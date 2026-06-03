@@ -74,7 +74,14 @@ async function sendSendGrid(to, subject, body, opts = {}) {
     return { sent: false, reason: "missing_subject_or_body" };
   }
 
-  const htmlBody = escapeHtml(body).replace(/\n/g, "<br>");
+  // Escape the user-supplied body so any HTML they typed renders as text (not
+  // markup). The tracking pixel is RAW trusted HTML we control, so it must be
+  // appended AFTER escaping — otherwise the <img> tag itself gets escaped to
+  // &lt;img&gt; and shows up as visible literal text in the email body.
+  let htmlBody = escapeHtml(body).replace(/\n/g, "<br>");
+  if (typeof opts.trackingPixelHtml === "string" && opts.trackingPixelHtml) {
+    htmlBody += opts.trackingPixelHtml;
+  }
   const personalization = { to: [{ email: to }] };
   // #623 — propagate cc/bcc through SendGrid personalization. Each recipient
   // here is a string; SendGrid wants {email}-shaped objects.
@@ -306,9 +313,14 @@ router.post("/send-email", composeAttachmentUpload, async (req, res) => {
         });
       }
 
-      // Inject tracking pixel into email body for SendGrid
+      // Build the open-tracking pixel as raw HTML and hand it to sendSendGrid
+      // via opts so it's appended to the HTML body AFTER the user body is
+      // escaped. It's an invisible 1×1 image (display:none) — present for
+      // open-tracking but never shown as text. (Previously it was concatenated
+      // into `body` and then escaped along with it, which rendered the <img>
+      // tag as visible literal text in the recipient's inbox.)
       const baseUrl = process.env.BASE_URL || "https://crm.globusdemos.com";
-      const trackedBody = `${body}\n\n<img src="${baseUrl}/api/communications/track/${trackingId}/open.gif" width="1" height="1" style="display:none" />`;
+      const trackingPixelHtml = `<img src="${baseUrl}/api/communications/track/${trackingId}/open.gif" width="1" height="1" style="display:none" alt="" />`;
 
 
       // Send via SendGrid with tracking pixel.
@@ -319,10 +331,11 @@ router.post("/send-email", composeAttachmentUpload, async (req, res) => {
       // #623 — cc/bcc are propagated identically across the per-recipient
       // loop. The SendGrid carbon-copy semantics fan to every cc/bcc per
       // primary-recipient send (mirrors stock email-client behaviour).
-      const mailResult = await sendSendGrid(recipient, subject, trackedBody, {
+      const mailResult = await sendSendGrid(recipient, subject, body, {
         cc: ccDeliverable,
         bcc: bccDeliverable,
         attachments: sendgridAttachments,
+        trackingPixelHtml,
       });
 
       // Per-recipient Activity on the linked contact (if any). Same pattern as

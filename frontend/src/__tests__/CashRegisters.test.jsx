@@ -365,15 +365,15 @@ describe('CashRegisters — #779 shift lifecycle', () => {
     fireEvent.click(screen.getByTestId('register-card-11'));
 
     await waitFor(() =>
-      expect(screen.getByLabelText(/Closing total/i)).toBeInTheDocument(),
+      expect(screen.getByLabelText(/Counted cash/i)).toBeInTheDocument(),
     );
-    fireEvent.change(screen.getByLabelText(/Closing total/i), {
+    fireEvent.change(screen.getByLabelText(/Counted cash/i), {
       target: { value: '2500' },
     });
     fireEvent.change(screen.getByLabelText(/Closing notes/i), {
       target: { value: 'End of day' },
     });
-    fireEvent.click(screen.getByRole('button', { name: /Close shift/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Close register/i }));
 
     await waitFor(() => {
       const calls = fetchApiMock.mock.calls.filter(
@@ -384,7 +384,33 @@ describe('CashRegisters — #779 shift lifecycle', () => {
       const body = JSON.parse(calls[0][1].body);
       expect(body).toEqual({ closingTotal: 2500, notes: 'End of day' });
     });
-    expect(notify.success).toHaveBeenCalledWith(expect.stringMatching(/Shift closed/i));
+    expect(notify.success).toHaveBeenCalledWith(expect.stringMatching(/Register closed/i));
+  });
+
+  it('auto-closes WITHOUT a counted amount — POST body omits closingTotal', async () => {
+    fetchApiMock.mockImplementation(makeMock());
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('Front Desk')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('register-card-11'));
+
+    // Click Close register with the count left blank → backend auto-computes.
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /Close register/i })).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Close register/i }));
+
+    await waitFor(() => {
+      const calls = fetchApiMock.mock.calls.filter(
+        ([url, opts]) =>
+          /^\/api\/pos\/shifts\/\d+\/close$/.test(url) && opts?.method === 'POST',
+      );
+      expect(calls.length).toBe(1);
+      const body = JSON.parse(calls[0][1].body);
+      // No manual count → backend closes at expectedCash (variance 0).
+      expect(body).not.toHaveProperty('closingTotal');
+    });
+    expect(notify.success).toHaveBeenCalledWith(expect.stringMatching(/Register closed at/i));
   });
 
   it('Deposit button POSTs to /api/pos/shifts/:id/deposit with { amount, reason } (#779)', async () => {
@@ -785,9 +811,9 @@ describe('CashRegisters — shift close validation', () => {
     fireEvent.click(screen.getByTestId('register-card-11'));
 
     await waitFor(() =>
-      expect(screen.getByLabelText(/Closing total/i)).toBeInTheDocument(),
+      expect(screen.getByLabelText(/Counted cash/i)).toBeInTheDocument(),
     );
-    const closingInput = screen.getByLabelText(/Closing total/i);
+    const closingInput = screen.getByLabelText(/Counted cash/i);
     fireEvent.change(closingInput, { target: { value: '-100' } });
     // Bypass HTML5 `min` constraint by submitting the form directly.
     fireEvent.submit(closingInput.closest('form'));
@@ -812,13 +838,13 @@ describe('CashRegisters — shift close validation', () => {
     fireEvent.click(screen.getByTestId('register-card-11'));
 
     await waitFor(() =>
-      expect(screen.getByLabelText(/Closing total/i)).toBeInTheDocument(),
+      expect(screen.getByLabelText(/Counted cash/i)).toBeInTheDocument(),
     );
-    fireEvent.change(screen.getByLabelText(/Closing total/i), {
+    fireEvent.change(screen.getByLabelText(/Counted cash/i), {
       target: { value: '2500' },
     });
     // Notes deliberately blank.
-    fireEvent.click(screen.getByRole('button', { name: /Close shift/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Close register/i }));
 
     await waitFor(() => {
       const closes = fetchApiMock.mock.calls.filter(
@@ -1118,7 +1144,7 @@ describe('CashRegisters — extension coverage', () => {
     expect(screen.getByTestId('status-header')).toHaveTextContent(/REGISTER CLOSED/i);
   });
 
-  it('Close shift NaN closingTotal triggers non-negative error (parseFloat("") branch)', async () => {
+  it('blank counted cash auto-closes (no error, POST omits closingTotal)', async () => {
     fetchApiMock.mockImplementation(makeMock());
     renderPage();
 
@@ -1126,21 +1152,22 @@ describe('CashRegisters — extension coverage', () => {
     fireEvent.click(screen.getByTestId('register-card-11'));
 
     await waitFor(() =>
-      expect(screen.getByLabelText(/Closing total/i)).toBeInTheDocument(),
+      expect(screen.getByLabelText(/Counted cash/i)).toBeInTheDocument(),
     );
-    // Leave closingTotal blank — parseFloat('') === NaN.
-    fireEvent.click(screen.getByRole('button', { name: /Close shift/i }));
+    // Leave the count blank → auto-close at expectedCash (no validation error).
+    fireEvent.click(screen.getByRole('button', { name: /Close register/i }));
 
     await waitFor(() => {
-      expect(notify.error).toHaveBeenCalledWith(
-        expect.stringMatching(/non-negative/i),
+      const closes = fetchApiMock.mock.calls.filter(
+        ([url, opts]) =>
+          /^\/api\/pos\/shifts\/\d+\/close$/.test(url) && opts?.method === 'POST',
       );
+      expect(closes.length).toBe(1);
+      expect(JSON.parse(closes[0][1].body)).not.toHaveProperty('closingTotal');
     });
-    const closes = fetchApiMock.mock.calls.filter(
-      ([url, opts]) =>
-        /^\/api\/pos\/shifts\/\d+\/close$/.test(url) && opts?.method === 'POST',
+    expect(notify.error).not.toHaveBeenCalledWith(
+      expect.stringMatching(/non-negative/i),
     );
-    expect(closes.length).toBe(0);
   });
 
   it('cancelling the WITHDRAW amount prompt aborts silently (no POST, no error toast)', async () => {

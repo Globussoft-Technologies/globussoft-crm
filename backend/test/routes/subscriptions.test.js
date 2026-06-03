@@ -109,6 +109,7 @@ if (eventBus.safeEmitEvent) {
 // exported property here is picked up. Default: not recorded (no open shift).
 const posExpense = requireCJS('../../lib/posExpense');
 posExpense.recordSubscriptionExpense = vi.fn().mockResolvedValue({ recorded: false, reason: 'NO_OPEN_SHIFT' });
+posExpense.recordSubscriptionExpenseEntry = vi.fn().mockResolvedValue({ recorded: true, expense: { id: 77 } });
 
 import express from 'express';
 import request from 'supertest';
@@ -157,6 +158,8 @@ beforeEach(() => {
   razorpayService.verifySignature.mockReset();
   posExpense.recordSubscriptionExpense.mockReset();
   posExpense.recordSubscriptionExpense.mockResolvedValue({ recorded: false, reason: 'NO_OPEN_SHIFT' });
+  posExpense.recordSubscriptionExpenseEntry.mockReset();
+  posExpense.recordSubscriptionExpenseEntry.mockResolvedValue({ recorded: true, expense: { id: 77 } });
 
   prisma.user.findUnique.mockResolvedValue({
     id: 7,
@@ -570,7 +573,7 @@ describe('POST /verify-payment — HMAC signature verify + subscription create',
     expect(Date.now() - new Date(createArg.startDate).getTime()).toBeLessThan(5000);
   });
 
-  test('logs the subscription spend to the POS drawer + surfaces posExpenseRecorded=true', async () => {
+  test('logs to BOTH the Expense ledger and the POS drawer + surfaces flags', async () => {
     razorpayService.verifySignature.mockReturnValue(true);
     prisma.subscription.findUnique.mockResolvedValue(null);
     prisma.subscriptionPlan.findUnique.mockResolvedValue({
@@ -579,6 +582,7 @@ describe('POST /verify-payment — HMAC signature verify + subscription create',
     prisma.subscription.create.mockResolvedValue({
       id: 101, planName: 'Pro', status: 'ACTIVE', endDate: new Date('2026-07-01'), amount: 1999,
     });
+    posExpense.recordSubscriptionExpenseEntry.mockResolvedValue({ recorded: true, expense: { id: 77 } });
     posExpense.recordSubscriptionExpense.mockResolvedValue({ recorded: true, shiftId: 5 });
 
     const res = await authedPost(makeApp(), '/api/subscriptions/verify-payment', {
@@ -587,14 +591,40 @@ describe('POST /verify-payment — HMAC signature verify + subscription create',
     });
 
     expect(res.status).toBe(200);
+    expect(res.body.expenseRecorded).toBe(true);
     expect(res.body.posExpenseRecorded).toBe(true);
-    // Logged with the plan amount + a "Subscription: <plan>" reason, scoped to
-    // the JWT user + tenant.
+    // Expense Management ledger — plan amount + name, scoped to JWT user/tenant.
+    expect(posExpense.recordSubscriptionExpenseEntry).toHaveBeenCalledWith(
+      expect.objectContaining({ tenantId: 1, userId: 7, amount: 1999, planName: 'Pro' }),
+    );
+    // POS drawer — "Subscription: <plan>" reason.
     expect(posExpense.recordSubscriptionExpense).toHaveBeenCalledWith(
       expect.objectContaining({
         tenantId: 1, userId: 7, amount: 1999, reason: 'Subscription: Pro',
       }),
     );
+  });
+
+  test('expenseRecorded=true even when no POS shift is open (Expense ledger is not shift-scoped)', async () => {
+    razorpayService.verifySignature.mockReturnValue(true);
+    prisma.subscription.findUnique.mockResolvedValue(null);
+    prisma.subscriptionPlan.findUnique.mockResolvedValue({
+      id: 2, name: 'Pro', price: 1999, currency: 'INR', billingIntervalDays: 30, features: '[]',
+    });
+    prisma.subscription.create.mockResolvedValue({
+      id: 101, planName: 'Pro', status: 'ACTIVE', endDate: new Date('2026-07-01'), amount: 1999,
+    });
+    posExpense.recordSubscriptionExpenseEntry.mockResolvedValue({ recorded: true, expense: { id: 77 } });
+    posExpense.recordSubscriptionExpense.mockResolvedValue({ recorded: false, reason: 'NO_OPEN_SHIFT' });
+
+    const res = await authedPost(makeApp(), '/api/subscriptions/verify-payment', {
+      razorpayOrderId: 'order_noshift2', razorpayPaymentId: 'pay_noshift2',
+      razorpaySignature: 'f'.repeat(64), planId: 2,
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body.expenseRecorded).toBe(true);   // shows in Expense Management
+    expect(res.body.posExpenseRecorded).toBe(false); // not deducted from a drawer
   });
 
   test('posExpenseRecorded=false when no shift is open (purchase still succeeds)', async () => {

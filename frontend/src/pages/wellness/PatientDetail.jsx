@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { ArrowLeft, Calendar, Stethoscope, FileText, FileSignature, ClipboardList, Plus, Camera, Package, Trash2, Video, Copy, Award, X, Minus, Download, ChevronDown, ChevronUp, Wallet as WalletIcon, Crown, ZoomIn, ZoomOut, Maximize, Minimize } from 'lucide-react';
+import { ArrowLeft, Calendar, Stethoscope, FileText, FileSignature, ClipboardList, Plus, Camera, Package, Trash2, Video, Copy, Award, X, Minus, Download, Eye, ChevronDown, ChevronUp, Wallet as WalletIcon, Crown, ZoomIn, ZoomOut, Maximize, Minimize, Check, Pencil } from 'lucide-react';
 import { fetchApi, getAuthToken } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { useFormAutosave } from '../../utils/useFormAutosave';
@@ -577,6 +577,7 @@ function sexLabel(g) {
 function RxDetailModal({ rx, patient, onClose }) {
   const notify = useNotify();
   const [downloading, setDownloading] = useState(false);
+  const [previewing, setPreviewing] = useState(false);
   let drugs = [];
   try { drugs = typeof rx.drugs === 'string' ? JSON.parse(rx.drugs) : rx.drugs; } catch { drugs = []; }
   if (!Array.isArray(drugs)) drugs = [];
@@ -598,12 +599,43 @@ function RxDetailModal({ rx, patient, onClose }) {
       }
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
-      window.open(url, '_blank', 'noopener');
+      // Trigger an actual download (anchor + `download` attr) rather than
+      // window.open(), which just opens the blob in the browser's PDF viewer
+      // instead of saving the file. Mirrors the patient-summary download above.
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `prescription-${rx.id}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 60_000);
     } catch (err) {
       notify.error(err.message || 'Failed to download prescription PDF.');
     } finally {
       setDownloading(false);
+    }
+  };
+
+  // "See" — open the PDF in a new tab for a quick preview (no save).
+  const previewPdf = async () => {
+    setPreviewing(true);
+    try {
+      const token = getAuthToken();
+      const res = await fetch(`/api/wellness/prescriptions/${rx.id}/pdf`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || `PDF preview failed (${res.status})`);
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      window.open(url, '_blank', 'noopener');
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (err) {
+      notify.error(err.message || 'Failed to open prescription PDF.');
+    } finally {
+      setPreviewing(false);
     }
   };
 
@@ -721,8 +753,23 @@ function RxDetailModal({ rx, patient, onClose }) {
           </button>
           <button
             type="button"
+            onClick={previewPdf}
+            disabled={previewing}
+            title="Open the prescription PDF in a new tab"
+            style={{
+              padding: '0.55rem 1rem', background: 'transparent', color: 'var(--accent-color)',
+              border: '1px solid var(--accent-color)', borderRadius: 8, cursor: previewing ? 'wait' : 'pointer',
+              fontSize: '0.85rem', display: 'inline-flex', alignItems: 'center', gap: '0.4rem',
+              opacity: previewing ? 0.7 : 1,
+            }}
+          >
+            <Eye size={14} /> {previewing ? 'Opening…' : 'See'}
+          </button>
+          <button
+            type="button"
             onClick={downloadPdf}
             disabled={downloading}
+            title="Download the prescription as a PDF file"
             style={{
               padding: '0.55rem 1rem', background: 'var(--accent-color)', color: '#fff',
               border: 'none', borderRadius: 8, cursor: downloading ? 'wait' : 'pointer',
@@ -2147,6 +2194,12 @@ function InventoryTab({ patient, onSaved }) {
   const [loading, setLoading] = useState(false);
   // #225: debounce guard so rapid clicks don't create duplicate consumption rows.
   const [submitting, setSubmitting] = useState(false);
+  // Inline amendment state: which row is being edited + its working values.
+  // Consumption rows are permanent clinical artefacts (see backend retention
+  // policy) — they can be CORRECTED (amended) but never deleted.
+  const [editingId, setEditingId] = useState(null);
+  const [editForm, setEditForm] = useState({ productName: '', qty: 1, unitCost: 0 });
+  const [savingEdit, setSavingEdit] = useState(false);
   const [filter, setFilter] = useState(EMPTY_DATE_FILTER);
   const [rangeStart, rangeEnd] = resolveDateRange(filter);
   const visibleVisits = (rangeStart && rangeEnd)
@@ -2190,6 +2243,47 @@ function InventoryTab({ patient, onSaved }) {
     }
   };
 
+  const startEdit = (item) => {
+    setEditingId(item.id);
+    setEditForm({ productName: item.productName, qty: item.qty, unitCost: item.unitCost });
+  };
+  const cancelEdit = () => {
+    setEditingId(null);
+    setEditForm({ productName: '', qty: 1, unitCost: 0 });
+  };
+  const saveEdit = async (item) => {
+    if (!editForm.productName || !editForm.productName.trim()) {
+      notify.error('Product name is required.');
+      return;
+    }
+    if (Number(editForm.qty) < 1) {
+      notify.error('Quantity must be at least 1.');
+      return;
+    }
+    if (Number(editForm.unitCost) < 0) {
+      notify.error('Unit cost cannot be negative.');
+      return;
+    }
+    if (savingEdit) return;
+    setSavingEdit(true);
+    try {
+      await fetchApi(`/api/wellness/visits/${visitId}/consumptions/${item.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          productName: editForm.productName.trim(),
+          qty: parseInt(editForm.qty) || 1,
+          unitCost: parseFloat(editForm.unitCost) || 0,
+        }),
+      });
+      notify.success('Consumption item updated.');
+      cancelEdit();
+      const next = await fetchApi(`/api/wellness/visits/${visitId}/consumptions`);
+      setItems(next);
+    } catch (_err) { /* fetchApi already toasted */ } finally {
+      setSavingEdit(false);
+    }
+  };
+
   const totalCost = items.reduce((s, i) => s + i.qty * i.unitCost, 0);
 
   return (
@@ -2228,22 +2322,46 @@ function InventoryTab({ patient, onSaved }) {
                     <th style={{ ...labelStyle, display: 'table-cell', padding: '0.6rem 1rem', textAlign: 'right' }}>Qty</th>
                     <th style={{ ...labelStyle, display: 'table-cell', padding: '0.6rem 1rem', textAlign: 'right' }}>Unit cost</th>
                     <th style={{ ...labelStyle, display: 'table-cell', padding: '0.6rem 1rem', textAlign: 'right' }}>Total</th>
+                    <th style={{ ...labelStyle, display: 'table-cell', padding: '0.6rem 1rem', textAlign: 'right' }}>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {items.map((i) => (
-                    <tr key={i.id} style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
-                      <td style={{ padding: '0.6rem 1rem', fontSize: '0.85rem' }}>{i.productName}</td>
-                      <td style={{ padding: '0.6rem 1rem', fontSize: '0.85rem', textAlign: 'right' }}>{i.qty}</td>
-                      <td style={{ padding: '0.6rem 1rem', fontSize: '0.85rem', textAlign: 'right' }}>₹{i.unitCost.toLocaleString('en-IN')}</td>
-                      <td style={{ padding: '0.6rem 1rem', fontSize: '0.85rem', textAlign: 'right', fontWeight: 500 }}>₹{(i.qty * i.unitCost).toLocaleString('en-IN')}</td>
-                    </tr>
+                    editingId === i.id ? (
+                      <tr key={i.id} style={{ borderBottom: '1px solid rgba(255,255,255,0.04)', background: 'rgba(255,255,255,0.03)' }}>
+                        <td style={{ padding: '0.4rem 1rem' }}>
+                          <input value={editForm.productName} onChange={(e) => setEditForm({ ...editForm, productName: e.target.value })} style={inputStyle} />
+                        </td>
+                        <td style={{ padding: '0.4rem 1rem', textAlign: 'right' }}>
+                          <input type="number" min={1} value={editForm.qty} onChange={(e) => setEditForm({ ...editForm, qty: e.target.value === '' ? '' : (parseInt(e.target.value) || 1) })} style={{ ...inputStyle, textAlign: 'right' }} />
+                        </td>
+                        <td style={{ padding: '0.4rem 1rem', textAlign: 'right' }}>
+                          <input type="number" min={0} step={0.01} value={editForm.unitCost} onChange={(e) => setEditForm({ ...editForm, unitCost: e.target.value === '' ? '' : (parseFloat(e.target.value) || 0) })} style={{ ...inputStyle, textAlign: 'right' }} />
+                        </td>
+                        <td style={{ padding: '0.4rem 1rem', fontSize: '0.85rem', textAlign: 'right', fontWeight: 500 }}>₹{((parseInt(editForm.qty) || 0) * (parseFloat(editForm.unitCost) || 0)).toLocaleString('en-IN')}</td>
+                        <td style={{ padding: '0.4rem 1rem', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                          <button type="button" onClick={() => saveEdit(i)} disabled={savingEdit} title="Save changes" style={{ background: 'transparent', border: 'none', cursor: savingEdit ? 'not-allowed' : 'pointer', color: 'var(--success-color)', padding: '0.25rem', marginRight: '0.25rem' }}><Check size={16} /></button>
+                          <button type="button" onClick={cancelEdit} disabled={savingEdit} title="Cancel" style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)', padding: '0.25rem' }}><X size={16} /></button>
+                        </td>
+                      </tr>
+                    ) : (
+                      <tr key={i.id} style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                        <td style={{ padding: '0.6rem 1rem', fontSize: '0.85rem' }}>{i.productName}</td>
+                        <td style={{ padding: '0.6rem 1rem', fontSize: '0.85rem', textAlign: 'right' }}>{i.qty}</td>
+                        <td style={{ padding: '0.6rem 1rem', fontSize: '0.85rem', textAlign: 'right' }}>₹{i.unitCost.toLocaleString('en-IN')}</td>
+                        <td style={{ padding: '0.6rem 1rem', fontSize: '0.85rem', textAlign: 'right', fontWeight: 500 }}>₹{(i.qty * i.unitCost).toLocaleString('en-IN')}</td>
+                        <td style={{ padding: '0.6rem 1rem', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                          <button type="button" onClick={() => startEdit(i)} disabled={!!editingId} title="Edit (amend) this item" style={{ background: 'transparent', border: 'none', cursor: editingId ? 'not-allowed' : 'pointer', color: 'var(--accent-color)', padding: '0.25rem', opacity: editingId ? 0.4 : 1 }}><Pencil size={15} /></button>
+                        </td>
+                      </tr>
+                    )
                   ))}
-                  {items.length === 0 && <tr><td colSpan={4} style={{ padding: '1rem', textAlign: 'center', color: 'var(--text-secondary)' }}>No products logged for this visit.</td></tr>}
+                  {items.length === 0 && <tr><td colSpan={5} style={{ padding: '1rem', textAlign: 'center', color: 'var(--text-secondary)' }}>No products logged for this visit.</td></tr>}
                   {items.length > 0 && (
                     <tr style={{ borderTop: '2px solid rgba(255,255,255,0.08)' }}>
                       <td colSpan={3} style={{ padding: '0.6rem 1rem', fontWeight: 600, textAlign: 'right' }}>Total cost</td>
                       <td style={{ padding: '0.6rem 1rem', fontWeight: 600, textAlign: 'right' }}>₹{totalCost.toLocaleString('en-IN')}</td>
+                      <td />
                     </tr>
                   )}
                 </tbody>

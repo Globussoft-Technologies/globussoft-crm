@@ -726,10 +726,37 @@ test.describe('POS — POST /sales/:id/refund', () => {
 // ── Shifts: close ─────────────────────────────────────────────────
 
 test.describe('POS — POST /shifts/:id/close', () => {
-  test('400 when closingTotal is missing', async ({ request }) => {
-    const res = await authPost(request, `/api/pos/shifts/${mainShiftId}/close`, {});
-    expect(res.status()).toBe(400);
-    expect((await res.json()).code).toBe('CLOSING_TOTAL_REQUIRED');
+  test('200 auto-closes at expectedCash when closingTotal is omitted (variance 0)', async ({ request }) => {
+    // closingTotal is OPTIONAL — when omitted the system closes the drawer at
+    // the computed expectedCash. Use a FRESH register + shift so the main
+    // shift stays open for the manual-count happy-path test below.
+    const reg = await authPost(request, '/api/pos/registers', registerBody({
+      name: `${RUN_TAG} AutoClose Register`,
+    }));
+    expect(reg.status()).toBe(201);
+    const register = await reg.json();
+    createdRegisterIds.push(register.id);
+
+    const openRes = await authPost(request, '/api/pos/shifts/open', {
+      registerId: register.id,
+      openingFloat: 750,
+    });
+    expect(openRes.status(), `open: ${await openRes.text()}`).toBe(201);
+    const shift = await openRes.json();
+    createdShiftIds.push(shift.id);
+
+    // No closingTotal in the body → auto-close at expectedCash.
+    const res = await authPost(request, `/api/pos/shifts/${shift.id}/close`, {
+      notes: `${RUN_TAG} auto-close`,
+    });
+    expect(res.status(), `auto-close: ${await res.text()}`).toBe(200);
+    const body = await res.json();
+    expect(body.status).toBe('CLOSED');
+    // No sales / ledger movement on this fresh shift → expected = openingFloat,
+    // closingTotal defaulted to expected, variance exactly 0.
+    expect(body.expectedCash).toBe(750);
+    expect(body.closingTotal).toBe(750);
+    expect(body.variance).toBe(0);
   });
 
   test('200 happy path closes shift, computes variance', async ({ request }) => {

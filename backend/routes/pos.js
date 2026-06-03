@@ -505,29 +505,14 @@ router.post("/shifts/:id/close", cashierGate, async (req, res) => {
       });
     }
     const { closingTotal, notes } = req.body;
-    if (closingTotal === undefined || closingTotal === null) {
-      return res
-        .status(400)
-        .json({
-          error: "closingTotal is required",
-          code: "CLOSING_TOTAL_REQUIRED",
-        });
-    }
-    const closing = parseFloat(closingTotal);
-    if (!Number.isFinite(closing) || closing < 0) {
-      return res
-        .status(400)
-        .json({
-          error: "closingTotal must be a non-negative number",
-          code: "INVALID_CLOSING_TOTAL",
-        });
-    }
+
     // expectedCash = openingFloat + sum(CASH sales) + sum(DEPOSIT) - sum(WITHDRAWAL).
     // #779: petty-cash ledger now contributes to expected drawer balance.
     // Pre-#779 deposits/withdrawals lived in a paper notebook; close-shift
     // variance silently absorbed them. With ledger rows persisted, the
     // expected count is the precise drawer math, and variance reflects
-    // only true under/over-counts.
+    // only true under/over-counts. We compute it BEFORE reading closingTotal
+    // so the system can auto-close at this figure when no manual count is given.
     const cashSales = await prisma.sale.aggregate({
       where: {
         tenantId: req.user.tenantId,
@@ -558,6 +543,27 @@ router.post("/shifts/:id/close", cashierGate, async (req, res) => {
     const withdrawalsTotal = withdrawals._sum.amount || 0;
     const expectedCash =
       shift.openingFloat + cashTaken + depositsTotal - withdrawalsTotal;
+
+    // closingTotal is OPTIONAL. When omitted/blank the system AUTO-CLOSES the
+    // drawer at the computed expectedCash (variance 0) — no manual count
+    // required. When a counted total IS supplied we honour it and record the
+    // signed variance (over/under count) for review.
+    let closing;
+    if (
+      closingTotal === undefined ||
+      closingTotal === null ||
+      String(closingTotal).trim() === ""
+    ) {
+      closing = expectedCash;
+    } else {
+      closing = parseFloat(closingTotal);
+      if (!Number.isFinite(closing) || closing < 0) {
+        return res.status(400).json({
+          error: "closingTotal must be a non-negative number",
+          code: "INVALID_CLOSING_TOTAL",
+        });
+      }
+    }
     const variance = closing - expectedCash;
     const closed = await prisma.shift.update({
       where: { id },

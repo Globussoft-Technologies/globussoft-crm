@@ -10,6 +10,7 @@ export default function Inbox() {
   const [smsMessages, setSmsMessages] = useState([]);
   const [waMessages, setWaMessages] = useState([]);
   const [contacts, setContacts] = useState([]);
+  const [patients, setPatients] = useState([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('emails');
 
@@ -99,10 +100,15 @@ export default function Inbox() {
       fetchApi('/api/contacts'),
       fetchApi('/api/sms/messages').catch(() => []),
       fetchApi('/api/whatsapp/messages').catch(() => []),
-    ]).then(([emailData, callData, contactData, smsData, waData]) => {
+      // Wellness patients aren't CRM Contacts, so they're a separate fetch.
+      // Generic (non-wellness) tenants 404 here — swallow and fall back to [].
+      fetchApi('/api/wellness/patients').catch(() => ({ patients: [] })),
+    ]).then(([emailData, callData, contactData, smsData, waData, patientData]) => {
       setEmails(Array.isArray(emailData) ? emailData : []);
       setCalls(Array.isArray(callData) ? callData : []);
       setContacts(Array.isArray(contactData) ? contactData : []);
+      const patientList = patientData?.patients || patientData;
+      setPatients(Array.isArray(patientList) ? patientList : []);
       setSmsMessages(Array.isArray(smsData?.messages || smsData) ? (smsData?.messages || smsData) : []);
       setWaMessages(Array.isArray(waData?.messages || waData) ? (waData?.messages || waData) : []);
       setLoading(false);
@@ -275,14 +281,57 @@ export default function Inbox() {
     e.preventDefault();
     if (!meetData.contactId) { notify.error("Please select a contact from the dropdown."); return; }
     try {
-      await fetchApi(`/api/contacts/${meetData.contactId}/activities`, {
+      // Patient selections are prefixed `patient:<id>` and log against the
+      // wellness patient activity endpoint; plain ids are CRM Contacts.
+      const isPatient = String(meetData.contactId).startsWith('patient:');
+      const rawId = isPatient ? meetData.contactId.slice('patient:'.length) : meetData.contactId;
+      const endpoint = isPatient
+        ? `/api/wellness/patients/${rawId}/activities`
+        : `/api/contacts/${rawId}/activities`;
+      // Resolve the selected recipient's email so we can actually email the
+      // invite (not just log it). The dropdown already filters to entries with
+      // an email, so this is normally present.
+      const selected = isPatient
+        ? patients.find(p => String(p.id) === String(rawId))
+        : contacts.find(c => String(c.id) === String(rawId));
+      const recipientEmail = selected?.email;
+
+      // 1. Log the meeting on the contact/patient activity timeline.
+      await fetchApi(endpoint, {
         method: 'POST',
         body: JSON.stringify({
           type: 'Meeting',
           description: `Scheduled Calendar Meeting for ${meetData.date} at ${meetData.time}. Topic: ${meetData.description}`
         })
       });
-      notify.success("Calendar Synced!\n\n[Epic #101] Meeting invite autonomously dispatched to the contact's inbox and added to your unified Google/Outlook calendar bindings.");
+
+      // 2. Actually send the invite email (SendGrid-backed, same endpoint the
+      //    Compose Email flow uses). Best-effort: a mail failure must not fail
+      //    the schedule — the activity is already logged.
+      let emailed = false;
+      if (recipientEmail) {
+        try {
+          await fetchApi('/api/communications/send-email', {
+            method: 'POST',
+            body: JSON.stringify({
+              to: recipientEmail,
+              subject: `Meeting invitation — ${meetData.date} at ${meetData.time}`,
+              body: `Hello,\n\nYou have a meeting scheduled for ${meetData.date} at ${meetData.time}.\n\n${meetData.description}\n\nThank you.`
+            })
+          });
+          emailed = true;
+        } catch (mailErr) {
+          console.error('Meeting invite email failed:', mailErr);
+        }
+      }
+
+      notify.success(
+        emailed
+          ? `Meeting scheduled — invite emailed to ${recipientEmail}.`
+          : recipientEmail
+            ? `Meeting scheduled, but the invite email could not be sent to ${recipientEmail}.`
+            : "Meeting scheduled. No email on file for this contact, so no invite was sent."
+      );
       setShowMeet(false);
       setMeetData({ contactId: '', date: '', time: '', description: '' });
     } catch(err) {
@@ -973,7 +1022,22 @@ export default function Inbox() {
                 <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-secondary)' }}>Associate with Contact:</label>
                 <select required className="input-field" value={meetData.contactId} onChange={e => setMeetData({...meetData, contactId: e.target.value})}>
                   <option value="">-- Select Contact --</option>
-                  {contacts.map(c => <option key={c.id} value={c.id}>{c.name} ({c.company})</option>)}
+                  {/* A meeting invite is dispatched to the contact's inbox, so only
+                      list contacts/patients that actually have an email, and show it.
+                      Patients aren't CRM Contacts (they live in the wellness Patient
+                      table), so they're grouped separately and their option value is
+                      prefixed `patient:` so handleScheduleMeeting routes them to the
+                      patient activity endpoint instead of /api/contacts/:id. */}
+                  {contacts.filter(c => c.email).length > 0 && (
+                    <optgroup label="Contacts">
+                      {contacts.filter(c => c.email).map(c => <option key={`c-${c.id}`} value={c.id}>{c.email}</option>)}
+                    </optgroup>
+                  )}
+                  {patients.filter(p => p.email).length > 0 && (
+                    <optgroup label="Patients">
+                      {patients.filter(p => p.email).map(p => <option key={`p-${p.id}`} value={`patient:${p.id}`}>{p.name} — {p.email}</option>)}
+                    </optgroup>
+                  )}
                 </select>
               </div>
               <div style={{ display: 'flex', gap: '1rem' }}>

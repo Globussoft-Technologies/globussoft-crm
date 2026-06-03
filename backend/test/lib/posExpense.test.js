@@ -18,13 +18,18 @@ prisma.shift = prisma.shift || {};
 prisma.shift.findFirst = vi.fn();
 prisma.pettyCashLedger = prisma.pettyCashLedger || {};
 prisma.pettyCashLedger.create = vi.fn();
+prisma.expense = prisma.expense || {};
+prisma.expense.create = vi.fn();
 
-const { recordSubscriptionExpense, findOpenShift } = requireCjs('../../lib/posExpense');
+const { recordSubscriptionExpense, recordSubscriptionExpenseEntry, findOpenShift } =
+  requireCjs('../../lib/posExpense');
 
 beforeEach(() => {
   prisma.shift.findFirst.mockReset();
   prisma.pettyCashLedger.create.mockReset();
   prisma.pettyCashLedger.create.mockImplementation(async ({ data }) => ({ id: 1, ...data }));
+  prisma.expense.create.mockReset();
+  prisma.expense.create.mockImplementation(async ({ data }) => ({ id: 77, ...data }));
 });
 
 describe('recordSubscriptionExpense', () => {
@@ -82,5 +87,36 @@ describe('recordSubscriptionExpense', () => {
       where: { tenantId: 2, status: 'OPEN' },
       orderBy: { id: 'desc' },
     });
+  });
+});
+
+describe('recordSubscriptionExpenseEntry (Expense Management ledger)', () => {
+  test('creates an Approved Software/Tech Expense row (no shift dependency)', async () => {
+    const r = await recordSubscriptionExpenseEntry({
+      tenantId: 2, userId: 9, amount: 1999, planName: 'Pro',
+    });
+
+    expect(r.recorded).toBe(true);
+    // Never touches the shift/petty-cash path — works regardless of drawer state.
+    expect(prisma.shift.findFirst).not.toHaveBeenCalled();
+    expect(prisma.expense.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          title: 'Subscription: Pro',
+          amount: 1999,
+          category: 'Software/Tech Expenses',
+          status: 'Approved',
+          tenantId: 2,
+          userId: 9,
+        }),
+      }),
+    );
+  });
+
+  test('rejects a non-positive amount (INVALID_INPUT, no DB write)', async () => {
+    const r = await recordSubscriptionExpenseEntry({ tenantId: 2, userId: 9, amount: 0 });
+    expect(r.recorded).toBe(false);
+    expect(r.reason).toBe('INVALID_INPUT');
+    expect(prisma.expense.create).not.toHaveBeenCalled();
   });
 });

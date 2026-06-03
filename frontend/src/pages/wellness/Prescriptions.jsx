@@ -133,9 +133,14 @@ export default function Prescriptions() {
       }
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
-      // Open in a new tab so the user can preview before saving. The
-      // browser's PDF viewer offers a one-click Save / Print.
-      window.open(url, '_blank', 'noopener');
+      // Trigger an actual file download rather than window.open() (which only
+      // opens the blob in the browser's PDF viewer instead of saving it).
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `prescription-${rx.id}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
       // Revoke after 60s to avoid keeping a blob URL pinned to the page.
       setTimeout(() => URL.revokeObjectURL(url), 60_000);
     } catch (err) {

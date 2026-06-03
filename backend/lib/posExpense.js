@@ -53,4 +53,35 @@ async function recordSubscriptionExpense({ tenantId, userId, amount, reason }) {
   return { recorded: true, entry, shiftId: shift.id };
 }
 
-module.exports = { recordSubscriptionExpense, findOpenShift };
+// Record the subscription spend in the Expense Management ledger (the Expense
+// model behind /expenses). Unlike the POS petty-cash entry this is NOT shift-
+// scoped, so it lands reliably in every environment — making it the canonical
+// place a subscription purchase shows up. Status APPROVED since the charge was
+// already settled through the payment gateway.
+//
+// @returns {Promise<{recorded:boolean, expense?:object, reason?:string}>}
+async function recordSubscriptionExpenseEntry({ tenantId, userId, amount, planName }) {
+  const amt = Number(amount);
+  if (!tenantId || !Number.isFinite(amt) || amt <= 0) {
+    return { recorded: false, reason: "INVALID_INPUT" };
+  }
+  const expense = await prisma.expense.create({
+    data: {
+      title: `Subscription: ${planName || "Plan"}`,
+      description: "Auto-recorded subscription purchase.",
+      amount: amt,
+      category: "Software/Tech Expenses",
+      status: "Approved",
+      expenseDate: new Date(),
+      userId: userId || null,
+      tenantId,
+    },
+  });
+  return { recorded: true, expense };
+}
+
+module.exports = {
+  recordSubscriptionExpense,
+  recordSubscriptionExpenseEntry,
+  findOpenShift,
+};

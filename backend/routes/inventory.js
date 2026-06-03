@@ -401,6 +401,34 @@ router.get("/products", canReadProducts, async (req, res) => {
   }
 });
 
+// Reject negative numerics on product writes. Stock + threshold are unit
+// counts (non-negative integers); price/volume/cost fields are non-negative
+// numbers. Returns { error, code } on the first violation, else null. The
+// frontend guards too, but a direct API call must not be able to seed a
+// negative stock level. Only validates keys present in the body (PUT is
+// partial), so a blank/omitted field falls through to the column default.
+function checkProductNumerics(body) {
+  const intFields = ["threshold", "currentStock"];
+  const floatFields = ["price", "volume", "discountedPrice", "dealerPrice", "purchasePrice", "tax"];
+  for (const f of intFields) {
+    const v = body[f];
+    if (v === undefined || v === null || v === "") continue;
+    const n = Number(v);
+    if (!Number.isInteger(n) || n < 0) {
+      return { error: `${f} must be a non-negative whole number`, code: "INVALID_QUANTITY" };
+    }
+  }
+  for (const f of floatFields) {
+    const v = body[f];
+    if (v === undefined || v === null || v === "") continue;
+    const n = Number(v);
+    if (!Number.isFinite(n) || n < 0) {
+      return { error: `${f} must be a non-negative number`, code: "INVALID_NUMERIC" };
+    }
+  }
+  return null;
+}
+
 router.post("/products", canWriteProducts, async (req, res) => {
   try {
     const {
@@ -413,6 +441,9 @@ router.post("/products", canWriteProducts, async (req, res) => {
     if (!name || typeof name !== "string" || !name.trim()) {
       return res.status(400).json({ error: "name is required", code: "NAME_REQUIRED" });
     }
+
+    const numErr = checkProductNumerics(req.body);
+    if (numErr) return res.status(400).json(numErr);
 
     // Check for duplicate SKU if provided
     if (sku) {
@@ -485,6 +516,9 @@ router.put("/products/:id", canUpdateProducts, async (req, res) => {
     const id = parseInt(req.params.id);
     const existing = await prisma.product.findFirst({ where: tenantWhere(req, { id }) });
     if (!existing) return res.status(404).json({ error: "Product not found" });
+
+    const numErr = checkProductNumerics(req.body);
+    if (numErr) return res.status(400).json(numErr);
 
     const allowed = [
       "name", "sku", "description", "price", "categoryId", "brandName",

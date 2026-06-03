@@ -395,7 +395,7 @@ describe('<PointOfSale /> — open-shift state', () => {
     renderPos();
     await waitFor(() => expect(screen.getByText(/Shift open/i)).toBeInTheDocument());
 
-    fireEvent.change(controlForLabel(/Closing total/i), { target: { value: '1500' } });
+    fireEvent.change(controlForLabel(/Counted cash/i), { target: { value: '1500' } });
     fireEvent.change(controlForLabel(/Notes/i), { target: { value: 'no variance' } });
     fireEvent.click(screen.getByRole('button', { name: /^Close shift$/i }));
 
@@ -415,21 +415,25 @@ describe('<PointOfSale /> — open-shift state', () => {
     await waitFor(() => expect(screen.getByText(/No shift open/i)).toBeInTheDocument());
   });
 
-  it('Close shift rejects an empty closingTotal — notify.error + no POST', async () => {
+  it('Close shift with a BLANK count auto-closes — POST omits closingTotal, no error', async () => {
     renderPos();
     await waitFor(() => expect(screen.getByText(/Shift open/i)).toBeInTheDocument());
     fetchApiMock.mockClear();
 
-    // Closing-total left blank.
+    // Counted cash left blank → auto-close at the system-computed expected cash.
     fireEvent.click(screen.getByRole('button', { name: /^Close shift$/i }));
 
     await waitFor(() => {
-      expect(notifyError).toHaveBeenCalledWith(expect.stringMatching(/cash drawer total/i));
+      const call = fetchApiMock.mock.calls.find(
+        ([url, opts]) => /\/close$/.test(url) && opts?.method === 'POST',
+      );
+      expect(call).toBeDefined();
+      // No manual count → backend closes at expectedCash (variance 0).
+      expect(JSON.parse(call[1].body)).not.toHaveProperty('closingTotal');
     });
-    const call = fetchApiMock.mock.calls.find(
-      ([url, opts]) => /\/close$/.test(url) && opts?.method === 'POST',
+    expect(notifyError).not.toHaveBeenCalledWith(
+      expect.stringMatching(/cash drawer total/i),
     );
-    expect(call).toBeUndefined();
   });
 });
 

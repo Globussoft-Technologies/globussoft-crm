@@ -270,6 +270,36 @@ describe('<Products /> — Add Product modal', () => {
     );
     expect(postCall).toBeUndefined();
   });
+
+  it('Negative Current Stock → notify.error + NO POST goes out', async () => {
+    installFetchApiMock();
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByText('PRP serum 10ml')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Add Product/i }));
+
+    const modal = screen.getByRole('heading', { name: /New Product/i }).closest('.glass');
+    // Name (text input 0) so the name guard passes and we reach the numeric one.
+    fireEvent.change(modal.querySelectorAll('input[type="text"]')[0], {
+      target: { value: 'Massage Oil' },
+    });
+    // Number inputs order: Price(0), Volume(1), Current Stock(2), Threshold(3).
+    const numberInputs = modal.querySelectorAll('input[type="number"]');
+    fireEvent.change(numberInputs[2], { target: { value: '-1' } });
+
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalledWith(
+        expect.stringMatching(/current stock cannot be negative/i),
+      );
+    });
+    const postCall = fetchApiMock.mock.calls.find(
+      ([u, opts]) => u === '/api/wellness/products' && opts?.method === 'POST',
+    );
+    expect(postCall).toBeUndefined();
+  });
 });
 
 describe('<Products /> — create happy path', () => {

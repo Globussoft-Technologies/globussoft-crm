@@ -1,0 +1,538 @@
+<!DOCTYPE html>
+<!--
+  Dr. Haror's Wellness — Per-Visit Prescription / Clinical Report
+  Self-contained, print-ready A4 layout (inline CSS, no external deps).
+
+  DEMO / LAYOUT DOCUMENT — placeholder content only. This is NOT a real
+  clinical record. Open in a browser and use the floating "Save as PDF"
+  button (or Ctrl/Cmd+P) to print to PDF.
+-->
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Per-Visit Prescription — Dr. Haror's Wellness</title>
+  <style>
+    :root {
+      --teal: #0f8a7e;
+      --teal-dark: #0b6f66;
+      --teal-tint: #e7f4f2;
+      --gold: #caa45a;
+      --amber-bg: #fff7e6;
+      --amber-border: #f0c36d;
+      --ink: #1f2937;
+      --muted: #6b7280;
+      --line: #e5e7eb;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: #eef2f1;
+      color: var(--ink);
+      font-family: "Segoe UI", Arial, Helvetica, sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ── Centered A4 sheet ─────────────────────────────────────────── */
+    .sheet {
+      max-width: 820px;
+      margin: 28px auto;
+      background: #ffffff;
+      border-radius: 14px;
+      box-shadow: 0 14px 50px rgba(0, 0, 0, 0.16);
+      overflow: hidden;
+    }
+
+    /* ── Header band ───────────────────────────────────────────────── */
+    .header {
+      background: linear-gradient(120deg, var(--teal) 0%, var(--teal-dark) 100%);
+      color: #fff;
+      padding: 26px 32px 22px;
+      display: flex;
+      align-items: center;
+      gap: 18px;
+    }
+    .logo-disc {
+      width: 58px; height: 58px;
+      border-radius: 50%;
+      background: #fff;
+      display: flex; align-items: center; justify-content: center;
+      flex: 0 0 auto;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    }
+    .logo-disc svg { width: 28px; height: 28px; }
+    .brand-block { flex: 1 1 auto; }
+    .brand-name {
+      font-size: 26px; font-weight: 800; letter-spacing: 0.3px;
+      line-height: 1.1;
+    }
+    .brand-tag {
+      font-size: 10px; letter-spacing: 3px; font-weight: 600;
+      color: #d6ecea; margin-top: 4px;
+    }
+    .clinic-contact {
+      text-align: right; font-size: 12px; line-height: 1.7; color: #eaf6f4;
+      flex: 0 0 auto;
+    }
+    .clinic-contact .addr { font-weight: 500; }
+
+    .gold-strip {
+      height: 5px;
+      background: linear-gradient(90deg, #b8893f 0%, var(--gold) 50%, #e7cd97 100%);
+    }
+
+    /* ── Meta strip ────────────────────────────────────────────────── */
+    .meta {
+      background: var(--teal-tint);
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      padding: 14px 32px;
+      gap: 12px;
+    }
+    .meta .label {
+      font-size: 10px; letter-spacing: 1.2px; font-weight: 700;
+      color: var(--teal); text-transform: uppercase;
+    }
+    .meta .value { font-size: 15px; font-weight: 700; color: var(--teal-dark); margin-top: 4px; }
+
+    /* ── Body ──────────────────────────────────────────────────────── */
+    .body { padding: 22px 32px 0; }
+
+    .cards {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      margin-bottom: 20px;
+    }
+    .card {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 16px 18px;
+      position: relative;
+      background: #fff;
+    }
+    .card.patient { border-left: 4px solid var(--teal); }
+    .card.doctor  { border-left: 4px solid var(--gold); }
+    .card .card-label {
+      font-size: 10px; letter-spacing: 1.4px; font-weight: 700;
+      color: var(--muted); text-transform: uppercase;
+    }
+    .card .card-name { font-size: 19px; font-weight: 800; color: var(--ink); margin: 6px 0 10px; }
+    .kv-row { display: flex; gap: 10px; font-size: 13px; margin: 4px 0; }
+    .kv-row .k { color: var(--muted); width: 78px; flex: 0 0 auto; }
+    .kv-row .v { color: var(--ink); font-weight: 500; }
+
+    .stamp {
+      position: absolute; top: 14px; right: 16px;
+      border: 2px solid var(--teal);
+      color: var(--teal);
+      font-size: 11px; font-weight: 800; letter-spacing: 1.5px;
+      padding: 4px 10px; border-radius: 6px;
+      transform: rotate(-8deg);
+      opacity: 0.92;
+    }
+
+    /* ── Section heading ───────────────────────────────────────────── */
+    .section-head {
+      display: flex; align-items: center; gap: 8px;
+      color: var(--teal-dark);
+      font-size: 13px; font-weight: 800; letter-spacing: 1.4px;
+      text-transform: uppercase;
+      border-bottom: 2px solid var(--teal-tint);
+      padding-bottom: 8px; margin: 22px 0 16px;
+    }
+    .section-head .ico { color: var(--gold); font-size: 15px; }
+
+    /* ── Condition & clinical details ──────────────────────────────── */
+    .clinical-grid {
+      display: grid;
+      grid-template-columns: 0.92fr 1.08fr;
+      gap: 18px;
+    }
+    .photo-col { display: grid; grid-template-rows: 1fr 1fr; gap: 14px; }
+    .dropzone {
+      position: relative;
+      border: 2px dashed var(--teal);
+      border-radius: 10px;
+      background: #f5fbfa;
+      min-height: 150px;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 6px; text-align: center;
+      color: var(--teal-dark); cursor: pointer; overflow: hidden;
+    }
+    .dropzone .dz-label {
+      position: absolute; top: 8px; left: 10px;
+      font-size: 9px; letter-spacing: 1px; font-weight: 700;
+      color: var(--teal); text-transform: uppercase;
+    }
+    .dropzone .dz-hint { font-size: 12px; font-weight: 600; }
+    .dropzone .dz-cam { font-size: 26px; opacity: 0.6; }
+    .dropzone input[type="file"] {
+      position: absolute; inset: 0; opacity: 0; cursor: pointer;
+    }
+    .dropzone img.preview {
+      position: absolute; inset: 0; width: 100%; height: 100%;
+      object-fit: cover; display: none;
+    }
+    .dropzone.has-image .dz-cam,
+    .dropzone.has-image .dz-hint { display: none; }
+    .dropzone.has-image img.preview { display: block; }
+    .dz-clear {
+      position: absolute; top: 6px; right: 6px;
+      width: 22px; height: 22px; border-radius: 50%;
+      background: rgba(0,0,0,0.55); color: #fff; border: none;
+      font-size: 14px; line-height: 1; cursor: pointer; display: none;
+      z-index: 2;
+    }
+    .dropzone.has-image .dz-clear { display: block; }
+
+    .clin-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .clin-table tr { border-bottom: 1px solid var(--line); }
+    .clin-table td { padding: 9px 4px; vertical-align: top; }
+    .clin-table td.k { color: var(--muted); width: 130px; font-weight: 500; }
+    .clin-table td.v { color: var(--ink); }
+    .pill {
+      display: inline-block; font-size: 11px; font-weight: 700;
+      padding: 3px 10px; border-radius: 999px;
+    }
+    .pill.green { background: #e3f6ec; color: #15803d; border: 1px solid #abdcc0; }
+    .pill.amber { background: var(--amber-bg); color: #92660b; border: 1px solid var(--amber-border); }
+    .pill.teal  { background: var(--teal-tint); color: var(--teal-dark); border: 1px solid #aedcd6; }
+
+    /* ── Vitals ────────────────────────────────────────────────────── */
+    .vitals {
+      display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px;
+      margin-top: 16px;
+    }
+    .vital {
+      border: 1px solid var(--line); border-radius: 8px;
+      padding: 10px 8px; text-align: center;
+    }
+    .vital .vl { font-size: 9px; letter-spacing: 1px; color: var(--muted); text-transform: uppercase; }
+    .vital .vv { font-size: 16px; font-weight: 800; color: var(--teal-dark); margin-top: 4px; }
+
+    /* ── Medication table ──────────────────────────────────────────── */
+    .med-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 4px; border-radius: 8px; overflow: hidden; }
+    .med-table thead th {
+      background: var(--teal); color: #fff; text-align: left;
+      font-size: 10px; letter-spacing: 1px; text-transform: uppercase;
+      padding: 11px 12px; font-weight: 700;
+    }
+    .med-table tbody td { padding: 12px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+    .med-table tbody tr:nth-child(even) { background: #f7faf9; }
+    .med-num {
+      width: 24px; height: 24px; border-radius: 50%;
+      background: var(--teal); color: #fff; font-size: 12px; font-weight: 700;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .med-name { font-weight: 800; color: var(--teal-dark); }
+    .med-sub { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+    /* ── Products & materials ──────────────────────────────────────── */
+    .materials { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .material {
+      border: 1px solid var(--line); border-radius: 9px;
+      padding: 12px 14px; display: flex; gap: 12px; align-items: center;
+    }
+    .material .m-ico {
+      width: 34px; height: 34px; border-radius: 8px; background: var(--teal-tint);
+      display: flex; align-items: center; justify-content: center; font-size: 16px; flex: 0 0 auto;
+    }
+    .material .m-name { font-weight: 700; color: var(--ink); font-size: 13px; }
+    .material .m-spec { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+    /* ── Advice box ────────────────────────────────────────────────── */
+    .advice {
+      background: var(--amber-bg);
+      border: 1px solid var(--amber-border);
+      border-left: 5px solid var(--gold);
+      border-radius: 10px;
+      padding: 16px 20px;
+      margin-top: 6px;
+    }
+    .advice h4 { margin: 0 0 8px; color: #92660b; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; }
+    .advice p { margin: 0; font-size: 13px; line-height: 1.7; color: #6b5418; }
+    .advice strong { color: #92660b; }
+
+    /* ── Footer (QR + signature) ───────────────────────────────────── */
+    .foot-grid {
+      display: grid; grid-template-columns: auto 1fr; gap: 24px;
+      align-items: flex-end; margin: 26px 0 18px;
+    }
+    .qr-wrap { text-align: center; }
+    .qr {
+      display: grid; grid-template-columns: repeat(11, 9px); grid-template-rows: repeat(11, 9px);
+      gap: 0; border: 4px solid #fff; background: #fff;
+    }
+    .qr span { width: 9px; height: 9px; }
+    .qr span.on { background: var(--teal-dark); }
+    .qr-cap { font-size: 9px; letter-spacing: 1px; color: var(--muted); margin-top: 6px; text-transform: uppercase; }
+    .sig { text-align: right; }
+    .sig .line { border-top: 1.5px solid var(--ink); width: 240px; margin-left: auto; margin-bottom: 6px; }
+    .sig .name { font-weight: 800; color: var(--teal-dark); font-size: 15px; }
+    .sig .title { color: var(--gold); font-size: 12px; font-weight: 600; }
+    .sig .clinic { color: var(--muted); font-size: 11px; }
+
+    .footer-bar {
+      background: var(--teal-dark); color: #d9ece9;
+      text-align: center; padding: 14px 24px; font-size: 12px;
+    }
+    .footer-bar .f-strong { color: var(--gold); font-weight: 700; }
+    .footer-bar .f-demo { display: block; font-size: 10px; color: #9fc5c0; margin-top: 4px; }
+
+    .demo-ribbon {
+      text-align: center; font-size: 10px; letter-spacing: 1px;
+      color: var(--muted); padding: 10px 0 2px; text-transform: uppercase;
+    }
+
+    /* ── Floating save button ──────────────────────────────────────── */
+    .save-btn {
+      position: fixed; bottom: 22px; right: 22px; z-index: 50;
+      background: var(--teal); color: #fff; border: none;
+      padding: 12px 20px; border-radius: 999px; font-size: 14px; font-weight: 700;
+      box-shadow: 0 8px 24px rgba(15,138,126,0.4); cursor: pointer;
+    }
+    .save-btn:hover { background: var(--teal-dark); }
+
+    /* ── Print ─────────────────────────────────────────────────────── */
+    @page { size: A4; margin: 12mm; }
+    @media print {
+      html, body { background: #fff; }
+      .sheet {
+        max-width: none; width: 100%; margin: 0;
+        border-radius: 0; box-shadow: none;
+      }
+      .no-print { display: none !important; }
+      /* Force background colours / gradients to print. */
+      * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      /* Keep logical blocks from splitting across pages. */
+      .card, .material, .vital, .advice, .section-head,
+      .med-table tr, .clin-table tr, .foot-grid { break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+  <div class="sheet">
+    <!-- Header -->
+    <div class="header">
+      <div class="logo-disc">
+        <svg viewBox="0 0 24 24" fill="#0f8a7e" aria-hidden="true">
+          <path d="M12 21s-6.7-4.35-9.33-8.07C.9 10.27 1.6 6.6 4.6 5.5c2-0.73 3.9.2 4.9 1.7l.5.76.5-.76c1-1.5 2.9-2.43 4.9-1.7 3 1.1 3.7 4.77 1.93 7.43C18.7 16.65 12 21 12 21z"/>
+        </svg>
+      </div>
+      <div class="brand-block">
+        <div class="brand-name">Dr. Haror's Wellness</div>
+        <div class="brand-tag">ENHANCED WELLNESS CLINIC</div>
+      </div>
+      <div class="clinic-contact">
+        <div class="addr">204, Linking Road, Bandra West</div>
+        <div class="addr">Mumbai, Maharashtra 400050</div>
+        <div>&#9742; +91 98765 43210</div>
+        <div>&#9993; bandra@enhancedwellness.in</div>
+      </div>
+    </div>
+    <div class="gold-strip"></div>
+
+    <!-- Meta strip -->
+    <div class="meta">
+      <div><div class="label">Prescription No.</div><div class="value">Rx #96 &middot; Visit 3</div></div>
+      <div><div class="label">Date</div><div class="value">29 May 2026</div></div>
+      <div><div class="label">Appointment</div><div class="value">#976</div></div>
+      <div><div class="label">Patient ID</div><div class="value">608</div></div>
+    </div>
+
+    <div class="body">
+      <!-- Info cards -->
+      <div class="cards">
+        <div class="card patient">
+          <div class="card-label">Patient</div>
+          <div class="card-name">Mohit Reddy</div>
+          <div class="kv-row"><span class="k">Gender</span><span class="v">Male &middot; 32 yrs</span></div>
+          <div class="kv-row"><span class="k">Phone</span><span class="v">+91 78791 22994</span></div>
+          <div class="kv-row"><span class="k">Email</span><span class="v">mohitreddy@gimpmail.com</span></div>
+          <div class="kv-row"><span class="k">Allergies</span><span class="v">None reported (NKDA)</span></div>
+        </div>
+        <div class="card doctor">
+          <span class="stamp">ISSUED</span>
+          <div class="card-label">Prescribing Doctor</div>
+          <div class="card-name">Dr. Ganesh Sharma</div>
+          <div class="kv-row"><span class="k">Dept.</span><span class="v">Hair Transplant &amp; Trichology</span></div>
+          <div class="kv-row"><span class="k">Procedure</span><span class="v">Sapphire FUE</span></div>
+          <div class="kv-row"><span class="k">Reg. No.</span><span class="v">MH-XXXXX (demo)</span></div>
+        </div>
+      </div>
+
+      <!-- Condition & Clinical Details -->
+      <div class="section-head"><span class="ico">&#9999;</span> Condition &amp; Clinical Details</div>
+      <div class="clinical-grid">
+        <div class="photo-col">
+          <label class="dropzone" id="dz-before">
+            <span class="dz-label">Before — Pre-op / Therapy</span>
+            <span class="dz-cam">&#128247;</span>
+            <span class="dz-hint">Click to upload</span>
+            <img class="preview" alt="Before" />
+            <button type="button" class="dz-clear no-print" aria-label="Clear image">&times;</button>
+            <input type="file" accept="image/*" />
+          </label>
+          <label class="dropzone" id="dz-after">
+            <span class="dz-label">After — Post-op / Result</span>
+            <span class="dz-cam">&#128247;</span>
+            <span class="dz-hint">Click to upload</span>
+            <img class="preview" alt="After" />
+            <button type="button" class="dz-clear no-print" aria-label="Clear image">&times;</button>
+            <input type="file" accept="image/*" />
+          </label>
+        </div>
+        <div>
+          <table class="clin-table">
+            <tr><td class="k">Diagnosis</td><td class="v"><strong>Androgenetic Alopecia</strong> — Norwood Grade IV</td></tr>
+            <tr><td class="k">Procedure done</td><td class="v">Sapphire FUE — 2,850 grafts (hairline + crown)</td></tr>
+            <tr><td class="k">Condition status</td><td class="v"><span class="pill green">Healing — On track</span></td></tr>
+            <tr><td class="k">Severity</td><td class="v"><span class="pill amber">Moderate</span></td></tr>
+            <tr><td class="k">Clinical findings</td><td class="v">Grafts well-seated, minimal crusting at recipient zone; no signs of infection or necrosis. Mild peri-graft erythema, expected for POD-7.</td></tr>
+            <tr><td class="k">Donor area</td><td class="v">Occipital donor healing well; sutures intact, no oozing.</td></tr>
+          </table>
+        </div>
+      </div>
+
+      <!-- Vitals -->
+      <div class="vitals">
+        <div class="vital"><div class="vl">BP</div><div class="vv">124/80</div></div>
+        <div class="vital"><div class="vl">Pulse</div><div class="vv">76 bpm</div></div>
+        <div class="vital"><div class="vl">Temp</div><div class="vv">98.4&deg;F</div></div>
+        <div class="vital"><div class="vl">SpO&#8322;</div><div class="vv">98%</div></div>
+        <div class="vital"><div class="vl">Weight</div><div class="vv">74 kg</div></div>
+      </div>
+
+      <!-- Medications -->
+      <div class="section-head"><span class="ico" style="font-family:Georgia,serif;font-weight:700;">&#8478;</span> Medication — Drugs Prescribed</div>
+      <table class="med-table">
+        <thead>
+          <tr><th style="width:34px;">#</th><th>Medication</th><th>Strength / Route</th><th>Dosage</th><th>Frequency</th><th>Duration</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><div class="med-num">1</div></td>
+            <td><div class="med-name">QR Hair Shampoo</div><div class="med-sub">Topical &middot; scalp</div></td>
+            <td>Ketoconazole 2% &middot; Topical</td><td>Coin-sized amount</td>
+            <td><span class="pill green">Once daily</span></td><td>1 month</td>
+          </tr>
+          <tr>
+            <td><div class="med-num">2</div></td>
+            <td><div class="med-name">QR Hair Serum</div><div class="med-sub">Topical &middot; scalp</div></td>
+            <td>Minoxidil 5% &middot; Topical</td><td>1 ml</td>
+            <td><span class="pill green">Twice daily</span></td><td>3 months</td>
+          </tr>
+          <tr>
+            <td><div class="med-num">3</div></td>
+            <td><div class="med-name">Finasteride</div><div class="med-sub">Oral &middot; tablet</div></td>
+            <td>1 mg &middot; Oral</td><td>1 tablet</td>
+            <td><span class="pill green">Once daily</span></td><td>3 months</td>
+          </tr>
+          <tr>
+            <td><div class="med-num">4</div></td>
+            <td><div class="med-name">Amoxicillin–Clavulanate</div><div class="med-sub">Oral &middot; antibiotic</div></td>
+            <td>625 mg &middot; Oral</td><td>1 tablet</td>
+            <td><span class="pill teal">Twice daily</span></td><td>5 days</td>
+          </tr>
+          <tr>
+            <td><div class="med-num">5</div></td>
+            <td><div class="med-name">Paracetamol</div><div class="med-sub">Oral &middot; analgesic (SOS)</div></td>
+            <td>500 mg &middot; Oral</td><td>1 tablet</td>
+            <td><span class="pill amber">SOS — if pain</span></td><td>As needed</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <!-- Products & Materials -->
+      <div class="section-head"><span class="ico">&#9879;</span> Products &amp; Materials Used (In-Procedure)</div>
+      <div class="materials">
+        <div class="material"><div class="m-ico">&#128137;</div><div><div class="m-name">Lignocaine 2% + Adrenaline</div><div class="m-spec">Local anaesthesia &middot; 20 ml used</div></div></div>
+        <div class="material"><div class="m-ico">&#128167;</div><div><div class="m-name">Normal Saline (0.9%)</div><div class="m-spec">Graft storage &amp; irrigation &middot; 500 ml</div></div></div>
+        <div class="material"><div class="m-ico">&#128300;</div><div><div class="m-name">Sapphire Blade Implanter</div><div class="m-spec">Recipient site creation &middot; 1.0 mm</div></div></div>
+        <div class="material"><div class="m-ico">&#128138;</div><div><div class="m-name">PRP Serum (autologous)</div><div class="m-spec">Growth-factor application &middot; 4 ml</div></div></div>
+        <div class="material"><div class="m-ico">&#129514;</div><div><div class="m-name">Betadine 5% Solution</div><div class="m-spec">Antiseptic prep &middot; donor + recipient</div></div></div>
+        <div class="material"><div class="m-ico">&#129657;</div><div><div class="m-name">Sterile Gauze &amp; Headband</div><div class="m-spec">Post-op dressing &middot; donor area</div></div></div>
+      </div>
+
+      <!-- Advice -->
+      <div class="section-head"><span class="ico">&#9888;</span> Post-Procedure Care &amp; Advice</div>
+      <div class="advice">
+        <h4>Per-Visit Instructions</h4>
+        <p>Begin gentle hair wash with the prescribed shampoo from day 3; do not rub or scratch the grafts. Apply the serum to the scalp at night on dry hair. Sleep with the head elevated for the first 5 nights. Avoid direct sun, helmet, swimming, gym and alcohol for 2 weeks. Stay well hydrated and complete the <strong>full antibiotic course</strong>. Report any excessive bleeding, swelling, or signs of infection. <strong>Review after 7 days.</strong></p>
+      </div>
+
+      <!-- QR + signature -->
+      <div class="foot-grid">
+        <div class="qr-wrap">
+          <div class="qr" id="qr"></div>
+          <div class="qr-cap">Scan to verify &middot; Rx #96 / V3</div>
+        </div>
+        <div class="sig">
+          <div class="line"></div>
+          <div class="name">Dr. Ganesh Sharma</div>
+          <div class="title">Hair Transplant Surgeon</div>
+          <div class="clinic">Dr. Haror's Wellness, Bandra West</div>
+        </div>
+      </div>
+
+      <div class="demo-ribbon">Demo / layout document — not a real clinical record</div>
+    </div>
+
+    <!-- Footer bar -->
+    <div class="footer-bar">
+      <span class="f-strong">Dr. Haror's Wellness</span> &nbsp;|&nbsp; 204, Linking Road, Bandra West, Mumbai 400050 &nbsp;|&nbsp; +91 98765 43210
+      <span class="f-demo">This is a digitally generated prescription. — Demo document for layout preview</span>
+    </div>
+  </div>
+
+  <button class="save-btn no-print" onclick="window.print()">&#11015; Save as PDF</button>
+
+  <script>
+    // ── Before/After image upload drop zones ──────────────────────────
+    document.querySelectorAll('.dropzone').forEach(function (dz) {
+      var input = dz.querySelector('input[type="file"]');
+      var img = dz.querySelector('img.preview');
+      var clear = dz.querySelector('.dz-clear');
+
+      input.addEventListener('change', function () {
+        var file = input.files && input.files[0];
+        if (!file) return;
+        var reader = new FileReader();
+        reader.onload = function (e) {
+          img.src = e.target.result;
+          dz.classList.add('has-image');
+        };
+        reader.readAsDataURL(file);
+      });
+
+      clear.addEventListener('click', function (ev) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        input.value = '';
+        img.removeAttribute('src');
+        dz.classList.remove('has-image');
+      });
+    });
+
+    // ── Decorative QR (11×11) — fixed pattern, NOT a real scannable code ─
+    (function () {
+      var P = [
+        "11111011111","10001010001","10111010111","10111011101","10111010101",
+        "10001010011","11111011111","00000010000","11011101101","01010100010","11001011011"
+      ];
+      var qr = document.getElementById('qr');
+      P.forEach(function (row) {
+        for (var i = 0; i < row.length; i++) {
+          var s = document.createElement('span');
+          if (row[i] === '1') s.className = 'on';
+          qr.appendChild(s);
+        }
+      });
+    })();
+  </script>
+</body>
+</html>

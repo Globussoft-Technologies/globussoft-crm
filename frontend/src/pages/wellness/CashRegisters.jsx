@@ -351,21 +351,28 @@ export default function CashRegisters({ embedded = false } = {}) {
   const submitCloseShift = async (e) => {
     e.preventDefault();
     if (!selectedShift?.id) return;
-    const total = parseFloat(closingTotal);
-    if (!Number.isFinite(total) || total < 0) {
-      notify.error('Closing total must be a non-negative number');
-      return;
+    // closingTotal is OPTIONAL — blank means "auto-close at the system-computed
+    // expected cash" (the common case). A counted amount is only needed when
+    // the cashier wants to record a variance (physical count ≠ expected).
+    const body = { notes: closingNotes || undefined };
+    const trimmed = String(closingTotal).trim();
+    if (trimmed !== '') {
+      const total = parseFloat(trimmed);
+      if (!Number.isFinite(total) || total < 0) {
+        notify.error('Counted cash must be a non-negative number');
+        return;
+      }
+      body.closingTotal = total;
     }
     setClosingShift(true);
     try {
       await fetchApi(`/api/pos/shifts/${selectedShift.id}/close`, {
         method: 'POST',
-        body: JSON.stringify({
-          closingTotal: total,
-          notes: closingNotes || undefined,
-        }),
+        body: JSON.stringify(body),
       });
-      notify.success('Shift closed');
+      notify.success(
+        trimmed !== '' ? 'Register closed' : `Register closed at ${formatMoney(currentBalance)}`,
+      );
       setClosingTotal('');
       setClosingNotes('');
       // Refresh: the shift is no longer open.
@@ -496,16 +503,26 @@ export default function CashRegisters({ embedded = false } = {}) {
 
   const visibleTransactions = transactions[txTab] || [];
 
-  // Total drawer balance = openingFloat + sum(CASH completed sales)
-  // — the same shape routes/pos.js close-shift uses for expectedCash.
+  // Expected cash in the drawer — MUST mirror routes/pos.js close-shift exactly:
+  //   openingFloat + sum(CASH sales paidAmount) + sum(DEPOSIT) − sum(WITHDRAWAL).
+  // Uses the UNFILTERED shift sales + the full petty-cash ledger (NOT the
+  // date-filtered transactions view) so the figure matches what the backend
+  // computes at close. This is the amount the system auto-closes at.
   const currentBalance = useMemo(() => {
     if (!selectedShift) return 0;
-    const cashTaken = transactions.bookings.reduce(
-      (acc, s) => acc + Number(s.total || 0),
-      0,
-    );
-    return Number(selectedShift.openingFloat || 0) + cashTaken;
-  }, [selectedShift, transactions.bookings]);
+    const sales = Array.isArray(selectedShift.sales) ? selectedShift.sales : [];
+    const cashTaken = sales
+      .filter((s) => s.paymentMethod === 'CASH' && s.status === 'COMPLETED')
+      .reduce((acc, s) => acc + Number(s.paidAmount ?? s.total ?? 0), 0);
+    const ledger = Array.isArray(pettyCash) ? pettyCash : [];
+    const deposits = ledger
+      .filter((e) => e.type === 'DEPOSIT')
+      .reduce((acc, e) => acc + Number(e.amount || 0), 0);
+    const withdrawals = ledger
+      .filter((e) => e.type === 'WITHDRAWAL')
+      .reduce((acc, e) => acc + Number(e.amount || 0), 0);
+    return Number(selectedShift.openingFloat || 0) + cashTaken + deposits - withdrawals;
+  }, [selectedShift, pettyCash]);
 
   // ── Render ────────────────────────────────────────────────────────
   return (
@@ -959,23 +976,34 @@ export default function CashRegisters({ embedded = false } = {}) {
                   padding: '0.75rem',
                   background: 'rgba(255,255,255,0.03)',
                   borderRadius: 8,
+                  alignItems: 'center',
                 }}
               >
+                {/* Auto-calculated expected drawer cash. The cashier can close
+                    straight away at this figure, or type a counted amount to
+                    record a variance. */}
+                <div style={{ flex: '1 1 100%', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                  Expected cash in drawer:{' '}
+                  <strong style={{ color: 'var(--text-primary)' }}>
+                    {formatMoney(currentBalance)}
+                  </strong>{' '}
+                  — leave the count blank to close at this amount.
+                </div>
                 <input
                   type="number"
                   min="0"
                   step="0.01"
-                  placeholder="Closing total — count the drawer"
+                  placeholder="Counted cash (optional)"
                   value={closingTotal}
                   onChange={(e) => setClosingTotal(e.target.value)}
-                  style={{ ...inputStyle, flex: '1 1 200px' }}
-                  aria-label="Closing total"
+                  style={{ ...inputStyle, flex: '1 1 180px' }}
+                  aria-label="Counted cash"
                 />
                 <input
                   placeholder="Notes (optional)"
                   value={closingNotes}
                   onChange={(e) => setClosingNotes(e.target.value)}
-                  style={{ ...inputStyle, flex: '2 1 240px' }}
+                  style={{ ...inputStyle, flex: '2 1 220px' }}
                   aria-label="Closing notes"
                 />
                 <button
@@ -984,7 +1012,7 @@ export default function CashRegisters({ embedded = false } = {}) {
                   style={primaryButtonStyle}
                 >
                   <Lock size={14} />
-                  {closingShift ? 'Closing…' : 'Close shift'}
+                  {closingShift ? 'Closing…' : 'Close register'}
                 </button>
               </form>
             </div>

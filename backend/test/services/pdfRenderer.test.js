@@ -196,6 +196,53 @@ describe('renderPrescriptionPdf', () => {
     expect(txt.toUpperCase()).toContain('FREQUENCY');
   });
 
+  test('header uses ASCII Tel:/Email: labels — no broken ☎/✉ glyphs', async () => {
+    // PDFKit's WinAnsi Helvetica can't render ☎/✉; they came out as "&"/"'".
+    const buf = await renderPrescriptionPdf(
+      { drugs: [] },
+      patientFixture(),
+      clinicFixture(),
+    );
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('Tel:');
+    expect(txt).toContain('Email:');
+    expect(txt).not.toContain('☎'); // ☎
+    expect(txt).not.toContain('✉'); // ✉
+  });
+
+  test('instructions callout heading has no ⚠ glyph prefix', async () => {
+    const buf = await renderPrescriptionPdf(
+      { drugs: [], instructions: 'Apply twice daily.' },
+      patientFixture(),
+      clinicFixture(),
+      { name: 'Dr. Harsh Mehta' },
+    );
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('Instructions');
+    expect(txt).not.toContain('⚠'); // ⚠
+  });
+
+  test('a short prescription renders on a SINGLE page', async () => {
+    const buf = await renderPrescriptionPdf(
+      {
+        drugs: [
+          { name: 'Minoxidil 5%', dosage: '1ml', frequency: 'BID', duration: '12 weeks' },
+          { name: 'Finasteride 1mg', dosage: '1 tab', frequency: 'OD', duration: '12 weeks' },
+        ],
+        instructions: 'Apply minoxidil only to dry scalp.',
+      },
+      patientFixture(),
+      clinicFixture(),
+      { name: 'Dr. Vikas Singh' },
+    );
+    const txt = extractPdfText(buf);
+    // The footer pass stamps "Page X of Y"; a 2-drug Rx must fit on one page.
+    expect(txt).toContain('Page 1 of 1');
+    // Exactly one PDF page object.
+    const pageCount = (buf.toString('latin1').match(/\/Type\s*\/Page[^s]/g) || []).length;
+    expect(pageCount).toBe(1);
+  });
+
   test('"no medications listed" placeholder when drugs list is empty', async () => {
     const buf = await renderPrescriptionPdf(
       { drugs: [] },

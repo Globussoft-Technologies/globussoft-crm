@@ -169,6 +169,27 @@ export default function Products() {
       return;
     }
 
+    // Numeric guards — stock / threshold / price / volume can never be negative.
+    // Stock + threshold are unit counts, so they must also be whole numbers.
+    const nonNegative = [
+      ['Current stock', formData.currentStock, true],
+      ['Reorder threshold', formData.threshold, true],
+      ['Price', formData.price, false],
+      ['Volume', formData.volume, false],
+    ];
+    for (const [label, raw, mustBeInt] of nonNegative) {
+      if (raw === '' || raw === null || raw === undefined) continue; // blank → server default
+      const n = Number(raw);
+      if (!Number.isFinite(n) || n < 0) {
+        notify.error(`${label} cannot be negative`);
+        return;
+      }
+      if (mustBeInt && !Number.isInteger(n)) {
+        notify.error(`${label} must be a whole number`);
+        return;
+      }
+    }
+
     try {
       if (editingId) {
         await fetchApi(`/api/wellness/products/${editingId}`, {
@@ -690,6 +711,7 @@ export default function Products() {
                   value={formData.price}
                   onChange={(e) => setFormData({ ...formData, price: e.target.value })}
                   step="0.01"
+                  min="0"
                   style={{
                     width: '100%',
                     padding: '0.75rem',
@@ -729,6 +751,7 @@ export default function Products() {
                   value={formData.volume}
                   onChange={(e) => setFormData({ ...formData, volume: e.target.value })}
                   step="0.01"
+                  min="0"
                   style={{
                     width: '100%',
                     padding: '0.75rem',
@@ -770,6 +793,8 @@ export default function Products() {
                 </label>
                 <input
                   type="number"
+                  min="0"
+                  step="1"
                   value={formData.currentStock}
                   onChange={(e) => setFormData({ ...formData, currentStock: e.target.value })}
                   style={{
@@ -788,6 +813,8 @@ export default function Products() {
                 </label>
                 <input
                   type="number"
+                  min="0"
+                  step="1"
                   value={formData.threshold}
                   onChange={(e) => setFormData({ ...formData, threshold: e.target.value })}
                   style={{

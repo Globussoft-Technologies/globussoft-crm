@@ -366,8 +366,11 @@ function drawBrandedHeader(doc, { brandName, tagline, clinic, logoBuffer, leftX,
   if (c.addressLine) addrLines.push(c.addressLine);
   const cityLine = [c.city, c.state, c.pincode].filter(Boolean).join(", ");
   if (cityLine) addrLines.push(cityLine);
-  if (c.phone) addrLines.push(`☎ ${c.phone}`); // ☎
-  if (c.email) addrLines.push(`✉ ${c.email}`); // ✉
+  // Plain-text labels — PDFKit's standard Helvetica (WinAnsi) has no ☎/✉
+  // glyphs, so those Unicode icons render as garbage ("&" / "'"). Use clear
+  // ASCII labels instead.
+  if (c.phone) addrLines.push(`Tel: ${c.phone}`);
+  if (c.email) addrLines.push(`Email: ${c.email}`);
   // Compose the whole right-rail as one block so vertical centring is honest.
   const blockH = addrLines.length * 11;
   let ry = bandY + (bandH - blockH) / 2;
@@ -526,8 +529,10 @@ function drawCalloutBox(doc, { x, y, w, heading, body, kind = "warning" }) {
   doc.rect(x, y, 4, h).fill(palette.border);
   doc.restore();
   if (heading) {
+    // No leading glyph — "⚠" isn't in Helvetica's WinAnsi set and renders as
+    // "&". The coloured box + left accent already mark this as a callout.
     doc.font("Helvetica-Bold").fontSize(10).fillColor(palette.text)
-      .text(`⚠ ${heading}`, x + padX + 4, y + padY, { width: w - padX * 2 - 8, lineBreak: false });
+      .text(heading, x + padX + 4, y + padY, { width: w - padX * 2 - 8, lineBreak: false });
   }
   if (body) {
     doc.font("Helvetica").fontSize(9.5).fillColor(palette.text)
@@ -539,29 +544,6 @@ function drawCalloutBox(doc, { x, y, w, heading, body, kind = "warning" }) {
   // the next element directly with moveDown / a fresh draw at doc.y.
   doc.y = y + h;
   return y + h;
-}
-
-// Faint "Rx" watermark behind the medications section. Drawn first so
-// the actual table sits on top. Uses fillOpacity so the watermark fades
-// into the page rather than dominating it. Serif voice matches the
-// reference's calligraphic prescription mark.
-//
-// Both text() calls pin width + height bounds so pdfkit's LineWrapper
-// never auto-paginates from the oversized 90pt glyph — without bounds,
-// it treats the descent of a giant glyph as "doesn't fit" and silently
-// adds a continuation page.
-function drawRxWatermark(doc, { x, y, size = 90 }) {
-  doc.save();
-  doc.fillOpacity(0.08).fillColor(BRAND.teal)
-    .font(SERIF_BOLD).fontSize(size)
-    .text("R", x, y, { lineBreak: false, width: size, height: size });
-  // The "x" curl beneath the R — smaller, slightly offset, italic-feel.
-  doc.font("Times-BoldItalic").fontSize(size * 0.55)
-    .text("x", x + size * 0.55, y + size * 0.45, {
-      lineBreak: false, width: size * 0.55, height: size * 0.55,
-    });
-  doc.restore();
-  doc.fillOpacity(1);
 }
 
 // Solid Rx mark (calligraphic) drawn at the top-left of each Rx card —
@@ -660,7 +642,7 @@ function getConsentBody(templateName) {
  * falls back to `clinic.name` as the title and skips the logo tile.
  */
 async function renderPrescriptionPdf(prescription, patient, clinic, doctor, opts = {}) {
-  const { tenant = null, logoBuffer = null } = opts || {};
+  const { tenant = null, logoBuffer = null, treatmentName = null } = opts || {};
   const doc = new PDFDocument({ size: "A4", margin: 50, bufferPages: true });
   const bufPromise = streamToBuffer(doc);
 
@@ -675,19 +657,31 @@ async function renderPrescriptionPdf(prescription, patient, clinic, doctor, opts
 
   const c = safeClinic(clinic);
   const brandName = tenant?.name || c.name || "Clinic";
+  const headerTagline =
+    tenant?.tagline || (brandName.toLowerCase().includes("wellness") ? "Wellness Clinic" : null);
+
+  // Continuation pages start below the repeated header band (header is 90px).
+  const CONTENT_TOP = 102;
 
   // Per-page section labels for the buffered-pages footer pass. Updated
   // every time we cross a new logical section so the footer reads e.g.
-  // "Prescription · Page 2 of 3".
+  // "Prescription · Page 2 of 3". Every NEW page also repeats the branded
+  // header band so a multi-page Rx reads as one letterhead throughout.
   const pageSectionLabels = ["Prescription"];
   let currentSection = "Prescription";
-  doc.on("pageAdded", () => pageSectionLabels.push(currentSection));
+  doc.on("pageAdded", () => {
+    pageSectionLabels.push(currentSection);
+    drawBrandedHeader(doc, {
+      brandName, tagline: headerTagline, clinic: c, logoBuffer, leftX, rightX: pageRight,
+    });
+    doc.y = CONTENT_TOP;
+  });
 
   // ── Local layout helpers (use the shared design system) ──────────
   const ensureSpace = (needed) => {
     if (doc.y + needed > contentBottom) {
       doc.addPage();
-      doc.y = 60;
+      doc.y = CONTENT_TOP;
     }
   };
 
@@ -737,7 +731,8 @@ async function renderPrescriptionPdf(prescription, patient, clinic, doctor, opts
   // Status pill, right-aligned with the title baseline.
   drawStatusPill(doc, status, pageRight - 80, doc.y - 32);
 
-  doc.moveDown(0.4);
+  // Clear gap so the subtitle never collides with the cards' top accent.
+  doc.y += 16;
 
   // ── Patient + Prescriber as side-by-side cards ───────────────────
   const cardGap = 12;
@@ -771,6 +766,7 @@ async function renderPrescriptionPdf(prescription, patient, clinic, doctor, opts
     .text(doctor?.name || "—", docCardX + 14, cardsTopY + 26, { width: cardW - 28, ellipsis: true, lineBreak: false });
   let dy = cardsTopY + 46;
   const dLines = [];
+  if (treatmentName) dLines.push(`Treatment · ${treatmentName}`);
   if (doctor?.phone) dLines.push(`Phone · ${doctor.phone}`);
   if (doctor?.email) dLines.push(`Email · ${doctor.email}`);
   if (doctor?.registrationNumber) dLines.push(`Reg. No · ${doctor.registrationNumber}`);
@@ -798,13 +794,9 @@ async function renderPrescriptionPdf(prescription, patient, clinic, doctor, opts
   currentSection = "Medications";
   drawSectionTitle(doc, "Medications", `${drugs.length || "No"} item${drugs.length === 1 ? "" : "s"} prescribed`,
     { x: leftX, w: usableW });
-  ensureSpace(60);
-  // Rx watermark sits behind the table — visible only in the gutters
-  // where the table doesn't cover it.
-  drawRxWatermark(doc, { x: pageRight - 110, y: doc.y - 8, size: 90 });
-  // Small calligraphic Rx mark above the table (reference page 4).
-  drawRxMark(doc, { x: leftX, y: doc.y, size: 22 });
-  doc.y = doc.y + 30;
+  ensureSpace(40);
+  // The table follows the section title directly — no decorative Rx mark.
+  doc.y += 8;
 
   doc.x = leftX;
   const cols = [
@@ -816,7 +808,7 @@ async function renderPrescriptionPdf(prescription, patient, clinic, doctor, opts
   ];
 
   let tableTop = doc.y;
-  if (tableTop + 30 > contentBottom) { doc.addPage(); tableTop = 60; }
+  if (tableTop + 30 > contentBottom) { doc.addPage(); tableTop = CONTENT_TOP; }
   // Teal header bar with white column labels.
   doc.save();
   doc.rect(leftX, tableTop, usableW, 24).fill(BRAND.teal);
@@ -855,7 +847,7 @@ async function renderPrescriptionPdf(prescription, patient, clinic, doctor, opts
 
       if (rowY + rowH > contentBottom) {
         doc.addPage();
-        rowY = 60;
+        rowY = CONTENT_TOP;
         // Re-paint header on the new page so the table reads correctly.
         doc.save();
         doc.rect(leftX, rowY, usableW, 24).fill(BRAND.teal);
@@ -946,7 +938,7 @@ async function renderPrescriptionPdf(prescription, patient, clinic, doctor, opts
     body: parsed.notes || "No clinical notes recorded.",
     kind: "warning",
   });
-  doc.moveDown(3);
+  doc.moveDown(0.6);
 
   // ── Doctor's signature block ─────────────────────────────────────
   // Guard against fires when doc.y was already pushed past page bottom by
@@ -954,9 +946,8 @@ async function renderPrescriptionPdf(prescription, patient, clinic, doctor, opts
   // an explicit y near contentBottom triggers pdfkit's continueOnNewPage
   // and silently adds a blank trailing page (4 phantom pages observed
   // before this guard).
-  doc.moveDown(1);
-  ensureSpace(80);
-  const sigBaseY = Math.min(Math.max(doc.y, contentBottom - 80), contentBottom - 36);
+  ensureSpace(46);
+  const sigBaseY = Math.min(Math.max(doc.y, contentBottom - 46), contentBottom - 32);
   const sigLineY = sigBaseY + 24;
   if (doctor?.name) {
     doc.font("Helvetica").fontSize(10).fillColor(BRAND.textBody)
@@ -1187,18 +1178,33 @@ async function renderPatientSummaryPdf({
   const usableW = pageRight - leftX;
   const contentBottom = doc.page.height - 56; // leave room for footer band
 
+  // Continuation pages start below the repeated header band (header is 90px).
+  const CONTENT_TOP = 102;
+
   // Per-page section labels — every time we advance into a new logical
   // section we update `currentSection`, and the `pageAdded` listener
   // propagates it to any auto-paginated page so the footer reads e.g.
-  // "Patient Profile · Page 2 of 7".
+  // "Patient Profile · Page 2 of 7". Every NEW page also repeats the branded
+  // header band so a multi-page summary reads as one letterhead throughout.
   const pageSectionLabels = ["Patient Profile & Case History"];
   let currentSection = "Patient Profile & Case History";
-  doc.on("pageAdded", () => pageSectionLabels.push(currentSection));
+  doc.on("pageAdded", () => {
+    pageSectionLabels.push(currentSection);
+    drawBrandedHeader(doc, {
+      brandName,
+      tagline: tenant?.tagline || (brandName.toLowerCase().includes("wellness") ? "Wellness Clinic" : null),
+      clinic: c,
+      logoBuffer,
+      leftX,
+      rightX: pageRight,
+    });
+    doc.y = CONTENT_TOP;
+  });
 
   const ensureSpace = (needed) => {
     if (doc.y + needed > contentBottom) {
       doc.addPage();
-      doc.y = 60;
+      doc.y = CONTENT_TOP;
     }
   };
 
@@ -1436,7 +1442,7 @@ async function renderPatientSummaryPdf({
   if (visits.length > 0) {
     currentSection = "Visits";
     doc.addPage();
-    doc.y = 60;
+    doc.y = CONTENT_TOP;
     sectionTitle(`Visits`, `${visits.length} visit${visits.length === 1 ? "" : "s"} on record · with before / after documentation`);
     for (let i = 0; i < visits.length; i++) {
       const v = visits[i];
@@ -1606,7 +1612,7 @@ async function renderPatientSummaryPdf({
   if (prescriptions.length > 0) {
     currentSection = "Prescriptions";
     doc.addPage();
-    doc.y = 60;
+    doc.y = CONTENT_TOP;
     sectionTitle(
       "Prescriptions",
       `${prescriptions.length} prescription${prescriptions.length === 1 ? "" : "s"} issued`,
@@ -1741,7 +1747,7 @@ async function renderPatientSummaryPdf({
 
           if (rowY + rowH > contentBottom) {
             doc.addPage();
-            rowY = 60;
+            rowY = CONTENT_TOP;
             doc.save();
             doc.rect(leftX, rowY, usableW, 24).fill(BRAND.teal);
             doc.restore();
@@ -1835,7 +1841,7 @@ async function renderPatientSummaryPdf({
     // BEFORE addPage so the new page's footer carries the right label.
     currentSection = "Treatment Plans & Wallet";
     doc.addPage();
-    doc.y = 60;
+    doc.y = CONTENT_TOP;
     sectionTitle("Treatment Plans & Wallet", "Financial summary");
 
     drawSectionLabelWithRule(doc, `Treatment Plans · ${treatmentPlans.length}`, { x: leftX, w: usableW });
@@ -1895,7 +1901,7 @@ async function renderPatientSummaryPdf({
     if (treatmentPlans.length === 0) {
       currentSection = "Wallet";
       doc.addPage();
-      doc.y = 60;
+      doc.y = CONTENT_TOP;
       sectionTitle("Wallet", "Financial summary");
     }
     drawSectionLabelWithRule(doc, "Wallet", { x: leftX, w: usableW });
@@ -1957,7 +1963,7 @@ async function renderPatientSummaryPdf({
         const rowH = Math.max(18, ...heights) + 6;
         if (rowY + rowH > contentBottom) {
           doc.addPage();
-          rowY = 60;
+          rowY = CONTENT_TOP;
         }
         if (ti % 2 === 1) {
           doc.save();

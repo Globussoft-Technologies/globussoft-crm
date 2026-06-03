@@ -374,21 +374,28 @@ export default function PointOfSale() {
   // ── Shift close ─────────────────────────────────────────────────────
   const closeShift = async () => {
     if (!currentShift) return;
-    if (closingTotal === '' || Number(closingTotal) < 0) {
-      notify.error('Enter the cash drawer total at close');
-      return;
+    // Counted total is OPTIONAL — blank means "auto-close at the system-computed
+    // expected cash" (variance 0). A counted amount is only needed to record a
+    // variance (physical count ≠ expected).
+    const body = { notes: closingNotes };
+    const trimmed = String(closingTotal).trim();
+    if (trimmed !== '') {
+      const total = Number(trimmed);
+      if (!Number.isFinite(total) || total < 0) {
+        notify.error('Counted cash must be a non-negative number');
+        return;
+      }
+      body.closingTotal = total;
     }
     setBusy(true);
     try {
       const closed = await fetchApi(`/api/pos/shifts/${currentShift.id}/close`, {
         method: 'POST',
-        body: JSON.stringify({
-          closingTotal: Number(closingTotal),
-          notes: closingNotes,
-        }),
+        body: JSON.stringify(body),
       });
       notify.success(
-        `Shift closed. Variance: ${formatMoney(closed.variance, 'INR', 'en-IN')}`,
+        `Shift closed at ${formatMoney(closed.closingTotal, 'INR', 'en-IN')}. ` +
+        `Variance: ${formatMoney(closed.variance, 'INR', 'en-IN')}`,
       );
       setCurrentShift(null);
       setClosingTotal('');
@@ -1207,11 +1214,13 @@ export default function PointOfSale() {
               <Lock size={18} /> Close shift
             </h2>
             <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', margin: '0 0 0.75rem 0' }}>
-              Count the cash drawer at end of shift, enter the total, and submit. Variance = counted − expected.
+              Click <strong>Close shift</strong> to close the drawer at the system-computed
+              expected cash. Only enter a counted total if you want to record a variance
+              (counted − expected).
             </p>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))', gap: '0.75rem', alignItems: 'end' }}>
               <div>
-                <label style={labelStyle}>Closing total (cash drawer count)</label>
+                <label style={labelStyle}>Counted cash (optional)</label>
                 <input
                   type="number"
                   min="0"
@@ -1219,7 +1228,7 @@ export default function PointOfSale() {
                   style={inputStyle}
                   value={closingTotal}
                   onChange={(e) => setClosingTotal(e.target.value)}
-                  placeholder="0"
+                  placeholder="Leave blank to auto-close"
                 />
               </div>
               <div style={{ gridColumn: 'span 2' }}>

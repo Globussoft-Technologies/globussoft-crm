@@ -1033,7 +1033,7 @@ router.post("/patients/tags", phiWriteGate, async (req, res) => {
     }
     const color =
       typeof req.body.color === "string" &&
-      /^#[0-9a-fA-F]{3,8}$/.test(req.body.color.trim())
+        /^#[0-9a-fA-F]{3,8}$/.test(req.body.color.trim())
         ? req.body.color.trim()
         : null;
     const existing = await prisma.tag.findFirst({
@@ -1064,13 +1064,13 @@ router.post("/patients/tags/bulk", phiWriteGate, async (req, res) => {
   try {
     const patientIds = Array.isArray(req.body.patientIds)
       ? req.body.patientIds
-          .map((n) => parseInt(n, 10))
-          .filter((n) => Number.isFinite(n))
+        .map((n) => parseInt(n, 10))
+        .filter((n) => Number.isFinite(n))
       : [];
     const tagIds = Array.isArray(req.body.tagIds)
       ? req.body.tagIds
-          .map((n) => parseInt(n, 10))
-          .filter((n) => Number.isFinite(n))
+        .map((n) => parseInt(n, 10))
+        .filter((n) => Number.isFinite(n))
       : [];
     if (!patientIds.length || !tagIds.length) {
       return res
@@ -1137,13 +1137,13 @@ router.delete("/patients/tags/bulk", phiWriteGate, async (req, res) => {
   try {
     const patientIds = Array.isArray(req.body.patientIds)
       ? req.body.patientIds
-          .map((n) => parseInt(n, 10))
-          .filter((n) => Number.isFinite(n))
+        .map((n) => parseInt(n, 10))
+        .filter((n) => Number.isFinite(n))
       : [];
     const tagIds = Array.isArray(req.body.tagIds)
       ? req.body.tagIds
-          .map((n) => parseInt(n, 10))
-          .filter((n) => Number.isFinite(n))
+        .map((n) => parseInt(n, 10))
+        .filter((n) => Number.isFinite(n))
       : [];
     if (!patientIds.length || !tagIds.length) {
       return res
@@ -1224,9 +1224,9 @@ async function buildPatientExportPayload(req) {
   const dataRows = rows.map((p) => {
     const tagNames = Array.isArray(p.tags)
       ? p.tags
-          .map((pt) => (pt && pt.tag ? pt.tag.name : null))
-          .filter(Boolean)
-          .join(", ")
+        .map((pt) => (pt && pt.tag ? pt.tag.name : null))
+        .filter(Boolean)
+        .join(", ")
       : "";
     return [
       p.id,
@@ -1403,7 +1403,7 @@ router.post("/patients/:id/tags", phiWriteGate, async (req, res) => {
       }
       const color =
         typeof req.body.color === "string" &&
-        /^#[0-9a-fA-F]{3,8}$/.test(req.body.color.trim())
+          /^#[0-9a-fA-F]{3,8}$/.test(req.body.color.trim())
           ? req.body.color.trim()
           : null;
       tag = await prisma.tag.findFirst({
@@ -1592,6 +1592,74 @@ router.get("/patients/:id/visits", phiReadGate, async (req, res) => {
   } catch (e) {
     console.error("[wellness] list patient visits error:", e.message);
     res.status(500).json({ error: "Failed to list patient visits" });
+  }
+});
+
+// POST /patients/:id/activities — log an Activity (e.g. a scheduled meeting)
+// against a Patient. The Inbox "Calendar Sync" modal lets an owner pick a
+// patient (not just a generic Contact) and schedule a meeting; the Activity
+// timeline is keyed on Contact.id, so we ensure the Patient is linked to a
+// Contact (creating + linking one from the patient's details on first use)
+// and write the Activity against that contactId. Mirrors the generic
+// POST /api/contacts/:id/activities handler so patient + contact meetings
+// land in the same activity stream.
+router.post("/patients/:id/activities", phiWriteGate, async (req, res) => {
+  try {
+    const patientId = parseInt(req.params.id);
+    const patient = await prisma.patient.findFirst({
+      where: tenantWhere(req, { id: patientId }),
+    });
+    if (!patient) return res.status(404).json({ error: "Patient not found" });
+
+    // The Activity / first-response timeline is Contact-scoped, and Contact
+    // requires a non-null email (@@unique([email, tenantId])). A patient with
+    // no email can't be linked, so reject rather than fabricate a placeholder.
+    let contactId = patient.contactId;
+    if (!contactId) {
+      if (!patient.email) {
+        return res.status(400).json({
+          error: "Patient has no email; cannot associate a meeting",
+          code: "PATIENT_NO_EMAIL",
+        });
+      }
+      // Reuse an existing same-email contact in this tenant if present
+      // (respects the email-per-tenant uniqueness), else create one.
+      const existingContact = await prisma.contact.findFirst({
+        where: { email: patient.email, tenantId: req.user.tenantId },
+        select: { id: true },
+      });
+      const contact =
+        existingContact ||
+        (await prisma.contact.create({
+          data: {
+            name: patient.name,
+            email: patient.email,
+            phone: patient.phone || null,
+            status: "Customer",
+            source: patient.source || "wellness-patient",
+            tenantId: req.user.tenantId,
+          },
+        }));
+      contactId = contact.id;
+      // Link the patient back to the contact so future activities reuse it.
+      await prisma.patient.update({
+        where: { id: patient.id },
+        data: { contactId },
+      });
+    }
+
+    const activity = await prisma.activity.create({
+      data: {
+        ...req.body,
+        contactId,
+        userId: req.user ? req.user.userId : null,
+        tenantId: req.user.tenantId,
+      },
+    });
+    res.status(201).json(activity);
+  } catch (e) {
+    console.error("[wellness] create patient activity error:", e.message);
+    res.status(500).json({ error: "Failed to create patient activity" });
   }
 });
 
@@ -3128,6 +3196,117 @@ router.post("/visits/:id/consumptions", phiWriteGate, async (req, res) => {
   }
 });
 
+// PUT /visits/:id/consumptions/:consumptionId — AMEND a consumption line.
+// Per the CLINICAL ARTEFACT RETENTION POLICY above, ServiceConsumption rows
+// are permanent and MUST NOT be deleted; corrections are made by amending the
+// existing row (typo in product name, wrong qty / unit cost). The audit log
+// records prior + new values so the historical state stays reconstructable.
+router.put(
+  "/visits/:id/consumptions/:consumptionId",
+  phiWriteGate,
+  async (req, res) => {
+    try {
+      const visitId = parseInt(req.params.id);
+      const consumptionId = parseInt(req.params.consumptionId);
+
+      // Tenant- + visit-scoped lookup so a caller can't amend another
+      // tenant's row (or a row from a different visit).
+      const existing = await prisma.serviceConsumption.findFirst({
+        where: tenantWhere(req, { id: consumptionId, visitId }),
+      });
+      if (!existing)
+        return res.status(404).json({ error: "Consumption item not found" });
+
+      // Only the three user-editable fields are amendable. Anything omitted
+      // falls back to the current value so a partial PUT is safe.
+      const productName =
+        req.body.productName != null ? req.body.productName : existing.productName;
+      const qty = req.body.qty != null ? req.body.qty : existing.qty;
+      const unitCost =
+        req.body.unitCost != null ? req.body.unitCost : existing.unitCost;
+
+      if (!productName || !String(productName).trim())
+        return res.status(400).json({ error: "productName required" });
+
+      // Same non-negative + per-line caps as the POST create path (#321).
+      const qNum = parseInt(qty) || 0;
+      const cNum = parseFloat(unitCost) || 0;
+      if (qNum < 1) {
+        return res.status(400).json({
+          error: "qty must be at least 1",
+          code: "AMOUNT_NEGATIVE",
+        });
+      }
+      if (cNum < 0) {
+        return res.status(400).json({
+          error: "unitCost must be non-negative",
+          code: "AMOUNT_NEGATIVE",
+        });
+      }
+      if (qNum > 10_000) {
+        return res.status(400).json({
+          error: "qty exceeds the 10,000-unit per-line cap",
+          code: "QTY_TOO_LARGE",
+        });
+      }
+      if (cNum > 1_000_000) {
+        return res.status(400).json({
+          error: "unitCost exceeds the ₹10,00,000 per-unit cap",
+          code: "UNIT_COST_TOO_LARGE",
+        });
+      }
+      if (qNum * cNum > 10_000_000) {
+        return res.status(400).json({
+          error: "consumption line total exceeds the ₹1,00,00,000 per-line cap",
+          code: "LINE_TOTAL_TOO_LARGE",
+        });
+      }
+
+      const updated = await prisma.serviceConsumption.update({
+        where: { id: existing.id },
+        data: {
+          productName: String(productName).trim(),
+          qty: qNum,
+          unitCost: cNum,
+        },
+      });
+
+      // Amendment trail: capture the before/after for the three editable
+      // fields so the permanent record stays auditable (policy §"Corrections").
+      writeAudit(
+        "ServiceConsumption",
+        "CONSUMPTION_AMENDED",
+        existing.id,
+        req.user.userId,
+        req.user.tenantId,
+        {
+          visitId,
+          before: {
+            productName: existing.productName,
+            qty: existing.qty,
+            unitCost: existing.unitCost,
+          },
+          after: {
+            productName: updated.productName,
+            qty: updated.qty,
+            unitCost: updated.unitCost,
+          },
+        },
+      ).catch((auditErr) => {
+        console.warn(
+          "[wellness] audit CONSUMPTION_AMENDED failed:",
+          auditErr.message,
+        );
+      });
+
+      res.json(updated);
+    } catch (e) {
+      console.error("[wellness] consumption amend error:", e.message);
+      res.status(500).json({ error: "Failed to amend consumption item" });
+    }
+  },
+);
+
 // ── Prescriptions ──────────────────────────────────────────────────
 
 // #326: clinical-write gate. The reusable verifyWellnessRole emits
@@ -3298,10 +3477,10 @@ router.put("/prescriptions/:id", requireClinicalRole, async (req, res) => {
       newDrugs = null;
     try {
       priorDrugs = JSON.parse(existing.drugs || "[]");
-    } catch (_) {}
+    } catch (_) { }
     try {
       newDrugs = JSON.parse(updated.drugs || "[]");
-    } catch (_) {}
+    } catch (_) { }
     await writeAudit(
       "Prescription",
       "UPDATE_PRESCRIPTION",
@@ -4870,7 +5049,7 @@ router.post(
           req.user.tenantId,
           req.io,
         );
-      } catch (_e) {}
+      } catch (_e) { }
       res.status(201).json(plan);
     } catch (e) {
       console.error("[wellness] create membership plan error:", e.message);
@@ -5176,7 +5355,7 @@ router.post("/patients/:id/memberships", phiWriteGate, async (req, res) => {
         req.user.tenantId,
         req.io,
       );
-    } catch (_e) {}
+    } catch (_e) { }
     res.status(201).json(membership);
   } catch (e) {
     console.error("[wellness] purchase membership error:", e.message);
@@ -5314,7 +5493,7 @@ router.post("/memberships/:id/redeem", phiWriteGate, async (req, res) => {
             req.user.tenantId,
             req.io,
           );
-        } catch (_e) {}
+        } catch (_e) { }
       }
       return res
         .status(410)
@@ -5407,7 +5586,7 @@ router.post("/memberships/:id/redeem", phiWriteGate, async (req, res) => {
         req.user.tenantId,
         req.io,
       );
-    } catch (_e) {}
+    } catch (_e) { }
 
     res.json({
       success: true,
@@ -5567,7 +5746,7 @@ router.post(
           req.user.tenantId,
           req.io,
         );
-      } catch (_e) {}
+      } catch (_e) { }
       res.json({ success: true, membership: updated });
     } catch (e) {
       console.error("[wellness] cancel membership error:", e.message);
@@ -8101,17 +8280,17 @@ router.get(
         prisma.agentRecommendation.findMany({
           where: locationId
             ? {
-                tenantId,
-                status: "pending",
-                // AgentRecommendation has no direct locationId. The orchestrator
-                // stores per-location recommendations with locationId in the
-                // JSON `payload`. Match either explicit JSON-substring or
-                // tenant-wide recommendations that lack a locationId scope.
-                OR: [
-                  { payload: { contains: `"locationId":${locationId}` } },
-                  { payload: { contains: `"locationId": ${locationId}` } },
-                ],
-              }
+              tenantId,
+              status: "pending",
+              // AgentRecommendation has no direct locationId. The orchestrator
+              // stores per-location recommendations with locationId in the
+              // JSON `payload`. Match either explicit JSON-substring or
+              // tenant-wide recommendations that lack a locationId scope.
+              OR: [
+                { payload: { contains: `"locationId":${locationId}` } },
+                { payload: { contains: `"locationId": ${locationId}` } },
+              ],
+            }
             : { tenantId, status: "pending" },
           orderBy: { priority: "desc" },
           take: 5,
@@ -8624,10 +8803,10 @@ function sanitizeUtmInput(utm, referrer) {
       v == null
         ? null
         : String(v)
-            // eslint-disable-next-line no-control-regex
-            .replace(/[\x00-\x1f\x7f]/g, "")
-            .slice(0, 191)
-            .trim() || null;
+          // eslint-disable-next-line no-control-regex
+          .replace(/[\x00-\x1f\x7f]/g, "")
+          .slice(0, 191)
+          .trim() || null;
     out.utmSource = trim(utm.utmSource ?? utm.source);
     out.utmMedium = trim(utm.utmMedium ?? utm.medium);
     out.utmCampaign = trim(utm.utmCampaign ?? utm.campaign);
@@ -9048,12 +9227,24 @@ router.get("/prescriptions/:id/pdf", async (req, res) => {
     const clinic = await primaryClinic(req.user.tenantId);
     const doctor =
       rx.doctor || (req.user?.name ? { name: req.user.name } : null);
-    const { tenant, logoBuffer } = await loadTenantBrandAssets(
-      req.user.tenantId,
-    );
+    const { tenant, logoBuffer } = await loadTenantBrandAssets(req.user.tenantId);
+
+    // Treatment name = the service of the prescription's visit (best-effort).
+    let treatmentName = null;
+    try {
+      if (rx.visitId) {
+        const visit = await prisma.visit.findFirst({
+          where: tenantWhere(req, { id: rx.visitId }),
+          select: { service: { select: { name: true } } },
+        });
+        treatmentName = visit?.service?.name || null;
+      }
+    } catch (_e) { /* treatment line is optional */ }
+
     const buf = await renderPrescriptionPdf(rx, rx.patient, clinic, doctor, {
       tenant,
       logoBuffer,
+      treatmentName,
     });
     // PRD §11: PDF export of an Rx is a downloadable PHI artefact; the audit
     // row is what proves "who pulled this drug list and when". IDs only —
@@ -9364,10 +9555,10 @@ router.get("/patients/:id/summary.pdf", phiReadGate, async (req, res) => {
 
     const walletTransactions = wallet
       ? await prisma.walletTransaction.findMany({
-          where: { tenantId: req.user.tenantId, walletId: wallet.id },
-          orderBy: { createdAt: "desc" },
-          take: 50,
-        })
+        where: { tenantId: req.user.tenantId, walletId: wallet.id },
+        orderBy: { createdAt: "desc" },
+        take: 50,
+      })
       : [];
 
     // Resolve a logo image to embed: prefer the tenant's uploaded
@@ -11252,9 +11443,9 @@ router.get(
       const ids = grouped.map((g) => g.patientId);
       const patients = ids.length
         ? await prisma.patient.findMany({
-            where: { id: { in: ids }, tenantId: req.user.tenantId },
-            select: { id: true, name: true, phone: true },
-          })
+          where: { id: { in: ids }, tenantId: req.user.tenantId },
+          select: { id: true, name: true, phone: true },
+        })
         : [];
       const byId = Object.fromEntries(patients.map((p) => [p.id, p]));
       res.json(
@@ -11871,7 +12062,7 @@ router.post(
           req.user.tenantId,
           req.io,
         );
-      } catch (_e) {}
+      } catch (_e) { }
       res.status(201).json(tx);
     } catch (e) {
       console.error("[wellness] wallet credit error:", e.message);
@@ -11945,7 +12136,7 @@ router.post(
           req.user.tenantId,
           req.io,
         );
-      } catch (_e) {}
+      } catch (_e) { }
       res.status(201).json(tx);
     } catch (e) {
       console.error("[wellness] wallet debit error:", e.message);
@@ -12045,7 +12236,7 @@ router.post(
       }
       const color =
         typeof req.body.color === "string" &&
-        /^#[0-9a-fA-F]{3,8}$/.test(req.body.color.trim())
+          /^#[0-9a-fA-F]{3,8}$/.test(req.body.color.trim())
           ? req.body.color.trim()
           : null;
 
@@ -12149,7 +12340,7 @@ router.post(
           req.user.tenantId,
           req.io,
         );
-      } catch (_e) {}
+      } catch (_e) { }
       // Return the plaintext ONCE in the response as `code` (back-compat with
       // 48 existing spec assertions) + `oneTimeCode` (explicit alias making
       // the disclosure semantics obvious to API consumers).
@@ -12378,7 +12569,7 @@ router.post("/giftcards/redeem", phiReadGate, async (req, res) => {
         req.user.tenantId,
         req.io,
       );
-    } catch (_e) {}
+    } catch (_e) { }
     res.status(201).json({ giftCard: updated, transaction: tx });
   } catch (e) {
     console.error("[wellness] giftcard redeem error:", e.message);
@@ -12833,7 +13024,7 @@ router.post("/giftcards/:id/purchase/confirm", async (req, res) => {
         req.user.tenantId,
         req.io,
       );
-    } catch (_e) {}
+    } catch (_e) { }
 
     res.json({
       success: true,
@@ -13244,7 +13435,7 @@ router.post(
           req.user.tenantId,
           req.io,
         );
-      } catch (_e) {}
+      } catch (_e) { }
 
       res.json({
         success: true,
@@ -13405,7 +13596,7 @@ router.post(
           req.user.tenantId,
           req.io,
         );
-      } catch (_e) {}
+      } catch (_e) { }
       res.status(201).json({ giftCard: updated, transaction: tx });
     } catch (e) {
       console.error("[wellness] giftcard apply error:", e.message);
@@ -13470,10 +13661,10 @@ router.post("/coupons", verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
       serviceIds: req.body.serviceIds
         ? Array.isArray(req.body.serviceIds)
           ? JSON.stringify(
-              req.body.serviceIds
-                .map((n) => parseInt(n, 10))
-                .filter(Number.isFinite),
-            )
+            req.body.serviceIds
+              .map((n) => parseInt(n, 10))
+              .filter(Number.isFinite),
+          )
           : String(req.body.serviceIds)
         : null,
       isActive: req.body.isActive === false ? false : true,
@@ -13555,10 +13746,10 @@ router.put(
           data[k] = req.body[k]
             ? Array.isArray(req.body[k])
               ? JSON.stringify(
-                  req.body[k]
-                    .map((n) => parseInt(n, 10))
-                    .filter(Number.isFinite),
-                )
+                req.body[k]
+                  .map((n) => parseInt(n, 10))
+                  .filter(Number.isFinite),
+              )
               : String(req.body[k])
             : null;
         }
@@ -13811,10 +14002,10 @@ router.post(
         serviceIds: req.body.serviceIds
           ? Array.isArray(req.body.serviceIds)
             ? JSON.stringify(
-                req.body.serviceIds
-                  .map((n) => parseInt(n, 10))
-                  .filter(Number.isFinite),
-              )
+              req.body.serviceIds
+                .map((n) => parseInt(n, 10))
+                .filter(Number.isFinite),
+            )
             : String(req.body.serviceIds)
           : null,
         isActive: req.body.isActive === false ? false : true,
@@ -13880,10 +14071,10 @@ router.put(
           data[k] = req.body[k]
             ? Array.isArray(req.body[k])
               ? JSON.stringify(
-                  req.body[k]
-                    .map((n) => parseInt(n, 10))
-                    .filter(Number.isFinite),
-                )
+                req.body[k]
+                  .map((n) => parseInt(n, 10))
+                  .filter(Number.isFinite),
+              )
               : String(req.body[k])
             : null;
         } else if (k === "expiresAt") {
@@ -14032,7 +14223,7 @@ router.post("/visits/:id/apply-cashback", phiWriteGate, async (req, res) => {
         req.user.tenantId,
         req.io,
       );
-    } catch (_e) {}
+    } catch (_e) { }
     res.status(201).json({
       applied: true,
       earn: result.earn,

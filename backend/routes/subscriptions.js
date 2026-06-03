@@ -501,21 +501,33 @@ router.post('/verify-payment', verifyToken, verifyRole(['ADMIN']), async (req, r
       }
     });
 
-    // Log the subscription spend as a cash-drawer expense (POS Cash Register
-    // → Expenses tab) so it's visible + deducted from the drawer. Best-effort:
-    // only lands if a shift is open, and never blocks the purchase.
+    // Log the subscription spend in two places, both best-effort (never block
+    // the purchase):
+    //   1. Expense Management ledger (/expenses) — NOT shift-scoped, so it
+    //      lands reliably in every environment. This is the canonical record.
+    //   2. POS Cash Register Expenses tab — only when a drawer shift is OPEN,
+    //      so it's deducted from the live cash drawer.
+    let expenseRecorded = false;
     let posExpenseRecorded = false;
     try {
-      const { recordSubscriptionExpense } = require('../lib/posExpense');
-      const r = await recordSubscriptionExpense({
+      const { recordSubscriptionExpenseEntry, recordSubscriptionExpense } = require('../lib/posExpense');
+      const exp = await recordSubscriptionExpenseEntry({
+        tenantId,
+        userId,
+        amount: subscription.amount,
+        planName: subscription.planName,
+      });
+      expenseRecorded = !!exp.recorded;
+
+      const pos = await recordSubscriptionExpense({
         tenantId,
         userId,
         amount: subscription.amount,
         reason: `Subscription: ${subscription.planName}`,
       });
-      posExpenseRecorded = !!r.recorded;
+      posExpenseRecorded = !!pos.recorded;
     } catch (e) {
-      console.error('[subscriptions.verify-payment] POS expense log failed:', e.message);
+      console.error('[subscriptions.verify-payment] expense log failed:', e.message);
     }
 
     res.json({
@@ -530,8 +542,9 @@ router.post('/verify-payment', verifyToken, verifyRole(['ADMIN']), async (req, r
       // True when the purchase was queued behind a still-running period rather
       // than activated immediately — lets the UI say "starts on <startDate>".
       scheduled: subscription.status === 'SCHEDULED',
-      // Surfaced so the UI can hint "open a shift to record this expense" when
-      // the spend couldn't be logged to the drawer (no open shift).
+      // expenseRecorded → shows in Expense Management (/expenses). posExpense-
+      // Recorded → also deducted from an open POS drawer (false if no shift).
+      expenseRecorded,
       posExpenseRecorded,
     });
   } catch (err) {

@@ -477,7 +477,29 @@ export default function BookAppointment() {
               </p>
             </div>
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+            <div
+              data-testid="my-appointments-scroll"
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '1rem',
+                // Cap the list height so the panel doesn't stretch
+                // indefinitely as the patient accumulates appointments.
+                // Cards beyond the cap scroll inside this container
+                // instead of pushing the booking form off-screen on
+                // shorter viewports.
+                maxHeight: '60vh',
+                overflowY: 'auto',
+                // Pad the right edge so the scrollbar doesn't clip the
+                // card border, and reserve gutter even when the scrollbar
+                // is hidden (overlay-scrollbar OSes) to avoid layout
+                // shift between scrollable / non-scrollable states.
+                paddingRight: '0.5rem',
+                scrollbarWidth: 'thin',
+                scrollbarColor: 'rgba(255,255,255,0.25) transparent',
+                scrollbarGutter: 'stable',
+              }}
+            >
               {myAppointments.map(apt => (
                 <div
                   key={apt.id}

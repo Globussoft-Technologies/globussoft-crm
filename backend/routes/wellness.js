@@ -54,6 +54,12 @@ const {
 const { parseDateTimeLocalInTZ, formatInTenantTZ } = require("../lib/datetime");
 // Wave 11 Agent GG: 4-class booking-conflict gate.
 const { assertVisitSlotAvailable } = require("../lib/bookingAvailability");
+// Centralized appointment service — book / cancel / reschedule business
+// rules. Both the legacy /appointments/* routes (CUSTOMER session) and
+// the new /portal/appointments/* routes (verifyPatientToken accepts both
+// CUSTOMER + phone+OTP) converge on this service so business logic
+// stays in one place.
+const appointmentService = require("../services/appointmentService");
 // Issue #207/#214/#216: wellness users carry both `role` (ADMIN/MANAGER/USER)
 // and an orthogonal `wellnessRole` (doctor/professional/telecaller/helper).
 // verifyRole only knows about the former, so a USER+doctor could hit Owner-
@@ -124,9 +130,7 @@ async function verifyPatientToken(req, res, next) {
           .json({ error: "Invalid or expired portal token" });
       }
     } else {
-      return res
-        .status(401)
-        .json({ error: "Invalid or expired portal token" });
+      return res.status(401).json({ error: "Invalid or expired portal token" });
     }
   }
 
@@ -160,25 +164,37 @@ async function verifyPatientToken(req, res, next) {
     }
   }
 
-  // Path B — regular CUSTOMER session token; resolve linked Patient.
+  // Path B — any authenticated session that has (or can claim) a linked
+  // Patient row in this tenant.
   //
-  // A CUSTOMER user IS the patient — they self-registered via
-  // /auth/customer/register to book their own appointments. If a Patient
-  // row isn't linked yet, resolve in this order:
-  //   1. Direct link via Patient.userId (already linked — fast path)
-  //   2. Claim an unlinked Patient with the same (email, tenantId) —
-  //      handles the case where clinic staff created the Patient first
-  //      and the customer registered later (the link is established now)
-  //   3. Auto-create a minimal Patient row from the User profile, linked
-  //      via userId, so dashboard widgets work on first sign-in
-  if (decoded.userType === "CUSTOMER" && decoded.userId && decoded.tenantId) {
+  // The data model: clinics use BOTH the CUSTOMER system role AND custom
+  // STAFF-typed roles (commonly the default "USER" role) as patient
+  // pools. The distinguishing characteristic of "this user is a patient"
+  // is NOT the role name but whether a Patient row is linked to their
+  // userId in this tenant.
+  //
+  // Resolution order:
+  //   1. Direct link via Patient.userId (fast path, applies to ANY role).
+  //   2. (CUSTOMER userType only) Claim an unlinked Patient with the
+  //      same (email, tenantId) — handles self-registered customers
+  //      whose Patient record was created by staff first.
+  //   3. (CUSTOMER userType only) Auto-create a minimal Patient row
+  //      from the User profile so dashboard widgets work on first
+  //      sign-in.
+  //
+  // STAFF-typed users (USER, DOCTOR, MANAGER, etc.) only get the direct
+  // link in step 1 — we deliberately do NOT auto-create Patient rows
+  // for them. Real staff (admins, doctors, receptionists) have no
+  // linked Patient row and get rejected with 401 here; the frontend
+  // shows the role-mismatch view instead of triggering forced logout.
+  if (decoded.userId && decoded.tenantId) {
     try {
       let patient = await prisma.patient.findFirst({
         where: { userId: decoded.userId, tenantId: decoded.tenantId },
         select: { id: true, phone: true, tenantId: true },
       });
 
-      if (!patient) {
+      if (!patient && decoded.userType === "CUSTOMER") {
         const userRow = await prisma.user.findUnique({
           where: { id: decoded.userId },
           select: { name: true, email: true },
@@ -220,6 +236,17 @@ async function verifyPatientToken(req, res, next) {
             select: { id: true, phone: true, tenantId: true },
           });
         }
+      }
+
+      if (!patient) {
+        // No linked Patient row for this user. Surface a distinct error
+        // code so the frontend can show "this account isn't linked to a
+        // patient profile" rather than treating it as a generic auth
+        // failure (which would force-logout via fetchApi's 401 handler).
+        return res.status(403).json({
+          error: "This account is not linked to a patient profile",
+          code: "NO_PATIENT_PROFILE",
+        });
       }
 
       req.patient = {
@@ -395,10 +422,9 @@ const phiWriteGate = verifyWellnessRole(
 // stays so RBAC ADMIN/MANAGER continue to short-circuit before any
 // permission lookup (no DB hit on the hot path).
 const adminOrPerm = (module, action) =>
-  verifyWellnessRole(
-    ["admin", "manager"],
-    { anyOfPermissions: [{ module, action }] },
-  );
+  verifyWellnessRole(["admin", "manager"], {
+    anyOfPermissions: [{ module, action }],
+  });
 
 // Plan #PAT-FILTERS / #PAT-TAGS — querystring helpers shared by the
 // patient list + export + bulk-tag endpoints.
@@ -1007,7 +1033,7 @@ router.post("/patients/tags", phiWriteGate, async (req, res) => {
     }
     const color =
       typeof req.body.color === "string" &&
-        /^#[0-9a-fA-F]{3,8}$/.test(req.body.color.trim())
+      /^#[0-9a-fA-F]{3,8}$/.test(req.body.color.trim())
         ? req.body.color.trim()
         : null;
     const existing = await prisma.tag.findFirst({
@@ -1038,13 +1064,13 @@ router.post("/patients/tags/bulk", phiWriteGate, async (req, res) => {
   try {
     const patientIds = Array.isArray(req.body.patientIds)
       ? req.body.patientIds
-        .map((n) => parseInt(n, 10))
-        .filter((n) => Number.isFinite(n))
+          .map((n) => parseInt(n, 10))
+          .filter((n) => Number.isFinite(n))
       : [];
     const tagIds = Array.isArray(req.body.tagIds)
       ? req.body.tagIds
-        .map((n) => parseInt(n, 10))
-        .filter((n) => Number.isFinite(n))
+          .map((n) => parseInt(n, 10))
+          .filter((n) => Number.isFinite(n))
       : [];
     if (!patientIds.length || !tagIds.length) {
       return res
@@ -1111,13 +1137,13 @@ router.delete("/patients/tags/bulk", phiWriteGate, async (req, res) => {
   try {
     const patientIds = Array.isArray(req.body.patientIds)
       ? req.body.patientIds
-        .map((n) => parseInt(n, 10))
-        .filter((n) => Number.isFinite(n))
+          .map((n) => parseInt(n, 10))
+          .filter((n) => Number.isFinite(n))
       : [];
     const tagIds = Array.isArray(req.body.tagIds)
       ? req.body.tagIds
-        .map((n) => parseInt(n, 10))
-        .filter((n) => Number.isFinite(n))
+          .map((n) => parseInt(n, 10))
+          .filter((n) => Number.isFinite(n))
       : [];
     if (!patientIds.length || !tagIds.length) {
       return res
@@ -1198,9 +1224,9 @@ async function buildPatientExportPayload(req) {
   const dataRows = rows.map((p) => {
     const tagNames = Array.isArray(p.tags)
       ? p.tags
-        .map((pt) => (pt && pt.tag ? pt.tag.name : null))
-        .filter(Boolean)
-        .join(", ")
+          .map((pt) => (pt && pt.tag ? pt.tag.name : null))
+          .filter(Boolean)
+          .join(", ")
       : "";
     return [
       p.id,
@@ -1377,7 +1403,7 @@ router.post("/patients/:id/tags", phiWriteGate, async (req, res) => {
       }
       const color =
         typeof req.body.color === "string" &&
-          /^#[0-9a-fA-F]{3,8}$/.test(req.body.color.trim())
+        /^#[0-9a-fA-F]{3,8}$/.test(req.body.color.trim())
           ? req.body.color.trim()
           : null;
       tag = await prisma.tag.findFirst({
@@ -2471,31 +2497,25 @@ router.post("/visits", phiWriteGate, async (req, res) => {
     const isCompleted =
       !status || status === "completed" || status === "in-treatment";
     if (isCompleted && !serviceId)
-      return res
-        .status(400)
-        .json({
-          error: "serviceId is required for a completed visit",
-          code: "SERVICE_REQUIRED",
-        });
+      return res.status(400).json({
+        error: "serviceId is required for a completed visit",
+        code: "SERVICE_REQUIRED",
+      });
     if (isCompleted && !doctorId)
-      return res
-        .status(400)
-        .json({
-          error: "doctorId is required for a completed visit",
-          code: "DOCTOR_REQUIRED",
-        });
+      return res.status(400).json({
+        error: "doctorId is required for a completed visit",
+        code: "DOCTOR_REQUIRED",
+      });
     // #109: amount must be non-negative — negative charges distort revenue analytics.
     if (
       amountCharged != null &&
       amountCharged !== "" &&
       Number(amountCharged) < 0
     ) {
-      return res
-        .status(400)
-        .json({
-          error: "amountCharged must be 0 or greater",
-          code: "AMOUNT_NEGATIVE",
-        });
+      return res.status(400).json({
+        error: "amountCharged must be 0 or greater",
+        code: "AMOUNT_NEGATIVE",
+      });
     }
     // #277: cap amountCharged at ₹50,00,000 (₹50L) to match the Service.basePrice
     // ceiling from #209. Without this, a visit can store ₹1e15 (one quadrillion)
@@ -2505,12 +2525,10 @@ router.post("/visits", phiWriteGate, async (req, res) => {
       amountCharged !== "" &&
       Number(amountCharged) > 5_000_000
     ) {
-      return res
-        .status(400)
-        .json({
-          error: "amountCharged exceeds the ₹50,00,000 per-visit cap",
-          code: "AMOUNT_TOO_LARGE",
-        });
+      return res.status(400).json({
+        error: "amountCharged exceeds the ₹50,00,000 per-visit cap",
+        code: "AMOUNT_TOO_LARGE",
+      });
     }
 
     // Wave 11 Agent GG: 4-class booking conflict gate.
@@ -2522,13 +2540,11 @@ router.post("/visits", phiWriteGate, async (req, res) => {
       locationId: locationId ? parseInt(locationId) : null,
     });
     if (!slotCheck.ok) {
-      return res
-        .status(409)
-        .json({
-          error: slotCheck.detail,
-          code: slotCheck.code,
-          detail: slotCheck.detail,
-        });
+      return res.status(409).json({
+        error: slotCheck.detail,
+        code: slotCheck.code,
+        detail: slotCheck.detail,
+      });
     }
 
     const visit = await prisma.visit.create({
@@ -2631,6 +2647,35 @@ router.post("/visits", phiWriteGate, async (req, res) => {
   }
 });
 
+// Staff-side endpoint to assign a doctor to a pending appointment (one
+// where doctorId is null — typically a portal self-booking with "No
+// preference — admin will assign"). Runs the same availability guards
+// as the booking flow so the assignment can't create a conflict.
+//
+// Once applied, the visit moves out of the patient's "Pending
+// Assignment" bucket and into "Upcoming" — the patient's MyBookings
+// picks this up on its next focus/visibility refresh (no extra
+// notification needed for Phase 1).
+router.patch("/visits/:id/assign-doctor", phiWriteGate, async (req, res) => {
+  try {
+    const { visit } = await appointmentService.assignDoctor({
+      tenantId: req.user.tenantId,
+      visitId: req.params.id,
+      doctorId: req.body.doctorId,
+      actor: { type: "user", id: req.user.userId },
+    });
+    res.json({ success: true, visit });
+  } catch (err) {
+    if (err && err.name === "AppointmentError") {
+      return res
+        .status(err.status)
+        .json({ error: err.message, code: err.code });
+    }
+    console.error("[wellness] assign doctor failed:", err.message);
+    res.status(500).json({ error: "Failed to assign doctor" });
+  }
+});
+
 router.put("/visits/:id", phiWriteGate, async (req, res) => {
   try {
     const id = parseInt(req.params.id);
@@ -2678,19 +2723,15 @@ router.put("/visits/:id", phiWriteGate, async (req, res) => {
     if (data.amountCharged != null && data.amountCharged !== "") {
       const amt = Number(data.amountCharged);
       if (amt < 0)
-        return res
-          .status(400)
-          .json({
-            error: "amountCharged must be 0 or greater",
-            code: "AMOUNT_NEGATIVE",
-          });
+        return res.status(400).json({
+          error: "amountCharged must be 0 or greater",
+          code: "AMOUNT_NEGATIVE",
+        });
       if (amt > 5_000_000)
-        return res
-          .status(400)
-          .json({
-            error: "amountCharged exceeds the ₹50,00,000 per-visit cap",
-            code: "AMOUNT_TOO_LARGE",
-          });
+        return res.status(400).json({
+          error: "amountCharged exceeds the ₹50,00,000 per-visit cap",
+          code: "AMOUNT_TOO_LARGE",
+        });
     }
 
     // #197: enforce status enum + transition matrix. A junk status like 'frog'
@@ -2732,13 +2773,11 @@ router.put("/visits/:id", phiWriteGate, async (req, res) => {
           data.locationId !== undefined ? data.locationId : existing.locationId,
       });
       if (!slotCheck.ok) {
-        return res
-          .status(409)
-          .json({
-            error: slotCheck.detail,
-            code: slotCheck.code,
-            detail: slotCheck.detail,
-          });
+        return res.status(409).json({
+          error: slotCheck.detail,
+          code: slotCheck.code,
+          detail: slotCheck.detail,
+        });
       }
     }
 
@@ -2845,11 +2884,15 @@ router.get("/visits/:id/photos/:filename", phiReadGate, async (req, res) => {
     // Defense-in-depth path-traversal guard (diskStorage sanitises on write,
     // but a hand-crafted GET could try `..%2F../etc/passwd`).
     if (!/^[a-zA-Z0-9._-]+$/.test(filename) || filename.includes("..")) {
-      return res.status(400).json({ error: "invalid filename", code: "INVALID_FILENAME" });
+      return res
+        .status(400)
+        .json({ error: "invalid filename", code: "INVALID_FILENAME" });
     }
     const mime = photoContentType(filename);
     if (!mime) {
-      return res.status(415).json({ error: "unsupported image type", code: "UNSUPPORTED_MEDIA" });
+      return res
+        .status(415)
+        .json({ error: "unsupported image type", code: "UNSUPPORTED_MEDIA" });
     }
     // Tenant-scope: the visit must belong to the caller's tenant.
     const visit = await prisma.visit.findFirst({
@@ -2858,7 +2901,15 @@ router.get("/visits/:id/photos/:filename", phiReadGate, async (req, res) => {
     });
     if (!visit) return res.status(404).json({ error: "Visit not found" });
 
-    const filePath = path.join(__dirname, "..", "uploads", "wellness", "visits", String(id), filename);
+    const filePath = path.join(
+      __dirname,
+      "..",
+      "uploads",
+      "wellness",
+      "visits",
+      String(id),
+      filename,
+    );
     if (!fs.existsSync(filePath)) {
       return res.status(404).json({ error: "Photo not found" });
     }
@@ -2889,7 +2940,8 @@ router.post(
         const mime = photoContentType(f.originalname || "");
         if (!mime) {
           return res.status(415).json({
-            error: "photos must be image/jpeg, image/png, image/webp or image/gif",
+            error:
+              "photos must be image/jpeg, image/png, image/webp or image/gif",
             code: "UNSUPPORTED_MEDIA",
           });
         }
@@ -2905,10 +2957,22 @@ router.post(
       const added = [];
       for (const f of files) {
         if (useS3) {
-          const url = await uploadImage(f.buffer, f.originalname, f.mimetype, `visits/${id}`);
+          const url = await uploadImage(
+            f.buffer,
+            f.originalname,
+            f.mimetype,
+            `visits/${id}`,
+          );
           added.push(url);
         } else {
-          const dir = path.join(__dirname, "..", "uploads", "wellness", "visits", String(id));
+          const dir = path.join(
+            __dirname,
+            "..",
+            "uploads",
+            "wellness",
+            "visits",
+            String(id),
+          );
           fs.mkdirSync(dir, { recursive: true });
           const safe = `${Date.now()}-${(f.originalname || "photo").replace(/[^a-zA-Z0-9._-]/g, "_")}`;
           fs.writeFileSync(path.join(dir, safe), f.buffer);
@@ -3023,36 +3087,28 @@ router.post("/visits/:id/consumptions", phiWriteGate, async (req, res) => {
     const qNum = parseInt(qty) || 1;
     const cNum = parseFloat(unitCost) || 0;
     if (qNum < 0 || cNum < 0) {
-      return res
-        .status(400)
-        .json({
-          error: "qty and unitCost must be non-negative",
-          code: "AMOUNT_NEGATIVE",
-        });
+      return res.status(400).json({
+        error: "qty and unitCost must be non-negative",
+        code: "AMOUNT_NEGATIVE",
+      });
     }
     if (qNum > 10_000) {
-      return res
-        .status(400)
-        .json({
-          error: "qty exceeds the 10,000-unit per-line cap",
-          code: "QTY_TOO_LARGE",
-        });
+      return res.status(400).json({
+        error: "qty exceeds the 10,000-unit per-line cap",
+        code: "QTY_TOO_LARGE",
+      });
     }
     if (cNum > 1_000_000) {
-      return res
-        .status(400)
-        .json({
-          error: "unitCost exceeds the ₹10,00,000 per-unit cap",
-          code: "UNIT_COST_TOO_LARGE",
-        });
+      return res.status(400).json({
+        error: "unitCost exceeds the ₹10,00,000 per-unit cap",
+        code: "UNIT_COST_TOO_LARGE",
+      });
     }
     if (qNum * cNum > 10_000_000) {
-      return res
-        .status(400)
-        .json({
-          error: "consumption line total exceeds the ₹1,00,00,000 per-line cap",
-          code: "LINE_TOTAL_TOO_LARGE",
-        });
+      return res.status(400).json({
+        error: "consumption line total exceeds the ₹1,00,00,000 per-line cap",
+        code: "LINE_TOTAL_TOO_LARGE",
+      });
     }
 
     const c = await prisma.serviceConsumption.create({
@@ -3159,12 +3215,10 @@ router.post("/prescriptions", requireClinicalRole, async (req, res) => {
       (d) => d && typeof d.name === "string" && d.name.trim(),
     );
     if (namedDrugs.length === 0) {
-      return res
-        .status(400)
-        .json({
-          error: "At least one drug name is required",
-          code: "DRUG_NAME_REQUIRED",
-        });
+      return res.status(400).json({
+        error: "At least one drug name is required",
+        code: "DRUG_NAME_REQUIRED",
+      });
     }
     const rx = await prisma.prescription.create({
       data: {
@@ -3215,12 +3269,10 @@ router.put("/prescriptions/:id", requireClinicalRole, async (req, res) => {
     if (!existing)
       return res.status(404).json({ error: "Prescription not found" });
     if (existing.doctorId !== req.user.userId && req.user.role !== "ADMIN") {
-      return res
-        .status(403)
-        .json({
-          error: "Only the prescriber or an admin can amend this prescription",
-          code: "AMEND_FORBIDDEN",
-        });
+      return res.status(403).json({
+        error: "Only the prescriber or an admin can amend this prescription",
+        code: "AMEND_FORBIDDEN",
+      });
     }
     const data = {};
     if (req.body.drugs !== undefined) {
@@ -3229,12 +3281,10 @@ router.put("/prescriptions/:id", requireClinicalRole, async (req, res) => {
         (d) => d && typeof d.name === "string" && d.name.trim(),
       );
       if (namedDrugs.length === 0) {
-        return res
-          .status(400)
-          .json({
-            error: "At least one drug name is required",
-            code: "DRUG_NAME_REQUIRED",
-          });
+        return res.status(400).json({
+          error: "At least one drug name is required",
+          code: "DRUG_NAME_REQUIRED",
+        });
       }
       data.drugs = JSON.stringify(namedDrugs);
     }
@@ -3248,10 +3298,10 @@ router.put("/prescriptions/:id", requireClinicalRole, async (req, res) => {
       newDrugs = null;
     try {
       priorDrugs = JSON.parse(existing.drugs || "[]");
-    } catch (_) { }
+    } catch (_) {}
     try {
       newDrugs = JSON.parse(updated.drugs || "[]");
-    } catch (_) { }
+    } catch (_) {}
     await writeAudit(
       "Prescription",
       "UPDATE_PRESCRIPTION",
@@ -3338,10 +3388,9 @@ router.get("/consents", phiReadGate, async (req, res) => {
 // row level; capturedByUserId stamps the staff member who facilitated.
 router.post(
   "/consents",
-  verifyWellnessRole(
-    ["clinical", "doctor", "professional", "admin"],
-    { anyOfPermissions: [{ module: "consents", action: "write" }] },
-  ),
+  verifyWellnessRole(["clinical", "doctor", "professional", "admin"], {
+    anyOfPermissions: [{ module: "consents", action: "write" }],
+  }),
   async (req, res) => {
     try {
       const {
@@ -3365,12 +3414,10 @@ router.post(
         typeof signatureSvg !== "string" ||
         signatureSvg.length < 500
       ) {
-        return res
-          .status(400)
-          .json({
-            error: "Patient signature is required and cannot be blank",
-            code: "SIGNATURE_REQUIRED",
-          });
+        return res.status(400).json({
+          error: "Patient signature is required and cannot be blank",
+          code: "SIGNATURE_REQUIRED",
+        });
       }
       // #564 — DPDP §15 / CONSENT_CAPTURE. Snapshot the matching
       // ConsentTemplate.body server-side so the immutable record reflects the
@@ -3510,71 +3557,71 @@ router.post(
 // #207/#216: consent metadata edits are admin-only (matches existing body
 // check). The verifyWellnessRole gate just produces a clean 403 with the
 // shared WELLNESS_ROLE_FORBIDDEN code before we touch the DB.
-router.put("/consents/:id", verifyWellnessRole(
-  ["admin"],
-  { anyOfPermissions: [{ module: "consents", action: "write" }] },
-), async (req, res) => {
-  try {
-    const id = parseInt(req.params.id);
-    const existing = await prisma.consentForm.findFirst({
-      where: tenantWhere(req, { id }),
-    });
-    if (!existing) return res.status(404).json({ error: "Consent not found" });
-    if (req.user.role !== "ADMIN") {
-      return res
-        .status(403)
-        .json({
+router.put(
+  "/consents/:id",
+  verifyWellnessRole(["admin"], {
+    anyOfPermissions: [{ module: "consents", action: "write" }],
+  }),
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const existing = await prisma.consentForm.findFirst({
+        where: tenantWhere(req, { id }),
+      });
+      if (!existing)
+        return res.status(404).json({ error: "Consent not found" });
+      if (req.user.role !== "ADMIN") {
+        return res.status(403).json({
           error: "Only an admin can amend consent metadata",
           code: "AMEND_FORBIDDEN",
         });
-    }
-    const data = {};
-    if (req.body.templateName !== undefined)
-      data.templateName = req.body.templateName;
-    if (req.body.serviceId !== undefined)
-      data.serviceId = req.body.serviceId ? parseInt(req.body.serviceId) : null;
-    if (req.body.signatureSvg !== undefined) {
-      return res
-        .status(400)
-        .json({
+      }
+      const data = {};
+      if (req.body.templateName !== undefined)
+        data.templateName = req.body.templateName;
+      if (req.body.serviceId !== undefined)
+        data.serviceId = req.body.serviceId
+          ? parseInt(req.body.serviceId)
+          : null;
+      if (req.body.signatureSvg !== undefined) {
+        return res.status(400).json({
           error: "signatureSvg cannot be edited after signing",
           code: "SIGNATURE_IMMUTABLE",
         });
-    }
-    if (req.body.signedPdfBlob !== undefined) {
-      return res
-        .status(400)
-        .json({
+      }
+      if (req.body.signedPdfBlob !== undefined) {
+        return res.status(400).json({
           error: "signedPdfBlob cannot be edited after signing",
           code: "PDF_BLOB_IMMUTABLE",
         });
+      }
+      const updated = await prisma.consentForm.update({ where: { id }, data });
+      // #179: HIPAA / DPDP — consent metadata amendments are PHI-adjacent and
+      // must be auditable. signatureSvg is rejected above so it can't appear
+      // in the diff. Audit failure must NOT break the user-facing response.
+      try {
+        const changes = diffFields(existing, updated, Object.keys(data));
+        await writeAudit(
+          "ConsentForm",
+          "UPDATE",
+          updated.id,
+          req.user.userId,
+          req.user.tenantId,
+          {
+            patientId: existing.patientId,
+            changedFields: changes,
+          },
+        );
+      } catch (auditErr) {
+        console.warn("[audit]", auditErr.message);
+      }
+      res.json(updated);
+    } catch (e) {
+      console.error("[wellness] amend consent error:", e.message);
+      res.status(500).json({ error: "Failed to amend consent" });
     }
-    const updated = await prisma.consentForm.update({ where: { id }, data });
-    // #179: HIPAA / DPDP — consent metadata amendments are PHI-adjacent and
-    // must be auditable. signatureSvg is rejected above so it can't appear
-    // in the diff. Audit failure must NOT break the user-facing response.
-    try {
-      const changes = diffFields(existing, updated, Object.keys(data));
-      await writeAudit(
-        "ConsentForm",
-        "UPDATE",
-        updated.id,
-        req.user.userId,
-        req.user.tenantId,
-        {
-          patientId: existing.patientId,
-          changedFields: changes,
-        },
-      );
-    } catch (auditErr) {
-      console.warn("[audit]", auditErr.message);
-    }
-    res.json(updated);
-  } catch (e) {
-    console.error("[wellness] amend consent error:", e.message);
-    res.status(500).json({ error: "Failed to amend consent" });
-  }
-});
+  },
+);
 
 // ── #612: Consent templates CRUD ───────────────────────────────────
 //
@@ -3849,7 +3896,8 @@ router.post("/treatment-plans", phiWriteGate, async (req, res) => {
       });
       if (dupe) {
         return res.status(409).json({
-          error: "An identical treatment plan was created in the last 5 minutes",
+          error:
+            "An identical treatment plan was created in the last 5 minutes",
           code: "IDEMPOTENT_DUPLICATE",
           existingId: dupe.id,
         });
@@ -4006,19 +4054,40 @@ function normalizeSupportedBookingTypesInput(raw) {
 
 router.post("/services", adminOrPerm("services", "write"), async (req, res) => {
   try {
-    const { name, category, ticketTier, basePrice, durationMin, targetRadiusKm, description, supportedBookingTypes, imageUrls } = req.body;
-    if (!name || !String(name).trim()) return res.status(400).json({ error: "name required" });
+    const {
+      name,
+      category,
+      ticketTier,
+      basePrice,
+      durationMin,
+      targetRadiusKm,
+      description,
+      supportedBookingTypes,
+      imageUrls,
+    } = req.body;
+    if (!name || !String(name).trim())
+      return res.status(400).json({ error: "name required" });
     // #115: refuse zero-priced services from the catalog. Existing ₹0 rows
     // (e.g. seed-only "spa") stay visible until manually corrected — only
     // new creations are blocked.
     const price = Number(basePrice);
     if (!Number.isFinite(price) || price <= 0) {
-      return res.status(400).json({ error: "basePrice must be greater than 0", code: "PRICE_REQUIRED" });
+      return res
+        .status(400)
+        .json({
+          error: "basePrice must be greater than 0",
+          code: "PRICE_REQUIRED",
+        });
     }
     // #209: cap basePrice at ₹50L (5_000_000). Public booking page exposes
     // garbage rows like ₹1e15 / 999999 min when there's no upper bound.
     if (price > 5_000_000) {
-      return res.status(400).json({ error: "basePrice exceeds maximum (₹50,00,000)", code: "PRICE_TOO_HIGH" });
+      return res
+        .status(400)
+        .json({
+          error: "basePrice exceeds maximum (₹50,00,000)",
+          code: "PRICE_TOO_HIGH",
+        });
     }
     // #149: durationMin must be positive; targetRadiusKm must be non-negative
     // when supplied (null = unlimited is fine).
@@ -4027,32 +4096,57 @@ router.post("/services", adminOrPerm("services", "write"), async (req, res) => {
     if (durationMin !== undefined && durationMin !== null) {
       const d = Number(durationMin);
       if (!Number.isFinite(d) || d <= 0) {
-        return res.status(400).json({ error: "durationMin must be greater than 0", code: "DURATION_INVALID" });
+        return res
+          .status(400)
+          .json({
+            error: "durationMin must be greater than 0",
+            code: "DURATION_INVALID",
+          });
       }
       // 720 min (12h) supports real long procedures like full hair transplant
       // sessions, which legitimately take 9-10 hours. The earlier 480 cap
       // accidentally caught real seed rows on the wellness tenant.
       if (d > 720) {
-        return res.status(400).json({ error: "durationMin exceeds maximum (720)", code: "DURATION_TOO_HIGH" });
+        return res
+          .status(400)
+          .json({
+            error: "durationMin exceeds maximum (720)",
+            code: "DURATION_TOO_HIGH",
+          });
       }
     }
-    if (targetRadiusKm !== undefined && targetRadiusKm !== null && targetRadiusKm !== "") {
+    if (
+      targetRadiusKm !== undefined &&
+      targetRadiusKm !== null &&
+      targetRadiusKm !== ""
+    ) {
       const r = Number(targetRadiusKm);
       if (!Number.isFinite(r) || r < 0) {
-        return res.status(400).json({ error: "targetRadiusKm cannot be negative", code: "RADIUS_INVALID" });
+        return res
+          .status(400)
+          .json({
+            error: "targetRadiusKm cannot be negative",
+            code: "RADIUS_INVALID",
+          });
       }
     }
     // Wave 2 Agent LL — validate supportedBookingTypes before write.
-    const sbtResult = normalizeSupportedBookingTypesInput(supportedBookingTypes);
+    const sbtResult = normalizeSupportedBookingTypesInput(
+      supportedBookingTypes,
+    );
     if (sbtResult.error) {
-      return res.status(sbtResult.error.status).json({ error: sbtResult.error.error, code: sbtResult.error.code });
+      return res
+        .status(sbtResult.error.status)
+        .json({ error: sbtResult.error.error, code: sbtResult.error.code });
     }
     // imageUrls is a JSON-stringified array of URLs (matches the Prisma
     // column shape). Accept either an array (we stringify) or a pre-
     // stringified value — frontends typically send the array form.
     let imageUrlsValue = null;
     if (imageUrls !== undefined && imageUrls !== null && imageUrls !== "") {
-      imageUrlsValue = Array.isArray(imageUrls) ? JSON.stringify(imageUrls) : String(imageUrls);
+      imageUrlsValue = Array.isArray(imageUrls)
+        ? JSON.stringify(imageUrls)
+        : String(imageUrls);
     }
     const svc = await prisma.service.create({
       data: {
@@ -4061,7 +4155,10 @@ router.post("/services", adminOrPerm("services", "write"), async (req, res) => {
         ticketTier: ticketTier || "medium",
         basePrice: basePrice ? parseFloat(basePrice) : 0,
         durationMin: durationMin ? parseInt(durationMin) : 30,
-        targetRadiusKm: targetRadiusKm !== undefined && targetRadiusKm !== null ? parseInt(targetRadiusKm) : null,
+        targetRadiusKm:
+          targetRadiusKm !== undefined && targetRadiusKm !== null
+            ? parseInt(targetRadiusKm)
+            : null,
         description,
         supportedBookingTypes: sbtResult.value,
         imageUrls: imageUrlsValue,
@@ -4071,13 +4168,22 @@ router.post("/services", adminOrPerm("services", "write"), async (req, res) => {
     // #179: catalog mutations are operational config — audit so price/duration
     // changes are traceable for billing-dispute investigations.
     try {
-      await writeAudit('Service', 'CREATE', svc.id, req.user.userId, req.user.tenantId, {
-        name: svc.name,
-        category: svc.category,
-        basePrice: svc.basePrice,
-        durationMin: svc.durationMin,
-      });
-    } catch (auditErr) { console.warn('[audit]', auditErr.message); }
+      await writeAudit(
+        "Service",
+        "CREATE",
+        svc.id,
+        req.user.userId,
+        req.user.tenantId,
+        {
+          name: svc.name,
+          category: svc.category,
+          basePrice: svc.basePrice,
+          durationMin: svc.durationMin,
+        },
+      );
+    } catch (auditErr) {
+      console.warn("[audit]", auditErr.message);
+    }
     res.status(201).json(svc);
   } catch (e) {
     console.error("[wellness] create service error:", e.message);
@@ -4088,81 +4194,140 @@ router.post("/services", adminOrPerm("services", "write"), async (req, res) => {
   }
 });
 
-router.put("/services/:id", adminOrPerm("services", "write"), async (req, res) => {
-  try {
-    const id = parseInt(req.params.id);
-    const existing = await prisma.service.findFirst({ where: tenantWhere(req, { id }) });
-    if (!existing) return res.status(404).json({ error: "Service not found" });
-    const data = {};
-    const allowed = ["name", "category", "ticketTier", "basePrice", "durationMin", "targetRadiusKm", "description", "isActive"];
-    for (const k of allowed) if (req.body[k] !== undefined) data[k] = req.body[k];
-    // imageUrls accepts either an array (we stringify) or a pre-stringified
-    // JSON value. Pass `null` or `[]` to clear.
-    if (req.body.imageUrls !== undefined) {
-      const v = req.body.imageUrls;
-      if (v === null || v === "") data.imageUrls = null;
-      else data.imageUrls = Array.isArray(v) ? JSON.stringify(v) : String(v);
-    }
-    // Wave 2 Agent LL — supportedBookingTypes is handled separately because
-    // it requires JSON-stringification + vocabulary validation, NOT a raw
-    // copy of req.body[k] like the other allowed fields.
-    if (req.body.supportedBookingTypes !== undefined) {
-      const sbtResult = normalizeSupportedBookingTypesInput(req.body.supportedBookingTypes);
-      if (sbtResult.error) {
-        return res.status(sbtResult.error.status).json({ error: sbtResult.error.error, code: sbtResult.error.code });
-      }
-      data.supportedBookingTypes = sbtResult.value;
-    }
-    // #115: same price guard on edit — can't update a service to ₹0.
-    if (data.basePrice !== undefined) {
-      const price = Number(data.basePrice);
-      if (!Number.isFinite(price) || price <= 0) {
-        return res.status(400).json({ error: "basePrice must be greater than 0", code: "PRICE_REQUIRED" });
-      }
-      // #209: same upper-bound cap on edit.
-      if (price > 5_000_000) {
-        return res.status(400).json({ error: "basePrice exceeds maximum (₹50,00,000)", code: "PRICE_TOO_HIGH" });
-      }
-    }
-    // #149: same duration / radius guards on edit.
-    if (data.durationMin !== undefined && data.durationMin !== null) {
-      const d = Number(data.durationMin);
-      if (!Number.isFinite(d) || d <= 0) {
-        return res.status(400).json({ error: "durationMin must be greater than 0", code: "DURATION_INVALID" });
-      }
-      // #209: same 8-hour cap on edit.
-      // 720 min (12h) supports real long procedures like full hair transplant
-      // sessions, which legitimately take 9-10 hours. The earlier 480 cap
-      // accidentally caught real seed rows on the wellness tenant.
-      if (d > 720) {
-        return res.status(400).json({ error: "durationMin exceeds maximum (720)", code: "DURATION_TOO_HIGH" });
-      }
-    }
-    if (data.targetRadiusKm !== undefined && data.targetRadiusKm !== null && data.targetRadiusKm !== "") {
-      const r = Number(data.targetRadiusKm);
-      if (!Number.isFinite(r) || r < 0) {
-        return res.status(400).json({ error: "targetRadiusKm cannot be negative", code: "RADIUS_INVALID" });
-      }
-    }
-    const updated = await prisma.service.update({ where: { id }, data });
-    // #179: audit only the keys that actually changed.
+router.put(
+  "/services/:id",
+  adminOrPerm("services", "write"),
+  async (req, res) => {
     try {
-      const changes = diffFields(existing, updated, Object.keys(data));
-      if (Object.keys(changes).length > 0) {
-        await writeAudit('Service', 'UPDATE', updated.id, req.user.userId, req.user.tenantId, {
-          changedFields: changes,
-        });
+      const id = parseInt(req.params.id);
+      const existing = await prisma.service.findFirst({
+        where: tenantWhere(req, { id }),
+      });
+      if (!existing)
+        return res.status(404).json({ error: "Service not found" });
+      const data = {};
+      const allowed = [
+        "name",
+        "category",
+        "ticketTier",
+        "basePrice",
+        "durationMin",
+        "targetRadiusKm",
+        "description",
+        "isActive",
+      ];
+      for (const k of allowed)
+        if (req.body[k] !== undefined) data[k] = req.body[k];
+      // imageUrls accepts either an array (we stringify) or a pre-stringified
+      // JSON value. Pass `null` or `[]` to clear.
+      if (req.body.imageUrls !== undefined) {
+        const v = req.body.imageUrls;
+        if (v === null || v === "") data.imageUrls = null;
+        else data.imageUrls = Array.isArray(v) ? JSON.stringify(v) : String(v);
       }
-    } catch (auditErr) { console.warn('[audit]', auditErr.message); }
-    res.json(updated);
-  } catch (e) {
-    console.error("[wellness] update service error:", e.message);
-    // #168 #165: same mapping as create.
-    const mapped = httpFromPrismaError(e);
-    if (mapped) return res.status(mapped.status).json(mapped);
-    res.status(500).json({ error: "Failed to update service" });
-  }
-});
+      // Wave 2 Agent LL — supportedBookingTypes is handled separately because
+      // it requires JSON-stringification + vocabulary validation, NOT a raw
+      // copy of req.body[k] like the other allowed fields.
+      if (req.body.supportedBookingTypes !== undefined) {
+        const sbtResult = normalizeSupportedBookingTypesInput(
+          req.body.supportedBookingTypes,
+        );
+        if (sbtResult.error) {
+          return res
+            .status(sbtResult.error.status)
+            .json({ error: sbtResult.error.error, code: sbtResult.error.code });
+        }
+        data.supportedBookingTypes = sbtResult.value;
+      }
+      // #115: same price guard on edit — can't update a service to ₹0.
+      if (data.basePrice !== undefined) {
+        const price = Number(data.basePrice);
+        if (!Number.isFinite(price) || price <= 0) {
+          return res
+            .status(400)
+            .json({
+              error: "basePrice must be greater than 0",
+              code: "PRICE_REQUIRED",
+            });
+        }
+        // #209: same upper-bound cap on edit.
+        if (price > 5_000_000) {
+          return res
+            .status(400)
+            .json({
+              error: "basePrice exceeds maximum (₹50,00,000)",
+              code: "PRICE_TOO_HIGH",
+            });
+        }
+      }
+      // #149: same duration / radius guards on edit.
+      if (data.durationMin !== undefined && data.durationMin !== null) {
+        const d = Number(data.durationMin);
+        if (!Number.isFinite(d) || d <= 0) {
+          return res
+            .status(400)
+            .json({
+              error: "durationMin must be greater than 0",
+              code: "DURATION_INVALID",
+            });
+        }
+        // #209: same 8-hour cap on edit.
+        // 720 min (12h) supports real long procedures like full hair transplant
+        // sessions, which legitimately take 9-10 hours. The earlier 480 cap
+        // accidentally caught real seed rows on the wellness tenant.
+        if (d > 720) {
+          return res
+            .status(400)
+            .json({
+              error: "durationMin exceeds maximum (720)",
+              code: "DURATION_TOO_HIGH",
+            });
+        }
+      }
+      if (
+        data.targetRadiusKm !== undefined &&
+        data.targetRadiusKm !== null &&
+        data.targetRadiusKm !== ""
+      ) {
+        const r = Number(data.targetRadiusKm);
+        if (!Number.isFinite(r) || r < 0) {
+          return res
+            .status(400)
+            .json({
+              error: "targetRadiusKm cannot be negative",
+              code: "RADIUS_INVALID",
+            });
+        }
+      }
+      const updated = await prisma.service.update({ where: { id }, data });
+      // #179: audit only the keys that actually changed.
+      try {
+        const changes = diffFields(existing, updated, Object.keys(data));
+        if (Object.keys(changes).length > 0) {
+          await writeAudit(
+            "Service",
+            "UPDATE",
+            updated.id,
+            req.user.userId,
+            req.user.tenantId,
+            {
+              changedFields: changes,
+            },
+          );
+        }
+      } catch (auditErr) {
+        console.warn("[audit]", auditErr.message);
+      }
+      res.json(updated);
+    } catch (e) {
+      console.error("[wellness] update service error:", e.message);
+      // #168 #165: same mapping as create.
+      const mapped = httpFromPrismaError(e);
+      if (mapped) return res.status(mapped.status).json(mapped);
+      res.status(500).json({ error: "Failed to update service" });
+    }
+  },
+);
 
 // ── Wellness role catalog ──────────────────────────────────────────
 //
@@ -4186,7 +4351,8 @@ const {
 
 router.get("/role-types", async (req, res) => {
   try {
-    const activeOnly = req.query.activeOnly === "1" || req.query.activeOnly === "true";
+    const activeOnly =
+      req.query.activeOnly === "1" || req.query.activeOnly === "true";
     const rows = await listRoleTypes(req.user.tenantId, { activeOnly });
     res.json(rows);
   } catch (e) {
@@ -4195,129 +4361,198 @@ router.get("/role-types", async (req, res) => {
   }
 });
 
-router.post("/role-types", adminOrPerm("settings", "manage"), async (req, res) => {
-  try {
-    const { key, label, icon, color, canTakeVisits, sortOrder } = req.body || {};
-    const keyErr = ensureRoleKey(key);
-    if (keyErr) return res.status(keyErr.status).json(keyErr);
-    const labelErr = ensureRoleLabel(label);
-    if (labelErr) return res.status(labelErr.status).json(labelErr);
-    const dupe = await prisma.wellnessRoleType.findFirst({
-      where: { tenantId: req.user.tenantId, key },
-      select: { id: true },
-    });
-    if (dupe) return res.status(409).json({ error: `Role key "${key}" already exists`, code: "ROLE_KEY_DUPLICATE" });
-    const row = await prisma.wellnessRoleType.create({
-      data: {
-        key,
-        label,
-        icon: icon || null,
-        color: color || null,
-        canTakeVisits: canTakeVisits === undefined ? true : Boolean(canTakeVisits),
-        sortOrder: Number.isFinite(Number(sortOrder)) ? parseInt(sortOrder, 10) : 0,
-        tenantId: req.user.tenantId,
-      },
-    });
+router.post(
+  "/role-types",
+  adminOrPerm("settings", "manage"),
+  async (req, res) => {
     try {
-      await writeAudit("WellnessRoleType", "CREATE", row.id, req.user.userId, req.user.tenantId, {
-        key: row.key, label: row.label, canTakeVisits: row.canTakeVisits,
-      });
-    } catch (auditErr) { console.warn("[audit]", auditErr.message); }
-    res.status(201).json(row);
-  } catch (e) {
-    console.error("[wellness] create role-type error:", e.message);
-    res.status(500).json({ error: "Failed to create role type" });
-  }
-});
-
-router.put("/role-types/:id", adminOrPerm("settings", "manage"), async (req, res) => {
-  try {
-    const id = parseInt(req.params.id, 10);
-    const existing = await prisma.wellnessRoleType.findFirst({
-      where: { id, tenantId: req.user.tenantId },
-    });
-    if (!existing) return res.status(404).json({ error: "Role type not found" });
-    const data = {};
-    if (req.body.label !== undefined) {
-      const labelErr = ensureRoleLabel(req.body.label);
+      const { key, label, icon, color, canTakeVisits, sortOrder } =
+        req.body || {};
+      const keyErr = ensureRoleKey(key);
+      if (keyErr) return res.status(keyErr.status).json(keyErr);
+      const labelErr = ensureRoleLabel(label);
       if (labelErr) return res.status(labelErr.status).json(labelErr);
-      data.label = req.body.label;
+      const dupe = await prisma.wellnessRoleType.findFirst({
+        where: { tenantId: req.user.tenantId, key },
+        select: { id: true },
+      });
+      if (dupe)
+        return res
+          .status(409)
+          .json({
+            error: `Role key "${key}" already exists`,
+            code: "ROLE_KEY_DUPLICATE",
+          });
+      const row = await prisma.wellnessRoleType.create({
+        data: {
+          key,
+          label,
+          icon: icon || null,
+          color: color || null,
+          canTakeVisits:
+            canTakeVisits === undefined ? true : Boolean(canTakeVisits),
+          sortOrder: Number.isFinite(Number(sortOrder))
+            ? parseInt(sortOrder, 10)
+            : 0,
+          tenantId: req.user.tenantId,
+        },
+      });
+      try {
+        await writeAudit(
+          "WellnessRoleType",
+          "CREATE",
+          row.id,
+          req.user.userId,
+          req.user.tenantId,
+          {
+            key: row.key,
+            label: row.label,
+            canTakeVisits: row.canTakeVisits,
+          },
+        );
+      } catch (auditErr) {
+        console.warn("[audit]", auditErr.message);
+      }
+      res.status(201).json(row);
+    } catch (e) {
+      console.error("[wellness] create role-type error:", e.message);
+      res.status(500).json({ error: "Failed to create role type" });
     }
-    if (req.body.key !== undefined && req.body.key !== existing.key) {
-      // Renaming the key would orphan every User with wellnessRole=oldKey.
-      // Refuse if any staff currently uses it; admins can deactivate the
-      // old row + create a new one + reassign staff manually.
+  },
+);
+
+router.put(
+  "/role-types/:id",
+  adminOrPerm("settings", "manage"),
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      const existing = await prisma.wellnessRoleType.findFirst({
+        where: { id, tenantId: req.user.tenantId },
+      });
+      if (!existing)
+        return res.status(404).json({ error: "Role type not found" });
+      const data = {};
+      if (req.body.label !== undefined) {
+        const labelErr = ensureRoleLabel(req.body.label);
+        if (labelErr) return res.status(labelErr.status).json(labelErr);
+        data.label = req.body.label;
+      }
+      if (req.body.key !== undefined && req.body.key !== existing.key) {
+        // Renaming the key would orphan every User with wellnessRole=oldKey.
+        // Refuse if any staff currently uses it; admins can deactivate the
+        // old row + create a new one + reassign staff manually.
+        const inUse = await prisma.user.count({
+          where: { tenantId: req.user.tenantId, wellnessRole: existing.key },
+        });
+        if (inUse > 0) {
+          return res.status(409).json({
+            error: `Cannot rename key while ${inUse} staff member(s) use it. Reassign them first.`,
+            code: "ROLE_KEY_IN_USE",
+          });
+        }
+        const keyErr = ensureRoleKey(req.body.key);
+        if (keyErr) return res.status(keyErr.status).json(keyErr);
+        const dupe = await prisma.wellnessRoleType.findFirst({
+          where: {
+            tenantId: req.user.tenantId,
+            key: req.body.key,
+            NOT: { id },
+          },
+          select: { id: true },
+        });
+        if (dupe)
+          return res
+            .status(409)
+            .json({
+              error: `Role key "${req.body.key}" already exists`,
+              code: "ROLE_KEY_DUPLICATE",
+            });
+        data.key = req.body.key;
+      }
+      if (req.body.icon !== undefined) data.icon = req.body.icon || null;
+      if (req.body.color !== undefined) data.color = req.body.color || null;
+      if (req.body.canTakeVisits !== undefined)
+        data.canTakeVisits = Boolean(req.body.canTakeVisits);
+      if (req.body.isActive !== undefined)
+        data.isActive = Boolean(req.body.isActive);
+      if (req.body.sortOrder !== undefined) {
+        const n = Number(req.body.sortOrder);
+        if (Number.isFinite(n)) data.sortOrder = parseInt(n, 10);
+      }
+      const updated = await prisma.wellnessRoleType.update({
+        where: { id },
+        data,
+      });
+      try {
+        const changes = diffFields(existing, updated, Object.keys(data));
+        if (Object.keys(changes).length > 0) {
+          await writeAudit(
+            "WellnessRoleType",
+            "UPDATE",
+            updated.id,
+            req.user.userId,
+            req.user.tenantId,
+            {
+              changedFields: changes,
+            },
+          );
+        }
+      } catch (auditErr) {
+        console.warn("[audit]", auditErr.message);
+      }
+      res.json(updated);
+    } catch (e) {
+      console.error("[wellness] update role-type error:", e.message);
+      res.status(500).json({ error: "Failed to update role type" });
+    }
+  },
+);
+
+router.delete(
+  "/role-types/:id",
+  adminOrPerm("settings", "manage"),
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      const existing = await prisma.wellnessRoleType.findFirst({
+        where: { id, tenantId: req.user.tenantId },
+      });
+      if (!existing)
+        return res.status(404).json({ error: "Role type not found" });
       const inUse = await prisma.user.count({
         where: { tenantId: req.user.tenantId, wellnessRole: existing.key },
       });
       if (inUse > 0) {
         return res.status(409).json({
-          error: `Cannot rename key while ${inUse} staff member(s) use it. Reassign them first.`,
-          code: "ROLE_KEY_IN_USE",
+          error: `Cannot delete role while ${inUse} staff member(s) use it. Deactivate instead or reassign staff first.`,
+          code: "ROLE_IN_USE",
+          inUseCount: inUse,
         });
       }
-      const keyErr = ensureRoleKey(req.body.key);
-      if (keyErr) return res.status(keyErr.status).json(keyErr);
-      const dupe = await prisma.wellnessRoleType.findFirst({
-        where: { tenantId: req.user.tenantId, key: req.body.key, NOT: { id } },
-        select: { id: true },
-      });
-      if (dupe) return res.status(409).json({ error: `Role key "${req.body.key}" already exists`, code: "ROLE_KEY_DUPLICATE" });
-      data.key = req.body.key;
-    }
-    if (req.body.icon !== undefined) data.icon = req.body.icon || null;
-    if (req.body.color !== undefined) data.color = req.body.color || null;
-    if (req.body.canTakeVisits !== undefined) data.canTakeVisits = Boolean(req.body.canTakeVisits);
-    if (req.body.isActive !== undefined) data.isActive = Boolean(req.body.isActive);
-    if (req.body.sortOrder !== undefined) {
-      const n = Number(req.body.sortOrder);
-      if (Number.isFinite(n)) data.sortOrder = parseInt(n, 10);
-    }
-    const updated = await prisma.wellnessRoleType.update({ where: { id }, data });
-    try {
-      const changes = diffFields(existing, updated, Object.keys(data));
-      if (Object.keys(changes).length > 0) {
-        await writeAudit("WellnessRoleType", "UPDATE", updated.id, req.user.userId, req.user.tenantId, {
-          changedFields: changes,
-        });
+      await prisma.wellnessRoleType.delete({ where: { id } });
+      try {
+        await writeAudit(
+          "WellnessRoleType",
+          "DELETE",
+          id,
+          req.user.userId,
+          req.user.tenantId,
+          {
+            key: existing.key,
+            label: existing.label,
+          },
+        );
+      } catch (auditErr) {
+        console.warn("[audit]", auditErr.message);
       }
-    } catch (auditErr) { console.warn("[audit]", auditErr.message); }
-    res.json(updated);
-  } catch (e) {
-    console.error("[wellness] update role-type error:", e.message);
-    res.status(500).json({ error: "Failed to update role type" });
-  }
-});
-
-router.delete("/role-types/:id", adminOrPerm("settings", "manage"), async (req, res) => {
-  try {
-    const id = parseInt(req.params.id, 10);
-    const existing = await prisma.wellnessRoleType.findFirst({
-      where: { id, tenantId: req.user.tenantId },
-    });
-    if (!existing) return res.status(404).json({ error: "Role type not found" });
-    const inUse = await prisma.user.count({
-      where: { tenantId: req.user.tenantId, wellnessRole: existing.key },
-    });
-    if (inUse > 0) {
-      return res.status(409).json({
-        error: `Cannot delete role while ${inUse} staff member(s) use it. Deactivate instead or reassign staff first.`,
-        code: "ROLE_IN_USE",
-        inUseCount: inUse,
-      });
+      res.json({ ok: true });
+    } catch (e) {
+      console.error("[wellness] delete role-type error:", e.message);
+      res.status(500).json({ error: "Failed to delete role type" });
     }
-    await prisma.wellnessRoleType.delete({ where: { id } });
-    try {
-      await writeAudit("WellnessRoleType", "DELETE", id, req.user.userId, req.user.tenantId, {
-        key: existing.key, label: existing.label,
-      });
-    } catch (auditErr) { console.warn("[audit]", auditErr.message); }
-    res.json({ ok: true });
-  } catch (e) {
-    console.error("[wellness] delete role-type error:", e.message);
-    res.status(500).json({ error: "Failed to delete role type" });
-  }
-});
+  },
+);
 
 // ── Memberships ────────────────────────────────────────────────────
 //
@@ -4447,6 +4682,25 @@ async function validateEntitlementServices(req, entitlements) {
 
 // GET /membership-plans — list active plans, all-roles (clinical staff
 // need to read so they can offer plans to patients during the visit).
+//
+// When the caller has a Patient row (typical for self-service buyers and
+// also wellness staff who happen to be patients), each plan in the
+// response is additively annotated with ownership fields so the Available
+// Plans UI can render the three-state card (never purchased / active /
+// expired) in one round-trip:
+//
+//   hasActiveMembership      — bool, true when an unexpired active row exists
+//   activeMembershipId       — int | null
+//   activeMembershipEndDate  — Date | null
+//   hasExpiredMembership     — bool, true when ANY prior row exists that
+//                              isn't currently active (status='expired',
+//                              'cancelled', or status='active' but
+//                              endDate <= now per the lazy-expiry rule)
+//
+// Admin-only / staff-only callers without a matching Patient row get the
+// legacy response shape unchanged. The added fields are additive — every
+// existing consumer that destructures `id`/`name`/`price`/etc. keeps
+// working without modification.
 router.get("/membership-plans", async (req, res) => {
   try {
     const includeInactive =
@@ -4463,7 +4717,55 @@ router.get("/membership-plans", async (req, res) => {
     const visible = includeTeardown
       ? plans
       : plans.filter((p) => !/^_teardown_|^_test_/.test(p.name || ""));
-    res.json(visible);
+
+    // Annotate with per-plan ownership for the calling user. Single query
+    // joined into the response — catalog size is bounded (<50 plans, <100
+    // memberships per user typically), so the overhead is negligible.
+    let annotated = visible;
+    if (req.user && req.user.userId && req.user.tenantId) {
+      const patient = await prisma.patient.findFirst({
+        where: {
+          tenant: { id: req.user.tenantId },
+          user: { id: req.user.userId },
+        },
+        select: { id: true },
+      });
+      if (patient) {
+        const memberships = await prisma.membership.findMany({
+          where: { tenantId: req.user.tenantId, patientId: patient.id },
+          select: { id: true, planId: true, status: true, endDate: true },
+        });
+        const now = Date.now();
+        const byPlan = new Map();
+        for (const m of memberships) {
+          if (!byPlan.has(m.planId)) byPlan.set(m.planId, []);
+          byPlan.get(m.planId).push(m);
+        }
+        annotated = visible.map((p) => {
+          const rows = byPlan.get(p.id) || [];
+          if (rows.length === 0) return p;
+          // Active = status === 'active' AND endDate > now. Lazy-expiry
+          // means a row can have stale 'active' status past its endDate;
+          // checking both fields keeps the ownership view aligned with the
+          // canonical "is this membership still usable?" semantics.
+          const active = rows.find(
+            (m) => m.status === "active" && m.endDate.getTime() > now,
+          );
+          const hasAnyNonActive = rows.some(
+            (m) => !(m.status === "active" && m.endDate.getTime() > now),
+          );
+          return {
+            ...p,
+            hasActiveMembership: !!active,
+            activeMembershipId: active?.id ?? null,
+            activeMembershipEndDate: active?.endDate ?? null,
+            hasExpiredMembership: !active && hasAnyNonActive,
+          };
+        });
+      }
+    }
+
+    res.json(annotated);
   } catch (e) {
     console.error("[wellness] list membership plans error:", e.message);
     res.status(500).json({ error: "Failed to list membership plans" });
@@ -4501,29 +4803,23 @@ router.post(
       }
       const dur = parseInt(durationDays, 10);
       if (!Number.isFinite(dur) || dur < 1 || dur > 3650) {
-        return res
-          .status(400)
-          .json({
-            error: "durationDays must be 1..3650",
-            code: "DURATION_INVALID",
-          });
+        return res.status(400).json({
+          error: "durationDays must be 1..3650",
+          code: "DURATION_INVALID",
+        });
       }
       const priceNum = Number(price);
       if (!Number.isFinite(priceNum) || priceNum <= 0) {
-        return res
-          .status(400)
-          .json({
-            error: "price must be greater than 0",
-            code: "PRICE_REQUIRED",
-          });
+        return res.status(400).json({
+          error: "price must be greater than 0",
+          code: "PRICE_REQUIRED",
+        });
       }
       if (priceNum > 5_000_000) {
-        return res
-          .status(400)
-          .json({
-            error: "price exceeds maximum (5,000,000)",
-            code: "PRICE_TOO_HIGH",
-          });
+        return res.status(400).json({
+          error: "price exceeds maximum (5,000,000)",
+          code: "PRICE_TOO_HIGH",
+        });
       }
       const ent = parseEntitlementsInput(entitlements);
       if (ent.error) return res.status(ent.error.status).json(ent.error);
@@ -4574,7 +4870,7 @@ router.post(
           req.user.tenantId,
           req.io,
         );
-      } catch (_e) { }
+      } catch (_e) {}
       res.status(201).json(plan);
     } catch (e) {
       console.error("[wellness] create membership plan error:", e.message);
@@ -4610,32 +4906,26 @@ router.put(
       if (req.body.durationDays !== undefined) {
         const dur = parseInt(req.body.durationDays, 10);
         if (!Number.isFinite(dur) || dur < 1 || dur > 3650) {
-          return res
-            .status(400)
-            .json({
-              error: "durationDays must be 1..3650",
-              code: "DURATION_INVALID",
-            });
+          return res.status(400).json({
+            error: "durationDays must be 1..3650",
+            code: "DURATION_INVALID",
+          });
         }
         data.durationDays = dur;
       }
       if (req.body.price !== undefined) {
         const priceNum = Number(req.body.price);
         if (!Number.isFinite(priceNum) || priceNum <= 0) {
-          return res
-            .status(400)
-            .json({
-              error: "price must be greater than 0",
-              code: "PRICE_REQUIRED",
-            });
+          return res.status(400).json({
+            error: "price must be greater than 0",
+            code: "PRICE_REQUIRED",
+          });
         }
         if (priceNum > 5_000_000) {
-          return res
-            .status(400)
-            .json({
-              error: "price exceeds maximum (5,000,000)",
-              code: "PRICE_TOO_HIGH",
-            });
+          return res.status(400).json({
+            error: "price exceeds maximum (5,000,000)",
+            code: "PRICE_TOO_HIGH",
+          });
         }
         data.price = priceNum;
       }
@@ -4696,12 +4986,10 @@ router.delete(
       if (!existing)
         return res.status(404).json({ error: "Membership plan not found" });
       if (!existing.isActive) {
-        return res
-          .status(409)
-          .json({
-            error: "Membership plan already inactive",
-            code: "PLAN_ALREADY_INACTIVE",
-          });
+        return res.status(409).json({
+          error: "Membership plan already inactive",
+          code: "PLAN_ALREADY_INACTIVE",
+        });
       }
       await prisma.membershipPlan.update({
         where: { id },
@@ -4766,6 +5054,35 @@ router.post("/patients/:id/memberships", phiWriteGate, async (req, res) => {
         .json({ error: "Membership plan is inactive", code: "PLAN_INACTIVE" });
     }
 
+    // Block duplicate active enrollment on the same plan. Staff workflow
+    // historically allowed stacking (the priorCount → isRenewal logic
+    // below treats every nth purchase as a renewal event), but per the
+    // 2026-06 lifecycle requirement we now reject while an active row
+    // exists and only allow re-purchase after expiry / cancellation.
+    // Mirrors the /membership-plans/:id/purchase/order gate so the
+    // server-side rule is enforced regardless of caller.
+    const staffSideActive = await prisma.membership.findFirst({
+      where: {
+        tenantId: req.user.tenantId,
+        patientId,
+        planId: plan.id,
+        status: "active",
+        endDate: { gt: new Date() },
+      },
+      select: { id: true, endDate: true },
+      orderBy: { endDate: "desc" },
+    });
+    if (staffSideActive) {
+      return res.status(409).json({
+        success: false,
+        message: "Patient already has an active membership for this plan.",
+        error: "Patient already has an active membership for this plan.",
+        code: "MEMBERSHIP_ALREADY_ACTIVE",
+        activeMembershipId: staffSideActive.id,
+        activeMembershipEndDate: staffSideActive.endDate,
+      });
+    }
+
     const start = startDate ? new Date(startDate) : new Date();
     if (Number.isNaN(start.getTime())) {
       return res
@@ -4781,12 +5098,10 @@ router.post("/patients/:id/memberships", phiWriteGate, async (req, res) => {
     try {
       entitlements = JSON.parse(plan.entitlements);
     } catch {
-      return res
-        .status(500)
-        .json({
-          error: "Plan entitlements are corrupt",
-          code: "PLAN_ENTITLEMENTS_CORRUPT",
-        });
+      return res.status(500).json({
+        error: "Plan entitlements are corrupt",
+        code: "PLAN_ENTITLEMENTS_CORRUPT",
+      });
     }
     const initialBalance = entitlements.map((e) => ({
       serviceId: e.serviceId,
@@ -4861,7 +5176,7 @@ router.post("/patients/:id/memberships", phiWriteGate, async (req, res) => {
         req.user.tenantId,
         req.io,
       );
-    } catch (_e) { }
+    } catch (_e) {}
     res.status(201).json(membership);
   } catch (e) {
     console.error("[wellness] purchase membership error:", e.message);
@@ -4967,12 +5282,10 @@ router.post("/memberships/:id/redeem", phiWriteGate, async (req, res) => {
     if (!membership)
       return res.status(404).json({ error: "Membership not found" });
     if (membership.status === "cancelled") {
-      return res
-        .status(410)
-        .json({
-          error: "Membership has been cancelled",
-          code: "MEMBERSHIP_CANCELLED",
-        });
+      return res.status(410).json({
+        error: "Membership has been cancelled",
+        code: "MEMBERSHIP_CANCELLED",
+      });
     }
     if (
       membership.status === "expired" ||
@@ -5001,7 +5314,7 @@ router.post("/memberships/:id/redeem", phiWriteGate, async (req, res) => {
             req.user.tenantId,
             req.io,
           );
-        } catch (_e) { }
+        } catch (_e) {}
       }
       return res
         .status(410)
@@ -5012,37 +5325,29 @@ router.post("/memberships/:id/redeem", phiWriteGate, async (req, res) => {
     try {
       balance = JSON.parse(membership.balance);
     } catch {
-      return res
-        .status(500)
-        .json({
-          error: "Membership balance is corrupt",
-          code: "MEMBERSHIP_BALANCE_CORRUPT",
-        });
+      return res.status(500).json({
+        error: "Membership balance is corrupt",
+        code: "MEMBERSHIP_BALANCE_CORRUPT",
+      });
     }
     if (!Array.isArray(balance)) {
-      return res
-        .status(500)
-        .json({
-          error: "Membership balance is corrupt",
-          code: "MEMBERSHIP_BALANCE_CORRUPT",
-        });
+      return res.status(500).json({
+        error: "Membership balance is corrupt",
+        code: "MEMBERSHIP_BALANCE_CORRUPT",
+      });
     }
     const line = balance.find((b) => b.serviceId === serviceIdInt);
     if (!line) {
-      return res
-        .status(409)
-        .json({
-          error: "Service not covered by this membership",
-          code: "MEMBERSHIP_SERVICE_NOT_COVERED",
-        });
+      return res.status(409).json({
+        error: "Service not covered by this membership",
+        code: "MEMBERSHIP_SERVICE_NOT_COVERED",
+      });
     }
     if (line.remaining <= 0) {
-      return res
-        .status(409)
-        .json({
-          error: "Membership balance exhausted for this service",
-          code: "MEMBERSHIP_BALANCE_EXHAUSTED",
-        });
+      return res.status(409).json({
+        error: "Membership balance exhausted for this service",
+        code: "MEMBERSHIP_BALANCE_EXHAUSTED",
+      });
     }
 
     line.remaining -= 1;
@@ -5102,7 +5407,7 @@ router.post("/memberships/:id/redeem", phiWriteGate, async (req, res) => {
         req.user.tenantId,
         req.io,
       );
-    } catch (_e) { }
+    } catch (_e) {}
 
     res.json({
       success: true,
@@ -5262,7 +5567,7 @@ router.post(
           req.user.tenantId,
           req.io,
         );
-      } catch (_e) { }
+      } catch (_e) {}
       res.json({ success: true, membership: updated });
     } catch (e) {
       console.error("[wellness] cancel membership error:", e.message);
@@ -5350,12 +5655,10 @@ router.put(
       if (!existing)
         return res.status(404).json({ error: "Recommendation not found" });
       if (req.user.role !== "ADMIN" && req.user.role !== "MANAGER") {
-        return res
-          .status(403)
-          .json({
-            error: "Only ADMIN or MANAGER can amend recommendations",
-            code: "AMEND_FORBIDDEN",
-          });
+        return res.status(403).json({
+          error: "Only ADMIN or MANAGER can amend recommendations",
+          code: "AMEND_FORBIDDEN",
+        });
       }
       if (existing.status !== "pending" && existing.status !== "snoozed") {
         return res.status(422).json({
@@ -5379,12 +5682,10 @@ router.put(
         data.priority !== undefined &&
         !["low", "medium", "high"].includes(data.priority)
       ) {
-        return res
-          .status(400)
-          .json({
-            error: "priority must be one of: low, medium, high",
-            code: "INVALID_PRIORITY",
-          });
+        return res.status(400).json({
+          error: "priority must be one of: low, medium, high",
+          code: "INVALID_PRIORITY",
+        });
       }
       const updated = await prisma.agentRecommendation.update({
         where: { id },
@@ -5567,31 +5868,27 @@ router.post(
   },
 );
 
-router.post(
-  "/ops/run",
-  adminOrPerm("settings", "manage"),
-  async (req, res) => {
-    try {
-      const {
-        runNpsForTenant,
-        runRetentionForTenant,
-        runMembershipExpiryForTenant,
-      } = require("../cron/wellnessOpsEngine");
-      const npsSent = await runNpsForTenant(req.user.tenantId);
-      const purged = await runRetentionForTenant(req.user.tenantId);
-      // PRD Gap §12 #4d — also drive the membership-expiry T-7 notifier so the
-      // /ops/run trigger can be exercised end-to-end (mirrors the e2e pattern
-      // used by reminders/run + low-stock/run for cron-engine specs).
-      const membershipExpiry = await runMembershipExpiryForTenant(
-        req.user.tenantId,
-      );
-      res.json({ npsSent, purged, membershipExpiry });
-    } catch (e) {
-      console.error("[wellness-ops] manual run failed:", e.message);
-      res.status(500).json({ error: "Failed to run ops", detail: e.message });
-    }
-  },
-);
+router.post("/ops/run", adminOrPerm("settings", "manage"), async (req, res) => {
+  try {
+    const {
+      runNpsForTenant,
+      runRetentionForTenant,
+      runMembershipExpiryForTenant,
+    } = require("../cron/wellnessOpsEngine");
+    const npsSent = await runNpsForTenant(req.user.tenantId);
+    const purged = await runRetentionForTenant(req.user.tenantId);
+    // PRD Gap §12 #4d — also drive the membership-expiry T-7 notifier so the
+    // /ops/run trigger can be exercised end-to-end (mirrors the e2e pattern
+    // used by reminders/run + low-stock/run for cron-engine specs).
+    const membershipExpiry = await runMembershipExpiryForTenant(
+      req.user.tenantId,
+    );
+    res.json({ npsSent, purged, membershipExpiry });
+  } catch (e) {
+    console.error("[wellness-ops] manual run failed:", e.message);
+    res.status(500).json({ error: "Failed to run ops", detail: e.message });
+  }
+});
 
 // Manual trigger for the low-stock inventory alert engine.
 // Returns the per-tenant breakdown { products, notifications, emails }.
@@ -5764,12 +6061,10 @@ router.post(
         pincode !== "" &&
         !/^\d{6}$/.test(String(pincode))
       ) {
-        return res
-          .status(400)
-          .json({
-            error: "Pincode must be exactly 6 digits",
-            code: "INVALID_PINCODE",
-          });
+        return res.status(400).json({
+          error: "Pincode must be exactly 6 digits",
+          code: "INVALID_PINCODE",
+        });
       }
       const loc = await prisma.location.create({
         data: {
@@ -5853,12 +6148,10 @@ router.put(
         data.pincode !== "" &&
         !/^\d{6}$/.test(String(data.pincode))
       ) {
-        return res
-          .status(400)
-          .json({
-            error: "Pincode must be exactly 6 digits",
-            code: "INVALID_PINCODE",
-          });
+        return res.status(400).json({
+          error: "Pincode must be exactly 6 digits",
+          code: "INVALID_PINCODE",
+        });
       }
 
       const updated = await prisma.location.update({ where: { id }, data });
@@ -5912,13 +6205,24 @@ router.delete(
       // violation under the schema's default onDelete: NoAction — we
       // surface a friendly 409 instead so the UI can guide the operator
       // toward the soft-disable affordance.
-      const [patients, visits, resources, holidays, registers] = await Promise.all([
-        prisma.patient.count({ where: { locationId: id, tenantId: req.user.tenantId } }),
-        prisma.visit.count({ where: { locationId: id, tenantId: req.user.tenantId } }),
-        prisma.resource.count({ where: { locationId: id, tenantId: req.user.tenantId } }),
-        prisma.holiday.count({ where: { locationId: id, tenantId: req.user.tenantId } }),
-        prisma.register.count({ where: { locationId: id, tenantId: req.user.tenantId } }),
-      ]);
+      const [patients, visits, resources, holidays, registers] =
+        await Promise.all([
+          prisma.patient.count({
+            where: { locationId: id, tenantId: req.user.tenantId },
+          }),
+          prisma.visit.count({
+            where: { locationId: id, tenantId: req.user.tenantId },
+          }),
+          prisma.resource.count({
+            where: { locationId: id, tenantId: req.user.tenantId },
+          }),
+          prisma.holiday.count({
+            where: { locationId: id, tenantId: req.user.tenantId },
+          }),
+          prisma.register.count({
+            where: { locationId: id, tenantId: req.user.tenantId },
+          }),
+        ]);
       const total = patients + visits + resources + holidays + registers;
       if (total > 0) {
         return res.status(409).json({
@@ -6021,12 +6325,10 @@ router.post(
         type !== "" &&
         !allowedTypes.has(type)
       ) {
-        return res
-          .status(400)
-          .json({
-            error: "type must be one of: " + [...allowedTypes].join(", "),
-            code: "INVALID_TYPE",
-          });
+        return res.status(400).json({
+          error: "type must be one of: " + [...allowedTypes].join(", "),
+          code: "INVALID_TYPE",
+        });
       }
       let serviceIdsCol = null;
       if (serviceIds !== undefined && serviceIds !== null) {
@@ -6084,12 +6386,10 @@ router.put(
       if (data.type !== undefined) {
         const allowedTypes = new Set(["ROOM", "MACHINE", "EQUIPMENT"]);
         if (!allowedTypes.has(data.type))
-          return res
-            .status(400)
-            .json({
-              error: "type must be one of: " + [...allowedTypes].join(", "),
-              code: "INVALID_TYPE",
-            });
+          return res.status(400).json({
+            error: "type must be one of: " + [...allowedTypes].join(", "),
+            code: "INVALID_TYPE",
+          });
       }
       if (data.serviceIds !== undefined && data.serviceIds !== null) {
         data.serviceIds = Array.isArray(data.serviceIds)
@@ -6157,114 +6457,156 @@ router.delete(
   },
 );
 
-router.get("/holidays", verifyWellnessRole(
-  ["clinical", "doctor", "professional", "telecaller", "admin", "manager"],
-  {
-    // Holidays back the Calendar page + Holidays admin page. Any clinical
-    // or scheduling-related read grant unlocks the endpoint so partial
-    // permission sets don't strand the user on a half-loaded calendar.
-    anyOfPermissions: [
-      { module: "calendar", action: "read" },
-      { module: "appointments", action: "read" },
-      { module: "my_appointments", action: "read" },
-      { module: "book_appointment", action: "write" },
-      { module: "waitlist", action: "read" },
-      { module: "settings", action: "read" },
-      { module: "patients", action: "read" },
-      { module: "visits", action: "read" },
-    ],
-  },
-), async (req, res) => {
-  try {
-    const { from, to } = req.query;
-    // Two-bucket fetch: (a) date-bounded non-recurring rows, (b) all
-    // recurringAnnually rows for the tenant (small set; client renders
-    // them as "every year on MM-DD"). Without (b), an annual holiday
-    // stored in 2026 disappears from the list in 2027.
-    const baseWhere = tenantWhere(req);
-    const dateBoundWhere = { ...baseWhere };
-    if (from || to) {
-      dateBoundWhere.date = {};
-      if (from) dateBoundWhere.date.gte = new Date(from);
-      if (to) dateBoundWhere.date.lte = new Date(to);
-    }
-    const [bounded, recurring] = await Promise.all([
-      prisma.holiday.findMany({
-        where: { ...dateBoundWhere, recurringAnnually: false },
-        orderBy: { date: "asc" },
-      }),
-      prisma.holiday.findMany({
-        where: { ...baseWhere, recurringAnnually: true },
-        orderBy: { date: "asc" },
-      }),
-    ]);
-    // Recurring annuals are stored at the original year's anchor date; to
-    // appear in [from, to] their MM-DD must produce an occurrence inside
-    // the window for SOME year in the spanning range. Pre-fix the recurring
-    // list was returned unfiltered for any from/to query, so an Aug-15
-    // Independence Day surfaced as "today's holiday" on May 21 etc.
-    let recurringInWindow = recurring;
-    if (from && to) {
-      const fromDate = new Date(from);
-      const toDate = new Date(to);
-      if (!Number.isNaN(fromDate.getTime()) && !Number.isNaN(toDate.getTime())) {
-        const fromMs = fromDate.getTime();
-        const toMs = toDate.getTime();
-        recurringInWindow = recurring.filter((h) => {
-          const hd = new Date(h.date);
-          const hM = hd.getUTCMonth();
-          const hD = hd.getUTCDate();
-          for (let y = fromDate.getUTCFullYear(); y <= toDate.getUTCFullYear(); y++) {
-            const occMs = Date.UTC(y, hM, hD);
-            if (occMs >= fromMs && occMs <= toMs) return true;
-          }
-          return false;
-        });
+router.get(
+  "/holidays",
+  verifyWellnessRole(
+    ["clinical", "doctor", "professional", "telecaller", "admin", "manager"],
+    {
+      // Holidays back the Calendar page + Holidays admin page. Any clinical
+      // or scheduling-related read grant unlocks the endpoint so partial
+      // permission sets don't strand the user on a half-loaded calendar.
+      anyOfPermissions: [
+        { module: "calendar", action: "read" },
+        { module: "appointments", action: "read" },
+        { module: "my_appointments", action: "read" },
+        { module: "book_appointment", action: "write" },
+        { module: "waitlist", action: "read" },
+        { module: "settings", action: "read" },
+        { module: "patients", action: "read" },
+        { module: "visits", action: "read" },
+      ],
+    },
+  ),
+  async (req, res) => {
+    try {
+      const { from, to } = req.query;
+      // Two-bucket fetch: (a) date-bounded non-recurring rows, (b) all
+      // recurringAnnually rows for the tenant (small set; client renders
+      // them as "every year on MM-DD"). Without (b), an annual holiday
+      // stored in 2026 disappears from the list in 2027.
+      const baseWhere = tenantWhere(req);
+      const dateBoundWhere = { ...baseWhere };
+      if (from || to) {
+        dateBoundWhere.date = {};
+        if (from) dateBoundWhere.date.gte = new Date(from);
+        if (to) dateBoundWhere.date.lte = new Date(to);
       }
+      const [bounded, recurring] = await Promise.all([
+        prisma.holiday.findMany({
+          where: { ...dateBoundWhere, recurringAnnually: false },
+          orderBy: { date: "asc" },
+        }),
+        prisma.holiday.findMany({
+          where: { ...baseWhere, recurringAnnually: true },
+          orderBy: { date: "asc" },
+        }),
+      ]);
+      // Recurring annuals are stored at the original year's anchor date; to
+      // appear in [from, to] their MM-DD must produce an occurrence inside
+      // the window for SOME year in the spanning range. Pre-fix the recurring
+      // list was returned unfiltered for any from/to query, so an Aug-15
+      // Independence Day surfaced as "today's holiday" on May 21 etc.
+      let recurringInWindow = recurring;
+      if (from && to) {
+        const fromDate = new Date(from);
+        const toDate = new Date(to);
+        if (
+          !Number.isNaN(fromDate.getTime()) &&
+          !Number.isNaN(toDate.getTime())
+        ) {
+          const fromMs = fromDate.getTime();
+          const toMs = toDate.getTime();
+          recurringInWindow = recurring.filter((h) => {
+            const hd = new Date(h.date);
+            const hM = hd.getUTCMonth();
+            const hD = hd.getUTCDate();
+            for (
+              let y = fromDate.getUTCFullYear();
+              y <= toDate.getUTCFullYear();
+              y++
+            ) {
+              const occMs = Date.UTC(y, hM, hD);
+              if (occMs >= fromMs && occMs <= toMs) return true;
+            }
+            return false;
+          });
+        }
+      }
+      // De-dupe in case a recurring holiday also falls inside the bounded
+      // window (it would otherwise appear twice).
+      const seen = new Set();
+      const out = [];
+      for (const r of [...recurringInWindow, ...bounded]) {
+        if (seen.has(r.id)) continue;
+        seen.add(r.id);
+        out.push(r);
+      }
+      out.sort((a, b) => new Date(a.date) - new Date(b.date));
+      res.json(out);
+    } catch (e) {
+      console.error("[wellness] list holidays error:", e.message);
+      res.status(500).json({ error: "Failed to list holidays" });
     }
-    // De-dupe in case a recurring holiday also falls inside the bounded
-    // window (it would otherwise appear twice).
-    const seen = new Set();
-    const out = [];
-    for (const r of [...recurringInWindow, ...bounded]) {
-      if (seen.has(r.id)) continue;
-      seen.add(r.id);
-      out.push(r);
-    }
-    out.sort((a, b) => new Date(a.date) - new Date(b.date));
-    res.json(out);
-  } catch (e) {
-    console.error("[wellness] list holidays error:", e.message);
-    res.status(500).json({ error: "Failed to list holidays" });
-  }
-});
+  },
+);
 
-router.post("/holidays", adminOrPerm("settings", "manage"), async (req, res) => {
-  try {
-    const { date, name, locationId, doctorId, recurringAnnually } = req.body;
-    if (!date) return res.status(400).json({ error: "date is required", code: "DATE_REQUIRED" });
-    if (!name || typeof name !== "string" || !name.trim()) return res.status(400).json({ error: "name is required", code: "NAME_REQUIRED" });
-    const istDay = formatInTenantTZ(new Date(date), "Asia/Kolkata", "yyyy-MM-dd");
-    const anchored = new Date(istDay + "T00:00:00.000Z");
-    const row = await prisma.holiday.create({
-      data: {
-        date: anchored,
-        name: name.trim(),
-        locationId: locationId ? parseInt(locationId, 10) : null,
-        doctorId: doctorId ? parseInt(doctorId, 10) : null,
-        recurringAnnually: Boolean(recurringAnnually),
-        tenantId: req.user.tenantId,
-      },
-    });
-    try { await writeAudit('Holiday', 'CREATE', row.id, req.user.userId, req.user.tenantId, { date: row.date, name: row.name, locationId: row.locationId, doctorId: row.doctorId, recurringAnnually: row.recurringAnnually }); } catch (auditErr) { console.warn('[audit]', auditErr.message); }
-    res.status(201).json(row);
-  } catch (e) {
-    console.error("[wellness] create holiday error:", e.message);
-    const mapped = httpFromPrismaError(e);
-    if (mapped) return res.status(mapped.status).json(mapped);
-    res.status(500).json({ error: "Failed to create holiday" });
-  }
-});
+router.post(
+  "/holidays",
+  adminOrPerm("settings", "manage"),
+  async (req, res) => {
+    try {
+      const { date, name, locationId, doctorId, recurringAnnually } = req.body;
+      if (!date)
+        return res
+          .status(400)
+          .json({ error: "date is required", code: "DATE_REQUIRED" });
+      if (!name || typeof name !== "string" || !name.trim())
+        return res
+          .status(400)
+          .json({ error: "name is required", code: "NAME_REQUIRED" });
+      const istDay = formatInTenantTZ(
+        new Date(date),
+        "Asia/Kolkata",
+        "yyyy-MM-dd",
+      );
+      const anchored = new Date(istDay + "T00:00:00.000Z");
+      const row = await prisma.holiday.create({
+        data: {
+          date: anchored,
+          name: name.trim(),
+          locationId: locationId ? parseInt(locationId, 10) : null,
+          doctorId: doctorId ? parseInt(doctorId, 10) : null,
+          recurringAnnually: Boolean(recurringAnnually),
+          tenantId: req.user.tenantId,
+        },
+      });
+      try {
+        await writeAudit(
+          "Holiday",
+          "CREATE",
+          row.id,
+          req.user.userId,
+          req.user.tenantId,
+          {
+            date: row.date,
+            name: row.name,
+            locationId: row.locationId,
+            doctorId: row.doctorId,
+            recurringAnnually: row.recurringAnnually,
+          },
+        );
+      } catch (auditErr) {
+        console.warn("[audit]", auditErr.message);
+      }
+      res.status(201).json(row);
+    } catch (e) {
+      console.error("[wellness] create holiday error:", e.message);
+      const mapped = httpFromPrismaError(e);
+      if (mapped) return res.status(mapped.status).json(mapped);
+      res.status(500).json({ error: "Failed to create holiday" });
+    }
+  },
+);
 
 router.delete(
   "/holidays/:id",
@@ -6301,14 +6643,7 @@ router.delete(
 router.get(
   "/working-hours",
   verifyWellnessRole(
-    [
-      "clinical",
-      "doctor",
-      "professional",
-      "telecaller",
-      "admin",
-      "manager",
-    ],
+    ["clinical", "doctor", "professional", "telecaller", "admin", "manager"],
     {
       // Working hours back the Calendar page + admin config page. Same
       // wide read set as resources/holidays so partial permissions don't
@@ -6349,43 +6684,33 @@ router.put(
     try {
       const doctorId = parseInt(req.params.doctorId, 10);
       if (!Number.isFinite(doctorId) || doctorId < 1)
-        return res
-          .status(400)
-          .json({
-            error: "doctorId must be a positive integer",
-            code: "INVALID_DOCTOR_ID",
-          });
+        return res.status(400).json({
+          error: "doctorId must be a positive integer",
+          code: "INVALID_DOCTOR_ID",
+        });
       const { schedule } = req.body;
       if (!Array.isArray(schedule))
-        return res
-          .status(400)
-          .json({
-            error: "schedule must be an array",
-            code: "SCHEDULE_REQUIRED",
-          });
+        return res.status(400).json({
+          error: "schedule must be an array",
+          code: "SCHEDULE_REQUIRED",
+        });
       const HHMM = /^\d{2}:\d{2}$/;
       for (const s of schedule) {
         if (!Number.isFinite(s.dayOfWeek) || s.dayOfWeek < 0 || s.dayOfWeek > 6)
-          return res
-            .status(400)
-            .json({
-              error: "dayOfWeek must be 0..6",
-              code: "INVALID_DAY_OF_WEEK",
-            });
+          return res.status(400).json({
+            error: "dayOfWeek must be 0..6",
+            code: "INVALID_DAY_OF_WEEK",
+          });
         if (!HHMM.test(s.startTime) || !HHMM.test(s.endTime))
-          return res
-            .status(400)
-            .json({
-              error: "startTime/endTime must be HH:mm",
-              code: "INVALID_TIME",
-            });
+          return res.status(400).json({
+            error: "startTime/endTime must be HH:mm",
+            code: "INVALID_TIME",
+          });
         if (s.startTime >= s.endTime)
-          return res
-            .status(400)
-            .json({
-              error: "endTime must be after startTime",
-              code: "INVERTED_TIME_RANGE",
-            });
+          return res.status(400).json({
+            error: "endTime must be after startTime",
+            code: "INVERTED_TIME_RANGE",
+          });
       }
       const doctor = await prisma.user.findFirst({
         where: { id: doctorId, tenantId: req.user.tenantId },
@@ -7098,12 +7423,10 @@ async function renderReportPdf(title, columns, rows, range, clinic) {
     y += lineH;
   }
   if (rows.length === 0) {
-    doc
-      .fillColor("#888")
-      .text("No data in this window.", left, y + 6, {
-        width: printW,
-        align: "center",
-      });
+    doc.fillColor("#888").text("No data in this window.", left, y + 6, {
+      width: printW,
+      align: "center",
+    });
   }
 
   doc.end();
@@ -7778,17 +8101,17 @@ router.get(
         prisma.agentRecommendation.findMany({
           where: locationId
             ? {
-              tenantId,
-              status: "pending",
-              // AgentRecommendation has no direct locationId. The orchestrator
-              // stores per-location recommendations with locationId in the
-              // JSON `payload`. Match either explicit JSON-substring or
-              // tenant-wide recommendations that lack a locationId scope.
-              OR: [
-                { payload: { contains: `"locationId":${locationId}` } },
-                { payload: { contains: `"locationId": ${locationId}` } },
-              ],
-            }
+                tenantId,
+                status: "pending",
+                // AgentRecommendation has no direct locationId. The orchestrator
+                // stores per-location recommendations with locationId in the
+                // JSON `payload`. Match either explicit JSON-substring or
+                // tenant-wide recommendations that lack a locationId scope.
+                OR: [
+                  { payload: { contains: `"locationId":${locationId}` } },
+                  { payload: { contains: `"locationId": ${locationId}` } },
+                ],
+              }
             : { tenantId, status: "pending" },
           orderBy: { priority: "desc" },
           take: 5,
@@ -8297,15 +8620,14 @@ function sanitizeUtmInput(utm, referrer) {
     referrer: null,
   };
   if (utm && typeof utm === "object") {
-     
     const trim = (v) =>
       v == null
         ? null
         : String(v)
-          // eslint-disable-next-line no-control-regex
-          .replace(/[\x00-\x1f\x7f]/g, "")
-          .slice(0, 191)
-          .trim() || null;
+            // eslint-disable-next-line no-control-regex
+            .replace(/[\x00-\x1f\x7f]/g, "")
+            .slice(0, 191)
+            .trim() || null;
     out.utmSource = trim(utm.utmSource ?? utm.source);
     out.utmMedium = trim(utm.utmMedium ?? utm.medium);
     out.utmCampaign = trim(utm.utmCampaign ?? utm.campaign);
@@ -8313,7 +8635,6 @@ function sanitizeUtmInput(utm, referrer) {
     out.utmContent = trim(utm.utmContent ?? utm.content);
   }
   if (referrer != null) {
-     
     out.referrer =
       String(referrer)
         // eslint-disable-next-line no-control-regex
@@ -8393,13 +8714,11 @@ router.post("/public/book", publicBookLimiter, async (req, res) => {
     // Indian mobile: 10 digits starting 6/7/8/9, optionally with +91 / 91 prefix.
     // Reject letters, short numbers, foreign formats — those are the spam vectors.
     if (!/^(\+?91)?[6-9]\d{9}$/.test(phoneStr.replace(/[\s-]/g, ""))) {
-      return res
-        .status(400)
-        .json({
-          error:
-            "phone must be a 10-digit Indian mobile (starts 6/7/8/9, optional +91)",
-          code: "INVALID_PHONE",
-        });
+      return res.status(400).json({
+        error:
+          "phone must be a 10-digit Indian mobile (starts 6/7/8/9, optional +91)",
+        code: "INVALID_PHONE",
+      });
     }
     if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email).trim())) {
       return res
@@ -8409,30 +8728,24 @@ router.post("/public/book", publicBookLimiter, async (req, res) => {
     if (preferredSlot) {
       const slot = new Date(preferredSlot);
       if (Number.isNaN(slot.getTime())) {
-        return res
-          .status(400)
-          .json({
-            error: "preferredSlot is not a valid date",
-            code: "INVALID_SLOT",
-          });
+        return res.status(400).json({
+          error: "preferredSlot is not a valid date",
+          code: "INVALID_SLOT",
+        });
       }
       const now = new Date();
       const ninetyDays = new Date(now.getTime() + 90 * 24 * 3600000);
       if (slot < now) {
-        return res
-          .status(400)
-          .json({
-            error: "preferredSlot must be in the future",
-            code: "SLOT_IN_PAST",
-          });
+        return res.status(400).json({
+          error: "preferredSlot must be in the future",
+          code: "SLOT_IN_PAST",
+        });
       }
       if (slot > ninetyDays) {
-        return res
-          .status(400)
-          .json({
-            error: "preferredSlot cannot be more than 90 days out",
-            code: "SLOT_TOO_FAR",
-          });
+        return res.status(400).json({
+          error: "preferredSlot cannot be more than 90 days out",
+          code: "SLOT_TOO_FAR",
+        });
       }
     }
 
@@ -8533,12 +8846,10 @@ router.post("/public/book", publicBookLimiter, async (req, res) => {
         ? parseInt(locationId)
         : null;
     if (reqLocationId !== null && !Number.isFinite(reqLocationId)) {
-      return res
-        .status(400)
-        .json({
-          error: "locationId must be numeric",
-          code: "INVALID_LOCATION",
-        });
+      return res.status(400).json({
+        error: "locationId must be numeric",
+        code: "INVALID_LOCATION",
+      });
     }
     let resolvedLocationId = reqLocationId;
     if (resolvedLocationId === null) {
@@ -8582,12 +8893,10 @@ router.post("/public/book", publicBookLimiter, async (req, res) => {
     ) {
       const parsedResourceId = parseInt(rawResourceId);
       if (!Number.isFinite(parsedResourceId)) {
-        return res
-          .status(400)
-          .json({
-            error: "resourceId must be numeric",
-            code: "INVALID_RESOURCE",
-          });
+        return res.status(400).json({
+          error: "resourceId must be numeric",
+          code: "INVALID_RESOURCE",
+        });
       }
       const resWhere = {
         id: parsedResourceId,
@@ -8696,13 +9005,11 @@ router.post("/public/book", publicBookLimiter, async (req, res) => {
       return { patient, visit };
     });
 
-    res
-      .status(201)
-      .json({
-        ok: true,
-        visit: result.visit,
-        patient: { id: result.patient.id, name: result.patient.name },
-      });
+    res.status(201).json({
+      ok: true,
+      visit: result.visit,
+      patient: { id: result.patient.id, name: result.patient.name },
+    });
   } catch (e) {
     console.error("[wellness] public booking failed:", e.message, e.stack);
     res.status(500).json({ error: "Booking failed", detail: e.message });
@@ -8741,7 +9048,9 @@ router.get("/prescriptions/:id/pdf", async (req, res) => {
     const clinic = await primaryClinic(req.user.tenantId);
     const doctor =
       rx.doctor || (req.user?.name ? { name: req.user.name } : null);
-    const { tenant, logoBuffer } = await loadTenantBrandAssets(req.user.tenantId);
+    const { tenant, logoBuffer } = await loadTenantBrandAssets(
+      req.user.tenantId,
+    );
     const buf = await renderPrescriptionPdf(rx, rx.patient, clinic, doctor, {
       tenant,
       logoBuffer,
@@ -8845,7 +9154,10 @@ router.get(
           auditErr.message,
         );
       }
-      res.json({ patient: { id: patient.id, name: patient.name }, prescriptions });
+      res.json({
+        patient: { id: patient.id, name: patient.name },
+        prescriptions,
+      });
     } catch (e) {
       console.error("[wellness] my-prescriptions list error:", e.message);
       res.status(500).json({ error: "Failed to load prescriptions" });
@@ -9052,10 +9364,10 @@ router.get("/patients/:id/summary.pdf", phiReadGate, async (req, res) => {
 
     const walletTransactions = wallet
       ? await prisma.walletTransaction.findMany({
-        where: { tenantId: req.user.tenantId, walletId: wallet.id },
-        orderBy: { createdAt: "desc" },
-        take: 50,
-      })
+          where: { tenantId: req.user.tenantId, walletId: wallet.id },
+          orderBy: { createdAt: "desc" },
+          take: 50,
+        })
       : [];
 
     // Resolve a logo image to embed: prefer the tenant's uploaded
@@ -9092,49 +9404,66 @@ router.get("/patients/:id/summary.pdf", phiReadGate, async (req, res) => {
       if (Array.isArray(raw)) return raw.filter((u) => typeof u === "string");
       try {
         const arr = JSON.parse(raw);
-        return Array.isArray(arr) ? arr.filter((u) => typeof u === "string") : [];
+        return Array.isArray(arr)
+          ? arr.filter((u) => typeof u === "string")
+          : [];
       } catch {
         return [];
       }
     };
 
-    const fetchS3Photo = (url) => new Promise((resolve) => {
-      if (!/^https?:\/\//i.test(url)) {
-        console.warn(`[wellness] photo skipped — not an http(s) URL: ${url}`);
-        return resolve(null);
-      }
-      const get = (target, hopsLeft) => {
-        try {
-          const lib = target.startsWith("https:") ? require("https") : require("http");
-          const req2 = lib.get(target, (resp) => {
-            const code = resp.statusCode || 0;
-            // S3 sometimes 302s to a regional host; follow one redirect.
-            if (code >= 300 && code < 400 && resp.headers.location && hopsLeft > 0) {
-              resp.resume();
-              return get(resp.headers.location, hopsLeft - 1);
-            }
-            if (code !== 200) {
-              resp.resume();
-              console.warn(`[wellness] photo fetch ${target} → HTTP ${code}`);
-              return resolve(null);
-            }
-            const chunks = [];
-            resp.on("data", (c) => chunks.push(c));
-            resp.on("end", () => resolve(Buffer.concat(chunks)));
-            resp.on("error", () => resolve(null));
-          });
-          req2.setTimeout(4000, () => { req2.destroy(); resolve(null); });
-          req2.on("error", (e) => {
-            console.warn(`[wellness] photo fetch ${target} failed: ${e.message}`);
-            resolve(null);
-          });
-        } catch (e) {
-          console.warn(`[wellness] photo fetch ${target} threw: ${e.message}`);
-          resolve(null);
+    const fetchS3Photo = (url) =>
+      new Promise((resolve) => {
+        if (!/^https?:\/\//i.test(url)) {
+          console.warn(`[wellness] photo skipped — not an http(s) URL: ${url}`);
+          return resolve(null);
         }
-      };
-      get(url, 1);
-    });
+        const get = (target, hopsLeft) => {
+          try {
+            const lib = target.startsWith("https:")
+              ? require("https")
+              : require("http");
+            const req2 = lib.get(target, (resp) => {
+              const code = resp.statusCode || 0;
+              // S3 sometimes 302s to a regional host; follow one redirect.
+              if (
+                code >= 300 &&
+                code < 400 &&
+                resp.headers.location &&
+                hopsLeft > 0
+              ) {
+                resp.resume();
+                return get(resp.headers.location, hopsLeft - 1);
+              }
+              if (code !== 200) {
+                resp.resume();
+                console.warn(`[wellness] photo fetch ${target} → HTTP ${code}`);
+                return resolve(null);
+              }
+              const chunks = [];
+              resp.on("data", (c) => chunks.push(c));
+              resp.on("end", () => resolve(Buffer.concat(chunks)));
+              resp.on("error", () => resolve(null));
+            });
+            req2.setTimeout(4000, () => {
+              req2.destroy();
+              resolve(null);
+            });
+            req2.on("error", (e) => {
+              console.warn(
+                `[wellness] photo fetch ${target} failed: ${e.message}`,
+              );
+              resolve(null);
+            });
+          } catch (e) {
+            console.warn(
+              `[wellness] photo fetch ${target} threw: ${e.message}`,
+            );
+            resolve(null);
+          }
+        };
+        get(url, 1);
+      });
 
     const photoBuffers = new Map();
     const photoFetchTasks = [];
@@ -9303,10 +9632,9 @@ router.get("/consents/:id/pdf", async (req, res) => {
 // action; staff initiates it.
 router.post(
   "/consents/:id/archive",
-  verifyWellnessRole(
-    ["clinical", "doctor", "professional", "admin"],
-    { anyOfPermissions: [{ module: "consents", action: "write" }] },
-  ),
+  verifyWellnessRole(["clinical", "doctor", "professional", "admin"], {
+    anyOfPermissions: [{ module: "consents", action: "write" }],
+  }),
   async (req, res) => {
     try {
       const id = parseInt(req.params.id);
@@ -9703,53 +10031,60 @@ router.get("/portal/visits", verifyPatientToken, async (req, res) => {
   }
 });
 
-router.get("/portal/prescriptions", verifyPatientToken, requirePortalPermission("my_prescriptions", "read"), async (req, res) => {
-  try {
-    const prescriptions = await prisma.prescription.findMany({
-      where: { patientId: req.patient.id },
-      orderBy: { createdAt: "desc" },
-      take: 50,
-      include: {
-        visit: {
-          select: {
-            id: true,
-            visitDate: true,
-            service: { select: { name: true } },
-          },
-        },
-        doctor: { select: { id: true, name: true } },
-      },
-    });
-    // PRD §11: patient-portal list read of own Rx. ONE row per request.
+router.get(
+  "/portal/prescriptions",
+  verifyPatientToken,
+  requirePortalPermission("my_prescriptions", "read"),
+  async (req, res) => {
     try {
-      const tenantId = prescriptions.length ? prescriptions[0].tenantId : null;
-      if (tenantId) {
-        await writeAudit(
-          "Prescription",
-          "PATIENT_LIST_READ",
-          null,
-          null,
-          tenantId,
-          {
-            count: prescriptions.length,
-            source: "portal/prescriptions",
-            patientId: req.patient.id,
+      const prescriptions = await prisma.prescription.findMany({
+        where: { patientId: req.patient.id },
+        orderBy: { createdAt: "desc" },
+        take: 50,
+        include: {
+          visit: {
+            select: {
+              id: true,
+              visitDate: true,
+              service: { select: { name: true } },
+            },
           },
-          { actorType: "patient", patientId: req.patient.id },
+          doctor: { select: { id: true, name: true } },
+        },
+      });
+      // PRD §11: patient-portal list read of own Rx. ONE row per request.
+      try {
+        const tenantId = prescriptions.length
+          ? prescriptions[0].tenantId
+          : null;
+        if (tenantId) {
+          await writeAudit(
+            "Prescription",
+            "PATIENT_LIST_READ",
+            null,
+            null,
+            tenantId,
+            {
+              count: prescriptions.length,
+              source: "portal/prescriptions",
+              patientId: req.patient.id,
+            },
+            { actorType: "patient", patientId: req.patient.id },
+          );
+        }
+      } catch (auditErr) {
+        console.warn(
+          "[wellness] audit portal/prescriptions failed:",
+          auditErr.message,
         );
       }
-    } catch (auditErr) {
-      console.warn(
-        "[wellness] audit portal/prescriptions failed:",
-        auditErr.message,
-      );
+      res.json(prescriptions);
+    } catch (e) {
+      console.error("[wellness] portal prescriptions error:", e.message);
+      res.status(500).json({ error: "Failed to load prescriptions" });
     }
-    res.json(prescriptions);
-  } catch (e) {
-    console.error("[wellness] portal prescriptions error:", e.message);
-    res.status(500).json({ error: "Failed to load prescriptions" });
-  }
-});
+  },
+);
 
 // GET /my-transactions — the signed-in user/customer's own financial history.
 //
@@ -9858,7 +10193,9 @@ router.get("/my-transactions", verifyToken, async (req, res) => {
     const memberships = await prisma.membership.findMany({
       where: { patientId: patient.id, ...onCreated },
       orderBy: { createdAt: "desc" },
-      include: { plan: { select: { name: true, price: true, currency: true } } },
+      include: {
+        plan: { select: { name: true, price: true, currency: true } },
+      },
     });
 
     // 4. Treatment-plan packages (startedAt is the purchase moment).
@@ -9981,6 +10318,88 @@ router.get("/my-transactions", verifyToken, async (req, res) => {
     res.status(500).json({ error: "Failed to load transactions" });
   }
 });
+
+// ── Patient-portal product catalogue ───────────────────────────────
+//
+// Read-only product browsing for patients. Mirrors the staff
+// /products + /product-categories list endpoints but:
+//   - runs under verifyPatientToken (req.patient, not req.user)
+//   - uses requirePortalPermission('products', 'read') so the
+//     CUSTOMER role grant in the Roles & Permissions matrix is the
+//     authoritative switch (admin unchecks it → patients no longer
+//     see the catalogue)
+//   - returns ONLY safe fields — no SKU, stock, purchase/dealer
+//     price, manufacturer, or tax internals — so the clinic's
+//     inventory-management data stays out of patient hands even if
+//     the same Product row is shared with the staff endpoint
+//   - hides products flagged Consumption (clinic-only consumables)
+//     and inactive rows so the shopping surface only shows things
+//     a patient could plausibly buy
+router.get(
+  "/portal/products",
+  verifyPatientToken,
+  requirePortalPermission("products", "read"),
+  async (req, res) => {
+    try {
+      const items = await prisma.product.findMany({
+        where: {
+          tenantId: req.patient.tenantId,
+          isActive: true,
+          // Consumption-only products are clinic supplies (gauze,
+          // disposables) — not part of the patient-facing catalogue.
+          // Treat null productType as Sale (back-compat with pre-v3.4
+          // rows that didn't set the field).
+          NOT: { productType: "Consumption" },
+        },
+        orderBy: { name: "asc" },
+        select: {
+          id: true,
+          name: true,
+          description: true,
+          price: true,
+          discountedPrice: true,
+          imageUrl: true,
+          brandName: true,
+          volume: true,
+          unit: true,
+          category: { select: { id: true, name: true } },
+        },
+      });
+      res.json(items);
+    } catch (e) {
+      console.error("[wellness] portal products error:", e.message);
+      res.status(500).json({ error: "Failed to load products" });
+    }
+  },
+);
+
+router.get(
+  "/portal/product-categories",
+  verifyPatientToken,
+  requirePortalPermission("products", "read"),
+  async (req, res) => {
+    try {
+      const items = await prisma.productCategory.findMany({
+        where: {
+          tenantId: req.patient.tenantId,
+          isActive: true,
+        },
+        orderBy: [{ parentId: "asc" }, { name: "asc" }],
+        select: {
+          id: true,
+          name: true,
+          parentId: true,
+          imageUrl: true,
+          color: true,
+        },
+      });
+      res.json(items);
+    } catch (e) {
+      console.error("[wellness] portal product-categories error:", e.message);
+      res.status(500).json({ error: "Failed to load product categories" });
+    }
+  },
+);
 
 // GET /portal/prescriptions/:id/pdf — patient self-download of an Rx PDF.
 //
@@ -10833,9 +11252,9 @@ router.get(
       const ids = grouped.map((g) => g.patientId);
       const patients = ids.length
         ? await prisma.patient.findMany({
-          where: { id: { in: ids }, tenantId: req.user.tenantId },
-          select: { id: true, name: true, phone: true },
-        })
+            where: { id: { in: ids }, tenantId: req.user.tenantId },
+            select: { id: true, name: true, phone: true },
+          })
         : [];
       const byId = Object.fromEntries(patients.map((p) => [p.id, p]));
       res.json(
@@ -11452,7 +11871,7 @@ router.post(
           req.user.tenantId,
           req.io,
         );
-      } catch (_e) { }
+      } catch (_e) {}
       res.status(201).json(tx);
     } catch (e) {
       console.error("[wellness] wallet credit error:", e.message);
@@ -11490,12 +11909,10 @@ router.post(
         });
       } catch (err) {
         if (err.code === "INSUFFICIENT_BALANCE") {
-          return res
-            .status(409)
-            .json({
-              error: "Wallet has insufficient balance",
-              code: "INSUFFICIENT_BALANCE",
-            });
+          return res.status(409).json({
+            error: "Wallet has insufficient balance",
+            code: "INSUFFICIENT_BALANCE",
+          });
         }
         throw err;
       }
@@ -11528,7 +11945,7 @@ router.post(
           req.user.tenantId,
           req.io,
         );
-      } catch (_e) { }
+      } catch (_e) {}
       res.status(201).json(tx);
     } catch (e) {
       console.error("[wellness] wallet debit error:", e.message);
@@ -11600,14 +12017,17 @@ router.post(
       // contract working for existing callers (wallet-giftcard spec,
       // PointOfSale issue flow). validityDays takes precedence over
       // an explicit expiresAt — if both are sent we honor expiresAt.
-      const name = typeof req.body.name === "string" && req.body.name.trim()
-        ? req.body.name.trim()
-        : null;
+      const name =
+        typeof req.body.name === "string" && req.body.name.trim()
+          ? req.body.name.trim()
+          : null;
       let price = null;
       if (req.body.price != null && req.body.price !== "") {
         const p = Number(req.body.price);
         if (!Number.isFinite(p) || p < 0) {
-          return res.status(400).json({ error: "price must be a non-negative number" });
+          return res
+            .status(400)
+            .json({ error: "price must be a non-negative number" });
         }
         price = p;
       }
@@ -11615,17 +12035,21 @@ router.post(
       if (req.body.validityDays != null && req.body.validityDays !== "") {
         const v = parseInt(req.body.validityDays, 10);
         if (!Number.isInteger(v) || v <= 0 || v > 3650) {
-          return res.status(400).json({ error: "validityDays must be an integer between 1 and 3650" });
+          return res
+            .status(400)
+            .json({
+              error: "validityDays must be an integer between 1 and 3650",
+            });
         }
         validityDays = v;
       }
-      const color = typeof req.body.color === "string" && /^#[0-9a-fA-F]{3,8}$/.test(req.body.color.trim())
-        ? req.body.color.trim()
-        : null;
+      const color =
+        typeof req.body.color === "string" &&
+        /^#[0-9a-fA-F]{3,8}$/.test(req.body.color.trim())
+          ? req.body.color.trim()
+          : null;
 
-      let expiresAt = req.body.expiresAt
-        ? new Date(req.body.expiresAt)
-        : null;
+      let expiresAt = req.body.expiresAt ? new Date(req.body.expiresAt) : null;
       if (expiresAt && Number.isNaN(expiresAt.getTime())) {
         return res
           .status(400)
@@ -11725,7 +12149,7 @@ router.post(
           req.user.tenantId,
           req.io,
         );
-      } catch (_e) { }
+      } catch (_e) {}
       // Return the plaintext ONCE in the response as `code` (back-compat with
       // 48 existing spec assertions) + `oneTimeCode` (explicit alias making
       // the disclosure semantics obvious to API consumers).
@@ -11773,7 +12197,8 @@ router.patch(
       const existing = await prisma.giftCard.findFirst({
         where: tenantWhere(req, { id }),
       });
-      if (!existing) return res.status(404).json({ error: "Gift card not found" });
+      if (!existing)
+        return res.status(404).json({ error: "Gift card not found" });
       // Redeemed cards are terminal — admins can't reactivate them.
       if (existing.status === "redeemed") {
         return res.status(409).json({
@@ -11795,7 +12220,11 @@ router.patch(
         id,
         req.user.userId,
         req.user.tenantId,
-        { from: existing.status, to: nextStatus, codeLast4: existing.codeLast4 },
+        {
+          from: existing.status,
+          to: nextStatus,
+          codeLast4: existing.codeLast4,
+        },
       );
       res.json(updated);
     } catch (e) {
@@ -11853,20 +12282,16 @@ router.post("/giftcards/redeem", phiReadGate, async (req, res) => {
         .json({ error: "Gift card not found", code: "GIFTCARD_NOT_FOUND" });
     }
     if (giftCard.status === "redeemed") {
-      return res
-        .status(409)
-        .json({
-          error: "Gift card already redeemed",
-          code: "GIFTCARD_ALREADY_REDEEMED",
-        });
+      return res.status(409).json({
+        error: "Gift card already redeemed",
+        code: "GIFTCARD_ALREADY_REDEEMED",
+      });
     }
     if (giftCard.status !== "active") {
-      return res
-        .status(409)
-        .json({
-          error: `Gift card status is ${giftCard.status}`,
-          code: "GIFTCARD_INACTIVE",
-        });
+      return res.status(409).json({
+        error: `Gift card status is ${giftCard.status}`,
+        code: "GIFTCARD_INACTIVE",
+      });
     }
     if (giftCard.expiresAt && giftCard.expiresAt.getTime() < Date.now()) {
       await prisma.giftCard.update({
@@ -11953,7 +12378,7 @@ router.post("/giftcards/redeem", phiReadGate, async (req, res) => {
         req.user.tenantId,
         req.io,
       );
-    } catch (_e) { }
+    } catch (_e) {}
     res.status(201).json({ giftCard: updated, transaction: tx });
   } catch (e) {
     console.error("[wellness] giftcard redeem error:", e.message);
@@ -11993,10 +12418,7 @@ router.get("/giftcards/storefront", async (req, res) => {
         // Only cards with a price are listed in the storefront — a row
         // with price=null is admin-issuance only (sold offline / gifted).
         price: { not: null },
-        OR: [
-          { expiresAt: null },
-          { expiresAt: { gt: now } },
-        ],
+        OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
       },
       select: {
         id: true,
@@ -12163,9 +12585,7 @@ router.post("/giftcards/:id/purchase/order", async (req, res) => {
     try {
       card = await loadStorefrontCard(req.user.tenantId, id);
     } catch (err) {
-      return res
-        .status(err.status || 500)
-        .json({ error: err.message });
+      return res.status(err.status || 500).json({ error: err.message });
     }
 
     const amountPaise = Math.round(Number(card.price) * 100);
@@ -12189,9 +12609,7 @@ router.post("/giftcards/:id/purchase/order", async (req, res) => {
         "[wellness] razorpay order failed:",
         gatewayErr && gatewayErr.message,
       );
-      return res
-        .status(502)
-        .json({ error: "Failed to create payment order" });
+      return res.status(502).json({ error: "Failed to create payment order" });
     }
 
     const payment = await prisma.payment.create({
@@ -12293,7 +12711,9 @@ router.post("/giftcards/:id/purchase/confirm", async (req, res) => {
     let meta = {};
     try {
       meta = JSON.parse(payment.metadata || "{}");
-    } catch (_e) { /* malformed metadata is treated as missing */ }
+    } catch (_e) {
+      /* malformed metadata is treated as missing */
+    }
     if (meta.giftCardId !== id || meta.kind !== "giftcard_purchase") {
       return res
         .status(400)
@@ -12319,9 +12739,7 @@ router.post("/giftcards/:id/purchase/confirm", async (req, res) => {
         where: { id: payment.id },
         data: { status: "FAILED" },
       });
-      return res
-        .status(err.status || 500)
-        .json({ error: err.message });
+      return res.status(err.status || 500).json({ error: err.message });
     }
 
     // Mark Payment SUCCESS first so the row is durable even if the
@@ -12358,10 +12776,7 @@ router.post("/giftcards/:id/purchase/confirm", async (req, res) => {
         giftCardId: card.id,
       });
     } catch (err) {
-      console.error(
-        "[wellness] giftcard purchase credit error:",
-        err.message,
-      );
+      console.error("[wellness] giftcard purchase credit error:", err.message);
       return res.status(500).json({ error: "Failed to credit wallet" });
     }
 
@@ -12418,7 +12833,7 @@ router.post("/giftcards/:id/purchase/confirm", async (req, res) => {
         req.user.tenantId,
         req.io,
       );
-    } catch (_e) { }
+    } catch (_e) {}
 
     res.json({
       success: true,
@@ -12481,7 +12896,10 @@ router.post(
       if (!plan.isActive) {
         return res
           .status(409)
-          .json({ error: "Membership plan is inactive", code: "PLAN_INACTIVE" });
+          .json({
+            error: "Membership plan is inactive",
+            code: "PLAN_INACTIVE",
+          });
       }
 
       // Get-or-create the buyer's patient record (same pattern as
@@ -12504,6 +12922,39 @@ router.post(
             tenant: { connect: { id: tenantId } },
             user: { connect: { id: userId } },
           },
+        });
+      }
+
+      // Reject duplicate purchase while an active membership exists for
+      // the same plan. Active = status='active' AND endDate > now. Lazy
+      // expiry means we MUST check both fields together — checking
+      // status alone would let a user re-buy past expiry (acceptable —
+      // they should be able to renew), but also let them double-buy on
+      // an unexpired-but-stale row (NOT acceptable). Returns 409 BEFORE
+      // touching Razorpay so the user is never charged for the duplicate.
+      const existingActive = await prisma.membership.findFirst({
+        where: {
+          tenantId,
+          patientId: patient.id,
+          planId: plan.id,
+          status: "active",
+          endDate: { gt: new Date() },
+        },
+        select: { id: true, endDate: true },
+        orderBy: { endDate: "desc" },
+      });
+      if (existingActive) {
+        return res.status(409).json({
+          success: false,
+          message: "You already have an active membership for this plan.",
+          // Legacy envelope fields kept for back-compat with the
+          // generic fetchApi error toast which reads `error` /
+          // `code` first. Cross-cutting standing rule prefers
+          // additive over breaking.
+          error: "You already have an active membership for this plan.",
+          code: "MEMBERSHIP_ALREADY_ACTIVE",
+          activeMembershipId: existingActive.id,
+          activeMembershipEndDate: existingActive.endDate,
         });
       }
 
@@ -12563,9 +13014,7 @@ router.post(
       });
     } catch (e) {
       console.error("[wellness] membership purchase order error:", e.message);
-      res
-        .status(500)
-        .json({ error: "Failed to start membership purchase" });
+      res.status(500).json({ error: "Failed to start membership purchase" });
     }
   },
 );
@@ -12625,9 +13074,7 @@ router.post(
           where: { id: payment.id },
           data: { status: "FAILED" },
         });
-        return res
-          .status(400)
-          .json({ error: "Signature verification failed" });
+        return res.status(400).json({ error: "Signature verification failed" });
       }
 
       // Pull plan + patient out of the metadata the order handler stored.
@@ -12636,11 +13083,10 @@ router.post(
       let meta = {};
       try {
         meta = JSON.parse(payment.metadata || "{}");
-      } catch (_e) { /* malformed metadata is treated as missing */ }
-      if (
-        meta.planId !== planIdInt ||
-        meta.kind !== "membership_purchase"
-      ) {
+      } catch (_e) {
+        /* malformed metadata is treated as missing */
+      }
+      if (meta.planId !== planIdInt || meta.kind !== "membership_purchase") {
         return res
           .status(400)
           .json({ error: "Payment does not match membership plan" });
@@ -12666,6 +13112,38 @@ router.post(
         return res
           .status(410)
           .json({ error: "Membership plan is no longer available" });
+      }
+
+      // Defence-in-depth duplicate-active check — the /order endpoint
+      // gates the same condition, but a race (two concurrent orders
+      // created in the same tick, or a /confirm called against a stale
+      // order that pre-dated the user's now-active membership) could
+      // slip through. Failing the Payment here triggers the same
+      // out-of-band refund the deactivated-plan branch above expects.
+      const existingActiveConfirm = await prisma.membership.findFirst({
+        where: {
+          tenantId: req.user.tenantId,
+          patientId,
+          planId: plan.id,
+          status: "active",
+          endDate: { gt: new Date() },
+        },
+        select: { id: true, endDate: true },
+        orderBy: { endDate: "desc" },
+      });
+      if (existingActiveConfirm) {
+        await prisma.payment.update({
+          where: { id: payment.id },
+          data: { status: "FAILED" },
+        });
+        return res.status(409).json({
+          success: false,
+          message: "You already have an active membership for this plan.",
+          error: "You already have an active membership for this plan.",
+          code: "MEMBERSHIP_ALREADY_ACTIVE",
+          activeMembershipId: existingActiveConfirm.id,
+          activeMembershipEndDate: existingActiveConfirm.endDate,
+        });
       }
 
       const updatedPayment = await prisma.payment.update({
@@ -12695,9 +13173,9 @@ router.post(
           code: "PLAN_ENTITLEMENTS_CORRUPT",
         });
       }
-      const initialBalance = (Array.isArray(entitlements) ? entitlements : []).map(
-        (e) => ({ serviceId: e.serviceId, remaining: e.quantity }),
-      );
+      const initialBalance = (
+        Array.isArray(entitlements) ? entitlements : []
+      ).map((e) => ({ serviceId: e.serviceId, remaining: e.quantity }));
 
       const start = new Date();
       const end = new Date(start.getTime() + plan.durationDays * 86400000);
@@ -12712,7 +13190,9 @@ router.post(
           },
         });
         isRenewal = priorCount > 0;
-      } catch (_e) { /* best-effort */ }
+      } catch (_e) {
+        /* best-effort */
+      }
 
       const membership = await prisma.membership.create({
         data: {
@@ -12764,7 +13244,7 @@ router.post(
           req.user.tenantId,
           req.io,
         );
-      } catch (_e) { }
+      } catch (_e) {}
 
       res.json({
         success: true,
@@ -12780,9 +13260,7 @@ router.post(
       });
     } catch (e) {
       console.error("[wellness] membership purchase confirm error:", e.message);
-      res
-        .status(500)
-        .json({ error: "Failed to confirm membership purchase" });
+      res.status(500).json({ error: "Failed to confirm membership purchase" });
     }
   },
 );
@@ -12834,20 +13312,16 @@ router.post(
           .json({ error: "Gift card not found", code: "GIFTCARD_NOT_FOUND" });
       }
       if (giftCard.status === "redeemed") {
-        return res
-          .status(409)
-          .json({
-            error: "Gift card already redeemed",
-            code: "GIFTCARD_ALREADY_REDEEMED",
-          });
+        return res.status(409).json({
+          error: "Gift card already redeemed",
+          code: "GIFTCARD_ALREADY_REDEEMED",
+        });
       }
       if (giftCard.status !== "active") {
-        return res
-          .status(409)
-          .json({
-            error: `Gift card status is ${giftCard.status}`,
-            code: "GIFTCARD_INACTIVE",
-          });
+        return res.status(409).json({
+          error: `Gift card status is ${giftCard.status}`,
+          code: "GIFTCARD_INACTIVE",
+        });
       }
       if (giftCard.expiresAt && giftCard.expiresAt.getTime() < Date.now()) {
         await prisma.giftCard.update({
@@ -12931,7 +13405,7 @@ router.post(
           req.user.tenantId,
           req.io,
         );
-      } catch (_e) { }
+      } catch (_e) {}
       res.status(201).json({ giftCard: updated, transaction: tx });
     } catch (e) {
       console.error("[wellness] giftcard apply error:", e.message);
@@ -12996,10 +13470,10 @@ router.post("/coupons", verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
       serviceIds: req.body.serviceIds
         ? Array.isArray(req.body.serviceIds)
           ? JSON.stringify(
-            req.body.serviceIds
-              .map((n) => parseInt(n, 10))
-              .filter(Number.isFinite),
-          )
+              req.body.serviceIds
+                .map((n) => parseInt(n, 10))
+                .filter(Number.isFinite),
+            )
           : String(req.body.serviceIds)
         : null,
       isActive: req.body.isActive === false ? false : true,
@@ -13009,12 +13483,10 @@ router.post("/coupons", verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
       row = await prisma.coupon.create({ data });
     } catch (err) {
       if (err.code === "P2002") {
-        return res
-          .status(409)
-          .json({
-            error: "Coupon code already exists in this tenant",
-            code: "COUPON_DUPLICATE",
-          });
+        return res.status(409).json({
+          error: "Coupon code already exists in this tenant",
+          code: "COUPON_DUPLICATE",
+        });
       }
       throw err;
     }
@@ -13083,10 +13555,10 @@ router.put(
           data[k] = req.body[k]
             ? Array.isArray(req.body[k])
               ? JSON.stringify(
-                req.body[k]
-                  .map((n) => parseInt(n, 10))
-                  .filter(Number.isFinite),
-              )
+                  req.body[k]
+                    .map((n) => parseInt(n, 10))
+                    .filter(Number.isFinite),
+                )
               : String(req.body[k])
             : null;
         }
@@ -13248,12 +13720,10 @@ router.post("/coupons/apply", phiReadGate, async (req, res) => {
       serviceId ? parseInt(serviceId, 10) : null,
     );
     if (!result.applied) {
-      return res
-        .status(409)
-        .json({
-          error: "Coupon does not apply to this purchase",
-          code: "COUPON_NOT_APPLICABLE",
-        });
+      return res.status(409).json({
+        error: "Coupon does not apply to this purchase",
+        code: "COUPON_NOT_APPLICABLE",
+      });
     }
     const updated = await prisma.coupon.update({
       where: { id: lookup.coupon.id },
@@ -13289,74 +13759,107 @@ function validateCashbackRuleBody(body) {
   const errors = [];
   if (!body.name || !String(body.name).trim()) errors.push("name is required");
   const v = Number(body.earnPercent);
-  if (!Number.isFinite(v) || v < 0) errors.push("earnPercent must be a non-negative number");
+  if (!Number.isFinite(v) || v < 0)
+    errors.push("earnPercent must be a non-negative number");
   if (v > 100) errors.push("earnPercent must be ≤ 100");
   if (body.minSpend != null) {
     const m = Number(body.minSpend);
-    if (!Number.isFinite(m) || m < 0) errors.push("minSpend must be a non-negative number");
+    if (!Number.isFinite(m) || m < 0)
+      errors.push("minSpend must be a non-negative number");
   }
   if (body.expiresAt != null && body.expiresAt !== "") {
     const d = new Date(body.expiresAt);
-    if (Number.isNaN(d.getTime())) errors.push("expiresAt must be a valid ISO date");
+    if (Number.isNaN(d.getTime()))
+      errors.push("expiresAt must be a valid ISO date");
   }
   return errors;
 }
 
 router.get(
-    "/cashback-rules",
-    verifyRole(["ADMIN", "MANAGER"]),
-    async (req, res) => {
-      try {
-        const where = tenantWhere(req);
-        if (req.query.isActive === "true") where.isActive = true;
-        if (req.query.isActive === "false") where.isActive = false;
-        const rules = await prisma.cashbackRule.findMany({
-          where,
-          orderBy: { createdAt: "desc" },
-        });
-        res.json({ rules });
-      } catch (e) {
-        console.error("[wellness] cashback list error:", e.message);
-        res.status(500).json({ error: "Failed to list cashback rules" });
-      }
-    },
-  );
+  "/cashback-rules",
+  verifyRole(["ADMIN", "MANAGER"]),
+  async (req, res) => {
+    try {
+      const where = tenantWhere(req);
+      if (req.query.isActive === "true") where.isActive = true;
+      if (req.query.isActive === "false") where.isActive = false;
+      const rules = await prisma.cashbackRule.findMany({
+        where,
+        orderBy: { createdAt: "desc" },
+      });
+      res.json({ rules });
+    } catch (e) {
+      console.error("[wellness] cashback list error:", e.message);
+      res.status(500).json({ error: "Failed to list cashback rules" });
+    }
+  },
+);
 
-  router.post("/cashback-rules", verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
+router.post(
+  "/cashback-rules",
+  verifyRole(["ADMIN", "MANAGER"]),
+  async (req, res) => {
     try {
       const errors = validateCashbackRuleBody(req.body);
-      if (errors.length) return res.status(400).json({ error: errors.join("; ") });
+      if (errors.length)
+        return res.status(400).json({ error: errors.join("; ") });
       const data = {
         tenantId: req.user.tenantId,
         name: String(req.body.name).trim(),
         earnPercent: Number(req.body.earnPercent),
         minSpend: req.body.minSpend != null ? Number(req.body.minSpend) : null,
         serviceIds: req.body.serviceIds
-          ? (Array.isArray(req.body.serviceIds)
-            ? JSON.stringify(req.body.serviceIds.map((n) => parseInt(n, 10)).filter(Number.isFinite))
-            : String(req.body.serviceIds))
+          ? Array.isArray(req.body.serviceIds)
+            ? JSON.stringify(
+                req.body.serviceIds
+                  .map((n) => parseInt(n, 10))
+                  .filter(Number.isFinite),
+              )
+            : String(req.body.serviceIds)
           : null,
         isActive: req.body.isActive === false ? false : true,
         expiresAt: req.body.expiresAt ? new Date(req.body.expiresAt) : null,
       };
       const row = await prisma.cashbackRule.create({ data });
-      await writeAudit("CashbackRule", "CREATE", row.id, req.user.userId, req.user.tenantId, {
-        name: row.name, earnPercent: row.earnPercent,
-      });
+      await writeAudit(
+        "CashbackRule",
+        "CREATE",
+        row.id,
+        req.user.userId,
+        req.user.tenantId,
+        {
+          name: row.name,
+          earnPercent: row.earnPercent,
+        },
+      );
       res.status(201).json(row);
     } catch (e) {
       console.error("[wellness] cashback create error:", e.message);
       res.status(500).json({ error: "Failed to create cashback rule" });
     }
-  });
+  },
+);
 
-  router.put("/cashback-rules/:id", verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
+router.put(
+  "/cashback-rules/:id",
+  verifyRole(["ADMIN", "MANAGER"]),
+  async (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);
-      const existing = await prisma.cashbackRule.findFirst({ where: tenantWhere(req, { id }) });
-      if (!existing) return res.status(404).json({ error: "Cashback rule not found" });
+      const existing = await prisma.cashbackRule.findFirst({
+        where: tenantWhere(req, { id }),
+      });
+      if (!existing)
+        return res.status(404).json({ error: "Cashback rule not found" });
       const data = {};
-      const allowed = ["name", "earnPercent", "minSpend", "serviceIds", "isActive", "expiresAt"];
+      const allowed = [
+        "name",
+        "earnPercent",
+        "minSpend",
+        "serviceIds",
+        "isActive",
+        "expiresAt",
+      ];
       for (const k of allowed) {
         if (req.body[k] === undefined) continue;
         if (k === "name") {
@@ -13364,7 +13867,9 @@ router.get(
         } else if (k === "earnPercent") {
           const v = Number(req.body[k]);
           if (!Number.isFinite(v) || v < 0 || v > 100) {
-            return res.status(400).json({ error: "earnPercent must be 0..100" });
+            return res
+              .status(400)
+              .json({ error: "earnPercent must be 0..100" });
           }
           data[k] = v;
         } else if (k === "minSpend") {
@@ -13373,9 +13878,13 @@ router.get(
           data[k] = !!req.body[k];
         } else if (k === "serviceIds") {
           data[k] = req.body[k]
-            ? (Array.isArray(req.body[k])
-              ? JSON.stringify(req.body[k].map((n) => parseInt(n, 10)).filter(Number.isFinite))
-              : String(req.body[k]))
+            ? Array.isArray(req.body[k])
+              ? JSON.stringify(
+                  req.body[k]
+                    .map((n) => parseInt(n, 10))
+                    .filter(Number.isFinite),
+                )
+              : String(req.body[k])
             : null;
         } else if (k === "expiresAt") {
           if (req.body[k] === null || req.body[k] === "") {
@@ -13383,652 +13892,683 @@ router.get(
           } else {
             const d = new Date(req.body[k]);
             if (Number.isNaN(d.getTime())) {
-              return res.status(400).json({ error: "expiresAt must be a valid ISO date" });
+              return res
+                .status(400)
+                .json({ error: "expiresAt must be a valid ISO date" });
             }
             data[k] = d;
           }
         }
       }
       const updated = await prisma.cashbackRule.update({ where: { id }, data });
-      await writeAudit("CashbackRule", "UPDATE", id, req.user.userId, req.user.tenantId, diffFields(existing, updated));
+      await writeAudit(
+        "CashbackRule",
+        "UPDATE",
+        id,
+        req.user.userId,
+        req.user.tenantId,
+        diffFields(existing, updated),
+      );
       res.json(updated);
     } catch (e) {
       console.error("[wellness] cashback update error:", e.message);
       res.status(500).json({ error: "Failed to update cashback rule" });
     }
-  });
+  },
+);
 
-  router.delete(
-    "/cashback-rules/:id",
-    verifyRole(["ADMIN"]),
-    async (req, res) => {
-      try {
-        const id = parseInt(req.params.id, 10);
-        const existing = await prisma.cashbackRule.findFirst({
-          where: tenantWhere(req, { id }),
-        });
-        if (!existing)
-          return res.status(404).json({ error: "Cashback rule not found" });
-        await prisma.cashbackRule.delete({ where: { id } });
-        await writeAudit(
-          "CashbackRule",
-          "DELETE",
-          id,
-          req.user.userId,
-          req.user.tenantId,
-          { name: existing.name },
-        );
-        res.status(204).send();
-      } catch (e) {
-        console.error("[wellness] cashback delete error:", e.message);
-        res.status(500).json({ error: "Failed to delete cashback rule" });
-      }
-    },
-  );
-
-  router.post("/visits/:id/apply-cashback", phiWriteGate, async (req, res) => {
+router.delete(
+  "/cashback-rules/:id",
+  verifyRole(["ADMIN"]),
+  async (req, res) => {
     try {
-      const visitId = parseInt(req.params.id, 10);
-      const visit = await prisma.visit.findFirst({
-        where: tenantWhere(req, { id: visitId }),
-        select: {
-          id: true,
-          patientId: true,
-          serviceId: true,
-          amountCharged: true,
-          status: true,
-        },
+      const id = parseInt(req.params.id, 10);
+      const existing = await prisma.cashbackRule.findFirst({
+        where: tenantWhere(req, { id }),
       });
-      if (!visit) return res.status(404).json({ error: "Visit not found" });
-      if (visit.status !== "completed") {
-        return res
-          .status(409)
-          .json({
-            error: "Cashback can only be applied to completed visits",
-            code: "VISIT_NOT_COMPLETED",
-          });
-      }
-      const existing = await prisma.walletTransaction.findFirst({
-        where: { tenantId: req.user.tenantId, visitId, type: "CREDIT_CASHBACK" },
-        select: { id: true, amount: true },
-      });
-      if (existing) {
-        return res.status(409).json({
-          error: "Cashback already applied for this visit",
-          code: "CASHBACK_ALREADY_APPLIED",
-          transactionId: existing.id,
-        });
-      }
-      const now = new Date();
-      const rules = await prisma.cashbackRule.findMany({
-        where: {
-          tenantId: req.user.tenantId,
-          isActive: true,
-          OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
-        },
-        orderBy: { createdAt: "asc" },
-      });
-      const result = computeCashbackEarn(
-        rules,
-        Number(visit.amountCharged) || 0,
-        visit.serviceId,
-      );
-      if (!result.applied) {
-        return res.json({ applied: false, earn: 0, ruleId: null });
-      }
-      const wallet = await getOrCreateWallet(req, visit.patientId);
-      const tx = await writeWalletTransaction({
-        tenantId: req.user.tenantId,
-        walletId: wallet.id,
-        type: "CREDIT_CASHBACK",
-        absAmount: result.earn,
-        performedBy: req.user.userId,
-        reason: `Cashback for Visit #${visitId} (rule ${result.ruleId})`,
-        visitId,
-      });
+      if (!existing)
+        return res.status(404).json({ error: "Cashback rule not found" });
+      await prisma.cashbackRule.delete({ where: { id } });
       await writeAudit(
-        "Patient",
-        "CASHBACK_EARN",
-        visit.patientId,
+        "CashbackRule",
+        "DELETE",
+        id,
         req.user.userId,
         req.user.tenantId,
+        { name: existing.name },
+      );
+      res.status(204).send();
+    } catch (e) {
+      console.error("[wellness] cashback delete error:", e.message);
+      res.status(500).json({ error: "Failed to delete cashback rule" });
+    }
+  },
+);
+
+router.post("/visits/:id/apply-cashback", phiWriteGate, async (req, res) => {
+  try {
+    const visitId = parseInt(req.params.id, 10);
+    const visit = await prisma.visit.findFirst({
+      where: tenantWhere(req, { id: visitId }),
+      select: {
+        id: true,
+        patientId: true,
+        serviceId: true,
+        amountCharged: true,
+        status: true,
+      },
+    });
+    if (!visit) return res.status(404).json({ error: "Visit not found" });
+    if (visit.status !== "completed") {
+      return res.status(409).json({
+        error: "Cashback can only be applied to completed visits",
+        code: "VISIT_NOT_COMPLETED",
+      });
+    }
+    const existing = await prisma.walletTransaction.findFirst({
+      where: { tenantId: req.user.tenantId, visitId, type: "CREDIT_CASHBACK" },
+      select: { id: true, amount: true },
+    });
+    if (existing) {
+      return res.status(409).json({
+        error: "Cashback already applied for this visit",
+        code: "CASHBACK_ALREADY_APPLIED",
+        transactionId: existing.id,
+      });
+    }
+    const now = new Date();
+    const rules = await prisma.cashbackRule.findMany({
+      where: {
+        tenantId: req.user.tenantId,
+        isActive: true,
+        OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
+      },
+      orderBy: { createdAt: "asc" },
+    });
+    const result = computeCashbackEarn(
+      rules,
+      Number(visit.amountCharged) || 0,
+      visit.serviceId,
+    );
+    if (!result.applied) {
+      return res.json({ applied: false, earn: 0, ruleId: null });
+    }
+    const wallet = await getOrCreateWallet(req, visit.patientId);
+    const tx = await writeWalletTransaction({
+      tenantId: req.user.tenantId,
+      walletId: wallet.id,
+      type: "CREDIT_CASHBACK",
+      absAmount: result.earn,
+      performedBy: req.user.userId,
+      reason: `Cashback for Visit #${visitId} (rule ${result.ruleId})`,
+      visitId,
+    });
+    await writeAudit(
+      "Patient",
+      "CASHBACK_EARN",
+      visit.patientId,
+      req.user.userId,
+      req.user.tenantId,
+      {
+        visitId,
+        ruleId: result.ruleId,
+        earn: result.earn,
+        transactionId: tx.id,
+      },
+    );
+    // PRD Gap §13 wave-6a — emit cashback.credited so workflow rules can
+    // react (cashback-redemption SMS, loyalty-tier upgrades).
+    try {
+      require("../lib/eventBus").emitEvent(
+        "cashback.credited",
         {
+          patientId: visit.patientId,
           visitId,
           ruleId: result.ruleId,
-          earn: result.earn,
+          amount: result.earn,
+          walletId: wallet.id,
           transactionId: tx.id,
         },
+        req.user.tenantId,
+        req.io,
       );
-      // PRD Gap §13 wave-6a — emit cashback.credited so workflow rules can
-      // react (cashback-redemption SMS, loyalty-tier upgrades).
-      try {
-        require("../lib/eventBus").emitEvent(
-          "cashback.credited",
-          {
-            patientId: visit.patientId,
-            visitId,
-            ruleId: result.ruleId,
-            amount: result.earn,
-            walletId: wallet.id,
-            transactionId: tx.id,
-          },
-          req.user.tenantId,
-          req.io,
-        );
-      } catch (_e) { }
-      res
-        .status(201)
-        .json({
-          applied: true,
-          earn: result.earn,
-          ruleId: result.ruleId,
-          transaction: tx,
-        });
-    } catch (e) {
-      console.error("[wellness] cashback apply error:", e.message);
-      res.status(500).json({ error: "Failed to apply cashback" });
+    } catch (_e) {}
+    res.status(201).json({
+      applied: true,
+      earn: result.earn,
+      ruleId: result.ruleId,
+      transaction: tx,
+    });
+  } catch (e) {
+    console.error("[wellness] cashback apply error:", e.message);
+    res.status(500).json({ error: "Failed to apply cashback" });
+  }
+});
+
+// Get doctors availability for patient appointment booking
+// Returns minimal doctor info (only id, name, availability status)
+// No email or sensitive fields exposed to prevent data leakage to patients
+router.get("/doctors/availability", verifyToken, async (req, res) => {
+  try {
+    const { tenantId } = req.user;
+    const dateParam = req.query.date || new Date().toISOString().split("T")[0];
+
+    // Strict whitelist: only users with wellnessRole = doctor or
+    // professional are bookable. The looser RBAC/specialty/fallback
+    // matches previously included generic staff who then 404'd on the
+    // time-slots endpoint (which gates on the same whitelist below),
+    // leaving the slot dropdown empty.
+    const doctors = await prisma.user.findMany({
+      where: {
+        tenantId,
+        deactivatedAt: null,
+        wellnessRole: { in: ["doctor", "professional"] },
+      },
+      select: { id: true, name: true, specialty: true, wellnessRole: true },
+      orderBy: { name: "asc" },
+    });
+
+    // Fetch approved leave requests for all doctors on the specified date
+    const targetDate = new Date(dateParam + "T00:00:00Z");
+    if (isNaN(targetDate.getTime())) {
+      return res
+        .status(400)
+        .json({ error: "Invalid date format. Use YYYY-MM-DD." });
     }
-  });
 
-  // Get doctors availability for patient appointment booking
-  // Returns minimal doctor info (only id, name, availability status)
-  // No email or sensitive fields exposed to prevent data leakage to patients
-  router.get("/doctors/availability", verifyToken, async (req, res) => {
-    try {
-      const { tenantId } = req.user;
-      const dateParam = req.query.date || new Date().toISOString().split("T")[0];
+    const startOfDay = new Date(targetDate);
+    startOfDay.setUTCHours(0, 0, 0, 0);
+    const endOfDay = new Date(targetDate);
+    endOfDay.setUTCHours(23, 59, 59, 999);
 
-      // Strict whitelist: only users with wellnessRole = doctor or
-      // professional are bookable. The looser RBAC/specialty/fallback
-      // matches previously included generic staff who then 404'd on the
-      // time-slots endpoint (which gates on the same whitelist below),
-      // leaving the slot dropdown empty.
-      const doctors = await prisma.user.findMany({
-        where: {
-          tenantId,
-          deactivatedAt: null,
-          wellnessRole: { in: ["doctor", "professional"] },
-        },
-        select: { id: true, name: true, specialty: true, wellnessRole: true },
-        orderBy: { name: "asc" },
-      });
+    const approvedLeaves = await prisma.leaveRequest.findMany({
+      where: {
+        tenantId,
+        status: "APPROVED",
+        startDate: { lte: endOfDay },
+        endDate: { gte: startOfDay },
+      },
+      select: {
+        userId: true,
+      },
+    });
 
-      // Fetch approved leave requests for all doctors on the specified date
-      const targetDate = new Date(dateParam + "T00:00:00Z");
-      if (isNaN(targetDate.getTime())) {
-        return res
-          .status(400)
-          .json({ error: "Invalid date format. Use YYYY-MM-DD." });
-      }
+    // Also check for block times (breaks, personal time, etc.) that span the entire day
+    const blockTimes = await prisma.blockTime.findMany({
+      where: {
+        tenantId,
+        startAt: { lte: endOfDay },
+        endAt: { gte: startOfDay },
+      },
+      select: {
+        userId: true,
+      },
+    });
 
-      const startOfDay = new Date(targetDate);
-      startOfDay.setUTCHours(0, 0, 0, 0);
-      const endOfDay = new Date(targetDate);
-      endOfDay.setUTCHours(23, 59, 59, 999);
+    const onLeaveIds = new Set(approvedLeaves.map((l) => l.userId));
+    const hasBlockTimeIds = new Set(blockTimes.map((b) => b.userId));
 
-      const approvedLeaves = await prisma.leaveRequest.findMany({
-        where: {
-          tenantId,
-          status: "APPROVED",
-          startDate: { lte: endOfDay },
-          endDate: { gte: startOfDay },
-        },
-        select: {
-          userId: true,
-        },
-      });
+    // Return only necessary fields: id, name, specialty, role, availability
+    const doctorsList = doctors.map((doctor) => ({
+      id: doctor.id,
+      name: doctor.name,
+      specialty: doctor.specialty || null,
+      wellnessRole: doctor.wellnessRole || null,
+      available: !onLeaveIds.has(doctor.id) && !hasBlockTimeIds.has(doctor.id),
+    }));
 
-      // Also check for block times (breaks, personal time, etc.) that span the entire day
-      const blockTimes = await prisma.blockTime.findMany({
-        where: {
-          tenantId,
-          startAt: { lte: endOfDay },
-          endAt: { gte: startOfDay },
-        },
-        select: {
-          userId: true,
-        },
-      });
+    res.json(doctorsList);
+  } catch (err) {
+    console.error("[wellness] get doctors availability error:", err.message);
+    res.status(500).json({ error: "Failed to fetch doctors availability" });
+  }
+});
 
-      const onLeaveIds = new Set(approvedLeaves.map((l) => l.userId));
-      const hasBlockTimeIds = new Set(blockTimes.map((b) => b.userId));
+// Get available time slots for a doctor on a specific date
+// Returns array of 30-min slots between 9 AM - 6 PM that are not already booked
+router.get("/doctors/:doctorId/time-slots", verifyToken, async (req, res) => {
+  try {
+    const { doctorId } = req.params;
+    const { tenantId } = req.user;
+    const dateParam = req.query.date || new Date().toISOString().split("T")[0];
 
-      // Return only necessary fields: id, name, specialty, role, availability
-      const doctorsList = doctors.map((doctor) => ({
-        id: doctor.id,
-        name: doctor.name,
-        specialty: doctor.specialty || null,
-        wellnessRole: doctor.wellnessRole || null,
-        available: !onLeaveIds.has(doctor.id) && !hasBlockTimeIds.has(doctor.id),
-      }));
+    // Validate doctor/professional exists and belongs to tenant.
+    // Must match the same whitelist as /doctors/availability or the
+    // time-slot dropdown stays empty for every professional picked.
+    const doctor = await prisma.user.findFirst({
+      where: {
+        id: parseInt(doctorId),
+        tenantId,
+        wellnessRole: { in: ["doctor", "professional"] },
+        deactivatedAt: null,
+      },
+      select: { id: true },
+    });
 
-      res.json(doctorsList);
-    } catch (err) {
-      console.error("[wellness] get doctors availability error:", err.message);
-      res.status(500).json({ error: "Failed to fetch doctors availability" });
+    if (!doctor) {
+      return res.status(404).json({ error: "Doctor not found" });
     }
-  });
 
-  // Get available time slots for a doctor on a specific date
-  // Returns array of 30-min slots between 9 AM - 6 PM that are not already booked
-  router.get("/doctors/:doctorId/time-slots", verifyToken, async (req, res) => {
-    try {
-      const { doctorId } = req.params;
-      const { tenantId } = req.user;
-      const dateParam = req.query.date || new Date().toISOString().split("T")[0];
+    // Check if doctor is on leave
+    const targetDate = new Date(dateParam + "T00:00:00Z");
+    const startOfDay = new Date(targetDate);
+    startOfDay.setUTCHours(0, 0, 0, 0);
+    const endOfDay = new Date(targetDate);
+    endOfDay.setUTCHours(23, 59, 59, 999);
 
-      // Validate doctor/professional exists and belongs to tenant.
-      // Must match the same whitelist as /doctors/availability or the
-      // time-slot dropdown stays empty for every professional picked.
-      const doctor = await prisma.user.findFirst({
-        where: {
-          id: parseInt(doctorId),
-          tenantId,
-          wellnessRole: { in: ["doctor", "professional"] },
-          deactivatedAt: null,
-        },
-        select: { id: true },
+    const leaveReq = await prisma.leaveRequest.findFirst({
+      where: {
+        tenantId,
+        userId: parseInt(doctorId),
+        status: "APPROVED",
+        startDate: { lte: endOfDay },
+        endDate: { gte: startOfDay },
+      },
+    });
+
+    if (leaveReq) {
+      return res.json({
+        available: false,
+        reason: "Doctor is on leave",
+        slots: [],
       });
+    }
 
-      if (!doctor) {
-        return res.status(404).json({ error: "Doctor not found" });
-      }
+    // Check for block times (breaks, personal time, etc.)
+    const blockTime = await prisma.blockTime.findFirst({
+      where: {
+        tenantId,
+        userId: parseInt(doctorId),
+        startAt: { lte: endOfDay },
+        endAt: { gte: startOfDay },
+      },
+    });
 
-      // Check if doctor is on leave
-      const targetDate = new Date(dateParam + "T00:00:00Z");
-      const startOfDay = new Date(targetDate);
-      startOfDay.setUTCHours(0, 0, 0, 0);
-      const endOfDay = new Date(targetDate);
-      endOfDay.setUTCHours(23, 59, 59, 999);
-
-      const leaveReq = await prisma.leaveRequest.findFirst({
-        where: {
-          tenantId,
-          userId: parseInt(doctorId),
-          status: "APPROVED",
-          startDate: { lte: endOfDay },
-          endDate: { gte: startOfDay },
-        },
+    if (blockTime) {
+      return res.json({
+        available: false,
+        reason: `Doctor unavailable: ${blockTime.reason}`,
+        slots: [],
       });
+    }
 
-      if (leaveReq) {
-        return res.json({
-          available: false,
-          reason: "Doctor is on leave",
-          slots: [],
-        });
-      }
-
-      // Check for block times (breaks, personal time, etc.)
-      const blockTime = await prisma.blockTime.findFirst({
-        where: {
-          tenantId,
-          userId: parseInt(doctorId),
-          startAt: { lte: endOfDay },
-          endAt: { gte: startOfDay },
-        },
-      });
-
-      if (blockTime) {
-        return res.json({
-          available: false,
-          reason: `Doctor unavailable: ${blockTime.reason}`,
-          slots: [],
-        });
-      }
-
-      // Get all booked visits for this doctor on this date
-      const bookedVisits = await prisma.visit.findMany({
-        where: {
-          tenantId,
-          doctorId: parseInt(doctorId),
-          visitDate: {
-            gte: new Date(dateParam + "T00:00:00+05:30"),
-            lte: new Date(dateParam + "T23:59:59+05:30"),
-          },
-          status: { not: "cancelled" },
-        },
-        select: { visitDate: true },
-      });
-
-      // Generate 30-min slots from 9 AM to 6 PM
-      const slots = [];
-      for (let hour = 9; hour < 18; hour++) {
-        for (let min = 0; min < 60; min += 30) {
-          const timeStr = `${String(hour).padStart(2, "0")}:${String(min).padStart(2, "0")}`;
-
-          // Check if this slot is booked
-          const isBooked = bookedVisits.some((visit) => {
-            const visitHour = visit.visitDate.getHours();
-            const visitMin = visit.visitDate.getMinutes();
-            return visitHour === hour && visitMin === min;
-          });
-
-          slots.push({
-            time: timeStr,
-            available: !isBooked,
-          });
-        }
-      }
-
-      res.json({
-        available: true,
-        date: dateParam,
+    // Get all booked visits for this doctor on this date
+    const bookedVisits = await prisma.visit.findMany({
+      where: {
+        tenantId,
         doctorId: parseInt(doctorId),
-        slots: slots.filter((s) => s.available).map((s) => s.time),
-      });
-    } catch (err) {
-      console.error("[wellness] get time slots error:", err.message);
-      res.status(500).json({ error: "Failed to fetch available time slots" });
+        visitDate: {
+          gte: new Date(dateParam + "T00:00:00+05:30"),
+          lte: new Date(dateParam + "T23:59:59+05:30"),
+        },
+        status: { not: "cancelled" },
+      },
+      select: { visitDate: true },
+    });
+
+    // Generate 30-min slots from 9 AM to 6 PM
+    const slots = [];
+    for (let hour = 9; hour < 18; hour++) {
+      for (let min = 0; min < 60; min += 30) {
+        const timeStr = `${String(hour).padStart(2, "0")}:${String(min).padStart(2, "0")}`;
+
+        // Check if this slot is booked
+        const isBooked = bookedVisits.some((visit) => {
+          const visitHour = visit.visitDate.getHours();
+          const visitMin = visit.visitDate.getMinutes();
+          return visitHour === hour && visitMin === min;
+        });
+
+        slots.push({
+          time: timeStr,
+          available: !isBooked,
+        });
+      }
     }
-  });
 
-  // User appointment booking endpoint
-  // Allows any authenticated user to book an appointment
-  router.post("/appointments/book", verifyToken, async (req, res) => {
-    try {
-      const {
-        doctorId,
-        serviceId,
-        appointmentDate,
-        appointmentTime,
-        reason,
-        membershipId,
-      } = req.body;
-      const { userId, tenantId } = req.user;
+    res.json({
+      available: true,
+      date: dateParam,
+      doctorId: parseInt(doctorId),
+      slots: slots.filter((s) => s.available).map((s) => s.time),
+    });
+  } catch (err) {
+    console.error("[wellness] get time slots error:", err.message);
+    res.status(500).json({ error: "Failed to fetch available time slots" });
+  }
+});
 
-      // Validate required fields. doctorId is OPTIONAL — when omitted the
-      // visit is created with doctor=null and the admin assigns one based on
-      // the patient's reason + available specialists. reason is REQUIRED so
-      // admins have something to triage against when no doctor is preselected.
-      if (!appointmentDate || !appointmentTime) {
-        return res.status(400).json({
-          error: "Missing required fields: appointmentDate, appointmentTime",
-        });
-      }
-      const trimmedReason = typeof reason === "string" ? reason.trim() : "";
-      if (!trimmedReason) {
-        return res
-          .status(400)
-          .json({ error: "Reason for appointment is required" });
-      }
-
-      // Parse date and time
-      const apptDate = new Date(appointmentDate);
-      if (isNaN(apptDate.getTime())) {
-        return res.status(400).json({ error: "Invalid appointment date" });
-      }
-
-      // Check if doctor is available (approved leave check). Only when a
-      // doctor was preselected — for admin-assigned bookings the staff
-      // dispatcher does this check at assignment time.
-      if (doctorId) {
-        const leaveReq = await prisma.leaveRequest.findFirst({
-          where: {
-            tenantId,
-            userId: parseInt(doctorId),
-            status: "APPROVED",
-            startDate: { lte: apptDate },
-            endDate: { gte: apptDate },
-          },
-        });
-
-        if (leaveReq) {
-          return res.status(409).json({
-            error: "Doctor is not available on this date",
-            code: "DOCTOR_UNAVAILABLE",
-          });
-        }
-      }
-
-      // Get or create patient for current user
-      let patient = await prisma.patient.findFirst({
-        where: {
-          tenant: { id: tenantId },
-          user: { id: userId },
-        },
+// User appointment booking endpoint
+// Allows any authenticated user to book an appointment
+// Legacy CUSTOMER-session booking endpoint. Thin adapter around
+// appointmentService.bookAppointment — business rules live in the
+// service so this route and /portal/appointments/book can't drift.
+// Patient resolution (create-on-first-book) stays at the route layer
+// because the CUSTOMER cohort's user→patient mapping differs from the
+// phone+OTP cohort's already-resolved req.patient.
+router.post("/appointments/book", verifyToken, async (req, res) => {
+  try {
+    const { userId, tenantId } = req.user;
+    let patient = await prisma.patient.findFirst({
+      where: { tenant: { id: tenantId }, user: { id: userId } },
+    });
+    if (!patient) {
+      const user = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { name: true, email: true },
       });
-
-      if (!patient) {
-        // Create patient record for user
-        const user = await prisma.user.findUnique({
-          where: { id: userId },
-          select: { name: true, email: true },
-        });
-
-        patient = await prisma.patient.create({
-          data: {
-            name: user.name || user.email || "Patient",
-            email: user.email,
-            source: "self-booking",
-            tenant: {
-              connect: { id: tenantId },
-            },
-            user: {
-              connect: { id: userId },
-            },
-          },
-        });
-      }
-
-      // Validate optional membership: must belong to this patient and be
-      // active + within its validity window. Wrong tenant / cancelled /
-      // expired memberships → 400 so the frontend can surface a clear
-      // message rather than silently dropping the selection.
-      let resolvedMembershipId = null;
-      if (membershipId != null && membershipId !== "") {
-        const mId = parseInt(membershipId);
-        if (Number.isNaN(mId)) {
-          return res.status(400).json({ error: "Invalid membership" });
-        }
-        const m = await prisma.membership.findFirst({
-          where: { id: mId, tenantId, patientId: patient.id },
-        });
-        const now = new Date();
-        if (!m || m.status !== "active" || m.endDate < now) {
-          return res.status(400).json({
-            error: "Selected membership is not active",
-            code: "MEMBERSHIP_INACTIVE",
-          });
-        }
-        resolvedMembershipId = mId;
-      }
-
-      // Create visit/appointment with IST timezone
-      const [hours, mins] = appointmentTime.split(":").map((x) => parseInt(x));
-      const visitDate = new Date(
-        appointmentDate +
-        `T${String(hours).padStart(2, "0")}:${String(mins).padStart(2, "0")}:00+05:30`,
-      );
-
-      const visit = await prisma.visit.create({
+      patient = await prisma.patient.create({
         data: {
-          tenantId,
-          patientId: patient.id,
-          doctorId: doctorId ? parseInt(doctorId) : null,
-          serviceId: serviceId ? parseInt(serviceId) : null,
-          membershipId: resolvedMembershipId,
-          visitDate,
-          status: "booked",
-          bookingType: "CLINIC_VISIT",
-          reason: trimmedReason,
-          createdAt: new Date(),
-        },
-        include: {
-          patient: { select: { id: true, name: true, email: true } },
-          doctor: { select: { id: true, name: true } },
-          service: { select: { id: true, name: true } },
+          name: user?.name || user?.email || "Patient",
+          email: user?.email || null,
+          source: "self-booking",
+          tenant: { connect: { id: tenantId } },
+          user: { connect: { id: userId } },
         },
       });
+    }
 
-      // Write audit log
-      await writeAudit("Visit", "CREATE", userId, visit.id, tenantId, {
+    const { visit } = await appointmentService.bookAppointment({
+      tenantId,
+      patientId: patient.id,
+      doctorId: req.body.doctorId,
+      serviceId: req.body.serviceId,
+      membershipId: req.body.membershipId,
+      appointmentDate: req.body.appointmentDate,
+      appointmentTime: req.body.appointmentTime,
+      reason: req.body.reason,
+      bookingType: req.body.bookingType || "CLINIC_VISIT",
+      actor: { type: "user", id: userId },
+    });
+
+    res.status(201).json({
+      success: true,
+      appointment: {
+        id: visit.id,
+        patientName: visit.patient.name,
+        doctorName: visit.doctor?.name || "Pending assignment",
+        serviceName: visit.service?.name || "General",
+        appointmentDate: visit.visitDate,
+        status: visit.status,
+        reason: visit.reason,
+        membershipId: visit.membershipId,
+        doctorAssigned: !!visit.doctorId,
+      },
+    });
+  } catch (err) {
+    if (err && err.name === "AppointmentError") {
+      return res
+        .status(err.status)
+        .json({ error: err.message, code: err.code });
+    }
+    console.error("[wellness] appointment booking failed:", err.message);
+    res.status(500).json({
+      error: "Failed to book appointment",
+      code: "APPOINTMENT_BOOKING_FAILED",
+    });
+  }
+});
+
+// Get user's appointments
+router.get("/appointments/my", verifyToken, async (req, res) => {
+  try {
+    const { userId, tenantId } = req.user;
+
+    // Find patient record for current user
+    const patient = await prisma.patient.findFirst({
+      where: {
+        tenant: { id: tenantId },
+        user: { id: userId },
+      },
+    });
+
+    if (!patient) {
+      return res.json([]);
+    }
+
+    // Get all visits for this patient (booked, arrived, in-treatment; exclude cancelled/completed/no-show)
+    const visits = await prisma.visit.findMany({
+      where: {
+        tenantId,
         patientId: patient.id,
-        doctorId,
-        visitDate: visitDate.toISOString(),
-        action: "User self-booked appointment",
-      });
+        status: { in: ["booked", "arrived", "in-treatment", "checked-in"] },
+      },
+      include: {
+        doctor: { select: { id: true, name: true } },
+        service: { select: { id: true, name: true } },
+      },
+      orderBy: { visitDate: "asc" },
+    });
 
+    const appointments = visits.map((v) => ({
+      id: v.id,
+      doctorName: v.doctor?.name || "Pending assignment",
+      serviceName: v.service?.name || "General",
+      appointmentDate: v.visitDate,
+      status: v.status,
+      reason: v.reason || null,
+      doctorAssigned: !!v.doctorId,
+    }));
+
+    res.json(appointments);
+  } catch (err) {
+    console.error("[wellness] get appointments failed:", err.message);
+    res.status(500).json({ error: "Failed to fetch appointments" });
+  }
+});
+
+// List active memberships the current user can apply to a booking. The
+// staff-side `/patients/:id/memberships` endpoint is phiReadGate-protected,
+// so the self-booking page can't reach it from the patient's own session.
+// This endpoint mirrors that read but scopes by req.user → patient and
+// filters to active, non-expired rows.
+router.get("/appointments/my-memberships", verifyToken, async (req, res) => {
+  try {
+    const { userId, tenantId } = req.user;
+    const patient = await prisma.patient.findFirst({
+      where: { tenant: { id: tenantId }, user: { id: userId } },
+    });
+    if (!patient) return res.json([]);
+
+    const now = new Date();
+    const rows = await prisma.membership.findMany({
+      where: {
+        tenantId,
+        patientId: patient.id,
+        status: "active",
+        endDate: { gte: now },
+      },
+      include: {
+        plan: { select: { id: true, name: true, durationDays: true } },
+      },
+      orderBy: { endDate: "asc" },
+    });
+    res.json(
+      rows.map((m) => {
+        let balance = [];
+        try {
+          const parsed = JSON.parse(m.balance || "[]");
+          if (Array.isArray(parsed)) balance = parsed;
+        } catch {
+          /* leave as [] */
+        }
+        return {
+          id: m.id,
+          planId: m.planId,
+          planName: m.plan?.name || "Membership",
+          planDurationDays: m.plan?.durationDays || null,
+          startDate: m.startDate,
+          endDate: m.endDate,
+          createdAt: m.createdAt,
+          status: m.status,
+          balance,
+        };
+      }),
+    );
+  } catch (err) {
+    console.error("[wellness] my memberships failed:", err.message);
+    res.status(500).json({ error: "Failed to fetch memberships" });
+  }
+});
+
+// Cancel appointment
+// Legacy CUSTOMER-session cancellation endpoint. Thin adapter — see
+// appointmentService.cancelAppointment for the business rules.
+router.post("/appointments/:id/cancel", verifyToken, async (req, res) => {
+  try {
+    const { userId, tenantId } = req.user;
+    const patient = await prisma.patient.findFirst({
+      where: { tenantId, userId },
+      select: { id: true },
+    });
+    if (!patient) {
+      return res.status(404).json({ error: "Appointment not found" });
+    }
+    const { visit } = await appointmentService.cancelAppointment({
+      tenantId,
+      patientId: patient.id,
+      visitId: req.params.id,
+      actor: { type: "user", id: userId },
+    });
+    res.json({
+      success: true,
+      appointment: { id: visit.id, status: visit.status },
+    });
+  } catch (err) {
+    if (err && err.name === "AppointmentError") {
+      return res
+        .status(err.status)
+        .json({ error: err.message, code: err.code });
+    }
+    console.error("[wellness] cancel appointment failed:", err.message);
+    res.status(500).json({ error: "Failed to cancel appointment" });
+  }
+});
+
+// ───────────────────────────────────────────────────────────────────
+// Patient portal appointment endpoints — accept BOTH cohorts via
+// verifyPatientToken (Path A = phone+OTP, Path B = CUSTOMER session
+// resolved to Patient). Business logic lives in appointmentService;
+// these routes only handle token verification + envelope shape.
+// ───────────────────────────────────────────────────────────────────
+
+router.get("/portal/appointments", verifyPatientToken, async (req, res) => {
+  try {
+    const bucket = String(req.query.bucket || "upcoming");
+    const visits = await appointmentService.listPatientAppointments({
+      tenantId: req.patient.tenantId,
+      patientId: req.patient.id,
+      bucket,
+    });
+    const appointments = visits.map(appointmentService.mapVisitToAppointment);
+    res.json({ bucket, count: appointments.length, appointments });
+  } catch (err) {
+    if (err && err.name === "AppointmentError") {
+      return res
+        .status(err.status)
+        .json({ error: err.message, code: err.code });
+    }
+    console.error("[wellness] portal list appointments failed:", err.message);
+    res.status(500).json({ error: "Failed to load appointments" });
+  }
+});
+
+router.post(
+  "/portal/appointments/book",
+  verifyPatientToken,
+  async (req, res) => {
+    try {
+      const { visit } = await appointmentService.bookAppointment({
+        tenantId: req.patient.tenantId,
+        patientId: req.patient.id,
+        doctorId: req.body.doctorId,
+        serviceId: req.body.serviceId,
+        membershipId: req.body.membershipId,
+        appointmentDate: req.body.appointmentDate,
+        appointmentTime: req.body.appointmentTime,
+        reason: req.body.reason,
+        bookingType: req.body.bookingType || "CLINIC_VISIT",
+        actor: { type: "patient", id: req.patient.id },
+      });
       res.status(201).json({
         success: true,
-        appointment: {
-          id: visit.id,
-          patientName: visit.patient.name,
-          doctorName: visit.doctor?.name || "Pending assignment",
-          serviceName: visit.service?.name || "General",
-          appointmentDate: visit.visitDate,
-          status: visit.status,
-          reason: visit.reason,
-          membershipId: visit.membershipId,
-          doctorAssigned: !!visit.doctorId,
-        },
+        appointment: appointmentService.mapVisitToAppointment(visit),
       });
     } catch (err) {
-      console.error("[wellness] appointment booking failed:", err.message);
+      if (err && err.name === "AppointmentError") {
+        return res
+          .status(err.status)
+          .json({ error: err.message, code: err.code });
+      }
+      console.error("[wellness] portal book appointment failed:", err.message);
       res.status(500).json({
         error: "Failed to book appointment",
         code: "APPOINTMENT_BOOKING_FAILED",
       });
     }
-  });
+  },
+);
 
-  // Get user's appointments
-  router.get("/appointments/my", verifyToken, async (req, res) => {
+router.post(
+  "/portal/appointments/:id/cancel",
+  verifyPatientToken,
+  async (req, res) => {
     try {
-      const { userId, tenantId } = req.user;
-
-      // Find patient record for current user
-      const patient = await prisma.patient.findFirst({
-        where: {
-          tenant: { id: tenantId },
-          user: { id: userId },
-        },
+      const { visit } = await appointmentService.cancelAppointment({
+        tenantId: req.patient.tenantId,
+        patientId: req.patient.id,
+        visitId: req.params.id,
+        actor: { type: "patient", id: req.patient.id },
       });
-
-      if (!patient) {
-        return res.json([]);
-      }
-
-      // Get all visits for this patient (booked, arrived, in-treatment; exclude cancelled/completed/no-show)
-      const visits = await prisma.visit.findMany({
-        where: {
-          tenantId,
-          patientId: patient.id,
-          status: { in: ["booked", "arrived", "in-treatment", "checked-in"] },
-        },
-        include: {
-          doctor: { select: { id: true, name: true } },
-          service: { select: { id: true, name: true } },
-        },
-        orderBy: { visitDate: "asc" },
-      });
-
-      const appointments = visits.map((v) => ({
-        id: v.id,
-        doctorName: v.doctor?.name || "Pending assignment",
-        serviceName: v.service?.name || "General",
-        appointmentDate: v.visitDate,
-        status: v.status,
-        reason: v.reason || null,
-        doctorAssigned: !!v.doctorId,
-      }));
-
-      res.json(appointments);
-    } catch (err) {
-      console.error("[wellness] get appointments failed:", err.message);
-      res.status(500).json({ error: "Failed to fetch appointments" });
-    }
-  });
-
-  // List active memberships the current user can apply to a booking. The
-  // staff-side `/patients/:id/memberships` endpoint is phiReadGate-protected,
-  // so the self-booking page can't reach it from the patient's own session.
-  // This endpoint mirrors that read but scopes by req.user → patient and
-  // filters to active, non-expired rows.
-  router.get("/appointments/my-memberships", verifyToken, async (req, res) => {
-    try {
-      const { userId, tenantId } = req.user;
-      const patient = await prisma.patient.findFirst({
-        where: { tenant: { id: tenantId }, user: { id: userId } },
-      });
-      if (!patient) return res.json([]);
-
-      const now = new Date();
-      const rows = await prisma.membership.findMany({
-        where: {
-          tenantId,
-          patientId: patient.id,
-          status: "active",
-          endDate: { gte: now },
-        },
-        include: {
-          plan: { select: { id: true, name: true, durationDays: true } },
-        },
-        orderBy: { endDate: "asc" },
-      });
-      res.json(
-        rows.map((m) => ({
-          id: m.id,
-          planName: m.plan?.name || "Membership",
-          endDate: m.endDate,
-          status: m.status,
-        })),
-      );
-    } catch (err) {
-      console.error("[wellness] my memberships failed:", err.message);
-      res.status(500).json({ error: "Failed to fetch memberships" });
-    }
-  });
-
-  // Cancel appointment
-  router.post("/appointments/:id/cancel", verifyToken, async (req, res) => {
-    try {
-      const { id } = req.params;
-      const { userId, tenantId } = req.user;
-
-      // Find visit
-      const visit = await prisma.visit.findUnique({
-        where: { id: parseInt(id) },
-      });
-
-      if (!visit) {
-        return res.status(404).json({ error: "Appointment not found" });
-      }
-
-      if (visit.tenantId !== tenantId) {
-        return res.status(403).json({ error: "Unauthorized" });
-      }
-
-      // Check if user is the patient
-      const patient = await prisma.patient.findUnique({
-        where: { id: visit.patientId },
-      });
-
-      if (patient.userId !== userId) {
-        return res
-          .status(403)
-          .json({ error: "Can only cancel your own appointments" });
-      }
-
-      // Update visit status to cancelled
-      const updated = await prisma.visit.update({
-        where: { id: parseInt(id) },
-        data: { status: "cancelled" },
-      });
-
-      await writeAudit("Visit", "UPDATE", userId, visit.id, tenantId, {
-        action: "User cancelled appointment",
-        status: "cancelled",
-      });
-
       res.json({
         success: true,
-        appointment: { id: updated.id, status: "cancelled" },
+        appointment: appointmentService.mapVisitToAppointment(visit),
       });
     } catch (err) {
-      console.error("[wellness] cancel appointment failed:", err.message);
+      if (err && err.name === "AppointmentError") {
+        return res
+          .status(err.status)
+          .json({ error: err.message, code: err.code });
+      }
+      console.error(
+        "[wellness] portal cancel appointment failed:",
+        err.message,
+      );
       res.status(500).json({ error: "Failed to cancel appointment" });
     }
-  });
+  },
+);
 
-  module.exports = router;
+router.patch(
+  "/portal/appointments/:id/reschedule",
+  verifyPatientToken,
+  async (req, res) => {
+    try {
+      const { visit } = await appointmentService.rescheduleAppointment({
+        tenantId: req.patient.tenantId,
+        patientId: req.patient.id,
+        visitId: req.params.id,
+        newAppointmentDate: req.body.appointmentDate,
+        newAppointmentTime: req.body.appointmentTime,
+        actor: { type: "patient", id: req.patient.id },
+      });
+      res.json({
+        success: true,
+        appointment: appointmentService.mapVisitToAppointment(visit),
+      });
+    } catch (err) {
+      if (err && err.name === "AppointmentError") {
+        return res
+          .status(err.status)
+          .json({ error: err.message, code: err.code });
+      }
+      console.error(
+        "[wellness] portal reschedule appointment failed:",
+        err.message,
+      );
+      res.status(500).json({ error: "Failed to reschedule appointment" });
+    }
+  },
+);
+
+module.exports = router;

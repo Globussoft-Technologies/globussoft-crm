@@ -583,6 +583,11 @@ router.post("/login", async (req, res) => {
         // customer portal instead of the staff dashboard.
         userType: user.userType || 'STAFF',
         wellnessRole: user.wellnessRole || null,
+        // #1123 — include profilePicture so the header avatar matches the
+        // /me payload after re-login. Without this the frontend persists a
+        // user object missing profilePicture, falls back to initials, and
+        // appears to "revert" the avatar that the user just uploaded.
+        profilePicture: user.profilePicture || null,
         primaryRole, // { id, key, name, landingPath } | null
         landingPath: primaryRole?.landingPath || null,
       },

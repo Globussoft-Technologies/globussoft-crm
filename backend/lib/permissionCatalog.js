@@ -142,6 +142,16 @@ const PERMISSION_CATALOG = {
   // ALSO scopes by `patientId: req.patient.id` so cross-patient access
   // is structurally impossible even if RBAC misconfigures the grant.
   my_prescriptions: ['read'],
+  // `my_bookings` gates /wellness/my-bookings — the patient-facing
+  // appointment management page (upcoming / pending / completed /
+  // cancelled, with View / Cancel / Reschedule actions). Distinct from
+  // both `appointments.read` (staff-wide list) and `my_appointments.read`
+  // (practitioner's own schedule) so the patient surface can be granted /
+  // revoked independently. Granted to the CUSTOMER system role by
+  // default. Backend enforcement at /portal/appointments handlers ALSO
+  // scopes by `patientId: req.patient.id` so cross-patient access is
+  // structurally impossible even if RBAC misconfigures the grant.
+  my_bookings: ['read'],
   consents: ['read', 'write', 'update', 'delete'],
   visits: ['read', 'write', 'update', 'delete'],
   // `products` and `inventory` are deliberately separate modules. `products`
@@ -236,6 +246,7 @@ const PERMISSION_DOMAINS = [
       'services',
       'prescriptions',
       'my_prescriptions',
+      'my_bookings',
       'consents',
       'visits',
     ],

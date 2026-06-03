@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { MapPin, Plus, Phone, Mail, Building2, Pencil, Trash2 } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
+import PageHeader from '../../components/PageHeader';
 
 const EMPTY_FORM = { name: '', addressLine: '', city: '', state: '', pincode: '', phone: '', email: '' };
 
@@ -93,19 +94,16 @@ export default function Locations() {
 
   return (
     <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
-      <header style={{ marginBottom: '1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
-        <div>
-          <h1 style={{ fontSize: '1.75rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <Building2 size={24} /> Clinic locations
-          </h1>
-          <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-            {locations.length} location{locations.length !== 1 ? 's' : ''} — add new ones as you franchise.
-          </p>
-        </div>
+      <PageHeader
+        icon={Building2}
+        title="Clinic locations"
+        count={locations.length}
+        description={`location${locations.length !== 1 ? 's' : ''} — add new ones as you franchise.`}
+      >
         <button onClick={() => (showAdd ? resetForm() : setShowAdd(true))} style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 1rem', background: 'var(--primary-color, var(--accent-color))', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer' }}>
           <Plus size={16} /> {showAdd ? 'Cancel' : 'New location'}
         </button>
-      </header>
+      </PageHeader>
 
       {showAdd && (
         <form onSubmit={submit} className="glass" style={{ padding: '1.25rem', marginBottom: '1rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '0.5rem' }}>

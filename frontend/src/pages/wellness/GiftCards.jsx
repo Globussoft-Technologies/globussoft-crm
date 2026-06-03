@@ -9,6 +9,7 @@ import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { formatMoney } from '../../utils/money';
 import { formatDate } from '../../utils/date';
+import PageHeader from '../../components/PageHeader';
 
 export default function GiftCardsPage() {
   const [list, setList] = useState([]);
@@ -84,19 +85,15 @@ export default function GiftCardsPage() {
 
   return (
     <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
-      <header style={{ marginBottom: '1.25rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div>
-          <h1 style={{ fontSize: '1.75rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <Gift size={24} /> Gift Cards
-          </h1>
-          <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-            Issue, track, and audit gift-card codes. Redemption credits the recipient's wallet.
-          </p>
-        </div>
+      <PageHeader
+        icon={Gift}
+        title="Gift Cards"
+        description="Issue, track, and audit gift-card codes. Redemption credits the recipient's wallet."
+      >
         <button onClick={() => setIssueOpen(true)} style={btnPrimary}>
           <Plus size={14} /> Issue gift card
         </button>
-      </header>
+      </PageHeader>
 
       {latestCode && (
         // Theme-aware toast — pre-fix this used a hardcoded `#ecfdf5`

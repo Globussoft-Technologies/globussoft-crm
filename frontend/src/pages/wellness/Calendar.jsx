@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState, useContext, useRef } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { Calendar as CalendarIcon, User as UserIcon, Stethoscope, Plus, X, Building2, Home, Video, Phone, Car } from 'lucide-react';
+import { Calendar as CalendarIcon, User as UserIcon, Stethoscope, Plus, X, Building2, Home, Video, Phone, Car, ChevronLeft, ChevronRight } from 'lucide-react';
 import React from 'react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { tenantLocale } from '../../utils/date';
 // Issue #816: Reusable CSV import/export toolbar — bookings entity.
 import CsvImportExportToolbar from '../../components/wellness/CsvImportExportToolbar';
+import PageHeader from '../../components/PageHeader';
 import { AuthContext } from '../../App';
 
 // #615: default visible window is 9 AM → 7 PM, but visits scheduled outside
@@ -17,6 +18,11 @@ import { AuthContext } from '../../App';
 // vertical position reflects the booked time. See `hoursForVisits()`.
 const DEFAULT_HOURS = Array.from({ length: 11 }, (_, i) => 9 + i); // 9 AM → 7 PM
 const STATUS_COLOR = {
+  // 'pending' is a presentational status — surfaced for visits whose
+  // doctorId is null (portal self-bookings with "No preference — admin
+  // will assign"). Storage stays as 'booked'; the UI flips the label
+  // and styling so admins can spot pending-assignment work at a glance.
+  pending:       'rgba(245,158,11,0.18)',
   booked:        'rgba(59,130,246,0.18)',
   confirmed:     'rgba(99,102,241,0.20)',
   arrived:       'rgba(168,85,247,0.20)',
@@ -26,10 +32,18 @@ const STATUS_COLOR = {
   cancelled:     'rgba(100,116,139,0.20)',
 };
 const STATUS_BORDER = {
+  pending: '#f59e0b',
   booked: '#3b82f6', confirmed: 'var(--primary-color, var(--accent-color, #6366f1))', arrived: '#a855f7',
   'in-treatment': '#f59e0b', completed: '#10b981',
   'no-show': '#ef4444', cancelled: '#64748b',
 };
+
+// Visits with no assigned doctor are stored as status='booked' so the
+// patient's portal flow stays consistent, but the staff UI surfaces them
+// as 'pending' for clarity. Single helper used by every render path so
+// the rule can't drift between Calendar / Appointments.
+export const displayStatus = (visit) =>
+  !visit?.doctorId && visit?.status === 'booked' ? 'pending' : visit?.status;
 
 // #262 / Option B: practitioner roles are now sourced from the per-tenant
 // WellnessRoleType catalog (admins maintain the list from Settings →
@@ -171,13 +185,16 @@ export default function CalendarGrid() {
   const [searchParams, setSearchParams] = useSearchParams();
   const focusId = searchParams.get('focus');
   const focusDateParam = searchParams.get('date');
-  // From / To filter inputs — mirror the Appointments page's date range so the
-  // two surfaces are interchangeable. Default both to today (single-day view).
+  // Single-day filter. The Calendar is a day-view-by-practitioner layout
+  // and previously exposed a FROM/TO dual picker that read as a range
+  // filter — users expected a multi-day grid and were confused when only
+  // FROM affected the view. Collapsed to ONE `from` input; the `setTo`
+  // shim below is preserved for the focus-from-Appointments handshake
+  // that still calls both setters in lockstep, and is a no-op.
   const initialDateStr = focusDateParam || todayLocalDate();
   const [from, setFrom] = useState(initialDateStr);
-  const [to, setTo] = useState(initialDateStr);
-  // The day-grid renders ONE day at a time. `date` is that day; it lives
-  // inside [from, to] and can be moved with the day-chip navigator below.
+  const setTo = () => {}; // legacy noop — see comment above
+  // The day-grid renders ONE day at a time. `date` is the rendered day.
   const [date, setDate] = useState(() => parseLocalDate(initialDateStr));
   const focusedRef = useRef(null);
   const [visits, setVisits] = useState([]);
@@ -210,6 +227,9 @@ export default function CalendarGrid() {
   // serviceId or doctorId per visitPOST validators (#109), but we collect
   // both up-front because that's how a receptionist actually books.
   const [newVisit, setNewVisit] = useState(null); // { columnId, hour } | null
+  // Pending visit currently being assigned to a doctor — { id, visitDate, ... }.
+  // Set when the user clicks "Assign doctor" on a pending chip.
+  const [assignTarget, setAssignTarget] = useState(null);
   // User appointment booking feature
   const [showBooking, setShowBooking] = useState(false);
   const [availability, setAvailability] = useState([]);
@@ -272,6 +292,25 @@ export default function CalendarGrid() {
   };
   useEffect(() => { load(); }, [date]);
 
+  // Refresh the calendar grid when the tab regains focus so visits booked
+  // from another surface (Book Appointment page, patient portal, another
+  // staff workstation) appear without a manual reload. Cheap re-fetch —
+  // only fires when the tab becomes visible, not on every render.
+  useEffect(() => {
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        load();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('focus', onVisibility);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('focus', onVisibility);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [date]);
+
   // Load doctor availability and user appointments when booking view is shown
   useEffect(() => {
     if (showBooking) {
@@ -327,6 +366,10 @@ export default function CalendarGrid() {
           duration: '30'
         });
         loadMyAppointments();
+        // Refresh the calendar grid so the new visit appears without manual
+        // reload. loadMyAppointments() only refreshes the booker's personal
+        // list inside the modal — the grid behind it stays stale otherwise.
+        load();
       }
     } catch (err) {
       notify.error(err.message || 'Failed to book appointment');
@@ -376,12 +419,26 @@ export default function CalendarGrid() {
   // Toggle "Show all" to surface every practitioner for booking empty slots.
   // Option B: also narrow by selectedRoleKey when the dropdown is on a
   // specific role (ALL_ROLES_KEY = no role filter applied).
+  //
+  // Hardening: a visit whose doctorId references a staff member NOT in
+  // practitionerKeys (deactivated staff, role-config mismatch, legacy
+  // seed with no wellnessRole) was previously orphaned — its column
+  // never rendered and the visit silently disappeared from the grid.
+  // We now force-include any staff id referenced by today's visits so
+  // every visit lands in a visible column.
   const practitioners = useMemo(() => {
-    let all = allStaff.filter((u) => practitionerKeys.has(effectiveWellnessRole(u)));
-    if (selectedRoleKey !== ALL_ROLES_KEY) {
-      all = all.filter((u) => effectiveWellnessRole(u) === selectedRoleKey);
-    }
     const doctorIdsToday = new Set(visits.map((v) => v.doctorId).filter(Boolean));
+    let all = allStaff.filter((u) =>
+      practitionerKeys.has(effectiveWellnessRole(u)) || doctorIdsToday.has(u.id),
+    );
+    if (selectedRoleKey !== ALL_ROLES_KEY) {
+      // Role-narrowing still respects the orphan-doctor hardening above:
+      // a visit's doctor surfaces even if their role doesn't match the
+      // narrowing filter, otherwise the role filter could hide visits.
+      all = all.filter(
+        (u) => effectiveWellnessRole(u) === selectedRoleKey || doctorIdsToday.has(u.id),
+      );
+    }
     if (showAll) return all;
     const withVisits = all.filter((u) => doctorIdsToday.has(u.id));
     // Fallback: if no practitioner has visits today, surface everyone so the
@@ -393,8 +450,13 @@ export default function CalendarGrid() {
   // column instead of silently dropping them. The dashboard counts ALL
   // visits today; the calendar must too. Also clamp visits scheduled
   // before 09:00 / after 19:00 to the boundary hour so they're surfaced.
+  //
+  // Unassigned is rendered as the FIRST column (leftmost) so portal
+  // self-bookings with "No preference — admin will assign" are
+  // immediately visible. Pushing it to the end hid pending bookings
+  // behind 30+ practitioner columns on large tenants.
   const columns = useMemo(() => {
-    const cols = practitioners.map((d) => ({
+    const practitionerCols = practitioners.map((d) => ({
       id: d.id,
       name: d.name,
       // Column-header role badge uses the effective role so RBAC-only
@@ -402,10 +464,36 @@ export default function CalendarGrid() {
       role: effectiveWellnessRole(d),
       isUnassigned: false,
     }));
-    if (visits.some((v) => !v.doctorId)) {
-      cols.push({ id: UNASSIGNED_KEY, name: 'Unassigned', role: null, isUnassigned: true });
+    // Hardening: synthesise a column for any visit whose doctorId isn't
+    // in the practitioners list (staff fully removed from allStaff —
+    // e.g. deleted user). Without this, the visit's grid cell never
+    // renders and the appointment disappears. Use the embedded
+    // visit.doctor relation for the name; flag the column so we can
+    // surface "(unavailable)" in the UI.
+    const knownIds = new Set(practitionerCols.map((c) => c.id));
+    const orphans = new Map();
+    for (const v of visits) {
+      if (v.doctorId && !knownIds.has(v.doctorId)) {
+        if (!orphans.has(v.doctorId)) {
+          orphans.set(v.doctorId, {
+            id: v.doctorId,
+            name: v.doctor?.name ? `${v.doctor.name} (unavailable)` : `Doctor #${v.doctorId} (unavailable)`,
+            role: null,
+            isUnassigned: false,
+            isOrphan: true,
+          });
+        }
+      }
     }
-    return cols;
+    const orphanCols = Array.from(orphans.values());
+    if (visits.some((v) => !v.doctorId)) {
+      return [
+        { id: UNASSIGNED_KEY, name: 'Unassigned', role: null, isUnassigned: true },
+        ...practitionerCols,
+        ...orphanCols,
+      ];
+    }
+    return [...practitionerCols, ...orphanCols];
   }, [visits, practitioners]);
 
   // #615: hours dynamically expand to cover every booked visit on the loaded
@@ -489,124 +577,133 @@ export default function CalendarGrid() {
     return r?.label?.toLowerCase() || selectedRoleKey;
   }, [selectedRoleKey, roleTypes]);
 
+  // Single-day picker — the Calendar is a day-view-by-practitioner layout,
+  // so the FROM/TO dual-date picker was confusing (users read it as a
+  // range filter and expected a multi-day grid). Collapsed into ONE Day
+  // input + prev/next arrows. The CSV export filters to this same day;
+  // an admin who needs a wider export range can use the staff
+  // Appointments page export instead.
+  const stepDay = (deltaDays) => {
+    const cur = parseLocalDate(from);
+    cur.setDate(cur.getDate() + deltaDays);
+    const next = isoLocalDate(cur);
+    setFrom(next);
+    setTo(next);
+    clearFocus();
+  };
+  const dayLabel = date.toLocaleDateString(tenantLocale(), { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+
   return (
     <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
-      <header style={{ marginBottom: '1.25rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
-        <div>
-          <h1 style={{ fontSize: '1.75rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <CalendarIcon size={24} /> Calendar
-          </h1>
-          <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-            Day view by practitioner — {date.toLocaleDateString(tenantLocale(), { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
-          </p>
-        </div>
-        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
-          {/* Option B: role-filter dropdown. Reads the per-tenant catalog
-              (Settings → Wellness Role Types). "All staff" is the default
-              and shows every catalog role with canTakeVisits=true. Hidden
-              when the catalog is empty (catalog not seeded, generic tenant,
-              or API error). */}
-          {practitionerRoleOptions.length > 0 && (
-            <select
-              value={selectedRoleKey}
-              onChange={(e) => setSelectedRoleKey(e.target.value)}
-              aria-label="Filter by staff role"
-              className="glass"
-              style={{
-                padding: '0.4rem 0.65rem', fontSize: '0.8rem',
-                borderRadius: 8, cursor: 'pointer',
-                border: '1px solid rgba(255,255,255,0.1)',
-                background: 'transparent',
-                color: 'var(--text-primary)',
-              }}
-            >
-              <option value={ALL_ROLES_KEY}>All staff</option>
-              {practitionerRoleOptions.map((r) => (
-                <option key={r.key} value={r.key}>{r.label}</option>
-              ))}
-            </select>
-          )}
-          {totalPractitionerCount > 0 && (
-            <button
-              type="button"
-              onClick={() => setShowAll((v) => !v)}
-              className="glass"
-              style={{
-                padding: '0.4rem 0.8rem', fontSize: '0.8rem',
-                borderRadius: 8, cursor: 'pointer',
-                border: `1px solid ${showAll ? 'rgba(99,102,241,0.5)' : 'rgba(255,255,255,0.1)'}`,
-                background: showAll ? 'rgba(99,102,241,0.15)' : 'transparent',
-                color: 'var(--text-primary)',
-              }}
-              title={showAll ? `Showing all ${totalPractitionerCount} ${selectedRoleLabel}` : `Showing ${visiblePractitionerCount} with visits today (click to show all)`}
-            >
-              {/* #307: pre-fix copy was "1 of 16" with no unit, which sat right
-                  next to the date chevrons and was widely misread as
-                  "day 1 of 16" — i.e. the chevrons advanced practitioners.
-                  Add the explicit noun (practitioners / nurses / stylists)
-                  so the chip is unambiguously about the column filter,
-                  not navigation. The noun comes from the dropdown's
-                  selected label (Option B). */}
-              {showAll
-                ? `All ${selectedRoleLabel} (${totalPractitionerCount})`
-                : `${visiblePractitionerCount} of ${totalPractitionerCount} ${selectedRoleLabel}`}
-            </button>
-          )}
-          {/* From/To date inputs — inline label + input pills, baseline-aligned
-              with the other header controls. From picks which day the grid
-              renders; To bounds the CSV-export range below. */}
-          <div style={dateField}>
-            <span style={dateFieldLabel}>From</span>
-            <input
-              type="date"
-              value={from}
-              max={to || undefined}
-              onChange={(e) => {
-                const v = e.target.value;
-                if (!v) return;
-                setFrom(v);
-                // Keep To >= From so the range never goes empty.
-                if (to && v > to) setTo(v);
-                clearFocus();
-              }}
-              aria-label="From date"
-              className="glass"
-              style={dateInput}
-            />
-          </div>
-          <div style={dateField}>
-            <span style={dateFieldLabel}>To</span>
-            <input
-              type="date"
-              value={to}
-              min={from || undefined}
-              onChange={(e) => {
-                const v = e.target.value;
-                if (!v) return;
-                setTo(v);
-                if (from && v < from) setFrom(v);
-                clearFocus();
-              }}
-              aria-label="To date"
-              className="glass"
-              style={dateInput}
-            />
-          </div>
-          {/* Issue #816: CSV Import / Export of bookings. Export reflects the
-              full From..To range so users can scope exports without leaving
-              the page. */}
-          <CsvImportExportToolbar
-            entity="bookings"
-            label="Bookings"
-            filters={{
-              from: `${from}T00:00:00+05:30`,
-              to: `${to}T23:59:59+05:30`,
+      <PageHeader
+        icon={CalendarIcon}
+        title="Calendar"
+        description={`Day view by practitioner — ${dayLabel}`}
+      >
+        {/* Option B: role-filter dropdown. Reads the per-tenant catalog
+            (Settings → Wellness Role Types). "All staff" is the default
+            and shows every catalog role with canTakeVisits=true. Hidden
+            when the catalog is empty (catalog not seeded, generic tenant,
+            or API error). */}
+        {practitionerRoleOptions.length > 0 && (
+          <select
+            value={selectedRoleKey}
+            onChange={(e) => setSelectedRoleKey(e.target.value)}
+            aria-label="Filter by staff role"
+            className="glass"
+            style={{
+              padding: '0.4rem 0.65rem', fontSize: '0.8rem',
+              borderRadius: 8, cursor: 'pointer',
+              border: '1px solid rgba(255,255,255,0.1)',
+              background: 'transparent',
+              color: 'var(--text-primary)',
             }}
-            formats={['csv', 'xlsx']}
-            onImported={load}
+          >
+            <option value={ALL_ROLES_KEY}>All staff</option>
+            {practitionerRoleOptions.map((r) => (
+              <option key={r.key} value={r.key}>{r.label}</option>
+            ))}
+          </select>
+        )}
+        {totalPractitionerCount > 0 && (
+          <button
+            type="button"
+            onClick={() => setShowAll((v) => !v)}
+            className="glass"
+            style={{
+              padding: '0.4rem 0.8rem', fontSize: '0.8rem',
+              borderRadius: 8, cursor: 'pointer',
+              border: `1px solid ${showAll ? 'rgba(99,102,241,0.5)' : 'rgba(255,255,255,0.1)'}`,
+              background: showAll ? 'rgba(99,102,241,0.15)' : 'transparent',
+              color: 'var(--text-primary)',
+            }}
+            title={showAll ? `Showing all ${totalPractitionerCount} ${selectedRoleLabel}` : `Showing ${visiblePractitionerCount} with visits today (click to show all)`}
+          >
+            {/* #307: pre-fix copy was "1 of 16" with no unit, which sat right
+                next to the date chevrons and was widely misread as
+                "day 1 of 16" — i.e. the chevrons advanced practitioners.
+                Add the explicit noun (practitioners / nurses / stylists)
+                so the chip is unambiguously about the column filter,
+                not navigation. The noun comes from the dropdown's
+                selected label (Option B). */}
+            {showAll
+              ? `All ${selectedRoleLabel} (${totalPractitionerCount})`
+              : `${visiblePractitionerCount} of ${totalPractitionerCount} ${selectedRoleLabel}`}
+          </button>
+        )}
+        {/* Single Day picker — the grid renders THIS day only. Prev/Next
+            arrows for quick day-by-day navigation; the native <input
+            type="date"> opens the system calendar popover for jumping
+            further. CSV export filters to the same day. */}
+        <div style={dateField}>
+          <button
+            type="button"
+            onClick={() => stepDay(-1)}
+            aria-label="Previous day"
+            className="glass"
+            style={{ padding: '0.3rem 0.4rem', borderRadius: 6, border: '1px solid rgba(255,255,255,0.1)', background: 'transparent', color: 'var(--text-primary)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center' }}
+          >
+            <ChevronLeft size={16} />
+          </button>
+          <input
+            type="date"
+            value={from}
+            onChange={(e) => {
+              const v = e.target.value;
+              if (!v) return;
+              setFrom(v);
+              setTo(v);
+              clearFocus();
+            }}
+            aria-label="Day shown on grid"
+            className="glass"
+            style={dateInput}
+            data-testid="calendar-day-picker"
           />
+          <button
+            type="button"
+            onClick={() => stepDay(1)}
+            aria-label="Next day"
+            className="glass"
+            style={{ padding: '0.3rem 0.4rem', borderRadius: 6, border: '1px solid rgba(255,255,255,0.1)', background: 'transparent', color: 'var(--text-primary)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center' }}
+          >
+            <ChevronRight size={16} />
+          </button>
         </div>
-      </header>
+        {/* Issue #816: CSV Import / Export of bookings. Export window is
+            scoped to the selected day — wider-range exports live on the
+            staff Appointments page (which has explicit range controls). */}
+        <CsvImportExportToolbar
+          entity="bookings"
+          label="Bookings"
+          filters={{
+            from: `${from}T00:00:00+05:30`,
+            to: `${from}T23:59:59+05:30`,
+          }}
+          formats={['csv', 'xlsx']}
+          onImported={load}
+        />
+      </PageHeader>
 
       {loading && <div data-testid="calendar-loading">Loading…</div>}
 
@@ -708,16 +805,18 @@ export default function CalendarGrid() {
                     >
                       {cell.map((v) => {
                         const isFocused = focusId && String(v.id) === String(focusId);
+                        const vStatus = displayStatus(v);
+                        const isPending = vStatus === 'pending';
                         return (
                         <Link
                           to={`/wellness/patients/${v.patient?.id || v.patientId}`}
                           key={v.id}
                           ref={isFocused ? focusedRef : undefined}
-                          data-testid={isFocused ? 'focused-visit' : undefined}
+                          data-testid={isFocused ? 'focused-visit' : `visit-chip-${v.id}`}
                           style={{
                             textDecoration: 'none', color: 'var(--text-primary)',
-                            background: STATUS_COLOR[v.status] || 'rgba(255,255,255,0.05)',
-                            borderLeft: `3px solid ${STATUS_BORDER[v.status] || '#64748b'}`,
+                            background: STATUS_COLOR[vStatus] || 'rgba(255,255,255,0.05)',
+                            borderLeft: `3px solid ${STATUS_BORDER[vStatus] || '#64748b'}`,
                             padding: '0.4rem 0.5rem', borderRadius: '6px',
                             fontSize: '0.75rem', display: 'block',
                             // #486: keep the event chip clamped to its grid-cell width
@@ -773,6 +872,48 @@ export default function CalendarGrid() {
                               </div>
                             );
                           })()}
+                          {isPending && (
+                            <div style={{ marginTop: '0.35rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                              <span
+                                data-testid={`pending-badge-${v.id}`}
+                                style={{
+                                  padding: '0.1rem 0.4rem',
+                                  borderRadius: 999,
+                                  fontSize: '0.6rem',
+                                  fontWeight: 600,
+                                  textTransform: 'uppercase',
+                                  letterSpacing: '0.04em',
+                                  background: 'rgba(245,158,11,0.18)',
+                                  color: '#f59e0b',
+                                  border: '1px solid rgba(245,158,11,0.4)',
+                                }}
+                              >
+                                Pending
+                              </span>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  // Stop the Link nav so the modal can mount.
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  setAssignTarget(v);
+                                }}
+                                data-testid={`assign-doctor-${v.id}`}
+                                style={{
+                                  padding: '0.15rem 0.5rem',
+                                  borderRadius: 6,
+                                  fontSize: '0.65rem',
+                                  fontWeight: 500,
+                                  background: 'var(--primary-color, var(--accent-color, #6366f1))',
+                                  color: '#fff',
+                                  border: 'none',
+                                  cursor: 'pointer',
+                                }}
+                              >
+                                Assign doctor
+                              </button>
+                            </div>
+                          )}
                         </Link>
                         );
                       })}
@@ -845,6 +986,15 @@ export default function CalendarGrid() {
           notify={notify}
           onClose={() => setNewVisit(null)}
           onCreated={() => { setNewVisit(null); load(); }}
+        />
+      )}
+
+      {assignTarget && (
+        <AssignDoctorModal
+          visit={assignTarget}
+          notify={notify}
+          onClose={() => setAssignTarget(null)}
+          onAssigned={() => { setAssignTarget(null); load(); }}
         />
       )}
 
@@ -1246,7 +1396,6 @@ function NewVisitModal({ column, hour, date, patients, services, waitlist, resou
 // Inline label+input pill — matches the height of the All-staff dropdown +
 // All-practitioners pill so the header row sits on one baseline.
 const dateField = { display: 'inline-flex', alignItems: 'center', gap: '0.4rem', padding: '0.35rem 0.65rem', borderRadius: 8, border: '1px solid rgba(255,255,255,0.1)', background: 'transparent' };
-const dateFieldLabel = { fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.04em', fontWeight: 600, color: 'var(--text-secondary)' };
 const dateInput = { padding: 0, fontSize: '0.8rem', border: 'none', background: 'transparent', color: 'var(--text-primary)', cursor: 'pointer', colorScheme: 'inherit', outline: 'none', font: 'inherit' };
 const colHead = { padding: '0.5rem 0.75rem', fontWeight: 600, fontSize: '0.8rem', borderBottom: '1px solid rgba(255,255,255,0.08)', background: 'rgba(255,255,255,0.02)', color: 'var(--text-primary)' };
 const hourLabel = { padding: '0.5rem', fontSize: '0.7rem', color: 'var(--text-secondary)', textAlign: 'right', borderRight: '1px solid rgba(255,255,255,0.05)' };
@@ -1264,3 +1413,197 @@ const sourceBtn = (active) => ({
   fontSize: '0.8rem',
   fontWeight: active ? 600 : 400,
 });
+
+// AssignDoctorModal — staff-side picker for assigning a doctor to a
+// pending appointment (a portal self-booking with no doctor selected).
+// Loads the same /doctors/availability list the booking form uses so
+// admins on leave + doctors with block-times can't be picked. Hits
+// PATCH /visits/:id/assign-doctor which runs the slot-conflict +
+// leave guards server-side as the authoritative check.
+export function AssignDoctorModal({ visit, notify, onClose, onAssigned }) {
+  const [doctors, setDoctors] = useState([]);
+  const [loadingDocs, setLoadingDocs] = useState(true);
+  const [selectedDoctorId, setSelectedDoctorId] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  const visitDay = useMemo(() => {
+    const d = new Date(visit.visitDate);
+    if (Number.isNaN(d.getTime())) return null;
+    return isoLocalDate(d);
+  }, [visit?.visitDate]);
+
+  useEffect(() => {
+    if (!visitDay) return;
+    let cancelled = false;
+    setLoadingDocs(true);
+    fetchApi(`/api/wellness/doctors/availability?date=${visitDay}`)
+      .then((data) => {
+        if (cancelled) return;
+        setDoctors(Array.isArray(data) ? data : []);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        notify?.error?.(err?.message || 'Failed to load doctor availability');
+        setDoctors([]);
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingDocs(false);
+      });
+    return () => { cancelled = true; };
+  }, [visitDay, notify]);
+
+  const submit = async () => {
+    if (!selectedDoctorId || submitting) return;
+    setSubmitting(true);
+    try {
+      await fetchApi(`/api/wellness/visits/${visit.id}/assign-doctor`, {
+        method: 'PATCH',
+        body: JSON.stringify({ doctorId: parseInt(selectedDoctorId, 10) }),
+      });
+      notify?.success?.('Doctor assigned');
+      onAssigned?.();
+    } catch (err) {
+      notify?.error?.(err?.message || 'Failed to assign doctor');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const visitTimeIst = visit?.visitDate
+    ? new Date(visit.visitDate).toLocaleString('en-IN', {
+        weekday: 'short', day: 'numeric', month: 'short', year: 'numeric',
+        hour: '2-digit', minute: '2-digit', hour12: false,
+      })
+    : '—';
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Assign doctor to appointment"
+      onClick={onClose}
+      data-testid="assign-doctor-modal"
+      style={{
+        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 1001,
+        display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem',
+      }}
+    >
+      <div
+        className="glass"
+        onClick={(e) => e.stopPropagation()}
+        style={{ maxWidth: '480px', width: '100%', padding: '1.5rem', borderRadius: 12 }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.75rem' }}>
+          <div>
+            <h3 style={{ margin: 0 }}>Assign doctor</h3>
+            <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginTop: '0.25rem' }}>
+              {visit.patient?.name || 'Patient'} · {visit.service?.name || 'General'} · {visitTimeIst} IST
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            data-testid="assign-doctor-close"
+            style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)' }}
+          >
+            <X size={20} />
+          </button>
+        </div>
+
+        {loadingDocs ? (
+          <div style={{ padding: '1rem 0', color: 'var(--text-secondary)' }}>Loading available doctors…</div>
+        ) : doctors.length === 0 ? (
+          <div style={{ padding: '1rem 0', color: 'var(--text-secondary)' }}>
+            No practitioners configured for this tenant.
+          </div>
+        ) : (
+          <div style={{ display: 'grid', gap: '0.4rem', maxHeight: '320px', overflowY: 'auto', marginBottom: '0.75rem' }}>
+            {doctors.map((d) => {
+              const checked = String(selectedDoctorId) === String(d.id);
+              return (
+                <label
+                  key={d.id}
+                  data-testid={`assign-doctor-option-${d.id}`}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: '0.6rem',
+                    padding: '0.55rem 0.7rem',
+                    borderRadius: 8,
+                    border: `1px solid ${checked ? 'var(--primary-color, var(--accent-color, #6366f1))' : 'rgba(255,255,255,0.1)'}`,
+                    background: checked ? 'rgba(99,102,241,0.1)' : 'transparent',
+                    cursor: d.available === false ? 'not-allowed' : 'pointer',
+                    opacity: d.available === false ? 0.5 : 1,
+                  }}
+                >
+                  <input
+                    type="radio"
+                    name="assign-doctor-radio"
+                    value={d.id}
+                    checked={checked}
+                    disabled={d.available === false}
+                    onChange={(e) => setSelectedDoctorId(e.target.value)}
+                  />
+                  <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, flex: 1 }}>
+                    <div style={{ fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {d.name}
+                      {d.specialty && (
+                        <span style={{ color: 'var(--text-secondary)', fontSize: '0.75rem', fontWeight: 400, marginLeft: '0.4rem' }}>
+                          · {d.specialty}
+                        </span>
+                      )}
+                    </div>
+                    {d.wellnessRole && (
+                      <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                        {d.wellnessRole}
+                      </span>
+                    )}
+                  </div>
+                  {d.available === false && (
+                    <span
+                      style={{
+                        fontSize: '0.65rem', padding: '0.1rem 0.4rem', borderRadius: 999,
+                        background: 'rgba(239,68,68,0.15)', color: '#ef4444', fontWeight: 600,
+                      }}
+                    >
+                      Unavailable
+                    </span>
+                  )}
+                </label>
+              );
+            })}
+          </div>
+        )}
+
+        <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
+          <button
+            type="button"
+            onClick={onClose}
+            style={{
+              padding: '0.5rem 1rem', borderRadius: 6,
+              background: 'rgba(255,255,255,0.06)',
+              border: '1px solid rgba(255,255,255,0.1)',
+              color: 'var(--text-primary)', cursor: 'pointer',
+            }}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={submit}
+            disabled={!selectedDoctorId || submitting}
+            data-testid="assign-doctor-submit"
+            style={{
+              padding: '0.5rem 1rem', borderRadius: 6,
+              background: 'var(--primary-color, var(--accent-color, #6366f1))',
+              color: '#fff', border: 'none',
+              cursor: !selectedDoctorId || submitting ? 'not-allowed' : 'pointer',
+              opacity: !selectedDoctorId || submitting ? 0.5 : 1,
+            }}
+          >
+            {submitting ? 'Assigning…' : 'Assign doctor'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}

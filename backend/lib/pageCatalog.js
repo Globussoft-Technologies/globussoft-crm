@@ -555,6 +555,25 @@ const PAGE_CATALOG = [
     category: 'Patient',
     requiredPermissions: [{ module: 'appointments', action: 'read' }],
   },
+  {
+    path: '/wellness/my-bookings',
+    label: 'My bookings',
+    description: 'Patient appointment management — upcoming, pending, completed, cancelled',
+    // Category is `Appointments` (not `Patient`) because the wellness
+    // sidebar's WELLNESS_CATEGORY_ORDER (frontend/src/components/Sidebar.jsx)
+    // only renders sections whose name appears in that list — `Patient`
+    // is a catalog-only tag used by `/portal` (which is a separate,
+    // public, non-sidebar route). Slotting under Appointments keeps the
+    // patient's bookings page next to Book Appointment so the cluster
+    // reads as one coherent group.
+    category: 'Appointments',
+    // Dedicated `my_bookings` module — split from the staff-facing
+    // `my_appointments` (practitioner's own schedule) so a patient can
+    // be granted appointment management without seeing the practitioner
+    // view, and vice versa. CUSTOMER system role grants this; ADMIN /
+    // MANAGER / clinical roles do not see it in their sidebars.
+    requiredPermissions: [{ module: 'my_bookings', action: 'read' }],
+  },
 
   // ── Admin ─────────────────────────────────────────────────────────
   {
@@ -670,11 +689,18 @@ const PAGE_CATALOG = [
     requiredPermissions: [{ module: 'products', action: 'read' }],
   },
   {
+    // Auto-consumption rules are admin-tier configuration (which products
+    // auto-deduct when a service is completed) — not a browse surface.
+    // Gating on products.manage hides this from CUSTOMER sidebars
+    // (CUSTOMER gets products.read for the catalogue, not .manage) while
+    // keeping ADMIN/NURSE access intact. The route handler's READ gate
+    // (canReadProductsStaff) keeps the legacy blanket-deny defensively
+    // if a customer ever URL-hops here.
     path: '/wellness/auto-consumption-rules',
     label: 'Auto-consumption',
     description: 'Per-service auto-consumption rules',
     category: 'Products',
-    requiredPermissions: [{ module: 'products', action: 'read' }],
+    requiredPermissions: [{ module: 'products', action: 'manage' }],
   },
 
   // ── Inventory Admin (operational ledger) ──────────────────────────

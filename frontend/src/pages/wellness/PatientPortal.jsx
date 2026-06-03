@@ -9,9 +9,11 @@ import {
   ShieldCheck,
   Download,
   Calendar as CalendarIcon,
+  ShoppingBag,
 } from 'lucide-react';
 import { useNotify } from '../../utils/notify';
 import { formatDate } from '../../utils/date';
+import MyBookings from './MyBookings';
 
 const PORTAL_TOKEN_KEY = 'patientPortalToken';
 const PORTAL_NAME_KEY = 'patientPortalName';
@@ -275,8 +277,10 @@ function Dashboard({ token, onLogout }) {
   const notify = useNotify();
   const [tab, setTab] = useState('visits');
   const [me, setMe] = useState(null);
-  const [visits, setVisits] = useState([]);
   const [prescriptions, setPrescriptions] = useState([]);
+  const [products, setProducts] = useState([]);
+  const [productCategories, setProductCategories] = useState([]);
+  const [productCategoryFilter, setProductCategoryFilter] = useState('');
   // Patient permission set resolved from /portal/me/permissions. Driven by
   // the tenant's CUSTOMER role permissions (see backend/lib/portalPermissions.js).
   // Tabs that require a permission render only when that permission is in
@@ -304,12 +308,11 @@ function Dashboard({ token, onLogout }) {
       setMe(m);
       setPermissions(permList);
 
-      // Visits is always shown for now (no per-tab gate yet); Rx is
-      // gated on `my_prescriptions.read`. Skip the gated fetches when
-      // the permission is missing so we don't surface a 403 toast.
-      const v = await portalFetch('/api/wellness/portal/visits', token);
-      setVisits(v || []);
-
+      // Visits/appointments fetching moved into the embedded
+      // <MyBookings /> component which hits the new
+      // /portal/appointments endpoints. Rx fetch stays gated on
+      // `my_prescriptions.read` so we don't surface a 403 toast on
+      // tenants where the permission is revoked.
       if (permList.includes('my_prescriptions.read')) {
         try {
           const p = await portalFetch('/api/wellness/portal/prescriptions', token);
@@ -322,6 +325,26 @@ function Dashboard({ token, onLogout }) {
         }
       } else {
         setPrescriptions([]);
+      }
+
+      // Shop catalogue — gated on products.read against the CUSTOMER role.
+      // Backend filters to active, sale-only products; we render only safe
+      // fields (no SKU / stock / purchase price) so even a misconfigured
+      // grant can't leak internal inventory data.
+      if (permList.includes('products.read')) {
+        try {
+          const [shop, cats] = await Promise.all([
+            portalFetch('/api/wellness/portal/products', token),
+            portalFetch('/api/wellness/portal/product-categories', token),
+          ]);
+          setProducts(Array.isArray(shop) ? shop : []);
+          setProductCategories(Array.isArray(cats) ? cats : []);
+        } catch (shopEx) {
+          if (!/forbidden|denied/i.test(shopEx.message || '')) throw shopEx;
+        }
+      } else {
+        setProducts([]);
+        setProductCategories([]);
       }
     } catch (ex) {
       if (/token/i.test(ex.message)) onLogout();
@@ -375,11 +398,23 @@ function Dashboard({ token, onLogout }) {
         icon: Pill,
         permission: 'my_prescriptions.read',
       },
+      {
+        key: 'shop',
+        label: 'Shop',
+        icon: ShoppingBag,
+        permission: 'products.read',
+      },
       { key: 'plan', label: 'Treatment Plan', icon: ClipboardList },
       { key: 'consent', label: 'Consent Forms', icon: ShieldCheck },
     ];
     return allTabs.filter((t) => !t.permission || hasPerm(t.permission));
   }, [hasPerm]);
+
+  const filteredProducts = useMemo(() => {
+    if (!productCategoryFilter) return products;
+    const cid = parseInt(productCategoryFilter, 10);
+    return products.filter((p) => p.category && p.category.id === cid);
+  }, [products, productCategoryFilter]);
 
   // If the currently-selected tab got filtered out (permission revoked
   // mid-session, or initial load resolved without the grant), fall back
@@ -482,47 +517,16 @@ function Dashboard({ token, onLogout }) {
         {loading && <div>Loading…</div>}
 
         {!loading && tab === 'visits' && (
-          <div style={{ display: 'grid', gap: '0.75rem' }}>
-            {visits.length === 0 && (
-              <div
-                className="glass"
-                style={{ padding: '1.5rem', textAlign: 'center', color: 'var(--text-secondary)' }}
-              >
-                No visits on record yet.
-              </div>
-            )}
-            {visits.map((v) => (
-              <div key={v.id} className="glass" style={{ padding: '1rem' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem', flexWrap: 'wrap' }}>
-                  <div>
-                    <div style={{ fontWeight: 600 }}>{v.service?.name || 'Consultation'}</div>
-                    <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '0.2rem' }}>
-                      {new Date(v.visitDate).toLocaleString('en-IN')}
-                      {v.doctor?.name && ` · Dr ${v.doctor.name}`}
-                    </div>
-                  </div>
-                  <span
-                    style={{
-                      background: 'rgba(255,255,255,0.06)',
-                      padding: '0.2rem 0.6rem',
-                      borderRadius: 999,
-                      fontSize: '0.7rem',
-                      textTransform: 'uppercase',
-                      fontWeight: 600,
-                      color: 'var(--text-secondary)',
-                    }}
-                  >
-                    {v.status}
-                  </span>
-                </div>
-                {v.notes && (
-                  <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '0.6rem', lineHeight: 1.5 }}>
-                    {v.notes}
-                  </p>
-                )}
-              </div>
-            ))}
-          </div>
+          // Shared MyBookings component — same UI as /wellness/my-bookings
+          // for authenticated CUSTOMER users. The portal shell passes a
+          // fetcher bound to its own phone+OTP token so the component
+          // hits /api/wellness/portal/appointments/* via verifyPatientToken
+          // Path A. The Book CTA is hidden here — the phone+OTP shell
+          // doesn't currently embed a booking flow.
+          <MyBookings
+            fetcher={(url, options = {}) => portalFetch(url, token, options)}
+            hideBookCta={true}
+          />
         )}
 
         {!loading && tab === 'prescriptions' && (
@@ -609,6 +613,178 @@ function Dashboard({ token, onLogout }) {
                 </div>
               );
             })}
+          </div>
+        )}
+
+        {!loading && tab === 'shop' && (
+          <div>
+            {productCategories.length > 0 && (
+              <div
+                style={{
+                  display: 'flex',
+                  gap: '0.5rem',
+                  flexWrap: 'wrap',
+                  marginBottom: '1rem',
+                }}
+              >
+                <button
+                  onClick={() => setProductCategoryFilter('')}
+                  style={{
+                    padding: '0.4rem 0.85rem',
+                    borderRadius: 999,
+                    border: '1px solid rgba(255,255,255,0.12)',
+                    background: productCategoryFilter === '' ? 'rgba(59,130,246,0.2)' : 'transparent',
+                    color: 'var(--text-primary)',
+                    cursor: 'pointer',
+                    fontSize: '0.8rem',
+                  }}
+                >
+                  All
+                </button>
+                {productCategories.map((c) => (
+                  <button
+                    key={c.id}
+                    onClick={() => setProductCategoryFilter(String(c.id))}
+                    style={{
+                      padding: '0.4rem 0.85rem',
+                      borderRadius: 999,
+                      border: '1px solid rgba(255,255,255,0.12)',
+                      background:
+                        productCategoryFilter === String(c.id)
+                          ? 'rgba(59,130,246,0.2)'
+                          : 'transparent',
+                      color: 'var(--text-primary)',
+                      cursor: 'pointer',
+                      fontSize: '0.8rem',
+                    }}
+                  >
+                    {c.name}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {filteredProducts.length === 0 ? (
+              <div
+                className="glass"
+                style={{
+                  padding: '1.5rem',
+                  textAlign: 'center',
+                  color: 'var(--text-secondary)',
+                }}
+              >
+                <ShoppingBag size={28} style={{ marginBottom: '0.5rem', opacity: 0.5 }} />
+                <div>No products available right now.</div>
+              </div>
+            ) : (
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns:
+                    'repeat(auto-fill, minmax(min(100%, 220px), 1fr))',
+                  gap: '1rem',
+                }}
+              >
+                {filteredProducts.map((p) => {
+                  const onSale =
+                    p.discountedPrice != null && p.discountedPrice < p.price;
+                  return (
+                    <div
+                      key={p.id}
+                      className="glass"
+                      style={{
+                        padding: '1rem',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '0.5rem',
+                      }}
+                    >
+                      {p.imageUrl ? (
+                        <img
+                          src={p.imageUrl}
+                          alt={p.name}
+                          style={{
+                            width: '100%',
+                            aspectRatio: '1 / 1',
+                            objectFit: 'cover',
+                            borderRadius: 8,
+                            background: 'rgba(255,255,255,0.04)',
+                          }}
+                        />
+                      ) : (
+                        <div
+                          aria-hidden="true"
+                          style={{
+                            width: '100%',
+                            aspectRatio: '1 / 1',
+                            borderRadius: 8,
+                            background: 'rgba(255,255,255,0.04)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            color: 'var(--text-secondary)',
+                          }}
+                        >
+                          <ShoppingBag size={32} opacity={0.4} />
+                        </div>
+                      )}
+                      <div style={{ fontWeight: 600, lineHeight: 1.25 }}>{p.name}</div>
+                      {p.brandName && (
+                        <div
+                          style={{
+                            fontSize: '0.75rem',
+                            color: 'var(--text-secondary)',
+                          }}
+                        >
+                          {p.brandName}
+                        </div>
+                      )}
+                      {p.description && (
+                        <div
+                          style={{
+                            fontSize: '0.8rem',
+                            color: 'var(--text-secondary)',
+                            display: '-webkit-box',
+                            WebkitLineClamp: 2,
+                            WebkitBoxOrient: 'vertical',
+                            overflow: 'hidden',
+                          }}
+                        >
+                          {p.description}
+                        </div>
+                      )}
+                      <div style={{ marginTop: 'auto', display: 'flex', alignItems: 'baseline', gap: '0.5rem' }}>
+                        <span style={{ fontWeight: 700, fontSize: '1rem' }}>
+                          ₹{(onSale ? p.discountedPrice : p.price).toFixed(2)}
+                        </span>
+                        {onSale && (
+                          <span
+                            style={{
+                              fontSize: '0.8rem',
+                              color: 'var(--text-secondary)',
+                              textDecoration: 'line-through',
+                            }}
+                          >
+                            ₹{p.price.toFixed(2)}
+                          </span>
+                        )}
+                        {p.volume && p.unit && (
+                          <span
+                            style={{
+                              fontSize: '0.75rem',
+                              color: 'var(--text-secondary)',
+                              marginLeft: 'auto',
+                            }}
+                          >
+                            {p.volume} {p.unit}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         )}
 

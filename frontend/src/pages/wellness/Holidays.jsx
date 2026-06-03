@@ -3,6 +3,7 @@ import { CalendarOff, Plus, Trash2 } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { DateRangeFilter, resolveDateRange, EMPTY_DATE_FILTER } from '../../components/wellness/DateRangeFilter';
+import PageHeader from '../../components/PageHeader';
 
 // Wave 11 Agent GG — admin Holiday calendar. The next 365 days surface as a
 // scrollable list grouped by month; clicking an empty cell opens an inline
@@ -99,22 +100,18 @@ export default function Holidays() {
 
   return (
     <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
-      <header style={{ marginBottom: '1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
-        <div>
-          <h1 style={{ fontSize: '1.75rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <CalendarOff size={24} /> Holidays
-          </h1>
-          <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-            Clinic-wide closures + per-location / per-practitioner leave days. {holidays.length} configured for the next 365 days.
-          </p>
-        </div>
+      <PageHeader
+        icon={CalendarOff}
+        title="Holidays"
+        description={`Clinic-wide closures + per-location / per-practitioner leave days. ${holidays.length} configured for the next 365 days.`}
+      >
         <button
           onClick={() => setAdding((v) => !v)}
           style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 1rem', background: 'var(--primary-color, var(--accent-color))', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer' }}
         >
           <Plus size={16} /> {adding ? 'Cancel' : 'Mark holiday'}
         </button>
-      </header>
+      </PageHeader>
 
       {adding && (
         <form onSubmit={submit} className="glass" style={{ padding: '1.25rem', marginBottom: '1rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))', gap: '0.5rem' }}>

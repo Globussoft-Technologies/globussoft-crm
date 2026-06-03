@@ -69,6 +69,7 @@ import { formatDate } from '../../utils/date';
 import { NumberInput } from '../../utils/numberInput';
 // Issue #816: Reusable CSV import/export toolbar for the Catalog + Packages tabs.
 import CsvImportExportToolbar from '../../components/wellness/CsvImportExportToolbar';
+import PageHeader from '../../components/PageHeader';
 
 const tierColor = { high: '#ef4444', medium: '#f59e0b', low: '#64748b' };
 const TICKET_TIER_OPTIONS = [
@@ -155,23 +156,21 @@ export default function Services() {
 
   return (
     <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
-      <header style={{ marginBottom: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
-        <div>
-          <h1 style={{ fontSize: '1.75rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-            <Sparkles size={24} /> Service catalog
-            {permsReady && !canManageServices && (
-              <span
-                title="You can view services but can't make changes."
-                style={{ fontSize: '0.7rem', padding: '0.2rem 0.55rem', borderRadius: 999, background: 'var(--subtle-bg)', color: 'var(--text-secondary)', border: '1px solid var(--border-color)', fontWeight: 500 }}
-              >
-                View only
-              </span>
-            )}
-          </h1>
-          <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>Each service has a price, duration, and target marketing radius.</p>
-        </div>
+      <PageHeader
+        icon={Sparkles}
+        title="Service catalog"
+        description="Each service has a price, duration, and target marketing radius."
+        inlineBadge={permsReady && !canManageServices ? (
+          <span
+            title="You can view services but can't make changes."
+            style={{ fontSize: '0.7rem', padding: '0.2rem 0.55rem', borderRadius: 999, background: 'var(--subtle-bg)', color: 'var(--text-secondary)', border: '1px solid var(--border-color)', fontWeight: 500 }}
+          >
+            View only
+          </span>
+        ) : null}
+      >
         {tab === 'catalog' && canManageServices && (
-          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+          <>
             {/* Issue #816: services CSV. No active filter, so we pass an empty
                 filters object — the export reflects the same all-active view
                 as the catalog tab. CsvImportExportToolbar wraps Import POST
@@ -181,15 +180,13 @@ export default function Services() {
             <button onClick={() => setShowAdd(!showAdd)} style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 1rem', background: 'var(--primary-color, var(--accent-color))', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer' }}>
               <Plus size={16} /> {showAdd ? 'Cancel' : 'New service'}
             </button>
-          </div>
+          </>
         )}
         {tab === 'packages' && canManageServices && (
-          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
-            {/* Issue #816: packages CSV. */}
-            <CsvImportExportToolbar entity="packages" label="Packages" formats={['csv', 'xlsx']} />
-          </div>
+          /* Issue #816: packages CSV. */
+          <CsvImportExportToolbar entity="packages" label="Packages" formats={['csv', 'xlsx']} />
         )}
-      </header>
+      </PageHeader>
 
       {/* Tabs */}
       <div

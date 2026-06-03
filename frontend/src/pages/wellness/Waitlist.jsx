@@ -4,6 +4,7 @@ import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { formatDate } from '../../utils/date';
 import { DateRangeFilter, resolveDateRange, EMPTY_DATE_FILTER } from '../../components/wellness/DateRangeFilter';
+import PageHeader from '../../components/PageHeader';
 
 const STATUS_OPTIONS = [
   { value: 'all', label: 'All', icon: null },
@@ -118,22 +119,18 @@ export default function Waitlist() {
 
   return (
     <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
-      <header style={{ marginBottom: '1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
-        <div>
-          <h1 style={{ fontSize: '1.6rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <Clock size={22} /> Waitlist
-          </h1>
-          <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginTop: '0.25rem' }}>
-            Patients waiting for an available slot. When a visit is cancelled, the next matching patient is auto-offered the slot via SMS.
-          </p>
-        </div>
+      <PageHeader
+        icon={Clock}
+        title="Waitlist"
+        description="Patients waiting for an available slot. When a visit is cancelled, the next matching patient is auto-offered the slot via SMS."
+      >
         <button
           onClick={() => setShowAdd((v) => !v)}
           style={{ padding: '0.55rem 1rem', background: 'var(--primary-color, var(--accent-color))', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.9rem' }}
         >
           <Plus size={16} /> Add to waitlist
         </button>
-      </header>
+      </PageHeader>
 
       {/* Filter chips */}
       <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '1rem' }}>

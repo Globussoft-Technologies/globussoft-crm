@@ -90,6 +90,11 @@ const CUSTOMER_PERMISSIONS = [
   'payments.read',
   'documents.read',
   'my_prescriptions.read',
+  // `my_bookings.read` gates the /wellness/my-bookings patient
+  // appointment management page (upcoming / pending / completed /
+  // cancelled with Cancel + Reschedule actions). Distinct from staff-
+  // facing `my_appointments.read` (practitioner's own schedule).
+  'my_bookings.read',
   'consents.read', 'consents.write',
   'visits.read',
 ];

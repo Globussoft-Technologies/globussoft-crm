@@ -69,6 +69,8 @@ const CUSTOMER_PERMISSIONS = [
   'documents.read',
   // Patient-portal-scoped Rx view — never the tenant-wide `prescriptions.read`.
   'my_prescriptions.read',
+  // Patient appointment management — /wellness/my-bookings.
+  'my_bookings.read',
   'consents.read',
 ];
 

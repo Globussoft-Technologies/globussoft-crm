@@ -30,6 +30,7 @@ import { SEARCH_DEBOUNCE_MS } from "../../utils/timing";
 import { formatDate } from "../../utils/date";
 import { DateRangeFilter, resolveDateRangeYmd, EMPTY_DATE_FILTER } from "../../components/wellness/DateRangeFilter";
 import CsvImportExportToolbar from "../../components/wellness/CsvImportExportToolbar";
+import PageHeader from "../../components/PageHeader";
 
 const SOURCE_OPTIONS = [
   { value: "walk-in", label: "Walk-in" },
@@ -407,80 +408,12 @@ export default function Patients() {
 
   return (
     <div style={{ padding: "2rem", animation: "fadeIn 0.5s ease-out" }}>
-      <header
-        className="glass"
-        style={{
-          marginBottom: "1.5rem",
-          padding: "1.25rem 1.5rem",
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          gap: "1.25rem",
-          flexWrap: "wrap",
-        }}
+      <PageHeader
+        icon={Users}
+        title="Patients"
+        count={total}
+        description={total === 1 ? "patient on record" : "patients on record"}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: "1rem", minWidth: 0 }}>
-          {/* Teal icon chip — gives the page header a visual anchor instead
-              of letting the title float as bare text. Matches the wellness
-              primary palette so the chip reads as brand, not decoration. */}
-          <div
-            aria-hidden="true"
-            style={{
-              width: 48,
-              height: 48,
-              borderRadius: 14,
-              background: "var(--primary-color, var(--accent-color))",
-              color: "#fff",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              flexShrink: 0,
-              boxShadow: "0 6px 16px rgba(38, 88, 85, 0.28)",
-            }}
-          >
-            <Users size={24} />
-          </div>
-          <div style={{ minWidth: 0 }}>
-            <h1
-              style={{
-                fontFamily: "var(--font-family)",
-                fontSize: "1.5rem",
-                fontWeight: 600,
-                margin: 0,
-                lineHeight: 1.2,
-              }}
-            >
-              Patients
-            </h1>
-            <div
-              style={{
-                marginTop: "0.4rem",
-                display: "flex",
-                alignItems: "center",
-                gap: "0.5rem",
-                flexWrap: "wrap",
-              }}
-            >
-              <span
-                style={{
-                  background: "rgba(38, 88, 85, 0.14)",
-                  color: "var(--primary-color, var(--accent-color))",
-                  padding: "2px 10px",
-                  borderRadius: 999,
-                  fontSize: "0.72rem",
-                  fontWeight: 600,
-                  letterSpacing: "0.02em",
-                }}
-              >
-                {total.toLocaleString()}
-              </span>
-              <span style={{ color: "var(--text-secondary)", fontSize: "0.85rem" }}>
-                {total === 1 ? "patient on record" : "patients on record"}
-              </span>
-            </div>
-          </div>
-        </div>
-        <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
           <CsvImportExportToolbar
             entity="customers"
             label="Patients"
@@ -540,8 +473,7 @@ export default function Patients() {
               </div>
             )}
           </div>
-        </div>
-      </header>
+      </PageHeader>
 
       {/* Search bar + filter toggle.
           - opaque --surface-color background (instead of the .glass blur)

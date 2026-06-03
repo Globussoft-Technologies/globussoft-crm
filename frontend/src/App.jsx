@@ -303,6 +303,7 @@ const WellnessCalendar = lazy(() => import("./pages/wellness/Calendar"));
 const WellnessBookAppointment = lazy(() => import("./pages/wellness/BookAppointment"));
 const WellnessAppointments = lazy(() => import("./pages/wellness/Appointments"));
 const WellnessMyAppointments = lazy(() => import("./pages/wellness/MyAppointments"));
+const WellnessMyBookings = lazy(() => import("./pages/wellness/MyBookings"));
 const WellnessReports = lazy(() => import("./pages/wellness/Reports"));
 const WellnessVisits = lazy(() => import("./pages/wellness/Visits"));
 const WellnessPrescriptions = lazy(
@@ -502,9 +503,16 @@ function HomeForNonAdmin({ children }) {
 // had no entry for it. Wellness tenants are bounced to their themed calendar
 // (/wellness/calendar); generic tenants land on /calendar-sync which is the
 // closest analog (Google/Outlook calendar binding management).
+//
+// Patient-experience separation (Path B): a CUSTOMER user (the patient
+// cohort) lands on /wellness/my-bookings instead of the operational
+// Calendar, which is reserved for Admin / Reception / Practitioners.
 function CalendarRedirect() {
-  const { tenant } = useContext(AuthContext);
+  const { tenant, user } = useContext(AuthContext);
   if (tenant?.vertical === "wellness") {
+    if (user?.role === "CUSTOMER") {
+      return <Navigate to="/wellness/my-bookings" replace />;
+    }
     return <Navigate to="/wellness/calendar" replace />;
   }
   return <Navigate to="/calendar-sync" replace />;
@@ -1558,6 +1566,7 @@ export default function App() {
               <Route path="wellness/calendar" element={<WellnessOnly><WellnessCalendar /></WellnessOnly>} />
               <Route path="wellness/appointments" element={<WellnessOnly><WellnessAppointments /></WellnessOnly>} />
               <Route path="wellness/my-appointments" element={<WellnessOnly><WellnessMyAppointments /></WellnessOnly>} />
+              <Route path="wellness/my-bookings" element={<WellnessOnly><WellnessMyBookings /></WellnessOnly>} />
               <Route path="wellness/book-appointment" element={<WellnessOnly><WellnessBookAppointment /></WellnessOnly>} />
               {/* Wave 2 Agent KK - WhatsApp 2-way threads (agent inbox). */}
               <Route path="wellness/whatsapp" element={<WellnessOnly><WellnessWhatsAppThreads /></WellnessOnly>} />
@@ -1644,7 +1653,7 @@ export default function App() {
               <Route path="wellness/auto-consumption-rules" element={
                 <WellnessOnly>
                   <RoleGuard
-                    requiredPermission={{ module: 'products', action: 'read' }}
+                    requiredPermission={{ module: 'products', action: 'manage' }}
                     feature="Auto-consumption rules"
                     lockedInPlace
                   >

@@ -107,7 +107,13 @@ describe('<wellness/Locations /> — delete button', () => {
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: /Clinic locations/i })).toBeInTheDocument();
     });
-    expect(screen.getByText(/2 locations/i)).toBeInTheDocument();
+    // The header renders the count as a teal pill ("2") and the noun in a
+    // sibling description span ("locations — add new ones..."). textContent
+    // aggregates across descendants so the matcher fires on every ancestor;
+    // use getAllByText and assert "at least one" instead of strict-single.
+    expect(
+      screen.getAllByText((_t, el) => /2 locations/i.test(el?.textContent || '')).length,
+    ).toBeGreaterThanOrEqual(1);
     // One card per row (h3 with the location name).
     expect(screen.getByRole('heading', { name: /Bangalore/, level: 3 })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /Ranchi/, level: 3 })).toBeInTheDocument();

@@ -944,6 +944,7 @@ const PAGE_ICON_BY_PATH = {
   "/wellness/book-appointment": Calendar,
   // Patient portal
   "/portal": UserCircle,
+  "/wellness/my-bookings": Calendar,
   // Admin
   "/wellness/locations": Building2,
   "/staff": UsersRound,

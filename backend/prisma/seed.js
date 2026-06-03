@@ -1042,6 +1042,8 @@ async function main() {
     'invoices.read',
     'documents.read',
     'my_prescriptions.read',
+    // Patient appointment management — /wellness/my-bookings page.
+    'my_bookings.read',
     'consents.read',
   ];
 

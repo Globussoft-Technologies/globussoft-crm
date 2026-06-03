@@ -136,8 +136,14 @@ describe('<wellness/Patients /> — page surface', () => {
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: /Patients/i })).toBeInTheDocument();
     });
-    // Total counter from /api/wellness/patients's .total field — "2 total".
-    expect(screen.getByText(/2 total/i)).toBeInTheDocument();
+    // Total counter from /api/wellness/patients's .total field. The header
+    // renders the count as a teal pill ("2") next to a descriptive label
+    // ("patients on record"). textContent aggregates across descendants so
+    // the matcher fires on every ancestor up the tree — use getAllByText
+    // and assert "at least one" rather than "exactly one".
+    expect(
+      screen.getAllByText((_t, el) => /2.*patients on record/i.test(el?.textContent || '')).length,
+    ).toBeGreaterThanOrEqual(1);
     // The "+ Add" dropdown trigger replaces the prior "New patient" inline
     // toggle. It's a button with aria-haspopup=menu.
     expect(screen.getByRole('button', { name: /Add/i, expanded: false })).toBeInTheDocument();

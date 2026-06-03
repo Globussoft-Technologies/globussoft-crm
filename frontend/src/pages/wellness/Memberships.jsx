@@ -4,14 +4,17 @@ import { useContext } from 'react';
 import {
   Crown, Plus, Pencil, Trash2, X, Save, Search, Check, Monitor,
   MoreVertical, Power, HelpCircle, Users, Package, Calendar, IndianRupee,
-  ChevronDown, ChevronUp, CreditCard,
+  ChevronDown, ChevronUp, CreditCard, Sparkles, Mail, RefreshCcw,
+  CheckCircle2, XCircle, Clock,
 } from 'lucide-react';
+import { formatDate } from '../../utils/date';
 import { useNavigate } from 'react-router-dom';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { usePermissions } from '../../hooks/usePermissions';
 import { formatMoney } from '../../utils/money';
 import { AuthContext } from '../../App';
+import PageHeader from '../../components/PageHeader';
 
 // Razorpay checkout SDK loader — same pattern as BuyGiftCards.jsx.
 // Lazy-loaded on first purchase attempt so the script isn't fetched
@@ -70,6 +73,34 @@ function planGradient(plan) {
   const hue1 = h % 360;
   const hue2 = (hue1 + 35) % 360;
   return `linear-gradient(135deg, hsl(${hue1}, 55%, 45%) 0%, hsl(${hue2}, 65%, 55%) 100%)`;
+}
+
+// Search box on the non-admin view stays hidden until the active catalog
+// has at least this many plans — keeps the toolbar clean when there's
+// nothing to search through. Admins always see search.
+const SEARCH_MIN_PLANS = 4;
+
+// Derive up to N display benefits from a plan's entitlements JSON. The
+// entitlements column holds `[{serviceId, quantity}]`; resolving against
+// the services catalog yields a human label like "Facial × 10". When the
+// catalog hasn't loaded yet we fall back to a generic "Service #id" so
+// cards never render an empty benefits list mid-load. Sorted by quantity
+// (highest first) so the most generous entitlement leads the card.
+function deriveBenefits(plan, services, limit = 3) {
+  let entitlements = [];
+  try {
+    const parsed = JSON.parse(plan?.entitlements || '[]');
+    if (Array.isArray(parsed)) entitlements = parsed;
+  } catch { /* swallow — empty benefits */ }
+  return entitlements
+    .map((e) => {
+      const svc = services.find((s) => s.id === e.serviceId);
+      const name = svc?.name || `Service #${e.serviceId}`;
+      const qty = Number(e.quantity) || 0;
+      return { name, qty };
+    })
+    .sort((a, b) => b.qty - a.qty)
+    .slice(0, limit);
 }
 
 // "1 Year plan" / "6 Month plan" / "45 Day plan" — derived from the raw
@@ -253,7 +284,7 @@ export default function Memberships() {
   // stays for visual parity with the design.
   const filterTabs = isAdmin
     ? ['All', 'Active', 'Expired', 'Inactive']
-    : ['Active', 'My memberships'];
+    : ['Available Plans', 'My Memberships'];
 
   const counts = useMemo(() => {
     if (isAdmin) {
@@ -264,12 +295,15 @@ export default function Memberships() {
         Expired: 0,
       };
     }
-    // User-side counts: Active = active plans the user doesn't already own;
-    // My memberships = plans the user has bought. Inactive / expired plans
-    // are hidden from users.
-    const activeForUser = plans.filter((p) => p.isActive && !ownedPlanIds.has(p.id));
+    // User-side counts:
+    //   Available Plans → ALL active plans the clinic has published,
+    //     regardless of whether the user already owns them. Owned plans
+    //     stay visible as "Purchased" (disabled CTA) so the user can
+    //     still see what they bought without leaving this tab.
+    //   My Memberships → the user's purchased rows.
+    const availableForUser = plans.filter((p) => p.isActive);
     const owned = plans.filter((p) => ownedPlanIds.has(p.id));
-    return { Active: activeForUser.length, 'My memberships': owned.length };
+    return { 'Available Plans': availableForUser.length, 'My Memberships': owned.length };
   }, [plans, isAdmin, ownedPlanIds]);
 
   // Reset to a valid filter if the user role changes mid-session (e.g. an
@@ -288,13 +322,17 @@ export default function Memberships() {
       else if (filter === 'Inactive') rows = rows.filter((p) => !p.isActive);
       else if (filter === 'Expired') rows = []; // see counts comment above
     } else {
-      // User view: hide inactive plans entirely, then split by ownership.
+      // User view: hide INACTIVE plans (admin soft-deletes), but show all
+      // active plans on the Available Plans tab — including ones the user
+      // has already purchased. Ownership is reflected on the card itself
+      // (Purchased badge + disabled CTA for active, Expired badge + Renew
+      // CTA for past-tense). The My Memberships tab is the alternate view
+      // and still filters to owned-only.
       const activeOnly = rows.filter((p) => p.isActive);
-      if (filter === 'My memberships') {
+      if (filter === 'My Memberships') {
         rows = activeOnly.filter((p) => ownedPlanIds.has(p.id));
       } else {
-        // Active tab = available-to-buy (i.e. active AND not yet owned).
-        rows = activeOnly.filter((p) => !ownedPlanIds.has(p.id));
+        rows = activeOnly;
       }
     }
     if (query.trim()) {
@@ -345,15 +383,11 @@ export default function Memberships() {
 
   return (
     <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out', position: 'relative', minHeight: '100%' }}>
-      <header style={{ marginBottom: '1.25rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
-        <div>
-          <h1 style={{ fontSize: '1.75rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <Crown size={24} /> Memberships
-          </h1>
-          <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-            Offer membership plans with exclusive benefits for returning clients.
-          </p>
-        </div>
+      <PageHeader
+        icon={Crown}
+        title="Memberships"
+        description="Offer membership plans with exclusive benefits for returning clients."
+      >
         <button
           type="button"
           onClick={() => notify.info('Reach support via the in-app chat or open a ticket from Help → Contact.')}
@@ -361,20 +395,28 @@ export default function Memberships() {
         >
           <HelpCircle size={14} /> Need Help?
         </button>
-      </header>
+      </PageHeader>
 
-      {/* Toolbar: search + filter pills + View Members link */}
+      {/* Toolbar: search + filter pills + View Members link.
+          Search is hidden when the visible-to-this-role plan count is below
+          SEARCH_MIN — at zero plans the search box adds friction without value;
+          for tiny catalogs the threshold avoids dropping the tabs onto a new
+          row on narrow viewports. Admins always see search (they manage the
+          catalog and may have many soft-deleted rows). */}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', alignItems: 'center', marginBottom: '1.5rem' }}>
-        <div style={{ position: 'relative', flex: '1 1 240px', maxWidth: 360 }}>
-          <Search size={15} style={{ position: 'absolute', left: '0.75rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-secondary)' }} />
-          <input
-            type="text"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search memberships..."
-            style={{ width: '100%', padding: '0.55rem 0.75rem 0.55rem 2.25rem', borderRadius: 999, border: '1px solid var(--border-color, rgba(255,255,255,0.15))', background: 'var(--surface-color, rgba(255,255,255,0.04))', color: 'var(--text-primary)', fontSize: '0.9rem', outline: 'none' }}
-          />
-        </div>
+        {(isAdmin || plans.filter((p) => p.isActive).length >= SEARCH_MIN_PLANS) && (
+          <div style={{ position: 'relative', flex: '1 1 240px', maxWidth: 360 }}>
+            <Search size={15} style={{ position: 'absolute', left: '0.75rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-secondary)' }} />
+            <input
+              type="text"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search memberships..."
+              aria-label="Search memberships"
+              style={{ width: '100%', padding: '0.55rem 0.75rem 0.55rem 2.25rem', borderRadius: 999, border: '1px solid var(--border-color, rgba(255,255,255,0.15))', background: 'var(--surface-color, rgba(255,255,255,0.04))', color: 'var(--text-primary)', fontSize: '0.9rem', outline: 'none' }}
+            />
+          </div>
+        )}
         <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
           {filterTabs.map((f) => {
             const active = filter === f;
@@ -418,33 +460,105 @@ export default function Memberships() {
       </div>
 
       {loading ? (
-        <p style={{ color: 'var(--text-secondary)' }}>Loading membership plans…</p>
+        <p style={{ color: 'var(--text-secondary)' }} role="status" aria-live="polite">Loading membership plans…</p>
+      ) : !isAdmin && filter === 'My Memberships' ? (
+        // Owned-memberships tab renders membership rows (purchase / expiry /
+        // status / balance) not catalog rows — different shape, different
+        // card. We still filter by `query` against the plan name so the
+        // search field remains useful on this tab when present.
+        myMemberships.length === 0 ? (
+          <EmptyState
+            icon={Crown}
+            title="No Memberships Yet"
+            description="Once you join a plan it will appear here with your benefits, expiry date, and renewal options."
+            ctaLabel="Browse Plans"
+            onCta={() => setFilter('Available Plans')}
+          />
+        ) : (
+          (() => {
+            const q = query.trim().toLowerCase();
+            const rows = q
+              ? myMemberships.filter((m) => String(m.planName || '').toLowerCase().includes(q))
+              : myMemberships;
+            if (rows.length === 0) {
+              return (
+                <EmptyState
+                  icon={Search}
+                  title="No matches"
+                  description={`No memberships match "${query}".`}
+                  ctaLabel="Clear search"
+                  onCta={() => setQuery('')}
+                />
+              );
+            }
+            return (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 320px), 1fr))', gap: '1.25rem' }}>
+                {rows.map((m) => (
+                  <OwnedMembershipCard
+                    key={m.id}
+                    membership={m}
+                    plan={plans.find((p) => p.id === m.planId)}
+                    services={services}
+                    onView={() => {
+                      const plan = plans.find((p) => p.id === m.planId);
+                      if (plan) setDetailPlan(plan);
+                    }}
+                    onRenew={(mem) => {
+                      // Backend membership-purchase already detects prior
+                      // memberships and emits membership.renewed (see
+                      // wellness.js around "isRenewal"), so routing the
+                      // user back through the standard Razorpay handshake
+                      // gives them a renewed Membership row without
+                      // needing a separate /renew route.
+                      const plan = plans.find((p) => p.id === mem.planId);
+                      if (plan) {
+                        setPurchasePlan(plan);
+                      } else {
+                        notify.error('Plan no longer available. Please contact your clinic to renew.');
+                      }
+                    }}
+                  />
+                ))}
+              </div>
+            );
+          })()
+        )
       ) : visiblePlans.length === 0 ? (
-        <div className="glass" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
-          {/* Empty-state copy is filter-aware so users get a useful next-step
-              instead of the generic "no matches" line — especially on the
-              user-side "Selected" tab when they haven't picked anything yet. */}
-          {query.trim()
-            ? 'No plans match your search.'
-            : !isAdmin && filter === 'My memberships'
-              ? "You don't have a membership yet. Open the Active tab to browse what's available."
-              : !isAdmin && filter === 'Active'
-                ? 'No membership plans are available right now. Please check back later.'
-                : filter !== 'Active'
-                  ? 'No plans match the current filter.'
-                  : (
-                      <>
-                        No active membership plans yet.
-                        {isAdmin && <> Tap the <strong>+</strong> button below to create one.</>}
-                      </>
-                    )}
-        </div>
+        // Empty state — filter-aware so users get a useful next-step instead
+        // of the generic "no matches" line.
+        query.trim() ? (
+          <EmptyState
+            icon={Search}
+            title="No matches"
+            description={`No plans match "${query}".`}
+            ctaLabel="Clear search"
+            onCta={() => setQuery('')}
+          />
+        ) : !isAdmin ? (
+          <EmptyState
+            icon={Crown}
+            title="No Membership Plans Available"
+            description="Memberships unlock recurring benefits, prepaid services, and exclusive savings on visits. Plans aren't published yet — your clinic will notify you when they go live."
+            ctaLabel="Contact Clinic"
+            ctaIcon={Mail}
+            onCta={() => notify.info('Reach your clinic via the in-app chat or call the front desk for membership details.')}
+          />
+        ) : (
+          <EmptyState
+            icon={Crown}
+            title="No Plans Yet"
+            description={filter === 'Active'
+              ? 'No active plans. Tap the + button below to create one.'
+              : 'No plans match the current filter.'}
+          />
+        )
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 320px), 1fr))', gap: '1.25rem' }}>
           {visiblePlans.map((p) => (
             <PlanCard
               key={p.id}
               plan={p}
+              services={services}
               isAdmin={isAdmin}
               isOwned={ownedPlanIds.has(p.id)}
               menuOpen={openMenuId === p.id}
@@ -518,11 +632,39 @@ export default function Memberships() {
 
 // ── Card ──────────────────────────────────────────────────────────
 
-function PlanCard({ plan, isAdmin, isOwned, menuOpen, onToggleMenu, onCloseMenu, onView, onEdit, onDelete, onDeactivate, onBuy }) {
+function PlanCard({ plan, services = [], isAdmin, isOwned, menuOpen, onToggleMenu, onCloseMenu, onView, onEdit, onDelete, onDeactivate, onBuy }) {
   const gradient = planGradient(plan);
   const isActive = plan.isActive !== false;
+  // Top-3 benefits derived from the entitlements JSON. Memoised so the
+  // sort+resolve doesn't re-run on every parent re-render (the catalog
+  // can have dozens of cards on screen).
+  const benefits = useMemo(() => deriveBenefits(plan, services, 3), [plan, services]);
+  const isFeatured = plan.featured === true || plan.isFeatured === true;
+
+  // Three-state ownership for the non-admin view. Backend annotates
+  // /membership-plans with hasActiveMembership / hasExpiredMembership /
+  // activeMembershipEndDate when the caller has a Patient row. Cancelled
+  // memberships surface as hasExpiredMembership=true per the 2026-06
+  // lifecycle decision (cancelled → re-purchase allowed, same as expired).
+  // Fallback to the isOwned flag (driven by /appointments/my-memberships)
+  // keeps the rendering sane when an older backend returns the legacy
+  // un-annotated shape; in that case we degrade to state 2 (active).
+  // Admins always see the catalog view — no per-user state.
+  const ownershipState = (() => {
+    if (isAdmin) return 'never';
+    if (plan.hasActiveMembership === true) return 'active';
+    if (plan.hasExpiredMembership === true) return 'expired';
+    if (plan.hasActiveMembership === undefined && isOwned) return 'active';
+    return 'never';
+  })();
   return (
     <div
+      role="article"
+      aria-label={`Membership plan: ${plan.name}`}
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onView(); }
+      }}
       style={{
         position: 'relative',
         borderRadius: 16,
@@ -534,14 +676,38 @@ function PlanCard({ plan, isAdmin, isOwned, menuOpen, onToggleMenu, onCloseMenu,
         overflow: 'hidden',
         opacity: isActive ? 1 : 0.6,
         cursor: 'pointer',
+        outline: 'none',
       }}
       onClick={onView}
     >
-      {/* Diagonal ribbon — top-left. For non-admin viewers who've already
-          bought the plan it flips to "Active" (accent color) so the
-          owned state is visible at a glance. Admin views ignore ownership —
-          they only see catalog Active state. */}
-      {(isActive || (isOwned && !isAdmin)) && (
+      {/* Featured badge — top-right, mutually exclusive with the menu so
+          only one ornament sits in that corner. Hidden on cards the admin
+          can edit (the menu wins). Reads from plan.featured if the column
+          exists; harmless when the column hasn't been added yet. */}
+      {isFeatured && !isAdmin && (
+        <div
+          style={{
+            position: 'absolute', top: 10, right: 10, zIndex: 2,
+            display: 'inline-flex', alignItems: 'center', gap: '0.25rem',
+            padding: '0.2rem 0.55rem',
+            background: 'rgba(255,255,255,0.95)',
+            color: '#9a6b00',
+            borderRadius: 999,
+            fontSize: '0.65rem', fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase',
+            boxShadow: '0 4px 10px rgba(0,0,0,0.2)',
+          }}
+        >
+          <Sparkles size={11} /> Featured
+        </div>
+      )}
+      {/* Diagonal ribbon — top-left. Label + colour reflect the three-state
+          ownership semantics on the non-admin view:
+            never  → "Active"     (green) — catalog availability cue
+            active → "Purchased"  (primary) — user already owns it
+            expired→ "Expired"    (grey)    — user owned previously, can renew
+          Admin views always show catalog "Active" since per-user state is
+          not meaningful in catalog-management mode. */}
+      {(isActive || (!isAdmin && ownershipState !== 'never')) && (
         <div
           style={{
             position: 'absolute', top: 0, left: 0, width: 90, height: 90,
@@ -551,13 +717,18 @@ function PlanCard({ plan, isAdmin, isOwned, menuOpen, onToggleMenu, onCloseMenu,
           <div style={{
             position: 'absolute', top: 12, left: -28, width: 110,
             transform: 'rotate(-45deg)', transformOrigin: 'center',
-            background: (!isAdmin && isOwned) ? 'var(--primary-color, var(--accent-color))' : '#16a34a',
+            background:
+              (!isAdmin && ownershipState === 'active')  ? 'var(--primary-color, var(--accent-color))'
+              : (!isAdmin && ownershipState === 'expired') ? '#6b7280'
+              : '#16a34a',
             color: '#fff', fontSize: '0.65rem',
             fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase',
             padding: '3px 0', textAlign: 'center',
             boxShadow: '0 2px 6px rgba(0,0,0,0.2)',
           }}>
-            {(!isAdmin && isOwned) ? 'Owned' : 'Active'}
+            {(!isAdmin && ownershipState === 'active')  ? 'Purchased'
+              : (!isAdmin && ownershipState === 'expired') ? 'Expired'
+              : 'Active'}
           </div>
         </div>
       )}
@@ -605,13 +776,60 @@ function PlanCard({ plan, isAdmin, isOwned, menuOpen, onToggleMenu, onCloseMenu,
       <div style={{ marginTop: '2.5rem', display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
         <h3 style={{ fontSize: '1.35rem', fontWeight: 600, textTransform: 'capitalize' }}>{plan.name}</h3>
         <div style={{ fontSize: '0.95rem', fontWeight: 500 }}>{formatMoney(plan.price, plan.currency || 'INR')}</div>
+        {/* Short description — single line, fade-truncated. Hidden on
+            entitlement-only plans so the card stays clean. */}
+        {plan.description && (
+          <div
+            style={{
+              fontSize: '0.78rem', opacity: 0.85, marginTop: '0.15rem',
+              display: '-webkit-box', WebkitBoxOrient: 'vertical',
+              WebkitLineClamp: 1, overflow: 'hidden', textOverflow: 'ellipsis',
+            }}
+          >
+            {plan.description}
+          </div>
+        )}
       </div>
 
+      {/* Up to 3 derived benefits — "Facial × 10" / "Hair Spa × 5" etc.
+          Surfaces the most generous entitlements without forcing the user
+          to open the detail modal. Falls back silently when entitlements
+          haven't loaded or the services catalog isn't ready. */}
+      {benefits.length > 0 && (
+        <ul
+          aria-label="Plan benefits"
+          style={{
+            margin: '0.6rem 0 0', padding: 0, listStyle: 'none',
+            display: 'flex', flexDirection: 'column', gap: '0.2rem',
+          }}
+        >
+          {benefits.map((b, i) => (
+            <li
+              key={i}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: '0.35rem',
+                fontSize: '0.78rem', opacity: 0.92,
+              }}
+            >
+              <Check size={12} aria-hidden="true" />
+              <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {b.name}{b.qty > 0 ? ` × ${b.qty}` : ''}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+
       {/* Footer action row. Admins only see "View Details" since picking a
-          plan isn't meaningful for them. Non-admin viewers see an inline
-          Select / Selected button so they can act on the plan directly
-          without opening the detail modal — the modal stays available for
-          plan information but is no longer the only path. */}
+          plan isn't meaningful for them. Non-admin viewers see one of three
+          CTAs based on the three-state ownership semantics:
+            never   → "Join Now"            (existing purchase flow)
+            active  → "Active Until <date>" (disabled, with helper text)
+            expired → "Renew Membership"    (re-enters purchase flow)
+          The Renew CTA uses the same onBuy hook — the backend already
+          treats a second purchase against the same plan as a renewal
+          (emits `membership.renewed`), so no separate renew endpoint is
+          required to wire this up. */}
       <div
         style={{ marginTop: '0.5rem', display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '0.75rem' }}
         onClick={(e) => e.stopPropagation()}
@@ -627,39 +845,345 @@ function PlanCard({ plan, isAdmin, isOwned, menuOpen, onToggleMenu, onCloseMenu,
         >
           View Details
         </button>
-        {!isAdmin && (
-          isOwned ? (
-            <span
-              title="You own this plan"
-              style={{
-                display: 'inline-flex', alignItems: 'center', gap: '0.35rem',
-                padding: '0.4rem 0.85rem',
-                background: 'rgba(255,255,255,0.92)',
-                color: '#111', borderRadius: 8,
-                fontSize: '0.8rem', fontWeight: 600,
-              }}
-            >
-              <Check size={13} /> Owned
-            </span>
-          ) : (
-            <button
-              type="button"
-              onClick={onBuy}
-              style={{
-                display: 'inline-flex', alignItems: 'center', gap: '0.35rem',
-                padding: '0.4rem 0.85rem',
-                background: 'rgba(0,0,0,0.35)',
-                color: '#fff',
-                border: '1px solid rgba(255,255,255,0.35)',
-                borderRadius: 8,
-                cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600,
-              }}
-            >
-              <CreditCard size={13} /> Buy
-            </button>
-          )
+        {!isAdmin && ownershipState === 'active' && (
+          <span
+            // role=button + aria-disabled communicates the disabled-CTA
+            // semantics to screen readers without using a real <button
+            // disabled> which would block keyboard focus on the helper
+            // text affordance.
+            role="button"
+            aria-disabled="true"
+            title="You already have an active membership for this plan"
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: '0.35rem',
+              padding: '0.4rem 0.85rem',
+              background: 'rgba(255,255,255,0.92)',
+              color: '#111', borderRadius: 8,
+              fontSize: '0.8rem', fontWeight: 600,
+              cursor: 'not-allowed',
+              opacity: 0.95,
+            }}
+          >
+            <Check size={13} />
+            {plan.activeMembershipEndDate
+              ? `Active Until ${formatDate(plan.activeMembershipEndDate)}`
+              : 'Purchased'}
+          </span>
+        )}
+        {!isAdmin && ownershipState === 'expired' && (
+          <button
+            type="button"
+            onClick={onBuy}
+            aria-label={`Renew ${plan.name}`}
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: '0.35rem',
+              padding: '0.4rem 0.85rem',
+              background: 'rgba(255,255,255,0.92)',
+              color: '#111',
+              border: 'none',
+              borderRadius: 8,
+              cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600,
+            }}
+          >
+            <RefreshCcw size={13} /> Renew Membership
+          </button>
+        )}
+        {!isAdmin && ownershipState === 'never' && (
+          <button
+            type="button"
+            onClick={onBuy}
+            aria-label={`Join ${plan.name}`}
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: '0.35rem',
+              padding: '0.4rem 0.85rem',
+              background: 'rgba(0,0,0,0.35)',
+              color: '#fff',
+              border: '1px solid rgba(255,255,255,0.35)',
+              borderRadius: 8,
+              cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600,
+            }}
+          >
+            <CreditCard size={13} /> Join Now
+          </button>
         )}
       </div>
+
+      {/* Helper text — visible only in State 2 (active membership), placed
+          below the action row in muted white so users immediately know
+          why the CTA is disabled and what to expect at expiry. Kept
+          inside the card so the explanation travels with the surface
+          (no tooltip / no separate panel). */}
+      {!isAdmin && ownershipState === 'active' && (
+        <p
+          style={{
+            margin: '0.55rem 0 0',
+            fontSize: '0.72rem',
+            lineHeight: 1.4,
+            color: 'rgba(255,255,255,0.78)',
+          }}
+        >
+          You already have an active membership for this plan. You can renew
+          after your current membership expires.
+        </p>
+      )}
+    </div>
+  );
+}
+
+// ── Owned membership card ─────────────────────────────────────────
+// Renders a row from the /appointments/my-memberships response, joined
+// against the plan catalog so we can derive total entitlements + service
+// names. Used on the "My Memberships" tab — distinct from PlanCard which
+// renders catalog entries. Status pill colors match the underlying
+// status enum (active / expired / cancelled) so the visual matches the
+// canonical Membership.status column.
+function OwnedMembershipCard({ membership, plan, services = [], onView, onRenew }) {
+  const gradient = planGradient(plan || { name: membership.planName });
+  const now = Date.now();
+  const expired = membership.endDate && new Date(membership.endDate).getTime() < now;
+  const status = expired ? 'expired' : (membership.status || 'active');
+
+  const STATUS_TONE = {
+    active:    { bg: 'rgba(34,197,94,0.18)',  color: '#16a34a', Icon: CheckCircle2, label: 'Active' },
+    expired:   { bg: 'rgba(239,68,68,0.18)',  color: '#dc2626', Icon: XCircle,      label: 'Expired' },
+    cancelled: { bg: 'rgba(107,114,128,0.22)', color: '#6b7280', Icon: XCircle,     label: 'Cancelled' },
+  };
+  const tone = STATUS_TONE[status] || STATUS_TONE.active;
+  const StatusIcon = tone.Icon;
+
+  // Usage summary: join membership.balance (remaining per serviceId)
+  // against plan.entitlements (original quantity per serviceId) so we can
+  // render "Facial: 3 / 10 remaining". When the plan catalog hasn't loaded
+  // we skip the original-quantity bit and just show remaining.
+  const usage = useMemo(() => {
+    const balance = Array.isArray(membership.balance) ? membership.balance : [];
+    let planEntitlements = [];
+    if (plan) {
+      try {
+        const parsed = JSON.parse(plan.entitlements || '[]');
+        if (Array.isArray(parsed)) planEntitlements = parsed;
+      } catch { /* leave as [] */ }
+    }
+    return balance.slice(0, 3).map((b) => {
+      const svc = services.find((s) => s.id === b.serviceId);
+      const original = planEntitlements.find((e) => e.serviceId === b.serviceId);
+      return {
+        name: svc?.name || `Service #${b.serviceId}`,
+        remaining: Number(b.remaining) || 0,
+        total: original ? Number(original.quantity) || 0 : null,
+      };
+    });
+  }, [membership.balance, plan, services]);
+
+  // Renewal eligibility: within 30 days of expiry OR already expired and
+  // not cancelled. The actual renew call is a TODO (no patient-facing
+  // route yet); for now the button surfaces a contact-clinic notice so the
+  // user knows the path forward.
+  const daysUntilExpiry = membership.endDate
+    ? Math.ceil((new Date(membership.endDate).getTime() - now) / 86400000)
+    : null;
+  const canRenew = status !== 'cancelled'
+    && daysUntilExpiry != null
+    && (expired || daysUntilExpiry <= 30);
+
+  return (
+    <div
+      role="article"
+      aria-label={`Membership: ${membership.planName}, status ${tone.label}`}
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if ((e.key === 'Enter' || e.key === ' ') && onView) { e.preventDefault(); onView(); }
+      }}
+      style={{
+        position: 'relative',
+        borderRadius: 16,
+        padding: '1.25rem 1.25rem 1rem',
+        minHeight: 200,
+        color: '#fff',
+        background: gradient,
+        boxShadow: '0 8px 20px rgba(0,0,0,0.25)',
+        overflow: 'hidden',
+        opacity: status === 'active' ? 1 : 0.85,
+        cursor: onView ? 'pointer' : 'default',
+        outline: 'none',
+      }}
+      onClick={onView}
+    >
+      {/* Status pill — top-right. Uses status-tone tokens so the color
+          (green/red/grey) matches the visual rule across the app. */}
+      <div
+        style={{
+          position: 'absolute', top: 10, right: 10, zIndex: 2,
+          display: 'inline-flex', alignItems: 'center', gap: '0.25rem',
+          padding: '0.2rem 0.55rem',
+          background: tone.bg,
+          color: tone.color,
+          border: `1px solid ${tone.color}`,
+          borderRadius: 999,
+          fontSize: '0.65rem', fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase',
+        }}
+      >
+        <StatusIcon size={11} /> {tone.label}
+      </div>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.8rem', opacity: 0.95 }}>
+        <Monitor size={14} /> {durationLabel(membership.planDurationDays || (plan && plan.durationDays))}
+      </div>
+
+      <div style={{ marginTop: '0.85rem', display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+        <h3 style={{ fontSize: '1.25rem', fontWeight: 600, textTransform: 'capitalize' }}>{membership.planName}</h3>
+      </div>
+
+      {/* Dates row — purchase + expiry side by side. formatDate respects
+          the user's locale so en-IN gets "dd/mm/yyyy" and en-US gets the
+          slash-style equivalent. */}
+      <div
+        style={{
+          marginTop: '0.65rem',
+          display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.4rem',
+          fontSize: '0.75rem', opacity: 0.92,
+        }}
+      >
+        <div>
+          <div style={{ opacity: 0.7, fontSize: '0.65rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Purchased</div>
+          <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem', marginTop: '0.1rem' }}>
+            <Calendar size={11} /> {formatDate(membership.createdAt || membership.startDate)}
+          </div>
+        </div>
+        <div>
+          <div style={{ opacity: 0.7, fontSize: '0.65rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Expires</div>
+          <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem', marginTop: '0.1rem' }}>
+            <Clock size={11} /> {formatDate(membership.endDate)}
+          </div>
+        </div>
+      </div>
+
+      {/* Usage summary — up to 3 rows of "Service: remaining / total". */}
+      {usage.length > 0 && (
+        <ul
+          aria-label="Benefit usage"
+          style={{
+            margin: '0.7rem 0 0', padding: 0, listStyle: 'none',
+            display: 'flex', flexDirection: 'column', gap: '0.2rem',
+          }}
+        >
+          {usage.map((u, i) => (
+            <li
+              key={i}
+              style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                gap: '0.5rem', fontSize: '0.78rem', opacity: 0.95,
+              }}
+            >
+              <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {u.name}
+              </span>
+              <span style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>
+                {u.total != null ? `${u.remaining} / ${u.total} left` : `${u.remaining} left`}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <div
+        style={{ marginTop: '0.75rem', display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '0.75rem' }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        {onView && (
+          <button
+            type="button"
+            onClick={onView}
+            style={{
+              background: 'transparent', border: 'none', color: '#fff',
+              fontSize: '0.85rem', cursor: 'pointer',
+              textDecoration: 'underline', textUnderlineOffset: '3px', padding: 0,
+            }}
+          >
+            View Details
+          </button>
+        )}
+        {canRenew && onRenew && (
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onRenew(membership); }}
+            aria-label={`Renew ${membership.planName}`}
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: '0.35rem',
+              padding: '0.4rem 0.85rem',
+              background: 'rgba(255,255,255,0.95)',
+              color: '#111',
+              border: 'none',
+              borderRadius: 8,
+              cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600,
+            }}
+          >
+            <RefreshCcw size={13} /> Renew
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Empty state ───────────────────────────────────────────────────
+// Shared empty-state surface. Used by both "no plans" and "no matches"
+// branches so the visual is consistent. Optional CTA — pass `onCta` +
+// `ctaLabel` to render a button. `icon` is a lucide component (passed
+// as the bare reference, not an element).
+function EmptyState({ icon: Icon = Crown, title, description, ctaLabel, ctaIcon: CtaIcon, onCta }) {
+  return (
+    <div
+      className="glass"
+      role="status"
+      aria-live="polite"
+      style={{
+        padding: '2.5rem 1.5rem',
+        textAlign: 'center',
+        display: 'flex', flexDirection: 'column', alignItems: 'center',
+        gap: '0.75rem',
+      }}
+    >
+      <div
+        aria-hidden="true"
+        style={{
+          width: 64, height: 64, borderRadius: '50%',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          background: 'var(--primary-color, var(--accent-color))',
+          color: '#fff',
+          opacity: 0.92,
+          boxShadow: '0 8px 20px rgba(0,0,0,0.18)',
+        }}
+      >
+        <Icon size={28} />
+      </div>
+      <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 600, color: 'var(--text-primary)' }}>{title}</h3>
+      {description && (
+        <p style={{
+          margin: 0, maxWidth: 460, lineHeight: 1.5,
+          fontSize: '0.88rem', color: 'var(--text-secondary)',
+        }}>
+          {description}
+        </p>
+      )}
+      {ctaLabel && onCta && (
+        <button
+          type="button"
+          onClick={onCta}
+          style={{
+            marginTop: '0.5rem',
+            display: 'inline-flex', alignItems: 'center', gap: '0.4rem',
+            padding: '0.55rem 1.1rem',
+            background: 'var(--primary-color, var(--accent-color))',
+            color: '#fff',
+            border: 'none',
+            borderRadius: 8,
+            cursor: 'pointer', fontSize: '0.88rem', fontWeight: 600,
+          }}
+        >
+          {CtaIcon && <CtaIcon size={14} />} {ctaLabel}
+        </button>
+      )}
     </div>
   );
 }
@@ -688,6 +1212,15 @@ function MenuItem({ icon, label, onClick, danger }) {
 // ── Detail modal ──────────────────────────────────────────────────
 
 function PlanDetailModal({ plan, services, isAdmin, isOwned, onClose, onEdit, onBuy }) {
+  // Refs for focus management — initialFocus captures the close button so
+  // the modal opens with focus on a known element (screen readers announce
+  // the dialog correctly), and dialogRef + the keydown handler below
+  // implement a basic Tab/Shift+Tab focus trap so keyboard users can't
+  // accidentally tab out of the modal back to the page underneath.
+  const dialogRef = useRef(null);
+  const initialFocusRef = useRef(null);
+  const titleId = useMemo(() => `plan-detail-title-${Math.random().toString(36).slice(2, 9)}`, []);
+
   const entitlements = useMemo(() => {
     try {
       const parsed = JSON.parse(plan.entitlements || '[]');
@@ -726,10 +1259,41 @@ function PlanDetailModal({ plan, services, isAdmin, isOwned, onClose, onEdit, on
   const toggle = (k) => setOpenSection((s) => ({ ...s, [k]: !s[k] }));
 
   useEffect(() => {
-    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    const focusable = () => {
+      if (!dialogRef.current) return [];
+      return Array.from(
+        dialogRef.current.querySelectorAll(
+          'a[href], button:not([disabled]), textarea, input, select, [tabindex]:not([tabindex="-1"])',
+        ),
+      ).filter((el) => !el.hasAttribute('disabled') && el.offsetParent !== null);
+    };
+    const onKey = (e) => {
+      if (e.key === 'Escape') {
+        onClose();
+        return;
+      }
+      if (e.key === 'Tab') {
+        // Focus trap — wrap Tab/Shift+Tab around the dialog's focusables.
+        const els = focusable();
+        if (els.length === 0) return;
+        const first = els[0];
+        const last = els[els.length - 1];
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
+    };
     document.addEventListener('keydown', onKey);
     const prev = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
+    // Move focus into the modal on open — close button is the safest
+    // initial target (always visible, doesn't trigger side-effects on
+    // accidental activation by assistive tech).
+    setTimeout(() => { initialFocusRef.current?.focus(); }, 0);
     return () => { document.removeEventListener('keydown', onKey); document.body.style.overflow = prev; };
   }, [onClose]);
 
@@ -740,18 +1304,25 @@ function PlanDetailModal({ plan, services, isAdmin, isOwned, onClose, onEdit, on
       style={{ position: 'fixed', inset: 0, background: 'var(--overlay-bg, rgba(0,0,0,0.45))', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '1rem' }}
       onClick={onClose}
     >
-      <div style={{
-        maxWidth: 540, width: '100%', maxHeight: '92vh', overflow: 'auto',
-        borderRadius: 14, position: 'relative',
-        // Theme-aware surface: --tooltip-bg is the canonical near-solid popover
-        // surface (dark navy in dark mode, near-white in light mode), so the
-        // modal stays legible against the page underneath in both themes.
-        background: 'var(--tooltip-bg, #fff)',
-        color: 'var(--text-primary, #111)',
-        border: '1px solid var(--border-color, rgba(0,0,0,0.08))',
-        boxShadow: '0 25px 50px rgba(0,0,0,0.35)',
-      }} onClick={(e) => e.stopPropagation()}>
-        <button onClick={onClose} aria-label="Close" style={{ position: 'absolute', top: 14, right: 14, background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', display: 'flex', zIndex: 2 }}>
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        style={{
+          maxWidth: 540, width: '100%', maxHeight: '92vh', overflow: 'auto',
+          borderRadius: 14, position: 'relative',
+          // Theme-aware surface: --tooltip-bg is the canonical near-solid popover
+          // surface (dark navy in dark mode, near-white in light mode), so the
+          // modal stays legible against the page underneath in both themes.
+          background: 'var(--tooltip-bg, #fff)',
+          color: 'var(--text-primary, #111)',
+          border: '1px solid var(--border-color, rgba(0,0,0,0.08))',
+          boxShadow: '0 25px 50px rgba(0,0,0,0.35)',
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <button ref={initialFocusRef} onClick={onClose} aria-label="Close membership details" style={{ position: 'absolute', top: 14, right: 14, background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', display: 'flex', zIndex: 2 }}>
           <X size={20} />
         </button>
 
@@ -760,7 +1331,7 @@ function PlanDetailModal({ plan, services, isAdmin, isOwned, onClose, onEdit, on
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', color: 'var(--text-secondary)', fontSize: '0.95rem', marginTop: '0.25rem' }}>
             <Monitor size={18} /> {durationLabel(plan.durationDays)}
           </div>
-          <h2 style={{ fontSize: '1.45rem', fontWeight: 600, marginTop: '0.75rem', textTransform: 'capitalize' }}>{plan.name}</h2>
+          <h2 id={titleId} style={{ fontSize: '1.45rem', fontWeight: 600, marginTop: '0.75rem', textTransform: 'capitalize' }}>{plan.name}</h2>
           <div style={{ fontSize: '1.25rem', fontWeight: 600, marginTop: '0.35rem' }}>{formatMoney(plan.price, plan.currency || 'INR')}</div>
         </div>
 

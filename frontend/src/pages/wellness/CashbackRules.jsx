@@ -8,6 +8,7 @@ import { Coins, Plus, Pencil, Trash2 } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { formatMoney } from '../../utils/money';
+import PageHeader from '../../components/PageHeader';
 
 export default function CashbackRulesPage() {
   const [rules, setRules] = useState([]);
@@ -48,17 +49,13 @@ export default function CashbackRulesPage() {
 
   return (
     <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
-      <header style={{ marginBottom: '1.25rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div>
-          <h1 style={{ fontSize: '1.75rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <Coins size={24} /> Cashback Rules
-          </h1>
-          <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-            Earn wallet credit for the patient on each completed visit. First-matching-rule wins.
-          </p>
-        </div>
+      <PageHeader
+        icon={Coins}
+        title="Cashback Rules"
+        description="Earn wallet credit for the patient on each completed visit. First-matching-rule wins."
+      >
         <button onClick={() => setEditOpen({})} style={btnPrimary}><Plus size={14} /> New rule</button>
-      </header>
+      </PageHeader>
 
       {loading ? (
         <div>Loading…</div>

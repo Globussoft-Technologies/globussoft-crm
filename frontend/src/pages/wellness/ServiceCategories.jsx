@@ -27,6 +27,7 @@ const TD_STYLE = { padding: '0.6rem 0.75rem', verticalAlign: 'middle' };
 import { fetchApi, getAuthToken } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { usePermissions } from '../../hooks/usePermissions';
+import PageHeader from '../../components/PageHeader';
 
 const EMPTY_FORM = { name: '', parentId: '', displayOrder: 0, isActive: true, imageUrl: '' };
 
@@ -176,29 +177,25 @@ export default function ServiceCategories() {
 
   return (
     <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
-      <header style={{ marginBottom: '1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
-        <div>
-          <h1 style={{ fontSize: '1.75rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-            <Stethoscope size={24} /> Service categories
-            {permsReady && !canManageServices && (
-              <span
-                title="You can view categories but can't make changes."
-                style={{ fontSize: '0.7rem', padding: '0.2rem 0.55rem', borderRadius: 999, background: 'var(--subtle-bg)', color: 'var(--text-secondary)', border: '1px solid var(--border-color)', fontWeight: 500 }}
-              >
-                View only
-              </span>
-            )}
-          </h1>
-          <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-            {q.trim() ? `${filtered.length} of ${categories.length}` : categories.length} categor{(q.trim() ? filtered.length : categories.length) === 1 ? 'y' : 'ies'} — hierarchical taxonomy for the service catalogue.
-          </p>
-        </div>
+      <PageHeader
+        icon={Stethoscope}
+        title="Service categories"
+        description={`${q.trim() ? `${filtered.length} of ${categories.length}` : categories.length} categor${(q.trim() ? filtered.length : categories.length) === 1 ? 'y' : 'ies'} — hierarchical taxonomy for the service catalogue.`}
+        inlineBadge={permsReady && !canManageServices ? (
+          <span
+            title="You can view categories but can't make changes."
+            style={{ fontSize: '0.7rem', padding: '0.2rem 0.55rem', borderRadius: 999, background: 'var(--subtle-bg)', color: 'var(--text-secondary)', border: '1px solid var(--border-color)', fontWeight: 500 }}
+          >
+            View only
+          </span>
+        ) : null}
+      >
         {canManageServices && (
           <button onClick={() => (showAdd ? resetForm() : setShowAdd(true))} style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 1rem', background: 'var(--primary-color, var(--accent-color))', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer' }}>
             <Plus size={16} /> {showAdd ? 'Cancel' : 'New category'}
           </button>
         )}
-      </header>
+      </PageHeader>
 
       {showAdd && canManageServices && (
         <form onSubmit={submit} style={{ background: 'var(--bg-elev)', padding: '1rem', borderRadius: 8, marginBottom: '1.5rem', display: 'grid', gap: '0.75rem', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 240px), 1fr))' }}>

@@ -7,6 +7,7 @@ import { Recycle, Plus, Pencil, Trash2 } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { usePermissions } from '../../hooks/usePermissions';
+import PageHeader from '../../components/PageHeader';
 
 const UNIT_OPTIONS = ['ml', 'gm', 'kg', 'piece', 'unit', 'bottle', 'tube', 'pack', 'ltr'];
 const EMPTY = { serviceId: '', productId: '', quantityPerVisit: '', unit: '', isActive: true };
@@ -105,29 +106,25 @@ export default function AutoConsumptionRules() {
 
   return (
     <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
-      <header style={{ marginBottom: '1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
-        <div>
-          <h1 style={{ fontSize: '1.75rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-            <Recycle size={24} /> Auto-consumption rules
-            {permsReady && !canManage && (
-              <span
-                title="You can view rules but can't make changes."
-                style={{ fontSize: '0.7rem', padding: '0.2rem 0.55rem', borderRadius: 999, background: 'var(--subtle-bg)', color: 'var(--text-secondary)', border: '1px solid var(--border-color)', fontWeight: 500 }}
-              >
-                View only
-              </span>
-            )}
-          </h1>
-          <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-            When a visit completes for the matching service, the listed product is automatically consumed in the configured quantity.
-          </p>
-        </div>
+      <PageHeader
+        icon={Recycle}
+        title="Auto-consumption rules"
+        description="When a visit completes for the matching service, the listed product is automatically consumed in the configured quantity."
+        inlineBadge={permsReady && !canManage ? (
+          <span
+            title="You can view rules but can't make changes."
+            style={{ fontSize: '0.7rem', padding: '0.2rem 0.55rem', borderRadius: 999, background: 'var(--subtle-bg)', color: 'var(--text-secondary)', border: '1px solid var(--border-color)', fontWeight: 500 }}
+          >
+            View only
+          </span>
+        ) : null}
+      >
         {canManage && (
           <button onClick={() => (showForm ? reset() : setShowForm(true))} style={primaryBtnStyle}>
             <Plus size={16} /> {showForm ? 'Cancel' : 'New rule'}
           </button>
         )}
-      </header>
+      </PageHeader>
 
       {showForm && canManage && (
         <form onSubmit={submit} className="glass" style={{ padding: '1.25rem', marginBottom: '1rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 240px), 1fr))', gap: '0.5rem' }}>

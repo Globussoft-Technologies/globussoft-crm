@@ -29,6 +29,7 @@ import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 // Issue #816: Reusable CSV import/export toolbar.
 import CsvImportExportToolbar from '../../components/wellness/CsvImportExportToolbar';
+import PageHeader from '../../components/PageHeader';
 
 const DOSAGE_FORMS = ['tablet', 'capsule', 'syrup', 'injection', 'topical', 'drops', 'inhaler', 'other'];
 
@@ -112,30 +113,25 @@ export default function Drugs() {
 
   return (
     <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
-      <header style={{ marginBottom: '1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
-        <div>
-          <h1 style={{ fontSize: '1.75rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <Pill size={24} /> Drug catalogue
-          </h1>
-          <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-            {drugs.length} drug{drugs.length === 1 ? '' : 's'} — used by the prescription writer&apos;s typeahead.
-          </p>
-        </div>
-        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
-          {/* Issue #816: drugs CSV. Pass current search as a filter so the
-              export reflects what's on screen. */}
-          <CsvImportExportToolbar
-            entity="products"
-            label="Drugs"
-            filters={{ q: search }}
-            formats={['csv', 'xlsx']}
-            onImported={() => load(search)}
-          />
-          <button onClick={() => (showAdd ? resetForm() : setShowAdd(true))} style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 1rem', background: 'var(--primary-color, var(--accent-color))', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer' }}>
-            <Plus size={16} /> {showAdd ? 'Cancel' : 'New drug'}
-          </button>
-        </div>
-      </header>
+      <PageHeader
+        icon={Pill}
+        title="Drug catalogue"
+        count={drugs.length}
+        description={`drug${drugs.length === 1 ? '' : 's'} — used by the prescription writer's typeahead.`}
+      >
+        {/* Issue #816: drugs CSV. Pass current search as a filter so the
+            export reflects what's on screen. */}
+        <CsvImportExportToolbar
+          entity="products"
+          label="Drugs"
+          filters={{ q: search }}
+          formats={['csv', 'xlsx']}
+          onImported={() => load(search)}
+        />
+        <button onClick={() => (showAdd ? resetForm() : setShowAdd(true))} style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 1rem', background: 'var(--primary-color, var(--accent-color))', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer' }}>
+          <Plus size={16} /> {showAdd ? 'Cancel' : 'New drug'}
+        </button>
+      </PageHeader>
 
       <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'stretch', marginBottom: '1rem' }}>
         <div style={{

@@ -13,6 +13,7 @@ import { ScaleIcon, Plus } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { usePermissions } from '../../hooks/usePermissions';
+import PageHeader from '../../components/PageHeader';
 
 const REASONS = ['SHRINKAGE', 'DAMAGE', 'EXPIRY', 'RECOUNT', 'TRANSFER_OUT', 'TRANSFER_IN', 'MANUAL'];
 const EMPTY = { productId: '', quantityDelta: '', reason: 'RECOUNT', notes: '' };
@@ -87,29 +88,25 @@ export default function InventoryAdjustments() {
 
   return (
     <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
-      <header style={{ marginBottom: '1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
-        <div>
-          <h1 style={{ fontSize: '1.75rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-            <ScaleIcon size={24} /> Inventory adjustments
-            {permsReady && !canWriteInventory && (
-              <span
-                title="You can view adjustments but can't make changes."
-                style={{ fontSize: '0.7rem', padding: '0.2rem 0.55rem', borderRadius: 999, background: 'var(--subtle-bg)', color: 'var(--text-secondary)', border: '1px solid var(--border-color)', fontWeight: 500 }}
-              >
-                View only
-              </span>
-            )}
-          </h1>
-          <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-            Signed deltas — positive credits stock, negative debits. Use this for shrinkage, damage, recounts, transfers.
-          </p>
-        </div>
+      <PageHeader
+        icon={ScaleIcon}
+        title="Inventory adjustments"
+        description="Signed deltas — positive credits stock, negative debits. Use this for shrinkage, damage, recounts, transfers."
+        inlineBadge={permsReady && !canWriteInventory ? (
+          <span
+            title="You can view adjustments but can't make changes."
+            style={{ fontSize: '0.7rem', padding: '0.2rem 0.55rem', borderRadius: 999, background: 'var(--subtle-bg)', color: 'var(--text-secondary)', border: '1px solid var(--border-color)', fontWeight: 500 }}
+          >
+            View only
+          </span>
+        ) : null}
+      >
         {canWriteInventory && (
           <button onClick={() => setShowForm((v) => !v)} style={primaryBtnStyle}>
             <Plus size={16} /> {showForm ? 'Cancel' : 'New adjustment'}
           </button>
         )}
-      </header>
+      </PageHeader>
 
       <div className="glass" style={{ padding: '0.85rem 1rem', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
         <label style={{ fontSize: '0.85rem' }}>Filter by product:&nbsp;

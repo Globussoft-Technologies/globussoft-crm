@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Truck, Plus, Pencil, Trash2, Archive, ArchiveRestore, Search } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
+import PageHeader from '../../components/PageHeader';
 
 const EMPTY = { name: '', contactPerson: '', phone: '', email: '', gstin: '', addressLine: '', isActive: true };
 
@@ -119,19 +120,15 @@ export default function Vendors() {
 
   return (
     <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
-      <header style={{ marginBottom: '1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
-        <div>
-          <h1 style={{ fontSize: '1.75rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <Truck size={24} /> Vendors
-          </h1>
-          <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-            {counts.active} active{counts.archived > 0 ? `, ${counts.archived} archived` : ''} — used when recording inventory receipts.
-          </p>
-        </div>
+      <PageHeader
+        icon={Truck}
+        title="Vendors"
+        description={`${counts.active} active${counts.archived > 0 ? `, ${counts.archived} archived` : ''} — used when recording inventory receipts.`}
+      >
         <button onClick={() => (showForm ? reset() : setShowForm(true))} style={primaryBtnStyle}>
           <Plus size={16} /> {showForm ? 'Cancel' : 'New vendor'}
         </button>
-      </header>
+      </PageHeader>
 
       {showForm && (
         <form onSubmit={submit} className="glass" style={{ padding: '1.25rem', marginBottom: '1rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 240px), 1fr))', gap: '0.5rem' }}>

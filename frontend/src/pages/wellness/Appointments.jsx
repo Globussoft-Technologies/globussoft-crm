@@ -1,8 +1,10 @@
 import { useContext, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Calendar, Search, Filter, RefreshCw } from 'lucide-react';
+import { Calendar, Search, Filter, RefreshCw, UserPlus } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { AuthContext } from '../../App';
+import { useNotify } from '../../utils/notify';
+import { AssignDoctorModal, displayStatus } from './Calendar';
 
 /**
  * Appointments — tenant-wide list view.
@@ -23,6 +25,10 @@ import { AuthContext } from '../../App';
 export default function Appointments() {
   const { user } = useContext(AuthContext) || {};
   const isOrg = user?.role === 'ADMIN' || user?.role === 'MANAGER';
+  const notify = useNotify();
+  // Pending visit currently being assigned to a doctor. Set when the
+  // user clicks the "Assign doctor" action on a pending row.
+  const [assignTarget, setAssignTarget] = useState(null);
 
   // Filter state — default to "this week" so the page is useful without
   // any clicks. Admin can widen / narrow from there.
@@ -338,19 +344,41 @@ export default function Appointments() {
                     )}
                   </Td>
                   <Td>
-                    <StatusBadge status={v.status} />
+                    <StatusBadge status={displayStatus(v)} />
                   </Td>
                   <Td>
-                    <Link
-                      to={`/wellness/calendar?focus=${v.id}${v.visitDate ? `&date=${isoLocalDate(v.visitDate)}` : ''}`}
-                      style={{
-                        fontSize: '0.8rem',
-                        color: 'var(--primary-color, var(--accent-color))',
-                        textDecoration: 'none',
-                      }}
-                    >
-                      Open in calendar →
-                    </Link>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', alignItems: 'flex-start' }}>
+                      {/* Assign-doctor action — only surfaces for pending
+                          visits (doctorId is null and still booked). Org
+                          roles only; doctors viewing their own list don't
+                          need the action. */}
+                      {isOrg && !v.doctorId && v.status === 'booked' && (
+                        <button
+                          type="button"
+                          onClick={() => setAssignTarget(v)}
+                          data-testid={`appointments-assign-${v.id}`}
+                          style={{
+                            display: 'inline-flex', alignItems: 'center', gap: '0.3rem',
+                            padding: '0.3rem 0.6rem', borderRadius: 6,
+                            fontSize: '0.78rem', fontWeight: 500,
+                            background: 'var(--primary-color, var(--accent-color, #6366f1))',
+                            color: '#fff', border: 'none', cursor: 'pointer',
+                          }}
+                        >
+                          <UserPlus size={13} /> Assign doctor
+                        </button>
+                      )}
+                      <Link
+                        to={`/wellness/calendar?focus=${v.id}${v.visitDate ? `&date=${isoLocalDate(v.visitDate)}` : ''}`}
+                        style={{
+                          fontSize: '0.8rem',
+                          color: 'var(--primary-color, var(--accent-color))',
+                          textDecoration: 'none',
+                        }}
+                      >
+                        Open in calendar →
+                      </Link>
+                    </div>
                   </Td>
                 </tr>
               ))}
@@ -368,6 +396,20 @@ export default function Appointments() {
         >
           {sorted.length} of {visits.length} appointments shown
         </div>
+      )}
+
+      {assignTarget && (
+        <AssignDoctorModal
+          visit={assignTarget}
+          notify={notify}
+          onClose={() => setAssignTarget(null)}
+          onAssigned={() => {
+            setAssignTarget(null);
+            // Refetch the list so the just-assigned visit shows its new
+            // doctor + drops its Assign button.
+            setReloadTick((t) => t + 1);
+          }}
+        />
       )}
     </div>
   );
@@ -413,9 +455,18 @@ function isoLocalDate(input) {
 
 function StatusBadge({ status }) {
   const palette = {
+    // 'pending' is a presentational status — surfaced for visits whose
+    // doctorId is null. The Calendar export `displayStatus` flips
+    // status='booked' + doctorId=null into 'pending' so the admin UI
+    // never displays raw 'booked' for an unassigned appointment.
+    pending: { fg: '#f59e0b', bg: 'rgba(245,158,11,0.12)' },
+    booked: { fg: '#3b82f6', bg: 'rgba(59,130,246,0.1)' },
     scheduled: { fg: '#3b82f6', bg: 'rgba(59,130,246,0.1)' },
     'checked-in': { fg: '#0ea5e9', bg: 'rgba(14,165,233,0.1)' },
     'in-progress': { fg: '#a855f7', bg: 'rgba(168,85,247,0.1)' },
+    'in-treatment': { fg: '#f59e0b', bg: 'rgba(245,158,11,0.12)' },
+    arrived: { fg: '#a855f7', bg: 'rgba(168,85,247,0.12)' },
+    confirmed: { fg: '#6366f1', bg: 'rgba(99,102,241,0.12)' },
     completed: { fg: '#10b981', bg: 'rgba(16,185,129,0.1)' },
     cancelled: { fg: '#6b7280', bg: 'rgba(107,114,128,0.1)' },
     'no-show': { fg: '#ef4444', bg: 'rgba(239,68,68,0.1)' },

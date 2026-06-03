@@ -11,11 +11,17 @@ export default function Products() {
   // PUT=products.update, DELETE=products.delete. We default to fail-closed
   // (canX=false until perms resolve) so buttons don't flash visible during
   // the initial permission fetch.
-  const { hasPermission, isReady: permsReady } = usePermissions();
+  const { hasPermission, isReady: permsReady, userType } = usePermissions();
   const canWriteProducts  = permsReady && hasPermission('products', 'write');
   const canUpdateProducts = permsReady && hasPermission('products', 'update');
   const canDeleteProducts = permsReady && hasPermission('products', 'delete');
   const canMutateProducts = canWriteProducts || canUpdateProducts || canDeleteProducts;
+  // CUSTOMER users see a catalogue-only view: no SKU, stock, or product
+  // type columns (backend strips these fields from the response anyway,
+  // but hiding the columns keeps the table compact and honest about
+  // what's renderable). Pairs with the allowCustomer opt-in on
+  // GET /api/wellness/products.
+  const isCustomerView = userType === 'CUSTOMER';
   const [products, setProducts] = useState([]);
   const [categories, setCategories] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -336,11 +342,17 @@ export default function Products() {
             <thead>
               <tr style={{ borderBottom: '2px solid var(--border-color)' }}>
                 <th style={{ textAlign: 'left', padding: '1rem', fontWeight: 600 }}>Product</th>
-                <th style={{ textAlign: 'left', padding: '1rem', fontWeight: 600 }}>SKU</th>
+                {!isCustomerView && (
+                  <th style={{ textAlign: 'left', padding: '1rem', fontWeight: 600 }}>SKU</th>
+                )}
                 <th style={{ textAlign: 'left', padding: '1rem', fontWeight: 600 }}>Category</th>
                 <th style={{ textAlign: 'right', padding: '1rem', fontWeight: 600 }}>Price</th>
-                <th style={{ textAlign: 'center', padding: '1rem', fontWeight: 600 }}>Stock</th>
-                <th style={{ textAlign: 'center', padding: '1rem', fontWeight: 600 }}>Type</th>
+                {!isCustomerView && (
+                  <th style={{ textAlign: 'center', padding: '1rem', fontWeight: 600 }}>Stock</th>
+                )}
+                {!isCustomerView && (
+                  <th style={{ textAlign: 'center', padding: '1rem', fontWeight: 600 }}>Type</th>
+                )}
                 {(canUpdateProducts || canDeleteProducts) && (
                   <th style={{ textAlign: 'center', padding: '1rem', fontWeight: 600 }}>Actions</th>
                 )}
@@ -364,30 +376,36 @@ export default function Products() {
                       </div>
                     </div>
                   </td>
-                  <td style={{ padding: '1rem', fontFamily: 'monospace', fontSize: '0.9rem' }}>{product.sku || '-'}</td>
-                  <td style={{ padding: '1rem', fontSize: '0.9rem' }}>{getCategoryName(product.categoryId)}</td>
+                  {!isCustomerView && (
+                    <td style={{ padding: '1rem', fontFamily: 'monospace', fontSize: '0.9rem' }}>{product.sku || '-'}</td>
+                  )}
+                  <td style={{ padding: '1rem', fontSize: '0.9rem' }}>{product.category?.name || getCategoryName(product.categoryId)}</td>
                   <td style={{ padding: '1rem', textAlign: 'right', fontWeight: 500 }}>₹{(product.price ?? 0).toFixed(2)}</td>
-                  <td style={{ padding: '1rem', textAlign: 'center' }}>
-                    <span
-                      onClick={() => setSelectedProductForDetails(product)}
-                      style={{
-                        padding: '0.25rem 0.75rem',
-                        background: product.currentStock > product.threshold ? 'rgba(34, 197, 94, 0.1)' : 'rgba(239, 68, 68, 0.1)',
-                        color: product.currentStock > product.threshold ? '#22c55e' : '#ef4444',
-                        borderRadius: 4,
-                        fontSize: '0.85rem',
-                        cursor: 'pointer',
-                        display: 'inline-block',
-                        transition: 'all 0.2s',
-                      }}
-                      onMouseEnter={(e) => e.target.style.opacity = '0.7'}
-                      onMouseLeave={(e) => e.target.style.opacity = '1'}
-                      title="Click to see details"
-                    >
-                      {product.currentStock}
-                    </span>
-                  </td>
-                  <td style={{ padding: '1rem', textAlign: 'center', fontSize: '0.85rem' }}>{product.productType || '-'}</td>
+                  {!isCustomerView && (
+                    <td style={{ padding: '1rem', textAlign: 'center' }}>
+                      <span
+                        onClick={() => setSelectedProductForDetails(product)}
+                        style={{
+                          padding: '0.25rem 0.75rem',
+                          background: product.currentStock > product.threshold ? 'rgba(34, 197, 94, 0.1)' : 'rgba(239, 68, 68, 0.1)',
+                          color: product.currentStock > product.threshold ? '#22c55e' : '#ef4444',
+                          borderRadius: 4,
+                          fontSize: '0.85rem',
+                          cursor: 'pointer',
+                          display: 'inline-block',
+                          transition: 'all 0.2s',
+                        }}
+                        onMouseEnter={(e) => e.target.style.opacity = '0.7'}
+                        onMouseLeave={(e) => e.target.style.opacity = '1'}
+                        title="Click to see details"
+                      >
+                        {product.currentStock}
+                      </span>
+                    </td>
+                  )}
+                  {!isCustomerView && (
+                    <td style={{ padding: '1rem', textAlign: 'center', fontSize: '0.85rem' }}>{product.productType || '-'}</td>
+                  )}
                   {(canUpdateProducts || canDeleteProducts) && (
                     <td style={{ padding: '1rem', textAlign: 'center' }}>
                       <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'center' }}>

@@ -775,7 +775,7 @@ function PlanCard({ plan, services = [], isAdmin, isOwned, menuOpen, onToggleMen
 
       <div style={{ marginTop: '2.5rem', display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
         <h3 style={{ fontSize: '1.35rem', fontWeight: 600, textTransform: 'capitalize' }}>{plan.name}</h3>
-        <div style={{ fontSize: '0.95rem', fontWeight: 500 }}>{formatMoney(plan.price, plan.currency || 'INR')}</div>
+        <div style={{ fontSize: '0.95rem', fontWeight: 500 }}>{formatMoney(plan.price, { currency: plan.currency || 'INR' })}</div>
         {/* Short description — single line, fade-truncated. Hidden on
             entitlement-only plans so the card stays clean. */}
         {plan.description && (
@@ -1332,7 +1332,7 @@ function PlanDetailModal({ plan, services, isAdmin, isOwned, onClose, onEdit, on
             <Monitor size={18} /> {durationLabel(plan.durationDays)}
           </div>
           <h2 id={titleId} style={{ fontSize: '1.45rem', fontWeight: 600, marginTop: '0.75rem', textTransform: 'capitalize' }}>{plan.name}</h2>
-          <div style={{ fontSize: '1.25rem', fontWeight: 600, marginTop: '0.35rem' }}>{formatMoney(plan.price, plan.currency || 'INR')}</div>
+          <div style={{ fontSize: '1.25rem', fontWeight: 600, marginTop: '0.35rem' }}>{formatMoney(plan.price, { currency: plan.currency || 'INR' })}</div>
         </div>
 
         <div style={{ height: 1, background: 'var(--border-color)', margin: '0 1.5rem' }} />
@@ -1344,7 +1344,7 @@ function PlanDetailModal({ plan, services, isAdmin, isOwned, onClose, onEdit, on
         <div style={{ padding: '1.25rem 1.5rem' }}>
           <h3 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '0.75rem' }}>Prepaid Card</h3>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.55rem' }}>
-            <CardRow label="Promotional Money" value={formatMoney(plan.price, plan.currency || 'INR')} />
+            <CardRow label="Promotional Money" value={formatMoney(plan.price, { currency: plan.currency || 'INR' })} />
             <CardRow
               label="Credit Amount"
               value={plan.description && /credit[:\s]*[₹]?\s*[\d,]+/i.test(plan.description)
@@ -1589,7 +1589,7 @@ function PurchaseModal({ plan, paying, onClose, onPay }) {
         </header>
 
         <div style={{ fontSize: '0.9rem', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
-          You'll pay <strong style={{ color: 'var(--text-primary)' }}>{formatMoney(plan.price, plan.currency || 'INR')}</strong> via Razorpay. The membership activates immediately on payment success and can be applied at appointment booking.
+          You'll pay <strong style={{ color: 'var(--text-primary)' }}>{formatMoney(plan.price, { currency: plan.currency || 'INR' })}</strong> via Razorpay. The membership activates immediately on payment success and can be applied at appointment booking.
         </div>
 
         <div style={{
@@ -1602,7 +1602,7 @@ function PurchaseModal({ plan, paying, onClose, onPay }) {
           gap: '0.35rem',
         }}>
           <div><strong>{plan.name}</strong> <span style={{ color: 'var(--text-secondary)' }}>· {durationLabel(plan.durationDays)}</span></div>
-          <div style={{ fontSize: '1.2rem', fontWeight: 600 }}>{formatMoney(plan.price, plan.currency || 'INR')}</div>
+          <div style={{ fontSize: '1.2rem', fontWeight: 600 }}>{formatMoney(plan.price, { currency: plan.currency || 'INR' })}</div>
         </div>
 
         <button
@@ -1626,7 +1626,7 @@ function PurchaseModal({ plan, paying, onClose, onPay }) {
           }}
         >
           <CreditCard size={14} />
-          {paying ? 'Opening Razorpay…' : `Pay ${formatMoney(plan.price, plan.currency || 'INR')} with Razorpay`}
+          {paying ? 'Opening Razorpay…' : `Pay ${formatMoney(plan.price, { currency: plan.currency || 'INR' })} with Razorpay`}
         </button>
       </div>
     </div>

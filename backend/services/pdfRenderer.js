@@ -274,7 +274,7 @@ function statusKind(raw) {
 // Rounded pill. Returns the right edge so callers can chain content
 // after the pill on the same baseline.
 function drawStatusPill(doc, label, x, y, opts = {}) {
-  const text = String(label || "—").toUpperCase();
+  let text = String(label || "—").toUpperCase();
   const kind = opts.kind || statusKind(label);
   const palette = STATUS_PILL[kind] || STATUS_PILL.neutral;
   const padX = opts.padX != null ? opts.padX : 8;
@@ -282,6 +282,19 @@ function drawStatusPill(doc, label, x, y, opts = {}) {
   const fontSize = opts.fontSize || 8;
   doc.save();
   doc.font("Helvetica-Bold").fontSize(fontSize);
+  // Opt-in cap: when maxWidth is supplied, truncate the label (".." — the "…"
+  // glyph is absent from WinAnsi Helvetica) so the pill never overflows its
+  // column. Callers that omit maxWidth keep the original auto-size behaviour.
+  if (opts.maxWidth) {
+    const maxTextW = opts.maxWidth - padX * 2;
+    if (doc.widthOfString(text) > maxTextW) {
+      const ell = "..";
+      while (text.length > 1 && doc.widthOfString(text + ell) > maxTextW) {
+        text = text.slice(0, -1);
+      }
+      text = text.replace(/\s+$/, "") + ell;
+    }
+  }
   const textW = doc.widthOfString(text);
   const w = textW + padX * 2;
   const h = fontSize + padY * 2;
@@ -887,9 +900,12 @@ async function renderPrescriptionPdf(prescription, patient, clinic, doctor, opts
         .text(dosageText, cols[2].x + 8, rowY + rowH / 2 - 6, {
           width: cols[2].w - 16, ellipsis: true, lineBreak: false,
         });
-      // FREQUENCY pill
+      // FREQUENCY pill — capped to the column so long values (e.g.
+      // "THREE TIMES DAILY (TDS) AS NEEDED") truncate instead of bleeding
+      // into the Duration column.
       drawStatusPill(doc, freq, cols[3].x + 8, rowY + rowH / 2 - 8, {
         kind: "success", fontSize: 8, padX: 8, padY: 3,
+        maxWidth: cols[3].w - 16,
       });
       // DURATION
       doc.font("Helvetica").fontSize(10).fillColor(BRAND.textBody)

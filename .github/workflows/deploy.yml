@@ -758,10 +758,8 @@ jobs:
             # existing NULL values block `prisma db push`. Self-heal with raw SQL
             # via prisma db execute (loads .env automatically, no client init needed).
             echo "=== heal NULL User.name (schema-hardening guard) ==="
-            cat > /tmp/fix-null-names.sql <<'SQL'
-UPDATE User SET name = '' WHERE name IS NULL;
-SQL
-npx prisma db execute --file=/tmp/fix-null-names.sql --schema=prisma/schema.prisma
+            printf '%s\n' "UPDATE User SET name = '' WHERE name IS NULL;" > /tmp/fix-null-names.sql
+            npx prisma db execute --file=/tmp/fix-null-names.sql --schema=prisma/schema.prisma
 
             echo "=== prisma db push (schema sync) ==="
             npx prisma db push --skip-generate --accept-data-loss 2>&1 | tail -5
@@ -948,10 +946,8 @@ npx prisma db execute --file=/tmp/fix-null-names.sql --schema=prisma/schema.pris
             # existing NULL values block `prisma db push`. Self-heal with raw SQL
             # via prisma db execute (loads .env automatically, no client init needed).
             echo "=== heal NULL User.name (schema-hardening guard) ==="
-            cat > /tmp/fix-null-names.sql <<'SQL'
-UPDATE User SET name = '' WHERE name IS NULL;
-SQL
-npx prisma db execute --file=/tmp/fix-null-names.sql --schema=prisma/schema.prisma
+            printf '%s\n' "UPDATE User SET name = '' WHERE name IS NULL;" > /tmp/fix-null-names.sql
+            npx prisma db execute --file=/tmp/fix-null-names.sql --schema=prisma/schema.prisma
 
             echo "=== prisma db push (schema sync) ==="
             npx prisma db push --skip-generate --accept-data-loss 2>&1 | tail -5

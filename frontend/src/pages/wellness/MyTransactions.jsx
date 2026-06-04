@@ -221,7 +221,7 @@ export default function MyTransactions() {
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: '1rem' }}>
           {['ALL', ...categoriesPresent].map((cat) => {
             const active = activeFilter === cat;
-            const m = cat === 'ALL' ? { label: 'All', color: 'var(--text-primary)' } : metaFor(cat);
+            const m = cat === 'ALL' ? { label: 'All', color: 'var(--primary-color, var(--accent-color))' } : metaFor(cat);
             return (
               <button
                 key={cat}

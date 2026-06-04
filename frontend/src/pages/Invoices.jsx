@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Receipt, Plus, CheckCircle2, Trash2, DollarSign, Clock, AlertTriangle, Download, RefreshCw, CreditCard, X, Filter } from 'lucide-react';
+import { Receipt, Plus, CheckCircle2, Trash2, IndianRupee, Clock, AlertTriangle, Download, RefreshCw, CreditCard, X, Filter } from 'lucide-react';
 import { fetchApi, getAuthToken } from '../utils/api';
 import { useNotify } from '../utils/notify';
 
@@ -432,7 +432,7 @@ export default function Invoices() {
           background: 'rgba(245,158,11,0.1)', color: '#f59e0b', border: '1px solid rgba(245,158,11,0.3)',
           display: 'flex', alignItems: 'center', gap: '0.4rem',
         }}>
-          <DollarSign size={14} /> Outstanding: {formatCurrency(stats.totalOutstanding)}
+          <IndianRupee size={14} /> Outstanding: {formatCurrency(stats.totalOutstanding)}
         </span>
         <span style={{
           padding: '0.4rem 1rem', borderRadius: '999px', fontSize: '0.8rem', fontWeight: '600',
@@ -668,7 +668,7 @@ export default function Invoices() {
                         {inv.invoiceNum}
                       </td>
                       <td style={{ padding: '1rem 0.5rem' }}>
-                        {/* #242: removed the hardcoded $ DollarSign icon — formatCurrency()
+                        {/* #242: removed the hardcoded $ IndianRupee icon — formatCurrency()
                             already prefixes the right symbol (₹ for INR tenants, $ for USD,
                             etc.). Stacking the icon caused "$ ₹1,500.00" on Indian tenants. */}
                         <span style={{ color: 'var(--success-color)', fontWeight: 600 }}>{formatCurrency(inv.amount)}</span>

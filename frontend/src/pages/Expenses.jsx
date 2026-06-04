@@ -3,7 +3,7 @@ import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { formatMoney, currencySymbol } from '../utils/money';
 import { formatDate } from '../utils/date';
-import { Receipt, Plus, Trash2, CheckCircle2, XCircle, DollarSign } from 'lucide-react';
+import { Receipt, Plus, Trash2, CheckCircle2, XCircle, IndianRupee } from 'lucide-react';
 import { DateRangeFilter, resolveDateRange, EMPTY_DATE_FILTER } from '../components/wellness/DateRangeFilter';
 
 const CATEGORY_OPTIONS = [
@@ -272,21 +272,21 @@ export default function Expenses() {
           background: 'rgba(245,158,11,0.1)', color: '#f59e0b', border: '1px solid rgba(245,158,11,0.3)',
           display: 'flex', alignItems: 'center', gap: '0.4rem',
         }}>
-          <DollarSign size={12} /> Pending: ${totalPending.toFixed(2)}
+          <IndianRupee size={12} /> Pending: {formatMoney(totalPending)}
         </span>
         <span style={{
           padding: '0.4rem 1rem', borderRadius: '999px', fontSize: '0.8rem', fontWeight: '600',
           background: 'rgba(16,185,129,0.1)', color: '#10b981', border: '1px solid rgba(16,185,129,0.3)',
           display: 'flex', alignItems: 'center', gap: '0.4rem',
         }}>
-          <CheckCircle2 size={12} /> Approved: ${totalApproved.toFixed(2)}
+          <CheckCircle2 size={12} /> Approved: {formatMoney(totalApproved)}
         </span>
         <span style={{
           padding: '0.4rem 1rem', borderRadius: '999px', fontSize: '0.8rem', fontWeight: '600',
           background: 'rgba(59,130,246,0.1)', color: '#3b82f6', border: '1px solid rgba(59,130,246,0.3)',
           display: 'flex', alignItems: 'center', gap: '0.4rem',
         }}>
-          <DollarSign size={12} /> Reimbursed: ${totalReimbursed.toFixed(2)}
+          <IndianRupee size={12} /> Reimbursed: {formatMoney(totalReimbursed)}
         </span>
         <span style={{
           padding: '0.4rem 1rem', borderRadius: '999px', fontSize: '0.8rem', fontWeight: '600',
@@ -423,7 +423,7 @@ export default function Expenses() {
                       onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
                       <td style={{ padding: '0.75rem 0.5rem', fontWeight: '500' }}>{exp.title}</td>
                       <td style={{ padding: '0.75rem 0.5rem', fontWeight: '600', color: '#10b981' }}>
-                        ${parseFloat(exp.amount).toFixed(2)}
+                        {formatMoney(exp.amount)}
                       </td>
                       <td style={{ padding: '0.75rem 0.5rem' }}>
                         <CategoryBadge category={exp.category} />
@@ -494,7 +494,7 @@ export default function Expenses() {
                                 padding: '0.3rem 0.6rem', fontSize: '0.7rem', fontWeight: '600',
                                 cursor: 'pointer', transition: '0.15s',
                               }}>
-                              <DollarSign size={12} /> Reimburse
+                              <IndianRupee size={12} /> Reimburse
                             </button>
                           )}
                           <button

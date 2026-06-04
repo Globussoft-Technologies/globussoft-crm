@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { FileSpreadsheet, Plus, Trash2, DollarSign, ArrowRightLeft, X, Download, Mail } from 'lucide-react';
+import { FileSpreadsheet, Plus, Trash2, IndianRupee, ArrowRightLeft, X, Download, Mail } from 'lucide-react';
 import { fetchApi, getAuthToken } from '../utils/api';
 import { useNotify } from '../utils/notify';
 
@@ -354,7 +354,7 @@ export default function Estimates() {
           background: 'rgba(16,185,129,0.1)', color: '#10b981', border: '1px solid rgba(16,185,129,0.3)',
           display: 'flex', alignItems: 'center', gap: '0.4rem',
         }}>
-          <DollarSign size={14} /> Total Value: {formatCurrency(visibleTotalValue)}
+          <IndianRupee size={14} /> Total Value: {formatCurrency(visibleTotalValue)}
         </span>
       </div>
 
@@ -624,7 +624,7 @@ export default function Estimates() {
                         {est.contact?.name || '-'}
                       </td>
                       <td style={{ padding: '1rem 0.5rem' }}>
-                        {/* #256: removed the hardcoded $ DollarSign — formatCurrency()
+                        {/* #256: removed the hardcoded $ IndianRupee — formatCurrency()
                             already prefixes the right symbol from tenant.defaultCurrency,
                             so wellness/India tenants no longer see '$ ₹100.00'. Mirrors
                             the same fix applied in Invoices.jsx (#242). */}

@@ -19,9 +19,29 @@ import { AssignDoctorModal, displayStatus } from './Calendar';
  *     server enforces who sees what.
  *
  * The page assumes the visit row is the "appointment" (in this codebase
- * a booking creates a Visit row with status='scheduled'; the words are
+ * a booking creates a Visit row with status='booked'; status terms are
  * used interchangeably elsewhere — Calendar.jsx, the booking flow, etc.)
+ *
+ * Status filter is keyed to the real Visit.status values used elsewhere
+ * (per Calendar.jsx palette). 'pending' is a CLIENT-SIDE presentational
+ * filter only — it maps to `displayStatus(v) === 'pending'` (i.e.
+ * status='booked' && doctorId IS NULL) since the server has no notion
+ * of pending separate from booked.
  */
+// Real Visit.status set per Calendar.jsx + wellness.js routes. 'pending'
+// is presentational only — derived from `booked` + null doctorId via
+// displayStatus(). Keep this list in lockstep with Calendar's palette.
+const STATUS_OPTIONS = [
+  { value: '', label: 'Any status' },
+  { value: 'booked', label: 'Booked' },
+  { value: 'pending', label: 'Pending (unassigned)', clientOnly: true },
+  { value: 'confirmed', label: 'Confirmed' },
+  { value: 'arrived', label: 'Arrived' },
+  { value: 'in-treatment', label: 'In treatment' },
+  { value: 'completed', label: 'Completed' },
+  { value: 'cancelled', label: 'Cancelled' },
+  { value: 'no-show', label: 'No-show' },
+];
 export default function Appointments() {
   const { user } = useContext(AuthContext) || {};
   const isOrg = user?.role === 'ADMIN' || user?.role === 'MANAGER';
@@ -55,7 +75,9 @@ export default function Appointments() {
     qs.set('to', `${to}T23:59:59${localTzOffset()}`);
     qs.set('limit', '500');
     if (doctorId) qs.set('doctorId', doctorId);
-    if (status) qs.set('status', status);
+    // 'pending' is client-side-only — server stores it as 'booked' with
+    // null doctorId. Send everything else through as-is.
+    if (status && status !== 'pending') qs.set('status', status);
     fetchApi(`/api/wellness/visits?${qs.toString()}`, { silent: true })
       .then((res) => {
         if (cancelled) return;
@@ -93,16 +115,24 @@ export default function Appointments() {
     };
   }, [isOrg]);
 
-  // Client-side search across patient name + service name. Keeps the
-  // server query stable + lets the user narrow without a round-trip.
+  // Client-side filters: presentational 'pending' status + free-text search.
+  // Server already narrows by date / doctor / real status; this layer adds
+  // the bits the server can't (pending = booked + no doctor) and per-row
+  // search without a round-trip.
   const filtered = useMemo(() => {
+    let rows = visits;
+    if (status === 'pending') {
+      rows = rows.filter((v) => v.status === 'booked' && !v.doctorId);
+    }
     const term = search.trim().toLowerCase();
-    if (!term) return visits;
-    return visits.filter((v) => {
-      const blob = `${v.patient?.name || ''} ${v.service?.name || ''} ${v.doctor?.name || ''}`.toLowerCase();
-      return blob.includes(term);
-    });
-  }, [visits, search]);
+    if (term) {
+      rows = rows.filter((v) => {
+        const blob = `${v.patient?.name || ''} ${v.service?.name || ''} ${v.doctor?.name || ''}`.toLowerCase();
+        return blob.includes(term);
+      });
+    }
+    return rows;
+  }, [visits, status, search]);
 
   // Sort by visitDate ascending so the timeline reads top-to-bottom.
   const sorted = useMemo(
@@ -202,13 +232,9 @@ export default function Appointments() {
             onChange={(e) => setStatus(e.target.value)}
             style={{ width: '100%' }}
           >
-            <option value="">Any status</option>
-            <option value="scheduled">Scheduled</option>
-            <option value="checked-in">Checked in</option>
-            <option value="in-progress">In progress</option>
-            <option value="completed">Completed</option>
-            <option value="cancelled">Cancelled</option>
-            <option value="no-show">No-show</option>
+            {STATUS_OPTIONS.map((opt) => (
+              <option key={opt.value || 'any'} value={opt.value}>{opt.label}</option>
+            ))}
           </select>
         </label>
         <label style={fieldLabel}>

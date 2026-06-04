@@ -1,4 +1,4 @@
-import { DollarSign } from 'lucide-react';
+import { IndianRupee } from 'lucide-react';
 import WidgetCard from '../WidgetCard.jsx';
 import { useWidgetData, todayLocalISODate } from '../useWidgetData.js';
 
@@ -23,7 +23,7 @@ export default function RevenueVsTarget({ meta }) {
     <WidgetCard
       title={meta?.title || 'Revenue vs target'}
       description={meta?.description}
-      icon={DollarSign}
+      icon={IndianRupee}
       loading={loading}
       error={error}
       empty={!loading && !error && revenue === 0 && !target}

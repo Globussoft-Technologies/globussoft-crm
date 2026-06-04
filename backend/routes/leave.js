@@ -786,7 +786,20 @@ router.get('/availability', verifyToken, async (req, res) => {
         name: true,
         email: true,
         role: true,
-        wellnessRole: true
+        wellnessRole: true,
+        // Mirror the userRoles join from routes/staff.js so the availability
+        // widget can surface the assigned RBAC role (Doctor / Nurse / custom)
+        // instead of falling through to the access tier ("USER") when the
+        // legacy wellnessRole column is null — happens for staff created
+        // before deriveWellnessRole existed or when the picked role's key
+        // doesn't match a wellness-catalog entry on this tenant.
+        userRoles: {
+          take: 1,
+          orderBy: { assignedAt: 'desc' },
+          select: {
+            role: { select: { id: true, key: true, name: true } }
+          }
+        }
       },
       orderBy: { name: 'asc' }
     });
@@ -803,15 +816,21 @@ router.get('/availability', verifyToken, async (req, res) => {
     });
 
     // Merge staff data with availability status
-    const availability = allStaff.map(staff => ({
-      id: staff.id,
-      name: staff.name,
-      email: staff.email,
-      role: staff.role,
-      wellnessRole: staff.wellnessRole,
-      available: !leaveMap[staff.id],
-      leave: leaveMap[staff.id] || null
-    }));
+    const availability = allStaff.map(staff => {
+      const assigned = staff.userRoles?.[0]?.role || null;
+      return {
+        id: staff.id,
+        name: staff.name,
+        email: staff.email,
+        role: staff.role,
+        wellnessRole: staff.wellnessRole,
+        primaryRole: assigned
+          ? { id: assigned.id, key: assigned.key, name: assigned.name }
+          : null,
+        available: !leaveMap[staff.id],
+        leave: leaveMap[staff.id] || null
+      };
+    });
 
     res.json(availability);
   } catch (err) {

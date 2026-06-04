@@ -2,7 +2,7 @@ import {
   Receipt,
   Plus,
   ArrowUpFromLine,
-  CircleDollarSign,
+  IndianRupee,
   UserCircle2,
   UserX,
 } from 'lucide-react';
@@ -298,7 +298,7 @@ export default function TransactionList({
                       gap: '0.5rem',
                     }}
                   >
-                    <CircleDollarSign
+                    <IndianRupee
                       size={14}
                       color="var(--success-color)"
                     />

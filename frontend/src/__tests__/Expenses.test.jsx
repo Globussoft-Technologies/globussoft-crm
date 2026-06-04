@@ -198,8 +198,9 @@ describe('<Expenses /> — page surface', () => {
     expect(screen.getByText('Electricity bill')).toBeInTheDocument();
     expect(screen.getByText('AdWords March')).toBeInTheDocument();
 
-    // Dollar-formatted amounts (hard-coded `$${parseFloat(amount).toFixed(2)}`
-    // in the row — formatMoney is imported but the row doesn't use it).
+    // Row amounts now use the canonical formatMoney() helper (mocked above
+    // as `$${Number(n).toFixed(2)}` — real INR/USD switching is covered by
+    // money.test.js).
     expect(screen.getByText('$120.50')).toBeInTheDocument();
     expect(screen.getByText('$15.00')).toBeInTheDocument();
     expect(screen.getByText('$42.75')).toBeInTheDocument();

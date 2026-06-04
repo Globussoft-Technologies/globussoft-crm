@@ -82,6 +82,14 @@ export default function Modal({
     return () => window.removeEventListener('keydown', onKey);
   }, [open, destructive, onClose]);
 
+  // Body scroll lock — the page underneath stays fixed until the modal closes.
+  useEffect(() => {
+    if (!open) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = prev; };
+  }, [open]);
+
   if (!open) return null;
 
   const minWidth = size === 'small' ? 360 : size === 'large' ? 720 : 480;

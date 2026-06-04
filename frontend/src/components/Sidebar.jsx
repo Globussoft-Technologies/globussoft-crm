@@ -33,7 +33,7 @@ import {
   FileText,
   FileSpreadsheet,
   FolderKanban,
-  DollarSign,
+  IndianRupee,
   Trophy,
   ShoppingBag,
   Radio,
@@ -910,7 +910,6 @@ const PAGE_ICON_BY_PATH = {
   "/converted-leads": UserPlus,
   "/callified-data": PhoneCall,
   "/tasks": CheckSquare,
-  "/marketplace-leads": ShoppingBag,
   "/lead-routing": Send,
   // Sales (generic only, not in wellness sidebar)
   "/dashboard": LayoutDashboard,
@@ -920,7 +919,7 @@ const PAGE_ICON_BY_PATH = {
   "/wellness/pos": Calculator,
   "/invoices": Receipt,
   "/estimates": FileSpreadsheet,
-  "/expenses": DollarSign,
+  "/expenses": IndianRupee,
   "/payments": CreditCard,
   "/wellness/wallet": WalletIcon,
   "/wellness/giftcards": Gift,
@@ -1015,12 +1014,9 @@ const PATH_COUNT_KEY = {
   "/tickets": "tickets",
 };
 
-// Some links want to highlight as active even when on a different path
-// (e.g. /marketplace-leads stays active when the user is on /marketplace,
-// the legacy alias). Path → list of additional pathnames to treat as matches.
-const PATH_MATCH_ALIASES = {
-  "/marketplace-leads": ["/marketplace"],
-};
+// Some links want to highlight as active even when on a different path.
+// Path → list of additional pathnames to treat as matches.
+const PATH_MATCH_ALIASES = {};
 
 function renderWellnessNav({
   Link,
@@ -1131,15 +1127,10 @@ function renderWellnessNav({
     // is now embedded inside Point of Sale as an admin/manager
     // "Manage registers" panel, so this slot intentionally has no
     // Finance extras.
-    Marketing: isManager ? (
-      <Link
-        key="/campaigns"
-        to="/campaigns"
-        icon={Megaphone}
-        label="Campaigns"
-        managerOnly
-      />
-    ) : null,
+    //
+    // Campaigns used to render here as a hardcoded managerOnly link;
+    // removed by request. Route stays mounted in App.jsx so /campaigns
+    // remains reachable via deep-link.
   };
 
   return (
@@ -1189,23 +1180,21 @@ function renderWellnessNav({
 
       {/* Admin — rendered LAST so management surfaces sit at the bottom of
           the sidebar, below day-to-day operational entries (Leads & Revenue,
-          Finance, etc.). One unified section that combines:
-            • catalog-driven entries pulled from /api/pages/me — Locations,
-              Staff, Roles, Commission Profiles, Revenue Goals, Channels,
-              Approvals, Audit Log, Privacy, Settings. These are gated by
-              the user's RolePermission grants, so a non-literal-ADMIN
-              custom role with `roles.read` (etc.) still sees the subset
-              of admin pages it can access.
-            • 4 hardcoded entries that are NOT yet in the page catalog —
-              Tenant Settings, AdsGPT Reports, Callified Calls, Wallet
-              Bonus Rules. These stay inside an `isAdmin / isManager`
-              guard until they're catalogued.
-          A single section header keeps everything visually grouped. */}
+          Finance, etc.). Catalog-driven entries pulled from /api/pages/me —
+          Locations, Staff, Roles, Commission Profiles, Revenue Goals,
+          Channels, Approvals, Audit Log, Privacy, Settings. These are
+          gated by the user's RolePermission grants, so a non-literal-ADMIN
+          custom role with `roles.read` (etc.) still sees the subset of
+          admin pages it can access.
+
+          The Tenant Settings / AdsGPT Reports / Callified Calls / Wallet
+          Bonus Rules sidebar shortcuts were removed by request — the
+          underlying routes stay mounted in App.jsx and remain reachable
+          via deep-link (e.g. CapBanners' "Tenant Settings →" anchor). */}
       {(() => {
         const adminCatalogItems = byCategory["Admin"] || [];
         // Pull Settings out of the catalog admin list — it MUST render
-        // last in the sidebar (after the 4 non-catalog hardcoded admin
-        // entries below), per UX requirement. If the user lacks
+        // last in the sidebar per UX requirement. If the user lacks
         // settings.read, /api/pages/me already filtered Settings out so
         // settingsPage is undefined and nothing renders for it — the
         // matrix-is-authoritative contract stays intact.
@@ -1215,47 +1204,13 @@ function renderWellnessNav({
         const otherAdminItems = adminCatalogItems.filter(
           (p) => p.path !== "/settings",
         );
-        const showHardcoded = isAdmin || isManager;
-        if (otherAdminItems.length === 0 && !showHardcoded && !settingsPage) {
+        if (otherAdminItems.length === 0 && !settingsPage) {
           return null;
         }
         return (
           <>
             <div style={labelStyle}>Admin</div>
             {otherAdminItems.map(renderPage)}
-            {/* Per-tenant cap-override admin UI. Surfaces /api/tenant-settings
-                CRUD so ADMINs can configure budget caps for AdsGPT / AI
-                calling / RateHawk / LLM without DB access. */}
-            <Link
-              to="/admin/tenant-settings"
-              icon={DollarSign}
-              label="Tenant Settings"
-              adminOnly
-            />
-            {/* AdsGPT Reports admin UI. managerOnly so MANAGERs see it too
-                (analytics, not config). */}
-            <Link
-              to="/admin/adsgpt-reports"
-              icon={TrendingUp}
-              label="AdsGPT Reports"
-              managerOnly
-            />
-            {/* Callified AI calls admin UI. managerOnly so MANAGERs see it
-                too (operator action, not config). */}
-            <Link
-              to="/admin/callified-calls"
-              icon={PhoneCall}
-              label="Callified Calls"
-              managerOnly
-            />
-            {/* Wallet bonus rule CRUD admin UI. ADMIN-only per PRD §3.9
-                RBAC matrix. Page is robust to backend absence. */}
-            <Link
-              to="/admin/wallet-rules"
-              icon={WalletIcon}
-              label="Wallet Bonus Rules"
-              adminOnly
-            />
             {/* Settings — pinned LAST in the sidebar per UX requirement.
                 Only renders if /api/pages/me granted access (i.e. the
                 user has settings.read on at least one assigned role). */}
@@ -1403,7 +1358,7 @@ function renderTravelNav({
       <Link to="/travel/itineraries" icon={MapIcon} label="Itineraries" />
       <Link to="/travel/trips" icon={Luggage} label="TMC Trips" />
       <Link to="/travel/web-checkins" icon={Ticket} label="Web Check-ins" />
-      <Link to="/travel/cost-master" icon={DollarSign} label="Cost Master" />
+      <Link to="/travel/cost-master" icon={IndianRupee} label="Cost Master" />
       {/* Arc 2 Travel Gap #907 slice 5/N — SightseeingMaster admin entry.
           Adjacent to Cost Master because #907 frames Sightseeing as "the
           6th category in Cost Master". */}
@@ -1568,7 +1523,7 @@ function renderTravelNav({
 
       <div style={labelStyle}>Financial</div>
       <Link to="/invoices" icon={Receipt} label="Invoices" />
-      <Link to="/payments" icon={DollarSign} label="Payments" />
+      <Link to="/payments" icon={IndianRupee} label="Payments" />
       <Link to="/quotes" icon={FileText} label="Quotes" />
 
       <div style={labelStyle}>Reports</div>
@@ -1693,7 +1648,7 @@ function renderGenericNav({
       />
       <Link
         to="/expenses"
-        icon={DollarSign}
+        icon={IndianRupee}
         label="Expenses"
         requiredPermission={{ module: "expenses", action: "read" }}
       />
@@ -1750,12 +1705,9 @@ function renderGenericNav({
         label="Landing Pages"
         managerOnly
       />
-      <Link
-        to="/marketplace-leads"
-        icon={ShoppingBag}
-        label="Marketplace Leads"
-        managerOnly
-      />
+      {/* Marketplace Leads sidebar link removed by request. Route stays
+          mounted in App.jsx so /marketplace-leads is reachable by deep
+          link / direct URL. */}
 
       <Link to="/support" icon={LifeBuoy} label="Support" managerOnly />
       <Link
@@ -1844,7 +1796,7 @@ function renderGenericNav({
           <Link to="/objects" icon={Database} label="App Builder" adminOnly />
           <Link
             to="/currencies"
-            icon={DollarSign}
+            icon={IndianRupee}
             label="Currencies"
             adminOnly
           />

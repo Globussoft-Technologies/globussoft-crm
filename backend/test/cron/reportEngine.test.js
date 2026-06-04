@@ -50,6 +50,7 @@ prisma.reportSchedule = {
   findMany: vi.fn(),
   update: vi.fn(),
 };
+prisma.tenantSetting = { findUnique: vi.fn() };
 
 // ── Patch node-cron BEFORE requiring SUT ───────────────────────────────
 const originalSchedule = nodeCron.schedule;
@@ -74,6 +75,7 @@ beforeEach(() => {
   prisma.tenant.findUnique.mockReset();
   prisma.reportSchedule.findMany.mockReset();
   prisma.reportSchedule.update.mockReset();
+  prisma.tenantSetting.findUnique.mockReset();
   scheduleMock.mockReset();
 
   // Defaults
@@ -92,6 +94,7 @@ beforeEach(() => {
   });
   prisma.reportSchedule.update.mockResolvedValue({});
   prisma.reportSchedule.findMany.mockResolvedValue([]);
+  prisma.tenantSetting.findUnique.mockResolvedValue(null);
 });
 
 afterAll(() => {

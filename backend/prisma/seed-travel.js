@@ -902,7 +902,7 @@ async function seedSampleTrips(tenantId) {
 
   for (const plan of tripPlans) {
     const trip = await prisma.tmcTrip.upsert({
-      where: { tripCode: plan.tripCode },
+      where: { tenantId_tripCode: { tenantId, tripCode: plan.tripCode } },
       update: {},
       create: {
         tenantId,

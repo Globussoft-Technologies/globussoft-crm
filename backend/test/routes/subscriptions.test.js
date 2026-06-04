@@ -79,6 +79,7 @@ prisma.subscription.updateMany = vi.fn();
 prisma.subscriptionPlan = prisma.subscriptionPlan || {};
 prisma.subscriptionPlan.findMany = vi.fn();
 prisma.subscriptionPlan.findUnique = vi.fn();
+prisma.$transaction = vi.fn(async (callback) => callback(prisma));
 // eventBus's best-effort emit walks automationRule.findMany — stub so it
 // doesn't blow up the unit_tests env (no DATABASE_URL).
 prisma.automationRule = prisma.automationRule || {};

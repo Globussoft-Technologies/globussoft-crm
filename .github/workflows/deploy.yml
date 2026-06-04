@@ -755,16 +755,10 @@ jobs:
             # the generator; --accept-data-loss allows additive changes
             # only — drops are still gated on schema.prisma.
             # Schema-hardening guard: if User.name was made non-nullable, any
-            # existing NULL values block `prisma db push`. Self-heal by setting
-            # NULL names to empty string before the push. (v3.4.14 hardening)
+            # existing NULL values block `prisma db push`. Self-heal with raw SQL
+            # via prisma db execute (loads .env automatically, no client init needed).
             echo "=== heal NULL User.name (schema-hardening guard) ==="
-            node -e "
-              const { PrismaClient } = require('@prisma/client');
-              const prisma = new PrismaClient();
-              prisma.user.updateMany({ where: { name: null }, data: { name: '' } })
-                .then(r => { console.log('Fixed', r.count, 'NULL name(s)'); return prisma.\$disconnect(); })
-                .catch(e => { console.error(e); prisma.\$disconnect().then(() => process.exit(1)); });
-            " 2>&1 | tail -3
+            echo "UPDATE User SET name = '' WHERE name IS NULL;" | npx prisma db execute --stdin
 
             echo "=== prisma db push (schema sync) ==="
             npx prisma db push --skip-generate --accept-data-loss 2>&1 | tail -5
@@ -948,16 +942,10 @@ jobs:
             npx prisma generate 2>&1 | tail -3
 
             # Schema-hardening guard: if User.name was made non-nullable, any
-            # existing NULL values block `prisma db push`. Self-heal by setting
-            # NULL names to empty string before the push. (v3.4.14 hardening)
+            # existing NULL values block `prisma db push`. Self-heal with raw SQL
+            # via prisma db execute (loads .env automatically, no client init needed).
             echo "=== heal NULL User.name (schema-hardening guard) ==="
-            node -e "
-              const { PrismaClient } = require('@prisma/client');
-              const prisma = new PrismaClient();
-              prisma.user.updateMany({ where: { name: null }, data: { name: '' } })
-                .then(r => { console.log('Fixed', r.count, 'NULL name(s)'); return prisma.\$disconnect(); })
-                .catch(e => { console.error(e); prisma.\$disconnect().then(() => process.exit(1)); });
-            " 2>&1 | tail -3
+            echo "UPDATE User SET name = '' WHERE name IS NULL;" | npx prisma db execute --stdin
 
             echo "=== prisma db push (schema sync) ==="
             npx prisma db push --skip-generate --accept-data-loss 2>&1 | tail -5

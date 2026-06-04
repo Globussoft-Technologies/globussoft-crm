@@ -485,17 +485,6 @@ function drawCardFrame(doc, { x, y, w, h, leftAccent = false, topAccent = false,
   doc.restore();
 }
 
-// Empty soft-tinted avatar circle — the reference patient-profile card
-// shows a blank circular plate (not an initial), so we paint a pale
-// teal-tinted disc with a thin border and leave the inner area clear.
-// `name` is kept in the signature for back-compat with existing callers
-// but is unused in the new rendering.
-function drawAvatarCircle(doc, { cx, cy, r /*, name */ }) {
-  doc.save();
-  doc.circle(cx, cy, r).fillAndStroke(BRAND.tealSoft, BRAND.borderSoft);
-  doc.restore();
-}
-
 // Two-column key/value grid (e.g. DOB / Gender / Source / Phone / Email
 // / Status). Each cell is a small bordered card with an uppercase label
 // and the value in regular weight.
@@ -579,25 +568,29 @@ function drawRxMark(doc, { x, y, size = 22, color = BRAND.tealDark }) {
 // events render with a red dot, completed with green, etc. Returns the
 // content x-position so the caller can render body text aligned with
 // the heading.
-function drawTimelineMarker(doc, { x, y, dotKind = "success", first = false, last = false }) {
+function drawTimelineMarker(doc, { x, y, dotKind = "success", first = false, last = false, drawConnectors = true }) {
   const palette = STATUS_PILL[dotKind] || STATUS_PILL.success;
   const dotR = 4;
   const lineX = x + 6;
-  // Vertical guide line — extends above unless first, and a stub below.
-  if (!first) {
-    doc.save();
-    doc.moveTo(lineX, y - 8).lineTo(lineX, y + dotR).lineWidth(1).strokeColor(BRAND.border).stroke();
-    doc.restore();
-  }
-  if (!last) {
-    doc.save();
-    doc.moveTo(lineX, y + dotR).lineTo(lineX, y + 38).lineWidth(1).strokeColor(BRAND.border).stroke();
-    doc.restore();
+  // Fixed-length guide stubs. Skipped when the caller draws its own
+  // dot-to-dot connectors (so the line spans the real gap between events
+  // regardless of their height — see the case-history timeline).
+  if (drawConnectors) {
+    if (!first) {
+      doc.save();
+      doc.moveTo(lineX, y - 8).lineTo(lineX, y + dotR).lineWidth(1).strokeColor(BRAND.border).stroke();
+      doc.restore();
+    }
+    if (!last) {
+      doc.save();
+      doc.moveTo(lineX, y + dotR).lineTo(lineX, y + 38).lineWidth(1).strokeColor(BRAND.border).stroke();
+      doc.restore();
+    }
   }
   doc.save();
   doc.circle(lineX, y + dotR, dotR).fillAndStroke(palette.border, palette.border);
   doc.restore();
-  return { contentX: lineX + 14 };
+  return { contentX: lineX + 14, lineX, dotR };
 }
 
 // Branded footer drawn on every page during the final buffered-pages
@@ -1297,9 +1290,9 @@ async function renderPatientSummaryPdf({
   currentSection = "Patient Profile";
   sectionTitle("Patient Profile", "Overview & demographic information");
 
-  // Profile card — soft panel with empty avatar circle, serif name and
-  // green ID pill. Matches the reference's restrained, brochure-like
-  // profile block.
+  // Profile card — soft panel with the serif name and green ID pill.
+  // (Avatar circle removed: records have no photo, so we lead with the
+  // name + ID rather than an empty placeholder disc.)
   ensureSpace(110);
   const profileCardY = doc.y;
   const profileCardH = 96;
@@ -1307,12 +1300,7 @@ async function renderPatientSummaryPdf({
     x: leftX, y: profileCardY, w: usableW, h: profileCardH,
     bg: BRAND.panelBg, border: BRAND.borderSoft,
   });
-  const avatarR = 32;
-  drawAvatarCircle(doc, {
-    cx: leftX + 28 + avatarR, cy: profileCardY + profileCardH / 2, r: avatarR,
-    name: patient?.name,
-  });
-  const profileTextX = leftX + 28 + avatarR * 2 + 22;
+  const profileTextX = leftX + 28;
   const profileTextW = usableW - (profileTextX - leftX) - 18;
   doc.font(SERIF_BOLD).fontSize(24).fillColor(BRAND.tealDark)
     .text(patient?.name || "—", profileTextX, profileCardY + 22, {
@@ -1366,11 +1354,17 @@ async function renderPatientSummaryPdf({
 
     const KIND_PILL_KIND = { Visit: "info", Prescription: "success", Consent: "warning" };
 
+    // Track the previous event's dot centre so we can draw a continuous
+    // guide line that spans the real (now roomier) gap between events,
+    // instead of the fixed-length stub that broke once spacing grew.
+    let prevDotCenterY = null;
+    const TL_LINE_X = leftX + 6;
+    const TL_DOT_R = 4;
     for (let i = 0; i < events.length; i++) {
       const e = events[i];
       const isFirst = i === 0;
       const isLast = i === events.length - 1;
-      ensureSpace(54);
+      ensureSpace(78);
 
       // Status dot colour follows the actual event status (cancelled →
       // red, completed/issued/signed → green) rather than the event kind.
@@ -1378,10 +1372,23 @@ async function renderPatientSummaryPdf({
         : e.kind === "Prescription" ? (parseRxInstructions(e.data.instructions).status || "issued")
         : "signed";
       const eventY = doc.y;
+
+      // Connect the previous dot to this one — but only on the same page
+      // (a page break resets eventY to the top, so prevDotCenterY would be
+      // BELOW it; skip the connector in that case to avoid a stray line).
+      if (prevDotCenterY != null && eventY > prevDotCenterY) {
+        doc.save();
+        doc.moveTo(TL_LINE_X, prevDotCenterY + TL_DOT_R)
+          .lineTo(TL_LINE_X, eventY)
+          .lineWidth(1).strokeColor(BRAND.border).stroke();
+        doc.restore();
+      }
+
       const tl = drawTimelineMarker(doc, {
         x: leftX, y: eventY, dotKind: statusKind(statusForDot),
-        first: isFirst, last: isLast,
+        first: isFirst, last: isLast, drawConnectors: false,
       });
+      prevDotCenterY = eventY + TL_DOT_R;
 
       // Header row: date · kind pill + service / Rx number, status pill on right.
       doc.font("Helvetica-Bold").fontSize(10).fillColor(BRAND.textDark)
@@ -1392,27 +1399,37 @@ async function renderPatientSummaryPdf({
       });
       doc.y = eventY + 16;
 
-      doc.font("Helvetica").fontSize(10).fillColor(BRAND.textBody);
+      // Deterministic vertical layout for the record body so the title, the
+      // doctor sub-line, and the Notes line each get real breathing room
+      // (the title uses lineBreak:false, whose auto y-advance is unreliable,
+      // so we position each line explicitly instead of via moveDown).
+      const titleY = eventY + 16;     // title sits below the date row
+      const bodyTop = titleY + 17;    // clear gap under the title
+      const bodyW = usableW - (tl.contentX - leftX);
       if (e.kind === "Visit") {
         const v = e.data;
-        const headLine = v.service?.name || "Visit";
         doc.font("Helvetica-Bold").fontSize(11).fillColor(BRAND.tealDark)
-          .text(headLine, tl.contentX, doc.y, { width: usableW - (tl.contentX - leftX) - 80, ellipsis: true, lineBreak: false });
+          .text(v.service?.name || "Visit", tl.contentX, titleY, { width: bodyW - 80, ellipsis: true, lineBreak: false });
         if (v.status) {
-          drawStatusPill(doc, v.status, pageRight - 70, doc.y - 16, { fontSize: 7.5, padX: 6, padY: 2 });
+          drawStatusPill(doc, v.status, pageRight - 70, titleY - 1, { fontSize: 7.5, padX: 6, padY: 2 });
         }
-        doc.moveDown(0.15);
         const sub = [];
         if (v.doctor?.name) sub.push(v.doctor.name);
         if (v.amount != null) sub.push(formatMoney(v.amount, currency));
+        let lineY = bodyTop;
         if (sub.length) {
-          doc.font("Helvetica").fontSize(9).fillColor(BRAND.textMuted)
-            .text(sub.join("   ·   "), tl.contentX, doc.y, { width: usableW - (tl.contentX - leftX) });
+          // Doctor name (+ amount) — darker than the old muted grey so it
+          // reads clearly under the title.
+          doc.font("Helvetica").fontSize(9).fillColor(BRAND.textBody)
+            .text(sub.join("   ·   "), tl.contentX, lineY, { width: bodyW });
+          lineY = doc.y + 4;
         }
         const n = scrubZyluText(v.notes);
         if (n) {
           doc.font("Helvetica").fontSize(9).fillColor(BRAND.textBody)
-            .text(`Notes: ${n}`, tl.contentX, doc.y + 2, { width: usableW - (tl.contentX - leftX) });
+            .text(`Notes: ${n}`, tl.contentX, lineY, { width: bodyW });
+        } else {
+          doc.y = lineY;
         }
       } else if (e.kind === "Prescription") {
         const p = e.data;
@@ -1421,32 +1438,27 @@ async function renderPatientSummaryPdf({
           ? drugs.map((d) => d.name || d.drug || "").filter(Boolean).join(", ")
           : "(no medications listed)";
         doc.font("Helvetica-Bold").fontSize(11).fillColor(BRAND.tealDark)
-          .text(`Rx #${p.id} — ${summary}`, tl.contentX, doc.y, {
-            width: usableW - (tl.contentX - leftX), ellipsis: true,
-          });
+          .text(`Rx #${p.id} — ${summary}`, tl.contentX, titleY, { width: bodyW, ellipsis: true, lineBreak: false });
         if (p.doctor?.name) {
-          doc.font("Helvetica").fontSize(9).fillColor(BRAND.textMuted)
-            .text(`Prescribed by ${p.doctor.name}`, tl.contentX, doc.y, {
-              width: usableW - (tl.contentX - leftX),
-            });
+          doc.font("Helvetica").fontSize(9).fillColor(BRAND.textBody)
+            .text(`Prescribed by ${p.doctor.name}`, tl.contentX, bodyTop, { width: bodyW });
+        } else {
+          doc.y = bodyTop;
         }
       } else if (e.kind === "Consent") {
         const cn = e.data;
         const title = cn.templateName || "general";
         const tail = cn.service?.name ? ` — ${cn.service.name}` : "";
         doc.font("Helvetica-Bold").fontSize(11).fillColor(BRAND.tealDark)
-          .text(`${title}${tail}`, tl.contentX, doc.y, {
-            width: usableW - (tl.contentX - leftX), ellipsis: true,
-          });
+          .text(`${title}${tail}`, tl.contentX, titleY, { width: bodyW, ellipsis: true, lineBreak: false });
         doc.font("Helvetica").fontSize(9).fillColor(BRAND.textMuted)
-          .text("Consent signed", tl.contentX, doc.y, {
-            width: usableW - (tl.contentX - leftX),
-          });
+          .text("Consent signed", tl.contentX, bodyTop, { width: bodyW });
       }
 
-      // Per-event bottom padding so the timeline guide line shows
-      // through cleanly between items.
-      doc.moveDown(0.6);
+      // Per-event bottom padding — roomier so records breathe and don't
+      // read as one dense block. The continuous connector above bridges
+      // whatever gap this produces.
+      doc.moveDown(1.4);
     }
     doc.moveDown(0.6);
   }

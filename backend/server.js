@@ -828,6 +828,10 @@ app.use("/api/travel", travelQuotesRoutes);
 app.use("/api/travel", travelInvoicesRoutes);
 app.use("/api/travel", require("./routes/travel_flyer_templates"));
 app.use("/api/travel", require("./routes/travel_commission_profiles"));
+// WS-1 — sub-brand session scope (POST /session/switch-brand + GET
+// /session/active-brand). Authoritative server-side validation behind the
+// sidebar sub-brand switcher; reuses middleware/travelGuards.js plumbing.
+app.use("/api/travel", require("./routes/travel_session"));
 app.use("/api/brand-kits", brandKitsRoutes);
 app.use("/api/adsgpt", adsgptRoutes);
 app.use("/api/ratehawk", ratehawkRoutes);

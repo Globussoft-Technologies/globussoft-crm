@@ -587,6 +587,11 @@ router.post("/login", async (req, res) => {
         // customer portal instead of the staff dashboard.
         userType: user.userType || 'STAFF',
         wellnessRole: user.wellnessRole || null,
+        // Sub-brand access scope (travel vertical). Lets the sidebar switcher
+        // render only the brands this user may activate; the authoritative gate
+        // stays server-side (travelGuards.getSubBrandAccessSet). Null = full
+        // access (admins / unset). Harmless extra field for non-travel clients.
+        subBrandAccess: user.subBrandAccess || null,
         // #1123 — include profilePicture so the header avatar matches the
         // /me payload after re-login. Without this the frontend persists a
         // user object missing profilePicture, falls back to initials, and
@@ -755,7 +760,7 @@ router.get("/me", verifyToken, async (req, res) => {
   try {
     const user = await prisma.user.findUnique({
       where: { id: req.user.userId },
-      select: { id: true, name: true, email: true, role: true, wellnessRole: true, profilePicture: true, tenantId: true, createdAt: true, tenant: { select: { id: true, name: true, slug: true, plan: true, vertical: true, country: true, defaultCurrency: true, locale: true, logoUrl: true, brandColor: true } } }
+      select: { id: true, name: true, email: true, role: true, wellnessRole: true, subBrandAccess: true, profilePicture: true, tenantId: true, createdAt: true, tenant: { select: { id: true, name: true, slug: true, plan: true, vertical: true, country: true, defaultCurrency: true, locale: true, logoUrl: true, brandColor: true } } }
     });
     if (!user) {
       return res.status(404).json({ error: "User not found" });

@@ -9462,21 +9462,7 @@ async function loadTenantBrandAssets(tenantId) {
     where: { id: tenantId },
     select: { id: true, name: true, logoUrl: true },
   });
-  const candidates = [];
-  if (tenant?.logoUrl && tenant.logoUrl.startsWith("/uploads/")) {
-    candidates.push(path.join(__dirname, "..", tenant.logoUrl));
-  }
-  candidates.push(
-    path.join(
-      __dirname,
-      "..",
-      "..",
-      "frontend",
-      "public",
-      "globussoft-logo.png",
-    ),
-  );
-  const logoBuffer = loadCachedLogo(candidates);
+  const logoBuffer = await resolveLogoBuffer(tenant?.logoUrl);
   return { tenant, logoBuffer };
 }
 
@@ -9498,6 +9484,77 @@ function loadCachedLogo(candidatePaths) {
     }
     __logoCache.set(p, null);
   }
+  return null;
+}
+
+// Bundled fallback logos, used only when the tenant has uploaded none (or the
+// upload can't be loaded). The 400×121 "-pdf" variant is PDF-safe; the
+// original globussoft-logo.png is 21,618×6,558 (~567 MB decoded) and would
+// OOM-kill the process inside PDFKit — it stays ONLY as a last-resort and is
+// itself size-guarded below, so it can never actually be embedded.
+const DEFAULT_LOGO_CANDIDATES = [
+  path.join(__dirname, "..", "..", "frontend", "public", "globussoft-logo-pdf.png"),
+  path.join(__dirname, "..", "..", "frontend", "public", "globussoft-logo.png"),
+];
+
+// Map a stored tenant logoUrl to an on-disk path when it's a locally-served
+// upload. Pure logic + its regression test live in lib/tenantLogo.js; here we
+// bind it to this file's backend dir (routes/ → ..). Returns null for remote
+// (https) URLs / anything that isn't an uploads path.
+const {
+  localLogoDiskPath: _localLogoDiskPath,
+  isLogoTooLarge,
+} = require("../lib/tenantLogo");
+function localLogoDiskPath(logoUrl) {
+  return _localLogoDiskPath(logoUrl, path.join(__dirname, ".."));
+}
+
+// Fetch a remote (S3 / https) logo into a Buffer, memoised by URL (both hits
+// and misses) so repeated PDF renders don't re-download.
+async function fetchRemoteLogo(url) {
+  if (__logoCache.has(url)) return __logoCache.get(url);
+  try {
+    const r = await fetch(url);
+    if (!r.ok) {
+      __logoCache.set(url, null);
+      return null;
+    }
+    const buf = Buffer.from(await r.arrayBuffer());
+    __logoCache.set(url, buf);
+    return buf;
+  } catch (_e) {
+    __logoCache.set(url, null);
+    return null;
+  }
+}
+
+// Resolve a tenant logoUrl to embeddable image bytes. Order: the tenant's
+// uploaded logo (remote S3 URL OR local disk path), then the bundled default.
+// Previously every clinical PDF fell straight to the default because the
+// resolver only matched a "/uploads/" prefix while uploads are stored as
+// "/api/uploads/..." (disk) or "https://..." (S3) — so no uploaded logo ever
+// matched. This is the single source of truth for "which logo does a PDF use".
+async function resolveLogoBuffer(logoUrl) {
+  // 1. Tenant-uploaded logo (remote S3 URL or local disk), but only if it's
+  //    a safe size — an oversized upload would OOM PDFKit, so skip it and
+  //    fall through to the bundled default rather than crash the request.
+  let buf = null;
+  if (typeof logoUrl === "string" && /^https?:\/\//i.test(logoUrl)) {
+    buf = await fetchRemoteLogo(logoUrl);
+  } else {
+    const disk = localLogoDiskPath(logoUrl);
+    if (disk) buf = loadCachedLogo([disk]);
+  }
+  if (buf && !isLogoTooLarge(buf)) return buf;
+
+  // 2. Bundled default — prefer the PDF-safe 400px logo; the full-size one is
+  //    a last resort and is itself size-guarded (so it can never embed).
+  for (const p of DEFAULT_LOGO_CANDIDATES) {
+    const d = loadCachedLogo([p]);
+    if (d && !isLogoTooLarge(d)) return d;
+  }
+
+  // 3. Nothing safe to embed → header draws its heart-glyph fallback.
   return null;
 }
 
@@ -9575,27 +9632,12 @@ router.get("/patients/:id/summary.pdf", phiReadGate, async (req, res) => {
       })
       : [];
 
-    // Resolve a logo image to embed: prefer the tenant's uploaded
-    // logoUrl (mapped onto disk under backend/uploads), else fall back
-    // to the bundled default application logo. The renderer clips
-    // whichever source it gets to a left-side square so combined
-    // "icon + wordmark" logos surface only the icon portion in the
-    // corner slot. Cache hit avoids per-request fs.readFileSync.
-    const candidates = [];
-    if (tenant?.logoUrl && tenant.logoUrl.startsWith("/uploads/")) {
-      candidates.push(path.join(__dirname, "..", tenant.logoUrl));
-    }
-    candidates.push(
-      path.join(
-        __dirname,
-        "..",
-        "..",
-        "frontend",
-        "public",
-        "globussoft-logo.png",
-      ),
-    );
-    const logoBuffer = loadCachedLogo(candidates);
+    // Resolve a logo image to embed: prefer the tenant's uploaded logo
+    // (S3 https URL OR local /api/uploads disk path), else the bundled
+    // default. The renderer clips whichever source it gets to a left-side
+    // square so combined "icon + wordmark" logos surface only the icon
+    // portion in the corner slot. resolveLogoBuffer memoises hits + misses.
+    const logoBuffer = await resolveLogoBuffer(tenant?.logoUrl);
 
     // Resolve visit before/after photo files into buffers the renderer
     // can embed. Photos are always uploaded to S3; the photosBefore /

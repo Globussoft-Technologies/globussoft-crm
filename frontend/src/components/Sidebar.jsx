@@ -1341,7 +1341,31 @@ function renderTravelNav({
           <select
             id="travel-sub-brand-switcher"
             value={activeSubBrand || ""}
-            onChange={(e) => setActiveSubBrand(e.target.value || null)}
+            onChange={async (e) => {
+              const next = e.target.value || null;
+              // "All" (null) just clears the client-side filter — there's no
+              // sub-brand to validate, and server-side subBrandAccess still
+              // gates every data route. Clear immediately.
+              if (!next) {
+                setActiveSubBrand(null);
+                return;
+              }
+              // WS-1: authoritative server-side check before switching.
+              // fetchApi throws + auto-surfaces a toast on 400/403, so we only
+              // reach setActiveSubBrand on a 200 — never an optimistic switch.
+              try {
+                await fetchApi("/api/travel/session/switch-brand", {
+                  method: "POST",
+                  body: JSON.stringify({ subBrand: next }),
+                });
+                setActiveSubBrand(next);
+              } catch {
+                // Rejected (403 SUB_BRAND_FORBIDDEN) or invalid (400): the
+                // error toast was already shown by fetchApi. Leave the
+                // selection unchanged — the controlled <select value=...>
+                // snaps back to the prior activeSubBrand.
+              }
+            }}
             style={{
               flex: 1,
               fontSize: 12,

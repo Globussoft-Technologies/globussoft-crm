@@ -626,8 +626,9 @@ export default function PointOfSale() {
         <div
           style={{
             ...cardStyle,
-            background: 'var(--success-bg, #e6f6ee)',
-            borderColor: 'var(--success-border, #a8d8b9)',
+            background: 'color-mix(in srgb, var(--success-color) 14%, transparent)',
+            border: '1px solid color-mix(in srgb, var(--success-color) 40%, transparent)',
+            color: 'var(--text-primary)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
@@ -635,7 +636,7 @@ export default function PointOfSale() {
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <Unlock size={18} />
+            <Unlock size={18} color="var(--success-color)" />
             <strong>Shift open</strong>
             <span style={{ color: 'var(--text-secondary)', marginLeft: '0.5rem' }}>
               Register {currentShift.register?.name || `#${currentShift.registerId}`} ·

@@ -20,7 +20,7 @@ import { useContext, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   AlertCircle, BadgePercent, Calendar as CalendarIcon,
-  ClipboardCheck, Compass, DollarSign, FileText, Globe, Luggage,
+  ClipboardCheck, Compass, IndianRupee, FileText, Globe, Luggage,
   Map as MapIcon, RefreshCw,
 } from "lucide-react";
 import { AuthContext } from "../../App";
@@ -104,7 +104,7 @@ export default function TravelDashboard() {
               }
             />
             <Tile
-              icon={DollarSign}
+              icon={IndianRupee}
               label="Cost master (active rates)"
               value={data.costMaster.activeRows}
               footer={byKeyFooter(data.costMaster.bySubBrand)}

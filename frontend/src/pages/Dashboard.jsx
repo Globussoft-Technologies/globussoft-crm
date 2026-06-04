@@ -24,7 +24,7 @@
  * to produce a coherent personal dashboard without any backend change.
  */
 import React, { useState, useEffect, useContext } from 'react';
-import { Users, DollarSign, Activity, Calendar, TrendingUp, CheckSquare } from 'lucide-react';
+import { Users, IndianRupee, Activity, Calendar, TrendingUp, CheckSquare } from 'lucide-react';
 import { AuthContext } from '../App';
 import { fetchApi } from '../utils/api';
 import { formatMoney, formatMoneyCompact } from '../utils/money';
@@ -121,14 +121,14 @@ export default function Dashboard() {
   const pendingTaskCount = myPendingTasks.length;
   const tiles = isUser
     ? [
-        { label: 'My Closed Revenue',   value: formatMoney(totalRevenue),     icon: <DollarSign size={24} />,   color: 'var(--accent-color)' },
+        { label: 'My Closed Revenue',   value: formatMoney(totalRevenue),     icon: <IndianRupee size={24} />,   color: 'var(--accent-color)' },
         { label: 'My Expected Revenue', value: formatMoney(expectedRevenue),  icon: <Activity size={24} />,     color: 'var(--success-color)' },
         { label: 'My Pending Tasks',    value: pendingTaskCount.toString(),   icon: <CheckSquare size={24} />,  color: '#3b82f6' },
         { label: 'My Win Rate',         value: formatPercent(conversionRate), icon: <TrendingUp size={24} />,   color: 'var(--warning-color)' },
         { label: 'My Open Deals',       value: dealCount.toString(),          icon: <Calendar size={24} />,     color: '#a855f7' },
       ]
     : [
-        { label: 'Closed Revenue',   value: formatMoney(totalRevenue),     icon: <DollarSign size={24} />,  color: 'var(--accent-color)' },
+        { label: 'Closed Revenue',   value: formatMoney(totalRevenue),     icon: <IndianRupee size={24} />,  color: 'var(--accent-color)' },
         { label: 'Expected Revenue', value: formatMoney(expectedRevenue),  icon: <Activity size={24} />,    color: 'var(--success-color)' },
         { label: 'Total Contacts',   value: activeLeads.toString(),        icon: <Users size={24} />,       color: '#3b82f6' },
         { label: 'Conversion Rate',  value: formatPercent(conversionRate), icon: <TrendingUp size={24} />,  color: 'var(--warning-color)' },

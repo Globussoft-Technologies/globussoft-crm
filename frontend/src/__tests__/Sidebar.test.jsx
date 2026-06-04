@@ -668,23 +668,25 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(screen.queryByText('SMS / Email Blasts')).toBeNull();
     });
 
-    it('renders Admin section + Inventory cluster for ADMIN under wellness', async () => {
+    it('renders Inventory cluster for ADMIN under wellness', async () => {
       renderSidebar({
         vertical: 'wellness',
         role: 'ADMIN',
         tenantName: 'Enhanced Wellness',
         accessiblePages: SAMPLE_WELLNESS_PAGES,
       });
-      // Inventory cluster + Admin section header all come from the
-      // catalog now. The SUT splits the inventory surfaces into two
-      // WELLNESS_CATEGORY_ORDER buckets:
+      // Inventory cluster headers come from the catalog. The SUT splits
+      // the inventory surfaces into two WELLNESS_CATEGORY_ORDER buckets:
       //   "Products"        — catalog config (Products, Categories, Auto-consumption)
       //   "Inventory Admin" — operational ledger (Vendors, Receipts, Adjustments)
-      // The original test asserted a single "Inventory" header which
-      // never matched a real SUT label. Pin the actual two-section
-      // contract with the section names as they render.
+      // The original test also asserted an "Admin" section header, which
+      // used to render unconditionally for ADMIN/MANAGER because the
+      // section hosted 4 hardcoded sidebar shortcuts (Tenant Settings,
+      // AdsGPT Reports, Callified Calls, Wallet Bonus Rules). Those
+      // shortcuts were removed by request; the section now only renders
+      // when /api/pages/me returns at least one Admin-category page, and
+      // this fixture has none — so no "Admin" header is expected here.
       await screen.findByText('Inventory Admin');
-      expect(screen.getByText('Admin')).toBeTruthy();
       // The two inventory cluster headers render verbatim.
       expect(screen.getAllByText('Products').length).toBeGreaterThanOrEqual(1);
       expect(screen.getByText('Inventory Admin')).toBeTruthy();
@@ -903,11 +905,14 @@ describe('Sidebar — load-bearing render surface', () => {
   });
 
   describe('Marketplace integration links', () => {
-    it('renders Marketplace Leads for MANAGER under generic with correct href', () => {
+    it('does NOT render Marketplace Leads in the sidebar (removed by request)', () => {
+      // /marketplace-leads route stays mounted in App.jsx and the catalog
+      // entry remains intact (deep-links + permission checks still work),
+      // but Sidebar.jsx suppresses the nav slot. The hardcoded generic-
+      // vertical link was deleted; the catalog-driven wellness slot is
+      // filtered out via SIDEBAR_HIDDEN_PATHS.
       renderSidebar({ vertical: 'generic', role: 'MANAGER' });
-      const link = screen.getByText('Marketplace Leads').closest('a');
-      expect(link).toBeTruthy();
-      expect(link.getAttribute('href')).toBe('/marketplace-leads');
+      expect(screen.queryByText('Marketplace Leads')).toBeNull();
     });
 
     it('renders Zapier integration link for ADMIN under generic', () => {

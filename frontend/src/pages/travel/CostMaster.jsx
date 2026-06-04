@@ -8,7 +8,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { BadgePercent, DollarSign, Download, Filter, Plus, ToggleLeft, ToggleRight, Upload } from "lucide-react";
+import { BadgePercent, IndianRupee, Download, Filter, Plus, ToggleLeft, ToggleRight, Upload } from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 
@@ -152,7 +152,7 @@ export default function CostMaster() {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12 }}>
         <div>
           <h1 style={{ display: "flex", alignItems: "center", gap: 10, margin: 0 }}>
-            <DollarSign size={28} aria-hidden /> Cost Master
+            <IndianRupee size={28} aria-hidden /> Cost Master
           </h1>
           <p style={{ color: "var(--text-secondary)", marginTop: 4 }}>
             Supplier rate book. /pricing/quote applies seasons + markup rules over these base rates.

@@ -326,13 +326,6 @@ const PAGE_CATALOG = [
     requiredPermissions: [{ module: 'tasks', action: 'read' }],
   },
   {
-    path: '/marketplace-leads',
-    label: 'Marketplace Leads',
-    description: 'Inbound leads from IndiaMART / JustDial / TradeIndia',
-    category: 'Leads & Revenue',
-    requiredPermissions: [{ module: 'leads', action: 'read' }],
-  },
-  {
     path: '/lead-routing',
     label: 'Routing Rules',
     description: 'Rules that auto-assign incoming leads',

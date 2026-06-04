@@ -6,7 +6,7 @@ import {
 import { fetchApi } from '../utils/api';
 import { formatMoney } from '../utils/money';
 import { formatPercent } from '../utils/percent';
-import { BarChart3, TrendingDown, Filter, Calendar, DollarSign, Users, Award, X } from 'lucide-react';
+import { BarChart3, TrendingDown, Filter, Calendar, IndianRupee, Users, Award, X } from 'lucide-react';
 
 const COLORS = ['#3b82f6', '#a855f7', '#10b981', '#f59e0b', '#ef4444', '#ec4899', '#6366f1', '#14b8a6'];
 
@@ -145,7 +145,7 @@ export default function FunnelPage() {
         <KpiCard icon={<Users size={20} />} label="Total Deals" value={kpis.totalDeals} color={COLORS[0]} />
         <KpiCard icon={<Award size={20} />} label="Won" value={kpis.won} color={COLORS[2]} />
         <KpiCard icon={<TrendingDown size={20} />} label="Lost" value={kpis.lost} color={COLORS[4]} />
-        <KpiCard icon={<DollarSign size={20} />} label="Win Rate" value={fmtPct(kpis.winRate)} color={COLORS[3]} />
+        <KpiCard icon={<IndianRupee size={20} />} label="Win Rate" value={fmtPct(kpis.winRate)} color={COLORS[3]} />
         <KpiCard icon={<Calendar size={20} />} label="Avg Cycle (days)" value={kpis.avgCycle || '—'} color={COLORS[1]} />
       </div>
 

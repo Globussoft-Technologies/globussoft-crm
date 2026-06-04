@@ -128,8 +128,11 @@ describe('<Payments /> — page surface', () => {
 
   it('renders one row per payment with invoiceId, amount, and gateway+status badges', async () => {
     renderPayments();
-    // INR row → ₹ prefix; USD rows → $ prefix.
-    await waitFor(() => expect(screen.getByText('₹1500.00')).toBeInTheDocument());
+    // All rows render in the tenant's default currency (USD here) — per-row
+    // currency stamps are kept for audit but not used for display. The
+    // SUCCESS amount ($1500.00) also surfaces in the Total Collected stat
+    // card, so it appears twice in the DOM.
+    await waitFor(() => expect(screen.getAllByText('$1500.00').length).toBeGreaterThanOrEqual(1));
     expect(screen.getByText('$250.00')).toBeInTheDocument();
     expect(screen.getByText('$75.00')).toBeInTheDocument();
     // Invoice IDs render as "#<id>".
@@ -391,7 +394,8 @@ describe('<Payments /> — page surface', () => {
     });
     renderPayments();
     await waitFor(() => expect(screen.getByText('#121')).toBeInTheDocument());
-    // Total Collected should render $1000.00 (only SUCCESS amount counted).
+    // Total Collected should render $1000.00 (only SUCCESS amount counted —
+    // mock formatMoney here uses .toFixed(2); real behavior covered by money.test.js).
     // Same amount also renders in the row's Amount cell (row #121).
     const matches = screen.getAllByText('$1000.00');
     expect(matches.length).toBeGreaterThanOrEqual(2);

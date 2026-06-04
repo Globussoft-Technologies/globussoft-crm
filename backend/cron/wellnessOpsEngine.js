@@ -58,6 +58,17 @@ async function runNpsForTenant(tenantId) {
       },
     });
 
+    // Idempotency: skip SMS if one already exists for this visit.
+    // Survey is upserted above, so survey.id is stable per visit.
+    const existingSms = await prisma.smsMessage.findFirst({
+      where: {
+        to: v.patient.phone,
+        body: { contains: `${PORTAL_BASE}/survey/${survey.id}` },
+        direction: "OUTBOUND",
+      },
+    });
+    if (existingSms) continue;
+
     const link = `${PORTAL_BASE}/survey/${survey.id}?p=${v.patient.id}`;
     await prisma.smsMessage.create({
       data: {

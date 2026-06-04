@@ -504,7 +504,7 @@ router.post("/:id/upload", verifyToken, upload.single("file"), async (req, res) 
 
 router.get("/public/:slug", async (req, res) => {
   try {
-    const page = await prisma.bookingPage.findUnique({ where: { slug: req.params.slug } });
+    const page = await prisma.bookingPage.findFirst({ where: { slug: req.params.slug } });
     if (!page || !page.isActive) return res.status(404).json({ error: "Booking page not found" });
 
     const owner = await prisma.user.findUnique({
@@ -553,7 +553,7 @@ router.get("/public/:slug", async (req, res) => {
 
 router.get("/public/:slug/slots", async (req, res) => {
   try {
-    const page = await prisma.bookingPage.findUnique({ where: { slug: req.params.slug } });
+    const page = await prisma.bookingPage.findFirst({ where: { slug: req.params.slug } });
     if (!page || !page.isActive) return res.status(404).json({ error: "Booking page not found" });
 
     const date = req.query.date;
@@ -571,7 +571,7 @@ router.get("/public/:slug/slots", async (req, res) => {
 
 router.post("/public/:slug/book", async (req, res) => {
   try {
-    const page = await prisma.bookingPage.findUnique({ where: { slug: req.params.slug } });
+    const page = await prisma.bookingPage.findFirst({ where: { slug: req.params.slug } });
     if (!page || !page.isActive) return res.status(404).json({ error: "Booking page not found" });
 
     const { contactName, contactEmail, contactPhone, scheduledAt, notes } = req.body || {};

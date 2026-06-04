@@ -478,7 +478,9 @@ test.describe('Memberships — POST /patients/:id/memberships', () => {
   });
 
   test('400 on invalid startDate', async ({ request }) => {
-    const res = await authPost(request, `/api/wellness/patients/${createdPatientId}/memberships`, {
+    // Use secondPatientId (no active membership) so the startDate validation
+    // fires before the MEMBERSHIP_ALREADY_ACTIVE duplicate check.
+    const res = await authPost(request, `/api/wellness/patients/${secondPatientId}/memberships`, {
       planId: createdPlanIds[0],
       startDate: 'not-a-date',
     });

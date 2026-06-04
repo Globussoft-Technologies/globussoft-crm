@@ -435,7 +435,7 @@ router.get("/:id/analytics", verifyToken, async (req, res) => {
 
 publicRouter.get("/:slug", async (req, res) => {
   try {
-    const page = await prisma.landingPage.findUnique({ where: { slug: req.params.slug } });
+    const page = await prisma.landingPage.findFirst({ where: { slug: req.params.slug } });
     if (!page || page.status !== "PUBLISHED") return res.status(404).send("<h1>Page not found</h1>");
 
     await prisma.landingPage.update({ where: { id: page.id }, data: { visits: { increment: 1 } } });
@@ -551,7 +551,7 @@ async function applyLeadRouting(formProps, tenantId, contactId) {
 
 publicRouter.post("/:slug/submit", express.json(), async (req, res) => {
   try {
-    const page = await prisma.landingPage.findUnique({ where: { slug: req.params.slug } });
+    const page = await prisma.landingPage.findFirst({ where: { slug: req.params.slug } });
     if (!page) return res.status(404).json({ error: "Page not found" });
     const tenantId = page.tenantId || 1;
 
@@ -622,7 +622,7 @@ publicRouter.post("/:slug/submit", express.json(), async (req, res) => {
 
 publicRouter.get("/:slug/track", async (req, res) => {
   try {
-    const page = await prisma.landingPage.findUnique({ where: { slug: req.params.slug } });
+    const page = await prisma.landingPage.findFirst({ where: { slug: req.params.slug } });
     if (page) {
       await prisma.landingPageAnalytics.create({
         data: { landingPageId: page.id, eventType: req.query.event || "VISIT", visitorIp: req.ip, userAgent: req.headers["user-agent"], tenantId: page.tenantId || 1 },

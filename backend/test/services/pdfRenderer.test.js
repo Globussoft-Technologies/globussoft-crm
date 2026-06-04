@@ -188,8 +188,59 @@ describe('renderPrescriptionPdf', () => {
     const txt = extractPdfText(buf);
     expect(txt).toContain('Finasteride 1mg');
     expect(txt).toContain('Biotin 5mg');
-    expect(txt).toContain('Medication');
-    expect(txt).toContain('Frequency');
+    // Reference-aligned table uses uppercase column headers — "Medications"
+    // appears as the section title (substring matches both), "FREQUENCY"
+    // as the column header. Case-insensitive checks intentionally so the
+    // contract pins the labels' presence, not their exact casing.
+    expect(txt.toUpperCase()).toContain('MEDICATION');
+    expect(txt.toUpperCase()).toContain('FREQUENCY');
+  });
+
+  test('header uses ASCII Tel:/Email: labels — no broken ☎/✉ glyphs', async () => {
+    // PDFKit's WinAnsi Helvetica can't render ☎/✉; they came out as "&"/"'".
+    const buf = await renderPrescriptionPdf(
+      { drugs: [] },
+      patientFixture(),
+      clinicFixture(),
+    );
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('Tel:');
+    expect(txt).toContain('Email:');
+    expect(txt).not.toContain('☎'); // ☎
+    expect(txt).not.toContain('✉'); // ✉
+  });
+
+  test('instructions callout heading has no ⚠ glyph prefix', async () => {
+    const buf = await renderPrescriptionPdf(
+      { drugs: [], instructions: 'Apply twice daily.' },
+      patientFixture(),
+      clinicFixture(),
+      { name: 'Dr. Harsh Mehta' },
+    );
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('Instructions');
+    expect(txt).not.toContain('⚠'); // ⚠
+  });
+
+  test('a short prescription renders on a SINGLE page', async () => {
+    const buf = await renderPrescriptionPdf(
+      {
+        drugs: [
+          { name: 'Minoxidil 5%', dosage: '1ml', frequency: 'BID', duration: '12 weeks' },
+          { name: 'Finasteride 1mg', dosage: '1 tab', frequency: 'OD', duration: '12 weeks' },
+        ],
+        instructions: 'Apply minoxidil only to dry scalp.',
+      },
+      patientFixture(),
+      clinicFixture(),
+      { name: 'Dr. Vikas Singh' },
+    );
+    const txt = extractPdfText(buf);
+    // The footer pass stamps "Page X of Y"; a 2-drug Rx must fit on one page.
+    expect(txt).toContain('Page 1 of 1');
+    // Exactly one PDF page object.
+    const pageCount = (buf.toString('latin1').match(/\/Type\s*\/Page[^s]/g) || []).length;
+    expect(pageCount).toBe(1);
   });
 
   test('"no medications listed" placeholder when drugs list is empty', async () => {
@@ -921,8 +972,10 @@ describe('renderPatientSummaryPdf — visit photos', () => {
     });
     const txt = extractPdfText(buf);
     expect(txt).toContain('BEFORE (5)');
-    // Renderer caps at 3 per side; 5 − 3 = 2 surplus surfaced as caption.
-    expect(txt).toContain('+2 more');
+    // Renderer caps at 1 hero thumbnail per side (matches the reference
+    // Dr. Haror's visit-card design where each BEFORE / AFTER side gets
+    // ONE large image, not a strip); 5 − 1 = 4 surplus surfaced as caption.
+    expect(txt).toContain('+4 more');
   });
 
   test('falls back to placeholder when a buffer is missing for an URL', async () => {

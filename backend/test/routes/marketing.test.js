@@ -185,6 +185,13 @@ function makeFakePrisma() {
         return row;
       }),
     },
+    // Security audit-fix (214017c1): sendCampaign now resolves the per-tenant
+    // from-address + Mailgun domain via lib/tenantSettings.getSetting(), which
+    // reads prisma.tenantSetting.findUnique. Default to null so getSetting
+    // falls back to FROM_EMAIL / env domain and the dispatch proceeds.
+    tenantSetting: {
+      findUnique: vi.fn(async () => null),
+    },
   };
 }
 

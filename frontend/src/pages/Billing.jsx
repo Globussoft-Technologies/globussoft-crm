@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { CreditCard, Plus, CheckCircle2, Clock, Trash2, FileText, DollarSign } from 'lucide-react';
+import { CreditCard, Plus, CheckCircle2, Clock, Trash2, FileText, IndianRupee } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { formatMoney } from '../utils/money';
@@ -142,7 +142,7 @@ export default function Billing() {
                 <div style={{ display: 'flex', alignItems: 'center', gap: '2.5rem' }}>
                   <div style={{ textAlign: 'right' }}>
                     <span style={{ fontSize: '1.75rem', fontWeight: 'bold', color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-                      <DollarSign size={24} color="var(--success-color)" />
+                      <IndianRupee size={24} color="var(--success-color)" />
                       {inv.amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </span>
                   </div>

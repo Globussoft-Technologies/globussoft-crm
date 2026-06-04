@@ -65,6 +65,43 @@ describe('getCatalog', () => {
   });
 });
 
+describe('customerOnly storefront pages', () => {
+  // The customer-facing surfaces (Buy Gift Cards storefront + My
+  // Transactions history) are open to any authenticated session
+  // (requiredPermissions: []) but carry a `customerOnly` flag the wellness
+  // sidebar uses to surface them ONLY to customer-tier roles (USER /
+  // CUSTOMER). Pin the flag + the open-permission contract so a refactor
+  // can't silently drop the gate or add a permission that would hide them
+  // from the very customers they're for.
+  const CUSTOMER_PAGES = ['/wellness/buy-giftcards', '/wellness/my-transactions'];
+
+  it('Buy Gift Cards + My Transactions are flagged customerOnly with no required permissions', () => {
+    for (const path of CUSTOMER_PAGES) {
+      const page = getPage(path);
+      expect(page, `${path} should exist in the catalog`).not.toBeNull();
+      expect(page.customerOnly).toBe(true);
+      expect(page.requiredPermissions).toEqual([]);
+    }
+  });
+
+  it('getAccessiblePages includes them for an empty permission set (everyone can reach the page)', () => {
+    const pages = getAccessiblePages(new Set());
+    const paths = pages.map((p) => p.path);
+    for (const path of CUSTOMER_PAGES) {
+      expect(paths).toContain(path);
+    }
+  });
+
+  it('carries the customerOnly flag through the getAccessiblePages clone', () => {
+    const pages = getAccessiblePages(new Set());
+    for (const path of CUSTOMER_PAGES) {
+      const page = pages.find((p) => p.path === path);
+      expect(page).toBeDefined();
+      expect(page.customerOnly).toBe(true);
+    }
+  });
+});
+
 describe('isKnownPage / getPage', () => {
   it('accepts catalog paths', () => {
     expect(isKnownPage('/home')).toBe(true);
@@ -182,7 +219,7 @@ describe('canAccessPath', () => {
     expect(canAccessPath('/wellness/book-appointment', nursePerms)).toBe(false);
     expect(canAccessPath('/wellness/my-appointments', nursePerms)).toBe(false);
     // Pages that need permissions Nurse simply doesn't have stay barred.
-    expect(canAccessPath('/invoices', nursePerms)).toBe(false); // billing.read
+    expect(canAccessPath('/invoices', nursePerms)).toBe(false); // invoices.read
     expect(canAccessPath('/wellness/pos', nursePerms)).toBe(false); // pos.read
   });
 });
@@ -205,7 +242,7 @@ describe('getAccessiblePages', () => {
     expect(paths).toContain('/wellness/patients');
     expect(paths).toContain('/wellness/calendar');
     expect(paths).toContain('/wellness/prescriptions');
-    expect(paths).not.toContain('/invoices'); // needs billing.read
+    expect(paths).not.toContain('/invoices'); // needs invoices.read
     expect(paths).not.toContain('/wellness/pos'); // needs pos.read
   });
 

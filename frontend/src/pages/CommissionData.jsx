@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { DollarSign, Download, Filter, Search } from 'lucide-react';
+import { IndianRupee, Download, Filter, Search } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 
@@ -115,7 +115,7 @@ export default function CommissionData() {
     <div style={{ padding: '2rem' }}>
       <div style={{ marginBottom: '2rem' }}>
         <h1 style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.5rem' }}>
-          <DollarSign size={32} />
+          <IndianRupee size={32} />
           Commission Data
         </h1>
         <p style={{ color: '#999', margin: 0 }}>Historical payroll and commission records</p>

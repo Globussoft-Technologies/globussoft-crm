@@ -209,8 +209,26 @@ router.get("/", async (req, res) => {
       createdAt: true,
       deactivatedAt: true,
     };
+    // Staff directory = EMPLOYEES only. Exclude userType='CUSTOMER' so
+    // self-registered customers / patients (who get a User row when they sign
+    // up via /auth/customer/register, e.g. to buy a gift card or view their
+    // own transactions) never appear in the staff list, role assignment
+    // pickers, or the wellness Doctor/Professional dropdowns that read this
+    // endpoint. What remains is everyone who works at / is paid by the clinic
+    // — userType STAFF (doctors, professionals, telecallers, helpers, admins,
+    // managers) and OWNER. Filtering on `not CUSTOMER` (rather than an
+    // allow-list) keeps any legacy rows whose userType predates the column.
     const users = await prisma.user.findMany({
-      where: { tenantId: req.user.tenantId },
+      where: {
+        tenantId: req.user.tenantId,
+        // Exclude customers on BOTH dimensions a self-registered customer
+        // carries (userType='CUSTOMER' AND role='CUSTOMER' — set together in
+        // /auth/customer/register). Either flag alone is enough to hide the
+        // row, so a mis-provisioned account can't leak. role='USER' staff
+        // (low-privilege employees) are NOT customers and stay visible.
+        userType: { not: "CUSTOMER" },
+        role: { not: "CUSTOMER" },
+      },
       select: isSummary ? slimSelect : fullSelect,
       orderBy: { createdAt: "desc" },
     });

@@ -20,6 +20,23 @@ import { ShieldCheck, CheckCircle2, AlertCircle, Loader2, Plane } from "lucide-r
 
 const KYC_MICROSITE_UUID_KEY = "kycMicrositeUuid";
 
+/** Lightweight client-side HTML sanitiser — strips scripts, event handlers,
+ *  and javascript: URLs as defence-in-depth even though the server already
+ *  runs sanitizeBody on storage. */
+function sanitizeHtml(raw) {
+  if (!raw || typeof raw !== "string") return "";
+  let s = raw;
+  // Remove <script> and <style> blocks entirely
+  s = s.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, "");
+  s = s.replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, "");
+  // Remove on* event handlers from tags
+  s = s.replace(/\s+on\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]*)/gi, "");
+  // Neutralise javascript: / data: URLs
+  s = s.replace(/(href|src|action)\s*=\s*("javascript:[^"]*"|'javascript:[^']*'|javascript:[^\s>]*)/gi, '$1="#"');
+  s = s.replace(/(href|src|action)\s*=\s*("data:[^"]*"|'data:[^']*'|data:[^\s>]*)/gi, '$1="#"');
+  return s;
+}
+
 async function publicFetch(path, { method = "GET", body } = {}) {
   const res = await fetch(`/api/travel/microsites/public${path}`, {
     method,
@@ -136,7 +153,7 @@ export default function PublicTripMicrosite() {
           <section style={S.section}>
             {/* itineraryHtml is sanitised server-side (sanitizeBody strips
                 dangerous tags) before it is ever stored. */}
-            <div dangerouslySetInnerHTML={{ __html: info.itineraryHtml }} />
+            <div dangerouslySetInnerHTML={{ __html: sanitizeHtml(info.itineraryHtml) }} />
           </section>
         )}
 

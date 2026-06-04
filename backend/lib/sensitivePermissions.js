@@ -51,14 +51,25 @@ const SENSITIVE_PERMISSIONS = new Set([
   'integrations.delete',
   'integrations.manage',
 
-  // BILLING / PAYMENTS / ACCOUNTING (W/U/D/M) — financial exposure.
+  // INVOICES / GIFT CARDS / PATIENT WALLETS / PAYMENTS / ACCOUNTING
+  // (W/U/D/M) — financial exposure. `billing` was decomposed into three
+  // surface-specific modules in v3.8.x; all three carry the same
+  // sensitive write-tier surface as the parent did.
   // Note: `payments` catalog only exposes read + export today, so no
   // payments-write entry exists; widening payments to .write/.update
   // would need a corresponding entry here.
-  'billing.write',
-  'billing.update',
-  'billing.delete',
-  'billing.manage',
+  'invoices.write',
+  'invoices.update',
+  'invoices.delete',
+  'invoices.manage',
+  'gift_cards.write',
+  'gift_cards.update',
+  'gift_cards.delete',
+  'gift_cards.manage',
+  'patient_wallets.write',
+  'patient_wallets.update',
+  'patient_wallets.delete',
+  'patient_wallets.manage',
   'accounting.write',
 
   // AUDIT (any write/delete) — can tamper with the audit trail.

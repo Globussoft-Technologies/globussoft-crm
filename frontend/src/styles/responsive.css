@@ -81,6 +81,10 @@
     height: 100vh;
     z-index: 999;
     transform: translateX(-100%);
+    /* GPU layer hint scoped to the ONLY place the sidebar transforms — the
+       mobile drawer slide. Keeping it out of the desktop rule avoids an
+       always-resident layer there (see index.css .app-sidebar note). */
+    will-change: transform;
     box-shadow: 4px 0 24px rgba(0, 0, 0, 0.4);
   }
 

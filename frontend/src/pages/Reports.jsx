@@ -153,12 +153,14 @@ export default function Reports() {
 
   const exportFile = (format) => {
     const token = getAuthToken();
-    const baseUrl = import.meta.env.VITE_API_URL || '';
+    // Relative path → same-origin via Vite's /api proxy. A VITE_API_URL
+    // prefix would make this cross-origin (CORS preflight 401 + mixed-content
+    // over HTTPS). See Invoices.jsx downloadPdf for the canonical note.
     const endpoint = format === 'pdf' ? 'export-pdf' : 'export-csv';
     const params = viewMode === 'table'
       ? `type=${detailType}${dateParams()}`
       : `metric=${metric}&groupBy=${groupBy}${dateParams()}`;
-    fetch(`${baseUrl}/api/reports/${endpoint}?${params}`, { headers: { Authorization: `Bearer ${token}` } })
+    fetch(`/api/reports/${endpoint}?${params}`, { headers: { Authorization: `Bearer ${token}` } })
       .then(res => {
         if (!res.ok) throw new Error(`${format.toUpperCase()} export failed`);
         return res.blob();

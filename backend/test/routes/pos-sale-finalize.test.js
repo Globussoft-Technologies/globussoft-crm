@@ -80,6 +80,12 @@ prisma.sale = prisma.sale || {};
 prisma.sale.findFirst = vi.fn();
 prisma.sale.create = vi.fn();
 
+// Atomic invoice numbering (replaces the racy sale.findFirst lookup).
+// generateInvoiceNumber() now calls invoiceCounter.upsert and derives the
+// invoice number from (nextSeq - 1). Returning nextSeq=2 yields POS-YYYY-0001.
+prisma.invoiceCounter = prisma.invoiceCounter || {};
+prisma.invoiceCounter.upsert = vi.fn().mockResolvedValue({ nextSeq: 2 });
+
 prisma.invoice = prisma.invoice || {};
 prisma.invoice.create = vi.fn();
 
@@ -145,6 +151,8 @@ beforeEach(() => {
   prisma.shift.findFirst.mockReset();
   prisma.sale.findFirst.mockReset();
   prisma.sale.create.mockReset();
+  prisma.invoiceCounter.upsert.mockReset();
+  prisma.invoiceCounter.upsert.mockResolvedValue({ nextSeq: 2 });
   prisma.invoice.create.mockReset();
   prisma.payment.create.mockReset();
   prisma.auditLog.create.mockReset();

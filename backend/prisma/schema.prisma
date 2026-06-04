@@ -352,6 +352,7 @@ model Tenant {
   registers       Register[]
   shifts          Shift[]
   sales           Sale[]
+  invoiceCounters InvoiceCounter[]
   saleLineItems   SaleLineItem[]
   // #779 — petty-cash deposits/withdrawals against open shifts.
   pettyCashLedger PettyCashLedger[]
@@ -414,7 +415,7 @@ model User {
   password  String
   role      String   @default("USER") // ADMIN, USER, MANAGER
   userType  String   @default("STAFF") // STAFF | OWNER | CUSTOMER
-  name      String?
+  name      String
   createdAt DateTime @default(now())
 
   // 2FA
@@ -545,6 +546,7 @@ model User {
   // Email is unique within a tenant, not globally — see the comment on the
   // email field. Lets the same email register/log in across multiple orgs.
   @@unique([email, tenantId])
+  @@index([tenantId, role])
 }
 
 model Contact {
@@ -721,6 +723,8 @@ model Contact {
   @@index([tenantId, assignedToId])
   @@index([tenantId, deletedAt])
   @@index([tenantId, status, slaBreached])
+  @@index([tenantId, name])
+  @@index([tenantId, phone])
 }
 
 model Activity {
@@ -739,6 +743,7 @@ model Activity {
 
   @@index([contactId, createdAt])
   @@index([tenantId, createdAt])
+  @@index([tenantId, userId])
 }
 
 model Deal {
@@ -779,6 +784,8 @@ model Deal {
 
   @@index([tenantId, stage])
   @@index([tenantId, ownerId])
+  @@index([tenantId, contactId])
+  @@index([tenantId, probability])
   @@index([tenantId, createdAt])
   @@index([tenantId, deletedAt])
 }
@@ -852,6 +859,7 @@ model Campaign {
   pushNotifications PushNotification[]
 
   @@index([sequenceId])
+  @@index([tenantId])
 }
 
 model AutomationRule {
@@ -905,6 +913,7 @@ model EmailMessage {
 
   @@index([tenantId, direction])
   @@index([tenantId, contactId])
+  @@index([tenantId, threadId])
   @@index([tenantId, createdAt])
 }
 
@@ -931,6 +940,7 @@ model CallLog {
   user   User? @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   @@index([tenantId, createdAt])
+  @@index([tenantId, contactId])
 }
 
 model Attachment {
@@ -944,6 +954,9 @@ model Attachment {
 
   dealId Int
   deal   Deal @relation(fields: [dealId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([tenantId, dealId])
 }
 
 model ApiKey {
@@ -964,6 +977,8 @@ model ApiKey {
 
   userId Int
   user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
 }
 
 model Webhook {
@@ -978,6 +993,8 @@ model Webhook {
 
   userId Int
   user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
 }
 
 model Invoice {
@@ -1008,7 +1025,7 @@ model Invoice {
   dealId    Int?
   deal      Deal?   @relation(fields: [dealId], references: [id], onDelete: SetNull)
   contactId Int
-  contact   Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  contact   Contact @relation(fields: [contactId], references: [id], onDelete: Restrict)
 
   // #601 — wellness visit linkage. Optional so generic CRM invoices don't
   // need it. SetNull on visit delete; Invoice itself stays Restrict-on-tenant.
@@ -1018,6 +1035,9 @@ model Invoice {
 
   @@index([tenantId, status])
   @@index([tenantId, contactId])
+  @@index([tenantId, isRecurring])
+  @@index([tenantId, nextRecurDate])
+  @@index([tenantId, parentInvoiceId])
   @@index([visitId, status])
 }
 
@@ -1119,6 +1139,9 @@ model SequenceEnrollment {
   currentStep Int?      @default(0)
   nextRun     DateTime?
   status      String    @default("Active") // Active, Completed, Paused, Unenrolled
+  // Pessimistic locking — mirrors waOutboundJob lockedAt/lockedBy pattern.
+  lockedAt    DateTime?
+  lockedBy    String?
   createdAt   DateTime  @default(now())
 
   tenantId Int    @default(1)
@@ -1218,7 +1241,7 @@ model Quote {
   mrr         Float           @default(0.0)
   status      String          @default("Draft") // Draft, Sent, Accepted, Rejected
   dealId      Int
-  deal        Deal            @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  deal        Deal            @relation(fields: [dealId], references: [id], onDelete: Restrict)
   lineItems   QuoteLineItem[]
   createdAt   DateTime        @default(now())
   updatedAt   DateTime        @updatedAt
@@ -1254,16 +1277,17 @@ model Task {
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   contactId Int?
-  contact   Contact? @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  contact   Contact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
 
   userId Int?
-  user   User? @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user   User? @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   projectId Int?
   project   Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
 
   @@index([tenantId, status])
   @@index([tenantId, userId])
+  @@index([tenantId, contactId])
   @@index([tenantId, deletedAt])
 }
 
@@ -1312,6 +1336,8 @@ model Contract {
   contact   Contact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
   dealId    Int?
   deal      Deal?    @relation(fields: [dealId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId])
 }
 
 model Estimate {
@@ -1367,6 +1393,7 @@ model Notification {
   user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, isRead])
+  @@index([tenantId, userId, isRead])
   @@index([tenantId, createdAt])
 }
 
@@ -1516,6 +1543,8 @@ model ReportSchedule {
 
   userId Int
   user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
 }
 
 model MarketplaceLead {
@@ -1590,6 +1619,7 @@ model SmsMessage {
   campaign   Campaign? @relation(fields: [campaignId], references: [id], onDelete: SetNull)
 
   @@index([tenantId, createdAt])
+  @@index([tenantId, contactId])
 }
 
 model SmsTemplate {
@@ -1692,6 +1722,7 @@ model WhatsAppMessage {
   // closes a measurable latency leak.
   @@index([providerMsgId])
   @@index([tenantId, status, createdAt])
+  @@index([tenantId, contactId])
 }
 
 // -- WhatsApp 2-way: Thread aggregation + opt-out (Wave 2 Agent KK) --
@@ -2038,7 +2069,7 @@ model NotificationPreference {
 model LandingPage {
   id              Int       @id @default(autoincrement())
   title           String
-  slug            String    @unique
+  slug            String
   description     String?
   templateType    String?
   content         String?   @db.LongText // JSON component array
@@ -2059,6 +2090,7 @@ model LandingPage {
   user      User?                  @relation(fields: [userId], references: [id], onDelete: SetNull)
   analytics LandingPageAnalytics[]
 
+  @@unique([tenantId, slug])
   @@index([tenantId, status])
 }
 
@@ -2248,6 +2280,8 @@ model Pipeline {
   tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+
+  @@index([tenantId])
 }
 
 // ── Forecasting + Win/Loss ───────────────────────────────────────
@@ -2411,6 +2445,8 @@ model Chatbot {
   tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@index([tenantId])
 }
 
 model ChatbotConversation {
@@ -2424,6 +2460,8 @@ model ChatbotConversation {
   tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@index([tenantId])
 }
 
 // ── Knowledge Base ───────────────────────────────────────────────
@@ -2481,6 +2519,8 @@ model CannedResponse {
   tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@index([tenantId])
 }
 
 // ── NPS / CSAT Surveys ───────────────────────────────────────────
@@ -2522,6 +2562,8 @@ model Survey {
 
   questions SurveyQuestion[]
   answers   SurveyAnswer[]
+
+  @@unique([tenantId, name])
 }
 
 model SurveyResponse {
@@ -2642,13 +2684,15 @@ model DocumentTemplate {
   tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@index([tenantId])
 }
 
 // ── Meeting Scheduler ────────────────────────────────────────────
 
 model BookingPage {
   id                 Int      @id @default(autoincrement())
-  slug               String   @unique
+  slug               String
   title              String
   description        String?
   ownerId            Int
@@ -2675,6 +2719,9 @@ model BookingPage {
   tenant             Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
+
+  @@unique([tenantId, slug])
+  @@index([tenantId])
 }
 
 model Booking {
@@ -2728,6 +2775,7 @@ model ScheduledEmail {
   createdAt    DateTime  @default(now())
 
   @@index([tenantId, status, scheduledFor])
+  @@index([tenantId])
 }
 
 // ── Custom Dashboards ────────────────────────────────────────────
@@ -2742,6 +2790,8 @@ model Dashboard {
   tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@index([tenantId])
 }
 
 // ── Custom Reports ───────────────────────────────────────────────
@@ -2756,6 +2806,8 @@ model CustomReport {
   tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+
+  @@index([tenantId])
 }
 
 // ── Multi-Currency ───────────────────────────────────────────────
@@ -2923,6 +2975,8 @@ model Playbook {
   tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@index([tenantId])
 }
 
 model PlaybookProgress {
@@ -3137,6 +3191,7 @@ model Patient {
   @@unique([tenantId, userId], name: "patient_tenant_user_unique")
   @@index([tenantId, name])
   @@index([tenantId, phone])
+  @@index([tenantId, email])
   @@index([tenantId, locationId])
   @@index([tenantId, userId])
   @@index([contactId])
@@ -3215,6 +3270,10 @@ model Visit {
   status        String   @default("completed") // booked, arrived, in-treatment, completed, no-show, cancelled
   vitals        String?  @db.Text // JSON: bp, pulse, weight, etc.
   notes         String?  @db.Text
+  // Patient-supplied chief complaint / reason for the appointment. Required at
+  // the self-booking form (BookAppointment.jsx) but nullable in DB so legacy
+  // staff-side creates (Calendar drag, public-widget) still validate.
+  reason        String?  @db.Text
   photosBefore  String?  @db.Text // JSON array of URLs
   photosAfter   String?  @db.Text // JSON array of URLs
   amountCharged Float?
@@ -3264,7 +3323,7 @@ model Visit {
   referrer    String? @db.Text // can be a long URL with query params
 
   patientId Int
-  patient   Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  patient   Patient @relation(fields: [patientId], references: [id], onDelete: Restrict)
 
   doctorId Int?
   doctor   User? @relation("DoctorVisits", fields: [doctorId], references: [id], onDelete: SetNull)
@@ -3274,6 +3333,13 @@ model Visit {
 
   treatmentPlanId Int?
   treatmentPlan   TreatmentPlan? @relation(fields: [treatmentPlanId], references: [id], onDelete: SetNull)
+
+  // Optional membership applied to this booking. The patient picks an active
+  // membership at booking time; the redemption is recorded on visit completion
+  // (not at booking) so cancellations don't drain balance. SetNull on
+  // membership deletion so the visit row survives membership purges.
+  membershipId Int?
+  membership   Membership? @relation(fields: [membershipId], references: [id], onDelete: SetNull)
 
   // #413 — Restrict (not Cascade) on Tenant deletion. Visit is PHI
   // (medical encounters, vitals, before/after photos, charged amounts).
@@ -3319,8 +3385,8 @@ model Prescription {
   instructions String? @db.Text
   pdfUrl       String?
 
-  visitId Int
-  visit   Visit @relation(fields: [visitId], references: [id], onDelete: Cascade)
+  visitId Int?
+  visit   Visit? @relation(fields: [visitId], references: [id], onDelete: SetNull)
 
   patientId Int
   patient   Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
@@ -3371,7 +3437,7 @@ model ConsentForm {
   hasPdfBlob       Boolean @default(false) // flag for list queries (avoid loading full BLOB)
 
   patientId Int
-  patient   Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  patient   Patient @relation(fields: [patientId], references: [id], onDelete: Restrict)
 
   serviceId Int?
   service   Service? @relation(fields: [serviceId], references: [id], onDelete: SetNull)
@@ -3459,7 +3525,7 @@ model TreatmentPlan {
   totalPrice        Float     @default(0)
 
   patientId Int
-  patient   Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  patient   Patient @relation(fields: [patientId], references: [id], onDelete: Restrict)
 
   serviceId Int?
   service   Service? @relation(fields: [serviceId], references: [id], onDelete: SetNull)
@@ -3655,7 +3721,7 @@ model PatientOtp {
 model LoyaltyTransaction {
   id        Int      @id @default(autoincrement())
   patientId Int
-  patient   Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  patient   Patient  @relation(fields: [patientId], references: [id], onDelete: Restrict)
   type      String // earned, redeemed, expired, referral_bonus, manual_credit
   points    Int // positive = credit, negative = redemption
   reason    String? // human description
@@ -3830,6 +3896,7 @@ model Membership {
   updatedAt        DateTime       @updatedAt
 
   redemptions MembershipRedemption[]
+  visits      Visit[]
 
   @@index([tenantId, patientId, status])
   @@index([tenantId, endDate])
@@ -4014,7 +4081,7 @@ model Wallet {
   tenantId  Int      @default(1)
   tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   patientId Int      @unique
-  patient   Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  patient   Patient  @relation(fields: [patientId], references: [id], onDelete: Restrict)
   balance   Float    @default(0)
   currency  String   @default("INR")
   createdAt DateTime @default(now())
@@ -4480,6 +4547,10 @@ model PettyCashLedger {
   // DEPOSIT | WITHDRAWAL. Free-text would be a footgun for the balance
   // computation; route-layer validates against this 2-value enum.
   type      String
+  // Expense category for WITHDRAWAL rows so the Expenses tab can group/label
+  // them (GENERAL | SUBSCRIPTION | …). DEPOSITs stay GENERAL. Route-layer
+  // validates; default keeps existing rows + uncategorised entries valid.
+  category  String   @default("GENERAL")
   amount    Float
   reason    String   @db.Text
   // Cashier id of who recorded the row — kept as a raw int (not an FK)
@@ -4539,6 +4610,18 @@ model Sale {
   @@index([tenantId, patientId])
   @@index([tenantId, status])
   @@index([tenantId, createdAt])
+}
+
+// Atomic invoice-number counter per (tenant, year). Replaces the racy
+// findFirst+1 pattern in routes/pos.js generateInvoiceNumber().
+model InvoiceCounter {
+  tenantId Int    @default(1)
+  year     Int
+  nextSeq  Int    @default(1)
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@id([tenantId, year])
+  @@index([tenantId])
 }
 
 model SaleLineItem {
@@ -4820,7 +4903,7 @@ model Subscription {
   planId              Int
   plan                SubscriptionPlan @relation(fields: [planId], references: [id], onDelete: Restrict)
   planName            String
-  status              String // ACTIVE | EXPIRED | CANCELLED
+  status              String // ACTIVE | SCHEDULED (queued behind a running period) | EXPIRED | CANCELLED
   amount              Decimal          @db.Decimal(12, 2)
   currency            String           @default("INR")
   billingIntervalDays Int?
@@ -4888,6 +4971,7 @@ model UserRole {
   assignedAt   DateTime @default(now())
   assignedById Int?
 
+  @@unique([userId])
   @@unique([userId, roleId])
   @@index([userId])
   @@index([roleId])
@@ -5245,7 +5329,7 @@ model TravelMarkupRule {
 model TmcTrip {
   id                   Int                       @id @default(autoincrement())
   tenantId             Int                       @default(1)
-  tripCode             String                    @unique // "bali2026"
+  tripCode             String                    // "bali2026"
   schoolContactId      Int // FK Contact (B2B school)
   destination          String
   departDate           DateTime
@@ -5265,6 +5349,7 @@ model TmcTrip {
   createdAt            DateTime                  @default(now())
   updatedAt            DateTime                  @updatedAt
 
+  @@unique([tenantId, tripCode])
   @@index([tenantId, status])
   @@index([tenantId, departDate])
 }

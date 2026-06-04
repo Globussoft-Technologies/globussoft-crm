@@ -404,6 +404,7 @@ const Layout = () => {
               name={user?.name || user?.email || "User"}
               size={28}
               roleBadge={user?.role || undefined}
+              imageUrl={user?.profilePicture || undefined}
             />
             <span>{user?.name || user?.email || "User"}</span>
           </button>

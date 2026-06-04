@@ -1,8 +1,10 @@
 import { useContext, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Calendar, Search, Filter, RefreshCw } from 'lucide-react';
+import { Calendar, Search, Filter, RefreshCw, UserPlus } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { AuthContext } from '../../App';
+import { useNotify } from '../../utils/notify';
+import { AssignDoctorModal, displayStatus } from './Calendar';
 
 /**
  * Appointments — tenant-wide list view.
@@ -17,12 +19,36 @@ import { AuthContext } from '../../App';
  *     server enforces who sees what.
  *
  * The page assumes the visit row is the "appointment" (in this codebase
- * a booking creates a Visit row with status='scheduled'; the words are
+ * a booking creates a Visit row with status='booked'; status terms are
  * used interchangeably elsewhere — Calendar.jsx, the booking flow, etc.)
+ *
+ * Status filter is keyed to the real Visit.status values used elsewhere
+ * (per Calendar.jsx palette). 'pending' is a CLIENT-SIDE presentational
+ * filter only — it maps to `displayStatus(v) === 'pending'` (i.e.
+ * status='booked' && doctorId IS NULL) since the server has no notion
+ * of pending separate from booked.
  */
+// Real Visit.status set per Calendar.jsx + wellness.js routes. 'pending'
+// is presentational only — derived from `booked` + null doctorId via
+// displayStatus(). Keep this list in lockstep with Calendar's palette.
+const STATUS_OPTIONS = [
+  { value: '', label: 'Any status' },
+  { value: 'booked', label: 'Booked' },
+  { value: 'pending', label: 'Pending (unassigned)', clientOnly: true },
+  { value: 'confirmed', label: 'Confirmed' },
+  { value: 'arrived', label: 'Arrived' },
+  { value: 'in-treatment', label: 'In treatment' },
+  { value: 'completed', label: 'Completed' },
+  { value: 'cancelled', label: 'Cancelled' },
+  { value: 'no-show', label: 'No-show' },
+];
 export default function Appointments() {
   const { user } = useContext(AuthContext) || {};
   const isOrg = user?.role === 'ADMIN' || user?.role === 'MANAGER';
+  const notify = useNotify();
+  // Pending visit currently being assigned to a doctor. Set when the
+  // user clicks the "Assign doctor" action on a pending row.
+  const [assignTarget, setAssignTarget] = useState(null);
 
   // Filter state — default to "this week" so the page is useful without
   // any clicks. Admin can widen / narrow from there.
@@ -49,7 +75,9 @@ export default function Appointments() {
     qs.set('to', `${to}T23:59:59${localTzOffset()}`);
     qs.set('limit', '500');
     if (doctorId) qs.set('doctorId', doctorId);
-    if (status) qs.set('status', status);
+    // 'pending' is client-side-only — server stores it as 'booked' with
+    // null doctorId. Send everything else through as-is.
+    if (status && status !== 'pending') qs.set('status', status);
     fetchApi(`/api/wellness/visits?${qs.toString()}`, { silent: true })
       .then((res) => {
         if (cancelled) return;
@@ -87,16 +115,24 @@ export default function Appointments() {
     };
   }, [isOrg]);
 
-  // Client-side search across patient name + service name. Keeps the
-  // server query stable + lets the user narrow without a round-trip.
+  // Client-side filters: presentational 'pending' status + free-text search.
+  // Server already narrows by date / doctor / real status; this layer adds
+  // the bits the server can't (pending = booked + no doctor) and per-row
+  // search without a round-trip.
   const filtered = useMemo(() => {
+    let rows = visits;
+    if (status === 'pending') {
+      rows = rows.filter((v) => v.status === 'booked' && !v.doctorId);
+    }
     const term = search.trim().toLowerCase();
-    if (!term) return visits;
-    return visits.filter((v) => {
-      const blob = `${v.patient?.name || ''} ${v.service?.name || ''} ${v.doctor?.name || ''}`.toLowerCase();
-      return blob.includes(term);
-    });
-  }, [visits, search]);
+    if (term) {
+      rows = rows.filter((v) => {
+        const blob = `${v.patient?.name || ''} ${v.service?.name || ''} ${v.doctor?.name || ''}`.toLowerCase();
+        return blob.includes(term);
+      });
+    }
+    return rows;
+  }, [visits, status, search]);
 
   // Sort by visitDate ascending so the timeline reads top-to-bottom.
   const sorted = useMemo(
@@ -196,13 +232,9 @@ export default function Appointments() {
             onChange={(e) => setStatus(e.target.value)}
             style={{ width: '100%' }}
           >
-            <option value="">Any status</option>
-            <option value="scheduled">Scheduled</option>
-            <option value="checked-in">Checked in</option>
-            <option value="in-progress">In progress</option>
-            <option value="completed">Completed</option>
-            <option value="cancelled">Cancelled</option>
-            <option value="no-show">No-show</option>
+            {STATUS_OPTIONS.map((opt) => (
+              <option key={opt.value || 'any'} value={opt.value}>{opt.label}</option>
+            ))}
           </select>
         </label>
         <label style={fieldLabel}>
@@ -338,19 +370,41 @@ export default function Appointments() {
                     )}
                   </Td>
                   <Td>
-                    <StatusBadge status={v.status} />
+                    <StatusBadge status={displayStatus(v)} />
                   </Td>
                   <Td>
-                    <Link
-                      to={`/wellness/calendar?focus=${v.id}${v.visitDate ? `&date=${isoLocalDate(v.visitDate)}` : ''}`}
-                      style={{
-                        fontSize: '0.8rem',
-                        color: 'var(--primary-color, var(--accent-color))',
-                        textDecoration: 'none',
-                      }}
-                    >
-                      Open in calendar →
-                    </Link>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', alignItems: 'flex-start' }}>
+                      {/* Assign-doctor action — only surfaces for pending
+                          visits (doctorId is null and still booked). Org
+                          roles only; doctors viewing their own list don't
+                          need the action. */}
+                      {isOrg && !v.doctorId && v.status === 'booked' && (
+                        <button
+                          type="button"
+                          onClick={() => setAssignTarget(v)}
+                          data-testid={`appointments-assign-${v.id}`}
+                          style={{
+                            display: 'inline-flex', alignItems: 'center', gap: '0.3rem',
+                            padding: '0.3rem 0.6rem', borderRadius: 6,
+                            fontSize: '0.78rem', fontWeight: 500,
+                            background: 'var(--primary-color, var(--accent-color, #6366f1))',
+                            color: '#fff', border: 'none', cursor: 'pointer',
+                          }}
+                        >
+                          <UserPlus size={13} /> Assign doctor
+                        </button>
+                      )}
+                      <Link
+                        to={`/wellness/calendar?focus=${v.id}${v.visitDate ? `&date=${isoLocalDate(v.visitDate)}` : ''}`}
+                        style={{
+                          fontSize: '0.8rem',
+                          color: 'var(--primary-color, var(--accent-color))',
+                          textDecoration: 'none',
+                        }}
+                      >
+                        Open in calendar →
+                      </Link>
+                    </div>
                   </Td>
                 </tr>
               ))}
@@ -368,6 +422,20 @@ export default function Appointments() {
         >
           {sorted.length} of {visits.length} appointments shown
         </div>
+      )}
+
+      {assignTarget && (
+        <AssignDoctorModal
+          visit={assignTarget}
+          notify={notify}
+          onClose={() => setAssignTarget(null)}
+          onAssigned={() => {
+            setAssignTarget(null);
+            // Refetch the list so the just-assigned visit shows its new
+            // doctor + drops its Assign button.
+            setReloadTick((t) => t + 1);
+          }}
+        />
       )}
     </div>
   );
@@ -413,9 +481,18 @@ function isoLocalDate(input) {
 
 function StatusBadge({ status }) {
   const palette = {
+    // 'pending' is a presentational status — surfaced for visits whose
+    // doctorId is null. The Calendar export `displayStatus` flips
+    // status='booked' + doctorId=null into 'pending' so the admin UI
+    // never displays raw 'booked' for an unassigned appointment.
+    pending: { fg: '#f59e0b', bg: 'rgba(245,158,11,0.12)' },
+    booked: { fg: '#3b82f6', bg: 'rgba(59,130,246,0.1)' },
     scheduled: { fg: '#3b82f6', bg: 'rgba(59,130,246,0.1)' },
     'checked-in': { fg: '#0ea5e9', bg: 'rgba(14,165,233,0.1)' },
     'in-progress': { fg: '#a855f7', bg: 'rgba(168,85,247,0.1)' },
+    'in-treatment': { fg: '#f59e0b', bg: 'rgba(245,158,11,0.12)' },
+    arrived: { fg: '#a855f7', bg: 'rgba(168,85,247,0.12)' },
+    confirmed: { fg: '#6366f1', bg: 'rgba(99,102,241,0.12)' },
     completed: { fg: '#10b981', bg: 'rgba(16,185,129,0.1)' },
     cancelled: { fg: '#6b7280', bg: 'rgba(107,114,128,0.1)' },
     'no-show': { fg: '#ef4444', bg: 'rgba(239,68,68,0.1)' },

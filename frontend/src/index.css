@@ -626,16 +626,45 @@ aside.glass.app-sidebar {
 
 .app-sidebar {
   contain: layout paint style;
-  will-change: transform;
+  /* NOTE: `will-change: transform` is intentionally NOT here. The sidebar only
+     transforms inside the mobile drawer (@media max-width:899px in
+     responsive.css), so a permanent, all-viewport `will-change` just pinned an
+     always-resident GPU layer on desktop — where nothing ever animates — which
+     also hosts the scrolling <nav> and added compositor overhead/jank for no
+     benefit (MDN: don't apply will-change permanently). `contain: layout paint
+     style` already isolates the sidebar's paint for fast scrolling. The drawer
+     slide gets its own scoped `will-change` in responsive.css's mobile block. */
 }
 
-/* PERF: the inner scroll container. Reserves a stable scrollbar gutter and
-   ensures the browser can fast-path scrolling without invalidating the
-   parent's compositing tree. */
+/* PERF + UX: the inner scroll container. `contain` lets the browser fast-path
+   scrolling without invalidating the parent's compositing tree;
+   `scrollbar-gutter: stable` reserves the gutter so content doesn't shift.
+   The styled scrollbar below is the SCROLL AFFORDANCE — without it the ~2700px
+   of hidden nav items had no visual hint they were scrollable, so the region
+   read as a clipped/broken render. A thin, theme-aware thumb signals "there's
+   more below" the moment the page loads. */
 .app-sidebar > nav {
   contain: layout paint style;
   scrollbar-gutter: stable;
   overscroll-behavior: contain;
+  scrollbar-width: thin; /* Firefox */
+  scrollbar-color: var(--scrollbar-thumb, rgba(128, 128, 128, 0.45)) transparent;
+}
+.app-sidebar > nav::-webkit-scrollbar {
+  width: 8px;
+}
+.app-sidebar > nav::-webkit-scrollbar-track {
+  background: transparent;
+}
+.app-sidebar > nav::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb, rgba(128, 128, 128, 0.45));
+  border-radius: 4px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+.app-sidebar > nav::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover, rgba(128, 128, 128, 0.75));
+  background-clip: padding-box;
 }
 
 /* Animations */

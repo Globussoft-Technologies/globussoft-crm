@@ -75,11 +75,13 @@ import { createRequire } from 'node:module';
 const requireCJS = createRequire(import.meta.url);
 const abTestsRouter = requireCJS('../../routes/ab_tests');
 
-function makeApp({ tenantId = 1, userId = 7 } = {}) {
+function makeApp({ tenantId = 1, userId = 7, role = 'ADMIN' } = {}) {
   const app = express();
   app.use(express.json());
   app.use((req, _res, next) => {
-    req.user = { userId, tenantId };
+    // 214017c1 added verifyRole(["ADMIN","MANAGER"]) to every route, which
+    // checks req.user.role — so the fake auth injector must supply a role.
+    req.user = { userId, tenantId, role };
     next();
   });
   app.use('/api/ab-tests', abTestsRouter);

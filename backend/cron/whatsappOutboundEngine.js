@@ -55,6 +55,21 @@ const BACKOFF_STEPS_MS = [
 const MAX_ATTEMPTS = BACKOFF_STEPS_MS.length;
 const WORKER_ID = `pid-${process.pid}`;
 
+// Verbose template/text send tracing. Default OFF — set WHATSAPP_DEBUG_LOG=true
+// in backend/.env to trace param resolution + the Meta request/response while
+// debugging locally. Pairs with the same flag in services/whatsappProvider.js
+// (which traces the raw HTTP payload + Meta response body).
+const WA_DEBUG =
+  String(process.env.WHATSAPP_DEBUG_LOG || "false").toLowerCase() === "true";
+function waDebug(tag, payload) {
+  if (!WA_DEBUG) return;
+  try {
+    console.log(`[whatsappOutboundEngine] ${tag} ${JSON.stringify(payload)}`);
+  } catch {
+    console.log(`[whatsappOutboundEngine] ${tag} <unserializable>`);
+  }
+}
+
 // Meta tier → per-tick budget. Conservative defaults so we don't burn
 // quality rating in a burst. Real Meta limits are per-24h "unique customer"
 // conversations, but per-tick limiting is a cheap proxy.
@@ -72,13 +87,21 @@ function tierBudget(tier) {
 
 async function reclaimStaleLocks() {
   const threshold = new Date(Date.now() - STALE_LOCK_MS);
-  await prisma.waOutboundJob.updateMany({
-    where: {
-      status: "IN_FLIGHT",
-      lockedAt: { lt: threshold },
-    },
-    data: { status: "PENDING", lockedAt: null, lockedBy: null },
-  });
+  try {
+    await prisma.waOutboundJob.updateMany({
+      where: {
+        status: "IN_FLIGHT",
+        lockedAt: { lt: threshold },
+      },
+      data: { status: "PENDING", lockedAt: null, lockedBy: null },
+    });
+  } catch (e) {
+    // A stale orphaned row (tenantId pointing at a deleted Tenant) can trip a
+    // tenantId FK violation here and abort the whole statement, which would
+    // kill the tick before pickJobs() ever runs. Swallow it — the orphan
+    // purge in pickJobs() cleans the offending rows on this same tick.
+    console.warn("[whatsappOutboundEngine] reclaimStaleLocks skipped:", e.message);
+  }
 }
 
 async function pickJobs() {
@@ -95,9 +118,44 @@ async function pickJobs() {
   });
   if (candidates.length === 0) return [];
 
-  // Step 2: claim them. updateMany with WHERE lockedAt IS NULL serializes
-  // across concurrent workers.
-  const ids = candidates.map((c) => c.id);
+  // Step 1b: SELF-HEAL orphaned rows. A WaOutboundJob whose tenantId points at
+  // a deleted Tenant can never be sent, and — because the claim below is a
+  // single atomic UPDATE — even ONE such row trips a tenantId FK violation
+  // that rejects the WHOLE batch, freezing the entire queue for every tenant
+  // (see the 2026-06 staging incident). Detect them by checking which candidate
+  // tenants still exist, DELETE the orphans (a child-row DELETE is always
+  // permitted, unlike the UPDATE the cron normally does), and claim only the
+  // rest. This makes the engine recover on its own with no manual SQL.
+  const candidateTenantIds = [...new Set(candidates.map((c) => c.tenantId))];
+  const existingTenants = await prisma.tenant.findMany({
+    where: { id: { in: candidateTenantIds } },
+    select: { id: true },
+  });
+  const existingTenantIds = new Set(existingTenants.map((t) => t.id));
+  const orphanIds = candidates
+    .filter((c) => !existingTenantIds.has(c.tenantId))
+    .map((c) => c.id);
+  if (orphanIds.length > 0) {
+    await prisma.waOutboundJob
+      .deleteMany({ where: { id: { in: orphanIds } } })
+      .then(() =>
+        console.warn(
+          `[whatsappOutboundEngine] purged ${orphanIds.length} orphaned job(s) ` +
+            `referencing deleted tenant(s): ids=${orphanIds.join(",")}`,
+        ),
+      )
+      .catch((e) =>
+        console.error("[whatsappOutboundEngine] orphan purge failed:", e.message),
+      );
+  }
+
+  // Step 2: claim the valid rows. updateMany with WHERE lockedAt IS NULL
+  // serializes across concurrent workers. Orphans are excluded so this
+  // statement can no longer be poisoned by deleted-tenant rows.
+  const ids = candidates
+    .filter((c) => existingTenantIds.has(c.tenantId))
+    .map((c) => c.id);
+  if (ids.length === 0) return [];
   await prisma.waOutboundJob.updateMany({
     where: { id: { in: ids }, lockedAt: null, status: "PENDING" },
     data: { status: "IN_FLIGHT", lockedAt: new Date(), lockedBy: WORKER_ID },
@@ -210,6 +268,25 @@ async function processJob(job, config) {
           /* malformed → send param-less; Meta surfaces the mismatch */
         }
       }
+      // Template debug trace: surfaces the two most common template-send
+      // failure causes — (1) the local WhatsAppTemplate row is missing so we
+      // fall back to en_US and the language code mismatches Meta's approved
+      // template language → Meta #132001 "template name does not exist in the
+      // translation"; (2) the {{n}} param count from interactiveJson doesn't
+      // match the approved template → Meta #132000 "number of parameters does
+      // not match". Logged as a single line so it's greppable in pm2 logs.
+      waDebug("sendTemplate →", {
+        messageId: msg.id,
+        to: msg.to,
+        templateName: msg.templateName,
+        templateRowFound: !!tpl,
+        languageUsed: tpl?.language || "en_US (DEFAULT — no local template row)",
+        paramCount: parameters.length,
+        parameters,
+        interactiveJsonRaw: msg.interactiveJson,
+        phoneNumberId: config.phoneNumberId,
+        accessTokenLast4: accessToken ? `…${String(accessToken).slice(-4)}` : null,
+      });
       result = await sendTemplate({
         to: msg.to,
         templateName: msg.templateName,
@@ -218,6 +295,7 @@ async function processJob(job, config) {
         phoneNumberId: config.phoneNumberId,
         accessToken,
       });
+      waDebug("sendTemplate ←", { messageId: msg.id, result });
     } else if (msg.body) {
       result = await sendText({
         to: msg.to,
@@ -282,9 +360,24 @@ async function finishJob(job, outcome) {
     return;
   }
 
+  // Single always-on choke point for EVERY failure cause — pre-flight
+  // (no config / disconnected / businessRestricted / missing or undecryptable
+  // token / no body), send-time Meta rejection, and exceptions. Without this
+  // a failed send is invisible on the console (it only lands in
+  // WhatsAppMessage.errorMessage). After a deploy, grep staging logs for
+  // `[whatsappOutboundEngine] FAIL` to see exactly why a message didn't go.
+  const m = job.message || {};
+  const typeLabel = m.templateName ? `template:${m.templateName}` : "text";
+
   const newAttempts = job.attempts + 1;
   if (!outcome.retryable || newAttempts >= MAX_ATTEMPTS) {
     const finalStatus = !outcome.retryable ? "FAILED" : "DEAD";
+    console.error(
+      `[whatsappOutboundEngine] FAIL message#${job.messageId} tenant=${job.tenantId} ` +
+        `${typeLabel} to=${m.to ?? "?"} status=${finalStatus} ` +
+        `attempts=${newAttempts}/${MAX_ATTEMPTS} reason=${outcome.reason || "?"} ` +
+        `→ ${outcome.error || "send failed"}`,
+    );
     await prisma.$transaction([
       prisma.whatsAppMessage.update({
         where: { id: job.messageId },
@@ -318,6 +411,12 @@ async function finishJob(job, outcome) {
   // Schedule retry.
   const backoff =
     BACKOFF_STEPS_MS[Math.min(newAttempts - 1, BACKOFF_STEPS_MS.length - 1)];
+  console.warn(
+    `[whatsappOutboundEngine] RETRY message#${job.messageId} tenant=${job.tenantId} ` +
+      `${typeLabel} attempt=${newAttempts}/${MAX_ATTEMPTS} ` +
+      `in ${Math.round(backoff / 1000)}s reason=${outcome.reason || "?"} ` +
+      `→ ${outcome.error || "send failed"}`,
+  );
   await prisma.waOutboundJob.update({
     where: { id: job.id },
     data: {

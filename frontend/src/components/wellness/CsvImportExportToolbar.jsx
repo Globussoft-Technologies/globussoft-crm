@@ -20,6 +20,7 @@
 // "<a href=…>" path would skip the header and 401.
 
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Upload, Download, X, FileText, AlertTriangle, CheckCircle2, ChevronDown } from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
@@ -371,7 +372,15 @@ function ImportModal({ entity, label, onClose, onImported, formats = ["csv"], te
     URL.revokeObjectURL(a.href);
   };
 
-  return (
+  // Portal to <body> so the modal's `position: fixed` is anchored to the
+  // viewport, not to an ancestor with backdrop-filter / transform / filter.
+  // PageHeader's `.glass` class applies backdrop-filter, which would
+  // otherwise contain `position: fixed` inside the header's bounding box
+  // — the modal's `inset: 0` would cover only the header rectangle, the
+  // dark backdrop wouldn't span the page, and the Cancel / Confirm buttons
+  // would sit over the search-bar row and have their clicks intercepted.
+  // (#1120)
+  return createPortal(
     <div
       role="dialog"
       aria-modal="true"
@@ -564,7 +573,8 @@ function ImportModal({ entity, label, onClose, onImported, formats = ["csv"], te
           )}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

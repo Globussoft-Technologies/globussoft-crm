@@ -189,12 +189,16 @@ async function generateUniqueSlug(base) {
     .slice(0, 40) || "org";
   let slug = root;
   let i = 1;
-  // Try until unused
-  while (await prisma.tenant.findUnique({ where: { slug } })) {
+  const MAX_ATTEMPTS = 100;
+  while (i <= MAX_ATTEMPTS) {
+    const existing = await prisma.tenant.findUnique({ where: { slug } });
+    if (!existing) return slug;
     i += 1;
     slug = `${root}-${i}`;
   }
-  return slug;
+  // Fallback: UUID suffix guarantees uniqueness under collision storms.
+  const suffix = require("crypto").randomUUID().slice(0, 8);
+  return `${root}-${suffix}`;
 }
 
 // Password complexity: minimum 8 chars, must contain at least one letter AND one number
@@ -583,6 +587,16 @@ router.post("/login", async (req, res) => {
         // customer portal instead of the staff dashboard.
         userType: user.userType || 'STAFF',
         wellnessRole: user.wellnessRole || null,
+        // Sub-brand access scope (travel vertical). Lets the sidebar switcher
+        // render only the brands this user may activate; the authoritative gate
+        // stays server-side (travelGuards.getSubBrandAccessSet). Null = full
+        // access (admins / unset). Harmless extra field for non-travel clients.
+        subBrandAccess: user.subBrandAccess || null,
+        // #1123 — include profilePicture so the header avatar matches the
+        // /me payload after re-login. Without this the frontend persists a
+        // user object missing profilePicture, falls back to initials, and
+        // appears to "revert" the avatar that the user just uploaded.
+        profilePicture: user.profilePicture || null,
         primaryRole, // { id, key, name, landingPath } | null
         landingPath: primaryRole?.landingPath || null,
       },
@@ -746,7 +760,7 @@ router.get("/me", verifyToken, async (req, res) => {
   try {
     const user = await prisma.user.findUnique({
       where: { id: req.user.userId },
-      select: { id: true, name: true, email: true, role: true, wellnessRole: true, profilePicture: true, tenantId: true, createdAt: true, tenant: { select: { id: true, name: true, slug: true, plan: true, vertical: true, country: true, defaultCurrency: true, locale: true, logoUrl: true, brandColor: true } } }
+      select: { id: true, name: true, email: true, role: true, wellnessRole: true, subBrandAccess: true, profilePicture: true, tenantId: true, createdAt: true, tenant: { select: { id: true, name: true, slug: true, plan: true, vertical: true, country: true, defaultCurrency: true, locale: true, logoUrl: true, brandColor: true } } }
     });
     if (!user) {
       return res.status(404).json({ error: "User not found" });

@@ -92,7 +92,7 @@ const WIDGET_CATALOG = [
     title: 'Pending payments at POS',
     description: 'Outstanding invoices ready for collection.',
     category: 'Front desk',
-    requiredPermissions: [{ module: 'billing', action: 'read' }],
+    requiredPermissions: [{ module: 'invoices', action: 'read' }],
     defaultRoleKeys: ['RECEPTIONIST'],
   },
   {

@@ -17,7 +17,8 @@ const slugify = (text) =>
 const ensureUniqueSlug = async (model, baseSlug, tenantId, ignoreId = null) => {
   let slug = baseSlug;
   let counter = 1;
-  while (true) {
+  const MAX_ATTEMPTS = 100;
+  while (counter <= MAX_ATTEMPTS) {
     const existing = await prisma[model].findFirst({
       where: { slug, tenantId, ...(ignoreId ? { NOT: { id: ignoreId } } : {}) },
     });
@@ -25,6 +26,9 @@ const ensureUniqueSlug = async (model, baseSlug, tenantId, ignoreId = null) => {
     counter += 1;
     slug = `${baseSlug}-${counter}`;
   }
+  // Fallback: UUID suffix guarantees uniqueness when the sequential space is exhausted.
+  const suffix = require("crypto").randomUUID().slice(0, 8);
+  return `${baseSlug}-${suffix}`;
 };
 
 // ─── PUBLIC ENDPOINTS (no auth — mounted before authenticated routes) ───────

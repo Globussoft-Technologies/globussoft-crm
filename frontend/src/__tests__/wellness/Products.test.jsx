@@ -44,6 +44,25 @@ vi.mock('../../utils/notify', () => ({
   useNotify: () => notifyObj,
 }));
 
+// Products gates its Add / Edit / Delete actions on products.{write,update,
+// delete}. Mock a fully-permissioned viewer so the surface renders (mirrors
+// src/__tests__/Products.test.jsx).
+vi.mock('../../hooks/usePermissions', () => ({
+  usePermissions: () => ({
+    isReady: true,
+    hasPermission: () => true,
+    permissions: ['products.read', 'products.write', 'products.update', 'products.delete', 'products.manage'],
+    roles: [],
+    isOwner: false,
+    userType: null,
+    isLoading: false,
+    error: null,
+    refresh: () => Promise.resolve(),
+    hasAllPermissions: () => true,
+    hasAnyPermission: () => true,
+  }),
+}));
+
 import Products from '../../pages/wellness/Products';
 
 const SAMPLE_PRODUCTS = [

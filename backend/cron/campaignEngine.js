@@ -78,6 +78,12 @@ async function processDueCampaigns(options = {}) {
   if (due.length === 0) return result;
 
   for (const campaign of due) {
+    const lock = await prisma.campaign.updateMany({
+      where: { id: campaign.id, scheduleStatus: "PENDING" },
+      data: { scheduleStatus: "PROCESSING" },
+    });
+    if (lock.count === 0) continue; // another worker got it
+
     try {
       // Hydrate audience filter from the persisted JSON column. Mirrors
       // the old shape: routes/marketing.js's sendCampaign reads

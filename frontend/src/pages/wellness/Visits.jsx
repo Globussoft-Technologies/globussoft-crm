@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { ChevronLeft, Phone, Calendar, ChevronRight } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { formatMoney } from '../../utils/money';
@@ -24,33 +24,40 @@ export default function Visits() {
   const [customDetailsLimit, setCustomDetailsLimit] = useState('');
   const [isCustomDetailsLimit, setIsCustomDetailsLimit] = useState(false);
 
-  const loadVisits = () => {
+  const loadVisits = useCallback(() => {
     if (!from || !to) return; // 'custom' preset with no dates yet — skip fetch
     setLoading(true);
+    let cancelled = false;
     const url = `/api/wellness/reports/visit?startDate=${from}&endDate=${to}&skip=${skip}&limit=${limit}`;
     fetchApi(url)
-      .then(setData)
-      .catch(() => setData(null))
-      .finally(() => setLoading(false));
-  };
+      .then((res) => { if (!cancelled) setData(res); })
+      .catch(() => { if (!cancelled) setData(null); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [from, to, skip, limit]);
 
-  const loadPatientDetails = (patientId) => {
+  const loadPatientDetails = useCallback((patientId) => {
     if (!from || !to) return;
     setDetailsLoading(true);
+    let cancelled = false;
     const url = `/api/wellness/reports/visit/${patientId}?startDate=${from}&endDate=${to}&skip=${detailsSkip}&limit=${detailsLimit}`;
     fetchApi(url)
-      .then(setPatientDetails)
-      .catch(() => setPatientDetails(null))
-      .finally(() => setDetailsLoading(false));
-  };
-
-  useEffect(loadVisits, [from, to, skip, limit]);
+      .then((res) => { if (!cancelled) setPatientDetails(res); })
+      .catch(() => { if (!cancelled) setPatientDetails(null); })
+      .finally(() => { if (!cancelled) setDetailsLoading(false); });
+    return () => { cancelled = true; };
+  }, [from, to, detailsSkip, detailsLimit]);
 
   useEffect(() => {
-    if (selectedPatient) {
-      loadPatientDetails(selectedPatient.id);
-    }
-  }, [selectedPatient, from, to, detailsSkip, detailsLimit]);
+    const cleanup = loadVisits();
+    return cleanup;
+  }, [loadVisits]);
+
+  useEffect(() => {
+    if (!selectedPatient) return;
+    const cleanup = loadPatientDetails(selectedPatient.id);
+    return cleanup;
+  }, [selectedPatient, loadPatientDetails]);
 
   // Reset pagination whenever the date range changes so we don't show "page 4"
   // of a window that may have far fewer pages now.
@@ -146,7 +153,7 @@ export default function Visits() {
               </tr>
             </thead>
             <tbody>
-              {patientDetails.data.visits.map((visit) => (
+              {(patientDetails.data?.visits || []).map((visit) => (
                 <tr key={visit.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
                   <td style={{ ...tdStyle, textAlign: 'left' }}>
                     {formatDate(visit.visitDate)}
@@ -172,7 +179,7 @@ export default function Visits() {
                   </td>
                 </tr>
               ))}
-              {patientDetails.data.visits.length === 0 && (
+              {(patientDetails.data?.visits || []).length === 0 && (
                 <tr>
                   <td colSpan={6} style={{ ...tdStyle, textAlign: 'center', color: 'var(--text-secondary)' }}>
                     No visits in selected period.
@@ -294,7 +301,7 @@ export default function Visits() {
                 </tr>
               </thead>
               <tbody>
-                {data.data.map((patient) => (
+                {(data.data || []).map((patient) => (
                   <tr
                     key={patient.id}
                     onClick={() => handlePatientClick(patient)}

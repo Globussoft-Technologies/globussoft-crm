@@ -33,7 +33,7 @@ import {
   FileText,
   FileSpreadsheet,
   FolderKanban,
-  DollarSign,
+  IndianRupee,
   Trophy,
   ShoppingBag,
   Radio,
@@ -48,6 +48,7 @@ import {
   TrendingUp,
   BookOpen,
   PenTool,
+  Pill,
   ClipboardList,
   MessageSquare,
   Eye,
@@ -79,10 +80,6 @@ import {
   Calculator,
   // Used by the dynamic page-catalog → sidebar icon lookup for /portal
   UserCircle,
-  // Zylu-Gap #770/#779/#780/#781 — Cash Register admin
-  Banknote,
-  // Zylu-Gap #800 (WA-005) — Blocked WhatsApp numbers admin entry
-  Ban,
   // Cron PRD Priority A #1 — LLM Spend admin dashboard
   Activity,
   // #898 — Campaigns sidebar surfacing (Email / SMS / Push)
@@ -148,6 +145,12 @@ const Sidebar = ({
   const role = user?.role || "USER";
   const isAdmin = role === "ADMIN";
   const isManager = role === "ADMIN" || role === "MANAGER";
+  // Customer-tier = the low-privilege end-customer roles. Drives the
+  // `customerOnly` page-catalog flag (e.g. Buy Gift Cards) so admin /
+  // manager / staff roles don't see customer-facing storefront entries
+  // in their nav. CUSTOMER is the self-service-registered role; USER is
+  // the default low-privilege end-user role.
+  const isCustomerTier = role === "USER" || role === "CUSTOMER";
   const wellnessRole = user?.wellnessRole || null;
   const subBrandAccess = (() => {
     if (isAdmin) return null;
@@ -826,6 +829,7 @@ const Sidebar = ({
                 CallifiedLink,
                 isAdmin,
                 isManager,
+                isCustomerTier,
                 hasPermission,
                 permissionsReady,
                 sectionLabelStyle,
@@ -881,6 +885,7 @@ const PAGE_ICON_BY_PATH = {
   "/wellness/patients": HeartPulse,
   "/wellness/waitlist": Clock,
   "/wellness/prescriptions": PenTool,
+  "/wellness/my-prescriptions": Pill,
   "/wellness/visits": HeartPulse,
   "/signatures": FileSignature,
   "/wellness/inventory": Package,
@@ -905,7 +910,6 @@ const PAGE_ICON_BY_PATH = {
   "/converted-leads": UserPlus,
   "/callified-data": PhoneCall,
   "/tasks": CheckSquare,
-  "/marketplace-leads": ShoppingBag,
   "/lead-routing": Send,
   // Sales (generic only, not in wellness sidebar)
   "/dashboard": LayoutDashboard,
@@ -915,11 +919,12 @@ const PAGE_ICON_BY_PATH = {
   "/wellness/pos": Calculator,
   "/invoices": Receipt,
   "/estimates": FileSpreadsheet,
-  "/expenses": DollarSign,
+  "/expenses": IndianRupee,
   "/payments": CreditCard,
   "/wellness/wallet": WalletIcon,
   "/wellness/giftcards": Gift,
   "/wellness/buy-giftcards": ShoppingBag,
+  "/wellness/my-transactions": Receipt,
   "/wellness/coupons": TicketPercent,
   "/wellness/cashback-rules": Coins,
   // Marketing
@@ -938,6 +943,7 @@ const PAGE_ICON_BY_PATH = {
   "/wellness/book-appointment": Calendar,
   // Patient portal
   "/portal": UserCircle,
+  "/wellness/my-bookings": Calendar,
   // Admin
   "/wellness/locations": Building2,
   "/staff": UsersRound,
@@ -1008,12 +1014,9 @@ const PATH_COUNT_KEY = {
   "/tickets": "tickets",
 };
 
-// Some links want to highlight as active even when on a different path
-// (e.g. /marketplace-leads stays active when the user is on /marketplace,
-// the legacy alias). Path → list of additional pathnames to treat as matches.
-const PATH_MATCH_ALIASES = {
-  "/marketplace-leads": ["/marketplace"],
-};
+// Some links want to highlight as active even when on a different path.
+// Path → list of additional pathnames to treat as matches.
+const PATH_MATCH_ALIASES = {};
 
 function renderWellnessNav({
   Link,
@@ -1021,6 +1024,7 @@ function renderWellnessNav({
   CallifiedLink,
   isAdmin,
   isManager,
+  isCustomerTier = false,
   hasPermission = () => false,
   permissionsReady = false,
   sectionLabelStyle,
@@ -1050,6 +1054,11 @@ function renderWellnessNav({
   for (const page of accessiblePages) {
     if (!page || !page.category || !page.path) continue;
     if (page.hideForAdminTier && isAdmin) continue;
+    // customerOnly pages (e.g. Buy Gift Cards storefront) only surface to
+    // customer-tier roles (USER / CUSTOMER). Admin / manager / staff don't
+    // see them in their nav. Sidebar-only UX rule; direct-URL access and
+    // the backend route's own auth are unchanged.
+    if (page.customerOnly && !isCustomerTier) continue;
     if (!byCategory[page.category]) byCategory[page.category] = [];
     byCategory[page.category].push(page);
   }
@@ -1112,40 +1121,16 @@ function renderWellnessNav({
   // entries here can drop out. `isManager` here is shorthand: literal-
   // ADMIN passes isManager too.
   const categoryExtras = {
-    "Leads & Revenue": (
-      <Link
-        key="/wellness/whatsapp/blocked-numbers"
-        to="/wellness/whatsapp/blocked-numbers"
-        icon={Ban}
-        label="Blocked Numbers"
-        managerOnly
-      />
-    ),
-    // Cash Registers is an admin/manager surface (shift open/close,
-    // float reconciliation, petty-cash ledger). Regular users (doctors,
-    // nurses, telecallers, customers) don't operate the till and were
-    // previously seeing a sidebar link that routed nowhere — the page
-    // exists at pages/wellness/CashRegisters.jsx but isn't wired into
-    // App.jsx yet, so clicking it 404s. Gating to manager/admin closes
-    // both gaps until the route lands.
-    Finance: isManager ? (
-      <Link
-        key="/wellness/cash-registers"
-        to="/wellness/cash-registers"
-        icon={Banknote}
-        label="Cash Registers"
-        managerOnly
-      />
-    ) : null,
-    Marketing: isManager ? (
-      <Link
-        key="/campaigns"
-        to="/campaigns"
-        icon={Megaphone}
-        label="Campaigns"
-        managerOnly
-      />
-    ) : null,
+    // Cash Registers used to live here as its own sidebar entry, but
+    // `/wellness/cash-registers` has no route mounted in App.jsx and the
+    // dedicated page 404'd on every click. The CashRegisters component
+    // is now embedded inside Point of Sale as an admin/manager
+    // "Manage registers" panel, so this slot intentionally has no
+    // Finance extras.
+    //
+    // Campaigns used to render here as a hardcoded managerOnly link;
+    // removed by request. Route stays mounted in App.jsx so /campaigns
+    // remains reachable via deep-link.
   };
 
   return (
@@ -1195,23 +1180,21 @@ function renderWellnessNav({
 
       {/* Admin — rendered LAST so management surfaces sit at the bottom of
           the sidebar, below day-to-day operational entries (Leads & Revenue,
-          Finance, etc.). One unified section that combines:
-            • catalog-driven entries pulled from /api/pages/me — Locations,
-              Staff, Roles, Commission Profiles, Revenue Goals, Channels,
-              Approvals, Audit Log, Privacy, Settings. These are gated by
-              the user's RolePermission grants, so a non-literal-ADMIN
-              custom role with `roles.read` (etc.) still sees the subset
-              of admin pages it can access.
-            • 4 hardcoded entries that are NOT yet in the page catalog —
-              Tenant Settings, AdsGPT Reports, Callified Calls, Wallet
-              Bonus Rules. These stay inside an `isAdmin / isManager`
-              guard until they're catalogued.
-          A single section header keeps everything visually grouped. */}
+          Finance, etc.). Catalog-driven entries pulled from /api/pages/me —
+          Locations, Staff, Roles, Commission Profiles, Revenue Goals,
+          Channels, Approvals, Audit Log, Privacy, Settings. These are
+          gated by the user's RolePermission grants, so a non-literal-ADMIN
+          custom role with `roles.read` (etc.) still sees the subset of
+          admin pages it can access.
+
+          The Tenant Settings / AdsGPT Reports / Callified Calls / Wallet
+          Bonus Rules sidebar shortcuts were removed by request — the
+          underlying routes stay mounted in App.jsx and remain reachable
+          via deep-link (e.g. CapBanners' "Tenant Settings →" anchor). */}
       {(() => {
         const adminCatalogItems = byCategory["Admin"] || [];
         // Pull Settings out of the catalog admin list — it MUST render
-        // last in the sidebar (after the 4 non-catalog hardcoded admin
-        // entries below), per UX requirement. If the user lacks
+        // last in the sidebar per UX requirement. If the user lacks
         // settings.read, /api/pages/me already filtered Settings out so
         // settingsPage is undefined and nothing renders for it — the
         // matrix-is-authoritative contract stays intact.
@@ -1221,47 +1204,13 @@ function renderWellnessNav({
         const otherAdminItems = adminCatalogItems.filter(
           (p) => p.path !== "/settings",
         );
-        const showHardcoded = isAdmin || isManager;
-        if (otherAdminItems.length === 0 && !showHardcoded && !settingsPage) {
+        if (otherAdminItems.length === 0 && !settingsPage) {
           return null;
         }
         return (
           <>
             <div style={labelStyle}>Admin</div>
             {otherAdminItems.map(renderPage)}
-            {/* Per-tenant cap-override admin UI. Surfaces /api/tenant-settings
-                CRUD so ADMINs can configure budget caps for AdsGPT / AI
-                calling / RateHawk / LLM without DB access. */}
-            <Link
-              to="/admin/tenant-settings"
-              icon={DollarSign}
-              label="Tenant Settings"
-              adminOnly
-            />
-            {/* AdsGPT Reports admin UI. managerOnly so MANAGERs see it too
-                (analytics, not config). */}
-            <Link
-              to="/admin/adsgpt-reports"
-              icon={TrendingUp}
-              label="AdsGPT Reports"
-              managerOnly
-            />
-            {/* Callified AI calls admin UI. managerOnly so MANAGERs see it
-                too (operator action, not config). */}
-            <Link
-              to="/admin/callified-calls"
-              icon={PhoneCall}
-              label="Callified Calls"
-              managerOnly
-            />
-            {/* Wallet bonus rule CRUD admin UI. ADMIN-only per PRD §3.9
-                RBAC matrix. Page is robust to backend absence. */}
-            <Link
-              to="/admin/wallet-rules"
-              icon={WalletIcon}
-              label="Wallet Bonus Rules"
-              adminOnly
-            />
             {/* Settings — pinned LAST in the sidebar per UX requirement.
                 Only renders if /api/pages/me granted access (i.e. the
                 user has settings.read on at least one assigned role). */}
@@ -1347,7 +1296,31 @@ function renderTravelNav({
           <select
             id="travel-sub-brand-switcher"
             value={activeSubBrand || ""}
-            onChange={(e) => setActiveSubBrand(e.target.value || null)}
+            onChange={async (e) => {
+              const next = e.target.value || null;
+              // "All" (null) just clears the client-side filter — there's no
+              // sub-brand to validate, and server-side subBrandAccess still
+              // gates every data route. Clear immediately.
+              if (!next) {
+                setActiveSubBrand(null);
+                return;
+              }
+              // WS-1: authoritative server-side check before switching.
+              // fetchApi throws + auto-surfaces a toast on 400/403, so we only
+              // reach setActiveSubBrand on a 200 — never an optimistic switch.
+              try {
+                await fetchApi("/api/travel/session/switch-brand", {
+                  method: "POST",
+                  body: JSON.stringify({ subBrand: next }),
+                });
+                setActiveSubBrand(next);
+              } catch {
+                // Rejected (403 SUB_BRAND_FORBIDDEN) or invalid (400): the
+                // error toast was already shown by fetchApi. Leave the
+                // selection unchanged — the controlled <select value=...>
+                // snaps back to the prior activeSubBrand.
+              }
+            }}
             style={{
               flex: 1,
               fontSize: 12,
@@ -1385,7 +1358,7 @@ function renderTravelNav({
       <Link to="/travel/itineraries" icon={MapIcon} label="Itineraries" />
       <Link to="/travel/trips" icon={Luggage} label="TMC Trips" />
       <Link to="/travel/web-checkins" icon={Ticket} label="Web Check-ins" />
-      <Link to="/travel/cost-master" icon={DollarSign} label="Cost Master" />
+      <Link to="/travel/cost-master" icon={IndianRupee} label="Cost Master" />
       {/* Arc 2 Travel Gap #907 slice 5/N — SightseeingMaster admin entry.
           Adjacent to Cost Master because #907 frames Sightseeing as "the
           6th category in Cost Master". */}
@@ -1550,7 +1523,7 @@ function renderTravelNav({
 
       <div style={labelStyle}>Financial</div>
       <Link to="/invoices" icon={Receipt} label="Invoices" />
-      <Link to="/payments" icon={DollarSign} label="Payments" />
+      <Link to="/payments" icon={IndianRupee} label="Payments" />
       <Link to="/quotes" icon={FileText} label="Quotes" />
 
       <div style={labelStyle}>Reports</div>
@@ -1665,7 +1638,7 @@ function renderGenericNav({
         to="/invoices"
         icon={Receipt}
         label="Invoices"
-        requiredPermission={{ module: "billing", action: "read" }}
+        requiredPermission={{ module: "invoices", action: "read" }}
       />
       <Link
         to="/estimates"
@@ -1675,7 +1648,7 @@ function renderGenericNav({
       />
       <Link
         to="/expenses"
-        icon={DollarSign}
+        icon={IndianRupee}
         label="Expenses"
         requiredPermission={{ module: "expenses", action: "read" }}
       />
@@ -1732,12 +1705,9 @@ function renderGenericNav({
         label="Landing Pages"
         managerOnly
       />
-      <Link
-        to="/marketplace-leads"
-        icon={ShoppingBag}
-        label="Marketplace Leads"
-        managerOnly
-      />
+      {/* Marketplace Leads sidebar link removed by request. Route stays
+          mounted in App.jsx so /marketplace-leads is reachable by deep
+          link / direct URL. */}
 
       <Link to="/support" icon={LifeBuoy} label="Support" managerOnly />
       <Link
@@ -1826,7 +1796,7 @@ function renderGenericNav({
           <Link to="/objects" icon={Database} label="App Builder" adminOnly />
           <Link
             to="/currencies"
-            icon={DollarSign}
+            icon={IndianRupee}
             label="Currencies"
             adminOnly
           />

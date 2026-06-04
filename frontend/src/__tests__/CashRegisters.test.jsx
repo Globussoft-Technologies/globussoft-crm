@@ -39,7 +39,7 @@
  * test conventions in this same directory.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
 const fetchApiMock = vi.fn();
@@ -146,7 +146,7 @@ const OPEN_SHIFT = {
 };
 
 // ── Mock builders ────────────────────────────────────────────────────
-function makeMock({ registers = [REGISTER_OPEN, REGISTER_CLOSED], openShiftFor = { 11: OPEN_SHIFT }, shiftDetail = OPEN_SHIFT } = {}) {
+function makeMock({ registers = [REGISTER_OPEN, REGISTER_CLOSED], openShiftFor = { 11: OPEN_SHIFT }, shiftDetail = OPEN_SHIFT, pettyCash = [] } = {}) {
   return (url, opts = {}) => {
     const method = opts.method || 'GET';
     if (url === '/api/pos/registers' && method === 'GET') {
@@ -160,6 +160,14 @@ function makeMock({ registers = [REGISTER_OPEN, REGISTER_CLOSED], openShiftFor =
       const regId = parseInt(shiftListMatch[1], 10);
       const s = openShiftFor[regId];
       return Promise.resolve(s ? [s] : []);
+    }
+    // Petty-cash ledger powers the Expenses tab — match BEFORE the bare
+    // /shifts/:id detail route (more specific path first).
+    if (/^\/api\/pos\/shifts\/\d+\/petty-cash$/.test(url) && method === 'GET') {
+      return Promise.resolve(pettyCash);
+    }
+    if (/^\/api\/pos\/shifts\/\d+\/withdraw$/.test(url) && method === 'POST') {
+      return Promise.resolve({ id: 555, type: 'WITHDRAWAL' });
     }
     const shiftDetailMatch = url.match(/^\/api\/pos\/shifts\/(\d+)$/);
     if (shiftDetailMatch && method === 'GET') {
@@ -357,15 +365,15 @@ describe('CashRegisters — #779 shift lifecycle', () => {
     fireEvent.click(screen.getByTestId('register-card-11'));
 
     await waitFor(() =>
-      expect(screen.getByLabelText(/Closing total/i)).toBeInTheDocument(),
+      expect(screen.getByLabelText(/Counted cash/i)).toBeInTheDocument(),
     );
-    fireEvent.change(screen.getByLabelText(/Closing total/i), {
+    fireEvent.change(screen.getByLabelText(/Counted cash/i), {
       target: { value: '2500' },
     });
     fireEvent.change(screen.getByLabelText(/Closing notes/i), {
       target: { value: 'End of day' },
     });
-    fireEvent.click(screen.getByRole('button', { name: /Close shift/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Close register/i }));
 
     await waitFor(() => {
       const calls = fetchApiMock.mock.calls.filter(
@@ -376,7 +384,33 @@ describe('CashRegisters — #779 shift lifecycle', () => {
       const body = JSON.parse(calls[0][1].body);
       expect(body).toEqual({ closingTotal: 2500, notes: 'End of day' });
     });
-    expect(notify.success).toHaveBeenCalledWith(expect.stringMatching(/Shift closed/i));
+    expect(notify.success).toHaveBeenCalledWith(expect.stringMatching(/Register closed/i));
+  });
+
+  it('auto-closes WITHOUT a counted amount — POST body omits closingTotal', async () => {
+    fetchApiMock.mockImplementation(makeMock());
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('Front Desk')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('register-card-11'));
+
+    // Click Close register with the count left blank → backend auto-computes.
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /Close register/i })).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Close register/i }));
+
+    await waitFor(() => {
+      const calls = fetchApiMock.mock.calls.filter(
+        ([url, opts]) =>
+          /^\/api\/pos\/shifts\/\d+\/close$/.test(url) && opts?.method === 'POST',
+      );
+      expect(calls.length).toBe(1);
+      const body = JSON.parse(calls[0][1].body);
+      // No manual count → backend closes at expectedCash (variance 0).
+      expect(body).not.toHaveProperty('closingTotal');
+    });
+    expect(notify.success).toHaveBeenCalledWith(expect.stringMatching(/Register closed at/i));
   });
 
   it('Deposit button POSTs to /api/pos/shifts/:id/deposit with { amount, reason } (#779)', async () => {
@@ -430,6 +464,73 @@ describe('CashRegisters — #779 shift lifecycle', () => {
       expect(body).toEqual({ amount: 250, reason: 'Courier fee' });
     });
     promptSpy.mockRestore();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────
+// Expenses tab — petty-cash WITHDRAWAL ledger + Subscription category
+// ─────────────────────────────────────────────────────────────────────
+describe('CashRegisters — Expenses tab + subscription expense', () => {
+  const SUBSCRIPTION_EXPENSE = {
+    id: 9001,
+    type: 'WITHDRAWAL',
+    category: 'SUBSCRIPTION',
+    amount: 1999,
+    reason: 'Subscription: Pro',
+    createdAt: '2026-05-18T10:00:00.000Z',
+  };
+
+  it('renders WITHDRAWAL entries with a Subscription badge in the Expenses tab', async () => {
+    fetchApiMock.mockImplementation(makeMock({ pettyCash: [SUBSCRIPTION_EXPENSE] }));
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('Front Desk')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('register-card-11'));
+
+    // Switch to the Expenses Cash tab.
+    await waitFor(() =>
+      expect(screen.getByRole('tab', { name: /Expenses Cash/i })).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByRole('tab', { name: /Expenses Cash/i }));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('expense-row-9001')).toBeInTheDocument(),
+    );
+    const row = screen.getByTestId('expense-row-9001');
+    expect(within(row).getByText('Subscription: Pro')).toBeInTheDocument(); // reason
+    expect(within(row).getByText('subscription')).toBeInTheDocument(); // category badge (lowercased)
+    expect(within(row).getByText(/^−/)).toBeInTheDocument(); // outflow amount (minus prefix)
+  });
+
+  it('Add-expense form POSTs /withdraw with the chosen SUBSCRIPTION category', async () => {
+    fetchApiMock.mockImplementation(makeMock({ pettyCash: [] }));
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('Front Desk')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('register-card-11'));
+
+    await waitFor(() =>
+      expect(screen.getByRole('tab', { name: /Expenses Cash/i })).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByRole('tab', { name: /Expenses Cash/i }));
+
+    // Fill the add-expense form: amount, reason, type=Subscription.
+    await waitFor(() =>
+      expect(screen.getByLabelText(/Expense amount/i)).toBeInTheDocument(),
+    );
+    fireEvent.change(screen.getByLabelText(/Expense amount/i), { target: { value: '1999' } });
+    fireEvent.change(screen.getByLabelText(/Expense reason/i), { target: { value: 'Pro plan' } });
+    fireEvent.change(screen.getByLabelText(/Expense type/i), { target: { value: 'SUBSCRIPTION' } });
+    fireEvent.click(screen.getByRole('button', { name: /Add expense/i }));
+
+    await waitFor(() => {
+      const calls = fetchApiMock.mock.calls.filter(
+        ([url, opts]) => /\/withdraw$/.test(url) && opts?.method === 'POST',
+      );
+      expect(calls.length).toBe(1);
+      const body = JSON.parse(calls[0][1].body);
+      expect(body).toEqual({ amount: 1999, reason: 'Pro plan', category: 'SUBSCRIPTION' });
+    });
   });
 });
 
@@ -493,8 +594,8 @@ describe('CashRegisters — #781 transactions tabs', () => {
     expect(screen.queryByTestId('tx-row-7002')).not.toBeInTheDocument();
   });
 
-  it('Expenses Cash tab is empty + surfaces the "backend pending" copy', async () => {
-    fetchApiMock.mockImplementation(makeMock());
+  it('Expenses Cash tab shows the empty-state copy when there are no ledger entries', async () => {
+    fetchApiMock.mockImplementation(makeMock({ pettyCash: [] }));
     renderPage();
 
     await waitFor(() => expect(screen.getByText('Front Desk')).toBeInTheDocument());
@@ -507,7 +608,7 @@ describe('CashRegisters — #781 transactions tabs', () => {
 
     await waitFor(() =>
       expect(
-        screen.getByText(/Cash expense ledger ships with the #779 backend follow-up/i),
+        screen.getByText(/No expenses recorded on this shift yet/i),
       ).toBeInTheDocument(),
     );
   });
@@ -710,9 +811,9 @@ describe('CashRegisters — shift close validation', () => {
     fireEvent.click(screen.getByTestId('register-card-11'));
 
     await waitFor(() =>
-      expect(screen.getByLabelText(/Closing total/i)).toBeInTheDocument(),
+      expect(screen.getByLabelText(/Counted cash/i)).toBeInTheDocument(),
     );
-    const closingInput = screen.getByLabelText(/Closing total/i);
+    const closingInput = screen.getByLabelText(/Counted cash/i);
     fireEvent.change(closingInput, { target: { value: '-100' } });
     // Bypass HTML5 `min` constraint by submitting the form directly.
     fireEvent.submit(closingInput.closest('form'));
@@ -737,13 +838,13 @@ describe('CashRegisters — shift close validation', () => {
     fireEvent.click(screen.getByTestId('register-card-11'));
 
     await waitFor(() =>
-      expect(screen.getByLabelText(/Closing total/i)).toBeInTheDocument(),
+      expect(screen.getByLabelText(/Counted cash/i)).toBeInTheDocument(),
     );
-    fireEvent.change(screen.getByLabelText(/Closing total/i), {
+    fireEvent.change(screen.getByLabelText(/Counted cash/i), {
       target: { value: '2500' },
     });
     // Notes deliberately blank.
-    fireEvent.click(screen.getByRole('button', { name: /Close shift/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Close register/i }));
 
     await waitFor(() => {
       const closes = fetchApiMock.mock.calls.filter(
@@ -1043,7 +1144,7 @@ describe('CashRegisters — extension coverage', () => {
     expect(screen.getByTestId('status-header')).toHaveTextContent(/REGISTER CLOSED/i);
   });
 
-  it('Close shift NaN closingTotal triggers non-negative error (parseFloat("") branch)', async () => {
+  it('blank counted cash auto-closes (no error, POST omits closingTotal)', async () => {
     fetchApiMock.mockImplementation(makeMock());
     renderPage();
 
@@ -1051,21 +1152,22 @@ describe('CashRegisters — extension coverage', () => {
     fireEvent.click(screen.getByTestId('register-card-11'));
 
     await waitFor(() =>
-      expect(screen.getByLabelText(/Closing total/i)).toBeInTheDocument(),
+      expect(screen.getByLabelText(/Counted cash/i)).toBeInTheDocument(),
     );
-    // Leave closingTotal blank — parseFloat('') === NaN.
-    fireEvent.click(screen.getByRole('button', { name: /Close shift/i }));
+    // Leave the count blank → auto-close at expectedCash (no validation error).
+    fireEvent.click(screen.getByRole('button', { name: /Close register/i }));
 
     await waitFor(() => {
-      expect(notify.error).toHaveBeenCalledWith(
-        expect.stringMatching(/non-negative/i),
+      const closes = fetchApiMock.mock.calls.filter(
+        ([url, opts]) =>
+          /^\/api\/pos\/shifts\/\d+\/close$/.test(url) && opts?.method === 'POST',
       );
+      expect(closes.length).toBe(1);
+      expect(JSON.parse(closes[0][1].body)).not.toHaveProperty('closingTotal');
     });
-    const closes = fetchApiMock.mock.calls.filter(
-      ([url, opts]) =>
-        /^\/api\/pos\/shifts\/\d+\/close$/.test(url) && opts?.method === 'POST',
+    expect(notify.error).not.toHaveBeenCalledWith(
+      expect.stringMatching(/non-negative/i),
     );
-    expect(closes.length).toBe(0);
   });
 
   it('cancelling the WITHDRAW amount prompt aborts silently (no POST, no error toast)', async () => {

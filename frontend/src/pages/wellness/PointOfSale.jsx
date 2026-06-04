@@ -44,11 +44,21 @@ import {
   Tag,
   ShieldAlert,
   MapPin,
+  Banknote,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { formatMoney } from '../../utils/money';
 import { AuthContext } from '../../App';
+// Embedded admin-only "Manage registers" panel. Renders without its
+// outer page chrome when given `embedded`. Previously lived at its own
+// /wellness/cash-registers route but that route was never mounted in
+// App.jsx — sidebar 404'd, surface was unreachable. Folded into POS so
+// register CRUD, shift open/close, petty cash, and recent transactions
+// are accessible from the same surface where sales are rung up.
+import CashRegisters from './CashRegisters';
 
 const LINE_TYPES = [
   { value: 'SERVICE', label: 'Service' },
@@ -101,6 +111,11 @@ export default function PointOfSale() {
   const [busy, setBusy] = useState(false);
   const [lastReceipt, setLastReceipt] = useState(null);
   const notify = useNotify();
+
+  // Admin/manager-only "Manage registers" panel toggle. Renders the
+  // CashRegisters component embedded (no page chrome) when expanded.
+  // Default collapsed so the cashier-focused sale flow stays primary.
+  const [showRegistersPanel, setShowRegistersPanel] = useState(false);
 
   // Wave 7C extras (PRD Gap §2 items 2 + 10)
   const [guestCheckout, setGuestCheckout] = useState(false);
@@ -359,21 +374,28 @@ export default function PointOfSale() {
   // ── Shift close ─────────────────────────────────────────────────────
   const closeShift = async () => {
     if (!currentShift) return;
-    if (closingTotal === '' || Number(closingTotal) < 0) {
-      notify.error('Enter the cash drawer total at close');
-      return;
+    // Counted total is OPTIONAL — blank means "auto-close at the system-computed
+    // expected cash" (variance 0). A counted amount is only needed to record a
+    // variance (physical count ≠ expected).
+    const body = { notes: closingNotes };
+    const trimmed = String(closingTotal).trim();
+    if (trimmed !== '') {
+      const total = Number(trimmed);
+      if (!Number.isFinite(total) || total < 0) {
+        notify.error('Counted cash must be a non-negative number');
+        return;
+      }
+      body.closingTotal = total;
     }
     setBusy(true);
     try {
       const closed = await fetchApi(`/api/pos/shifts/${currentShift.id}/close`, {
         method: 'POST',
-        body: JSON.stringify({
-          closingTotal: Number(closingTotal),
-          notes: closingNotes,
-        }),
+        body: JSON.stringify(body),
       });
       notify.success(
-        `Shift closed. Variance: ${formatMoney(closed.variance, 'INR', 'en-IN')}`,
+        `Shift closed at ${formatMoney(closed.closingTotal, 'INR', 'en-IN')}. ` +
+        `Variance: ${formatMoney(closed.variance, 'INR', 'en-IN')}`,
       );
       setCurrentShift(null);
       setClosingTotal('');
@@ -520,22 +542,93 @@ export default function PointOfSale() {
 
   return (
     <div style={{ padding: '2rem', animation: 'fadeIn 0.4s ease-out' }}>
-      <header style={{ marginBottom: '1.25rem' }}>
-        <h1 style={{ fontSize: '1.75rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-          <Calculator size={24} /> Point of Sale
-        </h1>
-        <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-          Cash-and-carry checkout. Open a shift, ring up sales, close the shift to reconcile the cash drawer.
-        </p>
+      <header
+        style={{
+          marginBottom: '1.25rem',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'flex-start',
+          flexWrap: 'wrap',
+          gap: '1rem',
+        }}
+      >
+        <div>
+          <h1 style={{ fontSize: '1.75rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <Calculator size={24} /> Point of Sale
+          </h1>
+          <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
+            Cash-and-carry checkout. Open a shift, ring up sales, close the shift to reconcile the cash drawer.
+          </p>
+        </div>
+        {/* Admin/manager-only "Manage registers" disclosure. Folds the
+            former /wellness/cash-registers page into this surface.
+            Collapsing the panel refreshes shift + register state so any
+            register CRUD / shift open-close performed inside the panel
+            reflects in the POS sale flow below without a manual reload. */}
+        {isAdminOrManager && (
+          <button
+            type="button"
+            onClick={() => {
+              setShowRegistersPanel((prev) => {
+                const next = !prev;
+                if (prev && !next) {
+                  // panel just closed — refresh POS-tracked state
+                  loadRegisters();
+                  loadCurrentShift();
+                }
+                return next;
+              });
+            }}
+            aria-expanded={showRegistersPanel}
+            aria-controls="pos-registers-panel"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.4rem',
+              padding: '0.55rem 0.9rem',
+              background: showRegistersPanel
+                ? 'var(--primary-color, var(--accent-color))'
+                : 'rgba(255,255,255,0.05)',
+              color: showRegistersPanel ? '#fff' : 'var(--text-primary)',
+              border: '1px solid var(--border-color)',
+              borderRadius: 8,
+              cursor: 'pointer',
+              fontSize: '0.9rem',
+              fontWeight: 500,
+            }}
+          >
+            <Banknote size={16} /> Manage registers
+            {showRegistersPanel ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+          </button>
+        )}
       </header>
+
+      {/* Embedded register management panel — admin/manager only.
+          Renders the full CashRegisters surface (CRUD + shift open/close
+          + petty cash deposit/withdraw + transactions list) inline so
+          the operator never has to leave the POS page. */}
+      {isAdminOrManager && showRegistersPanel && (
+        <section
+          id="pos-registers-panel"
+          className="glass"
+          style={{
+            padding: '1.25rem',
+            marginBottom: '1.5rem',
+            borderLeft: '3px solid var(--primary-color, var(--accent-color))',
+          }}
+        >
+          <CashRegisters embedded />
+        </section>
+      )}
 
       {/* Shift status banner */}
       {currentShift ? (
         <div
           style={{
             ...cardStyle,
-            background: 'var(--success-bg, #e6f6ee)',
-            borderColor: 'var(--success-border, #a8d8b9)',
+            background: 'color-mix(in srgb, var(--success-color) 14%, transparent)',
+            border: '1px solid color-mix(in srgb, var(--success-color) 40%, transparent)',
+            color: 'var(--text-primary)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
@@ -543,7 +636,7 @@ export default function PointOfSale() {
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <Unlock size={18} />
+            <Unlock size={18} color="var(--success-color)" />
             <strong>Shift open</strong>
             <span style={{ color: 'var(--text-secondary)', marginLeft: '0.5rem' }}>
               Register {currentShift.register?.name || `#${currentShift.registerId}`} ·
@@ -1122,11 +1215,13 @@ export default function PointOfSale() {
               <Lock size={18} /> Close shift
             </h2>
             <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', margin: '0 0 0.75rem 0' }}>
-              Count the cash drawer at end of shift, enter the total, and submit. Variance = counted − expected.
+              Click <strong>Close shift</strong> to close the drawer at the system-computed
+              expected cash. Only enter a counted total if you want to record a variance
+              (counted − expected).
             </p>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))', gap: '0.75rem', alignItems: 'end' }}>
               <div>
-                <label style={labelStyle}>Closing total (cash drawer count)</label>
+                <label style={labelStyle}>Counted cash (optional)</label>
                 <input
                   type="number"
                   min="0"
@@ -1134,7 +1229,7 @@ export default function PointOfSale() {
                   style={inputStyle}
                   value={closingTotal}
                   onChange={(e) => setClosingTotal(e.target.value)}
-                  placeholder="0"
+                  placeholder="Leave blank to auto-close"
                 />
               </div>
               <div style={{ gridColumn: 'span 2' }}>

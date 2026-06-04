@@ -117,6 +117,27 @@ vi.mock('../utils/notify', () => ({
   useNotify: () => notifyObj,
 }));
 
+// Default to a fully-permissioned viewer so existing assertions on
+// New rule / Edit / Delete keep passing. The SUT now hides these when the
+// viewer lacks products.manage.
+const FULL_PERMS = {
+  isReady: true,
+  hasPermission: () => true,
+  permissions: ['products.read', 'products.manage'],
+  roles: [],
+  isOwner: false,
+  userType: null,
+  isLoading: false,
+  error: null,
+  refresh: () => Promise.resolve(),
+  hasAllPermissions: () => true,
+  hasAnyPermission: () => true,
+};
+const usePermissionsMock = vi.fn(() => FULL_PERMS);
+vi.mock('../hooks/usePermissions', () => ({
+  usePermissions: (...args) => usePermissionsMock(...args),
+}));
+
 import AutoConsumptionRules from '../pages/wellness/AutoConsumptionRules';
 
 const SERVICE_PRP = { id: 501, name: 'PRP Hair Therapy' };

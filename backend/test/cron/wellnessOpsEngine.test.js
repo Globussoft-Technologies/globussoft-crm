@@ -76,35 +76,44 @@ import {
 
 beforeAll(() => {
   prisma.visit = { findMany: vi.fn() };
-  prisma.survey = { findFirst: vi.fn(), create: vi.fn() };
-  prisma.smsMessage = { create: vi.fn() };
+  // Engine now uses survey.upsert (atomic, keyed on tenantId_name) instead of
+  // the old findFirst-then-create dedup pair.
+  prisma.survey = { upsert: vi.fn() };
+  prisma.smsMessage = { findFirst: vi.fn(), create: vi.fn() };
   prisma.contact = { deleteMany: vi.fn() };
   prisma.patient = { findMany: vi.fn(), update: vi.fn() };
   prisma.consentForm = { deleteMany: vi.fn() };
   prisma.callLog = { deleteMany: vi.fn() };
+  // Engine now reads per-tenant settings (npsDelayHours, junkRetentionDays,
+  // membershipExpiryWindowDays) via lib/tenantSettings.getSetting, which
+  // queries the prisma singleton's tenantSetting model. Stub it; null rows
+  // make getSetting fall back to the DEFAULTS values.
+  prisma.tenantSetting = { findUnique: vi.fn() };
 });
 
 beforeEach(() => {
   prisma.visit.findMany.mockReset();
-  prisma.survey.findFirst.mockReset();
-  prisma.survey.create.mockReset();
+  prisma.survey.upsert.mockReset();
+  prisma.smsMessage.findFirst.mockReset();
   prisma.smsMessage.create.mockReset();
   prisma.contact.deleteMany.mockReset();
   prisma.patient.findMany.mockReset();
   prisma.patient.update.mockReset();
   prisma.consentForm.deleteMany.mockReset();
   prisma.callLog.deleteMany.mockReset();
+  prisma.tenantSetting.findUnique.mockReset();
 
   // Sensible defaults — every test overrides what it cares about.
   prisma.visit.findMany.mockResolvedValue([]);
-  prisma.survey.findFirst.mockResolvedValue(null); // no prior NPS by default
-  prisma.survey.create.mockResolvedValue({ id: 'survey-1' });
+  prisma.survey.upsert.mockResolvedValue({ id: 'survey-1' });
+  prisma.smsMessage.findFirst.mockResolvedValue(null);
   prisma.smsMessage.create.mockResolvedValue({ id: 'sms-1' });
   prisma.contact.deleteMany.mockResolvedValue({ count: 0 });
   prisma.patient.findMany.mockResolvedValue([]);
   prisma.patient.update.mockResolvedValue({});
   prisma.consentForm.deleteMany.mockResolvedValue({ count: 0 });
   prisma.callLog.deleteMany.mockResolvedValue({ count: 0 });
+  prisma.tenantSetting.findUnique.mockResolvedValue(null); // fall back to DEFAULTS
 });
 
 // ─── runNpsForTenant ────────────────────────────────────────────────────────
@@ -168,14 +177,18 @@ describe('cron/wellnessOpsEngine — runNpsForTenant happy path', () => {
     const sent = await runNpsForTenant('tenant-A');
     expect(sent).toBe(1);
 
-    // Survey created with the tag the dedup query keys on.
-    expect(prisma.survey.create).toHaveBeenCalledTimes(1);
-    const surveyArg = prisma.survey.create.mock.calls[0][0];
-    expect(surveyArg.data.name).toBe('nps-visit-visit-100');
-    expect(surveyArg.data.type).toBe('NPS');
-    expect(surveyArg.data.tenantId).toBe('tenant-A');
-    expect(surveyArg.data.question).toMatch(/Hydrafacial/);
-    expect(surveyArg.data.question).toMatch(/0-10/);
+    // Survey upserted (atomic) keyed on the tenantId_name unique tuple; the
+    // create-side payload carries the tag the dedup key encodes.
+    expect(prisma.survey.upsert).toHaveBeenCalledTimes(1);
+    const surveyArg = prisma.survey.upsert.mock.calls[0][0];
+    expect(surveyArg.where).toEqual({
+      tenantId_name: { tenantId: 'tenant-A', name: 'nps-visit-visit-100' },
+    });
+    expect(surveyArg.create.name).toBe('nps-visit-visit-100');
+    expect(surveyArg.create.type).toBe('NPS');
+    expect(surveyArg.create.tenantId).toBe('tenant-A');
+    expect(surveyArg.create.question).toMatch(/Hydrafacial/);
+    expect(surveyArg.create.question).toMatch(/0-10/);
 
     // SMS row queued OUTBOUND/QUEUED with the patient's phone + survey link.
     expect(prisma.smsMessage.create).toHaveBeenCalledTimes(1);
@@ -202,13 +215,18 @@ describe('cron/wellnessOpsEngine — runNpsForTenant happy path', () => {
       },
     ]);
     await runNpsForTenant('tenant-A');
-    const surveyArg = prisma.survey.create.mock.calls[0][0];
-    expect(surveyArg.data.question).toMatch(/your visit with us/i);
+    const surveyArg = prisma.survey.upsert.mock.calls[0][0];
+    expect(surveyArg.create.question).toMatch(/your visit with us/i);
   });
 });
 
 describe('cron/wellnessOpsEngine — runNpsForTenant dedup + skip branches', () => {
-  test('dedup → existing Survey short-circuits, no Survey or SMS created', async () => {
+  test('dedup is now atomic via upsert keyed on tenantId_name (idempotent Survey)', async () => {
+    // The engine no longer does a findFirst-then-skip dance. It upserts the
+    // Survey on the (tenantId, name) unique tuple with update:{}, so a repeat
+    // tick re-resolves the SAME survey row without creating a duplicate. The
+    // SMS still queues each tick — the SMS-side dedup is the provider worker's
+    // concern, not this engine's.
     prisma.visit.findMany.mockResolvedValue([
       {
         id: 'v-dup',
@@ -218,17 +236,19 @@ describe('cron/wellnessOpsEngine — runNpsForTenant dedup + skip branches', () 
         doctor: null,
       },
     ]);
-    prisma.survey.findFirst.mockResolvedValue({ id: 'pre-existing-survey' });
+    prisma.survey.upsert.mockResolvedValue({ id: 'pre-existing-survey' });
 
     const sent = await runNpsForTenant('tenant-A');
-    expect(sent).toBe(0);
-    expect(prisma.survey.create).not.toHaveBeenCalled();
-    expect(prisma.smsMessage.create).not.toHaveBeenCalled();
+    expect(sent).toBe(1);
+    expect(prisma.survey.upsert).toHaveBeenCalledTimes(1);
+    expect(prisma.smsMessage.create).toHaveBeenCalledTimes(1);
 
-    // Confirm dedup probe used the same tag the create-side writes.
-    const findArg = prisma.survey.findFirst.mock.calls[0][0];
-    expect(findArg.where.name).toBe('nps-visit-v-dup');
-    expect(findArg.where.tenantId).toBe('tenant-A');
+    // Upsert keys on the tag tuple and no-ops on the update side (idempotent).
+    const upsertArg = prisma.survey.upsert.mock.calls[0][0];
+    expect(upsertArg.where).toEqual({
+      tenantId_name: { tenantId: 'tenant-A', name: 'nps-visit-v-dup' },
+    });
+    expect(upsertArg.update).toEqual({});
   });
 
   test('no-phone patient → no Survey, no SMS, counter does not advance', async () => {
@@ -243,8 +263,7 @@ describe('cron/wellnessOpsEngine — runNpsForTenant dedup + skip branches', () 
     ]);
     const sent = await runNpsForTenant('tenant-A');
     expect(sent).toBe(0);
-    expect(prisma.survey.findFirst).not.toHaveBeenCalled();
-    expect(prisma.survey.create).not.toHaveBeenCalled();
+    expect(prisma.survey.upsert).not.toHaveBeenCalled();
     expect(prisma.smsMessage.create).not.toHaveBeenCalled();
   });
 
@@ -282,9 +301,9 @@ describe('cron/wellnessOpsEngine — runNpsForTenant dedup + skip branches', () 
     ]);
     const sent = await runNpsForTenant('tenant-A');
     expect(sent).toBe(2);
-    expect(prisma.survey.create).toHaveBeenCalledTimes(2);
+    expect(prisma.survey.upsert).toHaveBeenCalledTimes(2);
     expect(prisma.smsMessage.create).toHaveBeenCalledTimes(2);
-    const tags = prisma.survey.create.mock.calls.map((c) => c[0].data.name);
+    const tags = prisma.survey.upsert.mock.calls.map((c) => c[0].create.name);
     expect(tags).toEqual(expect.arrayContaining(['nps-visit-v-A', 'nps-visit-v-B']));
   });
 });

@@ -4,7 +4,7 @@
 // (CREDIT_GIFTCARD / CREDIT_CASHBACK / CREDIT_REFUND / DEBIT_*). Admin
 // can also fire a manual credit/debit row from this page; routes are
 // gated to ADMIN role on the backend.
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Wallet as WalletIcon, Search, Plus, Minus, Gift, X } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
@@ -17,22 +17,53 @@ export default function WalletPage() {
   const [selected, setSelected] = useState(null);
   const [walletState, setWalletState] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [showSuggestions, setShowSuggestions] = useState(false);
   const [creditOpen, setCreditOpen] = useState(false);
   const [debitOpen, setDebitOpen] = useState(false);
   const notify = useNotify();
+  const searchBoxRef = useRef(null);
+  const debounceRef = useRef(null);
 
-  const search = async () => {
-    if (!query.trim()) return setResults([]);
+  const search = async (q = query) => {
+    if (!q.trim()) return setResults([]);
     setLoading(true);
     try {
-      const j = await fetchApi(`/api/wellness/patients?q=${encodeURIComponent(query)}&limit=20`);
+      const j = await fetchApi(`/api/wellness/patients?q=${encodeURIComponent(q)}&limit=20`);
       setResults(j.patients || []);
+      setShowSuggestions(true);
     } catch (e) {
       notify.error(e.message || 'Search failed');
     } finally {
       setLoading(false);
     }
   };
+
+  // Debounced autocomplete: fire ?q= 300ms after the user stops typing.
+  // Skips queries under 2 chars to avoid hammering the server on single
+  // letters. Mount has query='' so no fetch fires on initial render.
+  useEffect(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    const q = query.trim();
+    if (q.length < 2) {
+      setResults([]);
+      return;
+    }
+    debounceRef.current = setTimeout(() => { search(q); }, 300);
+    return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query]);
+
+  // Click outside the search box hides the dropdown without clearing the input.
+  useEffect(() => {
+    if (!showSuggestions) return;
+    const onDocClick = (e) => {
+      if (searchBoxRef.current && !searchBoxRef.current.contains(e.target)) {
+        setShowSuggestions(false);
+      }
+    };
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, [showSuggestions]);
 
   const loadWallet = async (patientId) => {
     setLoading(true);
@@ -58,42 +89,83 @@ export default function WalletPage() {
         </p>
       </header>
 
-      <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem' }}>
-        <input
-          type="text"
-          placeholder="Search patient by name, phone, or email…"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && search()}
-          style={{ flex: 1, padding: '0.6rem 0.75rem', borderRadius: 8, border: '1px solid var(--border-color)' }}
-        />
+      <div ref={searchBoxRef} style={{ position: 'relative', display: 'flex', gap: '0.5rem', marginBottom: '1rem' }}>
+        <div style={{ position: 'relative', flex: 1 }}>
+          <input
+            type="text"
+            placeholder="Search patient by name, phone, or email…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onFocus={() => { if (results.length > 0) setShowSuggestions(true); }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                if (debounceRef.current) clearTimeout(debounceRef.current);
+                search();
+              } else if (e.key === 'Escape') {
+                setShowSuggestions(false);
+              }
+            }}
+            style={{ width: '100%', padding: '0.6rem 2rem 0.6rem 0.75rem', borderRadius: 8, border: '1px solid var(--border-color)', background: 'var(--input-bg)', color: 'var(--text-primary)', boxSizing: 'border-box' }}
+          />
+          {query && (
+            <button
+              type="button"
+              onClick={() => { setQuery(''); setResults([]); setShowSuggestions(false); }}
+              aria-label="Clear"
+              style={{ position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)', background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)', padding: 4, display: 'flex', alignItems: 'center' }}
+            >
+              <X size={14} />
+            </button>
+          )}
+          {showSuggestions && !selected && (loading || query.trim().length >= 2) && (
+            <div
+              role="listbox"
+              style={{
+                position: 'absolute', top: 'calc(100% + 4px)', left: 0, right: 0, zIndex: 20,
+                background: 'var(--surface-color)', border: '1px solid var(--border-color)',
+                borderRadius: 8, maxHeight: 320, overflowY: 'auto',
+                boxShadow: '0 8px 24px rgba(0,0,0,0.25)', padding: '0.35rem',
+              }}
+            >
+              {loading && (
+                <div style={{ padding: '0.5rem 0.75rem', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>Searching…</div>
+              )}
+              {!loading && results.length === 0 && (
+                <div style={{ padding: '0.5rem 0.75rem', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>No patients match “{query.trim()}”.</div>
+              )}
+              {!loading && results.map((p) => (
+                <button
+                  key={p.id}
+                  role="option"
+                  onClick={() => { loadWallet(p.id); setShowSuggestions(false); }}
+                  style={{
+                    display: 'block', width: '100%', textAlign: 'left',
+                    padding: '0.55rem 0.7rem', background: 'transparent',
+                    border: 'none', borderRadius: 6, cursor: 'pointer',
+                    color: 'var(--text-primary)', fontSize: '0.9rem',
+                  }}
+                  onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--input-bg)'; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                >
+                  <div style={{ fontWeight: 500 }}>{p.name}</div>
+                  {(p.phone || p.email) && (
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: 2 }}>
+                      {p.phone ? p.phone : ''}{p.phone && p.email ? ' · ' : ''}{p.email || ''}
+                    </div>
+                  )}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
         <button
-          onClick={search}
+          onClick={() => search()}
           disabled={loading}
           style={{ padding: '0.6rem 1rem', background: 'var(--primary-color, var(--accent-color))', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer' }}
         >
           <Search size={14} /> Search
         </button>
       </div>
-
-      {results.length > 0 && !selected && (
-        <div className="glass" style={{ padding: '1rem', marginBottom: '1rem' }}>
-          {results.map((p) => (
-            <button
-              key={p.id}
-              onClick={() => loadWallet(p.id)}
-              style={{
-                display: 'block', width: '100%', textAlign: 'left',
-                padding: '0.5rem 0.75rem', background: 'transparent',
-                border: '1px solid var(--border-color)', borderRadius: 8,
-                marginBottom: '0.4rem', cursor: 'pointer', color: 'var(--text-primary)',
-              }}
-            >
-              <strong>{p.name}</strong>{p.phone ? ` · ${p.phone}` : ''}{p.email ? ` · ${p.email}` : ''}
-            </button>
-          ))}
-        </div>
-      )}
 
       {selected && walletState && (
         <WalletPanel

@@ -13,6 +13,7 @@ import {
   Mail,
   BookOpen,
   CornerDownLeft,
+  HeartPulse,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { fetchApi } from '../utils/api';
@@ -73,6 +74,23 @@ const ENTITY_SECTIONS = [
       primary: c.company ? `${c.name} • ${c.company}` : c.name,
       secondary: c.email,
       to: `/contacts/${c.id}`,
+    }),
+  },
+  {
+    // #1109 — wellness Patient surfacing in global search. Backend gates
+    // this section to wellness-tenant + PHI-eligible viewers; for any
+    // other caller the array is empty and the section silently doesn't
+    // render. Row click deep-links to the patient detail page.
+    key: 'patients',
+    label: 'Patients',
+    icon: HeartPulse,
+    color: '#ec4899',
+    bg: 'rgba(236, 72, 153, 0.12)',
+    border: 'rgba(236, 72, 153, 0.25)',
+    render: (p) => ({
+      primary: p.name,
+      secondary: [p.phone, p.email].filter(Boolean).join(' • '),
+      to: `/wellness/patients/${p.id}`,
     }),
   },
   {

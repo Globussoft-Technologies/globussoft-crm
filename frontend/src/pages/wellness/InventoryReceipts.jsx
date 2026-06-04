@@ -9,7 +9,9 @@ import {
 } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
+import { usePermissions } from '../../hooks/usePermissions';
 import { DateRangeFilter, resolveDateRangeYmd, EMPTY_DATE_FILTER } from '../../components/wellness/DateRangeFilter';
+import PageHeader from '../../components/PageHeader';
 
 const EMPTY = {
   productId: '', vendorId: '', quantity: '', unitCost: '',
@@ -20,6 +22,13 @@ const EDIT_WINDOW_MS = 5 * 60 * 1000;
 
 export default function InventoryReceipts() {
   const notify = useNotify();
+  // Backend gates: POST→inventory.write, PUT→inventory.update,
+  // DELETE / reverse →inventory.delete. Fail closed until perms resolve.
+  const { hasPermission, isReady: permsReady } = usePermissions();
+  const canWriteInventory  = permsReady && hasPermission('inventory', 'write');
+  const canUpdateInventory = permsReady && hasPermission('inventory', 'update');
+  const canDeleteInventory = permsReady && hasPermission('inventory', 'delete');
+  const canMutateInventory = canWriteInventory || canUpdateInventory || canDeleteInventory;
   const [receipts, setReceipts] = useState([]);
   const [products, setProducts] = useState([]);
   const [vendors, setVendors] = useState([]);
@@ -190,22 +199,32 @@ export default function InventoryReceipts() {
 
   return (
     <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
-      <header style={{ marginBottom: '1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '1rem' }}>
-        <div>
-          <h1 style={{ fontSize: '1.75rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <ArrowDownToLine size={24} /> Inventory receipts
-          </h1>
-          <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-            Keep track of every product you buy — invoice number, supplier, batch, and what it cost.
-          </p>
-          <p style={{ color: 'var(--text-secondary)', marginTop: '0.15rem', fontSize: '0.85rem' }}>
-            {filtered.length} of {receipts.length} receipt{receipts.length === 1 ? '' : 's'} in window — total cost ₹{Number(totalCost).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
-          </p>
-        </div>
-        <button onClick={startCreate} style={primaryBtnStyle}>
-          <Plus size={16} /> {showForm && !editing ? 'Cancel' : 'Record receipt'}
-        </button>
-      </header>
+      <PageHeader
+        icon={ArrowDownToLine}
+        title="Inventory receipts"
+        description={(
+          <span style={{ display: 'inline-flex', flexDirection: 'column', gap: '2px' }}>
+            <span>Keep track of every product you buy — invoice number, supplier, batch, and what it cost.</span>
+            <span style={{ fontSize: '0.78rem' }}>
+              {filtered.length} of {receipts.length} receipt{receipts.length === 1 ? '' : 's'} in window — total cost ₹{Number(totalCost).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+            </span>
+          </span>
+        )}
+        inlineBadge={permsReady && !canMutateInventory ? (
+          <span
+            title="You can view receipts but can't make changes."
+            style={{ fontSize: '0.7rem', padding: '0.2rem 0.55rem', borderRadius: 999, background: 'var(--subtle-bg)', color: 'var(--text-secondary)', border: '1px solid var(--border-color)', fontWeight: 500 }}
+          >
+            View only
+          </span>
+        ) : null}
+      >
+        {canWriteInventory && (
+          <button onClick={startCreate} style={primaryBtnStyle}>
+            <Plus size={16} /> {showForm && !editing ? 'Cancel' : 'Record receipt'}
+          </button>
+        )}
+      </PageHeader>
 
       <div
         className="glass"
@@ -326,8 +345,12 @@ export default function InventoryReceipts() {
                   <td style={cellStyle}>{new Date(r.receivedAt).toLocaleDateString()}</td>
                   <td style={{ ...cellStyle, textAlign: 'right', whiteSpace: 'nowrap' }}>
                     <button onClick={() => setViewing(r)} style={iconBtnStyle} title="View details" aria-label={`View ${r.receiptNumber}`}><Eye size={14} /></button>
-                    <button onClick={() => startEdit(r)} style={iconBtnStyle} title="Edit" aria-label={`Edit ${r.receiptNumber}`}><Pencil size={14} /></button>
-                    <button onClick={() => remove(r)} style={iconBtnStyle} title="Delete" aria-label={`Delete ${r.receiptNumber}`}><Trash2 size={14} /></button>
+                    {canUpdateInventory && (
+                      <button onClick={() => startEdit(r)} style={iconBtnStyle} title="Edit" aria-label={`Edit ${r.receiptNumber}`}><Pencil size={14} /></button>
+                    )}
+                    {canDeleteInventory && (
+                      <button onClick={() => remove(r)} style={iconBtnStyle} title="Delete" aria-label={`Delete ${r.receiptNumber}`}><Trash2 size={14} /></button>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -336,7 +359,7 @@ export default function InventoryReceipts() {
         )}
       </div>
 
-      {viewing && <DetailModal receipt={viewing} onClose={() => setViewing(null)} onCopy={copy} copiedKey={copiedKey} onEdit={() => startEdit(viewing)} />}
+      {viewing && <DetailModal receipt={viewing} onClose={() => setViewing(null)} onCopy={copy} copiedKey={copiedKey} onEdit={canUpdateInventory ? () => startEdit(viewing) : null} />}
     </div>
   );
 }
@@ -395,7 +418,9 @@ function DetailModal({ receipt: r, onClose, onCopy, copiedKey, onEdit }) {
             )}
           </div>
           <div style={{ display: 'flex', gap: '0.25rem' }}>
-            <button onClick={onEdit} style={iconBtnStyle} title="Edit" aria-label="Edit"><Pencil size={14} /></button>
+            {onEdit && (
+              <button onClick={onEdit} style={iconBtnStyle} title="Edit" aria-label="Edit"><Pencil size={14} /></button>
+            )}
             <button onClick={onClose} style={iconBtnStyle} aria-label="Close"><X size={16} /></button>
           </div>
         </header>

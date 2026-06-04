@@ -366,19 +366,22 @@ describe('<Calendar /> — From/To date range + day-chip navigation', () => {
     expect(await screen.findByText(/Day view by practitioner/i)).toBeInTheDocument();
   });
 
-  it('renders From and To date inputs instead of today/chevron buttons', async () => {
+  it('renders a single Day picker (was From/To dual picker) with prev/next arrows', async () => {
     setupFetch({ visits: [] });
     renderCalendar();
     await screen.findByText('Dr. Anjali Mukherjee');
-    // The two new inputs are aria-labelled From date / To date.
-    expect(screen.getByLabelText(/From date/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/To date/i)).toBeInTheDocument();
-    // The legacy "Today" button + the chevron buttons are gone — only the
-    // practitioner-filter toggle remains alongside the inputs.
-    expect(screen.queryByRole('button', { name: 'Today' })).toBeNull();
+    // The new single input is aria-labelled "Day shown on grid".
+    expect(screen.getByLabelText(/Day shown on grid/i)).toBeInTheDocument();
+    // The old dual From/To labels are gone.
+    expect(screen.queryByLabelText(/From date/i)).toBeNull();
+    expect(screen.queryByLabelText(/To date/i)).toBeNull();
+    expect(screen.queryByLabelText(/Export end date/i)).toBeNull();
+    // Prev/Next day navigation arrows live next to the picker.
+    expect(screen.getByLabelText(/Previous day/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Next day/i)).toBeInTheDocument();
   });
 
-  it('changing the From date re-issues a /visits fetch for the new day', async () => {
+  it('changing the Day input re-issues a /visits fetch for the new day', async () => {
     setupFetch({ visits: [] });
     renderCalendar();
     await screen.findByText('Dr. Anjali Mukherjee');
@@ -389,7 +392,7 @@ describe('<Calendar /> — From/To date range + day-chip navigation', () => {
 
     // jsdom doesn't simulate keyboard input into `<input type="date">`
     // cleanly — fireEvent.change is the canonical write path.
-    fireEvent.change(screen.getByLabelText(/From date/i), { target: { value: '2030-01-15' } });
+    fireEvent.change(screen.getByLabelText(/Day shown on grid/i), { target: { value: '2030-01-15' } });
 
     await waitFor(() => {
       const visitsCallsAfter = fetchApi.mock.calls.filter(
@@ -399,19 +402,19 @@ describe('<Calendar /> — From/To date range + day-chip navigation', () => {
     });
   });
 
-  it('From input drives the rendered day (header subtitle + visits fetch)', async () => {
+  it('Day input drives the rendered day (header subtitle + visits fetch)', async () => {
     setupFetch({ visits: [] });
     renderCalendar();
     await screen.findByText('Dr. Anjali Mukherjee');
 
-    // Set From to a stable future day; To auto-widens to match.
-    fireEvent.change(screen.getByLabelText(/From date/i), { target: { value: '2030-04-17' } });
+    // Set Day to a stable future day; header subtitle and fetch follow.
+    fireEvent.change(screen.getByLabelText(/Day shown on grid/i), { target: { value: '2030-04-17' } });
 
-    // Header subtitle reflects the new day; visits fetch fires.
+    // Header subtitle reflects the new day.
     await waitFor(() => {
       expect(screen.getByText(/Day view by practitioner/i).textContent).toMatch(/2030/);
     });
-    expect(screen.getByLabelText(/To date/i).value).toBe('2030-04-17');
+    expect(screen.getByLabelText(/Day shown on grid/i).value).toBe('2030-04-17');
   });
 });
 
@@ -978,7 +981,7 @@ describe('<Calendar /> — focus query-param handshake', () => {
     scrollSpy = vi.spyOn(window.Element.prototype, 'scrollIntoView').mockImplementation(() => {});
   });
 
-  it('with ?focus=<id>&date=<yyyy-mm-dd>, seeds From/To to the date and surfaces the focused chip', async () => {
+  it('with ?focus=<id>&date=<yyyy-mm-dd>, snaps the Day picker to the date and surfaces the focused chip', async () => {
     // Pick a date string for the URL; build a Date with the same wall-clock
     // hour the visit uses so the chip lands at a stable hour in the grid.
     const target = '2030-01-15';
@@ -993,10 +996,9 @@ describe('<Calendar /> — focus query-param handshake', () => {
     });
     renderCalendar({ initialEntries: [`/wellness/calendar?focus=555&date=${target}`] });
 
-    // From/To inputs should be pinned to the target date.
-    const fromInput = await screen.findByLabelText(/From date/i);
-    expect(fromInput.value).toBe(target);
-    expect(screen.getByLabelText(/To date/i).value).toBe(target);
+    // Day input should be pinned to the target date (single-picker UX).
+    const dayInput = await screen.findByLabelText(/Day shown on grid/i);
+    expect(dayInput.value).toBe(target);
 
     // The focused chip carries the data-testid="focused-visit" marker AND a
     // ref-driven scrollIntoView call has been made on it.
@@ -1005,7 +1007,7 @@ describe('<Calendar /> — focus query-param handshake', () => {
     expect(scrollSpy).toHaveBeenCalled();
   });
 
-  it('without ?date, fetches /visits/<id> to learn the day, then snaps the range to it', async () => {
+  it('without ?date, fetches /visits/<id> to learn the day, then snaps the Day picker to it', async () => {
     const visitDate = new Date(2030, 5, 20, 11, 0, 0, 0);
     fetchApi.mockImplementation((url) => {
       if (url === '/api/staff') return Promise.resolve(staff);
@@ -1025,11 +1027,10 @@ describe('<Calendar /> — focus query-param handshake', () => {
     });
     renderCalendar({ initialEntries: ['/wellness/calendar?focus=777'] });
 
-    // Eventually From/To snap to 2030-06-20 driven by the /visits/777 fetch.
+    // Eventually Day snaps to 2030-06-20 driven by the /visits/777 fetch.
     await waitFor(() => {
-      expect(screen.getByLabelText(/From date/i).value).toBe('2030-06-20');
+      expect(screen.getByLabelText(/Day shown on grid/i).value).toBe('2030-06-20');
     });
-    expect(screen.getByLabelText(/To date/i).value).toBe('2030-06-20');
   });
 });
 

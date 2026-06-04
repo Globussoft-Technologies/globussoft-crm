@@ -381,8 +381,9 @@ router.post('/:id/activities', async (req, res) => {
   try {
     const contact = await prisma.contact.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
     if (!contact) return res.status(404).json({ error: 'Contact not found' });
+    const { type, description } = req.body;
     const activity = await prisma.activity.create({
-      data: { ...req.body, contactId: contact.id, userId: req.user ? req.user.userId : null, tenantId: req.user.tenantId }
+      data: { type, description, contactId: contact.id, userId: req.user ? req.user.userId : null, tenantId: req.user.tenantId }
     });
     // PRD §6.4: lead-side SLA — first activity logged against a Lead stamps
     // firstResponseAt, stopping the SLA clock. Best-effort: any failure

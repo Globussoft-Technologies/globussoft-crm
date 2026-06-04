@@ -158,18 +158,15 @@ function parseInvoiceNumber(s) {
 
 async function generateInvoiceNumber(tx, tenantId, now = new Date()) {
   const year = now.getUTCFullYear();
-  const prefix = `POS-${year}-`;
-  const latest = await tx.sale.findFirst({
-    where: { tenantId, invoiceNumber: { startsWith: prefix } },
-    orderBy: { invoiceNumber: "desc" },
-    select: { invoiceNumber: true },
+  // Atomic counter table (replaces the racy findFirst+1 pattern).
+  // nextSeq is the value AFTER increment; invoice = nextSeq - 1.
+  // For a fresh tenant+year, create sets nextSeq=2 → invoice 1.
+  const counter = await tx.invoiceCounter.upsert({
+    where: { tenantId_year: { tenantId, year } },
+    update: { nextSeq: { increment: 1 } },
+    create: { tenantId, year, nextSeq: 2 },
   });
-  let nextSeq = 1;
-  if (latest) {
-    const parsed = parseInvoiceNumber(latest.invoiceNumber);
-    if (parsed && parsed.year === year) nextSeq = parsed.seq + 1;
-  }
-  return formatInvoiceNumber(year, nextSeq);
+  return formatInvoiceNumber(year, counter.nextSeq - 1);
 }
 
 // ── Register CRUD ────────────────────────────────────────────────────
@@ -183,6 +180,7 @@ router.get("/registers", cashierGate, async (req, res) => {
     const items = await prisma.register.findMany({
       where,
       orderBy: [{ name: "asc" }],
+      take: 200,
       include: { location: { select: { id: true, name: true, city: true } } },
     });
     res.json(items);
@@ -505,29 +503,14 @@ router.post("/shifts/:id/close", cashierGate, async (req, res) => {
       });
     }
     const { closingTotal, notes } = req.body;
-    if (closingTotal === undefined || closingTotal === null) {
-      return res
-        .status(400)
-        .json({
-          error: "closingTotal is required",
-          code: "CLOSING_TOTAL_REQUIRED",
-        });
-    }
-    const closing = parseFloat(closingTotal);
-    if (!Number.isFinite(closing) || closing < 0) {
-      return res
-        .status(400)
-        .json({
-          error: "closingTotal must be a non-negative number",
-          code: "INVALID_CLOSING_TOTAL",
-        });
-    }
+
     // expectedCash = openingFloat + sum(CASH sales) + sum(DEPOSIT) - sum(WITHDRAWAL).
     // #779: petty-cash ledger now contributes to expected drawer balance.
     // Pre-#779 deposits/withdrawals lived in a paper notebook; close-shift
     // variance silently absorbed them. With ledger rows persisted, the
     // expected count is the precise drawer math, and variance reflects
-    // only true under/over-counts.
+    // only true under/over-counts. We compute it BEFORE reading closingTotal
+    // so the system can auto-close at this figure when no manual count is given.
     const cashSales = await prisma.sale.aggregate({
       where: {
         tenantId: req.user.tenantId,
@@ -558,6 +541,27 @@ router.post("/shifts/:id/close", cashierGate, async (req, res) => {
     const withdrawalsTotal = withdrawals._sum.amount || 0;
     const expectedCash =
       shift.openingFloat + cashTaken + depositsTotal - withdrawalsTotal;
+
+    // closingTotal is OPTIONAL. When omitted/blank the system AUTO-CLOSES the
+    // drawer at the computed expectedCash (variance 0) — no manual count
+    // required. When a counted total IS supplied we honour it and record the
+    // signed variance (over/under count) for review.
+    let closing;
+    if (
+      closingTotal === undefined ||
+      closingTotal === null ||
+      String(closingTotal).trim() === ""
+    ) {
+      closing = expectedCash;
+    } else {
+      closing = parseFloat(closingTotal);
+      if (!Number.isFinite(closing) || closing < 0) {
+        return res.status(400).json({
+          error: "closingTotal must be a non-negative number",
+          code: "INVALID_CLOSING_TOTAL",
+        });
+      }
+    }
     const variance = closing - expectedCash;
     const closed = await prisma.shift.update({
       where: { id },
@@ -716,6 +720,11 @@ router.get("/shifts/:id", cashierGate, async (req, res) => {
 // at close, not silently rejected (the cashier may need to record an IOU
 // that pays back tomorrow).
 
+// Allowed WITHDRAWAL categories for the Expenses tab. GENERAL is the default;
+// SUBSCRIPTION tags drawer cash spent on a platform subscription (auto-logged
+// on purchase + manually addable). Extend here as new expense types appear.
+const PETTY_CASH_CATEGORIES = ["GENERAL", "SUBSCRIPTION"];
+
 async function recordPettyCashEntry(req, res, type) {
   try {
     const id = parseInt(req.params.id);
@@ -734,7 +743,7 @@ async function recordPettyCashEntry(req, res, type) {
         code: "SHIFT_CLOSED",
       });
     }
-    const { amount, reason } = req.body || {};
+    const { amount, reason, category } = req.body || {};
     const amt = parseFloat(amount);
     if (!Number.isFinite(amt) || amt <= 0) {
       return res.status(400).json({
@@ -748,11 +757,26 @@ async function recordPettyCashEntry(req, res, type) {
         code: "REASON_REQUIRED",
       });
     }
+    // Category labels the expense for the Expenses tab. Only meaningful for
+    // WITHDRAWALs; deposits stay GENERAL. Validate against the allowed set so
+    // the UI's filters/badges stay stable.
+    let cat = "GENERAL";
+    if (type === "WITHDRAWAL" && category != null) {
+      const c = String(category).trim().toUpperCase();
+      if (!PETTY_CASH_CATEGORIES.includes(c)) {
+        return res.status(400).json({
+          error: `category must be one of ${PETTY_CASH_CATEGORIES.join(", ")}`,
+          code: "INVALID_CATEGORY",
+        });
+      }
+      cat = c;
+    }
     const entry = await prisma.pettyCashLedger.create({
       data: {
         tenantId: req.user.tenantId,
         shiftId: shift.id,
         type,
+        category: cat,
         amount: amt,
         reason: reason.trim().slice(0, 1000),
         userId: req.user.userId,
@@ -767,6 +791,7 @@ async function recordPettyCashEntry(req, res, type) {
       {
         ledgerId: entry.id,
         type,
+        category: cat,
         amount: amt,
         reason: entry.reason,
       },
@@ -1200,13 +1225,11 @@ router.post("/sales", cashierGate, async (req, res) => {
 
     // Transactional create — invoiceNumber + Sale + SaleLineItem rows +
     // Product.currentStock decrements (PRODUCT lines only).
-    // invoiceNumber is sequential (generateInvoiceNumber reads the current
-    // max + 1), so two concurrent sales in the SAME tenant can compute the
-    // same value → P2002 unique-violation on the invoiceNumber column → 500.
-    // Retry the whole transaction (which recomputes the number against the
-    // now-committed sibling sale) up to 5 attempts. Prod-relevant: concurrent
-    // POS lanes in one tenant otherwise intermittently 500 on a colliding
-    // invoice number (surfaced as flaky CI under 2 parallel test workers).
+    // invoiceNumber is sequential via InvoiceCounter atomic upsert
+    // (increment: 1 inside the transaction). The retry loop is a safety
+    // net for the rare case where two concurrent sales both hit the
+    // create branch of upsert for a brand-new (tenant, year) pair.
+    // Under normal operation the loop never iterates more than once.
     let sale = null;
     for (let _attempt = 0; sale === null; _attempt++) {
       try {
@@ -1439,6 +1462,8 @@ router.get("/sales/stats", adminGate, async (req, res) => {
     const sales = await prisma.sale.findMany({
       where,
       select: { total: true, status: true, createdAt: true },
+      orderBy: { createdAt: "desc" },
+      take: 5000,
     });
 
     // Empty short-circuit — return zeroed shape.
@@ -1590,6 +1615,8 @@ router.get("/sales/by-month", adminGate, async (req, res) => {
     const sales = await prisma.sale.findMany({
       where: { tenantId },
       select: { total: true, status: true, createdAt: true },
+      orderBy: { createdAt: "desc" },
+      take: 5000,
     });
 
     // Aggregate per-UTC-month. Map "YYYY-MM" → bucket. Null/invalid

@@ -39,6 +39,14 @@
  *                         sidebar-only UX rule for de-cluttering admin nav
  *                         from clinical / operational day-to-day pages they
  *                         don't typically use. Strictly UX; no access change.
+ *   customerOnly        — (optional, default false) if true, the wellness
+ *                         sidebar surfaces this page ONLY to customer-tier
+ *                         roles (role === 'USER' || role === 'CUSTOMER').
+ *                         Admin / manager / staff (any other role) don't see
+ *                         it in their nav. Used for customer-facing storefront
+ *                         surfaces (e.g. Buy Gift Cards). Strictly a sidebar-
+ *                         only UX rule — the page stays accessible by direct
+ *                         URL and the backend route's own auth is unchanged.
  *
  * Adding a new page = add one row here + one entry to PAGE_ICON_BY_PATH
  * in Sidebar.jsx. No other code change anywhere. Removing a page row is
@@ -136,13 +144,18 @@ const PAGE_CATALOG = [
     description: 'Rx review + finalisation',
     category: 'Clinical',
     requiredPermissions: [{ module: 'prescriptions', action: 'read' }],
-    // Sidebar UX: clinical day-to-day surface. Admin/owner-tier users
-    // technically have prescriptions.read but they don't use the Rx list
-    // in their primary nav — they reach it via patient charts or audit
-    // trails. Hiding it keeps admin's sidebar focused on management
-    // surfaces. Page stays accessible at /wellness/prescriptions for
-    // anyone with the permission.
-    hideForAdminTier: true,
+  },
+  {
+    path: '/wellness/my-prescriptions',
+    label: 'My Prescriptions',
+    description: 'Your own prescriptions (linked Patient profile)',
+    category: 'Clinical',
+    // Separate `my_prescriptions` module — granted to roles whose users
+    // may also be patients at this clinic (CUSTOMER, and optionally USER
+    // when staff-as-patient flows are in play). Backend scopes to
+    // req.user.userId's linked Patient row; cross-patient access is
+    // structurally impossible regardless of role grants.
+    requiredPermissions: [{ module: 'my_prescriptions', action: 'read' }],
   },
   {
     path: '/wellness/visits',
@@ -313,13 +326,6 @@ const PAGE_CATALOG = [
     requiredPermissions: [{ module: 'tasks', action: 'read' }],
   },
   {
-    path: '/marketplace-leads',
-    label: 'Marketplace Leads',
-    description: 'Inbound leads from IndiaMART / JustDial / TradeIndia',
-    category: 'Leads & Revenue',
-    requiredPermissions: [{ module: 'leads', action: 'read' }],
-  },
-  {
     path: '/lead-routing',
     label: 'Routing Rules',
     description: 'Rules that auto-assign incoming leads',
@@ -366,7 +372,7 @@ const PAGE_CATALOG = [
     label: 'Invoices',
     description: 'Patient + customer invoices',
     category: 'Finance',
-    requiredPermissions: [{ module: 'billing', action: 'read' }],
+    requiredPermissions: [{ module: 'invoices', action: 'read' }],
   },
   {
     path: '/estimates',
@@ -394,14 +400,14 @@ const PAGE_CATALOG = [
     label: 'Patient Wallets',
     description: 'Patient pre-paid wallet balances + history',
     category: 'Finance',
-    requiredPermissions: [{ module: 'billing', action: 'read' }],
+    requiredPermissions: [{ module: 'patient_wallets', action: 'read' }],
   },
   {
     path: '/wellness/giftcards',
     label: 'Gift Cards',
     description: 'Gift card issuance + redemption ledger',
     category: 'Finance',
-    requiredPermissions: [{ module: 'billing', action: 'read' }],
+    requiredPermissions: [{ module: 'gift_cards', action: 'read' }],
   },
   {
     path: '/wellness/buy-giftcards',
@@ -412,6 +418,24 @@ const PAGE_CATALOG = [
     // + buy. Backend route is auth-only too. Mirrors the open-to-all-users
     // shape used by /home + other low-privilege storefront surfaces.
     requiredPermissions: [],
+    // This is a CUSTOMER-facing storefront, so the sidebar entry is only
+    // surfaced to customer-tier roles (USER / CUSTOMER). Admin / manager /
+    // staff roles don't see it in their nav. Strictly a sidebar-only UX
+    // rule — the page stays reachable by direct URL and the backend route
+    // remains auth-only (so any logged-in user can still buy). See the
+    // customerOnly flag doc in the catalog header above.
+    customerOnly: true,
+  },
+  {
+    path: '/wellness/my-transactions',
+    label: 'My Transactions',
+    description: 'Your own payment history — purchases, treatments, gift cards, wallet + subscriptions',
+    category: 'Finance',
+    // Open to any authenticated user; the backend endpoint scopes the data
+    // to the caller's own Patient. customerOnly keeps the sidebar entry to
+    // customer-tier roles (USER / CUSTOMER) so staff / admin don't see it.
+    requiredPermissions: [],
+    customerOnly: true,
   },
   {
     path: '/wellness/coupons',
@@ -523,6 +547,25 @@ const PAGE_CATALOG = [
     description: 'Patient self-service home',
     category: 'Patient',
     requiredPermissions: [{ module: 'appointments', action: 'read' }],
+  },
+  {
+    path: '/wellness/my-bookings',
+    label: 'My bookings',
+    description: 'Patient appointment management — upcoming, pending, completed, cancelled',
+    // Category is `Appointments` (not `Patient`) because the wellness
+    // sidebar's WELLNESS_CATEGORY_ORDER (frontend/src/components/Sidebar.jsx)
+    // only renders sections whose name appears in that list — `Patient`
+    // is a catalog-only tag used by `/portal` (which is a separate,
+    // public, non-sidebar route). Slotting under Appointments keeps the
+    // patient's bookings page next to Book Appointment so the cluster
+    // reads as one coherent group.
+    category: 'Appointments',
+    // Dedicated `my_bookings` module — split from the staff-facing
+    // `my_appointments` (practitioner's own schedule) so a patient can
+    // be granted appointment management without seeing the practitioner
+    // view, and vice versa. CUSTOMER system role grants this; ADMIN /
+    // MANAGER / clinical roles do not see it in their sidebars.
+    requiredPermissions: [{ module: 'my_bookings', action: 'read' }],
   },
 
   // ── Admin ─────────────────────────────────────────────────────────
@@ -639,11 +682,18 @@ const PAGE_CATALOG = [
     requiredPermissions: [{ module: 'products', action: 'read' }],
   },
   {
+    // Auto-consumption rules are admin-tier configuration (which products
+    // auto-deduct when a service is completed) — not a browse surface.
+    // Gating on products.manage hides this from CUSTOMER sidebars
+    // (CUSTOMER gets products.read for the catalogue, not .manage) while
+    // keeping ADMIN/NURSE access intact. The route handler's READ gate
+    // (canReadProductsStaff) keeps the legacy blanket-deny defensively
+    // if a customer ever URL-hops here.
     path: '/wellness/auto-consumption-rules',
     label: 'Auto-consumption',
     description: 'Per-service auto-consumption rules',
     category: 'Products',
-    requiredPermissions: [{ module: 'products', action: 'read' }],
+    requiredPermissions: [{ module: 'products', action: 'manage' }],
   },
 
   // ── Inventory Admin (operational ledger) ──────────────────────────

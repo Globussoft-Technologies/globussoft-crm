@@ -10,6 +10,7 @@ const router = express.Router();
 const prisma = require("../lib/prisma");
 const { verifyToken } = require("../middleware/auth");
 const { requirePermission, clearUserCache, clearTenantCache } = require("../middleware/requirePermission");
+const { clearCustomerRoleCache } = require("../lib/portalPermissions");
 const {
   isValidPermission,
   getCatalog,
@@ -417,8 +418,10 @@ router.post(
         data: { roleId, module, action }
       });
 
-      // Clear permission cache for all users with this role
+      // Clear permission cache for all users with this role + the
+      // patient-portal CUSTOMER-role cache (lib/portalPermissions.js).
       clearTenantCache(role.tenantId);
+      if (role.key === "CUSTOMER") clearCustomerRoleCache(role.tenantId);
 
       await writeAudit("Role", "GRANT_PERMISSION", req.user.userId, req.user.userId, req.user.tenantId, {
         roleId,
@@ -470,8 +473,10 @@ router.delete(
         }
       });
 
-      // Clear permission cache for all users with this role
+      // Clear permission cache for all users with this role + the
+      // patient-portal CUSTOMER-role cache (lib/portalPermissions.js).
       clearTenantCache(role.tenantId);
+      if (role.key === "CUSTOMER") clearCustomerRoleCache(role.tenantId);
 
       await writeAudit("Role", "REVOKE_PERMISSION", req.user.userId, req.user.userId, req.user.tenantId, {
         roleId,
@@ -611,8 +616,10 @@ router.put(
         },
       );
 
-      // Clear permission cache for all users with this role
+      // Clear permission cache for all users with this role + the
+      // patient-portal CUSTOMER-role cache (lib/portalPermissions.js).
       clearTenantCache(role.tenantId);
+      if (role.key === "CUSTOMER") clearCustomerRoleCache(role.tenantId);
 
       await writeAudit("Role", "BULK_UPDATE_PERMISSIONS", req.user.userId, req.user.userId, req.user.tenantId, {
         roleId,

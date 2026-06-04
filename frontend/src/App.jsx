@@ -77,7 +77,6 @@ const Projects = lazy(() => import("./pages/Projects"));
 const Profile = lazy(() => import("./pages/Profile"));
 const Pricing = lazy(() => import("./pages/Pricing"));
 const ManagePlans = lazy(() => import("./pages/ManagePlans"));
-const MarketplaceLeads = lazy(() => import("./pages/MarketplaceLeads"));
 const Channels = lazy(() => import("./pages/Channels"));
 const LandingPages = lazy(() => import("./pages/LandingPages"));
 const LandingPageBuilder = lazy(() => import("./pages/LandingPageBuilder"));
@@ -94,27 +93,14 @@ const Signatures = lazy(() => import("./pages/Signatures"));
 const KnowledgeBase = lazy(() => import("./pages/KnowledgeBase"));
 const Currencies = lazy(() => import("./pages/Currencies"));
 const FieldPermissions = lazy(() => import("./pages/FieldPermissions"));
-// Per-tenant cap-override admin UI — consumes /api/tenant-settings CRUD
-// (backend commit 1542b8e). Completes the per-tenant cap pattern end-to-end:
-// helper + 4 consumers + backend CRUD + admin UI.
-const TenantSettings = lazy(() => import("./pages/admin/TenantSettings"));
 // Per-sub-brand BrandKit admin UI — consumes /api/brand-kits CRUD
 // (backend route commit e4783e0). Operator manages logo / colors / font /
 // tagline per (subBrand, version) with one-active-per-sub-brand semantics.
 const BrandKits = lazy(() => import("./pages/admin/BrandKits"));
-// AdsGPT Reports admin UI — consumes /api/adsgpt (backend route commit
-// 0d66a74, tick #102). Operator views per-platform ad performance + cap
-// utilisation; stub-mode banner surfaces while Q1 cred-blocked.
-const AdsGPTReports = lazy(() => import("./pages/admin/AdsGPTReports"));
 // RateHawk hotel-search admin UI — consumes /api/ratehawk (backend route
 // commit be67789, tick #103). Operator searches RateHawk hotel inventory
 // + sees cap utilisation; stub-mode banner surfaces while Q19 cred-blocked.
 const RateHawkSearch = lazy(() => import("./pages/admin/RateHawkSearch"));
-// Callified AI calls admin UI — consumes /api/callified (backend route
-// commit cdad62d, tick #104). Operator initiates outbound AI calls + sees
-// cap utilisation + feature-flag state; stub-mode banner surfaces while Q1
-// cred-blocked (Yasin's Callified.ai handover).
-const CallifiedCalls = lazy(() => import("./pages/admin/CallifiedCalls"));
 // Booking.com / Expedia hotel-search admin UI — consumes /api/booking-expedia
 // (backend route commit bb33cbe, tick #105). 4th and FINAL cap-consumer UI.
 // Phase 2 deferred-by-design: Expedia returns 503 EXPEDIA_NOT_YET_ENABLED
@@ -123,11 +109,6 @@ const CallifiedCalls = lazy(() => import("./pages/admin/CallifiedCalls"));
 const BookingExpediaSearch = lazy(() =>
   import("./pages/admin/BookingExpediaSearch"),
 );
-// Wallet bonus rule CRUD — Arc 1 D16 PRD_WALLET_TOPUP §3.6 (slice 5 PARTIAL,
-// scaffolds the operator UI ahead of Agent B's /api/wallet/rules route which
-// ships next tick at slice 3). Page is robust to the route's absence —
-// 404 surfaces as empty-state + a "backend not yet deployed" banner.
-const WalletRules = lazy(() => import("./pages/admin/WalletRules"));
 // CSP violations operator-inspect — slice 4 of #917, consumes slice-3 GET /api/csp/violations.
 const CSPViolations = lazy(() => import("./pages/admin/CSPViolations"));
 // PRD Gap §1.5 / §1.6 — admin pages for commission profiles + per-staff
@@ -294,16 +275,26 @@ const WellnessDrugs = lazy(() => import("./pages/wellness/Drugs"));
 const WellnessWallet = lazy(() => import("./pages/wellness/Wallet"));
 const WellnessGiftCards = lazy(() => import("./pages/wellness/GiftCards"));
 const WellnessBuyGiftCards = lazy(() => import("./pages/wellness/BuyGiftCards"));
+// Customer-facing transaction history — surfaced in the sidebar only for
+// customer-tier roles (USER / CUSTOMER) via the `customerOnly` catalog flag.
+const WellnessMyTransactions = lazy(() => import("./pages/wellness/MyTransactions"));
 const WellnessCoupons = lazy(() => import("./pages/wellness/Coupons"));
 const WellnessCashbackRules = lazy(() => import("./pages/wellness/CashbackRules"));
 const WellnessCalendar = lazy(() => import("./pages/wellness/Calendar"));
 const WellnessBookAppointment = lazy(() => import("./pages/wellness/BookAppointment"));
 const WellnessAppointments = lazy(() => import("./pages/wellness/Appointments"));
 const WellnessMyAppointments = lazy(() => import("./pages/wellness/MyAppointments"));
+const WellnessMyBookings = lazy(() => import("./pages/wellness/MyBookings"));
 const WellnessReports = lazy(() => import("./pages/wellness/Reports"));
 const WellnessVisits = lazy(() => import("./pages/wellness/Visits"));
 const WellnessPrescriptions = lazy(
   () => import("./pages/wellness/Prescriptions"),
+);
+// Staff-authed self-view of own Rx — granted via `my_prescriptions.read`.
+// Companion to the patient portal's prescriptions tab for staff users who
+// are ALSO patients at this clinic.
+const WellnessMyPrescriptions = lazy(
+  () => import("./pages/wellness/MyPrescriptions"),
 );
 const WellnessPublicBooking = lazy(
   () => import("./pages/wellness/PublicBooking"),
@@ -352,6 +343,9 @@ const SurveyPublic = lazy(() => import("./pages/SurveyPublic"));
 // Renders the survey form (legacy NPS/CSAT or new multi-question types)
 // and posts answers back to the matching /respond endpoint.
 const SurveyRespond = lazy(() => import("./pages/SurveyRespond"));
+// Public signer-facing e-signature landing page (the email link target).
+// Token-protected, no admin chrome — renders a PDF preview + signature pad.
+const SignDocument = lazy(() => import("./pages/SignDocument"));
 // Public customer-facing knowledge-base article view (no auth, no admin chrome).
 // Replaces the raw-JSON backend response that the KB "View" button used to open.
 const KbArticleView = lazy(() => import("./pages/KbArticleView"));
@@ -490,9 +484,16 @@ function HomeForNonAdmin({ children }) {
 // had no entry for it. Wellness tenants are bounced to their themed calendar
 // (/wellness/calendar); generic tenants land on /calendar-sync which is the
 // closest analog (Google/Outlook calendar binding management).
+//
+// Patient-experience separation (Path B): a CUSTOMER user (the patient
+// cohort) lands on /wellness/my-bookings instead of the operational
+// Calendar, which is reserved for Admin / Reception / Practitioners.
 function CalendarRedirect() {
-  const { tenant } = useContext(AuthContext);
+  const { tenant, user } = useContext(AuthContext);
   if (tenant?.vertical === "wellness") {
+    if (user?.role === "CUSTOMER") {
+      return <Navigate to="/wellness/my-bookings" replace />;
+    }
     return <Navigate to="/wellness/calendar" replace />;
   }
   return <Navigate to="/calendar-sync" replace />;
@@ -849,6 +850,7 @@ export default function App() {
                   {/* v3.7.17 — token-based respondent landing page. The
                       Send-Survey email link points here. */}
                   <Route path="/surveys/respond/:token" element={<SurveyRespond />} />
+                  <Route path="/sign/:token" element={<SignDocument />} />
                   {/* Public knowledge-base article view (no auth). Replaces the raw
                       backend JSON URL that the KB "View" button used to open. */}
                   <Route
@@ -931,10 +933,6 @@ export default function App() {
                     />
                     <Route path="cpq" element={<CPQ />} />
                     <Route path="marketplace" element={<Marketplace />} />
-                    <Route
-                      path="marketplace-leads"
-                      element={<MarketplaceLeads />}
-                    />
                     <Route
                       path="channels"
                       element={
@@ -1076,17 +1074,6 @@ export default function App() {
                         </RoleGuard>
                       }
                     />
-                    {/* Per-tenant cap-override admin UI. ADMIN-only mirrors the
-                        backend gate (verifyRole(['ADMIN']) on PUT/DELETE in
-                        backend/routes/tenant_settings.js commit 1542b8e). */}
-                    <Route
-                      path="admin/tenant-settings"
-                      element={
-                        <RoleGuard allow={["ADMIN"]} message="Tenant Settings requires admin access.">
-                          <TenantSettings />
-                        </RoleGuard>
-                      }
-                    />
                     {/* Per-sub-brand BrandKit admin UI. ADMIN-only mirrors the
                         backend gate (verifyRole(['ADMIN']) on POST/PUT/DELETE in
                         backend/routes/brand_kits.js commit e4783e0). */}
@@ -1098,20 +1085,6 @@ export default function App() {
                             <BrandKits />
                           </RoleGuard>
                         </TravelOnly>
-                      }
-                    />
-                    {/* AdsGPT Reports admin UI. ADMIN + MANAGER (analytics —
-                        not tenant-config). Consumes /api/adsgpt (backend route
-                        commit 0d66a74). Cap-status endpoint is ADMIN-only on
-                        the backend; MANAGER gets a 403 there which is swallowed
-                        silently (no pill renders). Report fetch works for both
-                        roles. */}
-                    <Route
-                      path="admin/adsgpt-reports"
-                      element={
-                        <RoleGuard allow={["ADMIN", "MANAGER"]} message="AdsGPT Reports requires admin or manager access.">
-                          <AdsGPTReports />
-                        </RoleGuard>
                       }
                     />
                     {/* RateHawk hotel-search admin UI. ADMIN + MANAGER (operator
@@ -1129,24 +1102,6 @@ export default function App() {
                             <RateHawkSearch />
                           </RoleGuard>
                         </TravelOnly>
-                      }
-                    />
-                    {/* Callified AI Calls admin UI. ADMIN + MANAGER (outbound
-                        calls reach real customers + cost real money). Consumes
-                        /api/callified (backend route commit cdad62d). Cap-status
-                        endpoint is ADMIN-only on the backend; MANAGER gets a 403
-                        there which is swallowed silently (no pill renders).
-                        Initiate + result-fetch work for both roles. Stub-mode
-                        banner surfaces until Q1 (Yasin's Callified.ai handover)
-                        cred swap lands. Per-tenant feature flag (DC-7) — page
-                        renders a "disabled" state when GET /enabled returns
-                        { enabled: false }. */}
-                    <Route
-                      path="admin/callified-calls"
-                      element={
-                        <RoleGuard allow={["ADMIN", "MANAGER"]} message="Callified AI Calls requires admin or manager access.">
-                          <CallifiedCalls />
-                        </RoleGuard>
                       }
                     />
                     {/* Booking.com / Expedia hotel-search admin UI. ADMIN +
@@ -1169,21 +1124,6 @@ export default function App() {
                             <BookingExpediaSearch />
                           </RoleGuard>
                         </TravelOnly>
-                      }
-                    />
-                    {/* Wallet bonus rule CRUD admin UI. ADMIN-only mirrors the
-                        backend RBAC matrix from PRD_WALLET_TOPUP §3.9
-                        (MANAGER gets read on rules, ADMIN gets CRUD). Slice 5
-                        PARTIAL — frontend scaffolds ahead of Agent B's
-                        /api/wallet/rules route which lands next tick at slice
-                        3. Page handles route-not-deployed gracefully via 404
-                        → empty state + banner. */}
-                    <Route
-                      path="admin/wallet-rules"
-                      element={
-                        <RoleGuard allow={["ADMIN"]} feature="Wallet Bonus Rules">
-                          <WalletRules />
-                        </RoleGuard>
                       }
                     />
                     <Route path="admin/csp-violations" element={<CSPViolations />} />
@@ -1450,6 +1390,22 @@ export default function App() {
                   </RoleGuard>
                 </WellnessOnly>
               } />
+              {/* Staff-authed self-view of own Rx. Sidebar surfacing comes
+                  from the page catalog entry (gated on my_prescriptions.read).
+                  Backend `/api/wellness/my-prescriptions[/:id/pdf]` is gated
+                  on the same permission + scoped to req.user.userId's linked
+                  Patient row. */}
+              <Route path="wellness/my-prescriptions" element={
+                <WellnessOnly>
+                  <RoleGuard
+                    requiredPermission={{ module: 'my_prescriptions', action: 'read' }}
+                    feature="My Prescriptions"
+                    lockedInPlace
+                  >
+                    <WellnessMyPrescriptions />
+                  </RoleGuard>
+                </WellnessOnly>
+              } />
               <Route path="wellness/locations" element={<WellnessOnly><WellnessLocations /></WellnessOnly>} />
               {/* Wave 11 Agent EE: Memberships catalog */}
               <Route path="wellness/memberships" element={
@@ -1467,7 +1423,7 @@ export default function App() {
               <Route path="wellness/wallet" element={
                 <WellnessOnly>
                   <RoleGuard
-                    requiredPermission={{ module: 'billing', action: 'read' }}
+                    requiredPermission={{ module: 'patient_wallets', action: 'read' }}
                     feature="Wallet ledger"
                     lockedInPlace
                   >
@@ -1478,7 +1434,7 @@ export default function App() {
               <Route path="wellness/giftcards" element={
                 <WellnessOnly>
                   <RoleGuard
-                    requiredPermission={{ module: 'billing', action: 'read' }}
+                    requiredPermission={{ module: 'gift_cards', action: 'read' }}
                     feature="Gift Cards"
                     lockedInPlace
                   >
@@ -1492,6 +1448,16 @@ export default function App() {
               <Route path="wellness/buy-giftcards" element={
                 <WellnessOnly>
                   <WellnessBuyGiftCards />
+                </WellnessOnly>
+              } />
+              {/* Customer-facing transaction history. Like Buy Gift Cards,
+                  any authenticated wellness user can open it; the data is
+                  scoped server-side to the caller's own Patient. The sidebar
+                  entry is gated to customer-tier roles via the customerOnly
+                  page-catalog flag. */}
+              <Route path="wellness/my-transactions" element={
+                <WellnessOnly>
+                  <WellnessMyTransactions />
                 </WellnessOnly>
               } />
               <Route path="wellness/coupons" element={
@@ -1519,6 +1485,7 @@ export default function App() {
               <Route path="wellness/calendar" element={<WellnessOnly><WellnessCalendar /></WellnessOnly>} />
               <Route path="wellness/appointments" element={<WellnessOnly><WellnessAppointments /></WellnessOnly>} />
               <Route path="wellness/my-appointments" element={<WellnessOnly><WellnessMyAppointments /></WellnessOnly>} />
+              <Route path="wellness/my-bookings" element={<WellnessOnly><WellnessMyBookings /></WellnessOnly>} />
               <Route path="wellness/book-appointment" element={<WellnessOnly><WellnessBookAppointment /></WellnessOnly>} />
               {/* Wave 2 Agent KK - WhatsApp 2-way threads (agent inbox). */}
               <Route path="wellness/whatsapp" element={<WellnessOnly><WellnessWhatsAppThreads /></WellnessOnly>} />
@@ -1605,7 +1572,7 @@ export default function App() {
               <Route path="wellness/auto-consumption-rules" element={
                 <WellnessOnly>
                   <RoleGuard
-                    requiredPermission={{ module: 'products', action: 'read' }}
+                    requiredPermission={{ module: 'products', action: 'manage' }}
                     feature="Auto-consumption rules"
                     lockedInPlace
                   >

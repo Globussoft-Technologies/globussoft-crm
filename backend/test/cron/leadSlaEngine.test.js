@@ -85,7 +85,7 @@ import {
 } from '../../cron/leadSlaEngine.js';
 
 beforeAll(() => {
-  prisma.contact = { findMany: vi.fn(), update: vi.fn() };
+  prisma.contact = { findMany: vi.fn(), updateMany: vi.fn() };
   prisma.tenant = { findMany: vi.fn(), findUnique: vi.fn() };
   // emitEvent's async tail touches automationRule.findMany + webhook.findMany.
   // Stub both so the real emitEvent (running inside the SUT) returns clean
@@ -97,14 +97,16 @@ beforeAll(() => {
 
 beforeEach(() => {
   prisma.contact.findMany.mockReset();
-  prisma.contact.update.mockReset();
+  prisma.contact.updateMany.mockReset();
   prisma.tenant.findMany.mockReset();
   prisma.tenant.findUnique.mockReset();
   prisma.automationRule.findMany.mockReset();
   prisma.webhook.findMany.mockReset();
 
   prisma.contact.findMany.mockResolvedValue([]);
-  prisma.contact.update.mockResolvedValue({});
+  // Atomic breach flip (commit 214017c1): updateMany guarded by
+  // slaBreached:false; count===1 means "we won the race", engine proceeds.
+  prisma.contact.updateMany.mockResolvedValue({ count: 1 });
   prisma.tenant.findMany.mockResolvedValue([]);
   prisma.tenant.findUnique.mockResolvedValue(null);
   prisma.automationRule.findMany.mockResolvedValue([]); // no rules → no executeAction
@@ -198,9 +200,9 @@ describe('cron/leadSlaEngine — happy path: breach detected', () => {
 
     const res = await processTenant(TENANT);
 
-    expect(prisma.contact.update).toHaveBeenCalledTimes(1);
-    const updArg = prisma.contact.update.mock.calls[0][0];
-    expect(updArg.where).toEqual({ id: 42 });
+    expect(prisma.contact.updateMany).toHaveBeenCalledTimes(1);
+    const updArg = prisma.contact.updateMany.mock.calls[0][0];
+    expect(updArg.where).toEqual({ id: 42, slaBreached: false });
     expect(updArg.data.slaBreached).toBe(true);
     expect(updArg.data.slaBreachedAt).toBeInstanceOf(Date);
 
@@ -223,7 +225,7 @@ describe('cron/leadSlaEngine — happy path: breach detected', () => {
 
     await processTenant(TENANT);
 
-    const slaBreachedAt = prisma.contact.update.mock.calls[0][0].data.slaBreachedAt;
+    const slaBreachedAt = prisma.contact.updateMany.mock.calls[0][0].data.slaBreachedAt;
     expect(slaBreachedAt.getTime()).toBeGreaterThanOrEqual(before);
     expect(slaBreachedAt.getTime()).toBeLessThanOrEqual(Date.now() + 50);
   });
@@ -237,7 +239,7 @@ describe('cron/leadSlaEngine — happy path: breach detected', () => {
 
     const res = await processTenant(TENANT);
 
-    expect(prisma.contact.update).toHaveBeenCalledTimes(3);
+    expect(prisma.contact.updateMany).toHaveBeenCalledTimes(3);
     expect(emitEventCalls()).toHaveLength(3);
     expect(res.checked).toBe(3);
     expect(res.breached).toBe(3);
@@ -263,7 +265,7 @@ describe('cron/leadSlaEngine — within-SLA / non-breach paths', () => {
 
     const res = await processTenant(TENANT);
 
-    expect(prisma.contact.update).not.toHaveBeenCalled();
+    expect(prisma.contact.updateMany).not.toHaveBeenCalled();
     expect(emitEventCalls()).toHaveLength(0);
     expect(res).toEqual({ tenant: 'enhanced', checked: 0, breached: 0, ids: [] });
   });
@@ -311,7 +313,7 @@ describe('cron/leadSlaEngine — breachedBy timing math', () => {
     // that emitEvent fired exactly once.
     expect(emitEventCalls()).toHaveLength(1);
     // And we CAN inspect contact.update side effect — slaBreachedAt is set.
-    const slaBreachedAt = prisma.contact.update.mock.calls[0][0].data.slaBreachedAt;
+    const slaBreachedAt = prisma.contact.updateMany.mock.calls[0][0].data.slaBreachedAt;
     // breachedBy = slaBreachedAt - dueAt; expect ~10min = 600,000 ms ± 1s.
     const computedBreachedBy = slaBreachedAt.getTime() - due.getTime();
     expect(computedBreachedBy).toBeGreaterThanOrEqual(10 * 60 * 1000);
@@ -328,7 +330,7 @@ describe('cron/leadSlaEngine — breachedBy timing math', () => {
     const res = await processTenant(TENANT);
 
     expect(res.breached).toBe(1);
-    expect(prisma.contact.update).toHaveBeenCalledTimes(1);
+    expect(prisma.contact.updateMany).toHaveBeenCalledTimes(1);
     expect(emitEventCalls()).toHaveLength(1);
   });
 });
@@ -342,15 +344,15 @@ describe('cron/leadSlaEngine — per-row error containment', () => {
       leadCandidate({ id: 2 }),
       leadCandidate({ id: 3 }),
     ]);
-    prisma.contact.update
+    prisma.contact.updateMany
       .mockRejectedValueOnce(new Error('DB write failed for id=1'))
-      .mockResolvedValueOnce({})
-      .mockResolvedValueOnce({});
+      .mockResolvedValueOnce({ count: 1 })
+      .mockResolvedValueOnce({ count: 1 });
 
     const res = await processTenant(TENANT);
 
     // All three attempts fired
-    expect(prisma.contact.update).toHaveBeenCalledTimes(3);
+    expect(prisma.contact.updateMany).toHaveBeenCalledTimes(3);
     // Only two emits (the failing row never reached emitEvent)
     expect(emitEventCalls()).toHaveLength(2);
     // breachedIds reflects only the successful rows
@@ -363,7 +365,7 @@ describe('cron/leadSlaEngine — per-row error containment', () => {
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     prisma.contact.findMany.mockResolvedValueOnce([leadCandidate({ id: 99 })]);
-    prisma.contact.update.mockRejectedValueOnce(new Error('boom'));
+    prisma.contact.updateMany.mockRejectedValueOnce(new Error('boom'));
 
     await processTenant(TENANT);
 
@@ -380,7 +382,7 @@ describe('cron/leadSlaEngine — per-row error containment', () => {
       leadCandidate({ id: 1 }),
       leadCandidate({ id: 2 }),
     ]);
-    prisma.contact.update
+    prisma.contact.updateMany
       .mockRejectedValueOnce(new Error('a'))
       .mockRejectedValueOnce(new Error('b'));
 
@@ -476,7 +478,7 @@ describe('cron/leadSlaEngine — runForTenant', () => {
 
     expect(res).toEqual({ checked: 0, breached: 0, ids: [] });
     expect(prisma.contact.findMany).not.toHaveBeenCalled();
-    expect(prisma.contact.update).not.toHaveBeenCalled();
+    expect(prisma.contact.updateMany).not.toHaveBeenCalled();
   });
 
   test('known tenant → delegates to processTenant; returns {checked, breached, ids} (sans tenant key)', async () => {

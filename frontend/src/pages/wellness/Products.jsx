@@ -2,10 +2,26 @@
 import { Package, Plus, Edit2, Trash2, AlertCircle, Search, Upload } from 'lucide-react';
 import { fetchApi, getAuthToken } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
+import { usePermissions } from '../../hooks/usePermissions';
 
 export default function Products() {
   const notify = useNotify();
   const fileInputRef = useRef(null);
+  // Backend routes inventory.js gate POST=products.write,
+  // PUT=products.update, DELETE=products.delete. We default to fail-closed
+  // (canX=false until perms resolve) so buttons don't flash visible during
+  // the initial permission fetch.
+  const { hasPermission, isReady: permsReady, userType } = usePermissions();
+  const canWriteProducts  = permsReady && hasPermission('products', 'write');
+  const canUpdateProducts = permsReady && hasPermission('products', 'update');
+  const canDeleteProducts = permsReady && hasPermission('products', 'delete');
+  const canMutateProducts = canWriteProducts || canUpdateProducts || canDeleteProducts;
+  // CUSTOMER users see a catalogue-only view: no SKU, stock, or product
+  // type columns (backend strips these fields from the response anyway,
+  // but hiding the columns keeps the table compact and honest about
+  // what's renderable). Pairs with the allowCustomer opt-in on
+  // GET /api/wellness/products.
+  const isCustomerView = userType === 'CUSTOMER';
   const [products, setProducts] = useState([]);
   const [categories, setCategories] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -153,6 +169,27 @@ export default function Products() {
       return;
     }
 
+    // Numeric guards — stock / threshold / price / volume can never be negative.
+    // Stock + threshold are unit counts, so they must also be whole numbers.
+    const nonNegative = [
+      ['Current stock', formData.currentStock, true],
+      ['Reorder threshold', formData.threshold, true],
+      ['Price', formData.price, false],
+      ['Volume', formData.volume, false],
+    ];
+    for (const [label, raw, mustBeInt] of nonNegative) {
+      if (raw === '' || raw === null || raw === undefined) continue; // blank → server default
+      const n = Number(raw);
+      if (!Number.isFinite(n) || n < 0) {
+        notify.error(`${label} cannot be negative`);
+        return;
+      }
+      if (mustBeInt && !Number.isInteger(n)) {
+        notify.error(`${label} must be a whole number`);
+        return;
+      }
+    }
+
     try {
       if (editingId) {
         await fetchApi(`/api/wellness/products/${editingId}`, {
@@ -235,27 +272,45 @@ export default function Products() {
   return (
     <div style={{ maxWidth: 1400, margin: '0 auto', padding: '2rem 1rem' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
           <Package size={28} color="var(--accent-color)" />
           <h1 style={{ fontSize: '1.5rem', fontWeight: 600, margin: 0 }}>Products</h1>
+          {permsReady && !canMutateProducts && (
+            <span
+              title="You can view products but can't make changes."
+              style={{
+                fontSize: '0.7rem',
+                padding: '0.2rem 0.55rem',
+                borderRadius: 999,
+                background: 'var(--subtle-bg)',
+                color: 'var(--text-secondary)',
+                border: '1px solid var(--border-color)',
+                fontWeight: 500,
+              }}
+            >
+              View only
+            </span>
+          )}
         </div>
-        <button
-          onClick={() => handleOpenModal()}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.5rem',
-            padding: '0.6rem 1.25rem',
-            background: 'var(--accent-color)',
-            color: '#fff',
-            border: 'none',
-            borderRadius: 8,
-            fontWeight: 500,
-            cursor: 'pointer',
-          }}
-        >
-          <Plus size={16} /> Add Product
-        </button>
+        {canWriteProducts && (
+          <button
+            onClick={() => handleOpenModal()}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.5rem',
+              padding: '0.6rem 1.25rem',
+              background: 'var(--accent-color)',
+              color: '#fff',
+              border: 'none',
+              borderRadius: 8,
+              fontWeight: 500,
+              cursor: 'pointer',
+            }}
+          >
+            <Plus size={16} /> Add Product
+          </button>
+        )}
       </div>
 
       <div style={{ display: 'flex', gap: '1rem', marginBottom: '2rem' }}>
@@ -308,12 +363,20 @@ export default function Products() {
             <thead>
               <tr style={{ borderBottom: '2px solid var(--border-color)' }}>
                 <th style={{ textAlign: 'left', padding: '1rem', fontWeight: 600 }}>Product</th>
-                <th style={{ textAlign: 'left', padding: '1rem', fontWeight: 600 }}>SKU</th>
+                {!isCustomerView && (
+                  <th style={{ textAlign: 'left', padding: '1rem', fontWeight: 600 }}>SKU</th>
+                )}
                 <th style={{ textAlign: 'left', padding: '1rem', fontWeight: 600 }}>Category</th>
                 <th style={{ textAlign: 'right', padding: '1rem', fontWeight: 600 }}>Price</th>
-                <th style={{ textAlign: 'center', padding: '1rem', fontWeight: 600 }}>Stock</th>
-                <th style={{ textAlign: 'center', padding: '1rem', fontWeight: 600 }}>Type</th>
-                <th style={{ textAlign: 'center', padding: '1rem', fontWeight: 600 }}>Actions</th>
+                {!isCustomerView && (
+                  <th style={{ textAlign: 'center', padding: '1rem', fontWeight: 600 }}>Stock</th>
+                )}
+                {!isCustomerView && (
+                  <th style={{ textAlign: 'center', padding: '1rem', fontWeight: 600 }}>Type</th>
+                )}
+                {(canUpdateProducts || canDeleteProducts) && (
+                  <th style={{ textAlign: 'center', padding: '1rem', fontWeight: 600 }}>Actions</th>
+                )}
               </tr>
             </thead>
             <tbody>
@@ -334,60 +397,74 @@ export default function Products() {
                       </div>
                     </div>
                   </td>
-                  <td style={{ padding: '1rem', fontFamily: 'monospace', fontSize: '0.9rem' }}>{product.sku || '-'}</td>
-                  <td style={{ padding: '1rem', fontSize: '0.9rem' }}>{getCategoryName(product.categoryId)}</td>
+                  {!isCustomerView && (
+                    <td style={{ padding: '1rem', fontFamily: 'monospace', fontSize: '0.9rem' }}>{product.sku || '-'}</td>
+                  )}
+                  <td style={{ padding: '1rem', fontSize: '0.9rem' }}>{product.category?.name || getCategoryName(product.categoryId)}</td>
                   <td style={{ padding: '1rem', textAlign: 'right', fontWeight: 500 }}>₹{(product.price ?? 0).toFixed(2)}</td>
-                  <td style={{ padding: '1rem', textAlign: 'center' }}>
-                    <span
-                      onClick={() => setSelectedProductForDetails(product)}
-                      style={{
-                        padding: '0.25rem 0.75rem',
-                        background: product.currentStock > product.threshold ? 'rgba(34, 197, 94, 0.1)' : 'rgba(239, 68, 68, 0.1)',
-                        color: product.currentStock > product.threshold ? '#22c55e' : '#ef4444',
-                        borderRadius: 4,
-                        fontSize: '0.85rem',
-                        cursor: 'pointer',
-                        display: 'inline-block',
-                        transition: 'all 0.2s',
-                      }}
-                      onMouseEnter={(e) => e.target.style.opacity = '0.7'}
-                      onMouseLeave={(e) => e.target.style.opacity = '1'}
-                      title="Click to see details"
-                    >
-                      {product.currentStock}
-                    </span>
-                  </td>
-                  <td style={{ padding: '1rem', textAlign: 'center', fontSize: '0.85rem' }}>{product.productType || '-'}</td>
-                  <td style={{ padding: '1rem', textAlign: 'center' }}>
-                    <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'center' }}>
-                      <button
-                        onClick={() => handleOpenModal(product)}
+                  {!isCustomerView && (
+                    <td style={{ padding: '1rem', textAlign: 'center' }}>
+                      <span
+                        onClick={() => setSelectedProductForDetails(product)}
                         style={{
-                          padding: '0.4rem 0.6rem',
-                          background: 'rgba(168, 85, 247, 0.1)',
-                          border: 'none',
-                          borderRadius: 6,
+                          padding: '0.25rem 0.75rem',
+                          background: product.currentStock > product.threshold ? 'rgba(34, 197, 94, 0.1)' : 'rgba(239, 68, 68, 0.1)',
+                          color: product.currentStock > product.threshold ? '#22c55e' : '#ef4444',
+                          borderRadius: 4,
+                          fontSize: '0.85rem',
                           cursor: 'pointer',
-                          color: 'var(--accent-color)',
+                          display: 'inline-block',
+                          transition: 'all 0.2s',
                         }}
+                        onMouseEnter={(e) => e.target.style.opacity = '0.7'}
+                        onMouseLeave={(e) => e.target.style.opacity = '1'}
+                        title="Click to see details"
                       >
-                        <Edit2 size={14} />
-                      </button>
-                      <button
-                        onClick={() => handleDelete(product.id)}
-                        style={{
-                          padding: '0.4rem 0.6rem',
-                          background: 'rgba(239, 68, 68, 0.1)',
-                          border: 'none',
-                          borderRadius: 6,
-                          cursor: 'pointer',
-                          color: '#ef4444',
-                        }}
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    </div>
-                  </td>
+                        {product.currentStock}
+                      </span>
+                    </td>
+                  )}
+                  {!isCustomerView && (
+                    <td style={{ padding: '1rem', textAlign: 'center', fontSize: '0.85rem' }}>{product.productType || '-'}</td>
+                  )}
+                  {(canUpdateProducts || canDeleteProducts) && (
+                    <td style={{ padding: '1rem', textAlign: 'center' }}>
+                      <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'center' }}>
+                        {canUpdateProducts && (
+                          <button
+                            onClick={() => handleOpenModal(product)}
+                            aria-label={`Edit ${product.name}`}
+                            style={{
+                              padding: '0.4rem 0.6rem',
+                              background: 'rgba(168, 85, 247, 0.1)',
+                              border: 'none',
+                              borderRadius: 6,
+                              cursor: 'pointer',
+                              color: 'var(--accent-color)',
+                            }}
+                          >
+                            <Edit2 size={14} />
+                          </button>
+                        )}
+                        {canDeleteProducts && (
+                          <button
+                            onClick={() => handleDelete(product.id)}
+                            aria-label={`Delete ${product.name}`}
+                            style={{
+                              padding: '0.4rem 0.6rem',
+                              background: 'rgba(239, 68, 68, 0.1)',
+                              border: 'none',
+                              borderRadius: 6,
+                              cursor: 'pointer',
+                              color: '#ef4444',
+                            }}
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>
@@ -634,6 +711,7 @@ export default function Products() {
                   value={formData.price}
                   onChange={(e) => setFormData({ ...formData, price: e.target.value })}
                   step="0.01"
+                  min="0"
                   style={{
                     width: '100%',
                     padding: '0.75rem',
@@ -673,6 +751,7 @@ export default function Products() {
                   value={formData.volume}
                   onChange={(e) => setFormData({ ...formData, volume: e.target.value })}
                   step="0.01"
+                  min="0"
                   style={{
                     width: '100%',
                     padding: '0.75rem',
@@ -714,6 +793,8 @@ export default function Products() {
                 </label>
                 <input
                   type="number"
+                  min="0"
+                  step="1"
                   value={formData.currentStock}
                   onChange={(e) => setFormData({ ...formData, currentStock: e.target.value })}
                   style={{
@@ -732,6 +813,8 @@ export default function Products() {
                 </label>
                 <input
                   type="number"
+                  min="0"
+                  step="1"
                   value={formData.threshold}
                   onChange={(e) => setFormData({ ...formData, threshold: e.target.value })}
                   style={{

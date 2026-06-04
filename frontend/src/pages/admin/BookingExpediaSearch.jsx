@@ -380,13 +380,13 @@ export default function BookingExpediaSearch() {
               marginBottom: 16,
             }}
           >
-            <RouterLink
-              to="/admin/tenant-settings"
-              style={ctaLink}
-              data-testid="booking-expedia-tenant-settings-link"
-            >
-              <Settings size={13} aria-hidden /> Pre-configure cap
-            </RouterLink>
+            {/* The Pre-configure cap CTA used to deep-link to
+                /admin/tenant-settings, but that route was removed by
+                request. Render a non-link hint in its slot so the
+                "while-you-wait" guidance still surfaces. */}
+            <span style={ctaLink} data-testid="booking-expedia-tenant-settings-link">
+              <Settings size={13} aria-hidden /> Pre-configure cap (ask admin)
+            </span>
             <RouterLink
               to="/admin/brand-kits"
               style={ctaLink}

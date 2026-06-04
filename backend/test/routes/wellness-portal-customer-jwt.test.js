@@ -49,6 +49,7 @@ import prisma from '../../lib/prisma.js';
 
 // Stub every prisma surface the /portal/visits handler + middleware touch.
 prisma.patient = prisma.patient || {};
+prisma.patient.findUnique = vi.fn();
 prisma.patient.findFirst = vi.fn();
 prisma.patient.update = vi.fn();
 prisma.patient.create = vi.fn();
@@ -103,6 +104,7 @@ function makeApp() {
 }
 
 beforeEach(() => {
+  prisma.patient.findUnique.mockReset();
   prisma.patient.findFirst.mockReset();
   prisma.patient.update.mockReset();
   prisma.patient.create.mockReset();
@@ -111,6 +113,8 @@ beforeEach(() => {
 
   // Sensible defaults — empty result set so the handler's body returns [].
   prisma.visit.findMany.mockResolvedValue([]);
+  // Path A default: patient exists so portal tokens resolve.
+  prisma.patient.findUnique.mockResolvedValue({ id: 50, tenantId: 7 });
 });
 
 describe('verifyPatientToken — Path A (patient-portal token)', () => {
@@ -146,7 +150,7 @@ describe('verifyPatientToken — Path B step 1 (linked Patient.userId)', () => {
     expect(res.body).toEqual([]);
     expect(prisma.patient.findFirst).toHaveBeenCalledWith({
       where: { userId: 100, tenantId: 7 },
-      select: { id: true, phone: true },
+      select: { id: true, phone: true, tenantId: true },
     });
     expect(prisma.user.findUnique).not.toHaveBeenCalled();
     expect(prisma.patient.create).not.toHaveBeenCalled();
@@ -176,7 +180,7 @@ describe('verifyPatientToken — Path B step 2 (claim by email)', () => {
     expect(res.status).toBe(200);
     expect(prisma.patient.findFirst).toHaveBeenNthCalledWith(1, {
       where: { userId: 100, tenantId: 7 },
-      select: { id: true, phone: true },
+      select: { id: true, phone: true, tenantId: true },
     });
     expect(prisma.patient.findFirst).toHaveBeenNthCalledWith(2, {
       where: {
@@ -184,7 +188,7 @@ describe('verifyPatientToken — Path B step 2 (claim by email)', () => {
         email: 'narendra@example.com',
         userId: null,
       },
-      select: { id: true, phone: true },
+      select: { id: true, phone: true, tenantId: true },
     });
     expect(prisma.patient.update).toHaveBeenCalledWith({
       where: { id: 99 },
@@ -221,7 +225,7 @@ describe('verifyPatientToken — Path B step 3 (auto-create)', () => {
         userId: 100,
         source: 'self-register',
       },
-      select: { id: true, phone: true },
+      select: { id: true, phone: true, tenantId: true },
     });
     expect(prisma.patient.update).not.toHaveBeenCalled();
     expect(prisma.visit.findMany).toHaveBeenCalledWith(
@@ -247,21 +251,53 @@ describe('verifyPatientToken — Path B step 3 (auto-create)', () => {
         userId: 100,
         tenantId: 7,
       }),
-      select: { id: true, phone: true },
+      select: { id: true, phone: true, tenantId: true },
     });
   });
 });
 
 describe('verifyPatientToken — auth-gate negatives', () => {
-  test('staff JWT (userType=STAFF) is rejected with 401 — no Patient lookup runs', async () => {
+  // Updated for the looser Path B: a STAFF-typed session is no longer
+  // rejected up-front (clinics use the USER role as a patient pool, so
+  // userType-only gating was too narrow). Instead the middleware looks
+  // up Patient.userId, and only rejects if no linked Patient row exists
+  // — but with a distinct 403 NO_PATIENT_PROFILE code so the frontend
+  // can show the role-mismatch view instead of force-redirecting.
+  test('staff JWT with NO linked Patient row → 403 NO_PATIENT_PROFILE', async () => {
+    // findFirst returns null (no link). user.findUnique should NOT run
+    // because auto-create is gated on userType === CUSTOMER.
+    prisma.patient.findFirst.mockResolvedValueOnce(null);
+
     const token = signStaffJwt();
     const res = await request(makeApp())
       .get('/api/wellness/portal/visits')
       .set('Authorization', `Bearer ${token}`);
 
-    expect(res.status).toBe(401);
-    expect(prisma.patient.findFirst).not.toHaveBeenCalled();
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe('NO_PATIENT_PROFILE');
+    expect(prisma.patient.findFirst).toHaveBeenCalledTimes(1);
+    expect(prisma.user.findUnique).not.toHaveBeenCalled();
     expect(prisma.patient.create).not.toHaveBeenCalled();
+  });
+
+  test('staff JWT WITH a linked Patient row (USER-role-as-patient) → 200', async () => {
+    // Clinics map their USER role as patients — a Patient.userId link
+    // exists. Pin the contract that the middleware accepts this and
+    // does NOT try to auto-create / claim by email (those paths stay
+    // CUSTOMER-only).
+    prisma.patient.findFirst.mockResolvedValueOnce({ id: 77, phone: '+918888800000' });
+
+    const token = signStaffJwt();
+    const res = await request(makeApp())
+      .get('/api/wellness/portal/visits')
+      .set('Authorization', `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(prisma.user.findUnique).not.toHaveBeenCalled();
+    expect(prisma.patient.create).not.toHaveBeenCalled();
+    expect(prisma.visit.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { patientId: 77 } }),
+    );
   });
 
   test('missing Authorization header → 401 "Missing portal token"', async () => {

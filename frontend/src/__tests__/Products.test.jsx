@@ -47,6 +47,27 @@ vi.mock('../utils/notify', () => ({
   useNotify: () => notifyObj,
 }));
 
+// Default to a fully-permissioned viewer so existing assertions on Add /
+// Edit / Delete buttons keep passing. The SUT now hides these buttons for
+// users without products.{write,update,delete}.
+const FULL_PERMS = {
+  isReady: true,
+  hasPermission: () => true,
+  permissions: ['products.read', 'products.write', 'products.update', 'products.delete', 'products.manage'],
+  roles: [],
+  isOwner: false,
+  userType: null,
+  isLoading: false,
+  error: null,
+  refresh: () => Promise.resolve(),
+  hasAllPermissions: () => true,
+  hasAnyPermission: () => true,
+};
+const usePermissionsMock = vi.fn(() => FULL_PERMS);
+vi.mock('../hooks/usePermissions', () => ({
+  usePermissions: (...args) => usePermissionsMock(...args),
+}));
+
 import Products from '../pages/wellness/Products';
 
 const CATEGORIES = [
@@ -243,6 +264,36 @@ describe('<Products /> — Add Product modal', () => {
 
     await waitFor(() => {
       expect(notifyError).toHaveBeenCalledWith('Product name is required');
+    });
+    const postCall = fetchApiMock.mock.calls.find(
+      ([u, opts]) => u === '/api/wellness/products' && opts?.method === 'POST',
+    );
+    expect(postCall).toBeUndefined();
+  });
+
+  it('Negative Current Stock → notify.error + NO POST goes out', async () => {
+    installFetchApiMock();
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByText('PRP serum 10ml')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Add Product/i }));
+
+    const modal = screen.getByRole('heading', { name: /New Product/i }).closest('.glass');
+    // Name (text input 0) so the name guard passes and we reach the numeric one.
+    fireEvent.change(modal.querySelectorAll('input[type="text"]')[0], {
+      target: { value: 'Massage Oil' },
+    });
+    // Number inputs order: Price(0), Volume(1), Current Stock(2), Threshold(3).
+    const numberInputs = modal.querySelectorAll('input[type="number"]');
+    fireEvent.change(numberInputs[2], { target: { value: '-1' } });
+
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalledWith(
+        expect.stringMatching(/current stock cannot be negative/i),
+      );
     });
     const postCall = fetchApiMock.mock.calls.find(
       ([u, opts]) => u === '/api/wellness/products' && opts?.method === 'POST',

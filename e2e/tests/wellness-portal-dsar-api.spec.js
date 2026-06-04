@@ -306,24 +306,25 @@ test.describe('POST /api/wellness/portal/export — patient self-DSAR', () => {
     expect(res.status()).toBe(401);
   });
 
-  test('5. auth gate: staff JWT (no patientId claim) → 401', async ({ request }) => {
+  test('5. auth gate: staff JWT (no patientId claim) → 403 NO_PATIENT_PROFILE', async ({ request }) => {
     test.skip(!staffToken, 'staff token unavailable');
-    // Staff tokens are signed with JWT_SECRET; PORTAL_JWT_SECRET falls
-    // back to JWT_SECRET when unset (wellness.js:40-43), so the JWT
-    // verifies — but `decoded.patientId` is undefined and the middleware
-    // returns 401 "Invalid portal token".
+    // Staff tokens verify under JWT_SECRET (PORTAL_JWT_SECRET falls back)
+    // but verifyPatientToken now returns 403 NO_PATIENT_PROFILE for staff
+    // JWTs without a linked Patient row (Path B rejection, not Path A).
     const res = await request.post(`${API}/wellness/portal/export`, {
       headers: { Authorization: `Bearer ${staffToken}` },
     });
-    expect(res.status()).toBe(401);
+    expect(res.status()).toBe(403);
+    expect((await res.json()).code).toBe('NO_PATIENT_PROFILE');
   });
 
-  test('6. auth gate: cross-tenant staff JWT → 401 (no patientId)', async ({ request }) => {
+  test('6. auth gate: cross-tenant staff JWT → 403 NO_PATIENT_PROFILE', async ({ request }) => {
     test.skip(!crossTenantStaffToken, 'cross-tenant staff token unavailable');
     const res = await request.post(`${API}/wellness/portal/export`, {
       headers: { Authorization: `Bearer ${crossTenantStaffToken}` },
     });
-    expect(res.status()).toBe(401);
+    expect(res.status()).toBe(403);
+    expect((await res.json()).code).toBe('NO_PATIENT_PROFILE');
   });
 
   test('7. auth gate: garbage Bearer → 401', async ({ request }) => {

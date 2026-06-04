@@ -204,9 +204,11 @@ describe('<BookingExpediaSearch /> — operator-facing Booking.com / Expedia sea
     expect(pending.textContent).toMatch(/Booking\.com \/ Expedia integration — Phase 2/);
     expect(pending.textContent).toMatch(/Q11/);
     expect(pending.textContent).toMatch(/vendor handover/i);
-    // CTA links route to the readiness surfaces.
-    const tenantLink = screen.getByTestId('booking-expedia-tenant-settings-link');
-    expect(tenantLink.getAttribute('href')).toBe('/admin/tenant-settings');
+    // CTA: brand-kits stays a real link; the tenant-settings slot is a
+    // non-link hint now that /admin/tenant-settings has been removed.
+    const tenantHint = screen.getByTestId('booking-expedia-tenant-settings-link');
+    expect(tenantHint.tagName).toBe('SPAN');
+    expect(tenantHint.textContent).toMatch(/Pre-configure cap/i);
     const brandLink = screen.getByTestId('booking-expedia-brand-kits-link');
     expect(brandLink.getAttribute('href')).toBe('/admin/brand-kits');
     // "Show form anyway" ghost button is offered as the QA escape hatch.

@@ -35,9 +35,14 @@ describe('sensitivePermissions catalog', () => {
     expect(SENSITIVE_PERMISSIONS.has('developer.manage')).toBe(true);
     expect(SENSITIVE_PERMISSIONS.has('integrations.write')).toBe(true);
     expect(SENSITIVE_PERMISSIONS.has('integrations.manage')).toBe(true);
-    // BILLING / ACCOUNTING write-tier
-    expect(SENSITIVE_PERMISSIONS.has('billing.write')).toBe(true);
-    expect(SENSITIVE_PERMISSIONS.has('billing.manage')).toBe(true);
+    // INVOICES / GIFT_CARDS / PATIENT_WALLETS / ACCOUNTING write-tier
+    // (billing was split into three surface-specific modules in v3.8.x)
+    expect(SENSITIVE_PERMISSIONS.has('invoices.write')).toBe(true);
+    expect(SENSITIVE_PERMISSIONS.has('invoices.manage')).toBe(true);
+    expect(SENSITIVE_PERMISSIONS.has('gift_cards.write')).toBe(true);
+    expect(SENSITIVE_PERMISSIONS.has('gift_cards.manage')).toBe(true);
+    expect(SENSITIVE_PERMISSIONS.has('patient_wallets.write')).toBe(true);
+    expect(SENSITIVE_PERMISSIONS.has('patient_wallets.manage')).toBe(true);
     expect(SENSITIVE_PERMISSIONS.has('accounting.write')).toBe(true);
     // Clinical PII destruction
     expect(SENSITIVE_PERMISSIONS.has('patients.delete')).toBe(true);
@@ -73,9 +78,9 @@ describe('getSensitiveGrants', () => {
     const grants = getSensitiveGrants([
       { module: 'patients', action: 'read' },
       { module: 'staff', action: 'manage' },
-      { module: 'billing', action: 'write' },
+      { module: 'invoices', action: 'write' },
     ]);
-    expect(grants.sort()).toEqual(['billing.write', 'staff.manage'].sort());
+    expect(grants.sort()).toEqual(['invoices.write', 'staff.manage'].sort());
   });
 
   test('returns empty array for empty / invalid input', () => {

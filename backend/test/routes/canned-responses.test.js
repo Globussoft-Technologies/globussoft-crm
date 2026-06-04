@@ -82,7 +82,7 @@ const cannedResponsesRouter = requireCJS('../../routes/canned_responses');
  * unauthenticated case where the global guard hasn't populated req.user
  * — the router's `|| 1` fallback then takes over.
  */
-function makeApp({ user = { userId: 7, tenantId: 1, role: 'USER' } } = {}) {
+function makeApp({ user = { userId: 7, tenantId: 1, role: 'ADMIN' } } = {}) {
   const app = express();
   app.use(express.json());
   app.use((req, _res, next) => {
@@ -111,7 +111,7 @@ describe('GET /api/canned-responses', () => {
     ];
     prisma.cannedResponse.findMany.mockResolvedValue(rows);
 
-    const res = await request(makeApp({ user: { userId: 1, tenantId: 7, role: 'USER' } })).get(
+    const res = await request(makeApp({ user: { userId: 1, tenantId: 7, role: 'ADMIN' } })).get(
       '/api/canned-responses',
     );
 
@@ -131,13 +131,17 @@ describe('GET /api/canned-responses', () => {
     expect(args.where).toEqual({ tenantId: 1, category: 'Billing' });
   });
 
-  test('falls back to tenantId=1 when no req.user is present (no global guard)', async () => {
+  test('403 RBAC_DENIED when no req.user is present (verifyRole gate)', async () => {
+    // Security audit-fix (214017c1): the in-route `|| 1` tenant fallback was
+    // removed and verifyRole([ADMIN,MANAGER]) now gates every handler. With
+    // no req.user, verifyRole short-circuits with 403 before any query runs.
     prisma.cannedResponse.findMany.mockResolvedValue([]);
 
-    await request(makeApp({ user: null })).get('/api/canned-responses');
+    const res = await request(makeApp({ user: null })).get('/api/canned-responses');
 
-    const args = prisma.cannedResponse.findMany.mock.calls[0][0];
-    expect(args.where).toEqual({ tenantId: 1 });
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe('RBAC_DENIED');
+    expect(prisma.cannedResponse.findMany).not.toHaveBeenCalled();
   });
 
   test('500 envelope when Prisma throws', async () => {
@@ -156,7 +160,7 @@ describe('GET /api/canned-responses?fields=summary', () => {
   test('?fields=summary attaches a slim select dropping content + tenantId + createdAt + updatedAt', async () => {
     prisma.cannedResponse.findMany.mockResolvedValue([]);
 
-    await request(makeApp({ user: { userId: 1, tenantId: 7, role: 'USER' } })).get(
+    await request(makeApp({ user: { userId: 1, tenantId: 7, role: 'ADMIN' } })).get(
       '/api/canned-responses?fields=summary',
     );
 
@@ -206,7 +210,7 @@ describe('GET /api/canned-responses?fields=summary', () => {
   test('?fields=summary + ?category= combine — both tenant + category in where AND select attached', async () => {
     prisma.cannedResponse.findMany.mockResolvedValue([]);
 
-    await request(makeApp({ user: { userId: 1, tenantId: 4, role: 'USER' } })).get(
+    await request(makeApp({ user: { userId: 1, tenantId: 4, role: 'ADMIN' } })).get(
       '/api/canned-responses?fields=summary&category=Billing',
     );
 
@@ -243,7 +247,7 @@ describe('POST /api/canned-responses', () => {
   test('happy path: coerces to String, defaults category=General, scopes tenant from req.user', async () => {
     prisma.cannedResponse.create.mockImplementation(async ({ data }) => ({ id: 42, ...data }));
 
-    const res = await request(makeApp({ user: { userId: 9, tenantId: 5, role: 'USER' } }))
+    const res = await request(makeApp({ user: { userId: 9, tenantId: 5, role: 'ADMIN' } }))
       .post('/api/canned-responses')
       .send({ name: 'Welcome', content: 'Hello and welcome!' });
 
@@ -294,7 +298,7 @@ describe('POST /api/canned-responses', () => {
     // The global stripDangerous middleware would strip body.tenantId in
     // production. Here we mount the router in isolation; the route's own
     // code already pins tenantId from req.user — that's what we pin.
-    await request(makeApp({ user: { userId: 1, tenantId: 3, role: 'USER' } }))
+    await request(makeApp({ user: { userId: 1, tenantId: 3, role: 'ADMIN' } }))
       .post('/api/canned-responses')
       .send({ name: 'X', content: 'Y', tenantId: 999 });
 
@@ -320,7 +324,7 @@ describe('PUT /api/canned-responses/:id', () => {
   test('404 when the row is not in the caller tenant (cross-tenant guard)', async () => {
     prisma.cannedResponse.findFirst.mockResolvedValue(null);
 
-    const res = await request(makeApp({ user: { userId: 1, tenantId: 7, role: 'USER' } }))
+    const res = await request(makeApp({ user: { userId: 1, tenantId: 7, role: 'ADMIN' } }))
       .put('/api/canned-responses/123')
       .send({ name: 'Patch' });
 
@@ -404,7 +408,7 @@ describe('DELETE /api/canned-responses/:id', () => {
   test('404 when the row is not in the caller tenant (cross-tenant guard)', async () => {
     prisma.cannedResponse.findFirst.mockResolvedValue(null);
 
-    const res = await request(makeApp({ user: { userId: 1, tenantId: 9, role: 'USER' } })).delete(
+    const res = await request(makeApp({ user: { userId: 1, tenantId: 9, role: 'ADMIN' } })).delete(
       '/api/canned-responses/123',
     );
 

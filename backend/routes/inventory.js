@@ -78,6 +78,23 @@ const tenantWhere = (req, extra = {}) => ({ tenantId: req.user.tenantId, ...extr
 //   delete  — destructive ops (DELETE + reverse receipts)
 //   manage  — admin-tier config (categories, vendors, auto-consumption
 //             rules, image uploads for catalog masters)
+// `products.read` is on the central CUSTOMER_SAFE_PERMISSIONS whitelist
+// in middleware/requirePermission.js — CUSTOMER users with the grant
+// pass the staff-route deny automatically. The catalogue + category
+// handlers below detect req.user.userType === 'CUSTOMER' and return a
+// stripped field set (no SKU, stock, purchase/dealer/cost prices, tax
+// internals, threshold, or barcode) so we don't leak inventory data.
+//
+// Auto-consumption rules is admin-config — the route still uses the
+// shared products.read gate but the page catalog bumps the sidebar
+// entry to products.manage so CUSTOMER never sees it. Defence in
+// depth: even if a CUSTOMER URL-hops there, the handler's include
+// pulls product.currentStock — readable in principle but harmless
+// because the page-catalog hides it.
+//
+// Write / update / delete / manage stay blanket-denied for CUSTOMER —
+// none of those permissions are in CUSTOMER_SAFE_PERMISSIONS. The
+// matrix checkbox is a no-op on those even if ticked.
 const canReadProducts = requirePermission("products", "read");
 const canWriteProducts = requirePermission("products", "write");
 const canUpdateProducts = requirePermission("products", "update");
@@ -99,10 +116,29 @@ const adminGate = verifyWellnessRole(["admin", "manager"]);
 
 router.get("/product-categories", canReadProducts, async (req, res) => {
   try {
+    const isCustomer = req.user?.userType === "CUSTOMER";
+    // Customer view: hide inactive categories + drop the _count (which
+    // includes inactive product counts they shouldn't infer). Staff view
+    // keeps everything for the management UI.
     const items = await prisma.productCategory.findMany({
-      where: tenantWhere(req),
+      where: isCustomer
+        ? { ...tenantWhere(req), isActive: true }
+        : tenantWhere(req),
       orderBy: [{ parentId: "asc" }, { name: "asc" }],
-      include: { _count: { select: { products: true, children: true } } },
+      take: 200,
+      ...(isCustomer
+        ? {
+            select: {
+              id: true,
+              name: true,
+              parentId: true,
+              imageUrl: true,
+              color: true,
+            },
+          }
+        : {
+            include: { _count: { select: { products: true, children: true } } },
+          }),
     });
     res.json(items);
   } catch (e) {
@@ -321,10 +357,44 @@ router.post("/upload/service-category-image", adminGate, upload.single("file"), 
 
 router.get("/products", canReadProducts, async (req, res) => {
   try {
+    const isCustomer = req.user?.userType === "CUSTOMER";
+    // Customer view: only active, non-Consumption (clinic-only) products,
+    // and a safe field set — no SKU / stock counts / cost prices /
+    // manufacturer / tax internals / barcode / threshold. Staff view
+    // keeps the full row for the catalogue management UI.
     const items = await prisma.product.findMany({
-      where: tenantWhere(req),
+      where: isCustomer
+        ? {
+            ...tenantWhere(req),
+            isActive: true,
+            NOT: { productType: "Consumption" },
+          }
+        : tenantWhere(req),
       orderBy: { name: "asc" },
-      include: { category: { select: { id: true, name: true } } },
+      take: 200,
+      ...(isCustomer
+        ? {
+            select: {
+              id: true,
+              name: true,
+              description: true,
+              price: true,
+              discountedPrice: true,
+              imageUrl: true,
+              brandName: true,
+              volume: true,
+              unit: true,
+              productType: true,
+              // categoryId kept so the frontend's category-filter
+              // dropdown still works; the field is a foreign key, not
+              // sensitive data.
+              categoryId: true,
+              category: { select: { id: true, name: true } },
+            },
+          }
+        : {
+            include: { category: { select: { id: true, name: true } } },
+          }),
     });
     res.json(items);
   } catch (e) {
@@ -332,6 +402,34 @@ router.get("/products", canReadProducts, async (req, res) => {
     res.status(500).json({ error: "Failed to list products" });
   }
 });
+
+// Reject negative numerics on product writes. Stock + threshold are unit
+// counts (non-negative integers); price/volume/cost fields are non-negative
+// numbers. Returns { error, code } on the first violation, else null. The
+// frontend guards too, but a direct API call must not be able to seed a
+// negative stock level. Only validates keys present in the body (PUT is
+// partial), so a blank/omitted field falls through to the column default.
+function checkProductNumerics(body) {
+  const intFields = ["threshold", "currentStock"];
+  const floatFields = ["price", "volume", "discountedPrice", "dealerPrice", "purchasePrice", "tax"];
+  for (const f of intFields) {
+    const v = body[f];
+    if (v === undefined || v === null || v === "") continue;
+    const n = Number(v);
+    if (!Number.isInteger(n) || n < 0) {
+      return { error: `${f} must be a non-negative whole number`, code: "INVALID_QUANTITY" };
+    }
+  }
+  for (const f of floatFields) {
+    const v = body[f];
+    if (v === undefined || v === null || v === "") continue;
+    const n = Number(v);
+    if (!Number.isFinite(n) || n < 0) {
+      return { error: `${f} must be a non-negative number`, code: "INVALID_NUMERIC" };
+    }
+  }
+  return null;
+}
 
 router.post("/products", canWriteProducts, async (req, res) => {
   try {
@@ -345,6 +443,9 @@ router.post("/products", canWriteProducts, async (req, res) => {
     if (!name || typeof name !== "string" || !name.trim()) {
       return res.status(400).json({ error: "name is required", code: "NAME_REQUIRED" });
     }
+
+    const numErr = checkProductNumerics(req.body);
+    if (numErr) return res.status(400).json(numErr);
 
     // Check for duplicate SKU if provided
     if (sku) {
@@ -417,6 +518,9 @@ router.put("/products/:id", canUpdateProducts, async (req, res) => {
     const id = parseInt(req.params.id);
     const existing = await prisma.product.findFirst({ where: tenantWhere(req, { id }) });
     if (!existing) return res.status(404).json({ error: "Product not found" });
+
+    const numErr = checkProductNumerics(req.body);
+    if (numErr) return res.status(400).json(numErr);
 
     const allowed = [
       "name", "sku", "description", "price", "categoryId", "brandName",
@@ -524,6 +628,7 @@ router.get("/vendors", canReadInventory, async (req, res) => {
     const items = await prisma.vendor.findMany({
       where,
       orderBy: { name: "asc" },
+      take: 200,
     });
     res.json(items);
   } catch (e) {
@@ -1210,6 +1315,7 @@ router.get("/auto-consumption-rules", canReadProducts, async (req, res) => {
     const items = await prisma.autoConsumptionRule.findMany({
       where,
       orderBy: [{ serviceId: "asc" }, { productId: "asc" }],
+      take: 200,
       include: {
         service: { select: { id: true, name: true } },
         product: { select: { id: true, name: true, sku: true, currentStock: true, unit: true } },

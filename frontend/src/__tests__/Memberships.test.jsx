@@ -204,8 +204,11 @@ describe('<Memberships /> — plan list', () => {
   it('renders the empty-state copy when no plans exist', async () => {
     installFetchMock({ plans: [] });
     renderPage();
+    // Admin viewer + default "Active" filter → admin empty-state branch in
+    // PlanCatalog EmptyState: title "No Plans Yet" + "No active plans. Tap the
+    // + button below to create one." (reworded in the 815a8783 refactor).
     expect(
-      await screen.findByText(/No active membership plans yet/i),
+      await screen.findByText(/No active plans\. Tap the . button below to create one/i),
     ).toBeInTheDocument();
   });
 
@@ -263,7 +266,10 @@ describe('<Memberships /> — plan list', () => {
     fireEvent.change(search, { target: { value: 'nothing-matches' } });
     await waitFor(() => {
       expect(screen.queryByText('Gold Facial Pack 10x')).toBeNull();
-      expect(screen.getByText(/No plans match the current filter/i)).toBeInTheDocument();
+      // Empty-state copy is now filter-aware. A query that matches nothing
+      // surfaces the search-specific message, which echoes the query verbatim:
+      //   No plans match "nothing-matches".
+      expect(screen.getByText(/No plans match "nothing-matches"/i)).toBeInTheDocument();
     });
   });
 });

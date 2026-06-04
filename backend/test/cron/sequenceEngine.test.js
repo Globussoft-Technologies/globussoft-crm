@@ -144,9 +144,20 @@ beforeAll(() => {
     findMany: vi.fn(),
     findUnique: vi.fn(),
     update: vi.fn(),
+    // Atomic batch-lock added by the cron-race hardening (214017c1): the
+    // tick claims candidate rows via updateMany(WHERE lockedAt IS NULL)
+    // before re-fetching only the rows this worker won.
+    updateMany: vi.fn(),
   };
   prisma.sequenceStep = {
     findFirst: vi.fn(),
+  };
+  // The legacy ReactFlow path now resolves the from-address via per-tenant
+  // settings: getSetting(tenantId, KEYS.EMAIL_FROM_ADDRESS) → prisma.tenant-
+  // Setting.findUnique on the singleton (214017c1). Stub it; default null in
+  // beforeEach so getSetting falls back to DEFAULTS / the supplied fallback.
+  prisma.tenantSetting = {
+    findUnique: vi.fn(),
   };
 });
 
@@ -160,6 +171,7 @@ beforeEach(() => {
   prisma.sequenceEnrollment.findMany.mockReset();
   prisma.sequenceEnrollment.findUnique.mockReset();
   prisma.sequenceEnrollment.update.mockReset();
+  prisma.sequenceEnrollment.updateMany.mockReset();
   prisma.sequenceStep.findFirst.mockReset();
 
   prisma.emailMessage.create.mockResolvedValue({ id: 'em-1' });
@@ -170,7 +182,9 @@ beforeEach(() => {
   prisma.sequenceEnrollment.findMany.mockResolvedValue([]);
   prisma.sequenceEnrollment.findUnique.mockResolvedValue(null);
   prisma.sequenceEnrollment.update.mockResolvedValue({});
+  prisma.sequenceEnrollment.updateMany.mockResolvedValue({ count: 0 });
   prisma.sequenceStep.findFirst.mockResolvedValue(null);
+  prisma.tenantSetting.findUnique.mockReset().mockResolvedValue(null);
 
   // The engine reads SENDGRID_API_KEY at module top and triggers a
   // best-effort fire-and-forget fetch when an email step fires. We
@@ -666,64 +680,93 @@ describe('cron/sequenceEngine — tickSequenceEngine', () => {
     expect(callOrder).toEqual(['replies', 'enrollments']);
   });
 
-  test('enrollment query shape: status=Active + (nextRun=null OR nextRun<=now) + includes sequence.steps + contact', async () => {
+  test('enrollment query shape: status=Active + (nextRun=null OR nextRun<=now) + lockedAt null candidate scan, then locked re-fetch includes sequence.steps + contact', async () => {
+    // The cron-race hardening (214017c1) split the single enrollment read
+    // into two: (1) a lightweight candidate scan (select id only, WHERE
+    // lockedAt IS NULL) and (2) a re-fetch of the rows this worker claimed
+    // (WHERE lockedBy = WORKER_ID) carrying the heavy include graph.
+    // Make the candidate scan return one row so the re-fetch fires.
+    prisma.sequenceEnrollment.findMany
+      .mockResolvedValueOnce([{ id: 100 }]) // candidate scan
+      .mockResolvedValueOnce([]);           // claimed re-fetch (empty is fine)
+    prisma.sequenceEnrollment.updateMany.mockResolvedValueOnce({ count: 1 });
+
     await tickSequenceEngine();
-    const arg = prisma.sequenceEnrollment.findMany.mock.calls[0][0];
-    expect(arg.where.status).toBe('Active');
-    expect(Array.isArray(arg.where.OR)).toBe(true);
-    const nullClause = arg.where.OR.find((c) => c.nextRun === null);
-    const lteClause = arg.where.OR.find((c) => c.nextRun && c.nextRun.lte);
+
+    // First call — candidate scan: where + select id + lockedAt null.
+    const candidateArg = prisma.sequenceEnrollment.findMany.mock.calls[0][0];
+    expect(candidateArg.where.status).toBe('Active');
+    expect(Array.isArray(candidateArg.where.OR)).toBe(true);
+    const nullClause = candidateArg.where.OR.find((c) => c.nextRun === null);
+    const lteClause = candidateArg.where.OR.find((c) => c.nextRun && c.nextRun.lte);
     expect(nullClause).toBeDefined();
     expect(lteClause).toBeDefined();
     expect(lteClause.nextRun.lte).toBeInstanceOf(Date);
-    // Include shape — sequence.steps with emailTemplate; contact.
-    expect(arg.include.contact).toBe(true);
-    expect(arg.include.sequence.include.steps.include.emailTemplate).toBe(true);
-    expect(arg.include.sequence.include.steps.orderBy).toEqual({ position: 'asc' });
+    expect(candidateArg.where.lockedAt).toBeNull();
+    expect(candidateArg.select).toEqual({ id: true });
+
+    // Second call — claimed re-fetch carries the include graph.
+    const refetchArg = prisma.sequenceEnrollment.findMany.mock.calls[1][0];
+    expect(refetchArg.include.contact).toBe(true);
+    expect(refetchArg.include.sequence.include.steps.include.emailTemplate).toBe(true);
+    expect(refetchArg.include.sequence.include.steps.orderBy).toEqual({ position: 'asc' });
   });
 
   test('skips enrollment whose sequence.isActive=false', async () => {
-    prisma.sequenceEnrollment.findMany.mockResolvedValueOnce([
-      {
-        ...enrollmentWith(),
-        sequence: {
-          id: 50,
-          isActive: false, // paused sequence
-          steps: [stepWith({ position: 0, kind: 'email', emailTemplate: { subject: 'S', body: 'B' } })],
-          nodes: null,
+    prisma.sequenceEnrollment.findMany
+      .mockResolvedValueOnce([{ id: 100 }]) // candidate scan
+      .mockResolvedValueOnce([              // claimed re-fetch
+        {
+          ...enrollmentWith(),
+          sequence: {
+            id: 50,
+            isActive: false, // paused sequence
+            steps: [stepWith({ position: 0, kind: 'email', emailTemplate: { subject: 'S', body: 'B' } })],
+            nodes: null,
+          },
         },
-      },
-    ]);
+      ]);
+    prisma.sequenceEnrollment.updateMany.mockResolvedValueOnce({ count: 1 });
 
     await tickSequenceEngine();
 
     expect(prisma.emailMessage.create).not.toHaveBeenCalled();
-    expect(prisma.sequenceEnrollment.update).not.toHaveBeenCalled();
+    // No step processing; but the engine DOES unlock the inactive enrollment
+    // (lockedAt/lockedBy → null), which is a sequenceEnrollment.update call.
+    const stepUpdates = prisma.sequenceEnrollment.update.mock.calls.filter(
+      (c) => c[0].data && (c[0].data.status !== undefined || c[0].data.currentStep !== undefined),
+    );
+    expect(stepUpdates).toHaveLength(0);
   });
 
   test('routes step-list-bearing enrollment through processStepListEnrollment', async () => {
-    prisma.sequenceEnrollment.findMany.mockResolvedValueOnce([
-      {
-        ...enrollmentWith(),
-        sequence: {
-          id: 50,
-          isActive: true,
-          steps: [
-            stepWith({ position: 0, kind: 'email', emailTemplate: { subject: 'S0', body: 'B0' } }),
-          ],
-          nodes: null,
+    prisma.sequenceEnrollment.findMany
+      .mockResolvedValueOnce([{ id: 100 }]) // candidate scan
+      .mockResolvedValueOnce([              // claimed re-fetch
+        {
+          ...enrollmentWith(),
+          sequence: {
+            id: 50,
+            isActive: true,
+            steps: [
+              stepWith({ position: 0, kind: 'email', emailTemplate: { subject: 'S0', body: 'B0' } }),
+            ],
+            nodes: null,
+          },
         },
-      },
-    ]);
+      ]);
+    prisma.sequenceEnrollment.updateMany.mockResolvedValueOnce({ count: 1 });
 
     await tickSequenceEngine();
 
     // EmailMessage write happened → step-list path ran.
     expect(prisma.emailMessage.create).toHaveBeenCalledTimes(1);
-    // Enrollment was advanced + marked Completed (only one step).
+    // Enrollment was advanced + marked Completed (only one step). The tick
+    // then issues a final unlock update (lockedAt/lockedBy → null), so we
+    // look for the Completed update rather than assuming it's the last call.
     const updateCalls = prisma.sequenceEnrollment.update.mock.calls;
-    expect(updateCalls.length).toBeGreaterThanOrEqual(1);
-    expect(updateCalls[updateCalls.length - 1][0].data.status).toBe('Completed');
+    const completedUpdate = updateCalls.find((c) => c[0].data && c[0].data.status === 'Completed');
+    expect(completedUpdate).toBeDefined();
   });
 
   test('routes canvas-only enrollment (no steps) through legacy path', async () => {
@@ -732,18 +775,21 @@ describe('cron/sequenceEngine — tickSequenceEngine', () => {
     const nodes = JSON.stringify([
       { id: 'n1', type: 'input', data: { label: 'ACTION: Send Email — welcome' } },
     ]);
-    prisma.sequenceEnrollment.findMany.mockResolvedValueOnce([
-      {
-        ...enrollmentWith({ currentNode: null }),
-        sequence: {
-          id: 50,
-          isActive: true,
-          steps: [], // no step-list rows → falls through to legacy path
-          nodes,
-          edges: '[]',
+    prisma.sequenceEnrollment.findMany
+      .mockResolvedValueOnce([{ id: 100 }]) // candidate scan
+      .mockResolvedValueOnce([              // claimed re-fetch
+        {
+          ...enrollmentWith({ currentNode: null }),
+          sequence: {
+            id: 50,
+            isActive: true,
+            steps: [], // no step-list rows → falls through to legacy path
+            nodes,
+            edges: '[]',
+          },
         },
-      },
-    ]);
+      ]);
+    prisma.sequenceEnrollment.updateMany.mockResolvedValueOnce({ count: 1 });
 
     await tickSequenceEngine();
 
@@ -751,11 +797,12 @@ describe('cron/sequenceEngine — tickSequenceEngine', () => {
     const arg = prisma.emailMessage.create.mock.calls[0][0];
     // Legacy path uses a different subject prefix.
     expect(arg.data.subject).toContain('Automated Sequence');
-    // Legacy path completes when no follow-on edge.
+    // Legacy path completes when no follow-on edge. The tick issues a final
+    // unlock update afterwards, so locate the Completed update explicitly.
     const updateCalls = prisma.sequenceEnrollment.update.mock.calls;
-    const lastCall = updateCalls[updateCalls.length - 1][0];
-    expect(lastCall.data.status).toBe('Completed');
-    expect(lastCall.data.currentNode).toBeNull();
+    const completedCall = updateCalls.find((c) => c[0].data && c[0].data.status === 'Completed');
+    expect(completedCall).toBeDefined();
+    expect(completedCall[0].data.currentNode).toBeNull();
   });
 
   test('top-level findMany throw → engine catches + logs (cron-resilience)', async () => {

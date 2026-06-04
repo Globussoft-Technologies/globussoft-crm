@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { FileSpreadsheet, Plus, Trash2, DollarSign, ArrowRightLeft, X, Download, Mail } from 'lucide-react';
+import { FileSpreadsheet, Plus, Trash2, IndianRupee, ArrowRightLeft, X, Download, Mail } from 'lucide-react';
 import { fetchApi, getAuthToken } from '../utils/api';
 import { useNotify } from '../utils/notify';
 
@@ -221,12 +221,23 @@ export default function Estimates() {
   // user had to navigate into the row to reach the PDF action.
   const downloadPdf = (id, estimateNum) => {
     const token = getAuthToken();
-    const baseUrl = import.meta.env.VITE_API_URL || '';
-    fetch(`${baseUrl}/api/estimates/${id}/pdf`, {
+    // Use a relative path so the request stays same-origin and goes through
+    // Vite's /api proxy (same as fetchApi). Prefixing with VITE_API_URL turns
+    // this into a cross-origin call → CORS preflight that the global auth
+    // guard 401s, plus mixed-content blocking when the page is served over
+    // HTTPS (devtunnel / prod). Mirrors the Invoices.jsx fix.
+    fetch(`/api/estimates/${id}/pdf`, {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     })
-      .then((res) => {
-        if (!res.ok) throw new Error('PDF generation failed');
+      .then(async (res) => {
+        if (!res.ok) {
+          let detail = `HTTP ${res.status}`;
+          try {
+            const body = await res.json();
+            if (body?.error) detail = body.error;
+          } catch { /* response wasn't JSON — keep the HTTP status */ }
+          throw new Error(detail);
+        }
         return res.blob();
       })
       .then((blob) => {
@@ -236,7 +247,7 @@ export default function Estimates() {
         link.click();
         URL.revokeObjectURL(link.href);
       })
-      .catch(() => notify.error('Failed to download PDF'));
+      .catch((err) => notify.error(`Failed to download PDF: ${err.message}`));
   };
 
   // #603: per-row email send. Hits the new POST /:id/email endpoint which
@@ -343,7 +354,7 @@ export default function Estimates() {
           background: 'rgba(16,185,129,0.1)', color: '#10b981', border: '1px solid rgba(16,185,129,0.3)',
           display: 'flex', alignItems: 'center', gap: '0.4rem',
         }}>
-          <DollarSign size={14} /> Total Value: {formatCurrency(visibleTotalValue)}
+          <IndianRupee size={14} /> Total Value: {formatCurrency(visibleTotalValue)}
         </span>
       </div>
 
@@ -613,7 +624,7 @@ export default function Estimates() {
                         {est.contact?.name || '-'}
                       </td>
                       <td style={{ padding: '1rem 0.5rem' }}>
-                        {/* #256: removed the hardcoded $ DollarSign — formatCurrency()
+                        {/* #256: removed the hardcoded $ IndianRupee — formatCurrency()
                             already prefixes the right symbol from tenant.defaultCurrency,
                             so wellness/India tenants no longer see '$ ₹100.00'. Mirrors
                             the same fix applied in Invoices.jsx (#242). */}

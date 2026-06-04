@@ -361,10 +361,10 @@ test.describe('Journey K — Low-stock inventory alerts', () => {
 });
 
 // =========================================================================
-//  L. BRANDING — color PUT, validation, admin gate
+//  L. BRANDING — color PUT + validation + admin gate; logo upload gate
 // =========================================================================
 
-test.describe.serial('Journey L — Tenant branding (color)', () => {
+test.describe.serial('Journey L — Tenant branding (color + logo gate)', () => {
   let originalColor = null;
 
   test('L1. GET /branding returns the current shape (logoUrl, brandColor, name, currency)', async ({ request }) => {
@@ -415,6 +415,36 @@ test.describe.serial('Journey L — Tenant branding (color)', () => {
       data: { brandColor: originalColor }, // null or previous value
     });
     expect(res.ok()).toBeTruthy();
+  });
+
+  // ── Logo upload — gate-level only. The S3 upload + replace-deletes-old
+  // happy path is unit-tested (backend/test/routes/wellness-branding-logo.test.js)
+  // against a mocked s3Service; we deliberately do NOT upload here so we never
+  // overwrite the demo tenant's real logo (and can't restore the original
+  // binary). Same split as auth-profile-picture-api.spec.js.
+
+  test('L6. POST /branding/logo from a non-admin role → 403 TENANT_ADMIN_REQUIRED', async ({ request }) => {
+    const token = await login(request, USER);
+    const res = await request.post(`${API}/wellness/branding/logo`, {
+      headers: auth(token),
+      multipart: {
+        logo: { name: 'logo.png', mimeType: 'image/png', buffer: Buffer.from([0x89, 0x50, 0x4e, 0x47]) },
+      },
+    });
+    expect(res.status()).toBe(403);
+    const body = await res.json();
+    expect(body.code).toBe('TENANT_ADMIN_REQUIRED');
+  });
+
+  test('L7. POST /branding/logo as ADMIN with no file part → 400', async ({ request }) => {
+    const token = await login(request, ADMIN);
+    const res = await request.post(`${API}/wellness/branding/logo`, {
+      headers: auth(token),
+      multipart: { foo: 'bar' },
+    });
+    expect(res.status()).toBe(400);
+    const body = await res.json();
+    expect(body.error).toMatch(/no logo file/i);
   });
 });
 

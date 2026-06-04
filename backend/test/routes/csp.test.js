@@ -42,6 +42,16 @@ prisma.auditLog = {
   create: vi.fn().mockResolvedValue({}),
 };
 
+// Security audit-fix (214017c1): POST /report no longer hardcodes
+// tenantId=1 — it derives the tenant from the Host header via
+// prisma.tenant.findUnique({ where: { slug } }) and FAILS CLOSED (204, no
+// write) when no tenant matches. Stub the lookup so the happy-path tests
+// resolve a tenant (id=1) and the persist branch runs. The fail-closed
+// branch is covered explicitly by its own test below.
+prisma.tenant = {
+  findUnique: vi.fn().mockResolvedValue({ id: 1, slug: "default" }),
+};
+
 import express from "express";
 import request from "supertest";
 import { createRequire } from "node:module";
@@ -57,6 +67,8 @@ function makeApp() {
 beforeEach(() => {
   prisma.auditLog.create.mockReset();
   prisma.auditLog.create.mockResolvedValue({});
+  prisma.tenant.findUnique.mockReset();
+  prisma.tenant.findUnique.mockResolvedValue({ id: 1, slug: "default" });
 });
 
 describe("POST /api/csp/report", () => {
@@ -328,19 +340,35 @@ describe("POST /api/csp/report", () => {
     expect(written["csp-report"]["disposition"]).toBe("report");
   });
 
-  // ── 15. tenantId hardcoded to 1 (slice-2 contract pin) ───────────────
-  // csp.js:112 hardcodes tenantId=1 in slice 2 because CSP reports are
-  // anonymous (no req.user). Slice 3 will derive tenantId from Host
-  // header lookup. Pinning the value here means any future slice-3
-  // refactor MUST update this test in lockstep — preventing a silent
-  // contract drift that would mis-attribute reports to tenant 1 forever.
-  test("audit-row writes with tenantId=1 (slice-2 hardcoded)", async () => {
+  // ── 15. tenantId derived from the Host-header tenant lookup ──────────
+  // Security audit-fix (214017c1): the slice-2 hardcoded `tenantId: 1` was
+  // replaced with a Host-header → prisma.tenant.findUnique({ slug }) lookup.
+  // The audit row must be attributed to the RESOLVED tenant's id, not a
+  // constant — otherwise multi-tenant deployments mis-attribute every CSP
+  // report to tenant 1. Here the stub resolves a tenant with id=42 and the
+  // write must carry tenantId=42.
+  test("audit-row writes with the resolved tenant's id (Host-header lookup)", async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ id: 42, slug: "acme" });
     await request(makeApp())
       .post("/api/csp/report")
       .set("Content-Type", "application/csp-report")
       .send(JSON.stringify({ "csp-report": { "violated-directive": "img-src" } }));
     expect(prisma.auditLog.create).toHaveBeenCalledTimes(1);
-    expect(prisma.auditLog.create.mock.calls[0][0].data.tenantId).toBe(1);
+    expect(prisma.auditLog.create.mock.calls[0][0].data.tenantId).toBe(42);
+  });
+
+  // ── 15b. Fail-closed when the Host maps to no tenant ─────────────────
+  // Security audit-fix (214017c1): if the Host header doesn't resolve to a
+  // tenant, the route MUST NOT attribute the report to a default tenant.
+  // It returns 204 (browsers don't retry) and writes NO audit row.
+  test("unknown Host (no tenant) → 204 and NO audit write (fail closed)", async () => {
+    prisma.tenant.findUnique.mockResolvedValue(null);
+    const res = await request(makeApp())
+      .post("/api/csp/report")
+      .set("Content-Type", "application/csp-report")
+      .send(JSON.stringify({ "csp-report": { "violated-directive": "img-src" } }));
+    expect(res.status).toBe(204);
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
   });
 
   // ── 16. Oversized payload → 413 with NO audit-row side-effect ────────

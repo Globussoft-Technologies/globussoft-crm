@@ -377,8 +377,10 @@ export default function InvoicesAdmin() {
     setDownloadingId(inv.id);
     try {
       const token = getAuthToken();
-      const baseUrl = import.meta.env.VITE_API_URL || "";
-      const resp = await fetch(`${baseUrl}/api/travel/invoices/${inv.id}/pdf`, {
+      // Relative path → same-origin via Vite's /api proxy. A VITE_API_URL
+      // prefix would make this cross-origin (CORS preflight 401 + mixed-content
+      // over HTTPS). See Invoices.jsx downloadPdf for the canonical note.
+      const resp = await fetch(`/api/travel/invoices/${inv.id}/pdf`, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       if (!resp.ok) {

@@ -256,19 +256,14 @@ test.describe('Canned Responses API — POST /', () => {
     expect(json.category).toBe('General');
   });
 
-  test('USER role can also create (route has no verifyRole gate)', async ({ request }) => {
+  test('USER role is rejected with 403 (#527)', async ({ request }) => {
     const token = await getGenericUser(request);
     if (!token) test.skip(true, 'no user@crm.com token');
     const res = await post(request, token, '/api/canned-responses', {
       name: `${RUN_TAG} user-can-create`,
       content: 'Hello from a USER role.',
     });
-    // Asserting permissive behavior — if a future PR locks this down,
-    // flip this to expect 403 and update the JSDoc.
-    expect(res.status()).toBe(201);
-    const json = await res.json();
-    createdGenericIds.add(json.id);
-    expect(json.name).toBe(`${RUN_TAG} user-can-create`);
+    expect(res.status()).toBe(403);
   });
 });
 

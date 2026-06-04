@@ -42,6 +42,40 @@ const { isValidPermission } = require('../lib/permissionCatalog');
 const PERMISSION_CACHE = new Map();
 const CACHE_TTL_MS = 30_000; // 30 seconds
 
+// Central whitelist of permissions whose routes are safe for CUSTOMER
+// userType callers. The middleware lets a CUSTOMER through automatically
+// when the requested permission is in this Set AND the user has the
+// grant — no per-route `allowCustomer: true` opt-in needed.
+//
+// Criteria for inclusion (a permission is "customer-safe" when ALL hold):
+//   1. The handler scopes by req.user.userId / linked patientId so a
+//      CUSTOMER can never see another customer's data. Examples:
+//      `my_prescriptions.read` → handler hardcodes `patientId:
+//      linkedPatient.id` where linkedPatient.userId === req.user.userId.
+//   2. OR the data is tenant-global and intentionally public to anyone
+//      on the tenant (catalogues, services, marketing surfaces). For
+//      these, the route handler ALSO strips internal management fields
+//      when req.user.userType === 'CUSTOMER' so we don't leak SKU /
+//      stock / cost prices / etc.
+//
+// Adding to this Set is how we unblock new pages without touching the
+// route file: confirm both criteria above, drop the key in here.
+const CUSTOMER_SAFE_PERMISSIONS = new Set([
+  // Per-user-scoped via Patient.userId lookup. See backend/routes/
+  // wellness.js:/my-prescriptions for the contract.
+  'my_prescriptions.read',
+  // Per-user-scoped via the assigned-doctor join (CUSTOMER users land
+  // in the empty-set branch because they're never the assigned
+  // practitioner — harmless if granted).
+  'my_appointments.read',
+  // Tenant-global catalogue. backend/routes/inventory.js strips SKU,
+  // stock counts, cost prices, manufacturer, tax internals and barcode
+  // when req.user.userType === 'CUSTOMER'.
+  'products.read',
+  // Per-user notification preferences (handler scopes by userId).
+  'notifications.read',
+]);
+
 /**
  * Heal a legacy-ADMIN user whose tenant has no RBAC rows (a pre-fix
  * signup). See loadUserPermissions for the full failure mode. Returns
@@ -237,8 +271,19 @@ async function getUserPermissions(tenantId, userId) {
 
 /**
  * Middleware factory: returns an Express middleware function that checks permission.
+ *
+ * Options:
+ *   allowCustomer (bool, default false)
+ *     Per-route override of the CUSTOMER blanket-deny. The central path
+ *     for this is the CUSTOMER_SAFE_PERMISSIONS Set at the top of this
+ *     file — drop the permission key in there and EVERY route gated on
+ *     it auto-passes for CUSTOMER (no per-route edit). Use this option
+ *     only when the permission is broadly admin-only but ONE specific
+ *     route's handler is customer-safe — rare. Otherwise prefer the
+ *     central whitelist so we don't fan a CUSTOMER policy out across
+ *     dozens of route files.
  */
-function requirePermission(module, action) {
+function requirePermission(module, action, opts = {}) {
   // Validate permission at middleware creation time (fast-fail on typos)
   if (!isValidPermission(module, action)) {
     throw new Error(
@@ -248,6 +293,8 @@ function requirePermission(module, action) {
   }
 
   const requiredPerm = `${module}.${action}`;
+  const allowCustomer =
+    !!opts.allowCustomer || CUSTOMER_SAFE_PERMISSIONS.has(requiredPerm);
 
   return async (req, res, next) => {
     try {
@@ -256,9 +303,15 @@ function requirePermission(module, action) {
         return next();
       }
 
-      // CUSTOMER userType is always denied staff-facing routes
-      // (blockCustomers middleware handles this, but double-check here)
-      if (req.user?.userType === 'CUSTOMER') {
+      // CUSTOMER userType is denied staff-facing routes by default. Two
+      // ways a CUSTOMER passes here:
+      //   - permission is in CUSTOMER_SAFE_PERMISSIONS (central whitelist
+      //     above), OR
+      //   - the specific route opted in with { allowCustomer: true }
+      // Either way, the matrix grant still has to be present — falling
+      // through this block means we still check `userPermissions.has(
+      // requiredPerm)` below.
+      if (req.user?.userType === 'CUSTOMER' && !allowCustomer) {
         return res.status(403).json({
           error: 'Access denied',
           code: 'CUSTOMER_ACCESS_DENIED',

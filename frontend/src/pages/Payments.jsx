@@ -1,7 +1,7 @@
 import React, { useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import {
   CreditCard,
-  DollarSign,
+  IndianRupee,
   CheckCircle,
   XCircle,
   RefreshCw,
@@ -78,11 +78,12 @@ function GatewayBadge({ gateway }) {
   );
 }
 
-// #286: use the canonical formatMoney() helper so wellness (INR) tenants no
-// longer see "$" on the dashboard. If the row carries its own currency
-// (multi-currency tenants), respect it; otherwise fall back to tenant default.
-function formatCurrency(amount, currency) {
-  return formatMoney(amount || 0, currency ? { currency } : undefined);
+// Always render in the tenant's default currency (INR for wellness tenants).
+// Per-row currency stamps were previously honored, which surfaced "$" rows on
+// INR tenants when historical payments were captured in USD — now display is
+// uniformly tenant-currency.
+function formatCurrency(amount) {
+  return formatMoney(amount || 0);
 }
 
 function formatDate(value) {
@@ -258,7 +259,7 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com → Settings �
           always matches what the date filter is showing. */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1rem', marginBottom: '1.5rem' }}>
         <StatCard
-          icon={<DollarSign size={20} />}
+          icon={<IndianRupee size={20} />}
           label={`Total Collected (${filterLabel})`}
           value={formatMoney(stats.collected)}
           color="#10b981"
@@ -382,7 +383,7 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com → Settings �
                 onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
               >
                 <Td>{p.invoiceId ? `#${p.invoiceId}` : <span style={{ color: 'var(--text-secondary)' }}>—</span>}</Td>
-                <Td><strong>{formatCurrency(p.amount, p.currency)}</strong></Td>
+                <Td><strong>{formatCurrency(p.amount)}</strong></Td>
                 <Td><GatewayBadge gateway={p.gateway} /></Td>
                 <Td><StatusBadge status={p.status} /></Td>
                 <Td>{formatDate(p.paidAt)}</Td>
@@ -638,7 +639,7 @@ function DetailModal({ payment, onClose }) {
 
         <DetailRow label="Status"><StatusBadge status={payment.status} /></DetailRow>
         <DetailRow label="Gateway"><GatewayBadge gateway={payment.gateway} /></DetailRow>
-        <DetailRow label="Amount">{formatCurrency(payment.amount, payment.currency)}</DetailRow>
+        <DetailRow label="Amount">{formatCurrency(payment.amount)}</DetailRow>
         <DetailRow label="Currency">{payment.currency}</DetailRow>
         <DetailRow label="Invoice">{payment.invoiceId ? `#${payment.invoiceId}` : '—'}</DetailRow>
         <DetailRow label="Gateway ID"><code style={{ fontSize: '0.78rem' }}>{payment.gatewayId || '—'}</code></DetailRow>

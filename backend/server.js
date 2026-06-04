@@ -70,6 +70,40 @@ const app = express();
 app.set('trust proxy', 1); // trust first proxy (Nginx)
 const server = http.createServer(app);
 
+// ── Express 4 Async Error Patch ─────────────────────────────────────
+// Express 4 does not catch rejected promises in async route handlers.
+// This patch wraps every route handler so that `throw` or a rejected
+// promise inside an async handler is forwarded to `next(err)` and
+// reaches the global error handler at the bottom of this file.
+// Covers app.* methods and Router.prototype.* methods so sub-routers
+// (routes/*.js) are protected too.
+function patchAsyncErrorHandling(target, methods) {
+  for (const method of methods) {
+    const original = target[method];
+    // Preserve `this` — Express's verb methods operate on the calling
+    // router/app instance (this.stack etc.). Binding to `target` (the shared
+    // prototype) would point them at the wrong object, so forward with .call.
+    target[method] = function (path, ...handlers) {
+      const wrapped = handlers.map((handler) => {
+        if (typeof handler !== "function") return handler;
+        return function (req, res, next) {
+          const result = handler(req, res, next);
+          if (result && typeof result.catch === "function") {
+            result.catch(next);
+          }
+        };
+      });
+      return original.call(this, path, ...wrapped);
+    };
+  }
+}
+const HTTP_METHODS = ["get", "post", "put", "patch", "delete"];
+patchAsyncErrorHandling(app, HTTP_METHODS);
+// In Express 4 the verb methods live on the `express.Router` function object
+// itself (router instances inherit from it via setPrototypeOf), NOT on
+// `express.Router.prototype` — patch the former so sub-routers are covered.
+patchAsyncErrorHandling(express.Router, HTTP_METHODS);
+
 // Initialize Sentry early for full request capture (no-op if SENTRY_DSN not set)
 initSentry(app);
 
@@ -794,6 +828,10 @@ app.use("/api/travel", travelQuotesRoutes);
 app.use("/api/travel", travelInvoicesRoutes);
 app.use("/api/travel", require("./routes/travel_flyer_templates"));
 app.use("/api/travel", require("./routes/travel_commission_profiles"));
+// WS-1 — sub-brand session scope (POST /session/switch-brand + GET
+// /session/active-brand). Authoritative server-side validation behind the
+// sidebar sub-brand switcher; reuses middleware/travelGuards.js plumbing.
+app.use("/api/travel", require("./routes/travel_session"));
 app.use("/api/brand-kits", brandKitsRoutes);
 app.use("/api/adsgpt", adsgptRoutes);
 app.use("/api/ratehawk", ratehawkRoutes);

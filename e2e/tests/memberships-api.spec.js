@@ -160,6 +160,14 @@ test.afterAll(async ({ request }) => {
 let seededServiceId = null;
 let secondServiceId = null;
 let createdPatientId = null;
+// secondPatientId hosts the membership purchases for tests whose intent
+// is independent of createdPatientId+plan[0]'s active state (startDate
+// validation, cancel flow, doctor RBAC). The 2026-06 lifecycle rule
+// allows only one active membership per (patient, plan); routing those
+// tests at a separate patient keeps createdPatientId+plan[0] reserved
+// for the redeem describe block which depends on createdMembershipIds[0]
+// staying active throughout the spec.
+let secondPatientId = null;
 
 test.beforeAll(async ({ request }) => {
   const tok = await login(request, 'admin');
@@ -186,6 +194,19 @@ test.beforeAll(async ({ request }) => {
     createdPatientId = body.id;
   }
   test.skip(!createdPatientId, 'Patient bootstrap failed — cannot test purchase/redeem flow.');
+
+  // Second patient used by tests that need a fresh active-membership slot
+  // on the existing plan (see secondPatientId comment above).
+  const pres2 = await authPost(request, '/api/wellness/patients', {
+    name: `${RUN_TAG} Patient 2`,
+    phone: nextPhone(),
+    gender: 'M',
+  });
+  if (pres2.status() === 201) {
+    const body = await pres2.json();
+    secondPatientId = body.id;
+  }
+  test.skip(!secondPatientId, 'Second-patient bootstrap failed — cannot test lifecycle flow.');
 });
 
 // Helper to construct minimum-valid plan body.
@@ -436,8 +457,15 @@ test.describe('Memberships — POST /patients/:id/memberships', () => {
   });
 
   test('201 with explicit startDate (computes endDate from it)', async ({ request }) => {
+    // Per the 2026-06 lifecycle policy, a patient cannot hold two active
+    // memberships of the same plan simultaneously. The prior happy-path
+    // test left an active membership on createdPatientId+plan[0]; this
+    // test targets secondPatientId (created in beforeAll) so it exercises
+    // the startDate-honoring branch without colliding with the new
+    // MEMBERSHIP_ALREADY_ACTIVE gate. Keeps createdPatientId+plan[0]
+    // active so the redeem describe later can use createdMembershipIds[0].
     const start = new Date('2026-06-01T00:00:00.000Z').toISOString();
-    const res = await authPost(request, `/api/wellness/patients/${createdPatientId}/memberships`, {
+    const res = await authPost(request, `/api/wellness/patients/${secondPatientId}/memberships`, {
       planId: createdPlanIds[0],
       startDate: start,
     });
@@ -450,7 +478,17 @@ test.describe('Memberships — POST /patients/:id/memberships', () => {
   });
 
   test('400 on invalid startDate', async ({ request }) => {
-    const res = await authPost(request, `/api/wellness/patients/${createdPatientId}/memberships`, {
+    // Create a fresh patient so the startDate validation fires before the
+    // MEMBERSHIP_ALREADY_ACTIVE duplicate check (both prior patients now have
+    // active memberships for plan[0] after the happy-path + explicit-startDate
+    // tests above).
+    const fresh = await authPost(request, '/api/wellness/patients', {
+      name: `${RUN_TAG} InvalidDate Patient`,
+      phone: nextPhone(),
+      gender: 'F',
+    });
+    const patientId = fresh.status() === 201 ? (await fresh.json()).id : secondPatientId;
+    const res = await authPost(request, `/api/wellness/patients/${patientId}/memberships`, {
       planId: createdPlanIds[0],
       startDate: 'not-a-date',
     });
@@ -564,12 +602,33 @@ test.describe('Memberships — POST /memberships/:id/redeem', () => {
 
 test.describe('Memberships — POST /memberships/:id/cancel', () => {
   test('200 sets status=cancelled + stamps cancelledAt + reason', async ({ request }) => {
-    // Create dedicated membership for cancel test
-    const buy = await authPost(request, `/api/wellness/patients/${createdPatientId}/memberships`, {
+    // Use secondPatientId so the L438 startDate membership stays in
+    // place (we don't redeem it but other ordering assumptions hold);
+    // cancelling here puts secondPatientId+plan[0] into a known
+    // cancelled state which the next test can build on.
+    const buy = await authPost(request, `/api/wellness/patients/${secondPatientId}/memberships`, {
       planId: createdPlanIds[0],
     });
-    expect(buy.status()).toBe(201);
-    const m = await buy.json();
+    // The L438 test already created an active membership on
+    // secondPatientId+plan[0]. Cancel it first if present so we can
+    // create a fresh row for the cancel-flow assertion.
+    let m;
+    if (buy.status() === 409) {
+      // Vacate the L438 active and retry.
+      const body = await buy.json();
+      expect(body.code).toBe('MEMBERSHIP_ALREADY_ACTIVE');
+      await authPost(request, `/api/wellness/memberships/${body.activeMembershipId}/cancel`, {
+        reason: 'spec setup — vacate for cancel-flow assertion',
+      });
+      const retry = await authPost(request, `/api/wellness/patients/${secondPatientId}/memberships`, {
+        planId: createdPlanIds[0],
+      });
+      expect(retry.status()).toBe(201);
+      m = await retry.json();
+    } else {
+      expect(buy.status()).toBe(201);
+      m = await buy.json();
+    }
     createdMembershipIds.push(m.id);
 
     const res = await authPost(request, `/api/wellness/memberships/${m.id}/cancel`, { reason: 'patient request' });
@@ -587,8 +646,10 @@ test.describe('Memberships — POST /memberships/:id/cancel', () => {
   });
 
   test('410 MEMBERSHIP_CANCELLED on redeem against cancelled membership', async ({ request }) => {
-    // Create + cancel + redeem
-    const buy = await authPost(request, `/api/wellness/patients/${createdPatientId}/memberships`, {
+    // Build on secondPatientId — the previous test left it in a
+    // cancelled state on plan[0], so we can create a fresh active row
+    // and immediately cancel it to set up the redeem-after-cancel probe.
+    const buy = await authPost(request, `/api/wellness/patients/${secondPatientId}/memberships`, {
       planId: createdPlanIds[0],
     });
     expect(buy.status()).toBe(201);
@@ -608,6 +669,114 @@ test.describe('Memberships — POST /memberships/:id/cancel', () => {
   test('404 on unknown id', async ({ request }) => {
     const res = await authPost(request, '/api/wellness/memberships/99999999/cancel', {});
     expect(res.status()).toBe(404);
+  });
+});
+
+// ── Lifecycle: duplicate-active block + state-3 re-purchase ───────
+// Pins the 2026-06 "one active membership per (patient, plan)" policy.
+// The 409 gate must hold on the staff-side purchase endpoint and the
+// response must carry the new envelope shape ({success, message, code,
+// activeMembershipId, activeMembershipEndDate}). After the prior
+// membership transitions to a non-active terminal state (cancelled or
+// expired), a fresh purchase against the same plan must succeed — that
+// transition is what the UI exposes as State 3 (Renew Membership CTA).
+test.describe('Memberships — lifecycle policy (one-active-per-plan)', () => {
+  // Test runs against createdPatientId+plan[0] which carries the L414
+  // active membership all the way through the spec. The duplicate gate
+  // should reject; an explicit cancel should then let the next purchase
+  // succeed. Cleanup vacates the new row so downstream tests (auth gate,
+  // tenant isolation, RBAC) keep their assumptions about catalog state.
+  let lifecycleMembershipId = null;
+
+  test('POST /patients/:id/memberships returns 409 when an active membership exists for the same plan', async ({ request }) => {
+    expect(createdMembershipIds[0]).toBeTruthy();
+    const res = await authPost(request, `/api/wellness/patients/${createdPatientId}/memberships`, {
+      planId: createdPlanIds[0],
+    });
+    expect(res.status()).toBe(409);
+    const body = await res.json();
+    // Envelope contract — both the new {success, message} shape AND the
+    // legacy {error, code} shape are present so the existing fetchApi
+    // error toast keeps working without a frontend change.
+    expect(body.success).toBe(false);
+    expect(body.code).toBe('MEMBERSHIP_ALREADY_ACTIVE');
+    expect(typeof body.message).toBe('string');
+    expect(body.message.toLowerCase()).toContain('active membership');
+    expect(typeof body.error).toBe('string');
+    // Includes the conflicting membership's id + expiry so the client can
+    // render "Active Until <date>" without a separate lookup round-trip.
+    expect(body.activeMembershipId).toBe(createdMembershipIds[0]);
+    expect(body.activeMembershipEndDate).toBeTruthy();
+  });
+
+  test('after cancelling the active membership, the same plan can be purchased again (State 3 → State 2)', async ({ request }) => {
+    // Vacate L414's membership so the lifecycle re-purchase path is open.
+    // L520 redeem already exercised it, so cancelling now doesn't break
+    // earlier tests; serial-mode + state-machine-aware ordering keeps
+    // this sound.
+    const cancel = await authPost(request, `/api/wellness/memberships/${createdMembershipIds[0]}/cancel`, {
+      reason: 'lifecycle test — vacate to assert re-purchase',
+    });
+    expect(cancel.status()).toBe(200);
+
+    // With no active membership for this (patient, plan), purchase succeeds.
+    const buy = await authPost(request, `/api/wellness/patients/${createdPatientId}/memberships`, {
+      planId: createdPlanIds[0],
+    });
+    expect(buy.status()).toBe(201);
+    const m = await buy.json();
+    expect(m.status).toBe('active');
+    expect(m.planId).toBe(createdPlanIds[0]);
+    lifecycleMembershipId = m.id;
+    createdMembershipIds.push(m.id);
+
+    // Sanity: a third purchase against the now-active row should 409
+    // again. Establishes the cycle: never → active (201) → 409 →
+    // cancel/expire → active (201) → 409 → …
+    const dup = await authPost(request, `/api/wellness/patients/${createdPatientId}/memberships`, {
+      planId: createdPlanIds[0],
+    });
+    expect(dup.status()).toBe(409);
+    expect((await dup.json()).code).toBe('MEMBERSHIP_ALREADY_ACTIVE');
+  });
+
+  test('GET /membership-plans response shape stays backward-compatible for callers without a Patient row', async ({ request }) => {
+    // admin@wellness.demo has a User row but no Patient row, so the
+    // ownership annotations are NOT added. The response must still
+    // include the canonical plan fields every existing consumer (and
+    // the legacy specs above) depends on.
+    const res = await authGet(request, '/api/wellness/membership-plans');
+    expect(res.status()).toBe(200);
+    const list = await res.json();
+    expect(Array.isArray(list)).toBe(true);
+    const ours = list.find((p) => createdPlanIds.includes(p.id));
+    expect(ours).toBeDefined();
+    // Canonical fields are present and well-typed.
+    expect(typeof ours.id).toBe('number');
+    expect(typeof ours.name).toBe('string');
+    expect(typeof ours.durationDays).toBe('number');
+    expect(typeof ours.price).toBe('number');
+    expect(typeof ours.entitlements).toBe('string');
+    // Ownership fields MAY be present if the admin happens to have a
+    // patient row in this tenant (some seeds do this). When absent the
+    // payload must still parse; when present they must be the documented
+    // types. Either is acceptable — the contract is "additive, never
+    // breaking."
+    if ('hasActiveMembership' in ours) {
+      expect(typeof ours.hasActiveMembership).toBe('boolean');
+      expect(typeof ours.hasExpiredMembership).toBe('boolean');
+    }
+  });
+
+  test.afterAll(async ({ request }) => {
+    // Vacate the lifecycle membership so it doesn't carry into later
+    // describes (their assumptions about createdPatientId+plan[0] state
+    // were authored before this test ran).
+    if (lifecycleMembershipId) {
+      await authPost(request, `/api/wellness/memberships/${lifecycleMembershipId}/cancel`, {
+        reason: 'lifecycle teardown',
+      }).catch(() => {});
+    }
   });
 });
 
@@ -659,8 +828,11 @@ test.describe('Memberships — RBAC', () => {
   });
 
   test('doctor (drharsh) CAN purchase + redeem (PHI-write gate)', async ({ request }) => {
-    // Doctor builds a fresh purchase against the existing plan
-    const buy = await authPost(request, `/api/wellness/patients/${createdPatientId}/memberships`, {
+    // Doctor builds a fresh purchase. After the cancel describe block,
+    // secondPatientId+plan[0] is in a cancelled state, so a fresh
+    // purchase succeeds (cancelled does NOT block re-purchase per the
+    // 2026-06 lifecycle policy — only currently-active does).
+    const buy = await authPost(request, `/api/wellness/patients/${secondPatientId}/memberships`, {
       planId: createdPlanIds[0],
     }, 'drharsh');
     expect(buy.status()).toBe(201);

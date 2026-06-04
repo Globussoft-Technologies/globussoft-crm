@@ -88,6 +88,17 @@ function sendTemplate({ to, templateName, language, parameters, phoneNumberId, a
     payload.template.components = components;
   }
 
+  // Trace the resolved template request — the `components` array and the
+  // language code are exactly what Meta validates against the approved
+  // template. Mismatches here are the #1 cause of template-send rejections.
+  waLog("sendTemplate resolved", {
+    to,
+    templateName,
+    language: language || "en_US",
+    paramCount: parameters ? parameters.length : 0,
+    components,
+  });
+
   return postToMeta({ phoneNumberId, accessToken, payload });
 }
 
@@ -183,6 +194,17 @@ function postToMeta({ phoneNumberId, accessToken, payload }) {
               parsed.error?.message ||
               parsed.error?.error_user_msg ||
               JSON.stringify(parsed);
+            // Always-on error log (mirrors graphRequest's behaviour). The
+            // top-level `message` is often generic ("Invalid parameter"); the
+            // actionable detail is in error_data.details / error_user_msg and
+            // the numeric `code`/`error_subcode`. Print the full body so
+            // debugging never depends on which helpful field Meta populated.
+            console.error(
+              `[whatsapp] Meta send rejected HTTP ${res.statusCode} ` +
+                `code=${parsed.error?.code ?? "?"} ` +
+                `subcode=${parsed.error?.error_subcode ?? "?"}:`,
+              JSON.stringify(parsed),
+            );
             resolve({ success: false, error: err });
           }
         } catch {

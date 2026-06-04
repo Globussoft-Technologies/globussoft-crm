@@ -32,6 +32,7 @@ const {
   requireTravelTenant,
   getSubBrandAccessSet,
   narrowWhereBySubBrand,
+  canAccessSubBrand,
 } = require("../middleware/travelGuards");
 
 // Build a Prisma `where` clause for tenant + sub-brand scoping. The
@@ -59,6 +60,20 @@ router.get("/dashboard", verifyToken, requireTravelTenant, async (req, res) => {
     const allowed = await getSubBrandAccessSet(req.user.userId);
     const tenantId = req.travelTenant.id;
 
+    // TmcTrip is TMC-only and has NO `subBrand` column, so it must NOT go
+    // through narrowWhereBySubBrand (which would inject `subBrand: { in: [...] }`
+    // and crash Prisma with "Unknown argument `subBrand`" for any sub-brand-
+    // scoped caller). Instead gate on whether the caller can see TMC at all
+    // (admins/full-access → yes; scoped users → only if "tmc" is in their set),
+    // mirroring tmcSummary() in travel_reports.js. When they can't, force an
+    // unsatisfiable filter so the trip aggregates resolve to zero.
+    const canTmc = canAccessSubBrand(allowed, "tmc");
+    function tmcWhere(extra = {}) {
+      const where = { tenantId, ...extra };
+      if (!canTmc) where.id = -1; // unsatisfiable → zero rows, never matches
+      return where;
+    }
+
     // 30-day cutoff used by both diagnostics + trip "upcoming" tile.
     const now = new Date();
     const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
@@ -82,14 +97,14 @@ router.get("/dashboard", verifyToken, requireTravelTenant, async (req, res) => {
       markupRuleCount,
       recentTripsRaw,
     ] = await Promise.all([
-      prisma.tmcTrip.count({ where: scoped(req, allowed) }),
+      prisma.tmcTrip.count({ where: tmcWhere() }),
       prisma.tmcTrip.groupBy({
         by: ["status"],
-        where: scoped(req, allowed),
+        where: tmcWhere(),
         _count: { _all: true },
       }),
       prisma.tmcTrip.count({
-        where: scoped(req, allowed, { departDate: { gte: now, lte: thirtyDaysAhead } }),
+        where: tmcWhere({ departDate: { gte: now, lte: thirtyDaysAhead } }),
       }),
       prisma.travelDiagnostic.count({
         where: scoped(req, allowed, { createdAt: { gte: thirtyDaysAgo } }),
@@ -125,7 +140,7 @@ router.get("/dashboard", verifyToken, requireTravelTenant, async (req, res) => {
         where: scoped(req, allowed, { isActive: true }),
       }),
       prisma.tmcTrip.findMany({
-        where: scoped(req, allowed),
+        where: tmcWhere(),
         orderBy: { createdAt: "desc" },
         take: 5,
         select: {

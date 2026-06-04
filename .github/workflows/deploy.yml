@@ -390,6 +390,7 @@ jobs:
             tests/sequences-input-sanitization-api.spec.js \
             tests/gdpr-dsar-export-api.spec.js \
             tests/wellness-portal-dsar-api.spec.js \
+            tests/wellness-portal-prescriptions-rbac-api.spec.js \
             tests/report-schedules-api.spec.js \
             tests/landing-page-upload-api.spec.js \
             tests/field-permissions-enforcement-api.spec.js \
@@ -475,6 +476,9 @@ jobs:
             tests/approvals-api.spec.js \
             tests/sso-api.spec.js \
             tests/auth-profile-picture-api.spec.js \
+            tests/wellness-my-transactions-api.spec.js \
+            tests/staff-api.spec.js \
+            tests/portal-appointments-api.spec.js \
             tests/teardown-completeness.spec.js \
             tests/demo-hygiene-api.spec.js
           echo "::notice::API specs passed"

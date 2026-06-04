@@ -44,7 +44,11 @@ const MANAGER_PERMISSIONS = [
   'reports.read', 'reports.export',
   'dashboards.read',
   'analytics.read', 'analytics.export',
-  'billing.read',
+  // `billing` was decomposed in v3.8.x → invoices / gift_cards /
+  // patient_wallets. MANAGER inherits read across all three.
+  'invoices.read',
+  'gift_cards.read',
+  'patient_wallets.read',
   'staff.read',
   'communications.read', 'communications.write',
   'email.read', 'email.write',
@@ -60,9 +64,13 @@ const MANAGER_PERMISSIONS = [
 const CUSTOMER_PERMISSIONS = [
   'appointments.read',
   'services.read',
-  'billing.read',
+  // `billing` decomposed in v3.8.x; CUSTOMER gets invoices.read.
+  'invoices.read',
   'documents.read',
-  'prescriptions.read',
+  // Patient-portal-scoped Rx view — never the tenant-wide `prescriptions.read`.
+  'my_prescriptions.read',
+  // Patient appointment management — /wellness/my-bookings.
+  'my_bookings.read',
   'consents.read',
 ];
 

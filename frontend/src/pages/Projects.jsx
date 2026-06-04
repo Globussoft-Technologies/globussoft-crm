@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { FolderKanban, Plus, Trash2, DollarSign, CheckCircle2 } from 'lucide-react';
+import { FolderKanban, Plus, Trash2, IndianRupee, CheckCircle2 } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { formatMoney } from '../utils/money';
@@ -181,7 +181,7 @@ export default function Projects() {
           background: 'rgba(245,158,11,0.1)', color: '#f59e0b', border: '1px solid rgba(245,158,11,0.3)',
           display: 'flex', alignItems: 'center', gap: '0.4rem',
         }}>
-          <DollarSign size={14} /> Total Budget: {formatCurrency(stats.totalBudget)}
+          <IndianRupee size={14} /> Total Budget: {formatCurrency(stats.totalBudget)}
         </span>
         <span style={{
           padding: '0.4rem 1rem', borderRadius: '999px', fontSize: '0.8rem',
@@ -306,7 +306,7 @@ export default function Projects() {
               >
                 <option value="">-- No Deal --</option>
                 {deals.map(d => (
-                  <option key={d.id} value={d.id}>{d.title} - ${Number(d.amount).toLocaleString()}</option>
+                  <option key={d.id} value={d.id}>{d.title} - {formatCurrency(d.amount)}</option>
                 ))}
               </select>
             </div>
@@ -368,7 +368,7 @@ export default function Projects() {
                         <td style={{ padding: '1rem 0.5rem' }}>
                           {Number(proj.budget) > 0 ? (
                             <span style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-                              <DollarSign size={14} color="var(--success-color)" />
+                              <IndianRupee size={14} color="var(--success-color)" />
                               {formatCurrency(proj.budget)}
                             </span>
                           ) : (

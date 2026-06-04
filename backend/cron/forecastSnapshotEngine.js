@@ -102,6 +102,7 @@ async function runForecastSnapshot() {
       try {
         const deals = await prisma.deal.findMany({
           where: { tenantId: tenant.id },
+          take: 500,
           select: {
             id: true,
             amount: true,

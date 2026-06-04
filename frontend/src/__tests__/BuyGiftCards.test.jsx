@@ -235,8 +235,8 @@ describe('BuyGiftCards — empty + grid', () => {
 // ─────────────────────────────────────────────────────────────────────
 // 3. Purchase modal opens
 // ─────────────────────────────────────────────────────────────────────
-describe('BuyGiftCards — purchase modal', () => {
-  it('clicking Buy opens the purchase dialog with the patient picker', async () => {
+describe('BuyGiftCards — purchase modal (self default + gift toggle)', () => {
+  it('clicking Buy opens the dialog in "for myself" mode — self chip shown, no picker', async () => {
     fetchApiMock.mockImplementation(defaultMock());
     render(<BuyGiftCardsPage />);
 
@@ -244,27 +244,46 @@ describe('BuyGiftCards — purchase modal', () => {
     fireEvent.click(screen.getByTestId('buy-giftcard-buy-11'));
 
     expect(screen.getByTestId('buy-giftcard-modal')).toBeInTheDocument();
-    expect(screen.getByTestId('buy-giftcard-patient-input')).toBeInTheDocument();
+    // Self mode is the default: the self chip renders and the patient
+    // directory picker is NOT shown.
+    expect(screen.getByTestId('buy-giftcard-self-chip')).toBeInTheDocument();
+    expect(screen.queryByTestId('buy-giftcard-patient-input')).toBeNull();
+    // Both recipient-mode toggles are present.
+    expect(screen.getByTestId('buy-giftcard-recipient-self')).toBeInTheDocument();
+    expect(screen.getByTestId('buy-giftcard-recipient-gift')).toBeInTheDocument();
     expect(screen.getByTestId('buy-giftcard-pay-now')).toBeInTheDocument();
   });
 
-  it('Pay button is disabled until a patient is selected', async () => {
+  it('Pay is ENABLED by default in self mode (no recipient selection needed)', async () => {
     fetchApiMock.mockImplementation(defaultMock());
     render(<BuyGiftCardsPage />);
 
     await waitFor(() => expect(screen.getByTestId('buy-giftcard-buy-11')).toBeInTheDocument());
     fireEvent.click(screen.getByTestId('buy-giftcard-buy-11'));
 
-    const pay = screen.getByTestId('buy-giftcard-pay-now');
-    expect(pay).toBeDisabled();
+    expect(screen.getByTestId('buy-giftcard-pay-now')).not.toBeDisabled();
   });
 
-  it('typing in the patient input triggers a patient lookup and renders results', async () => {
+  it('switching to "Gift to someone else" reveals the picker and disables Pay until a patient is chosen', async () => {
     fetchApiMock.mockImplementation(defaultMock());
     render(<BuyGiftCardsPage />);
 
     await waitFor(() => expect(screen.getByTestId('buy-giftcard-buy-11')).toBeInTheDocument());
     fireEvent.click(screen.getByTestId('buy-giftcard-buy-11'));
+
+    fireEvent.click(screen.getByTestId('buy-giftcard-recipient-gift'));
+    expect(screen.getByTestId('buy-giftcard-patient-input')).toBeInTheDocument();
+    expect(screen.queryByTestId('buy-giftcard-self-chip')).toBeNull();
+    expect(screen.getByTestId('buy-giftcard-pay-now')).toBeDisabled();
+  });
+
+  it('gift mode: typing triggers a patient lookup and renders results', async () => {
+    fetchApiMock.mockImplementation(defaultMock());
+    render(<BuyGiftCardsPage />);
+
+    await waitFor(() => expect(screen.getByTestId('buy-giftcard-buy-11')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('buy-giftcard-buy-11'));
+    fireEvent.click(screen.getByTestId('buy-giftcard-recipient-gift'));
 
     fireEvent.change(screen.getByTestId('buy-giftcard-patient-input'), {
       target: { value: 'priya' },
@@ -285,12 +304,13 @@ describe('BuyGiftCards — purchase modal', () => {
     expect(screen.getByTestId('buy-giftcard-patient-option-502')).toBeInTheDocument();
   });
 
-  it('selecting a patient enables the Pay button and renders the recipient chip', async () => {
+  it('gift mode: selecting a patient enables Pay and renders the recipient chip', async () => {
     fetchApiMock.mockImplementation(defaultMock());
     render(<BuyGiftCardsPage />);
 
     await waitFor(() => expect(screen.getByTestId('buy-giftcard-buy-11')).toBeInTheDocument());
     fireEvent.click(screen.getByTestId('buy-giftcard-buy-11'));
+    fireEvent.click(screen.getByTestId('buy-giftcard-recipient-gift'));
     fireEvent.change(screen.getByTestId('buy-giftcard-patient-input'), {
       target: { value: 'priya' },
     });
@@ -305,39 +325,83 @@ describe('BuyGiftCards — purchase modal', () => {
     expect(screen.getByTestId('buy-giftcard-recipient-chip')).toBeInTheDocument();
     expect(screen.getByTestId('buy-giftcard-pay-now')).not.toBeDisabled();
   });
+
+  it('toggling back to "For myself" hides the picker and re-enables Pay', async () => {
+    fetchApiMock.mockImplementation(defaultMock());
+    render(<BuyGiftCardsPage />);
+
+    await waitFor(() => expect(screen.getByTestId('buy-giftcard-buy-11')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('buy-giftcard-buy-11'));
+    fireEvent.click(screen.getByTestId('buy-giftcard-recipient-gift'));
+    expect(screen.getByTestId('buy-giftcard-patient-input')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('buy-giftcard-recipient-self'));
+    expect(screen.queryByTestId('buy-giftcard-patient-input')).toBeNull();
+    expect(screen.getByTestId('buy-giftcard-self-chip')).toBeInTheDocument();
+    expect(screen.getByTestId('buy-giftcard-pay-now')).not.toBeDisabled();
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────
 // 4. Pay flow — invokes /purchase/order + opens Razorpay
 // ─────────────────────────────────────────────────────────────────────
 describe('BuyGiftCards — Razorpay handshake', () => {
-  it('clicking Pay calls POST /purchase/order with the selected patientId, then opens Razorpay', async () => {
+  // Regular `function` (not arrow) so `new Razorpay(opts)` in the SUT
+  // doesn't throw "is not a constructor".
+  const stubRazorpay = (onCtor) => {
+    const open = vi.fn();
+    const ctor = vi.fn(function (opts) {
+      if (onCtor) onCtor(opts);
+      return { open };
+    });
+    window.Razorpay = ctor;
+    return { ctor, open };
+  };
+
+  it('self mode: clicking Pay calls /purchase/order with NO patientId, then opens Razorpay', async () => {
     fetchApiMock.mockImplementation(defaultMock());
-    // Pre-stub the Razorpay SDK so the SUT short-circuits the script
-    // loader and we can observe new Razorpay() being invoked.
-    const rzpOpen = vi.fn();
-    // The SUT calls `new Razorpay(opts)`. Arrow functions throw
-    // "is not a constructor" under `new`, so the inner mock body must
-    // be a regular `function` — when a constructor returns an object,
-    // that object replaces the `this` value, exactly the behaviour the
-    // SUT relies on for `const rzp = new Razorpay(opts)`.
-    const rzpCtor = vi.fn(function () { return { open: rzpOpen }; });
-    window.Razorpay = rzpCtor;
+    const { ctor, open } = stubRazorpay();
 
     render(<BuyGiftCardsPage />);
     await waitFor(() => expect(screen.getByTestId('buy-giftcard-buy-11')).toBeInTheDocument());
     fireEvent.click(screen.getByTestId('buy-giftcard-buy-11'));
+    // Self mode is the default — pay directly, no picker interaction.
+    fireEvent.click(screen.getByTestId('buy-giftcard-pay-now'));
+
+    await waitFor(
+      () => {
+        const orderCalls = fetchApiMock.mock.calls.filter(
+          ([url, opts]) =>
+            url === '/api/wellness/giftcards/11/purchase/order' && opts?.method === 'POST',
+        );
+        expect(orderCalls.length).toBe(1);
+        // No patientId in the body — the server credits the caller's own wallet.
+        const body = JSON.parse(orderCalls[0][1].body);
+        expect(body.patientId).toBeUndefined();
+      },
+      { timeout: 1500 },
+    );
+    await waitFor(() => expect(ctor).toHaveBeenCalledTimes(1));
+    expect(open).toHaveBeenCalledTimes(1);
+  });
+
+  it('gift mode: clicking Pay calls /purchase/order WITH the selected patientId', async () => {
+    fetchApiMock.mockImplementation(defaultMock());
+    const { ctor, open } = stubRazorpay();
+
+    render(<BuyGiftCardsPage />);
+    await waitFor(() => expect(screen.getByTestId('buy-giftcard-buy-11')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('buy-giftcard-buy-11'));
+    fireEvent.click(screen.getByTestId('buy-giftcard-recipient-gift'));
     fireEvent.change(screen.getByTestId('buy-giftcard-patient-input'), {
       target: { value: 'priya' },
     });
-
     const option = await screen.findByTestId(
       'buy-giftcard-patient-option-501',
       {},
       { timeout: 1500 },
     );
     fireEvent.click(option);
-
     fireEvent.click(screen.getByTestId('buy-giftcard-pay-now'));
 
     await waitFor(
@@ -352,18 +416,72 @@ describe('BuyGiftCards — Razorpay handshake', () => {
       },
       { timeout: 1500 },
     );
-
-    // Razorpay constructor must have been invoked with the order_id +
-    // key + handler from the server response.
-    await waitFor(() => expect(rzpCtor).toHaveBeenCalledTimes(1));
-    const opts = rzpCtor.mock.calls[0][0];
+    const opts = ctor.mock.calls[0][0];
     expect(opts.order_id).toBe('order_ABC');
     expect(opts.key).toBe('rzp_test_key');
     expect(typeof opts.handler).toBe('function');
-    expect(rzpOpen).toHaveBeenCalledTimes(1);
+    expect(open).toHaveBeenCalledTimes(1);
   });
 
-  it('Razorpay handler success → POST /purchase/confirm + success toast', async () => {
+  it('self mode: Razorpay success → POST /purchase/confirm + "your wallet" toast', async () => {
+    fetchApiMock.mockImplementation((url, opts = {}) => {
+      const method = opts.method || 'GET';
+      if (url === '/api/wellness/giftcards/storefront' && method === 'GET') {
+        return Promise.resolve({ giftCards: storefrontCards });
+      }
+      if (url === '/api/wellness/giftcards/11/purchase/order' && method === 'POST') {
+        return Promise.resolve({
+          orderId: 'order_ABC',
+          paymentId: 9001,
+          key: 'rzp_test_key',
+          amount: 200000,
+          currency: 'INR',
+          patientName: 'Demo User',
+        });
+      }
+      if (url === '/api/wellness/giftcards/11/purchase/confirm' && method === 'POST') {
+        return Promise.resolve({ success: true });
+      }
+      return Promise.resolve({});
+    });
+
+    let capturedHandler = null;
+    stubRazorpay((opts) => { capturedHandler = opts.handler; });
+
+    render(<BuyGiftCardsPage />);
+    await waitFor(() => expect(screen.getByTestId('buy-giftcard-buy-11')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('buy-giftcard-buy-11'));
+    fireEvent.click(screen.getByTestId('buy-giftcard-pay-now'));
+
+    await waitFor(() => expect(capturedHandler).toBeTypeOf('function'), { timeout: 1500 });
+    await capturedHandler({
+      razorpay_order_id: 'order_ABC',
+      razorpay_payment_id: 'pay_xyz',
+      razorpay_signature: 'sig_abc',
+    });
+
+    await waitFor(() => {
+      const confirmCalls = fetchApiMock.mock.calls.filter(
+        ([url, opts]) =>
+          url === '/api/wellness/giftcards/11/purchase/confirm' && opts?.method === 'POST',
+      );
+      expect(confirmCalls.length).toBe(1);
+      const body = JSON.parse(confirmCalls[0][1].body);
+      expect(body.paymentId).toBe(9001);
+    });
+    // Self-mode success copy reads "your wallet".
+    await waitFor(() =>
+      expect(notify.success).toHaveBeenCalledWith(expect.stringMatching(/your wallet/i)),
+    );
+    // Storefront reloads on success so the bought card disappears.
+    expect(
+      fetchApiMock.mock.calls.filter(
+        ([url]) => url === '/api/wellness/giftcards/storefront',
+      ).length,
+    ).toBeGreaterThanOrEqual(2);
+  });
+
+  it('gift mode: Razorpay success → "<name>\'s wallet" toast', async () => {
     fetchApiMock.mockImplementation((url, opts = {}) => {
       const method = opts.method || 'GET';
       if (url === '/api/wellness/giftcards/storefront' && method === 'GET') {
@@ -382,30 +500,18 @@ describe('BuyGiftCards — Razorpay handshake', () => {
         });
       }
       if (url === '/api/wellness/giftcards/11/purchase/confirm' && method === 'POST') {
-        return Promise.resolve({
-          success: true,
-          giftCard: { id: 11, status: 'redeemed' },
-          transaction: { id: 7777, type: 'CREDIT_GIFTCARD', amount: 2500 },
-        });
+        return Promise.resolve({ success: true });
       }
       return Promise.resolve({});
     });
 
-    // Capture the Razorpay handler the SUT installs so we can invoke
-    // it directly with a fake gateway response — simulates a successful
-    // checkout without spinning up the real Razorpay modal.
     let capturedHandler = null;
-    const rzpOpen = vi.fn();
-    // Regular function (not arrow) so `new Razorpay(opts)` in the SUT
-    // doesn't throw "is not a constructor".
-    window.Razorpay = vi.fn(function (opts) {
-      capturedHandler = opts.handler;
-      return { open: rzpOpen };
-    });
+    stubRazorpay((opts) => { capturedHandler = opts.handler; });
 
     render(<BuyGiftCardsPage />);
     await waitFor(() => expect(screen.getByTestId('buy-giftcard-buy-11')).toBeInTheDocument());
     fireEvent.click(screen.getByTestId('buy-giftcard-buy-11'));
+    fireEvent.click(screen.getByTestId('buy-giftcard-recipient-gift'));
     fireEvent.change(screen.getByTestId('buy-giftcard-patient-input'), {
       target: { value: 'priya' },
     });
@@ -418,61 +524,28 @@ describe('BuyGiftCards — Razorpay handshake', () => {
     fireEvent.click(screen.getByTestId('buy-giftcard-pay-now'));
 
     await waitFor(() => expect(capturedHandler).toBeTypeOf('function'), { timeout: 1500 });
-
-    // Simulate Razorpay handing the verified payment back.
     await capturedHandler({
       razorpay_order_id: 'order_ABC',
       razorpay_payment_id: 'pay_xyz',
       razorpay_signature: 'sig_abc',
     });
 
-    await waitFor(() => {
-      const confirmCalls = fetchApiMock.mock.calls.filter(
-        ([url, opts]) =>
-          url === '/api/wellness/giftcards/11/purchase/confirm' && opts?.method === 'POST',
-      );
-      expect(confirmCalls.length).toBe(1);
-      const body = JSON.parse(confirmCalls[0][1].body);
-      expect(body.paymentId).toBe(9001);
-      expect(body.razorpay_order_id).toBe('order_ABC');
-      expect(body.razorpay_payment_id).toBe('pay_xyz');
-      expect(body.razorpay_signature).toBe('sig_abc');
-    });
-
+    // Gift-mode success copy names the recipient.
     await waitFor(() =>
       expect(notify.success).toHaveBeenCalledWith(
         expect.stringMatching(/credited to Priya Iyer's wallet/i),
       ),
     );
-    // Storefront reloads on success so the bought card disappears.
-    expect(
-      fetchApiMock.mock.calls.filter(
-        ([url]) => url === '/api/wellness/giftcards/storefront',
-      ).length,
-    ).toBeGreaterThanOrEqual(2);
   });
 
-  it('Razorpay modal dismissed (ondismiss) clears the paying state', async () => {
+  it('self mode: Razorpay modal dismissed (ondismiss) clears the paying state', async () => {
     fetchApiMock.mockImplementation(defaultMock());
     let capturedOnDismiss = null;
-    // Regular function (not arrow) so `new Razorpay(opts)` works.
-    window.Razorpay = vi.fn(function (opts) {
-      capturedOnDismiss = opts.modal && opts.modal.ondismiss;
-      return { open: vi.fn() };
-    });
+    stubRazorpay((opts) => { capturedOnDismiss = opts.modal && opts.modal.ondismiss; });
 
     render(<BuyGiftCardsPage />);
     await waitFor(() => expect(screen.getByTestId('buy-giftcard-buy-11')).toBeInTheDocument());
     fireEvent.click(screen.getByTestId('buy-giftcard-buy-11'));
-    fireEvent.change(screen.getByTestId('buy-giftcard-patient-input'), {
-      target: { value: 'priya' },
-    });
-    const option = await screen.findByTestId(
-      'buy-giftcard-patient-option-501',
-      {},
-      { timeout: 1500 },
-    );
-    fireEvent.click(option);
     fireEvent.click(screen.getByTestId('buy-giftcard-pay-now'));
 
     await waitFor(() => expect(capturedOnDismiss).toBeTypeOf('function'), { timeout: 1500 });

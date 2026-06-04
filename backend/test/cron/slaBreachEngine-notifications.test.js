@@ -37,7 +37,13 @@ import { processTenant } from '../../cron/slaBreachEngine.js';
 beforeAll(() => {
   prisma.ticket = prisma.ticket || {};
   prisma.ticket.findMany = vi.fn();
-  prisma.ticket.update = vi.fn();
+  prisma.ticket.updateMany = vi.fn();
+  // Security hardening (commit 214017c1): engine reads per-tenant terminal
+  // statuses via lib/tenantSettings.getSetting → prisma.tenantSetting.findUnique
+  // on the shared singleton. Stub so the lookup resolves (default null →
+  // getSetting falls back to the built-in terminal-status DEFAULTS).
+  prisma.tenantSetting = prisma.tenantSetting || {};
+  prisma.tenantSetting.findUnique = vi.fn();
   prisma.user = prisma.user || {};
   prisma.user.findMany = vi.fn();
   prisma.notification = prisma.notification || {};
@@ -51,14 +57,17 @@ beforeAll(() => {
 
 beforeEach(() => {
   prisma.ticket.findMany.mockReset();
-  prisma.ticket.update.mockReset();
+  prisma.ticket.updateMany.mockReset();
+  prisma.tenantSetting.findUnique.mockReset();
   prisma.user.findMany.mockReset();
   prisma.notification.createMany.mockReset();
   prisma.automationRule.findMany.mockReset();
   prisma.webhook.findMany.mockReset();
 
   prisma.ticket.findMany.mockResolvedValue([]);
-  prisma.ticket.update.mockResolvedValue({});
+  // Atomic breach flip — count===1 means "we won the race", engine proceeds.
+  prisma.ticket.updateMany.mockResolvedValue({ count: 1 });
+  prisma.tenantSetting.findUnique.mockResolvedValue(null);
   prisma.user.findMany.mockResolvedValue([]);
   prisma.notification.createMany.mockResolvedValue({ count: 0 });
   prisma.automationRule.findMany.mockResolvedValue([]);
@@ -122,7 +131,7 @@ describe('cron/slaBreachEngine — Notification side-effect (PRD §12 #4b)', () 
     const res = await processTenant(TENANT);
 
     expect(res.breached).toBe(1);
-    expect(prisma.ticket.update).toHaveBeenCalledTimes(1); // breach flip
+    expect(prisma.ticket.updateMany).toHaveBeenCalledTimes(1); // breach flip
     expect(prisma.notification.createMany).not.toHaveBeenCalled();
   });
 
@@ -136,7 +145,7 @@ describe('cron/slaBreachEngine — Notification side-effect (PRD §12 #4b)', () 
     const res = await processTenant(TENANT);
 
     expect(res.breached).toBe(1);
-    expect(prisma.ticket.update).toHaveBeenCalledTimes(1);
+    expect(prisma.ticket.updateMany).toHaveBeenCalledTimes(1);
     expect(errSpy).toHaveBeenCalled();
     errSpy.mockRestore();
   });
@@ -321,7 +330,7 @@ describe('cron/slaBreachEngine — multi-ticket Notification fan-out', () => {
     const res = await processTenant(TENANT);
 
     // Both tickets reached the breach-flip; both were attempted in notify.
-    expect(prisma.ticket.update).toHaveBeenCalledTimes(2);
+    expect(prisma.ticket.updateMany).toHaveBeenCalledTimes(2);
     expect(prisma.notification.createMany).toHaveBeenCalledTimes(2);
     // Both still counted as breached — notify failure is best-effort.
     expect(res.breached).toBe(2);

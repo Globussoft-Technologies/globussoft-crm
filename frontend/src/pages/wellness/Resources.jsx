@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Box, Plus, Pencil, Trash2 } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
+import PageHeader from '../../components/PageHeader';
 
 // Wave 11 Agent GG — admin Resource CRUD page. Resources are bookable rooms /
 // machines / equipment surfaced in the Calendar's New Visit modal so a
@@ -94,22 +95,19 @@ export default function Resources() {
 
   return (
     <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
-      <header style={{ marginBottom: '1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
-        <div>
-          <h1 style={{ fontSize: '1.75rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <Box size={24} /> Resources
-          </h1>
-          <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-            Bookable rooms, machines, and equipment ({resources.length}) — the calendar guards against same-hour double-booking.
-          </p>
-        </div>
+      <PageHeader
+        icon={Box}
+        title="Resources"
+        count={resources.length}
+        description="Bookable rooms, machines, and equipment — the calendar guards against same-hour double-booking."
+      >
         <button
           onClick={() => (showAdd ? resetForm() : setShowAdd(true))}
           style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 1rem', background: 'var(--primary-color, var(--accent-color))', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer' }}
         >
           <Plus size={16} /> {showAdd ? 'Cancel' : 'New resource'}
         </button>
-      </header>
+      </PageHeader>
 
       {showAdd && (
         <form onSubmit={submit} className="glass" style={{ padding: '1.25rem', marginBottom: '1rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))', gap: '0.5rem' }}>

@@ -64,8 +64,10 @@ const Profile = () => {
     setDownloadingId(subId);
     try {
       const token = getAuthToken();
-      const baseUrl = import.meta.env.VITE_API_URL || '';
-      const url = `${baseUrl}/api/subscriptions/${subId}/invoice.pdf`;
+      // Relative path → same-origin via Vite's /api proxy. A VITE_API_URL
+      // prefix would make this cross-origin (CORS preflight 401 + mixed-content
+      // over HTTPS). See Invoices.jsx downloadPdf for the canonical note.
+      const url = `/api/subscriptions/${subId}/invoice.pdf`;
       const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
       if (!res.ok) throw new Error(`Download failed (${res.status})`);
       const blob = await res.blob();
@@ -162,8 +164,10 @@ const Profile = () => {
       const form = new FormData();
       form.append('file', file);
       const token = getAuthToken();
-      const baseUrl = import.meta.env.VITE_API_URL || '';
-      const res = await fetch(`${baseUrl}/api/auth/me/profile-picture`, {
+      // Relative path keeps the request same-origin (see downloadInvoicePdf
+      // above for the full rationale — VITE_API_URL prefix → cross-origin →
+      // preflight 401 → CORS error).
+      const res = await fetch(`/api/auth/me/profile-picture`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
         body: form,
@@ -184,7 +188,14 @@ const Profile = () => {
 
   const handleRemovePicture = async () => {
     if (!profile?.profilePicture) return;
-    if (!window.confirm('Remove your profile picture?')) return;
+    const ok = await notify.confirm({
+      title: 'Remove profile picture',
+      message: 'Your profile picture will be removed and replaced with your initials.',
+      confirmText: 'Remove',
+      cancelText: 'Cancel',
+      destructive: true,
+    });
+    if (!ok) return;
 
     setUploadingPicture(true);
     try {

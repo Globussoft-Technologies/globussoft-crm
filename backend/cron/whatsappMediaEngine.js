@@ -160,7 +160,11 @@ async function tick() {
 }
 
 function initWhatsappMediaCron() {
-  cron.schedule(TICK_CRON, () => { tick(); });
+  cron.schedule(TICK_CRON, () => {
+    tick().catch((err) => {
+      console.error("[whatsappMediaEngine] unhandled tick error:", err);
+    });
+  });
   console.log(`[whatsappMediaEngine] initialized (cron: ${TICK_CRON})`);
 }
 

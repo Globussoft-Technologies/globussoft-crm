@@ -21,6 +21,7 @@
 const cron = require("node-cron");
 const crypto = require("crypto");
 const prisma = require("../lib/prisma");
+const { getSetting, KEYS } = require("../lib/tenantSettings");
 
 let GoogleGenerativeAI;
 try { ({ GoogleGenerativeAI } = require("@google/generative-ai")); } catch (_) { /* optional */ }

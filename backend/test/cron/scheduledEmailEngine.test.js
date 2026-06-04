@@ -63,9 +63,12 @@ import prisma from '../../lib/prisma.js';
 import { processScheduledEmails } from '../../cron/scheduledEmailEngine.js';
 
 beforeAll(() => {
-  prisma.scheduledEmail = { findMany: vi.fn(), update: vi.fn() };
+  prisma.scheduledEmail = { findMany: vi.fn(), update: vi.fn(), updateMany: vi.fn() };
   prisma.emailMessage = { create: vi.fn() };
   prisma.emailTracking = { create: vi.fn() };
+  // Per-tenant settings reader (lib/tenantSettings → getSetting) runs on the
+  // prisma singleton. Stub it so getSetting falls back to DEFAULTS.
+  prisma.tenantSetting = { findUnique: vi.fn() };
 });
 
 let originalFetch;
@@ -74,13 +77,20 @@ let originalSendgridKey;
 beforeEach(() => {
   prisma.scheduledEmail.findMany.mockReset();
   prisma.scheduledEmail.update.mockReset();
+  prisma.scheduledEmail.updateMany.mockReset();
   prisma.emailMessage.create.mockReset();
   prisma.emailTracking.create.mockReset();
+  prisma.tenantSetting.findUnique.mockReset();
 
   prisma.scheduledEmail.findMany.mockResolvedValue([]);
   prisma.scheduledEmail.update.mockResolvedValue({});
+  // Atomic lock — engine claims each row via updateMany(...PROCESSING) and
+  // only proceeds when count === 1 (another worker losing the race → 0).
+  prisma.scheduledEmail.updateMany.mockResolvedValue({ count: 1 });
   prisma.emailMessage.create.mockResolvedValue({ id: 'email-row-1' });
   prisma.emailTracking.create.mockResolvedValue({});
+  // No TenantSetting row → getSetting falls back to DEFAULTS (from address).
+  prisma.tenantSetting.findUnique.mockResolvedValue(null);
 
   // Save + stub fetch so each test can override per-call.
   originalFetch = global.fetch;

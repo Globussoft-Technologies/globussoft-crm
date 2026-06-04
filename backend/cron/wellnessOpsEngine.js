@@ -25,7 +25,7 @@ const CONSENT_RETENTION_YEARS = 7;  // DPDP: hard-delete consent forms older tha
 const CALLLOG_RETENTION_MONTHS = 12; // hard-delete OUTBOUND CallLogs >12 months old with no notes
 
 async function runNpsForTenant(tenantId) {
-  const npsDelayHours = await getSetting(tenantId, KEYS.WELLNESS_NPS_DELAY_HOURS, { fallback: NPS_DELAY_HOURS_DEFAULT, coerce: Number });
+  const npsDelayHours = await getSetting(tenantId, KEYS.WELLNESS_NPS_DELAY_HOURS, { fallback: NPS_DELAY_HOURS, coerce: Number });
   const cutoff = new Date(Date.now() - npsDelayHours * 3600000);
   const visits = await prisma.visit.findMany({
     where: {
@@ -75,7 +75,7 @@ async function runNpsForTenant(tenantId) {
 }
 
 async function runRetentionForTenant(tenantId) {
-  const junkRetentionDays = await getSetting(tenantId, KEYS.WELLNESS_JUNK_RETENTION_DAYS, { fallback: JUNK_RETENTION_DAYS_DEFAULT, coerce: Number });
+  const junkRetentionDays = await getSetting(tenantId, KEYS.WELLNESS_JUNK_RETENTION_DAYS, { fallback: JUNK_RETENTION_DAYS, coerce: Number });
   const cutoff = new Date(Date.now() - junkRetentionDays * 86400000);
   const result = await prisma.contact.deleteMany({
     where: { tenantId, status: "Junk", createdAt: { lt: cutoff } },
@@ -107,7 +107,7 @@ function hashFor(prefix, idOrValue) {
 // out on subsequent ticks.
 async function runMembershipExpiryForTenant(tenantId) {
   const now = new Date();
-  const membershipExpiryWindowDays = await getSetting(tenantId, KEYS.WELLNESS_MEMBERSHIP_EXPIRY_WINDOW_DAYS, { fallback: MEMBERSHIP_EXPIRY_WINDOW_DAYS_DEFAULT, coerce: Number });
+  const membershipExpiryWindowDays = await getSetting(tenantId, KEYS.WELLNESS_MEMBERSHIP_EXPIRY_WINDOW_DAYS, { fallback: MEMBERSHIP_EXPIRY_WINDOW_DAYS, coerce: Number });
   const windowEnd = new Date(now.getTime() + membershipExpiryWindowDays * 86400000);
 
   const expiring = await prisma.membership.findMany({

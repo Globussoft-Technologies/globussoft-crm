@@ -70,6 +70,16 @@ beforeAll(() => {
   prisma.user = { findMany: vi.fn() };
   prisma.emailMessage = { create: vi.fn() };
   prisma.tenant = { findMany: vi.fn() };
+  // Engine now reads per-tenant alert roles via lib/tenantSettings.getSetting,
+  // which queries the prisma singleton's tenantSetting model. Stub it so the
+  // lookup resolves; a null row makes getSetting fall back to the DEFAULTS
+  // value (JSON ["MANAGER","ADMIN"]).
+  prisma.tenantSetting = { findUnique: vi.fn() };
+  // Engine now wraps the dedup-check + notification insert in a $transaction.
+  // The callback receives a tx client; reuse the stubbed prisma singleton.
+  prisma.$transaction = vi.fn(async (arg) =>
+    Array.isArray(arg) ? Promise.all(arg) : arg(prisma),
+  );
 });
 
 beforeEach(() => {
@@ -79,6 +89,7 @@ beforeEach(() => {
   prisma.user.findMany.mockReset();
   prisma.emailMessage.create.mockReset();
   prisma.tenant.findMany.mockReset();
+  prisma.tenantSetting.findUnique.mockReset();
 
   prisma.product.findMany.mockResolvedValue([]);
   prisma.notification.findFirst.mockResolvedValue(null);  // no prior alert
@@ -86,6 +97,7 @@ beforeEach(() => {
   prisma.user.findMany.mockResolvedValue([]);
   prisma.emailMessage.create.mockResolvedValue({});
   prisma.tenant.findMany.mockResolvedValue([]);
+  prisma.tenantSetting.findUnique.mockResolvedValue(null); // fall back to DEFAULTS
 });
 
 const TENANT = {

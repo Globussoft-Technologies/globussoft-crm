@@ -1,7 +1,7 @@
 import { useState } from 'react';
-import { fetchApi } from '../../../utils/api';
-import { useNotify } from '../../../utils/notify';
-import { formatDate } from '../../../utils/date';
+import { fetchApi } from '../../../../utils/api';
+import { useNotify } from '../../../../utils/notify';
+import { formatDate } from '../../../../utils/date';
 
 // ── Log visit tab ──────────────────────────────────────────────────
 // Shows booked appointments; clicking one lets you mark it as visited (completed)

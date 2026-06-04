@@ -114,15 +114,21 @@ function fakeResponse({ ok = true, status = 200, body = {} } = {}) {
   };
 }
 
+// The post-214017c1 engine is tenant-scoped: syncMarketplace(tenantId, provider, io)
+// and the MarketplaceConfig lookup/update keys on the composite unique
+// { tenantId_provider: { tenantId, provider } }. Tests pass this fixed tenant.
+const TENANT = 'tenant-A';
+
 describe('cron/marketplaceEngine — config gating', () => {
   test('inactive config → { skipped: true, reason }', async () => {
     prisma.marketplaceConfig.findUnique.mockResolvedValue({
       provider: 'indiamart',
       isActive: false,
     });
-    const result = await marketplaceEngine.syncMarketplace('indiamart', null);
+    const result = await marketplaceEngine.syncMarketplace(TENANT, 'indiamart', null);
     expect(result).toEqual({
       provider: 'indiamart',
+      tenantId: TENANT,
       skipped: true,
       reason: 'Not configured or inactive',
     });
@@ -131,7 +137,7 @@ describe('cron/marketplaceEngine — config gating', () => {
 
   test('missing config → { skipped: true, reason }', async () => {
     prisma.marketplaceConfig.findUnique.mockResolvedValue(null);
-    const result = await marketplaceEngine.syncMarketplace('justdial', null);
+    const result = await marketplaceEngine.syncMarketplace(TENANT, 'justdial', null);
     expect(result.skipped).toBe(true);
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -164,7 +170,7 @@ describe('cron/marketplaceEngine — IndiaMART sync', () => {
     );
 
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    const result = await marketplaceEngine.syncMarketplace('indiamart', null);
+    const result = await marketplaceEngine.syncMarketplace(TENANT, 'indiamart', null);
     logSpy.mockRestore();
 
     expect(result).toMatchObject({
@@ -181,7 +187,7 @@ describe('cron/marketplaceEngine — IndiaMART sync', () => {
     expect(firstCreate.data.email).toBe('a@b.com');
     expect(firstCreate.data.status).toBe('New');
     expect(prisma.marketplaceConfig.update).toHaveBeenCalledWith({
-      where: { provider: 'indiamart' },
+      where: { tenantId_provider: { tenantId: TENANT, provider: 'indiamart' } },
       data: { lastSyncAt: expect.any(Date) },
     });
   });
@@ -201,15 +207,22 @@ describe('cron/marketplaceEngine — IndiaMART sync', () => {
         ],
       })
     );
-    findDupMock.mockResolvedValue({ id: 99 }); // every lookup returns existing
+    // Post-214017c1 dedup is enforced at the DB layer: create() throws a
+    // Prisma P2002 unique-constraint violation, which the engine catches and
+    // counts as a duplicate (replacing the old findDuplicateMarketplaceLead
+    // pre-check). Every create rejects → every row is a duplicate.
+    prisma.marketplaceLead.create.mockRejectedValue(
+      Object.assign(new Error('Unique constraint failed'), { code: 'P2002' })
+    );
 
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    const result = await marketplaceEngine.syncMarketplace('indiamart', null);
+    const result = await marketplaceEngine.syncMarketplace(TENANT, 'indiamart', null);
     logSpy.mockRestore();
 
     expect(result.created).toBe(0);
     expect(result.duplicates).toBe(2);
-    expect(prisma.marketplaceLead.create).not.toHaveBeenCalled();
+    // create IS attempted twice (the dedup race is resolved by the catch).
+    expect(prisma.marketplaceLead.create).toHaveBeenCalledTimes(2);
   });
 
   test('records without externalId are skipped', async () => {
@@ -225,7 +238,7 @@ describe('cron/marketplaceEngine — IndiaMART sync', () => {
       })
     );
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    const result = await marketplaceEngine.syncMarketplace('indiamart', null);
+    const result = await marketplaceEngine.syncMarketplace(TENANT, 'indiamart', null);
     logSpy.mockRestore();
 
     // 2 leads "fetched" but only 1 created (the one with an externalId).
@@ -241,7 +254,7 @@ describe('cron/marketplaceEngine — IndiaMART sync', () => {
       lastSyncAt: null,
     });
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    const result = await marketplaceEngine.syncMarketplace('indiamart', null);
+    const result = await marketplaceEngine.syncMarketplace(TENANT, 'indiamart', null);
     logSpy.mockRestore();
     expect(result.fetched).toBe(0);
     expect(result.created).toBe(0);
@@ -257,7 +270,7 @@ describe('cron/marketplaceEngine — IndiaMART sync', () => {
     });
     fetchMock.mockResolvedValue(fakeResponse({ ok: false, status: 500 }));
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const result = await marketplaceEngine.syncMarketplace('indiamart', null);
+    const result = await marketplaceEngine.syncMarketplace(TENANT, 'indiamart', null);
     errSpy.mockRestore();
     expect(result.provider).toBe('indiamart');
     expect(result.error).toMatch(/500/);
@@ -275,7 +288,7 @@ describe('cron/marketplaceEngine — IndiaMART sync', () => {
     );
     const ioMock = { emit: vi.fn() };
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    await marketplaceEngine.syncMarketplace('indiamart', ioMock);
+    await marketplaceEngine.syncMarketplace(TENANT, 'indiamart', ioMock);
     logSpy.mockRestore();
     expect(ioMock.emit).toHaveBeenCalledWith('marketplace_lead_new', {
       provider: 'indiamart',
@@ -293,7 +306,7 @@ describe('cron/marketplaceEngine — IndiaMART sync', () => {
     fetchMock.mockResolvedValue(fakeResponse({ body: [] }));
     const ioMock = { emit: vi.fn() };
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    await marketplaceEngine.syncMarketplace('indiamart', ioMock);
+    await marketplaceEngine.syncMarketplace(TENANT, 'indiamart', ioMock);
     logSpy.mockRestore();
     expect(ioMock.emit).not.toHaveBeenCalled();
   });
@@ -308,7 +321,7 @@ describe('cron/marketplaceEngine — IndiaMART sync', () => {
     });
     fetchMock.mockResolvedValue(fakeResponse({ body: [] }));
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    await marketplaceEngine.syncMarketplace('indiamart', null);
+    await marketplaceEngine.syncMarketplace(TENANT, 'indiamart', null);
     logSpy.mockRestore();
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const url = fetchMock.mock.calls[0][0];
@@ -343,7 +356,7 @@ describe('cron/marketplaceEngine — JustDial sync (soft-fail)', () => {
     );
 
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    const result = await marketplaceEngine.syncMarketplace('justdial', null);
+    const result = await marketplaceEngine.syncMarketplace(TENANT, 'justdial', null);
     logSpy.mockRestore();
 
     expect(result.created).toBe(1);
@@ -362,7 +375,7 @@ describe('cron/marketplaceEngine — JustDial sync (soft-fail)', () => {
     fetchMock.mockResolvedValue(fakeResponse({ ok: false, status: 401 }));
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    const result = await marketplaceEngine.syncMarketplace('justdial', null);
+    const result = await marketplaceEngine.syncMarketplace(TENANT, 'justdial', null);
     warnSpy.mockRestore();
     logSpy.mockRestore();
     expect(result.fetched).toBe(0);
@@ -381,7 +394,7 @@ describe('cron/marketplaceEngine — JustDial sync (soft-fail)', () => {
     fetchMock.mockRejectedValue(new Error('ECONNREFUSED'));
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    const result = await marketplaceEngine.syncMarketplace('justdial', null);
+    const result = await marketplaceEngine.syncMarketplace(TENANT, 'justdial', null);
     warnSpy.mockRestore();
     logSpy.mockRestore();
     expect(result.fetched).toBe(0);
@@ -413,7 +426,7 @@ describe('cron/marketplaceEngine — TradeIndia sync (soft-fail)', () => {
       })
     );
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    const result = await marketplaceEngine.syncMarketplace('tradeindia', null);
+    const result = await marketplaceEngine.syncMarketplace(TENANT, 'tradeindia', null);
     logSpy.mockRestore();
     expect(result.created).toBe(1);
     expect(prisma.marketplaceLead.create.mock.calls[0][0].data.externalLeadId).toBe('TI-1');
@@ -429,7 +442,7 @@ describe('cron/marketplaceEngine — TradeIndia sync (soft-fail)', () => {
     fetchMock.mockResolvedValue(fakeResponse({ ok: false, status: 503 }));
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    const result = await marketplaceEngine.syncMarketplace('tradeindia', null);
+    const result = await marketplaceEngine.syncMarketplace(TENANT, 'tradeindia', null);
     warnSpy.mockRestore();
     logSpy.mockRestore();
     expect(result.fetched).toBe(0);
@@ -449,10 +462,11 @@ describe('cron/marketplaceEngine — initMarketplaceCron registration', () => {
   test('cron tick iterates active configs and dispatches syncMarketplace per provider', async () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     marketplaceEngine.initMarketplaceCron(null);
-    // Drive the tick
+    // Drive the tick. Post-214017c1 the tick lists ALL active configs across
+    // tenants (findMany where isActive) and dispatches per (tenantId, provider).
     prisma.marketplaceConfig.findMany.mockResolvedValue([
-      { provider: 'indiamart' },
-      { provider: 'justdial' },
+      { tenantId: TENANT, provider: 'indiamart' },
+      { tenantId: TENANT, provider: 'justdial' },
     ]);
     // Each provider call will go through syncMarketplace; pre-stage findUnique
     // to return inactive so each is a fast no-op.
@@ -460,10 +474,14 @@ describe('cron/marketplaceEngine — initMarketplaceCron registration', () => {
     const tick = scheduleMock.mock.calls[0][1];
     await tick();
     logSpy.mockRestore();
+    // findMany scopes to active configs only.
+    expect(prisma.marketplaceConfig.findMany).toHaveBeenCalledWith({
+      where: { isActive: true },
+    });
     // We expect 2 findUnique calls (one per provider in the loop).
     expect(prisma.marketplaceConfig.findUnique).toHaveBeenCalledTimes(2);
     expect(prisma.marketplaceConfig.findUnique.mock.calls[0][0]).toEqual({
-      where: { provider: 'indiamart' },
+      where: { tenantId_provider: { tenantId: TENANT, provider: 'indiamart' } },
     });
   });
 });
@@ -494,7 +512,7 @@ describe('cron/marketplaceEngine — extension: provider dispatch edge cases', (
       lastSyncAt: null,
     });
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    const result = await marketplaceEngine.syncMarketplace('newvendor', null);
+    const result = await marketplaceEngine.syncMarketplace(TENANT, 'newvendor', null);
     logSpy.mockRestore();
     expect(result.fetched).toBe(0);
     expect(result.created).toBe(0);
@@ -503,7 +521,7 @@ describe('cron/marketplaceEngine — extension: provider dispatch edge cases', (
     // lastSyncAt should still be touched — that part of the contract runs AFTER
     // the if/else branches regardless of which (or no) provider matched.
     expect(prisma.marketplaceConfig.update).toHaveBeenCalledWith({
-      where: { provider: 'newvendor' },
+      where: { tenantId_provider: { tenantId: TENANT, provider: 'newvendor' } },
       data: { lastSyncAt: expect.any(Date) },
     });
   });
@@ -530,7 +548,7 @@ describe('cron/marketplaceEngine — extension: IndiaMART response shapes & fall
       })
     );
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    const result = await marketplaceEngine.syncMarketplace('indiamart', null);
+    const result = await marketplaceEngine.syncMarketplace(TENANT, 'indiamart', null);
     logSpy.mockRestore();
     expect(result.fetched).toBe(1);
     expect(result.created).toBe(1);
@@ -557,7 +575,7 @@ describe('cron/marketplaceEngine — extension: IndiaMART response shapes & fall
       })
     );
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    const result = await marketplaceEngine.syncMarketplace('indiamart', null);
+    const result = await marketplaceEngine.syncMarketplace(TENANT, 'indiamart', null);
     logSpy.mockRestore();
     expect(result.created).toBe(1);
     const createArgs = prisma.marketplaceLead.create.mock.calls[0][0].data;
@@ -586,7 +604,7 @@ describe('cron/marketplaceEngine — extension: JustDial response shapes & id fa
       })
     );
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    const result = await marketplaceEngine.syncMarketplace('justdial', null);
+    const result = await marketplaceEngine.syncMarketplace(TENANT, 'justdial', null);
     logSpy.mockRestore();
     expect(result.created).toBe(1);
     expect(prisma.marketplaceLead.create.mock.calls[0][0].data.externalLeadId).toBe('JD-BARE-1');
@@ -613,7 +631,7 @@ describe('cron/marketplaceEngine — extension: JustDial response shapes & id fa
       })
     );
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    const result = await marketplaceEngine.syncMarketplace('justdial', null);
+    const result = await marketplaceEngine.syncMarketplace(TENANT, 'justdial', null);
     logSpy.mockRestore();
     expect(result.created).toBe(2);
     const ids = prisma.marketplaceLead.create.mock.calls.map((c) => c[0].data.externalLeadId);
@@ -650,7 +668,7 @@ describe('cron/marketplaceEngine — extension: TradeIndia field fallbacks', () 
       })
     );
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    const result = await marketplaceEngine.syncMarketplace('tradeindia', null);
+    const result = await marketplaceEngine.syncMarketplace(TENANT, 'tradeindia', null);
     logSpy.mockRestore();
     expect(result.created).toBe(1);
     const data = prisma.marketplaceLead.create.mock.calls[0][0].data;
@@ -671,8 +689,8 @@ describe('cron/marketplaceEngine — extension: cron-tick fault isolation', () =
     marketplaceEngine.initMarketplaceCron(null);
 
     prisma.marketplaceConfig.findMany.mockResolvedValue([
-      { provider: 'indiamart' },
-      { provider: 'justdial' },
+      { tenantId: TENANT, provider: 'indiamart' },
+      { tenantId: TENANT, provider: 'justdial' },
     ]);
 
     // First findUnique (indiamart) throws synchronously inside syncMarketplace.

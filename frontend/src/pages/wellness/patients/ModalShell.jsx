@@ -1,4 +1,5 @@
-import { useEffect, createPortal } from "react";
+import { useEffect } from "react";
+import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 
 // ── Modal shell (reused by both create + bulk-tag modals) ──────────

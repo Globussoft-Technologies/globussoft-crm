@@ -1,7 +1,7 @@
 import { Clock, Trash2, IndianRupee, MapPin } from 'lucide-react';
-import { fetchApi } from '../../utils/api';
-import { useNotify } from '../../utils/notify';
-import { formatDate } from '../../utils/date';
+import { fetchApi } from '../../../utils/api';
+import { useNotify } from '../../../utils/notify';
+import { formatDate } from '../../../utils/date';
 import { iconBtn, statusColor } from './shared';
 
 export default function TreatmentCard({ treatment, onChanged, onSelect }) {

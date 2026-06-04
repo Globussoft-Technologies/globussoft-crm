@@ -532,6 +532,16 @@ describe('<Services /> — Package builder tab', () => {
       writable: true,
       value: { writeText },
     });
+    // PackageBuilder now copies via utils/clipboard.copyToClipboard, which only
+    // uses navigator.clipboard.writeText when window.isSecureContext is true
+    // (otherwise it falls back to the execCommand textarea trick). jsdom leaves
+    // isSecureContext undefined, so force it on to exercise the modern path the
+    // stub above is asserting against.
+    Object.defineProperty(window, 'isSecureContext', {
+      configurable: true,
+      writable: true,
+      value: true,
+    });
 
     render(<MemoryRouter><Services /></MemoryRouter>);
     await waitFor(() => expect(screen.getByText('GFC Hair')).toBeInTheDocument());

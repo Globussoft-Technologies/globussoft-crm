@@ -79,7 +79,10 @@ const server = http.createServer(app);
 // (routes/*.js) are protected too.
 function patchAsyncErrorHandling(target, methods) {
   for (const method of methods) {
-    const original = target[method].bind(target);
+    const original = target[method];
+    // Preserve `this` — Express's verb methods operate on the calling
+    // router/app instance (this.stack etc.). Binding to `target` (the shared
+    // prototype) would point them at the wrong object, so forward with .call.
     target[method] = function (path, ...handlers) {
       const wrapped = handlers.map((handler) => {
         if (typeof handler !== "function") return handler;
@@ -90,13 +93,16 @@ function patchAsyncErrorHandling(target, methods) {
           }
         };
       });
-      return original(path, ...wrapped);
+      return original.call(this, path, ...wrapped);
     };
   }
 }
 const HTTP_METHODS = ["get", "post", "put", "patch", "delete"];
 patchAsyncErrorHandling(app, HTTP_METHODS);
-patchAsyncErrorHandling(express.Router.prototype, HTTP_METHODS);
+// In Express 4 the verb methods live on the `express.Router` function object
+// itself (router instances inherit from it via setPrototypeOf), NOT on
+// `express.Router.prototype` — patch the former so sub-routers are covered.
+patchAsyncErrorHandling(express.Router, HTTP_METHODS);
 
 // Initialize Sentry early for full request capture (no-op if SENTRY_DSN not set)
 initSentry(app);

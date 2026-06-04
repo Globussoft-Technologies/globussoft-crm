@@ -1,4 +1,4 @@
-import { getAuthToken } from '../../utils/api';
+import { getAuthToken } from '../../../utils/api';
 
 // Parse Service.imageUrls (Prisma stores a JSON-stringified array of URLs).
 // `allImagesOf` returns the full array; `firstImageOf` is a convenience

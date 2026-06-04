@@ -60,6 +60,12 @@ beforeAll(() => {
   // ~5s waiting for DATABASE_URL. Mock with [] (no webhooks → no delivery).
   prisma.webhook = prisma.webhook || {};
   prisma.webhook.findMany = vi.fn().mockResolvedValue([]);
+  // Post-214017c1 the expiry WINDOW is per-tenant via
+  // lib/tenantSettings.getSetting(tenantId, wellness.membershipExpiryWindowDays).
+  // That reads prisma.tenantSetting.findUnique on the singleton; stub it so a
+  // missing row falls back to the DEFAULT (7 days).
+  prisma.tenantSetting = prisma.tenantSetting || {};
+  prisma.tenantSetting.findUnique = vi.fn().mockResolvedValue(null);
 });
 
 beforeEach(() => {
@@ -67,11 +73,14 @@ beforeEach(() => {
   prisma.membership.update.mockReset();
   prisma.notification.createMany.mockReset();
   prisma.user.findMany.mockReset();
+  prisma.tenantSetting.findUnique.mockReset();
 
   prisma.membership.findMany.mockResolvedValue([]);
   prisma.membership.update.mockResolvedValue({});
   prisma.notification.createMany.mockResolvedValue({ count: 0 });
   prisma.user.findMany.mockResolvedValue([]);
+  // No TenantSetting row → getSetting falls back to DEFAULTS (7-day window).
+  prisma.tenantSetting.findUnique.mockResolvedValue(null);
 });
 
 const TENANT_ID = 42;

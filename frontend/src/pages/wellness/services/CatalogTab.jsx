@@ -1,10 +1,10 @@
 import { useMemo, useState } from 'react';
-import { usePermissions } from '../../hooks/usePermissions';
-import { useNotify } from '../../utils/notify';
-import { currencySymbol } from '../../utils/money';
+import { usePermissions } from '../../../hooks/usePermissions';
+import { useNotify } from '../../../utils/notify';
+import { currencySymbol } from '../../../utils/money';
 // #316: NumberInput strips the `<oldValue><newTyped>` concatenation artifact
 // users hit when doing Ctrl+A → Delete → retype on number fields.
-import { NumberInput } from '../../utils/numberInput';
+import { NumberInput } from '../../../utils/numberInput';
 import { inputStyle, srOnly, TICKET_TIER_OPTIONS } from './shared';
 import ServiceCard from './ServiceCard';
 import MultiSelectDropdown from './MultiSelectDropdown';

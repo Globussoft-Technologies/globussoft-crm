@@ -2,13 +2,13 @@ import { useContext, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { createPortal } from 'react-dom';
 import { IndianRupee, Clock, MapPin, Activity, Pencil, Trash2, CalendarPlus } from 'lucide-react';
-import { useScrollLock } from '../../hooks/useScrollLock';
-import { AuthContext } from '../../App';
-import { fetchApi } from '../../utils/api';
-import { useNotify } from '../../utils/notify';
-import { usePermissions } from '../../hooks/usePermissions';
-import { formatMoney } from '../../utils/money';
-import { formatDate } from '../../utils/date';
+import { useScrollLock } from '../../../hooks/useScrollLock';
+import { AuthContext } from '../../../App';
+import { fetchApi } from '../../../utils/api';
+import { useNotify } from '../../../utils/notify';
+import { usePermissions } from '../../../hooks/usePermissions';
+import { formatMoney } from '../../../utils/money';
+import { formatDate } from '../../../utils/date';
 import { allImagesOf, tierColor } from './shared';
 
 function DetailStat({ icon, label, value }) {

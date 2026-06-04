@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { IndianRupee, Clock, MapPin, Pencil, Trash2, X, Save } from 'lucide-react';
-import { fetchApi } from '../../utils/api';
-import { useNotify } from '../../utils/notify';
-import { usePermissions } from '../../hooks/usePermissions';
+import { fetchApi } from '../../../utils/api';
+import { useNotify } from '../../../utils/notify';
+import { usePermissions } from '../../../hooks/usePermissions';
 import { firstImageOf, iconBtn, inputStyle, tierColor } from './shared';
 import ImageUploadField from './ImageUploadField';
 

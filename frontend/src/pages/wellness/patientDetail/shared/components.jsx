@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { X, FileText, Download, Eye } from 'lucide-react';
-import { getAuthToken } from '../../../utils/api';
-import { useNotify } from '../../../utils/notify';
+import { getAuthToken } from '../../../../utils/api';
+import { useNotify } from '../../../../utils/notify';
 import { computeAgeFromDob, sexLabel, parseRxInstructions, th, td } from './helpers';
 
 // #226: shown above autosaved forms when a draft has been rehydrated from

@@ -1,4 +1,5 @@
-import { useState, useRef, useEffect, createPortal } from "react";
+import { useState, useRef, useEffect } from "react";
+import { createPortal } from "react-dom";
 import { ChevronDown, X } from "lucide-react";
 
 const modalInputStyle = {

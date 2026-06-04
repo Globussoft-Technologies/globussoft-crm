@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import {
   Monitor, CheckCircle2, XCircle, Clock, Calendar, RefreshCcw,
 } from 'lucide-react';
-import { formatDate } from '../../utils/date';
+import { formatDate } from '../../../utils/date';
 import { planGradient, durationLabel } from './utils';
 
 // Renders a row from the /appointments/my-memberships response, joined

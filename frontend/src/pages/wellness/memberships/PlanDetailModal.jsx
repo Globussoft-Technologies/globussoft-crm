@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { useScrollLock } from '../../hooks/useScrollLock';
+import { useScrollLock } from '../../../hooks/useScrollLock';
 import {
   Monitor, ChevronDown, ChevronUp,
   Pencil, Check, CreditCard, X,
 } from 'lucide-react';
-import { formatMoney } from '../../utils/money';
+import { formatMoney } from '../../../utils/money';
 import { durationLabel } from './utils';
 
 export function PlanDetailModal({ plan, services, isAdmin, isOwned, onClose, onEdit, onBuy }) {

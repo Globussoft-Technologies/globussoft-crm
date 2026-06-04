@@ -247,11 +247,65 @@ describe('budget-cap helpers — KEYS + DEFAULTS shape', () => {
   });
 
   test('DEFAULTS map covers every KEYS entry', () => {
+    // The §4.5 hardcoded-value fixes added non-budget operational keys whose
+    // defaults are strings (sms.dedupPhrase*, email.fromAddress, sla.terminal-
+    // Statuses JSON, report.smtp*) or numbers (orchestrator.defaultWorking-
+    // Minutes, wellness.*). Every KEYS entry must still have a DEFAULTS value;
+    // the budget-cap keys remain finite numbers.
+    const budgetCapKeys = [
+      KEYS.ADSGPT_MONTHLY_CAP_USD_CENTS,
+      KEYS.AI_CALLING_MONTHLY_CAP_USD_CENTS,
+      KEYS.RATEHAWK_MONTHLY_CAP_USD_CENTS,
+      KEYS.LLM_MONTHLY_CAP_USD_CENTS,
+      KEYS.BOOKING_EXPEDIA_MONTHLY_CAP_USD_CENTS,
+    ];
     for (const k of Object.values(KEYS)) {
       expect(DEFAULTS).toHaveProperty(k);
-      expect(typeof DEFAULTS[k]).toBe('number');
-      expect(Number.isFinite(DEFAULTS[k])).toBe(true);
+      expect(['number', 'string']).toContain(typeof DEFAULTS[k]);
+      if (budgetCapKeys.includes(k)) {
+        expect(typeof DEFAULTS[k]).toBe('number');
+        expect(Number.isFinite(DEFAULTS[k])).toBe(true);
+      }
     }
+  });
+
+  test('§4.5 operational KEYS + DEFAULTS match the lib (hardcoded-value fixes)', () => {
+    expect(KEYS.ORCHESTRATOR_DEFAULT_WORKING_MINUTES).toBe('orchestrator.defaultWorkingMinutes');
+    expect(KEYS.SMS_DEDUP_PHRASE_24H).toBe('sms.dedupPhrase24h');
+    expect(KEYS.SMS_DEDUP_PHRASE_1H).toBe('sms.dedupPhrase1h');
+    expect(KEYS.WELLNESS_NPS_DELAY_HOURS).toBe('wellness.npsDelayHours');
+    expect(KEYS.WELLNESS_JUNK_RETENTION_DAYS).toBe('wellness.junkRetentionDays');
+    expect(KEYS.WELLNESS_MEMBERSHIP_EXPIRY_WINDOW_DAYS).toBe('wellness.membershipExpiryWindowDays');
+    expect(KEYS.SLA_TERMINAL_STATUSES).toBe('sla.terminalStatuses');
+    expect(KEYS.EMAIL_FROM_ADDRESS).toBe('email.fromAddress');
+    expect(KEYS.INVENTORY_ALERT_ROLES).toBe('inventory.alertRoles');
+    expect(KEYS.REPORT_SMTP_HOST).toBe('report.smtpHost');
+    expect(KEYS.REPORT_SMTP_PORT).toBe('report.smtpPort');
+    expect(KEYS.REPORT_SMTP_SECURE).toBe('report.smtpSecure');
+    expect(KEYS.REPORT_SMTP_USER).toBe('report.smtpUser');
+    expect(KEYS.REPORT_SMTP_PASS).toBe('report.smtpPass');
+
+    // Numeric operational defaults.
+    expect(DEFAULTS[KEYS.ORCHESTRATOR_DEFAULT_WORKING_MINUTES]).toBe(660);
+    expect(DEFAULTS[KEYS.WELLNESS_NPS_DELAY_HOURS]).toBe(72);
+    expect(DEFAULTS[KEYS.WELLNESS_JUNK_RETENTION_DAYS]).toBe(90);
+    expect(DEFAULTS[KEYS.WELLNESS_MEMBERSHIP_EXPIRY_WINDOW_DAYS]).toBe(7);
+
+    // String / phrase defaults.
+    expect(DEFAULTS[KEYS.SMS_DEDUP_PHRASE_24H]).toBe('tomorrow at');
+    expect(DEFAULTS[KEYS.SMS_DEDUP_PHRASE_1H]).toBe('in 1 hour');
+
+    // JSON-encoded list defaults round-trip to the documented arrays.
+    expect(JSON.parse(DEFAULTS[KEYS.SLA_TERMINAL_STATUSES])).toEqual(['Resolved', 'Closed', 'Cancelled']);
+    expect(JSON.parse(DEFAULTS[KEYS.INVENTORY_ALERT_ROLES])).toEqual(['MANAGER', 'ADMIN']);
+
+    // Env-backed string defaults are always strings (may be '' when env unset).
+    expect(typeof DEFAULTS[KEYS.EMAIL_FROM_ADDRESS]).toBe('string');
+    expect(typeof DEFAULTS[KEYS.REPORT_SMTP_HOST]).toBe('string');
+    expect(typeof DEFAULTS[KEYS.REPORT_SMTP_PORT]).toBe('string');
+    expect(typeof DEFAULTS[KEYS.REPORT_SMTP_SECURE]).toBe('string');
+    expect(typeof DEFAULTS[KEYS.REPORT_SMTP_USER]).toBe('string');
+    expect(typeof DEFAULTS[KEYS.REPORT_SMTP_PASS]).toBe('string');
   });
 
   test('DEFAULTS env-fallback values match product-call resolution', () => {

@@ -85,7 +85,8 @@ describe('cron/auditIntegrityEngine — happy path (chain unbroken)', () => {
     const rows = buildValidChain(tenantId, 5);
     prisma.auditLog.findMany
       .mockResolvedValueOnce([{ tenantId }]) // distinct tenants
-      .mockResolvedValueOnce(rows);          // rows for tenant 7
+      .mockResolvedValueOnce(rows)           // rows for tenant 7 (batch 1)
+      .mockResolvedValueOnce([]);            // empty batch terminates cursor walk
 
     const summary = await runAuditIntegritySweep();
 
@@ -110,7 +111,8 @@ describe('cron/auditIntegrityEngine — happy path (chain unbroken)', () => {
     expect(rows[0].prevHash).toBe('GENESIS_42');
     prisma.auditLog.findMany
       .mockResolvedValueOnce([{ tenantId }])
-      .mockResolvedValueOnce(rows);
+      .mockResolvedValueOnce(rows)
+      .mockResolvedValueOnce([]);
     const summary = await runAuditIntegritySweep();
     expect(summary[0].chainLength).toBe(1);
     expect(summary[0].brokenAt).toBeNull();
@@ -191,7 +193,9 @@ describe('cron/auditIntegrityEngine — multi-tenant + edge cases', () => {
     prisma.auditLog.findMany
       .mockResolvedValueOnce([{ tenantId: 1 }, { tenantId: 2 }]) // distinct
       .mockResolvedValueOnce(t1Rows)
-      .mockResolvedValueOnce(t2Rows);
+      .mockResolvedValueOnce([]) // terminate tenant 1 cursor walk
+      .mockResolvedValueOnce(t2Rows)
+      .mockResolvedValueOnce([]); // terminate tenant 2 cursor walk
 
     const summary = await runAuditIntegritySweep();
     expect(summary).toHaveLength(2);
@@ -234,7 +238,8 @@ describe('cron/auditIntegrityEngine — resilience', () => {
     const rows = buildValidChain(tenantId, 2);
     prisma.auditLog.findMany
       .mockResolvedValueOnce([{ tenantId }])
-      .mockResolvedValueOnce(rows);
+      .mockResolvedValueOnce(rows)
+      .mockResolvedValueOnce([]);
     prisma.auditLog.create.mockRejectedValue(new Error('DB write failed'));
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     // Should not throw — the .catch() on the create call swallows the error.
@@ -259,7 +264,8 @@ describe('cron/auditIntegrityEngine — emitted-row hash-chain anchoring', () =>
     const rows = buildValidChain(tenantId, 2);
     prisma.auditLog.findMany
       .mockResolvedValueOnce([{ tenantId }])
-      .mockResolvedValueOnce(rows);
+      .mockResolvedValueOnce(rows)
+      .mockResolvedValueOnce([]);
     await runAuditIntegritySweep();
     const arg = prisma.auditLog.create.mock.calls[0][0];
     // The new row's prevHash must equal the verified head.
@@ -396,8 +402,9 @@ describe('cron/auditIntegrityEngine — cross-tenant isolation', () => {
     const t2Rows = buildValidChain(2, 2);
     prisma.auditLog.findMany
       .mockResolvedValueOnce([{ tenantId: 1 }, { tenantId: 2 }])
-      .mockResolvedValueOnce(t1Rows)
-      .mockResolvedValueOnce(t2Rows);
+      .mockResolvedValueOnce(t1Rows) // tenant 1 breaks → loop exits, no empty batch needed
+      .mockResolvedValueOnce(t2Rows)
+      .mockResolvedValueOnce([]); // terminate tenant 2 cursor walk
 
     const summary = await runAuditIntegritySweep();
 
@@ -420,7 +427,9 @@ describe('cron/auditIntegrityEngine — cross-tenant isolation', () => {
     prisma.auditLog.findMany
       .mockResolvedValueOnce([{ tenantId: 1 }, { tenantId: 2 }])
       .mockResolvedValueOnce(t1Rows)
-      .mockResolvedValueOnce(t2Rows);
+      .mockResolvedValueOnce([]) // terminate tenant 1 cursor walk
+      .mockResolvedValueOnce(t2Rows)
+      .mockResolvedValueOnce([]); // terminate tenant 2 cursor walk
 
     await runAuditIntegritySweep();
 
@@ -443,7 +452,8 @@ describe('cron/auditIntegrityEngine — emitted-row metadata', () => {
     const cleanRows = buildValidChain(tenantId, 2);
     prisma.auditLog.findMany
       .mockResolvedValueOnce([{ tenantId }])
-      .mockResolvedValueOnce(cleanRows);
+      .mockResolvedValueOnce(cleanRows)
+      .mockResolvedValueOnce([]);
     await runAuditIntegritySweep();
     const cleanDetails = JSON.parse(prisma.auditLog.create.mock.calls[0][0].data.details);
     expect(cleanDetails.reason).toBeNull();
@@ -468,7 +478,8 @@ describe('cron/auditIntegrityEngine — emitted-row metadata', () => {
     const rows = buildValidChain(tenantId, 1);
     prisma.auditLog.findMany
       .mockResolvedValueOnce([{ tenantId }])
-      .mockResolvedValueOnce(rows);
+      .mockResolvedValueOnce(rows)
+      .mockResolvedValueOnce([]);
 
     const before = Date.now();
     await runAuditIntegritySweep();

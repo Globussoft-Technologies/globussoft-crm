@@ -103,13 +103,15 @@ delete process.env.SENDGRID_API_KEY;
 const communicationsRouter = requireCJS('../../routes/communications');
 const { parseRecipients, isValidEmail } = communicationsRouter;
 
-function makeApp({ tenantId = 1, userId = 7 } = {}) {
+function makeApp({ tenantId = 1, userId = 7, role = 'ADMIN' } = {}) {
   const app = express();
   app.use(express.json());
   // Inject a fake req.user — production wires this via verifyToken
-  // upstream of the router.
+  // upstream of the router. Security audit-fix (214017c1) added
+  // verifyRole([ADMIN,MANAGER]) to /inbox, /send-email, /calls, /log-call,
+  // /tracking/:id — so the test identity must carry an allowed role.
   app.use((req, _res, next) => {
-    req.user = { userId, tenantId };
+    req.user = { userId, tenantId, role };
     next();
   });
   app.use('/api/communications', communicationsRouter);

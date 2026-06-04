@@ -38,6 +38,10 @@ prisma.product.updateMany = vi.fn().mockResolvedValue({ count: 0 });
 prisma.sale = prisma.sale || {};
 prisma.sale.findFirst = vi.fn().mockResolvedValue(null);
 prisma.sale.create = vi.fn();
+// Atomic invoice numbering: generateInvoiceNumber now upserts an
+// InvoiceCounter and derives the number from (nextSeq - 1).
+prisma.invoiceCounter = prisma.invoiceCounter || {};
+prisma.invoiceCounter.upsert = vi.fn().mockResolvedValue({ nextSeq: 2 });
 prisma.loyaltyConfig = prisma.loyaltyConfig || {};
 prisma.loyaltyConfig.findUnique = vi.fn().mockResolvedValue(null);
 prisma.loyaltyTransaction = prisma.loyaltyTransaction || {};

@@ -306,6 +306,7 @@ describe('GET /plans — active plans', () => {
     expect(prisma.subscriptionPlan.findMany).toHaveBeenCalledWith({
       where: { isActive: true },
       orderBy: [{ displayOrder: 'asc' }, { price: 'asc' }],
+      take: 200,
     });
   });
 

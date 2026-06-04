@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Package, Copy, Check } from 'lucide-react';
-import { useNotify } from '../../utils/notify';
-import { formatMoney } from '../../utils/money';
+import { useNotify } from '../../../utils/notify';
+import { formatMoney } from '../../../utils/money';
 import { inputStyle, labelStyle } from './shared';
 
 function Row({ label, children, negative }) {
@@ -42,7 +42,7 @@ export default function PackageBuilder({ services }) {
   const copyPitch = async () => {
     if (!pitch) return;
     try {
-      const { copyToClipboard } = await import('../../utils/clipboard');
+      const { copyToClipboard } = await import('../../../utils/clipboard');
       await copyToClipboard(pitch);
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);

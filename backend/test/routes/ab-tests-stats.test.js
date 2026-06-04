@@ -40,10 +40,10 @@
  * ────────────
  *   Mirror of backend/test/routes/ab-tests.test.js — prisma singleton
  *   monkey-patch BEFORE the router require, then mount the router into a
- *   bare express app with a fake req.user injector (the route file relies
- *   on the global server.js auth guard rather than route-level
- *   verifyToken middleware, so there's no auth gate to assert against
- *   when mounted bare).
+ *   bare express app with a fake req.user injector. As of 214017c1
+ *   ("security: audit-fix batch") every route now carries a route-level
+ *   verifyRole(["ADMIN","MANAGER"]) guard that reads req.user.role, so the
+ *   fake injector supplies role:'ADMIN' to clear the gate.
  */
 
 import { describe, test, expect, beforeEach, vi } from 'vitest';
@@ -71,11 +71,13 @@ import { createRequire } from 'node:module';
 const requireCJS = createRequire(import.meta.url);
 const abTestsRouter = requireCJS('../../routes/ab_tests');
 
-function makeApp({ tenantId = 1, userId = 7 } = {}) {
+function makeApp({ tenantId = 1, userId = 7, role = 'ADMIN' } = {}) {
   const app = express();
   app.use(express.json());
   app.use((req, _res, next) => {
-    req.user = { userId, tenantId };
+    // 214017c1 added verifyRole(["ADMIN","MANAGER"]) to every route, which
+    // checks req.user.role — so the fake auth injector must supply a role.
+    req.user = { userId, tenantId, role };
     next();
   });
   app.use('/api/ab-tests', abTestsRouter);

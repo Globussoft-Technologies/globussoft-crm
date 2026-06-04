@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { useScrollLock } from '../../hooks/useScrollLock';
-import { useNotify } from '../../utils/notify';
+import { useScrollLock } from '../../../hooks/useScrollLock';
+import { useNotify } from '../../../utils/notify';
 import {
   Crown, X, Save,
 } from 'lucide-react';
-import { fetchApi } from '../../utils/api';
+import { fetchApi } from '../../../utils/api';
 import { EMPTY_FORM, inputStyle } from './utils';
 import { EntitlementEditor } from './EntitlementEditor';
 

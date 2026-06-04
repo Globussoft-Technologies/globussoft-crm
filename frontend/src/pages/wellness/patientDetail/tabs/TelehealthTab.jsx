@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { Copy, Video } from 'lucide-react';
-import { fetchApi } from '../../../utils/api';
-import { useNotify } from '../../../utils/notify';
-import { DateRangeFilter, resolveDateRange, EMPTY_DATE_FILTER } from '../../../components/wellness/DateRangeFilter';
+import { fetchApi } from '../../../../utils/api';
+import { useNotify } from '../../../../utils/notify';
+import { DateRangeFilter, resolveDateRange, EMPTY_DATE_FILTER } from '../../../../components/wellness/DateRangeFilter';
 
 function slugifyName(n) {
   return String(n || 'patient')
@@ -58,7 +58,7 @@ export default function TelehealthTab({ patient, onSaved }) {
   const copyLink = async () => {
     if (!shareUrl) return;
     try {
-      const { copyToClipboard } = await import('../../../utils/clipboard');
+      const { copyToClipboard } = await import('../../../../utils/clipboard');
       await copyToClipboard(shareUrl);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);

@@ -63,6 +63,18 @@ vi.mock('../utils/api', () => ({
   getAuthToken: (...args) => getAuthTokenMock(...args),
 }));
 
+// The page no longer calls navigator.clipboard directly — copySnippet()
+// does `await import('../utils/clipboard')` and delegates to
+// copyToClipboard(). That util only hits navigator.clipboard.writeText in a
+// secure context (window.isSecureContext), which jsdom reports as falsy, so
+// it would otherwise fall through to the execCommand textarea path. Mock the
+// util so the copy test pins the real contract (copyToClipboard called with
+// the snippet) independent of secure-context plumbing.
+const copyToClipboardMock = vi.fn(() => Promise.resolve());
+vi.mock('../utils/clipboard', () => ({
+  copyToClipboard: (...args) => copyToClipboardMock(...args),
+}));
+
 import WebVisitors from '../pages/WebVisitors';
 
 const sampleStats = {
@@ -122,6 +134,7 @@ describe('<WebVisitors /> — page surface', () => {
     fetchApiMock.mockReset();
     fetchApiMock.mockImplementation(defaultFetchMock);
     getAuthTokenMock.mockClear();
+    copyToClipboardMock.mockClear();
 
     // jsdom doesn't ship a clipboard implementation; stub one.
     originalClipboard = navigator.clipboard;
@@ -281,10 +294,14 @@ describe('<WebVisitors /> — page surface', () => {
     await screen.findByText('Anita Sharma');
     const copyBtn = screen.getByRole('button', { name: /^Copy$/i });
     fireEvent.click(copyBtn);
+    // copySnippet() dynamically imports utils/clipboard and calls
+    // copyToClipboard(snippet); assert against that util (mocked above)
+    // rather than navigator.clipboard, which it only reaches in a secure
+    // context.
     await waitFor(() => {
-      expect(navigator.clipboard.writeText).toHaveBeenCalledTimes(1);
+      expect(copyToClipboardMock).toHaveBeenCalledTimes(1);
     });
-    const [written] = navigator.clipboard.writeText.mock.calls[0];
+    const [written] = copyToClipboardMock.mock.calls[0];
     expect(written).toMatch(/<script src="[^"]*\/crm-track\.js" data-tenant="7"><\/script>/);
     // Label flips to "Copied!" after the await resolves.
     expect(await screen.findByRole('button', { name: /Copied!/i })).toBeInTheDocument();

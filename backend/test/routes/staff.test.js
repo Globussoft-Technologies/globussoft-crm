@@ -420,7 +420,13 @@ describe('GET /api/staff?fields=summary — opt-in slim shape (#920 slice 15)', 
     prisma.user.findMany.mockResolvedValue([]);
     await request(makeApp({ tenantId: 4242 })).get('/api/staff?fields=summary');
     const args = prisma.user.findMany.mock.calls[0][0];
-    expect(args.where).toEqual({ tenantId: 4242 });
+    // Security audit-fix (214017c1): staff list now excludes CUSTOMER
+    // role/userType so portal customers never surface in the staff directory.
+    expect(args.where).toEqual({
+      tenantId: 4242,
+      role: { not: 'CUSTOMER' },
+      userType: { not: 'CUSTOMER' },
+    });
   });
 
   test('?fields=summary + low-trust viewer (role=USER) → response is still PII-masked (name/email/id masked) — slim does not bypass #682', async () => {

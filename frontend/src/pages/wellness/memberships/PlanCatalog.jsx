@@ -3,8 +3,8 @@ import {
   Monitor, MoreVertical, Pencil, Trash2, Power, Check,
   Sparkles, RefreshCcw, CreditCard,
 } from 'lucide-react';
-import { formatDate } from '../../utils/date';
-import { formatMoney } from '../../utils/money';
+import { formatDate } from '../../../utils/date';
+import { formatMoney } from '../../../utils/money';
 import { planGradient, deriveBenefits, durationLabel } from './utils';
 
 export function PlanCard({

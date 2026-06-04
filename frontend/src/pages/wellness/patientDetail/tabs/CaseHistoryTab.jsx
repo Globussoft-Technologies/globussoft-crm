@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Stethoscope, FileText, FileSignature, ChevronDown, ChevronUp } from 'lucide-react';
-import { DateRangeFilter, resolveDateRange, EMPTY_DATE_FILTER } from '../../../components/wellness/DateRangeFilter';
+import { DateRangeFilter, resolveDateRange, EMPTY_DATE_FILTER } from '../../../../components/wellness/DateRangeFilter';
 import { RxDetailModal } from '../shared/components';
 
 // Strip every customer-facing reference to the Zylu POS — patient.source

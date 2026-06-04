@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import { Upload, X } from 'lucide-react';
-import { useNotify } from '../../utils/notify';
+import { useNotify } from '../../../utils/notify';
 import { uploadImageFile } from './shared';
 
 // Shared upload control — preview + replace + remove. Used by the Create

@@ -29,10 +29,15 @@
  *      to the Dashboard (renders "Welcome, <name>").
  *   7. OTP verify with expired/invalid code → friendly "Invalid or expired"
  *      error rendered, no token stored.
- *   8. Dashboard parallel fetch: /portal/me + /portal/visits + /portal/
- *      prescriptions all called with Bearer token; visits tab renders rows
- *      with service name + doctor + status.
- *   9. Empty visits list → "No visits on record yet." copy renders.
+ *   8. Dashboard fetch: /portal/me + /portal/me/permissions called in parallel
+ *      with Bearer token; the Rx fetch is gated on `my_prescriptions.read`.
+ *      The "My Visits" tab embeds <MyBookings/> which fetches
+ *      /portal/appointments?bucket=<bucket> and renders appointment cards
+ *      (service name + doctor + status). [Updated for refactor 815a8783 — the
+ *      old direct /portal/visits fetch + inline visits list were removed.]
+ *   9. Empty upcoming bucket → MyBookings per-bucket empty-state copy ("No
+ *      upcoming appointments") renders. [Was "No visits on record yet."
+ *      pre-815a8783.]
  *  10. Prescriptions tab renders Rx rows with drug bullets (parsed from the
  *      JSON-string `drugs` column) and the Download PDF button.
  *  11. Logout button clears the token + name from localStorage and returns
@@ -66,8 +71,13 @@
  *     own `portalFetch` helper (inline at top of SUT) wrapping raw `fetch`.
  *     Tests stub `globalThis.fetch` directly.
  *   - Prompt anticipated invoice/treatment-plan/consent-form list endpoints.
- *     REALITY: the SUT only fetches `/portal/me` + `/portal/visits` +
- *     `/portal/prescriptions`. The Treatment Plan + Consent Forms tabs are
+ *     REALITY (post-815a8783): the Dashboard fetches `/portal/me` +
+ *     `/portal/me/permissions` in parallel, then `/portal/prescriptions`
+ *     (gated on `my_prescriptions.read`) and the shop endpoints (gated on
+ *     `products.read`). Visits/appointments are fetched by the embedded
+ *     <MyBookings/> via `/portal/appointments?bucket=<bucket>` — there is NO
+ *     direct `/portal/visits` fetch anymore. The Treatment Plan + Consent
+ *     Forms tabs are
  *     PLACEHOLDER pages ("Your treatment plan will appear here once your
  *     doctor shares one." / "Consent forms you've signed at the clinic will
  *     appear here.") — no backend endpoints, no data fetch. Tests verify
@@ -125,25 +135,6 @@ const PATIENT_PROFILE = {
   email: 'priya@example.com',
 };
 
-const VISITS_PAYLOAD = [
-  {
-    id: 901,
-    visitDate: '2026-04-15T10:00:00.000Z',
-    status: 'COMPLETED',
-    notes: 'Follow-up on hairfall regimen.',
-    service: { name: 'Hair PRP' },
-    doctor: { name: 'Harsh' },
-  },
-  {
-    id: 902,
-    visitDate: '2026-05-01T11:30:00.000Z',
-    status: 'BOOKED',
-    notes: null,
-    service: { name: 'Skin Consult' },
-    doctor: { name: 'Harsh' },
-  },
-];
-
 const PRESCRIPTIONS_PAYLOAD = [
   {
     id: 7001,
@@ -158,6 +149,34 @@ const PRESCRIPTIONS_PAYLOAD = [
   },
 ];
 
+// Drift (refactor 815a8783): the Dashboard no longer fetches /portal/visits
+// directly. The "My Visits" tab now embeds the shared <MyBookings /> component
+// which fetches /portal/appointments?bucket=<bucket> for each of four buckets
+// (upcoming/pending/completed/cancelled) and renders appointment cards. The
+// portal also resolves /portal/me/permissions and gates the Prescriptions +
+// Shop tabs on those permissions. The Dashboard tests below mock both.
+const PORTAL_PERMISSIONS = ['my_prescriptions.read'];
+
+// Appointments keyed by MyBookings bucket. Only "upcoming" carries rows by
+// default so the default-bucket render shows cards; others are empty.
+const APPOINTMENTS_BY_BUCKET = {
+  upcoming: [
+    {
+      id: 8001,
+      appointmentDate: '2026-06-15T10:00:00.000Z',
+      status: 'booked',
+      doctorName: 'Dr Harsh',
+      doctorAssigned: true,
+      serviceName: 'Hair PRP',
+      canReschedule: true,
+      canCancel: true,
+    },
+  ],
+  pending: [],
+  completed: [],
+  cancelled: [],
+};
+
 /**
  * Build a fetch stub keyed by URL pattern. Each test installs its own variant
  * via `installFetchMock({ overrides })` to model failure modes.
@@ -167,8 +186,9 @@ function installFetchMock({
   requestOtpStatus = 200,
   verifyOtpStatus = 200,
   verifyOtpError = 'Invalid or expired OTP',
-  visits = VISITS_PAYLOAD,
   prescriptions = PRESCRIPTIONS_PAYLOAD,
+  permissions = PORTAL_PERMISSIONS,
+  appointmentsByBucket = APPOINTMENTS_BY_BUCKET,
 } = {}) {
   const fetchStub = vi.fn((url, opts = {}) => {
     const method = opts.method || 'GET';
@@ -212,12 +232,23 @@ function installFetchMock({
         json: () => Promise.resolve(PATIENT_PROFILE),
       });
     }
-    if (url === '/api/wellness/portal/visits' && method === 'GET') {
+    if (url === '/api/wellness/portal/me/permissions' && method === 'GET') {
       return Promise.resolve({
         ok: true,
         status: 200,
         headers: new Map([['content-type', 'application/json']]),
-        json: () => Promise.resolve(visits),
+        json: () => Promise.resolve({ permissions }),
+      });
+    }
+    // MyBookings (embedded in the visits tab) fetches one bucket at a time:
+    // /portal/appointments?bucket=<bucket>.
+    if (typeof url === 'string' && url.startsWith('/api/wellness/portal/appointments?bucket=') && method === 'GET') {
+      const bucket = url.split('bucket=')[1];
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        headers: new Map([['content-type', 'application/json']]),
+        json: () => Promise.resolve({ appointments: appointmentsByBucket[bucket] || [] }),
       });
     }
     if (url === '/api/wellness/portal/prescriptions' && method === 'GET') {
@@ -419,42 +450,56 @@ describe('<PatientPortal /> — authenticated dashboard', () => {
     localStorage.setItem(PORTAL_NAME_KEY, 'Priya Sharma');
   });
 
-  it('loads /portal/me + /visits + /prescriptions in parallel with Bearer token; visits render', async () => {
+  it('loads /portal/me + /me/permissions + /prescriptions with Bearer token; visits (appointments) render', async () => {
+    // Drift (815a8783): the dashboard now resolves /portal/me +
+    // /portal/me/permissions in parallel (NOT /portal/visits), then gates the
+    // Rx fetch on `my_prescriptions.read`. The "My Visits" tab embeds
+    // <MyBookings/> which fetches /portal/appointments?bucket=<bucket>.
     const fetchStub = installFetchMock();
     render(<PatientPortal />);
-    // All three parallel fetches fire with the bearer token.
     await waitFor(() => {
       const meCall = fetchStub.mock.calls.find(
         ([u]) => u === '/api/wellness/portal/me',
       );
-      const visitsCall = fetchStub.mock.calls.find(
-        ([u]) => u === '/api/wellness/portal/visits',
+      const permsCall = fetchStub.mock.calls.find(
+        ([u]) => u === '/api/wellness/portal/me/permissions',
       );
       const rxCall = fetchStub.mock.calls.find(
         ([u]) => u === '/api/wellness/portal/prescriptions',
       );
       expect(meCall).toBeTruthy();
-      expect(visitsCall).toBeTruthy();
+      expect(permsCall).toBeTruthy();
       expect(rxCall).toBeTruthy();
       expect(meCall[1].headers.Authorization).toBe('Bearer seeded-token');
     });
-    // Default tab is Visits — both visits render with service + doctor.
+    // Default tab is My Visits → MyBookings fetches the upcoming bucket with
+    // the bearer token and renders the appointment card (service + doctor).
+    await waitFor(() => {
+      const apptCall = fetchStub.mock.calls.find(
+        ([u]) => u === '/api/wellness/portal/appointments?bucket=upcoming',
+      );
+      expect(apptCall).toBeTruthy();
+      expect(apptCall[1].headers.Authorization).toBe('Bearer seeded-token');
+    });
     expect(await screen.findByText('Hair PRP')).toBeInTheDocument();
-    expect(screen.getByText('Skin Consult')).toBeInTheDocument();
-    // Status chips render.
-    expect(screen.getByText('COMPLETED')).toBeInTheDocument();
-    expect(screen.getByText('BOOKED')).toBeInTheDocument();
-    // Visit-1 has notes copy.
-    expect(
-      screen.getByText(/Follow-up on hairfall regimen\./i),
-    ).toBeInTheDocument();
+    expect(screen.getByText('Dr Harsh')).toBeInTheDocument();
+    // Status pill renders (MyBookings maps `booked` → "Booked").
+    expect(screen.getByTestId('appt-status-8001')).toHaveTextContent('Booked');
   });
 
-  it('empty visits list → "No visits on record yet." copy renders', async () => {
-    installFetchMock({ visits: [] });
+  it('empty upcoming bucket → MyBookings empty-state copy renders', async () => {
+    // Drift: the old "No visits on record yet." copy lived in the inline
+    // visits list which was removed. MyBookings now renders a per-bucket
+    // empty state ("No upcoming appointments") for the default bucket.
+    installFetchMock({
+      appointmentsByBucket: { upcoming: [], pending: [], completed: [], cancelled: [] },
+    });
     render(<PatientPortal />);
     expect(
-      await screen.findByText(/No visits on record yet\./i),
+      await screen.findByTestId('my-bookings-empty-upcoming'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/No upcoming appointments/i),
     ).toBeInTheDocument();
   });
 

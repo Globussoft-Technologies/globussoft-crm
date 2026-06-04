@@ -1,8 +1,8 @@
 import { useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { useScrollLock } from '../../hooks/useScrollLock';
+import { useScrollLock } from '../../../hooks/useScrollLock';
 import { Crown, X, CreditCard } from 'lucide-react';
-import { formatMoney } from '../../utils/money';
+import { formatMoney } from '../../../utils/money';
 import { durationLabel } from './utils';
 
 // Razorpay checkout SDK loader — same pattern as BuyGiftCards.jsx.

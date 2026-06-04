@@ -126,7 +126,9 @@ async function processTenant(tenant) {
 
         await prisma.$transaction(async (tx) => {
           const since = new Date(Date.now() - 48 * 3600 * 1000);
-          const phrase = kind === "24h" ? DEDUP_PHRASE_24H : DEDUP_PHRASE_1H;
+          // Dedup anchors must match the phrases composeBody actually emits
+          // ("tomorrow at" for 24h, "in 1 hour" for 1h) — see header note.
+          const phrase = kind === "24h" ? "tomorrow at" : "in 1 hour";
           const or = [];
           if (patient.contactId) or.push({ contactId: patient.contactId });
           if (patient.phone) or.push({ to: patient.phone });

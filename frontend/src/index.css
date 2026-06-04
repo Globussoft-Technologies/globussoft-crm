@@ -615,12 +615,25 @@ aside.glass.app-sidebar {
   -webkit-backdrop-filter: none !important;
   box-shadow: none !important;
 }
-/* Default (non-wellness) sidebar: use a solid surface background instead of
+/* Default (non-wellness) sidebar: use a SOLID surface background instead of
    the translucent glass-bg. Wellness sets its own opaque gradient
    background via `[data-vertical="wellness"] aside.glass`, so this rule
-   only applies when that theme isn't active. */
-aside.glass.app-sidebar {
-  background: var(--surface-color);
+   only applies when that theme isn't active.
+
+   PERF: var(--surface-color) was rgba(22,24,29,0.4) in dark / rgba(255,255,255,0.7)
+   in light — semi-transparent. Every nav-link hover forced the browser to
+   alpha-blend the hover tile over the translucent sidebar over the body's
+   fixed radial-gradient background. On a 50-link generic sidebar this
+   multiplies paint cost enough to read as hover lag on integrated GPUs.
+   Using an opaque background eliminates the per-pixel blending stack
+   entirely; the hover repaint touches only the nav-link row itself.
+   (Wellness already used an opaque gradient and did not exhibit the lag.) */
+[data-theme="dark"] aside.glass.app-sidebar {
+  background: rgb(22, 24, 29);
+  border-right: 1px solid var(--border-color);
+}
+[data-theme="light"] aside.glass.app-sidebar {
+  background: rgb(255, 255, 255);
   border-right: 1px solid var(--border-color);
 }
 
@@ -644,7 +657,16 @@ aside.glass.app-sidebar {
    read as a clipped/broken render. A thin, theme-aware thumb signals "there's
    more below" the moment the page loads. */
 .app-sidebar > nav {
-  contain: layout paint style;
+  /* PERF: was `contain: layout paint style`. `paint` on the scroll container
+     created a single large paint boundary around all ~50 nav links. In
+     Chrome this caused the compositor to treat the entire <nav> as one
+     layer; any hover-induced invalidation inside it triggered a full
+     re-raster of the layer rather than just the hovered row. Removing
+     `paint` here (kept on the outer `.app-sidebar`) restores per-row
+     paint invalidation while still containing layout and style scope.
+     Scroll performance is unchanged because `.app-sidebar` above still
+     carries `contain: paint`. */
+  contain: layout style;
   scrollbar-gutter: stable;
   overscroll-behavior: contain;
   scrollbar-width: thin; /* Firefox */

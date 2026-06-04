@@ -79,7 +79,7 @@ beforeAll(() => {
   // Engine now uses survey.upsert (atomic, keyed on tenantId_name) instead of
   // the old findFirst-then-create dedup pair.
   prisma.survey = { upsert: vi.fn() };
-  prisma.smsMessage = { create: vi.fn() };
+  prisma.smsMessage = { findFirst: vi.fn(), create: vi.fn() };
   prisma.contact = { deleteMany: vi.fn() };
   prisma.patient = { findMany: vi.fn(), update: vi.fn() };
   prisma.consentForm = { deleteMany: vi.fn() };
@@ -94,6 +94,7 @@ beforeAll(() => {
 beforeEach(() => {
   prisma.visit.findMany.mockReset();
   prisma.survey.upsert.mockReset();
+  prisma.smsMessage.findFirst.mockReset();
   prisma.smsMessage.create.mockReset();
   prisma.contact.deleteMany.mockReset();
   prisma.patient.findMany.mockReset();
@@ -105,6 +106,7 @@ beforeEach(() => {
   // Sensible defaults — every test overrides what it cares about.
   prisma.visit.findMany.mockResolvedValue([]);
   prisma.survey.upsert.mockResolvedValue({ id: 'survey-1' });
+  prisma.smsMessage.findFirst.mockResolvedValue(null);
   prisma.smsMessage.create.mockResolvedValue({ id: 'sms-1' });
   prisma.contact.deleteMany.mockResolvedValue({ count: 0 });
   prisma.patient.findMany.mockResolvedValue([]);

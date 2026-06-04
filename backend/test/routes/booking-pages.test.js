@@ -434,7 +434,7 @@ describe('POST /api/booking-pages/:id/cancel/:bookingId', () => {
 
 describe('GET /api/booking-pages/public/:slug (no auth)', () => {
   test('happy path WITHOUT auth returns 14-day slot summary + public payload', async () => {
-    prisma.bookingPage.findUnique.mockResolvedValue({
+    prisma.bookingPage.findFirst.mockResolvedValue({
       id: 50,
       slug: 'discovery-call-abc',
       title: 'Discovery Call',
@@ -479,7 +479,7 @@ describe('GET /api/booking-pages/public/:slug (no auth)', () => {
   });
 
   test('inactive page → 404', async () => {
-    prisma.bookingPage.findUnique.mockResolvedValue({
+    prisma.bookingPage.findFirst.mockResolvedValue({
       id: 50, slug: 'foo', isActive: false, availability: DEFAULT_AVAILABILITY,
     });
     const res = await request(makeApp())
@@ -488,7 +488,7 @@ describe('GET /api/booking-pages/public/:slug (no auth)', () => {
   });
 
   test('unknown slug → 404', async () => {
-    prisma.bookingPage.findUnique.mockResolvedValue(null);
+    prisma.bookingPage.findFirst.mockResolvedValue(null);
     const res = await request(makeApp())
       .get('/api/booking-pages/public/missing-slug');
     expect(res.status).toBe(404);
@@ -499,7 +499,7 @@ describe('GET /api/booking-pages/public/:slug (no auth)', () => {
 
 describe('GET /api/booking-pages/public/:slug/slots (no auth)', () => {
   test('happy path returns slots for a given date', async () => {
-    prisma.bookingPage.findUnique.mockResolvedValue({
+    prisma.bookingPage.findFirst.mockResolvedValue({
       id: 50,
       slug: 'discovery-call-abc',
       durationMins: 30,
@@ -524,7 +524,7 @@ describe('GET /api/booking-pages/public/:slug/slots (no auth)', () => {
   });
 
   test('missing date query param → 400', async () => {
-    prisma.bookingPage.findUnique.mockResolvedValue({
+    prisma.bookingPage.findFirst.mockResolvedValue({
       id: 50, slug: 'discovery-call-abc', availability: DEFAULT_AVAILABILITY, isActive: true,
     });
     const res = await request(makeApp())
@@ -534,7 +534,7 @@ describe('GET /api/booking-pages/public/:slug/slots (no auth)', () => {
   });
 
   test('malformed date query (not YYYY-MM-DD) → 400', async () => {
-    prisma.bookingPage.findUnique.mockResolvedValue({
+    prisma.bookingPage.findFirst.mockResolvedValue({
       id: 50, slug: 'discovery-call-abc', availability: DEFAULT_AVAILABILITY, isActive: true,
     });
     const res = await request(makeApp())
@@ -547,7 +547,7 @@ describe('GET /api/booking-pages/public/:slug/slots (no auth)', () => {
 
 describe('POST /api/booking-pages/public/:slug/book (no auth)', () => {
   test('happy path: creates booking + returns confirmation envelope', async () => {
-    prisma.bookingPage.findUnique.mockResolvedValue({
+    prisma.bookingPage.findFirst.mockResolvedValue({
       id: 50,
       slug: 'discovery-call-abc',
       durationMins: 30,
@@ -593,7 +593,7 @@ describe('POST /api/booking-pages/public/:slug/book (no auth)', () => {
   });
 
   test('missing contactName → 400', async () => {
-    prisma.bookingPage.findUnique.mockResolvedValue({
+    prisma.bookingPage.findFirst.mockResolvedValue({
       id: 50, slug: 'foo', durationMins: 30, bufferMins: 0,
       availability: DEFAULT_AVAILABILITY, isActive: true, tenantId: 1,
     });
@@ -608,7 +608,7 @@ describe('POST /api/booking-pages/public/:slug/book (no auth)', () => {
   });
 
   test('past scheduledAt → 400 "must be in the future"', async () => {
-    prisma.bookingPage.findUnique.mockResolvedValue({
+    prisma.bookingPage.findFirst.mockResolvedValue({
       id: 50, slug: 'foo', durationMins: 30, bufferMins: 0,
       availability: DEFAULT_AVAILABILITY, isActive: true, tenantId: 1,
     });
@@ -626,7 +626,7 @@ describe('POST /api/booking-pages/public/:slug/book (no auth)', () => {
   });
 
   test('invalid scheduledAt string → 400 "Invalid scheduledAt"', async () => {
-    prisma.bookingPage.findUnique.mockResolvedValue({
+    prisma.bookingPage.findFirst.mockResolvedValue({
       id: 50, slug: 'foo', durationMins: 30, bufferMins: 0,
       availability: DEFAULT_AVAILABILITY, isActive: true, tenantId: 1,
     });
@@ -642,7 +642,7 @@ describe('POST /api/booking-pages/public/:slug/book (no auth)', () => {
   });
 
   test('scheduledAt not aligned to a valid slot → 409 "no longer available"', async () => {
-    prisma.bookingPage.findUnique.mockResolvedValue({
+    prisma.bookingPage.findFirst.mockResolvedValue({
       id: 50, slug: 'foo', durationMins: 30, bufferMins: 0,
       availability: DEFAULT_AVAILABILITY, isActive: true, tenantId: 1,
     });
@@ -666,7 +666,7 @@ describe('POST /api/booking-pages/public/:slug/book (no auth)', () => {
   });
 
   test('inactive page → 404 (public book gated on isActive)', async () => {
-    prisma.bookingPage.findUnique.mockResolvedValue({
+    prisma.bookingPage.findFirst.mockResolvedValue({
       id: 50, slug: 'foo', isActive: false, availability: DEFAULT_AVAILABILITY,
     });
     const res = await request(makeApp())

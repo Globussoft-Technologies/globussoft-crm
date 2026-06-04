@@ -540,7 +540,7 @@ describe('GET /api/landing-pages/:id/analytics', () => {
 
 describe('GET /p/:slug (public render, no auth)', () => {
   test('happy path WITHOUT auth: PUBLISHED page renders HTML, visits incremented, VISIT event logged', async () => {
-    prisma.landingPage.findUnique.mockResolvedValue({
+    prisma.landingPage.findFirst.mockResolvedValue({
       id: 50, slug: 'live-page', status: 'PUBLISHED', title: 'Live Page',
       content: '[]', tenantId: 1,
     });
@@ -566,7 +566,7 @@ describe('GET /p/:slug (public render, no auth)', () => {
   });
 
   test('DRAFT (non-PUBLISHED) page → 404 HTML, NO visit recorded', async () => {
-    prisma.landingPage.findUnique.mockResolvedValue({
+    prisma.landingPage.findFirst.mockResolvedValue({
       id: 50, slug: 'draft-page', status: 'DRAFT', content: '[]', tenantId: 1,
     });
     const res = await request(makeApp()).get('/p/draft-page');
@@ -576,7 +576,7 @@ describe('GET /p/:slug (public render, no auth)', () => {
   });
 
   test('unknown slug → 404', async () => {
-    prisma.landingPage.findUnique.mockResolvedValue(null);
+    prisma.landingPage.findFirst.mockResolvedValue(null);
     const res = await request(makeApp()).get('/p/missing-slug');
     expect(res.status).toBe(404);
     expect(prisma.landingPage.update).not.toHaveBeenCalled();
@@ -587,7 +587,7 @@ describe('GET /p/:slug (public render, no auth)', () => {
 
 describe('POST /p/:slug/submit (public submission, no auth)', () => {
   test('happy path WITHOUT auth: upserts contact, creates deal, increments submissions, returns success envelope', async () => {
-    prisma.landingPage.findUnique.mockResolvedValue({
+    prisma.landingPage.findFirst.mockResolvedValue({
       id: 50, slug: 'live-page', status: 'PUBLISHED', title: 'Live Page',
       content: '[]', tenantId: 1,
     });
@@ -635,7 +635,7 @@ describe('POST /p/:slug/submit (public submission, no auth)', () => {
   });
 
   test('unknown slug → 404 (no contact/deal/analytics writes)', async () => {
-    prisma.landingPage.findUnique.mockResolvedValue(null);
+    prisma.landingPage.findFirst.mockResolvedValue(null);
     const res = await request(makeApp())
       .post('/p/missing/submit')
       .send({ email: 'asha@example.com', name: 'Asha' });
@@ -647,7 +647,7 @@ describe('POST /p/:slug/submit (public submission, no auth)', () => {
   });
 
   test('submission without an email synthesises a placeholder address (anonymous tracking)', async () => {
-    prisma.landingPage.findUnique.mockResolvedValue({
+    prisma.landingPage.findFirst.mockResolvedValue({
       id: 50, slug: 'live-page', status: 'PUBLISHED', title: 'Live Page',
       content: '[]', tenantId: 1,
     });
@@ -668,7 +668,7 @@ describe('POST /p/:slug/submit (public submission, no auth)', () => {
 
 describe('GET /p/:slug/track (public 1×1 pixel, no auth)', () => {
   test('happy path: returns 1×1 GIF with no-store cache; analytics event logged', async () => {
-    prisma.landingPage.findUnique.mockResolvedValue({
+    prisma.landingPage.findFirst.mockResolvedValue({
       id: 50, slug: 'live-page', status: 'PUBLISHED', tenantId: 1,
     });
     const res = await request(makeApp()).get('/p/live-page/track?event=VISIT');
@@ -687,7 +687,7 @@ describe('GET /p/:slug/track (public 1×1 pixel, no auth)', () => {
   });
 
   test('unknown slug still returns the GIF (silent) — no analytics insert', async () => {
-    prisma.landingPage.findUnique.mockResolvedValue(null);
+    prisma.landingPage.findFirst.mockResolvedValue(null);
     const res = await request(makeApp()).get('/p/missing/track');
     expect(res.status).toBe(200);
     expect(res.headers['content-type']).toBe('image/gif');

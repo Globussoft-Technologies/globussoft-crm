@@ -478,9 +478,17 @@ test.describe('Memberships — POST /patients/:id/memberships', () => {
   });
 
   test('400 on invalid startDate', async ({ request }) => {
-    // Use secondPatientId (no active membership) so the startDate validation
-    // fires before the MEMBERSHIP_ALREADY_ACTIVE duplicate check.
-    const res = await authPost(request, `/api/wellness/patients/${secondPatientId}/memberships`, {
+    // Create a fresh patient so the startDate validation fires before the
+    // MEMBERSHIP_ALREADY_ACTIVE duplicate check (both prior patients now have
+    // active memberships for plan[0] after the happy-path + explicit-startDate
+    // tests above).
+    const fresh = await authPost(request, '/api/wellness/patients', {
+      name: `${RUN_TAG} InvalidDate Patient`,
+      phone: nextPhone(),
+      gender: 'F',
+    });
+    const patientId = fresh.status() === 201 ? (await fresh.json()).id : secondPatientId;
+    const res = await authPost(request, `/api/wellness/patients/${patientId}/memberships`, {
       planId: createdPlanIds[0],
       startDate: 'not-a-date',
     });

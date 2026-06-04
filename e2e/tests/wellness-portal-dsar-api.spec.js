@@ -318,12 +318,13 @@ test.describe('POST /api/wellness/portal/export — patient self-DSAR', () => {
     expect((await res.json()).code).toBe('NO_PATIENT_PROFILE');
   });
 
-  test('6. auth gate: cross-tenant staff JWT → 401 (no patientId)', async ({ request }) => {
+  test('6. auth gate: cross-tenant staff JWT → 403 NO_PATIENT_PROFILE', async ({ request }) => {
     test.skip(!crossTenantStaffToken, 'cross-tenant staff token unavailable');
     const res = await request.post(`${API}/wellness/portal/export`, {
       headers: { Authorization: `Bearer ${crossTenantStaffToken}` },
     });
-    expect(res.status()).toBe(401);
+    expect(res.status()).toBe(403);
+    expect((await res.json()).code).toBe('NO_PATIENT_PROFILE');
   });
 
   test('7. auth gate: garbage Bearer → 401', async ({ request }) => {

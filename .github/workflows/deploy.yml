@@ -758,7 +758,7 @@ jobs:
             # existing NULL values block `prisma db push`. Self-heal with raw SQL
             # via prisma db execute (loads .env automatically, no client init needed).
             echo "=== heal NULL User.name (schema-hardening guard) ==="
-            echo "UPDATE User SET name = '' WHERE name IS NULL;" | npx prisma db execute --stdin
+            echo "UPDATE User SET name = '' WHERE name IS NULL;" | npx prisma db execute --stdin --schema=prisma/schema.prisma
 
             echo "=== prisma db push (schema sync) ==="
             npx prisma db push --skip-generate --accept-data-loss 2>&1 | tail -5
@@ -945,7 +945,7 @@ jobs:
             # existing NULL values block `prisma db push`. Self-heal with raw SQL
             # via prisma db execute (loads .env automatically, no client init needed).
             echo "=== heal NULL User.name (schema-hardening guard) ==="
-            echo "UPDATE User SET name = '' WHERE name IS NULL;" | npx prisma db execute --stdin
+            echo "UPDATE User SET name = '' WHERE name IS NULL;" | npx prisma db execute --stdin --schema=prisma/schema.prisma
 
             echo "=== prisma db push (schema sync) ==="
             npx prisma db push --skip-generate --accept-data-loss 2>&1 | tail -5

@@ -639,14 +639,18 @@ aside.glass.app-sidebar {
 
 .app-sidebar {
   contain: layout paint style;
-  /* NOTE: `will-change: transform` is intentionally NOT here. The sidebar only
-     transforms inside the mobile drawer (@media max-width:899px in
-     responsive.css), so a permanent, all-viewport `will-change` just pinned an
-     always-resident GPU layer on desktop — where nothing ever animates — which
-     also hosts the scrolling <nav> and added compositor overhead/jank for no
-     benefit (MDN: don't apply will-change permanently). `contain: layout paint
-     style` already isolates the sidebar's paint for fast scrolling. The drawer
-     slide gets its own scoped `will-change` in responsive.css's mobile block. */
+  transition: none;
+  /* NOTE: `will-change: transform` is intentionally NOT here on the outer
+     aside. The sidebar only transforms inside the mobile drawer (@media
+     max-width:899px in responsive.css). A permanent `will-change` on the
+     aside would pin an always-resident GPU layer that also hosts the
+     scrolling <nav>, adding compositor overhead for no benefit.
+
+     The scrolling <nav> child gets its OWN layer promotion via
+     `transform: translateZ(0)` + `will-change: scroll-position` (see
+     .app-sidebar > nav below). This isolates the scrollable region from
+     the rest of the sidebar so raster/paint work during scroll doesn't
+     block the main thread. */
 }
 
 /* PERF + UX: the inner scroll container. `contain` lets the browser fast-path
@@ -657,16 +661,24 @@ aside.glass.app-sidebar {
    read as a clipped/broken render. A thin, theme-aware thumb signals "there's
    more below" the moment the page loads. */
 .app-sidebar > nav {
-  /* PERF: was `contain: layout paint style`. `paint` on the scroll container
-     created a single large paint boundary around all ~50 nav links. In
-     Chrome this caused the compositor to treat the entire <nav> as one
-     layer; any hover-induced invalidation inside it triggered a full
-     re-raster of the layer rather than just the hovered row. Removing
-     `paint` here (kept on the outer `.app-sidebar`) restores per-row
-     paint invalidation while still containing layout and style scope.
-     Scroll performance is unchanged because `.app-sidebar` above still
-     carries `contain: paint`. */
-  contain: layout style;
+  /* PERF (scroll smoothness): promote the scrolling <nav> to its own GPU
+     layer so the browser can raster it independently. Without this, every
+     scroll starts with a ~500ms main-thread paint burst as Chrome
+     re-rasters the entire sidebar region. `transform: translateZ(0)`
+     forces layer promotion; `will-change: scroll-position` hints the
+     compositor to keep the layer resident. `contain: layout paint`
+     isolates paint invalidation to the nav bounds (avoiding full-page
+     repaints) without `size` containment which would collapse height.
+
+     Caution: do NOT use `contain: strict` — `size` containment collapses
+     the menu to zero height and hides all items. `layout paint` is safe.
+
+     `transition: none` removes any accidental transition property that
+     could keep the compositor in "live layer" mode permanently. */
+  transform: translateZ(0);
+  will-change: scroll-position;
+  contain: layout paint;
+  transition: none;
   scrollbar-gutter: stable;
   overscroll-behavior: contain;
   scrollbar-width: thin; /* Firefox */

@@ -1105,7 +1105,7 @@ async function seedSampleTrips(tenantId) {
 async function seedTmcOperationalExtras(tenantId) {
   // 1. Find the anchor Bali trip + its participants.
   const baliTrip = await prisma.tmcTrip.findUnique({
-    where: { tripCode: "tmc-bali-2026" },
+    where: { tenantId_tripCode: { tenantId, tripCode: "tmc-bali-2026" } },
     select: { id: true },
   });
   if (!baliTrip) {

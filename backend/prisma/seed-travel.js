@@ -71,31 +71,43 @@ async function main() {
   const trialStartDate = new Date();
   const trialEndsAt = new Date(Date.now() + 15 * 86400000);
 
+  // subBrandAccess scopes which of the 4 travel sub-brands each user may
+  // act on (JSON array string on User.subBrandAccess). Policy: managers are
+  // scoped to the brand they run; the USER role (front-desk telecaller) and
+  // owners/admins see ALL brands. ADMINs are full-access regardless of this
+  // column (travelGuards.getSubBrandAccessSet short-circuits on role), but we
+  // set it explicitly so every user carries an intentional scope.
+  const ALL_BRANDS = ["tmc", "rfu", "travelstall", "visasure"];
   const users = [
     {
       email: "yasin@travelstall.in",
       role: "ADMIN",
       name: "Yasin (Owner)",
+      subBrandAccess: ALL_BRANDS,
     },
     {
       email: "admin@travelstall.demo",
       role: "ADMIN",
       name: "Demo Admin",
+      subBrandAccess: ALL_BRANDS,
     },
     {
       email: "tmc-ops@travelstall.demo",
       role: "MANAGER",
       name: "TMC Operator",
+      subBrandAccess: ["tmc"],
     },
     {
       email: "rfu-advisor@travelstall.demo",
       role: "MANAGER",
       name: "RFU Advisor",
+      subBrandAccess: ["rfu"],
     },
     {
       email: "telecaller@travelstall.demo",
       role: "USER",
       name: "Travel Telecaller",
+      subBrandAccess: ALL_BRANDS,
     },
   ];
 
@@ -108,6 +120,7 @@ async function main() {
         tenantId: tenant.id,
         role: u.role,
         name: u.name,
+        subBrandAccess: JSON.stringify(u.subBrandAccess),
       },
       create: {
         email: u.email,
@@ -115,6 +128,7 @@ async function main() {
         role: u.role,
         name: u.name,
         tenantId: tenant.id,
+        subBrandAccess: JSON.stringify(u.subBrandAccess),
         subscriptionStatus: "TRIAL",
         trialStartDate,
         trialEndsAt,

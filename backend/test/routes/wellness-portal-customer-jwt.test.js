@@ -49,6 +49,7 @@ import prisma from '../../lib/prisma.js';
 
 // Stub every prisma surface the /portal/visits handler + middleware touch.
 prisma.patient = prisma.patient || {};
+prisma.patient.findUnique = vi.fn();
 prisma.patient.findFirst = vi.fn();
 prisma.patient.update = vi.fn();
 prisma.patient.create = vi.fn();
@@ -103,6 +104,7 @@ function makeApp() {
 }
 
 beforeEach(() => {
+  prisma.patient.findUnique.mockReset();
   prisma.patient.findFirst.mockReset();
   prisma.patient.update.mockReset();
   prisma.patient.create.mockReset();
@@ -111,6 +113,8 @@ beforeEach(() => {
 
   // Sensible defaults — empty result set so the handler's body returns [].
   prisma.visit.findMany.mockResolvedValue([]);
+  // Path A default: patient exists so portal tokens resolve.
+  prisma.patient.findUnique.mockResolvedValue({ id: 50, tenantId: 7 });
 });
 
 describe('verifyPatientToken — Path A (patient-portal token)', () => {

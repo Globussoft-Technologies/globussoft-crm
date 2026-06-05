@@ -11,6 +11,11 @@ require("dotenv").config({
 
 const prisma = require("../lib/prisma");
 const { writeAudit } = require("../lib/audit");
+const {
+  getTenantRazorpayClient,
+  getTenantRazorpayCreds,
+  NOT_CONFIGURED_MESSAGE,
+} = require("../lib/tenantPaymentGateway");
 
 const router = express.Router();
 
@@ -27,25 +32,9 @@ function getStripe() {
   return stripeClient;
 }
 
-let razorpayClient = null;
-function getRazorpay() {
-  if (
-    !razorpayClient &&
-    process.env.RAZORPAY_KEY_ID &&
-    process.env.RAZORPAY_KEY_SECRET
-  ) {
-    try {
-      const Razorpay = require("razorpay");
-      razorpayClient = new Razorpay({
-        key_id: process.env.RAZORPAY_KEY_ID,
-        key_secret: process.env.RAZORPAY_KEY_SECRET,
-      });
-    } catch (err) {
-      console.error("[Payments] Failed to load Razorpay SDK:", err.message);
-    }
-  }
-  return razorpayClient;
-}
+// Razorpay clients are now built per-tenant from DB-stored keys via
+// lib/tenantPaymentGateway.js (customer → tenant payments). The platform's
+// own env keys are reserved for subscription billing in routes/subscriptions.js.
 
 // ── Helpers ──────────────────────────────────────────────────────
 function tenantOf(req) {
@@ -65,6 +54,51 @@ function safeJsonParse(value, fallback = {}) {
 function serialize(payment) {
   if (!payment) return payment;
   return { ...payment, metadata: safeJsonParse(payment.metadata, {}) };
+}
+
+// Resolve which Razorpay secret verifies an incoming webhook. Customer
+// payments (customer → tenant) are signed with the TENANT's own webhook
+// secret; we find the Payment row the event references and load that tenant's
+// secret. Platform / subscription payments (no per-tenant config) fall back to
+// the env secret. Read-only — no mutation happens here.
+async function resolveRazorpayWebhookSecret(event) {
+  const envSecret =
+    process.env.RAZORPAY_WEBHOOK_SECRET || process.env.RAZORPAY_KEY_SECRET || null;
+  try {
+    const payload = (event && event.payload) || {};
+    const paymentEnt =
+      payload.payment && (payload.payment.entity || payload.payment);
+    const orderEnt = payload.order && (payload.order.entity || payload.order);
+    const plinkEnt =
+      payload.payment_link &&
+      (payload.payment_link.entity || payload.payment_link);
+    // Candidate gatewayIds the order was stored under at creation time.
+    const candidates = [
+      paymentEnt && paymentEnt.order_id,
+      orderEnt && orderEnt.id,
+      paymentEnt && paymentEnt.id,
+      plinkEnt && plinkEnt.id,
+    ].filter(Boolean);
+    if (candidates.length) {
+      const payment = await prisma.payment.findFirst({
+        where: { gateway: "razorpay", gatewayId: { in: candidates } },
+        select: { tenantId: true },
+      });
+      if (payment) {
+        // No separate webhook secret is collected — verify with the tenant's
+        // Key Secret (mirrors the platform's
+        // `RAZORPAY_WEBHOOK_SECRET || RAZORPAY_KEY_SECRET` fallback).
+        const creds = await getTenantRazorpayCreds(payment.tenantId);
+        if (creds && creds.keySecret) return creds.keySecret;
+      }
+    }
+  } catch (err) {
+    console.error(
+      "[Payments] webhook tenant-secret resolution failed, falling back to env:",
+      err.message,
+    );
+  }
+  return envSecret;
 }
 
 // Strip anything that looks like a Stripe/Razorpay key out of a string. The
@@ -266,15 +300,28 @@ router.post(
   "/webhook/razorpay",
   express.raw({ type: "application/json" }),
   async (req, res) => {
-    const secret =
-      process.env.RAZORPAY_WEBHOOK_SECRET || process.env.RAZORPAY_KEY_SECRET;
-    if (!secret)
-      return res.status(503).json({ error: "Razorpay not configured" });
-
     const sig = req.headers["x-razorpay-signature"];
     const bodyStr = Buffer.isBuffer(req.body)
       ? req.body.toString("utf8")
       : JSON.stringify(req.body);
+
+    // Parse FIRST (read-only) so we can resolve which tenant this event
+    // belongs to, then verify the HMAC with THAT tenant's webhook secret.
+    // No DB mutation happens before signature verification below.
+    let event;
+    try {
+      event = JSON.parse(bodyStr);
+    } catch (_err) {
+      return res.status(400).json({ error: "Invalid JSON" });
+    }
+
+    // Tenant resolution: find the Payment row referenced by the event and use
+    // its tenant's webhook secret. Falls back to the platform env secret for
+    // subscription / platform payments (no per-tenant config row).
+    const secret = await resolveRazorpayWebhookSecret(event);
+    if (!secret)
+      return res.status(503).json({ error: "Razorpay not configured" });
+
     const expected = crypto
       .createHmac("sha256", secret)
       .update(bodyStr)
@@ -282,13 +329,6 @@ router.post(
 
     if (sig !== expected) {
       return res.status(400).json({ error: "Invalid signature" });
-    }
-
-    let event;
-    try {
-      event = JSON.parse(bodyStr);
-    } catch (_err) {
-      return res.status(400).json({ error: "Invalid JSON" });
     }
 
     try {
@@ -767,11 +807,18 @@ router.post("/create-stripe-checkout-session", async (req, res) => {
 // POST /create-razorpay-order
 router.post("/create-razorpay-order", async (req, res) => {
   try {
-    const razorpay = getRazorpay();
-    if (!razorpay)
-      return res.status(503).json({ error: "Razorpay not configured" });
-
     const tenantId = tenantOf(req);
+    // Customer payment (customer → tenant) — use the TENANT's own Razorpay
+    // keys, never the platform env keys (those are subscription-only). No
+    // silent fallback: if the tenant hasn't configured keys, money would
+    // otherwise land in the wrong account, so we disable with a clear message.
+    const rp = await getTenantRazorpayClient(tenantId);
+    if (!rp)
+      return res
+        .status(503)
+        .json({ error: NOT_CONFIGURED_MESSAGE, code: "GATEWAY_NOT_CONFIGURED" });
+    const razorpay = rp.client;
+
     const { invoiceId, amount, currency = "INR" } = req.body || {};
 
     if (!amount || isNaN(Number(amount))) {
@@ -825,7 +872,7 @@ router.post("/create-razorpay-order", async (req, res) => {
     res.json({
       orderId: order.id,
       paymentId: payment.id,
-      key: process.env.RAZORPAY_KEY_ID,
+      key: rp.keyId,
       amount: amountInt,
       currency: order.currency,
     });
@@ -855,9 +902,14 @@ router.post("/confirm-razorpay", async (req, res) => {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
-    const secret = process.env.RAZORPAY_KEY_SECRET;
+    // Verify against the TENANT's own Razorpay secret (same account that
+    // created the order), not the platform env secret.
+    const creds = await getTenantRazorpayCreds(tenantId);
+    const secret = creds && creds.keySecret;
     if (!secret)
-      return res.status(503).json({ error: "Razorpay not configured" });
+      return res
+        .status(503)
+        .json({ error: NOT_CONFIGURED_MESSAGE, code: "GATEWAY_NOT_CONFIGURED" });
 
     const payment = await prisma.payment.findFirst({
       where: { id: parseInt(paymentId), tenantId },

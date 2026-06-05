@@ -12780,14 +12780,20 @@ async function resolveSelfPatient(user) {
 // the confirm handler needs to credit the right wallet.
 router.post("/giftcards/:id/purchase/order", async (req, res) => {
   try {
-    const { getRazorpay } = require("../services/razorpayService");
-    const razorpay = getRazorpay();
-    if (!razorpay) {
-      return res.status(503).json({ error: "Razorpay not configured" });
+    // Customer payment (customer → tenant) — use the tenant's OWN Razorpay
+    // keys (BYOK) so the money settles into the clinic's account, not the
+    // platform's. No silent env fallback.
+    const {
+      getTenantRazorpayClient,
+      NOT_CONFIGURED_MESSAGE,
+    } = require("../lib/tenantPaymentGateway");
+    const rp = await getTenantRazorpayClient(req.user.tenantId);
+    if (!rp) {
+      return res
+        .status(503)
+        .json({ error: NOT_CONFIGURED_MESSAGE, code: "GATEWAY_NOT_CONFIGURED" });
     }
-    if (!process.env.RAZORPAY_KEY_ID) {
-      return res.status(503).json({ error: "Razorpay not configured" });
-    }
+    const razorpay = rp.client;
 
     const id = parseInt(req.params.id, 10);
     if (!Number.isInteger(id)) {
@@ -12886,7 +12892,7 @@ router.post("/giftcards/:id/purchase/order", async (req, res) => {
     res.json({
       orderId: order.id,
       paymentId: payment.id,
-      key: process.env.RAZORPAY_KEY_ID,
+      key: rp.keyId,
       amount: amountPaise,
       currency,
       giftCardId: card.id,
@@ -12926,9 +12932,16 @@ router.post("/giftcards/:id/purchase/confirm", async (req, res) => {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
-    const secret = process.env.RAZORPAY_KEY_SECRET;
+    const {
+      getTenantRazorpayCreds,
+      NOT_CONFIGURED_MESSAGE,
+    } = require("../lib/tenantPaymentGateway");
+    const creds = await getTenantRazorpayCreds(req.user.tenantId);
+    const secret = creds && creds.keySecret;
     if (!secret) {
-      return res.status(503).json({ error: "Razorpay not configured" });
+      return res
+        .status(503)
+        .json({ error: NOT_CONFIGURED_MESSAGE, code: "GATEWAY_NOT_CONFIGURED" });
     }
 
     const payment = await prisma.payment.findFirst({
@@ -13114,14 +13127,19 @@ router.post(
   verifyToken,
   async (req, res) => {
     try {
-      const { getRazorpay } = require("../services/razorpayService");
-      const razorpay = getRazorpay();
-      if (!razorpay) {
-        return res.status(503).json({ error: "Razorpay not configured" });
+      // Customer payment (customer → tenant) — use the tenant's OWN Razorpay
+      // keys (BYOK); no silent env fallback.
+      const {
+        getTenantRazorpayClient,
+        NOT_CONFIGURED_MESSAGE,
+      } = require("../lib/tenantPaymentGateway");
+      const rp = await getTenantRazorpayClient(req.user.tenantId);
+      if (!rp) {
+        return res
+          .status(503)
+          .json({ error: NOT_CONFIGURED_MESSAGE, code: "GATEWAY_NOT_CONFIGURED" });
       }
-      if (!process.env.RAZORPAY_KEY_ID) {
-        return res.status(503).json({ error: "Razorpay not configured" });
-      }
+      const razorpay = rp.client;
 
       const planIdInt = parseInt(req.params.id, 10);
       if (!Number.isFinite(planIdInt) || planIdInt < 1) {
@@ -13253,7 +13271,7 @@ router.post(
       res.json({
         orderId: order.id,
         paymentId: payment.id,
-        key: process.env.RAZORPAY_KEY_ID,
+        key: rp.keyId,
         amount: amountPaise,
         currency,
         planId: plan.id,
@@ -13296,9 +13314,16 @@ router.post(
         return res.status(400).json({ error: "Missing required fields" });
       }
 
-      const secret = process.env.RAZORPAY_KEY_SECRET;
+      const {
+        getTenantRazorpayCreds,
+        NOT_CONFIGURED_MESSAGE,
+      } = require("../lib/tenantPaymentGateway");
+      const creds = await getTenantRazorpayCreds(req.user.tenantId);
+      const secret = creds && creds.keySecret;
       if (!secret) {
-        return res.status(503).json({ error: "Razorpay not configured" });
+        return res
+          .status(503)
+          .json({ error: NOT_CONFIGURED_MESSAGE, code: "GATEWAY_NOT_CONFIGURED" });
       }
 
       const payment = await prisma.payment.findFirst({

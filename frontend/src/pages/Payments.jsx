@@ -16,6 +16,7 @@ import { fetchApi } from '../utils/api';
 import { AuthContext } from '../App';
 import { formatMoney } from '../utils/money';
 import { DateRangeFilter, resolveDateRange, DATE_FILTER_OPTIONS } from '../components/wellness/DateRangeFilter';
+import RazorpayGatewayCard from '../components/RazorpayGatewayCard';
 
 // ── Style constants ───────────────────────────────────────────────
 const GLASS = {
@@ -208,6 +209,11 @@ export default function Payments() {
           <AlertTriangle size={16} /> {error}
         </div>
       )}
+
+      {/* #848: per-tenant Razorpay keys (BYOK) for CUSTOMER payments. Admin-only.
+          Distinct from the platform env-var gateway below (which powers the
+          payments table + subscription billing). */}
+      {isAdmin && <RazorpayGatewayCard />}
 
       {/* #371: surface a clear configuration banner when neither Stripe
           nor Razorpay is wired up. Previously the page rendered a

@@ -625,7 +625,7 @@ describe('GET /api/integrations/marketplace/status — health-hint matrix', () =
 
   test('prisma failure → 500 with deterministic error envelope', async () => {
     prisma.marketplaceConfig.findMany.mockRejectedValue(new Error('db down'));
-    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => { });
     const app = makeApp();
     const res = await request(app).get('/api/integrations/marketplace/status');
     expect(res.status).toBe(500);
@@ -656,7 +656,7 @@ describe('GET /api/integrations/callified/auth-url — SSO JWT URL', () => {
     const res = await request(app).get('/api/integrations/callified/auth-url');
     expect(res.status).toBe(200);
     expect(typeof res.body.authUrl).toBe('string');
-    expect(res.body.authUrl).toMatch(/^http:\/\/localhost:8001\/api\/auth\/sso\/jwt\?token=/);
+    expect(res.body.authUrl).toMatch(/^https:\/\/testgo1\.callified\.ai\/api\/auth\/sso\/jwt\?token=/);
     expect(res.body.authUrl).toMatch(/&redirect=/);
 
     // Verify JWT is valid + role-mapped + payload-pinned.
@@ -757,7 +757,7 @@ describe('GET /api/integrations/callified/sso — 302 redirect', () => {
       .get('/api/integrations/callified/sso')
       .redirects(0); // don't follow — we want to assert on the 302 itself
     expect(res.status).toBe(302);
-    expect(res.headers.location).toMatch(/^http:\/\/localhost:8001\/api\/auth\/sso\/jwt\?token=/);
+    expect(res.headers.location).toMatch(/^https:\/\/testgo1\.callified\.ai\/api\/auth\/sso\/jwt\?token=/);
     expect(res.headers.location).toMatch(/&redirect=/);
   });
 

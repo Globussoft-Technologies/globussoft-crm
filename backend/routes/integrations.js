@@ -350,12 +350,13 @@ router.get("/callified/auth-url", verifyToken, async (req, res) => {
     });
 
     // 4. Construct the Callified auth URL with token and redirect params
-    // For development: use local Callified at http://localhost:8001
-    // For production: set CALLIFIED_DASHBOARD_URL env var
+    // Default is the live Callified SSO endpoint so the integration works
+    // out of the box. Override per-deploy with CALLIFIED_DASHBOARD_URL env
+    // var, or per-tenant via Integration.settings.dashboardUrl (DB row).
     const callifiedBaseUrl =
       process.env.CALLIFIED_DASHBOARD_URL ||
       settings.dashboardUrl ||
-      "http://localhost:8001/api/auth/sso/jwt";
+      "https://testgo1.callified.ai/api/auth/sso/jwt";
     const redirect = settings.redirectPath || "/crm";
     const authUrl = `${callifiedBaseUrl}?token=${encodeURIComponent(token)}&redirect=${encodeURIComponent(redirect)}`;
 
@@ -423,7 +424,7 @@ router.get("/callified/sso", verifyToken, async (req, res) => {
     const callifiedBaseUrl =
       process.env.CALLIFIED_DASHBOARD_URL ||
       settings.dashboardUrl ||
-      "http://localhost:8001/api/auth/sso/jwt";
+      "https://testgo1.callified.ai/api/auth/sso/jwt";
     const redirect = settings.redirectPath || "/crm";
     const authUrl = `${callifiedBaseUrl}?token=${encodeURIComponent(token)}&redirect=${encodeURIComponent(redirect)}`;
 

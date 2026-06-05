@@ -127,6 +127,7 @@ model Tenant {
   whatsappThreads      WhatsAppThread[]
   whatsappOptOuts      WhatsAppOptOut[]
   telephonyConfigs     TelephonyConfig[]
+  paymentGatewayConfigs PaymentGatewayConfig[]
   pushSubscriptions    PushSubscription[]
   pushNotifications    PushNotification[]
   pushTemplates        PushTemplate[]
@@ -1852,6 +1853,39 @@ model WhatsAppConfig {
   /// One WhatsApp credentials row per (tenant, provider). A tenant connects to Meta Cloud API once with their WABA + phone number ID. Different tenants own different WABAs and operate independently.
   @@unique([tenantId, provider])
   @@index([businessAccountId])
+}
+
+// ── Payment gateway (per-tenant BYOK) ─────────────────────────────
+//
+// #848 (PRD_PAYMENT_GATEWAY_CONFIG.md, minimal slice). The PLATFORM's own
+// Razorpay account (RAZORPAY_KEY_* env vars) is used ONLY for subscription
+// billing — when a tenant pays Globussoft (routes/subscriptions.js +
+// services/razorpayService.js). This model holds each TENANT's OWN Razorpay
+// merchant keys so their customers' payments (invoices, memberships, gift
+// cards) settle into the TENANT's account, not ours. BYOK — Bring Your Own
+// Key. Loaded by lib/tenantPaymentGateway.js at customer-payment time.
+//
+// keySecret + webhookSecret are AES-256-GCM-encrypted at rest via
+// credentialMasking.encryptCredential() (opt-in WELLNESS_FIELD_KEY; graceful
+// plaintext fallback for local dev) — same posture as SmsConfig /
+// WhatsAppConfig credentials. keyId is the public `rzp_live_…` identifier and
+// is stored plaintext (it ships to the browser checkout anyway).
+model PaymentGatewayConfig {
+  id            Int       @id @default(autoincrement())
+  provider      String // "razorpay" (only provider in the v1 slice; Stripe/etc. follow the PRD)
+  keyId         String? // public key id (rzp_live_… / rzp_test_…) — not secret
+  keySecret     String?   @db.Text // encrypted
+  webhookSecret String?   @db.Text // encrypted; verifies this tenant's Razorpay webhooks
+  isActive      Boolean   @default(false)
+  lastRotatedAt DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  tenantId Int    @default(1)
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  /// One gateway credential row per (tenant, provider). A tenant configures its own Razorpay merchant account once; reconfiguring updates the row. Different tenants settle to their own banks independently.
+  @@unique([tenantId, provider])
 }
 
 // ── WhatsApp SaaS P1 — webhook idempotency + audit ───────────────────

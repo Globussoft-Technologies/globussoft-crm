@@ -621,19 +621,45 @@ Captured in the existing [`docs/CREDS_TRACKER.md`](CREDS_TRACKER.md) format — 
 
 **No code paths conflict with existing shipped work.** Every TMC-specific addition is additive — the existing cross-cutting diagnostic shell continues to serve RFU + Travel Stall + Visa Sure unchanged.
 
-### Path to implementation
+### Implementation checklist — autonomous build cron tracks this section
 
-1. ~~**DD round 1.** Resolve DD-5.1 + DD-5.2 + DD-5.3.~~ ✅ **DONE 2026-06-08** — all 7 DDs resolved. DD-5.4/5/6 ship with GS-defaults; ratify with Yasin in the next sync. Build is unblocked.
-2. **Schema slice.** `TmcTripCatalogue` + 5 additive columns on `TravelDiagnostic` (`engine_state`, `engine_scores` JSON, `lead_quality` + `lead_quality_reasons[]`, `human_pick` + `weights_version`) + new `engine_weights` table. One Prisma migration. ~1 day.
-3. **Engine slice.** `backend/lib/tmcDiagnosticEngine.js` pure function + vitest cases for the 10 scenarios from §3.10 of the build spec (worked example + 9 hand-checked). ~2-3 days.
-4. **LLM Job A + B + 3-layer guard.** Jobs route via existing `lib/llmRouter.js`. `backend/lib/tmcReportGuard.js` ships with the 3 lookup config tables (destination blocklist seeded from catalogue, board-term list, restricted-word list). ~3-4 days.
-5. **Report renderer.** Web + PDF. Extends `services/pdfRenderer.js` with the §3.5 10-section template + the §3.5.5 config injection points. ~3-4 days.
-6. **Public form + report pages.** `TmcReadiness.jsx` + `TmcReadinessReport.jsx` + booking CTA. ~2-3 days.
-7. **Admin.** `engine_weights` UI tab in `DiagnosticBuilder.jsx` + `human_pick` UI in `DiagnosticDetail.jsx` + "Promote to active" in trip catalogue admin. ~2 days.
-8. **Pilot launch.** 2 day programs + 5 starter records active, controlled school set. Track the one metric.
-9. **Tuning loop.** Run §3.3.7 protocol once ≥50 submissions accumulate.
+> **The autonomous build cron reads this section every 10 minutes** to pick the next slice. Each slice is one parallel-safe single-agent commit. **Coding agents MUST mark their slice as ✅ DONE with their commit SHA in the SAME commit that ships the code** so the cron sees real progress on the next tick.
+>
+> **Slice markers:** ⬜ TODO · 🟡 IN-PROGRESS · ✅ DONE · 🔵 BLOCKED (waiting on a dependency or cred)
 
-**Estimated effort:** ~12-15 engineering days for items 2-7 (the MVD). Items 1 + 8 are external. Item 9 is post-pilot ongoing.
+| # | Slice | Files | Marker | Notes |
+|---|---|---|---|---|
+| **T0** | DD round 1 — resolve all 7 design decisions | `PRD_TMC_DIAGNOSTIC_SALES_ROUTING_ENGINE.md` §5.1 | ✅ DONE 2026-06-08 | DD-5.1-7 resolved; DD-5.4/5/6 ship with GS-defaults pending Yasin ratify |
+| **T1** | Schema slice — `TmcTripCatalogue` + `EngineWeights` + 10 additive columns on `TravelDiagnostic` | `backend/prisma/schema.prisma` + `backend/test/prisma/tmcDiagnosticEngineSchema.test.js` | ✅ DONE 2026-06-08 — `e43788e1` | 12 vitest cases green; `prisma validate` clean; purely additive |
+| **T2** | Engine pure function — `backend/lib/tmcDiagnosticEngine.js` | `backend/lib/tmcDiagnosticEngine.js` + `backend/test/lib/tmcDiagnosticEngine.test.js` | ⬜ TODO | Pure function: `(answers, catalogue, weights) → {state, primary, alternative, flags, icpTier, scores}`. Implements PRD §3.3 hard filters + 6 scoring signals + two-key sort invariant + ICP tier (§3.3.6). 10 vitest cases per PRD §3.10 step 2 (worked example + 9 hand-checked: budget-scope conflict / unknown budget / zero-survivor / single-survivor / growth-area duplicate / growth-area non-duplicate / grade-centering boundary / sort-invariant / thin-alternative). NO LLM calls. **Parallel-safe** with T3 + T4. Depends on T1. |
+| **T3** | Lead-quality classifier — `backend/lib/tmcLeadQuality.js` | `backend/lib/tmcLeadQuality.js` + `backend/test/lib/tmcLeadQuality.test.js` | ⬜ TODO | Pure function implementing PRD §3.4's 5 rules: free-domain + senior role; profile-spend contradiction; junk strings; repeat-submitter (>3/24h); Indian-mobile format fail. Ships block-list as config so TMC can extend without redeploy. ≥10 vitest cases (one per rule + edge cases). **Parallel-safe** with T2 + T4. No schema dep (works on already-shipped TravelDiagnostic columns). |
+| **T4** | TMC seed replacement — replace 3-Q placeholder with 12-Q spec + 5 starter catalogue records + sample EngineWeights row | `backend/prisma/seed-travel.js` | ⬜ TODO | Per PRD §3.1 the 12 fixed questions; per §3.2 + spec §5.5 the 5 starter trip records (Golden Triangle + Madhya Pradesh + Ladakh + Europe + USA STEM — JSON from spec §5.4); per §3.3.3 the default EngineWeights row. Seed must idempotently upsert. **Parallel-safe** with T2 + T3. Depends on T1. |
+| **T5** | Catalogue CRUD route — `backend/routes/travel_tmc_catalogue.js` + mount + vitest | `backend/routes/travel_tmc_catalogue.js` + `backend/server.js` + `backend/test/routes/travel-tmc-catalogue.test.js` | ⬜ TODO | GET / + GET /:id + POST + PATCH + DELETE (soft via status:archived) + POST /:id/promote-to-active (human-verify gate per §3.2 tagging rules). Tenant-scoped + ADMIN/MANAGER role gate. ≥15 vitest cases. Depends on T1. **Parallel-safe** with T6 + T7. |
+| **T6** | LLM prompts module — `backend/services/tmcDiagnosticPrompts.js` + vitest | `backend/services/tmcDiagnosticPrompts.js` + `backend/test/services/tmcDiagnosticPrompts.test.js` | ⬜ TODO | Two prompt builders for PRD §3.7 Job A (readiness narrative — 6 JSON fields) + Job B (sales brief + custom-concept — 7 JSON fields). System prompts exact-quote the build-spec PDF §9.1 + §9.2. **Parallel-safe** with T5 + T7. No schema dep. |
+| **T7** | Report 3-layer guardrail — `backend/lib/tmcReportGuard.js` + vitest | `backend/lib/tmcReportGuard.js` + `backend/test/lib/tmcReportGuard.test.js` | ⬜ TODO | Per PRD §3.7.1 — Layer 1 schema validation; Layer 2 destination/number/board-term/restricted-word strip checks; Layer 3 deterministic template fallback per §3.7.1 table. Ships with seeded blocklists (11 board terms + restricted-word list; destination blocklist read from catalogue at runtime). ≥15 vitest cases (one per check + each fallback path). **Parallel-safe** with T5 + T6. |
+| **T8** | Readiness report PDF endpoint + renderer | `backend/routes/travel_diagnostics.js` extension + `backend/services/pdfRenderer.js` extension + `backend/test/routes/travel-diagnostics-readiness-report.test.js` | ⬜ TODO | NEW endpoint `GET /api/travel/diagnostics/:id/readiness-report.pdf` per DD-5.2. Renderer ships the §3.5 10-section template + §3.5.5 config injection (trust / runway / academic-calendar / board-policy-hooks / assurance). Depends on T2 + T6 + T7. ≥10 vitest cases. **Parallel-safe** with T9 + T10. |
+| **T9** | Public form page — `TmcReadiness.jsx` (`/p/tmc/readiness`) | `frontend/src/pages/public/TmcReadiness.jsx` + `frontend/src/__tests__/TmcReadiness.test.jsx` + `frontend/src/App.jsx` route registration | ⬜ TODO | Per PRD §3.1 — 12-question form, one-question-per-screen, progress bar, Q12 email-gate is the only hard wall. Posts to `POST /api/travel/diagnostics/public/submit-tmc` (new endpoint or extend existing /submit). ≥10 vitest cases. **Parallel-safe** with T10 + T11. |
+| **T10** | Public report page — `TmcReadinessReport.jsx` | `frontend/src/pages/public/TmcReadinessReport.jsx` + `frontend/src/__tests__/TmcReadinessReport.test.jsx` + App.jsx route registration | ⬜ TODO | Renders the §3.5 10-section report from saved JSON, NO LLM call at render time. Booking CTA (DD-5.4) wires Google Meet slot picker via Calendar API. ≥8 vitest cases. **Parallel-safe** with T9 + T11. |
+| **T11** | Admin — `EngineWeights` config UI + `human_pick` recorder + "Promote to active" | `frontend/src/pages/travel/DiagnosticBuilder.jsx` + `frontend/src/pages/travel/DiagnosticDetail.jsx` + vitests | ⬜ TODO | EngineWeights tab in DiagnosticBuilder (6 weight inputs + threshold + version bump). human_pick dropdown in DiagnosticDetail (5 starter trips + "other" + "no rec"), senior-role-gated, engine output collapsed until recorded (DD-5.7). "Promote to active" button in trip catalogue admin (uses T5). ≥12 vitest cases. **Parallel-safe** with T9 + T10. |
+| **T12** | E2E gate spec — wire into deploy.yml + coverage.yml | `e2e/tests/travel-tmc-diagnostic-api.spec.js` + `.github/workflows/deploy.yml` + `.github/workflows/coverage.yml` | ⬜ TODO | End-to-end happy path: catalogue seed → public form submit → engine output → report PDF download → brief in CRM → suspect-lead handling. ≥12 cases. Wires into both gate spec lists before teardown-completeness.spec.js. Depends on T2 + T5 + T7 + T8 + T9. **Final integration slice.** |
+| **T13** | Final docs sweep — bump CHANGELOG + README "At a glance" stat refresh | `CHANGELOG.md` + `README.md` + `CLAUDE.md` | ⬜ TODO | Per `bumping-version-docs` skill. Marks the TMC Diagnostic Engine arc complete in the release narrative. |
+
+**Slice DAG:**
+```
+T0 → T1 → {T2, T3, T4} → {T5, T6, T7} → T8 → {T9, T10, T11} → T12 → T13
+```
+
+**Estimated effort if shipped serially:** ~12-15 engineering days (the MVD). With 2-3 parallel agents per dispatch wave, the cron should complete the arc in ~6-8 wall-clock days assuming healthy gate + no triage waves.
+
+### How the autonomous build cron drives this list
+
+The cron (created via `CronCreate`, fires every 10 minutes) does this per tick:
+
+1. **Sync.** `git pull --ff-only origin main`.
+2. **In-flight check.** `git log --since="9 minutes ago"` on the TMC arc paths (`backend/lib/tmc*.js`, `backend/services/tmc*.js`, `backend/routes/travel_tmc_catalogue.js`, `backend/routes/travel_diagnostics.js`, `frontend/src/pages/public/Tmc*.jsx`, this PRD, etc.). If ANY commit landed in the last 9 minutes touching the arc, assume an agent is finishing up. Skip the tick.
+3. **Pick.** Read this §10 checklist. Find the first ⬜ TODO row whose dependencies are all ✅ DONE. If multiple disjoint ⬜ TODO rows are eligible, pick up to 3 for parallel dispatch (matches the DAG's parallel layers).
+4. **Dispatch.** Spawn coding agents with explicit slice scope (this row's Files column) + this row's §-reference + **THE INSTRUCTION TO UPDATE THIS PRD §10 in the same commit**, marking the row as ✅ DONE with their SHA. Agents follow the standing project rules (`git commit --only`, no Co-Authored-By, etc.).
+5. **Stop condition.** If every row T2..T13 is ✅ DONE, log "TMC arc complete — cron can be deleted" and return without dispatching. (The 7-day session-only auto-expiry on the cron also acts as a hard stop.)
 
 ---
 

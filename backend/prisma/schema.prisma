@@ -85,56 +85,56 @@ model Tenant {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  users                User[]
-  contacts             Contact[]
-  activities           Activity[]
-  deals                Deal[]
-  tickets              Ticket[]
-  campaigns            Campaign[]
-  automationRules      AutomationRule[]
-  emailMessages        EmailMessage[]
-  callLogs             CallLog[]
-  attachments          Attachment[]
-  apiKeys              ApiKey[]
-  webhooks             Webhook[]
-  invoices             Invoice[]
-  integrations         Integration[]
-  customEntities       CustomEntity[]
-  customRecords        CustomRecord[]
-  sequences            Sequence[]
-  sequenceEnrollments  SequenceEnrollment[]
-  products             Product[]
-  quotes               Quote[]
-  tasks                Task[]
-  expenses             Expense[]
-  contracts            Contract[]
-  estimates            Estimate[]
-  projects             Project[]
-  notifications        Notification[]
-  auditLogs            AuditLog[]
-  llmCalls             LlmCallLog[]
-  pipelineStages       PipelineStage[]
-  emailTemplates       EmailTemplate[]
-  reportSchedules      ReportSchedule[]
-  marketplaceLeads     MarketplaceLead[]
-  marketplaceConfigs   MarketplaceConfig[]
-  smsMessages          SmsMessage[]
-  smsTemplates         SmsTemplate[]
-  smsConfigs           SmsConfig[]
-  whatsappMessages     WhatsAppMessage[]
-  whatsappTemplates    WhatsAppTemplate[]
-  whatsappConfigs      WhatsAppConfig[]
-  whatsappThreads      WhatsAppThread[]
-  whatsappOptOuts      WhatsAppOptOut[]
-  telephonyConfigs     TelephonyConfig[]
+  users                 User[]
+  contacts              Contact[]
+  activities            Activity[]
+  deals                 Deal[]
+  tickets               Ticket[]
+  campaigns             Campaign[]
+  automationRules       AutomationRule[]
+  emailMessages         EmailMessage[]
+  callLogs              CallLog[]
+  attachments           Attachment[]
+  apiKeys               ApiKey[]
+  webhooks              Webhook[]
+  invoices              Invoice[]
+  integrations          Integration[]
+  customEntities        CustomEntity[]
+  customRecords         CustomRecord[]
+  sequences             Sequence[]
+  sequenceEnrollments   SequenceEnrollment[]
+  products              Product[]
+  quotes                Quote[]
+  tasks                 Task[]
+  expenses              Expense[]
+  contracts             Contract[]
+  estimates             Estimate[]
+  projects              Project[]
+  notifications         Notification[]
+  auditLogs             AuditLog[]
+  llmCalls              LlmCallLog[]
+  pipelineStages        PipelineStage[]
+  emailTemplates        EmailTemplate[]
+  reportSchedules       ReportSchedule[]
+  marketplaceLeads      MarketplaceLead[]
+  marketplaceConfigs    MarketplaceConfig[]
+  smsMessages           SmsMessage[]
+  smsTemplates          SmsTemplate[]
+  smsConfigs            SmsConfig[]
+  whatsappMessages      WhatsAppMessage[]
+  whatsappTemplates     WhatsAppTemplate[]
+  whatsappConfigs       WhatsAppConfig[]
+  whatsappThreads       WhatsAppThread[]
+  whatsappOptOuts       WhatsAppOptOut[]
+  telephonyConfigs      TelephonyConfig[]
   paymentGatewayConfigs PaymentGatewayConfig[]
-  pushSubscriptions    PushSubscription[]
-  pushNotifications    PushNotification[]
-  pushTemplates        PushTemplate[]
-  landingPages         LandingPage[]
-  landingPageAnalytics LandingPageAnalytics[]
-  contactAttachments   ContactAttachment[]
-  emailTrackings       EmailTracking[]
+  pushSubscriptions     PushSubscription[]
+  pushNotifications     PushNotification[]
+  pushTemplates         PushTemplate[]
+  landingPages          LandingPage[]
+  landingPageAnalytics  LandingPageAnalytics[]
+  contactAttachments    ContactAttachment[]
+  emailTrackings        EmailTracking[]
 
   // Wellness vertical
   patients             Patient[]
@@ -384,9 +384,9 @@ model Tenant {
 
   // WhatsApp SaaS (P1+P3 scaffolding) — back-relations for multi-tenant routing,
   // webhook idempotency, async outbound queue, and media-download pipeline.
-  webhookEvents    WebhookEvent[]
-  waOutboundJobs   WaOutboundJob[]
-  waMediaJobs      WaMediaJob[]
+  webhookEvents  WebhookEvent[]
+  waOutboundJobs WaOutboundJob[]
+  waMediaJobs    WaMediaJob[]
 
   // Phase 2 (PRD §4.7) — per-tenant key/value settings table. First
   // consumer is the travel advance-ratio (`travel.advanceRatio.<subBrand>`
@@ -402,6 +402,15 @@ model Tenant {
   // Per-tenant wellness role catalog (replaces the hard-coded
   // VALID_WELLNESS_ROLES whitelist; admins can add custom roles).
   wellnessRoleTypes WellnessRoleType[]
+
+  // TMC Diagnostic & Sales-Routing Engine (PRD_TMC_DIAGNOSTIC_SALES_ROUTING_ENGINE
+  // §3.2 + §3.8, DD-5.1 RESOLVED 2026-06-08). Distinct from TmcTrip /
+  // Itinerary lifecycle — TmcTripCatalogue rows are the curated
+  // active/archived catalogue the engine recommends from; EngineWeights is
+  // the single tunable config row per tenant (one-to-one — singular
+  // back-relation type per @@unique([tenantId]) on EngineWeights).
+  tmcTripCatalogues TmcTripCatalogue[]
+  engineWeights     EngineWeights?
 }
 
 model User {
@@ -1665,18 +1674,18 @@ model SmsConfig {
 // ── WhatsApp ──────────────────────────────────────────────────────
 
 model WhatsAppMessage {
-  id            Int      @id @default(autoincrement())
+  id            Int       @id @default(autoincrement())
   to            String
   from          String?
-  body          String?  @db.Text
+  body          String?   @db.Text
   mediaUrl      String?
   mediaType     String?
-  direction     String   @default("OUTBOUND")
-  status        String   @default("QUEUED") // QUEUED, SENT, DELIVERED, READ, FAILED
+  direction     String    @default("OUTBOUND")
+  status        String    @default("QUEUED") // QUEUED, SENT, DELIVERED, READ, FAILED
   providerMsgId String?
   templateName  String?
   errorMessage  String?
-  read          Boolean  @default(false)
+  read          Boolean   @default(false)
   // Soft-delete for "Delete for me" — hides the message from the
   // operator's CRM view but preserves the row for audit / compliance.
   // Note: Meta WhatsApp Cloud API does NOT support deleting messages
@@ -1688,8 +1697,8 @@ model WhatsAppMessage {
   // as separate Meta webhook events with `type: "reaction"`; the handler
   // dereferences them to the target message via `providerMsgId` instead
   // of creating standalone rows. Empty emoji = reaction-removed.
-  reactionsJson String?  @db.Text
-  createdAt     DateTime @default(now())
+  reactionsJson String?   @db.Text
+  createdAt     DateTime  @default(now())
 
   tenantId Int    @default(1)
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -1774,16 +1783,16 @@ model WhatsAppOptOut {
 }
 
 model WhatsAppTemplate {
-  id             Int      @id @default(autoincrement())
+  id             Int       @id @default(autoincrement())
   name           String
-  language       String   @default("en")
-  category       String   @default("MARKETING") // MARKETING, UTILITY, AUTHENTICATION
+  language       String    @default("en")
+  category       String    @default("MARKETING") // MARKETING, UTILITY, AUTHENTICATION
   headerType     String? // TEXT, IMAGE, DOCUMENT, VIDEO, NONE
   headerContent  String?
-  body           String   @db.Text
+  body           String    @db.Text
   footer         String?
-  buttons        String?  @db.Text // JSON
-  status         String   @default("PENDING") // PENDING, APPROVED, REJECTED
+  buttons        String?   @db.Text // JSON
+  status         String    @default("PENDING") // PENDING, APPROVED, REJECTED
   metaTemplateId String?
   // WhatsApp SaaS P4: template-quality + sync tracking.
   // qualityScore — driven by `message_template_quality_update` webhook.
@@ -1792,8 +1801,8 @@ model WhatsAppTemplate {
   //   delivery silently broke.
   qualityScore   String? // 'HIGH' | 'MEDIUM' | 'LOW' | null
   lastSyncedAt   DateTime?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
   tenantId Int    @default(1)
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -1844,8 +1853,8 @@ model WhatsAppConfig {
   onboardedAt        DateTime?
   lastHealthCheckAt  DateTime?
 
-  createdAt          DateTime  @default(now())
-  updatedAt          DateTime  @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   tenantId Int    @default(1)
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -1941,16 +1950,16 @@ model WebhookEvent {
 //   FAILED    → final on 4xx (auth/template/policy) — do not retry
 //   DEAD      → 5+ retry attempts on 5xx/network — manual replay required
 model WaOutboundJob {
-  id        Int      @id @default(autoincrement())
-  messageId Int      @unique
+  id        Int             @id @default(autoincrement())
+  messageId Int             @unique
   message   WhatsAppMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
   tenantId  Int
-  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant    Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  status    String   @default("PENDING") // PENDING | IN_FLIGHT | DONE | FAILED | DEAD
-  attempts  Int      @default(0)
-  lastError String?  @db.Text
-  runAt     DateTime @default(now())
+  status    String    @default("PENDING") // PENDING | IN_FLIGHT | DONE | FAILED | DEAD
+  attempts  Int       @default(0)
+  lastError String?   @db.Text
+  runAt     DateTime  @default(now())
   lockedAt  DateTime?
   lockedBy  String?
 
@@ -1972,20 +1981,20 @@ model WaOutboundJob {
 // Reuses the existing s3Service (backend/services/s3Service.js) — same
 // bucket, same credentials. Cleanup is bucket-side via lifecycle policy.
 model WaMediaJob {
-  id          Int      @id @default(autoincrement())
-  messageId   Int      @unique
-  message     WhatsAppMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
-  tenantId    Int
-  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id        Int             @id @default(autoincrement())
+  messageId Int             @unique
+  message   WhatsAppMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  tenantId  Int
+  tenant    Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   metaMediaId String
   mimeType    String?
-  status      String   @default("PENDING") // PENDING | DONE | FAILED
-  attempts    Int      @default(0)
-  s3Url       String?  @db.Text
-  lastError   String?  @db.Text
+  status      String  @default("PENDING") // PENDING | DONE | FAILED
+  attempts    Int     @default(0)
+  s3Url       String? @db.Text
+  lastError   String? @db.Text
 
-  createdAt   DateTime @default(now())
+  createdAt   DateTime  @default(now())
   processedAt DateTime?
 
   @@index([status, createdAt])
@@ -4207,26 +4216,26 @@ model WalletCreditBatch {
 }
 
 model GiftCard {
-  id         Int       @id @default(autoincrement())
-  tenantId   Int       @default(1)
-  tenant     Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id           Int       @id @default(autoincrement())
+  tenantId     Int       @default(1)
+  tenant       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   // Wave-B Agent 3 (#653) — `code` is now a masked display value, e.g.
   // "ABCD****WXYZ". It is no longer redeemable; redemption uses codeHash.
   // Existing rows on demo were cleared by Wave-A4 cleanup so no backfill
   // is required. The legacy column is kept for back-compat (UI tables that
   // already render `code` as a column will render the mask instead).
-  code       String
+  code         String
   // bcrypt hash of the plaintext gift-card code (cost 10). Set on issue;
   // never reversible. Lookup hashes the incoming code via bcrypt.compare.
-  codeHash   String?
+  codeHash     String?
   // Last-4 of the original plaintext code, kept in cleartext for UI
   // display ("ending in WXYZ") and to narrow candidates during lookup.
   // Not redeemable on its own.
-  codeLast4  String?
+  codeLast4    String?
   // `amount` = the redeemable "gift value" credited to the recipient on
   // redemption. Kept as-is for back-compat with the existing /giftcards
   // and /giftcards/redeem flows.
-  amount     Float
+  amount       Float
   // v3.7.17 additive fields, matching the Zylu-style "Add Gift Card"
   // form (Name + Validity + Gift Value + Price + Color). All nullable —
   // existing GiftCard rows + the legacy issue flow keep working with
@@ -4244,15 +4253,15 @@ model GiftCard {
   price        Float?
   validityDays Int?
   color        String?
-  currency   String    @default("INR")
-  status     String    @default("active")
-  expiresAt  DateTime?
-  issuedTo   Int?
-  issuedFrom Int?
-  redeemedAt DateTime?
-  redeemedBy Int?
-  createdAt  DateTime  @default(now())
-  updatedAt  DateTime  @updatedAt
+  currency     String    @default("INR")
+  status       String    @default("active")
+  expiresAt    DateTime?
+  issuedTo     Int?
+  issuedFrom   Int?
+  redeemedAt   DateTime?
+  redeemedBy   Int?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 
   @@unique([tenantId, code])
   @@index([tenantId, status])
@@ -4917,13 +4926,13 @@ model SubscriptionPlan {
   // UI so prices/features can change without a redeploy. `pricing` carries
   // all 4 display prices (usd/inr × annual/monthly) as JSON; the canonical
   // `price`+`currency` above stays as the legacy Razorpay charge fallback.
-  planKey       String?  @unique // stable slug: starter | pro | ent
-  displayOrder  Int      @default(0)
-  popular       Boolean  @default(false)
+  planKey       String? @unique // stable slug: starter | pro | ent
+  displayOrder  Int     @default(0)
+  popular       Boolean @default(false)
   accentColor   String? // hex for card accent (e.g. #4f46e5)
   cta           String? // CTA button label
   featuresLabel String? // "Includes" or "Everything in Starter, plus"
-  pricing       String?  @db.Text // JSON: { usd: { annual, monthly, yearAnnualLabel, yearMonthlyLabel }, inr: {...} }
+  pricing       String? @db.Text // JSON: { usd: { annual, monthly, yearAnnualLabel, yearMonthlyLabel }, inr: {...} }
 
   subscriptions Subscription[]
 
@@ -5096,7 +5105,7 @@ model Tag {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  patients  PatientTag[]
+  patients PatientTag[]
 
   @@unique([tenantId, name])
   @@index([tenantId])
@@ -5146,12 +5155,50 @@ model TravelDiagnostic {
   talkingPointsJson   String?   @db.Text // LLM-generated advisor brief
   formVsCallJson      String?   @db.Text // LLM-generated form-vs-call comparison cache
   consentCapturedAt   DateTime?
-  tenant              Tenant    @relation(fields: [tenantId], references: [id], onDelete: Restrict)
-  createdAt           DateTime  @default(now())
-  updatedAt           DateTime  @updatedAt
+
+  // ── TMC Diagnostic & Sales-Routing Engine fields ────────────────────
+  // (PRD_TMC_DIAGNOSTIC_SALES_ROUTING_ENGINE §3.8, additive 2026-06-08).
+  // All nullable — pre-existing diagnostic rows must remain valid; these
+  // fields fill in over the engine's scoring lifecycle.
+  //
+  // engineState: "strong_match" | "partial_match" | "no_match" — §3.3.1.
+  // engineScoresJson: per-signal breakdown per surviving trip, NOT just
+  //   totals — required for §3.3.7 disagreement triage + NF-3 audit.
+  // recommendedTripId / alternativeTripId: bare ints (NOT FK) to
+  //   TmcTripCatalogue.id — keeps catalogue archival cheap during pilot
+  //   tuning; the engine module resolves via lookup. alternativeTripId
+  //   may be null on single_survivor.
+  // icpTier: "amazing" | "breadwinning" | "convenience" | "dangerous" |
+  //   "unclassified" — §3.3.6. NEVER shown to the school.
+  // leadQuality: "clean" | "suspect" — §3.4. Suspect drops below ALL
+  //   clean leads in CRM regardless of icpTier (DD-5.6).
+  // leadQualityReasonsJson: JSON array of reason strings — surfaced in
+  //   the brief header when lead_quality=suspect.
+  // flagsJson: JSON array of: below_min_group, budget_unknown,
+  //   scope_budget_conflict, thin_alternative, single_survivor,
+  //   needs_custom, suspect.
+  // humanPick: trip_id slug; filled by senior reviewer per §3.3.7
+  //   protocol (nullable; senior-role-gated UI per DD-5.7).
+  // weightsVersion: EngineWeights.version snapshot at scoring time —
+  //   required for audit / replay.
+  engineState            String?
+  engineScoresJson       String? @db.Text
+  recommendedTripId      Int?
+  alternativeTripId      Int?
+  icpTier                String?
+  leadQuality            String?
+  leadQualityReasonsJson String? @db.Text
+  flagsJson              String? @db.Text
+  humanPick              String?
+  weightsVersion         String?
+
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([tenantId, subBrand, contactId])
   @@index([tenantId, subBrand, classification])
+  @@index([tenantId, subBrand, engineState])
 }
 
 model TravelDiagnosticQuestionBank {
@@ -5363,7 +5410,7 @@ model TravelMarkupRule {
 model TmcTrip {
   id                   Int                       @id @default(autoincrement())
   tenantId             Int                       @default(1)
-  tripCode             String                    // "bali2026"
+  tripCode             String // "bali2026"
   schoolContactId      Int // FK Contact (B2B school)
   destination          String
   departDate           DateTime
@@ -6267,4 +6314,110 @@ model TravelFlyerTemplate {
   @@index([tenantId])
   @@index([tenantId, subBrand])
   @@index([tenantId, isActive])
+}
+
+// ── TMC Diagnostic & Sales-Routing Engine catalogue ─────────────────
+//
+// PRD_TMC_DIAGNOSTIC_SALES_ROUTING_ENGINE §3.2 + §3.8, DD-5.1 RESOLVED
+// 2026-06-08. The curated trip catalogue the engine recommends from.
+// Distinct lifecycle from `Itinerary` (which carries the per-school
+// instance state machine draft/sent/revised/accepted/rejected) and from
+// `TmcTrip` (which is the booked-trip operational record): catalogue
+// rows carry `status: active | archived`, are read by the engine where
+// status=active, and are tuned independently of any specific school
+// engagement.
+//
+// Foundational engine invariants from the PRD:
+//
+//   - priceBand MUST match a Q9 band exactly: "upto-5k" | "10k-30k" |
+//     "30k-75k" | "1l-2l" | "2l-plus". Hard filter; non-negotiable.
+//     §3.2 + §3.3.2 step 1.
+//   - primaryOutcomesJson are EXACT Q1 keys; skillsDevelopedJson are
+//     EXACT keys from the 7 canonical skills (no fuzzy matching).
+//     §3.2 tagging rules + §3.3 skill catalogue.
+//   - status defaults to "archived" — humans flip to "active" only
+//     after curriculum_hooks + price_band are verified (NF-9 +
+//     §5.5 hard launch gate).
+//   - reportSkillBlurb MUST NOT name the destination (school-facing
+//     report guardrail §3.5 + §3.7.1 Layer 2).
+//   - indicativePricePerStudent is brief-only, NEVER in the school
+//     report. Nullable for variable-price trips.
+//
+// Indexes: (tenantId, status) for engine queries (only active rows),
+// (tenantId, status, tier) for tier-filtered surveys, (tenantId,
+// status, priceBand) for budget-filtered surveys. The hot path is
+// "give me all active trips matching budget X tier Y board Z grade W"
+// — the multi-column indexes cover the first two filter steps.
+model TmcTripCatalogue {
+  id                        Int      @id @default(autoincrement())
+  tenantId                  Int      @default(1)
+  tripId                    String // unique slug per tenant — e.g. "golden-triangle-delhi-agra-jaipur"
+  title                     String
+  tagline                   String?  @db.Text
+  tier                      String // "day" | "domestic" | "international"
+  region                    String?
+  durationDays              Int
+  durationNights            Int      @default(0)
+  minGradeBand              String // "4-6" | "6-8" | "9-10" | "11-12"
+  maxGradeBand              String
+  boardsSupportedJson       String   @db.Text // JSON array of board names
+  minGroupSize              Int
+  priceBand                 String // MUST match a Q9 band exactly: "upto-5k" | "10k-30k" | "30k-75k" | "1l-2l" | "2l-plus"
+  indicativePricePerStudent Int? // null when variable; brief-only, never in the report
+  primaryOutcomesJson       String   @db.Text // JSON array of Q1 option keys this trip serves strongly
+  skillsDevelopedJson       String   @db.Text // JSON array of the 7 canonical skill keys
+  subjectsTouchedJson       String   @db.Text // JSON array, for the brief
+  anchorExperiencesJson     String   @db.Text // JSON array of {name, what_students_do, skill_link, subject_link}
+  curriculumHooksJson       String   @db.Text // JSON array of {board, grade_band, subject, topic, hook_text}
+  reportSkillBlurb          String   @db.Text // 2-3 sentences; NEVER names destination
+  summaryForBrief           String   @db.Text // 2-3 sentences destination-specific note for the executive
+  imageUrl                  String?
+  status                    String   @default("archived") // "active" | "archived" — engine recommends active only
+  tenant                    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  createdAt                 DateTime @default(now())
+  updatedAt                 DateTime @updatedAt
+
+  // Unique slug per tenant — catalogue lookup key from the engine
+  @@unique([tenantId, tripId])
+  // Engine-hot index: list all active trips for this tenant
+  @@index([tenantId, status])
+  // Engine-hot index: list all active trips of a specific tier
+  @@index([tenantId, status, tier])
+  // Engine-hot index: list all active trips in a specific price band
+  @@index([tenantId, status, priceBand])
+}
+
+// ── TMC Diagnostic Engine tunable weights ────────────────────────────
+//
+// PRD_TMC_DIAGNOSTIC_SALES_ROUTING_ENGINE §3.3.3 + §3.3.7 + §3.8.
+// SINGLE config row per tenant (enforced by @unique on tenantId) so
+// tuning is a config change, never a redeploy (NF-2 hot-reloadable).
+//
+// Defaults match the §3.3.3 scoring table exactly:
+//   - weightPrimaryOutcome      = 50  (Q1 primary-outcome match)
+//   - weightSecondarySkill      = 20  per match, capped at 40 (max 2 Q2 secondaries)
+//   - weightGrowthArea          = 15  once; 0 if duplicates a Q2 pick (no double-pay)
+//   - weightCurriculumHook      = 10  (board × grade-band hook present)
+//   - weightGradeBandCenter     = 10  (school band ≥ trip range midpoint ceiling)
+//   - weightTierValueLean       = 8   (only when geo_preference=open AND budget allows)
+//   - scoresWellThreshold       = 70  (§3.3.5 "scores well" floor)
+//
+// version: bumped on every config change so each scored submission's
+// captured weightsVersion (on TravelDiagnostic) is replayable for audit
+// and §3.3.7 weight-tuning disagreement triage.
+model EngineWeights {
+  id                    Int      @id @default(autoincrement())
+  // Enforces single-row-per-tenant — every Tenant has 0 or 1 EngineWeights.
+  tenantId              Int      @unique @default(1)
+  version               String   @default("v1") // bumped on every config change
+  weightPrimaryOutcome  Int      @default(50)
+  weightSecondarySkill  Int      @default(20) // applied per match, capped at 40 (max 2 secondaries)
+  weightGrowthArea      Int      @default(15) // awarded once; 0 if duplicates a Q2 pick
+  weightCurriculumHook  Int      @default(10)
+  weightGradeBandCenter Int      @default(10)
+  weightTierValueLean   Int      @default(8) // applied only when geo_preference=open
+  scoresWellThreshold   Int      @default(70) // §3.3.5 "scores well" floor
+  tenant                Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
 }

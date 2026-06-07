@@ -2592,6 +2592,302 @@ function renderTravelDiagnosticPdf(diagnostic, contact, bank) {
   return bufPromise;
 }
 
+// ── TMC School-Readiness Report PDF (T8 — PRD §3.5) ──────────────────
+//
+// Renders the school-facing readiness report per PRD §3.5: a 10-section
+// document built from:
+//   - engineOutput        (state + icpTier + flags from T2 engine)
+//   - narrative           (guarded LLM Job A output OR Layer-3 fallback
+//                          from T7 — 6 string fields)
+//   - standingFacts       (§3.5.5 config: trust / runway / academic_calendar
+//                          / board_policy_hooks / assurance — literally
+//                          injected by the renderer, never by the LLM)
+//   - boardHook           (resolved §3.5.1 board policy hook string —
+//                          empty when school's curriculum isn't on the
+//                          map; renderer omits the line in that case)
+//   - runwayDisplay       (resolved §3.5.2 runway display string for the
+//                          school's geo_preference — used in §5 cost-of-
+//                          waiting AND §8 assurance framing)
+//   - schoolAnswers       (Q1-Q12 — used for cover page school name +
+//                          contact name/role + ambition restatement)
+//   - bookingUrl          (DD-5.4 — Google Meet slot picker URL OR config
+//                          fallback URL; placeholder text if not provided)
+//   - catalogueMatched    (NOT used for trip names — only present so a
+//                          future "summary card" layout can pull aggregate
+//                          metadata. Per PRD §3.5: never name a trip or
+//                          destination in the school-facing report.)
+//
+// HARD CONTRACT (PRD §3.5):
+//   - NEVER writes a trip name, destination, or price.
+//   - Peer-proof numbers come from standingFacts.trust LITERALLY:
+//       "over 50" schools / "more than 100,000" students since 2015 /
+//       14018 last year / 12055 day / 1658 overnight / 305 international.
+//     Numbers are NEVER inflated, NEVER blended into all-time totals
+//     (§11.4 international stays honest at 305).
+//   - Runway display + lead_days come from standingFacts.runway, never
+//     hardcoded in the renderer.
+//   - Board hook is rendered ONLY when boardHook is a non-empty string.
+//
+// Returns Promise<Buffer> (matches sibling renderers' contract).
+function renderTmcReadinessReport({
+  engineOutput = null,
+  narrative = null,
+  standingFacts = null,
+  boardHook = "",
+  runwayDisplay = "",
+  schoolAnswers = null,
+  bookingUrl = "",
+  catalogueMatched = [], // kept on the API for forward-compat; not rendered as named trips per §3.5
+} = {}) {
+  // Defensively coerce — the route handler passes structured JSON but
+  // a malformed call shouldn't bomb the PDF generation.
+  const n = (narrative && typeof narrative === "object") ? narrative : {};
+  const sa = (schoolAnswers && typeof schoolAnswers === "object") ? schoolAnswers : {};
+  const sf = (standingFacts && typeof standingFacts === "object") ? standingFacts : {};
+  const trust = (sf.trust && typeof sf.trust === "object") ? sf.trust : {};
+  const assurance = (sf.assurance && typeof sf.assurance === "object") ? sf.assurance : {};
+  const profile = (sa.school_profile && typeof sa.school_profile === "object") ? sa.school_profile : {};
+  const contact = (sa.contact && typeof sa.contact === "object") ? sa.contact : {};
+
+  const schoolName = String(profile.school_name || sa.school_name || "Your school").trim();
+  const contactName = String(contact.contact_name || sa.contact_name || "").trim();
+  const contactRole = String(contact.contact_role || sa.contact_role || "").trim();
+  const eState = engineOutput && engineOutput.state ? String(engineOutput.state) : "";
+  // engineOutput is allowed but never surfaces destinations / trip names.
+
+  // PRD §3.5.3 verified peer-proof numbers. Pull from config when present;
+  // fall back to PRD §11.4 verbatim. We render the figures literally — the
+  // §11.4 honesty rule is "305 stays 305, never inflated, never blended."
+  const schoolsSince2015 = String(trust.schools_served_since_2015 || "over 50");
+  const studentsSince2015 = String(trust.students_moved_since_2015 || "more than 100,000");
+  const studentsLastYear = Number.isFinite(Number(trust.students_moved_last_year))
+    ? Number(trust.students_moved_last_year)
+    : 14018;
+  const dayStudents = Number.isFinite(Number(trust.day_students_last_year))
+    ? Number(trust.day_students_last_year)
+    : 12055;
+  const overnightStudents = Number.isFinite(Number(trust.overnight_students_last_year))
+    ? Number(trust.overnight_students_last_year)
+    : 1658;
+  const internationalStudents = Number.isFinite(Number(trust.international_students_last_year))
+    ? Number(trust.international_students_last_year)
+    : 305; // PRD §11.4 — honest at 305
+
+  // The §3.6 assurance block reads from the config; empty fields are
+  // OMITTED per PRD §3.5.5 — never filled with placeholder text.
+  const supervisionRatio = String(assurance.supervision_ratio || "").trim();
+  const tourDirectors = String(assurance.tour_directors || "").trim();
+  const safetyRecord = String(assurance.safety_record_line || trust.safety_record_line || "").trim();
+  const medicalProtocol = String(assurance.medical_emergency_protocol || "").trim();
+  const vendorVetting = String(assurance.vendor_transport_vetting || "").trim();
+  const governancePack = Array.isArray(assurance.governance_pack) ? assurance.governance_pack : [];
+
+  // Document scaffold.
+  const doc = new PDFDocument({ size: "A4", margin: 50 });
+  const bufPromise = streamToBuffer(doc);
+  const pageW = doc.page.width;
+  const pageMargin = 50;
+  const contentW = pageW - pageMargin * 2;
+  const accent = SUB_BRAND_ACCENT.tmc || "#0B4F6C";
+
+  // ── Section 1: Cover ────────────────────────────────────────────────
+  doc.rect(0, 0, pageW, 110).fill(accent);
+  doc.fillColor("#fff").font("Helvetica-Bold").fontSize(20)
+    .text("TMC", pageMargin, 30, { align: "left" });
+  doc.fillColor("#fff").font("Helvetica").fontSize(11)
+    .text("Student experiential readiness profile", pageMargin, 56);
+  doc.fillColor("#fff").font("Helvetica").fontSize(9)
+    .text("Diagnostic-led, never destination-led.", pageMargin, 74);
+
+  doc.fillColor(BRAND.textDark).font("Helvetica-Bold").fontSize(16)
+    .text(schoolName, pageMargin, 140, { width: contentW });
+  doc.font("Helvetica").fontSize(10).fillColor(BRAND.textMuted)
+    .text(`Prepared for ${contactName || "the leadership team"}${contactRole ? `, ${contactRole}` : ""}`, pageMargin, 168, { width: contentW });
+  doc.text(`Date: ${formatDate(new Date())}`, pageMargin, 184, { width: contentW });
+  if (eState) {
+    const stateLabel = eState === "strong_match"
+      ? "Strong readiness fit identified"
+      : eState === "partial_match"
+        ? "Partial readiness fit — see report"
+        : "Custom concept recommended";
+    doc.fillColor(accent).font("Helvetica-Bold").fontSize(10).text(stateLabel, pageMargin, 200);
+  }
+  doc.moveDown(2);
+  doc.y = Math.max(doc.y, 230);
+
+  // ── Section 2: Your ambition, in your words ─────────────────────────
+  renderTmcReportSection(doc, {
+    num: 2,
+    title: "Your ambition, in your words",
+    body: n.ambition_restatement || "",
+    accent,
+  });
+
+  // ── Section 3: Your students' readiness profile ─────────────────────
+  renderTmcReportSection(doc, {
+    num: 3,
+    title: "Your students' readiness profile",
+    body: n.readiness_profile || "",
+    accent,
+  });
+
+  // ── Section 4: What becomes possible ────────────────────────────────
+  renderTmcReportSection(doc, {
+    num: 4,
+    title: "What becomes possible",
+    body: n.what_becomes_possible || "",
+    accent,
+  });
+
+  // ── Section 5: The cost of waiting (+ runway append per PRD §3.5.2) ──
+  let costBody = n.cost_of_waiting || "";
+  if (runwayDisplay) {
+    costBody = costBody
+      ? `${costBody}\n\nPlanning runway for the trip you're considering: ${runwayDisplay}.`
+      : `Planning runway for the trip you're considering: ${runwayDisplay}.`;
+  }
+  renderTmcReportSection(doc, {
+    num: 5,
+    title: "The cost of waiting",
+    body: costBody,
+    accent,
+  });
+
+  // ── Section 6: Schools already moving (peer-proof block §3.5.3) ─────
+  // Literal injection from standingFacts. NEVER inflated. NEVER blended.
+  // PRD §11.4 — international stays honest at 305.
+  const peerBody = [
+    `Since 2015, TMC has served ${schoolsSince2015} schools across India, moving ${studentsSince2015} students.`,
+    `Last year alone, we moved ${studentsLastYear.toLocaleString("en-IN")} students — ${dayStudents.toLocaleString("en-IN")} on day programmes, ${overnightStudents.toLocaleString("en-IN")} on overnight domestic programmes, and ${internationalStudents} on international programmes.`,
+    `International is our emerging tier — a smaller, more committed set of schools choosing it deliberately.`,
+  ].join(" ");
+  renderTmcReportSection(doc, {
+    num: 6,
+    title: "Schools already moving",
+    body: peerBody,
+    accent,
+  });
+
+  // ── Section 7: How this benefits your institution (+ board hook) ────
+  let benefitBody = n.institutional_benefit || "";
+  if (boardHook) {
+    benefitBody = benefitBody
+      ? `${benefitBody}\n\nCurriculum alignment: ${boardHook}`
+      : `Curriculum alignment: ${boardHook}`;
+  }
+  renderTmcReportSection(doc, {
+    num: 7,
+    title: "How this benefits your institution",
+    body: benefitBody,
+    accent,
+  });
+
+  // ── Section 8: Your decision, de-risked (assurance §3.5.4) ──────────
+  let assuranceBody = n.assurance_framing || "";
+  const assuranceLines = [];
+  if (supervisionRatio) assuranceLines.push(`Supervision: ${supervisionRatio}.`);
+  if (tourDirectors) assuranceLines.push(`Tour directors: ${tourDirectors}.`);
+  if (safetyRecord) assuranceLines.push(`Safety record: ${safetyRecord}.`);
+  if (medicalProtocol) assuranceLines.push(`Medical/emergency: ${medicalProtocol}.`);
+  if (vendorVetting) assuranceLines.push(`Vendor + transport: ${vendorVetting}.`);
+  if (governancePack.length > 0) {
+    assuranceLines.push(`Governance pack provided: ${governancePack.join("; ")}.`);
+  }
+  const assuranceCombined = assuranceBody
+    ? [assuranceBody, ...assuranceLines].filter(Boolean).join("\n\n")
+    : assuranceLines.join("\n");
+  renderTmcReportSection(doc, {
+    num: 8,
+    title: "Your decision, de-risked",
+    body: assuranceCombined,
+    accent,
+  });
+
+  // ── Section 9: How TMC works ────────────────────────────────────────
+  const howWeWorkBody = [
+    `Every TMC trip starts with a diagnostic like the one you just completed. We never pick a destination first.`,
+    `${schoolsSince2015} schools and ${studentsSince2015} students since 2015 is the operating record this model produced.`,
+  ].join(" ");
+  renderTmcReportSection(doc, {
+    num: 9,
+    title: "How TMC works",
+    body: howWeWorkBody,
+    accent,
+  });
+
+  // ── Section 10: Single CTA ──────────────────────────────────────────
+  if (doc.y > doc.page.height - 200) doc.addPage();
+  doc.y = Math.max(doc.y, doc.y + 4);
+  doc.rect(pageMargin, doc.y, contentW, 110).fillAndStroke(BRAND.tealSoft, accent);
+  const ctaY = doc.y - 105;
+  doc.font("Helvetica-Bold").fontSize(13).fillColor(accent)
+    .text("Your students are ready.", pageMargin + 14, ctaY + 12, { width: contentW - 28 });
+  doc.font("Helvetica").fontSize(10).fillColor(BRAND.textBody)
+    .text(
+      "The calendar is the only thing between this profile and a programme that runs next year. " +
+      "Book a 30-minute conversation with the TMC team to walk through this report together.",
+      pageMargin + 14,
+      ctaY + 36,
+      { width: contentW - 28 },
+    );
+  if (bookingUrl) {
+    doc.font("Helvetica-Bold").fontSize(10).fillColor(accent)
+      .text(`Book your slot: ${bookingUrl}`, pageMargin + 14, ctaY + 84, { width: contentW - 28 });
+  } else {
+    doc.font("Helvetica").fontSize(9).fillColor(BRAND.textMuted)
+      .text(
+        "Your TMC executive will reach out within one working day to share their calendar.",
+        pageMargin + 14,
+        ctaY + 84,
+        { width: contentW - 28 },
+      );
+  }
+  doc.y = ctaY + 120;
+
+  // Footer with attribution.
+  const footerY = doc.page.height - doc.page.margins.bottom - 28;
+  doc.moveTo(pageMargin, footerY).lineTo(pageW - pageMargin, footerY)
+    .lineWidth(0.5).strokeColor(BRAND.border).stroke();
+  doc.font("Helvetica").fontSize(8).fillColor(BRAND.textMuted)
+    .text(
+      "TMC — School Trips. Diagnostic-led, never destination-led. " +
+      "Trust + runway + assurance figures verified by TMC; renderer-injected per readiness-report standing-facts policy.",
+      pageMargin, footerY + 8, { width: contentW, align: "center" },
+    );
+
+  doc.end();
+  return bufPromise;
+}
+
+/**
+ * Helper for the TMC readiness report — renders one numbered section
+ * with title + body, paginating when needed. Pure layout helper; never
+ * touches engineOutput or names a trip. Body is plain text (no HTML).
+ */
+function renderTmcReportSection(doc, { num, title, body, accent }) {
+  const pageMargin = 50;
+  const pageW = doc.page.width;
+  const contentW = pageW - pageMargin * 2;
+
+  // Soft page-break guard — drop to next page if the section header
+  // would otherwise sit at the very bottom.
+  if (doc.y > doc.page.height - 120) doc.addPage();
+
+  doc.y = Math.max(doc.y, doc.y + 6);
+  doc.font("Helvetica-Bold").fontSize(12).fillColor(accent)
+    .text(`${num}. ${title}`, pageMargin, doc.y, { width: contentW });
+  doc.moveDown(0.3);
+
+  const text = String(body || "").trim() || "—";
+  doc.font("Helvetica").fontSize(10).fillColor(BRAND.textBody)
+    .text(text, pageMargin, doc.y, {
+      width: contentW,
+      align: "left",
+      lineGap: 2,
+    });
+  doc.moveDown(0.7);
+}
+
 // ── Travel CRM — quote PDF (DD-5.6) ─────────────────────────────────
 function renderTravelQuotePdf(quote) {
   const q = quote || {};
@@ -3240,6 +3536,7 @@ module.exports = {
   // travel_invoices / travel_quotes route handlers and the
   // slice-2/8/13/18 gate specs (#900/#901/#902).
   renderTravelDiagnosticPdf,
+  renderTmcReadinessReport,
   renderTravelItineraryPdf,
   renderTravelStallPersonalisedPdf,
   renderTravelQuotePdf,

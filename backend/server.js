@@ -651,6 +651,14 @@ app.use("/api", (req, res, next) => {
   // anonymously. Admin CRUD (POST/PUT/DELETE + GET /plans/admin) stays gated
   // by the route-level verifyToken+verifyRole middleware below.
   if (req.method === 'GET' && req.path === '/subscriptions/plans') return next();
+  // TMC public readiness PDF — `/travel/diagnostics/:id/readiness-report.pdf`
+  // is designed public per PRD §5.1 DD-5.2 (the school clicks the report-
+  // download URL surfaced after public submit-tmc).  Can't be a prefix
+  // entry in openPaths because the `:id` segment is dynamic; suffix match
+  // on the route shape lets it through without auth.  Tightly scoped to
+  // GET + the exact suffix so other /travel/diagnostics/:id sub-routes
+  // stay auth-gated.
+  if (req.method === 'GET' && /^\/travel\/diagnostics\/\d+\/readiness-report\.pdf$/.test(req.path)) return next();
   verifyToken(req, res, (err) => {
     if (err) return next(err);
     checkSubscription(req, res, next);

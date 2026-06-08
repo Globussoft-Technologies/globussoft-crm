@@ -1971,19 +1971,41 @@ router.post("/diagnostics/public/submit-tmc", async (req, res) => {
     // Lead-quality classifier (T3).  Repeat-submitter prior count: best-
     // effort lookup; on failure we treat as 0 prior submissions (PRD §3.4
     // is explicit that lead-quality NEVER blocks report generation).
+    //
+    // PRD §3.4 rule 4 verbatim: ">3 submissions on (email, phone) in the
+    // last 24h" — the count MUST be scoped to THIS submitter's email OR
+    // phone, NOT every TMC submission on the tenant.  Pre-T12 fix this
+    // counted tenant-wide TMC submissions which made every test in a
+    // multi-test e2e suite suspect after the 4th run (rule 4 fired for
+    // every later submission), causing test 4's `clean` assertion to red
+    // on retries.  Counting via contact linkage gives the right per-
+    // submitter window: lookup contact(s) matching this email or phone,
+    // then count their TravelDiagnostic rows in the last 24h.
     let priorSubmissionsLast24h = 0;
     try {
       const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
-      priorSubmissionsLast24h = await prisma.travelDiagnostic.count({
-        where: {
-          tenantId: tenant.id,
-          subBrand: "tmc",
-          createdAt: { gte: since },
-          // Coarse: any submission from the same email or phone in the
-          // last 24h via the contact-id linkage.  A stricter implementation
-          // would look at contact.email — kept simple here.
-        },
-      });
+      const submitterPhone = typeof contact.phone === "string" ? contact.phone.trim() : "";
+      const contactOr = [];
+      if (email) contactOr.push({ email });
+      if (submitterPhone) contactOr.push({ phone: submitterPhone });
+      let priorContactIds = [];
+      if (contactOr.length > 0) {
+        const priorContacts = await prisma.contact.findMany({
+          where: { tenantId: tenant.id, OR: contactOr },
+          select: { id: true },
+        });
+        priorContactIds = priorContacts.map((c) => c.id);
+      }
+      if (priorContactIds.length > 0) {
+        priorSubmissionsLast24h = await prisma.travelDiagnostic.count({
+          where: {
+            tenantId: tenant.id,
+            subBrand: "tmc",
+            createdAt: { gte: since },
+            contactId: { in: priorContactIds },
+          },
+        });
+      }
     } catch { /* ignore */ }
     const leadQualityResult = tmcLeadQuality.classifyLeadQuality(answers, {
       priorSubmissionsLast24h,

@@ -33,12 +33,14 @@
  *      read at runtime from the trip catalogue's `status=archived` rows + the union
  *      of city/country/region/landmark/anchor-experience phrases from active trips per
  *      PRD §3.7.1 verbatim). Case-insensitive whole-word + multi-word phrase match.
- *   2. Number check — any 3+ digit integer in LLM text that ISN'T on the standing-facts
- *      whitelist (14018 / 12055 / 1658 / 305 / 50 / 100000 / 2015 — the §3.5.5 standing-facts
- *      block AND the §3.5.3 peer-proof aggregate numbers) → REJECT. The PRD's stricter form
- *      ("no digit-bearing token + no number-word") is what the LLM should never produce — Trust
- *      figures + runway are renderer-injected per NF-8. Allowing the whitelist means an LLM
- *      output that quotes the trust block accurately doesn't false-positive.
+ *   2. Number check — both DIGIT form (any 3+ digit integer) AND SPELLED form (canonicalised
+ *      number-words ≥ 100, e.g. "two hundred" → 200, "three hundred and five" → 305) in LLM
+ *      text that ISN'T on the standing-facts whitelist (14018 / 12055 / 1658 / 305 / 50 /
+ *      100000 / 2015 — the §3.5.5 standing-facts block AND the §3.5.3 peer-proof aggregate
+ *      numbers) → REJECT. The PRD §3.7.1 verbatim is "no digit-bearing token + no number-word";
+ *      T17 closed the spelled-form gap (was integer-only previously). Trust figures + runway
+ *      are renderer-injected per NF-8. Mixed forms like "200 (two hundred)" are coalesced so
+ *      the same value doesn't fire twice.
  *   3. Board-term check — block the 9 PRD-named board terms (NEP, CBSE, ICSE, ISC, IGCSE, IB,
  *      Cambridge, CISCE, CAS, SUPW, NCF) anywhere in output. Board hook is renderer-injected
  *      from §3.5.1 board curriculum map; LLM never writes a board policy claim.
@@ -240,6 +242,162 @@ function extractIntegers(text) {
   return matches || [];
 }
 
+// ---------------------------------------------------------------------------
+// Spelled-form number canonicaliser (PRD §3.7.1 check 2 — word form)
+//
+// PRD §3.7.1 check 2 names BOTH digit AND word forms as forbidden ("no
+// digit-bearing token + no number-word carrying a statistic / ratio / count /
+// currency"). An LLM that writes "five hundred international students" is
+// making the same statistical claim as "500" and must be rejected the same
+// way.
+//
+// Supports: units (zero..nine), teens (ten..nineteen), tens (twenty..ninety),
+// scale words (hundred, thousand, million), hyphens, the "and" connector
+// (UK form "three hundred and five" → 305), and case-folding. Composes
+// "<n> hundred [thousand]" / "<n> thousand" naturally via a scale-stack.
+//
+// NOT supported (documented limitations — flag for follow-up if the LLM
+// produces these):
+//   - billion / trillion and higher scales
+//   - ordinals (first / second / twenty-first)
+//   - fractions (one half / three quarters)
+//   - decimals (five point seven)
+//   - non-English / Hindi / regional spelled numbers
+//
+// Floor: 100 (mirrors extractIntegers's \d{3,} rule). "fifty" (50) or
+// "twenty-five" (25) cannot collide with the whitelist and are intentionally
+// dropped to keep the canonicaliser cheap.
+// ---------------------------------------------------------------------------
+
+const NUMBER_WORD_UNITS = {
+  zero: 0,
+  one: 1,
+  two: 2,
+  three: 3,
+  four: 4,
+  five: 5,
+  six: 6,
+  seven: 7,
+  eight: 8,
+  nine: 9,
+  ten: 10,
+  eleven: 11,
+  twelve: 12,
+  thirteen: 13,
+  fourteen: 14,
+  fifteen: 15,
+  sixteen: 16,
+  seventeen: 17,
+  eighteen: 18,
+  nineteen: 19,
+  twenty: 20,
+  thirty: 30,
+  forty: 40,
+  fifty: 50,
+  sixty: 60,
+  seventy: 70,
+  eighty: 80,
+  ninety: 90,
+};
+
+const NUMBER_WORD_SCALES = {
+  hundred: 100,
+  thousand: 1000,
+  million: 1000000,
+};
+
+const SPELLED_NUMBER_FLOOR = 100;
+
+/**
+ * Extract all spelled-form integers ≥ SPELLED_NUMBER_FLOOR from a text string.
+ *
+ * Returns array of integer values (numbers, not strings — caller stringifies
+ * when comparing against the whitelist to match extractIntegers's contract).
+ * Each value is the canonicalised total of a contiguous run of number-words
+ * (with "and" connectors and case/hyphen normalisation).
+ *
+ * Walks tokens forward, maintaining a running sub-total (`current`) and a
+ * committed total (`total`). Scale words above hundred (thousand / million)
+ * commit-and-reset; "hundred" multiplies sub-total in place. Non-number
+ * tokens close the phrase.
+ */
+function extractSpelledIntegers(text) {
+  if (typeof text !== "string") return [];
+
+  // Normalise: lowercase, hyphens → spaces. Sentence-boundary punctuation
+  // (. , ; : ! ? ( ) [ ] " ' / | + newlines / tabs) becomes an explicit
+  // BREAK sentinel so phrases on either side don't fuse — "two hundred.
+  // three hundred." stays as 2 phrases not "two hundred three hundred"
+  // (which would canonicalise to 500). Then drop remaining non-alpha and
+  // collapse whitespace.
+  const BREAK = " __break__ ";
+  const normalised = text
+    .toLowerCase()
+    .replace(/-/g, " ")
+    .replace(/[.,;:!?()\[\]"'/|+\n\r\t]/g, BREAK)
+    .replace(/[^a-z_\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (normalised.length === 0) return [];
+
+  const tokens = normalised.split(" ");
+  const results = [];
+
+  let total = 0;
+  let current = 0;
+  let inNumber = false;
+
+  const closePhrase = () => {
+    const value = total + current;
+    if (inNumber && value >= SPELLED_NUMBER_FLOOR) {
+      results.push(value);
+    }
+    total = 0;
+    current = 0;
+    inNumber = false;
+  };
+
+  for (let i = 0; i < tokens.length; i++) {
+    const tok = tokens[i];
+
+    if (Object.prototype.hasOwnProperty.call(NUMBER_WORD_UNITS, tok)) {
+      current += NUMBER_WORD_UNITS[tok];
+      inNumber = true;
+      continue;
+    }
+
+    if (tok === "hundred") {
+      // "two hundred" → 200; bare "hundred" → 100.
+      current = (current || 1) * 100;
+      inNumber = true;
+      continue;
+    }
+
+    if (tok === "thousand" || tok === "million") {
+      // Commit (current × scale) into total, reset sub-total.
+      // "two hundred thousand" = (200) * 1000 = 200000.
+      const scale = NUMBER_WORD_SCALES[tok];
+      total += (current || 1) * scale;
+      current = 0;
+      inNumber = true;
+      continue;
+    }
+
+    if (tok === "and" && inNumber) {
+      // UK connector — "three hundred and five" → 305. Skip silently.
+      continue;
+    }
+
+    // Non-number token — close out the running phrase.
+    closePhrase();
+  }
+
+  closePhrase(); // flush trailing phrase
+
+  return results;
+}
+
 /**
  * Collect every string field's text content from an output object into a single
  * concatenated string for content-check probes. Arrays of strings are flattened.
@@ -343,20 +501,39 @@ function checkContent(output, opts) {
     }
   }
 
-  // ---- Check 2: number check
+  // ---- Check 2: number check (digit form + spelled form per PRD §3.7.1)
   // The LLM never produces a number (NF-8). Trust + runway figures are
   // renderer-injected. Allow the standing-facts whitelist (so an LLM that
   // quotes "since 2015" doesn't false-positive); REJECT any other 3+ digit
   // integer.
+  //
+  // PRD §3.7.1 check 2 names BOTH "digit-bearing token" AND "number-word" as
+  // forbidden — an LLM that writes "five hundred international students" is
+  // making the same statistical claim as "500" and must be rejected the same
+  // way. T17 extends the original integer-only check (extractIntegers) with a
+  // spelled-form pass (extractSpelledIntegers) sharing the same whitelist +
+  // the same ≥100 floor.
+  //
+  // De-duplication: when an LLM writes "200 (two hundred)" both passes emit
+  // 200; the rejection should fire ONCE not twice. seenRejections coalesces.
   const whitelist = new Set(
     Array.isArray(opts.honestNumbersWhitelist)
       ? opts.honestNumbersWhitelist.map(String)
       : HONEST_NUMBERS_WHITELIST,
   );
   const integers = extractIntegers(text);
+  const spelledIntegers = extractSpelledIntegers(text).map(String);
+  const seenRejections = new Set();
   for (const n of integers) {
-    if (!whitelist.has(n)) {
+    if (!whitelist.has(n) && !seenRejections.has(n)) {
       reasons.push(`invented_number:${n}`);
+      seenRejections.add(n);
+    }
+  }
+  for (const n of spelledIntegers) {
+    if (!whitelist.has(n) && !seenRejections.has(n)) {
+      reasons.push(`invented_number_spelled:${n}`);
+      seenRejections.add(n);
     }
   }
 
@@ -537,6 +714,7 @@ module.exports = {
   buildJobAFallback,
   buildJobBFallback,
   extractIntegers,
+  extractSpelledIntegers,
   makeWholeWordRegex,
   makeSubstringRegex,
 };

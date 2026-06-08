@@ -34,6 +34,7 @@ const {
   buildJobAFallback,
   buildJobBFallback,
   extractIntegers,
+  extractSpelledIntegers,
   makeWholeWordRegex,
 } = await import('../../lib/tmcReportGuard.js').then((m) => m.default || m);
 
@@ -548,5 +549,173 @@ describe('Exported constants', () => {
     expect(DEFAULT_RESTRICTED_WORDS).toContain('limited time');
     expect(DEFAULT_RESTRICTED_WORDS).toContain('guaranteed');
     expect(DEFAULT_RESTRICTED_WORDS).toContain('act now');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T17 — Layer 2 number-word check (spelled-form integers)
+//
+// PRD §3.7.1 check 2 names BOTH digit AND word forms as forbidden. The
+// original Layer 2 implementation (T7) only scanned 3+ digit integers and
+// missed spelled forms like "five hundred" or "two thousand five hundred".
+// T17 closes the gap with a word-to-digit canonicaliser that runs the same
+// whitelist check on spelled forms ≥ 100. Whitelisted spelled forms (e.g.
+// "three hundred and five" → 305) accept; non-whitelisted spelled forms
+// reject with a `invented_number_spelled:<value>` reason.
+//
+// Floor: 100 (matches the existing integer-check ≥3-digit floor). Values
+// below floor (e.g. "fifty", "twenty-five") cannot collide with whitelist
+// and are intentionally dropped to keep the canonicaliser cheap.
+//
+// Limitations (documented inline in the source): no support for billion+,
+// ordinals, fractions, decimals, or non-English forms. If the LLM ever
+// produces those, a follow-up slice should extend the canonicaliser.
+
+describe('Layer 2 — number-word check (T17)', () => {
+  test('"three hundred and five" → 305 → ACCEPT (on whitelist)', () => {
+    const output = makeValidJobAOutput();
+    output.what_becomes_possible += ' three hundred and five international students.';
+    const result = guardReportOutput('A', output, { schoolAnswers: makeSchoolAnswers() });
+    expect(result.layer).toBe(1);
+    expect(result.accepted).toBe(true);
+  });
+
+  test('"fourteen thousand and eighteen" → 14018 → ACCEPT (on whitelist)', () => {
+    const output = makeValidJobAOutput();
+    output.cost_of_waiting += ' Last year fourteen thousand and eighteen students moved.';
+    const result = guardReportOutput('A', output, { schoolAnswers: makeSchoolAnswers() });
+    expect(result.layer).toBe(1);
+    expect(result.accepted).toBe(true);
+  });
+
+  test('"two hundred international students" → 200 → REJECT (off-whitelist spelled)', () => {
+    const output = makeValidJobAOutput();
+    output.what_becomes_possible += ' We moved two hundred international students last year.';
+    const result = guardReportOutput('A', output, { schoolAnswers: makeSchoolAnswers() });
+    expect(result.layer).toBe(3);
+    expect(result.reasons).toContain('invented_number_spelled:200');
+  });
+
+  test('"one hundred thousand" → 100000 → ACCEPT', () => {
+    const output = makeValidJobAOutput();
+    output.institutional_benefit += ' Since 2015 we have moved more than one hundred thousand students.';
+    const result = guardReportOutput('A', output, { schoolAnswers: makeSchoolAnswers() });
+    expect(result.layer).toBe(1);
+    expect(result.accepted).toBe(true);
+  });
+
+  test('"Twenty-five" (mixed-case + hyphen, < floor) → ACCEPT (below 3-digit floor)', () => {
+    const output = makeValidJobAOutput();
+    output.cost_of_waiting += ' Twenty-five schools have run this with us so far.';
+    const result = guardReportOutput('A', output, { schoolAnswers: makeSchoolAnswers() });
+    expect(result.layer).toBe(1);
+    expect(result.accepted).toBe(true);
+  });
+
+  test('"five hundred" → 500 → REJECT (off-whitelist spelled)', () => {
+    const output = makeValidJobAOutput();
+    output.cost_of_waiting += ' five hundred families benefited last year.';
+    const result = guardReportOutput('A', output, { schoolAnswers: makeSchoolAnswers() });
+    expect(result.layer).toBe(3);
+    expect(result.reasons).toContain('invented_number_spelled:500');
+  });
+
+  test('"fifty plus schools" → 50 (< floor) → ACCEPT', () => {
+    const output = makeValidJobAOutput();
+    output.institutional_benefit += ' Fifty plus schools have joined since 2015.';
+    const result = guardReportOutput('A', output, { schoolAnswers: makeSchoolAnswers() });
+    expect(result.layer).toBe(1);
+    expect(result.accepted).toBe(true);
+  });
+
+  test('mixed "200 (two hundred)" → single REJECT, not double-firing', () => {
+    const output = makeValidJobAOutput();
+    output.what_becomes_possible += ' We moved 200 (two hundred) students.';
+    const result = guardReportOutput('A', output, { schoolAnswers: makeSchoolAnswers() });
+    expect(result.layer).toBe(3);
+    // Count rejections referencing the value 200 — either digit OR spelled
+    // form is allowed, but the total count for 200 must be exactly 1.
+    const twoHundredRejections = result.reasons.filter(
+      (r) => r === 'invented_number:200' || r === 'invented_number_spelled:200',
+    );
+    expect(twoHundredRejections).toHaveLength(1);
+  });
+
+  test('Layer 3 fallback triggers when spelled REJECT fires', () => {
+    const output = makeValidJobAOutput();
+    output.cost_of_waiting += ' five hundred new students.';
+    const result = guardReportOutput('A', output, { schoolAnswers: makeSchoolAnswers() });
+    expect(result.layer).toBe(3);
+    expect(result.accepted).toBe(false);
+    // Fallback object MUST have all 6 Job A fields populated as non-empty
+    // strings — renderer (T8) cannot crash on a missing field.
+    for (const field of JOB_A_FIELDS) {
+      expect(result.output).toHaveProperty(field);
+      expect(typeof result.output[field]).toBe('string');
+      expect(result.output[field].length).toBeGreaterThan(0);
+    }
+  });
+
+  test('"one hundred two thousand" → 102000 → REJECT (scale composition for non-whitelisted values)', () => {
+    // Bonus scale-invariance test. The canonicaliser handles "<n> thousand"
+    // composition: 102000 is not on the whitelist so this rejects. If scale
+    // composition didn't work, the test would silently pass at Layer 1 —
+    // making the rejection assertion the load-bearing check that the
+    // composition actually works.
+    const output = makeValidJobAOutput();
+    output.what_becomes_possible += ' one hundred two thousand students reportedly travelled.';
+    const result = guardReportOutput('A', output, { schoolAnswers: makeSchoolAnswers() });
+    expect(result.layer).toBe(3);
+    expect(result.reasons).toContain('invented_number_spelled:102000');
+  });
+
+  test('caller-supplied honestNumbersWhitelist also applies to spelled forms', () => {
+    const output = makeValidJobAOutput();
+    output.cost_of_waiting += ' five hundred new students.';
+    const result = guardReportOutput('A', output, {
+      honestNumbersWhitelist: [...HONEST_NUMBERS_WHITELIST, 500],
+    });
+    expect(result.layer).toBe(1);
+    expect(result.accepted).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Helper: extractSpelledIntegers — direct unit tests (T17)
+
+describe('Helper: extractSpelledIntegers', () => {
+  test('parses common compound forms', () => {
+    expect(extractSpelledIntegers('three hundred and five students')).toEqual([305]);
+    expect(extractSpelledIntegers('fourteen thousand and eighteen')).toEqual([14018]);
+    expect(extractSpelledIntegers('two hundred ')).toEqual([200]);
+    expect(extractSpelledIntegers('one hundred thousand')).toEqual([100000]);
+  });
+
+  test('handles hyphens and case', () => {
+    // Hyphens become spaces; case is folded. "Twenty-five" is below floor.
+    expect(extractSpelledIntegers('Twenty-Five')).toEqual([]);
+    expect(extractSpelledIntegers('TWO HUNDRED')).toEqual([200]);
+    expect(extractSpelledIntegers('one-hundred')).toEqual([100]);
+  });
+
+  test('drops values below 100 floor', () => {
+    expect(extractSpelledIntegers('fifty schools')).toEqual([]);
+    expect(extractSpelledIntegers('twenty-five')).toEqual([]);
+    expect(extractSpelledIntegers('ninety nine')).toEqual([]);
+  });
+
+  test('emits multiple values across the same text', () => {
+    expect(extractSpelledIntegers('two hundred. three hundred. five hundred.')).toEqual([200, 300, 500]);
+  });
+
+  test('non-string input returns []', () => {
+    expect(extractSpelledIntegers(null)).toEqual([]);
+    expect(extractSpelledIntegers(undefined)).toEqual([]);
+    expect(extractSpelledIntegers(42)).toEqual([]);
+  });
+
+  test('text with no number words returns []', () => {
+    expect(extractSpelledIntegers('the canals of Amsterdam')).toEqual([]);
+    expect(extractSpelledIntegers('')).toEqual([]);
   });
 });

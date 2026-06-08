@@ -165,6 +165,9 @@ const TravelDiagnostics = lazy(() => import("./pages/travel/Diagnostics"));
 const TravelDiagnosticWizard = lazy(() => import("./pages/travel/DiagnosticWizard"));
 const TravelDiagnosticBuilder = lazy(() => import("./pages/travel/DiagnosticBuilder"));
 const TravelDiagnosticDetail = lazy(() => import("./pages/travel/DiagnosticDetail"));
+// T16 — dedicated TMC catalogue admin (extracts the Promote-to-active sub-panel
+// from DiagnosticBuilder's EngineWeights tab into a first-class page).
+const TravelTmcCatalogueAdmin = lazy(() => import("./pages/travel/TmcCatalogueAdmin"));
 const TravelItineraries = lazy(() => import("./pages/travel/Itineraries"));
 const TravelTrips = lazy(() => import("./pages/travel/Trips"));
 const TravelTripDetail = lazy(() => import("./pages/travel/TripDetail"));
@@ -1288,6 +1291,10 @@ export default function App() {
               <Route path="travel/flyer-templates" element={<TravelOnly><TravelFlyerTemplates /></TravelOnly>} />
               <Route path="travel/religious-packets" element={<TravelOnly><TravelReligiousPackets /></TravelOnly>} />
               <Route path="travel/tmc/microsite-preview" element={<TravelOnly><TravelTmcMicrositePreview /></TravelOnly>} />
+              {/* T16 — dedicated TMC catalogue admin page; the
+                  Promote-to-active surface is also retained as a sub-panel
+                  inside DiagnosticBuilder's EngineWeights tab for now. */}
+              <Route path="travel/tmc/catalogue" element={<TravelOnly><TravelTmcCatalogueAdmin /></TravelOnly>} />
               <Route path="travel/itineraries/:id" element={<TravelOnly><TravelItineraryDetail /></TravelOnly>} />
               <Route path="travel/leads/:contactId" element={<TravelOnly><TravelLeadDetail /></TravelOnly>} />
               {/* Arc 2 #904 slice — InboundLeads admin (STUB client-side

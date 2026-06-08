@@ -79,6 +79,20 @@ prisma.auditLog.findFirst = vi.fn().mockResolvedValue(null);
 prisma.tenant = prisma.tenant || {};
 prisma.tenant.findUnique = vi.fn().mockResolvedValue({ vertical: 'wellness' });
 
+// requirePermission middleware (backend/middleware/requirePermission.js:178)
+// resolves the caller's effective roles via userRole.findMany. When the
+// route declares `anyOfPermissions` (drugs writeGate does), the deny path
+// for a non-allowed wellnessRole calls getUserPermissions → loadUserPermissions
+// → our empty-array mock → permSet.size === 0 → maybeSelfHealAdminPermissions
+// which queries prisma.user.findUnique. We stub both: userRole.findMany to []
+// (no role grants) AND user.findUnique to null (self-heal exits at the
+// "user not found" early return), so the middleware lands on the
+// 403 WELLNESS_ROLE_FORBIDDEN path the test asserts.
+prisma.userRole = prisma.userRole || {};
+prisma.userRole.findMany = vi.fn();
+prisma.user = prisma.user || {};
+prisma.user.findUnique = vi.fn().mockResolvedValue(null);
+
 // eventBus stubs — writeAudit triggers a best-effort emit downstream.
 const eventBus = requireCJS('../../lib/eventBus');
 if (eventBus.emitEvent) eventBus.emitEvent = vi.fn().mockResolvedValue(undefined);
@@ -118,6 +132,7 @@ beforeEach(() => {
   prisma.drug.update.mockReset();
   prisma.drug.delete.mockReset();
   prisma.auditLog.create.mockClear();
+  prisma.userRole.findMany.mockReset().mockResolvedValue([]);
 
   // Sensible defaults — individual tests override.
   prisma.drug.findMany.mockResolvedValue([]);

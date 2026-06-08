@@ -62,6 +62,20 @@ prisma.auditLog.findFirst = vi.fn().mockResolvedValue(null);
 prisma.automationRule = prisma.automationRule || {};
 prisma.automationRule.findMany = vi.fn().mockResolvedValue([]);
 
+// requirePermission middleware (backend/middleware/requirePermission.js:178)
+// resolves the caller's effective roles via userRole.findMany. When the
+// route declares `anyOfPermissions` (POS adminGate does), the deny path
+// for a non-allowed wellnessRole calls getUserPermissions → loadUserPermissions
+// → our empty-array mock → permSet.size === 0 → maybeSelfHealAdminPermissions
+// which queries prisma.user.findUnique. We stub both: userRole.findMany to []
+// (no role grants) AND user.findUnique to null (self-heal exits at the
+// "user not found" early return), so the middleware lands on the
+// 403 WELLNESS_ROLE_FORBIDDEN path the test asserts.
+prisma.userRole = prisma.userRole || {};
+prisma.userRole.findMany = vi.fn();
+prisma.user = prisma.user || {};
+prisma.user.findUnique = vi.fn().mockResolvedValue(null);
+
 import express from 'express';
 import request from 'supertest';
 import { createRequire } from 'node:module';
@@ -95,6 +109,7 @@ beforeEach(() => {
   prisma.auditLog.create.mockResolvedValue({});
   prisma.tenant.findUnique.mockReset();
   prisma.tenant.findUnique.mockResolvedValue({ vertical: 'wellness' });
+  prisma.userRole.findMany.mockReset().mockResolvedValue([]);
 });
 
 // ── POST /shifts/:id/deposit ────────────────────────────────────────

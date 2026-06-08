@@ -21,6 +21,10 @@ module.exports = defineConfig({
     globals: true,
     environment: 'node',
     include: ['test/**/*.test.js'],
+    // T35: guard against real-DB fall-through. test/setup.js refuses to start
+    // the suite if DATABASE_URL points at a non-local host (unless
+    // ALLOW_REMOTE_DB_IN_TESTS=1 is set as an explicit override).
+    setupFiles: ['./test/setup.js'],
     // Don't accidentally pick up the Playwright specs in the e2e/ folder.
     exclude: ['node_modules/**', 'e2e/**', 'coverage/**', '.c8tmp/**'],
     // Hard-fail on a flaky test rather than retrying — these are pure

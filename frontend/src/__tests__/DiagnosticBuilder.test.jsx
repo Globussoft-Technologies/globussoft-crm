@@ -882,43 +882,26 @@ describe('DiagnosticBuilder — Travel diagnostic-bank authoring (PRD §4 Q13 / 
     expect(screen.getByText(/Read-only \(ADMIN required to save\)/i)).toBeTruthy();
   });
 
-  it('T11: Promote-to-active button appears for archived rows and calls T5 endpoint', async () => {
-    const archived = [
-      {
-        id: 11, tripId: 'golden-triangle', title: 'Golden Triangle',
-        tier: 'domestic', region: 'North India',
-        minGradeBand: '6-8', maxGradeBand: '11-12', status: 'archived',
-      },
-    ];
-    fetchApiMock.mockImplementation(makeWeightsFetch({ archivedCatalogue: archived }));
+  // T25: the legacy in-tab Promote-to-active sub-panel was deprecated
+  // once T16 shipped the dedicated /travel/tmc/catalogue admin page
+  // (TmcCatalogueAdmin.jsx). Engine Weights tab now surfaces a single
+  // link to that page; the full archived-row list + promote flow lives
+  // there. The two prior T11 tests that pinned the in-tab archived
+  // list + per-row Promote button + empty-state copy were removed —
+  // those behaviours are now covered by TmcCatalogueAdmin.test.jsx.
+  it('T25: Engine Weights tab links to /travel/tmc/catalogue (T16 dedicated page)', async () => {
+    fetchApiMock.mockImplementation(makeWeightsFetch());
     renderPage();
     fireEvent.click(screen.getByRole('tab', { name: /Engine Weights/i }));
-    await waitFor(() => {
-      expect(screen.getByText(/Golden Triangle/i)).toBeTruthy();
-    });
-    const promoteBtn = screen.getByRole('button', { name: /Promote Golden Triangle to active/i });
-    fireEvent.click(promoteBtn);
-    await waitFor(() => {
-      const promoteCall = fetchApiMock.mock.calls.find(
-        ([u, o]) => typeof u === 'string'
-          && u === '/api/travel-tmc-catalogue/11/promote-to-active'
-          && o?.method === 'POST',
-      );
-      expect(promoteCall).toBeTruthy();
-    });
-    await waitFor(() => {
-      expect(notifyObj.success).toHaveBeenCalled();
-      const msg = notifyObj.success.mock.calls[0][0];
-      expect(msg).toMatch(/Promoted "Golden Triangle" to active/i);
-    });
-  });
-
-  it('T11: Catalogue panel shows empty-state copy when there are no archived rows', async () => {
-    fetchApiMock.mockImplementation(makeWeightsFetch({ archivedCatalogue: [] }));
-    renderPage();
-    fireEvent.click(screen.getByRole('tab', { name: /Engine Weights/i }));
-    await waitFor(() => {
-      expect(screen.getByText(/No archived trips/i)).toBeTruthy();
-    });
+    const link = await screen.findByRole('link', { name: /Open TMC Catalogue Admin/i });
+    expect(link).toBeTruthy();
+    expect(link.getAttribute('href')).toBe('/travel/tmc/catalogue');
+    // The page must NOT fire the legacy in-tab archived-list GET (T16's
+    // dedicated page does its own load). Confirm no archived-list call
+    // went out from this surface.
+    const archivedListCalls = fetchApiMock.mock.calls.filter(
+      ([u]) => typeof u === 'string' && u.startsWith('/api/travel-tmc-catalogue'),
+    );
+    expect(archivedListCalls.length).toBe(0);
   });
 });

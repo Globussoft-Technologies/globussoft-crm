@@ -32,11 +32,12 @@
 // audit. A free-text version label can also be supplied to override the
 // auto-bump.
 //
-// ── TMC Trip-Catalogue Promote-to-active (T5 backend) ──
-// The Engine Weights tab also surfaces a "Trip catalogue (archived)"
-// panel listing TmcTripCatalogue rows in status=archived; an ADMIN-only
-// Promote-to-active button calls POST /api/travel-tmc-catalogue/:id/promote-to-active
-// per the T5 senior-role gate (PRD §3.2 human-verify gate).
+// ── TMC Trip-Catalogue Promote-to-active link (T25) ──
+// T11 originally rendered an in-tab archived-rows + Promote-to-active
+// sub-panel here; T16 shipped a dedicated /travel/tmc/catalogue page
+// (TmcCatalogueAdmin.jsx) that hosts the full promote flow. T25 replaces
+// the sub-panel with a one-line link to that page so authoring stays
+// focused on the engine-weights knobs.
 
 import { useEffect, useRef, useState, useContext, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
@@ -323,7 +324,20 @@ export default function DiagnosticBuilder() {
         <EngineWeightsPanel notify={notify} isAdmin={isAdmin} />
       )}
       {mode === 'engineWeights' && subBrand === 'tmc' && (
-        <CataloguePromotionPanel notify={notify} isAdmin={isAdmin} />
+        <div
+          style={{
+            marginTop: '1.5rem', padding: '1rem',
+            background: 'var(--surface-subtle, #f5f5f5)', borderRadius: '8px',
+          }}
+        >
+          <strong>Promote trips to active:</strong>{' '}
+          <Link
+            to="/travel/tmc/catalogue"
+            style={{ color: 'var(--primary-color, var(--accent-color))', textDecoration: 'none' }}
+          >
+            Open TMC Catalogue Admin →
+          </Link>
+        </div>
       )}
 
       {validation && (
@@ -1064,117 +1078,6 @@ function EngineWeightsPanel({ notify, isAdmin }) {
           <Save size={14} aria-hidden /> {saving ? 'Saving…' : 'Save engine weights'}
         </button>
       </div>
-    </section>
-  );
-}
-
-// ─── Trip-Catalogue Promote-to-active panel (TMC, T5 wire-in) ─────────
-//
-// PRD §3.2 — every TmcTripCatalogue row lands in status=archived (the
-// human-verify gate). Senior reviewers (ADMIN) promote rows to active
-// via POST /api/travel-tmc-catalogue/:id/promote-to-active. This panel
-// lists archived rows + surfaces the promote button per row.
-
-function CataloguePromotionPanel({ notify, isAdmin }) {
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState(null);
-  const [rows, setRows] = useState([]);
-  const [promotingId, setPromotingId] = useState(null);
-
-  const load = useCallback(() => {
-    setLoading(true);
-    setLoadError(null);
-    fetchApi('/api/travel-tmc-catalogue?status=archived', { silent: true })
-      .then((res) => {
-        const items = Array.isArray(res) ? res : (res?.items || res?.catalogue || []);
-        setRows(items.filter((r) => r?.status === 'archived'));
-      })
-      .catch((e) => {
-        setLoadError(e?.message || 'Failed to load catalogue');
-      })
-      .finally(() => setLoading(false));
-  }, []);
-
-  useEffect(() => { load(); }, [load]);
-
-  const promote = async (row) => {
-    if (!isAdmin) {
-      notify.error('Promote-to-active is ADMIN-only.');
-      return;
-    }
-    setPromotingId(row.id);
-    try {
-      await fetchApi(`/api/travel-tmc-catalogue/${row.id}/promote-to-active`, {
-        method: 'POST',
-        body: JSON.stringify({}),
-      });
-      notify.success(`Promoted "${row.title || row.tripId}" to active.`);
-      // Drop it from the archived list locally so the row disappears.
-      setRows((prev) => prev.filter((r) => r.id !== row.id));
-    } catch (e) {
-      notify.error(e?.body?.error || e?.message || 'Failed to promote');
-    } finally {
-      setPromotingId(null);
-    }
-  };
-
-  return (
-    <section style={card} aria-label="Trip catalogue archived rows">
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, flexWrap: 'wrap', gap: 8 }}>
-        <h2 style={{ ...cardTitle, margin: 0 }}>
-          Trip catalogue — archived ({rows.length})
-        </h2>
-        <button type="button" onClick={load} style={secondaryBtn} aria-label="Refresh catalogue list">
-          Refresh
-        </button>
-      </div>
-      <p style={{ color: 'var(--text-secondary)', fontSize: 13, margin: '0 0 12px' }}>
-        Per PRD §3.2 every catalogue row lands archived. ADMIN-only
-        Promote-to-active flips the row to <code>active</code> so the engine
-        considers it for matching.
-      </p>
-      {loading ? (
-        <p style={{ color: 'var(--text-secondary)' }}>Loading&hellip;</p>
-      ) : loadError ? (
-        <div role="alert" style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--danger-color)' }}>
-          <AlertTriangle size={16} aria-hidden /> {loadError}
-        </div>
-      ) : rows.length === 0 ? (
-        <p style={emptyHint}>No archived trips. New catalogue entries land here for review.</p>
-      ) : (
-        <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
-          {rows.map((r) => (
-            <li
-              key={r.id}
-              style={{
-                display: 'flex', justifyContent: 'space-between', gap: 12,
-                padding: '8px 0', borderBottom: '1px solid var(--border-color)',
-                flexWrap: 'wrap', alignItems: 'center',
-              }}
-            >
-              <div style={{ flex: '1 1 auto', minWidth: 200 }}>
-                <div style={{ fontWeight: 600, fontSize: 14 }}>{r.title || r.tripId}</div>
-                <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-                  {r.tier} · {r.region || '—'} · grades {r.minGradeBand}–{r.maxGradeBand}
-                </div>
-              </div>
-              {isAdmin ? (
-                <button
-                  type="button"
-                  onClick={() => promote(r)}
-                  disabled={promotingId === r.id}
-                  style={promotingId === r.id ? primaryBtnDisabled : primaryBtn}
-                  aria-label={`Promote ${r.title || r.tripId} to active`}
-                >
-                  {promotingId === r.id ? 'Promoting…' : 'Promote to active'}
-                </button>
-              ) : (
-                <span style={{ color: 'var(--text-secondary)', fontSize: 12 }}>ADMIN only</span>
-              )}
-            </li>
-          ))}
-        </ul>
-      )}
     </section>
   );
 }

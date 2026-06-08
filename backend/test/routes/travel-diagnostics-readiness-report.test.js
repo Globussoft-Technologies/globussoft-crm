@@ -87,6 +87,10 @@ prisma.contact = {
   create: vi.fn(),
   findUnique: vi.fn(),
   findFirst: vi.fn(),
+  // T12 fix-up (ad40689e) rescoped priorSubmissionsLast24h to a contact.findMany
+  // call before the TravelDiagnostic.count — without this mock the submit-tmc
+  // handler hangs and the happy-path + suspect-lead tests 5s-timeout.
+  findMany: vi.fn(),
 };
 prisma.user = prisma.user || {};
 prisma.user.findUnique = vi.fn();
@@ -208,6 +212,11 @@ beforeEach(() => {
   prisma.contact.create.mockReset().mockResolvedValue({ id: 900, tenantId: 1 });
   prisma.contact.findUnique.mockReset().mockResolvedValue(null);
   prisma.contact.findFirst.mockReset().mockResolvedValue(null);
+  // Empty array → priorSubmissionsLast24h=0 → repeat_submitter rule 4 does not
+  // fire. Happy-path test asserts leadQuality='clean'; suspect-lead test asserts
+  // leadQuality='suspect' via rule 1 (free_domain_senior_role), independent of
+  // submission count. Both want findMany to return [].
+  prisma.contact.findMany.mockReset().mockResolvedValue([]);
   prisma.user.findUnique.mockReset().mockResolvedValue({ role: 'ADMIN', subBrandAccess: null });
   prisma.revokedToken.findUnique.mockReset().mockResolvedValue(null);
   llmRouter.routeRequest.mockReset().mockResolvedValue({

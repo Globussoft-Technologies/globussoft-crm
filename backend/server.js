@@ -861,6 +861,7 @@ app.use("/api/embassy-rules", embassyRulesRoutes);
 app.use("/api/travel-curriculum", travelCurriculumRoutes);
 app.use("/api/travel-personalised-destinations", travelPersonalisedDestinationsRoutes);
 app.use("/api/travel-tmc-catalogue", require("./routes/travel_tmc_catalogue"));
+app.use("/api/travel/engine-weights", require("./routes/travel_engine_weights"));
 app.use("/api/tenant/sub-brand-themes", subBrandThemesRoutes);
 // Wellness vertical
 app.use("/api/wellness", wellnessRoutes);

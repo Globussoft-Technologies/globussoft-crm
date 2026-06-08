@@ -836,4 +836,267 @@ describe('DiagnosticDetail — advisor brief UI (PRD §4.1 + §4.2)', () => {
     });
     await screen.findByTestId('talking-points-text');
   });
+
+  // ─── T11 — human_pick recorder (DD-5.7) + collapsible engine output ─
+  // Pins PRD_TMC_DIAGNOSTIC_SALES_ROUTING_ENGINE §3.3.7 contract:
+  //   - human_pick dropdown shows 5 catalogue tripIds + "other" + "no_rec"
+  //   - ADMIN can edit; MANAGER/USER see read-only display only
+  //   - Engine output COLLAPSED until pick recorded (DD-5.7); REVEALS
+  //     automatically once saved
+  //   - PATCH /api/travel/diagnostics/:id with { humanPick: <slug> }
+
+  // TMC diagnostic with full engine output already persisted by the
+  // submit endpoint (T8). humanPick is null so the engine block stays
+  // collapsed until the senior reviewer records their blind pick.
+  const TMC_DIAGNOSTIC_NO_HUMAN_PICK = {
+    id: 42,
+    tenantId: 9,
+    subBrand: 'tmc',
+    contactId: 100,
+    questionsJson: JSON.stringify({
+      bankId: 7,
+      bankVersion: 1,
+      questionsJson: JSON.stringify({
+        questions: [
+          { id: 'primary_outcome', text: 'Primary outcome you want for students?' },
+          { id: 'grade_band', text: 'Which grade band?' },
+        ],
+      }),
+    }),
+    answersJson: JSON.stringify({ primary_outcome: 'confidence', grade_band: '9-10' }),
+    score: 78,
+    classification: 'strong_match',
+    classificationLabel: 'Strong match',
+    recommendedTier: 'domestic',
+    reportPdfUrl: null,
+    talkingPointsJson: null,
+    engineState: 'strong_match',
+    engineScoresJson: JSON.stringify({
+      'golden-triangle': { primaryOutcome: 50, secondarySkill: 20, total: 80 },
+      'madhya-pradesh':  { primaryOutcome: 50, secondarySkill: 20, total: 75 },
+    }),
+    recommendedTripId: 11,
+    alternativeTripId: 12,
+    icpTier: 'breadwinning',
+    leadQuality: 'clean',
+    leadQualityReasonsJson: null,
+    flagsJson: JSON.stringify(['scope_budget_conflict']),
+    humanPick: null,
+    weightsVersion: 'v1',
+    createdAt: '2026-06-08T08:00:00.000Z',
+  };
+
+  const TMC_DIAGNOSTIC_WITH_HUMAN_PICK = {
+    ...TMC_DIAGNOSTIC_NO_HUMAN_PICK,
+    humanPick: 'golden-triangle',
+  };
+
+  // Mock catalogue list (5 starter trips per PRD §3.2 / T4 seed).
+  const TMC_CATALOGUE_ACTIVE = [
+    { id: 11, tripId: 'golden-triangle',     title: 'Golden Triangle',         status: 'active' },
+    { id: 12, tripId: 'madhya-pradesh',      title: 'Madhya Pradesh Heritage', status: 'active' },
+    { id: 13, tripId: 'ladakh-expedition',   title: 'Ladakh Expedition',       status: 'active' },
+    { id: 14, tripId: 'europe-cultural',     title: 'Europe Cultural Tour',    status: 'active' },
+    { id: 15, tripId: 'usa-stem',            title: 'USA STEM Immersion',      status: 'active' },
+  ];
+
+  function makeTmcFetchImpl({ diagnostic, postPatchDiagnostic, catalogue } = {}) {
+    return (url, opts) => {
+      if (url === '/api/travel/diagnostics/42' && (!opts || opts.method === undefined || opts.method === 'GET')) {
+        return Promise.resolve(diagnostic);
+      }
+      if (url === '/api/travel/diagnostics/42' && opts?.method === 'PATCH') {
+        return Promise.resolve({ diagnostic: postPatchDiagnostic || { ...diagnostic, ...(opts.body ? JSON.parse(opts.body) : {}) } });
+      }
+      if (typeof url === 'string' && url.startsWith('/api/travel-tmc-catalogue')) {
+        return Promise.resolve(catalogue || TMC_CATALOGUE_ACTIVE);
+      }
+      return Promise.resolve(null);
+    };
+  }
+
+  it('T11: Engine output is COLLAPSED when humanPick is null + user is ADMIN', async () => {
+    fetchApiMock.mockImplementation(makeTmcFetchImpl({ diagnostic: TMC_DIAGNOSTIC_NO_HUMAN_PICK }));
+    renderPage();
+    await screen.findByRole('heading', { name: /Diagnostic #42/i });
+    // Collapsed sentinel surfaces.
+    expect(screen.getByTestId('engine-output-collapsed')).toBeTruthy();
+    expect(screen.getByText(/Engine output hidden/i)).toBeTruthy();
+    // Expanded block is NOT in the DOM.
+    expect(screen.queryByTestId('engine-output-expanded')).toBeNull();
+    // Reveal button is also absent (no pick recorded → no reveal CTA).
+    expect(screen.queryByTestId('engine-output-reveal')).toBeNull();
+  });
+
+  it('T11: Engine output is VISIBLE when humanPick is recorded (ADMIN)', async () => {
+    fetchApiMock.mockImplementation(makeTmcFetchImpl({ diagnostic: TMC_DIAGNOSTIC_WITH_HUMAN_PICK }));
+    renderPage();
+    await screen.findByRole('heading', { name: /Diagnostic #42/i });
+    await waitFor(() => {
+      expect(screen.getByTestId('engine-output-expanded')).toBeTruthy();
+    });
+    // The collapsed sentinel is NOT in the DOM.
+    expect(screen.queryByTestId('engine-output-collapsed')).toBeNull();
+    // Key engine fields are present.
+    expect(screen.getByText(/strong_match/i)).toBeTruthy();
+    expect(screen.getByText(/breadwinning/i)).toBeTruthy();
+    // Flags surface.
+    expect(screen.getByText(/scope_budget_conflict/i)).toBeTruthy();
+  });
+
+  it('T11: human_pick dropdown shows 5 catalogue tripIds + "other" + "no_rec"', async () => {
+    fetchApiMock.mockImplementation(makeTmcFetchImpl({ diagnostic: TMC_DIAGNOSTIC_NO_HUMAN_PICK }));
+    renderPage();
+    await screen.findByRole('heading', { name: /Diagnostic #42/i });
+    await waitFor(() => {
+      expect(screen.getByTestId('human-pick-select')).toBeTruthy();
+    });
+    const select = screen.getByTestId('human-pick-select');
+    // Wait for catalogue to load (async).
+    await waitFor(() => {
+      const optionValues = Array.from(select.querySelectorAll('option')).map((o) => o.value);
+      expect(optionValues).toContain('golden-triangle');
+      expect(optionValues).toContain('madhya-pradesh');
+      expect(optionValues).toContain('ladakh-expedition');
+      expect(optionValues).toContain('europe-cultural');
+      expect(optionValues).toContain('usa-stem');
+      expect(optionValues).toContain('other');
+      expect(optionValues).toContain('no_rec');
+    });
+  });
+
+  it('T11: human_pick dropdown is HIDDEN / read-only when user is MANAGER', async () => {
+    const withPick = { ...TMC_DIAGNOSTIC_WITH_HUMAN_PICK };
+    fetchApiMock.mockImplementation(makeTmcFetchImpl({ diagnostic: withPick }));
+    renderPage({ role: 'MANAGER' });
+    await screen.findByRole('heading', { name: /Diagnostic #42/i });
+    // No editable select for non-ADMIN.
+    expect(screen.queryByTestId('human-pick-select')).toBeNull();
+    // The read-only display shows the prior pick.
+    const readonly = await screen.findByTestId('human-pick-readonly');
+    expect(readonly.textContent).toMatch(/Golden Triangle/i);
+    // The "ADMIN only" annotation is present.
+    expect(readonly.textContent).toMatch(/ADMIN only/i);
+  });
+
+  it('T11: Selecting from dropdown + Save PATCHes /api/travel/diagnostics/:id with {humanPick}', async () => {
+    let patchBody = null;
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/travel/diagnostics/42' && (!opts || opts.method === undefined)) {
+        return Promise.resolve(TMC_DIAGNOSTIC_NO_HUMAN_PICK);
+      }
+      if (url === '/api/travel/diagnostics/42' && opts?.method === 'PATCH') {
+        patchBody = JSON.parse(opts.body);
+        return Promise.resolve({
+          diagnostic: { ...TMC_DIAGNOSTIC_NO_HUMAN_PICK, humanPick: patchBody.humanPick },
+        });
+      }
+      if (typeof url === 'string' && url.startsWith('/api/travel-tmc-catalogue')) {
+        return Promise.resolve(TMC_CATALOGUE_ACTIVE);
+      }
+      return Promise.resolve(null);
+    });
+    renderPage();
+    await screen.findByRole('heading', { name: /Diagnostic #42/i });
+    await waitFor(() => {
+      expect(screen.getByTestId('human-pick-select')).toBeTruthy();
+    });
+    const select = screen.getByTestId('human-pick-select');
+    fireEvent.change(select, { target: { value: 'madhya-pradesh' } });
+    fireEvent.click(screen.getByRole('button', { name: /Save human pick/i }));
+    await waitFor(() => {
+      expect(patchBody).toEqual({ humanPick: 'madhya-pradesh' });
+    });
+  });
+
+  it('T11: After PATCH success, engine output reveals automatically', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/travel/diagnostics/42' && (!opts || opts.method === undefined)) {
+        return Promise.resolve(TMC_DIAGNOSTIC_NO_HUMAN_PICK);
+      }
+      if (url === '/api/travel/diagnostics/42' && opts?.method === 'PATCH') {
+        const next = { ...TMC_DIAGNOSTIC_NO_HUMAN_PICK, humanPick: 'no_rec' };
+        return Promise.resolve({ diagnostic: next });
+      }
+      if (typeof url === 'string' && url.startsWith('/api/travel-tmc-catalogue')) {
+        return Promise.resolve(TMC_CATALOGUE_ACTIVE);
+      }
+      return Promise.resolve(null);
+    });
+    renderPage();
+    await screen.findByRole('heading', { name: /Diagnostic #42/i });
+    // Initially collapsed.
+    expect(screen.getByTestId('engine-output-collapsed')).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByTestId('human-pick-select')).toBeTruthy();
+    });
+    fireEvent.change(screen.getByTestId('human-pick-select'), { target: { value: 'no_rec' } });
+    fireEvent.click(screen.getByRole('button', { name: /Save human pick/i }));
+    await waitFor(() => {
+      expect(screen.getByTestId('engine-output-expanded')).toBeTruthy();
+    });
+    expect(screen.queryByTestId('engine-output-collapsed')).toBeNull();
+  });
+
+  it('T11: human_pick recorder section is NOT rendered for non-TMC diagnostics', async () => {
+    // DIAGNOSTIC_NO_BRIEF uses subBrand=rfu — recorder must stay hidden.
+    fetchApiMock.mockImplementation(makeFetchImpl(DIAGNOSTIC_NO_BRIEF));
+    renderPage();
+    await screen.findByRole('heading', { name: /Diagnostic #42/i });
+    expect(screen.queryByTestId('human-pick-select')).toBeNull();
+    expect(screen.queryByTestId('engine-output-collapsed')).toBeNull();
+    expect(screen.queryByTestId('engine-output-expanded')).toBeNull();
+    expect(screen.queryByText(/Senior reviewer — human pick/i)).toBeNull();
+  });
+
+  it('T11: Save with no selection surfaces a "pick first" notify + does NOT PATCH', async () => {
+    let patchCalled = false;
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/travel/diagnostics/42' && (!opts || opts.method === undefined)) {
+        return Promise.resolve(TMC_DIAGNOSTIC_NO_HUMAN_PICK);
+      }
+      if (url === '/api/travel/diagnostics/42' && opts?.method === 'PATCH') {
+        patchCalled = true;
+        return Promise.resolve({ diagnostic: TMC_DIAGNOSTIC_NO_HUMAN_PICK });
+      }
+      if (typeof url === 'string' && url.startsWith('/api/travel-tmc-catalogue')) {
+        return Promise.resolve(TMC_CATALOGUE_ACTIVE);
+      }
+      return Promise.resolve(null);
+    });
+    renderPage();
+    await screen.findByRole('heading', { name: /Diagnostic #42/i });
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Save human pick/i })).toBeTruthy();
+    });
+    // The button is disabled when no value selected — clicking is a no-op,
+    // but the test asserts the disabled-state contract + the lack of PATCH.
+    const saveBtn = screen.getByRole('button', { name: /Save human pick/i });
+    expect(saveBtn.disabled).toBe(true);
+    fireEvent.click(saveBtn);
+    // No PATCH triggered.
+    expect(patchCalled).toBe(false);
+  });
+
+  it('T11: Collapse button toggles engine output back to hidden after reveal', async () => {
+    fetchApiMock.mockImplementation(makeTmcFetchImpl({ diagnostic: TMC_DIAGNOSTIC_WITH_HUMAN_PICK }));
+    renderPage();
+    await screen.findByRole('heading', { name: /Diagnostic #42/i });
+    await waitFor(() => {
+      expect(screen.getByTestId('engine-output-expanded')).toBeTruthy();
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Collapse engine output/i }));
+    // Once collapsed by user, the Reveal CTA appears (NOT the "record your pick" sentinel —
+    // because a pick already exists).
+    await waitFor(() => {
+      expect(screen.getByTestId('engine-output-reveal')).toBeTruthy();
+    });
+    expect(screen.queryByTestId('engine-output-expanded')).toBeNull();
+    expect(screen.queryByTestId('engine-output-collapsed')).toBeNull();
+    // Click reveal → expands again.
+    fireEvent.click(screen.getByTestId('engine-output-reveal'));
+    await waitFor(() => {
+      expect(screen.getByTestId('engine-output-expanded')).toBeTruthy();
+    });
+  });
 });

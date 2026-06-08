@@ -19,15 +19,34 @@
 // POST shape unchanged: { subBrand, questionsJson, scoringRulesJson }
 // goes to /api/travel/diagnostic-banks; backend revalidates server-side
 // and creates v(N+1). Per Q16, existing banks are not mutated.
+//
+// ── TMC Engine Weights tab (PRD_TMC_DIAGNOSTIC_SALES_ROUTING_ENGINE T11 / §3.3.3 + §3.3.7) ──
+// When subBrand=tmc, a third tab "Engine Weights" surfaces the §3.3.3
+// weight knobs (6 weights + scoresWellThreshold + version) sourced from
+// the EngineWeights single-row config table. UI hits:
+//   GET  /api/travel/engine-weights          → current weights row
+//   PUT  /api/travel/engine-weights          → save (bumps version when
+//                                              weights changed)
+// Editing a weight + Save auto-increments version (v1 → v2 etc.) so the
+// captured TravelDiagnostic.weightsVersion is replayable per §3.3.7
+// audit. A free-text version label can also be supplied to override the
+// auto-bump.
+//
+// ── TMC Trip-Catalogue Promote-to-active (T5 backend) ──
+// The Engine Weights tab also surfaces a "Trip catalogue (archived)"
+// panel listing TmcTripCatalogue rows in status=archived; an ADMIN-only
+// Promote-to-active button calls POST /api/travel-tmc-catalogue/:id/promote-to-active
+// per the T5 senior-role gate (PRD §3.2 human-verify gate).
 
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState, useContext, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
   AlertTriangle, CheckCircle, ChevronDown, ChevronLeft, ChevronUp,
-  Download, FileJson, Plus, Save, Trash2, Upload,
+  Download, FileJson, Plus, Save, Settings, Trash2, Upload,
 } from 'lucide-react';
 import { fetchApi, getAuthToken } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
+import { AuthContext } from '../../App';
 
 const SUB_BRANDS = [
   { value: 'tmc', label: 'TMC (school trips)' },
@@ -86,6 +105,8 @@ const SCORING_EXAMPLE = JSON.stringify(
 export default function DiagnosticBuilder() {
   const notify = useNotify();
   const navigate = useNavigate();
+  const { user } = useContext(AuthContext) || {};
+  const isAdmin = user?.role === 'ADMIN';
 
   const [mode, setMode] = useState('visual');
   const [subBrand, setSubBrand] = useState('tmc');
@@ -94,6 +115,15 @@ export default function DiagnosticBuilder() {
   const [validation, setValidation] = useState(null);
   const [saving, setSaving] = useState(false);
   const fileRef = useRef(null);
+
+  // When the operator switches sub-brand away from TMC while sitting on
+  // the Engine Weights tab, fall back to Visual so the page doesn't show
+  // an empty (non-TMC) weights surface.
+  useEffect(() => {
+    if (mode === 'engineWeights' && subBrand !== 'tmc') {
+      setMode('visual');
+    }
+  }, [mode, subBrand]);
 
   const exportCsv = async () => {
     try {
@@ -248,14 +278,15 @@ export default function DiagnosticBuilder() {
         </div>
       </section>
 
-      <ModeTabs mode={mode} onChange={setMode} />
+      <ModeTabs mode={mode} onChange={setMode} subBrand={subBrand} />
 
-      {mode === 'visual' ? (
+      {mode === 'visual' && (
         <>
           <QuestionsVisualEditor json={qJson} onChange={setQJson} onSwitchToJson={() => setMode('json')} />
           <ScoringVisualEditor json={rJson} onChange={setRJson} onSwitchToJson={() => setMode('json')} />
         </>
-      ) : (
+      )}
+      {mode === 'json' && (
         <>
           <section style={card}>
             <h2 style={cardTitle}>questionsJson</h2>
@@ -287,6 +318,12 @@ export default function DiagnosticBuilder() {
             />
           </section>
         </>
+      )}
+      {mode === 'engineWeights' && subBrand === 'tmc' && (
+        <EngineWeightsPanel notify={notify} isAdmin={isAdmin} />
+      )}
+      {mode === 'engineWeights' && subBrand === 'tmc' && (
+        <CataloguePromotionPanel notify={notify} isAdmin={isAdmin} />
       )}
 
       {validation && (
@@ -336,7 +373,11 @@ export default function DiagnosticBuilder() {
 
 // ─── Mode tabs ────────────────────────────────────────────────────────
 
-function ModeTabs({ mode, onChange }) {
+function ModeTabs({ mode, onChange, subBrand }) {
+  // Engine Weights tab is TMC-only — the §3.3 deterministic 6-signal
+  // engine is a TMC-specific contract; other sub-brands continue to use
+  // the generic weighted-sum scorer with no weight knobs to expose.
+  const showEngineWeights = subBrand === 'tmc';
   return (
     <div role="tablist" aria-label="Authoring mode" style={tabRow}>
       <button
@@ -357,6 +398,17 @@ function ModeTabs({ mode, onChange }) {
       >
         JSON (advanced)
       </button>
+      {showEngineWeights && (
+        <button
+          type="button"
+          role="tab"
+          aria-selected={mode === 'engineWeights'}
+          onClick={() => onChange('engineWeights')}
+          style={mode === 'engineWeights' ? tabActive : tabIdle}
+        >
+          Engine Weights
+        </button>
+      )}
     </div>
   );
 }
@@ -735,6 +787,398 @@ function tryParse(s) {
   }
 }
 
+// ─── Engine Weights panel (TMC) ───────────────────────────────────────
+//
+// PRD_TMC_DIAGNOSTIC_SALES_ROUTING_ENGINE §3.3.3 + §3.3.7 + §3.8.
+// Six weight knobs + scoresWellThreshold + version label, sourced from
+// the EngineWeights config row (single-row-per-tenant).
+//
+// Endpoints (T11 backend follow-up — see PRD §10 row T11 notes):
+//   GET  /api/travel/engine-weights → current row (defaults if empty)
+//   PUT  /api/travel/engine-weights → save (auto-bumps version if any
+//                                     numeric weight changed)
+//
+// Validation: each weight must be an integer ≥ 0; threshold must be an
+// integer in [0, 100]. The Save button stays disabled while validation
+// is open until errors clear.
+
+const DEFAULT_TMC_WEIGHTS = {
+  version: 'v1',
+  weightPrimaryOutcome: 50,
+  weightSecondarySkill: 20,
+  weightGrowthArea: 15,
+  weightCurriculumHook: 10,
+  weightGradeBandCenter: 10,
+  weightTierValueLean: 8,
+  scoresWellThreshold: 70,
+};
+
+const WEIGHT_FIELDS = [
+  { key: 'weightPrimaryOutcome',  label: 'Primary-outcome match',  defaultValue: 50, hint: 'Q1 primary-outcome match. PRD §3.3.3 default 50.' },
+  { key: 'weightSecondarySkill',  label: 'Secondary-skill match',  defaultValue: 20, hint: 'Per Q2 match, capped at 40 (max 2 secondaries). PRD §3.3.3 default 20.' },
+  { key: 'weightGrowthArea',      label: 'Growth-area match',      defaultValue: 15, hint: 'Awarded once; 0 if duplicates a Q2 pick. PRD §3.3.3 default 15.' },
+  { key: 'weightCurriculumHook',  label: 'Curriculum hook depth',  defaultValue: 10, hint: 'Trip has a curriculum_hooks entry matching school board × grade. PRD §3.3.3 default 10.' },
+  { key: 'weightGradeBandCenter', label: 'Grade-band centering',   defaultValue: 10, hint: 'School band at/above trip range midpoint ceiling. PRD §3.3.3 default 10.' },
+  { key: 'weightTierValueLean',   label: 'Tier-value lean',        defaultValue:  8, hint: 'Only when geo_preference=open. Prefer higher affordable tier. PRD §3.3.3 default 8.' },
+];
+
+function validateWeights(weights) {
+  const errors = [];
+  for (const f of WEIGHT_FIELDS) {
+    const v = weights[f.key];
+    if (!Number.isInteger(v) || v < 0) {
+      errors.push(`${f.label} must be an integer ≥ 0 (got ${JSON.stringify(v)}).`);
+    }
+  }
+  const t = weights.scoresWellThreshold;
+  if (!Number.isInteger(t) || t < 0 || t > 100) {
+    errors.push(`Scores-well threshold must be an integer in [0, 100] (got ${JSON.stringify(t)}).`);
+  }
+  if (!weights.version || typeof weights.version !== 'string' || !weights.version.trim()) {
+    errors.push('Version label must be a non-empty string.');
+  }
+  return errors;
+}
+
+// Compute the next auto-bumped version when any numeric weight changed.
+// "vN" → "v(N+1)"; everything else gets a "-revised" suffix appended.
+function autoBumpVersion(prev) {
+  const m = /^v(\d+)$/i.exec(String(prev || '').trim());
+  if (m) return `v${Number(m[1]) + 1}`;
+  return `${prev || 'v1'}-revised`;
+}
+
+function weightsNumericallyEqual(a, b) {
+  for (const f of WEIGHT_FIELDS) {
+    if (Number(a[f.key]) !== Number(b[f.key])) return false;
+  }
+  return Number(a.scoresWellThreshold) !== Number(b.scoresWellThreshold) ? false : true;
+}
+
+function EngineWeightsPanel({ notify, isAdmin }) {
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
+  const [weights, setWeights] = useState(DEFAULT_TMC_WEIGHTS);
+  const [baseline, setBaseline] = useState(DEFAULT_TMC_WEIGHTS);
+  const [saving, setSaving] = useState(false);
+  const [errors, setErrors] = useState([]);
+
+  const load = useCallback(() => {
+    setLoading(true);
+    setLoadError(null);
+    fetchApi('/api/travel/engine-weights', { silent: true })
+      .then((res) => {
+        // Tolerate either a bare row OR an envelope { engineWeights }.
+        const row = res?.engineWeights || res;
+        if (row && typeof row === 'object') {
+          const merged = { ...DEFAULT_TMC_WEIGHTS, ...row };
+          setWeights(merged);
+          setBaseline(merged);
+        } else {
+          setWeights(DEFAULT_TMC_WEIGHTS);
+          setBaseline(DEFAULT_TMC_WEIGHTS);
+        }
+      })
+      .catch((e) => {
+        // 404 = no row yet; show the §3.3.3 defaults so the first save
+        // POSTs a brand-new row. Other errors surface to the operator.
+        if (e?.status === 404) {
+          setWeights(DEFAULT_TMC_WEIGHTS);
+          setBaseline(DEFAULT_TMC_WEIGHTS);
+        } else {
+          setLoadError(e?.message || 'Failed to load engine weights');
+        }
+      })
+      .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const updateField = (key, raw) => {
+    const next = { ...weights };
+    if (key === 'version') {
+      next.version = raw;
+    } else {
+      next[key] = raw === '' ? 0 : Number(raw);
+    }
+    setWeights(next);
+    setErrors([]);
+  };
+
+  const onSave = async () => {
+    if (!isAdmin) {
+      notify.error('Engine Weights save is ADMIN-only.');
+      return;
+    }
+    const v = validateWeights(weights);
+    if (v.length > 0) {
+      setErrors(v);
+      notify.error('Fix validation errors before saving.');
+      return;
+    }
+    // Auto-bump version if any numeric weight changed AND the operator
+    // didn't explicitly edit the version field themselves.
+    let payload = { ...weights };
+    const numericChanged = !weightsNumericallyEqual(weights, baseline);
+    const versionUntouched = weights.version === baseline.version;
+    if (numericChanged && versionUntouched) {
+      payload.version = autoBumpVersion(baseline.version);
+      setWeights(payload);
+    }
+    setSaving(true);
+    try {
+      const res = await fetchApi('/api/travel/engine-weights', {
+        method: 'PUT',
+        body: JSON.stringify(payload),
+      });
+      const row = res?.engineWeights || res || payload;
+      const merged = { ...DEFAULT_TMC_WEIGHTS, ...row };
+      setWeights(merged);
+      setBaseline(merged);
+      notify.success(`Engine weights saved (version ${merged.version}).`);
+    } catch (e) {
+      notify.error(e?.body?.error || e?.message || 'Failed to save engine weights');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <section style={card} aria-busy="true">
+        <h2 style={cardTitle}>
+          <Settings size={18} aria-hidden /> Engine Weights (TMC)
+        </h2>
+        <p style={{ color: 'var(--text-secondary)' }}>Loading current weights&hellip;</p>
+      </section>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <section style={{ ...card, borderLeft: '4px solid var(--danger-color)' }}>
+        <h2 style={cardTitle}>
+          <Settings size={18} aria-hidden /> Engine Weights (TMC)
+        </h2>
+        <div role="alert" style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--danger-color)' }}>
+          <AlertTriangle size={16} aria-hidden /> {loadError}
+        </div>
+        <div style={{ marginTop: 12 }}>
+          <button type="button" onClick={load} style={secondaryBtn}>Retry</button>
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <section style={card} aria-label="Engine Weights">
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, flexWrap: 'wrap', gap: 8 }}>
+        <h2 style={{ ...cardTitle, margin: 0 }}>
+          <Settings size={18} aria-hidden /> Engine Weights (TMC)
+        </h2>
+        <span style={versionPill} aria-label="Current version">
+          version: <strong style={{ marginLeft: 4 }}>{baseline.version}</strong>
+        </span>
+      </div>
+      <p style={{ color: 'var(--text-secondary)', fontSize: 13, margin: '0 0 12px' }}>
+        Per PRD §3.3.3 the six weights below + the §3.3.5 "scores-well" threshold drive the
+        deterministic 6-signal engine. Tuning here is config; the engine reads
+        the live row at submission time (§3.3.7). Changing any weight auto-bumps
+        the version so each scored submission's <code>weightsVersion</code> stays replayable.
+      </p>
+
+      <div style={fieldGrid}>
+        {WEIGHT_FIELDS.map((f) => (
+          <Field key={f.key} label={f.label}>
+            <input
+              type="number"
+              value={weights[f.key]}
+              onChange={(e) => updateField(f.key, e.target.value)}
+              style={input}
+              aria-label={f.label}
+              min={0}
+              step={1}
+            />
+            <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>{f.hint}</span>
+          </Field>
+        ))}
+        <Field label="Scores-well threshold (0-100)">
+          <input
+            type="number"
+            value={weights.scoresWellThreshold}
+            onChange={(e) => updateField('scoresWellThreshold', e.target.value)}
+            style={input}
+            aria-label="Scores-well threshold"
+            min={0}
+            max={100}
+            step={1}
+          />
+          <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+            PRD §3.3.5 "scores well" floor. Default 70.
+          </span>
+        </Field>
+        <Field label="Version label">
+          <input
+            type="text"
+            value={weights.version}
+            onChange={(e) => updateField('version', e.target.value)}
+            style={input}
+            aria-label="Version label"
+          />
+          <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+            Auto-bumps when weights change (vN → v(N+1)). Override freely if needed.
+          </span>
+        </Field>
+      </div>
+
+      {errors.length > 0 && (
+        <div
+          role="alert"
+          style={{
+            marginTop: 12, padding: 10, borderRadius: 6,
+            background: 'rgba(190, 50, 50, 0.08)',
+            border: '1px solid var(--danger-color)',
+            color: 'var(--danger-color)', fontSize: 13,
+          }}
+        >
+          <strong>Validation errors:</strong>
+          <ul style={{ margin: '6px 0 0', paddingLeft: 20 }}>
+            {errors.map((e, i) => <li key={i}>{e}</li>)}
+          </ul>
+        </div>
+      )}
+
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 12, gap: 8 }}>
+        {!isAdmin && (
+          <span style={{ color: 'var(--text-secondary)', fontSize: 12, alignSelf: 'center' }}>
+            Read-only (ADMIN required to save).
+          </span>
+        )}
+        <button
+          type="button"
+          onClick={onSave}
+          disabled={saving || !isAdmin}
+          style={saving || !isAdmin ? primaryBtnDisabled : primaryBtn}
+          aria-label="Save engine weights"
+        >
+          <Save size={14} aria-hidden /> {saving ? 'Saving…' : 'Save engine weights'}
+        </button>
+      </div>
+    </section>
+  );
+}
+
+// ─── Trip-Catalogue Promote-to-active panel (TMC, T5 wire-in) ─────────
+//
+// PRD §3.2 — every TmcTripCatalogue row lands in status=archived (the
+// human-verify gate). Senior reviewers (ADMIN) promote rows to active
+// via POST /api/travel-tmc-catalogue/:id/promote-to-active. This panel
+// lists archived rows + surfaces the promote button per row.
+
+function CataloguePromotionPanel({ notify, isAdmin }) {
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
+  const [rows, setRows] = useState([]);
+  const [promotingId, setPromotingId] = useState(null);
+
+  const load = useCallback(() => {
+    setLoading(true);
+    setLoadError(null);
+    fetchApi('/api/travel-tmc-catalogue?status=archived', { silent: true })
+      .then((res) => {
+        const items = Array.isArray(res) ? res : (res?.items || res?.catalogue || []);
+        setRows(items.filter((r) => r?.status === 'archived'));
+      })
+      .catch((e) => {
+        setLoadError(e?.message || 'Failed to load catalogue');
+      })
+      .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const promote = async (row) => {
+    if (!isAdmin) {
+      notify.error('Promote-to-active is ADMIN-only.');
+      return;
+    }
+    setPromotingId(row.id);
+    try {
+      await fetchApi(`/api/travel-tmc-catalogue/${row.id}/promote-to-active`, {
+        method: 'POST',
+        body: JSON.stringify({}),
+      });
+      notify.success(`Promoted "${row.title || row.tripId}" to active.`);
+      // Drop it from the archived list locally so the row disappears.
+      setRows((prev) => prev.filter((r) => r.id !== row.id));
+    } catch (e) {
+      notify.error(e?.body?.error || e?.message || 'Failed to promote');
+    } finally {
+      setPromotingId(null);
+    }
+  };
+
+  return (
+    <section style={card} aria-label="Trip catalogue archived rows">
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, flexWrap: 'wrap', gap: 8 }}>
+        <h2 style={{ ...cardTitle, margin: 0 }}>
+          Trip catalogue — archived ({rows.length})
+        </h2>
+        <button type="button" onClick={load} style={secondaryBtn} aria-label="Refresh catalogue list">
+          Refresh
+        </button>
+      </div>
+      <p style={{ color: 'var(--text-secondary)', fontSize: 13, margin: '0 0 12px' }}>
+        Per PRD §3.2 every catalogue row lands archived. ADMIN-only
+        Promote-to-active flips the row to <code>active</code> so the engine
+        considers it for matching.
+      </p>
+      {loading ? (
+        <p style={{ color: 'var(--text-secondary)' }}>Loading&hellip;</p>
+      ) : loadError ? (
+        <div role="alert" style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--danger-color)' }}>
+          <AlertTriangle size={16} aria-hidden /> {loadError}
+        </div>
+      ) : rows.length === 0 ? (
+        <p style={emptyHint}>No archived trips. New catalogue entries land here for review.</p>
+      ) : (
+        <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+          {rows.map((r) => (
+            <li
+              key={r.id}
+              style={{
+                display: 'flex', justifyContent: 'space-between', gap: 12,
+                padding: '8px 0', borderBottom: '1px solid var(--border-color)',
+                flexWrap: 'wrap', alignItems: 'center',
+              }}
+            >
+              <div style={{ flex: '1 1 auto', minWidth: 200 }}>
+                <div style={{ fontWeight: 600, fontSize: 14 }}>{r.title || r.tripId}</div>
+                <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                  {r.tier} · {r.region || '—'} · grades {r.minGradeBand}–{r.maxGradeBand}
+                </div>
+              </div>
+              {isAdmin ? (
+                <button
+                  type="button"
+                  onClick={() => promote(r)}
+                  disabled={promotingId === r.id}
+                  style={promotingId === r.id ? primaryBtnDisabled : primaryBtn}
+                  aria-label={`Promote ${r.title || r.tripId} to active`}
+                >
+                  {promotingId === r.id ? 'Promoting…' : 'Promote to active'}
+                </button>
+              ) : (
+                <span style={{ color: 'var(--text-secondary)', fontSize: 12 }}>ADMIN only</span>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
 // ─── Shared styles ────────────────────────────────────────────────────
 
 const card = {
@@ -838,4 +1282,10 @@ const optRow = {
 };
 const emptyHint = {
   color: 'var(--text-secondary)', fontSize: 13, fontStyle: 'italic', margin: '4px 0',
+};
+const versionPill = {
+  display: 'inline-flex', alignItems: 'center',
+  padding: '4px 10px', borderRadius: 999, fontSize: 12, fontWeight: 500,
+  background: 'var(--subtle-bg)', color: 'var(--text-primary)',
+  border: '1px solid var(--border-color)',
 };

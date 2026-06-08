@@ -320,6 +320,8 @@ cd e2e && npm install
 npx playwright test --project=chromium
 ```
 
+> **After pulling main:** if `npx vitest run` reports `Failed to load module @aws-sdk/...` (or similar `Cannot find module` errors), your local `node_modules` is stale relative to `package.json`. Re-run `cd backend && npm install` (or `cd frontend && npm install` for frontend deps). CI's `npm ci` step covers this automatically; local dev boxes do not until you re-install after a deps-add commit.
+
 ## Demo Credentials
 
 The Login page has **one-click quick-login buttons** grouped by tenant — no typing.

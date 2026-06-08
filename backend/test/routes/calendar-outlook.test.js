@@ -729,6 +729,41 @@ describe('POST /api/calendar/outlook/events', () => {
     expect(upsertArgs.create.provider).toBe('microsoft');
   });
 
+  test('createMeet:true requests a Teams online meeting (isOnlineMeeting + teamsForBusiness)', async () => {
+    prisma.calendarIntegration.findUnique.mockResolvedValue({
+      id: 1, userId: 7, tenantId: 1, accessToken: 'ms-at', expiresAt: new Date(Date.now() + 3600_000),
+    });
+    global.fetch.mockResolvedValueOnce(mockResponse({
+      ok: true, status: 201,
+      body: { id: 'graph-meet-id', subject: 'Consult', onlineMeeting: { joinUrl: 'https://teams.microsoft.com/l/meetup-join/new' } },
+    }));
+    const app = makeApp();
+    const res = await request(app)
+      .post('/api/calendar/outlook/events')
+      .send({ title: 'Consult', startTime: futureIso(3600_000), endTime: futureIso(7200_000), createMeet: true });
+    expect(res.status).toBe(201);
+    const graphBody = JSON.parse(global.fetch.mock.calls[0][1].body);
+    expect(graphBody.isOnlineMeeting).toBe(true);
+    expect(graphBody.onlineMeetingProvider).toBe('teamsForBusiness');
+    expect(prisma.calendarEvent.upsert.mock.calls[0][0].create.meetingUrl).toBe(
+      'https://teams.microsoft.com/l/meetup-join/new'
+    );
+  });
+
+  test('backward-compat: without createMeet, no online meeting is requested', async () => {
+    prisma.calendarIntegration.findUnique.mockResolvedValue({
+      id: 1, userId: 7, tenantId: 1, accessToken: 'ms-at', expiresAt: new Date(Date.now() + 3600_000),
+    });
+    global.fetch.mockResolvedValueOnce(mockResponse({ ok: true, status: 201, body: { id: 'g2', subject: 'Plain' } }));
+    const app = makeApp();
+    const res = await request(app)
+      .post('/api/calendar/outlook/events')
+      .send({ title: 'Plain', startTime: futureIso(3600_000), endTime: futureIso(7200_000) });
+    expect(res.status).toBe(201);
+    const graphBody = JSON.parse(global.fetch.mock.calls[0][1].body);
+    expect('isOnlineMeeting' in graphBody).toBe(false);
+  });
+
   test('502 when Graph create returns non-2xx', async () => {
     prisma.calendarIntegration.findUnique.mockResolvedValue({
       id: 1,
@@ -756,6 +791,51 @@ describe('POST /api/calendar/outlook/events', () => {
     expect(res.body.error).toMatch(/Graph create failed/);
     expect(res.body.error).toMatch(/insufficient privileges/);
     expect(prisma.calendarEvent.upsert).not.toHaveBeenCalled();
+  });
+});
+
+// ─── GET /slots — free/busy slot-picker (via getSchedule) ─────────
+
+describe('GET /api/calendar/outlook/slots', () => {
+  test('400 when date is missing/malformed', async () => {
+    const app = makeApp();
+    const res = await request(app).get('/api/calendar/outlook/slots');
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/date is required/i);
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  test('404 when Outlook not connected', async () => {
+    prisma.calendarIntegration.findUnique.mockResolvedValue(null);
+    const app = makeApp();
+    const res = await request(app).get('/api/calendar/outlook/slots?date=2999-01-15');
+    expect(res.status).toBe(404);
+    expect(res.body.error).toMatch(/not connected/i);
+  });
+
+  test('returns slots that exclude busy windows (via Graph getSchedule)', async () => {
+    prisma.calendarIntegration.findUnique.mockResolvedValue({
+      id: 1, userId: 7, tenantId: 1, accessToken: 'ms-at', expiresAt: new Date(Date.now() + 3600_000),
+    });
+    // 1st fetch = /me (mailbox), 2nd fetch = getSchedule. 09:00–10:00 UTC busy.
+    global.fetch
+      .mockResolvedValueOnce(mockResponse({ ok: true, status: 200, body: { mail: 'advisor@contoso.com' } }))
+      .mockResolvedValueOnce(mockResponse({
+        ok: true, status: 200,
+        body: { value: [{ scheduleItems: [{ start: { dateTime: '2999-01-15T09:00:00' }, end: { dateTime: '2999-01-15T10:00:00' } }] }] },
+      }));
+    const app = makeApp();
+    const res = await request(app).get(
+      '/api/calendar/outlook/slots?date=2999-01-15&durationMins=60&startHour=9&endHour=18&tzOffsetMins=0'
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.date).toBe('2999-01-15');
+    // 9 one-hour slots 09–18; the 09:00 slot is busy → 8 free.
+    expect(res.body.slots.length).toBe(8);
+    expect(res.body.slots.map((s) => s.start)).not.toContain('2999-01-15T09:00:00.000Z');
+    // getSchedule was queried for the resolved mailbox.
+    const schedBody = JSON.parse(global.fetch.mock.calls[1][1].body);
+    expect(schedBody.schedules).toEqual(['advisor@contoso.com']);
   });
 });
 

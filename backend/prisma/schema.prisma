@@ -201,6 +201,9 @@ model Tenant {
   // RESOLVED 2026-05-24). 100-200 starter rows seeded by GS; TMC academic
   // team validates + extends over 6-week window.
   curriculumMappings       TravelCurriculumMapping[]
+  // TMC school term/holiday/exam windows for trip scheduling. Baseline seeded;
+  // each school's actual dates captured by asking them (no public API exists).
+  travelSchoolTerms        TravelSchoolTerm[]
   // Per-sub-brand brand kits (PRD_TRAVEL_PER_SUBBRAND_BRANDING DD-5.2
   // [RESOLVED 2026-05-24]) — versioned brand-asset storage forked out of
   // subBrandConfigJson. See BrandKit model at bottom of file.
@@ -597,6 +600,10 @@ model Contact {
 
   // Customer portal
   portalPasswordHash String?
+  // Travel customer-portal profile avatar (S3 URL). Nullable + additive —
+  // only the travel customer portal reads/writes it; inert for every other
+  // vertical (wellness never touches this column).
+  avatarUrl          String?
 
   // #600 — wellness vertical extras. Optional + nullable so generic CRM
   // tenants ignore them entirely. Mirrors the Patient intake form (treatment
@@ -5154,6 +5161,12 @@ model TravelDiagnostic {
   reportPdfUrl        String?
   talkingPointsJson   String?   @db.Text // LLM-generated advisor brief
   formVsCallJson      String?   @db.Text // LLM-generated form-vs-call comparison cache
+  // PRD_TMC_CURRICULUM_MAPPING §3 FR-6 — cached curriculum→destination fit
+  // snapshot, computed at submission for TMC diagnostics that carry a
+  // curriculum+grade(+subject). Nullable: non-TMC sub-brands and TMC
+  // submissions without curriculum context leave this null (PDF omits the
+  // section). Shape: { curriculum, grade, subject, recommendations:[...] }.
+  curriculumFitJson   String?   @db.Text
   consentCapturedAt   DateTime?
 
   // ── TMC Diagnostic & Sales-Routing Engine fields ────────────────────
@@ -5243,6 +5256,9 @@ model Itinerary {
   pricingJson       String?         @db.Text // breakdown
   totalAmount       Decimal?        @db.Decimal(15, 2)
   currency          String          @default("INR")
+  // Number of travelers. totalAmount stores the GROUP total (sum of item line
+  // totals); the per-person budget is derived as totalAmount / pax. Default 1.
+  pax               Int             @default(1)
   pdfUrl            String?
   shareToken        String?         @unique // WhatsApp/email share link
   // Phase 2 — 50% advance booking pattern (PRD §4.7 Travel Stall). All
@@ -5257,6 +5273,10 @@ model Itinerary {
   advancePaidAmount Decimal?        @db.Decimal(15, 2)
   advancePaidAt     DateTime?
   paymentReference  String?
+  // Customer's reason/feedback when they DECLINE an offer (PRD §6.1). Free
+  // text the customer enters in the portal so the advisor knows what to
+  // improve. Nullable; only set on a customer decline.
+  declineReason     String?         @db.Text
   // LLM-generated draft summary block. Persisted so re-renders don't burn
   // tokens. Operator triggers regeneration via POST /draft/regen. Stays
   // null until the first regen call lands; the customer-facing PDF + share
@@ -5280,10 +5300,17 @@ model ItineraryItem {
   description String
   detailsJson String?   @db.Text // type-specific payload
   supplierId  Int?
-  unitCost    Decimal?  @db.Decimal(15, 2)
+  unitCost    Decimal?  @db.Decimal(15, 2) // "Rate" — cost of ONE unit
   markup      Decimal?  @db.Decimal(15, 2)
   gstAmount   Decimal?  @db.Decimal(15, 2)
-  totalPrice  Decimal?  @db.Decimal(15, 2)
+  totalPrice  Decimal?  @db.Decimal(15, 2) // auto = unitCost*quantity + markup + gstAmount (line total)
+  // Pricing basis so a line is never ambiguous:
+  //   unit ∈ per_person | per_night | per_room_night | per_day | per_group
+  //   quantity = how many units (e.g. pax, nights, days); line total = rate*qty
+  //   direction = one_way | round_trip (transport items only; null otherwise)
+  unit        String?   @default("per_person")
+  quantity    Decimal?  @default(1) @db.Decimal(10, 2)
+  direction   String?
   itinerary   Itinerary @relation(fields: [itineraryId], references: [id], onDelete: Cascade)
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
@@ -5386,6 +5413,34 @@ model TravelSeasonCalendar {
   updatedAt  DateTime @updatedAt
 
   @@index([tenantId, subBrand, startDate, endDate])
+}
+
+/// TMC school-term / holiday / exam-blackout windows used to warn when a school
+/// trip is scheduled during term-time or exams. V1 captures schoolName as free
+/// text. Baseline India windows are seeded; each school's ACTUAL dates are
+/// captured by asking the school (there is no public API for per-school term
+/// calendars). `source` distinguishes seed/manual/website — the last reserved
+/// for a future "import from the school's website" feed.
+model TravelSchoolTerm {
+  id         Int      @id @default(autoincrement())
+  tenantId   Int      @default(1)
+  subBrand   String   @default("tmc")
+  // Free-text school name. null = a baseline window that applies to ALL schools
+  // (e.g. national summer break) until a school provides its own dates.
+  schoolName String?
+  board      String? // CBSE | ICSE | IB | Cambridge | State | null
+  kind       String   @default("holiday") // term | holiday | exam-blackout
+  label      String // "Summer Break 2026", "Half-yearly exams", etc.
+  startDate  DateTime
+  endDate    DateTime
+  source     String   @default("manual") // manual | seed | website
+  isActive   Boolean  @default(true)
+  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([tenantId, subBrand, startDate, endDate])
+  @@index([tenantId, schoolName])
 }
 
 model TravelMarkupRule {

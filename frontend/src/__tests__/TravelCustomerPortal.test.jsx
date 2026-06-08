@@ -75,6 +75,20 @@ function renderPortal() {
   );
 }
 
+// The dashboard is now a sidebar layout with views. Navigate via the sidebar
+// nav (scoped by its aria-label so the label doesn't collide with the
+// overview cards / view headings that share the same text).
+async function gotoView(name) {
+  const nav = await screen.findByRole('navigation', { name: /portal sections/i });
+  fireEvent.click(within(nav).getByRole('button', { name }));
+}
+
+// Profile is NOT in the sidebar — it opens from the header name/avatar button.
+async function openProfile() {
+  await screen.findByRole('navigation', { name: /portal sections/i });
+  fireEvent.click(screen.getByRole('button', { name: /ahmed khan/i }));
+}
+
 beforeEach(() => {
   localStorage.clear();
   vi.restoreAllMocks();
@@ -128,8 +142,8 @@ describe('TravelCustomerPortal — pre-login (LoginScreen)', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: /sign in/i }));
     await waitFor(() => {
-      // Dashboard chrome: "Travel Customer Portal" header + customer name.
-      expect(screen.getByText('Travel Customer Portal')).toBeInTheDocument();
+      // Dashboard chrome: sidebar nav present after login.
+      expect(screen.getByRole('navigation', { name: /portal sections/i })).toBeInTheDocument();
     });
     expect(localStorage.getItem(PORTAL_TOKEN_KEY)).toBe('jwt-x');
   });
@@ -148,15 +162,16 @@ describe('TravelCustomerPortal — Dashboard (authenticated)', () => {
       return mockJsonResponse({});
     });
     renderPortal();
+    // Navigate to the Profile view via the sidebar, then assert details.
+    await openProfile();
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: /^profile$/i })).toBeInTheDocument();
     });
-    // Profile fields rendered from localStorage-cached contact. The name
-    // appears twice (header chrome + Profile card) — use getAllByText per
-    // CLAUDE.md standing rule on duplicate labels.
+    // Name appears in the sidebar, header button + Profile card — use
+    // getAllByText per the duplicate-label standing rule.
     expect(screen.getAllByText('Ahmed Khan').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText('ahmed.pilgrim@demo.test')).toBeInTheDocument();
-    // Both endpoints fetched
+    expect(screen.getAllByText('ahmed.pilgrim@demo.test').length).toBeGreaterThanOrEqual(1);
+    // Both dashboard endpoints fetched on mount.
     const calls = globalThis.fetch.mock.calls.map(([u]) => u);
     expect(calls.some((u) => u.includes('/portal/kyc/status'))).toBe(true);
     expect(calls.some((u) => u.includes('/portal/travel/itineraries'))).toBe(true);
@@ -181,15 +196,14 @@ describe('TravelCustomerPortal — Dashboard (authenticated)', () => {
     renderPortal();
     await waitFor(() => {
       // The "Verified" pill in the top-right header (rendered as a span,
-      // not a button) — there are also "Verified ✓" texts in the Profile
-      // card. Use getAllByText to tolerate duplicate labels (CLAUDE.md
-      // standing rule for repeated copy across header chrome + body).
+      // not a button). Use getAllByText to tolerate duplicate labels.
       expect(screen.getAllByText(/verified/i).length).toBeGreaterThanOrEqual(1);
     });
     // No "Connect with DigiLocker" button should appear when verified.
     expect(screen.queryByRole('button', { name: /connect with digilocker/i })).toBeNull();
-    // Masked Aadhaar last-4 visible
-    expect(screen.getByText(/9999/)).toBeInTheDocument();
+    // Masked Aadhaar last-4 lives in the Profile view.
+    await openProfile();
+    expect(await screen.findByText(/9999/)).toBeInTheDocument();
   });
 
   test('stub-mode verify flow: click Connect → initiate + callback fire inline → success message', async () => {
@@ -252,12 +266,353 @@ describe('TravelCustomerPortal — Dashboard (authenticated)', () => {
     });
     renderPortal();
     await waitFor(() => {
-      expect(screen.getByText('Travel Customer Portal')).toBeInTheDocument();
+      expect(screen.getByRole('navigation', { name: /portal sections/i })).toBeInTheDocument();
     });
     fireEvent.click(screen.getByRole('button', { name: /sign out/i }));
     // LoginScreen heading visible again
     expect(screen.getByRole('heading', { name: /customer portal/i })).toBeInTheDocument();
     expect(localStorage.getItem(PORTAL_TOKEN_KEY)).toBeNull();
     expect(localStorage.getItem(PORTAL_CONTACT_KEY)).toBeNull();
+  });
+});
+
+describe('TravelCustomerPortal — self-service diagnostic', () => {
+  const RFU_BANK = {
+    available: true,
+    bankId: 7,
+    subBrand: 'rfu',
+    version: 1,
+    questions: [
+      {
+        id: 'q1',
+        text: 'Have you performed Umrah before?',
+        type: 'single-choice',
+        options: [
+          { value: 'first', label: 'First-time pilgrim' },
+          { value: 'repeat', label: 'Repeat (3+)' },
+        ],
+      },
+      {
+        id: 'q2',
+        text: 'Any special-assistance requirements?',
+        type: 'multi-select',
+        options: [
+          { value: 'wheelchair', label: 'Wheelchair' },
+          { value: 'halal-meal', label: 'Halal meal' },
+        ],
+      },
+    ],
+  };
+
+  // Base dashboard fetch mock (kyc + itineraries) + a customisable diagnostic
+  // handler. `onPost` captures the submitted body. `brands` drives the
+  // brand-selector; a single brand auto-selects (no dropdown).
+  function mockDashboard({
+    brands = [{ subBrand: 'rfu' }],
+    defaultSubBrand = 'rfu',
+    bank = RFU_BANK,
+    history = [],
+    postResult,
+    onPost,
+  } = {}) {
+    globalThis.fetch = vi.fn((url, opts) => {
+      if (url.includes('/portal/kyc/status')) return mockJsonResponse({ kycStatus: 'unverified', mode: 'stub', aadhaarLast4: null });
+      if (url.includes('/portal/travel/itineraries')) return mockJsonResponse([]);
+      if (url.includes('/portal/travel/diagnostic-brands')) return mockJsonResponse({ brands, defaultSubBrand });
+      if (url.includes('/portal/travel/diagnostic-bank')) return mockJsonResponse(bank);
+      if (url.includes('/portal/travel/diagnostics')) {
+        if (opts && opts.method === 'POST') {
+          if (onPost) onPost(JSON.parse(opts.body));
+          return mockJsonResponse(postResult, { status: 201 });
+        }
+        return mockJsonResponse(history);
+      }
+      return mockJsonResponse({});
+    });
+  }
+
+  test('renders the take-diagnostic CTA when a bank is available', async () => {
+    setupLoggedIn();
+    mockDashboard();
+    renderPortal();
+    await gotoView(/travel diagnostic/i);
+    expect(await screen.findByRole('button', { name: /take the diagnostic/i })).toBeInTheDocument();
+    // The diagnostic-bank endpoint was fetched.
+    const calls = globalThis.fetch.mock.calls.map(([u]) => u);
+    expect(calls.some((u) => u.includes('/portal/travel/diagnostic-bank'))).toBe(true);
+  });
+
+  test('accepts single + multi answers, POSTs them, and renders the result', async () => {
+    setupLoggedIn();
+    let posted = null;
+    mockDashboard({
+      onPost: (body) => { posted = body; },
+      postResult: {
+        id: 99, subBrand: 'rfu', score: 4, classification: 'level_1',
+        classificationLabel: 'Standard Pilgrim', recommendedTier: 'entry',
+        createdAt: '2026-06-08T10:00:00.000Z',
+      },
+    });
+    renderPortal();
+    await gotoView(/travel diagnostic/i);
+    fireEvent.click(await screen.findByRole('button', { name: /take the diagnostic/i }));
+
+    // Answer q1 (single-choice radio) + q2 (multi-select checkbox).
+    fireEvent.click(await screen.findByLabelText(/First-time pilgrim/i));
+    fireEvent.click(screen.getByLabelText(/Wheelchair/i));
+    fireEvent.click(screen.getByRole('button', { name: /submit answers/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/Standard Pilgrim/i)).toBeInTheDocument();
+    });
+    // Submitted shape: brand + single = string, multi = array.
+    expect(posted.subBrand).toBe('rfu');
+    expect(posted.answers.q1).toBe('first');
+    expect(posted.answers.q2).toEqual(['wheelchair']);
+  });
+
+  test('blocks submit until every question is answered', async () => {
+    setupLoggedIn();
+    let postFired = false;
+    mockDashboard({ onPost: () => { postFired = true; }, postResult: {} });
+    renderPortal();
+    await gotoView(/travel diagnostic/i);
+    fireEvent.click(await screen.findByRole('button', { name: /take the diagnostic/i }));
+    // Answer only q1, leave q2 blank → submit should be rejected client-side.
+    fireEvent.click(await screen.findByLabelText(/First-time pilgrim/i));
+    fireEvent.click(screen.getByRole('button', { name: /submit answers/i }));
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent(/answer every question/i);
+    });
+    expect(postFired).toBe(false);
+  });
+
+  test('shows the latest past result + Retake when history exists', async () => {
+    setupLoggedIn();
+    mockDashboard({
+      history: [{
+        id: 50, subBrand: 'rfu', score: 8, classification: 'level_2',
+        classificationLabel: 'Confident Pilgrim', recommendedTier: 'primary',
+        createdAt: '2026-06-01T10:00:00.000Z',
+      }],
+    });
+    renderPortal();
+    await gotoView(/travel diagnostic/i);
+    await screen.findByText(/Confident Pilgrim/i);
+    expect(screen.getByRole('button', { name: /retake diagnostic/i })).toBeInTheDocument();
+  });
+
+  test('shows an unavailable message when no diagnostic brands exist', async () => {
+    setupLoggedIn();
+    mockDashboard({ brands: [], defaultSubBrand: null });
+    renderPortal();
+    await gotoView(/travel diagnostic/i);
+    await screen.findByText(/no diagnostic is available for you right now/i);
+    expect(screen.queryByRole('button', { name: /take the diagnostic/i })).toBeNull();
+  });
+
+  test('multi-brand customer can choose which programme to take', async () => {
+    setupLoggedIn();
+    const TMC_BANK = {
+      available: true, bankId: 8, subBrand: 'tmc', version: 1,
+      questions: [{ id: 't1', text: 'Group size?', type: 'single-choice', options: [{ value: 'small', label: 'Small group' }] }],
+    };
+    globalThis.fetch = vi.fn((url) => {
+      if (url.includes('/portal/kyc/status')) return mockJsonResponse({ kycStatus: 'unverified', mode: 'stub' });
+      if (url.includes('/portal/travel/itineraries')) return mockJsonResponse([]);
+      if (url.includes('/portal/travel/diagnostic-brands')) {
+        return mockJsonResponse({ brands: [{ subBrand: 'rfu' }, { subBrand: 'tmc' }], defaultSubBrand: 'rfu' });
+      }
+      if (url.includes('/portal/travel/diagnostic-bank')) {
+        return url.includes('subBrand=tmc') ? mockJsonResponse(TMC_BANK) : mockJsonResponse(RFU_BANK);
+      }
+      if (url.includes('/portal/travel/diagnostics')) return mockJsonResponse([]);
+      return mockJsonResponse({});
+    });
+    renderPortal();
+    await gotoView(/travel diagnostic/i);
+    // A selector appears because the customer is served by >1 brand.
+    const select = await screen.findByLabelText(/select travel programme/i);
+    expect(select).toBeInTheDocument();
+    // Default brand (RFU) question is reachable.
+    fireEvent.click(await screen.findByRole('button', { name: /take the diagnostic/i }));
+    expect(await screen.findByText(/Have you performed Umrah before\?/i)).toBeInTheDocument();
+    // Switch to TMC → its question bank loads.
+    fireEvent.change(select, { target: { value: 'tmc' } });
+    fireEvent.click(await screen.findByRole('button', { name: /take the diagnostic/i }));
+    expect(await screen.findByText(/Group size\?/i)).toBeInTheDocument();
+  });
+});
+
+describe('TravelCustomerPortal — sidebar navigation + avatar', () => {
+  function mockBase(extra) {
+    globalThis.fetch = vi.fn((url, opts) => {
+      if (url.includes('/portal/kyc/status')) return mockJsonResponse({ kycStatus: 'unverified', mode: 'stub', aadhaarLast4: null });
+      if (url.includes('/portal/travel/itineraries')) return mockJsonResponse(extra?.itineraries || []);
+      if (url.includes('/portal/travel/diagnostic-brands')) return mockJsonResponse({ brands: [], defaultSubBrand: null });
+      if (url.includes('/portal/travel/avatar') && opts && opts.method === 'POST') {
+        return mockJsonResponse({ avatarUrl: 'https://s3.example/avatars/contact/3140/new.jpg' });
+      }
+      return mockJsonResponse({});
+    });
+  }
+
+  test('default view is the dashboard overview (cards), not all sections at once', async () => {
+    setupLoggedIn();
+    mockBase();
+    renderPortal();
+    await screen.findByRole('navigation', { name: /portal sections/i });
+    // Profile heading is NOT shown on the overview — it lives in its own view.
+    expect(screen.queryByRole('heading', { name: /^profile$/i })).toBeNull();
+  });
+
+  test('clicking the name in the header opens the Profile view', async () => {
+    setupLoggedIn();
+    mockBase();
+    renderPortal();
+    await screen.findByRole('navigation', { name: /portal sections/i });
+    fireEvent.click(screen.getByRole('button', { name: /ahmed khan/i }));
+    expect(await screen.findByRole('heading', { name: /^profile$/i })).toBeInTheDocument();
+  });
+
+  test('My Bookings view lists the customer itineraries', async () => {
+    setupLoggedIn();
+    mockBase({
+      itineraries: [{
+        id: 1, destination: 'Makkah + Madinah', status: 'accepted',
+        startDate: '2026-07-11', endDate: '2026-07-21', totalAmount: 185000, currency: 'INR',
+      }],
+    });
+    renderPortal();
+    await gotoView(/my bookings/i);
+    expect(await screen.findByText(/Makkah \+ Madinah/i)).toBeInTheDocument();
+  });
+
+  test('clicking a booking opens its detail view; Back returns to the list', async () => {
+    setupLoggedIn();
+    mockBase({
+      itineraries: [{
+        id: 1, destination: 'Makkah + Madinah', status: 'accepted',
+        startDate: '2026-07-11', endDate: '2026-07-21',
+        totalAmount: 185000, advancePaidAmount: 92500, currency: 'INR',
+        items: [
+          { id: 11, itemType: 'flight', description: 'DEL-JED Saudia economy', totalPrice: 42000, position: 0 },
+          { id: 12, itemType: 'hotel', description: 'Makkah Hilton — 6 nights', totalPrice: 78000, position: 1 },
+        ],
+      }],
+    });
+    renderPortal();
+    await gotoView(/my bookings/i);
+    // Click the booking row → detail view with items + trip cost.
+    fireEvent.click(await screen.findByRole('button', { name: /view makkah \+ madinah details/i }));
+    expect(await screen.findByText(/your trip includes/i)).toBeInTheDocument();
+    // The item description appears in both the items list AND the per-person
+    // estimate-calculator breakdown, so it's a multi-match now.
+    expect(screen.getAllByText(/DEL-JED Saudia economy/i).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText(/trip cost/i)).toBeInTheDocument();
+    // Back returns to the bookings list.
+    fireEvent.click(screen.getByRole('button', { name: /back to bookings/i }));
+    expect(await screen.findByRole('heading', { name: /my bookings/i })).toBeInTheDocument();
+  });
+
+  test('per-person estimate calculator multiplies per-person price by the typed headcount', async () => {
+    setupLoggedIn();
+    mockBase({
+      itineraries: [{
+        id: 1, destination: 'Makkah + Madinah', status: 'accepted',
+        startDate: '2026-07-11', endDate: '2026-07-21',
+        // total 120000 for pax=2 → per person 60000.
+        totalAmount: 120000, pax: 2, currency: 'INR',
+        items: [
+          { id: 11, itemType: 'flight', description: 'DEL-JED Saudia economy', totalPrice: 42000, position: 0 },
+          { id: 12, itemType: 'hotel', description: 'Makkah Hilton — 6 nights', totalPrice: 78000, position: 1 },
+        ],
+      }],
+    });
+    renderPortal();
+    await gotoView(/my bookings/i);
+    fireEvent.click(await screen.findByRole('button', { name: /view makkah \+ madinah details/i }));
+    await screen.findByText(/estimate for your group/i);
+
+    // Defaults to the advisor's pax (2): 60000 × 2 = 120000.
+    expect(screen.getByText(/60,000.*×.*2 people/i)).toBeInTheDocument();
+
+    // Type 5 people → 60000 × 5 = 300000.
+    const input = screen.getByLabelText(/number of people for the estimate/i);
+    fireEvent.change(input, { target: { value: '5' } });
+    expect(screen.getByText(/60,000.*×.*5 people/i)).toBeInTheDocument();
+    // The multiplied total surfaces (₹300,000) in the estimate panel.
+    expect(screen.getByText(/3,00,000|300,000/)).toBeInTheDocument();
+  });
+
+  test('uploads an avatar to /portal/travel/avatar and shows the new image', async () => {
+    setupLoggedIn();
+    mockBase();
+    renderPortal();
+    await openProfile();
+    const input = await screen.findByLabelText(/upload profile photo/i);
+    const file = new File(['x'], 'me.png', { type: 'image/png' });
+    fireEvent.change(input, { target: { files: [file] } });
+    await waitFor(() => {
+      expect(document.querySelector('img[src*="avatars/contact/3140"]')).toBeTruthy();
+    });
+    const calls = globalThis.fetch.mock.calls.map(([u]) => u);
+    expect(calls.some((u) => u.includes('/portal/travel/avatar'))).toBe(true);
+  });
+});
+
+describe('TravelCustomerPortal — customer accept / decline of an offer', () => {
+  // A "sent" itinerary is a decidable offer — the customer can accept/decline.
+  const OFFER = {
+    id: 1, destination: 'Goa Family', status: 'sent',
+    startDate: '2026-07-01', endDate: '2026-07-05',
+    totalAmount: 50000, currency: 'INR', items: [],
+  };
+
+  function mockOffer({ onAccept, onDecline } = {}) {
+    globalThis.fetch = vi.fn((url, opts) => {
+      if (url.includes('/portal/kyc/status')) return mockJsonResponse({ kycStatus: 'unverified', mode: 'stub' });
+      if (url.includes('/portal/travel/diagnostic-brands')) return mockJsonResponse({ brands: [], defaultSubBrand: null });
+      if (url.includes('/portal/travel/itineraries/1/accept') && opts && opts.method === 'POST') {
+        if (onAccept) onAccept(opts.body ? JSON.parse(opts.body) : {});
+        return mockJsonResponse({ id: 1, status: 'accepted' }, { status: 200 });
+      }
+      if (url.includes('/portal/travel/itineraries/1/decline') && opts && opts.method === 'POST') {
+        const body = opts.body ? JSON.parse(opts.body) : {};
+        if (onDecline) onDecline(body);
+        return mockJsonResponse({ id: 1, status: 'rejected', declineReason: body.reason }, { status: 200 });
+      }
+      if (url.includes('/portal/travel/itineraries') && (!opts || opts.method === 'GET')) {
+        return mockJsonResponse([OFFER]);
+      }
+      return mockJsonResponse({});
+    });
+  }
+
+  test('a decidable offer shows Accept + Decline and accepting POSTs /accept', async () => {
+    setupLoggedIn();
+    let accepted = false;
+    mockOffer({ onAccept: () => { accepted = true; } });
+    renderPortal();
+    await gotoView(/my bookings/i);
+    fireEvent.click(await screen.findByRole('button', { name: /view goa family details/i }));
+    expect(await screen.findByText(/review this offer/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /accept offer/i }));
+    await waitFor(() => expect(accepted).toBe(true));
+  });
+
+  test('declining asks for a reason and posts it to /decline', async () => {
+    setupLoggedIn();
+    let declineBody = null;
+    mockOffer({ onDecline: (b) => { declineBody = b; } });
+    renderPortal();
+    await gotoView(/my bookings/i);
+    fireEvent.click(await screen.findByRole('button', { name: /view goa family details/i }));
+    // Decline opens a reason form rather than declining immediately.
+    fireEvent.click(await screen.findByRole('button', { name: /^decline$/i }));
+    const reason = await screen.findByLabelText(/reason for declining/i);
+    fireEvent.change(reason, { target: { value: 'Budget too high' } });
+    fireEvent.click(screen.getByRole('button', { name: /confirm decline/i }));
+    await waitFor(() => expect(declineBody && declineBody.reason).toBe('Budget too high'));
   });
 });

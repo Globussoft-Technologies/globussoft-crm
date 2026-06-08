@@ -157,6 +157,9 @@ function makeFetchImpl(getResponse = ITIN_WITH_ITEMS, opts = {}) {
     if (url.match(/^\/api\/travel\/itineraries\/\d+$/) && method === "GET") {
       return Promise.resolve(getResponse);
     }
+    if (url.match(/^\/api\/travel\/suppliers(\?|$)/) && method === "GET") {
+      return Promise.resolve({ suppliers: opts.suppliers || [] });
+    }
     if (url.match(/\/draft\/regen$/) && method === "POST") {
       return Promise.resolve({
         id: 42,
@@ -250,6 +253,19 @@ describe("ItineraryDetail — page contract", () => {
     expect(await screen.findByText(/No items yet/i)).toBeTruthy();
   });
 
+  it("empty items state shows an Add item CTA that opens the form", async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl(ITIN_EMPTY));
+    renderPage();
+    await screen.findByText(/No items yet/i);
+    // Editable users get two "Add item" affordances: the header button + the
+    // prominent empty-state CTA (so it isn't missed).
+    const addButtons = screen.getAllByRole("button", { name: /Add item/i });
+    expect(addButtons.length).toBeGreaterThanOrEqual(2);
+    // Clicking the empty-state CTA opens the item form.
+    fireEvent.click(addButtons[addButtons.length - 1]);
+    expect(await screen.findByRole("button", { name: /Save item/i })).toBeInTheDocument();
+  });
+
   it("renders draftSummary when present, empty state when null", async () => {
     fetchApiMock.mockImplementation(makeFetchImpl(ITIN_WITH_ITEMS));
     const { unmount } = renderPage();
@@ -278,6 +294,50 @@ describe("ItineraryDetail — page contract", () => {
     expect(notifyObj.success).toHaveBeenCalledWith("Draft regenerated");
   });
 
+  it("item Type dropdown offers non-flight (domestic) + expense options", async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl(ITIN_WITH_ITEMS));
+    renderPage();
+    await screen.findByText(/Goa school trip/);
+    fireEvent.click(screen.getByRole("button", { name: /Add item/i }));
+    // The Type <select> should include the newly-added options.
+    const opts = ["train", "bus", "cab", "meals", "sightseeing", "other"];
+    for (const t of opts) {
+      expect(screen.getByRole("option", { name: t })).toBeInTheDocument();
+    }
+  });
+
+  it("Supplier is a dropdown populated from /suppliers (no raw numeric id)", async () => {
+    fetchApiMock.mockImplementation(
+      makeFetchImpl(ITIN_WITH_ITEMS, {
+        suppliers: [
+          { id: 7, name: "Makemytrip Hotels", subBrand: "tmc" },
+          { id: 9, name: "IRCTC Rail", subBrand: "tmc" },
+        ],
+      }),
+    );
+    renderPage();
+    await screen.findByText(/Goa school trip/);
+    fireEvent.click(screen.getByRole("button", { name: /Add item/i }));
+    // Supplier options render by name; pick one and confirm it posts the id.
+    expect(await screen.findByRole("option", { name: /Makemytrip Hotels/i })).toBeInTheDocument();
+    // The supplier <select> is the one carrying the "— None —" option (a loose
+    // /Supplier/i label query would also match the "what you pay the supplier"
+    // hint on Unit cost).
+    const supplierSelect = (await screen.findByRole("option", { name: /— None —/i })).closest("select");
+    fireEvent.change(supplierSelect, { target: { value: "9" } });
+    fireEvent.change(screen.getByPlaceholderText(/IndiGo 6E-237/i), {
+      target: { value: "Delhi → Agra by train" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Save item/i }));
+    await waitFor(() => {
+      const postCall = fetchApiMock.mock.calls.find(
+        (c) => c[0] === "/api/travel/itineraries/42/items" && c[1]?.method === "POST",
+      );
+      expect(postCall).toBeTruthy();
+      expect(JSON.parse(postCall[1].body).supplierId).toBe(9);
+    });
+  });
+
   it("Add item form POSTs with the right body shape", async () => {
     fetchApiMock.mockImplementation(makeFetchImpl(ITIN_WITH_ITEMS));
     renderPage();
@@ -287,9 +347,9 @@ describe("ItineraryDetail — page contract", () => {
     fireEvent.change(screen.getByPlaceholderText(/IndiGo 6E-237/i), {
       target: { value: "Activity — beach cleanup" },
     });
-    // Set unit cost to verify Number-coercion happens before POST.
-    const unitCostInputs = screen.getAllByLabelText(/Unit cost/i);
-    fireEvent.change(unitCostInputs[0], { target: { value: "500" } });
+    // Set the Rate (formerly "Unit cost") to verify Number-coercion before POST.
+    // Anchor /^Rate/ so it doesn't also match the "Line total" hint copy.
+    fireEvent.change(screen.getByLabelText(/^Rate/i), { target: { value: "500" } });
 
     fireEvent.click(screen.getByRole("button", { name: /Save item/i }));
 
@@ -305,6 +365,52 @@ describe("ItineraryDetail — page contract", () => {
       expect(body.unitCost).toBe(500); // coerced to Number
     });
     expect(notifyObj.success).toHaveBeenCalledWith("Item added");
+  });
+
+  it("item form exposes Basis + Quantity + Direction and an auto Line total", async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl(ITIN_WITH_ITEMS));
+    renderPage();
+    await screen.findByText(/Goa school trip/);
+    fireEvent.click(screen.getByRole("button", { name: /Add item/i }));
+    expect(screen.getByLabelText(/^Basis/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^Quantity/i)).toBeInTheDocument();
+    // Default type is flight (transport) → Direction shown.
+    expect(screen.getByLabelText(/^Direction/i)).toBeInTheDocument();
+    // Line total auto-computes from Rate × Qty.
+    fireEvent.change(screen.getByLabelText(/^Rate/i), { target: { value: "1000" } });
+    fireEvent.change(screen.getByLabelText(/^Quantity/i), { target: { value: "2" } });
+    expect(screen.getByLabelText(/^Line total/i)).toHaveValue("2,000");
+  });
+
+  it("adding an item sends unit + quantity + direction (total computed server-side)", async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl(ITIN_WITH_ITEMS));
+    renderPage();
+    await screen.findByText(/Goa school trip/);
+    fireEvent.click(screen.getByRole("button", { name: /Add item/i }));
+    fireEvent.change(screen.getByPlaceholderText(/IndiGo 6E-237/i), { target: { value: "DEL-JED" } });
+    fireEvent.change(screen.getByLabelText(/^Rate/i), { target: { value: "2000" } });
+    fireEvent.change(screen.getByLabelText(/^Quantity/i), { target: { value: "2" } });
+    fireEvent.change(screen.getByLabelText(/^Basis/i), { target: { value: "per_group" } });
+    fireEvent.change(screen.getByLabelText(/^Direction/i), { target: { value: "round_trip" } });
+    fireEvent.click(screen.getByRole("button", { name: /Save item/i }));
+    await waitFor(() => {
+      const post = fetchApiMock.mock.calls.find(
+        (c) => c[0] === "/api/travel/itineraries/42/items" && c[1]?.method === "POST",
+      );
+      const body = JSON.parse(post[1].body);
+      expect(body.unit).toBe("per_group");
+      expect(body.quantity).toBe(2);
+      expect(body.direction).toBe("round_trip");
+      expect(body.totalPrice).toBeUndefined(); // server computes Rate × Qty + Markup + GST
+    });
+  });
+
+  it("header shows per-person and group totals derived from pax", async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl({ ...ITIN_WITH_ITEMS, pax: 2, totalAmount: 20000 }));
+    renderPage();
+    await screen.findByText(/Goa school trip/);
+    expect(screen.getByText(/Per person:/i)).toBeInTheDocument();
+    expect(screen.getByText(/Group \(2\)/i)).toBeInTheDocument();
   });
 
   it("Delete icon confirms + DELETEs the item", async () => {
@@ -764,8 +870,12 @@ describe("ItineraryDetail — share link + PDF download", () => {
 
     // Wait directly for the URL input to appear — the SUT renders it
     // conditionally on shareUrl state, and findBy waits for React's render.
+    // The link is built from the CURRENT origin + the returned shareToken
+    // (env-dynamic: localhost in dev, staging/prod elsewhere) — NOT the
+    // server's hardcoded shareUrl, which the mock still returns to prove the
+    // frontend ignores it.
     const urlInput = await screen.findByDisplayValue(
-      "https://crm.globusdemos.com/p/itinerary/abc123",
+      `${window.location.origin}/p/itinerary/abc123`,
     );
     expect(urlInput).toBeTruthy();
 
@@ -791,14 +901,14 @@ describe("ItineraryDetail — share link + PDF download", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /Generate share link/i }));
     await screen.findByDisplayValue(
-      "https://crm.globusdemos.com/p/itinerary/abc123",
+      `${window.location.origin}/p/itinerary/abc123`,
     );
 
     fireEvent.click(screen.getByRole("button", { name: /Copy share URL/i }));
 
     await waitFor(() => {
       expect(writeText).toHaveBeenCalledWith(
-        "https://crm.globusdemos.com/p/itinerary/abc123",
+        `${window.location.origin}/p/itinerary/abc123`,
       );
     });
     expect(notifyObj.success).toHaveBeenCalledWith("Copied to clipboard");
@@ -817,7 +927,7 @@ describe("ItineraryDetail — share link + PDF download", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /Generate share link/i }));
     await screen.findByDisplayValue(
-      "https://crm.globusdemos.com/p/itinerary/abc123",
+      `${window.location.origin}/p/itinerary/abc123`,
     );
     fireEvent.click(screen.getByRole("button", { name: /Copy share URL/i }));
 

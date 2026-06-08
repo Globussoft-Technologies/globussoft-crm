@@ -145,7 +145,9 @@ export default function BookingExpediaSearch() {
     setEnabledLoading(true);
     setCapStatusLoading(true);
 
-    fetchApi("/api/booking-expedia/enabled")
+    // { silent: true } — this is a readiness PROBE; a 404 (endpoint not yet
+    // shipped) is the expected default state, not an error worth toasting.
+    fetchApi("/api/booking-expedia/enabled", { silent: true })
       .then((res) => {
         if (cancelled) return;
         setEnabled(Boolean(res?.enabled));
@@ -155,9 +157,10 @@ export default function BookingExpediaSearch() {
         if (cancelled) return;
         // 404 (endpoint not yet shipped) or any other error → stay in
         // Phase-2-pending mode. Body may indicate phase: 2 + reason —
-        // surface phase if present.
-        if (err?.body?.phase != null) {
-          setEnabledPhase(Number(err.body.phase) || 2);
+        // surface phase if present. (fetchApi exposes the parsed body as
+        // err.data, not err.body.)
+        if (err?.data?.phase != null) {
+          setEnabledPhase(Number(err.data.phase) || 2);
         }
         setEnabled(false);
       })
@@ -165,7 +168,9 @@ export default function BookingExpediaSearch() {
         if (!cancelled) setEnabledLoading(false);
       });
 
-    fetchApi("/api/booking-expedia/cap-status")
+    // { silent: true } — /cap-status is ADMIN-only; a MANAGER gets a 403 by
+    // design and we render no pill rather than nagging them with a toast.
+    fetchApi("/api/booking-expedia/cap-status", { silent: true })
       .then((res) => {
         if (cancelled) return;
         setCapStatus(res);
@@ -173,10 +178,11 @@ export default function BookingExpediaSearch() {
       .catch((err) => {
         if (cancelled) return;
         // 402 → cap already exceeded; surface in the pill as 100%.
-        if (err?.status === 402 && err?.body) {
+        // (fetchApi exposes the parsed body as err.data, not err.body.)
+        if (err?.status === 402 && err?.data) {
           setCapStatus({
-            spentCents: err.body.spentCents,
-            capCents: err.body.capCents,
+            spentCents: err.data.spentCents,
+            capCents: err.data.capCents,
             percent: 1,
             withinCap: false,
             alertThreshold: true,
@@ -232,20 +238,21 @@ export default function BookingExpediaSearch() {
       });
       setSearchResult(res);
     } catch (err) {
+      // fetchApi exposes the parsed JSON body as err.data (not err.body).
       if (
         err?.status === 402 &&
-        err?.body?.code === "BOOKING_EXPEDIA_BUDGET_EXCEEDED"
+        err?.data?.code === "BOOKING_EXPEDIA_BUDGET_EXCEEDED"
       ) {
         setCapExceeded({
-          spentCents: err.body.spentCents,
-          capCents: err.body.capCents,
+          spentCents: err.data.spentCents,
+          capCents: err.data.capCents,
         });
         setSearchResult(null);
         return;
       }
       if (
         err?.status === 503 &&
-        err?.body?.code === "EXPEDIA_NOT_YET_ENABLED"
+        err?.data?.code === "EXPEDIA_NOT_YET_ENABLED"
       ) {
         notify.info(
           "Expedia is Phase 2 — pending DC-4 demand threshold + Q11 vendor handover.",
@@ -253,7 +260,7 @@ export default function BookingExpediaSearch() {
         setSearchResult(null);
         return;
       }
-      const msg = err?.body?.error || err?.message || "Failed to search hotels";
+      const msg = err?.data?.error || err?.message || "Failed to search hotels";
       notify.error(msg);
       setSearchResult(null);
     } finally {

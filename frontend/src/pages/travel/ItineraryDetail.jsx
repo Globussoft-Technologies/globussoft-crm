@@ -29,20 +29,32 @@ import {
   Map as MapIcon, Plane, Hotel, MapPin, Briefcase, FileText, Shield,
   Plus, Pencil, Trash2, X, Sparkles, Share2, Download, Check, XCircle, Copy,
   Calendar, ChevronDown, ChevronRight,
+  Train, Bus, Car, Camera, Utensils, Package,
 } from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { AuthContext } from "../../App";
 
-const ITEM_TYPES = ["flight", "hotel", "transfer", "activity", "visa", "insurance"];
+// Item types cover both fly + non-fly (domestic) trips and general expenses.
+// Keep in sync with VALID_ITEM_TYPES in backend/routes/travel_itineraries.js.
+const ITEM_TYPES = [
+  "flight", "train", "bus", "cab", "transfer", "hotel",
+  "sightseeing", "activity", "meals", "visa", "insurance", "other",
+];
 
 const ITEM_ICONS = {
   flight: Plane,
-  hotel: Hotel,
+  train: Train,
+  bus: Bus,
+  cab: Car,
   transfer: MapPin,
+  hotel: Hotel,
+  sightseeing: Camera,
   activity: Briefcase,
+  meals: Utensils,
   visa: FileText,
   insurance: Shield,
+  other: Package,
 };
 
 const STATUS_COLORS = {
@@ -71,7 +83,36 @@ const EMPTY_ITEM = {
   position: "",
   detailsJson: "",
   supplierId: "",
+  unit: "per_person",
+  quantity: "1",
+  direction: "",
 };
+
+// Pricing-basis options + labels (mirror VALID_ITEM_UNITS in the backend).
+const ITEM_UNITS = [
+  { value: "per_person", label: "Per person" },
+  { value: "per_night", label: "Per night" },
+  { value: "per_room_night", label: "Per room-night" },
+  { value: "per_day", label: "Per day" },
+  { value: "per_group", label: "Whole group (flat)" },
+];
+const unitLabel = (u) => (ITEM_UNITS.find((x) => x.value === u) || {}).label || u || "";
+// Transport types where a one-way / round-trip distinction matters.
+const TRANSPORT_TYPES = ["flight", "train", "bus", "cab", "transfer"];
+const DIRECTIONS = [
+  { value: "", label: "—" },
+  { value: "one_way", label: "One-way" },
+  { value: "round_trip", label: "Round-trip" },
+];
+// Compute the line total the same way the server does (rate × qty + markup + GST).
+function lineTotalOf(v) {
+  const rate = v.unitCost !== "" && v.unitCost != null ? Number(v.unitCost) : 0;
+  let qty = v.quantity !== "" && v.quantity != null ? Number(v.quantity) : 1;
+  if (!Number.isFinite(qty) || qty < 0) qty = 1;
+  const mk = v.markup !== "" && v.markup != null ? Number(v.markup) : 0;
+  const gst = v.gstAmount !== "" && v.gstAmount != null ? Number(v.gstAmount) : 0;
+  return Math.round((rate * qty + mk + gst) * 100) / 100;
+}
 
 function fmtDate(d) {
   if (!d) return "—";
@@ -134,6 +175,10 @@ export default function ItineraryDetail() {
   const [dayCostsOpen, setDayCostsOpen] = useState(false);
   const [dayCosts, setDayCosts] = useState(null); // { days, grandTotal, totalDays, averageDailyCost }
   const [dayCostsLoading, setDayCostsLoading] = useState(false);
+  // Suppliers for the item form's supplier picker (replaces the raw numeric
+  // "Supplier ID" field). Fetched once; tolerant of failure (picker just
+  // shows "— None —").
+  const [suppliers, setSuppliers] = useState([]);
 
   const load = () => {
     setLoading(true);
@@ -147,6 +192,12 @@ export default function ItineraryDetail() {
   };
 
   useEffect(load, [id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    fetchApi("/api/travel/suppliers?limit=500")
+      .then((res) => setSuppliers(Array.isArray(res) ? res : (res?.suppliers || [])))
+      .catch(() => setSuppliers([]));
+  }, []);
 
   const accept = async () => {
     if (!confirm("Mark this itinerary as accepted? This also fans out WebCheckin rows for every flight item.")) return;
@@ -194,7 +245,15 @@ export default function ItineraryDetail() {
         method: "POST",
         body: JSON.stringify({}),
       });
-      setShareUrl(res?.shareUrl || null);
+      // Build the share link from the CURRENT origin so it matches the
+      // environment the advisor is in — localhost in dev, the staging host
+      // on staging, the prod domain in prod — instead of the server's
+      // hardcoded PUBLIC_BASE_URL fallback. Fall back to the server-built
+      // shareUrl if the token isn't present for any reason.
+      const link = res?.shareToken
+        ? `${window.location.origin}/p/itinerary/${res.shareToken}`
+        : res?.shareUrl || null;
+      setShareUrl(link);
       notify.success("Share link generated");
     } catch (e) {
       notify.error(e?.body?.error || "Failed to generate share link");
@@ -227,7 +286,10 @@ export default function ItineraryDetail() {
       if (newItem.unitCost !== "") body.unitCost = Number(newItem.unitCost);
       if (newItem.markup !== "") body.markup = Number(newItem.markup);
       if (newItem.gstAmount !== "") body.gstAmount = Number(newItem.gstAmount);
-      if (newItem.totalPrice !== "") body.totalPrice = Number(newItem.totalPrice);
+      if (newItem.unit) body.unit = newItem.unit;
+      if (newItem.quantity !== "") body.quantity = Number(newItem.quantity);
+      if (newItem.direction) body.direction = newItem.direction;
+      // totalPrice is computed server-side (Rate × Qty + Markup + GST).
       await fetchApi(`/api/travel/itineraries/${id}/items`, {
         method: "POST",
         body: JSON.stringify(body),
@@ -258,7 +320,10 @@ export default function ItineraryDetail() {
       if (editing.unitCost !== "" && editing.unitCost != null) body.unitCost = Number(editing.unitCost);
       if (editing.markup !== "" && editing.markup != null) body.markup = Number(editing.markup);
       if (editing.gstAmount !== "" && editing.gstAmount != null) body.gstAmount = Number(editing.gstAmount);
-      if (editing.totalPrice !== "" && editing.totalPrice != null) body.totalPrice = Number(editing.totalPrice);
+      if (editing.unit) body.unit = editing.unit;
+      if (editing.quantity !== "" && editing.quantity != null) body.quantity = Number(editing.quantity);
+      body.direction = editing.direction || "";
+      // totalPrice is computed server-side (Rate × Qty + Markup + GST).
       await fetchApi(`/api/travel/itineraries/${id}/items/${editing.id}`, {
         method: "PATCH",
         body: JSON.stringify(body),
@@ -317,6 +382,25 @@ export default function ItineraryDetail() {
 
   const status = itin.status || "draft";
   const isTerminal = status === "accepted" || status === "rejected";
+  // totalAmount is the GROUP total (sum of item line totals); per-person is
+  // derived as group / travelers.
+  const pax = itin.pax && itin.pax > 0 ? itin.pax : 1;
+  const perPerson = itin.totalAmount != null
+    ? Math.round((Number(itin.totalAmount) / pax) * 100) / 100
+    : null;
+  const savePax = async (n) => {
+    const p = parseInt(n, 10);
+    if (!Number.isFinite(p) || p < 1 || p === pax) return;
+    try {
+      await fetchApi(`/api/travel/itineraries/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ pax: p }),
+      });
+      load();
+    } catch (e) {
+      notify.error(e?.body?.error || "Failed to update travelers");
+    }
+  };
   // PDF download uses a plain link; back-end accepts cookie OR bearer.
   // For bearer-only sessions, append token via query string would require a
   // server tweak — keep the link simple for now and document inline.
@@ -344,8 +428,26 @@ export default function ItineraryDetail() {
               <span style={{ color: "var(--text-secondary)", fontSize: 13 }}>
                 {fmtDate(itin.startDate)} → {fmtDate(itin.endDate)}
               </span>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 6, color: "var(--text-secondary)", fontSize: 13 }}>
+                Travelers:
+                {canEdit ? (
+                  <input
+                    type="number"
+                    min={1}
+                    defaultValue={pax}
+                    onBlur={(e) => savePax(e.target.value)}
+                    aria-label="Number of travelers"
+                    style={{ width: 56, padding: "2px 6px", borderRadius: 6, border: "1px solid var(--border-color)", background: "var(--bg-color)", color: "var(--text-primary)", fontSize: 13 }}
+                  />
+                ) : (
+                  <strong style={{ color: "var(--text-primary)" }}>{pax}</strong>
+                )}
+              </span>
+              <span style={{ color: "var(--text-primary)", fontSize: 13, fontWeight: 600 }}>
+                Per person: {fmtMoney(perPerson, itin.currency)}
+              </span>
               <span style={{ color: "var(--text-secondary)", fontSize: 13 }}>
-                Total: {fmtMoney(itin.totalAmount, itin.currency)}
+                Group ({pax}): {fmtMoney(itin.totalAmount, itin.currency)}
               </span>
               {itin.updatedAt && (
                 <span style={{ color: "var(--text-secondary)", fontSize: 12 }}>
@@ -429,7 +531,7 @@ export default function ItineraryDetail() {
 
         {adding && (
           <div style={{ background: "var(--surface-color)", padding: 16, borderRadius: 8, border: "1px solid var(--border-color)", marginBottom: 16 }}>
-            <ItemFields values={newItem} onChange={(patch) => setNewItem({ ...newItem, ...patch })} />
+            <ItemFields values={newItem} suppliers={suppliers} onChange={(patch) => setNewItem({ ...newItem, ...patch })} />
             <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
               <button type="button" onClick={addItem} style={primaryBtn}>Save item</button>
               <button type="button" onClick={() => { setNewItem(EMPTY_ITEM); setAdding(false); }} style={secondaryBtn}>Cancel</button>
@@ -442,7 +544,14 @@ export default function ItineraryDetail() {
           border: "1px solid var(--border-color)", overflow: "hidden",
         }}>
           {!itin.items || itin.items.length === 0 ? (
-            <div style={empty}>No items yet.</div>
+            <div style={{ ...empty, display: "flex", flexDirection: "column", alignItems: "center", gap: 12 }}>
+              <span>No items yet. Add hotels, flights, transport and other trip costs here.</span>
+              {canEdit && !adding && (
+                <button type="button" onClick={() => setAdding(true)} style={primaryBtn}>
+                  <Plus size={14} /> Add item
+                </button>
+              )}
+            </div>
           ) : (
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
@@ -450,9 +559,10 @@ export default function ItineraryDetail() {
                   <th style={th}>#</th>
                   <th style={th}>Type</th>
                   <th style={th}>Description</th>
-                  <th style={th}>Unit cost</th>
+                  <th style={th}>Basis</th>
+                  <th style={th}>Rate</th>
                   <th style={th}>Markup</th>
-                  <th style={th}>Total</th>
+                  <th style={th}>Line total</th>
                   {canEdit && <th style={th} colSpan={2}>Actions</th>}
                 </tr>
               </thead>
@@ -467,8 +577,17 @@ export default function ItineraryDetail() {
                           <Icon size={14} aria-hidden style={{ color: "var(--text-secondary)" }} />
                           {item.itemType}
                         </span>
+                        {item.direction && (
+                          <div style={{ fontSize: 11, color: "var(--text-secondary)" }}>
+                            {item.direction === "round_trip" ? "round-trip" : "one-way"}
+                          </div>
+                        )}
                       </td>
                       <td style={td}><strong>{item.description}</strong></td>
+                      <td style={{ ...td, fontSize: 12, color: "var(--text-secondary)" }}>
+                        {unitLabel(item.unit)}
+                        {item.quantity != null ? ` × ${Number(item.quantity)}` : ""}
+                      </td>
                       <td style={td}>{fmtMoney(item.unitCost, itin.currency)}</td>
                       <td style={td}>{fmtMoney(item.markup, itin.currency)}</td>
                       <td style={td}>{fmtMoney(item.totalPrice, itin.currency)}</td>
@@ -673,7 +792,7 @@ export default function ItineraryDetail() {
                 <X size={18} />
               </button>
             </div>
-            <ItemFields values={editing} onChange={(patch) => setEditing({ ...editing, ...patch })} />
+            <ItemFields values={editing} suppliers={suppliers} onChange={(patch) => setEditing({ ...editing, ...patch })} />
             <div style={{ marginTop: 16, display: "flex", gap: 8, justifyContent: "flex-end" }}>
               <button type="button" onClick={() => setEditing(null)} style={secondaryBtn}>Cancel</button>
               <button type="button" onClick={saveItem} style={primaryBtn}>Save</button>
@@ -704,7 +823,7 @@ function SummaryTile({ label, value }) {
   );
 }
 
-function ItemFields({ values, onChange }) {
+function ItemFields({ values, suppliers = [], onChange }) {
   return (
     <div style={{ display: "grid", gap: 12 }}>
       <div style={{ display: "grid", gap: 8, gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 160px), 1fr))" }}>
@@ -714,35 +833,79 @@ function ItemFields({ values, onChange }) {
             {ITEM_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
           </select>
         </label>
+        {TRANSPORT_TYPES.includes(values.itemType) && (
+          <label style={fieldLabel}>
+            Direction
+            <select value={values.direction ?? ""} onChange={(e) => onChange({ direction: e.target.value })} style={input}>
+              {DIRECTIONS.map((d) => <option key={d.value} value={d.value}>{d.label}</option>)}
+            </select>
+            <span style={hintLabel}>One-way or round-trip.</span>
+          </label>
+        )}
         <label style={fieldLabel}>
-          Position
-          <input type="number" value={values.position ?? ""} onChange={(e) => onChange({ position: e.target.value })} style={input} placeholder="auto" />
+          Order
+          <input
+            type="number"
+            min={0}
+            value={values.position ?? ""}
+            onChange={(e) => onChange({ position: e.target.value })}
+            style={input}
+            placeholder="auto"
+          />
+          <span style={hintLabel}>Sequence in the trip. Leave blank to add at the end.</span>
         </label>
         <label style={fieldLabel}>
-          Supplier ID
-          <input type="number" value={values.supplierId ?? ""} onChange={(e) => onChange({ supplierId: e.target.value })} style={input} placeholder="—" />
+          Supplier
+          <select
+            value={values.supplierId ?? ""}
+            onChange={(e) => onChange({ supplierId: e.target.value })}
+            style={input}
+          >
+            <option value="">— None —</option>
+            {suppliers.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name}{s.subBrand ? ` (${s.subBrand})` : ""}
+              </option>
+            ))}
+          </select>
+          <span style={hintLabel}>Who you&rsquo;re booking this through (optional).</span>
         </label>
       </div>
       <label style={fieldLabel}>
         Description
         <input value={values.description ?? ""} onChange={(e) => onChange({ description: e.target.value })} style={input} placeholder="e.g. IndiGo 6E-237 BLR → MAA" />
       </label>
-      <div style={{ display: "grid", gap: 8, gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 140px), 1fr))" }}>
+      <div style={{ display: "grid", gap: 8, gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 130px), 1fr))" }}>
         <label style={fieldLabel}>
-          Unit cost
-          <input type="number" step="0.01" value={values.unitCost ?? ""} onChange={(e) => onChange({ unitCost: e.target.value })} style={input} />
+          Basis
+          <select value={values.unit ?? "per_person"} onChange={(e) => onChange({ unit: e.target.value })} style={input}>
+            {ITEM_UNITS.map((u) => <option key={u.value} value={u.value}>{u.label}</option>)}
+          </select>
+          <span style={hintLabel}>What the rate is for.</span>
+        </label>
+        <label style={fieldLabel}>
+          Quantity
+          <input type="number" step="0.01" min={0} value={values.quantity ?? ""} onChange={(e) => onChange({ quantity: e.target.value })} style={input} placeholder="1" />
+          <span style={hintLabel}>How many units (travelers, nights…).</span>
+        </label>
+        <label style={fieldLabel}>
+          Rate
+          <input type="number" step="0.01" min={0} value={values.unitCost ?? ""} onChange={(e) => onChange({ unitCost: e.target.value })} style={input} />
+          <span style={hintLabel}>Cost of one unit (supplier price).</span>
         </label>
         <label style={fieldLabel}>
           Markup
-          <input type="number" step="0.01" value={values.markup ?? ""} onChange={(e) => onChange({ markup: e.target.value })} style={input} />
+          <input type="number" step="0.01" min={0} value={values.markup ?? ""} onChange={(e) => onChange({ markup: e.target.value })} style={input} />
+          <span style={hintLabel}>Your margin on top of cost.</span>
         </label>
         <label style={fieldLabel}>
           GST amount
-          <input type="number" step="0.01" value={values.gstAmount ?? ""} onChange={(e) => onChange({ gstAmount: e.target.value })} style={input} />
+          <input type="number" step="0.01" min={0} value={values.gstAmount ?? ""} onChange={(e) => onChange({ gstAmount: e.target.value })} style={input} />
         </label>
         <label style={fieldLabel}>
-          Total price
-          <input type="number" step="0.01" value={values.totalPrice ?? ""} onChange={(e) => onChange({ totalPrice: e.target.value })} style={input} />
+          Line total
+          <input type="text" readOnly value={lineTotalOf(values).toLocaleString("en-IN")} style={{ ...input, opacity: 0.75, cursor: "not-allowed" }} />
+          <span style={hintLabel}>Rate × Qty + Markup + GST (auto).</span>
         </label>
       </div>
       <label style={fieldLabel}>
@@ -768,6 +931,10 @@ const fieldLabel = {
   display: "grid", gap: 4, fontSize: 11,
   textTransform: "uppercase", letterSpacing: 0.5,
   color: "var(--text-secondary)",
+};
+const hintLabel = {
+  fontSize: 11, textTransform: "none", letterSpacing: 0,
+  color: "var(--text-secondary)", opacity: 0.8, fontWeight: 400,
 };
 const empty = { padding: 32, textAlign: "center", color: "var(--text-secondary)", fontSize: 14 };
 const th = {

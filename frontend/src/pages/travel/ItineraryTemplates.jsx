@@ -24,11 +24,18 @@
 // Mirrors SightseeingMaster.jsx (ca052d20) — same #907 arc, same admin-table
 // pattern, same notify hook (`../utils/notify`, not `../hooks/useNotify`).
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useContext } from 'react';
 import { Link } from 'react-router-dom';
 import { ChevronLeft, ChevronRight, Edit2, Filter, FileText, Plus, Trash2, X } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
+import { AuthContext } from '../../App';
+import { useActiveSubBrand } from '../../utils/subBrand';
+import {
+  accessibleSubBrands,
+  defaultSubBrandFor,
+  subBrandShortLabel,
+} from '../../utils/travelSubBrand';
 
 const SUB_BRANDS = [
   { value: '', label: 'All sub-brands' },
@@ -69,6 +76,15 @@ const EMPTY_FORM = {
 
 export default function ItineraryTemplates() {
   const notify = useNotify();
+  const { user } = useContext(AuthContext) || {};
+  const { activeSubBrand } = useActiveSubBrand();
+
+  // Sub-brand access: ADMIN / unrestricted users get a dropdown of all their
+  // accessible brands; single-brand users get the field locked read-only; 2-3
+  // brand users get a dropdown limited to THEIR brands. See defaultSubBrandFor.
+  const myBrands = accessibleSubBrands(user);
+  const lockedBrand = myBrands.length === 1 ? myBrands[0] : null;
+
   const [items, setItems] = useState([]);
   const [total, setTotal] = useState(0);
   const [offset, setOffset] = useState(0);
@@ -116,6 +132,14 @@ export default function ItineraryTemplates() {
     setForm(EMPTY_FORM);
     setEditingId(null);
     setShowForm(false);
+  };
+
+  // Open a fresh create form with the sub-brand pre-resolved to the user's
+  // default (their single brand if locked, else the active sidebar brand).
+  const openCreateForm = () => {
+    setForm({ ...EMPTY_FORM, subBrand: defaultSubBrandFor(user, activeSubBrand) });
+    setEditingId(null);
+    setShowForm(true);
   };
 
   const handleEdit = (item) => {
@@ -260,7 +284,7 @@ export default function ItineraryTemplates() {
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           {!showForm && (
-            <button type="button" onClick={() => setShowForm(true)} style={primaryBtn}>
+            <button type="button" onClick={openCreateForm} style={primaryBtn}>
               <Plus size={14} /> Add template
             </button>
           )}
@@ -427,19 +451,32 @@ export default function ItineraryTemplates() {
               </select>
             </Field>
             <Field label="Sub-brand">
-              <select
-                value={form.subBrand}
-                onChange={(e) => setForm({ ...form, subBrand: e.target.value })}
-                aria-label="subBrand"
-                style={selectStyle}
-              >
-                <option value="">— Tenant-wide —</option>
-                {SUB_BRANDS.filter((s) => s.value).map((s) => (
-                  <option key={s.value} value={s.value}>
-                    {s.label}
-                  </option>
-                ))}
-              </select>
+              {lockedBrand ? (
+                // Single-brand user: field is locked to their assigned brand.
+                // The value is already pinned in form.subBrand via
+                // defaultSubBrandFor (create) or the loaded row (edit).
+                <input
+                  type="text"
+                  value={subBrandShortLabel(lockedBrand)}
+                  readOnly
+                  disabled
+                  aria-label="Sub-brand (locked to your assigned brand)"
+                  style={{ ...inputStyle, opacity: 0.7, cursor: 'not-allowed' }}
+                />
+              ) : (
+                <select
+                  value={form.subBrand}
+                  onChange={(e) => setForm({ ...form, subBrand: e.target.value })}
+                  aria-label="subBrand"
+                  style={selectStyle}
+                >
+                  {myBrands.map((b) => (
+                    <option key={b} value={b}>
+                      {subBrandShortLabel(b)}
+                    </option>
+                  ))}
+                </select>
+              )}
             </Field>
             <Field label="Base price (minor units)">
               <input

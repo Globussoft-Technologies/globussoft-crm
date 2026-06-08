@@ -175,6 +175,30 @@ function renderPage({ role = 'ADMIN' } = {}) {
 }
 
 describe('DiagnosticDetail — advisor brief UI (PRD §4.1 + §4.2)', () => {
+  it('report PDF button POSTs to report-pdf/regen and opens the result', async () => {
+    const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/travel/diagnostics/42' && (!opts || opts.method === undefined || opts.method === 'GET')) {
+        return Promise.resolve(DIAGNOSTIC_NO_BRIEF);
+      }
+      if (url === '/api/travel/diagnostics/42/report-pdf/regen' && opts?.method === 'POST') {
+        return Promise.resolve({ reportPdfUrl: '/uploads/diagnostics/diag-42-new.pdf' });
+      }
+      return Promise.resolve(null);
+    });
+    renderPage();
+    const btn = await screen.findByRole('button', { name: /Regenerate PDF|Generate report PDF/i });
+    fireEvent.click(btn);
+    await waitFor(() => {
+      const post = fetchApiMock.mock.calls.find(
+        ([u, o]) => u === '/api/travel/diagnostics/42/report-pdf/regen' && o?.method === 'POST',
+      );
+      expect(post).toBeTruthy();
+    });
+    expect(openSpy).toHaveBeenCalledWith('/uploads/diagnostics/diag-42-new.pdf', '_blank', 'noopener,noreferrer');
+    openSpy.mockRestore();
+  });
+
   it('renders the page header with the diagnostic id', async () => {
     fetchApiMock.mockImplementation(makeFetchImpl(DIAGNOSTIC_NO_BRIEF));
     renderPage();
@@ -364,6 +388,31 @@ describe('DiagnosticDetail — advisor brief UI (PRD §4.1 + §4.2)', () => {
     expect(screen.getByLabelText(/Classification/i).textContent).toMatch(
       /High-intent qualified/i,
     );
+  });
+
+  it('renders a Customer section with the contact name/email/phone when the diagnostic is enriched', async () => {
+    const enriched = {
+      ...DIAGNOSTIC_NO_BRIEF,
+      contactId: 100,
+      contact: { id: 100, name: 'Asha Verma', email: 'asha@x.com', phone: '+91 99999 00000' },
+    };
+    fetchApiMock.mockImplementation(makeFetchImpl(enriched));
+    renderPage();
+    await screen.findByRole('heading', { name: /Diagnostic #42/i });
+
+    // Header chip carries the name.
+    expect(screen.getByLabelText(/Customer/i).textContent).toMatch(/Asha Verma/i);
+    // Dedicated Customer section shows the full contact details.
+    expect(screen.getByRole('heading', { name: /^Customer$/i })).toBeTruthy();
+    expect(screen.getByText('asha@x.com')).toBeTruthy();
+    expect(screen.getByText('+91 99999 00000')).toBeTruthy();
+  });
+
+  it('Customer chip falls back to "Contact #<id>" when no enriched contact is attached', async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl(DIAGNOSTIC_NO_BRIEF));
+    renderPage();
+    await screen.findByRole('heading', { name: /Diagnostic #42/i });
+    expect(screen.getByLabelText(/Customer/i).textContent).toMatch(/Contact #100/i);
   });
 
   it('falls back to the empty-state when questionsJson is missing — shows answers-map dump', async () => {

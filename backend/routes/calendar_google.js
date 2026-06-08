@@ -3,11 +3,13 @@ const path = require("path");
 require("dotenv").config({ path: path.resolve(__dirname, "../../.env"), override: true });
 
 const express = require("express");
+const crypto = require("crypto");
 const { google } = require("googleapis");
 const { verifyToken } = require("../middleware/auth");
 
 const router = express.Router();
 const prisma = require("../lib/prisma");
+const { parseSlotWindow, freeSlots } = require("../lib/calendarSlots");
 
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || process.env.GOOGLE_OAUTH_CLIENT_ID || "";
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || process.env.GOOGLE_OAUTH_CLIENT_SECRET || "";
@@ -274,10 +276,20 @@ router.get("/events", verifyToken, async (req, res) => {
 // POST /events — create event in Google Calendar + DB
 router.post("/events", verifyToken, async (req, res) => {
   try {
-    const { title, description, startTime, endTime, attendees, contactId, dealId, location } = req.body || {};
+    const { title, description, startTime, endTime, attendees, contactId, dealId, location, createMeet, conferencing } = req.body || {};
     if (!title || !startTime || !endTime) {
       return res.status(400).json({ error: "title, startTime and endTime are required" });
     }
+
+    // Opt-in Google Meet link generation (T18). Off by default so every
+    // existing caller's behavior is unchanged; Travel's consultation-call
+    // booking flow passes createMeet:true (or conferencing:'google_meet')
+    // to mint a Meet link on the event.
+    const wantsMeet =
+      createMeet === true ||
+      createMeet === "true" ||
+      conferencing === "google_meet" ||
+      conferencing === "meet";
 
     // Validate and parse dates
     const start = new Date(startTime);
@@ -325,16 +337,35 @@ router.post("/events", verifyToken, async (req, res) => {
           .filter((a) => a && a.email)
       : [];
 
+    const requestBody = {
+      summary: title,
+      description: description || undefined,
+      location: location || undefined,
+      start: { dateTime: new Date(startTime).toISOString() },
+      end: { dateTime: new Date(endTime).toISOString() },
+      attendees: attendeesArr.length ? attendeesArr : undefined,
+    };
+    if (wantsMeet) {
+      // Ask Google to provision a Meet conference for this event. requestId
+      // must be unique per create-request; a UUID satisfies that.
+      requestBody.conferenceData = {
+        createRequest: {
+          requestId: crypto.randomUUID(),
+          conferenceSolutionKey: { type: "hangoutsMeet" },
+        },
+      };
+    }
+
     const insertResp = await calendar.events.insert({
       calendarId: integration.calendarId || "primary",
-      requestBody: {
-        summary: title,
-        description: description || undefined,
-        location: location || undefined,
-        start: { dateTime: new Date(startTime).toISOString() },
-        end: { dateTime: new Date(endTime).toISOString() },
-        attendees: attendeesArr.length ? attendeesArr : undefined,
-      },
+      // conferenceDataVersion:1 is REQUIRED for Google to honor the
+      // createRequest above. Omitted entirely when no Meet is requested so
+      // the call shape is identical to the pre-T18 behavior.
+      ...(wantsMeet ? { conferenceDataVersion: 1 } : {}),
+      // Email the invitation (with the Meet link) to attendees. Without
+      // sendUpdates Google adds them to the event but never notifies them.
+      ...(attendeesArr.length ? { sendUpdates: "all" } : {}),
+      requestBody,
     });
 
     const ev = insertResp.data;
@@ -379,6 +410,77 @@ router.post("/events", verifyToken, async (req, res) => {
   } catch (err) {
     console.error("[calendar_google] POST /events error:", err);
     return res.status(err.status || 500).json({ error: err.message || "Failed to create event" });
+  }
+});
+
+// GET /slots — free/busy availability for a slot-picker (T18).
+//
+// Backs the consultation-call booking UI: given a day + slot length + working
+// hours, returns the bookable slots that don't overlap the connected
+// calendar's busy blocks. Additive + vertical-agnostic — wellness has its own
+// separate availability endpoints (/api/wellness/doctors/...) and never calls
+// this route.
+//
+// Query params:
+//   date          (required) YYYY-MM-DD — the day to search
+//   durationMins  (optional) slot length in minutes (default 30)
+//   startHour     (optional) working-day start hour 0..23 (default 9)
+//   endHour       (optional) working-day end hour 1..24, exclusive (default 18)
+//   stepMins      (optional) gap between slot starts (default = durationMins)
+//   tzOffsetMins  (optional) minutes to add to UTC for the user's local
+//                 wall-clock (e.g. 330 for IST). Default 0 (UTC).
+router.get("/slots", verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    if (!userId) {
+      return res.status(401).json({ error: "User ID not found in token" });
+    }
+
+    const win = parseSlotWindow(req.query);
+    if (win.error) return res.status(400).json({ error: win.error });
+
+    const { client, integration } = await getAuthorizedClientForUser(userId);
+    const calendar = google.calendar({ version: "v3", auth: client });
+    const calId = integration.calendarId || "primary";
+
+    const fb = await calendar.freebusy.query({
+      requestBody: {
+        timeMin: new Date(win.windowStartMs).toISOString(),
+        timeMax: new Date(win.windowEndMs).toISOString(),
+        items: [{ id: calId }],
+      },
+    });
+
+    const busy = (
+      (fb.data &&
+        fb.data.calendars &&
+        fb.data.calendars[calId] &&
+        fb.data.calendars[calId].busy) ||
+      []
+    ).map((b) => ({
+      start: new Date(b.start).getTime(),
+      end: new Date(b.end).getTime(),
+    }));
+
+    const slots = freeSlots(
+      win.windowStartMs,
+      win.windowEndMs,
+      busy,
+      win.durationMins,
+      win.stepMins,
+      Date.now(),
+    );
+
+    return res.json({
+      date: win.dateStr,
+      durationMins: win.durationMins,
+      timeMin: new Date(win.windowStartMs).toISOString(),
+      timeMax: new Date(win.windowEndMs).toISOString(),
+      slots,
+    });
+  } catch (err) {
+    console.error("[calendar_google] GET /slots error:", err);
+    return res.status(err.status || 500).json({ error: err.message || "Failed to load slots" });
   }
 });
 

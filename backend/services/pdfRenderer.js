@@ -2514,7 +2514,25 @@ function renderTravelStallPersonalisedPdf(payload) {
   return bufPromise;
 }
 
-function renderTravelDiagnosticPdf(diagnostic, contact, bank) {
+// Brand logo for travel report headers. Drop a PNG at
+// backend/assets/brand-logo.png and it is embedded automatically; until then
+// the header falls back to a drawn emblem badge (see renderTravelDiagnosticPdf).
+// Cached after first read. (Travel Stall's own brand pack is pending Q22.)
+let _travelHeaderLogo;
+function loadTravelHeaderLogo() {
+  if (_travelHeaderLogo !== undefined) return _travelHeaderLogo;
+  try {
+    const fsMod = require("fs");
+    const pathMod = require("path");
+    const p = pathMod.join(__dirname, "..", "assets", "brand-logo.png");
+    _travelHeaderLogo = fsMod.existsSync(p) ? fsMod.readFileSync(p) : null;
+  } catch {
+    _travelHeaderLogo = null;
+  }
+  return _travelHeaderLogo;
+}
+
+function renderTravelDiagnosticPdf(diagnostic, contact, bank, opts = {}) {
   const sub = diagnostic.subBrand;
   const brandLabel = SUB_BRAND_LABEL[sub] || "Travel CRM";
   const accent = SUB_BRAND_ACCENT[sub] || "#111111";
@@ -2532,34 +2550,63 @@ function renderTravelDiagnosticPdf(diagnostic, contact, bank) {
   const doc = new PDFDocument({ size: "A4", margin: 50 });
   const bufPromise = streamToBuffer(doc);
 
-  doc.rect(0, 0, doc.page.width, 60).fill(accent);
-  doc.font("Helvetica-Bold").fontSize(18).fillColor("#fff")
-    .text(brandLabel, 50, 22, { align: "left" });
-  doc.fillColor("#fff").fontSize(10).text("Diagnostic Report", 50, 42, { align: "left" });
-  doc.fillColor("#111").moveDown(2);
+  // ── Header band: brand logo (left) + label ──────────────────────────
+  const headerH = 66;
+  doc.rect(0, 0, doc.page.width, headerH).fill(accent);
+  let headerTextX = 50;
+  // Logo priority: route-resolved buffer (S3 / tenant) → bundled asset →
+  // drawn emblem badge. The route passes opts.logoBuffer from S3.
+  const logoBuf = opts.logoBuffer || loadTravelHeaderLogo();
+  let logoDrawn = false;
+  if (logoBuf) {
+    try {
+      doc.image(logoBuf, 50, 15, { fit: [36, 36] });
+      logoDrawn = true;
+      headerTextX = 98;
+    } catch {
+      logoDrawn = false;
+    }
+  }
+  if (!logoDrawn) {
+    // Emblem fallback: white rounded badge + brand initial in the accent.
+    const bx = 50, by = 15, bs = 36;
+    doc.roundedRect(bx, by, bs, bs, 8).fill("#ffffff");
+    const initial = (brandLabel || "T").trim().charAt(0).toUpperCase();
+    doc.font("Helvetica-Bold").fontSize(20).fillColor(accent)
+      .text(initial, bx, by + 8, { width: bs, align: "center" });
+    headerTextX = 98;
+  }
+  doc.font("Helvetica-Bold").fontSize(18).fillColor("#fff").text(brandLabel, headerTextX, 18);
+  doc.font("Helvetica").fontSize(10).fillColor("#fff").text("Diagnostic Report", headerTextX, 42);
 
-  doc.font("Helvetica-Bold").fontSize(13).fillColor("#111").text(contact?.name || "Customer", 50, 90);
+  // ── Body: flow downward from just below the header band ──────────────
+  doc.fillColor("#111");
+  doc.x = 50;
+  doc.y = headerH + 24;
+  doc.font("Helvetica-Bold").fontSize(14).fillColor("#111").text(contact?.name || "Customer");
   const metaLine = [contact?.email, contact?.phone].filter(Boolean).join("  •  ");
   if (metaLine) doc.font("Helvetica").fontSize(10).fillColor("#555").text(metaLine);
-  doc.moveDown(0.5);
-
   doc.font("Helvetica").fontSize(10).fillColor("#555");
   doc.text(`Bank version: v${bank?.version ?? "?"}`);
   doc.text(`Submitted: ${formatDate(diagnostic.createdAt || new Date())}`);
-  doc.moveDown();
+  doc.moveDown(0.8);
 
-  doc.rect(50, doc.y, doc.page.width - 100, 70).fillAndStroke("#f4f6f8", accent);
-  const resultY = doc.y - 65;
-  doc.font("Helvetica-Bold").fontSize(11).fillColor("#555")
-    .text("Classification", 60, resultY + 8);
+  // ── Classification box: draw at current y, render inside, then advance ──
+  const boxTop = doc.y;
+  const boxH = 74;
+  doc.rect(50, boxTop, doc.page.width - 100, boxH).fillAndStroke("#f4f6f8", accent);
+  doc.font("Helvetica-Bold").fontSize(11).fillColor("#555").text("Classification", 62, boxTop + 12);
   doc.font("Helvetica-Bold").fontSize(16).fillColor(accent)
-    .text(diagnostic.classificationLabel || diagnostic.classification || "—", 60, resultY + 24);
+    .text(diagnostic.classificationLabel || diagnostic.classification || "—", 62, boxTop + 28);
   doc.font("Helvetica").fontSize(10).fillColor("#333")
-    .text(`Score: ${diagnostic.score != null ? Number(diagnostic.score).toFixed(2) : "—"}`, 60, resultY + 50);
+    .text(`Score: ${diagnostic.score != null ? Number(diagnostic.score).toFixed(2) : "—"}`, 62, boxTop + 52);
   if (diagnostic.recommendedTier) {
-    doc.text(`Recommended tier: ${diagnostic.recommendedTier}`, 280, resultY + 50);
+    doc.font("Helvetica").fontSize(10).fillColor("#333")
+      .text(`Recommended tier: ${diagnostic.recommendedTier}`, 300, boxTop + 52);
   }
-  doc.fillColor("#111").moveDown(2);
+  doc.x = 50;
+  doc.y = boxTop + boxH + 18;
+  doc.fillColor("#111");
 
   doc.font("Helvetica-Bold").fontSize(12).fillColor("#111").text("Your answers", { underline: false });
   doc.moveDown(0.3);
@@ -2577,6 +2624,41 @@ function renderTravelDiagnosticPdf(diagnostic, contact, bank) {
       doc.font("Helvetica").fontSize(10).fillColor("#111")
         .text(`   ${ans}`);
       doc.moveDown(0.4);
+    });
+  }
+
+  // PRD_TMC_CURRICULUM_MAPPING §3 FR-7 — "Why these destinations fit your
+  // curriculum" section, driven by the cached curriculumFitJson snapshot.
+  // Rendered only when present; non-TMC reports (null cache) are unchanged.
+  let curriculumFit = null;
+  try {
+    curriculumFit = diagnostic.curriculumFitJson ? JSON.parse(diagnostic.curriculumFitJson) : null;
+  } catch { /* ignore a malformed cache — omit the section */ }
+  if (
+    curriculumFit &&
+    Array.isArray(curriculumFit.recommendations) &&
+    curriculumFit.recommendations.length
+  ) {
+    doc.moveDown(1);
+    doc.font("Helvetica-Bold").fontSize(12).fillColor("#111")
+      .text("Why these destinations fit your curriculum");
+    const ctxBits = [curriculumFit.curriculum, curriculumFit.grade, curriculumFit.subject]
+      .filter(Boolean)
+      .join("  •  ");
+    if (ctxBits) doc.font("Helvetica").fontSize(9).fillColor("#777").text(ctxBits);
+    doc.moveDown(0.4);
+    curriculumFit.recommendations.forEach((rec) => {
+      const fit = rec.fitScore != null ? `  (fit ${rec.fitScore}/100)` : "";
+      doc.font("Helvetica-Bold").fontSize(10.5).fillColor(accent)
+        .text(`${rec.destination || "Destination"}${fit}`);
+      (rec.reasons || []).forEach((reason) => {
+        const lead = reason.subject ? `${reason.subject}: ` : "";
+        const body = reason.learningOutcome || reason.rationale || "";
+        if (lead || body) {
+          doc.font("Helvetica").fontSize(9.5).fillColor("#333").text(`   • ${lead}${body}`);
+        }
+      });
+      doc.moveDown(0.3);
     });
   }
 

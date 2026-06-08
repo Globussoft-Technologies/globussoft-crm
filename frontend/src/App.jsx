@@ -48,6 +48,9 @@ const Developer = lazy(() => import("./pages/Developer"));
 const Portal = lazy(() => import("./pages/Portal"));
 const TravelCustomerPortal = lazy(() => import("./pages/travel/TravelCustomerPortal"));
 const PublicTripMicrosite = lazy(() => import("./pages/travel/PublicTripMicrosite"));
+// Public itinerary share page (no auth) — the advisor's "Share link" opens
+// /p/itinerary/:shareToken here. Backed by GET /api/travel/itineraries/public/:shareToken.
+const TripBooking = lazy(() => import("./pages/public/TripBooking"));
 const TravelKycCallback = lazy(() => import("./pages/travel/TravelKycCallback"));
 // PRD §3.1 / slice T9 — public no-auth TMC readiness diagnostic.
 const TmcReadiness = lazy(() => import("./pages/public/TmcReadiness"));
@@ -250,6 +253,8 @@ const TravelVisaEmbassyRulesAdmin = lazy(() => import("./pages/travel/visa/Embas
 // POST/PUT/DELETE RBAC. School-trip pitch-deck mappings (curriculum ×
 // grade × subject → destination) consumed by the diagnostic engine.
 const TravelCurriculumAdmin = lazy(() => import("./pages/travel/CurriculumAdmin"));
+// TMC school term calendar admin — term/holiday/exam windows for trip scheduling.
+const TravelSchoolTermCalendar = lazy(() => import("./pages/travel/SchoolTermCalendar"));
 // Phase 2 SHELL for #908 Marketing Flyer Studio (tick #186). Designed in
 // docs/PRD_TRAVEL_MARKETING_FLYER.md; this is a non-functional scaffold —
 // real implementation lands per PRD §8 dependency build order. ADMIN +
@@ -830,10 +835,11 @@ export default function App() {
                       the backend. The two callback routes catch DigiLocker's
                       ?code&state redirect and complete verification. */}
                   <Route path="/p/tripmicrosite/:publicUuid" element={<PublicTripMicrosite />} />
-                  {/* PRD §3.1 / slice T9 — public 12-Q readiness diagnostic. */}
-                  <Route path="/p/tmc/readiness" element={<TmcReadiness />} />
-                  {/* PRD §3.5 / slice T10 — public 10-section readiness report. */}
-                  <Route path="/p/tmc/report/:slug" element={<TmcReadinessReport />} />
+                  {/* Public itinerary share link (no auth). The advisor's
+                      "Share link" generates /p/itinerary/:shareToken; the lead
+                      reviews the itinerary + pays the 50% advance here without
+                      logging in. Backend openPath: /travel/itineraries/public. */}
+                  <Route path="/p/itinerary/:shareToken" element={<TripBooking />} />
                   <Route path="/travel/kyc/callback" element={<TravelKycCallback flow="microsite" />} />
                   <Route path="/travel/portal/kyc/callback" element={<TravelKycCallback flow="portal" />} />
                   <Route
@@ -1335,6 +1341,14 @@ export default function App() {
                 <TravelOnly>
                   <RoleGuard allow={["ADMIN"]} message="Curriculum Mappings admin requires admin access.">
                     <TravelCurriculumAdmin />
+                  </RoleGuard>
+                </TravelOnly>
+              } />
+              {/* TMC school term calendar admin — ADMIN-only per backend gates. */}
+              <Route path="travel/school-terms" element={
+                <TravelOnly>
+                  <RoleGuard allow={["ADMIN"]} message="School Term Calendar requires admin access.">
+                    <TravelSchoolTermCalendar />
                   </RoleGuard>
                 </TravelOnly>
               } />

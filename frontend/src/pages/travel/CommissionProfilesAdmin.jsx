@@ -72,7 +72,13 @@ import { useEffect, useState, useContext } from "react";
 import { Percent, Plus, Pencil, Trash2, Calculator, List, Download } from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
-import { SUB_BRAND_BG } from "../../utils/travelSubBrand";
+import {
+  SUB_BRAND_BG,
+  accessibleSubBrands,
+  defaultSubBrandFor,
+  subBrandShortLabel,
+} from "../../utils/travelSubBrand";
+import { useActiveSubBrand } from "../../utils/subBrand";
 import { AuthContext } from "../../App";
 
 const SUB_BRANDS = [
@@ -238,8 +244,17 @@ function parseProfileJsonForForm(profileType, raw) {
 export default function CommissionProfilesAdmin() {
   const notify = useNotify();
   const { user } = useContext(AuthContext) || {};
+  const { activeSubBrand } = useActiveSubBrand();
   const canWrite = user?.role === "ADMIN" || user?.role === "MANAGER";
   const canDelete = user?.role === "ADMIN";
+
+  // Sub-brand access scoping (mirrors Leads.jsx). myBrands = the sub-brands
+  // this user may act on (ADMIN → all 4; restricted user → their granted
+  // subset). lockedBrand is non-null only when the user is pinned to exactly
+  // one brand — in that case the create/edit form renders a read-only field
+  // instead of a free dropdown.
+  const myBrands = accessibleSubBrands(user);
+  const lockedBrand = myBrands.length === 1 ? myBrands[0] : null;
 
   const [profiles, setProfiles] = useState([]);
   const [total, setTotal] = useState(0);
@@ -308,7 +323,11 @@ export default function CommissionProfilesAdmin() {
   };
 
   const openCreate = () => {
-    resetForm();
+    // Default the sub-brand to the user's resolved brand (single-brand users
+    // → their one brand; multi-brand → active sidebar brand when accessible,
+    // else first brand) rather than the EMPTY_FORM blank.
+    setForm({ ...EMPTY_FORM, subBrand: defaultSubBrandFor(user, activeSubBrand) });
+    setEditingId(null);
     setShowForm(true);
   };
 
@@ -650,17 +669,27 @@ export default function CommissionProfilesAdmin() {
           </label>
           <label style={fieldLabel}>
             <span>Sub-brand</span>
-            <select
-              value={form.subBrand}
-              onChange={(e) => setForm({ ...form, subBrand: e.target.value })}
-              style={inputStyle}
-              aria-label="Sub-brand"
-            >
-              <option value="">(All — tenant-wide)</option>
-              {SUB_BRANDS.filter((s) => s.value).map((s) => (
-                <option key={s.value} value={s.value}>{s.label}</option>
-              ))}
-            </select>
+            {lockedBrand ? (
+              <input
+                type="text"
+                value={subBrandShortLabel(lockedBrand)}
+                readOnly
+                disabled
+                aria-label="Sub-brand (locked to your assigned brand)"
+                style={{ ...inputStyle, opacity: 0.7, cursor: "not-allowed" }}
+              />
+            ) : (
+              <select
+                value={form.subBrand}
+                onChange={(e) => setForm({ ...form, subBrand: e.target.value })}
+                style={inputStyle}
+                aria-label="Sub-brand"
+              >
+                {myBrands.map((b) => (
+                  <option key={b} value={b}>{subBrandShortLabel(b)}</option>
+                ))}
+              </select>
+            )}
           </label>
           <label style={fieldLabel}>
             <span>Profile type</span>

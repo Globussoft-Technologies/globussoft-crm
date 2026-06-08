@@ -36,7 +36,8 @@
 import { useState, useEffect, useCallback } from "react";
 import {
   ShieldCheck, ShieldAlert, LogOut, Plane, User as UserIcon,
-  CheckCircle2, AlertCircle, Loader2,
+  CheckCircle2, AlertCircle, Loader2, ClipboardCheck, Award, LayoutDashboard,
+  ChevronRight, ChevronLeft, Hotel, Ticket,
 } from "lucide-react";
 
 const PORTAL_TOKEN_KEY = "portalToken";
@@ -123,7 +124,19 @@ export default function TravelCustomerPortal() {
     );
   }
 
-  return <Dashboard token={token} contact={contact} onLogout={handleLogout} />;
+  // Persist contact edits (e.g. avatar) to state + localStorage so the
+  // header/profile reflect them and survive a refresh.
+  const updateContact = (patch) => {
+    setContact((prev) => {
+      const next = { ...(prev || {}), ...patch };
+      try { localStorage.setItem(PORTAL_CONTACT_KEY, JSON.stringify(next)); } catch { /* ignore */ }
+      return next;
+    });
+  };
+
+  return (
+    <Dashboard token={token} contact={contact} onUpdateContact={updateContact} onLogout={handleLogout} />
+  );
 }
 
 function LoginScreen({ form, setForm, onSubmit, error, loading }) {
@@ -227,12 +240,20 @@ const inputStyle = {
   boxSizing: "border-box",
 };
 
-function Dashboard({ token, contact, onLogout }) {
+function Dashboard({ token, contact, onUpdateContact, onLogout }) {
   const [kyc, setKyc] = useState(null);
   const [itineraries, setItineraries] = useState([]);
   const [loading, setLoading] = useState(true);
   const [verifyMsg, setVerifyMsg] = useState(null);
   const [verifyLoading, setVerifyLoading] = useState(false);
+  // Sidebar-driven view: overview | bookings | diagnostic | profile.
+  const [view, setView] = useState("overview");
+  // Within the bookings view, the booking whose detail is open (null = list).
+  const [selectedBookingId, setSelectedBookingId] = useState(null);
+  // Leaving the bookings view closes any open detail.
+  useEffect(() => {
+    if (view !== "bookings") setSelectedBookingId(null);
+  }, [view]);
 
   const loadAll = useCallback(async () => {
     setLoading(true);
@@ -295,71 +316,331 @@ function Dashboard({ token, contact, onLogout }) {
   const verified = kyc?.kycStatus === "verified";
 
   return (
-    <div style={{ minHeight: "100vh", background: "var(--bg-color, #FAF6EE)" }}>
-      <header style={{
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "space-between",
-        padding: "16px 24px",
-        background: "var(--surface-color, #FFFFFF)",
-        borderBottom: "1px solid var(--border-color, rgba(18, 38, 71, 0.12))",
-        gap: 16,
-        flexWrap: "wrap",
-      }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <Plane size={24} aria-hidden style={{ color: "var(--primary-color, #122647)" }} />
-          <strong>Travel Customer Portal</strong>
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-          <DigiLockerButton
-            verified={verified}
-            loading={verifyLoading}
-            onClick={handleVerify}
-          />
-          <span style={{ fontSize: 14, color: "var(--text-secondary)" }}>
-            {contact?.name || contact?.email}
-          </span>
-          <button
-            type="button"
-            onClick={onLogout}
-            style={iconBtnStyle}
-            title="Sign out"
-            aria-label="Sign out"
-          >
-            <LogOut size={16} aria-hidden />
-          </button>
-        </div>
-      </header>
+    <div style={{ minHeight: "100vh", display: "flex", background: "var(--bg-color, #FAF6EE)" }}>
+      <PortalSidebar view={view} setView={setView} contact={contact} bookingsCount={itineraries.length} />
 
-      <main style={{ maxWidth: 1100, margin: "0 auto", padding: 24, display: "grid", gap: 16 }}>
-        {verifyMsg && (
-          <div role="status" style={{
-            padding: "10px 14px",
-            borderRadius: 10,
-            background: verifyMsg.ok
-              ? "rgba(47, 122, 77, 0.10)"
-              : "rgba(168, 50, 63, 0.10)",
-            color: verifyMsg.ok
-              ? "var(--success-color, #2F7A4D)"
-              : "var(--danger-color, #A8323F)",
-            display: "flex", alignItems: "center", gap: 8,
-            fontSize: 14,
-          }}>
-            {verifyMsg.ok ? <CheckCircle2 size={16} /> : <AlertCircle size={16} />}
-            {verifyMsg.text}
+      <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
+        <header style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          padding: "14px 24px",
+          background: "var(--surface-color, #FFFFFF)",
+          borderBottom: "1px solid var(--border-color, rgba(18, 38, 71, 0.12))",
+          gap: 16,
+          flexWrap: "wrap",
+        }}>
+          <strong style={{ fontSize: 16 }}>
+            {view === "overview" && "Dashboard"}
+            {view === "bookings" && "My Bookings"}
+            {view === "diagnostic" && "Travel Diagnostic"}
+            {view === "profile" && "My Profile"}
+          </strong>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <DigiLockerButton verified={verified} loading={verifyLoading} onClick={handleVerify} />
+            {/* Clickable name + avatar → opens the Profile view. */}
+            <button
+              type="button"
+              onClick={() => setView("profile")}
+              title="View your profile"
+              style={{
+                display: "inline-flex", alignItems: "center", gap: 8,
+                padding: "4px 10px 4px 4px", borderRadius: 999,
+                border: "1px solid var(--border-color, rgba(18, 38, 71, 0.12))",
+                background: view === "profile" ? "rgba(18, 38, 71, 0.06)" : "transparent",
+                cursor: "pointer", fontSize: 14, color: "var(--text-primary)",
+              }}
+            >
+              <Avatar url={contact?.avatarUrl} name={contact?.name || contact?.email} size={28} />
+              {contact?.name || contact?.email}
+            </button>
+            <button type="button" onClick={onLogout} style={iconBtnStyle} title="Sign out" aria-label="Sign out">
+              <LogOut size={16} aria-hidden />
+            </button>
           </div>
-        )}
+        </header>
 
-        <ProfileCard
-          contact={contact}
-          kyc={kyc}
-          loading={loading}
-          verifyLoading={verifyLoading}
-          onVerify={handleVerify}
+        <main style={{ flex: 1, maxWidth: 1000, width: "100%", margin: "0 auto", padding: 24, display: "grid", gap: 16, alignContent: "start" }}>
+          {verifyMsg && (
+            <div role="status" style={{
+              padding: "10px 14px", borderRadius: 10,
+              background: verifyMsg.ok ? "rgba(47, 122, 77, 0.10)" : "rgba(168, 50, 63, 0.10)",
+              color: verifyMsg.ok ? "var(--success-color, #2F7A4D)" : "var(--danger-color, #A8323F)",
+              display: "flex", alignItems: "center", gap: 8, fontSize: 14,
+            }}>
+              {verifyMsg.ok ? <CheckCircle2 size={16} /> : <AlertCircle size={16} />}
+              {verifyMsg.text}
+            </div>
+          )}
+
+          {view === "overview" && (
+            <Overview
+              contact={contact}
+              itineraries={itineraries}
+              loading={loading}
+              verified={verified}
+              onOpen={setView}
+            />
+          )}
+
+          {view === "bookings" && (
+            selectedBookingId != null ? (
+              <BookingDetail
+                itinerary={itineraries.find((i) => i.id === selectedBookingId)}
+                token={token}
+                onChanged={loadAll}
+                onBack={() => setSelectedBookingId(null)}
+              />
+            ) : (
+              <ItinerariesCard itineraries={itineraries} loading={loading} onSelect={setSelectedBookingId} />
+            )
+          )}
+
+          {view === "diagnostic" && <DiagnosticsCard token={token} />}
+
+          {view === "profile" && (
+            <ProfileView
+              token={token}
+              contact={contact}
+              kyc={kyc}
+              loading={loading}
+              verifyLoading={verifyLoading}
+              onVerify={handleVerify}
+              onUpdateContact={onUpdateContact}
+            />
+          )}
+        </main>
+      </div>
+    </div>
+  );
+}
+
+// ─── Sidebar + header building blocks ────────────────────────────────
+
+// Profile is intentionally NOT a sidebar item — it's opened by clicking the
+// name/avatar in the header (PortalHeader), per the customer-portal design.
+const NAV_ITEMS = [
+  { key: "overview", label: "Dashboard", icon: LayoutDashboard },
+  { key: "bookings", label: "My Bookings", icon: Plane },
+  { key: "diagnostic", label: "Travel Diagnostic", icon: ClipboardCheck },
+];
+
+function PortalSidebar({ view, setView, contact, bookingsCount }) {
+  return (
+    <aside style={{
+      width: 240,
+      flexShrink: 0,
+      background: "var(--surface-color, #FFFFFF)",
+      borderRight: "1px solid var(--border-color, rgba(18, 38, 71, 0.12))",
+      display: "flex",
+      flexDirection: "column",
+      padding: "18px 12px",
+      gap: 4,
+    }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "4px 8px 14px" }}>
+        <Plane size={22} aria-hidden style={{ color: "var(--primary-color, #122647)" }} />
+        <strong style={{ fontSize: 15 }}>Travel Portal</strong>
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px", marginBottom: 8 }}>
+        <Avatar url={contact?.avatarUrl} name={contact?.name || contact?.email} size={36} />
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {contact?.name || "Customer"}
+          </div>
+          <div style={{ fontSize: 11, color: "var(--text-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {contact?.email}
+          </div>
+        </div>
+      </div>
+      <nav aria-label="Portal sections" style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+        {NAV_ITEMS.map(({ key, label, icon: Icon }) => {
+          const active = view === key;
+          return (
+            <button
+              key={key}
+              type="button"
+              onClick={() => setView(key)}
+              aria-current={active ? "page" : undefined}
+              style={{
+                display: "flex", alignItems: "center", gap: 10,
+                padding: "9px 12px", borderRadius: 8, border: "none",
+                textAlign: "left", cursor: "pointer", fontSize: 14, fontWeight: active ? 600 : 500,
+                background: active ? "var(--primary-color, #122647)" : "transparent",
+                color: active ? "#fff" : "var(--text-primary)",
+              }}
+            >
+              <Icon size={17} aria-hidden />
+              <span style={{ flex: 1 }}>{label}</span>
+              {key === "bookings" && bookingsCount > 0 && (
+                <span style={{
+                  fontSize: 11, fontWeight: 700, minWidth: 18, textAlign: "center",
+                  padding: "1px 6px", borderRadius: 999,
+                  background: active ? "rgba(255,255,255,0.22)" : "rgba(18, 38, 71, 0.10)",
+                }}>
+                  {bookingsCount}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </nav>
+    </aside>
+  );
+}
+
+// Round avatar — image when set, else initials on the brand colour.
+function Avatar({ url, name, size = 36 }) {
+  if (url) {
+    return (
+      <img
+        src={url}
+        alt={name || "Profile"}
+        style={{ width: size, height: size, borderRadius: "50%", objectFit: "cover", flexShrink: 0, background: "#eee" }}
+      />
+    );
+  }
+  const initials = (name || "?")
+    .split(/\s+/).filter(Boolean).map((w) => w[0]).slice(0, 2).join("").toUpperCase() || "?";
+  return (
+    <div style={{
+      width: size, height: size, borderRadius: "50%", flexShrink: 0,
+      background: "var(--primary-color, #122647)", color: "#fff",
+      display: "flex", alignItems: "center", justifyContent: "center",
+      fontWeight: 700, fontSize: Math.round(size * 0.38),
+    }}>
+      {initials}
+    </div>
+  );
+}
+
+// ─── Overview (home) — clickable summary cards ───────────────────────
+
+function Overview({ contact, itineraries, loading, verified, onOpen }) {
+  const accepted = itineraries.filter((i) => i.status === "accepted" || i.status === "advance_paid" || i.status === "fully_paid").length;
+  return (
+    <>
+      <div style={{ ...cardStyle, display: "flex", alignItems: "center", gap: 14 }}>
+        <Avatar url={contact?.avatarUrl} name={contact?.name || contact?.email} size={48} />
+        <div>
+          <div style={{ fontSize: 18, fontWeight: 700 }}>Welcome{contact?.name ? `, ${contact.name.split(" ")[0]}` : ""}!</div>
+          <div style={{ fontSize: 13, color: "var(--text-secondary)" }}>
+            {verified ? "Your identity is verified." : "Complete your DigiLocker verification from your profile."}
+          </div>
+        </div>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 240px), 1fr))", gap: 16 }}>
+        <OverviewCard
+          icon={Plane}
+          label="My Bookings"
+          value={loading ? "…" : String(itineraries.length)}
+          hint={loading ? "Loading…" : `${accepted} confirmed`}
+          onClick={() => onOpen("bookings")}
         />
+        <OverviewCard
+          icon={ClipboardCheck}
+          label="Travel Diagnostic"
+          value="Open"
+          hint="Help your advisor tailor your package"
+          onClick={() => onOpen("diagnostic")}
+        />
+      </div>
+    </>
+  );
+}
 
-        <ItinerariesCard itineraries={itineraries} loading={loading} />
-      </main>
+function OverviewCard({ icon: Icon, label, value, hint, onClick }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        ...cardStyle, textAlign: "left", cursor: "pointer", border: "1px solid var(--border-color, rgba(18,38,71,0.12))",
+        display: "flex", flexDirection: "column", gap: 6, background: "var(--surface-color, #FFFFFF)",
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--text-secondary)", fontSize: 13, fontWeight: 600 }}>
+        <Icon size={16} aria-hidden /> {label}
+      </div>
+      <div style={{ fontSize: 26, fontWeight: 700, color: "var(--text-primary)" }}>{value}</div>
+      <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>{hint}</div>
+    </button>
+  );
+}
+
+// ─── Profile view — profile details + avatar upload + KYC ────────────
+
+function ProfileView({ token, contact, kyc, loading, verifyLoading, onVerify, onUpdateContact }) {
+  return (
+    <>
+      <section style={{ ...cardStyle, display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
+        <AvatarUploader token={token} contact={contact} onUpdated={(avatarUrl) => onUpdateContact({ avatarUrl })} />
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 18, fontWeight: 700 }}>{contact?.name || "—"}</div>
+          <div style={{ fontSize: 13, color: "var(--text-secondary)" }}>{contact?.email}</div>
+        </div>
+      </section>
+      <ProfileCard
+        contact={contact}
+        kyc={kyc}
+        loading={loading}
+        verifyLoading={verifyLoading}
+        onVerify={onVerify}
+      />
+    </>
+  );
+}
+
+function AvatarUploader({ token, contact, onUpdated }) {
+  const [uploading, setUploading] = useState(false);
+  const [err, setErr] = useState(null);
+
+  const onPick = async (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    setErr(null);
+    setUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      // Raw fetch (NOT portalFetch) — FormData must set its own multipart
+      // boundary; portalFetch would force application/json.
+      const res = await fetch("/api/portal/travel/avatar", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        body: fd,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Upload failed");
+      onUpdated(data.avatarUrl);
+    } catch (e2) {
+      setErr(e2.message || "Upload failed");
+    } finally {
+      setUploading(false);
+      e.target.value = "";
+    }
+  };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
+      <Avatar url={contact?.avatarUrl} name={contact?.name || contact?.email} size={72} />
+      <label style={{
+        display: "inline-flex", alignItems: "center", gap: 6,
+        padding: "6px 12px", borderRadius: 8, fontSize: 13, fontWeight: 600,
+        border: "1px solid var(--border-color, rgba(18,38,71,0.12))",
+        cursor: uploading ? "wait" : "pointer", color: "var(--text-primary)",
+      }}>
+        {uploading ? <Loader2 size={14} className="spin" aria-hidden /> : <UserIcon size={14} aria-hidden />}
+        {uploading ? "Uploading…" : contact?.avatarUrl ? "Change photo" : "Upload photo"}
+        <input
+          type="file"
+          accept="image/*"
+          onChange={onPick}
+          disabled={uploading}
+          style={{ display: "none" }}
+          aria-label="Upload profile photo"
+        />
+      </label>
+      {err && <span style={{ fontSize: 12, color: "var(--danger-color, #A8323F)" }}>{err}</span>}
     </div>
   );
 }
@@ -482,7 +763,322 @@ function ProfileCard({ contact, kyc, loading, verifyLoading, onVerify }) {
   );
 }
 
-function ItinerariesCard({ itineraries, loading }) {
+const SUB_BRAND_LABELS = {
+  tmc: "TMC — School trips",
+  rfu: "RFU — Umrah",
+  travelstall: "Travel Stall — Family holidays",
+  visasure: "Visa Sure",
+};
+const brandLabel = (b) => SUB_BRAND_LABELS[b] || b;
+
+function DiagnosticsCard({ token }) {
+  const [brands, setBrands] = useState([]); // [{ subBrand }]
+  const [selected, setSelected] = useState(""); // active sub-brand
+  const [bank, setBank] = useState(null); // { available, questions, subBrand, ... }
+  const [history, setHistory] = useState([]);
+  const [answers, setAnswers] = useState({});
+  const [loadingBrands, setLoadingBrands] = useState(true);
+  const [loadingBank, setLoadingBank] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState(null);
+  const [result, setResult] = useState(null); // freshest submission this session
+  const [taking, setTaking] = useState(false); // is the form open?
+
+  // 1. Load the brands the customer can take a diagnostic for + their history.
+  //    A customer may be served by several brands, so they choose which one.
+  const loadBrands = useCallback(async () => {
+    setLoadingBrands(true);
+    try {
+      const [brandsRes, histRes] = await Promise.all([
+        portalFetch("/travel/diagnostic-brands", { token }).catch(() => ({ brands: [] })),
+        portalFetch("/travel/diagnostics", { token }).catch(() => []),
+      ]);
+      const list = Array.isArray(brandsRes?.brands) ? brandsRes.brands : [];
+      setBrands(list);
+      setHistory(Array.isArray(histRes) ? histRes : []);
+      // Default to the customer's own primary brand when it's offered, else first.
+      const def = brandsRes?.defaultSubBrand;
+      const initial = (list.find((b) => b.subBrand === def) || list[0] || {}).subBrand || "";
+      setSelected(initial);
+    } finally {
+      setLoadingBrands(false);
+    }
+  }, [token]);
+
+  useEffect(() => { loadBrands(); }, [loadBrands]);
+
+  // 2. Load the question bank whenever the selected brand changes.
+  const loadBank = useCallback(async (sb) => {
+    if (!sb) { setBank(null); return; }
+    setLoadingBank(true);
+    setAnswers({});
+    setResult(null);
+    setTaking(false);
+    setError(null);
+    try {
+      const res = await portalFetch(
+        `/travel/diagnostic-bank?subBrand=${encodeURIComponent(sb)}`,
+        { token },
+      ).catch(() => ({ available: false }));
+      setBank(res);
+    } finally {
+      setLoadingBank(false);
+    }
+  }, [token]);
+
+  useEffect(() => { loadBank(selected); }, [selected, loadBank]);
+
+  const refreshHistory = useCallback(async () => {
+    const hist = await portalFetch("/travel/diagnostics", { token }).catch(() => []);
+    setHistory(Array.isArray(hist) ? hist : []);
+  }, [token]);
+
+  const setSingle = (qid, value) => setAnswers((a) => ({ ...a, [qid]: value }));
+  const toggleMulti = (qid, value) =>
+    setAnswers((a) => {
+      const cur = Array.isArray(a[qid]) ? a[qid] : [];
+      return { ...a, [qid]: cur.includes(value) ? cur.filter((v) => v !== value) : [...cur, value] };
+    });
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setError(null);
+    const unanswered = (bank?.questions || []).filter((q) => {
+      const a = answers[q.id];
+      return a === undefined || a === "" || (Array.isArray(a) && a.length === 0);
+    });
+    if (unanswered.length) {
+      setError("Please answer every question before submitting.");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const res = await portalFetch("/travel/diagnostics", {
+        token,
+        method: "POST",
+        body: { subBrand: selected, answers },
+      });
+      setResult(res);
+      setTaking(false);
+      setAnswers({});
+      await refreshHistory();
+    } catch (err) {
+      setError(err.message || "Submission failed. Please try again.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  // Latest result for the currently-selected brand.
+  const latest = result || history.find((h) => h.subBrand === selected) || null;
+
+  return (
+    <section style={cardStyle} aria-labelledby="diag-heading">
+      <h2 id="diag-heading" style={{ display: "flex", alignItems: "center", gap: 8, margin: 0 }}>
+        <ClipboardCheck size={20} aria-hidden /> Travel Diagnostic
+      </h2>
+      <p style={{ color: "var(--text-secondary)", marginTop: 6, marginBottom: 0, fontSize: 14 }}>
+        Answer a few questions so your advisor can tailor the right package for you.
+      </p>
+
+      {loadingBrands ? (
+        <p style={{ color: "var(--text-secondary)", margin: "12px 0 0" }}>Loading…</p>
+      ) : brands.length === 0 ? (
+        <p style={{ color: "var(--text-secondary)", margin: "12px 0 0", fontSize: 14 }}>
+          No diagnostic is available for you right now. Check back shortly.
+        </p>
+      ) : (
+        <>
+          {/* Brand selector — a customer may be served by several brands. Only
+              shown when there's a genuine choice; a single brand auto-selects. */}
+          {brands.length > 1 && (
+            <label style={{ display: "block", fontSize: 13, fontWeight: 600, marginTop: 14 }}>
+              Which programme is this for?
+              <select
+                value={selected}
+                onChange={(e) => setSelected(e.target.value)}
+                aria-label="Select travel programme"
+                style={{ ...inputStyle, maxWidth: 360 }}
+              >
+                {brands.map((b) => (
+                  <option key={b.subBrand} value={b.subBrand}>{brandLabel(b.subBrand)}</option>
+                ))}
+              </select>
+            </label>
+          )}
+
+          {loadingBank ? (
+            <p style={{ color: "var(--text-secondary)", margin: "12px 0 0" }}>Loading questions…</p>
+          ) : !bank?.available ? (
+            <p style={{ color: "var(--text-secondary)", margin: "12px 0 0", fontSize: 14 }}>
+              No diagnostic is available for {brandLabel(selected)} right now.
+            </p>
+          ) : (
+          <>
+          {/* Latest result banner */}
+          {latest && !taking && (
+            <div
+              style={{
+                marginTop: 14,
+                padding: "12px 14px",
+                borderRadius: 10,
+                background: "rgba(47, 122, 77, 0.08)",
+                border: "1px solid rgba(47, 122, 77, 0.25)",
+              }}
+              role="status"
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 600 }}>
+                <Award size={16} aria-hidden style={{ color: "var(--success-color, #2F7A4D)" }} />
+                {latest.classificationLabel || "Completed"}
+                {latest.recommendedTier && (
+                  <span
+                    style={{
+                      fontSize: 12,
+                      padding: "2px 8px",
+                      borderRadius: 999,
+                      background: "rgba(18, 38, 71, 0.08)",
+                      textTransform: "capitalize",
+                    }}
+                  >
+                    {latest.recommendedTier} tier
+                  </span>
+                )}
+              </div>
+              <div style={{ fontSize: 13, color: "var(--text-secondary)", marginTop: 4 }}>
+                Submitted {latest.createdAt ? new Date(latest.createdAt).toLocaleString() : "—"}
+                {" · "}Your advisor can see this result.
+              </div>
+            </div>
+          )}
+
+          {error && (
+            <div role="alert" style={{
+              marginTop: 12, padding: "8px 12px",
+              background: "rgba(168, 50, 63, 0.08)",
+              color: "var(--danger-color, #A8323F)",
+              borderRadius: 8, fontSize: 14,
+              display: "flex", alignItems: "center", gap: 8,
+            }}>
+              <AlertCircle size={16} aria-hidden /> {error}
+            </div>
+          )}
+
+          {!taking ? (
+            <button
+              type="button"
+              onClick={() => { setTaking(true); setError(null); setResult(null); }}
+              style={{
+                marginTop: 14,
+                padding: "9px 16px",
+                background: "var(--primary-color, #122647)",
+                color: "white",
+                border: "none",
+                borderRadius: 8,
+                fontWeight: 600,
+                cursor: "pointer",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 8,
+              }}
+            >
+              <ClipboardCheck size={16} aria-hidden />
+              {latest ? "Retake diagnostic" : "Take the diagnostic"}
+            </button>
+          ) : (
+            <form onSubmit={submit} style={{ marginTop: 14, display: "grid", gap: 16 }}>
+              {(bank.questions || []).map((q, idx) => (
+                <fieldset key={q.id} style={{ border: "none", padding: 0, margin: 0 }}>
+                  <legend style={{ fontWeight: 600, fontSize: 14, marginBottom: 8 }}>
+                    {idx + 1}. {q.text}
+                    {q.type === "multi-select" && (
+                      <span style={{ fontWeight: 400, color: "var(--text-secondary)", fontSize: 12 }}>
+                        {" "}(select all that apply)
+                      </span>
+                    )}
+                  </legend>
+                  <div style={{ display: "grid", gap: 6 }}>
+                    {(q.options || []).map((o) => {
+                      const isMulti = q.type === "multi-select";
+                      const checked = isMulti
+                        ? Array.isArray(answers[q.id]) && answers[q.id].includes(o.value)
+                        : answers[q.id] === o.value;
+                      return (
+                        <label
+                          key={o.value}
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 8,
+                            padding: "8px 12px",
+                            border: `1px solid ${checked ? "var(--primary-color, #122647)" : "var(--border-color, rgba(18,38,71,0.12))"}`,
+                            borderRadius: 8,
+                            cursor: "pointer",
+                            fontSize: 14,
+                            background: checked ? "rgba(18, 38, 71, 0.04)" : "transparent",
+                          }}
+                        >
+                          <input
+                            type={isMulti ? "checkbox" : "radio"}
+                            name={q.id}
+                            value={o.value}
+                            checked={checked}
+                            onChange={() => (isMulti ? toggleMulti(q.id, o.value) : setSingle(q.id, o.value))}
+                          />
+                          {o.label}
+                        </label>
+                      );
+                    })}
+                  </div>
+                </fieldset>
+              ))}
+              <div style={{ display: "flex", gap: 8 }}>
+                <button
+                  type="submit"
+                  disabled={submitting}
+                  style={{
+                    padding: "9px 16px",
+                    background: "var(--primary-color, #122647)",
+                    color: "white",
+                    border: "none",
+                    borderRadius: 8,
+                    fontWeight: 600,
+                    cursor: submitting ? "wait" : "pointer",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 8,
+                  }}
+                >
+                  {submitting ? <Loader2 size={16} className="spin" aria-hidden /> : <CheckCircle2 size={16} aria-hidden />}
+                  {submitting ? "Submitting…" : "Submit answers"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setTaking(false); setError(null); }}
+                  disabled={submitting}
+                  style={{
+                    padding: "9px 16px",
+                    background: "transparent",
+                    color: "var(--text-secondary)",
+                    border: "1px solid var(--border-color, rgba(18,38,71,0.12))",
+                    borderRadius: 8,
+                    fontWeight: 600,
+                    cursor: "pointer",
+                  }}
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          )}
+          </>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
+
+function ItinerariesCard({ itineraries, loading, onSelect }) {
   return (
     <section style={cardStyle} aria-labelledby="itin-heading">
       <h2 id="itin-heading" style={{ display: "flex", alignItems: "center", gap: 8, margin: 0 }}>
@@ -497,43 +1093,417 @@ function ItinerariesCard({ itineraries, loading }) {
       ) : (
         <ul style={{ listStyle: "none", padding: 0, margin: "12px 0 0", display: "grid", gap: 10 }}>
           {itineraries.map((itin) => (
-            <li key={itin.id} style={{
-              padding: 12,
-              border: "1px solid var(--border-color, rgba(18, 38, 71, 0.12))",
-              borderRadius: 10,
-              background: "var(--surface-color, #FFFFFF)",
-            }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
-                <strong>{itin.destination || "(no destination)"}</strong>
-                <span style={{
-                  fontSize: 12,
-                  padding: "2px 8px",
-                  borderRadius: 999,
-                  background: "rgba(18, 38, 71, 0.08)",
-                  textTransform: "capitalize",
-                }}>
-                  {itin.status}
-                </span>
-              </div>
-              <div style={{ fontSize: 13, color: "var(--text-secondary)", marginTop: 4 }}>
-                {itin.startDate ? new Date(itin.startDate).toLocaleDateString() : "—"}
-                {" → "}
-                {itin.endDate ? new Date(itin.endDate).toLocaleDateString() : "—"}
-              </div>
-              {itin.totalAmount != null && (
-                <div style={{ marginTop: 4, fontWeight: 600 }}>
-                  {new Intl.NumberFormat("en-IN", {
-                    style: "currency",
-                    currency: itin.currency || "INR",
-                    maximumFractionDigits: 0,
-                  }).format(Number(itin.totalAmount))}
+            <li key={itin.id}>
+              <button
+                type="button"
+                onClick={() => onSelect && onSelect(itin.id)}
+                aria-label={`View ${itin.destination || "booking"} details`}
+                style={{
+                  width: "100%", textAlign: "left", cursor: "pointer",
+                  padding: 12,
+                  border: "1px solid var(--border-color, rgba(18, 38, 71, 0.12))",
+                  borderRadius: 10,
+                  background: "var(--surface-color, #FFFFFF)",
+                  color: "var(--text-primary)",
+                }}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
+                  <strong>{itin.destination || "(no destination)"}</strong>
+                  <span style={{
+                    fontSize: 12, padding: "2px 8px", borderRadius: 999,
+                    background: "rgba(18, 38, 71, 0.08)", textTransform: "capitalize",
+                  }}>
+                    {itin.status}
+                  </span>
                 </div>
-              )}
+                <div style={{ fontSize: 13, color: "var(--text-secondary)", marginTop: 4 }}>
+                  {itin.startDate ? new Date(itin.startDate).toLocaleDateString() : "—"}
+                  {" → "}
+                  {itin.endDate ? new Date(itin.endDate).toLocaleDateString() : "—"}
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginTop: 4 }}>
+                  {itin.totalAmount != null ? (
+                    <span style={{ fontWeight: 600 }}>{fmtMoney(itin.totalAmount, itin.currency)}</span>
+                  ) : <span />}
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12, color: "var(--primary-color, #122647)", fontWeight: 600 }}>
+                    View details <ChevronRight size={14} aria-hidden />
+                  </span>
+                </div>
+              </button>
             </li>
           ))}
         </ul>
       )}
     </section>
+  );
+}
+
+// Money formatter shared by the bookings list + detail view.
+function fmtMoney(amount, currency) {
+  if (amount == null) return "—";
+  return new Intl.NumberFormat("en-IN", {
+    style: "currency",
+    currency: currency || "INR",
+    maximumFractionDigits: 0,
+  }).format(Number(amount));
+}
+
+// ─── Booking detail view (opened by clicking a booking row) ──────────
+
+const TRIP_ITEM_ICON = {
+  flight: Plane, hotel: Hotel, transfer: Ticket, transport: Ticket,
+  activity: Ticket, visa: ShieldCheck, insurance: ShieldCheck,
+};
+
+const DECIDABLE_BOOKING_STATUSES = ["draft", "sent", "revised"];
+
+function BookingDetail({ itinerary, token, onChanged, onBack }) {
+  const [busy, setBusy] = useState(null); // "accept" | "decline" | null
+  const [decideErr, setDecideErr] = useState(null);
+  const [declining, setDeclining] = useState(false); // reason form open?
+  const [reasonText, setReasonText] = useState("");
+  // "What-if" headcount the customer types into the estimate calculator.
+  // Empty string = use the advisor's quoted traveler count (pax).
+  const [headcount, setHeadcount] = useState("");
+
+  if (!itinerary) {
+    return (
+      <section style={cardStyle}>
+        <button type="button" onClick={onBack} style={backBtnStyle}>
+          <ChevronLeft size={16} aria-hidden /> Back to bookings
+        </button>
+        <p style={{ color: "var(--text-secondary)", marginTop: 12 }}>This booking is no longer available.</p>
+      </section>
+    );
+  }
+  const items = Array.isArray(itinerary.items) ? itinerary.items : [];
+  const total = itinerary.totalAmount != null ? Number(itinerary.totalAmount) : 0;
+  const pax = itinerary.pax && itinerary.pax > 0 ? itinerary.pax : 1;
+  // Per-person figure derived from the advisor's quoted group total ÷ pax.
+  const perPerson = total / pax;
+  // Effective headcount the estimate is computed for: the customer's typed
+  // value when valid (≥1), otherwise the advisor's quoted pax.
+  const typedCount = parseInt(headcount, 10);
+  const estCount = headcount !== "" && Number.isFinite(typedCount) && typedCount > 0 ? typedCount : pax;
+  const estTotal = Math.round(perPerson * estCount * 100) / 100;
+  const paid = itinerary.advancePaidAmount != null ? Number(itinerary.advancePaidAmount) : 0;
+  const balance = Math.max(0, total - paid);
+  const status = itinerary.status;
+  const canDecide = DECIDABLE_BOOKING_STATUSES.includes(status);
+  const isAccepted = ["accepted", "advance_paid", "fully_paid"].includes(status);
+  const isDeclined = status === "rejected";
+
+  const decide = async (action, reason) => {
+    setBusy(action);
+    setDecideErr(null);
+    try {
+      await portalFetch(`/travel/itineraries/${itinerary.id}/${action}`, {
+        token,
+        method: "POST",
+        body: action === "decline" ? { reason: reason || "" } : {},
+      });
+      // Refresh the bookings so the status (and this detail view) update.
+      if (onChanged) await onChanged();
+    } catch (e) {
+      setDecideErr(e.message || "Something went wrong. Please try again.");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <>
+      <button type="button" onClick={onBack} style={backBtnStyle}>
+        <ChevronLeft size={16} aria-hidden /> Back to bookings
+      </button>
+
+      <section style={cardStyle} aria-labelledby="booking-detail-heading">
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10, flexWrap: "wrap" }}>
+          <h2 id="booking-detail-heading" style={{ display: "flex", alignItems: "center", gap: 8, margin: 0 }}>
+            <Plane size={20} aria-hidden /> {itinerary.destination || "Your trip"}
+          </h2>
+          <span style={{
+            fontSize: 12, padding: "3px 10px", borderRadius: 999,
+            background: "rgba(18, 38, 71, 0.08)", textTransform: "capitalize", fontWeight: 600,
+          }}>
+            {String(itinerary.status || "").replace(/_/g, " ")}
+          </span>
+        </div>
+        <div style={{ fontSize: 13, color: "var(--text-secondary)", marginTop: 6 }}>
+          {itinerary.startDate ? new Date(itinerary.startDate).toLocaleDateString() : "—"}
+          {" → "}
+          {itinerary.endDate ? new Date(itinerary.endDate).toLocaleDateString() : "—"}
+        </div>
+      </section>
+
+      {/* Customer's decision on the offer — accepting/declining is the
+          customer's right, not the advisor's. */}
+      {canDecide && (
+        <section style={cardStyle} aria-labelledby="booking-decision-heading">
+          <h3 id="booking-decision-heading" style={{ margin: 0, fontSize: 16 }}>
+            {status === "revised" ? "Updated offer — please review" : "Review this offer"}
+          </h3>
+          <p style={{ color: "var(--text-secondary)", margin: "6px 0 12px", fontSize: 14 }}>
+            {status === "revised"
+              ? "Your advisor updated this offer based on your feedback. Accept to confirm, or decline if it still isn’t right."
+              : "Your advisor has prepared this trip for you. Accept to confirm, or decline if it isn’t right."}
+          </p>
+          {decideErr && (
+            <div role="alert" style={{
+              marginBottom: 12, padding: "8px 12px", borderRadius: 8, fontSize: 14,
+              background: "rgba(168, 50, 63, 0.08)", color: "var(--danger-color, #A8323F)",
+              display: "flex", alignItems: "center", gap: 8,
+            }}>
+              <AlertCircle size={16} aria-hidden /> {decideErr}
+            </div>
+          )}
+          {!declining ? (
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <button
+                type="button"
+                onClick={() => decide("accept")}
+                disabled={busy !== null}
+                style={{
+                  display: "inline-flex", alignItems: "center", gap: 8,
+                  padding: "9px 18px", borderRadius: 8, fontWeight: 600, border: "none",
+                  background: "var(--success-color, #2F7A4D)", color: "#fff",
+                  cursor: busy ? "wait" : "pointer",
+                }}
+              >
+                {busy === "accept" ? <Loader2 size={16} className="spin" aria-hidden /> : <CheckCircle2 size={16} aria-hidden />}
+                {busy === "accept" ? "Accepting…" : "Accept offer"}
+              </button>
+              <button
+                type="button"
+                onClick={() => { setDeclining(true); setDecideErr(null); }}
+                disabled={busy !== null}
+                style={{
+                  display: "inline-flex", alignItems: "center", gap: 8,
+                  padding: "9px 18px", borderRadius: 8, fontWeight: 600,
+                  background: "transparent", color: "var(--danger-color, #A8323F)",
+                  border: "1px solid var(--danger-color, #A8323F)",
+                  cursor: busy ? "wait" : "pointer",
+                }}
+              >
+                <AlertCircle size={16} aria-hidden /> Decline
+              </button>
+            </div>
+          ) : (
+            // Decline confirmation + reason: tell the advisor what to improve.
+            <div style={{ display: "grid", gap: 10 }}>
+              <label style={{ fontSize: 14, fontWeight: 600 }}>
+                What would make this offer better for you?
+                <textarea
+                  value={reasonText}
+                  onChange={(e) => setReasonText(e.target.value)}
+                  rows={3}
+                  placeholder="e.g. Budget is a bit high, prefer an earlier date, want a different hotel…"
+                  aria-label="Reason for declining"
+                  style={{
+                    display: "block", width: "100%", marginTop: 6, padding: "8px 12px",
+                    borderRadius: 8, fontSize: 14, boxSizing: "border-box",
+                    border: "1px solid var(--border-color, rgba(18,38,71,0.12))",
+                    background: "var(--surface-color, #FFFFFF)", color: "var(--text-primary, #1F1B14)",
+                    fontFamily: "inherit", resize: "vertical",
+                  }}
+                />
+              </label>
+              <p style={{ margin: 0, fontSize: 12, color: "var(--text-secondary)" }}>
+                Your feedback goes straight to your advisor so they can revise the plan. (Optional)
+              </p>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                <button
+                  type="button"
+                  onClick={() => decide("decline", reasonText.trim())}
+                  disabled={busy !== null}
+                  style={{
+                    display: "inline-flex", alignItems: "center", gap: 8,
+                    padding: "9px 18px", borderRadius: 8, fontWeight: 600, border: "none",
+                    background: "var(--danger-color, #A8323F)", color: "#fff",
+                    cursor: busy ? "wait" : "pointer",
+                  }}
+                >
+                  {busy === "decline" ? <Loader2 size={16} className="spin" aria-hidden /> : <AlertCircle size={16} aria-hidden />}
+                  {busy === "decline" ? "Submitting…" : "Confirm decline"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setDeclining(false); setReasonText(""); setDecideErr(null); }}
+                  disabled={busy !== null}
+                  style={{
+                    padding: "9px 18px", borderRadius: 8, fontWeight: 600,
+                    background: "transparent", color: "var(--text-secondary)",
+                    border: "1px solid var(--border-color, rgba(18,38,71,0.12))",
+                    cursor: "pointer",
+                  }}
+                >
+                  Keep offer
+                </button>
+              </div>
+            </div>
+          )}
+        </section>
+      )}
+
+      {isAccepted && (
+        <section style={{ ...cardStyle, background: "rgba(47, 122, 77, 0.08)", border: "1px solid rgba(47, 122, 77, 0.25)" }} role="status">
+          <div style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 600, color: "var(--success-color, #2F7A4D)" }}>
+            <CheckCircle2 size={18} aria-hidden /> You accepted this offer.
+          </div>
+          <p style={{ color: "var(--text-secondary)", margin: "6px 0 0", fontSize: 14 }}>
+            Your advisor will reach out with the next steps and payment details.
+          </p>
+        </section>
+      )}
+
+      {isDeclined && (
+        <section style={{ ...cardStyle, background: "rgba(168, 50, 63, 0.06)", border: "1px solid rgba(168, 50, 63, 0.22)" }} role="status">
+          <div style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 600, color: "var(--danger-color, #A8323F)" }}>
+            <AlertCircle size={18} aria-hidden /> You declined this offer.
+          </div>
+          {itinerary.declineReason && (
+            <p style={{ color: "var(--text-primary)", margin: "8px 0 0", fontSize: 14, fontStyle: "italic" }}>
+              Your feedback: &ldquo;{itinerary.declineReason}&rdquo;
+            </p>
+          )}
+          <p style={{ color: "var(--text-secondary)", margin: "6px 0 0", fontSize: 14 }}>
+            Want to revisit it? Contact your advisor for an updated plan.
+          </p>
+        </section>
+      )}
+
+      <section style={cardStyle} aria-labelledby="booking-items-heading">
+        <h3 id="booking-items-heading" style={{ margin: 0, fontSize: 16 }}>Your trip includes</h3>
+        {items.length === 0 ? (
+          <p style={{ color: "var(--text-secondary)", margin: "12px 0 0", fontSize: 14 }}>
+            Itinerary details will appear here once your advisor adds them.
+          </p>
+        ) : (
+          <ul style={{ listStyle: "none", padding: 0, margin: "12px 0 0", display: "grid", gap: 10 }}>
+            {items.map((it) => {
+              const Icon = TRIP_ITEM_ICON[it.itemType] || Ticket;
+              return (
+                <li key={it.id} style={{
+                  display: "flex", alignItems: "center", gap: 12, padding: 12,
+                  border: "1px solid var(--border-color, rgba(18, 38, 71, 0.12))", borderRadius: 10,
+                }}>
+                  <Icon size={18} aria-hidden style={{ color: "var(--primary-color, #122647)", flexShrink: 0 }} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 600 }}>{it.description || it.itemType}</div>
+                    <div style={{ fontSize: 12, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: 0.5 }}>
+                      {it.itemType}
+                    </div>
+                  </div>
+                  {it.totalPrice != null && (
+                    <div style={{ fontWeight: 600 }}>{fmtMoney(it.totalPrice, itinerary.currency)}</div>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </section>
+
+      <section style={cardStyle} aria-labelledby="booking-cost-heading">
+        <h3 id="booking-cost-heading" style={{ margin: 0, fontSize: 16 }}>Trip cost</h3>
+        <dl style={{ margin: "12px 0 0", display: "grid", gridTemplateColumns: "1fr auto", gap: "8px 16px", fontSize: 14 }}>
+          <dt style={{ ...dtStyle, fontWeight: 700, color: "var(--text-primary)" }}>Per person</dt>
+          <dd style={{ ...ddStyle, fontWeight: 700, textAlign: "right" }}>{fmtMoney(pax > 1 ? Math.round((total / pax) * 100) / 100 : total, itinerary.currency)}</dd>
+          {pax > 1 && (<>
+            <dt style={dtStyle}>Group total ({pax} travelers)</dt>
+            <dd style={{ ...ddStyle, textAlign: "right" }}>{fmtMoney(total, itinerary.currency)}</dd>
+          </>)}
+          {paid > 0 && (<>
+            <dt style={dtStyle}>Paid so far</dt>
+            <dd style={{ ...ddStyle, textAlign: "right", color: "var(--success-color, #2F7A4D)" }}>{fmtMoney(paid, itinerary.currency)}</dd>
+            <dt style={dtStyle}>Balance due</dt>
+            <dd style={{ ...ddStyle, textAlign: "right", fontWeight: 600 }}>{fmtMoney(balance, itinerary.currency)}</dd>
+          </>)}
+        </dl>
+      </section>
+
+      {/* Per-person estimate calculator — customer types a headcount and sees
+          the per-person price multiplied out (overall + per item). */}
+      {perPerson > 0 && (
+        <section style={cardStyle} aria-labelledby="estimate-heading">
+          <h3 id="estimate-heading" style={{ margin: 0, fontSize: 16 }}>Estimate for your group</h3>
+          <p style={{ color: "var(--text-secondary)", margin: "6px 0 0", fontSize: 13 }}>
+            Per person is <strong>{fmtMoney(perPerson, itinerary.currency)}</strong>. Enter how many
+            people are travelling to see the estimated cost.
+          </p>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "12px 0 0", flexWrap: "wrap" }}>
+            <label htmlFor="estimate-headcount" style={{ fontSize: 14, color: "var(--text-primary)" }}>
+              Number of people
+            </label>
+            <input
+              id="estimate-headcount"
+              type="number"
+              min={1}
+              inputMode="numeric"
+              value={headcount}
+              placeholder={String(pax)}
+              onChange={(e) => setHeadcount(e.target.value)}
+              aria-label="Number of people for the estimate"
+              style={{
+                width: 90, padding: "8px 10px", fontSize: 14,
+                border: "1px solid var(--border-color, rgba(18, 38, 71, 0.2))", borderRadius: 8,
+              }}
+            />
+            {headcount !== "" && (
+              <button
+                type="button"
+                onClick={() => setHeadcount("")}
+                style={{
+                  background: "none", border: "none", padding: 0, cursor: "pointer",
+                  color: "var(--primary-color, #122647)", fontSize: 13, textDecoration: "underline",
+                }}
+              >
+                Reset to {pax}
+              </button>
+            )}
+          </div>
+
+          <div style={{
+            margin: "14px 0 0", padding: 14, borderRadius: 10,
+            background: "var(--subtle-bg, rgba(18, 38, 71, 0.04))",
+          }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12 }}>
+              <span style={{ fontSize: 14, color: "var(--text-secondary)" }}>
+                {fmtMoney(perPerson, itinerary.currency)} × {estCount} {estCount === 1 ? "person" : "people"}
+              </span>
+              <span style={{ fontSize: 20, fontWeight: 700, color: "var(--primary-color, #122647)" }} aria-live="polite">
+                {fmtMoney(estTotal, itinerary.currency)}
+              </span>
+            </div>
+          </div>
+
+          {items.length > 0 && (
+            <dl style={{ margin: "14px 0 0", display: "grid", gridTemplateColumns: "1fr auto", gap: "6px 16px", fontSize: 13 }}>
+              {items.map((it) => {
+                if (it.totalPrice == null) return null;
+                const itemPerPerson = Number(it.totalPrice) / pax;
+                const itemEst = Math.round(itemPerPerson * estCount * 100) / 100;
+                return (
+                  <div key={it.id} style={{ display: "contents" }}>
+                    <dt style={dtStyle}>
+                      {it.description || it.itemType}
+                      <span style={{ color: "var(--text-secondary)", marginLeft: 6 }}>
+                        ({fmtMoney(itemPerPerson, itinerary.currency)} pp)
+                      </span>
+                    </dt>
+                    <dd style={{ ...ddStyle, textAlign: "right" }}>{fmtMoney(itemEst, itinerary.currency)}</dd>
+                  </div>
+                );
+              })}
+            </dl>
+          )}
+          <p style={{ color: "var(--text-secondary)", margin: "10px 0 0", fontSize: 12 }}>
+            This is an indicative estimate based on the per-person price. Your advisor will confirm the
+            final cost for your group.
+          </p>
+        </section>
+      )}
+    </>
   );
 }
 
@@ -555,4 +1525,18 @@ const iconBtnStyle = {
   border: "1px solid var(--border-color, rgba(18, 38, 71, 0.12))",
   borderRadius: 8,
   cursor: "pointer",
+};
+const backBtnStyle = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 6,
+  padding: "6px 12px",
+  borderRadius: 8,
+  fontSize: 13,
+  fontWeight: 600,
+  background: "transparent",
+  color: "var(--text-secondary)",
+  border: "1px solid var(--border-color, rgba(18, 38, 71, 0.12))",
+  cursor: "pointer",
+  width: "fit-content",
 };

@@ -559,6 +559,7 @@ const embassyRulesRoutes = require("./routes/embassy_rules");
 // /api/embassy-rules) since authorship is tenant-wide ADMIN / advisor-head,
 // not sub-brand-scoped. Backs the diagnostic-engine destination scoring.
 const travelCurriculumRoutes = require("./routes/travel_curriculum");
+const travelSchoolTermRoutes = require("./routes/travel_school_terms");
 // TS18 Phase 2 SHELL — Travel Stall personalised destination recommender
 // (LLM consumer). Mounted at /api/travel-personalised-destinations so the
 // URL is sibling-flat with /api/embassy-rules / /api/travel-curriculum
@@ -651,14 +652,20 @@ app.use("/api", (req, res, next) => {
   // anonymously. Admin CRUD (POST/PUT/DELETE + GET /plans/admin) stays gated
   // by the route-level verifyToken+verifyRole middleware below.
   if (req.method === 'GET' && req.path === '/subscriptions/plans') return next();
-  // TMC public readiness PDF — `/travel/diagnostics/:id/readiness-report.pdf`
-  // is designed public per PRD §5.1 DD-5.2 (the school clicks the report-
-  // download URL surfaced after public submit-tmc).  Can't be a prefix
-  // entry in openPaths because the `:id` segment is dynamic; suffix match
-  // on the route shape lets it through without auth.  Tightly scoped to
-  // GET + the exact suffix so other /travel/diagnostics/:id sub-routes
-  // stay auth-gated.
-  if (req.method === 'GET' && /^\/travel\/diagnostics\/\d+\/readiness-report\.pdf$/.test(req.path)) return next();
+  // The travel itinerary PDF is opened in a NEW TAB via a plain <a href>
+  // (no fetch → no Authorization header), so the frontend passes the bearer
+  // JWT as a ?_t= query param. Promote it to the Authorization header so
+  // verifyToken can validate. SCOPED to exactly /travel/itineraries/:id/pdf —
+  // this does NOT broaden token-in-URL acceptance for any other route, and
+  // verifyToken still fully validates the token (no auth bypass).
+  if (
+    req.method === 'GET' &&
+    !req.headers.authorization &&
+    req.query && req.query._t &&
+    /^\/travel\/itineraries\/\d+\/pdf$/.test(req.path)
+  ) {
+    req.headers.authorization = `Bearer ${req.query._t}`;
+  }
   verifyToken(req, res, (err) => {
     if (err) return next(err);
     checkSubscription(req, res, next);
@@ -859,6 +866,7 @@ app.use("/api/travel/itinerary-templates", require("./routes/travel_itinerary_te
 app.use("/api/travel/sightseeing", require("./routes/travel_sightseeing"));
 app.use("/api/embassy-rules", embassyRulesRoutes);
 app.use("/api/travel-curriculum", travelCurriculumRoutes);
+app.use("/api/travel-school-terms", travelSchoolTermRoutes);
 app.use("/api/travel-personalised-destinations", travelPersonalisedDestinationsRoutes);
 app.use("/api/travel-tmc-catalogue", require("./routes/travel_tmc_catalogue"));
 app.use("/api/travel/engine-weights", require("./routes/travel_engine_weights"));

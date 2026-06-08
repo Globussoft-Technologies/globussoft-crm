@@ -213,3 +213,66 @@ test.describe("Travel dashboard API — aggregate shape", () => {
     }
   });
 });
+
+// ─── ?subBrand= scoping (the sidebar switcher drives this) ──────────
+//
+// The dashboard accepts an optional ?subBrand= query that narrows every
+// tile to a single sub-brand (intersected with the caller's access).
+// These assertions are STRUCTURAL, not seed-count-dependent:
+//   - An admin scoping to a non-TMC brand must see 0 trips + 0 microsites,
+//     because TmcTrip + TripMicrosite are TMC-only and gated on canTmc.
+//   - costMaster.bySubBrand must only contain the requested brand's key.
+//   - A garbage subBrand is a 400 INVALID_SUB_BRAND.
+test.describe("Travel dashboard API — ?subBrand= scoping", () => {
+  test("?subBrand=tmc narrows costMaster.bySubBrand to the tmc key only", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, "travel admin login unavailable");
+    const r = await retryOn5xx(() =>
+      request.get(`${BASE_URL}/api/travel/dashboard?subBrand=tmc`, {
+        headers: headers(token),
+        timeout: REQUEST_TIMEOUT,
+      }),
+    );
+    expect(r.status()).toBe(200);
+    const body = await r.json();
+    for (const key of Object.keys(body.costMaster.bySubBrand)) {
+      expect(key).toBe("tmc");
+    }
+  });
+
+  test("?subBrand=rfu zeroes TMC-only tiles (trips + microsites) and scopes costMaster to rfu", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, "travel admin login unavailable");
+    const r = await retryOn5xx(() =>
+      request.get(`${BASE_URL}/api/travel/dashboard?subBrand=rfu`, {
+        headers: headers(token),
+        timeout: REQUEST_TIMEOUT,
+      }),
+    );
+    expect(r.status()).toBe(200);
+    const body = await r.json();
+    // TmcTrip + TripMicrosite are TMC-only — an RFU scope must show zero,
+    // regardless of seed state.
+    expect(body.trips.total).toBe(0);
+    expect(body.trips.upcoming30d).toBe(0);
+    expect(body.microsites.published).toBe(0);
+    expect(body.recentTrips.length).toBe(0);
+    // costMaster, when present, is scoped to rfu only.
+    for (const key of Object.keys(body.costMaster.bySubBrand)) {
+      expect(key).toBe("rfu");
+    }
+  });
+
+  test("invalid ?subBrand= → 400 INVALID_SUB_BRAND", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, "travel admin login unavailable");
+    const r = await retryOn5xx(() =>
+      request.get(`${BASE_URL}/api/travel/dashboard?subBrand=not-a-brand`, {
+        headers: headers(token),
+        timeout: REQUEST_TIMEOUT,
+      }),
+    );
+    expect(r.status()).toBe(400);
+    expect((await r.json()).code).toBe("INVALID_SUB_BRAND");
+  });
+});

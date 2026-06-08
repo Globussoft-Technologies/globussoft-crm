@@ -257,6 +257,7 @@ export default function InboundLeads() {
                 <th style={th}>Email</th>
                 <th style={th}>Phone</th>
                 <th style={th}>Channel</th>
+                <th style={th}>Quality</th>
                 <th style={th}>Created</th>
                 <th style={th}>Action</th>
               </tr>
@@ -286,6 +287,66 @@ export default function InboundLeads() {
                       >
                         {ch}
                       </span>
+                    </td>
+                    <td style={td}>
+                      {(() => {
+                        // Mirrors the generic Leads/Contacts pattern: aiScore
+                        // badge (green >75 / amber >40 / red below) + a red
+                        // "Suspect" pill when the junk filter tagged it
+                        // (status='Junk') or the score is low. Show-all-badge —
+                        // nothing is hidden.
+                        const score = typeof c.aiScore === "number" ? c.aiScore : null;
+                        const isSuspect = c.status === "Junk" || (score != null && score < 40);
+                        if (score == null && !isSuspect) {
+                          return <span style={{ color: "var(--text-secondary)" }}>—</span>;
+                        }
+                        return (
+                          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                            {score != null && (
+                              <span
+                                data-testid={`inbound-lead-score-${c.id}`}
+                                style={{
+                                  padding: "2px 8px",
+                                  borderRadius: 10,
+                                  fontSize: 11,
+                                  fontWeight: 700,
+                                  backgroundColor:
+                                    score > 75
+                                      ? "rgba(16, 185, 129, 0.1)"
+                                      : score > 40
+                                        ? "rgba(245, 158, 11, 0.1)"
+                                        : "rgba(239, 68, 68, 0.1)",
+                                  color:
+                                    score > 75
+                                      ? "var(--success-color)"
+                                      : score > 40
+                                        ? "var(--warning-color)"
+                                        : "#ef4444",
+                                }}
+                              >
+                                {score}/100
+                              </span>
+                            )}
+                            {isSuspect && (
+                              <span
+                                data-testid={`inbound-lead-suspect-${c.id}`}
+                                title="Flagged by the junk-lead filter"
+                                style={{
+                                  padding: "2px 8px",
+                                  borderRadius: 10,
+                                  fontSize: 11,
+                                  fontWeight: 700,
+                                  background: "rgba(239, 68, 68, 0.12)",
+                                  color: "#ef4444",
+                                  border: "1px solid rgba(239,68,68,0.25)",
+                                }}
+                              >
+                                Suspect
+                              </span>
+                            )}
+                          </span>
+                        );
+                      })()}
                     </td>
                     <td style={td}>{formatDate(c.createdAt)}</td>
                     <td style={td}>

@@ -63,4 +63,4 @@ function dbFallthroughGuard() {
 
 dbFallthroughGuard();
 
-export { dbFallthroughGuard };
+module.exports = { dbFallthroughGuard };

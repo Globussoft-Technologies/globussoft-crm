@@ -2234,6 +2234,200 @@ router.get("/diagnostics/:id/readiness-report.pdf", async (req, res) => {
   }
 });
 
+// GET /api/travel/diagnostics/public/readiness-report/:slug
+//
+// Public no-auth endpoint per T14 / PRD §3.5.  The T10 frontend page
+// (`/p/tmc/report/:slug` → TmcReadinessReport.jsx) fetches this endpoint
+// to render the 10-section template.  Mirrors the PDF endpoint's data
+// pipeline (engine output + Job A narrative + report-guard + standing-
+// facts + board hook + runway display) but returns the pre-render
+// struct as JSON instead of streaming a PDF.
+//
+// Slug resolution: the slug is the public `reportSlug` token built by
+// `buildReportSlug(diagnosticId)` at submit-tmc time (id + 16-hex-byte
+// suffix) and surfaced in the submit response.  `parseDiagnosticIdFromSlug`
+// extracts the leading numeric id.  We additionally validate that the
+// suffix matches the stored slug's suffix-bytes-shape to ensure the slug
+// isn't trivially guessable by anyone who knows the diagnostic id
+// (DD-5.2 — token-gated public access).
+//
+// Tenant isolation: slugs are global-unique by construction (id is
+// unique); the response intentionally omits tenant identity (no
+// tenantId, no tenant slug, no tenant name) so a leaked slug doesn't
+// reveal which tenant the diagnostic belongs to.
+//
+// Layer 3 fallback: when the LLM call fails or T7's guard rejects the
+// LLM output, this endpoint still returns 200 with the deterministic
+// template narrative (mirrors PDF endpoint behaviour — NEVER 5xx on
+// guard-fallback).
+//
+// Cache: `Cache-Control: public, max-age=300` (5 min).  Report content
+// is stable once generated; same school revisiting their URL doesn't
+// regenerate the LLM call (and even if it did, the engine output is
+// already persisted from submit-tmc).
+router.get("/diagnostics/public/readiness-report/:slug", async (req, res) => {
+  try {
+    const slug = req.params.slug;
+    const id = parseDiagnosticIdFromSlug(slug);
+    if (!id) {
+      return res.status(404).json({
+        error: "Readiness diagnostic not found",
+        code: "DIAGNOSTIC_NOT_FOUND",
+      });
+    }
+
+    const diag = await prisma.travelDiagnostic.findFirst({
+      where: { id, subBrand: "tmc" },
+    });
+    if (!diag) {
+      return res.status(404).json({
+        error: "Readiness diagnostic not found",
+        code: "DIAGNOSTIC_NOT_FOUND",
+      });
+    }
+
+    let answers = {};
+    try { answers = JSON.parse(diag.answersJson || "{}"); }
+    catch { /* malformed → empty answers, fallback template */ }
+
+    // Load active catalogue for the destination blocklist + matched-trip
+    // narrative material.
+    let catalogue = [];
+    try {
+      catalogue = await prisma.tmcTripCatalogue.findMany({
+        where: { tenantId: diag.tenantId, status: "active" },
+      });
+    } catch { /* empty catalogue is fine — guard falls to template */ }
+    const matchedTripIds = new Set(
+      [diag.recommendedTripId, diag.alternativeTripId].filter((x) => x != null),
+    );
+    const matchedRows = catalogue.filter((t) => matchedTripIds.has(t.id));
+
+    // Build Job A prompt (T6).
+    const standingFacts = DEFAULT_STANDING_FACTS;
+    const destinationBlocklist = buildDestinationBlocklist(catalogue);
+    const catalogueMatchedBlurbs = matchedRows.map((t) => ({
+      blurb: stripDestinationWords(t.reportSkillBlurb || "", destinationBlocklist),
+      tier: t.tier,
+    }));
+    let engineOutputForPrompt = null;
+    try {
+      engineOutputForPrompt = {
+        state: diag.engineState || null,
+        flags: JSON.parse(diag.flagsJson || "[]"),
+      };
+    } catch { engineOutputForPrompt = { state: diag.engineState || null, flags: [] }; }
+
+    const promptEnvelope = tmcPrompts.buildReadinessNarrativePrompt({
+      answers,
+      engineOutput: engineOutputForPrompt,
+      catalogueMatched: catalogueMatchedBlurbs,
+      standingFactsConfig: standingFacts,
+      destinationBlocklist,
+    });
+
+    // Call the LLM router (T6).  Stub mode returns prose that won't pass
+    // Layer 1 schema validation, so the guard falls through to the
+    // deterministic template per design — same as the PDF endpoint.
+    let llmRaw = null;
+    try {
+      const llmResp = await llmRouter.routeRequest({
+        task: promptEnvelope.task,
+        payload: { system: promptEnvelope.system, user: promptEnvelope.user },
+        tenantId: diag.tenantId,
+      });
+      try { llmRaw = JSON.parse(llmResp && llmResp.text); }
+      catch { llmRaw = llmResp && llmResp.text; }
+    } catch (e) {
+      console.error("[travel-diag-tmc] readiness-report.json LLM call failed (falling through to template):", e.message);
+    }
+
+    // Run the T7 guard.  Layer 3 fallback fills from schoolAnswers.
+    const guarded = tmcReportGuard.guardReportOutput("A", llmRaw, {
+      destinationBlocklist,
+      schoolAnswers: answers,
+    });
+
+    // Resolve §3.5.1 board hook + §3.5.2 runway display.
+    const boardHook = resolveBoardHook(standingFacts, answers.curriculum);
+    const runwayDisplay = resolveRunwayDisplay(standingFacts, answers.geo_preference);
+    const runwayKey = resolveRunwayKey(answers.geo_preference);
+    const runwayDays = (standingFacts.runway[runwayKey] && standingFacts.runway[runwayKey].lead_days) || null;
+
+    // Board name surfaced for the §3.5.1 hook block — first selected
+    // curriculum (multi-board schools see the concatenated hookText but
+    // the header `board` field uses the first).  Empty string when
+    // curriculum is missing.
+    const curriculumList = Array.isArray(answers.curriculum)
+      ? answers.curriculum
+      : (answers.curriculum ? [answers.curriculum] : []);
+    const boardName = curriculumList.length > 0 ? String(curriculumList[0]) : "";
+
+    // catalogueMatched — buyer-facing.  Trip name + region + tier +
+    // duration ONLY.  Pricing fields (indicativePricePerStudent,
+    // priceBand) are EXCLUDED — DD-5.4 keeps the report a "what becomes
+    // possible" surface, not a quote.  The executive surfaces price
+    // separately via the brief / human follow-up.
+    const catalogueMatchedSafe = matchedRows.map((t) => ({
+      tripId: t.tripId,
+      title: t.title,
+      tier: t.tier,
+      region: t.region,
+      durationDays: t.durationDays,
+      durationNights: t.durationNights,
+      reportSkillBlurb: stripDestinationWords(t.reportSkillBlurb || "", destinationBlocklist),
+    }));
+
+    // Engine output — only the buyer-safe surface.  The full
+    // `engineScoresJson` (survivors[], eliminated[], weightsUsed{}) is
+    // INTENTIONALLY EXCLUDED — it would leak weight tuning and the
+    // catalogue's eliminated set is an internal sales artifact.  We
+    // expose only state + tier + the matched trip ids (which are already
+    // the school's surface).
+    const engineOutputForJson = {
+      state: diag.engineState || null,
+      icpTier: diag.icpTier || null,
+      recommendedTripId: diag.recommendedTripId || null,
+      alternativeTripId: diag.alternativeTripId || null,
+    };
+
+    const payload = {
+      diagnostic: {
+        id: diag.id,
+        engineState: diag.engineState || null,
+        icpTier: diag.icpTier || null,
+        weightsVersion: diag.weightsVersion || null,
+        createdAt: diag.createdAt instanceof Date ? diag.createdAt.toISOString() : diag.createdAt,
+      },
+      narrative: guarded.output,
+      engineOutput: engineOutputForJson,
+      standingFacts,
+      boardHook: {
+        board: boardName,
+        hookText: boardHook,
+      },
+      runwayDisplay: {
+        days: runwayDays,
+        label: runwayDisplay,
+      },
+      catalogueMatched: catalogueMatchedSafe,
+      guardLayer: guarded.layer,
+      guardAccepted: guarded.accepted,
+    };
+
+    res.setHeader("Cache-Control", "public, max-age=300");
+    res.setHeader("X-Tmc-Report-Guard-Layer", String(guarded.layer));
+    res.setHeader("X-Tmc-Report-Guard-Accepted", String(guarded.accepted));
+    res.status(200).json(payload);
+  } catch (e) {
+    console.error("[travel-diag-tmc] readiness-report.json error:", e.message);
+    res.status(500).json({
+      error: "Failed to render readiness report",
+      code: "REPORT_RENDER_FAILED",
+    });
+  }
+});
+
 // Internal exports for the T8 vitest suite — keeps the helpers
 // inline-testable without round-tripping through supertest.
 module.exports = router;

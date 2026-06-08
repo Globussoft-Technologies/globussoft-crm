@@ -589,12 +589,19 @@ jobs:
           # PrismaClientInitializationError in vitest 4.x.
           npx prisma generate
 
-      - name: Run vitest
+      - name: Run vitest (unit suite)
         working-directory: backend
         run: |
           set -euo pipefail
           npm test
           echo "::notice::Unit tests passed"
+
+      - name: Run vitest (integration suite)
+        working-directory: backend
+        run: |
+          set -euo pipefail
+          npm run test:integration
+          echo "::notice::Integration tests passed"
 
   # ── 5. FRONTEND_UNIT_TESTS: vitest + RTL over frontend/src components + ─
   # utils. G-21 — first wave of frontend unit-test infra. Mirrors backend's

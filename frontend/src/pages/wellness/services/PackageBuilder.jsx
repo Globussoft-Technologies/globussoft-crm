@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Package, Copy, Check } from 'lucide-react';
 import { useNotify } from '../../../utils/notify';
 import { formatMoney } from '../../../utils/money';
@@ -25,10 +25,15 @@ export default function PackageBuilder({ services }) {
   const [sessions, setSessions] = useState(6);
   const [discount, setDiscount] = useState(15);
   const [copied, setCopied] = useState(false);
+  const copyResetTimerRef = useRef(null);
 
   useEffect(() => {
     if (!serviceId && eligible.length) setServiceId(String(eligible[0].id));
   }, [eligible, serviceId]);
+
+  useEffect(() => () => {
+    if (copyResetTimerRef.current) clearTimeout(copyResetTimerRef.current);
+  }, []);
 
   const service = eligible.find((s) => String(s.id) === String(serviceId));
   const gross = service ? service.basePrice * sessions : 0;
@@ -45,7 +50,8 @@ export default function PackageBuilder({ services }) {
       const { copyToClipboard } = await import('../../../utils/clipboard');
       await copyToClipboard(pitch);
       setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
+      if (copyResetTimerRef.current) clearTimeout(copyResetTimerRef.current);
+      copyResetTimerRef.current = setTimeout(() => setCopied(false), 1500);
     } catch {
       notify.error('Could not copy');
     }

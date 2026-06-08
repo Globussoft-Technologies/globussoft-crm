@@ -12,6 +12,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
+    "test:integration": "vitest run --config vitest.integration.config.js",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "lint:strict": "eslint lib middleware services utils test --max-warnings 0",

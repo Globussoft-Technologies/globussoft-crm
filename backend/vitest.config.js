@@ -26,7 +26,19 @@ module.exports = defineConfig({
     // ALLOW_REMOTE_DB_IN_TESTS=1 is set as an explicit override).
     setupFiles: ['./test/setup.js'],
     // Don't accidentally pick up the Playwright specs in the e2e/ folder.
-    exclude: ['node_modules/**', 'e2e/**', 'coverage/**', '.c8tmp/**'],
+    // Also exclude `test/integration/prisma-extends.test.js` — that spec
+    // taps `prisma.$parent._engine` to exercise the real $extends machinery
+    // and can't run under T39's `prismaSurfaceGuard()` proxy. It runs under
+    // `backend/vitest.integration.config.js` (npm run test:integration)
+    // which sets PRISMA_ALLOW_REAL_CALLS=1 before setup.js fires. See
+    // PRD_TMC_DIAGNOSTIC_SALES_ROUTING_ENGINE.md §10 T40 for the rationale.
+    exclude: [
+      'node_modules/**',
+      'e2e/**',
+      'coverage/**',
+      '.c8tmp/**',
+      'test/integration/prisma-extends.test.js',
+    ],
     // Hard-fail on a flaky test rather than retrying — these are pure
     // unit tests, no flake should be tolerated.
     retry: 0,

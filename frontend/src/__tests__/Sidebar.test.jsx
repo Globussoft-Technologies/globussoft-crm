@@ -763,6 +763,10 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(screen.getByText('Quote Builder')).toBeTruthy();
       expect(screen.getByText('Marketing Flyer Studio')).toBeTruthy();
       expect(screen.getByText('Flyer Templates')).toBeTruthy();
+      // T26 (PRD_TMC_DIAGNOSTIC_SALES_ROUTING_ENGINE §10) — TMC Catalogue
+      // admin entry is ADMIN+MANAGER visible. Page CRUD is verifyRole
+      // ADMIN+MANAGER server-side; nav mirrors that posture.
+      expect(screen.getByText('TMC Catalogue')).toBeTruthy();
       // Travel Stall section label is `isManager` gated. The string also
       // appears as an <option> in the sub-brand switcher — filter to the
       // section-label DIV node (not the OPTION).
@@ -776,6 +780,8 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(screen.queryByText('Quote Builder')).toBeNull();
       expect(screen.queryByText('Marketing Flyer Studio')).toBeNull();
       expect(screen.queryByText('Flyer Templates')).toBeNull();
+      // T26 — TMC Catalogue is ADMIN+MANAGER only; hidden for USER.
+      expect(screen.queryByText('TMC Catalogue')).toBeNull();
       // Travel Stall as a section-label DIV is hidden for USER. The
       // sub-brand switcher's "Travel Stall" <option> is still present
       // (USER with null subBrandAccess sees all 4 options) — filter to

@@ -1357,6 +1357,20 @@ function renderTravelNav({
       />
       <Link to="/travel/itineraries" icon={MapIcon} label="Itineraries" />
       <Link to="/travel/trips" icon={Luggage} label="TMC Trips" />
+      {/* T26 (PRD_TMC_DIAGNOSTIC_SALES_ROUTING_ENGINE §10) — TMC Trip
+          Catalogue admin (T16 shipped 6a034ebb). ADMIN+MANAGER visibility
+          mirrors the page's CRUD auth posture (verifyRole inside the
+          route handler); USER role sees no entry. Sits adjacent to
+          "TMC Trips" since both surfaces are TMC sub-brand operator
+          tools — the Catalogue is the upstream "library of bookable
+          trip templates" that "TMC Trips" instances are spawned from. */}
+      {isManager && (
+        <Link
+          to="/travel/tmc/catalogue"
+          icon={Package}
+          label="TMC Catalogue"
+        />
+      )}
       <Link to="/travel/web-checkins" icon={Ticket} label="Web Check-ins" />
       <Link to="/travel/cost-master" icon={IndianRupee} label="Cost Master" />
       {/* Arc 2 Travel Gap #907 slice 5/N — SightseeingMaster admin entry.

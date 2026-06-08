@@ -104,6 +104,29 @@ for (const m of MODELS) {
   prisma[m].findMany = vi.fn();
 }
 
+// ── B5 mixed-class mock surface (T33 — backend-test-routes-red-audit Class B5)
+//
+//   search.js calls prisma.tenant.findUnique inside canSearchPatients() to
+//   resolve the tenant.vertical when req.user.vertical is not pre-stamped on
+//   the JWT. Without a mock the real Prisma client hangs trying to connect
+//   to a non-existent test DB, and tests 1/5/6/8 time out at 5s.
+//
+//   search.js also conditionally calls prisma.patient.findMany when the
+//   vertical resolves to 'wellness'. The default fixture stamps vertical
+//   'generic' so canSearchPatients returns false and patient.findMany is
+//   never invoked — but the mock surface needs to exist so that a future
+//   wellness-vertical case can stub a return value cleanly.
+//
+//   NOTE: the audit's "B1 + B2 mocks" recipe also lists prisma.userRole.findMany
+//   and prisma.user.findUnique because requirePermission middleware needs
+//   them — but routes/search.js does NOT mount requirePermission (only
+//   verifyToken). The B1 surfaces are therefore omitted here. The drift is
+//   documented in T36 (audit-recipe correction).
+prisma.tenant = prisma.tenant || {};
+prisma.tenant.findUnique = vi.fn();
+prisma.patient = prisma.patient || {};
+prisma.patient.findMany = vi.fn();
+
 import express from 'express';
 import request from 'supertest';
 const searchRouter = requireCJS('../../routes/search');
@@ -161,6 +184,10 @@ beforeEach(() => {
   for (const m of MODELS) {
     prisma[m].findMany.mockReset().mockResolvedValue([defaultRowFor(m)]);
   }
+  // T33 — generic tenant by default so canSearchPatients() returns false and
+  // patient.findMany is never invoked. Wellness-specific tests can override.
+  prisma.tenant.findUnique.mockReset().mockResolvedValue({ id: 1, vertical: 'generic' });
+  prisma.patient.findMany.mockReset().mockResolvedValue([]);
   authState.useReal = false;
 });
 

@@ -59,6 +59,15 @@ prisma.userRole = {
 prisma.auditLog = {
   create: vi.fn().mockResolvedValue({}),
 };
+// T30 (Class B2 from docs/gaps/backend-test-routes-red-audit.md) —
+// routes/staff.js:49 getCallerVertical() reads tenant.findUnique to
+// decide whether wellnessRole validation should consult the per-tenant
+// catalog (wellness) or the legacy whitelist (generic). Without this
+// mock the route reaches the real DB connection string, can't connect,
+// and the wellnessRole-enum-validation tests time out at 5s.
+prisma.tenant = {
+  findUnique: vi.fn(),
+};
 // PUT /:id wraps the User.update + UserRole swap in prisma.$transaction.
 // Passthrough so the callback receives `prisma` itself as `tx`, and the
 // mocked tx.user.update / tx.userRole.* hits the same mocks above.
@@ -234,6 +243,19 @@ describe('PATCH /:id — deactivate', () => {
 // ── PRD_WELLNESS_RBAC DD-5.1 [RESOLVED 2026-05-24] — cashier wellnessRole ──
 
 describe('PUT /:id — wellnessRole enum (PRD_WELLNESS_RBAC DD-5.1)', () => {
+  beforeEach(() => {
+    // T30: stub the vertical-resolution lookup so getCallerVertical()
+    // (routes/staff.js:49) doesn't try to reach the real DB and time out.
+    // Resolve to 'generic' so validateWellnessRole hits the
+    // LEGACY_WELLNESS_ROLES whitelist branch (which includes "cashier"
+    // per DD-5.1) — that path needs zero further mocks. The wellness
+    // branch would additionally require mocking prisma.wellnessRoleType
+    // because isCatalogedKey() queries the per-tenant catalog. Either
+    // branch satisfies these two cases identically because "cashier" is
+    // valid in the whitelist AND seeded in the wellness catalog.
+    prisma.tenant.findUnique.mockResolvedValue({ id: 1, vertical: 'generic' });
+  });
+
   test('accepts "cashier" as a valid wellnessRole (POS sales role)', async () => {
     prisma.user.findFirst.mockResolvedValue({
       id: 22, tenantId: 1, email: 'cashier@x.com', name: 'C', role: 'USER', wellnessRole: null,

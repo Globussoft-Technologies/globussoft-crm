@@ -53,6 +53,18 @@ prisma.travelInvoiceLine = {
   update: vi.fn(),
   delete: vi.fn(),
 };
+// T32 (Class B4) — auto-create payment schedule block (routes/travel_invoices.js
+// :3908) calls travelPaymentSchedule.findFirst + createMany after the Draft ->
+// Issued transition. Without these mocks Prisma's real client is reached and
+// the test times out. The 6 happy-path / FY-counter / audit-row / cross-sub-
+// brand tests don't care about schedule creation — they short-circuit by
+// returning a truthy findFirst so the createMany branch is skipped.
+prisma.travelPaymentSchedule = {
+  findFirst: vi.fn(),
+  findMany: vi.fn(),
+  create: vi.fn(),
+  createMany: vi.fn(),
+};
 // $transaction passes a "tx" with the same prisma shape — the handler reads
 // tx.travelInvoice.findFirst inside nextSubBrandInvoiceNum.
 prisma.$transaction = vi.fn(async (cb) => cb(prisma));
@@ -126,6 +138,14 @@ beforeEach(() => {
   prisma.user.findUnique.mockReset().mockResolvedValue({ role: 'ADMIN', subBrandAccess: null });
   prisma.auditLog.create.mockReset().mockResolvedValue({ id: 1 });
   prisma.auditLog.findFirst.mockReset().mockResolvedValue(null);
+  // T32 (Class B4) — short-circuit the auto-create payment schedule block by
+  // returning a truthy findFirst (matches the "operator already populated a
+  // custom schedule" branch). The 6 affected tests assert on FY-counter
+  // invoice-num formatting, NOT on schedule creation.
+  prisma.travelPaymentSchedule.findFirst.mockReset().mockResolvedValue({ id: 1 });
+  prisma.travelPaymentSchedule.findMany.mockReset().mockResolvedValue([]);
+  prisma.travelPaymentSchedule.create.mockReset();
+  prisma.travelPaymentSchedule.createMany.mockReset();
 });
 
 describe('POST /api/travel/invoices/:id/issue — Draft -> Issued', () => {

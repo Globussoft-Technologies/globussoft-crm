@@ -170,6 +170,12 @@ prisma.patient = prisma.patient || {};
 prisma.patient.findFirst = vi.fn().mockResolvedValue(null);
 prisma.wallet = prisma.wallet || {};
 prisma.wallet.findFirst = vi.fn().mockResolvedValue(null);
+// T31: webhook.findMany is invoked by lib/webhookDelivery.js when the route
+// emits contact.created / contact.updated via eventBus. Empty array → the
+// helper short-circuits (no subscribers) so happy create / update / delete
+// tests don't hang trying to reach the real DB at 163.227.174.141:3306.
+prisma.webhook = prisma.webhook || {};
+prisma.webhook.findMany = vi.fn().mockResolvedValue([]);
 
 import express from 'express';
 import request from 'supertest';
@@ -220,6 +226,7 @@ beforeEach(() => {
   prisma.contact.update.mockReset();
   prisma.patient.findFirst.mockReset().mockResolvedValue(null);
   prisma.wallet.findFirst.mockReset().mockResolvedValue(null);
+  prisma.webhook.findMany.mockReset().mockResolvedValue([]);
   writeAuditMock.mockReset().mockResolvedValue(undefined);
   diffFieldsMock.mockReset().mockReturnValue({});
   emitEventMock.mockReset();

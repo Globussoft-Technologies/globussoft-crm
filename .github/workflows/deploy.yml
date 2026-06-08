@@ -577,11 +577,17 @@ jobs:
           cache: "npm"
           cache-dependency-path: backend/package-lock.json
 
-      - name: Backend — npm ci
+      - name: Backend — npm ci + prisma generate
         working-directory: backend
         run: |
           set -euo pipefail
           npm ci --no-audit --no-fund
+          # Match the build + api_tests gates — generate the Linux Prisma
+          # query engine for the GHA runner so any test that lazy-loads
+          # PrismaClient (even from teardown) finds the right .so binary.
+          # Without this, developer.test.js exits 1 with an unhandled
+          # PrismaClientInitializationError in vitest 4.x.
+          npx prisma generate
 
       - name: Run vitest
         working-directory: backend

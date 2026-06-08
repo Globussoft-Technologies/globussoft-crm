@@ -49,6 +49,8 @@ const Portal = lazy(() => import("./pages/Portal"));
 const TravelCustomerPortal = lazy(() => import("./pages/travel/TravelCustomerPortal"));
 const PublicTripMicrosite = lazy(() => import("./pages/travel/PublicTripMicrosite"));
 const TravelKycCallback = lazy(() => import("./pages/travel/TravelKycCallback"));
+// PRD §3.1 / slice T9 — public no-auth TMC readiness diagnostic.
+const TmcReadiness = lazy(() => import("./pages/public/TmcReadiness"));
 // Cross-vertical staff attendance dashboard — visible to wellness + travel
 // tenants. Backend (/api/attendance/list + /summary) is role-gated to
 // ADMIN/MANAGER; per-row edit/delete is ADMIN-only.
@@ -823,6 +825,8 @@ export default function App() {
                       the backend. The two callback routes catch DigiLocker's
                       ?code&state redirect and complete verification. */}
                   <Route path="/p/tripmicrosite/:publicUuid" element={<PublicTripMicrosite />} />
+                  {/* PRD §3.1 / slice T9 — public 12-Q readiness diagnostic. */}
+                  <Route path="/p/tmc/readiness" element={<TmcReadiness />} />
                   <Route path="/travel/kyc/callback" element={<TravelKycCallback flow="microsite" />} />
                   <Route path="/travel/portal/kyc/callback" element={<TravelKycCallback flow="portal" />} />
                   <Route

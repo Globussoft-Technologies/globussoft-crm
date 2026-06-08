@@ -1,5 +1,72 @@
 # CHANGELOG
 
+## v3.9.4 — 2026-06-08 — TMC arc follow-up sweep (T14-T36)
+
+Post-arc cleanup driven by the autonomous build cron v2 after `v3.9.3` shipped the main TMC Diagnostic Engine. Closes the 4 codeable follow-up items flagged mid-arc (T14-T17), 3 gap-discovery housekeeping slices (T25/T26/T27 scoping audit), and the 6-class `backend/test/routes/` red-stabilization sweep (T28-T33 + T36 recipe correction). Final verification (T34) re-ran the full `test/routes/` sweep and pinned that the 11 originally-CI-red files are now green. **All 12 follow-up slices landed in the same autonomous cron window as v3.9.3.**
+
+### Added — TMC arc follow-up slices (T14-T17)
+
+| Slice | File(s) | Commit | Notes |
+|---|---|---|---|
+| **T14** | `backend/routes/travel_diagnostics.js` + `backend/test/routes/travel-diagnostics-public-readiness-json.test.js` | `39c04851` | Public `GET /api/travel/diagnostics/public/readiness-report/:slug` JSON endpoint — feeds T10's `TmcReadinessReport.jsx` (page degraded to "Report being generated…" pre-T14 because route didn't exist). Reuses T8's pipeline (Job A prompt → llmRouter → T7 guardReportOutput). Security shape: tenantId / engineScoresJson / pricing fields excluded; `Cache-Control: public, max-age=300`. 13 vitest cases. |
+| **T15** | `backend/routes/travel_engine_weights.js` + `backend/server.js` + `backend/test/routes/travel-engine-weights.test.js` | `b8996e9c` | EngineWeights CRUD — `GET/PUT /api/travel/engine-weights`. ADMIN+MANAGER gate, auto-version-bump on weight change, true-idempotent re-PUT, 7 validation paths + 25 vitest cases. UI gracefully degraded to defaults pre-T15 (404). |
+| **T16** | `frontend/src/pages/travel/TmcCatalogueAdmin.jsx` + sibling test + App.jsx route | `6a034ebb` | Dedicated catalogue admin page at `/travel/tmc/catalogue` — Active/Archived tabs, full 14-field PRD §3.2 inline form, ADMIN/MANAGER/USER role gating, mobile-responsive `repeat(auto-fit, minmax(min(100%, 240px), 1fr))` per standing rule. 15 vitest cases. |
+| **T17** | `backend/lib/tmcReportGuard.js` + `backend/test/lib/tmcReportGuard.test.js` | `9a2f24c0` | Number-WORD check (Layer 2 spelled-out-numbers detection) — canonicaliser supports units/teens/tens/`hundred`/`thousand`/`million`, hyphens, UK `and` connector, case-folding. Floor 100 (mirrors `\d{3,}` floor). 17 new cases on top of T7's 49 = 66 total. |
+
+### Fixed — T8 vitest missing-mock fix (T24)
+
+- **T24** (`8a4fe00b`) — `test/routes/travel-diagnostics-readiness-report.test.js` had 2 timeouts on main HEAD because T8's `submit-tmc` added `prisma.contact.findMany` for the `priorSubmissionsLast24h` count but the test only mocked `findUnique` + `findFirst` + `create`. Added `findMany` mock + `beforeEach` reset. Pre-fix: 3 failures / 11.17s. Post-fix: 20/20 in 1.12s.
+
+### Internal — Housekeeping (T25, T26, T27, T36)
+
+- **T25** (`164305af`) — Deprecated T11's `CataloguePromotionPanel` sub-panel inside `DiagnosticBuilder.jsx` (lines 1078-1180 replaced with a one-line "Open TMC Catalogue Admin →" link). T16's dedicated page is now the canonical surface.
+- **T26** (`3ea648f7`) — Sidebar nav entry "TMC Catalogue" under Travel section so the admin page is discoverable without URL typing.
+- **T27** (`0283dca9`) — Scoping audit doc [`docs/gaps/backend-test-routes-red-audit.md`](docs/gaps/backend-test-routes-red-audit.md) for the 31 pre-existing `test/routes/` reds T24 surfaced. **Headline finding:** 20/31 are a local-only `npm install` lag (missing `@aws-sdk/client-s3` declared in `package.json` since `eba590b8` 2026-05-20 — CI's `npm ci` covers it). Real CI-red surface: 11 files in 5 sub-classes (B1 `userRole.findMany` × 7, B2 `tenant.findUnique` × 1, B3 `webhook.findMany` × 1, B4 `travelPaymentSchedule.findFirst/findMany` × 1, B5 mixed × 1).
+- **T36** (`2797ad06`) — Fixed Class B1 recipe in the audit doc to include the missing `prisma.user.findUnique` stub. T29 discovered that empty `userRole.findMany` triggers `requirePermission.js`'s `maybeSelfHealAdminPermissions` path which queries unmocked `prisma.user.findUnique` and falls through to demo MySQL → 5s timeout.
+
+### Test stabilization — `backend/test/routes/` red sweep (T28-T34)
+
+11 CI-red files green, 5 sub-classes resolved, +1 local-env doc note for fresh-clone devs:
+
+| Slice | Files | Commit | Failure class |
+|---|---|---|---|
+| **T28** | `README.md` | `621c5896` | Class A — local-env doc note for fresh clones to run `cd backend && npm install` after deps-add commits |
+| **T29** | `drugs.test.js` + 6 `pos-*.test.js` files | `cc7a6dfb` | Class B1 — `userRole.findMany` + `user.findUnique` (self-heal trap discovered) — 9 timeouts across 7 files → 120 tests in 941ms |
+| **T30** | `staff.test.js` | (in-tree) | Class B2 — `tenant.findUnique` — 2 timeouts → 24/24 in 886ms |
+| **T31** | `contacts.test.js` | `7d879ec1` | Class B3 — `webhook.findMany` (Part A) + dedup-409 triage (Part B: no action — passes with Part A mock) — 3 timeouts → 19/19 in 0.86s |
+| **T32** | `travel-invoice-issue.test.js` | `05e5f47b` | Class B4 — `travelPaymentSchedule.findFirst/findMany/create/createMany` — 6 timeouts → 12/12 in 75ms |
+| **T33** | `search.test.js` | `eec71695` | Class B5 — `tenant.findUnique` + `patient.findMany` (requirePermission NOT actually mounted here — B1 mocks not needed) — 4-5 failures → 8/8 in 48ms |
+| **T34** | (verification only) | _this entry_ | Re-ran `npx vitest run test/routes/` — confirmed 11/11 T28-T33-targeted files green, all sub-classes resolved |
+
+### T34 verification result
+
+Re-ran `cd backend && npx vitest run test/routes/` post-T28..T33+T36. Result (after local `npm install` to satisfy T28's Class A on this dev box; CI's `npm ci` covers this on every push):
+
+```
+Test Files  5 failed | 359 passed | 5 skipped (369)
+Tests       9 failed | 6492 passed | 75 skipped (6576)
+Duration    42.93s
+```
+
+**All 11 T28-T33-targeted files (drugs + 6 POS + staff + contacts + travel-invoice-issue + search) pass 100% green.** The 5 residual failing files are out-of-scope-for-T27:
+
+- `auth-cookie-set.test.js`, `auth-profile-picture.test.js`, `auth.test.js`, `consent-templates.test.js`, `wellness-patients-xlsx.test.js` — these were originally classified as **Class A only** (missing AWS-SDK) by the T27 audit. After `npm install` fixes Class A, a secondary Class-B-style layer of missing Prisma mocks surfaced (5s timeouts on real-Prisma fall-through to demo MySQL `163.227.174.141:3306`). Same pattern as T28-T33, different files. **Tracked as a follow-up sub-slice** (T37 — `audit-spec residual sweep`) — the audit doc at [`docs/gaps/backend-test-routes-red-audit.md`](docs/gaps/backend-test-routes-red-audit.md) classifies these 5 as Class A only and may need re-classification once T35's harness guard lands and re-exposes hidden Class B fall-through across the full `test/routes/` surface.
+
+T35 (test-harness guard against real-DB fall-through) remains ⬜ TODO — depends on this T34 verification ✅ and will catch this residual class structurally rather than per-file.
+
+### Out-of-scope (explicitly deferred — 6 rows 🔵 BLOCKED)
+
+Carry-over from `v3.9.3` PRD §10 — awaiting Yasin's input:
+
+- **T18** — Calendar API booking integration (full Google Meet slot-picker per DD-5.4)
+- **T19** — Yasin's tagger pass on 5 starter catalogue trips (`priceBands` + `curriculumHooks`)
+- **T20** — Q3 option→skill pairings
+- **T21** — Build-spec PDF §9.1 + §9.2 exact-quote text transcription
+- **T22** — 6 open PRD §9 questions (multi-board / Q9 / NEP table / link expiry / pilot threshold / price source)
+- **T23** — DD-5.4 / 5.5 / 5.6 Yasin ratification (booking / term calendar / suspect lead visibility)
+
+These ship on Yasin's product-call resolution.
+
 ## v3.9.3 — 2026-06-08 — TMC Diagnostic & Sales-Routing Engine (Phase 1 — school B2B sub-brand)
 
 Ships the full TMC Diagnostic Engine arc per [docs/PRD_TMC_DIAGNOSTIC_SALES_ROUTING_ENGINE.md](docs/PRD_TMC_DIAGNOSTIC_SALES_ROUTING_ENGINE.md) — a 12-question public school-readiness diagnostic that drives a deterministic trip recommender + LLM-narrated readiness PDF + sales brief, with a 3-layer guardrail keeping the LLM output honest. Scope is Phase 1 (TMC sub-brand only — school educational trips inside the travel vertical); RFU/Travel Stall/Visa Sure intentionally not in scope. 13 commits across T1..T12 + one fix-up; arc landed in a single autonomous cron run with green gate throughout.

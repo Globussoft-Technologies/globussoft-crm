@@ -39,10 +39,17 @@ prisma.user = {
   findFirst: vi.fn(),
   create: vi.fn(),
   update: vi.fn(),
+  // T37 / Class B6: provisionTenantRbacInternal iterates tenant users
+  // (scripts/ensureRbacOnBoot.js:618) on the signup/register paths.
+  findMany: vi.fn().mockResolvedValue([]),
 };
 prisma.tenant = {
   findUnique: vi.fn().mockResolvedValue(null), // generateUniqueSlug loop terminator
   create: vi.fn(),
+  // T37 / Class B6: ensureRbacOnBoot's discovery path enumerates tenants;
+  // provisionTenantRbac itself doesn't normally call findMany on the
+  // signup path (it operates on a known tenantId) but stub permissively.
+  findMany: vi.fn().mockResolvedValue([]),
 };
 prisma.auditLog = {
   findFirst: vi.fn().mockResolvedValue(null),
@@ -51,6 +58,36 @@ prisma.auditLog = {
 prisma.revokedToken = {
   findUnique: vi.fn().mockResolvedValue(null),
   upsert: vi.fn().mockResolvedValue({}),
+};
+// T37 / Class B6 — RBAC self-heal seam. The /login + /signup + /register
+// + /2fa/verify paths transit through `provisionRbacForFreshTenant`
+// (on signup/register) AND the inline self-heal block in /login
+// (auth.js:521-535). Both reach into prisma.userRole / prisma.role /
+// prisma.rolePermission / prisma.roleWidget. Without these stubs the
+// real Prisma client tries to connect to demo MySQL and the 5s test
+// timeout fires (the errors are caught as non-fatal, but the await
+// blocks until the underlying socket retry exhausts). All stubs are
+// permissive: empty arrays / nulls so the self-heal exits cleanly.
+prisma.userRole = {
+  count: vi.fn().mockResolvedValue(1), // userRoleCount>0 → self-heal skips
+  findUnique: vi.fn().mockResolvedValue(null),
+  findFirst: vi.fn().mockResolvedValue(null),
+  findMany: vi.fn().mockResolvedValue([]),
+  create: vi.fn().mockResolvedValue({}),
+};
+prisma.role = {
+  // Make ensureRole's findFirst return an "existing" row so the
+  // provisioner short-circuits without calling create / permissions /
+  // widgets. Any truthy id will do — provisioner only reads { id }.
+  findFirst: vi.fn().mockResolvedValue({ id: 999 }),
+  create: vi.fn().mockResolvedValue({ id: 999 }),
+};
+prisma.rolePermission = {
+  findFirst: vi.fn().mockResolvedValue({ id: 999 }),
+  create: vi.fn().mockResolvedValue({}),
+};
+prisma.roleWidget = {
+  create: vi.fn().mockResolvedValue({}),
 };
 
 import express from 'express';
@@ -96,6 +133,19 @@ beforeEach(() => {
   prisma.auditLog.create.mockReset().mockResolvedValue({});
   prisma.revokedToken.findUnique.mockReset().mockResolvedValue(null);
   prisma.revokedToken.upsert.mockReset().mockResolvedValue({});
+  // T37 / Class B6 — keep self-heal seam permissive across tests.
+  prisma.userRole.count.mockReset().mockResolvedValue(1);
+  prisma.userRole.findUnique.mockReset().mockResolvedValue(null);
+  prisma.userRole.findFirst.mockReset().mockResolvedValue(null);
+  prisma.userRole.findMany.mockReset().mockResolvedValue([]);
+  prisma.userRole.create.mockReset().mockResolvedValue({});
+  prisma.role.findFirst.mockReset().mockResolvedValue({ id: 999 });
+  prisma.role.create.mockReset().mockResolvedValue({ id: 999 });
+  prisma.rolePermission.findFirst.mockReset().mockResolvedValue({ id: 999 });
+  prisma.rolePermission.create.mockReset().mockResolvedValue({});
+  prisma.roleWidget.create.mockReset().mockResolvedValue({});
+  prisma.user.findMany.mockReset().mockResolvedValue([]);
+  prisma.tenant.findMany.mockReset().mockResolvedValue([]);
   // After reset: findFirst delegates to findUnique so per-test
   // findUnique.mockResolvedValue calls cover the login code path too.
   prisma.user.findFirst.mockImplementation((...args) => prisma.user.findUnique(...args));

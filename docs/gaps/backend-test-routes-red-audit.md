@@ -12,6 +12,8 @@ The T24 flag "31 pre-existing red files" was captured on a local dev box (Window
 
 **Real CI-red surface:** 11 files (out of the 31 originally flagged). All 11 share the same underlying pattern as T24's fix — missing Prisma mocks on cross-cutting middleware / library code paths added after the test file was first written.
 
+> **T37 update 2026-06-08:** post-`npm install` (T28), 5 files originally classified as Class A only were found to ALSO carry a hidden Class B layer — see the new **Class B6 (RBAC self-heal seam)** below and the per-file re-classification at the end of the Class A section.
+
 ---
 
 ## Summary
@@ -28,8 +30,9 @@ The T24 flag "31 pre-existing red files" was captured on a local dev box (Window
 | **B3** | Missing mock — `prisma.webhook.findMany` (webhookDelivery via emitEvent on contact.created) | 1 | ~30 min (+1 assertion fix on dedup case) | YES |
 | **B4** | Missing mock — `prisma.travelPaymentSchedule.findFirst`/`findMany` (auto-schedule on invoice issue) | 1 | ~45 min (6 cases × 5-min each, share fixture) | YES |
 | **B5** | Mixed B1 + B2 — `search.test.js` exercises both surfaces | 1 | ~30 min | YES |
+| **B6** | Missing mock — RBAC self-heal seam (`prisma.userRole.*` + `prisma.role.*` + `prisma.rolePermission.*` + `prisma.roleWidget.*` ± `prisma.wellnessRoleType.findMany`) hit by auth/login self-heal, signup/register provisioner, and verifyWellnessRole permission fallback. **5 files** previously classified Class-A-only — surfaced by T34 verification post-`npm install`. | 5 | ~10 min/file (mock-add pattern is uniform; share a template across files) | YES |
 
-- **Total estimated CI sweep cost:** ~4-5 hours of focused work across the 11 CI-red files (single agent) — or 2 parallel agents finishing in ~2.5h since the classes are file-disjoint.
+- **Total estimated CI sweep cost:** ~4-5 hours of focused work across the 11 CI-red files (single agent) — or 2 parallel agents finishing in ~2.5h since the classes are file-disjoint. **+ ~1h for the T37 Class B6 residual sweep** (5 files; pattern is uniform once one is fixed).
 - **Total estimated local cleanup cost:** ~30 seconds (`cd backend && npm install`).
 
 ---
@@ -46,10 +49,10 @@ The T24 flag "31 pre-existing red files" was captured on a local dev box (Window
 
 | # | File | Notes |
 |---|---|---|
-| 1 | `backend/test/routes/auth-cookie-set.test.js` | Imports `routes/auth.js` → `services/s3Service.js` |
-| 2 | `backend/test/routes/auth-profile-picture.test.js` | Imports `services/s3Service.js` directly |
-| 3 | `backend/test/routes/auth.test.js` | Imports `routes/auth.js` → `services/s3Service.js` |
-| 4 | `backend/test/routes/consent-templates.test.js` | Transitive via wellness route stack |
+| 1 | `backend/test/routes/auth-cookie-set.test.js` | Imports `routes/auth.js` → `services/s3Service.js`. **T37 re-class: A + B6** (login/signup/register/2fa-verify all transit RBAC self-heal). Fixed in T37 commit (2026-06-08). |
+| 2 | `backend/test/routes/auth-profile-picture.test.js` | Imports `services/s3Service.js` directly. **T37 re-class: A + B6** (GET /auth/me → resolvePrimaryRole calls `prisma.userRole.findFirst` + `prisma.role.findFirst`). Fixed in T37 commit (2026-06-08). |
+| 3 | `backend/test/routes/auth.test.js` | Imports `routes/auth.js` → `services/s3Service.js`. **T37 re-class: A + B6** (login self-heal + signup/register provisioner). Fixed in T37 commit (2026-06-08). |
+| 4 | `backend/test/routes/consent-templates.test.js` | Transitive via wellness route stack. **T37 re-class: A + B6** (USER+telecaller path hits verifyWellnessRole permission fallback → `getUserPermissions` → self-heal). Fixed in T37 commit (2026-06-08). |
 | 5 | `backend/test/routes/inventory-stats.test.js` | Transitive via wellness route stack |
 | 6 | `backend/test/routes/inventory.test.js` | Transitive via wellness route stack |
 | 7 | `backend/test/routes/wave6a-event-emissions.test.js` | Transitive via wellness route stack |
@@ -63,7 +66,7 @@ The T24 flag "31 pre-existing red files" was captured on a local dev box (Window
 | 15 | `backend/test/routes/wellness-patients-filters.test.js` | Transitive via wellness route stack |
 | 16 | `backend/test/routes/wellness-patients-import-template.test.js` | Transitive via wellness route stack |
 | 17 | `backend/test/routes/wellness-patients-import.test.js` | Transitive via wellness route stack |
-| 18 | `backend/test/routes/wellness-patients-xlsx.test.js` | Transitive via wellness route stack |
+| 18 | `backend/test/routes/wellness-patients-xlsx.test.js` | Transitive via wellness route stack. **T37 re-class: A + B6** (USER-no-wellnessRole path hits verifyWellnessRole permission fallback → `getUserPermissions` → self-heal). Fixed in T37 commit (2026-06-08). |
 | 19 | `backend/test/routes/wellness-pnl-canonical.test.js` | Transitive via wellness route stack |
 | 20 | `backend/test/routes/wellness-portal-customer-jwt.test.js` | Transitive via wellness route stack |
 
@@ -150,6 +153,67 @@ Estimated cost: ~45 min (6 tests share one fixture).
 | # | File | Failing tests | Notes |
 |---|---|---|---|
 | 1 | `backend/test/routes/search.test.js` | 3 — happy path + tenant-scoped + handler error | `GET /api/search` runs requirePermission AND a tenant-vertical fan-out across multiple Prisma models. Needs the FULL B1 pair (`userRole.findMany` + `user.findUnique` — see Self-heal trap note in B1) AND B2 (`tenant.findUnique`) mock surfaces. ~30 min. |
+
+---
+
+### Class B6 — RBAC self-heal seam (multi-surface) — 5 files (T37)
+
+**Root cause:** 5 files originally bucketed as Class A only (AWS-SDK absent locally) carry a hidden second layer that surfaces once `npm install` lands the AWS-SDK package. The route stacks they import (`routes/auth.js` for login/signup/register/2fa-verify/profile-picture, `routes/wellness.js` for consent templates + patient xlsx export) transit one or more of three Prisma-touching seams:
+
+1. **/login inline self-heal** (`routes/auth.js:521-535`): if the user is legacy-ADMIN and `prisma.userRole.count === 0`, the route calls `provisionRbacForFreshTenant` → `provisionTenantRbac` → `provisionTenantRbacInternal` which iterates over `prisma.role.findFirst` (via `ensureRole`), `prisma.rolePermission.findFirst`/`create` (via `grantAllPermissions` / `grantPermissionList`), `prisma.userRole.create`, `prisma.roleWidget.create`, `prisma.user.findMany`, `prisma.tenant.findUnique`. Errors are caught as non-fatal warnings BUT each unmocked call blocks for the full socket-retry interval (~5s on a 5s test timeout).
+
+2. **/signup + /register unconditional provisioner** (`routes/auth.js:260, 323`): fires the full `provisionRbacForFreshTenant` after the user create — same downstream surface as the self-heal block.
+
+3. **resolvePrimaryRole** (`lib/roleResolution.js:46,66`): called by `/login` AND `GET /auth/me` to resolve landingPath. Queries `prisma.userRole.findFirst` then `prisma.role.findFirst` on the fallback path. Wrapped in try/catch but the socket-retry on the real Prisma client still blocks until timeout.
+
+4. **verifyWellnessRole permission fallback** (`middleware/wellnessRole.js:188-203`): when the wellnessRole allowlist + clinical meta-token + deny gate all fall through, the gate consults `requirePermissionModule.getUserPermissions` → `prisma.userRole.findMany`. Empty array triggers `maybeSelfHealAdminPermissions` which queries `prisma.user.findUnique` + `prisma.tenant.findUnique` + `prisma.role.findFirst`. The "clinical" meta-token branch also probes `prisma.wellnessRoleType.findMany`.
+
+**Fix recipe (uniform across all 5 files):**
+
+```js
+// T37 / Class B6 — RBAC self-heal seam. Add to the prisma singleton patch
+// BEFORE requiring the router. Permissive defaults so each seam exits
+// cleanly without touching the real Prisma client.
+prisma.userRole = {
+  count: vi.fn().mockResolvedValue(1),  // userRoleCount>0 short-circuits /login self-heal
+  findUnique: vi.fn().mockResolvedValue(null),
+  findFirst: vi.fn().mockResolvedValue(null),
+  findMany: vi.fn().mockResolvedValue([]),
+  create: vi.fn().mockResolvedValue({}),
+};
+prisma.role = {
+  // For signup/register: an "existing" role short-circuits ensureRole's
+  // create + permission grants + widget seeding. For /me + login fallback:
+  // null is fine, resolvePrimaryRole returns null and the caller falls
+  // through to the vertical default cleanly.
+  findFirst: vi.fn().mockResolvedValue({ id: 999 }),  // or null for /me-only files
+  create: vi.fn().mockResolvedValue({ id: 999 }),
+};
+prisma.rolePermission = {
+  findFirst: vi.fn().mockResolvedValue({ id: 999 }),
+  create: vi.fn().mockResolvedValue({}),
+};
+prisma.roleWidget = { create: vi.fn().mockResolvedValue({}) };
+// wellness-only — verifyWellnessRole's "clinical" meta-token probe.
+prisma.wellnessRoleType = { findMany: vi.fn().mockResolvedValue([]) };
+// Provisioner's tenant + user iteration.
+prisma.user.findMany = vi.fn().mockResolvedValue([]);
+prisma.tenant.findMany = vi.fn().mockResolvedValue([]);
+```
+
+Add corresponding `mockReset()` calls in `beforeEach`.
+
+Estimated cost per file: ~10 min once the template is in hand; ~30 min for the first file (template discovery). Total: ~1h.
+
+| # | File | Failing tests (pre-fix) | Seams hit |
+|---|---|---|---|
+| 1 | `backend/test/routes/auth.test.js` | 4 — login happy / login 2fa-branch / signup happy / register happy | seam 1 + seam 2 |
+| 2 | `backend/test/routes/auth-cookie-set.test.js` | 2 — login + register cookie-emission | seam 1 + seam 2 |
+| 3 | `backend/test/routes/auth-profile-picture.test.js` | 2 — GET /me with picture / GET /me without picture | seam 3 |
+| 4 | `backend/test/routes/consent-templates.test.js` | 1 — POST /consents with role=USER+telecaller → 403 | seam 4 |
+| 5 | `backend/test/routes/wellness-patients-xlsx.test.js` | 1 — GET /patients/export with role=USER+wellnessRole=null → 403 | seam 4 |
+
+**Post-fix verification (2026-06-08 — T37):** all 5 files green, `npx vitest run` over the set reports `Test Files 5 passed (5) / Tests 72 passed | 2 skipped (74) / 1.81s`. No source-code changes required — only mock-surface additions.
 
 ---
 

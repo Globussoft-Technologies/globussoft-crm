@@ -66,6 +66,40 @@ prisma.tenant = prisma.tenant || {};
 // DATABASE_URL set in the unit_tests env block.
 prisma.automationRule = prisma.automationRule || {};
 prisma.automationRule.findMany = vi.fn().mockResolvedValue([]);
+// T37 / Class B6 — RBAC self-heal seam. POST /api/wellness/consents
+// goes through verifyWellnessRole → on the USER+telecaller-not-allowed
+// path it tries `requirePermissionModule.getUserPermissions` which
+// loads via `prisma.userRole.findMany`. Empty array → enters
+// `maybeSelfHealAdminPermissions` which queries `prisma.user.findUnique`
+// (not the same as the test's existing stubs — separate ID space) and
+// then `prisma.tenant.findUnique` + `prisma.role.findFirst`. Without
+// these the real Prisma client hits demo MySQL and the 5s timeout
+// fires. Permissive defaults: empty arrays + null returns let the
+// gate fall through to the structured 403 cleanly.
+prisma.user = prisma.user || {};
+prisma.user.findUnique = vi.fn().mockResolvedValue(null);
+prisma.user.findMany = vi.fn().mockResolvedValue([]);
+prisma.userRole = {
+  count: vi.fn().mockResolvedValue(1),
+  findUnique: vi.fn().mockResolvedValue(null),
+  findFirst: vi.fn().mockResolvedValue(null),
+  findMany: vi.fn().mockResolvedValue([]),
+  create: vi.fn().mockResolvedValue({}),
+};
+prisma.role = {
+  findFirst: vi.fn().mockResolvedValue(null),
+  create: vi.fn().mockResolvedValue({ id: 999 }),
+};
+prisma.rolePermission = {
+  findFirst: vi.fn().mockResolvedValue({ id: 999 }),
+  create: vi.fn().mockResolvedValue({}),
+};
+prisma.roleWidget = { create: vi.fn().mockResolvedValue({}) };
+prisma.tenant.findUnique = vi.fn().mockResolvedValue({ id: 1, vertical: 'wellness' });
+prisma.tenant.findMany = vi.fn().mockResolvedValue([]);
+prisma.wellnessRoleType = {
+  findMany: vi.fn().mockResolvedValue([]),
+};
 
 import express from 'express';
 import request from 'supertest';

@@ -57,6 +57,41 @@ prisma.loyaltyTransaction = prisma.loyaltyTransaction || {
   findFirst: vi.fn(), aggregate: vi.fn(), findMany: vi.fn(), create: vi.fn(),
 };
 prisma.referral = prisma.referral || { findMany: vi.fn(), count: vi.fn() };
+// T37 / Class B6 — RBAC self-heal seam. GET /api/wellness/patients/export
+// is gated by verifyWellnessRole (phiReadGate). On the USER-no-wellnessRole
+// path the gate calls `requirePermissionModule.getUserPermissions` →
+// `prisma.userRole.findMany`. Empty array triggers
+// `maybeSelfHealAdminPermissions` which queries `prisma.user.findUnique`
+// + `prisma.tenant.findUnique` + `prisma.role.findFirst`. Without these
+// the real Prisma client hits demo MySQL and the 5s timeout fires
+// before the structured 403 can be emitted. The gate also probes
+// `prisma.wellnessRoleType.findMany` for the "clinical" meta-token
+// resolution before the permission fallback. All permissive defaults.
+prisma.user = prisma.user || {};
+prisma.user.findUnique = vi.fn().mockResolvedValue(null);
+prisma.user.findMany = vi.fn().mockResolvedValue([]);
+prisma.userRole = {
+  count: vi.fn().mockResolvedValue(1),
+  findUnique: vi.fn().mockResolvedValue(null),
+  findFirst: vi.fn().mockResolvedValue(null),
+  findMany: vi.fn().mockResolvedValue([]),
+  create: vi.fn().mockResolvedValue({}),
+};
+prisma.role = {
+  findFirst: vi.fn().mockResolvedValue(null),
+  create: vi.fn().mockResolvedValue({ id: 999 }),
+};
+prisma.rolePermission = {
+  findFirst: vi.fn().mockResolvedValue({ id: 999 }),
+  create: vi.fn().mockResolvedValue({}),
+};
+prisma.roleWidget = { create: vi.fn().mockResolvedValue({}) };
+prisma.tenant = prisma.tenant || {};
+prisma.tenant.findUnique = vi.fn().mockResolvedValue({ id: 1, vertical: 'wellness' });
+prisma.tenant.findMany = vi.fn().mockResolvedValue([]);
+prisma.wellnessRoleType = {
+  findMany: vi.fn().mockResolvedValue([]),
+};
 
 import express from 'express';
 import request from 'supertest';

@@ -35,6 +35,7 @@ import prisma from '../../lib/prisma.js';
 prisma.user = {
   findUnique: vi.fn(),
   update: vi.fn(),
+  findMany: vi.fn().mockResolvedValue([]),
 };
 prisma.auditLog = {
   findFirst: vi.fn().mockResolvedValue(null),
@@ -43,6 +44,34 @@ prisma.auditLog = {
 prisma.smsConfig = {
   findFirst: vi.fn().mockResolvedValue(null),
 };
+// T37 / Class B6 — RBAC self-heal seam. GET /api/auth/me invokes
+// resolvePrimaryRole (lib/roleResolution.js) which queries
+// prisma.userRole.findFirst → prisma.role.findFirst on the fallback
+// path. Without stubs the real Prisma client tries demo MySQL and the
+// 5s test timeout fires (errors are caught but each attempt blocks
+// while sockets retry). Permissive null returns let resolvePrimaryRole
+// short-circuit to null cleanly.
+prisma.userRole = {
+  count: vi.fn().mockResolvedValue(1),
+  findUnique: vi.fn().mockResolvedValue(null),
+  findFirst: vi.fn().mockResolvedValue(null),
+  findMany: vi.fn().mockResolvedValue([]),
+  create: vi.fn().mockResolvedValue({}),
+};
+prisma.role = {
+  findFirst: vi.fn().mockResolvedValue(null),
+  create: vi.fn().mockResolvedValue({ id: 999 }),
+};
+prisma.rolePermission = {
+  findFirst: vi.fn().mockResolvedValue({ id: 999 }),
+  create: vi.fn().mockResolvedValue({}),
+};
+prisma.roleWidget = {
+  create: vi.fn().mockResolvedValue({}),
+};
+prisma.tenant = prisma.tenant || {};
+prisma.tenant.findUnique = vi.fn().mockResolvedValue(null);
+prisma.tenant.findMany = vi.fn().mockResolvedValue([]);
 
 import express from 'express';
 import cookieParser from 'cookie-parser';
@@ -91,11 +120,19 @@ const PNG_BYTES = Buffer.from([
 beforeEach(() => {
   prisma.user.findUnique.mockReset();
   prisma.user.update.mockReset();
+  prisma.user.findMany.mockReset().mockResolvedValue([]);
   prisma.auditLog.findFirst.mockReset().mockResolvedValue(null);
   prisma.auditLog.create.mockReset().mockResolvedValue({});
   prisma.smsConfig.findFirst.mockReset().mockResolvedValue(null);
   s3Service.uploadImage.mockReset();
   s3Service.deleteFile.mockReset().mockResolvedValue(undefined);
+  // T37 / Class B6 — keep self-heal seam permissive across tests.
+  prisma.userRole.count.mockReset().mockResolvedValue(1);
+  prisma.userRole.findUnique.mockReset().mockResolvedValue(null);
+  prisma.userRole.findFirst.mockReset().mockResolvedValue(null);
+  prisma.userRole.findMany.mockReset().mockResolvedValue([]);
+  prisma.role.findFirst.mockReset().mockResolvedValue(null);
+  prisma.tenant.findUnique.mockReset().mockResolvedValue(null);
 });
 
 // ── GET /api/auth/me — surfaces the new field ───────────────────────

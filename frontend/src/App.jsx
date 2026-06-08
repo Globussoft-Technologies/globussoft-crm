@@ -51,6 +51,8 @@ const PublicTripMicrosite = lazy(() => import("./pages/travel/PublicTripMicrosit
 const TravelKycCallback = lazy(() => import("./pages/travel/TravelKycCallback"));
 // PRD §3.1 / slice T9 — public no-auth TMC readiness diagnostic.
 const TmcReadiness = lazy(() => import("./pages/public/TmcReadiness"));
+// PRD §3.5 / slice T10 — public 10-section readiness report page.
+const TmcReadinessReport = lazy(() => import("./pages/public/TmcReadinessReport"));
 // Cross-vertical staff attendance dashboard — visible to wellness + travel
 // tenants. Backend (/api/attendance/list + /summary) is role-gated to
 // ADMIN/MANAGER; per-row edit/delete is ADMIN-only.
@@ -827,6 +829,8 @@ export default function App() {
                   <Route path="/p/tripmicrosite/:publicUuid" element={<PublicTripMicrosite />} />
                   {/* PRD §3.1 / slice T9 — public 12-Q readiness diagnostic. */}
                   <Route path="/p/tmc/readiness" element={<TmcReadiness />} />
+                  {/* PRD §3.5 / slice T10 — public 10-section readiness report. */}
+                  <Route path="/p/tmc/report/:slug" element={<TmcReadinessReport />} />
                   <Route path="/travel/kyc/callback" element={<TravelKycCallback flow="microsite" />} />
                   <Route path="/travel/portal/kyc/callback" element={<TravelKycCallback flow="portal" />} />
                   <Route

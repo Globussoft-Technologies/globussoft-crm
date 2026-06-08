@@ -78,9 +78,15 @@ All 11 files share the same pattern as T24's fix shipped at commit `8a4fe00b`: t
 **Root cause:** `backend/middleware/requirePermission.js:178` queries `userRole.findMany` to resolve the caller's effective roles for permission checks. The middleware was added (or extended) after the POS + drug + pos-sale test files were written; the prisma mock surface in those tests doesn't list `userRole.findMany`.
 
 **Fix recipe per file:**
-1. Add `userRole: { findMany: vi.fn() }` to the prisma mock surface (in the `vi.mock('../../lib/prisma', ...)` block).
-2. Add `prisma.userRole.findMany.mockReset().mockResolvedValue([])` in `beforeEach`. Empty array → no permissions found via the secondary RBAC path → middleware falls back to the legacy `req.user.role` enum check (which the existing test stubs DO satisfy).
+1. Add BOTH `userRole: { findMany: vi.fn() }` AND `user: { findUnique: vi.fn() }` to the prisma mock surface (in the `vi.mock('../../lib/prisma', ...)` block).
+2. In `beforeEach`:
+   ```js
+   prisma.userRole.findMany.mockReset().mockResolvedValue([]);
+   prisma.user.findUnique.mockReset().mockResolvedValue(null);
+   ```
 3. If any specific test asserts on a granted-permission path, configure that test's `mockResolvedValueOnce` with the appropriate role-name shape.
+
+⚠️ **Self-heal trap:** the prior version of this recipe said "empty `userRole` → falls back to legacy `req.user.role` enum check" — that's **WRONG**. Empty `userRole.findMany` triggers `requirePermission.js`'s `maybeSelfHealAdminPermissions` path which queries `prisma.user.findUnique`. If that's unmocked, the test falls through Prisma singleton to demo MySQL (`163.227.174.141:3306`) → 5s timeout. The fix is the PAIR (`userRole` + `user` both stubbed); the `user.findUnique → null` path exits the self-heal cleanly, then the legacy `req.user.role` enum check applies. Discovered by T29 agent (commit `cc7a6dfb`) during the POS+drugs 7-file batch.
 
 Estimated cost per file: ~20 min (mock add + verify the 1-3 failing tests go green + smoke the file's still-passing tests). Total: ~2.5h.
 
@@ -143,7 +149,7 @@ Estimated cost: ~45 min (6 tests share one fixture).
 
 | # | File | Failing tests | Notes |
 |---|---|---|---|
-| 1 | `backend/test/routes/search.test.js` | 3 — happy path + tenant-scoped + handler error | `GET /api/search` runs requirePermission AND a tenant-vertical fan-out across multiple Prisma models. Needs BOTH B1 (`userRole.findMany`) AND B2 (`tenant.findUnique`) mock surfaces. ~30 min. |
+| 1 | `backend/test/routes/search.test.js` | 3 — happy path + tenant-scoped + handler error | `GET /api/search` runs requirePermission AND a tenant-vertical fan-out across multiple Prisma models. Needs the FULL B1 pair (`userRole.findMany` + `user.findUnique` — see Self-heal trap note in B1) AND B2 (`tenant.findUnique`) mock surfaces. ~30 min. |
 
 ---
 

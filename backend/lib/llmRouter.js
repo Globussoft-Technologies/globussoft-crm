@@ -11,9 +11,16 @@
 // return realProviderCall(...)` branch inside routeRequest. The
 // envelope is the SAME shape for stub + real
 // ({ text, finishReason, usage, model, stub }) so consumers don't
-// break on the cutover. SupplierCredential resolution (DB lookup)
-// lands with the real-mode swap; this scaffold only checks ENV
-// so llmEnabled() stays synchronous (callable from health checks).
+// break on the cutover.
+//
+// Per-tenant LLM key resolution (S45 — 2026-06-10):
+//   `getLlmKey(tenantId, model)` checks SupplierCredential category
+//   'llm-key' first (supplierName matches model name like 'gemini-flash'
+//   or the env-var like 'GEMINI_API_KEY'); falls back to process.env
+//   on miss. Returns null if both miss. Async because the DB lookup
+//   requires an await — `llmEnabled` followed it from sync to async
+//   in the same slice. Callers grep + audit was zero outside this
+//   module's own tests, so the contract flip was safe.
 //
 // Cost attribution: every call emits a structured log line:
 //   [llm-router] task=X model=Y tenant=Z tokens_in=N tokens_out=M
@@ -90,16 +97,99 @@ const ENV_FOR_MODEL = {
   "claude-haiku":     "ANTHROPIC_API_KEY",
 };
 
-function llmEnabled(task) {
-  // Check whether the provider for `task` has a real API key in ENV.
-  // Per PRD §9.1 keys also land under SupplierCredential — that DB
-  // lookup is intentionally NOT done here so llmEnabled() stays
-  // synchronous (callable from /api/health and other sync paths).
-  // SupplierCredential resolution lands with the real-mode swap.
+/**
+ * Resolve an LLM API key for a tenant + model. SupplierCredential lookup
+ * first (per-tenant override), then process.env fallback (dev/CI default).
+ * Returns null if both miss.
+ *
+ * SupplierCredential row contract (per S45):
+ *   category    = 'llm-key'
+ *   supplierName = either the model name ('gemini-flash', 'claude-opus-4-7')
+ *                  OR the env-var name ('GEMINI_API_KEY', 'ANTHROPIC_API_KEY')
+ *                  — accepted as a fuzzy match so seeding scripts can pick
+ *                  whichever feels more natural to operators.
+ *   passwordEncrypted = AES-256-GCM ciphertext of the actual API key
+ *                       (loginIdEncrypted reserved for a "key-id" if the
+ *                       provider has one, otherwise placeholder).
+ *
+ * Decryption is delegated to backend/lib/fieldEncryption.decrypt() which
+ * no-ops cleanly when the value isn't an ENC: prefix (so tests that seed
+ * plaintext rows still work). Missing WELLNESS_FIELD_KEY → decrypt
+ * returns the row's stored value as-is.
+ *
+ * Best-effort: any Prisma / decrypt error is logged and treated as a
+ * miss (caller falls through to ENV). NEVER throws.
+ *
+ * @param {number} tenantId    — optional. When omitted, skip the DB
+ *                              lookup and return the ENV value directly.
+ * @param {string} model       — e.g. 'gemini-flash' or 'claude-opus-4-7'
+ * @returns {Promise<string|null>}
+ */
+async function getLlmKey(tenantId, model) {
+  const envVar = ENV_FOR_MODEL[model];
+  const envValue = envVar ? process.env[envVar] : null;
+
+  // No tenant scope (e.g. sync probes from /api/health legacy callers
+  // wrapped via .then()) → ENV only. Matches the pre-S45 contract.
+  if (!tenantId) {
+    return envValue || null;
+  }
+
+  try {
+    const prisma = require("./prisma");
+    if (
+      !prisma.supplierCredential ||
+      typeof prisma.supplierCredential.findFirst !== "function"
+    ) {
+      return envValue || null;
+    }
+    // Accept either the model name OR the env-var name as supplierName.
+    // PRD §9.1 doesn't pin the naming convention; we accept both so the
+    // operator seeding the row doesn't need to know which one our code
+    // looks up. The 'in' filter is one Prisma round-trip vs. two.
+    const candidates = [model];
+    if (envVar) candidates.push(envVar);
+    const row = await prisma.supplierCredential.findFirst({
+      where: {
+        tenantId,
+        category: "llm-key",
+        supplierName: { in: candidates },
+      },
+      select: { passwordEncrypted: true },
+    });
+    if (row && row.passwordEncrypted) {
+      // Lazy require to avoid a circular bomb in test harnesses that
+      // hand-roll the crypto layer.
+      const { decrypt } = require("./fieldEncryption");
+      const plaintext = decrypt(row.passwordEncrypted);
+      if (plaintext) return plaintext;
+    }
+  } catch (e) {
+    console.error(
+      `[llm-router] getLlmKey supplierCredential lookup failed (non-fatal, falling back to ENV): ${e.message}`,
+    );
+  }
+
+  return envValue || null;
+}
+
+/**
+ * Whether the provider for `task` has a real API key available, either
+ * via SupplierCredential (per-tenant) or process.env (dev/CI fallback).
+ *
+ * Async since 2026-06-10 (S45) — the SupplierCredential lookup requires
+ * a DB round-trip. Pre-S45 the function was sync and ENV-only; the
+ * surface is back-compat for ENV-only callers (just await it).
+ *
+ * @param {string} task
+ * @param {number} [tenantId] — optional. Omit for ENV-only behaviour.
+ * @returns {Promise<boolean>}
+ */
+async function llmEnabled(task, tenantId) {
   const route = TASK_ROUTING[task];
   if (!route) return false;
-  const envVar = ENV_FOR_MODEL[route.primary];
-  return Boolean(envVar && process.env[envVar]);
+  const key = await module.exports.getLlmKey(tenantId, route.primary);
+  return Boolean(key);
 }
 
 function pickModel(task) {
@@ -303,7 +393,9 @@ function estimateTokens(s) {
 module.exports = {
   TASK_ROUTING,
   VALID_TASKS,
+  ENV_FOR_MODEL,
   llmEnabled,
+  getLlmKey,
   pickModel,
   routeRequest,
   // Exported for unit-test introspection only — not part of the

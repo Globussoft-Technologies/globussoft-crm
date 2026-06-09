@@ -199,23 +199,33 @@ function buildStubSuggestion({ destination, durationDays, themeJson, budgetTier 
 }
 
 /**
- * Whether the real Gemini call should fire. Wraps the env-var probe so
- * tests can `vi.spyOn(client, 'realModeEnabled').mockReturnValue(true)`
- * without setting the env directly. Synchronous — callable from sync paths.
+ * Whether the real Gemini call should fire. Wraps the key probe so
+ * tests can `vi.spyOn(client, 'realModeEnabled').mockResolvedValue(true)`
+ * without setting the env directly.
  *
- * Note: per PRD §9.1, per-tenant key support eventually comes via
- * SupplierCredential (category "llm-key"). This module checks ENV only
- * for now; the SupplierCredential lookup is a follow-up gap (mirrors the
- * lib/llmRouter scaffold's `llmEnabled` contract).
+ * Async since 2026-06-10 (S45) — resolves the API key via
+ * lib/llmRouter.getLlmKey() which checks SupplierCredential category
+ * 'llm-key' first then falls back to process.env[GEMINI_KEY_ENV]. The
+ * single caller (suggestItinerary below) was updated to `await
+ * module.exports.realModeEnabled(tenantId)` in the same slice.
+ *
+ * @param {number} [tenantId] — optional. Omit for ENV-only behaviour
+ *                              (matches the pre-S45 contract).
+ * @returns {Promise<boolean>}
  */
-function realModeEnabled() {
-  return Boolean(process.env[GEMINI_KEY_ENV]);
+async function realModeEnabled(tenantId) {
+  // Per PRD §9.1 / S45: per-tenant LLM keys live in SupplierCredential
+  // category 'llm-key'. Delegate to lib/llmRouter.getLlmKey so the
+  // SupplierCredential→ENV cascade lives in one place.
+  const llmRouter = require('../lib/llmRouter');
+  const key = await llmRouter.getLlmKey(tenantId, 'gemini-flash');
+  return Boolean(key);
 }
 
 /**
  * Attempt a real Gemini call. STUB: real-mode wire-in is gated on
  * Q-IT-2 (Gemini API key) arriving — until then, this function is
- * unreachable in practice (realModeEnabled() returns false). The
+ * unreachable in practice (realModeEnabled() resolves false). The
  * scaffold is present so the swap-in is a single-file edit when keys
  * land.
  *
@@ -286,8 +296,9 @@ async function suggestItinerary(args = {}, _ctx = {}) {
   );
 
   // Real-mode dispatch — try the Gemini call; fall through to stub on
-  // any error or when key is absent.
-  if (module.exports.realModeEnabled()) {
+  // any error or when key is absent. Pass tenantId so the resolver picks
+  // up a per-tenant SupplierCredential row before the ENV fallback.
+  if (await module.exports.realModeEnabled(tenantId)) {
     try {
       const realJson = await module.exports.callGemini({
         destination,

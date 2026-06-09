@@ -16,7 +16,7 @@
 //     - callGemini({...})           — real-mode swap point (throws today)
 //     - buildStubSuggestion({...})  — deterministic stub shape
 //
-// Surface area covered (16+ cases):
+// Surface area covered (16 + S45 extension = 20+ cases):
 //   1. Module shape pin (exports + constants)
 //   2. Stub mode returns canned shape with documented keys + correct days
 //   3. Real-mode flagged + key absent → falls back to stub
@@ -35,6 +35,11 @@
 //  14. realModeEnabled() returns false with no env key
 //  15. realModeEnabled() returns true when env key is set
 //  16. llmRouter.TASK_ROUTING registers 'itinerary-suggest' to gemini-flash
+//  S45 17-20. realModeEnabled async + per-tenant SupplierCredential:
+//             - SupplierCredential row present → true (no ENV needed)
+//             - SupplierCredential overrides ENV
+//             - no row + no ENV + tenantId → false
+//             - CJS self-mocking seam still works through module.exports.realModeEnabled
 //
 // Pin the contract that S9 (visual editor) + S11 (POI seed) MUST be
 // able to consume regardless of source — stub and real-mode return
@@ -53,6 +58,12 @@ const prismaMock = vi.hoisted(() => {
   const mock = {
     tenantSetting: {
       findUnique: vi.fn().mockResolvedValue(null), // default → DEFAULTS fallback
+    },
+    // S45: realModeEnabled now delegates to lib/llmRouter.getLlmKey
+    // which checks SupplierCredential first then process.env. Default
+    // null → DB miss → ENV fallback.
+    supplierCredential: {
+      findFirst: vi.fn().mockResolvedValue(null),
     },
   };
   const Module = require('node:module');
@@ -87,12 +98,18 @@ afterEach(() => {
   vi.restoreAllMocks();
   prismaMock.tenantSetting.findUnique.mockReset();
   prismaMock.tenantSetting.findUnique.mockResolvedValue(null);
+  prismaMock.supplierCredential.findFirst.mockReset();
+  prismaMock.supplierCredential.findFirst.mockResolvedValue(null);
 });
 
 function loadClient() {
   // Reload fresh between tests so the spend-stub mock + module state are
   // pristine. Same pattern as adsGptClient.test.js / llmRouter.test.js.
+  // S45: also reload llmRouter so its module-level cache + ENV_FOR_MODEL
+  // capture is rebuilt — `realModeEnabled` now require()s llmRouter lazily
+  // so a stale router would read stale env on the first invocation.
   delete requireCjs.cache[requireCjs.resolve('../../services/itinerarySuggestLLM.js')];
+  delete requireCjs.cache[requireCjs.resolve('../../lib/llmRouter.js')];
   return requireCjs('../../services/itinerarySuggestLLM.js');
 }
 
@@ -216,9 +233,12 @@ describe('suggestItinerary — REAL mode swap', () => {
     delete process.env.GEMINI_API_KEY;
 
     const c = loadClient();
-    expect(c.realModeEnabled()).toBe(false);
+    // S45: realModeEnabled is async; call with the same tenantId used
+    // by suggestItinerary below so the SupplierCredential lookup probes
+    // the same key.
+    expect(await c.realModeEnabled(1)).toBe(false);
 
-    // callGemini spy MUST NOT fire when realModeEnabled() is false.
+    // callGemini spy MUST NOT fire when realModeEnabled() resolves false.
     const geminiSpy = vi.spyOn(c, 'callGemini');
     const out = await c.suggestItinerary({
       tenantId: 1,
@@ -239,7 +259,7 @@ describe('suggestItinerary — REAL mode swap', () => {
     process.env.GEMINI_API_KEY = 'test-key-value';
 
     const c = loadClient();
-    expect(c.realModeEnabled()).toBe(true);
+    expect(await c.realModeEnabled(1)).toBe(true);
 
     const geminiSpy = vi.spyOn(c, 'callGemini').mockRejectedValue(new Error('synthetic network failure'));
 
@@ -459,10 +479,11 @@ describe('CJS self-mocking seam (regression-pin)', () => {
   test('suggestItinerary calls realModeEnabled via module.exports indirection', async () => {
     // The real-mode dispatch path resolves realModeEnabled() via the same
     // exports indirection — so callers can stub the env-probe without
-    // touching process.env.
+    // touching process.env. S45: realModeEnabled is async — use
+    // mockResolvedValue (not mockReturnValue) so the awaited call resolves.
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     const c = loadClient();
-    const enabledSpy = vi.spyOn(c, 'realModeEnabled').mockReturnValue(false);
+    const enabledSpy = vi.spyOn(c, 'realModeEnabled').mockResolvedValue(false);
 
     await c.suggestItinerary({ tenantId: 1, destination: 'X', durationDays: 1 });
 
@@ -476,22 +497,71 @@ describe('CJS self-mocking seam (regression-pin)', () => {
 // ── 7. realModeEnabled env probe ────────────────────────────────────
 
 describe('realModeEnabled', () => {
-  test('returns false when GEMINI_API_KEY is unset', () => {
+  test('returns false when GEMINI_API_KEY is unset (no tenantId)', async () => {
     delete process.env.GEMINI_API_KEY;
     const c = loadClient();
-    expect(c.realModeEnabled()).toBe(false);
+    expect(await c.realModeEnabled()).toBe(false);
   });
 
-  test('returns true when GEMINI_API_KEY is set to a truthy value', () => {
+  test('returns true when GEMINI_API_KEY is set to a truthy value', async () => {
     process.env.GEMINI_API_KEY = 'AIza...fake';
     const c = loadClient();
-    expect(c.realModeEnabled()).toBe(true);
+    expect(await c.realModeEnabled()).toBe(true);
   });
 
-  test('returns false when GEMINI_API_KEY is set to empty string', () => {
+  test('returns false when GEMINI_API_KEY is set to empty string', async () => {
     process.env.GEMINI_API_KEY = '';
     const c = loadClient();
-    expect(c.realModeEnabled()).toBe(false);
+    expect(await c.realModeEnabled()).toBe(false);
+  });
+
+  // ── S45: per-tenant SupplierCredential resolution ──
+  test('returns true when SupplierCredential row present (no ENV needed)', async () => {
+    delete process.env.GEMINI_API_KEY;
+    prismaMock.supplierCredential.findFirst.mockResolvedValueOnce({
+      passwordEncrypted: 'tenant-42-gemini-key',
+    });
+    const c = loadClient();
+    expect(await c.realModeEnabled(42)).toBe(true);
+  });
+
+  test('SupplierCredential row takes precedence over ENV', async () => {
+    process.env.GEMINI_API_KEY = 'ENV-key-also-set';
+    prismaMock.supplierCredential.findFirst.mockResolvedValueOnce({
+      passwordEncrypted: 'tenant-specific-overrides-env',
+    });
+    const c = loadClient();
+    expect(await c.realModeEnabled(42)).toBe(true);
+    expect(prismaMock.supplierCredential.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          tenantId: 42,
+          category: 'llm-key',
+        }),
+      }),
+    );
+  });
+
+  test('no SupplierCredential row + no ENV + tenantId passed → false', async () => {
+    delete process.env.GEMINI_API_KEY;
+    prismaMock.supplierCredential.findFirst.mockResolvedValueOnce(null);
+    const c = loadClient();
+    expect(await c.realModeEnabled(42)).toBe(false);
+  });
+
+  test('CJS self-mocking seam still works through module.exports.realModeEnabled', async () => {
+    // The standing rule: inter-function calls must go through the
+    // module.exports surface so vitest spies intercept. Pin it explicitly.
+    const c = loadClient();
+    const spy = vi.spyOn(c, 'realModeEnabled').mockResolvedValue(true);
+    const callSpy = vi.spyOn(c, 'callGemini').mockResolvedValue({
+      daySplit: [], poiSuggestions: [], thematicNotes: 'n', summary: 's',
+    });
+    const out = await c.suggestItinerary({ tenantId: 1, destination: 'X', durationDays: 1 });
+    expect(spy).toHaveBeenCalled();
+    expect(out.source).toBe('gemini');
+    spy.mockRestore();
+    callSpy.mockRestore();
   });
 });
 

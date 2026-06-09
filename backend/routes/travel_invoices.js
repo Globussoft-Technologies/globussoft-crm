@@ -7711,6 +7711,114 @@ router.post(
   },
 );
 
+// ============================================================================
+// GET /api/travel/invoices/:id/cancel-preview
+// S58 — PRD_TRAVEL_BILLING FR-3.7.b cancellation-policy preview surface.
+//
+// READ-ONLY. Calls the shared resolveCancellationOutcome() helper (the same
+// resolver that POST /:id/void uses to drive its auto-CreditNote issuance)
+// WITHOUT mutating the invoice or creating any rows. Powers the void-
+// confirmation modal (S56 InvoiceDetail.jsx): operators can see the refund
+// amount + matched policy tier BEFORE clicking "Confirm Void", so they
+// don't accidentally trigger a refund they didn't intend.
+//
+// Auth: same gate as POST /:id/void — verifyToken + verifyRole(ADMIN,MANAGER).
+// USER role denied (helper-shape; can't void → can't preview either).
+// Tenant + sub-brand scoped via loadParentInvoice (same path as void).
+//
+// Status guard: already-Voided invoices return 409 ALREADY_VOIDED (matches
+// the void endpoint's idempotency guard semantics, surfaced one tier
+// stricter via 409 instead of 400 since the resource state is the conflict,
+// not the input shape).
+//
+// Response envelope (200):
+//   {
+//     invoiceId,
+//     status,                       // current invoice status (Issued/Paid/Draft/Partial)
+//     policyApplied: { policyId, policyName, tier, refundPercent } | null,
+//     refundAmount: number | null,  // INR / invoice.currency; null if no policy resolved
+//     refundPercent: number | null,
+//     daysBeforeServiceStart: number | null,
+//     serviceStartDate: ISO string | null,
+//     reason: 'OK' | 'NO_POLICY_RESOLVED'  // why preview is null/empty
+//   }
+//
+// Error envelopes:
+//   400 INVALID_ID            (from loadParentInvoice)
+//   403 SUB_BRAND_DENIED      (from loadParentInvoice)
+//   404 INVOICE_NOT_FOUND     (cross-tenant or nonexistent)
+//   409 ALREADY_VOIDED        (invoice already Voided — cannot preview a void)
+// ============================================================================
+router.get(
+  "/invoices/:id/cancel-preview",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const invoiceId = parseInt(req.params.id, 10);
+      const invoice = await loadParentInvoice(req, res, invoiceId);
+      if (!invoice) return;
+
+      if (invoice.status === "Voided") {
+        return res.status(409).json({
+          error: "Invoice already voided",
+          code: "ALREADY_VOIDED",
+        });
+      }
+
+      // Defensive try/catch around the resolver — mirrors the void
+      // endpoint's defensive shell so a transient DB hiccup on policy
+      // lookup yields a "no preview available" response instead of a 500.
+      let resolved = null;
+      try {
+        resolved = await resolveCancellationOutcome(req, invoice);
+      } catch (resolverErr) {
+        console.error(
+          "[travel-invoices] cancel-preview resolver error:",
+          resolverErr.message,
+        );
+        resolved = null;
+      }
+
+      if (!resolved) {
+        return res.status(200).json({
+          invoiceId: invoice.id,
+          status: invoice.status,
+          policyApplied: null,
+          refundAmount: null,
+          refundPercent: null,
+          daysBeforeServiceStart: null,
+          serviceStartDate: null,
+          reason: "NO_POLICY_RESOLVED",
+        });
+      }
+
+      return res.status(200).json({
+        invoiceId: invoice.id,
+        status: invoice.status,
+        policyApplied: {
+          policyId: resolved.policyId,
+          policyName: resolved.policyName,
+          tier: resolved.tier,
+          refundPercent: resolved.refundPercent,
+        },
+        refundAmount: resolved.refundAmount,
+        refundPercent: resolved.refundPercent,
+        daysBeforeServiceStart: resolved.daysBeforeStart,
+        serviceStartDate: resolved.serviceStartDate,
+        reason: "OK",
+      });
+    } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-invoices] cancel-preview error:", e.message);
+      res.status(500).json({ error: "Failed to preview cancellation" });
+    }
+  },
+);
+
 // S33 (#920) — Cancellation-policy resolver helper.
 //
 // Given a voided invoice, finds the applicable CancellationPolicy and

@@ -584,3 +584,180 @@ describe('POST /invoices/:id/void — S33 cancellation-policy auto-CR-NOTE issua
     expect(res.body.policyApplied).toBeNull();
   });
 });
+
+// ===========================================================================
+// S58 — GET /api/travel/invoices/:id/cancel-preview
+//
+// Read-only refund preview endpoint that wraps resolveCancellationOutcome()
+// WITHOUT persisting any state. Powers the InvoiceDetail.jsx void-modal
+// (S56): operators see "you'll get ₹X refund per TMC Default tier — 14d
+// before service" BEFORE clicking Confirm Void. Same auth gate as the
+// void endpoint (ADMIN/MANAGER + travelTenant + sub-brand check).
+//
+// Contracts pinned (6 cases):
+//   (a) happy path — policy + service-start present → 200 with full preview
+//   (b) cross-tenant 404 INVOICE_NOT_FOUND
+//   (c) already-voided 409 ALREADY_VOIDED (resource-state conflict)
+//   (d) no policy resolved → 200 with refundAmount: null + reason: NO_POLICY_RESOLVED
+//   (e) idempotency — preview never writes (no update/create/auditLog.create
+//       called). Re-calling returns the same shape with invoice status unchanged.
+//   (f) USER role 403 (verifyRole short-circuits before findFirst)
+// ===========================================================================
+describe('S58 — GET /:id/cancel-preview', () => {
+  test('(a) happy path: policy + serviceStart present -> 200 with full preview envelope', async () => {
+    prisma.travelInvoice.findFirst.mockResolvedValueOnce(
+      issuedInvoice({ id: 900, totalAmount: '12000.00' }),
+    );
+    prisma.cancellationPolicy.findFirst.mockResolvedValueOnce(
+      policyRow({ id: 70, subBrand: 'tmc' }),
+    );
+    prisma.travelInvoiceLine.findMany.mockResolvedValueOnce([
+      { serviceStartDate: daysFromNow(60) }, // 60d out -> 100% refund tier
+    ]);
+
+    const res = await request(makeApp())
+      .get('/api/travel/invoices/900/cancel-preview')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      invoiceId: 900,
+      status: 'Issued',
+      refundAmount: 12000,
+      refundPercent: 100,
+      reason: 'OK',
+    });
+    expect(res.body.policyApplied).toMatchObject({
+      policyId: 70,
+      policyName: 'TMC Default',
+      refundPercent: 100,
+    });
+    expect(res.body.policyApplied.tier).toMatchObject({
+      daysBeforeServiceStart: 30,
+      refundPercent: 100,
+    });
+    expect(typeof res.body.daysBeforeServiceStart).toBe('number');
+    expect(res.body.daysBeforeServiceStart).toBeGreaterThanOrEqual(59);
+    expect(typeof res.body.serviceStartDate).toBe('string');
+
+    // CRITICAL: preview must NOT mutate any state.
+    expect(prisma.travelInvoice.update).not.toHaveBeenCalled();
+    expect(prisma.travelInvoice.create).not.toHaveBeenCalled();
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  test('(b) cross-tenant or nonexistent invoice -> 404 INVOICE_NOT_FOUND', async () => {
+    prisma.travelInvoice.findFirst.mockResolvedValueOnce(null);
+
+    const res = await request(makeApp())
+      .get('/api/travel/invoices/9999/cancel-preview')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(404);
+    expect(res.body).toMatchObject({ code: 'INVOICE_NOT_FOUND' });
+    expect(prisma.travelInvoice.update).not.toHaveBeenCalled();
+  });
+
+  test('(c) already-voided invoice -> 409 ALREADY_VOIDED (resource-state conflict)', async () => {
+    prisma.travelInvoice.findFirst.mockResolvedValueOnce(
+      issuedInvoice({ id: 901, status: 'Voided' }),
+    );
+
+    const res = await request(makeApp())
+      .get('/api/travel/invoices/901/cancel-preview')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(409);
+    expect(res.body).toMatchObject({ code: 'ALREADY_VOIDED' });
+    // No resolver work for an already-voided invoice.
+    expect(prisma.cancellationPolicy.findFirst).not.toHaveBeenCalled();
+    expect(prisma.travelInvoice.update).not.toHaveBeenCalled();
+    expect(prisma.travelInvoice.create).not.toHaveBeenCalled();
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  test('(d) no policy resolved -> 200 with refundAmount: null + reason: NO_POLICY_RESOLVED', async () => {
+    prisma.travelInvoice.findFirst.mockResolvedValueOnce(
+      issuedInvoice({ id: 902, totalAmount: '12000.00' }),
+    );
+    // No policy at any precedence level (pinned-id, sub-brand, tenant-wide).
+    prisma.cancellationPolicy.findFirst.mockResolvedValue(null);
+
+    const res = await request(makeApp())
+      .get('/api/travel/invoices/902/cancel-preview')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      invoiceId: 902,
+      status: 'Issued',
+      policyApplied: null,
+      refundAmount: null,
+      refundPercent: null,
+      daysBeforeServiceStart: null,
+      serviceStartDate: null,
+      reason: 'NO_POLICY_RESOLVED',
+    });
+    expect(prisma.travelInvoice.update).not.toHaveBeenCalled();
+    expect(prisma.travelInvoice.create).not.toHaveBeenCalled();
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  test('(e) idempotency: re-calling preview returns same shape + invoice state unchanged', async () => {
+    // Each call independently re-mocks findFirst (the route reads fresh).
+    // What we pin here is: no .update / .create / auditLog calls happen
+    // across both invocations, and the response shape is byte-identical.
+    const baseInvoice = issuedInvoice({ id: 903, totalAmount: '12000.00' });
+
+    prisma.travelInvoice.findFirst
+      .mockResolvedValueOnce(baseInvoice)
+      .mockResolvedValueOnce(baseInvoice);
+    prisma.cancellationPolicy.findFirst
+      .mockResolvedValueOnce(policyRow({ id: 71, subBrand: 'tmc' }))
+      .mockResolvedValueOnce(policyRow({ id: 71, subBrand: 'tmc' }));
+    prisma.travelInvoiceLine.findMany
+      .mockResolvedValueOnce([{ serviceStartDate: daysFromNow(14) }])
+      .mockResolvedValueOnce([{ serviceStartDate: daysFromNow(14) }]);
+
+    const res1 = await request(makeApp())
+      .get('/api/travel/invoices/903/cancel-preview')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    const res2 = await request(makeApp())
+      .get('/api/travel/invoices/903/cancel-preview')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res1.status).toBe(200);
+    expect(res2.status).toBe(200);
+
+    // Refund-bearing fields are byte-identical across the two calls.
+    expect(res2.body.invoiceId).toBe(res1.body.invoiceId);
+    expect(res2.body.status).toBe(res1.body.status);
+    expect(res2.body.refundAmount).toBe(res1.body.refundAmount);
+    expect(res2.body.refundPercent).toBe(res1.body.refundPercent);
+    expect(res2.body.policyApplied).toEqual(res1.body.policyApplied);
+    expect(res2.body.reason).toBe(res1.body.reason);
+
+    // 50% tier matched (14d out -> >=7 tier).
+    expect(res1.body.refundPercent).toBe(50);
+    expect(res1.body.refundAmount).toBe(6000);
+
+    // CRITICAL: zero writes across BOTH calls.
+    expect(prisma.travelInvoice.update).not.toHaveBeenCalled();
+    expect(prisma.travelInvoice.create).not.toHaveBeenCalled();
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
+
+    // Invoice the route read both times still reports status='Issued'
+    // — the route did not mutate baseInvoice.status under the hood.
+    expect(baseInvoice.status).toBe('Issued');
+  });
+
+  test('(f) USER role -> 403 (verifyRole short-circuits before findFirst)', async () => {
+    const res = await request(makeApp())
+      .get('/api/travel/invoices/904/cancel-preview')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(403);
+    expect(prisma.travelInvoice.findFirst).not.toHaveBeenCalled();
+    expect(prisma.travelInvoice.update).not.toHaveBeenCalled();
+  });
+});

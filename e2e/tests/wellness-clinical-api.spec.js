@@ -568,6 +568,58 @@ test.describe('Wellness API — POST /patients (create + validation)', () => {
     expect((await second.json()).code).toBe('DUPLICATE_PHONE');
   });
 
+  // ── S100 — structured firstName + lastName intake ──────────────────
+  // S62 added the columns; S96 surfaced them in the slim list shape; S97
+  // wired the create-customer modal to send them. S100 closes the loop by
+  // teaching the POST route handler to whitelist + persist them. This
+  // assertion pins the round-trip: POST with firstName + lastName, then
+  // GET ?fields=summary, and confirm both fields surface on the slim
+  // payload with the values we wrote.
+  test('S100: POST /patients with firstName + lastName persists both; GET round-trips on slim shape', async ({ request }) => {
+    const phone = nextPhone();
+    const createRes = await authPost(request, '/api/wellness/patients', {
+      name: `E2E ${RUN_TAG} structured-intake`,
+      phone,
+      firstName: `Riya${RUN_TAG}`,
+      lastName: `Sharma${RUN_TAG}`,
+    });
+    expect(createRes.status(), `create: ${await createRes.text()}`).toBe(201);
+    const created = await createRes.json();
+    expect(created.id).toBeTruthy();
+    // POST response echoes the persisted columns — pin both verbatim.
+    expect(created.firstName).toBe(`Riya${RUN_TAG}`);
+    expect(created.lastName).toBe(`Sharma${RUN_TAG}`);
+
+    // Round-trip via GET ?fields=summary (S96 slim shape) — surfaces the
+    // S62 columns we just populated. Use q= to scope to this exact row.
+    const listRes = await authGet(
+      request,
+      `/api/wellness/patients?fields=summary&q=${encodeURIComponent(`Riya${RUN_TAG}`)}&limit=10`,
+    );
+    expect(listRes.status()).toBe(200);
+    const listBody = await listRes.json();
+    const row = (listBody.patients || []).find((p) => p.id === created.id);
+    expect(row, 'created row visible on slim list').toBeTruthy();
+    expect(row.firstName).toBe(`Riya${RUN_TAG}`);
+    expect(row.lastName).toBe(`Sharma${RUN_TAG}`);
+  });
+
+  // S100 — lastName is OPTIONAL on POST (some legal-name cultures use a
+  // single name). firstName alone must persist + slim-list must round-trip
+  // with lastName as null.
+  test('S100: POST /patients with only firstName persists firstName + null lastName', async ({ request }) => {
+    const phone = nextPhone();
+    const createRes = await authPost(request, '/api/wellness/patients', {
+      name: `E2E ${RUN_TAG} single-name`,
+      phone,
+      firstName: `Madonna${RUN_TAG}`,
+    });
+    expect(createRes.status()).toBe(201);
+    const created = await createRes.json();
+    expect(created.firstName).toBe(`Madonna${RUN_TAG}`);
+    expect(created.lastName).toBeNull();
+  });
+
   test('PUT /patients/:id with another patient phone returns 409 DUPLICATE_PHONE', async ({ request }) => {
     const phoneA = nextPhone();
     const phoneB = nextPhone();

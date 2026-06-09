@@ -2072,6 +2072,54 @@ router.post("/patients", phiWriteGate, async (req, res) => {
       source,
       contactId,
     } = req.body;
+    // S100 — structured-intake whitelist for firstName + lastName.
+    // S62 added the Patient.firstName + Patient.lastName columns (additive-
+    // nullable). S96 surfaced them in the slim list projection. S97 wired
+    // the create-customer modal to send them in POST/PUT bodies. But the
+    // route handlers (this file, lines ~2063 POST + ~2210 PUT) did NOT
+    // whitelist the fields — they were silently dropped at the destructure
+    // boundary, so every new row landed with both columns null despite the
+    // modal sending the data. This closes the S62 → S96 → S97 chain.
+    //
+    // Validation: each is OPTIONAL (some legal-name cultures have a single
+    // name, so lastName especially must be optional). When provided, must
+    // be a non-empty string ≤80 chars. Empty string → null (don't persist
+    // blank-string columns; aligns with how `name` is normalised below).
+    // Reject 400 INVALID_NAME_FIELD on length / type violations so the SPA
+    // surfaces the error before the user hits "save".
+    function normaliseStructuredName(raw, fieldLabel) {
+      if (raw === undefined || raw === null) return { value: null, error: null };
+      if (typeof raw !== "string") {
+        return {
+          value: null,
+          error: {
+            status: 400,
+            error: `${fieldLabel} must be a string`,
+            code: "INVALID_NAME_FIELD",
+          },
+        };
+      }
+      const trimmed = raw.trim();
+      if (trimmed === "") return { value: null, error: null };
+      if (trimmed.length > 80) {
+        return {
+          value: null,
+          error: {
+            status: 400,
+            error: `${fieldLabel} must be 80 characters or fewer`,
+            code: "INVALID_NAME_FIELD",
+          },
+        };
+      }
+      return { value: trimmed, error: null };
+    }
+    const firstNameResult = normaliseStructuredName(req.body.firstName, "firstName");
+    if (firstNameResult.error) return res.status(firstNameResult.error.status).json(firstNameResult.error);
+    const lastNameResult = normaliseStructuredName(req.body.lastName, "lastName");
+    if (lastNameResult.error) return res.status(lastNameResult.error.status).json(lastNameResult.error);
+    const firstName = firstNameResult.value;
+    const lastName = lastNameResult.value;
+
     // New CRM-create-customer fields (taxType, instagramHandle, anniversary).
     // All optional; validated lightly here because validatePatientInput
     // only knows the legacy field set.
@@ -2115,6 +2163,11 @@ router.post("/patients", phiWriteGate, async (req, res) => {
     const patient = await prisma.patient.create({
       data: {
         name: normalisedName,
+        // S100 — structured intake additive to canonical `name`. Existing
+        // clients that send only `name` continue to work unchanged (both
+        // columns stay null); S97-modal clients populate both.
+        firstName,
+        lastName,
         email,
         phone: e164Phone,
         normalizedPhone,
@@ -2222,6 +2275,38 @@ router.put("/patients/:id", phiWriteGate, async (req, res) => {
       if (req.body[k] !== undefined) data[k] = req.body[k];
     if (req.body.dob !== undefined)
       data.dob = req.body.dob ? new Date(req.body.dob) : null;
+    // S100 — structured firstName + lastName whitelist (PUT). Mirrors POST
+    // semantics: ≤80-char string, empty → null. Explicit null on either
+    // field CLEARS that column on the row (this is the inline-edit /
+    // form-clear path; an admin editing a row may legitimately blank the
+    // last name on a single-name patient). When the body omits the key
+    // entirely, the field stays unchanged.
+    for (const fld of ["firstName", "lastName"]) {
+      if (req.body[fld] === undefined) continue;
+      const raw = req.body[fld];
+      if (raw === null) {
+        data[fld] = null;
+        continue;
+      }
+      if (typeof raw !== "string") {
+        return res.status(400).json({
+          error: `${fld} must be a string`,
+          code: "INVALID_NAME_FIELD",
+        });
+      }
+      const trimmed = raw.trim();
+      if (trimmed === "") {
+        data[fld] = null;
+        continue;
+      }
+      if (trimmed.length > 80) {
+        return res.status(400).json({
+          error: `${fld} must be 80 characters or fewer`,
+          code: "INVALID_NAME_FIELD",
+        });
+      }
+      data[fld] = trimmed;
+    }
     // New customer-create-modal fields. Same enum-clamp / length checks
     // as the POST handler; anniversary parses YYYY-MM-DD or ISO.
     if (req.body.taxType !== undefined) {

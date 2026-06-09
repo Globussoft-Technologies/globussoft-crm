@@ -12,6 +12,13 @@
     <link rel="apple-touch-icon" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#265855" />
+    <!-- #917 slice S1 (FR-3.2): per-request CSP nonce placeholder. The
+         backend mints res.locals.cspNonce; production-serving Nginx (or the
+         Express static handler) substitutes __CSP_NONCE__ with the live
+         nonce per response and stamps the same value onto every
+         <script>/<style> tag it ships. Until that deploy-layer wiring
+         lands, this meta tag is inert. -->
+    <meta name="csp-nonce" content="__CSP_NONCE__" />
     <title>Globussoft CRM</title>
   </head>
   <body>

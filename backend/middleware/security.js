@@ -1,4 +1,5 @@
 const helmet = require('helmet');
+const { attachNonce } = require('../lib/cspNonce');
 
 // 1. Helmet with CRM-appropriate config — closes #186 (missing security headers)
 // and #342 (regression: headers not firing in production) and #654 (CSP enabled,
@@ -117,13 +118,28 @@ const helmetMiddleware = helmet({
 // description becomes immediate account takeover when combined with the JWT
 // in sessionStorage (#914).
 //
-// Slice 1 (this commit): emit a SECOND CSP header — `Content-Security-Policy-
+// Slice 1 (shipped): emit a SECOND CSP header — `Content-Security-Policy-
 // Report-Only` — WITHOUT 'unsafe-inline' on script-src + style-src. Browsers
 // log violations to devtools/`report-uri` but do NOT block them. This lets
 // us observe what would break under a strict enforce-mode CSP without
 // shipping a regression. A future slice promotes report-only → enforce-mode
 // after the SPA's inline-script/inline-style surface is migrated to external
 // bundles + nonces.
+//
+// Slice S1 (this commit, FR-3.2): mint a cryptographically-random per-request
+// nonce via lib/cspNonce.js and advertise it as `'nonce-<base64>'` on
+// script-src + style-src of the strict Report-Only CSP. The HTML template
+// (frontend/index.html) carries a `<meta name="csp-nonce" content="__CSP_NONCE__">`
+// placeholder; production-serving Nginx (or the Express static handler) is
+// expected to substitute `__CSP_NONCE__` with the live nonce per response
+// and to stamp the same nonce onto each `<script>` / `<style>` it ships.
+// That deploy-layer wiring is the follow-up to this slice — the contract
+// landed here is "backend mints + advertises the nonce; frontend has the
+// hook; report-only header surfaces what enforce mode would block".
+//
+// Promotion to enforce mode is gated on CSP_ENFORCE=1 (planned follow-up
+// per FR-3.7 backward-compat cadence); the report-only header continues to
+// ship alongside until a clean violation window is observed.
 //
 // Why a second helmet instance rather than `reportOnly: true` on the existing
 // one: we want BOTH headers on the response — the enforce-mode transitional
@@ -132,6 +148,13 @@ const helmetMiddleware = helmet({
 // emitting both: helmet 8.x's `contentSecurityPolicy.reportOnly: true`
 // switches the SINGLE CSP header from enforce → report-only mode, but we
 // can layer a second helmet just for the Report-Only header.
+//
+// Helmet supports function directives of the shape `(req, res) => string`,
+// invoked per-request. We use that to splice the nonce off res.locals which
+// `attachNonce` populates upstream.
+const nonceScriptSrc = (req, res) => `'nonce-${res.locals && res.locals.cspNonce ? res.locals.cspNonce : ''}'`;
+const nonceStyleSrc = (req, res) => `'nonce-${res.locals && res.locals.cspNonce ? res.locals.cspNonce : ''}'`;
+
 const helmetStrictReportOnlyMiddleware = helmet({
   // Disable every header this second helmet would otherwise duplicate; we
   // only want the strict Report-Only CSP.
@@ -140,10 +163,13 @@ const helmetStrictReportOnlyMiddleware = helmet({
     reportOnly: true,
     directives: {
       defaultSrc: ["'self'"],
-      // No 'unsafe-inline' — that's the whole point of slice 1.
-      // Future slice adds nonce-based allowance.
-      scriptSrc: ["'self'", 'https://cdn.jsdelivr.net'],
-      styleSrc: ["'self'", 'https://fonts.googleapis.com'],
+      // No 'unsafe-inline'. The per-request nonce minted by attachNonce
+      // (mounted upstream in server.js) is spliced in via the function
+      // directive — the only inline scripts/styles the browser will allow
+      // (when enforce-mode flips) are ones explicitly carrying the matching
+      // nonce attribute set by the HTML template substitution layer.
+      scriptSrc: ["'self'", 'https://cdn.jsdelivr.net', nonceScriptSrc],
+      styleSrc: ["'self'", 'https://fonts.googleapis.com', nonceStyleSrc],
       imgSrc: ["'self'", 'data:', 'blob:', 'https:'],
       connectSrc: [
         "'self'",
@@ -287,6 +313,10 @@ function stripTenantOverride(req, res, next) {
 }
 
 module.exports = {
+  // #917 slice S1 — re-exported here for convenience; the canonical home is
+  // backend/lib/cspNonce.js. Mount this BEFORE helmetStrictReportOnlyMiddleware
+  // so res.locals.cspNonce is populated when the CSP function-directives run.
+  attachNonce,
   helmetMiddleware,
   helmetStrictReportOnlyMiddleware,
   permissionsPolicyMiddleware,

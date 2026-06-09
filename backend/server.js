@@ -184,8 +184,12 @@ app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
 // Security middleware
 const cookieParser = require('cookie-parser');
-const { helmetMiddleware, helmetStrictReportOnlyMiddleware, permissionsPolicyMiddleware, sanitizeBody, stripTenantOverride } = require('./middleware/security');
+const { attachNonce, helmetMiddleware, helmetStrictReportOnlyMiddleware, permissionsPolicyMiddleware, sanitizeBody, stripTenantOverride } = require('./middleware/security');
 const { originCheck } = require('./middleware/originCheck');
+// #917 slice S1 (FR-3.2) — mint a per-request CSP nonce BEFORE the strict
+// Report-Only CSP middleware runs. The CSP function-directives read
+// res.locals.cspNonce to advertise `'nonce-<base64>'` on script-src/style-src.
+app.use(attachNonce);
 app.use(helmetMiddleware);
 // #917 slice 1 — additive strict CSP in Report-Only mode (no 'unsafe-inline'
 // on script-src/style-src). Browsers log violations to devtools without

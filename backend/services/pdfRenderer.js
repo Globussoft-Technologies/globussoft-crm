@@ -23,6 +23,74 @@ const PDFDocument = require("pdfkit");
 const hsnSacMapper = require("../lib/hsnSacMapper");
 const gstCalculation = require("../lib/gstCalculation");
 
+// ── S51 logo-image fetch + in-memory LRU cache ──────────────────────
+// Contract (called from renderTravelInvoicePdf):
+//   fetchLogoBuffer(url, opts?) -> Promise<Buffer|null>
+//
+//   - Returns null on ANY fetch failure (404, network error, timeout,
+//     non-image content-type, oversize body). The PDF renderer treats
+//     null as "skip the doc.image() call" — invoice still renders, just
+//     without a logo. Fail-soft because a flaky CDN should NOT block an
+//     accountant from downloading their invoice.
+//   - In-memory Map cache (process-lifetime). Max 50 entries; FIFO
+//     eviction when full. TTL 1h (3_600_000 ms).
+//   - HTTP timeout 5s, max content-length 5MB.
+//   - opts: { axios?, ttlMs?, maxEntries?, cache? } — DI hooks for tests.
+//
+// axios is lazy-required inside the function so unit tests that never
+// touch this code path don't pull the axios surface.
+const LOGO_CACHE = new Map();
+const LOGO_CACHE_TTL_MS = 60 * 60 * 1000;
+const LOGO_CACHE_MAX = 50;
+const LOGO_FETCH_TIMEOUT_MS = 5_000;
+const LOGO_FETCH_MAX_BYTES = 5 * 1024 * 1024;
+
+async function fetchLogoBuffer(url, opts) {
+  if (!url || typeof url !== "string") return null;
+  const o = opts || {};
+  const ttl = typeof o.ttlMs === "number" ? o.ttlMs : LOGO_CACHE_TTL_MS;
+  const max = typeof o.maxEntries === "number" ? o.maxEntries : LOGO_CACHE_MAX;
+  const cache = o.cache || LOGO_CACHE;
+  const now = Date.now();
+
+  const hit = cache.get(url);
+  if (hit && hit.expiresAt > now) return hit.buf;
+  if (hit) cache.delete(url);
+
+  while (cache.size >= max) {
+    const firstKey = cache.keys().next().value;
+    if (firstKey === undefined) break;
+    cache.delete(firstKey);
+  }
+
+  let buf = null;
+  try {
+    const axios = o.axios || require("axios");
+    const resp = await axios.get(url, {
+      responseType: "arraybuffer",
+      timeout: LOGO_FETCH_TIMEOUT_MS,
+      maxContentLength: LOGO_FETCH_MAX_BYTES,
+      validateStatus: (s) => s >= 200 && s < 300,
+    });
+    if (!resp || !resp.data) return null;
+    buf = Buffer.isBuffer(resp.data) ? resp.data : Buffer.from(resp.data);
+    if (buf.length === 0 || buf.length > LOGO_FETCH_MAX_BYTES) return null;
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[pdfRenderer/S51] logo fetch failed for ${url}: ${err && err.message ? err.message : err}`,
+    );
+    return null;
+  }
+
+  cache.set(url, { buf, expiresAt: now + ttl });
+  return buf;
+}
+
+function _resetLogoCache() {
+  LOGO_CACHE.clear();
+}
+
 // ── Helpers ────────────────────────────────────────────────────────
 
 function streamToBuffer(doc) {
@@ -3445,7 +3513,7 @@ function extractTravellerListFromInvoice(invoice, lines) {
   return "—";
 }
 
-function renderTravelInvoicePdf(opts) {
+async function renderTravelInvoicePdf(opts) {
   const o = opts || {};
   const invoice = o.invoice || {};
   const lines = Array.isArray(o.lines)
@@ -3470,6 +3538,16 @@ function renderTravelInvoicePdf(opts) {
   // { branding: { headerColor: "#000", ... } } to opts to bypass the kit.
   const callerBranding = (o.branding && typeof o.branding === "object") ? o.branding : {};
   const branding = { ...brandKit, ...callerBranding };
+
+  // S51 — fetch the per-sub-brand logo (if any) BEFORE we start drawing.
+  // pdfkit's doc.image() needs the buffer synchronously, so we resolve the
+  // remote URL up front. Goes through module.exports.fetchLogoBuffer so
+  // unit tests can vi.spyOn(...) the seam without reaching into axios.
+  // Fail-soft: on any error, the helper returns null and we render a
+  // logo-less header band (back-compat with pre-S51 output).
+  const logoBuffer = branding.thumbnailUrl
+    ? await module.exports.fetchLogoBuffer(branding.thumbnailUrl)
+    : null;
   // The header band fill — was bare SUB_BRAND_ACCENT[sub] pre-S34. Now
   // sources from the brand-kit so the admin-curated palette wins.
   const accent = branding.headerColor || INVOICE_BRAND_KIT_FALLBACKS._generic.headerColor;
@@ -3514,6 +3592,26 @@ function renderTravelInvoicePdf(opts) {
     .toLowerCase()
     .replace(/(^|\s)\S/g, (c) => c.toUpperCase());
   doc.fillColor("#fff").fontSize(10).text(bandSubLabel, 50, 42, { align: "left" });
+
+  // S51 — embed brand logo into the header band's top-right (80×40 fit
+  // box at right edge). doc.image() throws on invalid buffers; wrap in
+  // try/catch so a malformed logo can't 500 the download. The brand
+  // color band still renders behind the logo regardless.
+  if (logoBuffer) {
+    try {
+      const LOGO_W = 80;
+      const LOGO_H = 40;
+      const LOGO_X = doc.page.width - LOGO_W - 50;
+      const LOGO_Y = 10;
+      doc.image(logoBuffer, LOGO_X, LOGO_Y, { fit: [LOGO_W, LOGO_H] });
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[pdfRenderer/S51] doc.image() rejected logo buffer: ${err && err.message ? err.message : err}`,
+      );
+    }
+  }
+
   doc.fillColor("#111").moveDown(2);
 
   const metaTop = 80;
@@ -3802,4 +3900,11 @@ module.exports = {
   INVOICE_BRAND_KIT_FALLBACKS,
   parseInvoiceSubBrandConfig,
   resolveInvoiceBrandKit,
+  // S51 — logo-image fetch + LRU cache. Exported via module.exports so the
+  // renderer can call `module.exports.fetchLogoBuffer(...)` (the CJS self-
+  // mocking seam pattern) and vitest cases can vi.spyOn(...) the surface
+  // without touching axios. `_resetLogoCache` is a test-only nuker so the
+  // module-level cache doesn't bleed between cases.
+  fetchLogoBuffer,
+  _resetLogoCache,
 };

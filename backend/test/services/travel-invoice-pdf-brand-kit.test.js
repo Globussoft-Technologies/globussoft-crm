@@ -37,7 +37,7 @@
  * Run: `cd backend && npx vitest run test/services/travel-invoice-pdf-brand-kit.test.js`
  */
 
-import { describe, test, expect } from 'vitest';
+import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
 import pdfR from '../../services/pdfRenderer.js';
 
 const {
@@ -459,5 +459,204 @@ describe('renderBrandedInvoicePdf — backward compat (wellness invoices)', () =
     // the brand-kit observability stamp (would mean the travel path
     // accidentally absorbed wellness too).
     expect(producer || '').not.toMatch(/brand-kit:/);
+  });
+});
+
+// ── S51 — logo URL embedding via pdfkit doc.image() ─────────────────
+//
+// Pins:
+//   (a) thumbnailUrl set + fetch succeeds → PDF body contains a /Subtype
+//       /Image XObject (the embedded logo).
+//   (b) thumbnailUrl set + fetch fails    → PDF renders without image,
+//       fetchLogoBuffer returns null, console.warn fires once.
+//   (c) thumbnailUrl null                 → PDF is byte-shape-equivalent
+//       to the S34 output (no /Image XObject), back-compat preserved.
+//   (d) cache hit                         → second renderer call with the
+//       same logo URL does NOT re-invoke axios.
+//
+// We test by spy-ing pdfRenderer.fetchLogoBuffer (CJS self-mock seam set
+// up in renderTravelInvoicePdf via `module.exports.fetchLogoBuffer(...)`)
+// for the success / failure / cache-miss cases, and intercept axios for
+// the (d) cache pin. _resetLogoCache() runs in beforeEach so the module-
+// level cache doesn't leak across cases.
+
+// Minimal 1×1 red PNG — IHDR + IDAT + IEND, well-known valid encoding
+// that pdfkit's PNG parser accepts (CRC checks + IDAT inflate succeed).
+// Sourced via `base64 -d <<< iVBORw0K...` round-tripped through PDFKit to
+// verify acceptance. ~70 bytes.
+const TINY_PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==',
+  'base64',
+);
+
+/** True if the PDF buffer contains an /Image XObject — i.e. doc.image()
+ * was called with a valid buffer and pdfkit serialised it into the body.
+ * Looks for the `/Subtype /Image` marker in the (decompressed) byte
+ * stream; the marker survives pdfkit's default flate compression because
+ * the XObject dictionary is uncompressed (only the image data stream is
+ * flated). */
+function pdfContainsImageXObject(buf) {
+  const str = buf.toString('latin1');
+  return /\/Subtype\s*\/Image/.test(str);
+}
+
+describe('renderTravelInvoicePdf — S51 logo URL embedding', () => {
+  beforeEach(() => {
+    // Module-level cache nuke so (a)/(b)/(c)/(d) don't share state.
+    pdfR._resetLogoCache();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  test('S51 (a) — thumbnailUrl set + fetch succeeds → PDF embeds /Image XObject', async () => {
+    // Spy the CJS self-mock seam so we never touch axios. fetchLogoBuffer
+    // returns the tiny PNG → renderTravelInvoicePdf calls doc.image(buf)
+    // → pdfkit emits an /XObject /Subtype /Image dictionary in the body.
+    const spy = vi.spyOn(pdfR, 'fetchLogoBuffer').mockResolvedValue(TINY_PNG);
+    const buf = await generateTravelInvoicePdf({
+      invoice: travelInvoiceFixture({ subBrand: 'tmc' }),
+      lines: sampleLines(),
+      tenant: null,
+      // Per-render override layer 1 wins; we don't need a real cfg blob.
+      branding: { thumbnailUrl: 'https://cdn.example.com/tmc-logo.png' },
+    });
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenCalledWith('https://cdn.example.com/tmc-logo.png');
+    expect(Buffer.isBuffer(buf)).toBe(true);
+    expect(buf.slice(0, 4).toString()).toBe('%PDF');
+    // The /Image XObject is the load-bearing pin — proves pdfkit
+    // actually serialised the logo into the PDF body. PNG magic bytes
+    // (89 50 4E 47) also appear in the (compressed) image stream, but
+    // the XObject dictionary is the canonical signal because it's
+    // uncompressed.
+    expect(pdfContainsImageXObject(buf)).toBe(true);
+  });
+
+  test('S51 (b) — thumbnailUrl set + fetch fails → PDF renders without image, no throw', async () => {
+    // fetchLogoBuffer's contract is "return null on failure, do not
+    // throw" — so the renderer falls through to a logo-less header band.
+    // The PDF still renders cleanly; the only signal is the absence of
+    // the /Image XObject.
+    const spy = vi.spyOn(pdfR, 'fetchLogoBuffer').mockResolvedValue(null);
+    const buf = await generateTravelInvoicePdf({
+      invoice: travelInvoiceFixture({ subBrand: 'tmc' }),
+      lines: sampleLines(),
+      tenant: null,
+      branding: { thumbnailUrl: 'https://cdn.example.com/404.png' },
+    });
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(Buffer.isBuffer(buf)).toBe(true);
+    expect(buf.slice(0, 4).toString()).toBe('%PDF');
+    // The header band still renders (brand-kit colors still applied),
+    // but no /Image XObject because no buffer reached doc.image().
+    expect(pdfContainsImageXObject(buf)).toBe(false);
+    // TMC fallback header color is still present — the failed logo
+    // fetch MUST NOT regress the brand-kit selector.
+    expect(pdfContainsHexColor(buf, '#1F4E79')).toBe(true);
+  });
+
+  test('S51 (c) — thumbnailUrl null → PDF unchanged from S34 output (back-compat)', async () => {
+    // No spy at all — the renderer's `if (branding.thumbnailUrl)` guard
+    // means fetchLogoBuffer is NEVER called. We assert that explicitly
+    // via a fail-loud spy so any future commit that strips the null
+    // guard immediately reds this test.
+    const spy = vi.spyOn(pdfR, 'fetchLogoBuffer').mockImplementation(() => {
+      throw new Error('fetchLogoBuffer must NOT be called when thumbnailUrl is null');
+    });
+    const buf = await generateTravelInvoicePdf({
+      invoice: travelInvoiceFixture({ subBrand: 'tmc' }),
+      lines: sampleLines(),
+      tenant: null,
+      // No branding.thumbnailUrl override — falls through to brand-kit
+      // selector, whose thumbnailUrl is null (operator hasn't uploaded
+      // a logo yet — Q22 blocker).
+    });
+    expect(spy).not.toHaveBeenCalled();
+    expect(Buffer.isBuffer(buf)).toBe(true);
+    // S34 contract preserved: header color, Producer metadata, body all
+    // unchanged. No /Image XObject because fetcher was never called.
+    expect(pdfContainsImageXObject(buf)).toBe(false);
+    expect(pdfContainsHexColor(buf, '#1F4E79')).toBe(true);
+    expect(extractProducer(buf)).toMatch(/brand-kit: fallback/);
+  });
+
+  test('S51 (d) — cache hit: second render with same URL does NOT re-fetch axios', async () => {
+    // Cache test exercises the REAL fetchLogoBuffer (not the spy) so we
+    // pin its in-memory LRU contract end-to-end. Mock axios at the
+    // require level via vi.doMock — fetchLogoBuffer lazy-requires axios
+    // inside its body so the doMock catches the first call, and the
+    // cached buffer short-circuits the second call before axios is
+    // consulted again.
+    const axiosGet = vi.fn().mockResolvedValue({
+      data: TINY_PNG,
+      status: 200,
+    });
+    // Use the opts.axios DI hook so we don't have to wrestle vi.mock
+    // module-cache state across describe blocks. The contract is
+    // identical (the renderer's call site passes no opts, so it uses
+    // the lazy-required axios — but for this cache pin we exercise
+    // fetchLogoBuffer directly).
+    const url = 'https://cdn.example.com/cache-pin.png';
+    const buf1 = await pdfR.fetchLogoBuffer(url, { axios: { get: axiosGet } });
+    expect(buf1).toEqual(TINY_PNG);
+    expect(axiosGet).toHaveBeenCalledTimes(1);
+
+    // Second call with same URL: cache hit, no axios.get call.
+    const buf2 = await pdfR.fetchLogoBuffer(url, { axios: { get: axiosGet } });
+    expect(buf2).toEqual(TINY_PNG);
+    // CRITICAL pin: still exactly 1 axios call. Cache short-circuited.
+    expect(axiosGet).toHaveBeenCalledTimes(1);
+
+    // Sanity: different URL = different fetch (proves it's a per-URL
+    // cache, not a "first call wins forever" bug).
+    const buf3 = await pdfR.fetchLogoBuffer(
+      'https://cdn.example.com/different.png',
+      { axios: { get: axiosGet } },
+    );
+    expect(buf3).toEqual(TINY_PNG);
+    expect(axiosGet).toHaveBeenCalledTimes(2);
+  });
+
+  test('S51 (d-extra) — TTL expiry: stale cache entry triggers re-fetch', async () => {
+    // Pin the TTL semantics — if the cache entry is older than ttlMs, the
+    // next call re-fetches. Use a tiny ttlMs window so the test is fast.
+    const axiosGet = vi.fn().mockResolvedValue({
+      data: TINY_PNG,
+      status: 200,
+    });
+    const url = 'https://cdn.example.com/ttl-pin.png';
+    await pdfR.fetchLogoBuffer(url, { axios: { get: axiosGet }, ttlMs: 1 });
+    expect(axiosGet).toHaveBeenCalledTimes(1);
+    // Wait past TTL expiry so the cached entry is stale on next read.
+    await new Promise((r) => setTimeout(r, 5));
+    await pdfR.fetchLogoBuffer(url, { axios: { get: axiosGet }, ttlMs: 1 });
+    expect(axiosGet).toHaveBeenCalledTimes(2);
+  });
+
+  test('S51 fetchLogoBuffer contract — null URL → null (no throw, no fetch)', async () => {
+    // Defensive — the renderer guards against null thumbnailUrl, but
+    // fetchLogoBuffer should ALSO be defensive in case a future caller
+    // forgets the guard.
+    const axiosGet = vi.fn();
+    const buf = await pdfR.fetchLogoBuffer(null, { axios: { get: axiosGet } });
+    expect(buf).toBe(null);
+    expect(axiosGet).not.toHaveBeenCalled();
+  });
+
+  test('S51 fetchLogoBuffer contract — axios.get throws → null + console.warn', async () => {
+    // Fail-soft contract pin. A flaky CDN must NOT 500 the PDF download.
+    const axiosGet = vi.fn().mockRejectedValue(new Error('ECONNRESET'));
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const buf = await pdfR.fetchLogoBuffer(
+      'https://cdn.example.com/broken.png',
+      { axios: { get: axiosGet } },
+    );
+    expect(buf).toBe(null);
+    expect(warnSpy).toHaveBeenCalled();
+    const warnText = warnSpy.mock.calls.map((c) => c.join(' ')).join('\n');
+    expect(warnText).toMatch(/logo fetch failed/);
+    expect(warnText).toMatch(/ECONNRESET/);
   });
 });

@@ -126,15 +126,20 @@ describe('llmRouter — module shape', () => {
 
   test('TASK_ROUTING matches PRD §9.1 exactly (per-task primary + fallback)', () => {
     const r = loadRouter();
-    // Pins PRD §9.1 (docs/TRAVEL_CRM_PRD.md lines 700-708).
+    // Pins PRD §9.1 (docs/TRAVEL_CRM_PRD.md lines 700-708) + the
+    // 'itinerary-suggest' extension landed for S14 (PRD_TRAVEL_ITINERARY_UPGRADES
+    // FR-3.6 — gemini-flash primary, claude-haiku fallback; 2K in / 4K out
+    // routed via backend/services/itinerarySuggestLLM.js for structured-JSON
+    // shape; this scaffold's stub-text path returns a tagged synthetic string).
     expect(r.TASK_ROUTING).toEqual({
-      "search":           { primary: "perplexity-sonar",  fallback: null },
-      "citation":         { primary: "perplexity-sonar",  fallback: null },
-      "reasoning":        { primary: "claude-opus-4-7",   fallback: "gpt-4" },
-      "talking-points":   { primary: "claude-opus-4-7",   fallback: "gpt-4" },
-      "form-vs-call":     { primary: "claude-opus-4-7",   fallback: "gpt-4" },
-      "bulk-text":        { primary: "gemini-flash",      fallback: "claude-haiku" },
-      "call-summary":     { primary: "gemini-flash",      fallback: null },
+      "search":            { primary: "perplexity-sonar",  fallback: null },
+      "citation":          { primary: "perplexity-sonar",  fallback: null },
+      "reasoning":         { primary: "claude-opus-4-7",   fallback: "gpt-4" },
+      "talking-points":    { primary: "claude-opus-4-7",   fallback: "gpt-4" },
+      "form-vs-call":      { primary: "claude-opus-4-7",   fallback: "gpt-4" },
+      "bulk-text":         { primary: "gemini-flash",      fallback: "claude-haiku" },
+      "call-summary":      { primary: "gemini-flash",      fallback: null },
+      "itinerary-suggest": { primary: "gemini-flash",      fallback: "claude-haiku" },
     });
   });
 
@@ -143,8 +148,9 @@ describe('llmRouter — module shape', () => {
     expect(r.VALID_TASKS.sort()).toEqual(
       Object.keys(r.TASK_ROUTING).sort(),
     );
-    // Length cross-check — PRD §9.1 has exactly 7 task classes.
-    expect(r.VALID_TASKS).toHaveLength(7);
+    // Length cross-check — PRD §9.1's 7 task classes + FR-3.6's
+    // 'itinerary-suggest' extension = 8.
+    expect(r.VALID_TASKS).toHaveLength(8);
   });
 });
 

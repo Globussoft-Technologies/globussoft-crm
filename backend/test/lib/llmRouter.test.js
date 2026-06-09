@@ -152,17 +152,22 @@ describe('llmRouter — module shape', () => {
     // + the 'marketing-flyer-copy' extension landed for S15
     // (PRD_TRAVEL_MARKETING_FLYER FR-3.6.1 — gemini-flash primary, claude-haiku
     // fallback; 1K in / 1K out headline+body+CTA JSON routed via
-    // backend/services/marketingFlyerCopyLLM.js for structured-JSON shape).
+    // backend/services/marketingFlyerCopyLLM.js for structured-JSON shape)
+    // + the 'marketing-flyer-image' extension landed for S16
+    // (PRD_TRAVEL_MARKETING_FLYER FR-3.6.3 — dall-e-3 primary, stability-xl
+    // fallback; image-gen for flyer hero blocks routed via
+    // backend/services/marketingFlyerImageLLM.js for structured-image shape).
     expect(r.TASK_ROUTING).toEqual({
-      "search":               { primary: "perplexity-sonar",  fallback: null },
-      "citation":             { primary: "perplexity-sonar",  fallback: null },
-      "reasoning":            { primary: "claude-opus-4-7",   fallback: "gpt-4" },
-      "talking-points":       { primary: "claude-opus-4-7",   fallback: "gpt-4" },
-      "form-vs-call":         { primary: "claude-opus-4-7",   fallback: "gpt-4" },
-      "bulk-text":            { primary: "gemini-flash",      fallback: "claude-haiku" },
-      "call-summary":         { primary: "gemini-flash",      fallback: null },
-      "itinerary-suggest":    { primary: "gemini-flash",      fallback: "claude-haiku" },
-      "marketing-flyer-copy": { primary: "gemini-flash",      fallback: "claude-haiku" },
+      "search":                { primary: "perplexity-sonar",  fallback: null },
+      "citation":              { primary: "perplexity-sonar",  fallback: null },
+      "reasoning":             { primary: "claude-opus-4-7",   fallback: "gpt-4" },
+      "talking-points":        { primary: "claude-opus-4-7",   fallback: "gpt-4" },
+      "form-vs-call":          { primary: "claude-opus-4-7",   fallback: "gpt-4" },
+      "bulk-text":             { primary: "gemini-flash",      fallback: "claude-haiku" },
+      "call-summary":          { primary: "gemini-flash",      fallback: null },
+      "itinerary-suggest":     { primary: "gemini-flash",      fallback: "claude-haiku" },
+      "marketing-flyer-copy":  { primary: "gemini-flash",      fallback: "claude-haiku" },
+      "marketing-flyer-image": { primary: "dall-e-3",          fallback: "stability-xl" },
     });
   });
 
@@ -173,8 +178,8 @@ describe('llmRouter — module shape', () => {
     );
     // Length cross-check — PRD §9.1's 7 task classes + FR-3.6's
     // 'itinerary-suggest' (S14) + FR-3.6.1's 'marketing-flyer-copy' (S15)
-    // extensions = 9.
-    expect(r.VALID_TASKS).toHaveLength(9);
+    // + FR-3.6.3's 'marketing-flyer-image' (S16) extensions = 10.
+    expect(r.VALID_TASKS).toHaveLength(10);
   });
 });
 

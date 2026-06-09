@@ -87,6 +87,20 @@ const TASK_ROUTING = {
   // synthetic string for routeRequest text-envelope callers. Real call
   // gated on Q-AI-3 / Q11 GEMINI_API_KEY.
   "marketing-flyer-copy": { primary: "gemini-flash",      fallback: "claude-haiku" },
+  // Marketing-flyer-image (PRD_TRAVEL_MARKETING_FLYER FR-3.6.3).
+  // AI image-gen for flyer hero blocks. Primary: DALL-E 3 (OpenAI API).
+  // Fallback: Stability AI XL. Structured-image path lives in
+  // backend/services/marketingFlyerImageLLM.js (S16 — same commit); this
+  // scaffold's stub-text path returns a tagged synthetic string for
+  // routeRequest text-envelope callers, though the canonical consumer
+  // uses the service module directly to get the imageUrl envelope. Real
+  // call gated on Q-MF-2 (OPENAI_API_KEY or STABILITY_API_KEY).
+  // Image tasks may be priced separately from text tasks (DALL-E 3 HD is
+  // $0.12/image vs Gemini Flash $0.0001/1K tokens) — flagged for future
+  // product call to split into its own `image-llm` integration cap so a
+  // runaway image-gen burst doesn't silently exhaust the text-LLM
+  // budget. Until then both share the 'llm' cap envelope.
+  "marketing-flyer-image": { primary: "dall-e-3",         fallback: "stability-xl" },
   // Catch-all for unrecognized tasks → reasoning model (Claude)
   // matches PRD's preference for a high-quality default.
 };
@@ -103,6 +117,11 @@ const ENV_FOR_MODEL = {
   "gpt-4":            "OPENAI_API_KEY",
   "gemini-flash":     "GEMINI_API_KEY",
   "claude-haiku":     "ANTHROPIC_API_KEY",
+  // S16 — image-gen providers for marketing-flyer-image task class
+  // (PRD_TRAVEL_MARKETING_FLYER FR-3.6.3). DALL-E 3 reuses the OpenAI
+  // key (same env var as gpt-4); Stability XL needs its own dedicated key.
+  "dall-e-3":         "OPENAI_API_KEY",
+  "stability-xl":     "STABILITY_API_KEY",
 };
 
 /**
@@ -387,6 +406,14 @@ function buildStubText(task, _payload) {
       // string. The structured-JSON path uses the service module directly,
       // not routeRequest's text envelope.
       return `${tag} Marketing flyer copy (synthetic). Real Gemini Flash flyer copy lands when Q-AI-3 / Q11 keys arrive — see backend/services/marketingFlyerCopyLLM.js for the structured-JSON path.`;
+    case "marketing-flyer-image":
+      // Routed to dall-e-3 primary / stability-xl fallback per PRD §9.1 +
+      // FR-3.6.3 (S16). Detailed imageUrl envelope (imageUrl + source +
+      // model + stub) is produced by backend/services/marketingFlyerImageLLM.js
+      // — this stub-text exists only so unrecognised-task callers of
+      // routeRequest get a sensible string. The structured-image path uses
+      // the service module directly, not routeRequest's text envelope.
+      return `${tag} Marketing flyer image (synthetic placeholder URL). Real DALL-E 3 / Stability XL image lands when Q-MF-2 keys arrive — see backend/services/marketingFlyerImageLLM.js for the structured-image path.`;
     case "reasoning":
       return `${tag} Reasoning output (synthetic). Real Claude/GPT lands when Q11 keys arrive.`;
     default:

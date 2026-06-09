@@ -1372,6 +1372,11 @@ function renderTravelNav({
         />
       )}
       <Link to="/travel/web-checkins" icon={Ticket} label="Web Check-ins" />
+      {/* Slice C2 — Passport OCR verification queue (ADMIN+MANAGER only).
+          PRD_PASSPORT_OCR §5.4 stub-mode drop. */}
+      {isManager && (
+        <Link to="/travel/passport-verification" icon={BadgeCheck} label="Passport Verification" />
+      )}
       <Link to="/travel/cost-master" icon={IndianRupee} label="Cost Master" />
       {/* Arc 2 Travel Gap #907 slice 5/N — SightseeingMaster admin entry.
           Adjacent to Cost Master because #907 frames Sightseeing as "the

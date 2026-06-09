@@ -5442,6 +5442,20 @@ model TripParticipant {
   passportNumber     String?
   passportExpiry     DateTime?
   passportDocId      Int? // ContactAttachment id
+  // Slice C2 (docs/PRD_PASSPORT_OCR.md FR-5/FR-6/FR-9) — additive nullable
+  // columns for the OCR extraction → verification queue → audit flow.
+  // passportExtractionJson holds the raw vendor envelope (extraction +
+  // confidence + provider + extractedAt) per PRD §5.3 "stub-mode-v1"
+  // shape; passportExtractedAt is set on upload + populates the
+  // verification queue's pending list (where extractedAt IS NOT NULL AND
+  // verifiedAt IS NULL). passportVerifiedAt/ById close the loop; the
+  // verifying user's id is captured for the audit trail. passportRejectedAt
+  // is set on operator reject + clears with the next re-upload.
+  passportExtractionJson String?           @db.Text
+  passportExtractedAt    DateTime?
+  passportVerifiedAt     DateTime?
+  passportVerifiedById   Int?
+  passportRejectedAt     DateTime?
   aadhaarLast4       String?
   aadhaarTokenId     String? // DigiLocker token, encrypted
   parentName         String?

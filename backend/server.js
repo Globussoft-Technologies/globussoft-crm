@@ -832,6 +832,8 @@ app.use("/api/travel/visa/analytics", travelVisaAnalyticsRoutes);
 app.use("/api/travel/visa", travelVisaRoutes);
 app.use("/api/travel", travelItinerariesRoutes);
 app.use("/api/travel", travelTripsRoutes);
+// Slice C2 — passport OCR upload + verification queue (stub-mode pending PC-1).
+app.use("/api/travel/passport", require("./routes/travel_passport"));
 app.use("/api/travel", travelCostMasterRoutes);
 app.use("/api/travel", travelSuppliersRoutes);
 app.use("/api/travel", travelQuotesRoutes);

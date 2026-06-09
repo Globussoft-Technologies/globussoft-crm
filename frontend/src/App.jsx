@@ -175,6 +175,8 @@ const TravelItineraries = lazy(() => import("./pages/travel/Itineraries"));
 const TravelTrips = lazy(() => import("./pages/travel/Trips"));
 const TravelTripDetail = lazy(() => import("./pages/travel/TripDetail"));
 const TravelWebCheckinQueue = lazy(() => import("./pages/travel/WebCheckinQueue"));
+// Slice C2 — Passport OCR verification queue (ADMIN+MANAGER). PRD_PASSPORT_OCR §5.4.
+const TravelPassportVerificationQueue = lazy(() => import("./pages/travel/PassportVerificationQueue"));
 const TravelCostMaster = lazy(() => import("./pages/travel/CostMaster"));
 // Arc 2 Travel Gap #907 slice 5/N — SightseeingMaster wire-in. SUT page
 // shipped slice 3 (ca052d20); this lazy import + Route below register the
@@ -1252,6 +1254,17 @@ export default function App() {
                   alias stays registered so existing bookmarks / sidebar links keep working. */}
               <Route path="travel/web-checkins" element={<TravelOnly><TravelWebCheckinQueue /></TravelOnly>} />
               <Route path="travel/webcheckins" element={<TravelOnly><TravelWebCheckinQueue /></TravelOnly>} />
+              {/* Slice C2 — Passport OCR verification queue. Backend route gates
+                  ADMIN+MANAGER; frontend RoleGuard mirrors so non-privileged
+                  users hit a friendly access-denied surface rather than the
+                  503 / 403 on the queue fetch. */}
+              <Route path="travel/passport-verification" element={
+                <TravelOnly>
+                  <RoleGuard allow={["ADMIN", "MANAGER"]} message="Passport verification requires admin or manager access.">
+                    <TravelPassportVerificationQueue />
+                  </RoleGuard>
+                </TravelOnly>
+              } />
               <Route path="travel/cost-master" element={<TravelOnly><TravelCostMaster /></TravelOnly>} />
               {/* Arc 2 Travel Gap #907 slice 5/N — SightseeingMaster admin
                   CRUD surface. Adjacent to cost-master per #907's "6th

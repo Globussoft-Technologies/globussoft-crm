@@ -92,6 +92,8 @@ const KNOWN_MODELS = [
   'Patient',
   'Visit',
   'Prescription',
+  // S43 — Visa Sure applications PII slim projection.
+  'VisaApplication',
 ];
 
 // PII / sensitive fields per model — fields the slim projection MUST NOT
@@ -151,6 +153,18 @@ const PII_FIELDS = Object.freeze({
     'drugs',          // load-bearing — the actual prescription contents
     'instructions',   // patient-specific dosage narrative
     'pdfUrl',         // signed URL with the same drug list once opened
+  ],
+  // S43 — Visa Sure applications (Phase 3). PII / sensitive fields the
+  // slim projection MUST drop. Sourced from prisma/schema.prisma:5725+ +
+  // the per-route adoption contract (decoration MUST be skipped on slim).
+  VisaApplication: [
+    'rejectionHistoryJson', // @db.Text — prior refusal reasons + dates
+    'outcomeReason',        // @db.Text — decision narrative
+    'familySize',           // dependent count — demographic metadata
+    'priorApplicationId',   // recovery-FK revealing prior rejection
+    'recoveryProgramId',    // FK to RejectionRecoveryProgram — same risk
+    'tenantId',             // strip per stripDangerous convention
+    'updatedAt',            // admin/audit metadata
   ],
 });
 
@@ -496,6 +510,41 @@ describe('listProjection(modelName, fullShape)', () => {
       expect(p).not.toHaveProperty('drugs');
       expect(p).not.toHaveProperty('instructions');
       expect(p).not.toHaveProperty('pdfUrl');
+    });
+
+    // ── S43 VisaApplication projection ────────────────────────────────
+    test('VisaApplication slim shape — rejection history + outcome reason + family size EXCLUDED', () => {
+      const p = listProjection('VisaApplication', false);
+      expect(p).toEqual({
+        id: true,
+        contactId: true,         // FK only — contact PII NOT joined on slim
+        applicationType: true,   // catalogue chip (tourist | business | ...)
+        destinationCountry: true,// ISO country code — non-PII
+        status: true,            // workflow filter pivot
+        readinessLevel: true,    // 1-4 diagnostic tier — non-PII
+        advisorRiskFlag: true,   // workflow chip — non-PII
+        complexCase: true,       // boolean workflow chip
+        filedAt: true,           // queue sort key
+        decidedAt: true,         // outcomes sort key
+        outcome: true,           // null | approved | rejected — chip
+        createdAt: true,         // default-sort stability
+      });
+      // Load-bearing PII drops — these MUST stay absent or the slim
+      // payload regresses to the full-shape risk class.
+      expect(p).not.toHaveProperty('rejectionHistoryJson');
+      expect(p).not.toHaveProperty('outcomeReason');
+      expect(p).not.toHaveProperty('familySize');
+      expect(p).not.toHaveProperty('priorApplicationId');
+      expect(p).not.toHaveProperty('recoveryProgramId');
+      // tenantId + updatedAt — strip-per-convention.
+      expect(p).not.toHaveProperty('tenantId');
+      expect(p).not.toHaveProperty('updatedAt');
+      // The contact decoration the route applies on full path must NOT
+      // appear here either — the projection is the SQL select; the
+      // decoration is a post-query step the route skips on slim. We
+      // pin the absence so a future refactor doesn't accidentally add
+      // contact PII back via a Prisma include.
+      expect(p).not.toHaveProperty('contact');
     });
   });
 });

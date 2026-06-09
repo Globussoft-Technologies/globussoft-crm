@@ -74,6 +74,17 @@ const { verifyToken, verifyRole } = require("../middleware/auth");
 const { requireTravelTenant } = require("../middleware/travelGuards");
 const { writeAudit } = require("../lib/audit");
 const { findLatestDiagnostic } = require("../lib/travelLatestDiagnostic");
+// #920 slice S43: opt-in slim shape via `?fields=summary` for GET /applications.
+// SQL-drops PII columns (rejectionHistoryJson, outcomeReason, familySize,
+// priorApplicationId, recoveryProgramId, updatedAt) at the Prisma layer +
+// SKIPS the post-query `.map(a => ({...a, contact}))` decoration that would
+// otherwise re-introduce contact PII (name/email/phone) into the payload.
+// Default shape stays full row + contact decoration (back-compat with the
+// frontend Applications.jsx + AdvisorDashboard.jsx pages that destructure
+// `a.contact.name` etc.). See backend/lib/listProjection.js's VisaApplication
+// entry for the per-field rationale and the decoration-skip contract.
+const listProjection = require("../lib/listProjection");
+const { isFullShape } = listProjection;
 
 const router = express.Router();
 
@@ -150,6 +161,19 @@ const STATUS_FIELD = {
 // Empty-state contract: when no visa-sure contacts (or no applications
 // for them) exist, returns { applications: [], total: 0, limit, offset }.
 // Never 500s on empty.
+//
+// #920 slice S43 — slim shape opt-in via `?fields=summary`. When the caller
+// passes `?fields=summary`, the response:
+//   1. SQL-drops PII columns (rejectionHistoryJson, outcomeReason,
+//      familySize, priorApplicationId, recoveryProgramId, updatedAt) at the
+//      Prisma layer via select projection;
+//   2. SKIPS the `.map(a => ({...a, contact}))` decoration so contact PII
+//      (name/email/phone) NEVER rides the slim payload — the picker/
+//      autocomplete caller follows GET /:id for the full contact join;
+//   3. Still emits the APPLICATION_LIST_READ audit row (regulatory
+//      "operator hit the list" visibility) with a `shape:"summary"` marker
+//      so reviewers can answer "did this call disclose contact PII?"
+//      without a join. Default shape stays full row + contact decoration.
 router.get(
   "/applications",
   verifyRole(["ADMIN", "MANAGER"]),
@@ -174,11 +198,22 @@ router.get(
         statusFilter = s;
       }
 
-      // Resolve visa-sure contact IDs first (mirrors the analytics pattern).
-      // Non-visa applications (schema-anomaly) stay out of the list this way.
+      // S43 — slim opt-in. The slim path skips both the Contact PII fetch
+      // (no decoration → no need for the Contact projection) AND the
+      // post-query .map() decoration. The full path keeps both for
+      // backward-compat with Applications.jsx + AdvisorDashboard.jsx.
+      const wantFullShape = isFullShape(req.query);
+
+      // Resolve visa-sure contact IDs. On the FULL path we also need the
+      // contact PII (name/email/phone) for the decoration; on the SLIM
+      // path we only need the ids list (used as a sub-brand isolation
+      // filter — non-visa-sure applications must stay out of the list
+      // regardless of shape).
       const visaContacts = await prisma.contact.findMany({
         where: { tenantId, subBrand: VISA_SUB_BRAND },
-        select: { id: true, name: true, email: true, phone: true },
+        select: wantFullShape
+          ? { id: true, name: true, email: true, phone: true }
+          : { id: true },
       });
 
       if (visaContacts.length === 0) {
@@ -191,7 +226,9 @@ router.get(
       }
 
       const contactIds = visaContacts.map((c) => c.id);
-      const contactById = new Map(visaContacts.map((c) => [c.id, c]));
+      const contactById = wantFullShape
+        ? new Map(visaContacts.map((c) => [c.id, c]))
+        : null;
 
       const where = {
         tenantId,
@@ -199,27 +236,38 @@ router.get(
       };
       if (statusFilter) where.status = statusFilter;
 
+      const findManyArgs = {
+        where,
+        orderBy: { createdAt: "desc" },
+        take,
+        skip,
+      };
+      if (!wantFullShape) {
+        // Slim projection — SQL-drops the load-bearing PII columns
+        // (rejectionHistoryJson, outcomeReason, familySize,
+        // priorApplicationId, recoveryProgramId, updatedAt, tenantId).
+        findManyArgs.select = listProjection("VisaApplication", false);
+      }
+
       const [applications, total] = await Promise.all([
-        prisma.visaApplication.findMany({
-          where,
-          orderBy: { createdAt: "desc" },
-          take,
-          skip,
-        }),
+        prisma.visaApplication.findMany(findManyArgs),
         prisma.visaApplication.count({ where }),
       ]);
 
-      // Decorate each row with its Contact projection. Doing this here
-      // (rather than via a Prisma `include`) avoids the missing
-      // `VisaApplication.contact` relation in the schema — VisaApplication
-      // carries `contactId Int` only, no @relation block back to Contact.
-      const decorated = applications.map((a) => ({
-        ...a,
-        contact: contactById.get(a.contactId) || null,
-      }));
+      // Decoration is FULL-PATH ONLY. The slim path returns the Prisma
+      // rows verbatim (no contact join) so the load-bearing privacy
+      // contract holds: no contact PII rides a `?fields=summary` payload.
+      const payload = wantFullShape
+        ? applications.map((a) => ({
+            ...a,
+            contact: contactById.get(a.contactId) || null,
+          }))
+        : applications;
 
       // Best-effort audit. Same .catch(() => {}) idiom as the analytics
-      // surface — never blocks the response.
+      // surface — never blocks the response. The shape marker lets
+      // reviewers answer "did this list call disclose contact PII?" by
+      // looking at one row instead of joining tables.
       writeAudit(
         "VisaApplication",
         "APPLICATION_LIST_READ",
@@ -230,11 +278,12 @@ router.get(
           subBrand: VISA_SUB_BRAND,
           statusFilter: statusFilter || null,
           count: applications.length,
+          shape: wantFullShape ? "full" : "summary",
         },
       ).catch(() => {});
 
       res.json({
-        applications: decorated,
+        applications: payload,
         total,
         limit: take,
         offset: skip,

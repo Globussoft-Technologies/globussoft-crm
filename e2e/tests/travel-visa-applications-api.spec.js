@@ -833,3 +833,220 @@ test.describe("Visa Sure applications — PATCH flow", () => {
     }
   });
 });
+
+// ─── S43 slim shape (?fields=summary) opt-in ─────────────────────────
+//
+// Slice S43 pins the slim-projection opt-in contract for the visa-
+// applications list endpoint:
+//
+//   1. Default (no ?fields=summary)          → full row shape + contact
+//      decoration  (back-compat with the Applications.jsx + AdvisorDashboard
+//      .jsx pages that destructure `a.contact.name` / `a.contact.email`
+//      / `a.contact.phone` directly).
+//   2. ?fields=summary                        → slim row shape, NO contact
+//      decoration, NO PII columns (rejectionHistoryJson, outcomeReason,
+//      familySize, priorApplicationId, recoveryProgramId, updatedAt,
+//      tenantId).
+//   3. Non-exact ?fields values               → fall through to full shape
+//      (strict equality, mirrors slices 1-51 + S42).
+//
+// The default-stays-full direction matches the 52 prior #920 slices' opt-in
+// shape (and PRD §10's residual contract). When the load-bearing privacy
+// review eventually flips the default to slim (see PRD FR-3.5.a), this
+// describe block's "default = full" assertions are the canonical signal
+// that future cross-cutting change will be a true breaking flip — author
+// the cross-cutting audit at that time.
+test.describe("Visa Sure applications — slim shape (?fields=summary)", () => {
+  test("default (no ?fields=summary) → full row shape + contact decoration", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) {
+      test.skip(true, "yasin@travelstall.in not seeded — skipping slim default-shape test");
+      return;
+    }
+    const r = await get(request, token, "/api/travel/visa/applications?limit=5");
+    expect(r.status()).toBe(200);
+    const body = await r.json();
+    expect(Array.isArray(body.applications)).toBe(true);
+    if (body.applications.length === 0) {
+      test.skip(
+        true,
+        "no visa applications on this stack — slim/full shape contrast unreachable without seed",
+      );
+      return;
+    }
+
+    // Default shape — every row must carry the FULL VisaApplication
+    // surface PLUS the `contact` decoration. We pin the keys that the
+    // frontend Applications.jsx page destructures directly; if any of
+    // these vanish from the default payload, the page breaks.
+    for (const a of body.applications) {
+      expect(a).toHaveProperty("id");
+      expect(a).toHaveProperty("contactId");
+      expect(a).toHaveProperty("applicationType");
+      expect(a).toHaveProperty("destinationCountry");
+      expect(a).toHaveProperty("status");
+      expect(a).toHaveProperty("readinessLevel");
+      expect(a).toHaveProperty("advisorRiskFlag");
+      expect(a).toHaveProperty("complexCase");
+      expect(a).toHaveProperty("createdAt");
+      // updatedAt + tenantId are part of the default row shape.
+      expect(a).toHaveProperty("updatedAt");
+      expect(a).toHaveProperty("tenantId");
+      // Contact decoration — the load-bearing default for the
+      // Applications page picker.
+      expect(a).toHaveProperty("contact");
+      if (a.contact !== null) {
+        expect(a.contact).toHaveProperty("id");
+        expect(a.contact).toHaveProperty("name");
+        // email + phone may be null in the seed but the KEY must exist.
+        expect(a.contact).toHaveProperty("email");
+        expect(a.contact).toHaveProperty("phone");
+      }
+    }
+  });
+
+  test("?fields=summary → slim row shape, NO contact decoration, NO PII columns", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) {
+      test.skip(true, "yasin@travelstall.in not seeded — skipping slim shape test");
+      return;
+    }
+    const r = await get(
+      request,
+      token,
+      "/api/travel/visa/applications?fields=summary&limit=5",
+    );
+    expect(r.status()).toBe(200);
+    const body = await r.json();
+
+    // Envelope still has the four list keys (slim is opt-in for the row
+    // shape; the envelope contract is independent).
+    expect(body).toHaveProperty("applications");
+    expect(body).toHaveProperty("total");
+    expect(body).toHaveProperty("limit");
+    expect(body).toHaveProperty("offset");
+    expect(Array.isArray(body.applications)).toBe(true);
+
+    if (body.applications.length === 0) {
+      test.skip(
+        true,
+        "no visa applications on this stack — per-row slim-shape pin unreachable without seed",
+      );
+      return;
+    }
+
+    for (const a of body.applications) {
+      // ── Slim shape — keys that MUST be present ─────────────────
+      expect(a).toHaveProperty("id");
+      expect(a).toHaveProperty("contactId");
+      expect(a).toHaveProperty("applicationType");
+      expect(a).toHaveProperty("destinationCountry");
+      expect(a).toHaveProperty("status");
+      expect(a).toHaveProperty("createdAt");
+
+      // ── PII / sensitive keys that MUST be absent on the slim path ─
+      //
+      // These are the load-bearing absences the slim shape exists to
+      // enforce. If any of these slip back into the response, the
+      // slice's privacy contract is broken.
+      expect(a).not.toHaveProperty("rejectionHistoryJson");
+      expect(a).not.toHaveProperty("outcomeReason");
+      expect(a).not.toHaveProperty("familySize");
+      expect(a).not.toHaveProperty("priorApplicationId");
+      expect(a).not.toHaveProperty("recoveryProgramId");
+      expect(a).not.toHaveProperty("tenantId");
+      expect(a).not.toHaveProperty("updatedAt");
+
+      // ── Contact decoration MUST be skipped on the slim path ────
+      //
+      // This is the OTHER load-bearing assertion — the route's
+      // post-query `.map(a => ({...a, contact}))` decoration would
+      // otherwise smuggle contact.name / contact.email / contact.phone
+      // back into the slim payload via the post-Prisma step.
+      expect(a).not.toHaveProperty("contact");
+    }
+  });
+
+  test("?fields=summary respects status filter (slim path + filter)", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) {
+      test.skip(true, "yasin@travelstall.in not seeded — skipping slim + filter test");
+      return;
+    }
+    const r = await get(
+      request,
+      token,
+      "/api/travel/visa/applications?fields=summary&status=intake&limit=10",
+    );
+    expect(r.status()).toBe(200);
+    const body = await r.json();
+    expect(Array.isArray(body.applications)).toBe(true);
+    for (const a of body.applications) {
+      expect(a.status).toBe("intake");
+      // Slim contract continues to hold under filter.
+      expect(a).not.toHaveProperty("rejectionHistoryJson");
+      expect(a).not.toHaveProperty("contact");
+    }
+  });
+
+  test("?fields=Summary (wrong case) → falls through to full shape", async ({ request }) => {
+    // Strict-equality opt-in: anything that isn't the literal lowercase
+    // string "summary" falls through to full. Mirrors the contract pinned
+    // in the prior 52 slices' specs.
+    const token = await getTravelAdmin(request);
+    if (!token) {
+      test.skip(true, "yasin@travelstall.in not seeded — skipping case-strict test");
+      return;
+    }
+    const r = await get(
+      request,
+      token,
+      "/api/travel/visa/applications?fields=Summary&limit=5",
+    );
+    expect(r.status()).toBe(200);
+    const body = await r.json();
+    if (body.applications.length === 0) {
+      test.skip(
+        true,
+        "no visa applications on this stack — case-strict slim assertion unreachable",
+      );
+      return;
+    }
+    // Case-mismatched value → full shape returns (contact decoration
+    // present, tenantId + updatedAt present).
+    for (const a of body.applications) {
+      expect(a).toHaveProperty("contact");
+      expect(a).toHaveProperty("tenantId");
+      expect(a).toHaveProperty("updatedAt");
+    }
+  });
+
+  test("?fields=full → full shape (explicit opt-out is a no-op)", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) {
+      test.skip(true, "yasin@travelstall.in not seeded — skipping ?fields=full test");
+      return;
+    }
+    const r = await get(
+      request,
+      token,
+      "/api/travel/visa/applications?fields=full&limit=5",
+    );
+    expect(r.status()).toBe(200);
+    const body = await r.json();
+    if (body.applications.length === 0) {
+      test.skip(
+        true,
+        "no visa applications on this stack — explicit ?fields=full assertion unreachable",
+      );
+      return;
+    }
+    for (const a of body.applications) {
+      // Explicit full opt-out matches the default — contact decoration
+      // present, tenantId + updatedAt present.
+      expect(a).toHaveProperty("contact");
+      expect(a).toHaveProperty("tenantId");
+      expect(a).toHaveProperty("updatedAt");
+    }
+  });
+});

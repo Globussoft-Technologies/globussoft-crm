@@ -217,6 +217,81 @@ const PROJECTIONS = Object.freeze({
     // sensitive personal data.
   }),
 
+  // ── Visa Sure applications (Phase 3 — PII surface) ──────────────────
+  //
+  // Slice S43 — VisaApplication slim list shape. The visa-applications
+  // list endpoint (GET /api/travel/visa/applications) carries identity-
+  // bearing data: contactId (FK back to a Contact whose PII the route
+  // decorates onto the row via `.map(a => ({...a, contact}))`),
+  // applicationType / destinationCountry (travel-intent metadata),
+  // status / readinessLevel / advisorRiskFlag (workflow keys), plus the
+  // load-bearing PII drop targets — rejectionHistoryJson (@db.Text, can
+  // embed prior visa-refusal reasons), outcomeReason (@db.Text, decision
+  // narrative), familySize (dependent count — PC-8 risk-flag input), and
+  // priorApplicationId (the recovery-FK linking to a prior rejected app).
+  //
+  // The list endpoint's MOST sensitive payload component is the contact
+  // decoration (the route adds `{...a, contact: {id, name, email, phone}}`
+  // after the Prisma findMany). The slim path's load-bearing semantic is
+  // that the route MUST skip the decoration when this projection is
+  // applied — otherwise the SQL-level column drop is bypassed by the
+  // post-query enrichment. The adoption rule:
+  //
+  //   if (slim) { findManyArgs.select = listProjection('VisaApplication', false);
+  //               rows = await prisma.visaApplication.findMany(findManyArgs);
+  //               return rows;  // ← no contact decoration
+  //   } else    { rows = await prisma.visaApplication.findMany(findManyArgs);
+  //               return rows.map((a) => ({ ...a, contact: contactById.get(a.contactId) || null }));
+  //   }
+  //
+  // Same shape as MarketplaceLead's `contact` include-skip pattern (the
+  // contact PII is fetch-via-separate-endpoint on the slim path).
+  VisaApplication: Object.freeze({
+    id: true,
+    contactId: true,        // FK only — contact PII follows the GET /:id
+                            // detail endpoint (which the picker row-click
+                            // navigates to) rather than riding the list.
+    applicationType: true,  // tourist | business | student | work | umrah |
+                            // hajj — picker chip; non-PII catalogue value.
+    destinationCountry: true, // ISO-3166-1 alpha-2 code (US, AE, ...) —
+                            // catalogue value; non-PII.
+    status: true,           // intake | docs-pending | filed | approved |
+                            // rejected | appeal — filter UI's pivot column.
+    readinessLevel: true,   // 1-4 numeric tier from the diagnostic —
+                            // non-PII workflow signal.
+    advisorRiskFlag: true,  // null | low | medium | high | priority —
+                            // workflow chip; non-PII.
+    complexCase: true,      // boolean — workflow chip; non-PII.
+    filedAt: true,          // timestamp — sort key for the filed-queue UI.
+    decidedAt: true,        // timestamp — sort key for the outcomes UI.
+    outcome: true,          // null | approved | rejected — workflow chip;
+                            // non-PII (the WHY is in outcomeReason which
+                            // is dropped).
+    createdAt: true,        // default-sort stability for the picker.
+    // Intentionally DROPPED:
+    //   rejectionHistoryJson (@db.Text) — embeds prior rejection reasons /
+    //     destinations / dates → identifiable travel history.
+    //   outcomeReason (@db.Text) — decision narrative; may quote the
+    //     embassy's case-by-case reasoning + applicant personal context.
+    //   familySize — dependent count; demographic metadata (PC-8 risk
+    //     engine input but not picker-relevant).
+    //   priorApplicationId — recovery-FK; surfaces the existence of a
+    //     prior rejected application by this same applicant. Useful in
+    //     detail UI; not safe for list payload because it reveals
+    //     rejection history via the FK chain alone.
+    //   recoveryProgramId — FK to a future RejectionRecoveryProgram model;
+    //     same rejection-history-revealing risk class.
+    //   tenantId — strip per repo-wide stripDangerous convention; the
+    //     payload is already tenant-scoped by the route's where clause.
+    //   updatedAt — admin/audit metadata; detail endpoint surfaces it.
+    //
+    // NOTE: the route MUST also skip the post-query
+    // `.map(a => ({...a, contact: contactById.get(a.contactId)}))`
+    // decoration on the slim path — that decoration is what would
+    // otherwise re-introduce contact.name / contact.email / contact.phone
+    // into the payload AFTER the SQL drop.
+  }),
+
   // ── Multi-channel inbound lead ingestion ─────────────────────────────
   MarketplaceLead: Object.freeze({
     id: true,

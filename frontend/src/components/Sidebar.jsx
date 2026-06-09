@@ -118,6 +118,13 @@ import {
   // Reusable itinerary template scaffolds — placed adjacent to Sightseeing
   // Master because both are #907 admin pages.
   LayoutTemplate,
+  // S49 (TRAVEL_BIG_SCOPE_BACKLOG) — QuoteTemplates nav entry icon. Stack
+  // of templates motif; sibling to FileText (Quotes). ADMIN+MANAGER gated.
+  FileStack,
+  // S55 (TRAVEL_BIG_SCOPE_BACKLOG) — CancellationPolicies nav entry icon.
+  // Ban-circle motif matches cancellation / refund semantics. ADMIN+MANAGER
+  // gated to mirror the backend POST/PATCH RBAC posture.
+  Ban,
 } from "lucide-react";
 import { AuthContext } from "../App";
 import { fetchApi } from "../utils/api";
@@ -1557,12 +1564,40 @@ function renderTravelNav({
           label="Quote Builder"
         />
       )}
+      {/* S49 (TRAVEL_BIG_SCOPE_BACKLOG) — QuoteTemplates admin nav entry.
+          Sits in the Quotes cluster (under Quote Builder) because it's a
+          pre-filled-line-set library that operators apply to new quotes.
+          ADMIN+MANAGER visible; the page enforces its own canWrite/Delete
+          gates server-side. SUT page commit 8fb23237 (S31). FileStack icon
+          picked for the "stack of reusable templates" motif (FileText taken
+          by Quotes; LayoutTemplate taken by Itinerary Templates). */}
+      {isManager && (
+        <Link
+          to="/travel/quote-templates"
+          icon={FileStack}
+          label="Quote Templates"
+        />
+      )}
       <Link to="/travel/invoices-admin" icon={Receipt} label="Invoices" />
       {/* Arc 2 #901 slice 7 — cross-invoice payment-milestone dashboard
           (consumes /api/travel/payment-schedules/upcoming). Billing-adjacent
           slot under Invoices is the right home: operator surface for
           upcoming/overdue milestones across all travel invoices. */}
       <Link to="/travel/milestones" icon={Clock} label="Milestones" />
+      {/* S55 (TRAVEL_BIG_SCOPE_BACKLOG) — CancellationPolicies admin nav
+          entry. Sits in the Invoices/Milestones billing cluster because
+          cancellation policies drive auto-issuance of credit notes when an
+          invoice is voided (S33 wire-in). ADMIN+MANAGER visible; the page
+          surfaces a Trash icon ADMIN-only mirroring the backend DELETE
+          verifyRole(["ADMIN"]) gate. SUT page commit 4823b160 (S54). Ban
+          icon picked for the cancellation/refund motif. */}
+      {isManager && (
+        <Link
+          to="/travel/cancellation-policies"
+          icon={Ban}
+          label="Cancellation Policies"
+        />
+      )}
       {isAdmin && (
         <Link to="/travel/suppliers" icon={Key} label="Supplier credentials" />
       )}

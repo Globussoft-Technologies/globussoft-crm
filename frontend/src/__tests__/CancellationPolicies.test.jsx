@@ -661,4 +661,28 @@ describe('validateTiers + renderTierPreview — pure helpers', () => {
       'at 60+d → 100% refund; at 30-59d → 50% refund; at <30d → 25% refund',
     );
   });
+
+  // S55 (TRAVEL_BIG_SCOPE_BACKLOG) — App.jsx route registration pin. S54
+  // shipped this page but did not touch App.jsx (shared-file hazard); S55
+  // wires it in. Without this assertion the lazy import + Route could be
+  // silently dropped in a future App.jsx refactor and the page would 404
+  // for users navigating from the Sidebar.
+  describe('S55 — App.jsx route registration', () => {
+    it('registers TravelCancellationPolicies lazy import + Route path="travel/cancellation-policies"', async () => {
+      const { readFileSync } = await import('node:fs');
+      const path = await import('node:path');
+      const appSrc = readFileSync(
+        path.resolve(__dirname, '../App.jsx'),
+        'utf-8',
+      );
+      // Lazy import — module path must point at the SUT.
+      expect(appSrc).toMatch(
+        /lazy\(\(\) => import\(['"]\.\/pages\/travel\/CancellationPolicies['"]\)\)/,
+      );
+      // Route path — registered under the travel cluster.
+      expect(appSrc).toMatch(/path=["']travel\/cancellation-policies["']/);
+      // Wrapped in TravelOnly so non-travel-tenant hits bounce.
+      expect(appSrc).toMatch(/<TravelOnly><TravelCancellationPolicies \/><\/TravelOnly>/);
+    });
+  });
 });

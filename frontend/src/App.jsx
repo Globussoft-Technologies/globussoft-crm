@@ -192,6 +192,16 @@ const TravelSightseeingMaster = lazy(() => import("./pages/travel/SightseeingMas
 // shipped slice 7 (f8768836); this lazy import + Route below register the
 // admin-facing CRUD surface for reusable itinerary templates.
 const TravelItineraryTemplates = lazy(() => import("./pages/travel/ItineraryTemplates"));
+// S49 (TRAVEL_BIG_SCOPE_BACKLOG) — App.jsx route registration for the S31
+// QuoteTemplates admin page (frontend/src/pages/travel/QuoteTemplates.jsx,
+// commit 8fb23237). Sibling to ItineraryTemplates above. Without this lazy
+// import + Route below, the page is unreachable from the running app.
+const TravelQuoteTemplates = lazy(() => import("./pages/travel/QuoteTemplates"));
+// S55 (TRAVEL_BIG_SCOPE_BACKLOG) — App.jsx route registration for the S54
+// CancellationPolicies admin page (frontend/src/pages/travel/CancellationPolicies.jsx,
+// commit 4823b160). Sibling to QuoteTemplates above; both are travel admin
+// CRUD surfaces that mirror the QuotesAdmin / InvoicesAdmin pattern.
+const TravelCancellationPolicies = lazy(() => import("./pages/travel/CancellationPolicies"));
 const TravelLeads = lazy(() => import("./pages/travel/Leads"));
 const TravelPricingRules = lazy(() => import("./pages/travel/PricingRules"));
 const TravelReports = lazy(() => import("./pages/travel/Reports"));
@@ -1331,6 +1341,26 @@ export default function App() {
                   CRUD surface. Adjacent to sightseeing because both are #907
                   admin pages. SUT page commit f8768836. */}
               <Route path="travel/itinerary-templates" element={<TravelOnly><TravelItineraryTemplates /></TravelOnly>} />
+              {/* S49 (TRAVEL_BIG_SCOPE_BACKLOG) — QuoteTemplates admin
+                  route registration. SUT page commit 8fb23237 (S31). Sits
+                  adjacent to ItineraryTemplates because both are reusable-
+                  template admin surfaces. Backend route mounted as
+                  /api/travel/quote-templates (S48, commit 32630ec1).
+                  No RoleGuard wrap — page is view-by-default for any
+                  logged-in travel-tenant user; write gates (canWrite for
+                  POST/PATCH; Delete for ADMIN-only) live inside the page,
+                  mirroring the QuotesAdmin / InvoicesAdmin convention. */}
+              <Route path="travel/quote-templates" element={<TravelOnly><TravelQuoteTemplates /></TravelOnly>} />
+              {/* S55 (TRAVEL_BIG_SCOPE_BACKLOG) — CancellationPolicies
+                  admin route registration. SUT page commit 4823b160 (S54).
+                  Sits adjacent to QuoteTemplates because both are tenant-
+                  policy admin CRUD surfaces. Backend route mounted as
+                  /api/travel/cancellation-policies (S53, commit 7e6a98b1).
+                  No RoleGuard wrap — page is view-by-default for any
+                  logged-in travel-tenant user; write gates (canWrite for
+                  POST/PATCH; Delete for ADMIN-only) live inside the page,
+                  mirroring the QuotesAdmin / InvoicesAdmin convention. */}
+              <Route path="travel/cancellation-policies" element={<TravelOnly><TravelCancellationPolicies /></TravelOnly>} />
               <Route path="travel/leads" element={<TravelOnly><TravelLeads /></TravelOnly>} />
               <Route path="travel/rfu/customers/:contactId" element={<TravelOnly><TravelRfuCustomerProfile /></TravelOnly>} />
               <Route path="travel/pricing-rules" element={<TravelOnly><TravelPricingRules /></TravelOnly>} />

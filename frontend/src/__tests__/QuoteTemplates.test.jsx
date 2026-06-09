@@ -485,4 +485,32 @@ describe('<QuoteTemplates /> — edit + delete flows', () => {
     );
     expect(del).toBeUndefined();
   });
+
+  // S49 (TRAVEL_BIG_SCOPE_BACKLOG) — App.jsx route registration pin. S31
+  // shipped this page but did not touch App.jsx (shared-file hazard); S49
+  // wires it in. Without this assertion the lazy import + Route could be
+  // silently dropped in a future App.jsx refactor and the page would 404
+  // for users navigating from the Sidebar — RTL render here would still
+  // pass because it renders the page directly.
+  describe('S49 — App.jsx route registration', () => {
+    it('registers TravelQuoteTemplates lazy import + Route path="travel/quote-templates"', async () => {
+      // Static-grep the App.jsx source. Verifies the lazy() factory points
+      // at the QuoteTemplates module + a <Route ...> entry with the right
+      // path is present. Catches a refactor that renames either side.
+      const { readFileSync } = await import('node:fs');
+      const path = await import('node:path');
+      const appSrc = readFileSync(
+        path.resolve(__dirname, '../App.jsx'),
+        'utf-8',
+      );
+      // Lazy import — module path must point at the SUT.
+      expect(appSrc).toMatch(
+        /lazy\(\(\) => import\(['"]\.\/pages\/travel\/QuoteTemplates['"]\)\)/,
+      );
+      // Route path — registered under the travel cluster.
+      expect(appSrc).toMatch(/path=["']travel\/quote-templates["']/);
+      // Wrapped in TravelOnly so non-travel-tenant hits bounce.
+      expect(appSrc).toMatch(/<TravelOnly><TravelQuoteTemplates \/><\/TravelOnly>/);
+    });
+  });
 });

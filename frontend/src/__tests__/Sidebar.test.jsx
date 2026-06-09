@@ -1360,4 +1360,51 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(screen.queryByText('My Transactions')).toBeNull();
     });
   });
+
+  // ── S49 + S55 (TRAVEL_BIG_SCOPE_BACKLOG) — App.jsx route + Sidebar
+  //    nav entry wirings for QuoteTemplates.jsx + CancellationPolicies.jsx.
+  //    Both entries are wrapped in `isManager` so ADMIN + MANAGER see them
+  //    but USER does NOT. Hrefs pin the route paths that App.jsx registers
+  //    (`/travel/quote-templates` + `/travel/cancellation-policies`) so a
+  //    future App.jsx rename would be caught here in addition to in the
+  //    page-specific test files.
+  describe('Travel vertical — S49 + S55 admin entries (QuoteTemplates + CancellationPolicies)', () => {
+    it('renders Quote Templates nav entry with href /travel/quote-templates for ADMIN', () => {
+      renderSidebar({ vertical: 'travel', role: 'ADMIN' });
+      const link = screen.getByText('Quote Templates').closest('a');
+      expect(link).toBeTruthy();
+      expect(link.getAttribute('href')).toBe('/travel/quote-templates');
+    });
+
+    it('renders Quote Templates nav entry for MANAGER under travel', () => {
+      renderSidebar({ vertical: 'travel', role: 'MANAGER' });
+      const link = screen.getByText('Quote Templates').closest('a');
+      expect(link).toBeTruthy();
+      expect(link.getAttribute('href')).toBe('/travel/quote-templates');
+    });
+
+    it('hides Quote Templates nav entry for USER role under travel', () => {
+      renderSidebar({ vertical: 'travel', role: 'USER' });
+      expect(screen.queryByText('Quote Templates')).toBeNull();
+    });
+
+    it('renders Cancellation Policies nav entry with href /travel/cancellation-policies for ADMIN', () => {
+      renderSidebar({ vertical: 'travel', role: 'ADMIN' });
+      const link = screen.getByText('Cancellation Policies').closest('a');
+      expect(link).toBeTruthy();
+      expect(link.getAttribute('href')).toBe('/travel/cancellation-policies');
+    });
+
+    it('renders Cancellation Policies nav entry for MANAGER under travel', () => {
+      renderSidebar({ vertical: 'travel', role: 'MANAGER' });
+      const link = screen.getByText('Cancellation Policies').closest('a');
+      expect(link).toBeTruthy();
+      expect(link.getAttribute('href')).toBe('/travel/cancellation-policies');
+    });
+
+    it('hides Cancellation Policies nav entry for USER role under travel', () => {
+      renderSidebar({ vertical: 'travel', role: 'USER' });
+      expect(screen.queryByText('Cancellation Policies')).toBeNull();
+    });
+  });
 });

@@ -396,18 +396,29 @@ function allowIframeEmbedding({ allowList } = {}) {
 }
 
 // #921 slice S4 (FR-3.6) — convenience: read per-tenant allowlist from the
-// (yet-to-be-added) Tenant.embedAllowlistJson column. Today returns null
-// (column doesn't exist); once the column lands in a future schema slice,
-// this is the single read site to update. Falls back to wildcard.
-async function readTenantEmbedAllowlist(_prisma, _tenantId) {
-  // FOLLOW-UP: when Tenant.embedAllowlistJson column lands, replace this
-  // with:
-  //   const t = await prisma.tenant.findUnique({
-  //     where: { id: tenantId },
-  //     select: { embedAllowlistJson: true },
-  //   });
-  //   return t?.embedAllowlistJson ? JSON.parse(t.embedAllowlistJson) : null;
-  return null;
+// Tenant.embedAllowlistJson column. Returns an array of allowed-origin strings
+// when the column is populated with a valid JSON array; null otherwise (no
+// per-tenant override → caller falls back to wildcard or route-level allowList).
+//
+// Slice S39 (2026-06-10) wired this to the real Prisma read after the column
+// landed; pre-S39 this stub returned null unconditionally. The signature
+// `(prisma, tenantId)` is preserved so existing callers don't need updates —
+// the dependency-injected `prisma` keeps the function unit-testable without
+// monkey-patching the module-level `prisma` import.
+async function readTenantEmbedAllowlist(prisma, tenantId) {
+  try {
+    if (!prisma || !tenantId) return null;
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { embedAllowlistJson: true },
+    });
+    if (!tenant || !tenant.embedAllowlistJson) return null;
+    const parsed = JSON.parse(tenant.embedAllowlistJson);
+    return Array.isArray(parsed) ? parsed : null;
+  } catch (err) {
+    console.warn('[readTenantEmbedAllowlist] failed:', err.message);
+    return null;
+  }
 }
 
 module.exports = {

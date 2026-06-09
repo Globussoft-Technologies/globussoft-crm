@@ -105,6 +105,11 @@ prisma.travelDiagnostic = {
   update: vi.fn(),
   count: vi.fn(),
 };
+// FR-5 curriculum-fit lookup delegate.
+prisma.travelCurriculumMapping = {
+  ...(prisma.travelCurriculumMapping || {}),
+  findMany: vi.fn(),
+};
 prisma.contact = {
   ...(prisma.contact || {}),
   findUnique: vi.fn(),
@@ -192,6 +197,7 @@ beforeEach(() => {
   });
   prisma.travelDiagnostic.update.mockReset().mockResolvedValue({ id: 500 });
   prisma.travelDiagnostic.count.mockReset().mockResolvedValue(0);
+  prisma.travelCurriculumMapping.findMany.mockReset().mockResolvedValue([]);
   prisma.contact.findUnique.mockReset().mockResolvedValue(null);
   prisma.contact.findFirst.mockReset().mockResolvedValue(null);
   prisma.contact.create.mockReset().mockResolvedValue({ id: 900, tenantId: 1 });
@@ -450,6 +456,102 @@ describe('POST /diagnostics (submit)', () => {
       bankVersion: 1,
       questionsJson: QUESTIONS_JSON,
     });
+  });
+});
+
+// ─── POST /diagnostics — FR-5 curriculum-fit recommendations (TMC) ─────
+
+describe('POST /diagnostics — curriculum-fit recommendations (FR-5)', () => {
+  const MAPPING_ROWS = [
+    { id: 1, subject: 'Geography', learningOutcome: 'Glacial landforms', fitRationale: 'Alps glaciation', destinationLabel: 'Switzerland + Austria', destinationId: null, fitScore: 80 },
+    { id: 3, subject: 'Geography', learningOutcome: 'River systems', fitRationale: 'Rhine basin', destinationLabel: 'Switzerland + Austria', destinationId: null, fitScore: 90 },
+    { id: 2, subject: 'Geography', learningOutcome: 'Plate tectonics', fitRationale: 'Iceland rifts', destinationLabel: 'Italy + Iceland', destinationId: null, fitScore: 70 },
+  ];
+
+  test('TMC submit WITH curriculum/grade/subject → ranked recommendations + cached on the row', async () => {
+    prisma.travelDiagnosticQuestionBank.findFirst.mockResolvedValue(bankRow()); // subBrand tmc
+    prisma.travelCurriculumMapping.findMany.mockResolvedValue(MAPPING_ROWS);
+    const res = await request(makeApp())
+      .post('/api/travel/diagnostics')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ bankId: 100, answers: { budget: 'high' }, curriculum: 'CBSE', grade: 'Class 9', subject: 'Geography' });
+    expect(res.status).toBe(201);
+    // Aggregated by destination, ranked by AVG fitScore desc.
+    // Switzerland avg(80,90)=85 ranks above Italy avg(70)=70.
+    expect(res.body.recommendations[0]).toMatchObject({ destination: 'Switzerland + Austria', fitScore: 85 });
+    expect(res.body.recommendations[0].reasons.length).toBe(2);
+    expect(res.body.recommendations[1]).toMatchObject({ destination: 'Italy + Iceland', fitScore: 70 });
+    // Lookup scoped to tenant + active + curriculum context.
+    const fbArgs = prisma.travelCurriculumMapping.findMany.mock.calls[0][0];
+    expect(fbArgs.where).toMatchObject({ tenantId: 1, isActive: true, curriculum: 'CBSE', grade: 'Class 9', subject: 'Geography' });
+    // Snapshot cached on the diagnostic row (FR-6).
+    const createData = prisma.travelDiagnostic.create.mock.calls[0][0].data;
+    expect(typeof createData.curriculumFitJson).toBe('string');
+    expect(JSON.parse(createData.curriculumFitJson).recommendations[0].destination).toBe('Switzerland + Austria');
+  });
+
+  test('TMC submit WITHOUT curriculum context → no recommendations, no lookup, null cache', async () => {
+    prisma.travelDiagnosticQuestionBank.findFirst.mockResolvedValue(bankRow());
+    const res = await request(makeApp())
+      .post('/api/travel/diagnostics')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ bankId: 100, answers: { budget: 'high' } });
+    expect(res.status).toBe(201);
+    expect(res.body.recommendations).toEqual([]);
+    expect(prisma.travelCurriculumMapping.findMany).not.toHaveBeenCalled();
+    expect(prisma.travelDiagnostic.create.mock.calls[0][0].data.curriculumFitJson).toBeNull();
+  });
+
+  test('non-TMC sub-brand with curriculum fields → curriculum lookup is skipped', async () => {
+    prisma.travelDiagnosticQuestionBank.findFirst.mockResolvedValue(bankRow({ subBrand: 'rfu' }));
+    const res = await request(makeApp())
+      .post('/api/travel/diagnostics')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ bankId: 100, answers: { budget: 'high' }, curriculum: 'CBSE', grade: 'Class 9' });
+    expect(res.status).toBe(201);
+    expect(res.body.recommendations).toEqual([]);
+    expect(prisma.travelCurriculumMapping.findMany).not.toHaveBeenCalled();
+  });
+});
+
+// ─── POST /diagnostics/:id/report-pdf/regen ───────────────────────────
+
+describe('POST /diagnostics/:id/report-pdf/regen', () => {
+  test('regenerates the branded PDF + returns a fresh reportPdfUrl', async () => {
+    prisma.travelDiagnostic.findFirst.mockResolvedValue({
+      id: 500,
+      tenantId: 1,
+      subBrand: 'tmc',
+      contactId: null,
+      questionsJson: JSON.stringify({ bankId: 100, bankVersion: 1, questionsJson: QUESTIONS_JSON }),
+    });
+    const res = await request(makeApp())
+      .post('/api/travel/diagnostics/500/report-pdf/regen')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({});
+    expect(res.status).toBe(200);
+    expect(res.body.reportPdfUrl).toMatch(/^\/uploads\/diagnostics\/diag-500-/);
+    expect(pdfRenderer.renderTravelDiagnosticPdf).toHaveBeenCalledTimes(1);
+  });
+
+  test('404 when the diagnostic does not exist', async () => {
+    prisma.travelDiagnostic.findFirst.mockResolvedValue(null);
+    const res = await request(makeApp())
+      .post('/api/travel/diagnostics/999/report-pdf/regen')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({});
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('NOT_FOUND');
+    expect(pdfRenderer.renderTravelDiagnosticPdf).not.toHaveBeenCalled();
+  });
+
+  test('400 on a non-numeric id', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/diagnostics/abc/report-pdf/regen')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({});
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_ID');
   });
 });
 

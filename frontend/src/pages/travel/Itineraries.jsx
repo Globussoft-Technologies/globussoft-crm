@@ -12,13 +12,20 @@
 // the message. Itineraries can still be drafted from a Deal page once
 // the Day 7 Deal-extension CTA lands.
 
-import { useEffect, useState } from "react";
+import { useContext, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Map, Filter, Plane, Hotel, MapPin, Briefcase, FileText, Shield, Plus, X,
 } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
+import { AuthContext } from "../../App";
+import { useActiveSubBrand } from "../../utils/subBrand";
+import {
+  accessibleSubBrands,
+  defaultSubBrandFor,
+  subBrandShortLabel,
+} from "../../utils/travelSubBrand";
 
 const SUB_BRANDS = [
   { value: "", label: "All sub-brands" },
@@ -106,6 +113,13 @@ function TierBadge({ tier }) {
 export default function Itineraries() {
   const notify = useNotify();
   const navigate = useNavigate();
+  const { user } = useContext(AuthContext) || {};
+  const { activeSubBrand } = useActiveSubBrand();
+  // Sub-brands this user may create itineraries under. Single-brand users
+  // are locked to their one brand (read-only field); multi-brand users get
+  // a dropdown limited to THEIR brands. See defaultSubBrandFor.
+  const myBrands = accessibleSubBrands(user);
+  const lockedBrand = myBrands.length === 1 ? myBrands[0] : null;
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [subBrand, setSubBrand] = useState("");
@@ -116,7 +130,7 @@ export default function Itineraries() {
   const [contacts, setContacts] = useState([]);
 
   const openCreate = () => {
-    setForm(EMPTY_FORM);
+    setForm({ ...EMPTY_FORM, subBrand: defaultSubBrandFor(user, activeSubBrand) });
     setCreating(true);
     fetchApi("/api/contacts?limit=200")
       .then((res) => setContacts(Array.isArray(res) ? res : (res?.contacts || [])))
@@ -341,15 +355,28 @@ export default function Itineraries() {
               </label>
               <label style={fieldLabel}>
                 Sub-brand
-                <select
-                  value={form.subBrand}
-                  onChange={(e) => setForm({ ...form, subBrand: e.target.value })}
-                  style={inputStyle}
-                >
-                  {SUB_BRANDS.filter((s) => s.value).map((s) => (
-                    <option key={s.value} value={s.value}>{s.label}</option>
-                  ))}
-                </select>
+                {lockedBrand ? (
+                  // Single-brand users can't change sub-brand — the value
+                  // is already pinned in form.subBrand via defaultSubBrandFor.
+                  <input
+                    type="text"
+                    value={subBrandShortLabel(lockedBrand)}
+                    readOnly
+                    disabled
+                    aria-label="Sub-brand (locked to your assigned brand)"
+                    style={{ ...inputStyle, opacity: 0.7, cursor: "not-allowed" }}
+                  />
+                ) : (
+                  <select
+                    value={form.subBrand}
+                    onChange={(e) => setForm({ ...form, subBrand: e.target.value })}
+                    style={inputStyle}
+                  >
+                    {myBrands.map((b) => (
+                      <option key={b} value={b}>{subBrandShortLabel(b)}</option>
+                    ))}
+                  </select>
+                )}
               </label>
               <label style={fieldLabel}>
                 Destination

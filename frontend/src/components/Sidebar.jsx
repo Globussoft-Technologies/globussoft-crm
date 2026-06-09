@@ -431,6 +431,24 @@ const Sidebar = ({
       navRef.current.scrollTop = scrollRef.current;
     }
   }, []);
+  // Self-heal a stale/invalid active sub-brand. The selection persists in
+  // sessionStorage, which SURVIVES a logout→login in the SAME tab — so an
+  // admin who picked "RFU", logged out, and logged back in as a TMC-only
+  // manager would inherit activeSubBrand="rfu". Since that manager can't
+  // access RFU, the brand-scoped nav would then hide ALL their own items
+  // (including "TMC Trips") and the dashboard would scope to a brand they
+  // don't own. When the persisted brand isn't in the current user's access
+  // set, reset it to "All". Travel-only; generic/wellness never set a brand.
+  useEffect(() => {
+    if (
+      isTravel &&
+      activeSubBrand &&
+      subBrandAccess !== null &&
+      !subBrandAccess.includes(activeSubBrand)
+    ) {
+      setActiveSubBrand(null);
+    }
+  }, [isTravel, activeSubBrand, subBrandAccess, setActiveSubBrand]);
   const brand = tenant?.name || "Globussoft";
   const logoUrl = tenant?.logoUrl || null;
   const brandColor = tenant?.brandColor || null;
@@ -808,6 +826,14 @@ const Sidebar = ({
           </h1>
         </div>
 
+        {isTravel &&
+          renderTravelSubBrandHeader({
+            sectionLabelStyle,
+            subBrandAccess,
+            activeSubBrand,
+            setActiveSubBrand,
+          })}
+
         <nav
           ref={navRef}
           onScroll={(e) => {
@@ -845,7 +871,6 @@ const Sidebar = ({
                   counts,
                   subBrandAccess,
                   activeSubBrand,
-                  setActiveSubBrand,
                 })
               : renderGenericNav({
                   Link,
@@ -1243,22 +1268,19 @@ function renderWellnessNav({
 // Microsites. For Day 1, only Dashboard is wired — everything else is
 // "Coming in Phase 1" so the user can see the planned navigation map
 // without dead links.
-function renderTravelNav({
-  Link,
-  isAdmin,
-  isManager,
+// Travel "Travel" section label + Q25 sub-brand switcher. Rendered in the
+// sidebar's FIXED header zone (outside the scrollable <nav>) so the switcher
+// stays reachable without scrolling back to the top. Only render the dropdown
+// when the user has full access (subBrandAccess === null, includes admins) or
+// access to ≥2 sub-brands — a single-sub-brand user has no choice to make.
+// Travel-only; generic/wellness sidebars never call this.
+function renderTravelSubBrandHeader({
   sectionLabelStyle,
-  counts = {},
   subBrandAccess = null,
   activeSubBrand = null,
   setActiveSubBrand = () => {},
 }) {
   const labelStyle = sectionLabelStyle || sectionLabel;
-  // Q25 sub-brand switcher. Only render the dropdown when the user
-  // either has full access (subBrandAccess === null, includes admins)
-  // or has access to ≥2 sub-brands — a single-sub-brand user has no
-  // choice to make, so the dropdown would be noise. Selecting "All"
-  // clears the active filter back to null.
   const ALL_SUB_BRANDS = [
     { value: "tmc", label: "TMC" },
     { value: "rfu", label: "RFU" },
@@ -1270,9 +1292,55 @@ function renderTravelNav({
       ? ALL_SUB_BRANDS
       : ALL_SUB_BRANDS.filter((s) => subBrandAccess.includes(s.value));
   const showSwitcher = visibleSubBrands.length >= 2;
+  // Single-brand scoped user (e.g. a TMC-only manager): there's nothing to
+  // switch between, so we don't render the dropdown — but we DO surface a
+  // static read-only chip so they can see which sub-brand they're scoped to
+  // ("TMC"). Full-access users (subBrandAccess === null) always get the
+  // switcher, never this chip.
+  const soleBrand =
+    !showSwitcher && subBrandAccess !== null && visibleSubBrands.length === 1
+      ? visibleSubBrands[0]
+      : null;
   return (
-    <>
+    <div style={{ flexShrink: 0 }}>
       <div style={labelStyle}>Travel</div>
+      {soleBrand && (
+        <div
+          style={{
+            padding: "4px 12px 8px",
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+          }}
+        >
+          <span
+            style={{
+              fontSize: 10,
+              color: "var(--text-secondary)",
+              textTransform: "uppercase",
+              letterSpacing: 0.5,
+            }}
+          >
+            Sub-brand
+          </span>
+          <span
+            style={{
+              flex: 1,
+              fontSize: 12,
+              fontWeight: 600,
+              padding: "4px 8px",
+              borderRadius: 4,
+              border: "1px solid var(--border-color)",
+              background: "var(--surface-color)",
+              color: "var(--text-primary)",
+            }}
+            data-testid="travel-sub-brand-sole"
+            aria-label={`Sub-brand: ${soleBrand.label}`}
+          >
+            {soleBrand.label}
+          </span>
+        </div>
+      )}
       {showSwitcher && (
         <div
           style={{
@@ -1341,6 +1409,45 @@ function renderTravelNav({
           </select>
         </div>
       )}
+    </div>
+  );
+}
+
+function renderTravelNav({
+  Link,
+  isAdmin,
+  isManager,
+  sectionLabelStyle,
+  counts = {},
+  subBrandAccess = null,
+  activeSubBrand = null,
+}) {
+  const labelStyle = sectionLabelStyle || sectionLabel;
+  // Brand-scoped nav (travel-only). Two layers gate a brand-tagged entry:
+  //   1. ACCESS — the user must be entitled to that sub-brand. Full-access
+  //      users (subBrandAccess === null, includes admins) see every brand; a
+  //      scoped user (e.g. a TMC-only manager with subBrandAccess=["tmc"])
+  //      only ever sees their granted brands' entries, regardless of the
+  //      switcher. This is why a TMC manager must NOT see the Travel Stall /
+  //      RFU / Visa Sure brand sections.
+  //   2. SWITCHER — when a specific sub-brand is active, narrow further to
+  //      just that brand; "All" (activeSubBrand === null) shows every brand
+  //      the user can access.
+  // Items with no brand tag are shared cross-brand surfaces (Diagnostics,
+  // Itineraries, Cost Master, Reports, …) and always render — their pages
+  // filter by the caller's access server-side. Does NOT touch the generic
+  // or wellness navs.
+  //
+  // The "Travel" section label + sub-brand switcher render OUTSIDE this
+  // scrollable nav (renderTravelSubBrandHeader, in the sidebar's fixed
+  // header zone) so the switcher stays reachable without scrolling up.
+  const canAccessBrand = (brand) =>
+    subBrandAccess === null || subBrandAccess.includes(brand);
+  const inBrand = (brand) =>
+    canAccessBrand(brand) &&
+    (activeSubBrand === null || activeSubBrand === brand);
+  return (
+    <>
       <Link to="/travel" icon={Compass} label="Dashboard" />
       <Link to="/travel/leads" icon={UserPlus} label="Leads" />
       {/* Arc 2 #904 slice — InboundLeads admin (operator surface for inbound
@@ -1356,20 +1463,8 @@ function renderTravelNav({
         label="Diagnostics"
       />
       <Link to="/travel/itineraries" icon={MapIcon} label="Itineraries" />
-      <Link to="/travel/trips" icon={Luggage} label="TMC Trips" />
-      {/* T26 (PRD_TMC_DIAGNOSTIC_SALES_ROUTING_ENGINE §10) — TMC Trip
-          Catalogue admin (T16 shipped 6a034ebb). ADMIN+MANAGER visibility
-          mirrors the page's CRUD auth posture (verifyRole inside the
-          route handler); USER role sees no entry. Sits adjacent to
-          "TMC Trips" since both surfaces are TMC sub-brand operator
-          tools — the Catalogue is the upstream "library of bookable
-          trip templates" that "TMC Trips" instances are spawned from. */}
-      {isManager && (
-        <Link
-          to="/travel/tmc/catalogue"
-          icon={Package}
-          label="TMC Catalogue"
-        />
+      {inBrand("tmc") && (
+        <Link to="/travel/trips" icon={Luggage} label="TMC Trips" />
       )}
       <Link to="/travel/web-checkins" icon={Ticket} label="Web Check-ins" />
       {/* Slice C2 — Passport OCR verification queue (ADMIN+MANAGER only).
@@ -1455,7 +1550,7 @@ function renderTravelNav({
       {isAdmin && (
         <Link to="/travel/suppliers" icon={Key} label="Supplier credentials" />
       )}
-      {isAdmin && (
+      {isAdmin && inBrand("rfu") && (
         <Link
           to="/travel/religious-packets"
           icon={BookOpen}
@@ -1465,11 +1560,19 @@ function renderTravelNav({
       {/* tick #181 — curriculum-mappings CRUD admin (consumes
           /api/travel-curriculum). TMC vertical school-trip pitch deck.
           ADMIN-only per backend RBAC + RoleGuard on the route element. */}
-      {isAdmin && (
+      {isAdmin && inBrand("tmc") && (
         <Link
           to="/travel/curriculum-mappings"
           icon={GraduationCap}
           label="Curriculum Mappings"
+        />
+      )}
+      {/* TMC school term calendar — term/holiday/exam windows for trip scheduling. */}
+      {isAdmin && inBrand("tmc") && (
+        <Link
+          to="/travel/school-terms"
+          icon={Calendar}
+          label="School Term Calendar"
         />
       )}
       {/* tick #186 — Marketing Flyer Studio Phase 2 SHELL (#908).
@@ -1499,7 +1602,7 @@ function renderTravelNav({
 
       {/* Phase 3 Visa Sure scaffolding (cluster B3) — placeholder shells, admin-only.
           Real implementation gated on product calls in docs/PRD_VISA_SURE_PHASE_3.md §5 + §9. */}
-      {isAdmin && (
+      {isAdmin && inBrand("visasure") && (
         <>
           <div style={labelStyle}>Visa Sure</div>
           <Link to="/travel/visa" icon={Stamp} label="Dashboard" />
@@ -1525,7 +1628,7 @@ function renderTravelNav({
 
       {/* Phase 2 Travel Stall operator landing (TS21) — scaffold shell.
           Operator-facing surface, visible to admin + manager. */}
-      {isManager && (
+      {isManager && inBrand("travelstall") && (
         <>
           <div style={labelStyle}>Travel Stall</div>
           <Link to="/travel-stall" icon={Sparkles} label="Dashboard" />
@@ -1541,6 +1644,9 @@ function renderTravelNav({
       <Link to="/inbox" icon={InboxIcon} label="Inbox" badge={counts.inbox} />
       <Link to="/sequences" icon={Send} label="Sequences" />
       <Link to="/tasks" icon={CheckSquare} label="Tasks" badge={counts.tasks} />
+      {/* T18 — consultation-call booking (Google Meet slot-picker). Reuses the
+          generic /calendar-sync surface; travel had no calendar entry before. */}
+      <Link to="/calendar-sync" icon={Calendar} label="Calendar" />
 
       <div style={labelStyle}>Financial</div>
       <Link to="/invoices" icon={Receipt} label="Invoices" />

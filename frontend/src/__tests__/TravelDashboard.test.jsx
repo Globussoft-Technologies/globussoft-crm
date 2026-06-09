@@ -122,6 +122,17 @@ vi.mock('../utils/notify', () => ({
   useNotify: () => notifyObj,
 }));
 
+// Controllable active sidebar sub-brand. vi.hoisted so the mock factory can
+// read it. Tests set activeSubBrandRef.current before renderPage to simulate
+// the sidebar switcher; default null = "All".
+const { activeSubBrandRef } = vi.hoisted(() => ({ activeSubBrandRef: { current: null } }));
+vi.mock('../utils/subBrand', () => ({
+  useActiveSubBrand: () => ({
+    activeSubBrand: activeSubBrandRef.current,
+    setActiveSubBrand: vi.fn(),
+  }),
+}));
+
 import { AuthContext } from '../App';
 import TravelDashboard from '../pages/travel/Dashboard';
 
@@ -178,7 +189,9 @@ const DASHBOARD_DEFAULT = {
 
 function installFetchMock({ data = DASHBOARD_DEFAULT } = {}) {
   fetchApiMock.mockImplementation((url) => {
-    if (url === '/api/travel/dashboard') {
+    // Match the base path with OR without the ?subBrand= query the SUT appends
+    // when a sidebar sub-brand is active.
+    if (url === '/api/travel/dashboard' || url.startsWith('/api/travel/dashboard?')) {
       if (data instanceof Error) return Promise.reject(data);
       return Promise.resolve(data);
     }
@@ -203,6 +216,7 @@ beforeEach(() => {
   notifyInfo.mockReset();
   notifyConfirm.mockReset();
   notifyConfirm.mockResolvedValue(true);
+  activeSubBrandRef.current = null; // default "All" — no ?subBrand= param
 });
 
 describe('<TravelDashboard /> — page chrome', () => {
@@ -363,6 +377,46 @@ describe('<TravelDashboard /> — Recent trips table', () => {
     // The inline <code> hint should also render.
     const { container } = await waitFor(() => ({ container: document.body }));
     expect(container.querySelector('code')?.textContent).toMatch(/POST \/api\/travel\/trips/);
+  });
+});
+
+describe('<TravelDashboard /> — sub-brand scoping', () => {
+  it('appends ?subBrand= when a sidebar sub-brand is active', async () => {
+    activeSubBrandRef.current = 'rfu';
+    installFetchMock();
+    renderPage();
+    await screen.findByText('47');
+    expect(fetchApiMock).toHaveBeenCalledWith('/api/travel/dashboard?subBrand=rfu');
+  });
+
+  it('sends NO query param when no sub-brand is active ("All")', async () => {
+    activeSubBrandRef.current = null;
+    installFetchMock();
+    renderPage();
+    await screen.findByText('47');
+    expect(fetchApiMock).toHaveBeenCalledWith('/api/travel/dashboard');
+  });
+
+  it('re-fetches with the new scope when the active sub-brand changes', async () => {
+    // Mount with no scope, then re-render with an active brand → the
+    // activeSubBrand-keyed effect fires a scoped re-fetch.
+    activeSubBrandRef.current = null;
+    installFetchMock();
+    const { rerender } = renderPage();
+    await screen.findByText('47');
+    expect(fetchApiMock).toHaveBeenCalledWith('/api/travel/dashboard');
+
+    activeSubBrandRef.current = 'tmc';
+    rerender(
+      <MemoryRouter>
+        <AuthContext.Provider value={{ user: ADMIN_USER, token: 'tk', tenant: TENANT_DEFAULT, loading: false }}>
+          <TravelDashboard />
+        </AuthContext.Provider>
+      </MemoryRouter>,
+    );
+    await waitFor(() =>
+      expect(fetchApiMock).toHaveBeenCalledWith('/api/travel/dashboard?subBrand=tmc'),
+    );
   });
 });
 

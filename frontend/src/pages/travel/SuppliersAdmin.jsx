@@ -22,7 +22,13 @@ import { useEffect, useState, useContext, Fragment } from "react";
 import { Building2, Plus, Pencil, Trash2, ChevronDown, ChevronRight, CheckCircle2, XCircle, Wallet, BarChart3, AlertTriangle } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
-import { SUB_BRAND_BG } from "../../utils/travelSubBrand";
+import {
+  SUB_BRAND_BG,
+  accessibleSubBrands,
+  defaultSubBrandFor,
+  subBrandShortLabel,
+} from "../../utils/travelSubBrand";
+import { useActiveSubBrand } from "../../utils/subBrand";
 import { AuthContext } from "../../App";
 
 const SUB_BRANDS = [
@@ -182,6 +188,13 @@ export default function SuppliersAdmin() {
   const { user } = useContext(AuthContext) || {};
   const canWrite = user?.role === "ADMIN" || user?.role === "MANAGER";
 
+  // Sub-brand access resolution (Q25 sub-brand isolation). ADMIN / unrestricted
+  // users get the full 4-brand dropdown; users restricted to exactly one brand
+  // get a read-only locked field; 2-3-brand users get a dropdown of just theirs.
+  const { activeSubBrand } = useActiveSubBrand();
+  const myBrands = accessibleSubBrands(user);
+  const lockedBrand = myBrands.length === 1 ? myBrands[0] : null;
+
   const [suppliers, setSuppliers] = useState([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -319,7 +332,8 @@ export default function SuppliersAdmin() {
   };
 
   const openCreate = () => {
-    resetForm();
+    setForm({ ...EMPTY_FORM, subBrand: defaultSubBrandFor(user, activeSubBrand) });
+    setEditingId(null);
     setShowForm(true);
   };
 
@@ -1006,16 +1020,30 @@ export default function SuppliersAdmin() {
               <option key={c.value} value={c.value}>{c.label}</option>
             ))}
           </select>
-          <select
-            value={form.subBrand}
-            onChange={(e) => setForm({ ...form, subBrand: e.target.value })}
-            style={inputStyle}
-            aria-label="Sub-brand"
-          >
-            {SUB_BRANDS.filter((s) => s.value).map((s) => (
-              <option key={s.value} value={s.value}>{s.label}</option>
-            ))}
-          </select>
+          {/* Sub-brand resolves to the user's access (Q25). Single-brand users
+              see a read-only locked field; admin / multi-brand users get a
+              dropdown limited to THEIR accessible brands. */}
+          {lockedBrand ? (
+            <input
+              type="text"
+              value={subBrandShortLabel(lockedBrand)}
+              readOnly
+              disabled
+              aria-label="Sub-brand (locked to your assigned brand)"
+              style={{ ...inputStyle, opacity: 0.7, cursor: "not-allowed" }}
+            />
+          ) : (
+            <select
+              value={form.subBrand}
+              onChange={(e) => setForm({ ...form, subBrand: e.target.value })}
+              style={inputStyle}
+              aria-label="Sub-brand"
+            >
+              {myBrands.map((b) => (
+                <option key={b} value={b}>{subBrandShortLabel(b)}</option>
+              ))}
+            </select>
+          )}
           {/* Slice 2 (#903) — payment terms (days). NET-30 / NET-45 style. */}
           <input
             placeholder="Payment terms (days)"

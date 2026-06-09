@@ -6,11 +6,14 @@
 // schema-edit-discipline); add new rows + flip isActive on outdated
 // ones.
 
-import { useEffect, useRef, useState } from "react";
+import { useContext, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { BadgePercent, IndianRupee, Download, Filter, Plus, ToggleLeft, ToggleRight, Upload } from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
+import { AuthContext } from "../../App";
+import { useActiveSubBrand } from "../../utils/subBrand";
+import { accessibleSubBrands, defaultSubBrandFor, subBrandShortLabel } from "../../utils/travelSubBrand";
 
 const SUB_BRANDS = [
   { value: "", label: "All sub-brands" },
@@ -30,6 +33,12 @@ const CATEGORIES = [
 
 export default function CostMaster() {
   const notify = useNotify();
+  const { user } = useContext(AuthContext) || {};
+  const { activeSubBrand } = useActiveSubBrand();
+  // ADMIN / unrestricted users get all 4 brands; users granted a subset get
+  // just those; single-brand users are pinned to their one brand (read-only).
+  const myBrands = accessibleSubBrands(user);
+  const lockedBrand = myBrands.length === 1 ? myBrands[0] : null;
   const [rates, setRates] = useState([]);
   const [loading, setLoading] = useState(true);
   const [subBrand, setSubBrand] = useState("");
@@ -182,7 +191,14 @@ export default function CostMaster() {
             aria-label="Upload cost-master CSV"
           />
           {!adding && (
-            <button type="button" onClick={() => setAdding(true)} style={primaryBtn}>
+            <button
+              type="button"
+              onClick={() => {
+                setForm((f) => ({ ...f, subBrand: defaultSubBrandFor(user, activeSubBrand, "rfu") }));
+                setAdding(true);
+              }}
+              style={primaryBtn}
+            >
               <Plus size={14} /> Add rate
             </button>
           )}
@@ -208,9 +224,22 @@ export default function CostMaster() {
       {adding && (
         <div style={{ background: "var(--surface-color)", padding: 16, borderRadius: 8, border: "1px solid var(--border-color)", marginBottom: 16 }}>
           <div style={{ display: "grid", gap: 8, gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 160px), 1fr))" }}>
-            <select value={form.subBrand} onChange={(e) => setForm({ ...form, subBrand: e.target.value })} style={input}>
-              {SUB_BRANDS.filter((s) => s.value).map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
-            </select>
+            {lockedBrand ? (
+              // Single-brand user: auto-selected, not editable. The value is
+              // already pinned in form.subBrand via defaultSubBrandFor.
+              <input
+                type="text"
+                value={subBrandShortLabel(lockedBrand)}
+                readOnly
+                disabled
+                aria-label="Sub-brand (locked to your assigned brand)"
+                style={{ ...input, opacity: 0.7, cursor: "not-allowed" }}
+              />
+            ) : (
+              <select value={form.subBrand} onChange={(e) => setForm({ ...form, subBrand: e.target.value })} style={input}>
+                {myBrands.map((b) => <option key={b} value={b}>{subBrandShortLabel(b)}</option>)}
+              </select>
+            )}
             <select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} style={input}>
               {CATEGORIES.filter((c) => c.value).map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
             </select>

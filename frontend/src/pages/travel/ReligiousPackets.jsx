@@ -11,6 +11,12 @@ import { BookOpen, Plus, Pencil, Trash2, X } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { AuthContext } from "../../App";
+import { useActiveSubBrand } from "../../utils/subBrand";
+import {
+  accessibleSubBrands,
+  defaultSubBrandFor,
+  subBrandShortLabel,
+} from "../../utils/travelSubBrand";
 
 const SUB_BRANDS = [
   { value: "", label: "All sub-brands" },
@@ -49,7 +55,14 @@ function channelsFromString(s) {
 export default function ReligiousPackets() {
   const notify = useNotify();
   const { user } = useContext(AuthContext) || {};
+  const { activeSubBrand } = useActiveSubBrand();
   const isAdmin = user?.role === "ADMIN";
+
+  // Sub-brands this user may author a packet under. A user restricted to a
+  // single brand has it auto-selected (no dropdown); admins + multi-brand
+  // users get a dropdown limited to THEIR brands. See defaultSubBrandFor.
+  const myBrands = accessibleSubBrands(user);
+  const lockedBrand = myBrands.length === 1 ? myBrands[0] : null;
 
   const [packets, setPackets] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -173,7 +186,16 @@ export default function ReligiousPackets() {
           </p>
         </div>
         {isAdmin && !adding && (
-          <button type="button" onClick={() => setAdding(true)} style={primaryBtn}>
+          <button
+            type="button"
+            onClick={() => {
+              // RFU-centric surface — default to "rfu" when the user isn't
+              // pinned to a single brand and has no active sidebar brand.
+              setForm({ ...EMPTY_FORM, subBrand: defaultSubBrandFor(user, activeSubBrand, "rfu") });
+              setAdding(true);
+            }}
+            style={primaryBtn}
+          >
             <Plus size={14} /> Add packet
           </button>
         )}
@@ -192,6 +214,8 @@ export default function ReligiousPackets() {
         <PacketForm
           form={form}
           setForm={setForm}
+          myBrands={myBrands}
+          lockedBrand={lockedBrand}
           onSave={add}
           onCancel={() => {
             setForm(EMPTY_FORM);
@@ -282,6 +306,8 @@ export default function ReligiousPackets() {
             <PacketFields
               values={editing}
               onChange={(patch) => setEditing({ ...editing, ...patch })}
+              myBrands={myBrands}
+              lockedBrand={lockedBrand}
               showActiveToggle
             />
             <div style={{ marginTop: 16, display: "flex", gap: 8, justifyContent: "flex-end" }}>
@@ -295,12 +321,14 @@ export default function ReligiousPackets() {
   );
 }
 
-function PacketForm({ form, setForm, onSave, onCancel }) {
+function PacketForm({ form, setForm, myBrands, lockedBrand, onSave, onCancel }) {
   return (
     <div style={{ background: "var(--surface-color)", padding: 16, borderRadius: 8, border: "1px solid var(--border-color)", marginBottom: 16 }}>
       <PacketFields
         values={form}
         onChange={(patch) => setForm({ ...form, ...patch })}
+        myBrands={myBrands}
+        lockedBrand={lockedBrand}
         showActiveToggle
       />
       <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
@@ -311,21 +339,34 @@ function PacketForm({ form, setForm, onSave, onCancel }) {
   );
 }
 
-function PacketFields({ values, onChange, showActiveToggle }) {
+function PacketFields({ values, onChange, myBrands = [], lockedBrand = null, showActiveToggle }) {
   return (
     <div style={{ display: "grid", gap: 12 }}>
       <div style={{ display: "grid", gap: 8, gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 160px), 1fr))" }}>
         <label style={fieldLabel}>
           Sub-brand
-          <select
-            value={values.subBrand}
-            onChange={(e) => onChange({ subBrand: e.target.value })}
-            style={input}
-          >
-            {SUB_BRANDS.filter((s) => s.value).map((s) => (
-              <option key={s.value} value={s.value}>{s.label}</option>
-            ))}
-          </select>
+          {lockedBrand ? (
+            // Single-brand user: auto-selected, not editable. The value is
+            // already pinned in values.subBrand via defaultSubBrandFor.
+            <input
+              type="text"
+              value={subBrandShortLabel(lockedBrand)}
+              readOnly
+              disabled
+              aria-label="Sub-brand (locked to your assigned brand)"
+              style={{ ...input, opacity: 0.7, cursor: "not-allowed" }}
+            />
+          ) : (
+            <select
+              value={values.subBrand}
+              onChange={(e) => onChange({ subBrand: e.target.value })}
+              style={input}
+            >
+              {myBrands.map((b) => (
+                <option key={b} value={b}>{subBrandShortLabel(b)}</option>
+              ))}
+            </select>
+          )}
         </label>
         <label style={fieldLabel}>
           Day offset (T-N days pre-trip)

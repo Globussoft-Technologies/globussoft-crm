@@ -3,8 +3,30 @@ const router = express.Router();
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
+const multer = require("multer");
 const prisma = require("../lib/prisma");
 const digilockerClient = require("../services/digilockerClient");
+const s3Service = require("../services/s3Service");
+const { scoreDiagnostic, parseBank } = require("../lib/travelDiagnosticScoring");
+const { notifyMany } = require("../lib/notificationService");
+
+// Memory-storage multer for the travel customer's profile avatar — 5 MB cap,
+// image-only (s3Service.uploadImage re-gates the mimetype). Mirrors the staff
+// avatar uploader in routes/auth.js.
+const avatarUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+});
+const avatarUploadHandler = (req, res, next) => {
+  avatarUpload.single("file")(req, res, (err) => {
+    if (err instanceof multer.MulterError) {
+      const msg = err.code === "LIMIT_FILE_SIZE" ? "Image must be 5 MB or smaller" : err.message;
+      return res.status(400).json({ error: msg, code: err.code });
+    }
+    if (err) return next(err);
+    next();
+  });
+};
 
 const { JWT_SECRET } = require("../config/secrets");
 const PORTAL_TOKEN_TTL = "7d";
@@ -69,6 +91,7 @@ router.post("/login", async (req, res) => {
         name: contact.name,
         email: contact.email,
         company: contact.company,
+        avatarUrl: contact.avatarUrl || null,
       },
     });
   } catch (err) {
@@ -339,6 +362,416 @@ router.get("/travel/itineraries", verifyPortalToken, requireTravelPortalTenant, 
   } catch (err) {
     console.error("[Portal][travel/itineraries]", err);
     res.status(500).json({ error: "Failed to fetch itineraries" });
+  }
+});
+
+// ─── Customer accept / decline of an offered itinerary ───────────────
+//
+// Accepting or declining an OFFER is the customer's decision (PRD §6.1) —
+// not the advisor's. These endpoints let the logged-in customer respond to
+// the itineraries shown in their portal. Strictly scoped to the customer's
+// OWN itineraries (contactId match) + their tenant. Status meaning:
+//   draft | sent | revised  → awaiting the customer's decision (decidable)
+//   accepted                → customer accepted (next step: pay advance)
+//   rejected                → customer declined
+//   advance_paid|fully_paid → already paid; cannot be changed here
+
+const DECIDABLE_ITIN_STATUSES = ["draft", "sent", "revised"];
+
+async function loadPortalOwnedItinerary(req, res) {
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isFinite(id)) {
+    res.status(400).json({ error: "Invalid itinerary id", code: "BAD_ID" });
+    return null;
+  }
+  const itin = await prisma.itinerary.findFirst({
+    where: { id, tenantId: req.portal.tenantId, contactId: req.portal.contactId },
+    select: { id: true, status: true, subBrand: true, destination: true },
+  });
+  if (!itin) {
+    res.status(404).json({ error: "Booking not found", code: "NOT_FOUND" });
+    return null;
+  }
+  return itin;
+}
+
+// Resolve the staff who should be notified about a decision on a given
+// sub-brand's itinerary: ALL admins (full visibility) + the MANAGERs who can
+// act on that sub-brand (subBrandAccess includes it, or is unset = full).
+async function resolveItineraryStaffUserIds(tenantId, subBrand) {
+  const staff = await prisma.user.findMany({
+    where: { tenantId, role: { in: ["ADMIN", "MANAGER"] } },
+    select: { id: true, role: true, subBrandAccess: true },
+  });
+  const ids = [];
+  for (const u of staff) {
+    if (u.role === "ADMIN") { ids.push(u.id); continue; }
+    let access = null;
+    if (u.subBrandAccess) {
+      try {
+        const arr = JSON.parse(u.subBrandAccess);
+        if (Array.isArray(arr)) access = arr;
+      } catch { /* malformed → treat as full access */ }
+    }
+    // null/empty = no restriction declared → full access; else must include it.
+    if (access === null || access.length === 0 || access.includes(subBrand)) {
+      ids.push(u.id);
+    }
+  }
+  return ids;
+}
+
+// Best-effort: notify the brand's manager(s) + admins that the customer
+// accepted/declined their itinerary. Never throws — a notification failure
+// must not fail the customer's action.
+async function notifyStaffOfItineraryDecision({ tenantId, subBrand, itineraryId, destination, contactId, action, reason }) {
+  try {
+    const userIds = await resolveItineraryStaffUserIds(tenantId, subBrand);
+    if (!userIds.length) return;
+    let who = "A customer";
+    try {
+      const c = await prisma.contact.findUnique({ where: { id: contactId }, select: { name: true, email: true } });
+      who = (c && (c.name || c.email)) || who;
+    } catch { /* fall back to "A customer" */ }
+    const verb = action === "accepted" ? "accepted" : "declined";
+    const brand = (subBrand || "").toUpperCase();
+    let message = `${who} ${verb} the ${brand} itinerary "${destination || `#${itineraryId}`}".`;
+    if (action === "declined" && reason) {
+      message += ` Reason: "${reason}"`;
+    }
+    await notifyMany({
+      userIds,
+      tenantId,
+      title: `Itinerary ${verb} by customer`,
+      message,
+      type: action === "accepted" ? "success" : "warning",
+      link: `/travel/itineraries/${itineraryId}`,
+    });
+  } catch (e) {
+    console.warn("[Portal] staff itinerary-decision notification failed:", e.message);
+  }
+}
+
+// POST /api/portal/travel/itineraries/:id/accept
+router.post("/travel/itineraries/:id/accept", verifyPortalToken, requireTravelPortalTenant, async (req, res) => {
+  try {
+    const itin = await loadPortalOwnedItinerary(req, res);
+    if (!itin) return;
+    if (["accepted", "advance_paid", "fully_paid"].includes(itin.status)) {
+      return res.status(409).json({ error: "You've already accepted this trip", code: "ALREADY_ACCEPTED" });
+    }
+    if (itin.status === "rejected") {
+      return res.status(409).json({ error: "This trip was declined — ask your advisor for a fresh offer", code: "ALREADY_REJECTED" });
+    }
+    if (!DECIDABLE_ITIN_STATUSES.includes(itin.status)) {
+      return res.status(409).json({ error: `Cannot accept a trip in '${itin.status}' status`, code: "INVALID_STATE" });
+    }
+    const updated = await prisma.itinerary.update({
+      where: { id: itin.id },
+      data: { status: "accepted" },
+      select: { id: true, status: true },
+    });
+    await notifyStaffOfItineraryDecision({
+      tenantId: req.portal.tenantId,
+      subBrand: itin.subBrand,
+      itineraryId: itin.id,
+      destination: itin.destination,
+      contactId: req.portal.contactId,
+      action: "accepted",
+    });
+    res.json(updated);
+  } catch (err) {
+    console.error("[Portal][travel/itin accept]", err);
+    res.status(500).json({ error: "Failed to accept this trip" });
+  }
+});
+
+// POST /api/portal/travel/itineraries/:id/decline
+router.post("/travel/itineraries/:id/decline", verifyPortalToken, requireTravelPortalTenant, async (req, res) => {
+  try {
+    const itin = await loadPortalOwnedItinerary(req, res);
+    if (!itin) return;
+    if (itin.status === "rejected") {
+      return res.status(409).json({ error: "You've already declined this trip", code: "ALREADY_REJECTED" });
+    }
+    if (["advance_paid", "fully_paid"].includes(itin.status)) {
+      return res.status(409).json({ error: "You can't decline a trip you've already paid for — contact your advisor", code: "INVALID_STATE" });
+    }
+    // Optional feedback: why they declined / what they'd want improved.
+    const rawReason = req.body && typeof req.body.reason === "string" ? req.body.reason.trim() : "";
+    const reason = rawReason ? rawReason.slice(0, 2000) : null;
+    const updated = await prisma.itinerary.update({
+      where: { id: itin.id },
+      data: { status: "rejected", declineReason: reason },
+      select: { id: true, status: true, declineReason: true },
+    });
+    await notifyStaffOfItineraryDecision({
+      tenantId: req.portal.tenantId,
+      subBrand: itin.subBrand,
+      itineraryId: itin.id,
+      destination: itin.destination,
+      contactId: req.portal.contactId,
+      action: "declined",
+      reason,
+    });
+    res.json(updated);
+  } catch (err) {
+    console.error("[Portal][travel/itin decline]", err);
+    res.status(500).json({ error: "Failed to decline this trip" });
+  }
+});
+
+// GET /api/portal/travel/profile — the logged-in customer's profile, incl.
+// avatar URL. Distinct from the generic /portal/me (which is not travel-gated
+// and omits avatarUrl).
+router.get("/travel/profile", verifyPortalToken, requireTravelPortalTenant, async (req, res) => {
+  try {
+    const contact = await prisma.contact.findUnique({
+      where: { id: req.portal.contactId },
+      select: {
+        id: true, name: true, email: true, phone: true, company: true,
+        title: true, subBrand: true, avatarUrl: true, createdAt: true,
+      },
+    });
+    if (!contact) return res.status(404).json({ error: "Contact not found" });
+    res.json(contact);
+  } catch (err) {
+    console.error("[Portal][travel/profile]", err);
+    res.status(500).json({ error: "Failed to fetch profile" });
+  }
+});
+
+// POST /api/portal/travel/avatar — upload (or replace) the customer's profile
+// photo. multipart/form-data, single `file` field. Stored in S3 under
+// avatars/contact/<id>; the old object is best-effort deleted on replace.
+router.post(
+  "/travel/avatar",
+  verifyPortalToken,
+  requireTravelPortalTenant,
+  avatarUploadHandler,
+  async (req, res) => {
+    try {
+      if (!req.file || !req.file.buffer) {
+        return res.status(400).json({ error: "No file uploaded", code: "NO_FILE" });
+      }
+      const existing = await prisma.contact.findUnique({
+        where: { id: req.portal.contactId },
+        select: { id: true, avatarUrl: true },
+      });
+      if (!existing) return res.status(404).json({ error: "Contact not found" });
+
+      let newUrl;
+      try {
+        newUrl = await s3Service.uploadImage(
+          req.file.buffer,
+          req.file.originalname || "avatar.jpg",
+          req.file.mimetype,
+          `avatars/contact/${req.portal.contactId}`,
+        );
+      } catch (uploadErr) {
+        if (/Invalid image MIME type/.test(uploadErr.message || "")) {
+          return res.status(415).json({
+            error: "Profile picture must be an image (jpeg/png/gif/webp/svg)",
+            code: "UNSUPPORTED_MEDIA",
+          });
+        }
+        if (/S3 bucket not configured/.test(uploadErr.message || "")) {
+          return res.status(503).json({
+            error: "Profile picture storage is not configured",
+            code: "STORAGE_UNCONFIGURED",
+          });
+        }
+        throw uploadErr;
+      }
+
+      await prisma.contact.update({
+        where: { id: req.portal.contactId },
+        data: { avatarUrl: newUrl },
+      });
+
+      // Best-effort delete of the previous object so the bucket doesn't leak.
+      if (existing.avatarUrl) {
+        try {
+          const oldKey = s3Service.extractKeyFromUrl(existing.avatarUrl);
+          if (oldKey) await s3Service.deleteFile(oldKey);
+        } catch (delErr) {
+          console.warn("[Portal][travel/avatar] old-avatar delete failed:", delErr.message);
+        }
+      }
+
+      res.json({ avatarUrl: newUrl });
+    } catch (err) {
+      console.error("[Portal][travel/avatar]", err);
+      res.status(500).json({ error: "Failed to upload avatar" });
+    }
+  },
+);
+
+// ─── Travel customer-portal — self-service diagnostic ────────────────
+//
+// The customer takes the readiness diagnostic for THEIR sub-brand (the
+// sub-brand on their Contact). The submission is recorded as a normal
+// TravelDiagnostic row keyed to their contactId + sub-brand + tenant, so
+// it automatically shows up for the brand's manager + admins on the staff
+// Diagnostics page (which already scopes by sub-brand access) — no extra
+// staff wiring needed. Reuses the same scoring engine as the staff route.
+//
+// Endpoints (all travel-tenant + portal-token gated):
+//   GET  /api/portal/travel/diagnostic-bank  → active bank questions for
+//        the customer's sub-brand (option weights stripped).
+//   GET  /api/portal/travel/diagnostics      → the customer's own past results.
+//   POST /api/portal/travel/diagnostics { answers } → score + record + return.
+
+// Resolve the logged-in portal customer's sub-brand from their Contact row.
+async function getPortalContactSubBrand(contactId) {
+  const c = await prisma.contact.findUnique({
+    where: { id: contactId },
+    select: { subBrand: true },
+  });
+  return c && c.subBrand ? c.subBrand : null;
+}
+
+// Load the active (highest-version) diagnostic bank for a sub-brand.
+async function loadActiveBank(tenantId, subBrand) {
+  return prisma.travelDiagnosticQuestionBank.findFirst({
+    where: { tenantId, subBrand, isActive: true },
+    orderBy: { version: "desc" },
+  });
+}
+
+// GET /api/portal/travel/diagnostic-brands
+//
+// A customer can be served by more than one sub-brand (e.g. RFU Umrah AND a
+// TMC school trip), so the portal lets them choose which brand's diagnostic
+// to take. Returns the sub-brands that have an ACTIVE diagnostic bank in the
+// tenant, plus the customer's own primary sub-brand as the default selection.
+router.get("/travel/diagnostic-brands", verifyPortalToken, requireTravelPortalTenant, async (req, res) => {
+  try {
+    const banks = await prisma.travelDiagnosticQuestionBank.findMany({
+      where: { tenantId: req.portal.tenantId, isActive: true },
+      select: { subBrand: true },
+      orderBy: [{ subBrand: "asc" }],
+    });
+    const brands = [...new Set(banks.map((b) => b.subBrand))].map((subBrand) => ({ subBrand }));
+    const defaultSubBrand = await getPortalContactSubBrand(req.portal.contactId);
+    res.json({ brands, defaultSubBrand });
+  } catch (err) {
+    console.error("[Portal][travel/diagnostic-brands]", err);
+    res.status(500).json({ error: "Failed to load diagnostic brands" });
+  }
+});
+
+// GET /api/portal/travel/diagnostic-bank?subBrand=rfu
+//
+// Questions for ONE sub-brand. `subBrand` comes from the customer's selector;
+// when omitted we fall back to their primary Contact.subBrand (back-compat).
+router.get("/travel/diagnostic-bank", verifyPortalToken, requireTravelPortalTenant, async (req, res) => {
+  try {
+    const requested = req.query.subBrand ? String(req.query.subBrand) : null;
+    const subBrand = requested || (await getPortalContactSubBrand(req.portal.contactId));
+    if (!subBrand) {
+      return res.json({ available: false, reason: "NO_SUB_BRAND" });
+    }
+    const bank = await loadActiveBank(req.portal.tenantId, subBrand);
+    if (!bank) {
+      return res.json({ available: false, reason: "NO_BANK", subBrand });
+    }
+    const { bank: parsed } = parseBank(bank.questionsJson, bank.scoringRulesJson);
+    // Project only what the customer needs to answer — NEVER expose the
+    // per-option scoring weights or the band thresholds.
+    const questions = ((parsed && parsed.questions) || []).map((q) => ({
+      id: q.id,
+      text: q.text,
+      type: q.type,
+      options: (q.options || []).map((o) => ({ value: o.value, label: o.label })),
+    }));
+    res.json({ available: true, bankId: bank.id, subBrand, version: bank.version, questions });
+  } catch (err) {
+    console.error("[Portal][travel/diagnostic-bank]", err);
+    res.status(500).json({ error: "Failed to load diagnostic" });
+  }
+});
+
+// GET /api/portal/travel/diagnostics — the customer's own submissions.
+router.get("/travel/diagnostics", verifyPortalToken, requireTravelPortalTenant, async (req, res) => {
+  try {
+    const rows = await prisma.travelDiagnostic.findMany({
+      where: { contactId: req.portal.contactId, tenantId: req.portal.tenantId },
+      orderBy: { createdAt: "desc" },
+      select: {
+        id: true,
+        subBrand: true,
+        score: true,
+        classification: true,
+        classificationLabel: true,
+        recommendedTier: true,
+        createdAt: true,
+      },
+    });
+    res.json(rows);
+  } catch (err) {
+    console.error("[Portal][travel/diagnostics]", err);
+    res.status(500).json({ error: "Failed to load diagnostics" });
+  }
+});
+
+// POST /api/portal/travel/diagnostics — submit answers; score + record.
+router.post("/travel/diagnostics", verifyPortalToken, requireTravelPortalTenant, async (req, res) => {
+  try {
+    const { answers, subBrand: bodySubBrand } = req.body || {};
+    if (!answers || typeof answers !== "object" || Array.isArray(answers)) {
+      return res.status(400).json({ error: "answers object required", code: "MISSING_FIELDS" });
+    }
+    // The customer picks which brand they're taking the diagnostic for
+    // (they may be served by several); fall back to their primary sub-brand.
+    const subBrand = bodySubBrand ? String(bodySubBrand) : (await getPortalContactSubBrand(req.portal.contactId));
+    if (!subBrand) {
+      return res.status(409).json({ error: "No sub-brand on your profile — please contact your advisor", code: "NO_SUB_BRAND" });
+    }
+    const bank = await loadActiveBank(req.portal.tenantId, subBrand);
+    if (!bank) {
+      return res.status(404).json({ error: "No diagnostic is available right now", code: "NO_BANK" });
+    }
+    const { bank: parsed } = parseBank(bank.questionsJson, bank.scoringRulesJson);
+    if (!parsed) {
+      return res.status(500).json({ error: "Diagnostic is temporarily unavailable", code: "BANK_CORRUPTED" });
+    }
+    const result = scoreDiagnostic(parsed, answers);
+    const snapshot = JSON.stringify({
+      bankId: bank.id,
+      bankVersion: bank.version,
+      questionsJson: bank.questionsJson,
+      scoringRulesJson: bank.scoringRulesJson,
+      scoringWarnings: result.warnings,
+      source: "customer-portal",
+    });
+    const diag = await prisma.travelDiagnostic.create({
+      data: {
+        tenantId: req.portal.tenantId,
+        subBrand: bank.subBrand,
+        contactId: req.portal.contactId,
+        questionBankId: bank.id,
+        questionsJson: snapshot,
+        answersJson: JSON.stringify(answers),
+        score: result.score,
+        classification: result.classification,
+        classificationLabel: result.classificationLabel,
+        recommendedTier: result.recommendedTier,
+      },
+    });
+    res.status(201).json({
+      id: diag.id,
+      subBrand: diag.subBrand,
+      score: result.score,
+      classification: result.classification,
+      classificationLabel: result.classificationLabel,
+      recommendedTier: result.recommendedTier,
+      createdAt: diag.createdAt,
+    });
+  } catch (err) {
+    if (err && err.status) return res.status(err.status).json({ error: err.message, code: err.code });
+    console.error("[Portal][travel/diagnostics POST]", err);
+    res.status(500).json({ error: "Failed to submit diagnostic" });
   }
 });
 

@@ -138,6 +138,7 @@ export default function DiagnosticDetail() {
   const [loadError, setLoadError] = useState(null);
 
   const [regenInFlight, setRegenInFlight] = useState(false);
+  const [pdfBusy, setPdfBusy] = useState(false);
 
   const [callTranscript, setCallTranscript] = useState("");
   const [compareInFlight, setCompareInFlight] = useState(false);
@@ -173,6 +174,30 @@ export default function DiagnosticDetail() {
       .finally(() => setLoading(false));
   };
   useEffect(load, [diagId]);
+
+  // (Re)generate the branded report PDF on demand. Submission-time generation
+  // is best-effort and can leave reportPdfUrl null; this rebuilds it and opens
+  // the result in a new tab.
+  const regenReportPdf = async () => {
+    setPdfBusy(true);
+    try {
+      const res = await fetchApi(`/api/travel/diagnostics/${diagId}/report-pdf/regen`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      if (res?.reportPdfUrl) {
+        setDiag((d) => (d ? { ...d, reportPdfUrl: res.reportPdfUrl } : d));
+        notify.success("Report PDF generated");
+        window.open(res.reportPdfUrl, "_blank", "noopener,noreferrer");
+      } else {
+        notify.error("PDF generation returned no URL");
+      }
+    } catch (e) {
+      notify.error(e?.message || "Failed to generate report PDF");
+    } finally {
+      setPdfBusy(false);
+    }
+  };
 
   // Sync the dropdown draft with whatever's persisted on the diagnostic.
   // This intentionally re-fires when diag.humanPick changes (after a
@@ -365,10 +390,42 @@ export default function DiagnosticDetail() {
             {diag.classificationLabel || diag.classification}
           </span>
         )}
+        {(diag.contact?.name || diag.contact?.email || diag.contactId) && (
+          <span style={classChip} aria-label="Customer">
+            {diag.contact?.name || diag.contact?.email || `Contact #${diag.contactId}`}
+          </span>
+        )}
         <span style={{ marginLeft: "auto", color: "var(--text-secondary)", fontSize: 13 }}>
           Created {fmtDate(diag.createdAt)}
         </span>
       </header>
+
+      {/* ── Customer — who took this diagnostic ──────────────────── */}
+      {(diag.contact?.name || diag.contact?.email || diag.contact?.phone || diag.contactId) && (
+        <section style={card}>
+          <h2 style={cardTitle}>Customer</h2>
+          <div style={summaryRow}>
+            <div>
+              <span style={kvLabel}>Name</span>
+              <span style={{ marginLeft: 8 }}>{diag.contact?.name || "—"}</span>
+            </div>
+            <div>
+              <span style={kvLabel}>Email</span>
+              <span style={{ marginLeft: 8 }}>{diag.contact?.email || "—"}</span>
+            </div>
+            <div>
+              <span style={kvLabel}>Phone</span>
+              <span style={{ marginLeft: 8 }}>{diag.contact?.phone || "—"}</span>
+            </div>
+            {diag.contactId && (
+              <div>
+                <span style={kvLabel}>Contact ID</span>
+                <span style={{ marginLeft: 8 }}>#{diag.contactId}</span>
+              </div>
+            )}
+          </div>
+        </section>
+      )}
 
       {/* ── Section 1: answers + classification ──────────────────── */}
       <section style={card}>
@@ -386,16 +443,38 @@ export default function DiagnosticDetail() {
             <span style={kvLabel}>Recommended tier</span>
             <span style={{ marginLeft: 8 }}>{diag.recommendedTier || "—"}</span>
           </div>
-          {diag.reportPdfUrl && (
-            <a
-              href={diag.reportPdfUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              style={pdfLink}
+          <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
+            {diag.reportPdfUrl && (
+              <a
+                href={diag.reportPdfUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={pdfLink}
+              >
+                <FileText size={14} aria-hidden /> Download report PDF
+              </a>
+            )}
+            <button
+              type="button"
+              onClick={regenReportPdf}
+              disabled={pdfBusy}
+              title="Build the branded report PDF from this diagnostic"
+              style={{
+                ...pdfLink,
+                background: "none",
+                border: "1px solid var(--border-color, #2a2a2a)",
+                cursor: pdfBusy ? "not-allowed" : "pointer",
+                opacity: pdfBusy ? 0.6 : 1,
+              }}
             >
-              <FileText size={14} aria-hidden /> Download report PDF
-            </a>
-          )}
+              <RefreshCw size={14} aria-hidden />{" "}
+              {pdfBusy
+                ? "Generating…"
+                : diag.reportPdfUrl
+                  ? "Regenerate PDF"
+                  : "Generate report PDF"}
+            </button>
+          </div>
         </div>
         {questions.length === 0 ? (
           <div style={{ color: "var(--text-secondary)", fontSize: 13, padding: "12px 0" }}>

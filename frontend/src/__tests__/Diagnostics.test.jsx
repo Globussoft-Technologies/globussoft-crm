@@ -415,7 +415,7 @@ describe('<Diagnostics /> — row rendering (badges + scores + classification fa
     expect(tierSpans[0].textContent).toBe('—');
   });
 
-  it('contact column shows #<id> when contactId present, em-dash when absent', async () => {
+  it('contact column shows #<id> when contactId present but no contact object, em-dash when absent', async () => {
     renderPage();
     const tmcRow = (await screen.findByText('tmc')).closest('tr');
     expect(within(tmcRow).getByText('#5001')).toBeInTheDocument();
@@ -424,6 +424,45 @@ describe('<Diagnostics /> — row rendering (badges + scores + classification fa
     // visasure contactId=null → em-dash in the contact cell (one of several).
     const visaRow = screen.getByText('visasure').closest('tr');
     expect(within(visaRow).getAllByText('—').length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('contact column shows the customer NAME when the row carries an enriched contact object', async () => {
+    installFetchMock({
+      list: {
+        diagnostics: [
+          makeDiagnostic({
+            id: 711,
+            subBrand: 'tmc',
+            contactId: 5001,
+            contact: { id: 5001, name: 'Asha Verma', email: 'asha@x.com', phone: '999' },
+          }),
+        ],
+      },
+    });
+    renderPage();
+    const row = (await screen.findByText('tmc')).closest('tr');
+    expect(within(row).getByText('Asha Verma')).toBeInTheDocument();
+    // The email renders as the secondary sub-line, not the bare #id.
+    expect(within(row).getByText('asha@x.com')).toBeInTheDocument();
+    expect(within(row).queryByText('#5001')).toBeNull();
+  });
+
+  it('contact column falls back to email when contact has email but no name', async () => {
+    installFetchMock({
+      list: {
+        diagnostics: [
+          makeDiagnostic({
+            id: 712,
+            subBrand: 'rfu',
+            contactId: 5002,
+            contact: { id: 5002, name: null, email: 'noname@x.com', phone: null },
+          }),
+        ],
+      },
+    });
+    renderPage();
+    const row = (await screen.findByText('rfu')).closest('tr');
+    expect(within(row).getByText('noname@x.com')).toBeInTheDocument();
   });
 });
 

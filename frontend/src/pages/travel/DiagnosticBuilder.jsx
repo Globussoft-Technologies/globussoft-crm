@@ -19,27 +19,8 @@
 // POST shape unchanged: { subBrand, questionsJson, scoringRulesJson }
 // goes to /api/travel/diagnostic-banks; backend revalidates server-side
 // and creates v(N+1). Per Q16, existing banks are not mutated.
-//
-// ── TMC Engine Weights tab (PRD_TMC_DIAGNOSTIC_SALES_ROUTING_ENGINE T11 / §3.3.3 + §3.3.7) ──
-// When subBrand=tmc, a third tab "Engine Weights" surfaces the §3.3.3
-// weight knobs (6 weights + scoresWellThreshold + version) sourced from
-// the EngineWeights single-row config table. UI hits:
-//   GET  /api/travel/engine-weights          → current weights row
-//   PUT  /api/travel/engine-weights          → save (bumps version when
-//                                              weights changed)
-// Editing a weight + Save auto-increments version (v1 → v2 etc.) so the
-// captured TravelDiagnostic.weightsVersion is replayable per §3.3.7
-// audit. A free-text version label can also be supplied to override the
-// auto-bump.
-//
-// ── TMC Trip-Catalogue Promote-to-active link (T25) ──
-// T11 originally rendered an in-tab archived-rows + Promote-to-active
-// sub-panel here; T16 shipped a dedicated /travel/tmc/catalogue page
-// (TmcCatalogueAdmin.jsx) that hosts the full promote flow. T25 replaces
-// the sub-panel with a one-line link to that page so authoring stays
-// focused on the engine-weights knobs.
 
-import { useEffect, useRef, useState, useContext, useCallback } from 'react';
+import { useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
   AlertTriangle, CheckCircle, ChevronDown, ChevronLeft, ChevronUp,
@@ -115,16 +96,50 @@ export default function DiagnosticBuilder() {
   const [rJson, setRJson] = useState(SCORING_EXAMPLE);
   const [validation, setValidation] = useState(null);
   const [saving, setSaving] = useState(false);
+  // Current active bank for the selected sub-brand (so switching brand shows
+  // THAT brand's existing questions to edit, not a static template).
+  const [loadingBank, setLoadingBank] = useState(true);
+  const [bankInfo, setBankInfo] = useState(null); // { existing, version } | null
   const fileRef = useRef(null);
+  const firstLoad = useRef(true);
 
-  // When the operator switches sub-brand away from TMC while sitting on
-  // the Engine Weights tab, fall back to Visual so the page doesn't show
-  // an empty (non-TMC) weights surface.
+  // Load the selected sub-brand's current active bank whenever it changes.
+  // Existing bank → pre-fill the editors with its questions + scoring (so
+  // admins edit a copy and ship v+1). No bank yet → start from a template.
+  // On a brand SWITCH with no bank we reset to the template; on the very
+  // first mount with no bank we leave the initial template untouched (so a
+  // late-resolving fetch can't wipe edits the admin already started).
   useEffect(() => {
-    if (mode === 'engineWeights' && subBrand !== 'tmc') {
-      setMode('visual');
-    }
-  }, [mode, subBrand]);
+    let cancelled = false;
+    setLoadingBank(true);
+    setValidation(null);
+    fetchApi(`/api/travel/diagnostic-banks?subBrand=${encodeURIComponent(subBrand)}&active=true`)
+      .then((res) => {
+        if (cancelled) return;
+        const bank = Array.isArray(res?.banks) ? res.banks[0] : null;
+        if (bank) {
+          setQJson(prettyJson(bank.questionsJson, QUESTIONS_EXAMPLE));
+          setRJson(prettyJson(bank.scoringRulesJson, SCORING_EXAMPLE));
+          setBankInfo({ existing: true, version: bank.version });
+        } else {
+          if (!firstLoad.current) {
+            setQJson(QUESTIONS_EXAMPLE);
+            setRJson(SCORING_EXAMPLE);
+          }
+          setBankInfo({ existing: false });
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setBankInfo({ existing: false });
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoadingBank(false);
+          firstLoad.current = false;
+        }
+      });
+    return () => { cancelled = true; };
+  }, [subBrand]);
 
   const exportCsv = async () => {
     try {
@@ -277,6 +292,13 @@ export default function DiagnosticBuilder() {
             </button>
           ))}
         </div>
+        <p style={{ color: 'var(--text-secondary)', fontSize: 13, margin: '10px 0 0' }}>
+          {loadingBank
+            ? 'Loading this brand’s current questions…'
+            : bankInfo?.existing
+              ? `Editing a copy of v${bankInfo.version}. Saving ships v${bankInfo.version + 1} for this brand.`
+              : 'No diagnostic bank yet for this brand — starting from a template. Saving ships v1.'}
+        </p>
       </section>
 
       <ModeTabs mode={mode} onChange={setMode} subBrand={subBrand} />
@@ -798,6 +820,16 @@ function tryParse(s) {
     return JSON.parse(s);
   } catch {
     return null;
+  }
+}
+
+// Pretty-print a stored JSON string for the editor; fall back to the raw
+// string (or a template) if it doesn't parse.
+function prettyJson(s, fallback) {
+  try {
+    return JSON.stringify(JSON.parse(s), null, 2);
+  } catch {
+    return s || fallback;
   }
 }
 

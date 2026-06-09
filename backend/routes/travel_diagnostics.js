@@ -68,7 +68,23 @@ async function generateDiagnosticPdfBestEffort(diag, bank) {
           select: { name: true, email: true, phone: true },
         })
       : { name: "Anonymous customer", email: null, phone: null };
-    const pdfBuf = await renderTravelDiagnosticPdf(diag, contact, bank);
+
+    // Brand logo for the header — S3 (tenant.logoUrl) first, local /uploads
+    // next, bundled asset last. Best-effort: a failure here just means the
+    // header draws its emblem instead.
+    let logoBuffer = null;
+    try {
+      const { resolveBrandLogoBuffer } = require("../lib/brandLogo");
+      const tenant = await prisma.tenant.findUnique({
+        where: { id: diag.tenantId },
+        select: { logoUrl: true },
+      });
+      logoBuffer = await resolveBrandLogoBuffer(tenant?.logoUrl);
+    } catch (logoErr) {
+      console.warn("[travel-diag] logo resolve failed:", logoErr.message);
+    }
+
+    const pdfBuf = await renderTravelDiagnosticPdf(diag, contact, bank, { logoBuffer });
     const rand = crypto.randomBytes(16).toString("hex");
     const filename = `diag-${diag.id}-${rand}.pdf`;
     const filepath = path.join(DIAG_PDF_DIR, filename);
@@ -221,9 +237,62 @@ router.post(
 // Submit a completed diagnostic. Caller provides bankId + answersJson;
 // the route scores it, stamps the questionsJson snapshot, and persists.
 // Optional links: contactId (the lead) and leadId (the deal).
+// PRD_TMC_CURRICULUM_MAPPING §3 FR-5 — build curriculum→destination
+// recommendations for a TMC diagnostic. Given the student's curriculum + grade
+// (+ optional subject), match active TravelCurriculumMapping rows, aggregate by
+// destination, rank by average fitScore, and return the top N. Returns null
+// when curriculum context is absent or nothing matches — the caller then
+// leaves curriculumFitJson null and the PDF omits the section (FR-7 fallback).
+async function buildCurriculumFit(tenantId, { curriculum, grade, subject }) {
+  const cur = (curriculum || "").toString().trim();
+  const grd = (grade || "").toString().trim();
+  const subj = (subject || "").toString().trim();
+  if (!cur || !grd) return null;
+
+  const where = { tenantId, isActive: true, curriculum: cur, grade: grd };
+  if (subj) where.subject = subj;
+
+  const rows = await prisma.travelCurriculumMapping.findMany({
+    where,
+    orderBy: { fitScore: "desc" },
+    take: 100,
+  });
+  if (!rows.length) return null;
+
+  // Aggregate by destination (free-text label, or "Trip #id" fallback when the
+  // mapping links a TmcTrip by id without a label).
+  const byDest = new Map();
+  for (const r of rows) {
+    const key =
+      r.destinationLabel ||
+      (r.destinationId != null ? `Trip #${r.destinationId}` : "Unspecified destination");
+    if (!byDest.has(key)) byDest.set(key, { destination: key, scores: [], reasons: [] });
+    const bucket = byDest.get(key);
+    if (typeof r.fitScore === "number") bucket.scores.push(r.fitScore);
+    bucket.reasons.push({
+      subject: r.subject,
+      learningOutcome: r.learningOutcome || null,
+      rationale: r.fitRationale || null,
+    });
+  }
+
+  const recommendations = Array.from(byDest.values())
+    .map((d) => ({
+      destination: d.destination,
+      fitScore: d.scores.length
+        ? Math.round(d.scores.reduce((a, b) => a + b, 0) / d.scores.length)
+        : null,
+      reasons: d.reasons.slice(0, 4),
+    }))
+    .sort((a, b) => (b.fitScore ?? 0) - (a.fitScore ?? 0))
+    .slice(0, 5);
+
+  return { curriculum: cur, grade: grd, subject: subj || null, recommendations };
+}
+
 router.post("/diagnostics", verifyToken, requireTravelTenant, async (req, res) => {
   try {
-    const { bankId, answers, contactId, leadId, consentCapturedAt } = req.body || {};
+    const { bankId, answers, contactId, leadId, consentCapturedAt, curriculum, grade, subject } = req.body || {};
     if (!bankId || !answers) {
       return res.status(400).json({
         error: "bankId and answers required",
@@ -267,6 +336,22 @@ router.post("/diagnostics", verifyToken, requireTravelTenant, async (req, res) =
 
     const result = scoreDiagnostic(parsed, answers);
 
+    // FR-5: TMC-only curriculum-fit recommendations. Curriculum context comes
+    // from explicit body fields, falling back to same-named answer keys. Any
+    // failure here is non-fatal — the diagnostic still writes without the fit.
+    let curriculumFit = null;
+    if (bank.subBrand === "tmc") {
+      try {
+        curriculumFit = await buildCurriculumFit(req.travelTenant.id, {
+          curriculum: curriculum ?? answers?.curriculum,
+          grade: grade ?? answers?.grade,
+          subject: subject ?? answers?.subject,
+        });
+      } catch (fitErr) {
+        console.warn("[travel-diag] curriculum-fit build failed:", fitErr.message);
+      }
+    }
+
     // Capture the questionsJson + scoringRulesJson snapshot for audit.
     // Combined into a single JSON-as-string to keep the schema simple.
     const snapshot = JSON.stringify({
@@ -290,6 +375,7 @@ router.post("/diagnostics", verifyToken, requireTravelTenant, async (req, res) =
         classification: result.classification,
         classificationLabel: result.classificationLabel,
         recommendedTier: result.recommendedTier,
+        curriculumFitJson: curriculumFit ? JSON.stringify(curriculumFit) : null,
         consentCapturedAt: consentCapturedAt ? new Date(consentCapturedAt) : null,
       },
     });
@@ -307,11 +393,56 @@ router.post("/diagnostics", verifyToken, requireTravelTenant, async (req, res) =
       recommendedTier: result.recommendedTier,
       warnings: result.warnings,
       reportPdfUrl,
+      recommendations: curriculumFit?.recommendations || [],
     });
   } catch (e) {
     if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
     console.error("[travel-diag] submit diagnostic error:", e.message);
     res.status(500).json({ error: "Failed to submit diagnostic" });
+  }
+});
+
+// POST /api/travel/diagnostics/:id/report-pdf/regen — (re)generate the branded
+// report PDF on demand. Submission-time PDF generation is best-effort and can
+// fail silently (e.g. transient write/DB error), leaving reportPdfUrl null with
+// no way to recover from the UI. This endpoint rebuilds the PDF from the
+// diagnostic's own immutable question snapshot and returns the fresh URL.
+router.post("/diagnostics/:id/report-pdf/regen", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) {
+      return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+    }
+    const diag = await prisma.travelDiagnostic.findFirst({
+      where: { id, tenantId: req.travelTenant.id },
+    });
+    if (!diag) {
+      return res.status(404).json({ error: "Diagnostic not found", code: "NOT_FOUND" });
+    }
+    const allowed = await getSubBrandAccessSet(req.user.userId);
+    if (!canAccessSubBrand(allowed, diag.subBrand)) {
+      return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+    }
+
+    // Reconstruct a bank-like object from the diagnostic's stored snapshot so
+    // the report renders the exact question set it was submitted with.
+    let bank = null;
+    try {
+      const snap = JSON.parse(diag.questionsJson || "{}");
+      bank = { version: snap.bankVersion, questionsJson: snap.questionsJson };
+    } catch {
+      bank = null;
+    }
+
+    const url = await generateDiagnosticPdfBestEffort(diag, bank);
+    if (!url) {
+      return res.status(500).json({ error: "PDF generation failed", code: "PDF_FAILED" });
+    }
+    res.json({ reportPdfUrl: url });
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error("[travel-diag] report-pdf regen error:", e.message);
+    res.status(500).json({ error: "Failed to regenerate report PDF" });
   }
 });
 
@@ -348,7 +479,24 @@ router.get("/diagnostics", verifyToken, requireTravelTenant, async (req, res) =>
       }),
       prisma.travelDiagnostic.count({ where }),
     ]);
-    res.json({ diagnostics, total, limit: take, offset: skip });
+
+    // TravelDiagnostic has no Prisma relation to Contact (just contactId), so
+    // batch-fetch the contacts and attach name/email so the UI can show WHO
+    // took each diagnostic instead of a bare "#id".
+    const contactIds = [...new Set(diagnostics.map((d) => d.contactId).filter(Boolean))];
+    const contactMap = {};
+    if (contactIds.length) {
+      const contacts = await prisma.contact.findMany({
+        where: { id: { in: contactIds }, tenantId: req.travelTenant.id },
+        select: { id: true, name: true, email: true, phone: true },
+      });
+      for (const c of contacts) contactMap[c.id] = c;
+    }
+    const enriched = diagnostics.map((d) => ({
+      ...d,
+      contact: d.contactId ? contactMap[d.contactId] || null : null,
+    }));
+    res.json({ diagnostics: enriched, total, limit: take, offset: skip });
   } catch (e) {
     if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
     console.error("[travel-diag] list diagnostics error:", e.message);
@@ -1169,7 +1317,15 @@ router.get("/diagnostics/:id", verifyToken, requireTravelTenant, async (req, res
     if (!canAccessSubBrand(allowed, diag.subBrand)) {
       return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
     }
-    res.json(diag);
+    // Attach the contact (name/email/phone) so the detail view can show WHO
+    // took it — TravelDiagnostic only stores contactId (no Prisma relation).
+    const contact = diag.contactId
+      ? await prisma.contact.findFirst({
+          where: { id: diag.contactId, tenantId: req.travelTenant.id },
+          select: { id: true, name: true, email: true, phone: true },
+        })
+      : null;
+    res.json({ ...diag, contact });
   } catch (e) {
     console.error("[travel-diag] get diagnostic error:", e.message);
     res.status(500).json({ error: "Failed to get diagnostic" });

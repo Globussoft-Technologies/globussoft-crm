@@ -44,6 +44,9 @@ import {
   SUB_BRAND_BG_FALLBACK,
   subBrandBackground,
   subBrandLabel,
+  subBrandShortLabel,
+  accessibleSubBrands,
+  defaultSubBrandFor,
 } from '../utils/travelSubBrand';
 
 describe('travelSubBrand — constants', () => {
@@ -131,6 +134,85 @@ describe('travelSubBrand — subBrandLabel()', () => {
   it('does not crash on no argument', () => {
     expect(() => subBrandLabel()).not.toThrow();
     expect(subBrandLabel()).toBe('—');
+  });
+});
+
+describe('travelSubBrand — subBrandShortLabel()', () => {
+  it('returns the compact (no-parenthetical) label for each known id', () => {
+    expect(subBrandShortLabel('tmc')).toBe('TMC');
+    expect(subBrandShortLabel('rfu')).toBe('RFU');
+    expect(subBrandShortLabel('travelstall')).toBe('Travel Stall');
+    expect(subBrandShortLabel('visasure')).toBe('Visa Sure');
+  });
+
+  it('falls back to the raw id for an unknown id, em-dash for empty', () => {
+    expect(subBrandShortLabel('mystery')).toBe('mystery');
+    expect(subBrandShortLabel(null)).toBe('—');
+    expect(subBrandShortLabel(undefined)).toBe('—');
+    expect(subBrandShortLabel('')).toBe('—');
+  });
+});
+
+describe('travelSubBrand — accessibleSubBrands()', () => {
+  it('ADMIN always gets all 4 brands regardless of subBrandAccess column', () => {
+    expect(accessibleSubBrands({ role: 'ADMIN', subBrandAccess: '["tmc"]' }))
+      .toEqual(['tmc', 'rfu', 'travelstall', 'visasure']);
+  });
+
+  it('non-admin with an explicit single-brand grant gets just that brand', () => {
+    expect(accessibleSubBrands({ role: 'MANAGER', subBrandAccess: '["tmc"]' }))
+      .toEqual(['tmc']);
+    expect(accessibleSubBrands({ role: 'USER', subBrandAccess: '["rfu"]' }))
+      .toEqual(['rfu']);
+  });
+
+  it('non-admin with multiple grants gets them in canonical order', () => {
+    // Input order shuffled — output follows SUB_BRAND_IDS ordering.
+    expect(accessibleSubBrands({ role: 'USER', subBrandAccess: '["visasure","tmc"]' }))
+      .toEqual(['tmc', 'visasure']);
+  });
+
+  it('treats unset / empty / malformed access as full access (all 4)', () => {
+    expect(accessibleSubBrands({ role: 'MANAGER' })).toEqual(SUB_BRAND_IDS);
+    expect(accessibleSubBrands({ role: 'MANAGER', subBrandAccess: '[]' })).toEqual(SUB_BRAND_IDS);
+    expect(accessibleSubBrands({ role: 'MANAGER', subBrandAccess: 'not-json' })).toEqual(SUB_BRAND_IDS);
+    expect(accessibleSubBrands(null)).toEqual(SUB_BRAND_IDS);
+  });
+
+  it('accepts an already-parsed array for subBrandAccess', () => {
+    expect(accessibleSubBrands({ role: 'MANAGER', subBrandAccess: ['rfu', 'tmc'] }))
+      .toEqual(['tmc', 'rfu']);
+  });
+});
+
+describe('travelSubBrand — defaultSubBrandFor()', () => {
+  const tmcManager = { role: 'MANAGER', subBrandAccess: '["tmc"]' };
+  const multi = { role: 'USER', subBrandAccess: '["tmc","rfu"]' };
+  const admin = { role: 'ADMIN' };
+
+  it('single-brand user is always pinned to their one brand (ignores active + preferred)', () => {
+    expect(defaultSubBrandFor(tmcManager, 'rfu')).toBe('tmc');
+    expect(defaultSubBrandFor(tmcManager, null, 'rfu')).toBe('tmc');
+  });
+
+  it('multi-brand user prefers the active sidebar brand when accessible', () => {
+    expect(defaultSubBrandFor(multi, 'rfu')).toBe('rfu');
+  });
+
+  it('ignores an active brand the user cannot access, falling through', () => {
+    // multi can't access visasure → not used; no preferred → first accessible.
+    expect(defaultSubBrandFor(multi, 'visasure')).toBe('tmc');
+  });
+
+  it('uses preferred when active is absent and preferred is accessible', () => {
+    expect(defaultSubBrandFor(multi, null, 'rfu')).toBe('rfu');
+    expect(defaultSubBrandFor(admin, null, 'rfu')).toBe('rfu');
+  });
+
+  it('falls back to the first accessible brand when nothing else resolves', () => {
+    expect(defaultSubBrandFor(admin, null)).toBe('tmc');
+    // preferred not accessible to a single-brand user → still their brand.
+    expect(defaultSubBrandFor(multi, null, 'visasure')).toBe('tmc');
   });
 });
 

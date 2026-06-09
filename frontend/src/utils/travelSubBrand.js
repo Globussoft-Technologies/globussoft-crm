@@ -70,3 +70,53 @@ export function subBrandLabel(subBrand) {
   if (!subBrand) return "—";
   return SUB_BRAND_LABEL[subBrand] || `(${subBrand})`;
 }
+
+// Short label for compact dropdowns / chips (no parenthetical descriptor).
+const SHORT_LABEL = {
+  tmc: "TMC",
+  rfu: "RFU",
+  travelstall: "Travel Stall",
+  visasure: "Visa Sure",
+};
+export function subBrandShortLabel(subBrand) {
+  if (!subBrand) return "—";
+  return SHORT_LABEL[subBrand] || subBrand;
+}
+
+// Which sub-brands a user may ACT ON in create/assign forms. Mirrors the
+// backend getSubBrandAccessSet (middleware/travelGuards.js) + the Sidebar's
+// subBrandAccess parser so the UI and server agree:
+//   - ADMIN                              → all 4 (full access)
+//   - unset / empty / malformed access   → all 4 (no restriction declared)
+//   - explicit granted subset            → just those ids
+// Returns an ordered array of sub-brand ids (subset of SUB_BRAND_IDS).
+export function accessibleSubBrands(user) {
+  if (user?.role === "ADMIN") return [...SUB_BRAND_IDS];
+  const raw = user?.subBrandAccess;
+  if (!raw) return [...SUB_BRAND_IDS];
+  try {
+    const arr = typeof raw === "string" ? JSON.parse(raw) : raw;
+    if (!Array.isArray(arr) || arr.length === 0) return [...SUB_BRAND_IDS];
+    const filtered = SUB_BRAND_IDS.filter((id) => arr.includes(id));
+    return filtered.length ? filtered : [...SUB_BRAND_IDS];
+  } catch {
+    return [...SUB_BRAND_IDS];
+  }
+}
+
+// Resolve the sub-brand a create form should DEFAULT to, given the user's
+// access + the currently-active sidebar sub-brand. Precedence:
+//   1. Single-brand user → pinned to their one brand.
+//   2. Active sidebar sub-brand, when the user can access it.
+//   3. `preferred` (the page's own sensible default, e.g. "rfu" for an
+//      RFU-centric surface), when the user can access it.
+//   4. The user's first accessible brand.
+// `preferred` is optional — pages that have no special default omit it and
+// fall through to the first accessible brand.
+export function defaultSubBrandFor(user, activeSubBrand, preferred) {
+  const brands = accessibleSubBrands(user);
+  if (brands.length === 1) return brands[0];
+  if (activeSubBrand && brands.includes(activeSubBrand)) return activeSubBrand;
+  if (preferred && brands.includes(preferred)) return preferred;
+  return brands[0];
+}

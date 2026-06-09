@@ -263,6 +263,44 @@ describe('Sidebar — load-bearing render surface', () => {
       });
       expect(screen.queryByLabelText('Switch active sub-brand')).toBeNull();
     });
+
+    it('shows a read-only sub-brand chip (no dropdown) for a single-brand user', () => {
+      renderSidebar({
+        vertical: 'travel',
+        role: 'MANAGER',
+        subBrandAccess: ['tmc'],
+      });
+      // No editable switcher…
+      expect(screen.queryByLabelText('Switch active sub-brand')).toBeNull();
+      // …but a static chip surfaces the one brand they're scoped to.
+      const chip = screen.getByTestId('travel-sub-brand-sole');
+      expect(chip.textContent).toBe('TMC');
+      // It is NOT a <select> — it's read-only context, not a choice.
+      expect(chip.tagName).not.toBe('SELECT');
+    });
+
+    it('does NOT show the sole-brand chip for full-access users (they get the switcher)', () => {
+      renderSidebar({ vertical: 'travel', role: 'ADMIN' });
+      expect(screen.queryByTestId('travel-sub-brand-sole')).toBeNull();
+      expect(screen.getByLabelText('Switch active sub-brand')).toBeTruthy();
+    });
+
+    it('access-aware nav: a TMC-only manager sees TMC Trips but NOT the Travel Stall section', () => {
+      renderSidebar({
+        vertical: 'travel',
+        role: 'MANAGER',
+        subBrandAccess: ['tmc'],
+      });
+      // Their own brand's surface is visible…
+      expect(screen.getByText('TMC Trips')).toBeTruthy();
+      // …but a brand section they have no access to is hidden, even though it
+      // is otherwise manager-gated. (Filter to the section-label DIV, since
+      // "Travel Stall" no longer appears as a switcher <option> for this user.)
+      const travelStall = screen
+        .queryAllByText('Travel Stall')
+        .filter((m) => m.tagName !== 'OPTION');
+      expect(travelStall.length).toBe(0);
+    });
   });
 
   describe('RBAC', () => {

@@ -43,7 +43,13 @@ import { Receipt, Plus, Pencil, Trash2, FileDown } from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { formatMoney } from "../../utils/money";
-import { SUB_BRAND_BG } from "../../utils/travelSubBrand";
+import {
+  SUB_BRAND_BG,
+  accessibleSubBrands,
+  defaultSubBrandFor,
+  subBrandShortLabel,
+} from "../../utils/travelSubBrand";
+import { useActiveSubBrand } from "../../utils/subBrand";
 import { AuthContext } from "../../App";
 
 const SUB_BRANDS = [
@@ -159,7 +165,14 @@ function formatDate(iso) {
 export default function InvoicesAdmin() {
   const notify = useNotify();
   const { user } = useContext(AuthContext) || {};
+  const { activeSubBrand } = useActiveSubBrand();
   const canWrite = user?.role === "ADMIN" || user?.role === "MANAGER";
+
+  // Sub-brand access gating for the create/edit form. ADMIN / no-restriction
+  // users get a dropdown of all 4; restricted users get only their brands; a
+  // single-brand user gets the field locked read-only. See defaultSubBrandFor.
+  const myBrands = accessibleSubBrands(user);
+  const lockedBrand = myBrands.length === 1 ? myBrands[0] : null;
 
   const [invoices, setInvoices] = useState([]);
   const [total, setTotal] = useState(0);
@@ -225,6 +238,9 @@ export default function InvoicesAdmin() {
 
   const openCreate = () => {
     resetForm();
+    // Default the sub-brand to the user's active/accessible brand instead of
+    // the static EMPTY_FORM "tmc" so restricted users start on a valid brand.
+    setForm({ ...EMPTY_FORM, subBrand: defaultSubBrandFor(user, activeSubBrand) });
     setShowForm(true);
   };
 
@@ -570,16 +586,30 @@ export default function InvoicesAdmin() {
             style={inputStyle}
             aria-label="Quote ID"
           />
-          <select
-            value={form.subBrand}
-            onChange={(e) => setForm({ ...form, subBrand: e.target.value })}
-            style={inputStyle}
-            aria-label="Sub-brand"
-          >
-            {SUB_BRANDS.filter((s) => s.value).map((s) => (
-              <option key={s.value} value={s.value}>{s.label}</option>
-            ))}
-          </select>
+          {lockedBrand ? (
+            // Single-brand user: auto-selected, not editable. The value is
+            // already pinned in form.subBrand via defaultSubBrandFor (create)
+            // or the record's own subBrand (edit).
+            <input
+              type="text"
+              value={subBrandShortLabel(lockedBrand)}
+              readOnly
+              disabled
+              aria-label="Sub-brand (locked to your assigned brand)"
+              style={{ ...inputStyle, opacity: 0.7, cursor: "not-allowed" }}
+            />
+          ) : (
+            <select
+              value={form.subBrand}
+              onChange={(e) => setForm({ ...form, subBrand: e.target.value })}
+              style={inputStyle}
+              aria-label="Sub-brand"
+            >
+              {myBrands.map((b) => (
+                <option key={b} value={b}>{subBrandShortLabel(b)}</option>
+              ))}
+            </select>
+          )}
           <div style={{ display: "flex", gap: 8 }}>
             <button type="submit" disabled={saving} style={{ ...primaryBtn, background: "var(--success-color, var(--primary-color))" }}>
               {saving ? "Saving…" : editingId ? "Save Changes" : "Save"}

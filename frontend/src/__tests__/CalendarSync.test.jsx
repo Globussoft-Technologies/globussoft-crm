@@ -446,6 +446,70 @@ describe('<CalendarSync /> — provider cards, OAuth-trigger, sync, event CRUD',
     expect(submitBtn).toBeDisabled();
   });
 
+  // ── Attendee picker + online-meeting flag (T18) ──
+  function makeGoogleOnlineWithContacts() {
+    return (url, opts) => {
+      if (typeof url === 'string' && url.startsWith('/api/contacts')) {
+        return Promise.resolve([
+          { id: 1, name: 'Anita Sharma', email: 'anita@example.com' },
+          { id: 2, name: 'Bob Lee', email: 'bob@example.com' },
+        ]);
+      }
+      if (url === '/api/calendar/google/events' && (!opts || !opts.method || opts.method === 'GET')) {
+        return Promise.resolve(sampleGoogleEvents);
+      }
+      if (url === '/api/calendar/outlook/events') return Promise.reject(new Error('not connected'));
+      if (url === '/api/calendar/google/events' && opts?.method === 'POST') {
+        return Promise.resolve({ id: 'new-evt' });
+      }
+      return Promise.resolve(null);
+    };
+  }
+
+  it('attendee dropdown: lists contacts and adds the selected email to the attendees field', async () => {
+    fetchApiMock.mockImplementation(makeGoogleOnlineWithContacts());
+    render(<CalendarSync />);
+    await screen.findByText(/^Connected$/i);
+    fireEvent.click(screen.getByTitle(/Create new calendar event/i));
+    await screen.findByRole('heading', { name: /Create Event in Google/i });
+
+    // Dropdown option for a fetched contact is present.
+    expect(
+      await screen.findByRole('option', { name: /Anita Sharma \(anita@example.com\)/i }),
+    ).toBeInTheDocument();
+
+    // Selecting it appends the email to the attendees text input.
+    const dropdown = screen.getByRole('combobox');
+    fireEvent.change(dropdown, { target: { value: 'anita@example.com' } });
+    const attendeesInput = screen.getByPlaceholderText(/email@example.com, another@example.com/i);
+    expect(attendeesInput.value).toContain('anita@example.com');
+  });
+
+  it('createMeet: checking "Add a Google Meet link" sends createMeet:true in the POST', async () => {
+    fetchApiMock.mockImplementation(makeGoogleOnlineWithContacts());
+    const { container } = render(<CalendarSync />);
+    await screen.findByText(/^Connected$/i);
+    fireEvent.click(screen.getByTitle(/Create new calendar event/i));
+    await screen.findByRole('heading', { name: /Create Event in Google/i });
+
+    fireEvent.change(screen.getByPlaceholderText(/Team Meeting, Client Call/i), {
+      target: { value: 'Consult' },
+    });
+    const dts = container.querySelectorAll('input[type="datetime-local"]');
+    fireEvent.change(dts[0], { target: { value: '2999-01-15T10:00' } });
+    fireEvent.change(dts[1], { target: { value: '2999-01-15T11:00' } });
+    fireEvent.click(screen.getByLabelText(/meeting link to this event/i));
+    fireEvent.click(screen.getByRole('button', { name: /^Create Event$/i }));
+
+    await waitFor(() => {
+      const post = fetchApiMock.mock.calls.find(
+        ([u, o]) => u === '/api/calendar/google/events' && o?.method === 'POST',
+      );
+      expect(post).toBeTruthy();
+      expect(JSON.parse(post[1].body).createMeet).toBe(true);
+    });
+  });
+
   it('event row click: opens the detail modal with the event title rendered + Close button', async () => {
     fetchApiMock.mockImplementation(makeGoogleOnlineMock());
     render(<CalendarSync />);

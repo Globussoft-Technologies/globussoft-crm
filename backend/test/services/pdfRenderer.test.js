@@ -1030,3 +1030,52 @@ describe('renderPatientSummaryPdf — visit photos', () => {
     expect(txt).not.toMatch(/AFTER \(/);
   });
 });
+
+// ── renderTravelDiagnosticPdf — curriculum-fit section (T21 FR-7) ────
+
+describe('renderTravelDiagnosticPdf — curriculum-fit section', () => {
+  const baseDiag = (overrides = {}) => ({
+    subBrand: 'tmc',
+    classification: 'level_2',
+    classificationLabel: 'Premium',
+    recommendedTier: 'premium',
+    score: 7.5,
+    createdAt: new Date('2026-06-08'),
+    answersJson: JSON.stringify({ budget: 'high' }),
+    ...overrides,
+  });
+  const bank = {
+    version: 1,
+    questionsJson: JSON.stringify({
+      questions: [{ id: 'budget', text: 'Budget tier?', type: 'single', options: [{ value: 'high', label: 'High' }] }],
+    }),
+  };
+  const contact = { name: 'Demo School', email: 'p@s.edu', phone: '+91 90000 00000' };
+
+  test('renders the curriculum section + destination when curriculumFitJson is present', async () => {
+    const curriculumFit = {
+      curriculum: 'CBSE', grade: 'Class 9', subject: 'Geography',
+      recommendations: [
+        { destination: 'Switzerland + Austria', fitScore: 85, reasons: [{ subject: 'Geography', learningOutcome: 'Glacial landforms', rationale: 'Alps' }] },
+      ],
+    };
+    const buf = await pdfR.renderTravelDiagnosticPdf(
+      baseDiag({ curriculumFitJson: JSON.stringify(curriculumFit) }), contact, bank
+    );
+    const txt = extractPdfText(buf);
+    expect(txt).toContain('curriculum');
+    expect(txt).toContain('Switzerland');
+  });
+
+  test('omits the section when curriculumFitJson is null (non-TMC / no context)', async () => {
+    const buf = await pdfR.renderTravelDiagnosticPdf(baseDiag({ curriculumFitJson: null }), contact, bank);
+    const txt = extractPdfText(buf);
+    expect(txt).not.toContain('Switzerland');
+  });
+
+  test('returns a valid PDF buffer', async () => {
+    const buf = await pdfR.renderTravelDiagnosticPdf(baseDiag(), contact, bank);
+    expect(Buffer.isBuffer(buf)).toBe(true);
+    expect(buf.slice(0, 4).toString()).toBe('%PDF');
+  });
+});

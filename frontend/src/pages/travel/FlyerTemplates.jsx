@@ -57,7 +57,14 @@ import { useNavigate } from "react-router-dom";
 import { FileImage, Plus, Pencil, Trash2, Copy, CopyPlus, Search } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
-import { SUB_BRAND_BG, SUB_BRAND_LABEL } from "../../utils/travelSubBrand";
+import {
+  SUB_BRAND_BG,
+  SUB_BRAND_LABEL,
+  accessibleSubBrands,
+  defaultSubBrandFor,
+  subBrandShortLabel,
+} from "../../utils/travelSubBrand";
+import { useActiveSubBrand } from "../../utils/subBrand";
 import { AuthContext } from "../../App";
 
 const SUB_BRANDS = [
@@ -67,8 +74,6 @@ const SUB_BRANDS = [
   { value: "travelstall", label: "Travel Stall" },
   { value: "visasure", label: "Visa Sure" },
 ];
-
-const SUB_BRANDS_CREATE = SUB_BRANDS.filter((s) => s.value);
 
 // Default placeholder palette used when a template's palette object is
 // malformed or missing (defensive — slice-1 validator ensures shape on
@@ -93,6 +98,12 @@ export default function FlyerTemplates() {
   const navigate = useNavigate();
   const { user } = useContext(AuthContext) || {};
   const canWrite = user?.role === "ADMIN" || user?.role === "MANAGER";
+  const { activeSubBrand } = useActiveSubBrand();
+  // Sub-brands this user may create/edit templates for. ADMIN (or any user
+  // with all 4) gets a full dropdown; a user restricted to exactly one brand
+  // gets that brand auto-selected + a read-only field (no dropdown).
+  const myBrands = accessibleSubBrands(user);
+  const lockedBrand = myBrands.length === 1 ? myBrands[0] : null;
 
   const [templates, setTemplates] = useState([]);
   const [total, setTotal] = useState(0);
@@ -154,7 +165,8 @@ export default function FlyerTemplates() {
   };
 
   const openCreate = () => {
-    resetForm();
+    setEditingId(null);
+    setForm({ ...EMPTY_FORM, subBrand: defaultSubBrandFor(user, activeSubBrand) });
     setShowForm(true);
   };
 
@@ -331,16 +343,27 @@ export default function FlyerTemplates() {
             style={inputStyle}
             aria-label="Template name"
           />
-          <select
-            value={form.subBrand}
-            onChange={(e) => setForm({ ...form, subBrand: e.target.value })}
-            style={inputStyle}
-            aria-label="Sub-brand"
-          >
-            {SUB_BRANDS_CREATE.map((s) => (
-              <option key={s.value} value={s.value}>{s.label}</option>
-            ))}
-          </select>
+          {lockedBrand ? (
+            <input
+              type="text"
+              value={subBrandShortLabel(form.subBrand || lockedBrand)}
+              readOnly
+              disabled
+              aria-label="Sub-brand (locked to your assigned brand)"
+              style={{ ...inputStyle, opacity: 0.7, cursor: "not-allowed" }}
+            />
+          ) : (
+            <select
+              value={form.subBrand}
+              onChange={(e) => setForm({ ...form, subBrand: e.target.value })}
+              style={inputStyle}
+              aria-label="Sub-brand"
+            >
+              {myBrands.map((b) => (
+                <option key={b} value={b}>{subBrandShortLabel(b)}</option>
+              ))}
+            </select>
+          )}
           <div style={{ display: "flex", gap: 8 }}>
             <button type="submit" disabled={saving} style={{ ...primaryBtn, background: "var(--success-color, var(--primary-color))" }}>
               {saving ? "Saving…" : editingId ? "Save Changes" : "Save"}

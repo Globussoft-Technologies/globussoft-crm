@@ -165,6 +165,28 @@ describe('<InboundLeads /> — initial fetch', () => {
   });
 });
 
+describe('<InboundLeads /> — suspect / quality badges', () => {
+  it('badges a Junk lead as Suspect + shows its aiScore; a good lead shows score with no Suspect pill', async () => {
+    installFetchMock({ contacts: [
+      makeContact({ id: 8001, name: 'Junk Lead', source: 'inbound:webform', status: 'Junk', aiScore: 12 }),
+      makeContact({ id: 8002, name: 'Good Lead', source: 'inbound:voyagr', status: 'Lead', aiScore: 88 }),
+    ] });
+    render(<InboundLeads />);
+    expect(await screen.findByTestId('inbound-lead-suspect-8001')).toBeInTheDocument();
+    expect(screen.getByTestId('inbound-lead-score-8001')).toHaveTextContent('12/100');
+    expect(screen.getByTestId('inbound-lead-score-8002')).toHaveTextContent('88/100');
+    expect(screen.queryByTestId('inbound-lead-suspect-8002')).toBeNull();
+  });
+
+  it('flags a low aiScore (<40) as Suspect even when status is not Junk', async () => {
+    installFetchMock({ contacts: [
+      makeContact({ id: 8003, name: 'Low Score', source: 'inbound:whatsapp', status: 'Lead', aiScore: 30 }),
+    ] });
+    render(<InboundLeads />);
+    expect(await screen.findByTestId('inbound-lead-suspect-8003')).toBeInTheDocument();
+  });
+});
+
 describe('<InboundLeads /> — only inbound: rows survive', () => {
   it('client-side filters to source.startsWith("inbound:")', async () => {
     installFetchMock({

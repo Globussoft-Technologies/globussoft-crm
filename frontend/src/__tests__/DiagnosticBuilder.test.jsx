@@ -94,11 +94,30 @@ function renderPage({ role = 'ADMIN' } = {}) {
 
 beforeEach(() => {
   fetchApiMock.mockReset();
+  // The builder loads the selected sub-brand's current active bank on mount /
+  // brand-switch. Default: no existing bank → the editors keep their template
+  // seed. Tests that exercise the POST override this with a routing impl.
+  fetchApiMock.mockImplementation((url) =>
+    typeof url === 'string' && url.includes('/diagnostic-banks?')
+      ? Promise.resolve({ banks: [] })
+      : Promise.resolve({ id: 1, version: 1, subBrand: 'tmc' }),
+  );
   notifyObj.error.mockReset();
   notifyObj.success.mockReset();
   notifyObj.info.mockReset();
   navigateMock.mockReset();
 });
+
+// Helper: route the mount GET to "no existing bank" and the POST to a given
+// resolver/rejecter, so the *Once timing no longer collides with mount.
+function routePost(postHandler) {
+  fetchApiMock.mockImplementation((url, opts) => {
+    if (typeof url === 'string' && url.includes('/diagnostic-banks?')) {
+      return Promise.resolve({ banks: [] });
+    }
+    return postHandler(url, opts);
+  });
+}
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -208,7 +227,7 @@ describe('DiagnosticBuilder — Travel diagnostic-bank authoring (PRD §4 Q13 / 
   });
 
   it('Create POSTs to /api/travel/diagnostic-banks with the right shape + navigates on success', async () => {
-    fetchApiMock.mockResolvedValueOnce({ id: 99, version: 4, subBrand: 'tmc' });
+    routePost(() => Promise.resolve({ id: 99, version: 4, subBrand: 'tmc' }));
     renderPage();
     fireEvent.click(screen.getByRole('button', { name: /Create bank/i }));
     await waitFor(() => {
@@ -230,10 +249,10 @@ describe('DiagnosticBuilder — Travel diagnostic-bank authoring (PRD §4 Q13 / 
   });
 
   it('Create surfaces the backend error message on failure', async () => {
-    fetchApiMock.mockRejectedValueOnce({
+    routePost(() => Promise.reject({
       status: 400,
       body: { error: 'questionsJson schema invalid: question[0].options is empty' },
-    });
+    }));
     renderPage();
     fireEvent.click(screen.getByRole('button', { name: /Create bank/i }));
     await waitFor(() => {
@@ -421,7 +440,7 @@ describe('DiagnosticBuilder — Travel diagnostic-bank authoring (PRD §4 Q13 / 
   });
 
   it('Create uses the currently-selected sub-brand in the POST + uppercased success', async () => {
-    fetchApiMock.mockResolvedValueOnce({ id: 7, version: 2, subBrand: 'rfu' });
+    routePost(() => Promise.resolve({ id: 7, version: 2, subBrand: 'rfu' }));
     renderPage();
     fireEvent.click(screen.getByRole('button', { name: /RFU \(Umrah\)/i }));
     fireEvent.click(screen.getByRole('button', { name: /Create bank/i }));
@@ -441,7 +460,7 @@ describe('DiagnosticBuilder — Travel diagnostic-bank authoring (PRD §4 Q13 / 
   });
 
   it('Create swallows a rejection lacking body.error with a generic fallback message', async () => {
-    fetchApiMock.mockRejectedValueOnce({ status: 500 });
+    routePost(() => Promise.reject({ status: 500 }));
     renderPage();
     fireEvent.click(screen.getByRole('button', { name: /Create bank/i }));
     await waitFor(() => {
@@ -463,13 +482,14 @@ describe('DiagnosticBuilder — Travel diagnostic-bank authoring (PRD §4 Q13 / 
       const msg = notifyObj.error.mock.calls[0][0];
       expect(msg).toMatch(/Fix validation errors/i);
     });
-    expect(fetchApiMock).not.toHaveBeenCalled();
+    // The mount load may have queried the bank list, but no POST (create) fires.
+    expect(fetchApiMock.mock.calls.some(([, o]) => o?.method === 'POST')).toBe(false);
     expect(navigateMock).not.toHaveBeenCalled();
   });
 
   it('Create button shows "Creating…" + disabled state while the POST is in-flight', async () => {
     let resolveCreate;
-    fetchApiMock.mockReturnValueOnce(new Promise((resolve) => { resolveCreate = resolve; }));
+    routePost(() => new Promise((resolve) => { resolveCreate = resolve; }));
     renderPage();
     const createBtn = screen.getByRole('button', { name: /Create bank/i });
     fireEvent.click(createBtn);

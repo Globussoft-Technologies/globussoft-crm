@@ -26,19 +26,18 @@
 //     offset+limit pair (Prev/Next, limit=20) keeps the page lean and
 //     mirrors the Phase-1 admin-table shape across travel/* siblings.
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useContext } from 'react';
 import { Link } from 'react-router-dom';
 import { ChevronLeft, ChevronRight, Edit2, Filter, MapPin, Plus, Trash2, X } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
-
-const SUB_BRANDS = [
-  { value: '', label: 'All sub-brands' },
-  { value: 'tmc', label: 'TMC' },
-  { value: 'rfu', label: 'RFU' },
-  { value: 'travelstall', label: 'Travel Stall' },
-  { value: 'visasure', label: 'Visa Sure' },
-];
+import { AuthContext } from '../../App';
+import { useActiveSubBrand } from '../../utils/subBrand';
+import {
+  accessibleSubBrands,
+  defaultSubBrandFor,
+  subBrandShortLabel,
+} from '../../utils/travelSubBrand';
 
 const CATEGORIES = [
   { value: '', label: 'All categories' },
@@ -68,6 +67,16 @@ const EMPTY_FORM = {
 
 export default function SightseeingMaster() {
   const notify = useNotify();
+  const { user } = useContext(AuthContext) || {};
+  const { activeSubBrand } = useActiveSubBrand();
+
+  // Sub-brand access resolution (mirrors Leads.jsx): ADMIN / unrestricted users
+  // get a dropdown of all accessible brands; a user restricted to exactly one
+  // brand gets that brand auto-selected + a read-only field; 2-3 brand users get
+  // a dropdown limited to THEIR brands. See defaultSubBrandFor.
+  const myBrands = accessibleSubBrands(user);
+  const lockedBrand = myBrands.length === 1 ? myBrands[0] : null;
+
   const [items, setItems] = useState([]);
   const [total, setTotal] = useState(0);
   const [offset, setOffset] = useState(0);
@@ -113,6 +122,12 @@ export default function SightseeingMaster() {
     setForm(EMPTY_FORM);
     setEditingId(null);
     setShowForm(false);
+  };
+
+  const openCreate = () => {
+    setForm({ ...EMPTY_FORM, subBrand: defaultSubBrandFor(user, activeSubBrand) });
+    setEditingId(null);
+    setShowForm(true);
   };
 
   const handleEdit = (item) => {
@@ -241,7 +256,7 @@ export default function SightseeingMaster() {
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           {!showForm && (
-            <button type="button" onClick={() => setShowForm(true)} style={primaryBtn}>
+            <button type="button" onClick={openCreate} style={primaryBtn}>
               <Plus size={14} /> Add sightseeing
             </button>
           )}
@@ -382,19 +397,31 @@ export default function SightseeingMaster() {
               </select>
             </Field>
             <Field label="Sub-brand">
-              <select
-                value={form.subBrand}
-                onChange={(e) => setForm({ ...form, subBrand: e.target.value })}
-                aria-label="subBrand"
-                style={selectStyle}
-              >
-                <option value="">— Tenant-wide —</option>
-                {SUB_BRANDS.filter((s) => s.value).map((s) => (
-                  <option key={s.value} value={s.value}>
-                    {s.label}
-                  </option>
-                ))}
-              </select>
+              {lockedBrand ? (
+                // Single-brand user: auto-selected, not editable. The value is
+                // already pinned in form.subBrand via defaultSubBrandFor.
+                <input
+                  type="text"
+                  value={subBrandShortLabel(lockedBrand)}
+                  readOnly
+                  disabled
+                  aria-label="Sub-brand (locked to your assigned brand)"
+                  style={{ ...inputStyle, opacity: 0.7, cursor: 'not-allowed' }}
+                />
+              ) : (
+                <select
+                  value={form.subBrand}
+                  onChange={(e) => setForm({ ...form, subBrand: e.target.value })}
+                  aria-label="subBrand"
+                  style={selectStyle}
+                >
+                  {myBrands.map((b) => (
+                    <option key={b} value={b}>
+                      {subBrandShortLabel(b)}
+                    </option>
+                  ))}
+                </select>
+              )}
             </Field>
             <Field label="Duration (minutes)">
               <input

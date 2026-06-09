@@ -1,13 +1,18 @@
 /**
  * TripBooking.jsx — public trip booking + 50%-advance flow (PRD §4.7).
  *
- * Consumes the public endpoints from commit 8abf6f3:
+ * Consumes the public endpoints:
  *   GET  /api/travel/itineraries/public/:shareToken
- *   POST /api/travel/itineraries/public/:shareToken/record-advance-payment
+ *   POST /api/travel/itineraries/public/:shareToken/create-payment-order
+ *   POST /api/travel/itineraries/public/:shareToken/verify-payment
  *
- * Both go through raw fetch() (page renders outside AuthContext shell),
- * so global.fetch is spied per-test. Mock objects are stable references
- * per CLAUDE.md feedback rule.
+ * Payment is a REAL Razorpay checkout: the page mints an order, opens the
+ * Razorpay modal (window.Razorpay), then verifies the signed result. Tests
+ * stub window.Razorpay so the modal auto-resolves a signed success payload.
+ *
+ * All requests go through raw fetch() (page renders outside AuthContext
+ * shell), so global.fetch is spied per-test. Mock objects are stable
+ * references per CLAUDE.md feedback rule.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
@@ -58,10 +63,29 @@ beforeEach(() => {
 });
 afterEach(() => {
   fetchSpy.mockRestore();
+  delete window.Razorpay;
 });
 
 const ok = (body) => Promise.resolve({ ok: true, json: () => Promise.resolve(body) });
 const fail = (status, body) => Promise.resolve({ ok: false, status, json: () => Promise.resolve(body) });
+
+// Stub the Razorpay checkout SDK. Because window.Razorpay is set, the page's
+// loadRazorpayScript() resolves immediately (no <script> injection needed).
+// open() auto-invokes the success handler with a signed result so the flow
+// proceeds to verify-payment. SIGNED = { razorpay_order_id/payment_id/signature }.
+function installRazorpaySuccess() {
+  window.Razorpay = function Razorpay(opts) {
+    this.opts = opts;
+    this.on = () => {};
+    this.open = () => {
+      opts.handler({
+        razorpay_order_id: 'order_test_1',
+        razorpay_payment_id: 'pay_test_1',
+        razorpay_signature: 'sig_test_1',
+      });
+    };
+  };
+}
 
 function renderTrip(token = SENT_ITINERARY.shareToken) {
   return render(
@@ -115,7 +139,8 @@ describe('TripBooking — public booking page (PRD §4.7)', () => {
     expect(cta.textContent).toMatch(/50,000/);
   });
 
-  it('Pay-advance button POSTs the advanceDue amount + reload reflects new state', async () => {
+  it('Pay-advance opens Razorpay checkout, verifies the signed result, and reload reflects new state', async () => {
+    installRazorpaySuccess();
     let getCalls = 0;
     fetchSpy.mockImplementation((url, opts) => {
       if (url.startsWith('/api/travel/itineraries/public/') && !opts) {
@@ -123,12 +148,23 @@ describe('TripBooking — public booking page (PRD §4.7)', () => {
         // First load = sent; after pay → advance_paid.
         return ok(getCalls === 1 ? SENT_ITINERARY : ADVANCE_PAID_ITINERARY);
       }
-      if (opts?.method === 'POST' && url.endsWith('/record-advance-payment')) {
+      if (opts?.method === 'POST' && url.endsWith('/create-payment-order')) {
+        return ok({
+          orderId: 'order_test_1',
+          amount: 5000000, // paise
+          amountMajor: 50000,
+          currency: 'INR',
+          keyId: 'rzp_test_x',
+          kind: 'advance',
+          destination: 'Bali, Indonesia',
+        });
+      }
+      if (opts?.method === 'POST' && url.endsWith('/verify-payment')) {
         return ok({
           status: 'advance_paid',
           advancePaidAmount: 50000,
           advancePaidAt: '2026-05-21T10:00:00.000Z',
-          paymentReference: 'demo_pay_x',
+          paymentReference: 'pay_test_1',
           balanceDue: 50000,
         });
       }
@@ -138,16 +174,28 @@ describe('TripBooking — public booking page (PRD §4.7)', () => {
     const payBtn = await screen.findByRole('button', { name: /Pay 50% to confirm/i });
     fireEvent.click(payBtn);
 
-    // Re-fetch happens → advance-paid state renders.
+    // Re-fetch after a verified payment → advance-paid state renders.
     await screen.findByText(/Advance received/i);
     expect(screen.getByText(/Your trip is confirmed/i)).toBeTruthy();
 
-    // Verify POST body had advanceDue + a paymentReference.
-    const postCall = fetchSpy.mock.calls.find((c) => c[1]?.method === 'POST');
-    const body = JSON.parse(postCall[1].body);
-    expect(body.amount).toBe(50000);
-    expect(typeof body.paymentReference).toBe('string');
-    expect(body.paymentReference).toMatch(/^demo_pay_/);
+    // create-payment-order was called with kind: advance.
+    const orderCall = fetchSpy.mock.calls.find(
+      (c) => c[1]?.method === 'POST' && c[0].endsWith('/create-payment-order'),
+    );
+    expect(JSON.parse(orderCall[1].body).kind).toBe('advance');
+
+    // verify-payment was called with the signed Razorpay fields.
+    const verifyCall = fetchSpy.mock.calls.find(
+      (c) => c[1]?.method === 'POST' && c[0].endsWith('/verify-payment'),
+    );
+    const vbody = JSON.parse(verifyCall[1].body);
+    expect(vbody.razorpay_order_id).toBe('order_test_1');
+    expect(vbody.razorpay_payment_id).toBe('pay_test_1');
+    expect(vbody.razorpay_signature).toBe('sig_test_1');
+
+    // No demo record-advance-payment call — the dummy path is gone.
+    const demoCall = fetchSpy.mock.calls.find((c) => c[0].endsWith('/record-advance-payment'));
+    expect(demoCall).toBeUndefined();
   });
 
   it('shows balance-pay CTA after advance is recorded', async () => {
@@ -168,15 +216,16 @@ describe('TripBooking — public booking page (PRD §4.7)', () => {
     expect(screen.queryByRole('button', { name: /Pay /i })).toBeNull();
   });
 
-  it('surfaces a payment error and stays on the form', async () => {
+  it('surfaces a payment error and stays on the form when order creation fails', async () => {
+    installRazorpaySuccess();
     let getCalls = 0;
     fetchSpy.mockImplementation((url, opts) => {
       if (url.startsWith('/api/travel/itineraries/public/') && !opts) {
         getCalls += 1;
         return ok(SENT_ITINERARY);
       }
-      if (opts?.method === 'POST' && url.endsWith('/record-advance-payment')) {
-        return fail(500, { error: 'Gateway timeout. Please try again.' });
+      if (opts?.method === 'POST' && url.endsWith('/create-payment-order')) {
+        return fail(503, { error: 'Online payment is not configured', code: 'GATEWAY_NOT_CONFIGURED' });
       }
       return ok({});
     });
@@ -184,8 +233,8 @@ describe('TripBooking — public booking page (PRD §4.7)', () => {
     const payBtn = await screen.findByRole('button', { name: /Pay 50% to confirm/i });
     fireEvent.click(payBtn);
     await screen.findByRole('alert');
-    expect(screen.getByText(/Gateway timeout/)).toBeTruthy();
-    // Still on the form (Pay button visible, no advance-received success state).
+    expect(screen.getByText(/not configured/i)).toBeTruthy();
+    // Still on the form (no advance-received success state).
     expect(screen.queryByText(/Advance received/i)).toBeNull();
     // GET only called once (the initial load — no reload on pay-error).
     expect(getCalls).toBe(1);

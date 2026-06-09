@@ -67,7 +67,7 @@ describe('s3Service — uploadFile', () => {
     expect(url).toMatch(/^https:\/\/test-bucket\.s3\.us-east-1\.amazonaws\.com\/avatars\/\d+-photo\.jpg$/);
   });
 
-  test('sends PutObjectCommand with bucket/key/body/contentType/ACL', async () => {
+  test('sends PutObjectCommand with bucket/key/body/contentType and NO ACL', async () => {
     sendMock.mockResolvedValueOnce({});
     const buf = Buffer.from('img-bytes');
     await uploadFile(buf, 'avatar.png', 'image/png', 'avatars');
@@ -79,7 +79,10 @@ describe('s3Service — uploadFile', () => {
     expect(cmd.input.Key).toMatch(/^avatars\/\d+-avatar\.png$/);
     expect(cmd.input.Body).toBe(buf);
     expect(cmd.input.ContentType).toBe('image/png');
-    expect(cmd.input.ACL).toBe('public-read');
+    // ACL intentionally NOT set — buckets with Object Ownership = "bucket
+    // owner enforced" reject ACL params on PutObject. Public access is
+    // controlled at the bucket-policy level instead.
+    expect(cmd.input.ACL).toBeUndefined();
   });
 
   test('lowercases filename and replaces special chars with _', async () => {

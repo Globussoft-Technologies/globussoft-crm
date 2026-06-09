@@ -112,7 +112,13 @@ function makeItem(overrides = {}) {
   };
 }
 
-const ALL_TYPES = ['flight', 'hotel', 'transfer', 'activity', 'visa', 'insurance'];
+// Mirrors VALID_ITEM_TYPES in backend/routes/travel_itineraries.js — every
+// bucket must be present + zero-filled in the empty-itinerary response for a
+// stable consumer shape, and the route widens this enum over time.
+const ALL_TYPES = [
+  'flight', 'train', 'bus', 'cab', 'transfer', 'hotel',
+  'sightseeing', 'activity', 'meals', 'visa', 'insurance', 'other',
+];
 
 beforeEach(() => {
   prisma.itinerary.findFirst.mockReset();
@@ -128,7 +134,7 @@ beforeEach(() => {
 });
 
 describe('GET /api/travel/itineraries/:id/totals — happy paths', () => {
-  test('empty itinerary → totalItems=0, all-zero grand, all 6 byItemType buckets present + zero-filled', async () => {
+  test('empty itinerary → totalItems=0, all-zero grand, every byItemType bucket present + zero-filled', async () => {
     prisma.itinerary.findFirst.mockResolvedValueOnce(parentItinerary());
     prisma.itineraryItem.findMany.mockResolvedValue([]);
 
@@ -142,7 +148,7 @@ describe('GET /api/travel/itineraries/:id/totals — happy paths', () => {
       totalItems: 0,
       grand: { totalUnitCost: 0, totalMarkup: 0, totalGstAmount: 0, totalPrice: 0 },
     });
-    // All 6 buckets must be present + zero-filled for stable consumer shape.
+    // Every bucket must be present + zero-filled for stable consumer shape.
     expect(Object.keys(res.body.byItemType).sort()).toEqual([...ALL_TYPES].sort());
     for (const t of ALL_TYPES) {
       expect(res.body.byItemType[t]).toEqual({

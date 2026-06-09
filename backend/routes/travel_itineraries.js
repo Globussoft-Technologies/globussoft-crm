@@ -1980,7 +1980,7 @@ router.patch("/itineraries/:id/items/:itemId", verifyToken, requireTravelTenant,
     if (!existing) return res.status(404).json({ error: "Item not found", code: "ITEM_NOT_FOUND" });
 
     const data = {};
-    const { itemType, position, description, detailsJson, supplierId, unitCost, markup, gstAmount, unit, quantity, direction } = req.body || {};
+    const { itemType, position, description, detailsJson, supplierId, unitCost, markup, gstAmount, unit, quantity, direction, totalPrice } = req.body || {};
     if (itemType !== undefined) {
       assertValidItemType(itemType);
       data.itemType = itemType;
@@ -2010,15 +2010,21 @@ router.patch("/itineraries/:id/items/:itemId", verifyToken, requireTravelTenant,
     }
 
     // Recompute the line total whenever a price-affecting field changes,
-    // merging the patch with the item's existing values. Never trust a
-    // client-supplied total.
-    if ([unitCost, markup, gstAmount, quantity].some((v) => v !== undefined)) {
+    // merging the patch with the item's existing values. A client-supplied
+    // `totalPrice` is only honoured when NONE of the cost components are
+    // being patched — that's the "override the total directly" path (used
+    // by ad-hoc line items where unitCost/markup don't apply). If both
+    // arrive in the same body, server-recomputed wins.
+    const costFieldsPatched = [unitCost, markup, gstAmount, quantity].some((v) => v !== undefined);
+    if (costFieldsPatched) {
       data.totalPrice = computeItemLineTotal({
         unitCost: unitCost !== undefined ? unitCost : existing.unitCost,
         quantity: quantity !== undefined ? quantity : existing.quantity,
         markup: markup !== undefined ? markup : existing.markup,
         gstAmount: gstAmount !== undefined ? gstAmount : existing.gstAmount,
       });
+    } else if (totalPrice !== undefined) {
+      data.totalPrice = totalPrice != null && totalPrice !== "" ? Number(totalPrice) : 0;
     }
 
     if (Object.keys(data).length === 0) {

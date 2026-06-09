@@ -191,7 +191,7 @@ app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
 // Security middleware
 const cookieParser = require('cookie-parser');
-const { attachNonce, helmetMiddleware, helmetStrictReportOnlyMiddleware, permissionsPolicyMiddleware, sanitizeBody, stripTenantOverride } = require('./middleware/security');
+const { attachNonce, helmetMiddleware, helmetStrictReportOnlyMiddleware, permissionsPolicyMiddleware, sanitizeBody, stripTenantOverride, allowIframeEmbedding } = require('./middleware/security');
 const { originCheck } = require('./middleware/originCheck');
 // #917 slice S1 (FR-3.2) — mint a per-request CSP nonce BEFORE the strict
 // Report-Only CSP middleware runs. The CSP function-directives read
@@ -961,6 +961,19 @@ app.use("/api/security", require("./routes/security_reports"));
 
 // Public landing pages (outside /api/ prefix, no auth guard)
 app.use("/p", landingPagesPublic);
+
+// #921 slice S38 — wire the iframe-embedding override on /embed/* BEFORE
+// the lead-form gate handler. S4 (commit 6561bdc) made the global default
+// X-Frame-Options: DENY + CSP frame-ancestors 'none' so no page can be
+// iframed by anyone — but the embed widget is the ONE intentionally-public
+// iframe surface (partner sites embed our /embed/lead-form.html into their
+// own pages via an iframe pointing at our origin). Without this override
+// every partner-side embed silently broke when S4 landed. allowList: ['*']
+// = "anyone can frame me" — appropriate because the embed widget is
+// intentionally public and partner origins aren't known upfront. Once
+// Tenant.embedAllowlistJson lands (flagged follow-up in security.js:355+),
+// this mount can read per-tenant allowList instead of the wildcard.
+app.use("/embed", allowIframeEmbedding({ allowList: ["*"] }));
 
 // #297: /embed/lead-form.html — server-side gate so a malformed/revoked
 // API key returns 404 at GET time rather than letting the form render and

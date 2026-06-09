@@ -628,6 +628,69 @@ test.describe('#297 — embed widget GETs are gated on API key validity', () => 
 });
 
 // ──────────────────────────────────────────────────────────────────────
+// #921 slice S38 — /embed/* is intentionally framable (partner-site iframe)
+// ──────────────────────────────────────────────────────────────────────
+//
+// S4 (commit 6561bdc) shipped a global X-Frame-Options: DENY +
+// CSP frame-ancestors 'none' — so by default NO page can be iframed by
+// anyone, including itself. The embed lead-capture widget at
+// /embed/lead-form.html is the ONE legitimate cross-origin iframe case;
+// partner sites embed our URL into an iframe on THEIR origin. S38 mounts
+// allowIframeEmbedding({ allowList: ['*'] }) on /embed/* so the global
+// default is overridden for this route family only.
+//
+// Pins:
+//   1. GET /embed/lead-form.html → X-Frame-Options is ABSENT
+//      (the override removes it; presence of any value, especially DENY,
+//      would re-block partners on legacy browsers that prefer XFO).
+//   2. GET /embed/lead-form.html → CSP frame-ancestors is permissive
+//      (either absent, or contains the wildcard '*' — NOT 'none').
+//
+// If this describe goes RED the partner-side embed broke — every partner
+// CRM that loads our widget via <iframe> will see a "refused to display
+// in a frame" error in their browser console.
+test.describe("#921 slice S38 — embed widget remains framable by partners", () => {
+  test("GET /embed/lead-form.html — X-Frame-Options is NOT DENY", async ({ request }) => {
+    test.skip(!IS_LOCAL_STACK, "/embed/* served by Nginx in production — backend gate is local-stack-only");
+    const r = await request.get(`${BASE_URL}/embed/lead-form.html`, {
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(r.status()).toBe(200);
+    const headers = r.headers();
+    // The override calls res.removeHeader('X-Frame-Options'), so the
+    // header should be absent. Accept SAMEORIGIN too in case a future
+    // refactor flips the override strategy, but DENY must never be the
+    // value — that's exactly what partners would be blocked by.
+    const xfo = headers["x-frame-options"];
+    if (xfo !== undefined) {
+      expect(String(xfo).toUpperCase()).not.toBe("DENY");
+      expect(String(xfo).toUpperCase()).not.toBe("DENY".toUpperCase());
+    }
+  });
+
+  test("GET /embed/lead-form.html — CSP frame-ancestors is permissive", async ({ request }) => {
+    test.skip(!IS_LOCAL_STACK, "/embed/* served by Nginx in production — backend gate is local-stack-only");
+    const r = await request.get(`${BASE_URL}/embed/lead-form.html`, {
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(r.status()).toBe(200);
+    const headers = r.headers();
+    const csp = headers["content-security-policy"];
+    // CSP header may be absent (no global CSP) or present (helmet config).
+    // What matters: if frame-ancestors is set, it must NOT be 'none'.
+    if (csp) {
+      const m = String(csp).match(/frame-ancestors\s+([^;]+)/i);
+      if (m) {
+        const directive = m[1].trim();
+        // Wildcard '*' is the expected value; reject 'none' specifically.
+        expect(directive).not.toMatch(/^'none'$/);
+        expect(directive).not.toMatch(/^none$/);
+      }
+    }
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────
 // #208 — /api/portal serves the customer portal contract, NOT KB
 // ──────────────────────────────────────────────────────────────────────
 

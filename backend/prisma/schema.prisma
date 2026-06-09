@@ -6771,3 +6771,47 @@ model SecurityIncident {
   @@index([incidentType])
   @@index([createdAt])
 }
+
+// ── Travel POI catalog (S11 — PRD_TRAVEL_ITINERARY_UPGRADES FR-3.5) ──
+//
+// Points-of-interest catalog populated from OpenTripMap (+ future
+// providers). Rows are shared across tenants by default (tenantId NULL —
+// catalog data). Tenant-pinned overrides land in a later slice via
+// tenantId-scoped duplicates.
+//
+// Idempotent upsert key: (externalSource, externalId). Re-running the
+// seeder doesn't create duplicates — re-runs refresh name / category /
+// imageUrl / descriptionShort while preserving the local id and any
+// pendingApproval / tenant-tagging fields set after import.
+//
+// Additive model — no FKs, no UNIQUE on existing data, no column changes
+// elsewhere. Migration-safety bless markers not required.
+//
+// S12 (Inline Add-POI modal) uses pendingApproval=true for rep-suggested
+// POIs that need ADMIN approval before being itinerary-eligible. The
+// seeder always upserts with pendingApproval=false (catalog imports are
+// pre-approved by virtue of being curated by the seeder script).
+model TravelPoi {
+  id               Int      @id @default(autoincrement())
+  tenantId         Int? // null = catalog-wide; set when an admin pins / forks a row to a tenant
+  externalSource   String // 'opentripmap' | future providers
+  externalId       String // upstream xid / external identifier
+  name             String
+  nameLocal        String? // transliteration / local-language label
+  category         String? // 'religious' | 'historical' | 'natural' | 'cultural' | ...
+  latitude         Float?
+  longitude        Float?
+  country          String? // ISO-3166-1-alpha-2
+  destinationSlug  String? // grouping key for top-N destinations (e.g. 'goa', 'paris')
+  imageUrl         String?
+  wikidataId       String?
+  descriptionShort String?  @db.Text // cached short description
+  pendingApproval  Boolean  @default(false) // S12 uses this for rep-suggested rows
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@unique([externalSource, externalId])
+  @@index([tenantId, destinationSlug])
+  @@index([country, category])
+  @@index([pendingApproval])
+}

@@ -158,6 +158,26 @@ function installFetchMock({
   update = { invoice: makeInvoice() },
   remove = null,
   detail = null,
+  // S56 — cancel-preview + void surfaces. Default `preview` = an OK
+  // response with a 50% TMC Default tier; tests opt-in to NO_POLICY_RESOLVED
+  // or Error to exercise the warning + error branches.
+  preview = {
+    invoiceId: 101,
+    status: 'Issued',
+    policyApplied: { policyId: 7, policyName: 'TMC Default', tier: 0, refundPercent: 50 },
+    refundAmount: 25000,
+    refundPercent: 50,
+    daysBeforeServiceStart: 14,
+    serviceStartDate: '2026-07-15T00:00:00.000Z',
+    reason: 'OK',
+  },
+  voidResp = {
+    id: 101,
+    invoiceNum: 'TINV-2026-0001',
+    status: 'Voided',
+    creditNote: null,
+    policyApplied: null,
+  },
 } = {}) {
   fetchApiMock.mockImplementation((url, opts) => {
     const method = opts?.method || 'GET';
@@ -167,6 +187,16 @@ function installFetchMock({
     if (url.includes('?include=lines') && method === 'GET') {
       if (detail instanceof Error) return Promise.reject(detail);
       return Promise.resolve(detail);
+    }
+    // S56 — cancel-preview GET (fires when void modal opens).
+    if (url.includes('/cancel-preview') && method === 'GET') {
+      if (preview instanceof Error) return Promise.reject(preview);
+      return Promise.resolve(preview);
+    }
+    // S56 — POST /:id/void (fires on Confirm).
+    if (/\/api\/travel\/invoices\/\d+\/void$/.test(url) && method === 'POST') {
+      if (voidResp instanceof Error) return Promise.reject(voidResp);
+      return Promise.resolve(voidResp);
     }
     if (url.startsWith('/api/travel/invoices') && method === 'GET') {
       if (list instanceof Error) return Promise.reject(list);
@@ -833,5 +863,247 @@ describe('<InvoicesAdmin /> — TDS withholding tiles (#901 slice 22)', () => {
     expect(tiles.textContent).toMatch(/10,000/);
     // Net payable = 200,000 - 10,000 = 190,000.
     expect(tiles.textContent).toMatch(/1,90,000|190,000/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// S56 (#920) — void-confirmation modal with cancel-preview surface
+// ---------------------------------------------------------------------------
+//
+// Per the S33 follow-up #4 backlog item: operators clicking the dedicated
+// Void icon button see a confirmation modal that includes the refund
+// preview BEFORE committing the void. The preview is fetched from
+// GET /api/travel/invoices/:id/cancel-preview (S58, commit c634af14)
+// and rendered based on `reason`:
+//
+//   reason: 'OK'                  → "Refund: ₹X per <policyName> (Y% — Zd before service)"
+//   reason: 'NO_POLICY_RESOLVED'  → "No matching cancellation policy. Voiding
+//                                    will NOT auto-issue a credit note."
+//   preview-fetch failure         → "Could not load refund preview — review
+//                                    the policy before confirming."
+//
+// The reason text input is REQUIRED by the backend (5..500 chars,
+// INVALID_VOID_REASON) and remains in place — the preview is purely
+// informational. Confirm fires POST /:id/void with { reason }.
+//
+// Discriminator key: `preview.reason` (NOT `refundAmount === null`) since
+// `refundAmount: 0` is a valid no-refund-but-policy-matched state (the 0%
+// tier surfaces the policy without auto-issuing a credit note).
+describe('<InvoicesAdmin /> — void-confirmation modal (S56)', () => {
+  it('clicking the Void icon button opens the modal AND fires the cancel-preview GET', async () => {
+    renderPage();
+    await screen.findByText('TINV-2026-0001');
+    fetchApiMock.mockClear();
+    // Re-install so the cleared mock still routes the post-click traffic.
+    installFetchMock();
+    fireEvent.click(screen.getByRole('button', { name: /Void invoice TINV-2026-0001/i }));
+    // Modal renders.
+    expect(await screen.findByTestId('void-modal')).toBeInTheDocument();
+    // Cancel-preview GET fired against the row's id.
+    await waitFor(() => {
+      const previewGet = fetchApiMock.mock.calls.find(
+        ([url, opts]) =>
+          url === '/api/travel/invoices/101/cancel-preview' &&
+          (!opts || !opts.method || opts.method === 'GET'),
+      );
+      expect(previewGet).toBeTruthy();
+    });
+  });
+
+  it('renders the OK refund line when preview.reason === "OK"', async () => {
+    // Default mock ships an OK preview with 50% TMC Default + 14d.
+    renderPage();
+    await screen.findByText('TINV-2026-0001');
+    fireEvent.click(screen.getByRole('button', { name: /Void invoice TINV-2026-0001/i }));
+    // Wait for the preview to land.
+    const panel = await screen.findByTestId('void-preview-panel');
+    // Refund line: ₹25,000 + TMC Default + 50% + 14d.
+    // Asserting on substrings to tolerate the en-IN locale digit-grouping
+    // variants per CLAUDE.md cron-learning 2026-05-07 wave-6.
+    await waitFor(() => {
+      expect(panel.textContent).toMatch(/Refund:/);
+    });
+    expect(panel.textContent).toMatch(/25,000/);
+    expect(panel.textContent).toMatch(/TMC Default/);
+    expect(panel.textContent).toMatch(/50%/);
+    expect(panel.textContent).toMatch(/14d before service/);
+  });
+
+  it('renders the NO_POLICY_RESOLVED warning line when no policy matches', async () => {
+    installFetchMock({
+      preview: {
+        invoiceId: 101,
+        status: 'Issued',
+        policyApplied: null,
+        refundAmount: null,
+        refundPercent: null,
+        daysBeforeServiceStart: null,
+        serviceStartDate: null,
+        reason: 'NO_POLICY_RESOLVED',
+      },
+    });
+    renderPage();
+    await screen.findByText('TINV-2026-0001');
+    fireEvent.click(screen.getByRole('button', { name: /Void invoice TINV-2026-0001/i }));
+    const panel = await screen.findByTestId('void-preview-panel');
+    await waitFor(() => {
+      expect(panel.textContent).toMatch(/No matching cancellation policy/);
+    });
+    expect(panel.textContent).toMatch(/will NOT auto-issue a credit note/i);
+    // Refund line MUST NOT render on no-policy.
+    expect(panel.textContent).not.toMatch(/Refund:/);
+  });
+
+  it('renders the soft-error line when the preview fetch fails (network / 404 / 409)', async () => {
+    const err = new Error('Forbidden');
+    err.status = 409;
+    installFetchMock({ preview: err });
+    renderPage();
+    await screen.findByText('TINV-2026-0001');
+    fireEvent.click(screen.getByRole('button', { name: /Void invoice TINV-2026-0001/i }));
+    const panel = await screen.findByTestId('void-preview-panel');
+    await waitFor(() => {
+      expect(panel.textContent).toMatch(/Could not load refund preview/);
+    });
+    expect(panel.textContent).toMatch(/review the policy before confirming/);
+    // Confirm button MUST remain available even after preview failure —
+    // the preview is informational, not a hard gate.
+    const confirmBtn = screen.getByRole('button', { name: /Confirm void of invoice TINV-2026-0001/i });
+    expect(confirmBtn).not.toBeDisabled();
+  });
+
+  it('the reason textarea is present + Confirm fires POST /:id/void with { reason } after preview load', async () => {
+    renderPage();
+    await screen.findByText('TINV-2026-0001');
+    fireEvent.click(screen.getByRole('button', { name: /Void invoice TINV-2026-0001/i }));
+    // Preview lands.
+    const panel = await screen.findByTestId('void-preview-panel');
+    await waitFor(() => {
+      expect(panel.textContent).toMatch(/Refund:/);
+    });
+    // Reason textarea is rendered + accepts input.
+    const reasonInput = screen.getByLabelText(/Void reason/i);
+    expect(reasonInput).toBeInTheDocument();
+    fireEvent.change(reasonInput, {
+      target: { value: 'Customer cancelled trip — refunded via card.' },
+    });
+    // Clear so we can isolate the POST call.
+    fetchApiMock.mockClear();
+    installFetchMock();
+    fireEvent.click(
+      screen.getByRole('button', { name: /Confirm void of invoice TINV-2026-0001/i }),
+    );
+    await waitFor(() => {
+      const post = fetchApiMock.mock.calls.find(
+        ([url, opts]) =>
+          /\/api\/travel\/invoices\/101\/void$/.test(url) && opts?.method === 'POST',
+      );
+      expect(post).toBeTruthy();
+      const body = JSON.parse(post[1].body);
+      expect(body.reason).toBe('Customer cancelled trip — refunded via card.');
+    });
+    // Success toast fires + modal closes.
+    await waitFor(() => {
+      expect(notifySuccess).toHaveBeenCalled();
+    });
+  });
+
+  it('Confirm with reason shorter than 5 chars triggers notify.error and does NOT POST', async () => {
+    renderPage();
+    await screen.findByText('TINV-2026-0001');
+    fireEvent.click(screen.getByRole('button', { name: /Void invoice TINV-2026-0001/i }));
+    await screen.findByTestId('void-preview-panel');
+    const reasonInput = screen.getByLabelText(/Void reason/i);
+    fireEvent.change(reasonInput, { target: { value: 'foo' } });
+    fetchApiMock.mockClear();
+    installFetchMock();
+    fireEvent.click(
+      screen.getByRole('button', { name: /Confirm void of invoice TINV-2026-0001/i }),
+    );
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalled();
+    });
+    expect(notifyError.mock.calls[0][0]).toMatch(/5\.\.500/);
+    const posts = fetchApiMock.mock.calls.filter(
+      ([url, opts]) =>
+        /\/api\/travel\/invoices\/\d+\/void$/.test(url) && opts?.method === 'POST',
+    );
+    expect(posts.length).toBe(0);
+  });
+
+  it('the Void icon button is hidden on already-Voided rows (terminal state)', async () => {
+    installFetchMock({
+      list: {
+        invoices: [
+          makeInvoice({ id: 601, invoiceNum: 'TINV-2026-0601', status: 'Issued' }),
+          makeInvoice({ id: 602, invoiceNum: 'TINV-2026-0602', status: 'Voided' }),
+        ],
+        total: 2,
+      },
+    });
+    renderPage();
+    await screen.findByText('TINV-2026-0601');
+    // Issued row → Void button surfaces.
+    expect(
+      screen.getByRole('button', { name: /Void invoice TINV-2026-0601/i }),
+    ).toBeInTheDocument();
+    // Voided row → no Void button (already-Voided is terminal).
+    expect(
+      screen.queryByRole('button', { name: /Void invoice TINV-2026-0602/i }),
+    ).toBeNull();
+  });
+
+  it('Cancel button closes the modal without firing the void POST', async () => {
+    renderPage();
+    await screen.findByText('TINV-2026-0001');
+    fireEvent.click(screen.getByRole('button', { name: /Void invoice TINV-2026-0001/i }));
+    await screen.findByTestId('void-preview-panel');
+    fetchApiMock.mockClear();
+    installFetchMock();
+    // Click the Cancel button inside the modal (NOT the page's filter "Cancel").
+    const modal = screen.getByTestId('void-modal');
+    const cancelBtn = Array.from(modal.querySelectorAll('button')).find(
+      (b) => /^Cancel$/.test(b.textContent.trim()),
+    );
+    expect(cancelBtn).toBeTruthy();
+    fireEvent.click(cancelBtn);
+    // Modal unmounts.
+    await waitFor(() => {
+      expect(screen.queryByTestId('void-modal')).toBeNull();
+    });
+    // No POST fired.
+    const posts = fetchApiMock.mock.calls.filter(
+      ([url, opts]) =>
+        /\/api\/travel\/invoices\/\d+\/void$/.test(url) && opts?.method === 'POST',
+    );
+    expect(posts.length).toBe(0);
+  });
+
+  it('on successful void with auto-issued credit note, the success toast names the policy', async () => {
+    installFetchMock({
+      voidResp: {
+        id: 101,
+        invoiceNum: 'TINV-2026-0001',
+        status: 'Voided',
+        creditNote: { id: 999, invoiceNum: 'CN-TINV-2026-0001', totalAmount: -25000 },
+        policyApplied: { policyId: 7, policyName: 'TMC Default', tier: 0, refundPercent: 50 },
+      },
+    });
+    renderPage();
+    await screen.findByText('TINV-2026-0001');
+    fireEvent.click(screen.getByRole('button', { name: /Void invoice TINV-2026-0001/i }));
+    await screen.findByTestId('void-preview-panel');
+    fireEvent.change(screen.getByLabelText(/Void reason/i), {
+      target: { value: 'Customer cancelled trip — refunded via card.' },
+    });
+    fireEvent.click(
+      screen.getByRole('button', { name: /Confirm void of invoice TINV-2026-0001/i }),
+    );
+    await waitFor(() => {
+      expect(notifySuccess).toHaveBeenCalled();
+    });
+    // The contextual success message names the policy.
+    expect(notifySuccess.mock.calls[0][0]).toMatch(/TMC Default/);
+    expect(notifySuccess.mock.calls[0][0]).toMatch(/credit note auto-issued/i);
   });
 });

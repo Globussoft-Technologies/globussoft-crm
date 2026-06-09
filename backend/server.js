@@ -660,7 +660,7 @@ app.use("/api", (req, res, next) => {
   // promotes a contact to a portal user. Removing the entry routes the
   // unauthenticated case through the global guard's 401 (RFC 7235), and
   // the authenticated case continues unaffected.
-  const openPaths = ["/auth/login", "/auth/signup", "/auth/register", "/auth/customer/register", "/auth/public/tenants", "/auth/forgot-password", "/auth/reset-password", "/auth/2fa/verify", "/health", "/marketplace-leads/webhook", "/sms/webhook", "/whatsapp/webhook", "/telephony/webhook", "/push/subscribe/visitor", "/push/vapid-key", "/communications/track/", "/sso/google/callback", "/sso/microsoft/callback", "/sso/google/start", "/sso/microsoft/start", "/email/inbound", "/calendar/google/callback", "/calendar/outlook/callback", "/voice/webhook", "/portal/login", "/portal/forgot", "/portal/reset", "/portal/me", "/portal/tickets", "/portal/invoices", "/portal/contracts", "/portal/travel", "/portal/kyc", "/signatures/sign", "/surveys/respond", "/surveys/public", "/chatbots/chat", "/web-visitors/track", "/payments/webhook", "/accounting/webhook", "/scim/v2", "/booking-pages/public", "/knowledge-base/public", "/live-chat/visitor", "/document-views/track", "/zapier/webhook", "/marketing/submit", "/v1/external", "/v1/voyagr", "/wellness/public", "/wellness/portal", "/attendance/biometric/webhook", "/travel/microsites/public", "/travel/diagnostics/public", "/travel/itineraries/public", "/travel/inbound/leads", "/security/csp-report"];
+  const openPaths = ["/auth/login", "/auth/signup", "/auth/register", "/auth/customer/register", "/auth/public/tenants", "/auth/forgot-password", "/auth/reset-password", "/auth/2fa/verify", "/health", "/marketplace-leads/webhook", "/sms/webhook", "/whatsapp/webhook", "/telephony/webhook", "/push/subscribe/visitor", "/push/vapid-key", "/communications/track/", "/sso/google/callback", "/sso/microsoft/callback", "/sso/google/start", "/sso/microsoft/start", "/email/inbound", "/calendar/google/callback", "/calendar/outlook/callback", "/voice/webhook", "/portal/login", "/portal/forgot", "/portal/reset", "/portal/me", "/portal/tickets", "/portal/invoices", "/portal/contracts", "/portal/travel", "/portal/kyc", "/signatures/sign", "/surveys/respond", "/surveys/public", "/chatbots/chat", "/web-visitors/track", "/payments/webhook", "/accounting/webhook", "/scim/v2", "/booking-pages/public", "/knowledge-base/public", "/live-chat/visitor", "/document-views/track", "/zapier/webhook", "/marketing/submit", "/v1/external", "/v1/voyagr", "/wellness/public", "/wellness/portal", "/attendance/biometric/webhook", "/travel/microsites/public", "/travel/diagnostics/public", "/travel/itineraries/public", "/travel/inbound/leads", "/v1/flyers/public", "/security/csp-report"];
   if (openPaths.some(p => req.path.startsWith(p))) return next();
   // Public marketing catalog — the /pricing page hits GET /subscriptions/plans
   // anonymously. Admin CRUD (POST/PUT/DELETE + GET /plans/admin) stays gated
@@ -880,6 +880,12 @@ app.use("/api/travel/cancellation-policies", require("./routes/travel_cancellati
 app.use("/api/travel", travelQuotesRoutes);
 app.use("/api/travel", travelInvoicesRoutes);
 app.use("/api/travel", require("./routes/travel_flyer_templates"));
+// S78 (Marketing Flyer #908) — mount the mixed-auth flyer share + public render
+// router. POST /:id/share is auth-gated inside the router (verifyToken +
+// verifyRole + requireTravelTenant); GET /public/:slug + /public/:slug/meta
+// bypass auth via the '/v1/flyers/public' entry added to openPaths above.
+// Same shape as travel_quotes_public mount (line 877).
+app.use("/api/v1/flyers", require("./routes/travel_flyer_public"));
 app.use("/api/travel", require("./routes/travel_commission_profiles"));
 // WS-1 — sub-brand session scope (POST /session/switch-brand + GET
 // /session/active-brand). Authoritative server-side validation behind the

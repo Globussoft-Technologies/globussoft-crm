@@ -483,6 +483,7 @@ jobs:
             tests/staff-api.spec.js \
             tests/portal-appointments-api.spec.js \
             tests/security-headers-api.spec.js \
+            tests/travel-flyer-public-api.spec.js \
             tests/teardown-completeness.spec.js \
             tests/demo-hygiene-api.spec.js
           echo "::notice::API specs passed"

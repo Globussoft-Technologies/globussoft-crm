@@ -1105,3 +1105,167 @@ test.describe("Travel itineraries API — slim-shape opt-in (#920 S3)", () => {
     expect(it).toHaveProperty("items"); // include still fires on default path
   });
 });
+
+// ─── S46: POST /api/travel/itineraries/suggest ───────────────────────
+//
+// Surfaces the S14 service module (backend/services/itinerarySuggestLLM.js,
+// commit 17449b35) as a public HTTP endpoint so the frontend "Suggest
+// itinerary" button (PRD docs/PRD_TRAVEL_ITINERARY_UPGRADES.md FR-3.6
+// step (a)) can call it. Until Q-IT-2 / Q11 keys arrive, the service
+// returns deterministic [STUB] content; both stub + real modes share
+// the same `{ suggestionJson, source, model, stub }` response envelope.
+//
+// Coverage:
+//   (a) happy path  — returns the canned-stub shape (stub: true,
+//                     source: 'stub', daySplit length === durationDays).
+//   (b) missing destination → 400 INVALID_DESTINATION.
+//   (c) durationDays out of range → 400 INVALID_DURATION_DAYS.
+//   (e) auth required (anon → 401 from verifyToken).
+//
+// (d) budget-cap exceeded → 500 with code ITINERARY_SUGGEST_BUDGET_EXCEEDED
+//     is covered at the UNIT layer (backend/test/services/
+//     itinerary-suggest-llm.test.js) via vi.spyOn(client, 'checkBudgetCap').
+//     Flipping the per-tenant TenantSetting LLM cap to 0 in an e2e context
+//     would interfere with sibling LLM tests (talking-points, form-vs-call,
+//     draft/regen, talking-points-api, etc.) running in parallel shards.
+//     The route's catch-handler is shape-pinned by (b) + (c) failing the
+//     validators before the service ever runs.
+
+test.describe("Travel itineraries API — S46 — POST /suggest", () => {
+  test("(a) happy path returns canned-stub shape (source=stub, daySplit length === durationDays)", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, "travel admin not available");
+    const res = await post(request, token, "/api/travel/itineraries/suggest", {
+      destination: `${RUN_TAG} Suggest Destination`,
+      durationDays: 3,
+      themeJson: { romantic: true },
+      budgetTier: "mid",
+    });
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    // Envelope contract from S14 (services/itinerarySuggestLLM.js).
+    expect(body).toHaveProperty("suggestionJson");
+    expect(body).toHaveProperty("source");
+    expect(body).toHaveProperty("model");
+    expect(body).toHaveProperty("stub");
+    // Stub-mode shape — until Q-IT-2 keys arrive, source is always 'stub'.
+    // (If keys land before this assertion is updated, the test fails loudly
+    // which is the desired signal — we want to know when real-mode flips.)
+    expect(body.source).toBe("stub");
+    expect(body.stub).toBe(true);
+    expect(body.model).toBe("gemini-2.5-flash");
+    // suggestionJson contract per S14 header.
+    const sj = body.suggestionJson;
+    expect(Array.isArray(sj.daySplit)).toBe(true);
+    expect(sj.daySplit.length).toBe(3); // matches durationDays
+    expect(Array.isArray(sj.poiSuggestions)).toBe(true);
+    expect(typeof sj.thematicNotes).toBe("string");
+    expect(typeof sj.summary).toBe("string");
+    // Each day has dayNumber + theme + items[].
+    for (const day of sj.daySplit) {
+      expect(day).toHaveProperty("dayNumber");
+      expect(day).toHaveProperty("theme");
+      expect(Array.isArray(day.items)).toBe(true);
+    }
+  });
+
+  test("(b) missing destination → 400 INVALID_DESTINATION", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, "travel admin not available");
+    const res = await post(request, token, "/api/travel/itineraries/suggest", {
+      durationDays: 3,
+    });
+    expect(res.status()).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("INVALID_DESTINATION");
+  });
+
+  test("(b.2) empty-string destination → 400 INVALID_DESTINATION", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, "travel admin not available");
+    const res = await post(request, token, "/api/travel/itineraries/suggest", {
+      destination: "   ",
+      durationDays: 3,
+    });
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe("INVALID_DESTINATION");
+  });
+
+  test("(c) durationDays=0 → 400 INVALID_DURATION_DAYS", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, "travel admin not available");
+    const res = await post(request, token, "/api/travel/itineraries/suggest", {
+      destination: `${RUN_TAG} Suggest Edge`,
+      durationDays: 0,
+    });
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe("INVALID_DURATION_DAYS");
+  });
+
+  test("(c.2) durationDays=31 (over upper bound) → 400 INVALID_DURATION_DAYS", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, "travel admin not available");
+    const res = await post(request, token, "/api/travel/itineraries/suggest", {
+      destination: `${RUN_TAG} Suggest Over`,
+      durationDays: 31,
+    });
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe("INVALID_DURATION_DAYS");
+  });
+
+  test("(c.3) durationDays=missing → 400 INVALID_DURATION_DAYS", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, "travel admin not available");
+    const res = await post(request, token, "/api/travel/itineraries/suggest", {
+      destination: `${RUN_TAG} Suggest NoDays`,
+    });
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe("INVALID_DURATION_DAYS");
+  });
+
+  test("(e) anonymous request → 401 from verifyToken", async ({ request }) => {
+    const res = await request.post(`${BASE_URL}/api/travel/itineraries/suggest`, {
+      headers: { "Content-Type": "application/json" },
+      data: { destination: "Paris", durationDays: 3 },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(res.status()).toBe(401);
+  });
+
+  test("invalid budgetTier → 400 INVALID_BUDGET_TIER", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, "travel admin not available");
+    const res = await post(request, token, "/api/travel/itineraries/suggest", {
+      destination: `${RUN_TAG} Suggest BadTier`,
+      durationDays: 3,
+      budgetTier: "platinum", // not in enum
+    });
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe("INVALID_BUDGET_TIER");
+  });
+
+  test("themeJson as array → 400 INVALID_THEME_JSON", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, "travel admin not available");
+    const res = await post(request, token, "/api/travel/itineraries/suggest", {
+      destination: `${RUN_TAG} Suggest BadTheme`,
+      durationDays: 3,
+      themeJson: ["romantic", "luxury"], // arrays not allowed
+    });
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe("INVALID_THEME_JSON");
+  });
+
+  test("happy path with no optional fields returns valid envelope", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, "travel admin not available");
+    const res = await post(request, token, "/api/travel/itineraries/suggest", {
+      destination: `${RUN_TAG} Minimal`,
+      durationDays: 1,
+    });
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(body.suggestionJson.daySplit.length).toBe(1);
+    expect(body.source).toBe("stub");
+  });
+});

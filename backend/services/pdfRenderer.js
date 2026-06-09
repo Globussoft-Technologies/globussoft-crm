@@ -2450,6 +2450,13 @@ function parseInvoiceSubBrandConfig(jsonString) {
   }
 }
 
+// S52 — alias for the parser so the generic name (`parseTravelSubBrandConfig`)
+// is available to sibling travel PDF helpers (itinerary / quote / diagnostic /
+// tmc-readiness / travelstall-personalised) that now consume the same selector.
+// `parseInvoiceSubBrandConfig` is kept as the S34 export name for back-compat
+// with the existing brand-kit test suite + the invoice renderer.
+const parseTravelSubBrandConfig = parseInvoiceSubBrandConfig;
+
 // Pick brand-kit fields for a given sub-brand from the parsed config blob.
 // Sub-brand block first, then top-level fallback, then hard-coded
 // per-sub-brand defaults. Returns { fields: {...}, source: "..." } where
@@ -2484,6 +2491,48 @@ function resolveInvoiceBrandKit(cfg, subBrand) {
 
   return { fields: out, source: usedConfig ? "subBrandConfig" : "fallback" };
 }
+
+// S52 — alias the resolver under the generic name (`resolveTravelBrandKit`)
+// so sibling travel PDF helpers don't carry an "Invoice" suffix when reading
+// it. Same body, same shape, same precedence chain. Keeping the original
+// `resolveInvoiceBrandKit` name as an alias retains the S34 test surface +
+// the invoice renderer's call-site verbatim.
+const resolveTravelBrandKit = resolveInvoiceBrandKit;
+
+// S52 — shared brand-kit resolution helper for the 5 sibling travel PDF
+// helpers (itinerary / quote / diagnostic / tmc-readiness / travelstall-
+// personalised). Each renderer threads `opts.tenant` + `opts.branding` and
+// calls this once at top-of-body to resolve the effective brand kit.
+//
+// Precedence (matches S34 for invoice PDFs):
+//   1. opts.branding override fields (per-render explicit, layer 1)
+//   2. tenant.subBrandConfigJson[subBrand] (per-sub-brand config, layer 2)
+//   3. tenant.subBrandConfigJson top-level keys (top-level fallback, layer 3)
+//   4. INVOICE_BRAND_KIT_FALLBACKS[subBrand] (hard-coded, layer 4)
+//
+// Returns { branding, source } where:
+//   - branding has every BRAND_KIT_FIELD shape-complete (headerColor,
+//     primaryColor, accentColor, thumbnailUrl, fontFamily).
+//   - source ∈ {"subBrandConfig", "fallback"} for observability (the invoice
+//     renderer stamps it into PDF Producer metadata; the sibling renderers
+//     don't currently surface it but the same field is available).
+//
+// Sibling helpers used to read `accent = SUB_BRAND_ACCENT[sub] || "#111111"`.
+// After S52, the call site reads `branding.headerColor` from this helper,
+// which sources from tenant.subBrandConfigJson when available and falls back
+// to INVOICE_BRAND_KIT_FALLBACKS otherwise. The SUB_BRAND_ACCENT constant is
+// retained for any non-travel call sites (none today, but leaving it in case
+// a future deletion would surface an unexpected consumer).
+function resolveTravelHeaderBrandKit(subBrand, opts = {}) {
+  const tenant = opts && opts.tenant;
+  const cfg = parseTravelSubBrandConfig(tenant && tenant.subBrandConfigJson);
+  const { fields, source } = resolveTravelBrandKit(cfg, subBrand);
+  const callerBranding = (opts && opts.branding && typeof opts.branding === "object")
+    ? opts.branding
+    : {};
+  const branding = { ...fields, ...callerBranding };
+  return { branding, source };
+}
 // ---------------------------------------------------------------------------
 
 function resolveAnswerLabel(question, rawAnswer) {
@@ -2505,10 +2554,21 @@ function resolveAnswerLabel(question, rawAnswer) {
 // (travel_itineraries.js / travel_travelstall.js) reference these two
 // renderers but they were missing from this worktree's pdfRenderer.js,
 // so every /itineraries/:id/pdf + personalised-pdf call 500'd.
-function renderTravelItineraryPdf(itinerary, contact) {
+//
+// S52 — `opts.tenant` (optional) threads `tenant.subBrandConfigJson` into
+// the shared brand-kit selector so an admin POST to that column cascades
+// into this PDF too. `opts.branding` (optional) per-render override is the
+// highest-precedence layer. When `opts` is omitted (legacy caller), the
+// renderer falls back to INVOICE_BRAND_KIT_FALLBACKS per sub-brand — same
+// palette the invoice renderer uses, so the four travel sub-brands now
+// share one curated color set. Pre-S52, the header color came from the
+// legacy SUB_BRAND_ACCENT constant; that constant is retained for any
+// non-travel call site but no longer consulted here.
+function renderTravelItineraryPdf(itinerary, contact, opts = {}) {
   const sub = itinerary.subBrand;
   const brandLabel = SUB_BRAND_LABEL[sub] || "Travel CRM";
-  const accent = SUB_BRAND_ACCENT[sub] || "#111111";
+  const { branding } = resolveTravelHeaderBrandKit(sub, opts);
+  const accent = branding.headerColor || INVOICE_BRAND_KIT_FALLBACKS._generic.headerColor;
   const currency = itinerary.currency || "INR";
   const items = Array.isArray(itinerary.items) ? itinerary.items : [];
 
@@ -2608,12 +2668,31 @@ function renderTravelItineraryPdf(itinerary, contact) {
 }
 
 // ── Travel CRM — Travel Stall personalised 3-5 destination PDF (PRD §4.5)
-// Downstream artefact of the llmRouter bulk-text consumer. STUB branding
-// (SUB_BRAND_ACCENT.travelstall + Helvetica) pending Q22 brand assets.
+// Downstream artefact of the llmRouter bulk-text consumer.
+//
+// S52 — header band sources from the shared brand-kit selector. `payload.tenant`
+// (optional) threads `tenant.subBrandConfigJson` into the resolver so an admin
+// POST to that column cascades into this PDF. `payload.branding` (optional)
+// per-render override wins (precedence layer 1). When neither is supplied
+// (legacy caller), the renderer falls back to INVOICE_BRAND_KIT_FALLBACKS.
+// travelstall — the S13-aligned palette (headerColor #922B21). Pre-S52 this
+// was the legacy SUB_BRAND_ACCENT.travelstall (#122647 navy). The new color
+// is what S34's invoice renderer ships today; we adopt the same so the four
+// travel sub-brands share one curated palette. Logo embedding remains pending
+// Q22 brand assets — the `branding.thumbnailUrl` field is plumbed end-to-end
+// but the Travel Stall personalised template doesn't yet doc.image() the
+// logo (only the invoice renderer does that today via S51's fetchLogoBuffer).
 function renderTravelStallPersonalisedPdf(payload) {
   const sub = "travelstall";
   const brandLabel = SUB_BRAND_LABEL[sub] || "Travel Stall";
-  const accent = SUB_BRAND_ACCENT[sub] || "#122647";
+  // S52 — resolve via the shared brand-kit selector. The payload object may
+  // carry `tenant` and `branding` keys; treat the whole payload as the opts
+  // bag so route handlers can pass tenant alongside contact/destinations.
+  const { branding } = resolveTravelHeaderBrandKit(sub, {
+    tenant: payload && payload.tenant,
+    branding: payload && payload.branding,
+  });
+  const accent = branding.headerColor || INVOICE_BRAND_KIT_FALLBACKS.travelstall.headerColor;
   const contact = payload?.contact || {};
   const destinations = Array.isArray(payload?.destinations) ? payload.destinations.slice(0, 5) : [];
   const budget = payload?.budget != null ? Number(payload.budget) : null;
@@ -2730,10 +2809,19 @@ function loadTravelHeaderLogo() {
   return _travelHeaderLogo;
 }
 
+// S52 — `opts.tenant` (optional) threads `tenant.subBrandConfigJson` into
+// the shared brand-kit selector; `opts.branding` (optional) per-render
+// override wins. `opts.logoBuffer` (pre-S52) is retained — that path is
+// route-resolved from S3 / tenant assets and still drawn into the header.
+// When neither tenant nor branding is supplied (legacy caller), the
+// header color falls back to INVOICE_BRAND_KIT_FALLBACKS[subBrand]. Pre-S52
+// the color came from SUB_BRAND_ACCENT[sub]; the four travel sub-brands
+// now share the S13-aligned palette.
 function renderTravelDiagnosticPdf(diagnostic, contact, bank, opts = {}) {
   const sub = diagnostic.subBrand;
   const brandLabel = SUB_BRAND_LABEL[sub] || "Travel CRM";
-  const accent = SUB_BRAND_ACCENT[sub] || "#111111";
+  const { branding } = resolveTravelHeaderBrandKit(sub, opts);
+  const accent = branding.headerColor || INVOICE_BRAND_KIT_FALLBACKS._generic.headerColor;
 
   let questions = [];
   try {
@@ -2909,6 +2997,14 @@ function renderTravelDiagnosticPdf(diagnostic, contact, bank, opts = {}) {
 //   - Board hook is rendered ONLY when boardHook is a non-empty string.
 //
 // Returns Promise<Buffer> (matches sibling renderers' contract).
+// S52 — accepts `tenant` (optional) for the shared brand-kit selector
+// (reads `tenant.subBrandConfigJson` → tmc block → headerColor) and
+// `branding` (optional) for per-render explicit override (precedence
+// layer 1). Pre-S52 the report used `SUB_BRAND_ACCENT.tmc` (#0B4F6C).
+// The TMC report is always sub-brand "tmc" so the resolver always reads
+// the tmc block; when neither tenant nor branding is supplied (legacy
+// caller), the renderer falls back to INVOICE_BRAND_KIT_FALLBACKS.tmc
+// (#1F4E79, the S13-aligned palette).
 function renderTmcReadinessReport({
   engineOutput = null,
   narrative = null,
@@ -2918,6 +3014,8 @@ function renderTmcReadinessReport({
   schoolAnswers = null,
   bookingUrl = "",
   catalogueMatched = [], // kept on the API for forward-compat; not rendered as named trips per §3.5
+  tenant = null,
+  branding: brandingOverride = null,
 } = {}) {
   // Defensively coerce — the route handler passes structured JSON but
   // a malformed call shouldn't bomb the PDF generation.
@@ -2968,7 +3066,15 @@ function renderTmcReadinessReport({
   const pageW = doc.page.width;
   const pageMargin = 50;
   const contentW = pageW - pageMargin * 2;
-  const accent = SUB_BRAND_ACCENT.tmc || "#0B4F6C";
+  // S52 — TMC readiness report is fixed sub-brand "tmc"; pull the header
+  // color from the shared brand-kit selector so admin-curated palettes
+  // cascade in via `tenant.subBrandConfigJson`. Per-render override via
+  // `branding` is precedence layer 1.
+  const { branding: tmcBranding } = resolveTravelHeaderBrandKit("tmc", {
+    tenant,
+    branding: brandingOverride,
+  });
+  const accent = tmcBranding.headerColor || INVOICE_BRAND_KIT_FALLBACKS.tmc.headerColor;
 
   // ── Section 1: Cover ────────────────────────────────────────────────
   doc.rect(0, 0, pageW, 110).fill(accent);
@@ -3169,11 +3275,29 @@ function renderTmcReportSection(doc, { num, title, body, accent }) {
 }
 
 // ── Travel CRM — quote PDF (DD-5.6) ─────────────────────────────────
-function renderTravelQuotePdf(quote) {
+// S52 — optional second `opts` arg (back-compat with single-arg legacy
+// callers) threads `opts.tenant` + `opts.branding` into the shared
+// brand-kit selector. Precedence chain (highest first):
+//   1. `quote.brandKit.accent` (pre-S52 inline override — preserved
+//      so the existing quote-template callers keep working)
+//   2. `opts.branding.*`        (S52 per-render explicit override)
+//   3. `opts.tenant.subBrandConfigJson[subBrand]` (S52 admin config)
+//   4. `opts.tenant.subBrandConfigJson` top-level (S52 admin config)
+//   5. INVOICE_BRAND_KIT_FALLBACKS[subBrand]      (S52 hard-coded)
+// Pre-S52 fallback was SUB_BRAND_ACCENT[sub]; the four travel sub-brands
+// now share the S13-aligned palette through #5.
+function renderTravelQuotePdf(quote, opts = {}) {
   const q = quote || {};
   const sub = q.subBrand;
   const brandLabel = SUB_BRAND_LABEL[sub] || "Travel CRM";
-  const accent = (q.brandKit && q.brandKit.accent) || SUB_BRAND_ACCENT[sub] || "#111111";
+  const { branding } = resolveTravelHeaderBrandKit(sub, opts);
+  // Layer 1 — legacy `q.brandKit.accent` inline override still wins (back-
+  // compat with pre-S52 quote-template callers). Layer 2 — branding.headerColor
+  // from the shared selector. Layer 3 — hard-coded fallback (defensive — every
+  // sub-brand has a fallback entry so this fires only on unknown sub-brand).
+  const accent = (q.brandKit && q.brandKit.accent)
+    || branding.headerColor
+    || INVOICE_BRAND_KIT_FALLBACKS._generic.headerColor;
   const currency = q.currency || "INR";
   const rawItems = Array.isArray(q.items)
     ? q.items
@@ -3900,6 +4024,15 @@ module.exports = {
   INVOICE_BRAND_KIT_FALLBACKS,
   parseInvoiceSubBrandConfig,
   resolveInvoiceBrandKit,
+  // S52 — generic-named aliases so sibling travel PDF helpers + their
+  // tests can read the selector under a name that doesn't carry an
+  // "Invoice" suffix (the same helper body powers itinerary / quote /
+  // diagnostic / tmc-readiness / travelstall-personalised PDFs after
+  // the brand-kit adoption sweep). + shared header-brand-kit resolver
+  // for one-call use inside the renderers.
+  parseTravelSubBrandConfig,
+  resolveTravelBrandKit,
+  resolveTravelHeaderBrandKit,
   // S51 — logo-image fetch + LRU cache. Exported via module.exports so the
   // renderer can call `module.exports.fetchLogoBuffer(...)` (the CJS self-
   // mocking seam pattern) and vitest cases can vi.spyOn(...) the surface

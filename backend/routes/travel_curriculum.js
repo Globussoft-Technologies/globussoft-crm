@@ -57,10 +57,53 @@
  */
 
 const express = require("express");
+const multer = require("multer");
 const router = express.Router();
 const { verifyToken, verifyRole } = require("../middleware/auth");
 const prisma = require("../lib/prisma");
 const { sanitizeText } = require("../lib/sanitizeJson");
+const {
+  parseCsv: parseCurriculumCsv,
+  serializeCsv: serializeCurriculumCsv,
+  ALLOWED_CURRICULA: CURRICULUM_CSV_ALLOWED,
+} = require("../lib/curriculumCsvParser");
+
+// C6 — multer for /import.csv (memory storage, 5 MB cap matches csv_io.js +
+// travel_csv_io.js conventions).
+const curriculumUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+});
+
+// Scoped text-body parser for /import.csv when the client posts a raw
+// text/csv body (vs. multipart/form-data). Mounted at /import.csv path
+// only so other handlers in this router aren't affected.
+router.use("/import.csv", express.text({
+  type: ["text/csv", "text/plain"],
+  limit: "5mb",
+}));
+
+// Helper — read CSV from either multer (form-data file) or raw text body.
+function readCurriculumCsvBody(req) {
+  if (req.file && req.file.buffer) return req.file.buffer.toString("utf8");
+  if (typeof req.body === "string") return req.body;
+  if (req.body && typeof req.body.csv === "string") return req.body.csv;
+  return null;
+}
+
+// 7 canonical TMC skills per docs/PRD_TMC_DIAGNOSTIC_SALES_ROUTING_ENGINE.md
+// §3.3 + TMC_PENDING_FEATURES.md §Q3. Case-insensitive match on the
+// learningOutcome field — coverage endpoint reports which of these 7 have
+// ≥1 mapping per (curriculum, grade).
+const TMC_CANONICAL_SKILLS = [
+  "Empathy",
+  "Self-awareness",
+  "Collaboration and teamwork",
+  "Mindfulness",
+  "Lifelong learning and curiosity",
+  "Cultural respect and inclusion",
+  "Emotional resilience",
+];
 
 function assertNonEmptyString(input, fieldName, errorCode) {
   if (typeof input !== "string" || input.trim() === "") {
@@ -622,6 +665,367 @@ router.get("/by-quarter", verifyToken, async (req, res) => {
     res.status(500).json({ error: "Failed to compute quarterly rollup" });
   }
 });
+
+// ============================================================================
+// C6 (docs/TRAVEL_CODEABLE_BACKLOG.md) — CSV import/export + coverage report
+// per docs/PRD_TMC_CURRICULUM_MAPPING.md FR-2 / FR-4 / FR-8.
+//
+// Three endpoints, all ADMIN+MANAGER role-gated, all tenant-scoped:
+//
+//   POST /api/travel-curriculum/import.csv  — upsert by composite key
+//                                              (tenantId, curriculum, grade,
+//                                              subject, learningOutcome).
+//                                              Accepts multipart/form-data
+//                                              "file" field OR raw text/csv
+//                                              body. 5 MB cap.
+//   GET  /api/travel-curriculum/export.csv  — round-trippable CSV. Optional
+//                                              ?curriculum / ?grade /
+//                                              ?subject filters narrow the
+//                                              export. text/csv response with
+//                                              Content-Disposition: attachment.
+//   GET  /api/travel-curriculum/coverage    — coverage matrix per
+//                                              (curriculum, grade) cross-
+//                                              product against the 7 canonical
+//                                              TMC skills (PRD_TMC_
+//                                              DIAGNOSTIC_SALES_ROUTING_ENGINE
+//                                              §3.3): which outcomes have ≥1
+//                                              mapping, which are missing.
+//
+// Composite-key adaptation from the C6 slice spec
+// -----------------------------------------------
+// Slice spec described columns as board/gradeBand/outcome/topicCode/topicTitle
+// — those are placeholders. The real TravelCurriculumMapping model
+// (prisma/schema.prisma:6186) has the @@unique composite of (tenantId,
+// curriculum, grade, subject, learningOutcome). The CSV column set + the
+// upsert key here match the real model.
+//
+// Express route ordering: declared BEFORE the /:id family so the literal
+// paths win over the :id matcher.
+// ============================================================================
+
+// POST /api/travel-curriculum/import.csv — ADMIN+MANAGER. Upsert by composite
+// key. Returns { rowsProcessed, rowsCreated, rowsUpdated, errors }. On
+// header-level or per-row validation errors, returns 400 with the error list
+// and no rows persisted (atomic). Per AC-2 (PRD §6) — atomic on validation
+// failure protects the academic team from partial-state surprises.
+router.post(
+  "/import.csv",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  curriculumUpload.single("file"),
+  async (req, res) => {
+    try {
+      const csvText = readCurriculumCsvBody(req);
+      if (!csvText || csvText.trim() === "") {
+        return res.status(400).json({
+          error: "No CSV body or file uploaded",
+          code: "NO_CSV",
+        });
+      }
+
+      const { rows, errors, headerError } = parseCurriculumCsv(csvText);
+
+      // Header-level rejection: no data could be loaded.
+      if (headerError) {
+        return res.status(400).json({
+          error: headerError,
+          code: "CSV_HEADER_INVALID",
+          errors: [],
+        });
+      }
+
+      // Per-row validation errors — atomic rejection per AC-2.
+      if (errors.length > 0) {
+        return res.status(400).json({
+          error: `${errors.length} row(s) failed validation; no rows persisted`,
+          code: "CSV_ROWS_INVALID",
+          errors,
+        });
+      }
+
+      // Header valid + zero data rows → still treat as success (idempotent
+      // no-op so re-running a cleared CSV is safe).
+      if (rows.length === 0) {
+        return res.json({
+          rowsProcessed: 0,
+          rowsCreated: 0,
+          rowsUpdated: 0,
+          errors: [],
+        });
+      }
+
+      let rowsCreated = 0;
+      let rowsUpdated = 0;
+      const tenantId = req.user.tenantId;
+
+      for (const r of rows) {
+        // Build the upsert payload — sanitise the free-text fields the
+        // same way the POST handler does so the CSV path matches the
+        // hand-create path.
+        const dataCreate = {
+          tenantId,
+          curriculum: sanitizeText(r.curriculum),
+          grade: sanitizeText(r.grade),
+          subject: sanitizeText(r.subject),
+          learningOutcome: sanitizeText(r.learningOutcome),
+          destinationLabel: r.destinationLabel
+            ? sanitizeText(r.destinationLabel)
+            : null,
+          destinationId: r.destinationId,
+          fitScore: r.fitScore == null ? 50 : r.fitScore,
+          fitRationale: r.fitRationale ? sanitizeText(r.fitRationale) : null,
+          isActive: r.isActive == null ? true : r.isActive,
+          createdById: req.user.userId,
+        };
+        const dataUpdate = {
+          destinationLabel: r.destinationLabel
+            ? sanitizeText(r.destinationLabel)
+            : null,
+          destinationId: r.destinationId,
+          fitScore: r.fitScore == null ? 50 : r.fitScore,
+          fitRationale: r.fitRationale ? sanitizeText(r.fitRationale) : null,
+          isActive: r.isActive == null ? true : r.isActive,
+        };
+
+        // Lookup by the composite-key tuple. Prisma's upsert against a
+        // multi-field @@unique key requires the full key tuple in `where`,
+        // and learningOutcome is nullable in the schema so we use findFirst
+        // + create/update for forward-compat (rather than the named
+        // compound-unique index which would error if learningOutcome is
+        // ever null on either side).
+        const existing = await prisma.travelCurriculumMapping.findFirst({
+          where: {
+            tenantId,
+            curriculum: dataCreate.curriculum,
+            grade: dataCreate.grade,
+            subject: dataCreate.subject,
+            learningOutcome: dataCreate.learningOutcome,
+          },
+        });
+
+        if (existing) {
+          await prisma.travelCurriculumMapping.update({
+            where: { id: existing.id },
+            data: dataUpdate,
+          });
+          rowsUpdated += 1;
+        } else {
+          await prisma.travelCurriculumMapping.create({ data: dataCreate });
+          rowsCreated += 1;
+        }
+      }
+
+      res.json({
+        rowsProcessed: rows.length,
+        rowsCreated,
+        rowsUpdated,
+        errors: [],
+      });
+    } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-curriculum] import.csv error:", e.message);
+      res.status(500).json({ error: "Failed to import curriculum CSV" });
+    }
+  },
+);
+
+// GET /api/travel-curriculum/export.csv — ADMIN+MANAGER. Round-trip CSV with
+// optional ?curriculum / ?grade / ?subject filters.
+router.get(
+  "/export.csv",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  async (req, res) => {
+    try {
+      const where = { tenantId: req.user.tenantId };
+      if (req.query.curriculum !== undefined) {
+        where.curriculum = String(req.query.curriculum);
+      }
+      if (req.query.grade !== undefined) {
+        where.grade = String(req.query.grade);
+      }
+      if (req.query.subject !== undefined) {
+        where.subject = String(req.query.subject);
+      }
+
+      const mappings = await prisma.travelCurriculumMapping.findMany({
+        where,
+        orderBy: [
+          { curriculum: "asc" },
+          { grade: "asc" },
+          { subject: "asc" },
+          { id: "asc" },
+        ],
+      });
+
+      // Shape rows to the CSV column contract — null → empty string is
+      // handled by serializeCsv via renderCell.
+      const rows = mappings.map((m) => ({
+        curriculum: m.curriculum,
+        grade: m.grade,
+        subject: m.subject,
+        learningOutcome: m.learningOutcome || "",
+        destinationLabel: m.destinationLabel || "",
+        destinationId: m.destinationId == null ? "" : m.destinationId,
+        fitScore: m.fitScore == null ? "" : m.fitScore,
+        fitRationale: m.fitRationale || "",
+        isActive: typeof m.isActive === "boolean" ? m.isActive : "",
+      }));
+
+      const csv = serializeCurriculumCsv(rows);
+      const dateStr = new Date().toISOString().slice(0, 10);
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="curriculum-export-${dateStr}.csv"`,
+      );
+      res.send(csv);
+    } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-curriculum] export.csv error:", e.message);
+      res.status(500).json({ error: "Failed to export curriculum CSV" });
+    }
+  },
+);
+
+// GET /api/travel-curriculum/coverage — ADMIN+MANAGER. For each
+// (curriculum, grade) cross-product present in this tenant's data, report
+// which of the 7 canonical TMC skills are covered by ≥1 active mapping vs
+// missing. Case-insensitive substring match — the learningOutcome free-text
+// must MENTION the canonical skill name.
+//
+// Response shape (C6 slice spec, adapted to actual columns):
+//   {
+//     coverage: [{
+//       curriculum, gradeBand,
+//       mappingCount, outcomesCovered, outcomesMissing
+//     }, ...],
+//     totals: {
+//       totalMappings, boardsCovered, fullCoverageBoards, gapCount
+//     }
+//   }
+//
+// (gradeBand in the response is the model's `grade` field — the C6 spec used
+// "gradeBand" but the model column is "grade".)
+router.get(
+  "/coverage",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  async (req, res) => {
+    try {
+      const tenantId = req.user.tenantId;
+
+      const mappings = await prisma.travelCurriculumMapping.findMany({
+        where: { tenantId, isActive: true },
+        select: {
+          curriculum: true,
+          grade: true,
+          learningOutcome: true,
+        },
+      });
+
+      // Group by (curriculum, grade) → set of covered canonical skills.
+      const byKey = new Map();
+      for (const m of mappings) {
+        const cur = m.curriculum || "";
+        const grd = m.grade || "";
+        const key = `${cur} ${grd}`;
+        let bucket = byKey.get(key);
+        if (!bucket) {
+          bucket = {
+            curriculum: cur,
+            gradeBand: grd,
+            mappingCount: 0,
+            outcomesCoveredSet: new Set(),
+          };
+          byKey.set(key, bucket);
+        }
+        bucket.mappingCount += 1;
+
+        const outcomeText = String(m.learningOutcome || "").toLowerCase();
+        if (outcomeText) {
+          for (const skill of TMC_CANONICAL_SKILLS) {
+            if (outcomeText.includes(skill.toLowerCase())) {
+              bucket.outcomesCoveredSet.add(skill);
+            }
+          }
+        }
+      }
+
+      const coverage = [];
+      const fullCoverageBoardsSet = new Set();
+      let gapCount = 0;
+      const boardsSeen = new Set();
+
+      for (const bucket of byKey.values()) {
+        const covered = [...bucket.outcomesCoveredSet];
+        const missing = TMC_CANONICAL_SKILLS.filter(
+          (s) => !bucket.outcomesCoveredSet.has(s),
+        );
+        coverage.push({
+          curriculum: bucket.curriculum,
+          gradeBand: bucket.gradeBand,
+          mappingCount: bucket.mappingCount,
+          outcomesCovered: covered,
+          outcomesMissing: missing,
+        });
+        boardsSeen.add(bucket.curriculum);
+        if (missing.length === 0) {
+          fullCoverageBoardsSet.add(bucket.curriculum);
+        } else {
+          gapCount += missing.length;
+        }
+      }
+
+      // Sort coverage rows for deterministic output (curriculum asc, then
+      // gradeBand asc).
+      coverage.sort((a, b) => {
+        if (a.curriculum !== b.curriculum) {
+          return a.curriculum < b.curriculum ? -1 : 1;
+        }
+        if (a.gradeBand !== b.gradeBand) {
+          return a.gradeBand < b.gradeBand ? -1 : 1;
+        }
+        return 0;
+      });
+
+      // Zero-mappings tenant: synthesise one envelope row per allowed
+      // curriculum so the UI's coverage matrix has rows to render. Each
+      // synthesised row has mappingCount 0 + all 7 skills missing.
+      if (coverage.length === 0) {
+        for (const cur of CURRICULUM_CSV_ALLOWED) {
+          coverage.push({
+            curriculum: cur,
+            gradeBand: "",
+            mappingCount: 0,
+            outcomesCovered: [],
+            outcomesMissing: [...TMC_CANONICAL_SKILLS],
+          });
+          gapCount += TMC_CANONICAL_SKILLS.length;
+        }
+      }
+
+      const totals = {
+        totalMappings: mappings.length,
+        boardsCovered: boardsSeen.size,
+        fullCoverageBoards: [...fullCoverageBoardsSet].sort(),
+        gapCount,
+      };
+
+      res.json({ coverage, totals });
+    } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-curriculum] coverage error:", e.message);
+      res.status(500).json({ error: "Failed to compute curriculum coverage" });
+    }
+  },
+);
 
 // GET /api/travel-curriculum/:id — single mapping (tenant-scoped).
 router.get("/:id", verifyToken, async (req, res) => {

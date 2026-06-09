@@ -1,0 +1,4 @@
+curriculum,grade,subject,learningOutcome,destinationLabel,destinationId,fitScore,fitRationale,isActive
+CBSE,Class 9,Geography,Plate tectonics,Mussoorie,,85,Field observation,true
+FOO,Class 9,Geography,Plate tectonics,Mussoorie,,85,Field observation,true
+CBSE,Class 9,Biology,Diversity in Living Organisms,Andaman,,92,Coral reef study,true

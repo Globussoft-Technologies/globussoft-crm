@@ -182,6 +182,7 @@ model Tenant {
   // the generic Quote / Invoice / Vendor. See model docs at bottom of file.
   travelQuotes             TravelQuote[]
   travelQuoteLines         TravelQuoteLine[]
+  travelQuoteTemplates     TravelQuoteTemplate[]
   travelInvoices           TravelInvoice[]
   travelInvoiceLines       TravelInvoiceLine[]
   travelPaymentSchedules   TravelPaymentSchedule[]
@@ -6003,6 +6004,56 @@ model TravelQuoteLine {
 
   @@index([tenantId, quoteId])
   @@index([quoteId, sortOrder])
+}
+
+// PRD_TRAVEL_QUOTE_BUILDER §3.5 — Template library.
+//
+// S31 slice (#920 / TRAVEL_BIG_SCOPE_BACKLOG). A TravelQuoteTemplate is a
+// saved pre-filled set of TravelQuoteLine shapes that operators can clone
+// into a new quote at build-time. Canonical examples: Umrah-7d, Golden-
+// Triangle-5d, Schengen-visa-checklist. Saves operator typing on common
+// itineraries.
+//
+// linesJson holds a JSON array of line shapes (without binding prices —
+// prices may re-resolve at quote-build time via the pricing engine; the
+// snapshot here is the operator's reference set). Each item in the array:
+//   {
+//     lineType: "hotel" | "flight" | "transport" | "visa" | "service" | "other",
+//     description: string,
+//     quantity: int (default 1),
+//     unitPrice: number,
+//     currency: string (3-letter ISO; defaults to template.currency),
+//     supplierId: int|null,
+//     sortOrder: int (default 0),
+//     notes: string|null
+//   }
+//
+// Sub-brand scoping: nullable subBrand. NULL = tenant-wide (visible to all
+// users); named sub-brand = scoped to caller's subBrandAccess[] (mirrors
+// ItineraryTemplate semantics from commit 1c01111a).
+//
+// category provides a coarse filter dimension ("Umrah" / "India-tour" /
+// "Europe-tour" / "Visa" / etc.) for the dropdown picker UI.
+//
+// Additive nullable schema — NO bless marker. Brand-new model; no UNIQUE
+// constraints, no backfilled NOT NULL columns. Per CLAUDE.md standing
+// rule: only re-shapes need bless markers, fresh additive models don't.
+model TravelQuoteTemplate {
+  id          Int      @id @default(autoincrement())
+  tenantId    Int      @default(1)
+  name        String   @db.VarChar(255)
+  description String?  @db.Text
+  subBrand    String? // tmc | rfu | travelstall | visasure | null (tenant-wide)
+  category    String? // Umrah | India-tour | Europe-tour | Visa | etc.
+  currency    String   @default("INR")
+  linesJson   String   @db.LongText // JSON array of line shapes; see model docs
+  isActive    Boolean  @default(true)
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([tenantId, isActive])
+  @@index([tenantId, subBrand, isActive])
 }
 
 model TravelInvoice {

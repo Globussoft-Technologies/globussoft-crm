@@ -1211,6 +1211,20 @@ model SequenceStep {
   // threadId='seq-<enrollmentId>' arrives while parked on this step.
   pauseOnReply Boolean @default(true)
 
+  // S19 (PRD_TRAVEL_MARKETING_FLYER FR-3.5 / AC-6.5) — optional outbound
+  // attachment metadata. JSON-encoded array of refs, e.g.
+  //   [{"kind":"flyer","flyerId":42,"format":"pdf-a4"},
+  //    {"kind":"file","url":"https://...","filename":"brochure.pdf"}]
+  // For kind='flyer', the engine looks up the TravelFlyerTemplate by id and
+  // calls services/flyerRenderEngine.renderFlyer({template, data, format}) at
+  // send-time so a single template can be reused across departure-date
+  // variants without persisting a fresh template row per send. Nullable +
+  // additive — existing steps with no attachments leave this null. Stored
+  // as @db.Text so MySQL can hold larger arrays; route layer stringifies
+  // before save + the cron engine JSON.parse-with-try at send-time (a
+  // corrupt JSON blob logs + skips attachments rather than aborting send).
+  attachmentRefsJson String? @db.Text
+
   createdAt DateTime @default(now())
 
   /// One step per (sequence, position) — drip sequences are linear, so position N must be unambiguous. Tenant scoping is inherited via the parent Sequence (SequenceStep is on the NON_TENANT_MODELS whitelist in schema-invariants.test.js for this reason).

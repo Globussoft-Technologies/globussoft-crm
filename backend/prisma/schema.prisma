@@ -414,6 +414,13 @@ model Tenant {
   // back-relation type per @@unique([tenantId]) on EngineWeights).
   tmcTripCatalogues TmcTripCatalogue[]
   engineWeights     EngineWeights?
+
+  // PRD_TRAVEL_SECURITY_ARCHITECTURE FR-3.7 (S5) — security telemetry sink.
+  // CSP violation reports + cross-tenant intercepts + future incident classes
+  // all land in SecurityIncident. tenantId on the child is nullable (CSP
+  // reports often arrive before auth resolves), so the back-relation only
+  // ties together rows where the tenant could be attributed.
+  securityIncidents SecurityIncident[]
 }
 
 model User {
@@ -5204,6 +5211,17 @@ model TravelDiagnostic {
   flagsJson              String? @db.Text
   humanPick              String?
   weightsVersion         String?
+  // C7 — TMC Curriculum-Fit top-N recommendations per
+  // PRD_TMC_CURRICULUM_MAPPING.md FR-5. JSON array snapshot of the
+  // computed top-N (default 5) TravelCurriculumMapping rows that
+  // best fit the submitter's (board × grade-band × outcome) profile
+  // at submit time. Persisted-not-recomputed so the brief / report
+  // doesn't drift as advisors edit mappings post-submit. Each entry
+  // shape: { mappingId, board, subject, grade, learningOutcome,
+  // destinationLabel, destinationId, fitScore, fitRationale }.
+  // Empty array when no curriculum mappings exist for the tenant
+  // (graceful — engine still recommends a trip via the catalogue).
+  curriculumFitJson      String? @db.Text
 
   tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Restrict)
   createdAt DateTime @default(now())
@@ -5497,6 +5515,20 @@ model TripParticipant {
   passportNumber     String?
   passportExpiry     DateTime?
   passportDocId      Int? // ContactAttachment id
+  // Slice C2 (docs/PRD_PASSPORT_OCR.md FR-5/FR-6/FR-9) — additive nullable
+  // columns for the OCR extraction → verification queue → audit flow.
+  // passportExtractionJson holds the raw vendor envelope (extraction +
+  // confidence + provider + extractedAt) per PRD §5.3 "stub-mode-v1"
+  // shape; passportExtractedAt is set on upload + populates the
+  // verification queue's pending list (where extractedAt IS NOT NULL AND
+  // verifiedAt IS NULL). passportVerifiedAt/ById close the loop; the
+  // verifying user's id is captured for the audit trail. passportRejectedAt
+  // is set on operator reject + clears with the next re-upload.
+  passportExtractionJson String?           @db.Text
+  passportExtractedAt    DateTime?
+  passportVerifiedAt     DateTime?
+  passportVerifiedById   Int?
+  passportRejectedAt     DateTime?
   aadhaarLast4       String?
   aadhaarTokenId     String? // DigiLocker token, encrypted
   parentName         String?
@@ -5875,18 +5907,61 @@ model TravelQuote {
   tenantId    Int               @default(1)
   subBrand    String
   contactId   Int
-  status      String            @default("Draft") // Draft | Sent | Accepted | Rejected
+  status      String            @default("Draft") // Draft | Sent | Accepted | Rejected | Expired
   totalAmount Decimal?          @db.Decimal(15, 2)
   currency    String            @default("INR")
   validUntil  DateTime?
   lines       TravelQuoteLine[]
   invoices    TravelInvoice[]
+  snapshots   TravelQuoteSnapshot[]
   tenant      Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt   DateTime          @default(now())
   updatedAt   DateTime          @updatedAt
 
   @@index([tenantId, subBrand])
   @@index([tenantId, subBrand, status])
+}
+
+// Slice C9 — TravelQuoteSnapshot — immutable version history rows.
+//
+// One row is written every time a TravelQuote's status transitions:
+//   - Customer-side: accept / reject / counter (via public landing page,
+//     no auth — share-link JWT authorizes the write).
+//   - Operator-side: future slices can emit snapshots from internal
+//     accept/decline routes too; today only the public-side endpoints
+//     write here (additive — operator audit chain via writeAudit() stays
+//     authoritative for staff-driven transitions).
+//   - System: quoteExpirySweep cron flips status Draft|Sent → Expired
+//     when validUntil < now and writes a snapshot with changedBy='system'.
+//
+// snapshotJson stores the full TravelQuote + lines as observed at the
+// transition instant. Schema is intentionally append-only — no UPDATE /
+// DELETE on existing rows; the cron's idempotency check looks for an
+// existing system-authored Expired snapshot before re-writing.
+//
+// Additive nullable schema — no bless marker required. statusBefore can
+// be null for genesis rows; statusAfter is required (every snapshot
+// represents a definite transition). changedById is nullable because
+// customer-side transitions have no req.user.userId (the JWT only carries
+// quoteId + tenantId).
+model TravelQuoteSnapshot {
+  id            Int      @id @default(autoincrement())
+  quoteId       Int
+  tenantId      Int
+  versionNumber Int
+  snapshotJson  String   @db.Text
+  statusBefore  String?
+  statusAfter   String
+  changedById   Int?
+  changedBy     String?  // 'customer' | 'staff' | 'system'
+  changeReason  String?  @db.Text
+  createdAt     DateTime @default(now())
+
+  quote         TravelQuote @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([quoteId])
+  @@index([createdAt])
 }
 
 // PRD_TRAVEL_QUOTE_BUILDER §3.2 — line-item composition.
@@ -6086,6 +6161,14 @@ model TravelPaymentSchedule {
   status           String        @default("pending") // pending | partial | paid | overdue | waived
   paidAt           DateTime?
   notes            String?       @db.Text
+  // C8 (PRD_TRAVEL_BILLING UC-2.4 reminder cron) — additive nullable
+  // counters consumed by paymentScheduleReminderEngine.js. Idempotency
+  // guard: engine skips schedules where remindersSentCount >= 3 so the
+  // T-7 / T-3 / T-1 sweep can't double-fire on a re-run within the same
+  // window. lastReminderSentAt powers an operator-visible "last chased"
+  // surface in the future Aged Receivable drill-down.
+  remindersSentCount  Int?        @default(0)
+  lastReminderSentAt  DateTime?
   invoice          TravelInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
   tenant           Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt        DateTime      @default(now())
@@ -6475,4 +6558,70 @@ model EngineWeights {
   tenant                Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// PRD_TRAVEL_SECURITY_ARCHITECTURE FR-3.7 (S5) — security-telemetry sink.
+//
+// Three incident classes ship in S5 (more can follow without schema change):
+//   - 'csp-violation'         POST /api/security/csp-report (browser-emitted)
+//   - 'cross-tenant-attempt'  middleware/crossTenantInterceptor.js logs +
+//                             returns 404 when an authenticated caller asks
+//                             for a row id whose owning tenant differs from
+//                             their JWT tenantId.
+//   - 'rate-limit-exceeded'   reserved for future rate-limit handler hooks.
+//
+// Why tenantId is nullable
+// ────────────────────────
+// CSP reports are emitted by the BROWSER, not by an authenticated session
+// — there's no Authorization header on a `Content-Security-Policy-Report-
+// Only` ping. The route resolves the tenant best-effort from the Host
+// header, but a CSP report on an unknown host (during DNS bring-up, on the
+// localhost dev environment, or against a proxy mid-deploy) is still
+// useful telemetry; we'd rather persist it with tenantId=null than drop
+// it. Cross-tenant-attempt rows are ALWAYS attributable (the requesting
+// JWT carried a tenantId by definition) so those land with a real id.
+//
+// Why reportJson is String @db.Text
+// ─────────────────────────────────
+// Each incident class carries different shape — CSP reports follow the
+// W3C csp-report envelope, cross-tenant-attempt rows carry our own
+// {attemptedModel, attemptedRowId, ...} shape. Modelling as relational
+// columns would either require N nullable columns or N child tables;
+// JSON-string Text mirrors the existing pattern (AuditLog.details,
+// SequenceStep.conditionJson, AbTest variantA/B, etc.) and the read sites
+// JSON.parse it on demand.
+//
+// severity bucket
+// ───────────────
+// CSP: script-src violation = 'high' (active-content risk); style-src
+// = 'medium' (CSS injection / data exfil); everything else = 'low'.
+// Cross-tenant-attempt = 'high' (potential IDOR / enumeration probe).
+//
+// Review trail
+// ────────────
+// reviewedAt / reviewedById / reviewNote let an ADMIN mark an incident as
+// triaged ("known false positive — the SDK we're integrating injects
+// inline styles, widening style-src nonce-allowlist is tracked under #N").
+// ─────────────────────────────────────────────────────────────────────
+model SecurityIncident {
+  id                 Int       @id @default(autoincrement())
+  tenantId           Int? // nullable — CSP reports may arrive before auth resolves
+  incidentType       String // 'csp-violation' | 'cross-tenant-attempt' | 'rate-limit-exceeded' | ...
+  severity           String    @default("medium") // 'low' | 'medium' | 'high' | 'critical'
+  reportJson         String    @db.Text // raw report payload (JSON-stringified shape-per-incidentType)
+  userAgent          String?
+  ipAddress          String?
+  url                String? // violating URL for CSP reports / request URL for cross-tenant
+  blockedUri         String? // CSP blockedUri (null for non-CSP rows)
+  effectiveDirective String? // CSP directive that was violated (null for non-CSP rows)
+  reviewedAt         DateTime?
+  reviewedById       Int?
+  reviewNote         String?   @db.Text
+  createdAt          DateTime  @default(now())
+  tenant             Tenant?   @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId])
+  @@index([incidentType])
+  @@index([createdAt])
 }

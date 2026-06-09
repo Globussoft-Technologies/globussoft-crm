@@ -591,7 +591,7 @@ function pickAlternative(sortedScored) {
  *   }
  * }
  */
-function runTmcDiagnosticEngine(answers, catalogue, weights) {
+function runTmcDiagnosticEngine(answers, catalogue, weights, curriculumMappings) {
   if (!answers || typeof answers !== 'object') {
     throw new TypeError('runTmcDiagnosticEngine: answers must be an object');
   }
@@ -600,6 +600,12 @@ function runTmcDiagnosticEngine(answers, catalogue, weights) {
   }
   const mergedWeights = mergeWeights(weights);
   const curriculumArr = curriculumToArray(answers.curriculum);
+  // C7 — curriculum-fit top-N. Optional input; missing/empty → empty
+  // array (no behaviour change for any pre-C7 caller).
+  const curriculumFit = Array.isArray(curriculumMappings)
+    && curriculumMappings.length > 0
+      ? computeCurriculumFit(answers, curriculumMappings, { topN: 5 })
+      : [];
 
   // ── Step 1: hard filters (PRD §3.3.2), in PRD order ───────────────
   const survivors = [];
@@ -666,6 +672,7 @@ function runTmcDiagnosticEngine(answers, catalogue, weights) {
         eliminated,
         weightsUsed: mergedWeights,
       },
+      curriculumFit,
     };
   }
 
@@ -690,6 +697,7 @@ function runTmcDiagnosticEngine(answers, catalogue, weights) {
         eliminated,
         weightsUsed: mergedWeights,
       },
+      curriculumFit,
     };
   }
 
@@ -717,6 +725,7 @@ function runTmcDiagnosticEngine(answers, catalogue, weights) {
       eliminated,
       weightsUsed: mergedWeights,
     },
+    curriculumFit,
   };
 }
 
@@ -751,12 +760,217 @@ function maybeBelowMinGroup(trip, answers, flags) {
   }
 }
 
+// ── C7 — Curriculum-Fit top-N recommendations (PRD §FR-5) ────────────
+//
+// Per PRD_TMC_CURRICULUM_MAPPING.md FR-5 the engine extends its envelope
+// with a `curriculumFit` array: the top-N TravelCurriculumMapping rows
+// that best fit the submitter's (board × grade-band × outcome) profile.
+// Pure function — no DB, no fetch. Takes pre-fetched mapping rows as
+// input. The submit-tmc route fetches active mappings up-front and
+// hands them in.
+//
+// The scoring is deliberately simple (overlap-with-outcomes) so the
+// signal is auditable end-to-end during the V1 pilot. A learned scorer
+// can replace this later without changing the route's contract — the
+// route only knows about the function signature + output shape.
+
+// Q5 grade_band → curriculum-mapping `grade` string tokens. Used to
+// match Q5 ("9-10") against the curriculum mapping's free-text grade
+// field ("Class 9", "Class 10", "IB Year 1", "IGCSE Year 10", etc.).
+// The mapping is a substring-match — if a mapping's grade contains the
+// digit pair the band names, it counts as a band hit. This lets one
+// table serve CBSE + ICSE + IB + Cambridge without per-curriculum
+// branching, at the cost of a slightly noisier match (e.g. "Class 6"
+// hits both band 4-6 AND 6-8). The duplicate hit is intentional —
+// schools straddling the boundary year see destinations from both
+// neighbours, which matches real classroom planning.
+const GRADE_BAND_TO_GRADE_NUMBERS = Object.freeze({
+  '4-6': ['4', '5', '6'],
+  '6-8': ['6', '7', '8'],
+  '9-10': ['9', '10'],
+  '11-12': ['11', '12'],
+});
+
+function gradeMatchesBand(gradeStr, gradeBand) {
+  if (typeof gradeStr !== 'string' || gradeStr.length === 0) return false;
+  const numbers = GRADE_BAND_TO_GRADE_NUMBERS[gradeBand];
+  if (!numbers || numbers.length === 0) return false;
+  // Tokenize on word boundaries so "Class 10" matches '10' but
+  // "Class 100" wouldn't (defensive — we don't ship Class 100,
+  // but the substring-on-digits approach without word-bounding
+  // would also accept "Class 102", "IB 11 Year" etc. incorrectly).
+  // Pattern: a digit-run boundary.
+  for (const n of numbers) {
+    const re = new RegExp(`(?:^|\\D)${n}(?:\\D|$)`);
+    if (re.test(gradeStr)) return true;
+  }
+  return false;
+}
+
+/**
+ * Compute top-N curriculum-fit recommendations for a TMC submission.
+ *
+ * Filters mappings by (board × grade-band) THEN scores each surviving
+ * mapping by the overlap between its `learningOutcome` and the school's
+ * primary_outcome + secondary_skills. Returns top-N sorted by fitScore
+ * descending, with mappingId asc as the deterministic tie-break.
+ *
+ * @param {object} answers - TMC §3.1 answers. Reads:
+ *     - primary_outcome (string, Q1 — primary outcome key)
+ *     - secondary_skills (string[], Q2 — exactly 2)
+ *     - curriculum (string | string[], Q6 — board(s))
+ *     - grade_band (string, Q5 — "4-6"/"6-8"/"9-10"/"11-12")
+ * @param {Array<object>} curriculumMappings - Active rows from
+ *   TravelCurriculumMapping (already tenant-scoped). Each row shape:
+ *     { id, curriculum, grade, subject, learningOutcome,
+ *       destinationId, destinationLabel, fitScore, fitRationale }
+ * @param {object} [opts]
+ * @param {number} [opts.topN=5] - Max recommendations returned.
+ * @returns {Array<object>} Top-N curriculum-fit rows, each:
+ *   { mappingId, board, subject, grade, learningOutcome,
+ *     destinationLabel, destinationId, fitScore, fitRationale }
+ *
+ * Empty cases:
+ *   - curriculumMappings empty → []
+ *   - answers.curriculum missing/empty → [] (no board to filter on)
+ *   - zero rows survive board+grade filter → []
+ */
+function computeCurriculumFit(answers, curriculumMappings, opts) {
+  const topN =
+    opts && typeof opts.topN === 'number' && opts.topN > 0 ? opts.topN : 5;
+  if (!Array.isArray(curriculumMappings) || curriculumMappings.length === 0) {
+    return [];
+  }
+  if (!answers || typeof answers !== 'object') return [];
+
+  const curriculumArr = curriculumToArray(answers.curriculum);
+  if (curriculumArr.length === 0) return [];
+
+  const gradeBand = answers.grade_band;
+  const primaryOutcome =
+    typeof answers.primary_outcome === 'string' ? answers.primary_outcome : '';
+  const secondarySkills = Array.isArray(answers.secondary_skills)
+    ? answers.secondary_skills.filter(
+      (s) => typeof s === 'string' && s.length > 0,
+    )
+    : [];
+
+  // Primary outcome bonus: +50 (primary match is the dominant signal,
+  // mirrors the engine's weightPrimaryOutcome shape for symmetry).
+  // Secondary skill bonus: +20 each, capped at +40 (cap of 2 matches —
+  // mirrors scoreSecondarySkill's max). Grade-band aligned: +10
+  // (matches weightGradeBandCenter shape). Base score before bonuses:
+  // 50 (so a board+grade match with NO outcome overlap still surfaces).
+  const PRIMARY_OUTCOME_BONUS = 50;
+  const SECONDARY_SKILL_BONUS = 20;
+  const SECONDARY_CAP_MATCHES = 2;
+  const GRADE_BAND_BONUS = 10;
+  const BASE_SCORE = 50;
+
+  const scored = [];
+  for (const mapping of curriculumMappings) {
+    if (!mapping || typeof mapping !== 'object') continue;
+    // Board (curriculum) filter — any of the school's selected boards
+    // must match the mapping's curriculum.
+    if (typeof mapping.curriculum !== 'string') continue;
+    if (!curriculumArr.includes(mapping.curriculum)) continue;
+    // Grade-band filter — mapping's grade string must reference any
+    // class number that falls inside the school's Q5 band.
+    if (!gradeMatchesBand(mapping.grade, gradeBand)) continue;
+
+    const mappingOutcome =
+      typeof mapping.learningOutcome === 'string'
+        ? mapping.learningOutcome
+        : '';
+
+    // Outcome-overlap scoring. Substring-tolerant match (case-insensitive)
+    // because mapping outcomes are advisor-authored free text while
+    // answer outcomes are option keys — "empathy" ⊂ "Empathy + Cultural
+    // respect" type matches MUST count.
+    const lcOutcome = mappingOutcome.toLowerCase();
+    const primaryMatched =
+      primaryOutcome.length > 0 &&
+      lcOutcome.length > 0 &&
+      lcOutcome.includes(primaryOutcome.toLowerCase());
+    let secondaryMatchCount = 0;
+    const matchedSecondaries = [];
+    for (const s of secondarySkills) {
+      if (
+        s.length > 0 &&
+        lcOutcome.length > 0 &&
+        lcOutcome.includes(s.toLowerCase())
+      ) {
+        secondaryMatchCount++;
+        matchedSecondaries.push(s);
+        if (secondaryMatchCount >= SECONDARY_CAP_MATCHES) break;
+      }
+    }
+
+    const fitScore =
+      BASE_SCORE +
+      (primaryMatched ? PRIMARY_OUTCOME_BONUS : 0) +
+      secondaryMatchCount * SECONDARY_SKILL_BONUS +
+      GRADE_BAND_BONUS;
+
+    // Human-readable rationale. Composed from the parts that fired so
+    // advisors / parents see why the destination came up.
+    const rationaleParts = [];
+    if (primaryMatched) {
+      rationaleParts.push(`Primary outcome match (${primaryOutcome})`);
+    }
+    if (secondaryMatchCount > 0) {
+      rationaleParts.push(
+        `secondary skill alignment (${matchedSecondaries.join(', ')})`,
+      );
+    }
+    rationaleParts.push('grade band aligned');
+    const fitRationale = rationaleParts
+      .join(' + ')
+      .replace(/^./, (c) => c.toUpperCase());
+
+    // mappingId is the deterministic tie-break for byte-identical
+    // ordering on equal-score rows (NF-1 contract).
+    const mappingId = Number.isFinite(mapping.id) ? mapping.id : 0;
+
+    scored.push({
+      mappingId,
+      board: mapping.curriculum,
+      subject: typeof mapping.subject === 'string' ? mapping.subject : '',
+      grade: typeof mapping.grade === 'string' ? mapping.grade : '',
+      learningOutcome: mappingOutcome,
+      destinationLabel:
+        typeof mapping.destinationLabel === 'string'
+          ? mapping.destinationLabel
+          : null,
+      destinationId: Number.isFinite(mapping.destinationId)
+        ? mapping.destinationId
+        : null,
+      fitScore,
+      fitRationale,
+    });
+  }
+
+  // Sort: fitScore desc, mappingId asc (deterministic tie-break).
+  scored.sort((a, b) => {
+    if (a.fitScore !== b.fitScore) return b.fitScore - a.fitScore;
+    return a.mappingId - b.mappingId;
+  });
+
+  return scored.slice(0, topN);
+}
+
 // ── Exports ──────────────────────────────────────────────────────────
 //
 // Public surface: runTmcDiagnosticEngine is the entry point. The
 // constants + per-signal scorers + ICP computer are exported for the
 // vitest suite so each piece can be probed independently per PRD §3.10
 // step 2's hand-checked test cases.
+//
+// C7 additive: runTmcDiagnosticEngine accepts an optional 4th argument
+// (curriculumMappings array). When supplied, the returned envelope
+// includes a `curriculumFit` field (top-N recommendations). When omitted
+// or empty, `curriculumFit` is [] — backward-compatible with every
+// pre-C7 caller.
 module.exports = {
   runTmcDiagnosticEngine,
   // For tests: probe each piece independently
@@ -777,4 +991,7 @@ module.exports = {
   scoreTierLean,
   scoreTrip,
   compareScored,
+  // C7
+  computeCurriculumFit,
+  gradeMatchesBand,
 };

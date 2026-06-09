@@ -224,12 +224,41 @@ External cred-blocked dependencies (do NOT block Phase 1 launch — ship stub-mo
 
 ## §10 Status snapshot
 
-- **Current state:** ZERO flyer authoring surface. Operators bail out to Canva / Adobe Express for marketing collateral; the round-trip is the friction.
-- **This PRD:** WRITTEN 2026-05-23 (tick #23). Captures 22 functional requirements across 7 groups, 5 design decisions, 3 cred dependencies, 10 acceptance criteria, 6 open questions, 8 build-order dependencies.
-- **Path to implementation:** 15-25 engineering days, dominated by DD-5.1 fork (Polotno embed = ~10 days; in-house build = ~20-25 days). Phase 1 ships AC-6.1 through AC-6.10 except AC-6.9 (Q-MF-3 cred-blocked, stub acceptable). Phase 2 layers analytics, A/B testing, animated output. Phase 3 adds POD fulfillment.
-- **Status flag:** DRAFT — pending design-decision sign-off (DD-5.1 through DD-5.5) and cred-chase resolution (Q-MF-1, Q-MF-2, Q-MF-3). All three creds overlap with sibling PRDs already in flight; resolving them once unlocks 4+ feature workstreams.
+### 2026-06-09 refresh — FlyerTemplates + Studio SHELL live; canvas editor + render pipeline pending
+
+**Current state:** The "ZERO flyer authoring surface" claim is OBSOLETE. Slices 1-5 are SHIPPED: the FlyerTemplates list page + Marketing Flyer Studio Phase 2 SHELL with palette/layout/assets local state + Save-as-Template flow + `?template=<id>` seeding. The studio header self-labels as "non-functional scaffold" until the canvas editor + render pipeline land. DD-5.1 (Polotno vs in-house) remains the gating product call before sprint-1 implementation can start.
+
+**SHIPPED:**
+- ✅ `backend/routes/travel_flyer_templates.js` — extensive CRUD + slices (POST/PUT/GET)
+- ✅ `backend/lib/flyerExport.js` + tests
+- ✅ `backend/lib/flyerTemplateValidator.js`
+- ✅ `frontend/src/pages/travel/FlyerTemplates.jsx` list page + tests
+- ✅ `frontend/src/pages/travel/MarketingFlyerStudio.jsx` — Phase 2 SHELL with palette/layout/assets local state + Save-as-Template flow + `?template=<id>` seeding
+- ✅ `App.jsx` routes mounted (`/travel/flyer-templates`, MarketingFlyerStudio path)
+
+**Pending (in-PRD work):**
+- ⬜ Drag-drop canvas editor with full block-type registry (FR-3.1.1-3.1.7) — ~8-10d (or ~5d via Polotno per DD-5.1)
+- ⬜ Asset library + Multer pipeline + tag search (FR-3.2) — ~3d
+- ⬜ AI copy task class `marketing-flyer-copy` (FR-3.6.1) — ~1d
+- ⬜ AI image task class `marketing-flyer-image` stub-mode (FR-3.6.3) — ~1d
+- ⬜ PDF + multi-aspect PNG render via Puppeteer (FR-3.4) — ~3d
+- ⬜ WhatsApp share flow (FR-3.5.1) — ~1d
+- ⬜ `SequenceStep.attachmentRefs` flyer kind extension (FR-3.5/AC-6.5) — ~½d
+- ⬜ Brand-lock + brand-kit hot-reload (FR-3.3) — ~1d
+- ⬜ Public share URL + embed code (FR-3.5.3-5.3.4) — ~1d
+
+**Blocked (design decisions / creds):**
+- 🔵 DD-5.1 Polotno embed vs in-house — needs product call before sprint 1
+- 🔵 DD-5.3 AI image provider
+- 🔵 Q-MF-1 asset storage cred
+- 🔵 Q-MF-2 AI image API key (overlaps Q-AI-3)
+- 🔵 Q-MF-3 WhatsApp Business creds (overlaps Q9)
+
+**Net remaining: ~18-22 engineering days** (Polotno fork shrinks canvas editor ~5d). All three Q-MF creds overlap sibling PRDs (Q-AI-3, Q9) — resolving them unlocks 4+ workstreams.
+
+- **Status flag:** DRAFT — pending design-decision sign-off (DD-5.1 through DD-5.5) and cred-chase resolution (Q-MF-1, Q-MF-2, Q-MF-3).
 - **Sibling PRDs:** [PRD_AI_SURFACES.md](PRD_AI_SURFACES.md) (donates the AI copy + AI image task-class infrastructure), [WHATSAPP_INTEGRATION_PRD.md](WHATSAPP_INTEGRATION_PRD.md) (donates the share-to-WhatsApp distribution channel), [PRD_TRAVEL_B2B_AGENT_PORTAL.md](PRD_TRAVEL_B2B_AGENT_PORTAL.md) (downstream consumer of flyer library — sub-agents reshare flyers), [PRD_TRAVEL_QUOTE_BUILDER.md](PRD_TRAVEL_QUOTE_BUILDER.md) (sibling visual builder for per-quote PDFs — Quote Builder pattern feeds Flyer Studio pattern).
-- **Anti-busywork guardrail:** This PRD is design+spec, NOT impl. Do not start in-house editor build until DD-5.1 is resolved (sunk cost: 4-6 weeks if Polotno would have worked). Do not chase Q-MF-2 / Q-MF-3 independently — they're already on the cred-chase backlog via sibling PRDs.
+- **Anti-busywork guardrail:** Do not start in-house canvas editor build until DD-5.1 is resolved (sunk cost: 4-6 weeks if Polotno would have worked). Do not chase Q-MF-2 / Q-MF-3 independently — they're already on the cred-chase backlog via sibling PRDs.
 
 ---
 

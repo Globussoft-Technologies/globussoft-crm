@@ -184,8 +184,12 @@ app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
 // Security middleware
 const cookieParser = require('cookie-parser');
-const { helmetMiddleware, helmetStrictReportOnlyMiddleware, permissionsPolicyMiddleware, sanitizeBody, stripTenantOverride } = require('./middleware/security');
+const { attachNonce, helmetMiddleware, helmetStrictReportOnlyMiddleware, permissionsPolicyMiddleware, sanitizeBody, stripTenantOverride } = require('./middleware/security');
 const { originCheck } = require('./middleware/originCheck');
+// #917 slice S1 (FR-3.2) — mint a per-request CSP nonce BEFORE the strict
+// Report-Only CSP middleware runs. The CSP function-directives read
+// res.locals.cspNonce to advertise `'nonce-<base64>'` on script-src/style-src.
+app.use(attachNonce);
 app.use(helmetMiddleware);
 // #917 slice 1 — additive strict CSP in Report-Only mode (no 'unsafe-inline'
 // on script-src/style-src). Browsers log violations to devtools without
@@ -340,6 +344,9 @@ const CONTENT_TYPE_GUARD_EXCLUDE_PREFIXES = [
   // application/reports+json, neither of which is in SUPPORTED_CONTENT_TYPES.
   // The route's own express.json() parser handles them.
   "/api/csp/report",
+  // #921 / FR-3.7 (S5) — new SecurityIncident-backed CSP report sink.
+  // Same content-type handling rationale as /api/csp/report above.
+  "/api/security/csp-report",
 ];
 app.use("/api", (req, res, next) => {
   if (!["POST", "PUT", "PATCH"].includes(req.method)) return next();
@@ -646,7 +653,7 @@ app.use("/api", (req, res, next) => {
   // promotes a contact to a portal user. Removing the entry routes the
   // unauthenticated case through the global guard's 401 (RFC 7235), and
   // the authenticated case continues unaffected.
-  const openPaths = ["/auth/login", "/auth/signup", "/auth/register", "/auth/customer/register", "/auth/public/tenants", "/auth/forgot-password", "/auth/reset-password", "/auth/2fa/verify", "/health", "/marketplace-leads/webhook", "/sms/webhook", "/whatsapp/webhook", "/telephony/webhook", "/push/subscribe/visitor", "/push/vapid-key", "/communications/track/", "/sso/google/callback", "/sso/microsoft/callback", "/sso/google/start", "/sso/microsoft/start", "/email/inbound", "/calendar/google/callback", "/calendar/outlook/callback", "/voice/webhook", "/portal/login", "/portal/forgot", "/portal/reset", "/portal/me", "/portal/tickets", "/portal/invoices", "/portal/contracts", "/portal/travel", "/portal/kyc", "/signatures/sign", "/surveys/respond", "/surveys/public", "/chatbots/chat", "/web-visitors/track", "/payments/webhook", "/accounting/webhook", "/scim/v2", "/booking-pages/public", "/knowledge-base/public", "/live-chat/visitor", "/document-views/track", "/zapier/webhook", "/marketing/submit", "/v1/external", "/v1/voyagr", "/wellness/public", "/wellness/portal", "/attendance/biometric/webhook", "/travel/microsites/public", "/travel/diagnostics/public", "/travel/itineraries/public", "/travel/inbound/leads"];
+  const openPaths = ["/auth/login", "/auth/signup", "/auth/register", "/auth/customer/register", "/auth/public/tenants", "/auth/forgot-password", "/auth/reset-password", "/auth/2fa/verify", "/health", "/marketplace-leads/webhook", "/sms/webhook", "/whatsapp/webhook", "/telephony/webhook", "/push/subscribe/visitor", "/push/vapid-key", "/communications/track/", "/sso/google/callback", "/sso/microsoft/callback", "/sso/google/start", "/sso/microsoft/start", "/email/inbound", "/calendar/google/callback", "/calendar/outlook/callback", "/voice/webhook", "/portal/login", "/portal/forgot", "/portal/reset", "/portal/me", "/portal/tickets", "/portal/invoices", "/portal/contracts", "/portal/travel", "/portal/kyc", "/signatures/sign", "/surveys/respond", "/surveys/public", "/chatbots/chat", "/web-visitors/track", "/payments/webhook", "/accounting/webhook", "/scim/v2", "/booking-pages/public", "/knowledge-base/public", "/live-chat/visitor", "/document-views/track", "/zapier/webhook", "/marketing/submit", "/v1/external", "/v1/voyagr", "/wellness/public", "/wellness/portal", "/attendance/biometric/webhook", "/travel/microsites/public", "/travel/diagnostics/public", "/travel/itineraries/public", "/travel/inbound/leads", "/security/csp-report"];
   if (openPaths.some(p => req.path.startsWith(p))) return next();
   // Public marketing catalog — the /pricing page hits GET /subscriptions/plans
   // anonymously. Admin CRUD (POST/PUT/DELETE + GET /plans/admin) stays gated
@@ -666,6 +673,19 @@ app.use("/api", (req, res, next) => {
   ) {
     req.headers.authorization = `Bearer ${req.query._t}`;
   }
+  // TMC public readiness PDF — `/travel/diagnostics/:id/readiness-report.pdf`
+  // is designed public per PRD §5.1 DD-5.2 (the school clicks the report-
+  // download URL surfaced after public submit-tmc).  Can't be a prefix
+  // entry in openPaths because the `:id` segment is dynamic; suffix match
+  // on the route shape lets it through without auth.  Tightly scoped to
+  // GET + the exact suffix so other /travel/diagnostics/:id sub-routes
+  // stay auth-gated.
+  if (req.method === 'GET' && /^\/travel\/diagnostics\/\d+\/readiness-report\.pdf$/.test(req.path)) return next();
+  // Slice C9 — TravelQuote customer-share landing endpoints (PRD §3.7).
+  // Public, JWT-gated by `:shareToken` segment (verified inside the route).
+  // GET = read-only envelope; POST = accept|reject|counter customer actions.
+  if (req.method === 'GET' && /^\/travel\/quotes\/public\/quote\/[^/]+$/.test(req.path)) return next();
+  if (req.method === 'POST' && /^\/travel\/quotes\/public\/quote\/[^/]+\/(accept|reject|counter)$/.test(req.path)) return next();
   verifyToken(req, res, (err) => {
     if (err) return next(err);
     checkSubscription(req, res, next);
@@ -839,8 +859,15 @@ app.use("/api/travel/visa/analytics", travelVisaAnalyticsRoutes);
 app.use("/api/travel/visa", travelVisaRoutes);
 app.use("/api/travel", travelItinerariesRoutes);
 app.use("/api/travel", travelTripsRoutes);
+// Slice C2 — passport OCR upload + verification queue (stub-mode pending PC-1).
+app.use("/api/travel/passport", require("./routes/travel_passport"));
 app.use("/api/travel", travelCostMasterRoutes);
 app.use("/api/travel", travelSuppliersRoutes);
+// Slice C9 — TravelQuote customer-share public landing (PRD §3.7).
+// MUST be mounted BEFORE travelQuotesRoutes — the operator route has
+// `:id` capture on `/quotes/:id` which would otherwise match `/quotes/public/...`
+// at validateNumericId and 400 INVALID_ID before reaching the public router.
+app.use("/api/travel/quotes/public", require("./routes/travel_quotes_public"));
 app.use("/api/travel", travelQuotesRoutes);
 app.use("/api/travel", travelInvoicesRoutes);
 app.use("/api/travel", require("./routes/travel_flyer_templates"));
@@ -915,6 +942,13 @@ app.use("/api/v1/external", externalRoutes);
 app.use("/api/v1/voyagr", voyagrRoutes);
 // Admin tooling (ADMIN-only ops triggers + read APIs)
 app.use("/api/admin", adminRoutes);
+
+// PRD_TRAVEL_SECURITY_ARCHITECTURE FR-3.7 (S5) — SecurityIncident ingest
+// + ADMIN triage listing. POST /api/security/csp-report is public (exempt
+// via openPaths + CONTENT_TYPE_GUARD_EXCLUDE_PREFIXES); GET /incidents and
+// POST /incidents/:id/review re-assert verifyToken + verifyRole(['ADMIN'])
+// at the route. Separate from /api/csp (slice 2 of #917) — see route header.
+app.use("/api/security", require("./routes/security_reports"));
 
 // Public landing pages (outside /api/ prefix, no auth guard)
 app.use("/p", landingPagesPublic);
@@ -1216,6 +1250,13 @@ if (process.env.DISABLE_CRONS === '1') {
   const { initTripPaymentRemindersCron } = require('./cron/tripPaymentReminders');
   initTripPaymentRemindersCron();
 
+  // C8 (PRD_TRAVEL_BILLING UC-2.4) — daily 09:13 IST TravelPaymentSchedule
+  // T-7 / T-3 / T-1 reminder sweep. Fires SMS + email customer reminders
+  // (WA leg stub pending Q9 Wati creds) per milestone whose dueDate lands
+  // in window; bumps remindersSentCount + lastReminderSentAt on the row.
+  const { initCron: initPaymentScheduleReminderCron } = require('./cron/paymentScheduleReminderEngine');
+  initPaymentScheduleReminderCron();
+
   // Initialize Travel CRM diagnostic-to-advisor escalation (every 5 min).
   // PRD §6.3 row 6 — diagnostics stalled >30 min without advisor outreach
   // surface as high-priority Notification rows on the advisor dashboard.
@@ -1263,6 +1304,12 @@ if (process.env.DISABLE_CRONS === '1') {
   // (packet, itinerary, year) dedup window. WA dispatch deferred to Q9.
   const { initReligiousGuidanceCron } = require('./cron/religiousGuidanceEngine');
   initReligiousGuidanceCron();
+
+  // Slice C9 — Travel CRM quote expiry sweep (daily 09:00 IST).
+  // PRD_TRAVEL_QUOTE_BUILDER §3.7 — flips Draft/Sent quotes with validUntil<now
+  // to status='Expired' + writes a TravelQuoteSnapshot history row per transition.
+  const { initCron: initQuoteExpirySweepCron } = require('./cron/quoteExpirySweep');
+  initQuoteExpirySweepCron();
 
   // #902 GST slice 12 — daily GSTR filing reminder sweep (05:00 UTC = 10:30 IST).
   // Iterates active tenants and emits a tiered reminder (T-7d / T-3d / T-1d / T-0)

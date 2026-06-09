@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useContext } from 'react';
+import React, { useState, useEffect, useContext, useRef, useCallback, useMemo } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Plus, Trash2, Zap, X } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
@@ -6,6 +7,16 @@ import { formatMoney, currencySymbol } from '../utils/money';
 import { io } from 'socket.io-client';
 import DealModal from '../components/DealModal';
 import { AuthContext } from '../App';
+
+// C4 (PRD_TRAVEL_PIPELINE_KANBAN FR-3.18) — virtualization threshold.
+// Columns with >100 cards render only a windowed slice based on scroll
+// position. Below this threshold all cards render — small enough to skip
+// the windowing overhead. Exported as a const so the test file can pin it.
+export const VIRTUALIZATION_THRESHOLD = 100;
+// Approximate height of a single card (h4 + company line + amount row + gap).
+// Tuned to keep ~20 cards in the DOM at any time for a 200+ card column.
+const CARD_ROW_HEIGHT = 132;
+const VIRTUAL_BUFFER_CARDS = 5;
 
 // #897 (PRD_TRAVEL_PIPELINE_KANBAN) — Travel-vertical sub-brand filter.
 // 4 sub-brands per the multi-tenant travel architecture.
@@ -39,7 +50,81 @@ const Pipeline = () => {
   // #897 (PRD_TRAVEL_PIPELINE_KANBAN FR-5) — sub-brand filter for
   // Travel-vertical tenants. Empty string = no filter (all sub-brands).
   // Generic + wellness tenants don't see the dropdown; filter stays ''.
-  const [selectedSubBrand, setSelectedSubBrand] = useState('');
+  //
+  // C3 (FR-3.15) — URL-param persistence via useSearchParams. Initial state
+  // seeds from `?subBrand=tmc` (or the first valid value in a comma list like
+  // `?subBrand=tmc,rfu`, forward-compat for a multi-select C4 may add later).
+  // Unknown / empty values fall back to '' (all sub-brands). The first effect
+  // syncs the URL when the dropdown changes; the second effect re-seeds local
+  // state when the URL changes externally (back-button, deep-link nav).
+  const [searchParams, setSearchParams] = useSearchParams();
+  const _validSubBrands = TRAVEL_SUB_BRANDS.map((sb) => sb.value).filter(Boolean);
+  const parseSubBrandParam = (raw) => {
+    if (!raw) return '';
+    const first = raw.split(',').map((s) => s.trim()).find((s) => _validSubBrands.includes(s));
+    return first || '';
+  };
+  const [selectedSubBrand, setSelectedSubBrand] = useState(() =>
+    parseSubBrandParam(searchParams.get('subBrand')),
+  );
+
+  // C4 (FR-3.17) — keyboard a11y. `keyboardMoveDealId` is the id of a card
+  // currently in "move mode" (set when user presses Space on a focused card;
+  // arrow keys then move the card; second Space drops it; Esc cancels).
+  // `announcement` feeds the visually-hidden aria-live region the screen
+  // reader announces after a drop ("Moved {deal} from {old} to {new}").
+  const [keyboardMoveDealId, setKeyboardMoveDealId] = useState(null);
+  const [announcement, setAnnouncement] = useState('');
+
+  // C4 (FR-3.18) — per-column scroll position drives the windowed slice.
+  // We track scrollTop per stage.id; when a column has >threshold cards,
+  // only cards within ±buffer of the visible window render.
+  const [scrollPositions, setScrollPositions] = useState({});
+
+  // C4 (FR-3.16) — touch-drag state. HTML5 DragEvent doesn't fire on touch
+  // devices; we synthesize the drop by tracking the held card and the
+  // column the touchEnd lands in. `touchDragDealId` is the in-flight card.
+  const touchDragRef = useRef({ dealId: null, startY: 0 });
+
+  // C4 — reduced-motion preference; skip drag animations / transitions when set.
+  const prefersReducedMotion = useMemo(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return false;
+    try {
+      return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    } catch {
+      return false;
+    }
+  }, []);
+
+  // C3 — push selectedSubBrand → URL. Empty selection removes the param
+  // entirely so deep-links stay clean (`/pipeline` not `/pipeline?subBrand=`).
+  useEffect(() => {
+    const current = searchParams.get('subBrand') || '';
+    if (!selectedSubBrand) {
+      if (current) {
+        searchParams.delete('subBrand');
+        setSearchParams(searchParams, { replace: true });
+      }
+      return;
+    }
+    if (current !== selectedSubBrand) {
+      searchParams.set('subBrand', selectedSubBrand);
+      setSearchParams(searchParams, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedSubBrand]);
+
+  // C3 — pull URL → selectedSubBrand. Fires on browser back/forward or any
+  // external nav that mutates the `subBrand` param. Guarded against the
+  // echo loop by only writing local state when the parsed URL value
+  // diverges from the current selection.
+  useEffect(() => {
+    const fromUrl = parseSubBrandParam(searchParams.get('subBrand'));
+    if (fromUrl !== selectedSubBrand) {
+      setSelectedSubBrand(fromUrl);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
 
   const fetchAiScore = async (e, dealId) => {
     e.stopPropagation();
@@ -211,6 +296,198 @@ const Pipeline = () => {
     e.preventDefault();
   };
 
+  // C4 (FR-3.16) — touch-drag. HTML5 drag events don't fire on touch
+  // devices; synthesize the drop by tracking the held card on touchStart
+  // and finding the column the touchEnd lands in via elementFromPoint.
+  // Mirrors the HTML5 drop semantics (optimistic update + rollback in
+  // handleDrop) by funnelling through the same code path with a synthetic
+  // dataTransfer.
+  const handleCardTouchStart = (e, dealId) => {
+    touchDragRef.current = { dealId, startY: e.touches[0].clientY };
+  };
+
+  const handleCardTouchEnd = async (e) => {
+    const { dealId } = touchDragRef.current;
+    touchDragRef.current = { dealId: null, startY: 0 };
+    if (!dealId) return;
+
+    // Find the column at the touchEnd coordinates. `changedTouches[0]` is
+    // where the finger lifted; `elementFromPoint` walks the tree to find
+    // the dropped-on column via the `data-stage-id` attribute we set on
+    // the column wrapper.
+    const touch = e.changedTouches && e.changedTouches[0];
+    if (!touch) return;
+    const target = document.elementFromPoint(touch.clientX, touch.clientY);
+    const column = target && target.closest('[data-stage-id]');
+    if (!column) return;
+    const stageId = column.getAttribute('data-stage-id');
+    if (!stageId) return;
+
+    // Funnel through the same code path as HTML5 drop — synthesize a
+    // minimal dataTransfer so handleDrop's existing rollback / optimistic-
+    // update logic catches the touch path too.
+    await handleDrop({
+      preventDefault: () => {},
+      dataTransfer: { getData: () => String(dealId) },
+    }, stageId);
+  };
+
+  // C4 (FR-3.17) — keyboard a11y. Per the PRD:
+  //   Tab → focus first card
+  //   Arrow Up/Down → move focus within a column
+  //   Arrow Left/Right → move focus across columns at same vertical position
+  //   Space → enter / exit "move mode" (second Space drops; Esc cancels)
+  //   In move mode: arrows move the CARD itself, not focus.
+  // The keyboardMoveDealId state distinguishes the two modes.
+  const filterStageDeals = useCallback(
+    (stage) =>
+      deals.filter(
+        (d) =>
+          d.stage === stage.id &&
+          (!selectedSubBrand || d.subBrand === selectedSubBrand),
+      ),
+    [deals, selectedSubBrand],
+  );
+
+  const focusCardByPosition = (stageIndex, dealIndex) => {
+    // Find the card via data attributes. Falls back gracefully when the
+    // target column has fewer cards than dealIndex (move to last card).
+    const stage = stages[stageIndex];
+    if (!stage) return;
+    const targetStageDeals = filterStageDeals(stage);
+    if (targetStageDeals.length === 0) return;
+    const clampedIndex = Math.min(dealIndex, targetStageDeals.length - 1);
+    const targetDeal = targetStageDeals[clampedIndex];
+    if (!targetDeal) return;
+    const el = document.querySelector(`[data-deal-id="${targetDeal.id}"]`);
+    if (el && typeof el.focus === 'function') {
+      el.focus();
+    }
+  };
+
+  const announceMove = (deal, oldStageId, newStageId) => {
+    const oldStage = stages.find((s) => s.id === oldStageId);
+    const newStage = stages.find((s) => s.id === newStageId);
+    setAnnouncement(
+      `Moved ${deal.title} from ${oldStage ? oldStage.title : oldStageId} to ${newStage ? newStage.title : newStageId}`,
+    );
+  };
+
+  const moveCardToStage = async (dealId, newStageId) => {
+    const deal = deals.find((d) => d.id === dealId);
+    if (!deal) return;
+    const oldStageId = deal.stage;
+    if (oldStageId === newStageId) return;
+
+    const prevDeals = deals;
+    const newProb = STAGE_PROBABILITY[newStageId];
+    setDeals((prev) =>
+      prev.map((d) => {
+        if (d.id !== dealId) return d;
+        return newProb !== undefined
+          ? { ...d, stage: newStageId, probability: newProb }
+          : { ...d, stage: newStageId };
+      }),
+    );
+    announceMove(deal, oldStageId, newStageId);
+
+    try {
+      const updated = await fetchApi(`/api/deals/${dealId}`, {
+        method: 'PUT',
+        body: JSON.stringify(
+          newProb !== undefined ? { stage: newStageId, probability: newProb } : { stage: newStageId },
+        ),
+      });
+      if (updated && updated.id) {
+        setDeals((prev) => prev.map((d) => (d.id === updated.id ? { ...d, ...updated } : d)));
+      }
+    } catch (err) {
+      setDeals(prevDeals);
+    }
+  };
+
+  const handleCardKeyDown = (e, deal, stageIndex, dealIndex) => {
+    const isMoveMode = keyboardMoveDealId === deal.id;
+
+    if (e.key === 'Escape' && isMoveMode) {
+      e.preventDefault();
+      setKeyboardMoveDealId(null);
+      setAnnouncement(`Cancelled move of ${deal.title}`);
+      return;
+    }
+
+    if (e.key === ' ' || e.key === 'Spacebar') {
+      e.preventDefault();
+      if (isMoveMode) {
+        // Second Space — drop in current column (commits whatever stage the
+        // card has been moved into; even if it didn't change, exit move mode).
+        setKeyboardMoveDealId(null);
+        setAnnouncement(`Dropped ${deal.title}`);
+      } else {
+        // First Space — enter move mode.
+        setKeyboardMoveDealId(deal.id);
+        setAnnouncement(
+          `Picked up ${deal.title}. Use arrow keys to move; Space to drop; Escape to cancel.`,
+        );
+      }
+      return;
+    }
+
+    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+      e.preventDefault();
+      if (isMoveMode) {
+        // Move the CARD itself.
+        if (e.key === 'ArrowLeft' && stageIndex > 0) {
+          moveCardToStage(deal.id, stages[stageIndex - 1].id);
+        } else if (e.key === 'ArrowRight' && stageIndex < stages.length - 1) {
+          moveCardToStage(deal.id, stages[stageIndex + 1].id);
+        }
+        // ArrowUp/ArrowDown within a column is a no-op for stage assignment
+        // (the kanban groups by stage, not by intra-column order). Future
+        // slice could add an `order` column to support intra-column reorder.
+        return;
+      }
+      // Not in move mode — move FOCUS.
+      if (e.key === 'ArrowUp') {
+        focusCardByPosition(stageIndex, Math.max(0, dealIndex - 1));
+      } else if (e.key === 'ArrowDown') {
+        focusCardByPosition(stageIndex, dealIndex + 1);
+      } else if (e.key === 'ArrowLeft' && stageIndex > 0) {
+        focusCardByPosition(stageIndex - 1, dealIndex);
+      } else if (e.key === 'ArrowRight' && stageIndex < stages.length - 1) {
+        focusCardByPosition(stageIndex + 1, dealIndex);
+      }
+    }
+  };
+
+  // C4 (FR-3.18) — windowed slice for columns over the virtualization threshold.
+  // Below threshold: render every card (no overhead). Above threshold: render
+  // only cards within ±buffer of the visible window based on scrollTop. The
+  // column wrapper keeps a phantom-height div so the scrollbar still tracks
+  // the real total and the card-count badge still shows real total length.
+  const computeVisibleRange = (totalCards, scrollTop, containerHeight = 600) => {
+    if (totalCards <= VIRTUALIZATION_THRESHOLD) {
+      return { startIndex: 0, endIndex: totalCards, useVirt: false };
+    }
+    const firstVisible = Math.floor(scrollTop / CARD_ROW_HEIGHT);
+    const visibleCount = Math.ceil(containerHeight / CARD_ROW_HEIGHT);
+    const startIndex = Math.max(0, firstVisible - VIRTUAL_BUFFER_CARDS);
+    const endIndex = Math.min(totalCards, firstVisible + visibleCount + VIRTUAL_BUFFER_CARDS);
+    return { startIndex, endIndex, useVirt: true };
+  };
+
+  const handleColumnScroll = (e, stageId) => {
+    const scrollTop = e.currentTarget.scrollTop;
+    setScrollPositions((prev) => {
+      // Coalesce updates to roughly one per CARD_ROW_HEIGHT pixels — the
+      // window shifts in card-height chunks, not pixel-by-pixel, so we avoid
+      // a setState per scroll event.
+      const prevTop = prev[stageId] || 0;
+      if (Math.abs(scrollTop - prevTop) < CARD_ROW_HEIGHT / 2) return prev;
+      return { ...prev, [stageId]: scrollTop };
+    });
+  };
+
   return (
     <div style={{ padding: '2rem', height: '100%', display: 'flex', flexDirection: 'column', animation: 'fadeIn 0.4s ease-out' }}>
       <header style={{ marginBottom: '2rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -248,22 +525,59 @@ const Pipeline = () => {
         </div>
       </header>
 
+      {/* C4 (FR-3.17) — aria-live region for screen-reader announcements
+          on card pickup / drop / cancel. Visually hidden via CSS-in-JS
+          clip-path; `aria-live=polite` waits until the SR is idle. */}
+      <div
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        data-testid="pipeline-announcer"
+        style={{
+          position: 'absolute',
+          width: '1px',
+          height: '1px',
+          padding: 0,
+          margin: '-1px',
+          overflow: 'hidden',
+          clip: 'rect(0,0,0,0)',
+          whiteSpace: 'nowrap',
+          border: 0,
+        }}
+      >
+        {announcement}
+      </div>
+
       {loading ? (
         <div style={{ textAlign: 'center', padding: '2rem' }}>Loading deals...</div>
       ) : (
         <div style={{ display: 'flex', gap: '1.5rem', flex: 1, overflowX: 'auto', paddingBottom: '1rem' }}>
-          {stages.map(stage => {
+          {stages.map((stage, stageIndex) => {
             // #897 — filter cards by stage AND (Travel only) by sub-brand
-            const stageDeals = deals.filter(d =>
-              d.stage === stage.id &&
-              (!selectedSubBrand || d.subBrand === selectedSubBrand)
-            );
+            const stageDeals = filterStageDeals(stage);
             const totalValue = stageDeals.reduce((sum, d) => sum + (d.amount || 0), 0);
+
+            // C4 (FR-3.18) — windowed slice for >100-card columns. Below
+            // threshold: render every card. Above: render only the visible
+            // window + buffer.
+            const scrollTop = scrollPositions[stage.id] || 0;
+            const { startIndex, endIndex, useVirt } = computeVisibleRange(
+              stageDeals.length,
+              scrollTop,
+            );
+            const visibleDeals = useVirt
+              ? stageDeals.slice(startIndex, endIndex)
+              : stageDeals;
+            const topSpacer = useVirt ? startIndex * CARD_ROW_HEIGHT : 0;
+            const bottomSpacer = useVirt
+              ? Math.max(0, (stageDeals.length - endIndex) * CARD_ROW_HEIGHT)
+              : 0;
 
             return (
               <div
                 key={stage.id}
                 className="glass"
+                data-stage-id={stage.id}
                 // #877 — explicit --column-bg override (darker than --surface-color
                 // used by inner .card deal tiles) so columns visually separate
                 // from cards in both dark and light themes. Token defined in
@@ -275,55 +589,99 @@ const Pipeline = () => {
                 <div style={{ padding: '1.25rem', borderBottom: `2px solid ${stage.color}` }}>
                   <h3 style={{ fontSize: '1rem', fontWeight: '600', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     {stage.title}
-                    <span style={{ fontSize: '0.75rem', padding: '2px 8px', background: 'var(--subtle-bg-3)', borderRadius: '12px' }}>{stageDeals.length}</span>
+                    {/* The badge always shows the REAL total length, not the
+                        windowed visible count — important when virtualization
+                        is active (badge=200 while DOM has ~20 cards). */}
+                    <span data-testid={`stage-count-${stage.id}`} style={{ fontSize: '0.75rem', padding: '2px 8px', background: 'var(--subtle-bg-3)', borderRadius: '12px' }}>{stageDeals.length}</span>
                   </h3>
                   <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginTop: '0.5rem', fontWeight: '500' }}>
                     {formatMoney(totalValue)}
                   </p>
                 </div>
-                
-                <div style={{ padding: '1rem', display: 'flex', flexDirection: 'column', gap: '0.75rem', flex: 1, overflowY: 'auto', maxHeight: 'calc(100vh - 280px)' }}>
-                  {stageDeals.map(deal => (
-                    <div
-                      key={deal.id}
-                      className="card table-row-hover"
-                      draggable
-                      onClick={() => setSelectedDeal(deal)}
-                      onDragStart={(e) => handleDragStart(e, deal.id)}
-                      style={{ padding: '1.2rem', cursor: 'pointer', position: 'relative', display: 'flex', flexDirection: 'column', gap: '0.8rem', minWidth: 0, flexShrink: 0 }}
-                    >
-                      <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', position: 'absolute', top: '0.75rem', right: '0.75rem' }}>
-                        <button onClick={(e) => fetchAiScore(e, deal.id)} aria-label={`Generate deal score for ${deal.title}`} style={{ background: 'none', border: 'none', color: '#a855f7', cursor: 'pointer', padding: '0.25rem', display: 'flex' }} title="Generate AI Insights">
-                          <Zap size={14} style={{transition: 'var(--transition)'}} onMouseOver={e => e.currentTarget.style.filter = 'drop-shadow(0 0 5px #a855f7)'} onMouseOut={e => e.currentTarget.style.filter = 'none'} />
-                        </button>
-                        <button onClick={(e) => handleDelete(e, deal.id)} aria-label={`Delete deal ${deal.title}`} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', padding: '0.25rem', display: 'flex' }} title="Delete Deal">
-                          <Trash2 size={14} style={{transition: 'var(--transition)'}} onMouseOver={e => e.currentTarget.style.color = '#ef4444'} onMouseOut={e => e.currentTarget.style.color = 'var(--text-secondary)'} />
-                        </button>
-                      </div>
 
-                      <div style={{ paddingRight: '2.5rem' }}>
-                        <h4 style={{ fontWeight: '700', fontSize: '0.95rem', marginBottom: '0.4rem', color: 'var(--text-primary)', lineHeight: '1.3', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{deal.title}</h4>
-                        <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {deal.company || deal.contactName || '—'}
-                        </p>
-                      </div>
+                <div
+                  data-testid={`stage-body-${stage.id}`}
+                  onScroll={(e) => handleColumnScroll(e, stage.id)}
+                  style={{ padding: '1rem', display: 'flex', flexDirection: 'column', gap: '0.75rem', flex: 1, overflowY: 'auto', maxHeight: 'calc(100vh - 280px)' }}
+                >
+                  {/* C4 (FR-3.18) — top spacer keeps scrollbar position aligned
+                      with the un-rendered cards above the visible window. */}
+                  {topSpacer > 0 && <div style={{ height: topSpacer }} aria-hidden="true" />}
 
-                      <div style={{ borderTop: `1px solid var(--border-color)`, paddingTop: '0.8rem', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
-                        <div>
-                          <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '0.3rem', fontWeight: '500' }}>Amount</p>
-                          <p style={{ fontSize: '1.2rem', fontWeight: 'bold', color: 'var(--text-primary)', marginBottom: '0' }}>
-                            {formatMoney(deal.amount || 0, { currency: deal.currency })}
+                  {visibleDeals.map((deal, visibleIdx) => {
+                    // dealIndex is the position within stageDeals (the source
+                    // of truth for keyboard nav); use startIndex offset when
+                    // virtualized so arrow keys still target the right row.
+                    const dealIndex = useVirt ? startIndex + visibleIdx : visibleIdx;
+                    const isInMoveMode = keyboardMoveDealId === deal.id;
+                    return (
+                      <div
+                        key={deal.id}
+                        className="card table-row-hover"
+                        data-deal-id={deal.id}
+                        data-in-move-mode={isInMoveMode ? 'true' : 'false'}
+                        draggable
+                        tabIndex={0}
+                        role="button"
+                        aria-label={`Deal: ${deal.title}, stage ${stage.title}, ${deal.probability}% probability${isInMoveMode ? '. In move mode — arrows to move, Space to drop, Escape to cancel.' : ''}`}
+                        onClick={() => setSelectedDeal(deal)}
+                        onDragStart={(e) => handleDragStart(e, deal.id)}
+                        onTouchStart={(e) => handleCardTouchStart(e, deal.id)}
+                        onTouchEnd={handleCardTouchEnd}
+                        onKeyDown={(e) => handleCardKeyDown(e, deal, stageIndex, dealIndex)}
+                        style={{
+                          padding: '1.2rem',
+                          cursor: 'pointer',
+                          position: 'relative',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '0.8rem',
+                          minWidth: 0,
+                          flexShrink: 0,
+                          // C4 (FR-3.17) — visible focus + move-mode outline.
+                          outline: isInMoveMode ? '2px solid var(--accent-color, #3b82f6)' : undefined,
+                          // C4 — reduced-motion: skip transitions when the
+                          // user has set `prefers-reduced-motion: reduce`.
+                          transition: prefersReducedMotion ? 'none' : undefined,
+                        }}
+                      >
+                        <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', position: 'absolute', top: '0.75rem', right: '0.75rem' }}>
+                          <button onClick={(e) => fetchAiScore(e, deal.id)} aria-label={`Generate deal score for ${deal.title}`} style={{ background: 'none', border: 'none', color: '#a855f7', cursor: 'pointer', padding: '0.25rem', display: 'flex' }} title="Generate AI Insights">
+                            <Zap size={14} style={{transition: prefersReducedMotion ? 'none' : 'var(--transition)'}} onMouseOver={e => e.currentTarget.style.filter = 'drop-shadow(0 0 5px #a855f7)'} onMouseOut={e => e.currentTarget.style.filter = 'none'} />
+                          </button>
+                          <button onClick={(e) => handleDelete(e, deal.id)} aria-label={`Delete deal ${deal.title}`} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', padding: '0.25rem', display: 'flex' }} title="Delete Deal">
+                            <Trash2 size={14} style={{transition: prefersReducedMotion ? 'none' : 'var(--transition)'}} onMouseOver={e => e.currentTarget.style.color = '#ef4444'} onMouseOut={e => e.currentTarget.style.color = 'var(--text-secondary)'} />
+                          </button>
+                        </div>
+
+                        <div style={{ paddingRight: '2.5rem' }}>
+                          <h4 style={{ fontWeight: '700', fontSize: '0.95rem', marginBottom: '0.4rem', color: 'var(--text-primary)', lineHeight: '1.3', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{deal.title}</h4>
+                          <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {deal.company || deal.contactName || '—'}
                           </p>
                         </div>
-                        <div style={{ textAlign: 'right' }}>
-                          <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '0.3rem', fontWeight: '500' }}>Probability</p>
-                          <span style={{ fontSize: '0.95rem', padding: '0.35rem 0.6rem', backgroundColor: `${stage.color}20`, color: stage.color, borderRadius: '4px', fontWeight: '700', display: 'inline-block' }}>
-                            {deal.probability}%
-                          </span>
+
+                        <div style={{ borderTop: `1px solid var(--border-color)`, paddingTop: '0.8rem', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
+                          <div>
+                            <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '0.3rem', fontWeight: '500' }}>Amount</p>
+                            <p style={{ fontSize: '1.2rem', fontWeight: 'bold', color: 'var(--text-primary)', marginBottom: '0' }}>
+                              {formatMoney(deal.amount || 0, { currency: deal.currency })}
+                            </p>
+                          </div>
+                          <div style={{ textAlign: 'right' }}>
+                            <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '0.3rem', fontWeight: '500' }}>Probability</p>
+                            <span style={{ fontSize: '0.95rem', padding: '0.35rem 0.6rem', backgroundColor: `${stage.color}20`, color: stage.color, borderRadius: '4px', fontWeight: '700', display: 'inline-block' }}>
+                              {deal.probability}%
+                            </span>
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
+
+                  {/* C4 (FR-3.18) — bottom spacer balances scrollbar. */}
+                  {bottomSpacer > 0 && <div style={{ height: bottomSpacer }} aria-hidden="true" />}
+
                   {stageDeals.length === 0 && (
                     <div style={{ textAlign: 'center', color: 'var(--text-secondary)', fontSize: '0.875rem', padding: '2rem 1rem', border: '1px dashed var(--border-color)', borderRadius: '12px' }}>
                       Drag deals here

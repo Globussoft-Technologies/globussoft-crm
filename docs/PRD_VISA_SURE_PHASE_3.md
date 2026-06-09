@@ -460,37 +460,64 @@ disambiguations that can be answered inline.
 
 ## 10. Status snapshot
 
+_Last refreshed 2026-06-09 against shipped code. Engineering plumbing for
+Phase 3 is effectively complete; remaining gaps are content-load /
+product-call / cred-blocked items owed by Yasin + counsel + advisor team._
+
 - **Diagnostic + scoring plumbing** ✅ SHIPPED (shared with TMC / RFU);
   [routes/travel_diagnostics.js](../backend/routes/travel_diagnostics.js) +
   [lib/travelDiagnosticScoring.js](../backend/lib/travelDiagnosticScoring.js).
-- **Schema models** ✅ SHIPPED — `VisaApplication` at
-  [prisma/schema.prisma:4498](../backend/prisma/schema.prisma#L4498) +
-  `VisaDocumentChecklistItem` at `:4523`. Seeded with 4 sample rows
-  (commit `78884e3`).
-- **Visa Sure question bank + scoring rules seed** 🔴 NOT-STARTED — pending
-  OQ-1 content drop from Yasin.
-- **Routes** 🔴 NOT-STARTED — `/api/travel/visa/applications/*`,
-  `/api/travel/visa/documents/*`, `/api/travel/visa/checklists/*`,
-  `/api/travel/reports/visa` all to be built in cluster B3.
-- **UI pages** 🔴 NOT-STARTED — `frontend/src/pages/travel/visa/*` does not
-  exist; `Glob frontend/src/pages/travel/Visa*` returns zero.
-- **Risk-flag cron** 🔴 NOT-STARTED — `backend/cron/visaRiskFlagEngine.js`
-  does not exist; the sibling parallel agent on this same wave MAY ship
-  a shell; if it doesn't, the cron is the first commit of cluster B3.
-- **PDF brand template** 🔴 NOT-STARTED — pending OQ-2 content + Yasin brand
-  assets (palette / logo).
-- **Sidebar nav + landing route** 🔴 NOT-STARTED — additive change to
-  `frontend/src/components/Sidebar.jsx` `renderTravelNav()` +
-  `frontend/src/App.jsx` lazy-load block.
-- **Voyagr-side Visa Sure form** 🔴 NOT-STARTED — cluster F2 in
-  MANUAL_CODING_BACKLOG; would ship in tandem with the CRM-side go-live.
+- **Schema models** ✅ SHIPPED — `VisaApplication` +
+  `VisaDocumentChecklistItem` in
+  [prisma/schema.prisma](../backend/prisma/schema.prisma) (commit `78884e3`).
+  `recoveryProgramId` nullable FK on `VisaApplication` for the future
+  `RejectionRecoveryProgram` model is in place.
+- **Visa Sure question bank + scoring rules seed** 🔵 BLOCKED — pending
+  OQ-1 content drop from Yasin (15-Q Visa Sure diagnostic bank). Plumbing
+  is ready to ingest it.
+- **Routes** ✅ SHIPPED — full CRUD + analytics live at
+  [routes/travel_visa.js](../backend/routes/travel_visa.js) +
+  [routes/travel_visa_analytics.js](../backend/routes/travel_visa_analytics.js)
+  (stats / by-year / by-quarter / by-month). Gated by per-push specs
+  [travel-visa-applications-api.spec.js](../e2e/tests/travel-visa-applications-api.spec.js) +
+  [travel-visa-analytics-api.spec.js](../e2e/tests/travel-visa-analytics-api.spec.js).
+- **UI pages** ✅ SHIPPED — 6 pages live under
+  `frontend/src/pages/travel/visa/`:
+  `Applications.jsx`, `AdvisorDashboard.jsx`, `Dashboard.jsx`,
+  `Checklists.jsx`, `Reports.jsx`, `EmbassyRulesAdmin.jsx`.
+- **Risk-flag cron** ✅ SHIPPED —
+  [backend/cron/visaRiskFlagEngine.js](../backend/cron/visaRiskFlagEngine.js)
+  with sibling vitest suite. Wired into the cron registry.
+- **PDF brand template** ⬜ TODO — no `templates/visa-sure.pdfkit.js` yet.
+  Blocked on OQ-2 content + Yasin brand assets (palette / logo / Q22
+  brand pack).
+- **Sidebar nav + landing route** ✅ SHIPPED — Visa Sure group is live in
+  [frontend/src/components/Sidebar.jsx](../frontend/src/components/Sidebar.jsx#L1493)
+  (`renderTravelNav()` lines 1493-1512 — Dashboard / Applications /
+  Checklists / Embassy rules); App.jsx lazy-loads the page set.
+- **`visa-summary` LLM task class** ⬜ TODO — currently reuses the generic
+  `talking-points` class. Needs a dedicated task class + prompt template.
+- **`VisaQuotationTemplate` model + admin** ⬜ TODO — PC-3-shaped; awaiting
+  product-call decision before schema lands.
+- **Retention-policy rows for `VisaApplication` + `VisaDocumentChecklistItem`**
+  ⬜ TODO — GDPR retention engine doesn't yet have rules for these models.
+- **Document upload passport OCR integration** ⬜ TODO — optional
+  enhancement; document upload endpoint exists, OCR pipeline does not.
+- **LLM keys for real-mode** 🔵 BLOCKED — Q11 (CREDS_TRACKER); stub clients
+  in place, swap point ready.
+- **WA dispatch** 🔵 BLOCKED — Q9 (CREDS_TRACKER); WA stub wired but
+  unverified business-account credentials.
+- **PC-1..PC-8 product calls** 🔵 BLOCKED on Yasin (all 8 §5.1 product
+  calls outstanding).
+- **Voyagr-side Visa Sure form** ⬜ TODO — cluster F2 in
+  MANUAL_CODING_BACKLOG; would ship in tandem with the cred-drop go-live.
 
-**Estimated engineering time once §5.1 product calls resolve:** ~2 weeks per
-cluster B3 in MANUAL_CODING_BACKLOG. Breakdown: ~3 days schema + routes,
-~3 days frontend (3 pages + nav + theme), ~2 days risk-flag engine + retention
-policy + analytics endpoint, ~2 days seed + content load (diagnostic bank +
-checklist templates + quotation templates + PDF template), ~2 days e2e
-specs + vitest coverage + gate-wiring.
+**Remaining engineering effort (post product-call + cred-drop):** ~3-5 days
+total — ~1 day PDF brand template + `visa-summary` LLM task class, ~½ day
+`VisaQuotationTemplate` schema + admin (after PC-3), ~¼ day retention rows,
+~½ day OCR integration (optional), ~1 day Voyagr-side form. The bulk of
+cluster B3 (schema + routes + UI + cron + analytics + gate specs) is
+already in `main`.
 
 ---
 

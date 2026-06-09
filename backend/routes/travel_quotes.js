@@ -61,6 +61,9 @@ const {
   groupLinesBySac,
 } = require("../lib/hsnSacMapper");
 const { computeQuoteAnalytics } = require("../lib/travelQuoteAnalytics");
+const { rankQuotes } = require("../lib/quoteRanker");
+const ratehawkClient = require("../services/ratehawkClient");
+const bookingExpediaClient = require("../services/bookingExpediaClient");
 
 const VALID_QUOTE_STATUSES = ["Draft", "Sent", "Accepted", "Rejected"];
 const VALID_LINE_TYPES = ["hotel", "flight", "transport", "visa", "service", "other"];
@@ -3422,6 +3425,303 @@ router.get(
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-quotes] audit-trail error:", e.message);
       res.status(500).json({ error: "Failed to load audit trail" });
+    }
+  },
+);
+
+// ----------------------------------------------------------------------------
+// Slice C5 — POST /api/travel/quote/unified-search
+// Per PRD_RATEHAWK_INTEGRATION FR-5 + FR-6 + DC-6 (side-by-side vendor
+// clients; ranker merges across an array of per-vendor result arrays).
+//
+// Fan-out behaviour:
+//   1. Iterate over the requested provider list (default: all enabled
+//      providers — currently ratehawk + bookingExpedia).
+//   2. Call each Client.searchHotels(...) via Promise.allSettled — one
+//      provider's failure must NOT block the others (NFR reliability +
+//      "vendor degraded" toast per §4).
+//   3. Catch *_NOT_YET_ENABLED / *_BUDGET_EXCEEDED errors → mark that
+//      provider as `disabled` (cred-blocked) in the response envelope.
+//      Other errors → status: 'error' + errorMessage.
+//   4. Flatten all returned hotels into per-provider quote rows, then
+//      apply tenant + sub-brand markup via the existing pickMarkup
+//      helper so customer-facing prices include the markup (NET stays
+//      provider-side; customer never sees raw NET — §2.3).
+//   5. Pass the unified array to rankQuotes() for composite-score sort.
+//
+// Envelope shape (also documented in the FR-5 row of the PRD):
+//   { results: [ ...ranked quotes ],
+//     providers: { ratehawk: { status, count, errorMessage? }, ... },
+//     totalCount: N,
+//     rankedAt: ISO,
+//     subBrand: string }
+//
+// Markup-source compatibility: both stub clients today return
+// `hotels: []`, so the live response is mostly an empty-array envelope
+// with provider-status diagnostics — but the markup + ranker code paths
+// are still exercised end-to-end in the route's vitest because the
+// tests mock the stubs to return canned non-empty payloads.
+// ----------------------------------------------------------------------------
+
+const KNOWN_PROVIDERS = ["ratehawk", "bookingExpedia"];
+
+// Provider → client wrapper. Each wrapper normalises the client's
+// stub-shape into the unified quote shape rankQuotes expects:
+//   { provider, propertyName, propertyCity, price, currency,
+//     supplierRating, cancellationPolicy, sourceRef }
+//
+// When the real-mode swap happens (Q19 cred drop), the stub-shape
+// inside each client changes but the wrapper signature stays. The
+// route doesn't have to learn the difference.
+async function _callRatehawk({ tenantId, ...criteria }) {
+  const envelope = await ratehawkClient.searchHotels({ tenantId, ...criteria });
+  const hotels = Array.isArray(envelope.hotels) ? envelope.hotels : [];
+  return hotels.map((h) => ({
+    provider: "ratehawk",
+    propertyName: h.propertyName || h.name || null,
+    propertyCity: h.propertyCity || h.city || criteria.destinationCity || null,
+    price: Number(h.totalRate ?? h.ratePerNight ?? h.price ?? 0),
+    currency: h.currency || envelope.currency || "USD",
+    supplierRating: h.supplierRating ?? h.rating ?? null,
+    cancellationPolicy: h.cancellationPolicy || h.refundability || null,
+    sourceRef: h.sourceRef || h.id || null,
+    raw: h,
+  }));
+}
+
+async function _callBookingExpedia({ tenantId, ...criteria }) {
+  const envelope = await bookingExpediaClient.searchHotels({
+    tenantId,
+    provider: "booking",
+    ...criteria,
+  });
+  const hotels = Array.isArray(envelope.hotels) ? envelope.hotels : [];
+  return hotels.map((h) => ({
+    provider: "bookingExpedia",
+    propertyName: h.propertyName || h.name || null,
+    propertyCity: h.propertyCity || h.city || criteria.destinationCity || null,
+    price: Number(h.totalRate ?? h.ratePerNight ?? h.price ?? 0),
+    currency: h.currency || envelope.currency || "USD",
+    supplierRating: h.supplierRating ?? h.rating ?? null,
+    cancellationPolicy: h.cancellationPolicy || h.refundability || null,
+    sourceRef: h.sourceRef || h.id || null,
+    raw: h,
+  }));
+}
+
+const PROVIDER_CALLERS = {
+  ratehawk: _callRatehawk,
+  bookingExpedia: _callBookingExpedia,
+};
+
+router.post(
+  "/quote/unified-search",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const body = req.body || {};
+
+      // ----------------------------------------------------------------
+      // Input validation
+      // ----------------------------------------------------------------
+      const subBrand = body.subBrand;
+      if (!subBrand || typeof subBrand !== "string") {
+        return res.status(400).json({
+          error: "subBrand is required",
+          code: "MISSING_SUB_BRAND",
+        });
+      }
+      try {
+        assertValidSubBrand(subBrand);
+      } catch (e) {
+        return res.status(e.status || 400).json({ error: e.message, code: e.code });
+      }
+
+      const destination = body.destination;
+      if (!destination || typeof destination !== "string") {
+        return res.status(400).json({
+          error: "destination is required",
+          code: "MISSING_DESTINATION",
+        });
+      }
+
+      const checkIn = body.checkIn;
+      const checkOut = body.checkOut;
+      if (!checkIn || !checkOut) {
+        return res.status(400).json({
+          error: "checkIn and checkOut are required",
+          code: "MISSING_DATES",
+        });
+      }
+
+      // Sub-brand access: a MANAGER scoped to {tmc} cannot fan-out a
+      // search under {rfu}. Admin (allowed === null) passes through.
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (!canAccessSubBrand(allowed, subBrand)) {
+        return res.status(403).json({
+          error: "Sub-brand access denied",
+          code: "SUB_BRAND_DENIED",
+        });
+      }
+
+      // Rooms / guests aggregation — sum rooms[].adults so the
+      // provider client gets a single guest count. V1 contract per
+      // PRD §3 — multi-room API expansion is Phase 2.
+      const rooms = Array.isArray(body.rooms) ? body.rooms : [{ adults: 2 }];
+      const guests = rooms.reduce(
+        (acc, r) => acc + (Number(r.adults) || 0) + (Number(r.children) || 0),
+        0,
+      );
+
+      // Provider selection: caller may pin a subset; default to all.
+      let providers = Array.isArray(body.providers) && body.providers.length > 0
+        ? body.providers
+        : KNOWN_PROVIDERS;
+      providers = providers.filter((p) => KNOWN_PROVIDERS.includes(p));
+      if (providers.length === 0) {
+        return res.status(400).json({
+          error: `providers must include at least one of: ${KNOWN_PROVIDERS.join(", ")}`,
+          code: "INVALID_PROVIDERS",
+        });
+      }
+
+      // ----------------------------------------------------------------
+      // Fan-out: Promise.allSettled so one provider's failure / cred-
+      // blocked stub doesn't sink the others.
+      // ----------------------------------------------------------------
+      const criteria = {
+        tenantId: req.travelTenant.id,
+        destinationCity: destination,
+        checkInDate: checkIn,
+        checkOutDate: checkOut,
+        guests: guests || 2,
+        rooms: rooms.length,
+      };
+
+      const settlements = await Promise.allSettled(
+        providers.map((p) => PROVIDER_CALLERS[p](criteria)),
+      );
+
+      // ----------------------------------------------------------------
+      // Provider status + result collection
+      // ----------------------------------------------------------------
+      const providerStatus = {};
+      let allQuotes = [];
+
+      for (let i = 0; i < providers.length; i += 1) {
+        const provider = providers[i];
+        const s = settlements[i];
+        if (s.status === "fulfilled") {
+          providerStatus[provider] = { status: "ok", count: s.value.length };
+          allQuotes = allQuotes.concat(s.value);
+        } else {
+          const err = s.reason || {};
+          // *_NOT_YET_ENABLED + *_BUDGET_EXCEEDED + EXPEDIA_NOT_YET_ENABLED
+          // all represent cred-blocked / cap-blocked states — operators
+          // see them as "disabled" rather than "error" so the UI tile
+          // distinguishes operator-onboarding from runtime failure.
+          const code = err.code || "";
+          const disabled =
+            code === "RATEHAWK_NOT_YET_ENABLED" ||
+            code === "RATEHAWK_BUDGET_EXCEEDED" ||
+            code === "BOOKING_EXPEDIA_NOT_YET_ENABLED" ||
+            code === "BOOKING_EXPEDIA_BUDGET_EXCEEDED" ||
+            code === "EXPEDIA_NOT_YET_ENABLED";
+          providerStatus[provider] = {
+            status: disabled ? "disabled" : "error",
+            count: 0,
+            errorMessage: err.message || String(err),
+            ...(err.code ? { errorCode: err.code } : {}),
+          };
+        }
+      }
+
+      // ----------------------------------------------------------------
+      // Markup pass — apply tenant + sub-brand markup so customer-facing
+      // prices include the markup. Per PRD §2.3 + FR-7: NET stays
+      // provider-side; customer sees marked-up rate only. Audit-snapshot
+      // path stores both (NET + markup + grand-total) but that's the
+      // operator-side persistence layer, not this fan-out.
+      // ----------------------------------------------------------------
+      let markupRules = [];
+      try {
+        markupRules = await prisma.travelMarkupRule.findMany({
+          where: {
+            tenantId: req.travelTenant.id,
+            subBrand,
+            isActive: true,
+          },
+          orderBy: [{ priority: "asc" }, { id: "asc" }],
+        });
+      } catch (_e) {
+        // travelMarkupRule may not exist in some mocked test
+        // environments — fall back to "no markup" so the route still
+        // returns a valid envelope.
+        markupRules = [];
+      }
+
+      const round2 = (n) => Math.round(n * 100) / 100;
+      const markedQuotes = allQuotes.map((q) => {
+        const scope = mapCategoryToScope("hotel"); // unified-search hotels-only V1
+        const netPrice = Number(q.price) || 0;
+        const { rule, markupAmount } = pickMarkup(
+          markupRules,
+          subBrand,
+          scope,
+          netPrice,
+        );
+        const grossPrice = round2(netPrice + (markupAmount || 0));
+        return {
+          ...q,
+          netPrice: round2(netPrice),
+          markupAmount: round2(markupAmount || 0),
+          markupRuleId: rule?.id ?? null,
+          price: grossPrice, // ranker sorts on customer-facing price
+        };
+      });
+
+      // ----------------------------------------------------------------
+      // Rank + envelope
+      // ----------------------------------------------------------------
+      const ranked = rankQuotes(markedQuotes);
+
+      // FR-9 — audit each unified-search call so per-tenant cost +
+      // provider-mix surfaces in admin reporting. Best-effort; a
+      // failed audit write must not block the response.
+      try {
+        await writeAudit(
+          "TravelQuote",
+          "TRAVEL_UNIFIED_SEARCH",
+          0,
+          req.user.userId,
+          req.travelTenant.id,
+          {
+            subBrand,
+            destination,
+            checkIn,
+            checkOut,
+            providers,
+            providerStatus,
+            totalCount: ranked.length,
+          },
+        );
+      } catch (_e) {
+        /* swallow */
+      }
+
+      res.json({
+        results: ranked,
+        providers: providerStatus,
+        totalCount: ranked.length,
+        subBrand,
+        rankedAt: new Date().toISOString(),
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-quotes] unified-search error:", e.message);
+      res.status(500).json({ error: "Failed to run unified search" });
     }
   },
 );

@@ -56,6 +56,8 @@ const TravelKycCallback = lazy(() => import("./pages/travel/TravelKycCallback"))
 const TmcReadiness = lazy(() => import("./pages/public/TmcReadiness"));
 // PRD §3.5 / slice T10 — public 10-section readiness report page.
 const TmcReadinessReport = lazy(() => import("./pages/public/TmcReadinessReport"));
+// PRD_TRAVEL_QUOTE_BUILDER §3.7 / slice C9 — public quote-accept landing.
+const QuoteAcceptLanding = lazy(() => import("./pages/public/QuoteAcceptLanding"));
 // Cross-vertical staff attendance dashboard — visible to wellness + travel
 // tenants. Backend (/api/attendance/list + /summary) is role-gated to
 // ADMIN/MANAGER; per-row edit/delete is ADMIN-only.
@@ -118,6 +120,9 @@ const BookingExpediaSearch = lazy(() =>
 );
 // CSP violations operator-inspect — slice 4 of #917, consumes slice-3 GET /api/csp/violations.
 const CSPViolations = lazy(() => import("./pages/admin/CSPViolations"));
+// Voyagr (OJR) per-site API key admin — slice C1 of TRAVEL_CODEABLE_BACKLOG.
+// ADMIN-only; provisions per-sub-brand API keys consumed by /api/v1/voyagr.
+const VoyagrApiKeys = lazy(() => import("./pages/admin/VoyagrApiKeys"));
 // PRD Gap §1.5 / §1.6 — admin pages for commission profiles + per-staff
 // revenue goals.
 const CommissionProfiles = lazy(() => import("./pages/CommissionProfiles"));
@@ -175,6 +180,8 @@ const TravelItineraries = lazy(() => import("./pages/travel/Itineraries"));
 const TravelTrips = lazy(() => import("./pages/travel/Trips"));
 const TravelTripDetail = lazy(() => import("./pages/travel/TripDetail"));
 const TravelWebCheckinQueue = lazy(() => import("./pages/travel/WebCheckinQueue"));
+// Slice C2 — Passport OCR verification queue (ADMIN+MANAGER). PRD_PASSPORT_OCR §5.4.
+const TravelPassportVerificationQueue = lazy(() => import("./pages/travel/PassportVerificationQueue"));
 const TravelCostMaster = lazy(() => import("./pages/travel/CostMaster"));
 // Arc 2 Travel Gap #907 slice 5/N — SightseeingMaster wire-in. SUT page
 // shipped slice 3 (ca052d20); this lazy import + Route below register the
@@ -840,6 +847,12 @@ export default function App() {
                       reviews the itinerary + pays the 50% advance here without
                       logging in. Backend openPath: /travel/itineraries/public. */}
                   <Route path="/p/itinerary/:shareToken" element={<TripBooking />} />
+                  {/* PRD §3.1 / slice T9 — public 12-Q readiness diagnostic. */}
+                  <Route path="/p/tmc/readiness" element={<TmcReadiness />} />
+                  {/* PRD §3.5 / slice T10 — public 10-section readiness report. */}
+                  <Route path="/p/tmc/report/:slug" element={<TmcReadinessReport />} />
+                  {/* PRD_TRAVEL_QUOTE_BUILDER §3.7 / slice C9 — customer-accept landing. */}
+                  <Route path="/p/quote/:shareToken" element={<QuoteAcceptLanding />} />
                   <Route path="/travel/kyc/callback" element={<TravelKycCallback flow="microsite" />} />
                   <Route path="/travel/portal/kyc/callback" element={<TravelKycCallback flow="portal" />} />
                   <Route
@@ -1144,6 +1157,8 @@ export default function App() {
                       }
                     />
                     <Route path="admin/csp-violations" element={<CSPViolations />} />
+                    {/* Slice C1 — Voyagr per-site API key admin. ADMIN-only. */}
+                    <Route path="admin/voyagr-api-keys" element={<RoleGuard allow={["ADMIN"]} message="Voyagr API Keys requires admin access."><VoyagrApiKeys /></RoleGuard>} />
                     {/* PRD Gap §1.5 / §1.6 */}
                     <Route
                       path="commission-profiles"
@@ -1253,6 +1268,17 @@ export default function App() {
                   alias stays registered so existing bookmarks / sidebar links keep working. */}
               <Route path="travel/web-checkins" element={<TravelOnly><TravelWebCheckinQueue /></TravelOnly>} />
               <Route path="travel/webcheckins" element={<TravelOnly><TravelWebCheckinQueue /></TravelOnly>} />
+              {/* Slice C2 — Passport OCR verification queue. Backend route gates
+                  ADMIN+MANAGER; frontend RoleGuard mirrors so non-privileged
+                  users hit a friendly access-denied surface rather than the
+                  503 / 403 on the queue fetch. */}
+              <Route path="travel/passport-verification" element={
+                <TravelOnly>
+                  <RoleGuard allow={["ADMIN", "MANAGER"]} message="Passport verification requires admin or manager access.">
+                    <TravelPassportVerificationQueue />
+                  </RoleGuard>
+                </TravelOnly>
+              } />
               <Route path="travel/cost-master" element={<TravelOnly><TravelCostMaster /></TravelOnly>} />
               {/* Arc 2 Travel Gap #907 slice 5/N — SightseeingMaster admin
                   CRUD surface. Adjacent to cost-master per #907's "6th

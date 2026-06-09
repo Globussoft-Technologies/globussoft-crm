@@ -5,6 +5,7 @@
 // and stripTenantOverride (deletes tenantId/userId from req.body).
 import { describe, test, expect, vi } from 'vitest';
 import {
+  attachNonce,
   helmetMiddleware,
   helmetStrictReportOnlyMiddleware,
   permissionsPolicyMiddleware,
@@ -12,7 +13,7 @@ import {
   stripTenantOverride,
 } from '../../middleware/security.js';
 
-function makeReqRes({ body, path = '/api/contacts' } = {}) {
+function makeReqRes({ body, path = '/api/contacts', locals } = {}) {
   // stripTenantOverride introspects req.path to skip stripping for the
   // public /customer/register endpoint. Default to a non-public path so
   // the strip-tenant assertions exercise the normal (stripping) branch.
@@ -21,6 +22,10 @@ function makeReqRes({ body, path = '/api/contacts' } = {}) {
   let statusCode = 200;
   const res = {
     headers,
+    // #917 slice S1 — Express always populates res.locals; mirror that here
+    // so helmet's CSP function-directives can read res.locals.cspNonce when
+    // building the Report-Only header. Callers can override via `locals`.
+    locals: locals || {},
     setHeader: vi.fn(function (name, value) {
       headers[name] = value;
     }),
@@ -49,7 +54,8 @@ function makeReqRes({ body, path = '/api/contacts' } = {}) {
 }
 
 describe('module shape', () => {
-  test('exports the five middleware functions', () => {
+  test('exports the six middleware functions', () => {
+    expect(typeof attachNonce).toBe('function');
     expect(typeof helmetMiddleware).toBe('function');
     expect(typeof helmetStrictReportOnlyMiddleware).toBe('function');
     expect(typeof permissionsPolicyMiddleware).toBe('function');
@@ -183,6 +189,84 @@ describe('helmetStrictReportOnlyMiddleware (#917 slice 1)', () => {
     expect(res.headers['X-Frame-Options']).toBeUndefined();
     expect(res.headers['Referrer-Policy']).toBeUndefined();
     expect(res.headers['Cross-Origin-Resource-Policy']).toBeUndefined();
+  });
+});
+
+// #917 slice S1 (FR-3.2) — attachNonce middleware re-exported from security
+// module mints res.locals.cspNonce per request; the strict Report-Only CSP
+// then advertises `'nonce-<base64>'` on script-src + style-src via helmet
+// function-directives. Together these unblock the eventual flip from
+// Report-Only → enforce mode without re-introducing 'unsafe-inline'.
+describe('attachNonce (#917 slice S1 FR-3.2)', () => {
+  test('is a 3-arg middleware that calls next and populates res.locals.cspNonce', () => {
+    const { req, res, next } = makeReqRes();
+    attachNonce(req, res, next);
+    expect(next).toHaveBeenCalledOnce();
+    expect(typeof res.locals.cspNonce).toBe('string');
+    expect(res.locals.cspNonce).toHaveLength(24);
+  });
+
+  test('generates a distinct nonce per request (no memoization across calls)', () => {
+    const seen = new Set();
+    for (let i = 0; i < 10; i++) {
+      const { req, res, next } = makeReqRes();
+      attachNonce(req, res, next);
+      seen.add(res.locals.cspNonce);
+    }
+    expect(seen.size).toBe(10);
+  });
+});
+
+describe('helmetStrictReportOnlyMiddleware nonce wiring (#917 slice S1)', () => {
+  test('script-src advertises `nonce-<base64>` when res.locals.cspNonce is set', () => {
+    // Mirror the server.js order of operations: attachNonce then strict CSP.
+    const { req, res, next } = makeReqRes();
+    attachNonce(req, res, next);
+    const nonce = res.locals.cspNonce;
+    const next2 = vi.fn();
+    helmetStrictReportOnlyMiddleware(req, res, next2);
+    const reportOnly = res.headers['Content-Security-Policy-Report-Only'];
+    expect(reportOnly).toContain(`'nonce-${nonce}'`);
+    // Specifically inside script-src:
+    const scriptMatch = reportOnly.match(/script-src([^;]*)/i);
+    expect(scriptMatch[1]).toContain(`'nonce-${nonce}'`);
+  });
+
+  test('style-src advertises the same nonce as script-src', () => {
+    const { req, res, next } = makeReqRes();
+    attachNonce(req, res, next);
+    const nonce = res.locals.cspNonce;
+    const next2 = vi.fn();
+    helmetStrictReportOnlyMiddleware(req, res, next2);
+    const reportOnly = res.headers['Content-Security-Policy-Report-Only'];
+    const styleMatch = reportOnly.match(/style-src([^;]*)/i);
+    expect(styleMatch[1]).toContain(`'nonce-${nonce}'`);
+  });
+
+  test('two distinct requests produce two distinct advertised nonces', () => {
+    const reqA = makeReqRes();
+    attachNonce(reqA.req, reqA.res, reqA.next);
+    helmetStrictReportOnlyMiddleware(reqA.req, reqA.res, vi.fn());
+    const reqB = makeReqRes();
+    attachNonce(reqB.req, reqB.res, reqB.next);
+    helmetStrictReportOnlyMiddleware(reqB.req, reqB.res, vi.fn());
+    const headerA = reqA.res.headers['Content-Security-Policy-Report-Only'];
+    const headerB = reqB.res.headers['Content-Security-Policy-Report-Only'];
+    const nonceA = headerA.match(/'nonce-([^']+)'/)[1];
+    const nonceB = headerB.match(/'nonce-([^']+)'/)[1];
+    expect(nonceA).not.toBe(nonceB);
+  });
+
+  test("'unsafe-inline' is STILL absent from script-src and style-src after nonce wiring", () => {
+    // Nonce wiring must not accidentally re-introduce 'unsafe-inline'.
+    const { req, res, next } = makeReqRes();
+    attachNonce(req, res, next);
+    helmetStrictReportOnlyMiddleware(req, res, vi.fn());
+    const reportOnly = res.headers['Content-Security-Policy-Report-Only'];
+    const scriptMatch = reportOnly.match(/script-src([^;]*)/i);
+    const styleMatch = reportOnly.match(/style-src([^;]*)/i);
+    expect(scriptMatch[1]).not.toContain("'unsafe-inline'");
+    expect(styleMatch[1]).not.toContain("'unsafe-inline'");
   });
 });
 

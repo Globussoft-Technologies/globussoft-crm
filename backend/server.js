@@ -876,6 +876,7 @@ app.use("/api/travel", travelSuppliersRoutes);
 // at validateNumericId and 400 INVALID_ID before reaching the public router.
 app.use("/api/travel/quotes/public", require("./routes/travel_quotes_public"));
 app.use("/api/travel/quote-templates", require("./routes/travel_quote_templates"));
+app.use("/api/travel/cancellation-policies", require("./routes/travel_cancellation_policies"));
 app.use("/api/travel", travelQuotesRoutes);
 app.use("/api/travel", travelInvoicesRoutes);
 app.use("/api/travel", require("./routes/travel_flyer_templates"));

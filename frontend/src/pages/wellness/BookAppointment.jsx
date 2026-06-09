@@ -41,6 +41,12 @@ export default function BookAppointment() {
   // via /api/wellness/appointments/book-and-pay + /confirm-payment.
   const [paymentChoice, setPaymentChoice] = useState('later');
 
+  // Payment block disabled per product decision; backend + handler stay
+  // wired so flipping this to `true` restores the UI with no other changes.
+  // Named constant (not literal `false`) so ESLint's
+  // no-constant-binary-expression rule doesn't fire on `{… && (...)}`.
+  const SHOW_PAYMENT_BLOCK = false;
+
   // Read URL params synchronously for initial form values. Used by the
   // Dr. Haror's marketing-site → CRM redirect handoff:
   //   ?serviceId=<id>  — pre-selects the service dropdown. Set in initial
@@ -580,14 +586,12 @@ export default function BookAppointment() {
             {/* Payment Method — TEMPORARILY DISABLED per product decision.
                 The pay-now radio + Razorpay handoff stay wired up in the
                 handler + backend (/appointments/book-and-pay +
-                /confirm-payment); flipping the `false &&` below back on
-                restores the UI without any other changes. Default state
+                /confirm-payment); flipping `SHOW_PAYMENT_BLOCK` (declared
+                near the top of the component) to true restores the UI
+                without any other changes. Default state
                 `paymentChoice='later'` keeps the existing free-booking
-                path active while this is off.
-
-                Re-enable by changing `{false && (` to `{(` (or just
-                removing the `false &&` guard). */}
-            {false && (
+                path active while this is off. */}
+            {SHOW_PAYMENT_BLOCK && (
             <div style={{
               padding: '1rem',
               background: 'var(--surface-color)',

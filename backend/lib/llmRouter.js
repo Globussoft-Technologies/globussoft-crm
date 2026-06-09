@@ -79,6 +79,14 @@ const TASK_ROUTING = {
   // swap lives in backend/services/itinerarySuggestLLM.js (S14 — same
   // commit). Real call gated on Q-IT-2 / Q11 GEMINI_API_KEY.
   "itinerary-suggest": { primary: "gemini-flash",      fallback: "claude-haiku" },
+  // Marketing-flyer-copy (PRD_TRAVEL_MARKETING_FLYER FR-3.6.1 + AC-6.8).
+  // 1K in / 1K out — short-form headline + body + CTA JSON. Routed to
+  // gemini-flash for low-cost bulk-shape Gemini calls per PRD §9.1.
+  // Structured-JSON path lives in backend/services/marketingFlyerCopyLLM.js
+  // (S15 — same commit); this scaffold's stub-text path returns a tagged
+  // synthetic string for routeRequest text-envelope callers. Real call
+  // gated on Q-AI-3 / Q11 GEMINI_API_KEY.
+  "marketing-flyer-copy": { primary: "gemini-flash",      fallback: "claude-haiku" },
   // Catch-all for unrecognized tasks → reasoning model (Claude)
   // matches PRD's preference for a high-quality default.
 };
@@ -371,6 +379,14 @@ function buildStubText(task, _payload) {
       // get a sensible string. The structured-JSON path uses the service
       // module directly, not routeRequest's text envelope.
       return `${tag} Itinerary suggestion (synthetic). Real Gemini Flash itinerary lands when Q-IT-2 / Q11 keys arrive — see backend/services/itinerarySuggestLLM.js for the structured-JSON path.`;
+    case "marketing-flyer-copy":
+      // Routed to gemini-flash per PRD §9.1 + FR-3.6.1 (S15). Detailed
+      // copyJson shape (headline + body + cta) is produced by
+      // backend/services/marketingFlyerCopyLLM.js — this stub-text exists
+      // only so unrecognised-task callers of routeRequest get a sensible
+      // string. The structured-JSON path uses the service module directly,
+      // not routeRequest's text envelope.
+      return `${tag} Marketing flyer copy (synthetic). Real Gemini Flash flyer copy lands when Q-AI-3 / Q11 keys arrive — see backend/services/marketingFlyerCopyLLM.js for the structured-JSON path.`;
     case "reasoning":
       return `${tag} Reasoning output (synthetic). Real Claude/GPT lands when Q11 keys arrive.`;
     default:

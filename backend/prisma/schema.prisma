@@ -5302,6 +5302,15 @@ model ItineraryItem {
   markup      Decimal?  @db.Decimal(15, 2)
   gstAmount   Decimal?  @db.Decimal(15, 2)
   totalPrice  Decimal?  @db.Decimal(15, 2)
+  // S8 — additive nullable columns for FR-3.3 day-by-day editor + FR-3.4 map
+  // preview (PRD_TRAVEL_ITINERARY_UPGRADES.md §3.3 + §3.4). All three nullable
+  // so pre-existing ItineraryItem rows stay valid without a backfill. S9 (visual
+  // editor) groups items by dayNumber; S10 (map preview) plots items with both
+  // latitude + longitude set. dayNumber is 1-indexed; Float chosen for lat/lng
+  // (sufficient precision for ~11m positioning at typical zoom levels).
+  dayNumber   Int?
+  latitude    Float?
+  longitude   Float?
   itinerary   Itinerary @relation(fields: [itineraryId], references: [id], onDelete: Cascade)
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
@@ -5454,12 +5463,12 @@ model TmcTrip {
 }
 
 model TripParticipant {
-  id                 Int                 @id @default(autoincrement())
-  tripId             Int
-  fullName           String
-  passportNumber     String?
-  passportExpiry     DateTime?
-  passportDocId      Int? // ContactAttachment id
+  id                     Int                 @id @default(autoincrement())
+  tripId                 Int
+  fullName               String
+  passportNumber         String?
+  passportExpiry         DateTime?
+  passportDocId          Int? // ContactAttachment id
   // Slice C2 (docs/PRD_PASSPORT_OCR.md FR-5/FR-6/FR-9) — additive nullable
   // columns for the OCR extraction → verification queue → audit flow.
   // passportExtractionJson holds the raw vendor envelope (extraction +
@@ -5469,22 +5478,22 @@ model TripParticipant {
   // verifiedAt IS NULL). passportVerifiedAt/ById close the loop; the
   // verifying user's id is captured for the audit trail. passportRejectedAt
   // is set on operator reject + clears with the next re-upload.
-  passportExtractionJson String?           @db.Text
+  passportExtractionJson String?             @db.Text
   passportExtractedAt    DateTime?
   passportVerifiedAt     DateTime?
   passportVerifiedById   Int?
   passportRejectedAt     DateTime?
-  aadhaarLast4       String?
-  aadhaarTokenId     String? // DigiLocker token, encrypted
-  parentName         String?
-  parentPhone        String?
-  parentEmail        String?
-  medicalNotes       String?             @db.Text
-  consentCapturedAt  DateTime?
-  trip               TmcTrip             @relation(fields: [tripId], references: [id], onDelete: Cascade)
-  digilockerSessions DigilockerSession[]
-  createdAt          DateTime            @default(now())
-  updatedAt          DateTime            @updatedAt
+  aadhaarLast4           String?
+  aadhaarTokenId         String? // DigiLocker token, encrypted
+  parentName             String?
+  parentPhone            String?
+  parentEmail            String?
+  medicalNotes           String?             @db.Text
+  consentCapturedAt      DateTime?
+  trip                   TmcTrip             @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  digilockerSessions     DigilockerSession[]
+  createdAt              DateTime            @default(now())
+  updatedAt              DateTime            @updatedAt
 
   @@index([tripId])
 }
@@ -5848,20 +5857,20 @@ model TripMicrositeOtp {
 // (tenantId, subBrand). The voyagrAuth + apiKeyAuth.requireSubBrandMatch
 // helpers enforce sub-brand isolation at the route layer.
 model TravelQuote {
-  id          Int               @id @default(autoincrement())
-  tenantId    Int               @default(1)
+  id          Int                   @id @default(autoincrement())
+  tenantId    Int                   @default(1)
   subBrand    String
   contactId   Int
-  status      String            @default("Draft") // Draft | Sent | Accepted | Rejected | Expired
-  totalAmount Decimal?          @db.Decimal(15, 2)
-  currency    String            @default("INR")
+  status      String                @default("Draft") // Draft | Sent | Accepted | Rejected | Expired
+  totalAmount Decimal?              @db.Decimal(15, 2)
+  currency    String                @default("INR")
   validUntil  DateTime?
   lines       TravelQuoteLine[]
   invoices    TravelInvoice[]
   snapshots   TravelQuoteSnapshot[]
-  tenant      Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  createdAt   DateTime          @default(now())
-  updatedAt   DateTime          @updatedAt
+  tenant      Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt   DateTime              @default(now())
+  updatedAt   DateTime              @updatedAt
 
   @@index([tenantId, subBrand])
   @@index([tenantId, subBrand, status])
@@ -5898,11 +5907,11 @@ model TravelQuoteSnapshot {
   statusBefore  String?
   statusAfter   String
   changedById   Int?
-  changedBy     String?  // 'customer' | 'staff' | 'system'
+  changedBy     String? // 'customer' | 'staff' | 'system'
   changeReason  String?  @db.Text
   createdAt     DateTime @default(now())
 
-  quote         TravelQuote @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  quote TravelQuote @relation(fields: [quoteId], references: [id], onDelete: Cascade)
 
   @@index([tenantId])
   @@index([quoteId])
@@ -6095,29 +6104,29 @@ model TravelInvoiceLine {
 //   slice 8 — payment-webhook wires receivedAmount + paidAt automatically
 //   slice 9 — overdue cron flips status to 'overdue' on dueDate < now
 model TravelPaymentSchedule {
-  id               Int           @id @default(autoincrement())
-  tenantId         Int           @default(1)
-  invoiceId        Int
-  milestoneOrder   Int // 1-based; operator-controlled sequencing
-  dueDate          DateTime?
-  expectedAmount   Decimal       @db.Decimal(15, 2)
-  expectedCurrency String        @default("INR")
-  receivedAmount   Decimal?      @db.Decimal(15, 2)
-  status           String        @default("pending") // pending | partial | paid | overdue | waived
-  paidAt           DateTime?
-  notes            String?       @db.Text
+  id                 Int           @id @default(autoincrement())
+  tenantId           Int           @default(1)
+  invoiceId          Int
+  milestoneOrder     Int // 1-based; operator-controlled sequencing
+  dueDate            DateTime?
+  expectedAmount     Decimal       @db.Decimal(15, 2)
+  expectedCurrency   String        @default("INR")
+  receivedAmount     Decimal?      @db.Decimal(15, 2)
+  status             String        @default("pending") // pending | partial | paid | overdue | waived
+  paidAt             DateTime?
+  notes              String?       @db.Text
   // C8 (PRD_TRAVEL_BILLING UC-2.4 reminder cron) — additive nullable
   // counters consumed by paymentScheduleReminderEngine.js. Idempotency
   // guard: engine skips schedules where remindersSentCount >= 3 so the
   // T-7 / T-3 / T-1 sweep can't double-fire on a re-run within the same
   // window. lastReminderSentAt powers an operator-visible "last chased"
   // surface in the future Aged Receivable drill-down.
-  remindersSentCount  Int?        @default(0)
-  lastReminderSentAt  DateTime?
-  invoice          TravelInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
-  tenant           Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  createdAt        DateTime      @default(now())
-  updatedAt        DateTime      @updatedAt
+  remindersSentCount Int?          @default(0)
+  lastReminderSentAt DateTime?
+  invoice            TravelInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  tenant             Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
 
   @@index([tenantId, invoiceId])
   @@index([tenantId, invoiceId, milestoneOrder])

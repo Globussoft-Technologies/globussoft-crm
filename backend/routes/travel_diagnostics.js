@@ -1957,10 +1957,27 @@ router.post("/diagnostics/public/submit-tmc", async (req, res) => {
       });
     } catch { /* empty catalogue → engine returns no_match */ }
 
-    // Run the deterministic engine (T2).  Throws on bad input shape.
+    // C7 — load active curriculum mappings for this tenant. The engine
+    // uses them to compute top-N curriculum-fit recommendations
+    // (PRD_TMC_CURRICULUM_MAPPING FR-5). Empty result is the graceful
+    // path — engine returns curriculumFit: [] and the report falls
+    // back to the catalogue trip alone.
+    let curriculumMappings = [];
+    try {
+      curriculumMappings = await prisma.travelCurriculumMapping.findMany({
+        where: { tenantId: tenant.id, isActive: true },
+      });
+    } catch { /* table empty or fresh tenant → empty curriculumFit */ }
+
+    // Run the deterministic engine (T2 + C7).  Throws on bad input shape.
     let engineOutput;
     try {
-      engineOutput = tmcEngine.runTmcDiagnosticEngine(answers, catalogue, weights);
+      engineOutput = tmcEngine.runTmcDiagnosticEngine(
+        answers,
+        catalogue,
+        weights,
+        curriculumMappings,
+      );
     } catch (e) {
       return res.status(400).json({
         error: e.message || "Engine input invalid",
@@ -2071,6 +2088,11 @@ router.post("/diagnostics/public/submit-tmc", async (req, res) => {
         leadQualityReasonsJson: JSON.stringify(leadQualityResult.reasons || []),
         flagsJson: JSON.stringify(combinedFlags),
         weightsVersion: weightsVersion,
+        // C7 — persist curriculum-fit snapshot so the brief / PDF
+        // doesn't drift as advisors edit mappings post-submit.
+        curriculumFitJson: JSON.stringify(
+          Array.isArray(engineOutput.curriculumFit) ? engineOutput.curriculumFit : [],
+        ),
       },
     });
 
@@ -2080,6 +2102,7 @@ router.post("/diagnostics/public/submit-tmc", async (req, res) => {
       reportSlug,
       tenantSlug: tenant.slug,
       engineState: engineOutput.state,
+      curriculumFit: Array.isArray(engineOutput.curriculumFit) ? engineOutput.curriculumFit : [],
       message:
         `Thanks${contact.contact_name ? `, ${String(contact.contact_name).split(" ")[0]}` : ""} — your readiness profile is ready. ` +
         `Our team will reach out at ${email} within one working day.`,

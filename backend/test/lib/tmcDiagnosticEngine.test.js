@@ -58,6 +58,8 @@ const {
   scoreCurriculumHook,
   scoreGradeCenter,
   scoreTierLean,
+  computeCurriculumFit,
+  gradeMatchesBand,
 } = engine;
 
 // ── Fixtures ────────────────────────────────────────────────────────
@@ -1103,5 +1105,250 @@ describe('TMC engine — input validation', () => {
     expect(result.state).toBe('no_match');
     const elim = result.scores.eliminated.find((e) => e.tripId === 'malformed');
     expect(elim).toBeDefined();
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────
+// C7 — computeCurriculumFit (PRD_TMC_CURRICULUM_MAPPING FR-5)
+// ────────────────────────────────────────────────────────────────────
+//
+// Pins the new curriculum-fit top-N recommendation function. Filters
+// candidate mappings by (board × grade-band) THEN scores by overlap
+// between the school's primary_outcome + secondary_skills and the
+// mapping's learningOutcome. Returns top-N by fitScore desc, mappingId
+// asc tiebreak.
+//
+// Backward-compat contract: runTmcDiagnosticEngine without a 4th arg
+// returns curriculumFit: [], all 39 prior cases keep passing.
+
+function curriculumMappingRow(overrides = {}) {
+  return {
+    id: 1,
+    tenantId: 1,
+    curriculum: 'CBSE',
+    grade: 'Class 9',
+    subject: 'Social Studies',
+    learningOutcome: 'Empathy and cultural respect through field study',
+    destinationId: 4,
+    destinationLabel: 'Madhya Pradesh',
+    fitScore: 50,
+    fitRationale: 'Strong NEP alignment',
+    isActive: true,
+    ...overrides,
+  };
+}
+
+function curriculumAnswers(overrides = {}) {
+  return {
+    primary_outcome: 'Empathy',
+    secondary_skills: ['Cultural respect and inclusion', 'Self-awareness'],
+    grade_band: '9-10',
+    curriculum: 'CBSE',
+    ...overrides,
+  };
+}
+
+describe('computeCurriculumFit (C7) — top-N curriculum-fit recommendations', () => {
+  test('empty curriculumMappings → returns []', () => {
+    const out = computeCurriculumFit(curriculumAnswers(), []);
+    expect(out).toEqual([]);
+  });
+
+  test('null/undefined curriculumMappings → returns []', () => {
+    expect(computeCurriculumFit(curriculumAnswers(), null)).toEqual([]);
+    expect(computeCurriculumFit(curriculumAnswers(), undefined)).toEqual([]);
+  });
+
+  test('single mapping with board+grade match → fitScore > 0, returned', () => {
+    const out = computeCurriculumFit(curriculumAnswers(), [
+      curriculumMappingRow(),
+    ]);
+    expect(out).toHaveLength(1);
+    expect(out[0].mappingId).toBe(1);
+    expect(out[0].board).toBe('CBSE');
+    expect(out[0].destinationLabel).toBe('Madhya Pradesh');
+    expect(out[0].destinationId).toBe(4);
+    expect(out[0].fitScore).toBeGreaterThan(0);
+  });
+
+  test('board mismatch (school=CBSE, mapping=ICSE) → mapping filtered out', () => {
+    const out = computeCurriculumFit(curriculumAnswers(), [
+      curriculumMappingRow({ id: 1, curriculum: 'ICSE' }),
+    ]);
+    expect(out).toEqual([]);
+  });
+
+  test('grade-band mismatch (school=9-10, mapping grade=Class 5) → filtered out', () => {
+    const out = computeCurriculumFit(curriculumAnswers(), [
+      curriculumMappingRow({ id: 1, grade: 'Class 5' }),
+    ]);
+    expect(out).toEqual([]);
+  });
+
+  test('primary-outcome substring match boosts score (+50)', () => {
+    const withoutOutcome = computeCurriculumFit(curriculumAnswers(), [
+      curriculumMappingRow({ id: 1, learningOutcome: 'Geometry homework drill' }),
+    ]);
+    const withOutcome = computeCurriculumFit(curriculumAnswers(), [
+      curriculumMappingRow({ id: 2, learningOutcome: 'Empathy field study' }),
+    ]);
+    expect(withoutOutcome[0].fitScore).toBeLessThan(withOutcome[0].fitScore);
+    expect(withOutcome[0].fitScore - withoutOutcome[0].fitScore).toBe(50);
+  });
+
+  test('secondary-skill match adds smaller bonus (+20 each, cap 2)', () => {
+    // Mapping has BOTH secondary skills in its outcome → +40 (2*20).
+    const out = computeCurriculumFit(curriculumAnswers(), [
+      curriculumMappingRow({
+        id: 1,
+        learningOutcome:
+          'Self-awareness combined with cultural respect and inclusion field work',
+      }),
+    ]);
+    const onlySecondaries = computeCurriculumFit(curriculumAnswers(), [
+      curriculumMappingRow({
+        id: 2,
+        learningOutcome:
+          'Self-awareness combined with cultural respect and inclusion field work',
+      }),
+    ]);
+    // Both calls identical mapping → identical score; check the score
+    // includes +40 (2 secondary matches) on top of base + grade band.
+    // Base 50 + grade band 10 + 2 secondary matches 40 = 100. No primary.
+    expect(out[0].fitScore).toBe(100);
+    expect(onlySecondaries[0].fitScore).toBe(100);
+  });
+
+  test('topN respected — 10 mappings, topN: 3 → only 3 returned', () => {
+    const mappings = [];
+    for (let i = 0; i < 10; i++) {
+      mappings.push(
+        curriculumMappingRow({
+          id: i + 1,
+          learningOutcome: i < 5 ? 'Empathy lesson' : 'Geography lesson',
+        }),
+      );
+    }
+    const out = computeCurriculumFit(curriculumAnswers(), mappings, { topN: 3 });
+    expect(out).toHaveLength(3);
+  });
+
+  test('sort order is fitScore desc (primary-outcome match leads)', () => {
+    const out = computeCurriculumFit(curriculumAnswers(), [
+      curriculumMappingRow({ id: 1, learningOutcome: 'Geography drill' }),
+      curriculumMappingRow({ id: 2, learningOutcome: 'Empathy and cultural respect' }),
+      curriculumMappingRow({ id: 3, learningOutcome: 'History timeline' }),
+    ]);
+    // mappingId=2 has primary-outcome match → highest score, lands first
+    expect(out[0].mappingId).toBe(2);
+    expect(out[0].fitScore).toBeGreaterThan(out[1].fitScore);
+  });
+
+  test('ties broken by mappingId asc (deterministic)', () => {
+    const out = computeCurriculumFit(curriculumAnswers(), [
+      curriculumMappingRow({ id: 50, learningOutcome: 'Geography drill' }),
+      curriculumMappingRow({ id: 10, learningOutcome: 'History timeline' }),
+      curriculumMappingRow({ id: 30, learningOutcome: 'Civics review' }),
+    ]);
+    // All three have NO outcome overlap → identical scores → mappingId asc
+    expect(out.map((r) => r.mappingId)).toEqual([10, 30, 50]);
+  });
+
+  test('fitRationale includes human-readable reason text', () => {
+    const out = computeCurriculumFit(curriculumAnswers(), [
+      curriculumMappingRow({
+        id: 1,
+        learningOutcome: 'Empathy + self-awareness lessons',
+      }),
+    ]);
+    expect(out[0].fitRationale).toBeTruthy();
+    expect(typeof out[0].fitRationale).toBe('string');
+    expect(out[0].fitRationale.toLowerCase()).toMatch(/empathy|primary|secondary|grade/);
+  });
+
+  test('multi-board input (CBSE + IGCSE) → both branches matched', () => {
+    const out = computeCurriculumFit(
+      curriculumAnswers({ curriculum: ['CBSE', 'IGCSE'] }),
+      [
+        curriculumMappingRow({ id: 1, curriculum: 'CBSE', grade: 'Class 9' }),
+        curriculumMappingRow({ id: 2, curriculum: 'IGCSE', grade: 'IGCSE Year 10' }),
+        curriculumMappingRow({ id: 3, curriculum: 'ICSE', grade: 'Class 9' }),
+      ],
+    );
+    const ids = out.map((r) => r.mappingId).sort((a, b) => a - b);
+    expect(ids).toContain(1);
+    expect(ids).toContain(2);
+    expect(ids).not.toContain(3);
+  });
+
+  test('answers with no curriculum field → returns [] (no crash)', () => {
+    const out = computeCurriculumFit(
+      curriculumAnswers({ curriculum: undefined }),
+      [curriculumMappingRow()],
+    );
+    expect(out).toEqual([]);
+  });
+
+  test('case-insensitive outcome match (Empathy ⊂ "Field empathy through travel")', () => {
+    const out = computeCurriculumFit(curriculumAnswers(), [
+      curriculumMappingRow({ id: 1, learningOutcome: 'FIELD EMPATHY THROUGH TRAVEL' }),
+    ]);
+    expect(out[0].fitScore).toBeGreaterThan(50);
+    // Primary outcome bonus fired despite case mismatch.
+    const baselineNoOutcome = computeCurriculumFit(curriculumAnswers(), [
+      curriculumMappingRow({ id: 2, learningOutcome: 'Map drills only' }),
+    ]);
+    expect(out[0].fitScore - baselineNoOutcome[0].fitScore).toBe(50);
+  });
+
+  test('gradeMatchesBand helper — band 9-10 matches "Class 9" / "Class 10" but not "Class 5"', () => {
+    expect(gradeMatchesBand('Class 9', '9-10')).toBe(true);
+    expect(gradeMatchesBand('Class 10', '9-10')).toBe(true);
+    expect(gradeMatchesBand('Class 5', '9-10')).toBe(false);
+    expect(gradeMatchesBand('IGCSE Year 10', '9-10')).toBe(true);
+    expect(gradeMatchesBand('IB Year 11', '11-12')).toBe(true);
+  });
+
+  test('default topN is 5 when opts omitted', () => {
+    const mappings = [];
+    for (let i = 0; i < 12; i++) {
+      mappings.push(curriculumMappingRow({ id: i + 1 }));
+    }
+    const out = computeCurriculumFit(curriculumAnswers(), mappings);
+    expect(out).toHaveLength(5);
+  });
+
+  test('runTmcDiagnosticEngine without 4th arg → curriculumFit: [] (backward compat)', () => {
+    const answers = {
+      primary_outcome: 'Global awareness',
+      grade_band: '9-10',
+      curriculum: 'CBSE',
+      geo_preference: 'domestic',
+      budget_band: '30k-75k',
+      school_profile: SCHOOL_BREADWINNING,
+    };
+    const result = runTmcDiagnosticEngine(answers, []);
+    expect(result.curriculumFit).toEqual([]);
+  });
+
+  test('runTmcDiagnosticEngine with 4th arg → curriculumFit populated when matches exist', () => {
+    const answers = {
+      primary_outcome: 'Empathy',
+      secondary_skills: ['Cultural respect and inclusion', 'Self-awareness'],
+      grade_band: '9-10',
+      curriculum: 'CBSE',
+      geo_preference: 'domestic',
+      budget_band: '30k-75k',
+      school_profile: SCHOOL_BREADWINNING,
+    };
+    const result = runTmcDiagnosticEngine(
+      answers,
+      [],
+      undefined,
+      [curriculumMappingRow({ id: 1, learningOutcome: 'Empathy through field work' })],
+    );
+    expect(Array.isArray(result.curriculumFit)).toBe(true);
+    expect(result.curriculumFit).toHaveLength(1);
+    expect(result.curriculumFit[0].mappingId).toBe(1);
   });
 });

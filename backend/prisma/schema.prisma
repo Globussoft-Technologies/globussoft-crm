@@ -5191,6 +5191,17 @@ model TravelDiagnostic {
   flagsJson              String? @db.Text
   humanPick              String?
   weightsVersion         String?
+  // C7 — TMC Curriculum-Fit top-N recommendations per
+  // PRD_TMC_CURRICULUM_MAPPING.md FR-5. JSON array snapshot of the
+  // computed top-N (default 5) TravelCurriculumMapping rows that
+  // best fit the submitter's (board × grade-band × outcome) profile
+  // at submit time. Persisted-not-recomputed so the brief / report
+  // doesn't drift as advisors edit mappings post-submit. Each entry
+  // shape: { mappingId, board, subject, grade, learningOutcome,
+  // destinationLabel, destinationId, fitScore, fitRationale }.
+  // Empty array when no curriculum mappings exist for the tenant
+  // (graceful — engine still recommends a trip via the catalogue).
+  curriculumFitJson      String? @db.Text
 
   tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Restrict)
   createdAt DateTime @default(now())

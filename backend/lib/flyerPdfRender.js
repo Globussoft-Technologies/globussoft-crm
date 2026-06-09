@@ -65,9 +65,13 @@ const DEFAULT_PALETTE = Object.freeze({
 });
 
 // pdfkit page-size tokens. We accept the same `aspect` taxonomy as
-// lib/flyerExport.js (PDF_PAPER_SIZES = ['a4', 'us_letter']).
+// lib/flyerExport.js (PDF_PAPER_SIZES = ['a4', 'us_letter']) plus 'a5'
+// (S75 — A5 was previously coerced to A4 by services/flyerRenderEngine.js
+// because this table didn't include it). pdfkit accepts the string 'A5'
+// as a built-in page-size token (148 × 210 mm = 419.53 × 595.28 pt portrait).
 const PAPER_SIZES = {
   a4: "A4",
+  a5: "A5",
   us_letter: "LETTER",
 };
 

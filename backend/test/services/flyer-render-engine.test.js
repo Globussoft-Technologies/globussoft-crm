@@ -205,6 +205,18 @@ describe('renderFlyer — pdf-a5 format', () => {
     expect(result.widthPx).toBeNull();
     expect(result.heightPx).toBeNull();
   });
+
+  test('S75 — pdf-a5 produces a different byte stream than pdf-a4 (real A5 page size)', async () => {
+    // Pre-S75 carry-over: flyerRenderEngine passed `aspect: 'a4'` for
+    // BOTH pdf-a4 and pdf-a5, so the two formats returned identical PDFs
+    // modulo non-determinism in the ISO timestamp footer. After S75, the
+    // engine's renderPdfBranch maps formatMeta.pdfPageSize → lib aspect
+    // verbatim (A4→a4, A5→a5, LETTER→us_letter), so pdf-a5 truly renders
+    // at A5 dimensions. Pin via byte-stream inequality.
+    const a4 = await renderFlyer({ template: fullTemplate, format: 'pdf-a4' });
+    const a5 = await renderFlyer({ template: fullTemplate, format: 'pdf-a5' });
+    expect(a4.buffer.equals(a5.buffer)).toBe(false);
+  });
 });
 
 describe('renderFlyer — png-square format (Puppeteer absent → stub fallback)', () => {

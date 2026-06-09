@@ -273,34 +273,24 @@ const STUB_PNG_BUFFER = Buffer.from(
 
 /**
  * Render the PDF path. Delegates to `lib/flyerPdfRender.js`'s
- * `renderFlyerPdf(template, opts)`, then injects the A5 page-size
- * support by passing the pdfkit page-size token directly.
+ * `renderFlyerPdf(template, opts)`, mapping the pdfkit page-size token
+ * back to the lib's aspect-token taxonomy.
  *
- * lib/flyerPdfRender.js currently has a PAPER_SIZES table mapping
- * `'a4' → 'A4'` and `'us_letter' → 'LETTER'`; A5 isn't in the table. To
- * stay disjoint-file (per S17's "extend lib only via routes — don't
- * touch lib") we pass `aspect: 'a4'` to the lib and rely on the fact
- * that lib defaults to 'A4' when the aspect token isn't matched — which
- * means today's A5 dispatch renders as A4 with the placeholder PDF body.
- * This is documented as a known under-rendering (A5 returns A4-sized
- * PDF until a follow-up slice extends `lib/flyerPdfRender.js`'s
- * PAPER_SIZES table). The returned buffer is still a valid PDF; the
- * MIME + extension are correct; the route's `?inline=1` browser preview
- * just shows the A4 page. Note in the module return shape that
- * `pdfPageSize` is 'A4' for both — operator-visible discrepancy is
- * scoped to "the A5 form returns an A4-sized PDF until lib extension."
- *
- * NOTE: When the follow-up lib extension lands, this function can pass
- * `aspect: 'a5'` straight through and the lib will honour it. No caller
- * change.
+ * History: pre-S75, lib/flyerPdfRender.js's PAPER_SIZES table mapped
+ * only `'a4' → 'A4'` and `'us_letter' → 'LETTER'` — so this branch
+ * passed `aspect: 'a4'` for BOTH pdf-a4 AND pdf-a5 formats, and pdf-a5
+ * silently rendered as an A4-sized PDF. S75 extended the lib's
+ * PAPER_SIZES table to include `'a5' → 'A5'`, so pdf-a5 can now honour
+ * the requested page size end-to-end. This dispatch maps formatMeta's
+ * pdfkit-token back to the lib's aspect-token verbatim.
  */
 async function renderPdfBranch({ template, formatMeta }) {
-  // Compute a hash-preview from the template if the caller didn't pass
-  // one. lib/flyerPdfRender wants opts.hash for the footer line — a stale
-  // hash is preferable to no footer at all, so we synthesise an empty
-  // marker for the placeholder case.
+  // Map pdfkit page-size tokens back to the lib's aspect taxonomy. The
+  // lib accepts 'a4' | 'a5' | 'us_letter' and defaults to 'a4' on any
+  // unrecognised value — but we shouldn't need that fallback now.
+  const ASPECT_BY_PAGE_SIZE = { A4: "a4", A5: "a5", LETTER: "us_letter" };
   const opts = {
-    aspect: formatMeta.pdfPageSize === "A4" ? "a4" : "a4", // see header
+    aspect: ASPECT_BY_PAGE_SIZE[formatMeta.pdfPageSize] || "a4",
     hash: "synthetic",
   };
   const buffer = await renderFlyerPdf(template, opts);

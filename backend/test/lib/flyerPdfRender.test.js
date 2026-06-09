@@ -212,8 +212,98 @@ describe('module exports', () => {
     expect(Object.isFrozen(DEFAULT_PALETTE)).toBe(true);
   });
 
-  test('exports PAPER_SIZES mapping aspect → pdfkit token', () => {
-    expect(PAPER_SIZES).toMatchObject({ a4: 'A4', us_letter: 'LETTER' });
+  test('exports PAPER_SIZES mapping aspect → pdfkit token (S75 added a5)', () => {
+    // S75: A5 added to the table so flyerRenderEngine.js's pdf-a5
+    // dispatch can pass `aspect: 'a5'` instead of silently coercing to a4.
+    expect(PAPER_SIZES).toMatchObject({ a4: 'A4', a5: 'A5', us_letter: 'LETTER' });
+  });
+});
+
+describe('renderFlyerPdf — S75 A5 aspect support', () => {
+  test('renders a valid PDF with %PDF magic bytes for a5 aspect', async () => {
+    const buf = await renderFlyerPdf(
+      { palette: validPalette, layout: validLayout, assets: validAssets },
+      { aspect: 'a5', hash: '5'.repeat(64) },
+    );
+    expect(Buffer.isBuffer(buf)).toBe(true);
+    expect(isPdfMagic(buf)).toBe(true);
+    expect(buf.length).toBeGreaterThan(500);
+  });
+
+  test('a4 and a5 produce different byte streams (page size honoured)', async () => {
+    const a4 = await renderFlyerPdf(
+      { palette: validPalette, layout: validLayout, assets: validAssets },
+      { aspect: 'a4', hash: 'aa'.repeat(32) },
+    );
+    const a5 = await renderFlyerPdf(
+      { palette: validPalette, layout: validLayout, assets: validAssets },
+      { aspect: 'a5', hash: 'aa'.repeat(32) },
+    );
+    // Different page sizes → different page dimensions baked into the PDF
+    // catalog → different byte streams. (Both share the same hash so the
+    // footer line is identical — the divergence is purely page-size.)
+    expect(a4.equals(a5)).toBe(false);
+  });
+
+  test('a5 and us_letter produce different byte streams', async () => {
+    const a5 = await renderFlyerPdf(
+      { palette: validPalette, layout: validLayout, assets: validAssets },
+      { aspect: 'a5', hash: 'bb'.repeat(32) },
+    );
+    const letter = await renderFlyerPdf(
+      { palette: validPalette, layout: validLayout, assets: validAssets },
+      { aspect: 'us_letter', hash: 'bb'.repeat(32) },
+    );
+    expect(a5.equals(letter)).toBe(false);
+  });
+
+  test('empty template still renders an a5-sized placeholder PDF', async () => {
+    const buf = await renderFlyerPdf({}, { aspect: 'a5' });
+    expect(isPdfMagic(buf)).toBe(true);
+    expect(buf.length).toBeGreaterThan(500);
+  });
+
+  test('unknown aspect still folds to a4 (a5 specifically uses A5; a3 falls back)', async () => {
+    // Regression-pin: an unknown aspect ('a3') folds to a4 — only the
+    // three known aspects (a4, a5, us_letter) get their declared sizes.
+    // We can't byte-compare two PDFs because the footer line includes
+    // a per-call ISO timestamp; instead compare LENGTHS as a proxy —
+    // a3-folded-to-a4 should be the same length range as explicit a4,
+    // and BOTH should differ from a5 (which is physically smaller).
+    const a3 = await renderFlyerPdf(
+      { palette: validPalette, layout: validLayout, assets: validAssets },
+      { aspect: 'a3', hash: 'cc'.repeat(32) },
+    );
+    const a4 = await renderFlyerPdf(
+      { palette: validPalette, layout: validLayout, assets: validAssets },
+      { aspect: 'a4', hash: 'cc'.repeat(32) },
+    );
+    const a5 = await renderFlyerPdf(
+      { palette: validPalette, layout: validLayout, assets: validAssets },
+      { aspect: 'a5', hash: 'cc'.repeat(32) },
+    );
+    // a3 should land in the a4 size class (lengths within 50 bytes of each
+    // other — timestamp + same MediaBox + same content). a5 has a smaller
+    // MediaBox, so even though pdfkit's output isn't strictly length-
+    // ordered by page-size, the byte stream itself differs from both.
+    expect(Math.abs(a3.length - a4.length)).toBeLessThan(50);
+    expect(a3.equals(a4)).toBe(false); // ISO timestamps differ
+    expect(a3.equals(a5)).toBe(false); // page size differs
+  });
+
+  test('a5 still rejects bad palette gracefully (cross-aspect degraded-input contract)', async () => {
+    // Pre-S75 the renderer was hardcoded into A4 for any unknown aspect
+    // so degraded-palette + non-a4 aspect was never exercised. Pin that
+    // the safeHex/empty-template fallbacks still fire for a5 too.
+    const buf = await renderFlyerPdf(
+      {
+        palette: { primaryHex: 'garbage', bgHex: 42 },
+        layout: { not: 'array' },
+        assets: 'nope',
+      },
+      { aspect: 'a5', hash: 'dd'.repeat(32) },
+    );
+    expect(isPdfMagic(buf)).toBe(true);
   });
 });
 

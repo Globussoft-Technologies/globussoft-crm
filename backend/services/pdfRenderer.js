@@ -2288,6 +2288,136 @@ const SUB_BRAND_ACCENT = {
   visasure: "#7A2F5C",
 };
 
+// ---------------------------------------------------------------------------
+// Brand-kit-aware invoice PDF defaults — S34 (TRAVEL_BIG_SCOPE_BACKLOG.md,
+// PRD_TRAVEL_BILLING.md "Per-sub-brand PDF invoice templates").
+//
+// Same shape as the S13 itinerary-template selector
+// (backend/routes/travel_itinerary_templates.js, commit 1541a063) — same key
+// set, same fallback hex values per sub-brand, same precedence chain. The
+// FALLBACKS constant is replicated VERBATIM from S13 to keep cross-doc
+// consistency between itinerary templates + invoice PDFs (an admin who
+// configures a sub-brand block once gets matching colors across both surfaces).
+//
+// On PDF render, when the caller doesn't override branding, we read
+// `tenant.subBrandConfigJson` (legacy admin-curated per-sub-brand kit) and
+// resolve deterministic defaults for the invoice's `subBrand` (or top-level /
+// generic fall-through).
+//
+// Q22 (Yasin brand pack) is the content-blocker for the actual logo asset URLs
+// + final-approved hex codes; until then `subBrandConfigJson` is typically
+// empty/null in production, so this slice falls back to a hard-coded
+// sensible-default palette per sub-brand. When the brand pack lands, an ADMIN
+// PATCH of the tenant's subBrandConfigJson (single update) cascades into every
+// future invoice + itinerary render — no per-route edit needed.
+//
+// JSON shape consumed (one of):
+//   { tmc:        { thumbnailUrl?, primaryColor?, accentColor?,
+//                   headerColor?, fontFamily? },
+//     rfu:        { ... }, travelstall: { ... }, visasure: { ... },
+//     // optional top-level fallback used when invoice has no subBrand
+//     thumbnailUrl?, primaryColor?, accentColor?, headerColor?, fontFamily?
+//   }
+//
+// Output (consumed by renderTravelInvoicePdf):
+//   - branding.headerColor   ← cfg.headerColor   (top-band fill)
+//   - branding.primaryColor  ← cfg.primaryColor  (totals + section accents)
+//   - branding.accentColor   ← cfg.accentColor   (divider rules, secondary)
+//   - branding.fontFamily    ← cfg.fontFamily    (reserved — pdfkit is
+//                                                 limited to Helvetica /
+//                                                 Times / Courier built-ins,
+//                                                 so this field is recorded
+//                                                 for forward-compat once
+//                                                 we wire a custom font
+//                                                 loader; today it's a
+//                                                 metadata-only field).
+//   - branding.thumbnailUrl  ← cfg.thumbnailUrl  (logo for top-band; null
+//                                                 fallback means "skip logo
+//                                                 image" — operator hasn't
+//                                                 uploaded one yet).
+//   - branding._source       ← "subBrandConfig" | "fallback"
+//
+// Caller precedence (highest first):
+//   1. Explicit per-render override (opts.branding.*)
+//   2. Per-sub-brand block in subBrandConfigJson[subBrand]
+//   3. Top-level block in subBrandConfigJson
+//   4. Hard-coded fallback per sub-brand (INVOICE_BRAND_KIT_FALLBACKS below)
+//
+// Backward compat: wellness invoices (renderBrandedInvoicePdf) don't have
+// a `subBrand` and don't pass through this selector at all — that path is
+// unchanged. Travel invoices without a subBrand (defensive — TravelInvoice's
+// schema requires subBrand so this is a paranoid fallback) drop to _generic.
+const INVOICE_BRAND_KIT_FIELDS = [
+  "thumbnailUrl",
+  "primaryColor",
+  "accentColor",
+  "headerColor",
+  "fontFamily",
+];
+
+// Per-sub-brand fallback defaults — replicated VERBATIM from S13's
+// BRAND_KIT_FALLBACKS (backend/routes/travel_itinerary_templates.js:123-129).
+// Colors are WCAG-AA on white; Inter is the same family Marketing Flyer Studio
+// + main app use. thumbnailUrl=null because Q22 hasn't landed (operator
+// uploads on save).
+const INVOICE_BRAND_KIT_FALLBACKS = {
+  tmc:         { thumbnailUrl: null, primaryColor: "#1F4E79", accentColor: "#F2B544", headerColor: "#1F4E79", fontFamily: "Inter, sans-serif" },
+  rfu:         { thumbnailUrl: null, primaryColor: "#0B5345", accentColor: "#D4AC0D", headerColor: "#0B5345", fontFamily: "Inter, sans-serif" },
+  travelstall: { thumbnailUrl: null, primaryColor: "#C0392B", accentColor: "#F39C12", headerColor: "#922B21", fontFamily: "Inter, sans-serif" },
+  visasure:    { thumbnailUrl: null, primaryColor: "#283747", accentColor: "#5DADE2", headerColor: "#283747", fontFamily: "Inter, sans-serif" },
+  _generic:    { thumbnailUrl: null, primaryColor: "#1F4E79", accentColor: "#F2B544", headerColor: "#1F4E79", fontFamily: "Inter, sans-serif" },
+};
+
+function parseInvoiceSubBrandConfig(jsonString) {
+  if (!jsonString || typeof jsonString !== "string") return {};
+  try {
+    const obj = JSON.parse(jsonString);
+    if (!obj || typeof obj !== "object" || Array.isArray(obj)) return {};
+    return obj;
+  } catch (_e) {
+    // Malformed JSON → return empty so we fall through to hard-coded
+    // fallback. Don't throw — a bad admin-saved blob shouldn't kill an
+    // invoice download.
+    return {};
+  }
+}
+
+// Pick brand-kit fields for a given sub-brand from the parsed config blob.
+// Sub-brand block first, then top-level fallback, then hard-coded
+// per-sub-brand defaults. Returns { fields: {...}, source: "..." } where
+// source ∈ {"subBrandConfig" | "fallback"} for downstream callers + tests
+// that want to assert the resolution path.
+function resolveInvoiceBrandKit(cfg, subBrand) {
+  const out = {};
+  let usedConfig = false;
+  const subBlock = subBrand && cfg && typeof cfg[subBrand] === "object" && !Array.isArray(cfg[subBrand])
+    ? cfg[subBrand]
+    : null;
+
+  for (const f of INVOICE_BRAND_KIT_FIELDS) {
+    if (subBlock && subBlock[f] !== undefined && subBlock[f] !== null && subBlock[f] !== "") {
+      out[f] = subBlock[f];
+      usedConfig = true;
+    } else if (cfg && cfg[f] !== undefined && cfg[f] !== null && cfg[f] !== "") {
+      out[f] = cfg[f];
+      usedConfig = true;
+    }
+  }
+
+  // Backfill missing fields from the hard-coded fallback so the returned
+  // object is always shape-complete. Source remains "subBrandConfig" if at
+  // least one field came from config; "fallback" only when ZERO fields came
+  // from config.
+  const fallbackKey = subBrand && INVOICE_BRAND_KIT_FALLBACKS[subBrand] ? subBrand : "_generic";
+  const fallback = INVOICE_BRAND_KIT_FALLBACKS[fallbackKey];
+  for (const f of INVOICE_BRAND_KIT_FIELDS) {
+    if (out[f] === undefined) out[f] = fallback[f];
+  }
+
+  return { fields: out, source: usedConfig ? "subBrandConfig" : "fallback" };
+}
+// ---------------------------------------------------------------------------
+
 function resolveAnswerLabel(question, rawAnswer) {
   if (rawAnswer == null) return "—";
   if (Array.isArray(question?.options) && question.options.length > 0) {
@@ -3327,7 +3457,30 @@ function renderTravelInvoicePdf(opts) {
 
   const sub = invoice.subBrand;
   const brandLabel = SUB_BRAND_LABEL[sub] || "Travel CRM";
-  const accent = SUB_BRAND_ACCENT[sub] || "#111111";
+
+  // S34 — resolve brand-kit colors from tenant.subBrandConfigJson with
+  // per-sub-brand fallbacks. Caller can override per-render via opts.branding
+  // (highest precedence, layer 1). When tenant or subBrandConfigJson is null,
+  // we fall through to INVOICE_BRAND_KIT_FALLBACKS (sensible WCAG-AA per
+  // sub-brand defaults, replicated from S13's itinerary-template selector
+  // so colors are consistent across both surfaces).
+  const cfg = parseInvoiceSubBrandConfig(tenant && tenant.subBrandConfigJson);
+  const { fields: brandKit, source: brandSource } = resolveInvoiceBrandKit(cfg, sub);
+  // Per-render explicit overrides win (precedence layer 1). Callers can pass
+  // { branding: { headerColor: "#000", ... } } to opts to bypass the kit.
+  const callerBranding = (o.branding && typeof o.branding === "object") ? o.branding : {};
+  const branding = { ...brandKit, ...callerBranding };
+  // The header band fill — was bare SUB_BRAND_ACCENT[sub] pre-S34. Now
+  // sources from the brand-kit so the admin-curated palette wins.
+  const accent = branding.headerColor || INVOICE_BRAND_KIT_FALLBACKS._generic.headerColor;
+  // primaryColor drives the "Total Due" line + section accents downstream.
+  // accentColor drives secondary dividers (header band underline).
+  const primaryColor = branding.primaryColor || INVOICE_BRAND_KIT_FALLBACKS._generic.primaryColor;
+  // _brandingSource: stamped into PDF Producer metadata so we can observe in
+  // a tester / smoke check which resolution path fired without parsing PDF
+  // body text. Values: "subBrandConfig" | "fallback".
+  void brandSource;
+
   const currency = invoice.currency || "INR";
   const docType = invoice.docType || "TaxInvoice";
   const docHeaderTitle = docTypeHeader(docType);
@@ -3341,7 +3494,17 @@ function renderTravelInvoicePdf(opts) {
     return `${currency} ${v.toFixed(2)}`;
   }
 
-  const doc = new PDFDocument({ size: "A4", margin: 50 });
+  const doc = new PDFDocument({
+    size: "A4",
+    margin: 50,
+    info: {
+      // S34 — stamp brand-kit resolution path into PDF Producer metadata so
+      // downstream observers (tests, ops greps) can see whether the rendered
+      // colors came from subBrandConfigJson or from the hard-coded fallback
+      // without parsing body-text. Format: "Globussoft CRM (brand-kit: <src>)"
+      Producer: `Globussoft CRM (brand-kit: ${brandSource})`,
+    },
+  });
   const bufPromise = streamToBuffer(doc);
 
   doc.rect(0, 0, doc.page.width, 60).fill(accent);
@@ -3531,8 +3694,12 @@ function renderTravelInvoicePdf(opts) {
 
   doc.moveTo(350, ty).lineTo(545, ty).lineWidth(0.5).strokeColor("#bbb").stroke();
   ty += 6;
-  doc.font("Helvetica-Bold").fontSize(11).fillColor("#111");
+  // S34 — paint "Total Due" label in the sub-brand's primaryColor so the
+  // page's most-load-bearing figure is brand-tinted. Numeric value stays
+  // #111 (high-contrast black) for readability.
+  doc.font("Helvetica-Bold").fontSize(11).fillColor(primaryColor);
   doc.text("Total Due", 350, ty, { width: 95, align: "right" });
+  doc.fillColor("#111");
   doc.text(fmt(grandTotal), 450, ty, { width: 95, align: "right" });
   ty += 18;
   doc.y = ty + 8;
@@ -3628,4 +3795,11 @@ module.exports = {
   voucherSubtypeForLine,
   formatVoucherServiceRange,
   extractTravellerListFromInvoice,
+  // S34 — brand-kit selector helpers exported so unit tests (and any
+  // future routes that need to preview brand-kit resolution before
+  // rendering the PDF) can exercise the same code path the renderer uses.
+  INVOICE_BRAND_KIT_FIELDS,
+  INVOICE_BRAND_KIT_FALLBACKS,
+  parseInvoiceSubBrandConfig,
+  resolveInvoiceBrandKit,
 };

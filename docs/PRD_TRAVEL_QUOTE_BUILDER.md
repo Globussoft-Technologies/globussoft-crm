@@ -299,43 +299,40 @@ Existing `pdfRenderer.js` (services/) handles wellness prescription + consent + 
 
 ## 10. Status snapshot
 
-### 2026-05-24 update
+### 2026-06-09 refresh — builder + admin LIVE; PDF/convert/templates pending
 
-**DD-5.1 RESOLVED:** FORK — `TravelQuote` shipped at commit `fdb793e` (~85 LOC across the 3 trio models with `TravelInvoice` + `TravelSupplier`). Tenant inverse relation threaded into the travel-vertical cluster. `prisma validate` clean.
+**Current state:** Slices 1-8 of the Quote Builder are SHIPPED. The `/quotes` route claim from the prior snapshot ("resolves to QuotesComingSoon.jsx pending routes scaffold") is OBSOLETE — the builder + admin pages are live and mounted in `App.jsx`. `QuotesComingSoon.jsx` is no longer reachable from the live Travel sidebar.
 
-**What's now possible:**
-- Backend routes can be scaffolded against the new model — `routes/travel_quotes.js` CRUD + send + accept + reject + counter + convert-to-invoice are follow-up commits.
-- Frontend can wire `pages/travel/QuoteBuilder.jsx` to the new model once routes exist; `/quotes` route swap from `QuotesComingSoon` to `QuoteList` follows.
-- Sub-brand isolation enforced at the schema level (`subBrand` indexed; `@@index([tenantId, subBrand])`).
+**SHIPPED:**
+- ✅ `TravelQuote` + `TravelQuoteLine` Prisma models (`backend/prisma/schema.prisma:5818+`) — DD-5.1 fork resolved at `fdb793e`
+- ✅ `backend/routes/travel_quotes.js` — CRUD + analytics + by-month/quarter/year + stats + expired + line CRUD + supplier picker + "Send" stub action
+- ✅ `frontend/src/pages/travel/QuoteBuilder.jsx` — 3-pane composer with markup calc (slices 2-8)
+- ✅ `frontend/src/pages/travel/QuotesAdmin.jsx` — CRUD list
+- ✅ `POST /api/travel/pricing/quote` engine endpoint
+- ✅ `subBrandAccess[]` server-side enforcement on `travel_quotes` routes
+- ✅ Supplier picker wired (slice 4)
+- ✅ "Send to customer" stub action (slice 6 — real WA delivery Q9-blocked)
+- ✅ `App.jsx` mounts `/travel/quotes-admin` (QuotesAdmin) + `/travel/quotes/builder/:id?` (QuoteBuilder)
 
-**Still pending (PRD-internal DD-5.2 through DD-5.6):**
-- **DD-5.2** — Pricing-engine UX: rule-based config (recommended) vs formula-language (escape hatch).
-- **DD-5.3** — Tax treatment per-sub-brand default (inclusive for B2C / RFU / Travel Stall; exclusive for TMC / Visa Sure).
-- **DD-5.4** — FX-rate source + cadence (RBI ref-rate recommended; daily 09:00 IST cron).
-- **DD-5.5** — Counter-offer flow (simple number+reason for v1).
-- **DD-5.6** — PDF renderer template ownership (extend existing `pdfRenderer.js`).
-- Per-PRD field expansion: real §3 fields (per-pax dimension, HSN-tax-aware lines, itinerary linkage, sub-agent clone-with-margin, accept-link JWT scope) land in follow-up commits.
+**Pending (in-PRD work):**
+- ⬜ PDF render (`renderTravelQuote()` not yet in `pdfRenderer.js`) — ~2d
+- ⬜ Quote → Invoice convert flow (`TravelInvoice.quoteId` FK exists; no `/convert-to-invoice` route) — ~2d
+- ⬜ Templates not implemented (`QuoteTemplate` / `TravelQuoteTemplate` models absent) — ~3d
+- ⬜ FX-rate locking at accept-time — ~½d
+- ⬜ Customer-side accept/reject/counter landing — ~3d
+- ⬜ `QuoteSnapshot` version history — ~1d
+- ⬜ Sub-agent clone-with-margin (FR-3.6 / UC-2.6) — ~2d
+- ⬜ Cron quote-expiry sweep — ~½d
 
-**Path to implementation:** Routes scaffold = 3-5 days (matches Day 3-5 in the existing breakdown). Full builder UI (3-pane Cost Master picker + day/category grouping + live totals) = +3-5 days. Customer accept flow + PDF render + WhatsApp/Email delivery = +2-3 days. Templates + audit + cron-expiry sweep = +3-4 days. **Net remaining: 11-17 engineering days** post DD-5.1 land; the schema decision (the longest-tail dependency) is now off the critical path.
+**Blocked (creds / external):**
+- 🔵 WA send delivery on Q9 (WhatsApp Cloud API creds)
+- 🔵 FX cron source DD-5.4 (RBI ref-rate cadence call)
 
-- **2026-05-23 (cron tick #19 / agent 2):** PRD WRITTEN. Verify-before-pickup found no existing Quote Builder PRD; the `/quotes` route stubs to `QuotesComingSoon.jsx` (not Estimates as the prompt assumed — minor correction logged below).
-- **Pre-existing surface:**
-  - `QuotesComingSoon.jsx` — friendly stub (BUG-T24 / #886)
-  - Dormant `Quote` + `QuoteLineItem` Prisma models (potentially deletable per DD-5.1)
-  - `POST /api/travel/pricing/quote` engine (composes single-line quotes today)
-  - `Estimate` + `EstimateLineItem` — closest analogue, sketches the status workflow + PDF/CSV export to copy from
-- **Path to implementation (10-18 engineering days, assumes DD-5.1 picks fork):**
-  - **Day 1-2** — DD calls landed (DD-5.1 fork confirmed, DD-5.2 config-driven, DD-5.3 per-sub-brand defaults, DD-5.4 RBI ref-rate, DD-5.5 simple counter, DD-5.6 extend `pdfRenderer.js`). Schema migration drafted (new 4 models + indexes + FKs).
-  - **Day 3-5** — Backend routes: `travel_quotes.js` CRUD + send + accept + reject + counter + convert-to-invoice + customer-share-link JWT. Per-route specs in `e2e/tests/`.
-  - **Day 6-8** — Builder UI (3-pane): Cost Master picker (left), day/category-grouped line items (centre), live totals + customer-currency mirror (right). `@dnd-kit/core` for drag-drop (per Pipeline Kanban PRD DD-5.1).
-  - **Day 9-10** — Customer-side accept landing + PDF render extension to `pdfRenderer.js` + branded delivery via WhatsApp (subBrandConfig stub) + Email.
-  - **Day 11-12** — Templates: model + CRUD + admin Settings page + save-as-template flow.
-  - **Day 13-14** — Audit + snapshot + version history + cron expiry sweep.
-  - **Day 15-16** — Sub-agent clone-with-margin (FR-3.6 / use case 2.6) — may slip to v2 depending on velocity.
-  - **Day 17-18** — Buffer / hardening / regression sweep / `/quotes` route swap from `QuotesComingSoon` to `QuoteList`.
+**Net remaining: ~14 engineering days** + 2 cred unblocks. The schema + builder UI + admin list (the longest-tail dependencies) are off the critical path. PDF + convert + customer-accept landing are the next high-value slices.
+
 - **Phase:** P1 — Revenue-critical builds (per Travel CRM gap-audit Tier).
 - **Closes:** #900 once FR-3.1 through FR-3.9 ship + AC-6.1 through AC-6.12 pass.
-- **Blocks on:** DD-5.1 + DD-5.2 + DD-5.3 must land BEFORE backend impl starts (otherwise 1-2 day rewrite risk if a decision flips mid-flight).
+- **Blocks on:** Q9 (WA creds) for end-to-end customer delivery; DD-5.4 (FX cadence) for accept-time lock.
 
 ---
 

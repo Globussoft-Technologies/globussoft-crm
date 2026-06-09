@@ -62,6 +62,7 @@ const {
 } = require("../lib/hsnSacMapper");
 const { computeQuoteAnalytics } = require("../lib/travelQuoteAnalytics");
 const { rankQuotes } = require("../lib/quoteRanker");
+const listProjection = require("../lib/listProjection");
 const ratehawkClient = require("../services/ratehawkClient");
 const bookingExpediaClient = require("../services/bookingExpediaClient");
 
@@ -170,6 +171,13 @@ function parseValidUntil(input) {
 
 // GET /api/travel/quotes
 // Honors ?subBrand=tmc (filter to that sub-brand) and ?status=Draft.
+// GET /api/travel/quotes
+//
+// Slim-shape opt-in (#920 slice S3 — FR-3.5 PII payload reduction).
+// Default shape is the full TravelQuote row (back-compat). Pass
+// `?fields=summary` to opt into the slim projection (id + subBrand +
+// contactId + status + totalAmount + currency + validUntil + createdAt)
+// — picker / dashboard-tile callers don't need the model's full row.
 router.get("/quotes", verifyToken, requireTravelTenant, async (req, res) => {
   try {
     const where = { tenantId: req.travelTenant.id };
@@ -192,13 +200,18 @@ router.get("/quotes", verifyToken, requireTravelTenant, async (req, res) => {
     const take = Math.min(parseInt(req.query.limit, 10) || 100, 500);
     const skip = parseInt(req.query.offset, 10) || 0;
 
+    const isSummary = req.query.fields === "summary";
+    const findManyArgs = {
+      where,
+      orderBy: [{ createdAt: "desc" }],
+      take,
+      skip,
+    };
+    if (isSummary) {
+      findManyArgs.select = listProjection("TravelQuote", false);
+    }
     const [quotes, total] = await Promise.all([
-      prisma.travelQuote.findMany({
-        where,
-        orderBy: [{ createdAt: "desc" }],
-        take,
-        skip,
-      }),
+      prisma.travelQuote.findMany(findManyArgs),
       prisma.travelQuote.count({ where }),
     ]);
     res.json({ quotes, total, limit: take, offset: skip });

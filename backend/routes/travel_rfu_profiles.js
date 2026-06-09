@@ -27,6 +27,7 @@ const { verifyToken, verifyRole } = require("../middleware/auth");
 const prisma = require("../lib/prisma");
 const { requireTravelTenant, getSubBrandAccessSet } = require("../middleware/travelGuards");
 const { findDuplicateContactFull } = require("../utils/deduplication");
+const listProjection = require("../lib/listProjection");
 
 const VALID_TIERS = ["entry", "primary", "premium"];
 
@@ -45,6 +46,17 @@ async function requireRfuAccess(req, res, next) {
 
 // ─── List + create ────────────────────────────────────────────────────
 
+// GET /api/travel/rfu-profiles
+//
+// Slim-shape opt-in (#920 slice S3 — FR-3.5 PII payload reduction).
+// **High-value PII target.** Default shape ships every column of
+// RfuLeadProfile — passportNumber (plaintext today; Phase 1.5 will
+// encrypt), visaHistoryJson, frequentFlyerJson, emergencyContact* (name
+// + phone), medicalNotes (@db.Text), specialAssistance, pastComplaintsJson.
+// Pass `?fields=summary` to opt into the slim projection (id + contactId
+// + productTier + createdAt). Picker / sub-brand-tile callers don't need
+// the full PII; the detail endpoint GET /rfu-profiles/:id is per-row
+// audit-able.
 router.get("/rfu-profiles", verifyToken, requireTravelTenant, requireRfuAccess, async (req, res) => {
   try {
     const where = { tenantId: req.travelTenant.id };
@@ -56,8 +68,13 @@ router.get("/rfu-profiles", verifyToken, requireTravelTenant, requireRfuAccess, 
     }
     const take = Math.min(parseInt(req.query.limit, 10) || 50, 200);
     const skip = parseInt(req.query.offset, 10) || 0;
+    const isSummary = req.query.fields === "summary";
+    const findManyArgs = { where, orderBy: { id: "desc" }, take, skip };
+    if (isSummary) {
+      findManyArgs.select = listProjection("RfuLeadProfile", false);
+    }
     const [profiles, total] = await Promise.all([
-      prisma.rfuLeadProfile.findMany({ where, orderBy: { id: "desc" }, take, skip }),
+      prisma.rfuLeadProfile.findMany(findManyArgs),
       prisma.rfuLeadProfile.count({ where }),
     ]);
     res.json({ profiles, total, limit: take, offset: skip });

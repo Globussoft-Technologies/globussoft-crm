@@ -55,6 +55,7 @@ const { computeWindowOpenAt } = require("../lib/webCheckinWindow");
 const { resolveForSubBrand } = require("../lib/subBrandConfig");
 const llmRouter = require("../lib/llmRouter");
 const { computeDayCosts } = require("../lib/itineraryDayCostCalculator");
+const listProjection = require("../lib/listProjection");
 
 const VALID_ITEM_TYPES = ["flight", "hotel", "transfer", "activity", "visa", "insurance"];
 // Phase 2 (PRD §4.7) extends the enum with advance_paid / fully_paid for
@@ -81,6 +82,18 @@ function assertValidItemType(itemType) {
 // ─── List + create ────────────────────────────────────────────────────
 
 // GET /api/travel/itineraries
+//
+// Slim-shape opt-in (#920 slice S3 — FR-3.5 PII payload reduction).
+// Default shape unchanged (full Itinerary row + `items` include with the
+// polymorphic item details). The full row includes shareToken (an
+// auth-bearing public-share token), pricingJson (a heavy @db.Text
+// breakdown of cost + GST + tcs lines), pdfUrl, and micrositeUrl —
+// every one of these is a sensitive value that picker / dropdown
+// callers don't need. Pass `?fields=summary` to opt into the slim
+// projection (id + subBrand + contactId + destination + status + dates
+// + totalAmount + currency + createdAt; the share token + pricing JSON
+// + PDF URL are SQL-dropped at the Prisma layer). The slim path also
+// SKIPS the `items` include (picker callers don't need per-item bodies).
 router.get("/itineraries", verifyToken, requireTravelTenant, async (req, res) => {
   try {
     const where = { tenantId: req.travelTenant.id };
@@ -109,14 +122,20 @@ router.get("/itineraries", verifyToken, requireTravelTenant, async (req, res) =>
     const take = Math.min(parseInt(req.query.limit, 10) || 50, 200);
     const skip = parseInt(req.query.offset, 10) || 0;
 
+    const isSummary = req.query.fields === "summary";
+    const findManyArgs = {
+      where,
+      orderBy: { createdAt: "desc" },
+      take,
+      skip,
+    };
+    if (isSummary) {
+      findManyArgs.select = listProjection("Itinerary", false);
+    } else {
+      findManyArgs.include = { items: { orderBy: { position: "asc" } } };
+    }
     const [itineraries, total] = await Promise.all([
-      prisma.itinerary.findMany({
-        where,
-        orderBy: { createdAt: "desc" },
-        take,
-        skip,
-        include: { items: { orderBy: { position: "asc" } } },
-      }),
+      prisma.itinerary.findMany(findManyArgs),
       prisma.itinerary.count({ where }),
     ]);
     res.json({ itineraries, total, limit: take, offset: skip });

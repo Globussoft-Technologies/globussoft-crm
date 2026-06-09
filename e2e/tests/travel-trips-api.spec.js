@@ -720,3 +720,123 @@ test.describe("Travel trips API — ops dashboard (PRD §4.9)", () => {
     }
   });
 });
+
+// ─── Slim-shape opt-in (#920 slice S3 — FR-3.5 PII payload reduction) ───
+//
+// Per the PRD_TRAVEL_SECURITY_ARCHITECTURE.md FR-3.5 contract,
+// `?fields=summary` on GET /trips drops every column outside the slim
+// projection (tripCode / destination / status / dates / createdAt) AND
+// skips the `_count` include. Default shape (no ?fields, or any non-exact
+// value) stays unchanged.
+//
+// On GET /trips/:id/participants the same opt-in drops EVERY PII field —
+// passport, aadhaar, parent contact, medicalNotes — and keeps only
+// fullName + tripId + consentCapturedAt + createdAt + id. This is the
+// load-bearing privacy contract on this slice.
+
+test.describe("Travel trips API — slim-shape opt-in (#920 S3)", () => {
+  test("GET /trips?fields=summary returns slim projection (no micrositeUrl, no _count)", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || created.tripIds.length === 0) test.skip(true, "no trips");
+    const res = await get(request, token, "/api/travel/trips?fields=summary");
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(Array.isArray(body.trips)).toBe(true);
+    expect(body.trips.length).toBeGreaterThanOrEqual(1);
+    // Slim keys present.
+    for (const trip of body.trips) {
+      expect(trip).toHaveProperty("id");
+      expect(trip).toHaveProperty("tripCode");
+      expect(trip).toHaveProperty("destination");
+      expect(trip).toHaveProperty("status");
+      // SQL-dropped fields MUST NOT appear.
+      expect(trip).not.toHaveProperty("micrositeUrl");
+      expect(trip).not.toHaveProperty("micrositeUuid");
+      expect(trip).not.toHaveProperty("driveFolderId");
+      expect(trip).not.toHaveProperty("pricePerStudent");
+      // _count include is SKIPPED on slim path.
+      expect(trip).not.toHaveProperty("_count");
+    }
+  });
+
+  test("GET /trips (default shape) still ships full row + _count include", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || created.tripIds.length === 0) test.skip(true, "no trips");
+    const res = await get(request, token, "/api/travel/trips");
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(body.trips.length).toBeGreaterThanOrEqual(1);
+    // Full row keys present (back-compat for every existing caller).
+    const trip = body.trips[0];
+    expect(trip).toHaveProperty("legalEntity");
+    expect(trip).toHaveProperty("_count");
+  });
+
+  test("GET /trips?fields=full equals default (non-exact opt-in value)", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || created.tripIds.length === 0) test.skip(true, "no trips");
+    const res = await get(request, token, "/api/travel/trips?fields=full");
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    // Non-summary value falls through to full shape — _count include present.
+    expect(body.trips[0]).toHaveProperty("_count");
+  });
+
+  test("GET /trips/:id/participants?fields=summary drops EVERY PII field", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || created.tripIds.length === 0 || created.participantIds.length === 0) {
+      test.skip(true, "no participants seeded");
+    }
+    const res = await get(
+      request,
+      token,
+      `/api/travel/trips/${created.tripIds[0]}/participants?fields=summary`,
+    );
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(Array.isArray(body.participants)).toBe(true);
+    expect(body.participants.length).toBeGreaterThanOrEqual(1);
+    for (const p of body.participants) {
+      expect(p).toHaveProperty("id");
+      expect(p).toHaveProperty("fullName");
+      expect(p).toHaveProperty("tripId");
+      // **Load-bearing privacy assertions — every PII field MUST be absent.**
+      expect(p).not.toHaveProperty("passportNumber");
+      expect(p).not.toHaveProperty("passportExpiry");
+      expect(p).not.toHaveProperty("passportDocId");
+      expect(p).not.toHaveProperty("passportExtractionJson");
+      expect(p).not.toHaveProperty("aadhaarLast4");
+      expect(p).not.toHaveProperty("aadhaarTokenId");
+      expect(p).not.toHaveProperty("parentName");
+      expect(p).not.toHaveProperty("parentPhone");
+      expect(p).not.toHaveProperty("parentEmail");
+      expect(p).not.toHaveProperty("medicalNotes");
+    }
+  });
+
+  test("GET /trips/:id/participants (default shape) still ships full PII row", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || created.tripIds.length === 0 || created.participantIds.length === 0) {
+      test.skip(true, "no participants seeded");
+    }
+    const res = await get(
+      request,
+      token,
+      `/api/travel/trips/${created.tripIds[0]}/participants`,
+    );
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    // Default shape preserves the existing behaviour — full row with PII
+    // keys present (matches the participants we just created in the
+    // sibling describe).
+    expect(body.participants.length).toBeGreaterThanOrEqual(1);
+    const p = body.participants[0];
+    expect(p).toHaveProperty("fullName");
+    // PII keys present on default — either populated or null, but the
+    // PROPERTY itself exists (Prisma returns the columns even when null).
+    expect(p).toHaveProperty("passportNumber");
+    expect(p).toHaveProperty("parentName");
+    expect(p).toHaveProperty("parentPhone");
+    expect(p).toHaveProperty("medicalNotes");
+  });
+});

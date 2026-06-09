@@ -1062,3 +1062,46 @@ test.describe("Travel itineraries API — LLM draft regen (PRD §4.3 + §9.1)", 
     expect(body.code).toBe("WRONG_VERTICAL");
   });
 });
+
+// ─── Slim-shape opt-in (#920 slice S3 — FR-3.5 PII payload reduction) ───
+//
+// `?fields=summary` on GET /itineraries drops shareToken (auth-bearing),
+// pricingJson (heavy @db.Text), pdfUrl, micrositeUrl AND skips the
+// `items` include. Default shape unchanged.
+
+test.describe("Travel itineraries API — slim-shape opt-in (#920 S3)", () => {
+  test("GET /itineraries?fields=summary returns slim projection (no shareToken, no pricingJson, no items include)", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, "travel admin not available");
+    const res = await get(request, token, "/api/travel/itineraries?fields=summary");
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(Array.isArray(body.itineraries)).toBe(true);
+    if (body.itineraries.length === 0) test.skip(true, "no itineraries seeded yet");
+    for (const it of body.itineraries) {
+      expect(it).toHaveProperty("id");
+      expect(it).toHaveProperty("subBrand");
+      expect(it).toHaveProperty("contactId");
+      expect(it).toHaveProperty("destination");
+      expect(it).toHaveProperty("status");
+      // SQL-dropped — never appear on slim path.
+      expect(it).not.toHaveProperty("shareToken");
+      expect(it).not.toHaveProperty("pricingJson");
+      expect(it).not.toHaveProperty("pdfUrl");
+      expect(it).not.toHaveProperty("micrositeUrl");
+      // items include is SKIPPED on slim path.
+      expect(it).not.toHaveProperty("items");
+    }
+  });
+
+  test("GET /itineraries (default shape) still ships full row + items include", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, "travel admin not available");
+    const res = await get(request, token, "/api/travel/itineraries");
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    if (body.itineraries.length === 0) test.skip(true, "no itineraries seeded");
+    const it = body.itineraries[0];
+    expect(it).toHaveProperty("items"); // include still fires on default path
+  });
+});

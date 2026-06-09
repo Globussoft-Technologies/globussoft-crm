@@ -423,6 +423,62 @@ test.describe('marketplace-leads API — tenant isolation', () => {
 // Webhooks pin tenantId=1 (generic Default Org); use adminToken to find/dismiss.
 // ─────────────────────────────────────────────────────────────────────────
 
+// ─── Slim-shape opt-in (#920 slice S3 — FR-3.5 PII payload reduction) ───
+//
+// **High-value PII target.** Default GET / ships every column —
+// `email`, `phone`, `company`, `message` (@db.Text), `product`, `city`,
+// AND `rawPayload` (@db.Text — embeds the entire IndiaMART / JustDial /
+// TradeIndia webhook envelope per row, often kilobytes each). The slim
+// path drops every one of those + skips the `contact` PII join include.
+// Default behaviour unchanged for all existing callers.
+
+test.describe('marketplace-leads API — slim-shape opt-in (#920 S3)', () => {
+  test('GET /marketplace-leads?fields=summary drops email / phone / message / rawPayload', async ({ request }) => {
+    if (!adminToken) test.skip(true, 'no admin token');
+    const r = await request.get(`${API}/marketplace-leads?fields=summary&limit=10`, {
+      headers: { Authorization: `Bearer ${adminToken}` },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(r.status()).toBe(200);
+    const body = await r.json();
+    expect(Array.isArray(body.leads)).toBe(true);
+    if (body.leads.length === 0) test.skip(true, 'no leads in tenant');
+    for (const lead of body.leads) {
+      expect(lead).toHaveProperty('id');
+      expect(lead).toHaveProperty('provider');
+      expect(lead).toHaveProperty('status');
+      // Load-bearing PII assertions — every sensitive column dropped.
+      expect(lead).not.toHaveProperty('email');
+      expect(lead).not.toHaveProperty('phone');
+      expect(lead).not.toHaveProperty('company');
+      expect(lead).not.toHaveProperty('message');
+      expect(lead).not.toHaveProperty('product');
+      expect(lead).not.toHaveProperty('city');
+      expect(lead).not.toHaveProperty('rawPayload');
+      expect(lead).not.toHaveProperty('externalLeadId');
+      // contact include is SKIPPED on slim path (FK only).
+      expect(lead).not.toHaveProperty('contact');
+    }
+  });
+
+  test('GET /marketplace-leads (default shape) still ships full PII + contact include', async ({ request }) => {
+    if (!adminToken) test.skip(true, 'no admin token');
+    const r = await request.get(`${API}/marketplace-leads?limit=10`, {
+      headers: { Authorization: `Bearer ${adminToken}` },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(r.status()).toBe(200);
+    const body = await r.json();
+    if (body.leads.length === 0) test.skip(true, 'no leads in tenant');
+    const lead = body.leads[0];
+    // Default shape preserves the existing payload.
+    expect(lead).toHaveProperty('email');
+    expect(lead).toHaveProperty('phone');
+    expect(lead).toHaveProperty('rawPayload');
+    expect(lead).toHaveProperty('contact'); // include still fires on default
+  });
+});
+
 test.afterAll(async ({ request }) => {
   if (!adminToken || createdExternalIds.length === 0) return;
   try {

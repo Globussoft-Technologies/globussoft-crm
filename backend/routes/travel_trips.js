@@ -47,6 +47,7 @@ const prisma = require("../lib/prisma");
 const { requireTravelTenant, getSubBrandAccessSet } = require("../middleware/travelGuards");
 const digilockerClient = require("../services/digilockerClient");
 const googleDriveClient = require("../services/googleDriveClient");
+const listProjection = require("../lib/listProjection");
 
 const VALID_TRIP_STATUSES = ["confirmed", "in-trip", "completed", "cancelled"];
 
@@ -68,6 +69,17 @@ async function requireTmcAccess(req, res, next) {
 // ─── Trip CRUD ────────────────────────────────────────────────────────
 
 // GET /api/travel/trips
+//
+// Slim-shape opt-in (#920 slice S3 — FR-3.5 PII payload reduction). Default
+// shape unchanged (full TmcTrip row + _count include) — every existing
+// caller (frontend Trips.jsx + TripDetail.jsx + e2e specs) keeps working.
+// Callers can opt into the slim summary projection (id + tripCode +
+// destination + status + dates + createdAt; NO microsite URL, drive
+// folder id, or pricePerStudent) by passing `?fields=summary`. The slim
+// path also skips the `_count` include — slim-shape pickers don't need
+// per-trip child counts. The projection lookup is centralized in
+// backend/lib/listProjection.js so future routes adopt the same shape
+// via a single require() instead of cargo-culting the literal `select`.
 router.get("/trips", verifyToken, requireTravelTenant, requireTmcAccess, async (req, res) => {
   try {
     const where = { tenantId: req.travelTenant.id };
@@ -85,14 +97,24 @@ router.get("/trips", verifyToken, requireTravelTenant, requireTmcAccess, async (
     const take = Math.min(parseInt(req.query.limit, 10) || 50, 200);
     const skip = parseInt(req.query.offset, 10) || 0;
 
+    const isSummary = req.query.fields === "summary";
+    const findManyArgs = {
+      where,
+      orderBy: { departDate: "asc" },
+      take,
+      skip,
+    };
+    if (isSummary) {
+      // Slim path: SQL-level field drop via Prisma `select` — keeps the
+      // route handler the only enforcement layer required. The `_count`
+      // include is skipped (picker callers don't need per-trip child
+      // counts).
+      findManyArgs.select = listProjection("TmcTrip", false);
+    } else {
+      findManyArgs.include = { _count: { select: { participants: true, documentRequirements: true } } };
+    }
     const [trips, total] = await Promise.all([
-      prisma.tmcTrip.findMany({
-        where,
-        orderBy: { departDate: "asc" },
-        take,
-        skip,
-        include: { _count: { select: { participants: true, documentRequirements: true } } },
-      }),
+      prisma.tmcTrip.findMany(findManyArgs),
       prisma.tmcTrip.count({ where }),
     ]);
     res.json({ trips, total, limit: take, offset: skip });
@@ -1166,13 +1188,31 @@ async function loadTrip(req) {
   return trip;
 }
 
+// GET /api/travel/trips/:id/participants
+//
+// Slim-shape opt-in (#920 slice S3 — FR-3.5 PII payload reduction).
+// **High-value PII target.** Default shape ships the full TripParticipant
+// row including passportNumber, passportExtractionJson (raw vendor
+// envelope), aadhaarLast4 + aadhaarTokenId (DigiLocker), parentName /
+// parentPhone / parentEmail, and medicalNotes — every field on the
+// model is regulated PII / sensitive data. Callers that just need the
+// roster picker (fullName + tripId + id) can opt into the slim
+// projection via `?fields=summary`; the SQL-level `select` drops every
+// PII column at the Prisma layer, so the route handler is the only
+// enforcement boundary needed. Detail endpoint (PATCH /participants/:pid
+// reads the full row through `findFirst` separately, audited per-row.
 router.get("/trips/:id/participants", verifyToken, requireTravelTenant, requireTmcAccess, async (req, res) => {
   try {
     const trip = await loadTrip(req);
-    const rows = await prisma.tripParticipant.findMany({
+    const isSummary = req.query.fields === "summary";
+    const findManyArgs = {
       where: { tripId: trip.id },
       orderBy: { id: "asc" },
-    });
+    };
+    if (isSummary) {
+      findManyArgs.select = listProjection("TripParticipant", false);
+    }
+    const rows = await prisma.tripParticipant.findMany(findManyArgs);
     res.json({ participants: rows });
   } catch (e) {
     if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });

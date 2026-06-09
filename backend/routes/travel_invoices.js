@@ -57,6 +57,7 @@ const {
   descriptionForSac,
   groupLinesBySac,
 } = require("../lib/hsnSacMapper");
+const listProjection = require("../lib/listProjection");
 
 const VALID_INVOICE_STATUSES = ["Draft", "Issued", "Partial", "Paid", "Voided"];
 
@@ -362,6 +363,16 @@ async function nextSubBrandInvoiceNum(tenantId, subBrand, date = new Date()) {
 
 // GET /api/travel/invoices
 // Honors ?subBrand=tmc + ?status=Issued + ?contactId=N + ?quoteId=N.
+// GET /api/travel/invoices
+//
+// Slim-shape opt-in (#920 slice S3 — FR-3.5 PII payload reduction).
+// Default shape unchanged. Pass `?fields=summary` for the slim
+// projection (id + subBrand + contactId + invoiceNum + status + docType
+// + totalAmount + currency + dueDate + paidAt + createdAt). TCS columns
+// + parentInvoiceId are SQL-dropped on the slim path — they're audit /
+// adjustment-trail data, not picker-relevant. Pickers and the aged-
+// receivables dashboard tile that just need invoice headers can opt in
+// to drop ~15kb of per-row payload at scale.
 router.get(
   "/invoices",
   verifyToken,
@@ -414,13 +425,18 @@ router.get(
       const take = Math.min(parseInt(req.query.limit, 10) || 100, 500);
       const skip = parseInt(req.query.offset, 10) || 0;
 
+      const isSummary = req.query.fields === "summary";
+      const findManyArgs = {
+        where,
+        orderBy: [{ createdAt: "desc" }],
+        take,
+        skip,
+      };
+      if (isSummary) {
+        findManyArgs.select = listProjection("TravelInvoice", false);
+      }
       const [invoices, total] = await Promise.all([
-        prisma.travelInvoice.findMany({
-          where,
-          orderBy: [{ createdAt: "desc" }],
-          take,
-          skip,
-        }),
+        prisma.travelInvoice.findMany(findManyArgs),
         prisma.travelInvoice.count({ where }),
       ]);
       res.json({ invoices, total, limit: take, offset: skip });

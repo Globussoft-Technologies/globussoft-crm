@@ -188,6 +188,8 @@ model Tenant {
   travelPaymentSchedules   TravelPaymentSchedule[]
   travelSuppliers          TravelSupplier[]
   travelSupplierPayables   TravelSupplierPayable[]
+  // S33 (#920) — PRD_TRAVEL_BILLING FR-3.7 cancellation policies.
+  cancellationPolicies     CancellationPolicy[]
   // PRD_TRAVEL_B2B_AGENT_PORTAL #905 slice 2 — commission profiles
   // (additive; consumes lib/agentCommissionCalculator.js from slice 1
   // commit cb284098). Each row is one named operator-facing pricing
@@ -6057,38 +6059,38 @@ model TravelQuoteTemplate {
 }
 
 model TravelInvoice {
-  id                 Int                     @id @default(autoincrement())
-  tenantId           Int                     @default(1)
-  subBrand           String
-  contactId          Int
+  id                   Int                     @id @default(autoincrement())
+  tenantId             Int                     @default(1)
+  subBrand             String
+  contactId            Int
   // Optional FK to TravelQuote — an invoice can be generated without a
   // prior quote (direct billing, supplier-passthrough scenarios).
-  quoteId            Int?
+  quoteId              Int?
   // Tenant-scoped human-readable identifier (e.g. "TINV-2026-0001"). The
   // route layer assigns sequentially per tenant + sub-brand at create time.
-  invoiceNum         String
-  status             String                  @default("Draft") // Draft | Issued | Partial | Paid | Voided
-  totalAmount        Decimal?                @db.Decimal(15, 2)
-  currency           String                  @default("INR")
-  dueDate            DateTime?
-  paidAt             DateTime?
+  invoiceNum           String
+  status               String                  @default("Draft") // Draft | Issued | Partial | Paid | Voided
+  totalAmount          Decimal?                @db.Decimal(15, 2)
+  currency             String                  @default("INR")
+  dueDate              DateTime?
+  paidAt               DateTime?
   // Arc 2 #901 slice 10 — Section 206C(1G) TCS persistence (PRD_TRAVEL_BILLING
   // UC-2.6 + FR-3.5). All four fields nullable + additive — invoices that
   // never get TCS applied (domestic, below-threshold, pre-slice-10 historical)
   // leave them null. tcsAppliedAt doubles as the idempotency sentinel — once
   // set, POST /:id/apply-tcs rejects with TCS_ALREADY_APPLIED. Line-level
   // TCS persistence (separate TravelInvoiceLine row) is deferred to slice 11.
-  tcsAmount          Decimal?                @db.Decimal(15, 2)
-  tcsRate            Decimal?                @db.Decimal(5, 2)
-  tcsExceedingAmount Decimal?                @db.Decimal(15, 2)
-  tcsAppliedAt       DateTime?
+  tcsAmount            Decimal?                @db.Decimal(15, 2)
+  tcsRate              Decimal?                @db.Decimal(5, 2)
+  tcsExceedingAmount   Decimal?                @db.Decimal(15, 2)
+  tcsAppliedAt         DateTime?
   // Arc 2 #901 slice 11 — Doc-type taxonomy (PRD_TRAVEL_BILLING FR-3.x).
   // Nullable with default "TaxInvoice"; new rows get the default, existing
   // rows remain NULL (route layer treats NULL as "TaxInvoice"). Enum values:
   // Proforma | TaxInvoice | CreditNote | DebitNote | TravelVoucher.
   // Separate CreditNote/DebitNote workflows deferred to slice 12; this slice
   // ships the field + validation + filter only.
-  docType            String?                 @default("TaxInvoice")
+  docType              String?                 @default("TaxInvoice")
   // Arc 2 #901 slice 14 — CreditNote workflow (PRD_TRAVEL_BILLING UC-2.7).
   // Self-relation linking a CreditNote (or DebitNote) row back to the
   // original invoice it adjusts. Nullable + onDelete SetNull — if the parent
@@ -6096,20 +6098,83 @@ model TravelInvoice {
   // record (audit-trail preservation; deletion of a parent in Issued/Paid
   // state is already prevented at the route layer). Existing rows get NULL
   // (additive safe — no bless marker needed).
-  parentInvoiceId    Int?
-  parentInvoice      TravelInvoice?          @relation("InvoiceCreditNotes", fields: [parentInvoiceId], references: [id], onDelete: SetNull)
-  creditNotes        TravelInvoice[]         @relation("InvoiceCreditNotes")
-  lines              TravelInvoiceLine[]
-  schedule           TravelPaymentSchedule[]
-  quote              TravelQuote?            @relation(fields: [quoteId], references: [id], onDelete: SetNull)
-  tenant             Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  createdAt          DateTime                @default(now())
-  updatedAt          DateTime                @updatedAt
+  parentInvoiceId      Int?
+  parentInvoice        TravelInvoice?          @relation("InvoiceCreditNotes", fields: [parentInvoiceId], references: [id], onDelete: SetNull)
+  creditNotes          TravelInvoice[]         @relation("InvoiceCreditNotes")
+  // S33 (#920) — PRD_TRAVEL_BILLING FR-3.7 cancellation-policy wire-up.
+  // Optional FK pointing at a CancellationPolicy row the operator chose
+  // at issue-time (or auto-picked at void-time as the sub-brand's active
+  // default). NULL means "fall back to sub-brand default at cancel-time"
+  // so historical invoices and policy-less sub-brands keep working.
+  // onDelete: SetNull — deleting a policy mid-flight leaves the invoice
+  // intact + falls back to default resolution on the next cancel.
+  // Nullable + additive (no bless marker needed).
+  cancellationPolicyId Int?
+  cancellationPolicy   CancellationPolicy?     @relation(fields: [cancellationPolicyId], references: [id], onDelete: SetNull)
+  lines                TravelInvoiceLine[]
+  schedule             TravelPaymentSchedule[]
+  quote                TravelQuote?            @relation(fields: [quoteId], references: [id], onDelete: SetNull)
+  tenant               Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt            DateTime                @default(now())
+  updatedAt            DateTime                @updatedAt
 
   @@unique([tenantId, invoiceNum])
   @@index([tenantId, subBrand])
   @@index([tenantId, subBrand, status])
   @@index([tenantId, parentInvoiceId])
+  @@index([tenantId, cancellationPolicyId])
+}
+
+// S33 (#920) — PRD_TRAVEL_BILLING FR-3.7.a cancellation-policy table.
+//
+// Per-tenant policy rows mapping "days before service start" → refund
+// percent. When an invoice is voided (cancellation), the route layer
+// walks the tiers (sorted DESC by daysBeforeServiceStart) and picks the
+// first tier whose threshold is <= the actual days-before-start; the
+// matched tier's refundPercent drives the credit-note amount.
+//
+// tiersJson stores the policy as a JSON array of
+//   { daysBeforeServiceStart: <int>, refundPercent: <0..100> }
+// e.g. [
+//   {"daysBeforeServiceStart": 30, "refundPercent": 100},  // full refund 30d+ out
+//   {"daysBeforeServiceStart": 7,  "refundPercent": 50},   // 50% refund 7..29d
+//   {"daysBeforeServiceStart": 0,  "refundPercent": 0}     // no refund <7d
+// ]
+//
+// PRD note: PRD uses "retentionPercent" (% kept by operator). We store
+// the inverse "refundPercent" (% returned to customer) because that's
+// the value that directly drives the credit-note amount — saves an
+// arithmetic flip in every consumer. refundPercent + retentionPercent
+// always = 100. Operator-facing UI may render either; the route layer
+// reports both in the cancel-preview response.
+//
+// subBrand is OPTIONAL — NULL means "tenant-wide default applied to any
+// sub-brand without its own policy"; a named sub-brand scopes the
+// policy to that sub-brand only. Sub-brand-specific overrides win over
+// tenant-wide defaults at lookup time.
+//
+// @@unique([tenantId, name]) prevents duplicate policy names per tenant
+// (humans address policies by name in the admin UI). Multiple active
+// policies per tenant are legal — they just need distinct names.
+//
+// Additive nullable schema — NO bless marker. Brand-new model; the FK
+// on TravelInvoice.cancellationPolicyId is nullable.
+model CancellationPolicy {
+  id          Int             @id @default(autoincrement())
+  tenantId    Int             @default(1)
+  name        String          @db.VarChar(255) // e.g. "TMC Default" / "RFU Default"
+  subBrand    String? // tmc | rfu | travelstall | visasure | null (tenant-wide)
+  description String?         @db.Text
+  tiersJson   String          @db.LongText // JSON array; see model docs above
+  isActive    Boolean         @default(true)
+  invoices    TravelInvoice[]
+  tenant      Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  @@unique([tenantId, name])
+  @@index([tenantId, isActive])
+  @@index([tenantId, subBrand, isActive])
 }
 
 // PRD_TRAVEL_BILLING FR-3.1.a — line-item composition under TravelInvoice.

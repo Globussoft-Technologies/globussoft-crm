@@ -86,6 +86,16 @@ const { verifyRole } = require("../middleware/auth");
 // `my_prescriptions.read` view their OWN linked Patient's Rx without
 // needing the tenant-wide `prescriptions.read`.
 const { requirePermission } = require("../middleware/requirePermission");
+// #920 slice S59 — canonical PHI-read gate factory. The original inline
+// declaration of `phiReadGate` (which lived just below the `phiReadGate`
+// JSDoc block ~line 365) has been replaced with this factory call so the
+// gate's policy is defined ONCE in middleware/phiReadGate.js and reused by
+// any future route that needs the same PHI-read access semantics. The
+// JSDoc block at lines 320-365 below documents WHY the gate exists; the
+// factory call returns byte-equivalent behaviour to the prior inline
+// `verifyWellnessRole([...], { anyOfPermissions: [...], deny: ["helper"] })`
+// declaration. See middleware/phiReadGate.js for the canonical policy.
+const { makePhiReadGate } = require("../middleware/phiReadGate");
 const {
   uploadImage,
   deleteFile,
@@ -362,31 +372,15 @@ const tenantWhere = (req, extra = {}) => ({
 // backend page catalog (lib/pageCatalog.js) — granting the page's
 // listed `requiredPermissions` to a custom role makes that role
 // immediately usable end-to-end (sidebar → page → API).
-const phiReadGate = verifyWellnessRole(
-  ["clinical", "doctor", "professional", "telecaller", "admin", "manager"],
-  {
-    anyOfPermissions: [
-      { module: "patients", action: "read" },
-      { module: "appointments", action: "read" },
-      // `my_appointments.read` + `waitlist.read` opened in v3.8.x when
-      // the `appointments` module was split per-page — a doctor with
-      // only `my_appointments.read` still needs to call the underlying
-      // /api/wellness/* read endpoints to hydrate their page.
-      { module: "my_appointments", action: "read" },
-      { module: "waitlist", action: "read" },
-      { module: "calendar", action: "read" },
-      { module: "visits", action: "read" },
-      { module: "prescriptions", action: "read" },
-      { module: "consents", action: "read" },
-    ],
-    // helpers are seeded with role=USER (per seed-wellness.js:218-219)
-    // which grants appointments.read for self-service. Without an
-    // explicit deny, that backdoor lets a helper through phiReadGate
-    // and read full patient PHI. Pinned by
-    // wellness-rbac-regression-api.spec.js:488.
-    deny: ["helper"],
-  },
-);
+// #920 slice S59 — was previously an inline `verifyWellnessRole([...], {
+// anyOfPermissions: [...], deny: ["helper"] })` declaration here. The
+// policy now lives in middleware/phiReadGate.js (imported at the top of
+// this file). `makePhiReadGate()` returns the IDENTICAL middleware the
+// inline form did — same allow list, same `anyOfPermissions` cluster,
+// same `deny: ["helper"]`. The JSDoc above documents the WHY; the
+// middleware module documents the policy contents. All 30+ callsites of
+// `phiReadGate` below continue to work unchanged.
+const phiReadGate = makePhiReadGate();
 const phiWriteGate = verifyWellnessRole(
   ["clinical", "doctor", "professional", "admin", "manager"],
   {

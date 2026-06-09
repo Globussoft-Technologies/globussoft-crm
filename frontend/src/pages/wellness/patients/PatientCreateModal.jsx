@@ -36,37 +36,86 @@ export default function PatientCreateModal({ locations, onClose, onCreated, edit
     try { return new Date(val).toISOString().slice(0, 10); } catch { return ""; }
   };
 
-  const [form, setForm] = useState(() => editPatient ? {
-    name: editPatient.name || "",
-    phone: editPatient.phone || "",
-    email: editPatient.email || "",
-    gender: editPatient.gender || "",
-    taxType: editPatient.taxType || "",
-    source: editPatient.source || "walk-in",
-    instagramHandle: editPatient.instagramHandle || "",
-    dob: toDateInput(editPatient.dob),
-    anniversary: toDateInput(editPatient.anniversary),
-    notes: editPatient.notes || "",
-    locationId: editPatient.locationId || locations[0]?.id || "",
-  } : {
-    name: "",
-    phone: "",
-    email: "",
-    gender: "",
-    taxType: "",
-    source: "walk-in",
-    instagramHandle: "",
-    dob: "",
-    anniversary: "",
-    notes: "",
-    locationId: locations[0]?.id || "",
+  // S97 — structured intake. Persist firstName + lastName explicitly so
+  // the patient row's structured-name columns (S62) start populating from
+  // the create flow. Legacy `name` column stays the canonical full-name
+  // surface (it backs the search index, SMS templates, and prescriptions)
+  // and is derived on save from `${firstName} ${lastName}`.trim().
+  //
+  // Edit-mode prefill: when the row already has firstName/lastName, use
+  // them as-is. When the row is legacy (firstName + lastName both null)
+  // we best-effort split the existing `name`: everything before the last
+  // whitespace run goes to firstName, the final word becomes lastName.
+  // Single-word names land entirely in firstName with lastName empty —
+  // this is the right shape for cultures with single legal names.
+  const splitLegacyName = (full) => {
+    const s = String(full || "").trim();
+    if (!s) return { firstName: "", lastName: "" };
+    const parts = s.split(/\s+/);
+    if (parts.length === 1) return { firstName: parts[0], lastName: "" };
+    return {
+      firstName: parts.slice(0, -1).join(" "),
+      lastName: parts[parts.length - 1],
+    };
+  };
+  const [form, setForm] = useState(() => {
+    if (editPatient) {
+      const hasStructured = editPatient.firstName || editPatient.lastName;
+      const split = hasStructured
+        ? { firstName: editPatient.firstName || "", lastName: editPatient.lastName || "" }
+        : splitLegacyName(editPatient.name);
+      return {
+        firstName: split.firstName,
+        lastName: split.lastName,
+        // Legacy `name` is retained for back-compat reads (some callers may
+        // pre-fill it) but is auto-derived on render + submit.
+        name: editPatient.name || "",
+        phone: editPatient.phone || "",
+        email: editPatient.email || "",
+        gender: editPatient.gender || "",
+        taxType: editPatient.taxType || "",
+        source: editPatient.source || "walk-in",
+        instagramHandle: editPatient.instagramHandle || "",
+        dob: toDateInput(editPatient.dob),
+        anniversary: toDateInput(editPatient.anniversary),
+        notes: editPatient.notes || "",
+        locationId: editPatient.locationId || locations[0]?.id || "",
+      };
+    }
+    return {
+      firstName: "",
+      lastName: "",
+      name: "",
+      phone: "",
+      email: "",
+      gender: "",
+      taxType: "",
+      source: "walk-in",
+      instagramHandle: "",
+      dob: "",
+      anniversary: "",
+      notes: "",
+      locationId: locations[0]?.id || "",
+    };
   });
+  // Computed full name preview — derived from the structured fields. This
+  // is what we POST as `name` so the canonical legacy column stays
+  // populated even for backends that don't yet persist firstName/lastName.
+  const derivedName = [form.firstName, form.lastName]
+    .map((s) => (s || "").trim())
+    .filter(Boolean)
+    .join(" ");
   const [submitting, setSubmitting] = useState(false);
 
   const submit = async (e) => {
     e.preventDefault();
-    const trimmedName = (form.name || "").trim();
-    if (trimmedName.length < 1) { notify.error("Full name is required"); return; }
+    // S97 — validation moved from `name` to `firstName`. lastName is
+    // optional (single-name cultures, mononyms, etc.). The canonical
+    // `name` column is derived from the two structured fields on save.
+    const trimmedFirstName = (form.firstName || "").trim();
+    const trimmedLastName = (form.lastName || "").trim();
+    if (trimmedFirstName.length < 1) { notify.error("First name is required"); return; }
+    const trimmedName = [trimmedFirstName, trimmedLastName].filter(Boolean).join(" ");
     const phoneClean = (form.phone || "").trim().replace(/[\s\-()]/g, "");
     if (!phoneClean) { notify.error("Phone is required"); return; }
     if (!INDIAN_MOBILE_RE.test(phoneClean)) {
@@ -81,7 +130,14 @@ export default function PatientCreateModal({ locations, onClose, onCreated, edit
     setSubmitting(true);
     try {
       const payload = {
+        // S97 — send all three so the backend can persist whichever it
+        // recognises today. POST /patients currently only persists
+        // `name`; the structured fields are forward-compat — they'll
+        // start populating Patient.firstName / Patient.lastName once the
+        // route handler whitelists them (paired follow-up slice).
         name: trimmedName,
+        firstName: trimmedFirstName,
+        lastName: trimmedLastName || null,
         phone: form.phone,
         email: emailRaw || null,
         gender: form.gender || null,
@@ -142,13 +198,46 @@ export default function PatientCreateModal({ locations, onClose, onCreated, edit
             style={modalInputStyle}
           />
         </FormField>
-        <FormField label="Full name" required icon={<UserPlus size={14} />}>
+        {/* S97 — structured intake: firstName (required) + lastName
+            (optional, for mononym / single-legal-name cultures). The
+            canonical `name` column is rendered as a read-only derived
+            preview below so the operator sees the exact string that will
+            be saved + searched on. */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 200px), 1fr))", gap: "1rem" }}>
+          <FormField label="First name" required icon={<UserPlus size={14} />}>
+            <input
+              required
+              value={form.firstName}
+              placeholder="John"
+              aria-label="First name"
+              onChange={(e) => setForm({ ...form, firstName: e.target.value })}
+              style={modalInputStyle}
+            />
+          </FormField>
+          <FormField label="Last name">
+            <input
+              value={form.lastName}
+              placeholder="Doe"
+              aria-label="Last name"
+              onChange={(e) => setForm({ ...form, lastName: e.target.value })}
+              style={modalInputStyle}
+            />
+          </FormField>
+        </div>
+        <FormField label="Full name (auto)">
           <input
-            required
-            value={form.name}
-            placeholder="John Doe"
-            onChange={(e) => setForm({ ...form, name: e.target.value })}
-            style={modalInputStyle}
+            readOnly
+            tabIndex={-1}
+            aria-label="Full name preview"
+            data-testid="patient-name-preview"
+            value={derivedName}
+            placeholder="Will be derived from First + Last"
+            style={{
+              ...modalInputStyle,
+              background: "var(--subtle-bg, rgba(0,0,0,0.04))",
+              color: "var(--text-secondary)",
+              cursor: "not-allowed",
+            }}
           />
         </FormField>
         <FormField label="Gender">

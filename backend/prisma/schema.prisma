@@ -5168,12 +5168,6 @@ model TravelDiagnostic {
   reportPdfUrl        String?
   talkingPointsJson   String?   @db.Text // LLM-generated advisor brief
   formVsCallJson      String?   @db.Text // LLM-generated form-vs-call comparison cache
-  // PRD_TMC_CURRICULUM_MAPPING §3 FR-6 — cached curriculum→destination fit
-  // snapshot, computed at submission for TMC diagnostics that carry a
-  // curriculum+grade(+subject). Nullable: non-TMC sub-brands and TMC
-  // submissions without curriculum context leave this null (PDF omits the
-  // section). Shape: { curriculum, grade, subject, recommendations:[...] }.
-  curriculumFitJson   String?   @db.Text
   consentCapturedAt   DateTime?
 
   // ── TMC Diagnostic & Sales-Routing Engine fields ────────────────────

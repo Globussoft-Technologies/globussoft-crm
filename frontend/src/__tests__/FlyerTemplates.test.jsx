@@ -63,7 +63,7 @@
  *   - All data-dependent assertions use findBy / waitFor (per CLAUDE.md
  *     tick #108 cron-learning).
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
@@ -71,6 +71,7 @@ const fetchApiMock = vi.fn();
 vi.mock('../utils/api', () => ({
   fetchApi: (...args) => fetchApiMock(...args),
   getAuthToken: () => 'test-token',
+  getActiveTenantId: () => 1,
 }));
 
 // Stable notify object — RTL standing rule.
@@ -565,5 +566,330 @@ describe('<FlyerTemplates /> — Duplicate action (slice 7, consumes 6bbad574)',
       );
       expect(dupPosts.length).toBe(1);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Slice S77 — Download dropdown (Wave 17)
+//
+// Scope: each template card grows a "Download" button + chevron that opens
+// a menu of 5 render-format items. Selecting an item fires
+//   POST /api/travel/flyer-templates/:id/render  body:{ format }
+// (the slice S17 backend route) using RAW global.fetch (NOT fetchApi),
+// because fetchApi calls response.json() and would corrupt the binary
+// buffer the route streams back. The blob → createObjectURL → <a download>
+// → revokeObjectURL flow is the canonical browser "save buffer as file"
+// trick.
+//
+// These tests pin:
+//   - Per-row trigger present + accessible (aria-haspopup / aria-expanded)
+//   - All 5 format items render
+//   - Menu open/close: trigger toggles, Esc closes, click-outside closes
+//   - Each item fires fetch with the correct format payload
+//   - Success path: blob() called, createObjectURL called, <a download>
+//     clicked with the operator-friendly filename, revokeObjectURL called
+//   - Failure path: notify.error fired with the server's error string;
+//     when the response body isn't JSON, a generic fallback fires
+//   - Loading state: items disabled while the fetch is mid-flight
+//   - Filename derivation: name + format + ext.
+// ---------------------------------------------------------------------------
+describe('<FlyerTemplates /> — Download dropdown (slice S77 / FR-3.4 / FR-3.5)', () => {
+  let fetchSpy;
+  let createObjectURLSpy;
+  let revokeObjectURLSpy;
+  let clickSpy;
+  let createdAnchors;
+
+  // Install JSDOM doesn't have URL.createObjectURL by default; install a no-op
+  // before mounting so the SUT can call it. Same for revokeObjectURL.
+  beforeEach(() => {
+    if (!('createObjectURL' in URL)) {
+      // eslint-disable-next-line no-undef
+      Object.defineProperty(URL, 'createObjectURL', { writable: true, value: () => 'blob:url' });
+    }
+    if (!('revokeObjectURL' in URL)) {
+      // eslint-disable-next-line no-undef
+      Object.defineProperty(URL, 'revokeObjectURL', { writable: true, value: () => {} });
+    }
+    createObjectURLSpy = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:mock-url');
+    revokeObjectURLSpy = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
+
+    // Capture the <a download> click + the synthesized element.
+    createdAnchors = [];
+    clickSpy = vi.fn();
+    const origCreate = document.createElement.bind(document);
+    vi.spyOn(document, 'createElement').mockImplementation((tag) => {
+      const el = origCreate(tag);
+      if (tag === 'a') {
+        el.click = clickSpy;
+        createdAnchors.push(el);
+      }
+      return el;
+    });
+
+    fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 200,
+      blob: vi.fn().mockResolvedValue(new Blob(['x'], { type: 'application/pdf' })),
+      json: vi.fn().mockResolvedValue({}),
+    });
+  });
+
+  afterEach(() => {
+    fetchSpy?.mockRestore();
+    createObjectURLSpy?.mockRestore();
+    revokeObjectURLSpy?.mockRestore();
+    vi.restoreAllMocks();
+  });
+
+  it('renders a Download trigger button per template card (ADMIN)', async () => {
+    renderPage();
+    await screen.findByText('TMC Summer Europe Flyer');
+    expect(
+      screen.getByRole('button', { name: /^Download TMC Summer Europe Flyer$/ }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: /^Download RFU Ramadan Umrah Flyer$/ }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: /^Download Visa Sure UK Flyer$/ }),
+    ).toBeInTheDocument();
+  });
+
+  it('Download trigger exposes aria-haspopup=menu and aria-expanded toggle', async () => {
+    renderPage();
+    await screen.findByText('TMC Summer Europe Flyer');
+    const trigger = screen.getByRole('button', { name: /^Download TMC Summer Europe Flyer$/ });
+    expect(trigger).toHaveAttribute('aria-haspopup', 'menu');
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(trigger);
+    expect(trigger).toHaveAttribute('aria-expanded', 'true');
+  });
+
+  it('clicking Download opens a menu with all 5 format items', async () => {
+    renderPage();
+    await screen.findByText('TMC Summer Europe Flyer');
+    fireEvent.click(screen.getByRole('button', { name: /^Download TMC Summer Europe Flyer$/ }));
+    const menu = screen.getByTestId('flyer-download-menu-501');
+    expect(within(menu).getByRole('menuitem', { name: /PDF — A4/ })).toBeInTheDocument();
+    expect(within(menu).getByRole('menuitem', { name: /PDF — A5/ })).toBeInTheDocument();
+    expect(within(menu).getByRole('menuitem', { name: /Square PNG/ })).toBeInTheDocument();
+    expect(within(menu).getByRole('menuitem', { name: /Instagram Story/ })).toBeInTheDocument();
+    expect(within(menu).getByRole('menuitem', { name: /Facebook Cover/ })).toBeInTheDocument();
+    // 5 menuitems total inside this card's menu.
+    expect(within(menu).getAllByRole('menuitem').length).toBe(5);
+  });
+
+  it('Esc key closes the open dropdown', async () => {
+    renderPage();
+    await screen.findByText('TMC Summer Europe Flyer');
+    fireEvent.click(screen.getByRole('button', { name: /^Download TMC Summer Europe Flyer$/ }));
+    expect(screen.getByTestId('flyer-download-menu-501')).toBeInTheDocument();
+    fireEvent.keyDown(document, { key: 'Escape' });
+    await waitFor(() => {
+      expect(screen.queryByTestId('flyer-download-menu-501')).toBeNull();
+    });
+  });
+
+  it('mousedown outside the dropdown closes it (click-outside semantics)', async () => {
+    renderPage();
+    await screen.findByText('TMC Summer Europe Flyer');
+    fireEvent.click(screen.getByRole('button', { name: /^Download TMC Summer Europe Flyer$/ }));
+    expect(screen.getByTestId('flyer-download-menu-501')).toBeInTheDocument();
+    fireEvent.mouseDown(document.body);
+    await waitFor(() => {
+      expect(screen.queryByTestId('flyer-download-menu-501')).toBeNull();
+    });
+  });
+
+  it('clicking "PDF — A4" fires POST /:id/render with format=pdf-a4', async () => {
+    renderPage();
+    await screen.findByText('TMC Summer Europe Flyer');
+    fireEvent.click(screen.getByRole('button', { name: /^Download TMC Summer Europe Flyer$/ }));
+    fireEvent.click(screen.getByTestId('flyer-download-item-501-pdf-a4'));
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalled();
+    });
+    const [url, opts] = fetchSpy.mock.calls[0];
+    expect(url).toBe('/api/travel/flyer-templates/501/render');
+    expect(opts.method).toBe('POST');
+    expect(JSON.parse(opts.body)).toEqual({ format: 'pdf-a4' });
+    expect(opts.headers.Authorization).toBe('Bearer test-token');
+    expect(opts.headers['Content-Type']).toBe('application/json');
+  });
+
+  it('clicking "PDF — A5" fires POST with format=pdf-a5', async () => {
+    renderPage();
+    await screen.findByText('TMC Summer Europe Flyer');
+    fireEvent.click(screen.getByRole('button', { name: /^Download TMC Summer Europe Flyer$/ }));
+    fireEvent.click(screen.getByTestId('flyer-download-item-501-pdf-a5'));
+    await waitFor(() => {
+      const call = fetchSpy.mock.calls.find(([u]) => u === '/api/travel/flyer-templates/501/render');
+      expect(call).toBeTruthy();
+      expect(JSON.parse(call[1].body)).toEqual({ format: 'pdf-a5' });
+    });
+  });
+
+  it('clicking "Square PNG" fires POST with format=png-square', async () => {
+    renderPage();
+    await screen.findByText('TMC Summer Europe Flyer');
+    fireEvent.click(screen.getByRole('button', { name: /^Download TMC Summer Europe Flyer$/ }));
+    fireEvent.click(screen.getByTestId('flyer-download-item-501-png-square'));
+    await waitFor(() => {
+      const call = fetchSpy.mock.calls.find(([u]) => u === '/api/travel/flyer-templates/501/render');
+      expect(call).toBeTruthy();
+      expect(JSON.parse(call[1].body)).toEqual({ format: 'png-square' });
+    });
+  });
+
+  it('clicking "Instagram Story" fires POST with format=png-portrait-ig', async () => {
+    renderPage();
+    await screen.findByText('TMC Summer Europe Flyer');
+    fireEvent.click(screen.getByRole('button', { name: /^Download TMC Summer Europe Flyer$/ }));
+    fireEvent.click(screen.getByTestId('flyer-download-item-501-png-portrait-ig'));
+    await waitFor(() => {
+      const call = fetchSpy.mock.calls.find(([u]) => u === '/api/travel/flyer-templates/501/render');
+      expect(call).toBeTruthy();
+      expect(JSON.parse(call[1].body)).toEqual({ format: 'png-portrait-ig' });
+    });
+  });
+
+  it('clicking "Facebook Cover" fires POST with format=png-landscape-fb', async () => {
+    renderPage();
+    await screen.findByText('TMC Summer Europe Flyer');
+    fireEvent.click(screen.getByRole('button', { name: /^Download TMC Summer Europe Flyer$/ }));
+    fireEvent.click(screen.getByTestId('flyer-download-item-501-png-landscape-fb'));
+    await waitFor(() => {
+      const call = fetchSpy.mock.calls.find(([u]) => u === '/api/travel/flyer-templates/501/render');
+      expect(call).toBeTruthy();
+      expect(JSON.parse(call[1].body)).toEqual({ format: 'png-landscape-fb' });
+    });
+  });
+
+  it('success path: blob() called, createObjectURL called, anchor clicked with derived filename, revokeObjectURL called', async () => {
+    renderPage();
+    await screen.findByText('TMC Summer Europe Flyer');
+    fireEvent.click(screen.getByRole('button', { name: /^Download TMC Summer Europe Flyer$/ }));
+    fireEvent.click(screen.getByTestId('flyer-download-item-501-pdf-a4'));
+    await waitFor(() => {
+      expect(createObjectURLSpy).toHaveBeenCalled();
+    });
+    expect(clickSpy).toHaveBeenCalled();
+    expect(revokeObjectURLSpy).toHaveBeenCalledWith('blob:mock-url');
+    // Filename derivation pin: template.name + format + ext
+    const anchor = createdAnchors[createdAnchors.length - 1];
+    expect(anchor.download).toBe('TMC Summer Europe Flyer-pdf-a4.pdf');
+    expect(anchor.href).toContain('blob:mock-url');
+  });
+
+  it('filename for PNG format uses .png extension', async () => {
+    renderPage();
+    await screen.findByText('TMC Summer Europe Flyer');
+    fireEvent.click(screen.getByRole('button', { name: /^Download TMC Summer Europe Flyer$/ }));
+    fireEvent.click(screen.getByTestId('flyer-download-item-501-png-square'));
+    await waitFor(() => {
+      expect(clickSpy).toHaveBeenCalled();
+    });
+    const anchor = createdAnchors[createdAnchors.length - 1];
+    expect(anchor.download).toBe('TMC Summer Europe Flyer-png-square.png');
+  });
+
+  it('failure path: 5xx surfaces notify.error with server error string', async () => {
+    fetchSpy.mockResolvedValueOnce({
+      ok: false,
+      status: 500,
+      blob: vi.fn(),
+      json: vi.fn().mockResolvedValue({ error: 'Failed to render flyer' }),
+    });
+    renderPage();
+    await screen.findByText('TMC Summer Europe Flyer');
+    fireEvent.click(screen.getByRole('button', { name: /^Download TMC Summer Europe Flyer$/ }));
+    fireEvent.click(screen.getByTestId('flyer-download-item-501-pdf-a4'));
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalledWith('Failed to render flyer');
+    });
+    // No anchor/click on failure path.
+    expect(clickSpy).not.toHaveBeenCalled();
+  });
+
+  it('failure path: 400 INVALID_FORMAT-style error surfaces server error string', async () => {
+    fetchSpy.mockResolvedValueOnce({
+      ok: false,
+      status: 400,
+      blob: vi.fn(),
+      json: vi.fn().mockResolvedValue({ error: 'format must be one of: pdf-a4, pdf-a5, png-square, png-portrait-ig, png-landscape-fb', code: 'INVALID_FORMAT' }),
+    });
+    renderPage();
+    await screen.findByText('TMC Summer Europe Flyer');
+    fireEvent.click(screen.getByRole('button', { name: /^Download TMC Summer Europe Flyer$/ }));
+    fireEvent.click(screen.getByTestId('flyer-download-item-501-pdf-a4'));
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalledWith(expect.stringContaining('format must be one of'));
+    });
+  });
+
+  it('failure path: non-JSON error response surfaces a generic fallback message', async () => {
+    fetchSpy.mockResolvedValueOnce({
+      ok: false,
+      status: 503,
+      blob: vi.fn(),
+      json: vi.fn().mockRejectedValue(new Error('not json')),
+    });
+    renderPage();
+    await screen.findByText('TMC Summer Europe Flyer');
+    fireEvent.click(screen.getByRole('button', { name: /^Download TMC Summer Europe Flyer$/ }));
+    fireEvent.click(screen.getByTestId('flyer-download-item-501-pdf-a4'));
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalledWith(expect.stringMatching(/Render failed \(503\)\./));
+    });
+  });
+
+  it('loading state: items disabled while the render fetch is mid-flight', async () => {
+    // Hold the fetch open until we manually resolve.
+    let resolveFetch;
+    fetchSpy.mockImplementationOnce(() => new Promise((res) => { resolveFetch = res; }));
+    renderPage();
+    await screen.findByText('TMC Summer Europe Flyer');
+    fireEvent.click(screen.getByRole('button', { name: /^Download TMC Summer Europe Flyer$/ }));
+    const item = screen.getByTestId('flyer-download-item-501-pdf-a4');
+    fireEvent.click(item);
+    // Items are disabled while loading.
+    await waitFor(() => {
+      // The whole menu is in-flight: every item is disabled.
+      const a4 = screen.queryByTestId('flyer-download-item-501-pdf-a4');
+      // Menu may still be open in loading state OR have collapsed — both
+      // are acceptable. What we MUST observe is that the trigger button
+      // is disabled mid-flight.
+      const trigger = screen.getByRole('button', { name: /^Download TMC Summer Europe Flyer$/ });
+      expect(trigger).toBeDisabled();
+      // Either menu still open (items disabled) or menu closed.
+      if (a4) expect(a4).toBeDisabled();
+    });
+    // Release the fetch.
+    resolveFetch({
+      ok: true,
+      status: 200,
+      blob: vi.fn().mockResolvedValue(new Blob(['x'])),
+      json: vi.fn(),
+    });
+    await waitFor(() => {
+      const trigger = screen.getByRole('button', { name: /^Download TMC Summer Europe Flyer$/ });
+      expect(trigger).not.toBeDisabled();
+    });
+  });
+
+  it('falls back to "flyer" filename prefix when template.name is empty', async () => {
+    installFetchMock({
+      list: { templates: [makeTemplate({ id: 777, name: '' })], total: 1 },
+    });
+    renderPage();
+    await screen.findByTestId('flyer-template-card-777');
+    fireEvent.click(screen.getByRole('button', { name: /^Download flyer$/ }));
+    fireEvent.click(screen.getByTestId('flyer-download-item-777-pdf-a4'));
+    await waitFor(() => {
+      expect(clickSpy).toHaveBeenCalled();
+    });
+    const anchor = createdAnchors[createdAnchors.length - 1];
+    expect(anchor.download).toBe('flyer-pdf-a4.pdf');
   });
 });

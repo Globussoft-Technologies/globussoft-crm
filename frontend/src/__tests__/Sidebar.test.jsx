@@ -831,6 +831,28 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(screen.queryByText('Pricing Rules')).toBeNull();
     });
 
+    it('renders POI Approvals nav entry for ADMIN under travel (S99)', () => {
+      // S99 (TRAVEL_BIG_SCOPE_BACKLOG) — POI rep-suggested approval queue is
+      // ADMIN-only. Backend RBAC on /api/travel/pois/pending + approve +
+      // reject enforces; sidebar entry mirrors that gate so non-ADMINs do
+      // not even see the link. Page commit: PoiPendingApprovalQueue.jsx S12.
+      renderSidebar({ vertical: 'travel', role: 'ADMIN' });
+      const link = screen.getByText('POI Approvals').closest('a');
+      expect(link).toBeTruthy();
+      expect(link.getAttribute('href')).toBe('/travel/pois/pending');
+    });
+
+    it('hides POI Approvals nav entry for MANAGER + USER under travel (S99)', () => {
+      // Manager + User MUST NOT see the entry — backend rejects with 403
+      // and the page renders an access-denied surface; UX is to not even
+      // surface the link to non-ADMINs.
+      const managerEnv = renderSidebar({ vertical: 'travel', role: 'MANAGER' });
+      expect(screen.queryByText('POI Approvals')).toBeNull();
+      managerEnv.unmount();
+      renderSidebar({ vertical: 'travel', role: 'USER' });
+      expect(screen.queryByText('POI Approvals')).toBeNull();
+    });
+
     it('renders Sales pipeline / Customer comms / Financial / Reports section headers under travel', () => {
       renderSidebar({ vertical: 'travel', role: 'USER' });
       // These are role-agnostic section labels in renderTravelNav.

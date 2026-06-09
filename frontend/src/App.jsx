@@ -192,6 +192,12 @@ const TravelSightseeingMaster = lazy(() => import("./pages/travel/SightseeingMas
 // shipped slice 7 (f8768836); this lazy import + Route below register the
 // admin-facing CRUD surface for reusable itinerary templates.
 const TravelItineraryTemplates = lazy(() => import("./pages/travel/ItineraryTemplates"));
+// S99 (TRAVEL_BIG_SCOPE_BACKLOG) — POI rep-suggested pending-approval queue
+// wire-in. SUT page shipped S12 (PoiPendingApprovalQueue.jsx). ADMIN-only
+// surface — backend RBAC enforces; frontend RoleGuard mirrors so non-ADMIN
+// roles hit a friendly access-denied surface rather than a 403 from the
+// queue fetch. Backend route mounted S98 (commit 37d9ce40).
+const TravelPoiPendingApprovalQueue = lazy(() => import("./pages/travel/PoiPendingApprovalQueue"));
 // S49 (TRAVEL_BIG_SCOPE_BACKLOG) — App.jsx route registration for the S31
 // QuoteTemplates admin page (frontend/src/pages/travel/QuoteTemplates.jsx,
 // commit 8fb23237). Sibling to ItineraryTemplates above. Without this lazy
@@ -1341,6 +1347,19 @@ export default function App() {
                   CRUD surface. Adjacent to sightseeing because both are #907
                   admin pages. SUT page commit f8768836. */}
               <Route path="travel/itinerary-templates" element={<TravelOnly><TravelItineraryTemplates /></TravelOnly>} />
+              {/* S99 (TRAVEL_BIG_SCOPE_BACKLOG) — POI rep-suggested
+                  pending-approval queue. ADMIN-only — backend RBAC enforces
+                  on /api/travel/pois/pending + approve + reject, frontend
+                  RoleGuard mirrors to surface an access-denied panel for
+                  non-ADMIN roles rather than the route's 403. SUT page
+                  shipped S12; backend mount S98 (commit 37d9ce40). */}
+              <Route path="travel/pois/pending" element={
+                <TravelOnly>
+                  <RoleGuard allow={["ADMIN"]} message="POI approval queue requires admin access.">
+                    <TravelPoiPendingApprovalQueue />
+                  </RoleGuard>
+                </TravelOnly>
+              } />
               {/* S49 (TRAVEL_BIG_SCOPE_BACKLOG) — QuoteTemplates admin
                   route registration. SUT page commit 8fb23237 (S31). Sits
                   adjacent to ItineraryTemplates because both are reusable-

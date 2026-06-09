@@ -1470,6 +1470,19 @@ function renderTravelNav({
         label="Diagnostics"
       />
       <Link to="/travel/itineraries" icon={MapIcon} label="Itineraries" />
+      {/* S99 (TRAVEL_BIG_SCOPE_BACKLOG) — POI rep-suggested pending-approval
+          queue. ADMIN-only — reps suggest POIs inline on itineraries
+          (FR-3.7); ADMIN reviews here. Sits directly under Itineraries
+          because the queue is the upstream review surface for inline POI
+          suggestions made on itineraries. CheckSquare icon mirrors the
+          approval/review semantic; already imported via the icon block. */}
+      {isAdmin && (
+        <Link
+          to="/travel/pois/pending"
+          icon={CheckSquare}
+          label="POI Approvals"
+        />
+      )}
       {inBrand("tmc") && (
         <Link to="/travel/trips" icon={Luggage} label="TMC Trips" />
       )}

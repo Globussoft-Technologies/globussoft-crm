@@ -15,6 +15,7 @@ import {
   UserCircle,
 } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
+import PageHeader from '../../components/PageHeader';
 import { useNotify } from '../../utils/notify';
 import { AuthContext } from '../../App';
 
@@ -299,16 +300,11 @@ export default function MyBookings({
 
   return (
     <div style={{ padding: '1rem', maxWidth: '1100px', margin: '0 auto' }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.75rem' }}>
-        <div>
-          <h2 style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', margin: 0 }}>
-            <CalendarIcon size={20} />
-            My Bookings
-          </h2>
-          <p style={{ color: 'var(--text-secondary)', margin: '0.25rem 0 0 0', fontSize: '0.9rem' }}>
-            View, reschedule, or cancel your appointments
-          </p>
-        </div>
+      <PageHeader
+        icon={CalendarIcon}
+        title="My Bookings"
+        description="View, reschedule, or cancel your appointments"
+      >
         {!hideBookCta && (
           <Link
             to={bookHref}
@@ -330,7 +326,7 @@ export default function MyBookings({
             Book a new appointment
           </Link>
         )}
-      </div>
+      </PageHeader>
 
       {/* Bucket tabs */}
       <div

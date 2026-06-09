@@ -886,3 +886,25 @@ table.stable-table td {
     var(--subtle-bg-2)
   );
 }
+
+/* Settings page: CSS multi-column container so cards auto-balance vertically
+   instead of pooling into two fixed columns. Each card opts out of mid-card
+   column breaks and carries its own bottom margin (the column-gap only
+   applies horizontally between columns). */
+.settings-grid {
+  columns: 360px 2;
+  column-gap: 1.5rem;
+  /* Tell the browser to balance column heights rather than fill column 1
+     before column 2. */
+  column-fill: balance;
+}
+.settings-grid > .card {
+  break-inside: avoid;
+  -webkit-column-break-inside: avoid;
+  page-break-inside: avoid;
+  margin-bottom: 1.5rem;
+  /* Without an explicit display, some browsers leave the card as inline
+     inside the column context and the heading sits next to the previous
+     card. Block restores the expected stacked-card behaviour. */
+  display: block;
+}

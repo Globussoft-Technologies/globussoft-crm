@@ -11,6 +11,7 @@ import {
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { usePermissions } from "../../hooks/usePermissions";
+import PageHeader from "../../components/PageHeader";
 
 export default function ProductCategories() {
   const notify = useNotify();
@@ -172,37 +173,28 @@ export default function ProductCategories() {
 
   return (
     <div style={{ maxWidth: 1200, margin: "0 auto", padding: "2rem 1rem" }}>
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          marginBottom: "2rem",
-        }}
+      <PageHeader
+        icon={Layers}
+        title="Product Categories"
+        description="Organize products into hierarchical categories for easier catalogue browsing."
+        inlineBadge={permsReady && !canManage ? (
+          <span
+            title="You can view categories but can't make changes."
+            style={{
+              fontSize: "0.7rem",
+              padding: "0.2rem 0.55rem",
+              borderRadius: 999,
+              background: "var(--subtle-bg)",
+              color: "var(--text-secondary)",
+              border: "1px solid var(--border-color)",
+              letterSpacing: "0.02em",
+              fontWeight: 500,
+            }}
+          >
+            View only
+          </span>
+        ) : null}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", flexWrap: "wrap" }}>
-          <Layers size={28} color="var(--accent-color)" />
-          <h1 style={{ fontSize: "1.5rem", fontWeight: 600, margin: 0 }}>
-            Product Categories
-          </h1>
-          {permsReady && !canManage && (
-            <span
-              title="You can view categories but can't make changes."
-              style={{
-                fontSize: "0.7rem",
-                padding: "0.2rem 0.55rem",
-                borderRadius: 999,
-                background: "var(--subtle-bg)",
-                color: "var(--text-secondary)",
-                border: "1px solid var(--border-color)",
-                letterSpacing: "0.02em",
-                fontWeight: 500,
-              }}
-            >
-              View only
-            </span>
-          )}
-        </div>
         {canManage && (
           <button
             onClick={() => handleOpenModal()}
@@ -222,7 +214,7 @@ export default function ProductCategories() {
             <Plus size={16} /> Add Category
           </button>
         )}
-      </div>
+      </PageHeader>
 
       <div style={{ position: "relative", marginBottom: "1rem", maxWidth: 400 }}>
         <Search

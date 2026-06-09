@@ -132,6 +132,13 @@ const ALLOWED_ORIGINS = [
   "http://127.0.0.1:5173",
   "http://127.0.0.1:5000",
   "https://globuscrm.globussoft.com",
+  // Dr. Haror's external marketing site — consumes the public wellness
+  // catalog + payment endpoints (POST /api/wellness/public/payment/order +
+  // /confirm). Hardcoded because it's part of the product surface, not a
+  // one-off env override.
+  "https://enhancewellness.globusdemos.com",
+  "http://localhost:8080",
+  "http://127.0.0.1:8080",
   ...(process.env.FRONTEND_URL ? [process.env.FRONTEND_URL] : []),
   ...(process.env.CORS_ALLOWED_ORIGINS
     ? process.env.CORS_ALLOWED_ORIGINS.split(",").map((s) => s.trim()).filter(Boolean)

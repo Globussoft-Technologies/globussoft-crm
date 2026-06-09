@@ -1,9 +1,10 @@
 import { useContext, useState, useEffect } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { CheckCircle2, XCircle } from "lucide-react";
 import { AuthContext } from "../App";
 import { setAuthToken } from "../utils/api";
 import { invalidatePermissionCache } from "../hooks/usePermissions";
+import { safeNext } from "../utils/safeNext";
 import PasswordInput from "../components/PasswordInput";
 
 // Self-service customer registration page (public, no auth required).
@@ -36,13 +37,27 @@ function passwordStrength(p) {
 
 export default function CustomerRegister() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { setUser, setToken, setTenant } = useContext(AuthContext);
+
+  // Handoff params from the external Dr. Haror's marketing site:
+  //   ?tenantSlug=enhanced-wellness — pre-selects + locks the org dropdown
+  //   ?next=/wellness/book-appointment?... — post-register landing path
+  //   ?name=...  + ?email=... — pre-fills the corresponding fields so users
+  //                              don't re-type what they already entered on
+  //                              the marketing site.
+  // safeNext() rejects external URLs so a hostile ?next= can't redirect off-app.
+  const nextParam = searchParams.get("next");
+  const tenantSlugParam = searchParams.get("tenantSlug");
+  const lockedToTenantSlug = !!tenantSlugParam;
+  const initialEmail = (searchParams.get("email") || "").trim().toLowerCase();
+  const initialName = (searchParams.get("name") || "").trim();
 
   const [tenants, setTenants] = useState([]);
   const [tenantsLoading, setTenantsLoading] = useState(true);
   const [form, setForm] = useState({
-    email: "",
-    name: "",
+    email: initialEmail,
+    name: initialName,
     tenantId: "",
     password: "",
     confirmPassword: "",
@@ -67,6 +82,16 @@ export default function CustomerRegister() {
     };
     loadTenants();
   }, []);
+
+  // Pre-select the locked tenant once the list arrives. Done in an effect (not
+  // initial state) because the tenant list is fetched asynchronously.
+  useEffect(() => {
+    if (!tenantSlugParam || tenants.length === 0) return;
+    const match = tenants.find((t) => t.slug === tenantSlugParam);
+    if (match) {
+      setForm((prev) => (prev.tenantId ? prev : { ...prev, tenantId: String(match.id) }));
+    }
+  }, [tenantSlugParam, tenants]);
 
   const update = (field) => (e) =>
     setForm({ ...form, [field]: e.target.value });
@@ -147,9 +172,35 @@ export default function CustomerRegister() {
       if (data?.user) setUser(data.user);
       if (data?.tenant) setTenant(data.tenant);
       invalidatePermissionCache();
-      // Route based on tenant vertical: wellness tenants → /wellness, others → /dashboard
+      // Honour the ?next= param if it's a safe in-app path (e.g. the marketing
+      // site's /wellness/book-appointment handoff). Falls back to the
+      // vertical-aware default when next is missing or rejected by safeNext.
       const vertical = data?.tenant?.vertical || "generic";
-      navigate(vertical === "wellness" ? "/wellness" : "/dashboard");
+      const verticalDefault = vertical === "wellness" ? "/wellness" : "/dashboard";
+      const safeNextValue = safeNext(nextParam);
+      const target = safeNextValue || verticalDefault;
+      console.warn(
+        `[CustomerRegister handoff] nextParam="${nextParam}" → safeNext="${safeNextValue}" → navigating to="${target}"`
+      );
+      // Critical: when the handoff target carries a query string (the
+      // marketing-site serviceId/date/time prefill), use a full page reload
+      // instead of react-router's navigate(). React batches setToken /
+      // setUser / setTenant state updates, so navigate() runs while the
+      // outer route guard still sees `token === null` and renders
+      // <Navigate to="/login" /> — that re-render strips the query string.
+      // window.location.assign forces a fresh page load; the token survives
+      // via sessionStorage and user/tenant via localStorage (both written
+      // synchronously above).
+      const hasHandoff = target.indexOf("?") > -1;
+      if (hasHandoff) {
+        try {
+          if (data.user) localStorage.setItem("user", JSON.stringify(data.user));
+          if (data.tenant) localStorage.setItem("tenant", JSON.stringify(data.tenant));
+        } catch { /* ignore */ }
+        window.location.assign(target);
+      } else {
+        navigate(target);
+      }
     } catch {
       setSubmitError("Server error. Please try again.");
     } finally {
@@ -219,16 +270,21 @@ export default function CustomerRegister() {
           </Field>
 
           <Field
-            label="Organization"
+            label={lockedToTenantSlug ? "Booking for" : "Organization"}
             htmlFor="cr-tenant"
             error={errors.tenantId}
+            help={
+              lockedToTenantSlug
+                ? "You started this booking from a specific clinic — registration is scoped to it."
+                : undefined
+            }
           >
             <select
               id="cr-tenant"
               className="input-field"
               value={form.tenantId}
               onChange={update("tenantId")}
-              disabled={isLoading || tenantsLoading}
+              disabled={isLoading || tenantsLoading || lockedToTenantSlug}
               required
             >
               <option value="">
@@ -372,7 +428,11 @@ export default function CustomerRegister() {
         >
           Already have an account?{" "}
           <Link
-            to="/login"
+            // Preserve the marketing-site handoff (?tenantSlug=, ?next=,
+            // ?name=, ?email=, ?phone=) when bouncing to /login so users
+            // who already have an account land on the same prefilled
+            // Book Appointment page after signing in.
+            to={`/login${typeof window !== "undefined" ? window.location.search : ""}`}
             style={{
               color: "var(--primary-color, var(--accent-color))",
               textDecoration: "none",

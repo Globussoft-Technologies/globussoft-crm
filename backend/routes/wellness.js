@@ -13875,10 +13875,12 @@ router.delete("/coupons/:id", verifyRole(["ADMIN"]), async (req, res) => {
   }
 });
 
-async function loadCouponForApply(req, code) {
+// tenantId is passed explicitly so callers without a req.user (anonymous public
+// payment flow) can reuse this. Existing auth'd callers pass req.user.tenantId.
+async function loadCouponForApply(tenantId, code) {
   const coupon = await prisma.coupon.findFirst({
     where: {
-      tenantId: req.user.tenantId,
+      tenantId,
       code: String(code || "")
         .trim()
         .toUpperCase(),
@@ -13947,7 +13949,7 @@ router.post("/coupons/preview", async (req, res) => {
         .status(400)
         .json({ error: "baseAmount must be a positive number" });
     }
-    const lookup = await loadCouponForApply(req, code);
+    const lookup = await loadCouponForApply(req.user.tenantId, code);
     if (lookup.error) {
       return res
         .status(lookup.error.status)
@@ -13980,7 +13982,7 @@ router.post("/coupons/apply", phiReadGate, async (req, res) => {
         .status(400)
         .json({ error: "baseAmount must be a positive number" });
     }
-    const lookup = await loadCouponForApply(req, code);
+    const lookup = await loadCouponForApply(req.user.tenantId, code);
     if (lookup.error) {
       return res
         .status(lookup.error.status)
@@ -14578,6 +14580,316 @@ router.post("/appointments/book", verifyToken, async (req, res) => {
       error: "Failed to book appointment",
       code: "APPOINTMENT_BOOKING_FAILED",
     });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────
+// Pay-now booking flow: customer pays via Razorpay BEFORE the slot is
+// reserved. Two-step handshake mirrors the gift-card storefront pattern.
+//   1. POST /appointments/book-and-pay
+//        Creates Razorpay Order + PENDING Payment row with booking intent
+//        stashed in metadata. Does NOT create the Visit yet.
+//   2. POST /appointments/confirm-payment
+//        Verifies the HMAC signature, creates the Visit using the
+//        existing appointmentService, marks Payment SUCCESS.
+// "Pay later" path is the existing /appointments/book — Visit created
+// immediately, no payment row.
+// ─────────────────────────────────────────────────────────────────
+
+const APPOINTMENT_GST_RATE = 0.18;
+const APPOINTMENT_CONVENIENCE_FEE = 49;
+
+router.post("/appointments/book-and-pay", verifyToken, async (req, res) => {
+  try {
+    const crypto = require("crypto");
+    const {
+      getTenantRazorpayClient,
+      NOT_CONFIGURED_MESSAGE,
+    } = require("../lib/tenantPaymentGateway");
+
+    const { userId, tenantId } = req.user;
+    const {
+      reason,
+      doctorId,
+      serviceId,
+      membershipId,
+      appointmentDate,
+      appointmentTime,
+      bookingType,
+    } = req.body || {};
+
+    if (!reason || !serviceId || !appointmentDate || !appointmentTime) {
+      return res.status(400).json({
+        error: "reason, serviceId, appointmentDate, appointmentTime required",
+        code: "INVALID_INPUT",
+      });
+    }
+
+    // Resolve the service + its price. Pay-now requires a real basePrice.
+    const service = await prisma.service.findFirst({
+      where: { id: parseInt(serviceId, 10), tenantId, isActive: true },
+    });
+    if (!service) {
+      return res.status(404).json({ error: "Service not found", code: "SERVICE_NOT_FOUND" });
+    }
+    if (service.basePrice == null || Number(service.basePrice) <= 0) {
+      return res.status(409).json({
+        error: "This service is consultation-priced. Please choose 'Pay after service' instead.",
+        code: "SERVICE_NOT_PAYABLE",
+      });
+    }
+
+    // Server-side price computation. baseAmount + 18% GST + ₹49 convenience.
+    const baseAmount = Number(service.basePrice);
+    const tax = Math.round(baseAmount * APPOINTMENT_GST_RATE * 100) / 100;
+    const total = Math.round((baseAmount + tax + APPOINTMENT_CONVENIENCE_FEE) * 100) / 100;
+
+    // Load the tenant's Razorpay client (BYOK).
+    const rp = await getTenantRazorpayClient(tenantId);
+    if (!rp) {
+      return res.status(503).json({
+        error: NOT_CONFIGURED_MESSAGE,
+        code: "GATEWAY_NOT_CONFIGURED",
+      });
+    }
+
+    let order;
+    try {
+      order = await rp.client.orders.create({
+        amount: Math.round(total * 100),
+        currency: "INR",
+        receipt: `apt_${userId}_${Date.now()}`,
+        notes: {
+          tenantId: String(tenantId),
+          userId: String(userId),
+          serviceId: String(service.id),
+          kind: "appointment_payment",
+        },
+      });
+    } catch (gatewayErr) {
+      console.error("[wellness] book-and-pay order failed:", gatewayErr && gatewayErr.message);
+      return res.status(502).json({ error: "Failed to create payment order", code: "GATEWAY_ERROR" });
+    }
+
+    const breakdown = {
+      baseAmount: +baseAmount.toFixed(2),
+      tax: +tax.toFixed(2),
+      convenienceFee: APPOINTMENT_CONVENIENCE_FEE,
+      total: +total.toFixed(2),
+    };
+
+    const payment = await prisma.payment.create({
+      data: {
+        invoiceId: null,
+        amount: total,
+        currency: "INR",
+        gateway: "razorpay",
+        gatewayId: order.id,
+        status: "PENDING",
+        tenantId,
+        metadata: JSON.stringify({
+          kind: "appointment_payment",
+          userId,
+          serviceId: service.id,
+          doctorId: doctorId ? parseInt(doctorId, 10) : null,
+          membershipId: membershipId ? parseInt(membershipId, 10) : null,
+          appointmentDate,
+          appointmentTime,
+          reason: String(reason).slice(0, 1000),
+          bookingType: bookingType || "CLINIC_VISIT",
+          breakdown,
+        }),
+      },
+    });
+
+    res.status(201).json({
+      orderId: order.id,
+      paymentId: payment.id,
+      key: rp.keyId,
+      amount: Math.round(total * 100),
+      currency: "INR",
+      breakdown,
+      service: { id: service.id, name: service.name },
+    });
+  } catch (err) {
+    console.error("[wellness] book-and-pay error:", err.message, err.stack);
+    res.status(500).json({ error: "Failed to start payment", code: "BOOK_AND_PAY_FAILED" });
+  }
+});
+
+router.post("/appointments/confirm-payment", verifyToken, async (req, res) => {
+  try {
+    const crypto = require("crypto");
+    const {
+      getTenantRazorpayCreds,
+      NOT_CONFIGURED_MESSAGE,
+    } = require("../lib/tenantPaymentGateway");
+
+    const { userId, tenantId } = req.user;
+    const {
+      paymentId,
+      razorpay_order_id,
+      razorpay_payment_id,
+      razorpay_signature,
+    } = req.body || {};
+
+    if (!paymentId || !razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+      return res
+        .status(400)
+        .json({ error: "Missing required fields", code: "INVALID_INPUT" });
+    }
+
+    const payment = await prisma.payment.findFirst({
+      where: { id: parseInt(paymentId, 10), tenantId },
+    });
+    if (!payment) {
+      return res.status(404).json({ error: "Payment not found" });
+    }
+
+    // Idempotency: if a prior call already finalized this payment, return
+    // the existing visit instead of double-charging or double-creating.
+    const existingMeta = (() => {
+      try { return JSON.parse(payment.metadata || "{}"); } catch { return {}; }
+    })();
+    if (payment.status === "SUCCESS" && existingMeta.visitId) {
+      return res.json({
+        success: true,
+        visitId: existingMeta.visitId,
+        alreadyConfirmed: true,
+      });
+    }
+
+    // HMAC verify against tenant's Razorpay secret.
+    const creds = await getTenantRazorpayCreds(tenantId);
+    if (!creds || !creds.keySecret) {
+      return res
+        .status(503)
+        .json({ error: NOT_CONFIGURED_MESSAGE, code: "GATEWAY_NOT_CONFIGURED" });
+    }
+    const expected = crypto
+      .createHmac("sha256", creds.keySecret)
+      .update(`${razorpay_order_id}|${razorpay_payment_id}`)
+      .digest("hex");
+    if (expected !== razorpay_signature) {
+      await prisma.payment.update({
+        where: { id: payment.id },
+        data: { status: "FAILED" },
+      });
+      return res
+        .status(400)
+        .json({ error: "Signature verification failed", code: "BAD_SIGNATURE" });
+    }
+
+    // Resolve / lazy-create the Patient row for this user (same shape as
+    // /appointments/book) so appointmentService has a patient to bind to.
+    let patient = await prisma.patient.findFirst({
+      where: { tenant: { id: tenantId }, user: { id: userId } },
+    });
+    if (!patient) {
+      const user = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { name: true, email: true },
+      });
+      patient = await prisma.patient.create({
+        data: {
+          name: user?.name || user?.email || "Patient",
+          email: user?.email || null,
+          source: "self-booking",
+          tenant: { connect: { id: tenantId } },
+          user: { connect: { id: userId } },
+        },
+      });
+    }
+
+    // Create the visit using the same service that backs /appointments/book.
+    let visit;
+    try {
+      const result = await appointmentService.bookAppointment({
+        tenantId,
+        patientId: patient.id,
+        doctorId: existingMeta.doctorId,
+        serviceId: existingMeta.serviceId,
+        membershipId: existingMeta.membershipId,
+        appointmentDate: existingMeta.appointmentDate,
+        appointmentTime: existingMeta.appointmentTime,
+        reason: existingMeta.reason,
+        bookingType: existingMeta.bookingType || "CLINIC_VISIT",
+        actor: { type: "user", id: userId },
+      });
+      visit = result.visit;
+    } catch (bookErr) {
+      // The Razorpay charge already succeeded, so we can't reject here.
+      // Mark payment SUCCESS but record the failure for ops follow-up.
+      await prisma.payment.update({
+        where: { id: payment.id },
+        data: {
+          status: "SUCCESS",
+          paidAt: new Date(),
+          gatewayId: razorpay_payment_id,
+          metadata: JSON.stringify({
+            ...existingMeta,
+            razorpay_order_id,
+            razorpay_payment_id,
+            bookingError: bookErr.message || String(bookErr),
+            needsManualBooking: true,
+          }),
+        },
+      });
+      return res.status(500).json({
+        error: "Payment succeeded but the slot couldn't be reserved automatically. Our team will reach out shortly.",
+        code: "BOOKING_AFTER_PAYMENT_FAILED",
+        paymentId: payment.id,
+      });
+    }
+
+    // Mark Payment SUCCESS + stash visitId for idempotency.
+    await prisma.payment.update({
+      where: { id: payment.id },
+      data: {
+        status: "SUCCESS",
+        paidAt: new Date(),
+        gatewayId: razorpay_payment_id,
+        metadata: JSON.stringify({
+          ...existingMeta,
+          razorpay_order_id,
+          razorpay_payment_id,
+          visitId: visit.id,
+          verifiedAt: new Date().toISOString(),
+        }),
+      },
+    });
+
+    // Emit payment.collected so workflow rules / notifications run, same
+    // shape as the existing payments.js handlers use.
+    try {
+      require("../lib/eventBus").emitEvent(
+        "payment.collected",
+        {
+          invoiceId: null,
+          paymentId: payment.id,
+          amount: Number(payment.amount),
+          method: "razorpay",
+          currency: "INR",
+          paidAt: new Date(),
+        },
+        tenantId,
+        userId,
+      );
+    } catch (_e) { /* best-effort */ }
+
+    res.json({
+      success: true,
+      visitId: visit.id,
+      appointment: {
+        id: visit.id,
+        serviceName: visit.service?.name || "General",
+        appointmentDate: visit.visitDate,
+        status: visit.status,
+      },
+    });
+  } catch (err) {
+    console.error("[wellness] confirm-payment error:", err.message, err.stack);
+    res.status(500).json({ error: "Failed to confirm payment", code: "CONFIRM_PAYMENT_FAILED" });
   }
 });
 

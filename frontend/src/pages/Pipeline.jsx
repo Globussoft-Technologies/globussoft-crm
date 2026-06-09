@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useContext } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Plus, Trash2, Zap, X } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
@@ -39,7 +40,53 @@ const Pipeline = () => {
   // #897 (PRD_TRAVEL_PIPELINE_KANBAN FR-5) — sub-brand filter for
   // Travel-vertical tenants. Empty string = no filter (all sub-brands).
   // Generic + wellness tenants don't see the dropdown; filter stays ''.
-  const [selectedSubBrand, setSelectedSubBrand] = useState('');
+  //
+  // C3 (FR-3.15) — URL-param persistence via useSearchParams. Initial state
+  // seeds from `?subBrand=tmc` (or the first valid value in a comma list like
+  // `?subBrand=tmc,rfu`, forward-compat for a multi-select C4 may add later).
+  // Unknown / empty values fall back to '' (all sub-brands). The first effect
+  // syncs the URL when the dropdown changes; the second effect re-seeds local
+  // state when the URL changes externally (back-button, deep-link nav).
+  const [searchParams, setSearchParams] = useSearchParams();
+  const _validSubBrands = TRAVEL_SUB_BRANDS.map((sb) => sb.value).filter(Boolean);
+  const parseSubBrandParam = (raw) => {
+    if (!raw) return '';
+    const first = raw.split(',').map((s) => s.trim()).find((s) => _validSubBrands.includes(s));
+    return first || '';
+  };
+  const [selectedSubBrand, setSelectedSubBrand] = useState(() =>
+    parseSubBrandParam(searchParams.get('subBrand')),
+  );
+
+  // C3 — push selectedSubBrand → URL. Empty selection removes the param
+  // entirely so deep-links stay clean (`/pipeline` not `/pipeline?subBrand=`).
+  useEffect(() => {
+    const current = searchParams.get('subBrand') || '';
+    if (!selectedSubBrand) {
+      if (current) {
+        searchParams.delete('subBrand');
+        setSearchParams(searchParams, { replace: true });
+      }
+      return;
+    }
+    if (current !== selectedSubBrand) {
+      searchParams.set('subBrand', selectedSubBrand);
+      setSearchParams(searchParams, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedSubBrand]);
+
+  // C3 — pull URL → selectedSubBrand. Fires on browser back/forward or any
+  // external nav that mutates the `subBrand` param. Guarded against the
+  // echo loop by only writing local state when the parsed URL value
+  // diverges from the current selection.
+  useEffect(() => {
+    const fromUrl = parseSubBrandParam(searchParams.get('subBrand'));
+    if (fromUrl !== selectedSubBrand) {
+      setSelectedSubBrand(fromUrl);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
 
   const fetchAiScore = async (e, dealId) => {
     e.stopPropagation();

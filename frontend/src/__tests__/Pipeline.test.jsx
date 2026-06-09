@@ -445,6 +445,154 @@ describe('Pipeline deal card details', () => {
   });
 });
 
+/**
+ * C3 (PRD_TRAVEL_PIPELINE_KANBAN FR-3.15) — Pipeline sub-brand URL-param
+ * persistence. The filter chip itself already shipped via #897; C3 adds a
+ * `?subBrand=tmc` URL-param sync via `useSearchParams` so the selection
+ * survives page reload + deep-link share + browser back-button navigation.
+ *
+ * These cases wrap the page in a Travel-vertical AuthContext so the
+ * dropdown actually renders (the earlier non-Travel test confirmed the
+ * dropdown stays hidden otherwise). `MemoryRouter` is seeded via
+ * `initialEntries=[...]` to simulate the URL-on-mount path; `LocationProbe`
+ * exposes the live URL so tests can assert sync direction without coupling
+ * to `window.location` (which jsdom + MemoryRouter intentionally don't wire).
+ *
+ * Contracts pinned:
+ *   1. Initial `?subBrand=tmc` → dropdown seeds to 'tmc'.
+ *   2. User selects 'rfu' → URL updates to `?subBrand=rfu`.
+ *   3. User selects 'All sub-brands' (empty) → `subBrand` param removed from URL.
+ *   4. URL changes to `?subBrand=visasure` via external nav (back-button shape)
+ *      → component re-syncs its dropdown to 'visasure'.
+ *   Plus a 5th: invalid `?subBrand=garbage` → falls back to '' (all).
+ */
+import { AuthContext } from '../App';
+import { Routes, Route, useLocation } from 'react-router-dom';
+
+function LocationProbe() {
+  const loc = useLocation();
+  return <div data-testid="location-probe">{`${loc.pathname}${loc.search}`}</div>;
+}
+
+function renderTravelPipelineAt(initialUrl) {
+  const travelUser = { tenant: { vertical: 'travel' } };
+  return render(
+    <AuthContext.Provider value={{ user: travelUser }}>
+      <MemoryRouter initialEntries={[initialUrl]}>
+        <Routes>
+          <Route
+            path="/pipeline"
+            element={
+              <>
+                <Pipeline />
+                <LocationProbe />
+              </>
+            }
+          />
+        </Routes>
+      </MemoryRouter>
+    </AuthContext.Provider>,
+  );
+}
+
+describe('Pipeline sub-brand URL-param persistence (C3 / FR-3.15)', () => {
+  beforeEach(() => {
+    mockApi({
+      stages: [{ id: 1, name: 'New Lead', color: '#3b82f6', position: 0 }],
+      deals: [],
+    });
+  });
+
+  it('seeds dropdown selection from `?subBrand=tmc` on initial mount', async () => {
+    renderTravelPipelineAt('/pipeline?subBrand=tmc');
+
+    await waitFor(() => {
+      expect(screen.queryByText('Loading deals...')).not.toBeInTheDocument();
+    });
+
+    const select = screen.getByLabelText('Filter by sub-brand');
+    expect(select).toHaveValue('tmc');
+    // URL stays at the seeded value (no echo-loop rewrite).
+    expect(screen.getByTestId('location-probe').textContent).toContain('subBrand=tmc');
+  });
+
+  it('updates URL to `?subBrand=rfu` when user selects RFU from the dropdown', async () => {
+    renderTravelPipelineAt('/pipeline');
+
+    await waitFor(() => {
+      expect(screen.queryByText('Loading deals...')).not.toBeInTheDocument();
+    });
+
+    const select = screen.getByLabelText('Filter by sub-brand');
+    expect(select).toHaveValue('');
+
+    fireEvent.change(select, { target: { value: 'rfu' } });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('location-probe').textContent).toContain('subBrand=rfu');
+    });
+    expect(select).toHaveValue('rfu');
+  });
+
+  it('removes the `subBrand` param from URL when user picks "All sub-brands"', async () => {
+    renderTravelPipelineAt('/pipeline?subBrand=tmc');
+
+    await waitFor(() => {
+      expect(screen.queryByText('Loading deals...')).not.toBeInTheDocument();
+    });
+
+    const select = screen.getByLabelText('Filter by sub-brand');
+    expect(select).toHaveValue('tmc');
+
+    // Empty-string option = "All sub-brands" — deselect.
+    fireEvent.change(select, { target: { value: '' } });
+
+    await waitFor(() => {
+      const probe = screen.getByTestId('location-probe').textContent;
+      expect(probe).not.toContain('subBrand');
+    });
+    expect(select).toHaveValue('');
+  });
+
+  it('re-syncs dropdown when URL changes externally to `?subBrand=visasure`', async () => {
+    // Same shape as a browser back-button hop: re-render the tree at a
+    // different initialEntries. With MemoryRouter, unmount + remount is the
+    // simplest way to simulate an external URL nav inside jsdom.
+    const { unmount } = renderTravelPipelineAt('/pipeline?subBrand=tmc');
+
+    await waitFor(() => {
+      expect(screen.queryByText('Loading deals...')).not.toBeInTheDocument();
+    });
+
+    expect(screen.getByLabelText('Filter by sub-brand')).toHaveValue('tmc');
+    unmount();
+
+    renderTravelPipelineAt('/pipeline?subBrand=visasure');
+
+    await waitFor(() => {
+      expect(screen.queryByText('Loading deals...')).not.toBeInTheDocument();
+    });
+
+    expect(screen.getByLabelText('Filter by sub-brand')).toHaveValue('visasure');
+    expect(screen.getByTestId('location-probe').textContent).toContain('subBrand=visasure');
+  });
+
+  it('falls back to "" (all) when URL carries an unknown sub-brand value', async () => {
+    renderTravelPipelineAt('/pipeline?subBrand=garbage');
+
+    await waitFor(() => {
+      expect(screen.queryByText('Loading deals...')).not.toBeInTheDocument();
+    });
+
+    // Unknown value isn't in TRAVEL_SUB_BRANDS — parseSubBrandParam returns ''.
+    expect(screen.getByLabelText('Filter by sub-brand')).toHaveValue('');
+    // Component-driven URL-cleanup strips the unknown param.
+    await waitFor(() => {
+      expect(screen.getByTestId('location-probe').textContent).not.toContain('garbage');
+    });
+  });
+});
+
 describe('Pipeline AI score fetch — error path', () => {
   it('surfaces a notify.error when /api/ai_scoring/score/<id> rejects', async () => {
     const calls = [];

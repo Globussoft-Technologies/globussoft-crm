@@ -107,7 +107,10 @@ router.get("/public/tenants", async (req, res) => {
   try {
     const tenants = await prisma.tenant.findMany({
       where: { isActive: true },
-      select: { id: true, name: true },
+      // `slug` is included so the customer-register + login pages can map a
+      // `?tenantSlug=` handoff param (e.g. from the Dr. Haror's marketing
+      // site) to a tenant id and pre-select the dropdown.
+      select: { id: true, name: true, slug: true },
       orderBy: { name: 'asc' },
     });
     res.json(tenants);

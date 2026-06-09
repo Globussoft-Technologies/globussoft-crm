@@ -6,17 +6,15 @@
  * page). The Settings page renders a 2-column grid of cards: Organization,
  * Appearance (theme radio group), Email Messages (retention toggle — already
  * pinned by Settings.emailRetention.test.jsx), Branding (logo + brand color),
- * Pipeline Stages, User Roster, Invite User, Notification Preferences, plus
- * a wellness-only ConsentTemplates card. This test pins the page-shell +
- * representative card behaviours WITHOUT duplicating Settings.emailRetention's
- * scope.
+ * Pipeline Stages, Invite User, Notification Preferences, plus a wellness-only
+ * ConsentTemplates card. The Access Control Roster lives on the separate
+ * RolesAdmin page — it is no longer rendered on Settings.
  *
  * Scope: pins the page-surface invariants:
  *   1. Smoke render — page renders with the "Organization Settings" header
  *      and the high-level subtitle.
  *   2. Initial-mount fetchApi calls — /api/tenants/current, /api/wellness/branding,
- *      /api/auth/users, /api/pipeline_stages, /api/notifications/preferences
- *      all fire on mount.
+ *      /api/pipeline_stages, /api/notifications/preferences all fire on mount.
  *   3. Organization card renders Name + Slug + Owner Email + Plan inputs
  *      after the tenant load resolves.
  *   4. Organization save — submitting the form PUTs to /api/tenants/current
@@ -29,20 +27,16 @@
  *      with { name, color, position } and then re-fetches the list.
  *   8. Invite user — submitting the invite form POSTs to /api/auth/register
  *      with the form values.
- *   9. User Roster card — loaded users render with their name + email + role
- *      badge.
- *  10. Loading state — while initial fetches are in-flight, the Organization
- *      card shows "Loading organization details…" and the roster shows
- *      "Loading team...".
- *  11. Slug field is read-only — its readOnly attribute and the helper text
+ *   9. Loading state — while initial fetches are in-flight, the Organization
+ *      card shows "Loading organization details…".
+ *  10. Slug field is read-only — its readOnly attribute and the helper text
  *      "Slug is read-only after organization creation." render together.
- *  12. Wellness-only Consent Templates card — does NOT render for generic
+ *  11. Wellness-only Consent Templates card — does NOT render for generic
  *      vertical; DOES render when tenant.vertical === 'wellness'.
  *
  * Backend contracts pinned:
  *   GET  /api/tenants/current             → tenant row
  *   PUT  /api/tenants/current  { name, ownerEmail }
- *   GET  /api/auth/users                  → User[]
  *   POST /api/auth/register   { name, email, password, role }
  *   GET  /api/pipeline_stages             → PipelineStage[]
  *   POST /api/pipeline_stages  { name, color, position }
@@ -123,11 +117,6 @@ const baseStages = [
   { id: 's2', name: 'Qualification', color: '#10b981', position: 1 },
 ];
 
-const baseUsers = [
-  { id: 'u1', name: 'Aditi Sharma', email: 'aditi@acme.com', role: 'ADMIN' },
-  { id: 'u2', name: 'Rohan Mehta', email: 'rohan@acme.com', role: 'USER' },
-];
-
 const basePrefs = {
   categoryToggles: { deal: true, task: true, ticket: true, lead: true, approval: true, leave: true, expense: true },
   channels: { db: true, socket: true, push: false, email: true },
@@ -139,7 +128,6 @@ const basePrefs = {
 function buildDefaultFetch(overrides = {}) {
   const tenant = overrides.tenant ?? baseTenant;
   const stages = overrides.stages ?? baseStages;
-  const users = overrides.users ?? baseUsers;
   const branding = overrides.branding ?? { logoUrl: null, brandColor: '' };
   const prefs = overrides.prefs ?? basePrefs;
 
@@ -151,7 +139,6 @@ function buildDefaultFetch(overrides = {}) {
       return Promise.resolve({ ...tenant, ...body });
     }
     if (url === '/api/wellness/branding' && method === 'GET') return Promise.resolve(branding);
-    if (url === '/api/auth/users' && method === 'GET') return Promise.resolve(users);
     if (url === '/api/auth/register' && method === 'POST') return Promise.resolve({ ok: true });
     if (url === '/api/pipeline_stages' && method === 'GET') return Promise.resolve(stages);
     if (url === '/api/pipeline_stages' && method === 'POST') return Promise.resolve({ ok: true });
@@ -187,10 +174,11 @@ describe('<Settings /> — page shell + representative card pin', () => {
       const calledUrls = fetchApiMock.mock.calls.map(([url]) => url);
       expect(calledUrls).toContain('/api/tenants/current');
       expect(calledUrls).toContain('/api/wellness/branding');
-      expect(calledUrls).toContain('/api/auth/users');
       expect(calledUrls).toContain('/api/pipeline_stages');
       expect(calledUrls).toContain('/api/notifications/preferences');
     });
+    // Access Control Roster now lives on /roles — Settings must NOT fetch users.
+    expect(fetchApiMock.mock.calls.map(([url]) => url)).not.toContain('/api/auth/users');
   });
 
   // 3 — Organization card renders inputs
@@ -301,25 +289,21 @@ describe('<Settings /> — page shell + representative card pin', () => {
     });
   });
 
-  // 9 — User Roster renders loaded users
-  it('renders the loaded users in the Access Control Roster with name + email + role badge', async () => {
+  // 9 — Access Control Roster has been moved to RolesAdmin — Settings must NOT
+  // render the roster card or the "Loading team..." copy.
+  it('does NOT render the Access Control Roster card (moved to RolesAdmin)', async () => {
     render(<Settings />);
-    await waitFor(() => expect(screen.getByText('Aditi Sharma')).toBeInTheDocument());
-    expect(screen.getByText('aditi@acme.com')).toBeInTheDocument();
-    expect(screen.getByText('Rohan Mehta')).toBeInTheDocument();
-    expect(screen.getByText('rohan@acme.com')).toBeInTheDocument();
-    // ADMIN badge text appears for Aditi
-    const adminBadges = screen.getAllByText('ADMIN');
-    expect(adminBadges.length).toBeGreaterThan(0);
+    await waitFor(() => expect(screen.getByDisplayValue('Acme Corp')).toBeInTheDocument());
+    expect(screen.queryByText(/Access Control Roster/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Loading team/i)).not.toBeInTheDocument();
   });
 
-  // 10 — Loading states (initial mount before fetches resolve)
-  it('shows the loading copy ("Loading organization details…" + "Loading team...") before fetches resolve', async () => {
+  // 10 — Loading state (initial mount before fetches resolve)
+  it('shows the "Loading organization details…" copy before tenant fetch resolves', async () => {
     // Make all fetches hang so the loading state stays visible.
     fetchApiMock.mockImplementation(() => new Promise(() => {}));
     render(<Settings />);
     expect(screen.getByText(/Loading organization details/i)).toBeInTheDocument();
-    expect(screen.getByText(/Loading team/i)).toBeInTheDocument();
   });
 
   // 11 — Slug field is read-only
@@ -352,13 +336,12 @@ describe('<Settings /> — page shell + representative card pin', () => {
 });
 
 // ============================================================================
-// EXTENSION WAVE — additional ≥10 cases covering uncovered card sections:
+// EXTENSION WAVE — additional cases covering uncovered card sections:
 // Branding (logo placeholder + brand color save), Pipeline Stages (delete +
 // reorder), Email Messages (retention toggle pins), Notification Preferences
 // (category + channel toggles, save, reset), Invite (role-select), Consent
-// (create + delete), Roster row controls (role-change + delete), Public
-// Booking URL copy. Same stable mock pattern; preserves the existing describe
-// block above. Pure pin — no SUT changes.
+// (create + delete), Public Booking URL copy. Same stable mock pattern;
+// preserves the existing describe block above. Pure pin — no SUT changes.
 // ============================================================================
 
 describe('<Settings /> — extended card coverage', () => {
@@ -619,48 +602,10 @@ describe('<Settings /> — extended card coverage', () => {
     });
   });
 
-  // 25 — Roster: change role on existing user PUTs /api/auth/users/:id/role
-  it('changing a roster user role PUTs /api/auth/users/:id/role with the new role', async () => {
-    const user = userEvent.setup();
-    render(<Settings />);
-    await waitFor(() => expect(screen.getByText('Rohan Mehta')).toBeInTheDocument());
-
-    // Find Rohan's row → its select element
-    const rohanRow = screen.getByText('Rohan Mehta').closest('div').parentElement;
-    const roleSelect = rohanRow.querySelector('select');
-    expect(roleSelect).toBeTruthy();
-    await user.selectOptions(roleSelect, 'MANAGER');
-
-    await waitFor(() => {
-      const puts = fetchApiMock.mock.calls.filter(
-        ([url, opts]) => /^\/api\/auth\/users\/u2\/role$/.test(url) && opts?.method === 'PUT'
-      );
-      expect(puts.length).toBe(1);
-      const body = JSON.parse(puts[0][1].body);
-      expect(body.role).toBe('MANAGER');
-    });
-  });
-
-  // 26 — Roster: delete non-ADMIN user DELETEs /api/auth/users/:id after confirm
-  it('clicking the trash icon on a non-ADMIN roster user DELETEs /api/auth/users/:id after confirm', async () => {
-    const user = userEvent.setup();
-    render(<Settings />);
-    await waitFor(() => expect(screen.getByText('Rohan Mehta')).toBeInTheDocument());
-
-    // Rohan is USER → trash button visible; Aditi is ADMIN → "—" placeholder.
-    const rohanCard = screen.getByText('Rohan Mehta').closest('div').parentElement;
-    const trashBtn = rohanCard.querySelector('button');
-    expect(trashBtn).toBeTruthy();
-    await user.click(trashBtn);
-
-    await waitFor(() => {
-      const deletes = fetchApiMock.mock.calls.filter(
-        ([url, opts]) => /^\/api\/auth\/users\/u2$/.test(url) && opts?.method === 'DELETE'
-      );
-      expect(deletes.length).toBe(1);
-    });
-    expect(notifyObj.confirm).toHaveBeenCalled();
-  });
+  // 25/26 — Access Control Roster row controls (role-change PUT + delete) used
+  // to live here; the roster moved to the RolesAdmin page (/roles) so those
+  // assertions are no longer applicable. The roster's absence from Settings is
+  // covered by test 9 above.
 
   // 27 — Consent Templates (wellness): seeded templates render + Add Template POSTs
   it('wellness Consent Templates card lists seeded rows and Add Template POSTs new row', async () => {

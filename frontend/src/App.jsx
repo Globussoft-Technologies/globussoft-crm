@@ -424,6 +424,35 @@ function landingFor(user, tenant) {
   return configured;
 }
 
+// Honour the marketing-site `?next=` handoff when an already-authenticated
+// user hits /login or /customer/register (the route guards normally bounce
+// them to their landing page, which loses the handoff context). Only
+// accepts in-app paths so a hostile `?next=https://evil.com/phish` falls
+// back to the supplied default.
+function landingWithHandoff(fallback) {
+  try {
+    const next = new URLSearchParams(window.location.search).get('next');
+    if (next && next.startsWith('/') && !next.startsWith('//')) {
+      return decodeURIComponent(next);
+    }
+  } catch (_e) { /* fall through */ }
+  return fallback;
+}
+
+// Detect whether the URL carries marketing-site handoff params. When yes,
+// /customer/register should ALWAYS render its form — even if there's an
+// existing session — because the user explicitly came in to create a new
+// customer account (often distinct from whatever stale admin/staff session
+// happens to be lingering in their browser).
+function hasMarketingHandoff() {
+  try {
+    const p = new URLSearchParams(window.location.search);
+    return !!(p.get('tenantSlug') && p.get('next'));
+  } catch (_e) {
+    return false;
+  }
+}
+
 // Route guard: bounces wellness tenants away from generic-CRM-only pages.
 // The generic Enterprise Overview, deal pipeline, forecasting, etc. don't apply
 // to a clinic — wellness has its own /wellness Owner Dashboard. Without this
@@ -800,10 +829,15 @@ export default function App() {
                   <Route
                     path="/login"
                     element={
-                      !token ? (
+                      // Same handoff treatment as /customer/register — when
+                      // the marketing-site link is present, let the user
+                      // sign in as whoever they actually came in to be (the
+                      // pre-filled customer email is rarely the same as the
+                      // stale admin/staff session their browser holds).
+                      (!token || hasMarketingHandoff()) ? (
                         <Login />
                       ) : (
-                        <Navigate to={landingFor(user, tenant)} replace />
+                        <Navigate to={landingWithHandoff(landingFor(user, tenant))} replace />
                       )
                     }
                   />
@@ -819,7 +853,16 @@ export default function App() {
                   />
                   <Route
                     path="/customer/register"
-                    element={!token ? <CustomerRegister /> : <Navigate to="/home" />}
+                    element={
+                      // Always show the form when the URL carries a marketing
+                      // handoff — even if there's an existing session — so
+                      // users coming from Dr. Haror's checkout can register a
+                      // new customer account regardless of whatever stale
+                      // staff/admin session their browser is holding.
+                      (!token || hasMarketingHandoff())
+                        ? <CustomerRegister />
+                        : <Navigate to={landingWithHandoff("/home")} replace />
+                    }
                   />
                   <Route path="/sso/return" element={<SsoReturn />} />
                   <Route path="/pricing" element={<Pricing />} />

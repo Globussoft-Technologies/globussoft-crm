@@ -1412,6 +1412,8 @@ function renderTravelNav({
           label="Booking / Expedia"
         />
       )}
+      {/* Slice C1 — Voyagr per-site API key admin (ADMIN-only). */}
+      {isAdmin && (<Link to="/admin/voyagr-api-keys" icon={Key} label="Voyagr API Keys" />)}
       {/* Arc 2 #903 — cross-supplier Payables (A/P) review. Operator surface
           aggregating every TravelSupplierPayable across every supplier into
           one table; complements the per-supplier expand on SuppliersAdmin.

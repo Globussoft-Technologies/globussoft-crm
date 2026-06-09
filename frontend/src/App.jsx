@@ -115,6 +115,9 @@ const BookingExpediaSearch = lazy(() =>
 );
 // CSP violations operator-inspect — slice 4 of #917, consumes slice-3 GET /api/csp/violations.
 const CSPViolations = lazy(() => import("./pages/admin/CSPViolations"));
+// Voyagr (OJR) per-site API key admin — slice C1 of TRAVEL_CODEABLE_BACKLOG.
+// ADMIN-only; provisions per-sub-brand API keys consumed by /api/v1/voyagr.
+const VoyagrApiKeys = lazy(() => import("./pages/admin/VoyagrApiKeys"));
 // PRD Gap §1.5 / §1.6 — admin pages for commission profiles + per-staff
 // revenue goals.
 const CommissionProfiles = lazy(() => import("./pages/CommissionProfiles"));
@@ -1138,6 +1141,8 @@ export default function App() {
                       }
                     />
                     <Route path="admin/csp-violations" element={<CSPViolations />} />
+                    {/* Slice C1 — Voyagr per-site API key admin. ADMIN-only. */}
+                    <Route path="admin/voyagr-api-keys" element={<RoleGuard allow={["ADMIN"]} message="Voyagr API Keys requires admin access."><VoyagrApiKeys /></RoleGuard>} />
                     {/* PRD Gap §1.5 / §1.6 */}
                     <Route
                       path="commission-profiles"

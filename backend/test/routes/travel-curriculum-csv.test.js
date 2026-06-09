@@ -299,7 +299,7 @@ describe('GET /api/travel-curriculum/export.csv', () => {
     expect(res.body[0]).toBe(0xef);
     expect(res.body[1]).toBe(0xbb);
     expect(res.body[2]).toBe(0xef >> 24 | 0xbf); // 0xbf
-    const text = res.body.toString('utf8').replace(/^﻿/, '');
+    const text = res.body.toString('utf8').replace(/^\uFEFF/, '');
     expect(text).toContain('curriculum,grade,subject,learningOutcome');
     expect(text).toContain('CBSE,Class 9,Geography,Plate tectonics');
     expect(text).toContain('CBSE,Class 9,Biology,Diversity in Living Organisms');
@@ -330,7 +330,7 @@ describe('GET /api/travel-curriculum/export.csv', () => {
       .parse(bufferParser);
 
     expect(res.status).toBe(200);
-    const text = res.body.toString('utf8').replace(/^﻿/, '');
+    const text = res.body.toString('utf8').replace(/^\uFEFF/, '');
     expect(text).toBe(
       'curriculum,grade,subject,learningOutcome,destinationLabel,destinationId,fitScore,fitRationale,isActive',
     );

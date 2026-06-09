@@ -129,7 +129,7 @@ function parseCsv(csvText, opts = {}) {
   }
 
   // Empty / whitespace-only body → no header, no rows, no errors.
-  if (csvText.replace(/﻿/g, "").trim() === "") {
+  if (csvText.replace(/\uFEFF/g, "").trim() === "") {
     return { rows: [], errors: [], headerError: null };
   }
 

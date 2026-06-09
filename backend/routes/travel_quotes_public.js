@@ -34,6 +34,28 @@
  * TravelQuoteSnapshot row with statusBefore / statusAfter / changedBy='customer'
  * + optional changeReason. The snapshotJson captures the full quote + lines
  * shape AT THE TRANSITION INSTANT so version history is reconstructable.
+ *
+ * S32 — FX-rate locking at accept-time (PRD §3.4.2 + §3.4.3 + FR-3.7.4 +
+ * AC-6.6). On customer accept, the route looks up the current FX rate for
+ * (quote.currency → tenant.defaultCurrency) and persists it into the
+ * Accepted-transition snapshotJson under fxLock = { sourceCurrency,
+ * targetCurrency, rate, lockedAt }. Why-store-in-snapshotJson: TravelQuote
+ * has no fxRateSnapshot column yet (schema add is a follow-up slice — see
+ * S47), and the snapshotJson field on TravelQuoteSnapshot is freeform JSON
+ * already written on every transition. This delivers the FX-lock contract
+ * (margin-shift prevention) without a schema migration. When schema columns
+ * land, the helper readFxLockFromAcceptSnapshot() becomes the migration
+ * path: the accept route also writes to the column going forward; old
+ * pre-migration rows keep their snapshotJson form.
+ *
+ * Idempotency: if the customer re-hits /accept on a quote already in
+ * Accepted status, the route returns 409 ALREADY_ACTIONED with the
+ * originally-locked FX rate (NOT a fresh re-lookup) so downstream
+ * frontends can still surface the locked rate to the customer. Fresh
+ * accepts on Draft/Sent get a fresh lookup. The lookup itself is
+ * fail-soft: if the source/target currency pair can't be resolved
+ * (no Currency row, no isBase tenant currency), fxLock is recorded with
+ * rate=null + reason — the accept transition itself still succeeds.
  */
 
 const express = require('express');
@@ -115,6 +137,120 @@ function customerEnvelope(quote, contact) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// S32 — FX-rate lock helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Look up the FX rate for source-currency → tenant-base-currency at this
+ * instant. Returns { sourceCurrency, targetCurrency, rate, lockedAt, reason }.
+ *
+ * Rate semantics: multiply a source-currency amount by `rate` to get the
+ * target-currency amount. So if quote.currency = 'USD' and tenant base = 'INR',
+ * the returned rate is "1 USD = N INR" (e.g. 83.4).
+ *
+ * Fail-soft: missing Currency row / missing tenant default / lookup error
+ * returns rate=null + a non-empty reason so callers can persist the attempt.
+ * The accept transition itself never fails because the FX lookup failed —
+ * the customer accept must always proceed; FX-lock is a margin-protection
+ * accessory, not a gate.
+ *
+ * Pair semantics:
+ *   - sourceCurrency === targetCurrency → rate=1.0, reason='same_currency'.
+ *   - Tenant defaultCurrency missing → rate=null, reason='no_tenant_currency'.
+ *   - Currency row for sourceCurrency missing in this tenant → rate=null,
+ *     reason='no_source_rate'.
+ *   - Lookup throws → rate=null, reason='lookup_error'.
+ */
+async function lookupFxRate(prismaClient, sourceCurrency, tenantId) {
+  const lockedAt = new Date().toISOString();
+  try {
+    const tenant = await prismaClient.tenant.findUnique({
+      where: { id: tenantId },
+      select: { defaultCurrency: true },
+    });
+    const targetCurrency = tenant && tenant.defaultCurrency ? tenant.defaultCurrency : null;
+    if (!targetCurrency) {
+      return {
+        sourceCurrency: sourceCurrency || null,
+        targetCurrency: null,
+        rate: null,
+        lockedAt,
+        reason: 'no_tenant_currency',
+      };
+    }
+    if (sourceCurrency && sourceCurrency === targetCurrency) {
+      return {
+        sourceCurrency,
+        targetCurrency,
+        rate: 1.0,
+        lockedAt,
+        reason: 'same_currency',
+      };
+    }
+    if (!sourceCurrency) {
+      return {
+        sourceCurrency: null,
+        targetCurrency,
+        rate: null,
+        lockedAt,
+        reason: 'no_source_currency',
+      };
+    }
+    const currencyRow = await prismaClient.currency.findFirst({
+      where: { code: sourceCurrency, tenantId },
+      select: { exchangeRate: true },
+    });
+    if (!currencyRow || currencyRow.exchangeRate == null) {
+      return {
+        sourceCurrency,
+        targetCurrency,
+        rate: null,
+        lockedAt,
+        reason: 'no_source_rate',
+      };
+    }
+    return {
+      sourceCurrency,
+      targetCurrency,
+      rate: Number(currencyRow.exchangeRate),
+      lockedAt,
+      reason: null,
+    };
+  } catch (_e) {
+    return {
+      sourceCurrency: sourceCurrency || null,
+      targetCurrency: null,
+      rate: null,
+      lockedAt,
+      reason: 'lookup_error',
+    };
+  }
+}
+
+/**
+ * Read the previously-locked FX snapshot from the existing Accepted-status
+ * snapshot row for a quote. Returns the fxLock block as stored at accept
+ * time, or null if no Accepted snapshot exists / snapshotJson is malformed.
+ *
+ * Used on the 409 ALREADY_ACTIONED branch of /accept so re-hits surface
+ * the originally-locked rate without re-running the lookup.
+ */
+async function readFxLockFromAcceptSnapshot(prismaClient, quoteId) {
+  try {
+    const accepted = await prismaClient.travelQuoteSnapshot.findFirst({
+      where: { quoteId, statusAfter: 'Accepted' },
+      orderBy: { createdAt: 'asc' },
+      select: { snapshotJson: true },
+    });
+    if (!accepted || !accepted.snapshotJson) return null;
+    const parsed = JSON.parse(accepted.snapshotJson);
+    return parsed && parsed.fxLock ? parsed.fxLock : null;
+  } catch (_e) {
+    return null;
+  }
+}
+
 /**
  * Determine the next versionNumber for snapshots on this quote.
  */
@@ -132,12 +268,12 @@ async function nextVersionNumber(quoteId) {
  * returns the response envelope. Caller passes the wanted new status +
  * change-reason payload.
  */
-async function applyCustomerTransition({ quote, statusAfter, changedBy, changeReason, customerName }) {
+async function applyCustomerTransition({ quote, statusAfter, changedBy, changeReason, customerName, extraSnapshot }) {
   const statusBefore = quote.status;
   const versionNumber = await nextVersionNumber(quote.id);
 
   // Capture the full quote + lines shape at the transition instant.
-  const snapshotJson = JSON.stringify({
+  const snapshotPayload = {
     quote: {
       id: quote.id,
       tenantId: quote.tenantId,
@@ -163,7 +299,12 @@ async function applyCustomerTransition({ quote, statusAfter, changedBy, changeRe
       notes: l.notes,
     })),
     customerName: customerName || null,
-  });
+  };
+  // S32 — merge any transition-specific extras (e.g. fxLock on Accepted).
+  if (extraSnapshot && typeof extraSnapshot === 'object') {
+    Object.assign(snapshotPayload, extraSnapshot);
+  }
+  const snapshotJson = JSON.stringify(snapshotPayload);
 
   const updated = await prisma.travelQuote.update({
     where: { id: quote.id },
@@ -285,10 +426,19 @@ router.post('/quote/:shareToken/accept', async (req, res) => {
     }
 
     if (quote.status !== 'Draft' && quote.status !== 'Sent') {
+      // S32 — surface the originally-locked FX rate on the idempotency-409
+      // path so re-hits return the locked rate without a fresh lookup.
+      // Only applies when prior status is Accepted (Rejected / Countered
+      // don't carry an FX lock).
+      let fxLock = null;
+      if (quote.status === 'Accepted') {
+        fxLock = await readFxLockFromAcceptSnapshot(prisma, quote.id);
+      }
       return res.status(409).json({
         error: `This quote was already actioned (status: ${quote.status})`,
         code: 'ALREADY_ACTIONED',
         status: quote.status,
+        fxLock,
       });
     }
 
@@ -300,12 +450,17 @@ router.post('/quote/:shareToken/accept', async (req, res) => {
       ? req.body.customerNote.trim().slice(0, 2000)
       : null;
 
+    // S32 — compute the FX-lock for source (quote.currency) → tenant base.
+    // Fail-soft: rate=null + reason is recorded if lookup can't resolve.
+    const fxLock = await lookupFxRate(prisma, quote.currency, quote.tenantId);
+
     const { updated, statusBefore } = await applyCustomerTransition({
       quote,
       statusAfter: 'Accepted',
       changedBy: 'customer',
       changeReason: customerNote,
       customerName,
+      extraSnapshot: { fxLock },
     });
 
     return res.status(200).json({
@@ -313,6 +468,7 @@ router.post('/quote/:shareToken/accept', async (req, res) => {
       quoteId: updated.id,
       previousStatus: statusBefore,
       acceptedAt: updated.updatedAt,
+      fxLock,
     });
   } catch (e) {
     console.error('[travel-quotes-public] accept error:', e.message);

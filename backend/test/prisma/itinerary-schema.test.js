@@ -205,4 +205,24 @@ describe('ItineraryItem — S8 schema pin (dayNumber + latitude + longitude)', (
       'existing @@index([itineraryId, position]) must survive S8',
     ).toBe(true);
   });
+
+  // ── S37: composite index for day-filtered editor reads ──────────────
+  //
+  // S9's day-by-day visual editor queries
+  //   `WHERE itineraryId = X AND dayNumber = Y ORDER BY position`
+  // The existing @@index([itineraryId, position]) is fine for the ordered
+  // full-list read but won't be hit on the day-filtered read. S37 adds the
+  // composite index `@@index([itineraryId, dayNumber])` so the editor's
+  // per-day fetch hits an index instead of a filesort. Additive index —
+  // non-destructive, no bless marker required per CLAUDE.md migration-
+  // safety rule.
+  test('S37: declares @@index([itineraryId, dayNumber]) for day-filtered editor reads', () => {
+    expect(
+      /@@index\(\[itineraryId,\s*dayNumber\]\)/.test(itineraryItemBody),
+      'S37 missing: ItineraryItem must declare @@index([itineraryId, dayNumber]) ' +
+        "so S9's visual editor query `WHERE itineraryId = X AND dayNumber = Y " +
+        'ORDER BY position` hits an index. Pre-existing @@index([itineraryId, position]) ' +
+        "covers the ordered full-list read but NOT the day-filtered read.",
+    ).toBe(true);
+  });
 });

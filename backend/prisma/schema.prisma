@@ -5340,6 +5340,13 @@ model ItineraryItem {
   updatedAt   DateTime  @updatedAt
 
   @@index([itineraryId, position])
+  // S37 — composite index for S9's day-by-day editor: query shape is
+  // `WHERE itineraryId = X AND dayNumber = Y ORDER BY position` (group
+  // items by day, then preserve in-day order). The existing
+  // @@index([itineraryId, position]) covers ordered-list reads but won't
+  // be hit on the day-filtered read. Additive index — non-destructive,
+  // no bless marker required per CLAUDE.md migration-safety rule.
+  @@index([itineraryId, dayNumber])
 }
 
 // ── Cost master + seasonal calendar + markup rules ───────────────────

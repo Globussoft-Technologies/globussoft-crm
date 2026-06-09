@@ -1,6 +1,7 @@
 // @ts-check
 /**
  * S52 — Brand-kit adoption sweep for sibling travel PDF helpers.
+ * S65 — Extends the S51 logo-embed pattern to those same 5 sibling helpers.
  *
  * Pins the contract that the 5 sibling travel PDF helpers
  * (renderTravelItineraryPdf / renderTravelQuotePdf / renderTravelDiagnosticPdf
@@ -8,6 +9,19 @@
  * their header color from the SAME shared brand-kit selector S34 shipped
  * for renderTravelInvoicePdf. A single admin POST to
  * `tenant.subBrandConfigJson` cascades into ALL travel-vertical PDFs.
+ *
+ * S65 additions (5 new image-embed pins at the bottom of the file):
+ *   - For each of the 5 sibling renderers, spy `pdfR.fetchLogoBuffer`
+ *     with a tiny valid PNG buffer, set `branding.thumbnailUrl` via
+ *     per-render override, assert `/Subtype /Image` appears in the PDF
+ *     body. Same `pdfContainsImageXObject` helper S51 used for the
+ *     invoice renderer.
+ *   - For `renderTravelQuotePdf` specifically, also pin that the pre-S65
+ *     `[Logo: <url>]` text-placeholder is GONE from the rendered PDF
+ *     (it was replaced by the embedded image).
+ *   - back-compat: when `branding.thumbnailUrl` is null AND no inline
+ *     override is set, `fetchLogoBuffer` is NEVER called and no /Image
+ *     XObject appears (pre-S65 logo-less output is byte-shape preserved).
  *
  * Pre-S52 the header band was filled with `SUB_BRAND_ACCENT[sub]`:
  *
@@ -53,7 +67,7 @@
  * Run: `cd backend && npx vitest run test/services/travel-sibling-pdfs-brand-kit.test.js`
  */
 
-import { describe, test, expect } from 'vitest';
+import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
 import pdfR from '../../services/pdfRenderer.js';
 
 const {
@@ -581,5 +595,177 @@ describe('S52 — wellness invoice path is untouched (renderBrandedInvoicePdf)',
     expect(pdfContainsHexColor(buf, '#0B5345')).toBe(false); // RFU fallback
     expect(pdfContainsHexColor(buf, '#922B21')).toBe(false); // travelstall fallback
     expect(pdfContainsHexColor(buf, '#283747')).toBe(false); // visasure fallback
+  });
+});
+
+// ── S65 — sibling-renderer logo embed pins ─────────────────────────────
+//
+// Tiny 1x1 PNG (same magic bytes pdfkit's PNG parser accepts). Re-used
+// by every embed pin below so we don't hit the network.
+const TINY_PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==',
+  'base64',
+);
+
+/** True iff the PDF buffer contains an `/XObject /Subtype /Image` dictionary.
+ * That marker is uncompressed in the PDF body even when the image stream
+ * itself is flate-encoded — so a simple latin1-substring grep against the
+ * raw buffer is sufficient. Lifted verbatim from S51's invoice test. */
+function pdfContainsImageXObject(buf) {
+  const str = buf.toString('latin1');
+  return /\/Subtype\s*\/Image/.test(str);
+}
+
+describe('S65 — sibling-renderer logo URL embedding', () => {
+  beforeEach(() => {
+    // Module-level cache nuke so spies/cache don't bleed between cases.
+    pdfR._resetLogoCache();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  test('S65 (a) — renderTravelItineraryPdf: thumbnailUrl set + fetch succeeds → /Image XObject', async () => {
+    // Spy the CJS self-mock seam (module.exports.fetchLogoBuffer) so we
+    // never touch axios. The renderer awaits the spy then calls
+    // doc.image() → pdfkit serialises an /XObject /Subtype /Image dict.
+    const spy = vi.spyOn(pdfR, 'fetchLogoBuffer').mockResolvedValue(TINY_PNG);
+    const buf = await renderTravelItineraryPdf(
+      itineraryFixture({ subBrand: 'tmc' }),
+      contactFixture(),
+      { branding: { thumbnailUrl: 'https://cdn.example.com/tmc-itin.png' } },
+    );
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenCalledWith('https://cdn.example.com/tmc-itin.png');
+    expect(Buffer.isBuffer(buf)).toBe(true);
+    expect(buf.slice(0, 4).toString()).toBe('%PDF');
+    expect(pdfContainsImageXObject(buf)).toBe(true);
+  });
+
+  test('S65 (b) — renderTravelQuotePdf: thumbnailUrl set + fetch succeeds → /Image XObject', async () => {
+    const spy = vi.spyOn(pdfR, 'fetchLogoBuffer').mockResolvedValue(TINY_PNG);
+    const buf = await renderTravelQuotePdf(
+      quoteFixture({ subBrand: 'rfu' }),
+      { branding: { thumbnailUrl: 'https://cdn.example.com/rfu-quote.png' } },
+    );
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenCalledWith('https://cdn.example.com/rfu-quote.png');
+    expect(Buffer.isBuffer(buf)).toBe(true);
+    expect(pdfContainsImageXObject(buf)).toBe(true);
+  });
+
+  test('S65 (c) — renderTravelQuotePdf: text-placeholder `[Logo: ...]` is GONE post-S65', async () => {
+    // Pre-S65 the quote renderer emitted a literal `[Logo: <url>]` string
+    // into the header band whenever `q.brandKit.logoUrl` was set. S65
+    // replaces that with the real embedded image. Pin the removal so
+    // no future regression re-introduces the placeholder.
+    vi.spyOn(pdfR, 'fetchLogoBuffer').mockResolvedValue(TINY_PNG);
+    const logoUrl = 'https://cdn.example.com/rfu-quote-placeholder-check.png';
+    const buf = await renderTravelQuotePdf(
+      quoteFixture({ subBrand: 'rfu', brandKit: { logoUrl } }),
+    );
+    expect(Buffer.isBuffer(buf)).toBe(true);
+    // The legacy `[Logo: <url>]` placeholder string must NOT appear in
+    // either the raw PDF or any inflated stream. The renderer's text
+    // ops land in (potentially flate-encoded) content streams; the
+    // pdfContainsHexColor helper already inflates those for the color
+    // checks, so we re-use the same inflation logic here via the str
+    // search after inflate.
+    const zlib = require('node:zlib');
+    const str = buf.toString('latin1');
+    let inflated = '';
+    const lenRe = /\/Length\s+(\d+)\b[^>]*>>\s*stream\r?\n/g;
+    let m;
+    while ((m = lenRe.exec(str)) !== null) {
+      const len = parseInt(m[1], 10);
+      const start = lenRe.lastIndex;
+      const raw = buf.subarray(start, start + len);
+      try {
+        inflated += zlib.inflateSync(raw).toString('latin1');
+      } catch (_e) {
+        inflated += raw.toString('latin1');
+      }
+    }
+    const haystack = inflated || str;
+    expect(haystack).not.toContain('[Logo:');
+    expect(haystack).not.toContain(logoUrl);
+    // /Image XObject DOES appear (the real embed replaced the placeholder).
+    expect(pdfContainsImageXObject(buf)).toBe(true);
+  });
+
+  test('S65 (d) — renderTravelDiagnosticPdf: branding.thumbnailUrl + fetch succeeds → /Image XObject', async () => {
+    // Diagnostic renderer's logo precedence: opts.logoBuffer (pre-S65) →
+    // branding.thumbnailUrl (S65) → loadTravelHeaderLogo() bundled asset →
+    // drawn emblem badge. We exercise the new S65 layer here — no
+    // opts.logoBuffer, but branding.thumbnailUrl is set.
+    const spy = vi.spyOn(pdfR, 'fetchLogoBuffer').mockResolvedValue(TINY_PNG);
+    const buf = await renderTravelDiagnosticPdf(
+      diagnosticFixture({ subBrand: 'visasure' }),
+      contactFixture(),
+      bankFixture(),
+      { branding: { thumbnailUrl: 'https://cdn.example.com/visasure-diag.png' } },
+    );
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenCalledWith('https://cdn.example.com/visasure-diag.png');
+    expect(Buffer.isBuffer(buf)).toBe(true);
+    expect(pdfContainsImageXObject(buf)).toBe(true);
+  });
+
+  test('S65 (e) — renderTmcReadinessReport: thumbnailUrl set + fetch succeeds → /Image XObject', async () => {
+    const spy = vi.spyOn(pdfR, 'fetchLogoBuffer').mockResolvedValue(TINY_PNG);
+    const buf = await renderTmcReadinessReport({
+      ...tmcReadinessPayloadFixture(),
+      branding: { thumbnailUrl: 'https://cdn.example.com/tmc-readiness.png' },
+    });
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenCalledWith('https://cdn.example.com/tmc-readiness.png');
+    expect(Buffer.isBuffer(buf)).toBe(true);
+    expect(pdfContainsImageXObject(buf)).toBe(true);
+  });
+
+  test('S65 (f) — renderTravelStallPersonalisedPdf: thumbnailUrl set + fetch succeeds → /Image XObject', async () => {
+    const spy = vi.spyOn(pdfR, 'fetchLogoBuffer').mockResolvedValue(TINY_PNG);
+    const buf = await renderTravelStallPersonalisedPdf({
+      ...travelStallPayloadFixture(),
+      branding: { thumbnailUrl: 'https://cdn.example.com/travelstall.png' },
+    });
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenCalledWith('https://cdn.example.com/travelstall.png');
+    expect(Buffer.isBuffer(buf)).toBe(true);
+    expect(pdfContainsImageXObject(buf)).toBe(true);
+  });
+
+  test('S65 (g) — back-compat: no thumbnailUrl → fetchLogoBuffer NEVER called, no /Image XObject', async () => {
+    // All 5 renderers must preserve pre-S65 byte-shape when no logo URL
+    // is configured. Fail-loud spy: throws on call, so any commit that
+    // strips the null guard reds this test instantly.
+    const spy = vi.spyOn(pdfR, 'fetchLogoBuffer').mockImplementation(() => {
+      throw new Error('fetchLogoBuffer must NOT be called when no logo URL is configured');
+    });
+    const itinBuf = await renderTravelItineraryPdf(itineraryFixture(), contactFixture());
+    const quoteBuf = await renderTravelQuotePdf(quoteFixture()); // no brandKit.logoUrl either
+    const stallBuf = await renderTravelStallPersonalisedPdf(travelStallPayloadFixture());
+    const tmcBuf = await renderTmcReadinessReport(tmcReadinessPayloadFixture());
+    // Diagnostic intentionally NOT included here — its renderer's S52
+    // logoBuffer test (already in this file) covers the opts.logoBuffer
+    // path; without thumbnailUrl AND without opts.logoBuffer it falls
+    // through to loadTravelHeaderLogo() which may or may not find a
+    // bundled asset on disk. We assert fetchLogoBuffer wasn't called.
+    const diagBuf = await renderTravelDiagnosticPdf(
+      diagnosticFixture(), contactFixture(), bankFixture(),
+    );
+    expect(spy).not.toHaveBeenCalled();
+    expect(Buffer.isBuffer(itinBuf)).toBe(true);
+    expect(Buffer.isBuffer(quoteBuf)).toBe(true);
+    expect(Buffer.isBuffer(stallBuf)).toBe(true);
+    expect(Buffer.isBuffer(tmcBuf)).toBe(true);
+    expect(Buffer.isBuffer(diagBuf)).toBe(true);
+    // Itinerary / quote / stall headers have no other XObject source,
+    // so /Image XObject MUST be absent. (TMC readiness and diagnostic
+    // can carry one via bundled asset — we don't pin its absence here.)
+    expect(pdfContainsImageXObject(itinBuf)).toBe(false);
+    expect(pdfContainsImageXObject(quoteBuf)).toBe(false);
+    expect(pdfContainsImageXObject(stallBuf)).toBe(false);
   });
 });

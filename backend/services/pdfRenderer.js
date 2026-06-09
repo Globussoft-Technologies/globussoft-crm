@@ -2564,13 +2564,23 @@ function resolveAnswerLabel(question, rawAnswer) {
 // share one curated color set. Pre-S52, the header color came from the
 // legacy SUB_BRAND_ACCENT constant; that constant is retained for any
 // non-travel call site but no longer consulted here.
-function renderTravelItineraryPdf(itinerary, contact, opts = {}) {
+async function renderTravelItineraryPdf(itinerary, contact, opts = {}) {
   const sub = itinerary.subBrand;
   const brandLabel = SUB_BRAND_LABEL[sub] || "Travel CRM";
   const { branding } = resolveTravelHeaderBrandKit(sub, opts);
   const accent = branding.headerColor || INVOICE_BRAND_KIT_FALLBACKS._generic.headerColor;
   const currency = itinerary.currency || "INR";
   const items = Array.isArray(itinerary.items) ? itinerary.items : [];
+
+  // S65 — fetch the per-sub-brand logo (if any) BEFORE we start drawing.
+  // pdfkit's doc.image() needs the buffer synchronously, so we resolve the
+  // remote URL up front. Goes through module.exports.fetchLogoBuffer so
+  // unit tests can vi.spyOn(...) the seam without reaching into axios.
+  // Fail-soft: on any error, the helper returns null and we render a
+  // logo-less header band (back-compat with pre-S65 output).
+  const logoBuffer = branding.thumbnailUrl
+    ? await module.exports.fetchLogoBuffer(branding.thumbnailUrl)
+    : null;
 
   const doc = new PDFDocument({ size: "A4", margin: 50 });
   const bufPromise = streamToBuffer(doc);
@@ -2583,6 +2593,26 @@ function renderTravelItineraryPdf(itinerary, contact, opts = {}) {
     `Itinerary v${itinerary.version || 1}`,
     50, 42, { align: "left" },
   );
+
+  // S65 — embed brand logo into the header band's top-right (80×40 fit box
+  // at right edge). doc.image() throws on invalid buffers; wrap in try/catch
+  // so a malformed logo can't 500 the download. The brand color band still
+  // renders behind the logo regardless.
+  if (logoBuffer) {
+    try {
+      const LOGO_W = 80;
+      const LOGO_H = 40;
+      const LOGO_X = doc.page.width - LOGO_W - 50;
+      const LOGO_Y = 10;
+      doc.image(logoBuffer, LOGO_X, LOGO_Y, { fit: [LOGO_W, LOGO_H] });
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[pdfRenderer/S65] doc.image() rejected logo buffer (itinerary): ${err && err.message ? err.message : err}`,
+      );
+    }
+  }
+
   doc.fillColor("#111").moveDown(2);
 
   // Customer block
@@ -2682,7 +2712,7 @@ function renderTravelItineraryPdf(itinerary, contact, opts = {}) {
 // Q22 brand assets — the `branding.thumbnailUrl` field is plumbed end-to-end
 // but the Travel Stall personalised template doesn't yet doc.image() the
 // logo (only the invoice renderer does that today via S51's fetchLogoBuffer).
-function renderTravelStallPersonalisedPdf(payload) {
+async function renderTravelStallPersonalisedPdf(payload) {
   const sub = "travelstall";
   const brandLabel = SUB_BRAND_LABEL[sub] || "Travel Stall";
   // S52 — resolve via the shared brand-kit selector. The payload object may
@@ -2701,6 +2731,13 @@ function renderTravelStallPersonalisedPdf(payload) {
   const proseText = String(payload?.proseText || "");
   const generatedAt = payload?.generatedAt || new Date().toISOString();
 
+  // S65 — fetch the per-sub-brand logo (if any) BEFORE we start drawing.
+  // Same pattern as renderTravelInvoicePdf — module.exports indirection
+  // keeps the CJS self-mocking seam intact for vitest spies.
+  const logoBuffer = branding.thumbnailUrl
+    ? await module.exports.fetchLogoBuffer(branding.thumbnailUrl)
+    : null;
+
   const doc = new PDFDocument({ size: "A4", margin: 50 });
   const bufPromise = streamToBuffer(doc);
 
@@ -2709,6 +2746,24 @@ function renderTravelStallPersonalisedPdf(payload) {
   doc.font("Helvetica-Bold").fontSize(18).fillColor("#fff")
     .text(brandLabel, 50, 22, { align: "left" });
   doc.fillColor("#fff").fontSize(10).text("Personalised Recommendations", 50, 42, { align: "left" });
+
+  // S65 — embed brand logo into the header band's top-right (80×40 fit box).
+  // Fail-soft try/catch matches the invoice renderer.
+  if (logoBuffer) {
+    try {
+      const LOGO_W = 80;
+      const LOGO_H = 40;
+      const LOGO_X = doc.page.width - LOGO_W - 50;
+      const LOGO_Y = 10;
+      doc.image(logoBuffer, LOGO_X, LOGO_Y, { fit: [LOGO_W, LOGO_H] });
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[pdfRenderer/S65] doc.image() rejected logo buffer (travelstall): ${err && err.message ? err.message : err}`,
+      );
+    }
+  }
+
   doc.fillColor("#111").moveDown(2);
 
   // Customer block
@@ -2817,7 +2872,7 @@ function loadTravelHeaderLogo() {
 // header color falls back to INVOICE_BRAND_KIT_FALLBACKS[subBrand]. Pre-S52
 // the color came from SUB_BRAND_ACCENT[sub]; the four travel sub-brands
 // now share the S13-aligned palette.
-function renderTravelDiagnosticPdf(diagnostic, contact, bank, opts = {}) {
+async function renderTravelDiagnosticPdf(diagnostic, contact, bank, opts = {}) {
   const sub = diagnostic.subBrand;
   const brandLabel = SUB_BRAND_LABEL[sub] || "Travel CRM";
   const { branding } = resolveTravelHeaderBrandKit(sub, opts);
@@ -2833,6 +2888,16 @@ function renderTravelDiagnosticPdf(diagnostic, contact, bank, opts = {}) {
     answers = JSON.parse(diagnostic.answersJson || "{}");
   } catch { /* leave empty */ }
 
+  // S65 — when the brand-kit selector surfaces a thumbnailUrl AND the route
+  // didn't already pass an explicit opts.logoBuffer, fetch the remote logo
+  // through the shared LRU cache. Explicit logoBuffer (route-resolved from
+  // S3 / tenant) stays as the highest-precedence layer (pre-S65 contract).
+  // Fail-soft: null buffer falls back to the bundled asset → emblem badge.
+  let brandKitLogoBuf = null;
+  if (!opts.logoBuffer && branding.thumbnailUrl) {
+    brandKitLogoBuf = await module.exports.fetchLogoBuffer(branding.thumbnailUrl);
+  }
+
   const doc = new PDFDocument({ size: "A4", margin: 50 });
   const bufPromise = streamToBuffer(doc);
 
@@ -2840,9 +2905,13 @@ function renderTravelDiagnosticPdf(diagnostic, contact, bank, opts = {}) {
   const headerH = 66;
   doc.rect(0, 0, doc.page.width, headerH).fill(accent);
   let headerTextX = 50;
-  // Logo priority: route-resolved buffer (S3 / tenant) → bundled asset →
-  // drawn emblem badge. The route passes opts.logoBuffer from S3.
-  const logoBuf = opts.logoBuffer || loadTravelHeaderLogo();
+  // Logo priority: opts.logoBuffer (route-resolved S3 / tenant — pre-S65) →
+  // branding.thumbnailUrl fetched via S65 cache → bundled asset → emblem
+  // badge. The diagnostic renderer keeps its left-aligned 36×36 emblem slot
+  // (existing layout) — that's distinct from S65's 80×40 top-right slot
+  // used by the other 4 sibling renderers, because the diagnostic header
+  // band was designed left-anchored before S65.
+  const logoBuf = opts.logoBuffer || brandKitLogoBuf || loadTravelHeaderLogo();
   let logoDrawn = false;
   if (logoBuf) {
     try {
@@ -3005,7 +3074,7 @@ function renderTravelDiagnosticPdf(diagnostic, contact, bank, opts = {}) {
 // the tmc block; when neither tenant nor branding is supplied (legacy
 // caller), the renderer falls back to INVOICE_BRAND_KIT_FALLBACKS.tmc
 // (#1F4E79, the S13-aligned palette).
-function renderTmcReadinessReport({
+async function renderTmcReadinessReport({
   engineOutput = null,
   narrative = null,
   standingFacts = null,
@@ -3060,12 +3129,6 @@ function renderTmcReadinessReport({
   const vendorVetting = String(assurance.vendor_transport_vetting || "").trim();
   const governancePack = Array.isArray(assurance.governance_pack) ? assurance.governance_pack : [];
 
-  // Document scaffold.
-  const doc = new PDFDocument({ size: "A4", margin: 50 });
-  const bufPromise = streamToBuffer(doc);
-  const pageW = doc.page.width;
-  const pageMargin = 50;
-  const contentW = pageW - pageMargin * 2;
   // S52 — TMC readiness report is fixed sub-brand "tmc"; pull the header
   // color from the shared brand-kit selector so admin-curated palettes
   // cascade in via `tenant.subBrandConfigJson`. Per-render override via
@@ -3076,6 +3139,19 @@ function renderTmcReadinessReport({
   });
   const accent = tmcBranding.headerColor || INVOICE_BRAND_KIT_FALLBACKS.tmc.headerColor;
 
+  // S65 — fetch the TMC sub-brand logo (if any) BEFORE drawing the cover.
+  // pdfkit's doc.image() needs the buffer synchronously; resolve up front.
+  const tmcLogoBuffer = tmcBranding.thumbnailUrl
+    ? await module.exports.fetchLogoBuffer(tmcBranding.thumbnailUrl)
+    : null;
+
+  // Document scaffold.
+  const doc = new PDFDocument({ size: "A4", margin: 50 });
+  const bufPromise = streamToBuffer(doc);
+  const pageW = doc.page.width;
+  const pageMargin = 50;
+  const contentW = pageW - pageMargin * 2;
+
   // ── Section 1: Cover ────────────────────────────────────────────────
   doc.rect(0, 0, pageW, 110).fill(accent);
   doc.fillColor("#fff").font("Helvetica-Bold").fontSize(20)
@@ -3084,6 +3160,25 @@ function renderTmcReadinessReport({
     .text("Student experiential readiness profile", pageMargin, 56);
   doc.fillColor("#fff").font("Helvetica").fontSize(9)
     .text("Diagnostic-led, never destination-led.", pageMargin, 74);
+
+  // S65 — embed brand logo in the cover band's top-right (80×40 fit box at
+  // right edge). The 110px-tall cover band gives more vertical room than
+  // the sibling renderers' 60px header, so we keep the same 80×40 fit slot
+  // for visual consistency across all 5 travel PDFs. Fail-soft try/catch.
+  if (tmcLogoBuffer) {
+    try {
+      const LOGO_W = 80;
+      const LOGO_H = 40;
+      const LOGO_X = pageW - LOGO_W - pageMargin;
+      const LOGO_Y = 30;
+      doc.image(tmcLogoBuffer, LOGO_X, LOGO_Y, { fit: [LOGO_W, LOGO_H] });
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[pdfRenderer/S65] doc.image() rejected logo buffer (tmc-readiness): ${err && err.message ? err.message : err}`,
+      );
+    }
+  }
 
   doc.fillColor(BRAND.textDark).font("Helvetica-Bold").fontSize(16)
     .text(schoolName, pageMargin, 140, { width: contentW });
@@ -3286,7 +3381,7 @@ function renderTmcReportSection(doc, { num, title, body, accent }) {
 //   5. INVOICE_BRAND_KIT_FALLBACKS[subBrand]      (S52 hard-coded)
 // Pre-S52 fallback was SUB_BRAND_ACCENT[sub]; the four travel sub-brands
 // now share the S13-aligned palette through #5.
-function renderTravelQuotePdf(quote, opts = {}) {
+async function renderTravelQuotePdf(quote, opts = {}) {
   const q = quote || {};
   const sub = q.subBrand;
   const brandLabel = SUB_BRAND_LABEL[sub] || "Travel CRM";
@@ -3315,6 +3410,19 @@ function renderTravelQuotePdf(quote, opts = {}) {
     return `${currency} ${v.toFixed(2)}`;
   }
 
+  // S65 — resolve logo URL BEFORE drawing. Precedence:
+  //   1. q.brandKit.logoUrl  — pre-S65 inline override (the quote-template
+  //      caller could carry an explicit logo URL alongside the accent
+  //      override). Honored if present to preserve back-compat with any
+  //      template that supplied logoUrl.
+  //   2. branding.thumbnailUrl — admin-curated via tenant.subBrandConfigJson.
+  // Either way, the buffer is fetched through module.exports.fetchLogoBuffer
+  // so vitest spies catch it. Fail-soft on any network / parse error.
+  const quoteLogoUrl = (q.brandKit && q.brandKit.logoUrl) || branding.thumbnailUrl || null;
+  const logoBuffer = quoteLogoUrl
+    ? await module.exports.fetchLogoBuffer(quoteLogoUrl)
+    : null;
+
   const doc = new PDFDocument({ size: "A4", margin: 50 });
   const bufPromise = streamToBuffer(doc);
 
@@ -3323,10 +3431,25 @@ function renderTravelQuotePdf(quote, opts = {}) {
     .text(brandLabel, 50, 22, { align: "left" });
   doc.fillColor("#fff").fontSize(10).text("Quote", 50, 42, { align: "left" });
 
-  if (q.brandKit && q.brandKit.logoUrl) {
-    doc.font("Helvetica").fontSize(8).fillColor("#fff")
-      .text(`[Logo: ${q.brandKit.logoUrl}]`, doc.page.width - 250, 22, { width: 200, align: "right" });
+  // S65 — embed brand logo into the header band's top-right (80×40 fit box).
+  // Replaces the pre-S65 `[Logo: <url>]` text-placeholder that the quote
+  // renderer used to emit when q.brandKit.logoUrl was set. Fail-soft: a
+  // malformed buffer falls through to a logo-less header band.
+  if (logoBuffer) {
+    try {
+      const LOGO_W = 80;
+      const LOGO_H = 40;
+      const LOGO_X = doc.page.width - LOGO_W - 50;
+      const LOGO_Y = 10;
+      doc.image(logoBuffer, LOGO_X, LOGO_Y, { fit: [LOGO_W, LOGO_H] });
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[pdfRenderer/S65] doc.image() rejected logo buffer (quote): ${err && err.message ? err.message : err}`,
+      );
+    }
   }
+
   doc.fillColor("#111").moveDown(2);
 
   const metaTop = 80;

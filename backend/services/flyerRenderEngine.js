@@ -121,7 +121,6 @@ let _puppeteerResolution = null;
 function tryRequirePuppeteer() {
   if (_puppeteerResolution !== null) return _puppeteerResolution;
   try {
-    // eslint-disable-next-line global-require, import/no-unresolved
     const puppeteer = require("puppeteer");
     _puppeteerResolution = { ok: true, puppeteer };
   } catch (_e) {

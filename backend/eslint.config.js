@@ -137,6 +137,16 @@ module.exports = [
     // read is safe.
     files: ['routes/**/*.js'],
     rules: {
+      // All `no-restricted-syntax` selectors for routes/**/*.js live in
+      // this ONE rule definition because ESLint flat config replaces
+      // the rule entirely when a later override re-defines it (the LAST
+      // matching override wins for a given file — there is no additive
+      // merge across overrides for selectors-of-the-same-rule). Severity
+      // is therefore SHARED across all selectors below: `error`. The new
+      // #918/#919 FR-3.4 tenant-scope heuristic lives in a SIBLING
+      // override below at a SEPARATE rule key (gbscrm/tenant-scope-
+      // heuristic — defined via inline plugin) so it can ship at `warn`
+      // severity without forcing the #646 selectors to warn-level too.
       'no-restricted-syntax': [
         'error',
         // Keep the req.user.id rule from above — overriding `no-restricted-syntax`
@@ -173,6 +183,124 @@ module.exports = [
           message: "Don't read req.body.updatedAt — the global stripDangerous middleware deletes it. The DB sets updatedAt automatically. See issue #646.",
         },
       ],
+    },
+  },
+  {
+    // ──────────────────────────────────────────────────────────────────
+    // #918 / #919 (FR-3.4) — Tenant-scope heuristic for Prisma calls
+    // inside route handlers. WARN-level by design.
+    //
+    // Why this rule lives in a SEPARATE inline plugin rather than as
+    // another `no-restricted-syntax` selector: ESLint flat config does
+    // NOT additively merge `no-restricted-syntax` selectors across
+    // overrides for the same file. The LAST matching override REPLACES
+    // the rule entirely. Adding the heuristic at warn-level would force
+    // the #646 + req.user.id selectors above to demote to warn too, OR
+    // we'd have to ship the heuristic at error and break CI on ~60-70
+    // pre-existing callsites. The inline plugin sidesteps both: a
+    // separate rule key (`gbscrm/tenant-scope-finder-heuristic`) carries
+    // its own severity independent of the built-in `no-restricted-
+    // syntax` rule.
+    //
+    // What it flags:
+    //   `prisma.<Model>.findMany({ where: { ...properties... } })` where
+    //   the `where` ObjectExpression has at least one Property, has NO
+    //   Property named `tenantId`, AND has NO Property named `id`. The
+    //   `id` escape hatch reduces the false-positive class for
+    //   by-primary-key lookups that are tenant-safe by virtue of a
+    //   prior tenant-scoped fetch of that id.
+    //
+    // Why ONLY `findMany`:
+    //   List endpoints are the highest-risk class for cross-tenant
+    //   leakage — they return an array of rows. `findFirst` /
+    //   `findUnique` / `update` / `delete` by primary key after a prior
+    //   tenant-scoped fetch dominate the noise floor when the selector
+    //   is widened. Narrowing to `findMany` lifts signal:noise from
+    //   roughly 1:25 to roughly 1:5 on the existing 102-route surface.
+    //
+    // What it WON'T catch (cron-callsite review separately — see
+    // [docs/gaps/cross-tenant-coverage-audit.md]):
+    //   - Prisma calls inside `backend/cron/*.js` engines (different
+    //     scope; the engine loops per-tenant or carries `tenantId` in
+    //     local scope explicitly).
+    //   - Prisma calls inside `backend/lib/*.js` / `services/*.js`
+    //     helpers (most accept a `tenantId` arg from the caller; the
+    //     caller is responsible for scoping).
+    //   - Raw SQL via `$queryRaw` / `$executeRaw`.
+    //   - Calls where `where` is computed dynamically (`where:
+    //     buildWhere(req)` or `where: { ...tenantWhere(req) }`) — the
+    //     AST can't see into the builder or spread expression.
+    //   - `findFirst` / `findUnique` / `update` / `delete` (intentional
+    //     narrowing — false-positive rate too high to justify the
+    //     signal).
+    //
+    // Suppress with `// eslint-disable-next-line gbscrm/tenant-scope-
+    // finder-heuristic` + a one-line comment explaining why the call is
+    // tenant-safe (e.g. "// safe: ADMIN-only route, verified by
+    // verifyRole guard at top" or "// safe: list scoped by prior tenant-
+    // scoped contactId fetch").
+    //
+    // The companion gate spec
+    // [`e2e/tests/cross-tenant-coverage-audit.spec.js`] provides the
+    // runtime check: cross-tenant Bearer tokens against GET / detail
+    // endpoints for the highest-risk models. The two layers are
+    // complementary — ESLint catches it at write-time (warn), the gate
+    // spec catches it at deploy-time (error).
+    //
+    // Tightening path: if a third instance of cross-tenant leak is
+    // surfaced in a model NOT covered by the gate spec, widen the
+    // selector to also flag `findFirst` and `findUnique`, then promote
+    // severity from `warn` to `error` after sweeping the existing
+    // ~60-70 callsites with audit-backed `// eslint-disable-next-line`
+    // directives.
+    // ──────────────────────────────────────────────────────────────────
+    files: ['routes/**/*.js'],
+    plugins: {
+      gbscrm: {
+        rules: {
+          // Inline custom rule. Takes a single options object with
+          // { selector, message } and reports the message on every
+          // node matching the selector. Effectively a clone of the
+          // built-in `no-restricted-syntax` rule but registered under
+          // a separate key so it can carry its own severity.
+          'tenant-scope-finder-heuristic': {
+            meta: {
+              type: 'problem',
+              docs: {
+                description: 'FR-3.4 tenant-scope heuristic for Prisma findMany calls in route handlers.',
+              },
+              schema: [{
+                type: 'object',
+                properties: {
+                  selector: { type: 'string' },
+                  message: { type: 'string' },
+                },
+                required: ['selector', 'message'],
+                additionalProperties: false,
+              }],
+              messages: { restricted: '{{message}}' },
+            },
+            create(context) {
+              const opts = context.options[0];
+              return {
+                [opts.selector](node) {
+                  context.report({
+                    node,
+                    messageId: 'restricted',
+                    data: { message: opts.message },
+                  });
+                },
+              };
+            },
+          },
+        },
+      },
+    },
+    rules: {
+      'gbscrm/tenant-scope-finder-heuristic': ['warn', {
+        selector: "CallExpression[callee.object.object.name='prisma'][callee.property.name='findMany'] > ObjectExpression > Property[key.name='where'] > ObjectExpression:has(Property):not(:has(Property[key.name='tenantId'])):not(:has(Property[key.name='id']))",
+        message: "FR-3.4 (#918 / #919): prisma.<Model>.findMany inside routes/ is missing `tenantId` in its WHERE clause. List endpoints are the highest-risk class for cross-tenant data leak — they return arrays of rows. Either (a) add `tenantId: req.user.tenantId` to the WHERE, (b) use the `tenantWhere(req)` helper if/when introduced, or (c) suppress with `// eslint-disable-next-line gbscrm/tenant-scope-finder-heuristic` + a one-line comment explaining why the call is tenant-safe (e.g. ADMIN-only route, parent-row tenant-scoped, lookup model with no PII). See docs/gaps/cross-tenant-coverage-audit.md.",
+      }],
     },
   },
   {

@@ -184,17 +184,21 @@ function listFrontendSourceFiles() {
 
 test.describe('#186/#342 — security headers (tightened pins)', () => {
   // Helmet 8.x sets these defaults via helmetMiddleware (security.js:27-41):
-  //   x-frame-options:           SAMEORIGIN
+  //   x-frame-options:           DENY                                    (#921 slice S4)
   //   x-content-type-options:    nosniff
   //   referrer-policy:           strict-origin-when-cross-origin
   //   permissions-policy:        camera=(), microphone=(), geolocation=(self), interest-cohort=()
-  //   strict-transport-security: max-age=31536000; includeSubDomains   (HTTPS only)
+  //   strict-transport-security: max-age=31536000; includeSubDomains     (HTTPS only)
   //   cross-origin-resource-policy: cross-origin
   //
-  // CSP is intentionally disabled (security.js:28) for the embed-widget
-  // cross-origin loads — pinning its absence so a refactor that re-enables
-  // it without nonce wiring fails fast (the embed widget would break
-  // silently on partner sites otherwise).
+  // #921 slice S4 (FR-3.6): X-Frame-Options flipped from SAMEORIGIN to
+  // DENY; CSP frame-ancestors flipped from 'self' to 'none'. The embed
+  // widget at /embed/lead-form.html now uses allowIframeEmbedding() per-
+  // route override to permit partner-site framing (X-Frame-Options removed
+  // + frame-ancestors *).
+  //
+  // #654 (v3.7.x): CSP enabled in transitional mode permitting 'unsafe-
+  // inline' on script-src/style-src; nonce wiring landed in #917 slice S1.
   for (const path of ['/api/health', '/api/auth/login']) {
     test(`${path} carries the canonical helmet header values`, async ({ request }) => {
       const res = path.endsWith('/login')
@@ -207,10 +211,10 @@ test.describe('#186/#342 — security headers (tightened pins)', () => {
 
       const headers = res.headers();
 
-      // Tighter pin: assert the EXACT value, not just truthy. A regression
-      // that flips X-Frame-Options to DENY (which would break /embed/lead-form.html
-      // preview inside our own admin UI) surfaces here.
-      expect(headers['x-frame-options']?.toUpperCase()).toBe('SAMEORIGIN');
+      // #921 slice S4 (FR-3.6) — tighter pin: SAMEORIGIN → DENY. Embed
+      // widget override keeps the legit cross-origin framing case working
+      // (XFO removed at /embed/lead-form.html, frame-ancestors splice).
+      expect(headers['x-frame-options']?.toUpperCase()).toBe('DENY');
       expect(headers['x-content-type-options']).toBe('nosniff');
       expect(headers['referrer-policy']).toBe('strict-origin-when-cross-origin');
 
@@ -243,7 +247,8 @@ test.describe('#186/#342 — security headers (tightened pins)', () => {
       const csp = headers['content-security-policy'] || '';
       expect(csp, '#654 — CSP must be present (was re-enabled in v3.7.x)').toBeTruthy();
       expect(csp).toContain("default-src 'self'");
-      expect(csp).toContain("frame-ancestors 'self'");
+      // #921 slice S4 (FR-3.6) — frame-ancestors flipped from 'self' to 'none'.
+      expect(csp).toContain("frame-ancestors 'none'");
       expect(csp).toContain("object-src 'none'");
     });
   }

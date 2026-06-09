@@ -80,10 +80,13 @@ describe('helmetMiddleware', () => {
     expect(hsts).toContain('includeSubDomains');
   });
 
-  test('sets X-Frame-Options to SAMEORIGIN', () => {
+  // #921 slice S4 (FR-3.6) — X-Frame-Options flipped from SAMEORIGIN to
+  // DENY as the global default. Per-route override for the embed widget
+  // is provided by allowIframeEmbedding() (see dedicated test below).
+  test('sets X-Frame-Options to DENY (FR-3.6 default)', () => {
     const { req, res, next } = makeReqRes();
     helmetMiddleware(req, res, next);
-    expect(res.headers['X-Frame-Options']).toBe('SAMEORIGIN');
+    expect(res.headers['X-Frame-Options']).toBe('DENY');
   });
 
   test('sets Referrer-Policy to strict-origin-when-cross-origin', () => {
@@ -106,14 +109,17 @@ describe('helmetMiddleware', () => {
   // handlers). The directive list includes object-src 'none',
   // frame-ancestors 'self', form-action 'self', base-uri 'self' — strict
   // wins. Tightening to nonces is tracked as a follow-up.
-  test('sets a transitional Content-Security-Policy with object-src none + frame-ancestors self', () => {
+  test("sets a transitional Content-Security-Policy with object-src none + frame-ancestors 'none' (#921 FR-3.6)", () => {
     const { req, res, next } = makeReqRes();
     helmetMiddleware(req, res, next);
     const csp = res.headers['Content-Security-Policy'];
     expect(csp).toBeTruthy();
     expect(csp.toLowerCase()).toContain("default-src 'self'");
     expect(csp.toLowerCase()).toContain("object-src 'none'");
-    expect(csp.toLowerCase()).toContain("frame-ancestors 'self'");
+    // #921 slice S4 — frame-ancestors flipped from 'self' to 'none' for
+    // global clickjacking lockdown. Embed widget gets per-route override
+    // via allowIframeEmbedding().
+    expect(csp.toLowerCase()).toContain("frame-ancestors 'none'");
     expect(csp.toLowerCase()).toContain("form-action 'self'");
     expect(csp.toLowerCase()).toContain("base-uri 'self'");
   });

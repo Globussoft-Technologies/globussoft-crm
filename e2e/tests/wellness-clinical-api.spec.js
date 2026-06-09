@@ -3642,6 +3642,92 @@ test.describe('Wellness API — #920 S42 PHI slim-shape opt-in', () => {
     }
   });
 
+  // ── S96 — surface S62 slim-shape columns ─────────────────────────────
+  // S62 added firstName/lastName/displayName/lastVisitDate to Patient and
+  // status/dispensedAt to Prescription as additive-nullable columns. S42's
+  // slim projection (which shipped BEFORE S62) only selected the pre-S62
+  // column set, so the new columns were SQL-dropped on `?fields=summary`
+  // even though they were safe to surface (firstName/lastName/displayName
+  // are PII-name-class, governed by the same maskRows() viewer filter as
+  // `name`; lastVisitDate / status / dispensedAt are non-PHI workflow
+  // keys). S96 extends the slim projection to surface these columns. The
+  // assertions below pin THE KEY's PRESENCE in the slim-path response;
+  // they're nullability-tolerant because S62 columns are nullable + no
+  // backfill ran yet, so values are typically null in seed/test rows.
+  test('S96: GET /patients?fields=summary surfaces S62 columns (firstName/lastName/displayName/lastVisitDate)', async ({ request }) => {
+    // Seed a patient — the S62 PRD-additive columns are nullable + not
+    // backfilled, so we don't pass values for them; we only pin that the
+    // KEYS appear on every slim row (values may be null).
+    await createPatient(request, { suffix: 'S96PatientSlimKeys' });
+    const res = await authGet(request, '/api/wellness/patients?fields=summary&limit=10');
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(Array.isArray(body.patients)).toBe(true);
+    expect(body.patients.length).toBeGreaterThan(0);
+    for (const p of body.patients) {
+      // S62-shipped, S96-surfaced — the KEYS must be present on every
+      // slim row (values may be null since no backfill ran).
+      expect(p).toHaveProperty('firstName');
+      expect(p).toHaveProperty('lastName');
+      expect(p).toHaveProperty('displayName');
+      expect(p).toHaveProperty('lastVisitDate');
+      // Sanity: the pre-S96 slim shape (name + createdAt) is still present.
+      expect(p).toHaveProperty('id');
+      expect(p).toHaveProperty('name');
+      // And the PHI drops still hold (regression on the load-bearing S42
+      // contract — adding firstName/lastName MUST NOT have re-introduced
+      // a phone/email/dob leak).
+      expect(p).not.toHaveProperty('phone');
+      expect(p).not.toHaveProperty('email');
+      expect(p).not.toHaveProperty('dob');
+      expect(p).not.toHaveProperty('allergies');
+      expect(p).not.toHaveProperty('notes');
+    }
+  });
+
+  test('S96: GET /prescriptions?fields=summary surfaces S62 columns (status/dispensedAt)', async ({ request }) => {
+    // Use a freshly-created patient to scope the Rx list (avoids picking
+    // up unrelated seed/wellness-monitor Rx rows whose shape we don't
+    // control).
+    const p = await createPatient(request, { suffix: 'S96RxSlimKeys' });
+    const res = await authGet(
+      request,
+      `/api/wellness/prescriptions?fields=summary&patientId=${p.id}&limit=10`,
+    );
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(Array.isArray(body.items)).toBe(true);
+    expect(typeof body.total).toBe('number');
+    // No Rx seeded for this fresh patient — if items is empty, fall back
+    // to a tenant-wide slim call to pin the shape on whatever pre-existing
+    // Rx rows the test fixture / monitor seeded. The KEYS must be present
+    // either way; only the values vary per row.
+    let rows = body.items;
+    if (rows.length === 0) {
+      const tenantWide = await authGet(request, '/api/wellness/prescriptions?fields=summary&limit=10');
+      expect(tenantWide.status()).toBe(200);
+      const wideBody = await tenantWide.json();
+      rows = wideBody.items;
+      if (rows.length === 0) {
+        test.skip(true, 'no prescriptions seeded — slim shape needs at least one row to assert');
+      }
+    }
+    for (const rx of rows) {
+      // S62-shipped, S96-surfaced — the KEYS must be present.
+      expect(rx).toHaveProperty('status');
+      expect(rx).toHaveProperty('dispensedAt');
+      // Sanity: the pre-S96 slim shape still applies.
+      expect(rx).toHaveProperty('id');
+      expect(rx).toHaveProperty('patientId');
+      expect(rx).toHaveProperty('createdAt');
+      // Load-bearing PHI drops still hold — the medico-legal contract
+      // doesn't regress just because we added two workflow keys.
+      expect(rx).not.toHaveProperty('drugs');
+      expect(rx).not.toHaveProperty('instructions');
+      expect(rx).not.toHaveProperty('pdfUrl');
+    }
+  });
+
   // ── Cross-endpoint sanity: phiReadGate still gates slim path ─────────
   test('GET /patients?fields=summary still requires PHI-read role (gate applies pre-shape)', async ({ request }) => {
     // Helper role is denied by phiReadGate's `deny: ["helper"]` clause —

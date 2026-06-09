@@ -441,6 +441,11 @@ describe('listProjection(modelName, fullShape)', () => {
         id: true,
         name: true,         // operator headline (masking still applied
                             // route-side for low-trust viewers).
+        // S96 — S62 PRD columns surfaced on slim shape.
+        firstName: true,
+        lastName: true,
+        displayName: true,
+        lastVisitDate: true,
         locationId: true,
         source: true,
         createdAt: true,
@@ -502,6 +507,11 @@ describe('listProjection(modelName, fullShape)', () => {
         patientId: true,
         visitId: true,
         doctorId: true,
+        // S96 — S62 PRD columns surfaced on slim shape (workflow keys,
+        // not PHI on their own — they don't reveal the prescription
+        // contents, only its lifecycle / dispense timestamp).
+        status: true,
+        dispensedAt: true,
         createdAt: true,
       });
       // The Rx contents — load-bearing drop for HIPAA compliance.
@@ -510,6 +520,78 @@ describe('listProjection(modelName, fullShape)', () => {
       expect(p).not.toHaveProperty('drugs');
       expect(p).not.toHaveProperty('instructions');
       expect(p).not.toHaveProperty('pdfUrl');
+    });
+
+    // ── S96 — S62 column surface assertions (explicit per-column) ─────
+    // Eight strict pins matching the slice spec's case enumeration. The
+    // Patient + Prescription `toEqual` blocks above ALREADY pin the full
+    // slim shape including these columns, but the per-column inclusion
+    // pins below isolate the S96 contract so a future contributor
+    // accidentally dropping ONE column (e.g. while reshuffling) gets a
+    // single-purpose failure rather than a noisy whole-shape diff.
+
+    test('S96: Patient slim shape INCLUDES firstName', () => {
+      const p = listProjection('Patient', false);
+      expect(p).toHaveProperty('firstName', true);
+    });
+
+    test('S96: Patient slim shape INCLUDES lastName', () => {
+      const p = listProjection('Patient', false);
+      expect(p).toHaveProperty('lastName', true);
+    });
+
+    test('S96: Patient slim shape INCLUDES displayName', () => {
+      const p = listProjection('Patient', false);
+      expect(p).toHaveProperty('displayName', true);
+    });
+
+    test('S96: Patient slim shape INCLUDES lastVisitDate', () => {
+      const p = listProjection('Patient', false);
+      expect(p).toHaveProperty('lastVisitDate', true);
+    });
+
+    test('S96: Prescription slim shape INCLUDES status', () => {
+      const p = listProjection('Prescription', false);
+      expect(p).toHaveProperty('status', true);
+    });
+
+    test('S96: Prescription slim shape INCLUDES dispensedAt', () => {
+      const p = listProjection('Prescription', false);
+      expect(p).toHaveProperty('dispensedAt', true);
+    });
+
+    // ── S96 — regression: full path UNCHANGED ─────────────────────────
+    // The non-slim (default) path always returns undefined so Prisma
+    // ships the full row. S96 must NOT change this. Pinning that the
+    // full-path return contract is still `undefined` for both models
+    // catches a future refactor that accidentally inverts the slim/full
+    // gate.
+
+    test('S96 regression: Patient full path (fullShape=true) UNCHANGED — returns undefined', () => {
+      // The full path is the helper's "ship whatever Prisma's default is"
+      // signal. Adding columns to the slim shape MUST NOT alter the
+      // full-path contract.
+      expect(listProjection('Patient', true)).toBeUndefined();
+    });
+
+    test('S96 regression: Prescription full path (fullShape=true) UNCHANGED — returns undefined', () => {
+      expect(listProjection('Prescription', true)).toBeUndefined();
+    });
+
+    // Sanity-pin the slim-shape FIELD COUNT for both models so a future
+    // contributor accidentally REMOVING a slim column (rather than just
+    // changing what's in it) is caught by these counters. Patient: 9
+    // keys (id, name, firstName, lastName, displayName, lastVisitDate,
+    // locationId, source, createdAt). Prescription: 7 keys (id,
+    // patientId, visitId, doctorId, status, dispensedAt, createdAt).
+    test('S96 regression: Patient slim shape has exactly 9 keys', () => {
+      const p = listProjection('Patient', false);
+      expect(Object.keys(p)).toHaveLength(9);
+    });
+
+    test('S96 regression: Prescription slim shape has exactly 7 keys', () => {
+      const p = listProjection('Prescription', false);
+      expect(Object.keys(p)).toHaveLength(7);
     });
 
     // ── S43 VisaApplication projection ────────────────────────────────

@@ -350,6 +350,22 @@ const PROJECTIONS = Object.freeze({
                          // still applies the existing maskRows() viewer-policy
                          // filter so low-trust viewers (telecaller / helper)
                          // see masked names on slim path too.
+    // S96 — surface S62's slim-shape PRD additions (per S42 carry-over).
+    // firstName / lastName / displayName / lastVisitDate are the structured
+    // name parts + last-visit anchor that the slim row UI can render WITHOUT
+    // loading the full PHI payload. Same PHI risk class as `name` (operator-
+    // visible identifier) and gated by the same maskRows() viewer-policy
+    // filter route-side, so low-trust viewers (telecaller / helper) see them
+    // masked too. lastVisitDate is a denormalized cache (currently null on
+    // every row — S62 added the column without backfill; population logic is
+    // a follow-up gap row). The slim consumer treats null as "unknown / not
+    // yet computed", not "no visits".
+    firstName: true,     // structured given name (additive to `name`).
+    lastName: true,      // structured family name (additive to `name`).
+    displayName: true,   // operator-set / computed UI-rendered name (falls
+                         // back to `name` when null).
+    lastVisitDate: true, // denormalized MAX(visits.visitDate) anchor for
+                         // last-visit chip on picker rows.
     locationId: true,    // location chip on the picker (non-PHI — just a
                          // clinic-branch FK).
     source: true,        // "ad" | "walk-in" | "referral" | "whatsapp" — non-
@@ -416,6 +432,19 @@ const PROJECTIONS = Object.freeze({
     visitId: true,       // back-link FK (when the Rx anchors a visit).
     doctorId: true,      // prescriber FK — medico-legal "who wrote it"
                          // metadata; not PHI on its own.
+    // S96 — surface S62's slim-shape PRD additions. Both columns are
+    // lifecycle workflow keys (not PHI on their own — they don't reveal
+    // what was prescribed, only whether/when the Rx was issued/dispensed).
+    // status is the conventional 'draft' | 'issued' | 'dispensed' |
+    // 'cancelled' string (null = legacy row, route layer treats as
+    // 'issued' for back-compat per the S62 schema comment).
+    // dispensedAt is the POS pharmacy-dispense timestamp (null until the
+    // dispense action fires). Both are picker-relevant for the Rx-history
+    // / dispense-queue UIs that the slim path serves.
+    status: true,        // 'draft' | 'issued' | 'dispensed' | 'cancelled'
+                         // — non-PHI lifecycle marker.
+    dispensedAt: true,   // pharmacy-dispense timestamp — non-PHI workflow
+                         // signal (null until dispense action fires).
     createdAt: true,     // sort key for Rx history.
     // Intentionally DROPPED (the entire reason this slim shape exists):
     //   drugs (@db.Text JSON) — the actual prescription contents. THIS IS
@@ -425,14 +454,9 @@ const PROJECTIONS = Object.freeze({
     //   pdfUrl — signed PDF link; potentially auth-bearing on signed-URL
     //            providers + contains the same drug list once opened.
     //
-    // Notes on absent columns:
-    //   - There is NO `status` column on Prescription (Rx is not stateful in
-    //     this schema; once written, it stands until amended via PUT, which
-    //     creates a separate row). The slice spec mentioned "status" but
-    //     the schema doesn't carry one. Leaving it out keeps the slim
-    //     contract honest.
-    //   - There is NO `dispensedAt` column on Prescription. Dispensing is
-    //     tracked in the pharmacy/inventory subsystem, not on the Rx row.
+    // (Earlier comment noted status + dispensedAt did NOT exist on
+    // Prescription; S62 added them as nullable columns. S96 surfaced them
+    // on the slim shape per the original S42 carry-over spec.)
   }),
 });
 

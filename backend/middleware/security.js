@@ -83,11 +83,20 @@ const helmetMiddleware = helmet({
       // form-action: limit the destination of <form action=> POSTs to self —
       // bounds CSRF-via-form-submission to the same-origin set.
       formAction: ["'self'"],
-      // frame-ancestors 'self' replaces X-Frame-Options SAMEORIGIN
-      // semantically and is the modern equivalent. Pinned spec
-      // (security-headers.spec.js) also asserts the legacy header for
-      // browsers that haven't migrated to CSP frame-ancestors.
-      frameAncestors: ["'self'"],
+      // #921 slice S4 (FR-3.6) — frame-ancestors flipped from 'self' to
+      // 'none' as the global default. The CRM is not designed to be
+      // legitimately iframed by anyone (including ourselves) outside of
+      // the explicit embed widget at /embed/lead-form.html, which loads
+      // INTO partner sites and so cares about the OUTBOUND framing
+      // (handled by the partner's CSP, not ours). The previous 'self'
+      // value left a clickjacking window open via subdomain takeover (an
+      // attacker controlling any *.globusdemos.com origin could iframe
+      // the admin UI and replay clicks). 'none' closes that window
+      // unconditionally. Per-route overrides for the embed widget are
+      // wired via the `allowIframeEmbedding(allowList)` middleware
+      // exported below; per-tenant allowlist via Tenant.embedAllowlistJson
+      // is FOLLOW-UP (column doesn't exist yet — see slice S4 commit body).
+      frameAncestors: ["'none'"],
       // base-uri 'self' blocks an injected <base> tag from rewriting the
       // document base URL and exfiltrating relative-URL requests.
       baseUri: ["'self'"],
@@ -98,10 +107,15 @@ const helmetMiddleware = helmet({
   // 1-year HSTS, conservative — no preload until we're sure every subdomain
   // is HTTPS-ready. includeSubDomains so *.globusdemos.com inherits.
   hsts: { maxAge: 31536000, includeSubDomains: true, preload: false },
-  // SAMEORIGIN keeps /embed/lead-form.html previewable inside our own admin
-  // UI; the widget is loaded BY partner sites (parent iframe is theirs, not
-  // ours) so we don't need to allow being framed by anyone else.
-  xFrameOptions: { action: 'sameorigin' },
+  // #921 slice S4 (FR-3.6) — X-Frame-Options flipped from 'sameorigin' to
+  // 'deny' as the global default. Paired with CSP frame-ancestors 'none'
+  // above; X-Frame-Options is the legacy companion header for browsers
+  // that predate CSP2 frame-ancestors (every supported browser today
+  // honors both; we ship both for defense-in-depth + audit trail).
+  // The embed widget at /embed/lead-form.html overrides this per-route
+  // via the `allowIframeEmbedding()` middleware so it remains framable
+  // by partner sites that legitimately host the lead-capture widget.
+  xFrameOptions: { action: 'deny' },
   // Pinned explicitly so future helmet upgrades can't silently drop them.
   xContentTypeOptions: true,
   referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
@@ -312,6 +326,90 @@ function stripTenantOverride(req, res, next) {
   next();
 }
 
+// #921 slice S4 (FR-3.6) — per-route iframe-embed override.
+//
+// The global default (helmetMiddleware above) ships X-Frame-Options: DENY
+// + CSP frame-ancestors 'none' — every route refuses to be iframed by
+// anything, including itself. The embed lead-capture widget at
+// `/embed/lead-form.html` is the ONE legitimate cross-origin iframe case;
+// partner sites (callified.ai, partner CRMs) embed the widget INTO an
+// iframe on THEIR origin pointing at OUR URL. For that to work we need
+// to permit being framed by those partner origins.
+//
+// Two override paths, factory-returning a middleware:
+//
+//   allowIframeEmbedding({ allowList: ['https://partner.com'] })
+//       — explicit list of origins allowed to frame. X-Frame-Options has
+//         no list-form (only DENY/SAMEORIGIN/ALLOW-FROM-uri, and
+//         ALLOW-FROM is deprecated + not honored by Chromium since 76),
+//         so we DROP the X-Frame-Options header (the modern browser uses
+//         CSP frame-ancestors anyway) and set CSP frame-ancestors to the
+//         provided allowList.
+//
+//   allowIframeEmbedding({ allowList: ['*'] })
+//       — wildcard "anyone can frame", used for the public embed widget
+//         where partner origins aren't known upfront. Drops X-Frame-Options
+//         and sets `frame-ancestors *`. Use carefully — only on routes
+//         that are intentionally publicly embeddable.
+//
+// Follow-up gap (NOT in this slice — flagged for separate cron tracker
+// row): Tenant.embedAllowlistJson column doesn't exist yet. Once added,
+// the embed handler can call allowIframeEmbedding({
+//   allowList: tenant.embedAllowlistJson || ['*']
+// }) for per-tenant control. For now we ship the override mechanism +
+// the per-tenant read returns null + falls back to wildcard.
+function allowIframeEmbedding({ allowList } = {}) {
+  return function iframeEmbedOverride(req, res, next) {
+    // Drop the global DENY — its presence overrides any frame-ancestors
+    // value in older browsers.
+    if (typeof res.removeHeader === 'function') {
+      res.removeHeader('X-Frame-Options');
+    }
+    // Build the frame-ancestors source list. Wildcard '*' is preserved
+    // verbatim; explicit origins are joined space-separated per CSP spec.
+    const list = Array.isArray(allowList) && allowList.length ? allowList : ['*'];
+    const ancestorList = list.join(' ');
+
+    // Splice frame-ancestors into the existing CSP header without
+    // discarding the other directives (script-src, style-src, etc.
+    // that the SPA bootstrap still needs). Helmet has already set the
+    // Content-Security-Policy header by the time this runs.
+    const currentCsp = (typeof res.getHeader === 'function' && res.getHeader('Content-Security-Policy')) || '';
+    if (currentCsp) {
+      const updated = String(currentCsp).replace(
+        /frame-ancestors[^;]*/i,
+        `frame-ancestors ${ancestorList}`
+      );
+      // If the directive wasn't present (shouldn't happen with current
+      // helmetMiddleware config, but be defensive), append it.
+      const finalCsp = updated === String(currentCsp)
+        ? `${updated}; frame-ancestors ${ancestorList}`
+        : updated;
+      if (typeof res.setHeader === 'function') {
+        res.setHeader('Content-Security-Policy', finalCsp);
+      }
+    } else if (typeof res.setHeader === 'function') {
+      res.setHeader('Content-Security-Policy', `frame-ancestors ${ancestorList}`);
+    }
+    next();
+  };
+}
+
+// #921 slice S4 (FR-3.6) — convenience: read per-tenant allowlist from the
+// (yet-to-be-added) Tenant.embedAllowlistJson column. Today returns null
+// (column doesn't exist); once the column lands in a future schema slice,
+// this is the single read site to update. Falls back to wildcard.
+async function readTenantEmbedAllowlist(_prisma, _tenantId) {
+  // FOLLOW-UP: when Tenant.embedAllowlistJson column lands, replace this
+  // with:
+  //   const t = await prisma.tenant.findUnique({
+  //     where: { id: tenantId },
+  //     select: { embedAllowlistJson: true },
+  //   });
+  //   return t?.embedAllowlistJson ? JSON.parse(t.embedAllowlistJson) : null;
+  return null;
+}
+
 module.exports = {
   // #917 slice S1 — re-exported here for convenience; the canonical home is
   // backend/lib/cspNonce.js. Mount this BEFORE helmetStrictReportOnlyMiddleware
@@ -322,4 +420,7 @@ module.exports = {
   permissionsPolicyMiddleware,
   sanitizeBody,
   stripTenantOverride,
+  // #921 slice S4 (FR-3.6)
+  allowIframeEmbedding,
+  readTenantEmbedAllowlist,
 };

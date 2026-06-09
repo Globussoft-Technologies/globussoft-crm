@@ -106,6 +106,7 @@ const resetTokens = new Map();
 router.get("/public/tenants", async (req, res) => {
   try {
     const tenants = await prisma.tenant.findMany({
+      // eslint-disable-next-line gbscrm/tenant-scope-finder-heuristic -- safe: PUBLIC route (no verifyToken) listing tenants for the registration dropdown — there is no req.user.tenantId to scope by; the response is intentionally cross-tenant. S36 (FR-3.4 / #919) audit-reviewed false-positive.
       where: { isActive: true },
       // `slug` is included so the customer-register + login pages can map a
       // `?tenantSlug=` handoff param (e.g. from the Dr. Haror's marketing
@@ -350,6 +351,7 @@ router.post("/signup", async (req, res) => {
 router.get("/customer/tenants", async (req, res) => {
   try {
     const tenants = await prisma.tenant.findMany({
+      // eslint-disable-next-line gbscrm/tenant-scope-finder-heuristic -- safe: PUBLIC route (no verifyToken) for the customer self-registration dropdown — no req.user.tenantId exists pre-registration. Returns minimal display fields only (id, name, vertical) — no plan, owner, billing, or branding metadata. S36 (FR-3.4 / #919) audit-reviewed false-positive.
       where: { isActive: true },
       select: { id: true, name: true, vertical: true },
       orderBy: { name: "asc" },

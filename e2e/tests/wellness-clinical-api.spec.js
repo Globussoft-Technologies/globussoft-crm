@@ -3282,6 +3282,44 @@ test.describe('#748 archive guard on membership purchase', () => {
 //   - The audit details payload now carries `shape: 'full' | 'summary'`
 //     so reviewers can answer "did this op leak PHI?" without joining
 //     two tables.
+// S61: poll the /api/audit ADMIN list and return the row whose details
+// payload (JSON-parsed) satisfies `predicate`. Returns null after the
+// 3.5s budget without throwing — caller asserts row truthiness via expect.
+//
+// The audit list endpoint returns `desc` by createdAt and caps at 100.
+// We don't filter by createdAt at the predicate layer because the
+// row-identifying marker (q substring / patientId fk) is already unique
+// per call — see the describe-block header for the strategy rationale.
+//
+// Re-poll cadence: 6 attempts × 500ms — total ~3.5s. The writeAudit call
+// is fire-and-forget but typically settles within 50-300ms on the local
+// stack; the longer budget covers demo's 8-shard contention window.
+async function pollForAuditRow(request, entity, action, predicate) {
+  const deadline = Date.now() + 3500;
+  while (Date.now() < deadline) {
+    const auditRes = await authGet(
+      request,
+      `/api/audit?entity=${encodeURIComponent(entity)}&action=${encodeURIComponent(action)}`,
+    );
+    if (auditRes.status() === 200) {
+      const body = await auditRes.json();
+      const rows = Array.isArray(body) ? body : (body.items || body.rows || []);
+      for (const row of rows) {
+        if (row.entity !== entity || row.action !== action) continue;
+        let details;
+        try {
+          details = typeof row.details === 'string' ? JSON.parse(row.details) : row.details;
+        } catch (_e) {
+          continue;
+        }
+        if (predicate(details)) return row;
+      }
+    }
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  return null;
+}
+
 test.describe('Wellness API — #920 S42 PHI slim-shape opt-in', () => {
   // ── Patients ─────────────────────────────────────────────────────────
   test('GET /patients?fields=summary drops every PHI column', async ({ request }) => {
@@ -3353,36 +3391,173 @@ test.describe('Wellness API — #920 S42 PHI slim-shape opt-in', () => {
     }
   });
 
-  test('GET /patients?fields=summary writes PATIENT_LIST_READ audit row with shape=summary', async ({ request }) => {
-    await createPatient(request, { suffix: 'S42AuditMarker' });
-    const before = Date.now();
-    const res = await authGet(request, '/api/wellness/patients?fields=summary&limit=3');
-    expect(res.status()).toBe(200);
-    // Brief await for the fire-and-forget audit write to settle.
-    await new Promise((r) => setTimeout(r, 1500));
-    const auditRes = await authGet(
+  // =====================================================================
+  // S61 — strict-pin audit-shape contract for PHI list reads.
+  //
+  // S42 landed the `details.shape` discriminator on the three PHI list-read
+  // audit rows (PATIENT_LIST_READ / VISIT_LIST_READ / PRESCRIPTION_LIST_READ)
+  // but pinned it SOFTLY: the original test grabbed the newest audit row
+  // within a 5s window, JSON-parsed details, and ran shape assertions only
+  // if a recent row was found. Under sustained background-cron write
+  // pressure on demo (e2e-full target) that window can be occupied by an
+  // UNRELATED PATIENT_LIST_READ row from another worker / wellness-read-
+  // audit-api.spec.js / portal access — so the "right shape" assertion
+  // would falsely pass against the wrong row, or silently fall through.
+  //
+  // The strict-pin strategy threads a unique deterministic marker through
+  // each endpoint's details payload so the lookup is row-identifiable:
+  //
+  //   Patient list      — pass `?q=<RUN_TAG>-pat-<rand>`. The route copies
+  //                       `q` verbatim into `details.query`. Filter audit
+  //                       rows by `details.query === <marker>` (exact
+  //                       string equality, not substring) — guaranteed
+  //                       0-or-1 matches because the marker is unique per
+  //                       test call.
+  //   Visit list        — pass `?patientId=<freshly-created-patient-id>`.
+  //                       The route copies it into `details.filters.patientId`.
+  //                       Filter by `details.filters.patientId === <id>`
+  //                       — guaranteed 0-or-1 matches because each test
+  //                       creates its own patient.
+  //   Prescription list — same approach: `?patientId=<freshly-created-id>`,
+  //                       filter by `details.filters.patientId === <id>`.
+  //
+  // Each strict pin runs the call twice (summary + full) on the SAME
+  // marker so the shape distinction is the load-bearing assertion (both
+  // requests SHOULD emit an audit row; the shape field MUST differ).
+  // =====================================================================
+  test('S61: GET /patients?fields=summary writes PATIENT_LIST_READ audit row with shape=summary (strict)', async ({ request }) => {
+    // Unique deterministic marker — `q` is copied verbatim into
+    // details.query (see backend/routes/wellness.js line ~755). Use a
+    // RUN_TAG + monotonic suffix + random tail so concurrent tests in
+    // this describe never collide.
+    const marker = `${RUN_TAG}-patq-summary-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const res = await authGet(
       request,
-      `/api/audit?entity=Patient&action=PATIENT_LIST_READ&limit=20`,
+      `/api/wellness/patients?fields=summary&q=${encodeURIComponent(marker)}&limit=3`,
     );
-    expect(auditRes.status()).toBe(200);
-    const auditBody = await auditRes.json();
-    const rows = Array.isArray(auditBody) ? auditBody : (auditBody.items || auditBody.rows || []);
-    // Find the most recent row attributable to our call (within ~5s).
-    const recent = rows.find((row) => {
-      const created = row.createdAt ? new Date(row.createdAt).getTime() : 0;
-      return created >= before - 1000;
-    });
-    // Audit lookup endpoints differ per deployment; if we found a recent
-    // row, pin shape=summary. If not, the route's writeAudit catch already
-    // logs failures — the no-throw is what matters here.
-    if (recent && typeof recent.details === 'string') {
-      try {
-        const detailsObj = JSON.parse(recent.details);
-        expect(detailsObj.shape).toBe('summary');
-      } catch (_e) {
-        // details might be JSON-string-escaped or missing — soft pin only.
-      }
-    }
+    expect(res.status()).toBe(200);
+    // Allow the fire-and-forget writeAudit to settle. Poll up to ~3s.
+    const row = await pollForAuditRow(
+      request,
+      'Patient',
+      'PATIENT_LIST_READ',
+      (details) => details && details.query === marker,
+    );
+    expect(row, `audit row not found for marker=${marker}`).toBeTruthy();
+    const details = typeof row.details === 'string' ? JSON.parse(row.details) : row.details;
+    // Strict-pin contract: shape discriminator is the load-bearing field.
+    expect(details.shape).toBe('summary');
+    expect(details.query).toBe(marker);
+    // The route also pins `count` (number, may be 0 if no E2E patient
+    // matches the random marker — we don't assert non-zero count, only
+    // the count KEY's existence as part of the shape contract).
+    expect(typeof details.count).toBe('number');
+  });
+
+  test('S61: GET /patients (default = full) writes PATIENT_LIST_READ audit row with shape=full (strict)', async ({ request }) => {
+    const marker = `${RUN_TAG}-patq-full-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const res = await authGet(
+      request,
+      `/api/wellness/patients?q=${encodeURIComponent(marker)}&limit=3`,
+    );
+    expect(res.status()).toBe(200);
+    const row = await pollForAuditRow(
+      request,
+      'Patient',
+      'PATIENT_LIST_READ',
+      (details) => details && details.query === marker,
+    );
+    expect(row, `audit row not found for marker=${marker}`).toBeTruthy();
+    const details = typeof row.details === 'string' ? JSON.parse(row.details) : row.details;
+    // The other half of the discriminator pair — same marker, opposite shape.
+    expect(details.shape).toBe('full');
+    expect(details.query).toBe(marker);
+  });
+
+  test('S61: GET /visits?fields=summary writes VISIT_LIST_READ audit row with shape=summary (strict)', async ({ request }) => {
+    // Use a freshly-created patient's id as the deterministic marker.
+    // The route copies `?patientId=<n>` into details.filters.patientId
+    // (see backend/routes/wellness.js line ~2537). Per-call uniqueness
+    // is guaranteed because each test creates its own patient row.
+    const p = await createPatient(request, { suffix: 'S61VisitSummaryMarker' });
+    const res = await authGet(
+      request,
+      `/api/wellness/visits?fields=summary&patientId=${p.id}&limit=10`,
+    );
+    expect(res.status()).toBe(200);
+    const row = await pollForAuditRow(
+      request,
+      'Visit',
+      'VISIT_LIST_READ',
+      (details) => details && details.filters && details.filters.patientId === p.id,
+    );
+    expect(row, `audit row not found for patientId=${p.id}`).toBeTruthy();
+    const details = typeof row.details === 'string' ? JSON.parse(row.details) : row.details;
+    expect(details.shape).toBe('summary');
+    expect(details.filters.patientId).toBe(p.id);
+    expect(typeof details.count).toBe('number');
+  });
+
+  test('S61: GET /visits (default = full) writes VISIT_LIST_READ audit row with shape=full (strict)', async ({ request }) => {
+    const p = await createPatient(request, { suffix: 'S61VisitFullMarker' });
+    const res = await authGet(
+      request,
+      `/api/wellness/visits?patientId=${p.id}&limit=10`,
+    );
+    expect(res.status()).toBe(200);
+    const row = await pollForAuditRow(
+      request,
+      'Visit',
+      'VISIT_LIST_READ',
+      (details) => details && details.filters && details.filters.patientId === p.id,
+    );
+    expect(row, `audit row not found for patientId=${p.id}`).toBeTruthy();
+    const details = typeof row.details === 'string' ? JSON.parse(row.details) : row.details;
+    expect(details.shape).toBe('full');
+    expect(details.filters.patientId).toBe(p.id);
+  });
+
+  test('S61: GET /prescriptions?fields=summary writes PRESCRIPTION_LIST_READ audit row with shape=summary (strict)', async ({ request }) => {
+    // Same strategy as the Visit strict pin: freshly-created patientId
+    // threads into details.filters.patientId. The Prescription LIST
+    // endpoint (backend/routes/wellness.js line ~3451) echoes
+    // `?patientId=<n>` verbatim into the audit row.
+    const p = await createPatient(request, { suffix: 'S61RxSummaryMarker' });
+    const res = await authGet(
+      request,
+      `/api/wellness/prescriptions?fields=summary&patientId=${p.id}&limit=10`,
+    );
+    expect(res.status()).toBe(200);
+    const row = await pollForAuditRow(
+      request,
+      'Prescription',
+      'PRESCRIPTION_LIST_READ',
+      (details) => details && details.filters && details.filters.patientId === p.id,
+    );
+    expect(row, `audit row not found for patientId=${p.id}`).toBeTruthy();
+    const details = typeof row.details === 'string' ? JSON.parse(row.details) : row.details;
+    expect(details.shape).toBe('summary');
+    expect(details.filters.patientId).toBe(p.id);
+    expect(typeof details.count).toBe('number');
+  });
+
+  test('S61: GET /prescriptions (default = full) writes PRESCRIPTION_LIST_READ audit row with shape=full (strict)', async ({ request }) => {
+    const p = await createPatient(request, { suffix: 'S61RxFullMarker' });
+    const res = await authGet(
+      request,
+      `/api/wellness/prescriptions?patientId=${p.id}&limit=10`,
+    );
+    expect(res.status()).toBe(200);
+    const row = await pollForAuditRow(
+      request,
+      'Prescription',
+      'PRESCRIPTION_LIST_READ',
+      (details) => details && details.filters && details.filters.patientId === p.id,
+    );
+    expect(row, `audit row not found for patientId=${p.id}`).toBeTruthy();
+    const details = typeof row.details === 'string' ? JSON.parse(row.details) : row.details;
+    expect(details.shape).toBe('full');
+    expect(details.filters.patientId).toBe(p.id);
   });
 
   // ── Visits ───────────────────────────────────────────────────────────

@@ -84,6 +84,16 @@
  *     Both halves are now hard-asserted: JWT revocation (security
  *     primitive) + audit emission (discoverability).
  *
+ *   PHI list-reads (routes/wellness.js — added S42, strict-pinned S61):
+ *     GET    /api/wellness/patients         → AuditLog 'Patient'      'PATIENT_LIST_READ'
+ *     GET    /api/wellness/visits           → AuditLog 'Visit'        'VISIT_LIST_READ'
+ *     GET    /api/wellness/prescriptions    → AuditLog 'Prescription' 'PRESCRIPTION_LIST_READ'
+ *     Each row's `details` carries a `shape: 'full' | 'summary'`
+ *     discriminator (S42 contract). The list-read describe blocks below
+ *     pin BOTH halves of the matrix — the action+entity emission
+ *     contract AND the shape discriminator — so a future refactor that
+ *     drops either piece reds the per-push gate.
+ *
  * NEGATIVE-CASE ASSERTIONS:
  *   - 400 validation-failed POST /api/contacts (missing email) → NO new
  *     audit row for the failed request.
@@ -988,5 +998,210 @@ test.describe('Audit coverage — actor + tenant scope sanity', () => {
     expect(row, 'audit row must be readable within 2s of response').not.toBeNull();
     const elapsed = Date.now() - t0;
     expect(elapsed, `total response+audit-poll under 5s (was ${elapsed}ms)`).toBeLessThan(5000);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────
+// PHI list-read audit emissions (wellness tenant — S42 contract, S61 strict pin)
+// ─────────────────────────────────────────────────────────────────────
+//
+// PRD §11 (HIPAA / DPDP Act) — every bulk PHI list call MUST emit one
+// AuditLog row per request. The S42 slice added the `details.shape`
+// discriminator (`'full' | 'summary'`) so reviewers can answer "did
+// this call disclose PHI?" without joining tables. S61 pins both the
+// emission contract AND the discriminator deterministically — the
+// fresh-patient `patientId` filter (and unique `q` marker for the
+// Patient list) gives a per-call signature in details.filters /
+// details.query so the row lookup never lands on an unrelated row.
+//
+// Lookup strategy: list-read audit rows have entityId=null (bulk read),
+// so the existing findAuditRow(entity, action, entityId) helper doesn't
+// apply. The findListReadAuditRow helper below filters by predicate on
+// the parsed details payload.
+
+async function findListReadAuditRow(request, token, entity, action, predicate) {
+  // 6 attempts × 500ms — matches the wellness-clinical-api S61 budget.
+  // The audit write is fire-and-forget but typically lands in <300ms.
+  for (let attempt = 0; attempt < 6; attempt++) {
+    const res = await get(request, token, `/api/audit?entity=${encodeURIComponent(entity)}&action=${encodeURIComponent(action)}`);
+    if (res.status() === 200) {
+      const rows = await res.json();
+      for (const row of rows) {
+        if (row.entity !== entity || row.action !== action) continue;
+        let details;
+        try {
+          details = typeof row.details === 'string' ? JSON.parse(row.details) : row.details;
+        } catch (_e) {
+          continue;
+        }
+        if (predicate(details)) return row;
+      }
+    }
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  return null;
+}
+
+test.describe('Audit coverage — PHI list reads (S42 emission + shape discriminator)', () => {
+  let seedPatientId = null;
+  let seedPatientPhone = null;
+
+  test('seed: Patient for PHI list-read marker', async ({ request }) => {
+    const { token } = await getWellnessAdmin(request);
+    const ts = Date.now();
+    const phoneTail = String(ts + 3).slice(-9);
+    seedPatientPhone = `+919${phoneTail}`;
+    const res = await post(request, token, '/api/wellness/patients', {
+      name: `${RUN_TAG} phi-list-marker`,
+      phone: seedPatientPhone,
+      source: 'walkin',
+    });
+    expect(res.status()).toBe(201);
+    const p = await res.json();
+    seedPatientId = p.id;
+    created.wellness.patients.push(p.id);
+  });
+
+  // ── Patient list ────────────────────────────────────────────────────
+  test('GET /api/wellness/patients emits PATIENT_LIST_READ with shape=full (default)', async ({ request }) => {
+    const { token, userId, tenantId } = await getWellnessAdmin(request);
+    // Unique marker threaded into details.query for deterministic lookup.
+    const marker = `${RUN_TAG}-PLR-full-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const res = await get(request, token, `/api/wellness/patients?q=${encodeURIComponent(marker)}&limit=3`);
+    expect(res.status()).toBe(200);
+
+    const row = await findListReadAuditRow(
+      request,
+      token,
+      'Patient',
+      'PATIENT_LIST_READ',
+      (details) => details && details.query === marker,
+    );
+    expect(row, `PATIENT_LIST_READ audit row not found for marker=${marker}`).not.toBeNull();
+    expect(row.userId).toBe(userId);
+    expect(row.tenantId).toBe(tenantId);
+    // entityId is null for list reads (bulk PHI read, not per-row).
+    expect(row.entityId).toBeNull();
+    const details = typeof row.details === 'string' ? JSON.parse(row.details) : row.details;
+    expect(details.shape).toBe('full');
+    expect(details.query).toBe(marker);
+    expect(typeof details.count).toBe('number');
+  });
+
+  test('GET /api/wellness/patients?fields=summary emits PATIENT_LIST_READ with shape=summary', async ({ request }) => {
+    const { token, userId, tenantId } = await getWellnessAdmin(request);
+    const marker = `${RUN_TAG}-PLR-summary-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const res = await get(request, token, `/api/wellness/patients?fields=summary&q=${encodeURIComponent(marker)}&limit=3`);
+    expect(res.status()).toBe(200);
+
+    const row = await findListReadAuditRow(
+      request,
+      token,
+      'Patient',
+      'PATIENT_LIST_READ',
+      (details) => details && details.query === marker,
+    );
+    expect(row, `PATIENT_LIST_READ audit row not found for marker=${marker}`).not.toBeNull();
+    expect(row.userId).toBe(userId);
+    expect(row.tenantId).toBe(tenantId);
+    expect(row.entityId).toBeNull();
+    const details = typeof row.details === 'string' ? JSON.parse(row.details) : row.details;
+    // S42 contract: slim path emits PATIENT_LIST_READ with shape=summary
+    // (and skips the PII_DISCLOSED sibling row entirely — no PHI columns
+    // in the response = no disclosure event).
+    expect(details.shape).toBe('summary');
+    expect(details.query).toBe(marker);
+  });
+
+  // ── Visit list ──────────────────────────────────────────────────────
+  test('GET /api/wellness/visits emits VISIT_LIST_READ with shape=full (default)', async ({ request }) => {
+    const { token, userId, tenantId } = await getWellnessAdmin(request);
+    expect(seedPatientId, 'seed patient id must exist').toBeTruthy();
+    const res = await get(request, token, `/api/wellness/visits?patientId=${seedPatientId}&limit=10`);
+    expect(res.status()).toBe(200);
+
+    const row = await findListReadAuditRow(
+      request,
+      token,
+      'Visit',
+      'VISIT_LIST_READ',
+      (details) => details && details.filters && details.filters.patientId === seedPatientId,
+    );
+    expect(row, `VISIT_LIST_READ audit row not found for patientId=${seedPatientId}`).not.toBeNull();
+    expect(row.userId).toBe(userId);
+    expect(row.tenantId).toBe(tenantId);
+    expect(row.entityId).toBeNull();
+    const details = typeof row.details === 'string' ? JSON.parse(row.details) : row.details;
+    expect(details.shape).toBe('full');
+    expect(details.filters.patientId).toBe(seedPatientId);
+  });
+
+  test('GET /api/wellness/visits?fields=summary emits VISIT_LIST_READ with shape=summary', async ({ request }) => {
+    const { token, userId, tenantId } = await getWellnessAdmin(request);
+    expect(seedPatientId, 'seed patient id must exist').toBeTruthy();
+    // Reuse the seed patient but issue a separate request so a new audit
+    // row is emitted on the slim path. The describe is serial so the
+    // previous full-shape request's row won't be confused with this one
+    // (different shape, same patientId — predicate also asserts shape).
+    const res = await get(request, token, `/api/wellness/visits?fields=summary&patientId=${seedPatientId}&limit=10`);
+    expect(res.status()).toBe(200);
+
+    const row = await findListReadAuditRow(
+      request,
+      token,
+      'Visit',
+      'VISIT_LIST_READ',
+      (details) => details && details.filters && details.filters.patientId === seedPatientId && details.shape === 'summary',
+    );
+    expect(row, `VISIT_LIST_READ summary audit row not found for patientId=${seedPatientId}`).not.toBeNull();
+    expect(row.userId).toBe(userId);
+    expect(row.tenantId).toBe(tenantId);
+    const details = typeof row.details === 'string' ? JSON.parse(row.details) : row.details;
+    expect(details.shape).toBe('summary');
+    expect(details.filters.patientId).toBe(seedPatientId);
+  });
+
+  // ── Prescription list ───────────────────────────────────────────────
+  test('GET /api/wellness/prescriptions emits PRESCRIPTION_LIST_READ with shape=full (default)', async ({ request }) => {
+    const { token, userId, tenantId } = await getWellnessAdmin(request);
+    expect(seedPatientId, 'seed patient id must exist').toBeTruthy();
+    const res = await get(request, token, `/api/wellness/prescriptions?patientId=${seedPatientId}&limit=10`);
+    expect(res.status()).toBe(200);
+
+    const row = await findListReadAuditRow(
+      request,
+      token,
+      'Prescription',
+      'PRESCRIPTION_LIST_READ',
+      (details) => details && details.filters && details.filters.patientId === seedPatientId && details.shape === 'full',
+    );
+    expect(row, `PRESCRIPTION_LIST_READ full audit row not found for patientId=${seedPatientId}`).not.toBeNull();
+    expect(row.userId).toBe(userId);
+    expect(row.tenantId).toBe(tenantId);
+    expect(row.entityId).toBeNull();
+    const details = typeof row.details === 'string' ? JSON.parse(row.details) : row.details;
+    expect(details.shape).toBe('full');
+    expect(details.filters.patientId).toBe(seedPatientId);
+  });
+
+  test('GET /api/wellness/prescriptions?fields=summary emits PRESCRIPTION_LIST_READ with shape=summary', async ({ request }) => {
+    const { token, userId, tenantId } = await getWellnessAdmin(request);
+    expect(seedPatientId, 'seed patient id must exist').toBeTruthy();
+    const res = await get(request, token, `/api/wellness/prescriptions?fields=summary&patientId=${seedPatientId}&limit=10`);
+    expect(res.status()).toBe(200);
+
+    const row = await findListReadAuditRow(
+      request,
+      token,
+      'Prescription',
+      'PRESCRIPTION_LIST_READ',
+      (details) => details && details.filters && details.filters.patientId === seedPatientId && details.shape === 'summary',
+    );
+    expect(row, `PRESCRIPTION_LIST_READ summary audit row not found for patientId=${seedPatientId}`).not.toBeNull();
+    expect(row.userId).toBe(userId);
+    expect(row.tenantId).toBe(tenantId);
+    const details = typeof row.details === 'string' ? JSON.parse(row.details) : row.details;
+    expect(details.shape).toBe('summary');
+    expect(details.filters.patientId).toBe(seedPatientId);
   });
 });

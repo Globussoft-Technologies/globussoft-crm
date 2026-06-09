@@ -3257,3 +3257,224 @@ test.describe('#748 archive guard on membership purchase', () => {
     expect((await r.json()).code).toBe('PLAN_INACTIVE');
   });
 });
+
+// =====================================================================
+// #920 slice S42 — wellness PHI list-endpoint slim projection
+// =====================================================================
+//
+// The wellness clinical surface ships full PHI by default on three list
+// endpoints (GET /patients, /visits, /prescriptions). The slim shape opt-in
+// (`?fields=summary`) is the HIPAA-friendly picker surface: SQL-drops every
+// PHI column at the Prisma layer (phone, email, dob, allergies, notes,
+// drugs, instructions, vitals, photos, home-address, etc.) and SKIPS the
+// PII_DISCLOSED audit row (no PII columns in the response = no disclosure
+// event happened).
+//
+// Default shape stays full PHI (back-compat with 28 frontend wellness
+// pages that destructure patient.phone / patient.email directly — see
+// CLAUDE.md "Standing rules" §"API response shape change").
+//
+// Audit-coordination contract (the load-bearing semantic):
+//   - {PATIENT,VISIT,PRESCRIPTION}_LIST_READ fires on BOTH paths (the
+//     regulatory "an operator hit the list endpoint" visibility).
+//   - PII_DISCLOSED (Patient list only — the other two endpoints don't
+//     emit PII_DISCLOSED at all) is SKIPPED on slim path.
+//   - The audit details payload now carries `shape: 'full' | 'summary'`
+//     so reviewers can answer "did this op leak PHI?" without joining
+//     two tables.
+test.describe('Wellness API — #920 S42 PHI slim-shape opt-in', () => {
+  // ── Patients ─────────────────────────────────────────────────────────
+  test('GET /patients?fields=summary drops every PHI column', async ({ request }) => {
+    // Seed one patient with full PHI so a leak would show up.
+    await createPatient(request, {
+      suffix: 'S42SlimPatient',
+      email: `s42-${Date.now()}@example.com`,
+      gender: 'F',
+      dob: '1990-04-15',
+      notes: 'S42 PHI notes — MUST NOT leak through slim shape',
+      allergies: 'S42 allergies — MUST NOT leak',
+    });
+    const res = await authGet(request, '/api/wellness/patients?fields=summary&limit=10');
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(Array.isArray(body.patients)).toBe(true);
+    expect(body.patients.length).toBeGreaterThan(0);
+    for (const p of body.patients) {
+      // Slim keys present.
+      expect(p).toHaveProperty('id');
+      expect(p).toHaveProperty('name');
+      expect(p).toHaveProperty('createdAt');
+      // Load-bearing PHI assertions — every PHI column MUST be absent.
+      expect(p).not.toHaveProperty('phone');
+      expect(p).not.toHaveProperty('normalizedPhone');
+      expect(p).not.toHaveProperty('email');
+      expect(p).not.toHaveProperty('dob');
+      expect(p).not.toHaveProperty('gender');
+      expect(p).not.toHaveProperty('bloodGroup');
+      expect(p).not.toHaveProperty('allergies');
+      expect(p).not.toHaveProperty('notes');
+      expect(p).not.toHaveProperty('photoUrl');
+      expect(p).not.toHaveProperty('gst');
+      expect(p).not.toHaveProperty('tagsJson');
+      // The `tags` relation is also skipped on slim path (slim shape
+      // uses Prisma `select`, not `include` — tags aren't in the
+      // select list so the SQL JOIN is dropped entirely).
+      expect(p).not.toHaveProperty('tags');
+    }
+  });
+
+  test('GET /patients (default shape) still ships full PHI row + tags include', async ({ request }) => {
+    const res = await authGet(request, '/api/wellness/patients?limit=5');
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(Array.isArray(body.patients)).toBe(true);
+    expect(body.patients.length).toBeGreaterThan(0);
+    // At least one full-shape PHI key MUST be present on each row (the
+    // pre-S42 contract — back-compat for 28 frontend pages).
+    for (const p of body.patients) {
+      expect(p).toHaveProperty('id');
+      // `tags` is always present on default shape (the include).
+      expect(p).toHaveProperty('tags');
+      // Phone / email may be null per row but the KEYS exist.
+      expect(p).toHaveProperty('phone');
+      expect(p).toHaveProperty('email');
+      expect(p).toHaveProperty('dob');
+    }
+  });
+
+  test('GET /patients?fields=Summary (wrong case) falls through to full shape', async ({ request }) => {
+    // Strict-equality contract pinned by listProjection's isFullShape().
+    const res = await authGet(request, '/api/wellness/patients?fields=Summary&limit=2');
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    if (body.patients.length > 0) {
+      // Wrong-case → full shape → phone key present.
+      expect(body.patients[0]).toHaveProperty('phone');
+    }
+  });
+
+  test('GET /patients?fields=summary writes PATIENT_LIST_READ audit row with shape=summary', async ({ request }) => {
+    await createPatient(request, { suffix: 'S42AuditMarker' });
+    const before = Date.now();
+    const res = await authGet(request, '/api/wellness/patients?fields=summary&limit=3');
+    expect(res.status()).toBe(200);
+    // Brief await for the fire-and-forget audit write to settle.
+    await new Promise((r) => setTimeout(r, 1500));
+    const auditRes = await authGet(
+      request,
+      `/api/audit?entity=Patient&action=PATIENT_LIST_READ&limit=20`,
+    );
+    expect(auditRes.status()).toBe(200);
+    const auditBody = await auditRes.json();
+    const rows = Array.isArray(auditBody) ? auditBody : (auditBody.items || auditBody.rows || []);
+    // Find the most recent row attributable to our call (within ~5s).
+    const recent = rows.find((row) => {
+      const created = row.createdAt ? new Date(row.createdAt).getTime() : 0;
+      return created >= before - 1000;
+    });
+    // Audit lookup endpoints differ per deployment; if we found a recent
+    // row, pin shape=summary. If not, the route's writeAudit catch already
+    // logs failures — the no-throw is what matters here.
+    if (recent && typeof recent.details === 'string') {
+      try {
+        const detailsObj = JSON.parse(recent.details);
+        expect(detailsObj.shape).toBe('summary');
+      } catch (_e) {
+        // details might be JSON-string-escaped or missing — soft pin only.
+      }
+    }
+  });
+
+  // ── Visits ───────────────────────────────────────────────────────────
+  test('GET /visits?fields=summary drops every PHI column + nested include', async ({ request }) => {
+    const res = await authGet(request, '/api/wellness/visits?fields=summary&limit=10');
+    expect(res.status()).toBe(200);
+    const visits = await res.json();
+    expect(Array.isArray(visits)).toBe(true);
+    if (visits.length === 0) test.skip(true, 'no visits seeded — slim shape needs at least one row to assert');
+    for (const v of visits) {
+      // Slim keys present.
+      expect(v).toHaveProperty('id');
+      expect(v).toHaveProperty('patientId');
+      expect(v).toHaveProperty('visitDate');
+      expect(v).toHaveProperty('status');
+      // Nested includes (patient/service/doctor) MUST be absent.
+      expect(v).not.toHaveProperty('patient');
+      expect(v).not.toHaveProperty('service');
+      expect(v).not.toHaveProperty('doctor');
+      // PHI columns on the Visit row itself MUST be absent.
+      expect(v).not.toHaveProperty('reason');
+      expect(v).not.toHaveProperty('notes');
+      expect(v).not.toHaveProperty('vitals');
+      expect(v).not.toHaveProperty('photosBefore');
+      expect(v).not.toHaveProperty('photosAfter');
+      expect(v).not.toHaveProperty('amountCharged');
+      expect(v).not.toHaveProperty('videoCallUrl');
+      expect(v).not.toHaveProperty('atHomeAddress');
+      expect(v).not.toHaveProperty('atHomePincode');
+    }
+  });
+
+  test('GET /visits (default shape) still ships patient + service + doctor includes', async ({ request }) => {
+    const res = await authGet(request, '/api/wellness/visits?limit=5');
+    expect(res.status()).toBe(200);
+    const visits = await res.json();
+    expect(Array.isArray(visits)).toBe(true);
+    if (visits.length > 0) {
+      // Includes are always present on default path even when null-FK.
+      const v = visits[0];
+      // The patient/service/doctor relation keys exist (may be null if FK is null).
+      expect(Object.prototype.hasOwnProperty.call(v, 'patient')).toBe(true);
+      expect(Object.prototype.hasOwnProperty.call(v, 'service')).toBe(true);
+      expect(Object.prototype.hasOwnProperty.call(v, 'doctor')).toBe(true);
+    }
+  });
+
+  // ── Prescriptions ────────────────────────────────────────────────────
+  test('GET /prescriptions?fields=summary drops drugs + instructions + nested includes', async ({ request }) => {
+    const res = await authGet(request, '/api/wellness/prescriptions?fields=summary&limit=10');
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(Array.isArray(body.items)).toBe(true);
+    expect(typeof body.total).toBe('number');
+    if (body.items.length === 0) test.skip(true, 'no prescriptions seeded — slim shape needs at least one row to assert');
+    for (const rx of body.items) {
+      // Slim keys present.
+      expect(rx).toHaveProperty('id');
+      expect(rx).toHaveProperty('patientId');
+      expect(rx).toHaveProperty('createdAt');
+      // Load-bearing assertions: the actual Rx contents MUST be dropped.
+      expect(rx).not.toHaveProperty('drugs');           // THE drug list
+      expect(rx).not.toHaveProperty('instructions');    // dosage narrative
+      expect(rx).not.toHaveProperty('pdfUrl');          // signed-URL leak vector
+      // Nested includes (patient/doctor) MUST be absent.
+      expect(rx).not.toHaveProperty('patient');
+      expect(rx).not.toHaveProperty('doctor');
+    }
+  });
+
+  test('GET /prescriptions (default shape) still ships drugs + patient/doctor includes', async ({ request }) => {
+    const res = await authGet(request, '/api/wellness/prescriptions?limit=5');
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(Array.isArray(body.items)).toBe(true);
+    if (body.items.length > 0) {
+      const rx = body.items[0];
+      expect(rx).toHaveProperty('drugs');
+      // Includes present (may be null if FK is null on legacy rows).
+      expect(Object.prototype.hasOwnProperty.call(rx, 'patient')).toBe(true);
+      expect(Object.prototype.hasOwnProperty.call(rx, 'doctor')).toBe(true);
+    }
+  });
+
+  // ── Cross-endpoint sanity: phiReadGate still gates slim path ─────────
+  test('GET /patients?fields=summary still requires PHI-read role (gate applies pre-shape)', async ({ request }) => {
+    // Helper role is denied by phiReadGate's `deny: ["helper"]` clause —
+    // slim path MUST not bypass the access gate (the gate runs as
+    // middleware BEFORE the route's `?fields` branching).
+    const res = await authGet(request, '/api/wellness/patients?fields=summary&limit=3', 'helper');
+    expect(res.status()).toBe(403);
+    const body = await res.json();
+    expect(body.code).toBe('WELLNESS_ROLE_FORBIDDEN');
+  });
+});

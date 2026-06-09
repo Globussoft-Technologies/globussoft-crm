@@ -2,6 +2,13 @@
 // (FR-3.5 PII payload reduction — per docs/PRD_TRAVEL_SECURITY_ARCHITECTURE.md
 // §3 FR-3.5 + tracker row S3 in docs/TRAVEL_BIG_SCOPE_BACKLOG.md).
 //
+// Slice S42 — wellness PHI list-endpoint slim projections (Patient + Visit +
+// Prescription). Same opt-in shape (`?fields=summary`) extended to the HIPAA-
+// regulated wellness clinical surface. The new registry entries live alongside
+// the travel-vertical entries; the audit-coordination semantics ride on the
+// route adoption (see backend/routes/wellness.js GET /patients|/visits|
+// /prescriptions for the per-route wiring).
+//
 // Why this helper exists
 // ----------------------
 // List endpoints today return the FULL Prisma row shape, including PII columns
@@ -225,6 +232,132 @@ const PROJECTIONS = Object.freeze({
     // Intentionally DROPPED: email, phone, company, message (@db.Text),
     // product, city, rawPayload (@db.Text — could embed full webhook payload).
     // These are the highest-PII fields on the model.
+  }),
+
+  // ── Wellness vertical (HIPAA / DPDP Act) ─────────────────────────────
+  // Slice S42 — wellness PHI list-endpoint slim projections.
+  //
+  // The wellness clinical surface (`GET /api/wellness/{patients,visits,
+  // prescriptions}`) is HIPAA-regulated: any default-shape PHI ship-out
+  // is medico-legally significant. The PRD §11 contract already requires
+  // an audit row per PHI read; this slice extends that contract by giving
+  // the list pickers an opt-in slim shape (`?fields=summary`) that ships
+  // ONLY non-PHI identifiers + workflow keys. That lets the picker /
+  // dropdown / count-badge use cases hit the list endpoint WITHOUT
+  // triggering a PII_DISCLOSED audit row (because no PII is in the
+  // response payload — the operator never SAW it).
+  //
+  // Audit-coordination contract: when the route returns slim shape, the
+  // PATIENT_LIST_READ / VISIT_LIST_READ / PRESCRIPTION_LIST_READ audit
+  // row is STILL written (regulatory "an operator hit the list endpoint"
+  // visibility), but the PII_DISCLOSED audit row is SKIPPED on slim path
+  // because no PHI columns are in the response. This is the load-bearing
+  // semantic of the slim path: it converts a PII-disclosing call into a
+  // non-PII-disclosing call by SQL-dropping the columns at the Prisma
+  // layer (the operator gets back rows with only IDs + workflow keys, so
+  // no disclosure event has happened).
+  //
+  // Default shape stays full PHI (back-compat with the 28 frontend
+  // wellness pages that destructure `patient.phone` / `patient.email` /
+  // `patient.dob` directly — flipping the default would silently break
+  // every page picker that depends on the full row).
+  Patient: Object.freeze({
+    id: true,
+    name: true,          // operator headline. Per the existing piiMask /
+                         // shouldMaskForViewer contract (#680), Patient.name
+                         // is classified as PII when an UNMASKED disclosure
+                         // is logged — but the slim shape's purpose is
+                         // explicitly to ship a row-identifier surface for
+                         // pickers / autocomplete / tag-link UIs where the
+                         // operator MUST see the patient name to disambiguate.
+                         // Without name, the slim row is a useless number.
+                         // Trade-off: name stays IN the slim shape; the route
+                         // still applies the existing maskRows() viewer-policy
+                         // filter so low-trust viewers (telecaller / helper)
+                         // see masked names on slim path too.
+    locationId: true,    // location chip on the picker (non-PHI — just a
+                         // clinic-branch FK).
+    source: true,        // "ad" | "walk-in" | "referral" | "whatsapp" — non-
+                         // PHI classifier; useful for the picker UI's
+                         // source-segmentation chip.
+    createdAt: true,     // sort key for default-list stability.
+    // Intentionally DROPPED (PHI):
+    //   phone, normalizedPhone, email — direct contact PII.
+    //   dob, gender, bloodGroup — demographic / clinical PHI.
+    //   allergies, notes (both @db.Text) — clinical narrative PHI.
+    //   photoUrl — patient photo (PHI under HIPAA's "biometric identifier"
+    //              clause when the image is the patient themselves).
+    //   gst (@db.VarChar(15)) — regulated tax identifier.
+    //   tagsJson — patient-segment labels (e.g. "diabetic", "vip-revenue")
+    //              that conflate clinical diagnosis with VIP marketing and
+    //              are too sensitive for the slim picker shape.
+    //   anniversary, walletBalance, taxType, instagramHandle — non-clinical
+    //              but still personal; the picker doesn't need them.
+    //   contactId, userId — back-link FKs; not picker-useful.
+    //   deletedAt, updatedAt — tombstone columns; admin-list UI fetches the
+    //              full row when it needs to see them.
+  }),
+
+  Visit: Object.freeze({
+    id: true,
+    patientId: true,     // back-link FK so the picker can hop to the patient.
+                         // NOT PHI on its own — it's a row identifier.
+    visitDate: true,     // calendar / sort key. The date alone is not PHI;
+                         // joining it with patientId is — the slim caller
+                         // already has the patient FK so this is a no-op
+                         // delta vs the bare patientId.
+    status: true,        // filter UI: booked | arrived | in-treatment |
+                         // completed | no-show | cancelled. Non-PHI.
+    doctorId: true,      // assigned doctor — calendar column UI needs it
+                         // to render the per-doctor lane. Non-PHI (just a
+                         // staff User FK).
+    serviceId: true,     // service catalog FK — picker shows "Botox" /
+                         // "Hair Transplant" badge. Non-PHI; the service
+                         // name is in the catalog, not on the visit.
+    locationId: true,    // clinic branch — multi-location UI lane.
+    bookingType: true,   // CLINIC_VISIT | IN_HOME | VIDEO | PHONE.
+                         // Channel chip on the picker UI. Non-PHI.
+    createdAt: true,     // sort key for visit-history.
+    // Intentionally DROPPED (PHI):
+    //   reason (@db.Text) — patient-supplied chief complaint. Clinical PHI.
+    //   notes (@db.Text) — clinical narrative.
+    //   vitals (@db.Text JSON) — BP / pulse / weight — clinical PHI.
+    //   photosBefore, photosAfter (@db.Text JSON arrays of URLs) — clinical
+    //                  photography PHI.
+    //   amountCharged — financial PHI (joins with patient identity to
+    //                   reveal what the patient paid for what treatment).
+    //   videoRoom, videoCallUrl — telehealth session identifiers. The URL
+    //                   is auth-bearing (anyone with the link enters the
+    //                   session); MUST not leak through pickers.
+    //   atHomeAddress, atHomeCity, atHomePincode — patient home address PHI.
+    //   travelTimeMinutes — dispatch-private (combined with address = PHI).
+    //   utm* + referrer — attribution data; not PHI in isolation but useless
+    //                     to a picker.
+  }),
+
+  Prescription: Object.freeze({
+    id: true,
+    patientId: true,     // back-link FK.
+    visitId: true,       // back-link FK (when the Rx anchors a visit).
+    doctorId: true,      // prescriber FK — medico-legal "who wrote it"
+                         // metadata; not PHI on its own.
+    createdAt: true,     // sort key for Rx history.
+    // Intentionally DROPPED (the entire reason this slim shape exists):
+    //   drugs (@db.Text JSON) — the actual prescription contents. THIS IS
+    //          THE LOAD-BEARING DROP for HIPAA: shipping the drug list in
+    //          a list-endpoint response is what makes the call a PHI read.
+    //   instructions (@db.Text) — patient-specific dosage narrative.
+    //   pdfUrl — signed PDF link; potentially auth-bearing on signed-URL
+    //            providers + contains the same drug list once opened.
+    //
+    // Notes on absent columns:
+    //   - There is NO `status` column on Prescription (Rx is not stateful in
+    //     this schema; once written, it stands until amended via PUT, which
+    //     creates a separate row). The slice spec mentioned "status" but
+    //     the schema doesn't carry one. Leaving it out keeps the slim
+    //     contract honest.
+    //   - There is NO `dispensedAt` column on Prescription. Dispensing is
+    //     tracked in the pharmacy/inventory subsystem, not on the Rx row.
   }),
 });
 

@@ -30,6 +30,15 @@ const {
   renderPatientSummaryPdf,
 } = require("../services/pdfRenderer");
 const { writeAudit, diffFields } = require("../lib/audit");
+// #920 slice S42 — wellness PHI list-endpoint slim projections.
+// `?fields=summary` opts into a SQL-level slim shape that drops every PHI
+// column from Patient / Visit / Prescription list responses; default shape
+// stays full row (back-compat). The PRD §11 PHI-read audit row is still
+// written on both paths, but the PII_DISCLOSED row is SKIPPED on the slim
+// path because no PHI columns are in the response — the operator never
+// SAW PHI, so no disclosure event happened.
+const listProjection = require("../lib/listProjection");
+const { isFullShape } = listProjection;
 const { verifyToken } = require("../middleware/auth");
 // #679/#680/#681/#682 PII masking helpers + viewer policy. Used on list views
 // (Locations, Patients list, Telecaller Queue) so low-trust viewers
@@ -705,18 +714,28 @@ router.get("/patients", phiReadGate, async (req, res) => {
     ) {
       where.deletedAt = null;
     }
-    const [patients, total] = await Promise.all([
-      prisma.patient.findMany({
-        where,
-        take: Math.min(parseInt(limit, 10) || 50, 200),
-        skip: parseInt(offset, 10) || 0,
-        orderBy: { createdAt: "desc" },
-        include: {
-          tags: {
-            include: { tag: { select: { id: true, name: true, color: true } } },
-          },
+    // #920 slice S42: opt-in slim shape via `?fields=summary`. SQL-drops
+    // every PHI column at the Prisma layer; default shape stays full row.
+    // Slim path also skips the `tags` include (pickers don't render tags;
+    // the full-row path keeps it for the patient-list UI).
+    const wantFullShape = isFullShape(req.query);
+    const findManyArgs = {
+      where,
+      take: Math.min(parseInt(limit, 10) || 50, 200),
+      skip: parseInt(offset, 10) || 0,
+      orderBy: { createdAt: "desc" },
+    };
+    if (wantFullShape) {
+      findManyArgs.include = {
+        tags: {
+          include: { tag: { select: { id: true, name: true, color: true } } },
         },
-      }),
+      };
+    } else {
+      findManyArgs.select = listProjection("Patient", false);
+    }
+    const [patients, total] = await Promise.all([
+      prisma.patient.findMany(findManyArgs),
       prisma.patient.count({ where }),
     ]);
     // PRD §11: HIPAA / DPDP Act — log every PHI read. Patient list is a
@@ -725,6 +744,12 @@ router.get("/patients", phiReadGate, async (req, res) => {
     // not a response-time critical write — awaiting it added 30-100ms to
     // every list call on a cold connection. The promise still completes
     // (its catch logs to console); response goes out without blocking.
+    //
+    // S42 audit-coordination contract: the PATIENT_LIST_READ row fires on
+    // BOTH paths (full + slim). The regulatory "an operator hit the list
+    // endpoint" visibility is required regardless of payload shape; what
+    // changes on the slim path is the absence of PII_DISCLOSED (because
+    // no PII columns are in the response).
     writeAudit(
       "Patient",
       "PATIENT_LIST_READ",
@@ -735,6 +760,9 @@ router.get("/patients", phiReadGate, async (req, res) => {
         count: patients.length,
         query: q || null,
         locationId: locationId ? parseInt(locationId) : null,
+        // Pin the shape into the audit row so reviewers can answer "did
+        // this list call disclose PHI?" without joining two tables.
+        shape: wantFullShape ? "full" : "summary",
       },
     ).catch((auditErr) => {
       console.warn(
@@ -749,6 +777,28 @@ router.get("/patients", phiReadGate, async (req, res) => {
     // payload). Unmasked-disclosure emits a PII_DISCLOSED audit row in
     // addition to PATIENT_LIST_READ so reviewers can answer "who saw the
     // unmasked names + phones?" without joining two log tables.
+    //
+    // S42: slim path skips the PII_DISCLOSED row (no PHI columns in
+    // response = no disclosure event happened). BUT we still apply the
+    // existing maskRows() viewer-policy filter on `name` for low-trust
+    // viewers — telecallers and any generic-USER who bypassed via an
+    // RBAC permission grant. Patient name CAN be PII when combined with
+    // other context (a telecaller seeing "Ravi Kumar, location=Mumbai-1"
+    // still has actionable PII on slim path). Masking the name preserves
+    // the #680 viewer-tier privacy contract on the slim path too.
+    //
+    // No PII_DISCLOSED audit is written even on the un-masked slim path —
+    // the slim response shape doesn't ship phone/email/dob, so the
+    // disclosure surface is structurally narrower than the masked column
+    // list (`['name','phone','email','dob']`). Reviewers querying for
+    // PII_DISCLOSED rows are looking for phone/email/dob leaks; a
+    // name-only slim read isn't in that risk class.
+    if (!wantFullShape) {
+      const outPatientsSlim = shouldMaskForViewer(req)
+        ? maskRows(patients, ["name"])
+        : patients;
+      return res.json({ patients: outPatientsSlim, total });
+    }
     const piiFields = ["name", "phone", "email", "dob"];
     const outPatients = shouldMaskForViewer(req)
       ? maskRows(patients, piiFields)
@@ -2452,21 +2502,35 @@ router.get("/visits", phiReadGate, async (req, res) => {
       where.doctorId = req.user.userId;
     }
 
-    const visits = await prisma.visit.findMany({
+    // #920 slice S42: opt-in slim shape via `?fields=summary`. Drops the
+    // patient/service/doctor INCLUDES (they ship PHI: patient.name +
+    // patient.phone, doctor.name). Slim shape ships only FKs the picker
+    // can hop on (patientId, doctorId, serviceId, locationId).
+    const wantFullShape = isFullShape(req.query);
+    const visitFindArgs = {
       where,
       take: Math.min(parseInt(limit, 10) || 100, 500),
       skip: parseInt(offset, 10) || 0,
       orderBy: { visitDate: "desc" },
-      include: {
+    };
+    if (wantFullShape) {
+      visitFindArgs.include = {
         patient: { select: { id: true, name: true, phone: true } },
         service: { select: { id: true, name: true, category: true } },
         doctor: { select: { id: true, name: true } },
-      },
-    });
+      };
+    } else {
+      visitFindArgs.select = listProjection("Visit", false);
+    }
+    const visits = await prisma.visit.findMany(visitFindArgs);
     // PRD §11 / T2.2: staff-side cross-patient visit list is a PHI read
-    // (response includes patient name + phone). One audit row per request,
-    // with the filter params and result count — never the row contents.
-    // #534 (PERF-1): fire-and-forget — see PATIENT_LIST_READ above.
+    // (response includes patient name + phone on full path). One audit row
+    // per request, with the filter params and result count — never the row
+    // contents. #534 (PERF-1): fire-and-forget — see PATIENT_LIST_READ above.
+    //
+    // S42 audit-coordination: VISIT_LIST_READ fires on BOTH paths (the
+    // regulatory "operator hit list endpoint" record); the `shape` field
+    // distinguishes full vs slim for reviewer queries.
     writeAudit(
       "Visit",
       "VISIT_LIST_READ",
@@ -2482,6 +2546,7 @@ router.get("/visits", phiReadGate, async (req, res) => {
           from: from || null,
           to: to || null,
         },
+        shape: wantFullShape ? "full" : "summary",
       },
     ).catch((auditErr) => {
       console.warn("[wellness] audit /visits list failed:", auditErr.message);
@@ -3347,22 +3412,40 @@ router.get("/prescriptions", phiReadGate, async (req, res) => {
     if (patientId) where.patientId = parseInt(patientId);
     const take = Math.min(parseInt(limit, 10) || 50, 200);
     const skipN = Math.max(parseInt(skip, 10) || 0, 0);
+    // #920 slice S42: opt-in slim shape via `?fields=summary`. Drops the
+    // patient/doctor includes (patient.name is PHI under the strict
+    // medico-legal classification — and crucially, the `drugs` @db.Text
+    // column on Prescription is the load-bearing PHI drop: that's what
+    // makes the bare-list call a regulated PHI read). Slim shape returns
+    // only FKs the picker can hop on.
+    const wantFullShape = isFullShape(req.query);
+    const rxFindArgs = {
+      where,
+      take,
+      skip: skipN,
+      orderBy: { createdAt: "desc" },
+    };
+    if (wantFullShape) {
+      rxFindArgs.include = {
+        patient: { select: { id: true, name: true } },
+        doctor: { select: { id: true, name: true } },
+      };
+    } else {
+      rxFindArgs.select = listProjection("Prescription", false);
+    }
     const [items, total] = await Promise.all([
-      prisma.prescription.findMany({
-        where,
-        take,
-        skip: skipN,
-        orderBy: { createdAt: "desc" },
-        include: {
-          patient: { select: { id: true, name: true } },
-          doctor: { select: { id: true, name: true } },
-        },
-      }),
+      prisma.prescription.findMany(rxFindArgs),
       prisma.prescription.count({ where }),
     ]);
-    // PRD §11 / T2.2: staff-side prescription list is a PHI read
-    // (response embeds patient name + drugs JSON). Medico-legal trail.
-    // #534 (PERF-1): fire-and-forget — see PATIENT_LIST_READ above.
+    // PRD §11 / T2.2: staff-side prescription list is a PHI read on the
+    // full path (response embeds patient name + the drugs JSON). Medico-
+    // legal trail. #534 (PERF-1): fire-and-forget — see PATIENT_LIST_READ
+    // above.
+    //
+    // S42 audit-coordination: PRESCRIPTION_LIST_READ fires on BOTH paths;
+    // `shape: 'summary'` indicates no drug list / no patient name was
+    // disclosed. A reviewer can answer "did this op leak Rx contents?"
+    // without joining tables.
     writeAudit(
       "Prescription",
       "PRESCRIPTION_LIST_READ",
@@ -3372,6 +3455,7 @@ router.get("/prescriptions", phiReadGate, async (req, res) => {
       {
         count: items.length,
         filters: { patientId: patientId ? parseInt(patientId) : null },
+        shape: wantFullShape ? "full" : "summary",
       },
     ).catch((auditErr) => {
       console.warn(

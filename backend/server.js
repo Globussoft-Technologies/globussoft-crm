@@ -344,6 +344,9 @@ const CONTENT_TYPE_GUARD_EXCLUDE_PREFIXES = [
   // application/reports+json, neither of which is in SUPPORTED_CONTENT_TYPES.
   // The route's own express.json() parser handles them.
   "/api/csp/report",
+  // #921 / FR-3.7 (S5) — new SecurityIncident-backed CSP report sink.
+  // Same content-type handling rationale as /api/csp/report above.
+  "/api/security/csp-report",
 ];
 app.use("/api", (req, res, next) => {
   if (!["POST", "PUT", "PATCH"].includes(req.method)) return next();
@@ -649,7 +652,7 @@ app.use("/api", (req, res, next) => {
   // promotes a contact to a portal user. Removing the entry routes the
   // unauthenticated case through the global guard's 401 (RFC 7235), and
   // the authenticated case continues unaffected.
-  const openPaths = ["/auth/login", "/auth/signup", "/auth/register", "/auth/customer/register", "/auth/public/tenants", "/auth/forgot-password", "/auth/reset-password", "/auth/2fa/verify", "/health", "/marketplace-leads/webhook", "/sms/webhook", "/whatsapp/webhook", "/telephony/webhook", "/push/subscribe/visitor", "/push/vapid-key", "/communications/track/", "/sso/google/callback", "/sso/microsoft/callback", "/sso/google/start", "/sso/microsoft/start", "/email/inbound", "/calendar/google/callback", "/calendar/outlook/callback", "/voice/webhook", "/portal/login", "/portal/forgot", "/portal/reset", "/portal/me", "/portal/tickets", "/portal/invoices", "/portal/contracts", "/portal/travel", "/portal/kyc", "/signatures/sign", "/surveys/respond", "/surveys/public", "/chatbots/chat", "/web-visitors/track", "/payments/webhook", "/accounting/webhook", "/scim/v2", "/booking-pages/public", "/knowledge-base/public", "/live-chat/visitor", "/document-views/track", "/zapier/webhook", "/marketing/submit", "/v1/external", "/v1/voyagr", "/wellness/public", "/wellness/portal", "/attendance/biometric/webhook", "/travel/microsites/public", "/travel/diagnostics/public", "/travel/itineraries/public", "/travel/inbound/leads"];
+  const openPaths = ["/auth/login", "/auth/signup", "/auth/register", "/auth/customer/register", "/auth/public/tenants", "/auth/forgot-password", "/auth/reset-password", "/auth/2fa/verify", "/health", "/marketplace-leads/webhook", "/sms/webhook", "/whatsapp/webhook", "/telephony/webhook", "/push/subscribe/visitor", "/push/vapid-key", "/communications/track/", "/sso/google/callback", "/sso/microsoft/callback", "/sso/google/start", "/sso/microsoft/start", "/email/inbound", "/calendar/google/callback", "/calendar/outlook/callback", "/voice/webhook", "/portal/login", "/portal/forgot", "/portal/reset", "/portal/me", "/portal/tickets", "/portal/invoices", "/portal/contracts", "/portal/travel", "/portal/kyc", "/signatures/sign", "/surveys/respond", "/surveys/public", "/chatbots/chat", "/web-visitors/track", "/payments/webhook", "/accounting/webhook", "/scim/v2", "/booking-pages/public", "/knowledge-base/public", "/live-chat/visitor", "/document-views/track", "/zapier/webhook", "/marketing/submit", "/v1/external", "/v1/voyagr", "/wellness/public", "/wellness/portal", "/attendance/biometric/webhook", "/travel/microsites/public", "/travel/diagnostics/public", "/travel/itineraries/public", "/travel/inbound/leads", "/security/csp-report"];
   if (openPaths.some(p => req.path.startsWith(p))) return next();
   // Public marketing catalog — the /pricing page hits GET /subscriptions/plans
   // anonymously. Admin CRUD (POST/PUT/DELETE + GET /plans/admin) stays gated
@@ -923,6 +926,13 @@ app.use("/api/v1/external", externalRoutes);
 app.use("/api/v1/voyagr", voyagrRoutes);
 // Admin tooling (ADMIN-only ops triggers + read APIs)
 app.use("/api/admin", adminRoutes);
+
+// PRD_TRAVEL_SECURITY_ARCHITECTURE FR-3.7 (S5) — SecurityIncident ingest
+// + ADMIN triage listing. POST /api/security/csp-report is public (exempt
+// via openPaths + CONTENT_TYPE_GUARD_EXCLUDE_PREFIXES); GET /incidents and
+// POST /incidents/:id/review re-assert verifyToken + verifyRole(['ADMIN'])
+// at the route. Separate from /api/csp (slice 2 of #917) — see route header.
+app.use("/api/security", require("./routes/security_reports"));
 
 // Public landing pages (outside /api/ prefix, no auth guard)
 app.use("/p", landingPagesPublic);

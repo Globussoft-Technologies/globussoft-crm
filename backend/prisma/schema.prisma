@@ -411,6 +411,13 @@ model Tenant {
   // back-relation type per @@unique([tenantId]) on EngineWeights).
   tmcTripCatalogues TmcTripCatalogue[]
   engineWeights     EngineWeights?
+
+  // PRD_TRAVEL_SECURITY_ARCHITECTURE FR-3.7 (S5) — security telemetry sink.
+  // CSP violation reports + cross-tenant intercepts + future incident classes
+  // all land in SecurityIncident. tenantId on the child is nullable (CSP
+  // reports often arrive before auth resolves), so the back-relation only
+  // ties together rows where the tenant could be attributed.
+  securityIncidents SecurityIncident[]
 }
 
 model User {
@@ -6496,4 +6503,70 @@ model EngineWeights {
   tenant                Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// PRD_TRAVEL_SECURITY_ARCHITECTURE FR-3.7 (S5) — security-telemetry sink.
+//
+// Three incident classes ship in S5 (more can follow without schema change):
+//   - 'csp-violation'         POST /api/security/csp-report (browser-emitted)
+//   - 'cross-tenant-attempt'  middleware/crossTenantInterceptor.js logs +
+//                             returns 404 when an authenticated caller asks
+//                             for a row id whose owning tenant differs from
+//                             their JWT tenantId.
+//   - 'rate-limit-exceeded'   reserved for future rate-limit handler hooks.
+//
+// Why tenantId is nullable
+// ────────────────────────
+// CSP reports are emitted by the BROWSER, not by an authenticated session
+// — there's no Authorization header on a `Content-Security-Policy-Report-
+// Only` ping. The route resolves the tenant best-effort from the Host
+// header, but a CSP report on an unknown host (during DNS bring-up, on the
+// localhost dev environment, or against a proxy mid-deploy) is still
+// useful telemetry; we'd rather persist it with tenantId=null than drop
+// it. Cross-tenant-attempt rows are ALWAYS attributable (the requesting
+// JWT carried a tenantId by definition) so those land with a real id.
+//
+// Why reportJson is String @db.Text
+// ─────────────────────────────────
+// Each incident class carries different shape — CSP reports follow the
+// W3C csp-report envelope, cross-tenant-attempt rows carry our own
+// {attemptedModel, attemptedRowId, ...} shape. Modelling as relational
+// columns would either require N nullable columns or N child tables;
+// JSON-string Text mirrors the existing pattern (AuditLog.details,
+// SequenceStep.conditionJson, AbTest variantA/B, etc.) and the read sites
+// JSON.parse it on demand.
+//
+// severity bucket
+// ───────────────
+// CSP: script-src violation = 'high' (active-content risk); style-src
+// = 'medium' (CSS injection / data exfil); everything else = 'low'.
+// Cross-tenant-attempt = 'high' (potential IDOR / enumeration probe).
+//
+// Review trail
+// ────────────
+// reviewedAt / reviewedById / reviewNote let an ADMIN mark an incident as
+// triaged ("known false positive — the SDK we're integrating injects
+// inline styles, widening style-src nonce-allowlist is tracked under #N").
+// ─────────────────────────────────────────────────────────────────────
+model SecurityIncident {
+  id                 Int       @id @default(autoincrement())
+  tenantId           Int? // nullable — CSP reports may arrive before auth resolves
+  incidentType       String // 'csp-violation' | 'cross-tenant-attempt' | 'rate-limit-exceeded' | ...
+  severity           String    @default("medium") // 'low' | 'medium' | 'high' | 'critical'
+  reportJson         String    @db.Text // raw report payload (JSON-stringified shape-per-incidentType)
+  userAgent          String?
+  ipAddress          String?
+  url                String? // violating URL for CSP reports / request URL for cross-tenant
+  blockedUri         String? // CSP blockedUri (null for non-CSP rows)
+  effectiveDirective String? // CSP directive that was violated (null for non-CSP rows)
+  reviewedAt         DateTime?
+  reviewedById       Int?
+  reviewNote         String?   @db.Text
+  createdAt          DateTime  @default(now())
+  tenant             Tenant?   @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId])
+  @@index([incidentType])
+  @@index([createdAt])
 }

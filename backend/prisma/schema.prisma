@@ -3204,6 +3204,34 @@ model Patient {
   taxType         String?
   instagramHandle String?
 
+  // S62 — slim-shape PRD additions per S42 carry-over. The slim
+  // projection contract surfaces a row's "header" (id + name parts +
+  // last-visit anchor) without loading the full PHI payload — useful
+  // for list views, Omnibar quick-pick, and external-API minimal
+  // projections.
+  //   firstName     : structured given name (legacy `name` stays the
+  //                   canonical "as-displayed" full name; firstName +
+  //                   lastName are additive split fields populated by
+  //                   intake form when available).
+  //   lastName      : structured family name (paired with firstName).
+  //   displayName   : operator-set / computed UI-rendered name. Useful
+  //                   for "name-as-displayed" vs canonical legal name
+  //                   (e.g. "Dr. K. Reddy" displayName over the legal
+  //                   "Kavita Reddy" name). Null falls back to `name`.
+  //   lastVisitDate : denormalized cache of MAX(visits.visitDate) for
+  //                   this patient. THIS SLICE adds the column ONLY;
+  //                   population logic (Visit insert hook + backfill
+  //                   cron) is deferred as a follow-up gap row. Reads
+  //                   without population logic SHOULD treat null as
+  //                   "unknown / not yet computed", not "no visits".
+  // All four are additive nullable — no default backfill needed; the
+  // slim-projection consumer in lib/listProjection.js will be updated
+  // in a paired follow-up slice (S42 consumer extension).
+  firstName     String?
+  lastName      String?
+  displayName   String?
+  lastVisitDate DateTime?
+
   // #413 — Restrict (not Cascade) on Tenant deletion. Patient is PHI
   // (medical history, allergies, photos, prescriptions cascade-from-here).
   // A misclick on tenant.delete() must NOT silently destroy clinical
@@ -3464,6 +3492,25 @@ model Prescription {
   drugs        String  @db.Text // JSON array: [{name, dosage, frequency, duration}]
   instructions String? @db.Text
   pdfUrl       String?
+
+  // S62 — slim-shape PRD additions per S42 carry-over.
+  //   status       : lifecycle marker. Conventional values:
+  //                  'draft'     — composed, not yet issued
+  //                  'issued'    — handed to / sent to patient
+  //                  'dispensed' — pharmacy filled (paired with dispensedAt)
+  //                  'cancelled' — voided post-issue
+  //                  Stored as String? (not enum) for additive safety +
+  //                  future enum upgrade once the value set stabilises.
+  //                  Null = legacy row (pre-S62); route layer treats
+  //                  null as 'issued' for back-compat. Enum-upgrade
+  //                  decision deferred as a follow-up gap row.
+  //   dispensedAt  : timestamp the prescription was dispensed by the
+  //                  pharmacy. Set by POS pharmacy-dispense action;
+  //                  null until that action fires. Used by clinical-audit
+  //                  reports + controlled-substance compliance views.
+  // Both additive nullable — no bless marker needed.
+  status      String?
+  dispensedAt DateTime?
 
   visitId Int?
   visit   Visit? @relation(fields: [visitId], references: [id], onDelete: SetNull)

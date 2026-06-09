@@ -1,4 +1,4 @@
-/**
+﻿/**
  * /api/travel/invoices — TravelInvoice CRUD (PRD_TRAVEL_BILLING DD-5.1)
  *
  * Third in the Quote/Invoice/Supplier trio. Schema at commit fdb793e
@@ -1079,6 +1079,558 @@ router.get(
       }
       console.error("[travel-invoices] aged-receivable error:", e.message);
       res.status(500).json({ error: "Failed to generate aged receivable" });
+    }
+  },
+);
+
+// ============================================================================
+// C8 (PRD_TRAVEL_BILLING UC-2.4 / FR-3.6.b / FR-3.5.b) — three new finance-side
+// endpoints layered alongside the existing /aged-receivable + /payables/aging:
+//
+//   GET /invoices/aged-receivable-report  — Aged A/R with named C8 buckets
+//                                            (Current/31-60/61-90/Over 90)
+//   GET /invoices/aged-payable-report     — Aged A/P over TravelSupplierPayable
+//                                            (joined from this route per C8
+//                                            contract; companion to
+//                                            travel_suppliers.js /payables/aging
+//                                            slice 8 but with the C8 fixed
+//                                            label spec)
+//   GET /invoices/tcs/27eq                — Quarterly Form 27EQ (Sec 206C(1G))
+//                                            per-buyer TCS rollup, JSON or CSV
+//
+// These are SEPARATE from slice 23's existing /aged-receivable (different
+// bucket-label contract, kept untouched per the C8 dispatch rules) and slice
+// 8's /payables/aging on routes/travel_suppliers.js — the C8 deliverable pins
+// a fixed contract shape (named labels "Current (0-30 days)" / "31-60 days" /
+// etc.) the Finance dashboard + month-end-close packet depend on.
+//
+// IMPORTANT — route ordering: these handlers MUST stay above the GET
+// /invoices/:id handler later in this file, otherwise Express interprets the
+// path fragments `aged-receivable-report`, `aged-payable-report`, and `tcs`
+// as `:id` parameter values and 404s the routes.
+//
+// Auth: ADMIN + MANAGER, tenant-scoped. Sub-brand access narrowing applies.
+// ============================================================================
+
+const C8_BUCKETS = [
+  { label: "Current (0-30 days)", min: 0, max: 30 },
+  { label: "31-60 days", min: 31, max: 60 },
+  { label: "61-90 days", min: 61, max: 90 },
+  { label: "Over 90 days", min: 91, max: null },
+];
+
+function c8BucketForDaysOverdue(days) {
+  for (const b of C8_BUCKETS) {
+    if (b.max == null) {
+      if (days >= b.min) return b;
+    } else if (days >= b.min && days <= b.max) {
+      return b;
+    }
+  }
+  return C8_BUCKETS[0];
+}
+
+function emptyC8Buckets() {
+  return C8_BUCKETS.map((b) => ({
+    label: b.label,
+    minDaysOverdue: b.min,
+    maxDaysOverdue: b.max,
+    invoiceCount: 0,
+    totalAmount: 0,
+  }));
+}
+
+function parseAsOfDate(input) {
+  if (input == null || input === "") return new Date();
+  const s = String(input).trim();
+  const d = new Date(s);
+  if (Number.isNaN(d.getTime())) {
+    const err = new Error("asOfDate must be a valid ISO-8601 date");
+    err.status = 400;
+    err.code = "INVALID_AS_OF_DATE";
+    throw err;
+  }
+  return d;
+}
+
+// GET /api/travel/invoices/aged-receivable-report — C8 aged-A/R with named
+// buckets (PRD_TRAVEL_BILLING FR-3.6.b). Distinct from slice 23's
+// /aged-receivable; pins the customer-facing labels the Finance dashboard
+// + month-end-close packet expect.
+router.get(
+  "/invoices/aged-receivable-report",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const asOf = parseAsOfDate(req.query.asOfDate);
+
+      let subBrandFilter = null;
+      if (req.query.subBrand != null && String(req.query.subBrand).trim() !== "") {
+        const sb = String(req.query.subBrand).trim();
+        assertValidSubBrand(sb);
+        subBrandFilter = sb;
+      }
+
+      const where = {
+        tenantId: req.travelTenant.id,
+        status: { notIn: ["Paid", "Voided"] },
+      };
+      if (subBrandFilter) where.subBrand = subBrandFilter;
+
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (allowed) {
+        if (where.subBrand && typeof where.subBrand === "string") {
+          if (!canAccessSubBrand(allowed, where.subBrand)) {
+            where.subBrand = "__none__";
+          }
+        } else {
+          where.subBrand = allowed.size > 0 ? { in: [...allowed] } : "__none__";
+        }
+      }
+
+      const invoices = await prisma.travelInvoice.findMany({
+        where,
+        include: {
+          schedule: { select: { receivedAmount: true } },
+        },
+        take: 10_000,
+      });
+
+      const asOfMs = asOf.getTime();
+      const buckets = emptyC8Buckets();
+      const drillRows = [];
+      let totalReceivable = 0;
+      let currency = null;
+
+      for (const inv of invoices) {
+        const sched = Array.isArray(inv.schedule) ? inv.schedule : [];
+        let received = 0;
+        for (const s of sched) {
+          received += Number(s.receivedAmount == null ? 0 : s.receivedAmount);
+        }
+        const totalAmt = Number(inv.totalAmount == null ? 0 : inv.totalAmount);
+        const outstanding = Math.max(0, totalAmt - received);
+        if (outstanding <= 0) continue;
+
+        const dueMs =
+          inv.dueDate instanceof Date
+            ? inv.dueDate.getTime()
+            : inv.dueDate
+              ? new Date(inv.dueDate).getTime()
+              : asOfMs;
+        const daysOverdue = Math.max(
+          0,
+          Math.floor((asOfMs - dueMs) / 86_400_000),
+        );
+        const bucketSpec = c8BucketForDaysOverdue(daysOverdue);
+        const bucketRow = buckets.find((b) => b.label === bucketSpec.label);
+        bucketRow.invoiceCount += 1;
+        bucketRow.totalAmount = round2(bucketRow.totalAmount + outstanding);
+        totalReceivable = round2(totalReceivable + outstanding);
+
+        if (currency == null) currency = inv.currency || "INR";
+
+        drillRows.push({
+          id: inv.id,
+          invoiceNum: inv.invoiceNum,
+          subBrand: inv.subBrand,
+          contactId: inv.contactId,
+          dueDate: inv.dueDate,
+          totalAmount: round2(totalAmt),
+          receivedAmount: round2(received),
+          outstandingAmount: round2(outstanding),
+          daysOverdue,
+          bucket: bucketSpec.label,
+          currency: inv.currency || "INR",
+        });
+      }
+
+      drillRows.sort((a, b) => b.daysOverdue - a.daysOverdue);
+
+      res.json({
+        asOfDate: asOf.toISOString().slice(0, 10),
+        currency: currency || "INR",
+        buckets,
+        totalReceivable,
+        invoices: drillRows,
+      });
+    } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-invoices] aged-receivable-report error:", e.message);
+      res
+        .status(500)
+        .json({ error: "Failed to generate aged-receivable report" });
+    }
+  },
+);
+
+// GET /api/travel/invoices/aged-payable-report — C8 aged-A/P over
+// TravelSupplierPayable (PRD_TRAVEL_BILLING FR-3.6.c). Distinct from slice
+// 8's /payables/aging in routes/travel_suppliers.js — same bucket spec as
+// the C8 aged-receivable above so the Finance dashboard can render both
+// reports side-by-side with consistent labels.
+router.get(
+  "/invoices/aged-payable-report",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const asOf = parseAsOfDate(req.query.asOfDate);
+
+      let subBrandFilter = null;
+      if (req.query.subBrand != null && String(req.query.subBrand).trim() !== "") {
+        const sb = String(req.query.subBrand).trim();
+        assertValidSubBrand(sb);
+        subBrandFilter = sb;
+      }
+
+      const where = {
+        tenantId: req.travelTenant.id,
+        status: { notIn: ["paid", "cancelled"] },
+      };
+
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      const supplierFilter = {};
+      if (subBrandFilter) {
+        if (allowed !== null && !canAccessSubBrand(allowed, subBrandFilter)) {
+          supplierFilter.subBrand = "__none__";
+        } else {
+          supplierFilter.subBrand = subBrandFilter;
+        }
+      } else if (allowed !== null) {
+        supplierFilter.subBrand =
+          allowed.size > 0 ? { in: [...allowed] } : "__none__";
+      }
+      if (Object.keys(supplierFilter).length > 0) {
+        where.supplier = { is: supplierFilter };
+      }
+
+      const payables = await prisma.travelSupplierPayable.findMany({
+        where,
+        include: {
+          supplier: { select: { id: true, name: true, subBrand: true } },
+        },
+        take: 10_000,
+      });
+
+      const asOfMs = asOf.getTime();
+      const buckets = emptyC8Buckets();
+      const drillRows = [];
+      let totalPayable = 0;
+      let currency = null;
+
+      for (const p of payables) {
+        const amt = Number(p.amount == null ? 0 : p.amount);
+        if (amt <= 0) continue;
+        const dueMs =
+          p.dueDate instanceof Date
+            ? p.dueDate.getTime()
+            : p.dueDate
+              ? new Date(p.dueDate).getTime()
+              : asOfMs;
+        const daysOverdue = Math.max(
+          0,
+          Math.floor((asOfMs - dueMs) / 86_400_000),
+        );
+        const bucketSpec = c8BucketForDaysOverdue(daysOverdue);
+        const bucketRow = buckets.find((b) => b.label === bucketSpec.label);
+        bucketRow.invoiceCount += 1;
+        bucketRow.totalAmount = round2(bucketRow.totalAmount + amt);
+        totalPayable = round2(totalPayable + amt);
+
+        if (currency == null) currency = p.currency || "INR";
+
+        drillRows.push({
+          id: p.id,
+          supplierId: p.supplierId,
+          supplierName: p.supplier ? p.supplier.name : null,
+          subBrand: p.supplier ? p.supplier.subBrand : null,
+          poNumber: p.poNumber,
+          dueDate: p.dueDate,
+          amount: round2(amt),
+          daysOverdue,
+          bucket: bucketSpec.label,
+          currency: p.currency || "INR",
+        });
+      }
+
+      drillRows.sort((a, b) => b.daysOverdue - a.daysOverdue);
+
+      res.json({
+        asOfDate: asOf.toISOString().slice(0, 10),
+        currency: currency || "INR",
+        buckets,
+        totalPayable,
+        payables: drillRows,
+      });
+    } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-invoices] aged-payable-report error:", e.message);
+      res
+        .status(500)
+        .json({ error: "Failed to generate aged-payable report" });
+    }
+  },
+);
+
+// ============================================================================
+// GET /api/travel/invoices/tcs/27eq — Quarterly Form 27EQ rollup
+// (PRD_TRAVEL_BILLING FR-3.5.b — Section 206C(1G) TCS return).
+//
+// Returns per-buyer TCS-collected totals for the given financial year +
+// quarter. Sec 206C requires this report quarterly; this endpoint is the
+// data feed for the Form 27EQ filing surface.
+//
+// FY convention: Indian FY runs Apr 1 → Mar 31. `?fy=2025-26` means
+// 2025-04-01 → 2026-03-31. Quarters Q1=Apr-Jun, Q2=Jul-Sep, Q3=Oct-Dec,
+// Q4=Jan-Mar (next calendar year for Q4 of the FY).
+//
+// Includes only invoices where `tcsAppliedAt IS NOT NULL` (slice 10
+// promoted TCS persistence; this is the post-application cohort). Cohort
+// field is `tcsAppliedAt` (when TCS was applied), not createdAt — the
+// taxable event for 27EQ is the application date.
+//
+// Auth: ADMIN | MANAGER. Sub-brand access narrowing applies.
+//
+// Query params:
+//   ?fy=2025-26                     — REQUIRED. FY YYYY-YY format.
+//   ?quarter=Q1|Q2|Q3|Q4            — REQUIRED. Quarter within the FY.
+//   ?format=json|csv (default json) — output format. CSV emits 27EQ-style
+//                                      columns + Content-Disposition.
+//
+// Response (json):
+//   {
+//     fy: "2025-26",
+//     quarter: "Q1",
+//     dateRange: { from: "2025-04-01", to: "2025-06-30" },
+//     rows: [
+//       { buyerName, buyerPan, totalTcsCollected, invoiceCount }
+//     ],
+//     totals: { totalRows, totalTcs }
+//   }
+//
+// Response (csv):
+//   Header row: Buyer_Name,Buyer_PAN,Total_TCS,Invoice_Count
+//   BOM-prefixed UTF-8 + CRLF (matches gstr1-export convention).
+//   Filename: `tcs-27eq-<fy>-<quarter>.csv`.
+//
+// Error codes: MISSING_FY, MISSING_QUARTER, INVALID_FY, INVALID_QUARTER,
+// INVALID_FORMAT.
+// ============================================================================
+
+function parseFy(raw) {
+  if (!raw || typeof raw !== "string") {
+    const err = new Error("fy query parameter is required (format YYYY-YY)");
+    err.status = 400;
+    err.code = "MISSING_FY";
+    throw err;
+  }
+  const m = /^(\d{4})-(\d{2})$/.exec(raw.trim());
+  if (!m) {
+    const err = new Error("fy must match YYYY-YY (e.g. 2025-26)");
+    err.status = 400;
+    err.code = "INVALID_FY";
+    throw err;
+  }
+  const startYear = parseInt(m[1], 10);
+  const endYearShort = parseInt(m[2], 10);
+  // The trailing component is the LAST two digits of (startYear + 1).
+  const expectedEndShort = (startYear + 1) % 100;
+  if (endYearShort !== expectedEndShort) {
+    const err = new Error(
+      `fy second component must equal (startYear+1) % 100 — got ${m[2]}, expected ${String(expectedEndShort).padStart(2, "0")}`,
+    );
+    err.status = 400;
+    err.code = "INVALID_FY";
+    throw err;
+  }
+  return { startYear, endYear: startYear + 1 };
+}
+
+function parseQuarterRange(quarterRaw, fy) {
+  if (!quarterRaw || typeof quarterRaw !== "string") {
+    const err = new Error("quarter query parameter is required (Q1|Q2|Q3|Q4)");
+    err.status = 400;
+    err.code = "MISSING_QUARTER";
+    throw err;
+  }
+  const q = quarterRaw.trim().toUpperCase();
+  if (!["Q1", "Q2", "Q3", "Q4"].includes(q)) {
+    const err = new Error("quarter must be one of Q1|Q2|Q3|Q4");
+    err.status = 400;
+    err.code = "INVALID_QUARTER";
+    throw err;
+  }
+  // Indian FY quarter mapping:
+  //   Q1 = Apr-Jun (startYear)
+  //   Q2 = Jul-Sep (startYear)
+  //   Q3 = Oct-Dec (startYear)
+  //   Q4 = Jan-Mar (endYear)
+  const ranges = {
+    Q1: { year: fy.startYear, startMonth: 3, endMonthExclusive: 6 },
+    Q2: { year: fy.startYear, startMonth: 6, endMonthExclusive: 9 },
+    Q3: { year: fy.startYear, startMonth: 9, endMonthExclusive: 12 },
+    Q4: { year: fy.endYear, startMonth: 0, endMonthExclusive: 3 },
+  };
+  const r = ranges[q];
+  // Use UTC dates so the date-range string is timezone-independent
+  // (matches the deploy convention for monthly cohorts).
+  const start = new Date(Date.UTC(r.year, r.startMonth, 1, 0, 0, 0, 0));
+  const end = new Date(Date.UTC(r.year, r.endMonthExclusive, 1, 0, 0, 0, 0));
+  // toRange string for the response envelope (inclusive last day of Q).
+  const lastDay = new Date(end.getTime() - 86_400_000);
+  return {
+    quarter: q,
+    start,
+    end,
+    fromIso: start.toISOString().slice(0, 10),
+    toIso: lastDay.toISOString().slice(0, 10),
+  };
+}
+
+// The Indian GSTIN encodes the buyer's PAN as characters 3..12 (1-based)
+// — e.g. "07ABCDE1234F1Z5" → PAN = "ABCDE1234F". For 27EQ rows we expose
+// the derived PAN when a GSTIN is present; null otherwise.
+function panFromGst(gstin) {
+  if (!gstin || typeof gstin !== "string") return null;
+  const s = gstin.trim().toUpperCase();
+  if (s.length < 12) return null;
+  const pan = s.slice(2, 12);
+  if (!/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(pan)) return null;
+  return pan;
+}
+
+router.get(
+  "/invoices/tcs/27eq",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const fy = parseFy(req.query.fy);
+      const qr = parseQuarterRange(req.query.quarter, fy);
+
+      const fmt =
+        req.query.format == null || req.query.format === ""
+          ? "json"
+          : String(req.query.format).toLowerCase();
+      if (!["json", "csv"].includes(fmt)) {
+        const err = new Error("format must be 'json' or 'csv'");
+        err.status = 400;
+        err.code = "INVALID_FORMAT";
+        throw err;
+      }
+
+      const where = {
+        tenantId: req.travelTenant.id,
+        tcsAppliedAt: { gte: qr.start, lt: qr.end },
+        tcsAmount: { gt: 0 },
+      };
+
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (allowed) {
+        where.subBrand = allowed.size > 0 ? { in: [...allowed] } : "__none__";
+      }
+
+      const invoices = await prisma.travelInvoice.findMany({
+        where,
+        select: {
+          id: true,
+          contactId: true,
+          tcsAmount: true,
+        },
+        take: 50_000,
+      });
+
+      // Roll up per-buyer (contactId). Fetch contact details once we know
+      // which buyers contributed; this avoids loading 50K contacts when only
+      // a handful actually have TCS-applied invoices in the quarter.
+      const byContact = new Map();
+      for (const inv of invoices) {
+        const cid = inv.contactId;
+        const tcs = Number(inv.tcsAmount == null ? 0 : inv.tcsAmount);
+        if (!byContact.has(cid)) {
+          byContact.set(cid, { totalTcs: 0, invoiceCount: 0 });
+        }
+        const row = byContact.get(cid);
+        row.totalTcs = round2(row.totalTcs + tcs);
+        row.invoiceCount += 1;
+      }
+
+      let contactById = new Map();
+      if (byContact.size > 0) {
+        const contacts = await prisma.contact.findMany({
+          where: { id: { in: [...byContact.keys()] } },
+          select: { id: true, name: true, gst: true },
+        });
+        contactById = new Map(contacts.map((c) => [c.id, c]));
+      }
+
+      const rows = [];
+      let totalTcs = 0;
+      for (const [cid, agg] of byContact.entries()) {
+        const c = contactById.get(cid) || {};
+        rows.push({
+          buyerName: c.name || `Contact #${cid}`,
+          buyerPan: panFromGst(c.gst),
+          totalTcsCollected: agg.totalTcs,
+          invoiceCount: agg.invoiceCount,
+        });
+        totalTcs = round2(totalTcs + agg.totalTcs);
+      }
+      rows.sort((a, b) => b.totalTcsCollected - a.totalTcsCollected);
+
+      if (fmt === "csv") {
+        const CRLF = "\r\n";
+        const BOM = "﻿";
+        const parts = [];
+        parts.push(
+          ["Buyer_Name", "Buyer_PAN", "Total_TCS", "Invoice_Count"]
+            .map(csvEscape)
+            .join(","),
+        );
+        for (const r of rows) {
+          parts.push(
+            [
+              r.buyerName,
+              r.buyerPan || "",
+              formatMoney(r.totalTcsCollected),
+              String(r.invoiceCount),
+            ]
+              .map(csvEscape)
+              .join(","),
+          );
+        }
+        const csv = BOM + parts.join(CRLF) + CRLF;
+        const filename = `tcs-27eq-${req.query.fy}-${qr.quarter}.csv`;
+        res.setHeader("Content-Type", "text/csv; charset=utf-8");
+        res.setHeader(
+          "Content-Disposition",
+          `attachment; filename="${filename}"`,
+        );
+        return res.status(200).send(csv);
+      }
+
+      return res.status(200).json({
+        fy: req.query.fy,
+        quarter: qr.quarter,
+        dateRange: { from: qr.fromIso, to: qr.toIso },
+        rows,
+        totals: { totalRows: rows.length, totalTcs },
+      });
+    } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-invoices] tcs/27eq error:", e.message);
+      res.status(500).json({ error: "Failed to generate Form 27EQ" });
     }
   },
 );

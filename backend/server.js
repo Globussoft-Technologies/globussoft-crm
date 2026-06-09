@@ -659,6 +659,11 @@ app.use("/api", (req, res, next) => {
   // GET + the exact suffix so other /travel/diagnostics/:id sub-routes
   // stay auth-gated.
   if (req.method === 'GET' && /^\/travel\/diagnostics\/\d+\/readiness-report\.pdf$/.test(req.path)) return next();
+  // Slice C9 — TravelQuote customer-share landing endpoints (PRD §3.7).
+  // Public, JWT-gated by `:shareToken` segment (verified inside the route).
+  // GET = read-only envelope; POST = accept|reject|counter customer actions.
+  if (req.method === 'GET' && /^\/travel\/quotes\/public\/quote\/[^/]+$/.test(req.path)) return next();
+  if (req.method === 'POST' && /^\/travel\/quotes\/public\/quote\/[^/]+\/(accept|reject|counter)$/.test(req.path)) return next();
   verifyToken(req, res, (err) => {
     if (err) return next(err);
     checkSubscription(req, res, next);
@@ -836,6 +841,11 @@ app.use("/api/travel", travelTripsRoutes);
 app.use("/api/travel/passport", require("./routes/travel_passport"));
 app.use("/api/travel", travelCostMasterRoutes);
 app.use("/api/travel", travelSuppliersRoutes);
+// Slice C9 — TravelQuote customer-share public landing (PRD §3.7).
+// MUST be mounted BEFORE travelQuotesRoutes — the operator route has
+// `:id` capture on `/quotes/:id` which would otherwise match `/quotes/public/...`
+// at validateNumericId and 400 INVALID_ID before reaching the public router.
+app.use("/api/travel/quotes/public", require("./routes/travel_quotes_public"));
 app.use("/api/travel", travelQuotesRoutes);
 app.use("/api/travel", travelInvoicesRoutes);
 app.use("/api/travel", require("./routes/travel_flyer_templates"));
@@ -1210,6 +1220,13 @@ if (process.env.DISABLE_CRONS === '1') {
   const { initTripPaymentRemindersCron } = require('./cron/tripPaymentReminders');
   initTripPaymentRemindersCron();
 
+  // C8 (PRD_TRAVEL_BILLING UC-2.4) — daily 09:13 IST TravelPaymentSchedule
+  // T-7 / T-3 / T-1 reminder sweep. Fires SMS + email customer reminders
+  // (WA leg stub pending Q9 Wati creds) per milestone whose dueDate lands
+  // in window; bumps remindersSentCount + lastReminderSentAt on the row.
+  const { initCron: initPaymentScheduleReminderCron } = require('./cron/paymentScheduleReminderEngine');
+  initPaymentScheduleReminderCron();
+
   // Initialize Travel CRM diagnostic-to-advisor escalation (every 5 min).
   // PRD §6.3 row 6 — diagnostics stalled >30 min without advisor outreach
   // surface as high-priority Notification rows on the advisor dashboard.
@@ -1257,6 +1274,12 @@ if (process.env.DISABLE_CRONS === '1') {
   // (packet, itinerary, year) dedup window. WA dispatch deferred to Q9.
   const { initReligiousGuidanceCron } = require('./cron/religiousGuidanceEngine');
   initReligiousGuidanceCron();
+
+  // Slice C9 — Travel CRM quote expiry sweep (daily 09:00 IST).
+  // PRD_TRAVEL_QUOTE_BUILDER §3.7 — flips Draft/Sent quotes with validUntil<now
+  // to status='Expired' + writes a TravelQuoteSnapshot history row per transition.
+  const { initCron: initQuoteExpirySweepCron } = require('./cron/quoteExpirySweep');
+  initQuoteExpirySweepCron();
 
   // #902 GST slice 12 — daily GSTR filing reminder sweep (05:00 UTC = 10:30 IST).
   // Iterates active tenants and emits a tiered reminder (T-7d / T-3d / T-1d / T-0)

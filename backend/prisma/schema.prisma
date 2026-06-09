@@ -5834,18 +5834,61 @@ model TravelQuote {
   tenantId    Int               @default(1)
   subBrand    String
   contactId   Int
-  status      String            @default("Draft") // Draft | Sent | Accepted | Rejected
+  status      String            @default("Draft") // Draft | Sent | Accepted | Rejected | Expired
   totalAmount Decimal?          @db.Decimal(15, 2)
   currency    String            @default("INR")
   validUntil  DateTime?
   lines       TravelQuoteLine[]
   invoices    TravelInvoice[]
+  snapshots   TravelQuoteSnapshot[]
   tenant      Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt   DateTime          @default(now())
   updatedAt   DateTime          @updatedAt
 
   @@index([tenantId, subBrand])
   @@index([tenantId, subBrand, status])
+}
+
+// Slice C9 — TravelQuoteSnapshot — immutable version history rows.
+//
+// One row is written every time a TravelQuote's status transitions:
+//   - Customer-side: accept / reject / counter (via public landing page,
+//     no auth — share-link JWT authorizes the write).
+//   - Operator-side: future slices can emit snapshots from internal
+//     accept/decline routes too; today only the public-side endpoints
+//     write here (additive — operator audit chain via writeAudit() stays
+//     authoritative for staff-driven transitions).
+//   - System: quoteExpirySweep cron flips status Draft|Sent → Expired
+//     when validUntil < now and writes a snapshot with changedBy='system'.
+//
+// snapshotJson stores the full TravelQuote + lines as observed at the
+// transition instant. Schema is intentionally append-only — no UPDATE /
+// DELETE on existing rows; the cron's idempotency check looks for an
+// existing system-authored Expired snapshot before re-writing.
+//
+// Additive nullable schema — no bless marker required. statusBefore can
+// be null for genesis rows; statusAfter is required (every snapshot
+// represents a definite transition). changedById is nullable because
+// customer-side transitions have no req.user.userId (the JWT only carries
+// quoteId + tenantId).
+model TravelQuoteSnapshot {
+  id            Int      @id @default(autoincrement())
+  quoteId       Int
+  tenantId      Int
+  versionNumber Int
+  snapshotJson  String   @db.Text
+  statusBefore  String?
+  statusAfter   String
+  changedById   Int?
+  changedBy     String?  // 'customer' | 'staff' | 'system'
+  changeReason  String?  @db.Text
+  createdAt     DateTime @default(now())
+
+  quote         TravelQuote @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([quoteId])
+  @@index([createdAt])
 }
 
 // PRD_TRAVEL_QUOTE_BUILDER §3.2 — line-item composition.
@@ -6045,6 +6088,14 @@ model TravelPaymentSchedule {
   status           String        @default("pending") // pending | partial | paid | overdue | waived
   paidAt           DateTime?
   notes            String?       @db.Text
+  // C8 (PRD_TRAVEL_BILLING UC-2.4 reminder cron) — additive nullable
+  // counters consumed by paymentScheduleReminderEngine.js. Idempotency
+  // guard: engine skips schedules where remindersSentCount >= 3 so the
+  // T-7 / T-3 / T-1 sweep can't double-fire on a re-run within the same
+  // window. lastReminderSentAt powers an operator-visible "last chased"
+  // surface in the future Aged Receivable drill-down.
+  remindersSentCount  Int?        @default(0)
+  lastReminderSentAt  DateTime?
   invoice          TravelInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
   tenant           Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt        DateTime      @default(now())

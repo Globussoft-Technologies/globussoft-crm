@@ -24,7 +24,7 @@
 //      PRD §3.6(d) pricing transparency.
 
 import { useEffect, useState, useContext } from "react";
-import { useParams } from "react-router-dom";
+import { useParams, Link } from "react-router-dom";
 import {
   Map as MapIcon, Plane, Hotel, MapPin, Briefcase, FileText, Shield,
   Plus, Pencil, Trash2, X, Sparkles, Share2, Download, Check, XCircle, Copy,
@@ -478,6 +478,10 @@ export default function ItineraryDetail() {
             <a href={pdfHref} target="_blank" rel="noreferrer" style={{ ...secondaryBtn, textDecoration: "none" }}>
               <Download size={14} /> PDF
             </a>
+            {/* FR-3.3/3.4 — open the visual day-by-day planner + map editor. */}
+            <Link to={`/travel/itineraries/${id}/edit`} style={{ ...secondaryBtn, textDecoration: "none" }} aria-label="Open the day-by-day planner and map">
+              <MapIcon size={14} /> Day planner
+            </Link>
           </div>
         </div>
         {shareUrl && (

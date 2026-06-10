@@ -478,11 +478,15 @@ test.describe("Travel itineraries API — items", () => {
     if (!token || created.itemIds.length === 0) test.skip(true, "no items");
     const itinId = created.itineraryIds[0];
     const itemId = created.itemIds[0];
+    // The route never trusts a client-supplied totalPrice — it recomputes the
+    // line total from price-affecting fields (computeItemLineTotal:
+    // unitCost*quantity + markup + gstAmount). So drive the total via those
+    // fields: 2000*1 + 0 + 0 = 2000.
     const res = await patch(
       request,
       token,
       `/api/travel/itineraries/${itinId}/items/${itemId}`,
-      { description: `${RUN_TAG} amended desc`, totalPrice: 2000 },
+      { description: `${RUN_TAG} amended desc`, unitCost: 2000, quantity: 1, markup: 0, gstAmount: 0 },
     );
     expect(res.status()).toBe(200);
     const body = await res.json();

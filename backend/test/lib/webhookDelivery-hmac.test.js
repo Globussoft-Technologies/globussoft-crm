@@ -112,3 +112,40 @@ describe('webhookDelivery — HMAC signing present', () => {
     expect(bodyTsUnix).toBe(tSec);
   });
 });
+
+// ── Explicit per-tenant secret argument (multi-tenant signing) ──────────
+//
+// deliverSingle gained an optional 5th `secret` param: deliverWebhooks resolves
+// the tenant's WebhookCredential secret and passes it in. The explicit arg wins
+// over process.env.WEBHOOK_HMAC_SECRET; when omitted, the env path (above) still
+// applies — that's the legacy 4-arg behaviour the rest of this file pins.
+describe('webhookDelivery — explicit secret argument', () => {
+  test('signs with the explicit secret argument when provided', async () => {
+    const tenantSecret = 'per-tenant-xyz';
+    await deliverSingle('https://receiver.test/wh', 'lead.new', { id: 1 }, 9, tenantSecret);
+    const [, opts] = global.fetch.mock.calls[0];
+    const m = opts.headers['X-Globussoft-Signature'].match(/^t=(\d+),v1=([a-f0-9]{64})$/);
+    expect(m).toBeTruthy();
+    const expected = createHmac('sha256', tenantSecret).update(`${m[1]}.${opts.body}`).digest('hex');
+    expect(m[2]).toBe(expected);
+  });
+
+  test('explicit secret argument OVERRIDES process.env.WEBHOOK_HMAC_SECRET', async () => {
+    process.env.WEBHOOK_HMAC_SECRET = 'env-secret-should-lose';
+    const tenantSecret = 'arg-secret-should-win';
+    await deliverSingle('https://receiver.test/wh', 'lead.new', { id: 1 }, 9, tenantSecret);
+    const [, opts] = global.fetch.mock.calls[0];
+    const m = opts.headers['X-Globussoft-Signature'].match(/^t=(\d+),v1=([a-f0-9]{64})$/);
+    const expectedArg = createHmac('sha256', tenantSecret).update(`${m[1]}.${opts.body}`).digest('hex');
+    const expectedEnv = createHmac('sha256', 'env-secret-should-lose').update(`${m[1]}.${opts.body}`).digest('hex');
+    expect(m[2]).toBe(expectedArg);
+    expect(m[2]).not.toBe(expectedEnv);
+  });
+
+  test('no signature when neither explicit secret nor env secret is set', async () => {
+    // explicit secret undefined + env unset → unsigned (legacy backwards-compat)
+    await deliverSingle('https://receiver.test/wh', 'lead.new', { id: 1 }, 9, undefined);
+    const [, opts] = global.fetch.mock.calls[0];
+    expect(opts.headers['X-Globussoft-Signature']).toBeUndefined();
+  });
+});

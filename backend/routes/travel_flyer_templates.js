@@ -110,6 +110,26 @@ const {
   buildOutputCacheKey,
 } = require("../lib/flyerExport");
 const { renderFlyerPdf } = require("../lib/flyerPdfRender");
+const multer = require("multer");
+const fs = require("fs");
+const path = require("path");
+const s3 = require("../services/s3Service");
+
+// Flyer asset upload (PRD_TRAVEL_MARKETING_FLYER FR-3.2.2). memoryStorage so the
+// buffer can route to S3 (when AWS_S3_BUCKET_NAME is set) OR local disk (dev /
+// no creds) — works now, uses S3 the moment the bucket env lands, no code change.
+const FLYER_IMAGE_MIMES = ["image/jpeg", "image/png", "image/gif", "image/webp", "image/svg+xml"];
+const flyerImageUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5 MB
+  fileFilter: (_req, file, cb) => {
+    if (FLYER_IMAGE_MIMES.includes(file.mimetype)) cb(null, true);
+    else cb(new Error("Only JPG, PNG, GIF, WebP, or SVG images are allowed"));
+  },
+});
+function flyerImageExt(mime) {
+  return ({ "image/jpeg": ".jpg", "image/png": ".png", "image/gif": ".gif", "image/webp": ".webp", "image/svg+xml": ".svg" })[mime] || ".img";
+}
 
 /**
  * Parse a `@db.Text` column expected to contain JSON. Accepts:
@@ -199,6 +219,54 @@ function withTemplateHash(row) {
   }
   return { ...row, templateHash: hashTemplateShape({ palette, layout, assets }) };
 }
+
+// POST /api/travel/flyer-templates/upload
+//
+// FR-3.2.2 — upload a flyer asset image (multipart/form-data, field "image").
+// Storage: AWS S3 via services/s3Service when AWS_S3_BUCKET_NAME is configured
+// (marketing flyers are public-shareable assets, so s3Service's public-read ACL
+// is appropriate here); otherwise written to local disk under
+// backend/uploads/flyer-assets/tenant-<id>/ (served by the /uploads static
+// mount). ADMIN/MANAGER + travel-vertical only (matches the studio RBAC).
+// Returns { url, storage }.
+router.post(
+  "/flyer-templates/upload",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  (req, res) => {
+    flyerImageUpload.single("image")(req, res, async (err) => {
+      if (err) {
+        const code = err.code === "LIMIT_FILE_SIZE" ? "FILE_TOO_LARGE" : "INVALID_UPLOAD";
+        return res.status(400).json({ error: err.message || "Upload failed", code });
+      }
+      if (!req.file) {
+        return res.status(400).json({ error: "image file is required (field 'image')", code: "MISSING_FILE" });
+      }
+      try {
+        const tenantId = req.travelTenant.id;
+        if (s3.BUCKET_NAME) {
+          const url = await s3.uploadImage(
+            req.file.buffer,
+            req.file.originalname || "flyer-asset",
+            req.file.mimetype,
+            `flyer-assets/tenant-${tenantId}`,
+          );
+          return res.status(201).json({ url, storage: "s3" });
+        }
+        // Local-disk fallback (no S3 configured).
+        const dir = path.join(__dirname, "..", "uploads", "flyer-assets", `tenant-${tenantId}`);
+        await fs.promises.mkdir(dir, { recursive: true });
+        const fileName = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}${flyerImageExt(req.file.mimetype)}`;
+        await fs.promises.writeFile(path.join(dir, fileName), req.file.buffer);
+        return res.status(201).json({ url: `/uploads/flyer-assets/tenant-${tenantId}/${fileName}`, storage: "local" });
+      } catch (e) {
+        console.error("[flyer-upload] store error:", e.message);
+        return res.status(500).json({ error: "Failed to store image", code: "UPLOAD_STORE_FAILED" });
+      }
+    });
+  },
+);
 
 // GET /api/travel/flyer-templates
 // Honors ?subBrand=tmc, ?isActive=true/false.

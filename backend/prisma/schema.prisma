@@ -103,6 +103,8 @@ model Tenant {
   attachments           Attachment[]
   apiKeys               ApiKey[]
   webhooks              Webhook[]
+  webhookCredential     WebhookCredential?
+  patientNotifications  PatientNotification[]
   invoices              Invoice[]
   integrations          Integration[]
   customEntities        CustomEntity[]
@@ -504,6 +506,7 @@ model User {
   tickets           Ticket[]           @relation("AssignedTickets")
   apiKeys           ApiKey[]
   webhooks          Webhook[]
+  webhookCredentials WebhookCredential[] @relation("UserWebhookCredentials")
   tasks             Task[]
   expenses          Expense[]
   approvedExpenses  Expense[]          @relation("ExpenseApprover")
@@ -1002,6 +1005,11 @@ model ApiKey {
   // req.requireSubBrandMatch(targetSubBrand) helper — a key with subBrand='tmc'
   // posting a lead with subBrand='rfu' is rejected 403 SUB_BRAND_MISMATCH.
   subBrand  String?
+  // #908 (PRD_FLIGHT_PLUGIN_CHROME_EXTENSION FR-4/FR-5) — scopes a key to a
+  // specific consumer. null = tenant-wide (legacy / partner API); when set
+  // (e.g. "flight-plugin") the matching endpoint enforces it. Additive nullable
+  // so existing keys keep working unchanged.
+  purpose   String?
   createdAt DateTime  @default(now())
   lastUsed  DateTime?
 
@@ -1026,6 +1034,36 @@ model Webhook {
 
   userId Int
   user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+}
+
+// Per-tenant HMAC signing credential for outbound webhooks (the lead-sync
+// stream GlobusPhone consumes). Replaces the single global
+// `process.env.WEBHOOK_HMAC_SECRET`: each tenant's outbound webhooks are
+// signed with THIS tenant's `secret` instead. One row per tenant
+// (`tenantId @unique`) — rotation/regeneration overwrites `secret` in place;
+// revoke flips `status` to REVOKED (kept for audit, but delivery stops).
+//
+// Show-once model (Stripe/GitHub/AWS): the raw secret is only ever returned
+// in the generate/rotate HTTP response — never re-served afterwards. It is
+// stored encrypted-at-rest via lib/fieldEncryption.js (AES-256-GCM, opt-in
+// via WELLNESS_FIELD_KEY) because the SERVER still needs it to sign; the
+// `ENC:v1:...` wrapper means a plaintext secret (key unset) and an encrypted
+// one coexist transparently. Delivery is also subscription-gated — see
+// lib/webhookEntitlement.js + lib/webhookDelivery.js deliverWebhooks().
+model WebhookCredential {
+  id            Int       @id @default(autoincrement())
+  tenantId      Int       @unique // one signing secret per tenant
+  tenant        Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  secret        String    @db.Text // raw 64-hex OR "ENC:v1:..." (fieldEncryption)
+  signingId     String    @unique // public, non-secret ref e.g. "whid_<hex>"
+  status        String    @default("ACTIVE") // ACTIVE | REVOKED
+  lastRotatedAt DateTime?
+  createdById   Int
+  createdBy     User      @relation("UserWebhookCredentials", fields: [createdById], references: [id], onDelete: Cascade)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
   @@index([tenantId])
 }
@@ -1442,6 +1480,35 @@ model Notification {
   @@index([userId, isRead])
   @@index([tenantId, userId, isRead])
   @@index([tenantId, createdAt])
+}
+
+// Patient-facing notification inbox (wellness patient portal + Android app).
+//
+// DELIBERATELY SEPARATE from the staff `Notification` model above: that one is
+// keyed on `userId` (staff Users) and is consumed by the web notification bell
+// + /api/notifications. Patients are a distinct `Patient` model (not Users) and
+// portal JWTs are rejected by the staff verifyToken middleware, so they could
+// never use that table. This additive table is patient-scoped (patientId) and
+// served by the portal endpoints in routes/wellness.js (/portal/me/notifications*)
+// behind verifyPatientToken — nothing in the staff notification path is touched.
+model PatientNotification {
+  id        Int       @id @default(autoincrement())
+  title     String
+  message   String    @db.Text
+  type      String    @default("info") // info | appointment | prescription | payment | system
+  link      String? // optional deep-link the app/portal can navigate to
+  isRead    Boolean   @default(false)
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  patientId Int
+  patient   Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  tenantId Int
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([patientId, isRead])
+  @@index([patientId, createdAt])
 }
 
 model AuditLog {
@@ -3283,6 +3350,9 @@ model Patient {
   // the route handler filters by patient.deletedAt at read time, so dangling
   // tag links resurrect on patient restore.
   tags PatientTag[]
+
+  // Patient-portal notification inbox (additive — see PatientNotification).
+  patientNotifications PatientNotification[]
 
   /// One Patient per (tenant, normalized phone number). DB-level dedup gate guarding against the recurring "same patient created N times by overlapping intake flows" inflation pattern. Cross-tenant duplicates allowed — different clinics can each have a Patient with phone +91-9876543210.
   // #401 — DB-level dedup gate. Pre-this-constraint, the dedup logic

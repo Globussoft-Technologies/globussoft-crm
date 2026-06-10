@@ -1639,6 +1639,16 @@ function renderTravelNav({
           label="School Term Calendar"
         />
       )}
+      {/* T26 (PRD_TMC_DIAGNOSTIC_SALES_ROUTING_ENGINE §10) — TMC trip-catalogue
+          admin (route /travel/tmc/catalogue → TmcCatalogueAdmin). ADMIN+MANAGER
+          visible, mirroring the page's verifyRole posture; TMC-brand scoped. */}
+      {isManager && inBrand("tmc") && (
+        <Link
+          to="/travel/tmc/catalogue"
+          icon={BookOpen}
+          label="TMC Catalogue"
+        />
+      )}
       {/* tick #186 — Marketing Flyer Studio Phase 2 SHELL (#908).
           MANAGER+ operator-facing surface; real impl per PRD §8 build
           order in docs/PRD_TRAVEL_MARKETING_FLYER.md. */}

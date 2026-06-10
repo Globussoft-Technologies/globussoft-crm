@@ -1161,13 +1161,13 @@ router.get("/itineraries/stats", verifyToken, requireTravelTenant, async (req, r
     const zeroed = {
       total: 0,
       byStatus: {
-        draft:        { count: 0, totalValue: 0 },
-        sent:         { count: 0, totalValue: 0 },
-        revised:      { count: 0, totalValue: 0 },
-        accepted:     { count: 0, totalValue: 0 },
-        rejected:     { count: 0, totalValue: 0 },
+        draft: { count: 0, totalValue: 0 },
+        sent: { count: 0, totalValue: 0 },
+        revised: { count: 0, totalValue: 0 },
+        accepted: { count: 0, totalValue: 0 },
+        rejected: { count: 0, totalValue: 0 },
         advance_paid: { count: 0, totalValue: 0 },
-        fully_paid:   { count: 0, totalValue: 0 },
+        fully_paid: { count: 0, totalValue: 0 },
       },
       bySubBrand: {},
       grandTotalValue: 0,
@@ -1205,13 +1205,13 @@ router.get("/itineraries/stats", verifyToken, requireTravelTenant, async (req, r
     const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 
     const byStatus = {
-      draft:        { count: 0, totalValue: 0 },
-      sent:         { count: 0, totalValue: 0 },
-      revised:      { count: 0, totalValue: 0 },
-      accepted:     { count: 0, totalValue: 0 },
-      rejected:     { count: 0, totalValue: 0 },
+      draft: { count: 0, totalValue: 0 },
+      sent: { count: 0, totalValue: 0 },
+      revised: { count: 0, totalValue: 0 },
+      accepted: { count: 0, totalValue: 0 },
+      rejected: { count: 0, totalValue: 0 },
       advance_paid: { count: 0, totalValue: 0 },
-      fully_paid:   { count: 0, totalValue: 0 },
+      fully_paid: { count: 0, totalValue: 0 },
     };
     const bySubBrand = {};
     let grandTotalValue = 0;
@@ -1982,7 +1982,7 @@ router.patch("/itineraries/:id/items/:itemId", verifyToken, requireTravelTenant,
     if (!existing) return res.status(404).json({ error: "Item not found", code: "ITEM_NOT_FOUND" });
 
     const data = {};
-    const { itemType, position, description, detailsJson, supplierId, unitCost, markup, gstAmount, unit, quantity, direction, totalPrice } = req.body || {};
+    const { itemType, position, description, detailsJson, supplierId, unitCost, markup, gstAmount, unit, quantity, direction, dayNumber, latitude, longitude, totalPrice } = req.body || {};
     if (itemType !== undefined) {
       assertValidItemType(itemType);
       data.itemType = itemType;
@@ -2009,6 +2009,44 @@ router.patch("/itineraries/:id/items/:itemId", verifyToken, requireTravelTenant,
         return res.status(400).json({ error: `direction must be one of: ${VALID_ITEM_DIRECTIONS.join(", ")}`, code: "INVALID_DIRECTION" });
       }
       data.direction = direction ? String(direction) : null;
+    }
+
+    // FR-3.3 day-by-day editor + FR-3.4 map preview
+    // (PRD_TRAVEL_ITINERARY_UPGRADES). The visual editor moves items across
+    // day cards (dayNumber) and plots them on the map (latitude/longitude).
+    // All three are additive nullable columns (S8); "" / null clears them.
+    if (dayNumber !== undefined) {
+      if (dayNumber === null || dayNumber === "") {
+        data.dayNumber = null;
+      } else {
+        const dn = parseInt(dayNumber, 10);
+        if (!Number.isInteger(dn) || dn < 1 || dn > 365) {
+          return res.status(400).json({ error: "dayNumber must be an integer between 1 and 365", code: "INVALID_DAY_NUMBER" });
+        }
+        data.dayNumber = dn;
+      }
+    }
+    if (latitude !== undefined) {
+      if (latitude === null || latitude === "") {
+        data.latitude = null;
+      } else {
+        const lat = Number(latitude);
+        if (!Number.isFinite(lat) || lat < -90 || lat > 90) {
+          return res.status(400).json({ error: "latitude must be between -90 and 90", code: "INVALID_LATITUDE" });
+        }
+        data.latitude = lat;
+      }
+    }
+    if (longitude !== undefined) {
+      if (longitude === null || longitude === "") {
+        data.longitude = null;
+      } else {
+        const lng = Number(longitude);
+        if (!Number.isFinite(lng) || lng < -180 || lng > 180) {
+          return res.status(400).json({ error: "longitude must be between -180 and 180", code: "INVALID_LONGITUDE" });
+        }
+        data.longitude = lng;
+      }
     }
 
     // Recompute the line total whenever a price-affecting field changes,
@@ -2357,9 +2395,9 @@ async function autoCreateWebCheckinsForItinerary(itineraryId, tenantId) {
     }
     const airlineCode = String(
       details.airlineCode
-        || (typeof details.flightNumber === "string"
-          && details.flightNumber.match(/^[A-Z0-9]{2}/)?.[0])
-        || "",
+      || (typeof details.flightNumber === "string"
+        && details.flightNumber.match(/^[A-Z0-9]{2}/)?.[0])
+      || "",
     ).toUpperCase();
     const dep = new Date(details.departureAt);
     if (!Number.isFinite(dep.getTime())) {
@@ -2388,7 +2426,7 @@ async function autoCreateWebCheckinsForItinerary(itineraryId, tenantId) {
     } catch (e) {
       console.error(
         `[travel-itin] webcheckin auto-create for itinerary ${itineraryId} ` +
-          `(PNR ${details.pnr}) failed (non-fatal):`,
+        `(PNR ${details.pnr}) failed (non-fatal):`,
         e.message,
       );
       skipped++;
@@ -2477,6 +2515,136 @@ router.post("/itineraries/:id/accept", verifyToken, requireTravelTenant, async (
   }
 });
 
+// FR-3.4(d) response shape: { summary, days: [{ dayNumber, items: [...] }] }.
+// Deterministic (no Date.now / Math.random) so the stub is test-pinnable
+// and demo screenshots stay stable. Each item uses a valid ItineraryItem
+// itemType (flight|hotel|activity) so the operator can materialise an
+// accepted day straight through POST /itineraries/:id/items unchanged.
+function buildSuggestionSkeleton({ destination, days, budgetPerPax, summary }) {
+  const perDayHotel =
+    budgetPerPax != null && days > 0
+      ? Math.round((budgetPerPax / days) * 100) / 100
+      : null;
+  const dayList = [];
+  for (let d = 1; d <= days; d++) {
+    const items = [];
+    if (d === 1) {
+      items.push({ itemType: "flight", description: `Arrival in ${destination}`, suggestedSupplierName: null, estimatedCost: null, latitude: null, longitude: null });
+    }
+    items.push({ itemType: "hotel", description: `Night ${d} — stay in ${destination}`, suggestedSupplierName: null, estimatedCost: perDayHotel, latitude: null, longitude: null });
+    items.push({ itemType: "activity", description: `Day ${d} — sightseeing in ${destination}`, suggestedSupplierName: null, estimatedCost: null, latitude: null, longitude: null });
+    if (d === days) {
+      items.push({ itemType: "flight", description: `Departure from ${destination}`, suggestedSupplierName: null, estimatedCost: null, latitude: null, longitude: null });
+    }
+    dayList.push({ dayNumber: d, items });
+  }
+  return { summary, days: dayList };
+}
+
+// POST /api/travel/itineraries/suggest
+//
+// PRD_TRAVEL_ITINERARY_UPGRADES FR-3.4 — LLM "Suggest itinerary".
+// Operator supplies destination + days + (optional) budget-per-pax +
+// traveller profile + sub-brand; returns a STRUCTURED day-by-day draft
+// for review. Per FR-3.4(e) this is SUGGESTED only — NOTHING is written
+// to the DB. The operator materialises accepted days via the existing
+// POST /itineraries + /:id/items endpoints.
+//
+// itinerary-suggest task class → gemini-flash provider slot (PRD §9.1;
+// PRD names gemini-2.5-flash). Until Q11 keys land, llmRouter returns a
+// [STUB-ITINERARY-SUGGEST] summary and we assemble a deterministic
+// day-by-day skeleton here (FR-3.4(g) — mirrors /draft/regen's stub).
+//
+// No diagnostic-first guard: this is an internal operator drafting tool,
+// not a customer-facing quote artifact (that guard lives on itinerary
+// CREATE). Sub-brand, when supplied, is validated + access-checked.
+// Travel-tenant only (requireTravelTenant → 403 WRONG_VERTICAL for
+// generic/wellness).
+router.post(
+  "/itineraries/suggest",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const { destination, days, budgetPerPax, travellerProfile, subBrand } = req.body || {};
+
+      const dest = typeof destination === "string" ? destination.trim() : "";
+      if (!dest) {
+        return res.status(400).json({ error: "destination is required", code: "MISSING_DESTINATION" });
+      }
+      const numDays = parseInt(days, 10);
+      if (!Number.isInteger(numDays) || numDays < 1 || numDays > 30) {
+        return res.status(400).json({ error: "days must be an integer between 1 and 30", code: "INVALID_DAYS" });
+      }
+
+      let resolvedSubBrand = null;
+      if (subBrand != null && String(subBrand).trim() !== "") {
+        assertValidSubBrand(String(subBrand).trim()); // throws 400 INVALID_SUB_BRAND (caught below)
+        resolvedSubBrand = String(subBrand).trim();
+        const allowed = await getSubBrandAccessSet(req.user.userId);
+        if (!canAccessSubBrand(allowed, resolvedSubBrand)) {
+          return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+        }
+      }
+
+      let budgetNum = null;
+      if (budgetPerPax != null && budgetPerPax !== "") {
+        budgetNum = Number(budgetPerPax);
+        if (!Number.isFinite(budgetNum) || budgetNum < 0) {
+          return res.status(400).json({ error: "budgetPerPax must be a non-negative number", code: "INVALID_BUDGET" });
+        }
+      }
+      const profile = typeof travellerProfile === "string" ? travellerProfile.slice(0, 2000) : null;
+
+      let result;
+      try {
+        result = await llmRouter.routeRequest({
+          task: "itinerary-suggest",
+          payload: {
+            destination: dest,
+            days: numDays,
+            budgetPerPax: budgetNum,
+            travellerProfile: profile,
+            subBrand: resolvedSubBrand,
+            __userId: req.user.userId,
+            __surface: "itinerary-suggest",
+          },
+          tenantId: req.travelTenant.id,
+        });
+      } catch (e) {
+        if (e.code === "LLM_BUDGET_EXCEEDED") {
+          return res.status(429).json({
+            error: "Monthly AI budget reached for this tenant.",
+            code: "LLM_BUDGET_EXCEEDED",
+            spentCents: e.spentCents,
+            capCents: e.capCents,
+          });
+        }
+        throw e;
+      }
+
+      const suggestion = buildSuggestionSkeleton({
+        destination: dest,
+        days: numDays,
+        budgetPerPax: budgetNum,
+        summary: result.text,
+      });
+
+      return res.status(200).json({
+        suggestion,
+        subBrand: resolvedSubBrand,
+        model: result.model,
+        stub: Boolean(result.stub),
+        generatedAt: new Date().toISOString(),
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-itin] suggest error:", e.message);
+      res.status(500).json({ error: "Failed to generate itinerary suggestion" });
+    }
+  },
+);
+
 // POST /api/travel/itineraries/:id/draft/regen
 //
 // PRD §4.3 + §9.1: regenerate the customer-facing draft summary block
@@ -2528,9 +2696,9 @@ router.post(
       // structure alone, just without the recipient framing.
       const contact = full.contactId
         ? await prisma.contact.findFirst({
-            where: { id: full.contactId, tenantId: req.travelTenant.id },
-            select: { name: true },
-          })
+          where: { id: full.contactId, tenantId: req.travelTenant.id },
+          select: { name: true },
+        })
         : null;
 
       // PII-minimal payload — mirrors talking-points pattern. NO contact
@@ -2765,7 +2933,7 @@ router.post("/itineraries/:id/share", verifyToken, requireTravelTenant, async (r
     const cfg = resolveForSubBrand(tenantCfgRow, itin.subBrand);
     console.log(
       `[travel-itin] share token minted for itin ${full.id} (sub-brand=${itin.subBrand}) — ` +
-        `would WhatsApp-blast via wabaId=${cfg.wabaId || "(no-config)"} pending Wati creds`,
+      `would WhatsApp-blast via wabaId=${cfg.wabaId || "(no-config)"} pending Wati creds`,
     );
     res.json({ shareToken: token, shareUrl });
   } catch (e) {
@@ -2808,9 +2976,9 @@ router.get("/itineraries/:id/pdf", verifyToken, requireTravelTenant, async (req,
     }
     const contact = full.contactId
       ? await prisma.contact.findUnique({
-          where: { id: full.contactId },
-          select: { name: true, email: true, phone: true },
-        })
+        where: { id: full.contactId },
+        select: { name: true, email: true, phone: true },
+      })
       : { name: "Customer", email: null, phone: null };
     const pdfBuf = await renderTravelItineraryPdf(full, contact);
     res.setHeader("Content-Type", "application/pdf");
@@ -4421,7 +4589,7 @@ router.post(
             detailsObj.notes = String(src.notes);
           }
           if (src.suggestedSupplierName != null
-              && String(src.suggestedSupplierName).trim() !== "") {
+            && String(src.suggestedSupplierName).trim() !== "") {
             detailsObj.suggestedSupplierName = String(src.suggestedSupplierName);
           }
           if (src.durationMinutes != null && src.durationMinutes !== "") {

@@ -426,6 +426,7 @@ const dealsDocumentsRoutes = require("./routes/deals_documents");
 const marketingRoutes = require("./routes/marketing");
 const reportsRoutes = require("./routes/reports");
 const developerRoutes = require("./routes/developer");
+const settingsRoutes = require("./routes/settings");
 const billingRoutes = require("./routes/billing");
 const v1InvoicesRoutes = require("./routes/v1_invoices");
 const searchRoutes = require("./routes/search");
@@ -603,6 +604,8 @@ const attendanceRoutes = require("./routes/attendance");
 const leaveRoutes = require("./routes/leave");
 // External partner API v1 (Callified.ai, Globus Phone, etc. — API key auth)
 const externalRoutes = require("./routes/external");
+// Flight Quotation plugin endpoint (#908) — API key auth via X-API-Key
+const travelFlightQuotesRoutes = require("./routes/travel_flight_quotes");
 // Voyagr (OJR) CMS lead-capture API v1 — API key auth via X-API-Key
 // (mirror partner-API pattern). See docs/MANUAL_CODING_BACKLOG.md cluster F1.
 // CORS: voyagr's server-to-server call (Next.js API route → CRM) has no
@@ -660,7 +663,7 @@ app.use("/api", (req, res, next) => {
   // promotes a contact to a portal user. Removing the entry routes the
   // unauthenticated case through the global guard's 401 (RFC 7235), and
   // the authenticated case continues unaffected.
-  const openPaths = ["/auth/login", "/auth/signup", "/auth/register", "/auth/customer/register", "/auth/public/tenants", "/auth/forgot-password", "/auth/reset-password", "/auth/2fa/verify", "/health", "/marketplace-leads/webhook", "/sms/webhook", "/whatsapp/webhook", "/telephony/webhook", "/push/subscribe/visitor", "/push/vapid-key", "/communications/track/", "/sso/google/callback", "/sso/microsoft/callback", "/sso/google/start", "/sso/microsoft/start", "/email/inbound", "/calendar/google/callback", "/calendar/outlook/callback", "/voice/webhook", "/portal/login", "/portal/forgot", "/portal/reset", "/portal/me", "/portal/tickets", "/portal/invoices", "/portal/contracts", "/portal/travel", "/portal/kyc", "/signatures/sign", "/surveys/respond", "/surveys/public", "/chatbots/chat", "/web-visitors/track", "/payments/webhook", "/accounting/webhook", "/scim/v2", "/booking-pages/public", "/knowledge-base/public", "/live-chat/visitor", "/document-views/track", "/zapier/webhook", "/marketing/submit", "/v1/external", "/v1/voyagr", "/wellness/public", "/wellness/portal", "/attendance/biometric/webhook", "/travel/microsites/public", "/travel/diagnostics/public", "/travel/itineraries/public", "/travel/inbound/leads", "/v1/flyers/public", "/security/csp-report"];
+  const openPaths = ["/auth/login", "/auth/signup", "/auth/register", "/auth/customer/register", "/auth/public/tenants", "/auth/forgot-password", "/auth/reset-password", "/auth/2fa/verify", "/health", "/marketplace-leads/webhook", "/sms/webhook", "/whatsapp/webhook", "/telephony/webhook", "/push/subscribe/visitor", "/push/vapid-key", "/communications/track/", "/sso/google/callback", "/sso/microsoft/callback", "/sso/google/start", "/sso/microsoft/start", "/email/inbound", "/calendar/google/callback", "/calendar/outlook/callback", "/voice/webhook", "/portal/login", "/portal/forgot", "/portal/reset", "/portal/me", "/portal/tickets", "/portal/invoices", "/portal/contracts", "/portal/travel", "/portal/kyc", "/signatures/sign", "/surveys/respond", "/surveys/public", "/chatbots/chat", "/web-visitors/track", "/payments/webhook", "/accounting/webhook", "/scim/v2", "/booking-pages/public", "/knowledge-base/public", "/live-chat/visitor", "/document-views/track", "/zapier/webhook", "/marketing/submit", "/v1/external", "/v1/voyagr", "/v1/flight-plugin", "/wellness/public", "/wellness/portal", "/attendance/biometric/webhook", "/travel/microsites/public", "/travel/diagnostics/public", "/travel/itineraries/public", "/travel/inbound/leads", "/v1/flyers/public", "/security/csp-report"];
   if (openPaths.some(p => req.path.startsWith(p))) return next();
   // Public marketing catalog — the /pricing page hits GET /subscriptions/plans
   // anonymously. Admin CRUD (POST/PUT/DELETE + GET /plans/admin) stays gated
@@ -737,6 +740,7 @@ app.use("/api/deals_documents", dealsDocumentsRoutes);
 app.use("/api/marketing", marketingRoutes);
 app.use("/api/reports", reportsRoutes);
 app.use("/api/developer", developerRoutes);
+app.use("/api/settings", settingsRoutes);
 app.use("/api/billing", billingRoutes);
 // PRD Gap §2 items 7a-d — `/api/v1/invoices` stable public-API alias for the
 // legacy /api/billing surface. Includes a NEW POST /:id/payments endpoint
@@ -956,6 +960,9 @@ app.use("/api/v1/external", externalRoutes);
 // verifyToken via /v1/voyagr entry in openPaths above; uses its own
 // X-API-Key middleware).
 app.use("/api/v1/voyagr", voyagrRoutes);
+// Flight Quotation plugin endpoint (#908 FR-5) — X-API-Key auth (externalAuth);
+// applies markup server-side + persists a flight ItineraryItem.
+app.use("/api/v1/flight-plugin", travelFlightQuotesRoutes);
 // Admin tooling (ADMIN-only ops triggers + read APIs)
 app.use("/api/admin", adminRoutes);
 

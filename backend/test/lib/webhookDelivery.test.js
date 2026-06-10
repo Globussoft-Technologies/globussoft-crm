@@ -10,10 +10,21 @@ const { deliverWebhooks, deliverSingle } = wh;
 
 beforeAll(() => {
   prisma.webhook = { findMany: vi.fn() };
+  // deliverWebhooks now resolves entitlement + per-tenant secret via
+  // lib/webhookEntitlement.js (same prisma singleton). Stub those surfaces so
+  // the delivery-path tests below see an ENTITLED tenant with NO per-tenant
+  // credential (→ env/null secret) unless a test overrides them.
+  prisma.subscription = { findFirst: vi.fn() };
+  prisma.user = { findFirst: vi.fn() };
+  prisma.webhookCredential = { findFirst: vi.fn() };
 });
 
 beforeEach(() => {
   prisma.webhook.findMany.mockReset();
+  // Default: entitled via an active paid subscription, no per-tenant credential.
+  prisma.subscription.findFirst.mockReset().mockResolvedValue({ id: 1 });
+  prisma.user.findFirst.mockReset().mockResolvedValue(null);
+  prisma.webhookCredential.findFirst.mockReset().mockResolvedValue(null);
   global.fetch = vi.fn();
 });
 
@@ -229,5 +240,86 @@ describe('lib/webhookDelivery — boundary / shape', () => {
       deliverWebhooks('contact.created', { id: 2 }, 9),
     ]);
     expect(global.fetch).toHaveBeenCalledTimes(3);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Subscription gating + per-tenant secret resolution (multi-tenant webhook
+// signing). deliverWebhooks now: (1) skips ALL delivery when the tenant is not
+// entitled (no active sub AND no active trial), and (2) signs with the tenant's
+// own WebhookCredential secret when present.
+// ---------------------------------------------------------------------------
+describe('lib/webhookDelivery — subscription gating', () => {
+  test('skips all deliveries when the tenant is NOT entitled', async () => {
+    prisma.webhook.findMany.mockResolvedValue([
+      { id: 1, targetUrl: 'https://a.example/wh' },
+      { id: 2, targetUrl: 'https://b.example/wh' },
+    ]);
+    // Not entitled: no active subscription AND no active trial.
+    prisma.subscription.findFirst.mockResolvedValue(null);
+    prisma.user.findFirst.mockResolvedValue(null);
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    await deliverWebhooks('deal.won', { id: 5 }, 9);
+
+    expect(global.fetch).not.toHaveBeenCalled(); // gate stopped delivery
+    logSpy.mockRestore();
+  });
+
+  test('delivers when entitled via an active TRIAL (no paid subscription)', async () => {
+    prisma.webhook.findMany.mockResolvedValue([{ id: 1, targetUrl: 'https://a.example/wh' }]);
+    prisma.subscription.findFirst.mockResolvedValue(null); // no paid sub
+    prisma.user.findFirst.mockResolvedValue({ id: 7 }); // active trial user
+    global.fetch.mockResolvedValue({ ok: true, status: 200 });
+
+    await deliverWebhooks('deal.won', { id: 5 }, 9);
+
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  test('entitlement check runs only when ≥1 webhook matches (no DB cost for empty results)', async () => {
+    prisma.webhook.findMany.mockResolvedValue([]);
+    await deliverWebhooks('deal.won', { id: 5 }, 9);
+    expect(prisma.subscription.findFirst).not.toHaveBeenCalled();
+    expect(prisma.webhookCredential.findFirst).not.toHaveBeenCalled();
+  });
+});
+
+describe('lib/webhookDelivery — per-tenant secret signing', () => {
+  const crypto = require('node:crypto');
+
+  test("signs with the tenant's WebhookCredential secret (not the global env secret)", async () => {
+    const tenantSecret = 'tenant-specific-secret-abc';
+    process.env.WEBHOOK_HMAC_SECRET = 'GLOBAL-should-not-be-used';
+    prisma.webhook.findMany.mockResolvedValue([{ id: 1, targetUrl: 'https://a.example/wh' }]);
+    prisma.subscription.findFirst.mockResolvedValue({ id: 1 }); // entitled
+    prisma.webhookCredential.findFirst.mockResolvedValue({ secret: tenantSecret });
+    global.fetch.mockResolvedValue({ ok: true, status: 200 });
+
+    await deliverWebhooks('deal.won', { dealId: 5 }, 9);
+
+    const [, opts] = global.fetch.mock.calls[0];
+    const sig = opts.headers['X-Globussoft-Signature'];
+    const m = sig.match(/^t=(\d+),v1=([a-f0-9]{64})$/);
+    expect(m).toBeTruthy();
+    const expected = crypto.createHmac('sha256', tenantSecret).update(`${m[1]}.${opts.body}`).digest('hex');
+    expect(m[2]).toBe(expected); // signed with the TENANT secret
+    delete process.env.WEBHOOK_HMAC_SECRET;
+  });
+
+  test('falls back to the global env secret when the tenant has no credential', async () => {
+    process.env.WEBHOOK_HMAC_SECRET = 'global-fallback-secret';
+    prisma.webhook.findMany.mockResolvedValue([{ id: 1, targetUrl: 'https://a.example/wh' }]);
+    prisma.subscription.findFirst.mockResolvedValue({ id: 1 });
+    prisma.webhookCredential.findFirst.mockResolvedValue(null); // no per-tenant credential
+    global.fetch.mockResolvedValue({ ok: true, status: 200 });
+
+    await deliverWebhooks('deal.won', { dealId: 5 }, 9);
+
+    const [, opts] = global.fetch.mock.calls[0];
+    const m = opts.headers['X-Globussoft-Signature'].match(/^t=(\d+),v1=([a-f0-9]{64})$/);
+    const expected = crypto.createHmac('sha256', 'global-fallback-secret').update(`${m[1]}.${opts.body}`).digest('hex');
+    expect(m[2]).toBe(expected);
+    delete process.env.WEBHOOK_HMAC_SECRET;
   });
 });

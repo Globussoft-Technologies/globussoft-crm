@@ -1,43 +1,92 @@
-# Retrofit
--keepattributes Signature
--keepattributes Exceptions
--keep class retrofit2.** { *; }
--keepclasseswithmembers class * {
+# ──────────────────────────────────────────────────────────────────────────────
+# WellnessCRM Patient App — ProGuard / R8 rules
+# ──────────────────────────────────────────────────────────────────────────────
+
+# Preserve source file names + line numbers for crash stack traces (Sentry)
+-keepattributes SourceFile,LineNumberTable
+-renamesourcefileattribute SourceFile
+
+# Keep Kotlin metadata (required by Hilt, Moshi reflection fallback, coroutines)
+-keepattributes *Annotation*, Signature, InnerClasses, EnclosingMethod
+
+# ── Kotlin ────────────────────────────────────────────────────────────────────
+-keep class kotlin.Metadata { *; }
+-dontwarn kotlin.**
+
+# ── Moshi (codegen via KSP) ───────────────────────────────────────────────────
+# KSP-generated JsonAdapter classes must survive R8 shrinking
+-keep class **JsonAdapter { *; }
+-keep class **JsonAdapter$* { *; }
+# Keep all classes annotated with @JsonClass so Moshi can resolve adapters at runtime
+-keep @com.squareup.moshi.JsonClass class * { *; }
+# Keep Moshi's own annotation types
+-keep class com.squareup.moshi.** { *; }
+-dontwarn com.squareup.moshi.**
+# Enum serialization — Moshi uses .name() which must not be obfuscated
+-keepclassmembers enum * {
+    public static **[] values();
+    public static ** valueOf(java.lang.String);
+}
+
+# ── Retrofit 2 ────────────────────────────────────────────────────────────────
+# Keep all Retrofit annotations on interface methods so Retrofit can read them
+-keepclassmembers,allowobfuscation interface * {
     @retrofit2.http.* <methods>;
 }
+-dontwarn retrofit2.**
+-keep class retrofit2.** { *; }
 
-# Gson
--keepattributes *Annotation*
--dontwarn sun.misc.**
--keep class com.google.gson.** { *; }
--keep class * implements com.google.gson.TypeAdapterFactory
--keep class * implements com.google.gson.JsonSerializer
--keep class * implements com.google.gson.JsonDeserializer
--keepclassmembers,allowobfuscation class * {
-    @com.google.gson.annotations.SerializedName <fields>;
-}
-
-# Network model DTOs — keep for Gson deserialization
--keep class com.globussoft.wellness.core.network.model.** { *; }
-
-# Domain models — keep for data mapping
--keep class com.globussoft.wellness.core.domain.model.** { *; }
-
-# Room
--keep class * extends androidx.room.RoomDatabase
--keep @androidx.room.Entity class *
--dontwarn androidx.room.paging.**
-
-# OkHttp
+# ── OkHttp 4 ──────────────────────────────────────────────────────────────────
 -dontwarn okhttp3.**
 -dontwarn okio.**
--keep class okhttp3.** { *; }
+-dontwarn org.conscrypt.**
+-dontwarn org.bouncycastle.**
+-dontwarn org.openjsse.**
+# Required for OkHttp internal headers
+-keepnames class okhttp3.internal.publicsuffix.PublicSuffixDatabase
 
-# Hilt
--keep class dagger.hilt.** { *; }
--keep class javax.inject.** { *; }
-
-# Coroutines
--keepclassmembernames class kotlinx.** {
-    volatile <fields>;
+# ── Room ──────────────────────────────────────────────────────────────────────
+# Room ships its own rules; these are extras for safety
+-keep class * extends androidx.room.RoomDatabase { *; }
+-keep @androidx.room.Entity class * { *; }
+-keep @androidx.room.Dao interface * { *; }
+-keepclassmembers class * extends androidx.room.RoomDatabase {
+    abstract *;
 }
+
+# ── Hilt ──────────────────────────────────────────────────────────────────────
+# Hilt ships its own ProGuard rules via Gradle; these cover edge cases
+-keep class dagger.hilt.** { *; }
+-keep @dagger.hilt.android.HiltAndroidApp class * { *; }
+-keep @dagger.hilt.android.AndroidEntryPoint class * { *; }
+-dontwarn dagger.hilt.**
+
+# ── Razorpay SDK ──────────────────────────────────────────────────────────────
+-keep class com.razorpay.** { *; }
+-keep interface com.razorpay.** { *; }
+-dontwarn com.razorpay.**
+-keepclassmembers class * {
+    @com.razorpay.RazorpayPaymentActivityV2 *;
+}
+
+# ── Firebase ──────────────────────────────────────────────────────────────────
+# Firebase ships its own rules; keep messaging data classes explicitly
+-keep class com.google.firebase.messaging.** { *; }
+-dontwarn com.google.firebase.**
+
+# ── Sentry ────────────────────────────────────────────────────────────────────
+-keep class io.sentry.** { *; }
+-dontwarn io.sentry.**
+
+# ── Coroutines ────────────────────────────────────────────────────────────────
+-keepclassmembers class kotlinx.coroutines.** { *; }
+-dontwarn kotlinx.coroutines.**
+
+# ── Coil ──────────────────────────────────────────────────────────────────────
+-dontwarn coil.**
+
+# ── Security Crypto (EncryptedSharedPreferences) ──────────────────────────────
+-keep class androidx.security.crypto.** { *; }
+
+# ── BuildConfig ───────────────────────────────────────────────────────────────
+-keep class com.globus.crm.BuildConfig { *; }

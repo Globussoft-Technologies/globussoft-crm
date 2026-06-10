@@ -1,14 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Splash screen theme (shows while app initializes) -->
-    <style name="Theme.WellnessCRM.Splash" parent="Theme.SplashScreen">
-        <item name="windowSplashScreenBackground">#265855</item>
-        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_splash_logo</item>
-        <item name="postSplashScreenTheme">@style/Theme.WellnessCRM</item>
-    </style>
 
     <style name="Theme.WellnessCRM" parent="android:Theme.Material.Light.NoActionBar">
-        <item name="android:statusBarColor">@android:color/transparent</item>
-        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowBackground">@color/splash_background</item>
     </style>
 </resources>

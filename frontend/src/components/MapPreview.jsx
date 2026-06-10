@@ -152,6 +152,7 @@ export default function MapPreview({
     <div
       data-testid="map-preview"
       data-pin-count={pins.length}
+      className="map-preview"
       style={{ width: '100%', height, position: 'relative' }}
     >
       <MapContainer
@@ -193,9 +194,16 @@ export default function MapPreview({
       </MapContainer>
       {/* Explicit attribution text — tile-layer attribution is the canonical
           OSM-required line, but we also render a visible label so the
-          requirement is impossible to miss in screenshots / print exports. */}
+          requirement is impossible to miss in screenshots / print exports.
+          S83: gained a stable className `map-preview__attribution` so
+          print.css's @media print rules can force position:static +
+          visibility:visible regardless of how the print engine handles
+          absolute-positioned overlays. The inline style is the
+          screen-mode contract; print.css overrides it via !important
+          inside @media print only. */}
       <div
         data-testid="map-attribution"
+        className="map-preview__attribution"
         style={{
           position: 'absolute',
           bottom: 4,
@@ -209,7 +217,7 @@ export default function MapPreview({
           pointerEvents: 'none',
         }}
       >
-        © OpenStreetMap contributors
+        <span>© OpenStreetMap contributors</span>
       </div>
     </div>
   );

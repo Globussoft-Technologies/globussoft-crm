@@ -30,6 +30,17 @@ import { render, screen, fireEvent } from '@testing-library/react';
  *   which jsdom does NOT model. We mock react-leaflet to stub the heavy
  *   DOM and pin the prop-passing contract instead — what the component
  *   PASSES to MapContainer/Marker/Popup is what we care about.
+ *
+ * S83 — print-CSS hardening
+ *   The attribution overlay gained a stable className
+ *   `map-preview__attribution` (and the outer wrapper gained
+ *   `.map-preview`) so frontend/src/styles/print.css can target them
+ *   inside @media print blocks. jsdom does NOT evaluate @media print
+ *   rules, so this suite cannot directly assert the print-mode style
+ *   computation — what we CAN pin (and do, below) is the className +
+ *   text contract that the print-css rules depend on. If a future
+ *   refactor drops the className, the print rule stops applying
+ *   silently; these tests turn that into a loud failure.
  */
 
 vi.mock('react-leaflet', () => {
@@ -264,5 +275,71 @@ describe('<MapPreview />', () => {
     const container = screen.getByTestId('map-container');
     expect(container).toHaveAttribute('data-center', JSON.stringify([0, 0]));
     expect(container).toHaveAttribute('data-zoom', '1');
+  });
+});
+
+/**
+ * S83 — print-CSS class-hook contract
+ *
+ * The print.css @media print rules target two classnames:
+ *   - .map-preview              — outer wrapper
+ *   - .map-preview__attribution — visible OSM chip
+ *
+ * These tests pin the className + text contract so a future refactor
+ * doesn't silently drop the hooks (which would silently break
+ * print-mode attribution visibility — an OSM license risk).
+ *
+ * jsdom can't evaluate @media print rules, so the BEHAVIOURAL contract
+ * (position:static + visibility:visible at print-time) isn't asserted
+ * directly here. It is verified manually in browser print preview
+ * AND documented in the print.css header comment.
+ */
+describe('<MapPreview /> — S83 print-css hooks', () => {
+  it('outer wrapper has the stable `map-preview` className for print.css targeting', () => {
+    render(<MapPreview items={SAMPLE_ITEMS} />);
+    const wrapper = screen.getByTestId('map-preview');
+    expect(wrapper.className).toMatch(/\bmap-preview\b/);
+  });
+
+  it('attribution element has the stable `map-preview__attribution` className', () => {
+    render(<MapPreview items={SAMPLE_ITEMS} />);
+    const attr = screen.getByTestId('map-attribution');
+    expect(attr.className).toMatch(/\bmap-preview__attribution\b/);
+  });
+
+  it('attribution text is the exact OSM-required literal', () => {
+    render(<MapPreview items={SAMPLE_ITEMS} />);
+    const attr = screen.getByTestId('map-attribution');
+    // Exact literal — substring matches would let a bad refactor pass.
+    expect(attr.textContent).toBe('© OpenStreetMap contributors');
+  });
+
+  it('attribution text is wrapped in a <span> so print.css can target inline-text', () => {
+    render(<MapPreview items={SAMPLE_ITEMS} />);
+    const attr = screen.getByTestId('map-attribution');
+    const span = attr.querySelector('span');
+    expect(span).not.toBeNull();
+    expect(span.textContent).toBe('© OpenStreetMap contributors');
+  });
+
+  it('attribution + wrapper class hooks both survive when items list is empty', () => {
+    // Print export of a blank-map page (e.g. an itinerary draft without
+    // pinned coords) must still carry the attribution + class hooks.
+    render(<MapPreview items={[]} />);
+    expect(screen.getByTestId('map-preview').className).toMatch(/\bmap-preview\b/);
+    expect(screen.getByTestId('map-attribution').className).toMatch(/\bmap-preview__attribution\b/);
+    expect(screen.getByTestId('map-attribution').textContent).toBe('© OpenStreetMap contributors');
+  });
+
+  it('attribution element renders inside the .map-preview wrapper (DOM parent chain)', () => {
+    // print.css targets `.map-preview__attribution` outside of any
+    // class-nesting selector, but the rule for `.map-preview` (page-break
+    // avoidance + overflow:visible) needs the wrapper to be the visible
+    // ancestor. Pin the parent relationship so a refactor that lifts the
+    // attribution outside the wrapper raises a test failure.
+    render(<MapPreview items={SAMPLE_ITEMS} />);
+    const wrapper = screen.getByTestId('map-preview');
+    const attr = screen.getByTestId('map-attribution');
+    expect(wrapper.contains(attr)).toBe(true);
   });
 });

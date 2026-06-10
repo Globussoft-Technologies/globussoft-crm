@@ -40,6 +40,14 @@ const { writeAudit, diffFields } = require("../lib/audit");
 const listProjection = require("../lib/listProjection");
 const { isFullShape } = listProjection;
 const { verifyToken } = require("../middleware/auth");
+// Patient-portal notification inbox (additive — patient-scoped, separate from
+// the staff Notification table). Backs /portal/me/notifications* below.
+const {
+  listPatientNotifications,
+  markPatientNotificationRead,
+  markAllPatientNotificationsRead,
+  toPublic: toPublicNotification,
+} = require("../lib/patientNotificationService");
 // #679/#680/#681/#682 PII masking helpers + viewer policy. Used on list views
 // (Locations, Patients list, Telecaller Queue) so low-trust viewers
 // (telecaller / helper / generic USER on wellness tenant) see masked
@@ -10402,6 +10410,65 @@ router.get("/portal/me/permissions", verifyPatientToken, async (req, res) => {
   } catch (e) {
     console.error("[wellness] portal/me/permissions error:", e.message);
     res.status(500).json({ error: "Failed to load permissions" });
+  }
+});
+
+// ── Patient notification inbox (Option A: REST inbox for the patient app) ──
+//
+// Patient-scoped notifications served from the PatientNotification table —
+// distinct from the staff /api/notifications bell (which the portal JWT can't
+// reach by design). All three sit behind verifyPatientToken and scope every
+// query to req.patient.id, so a patient only ever sees / mutates their own
+// rows. The Android app's Room-backed inbox + the web portal can consume these.
+
+// GET /portal/me/notifications — newest-first inbox + live unread count.
+//   ?limit=N (default 50, capped 200)   ?unreadOnly=true
+router.get("/portal/me/notifications", verifyPatientToken, async (req, res) => {
+  try {
+    const unreadOnly = req.query.unreadOnly === "true" || req.query.unreadOnly === "1";
+    const { items, unreadCount } = await listPatientNotifications(req.patient.id, {
+      limit: req.query.limit,
+      unreadOnly,
+    });
+    res.json({
+      notifications: items.map(toPublicNotification),
+      unreadCount,
+      count: items.length,
+    });
+  } catch (e) {
+    console.error("[wellness] portal/me/notifications error:", e.message);
+    res.status(500).json({ error: "Failed to load notifications" });
+  }
+});
+
+// PUT /portal/me/notifications/:id/read — mark ONE read (scoped to patient).
+router.put("/portal/me/notifications/:id/read", verifyPatientToken, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isInteger(id)) {
+      return res.status(400).json({ error: "Invalid notification id", code: "INVALID_ID" });
+    }
+    const updated = await markPatientNotificationRead(req.patient.id, id);
+    if (!updated) {
+      // Either no such id, or it belongs to another patient — same 404 either
+      // way so a patient can't probe other patients' notification ids.
+      return res.status(404).json({ error: "Notification not found", code: "NOTIFICATION_NOT_FOUND" });
+    }
+    res.json(toPublicNotification(updated));
+  } catch (e) {
+    console.error("[wellness] portal/me/notifications/:id/read error:", e.message);
+    res.status(500).json({ error: "Failed to update notification" });
+  }
+});
+
+// POST /portal/me/notifications/mark-all-read — mark all unread read.
+router.post("/portal/me/notifications/mark-all-read", verifyPatientToken, async (req, res) => {
+  try {
+    const marked = await markAllPatientNotificationsRead(req.patient.id);
+    res.json({ success: true, marked });
+  } catch (e) {
+    console.error("[wellness] portal/me/notifications/mark-all-read error:", e.message);
+    res.status(500).json({ error: "Failed to mark all read" });
   }
 });
 

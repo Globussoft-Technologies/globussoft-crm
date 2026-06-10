@@ -68,7 +68,7 @@
  */
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, within, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
 // Stable mock impl for useActiveSubBrand — per-test setup uses
@@ -98,6 +98,7 @@ vi.mock('../utils/notify', () => ({
 const fetchApiMock = vi.fn();
 vi.mock('../utils/api', () => ({
   fetchApi: (...args) => fetchApiMock(...args),
+  getAuthToken: () => 'tk',
 }));
 
 // useSearchParams + useNavigate mocked — STABLE references for both the
@@ -163,45 +164,54 @@ describe('MarketingFlyerStudio — SHELL surface', () => {
     expect(screen.getByText(/TMC \/ RFU \/ Travel Stall \/ Visa Sure/i)).toBeTruthy();
   });
 
-  it('renders 4 sub-brand placeholder cards (tmc / rfu / travelstall / visasure)', () => {
+  it('renders the editor toolbar (+ Text / + Image) and canvas with the seeded block', () => {
     renderStudio();
-    const ids = ['tmc', 'rfu', 'travelstall', 'visasure'];
-    for (const id of ids) {
-      const card = screen.getByTestId(`flyer-card-${id}`);
-      expect(card).toBeTruthy();
-      expect(card.getAttribute('data-sub-brand')).toBe(id);
-    }
-    // Container has exactly 4 cards — exact count guards against
-    // accidental drift if a 5th sub-brand is added without updating the
-    // canonical VALID_SUB_BRANDS set.
-    const cards = screen.getByTestId('marketing-flyer-studio-cards').querySelectorAll('[data-sub-brand]');
-    expect(cards.length).toBe(4);
+    expect(screen.getByTestId('flyer-editor')).toBeTruthy();
+    expect(screen.getByTestId('flyer-canvas')).toBeTruthy();
+    expect(screen.getByTestId('flyer-add-text')).toBeTruthy();
+    expect(screen.getByTestId('flyer-add-image')).toBeTruthy();
+    // The default layout seeds one text block on the canvas.
+    expect(screen.getByTestId('flyer-block-0')).toBeTruthy();
   });
 
-  it('shows a "Coming soon" overlay affordance on every sub-brand card', () => {
+  it('"+ Text" appends a text block to the canvas', () => {
     renderStudio();
-    const ids = ['tmc', 'rfu', 'travelstall', 'visasure'];
-    for (const id of ids) {
-      const overlay = screen.getByTestId(`flyer-card-${id}-coming-soon`);
-      expect(overlay).toBeTruthy();
-      // Overlay carries the literal "Coming soon" copy.
-      expect(overlay.textContent || '').toMatch(/coming soon/i);
+    expect(screen.queryByTestId('flyer-block-1')).toBeNull();
+    fireEvent.click(screen.getByTestId('flyer-add-text'));
+    expect(screen.getByTestId('flyer-block-1')).toBeTruthy();
+  });
+
+  it('"+ Image" appends an image block (shows the set-URL placeholder)', () => {
+    renderStudio();
+    fireEvent.click(screen.getByTestId('flyer-add-image'));
+    const block = screen.getByTestId('flyer-block-1');
+    expect(block).toBeTruthy();
+    expect(block.textContent || '').toMatch(/set url/i);
+  });
+
+  it('clicking a block selects it and the properties panel edits its text live', () => {
+    renderStudio();
+    fireEvent.click(screen.getByTestId('flyer-block-0'));
+    const textArea = screen.getByLabelText('Block text');
+    expect(textArea).toBeTruthy();
+    fireEvent.change(textArea, { target: { value: 'Ramadan Umrah 2026' } });
+    expect(screen.getByTestId('flyer-block-0').textContent || '').toMatch(/Ramadan Umrah 2026/);
+  });
+
+  it('renders a colour swatch for each of the 5 palette keys', () => {
+    renderStudio();
+    for (const k of ['primaryHex', 'secondaryHex', 'accentHex', 'textHex', 'bgHex']) {
+      expect(screen.getByTestId(`palette-${k}`)).toBeTruthy();
     }
   });
 
-  it('visually highlights the active sub-brand card (data-active + aria-current)', () => {
-    activeSubBrandMockImpl.mockReturnValue({ activeSubBrand: 'rfu', setActiveSubBrand: () => {} });
+  it('an image block exposes the URL field + an "Upload image" control', () => {
     renderStudio();
-    const rfuCard = screen.getByTestId('flyer-card-rfu');
-    expect(rfuCard.getAttribute('data-active')).toBe('true');
-    expect(rfuCard.getAttribute('aria-current')).toBe('true');
-
-    // Non-active cards remain data-active='false' with no aria-current.
-    for (const id of ['tmc', 'travelstall', 'visasure']) {
-      const card = screen.getByTestId(`flyer-card-${id}`);
-      expect(card.getAttribute('data-active')).toBe('false');
-      expect(card.getAttribute('aria-current')).toBeNull();
-    }
+    fireEvent.click(screen.getByTestId('flyer-add-image'));
+    fireEvent.click(screen.getByTestId('flyer-block-1'));
+    expect(screen.getByLabelText('Image URL')).toBeTruthy();
+    expect(screen.getByTestId('flyer-image-upload')).toBeTruthy();
+    expect(screen.getByTestId('flyer-image-file')).toBeTruthy();
   });
 
   it('RoleGuard gate — USER role blocks the studio; ADMIN/MANAGER render the studio', async () => {
@@ -233,21 +243,11 @@ describe('MarketingFlyerStudio — SHELL surface', () => {
     });
   });
 
-  it('renders without throwing when activeSubBrand is null (no card highlighted)', () => {
+  it('renders without throwing when activeSubBrand is null', () => {
     activeSubBrandMockImpl.mockReturnValue({ activeSubBrand: null, setActiveSubBrand: () => {} });
     expect(() => renderStudio()).not.toThrow();
-    // Heading mounts.
     expect(screen.getByRole('heading', { level: 1, name: /marketing flyer studio/i })).toBeTruthy();
-    // All 4 cards mount with data-active='false' (no highlight).
-    for (const id of ['tmc', 'rfu', 'travelstall', 'visasure']) {
-      const card = screen.getByTestId(`flyer-card-${id}`);
-      expect(card.getAttribute('data-active')).toBe('false');
-      expect(card.getAttribute('aria-current')).toBeNull();
-    }
-    // Defensive — within() resolves the cards container so the test
-    // double-checks the scope is what we expect.
-    const container = screen.getByTestId('marketing-flyer-studio-cards');
-    expect(within(container).getAllByText(/coming soon/i).length).toBeGreaterThanOrEqual(4);
+    expect(screen.getByTestId('flyer-editor')).toBeTruthy();
   });
 });
 

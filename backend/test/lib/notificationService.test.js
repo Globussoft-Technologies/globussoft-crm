@@ -26,7 +26,14 @@
 import { describe, test, expect, vi, beforeAll, beforeEach } from 'vitest';
 
 vi.hoisted(() => {
-  process.env.SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || 'test-sendgrid-key';
+  // FORCE the fixture key (don't `|| ` it). The email-channel tests assert the
+  // Authorization header is EXACTLY `Bearer test-sendgrid-key`, so an ambient
+  // SENDGRID_API_KEY must never leak in. The test harness loads the project
+  // `.env` (for DATABASE_URL etc.) before this runs, and a dev `.env` that
+  // carries a real SendGrid key would otherwise override the fixture and fail
+  // the exact-match assertion. vi.hoisted runs before the SUT import, so this
+  // value is what notificationService.js captures at module load.
+  process.env.SENDGRID_API_KEY = 'test-sendgrid-key';
 });
 import { createRequire } from 'node:module';
 import prisma from '../../lib/prisma.js';

@@ -68,6 +68,27 @@ router.get("/rfu-profiles", verifyToken, requireTravelTenant, requireRfuAccess, 
     }
     const take = Math.min(parseInt(req.query.limit, 10) || 50, 200);
     const skip = parseInt(req.query.offset, 10) || 0;
+    // S3 (PRD_TRAVEL_SECURITY_ARCHITECTURE) — opt-in PII-light list projection.
+    // ?fields=summary returns only list-safe columns and DROPS the sensitive
+    // ones (passport, visa history, frequent-flyer, budget, medical notes,
+    // emergency contact, past complaints). Opt-in + additive: the DEFAULT
+    // response shape is unchanged, so every existing caller is byte-identical.
+    // Travel-only endpoint (requireTravelTenant + requireRfuAccess) — never
+    // reached by the wellness or generic verticals.
+    const findArgs = { where, orderBy: { id: "desc" }, take, skip };
+    if (req.query.fields === "summary") {
+      findArgs.select = {
+        id: true,
+        tenantId: true,
+        contactId: true,
+        productTier: true,
+        travelStyle: true,
+        seatPref: true,
+        mealPref: true,
+        createdAt: true,
+        updatedAt: true,
+      };
+    }
     const isSummary = req.query.fields === "summary";
     const findManyArgs = { where, orderBy: { id: "desc" }, take, skip };
     if (isSummary) {

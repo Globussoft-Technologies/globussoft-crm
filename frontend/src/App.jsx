@@ -250,6 +250,7 @@ const TravelFlyerTemplates = lazy(() => import("./pages/travel/FlyerTemplates"))
 const TravelReligiousPackets = lazy(() => import("./pages/travel/ReligiousPackets"));
 const TravelTmcMicrositePreview = lazy(() => import("./pages/travel/TmcMicrositePreview"));
 const TravelItineraryDetail = lazy(() => import("./pages/travel/ItineraryDetail"));
+const TravelItineraryEditor = lazy(() => import("./pages/travel/ItineraryEditor"));
 const TravelLeadDetail = lazy(() => import("./pages/travel/LeadDetail"));
 // Arc 2 #904 slice — InboundLeads admin page (STUB consumer). Operator-facing
 // list of inbound leads ingested via POST /api/travel/inbound/leads/:channel
@@ -1420,6 +1421,7 @@ export default function App() {
                   inside DiagnosticBuilder's EngineWeights tab for now. */}
               <Route path="travel/tmc/catalogue" element={<TravelOnly><TravelTmcCatalogueAdmin /></TravelOnly>} />
               <Route path="travel/itineraries/:id" element={<TravelOnly><TravelItineraryDetail /></TravelOnly>} />
+              <Route path="travel/itineraries/:id/edit" element={<TravelOnly><TravelItineraryEditor /></TravelOnly>} />
               <Route path="travel/leads/:contactId" element={<TravelOnly><TravelLeadDetail /></TravelOnly>} />
               {/* Arc 2 #904 slice — InboundLeads admin (STUB client-side
                   filter pending dedicated GET endpoint). Operator surface

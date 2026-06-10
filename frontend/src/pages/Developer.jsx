@@ -73,7 +73,7 @@ export default function Developer() {
     try {
       const k = await fetchApi('/api/developer/apikeys');
       setKeys(Array.isArray(k) ? k : []);
-      
+
       const h = await fetchApi('/api/developer/webhooks');
       setHooks(Array.isArray(h) ? h : []);
     } catch (err) {
@@ -217,7 +217,7 @@ export default function Developer() {
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2rem' }}>
-        
+
         {/* API Keys */}
         <div className="card" style={{ padding: '2rem' }}>
           <h3 style={{ fontSize: '1.25rem', fontWeight: '600', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>

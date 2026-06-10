@@ -64,13 +64,13 @@ const { getBudgetCap, evaluateCap } = require("./tenantSettings");
 // always returns the primary's model identifier so consumers can
 // pin the contract; fallback wiring lands with real-mode.
 const TASK_ROUTING = {
-  "search":            { primary: "perplexity-sonar",  fallback: null },
-  "citation":          { primary: "perplexity-sonar",  fallback: null },
-  "reasoning":         { primary: "claude-opus-4-7",   fallback: "gpt-4" },
-  "talking-points":    { primary: "claude-opus-4-7",   fallback: "gpt-4" },
-  "form-vs-call":      { primary: "claude-opus-4-7",   fallback: "gpt-4" },
-  "bulk-text":         { primary: "gemini-flash",      fallback: "claude-haiku" },
-  "call-summary":      { primary: "gemini-flash",      fallback: null },
+  "search": { primary: "perplexity-sonar", fallback: null },
+  "citation": { primary: "perplexity-sonar", fallback: null },
+  "reasoning": { primary: "claude-opus-4-7", fallback: "gpt-4" },
+  "talking-points": { primary: "claude-opus-4-7", fallback: "gpt-4" },
+  "form-vs-call": { primary: "claude-opus-4-7", fallback: "gpt-4" },
+  "bulk-text": { primary: "gemini-flash", fallback: "claude-haiku" },
+  "call-summary": { primary: "gemini-flash", fallback: null },
   // Itinerary-suggest (PRD_TRAVEL_ITINERARY_UPGRADES FR-3.6 + AI_SURFACES §3
   // table). 2K in / 4K out — larger out than bulk-text because the full
   // itinerary JSON shape (daySplit + poiSuggestions + thematicNotes) lands
@@ -78,7 +78,7 @@ const TASK_ROUTING = {
   // routing table for Travel Stall's bulk-shape Gemini calls. Real-mode
   // swap lives in backend/services/itinerarySuggestLLM.js (S14 — same
   // commit). Real call gated on Q-IT-2 / Q11 GEMINI_API_KEY.
-  "itinerary-suggest": { primary: "gemini-flash",      fallback: "claude-haiku" },
+  "itinerary-suggest": { primary: "gemini-flash", fallback: "claude-haiku" },
   // Marketing-flyer-copy (PRD_TRAVEL_MARKETING_FLYER FR-3.6.1 + AC-6.8).
   // 1K in / 1K out — short-form headline + body + CTA JSON. Routed to
   // gemini-flash for low-cost bulk-shape Gemini calls per PRD §9.1.
@@ -86,7 +86,7 @@ const TASK_ROUTING = {
   // (S15 — same commit); this scaffold's stub-text path returns a tagged
   // synthetic string for routeRequest text-envelope callers. Real call
   // gated on Q-AI-3 / Q11 GEMINI_API_KEY.
-  "marketing-flyer-copy": { primary: "gemini-flash",      fallback: "claude-haiku" },
+  "marketing-flyer-copy": { primary: "gemini-flash", fallback: "claude-haiku" },
   // Marketing-flyer-image (PRD_TRAVEL_MARKETING_FLYER FR-3.6.3).
   // AI image-gen for flyer hero blocks. Primary: DALL-E 3 (OpenAI API).
   // Fallback: Stability AI XL. Structured-image path lives in
@@ -100,7 +100,7 @@ const TASK_ROUTING = {
   // product call to split into its own `image-llm` integration cap so a
   // runaway image-gen burst doesn't silently exhaust the text-LLM
   // budget. Until then both share the 'llm' cap envelope.
-  "marketing-flyer-image": { primary: "dall-e-3",         fallback: "stability-xl" },
+  "marketing-flyer-image": { primary: "dall-e-3", fallback: "stability-xl" },
   // Catch-all for unrecognized tasks → reasoning model (Claude)
   // matches PRD's preference for a high-quality default.
 };
@@ -113,15 +113,15 @@ const VALID_TASKS = Object.keys(TASK_ROUTING);
 // (per-tenant key support); ENV stays as the dev/CI fallback.
 const ENV_FOR_MODEL = {
   "perplexity-sonar": "PERPLEXITY_API_KEY",
-  "claude-opus-4-7":  "ANTHROPIC_API_KEY",
-  "gpt-4":            "OPENAI_API_KEY",
-  "gemini-flash":     "GEMINI_API_KEY",
-  "claude-haiku":     "ANTHROPIC_API_KEY",
+  "claude-opus-4-7": "ANTHROPIC_API_KEY",
+  "gpt-4": "OPENAI_API_KEY",
+  "gemini-flash": "GEMINI_API_KEY",
+  "claude-haiku": "ANTHROPIC_API_KEY",
   // S16 — image-gen providers for marketing-flyer-image task class
   // (PRD_TRAVEL_MARKETING_FLYER FR-3.6.3). DALL-E 3 reuses the OpenAI
   // key (same env var as gpt-4); Stability XL needs its own dedicated key.
-  "dall-e-3":         "OPENAI_API_KEY",
-  "stability-xl":     "STABILITY_API_KEY",
+  "dall-e-3": "OPENAI_API_KEY",
+  "stability-xl": "STABILITY_API_KEY",
 };
 
 /**
@@ -306,11 +306,25 @@ async function routeRequest({ task, payload, tenantId } = {}) {
 
   const { model, reason } = pickModel(task);
 
-  // STUB: real provider call. When the matching API key lands in
-  // env (or in SupplierCredential per PRD §9.1), swap this block
-  // for `return realProviderCall(model, payload)`.
-  // Synthetic response shape matches what the real providers return
-  // after normalization: { text, finishReason, usage, model, stub }.
+  // Real-mode: when the task's provider key is present in env AND we're not
+  // under test, call the REAL provider — so the moment a key lands the output
+  // is real with ZERO further code changes (no "swap the stub later" landmine).
+  // No key (dev / CI / demo-without-keys) OR NODE_ENV==='test' falls through to
+  // the deterministic stub below, keeping unit + e2e runs offline + repeatable.
+  if (process.env.NODE_ENV !== "test" && llmEnabled(task)) {
+    try {
+      return await realProviderCall({ task, model, payload, tenantId });
+    } catch (e) {
+      console.error(`[llm-router] real provider call failed (task=${task} model=${model}): ${e.message}`);
+      const err = new Error(`LLM provider call failed: ${e.message}`);
+      err.code = "LLM_PROVIDER_ERROR";
+      throw err;
+    }
+  }
+
+  // STUB: deterministic synthetic response used when no provider key is set
+  // (or under test). Same envelope shape as the real path:
+  // { text, finishReason, usage, model, stub }.
   const stubText = buildStubText(task, payload);
   const tokensIn = estimateTokens(JSON.stringify(payload || {}));
   const tokensOut = estimateTokens(stubText);
@@ -433,6 +447,177 @@ function estimateTokens(s) {
   return Math.ceil(String(s).length / 4);
 }
 
+// ── Real-mode provider calls ─────────────────────────────────────────
+//
+// Activated by routeRequest when the task's provider key is present (and not
+// under test). The REAL provider model id per routing label is env-overridable
+// so a model rename is a config change, never a code change (no stale-model
+// landmine). Defaults track the current model generation.
+const MODEL_ID_ENV = {
+  "claude-opus-4-7": ["LLM_MODEL_CLAUDE_OPUS", "claude-opus-4-8"],
+  "claude-haiku": ["LLM_MODEL_CLAUDE_HAIKU", "claude-haiku-4-5-20251001"],
+  "gpt-4": ["LLM_MODEL_GPT", "gpt-4o"],
+  "gemini-flash": ["LLM_MODEL_GEMINI", "gemini-2.5-flash"],
+  "perplexity-sonar": ["LLM_MODEL_PERPLEXITY", "sonar"],
+};
+
+function resolveRealModelId(label) {
+  const entry = MODEL_ID_ENV[label];
+  if (!entry) return label;
+  const [envVar, dflt] = entry;
+  return process.env[envVar] || dflt;
+}
+
+function providerForModel(label) {
+  if (label.startsWith("claude")) return "anthropic";
+  if (label.startsWith("gpt")) return "openai";
+  if (label.startsWith("gemini")) return "gemini";
+  if (label.startsWith("perplexity") || label === "sonar") return "perplexity";
+  return "anthropic";
+}
+
+// Build a task-appropriate { system, user } prompt. The payload's __-prefixed
+// hint keys (e.g. __userId / __surface) are stripped — only real content is
+// sent to the provider.
+function buildPrompt(task, payload) {
+  const content = {};
+  for (const [k, v] of Object.entries(payload || {})) {
+    if (!String(k).startsWith("__")) content[k] = v;
+  }
+  const SYS = {
+    "talking-points": "You are a senior travel advisor. Given a lead's diagnostic profile, produce concise, actionable talking points for the advisor's next call. Plain text, 3-6 short bullets.",
+    "form-vs-call": "You compare a customer's web-form answers against their phone-call answers, summarise the level of match, and flag any mismatches. Plain text.",
+    "itinerary-suggest": "You are an expert travel planner. Given a destination, number of days, budget per person, and traveller profile, write a concise day-by-day itinerary summary in prose. Do NOT invent specific prices.",
+    "bulk-text": "You write clear, customer-facing travel copy. Plain text.",
+    "call-summary": "You summarise a sales/advisory call in a few sentences. Plain text.",
+    "reasoning": "You are a careful reasoning assistant for a travel CRM. Plain text.",
+    "search": "You answer with concise, well-sourced information. Plain text.",
+    "citation": "You answer with concise, well-sourced information. Plain text.",
+  };
+  const system = SYS[task] || SYS.reasoning;
+  const user = `Task: ${task}\nContext (JSON):\n${JSON.stringify(content)}`;
+  return { system, user };
+}
+
+async function httpJson(url, opts, timeoutMs = 30000) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { ...opts, signal: ctrl.signal });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const msg = (body && (body.error?.message || body.error)) || res.statusText || `HTTP ${res.status}`;
+      throw new Error(`${res.status} ${msg}`);
+    }
+    return body;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function callAnthropic(modelId, system, user, apiKey, maxTokens) {
+  const body = await httpJson("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
+    body: JSON.stringify({ model: modelId, max_tokens: maxTokens, system, messages: [{ role: "user", content: user }] }),
+  });
+  const text = (body.content || []).map((c) => c.text || "").join("").trim();
+  const u = body.usage || {};
+  return { text, tokensIn: u.input_tokens || 0, tokensOut: u.output_tokens || 0 };
+}
+
+// OpenAI + Perplexity share the OpenAI chat-completions wire format.
+async function callOpenAICompatible(baseUrl, modelId, system, user, apiKey, maxTokens) {
+  const body = await httpJson(`${baseUrl}/chat/completions`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({
+      model: modelId,
+      max_tokens: maxTokens,
+      messages: [{ role: "system", content: system }, { role: "user", content: user }],
+    }),
+  });
+  const text = (body.choices && body.choices[0] && body.choices[0].message && body.choices[0].message.content || "").trim();
+  const u = body.usage || {};
+  return { text, tokensIn: u.prompt_tokens || 0, tokensOut: u.completion_tokens || 0 };
+}
+
+async function callGemini(modelId, system, user, apiKey, maxTokens) {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${encodeURIComponent(apiKey)}`;
+  const body = await httpJson(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      systemInstruction: { parts: [{ text: system }] },
+      contents: [{ role: "user", parts: [{ text: user }] }],
+      generationConfig: { maxOutputTokens: maxTokens },
+    }),
+  });
+  const parts = (body.candidates && body.candidates[0] && body.candidates[0].content && body.candidates[0].content.parts) || [];
+  const text = parts.map((p) => p.text || "").join("").trim();
+  const m = body.usageMetadata || {};
+  return { text, tokensIn: m.promptTokenCount || 0, tokensOut: m.candidatesTokenCount || 0 };
+}
+
+async function realProviderCall({ task, model, payload, tenantId }) {
+  const provider = providerForModel(model);
+  const envVar = ENV_FOR_MODEL[model];
+  const apiKey = envVar && process.env[envVar];
+  if (!apiKey) throw new Error(`no API key for ${model}`);
+  const modelId = resolveRealModelId(model);
+  const { system, user } = buildPrompt(task, payload);
+  const maxTokens = 4096;
+
+  let out;
+  if (provider === "anthropic") out = await callAnthropic(modelId, system, user, apiKey, maxTokens);
+  else if (provider === "openai") out = await callOpenAICompatible("https://api.openai.com/v1", modelId, system, user, apiKey, maxTokens);
+  else if (provider === "perplexity") out = await callOpenAICompatible("https://api.perplexity.ai", modelId, system, user, apiKey, maxTokens);
+  else if (provider === "gemini") out = await callGemini(modelId, system, user, apiKey, maxTokens);
+  else throw new Error(`unknown provider for ${model}`);
+
+  const tokensIn = out.tokensIn || estimateTokens(JSON.stringify(payload || {}));
+  const tokensOut = out.tokensOut || estimateTokens(out.text);
+
+  // Token-only telemetry — NEVER log payload content (PII discipline).
+  console.log(
+    `[llm-router] task=${task} model=${model} (${modelId}) tenant=${tenantId || "?"} ` +
+    `tokens_in=${tokensIn} tokens_out=${tokensOut} cost_estimate=$0.0000 stub=false reason=real`,
+  );
+
+  // Persist one LlmCallLog row (best-effort, fire-and-forget) — mirrors the
+  // stub path so the admin spend dashboard counts real calls too.
+  try {
+    const prisma = require("./prisma");
+    prisma.llmCallLog
+      .create({
+        data: {
+          tenantId: tenantId || 1,
+          task,
+          model,
+          reason: "real",
+          promptTokens: tokensIn,
+          completionTokens: tokensOut,
+          totalTokens: tokensIn + tokensOut,
+          costEstimate: 0, // real per-token pricing is a follow-up; tokens are real
+          stub: false,
+          userId: (payload && payload.__userId) || null,
+          surface: (payload && payload.__surface) || null,
+        },
+      })
+      .catch((e) => console.error(`[llm-router] LlmCallLog persist failed (non-fatal): ${e.message}`));
+  } catch (e) {
+    console.error(`[llm-router] LlmCallLog require failed (non-fatal): ${e.message}`);
+  }
+
+  return {
+    text: out.text || "",
+    finishReason: "stop",
+    usage: { promptTokens: tokensIn, completionTokens: tokensOut, totalTokens: tokensIn + tokensOut },
+    model,
+    stub: false,
+  };
+}
+
 module.exports = {
   TASK_ROUTING,
   VALID_TASKS,
@@ -446,4 +631,7 @@ module.exports = {
   buildStubText,
   estimateTokens,
   computeMonthlySpendCents,
+  buildPrompt,
+  resolveRealModelId,
+  providerForModel,
 };

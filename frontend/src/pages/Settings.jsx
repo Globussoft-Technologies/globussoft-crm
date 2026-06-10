@@ -32,6 +32,7 @@ import { useNotify } from "../utils/notify";
 import { usePermissions } from "../hooks/usePermissions";
 import { ThemeContext, AuthContext } from "../App";
 import PasswordInput from "../components/PasswordInput";
+import WebhookSigningCredential from "../components/WebhookSigningCredential";
 
 // #391: single source of truth for the default brand color so the color
 // picker swatch, the placeholder hint, and the color actually applied
@@ -1474,6 +1475,11 @@ export default function Settings() {
               </p>
             )}
           </div>
+
+          {/* Webhook Signing Credential — per-tenant HMAC secret for outbound
+              webhooks (GlobusPhone lead-sync). Self-contained admin component;
+              ADMIN-only + subscription-gated server-side. */}
+          <WebhookSigningCredential />
 
           {/* Notification Preferences Card */}
           <NotificationPreferencesCard notify={notify} />

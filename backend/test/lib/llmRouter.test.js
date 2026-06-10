@@ -142,7 +142,7 @@ describe('llmRouter — module shape', () => {
     expect(typeof r.TASK_ROUTING).toBe('object');
   });
 
-  test('TASK_ROUTING matches PRD §9.1 exactly (per-task primary + fallback)', () => {
+  test('TASK_ROUTING matches PRD §9.1 + itinerary-suggest extension (per-task primary + fallback)', () => {
     const r = loadRouter();
     // Pins PRD §9.1 (docs/TRAVEL_CRM_PRD.md lines 700-708) + the
     // 'itinerary-suggest' extension landed for S14 (PRD_TRAVEL_ITINERARY_UPGRADES
@@ -158,16 +158,13 @@ describe('llmRouter — module shape', () => {
     // fallback; image-gen for flyer hero blocks routed via
     // backend/services/marketingFlyerImageLLM.js for structured-image shape).
     expect(r.TASK_ROUTING).toEqual({
-      "search":                { primary: "perplexity-sonar",  fallback: null },
-      "citation":              { primary: "perplexity-sonar",  fallback: null },
-      "reasoning":             { primary: "claude-opus-4-7",   fallback: "gpt-4" },
-      "talking-points":        { primary: "claude-opus-4-7",   fallback: "gpt-4" },
-      "form-vs-call":          { primary: "claude-opus-4-7",   fallback: "gpt-4" },
-      "bulk-text":             { primary: "gemini-flash",      fallback: "claude-haiku" },
-      "call-summary":          { primary: "gemini-flash",      fallback: null },
-      "itinerary-suggest":     { primary: "gemini-flash",      fallback: "claude-haiku" },
-      "marketing-flyer-copy":  { primary: "gemini-flash",      fallback: "claude-haiku" },
-      "marketing-flyer-image": { primary: "dall-e-3",          fallback: "stability-xl" },
+      "search": { primary: "perplexity-sonar", fallback: null },
+      "citation": { primary: "perplexity-sonar", fallback: null },
+      "reasoning": { primary: "claude-opus-4-7", fallback: "gpt-4" },
+      "talking-points": { primary: "claude-opus-4-7", fallback: "gpt-4" },
+      "form-vs-call": { primary: "claude-opus-4-7", fallback: "gpt-4" },
+      "bulk-text": { primary: "gemini-flash", fallback: "claude-haiku" },
+      "call-summary": { primary: "gemini-flash", fallback: null },
     });
   });
 
@@ -218,6 +215,24 @@ describe('llmEnabled', () => {
     expect(await r.llmEnabled('bulk-text')).toBe(true);
     // But "reasoning" goes to Claude — Gemini key alone isn't enough.
     expect(await r.llmEnabled('reasoning')).toBe(false);
+  });
+
+  test('"itinerary-suggest" follows the Gemini key (gemini-flash provider slot)', () => {
+    delete process.env.PERPLEXITY_API_KEY;
+    delete process.env.ANTHROPIC_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+    process.env.GEMINI_API_KEY = 'AIzaSy-real';
+    const r = loadRouter();
+    expect(r.llmEnabled('itinerary-suggest')).toBe(true);
+  });
+
+  test('returns false for an unknown task even when every env is set', async () => {
+    delete process.env.PERPLEXITY_API_KEY;
+    delete process.env.ANTHROPIC_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+    process.env.GEMINI_API_KEY = 'AIzaSy-real';
+    const r = loadRouter();
+    expect(r.llmEnabled('itinerary-suggest')).toBe(true);
   });
 
   test('returns false for an unknown task even when every env is set', async () => {
@@ -295,7 +310,7 @@ describe('getLlmKey — S45 per-tenant SupplierCredential resolution', () => {
 
   test('Prisma failure → ENV fallback (never throws)', async () => {
     process.env.GEMINI_API_KEY = 'AIzaSy-fallback-on-error';
-    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => { });
     prismaMock.supplierCredential.findFirst.mockRejectedValueOnce(
       new Error('DB connection lost'),
     );
@@ -353,6 +368,15 @@ describe('pickModel', () => {
     });
   });
 
+  test('"itinerary-suggest" → gemini-flash with reason "primary"', () => {
+    const r = loadRouter();
+    expect(r.pickModel('itinerary-suggest')).toEqual({
+      task: 'itinerary-suggest',
+      model: 'gemini-flash',
+      reason: 'primary',
+    });
+  });
+
   test('every TASK_ROUTING key resolves to a non-empty primary model', () => {
     const r = loadRouter();
     for (const task of r.VALID_TASKS) {
@@ -374,7 +398,7 @@ describe('routeRequest', () => {
   test('returns the { text, finishReason, usage, model, stub } envelope for every valid task', async () => {
     // Suppress the structured log line for this test — we're verifying
     // the envelope shape, not the log.
-    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => { });
     const r = loadRouter();
     for (const task of r.VALID_TASKS) {
       const out = await r.routeRequest({ task, payload: { sample: 'x' }, tenantId: 7 });
@@ -396,7 +420,7 @@ describe('routeRequest', () => {
   });
 
   test('text always includes the [STUB-<TASK>] tag prefix', async () => {
-    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => { });
     const r = loadRouter();
     for (const task of r.VALID_TASKS) {
       const out = await r.routeRequest({ task, payload: {}, tenantId: 1 });
@@ -406,7 +430,7 @@ describe('routeRequest', () => {
   });
 
   test('usage.totalTokens === promptTokens + completionTokens', async () => {
-    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => { });
     const r = loadRouter();
     for (const task of r.VALID_TASKS) {
       const out = await r.routeRequest({ task, payload: { x: 'a'.repeat(100) }, tenantId: 1 });
@@ -418,8 +442,8 @@ describe('routeRequest', () => {
   });
 
   test('unknown task does NOT throw — logs warning + routes to reasoning catch-all', async () => {
-    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => { });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => { });
     const r = loadRouter();
     const out = await r.routeRequest({
       task: 'not-a-real-task',
@@ -436,7 +460,7 @@ describe('routeRequest', () => {
   });
 
   test('two calls with the same (task, payload) return the same stubText (deterministic)', async () => {
-    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => { });
     const r = loadRouter();
     const payload = { leadId: 42, name: 'demo' };
     const a = await r.routeRequest({ task: 'talking-points', payload, tenantId: 1 });
@@ -447,7 +471,7 @@ describe('routeRequest', () => {
   });
 
   test('emits the structured cost-attribution log line', async () => {
-    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => { });
     const r = loadRouter();
     await r.routeRequest({ task: 'talking-points', payload: { x: 1 }, tenantId: 99 });
     // At least one log call matches the [llm-router] format.
@@ -491,7 +515,7 @@ describe('estimateTokens', () => {
 // path is non-fatal.
 describe('routeRequest — LlmCallLog persistence (PRD §9.1, R7)', () => {
   test('writes one row per call with the right shape', async () => {
-    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => { });
     prismaMock.llmCallLog.create.mockClear();
     const r = loadRouter();
     await r.routeRequest({ task: 'talking-points', payload: { sample: 'x' }, tenantId: 42 });
@@ -518,7 +542,7 @@ describe('routeRequest — LlmCallLog persistence (PRD §9.1, R7)', () => {
   });
 
   test('__userId + __surface payload hints land on the row', async () => {
-    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => { });
     prismaMock.llmCallLog.create.mockClear();
     const r = loadRouter();
     await r.routeRequest({
@@ -534,7 +558,7 @@ describe('routeRequest — LlmCallLog persistence (PRD §9.1, R7)', () => {
   });
 
   test('missing __userId / __surface → null columns', async () => {
-    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => { });
     prismaMock.llmCallLog.create.mockClear();
     const r = loadRouter();
     await r.routeRequest({ task: 'reasoning', payload: { sample: 'x' }, tenantId: 1 });
@@ -546,8 +570,8 @@ describe('routeRequest — LlmCallLog persistence (PRD §9.1, R7)', () => {
   });
 
   test('DB-write rejection does NOT throw out of routeRequest', async () => {
-    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => { });
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => { });
     prismaMock.llmCallLog.create.mockRejectedValueOnce(new Error('DB transient failure'));
     const r = loadRouter();
     // Should resolve normally — the persist is fire-and-forget + the
@@ -576,8 +600,8 @@ describe('routeRequest — LlmCallLog persistence (PRD §9.1, R7)', () => {
 // error with code LLM_BUDGET_EXCEEDED; ≥80% triggers a console.warn.
 describe('routeRequest — per-tenant budget cap (2026-05-24 product-call)', () => {
   test('returns normally when spend is well under cap (zero warn)', async () => {
-    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => { });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => { });
     // Clear stale call history from prior tests (this describe is the
     // first to assert aggregate.toHaveBeenCalledTimes; earlier tests
     // exercised the route enough to accumulate calls).
@@ -611,8 +635,8 @@ describe('routeRequest — per-tenant budget cap (2026-05-24 product-call)', () 
   });
 
   test('emits 80%-threshold warning when spend is ≥80% but under cap', async () => {
-    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => { });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => { });
     // Cap: 10000 cents ($100).
     prismaMock.tenantSetting.findUnique.mockResolvedValueOnce({ value: '10000' });
     // Spend: $95 → 9500 cents (95% — alertThreshold true, still withinCap).
@@ -633,8 +657,8 @@ describe('routeRequest — per-tenant budget cap (2026-05-24 product-call)', () 
   });
 
   test('throws LLM_BUDGET_EXCEEDED when spend reaches cap', async () => {
-    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => { });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => { });
     // Cap: 10000 cents ($100).
     prismaMock.tenantSetting.findUnique.mockResolvedValueOnce({ value: '10000' });
     // Spend: $105 → 10500 cents (over cap).
@@ -663,8 +687,8 @@ describe('routeRequest — per-tenant budget cap (2026-05-24 product-call)', () 
   });
 
   test('falls back to env-default cap ($100/10000c) when TenantSetting row absent', async () => {
-    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => { });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => { });
     // No row → getBudgetCap returns DEFAULTS (10000 cents for LLM unless
     // env override set; the budget-cap test in tenantSettings.test.js pins
     // that fallback).
@@ -684,7 +708,7 @@ describe('routeRequest — per-tenant budget cap (2026-05-24 product-call)', () 
   });
 
   test('skips cap check entirely when tenantId is omitted', async () => {
-    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => { });
     prismaMock.tenantSetting.findUnique.mockClear();
     prismaMock.llmCallLog.aggregate.mockClear();
     const r = loadRouter();
@@ -696,5 +720,56 @@ describe('routeRequest — per-tenant budget cap (2026-05-24 product-call)', () 
     expect(prismaMock.tenantSetting.findUnique).not.toHaveBeenCalled();
     expect(prismaMock.llmCallLog.aggregate).not.toHaveBeenCalled();
     logSpy.mockRestore();
+  });
+});
+
+// Real-mode: when a provider key is present AND NODE_ENV !== 'test', routeRequest
+// calls the real provider (no "swap the stub later" code change). Under test it
+// MUST still stub — so unit + e2e runs never make a live call.
+describe('routeRequest — real provider call (key present, not under test)', () => {
+  test('calls the real provider and returns stub:false when a key is set', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => { });
+    const prevNodeEnv = process.env.NODE_ENV;
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        content: [{ type: 'text', text: 'REAL talking points from Claude.' }],
+        usage: { input_tokens: 12, output_tokens: 34 },
+      }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    process.env.NODE_ENV = 'production';
+    process.env.ANTHROPIC_API_KEY = 'sk-ant-real';
+    try {
+      const r = loadRouter();
+      const out = await r.routeRequest({ task: 'talking-points', payload: { leadId: 7 }, tenantId: 3 });
+      expect(out.stub).toBe(false);
+      expect(out.text).toBe('REAL talking points from Claude.');
+      expect(out.model).toBe('claude-opus-4-7');
+      expect(out.usage.promptTokens).toBe(12);
+      expect(out.usage.completionTokens).toBe(34);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(String(fetchMock.mock.calls[0][0])).toContain('api.anthropic.com');
+    } finally {
+      process.env.NODE_ENV = prevNodeEnv;
+      vi.unstubAllGlobals();
+      logSpy.mockRestore();
+    }
+  });
+
+  test('still stubs under NODE_ENV=test even with a key set (no live call)', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => { });
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    process.env.ANTHROPIC_API_KEY = 'sk-ant-real'; // NODE_ENV stays 'test' (vitest default)
+    try {
+      const r = loadRouter();
+      const out = await r.routeRequest({ task: 'talking-points', payload: {}, tenantId: 1 });
+      expect(out.stub).toBe(true);
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+      logSpy.mockRestore();
+    }
   });
 });

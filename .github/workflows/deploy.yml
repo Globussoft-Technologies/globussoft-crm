@@ -449,6 +449,8 @@ jobs:
             tests/travel-tmc-diagnostic-api.spec.js \
             tests/travel-digilocker-stub-api.spec.js \
             tests/travel-itineraries-api.spec.js \
+            tests/travel-itinerary-suggest-api.spec.js \
+            tests/travel-flight-plugin-api.spec.js \
             tests/travel-trips-api.spec.js \
             tests/travel-cost-master-api.spec.js \
             tests/travel-suppliers-api.spec.js \
@@ -485,6 +487,8 @@ jobs:
             tests/security-headers-api.spec.js \
             tests/travel-flyer-public-api.spec.js \
             tests/travel-pois-api.spec.js \
+            tests/webhook-credential-api.spec.js \
+            tests/wellness-portal-notifications-api.spec.js \
             tests/teardown-completeness.spec.js \
             tests/demo-hygiene-api.spec.js
           echo "::notice::API specs passed"

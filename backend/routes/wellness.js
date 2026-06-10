@@ -2806,6 +2806,25 @@ router.post("/visits", phiWriteGate, async (req, res) => {
     // by (visitId, type='earned'). Failures must not roll back the visit.
     await maybeAutoCreditLoyalty(visit, req.user.tenantId);
 
+    // S94: denormalize Patient.lastVisitDate cache from the just-created
+    // visit. Best-effort — a failure here MUST NOT abort the visit insert
+    // (the source-of-truth Visit row exists; the cron/backfillLastVisitEngine
+    // sweep will reconcile any drift on its next run). The column was added
+    // by S62; population is THIS slice. Read path (S96 listProjection slim
+    // Select) returns null until this hook lands, so this is the first write
+    // path that surfaces it.
+    try {
+      await prisma.patient.update({
+        where: { id: visit.patientId },
+        data: { lastVisitDate: visit.visitDate },
+      });
+    } catch (denormErr) {
+      console.error(
+        "[wellness] lastVisitDate denorm-update failed",
+        denormErr.message,
+      );
+    }
+
     // #616: emit wellness sequence triggers. visit.scheduled fires on every
     // create (covers booking-confirmation drips); visit.completed also fires
     // when a same-row create lands as status='completed' (the default). Failure

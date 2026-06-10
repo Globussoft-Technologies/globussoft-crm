@@ -528,9 +528,22 @@ const products = {
 
 const customers = {
   model: "patient",
-  headers: ["name", "phone", "email", "gender", "dob", "source", "bloodGroup", "allergies", "notes"],
+  // S103 — additive firstName + lastName columns. Slot ordered after `name`
+  // so the template export keeps the human-readable order (full name, then
+  // structured split, then contact + clinical fields). Both columns are
+  // OPTIONAL — CSVs without them stay accepted (legacy template +
+  // /import-template downloads keep working unchanged). Mirrors S100's
+  // POST /patients contract: empty string → null, ≤80 chars, reject row
+  // on length / type violations with column-level error.
+  headers: ["name", "firstName", "lastName", "phone", "email", "gender", "dob", "source", "bloodGroup", "allergies", "notes"],
+  // S103 — these columns appear in `headers` (so the template + export
+  // populate them) but are NOT required on import. Legacy CSVs without
+  // them pass the header check and import unchanged.
+  optionalHeaders: ["firstName", "lastName"],
   sample: {
     name: "Anita Sharma",
+    firstName: "Anita",
+    lastName: "Sharma",
     phone: "+919876543210",
     email: "anita@example.com",
     gender: "F",
@@ -562,8 +575,12 @@ const customers = {
     return where;
   },
   orderBy: { createdAt: "desc" },
+  // S103 — export cell order must match `headers` (firstName + lastName
+  // slot 2 + 3). null/undefined → empty string for CSV-safe rendering.
   serialize: (p) => [
     p.name || "",
+    p.firstName || "",
+    p.lastName || "",
     p.phone || "",
     p.email || "",
     p.gender || "",
@@ -577,6 +594,30 @@ const customers = {
     const errors = [];
     const nameErr = requireString(raw.name, "name");
     if (nameErr) errors.push(nameErr);
+
+    // S103 — firstName + lastName parser. Each is OPTIONAL; absent /
+    // empty / whitespace-only → null. Non-string → row error. Length
+    // >80 → row error. Mirrors POST /patients S100 validation so the
+    // CSV path and the dedicated create-customer API enforce the same
+    // shape. Per-row error isolation — the whole import never aborts
+    // on a single bad row; the offending row gets logged in
+    // result.errors and skipped, the rest get inserted.
+    function parseStructuredName(v, column) {
+      if (v === undefined || v === null) return { value: null, error: null };
+      if (typeof v !== "string") {
+        return { value: null, error: { column, value: String(v), message: `${column} must be a string` } };
+      }
+      const trimmed = v.trim();
+      if (trimmed === "") return { value: null, error: null };
+      if (trimmed.length > 80) {
+        return { value: null, error: { column, value: trimmed, message: `${column} must be 80 characters or fewer` } };
+      }
+      return { value: trimmed, error: null };
+    }
+    const firstNameResult = parseStructuredName(raw.firstName, "firstName");
+    if (firstNameResult.error) errors.push(firstNameResult.error);
+    const lastNameResult = parseStructuredName(raw.lastName, "lastName");
+    if (lastNameResult.error) errors.push(lastNameResult.error);
 
     const phone = trimOrNull(raw.phone);
     if (!phone) {
@@ -609,6 +650,12 @@ const customers = {
     return {
       data: {
         name: String(raw.name).trim(),
+        // S103 — structured intake. Additive: legacy CSVs without these
+        // columns produce null on both, no observable change. New CSVs
+        // populate both Patient.firstName + Patient.lastName so legacy
+        // patient-database imports lose zero data.
+        firstName: firstNameResult.value,
+        lastName: lastNameResult.value,
         phone,
         normalizedPhone,
         email: email || null,

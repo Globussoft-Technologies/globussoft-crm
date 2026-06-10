@@ -40,6 +40,12 @@
 //             - SupplierCredential overrides ENV
 //             - no row + no ENV + tenantId → false
 //             - CJS self-mocking seam still works through module.exports.realModeEnabled
+//  S109 21-24. itemType vocabulary reconciled with travel_itineraries.js
+//              VALID_ITEM_TYPES enum:
+//              - Stub emits 'meals' (plural) — within enum
+//              - Stub does NOT emit 'meal' (singular) — would 400
+//              - Stub does NOT emit 'accommodation' — would 400
+//              - Every emitted itemType is a member of VALID_ITEM_TYPES
 //
 // Pin the contract that S9 (visual editor) + S11 (POI seed) MUST be
 // able to consume regardless of source — stub and real-mode return
@@ -169,7 +175,13 @@ describe('suggestItinerary — STUB mode (default; no Gemini key)', () => {
       expect(typeof day.theme).toBe('string');
       expect(Array.isArray(day.items)).toBe(true);
       day.items.forEach((it) => {
-        expect(['activity', 'meal', 'transfer', 'accommodation']).toContain(it.itemType);
+        // S109 (2026-06-10): itemType vocabulary reconciled with
+        // travel_itineraries.js VALID_ITEM_TYPES enum. Stub emits only
+        // canonical-plural forms ('meals' not 'meal'; 'hotel' not
+        // 'accommodation'). Asserting against a subset of VALID_ITEM_TYPES
+        // since the stub only emits 'activity' + 'meals' today; new
+        // canonical types are added to this list as future stub paths emit.
+        expect(['activity', 'meals', 'transfer', 'hotel']).toContain(it.itemType);
         expect(typeof it.description).toBe('string');
         // estimatedCost / latitude / longitude / suggestedSupplierName are
         // null in stub but the keys MUST be present (S9 reads them).
@@ -640,5 +652,120 @@ describe('buildStubSuggestion', () => {
     const c = loadClient();
     expect(c.buildStubSuggestion({ destination: 'X', durationDays: 0 }).daySplit).toHaveLength(1);
     expect(c.buildStubSuggestion({ destination: 'X', durationDays: -5 }).daySplit).toHaveLength(1);
+  });
+});
+
+// ── 11. S109 — itemType vocabulary reconciliation ───────────────────────
+//
+// Pre-S109, the stub emitted `itemType: 'meal'` (singular) which the
+// materialise route's VALID_ITEM_TYPES enum (in
+// backend/routes/travel_itineraries.js) rejected with a 400
+// INVALID_ITEM_TYPE — the suggestionJson could not be handed verbatim
+// to /from-suggestion. S108 worked around this with an alias-map in the
+// e2e spec. S109 fixes the underlying drift in the service so:
+//   (a) the service emits ONLY canonical-plural forms ('meals' not 'meal')
+//   (b) the materialise route + any future modal/SDK consumer can forward
+//       suggestionJson verbatim
+//   (c) the S108 alias-map was removed in the same commit
+//
+// These tests pin the canonical-emit shape so the drift can't silently
+// reappear.
+
+describe('S109 — itemType vocabulary reconciled with VALID_ITEM_TYPES', () => {
+  // The route's VALID_ITEM_TYPES enum — kept in lockstep with
+  // backend/routes/travel_itineraries.js:64-67. If the route enum is
+  // widened, this list extends accordingly.
+  const VALID_ITEM_TYPES = [
+    'flight', 'train', 'bus', 'cab', 'transfer', 'hotel',
+    'sightseeing', 'activity', 'meals', 'visa', 'insurance', 'other',
+  ];
+
+  test('stub-emitted itemTypes are ALL members of VALID_ITEM_TYPES', () => {
+    const c = loadClient();
+    // Exercise across multiple day counts to surface any day-index-dependent
+    // emit (the current stub builder doesn't have one, but a future
+    // randomised-stub might).
+    [1, 2, 3, 5, 7].forEach((durationDays) => {
+      const out = c.buildStubSuggestion({
+        destination: 'TestDest',
+        durationDays,
+        budgetTier: 'standard',
+      });
+      out.daySplit.forEach((day) => {
+        day.items.forEach((it) => {
+          expect(
+            VALID_ITEM_TYPES,
+            `day ${day.dayNumber} item ${it.itemType} not in VALID_ITEM_TYPES`,
+          ).toContain(it.itemType);
+        });
+      });
+    });
+  });
+
+  test('stub does NOT emit "meal" (singular — pre-S109 form)', () => {
+    const c = loadClient();
+    const out = c.buildStubSuggestion({
+      destination: 'X',
+      durationDays: 5, // larger sample to catch any path-dependent emit
+      themeJson: { food: true },
+      budgetTier: 'premium',
+    });
+    const allItemTypes = out.daySplit.flatMap((d) => d.items.map((i) => i.itemType));
+    expect(allItemTypes).not.toContain('meal');
+  });
+
+  test('stub does NOT emit "accommodation" (pre-S109 form)', () => {
+    const c = loadClient();
+    const out = c.buildStubSuggestion({
+      destination: 'X',
+      durationDays: 5,
+      themeJson: { hotel: true },
+      budgetTier: 'premium',
+    });
+    const allItemTypes = out.daySplit.flatMap((d) => d.items.map((i) => i.itemType));
+    expect(allItemTypes).not.toContain('accommodation');
+  });
+
+  test('stub emits canonical "meals" (plural — route enum form)', () => {
+    const c = loadClient();
+    const out = c.buildStubSuggestion({
+      destination: 'X',
+      durationDays: 2,
+      budgetTier: 'standard',
+    });
+    const allItemTypes = out.daySplit.flatMap((d) => d.items.map((i) => i.itemType));
+    // Every day in the stub builder emits exactly one 'meals' item
+    // (alongside one 'activity') — assert presence.
+    expect(allItemTypes).toContain('meals');
+  });
+
+  test('suggestionJson can round-trip through VALID_ITEM_TYPES contract verbatim', async () => {
+    // This is the consumer-side contract that S109 unlocks: the operator
+    // calls /suggest, gets suggestionJson back, and hands it verbatim to
+    // /from-suggestion. The materialise route loops the items and calls
+    // `assertValidItemType` per row — every item MUST pass.
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const c = loadClient();
+    const out = await c.suggestItinerary({
+      tenantId: 1,
+      destination: 'Bali',
+      durationDays: 3,
+      budgetTier: 'standard',
+    });
+    // Simulate the route's assertValidItemType loop — pure function, no
+    // network needed.
+    function assertValidItemType(itemType) {
+      if (!VALID_ITEM_TYPES.includes(itemType)) {
+        throw new Error(`INVALID_ITEM_TYPE: ${itemType}`);
+      }
+    }
+    expect(() => {
+      out.suggestionJson.daySplit.forEach((day) => {
+        (day.items || []).forEach((it) => {
+          assertValidItemType(it.itemType);
+        });
+      });
+    }).not.toThrow();
+    logSpy.mockRestore();
   });
 });

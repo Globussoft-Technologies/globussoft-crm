@@ -8,7 +8,7 @@
  * materialises the accepted suggestion into a real Itinerary +
  * ItineraryItem rows.
  *
- * Contract pinned (14 cases):
+ * Contract pinned (14 base + S109 5 = 19 cases):
  *   1.  Happy path: 2 days × 3 items → 1 itinerary + 6 items with
  *       correct dayNumber + position + descriptions.
  *   2.  suggestionJson missing → 400 INVALID_SUGGESTION_JSON.
@@ -31,6 +31,12 @@
  *       .tenantId (not body-supplied).
  *  14.  Service-shape compatibility: `daySplit` (service-emitted) key is
  *       accepted in place of `days`.
+ *   S109a. Route accepts itemType=meals (canonical plural).
+ *   S109b. Route accepts itemType=hotel (canonical, not 'accommodation').
+ *   S109c. Route rejects pre-S109 singular 'meal' → 400 INVALID_ITEM_TYPE.
+ *   S109d. Route rejects pre-S109 'accommodation' → 400 INVALID_ITEM_TYPE.
+ *   S109e. Suggest→materialise verbatim round-trip: stub-shape suggestion
+ *          (post-S109) is accepted by route with no alias normalisation.
  *
  * Mocking strategy (mirrors travel-itineraries-stats.test.js):
  *   - Patch prisma singleton with vi.fn() BEFORE requireCJS of the router.
@@ -441,6 +447,177 @@ describe('POST /api/travel/itineraries/from-suggestion (S90)', () => {
       });
     const callArg = prisma.itinerary.create.mock.calls[0][0];
     expect(callArg.data.tenantId).toBe(1); // from req.travelTenant.id, not body
+  });
+
+  // ── S109 — service↔route itemType vocabulary reconciliation ─────────
+  //
+  // Pins that the route's VALID_ITEM_TYPES enum accepts the canonical
+  // plural forms the service emits post-S109 ('meals' + 'hotel'). Also
+  // pins that a verbatim suggestionJson hand-off from /suggest →
+  // /from-suggestion works without alias normalisation.
+
+  test('S109a. route accepts itemType=meals (canonical plural, in VALID_ITEM_TYPES)', async () => {
+    const app = makeApp();
+    const token = tokenFor('USER');
+    const res = await request(app)
+      .post('/api/travel/itineraries/from-suggestion')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        suggestionJson: {
+          daySplit: [{
+            dayNumber: 1,
+            items: [{ itemType: 'meals', description: 'Lunch buffet' }],
+          }],
+        },
+        contactId: 501,
+        subBrand: 'tmc',
+      });
+    expect(res.status).toBe(201);
+    const callArg = prisma.itinerary.create.mock.calls[0][0];
+    expect(callArg.data.items.create[0].itemType).toBe('meals');
+  });
+
+  test('S109b. route accepts itemType=hotel (canonical, in VALID_ITEM_TYPES)', async () => {
+    const app = makeApp();
+    const token = tokenFor('USER');
+    const res = await request(app)
+      .post('/api/travel/itineraries/from-suggestion')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        suggestionJson: {
+          daySplit: [{
+            dayNumber: 1,
+            items: [{ itemType: 'hotel', description: 'Stay at Taj Goa' }],
+          }],
+        },
+        contactId: 501,
+        subBrand: 'tmc',
+      });
+    expect(res.status).toBe(201);
+    const callArg = prisma.itinerary.create.mock.calls[0][0];
+    expect(callArg.data.items.create[0].itemType).toBe('hotel');
+  });
+
+  test('S109c. route REJECTS pre-S109 singular "meal" with 400 INVALID_ITEM_TYPE', async () => {
+    // The drift surfaced in S108 — if the service ever regresses to
+    // singular 'meal' emit, the route's enum will reject it. Pin the
+    // protective error so the drift is visible.
+    const app = makeApp();
+    const token = tokenFor('USER');
+    const res = await request(app)
+      .post('/api/travel/itineraries/from-suggestion')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        suggestionJson: {
+          daySplit: [{
+            dayNumber: 1,
+            items: [{ itemType: 'meal', description: 'Lunch' }],
+          }],
+        },
+        contactId: 501,
+        subBrand: 'tmc',
+      });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_ITEM_TYPE');
+  });
+
+  test('S109d. route REJECTS pre-S109 "accommodation" with 400 INVALID_ITEM_TYPE', async () => {
+    const app = makeApp();
+    const token = tokenFor('USER');
+    const res = await request(app)
+      .post('/api/travel/itineraries/from-suggestion')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        suggestionJson: {
+          daySplit: [{
+            dayNumber: 1,
+            items: [{ itemType: 'accommodation', description: 'Hotel' }],
+          }],
+        },
+        contactId: 501,
+        subBrand: 'tmc',
+      });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_ITEM_TYPE');
+  });
+
+  test('S109e. suggest→materialise verbatim round-trip: stub emit shape is accepted by route', async () => {
+    // The full contract S109 unlocks: the service's stub emit goes
+    // verbatim to the route. We construct a suggestion that mirrors what
+    // backend/services/itinerarySuggestLLM.js's buildStubSuggestion emits
+    // post-S109 (only 'activity' + 'meals' itemTypes) and confirm the
+    // materialise route accepts every item.
+    const app = makeApp();
+    const token = tokenFor('USER');
+    // Mirror buildStubSuggestion shape — pinned at the service level by
+    // backend/test/services/itinerary-suggest-llm.test.js S109 cases.
+    const stubShape = {
+      daySplit: [
+        {
+          dayNumber: 1,
+          theme: '[STUB] Day 1 — general theme placeholder',
+          items: [
+            {
+              itemType: 'activity',
+              description: '[STUB] Day 1 activity placeholder',
+              estimatedCost: null,
+              latitude: null,
+              longitude: null,
+              suggestedSupplierName: null,
+            },
+            {
+              itemType: 'meals', // S109: was 'meal' pre-fix
+              description: '[STUB] Day 1 meal placeholder',
+              estimatedCost: null,
+              latitude: null,
+              longitude: null,
+              suggestedSupplierName: null,
+            },
+          ],
+        },
+        {
+          dayNumber: 2,
+          theme: '[STUB] Day 2 — general theme placeholder',
+          items: [
+            {
+              itemType: 'activity',
+              description: '[STUB] Day 2 activity placeholder',
+              estimatedCost: null,
+              latitude: null,
+              longitude: null,
+              suggestedSupplierName: null,
+            },
+            {
+              itemType: 'meals',
+              description: '[STUB] Day 2 meal placeholder',
+              estimatedCost: null,
+              latitude: null,
+              longitude: null,
+              suggestedSupplierName: null,
+            },
+          ],
+        },
+      ],
+      summary: '[STUB] 2-day TestDest (standard)',
+      thematicNotes: '[STUB-ITINERARY-SUGGEST] Synthetic outline.',
+    };
+    const res = await request(app)
+      .post('/api/travel/itineraries/from-suggestion')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        suggestionJson: stubShape,
+        contactId: 501,
+        subBrand: 'tmc',
+      });
+    expect(res.status).toBe(201);
+    expect(res.body.itemsCreated).toBe(4);
+    const callArg = prisma.itinerary.create.mock.calls[0][0];
+    const emittedTypes = callArg.data.items.create.map((i) => i.itemType);
+    // Verify NO singular 'meal' / 'accommodation' leaked through.
+    expect(emittedTypes).not.toContain('meal');
+    expect(emittedTypes).not.toContain('accommodation');
+    // Verify the canonical plural made it.
+    expect(emittedTypes).toContain('meals');
   });
 
   test('14. service-shape compatibility: `days` (prompt key) accepted alongside `daySplit`', async () => {

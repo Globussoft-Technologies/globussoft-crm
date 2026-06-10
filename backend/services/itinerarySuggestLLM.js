@@ -28,7 +28,13 @@
  *     suggestionJson: {
  *       daySplit: [
  *         { dayNumber: 1, theme: "...", items: [
- *           { itemType: "activity"|"meal"|"transfer"|"accommodation",
+ *           { itemType: "activity"|"meals"|"transfer"|"hotel",
+ *             // S109 (2026-06-10): itemType vocabulary reconciled with
+ *             // backend/routes/travel_itineraries.js VALID_ITEM_TYPES enum
+ *             // (canonical plural form: 'meals' not 'meal'; 'hotel' not
+ *             // 'accommodation'). S9 (visual editor) + S11 (POI seed) +
+ *             // /from-suggestion materialise route now accept the
+ *             // suggestionJson verbatim with no alias-normalisation.
  *             description: "...", estimatedCost: <number|null>,
  *             latitude: <number|null>, longitude: <number|null>,
  *             suggestedSupplierName: <string|null> }
@@ -171,7 +177,10 @@ function buildStubSuggestion({ destination, durationDays, themeJson, budgetTier 
           suggestedSupplierName: null,
         },
         {
-          itemType: 'meal',
+          // S109 (2026-06-10): canonical plural 'meals' per
+          // travel_itineraries.js VALID_ITEM_TYPES enum. Was 'meal' (singular)
+          // pre-S109 which the materialise route's enum rejected.
+          itemType: 'meals',
           description: `[STUB] Day ${d} meal placeholder`,
           estimatedCost: null,
           latitude: null,

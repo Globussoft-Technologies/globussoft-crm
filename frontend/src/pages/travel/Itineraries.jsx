@@ -252,16 +252,91 @@ export default function Itineraries() {
     }
   };
 
-  // Stub-side handler for "Create itinerary from this suggestion". The
-  // materialise-from-suggestion endpoint is not yet shipped (flagged as a
-  // follow-up gap row — see commit body). For now this surfaces an info
-  // notify so the operator knows the flow exists but hasn't landed.
-  const createFromSuggestion = () => {
-    notify.info(
-      "Materialise-from-suggestion is pending a backend endpoint. "
-      + "For now, use Create Itinerary above and copy items by hand.",
-    );
+  // S90 — Materialise-from-suggestion materialise state.
+  //
+  // The /suggest endpoint doesn't need contactId or subBrand (it's a pure
+  // LLM/stub brainstorm). Materialising into a real Itinerary DOES — we
+  // surface a tiny picker inline in the preview pane so the operator can
+  // pick the contact + sub-brand at the moment of commit. (We could also
+  // navigate to the Create drawer pre-filled, but that's a heavier UX
+  // and would require lifting the suggestion through state. The inline
+  // picker keeps the flow one click.)
+  const [materialiseContactId, setMaterialiseContactId] = useState("");
+  const [materialiseSubBrand, setMaterialiseSubBrand] = useState("");
+  const [materialising, setMaterialising] = useState(false);
+
+  // PRD FR-3.6 step (d) — Materialise the suggestion into an Itinerary +
+  // ItineraryItem rows by POST /api/travel/itineraries/from-suggestion.
+  // On success → navigate to the detail page if it exists; otherwise
+  // close the modal and refresh the list.
+  const createFromSuggestion = async () => {
+    if (!suggestResult || !suggestResult.suggestionJson) {
+      notify.error("No suggestion to materialise");
+      return;
+    }
+    if (!materialiseContactId) {
+      notify.error("Pick a contact to attach the itinerary to");
+      return;
+    }
+    const cid = parseInt(materialiseContactId, 10);
+    if (!Number.isFinite(cid)) {
+      notify.error("Invalid contact selection");
+      return;
+    }
+    const effectiveSubBrand = materialiseSubBrand
+      || defaultSubBrandFor(user, activeSubBrand);
+    setMaterialising(true);
+    try {
+      const body = {
+        suggestionJson: suggestResult.suggestionJson,
+        contactId: cid,
+        subBrand: effectiveSubBrand,
+      };
+      const res = await fetchApi(
+        "/api/travel/itineraries/from-suggestion",
+        { method: "POST", body: JSON.stringify(body) },
+      );
+      const itemsCreated = (res && typeof res.itemsCreated === "number")
+        ? res.itemsCreated
+        : (res && res.itinerary && Array.isArray(res.itinerary.items))
+          ? res.itinerary.items.length
+          : 0;
+      notify.success(`Itinerary created with ${itemsCreated} items`);
+      closeSuggest();
+      const newId = res && res.itinerary && res.itinerary.id;
+      if (newId) {
+        // Detail page exists (Day 11 ItineraryDetail). Navigate so the
+        // operator can review + edit before sending.
+        navigate(`/travel/itineraries/${newId}`);
+      } else {
+        load();
+      }
+    } catch (err) {
+      notify.error(
+        err?.body?.error
+        || err?.message
+        || "Failed to materialise itinerary",
+      );
+    } finally {
+      setMaterialising(false);
+    }
   };
+
+  // Load contacts for the materialise picker when the preview pane opens.
+  // Reuses the same /api/contacts feed as the Create drawer.
+  useEffect(() => {
+    if (!suggestResult || !suggestResult.suggestionJson) return;
+    if (contacts.length > 0) return;
+    fetchApi("/api/contacts?limit=200")
+      .then((res) => setContacts(Array.isArray(res) ? res : (res?.contacts || [])))
+      .catch(() => setContacts([]));
+  }, [suggestResult]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Reset materialise picker state every time the suggestion changes.
+  useEffect(() => {
+    setMaterialiseContactId("");
+    setMaterialiseSubBrand(defaultSubBrandFor(user, activeSubBrand));
+  }, [suggestResult]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const submitCreate = async (e) => {
     e.preventDefault();
@@ -767,12 +842,65 @@ export default function Itineraries() {
                     {suggestResult.suggestionJson.thematicNotes}
                   </p>
                 )}
+                {/* S90 — materialise picker: contact + sub-brand inline so
+                    the operator picks them at commit time without leaving
+                    the modal. */}
+                <div
+                  style={{
+                    marginTop: 12,
+                    display: "grid",
+                    gridTemplateColumns: "1fr 1fr",
+                    gap: 8,
+                  }}
+                  data-testid="materialise-picker"
+                >
+                  <label style={fieldLabel}>
+                    Attach to contact
+                    <select
+                      value={materialiseContactId}
+                      onChange={(e) => setMaterialiseContactId(e.target.value)}
+                      style={inputStyle}
+                      aria-label="Contact for materialised itinerary"
+                    >
+                      <option value="">— pick a contact —</option>
+                      {contacts.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.name || c.email || `Contact #${c.id}`}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label style={fieldLabel}>
+                    Sub-brand
+                    <select
+                      value={materialiseSubBrand}
+                      onChange={(e) => setMaterialiseSubBrand(e.target.value)}
+                      style={inputStyle}
+                      aria-label="Sub-brand for materialised itinerary"
+                      disabled={!!lockedBrand}
+                    >
+                      {lockedBrand
+                        ? (
+                          <option value={lockedBrand}>
+                            {subBrandShortLabel(lockedBrand) || lockedBrand}
+                          </option>
+                        )
+                        : (myBrands.length > 0 ? myBrands : ["tmc", "rfu", "travelstall", "visasure"])
+                          .map((sb) => (
+                            <option key={sb} value={sb}>
+                              {subBrandShortLabel(sb) || sb}
+                            </option>
+                          ))}
+                    </select>
+                  </label>
+                </div>
                 <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 12 }}>
                   <button
                     type="button"
                     onClick={() => setSuggestResult(null)}
                     style={refreshBtn}
                     aria-label="Discard suggestion"
+                    disabled={materialising}
                   >
                     Discard
                   </button>
@@ -781,8 +909,11 @@ export default function Itineraries() {
                     onClick={createFromSuggestion}
                     style={primaryBtn}
                     aria-label="Create itinerary from this suggestion"
+                    disabled={materialising || !materialiseContactId}
                   >
-                    Create itinerary from this suggestion
+                    {materialising
+                      ? "Creating itinerary…"
+                      : "Create itinerary from this suggestion"}
                   </button>
                 </div>
               </div>

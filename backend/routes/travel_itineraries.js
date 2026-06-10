@@ -57,6 +57,7 @@ const llmRouter = require("../lib/llmRouter");
 const { computeDayCosts } = require("../lib/itineraryDayCostCalculator");
 const listProjection = require("../lib/listProjection");
 const itinerarySuggestLLM = require("../services/itinerarySuggestLLM");
+const { writeAudit } = require("../lib/audit");
 
 // Covers fly + non-fly (domestic) transport and general trip expenses. Keep
 // in sync with ITEM_TYPES in frontend/src/pages/travel/ItineraryDetail.jsx.
@@ -4169,5 +4170,369 @@ router.post("/itineraries/suggest", verifyToken, requireTravelTenant, async (req
       .json({ error: "ITINERARY_SUGGEST_FAILED", code });
   }
 });
+
+// POST /api/travel/itineraries/from-suggestion
+//
+// S90 — PRD docs/PRD_TRAVEL_ITINERARY_UPGRADES.md FR-3.6 step (d). Operator
+// has used POST /itineraries/suggest to brainstorm; this endpoint
+// materialises the accepted suggestion into a real `Itinerary` row +
+// `ItineraryItem` children. Transactional — either everything lands or
+// nothing does (no half-baked itineraries left behind on a mid-stream
+// item insert failure).
+//
+// USER+ gate (every travel sales operator). PRD §4.1 diagnostic-first
+// guard applies: the contact must have a completed diagnostic for the
+// chosen sub-brand or 403 DIAGNOSTIC_REQUIRED comes back.
+//
+// Request body:
+//   {
+//     suggestionJson: {                            // REQUIRED — output of /suggest
+//       daySplit?: [ {                             // Service emits `daySplit`
+//         dayNumber: int,                          //   per itinerarySuggestLLM.js
+//         theme?: string,
+//         items: [ { itemType, description,
+//                    estimatedCost?, latitude?,
+//                    longitude?, suggestedSupplierName? }, ... ]
+//       }, ... ],
+//       days?: [ {...same shape...} ],             // Accepted alias for forward-
+//                                                  //   compat with the prompt's
+//                                                  //   `suggestionJson.days[]`
+//                                                  //   wording.
+//       summary?: string,                          // Used as itinerary.name
+//                                                  //   default if no name given.
+//       thematicNotes?: string,
+//     },
+//     contactId: int,                              // REQUIRED — see SHAPE-DRIFT
+//                                                  //   below; schema makes
+//                                                  //   contactId NON-NULL.
+//     subBrand?: string,                           // Optional; defaults from the
+//                                                  //   contact's accessible
+//                                                  //   sub-brand if missing.
+//     destination?: string,                        // Optional; defaults from
+//                                                  //   suggestionJson.summary
+//                                                  //   or 'Suggested itinerary'.
+//   }
+//
+// Response 201:
+//   {
+//     itinerary: { id, ..., items: [...] },
+//     itemsCreated: int,
+//     daysProcessed: int,
+//   }
+//
+// Errors:
+//   400 INVALID_SUGGESTION_JSON  — missing / not-object / no day array
+//   400 INVALID_DAY              — day missing dayNumber or items
+//   400 ITEM_MISSING_NAME        — item missing name/description
+//   400 INVALID_ITEM_TYPE        — item itemType outside VALID_ITEM_TYPES
+//   400 CONTACT_ID_REQUIRED      — contactId not provided (schema gap below)
+//   400 INVALID_CONTACT_ID       — contactId not a positive int
+//   400 INVALID_SUB_BRAND        — subBrand outside enum
+//   403 SUB_BRAND_DENIED         — caller lacks sub-brand access
+//   403 DIAGNOSTIC_REQUIRED      — PRD §4.1 guard
+//   404 CONTACT_NOT_FOUND        — cross-tenant contact lookup
+//   500 ITINERARY_MATERIALISE_FAILED
+//
+// SHAPE DRIFT (prompt vs schema vs service):
+//   - Prompt body says `contactId` is optional. Prisma schema says
+//     `Itinerary.contactId Int` (not nullable). To avoid orphan-create
+//     attempts that die at the DB layer with an opaque P2003, this route
+//     ENFORCES contactId as required + returns CONTACT_ID_REQUIRED 400.
+//     This is consistent with the canonical POST /itineraries route.
+//   - Prompt says items come from `suggestionJson.days[]`. The actual
+//     service (backend/services/itinerarySuggestLLM.js) emits
+//     `suggestionJson.daySplit[]`. We accept both keys (daySplit takes
+//     precedence) so the prompt's example works AND the production
+//     pipeline works.
+//   - Service items shape uses `description` + `itemType` (NOT `name`).
+//     We treat `name` OR `description` as the source; whichever is set
+//     becomes ItineraryItem.description (which is required per schema).
+//   - Service items can supply `estimatedCost` (number); we map to
+//     ItineraryItem.unitCost. quantity defaults to 1, totalPrice computed
+//     via computeItemLineTotal.
+router.post(
+  "/itineraries/from-suggestion",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const { suggestionJson, contactId, subBrand, destination } = req.body || {};
+
+      // 1. suggestionJson validation
+      if (
+        !suggestionJson
+        || typeof suggestionJson !== "object"
+        || Array.isArray(suggestionJson)
+      ) {
+        return res.status(400).json({
+          error: "suggestionJson required (must be an object)",
+          code: "INVALID_SUGGESTION_JSON",
+        });
+      }
+      // Accept both `daySplit` (service-emitted) and `days` (prompt-named).
+      const days = Array.isArray(suggestionJson.daySplit)
+        ? suggestionJson.daySplit
+        : Array.isArray(suggestionJson.days)
+          ? suggestionJson.days
+          : null;
+      if (!days || days.length === 0) {
+        return res.status(400).json({
+          error: "suggestionJson.daySplit (or .days) must be a non-empty array",
+          code: "INVALID_SUGGESTION_JSON",
+        });
+      }
+
+      // 2. contactId validation — REQUIRED at the route layer (schema gap;
+      //    see SHAPE DRIFT note above).
+      if (contactId == null || contactId === "") {
+        return res.status(400).json({
+          error: "contactId required",
+          code: "CONTACT_ID_REQUIRED",
+        });
+      }
+      const cid = parseInt(contactId, 10);
+      if (!Number.isFinite(cid) || cid < 1) {
+        return res.status(400).json({
+          error: "contactId must be a positive integer",
+          code: "INVALID_CONTACT_ID",
+        });
+      }
+
+      // 3. Verify contact belongs to caller's tenant. Cross-tenant → 404
+      //    (not 403) so we don't leak the existence of other tenants' rows.
+      const contact = await prisma.contact.findFirst({
+        where: { id: cid, tenantId: req.travelTenant.id },
+        select: { id: true },
+      });
+      if (!contact) {
+        return res.status(404).json({
+          error: "Contact not found",
+          code: "CONTACT_NOT_FOUND",
+        });
+      }
+
+      // 4. subBrand validation (optional but enum-validated when present).
+      let effectiveSubBrand = subBrand;
+      if (effectiveSubBrand) {
+        assertValidSubBrand(effectiveSubBrand);
+      } else {
+        // Default to the operator's first accessible sub-brand when omitted.
+        const allowed = await getSubBrandAccessSet(req.user.userId);
+        if (allowed instanceof Set && allowed.size > 0) {
+          effectiveSubBrand = [...allowed][0];
+        } else {
+          // No access set narrowing (ADMIN) — fall through to 'travelstall'
+          // as a sane default matching the other create paths' habit.
+          effectiveSubBrand = "travelstall";
+        }
+      }
+
+      // 5. Sub-brand access check (mirrors POST /itineraries).
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (!canAccessSubBrand(allowed, effectiveSubBrand)) {
+        return res.status(403).json({
+          error: "Sub-brand access denied",
+          code: "SUB_BRAND_DENIED",
+        });
+      }
+
+      // 6. PRD §4.1 diagnostic-first guard (mirrors POST /itineraries).
+      await assertCompletedDiagnostic(prisma, req.travelTenant.id, cid, effectiveSubBrand);
+
+      // 7. Flatten days/items into ItineraryItem rows with up-front
+      //    validation so any bad row rejects before the transaction opens.
+      const itemRows = [];
+      let position = 0;
+      for (let dIdx = 0; dIdx < days.length; dIdx += 1) {
+        const day = days[dIdx];
+        if (!day || typeof day !== "object") {
+          return res.status(400).json({
+            error: `day[${dIdx}] must be an object`,
+            code: "INVALID_DAY",
+          });
+        }
+        const dayNumber = day.dayNumber != null
+          ? parseInt(day.dayNumber, 10)
+          : dIdx + 1;
+        if (!Number.isFinite(dayNumber) || dayNumber < 1) {
+          return res.status(400).json({
+            error: `day[${dIdx}].dayNumber must be a positive integer`,
+            code: "INVALID_DAY",
+          });
+        }
+        const dayItems = Array.isArray(day.items) ? day.items : null;
+        if (!dayItems) {
+          return res.status(400).json({
+            error: `day[${dIdx}].items must be an array`,
+            code: "INVALID_DAY",
+          });
+        }
+
+        for (let iIdx = 0; iIdx < dayItems.length; iIdx += 1) {
+          const src = dayItems[iIdx];
+          if (!src || typeof src !== "object") {
+            return res.status(400).json({
+              error: `day[${dIdx}].items[${iIdx}] must be an object`,
+              code: "ITEM_MISSING_NAME",
+            });
+          }
+          // Accept either `name` (prompt wording) or `description` (service
+          // shape). Whichever is present becomes ItineraryItem.description.
+          const desc = (src.description != null && String(src.description).trim() !== "")
+            ? String(src.description)
+            : (src.name != null && String(src.name).trim() !== "")
+              ? String(src.name)
+              : null;
+          if (!desc) {
+            return res.status(400).json({
+              error: `day[${dIdx}].items[${iIdx}] missing name/description`,
+              code: "ITEM_MISSING_NAME",
+            });
+          }
+          // itemType defaults to 'activity' when absent (service-emitted
+          // items always set it; user-supplied days[] from the prompt
+          // example may not).
+          const itemType = src.itemType ? String(src.itemType) : "activity";
+          assertValidItemType(itemType);
+
+          // Map cost: service uses `estimatedCost`; the create route uses
+          // `unitCost`. Either is acceptable from the suggestion source.
+          const unitCost = src.unitCost != null && src.unitCost !== ""
+            ? Number(src.unitCost)
+            : (src.estimatedCost != null && src.estimatedCost !== "")
+              ? Number(src.estimatedCost)
+              : null;
+
+          // Lat/lng pass-through (Float? in schema).
+          const latitude = (src.latitude != null && src.latitude !== "")
+            ? Number(src.latitude)
+            : (src.lat != null && src.lat !== "")
+              ? Number(src.lat)
+              : null;
+          const longitude = (src.longitude != null && src.longitude !== "")
+            ? Number(src.longitude)
+            : (src.lng != null && src.lng !== "")
+              ? Number(src.lng)
+              : null;
+
+          // notes pass-through — into detailsJson as { notes, suggestedSupplierName? }
+          const detailsObj = {};
+          if (src.notes != null && String(src.notes).trim() !== "") {
+            detailsObj.notes = String(src.notes);
+          }
+          if (src.suggestedSupplierName != null
+              && String(src.suggestedSupplierName).trim() !== "") {
+            detailsObj.suggestedSupplierName = String(src.suggestedSupplierName);
+          }
+          if (src.durationMinutes != null && src.durationMinutes !== "") {
+            const dm = Number(src.durationMinutes);
+            if (Number.isFinite(dm) && dm >= 0) detailsObj.durationMinutes = dm;
+          }
+          if (src.locationName != null && String(src.locationName).trim() !== "") {
+            detailsObj.locationName = String(src.locationName);
+          }
+
+          const itemRow = {
+            itemType,
+            position,
+            description: desc,
+            detailsJson: Object.keys(detailsObj).length > 0
+              ? JSON.stringify(detailsObj)
+              : null,
+            unitCost,
+            quantity: 1,
+            markup: null,
+            gstAmount: null,
+            unit: "per_person",
+            dayNumber,
+            latitude: Number.isFinite(latitude) ? latitude : null,
+            longitude: Number.isFinite(longitude) ? longitude : null,
+            totalPrice: computeItemLineTotal({
+              unitCost,
+              quantity: 1,
+              markup: null,
+              gstAmount: null,
+            }),
+          };
+          itemRows.push(itemRow);
+          position += 1;
+        }
+      }
+
+      // 8. Resolve productTier default from latest diagnostic (PRD §6.4 —
+      //    mirrors POST /itineraries).
+      const latest = await findLatestDiagnostic(
+        prisma,
+        req.travelTenant.id,
+        cid,
+        effectiveSubBrand,
+      );
+      const productTier = (latest && latest.recommendedTier) || null;
+
+      // 9. Resolve destination — body > suggestionJson.summary > placeholder.
+      const effectiveDestination = (destination && String(destination).trim() !== "")
+        ? String(destination).trim()
+        : (suggestionJson.summary && String(suggestionJson.summary).trim() !== "")
+          ? String(suggestionJson.summary).trim().slice(0, 200)
+          : "Suggested itinerary";
+
+      // 10. Transactional create — Itinerary + ItineraryItem rows in one
+      //     shot via Prisma's nested create. Atomic by Prisma's contract.
+      const itinerary = await prisma.itinerary.create({
+        data: {
+          tenantId: req.travelTenant.id,
+          subBrand: effectiveSubBrand,
+          contactId: cid,
+          status: "draft",
+          productTier,
+          destination: effectiveDestination,
+          currency: "INR",
+          totalAmount: itemRows.reduce(
+            (s, it) => s + (Number.isFinite(it.totalPrice) ? Number(it.totalPrice) : 0),
+            0,
+          ),
+          items: itemRows.length > 0 ? { create: itemRows } : undefined,
+        },
+        include: { items: { orderBy: { position: "asc" } } },
+      });
+
+      // 11. Audit-log emission. PRD FR-3.6 (d) needs to be traceable when
+      //     an operator materialises an LLM suggestion into committed rows.
+      try {
+        await writeAudit(
+          "Itinerary",
+          "itinerary.materialised-from-suggestion",
+          itinerary.id,
+          req.user.userId,
+          req.travelTenant.id,
+          {
+            subBrand: effectiveSubBrand,
+            contactId: cid,
+            daysProcessed: days.length,
+            itemsCreated: itemRows.length,
+            destination: effectiveDestination,
+            summarySource: !!suggestionJson.summary,
+          },
+        );
+      } catch (auditErr) {
+        // Audit failure is non-fatal — itinerary has landed; log + move on.
+        console.error("[travel-itin] materialise audit failed:", auditErr.message);
+      }
+
+      return res.status(201).json({
+        itinerary,
+        itemsCreated: itemRows.length,
+        daysProcessed: days.length,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-itin] materialise error:", e.message);
+      return res.status(500).json({
+        error: "Failed to materialise itinerary from suggestion",
+        code: "ITINERARY_MATERIALISE_FAILED",
+      });
+    }
+  },
+);
 
 module.exports = router;

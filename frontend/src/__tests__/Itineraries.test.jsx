@@ -991,7 +991,7 @@ describe('<Itineraries /> — S63 Suggest itinerary CTA + modal', () => {
     expect(screen.getByText(/^Stub$/i)).toBeInTheDocument();
   });
 
-  it('success path: "Create itinerary from this suggestion" button present + surfaces info notify when materialise endpoint missing', async () => {
+  it('"Create itinerary from this suggestion" button is present + disabled until a contact is picked (S90 materialise picker)', async () => {
     renderPage();
     await screen.findByText('Andaman Islands');
     fireEvent.click(
@@ -1011,12 +1011,288 @@ describe('<Itineraries /> — S63 Suggest itinerary CTA + modal', () => {
     expect(
       screen.getByRole('button', { name: /Discard suggestion/i }),
     ).toBeInTheDocument();
+    // Materialise picker is rendered.
+    expect(screen.getByTestId('materialise-picker')).toBeInTheDocument();
+    // Button starts disabled (no contact picked yet).
+    expect(createBtn).toBeDisabled();
+  });
+});
 
-    // Materialise endpoint is not yet shipped — clicking surfaces info notify.
+// S90 — Materialise-from-suggestion (POST /api/travel/itineraries/from-suggestion).
+//
+// Contracts pinned:
+//   1. Picking a contact + clicking "Create itinerary from this suggestion"
+//      POSTs to /api/travel/itineraries/from-suggestion with the
+//      { suggestionJson, contactId, subBrand } body.
+//   2. On 201 success → notify.success("Itinerary created with N items"),
+//      modal closes, navigate to /travel/itineraries/:id.
+//   3. On 4xx/5xx error → notify.error with the backend error body, no
+//      navigate.
+//   4. Loading state: button shows "Creating itinerary…" and stays
+//      disabled during the in-flight POST.
+//   5. Discard button works alongside the materialise picker (pane
+//      still closeable without committing).
+//   6. Backend 403 SUB_BRAND_DENIED surfaces notify.error.
+describe('<Itineraries /> — S90 materialise-from-suggestion', () => {
+  function installMaterialiseMock({
+    suggestResult = STUB_SUGGESTION,
+    materialiseResult = null,
+    materialiseError = null,
+  } = {}) {
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = opts?.method || 'GET';
+      if (url === '/api/travel/itineraries/suggest' && method === 'POST') {
+        return Promise.resolve(suggestResult);
+      }
+      if (
+        url === '/api/travel/itineraries/from-suggestion'
+        && method === 'POST'
+      ) {
+        if (materialiseError) return Promise.reject(materialiseError);
+        return Promise.resolve(materialiseResult || {
+          itinerary: {
+            id: 12345,
+            tenantId: 1,
+            subBrand: 'tmc',
+            contactId: 5001,
+            status: 'draft',
+            destination: 'Suggested itinerary',
+            currency: 'INR',
+            items: [
+              { id: 91, itemType: 'activity', description: 'd1 a1', position: 0, dayNumber: 1 },
+              { id: 92, itemType: 'meal', description: 'd1 m1', position: 1, dayNumber: 1 },
+              { id: 93, itemType: 'activity', description: 'd2 a1', position: 2, dayNumber: 2 },
+            ],
+          },
+          itemsCreated: 3,
+          daysProcessed: 2,
+        });
+      }
+      if (url.startsWith('/api/travel/itineraries') && method === 'GET') {
+        return Promise.resolve({
+          itineraries: ITINS_DEFAULT, total: ITINS_DEFAULT.length, limit: 100, offset: 0,
+        });
+      }
+      if (url.startsWith('/api/contacts')) {
+        return Promise.resolve(CONTACTS_DEFAULT);
+      }
+      return Promise.resolve(null);
+    });
+  }
+
+  async function openPreviewPane() {
+    renderPage();
+    await screen.findByText('Andaman Islands');
+    fireEvent.click(
+      screen.getByRole('button', { name: /Suggest itinerary using AI/i }),
+    );
+    await screen.findByRole('heading', { name: /Suggest itinerary/i });
+    fireEvent.change(screen.getByLabelText(/Destination/i), {
+      target: { value: 'Goa' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /^Suggest$/ }));
+    await screen.findByTestId('suggest-preview-pane');
+  }
+
+  it('happy path: pick contact + click materialise → POSTs correct body + notify.success + navigate', async () => {
+    installMaterialiseMock();
+    await openPreviewPane();
+    // Pick a contact.
+    fireEvent.change(
+      screen.getByLabelText(/Contact for materialised itinerary/i),
+      { target: { value: '5001' } },
+    );
+    const createBtn = screen.getByRole('button', {
+      name: /Create itinerary from this suggestion/i,
+    });
+    expect(createBtn).not.toBeDisabled();
     fireEvent.click(createBtn);
+    // notify.success fires with "Itinerary created with 3 items".
     await waitFor(() => {
-      expect(notifyInfo).toHaveBeenCalledWith(
-        expect.stringMatching(/Materialise-from-suggestion is pending/i),
+      expect(notifySuccess).toHaveBeenCalledWith(
+        expect.stringMatching(/Itinerary created with 3 items/i),
+      );
+    });
+    // POST body shape contract pin.
+    const materialiseCall = fetchApiMock.mock.calls.find(
+      ([url, opts]) =>
+        url === '/api/travel/itineraries/from-suggestion'
+        && opts?.method === 'POST',
+    );
+    expect(materialiseCall).toBeTruthy();
+    const body = JSON.parse(materialiseCall[1].body);
+    expect(body.contactId).toBe(5001);
+    expect(body.subBrand).toBeTruthy();
+    expect(body.suggestionJson).toBeTruthy();
+    expect(Array.isArray(body.suggestionJson.daySplit)).toBe(true);
+    // Navigation to the new itinerary's detail page.
+    await waitFor(() => {
+      expect(navigateMock).toHaveBeenCalledWith('/travel/itineraries/12345');
+    });
+  });
+
+  it('error path: backend 500 surfaces notify.error + no navigate', async () => {
+    const err = new Error('Materialise failed');
+    err.body = {
+      error: 'Failed to materialise itinerary from suggestion',
+      code: 'ITINERARY_MATERIALISE_FAILED',
+    };
+    installMaterialiseMock({ materialiseError: err });
+    await openPreviewPane();
+    fireEvent.change(
+      screen.getByLabelText(/Contact for materialised itinerary/i),
+      { target: { value: '5001' } },
+    );
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: /Create itinerary from this suggestion/i,
+      }),
+    );
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalledWith(
+        expect.stringMatching(/Failed to materialise itinerary from suggestion/i),
+      );
+    });
+    expect(navigateMock).not.toHaveBeenCalled();
+    expect(notifySuccess).not.toHaveBeenCalled();
+  });
+
+  it('backend 403 SUB_BRAND_DENIED → notify.error with backend message + no navigate', async () => {
+    const err = new Error('SUB_BRAND_DENIED');
+    err.body = {
+      error: 'Sub-brand access denied',
+      code: 'SUB_BRAND_DENIED',
+    };
+    installMaterialiseMock({ materialiseError: err });
+    await openPreviewPane();
+    fireEvent.change(
+      screen.getByLabelText(/Contact for materialised itinerary/i),
+      { target: { value: '5001' } },
+    );
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: /Create itinerary from this suggestion/i,
+      }),
+    );
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalledWith(
+        expect.stringMatching(/Sub-brand access denied/i),
+      );
+    });
+    expect(navigateMock).not.toHaveBeenCalled();
+  });
+
+  it('loading state: button shows "Creating itinerary…" + stays disabled during the in-flight POST', async () => {
+    let resolveMaterialise;
+    const pending = new Promise((resolve) => {
+      resolveMaterialise = resolve;
+    });
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = opts?.method || 'GET';
+      if (url === '/api/travel/itineraries/suggest' && method === 'POST') {
+        return Promise.resolve(STUB_SUGGESTION);
+      }
+      if (url === '/api/travel/itineraries/from-suggestion' && method === 'POST') {
+        return pending;
+      }
+      if (url.startsWith('/api/travel/itineraries') && method === 'GET') {
+        return Promise.resolve({
+          itineraries: ITINS_DEFAULT, total: ITINS_DEFAULT.length, limit: 100, offset: 0,
+        });
+      }
+      if (url.startsWith('/api/contacts')) {
+        return Promise.resolve(CONTACTS_DEFAULT);
+      }
+      return Promise.resolve(null);
+    });
+    await openPreviewPane();
+    fireEvent.change(
+      screen.getByLabelText(/Contact for materialised itinerary/i),
+      { target: { value: '5001' } },
+    );
+    const triggerBtn = screen.getByRole('button', {
+      name: /Create itinerary from this suggestion/i,
+    });
+    fireEvent.click(triggerBtn);
+    // Loading text + disabled state. The button's aria-label stays
+    // constant ("Create itinerary from this suggestion") for screen-
+    // reader stability; the inner TEXT swaps to "Creating itinerary…"
+    // during the in-flight POST.
+    await waitFor(() => {
+      expect(triggerBtn).toBeDisabled();
+      expect(triggerBtn.textContent).toMatch(/Creating itinerary/i);
+    });
+    // Resolve so vitest can complete cleanly.
+    resolveMaterialise({
+      itinerary: { id: 999, items: [] },
+      itemsCreated: 0,
+      daysProcessed: 1,
+    });
+    await waitFor(() => {
+      expect(notifySuccess).toHaveBeenCalled();
+    });
+  });
+
+  it('no contact picked → notify.error + no POST + button stays disabled', async () => {
+    installMaterialiseMock();
+    await openPreviewPane();
+    // Don't pick a contact.
+    const createBtn = screen.getByRole('button', {
+      name: /Create itinerary from this suggestion/i,
+    });
+    expect(createBtn).toBeDisabled();
+    // No materialise POST happened.
+    const materialiseCalls = fetchApiMock.mock.calls.filter(
+      ([url]) => url === '/api/travel/itineraries/from-suggestion',
+    );
+    expect(materialiseCalls).toHaveLength(0);
+  });
+
+  it('discard alongside materialise picker: discarding before pick → preview pane gone, no POST, modal still open', async () => {
+    installMaterialiseMock();
+    await openPreviewPane();
+    expect(screen.getByTestId('materialise-picker')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Discard suggestion/i }));
+    await waitFor(() => {
+      expect(screen.queryByTestId('suggest-preview-pane')).toBeNull();
+    });
+    // Modal still open (heading still present).
+    expect(
+      screen.getByRole('heading', { name: /Suggest itinerary/i }),
+    ).toBeInTheDocument();
+    // No materialise POST happened.
+    const materialiseCalls = fetchApiMock.mock.calls.filter(
+      ([url]) => url === '/api/travel/itineraries/from-suggestion',
+    );
+    expect(materialiseCalls).toHaveLength(0);
+  });
+
+  it('uses itinerary.items.length as fallback when backend omits itemsCreated', async () => {
+    installMaterialiseMock({
+      materialiseResult: {
+        itinerary: {
+          id: 7777,
+          items: [
+            { id: 1, itemType: 'activity', description: 'x', position: 0 },
+            { id: 2, itemType: 'meal', description: 'y', position: 1 },
+          ],
+        },
+        // itemsCreated intentionally omitted to exercise the fallback.
+      },
+    });
+    await openPreviewPane();
+    fireEvent.change(
+      screen.getByLabelText(/Contact for materialised itinerary/i),
+      { target: { value: '5001' } },
+    );
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: /Create itinerary from this suggestion/i,
+      }),
+    );
+    await waitFor(() => {
+      expect(notifySuccess).toHaveBeenCalledWith(
+        expect.stringMatching(/Itinerary created with 2 items/i),
       );
     });
   });

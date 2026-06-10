@@ -34,6 +34,22 @@ const { JWT_SECRET } = require("../config/secrets");
 const prisma = require("../lib/prisma");
 const { requireTravelTenant, getSubBrandAccessSet } = require("../middleware/travelGuards");
 const { resolveForSubBrand } = require("../lib/subBrandConfig");
+const digilockerClient = require("../services/digilockerClient");
+
+// Aadhaar/DigiLocker microsite-verification tuning. A session is only
+// valid to call back within SESSION_TTL_MS of /start (matches the
+// DigiLocker authorise-code lifetime); a second /start for the same
+// participant inside REPLAY_WINDOW_MS is rejected as in-flight.
+const KYC_SESSION_TTL_MS = 10 * 60 * 1000;
+const KYC_REPLAY_WINDOW_MS = 5 * 60 * 1000;
+// Registered redirect URI for the PUBLIC microsite flow — distinct from
+// the customer-portal flow's DIGILOCKER_REDIRECT_URI (which points at the
+// logged-in portal callback). Must match the value registered in the
+// APISetu partner app exactly. Falls back to the local dev callback so
+// stub-mode dev works without any env config. The value is stored on each
+// DigilockerSession so the token-exchange redirect_uri stays in sync with
+// the authorize-time one even if the env var changes mid-flight.
+const KYC_REDIRECT_URI = process.env.DIGILOCKER_MICROSITE_REDIRECT_URI || "http://localhost:5173/travel/kyc/callback";
 
 // OTP constants for the public microsite PII reveal flow (PRD §4.5).
 // 4-digit code per the PRD spec, 10-minute validity, 30-minute access
@@ -1214,7 +1230,7 @@ router.get("/microsites/public/:publicUuid/full", async (req, res) => {
     let claims;
     try {
       claims = jwt.verify(String(token), JWT_SECRET);
-    } catch (jwtErr) {
+    } catch (_jwtErr) {
       return res.status(401).json({ error: "Access token invalid or expired", code: "TOKEN_INVALID" });
     }
     if (!claims || claims.kind !== "microsite-otp") {
@@ -1286,6 +1302,207 @@ router.get("/microsites/public/:publicUuid/full", async (req, res) => {
   } catch (e) {
     console.error("[travel-microsite] /full error:", e.message);
     res.status(500).json({ error: "Failed to load full microsite payload" });
+  }
+});
+
+// ─── PUBLIC Aadhaar / DigiLocker verification (PRD §4.5 + §4.7) ───────
+//
+// Parent-facing flow on the public microsite. A parent verifies a trip
+// participant's Aadhaar without logging in. There is NO app-side OTP gate:
+// authenticity is established by DigiLocker itself — the user signs in to
+// THEIR OWN DigiLocker account (which enforces its own OTP / MPIN) and
+// consents before any Aadhaar data is shared. Endpoints:
+//   GET  /microsites/public/:publicUuid/participants
+//        → { participants: [{ id, fullName, aadhaarLast4 }] }
+//   POST /microsites/public/:publicUuid/verify/aadhaar/start
+//        body { participantId } → { sessionId, state, oauthUrl, mode, expiresAt }
+//   POST /microsites/public/:publicUuid/verify/aadhaar/callback
+//        body { state, code }   → { verified, aadhaarLast4 }
+//
+// Security model:
+//   - The publicUuid is a 128-bit unguessable token; /start additionally
+//     requires the participant to belong to THIS microsite's trip.
+//   - The OAuth `state` is a 128-bit unguessable token (digilockerClient)
+//     and is the @unique dedup/replay key. /callback resolves the session
+//     by state alone, then re-confirms the participant belongs to this
+//     microsite's trip — so a leaked state can't write Aadhaar onto another
+//     trip's participant.
+//   - Stub-mode (no APISETU_PARTNER_API_KEY) returns synthetic last-4
+//     "9999"; real-mode hits APISetu's DigiLocker partner endpoint.
+//   - Aadhaar Act §29: only aadhaarLast4 is ever returned; the opaque
+//     token is persisted server-side only, never in any HTTP response.
+
+// Resolve a non-expired microsite by publicUuid (shared by the Aadhaar
+// endpoints). Throws structured errors for bad-shape / missing / expired.
+async function loadPublicMicrosite(uuid) {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(uuid)) {
+    const err = new Error("publicUuid must be a UUID"); err.status = 400; err.code = "INVALID_UUID"; throw err;
+  }
+  const ms = await prisma.tripMicrosite.findUnique({
+    where: { publicUuid: uuid },
+    select: { id: true, tripId: true, tenantId: true, expiresAt: true },
+  });
+  if (!ms) {
+    const err = new Error("Microsite not found"); err.status = 404; err.code = "NOT_FOUND"; throw err;
+  }
+  if (ms.expiresAt && new Date(ms.expiresAt) < new Date()) {
+    const err = new Error("This microsite has expired"); err.status = 410; err.code = "GONE"; throw err;
+  }
+  return ms;
+}
+
+// GET /api/travel/microsites/public/:publicUuid/participants
+//
+// Public minimal participant list for the Aadhaar verification UI. No OTP
+// gate — DigiLocker authenticates the individual during consent. Returns
+// ONLY id + fullName + aadhaarLast4 (so the UI can show who's already
+// verified) — never passport / DOB / contact PII.
+router.get("/microsites/public/:publicUuid/participants", async (req, res) => {
+  try {
+    const ms = await loadPublicMicrosite(String(req.params.publicUuid));
+    const participants = await prisma.tripParticipant.findMany({
+      where: { tripId: ms.tripId },
+      select: { id: true, fullName: true, aadhaarLast4: true },
+      orderBy: { id: "asc" },
+    });
+    res.json({ participants });
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error("[travel-microsite] public participants error:", e.message);
+    res.status(500).json({ error: "Failed to load participants" });
+  }
+});
+
+// POST /api/travel/microsites/public/:publicUuid/verify/aadhaar/start
+router.post("/microsites/public/:publicUuid/verify/aadhaar/start", async (req, res) => {
+  try {
+    const ms = await loadPublicMicrosite(String(req.params.publicUuid));
+
+    const participantId = parseInt(req.body && req.body.participantId, 10);
+    if (!Number.isFinite(participantId)) {
+      return res.status(400).json({ error: "participantId required", code: "MISSING_FIELDS" });
+    }
+    const participant = await prisma.tripParticipant.findFirst({
+      where: { id: participantId, tripId: ms.tripId },
+      select: { id: true },
+    });
+    if (!participant) {
+      return res.status(404).json({ error: "Participant not found on this trip", code: "PARTICIPANT_NOT_FOUND" });
+    }
+
+    // Replay guard — refuse a second start while a recent one is still
+    // in-flight for the same participant.
+    const replayFloor = new Date(Date.now() - KYC_REPLAY_WINDOW_MS);
+    const inFlight = await prisma.digilockerSession.findFirst({
+      where: { participantId: participant.id, status: "initiated", initiatedAt: { gte: replayFloor } },
+      select: { id: true },
+    });
+    if (inFlight) {
+      return res.status(409).json({ error: "A verification is already in progress for this participant", code: "SESSION_IN_FLIGHT" });
+    }
+
+    const { state, oauthUrl } = await digilockerClient.initiateSession({
+      participantId: participant.id,
+      subjectType: "participant",
+      redirectUri: KYC_REDIRECT_URI,
+    });
+    const session = await prisma.digilockerSession.create({
+      data: {
+        tenantId: ms.tenantId,
+        subjectType: "participant",
+        participantId: participant.id,
+        state,
+        status: "initiated",
+        redirectUri: KYC_REDIRECT_URI,
+      },
+      select: { id: true, state: true, initiatedAt: true },
+    });
+    res.status(201).json({
+      sessionId: session.id,
+      state: session.state,
+      oauthUrl,
+      // "stub" | "apisetu-partner" | "oauth2" — lets the public page decide
+      // whether to redirect to a real DigiLocker URL or complete inline (stub).
+      mode: digilockerClient.authMode(),
+      expiresAt: new Date(session.initiatedAt.getTime() + KYC_SESSION_TTL_MS).toISOString(),
+    });
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error("[travel-microsite] aadhaar/start error:", e.message);
+    res.status(500).json({ error: "Failed to start Aadhaar verification" });
+  }
+});
+
+// POST /api/travel/microsites/public/:publicUuid/verify/aadhaar/callback
+//
+// Resolves the session by the unguessable `state`, then confirms the
+// participant belongs to THIS microsite's trip before writing anything.
+router.post("/microsites/public/:publicUuid/verify/aadhaar/callback", async (req, res) => {
+  try {
+    const ms = await loadPublicMicrosite(String(req.params.publicUuid));
+    const { state, code } = req.body || {};
+    if (!state || typeof state !== "string") {
+      return res.status(400).json({ error: "state required", code: "MISSING_FIELDS" });
+    }
+    const session = await prisma.digilockerSession.findFirst({
+      where: { state, subjectType: "participant" },
+      select: {
+        id: true, status: true, initiatedAt: true, redirectUri: true, participantId: true,
+        participant: { select: { id: true, tripId: true } },
+      },
+    });
+    if (!session || !session.participant) {
+      return res.status(404).json({ error: "DigiLocker session not found", code: "SESSION_NOT_FOUND" });
+    }
+    // Scope check: the session's participant must belong to this microsite's
+    // trip. Blocks a state leaked from one microsite writing onto another.
+    if (session.participant.tripId !== ms.tripId) {
+      return res.status(403).json({ error: "Session does not belong to this microsite", code: "SESSION_SCOPE" });
+    }
+    if (session.status === "verified") {
+      return res.status(409).json({ error: "DigiLocker session already verified", code: "INVALID_STATE" });
+    }
+    if (session.status === "expired" || session.status === "failed") {
+      return res.status(410).json({ error: `DigiLocker session ${session.status}`, code: "SESSION_GONE" });
+    }
+    // Soft expiry — the authorise code is short-lived; refuse a stale callback.
+    if (Date.now() - new Date(session.initiatedAt).getTime() > KYC_SESSION_TTL_MS) {
+      await prisma.digilockerSession.update({
+        where: { id: session.id },
+        data: { status: "expired", failedReason: "session timed out before callback" },
+      });
+      return res.status(410).json({ error: "DigiLocker session expired", code: "SESSION_GONE" });
+    }
+
+    let aadhaarLast4, aadhaarTokenId;
+    try {
+      ({ aadhaarLast4, aadhaarTokenId } = await digilockerClient.exchangeCallback({
+        state, code, redirectUri: session.redirectUri,
+      }));
+    } catch (e) {
+      await prisma.digilockerSession.update({
+        where: { id: session.id },
+        data: { status: "failed", failedReason: String(e.message).slice(0, 200) },
+      });
+      return res.status(502).json({ error: "DigiLocker exchange failed", code: "EXCHANGE_FAILED" });
+    }
+
+    await prisma.$transaction([
+      prisma.digilockerSession.update({
+        where: { id: session.id },
+        data: { status: "verified", verifiedAt: new Date(), resultLast4: aadhaarLast4, resultTokenId: aadhaarTokenId },
+      }),
+      prisma.tripParticipant.update({
+        where: { id: session.participant.id },
+        data: { aadhaarLast4, aadhaarTokenId },
+      }),
+    ]);
+    // NEVER return aadhaarTokenId — server-side only (Aadhaar Act §29).
+    res.status(200).json({ verified: true, aadhaarLast4 });
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error("[travel-microsite] aadhaar/callback error:", e.message);
+    res.status(500).json({ error: "Failed to complete Aadhaar verification" });
   }
 });
 

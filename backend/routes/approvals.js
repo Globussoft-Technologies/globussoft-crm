@@ -25,7 +25,17 @@ async function audit(action, entityId, userId, tenantId, details) {
 
 // Helper: hydrate requester / approver user objects (Prisma model has no
 // declared relations, so we fetch users explicitly and graft them on).
-async function hydrateUsers(requests, _tenantId) {
+//
+// S36 (FR-3.4 / #919): the user lookup is tenant-scoped defensively. The
+// `requestedBy` / `approvedBy` ids come from ApprovalRequest rows that the
+// caller already filtered to their own tenant — but Prisma schema does NOT
+// enforce a (User.tenantId == ApprovalRequest.tenantId) constraint, so a
+// stale or maliciously-crafted cross-tenant user id slipped into either
+// column would leak User PII (name + email + role). Adding the explicit
+// `tenantId` filter here closes that vector. If a hydration row drops to
+// null because the user is genuinely cross-tenant, the caller falls back
+// to the existing `|| null` handling and the response stays well-formed.
+async function hydrateUsers(requests, tenantId) {
   if (!Array.isArray(requests) || requests.length === 0) return requests;
 
   const userIds = new Set();
@@ -36,7 +46,7 @@ async function hydrateUsers(requests, _tenantId) {
   if (userIds.size === 0) return requests;
 
   const users = await prisma.user.findMany({
-    where: { id: { in: Array.from(userIds) } },
+    where: { id: { in: Array.from(userIds) }, tenantId },
     select: { id: true, name: true, email: true, role: true },
   });
   const byId = Object.fromEntries(users.map((u) => [u.id, u]));
@@ -49,6 +59,13 @@ async function hydrateUsers(requests, _tenantId) {
 }
 
 // ── GET /api/approvals ─ list approval requests for tenant ───────
+// #920 slice 34 — ?fields=summary opt-in returns a slim row shape (id,
+// entity, entityId, status, requestedBy, approvedBy, requestedAt) suitable
+// for compact list views / badges / queue picker chrome. Slim path drops
+// the free-text `reason` + `comment` columns (potentially long) AND skips
+// the hydrateUsers() roundtrip (which fans an extra prisma.user.findMany
+// for requester/approver objects). Existing callers (no ?fields, or any
+// non-exact value) get the full hydrated row shape unchanged.
 router.get("/", verifyToken, async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
@@ -58,10 +75,28 @@ router.get("/", verifyToken, async (req, res) => {
     if (status) where.status = status;
     if (entity) where.entity = entity;
 
-    const requests = await prisma.approvalRequest.findMany({
+    const isSummary = req.query.fields === "summary";
+    const findManyArgs = {
       where,
       orderBy: { requestedAt: "desc" },
-    });
+    };
+    if (isSummary) {
+      findManyArgs.select = {
+        id: true,
+        entity: true,
+        entityId: true,
+        status: true,
+        requestedBy: true,
+        approvedBy: true,
+        requestedAt: true,
+      };
+    }
+
+    const requests = await prisma.approvalRequest.findMany(findManyArgs);
+    if (isSummary) {
+      // Slim path: skip the user hydration roundtrip entirely.
+      return res.json(requests);
+    }
     const hydrated = await hydrateUsers(requests, tenantId);
     res.json(hydrated);
   } catch (err) {

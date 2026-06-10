@@ -15,7 +15,7 @@ When a gap / backlog / regression-tracking file is **fully closed** (every entry
 Full-stack enterprise CRM built by Globussoft Technologies. Mirrors top-100 CRM platforms with a glassmorphism UI. **Multi-tenant with vertical configurations** — a single codebase serves generic B2B CRM users AND the wellness vertical (clinics, salons, aesthetics).
 
 - **Repo:** https://github.com/Globussoft-Technologies/globussoft-crm
-- **Version:** v3.8.3 — see [CHANGELOG.md](CHANGELOG.md) for the full release history. Per-push gate runs across 6 mandatory deploy gates + a separate PR pre-merge checks workflow (vite build + ESLint). Counts (`e2e/tests/` Playwright, `backend/test/` vitest, `frontend/src/__tests__/` vitest, `.claude/skills/`) are surfaced in [README.md](README.md)'s "At a glance" table so they don't rot here.
+- **Version:** v3.9.3 — see [CHANGELOG.md](CHANGELOG.md) for the full release history. Per-push gate runs across 6 mandatory deploy gates + a separate PR pre-merge checks workflow (vite build + ESLint). Counts (`e2e/tests/` Playwright, `backend/test/` vitest, `frontend/src/__tests__/` vitest, `.claude/skills/`) are surfaced in [README.md](README.md)'s "At a glance" table so they don't rot here.
 - **Branch:** main (single-branch workflow)
 - **Deploy:** GitHub Actions auto-deploy on push to main ([.github/workflows/deploy.yml](.github/workflows/deploy.yml)) — health-check + rollback to HEAD~1 on fail. Local `ssh_deploy_*.py` scripts are legacy.
 
@@ -120,7 +120,7 @@ API-key authenticated (`X-API-Key: glbs_…`) endpoints consumed by sister Globu
 - **routes/external.js** -- `/health`, `/me`, `/leads` (POST + GET poll), `/calls` (POST + PATCH for late transcripts), `/messages`, `/appointments`, `/contacts/lookup`, `/patients/lookup`, `/services`, `/staff`, `/locations`
 - Docs: docs/wellness-client/EXTERNAL_API.md
 
-### Routes (backend/routes/) -- 103 route files
+### Routes (backend/routes/) -- 157 route files
 
 > The grouped list below is a representative map. ~12 newer route files (pos, memberships, attendance, leave, drugs, inventory, service_categories, csv_io, v1_invoices, subscriptions, etc.) landed across v3.4–v3.8 and are not all enumerated here — see `backend/routes/` for the authoritative set.
 
@@ -150,7 +150,7 @@ API-key authenticated (`X-API-Key: glbs_…`) endpoints consumed by sister Globu
 
 **Wellness vertical (v3.1):** wellness.js (patients, visits, prescriptions, consents, treatments, services, locations, recommendations, dashboard, reports/pnl-by-service, /per-professional, /per-location, /attribution, photos, inventory, telecaller/queue + /dispose, portal/login + /me + /visits + /prescriptions, orchestrator/run, public/tenant/:slug + public/book)
 
-**Travel vertical (Phase 1, in flight):** travel.js + travel_diagnostics.js + travel_itineraries.js + travel_trips.js + travel_trip_billing.js + travel_microsites.js + travel_cost_master.js + travel_pricing.js + travel_suppliers.js + travel_rfu_profiles.js. Hosts 4 sub-brands under one tenant (TMC school trips / RFU Umrah / Travel Stall family holidays / Visa Sure) per Q25. See [docs/TRAVEL_CRM_PRD.md](docs/TRAVEL_CRM_PRD.md), [docs/TRAVEL_CRM_OPEN_QUESTIONS.md](docs/TRAVEL_CRM_OPEN_QUESTIONS.md), [docs/TRAVEL_CRM_RISKS.md](docs/TRAVEL_CRM_RISKS.md). Shared guards in [backend/middleware/travelGuards.js](backend/middleware/travelGuards.js); pure pricing math in [backend/lib/travelPricing.js](backend/lib/travelPricing.js); diagnostic scoring in [backend/lib/travelDiagnosticScoring.js](backend/lib/travelDiagnosticScoring.js). Schema: 21 new Prisma models (diagnostic banks + diagnostics, itineraries + items, TmcTrip + 5 children, supplier credentials vault + access log, microsite + OTP, VisaApplication + checklist, RfuLeadProfile, season calendar + markup rules).
+**Travel vertical (Phase 1, in flight):** travel.js + travel_diagnostics.js + travel_itineraries.js + travel_trips.js + travel_trip_billing.js + travel_microsites.js + travel_cost_master.js + travel_pricing.js + travel_suppliers.js + travel_rfu_profiles.js + travel_tmc_catalogue.js (TMC trip catalogue with human-verify gate). Hosts 4 sub-brands under one tenant (TMC school trips / RFU Umrah / Travel Stall family holidays / Visa Sure) per Q25. See [docs/TRAVEL_CRM_PRD.md](docs/TRAVEL_CRM_PRD.md), [docs/TRAVEL_CRM_OPEN_QUESTIONS.md](docs/TRAVEL_CRM_OPEN_QUESTIONS.md), [docs/TRAVEL_CRM_RISKS.md](docs/TRAVEL_CRM_RISKS.md). Shared guards in [backend/middleware/travelGuards.js](backend/middleware/travelGuards.js); pure pricing math in [backend/lib/travelPricing.js](backend/lib/travelPricing.js); diagnostic scoring in [backend/lib/travelDiagnosticScoring.js](backend/lib/travelDiagnosticScoring.js). **TMC sub-brand has a full Diagnostic & Sales-Routing Engine** per [docs/PRD_TMC_DIAGNOSTIC_SALES_ROUTING_ENGINE.md](docs/PRD_TMC_DIAGNOSTIC_SALES_ROUTING_ENGINE.md) (v3.9.3): 12-Q public form (`/p/tmc/readiness`) → deterministic engine ([backend/lib/tmcDiagnosticEngine.js](backend/lib/tmcDiagnosticEngine.js)) + 5-rule lead-quality classifier ([backend/lib/tmcLeadQuality.js](backend/lib/tmcLeadQuality.js)) → LLM Job A readiness narrative + Job B sales brief ([backend/services/tmcDiagnosticPrompts.js](backend/services/tmcDiagnosticPrompts.js)) → 3-layer guardrail ([backend/lib/tmcReportGuard.js](backend/lib/tmcReportGuard.js)) → public report page (`/p/tmc/report/:slug`) + downloadable PDF. Schema: 23 new Prisma models (diagnostic banks + diagnostics, itineraries + items, TmcTrip + 5 children, supplier credentials vault + access log, microsite + OTP, VisaApplication + checklist, RfuLeadProfile, season calendar + markup rules, TmcTripCatalogue, EngineWeights).
 
 **External Partner API (v3.1):** external.js (/api/v1/external/* — health, me, leads, calls, messages, appointments, contacts/lookup, patients/lookup, services, staff, locations)
 
@@ -197,7 +197,7 @@ CPQBuilder, CommandPalette, DealModal, EmailSignatureEditor, LanguageSwitcher, L
 
 **Wellness theme (v3.1):** theme/wellness.css — scoped under `[data-vertical="wellness"]`. Activated in App.jsx by setting `data-vertical` on body based on tenant.vertical.
 
-### Prisma Models (152 total)
+### Prisma Models (211 total)
 
 > The enumeration below is the v3.1-era baseline (108 models). ~44 more landed across v3.4–v3.8 — POS (Register, Shift, Sale, PettyCashLedger), Attendance/Leave, Wallet/Cashback/GiftCard/Coupon, Resource/Holiday, inventory (ProductCategory, Vendor, InventoryReceipt, InventoryAdjustment), WhatsAppThread, and more. See [prisma/schema.prisma](backend/prisma/schema.prisma) for the authoritative list.
 

@@ -74,9 +74,24 @@ const isValidSlug = (s) =>
 
 router.get("/", verifyToken, async (req, res) => {
   try {
+    // #920 slice 38: ?fields=summary slim-shape opt-in. Mirrors slices 1-36.
+    // The default list already excludes the heavy content @db.LongText +
+    // cssOverrides @db.Text + metaTitle/metaDescription columns (LandingPage
+    // schema has the body JSON in `content`, see prisma/schema.prisma:1764).
+    // Picker / dropdown UI (slug-collision check, page-selector chips, "link
+    // to landing page" form fields) doesn't need visits / submissions /
+    // templateType / createdAt / updatedAt either — only id + title + slug +
+    // status. When the caller passes ?fields=summary we project to that
+    // minimal set. Opt-in additive — existing callers (no ?fields, or any
+    // non-exact value) get the analytics-bearing shape unchanged so the
+    // LandingPages.jsx grid continues to render visits + submissions tiles.
+    const isSummary = req.query.fields === "summary";
+    const select = isSummary
+      ? { id: true, title: true, slug: true, status: true }
+      : { id: true, title: true, slug: true, status: true, visits: true, submissions: true, templateType: true, createdAt: true, updatedAt: true };
     res.json(await prisma.landingPage.findMany({
       where: { tenantId: req.user.tenantId },
-      select: { id: true, title: true, slug: true, status: true, visits: true, submissions: true, templateType: true, createdAt: true, updatedAt: true },
+      select,
       orderBy: { createdAt: "desc" },
     }));
   } catch (_err) { res.status(500).json({ error: "Failed to fetch landing pages" }); }
@@ -420,7 +435,7 @@ router.get("/:id/analytics", verifyToken, async (req, res) => {
 
 publicRouter.get("/:slug", async (req, res) => {
   try {
-    const page = await prisma.landingPage.findUnique({ where: { slug: req.params.slug } });
+    const page = await prisma.landingPage.findFirst({ where: { slug: req.params.slug } });
     if (!page || page.status !== "PUBLISHED") return res.status(404).send("<h1>Page not found</h1>");
 
     await prisma.landingPage.update({ where: { id: page.id }, data: { visits: { increment: 1 } } });
@@ -536,7 +551,7 @@ async function applyLeadRouting(formProps, tenantId, contactId) {
 
 publicRouter.post("/:slug/submit", express.json(), async (req, res) => {
   try {
-    const page = await prisma.landingPage.findUnique({ where: { slug: req.params.slug } });
+    const page = await prisma.landingPage.findFirst({ where: { slug: req.params.slug } });
     if (!page) return res.status(404).json({ error: "Page not found" });
     const tenantId = page.tenantId || 1;
 
@@ -607,7 +622,7 @@ publicRouter.post("/:slug/submit", express.json(), async (req, res) => {
 
 publicRouter.get("/:slug/track", async (req, res) => {
   try {
-    const page = await prisma.landingPage.findUnique({ where: { slug: req.params.slug } });
+    const page = await prisma.landingPage.findFirst({ where: { slug: req.params.slug } });
     if (page) {
       await prisma.landingPageAnalytics.create({
         data: { landingPageId: page.id, eventType: req.query.event || "VISIT", visitorIp: req.ip, userAgent: req.headers["user-agent"], tenantId: page.tenantId || 1 },

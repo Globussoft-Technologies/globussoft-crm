@@ -1,6 +1,7 @@
 const express = require("express");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
+const multer = require("multer");
 const { verifyToken, verifyRole } = require("../middleware/auth");
 
 const crypto = require("crypto");
@@ -8,6 +9,88 @@ const crypto = require("crypto");
 const router = express.Router();
 const prisma = require("../lib/prisma");
 const { writeAudit } = require("../lib/audit");
+const { resolvePrimaryRole } = require("../lib/roleResolution");
+const { provisionTenantRbac } = require("../scripts/ensureRbacOnBoot");
+// Module-object require so vi.mock-style replacement of the exports at
+// test time is observable here (the destructured form captures function
+// references at require-time and bypasses any later patching).
+const s3Service = require("../services/s3Service");
+
+// Memory-storage multer for profile-picture uploads — 5 MB cap, image-only.
+// The route below hands the buffer to s3Service.uploadImage() which gates
+// the mimetype again, but rejecting at the multer layer gives a cleaner
+// error path for oversized files (multer's MulterError vs a thrown
+// "Invalid image MIME type" deep in the S3 client).
+const profilePictureUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+});
+
+// Wrap multer's single-file middleware so MulterError instances (e.g.
+// LIMIT_FILE_SIZE) are translated into JSON responses inside this route
+// rather than bubbling up to the global error handler as a 500. Without
+// this, a 6 MB upload returns the default express error page instead of
+// a clean { code: "FILE_TOO_LARGE" } envelope the frontend can read.
+function profilePictureUploadHandler(req, res, next) {
+  profilePictureUpload.single("file")(req, res, (err) => {
+    if (err instanceof multer.MulterError) {
+      if (err.code === "LIMIT_FILE_SIZE") {
+        return res.status(413).json({
+          error: "Profile picture must be 5 MB or smaller",
+          code: "FILE_TOO_LARGE",
+        });
+      }
+      return res.status(400).json({ error: "Upload error", code: err.code });
+    }
+    if (err) return next(err);
+    next();
+  });
+}
+
+// After a fresh tenant is created via /register or /signup, ensure the
+// canonical RBAC role set exists for that tenant AND the freshly-created
+// admin user is assigned to the ADMIN role. Without this, the new admin
+// holds User.role='ADMIN' (legacy string makes the sidebar's isAdmin
+// gate true) but has zero RolePermission grants, so /api/pages/me
+// returns nothing and the catalog-driven sidebar sections all collapse —
+// the canonical "I created my account and the sidebar is almost empty"
+// symptom. Idempotent; safe to call even if a prior call partially
+// succeeded.
+async function provisionRbacForFreshTenant(tenantId, isWellness, adminUserId) {
+  try {
+    await provisionTenantRbac(tenantId, { isWellness });
+    // Assign the new admin user to the tenant's ADMIN role row. The
+    // provisioner's user-iteration loop ALSO does this when it sees a
+    // User.role='ADMIN' row for the tenant, but the loop is best-effort
+    // (skips on conflict). Doing it explicitly here too makes the wire-
+    // up failure-mode visible (any error bubbles up to the caller).
+    if (adminUserId) {
+      const adminRole = await prisma.role.findFirst({
+        where: { tenantId, key: 'ADMIN' },
+        select: { id: true },
+      });
+      if (adminRole) {
+        const existing = await prisma.userRole.findUnique({
+          where: { userId_roleId: { userId: adminUserId, roleId: adminRole.id } },
+        });
+        if (!existing) {
+          await prisma.userRole.create({
+            data: { userId: adminUserId, roleId: adminRole.id },
+          });
+        }
+      }
+    }
+  } catch (err) {
+    // Failure here is non-fatal for the signup flow itself — the user
+    // and tenant rows have already been persisted, and the next server
+    // boot's ensureRbacOnBoot will pick up the gap. Log so an operator
+    // can diagnose if the inline call repeatedly fails.
+    console.error(
+      `[auth] provisionRbacForFreshTenant failed for tenant ${tenantId}:`,
+      err && err.message ? err.message : err,
+    );
+  }
+}
 const { JWT_SECRET } = require("../config/secrets");
 // #914 slice 1 — additive HttpOnly cookie set alongside the JWT body. The
 // middleware does NOT yet read this cookie (slice 2) and the frontend does
@@ -18,6 +101,25 @@ const { setAuthCookie, clearAuthCookie } = require("../lib/authCookies");
 
 // In-memory store for password reset tokens (token -> { userId, expiresAt })
 const resetTokens = new Map();
+
+// Public endpoint: Get list of tenants for customer registration
+router.get("/public/tenants", async (req, res) => {
+  try {
+    const tenants = await prisma.tenant.findMany({
+      // eslint-disable-next-line gbscrm/tenant-scope-finder-heuristic -- safe: PUBLIC route (no verifyToken) listing tenants for the registration dropdown — there is no req.user.tenantId to scope by; the response is intentionally cross-tenant. S36 (FR-3.4 / #919) audit-reviewed false-positive.
+      where: { isActive: true },
+      // `slug` is included so the customer-register + login pages can map a
+      // `?tenantSlug=` handoff param (e.g. from the Dr. Haror's marketing
+      // site) to a tenant id and pre-select the dropdown.
+      select: { id: true, name: true, slug: true },
+      orderBy: { name: 'asc' },
+    });
+    res.json(tenants);
+  } catch (err) {
+    console.error("[auth/public/tenants] error:", err.message);
+    res.status(500).json({ error: "Failed to load tenants" });
+  }
+});
 
 // #526 (CRIT-01): Send password-reset link via SendGrid. Local helper
 // because the same `sendSendGrid` function is duplicated in
@@ -91,12 +193,16 @@ async function generateUniqueSlug(base) {
     .slice(0, 40) || "org";
   let slug = root;
   let i = 1;
-  // Try until unused
-  while (await prisma.tenant.findUnique({ where: { slug } })) {
+  const MAX_ATTEMPTS = 100;
+  while (i <= MAX_ATTEMPTS) {
+    const existing = await prisma.tenant.findUnique({ where: { slug } });
+    if (!existing) return slug;
     i += 1;
     slug = `${root}-${i}`;
   }
-  return slug;
+  // Fallback: UUID suffix guarantees uniqueness under collision storms.
+  const suffix = require("crypto").randomUUID().slice(0, 8);
+  return `${root}-${suffix}`;
 }
 
 // Password complexity: minimum 8 chars, must contain at least one letter AND one number
@@ -111,13 +217,18 @@ function validatePasswordComplexity(password) {
 // Register Epic — creates a new Tenant + first User (org owner)
 router.post("/register", async (req, res) => {
   try {
-    const { email, password, name, organizationName } = req.body;
+    const { email, password, name, organizationName, vertical } = req.body;
 
     const pwErr = validatePasswordComplexity(password);
     if (pwErr) return res.status(400).json({ error: pwErr });
 
-    const existingUser = await prisma.user.findUnique({ where: { email } });
-    if (existingUser) return res.status(400).json({ error: "User already exists" });
+    // Org creation makes a brand-new tenant, so (email, newTenantId) can never
+    // collide — email is unique per-tenant now (see User schema). The same
+    // email is allowed to own/belong to multiple orgs, so there is no global
+    // "already exists" pre-check here.
+
+    const validVerticals = ['generic', 'wellness', 'travel'];
+    const selectedVertical = validVerticals.includes(vertical) ? vertical : 'generic';
 
     const hashedPassword = await bcrypt.hash(password, 10);
 
@@ -125,7 +236,7 @@ router.post("/register", async (req, res) => {
     const slug = await generateUniqueSlug(orgName);
 
     const tenant = await prisma.tenant.create({
-      data: { name: orgName, slug, ownerEmail: email, plan: "TRIAL" }
+      data: { name: orgName, slug, ownerEmail: email, plan: "TRIAL", vertical: selectedVertical }
     });
 
     const trialDays = parseInt(process.env.FREE_TRIAL_DAYS || 15);
@@ -144,6 +255,13 @@ router.post("/register", async (req, res) => {
         subscriptionStatus: "TRIAL"
       }
     });
+
+    // Provision the canonical RBAC role set for the fresh tenant + assign
+    // the new admin user to the ADMIN role row. Without this, the new
+    // admin has no RolePermission grants and the catalog-driven sidebar
+    // sections collapse on first login (the "sidebar is almost empty"
+    // signup bug). Awaited so the user lands on a fully-RBAC'd session.
+    await provisionRbacForFreshTenant(tenant.id, selectedVertical === 'wellness', user.id);
 
     // #325: include vertical on the JWT so verifyWellnessRole can check
     // tenant vertical without an extra DB lookup per request.
@@ -164,13 +282,18 @@ router.post("/register", async (req, res) => {
 // Signup alias (matches signup page) — same behavior as register
 router.post("/signup", async (req, res) => {
   try {
-    const { email, password, name, organizationName } = req.body;
+    const { email, password, name, organizationName, vertical } = req.body;
 
     const pwErr = validatePasswordComplexity(password);
     if (pwErr) return res.status(400).json({ error: pwErr });
 
-    const existingUser = await prisma.user.findUnique({ where: { email } });
-    if (existingUser) return res.status(400).json({ error: "User already exists" });
+    // Org creation makes a brand-new tenant, so (email, newTenantId) can never
+    // collide — email is unique per-tenant now (see User schema). The same
+    // email is allowed to own/belong to multiple orgs, so there is no global
+    // "already exists" pre-check here.
+
+    const validVerticals = ['generic', 'wellness', 'travel'];
+    const selectedVertical = validVerticals.includes(vertical) ? vertical : 'generic';
 
     const hashedPassword = await bcrypt.hash(password, 10);
 
@@ -178,7 +301,7 @@ router.post("/signup", async (req, res) => {
     const slug = await generateUniqueSlug(orgName);
 
     const tenant = await prisma.tenant.create({
-      data: { name: orgName, slug, ownerEmail: email, plan: "TRIAL" }
+      data: { name: orgName, slug, ownerEmail: email, plan: "TRIAL", vertical: selectedVertical }
     });
 
     const trialDays = parseInt(process.env.FREE_TRIAL_DAYS || 15);
@@ -198,6 +321,11 @@ router.post("/signup", async (req, res) => {
       }
     });
 
+    // Provision the canonical RBAC role set for the fresh tenant + assign
+    // the new admin user to the ADMIN role row. See /register for the
+    // longer comment — same bug, same fix.
+    await provisionRbacForFreshTenant(tenant.id, selectedVertical === 'wellness', user.id);
+
     // #325: include vertical on the JWT so verifyWellnessRole can check
     // tenant vertical without an extra DB lookup per request.
     const token = signSessionToken({ userId: user.id, role: user.role, wellnessRole: user.wellnessRole || null, tenantId: tenant.id, vertical: tenant.vertical || "generic" });
@@ -214,14 +342,142 @@ router.post("/signup", async (req, res) => {
   }
 });
 
+// GET /api/auth/customer/tenants — public list of active tenants for the
+// customer self-registration dropdown. Returns minimal display fields only
+// (id, name, vertical) — no plan, owner, billing, or branding metadata.
+// Used by the CustomerRegister page to populate its Organization dropdown
+// so new tenants created via /api/auth/signup show up automatically without
+// a frontend redeploy.
+router.get("/customer/tenants", async (req, res) => {
+  try {
+    const tenants = await prisma.tenant.findMany({
+      // eslint-disable-next-line gbscrm/tenant-scope-finder-heuristic -- safe: PUBLIC route (no verifyToken) for the customer self-registration dropdown — no req.user.tenantId exists pre-registration. Returns minimal display fields only (id, name, vertical) — no plan, owner, billing, or branding metadata. S36 (FR-3.4 / #919) audit-reviewed false-positive.
+      where: { isActive: true },
+      select: { id: true, name: true, vertical: true },
+      orderBy: { name: "asc" },
+    });
+    res.json(tenants);
+  } catch (error) {
+    console.error("[auth] customer/tenants error:", error);
+    res.status(500).json({ error: "Failed to fetch tenants" });
+  }
+});
+
+// Customer Registration — open path for CUSTOMER userType self-registration
+// Creates a new User with userType: 'CUSTOMER' and assigns the tenant's CUSTOMER role
+router.post("/customer/register", async (req, res) => {
+  try {
+    // The target tenant is supplied in the body and MUST be named
+    // `registrationTenantId`, NOT `tenantId`: the global stripDangerous
+    // middleware deletes `tenantId` from every request body (see CLAUDE.md
+    // standing rules), so a `tenantId` field would always arrive undefined
+    // and registration would 400. `registrationTenantId` is not on the strip
+    // list, so it passes through intact.
+    const { email, password, name, registrationTenantId } = req.body || {};
+
+    // Input validation
+    if (!email || typeof email !== "string" || !password || typeof password !== "string") {
+      return res.status(400).json({ error: "email, password, and registrationTenantId are required" });
+    }
+
+    // Coerce to a number — JSON sends it numeric, but accept a numeric string
+    // defensively. Reject anything that isn't a positive integer.
+    const tenantId = Number(registrationTenantId);
+    if (!Number.isInteger(tenantId) || tenantId <= 0) {
+      return res.status(400).json({ error: "registrationTenantId must be a valid number" });
+    }
+
+    // Password complexity check
+    const pwErr = validatePasswordComplexity(password);
+    if (pwErr) return res.status(400).json({ error: pwErr });
+
+    // Check tenant exists
+    const tenant = await prisma.tenant.findUnique({ where: { id: tenantId } });
+    if (!tenant) {
+      return res.status(400).json({ error: "Invalid tenant ID" });
+    }
+
+    // Check email isn't already registered IN THIS ORG. Email is unique
+    // per-tenant, so the same address may register at another org — we only
+    // block a duplicate within the same tenant.
+    const existingUser = await prisma.user.findFirst({ where: { email, tenantId } });
+    if (existingUser) {
+      return res.status(400).json({ error: "Email already registered" });
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    // Create CUSTOMER user
+    const user = await prisma.user.create({
+      data: {
+        email,
+        password: hashedPassword,
+        name: name || email.split('@')[0],
+        userType: 'CUSTOMER',
+        role: 'CUSTOMER', // Legacy field for backward compat
+        tenantId,
+      },
+      include: { tenant: true }
+    });
+
+    // Assign CUSTOMER role via UserRole junction
+    // Find the tenant's CUSTOMER system role
+    const customerRole = await prisma.role.findFirst({
+      where: {
+        tenantId: tenantId,
+        key: 'CUSTOMER',
+        isSystem: true
+      }
+    });
+
+    if (customerRole) {
+      await prisma.userRole.create({
+        data: {
+          userId: user.id,
+          roleId: customerRole.id
+        }
+      });
+    }
+
+    // Emit audit log for customer registration
+    await writeAudit('User', 'CUSTOMER_REGISTRATION', user.id, user.id, tenantId, {
+      email: user.email,
+      name: user.name,
+      tenantId: tenantId
+    });
+
+    // Issue JWT
+    const jwtPayload = {
+      userId: user.id,
+      role: 'CUSTOMER',
+      wellnessRole: null,
+      tenantId: tenantId,
+      vertical: user.tenant?.vertical || "generic",
+      userType: 'CUSTOMER',
+      isOwner: false,
+    };
+    const token = signSessionToken(jwtPayload);
+
+    res.status(201).json({
+      token,
+      user: { id: user.id, email: user.email, name: user.name, userType: 'CUSTOMER' },
+      tenant: user.tenant ? { id: user.tenant.id, name: user.tenant.name, slug: user.tenant.slug, vertical: user.tenant.vertical || "generic" } : null
+    });
+
+  } catch (error) {
+    console.error("[auth] customer/register error:", error);
+    res.status(500).json({ error: "Customer registration failed" });
+  }
+});
+
 // Login Epic
 // NOTE: Login throttling is handled at the server level via express-rate-limit
 // (1000 req/15min on auth/login per server.js).
 router.post("/login", async (req, res) => {
   try {
-    const { email, password } = req.body || {};
+    const { email, password, loginTenantId } = req.body || {};
 
-    // Input validation — without this, an empty body crashes findUnique with
+    // Input validation — without this, an empty body crashes findFirst with
     // PrismaClientValidationError (email: undefined). Return 400 instead.
     if (!email || typeof email !== "string" || !password || typeof password !== "string") {
       return res.status(400).json({ error: "email and password are required" });
@@ -229,7 +485,16 @@ router.post("/login", async (req, res) => {
 
     // Admin/admin bypass intentionally removed for security hardening.
 
-    const user = await prisma.user.findUnique({ where: { email }, include: { tenant: true } });
+    // Email is unique per-tenant, not globally (see schema User model), so an
+    // email can match an account in more than one org. The login form sends
+    // the chosen org as `loginTenantId` (a non-stripped name — `tenantId`
+    // would be deleted by stripDangerous). When supplied we scope to it; when
+    // absent (legacy API callers) we fall back to the first match by email.
+    const scopedTenantId = Number(loginTenantId);
+    const tenantFilter = Number.isInteger(scopedTenantId) && scopedTenantId > 0
+      ? { tenantId: scopedTenantId }
+      : {};
+    const user = await prisma.user.findFirst({ where: { email, ...tenantFilter }, include: { tenant: true } });
     // #192: when the email isn't found, run a dummy bcrypt compare against a
     // fixed-cost hash so the unknown-email path takes the same wall time as
     // the known-email-wrong-password path. Closes the timing-oracle that let
@@ -245,6 +510,34 @@ router.post("/login", async (req, res) => {
     if (!isMatch) return res.status(401).json({ error: "Invalid credentials" });
 
     const tenantId = user.tenantId || 1;
+
+    // Self-heal for signups created BEFORE provisionRbacForFreshTenant
+    // was wired into /register + /signup. Those flows persisted the
+    // tenant + user but never created the canonical Role rows or
+    // RolePermission grants — the user holds User.role='ADMIN' (so the
+    // legacy sidebar isAdmin gate passes) yet the resolver returns an
+    // empty Set, collapsing every catalog-driven nav section. Detect
+    // and repair here: if the user's tenant has no ADMIN role row, OR
+    // if this admin user has no UserRole assignment at all, run the
+    // provisioner before issuing the JWT. The provisioner is idempotent
+    // (find-first-then-create) so a healthy session does a single
+    // userRole.count and exits early. Wrapped so a failure during
+    // self-heal can never block a legitimate login.
+    if (user.userType !== 'OWNER' && user.tenantId) {
+      try {
+        const isLegacyAdmin = String(user.role || '').toUpperCase() === 'ADMIN';
+        const userRoleCount = await prisma.userRole.count({ where: { userId: user.id } });
+        if (isLegacyAdmin && userRoleCount === 0) {
+          const isWellness = user.tenant?.vertical === 'wellness';
+          await provisionRbacForFreshTenant(user.tenantId, isWellness, user.id);
+        }
+      } catch (healErr) {
+        console.warn(
+          '[auth/login] RBAC self-heal failed (non-fatal):',
+          healErr && healErr.message ? healErr.message : healErr,
+        );
+      }
+    }
 
     // If 2FA is enabled, return short-lived temp token instead of final JWT.
     // Frontend must POST /api/auth/2fa/verify with { tempToken, code } to complete login.
@@ -262,7 +555,17 @@ router.post("/login", async (req, res) => {
     // without re-reading the user row on every request.
     // #325: include vertical on the JWT so verifyWellnessRole can check
     // tenant vertical without an extra DB lookup per request.
-    const token = signSessionToken({ userId: user.id, role: user.role, wellnessRole: user.wellnessRole || null, tenantId, vertical: user.tenant?.vertical || "generic" });
+    // RBAC: include userType and isOwner for new permission system
+    const jwtPayload = {
+      userId: user.id,
+      role: user.role,
+      wellnessRole: user.wellnessRole || null,
+      tenantId,
+      vertical: user.tenant?.vertical || "generic",
+      userType: user.userType || 'STAFF',
+      isOwner: user.userType === 'OWNER',
+    };
+    const token = signSessionToken(jwtPayload);
 
     // #555: Audit tenant session selection (Option C - single tenant per session)
     await writeAudit('Auth', 'LOGIN', user.id, user.id, tenantId, {
@@ -272,10 +575,36 @@ router.post("/login", async (req, res) => {
       sessionInfo: 'Single tenant per session enforced'
     });
 
+    // Resolve the user's primary RBAC role so the frontend can route to
+    // its configured landingPath on login. Falls back gracefully through
+    // UserRole join → legacy User.role string → null (vertical default).
+    const primaryRole = await resolvePrimaryRole({ id: user.id, role: user.role, tenantId });
+
     setAuthCookie(res, token); // #914 slice 1 — additive HttpOnly cookie (no consumer reads it yet)
     res.json({
       token,
-      user: { id: user.id, email: user.email, name: user.name, role: user.role, wellnessRole: user.wellnessRole || null },
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        role: user.role,
+        // userType lets the frontend route self-service customers to the
+        // customer portal instead of the staff dashboard.
+        userType: user.userType || 'STAFF',
+        wellnessRole: user.wellnessRole || null,
+        // Sub-brand access scope (travel vertical). Lets the sidebar switcher
+        // render only the brands this user may activate; the authoritative gate
+        // stays server-side (travelGuards.getSubBrandAccessSet). Null = full
+        // access (admins / unset). Harmless extra field for non-travel clients.
+        subBrandAccess: user.subBrandAccess || null,
+        // #1123 — include profilePicture so the header avatar matches the
+        // /me payload after re-login. Without this the frontend persists a
+        // user object missing profilePicture, falls back to initials, and
+        // appears to "revert" the avatar that the user just uploaded.
+        profilePicture: user.profilePicture || null,
+        primaryRole, // { id, key, name, landingPath } | null
+        landingPath: primaryRole?.landingPath || null,
+      },
       tenant: user.tenant ? { id: user.tenant.id, name: user.tenant.name, slug: user.tenant.slug, plan: user.tenant.plan, vertical: user.tenant.vertical || "generic", country: user.tenant.country || "US", defaultCurrency: user.tenant.defaultCurrency || "USD", locale: user.tenant.locale || "en-US", logoUrl: user.tenant.logoUrl, brandColor: user.tenant.brandColor } : null
     });
   } catch (error) {
@@ -358,7 +687,10 @@ router.post("/forgot-password", async (req, res) => {
     const { email } = req.body;
     if (!email) return res.status(400).json({ error: "Email is required" });
 
-    const user = await prisma.user.findUnique({ where: { email } });
+    // Email is unique per-tenant now, so findFirst (not findUnique). If the
+    // same email exists in multiple orgs this resets the first match; a future
+    // enhancement could disambiguate by org, but the common case is one org.
+    const user = await prisma.user.findFirst({ where: { email } });
 
     if (user) {
       const token = crypto.randomBytes(32).toString("hex");
@@ -433,7 +765,7 @@ router.get("/me", verifyToken, async (req, res) => {
   try {
     const user = await prisma.user.findUnique({
       where: { id: req.user.userId },
-      select: { id: true, name: true, email: true, role: true, wellnessRole: true, createdAt: true, tenant: { select: { id: true, name: true, slug: true, plan: true, vertical: true, country: true, defaultCurrency: true, locale: true, logoUrl: true, brandColor: true } } }
+      select: { id: true, name: true, email: true, role: true, wellnessRole: true, subBrandAccess: true, profilePicture: true, tenantId: true, createdAt: true, tenant: { select: { id: true, name: true, slug: true, plan: true, vertical: true, country: true, defaultCurrency: true, locale: true, logoUrl: true, brandColor: true } } }
     });
     if (!user) {
       return res.status(404).json({ error: "User not found" });
@@ -455,9 +787,80 @@ router.get("/me", verifyToken, async (req, res) => {
       smsConfigured = false;
     }
 
-    res.json({ ...user, features: { smsConfigured } });
+    // Carry primaryRole + landingPath on /me so a page-refresh restores the
+    // same routing context the login response gave us.
+    const primaryRole = await resolvePrimaryRole({ id: user.id, role: user.role, tenantId: user.tenantId });
+
+    res.json({
+      ...user,
+      tenantId: undefined, // hide raw FK; client should use user.tenant.id
+      primaryRole,
+      landingPath: primaryRole?.landingPath || null,
+      features: { smsConfigured },
+    });
   } catch (_error) {
     res.status(500).json({ error: "Failed to fetch profile" });
+  }
+});
+
+// GET /api/auth/me/permissions — return merged permissions from all assigned roles
+router.get("/me/permissions", verifyToken, async (req, res) => {
+  try {
+    const { getUserPermissions } = require("../middleware/requirePermission");
+
+    const user = await prisma.user.findUnique({
+      where: { id: req.user.userId },
+      include: {
+        userRoles: {
+          include: { role: true }
+        }
+      }
+    });
+
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    // Build response: OWNER always returns empty permission list (short-circuit)
+    if (req.user.isOwner) {
+      return res.json({
+        isOwner: true,
+        userType: 'OWNER',
+        roles: ['OWNER'],
+        permissions: [], // OWNER bypasses all checks at middleware level
+        primaryRole: null,
+        landingPath: null,
+      });
+    }
+
+    // Load merged permissions for non-OWNER users
+    const permissions = await getUserPermissions(req.user.tenantId, req.user.userId);
+    const permissionArray = Array.from(permissions).sort();
+
+    // Extract role names from userRoles
+    const roleNames = user.userRoles.map(ur => ur.role.key);
+
+    // Single-role-per-user: surface the primary role + its landing path so
+    // the frontend doesn't need a second round-trip to figure out where to
+    // route this user. Falls back through the same precedence as
+    // /api/auth/login (UserRole join → legacy User.role string → null).
+    const primaryRole = await resolvePrimaryRole({
+      id: user.id,
+      role: user.role,
+      tenantId: req.user.tenantId,
+    });
+
+    res.json({
+      isOwner: false,
+      userType: user.userType || 'STAFF',
+      roles: roleNames,
+      permissions: permissionArray,
+      primaryRole,
+      landingPath: primaryRole?.landingPath || null,
+    });
+  } catch (_error) {
+    console.error("[auth/me/permissions] error:", _error);
+    res.status(500).json({ error: "Failed to fetch permissions" });
   }
 });
 
@@ -470,7 +873,9 @@ router.put("/me", verifyToken, async (req, res) => {
     if (name) updateData.name = name;
 
     if (email) {
-      const existing = await prisma.user.findUnique({ where: { email } });
+      // Email is unique per-tenant — only block if another account IN THE
+      // SAME tenant already uses it.
+      const existing = await prisma.user.findFirst({ where: { email, tenantId: req.user.tenantId } });
       if (existing && existing.id !== req.user.userId) {
         return res.status(400).json({ error: "Email already in use by another account" });
       }
@@ -510,7 +915,7 @@ router.put("/me", verifyToken, async (req, res) => {
     const updatedUser = await prisma.user.update({
       where: { id: req.user.userId },
       data: updateData,
-      select: { id: true, name: true, email: true, role: true, createdAt: true }
+      select: { id: true, name: true, email: true, role: true, profilePicture: true, createdAt: true }
     });
 
     // #179: audit profile changes. CRITICAL: never include the password value
@@ -535,6 +940,146 @@ router.put("/me", verifyToken, async (req, res) => {
     res.json(updatedUser);
   } catch (_error) {
     res.status(500).json({ error: "Failed to update profile" });
+  }
+});
+
+// POST /api/auth/me/profile-picture — upload (or replace) the signed-in
+// user's avatar. multipart/form-data with a single `file` field. On
+// replace, the previous S3 object is deleted so the bucket doesn't
+// accumulate orphans. The delete is best-effort: a failure to remove the
+// old key is logged but does not fail the upload (the new picture is
+// already in S3 and the DB pointer would otherwise be stale).
+router.post(
+  "/me/profile-picture",
+  verifyToken,
+  profilePictureUploadHandler,
+  async (req, res) => {
+    try {
+      if (!req.file || !req.file.buffer) {
+        return res.status(400).json({ error: "No file uploaded", code: "NO_FILE" });
+      }
+
+      const existing = await prisma.user.findUnique({
+        where: { id: req.user.userId },
+        select: { id: true, profilePicture: true },
+      });
+      if (!existing) {
+        return res.status(404).json({ error: "User not found" });
+      }
+
+      let newUrl;
+      try {
+        newUrl = await s3Service.uploadImage(
+          req.file.buffer,
+          req.file.originalname || "profile.jpg",
+          req.file.mimetype,
+          `avatars/${req.user.userId}`,
+        );
+      } catch (uploadErr) {
+        if (/Invalid image MIME type/.test(uploadErr.message || "")) {
+          return res.status(415).json({
+            error: "Profile picture must be an image (jpeg/png/gif/webp/svg)",
+            code: "UNSUPPORTED_MEDIA",
+          });
+        }
+        if (/S3 bucket not configured/.test(uploadErr.message || "")) {
+          return res.status(503).json({
+            error: "Profile picture storage is not configured",
+            code: "STORAGE_UNCONFIGURED",
+          });
+        }
+        throw uploadErr;
+      }
+
+      const updated = await prisma.user.update({
+        where: { id: req.user.userId },
+        data: { profilePicture: newUrl },
+        select: { id: true, name: true, email: true, role: true, profilePicture: true },
+      });
+
+      // Best-effort delete of the previous S3 object so we don't leak
+      // orphan avatars on every replace.
+      if (existing.profilePicture && existing.profilePicture !== newUrl) {
+        const oldKey = s3Service.extractKeyFromUrl(existing.profilePicture);
+        if (oldKey) {
+          try {
+            await s3Service.deleteFile(oldKey);
+          } catch (delErr) {
+            console.warn(
+              "[auth/me/profile-picture] failed to delete previous S3 key:",
+              oldKey,
+              delErr.message,
+            );
+          }
+        }
+      }
+
+      await writeAudit(
+        "User",
+        "UPDATE_PROFILE_PICTURE",
+        updated.id,
+        req.user.userId,
+        req.user.tenantId,
+        { replaced: !!existing.profilePicture },
+      );
+
+      res.json(updated);
+    } catch (err) {
+      console.error("[auth/me/profile-picture] upload error:", err && err.message);
+      res.status(500).json({ error: "Failed to upload profile picture" });
+    }
+  },
+);
+
+// DELETE /api/auth/me/profile-picture — clear the avatar + remove the S3
+// object. Idempotent: returns 200 with profilePicture:null whether or not
+// one was set.
+router.delete("/me/profile-picture", verifyToken, async (req, res) => {
+  try {
+    const existing = await prisma.user.findUnique({
+      where: { id: req.user.userId },
+      select: { id: true, profilePicture: true },
+    });
+    if (!existing) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    if (existing.profilePicture) {
+      const key = s3Service.extractKeyFromUrl(existing.profilePicture);
+      if (key) {
+        try {
+          await s3Service.deleteFile(key);
+        } catch (delErr) {
+          console.warn(
+            "[auth/me/profile-picture] failed to delete S3 key:",
+            key,
+            delErr.message,
+          );
+        }
+      }
+    }
+
+    const updated = await prisma.user.update({
+      where: { id: req.user.userId },
+      data: { profilePicture: null },
+      select: { id: true, name: true, email: true, role: true, profilePicture: true },
+    });
+
+    if (existing.profilePicture) {
+      await writeAudit(
+        "User",
+        "DELETE_PROFILE_PICTURE",
+        updated.id,
+        req.user.userId,
+        req.user.tenantId,
+        {},
+      );
+    }
+
+    res.json(updated);
+  } catch (err) {
+    console.error("[auth/me/profile-picture] delete error:", err && err.message);
+    res.status(500).json({ error: "Failed to remove profile picture" });
   }
 });
 

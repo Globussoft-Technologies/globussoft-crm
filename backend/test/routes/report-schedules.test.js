@@ -412,3 +412,99 @@ describe('PUT /:id/toggle — flip enabled flag', () => {
     });
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────
+// GET /?fields=summary — #920 slice 47 slim-shape opt-in
+// ─────────────────────────────────────────────────────────────────────────
+// Mirrors slices 1-46. When the caller passes ?fields=summary, the route
+// MUST switch from `include: { user: ... }` to a slim `select` that drops
+// the heavy JSON-stringified columns (ReportSchedule.metrics +
+// ReportSchedule.recipients, both `String? @db.Text` storing JSON
+// arrays) and the user-include. Any non-exact value (`?fields=foo`,
+// `?fields=`, omitted entirely) falls back to the full include shape.
+// The tenant/admin scoping branch (admin sees all-in-tenant; non-admin
+// scoped to req.user.userId) must be preserved unchanged on both
+// branches — slim-shape is orthogonal to authz.
+
+describe('GET /?fields=summary — slim-shape opt-in (#920 slice 47)', () => {
+  test('?fields=summary uses slim select that drops metrics + recipients JSON columns', async () => {
+    prisma.reportSchedule.findMany.mockResolvedValue([
+      { id: 1, name: 'Weekly Deals', reportType: 'deals' },
+    ]);
+
+    const res = await request(makeApp({ tenantId: 42, role: 'ADMIN' }))
+      .get('/api/report-schedules?fields=summary');
+
+    expect(res.status).toBe(200);
+    const callArg = prisma.reportSchedule.findMany.mock.calls[0][0];
+    // Must use select, NOT include.
+    expect(callArg.select).toBeDefined();
+    expect(callArg.include).toBeUndefined();
+    // Heavy JSON-stringified columns MUST be absent from select.
+    expect(callArg.select).not.toHaveProperty('metrics');
+    expect(callArg.select).not.toHaveProperty('recipients');
+    // Light columns the list UI needs MUST be present.
+    expect(callArg.select.id).toBe(true);
+    expect(callArg.select.name).toBe(true);
+    expect(callArg.select.reportType).toBe(true);
+    expect(callArg.select.frequency).toBe(true);
+    expect(callArg.select.format).toBe(true);
+    expect(callArg.select.enabled).toBe(true);
+    expect(callArg.select.lastRunAt).toBe(true);
+    expect(callArg.select.tenantId).toBe(true);
+    expect(callArg.select.userId).toBe(true);
+  });
+
+  test('no ?fields (default) preserves full include shape with user relation (back-compat)', async () => {
+    prisma.reportSchedule.findMany.mockResolvedValue([]);
+
+    const res = await request(makeApp({ tenantId: 42, role: 'ADMIN' }))
+      .get('/api/report-schedules');
+
+    expect(res.status).toBe(200);
+    const callArg = prisma.reportSchedule.findMany.mock.calls[0][0];
+    expect(callArg.select).toBeUndefined();
+    expect(callArg.include).toEqual({
+      user: { select: { id: true, name: true, email: true } },
+    });
+  });
+
+  test('?fields=foo (non-exact) falls back to full include shape — only exact "summary" opts in', async () => {
+    prisma.reportSchedule.findMany.mockResolvedValue([]);
+
+    const res = await request(makeApp({ tenantId: 42, role: 'ADMIN' }))
+      .get('/api/report-schedules?fields=foo');
+
+    expect(res.status).toBe(200);
+    const callArg = prisma.reportSchedule.findMany.mock.calls[0][0];
+    expect(callArg.select).toBeUndefined();
+    expect(callArg.include).toBeDefined();
+    expect(callArg.include.user).toBeDefined();
+  });
+
+  test('?fields=summary preserves ADMIN tenant-wide scope (no userId filter)', async () => {
+    prisma.reportSchedule.findMany.mockResolvedValue([]);
+
+    await request(makeApp({ tenantId: 42, userId: 7, role: 'ADMIN' }))
+      .get('/api/report-schedules?fields=summary');
+
+    const callArg = prisma.reportSchedule.findMany.mock.calls[0][0];
+    expect(callArg.where).toEqual({ tenantId: 42 });
+    expect(callArg.where).not.toHaveProperty('userId');
+    expect(callArg.orderBy).toEqual({ createdAt: 'desc' });
+  });
+
+  test('?fields=summary preserves non-ADMIN scope (userId filter applied alongside slim select)', async () => {
+    prisma.reportSchedule.findMany.mockResolvedValue([]);
+
+    await request(makeApp({ tenantId: 42, userId: 7, role: 'USER' }))
+      .get('/api/report-schedules?fields=summary');
+
+    const callArg = prisma.reportSchedule.findMany.mock.calls[0][0];
+    // authz scope is preserved orthogonally to slim-shape opt-in.
+    expect(callArg.where).toEqual({ tenantId: 42, userId: 7 });
+    // slim select still applies.
+    expect(callArg.select).toBeDefined();
+    expect(callArg.include).toBeUndefined();
+  });
+});

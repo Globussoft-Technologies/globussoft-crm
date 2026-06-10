@@ -52,12 +52,19 @@
  *     surface; older window.confirm pattern is reserved for the parent
  *     suppliers delete which predates the migration).
  */
-import { useEffect, useState, useContext, useMemo } from "react";
+import { useEffect, useState, useContext, useMemo, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { FileImage, Plus, Pencil, Trash2, Copy, CopyPlus, Search } from "lucide-react";
-import { fetchApi } from "../../utils/api";
+import { FileImage, Plus, Pencil, Trash2, Copy, CopyPlus, Search, Download, ChevronDown } from "lucide-react";
+import { fetchApi, getAuthToken, getActiveTenantId } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
-import { SUB_BRAND_BG, SUB_BRAND_LABEL } from "../../utils/travelSubBrand";
+import {
+  SUB_BRAND_BG,
+  SUB_BRAND_LABEL,
+  accessibleSubBrands,
+  defaultSubBrandFor,
+  subBrandShortLabel,
+} from "../../utils/travelSubBrand";
+import { useActiveSubBrand } from "../../utils/subBrand";
 import { AuthContext } from "../../App";
 
 const SUB_BRANDS = [
@@ -67,8 +74,6 @@ const SUB_BRANDS = [
   { value: "travelstall", label: "Travel Stall" },
   { value: "visasure", label: "Visa Sure" },
 ];
-
-const SUB_BRANDS_CREATE = SUB_BRANDS.filter((s) => s.value);
 
 // Default placeholder palette used when a template's palette object is
 // malformed or missing (defensive — slice-1 validator ensures shape on
@@ -88,11 +93,34 @@ const EMPTY_FORM = {
   subBrand: "tmc",
 };
 
+// PRD_TRAVEL_MARKETING_FLYER.md FR-3.4 / FR-3.5 — 5-format render menu
+// (slice S77 — Wave 17 — Download dropdown on each template row).
+//
+// Each item maps to a `format` value the backend's POST /:id/render route
+// (slice S17) accepts. The extension column drives the file-save filename
+// suffix (`.pdf` for the two pdf-* formats; `.png` for the three png-*
+// formats). MIME isn't used client-side — the backend sets Content-Type
+// on the response, and `Blob`/`createObjectURL` carries that through to
+// the browser's save dialog.
+const RENDER_FORMATS = [
+  { format: "pdf-a4", label: "PDF — A4", ext: "pdf" },
+  { format: "pdf-a5", label: "PDF — A5", ext: "pdf" },
+  { format: "png-square", label: "Square PNG (1200×1200)", ext: "png" },
+  { format: "png-portrait-ig", label: "Instagram Story (1080×1920)", ext: "png" },
+  { format: "png-landscape-fb", label: "Facebook Cover (1920×1080)", ext: "png" },
+];
+
 export default function FlyerTemplates() {
   const notify = useNotify();
   const navigate = useNavigate();
   const { user } = useContext(AuthContext) || {};
   const canWrite = user?.role === "ADMIN" || user?.role === "MANAGER";
+  const { activeSubBrand } = useActiveSubBrand();
+  // Sub-brands this user may create/edit templates for. ADMIN (or any user
+  // with all 4) gets a full dropdown; a user restricted to exactly one brand
+  // gets that brand auto-selected + a read-only field (no dropdown).
+  const myBrands = accessibleSubBrands(user);
+  const lockedBrand = myBrands.length === 1 ? myBrands[0] : null;
 
   const [templates, setTemplates] = useState([]);
   const [total, setTotal] = useState(0);
@@ -154,7 +182,8 @@ export default function FlyerTemplates() {
   };
 
   const openCreate = () => {
-    resetForm();
+    setEditingId(null);
+    setForm({ ...EMPTY_FORM, subBrand: defaultSubBrandFor(user, activeSubBrand) });
     setShowForm(true);
   };
 
@@ -219,6 +248,70 @@ export default function FlyerTemplates() {
 
   const handleUseAsStartingPoint = (t) => {
     navigate(`/travel/marketing-flyer-studio?template=${t.id}`);
+  };
+
+  // Download dispatcher consumes POST /api/travel/flyer-templates/:id/render
+  // (slice S17 — backend route, 5-format synchronous render). Returns a
+  // binary buffer (PDF or PNG) on the wire, NOT JSON — so we MUST bypass
+  // the existing fetchApi helper (which always calls response.json() and
+  // would corrupt the buffer). Raw fetch + response.blob() + a synthetic
+  // <a download> click is the canonical browser save-buffer-as-file flow.
+  //
+  // Filename derivation: `${template.name}-${format}.${ext}`. Spaces +
+  // unicode in the name are fine (the browser save-dialog handles them
+  // verbatim); the backend's own Content-Disposition is overridden by
+  // the <a download> attribute on the client side, which is what we want
+  // so the file lands with the operator-friendly name not the backend's
+  // `flyer-501-pdf-a4.pdf`.
+  //
+  // Errors: 4xx + 5xx surface via notify.error with the route's `error`
+  // string if the response is JSON, or a generic "Render failed" fallback
+  // otherwise. We do NOT auto-redirect on 401 here (unlike fetchApi) —
+  // the next foreground fetchApi call will surface the real 401 + redirect.
+  const handleDownload = async (t, format, ext) => {
+    try {
+      const token = getAuthToken();
+      const activeTenantId = getActiveTenantId();
+      const headers = { "Content-Type": "application/json" };
+      if (token) headers.Authorization = `Bearer ${token}`;
+      if (activeTenantId != null) headers["X-Active-Tenant"] = String(activeTenantId);
+      const response = await fetch(
+        `/api/travel/flyer-templates/${t.id}/render`,
+        {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ format }),
+        },
+      );
+      if (!response.ok) {
+        let msg = `Render failed (${response.status}).`;
+        try {
+          const errData = await response.json();
+          if (errData && (errData.error || errData.message)) {
+            msg = errData.error || errData.message;
+          }
+        } catch (_e) { /* non-JSON error body — keep generic msg */ }
+        notify.error(msg);
+        return;
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      try {
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `${(t.name || "flyer").trim() || "flyer"}-${format}.${ext}`;
+        // The element doesn't need to be in the DOM for .click() to trigger
+        // the browser save dialog, but appending makes the spec test path
+        // observable + sidesteps some browser quirks.
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+    } catch (err) {
+      notify.error(err?.message || "Render failed");
+    }
   };
 
   // Duplicate consumes POST /api/travel/flyer-templates/:id/duplicate (slice
@@ -331,16 +424,27 @@ export default function FlyerTemplates() {
             style={inputStyle}
             aria-label="Template name"
           />
-          <select
-            value={form.subBrand}
-            onChange={(e) => setForm({ ...form, subBrand: e.target.value })}
-            style={inputStyle}
-            aria-label="Sub-brand"
-          >
-            {SUB_BRANDS_CREATE.map((s) => (
-              <option key={s.value} value={s.value}>{s.label}</option>
-            ))}
-          </select>
+          {lockedBrand ? (
+            <input
+              type="text"
+              value={subBrandShortLabel(form.subBrand || lockedBrand)}
+              readOnly
+              disabled
+              aria-label="Sub-brand (locked to your assigned brand)"
+              style={{ ...inputStyle, opacity: 0.7, cursor: "not-allowed" }}
+            />
+          ) : (
+            <select
+              value={form.subBrand}
+              onChange={(e) => setForm({ ...form, subBrand: e.target.value })}
+              style={inputStyle}
+              aria-label="Sub-brand"
+            >
+              {myBrands.map((b) => (
+                <option key={b} value={b}>{subBrandShortLabel(b)}</option>
+              ))}
+            </select>
+          )}
           <div style={{ display: "flex", gap: 8 }}>
             <button type="submit" disabled={saving} style={{ ...primaryBtn, background: "var(--success-color, var(--primary-color))" }}>
               {saving ? "Saving…" : editingId ? "Save Changes" : "Save"}
@@ -497,6 +601,7 @@ export default function FlyerTemplates() {
                   >
                     <Copy size={12} /> Use as starting point
                   </button>
+                  <DownloadDropdown template={t} onDownload={handleDownload} />
                   {canWrite && (
                     <>
                       <button
@@ -533,6 +638,154 @@ export default function FlyerTemplates() {
               </article>
             );
           })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// DownloadDropdown — slice S77 (Wave 17) per-card menu trigger.
+//
+// Why a sub-component (and not inline state on the parent):
+//   - Open/close + in-flight `loading` state is per-row. Hoisting either
+//     to the parent would force the parent to key by template id with
+//     two more useState dictionaries; the cost-of-a-component is lower.
+//   - Click-outside / Esc-to-close fire on `document` listeners; binding
+//     them inside the component scopes the listeners to mount/unmount
+//     so they self-clean on row removal.
+//
+// Accessibility surface:
+//   - Trigger is role=button (default for <button>) with aria-haspopup=menu
+//     and aria-expanded reflecting open/closed.
+//   - Open menu has role=menu; items have role=menuitem.
+//   - Arrow keys + Enter + Esc handled at the menu level via onKeyDown.
+//   - Click outside the menu closes it (mousedown listener on document).
+function DownloadDropdown({ template, onDownload }) {
+  const [open, setOpen] = useState(false);
+  const [loadingFormat, setLoadingFormat] = useState(null);
+  const wrapperRef = useRef(null);
+  const itemRefs = useRef([]);
+
+  // Click-outside + Esc-to-close. mousedown (not click) so the trigger's
+  // own click event doesn't race the listener and immediately re-close.
+  useEffect(() => {
+    if (!open) return;
+    const onDocMouseDown = (e) => {
+      if (wrapperRef.current && !wrapperRef.current.contains(e.target)) {
+        setOpen(false);
+      }
+    };
+    const onDocKey = (e) => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        setOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onDocMouseDown);
+    document.addEventListener("keydown", onDocKey);
+    return () => {
+      document.removeEventListener("mousedown", onDocMouseDown);
+      document.removeEventListener("keydown", onDocKey);
+    };
+  }, [open]);
+
+  const fire = async (format, ext) => {
+    if (loadingFormat) return; // Suppress concurrent clicks across items.
+    setLoadingFormat(format);
+    try {
+      await onDownload(template, format, ext);
+    } finally {
+      setLoadingFormat(null);
+      setOpen(false);
+    }
+  };
+
+  const onMenuKeyDown = (e, idx) => {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      const next = (idx + 1) % RENDER_FORMATS.length;
+      itemRefs.current[next]?.focus();
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      const prev = (idx - 1 + RENDER_FORMATS.length) % RENDER_FORMATS.length;
+      itemRefs.current[prev]?.focus();
+    } else if (e.key === "Home") {
+      e.preventDefault();
+      itemRefs.current[0]?.focus();
+    } else if (e.key === "End") {
+      e.preventDefault();
+      itemRefs.current[RENDER_FORMATS.length - 1]?.focus();
+    }
+  };
+
+  return (
+    <div ref={wrapperRef} style={{ position: "relative", display: "inline-block" }}>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        disabled={loadingFormat != null}
+        aria-haspopup="menu"
+        aria-expanded={open ? "true" : "false"}
+        aria-label={`Download ${template.name || "flyer"}`}
+        title={`Download ${template.name || "flyer"}`}
+        style={{
+          ...smallPrimaryBtn,
+          background: "var(--surface-color)",
+          color: "var(--text-primary)",
+          border: "1px solid var(--border-color)",
+          opacity: loadingFormat != null ? 0.7 : 1,
+        }}
+        data-testid={`flyer-download-trigger-${template.id}`}
+      >
+        <Download size={12} aria-hidden />
+        {loadingFormat ? "Rendering…" : "Download"}
+        <ChevronDown size={12} aria-hidden />
+      </button>
+      {open && (
+        <div
+          role="menu"
+          aria-label={`Download formats for ${template.name || "flyer"}`}
+          data-testid={`flyer-download-menu-${template.id}`}
+          style={{
+            position: "absolute",
+            top: "calc(100% + 4px)",
+            right: 0,
+            minWidth: 220,
+            background: "var(--surface-color, #1f2937)",
+            border: "1px solid var(--border-color)",
+            borderRadius: 6,
+            padding: 4,
+            zIndex: 20,
+            boxShadow: "0 8px 24px rgba(0,0,0,0.2)",
+            display: "flex",
+            flexDirection: "column",
+          }}
+        >
+          {RENDER_FORMATS.map(({ format, label, ext }, idx) => (
+            <button
+              key={format}
+              type="button"
+              role="menuitem"
+              ref={(el) => { itemRefs.current[idx] = el; }}
+              disabled={loadingFormat != null}
+              onClick={() => fire(format, ext)}
+              onKeyDown={(e) => onMenuKeyDown(e, idx)}
+              data-testid={`flyer-download-item-${template.id}-${format}`}
+              style={{
+                padding: "8px 10px",
+                background: "transparent",
+                color: "var(--text-primary)",
+                border: "none",
+                cursor: loadingFormat != null ? "wait" : "pointer",
+                fontSize: 13,
+                textAlign: "left",
+                borderRadius: 4,
+                opacity: loadingFormat != null && loadingFormat !== format ? 0.5 : 1,
+              }}
+            >
+              {loadingFormat === format ? `${label} — rendering…` : label}
+            </button>
+          ))}
         </div>
       )}
     </div>

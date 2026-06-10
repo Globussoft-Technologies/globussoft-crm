@@ -370,6 +370,98 @@ describe('GET /document/:type/:id — per-document detail', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────
+// GET /?fields=summary — slim-shape opt-in (slice 50 of arc-3 #920)
+// ─────────────────────────────────────────────────────────────────────────
+// Additive opt-in: legacy callers (no ?fields, or any non-"summary" value)
+// continue to receive the full row shape unchanged. ?fields=summary swaps in
+// a slim Prisma select that drops the heavy ipAddress + userAgent text columns
+// from the wire payload, useful for list dashboards that only show
+// open-status + duration + viewer-email and don't need forensic IP/UA metadata.
+//
+// Cases (5 total):
+//   1. no ?fields → no `select` key (full-row shape preserved — back-compat)
+//   2. ?fields=summary → exact-key slim `select` shape pinned
+//   3. ?fields=summary preserves tenant + documentType + documentId filters
+//   4. ?fields=other (any non-exact value) → treated as full-row (back-compat)
+//   5. ?fields=summary on empty result still returns [] (no crash on slim path)
+
+describe('GET /?fields=summary — slim-shape opt-in', () => {
+  test('no ?fields → findMany called WITHOUT a select key (full-row preserved)', async () => {
+    prisma.documentView.findMany.mockResolvedValue([
+      { id: 1, documentType: 'Quote', documentId: 7, ipAddress: '1.1.1.1', userAgent: 'ua' },
+    ]);
+
+    const res = await request(makeApp({ tenantId: 42 }))
+      .get('/api/document-views');
+
+    expect(res.status).toBe(200);
+    const arg = prisma.documentView.findMany.mock.calls[0][0];
+    expect(arg.select).toBeUndefined();
+    expect(arg).toEqual({
+      where: { tenantId: 42 },
+      orderBy: { createdAt: 'desc' },
+    });
+  });
+
+  test('?fields=summary → findMany called with exact slim-shape select keys', async () => {
+    prisma.documentView.findMany.mockResolvedValue([]);
+
+    const res = await request(makeApp({ tenantId: 42 }))
+      .get('/api/document-views?fields=summary');
+
+    expect(res.status).toBe(200);
+    const arg = prisma.documentView.findMany.mock.calls[0][0];
+    expect(arg.select).toEqual({
+      id: true,
+      documentType: true,
+      documentId: true,
+      trackingId: true,
+      viewerEmail: true,
+      viewedAt: true,
+      duration: true,
+      createdAt: true,
+    });
+    // Heavy forensic columns explicitly NOT in the slim shape.
+    expect(arg.select.ipAddress).toBeUndefined();
+    expect(arg.select.userAgent).toBeUndefined();
+  });
+
+  test('?fields=summary preserves tenant + documentType + documentId filter where-clause', async () => {
+    prisma.documentView.findMany.mockResolvedValue([]);
+
+    const res = await request(makeApp({ tenantId: 42 }))
+      .get('/api/document-views?fields=summary&documentType=Quote&documentId=7');
+
+    expect(res.status).toBe(200);
+    const arg = prisma.documentView.findMany.mock.calls[0][0];
+    expect(arg.where).toEqual({ tenantId: 42, documentType: 'Quote', documentId: 7 });
+    expect(arg.orderBy).toEqual({ createdAt: 'desc' });
+    expect(arg.select).toBeDefined();
+  });
+
+  test('?fields=other (any non-"summary" value) → treated as full-row (back-compat for typos)', async () => {
+    prisma.documentView.findMany.mockResolvedValue([]);
+
+    const res = await request(makeApp({ tenantId: 42 }))
+      .get('/api/document-views?fields=full');
+
+    expect(res.status).toBe(200);
+    const arg = prisma.documentView.findMany.mock.calls[0][0];
+    expect(arg.select).toBeUndefined();
+  });
+
+  test('?fields=summary on empty-result tenant still returns [] (no crash on slim path)', async () => {
+    prisma.documentView.findMany.mockResolvedValue([]);
+
+    const res = await request(makeApp({ tenantId: 99 }))
+      .get('/api/document-views?fields=summary');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([]);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
 // GET /stats — tenant-wide KPI summary
 // ─────────────────────────────────────────────────────────────────────────
 

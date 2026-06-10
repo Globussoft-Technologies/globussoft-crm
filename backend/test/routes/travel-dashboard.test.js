@@ -362,13 +362,14 @@ describe('GET /api/travel/dashboard — tenant + sub-brand scoping', () => {
     await request(makeApp())
       .get('/api/travel/dashboard')
       .set('Authorization', `Bearer ${tokenFor('MANAGER')}`);
-    // tmcTrip aggregates must narrow to the user's allowed sub-brands.
+    // tmcTrip is TMC-only and has NO subBrand column — it must NOT be
+    // sub-brand narrowed (doing so crashes Prisma with "Unknown argument
+    // `subBrand`"). A caller WITH "tmc" access sees all tenant trips.
     const tmcWhere = prisma.tmcTrip.count.mock.calls[0][0].where;
-    expect(tmcWhere).toMatchObject({
-      tenantId: 1,
-      subBrand: { in: ['tmc'] },
-    });
-    // Same narrow on itineraries.
+    expect(tmcWhere).not.toHaveProperty('subBrand');
+    expect(tmcWhere).toMatchObject({ tenantId: 1 });
+    expect(tmcWhere).not.toHaveProperty('id'); // canTmc → no unsatisfiable guard
+    // Sub-brand-bearing models (itinerary, costMaster) ARE still narrowed.
     const itinWhere = prisma.itinerary.count.mock.calls[0][0].where;
     expect(itinWhere).toMatchObject({
       tenantId: 1,
@@ -381,6 +382,22 @@ describe('GET /api/travel/dashboard — tenant + sub-brand scoping', () => {
       subBrand: { in: ['tmc'] },
       isActive: true,
     });
+  });
+
+  test('non-admin WITHOUT tmc access (subBrandAccess=["rfu"]) → tmcTrip not subBrand-narrowed, returns 200 (regression: Unknown argument `subBrand`)', async () => {
+    prisma.user.findUnique.mockResolvedValue({
+      role: 'MANAGER',
+      subBrandAccess: JSON.stringify(['rfu']),
+    });
+    const res = await request(makeApp())
+      .get('/api/travel/dashboard')
+      .set('Authorization', `Bearer ${tokenFor('MANAGER')}`);
+    expect(res.status).toBe(200);
+    // No subBrand key on the TMC-only model (would crash real Prisma).
+    const tmcWhere = prisma.tmcTrip.count.mock.calls[0][0].where;
+    expect(tmcWhere).not.toHaveProperty('subBrand');
+    // Caller can't see TMC → unsatisfiable guard zeroes the trip aggregates.
+    expect(tmcWhere).toMatchObject({ tenantId: 1, id: -1 });
   });
 
   test('microsite counts use tenantId ONLY (NOT sub-brand narrowed — sourced from parent trip)', async () => {

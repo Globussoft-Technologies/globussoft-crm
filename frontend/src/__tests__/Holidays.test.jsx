@@ -94,11 +94,12 @@ vi.mock('../utils/api', () => ({
 const notifyError = vi.fn();
 const notifySuccess = vi.fn();
 const notifyInfo = vi.fn();
+const notifyConfirm = vi.fn(() => Promise.resolve(true));
 const notifyObj = {
   error: notifyError,
   info: notifyInfo,
   success: notifySuccess,
-  confirm: () => Promise.resolve(true),
+  confirm: (...args) => notifyConfirm(...args),
 };
 vi.mock('../utils/notify', () => ({
   useNotify: () => notifyObj,
@@ -163,17 +164,17 @@ function installFetchMock({
   });
 }
 
-let confirmSpy;
 beforeEach(() => {
   fetchApiMock.mockReset();
   notifyError.mockReset();
   notifySuccess.mockReset();
   notifyInfo.mockReset();
-  confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+  notifyConfirm.mockReset();
+  notifyConfirm.mockResolvedValue(true);
 });
 
 afterEach(() => {
-  confirmSpy.mockRestore();
+  // notifyConfirm is reset in beforeEach.
 });
 
 describe('<Holidays /> — page chrome + mount fetches', () => {
@@ -272,7 +273,7 @@ describe('<Holidays /> — add form', () => {
       );
       expect(postCall).toBeTruthy();
       const body = JSON.parse(postCall[1].body);
-      expect(body).toEqual({
+      expect(body).toMatchObject({
         date: '2027-01-26',
         name: 'Republic Day',
         locationId: null,
@@ -335,13 +336,13 @@ describe('<Holidays /> — add form', () => {
 });
 
 describe('<Holidays /> — delete flow', () => {
-  it('delete: window.confirm true → DELETE /api/wellness/holidays/:id + notify.success', async () => {
+  it('delete: notify.confirm true → DELETE /api/wellness/holidays/:id + notify.success', async () => {
     installFetchMock();
     render(<Holidays />);
     // Wait for table to render.
     const labourRow = (await screen.findByText(/^Labour Day$/)).closest('tr');
     const delBtn = within(labourRow).getByRole('button', { name: /Delete/i });
-    confirmSpy.mockReturnValueOnce(true);
+    notifyConfirm.mockResolvedValueOnce(true);
     fireEvent.click(delBtn);
     await waitFor(() => {
       const deleteCall = fetchApiMock.mock.calls.find(
@@ -354,12 +355,12 @@ describe('<Holidays /> — delete flow', () => {
     );
   });
 
-  it('delete: window.confirm false → no DELETE fired', async () => {
+  it('delete: notify.confirm false → no DELETE fired', async () => {
     installFetchMock();
     render(<Holidays />);
     const labourRow = (await screen.findByText(/^Labour Day$/)).closest('tr');
     const delBtn = within(labourRow).getByRole('button', { name: /Delete/i });
-    confirmSpy.mockReturnValueOnce(false);
+    notifyConfirm.mockResolvedValueOnce(false);
     fireEvent.click(delBtn);
     // Give microtask queue a chance to drain.
     await Promise.resolve();

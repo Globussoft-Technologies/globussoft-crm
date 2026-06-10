@@ -1,14 +1,15 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { ChevronLeft, Phone, Calendar, ChevronRight } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { formatMoney } from '../../utils/money';
 import { formatDate } from '../../utils/date';
-
-const isoDay = (d) => d.toISOString().slice(0, 10);
+import { DateRangeFilter, resolveDateRangeYmd } from '../../components/wellness/DateRangeFilter';
 
 export default function Visits() {
-  const [from, setFrom] = useState(isoDay(new Date(Date.now() - 30 * 86400000)));
-  const [to, setTo] = useState(isoDay(new Date()));
+  // Visit reports require a window — opt out of the "All time" option in the
+  // dropdown and default to last30 (matches the prior 30-day default).
+  const [filter, setFilter] = useState({ preset: 'last30', start: '', end: '' });
+  const [from, to] = resolveDateRangeYmd(filter);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [skip, setSkip] = useState(0);
@@ -23,31 +24,44 @@ export default function Visits() {
   const [customDetailsLimit, setCustomDetailsLimit] = useState('');
   const [isCustomDetailsLimit, setIsCustomDetailsLimit] = useState(false);
 
-  const loadVisits = () => {
+  const loadVisits = useCallback(() => {
+    if (!from || !to) return; // 'custom' preset with no dates yet — skip fetch
     setLoading(true);
+    let cancelled = false;
     const url = `/api/wellness/reports/visit?startDate=${from}&endDate=${to}&skip=${skip}&limit=${limit}`;
     fetchApi(url)
-      .then(setData)
-      .catch(() => setData(null))
-      .finally(() => setLoading(false));
-  };
+      .then((res) => { if (!cancelled) setData(res); })
+      .catch(() => { if (!cancelled) setData(null); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [from, to, skip, limit]);
 
-  const loadPatientDetails = (patientId) => {
+  const loadPatientDetails = useCallback((patientId) => {
+    if (!from || !to) return;
     setDetailsLoading(true);
+    let cancelled = false;
     const url = `/api/wellness/reports/visit/${patientId}?startDate=${from}&endDate=${to}&skip=${detailsSkip}&limit=${detailsLimit}`;
     fetchApi(url)
-      .then(setPatientDetails)
-      .catch(() => setPatientDetails(null))
-      .finally(() => setDetailsLoading(false));
-  };
-
-  useEffect(loadVisits, [from, to, skip, limit]);
+      .then((res) => { if (!cancelled) setPatientDetails(res); })
+      .catch(() => { if (!cancelled) setPatientDetails(null); })
+      .finally(() => { if (!cancelled) setDetailsLoading(false); });
+    return () => { cancelled = true; };
+  }, [from, to, detailsSkip, detailsLimit]);
 
   useEffect(() => {
-    if (selectedPatient) {
-      loadPatientDetails(selectedPatient.id);
-    }
-  }, [selectedPatient, from, to, detailsSkip, detailsLimit]);
+    const cleanup = loadVisits();
+    return cleanup;
+  }, [loadVisits]);
+
+  useEffect(() => {
+    if (!selectedPatient) return;
+    const cleanup = loadPatientDetails(selectedPatient.id);
+    return cleanup;
+  }, [selectedPatient, loadPatientDetails]);
+
+  // Reset pagination whenever the date range changes so we don't show "page 4"
+  // of a window that may have far fewer pages now.
+  useEffect(() => { setSkip(0); }, [from, to]);
 
   const handlePatientClick = (patient) => {
     setSelectedPatient(patient);
@@ -66,10 +80,10 @@ export default function Visits() {
 
   if (selectedPatient && patientDetails) {
     return (
-      <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
+      <div style={{ padding: '2rem 2.25rem', animation: 'fadeIn 0.5s ease-out' }}>
         <button
           onClick={() => setSelectedPatient(null)}
-          style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.5rem 1rem', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 8, cursor: 'pointer', color: 'var(--text-primary)', fontSize: '0.85rem', marginBottom: '1.5rem' }}
+          style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.5rem 1rem', background: 'var(--subtle-bg-2)', border: '1px solid var(--border-color)', borderRadius: 8, cursor: 'pointer', color: 'var(--text-primary)', fontSize: '0.85rem', marginBottom: '1.5rem' }}
         >
           <ChevronLeft size={16} /> Back to Visits List
         </button>
@@ -98,7 +112,7 @@ export default function Visits() {
                 autoFocus
                 title="Enter a number between 1 and 50"
               />
-              <button onClick={() => { setIsCustomDetailsLimit(false); setCustomDetailsLimit(''); }} style={{ padding: '0.45rem 0.6rem', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 8, color: 'var(--text-primary)', fontSize: '0.85rem', cursor: 'pointer' }}>Back</button>
+              <button onClick={() => { setIsCustomDetailsLimit(false); setCustomDetailsLimit(''); }} style={paginationSelect}>Back</button>
             </>
           ) : (
             <select value={detailsLimit} onChange={(e) => {
@@ -129,7 +143,7 @@ export default function Visits() {
               <col style={{ width: '10%' }} />
             </colgroup>
             <thead>
-              <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+              <tr style={{ borderBottom: '1px solid var(--border-color)', background: 'var(--subtle-bg-3)' }}>
                 <th style={{ ...thStyle, textAlign: 'left' }}>Date</th>
                 <th style={{ ...thStyle, textAlign: 'left' }}>Doctor</th>
                 <th style={{ ...thStyle, textAlign: 'left' }}>Service</th>
@@ -139,8 +153,8 @@ export default function Visits() {
               </tr>
             </thead>
             <tbody>
-              {patientDetails.data.visits.map((visit) => (
-                <tr key={visit.id} style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+              {(patientDetails.data?.visits || []).map((visit) => (
+                <tr key={visit.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
                   <td style={{ ...tdStyle, textAlign: 'left' }}>
                     {formatDate(visit.visitDate)}
                   </td>
@@ -165,7 +179,7 @@ export default function Visits() {
                   </td>
                 </tr>
               ))}
-              {patientDetails.data.visits.length === 0 && (
+              {(patientDetails.data?.visits || []).length === 0 && (
                 <tr>
                   <td colSpan={6} style={{ ...tdStyle, textAlign: 'center', color: 'var(--text-secondary)' }}>
                     No visits in selected period.
@@ -177,11 +191,11 @@ export default function Visits() {
         </div>
 
         {patientDetails.count > detailsLimit && (
-          <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'center', marginTop: '1rem' }}>
+          <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'center', marginTop: '1.25rem' }}>
             <button
               disabled={detailsSkip === 0 || detailsLoading}
               onClick={() => handleDetailsPageChange('prev')}
-              style={{ padding: '0.5rem 1rem', background: detailsSkip === 0 ? 'rgba(255,255,255,0.03)' : 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 8, cursor: detailsSkip === 0 ? 'not-allowed' : 'pointer', color: 'var(--text-primary)', fontSize: '0.85rem' }}
+              style={paginationButton(detailsSkip === 0)}
             >
               Previous
             </button>
@@ -191,7 +205,7 @@ export default function Visits() {
             <button
               disabled={detailsSkip + detailsLimit >= patientDetails.count || detailsLoading}
               onClick={() => handleDetailsPageChange('next')}
-              style={{ padding: '0.5rem 1rem', background: detailsSkip + detailsLimit >= patientDetails.count ? 'rgba(255,255,255,0.03)' : 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 8, cursor: detailsSkip + detailsLimit >= patientDetails.count ? 'not-allowed' : 'pointer', color: 'var(--text-primary)', fontSize: '0.85rem' }}
+              style={paginationButton(detailsSkip + detailsLimit >= patientDetails.count)}
             >
               Next
             </button>
@@ -202,20 +216,18 @@ export default function Visits() {
   }
 
   return (
-    <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
-      <header style={{ marginBottom: '1.25rem' }}>
-        <h1 style={{ fontSize: '1.75rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+    <div style={{ padding: '2rem 2.25rem', animation: 'fadeIn 0.5s ease-out' }}>
+      <header style={{ marginBottom: '1.5rem' }}>
+        <h1 style={{ fontSize: '1.75rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.6rem', margin: 0 }}>
           <Calendar size={24} /> Visits
         </h1>
-        <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
+        <p style={{ color: 'var(--text-secondary)', marginTop: '0.35rem', marginBottom: 0, fontSize: '0.9rem' }}>
           Patient visits — filterable by date.
         </p>
       </header>
 
       <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', flexWrap: 'wrap', alignItems: 'center' }}>
-        <input type="date" value={from} onChange={(e) => { setFrom(e.target.value); setSkip(0); }} style={dateInput} />
-        <span style={{ color: 'var(--text-secondary)' }}>→</span>
-        <input type="date" value={to} onChange={(e) => { setTo(e.target.value); setSkip(0); }} style={dateInput} />
+        <DateRangeFilter value={filter} onChange={setFilter} label={null} includeAllOption={false} />
         <div style={{ flex: 1 }} />
         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
           <label style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>Per page:</label>
@@ -257,14 +269,14 @@ export default function Visits() {
 
       {!loading && data && (
         <>
-          <div className="glass" style={{ padding: '1rem', marginBottom: '1rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '0.75rem' }}>
-            <div style={{ padding: '0.75rem' }}>
-              <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Patients with Visits</div>
-              <div style={{ fontSize: '1.5rem', fontWeight: 600, marginTop: '0.25rem' }}>{data.count.toLocaleString('en-IN')}</div>
+          <div className="glass" style={{ padding: '1.25rem 1.5rem', marginBottom: '1.25rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))', gap: '1rem' }}>
+            <div style={{ padding: '0.25rem 0.5rem' }}>
+              <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600 }}>Patients with Visits</div>
+              <div style={{ fontSize: '1.6rem', fontWeight: 700, marginTop: '0.4rem' }}>{data.count.toLocaleString('en-IN')}</div>
             </div>
-            <div style={{ padding: '0.75rem' }}>
-              <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Revenue</div>
-              <div style={{ fontSize: '1.5rem', fontWeight: 600, marginTop: '0.25rem', color: 'var(--success-color)' }}>
+            <div style={{ padding: '0.25rem 0.5rem', borderLeft: '1px solid var(--border-color)' }}>
+              <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600 }}>Revenue</div>
+              <div style={{ fontSize: '1.6rem', fontWeight: 700, marginTop: '0.4rem', color: 'var(--success-color)' }}>
                 {formatMoney(data.totalRevenue || 0)}
               </div>
             </div>
@@ -280,7 +292,7 @@ export default function Visits() {
                 <col style={{ width: '20%' }} />
               </colgroup>
               <thead>
-                <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+                <tr style={{ borderBottom: '1px solid var(--border-color)', background: 'var(--subtle-bg-3)' }}>
                   <th style={{ ...thStyle, textAlign: 'left' }}>Patient Name</th>
                   <th style={{ ...thStyle, textAlign: 'left' }}>Phone</th>
                   <th style={{ ...thStyle, textAlign: 'right' }}>Total Visits</th>
@@ -289,15 +301,15 @@ export default function Visits() {
                 </tr>
               </thead>
               <tbody>
-                {data.data.map((patient) => (
+                {(data.data || []).map((patient) => (
                   <tr
                     key={patient.id}
                     onClick={() => handlePatientClick(patient)}
-                    style={{ borderBottom: '1px solid rgba(255,255,255,0.04)', cursor: 'pointer', transition: 'background 0.2s' }}
-                    onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.03)'}
+                    style={{ borderBottom: '1px solid var(--border-color)', cursor: 'pointer', transition: 'background 0.2s' }}
+                    onMouseEnter={(e) => e.currentTarget.style.background = 'var(--subtle-bg-2)'}
                     onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
                   >
-                    <td style={{ ...tdStyle, textAlign: 'left', color: 'var(--accent-color)', fontWeight: 500 }}>
+                    <td style={{ ...tdStyle, textAlign: 'left', color: 'var(--primary-color, var(--accent-color))', fontWeight: 600 }}>
                       {patient.name}
                     </td>
                     <td style={{ ...tdStyle, textAlign: 'left' }}>
@@ -332,11 +344,11 @@ export default function Visits() {
           </div>
 
           {data.count > limit && (
-            <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'center', marginTop: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'center', marginTop: '1.25rem', alignItems: 'center', flexWrap: 'wrap' }}>
               <button
                 disabled={skip === 0 || loading}
                 onClick={() => handlePageChange('prev')}
-                style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', padding: '0.5rem 1rem', background: skip === 0 ? 'rgba(255,255,255,0.03)' : 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 8, cursor: skip === 0 ? 'not-allowed' : 'pointer', color: 'var(--text-primary)', fontSize: '0.85rem' }}
+                style={paginationButton(skip === 0)}
               >
                 <ChevronLeft size={14} /> Previous
               </button>
@@ -346,7 +358,7 @@ export default function Visits() {
               <button
                 disabled={skip + limit >= data.count || loading}
                 onClick={() => handlePageChange('next')}
-                style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', padding: '0.5rem 1rem', background: skip + limit >= data.count ? 'rgba(255,255,255,0.03)' : 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 8, cursor: skip + limit >= data.count ? 'not-allowed' : 'pointer', color: 'var(--text-primary)', fontSize: '0.85rem' }}
+                style={paginationButton(skip + limit >= data.count)}
               >
                 Next <ChevronRight size={14} />
               </button>
@@ -361,11 +373,11 @@ export default function Visits() {
   );
 }
 
-const thStyle = { textAlign: 'left', padding: '0.65rem 1rem', fontSize: '0.7rem', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', overflow: 'hidden', textOverflow: 'ellipsis' };
-const tdStyle = { padding: '0.65rem 1rem', fontSize: '0.85rem', overflow: 'hidden', textOverflow: 'ellipsis' };
-const dateInput = { padding: '0.45rem 0.6rem', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 8, color: 'var(--text-primary)', fontSize: '0.85rem' };
-const paginationSelect = { padding: '0.45rem 0.6rem', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 8, color: 'var(--text-primary)', fontSize: '0.85rem', cursor: 'pointer' };
-const paginationInput = { padding: '0.45rem 0.6rem', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 8, color: 'var(--text-primary)', fontSize: '0.85rem', width: '80px' };
+const thStyle = { textAlign: 'left', padding: '0.75rem 1rem', fontSize: '0.7rem', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.06em', overflow: 'hidden', textOverflow: 'ellipsis' };
+const tdStyle = { padding: '0.75rem 1rem', fontSize: '0.88rem', overflow: 'hidden', textOverflow: 'ellipsis' };
+const paginationSelect = { padding: '0.45rem 0.6rem', background: 'var(--subtle-bg-2)', border: '1px solid var(--border-color)', borderRadius: 8, color: 'inherit', fontSize: '0.85rem', cursor: 'pointer' };
+const paginationInput = { padding: '0.45rem 0.6rem', background: 'var(--subtle-bg-2)', border: '1px solid var(--border-color)', borderRadius: 8, color: 'inherit', fontSize: '0.85rem', width: '80px' };
+const paginationButton = (disabled) => ({ display: 'flex', alignItems: 'center', gap: '0.25rem', padding: '0.5rem 1rem', background: disabled ? 'transparent' : 'var(--subtle-bg-2)', border: '1px solid var(--border-color)', borderRadius: 8, cursor: disabled ? 'not-allowed' : 'pointer', color: 'var(--text-primary)', fontSize: '0.85rem', opacity: disabled ? 0.55 : 1 });
 const statusBg = (status) => {
   switch (status) {
     case 'completed': return 'rgba(34,197,94,0.2)';

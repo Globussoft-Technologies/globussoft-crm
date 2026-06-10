@@ -1,5 +1,118 @@
 # CHANGELOG
 
+## v3.9.4 — 2026-06-08 — TMC arc follow-up sweep (T14-T36)
+
+Post-arc cleanup driven by the autonomous build cron v2 after `v3.9.3` shipped the main TMC Diagnostic Engine. Closes the 4 codeable follow-up items flagged mid-arc (T14-T17), 3 gap-discovery housekeeping slices (T25/T26/T27 scoping audit), and the 6-class `backend/test/routes/` red-stabilization sweep (T28-T33 + T36 recipe correction). Final verification (T34) re-ran the full `test/routes/` sweep and pinned that the 11 originally-CI-red files are now green. **All 12 follow-up slices landed in the same autonomous cron window as v3.9.3.**
+
+### Added — TMC arc follow-up slices (T14-T17)
+
+| Slice | File(s) | Commit | Notes |
+|---|---|---|---|
+| **T14** | `backend/routes/travel_diagnostics.js` + `backend/test/routes/travel-diagnostics-public-readiness-json.test.js` | `39c04851` | Public `GET /api/travel/diagnostics/public/readiness-report/:slug` JSON endpoint — feeds T10's `TmcReadinessReport.jsx` (page degraded to "Report being generated…" pre-T14 because route didn't exist). Reuses T8's pipeline (Job A prompt → llmRouter → T7 guardReportOutput). Security shape: tenantId / engineScoresJson / pricing fields excluded; `Cache-Control: public, max-age=300`. 13 vitest cases. |
+| **T15** | `backend/routes/travel_engine_weights.js` + `backend/server.js` + `backend/test/routes/travel-engine-weights.test.js` | `b8996e9c` | EngineWeights CRUD — `GET/PUT /api/travel/engine-weights`. ADMIN+MANAGER gate, auto-version-bump on weight change, true-idempotent re-PUT, 7 validation paths + 25 vitest cases. UI gracefully degraded to defaults pre-T15 (404). |
+| **T16** | `frontend/src/pages/travel/TmcCatalogueAdmin.jsx` + sibling test + App.jsx route | `6a034ebb` | Dedicated catalogue admin page at `/travel/tmc/catalogue` — Active/Archived tabs, full 14-field PRD §3.2 inline form, ADMIN/MANAGER/USER role gating, mobile-responsive `repeat(auto-fit, minmax(min(100%, 240px), 1fr))` per standing rule. 15 vitest cases. |
+| **T17** | `backend/lib/tmcReportGuard.js` + `backend/test/lib/tmcReportGuard.test.js` | `9a2f24c0` | Number-WORD check (Layer 2 spelled-out-numbers detection) — canonicaliser supports units/teens/tens/`hundred`/`thousand`/`million`, hyphens, UK `and` connector, case-folding. Floor 100 (mirrors `\d{3,}` floor). 17 new cases on top of T7's 49 = 66 total. |
+
+### Fixed — T8 vitest missing-mock fix (T24)
+
+- **T24** (`8a4fe00b`) — `test/routes/travel-diagnostics-readiness-report.test.js` had 2 timeouts on main HEAD because T8's `submit-tmc` added `prisma.contact.findMany` for the `priorSubmissionsLast24h` count but the test only mocked `findUnique` + `findFirst` + `create`. Added `findMany` mock + `beforeEach` reset. Pre-fix: 3 failures / 11.17s. Post-fix: 20/20 in 1.12s.
+
+### Internal — Housekeeping (T25, T26, T27, T36)
+
+- **T25** (`164305af`) — Deprecated T11's `CataloguePromotionPanel` sub-panel inside `DiagnosticBuilder.jsx` (lines 1078-1180 replaced with a one-line "Open TMC Catalogue Admin →" link). T16's dedicated page is now the canonical surface.
+- **T26** (`3ea648f7`) — Sidebar nav entry "TMC Catalogue" under Travel section so the admin page is discoverable without URL typing.
+- **T27** (`0283dca9`) — Scoping audit doc [`docs/gaps/backend-test-routes-red-audit.md`](docs/gaps/backend-test-routes-red-audit.md) for the 31 pre-existing `test/routes/` reds T24 surfaced. **Headline finding:** 20/31 are a local-only `npm install` lag (missing `@aws-sdk/client-s3` declared in `package.json` since `eba590b8` 2026-05-20 — CI's `npm ci` covers it). Real CI-red surface: 11 files in 5 sub-classes (B1 `userRole.findMany` × 7, B2 `tenant.findUnique` × 1, B3 `webhook.findMany` × 1, B4 `travelPaymentSchedule.findFirst/findMany` × 1, B5 mixed × 1).
+- **T36** (`2797ad06`) — Fixed Class B1 recipe in the audit doc to include the missing `prisma.user.findUnique` stub. T29 discovered that empty `userRole.findMany` triggers `requirePermission.js`'s `maybeSelfHealAdminPermissions` path which queries unmocked `prisma.user.findUnique` and falls through to demo MySQL → 5s timeout.
+
+### Test stabilization — `backend/test/routes/` red sweep (T28-T34)
+
+11 CI-red files green, 5 sub-classes resolved, +1 local-env doc note for fresh-clone devs:
+
+| Slice | Files | Commit | Failure class |
+|---|---|---|---|
+| **T28** | `README.md` | `621c5896` | Class A — local-env doc note for fresh clones to run `cd backend && npm install` after deps-add commits |
+| **T29** | `drugs.test.js` + 6 `pos-*.test.js` files | `cc7a6dfb` | Class B1 — `userRole.findMany` + `user.findUnique` (self-heal trap discovered) — 9 timeouts across 7 files → 120 tests in 941ms |
+| **T30** | `staff.test.js` | (in-tree) | Class B2 — `tenant.findUnique` — 2 timeouts → 24/24 in 886ms |
+| **T31** | `contacts.test.js` | `7d879ec1` | Class B3 — `webhook.findMany` (Part A) + dedup-409 triage (Part B: no action — passes with Part A mock) — 3 timeouts → 19/19 in 0.86s |
+| **T32** | `travel-invoice-issue.test.js` | `05e5f47b` | Class B4 — `travelPaymentSchedule.findFirst/findMany/create/createMany` — 6 timeouts → 12/12 in 75ms |
+| **T33** | `search.test.js` | `eec71695` | Class B5 — `tenant.findUnique` + `patient.findMany` (requirePermission NOT actually mounted here — B1 mocks not needed) — 4-5 failures → 8/8 in 48ms |
+| **T34** | (verification only) | _this entry_ | Re-ran `npx vitest run test/routes/` — confirmed 11/11 T28-T33-targeted files green, all sub-classes resolved |
+
+### T34 verification result
+
+Re-ran `cd backend && npx vitest run test/routes/` post-T28..T33+T36. Result (after local `npm install` to satisfy T28's Class A on this dev box; CI's `npm ci` covers this on every push):
+
+```
+Test Files  5 failed | 359 passed | 5 skipped (369)
+Tests       9 failed | 6492 passed | 75 skipped (6576)
+Duration    42.93s
+```
+
+**All 11 T28-T33-targeted files (drugs + 6 POS + staff + contacts + travel-invoice-issue + search) pass 100% green.** The 5 residual failing files are out-of-scope-for-T27:
+
+- `auth-cookie-set.test.js`, `auth-profile-picture.test.js`, `auth.test.js`, `consent-templates.test.js`, `wellness-patients-xlsx.test.js` — these were originally classified as **Class A only** (missing AWS-SDK) by the T27 audit. After `npm install` fixes Class A, a secondary Class-B-style layer of missing Prisma mocks surfaced (5s timeouts on real-Prisma fall-through to demo MySQL `163.227.174.141:3306`). Same pattern as T28-T33, different files. **Tracked as a follow-up sub-slice** (T37 — `audit-spec residual sweep`) — the audit doc at [`docs/gaps/backend-test-routes-red-audit.md`](docs/gaps/backend-test-routes-red-audit.md) classifies these 5 as Class A only and may need re-classification once T35's harness guard lands and re-exposes hidden Class B fall-through across the full `test/routes/` surface.
+
+T35 (test-harness guard against real-DB fall-through) remains ⬜ TODO — depends on this T34 verification ✅ and will catch this residual class structurally rather than per-file.
+
+### Out-of-scope (explicitly deferred — 6 rows 🔵 BLOCKED)
+
+Carry-over from `v3.9.3` PRD §10 — awaiting Yasin's input:
+
+- **T18** — Calendar API booking integration (full Google Meet slot-picker per DD-5.4)
+- **T19** — Yasin's tagger pass on 5 starter catalogue trips (`priceBands` + `curriculumHooks`)
+- **T20** — Q3 option→skill pairings
+- **T21** — Build-spec PDF §9.1 + §9.2 exact-quote text transcription
+- **T22** — 6 open PRD §9 questions (multi-board / Q9 / NEP table / link expiry / pilot threshold / price source)
+- **T23** — DD-5.4 / 5.5 / 5.6 Yasin ratification (booking / term calendar / suspect lead visibility)
+
+These ship on Yasin's product-call resolution.
+
+## v3.9.3 — 2026-06-08 — TMC Diagnostic & Sales-Routing Engine (Phase 1 — school B2B sub-brand)
+
+Ships the full TMC Diagnostic Engine arc per [docs/PRD_TMC_DIAGNOSTIC_SALES_ROUTING_ENGINE.md](docs/PRD_TMC_DIAGNOSTIC_SALES_ROUTING_ENGINE.md) — a 12-question public school-readiness diagnostic that drives a deterministic trip recommender + LLM-narrated readiness PDF + sales brief, with a 3-layer guardrail keeping the LLM output honest. Scope is Phase 1 (TMC sub-brand only — school educational trips inside the travel vertical); RFU/Travel Stall/Visa Sure intentionally not in scope. 13 commits across T1..T12 + one fix-up; arc landed in a single autonomous cron run with green gate throughout.
+
+### Test surface continued growth
+
+| Tier | Tool | v3.9.2 | v3.9.3 | Delta |
+|---|---|---|---|---|
+| Per-push API tests | Playwright | 281 specs | **282 specs** | +1 spec (`travel-tmc-diagnostic-api.spec.js`, 15 cases) |
+| Per-push unit tests | vitest backend | 535 files | **543 files** | +8 files / +~330 cases (engine + classifier + prompts + guard + schema + catalogue route + diagnostics route + pdfRenderer) |
+| Per-push unit tests | vitest frontend | 256 files | **258 files** | +2 files / +27 cases (`TmcReadiness.test.jsx` 13, `TmcReadinessReport.test.jsx` 14) |
+
+### Added — TMC Diagnostic Engine arc (T1..T12)
+
+| Slice | File(s) | Commit | Notes |
+|---|---|---|---|
+| **T1** | `prisma/schema.prisma` (+ schema vitest) | `e43788e1` | `TmcTripCatalogue` + `EngineWeights` models + 10 additive nullable columns on `TravelDiagnostic` (engineState, engineScoresJson, recommendedTripId, alternativeTripId, icpTier, leadQuality, leadQualityReasonsJson, flagsJson, weightsVersion, weightsUsedJson). 12 vitest cases. Purely additive — no bless markers. |
+| **T2** | `backend/lib/tmcDiagnosticEngine.js` | `4dc4ef78` | Pure deterministic scorer `(answers, catalogue, weights) → {state, primary, alternative, flags, icpTier, scores}`. PRD §3.3 hard filters + 6 weighted signals + two-key sort invariant + ICP tier classification. 39 vitest cases. NO LLM, NO DB. |
+| **T3** | `backend/lib/tmcLeadQuality.js` | `f787af93` | 5-rule suspect-lead classifier per PRD §3.4 (free-domain + senior role; profile-spend contradiction; junk strings; repeat-submitter; Indian-mobile format fail). 40 vitest cases. Extensible block-lists for TMC ops. |
+| **T4** | `backend/prisma/seed-travel.js` | `851a4f51` | 12-Q TMC question bank + 5 starter catalogue trips (Golden Triangle / Madhya Pradesh / Ladakh / Europe / USA STEM) + `EngineWeights` v1 row with PRD §3.3.3 defaults (50/20/15/10/10/8 + threshold 70). Idempotent upsert. |
+| **T5** | `backend/routes/travel_tmc_catalogue.js` | `759b734a` | CRUD + `POST /:id/promote-to-active` gate. Human-verify discipline: POST always lands `status="archived"` regardless of body. PATCH rejects status mutation; soft-delete via DELETE. 34 vitest cases. Mounted at `/api/travel-tmc-catalogue`. |
+| **T6** | `backend/services/tmcDiagnosticPrompts.js` | `b66d991c` | LLM prompt builders — Job A (6-field readiness narrative) + Job B (7-field sales brief + custom concept). Injects §3.5.5 standing facts (305/14018/12055/1658) literally so the LLM sees the numbers it must NOT write. Calm-institutional voice (§11.3) + IB-never-sees-NEP (AC-3) baked into prompt language. 50 vitest cases. NO DB, NO LLM call. |
+| **T7** | `backend/lib/tmcReportGuard.js` | `816ee8b2` | 3-layer guardrail: schema validation + destination/number/board-term/restricted-word strip checks + deterministic Layer-3 template fallback. Honest-at-305 number whitelist enforces §11.4. 49 vitest cases. Caller-extensible blocklists. |
+| **T8** | `backend/routes/travel_diagnostics.js` + `backend/services/pdfRenderer.js` | `fe9bba84` | `POST /api/travel/diagnostics/public/submit-tmc` (public; Q12 email is the only hard wall per NF-6) + `GET /:id/readiness-report.pdf` + new 10-section PDF template renderer. Pipeline: engine + lead-quality → persist T1 columns → Job A prompt → llmRouter (stub-or-real) → 3-layer guard → PDF. 20 vitest cases. |
+| **T9** | `frontend/src/pages/public/TmcReadiness.jsx` | `5a03ef43` | 12-Q one-screen-at-a-time wizard with progress bar, forward/back nav, per-screen persistence. Q12 email-gate. Posts to T8's public endpoint with PRD §3.1 field-key contract. Theme-variable colors per CLAUDE.md (no salmon CTAs under wellness embedders). 13 vitest cases. |
+| **T10** | `frontend/src/pages/public/TmcReadinessReport.jsx` | `08e5fc42` | Public 10-section report template render. Board hook by curriculum (CBSE → NEP/NCF; IGCSE → Cambridge Learner Attributes; IB → CAS + Learner Profile — AC-3 IB-never-sees-NEP asserted in tests). Runway display by geo. Peer-proof block carries 305/14,018/12,055/1,658 VERBATIM. 14 vitest cases. PDF download via T8 endpoint. |
+| **T11** | `DiagnosticBuilder.jsx` + `DiagnosticDetail.jsx` | `0200418e` | EngineWeights config tab (ADMIN, TMC-only, version auto-bumps on weight changes) + `human_pick` recorder (DD-5.7: engine output COLLAPSED until pick recorded — auto-reveals on PATCH success) + Promote-to-active panel. 17 new vitest cases. |
+| **T12** | `e2e/tests/travel-tmc-diagnostic-api.spec.js` + workflows | `22084f66` | 15 e2e cases across 7 describe blocks: catalogue → public submit → engine pin → ICP tier branches → suspect handling → PDF download → brief surface → email hard wall → human-verify gate → promote-to-active role gate → cross-tenant isolation. Wired into both `deploy.yml` api_tests and `coverage.yml` spec lists. Serial-mode describe + 120s timeout headroom under shard load. |
+
+### Fixed — TMC arc follow-ups
+
+- **T12 fix-up** (`ad40689e`) — `priorSubmissionsLast24h` scope on `submit-tmc` was tenant-wide which inflated the `repeat_submitter` lead-quality rule under shared-demo workload. Rescoped to per-(email/phone) so the rule fires only on the genuine duplicate-applicant signal. Also added the PDF endpoint's public-via-slug gate to `server.js` openPaths so the public report can pull its PDF without a JWT.
+- **Pre-arc** (`f694411c`) — `frontend/src/pages/wellness/services/PackageBuilder.jsx` cleared a copy-reset `setTimeout` on unmount. The unhandled-rejection-in-jsdom from this timer was reding the `frontend_unit_tests` gate intermittently; absorbed before the TMC arc kicked off so the arc could ship against a green baseline.
+
+### Out-of-scope (explicitly deferred)
+
+- Full Google Calendar API slot picker for booking — DD-5.4 MVD lands as a config-driven URL fallback (`VITE_TMC_BOOKING_URL`) with mailto fallback; Yasin re-ratification of the booking URL is the trigger to file the Calendar-API follow-up.
+- TMC catalogue tagger pass on `priceBands` + `curriculumHooks` for the 5 seeded trips — inline `TODO(spec §5.4)` markers in seed; pending Yasin's tagger pass per spec §5.2 item 1.
+- Backend `routes/travel_engine_weights.js` (GET + PUT) — UI gracefully degrades to PRD §3.3.3 defaults on 404; file follow-up GH issue to add the route + its vitest (~30 min).
+- LLM real-mode wiring beyond the stub `llmRouter` — guardrail's Layer-3 deterministic fallback ships the PDF green in stub mode (the path most exercised in dev/CI); real-mode swap is one-line on the llmRouter side.
+
+### Carry-over for v3.9.4
+
+- Sibling Phase 1.5 cleanup items from the [Unreleased — Autonomous overnight cron 2026-05-23 (34-tick session)](#unreleased--autonomous-overnight-cron-2026-05-23-34-tick-session) block below — that arc's deliverables are still pre-version-bump.
+- Catalogue tagger pass + EngineWeights route (TMC arc residuals listed above) when Yasin's product call confirms the open DD-5.4/5/6 GS-defaults.
+
 ## Unreleased — Autonomous overnight cron 2026-05-23 (34-tick session)
 
 A continuous 34-tick autonomous-cron session driven against all 3 phases of the user's 2026-05-23 directive: Phase 1.5 + Phase 2 + Phase 3 features + PRD writing for every blocked / multi-day backlog item. Material shipped to `main`; gate stayed green throughout.

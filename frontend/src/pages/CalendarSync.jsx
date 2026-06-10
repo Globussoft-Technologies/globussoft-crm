@@ -75,11 +75,18 @@ export default function CalendarSync() {
     endTime: '',
     attendees: '',
     location: '',
+    createMeet: false,
   });
   const [showEventDetail, setShowEventDetail] = useState(false);
   const [selectedEvent, setSelectedEvent] = useState(null);
   const [isEditingEvent, setIsEditingEvent] = useState(false);
   const [editFormData, setEditFormData] = useState({});
+  // T18 slot-picker (Google only): pick a day → fetch free/busy slots →
+  // click a slot to fill start/end. Purely additive; leaving it untouched
+  // keeps the manual datetime inputs as the source of truth.
+  const [slotPicker, setSlotPicker] = useState({ date: '', slots: [], loading: false, error: '' });
+  // Attendee picker — contacts/customers fetched lazily when the modal opens.
+  const [contactOptions, setContactOptions] = useState([]);
 
   // Detect ?connected=google|outlook in URL
   useEffect(() => {
@@ -171,6 +178,31 @@ export default function CalendarSync() {
     }
   };
 
+  // Lazily fetch contacts/customers the first time the Create-Event modal
+  // opens, to populate the attendee dropdown. Best-effort — failure just
+  // leaves the manual email input as the only path.
+  useEffect(() => {
+    if (!showCreateModal || contactOptions.length) return;
+    fetchApi('/api/contacts?limit=200')
+      .then((res) => {
+        const list = Array.isArray(res) ? res : (res?.data || res?.contacts || []);
+        setContactOptions(
+          list
+            .filter((c) => c && c.email)
+            .map((c) => ({ id: c.id, name: c.name || c.email, email: c.email }))
+        );
+      })
+      .catch(() => {});
+  }, [showCreateModal, contactOptions.length]);
+
+  // Append an email to the comma-separated attendees field, de-duplicating.
+  const addAttendeeEmail = (email) => {
+    if (!email) return;
+    const current = formData.attendees.split(',').map((s) => s.trim()).filter(Boolean);
+    if (current.includes(email)) return;
+    setFormData({ ...formData, attendees: [...current, email].join(', ') });
+  };
+
   const handleCreateEvent = async (e) => {
     e.preventDefault();
     if (!formData.title || !formData.startTime || !formData.endTime) {
@@ -187,19 +219,66 @@ export default function CalendarSync() {
         location: formData.location,
         attendees: formData.attendees ? formData.attendees.split(',').map(a => a.trim()) : [],
       };
+      // Online meeting link is opt-in for both providers — Google Meet for
+      // Google, Teams for Outlook. Both routes read the same createMeet flag.
+      if (formData.createMeet) {
+        payload.createMeet = true;
+      }
       await fetchApi(`/api/calendar/${createProvider}/events`, {
         method: 'POST',
         body: JSON.stringify(payload)
       });
       setToast(`Event created in ${createProvider === 'google' ? 'Google' : 'Outlook'}`);
       setShowCreateModal(false);
-      setFormData({ title: '', description: '', startTime: '', endTime: '', attendees: '', location: '' });
+      setFormData({ title: '', description: '', startTime: '', endTime: '', attendees: '', location: '', createMeet: false }); setSlotPicker({ date: '', slots: [], loading: false, error: '' });
       await loadAll();
     } catch (e) {
       setToast(`Failed to create event: ${e.message}`);
     } finally {
       setBusy((b) => ({ ...b, [createProvider]: false }));
     }
+  };
+
+  // T18: fetch free/busy slots for the chosen day from the Google Calendar
+  // slots endpoint. Each returned slot, when clicked, fills the start/end
+  // datetime-local inputs (converted to the browser's local wall-clock so the
+  // existing inputs render correctly). tzOffsetMins tells the backend which
+  // wall-clock the working hours refer to.
+  const handleFindSlots = async () => {
+    if (!slotPicker.date) {
+      setSlotPicker((s) => ({ ...s, error: 'Pick a date first' }));
+      return;
+    }
+    setSlotPicker((s) => ({ ...s, loading: true, error: '', slots: [] }));
+    try {
+      const tzOffsetMins = -new Date().getTimezoneOffset(); // e.g. +330 for IST
+      const qs = new URLSearchParams({
+        date: slotPicker.date,
+        durationMins: '30',
+        tzOffsetMins: String(tzOffsetMins),
+      }).toString();
+      const res = await fetchApi(`/api/calendar/${createProvider}/slots?${qs}`);
+      const slots = Array.isArray(res?.slots) ? res.slots : [];
+      setSlotPicker((s) => ({ ...s, loading: false, slots, error: slots.length ? '' : 'No free slots that day' }));
+    } catch (err) {
+      setSlotPicker((s) => ({ ...s, loading: false, error: err.message || 'Failed to load slots' }));
+    }
+  };
+
+  // Convert an ISO instant to the value a datetime-local input expects
+  // (local wall-clock, no timezone suffix, minute precision).
+  const isoToLocalInput = (iso) => {
+    const d = new Date(iso);
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  };
+
+  const handlePickSlot = (slot) => {
+    setFormData((f) => ({
+      ...f,
+      startTime: isoToLocalInput(slot.start),
+      endTime: isoToLocalInput(slot.end),
+    }));
   };
 
   const handleOpenEventDetail = (event) => {
@@ -1025,7 +1104,7 @@ export default function CalendarSync() {
               <button
                 onClick={() => {
                   setShowCreateModal(false);
-                  setFormData({ title: '', description: '', startTime: '', endTime: '', attendees: '', location: '' });
+                  setFormData({ title: '', description: '', startTime: '', endTime: '', attendees: '', location: '', createMeet: false }); setSlotPicker({ date: '', slots: [], loading: false, error: '' });
                 }}
                 style={{
                   background: 'none', border: 'none', fontSize: '1.5rem',
@@ -1172,6 +1251,22 @@ export default function CalendarSync() {
                 <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 700, marginBottom: '0.6rem', color: '#1f2937', letterSpacing: '0.3px' }}>
                   Attendees
                 </label>
+                {contactOptions.length > 0 && (
+                  <select
+                    value=""
+                    onChange={(e) => { addAttendeeEmail(e.target.value); e.target.value = ''; }}
+                    style={{
+                      width: '100%', padding: '0.7rem', fontSize: '0.9rem', marginBottom: '0.5rem',
+                      border: '1px solid #e5e7eb', borderRadius: '8px', background: '#fff', color: '#1f2937',
+                      boxSizing: 'border-box', cursor: 'pointer',
+                    }}
+                  >
+                    <option value="">+ Add from contacts…</option>
+                    {contactOptions.map((c) => (
+                      <option key={c.id} value={c.email}>{c.name} ({c.email})</option>
+                    ))}
+                  </select>
+                )}
                 <input
                   type="text"
                   placeholder="email@example.com, another@example.com"
@@ -1233,13 +1328,87 @@ export default function CalendarSync() {
                 />
               </div>
 
+              {/* Slot-picker + online meeting (Google Meet / Teams) — T18 */}
+              {(createProvider === 'google' || createProvider === 'outlook') && (
+                <div style={{ border: '1px dashed #d1d5db', borderRadius: '8px', padding: '1rem', background: '#f9fafb', display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+                  <div style={{ fontSize: '0.85rem', fontWeight: 700, color: '#1f2937', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                    <Video size={15} style={{ color: '#4285F4' }} /> Booking helper
+                  </div>
+
+                  {/* Find available slots */}
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, marginBottom: '0.4rem', color: '#374151' }}>
+                      Find available slots
+                    </label>
+                    <div style={{ display: 'flex', gap: '0.5rem' }}>
+                      <input
+                        type="date"
+                        value={slotPicker.date}
+                        onChange={(e) => setSlotPicker((s) => ({ ...s, date: e.target.value, error: '' }))}
+                        style={{ flex: 1, padding: '0.6rem', fontSize: '0.9rem', border: '1px solid #e5e7eb', borderRadius: '8px', background: '#fff', color: '#1f2937', boxSizing: 'border-box' }}
+                      />
+                      <button
+                        type="button"
+                        onClick={handleFindSlots}
+                        disabled={slotPicker.loading || !slotPicker.date}
+                        style={{
+                          padding: '0.6rem 1rem', borderRadius: '8px', border: '1px solid #4285F4',
+                          background: slotPicker.loading || !slotPicker.date ? '#e5e7eb' : 'rgba(66,133,244,0.1)',
+                          color: slotPicker.loading || !slotPicker.date ? '#9ca3af' : '#1a56c4',
+                          cursor: slotPicker.loading || !slotPicker.date ? 'not-allowed' : 'pointer',
+                          fontWeight: 600, fontSize: '0.85rem', whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {slotPicker.loading ? 'Finding…' : 'Find slots'}
+                      </button>
+                    </div>
+                    {slotPicker.error && (
+                      <div style={{ fontSize: '0.78rem', color: '#b45309', marginTop: '0.4rem' }}>{slotPicker.error}</div>
+                    )}
+                    {slotPicker.slots.length > 0 && (
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', marginTop: '0.6rem' }}>
+                        {slotPicker.slots.map((slot) => {
+                          const selected = formData.startTime === isoToLocalInput(slot.start);
+                          return (
+                            <button
+                              key={slot.start}
+                              type="button"
+                              onClick={() => handlePickSlot(slot)}
+                              style={{
+                                padding: '0.4rem 0.7rem', borderRadius: '999px', fontSize: '0.8rem', fontWeight: 600,
+                                border: selected ? '1px solid #4285F4' : '1px solid #e5e7eb',
+                                background: selected ? '#4285F4' : '#fff',
+                                color: selected ? '#fff' : '#374151', cursor: 'pointer',
+                              }}
+                            >
+                              {formatDateTime(slot.start)}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Add Google Meet link */}
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem', fontWeight: 600, color: '#374151', cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={formData.createMeet}
+                      onChange={(e) => setFormData({ ...formData, createMeet: e.target.checked })}
+                      style={{ width: '16px', height: '16px', cursor: 'pointer' }}
+                    />
+                    Add a {createProvider === 'google' ? 'Google Meet' : 'Teams'} meeting link to this event
+                  </label>
+                </div>
+              )}
+
               {/* Buttons */}
               <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1.5rem', justifyContent: 'flex-end' }}>
                 <button
                   type="button"
                   onClick={() => {
                     setShowCreateModal(false);
-                    setFormData({ title: '', description: '', startTime: '', endTime: '', attendees: '', location: '' });
+                    setFormData({ title: '', description: '', startTime: '', endTime: '', attendees: '', location: '', createMeet: false }); setSlotPicker({ date: '', slots: [], loading: false, error: '' });
                   }}
                   style={{
                     padding: '0.65rem 1.5rem', borderRadius: '8px',

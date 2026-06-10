@@ -126,7 +126,13 @@ describe('<Login /> — page surface', () => {
     setTokenMock.mockClear();
     setTenantMock.mockClear();
     originalFetch = global.fetch;
-    global.fetch = vi.fn();
+    // Default impl returns an empty-list response so the on-mount
+    // `fetch("/api/auth/public/tenants").then(...)` in Login.jsx:49 doesn't
+    // resolve `undefined.then` and throw a TypeError. Tests that exercise
+    // a specific endpoint override this with mockImplementation.
+    global.fetch = vi.fn(() => Promise.resolve({
+      ok: true, status: 200, json: () => Promise.resolve([]),
+    }));
     // Snapshot + replace window.location with a writable stub so the
     // SSO buttons' window.location.href = '...' assignment is
     // observable + reversible.
@@ -174,11 +180,10 @@ describe('<Login /> — page surface', () => {
     expect(screen.getByText(/RFU Advisor/i)).toBeInTheDocument();
   });
 
-  it('renders SSO buttons for Google and Microsoft', () => {
-    renderLogin();
-    expect(screen.getByRole('button', { name: /Sign in with Google/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Sign in with Microsoft/i })).toBeInTheDocument();
-  });
+  // SSO buttons are gated behind `SHOW_SSO = false` in Login.jsx:9 — feature
+  // is hidden until tenant-level SSO config + provider credentials land. Flip
+  // the SHOW_SSO const + un-skip these three tests together when re-enabling.
+  it.skip('renders SSO buttons for Google and Microsoft — gated behind SHOW_SSO', () => {});
 
   it('successful login POSTs /api/auth/login and navigates to /dashboard for generic tenant', async () => {
     global.fetch.mockImplementation((url) => {
@@ -202,7 +207,10 @@ describe('<Login /> — page surface', () => {
     expect(setUserMock).toHaveBeenCalledWith(
       expect.objectContaining({ email: 'admin@globussoft.com', role: 'ADMIN' })
     );
-    expect(setTokenMock).toHaveBeenCalledWith('jwt-abc');
+    // `setToken` carries a second arg (`{ remember }`) since the
+    // "keep me signed in" feature landed. Match the token + tolerate
+    // the options bag with any shape.
+    expect(setTokenMock).toHaveBeenCalledWith('jwt-abc', expect.anything());
     expect(setTenantMock).toHaveBeenCalledWith(
       expect.objectContaining({ vertical: 'generic' })
     );
@@ -349,7 +357,9 @@ describe('<Login /> — page surface', () => {
     await waitFor(() => {
       expect(navigateMock).toHaveBeenCalledWith('/dashboard');
     });
-    expect(setTokenMock).toHaveBeenCalledWith('jwt-2fa');
+    // Same shape note as the generic-tenant test above — second `remember`
+    // arg added with the "keep me signed in" feature.
+    expect(setTokenMock).toHaveBeenCalledWith('jwt-2fa', expect.anything());
     const verifyCall = global.fetch.mock.calls.find(([u]) => u === '/api/auth/2fa/verify');
     expect(verifyCall).toBeTruthy();
     expect(JSON.parse(verifyCall[1].body)).toEqual({
@@ -393,17 +403,10 @@ describe('<Login /> — page surface', () => {
     });
   });
 
-  it('SSO Google button redirects window.location to /api/sso/google/start', () => {
-    renderLogin();
-    fireEvent.click(screen.getByRole('button', { name: /Sign in with Google/i }));
-    expect(window.location.href).toBe('/api/sso/google/start');
-  });
+  // See SHOW_SSO note above.
+  it.skip('SSO Google button redirects window.location to /api/sso/google/start — gated behind SHOW_SSO', () => {});
 
-  it('SSO Microsoft button redirects window.location to /api/sso/microsoft/start', () => {
-    renderLogin();
-    fireEvent.click(screen.getByRole('button', { name: /Sign in with Microsoft/i }));
-    expect(window.location.href).toBe('/api/sso/microsoft/start');
-  });
+  it.skip('SSO Microsoft button redirects window.location to /api/sso/microsoft/start — gated behind SHOW_SSO', () => {});
 
   it('Forgot Password toggle opens the reset-token form; empty submit surfaces the inline validation', async () => {
     renderLogin();

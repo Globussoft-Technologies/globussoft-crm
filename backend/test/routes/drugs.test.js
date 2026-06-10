@@ -79,6 +79,20 @@ prisma.auditLog.findFirst = vi.fn().mockResolvedValue(null);
 prisma.tenant = prisma.tenant || {};
 prisma.tenant.findUnique = vi.fn().mockResolvedValue({ vertical: 'wellness' });
 
+// requirePermission middleware (backend/middleware/requirePermission.js:178)
+// resolves the caller's effective roles via userRole.findMany. When the
+// route declares `anyOfPermissions` (drugs writeGate does), the deny path
+// for a non-allowed wellnessRole calls getUserPermissions → loadUserPermissions
+// → our empty-array mock → permSet.size === 0 → maybeSelfHealAdminPermissions
+// which queries prisma.user.findUnique. We stub both: userRole.findMany to []
+// (no role grants) AND user.findUnique to null (self-heal exits at the
+// "user not found" early return), so the middleware lands on the
+// 403 WELLNESS_ROLE_FORBIDDEN path the test asserts.
+prisma.userRole = prisma.userRole || {};
+prisma.userRole.findMany = vi.fn();
+prisma.user = prisma.user || {};
+prisma.user.findUnique = vi.fn().mockResolvedValue(null);
+
 // eventBus stubs — writeAudit triggers a best-effort emit downstream.
 const eventBus = requireCJS('../../lib/eventBus');
 if (eventBus.emitEvent) eventBus.emitEvent = vi.fn().mockResolvedValue(undefined);
@@ -118,6 +132,7 @@ beforeEach(() => {
   prisma.drug.update.mockReset();
   prisma.drug.delete.mockReset();
   prisma.auditLog.create.mockClear();
+  prisma.userRole.findMany.mockReset().mockResolvedValue([]);
 
   // Sensible defaults — individual tests override.
   prisma.drug.findMany.mockResolvedValue([]);
@@ -194,6 +209,101 @@ describe('GET / — list drugs', () => {
     ).get('/api/wellness/drugs');
 
     expect(res.status).toBe(200);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// GET /?fields=summary — slim-shape opt-in (#920 slice 49)
+// ─────────────────────────────────────────────────────────────────────────
+//
+// Mirrors slices 1-48: the typeahead callers (prescription writer) only need
+// the lookup-shape columns (id, name, genericName, dosageForm, strength). The
+// heavy free-text `notes` column (@db.Text — admin-only contraindications /
+// scheduling info) plus timestamps + tenantId chrome are server-side noise
+// for the typeahead. `?fields=summary` opts into a Prisma `select` that drops
+// them; the default (unspecified fields) keeps the full row for the admin
+// catalogue list page.
+
+describe('GET /?fields=summary — slim-shape opt-in', () => {
+  test('passes a slim `select` projection to findMany when fields=summary', async () => {
+    prisma.drug.findMany.mockResolvedValue([]);
+
+    const res = await request(makeApp({ tenantId: 1 })).get(
+      '/api/wellness/drugs?fields=summary',
+    );
+
+    expect(res.status).toBe(200);
+    const callArg = prisma.drug.findMany.mock.calls[0][0];
+    expect(callArg.select).toEqual({
+      id: true,
+      name: true,
+      genericName: true,
+      dosageForm: true,
+      strengthValue: true,
+      strengthUnit: true,
+      isActive: true,
+    });
+  });
+
+  test('slim select OMITS the heavy `notes` column (@db.Text)', async () => {
+    prisma.drug.findMany.mockResolvedValue([]);
+
+    await request(makeApp({ tenantId: 1 })).get(
+      '/api/wellness/drugs?fields=summary',
+    );
+
+    const callArg = prisma.drug.findMany.mock.calls[0][0];
+    expect(callArg.select.notes).toBeUndefined();
+    // timestamps + tenantId chrome also dropped from the slim shape
+    expect(callArg.select.createdAt).toBeUndefined();
+    expect(callArg.select.updatedAt).toBeUndefined();
+    expect(callArg.select.tenantId).toBeUndefined();
+    // default dosage hint columns are also omitted (typeahead doesn't render them)
+    expect(callArg.select.defaultDosage).toBeUndefined();
+    expect(callArg.select.defaultFrequency).toBeUndefined();
+    expect(callArg.select.defaultDuration).toBeUndefined();
+  });
+
+  test('default (no ?fields) returns the full row — no `select` clause sent', async () => {
+    prisma.drug.findMany.mockResolvedValue([]);
+
+    await request(makeApp({ tenantId: 1 })).get('/api/wellness/drugs');
+
+    const callArg = prisma.drug.findMany.mock.calls[0][0];
+    expect(callArg.select).toBeUndefined();
+  });
+
+  test('unknown ?fields value (anything not "summary") falls back to full shape', async () => {
+    prisma.drug.findMany.mockResolvedValue([]);
+
+    await request(makeApp({ tenantId: 1 })).get(
+      '/api/wellness/drugs?fields=bogus',
+    );
+
+    const callArg = prisma.drug.findMany.mock.calls[0][0];
+    expect(callArg.select).toBeUndefined();
+  });
+
+  test('slim mode composes with ?q= + ?isActive= + ?limit= filters', async () => {
+    prisma.drug.findMany.mockResolvedValue([]);
+
+    const res = await request(makeApp({ tenantId: 42 })).get(
+      '/api/wellness/drugs?fields=summary&q=para&isActive=true&limit=10',
+    );
+
+    expect(res.status).toBe(200);
+    const callArg = prisma.drug.findMany.mock.calls[0][0];
+    // composes correctly with the other query-string features
+    expect(callArg.where.tenantId).toBe(42);
+    expect(callArg.where.isActive).toBe(true);
+    expect(callArg.where.OR).toEqual([
+      { name: { contains: 'para' } },
+      { genericName: { contains: 'para' } },
+    ]);
+    expect(callArg.take).toBe(10);
+    // and the slim select still applies
+    expect(callArg.select).toBeDefined();
+    expect(callArg.select.id).toBe(true);
   });
 });
 

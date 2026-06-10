@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { FileText, Plus, Trash2, CheckCircle2, XCircle, DollarSign } from 'lucide-react';
+import { FileText, Plus, Trash2, CheckCircle2, XCircle, IndianRupee } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { formatMoney, currencySymbol } from '../utils/money';
@@ -148,7 +148,7 @@ export default function Contracts() {
           background: 'var(--subtle-bg-4)', color: 'var(--text-secondary)', border: '1px solid var(--border-color)',
           display: 'flex', alignItems: 'center', gap: '0.3rem',
         }}>
-          <DollarSign size={14} /> {formatMoney(activeValue, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} active value
+          <IndianRupee size={14} /> {formatMoney(activeValue, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} active value
         </span>
       </div>
 
@@ -282,7 +282,7 @@ export default function Contracts() {
                         {c.deal?.title || '—'}
                       </td>
                       <td style={{ padding: '0.85rem 0.5rem', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '0.15rem' }}>
-                        <DollarSign size={14} color="var(--success-color)" />
+                        <IndianRupee size={14} color="var(--success-color)" />
                         {formatMoney(c.value || 0, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                       </td>
                       <td style={{ padding: '0.85rem 0.5rem' }}>

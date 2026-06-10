@@ -1,0 +1,38 @@
+name: Debug staging (one-shot)
+on:
+  workflow_dispatch:
+jobs:
+  debug:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy main to crm-staging
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          password: ${{ secrets.SSH_PASSWORD }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          command_timeout: 10m
+          script: |
+            export PATH="$HOME/.nvm/versions/node/v24.14.0/bin:$PATH"
+            ENV=~/globussoft-crm-staging/backend/.env
+
+            add_if_missing() {
+              local key="$1" val="$2"
+              if grep -q "^${key}=" "$ENV" 2>/dev/null; then
+                echo "already set: $(grep "^${key}=" "$ENV")"
+              else
+                echo "${key}=${val}" >> "$ENV"
+                echo "added: ${key}=${val}"
+              fi
+            }
+
+            add_if_missing PUBLIC_BASE_URL "https://crm-staging.globusdemos.com"
+            add_if_missing BASE_URL        "https://crm-staging.globusdemos.com"
+            add_if_missing SENDGRID_FROM_EMAIL "noreply@crm-staging.globusdemos.com"
+
+            echo "=== current values ==="
+            grep -E "^PUBLIC_BASE_URL=|^BASE_URL=|^SENDGRID_FROM_EMAIL=" "$ENV"
+
+            pm2 restart 34 --update-env 2>&1 | tail -3
+            echo "done"

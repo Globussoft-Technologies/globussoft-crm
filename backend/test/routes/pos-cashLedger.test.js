@@ -37,11 +37,16 @@ import prisma from '../../lib/prisma.js';
 
 prisma.shift = {
   findFirst: vi.fn(),
+  update: vi.fn(),
 };
 prisma.pettyCashLedger = {
   create: vi.fn(),
   findMany: vi.fn(),
+  aggregate: vi.fn(),
 };
+// Close-shift drawer math reads cash sales + ledger deposit/withdrawal totals.
+prisma.sale = prisma.sale || {};
+prisma.sale.aggregate = vi.fn();
 prisma.tenant = prisma.tenant || {};
 prisma.tenant.findUnique = vi.fn().mockResolvedValue({ vertical: 'wellness' });
 
@@ -56,6 +61,20 @@ prisma.auditLog.findFirst = vi.fn().mockResolvedValue(null);
 // empty array so the dispatcher exits cleanly.
 prisma.automationRule = prisma.automationRule || {};
 prisma.automationRule.findMany = vi.fn().mockResolvedValue([]);
+
+// requirePermission middleware (backend/middleware/requirePermission.js:178)
+// resolves the caller's effective roles via userRole.findMany. When the
+// route declares `anyOfPermissions` (POS adminGate does), the deny path
+// for a non-allowed wellnessRole calls getUserPermissions → loadUserPermissions
+// → our empty-array mock → permSet.size === 0 → maybeSelfHealAdminPermissions
+// which queries prisma.user.findUnique. We stub both: userRole.findMany to []
+// (no role grants) AND user.findUnique to null (self-heal exits at the
+// "user not found" early return), so the middleware lands on the
+// 403 WELLNESS_ROLE_FORBIDDEN path the test asserts.
+prisma.userRole = prisma.userRole || {};
+prisma.userRole.findMany = vi.fn();
+prisma.user = prisma.user || {};
+prisma.user.findUnique = vi.fn().mockResolvedValue(null);
 
 import express from 'express';
 import request from 'supertest';
@@ -81,12 +100,16 @@ function makeApp({
 
 beforeEach(() => {
   prisma.shift.findFirst.mockReset();
+  prisma.shift.update.mockReset();
   prisma.pettyCashLedger.create.mockReset();
   prisma.pettyCashLedger.findMany.mockReset();
+  prisma.pettyCashLedger.aggregate.mockReset();
+  prisma.sale.aggregate.mockReset();
   prisma.auditLog.create.mockReset();
   prisma.auditLog.create.mockResolvedValue({});
   prisma.tenant.findUnique.mockReset();
   prisma.tenant.findUnique.mockResolvedValue({ vertical: 'wellness' });
+  prisma.userRole.findMany.mockReset().mockResolvedValue([]);
 });
 
 // ── POST /shifts/:id/deposit ────────────────────────────────────────
@@ -332,6 +355,68 @@ describe('POST /shifts/:id/withdraw', () => {
   });
 });
 
+// ── Expense category on WITHDRAWAL (Subscription tagging) ─────────────
+
+describe('POST /shifts/:id/withdraw — category', () => {
+  function openShift() {
+    prisma.shift.findFirst.mockResolvedValue({
+      id: 42, tenantId: 1, status: 'OPEN', userId: 7,
+    });
+    prisma.pettyCashLedger.create.mockImplementation(async ({ data }) => ({ id: 200, ...data }));
+  }
+
+  test('SUBSCRIPTION category is persisted on the ledger row', async () => {
+    openShift();
+    const res = await request(makeApp())
+      .post('/api/pos/shifts/42/withdraw')
+      .send({ amount: 499, reason: 'Pro plan', category: 'SUBSCRIPTION' });
+    expect(res.status).toBe(201);
+    expect(res.body.category).toBe('SUBSCRIPTION');
+    expect(prisma.pettyCashLedger.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ type: 'WITHDRAWAL', category: 'SUBSCRIPTION' }),
+      }),
+    );
+  });
+
+  test('lowercase category is normalised to upper-case', async () => {
+    openShift();
+    const res = await request(makeApp())
+      .post('/api/pos/shifts/42/withdraw')
+      .send({ amount: 10, reason: 'x', category: 'subscription' });
+    expect(res.status).toBe(201);
+    expect(res.body.category).toBe('SUBSCRIPTION');
+  });
+
+  test('omitted category defaults to GENERAL', async () => {
+    openShift();
+    const res = await request(makeApp())
+      .post('/api/pos/shifts/42/withdraw')
+      .send({ amount: 10, reason: 'x' });
+    expect(res.status).toBe(201);
+    expect(res.body.category).toBe('GENERAL');
+  });
+
+  test('unknown category is rejected with 400 INVALID_CATEGORY', async () => {
+    openShift();
+    const res = await request(makeApp())
+      .post('/api/pos/shifts/42/withdraw')
+      .send({ amount: 10, reason: 'x', category: 'BOGUS' });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_CATEGORY');
+    expect(prisma.pettyCashLedger.create).not.toHaveBeenCalled();
+  });
+
+  test('DEPOSIT ignores category and stays GENERAL', async () => {
+    openShift();
+    const res = await request(makeApp())
+      .post('/api/pos/shifts/42/deposit')
+      .send({ amount: 10, reason: 'x', category: 'SUBSCRIPTION' });
+    expect(res.status).toBe(201);
+    expect(res.body.category).toBe('GENERAL');
+  });
+});
+
 // ── GET /shifts/:id/petty-cash ───────────────────────────────────────
 
 describe('GET /shifts/:id/petty-cash', () => {
@@ -367,5 +452,80 @@ describe('GET /shifts/:id/petty-cash', () => {
     })).get('/api/pos/shifts/42/petty-cash');
     expect(res.status).toBe(403);
     expect(res.body.code).toBe('SHIFT_NOT_OWNER');
+  });
+});
+
+// ── POST /shifts/:id/close — auto-compute closing total ──────────────
+//
+// closingTotal is OPTIONAL: when omitted/blank the system closes the drawer at
+// the computed expectedCash (variance 0); when a counted total IS supplied the
+// signed variance is recorded. expectedCash = openingFloat + CASH-sale
+// paidAmount + DEPOSITs − WITHDRAWALs.
+
+describe('POST /shifts/:id/close — auto-calculated closing', () => {
+  function openDrawer({ openingFloat = 500, cash = 0, deposits = 0, withdrawals = 0 } = {}) {
+    prisma.shift.findFirst.mockResolvedValue({
+      id: 42, tenantId: 1, status: 'OPEN', userId: 7, registerId: 3, openingFloat,
+    });
+    prisma.sale.aggregate.mockResolvedValue({ _sum: { paidAmount: cash } });
+    prisma.pettyCashLedger.aggregate
+      .mockResolvedValueOnce({ _sum: { amount: deposits } }) // DEPOSIT query first
+      .mockResolvedValueOnce({ _sum: { amount: withdrawals } }); // then WITHDRAWAL
+    prisma.shift.update.mockImplementation(async ({ data }) => ({ id: 42, ...data }));
+  }
+
+  test('omitting closingTotal auto-closes at expectedCash with variance 0', async () => {
+    openDrawer({ openingFloat: 500, cash: 1500, deposits: 200, withdrawals: 300 });
+    // expectedCash = 500 + 1500 + 200 − 300 = 1900
+
+    const res = await request(makeApp())
+      .post('/api/pos/shifts/42/close')
+      .send({ notes: 'auto' }); // no closingTotal
+
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('CLOSED');
+    expect(res.body.expectedCash).toBe(1900);
+    expect(res.body.closingTotal).toBe(1900); // defaulted to expected
+    expect(res.body.variance).toBe(0);
+  });
+
+  test('blank-string closingTotal also auto-closes at expectedCash', async () => {
+    openDrawer({ openingFloat: 1000 });
+    const res = await request(makeApp())
+      .post('/api/pos/shifts/42/close')
+      .send({ closingTotal: '' });
+    expect(res.status).toBe(200);
+    expect(res.body.closingTotal).toBe(1000);
+    expect(res.body.variance).toBe(0);
+  });
+
+  test('a supplied counted total records the signed variance', async () => {
+    openDrawer({ openingFloat: 500, cash: 1500 }); // expected = 2000
+    const res = await request(makeApp())
+      .post('/api/pos/shifts/42/close')
+      .send({ closingTotal: 1850 }); // counted 150 short
+    expect(res.status).toBe(200);
+    expect(res.body.expectedCash).toBe(2000);
+    expect(res.body.closingTotal).toBe(1850);
+    expect(res.body.variance).toBe(-150);
+  });
+
+  test('a negative counted total is still rejected (400)', async () => {
+    openDrawer();
+    const res = await request(makeApp())
+      .post('/api/pos/shifts/42/close')
+      .send({ closingTotal: -5 });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_CLOSING_TOTAL');
+    expect(prisma.shift.update).not.toHaveBeenCalled();
+  });
+
+  test('closing an already-closed shift returns 409 SHIFT_NOT_OPEN', async () => {
+    prisma.shift.findFirst.mockResolvedValue({ id: 42, tenantId: 1, status: 'CLOSED', userId: 7 });
+    const res = await request(makeApp())
+      .post('/api/pos/shifts/42/close')
+      .send({});
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('SHIFT_NOT_OPEN');
   });
 });

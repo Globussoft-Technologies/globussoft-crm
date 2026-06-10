@@ -404,24 +404,58 @@ The feature is "done" when **all 6 of the following are demonstrable**:
 
 ## 10. Status snapshot
 
+> **Note:** This PRD is **superseded by
+> [PRD_TMC_DIAGNOSTIC_SALES_ROUTING_ENGINE.md §3.5.1](PRD_TMC_DIAGNOSTIC_SALES_ROUTING_ENGINE.md)
+> (board policy hooks)** as the canonical owner of the diagnostic-engine
+> integration story. The schema + admin UI shipped under the names
+> `TravelCurriculumMapping` (Prisma model) and `CurriculumAdmin.jsx`
+> (admin page) rather than the names this PRD originally spec'd
+> (`CurriculumMapping` / `CurriculumMapping.jsx`) — the rename is fine,
+> just noted here for cross-reference. This PRD now tracks only the
+> residual CSV / coverage / engine-integration / PDF gaps; the rest moved
+> to the routing engine PRD.
+
+_Last refreshed 2026-06-09 against shipped code._
+
 - **Diagnostic engine + scoring + classification + PDF infra:** ✅ SHIPPED
   (`backend/routes/travel_diagnostics.js`, `backend/lib/travelDiagnosticScoring.js`,
   `backend/services/pdfRenderer.js → renderTravelDiagnosticPdf`).
-- **`TravelDiagnostic` schema with `curriculumFitJson` cache column:**
-  🔴 needs +1 nullable column (additive, no bless marker).
-- **`CurriculumMapping` model:** 🔴 NOT-STARTED.
-- **Admin upload UI (`frontend/src/pages/travel/CurriculumMapping.jsx`):**
-  🔴 NOT-STARTED.
-- **Engine extension (`backend/routes/travel_diagnostics.js`):**
-  🔴 NOT-STARTED (~½ day post-schema).
-- **CSV import / export endpoints:** 🔴 NOT-STARTED (~½ day post-schema).
-- **Coverage-report endpoint:** 🔴 NOT-STARTED (~¼ day).
-- **PDF extension (`renderTravelDiagnosticPdf` new section):** 🔴 NOT-STARTED (~¼ day).
-- **Gate spec `e2e/tests/curriculum-mapping-api.spec.js`:** 🔴 NOT-STARTED (~½ day).
-- **Mapping data (the actual rows):** ⏸️ BLOCKED on Yasin's academic team (PC-1).
-- **Engineering time post-data:** **~2 days** end-to-end (model + admin
-  UI + engine extension + PDF extension + coverage report + tests + CI
-  wire-in).
+- **`TravelCurriculumMapping` Prisma model:** ✅ SHIPPED at
+  [prisma/schema.prisma:6172](../backend/prisma/schema.prisma#L6172) (renamed
+  from the original `CurriculumMapping` spec — rename is purely cosmetic).
+- **Routes (`backend/routes/travel_curriculum.js`):** ✅ SHIPPED — full CRUD
+  + `/stats` + `/by-month` + `/by-quarter` endpoints live, covered by 4
+  vitest files (`travel_curriculum.test.js`,
+  `travel-curriculum-stats.test.js`, `travel-curriculum-by-month.test.js`,
+  `travel-curriculum-by-quarter.test.js`).
+- **Admin upload UI (`frontend/src/pages/travel/CurriculumAdmin.jsx`):**
+  ✅ SHIPPED (renamed from the original `CurriculumMapping.jsx` spec).
+- **Seed file (`backend/prisma/seed-travel-curriculum.js`):** ✅ SHIPPED —
+  seed plumbing in place; real V1 mapping rows still owed by Yasin /
+  academic team per PC-1.
+- **`TravelDiagnostic.curriculumFitJson` cache column:** ⬜ TODO (FR-5
+  diagnostic-engine extension — needs the additive nullable column plus
+  wire-in to the diagnostic submit path so the TMC submit returns the
+  top-N curriculum recommendations).
+- **CSV import endpoint (FR-2):** ⬜ TODO — no `import.csv` route on the
+  curriculum router yet (~½ day).
+- **CSV export endpoint (FR-4):** ⬜ TODO (~½ day, pairs with import).
+- **Engine integration (FR-5 — top-N recommendations on TMC submit):**
+  ⬜ TODO (~½ day after `curriculumFitJson` column lands).
+- **PDF extension (FR-7 "why this fits curriculum" section in
+  `renderTravelDiagnosticPdf`):** ⬜ TODO (~¼ day).
+- **Coverage-report endpoint (FR-8, `/coverage`):** ⬜ TODO (~¼ day).
+- **Gate spec `e2e/tests/curriculum-mapping-api.spec.js` (FR-10):**
+  ⬜ TODO (~½ day; vitest already covers handler shape, the gate spec
+  pins the demo-deployed contract).
+- **Mapping data (the actual V1 rows):** 🔵 BLOCKED on TMC academic team
+  (Yasin / Aishwarya / Jihad — PC-1).
+- **PC-2 .. PC-5 product calls:** 🔵 BLOCKED on Yasin.
+- **Engineering time post-data:** **~1.5-2 days** end-to-end for the
+  remaining slices (column + engine extension + CSV import/export + PDF
+  extension + coverage report + gate spec + CI wire-in). The schema +
+  admin UI + CRUD + analytics + seed plumbing + vitest coverage are all
+  already in `main`.
 
 ---
 

@@ -64,13 +64,14 @@ import prisma from '../../lib/prisma.js';
 prisma.user = {
   findUnique: vi.fn(),
   findFirst: vi.fn(),
-  findMany: vi.fn(),
+  findMany: vi.fn().mockResolvedValue([]),
   create: vi.fn(),
   update: vi.fn(),
   delete: vi.fn(),
 };
 prisma.tenant = {
   findUnique: vi.fn().mockResolvedValue(null),
+  findMany: vi.fn().mockResolvedValue([]),
   create: vi.fn(),
 };
 prisma.auditLog = {
@@ -84,6 +85,35 @@ prisma.revokedToken = {
 };
 prisma.smsConfig = {
   findFirst: vi.fn().mockResolvedValue(null),
+};
+// T37 / Class B6 — RBAC self-heal seam. /login (inline self-heal block
+// at routes/auth.js:521-535) AND /signup + /register (call
+// provisionRbacForFreshTenant unconditionally at lines 260 + 323) reach
+// into prisma.userRole / prisma.role / prisma.rolePermission /
+// prisma.roleWidget via scripts/ensureRbacOnBoot.js. Without these the
+// real Prisma client tries to reach demo MySQL — errors are caught as
+// non-fatal but each socket retry burns 5s and the test timeout fires.
+// Permissive stubs: userRole.count=1 short-circuits the /login self-heal
+// before it calls the provisioner; role.findFirst returns an "existing"
+// row so ensureRole skips create + permissions + widget seeding for
+// signup/register paths.
+prisma.userRole = {
+  count: vi.fn().mockResolvedValue(1),
+  findUnique: vi.fn().mockResolvedValue(null),
+  findFirst: vi.fn().mockResolvedValue(null),
+  findMany: vi.fn().mockResolvedValue([]),
+  create: vi.fn().mockResolvedValue({}),
+};
+prisma.role = {
+  findFirst: vi.fn().mockResolvedValue({ id: 999 }),
+  create: vi.fn().mockResolvedValue({ id: 999 }),
+};
+prisma.rolePermission = {
+  findFirst: vi.fn().mockResolvedValue({ id: 999 }),
+  create: vi.fn().mockResolvedValue({}),
+};
+prisma.roleWidget = {
+  create: vi.fn().mockResolvedValue({}),
 };
 
 import express from 'express';
@@ -118,16 +148,37 @@ function findAuthCookie(res) {
 beforeEach(() => {
   prisma.user.findUnique.mockReset();
   prisma.user.findFirst.mockReset();
+  prisma.user.findMany.mockReset().mockResolvedValue([]);
   prisma.user.create.mockReset();
   prisma.user.update.mockReset();
   prisma.tenant.findUnique.mockReset().mockResolvedValue(null);
+  prisma.tenant.findMany.mockReset().mockResolvedValue([]);
   prisma.tenant.create.mockReset();
   prisma.auditLog.findFirst.mockReset().mockResolvedValue(null);
   prisma.auditLog.create.mockReset().mockResolvedValue({});
   prisma.revokedToken.findUnique.mockReset().mockResolvedValue(null);
   prisma.revokedToken.upsert.mockReset().mockResolvedValue({});
   prisma.smsConfig.findFirst.mockReset().mockResolvedValue(null);
+  // T37 / Class B6 — keep self-heal seam permissive across tests.
+  prisma.userRole.count.mockReset().mockResolvedValue(1);
+  prisma.userRole.findUnique.mockReset().mockResolvedValue(null);
+  prisma.userRole.findFirst.mockReset().mockResolvedValue(null);
+  prisma.userRole.findMany.mockReset().mockResolvedValue([]);
+  prisma.userRole.create.mockReset().mockResolvedValue({});
+  prisma.role.findFirst.mockReset().mockResolvedValue({ id: 999 });
+  prisma.role.create.mockReset().mockResolvedValue({ id: 999 });
+  prisma.rolePermission.findFirst.mockReset().mockResolvedValue({ id: 999 });
+  prisma.rolePermission.create.mockReset().mockResolvedValue({});
+  prisma.roleWidget.create.mockReset().mockResolvedValue({});
   delete process.env.NODE_ENV;
+
+  // Schema-drift compat shim: User.email is now composite-unique with
+  // tenantId (@@unique([email, tenantId])), so login + signup + register +
+  // duplicate-email checks use findFirst not findUnique. The existing
+  // tests in this file pre-date the migration and mock findUnique. Have
+  // findFirst delegate so every existing `prisma.user.findUnique.mockResolvedValue(...)`
+  // assertion keeps working without per-test edits.
+  prisma.user.findFirst.mockImplementation((...args) => prisma.user.findUnique(...args));
 });
 
 // ── POST /api/auth/login ─────────────────────────────────────────────
@@ -281,20 +332,13 @@ describe('POST /api/auth/signup', () => {
     expect(createArg.data.password).toMatch(/^\$2[ab]\$/); // bcrypt prefix
   });
 
-  test('duplicate email → 400 "User already exists"', async () => {
-    prisma.user.findUnique.mockResolvedValue({ id: 99, email: 'dup@user.com' });
-
-    const res = await request(makeApp())
-      .post('/api/auth/signup')
-      .send({ email: 'dup@user.com', password: 'password123', name: 'Dup' });
-
-    expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/already exists/i);
-    // Critical: dup-check short-circuits BEFORE tenant create — otherwise
-    // every dup signup attempt would litter the Tenant table.
-    expect(prisma.tenant.create).not.toHaveBeenCalled();
-    expect(prisma.user.create).not.toHaveBeenCalled();
-  });
+  // DRIFT: User.email is now composite-unique with tenantId, so the
+  // signup route INTENTIONALLY no longer pre-checks for duplicate email
+  // (see routes/auth.js:217-220 comment — "same email is allowed to own
+  // multiple orgs"). The old "already exists" contract is gone. If a
+  // future migration restores a global email uniqueness the test below
+  // can be revived.
+  test.skip('duplicate email → 400 "User already exists" (SUT no longer dup-checks)', () => {});
 
   test('weak password (no digit) → 400 with complexity-error message', async () => {
     const res = await request(makeApp())
@@ -339,16 +383,10 @@ describe('POST /api/auth/register', () => {
     expect(res.body.tenant.slug).toBe('beta-inc');
   });
 
-  test('duplicate email → 400 "User already exists"', async () => {
-    prisma.user.findUnique.mockResolvedValue({ id: 99, email: 'dup@user.com' });
-
-    const res = await request(makeApp())
-      .post('/api/auth/register')
-      .send({ email: 'dup@user.com', password: 'password123', name: 'Dup' });
-
-    expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/already exists/i);
-  });
+  // DRIFT: same as /signup — the register route no longer pre-checks
+  // duplicate email (see routes/auth.js:217-220). Composite-unique
+  // [email, tenantId] makes the same email valid across orgs.
+  test.skip('duplicate email → 400 "User already exists" (SUT no longer dup-checks)', () => {});
 });
 
 // ── GET /api/auth/me ─────────────────────────────────────────────────

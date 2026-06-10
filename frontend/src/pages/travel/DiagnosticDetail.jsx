@@ -24,6 +24,22 @@
 //      classification badge (color-coded match/review/mismatch/unknown),
 //      scorePercent, summary prose, and perFieldDiff table.
 //
+// ── TMC §3.3.7 human_pick recorder (PRD T11 / DD-5.7) ──
+// For TMC diagnostics (subBrand === 'tmc'), the page surfaces a
+// human-pick recorder section above the talking-points brief:
+//
+//   - Dropdown of the 5 starter trips (sourced from
+//     GET /api/travel-tmc-catalogue?status=active) + "other" + "no_rec"
+//   - ADMIN-only edit; MANAGER/USER see a read-only display of any
+//     prior pick.
+//   - Engine output (recommendedTripId / alternativeTripId / scores) is
+//     COLLAPSED behind an expand button until the senior reviewer has
+//     recorded their pick (DD-5.7). The collapsed state surfaces ONLY
+//     the prompt + dropdown; the engine output reveals automatically
+//     after the pick is saved.
+//   - Saving PATCHes /api/travel/diagnostics/:id with { humanPick: ... }
+//     where the value is the catalogue tripId slug, "other", or "no_rec".
+//
 // Hard NOs encoded:
 //   - Talking-points NEVER auto-fires on load (real Claude costs $; the
 //     human chooses when to spend a token via the Regenerate button).
@@ -33,11 +49,11 @@
 //   - We DO NOT mutate the diagnostic on this page; we only read +
 //     forward to the two POST endpoints above.
 
-import { useEffect, useState, useContext } from "react";
+import { useCallback, useEffect, useState, useContext } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
   ChevronLeft, ClipboardCheck, RefreshCw, FileText, Send,
-  AlertTriangle, Sparkles, CheckCircle, XCircle,
+  AlertTriangle, Sparkles, CheckCircle, XCircle, Eye, EyeOff, UserCheck,
 } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
@@ -111,6 +127,10 @@ export default function DiagnosticDetail() {
   const notify = useNotify();
   const { user } = useContext(AuthContext) || {};
   const canRegen = user?.role === "ADMIN" || user?.role === "MANAGER";
+  // PRD §3.3.7 + DD-5.7 — human_pick is senior-role-gated to ADMIN only.
+  // MANAGER + USER see prior pick as read-only display; only ADMIN can
+  // edit. Engine output is collapsed for ADMIN until pick recorded.
+  const canEditHumanPick = user?.role === "ADMIN";
   const diagId = parseInt(id, 10);
 
   const [diag, setDiag] = useState(null);
@@ -118,10 +138,18 @@ export default function DiagnosticDetail() {
   const [loadError, setLoadError] = useState(null);
 
   const [regenInFlight, setRegenInFlight] = useState(false);
+  const [pdfBusy, setPdfBusy] = useState(false);
 
   const [callTranscript, setCallTranscript] = useState("");
   const [compareInFlight, setCompareInFlight] = useState(false);
   const [comparison, setComparison] = useState(null);
+
+  // human_pick recorder + collapsible engine output (TMC-only, T11).
+  const [humanPickDraft, setHumanPickDraft] = useState("");
+  const [humanPickSaving, setHumanPickSaving] = useState(false);
+  const [catalogue, setCatalogue] = useState([]);
+  const [catalogueLoading, setCatalogueLoading] = useState(false);
+  const [engineExpanded, setEngineExpanded] = useState(false);
 
   const load = () => {
     if (!Number.isFinite(diagId)) {
@@ -146,6 +174,98 @@ export default function DiagnosticDetail() {
       .finally(() => setLoading(false));
   };
   useEffect(load, [diagId]);
+
+  // (Re)generate the branded report PDF on demand. Submission-time generation
+  // is best-effort and can leave reportPdfUrl null; this rebuilds it and opens
+  // the result in a new tab.
+  const regenReportPdf = async () => {
+    setPdfBusy(true);
+    try {
+      const res = await fetchApi(`/api/travel/diagnostics/${diagId}/report-pdf/regen`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      if (res?.reportPdfUrl) {
+        setDiag((d) => (d ? { ...d, reportPdfUrl: res.reportPdfUrl } : d));
+        notify.success("Report PDF generated");
+        window.open(res.reportPdfUrl, "_blank", "noopener,noreferrer");
+      } else {
+        notify.error("PDF generation returned no URL");
+      }
+    } catch (e) {
+      notify.error(e?.message || "Failed to generate report PDF");
+    } finally {
+      setPdfBusy(false);
+    }
+  };
+
+  // Sync the dropdown draft with whatever's persisted on the diagnostic.
+  // This intentionally re-fires when diag.humanPick changes (after a
+  // successful save) so the dropdown reflects the canonical state.
+  useEffect(() => {
+    if (diag && typeof diag.humanPick === "string") {
+      setHumanPickDraft(diag.humanPick);
+    } else if (diag) {
+      setHumanPickDraft("");
+    }
+  }, [diag?.humanPick]);
+
+  // Once a pick is recorded, the engine output expands automatically per
+  // DD-5.7 (collapsed until recorded). The senior reviewer can still
+  // collapse it again via the toggle to take a second blind read on a
+  // sibling diagnostic, but the default is reveal-on-record.
+  useEffect(() => {
+    if (diag?.humanPick) setEngineExpanded(true);
+  }, [diag?.humanPick]);
+
+  // Load the catalogue of active trips for the human_pick dropdown.
+  // Only fetched once per page load AND only for TMC diagnostics; other
+  // sub-brands never see the recorder section.
+  const loadCatalogue = useCallback(() => {
+    setCatalogueLoading(true);
+    fetchApi("/api/travel-tmc-catalogue?status=active", { silent: true })
+      .then((res) => {
+        const items = Array.isArray(res) ? res : (res?.items || res?.catalogue || []);
+        setCatalogue(items.filter((r) => r?.status === "active"));
+      })
+      .catch(() => {
+        // Non-fatal — the dropdown still ships "other" + "no_rec" options.
+        setCatalogue([]);
+      })
+      .finally(() => setCatalogueLoading(false));
+  }, []);
+
+  useEffect(() => {
+    if (diag?.subBrand === "tmc") loadCatalogue();
+  }, [diag?.subBrand, loadCatalogue]);
+
+  const saveHumanPick = async () => {
+    if (!canEditHumanPick) return;
+    if (!humanPickDraft) {
+      notify.error("Pick a trip, \"other\", or \"no rec\" before saving.");
+      return;
+    }
+    setHumanPickSaving(true);
+    try {
+      const res = await fetchApi(`/api/travel/diagnostics/${diagId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ humanPick: humanPickDraft }),
+      });
+      const next = res?.diagnostic || res;
+      if (next && typeof next === "object" && next.id) {
+        setDiag(next);
+      } else {
+        // Server returned an envelope we don't recognize — refetch to be safe.
+        setDiag((prev) => (prev ? { ...prev, humanPick: humanPickDraft } : prev));
+      }
+      notify.success("Human pick recorded — engine output unlocked.");
+      setEngineExpanded(true);
+    } catch (e) {
+      notify.error(e?.body?.error || e?.message || "Failed to save human pick");
+    } finally {
+      setHumanPickSaving(false);
+    }
+  };
 
   const regenTalkingPoints = async () => {
     if (!canRegen) return;
@@ -270,10 +390,42 @@ export default function DiagnosticDetail() {
             {diag.classificationLabel || diag.classification}
           </span>
         )}
+        {(diag.contact?.name || diag.contact?.email || diag.contactId) && (
+          <span style={classChip} aria-label="Customer">
+            {diag.contact?.name || diag.contact?.email || `Contact #${diag.contactId}`}
+          </span>
+        )}
         <span style={{ marginLeft: "auto", color: "var(--text-secondary)", fontSize: 13 }}>
           Created {fmtDate(diag.createdAt)}
         </span>
       </header>
+
+      {/* ── Customer — who took this diagnostic ──────────────────── */}
+      {(diag.contact?.name || diag.contact?.email || diag.contact?.phone || diag.contactId) && (
+        <section style={card}>
+          <h2 style={cardTitle}>Customer</h2>
+          <div style={summaryRow}>
+            <div>
+              <span style={kvLabel}>Name</span>
+              <span style={{ marginLeft: 8 }}>{diag.contact?.name || "—"}</span>
+            </div>
+            <div>
+              <span style={kvLabel}>Email</span>
+              <span style={{ marginLeft: 8 }}>{diag.contact?.email || "—"}</span>
+            </div>
+            <div>
+              <span style={kvLabel}>Phone</span>
+              <span style={{ marginLeft: 8 }}>{diag.contact?.phone || "—"}</span>
+            </div>
+            {diag.contactId && (
+              <div>
+                <span style={kvLabel}>Contact ID</span>
+                <span style={{ marginLeft: 8 }}>#{diag.contactId}</span>
+              </div>
+            )}
+          </div>
+        </section>
+      )}
 
       {/* ── Section 1: answers + classification ──────────────────── */}
       <section style={card}>
@@ -291,16 +443,38 @@ export default function DiagnosticDetail() {
             <span style={kvLabel}>Recommended tier</span>
             <span style={{ marginLeft: 8 }}>{diag.recommendedTier || "—"}</span>
           </div>
-          {diag.reportPdfUrl && (
-            <a
-              href={diag.reportPdfUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              style={pdfLink}
+          <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
+            {diag.reportPdfUrl && (
+              <a
+                href={diag.reportPdfUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={pdfLink}
+              >
+                <FileText size={14} aria-hidden /> Download report PDF
+              </a>
+            )}
+            <button
+              type="button"
+              onClick={regenReportPdf}
+              disabled={pdfBusy}
+              title="Build the branded report PDF from this diagnostic"
+              style={{
+                ...pdfLink,
+                background: "none",
+                border: "1px solid var(--border-color, #2a2a2a)",
+                cursor: pdfBusy ? "not-allowed" : "pointer",
+                opacity: pdfBusy ? 0.6 : 1,
+              }}
             >
-              <FileText size={14} aria-hidden /> Download report PDF
-            </a>
-          )}
+              <RefreshCw size={14} aria-hidden />{" "}
+              {pdfBusy
+                ? "Generating…"
+                : diag.reportPdfUrl
+                  ? "Regenerate PDF"
+                  : "Generate report PDF"}
+            </button>
+          </div>
         </div>
         {questions.length === 0 ? (
           <div style={{ color: "var(--text-secondary)", fontSize: 13, padding: "12px 0" }}>
@@ -331,6 +505,22 @@ export default function DiagnosticDetail() {
           </table>
         )}
       </section>
+
+      {/* ── TMC human_pick recorder + engine output (PRD T11 / DD-5.7) ── */}
+      {diag.subBrand === "tmc" && (
+        <HumanPickSection
+          diag={diag}
+          catalogue={catalogue}
+          catalogueLoading={catalogueLoading}
+          humanPickDraft={humanPickDraft}
+          setHumanPickDraft={setHumanPickDraft}
+          saveHumanPick={saveHumanPick}
+          humanPickSaving={humanPickSaving}
+          canEditHumanPick={canEditHumanPick}
+          engineExpanded={engineExpanded}
+          setEngineExpanded={setEngineExpanded}
+        />
+      )}
 
       {/* ── Section 2: talking-points brief ──────────────────────── */}
       <section style={{ ...card, marginTop: 16 }}>
@@ -505,6 +695,188 @@ export default function DiagnosticDetail() {
   );
 }
 
+// ─── TMC human_pick recorder + engine output (DD-5.7 collapsible) ────
+//
+// Senior reviewers (ADMIN) pick one of the 5 starter trips, "other", or
+// "no_rec" BLIND to the engine's recommendation. The engine output stays
+// COLLAPSED until they save — DD-5.7's load-bearing constraint. Once a
+// pick is recorded the engine output unlocks (auto-expanded) and the
+// reviewer can compare their pick against the engine's primary/alternative
+// recommendations + per-signal scores for §3.3.7 disagreement triage.
+
+const SPECIAL_PICK_OPTIONS = [
+  { value: "other", label: "Other (not in the catalogue)" },
+  { value: "no_rec", label: "No recommendation" },
+];
+
+function HumanPickSection({
+  diag, catalogue, catalogueLoading,
+  humanPickDraft, setHumanPickDraft, saveHumanPick, humanPickSaving,
+  canEditHumanPick, engineExpanded, setEngineExpanded,
+}) {
+  const persisted = diag?.humanPick || "";
+  const hasPick = !!persisted;
+  const engineScores = parseTalkingPointsEnvelope(diag?.engineScoresJson);
+  const engineFlags = parseTalkingPointsEnvelope(diag?.flagsJson);
+  const labelForValue = (v) => {
+    if (!v) return "—";
+    const fromCatalogue = catalogue.find((c) => c.tripId === v || String(c.id) === v);
+    if (fromCatalogue) return fromCatalogue.title || fromCatalogue.tripId;
+    const special = SPECIAL_PICK_OPTIONS.find((o) => o.value === v);
+    if (special) return special.label;
+    return v;
+  };
+
+  return (
+    <section style={{ ...card, marginTop: 16 }} aria-label="Human pick and engine output">
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+        <h2 style={{ ...cardTitle, margin: 0 }}>
+          <UserCheck size={18} aria-hidden /> Senior reviewer — human pick
+        </h2>
+        {hasPick && (
+          <span style={pickedBadge} aria-label="Pick recorded">
+            <CheckCircle size={12} aria-hidden /> recorded
+          </span>
+        )}
+      </div>
+
+      <p style={{ color: "var(--text-secondary)", fontSize: 13, margin: "0 0 12px" }}>
+        PRD §3.3.7 protocol — record your hand-picked trip <strong>blind</strong> to
+        the engine output below. After ≥50 pilot submissions an analyst
+        computes engine-vs-human agreement rate and tunes one weight at a
+        time.
+      </p>
+
+      {/* Dropdown (ADMIN) or read-only display (MANAGER / USER) */}
+      {canEditHumanPick ? (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "flex-end" }}>
+          <label style={{ flex: "1 1 280px", display: "flex", flexDirection: "column", gap: 6 }}>
+            <span style={kvLabel}>Your pick</span>
+            <select
+              data-testid="human-pick-select"
+              value={humanPickDraft}
+              onChange={(e) => setHumanPickDraft(e.target.value)}
+              style={input}
+              aria-label="Human pick"
+            >
+              <option value="">— select —</option>
+              {catalogueLoading && (
+                <option value="" disabled>
+                  Loading catalogue…
+                </option>
+              )}
+              {catalogue.map((c) => (
+                <option key={c.tripId || c.id} value={c.tripId || String(c.id)}>
+                  {c.title || c.tripId}
+                </option>
+              ))}
+              {SPECIAL_PICK_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </select>
+          </label>
+          <button
+            type="button"
+            onClick={saveHumanPick}
+            disabled={humanPickSaving || !humanPickDraft}
+            style={{
+              ...primaryBtn,
+              opacity: (humanPickSaving || !humanPickDraft) ? 0.6 : 1,
+            }}
+            aria-label="Save human pick"
+          >
+            <UserCheck size={14} aria-hidden />
+            {humanPickSaving ? "Saving…" : hasPick ? "Update pick" : "Save pick"}
+          </button>
+        </div>
+      ) : (
+        <div style={{ fontSize: 14 }} data-testid="human-pick-readonly">
+          <span style={kvLabel}>Recorded pick</span>
+          <span style={{ marginLeft: 8 }}>{labelForValue(persisted)}</span>
+          <span style={{ marginLeft: 12, color: "var(--text-secondary)", fontSize: 12 }}>
+            (ADMIN only)
+          </span>
+        </div>
+      )}
+
+      {/* Engine output — collapsed until pick recorded (DD-5.7). */}
+      <div style={{ marginTop: 16 }}>
+        {hasPick && engineExpanded ? (
+          <div data-testid="engine-output-expanded">
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+              <strong style={{ fontSize: 14 }}>Engine output</strong>
+              <button
+                type="button"
+                onClick={() => setEngineExpanded(false)}
+                style={collapseBtn}
+                aria-label="Collapse engine output"
+              >
+                <EyeOff size={12} aria-hidden /> Collapse
+              </button>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 180px), 1fr))", gap: 10 }}>
+              <EngineKV label="Engine state" value={diag.engineState || "—"} />
+              <EngineKV label="Primary trip id" value={diag.recommendedTripId ?? "—"} />
+              <EngineKV label="Alternative trip id" value={diag.alternativeTripId ?? "—"} />
+              <EngineKV label="ICP tier" value={diag.icpTier || "—"} />
+              <EngineKV label="Lead quality" value={diag.leadQuality || "—"} />
+              <EngineKV label="Weights version" value={diag.weightsVersion || "—"} />
+            </div>
+            {Array.isArray(engineFlags) && engineFlags.length > 0 && (
+              <div style={{ marginTop: 10, fontSize: 13 }}>
+                <span style={kvLabel}>Flags</span>
+                <span style={{ marginLeft: 8 }}>{engineFlags.join(", ")}</span>
+              </div>
+            )}
+            {engineScores && (
+              <details style={{ marginTop: 10 }}>
+                <summary style={{ cursor: "pointer", fontSize: 13, color: "var(--text-secondary)" }}>
+                  Per-signal score breakdown (raw engineScoresJson)
+                </summary>
+                <pre style={engineScoresPre} data-testid="engine-scores-pre">
+                  {JSON.stringify(engineScores, null, 2)}
+                </pre>
+              </details>
+            )}
+          </div>
+        ) : hasPick && !engineExpanded ? (
+          <button
+            type="button"
+            onClick={() => setEngineExpanded(true)}
+            style={revealBtn}
+            data-testid="engine-output-reveal"
+            aria-label="Reveal engine output"
+          >
+            <Eye size={14} aria-hidden /> Reveal engine output
+          </button>
+        ) : (
+          <div
+            data-testid="engine-output-collapsed"
+            role="status"
+            style={collapsedBox}
+          >
+            <EyeOff size={18} aria-hidden style={{ color: "var(--text-secondary)" }} />
+            <div>
+              <strong>Engine output hidden</strong> — record your pick first per
+              PRD §3.3.7 (DD-5.7). This keeps your read of the school&rsquo;s
+              answers untainted by the engine&rsquo;s recommendation.
+            </div>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function EngineKV({ label, value }) {
+  return (
+    <div>
+      <div style={kvLabel}>{label}</div>
+      <div style={{ fontSize: 14, marginTop: 2 }}>{String(value)}</div>
+    </div>
+  );
+}
+
 // ─── Styles ──────────────────────────────────────────────────────────
 
 const backLink = {
@@ -618,6 +990,14 @@ const textarea = {
   fontFamily: "inherit",
 };
 
+const input = {
+  width: "100%", boxSizing: "border-box",
+  padding: "8px 10px", borderRadius: 6,
+  border: "1px solid var(--border-color)",
+  background: "var(--surface-color)", color: "var(--text-primary)",
+  fontSize: 13, fontFamily: "inherit",
+};
+
 const th = {
   textAlign: "left", padding: "10px 12px", fontSize: 12,
   textTransform: "uppercase", letterSpacing: 0.5,
@@ -628,4 +1008,40 @@ const th = {
 const td = {
   padding: "10px 12px", fontSize: 14,
   color: "var(--text-primary)", verticalAlign: "top",
+};
+
+const pickedBadge = {
+  display: "inline-flex", alignItems: "center", gap: 4,
+  padding: "2px 8px", borderRadius: 999, fontSize: 11, fontWeight: 600,
+  background: "rgba(47, 122, 77, 0.14)", color: "#2F7A4D",
+  border: "1px solid #2F7A4D",
+};
+
+const collapsedBox = {
+  padding: 14, borderRadius: 8,
+  background: "var(--subtle-bg)",
+  border: "1px dashed var(--border-color)",
+  display: "flex", alignItems: "flex-start", gap: 10,
+  color: "var(--text-primary)", fontSize: 14, lineHeight: 1.4,
+};
+
+const revealBtn = {
+  display: "inline-flex", alignItems: "center", gap: 6,
+  padding: "6px 12px", borderRadius: 6, fontWeight: 600, fontSize: 13,
+  background: "var(--surface-color)", color: "var(--primary-color, var(--accent-color))",
+  border: "1px solid var(--primary-color, var(--accent-color))", cursor: "pointer",
+};
+
+const collapseBtn = {
+  display: "inline-flex", alignItems: "center", gap: 4,
+  padding: "2px 8px", borderRadius: 6, fontSize: 11, fontWeight: 500,
+  background: "transparent", color: "var(--text-secondary)",
+  border: "1px solid var(--border-color)", cursor: "pointer",
+};
+
+const engineScoresPre = {
+  marginTop: 6, padding: 10, borderRadius: 6,
+  background: "var(--bg-color)", border: "1px solid var(--border-light)",
+  fontSize: 12, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+  whiteSpace: "pre-wrap", maxHeight: 240, overflow: "auto",
 };

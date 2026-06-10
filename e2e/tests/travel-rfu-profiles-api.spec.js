@@ -186,6 +186,17 @@ test.describe("Travel RFU profiles API — CRUD", () => {
     expect((await res.json()).code).toBe("INVALID_TIER");
   });
 
+  test("GET /rfu-profiles?fields=summary omits sensitive PII columns", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || created.profileIds.length === 0) test.skip(true, "no profiles");
+    const res = await get(request, token, "/api/travel/rfu-profiles?fields=summary");
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    const seeded = body.profiles.find((p) => p.id === created.profileIds[0]);
+    expect(seeded.passportNumber).toBeUndefined();
+    expect(seeded.contactId).toBeDefined();
+  });
+
   test("GET /rfu-profiles/by-contact/:contactId returns the profile", async ({ request }) => {
     const token = await getTravelAdmin(request);
     if (!token || !contactId) test.skip(true, "no contact");
@@ -361,5 +372,58 @@ test.describe("Travel RFU profiles API — Phase 2 dedup (PRD §4.5)", () => {
     });
     expect(res.status()).toBe(200);
     expect((await res.json()).passportNumber).toBe(secondPassport);
+  });
+});
+
+// ─── Slim-shape opt-in (#920 slice S3 — FR-3.5 PII payload reduction) ───
+//
+// **High-value PII target.** Default shape ships every regulated /
+// sensitive column — passportNumber (plaintext), visaHistoryJson,
+// frequentFlyerJson, emergencyContact*, medicalNotes (@db.Text),
+// specialAssistance, pastComplaintsJson. `?fields=summary` opts into
+// the slim projection (id + contactId + productTier + createdAt). The
+// detail endpoint GET /rfu-profiles/:id surfaces the full PII.
+
+test.describe("Travel RFU profiles — slim-shape opt-in (#920 S3)", () => {
+  test("GET /rfu-profiles?fields=summary drops EVERY PII column", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, "no token");
+    const res = await get(request, token, "/api/travel/rfu-profiles?fields=summary");
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(Array.isArray(body.profiles)).toBe(true);
+    if (body.profiles.length === 0) test.skip(true, "no profiles seeded");
+    for (const p of body.profiles) {
+      // Slim keys present.
+      expect(p).toHaveProperty("id");
+      expect(p).toHaveProperty("contactId");
+      // PII fields MUST NOT appear — the load-bearing #920 contract.
+      expect(p).not.toHaveProperty("passportNumber");
+      expect(p).not.toHaveProperty("passportExpiry");
+      expect(p).not.toHaveProperty("visaHistoryJson");
+      expect(p).not.toHaveProperty("frequentFlyerJson");
+      expect(p).not.toHaveProperty("emergencyContactName");
+      expect(p).not.toHaveProperty("emergencyContactPhone");
+      expect(p).not.toHaveProperty("medicalNotes");
+      expect(p).not.toHaveProperty("specialAssistance");
+      expect(p).not.toHaveProperty("pastComplaintsJson");
+      expect(p).not.toHaveProperty("budgetMin");
+      expect(p).not.toHaveProperty("budgetMax");
+    }
+  });
+
+  test("GET /rfu-profiles (default shape) still ships full PII row", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, "no token");
+    const res = await get(request, token, "/api/travel/rfu-profiles");
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    if (body.profiles.length === 0) test.skip(true, "no profiles seeded");
+    const p = body.profiles[0];
+    // Default shape preserves the existing payload — PII keys present
+    // (RfuCustomerProfile.jsx renders these directly).
+    expect(p).toHaveProperty("passportNumber");
+    expect(p).toHaveProperty("medicalNotes");
+    expect(p).toHaveProperty("emergencyContactName");
   });
 });

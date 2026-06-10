@@ -1,8 +1,10 @@
-import React, { useState, useEffect, useContext } from 'react';
-import { User, Mail, Key, Save, Stethoscope } from 'lucide-react';
-import { fetchApi } from '../utils/api';
+import React, { useState, useEffect, useContext, useRef } from 'react';
+import { User, Mail, Key, Save, Stethoscope, Download, FileText, Camera, Trash2 } from 'lucide-react';
+import { fetchApi, getAuthToken } from '../utils/api';
 import { AuthContext } from '../App';
+import { useNotify } from '../utils/notify';
 import { formatDateLong } from '../utils/date';
+import PasswordInput from '../components/PasswordInput';
 
 // #641 — practitioner-specific profile sections (specialty, license, etc.)
 // must ONLY render for users whose wellnessRole identifies them as a
@@ -19,6 +21,7 @@ function isPractitioner(profile) {
 
 const Profile = () => {
   const { user: authUser, setUser: setAuthUser, subscription } = useContext(AuthContext);
+  const notify = useNotify();
   const [profile, setProfile] = useState(null);
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -30,10 +33,55 @@ const Profile = () => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [changingPassword, setChangingPassword] = useState(false);
+  // Billing history — paid subscriptions tied to this admin. ADMIN-only on
+  // the backend; we still call it from any role's Profile page and just
+  // render nothing on 403 so the page itself doesn't error.
+  const [invoices, setInvoices] = useState([]);
+  const [invoicesLoaded, setInvoicesLoaded] = useState(false);
+  const [downloadingId, setDownloadingId] = useState(null);
+  const [uploadingPicture, setUploadingPicture] = useState(false);
+  const fileInputRef = useRef(null);
 
   useEffect(() => {
     loadProfile();
+    loadInvoices();
   }, []);
+
+  const loadInvoices = async () => {
+    try {
+      const data = await fetchApi('/api/subscriptions/invoices', { silent: true });
+      setInvoices(Array.isArray(data) ? data : []);
+    } catch {
+      // Non-admin role gets 403 → just leave invoices empty, hide the
+      // section. Network errors also silently no-op.
+      setInvoices([]);
+    } finally {
+      setInvoicesLoaded(true);
+    }
+  };
+
+  const downloadInvoicePdf = async (subId, invoiceNum) => {
+    setDownloadingId(subId);
+    try {
+      const token = getAuthToken();
+      // Relative path → same-origin via Vite's /api proxy. A VITE_API_URL
+      // prefix would make this cross-origin (CORS preflight 401 + mixed-content
+      // over HTTPS). See Invoices.jsx downloadPdf for the canonical note.
+      const url = `/api/subscriptions/${subId}/invoice.pdf`;
+      const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+      if (!res.ok) throw new Error(`Download failed (${res.status})`);
+      const blob = await res.blob();
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = `${invoiceNum || `subscription-${subId}`}.pdf`;
+      link.click();
+      URL.revokeObjectURL(link.href);
+    } catch (err) {
+      notify.error(`Could not download invoice: ${err.message || 'unknown error'}`);
+    } finally {
+      setDownloadingId(null);
+    }
+  };
 
   const loadProfile = async () => {
     try {
@@ -91,6 +139,77 @@ const Profile = () => {
       setProfileMsg({ text: err.message || 'Failed to update profile', type: 'error' });
     }
     setSaving(false);
+  };
+
+  const handlePickPicture = () => {
+    if (fileInputRef.current) fileInputRef.current.click();
+  };
+
+  const handlePictureSelected = async (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+
+    if (!/^image\//.test(file.type)) {
+      notify.error('Please choose an image file (JPEG, PNG, GIF, or WebP).');
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      notify.error('Image must be 5 MB or smaller.');
+      return;
+    }
+
+    setUploadingPicture(true);
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      const token = getAuthToken();
+      // Relative path keeps the request same-origin (see downloadInvoicePdf
+      // above for the full rationale — VITE_API_URL prefix → cross-origin →
+      // preflight 401 → CORS error).
+      const res = await fetch(`/api/auth/me/profile-picture`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: form,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `Upload failed (${res.status})`);
+      setProfile((prev) => ({ ...(prev || {}), profilePicture: data.profilePicture }));
+      if (setAuthUser && authUser) {
+        setAuthUser({ ...authUser, profilePicture: data.profilePicture });
+      }
+      notify.success('Profile picture updated');
+    } catch (err) {
+      notify.error(err.message || 'Failed to upload profile picture');
+    } finally {
+      setUploadingPicture(false);
+    }
+  };
+
+  const handleRemovePicture = async () => {
+    if (!profile?.profilePicture) return;
+    const ok = await notify.confirm({
+      title: 'Remove profile picture',
+      message: 'Your profile picture will be removed and replaced with your initials.',
+      confirmText: 'Remove',
+      cancelText: 'Cancel',
+      destructive: true,
+    });
+    if (!ok) return;
+
+    setUploadingPicture(true);
+    try {
+      const updated = await fetchApi('/api/auth/me/profile-picture', { method: 'DELETE' });
+      setProfile((prev) => ({ ...(prev || {}), profilePicture: updated.profilePicture }));
+      if (setAuthUser && authUser) {
+        setAuthUser({ ...authUser, profilePicture: updated.profilePicture });
+      }
+      notify.success('Profile picture removed');
+    } catch (err) {
+      notify.error(err.message || 'Failed to remove profile picture');
+    } finally {
+      setUploadingPicture(false);
+    }
   };
 
   const handleChangePassword = async (e) => {
@@ -176,7 +295,9 @@ const Profile = () => {
           marginBottom: '1.5rem',
           display: 'flex',
           justifyContent: 'space-between',
-          alignItems: 'center'
+          alignItems: 'center',
+          gap: 12,
+          flexWrap: 'wrap',
         }}>
           <div>
             <div style={{ fontSize: '12px', color: '#888' }}>Current Plan</div>
@@ -184,25 +305,148 @@ const Profile = () => {
               {subscription.subscription.planName}
             </div>
           </div>
-          <div style={{ textAlign: 'right' }}>
-            <div style={{ fontSize: '12px', color: '#888' }}>Expires</div>
-            <div style={{ fontSize: '16px', color: '#22c55e', fontWeight: '600' }}>
-              {formatDate(subscription.subscription.endDate)}
+          <div style={{ textAlign: 'right', display: 'flex', alignItems: 'center', gap: 16 }}>
+            <div>
+              <div style={{ fontSize: '12px', color: '#888' }}>Expires</div>
+              <div style={{ fontSize: '16px', color: '#22c55e', fontWeight: '600' }}>
+                {formatDate(subscription.subscription.endDate)}
+              </div>
             </div>
+            {/* Download the most recent paid invoice. Invoices list is
+                pre-sorted newest-first so [0] is always the latest payment
+                that produced the current ACTIVE subscription. Hidden for
+                non-admin roles (the invoices fetch silently 403s for them
+                and `invoices` stays empty). */}
+            {invoices.length > 0 && (
+              <button
+                onClick={() => downloadInvoicePdf(invoices[0].id, invoices[0].invoiceNum)}
+                disabled={downloadingId === invoices[0].id}
+                title="Download the latest invoice as PDF"
+                style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 6,
+                  padding: '8px 14px', fontSize: '13px', fontWeight: 600,
+                  background: '#22c55e', color: '#fff', border: 'none',
+                  borderRadius: 6, cursor: downloadingId === invoices[0].id ? 'wait' : 'pointer',
+                  opacity: downloadingId === invoices[0].id ? 0.7 : 1,
+                  fontFamily: 'inherit',
+                }}
+              >
+                <Download size={14} />
+                {downloadingId === invoices[0].id ? 'Generating…' : 'Invoice PDF'}
+              </button>
+            )}
           </div>
         </div>
       ) : null}
 
+      {/* Billing history — full list of past subscription payments, each
+          with its own PDF download. Hidden when invoices list is empty
+          (anonymous + non-admin roles + brand-new users on TRIAL). */}
+      {invoicesLoaded && invoices.length > 0 && (
+        <div className="card glass" style={{ padding: '1.5rem', marginBottom: '1.5rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: '1rem' }}>
+            <FileText size={18} color="var(--accent-color)" />
+            <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 600 }}>Billing History</h3>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {invoices.map((inv) => (
+              <div
+                key={inv.id}
+                style={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                  padding: '12px 14px', borderRadius: 8,
+                  border: '1px solid var(--border-color)',
+                  background: 'var(--subtle-bg-1, transparent)',
+                  gap: 12, flexWrap: 'wrap',
+                }}
+              >
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--text-primary)' }}>
+                    {inv.invoiceNum} · {inv.planName}
+                  </div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: 2 }}>
+                    {formatDate(inv.startDate)}
+                    {inv.endDate ? ` → ${formatDate(inv.endDate)}` : ''} · {inv.status}
+                  </div>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <div style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--text-primary)' }}>
+                    {inv.currency === 'INR' ? '₹' : (inv.currency === 'USD' ? '$' : '')}
+                    {Number(inv.amount).toLocaleString()}
+                  </div>
+                  <button
+                    onClick={() => downloadInvoicePdf(inv.id, inv.invoiceNum)}
+                    disabled={downloadingId === inv.id}
+                    style={{
+                      display: 'inline-flex', alignItems: 'center', gap: 6,
+                      padding: '6px 12px', fontSize: '0.78rem', fontWeight: 600,
+                      background: 'transparent', color: 'var(--accent-color)',
+                      border: '1px solid var(--accent-color)', borderRadius: 6,
+                      cursor: downloadingId === inv.id ? 'wait' : 'pointer',
+                      opacity: downloadingId === inv.id ? 0.7 : 1,
+                      fontFamily: 'inherit',
+                    }}
+                  >
+                    <Download size={12} />
+                    {downloadingId === inv.id ? 'Generating…' : 'PDF'}
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Profile Info Card */}
       <div className="card glass" style={{ padding: '1.5rem', marginBottom: '1.5rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1.5rem' }}>
-          <div style={{
-            width: 56, height: 56, borderRadius: '50%',
-            background: 'linear-gradient(135deg, var(--accent-color), var(--primary-color))',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            fontSize: '1.25rem', fontWeight: 'bold', color: '#fff'
-          }}>
-            {(profile?.name || '?').charAt(0).toUpperCase()}
+          <div style={{ position: 'relative', width: 80, height: 80, flexShrink: 0 }}>
+            {profile?.profilePicture ? (
+              <img
+                src={profile.profilePicture}
+                alt={profile?.name || 'Profile'}
+                style={{
+                  width: 80, height: 80, borderRadius: '50%',
+                  objectFit: 'cover', display: 'block',
+                  border: '2px solid var(--border-color, rgba(255,255,255,0.15))',
+                }}
+              />
+            ) : (
+              <div style={{
+                width: 80, height: 80, borderRadius: '50%',
+                background: 'linear-gradient(135deg, var(--accent-color), var(--primary-color))',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: '1.75rem', fontWeight: 'bold', color: '#fff',
+              }}>
+                {(profile?.name || '?').charAt(0).toUpperCase()}
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={handlePickPicture}
+              disabled={uploadingPicture}
+              title={profile?.profilePicture ? 'Change profile picture' : 'Upload profile picture'}
+              aria-label={profile?.profilePicture ? 'Change profile picture' : 'Upload profile picture'}
+              style={{
+                position: 'absolute', right: -4, bottom: -4,
+                width: 28, height: 28, borderRadius: '50%',
+                background: 'var(--primary-color, var(--accent-color))',
+                color: '#fff', border: '2px solid var(--surface-color, #fff)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                cursor: uploadingPicture ? 'wait' : 'pointer',
+                opacity: uploadingPicture ? 0.7 : 1,
+                padding: 0,
+              }}
+            >
+              <Camera size={14} />
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/jpeg,image/png,image/gif,image/webp"
+              onChange={handlePictureSelected}
+              style={{ display: 'none' }}
+            />
           </div>
           <div>
             <h2 style={{ fontSize: '1.15rem', fontWeight: '600', color: 'var(--text-primary)', margin: 0 }}>
@@ -211,6 +455,21 @@ const Profile = () => {
             <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', margin: '0.15rem 0 0' }}>
               {profile?.email}
             </p>
+            {profile?.profilePicture && (
+              <button
+                type="button"
+                onClick={handleRemovePicture}
+                disabled={uploadingPicture}
+                style={{
+                  background: 'transparent', border: 'none', padding: 0,
+                  color: '#ef4444', fontSize: '0.75rem', cursor: uploadingPicture ? 'wait' : 'pointer',
+                  display: 'inline-flex', alignItems: 'center', gap: 4,
+                  marginTop: '0.25rem', fontFamily: 'inherit',
+                }}
+              >
+                <Trash2 size={12} /> Remove picture
+              </button>
+            )}
             <div style={{ display: 'flex', gap: '0.4rem', marginTop: '0.35rem', flexWrap: 'wrap' }}>
               <span style={{
                 display: 'inline-block',
@@ -346,36 +605,33 @@ const Profile = () => {
             <label style={{ display: 'block', marginBottom: '0.4rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
               Current Password
             </label>
-            <input
-              type="password"
-              className="input-field"
+            <PasswordInput
               value={currentPassword}
               onChange={(e) => setCurrentPassword(e.target.value)}
               placeholder="Enter current password"
+              autoComplete="current-password"
             />
           </div>
           <div style={{ marginBottom: '1rem' }}>
             <label style={{ display: 'block', marginBottom: '0.4rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
               New Password
             </label>
-            <input
-              type="password"
-              className="input-field"
+            <PasswordInput
               value={newPassword}
               onChange={(e) => setNewPassword(e.target.value)}
               placeholder="Enter new password"
+              autoComplete="new-password"
             />
           </div>
           <div style={{ marginBottom: '1rem' }}>
             <label style={{ display: 'block', marginBottom: '0.4rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
               Confirm New Password
             </label>
-            <input
-              type="password"
-              className="input-field"
+            <PasswordInput
               value={confirmPassword}
               onChange={(e) => setConfirmPassword(e.target.value)}
               placeholder="Confirm new password"
+              autoComplete="new-password"
             />
           </div>
 

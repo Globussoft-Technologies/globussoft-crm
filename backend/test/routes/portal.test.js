@@ -198,6 +198,10 @@ describe('POST /login — body validation + auth', () => {
     expect(res.body.contact).toEqual({
       id: 99, name: 'Alice Sharma',
       email: 'alice@example.com', company: 'Acme Co',
+      // Login response includes the portal avatar (routes/portal.js maps
+      // `avatarUrl: contact.avatarUrl || null`). This mock contact has no
+      // avatarUrl set, so the route returns null.
+      avatarUrl: null,
     });
     // Token claim shape — tenantId MUST come from contact row, NOT request body
     const decoded = jwt.verify(res.body.token, JWT_SECRET);
@@ -393,5 +397,97 @@ describe('GET /invoices — cross-contact + cross-tenant isolation', () => {
         where: { contactId: 42, tenantId: 1 },
       })
     );
+  });
+});
+
+// ── GET /api/portal/invoices?fields=summary — #920 slice 33 ────────────
+
+describe('GET /invoices ?fields=summary — slim-shape opt-in', () => {
+  // #920 slice 33 pins the additive opt-in projection contract on the
+  // portal invoice list. Mirrors slices 1-30. Pre-existing callers (no
+  // ?fields, ?fields=full, ?fields=anything-else) MUST continue to get
+  // the full default row shape (no Prisma select). ?fields=summary is
+  // an exact-string opt-in that swaps default shape → minimal column
+  // projection. Cross-contact + cross-tenant scoping MUST be preserved
+  // identically under both code paths — the slim shape is purely a
+  // column-set narrowing, never a filter relaxation.
+
+  test('default (no ?fields) → findMany has NO select; tenant+contact scope preserved', async () => {
+    prisma.invoice.findMany.mockResolvedValue([]);
+    const res = await request(makeApp())
+      .get('/api/portal/invoices')
+      .set('Authorization', portalBearer({ contactId: 42, tenantId: 1 }));
+    expect(res.status).toBe(200);
+    const args = prisma.invoice.findMany.mock.calls[0][0];
+    expect(args).not.toHaveProperty('select');
+    expect(args.where).toEqual({ contactId: 42, tenantId: 1 });
+    expect(args.orderBy).toEqual({ issuedDate: 'desc' });
+  });
+
+  test('?fields=summary → slim Prisma select applied with the minimal column set', async () => {
+    prisma.invoice.findMany.mockResolvedValue([]);
+    const res = await request(makeApp())
+      .get('/api/portal/invoices?fields=summary')
+      .set('Authorization', portalBearer({ contactId: 42, tenantId: 1 }));
+    expect(res.status).toBe(200);
+    const args = prisma.invoice.findMany.mock.calls[0][0];
+    expect(args.select).toEqual({
+      id: true,
+      invoiceNum: true,
+      amount: true,
+      status: true,
+      dueDate: true,
+      issuedDate: true,
+    });
+    // No leakage of heavy columns into the slim projection.
+    expect(args.select).not.toHaveProperty('isRecurring');
+    expect(args.select).not.toHaveProperty('recurFrequency');
+    expect(args.select).not.toHaveProperty('nextRecurDate');
+    expect(args.select).not.toHaveProperty('parentInvoiceId');
+    expect(args.select).not.toHaveProperty('visitId');
+    expect(args.select).not.toHaveProperty('legalEntityCode');
+    expect(args.select).not.toHaveProperty('paidAt');
+    expect(args.select).not.toHaveProperty('tenantId');
+  });
+
+  test('?fields=summary preserves BOTH contactId AND tenantId scope (no filter relaxation)', async () => {
+    // Regression pin: slim-shape MUST NOT silently drop the cross-
+    // contact / cross-tenant isolation. The where-clause is identical
+    // to the default path.
+    prisma.invoice.findMany.mockResolvedValue([]);
+    await request(makeApp())
+      .get('/api/portal/invoices?fields=summary')
+      .set('Authorization', portalBearer({ contactId: 42, tenantId: 1 }));
+    const args = prisma.invoice.findMany.mock.calls[0][0];
+    expect(args.where).toEqual({ contactId: 42, tenantId: 1 });
+  });
+
+  test('?fields=full (or any non-exact value) → falls back to default shape, no select', async () => {
+    // Exact-string opt-in: only the literal "summary" enables slim.
+    // Common typos / case variants get the default row shape so
+    // existing callers never silently see narrower data.
+    prisma.invoice.findMany.mockResolvedValue([]);
+    await request(makeApp())
+      .get('/api/portal/invoices?fields=full')
+      .set('Authorization', portalBearer({ contactId: 42, tenantId: 1 }));
+    let args = prisma.invoice.findMany.mock.calls[0][0];
+    expect(args).not.toHaveProperty('select');
+
+    prisma.invoice.findMany.mockClear();
+    await request(makeApp())
+      .get('/api/portal/invoices?fields=Summary') // case-sensitive
+      .set('Authorization', portalBearer({ contactId: 42, tenantId: 1 }));
+    args = prisma.invoice.findMany.mock.calls[0][0];
+    expect(args).not.toHaveProperty('select');
+  });
+
+  test('?fields=summary still requires portal JWT (no auth bypass via query param)', async () => {
+    // Defensive: the slim-shape opt-in lives INSIDE the verifyPortalToken
+    // wrapper. An unauthenticated caller passing ?fields=summary must
+    // still 401 — the query param doesn't bypass auth.
+    const res = await request(makeApp())
+      .get('/api/portal/invoices?fields=summary');
+    expect(res.status).toBe(401);
+    expect(prisma.invoice.findMany).not.toHaveBeenCalled();
   });
 });

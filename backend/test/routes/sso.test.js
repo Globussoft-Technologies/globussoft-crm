@@ -375,8 +375,10 @@ describe('GET /api/sso/google/callback', () => {
   test('links existing local user by email — updates googleId + ssoProvider', async () => {
     // findFirst (by googleId) returns null — no prior link.
     prisma.user.findFirst.mockResolvedValueOnce(null);
-    // findUnique (by email) returns the existing local user.
-    prisma.user.findUnique.mockResolvedValueOnce({
+    // findFirst (by email) — User.email is composite-unique with tenantId
+    // so the SUT uses findFirst for email lookups too (was findUnique
+    // pre-migration). Mock the same row for the second call.
+    prisma.user.findFirst.mockResolvedValueOnce({
       id: 100,
       email: 'alice@example.com',
       role: 'USER',

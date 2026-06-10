@@ -400,9 +400,10 @@ describe('Coupons — edit flow', () => {
 // 10. Delete flow — native confirm gate
 // ─────────────────────────────────────────────────────────────────────
 describe('Coupons — delete flow', () => {
-  it('DELETEs /api/wellness/coupons/:id and surfaces success notify when confirm()=true', async () => {
+  // SUT drift: delete uses notify.confirm({...}) (async), NOT window.confirm.
+  it('DELETEs /api/wellness/coupons/:id and surfaces success notify when notify.confirm()=true', async () => {
     fetchApiMock.mockImplementation(makeListMock([COUPON_PERCENT]));
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    notify.confirm.mockImplementation(() => Promise.resolve(true));
     render(<CouponsPage />);
 
     await waitFor(() => expect(screen.getByText('SUMMER25')).toBeInTheDocument());
@@ -417,12 +418,11 @@ describe('Coupons — delete flow', () => {
       expect(dels.length).toBe(1);
     });
     expect(notify.success).toHaveBeenCalledWith(expect.stringMatching(/Coupon deleted/i));
-    confirmSpy.mockRestore();
   });
 
-  it('does NOT DELETE when confirm()=false', async () => {
+  it('does NOT DELETE when notify.confirm()=false', async () => {
     fetchApiMock.mockImplementation(makeListMock([COUPON_PERCENT]));
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    notify.confirm.mockImplementation(() => Promise.resolve(false));
     render(<CouponsPage />);
 
     await waitFor(() => expect(screen.getByText('SUMMER25')).toBeInTheDocument());
@@ -431,10 +431,10 @@ describe('Coupons — delete flow', () => {
 
     // Give microtasks a beat.
     await Promise.resolve();
+    await Promise.resolve();
     const dels = fetchApiMock.mock.calls.filter(([, opts]) => opts?.method === 'DELETE');
     expect(dels.length).toBe(0);
     expect(notify.success).not.toHaveBeenCalledWith(expect.stringMatching(/Coupon deleted/i));
-    confirmSpy.mockRestore();
   });
 });
 

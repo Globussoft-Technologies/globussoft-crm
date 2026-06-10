@@ -20,22 +20,28 @@ import { useContext, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   AlertCircle, BadgePercent, Calendar as CalendarIcon,
-  ClipboardCheck, Compass, DollarSign, FileText, Globe, Luggage,
+  ClipboardCheck, Compass, IndianRupee, FileText, Globe, Luggage,
   Map as MapIcon, RefreshCw,
 } from "lucide-react";
 import { AuthContext } from "../../App";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
+import { useActiveSubBrand } from "../../utils/subBrand";
 
 export default function TravelDashboard() {
   const { user, tenant } = useContext(AuthContext) || {};
   const notify = useNotify();
+  const { activeSubBrand } = useActiveSubBrand();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
 
   const load = () => {
     setLoading(true);
-    fetchApi("/api/travel/dashboard")
+    // Mirror the sidebar sub-brand switcher: when a brand is active, scope
+    // every tile to it via ?subBrand=. "All" (activeSubBrand=null) sends no
+    // param so the endpoint falls back to the caller's full access set.
+    const qs = activeSubBrand ? `?subBrand=${encodeURIComponent(activeSubBrand)}` : "";
+    fetchApi(`/api/travel/dashboard${qs}`)
       .then(setData)
       .catch((e) => {
         notify.error(e?.body?.error || "Failed to load dashboard");
@@ -43,7 +49,9 @@ export default function TravelDashboard() {
       })
       .finally(() => setLoading(false));
   };
-  useEffect(load, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // Re-fetch on mount AND whenever the active sub-brand changes, so flipping
+  // the switcher recomputes the KPI tiles instead of showing stale "All" data.
+  useEffect(load, [activeSubBrand]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div style={{ padding: 24, maxWidth: 1200, margin: "0 auto" }}>
@@ -104,7 +112,7 @@ export default function TravelDashboard() {
               }
             />
             <Tile
-              icon={DollarSign}
+              icon={IndianRupee}
               label="Cost master (active rates)"
               value={data.costMaster.activeRows}
               footer={byKeyFooter(data.costMaster.bySubBrand)}
@@ -138,7 +146,7 @@ export default function TravelDashboard() {
                   </tr>
                 </thead>
                 <tbody>
-                  {data.recentTrips.map((t) => (
+                  {(data.recentTrips || []).map((t) => (
                     <tr key={t.id} style={trStyle}>
                       <td style={td}>
                         <Link to={`/travel/trips/${t.id}`} style={tripLink}>

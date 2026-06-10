@@ -197,9 +197,13 @@ router.get("/agent/:userId", async (req, res) => {
 
     const baseWhere = buildWhere(req, startDate, endDate);
     const [deals, tasks, calls, emails, contacts] = await Promise.all([
+      // eslint-disable-next-line gbscrm/tenant-scope-finder-heuristic -- safe: spread `...baseWhere` injects { tenantId: req.user.tenantId } via buildWhere() helper (L26-34). ESLint AST can't see through the spread. S36 (FR-3.4 / #919) audit-reviewed false-positive.
       prisma.deal.findMany({ where: { ...baseWhere, ownerId: userId }, include: { contact: { select: { name: true } } }, orderBy: { createdAt: 'desc' }, take: 20 }),
+      // eslint-disable-next-line gbscrm/tenant-scope-finder-heuristic -- safe: spread `...baseWhere` injects tenantId via buildWhere() helper. S36 (FR-3.4 / #919) audit-reviewed false-positive.
       prisma.task.findMany({ where: { ...baseWhere, userId }, orderBy: { createdAt: 'desc' }, take: 20 }),
+      // eslint-disable-next-line gbscrm/tenant-scope-finder-heuristic -- safe: spread `...baseWhere` injects tenantId via buildWhere() helper. S36 (FR-3.4 / #919) audit-reviewed false-positive.
       prisma.callLog.findMany({ where: { ...baseWhere, userId }, include: { contact: { select: { name: true } } }, orderBy: { createdAt: 'desc' }, take: 20 }),
+      // eslint-disable-next-line gbscrm/tenant-scope-finder-heuristic -- safe: spread `...baseWhere` injects tenantId via buildWhere() helper. S36 (FR-3.4 / #919) audit-reviewed false-positive.
       prisma.emailMessage.findMany({ where: { ...baseWhere, userId, direction: 'OUTBOUND' }, orderBy: { createdAt: 'desc' }, take: 20 }),
       prisma.contact.findMany({ where: { tenantId, assignedToId: userId }, select: { id: true, name: true, email: true, status: true, aiScore: true } }),
     ]);

@@ -219,6 +219,7 @@ jobs:
             tests/sequences-input-sanitization-api.spec.js \
             tests/gdpr-dsar-export-api.spec.js \
             tests/wellness-portal-dsar-api.spec.js \
+            tests/wellness-portal-prescriptions-rbac-api.spec.js \
             tests/report-schedules-api.spec.js \
             tests/landing-page-upload-api.spec.js \
             tests/field-permissions-enforcement-api.spec.js \
@@ -236,6 +237,7 @@ jobs:
             tests/deals_documents.spec.js \
             tests/wellness-patient-soft-delete-api.spec.js \
             tests/wallet-giftcard-coupon-api.spec.js \
+            tests/giftcards-apply-api.spec.js \
             tests/memberships-api.spec.js \
             tests/memberships-dashboard-api.spec.js \
             tests/inventory-extension-api.spec.js \
@@ -258,16 +260,24 @@ jobs:
             tests/pii-masking-api.spec.js \
             tests/developer-api.spec.js \
             tests/security-validation-2026-05-12-api.spec.js \
+            tests/wellness-csv-io-api.spec.js \
+            tests/role-landing-path-api.spec.js \
+            tests/widgets-api.spec.js \
+            tests/page-catalog-api.spec.js \
             tests/knowledge-base-api.spec.js \
             tests/landing-pages-api.spec.js \
             tests/portal-api.spec.js \
+            tests/portal-kyc-api.spec.js \
             tests/tenant-switch-disabled-api.spec.js \
             tests/voice-transcription-api.spec.js \
             tests/channels-credentials-api.spec.js \
             tests/wellness-consent-archive-api.spec.js \
             tests/travel-diagnostics-api.spec.js \
+            tests/travel-tmc-diagnostic-api.spec.js \
             tests/travel-digilocker-stub-api.spec.js \
             tests/travel-itineraries-api.spec.js \
+            tests/travel-itinerary-suggest-api.spec.js \
+            tests/travel-flight-plugin-api.spec.js \
             tests/travel-trips-api.spec.js \
             tests/travel-cost-master-api.spec.js \
             tests/travel-suppliers-api.spec.js \
@@ -290,12 +300,22 @@ jobs:
             tests/pos-sale-finalize-api.spec.js \
             tests/travel-quote-lines-api.spec.js \
             tests/travel-idor-cross-tenant-api.spec.js \
+            tests/wellness-role-types-api.spec.js \
             tests/subscriptions-api.spec.js \
             tests/funnel-api.spec.js \
             tests/win-loss-api.spec.js \
             tests/marketplace-leads-api.spec.js \
             tests/approvals-api.spec.js \
             tests/sso-api.spec.js \
+            tests/auth-profile-picture-api.spec.js \
+            tests/wellness-my-transactions-api.spec.js \
+            tests/staff-api.spec.js \
+            tests/portal-appointments-api.spec.js \
+            tests/security-headers-api.spec.js \
+            tests/travel-flyer-public-api.spec.js \
+            tests/travel-pois-api.spec.js \
+            tests/webhook-credential-api.spec.js \
+            tests/wellness-portal-notifications-api.spec.js \
             tests/teardown-completeness.spec.js \
             tests/demo-hygiene-api.spec.js
 

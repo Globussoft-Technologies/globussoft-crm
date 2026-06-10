@@ -24,10 +24,40 @@ router.get("/products", verifyToken, async (req, res) => {
 // Push new SKUs to Product Catalog
 router.post("/products", verifyToken, async (req, res) => {
   try {
-    const product = await prisma.product.create({ data: { ...req.body, tenantId: req.user.tenantId } });
+    const allowlist = [
+      'name', 'sku', 'description', 'price', 'isRecurring', 'threshold',
+      'currentStock', 'partialMlUsed', 'brandName', 'productType', 'productCode',
+      'hsnCode', 'volume', 'unit', 'discountedPrice', 'dealerPrice',
+      'purchasePrice', 'manufacturer', 'tax', 'isTaxIncluded', 'barcode',
+      'imageUrl', 'isActive', 'categoryId'
+    ];
+    const data = {};
+    for (const key of allowlist) {
+      if (req.body[key] !== undefined) data[key] = req.body[key];
+    }
+    const product = await prisma.product.create({ data: { ...data, tenantId: req.user.tenantId } });
     res.status(201).json(product);
   } catch(_err) {
     res.status(500).json({ error: "Product matrix mutation failed structurally." });
+  }
+});
+
+// List all Quotes for the tenant (used by the Signatures page dropdown).
+// Optional ?dealId= narrows the result to a single deal — useful for callers
+// that want filter-by-deal without hitting the /:dealId variant below.
+router.get("/quotes", verifyToken, async (req, res) => {
+  try {
+    const where = { tenantId: req.user.tenantId };
+    if (req.query.dealId) where.dealId = parseInt(req.query.dealId);
+    const quotes = await prisma.quote.findMany({
+      where,
+      include: { lineItems: true },
+      orderBy: { createdAt: 'desc' },
+    });
+    const filtered = await filterReadFields(quotes, req.user.role, "Quote", req.user.tenantId);
+    res.json(filtered);
+  } catch(_err) {
+    res.status(500).json({ error: "Fetching CPQ arrays failed." });
   }
 });
 

@@ -70,6 +70,40 @@ const app = express();
 app.set('trust proxy', 1); // trust first proxy (Nginx)
 const server = http.createServer(app);
 
+// ── Express 4 Async Error Patch ─────────────────────────────────────
+// Express 4 does not catch rejected promises in async route handlers.
+// This patch wraps every route handler so that `throw` or a rejected
+// promise inside an async handler is forwarded to `next(err)` and
+// reaches the global error handler at the bottom of this file.
+// Covers app.* methods and Router.prototype.* methods so sub-routers
+// (routes/*.js) are protected too.
+function patchAsyncErrorHandling(target, methods) {
+  for (const method of methods) {
+    const original = target[method];
+    // Preserve `this` — Express's verb methods operate on the calling
+    // router/app instance (this.stack etc.). Binding to `target` (the shared
+    // prototype) would point them at the wrong object, so forward with .call.
+    target[method] = function (path, ...handlers) {
+      const wrapped = handlers.map((handler) => {
+        if (typeof handler !== "function") return handler;
+        return function (req, res, next) {
+          const result = handler(req, res, next);
+          if (result && typeof result.catch === "function") {
+            result.catch(next);
+          }
+        };
+      });
+      return original.call(this, path, ...wrapped);
+    };
+  }
+}
+const HTTP_METHODS = ["get", "post", "put", "patch", "delete"];
+patchAsyncErrorHandling(app, HTTP_METHODS);
+// In Express 4 the verb methods live on the `express.Router` function object
+// itself (router instances inherit from it via setPrototypeOf), NOT on
+// `express.Router.prototype` — patch the former so sub-routers are covered.
+patchAsyncErrorHandling(express.Router, HTTP_METHODS);
+
 // Initialize Sentry early for full request capture (no-op if SENTRY_DSN not set)
 initSentry(app);
 
@@ -98,6 +132,13 @@ const ALLOWED_ORIGINS = [
   "http://127.0.0.1:5173",
   "http://127.0.0.1:5000",
   "https://globuscrm.globussoft.com",
+  // Dr. Haror's external marketing site — consumes the public wellness
+  // catalog + payment endpoints (POST /api/wellness/public/payment/order +
+  // /confirm). Hardcoded because it's part of the product surface, not a
+  // one-off env override.
+  "https://enhancewellness.globusdemos.com",
+  "http://localhost:8080",
+  "http://127.0.0.1:8080",
   ...(process.env.FRONTEND_URL ? [process.env.FRONTEND_URL] : []),
   ...(process.env.CORS_ALLOWED_ORIGINS
     ? process.env.CORS_ALLOWED_ORIGINS.split(",").map((s) => s.trim()).filter(Boolean)
@@ -116,6 +157,31 @@ app.use(cors({
   },
   credentials: true,
 }));
+// ─── WhatsApp webhook (P1 — must mount BEFORE express.json) ──────────────
+// Meta signs the raw request body with HMAC-SHA-256 using META_APP_SECRET.
+// Any JSON re-serialization would change the byte stream and break the
+// signature check. We therefore mount the webhook router here — earlier
+// than the global JSON body parser — with its own express.raw() so the
+// middleware in middleware/metaWebhook.js sees a Buffer.
+//
+// The router responds 200 immediately and processes events asynchronously
+// via setImmediate; downstream middlewares (express.json, helmet, auth
+// guard, etc.) never run for these requests because the response is
+// already flushed.
+//
+// Existing GET/POST /webhook stubs inside routes/whatsapp.js are tombstones
+// that log + 503 if they ever fire — that would indicate this mount-order
+// is wrong.
+// Attach `req.io` BEFORE the webhook mount so the webhook handler can
+// emit Socket.IO events to connected operators (real-time inbox push).
+// Pre-fix: the matching middleware lower down (~line 322) ran AFTER
+// the webhook router → `req.io` was undefined inside handleMessagesEvent
+// → emit silently no-op'd → frontend never received the
+// `whatsapp:received` event → users had to refresh manually.
+app.use((req, _res, next) => { req.io = io; next(); });
+
+app.use("/api/whatsapp/webhook", require("./routes/whatsapp_webhook"));
+
 app.use(express.json({ limit: "10mb" }));
 // Twilio voice/telephony/SMS webhooks and Mailgun/Razorpay form posts send
 // `application/x-www-form-urlencoded`. Without this parser req.body is empty
@@ -125,8 +191,12 @@ app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
 // Security middleware
 const cookieParser = require('cookie-parser');
-const { helmetMiddleware, helmetStrictReportOnlyMiddleware, permissionsPolicyMiddleware, sanitizeBody, stripTenantOverride } = require('./middleware/security');
+const { attachNonce, helmetMiddleware, helmetStrictReportOnlyMiddleware, permissionsPolicyMiddleware, sanitizeBody, stripTenantOverride, allowIframeEmbedding } = require('./middleware/security');
 const { originCheck } = require('./middleware/originCheck');
+// #917 slice S1 (FR-3.2) — mint a per-request CSP nonce BEFORE the strict
+// Report-Only CSP middleware runs. The CSP function-directives read
+// res.locals.cspNonce to advertise `'nonce-<base64>'` on script-src/style-src.
+app.use(attachNonce);
 app.use(helmetMiddleware);
 // #917 slice 1 — additive strict CSP in Report-Only mode (no 'unsafe-inline'
 // on script-src/style-src). Browsers log violations to devtools without
@@ -281,6 +351,9 @@ const CONTENT_TYPE_GUARD_EXCLUDE_PREFIXES = [
   // application/reports+json, neither of which is in SUPPORTED_CONTENT_TYPES.
   // The route's own express.json() parser handles them.
   "/api/csp/report",
+  // #921 / FR-3.7 (S5) — new SecurityIncident-backed CSP report sink.
+  // Same content-type handling rationale as /api/csp/report above.
+  "/api/security/csp-report",
 ];
 app.use("/api", (req, res, next) => {
   if (!["POST", "PUT", "PATCH"].includes(req.method)) return next();
@@ -305,11 +378,9 @@ const presenceColors = ['#ef4444', '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '
 const { setIO } = require('./lib/eventBus');
 setIO(io);
 
-// Attach socket to requests so routes can emit events
-app.use((req, res, next) => {
-  req.io = io;
-  next();
-});
+// req.io is now attached at the top of the middleware chain (above the
+// webhook mount) so the WhatsApp webhook handler can use it. No need
+// to re-attach here — left as a comment marker only.
 
 io.on("connection", (socket) => {
   console.log(`[Socket] Client connected: ${socket.id}`);
@@ -338,6 +409,13 @@ io.on("connection", (socket) => {
 
 // Import Enterprise Routes
 const authRoutes = require("./routes/auth");
+const rolesRoutes = require("./routes/roles");
+const widgetsRoutes = require("./routes/widgets");
+const pagesRoutes = require("./routes/pages");
+// /api/users — per-target user endpoints (currently just :userId/permissions).
+// Sister surface to /api/auth/me/* but addresses ANY user, with same-tenant +
+// roles.read guards inside the handler.
+const usersRoutes = require("./routes/users");
 const contactsRoutes = require("./routes/contacts");
 const dealsRoutes = require("./routes/deals");
 const calendarRoutes = require("./routes/calendar");
@@ -348,6 +426,7 @@ const dealsDocumentsRoutes = require("./routes/deals_documents");
 const marketingRoutes = require("./routes/marketing");
 const reportsRoutes = require("./routes/reports");
 const developerRoutes = require("./routes/developer");
+const settingsRoutes = require("./routes/settings");
 const billingRoutes = require("./routes/billing");
 const v1InvoicesRoutes = require("./routes/v1_invoices");
 const searchRoutes = require("./routes/search");
@@ -419,6 +498,7 @@ const approvalsRoutes = require("./routes/approvals");
 const documentTemplatesRoutes = require("./routes/document_templates");
 const surveysRoutes = require("./routes/surveys");
 const paymentsRoutes = require("./routes/payments");
+const paymentGatewaysRoutes = require("./routes/payment_gateways");
 const accountingRoutes = require("./routes/accounting");
 const dealInsightsRoutes = require("./routes/deal_insights");
 const dataEnrichmentRoutes = require("./routes/data_enrichment");
@@ -494,6 +574,7 @@ const embassyRulesRoutes = require("./routes/embassy_rules");
 // /api/embassy-rules) since authorship is tenant-wide ADMIN / advisor-head,
 // not sub-brand-scoped. Backs the diagnostic-engine destination scoring.
 const travelCurriculumRoutes = require("./routes/travel_curriculum");
+const travelSchoolTermRoutes = require("./routes/travel_school_terms");
 // TS18 Phase 2 SHELL — Travel Stall personalised destination recommender
 // (LLM consumer). Mounted at /api/travel-personalised-destinations so the
 // URL is sibling-flat with /api/embassy-rules / /api/travel-curriculum
@@ -523,6 +604,8 @@ const attendanceRoutes = require("./routes/attendance");
 const leaveRoutes = require("./routes/leave");
 // External partner API v1 (Callified.ai, Globus Phone, etc. — API key auth)
 const externalRoutes = require("./routes/external");
+// Flight Quotation plugin endpoint (#908) — API key auth via X-API-Key
+const travelFlightQuotesRoutes = require("./routes/travel_flight_quotes");
 // Voyagr (OJR) CMS lead-capture API v1 — API key auth via X-API-Key
 // (mirror partner-API pattern). See docs/MANUAL_CODING_BACKLOG.md cluster F1.
 // CORS: voyagr's server-to-server call (Next.js API route → CRM) has no
@@ -541,6 +624,11 @@ const adminRoutes = require("./routes/admin");
 const serviceCategoriesRoutes = require("./routes/service_categories");
 const drugsRoutes = require("./routes/drugs");
 const csvIoRoutes = require("./routes/csv_io");
+// Wave 3 — Staff availability blocks (breaks, leave, personal time)
+const blockTimesRoutes = require("./routes/block-times");
+// Issue #816 — per-entity CSV import/export with template + async modes for
+// the wellness list pages (services, packages, products, customers, bookings).
+const wellnessCsvRoutes = require("./routes/wellnessCsv");
 
 // OpenAPI Swagger Bootloader
 //
@@ -568,8 +656,46 @@ app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument, {
 
 // Global auth guard — protects all /api/ routes EXCEPT auth login/signup and health
 app.use("/api", (req, res, next) => {
-  const openPaths = ["/auth/login", "/auth/signup", "/auth/register", "/auth/forgot-password", "/auth/reset-password", "/auth/2fa/verify", "/health", "/marketplace-leads/webhook", "/sms/webhook", "/whatsapp/webhook", "/telephony/webhook", "/push/subscribe/visitor", "/push/vapid-key", "/communications/track/", "/sso/google/callback", "/sso/microsoft/callback", "/sso/google/start", "/sso/microsoft/start", "/email/inbound", "/calendar/google/callback", "/calendar/outlook/callback", "/voice/webhook", "/portal/login", "/portal/forgot", "/portal/reset", "/signatures/sign", "/surveys/respond", "/surveys/public", "/chatbots/chat", "/web-visitors/track", "/payments/webhook", "/accounting/webhook", "/scim/v2", "/booking-pages/public", "/knowledge-base/public", "/live-chat/visitor", "/document-views/track", "/zapier/webhook", "/marketing/submit", "/v1/external", "/v1/voyagr", "/wellness/public", "/wellness/portal", "/attendance/biometric/webhook", "/travel/microsites/public", "/travel/diagnostics/public", "/travel/itineraries/public", "/travel/inbound/leads", "/csp/report"];
+  // /portal/set-password was previously in openPaths — that's a real
+  // security hole: any anonymous caller could rewrite a contact's portal
+  // password to a value of their choice. Per #537 + portal-api.spec.js:41
+  // the route requires a staff (admin / manager) token — the staff user
+  // promotes a contact to a portal user. Removing the entry routes the
+  // unauthenticated case through the global guard's 401 (RFC 7235), and
+  // the authenticated case continues unaffected.
+  const openPaths = ["/auth/login", "/auth/signup", "/auth/register", "/auth/customer/register", "/auth/public/tenants", "/auth/forgot-password", "/auth/reset-password", "/auth/2fa/verify", "/health", "/marketplace-leads/webhook", "/sms/webhook", "/whatsapp/webhook", "/telephony/webhook", "/push/subscribe/visitor", "/push/vapid-key", "/communications/track/", "/sso/google/callback", "/sso/microsoft/callback", "/sso/google/start", "/sso/microsoft/start", "/email/inbound", "/calendar/google/callback", "/calendar/outlook/callback", "/voice/webhook", "/portal/login", "/portal/forgot", "/portal/reset", "/portal/me", "/portal/tickets", "/portal/invoices", "/portal/contracts", "/portal/travel", "/portal/kyc", "/signatures/sign", "/surveys/respond", "/surveys/public", "/chatbots/chat", "/web-visitors/track", "/payments/webhook", "/accounting/webhook", "/scim/v2", "/booking-pages/public", "/knowledge-base/public", "/live-chat/visitor", "/document-views/track", "/zapier/webhook", "/marketing/submit", "/v1/external", "/v1/voyagr", "/v1/flight-plugin", "/wellness/public", "/wellness/portal", "/attendance/biometric/webhook", "/travel/microsites/public", "/travel/diagnostics/public", "/travel/itineraries/public", "/travel/inbound/leads", "/v1/flyers/public", "/security/csp-report"];
   if (openPaths.some(p => req.path.startsWith(p))) return next();
+  // Public marketing catalog — the /pricing page hits GET /subscriptions/plans
+  // anonymously. Admin CRUD (POST/PUT/DELETE + GET /plans/admin) stays gated
+  // by the route-level verifyToken+verifyRole middleware below.
+  if (req.method === 'GET' && req.path === '/subscriptions/plans') return next();
+  // The travel itinerary PDF is opened in a NEW TAB via a plain <a href>
+  // (no fetch → no Authorization header), so the frontend passes the bearer
+  // JWT as a ?_t= query param. Promote it to the Authorization header so
+  // verifyToken can validate. SCOPED to exactly /travel/itineraries/:id/pdf —
+  // this does NOT broaden token-in-URL acceptance for any other route, and
+  // verifyToken still fully validates the token (no auth bypass).
+  if (
+    req.method === 'GET' &&
+    !req.headers.authorization &&
+    req.query && req.query._t &&
+    /^\/travel\/itineraries\/\d+\/pdf$/.test(req.path)
+  ) {
+    req.headers.authorization = `Bearer ${req.query._t}`;
+  }
+  // TMC public readiness PDF — `/travel/diagnostics/:id/readiness-report.pdf`
+  // is designed public per PRD §5.1 DD-5.2 (the school clicks the report-
+  // download URL surfaced after public submit-tmc).  Can't be a prefix
+  // entry in openPaths because the `:id` segment is dynamic; suffix match
+  // on the route shape lets it through without auth.  Tightly scoped to
+  // GET + the exact suffix so other /travel/diagnostics/:id sub-routes
+  // stay auth-gated.
+  if (req.method === 'GET' && /^\/travel\/diagnostics\/\d+\/readiness-report\.pdf$/.test(req.path)) return next();
+  // Slice C9 — TravelQuote customer-share landing endpoints (PRD §3.7).
+  // Public, JWT-gated by `:shareToken` segment (verified inside the route).
+  // GET = read-only envelope; POST = accept|reject|counter customer actions.
+  if (req.method === 'GET' && /^\/travel\/quotes\/public\/quote\/[^/]+$/.test(req.path)) return next();
+  if (req.method === 'POST' && /^\/travel\/quotes\/public\/quote\/[^/]+\/(accept|reject|counter)$/.test(req.path)) return next();
   verifyToken(req, res, (err) => {
     if (err) return next(err);
     checkSubscription(req, res, next);
@@ -595,6 +721,15 @@ app.param("id", validateNumericId);
 
 // Map API Endpoints
 app.use("/api/auth", authRoutes);
+app.use("/api/roles", rolesRoutes);
+// SPEC §C3 — unified /api/me + /api/permissions endpoints. Both come
+// from the same module so the SPEC-named endpoint surface is contiguous.
+const { meRouter, permissionsRouter } = require("./routes/me");
+app.use("/api/me", meRouter);
+app.use("/api/permissions", permissionsRouter);
+app.use("/api/widgets", widgetsRoutes);
+app.use("/api/pages", pagesRoutes);
+app.use("/api/users", usersRoutes);
 app.use("/api/contacts", contactsRoutes);
 app.use("/api/deals", dealsRoutes);
 app.use("/api/calendar", calendarRoutes);
@@ -605,6 +740,7 @@ app.use("/api/deals_documents", dealsDocumentsRoutes);
 app.use("/api/marketing", marketingRoutes);
 app.use("/api/reports", reportsRoutes);
 app.use("/api/developer", developerRoutes);
+app.use("/api/settings", settingsRoutes);
 app.use("/api/billing", billingRoutes);
 // PRD Gap §2 items 7a-d — `/api/v1/invoices` stable public-API alias for the
 // legacy /api/billing surface. Includes a NEW POST /:id/payments endpoint
@@ -635,6 +771,11 @@ app.use("/api/audit", auditRoutes);
 app.use("/api/marketplace-leads", marketplaceLeadsRoutes);
 app.use("/api/sms", smsRoutes);
 app.use("/api/whatsapp", whatsappRoutes);
+// P2: WhatsApp embedded-signup onboarding routes. Mounted as a separate
+// router under /api/whatsapp/onboard so the rate-limiter + auth guard
+// pipeline above applies, but the route handlers live in
+// routes/whatsapp_onboard.js. Feature-flagged via WHATSAPP_EMBEDDED_SIGNUP_ENABLED.
+app.use("/api/whatsapp/onboard", require("./routes/whatsapp_onboard"));
 app.use("/api/telephony", telephonyRoutes);
 app.use("/api/push", pushRoutes);
 app.use("/api/landing-pages", landingPagesRoutes);
@@ -682,6 +823,7 @@ app.use("/api/approvals", approvalsRoutes);
 app.use("/api/document-templates", documentTemplatesRoutes);
 app.use("/api/surveys", surveysRoutes);
 app.use("/api/payments", paymentsRoutes);
+app.use("/api/payment-gateways", paymentGatewaysRoutes);
 app.use("/api/accounting", accountingRoutes);
 app.use("/api/deal-insights", dealInsightsRoutes);
 app.use("/api/data-enrichment", dataEnrichmentRoutes);
@@ -728,12 +870,31 @@ app.use("/api/travel/visa/analytics", travelVisaAnalyticsRoutes);
 app.use("/api/travel/visa", travelVisaRoutes);
 app.use("/api/travel", travelItinerariesRoutes);
 app.use("/api/travel", travelTripsRoutes);
+// Slice C2 — passport OCR upload + verification queue (stub-mode pending PC-1).
+app.use("/api/travel/passport", require("./routes/travel_passport"));
 app.use("/api/travel", travelCostMasterRoutes);
 app.use("/api/travel", travelSuppliersRoutes);
+// Slice C9 — TravelQuote customer-share public landing (PRD §3.7).
+// MUST be mounted BEFORE travelQuotesRoutes — the operator route has
+// `:id` capture on `/quotes/:id` which would otherwise match `/quotes/public/...`
+// at validateNumericId and 400 INVALID_ID before reaching the public router.
+app.use("/api/travel/quotes/public", require("./routes/travel_quotes_public"));
+app.use("/api/travel/quote-templates", require("./routes/travel_quote_templates"));
+app.use("/api/travel/cancellation-policies", require("./routes/travel_cancellation_policies"));
 app.use("/api/travel", travelQuotesRoutes);
 app.use("/api/travel", travelInvoicesRoutes);
 app.use("/api/travel", require("./routes/travel_flyer_templates"));
+// S78 (Marketing Flyer #908) — mount the mixed-auth flyer share + public render
+// router. POST /:id/share is auth-gated inside the router (verifyToken +
+// verifyRole + requireTravelTenant); GET /public/:slug + /public/:slug/meta
+// bypass auth via the '/v1/flyers/public' entry added to openPaths above.
+// Same shape as travel_quotes_public mount (line 877).
+app.use("/api/v1/flyers", require("./routes/travel_flyer_public"));
 app.use("/api/travel", require("./routes/travel_commission_profiles"));
+// WS-1 — sub-brand session scope (POST /session/switch-brand + GET
+// /session/active-brand). Authoritative server-side validation behind the
+// sidebar sub-brand switcher; reuses middleware/travelGuards.js plumbing.
+app.use("/api/travel", require("./routes/travel_session"));
 app.use("/api/brand-kits", brandKitsRoutes);
 app.use("/api/adsgpt", adsgptRoutes);
 app.use("/api/ratehawk", ratehawkRoutes);
@@ -749,9 +910,13 @@ app.use("/api/travel", travelTravelStallRoutes);
 app.use("/api/travel", require("./routes/travel_inbound_leads"));
 app.use("/api/travel/itinerary-templates", require("./routes/travel_itinerary_templates"));
 app.use("/api/travel/sightseeing", require("./routes/travel_sightseeing"));
+app.use("/api/travel/pois", require("./routes/travel_pois"));
 app.use("/api/embassy-rules", embassyRulesRoutes);
 app.use("/api/travel-curriculum", travelCurriculumRoutes);
+app.use("/api/travel-school-terms", travelSchoolTermRoutes);
 app.use("/api/travel-personalised-destinations", travelPersonalisedDestinationsRoutes);
+app.use("/api/travel-tmc-catalogue", require("./routes/travel_tmc_catalogue"));
+app.use("/api/travel/engine-weights", require("./routes/travel_engine_weights"));
 app.use("/api/tenant/sub-brand-themes", subBrandThemesRoutes);
 // Wellness vertical
 app.use("/api/wellness", wellnessRoutes);
@@ -760,10 +925,14 @@ app.use("/api/wellness", wellnessRoutes);
 // does NOT own (product-categories, vendors, inventory/receipts,
 // inventory/adjustments, inventory/movements, auto-consumption-rules).
 app.use("/api/wellness", inventoryRoutes);
+// Wave 3 — Staff availability blocks (breaks, leave, personal time). Wellness-gated.
+app.use("/api/wellness/block-times", blockTimesRoutes);
 // Wave 7 Agent A — Service catalogue depth + Drug catalogue + CSV io.
 app.use("/api/wellness/service-categories", serviceCategoriesRoutes);
 app.use("/api/wellness/drugs", drugsRoutes);
 app.use("/api/csv", csvIoRoutes);
+// Issue #816 — /api/wellness/csv/:entity/{template|export|import|import/async|jobs}.
+app.use("/api/wellness/csv", wellnessCsvRoutes);
 // Wave 2 Agent II — POS / cash register / shift / sale backbone. Mounted at
 // /api/pos. Wellness-vertical-gated; generic tenants get a clean 403.
 app.use("/api/pos", posRoutes);
@@ -791,11 +960,34 @@ app.use("/api/v1/external", externalRoutes);
 // verifyToken via /v1/voyagr entry in openPaths above; uses its own
 // X-API-Key middleware).
 app.use("/api/v1/voyagr", voyagrRoutes);
+// Flight Quotation plugin endpoint (#908 FR-5) — X-API-Key auth (externalAuth);
+// applies markup server-side + persists a flight ItineraryItem.
+app.use("/api/v1/flight-plugin", travelFlightQuotesRoutes);
 // Admin tooling (ADMIN-only ops triggers + read APIs)
 app.use("/api/admin", adminRoutes);
 
+// PRD_TRAVEL_SECURITY_ARCHITECTURE FR-3.7 (S5) — SecurityIncident ingest
+// + ADMIN triage listing. POST /api/security/csp-report is public (exempt
+// via openPaths + CONTENT_TYPE_GUARD_EXCLUDE_PREFIXES); GET /incidents and
+// POST /incidents/:id/review re-assert verifyToken + verifyRole(['ADMIN'])
+// at the route. Separate from /api/csp (slice 2 of #917) — see route header.
+app.use("/api/security", require("./routes/security_reports"));
+
 // Public landing pages (outside /api/ prefix, no auth guard)
 app.use("/p", landingPagesPublic);
+
+// #921 slice S38 — wire the iframe-embedding override on /embed/* BEFORE
+// the lead-form gate handler. S4 (commit 6561bdc) made the global default
+// X-Frame-Options: DENY + CSP frame-ancestors 'none' so no page can be
+// iframed by anyone — but the embed widget is the ONE intentionally-public
+// iframe surface (partner sites embed our /embed/lead-form.html into their
+// own pages via an iframe pointing at our origin). Without this override
+// every partner-side embed silently broke when S4 landed. allowList: ['*']
+// = "anyone can frame me" — appropriate because the embed widget is
+// intentionally public and partner origins aren't known upfront. Once
+// Tenant.embedAllowlistJson lands (flagged follow-up in security.js:355+),
+// this mount can read per-tenant allowList instead of the wildcard.
+app.use("/embed", allowIframeEmbedding({ allowList: ["*"] }));
 
 // #297: /embed/lead-form.html — server-side gate so a malformed/revoked
 // API key returns 404 at GET time rather than letting the form render and
@@ -839,8 +1031,20 @@ app.get("/embed/lead-form.html", async (req, res, next) => {
   }
 });
 
-// Server File Uploads Statically
+// Server File Uploads Statically.
+// Mounted at BOTH `/uploads` (legacy, kept for any non-Nginx setups that
+// proxy the bare path) AND `/api/uploads` (canonical). The `/api/uploads`
+// mount is the one that actually works on the deployed demo + the Vite dev
+// server, because Nginx only proxies `/api/*` to the backend (and the Vite
+// dev proxy is configured the same way). Bare `/uploads/*` requests hit
+// the static-frontend host first and fall through the SPA catch-all → the
+// browser renders the React index.html as if it were an image → broken
+// image. New upload routes should return `/api/uploads/...` URLs; the
+// PHI gating remains the route-level concern (filenames are
+// pseudo-random, but the static mount itself is intentionally public so
+// `<img src>` works without an Authorization header).
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
+app.use("/api/uploads", express.static(path.join(__dirname, "uploads")));
 // Health Check Endpoint
 const prisma = require("./lib/prisma");
 
@@ -944,6 +1148,34 @@ app.use((err, req, res, next) => {
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
   console.log(`[Backend] Enterprise Express Server running securely on port ${PORT}`);
+
+  // Auto-heal RBAC state on boot so requiredPermission-gated UI (e.g. the
+  // "Roles" sidebar entry) appears consistently across local / dev / prod
+  // without manual seed-rbac-only.js runs. Fire-and-forget: a DB hiccup must
+  // never crash the server. Set DISABLE_RBAC_BOOT_SYNC=1 to opt out.
+  const { ensureRbacOnBoot } = require('./scripts/ensureRbacOnBoot');
+  ensureRbacOnBoot()
+    .then((stats) => {
+      if (!stats) return;
+      const wrote = stats.rolesCreated + stats.permsCreated + stats.assignmentsCreated;
+      if (wrote > 0) {
+        console.log(`[rbac-boot] backfilled — roles:${stats.rolesCreated} perms:${stats.permsCreated} assignments:${stats.assignmentsCreated} (skipped users:${stats.usersSkipped})`);
+      } else {
+        console.log('[rbac-boot] RBAC state already compatible — no changes.');
+      }
+    })
+    .catch((err) => console.error('[rbac-boot] non-fatal error:', err && err.message ? err.message : err));
+
+  // Self-heal the SubscriptionPlan catalog so a fresh install / wiped DB /
+  // partial seed always has the 3 canonical plans on /pricing. Idempotent —
+  // existing rows are left alone (Owner edits via Manage Plans persist
+  // across restarts). Fire-and-forget; never crash boot on a DB hiccup.
+  // Set DISABLE_PLANS_BOOT_SYNC=1 to opt out.
+  if (process.env.DISABLE_PLANS_BOOT_SYNC !== '1') {
+    const ensureSubscriptionPlans = require('./lib/ensureSubscriptionPlans');
+    ensureSubscriptionPlans()
+      .catch((err) => console.error('[plans-boot] non-fatal error:', err && err.message ? err.message : err));
+  }
 });
 
 // Graceful shutdown — required for c8 / V8 line coverage to flush its temp
@@ -1054,6 +1286,13 @@ if (process.env.DISABLE_CRONS === '1') {
   const { initTripPaymentRemindersCron } = require('./cron/tripPaymentReminders');
   initTripPaymentRemindersCron();
 
+  // C8 (PRD_TRAVEL_BILLING UC-2.4) — daily 09:13 IST TravelPaymentSchedule
+  // T-7 / T-3 / T-1 reminder sweep. Fires SMS + email customer reminders
+  // (WA leg stub pending Q9 Wati creds) per milestone whose dueDate lands
+  // in window; bumps remindersSentCount + lastReminderSentAt on the row.
+  const { initCron: initPaymentScheduleReminderCron } = require('./cron/paymentScheduleReminderEngine');
+  initPaymentScheduleReminderCron();
+
   // Initialize Travel CRM diagnostic-to-advisor escalation (every 5 min).
   // PRD §6.3 row 6 — diagnostics stalled >30 min without advisor outreach
   // surface as high-priority Notification rows on the advisor dashboard.
@@ -1102,6 +1341,12 @@ if (process.env.DISABLE_CRONS === '1') {
   const { initReligiousGuidanceCron } = require('./cron/religiousGuidanceEngine');
   initReligiousGuidanceCron();
 
+  // Slice C9 — Travel CRM quote expiry sweep (daily 09:00 IST).
+  // PRD_TRAVEL_QUOTE_BUILDER §3.7 — flips Draft/Sent quotes with validUntil<now
+  // to status='Expired' + writes a TravelQuoteSnapshot history row per transition.
+  const { initCron: initQuoteExpirySweepCron } = require('./cron/quoteExpirySweep');
+  initQuoteExpirySweepCron();
+
   // #902 GST slice 12 — daily GSTR filing reminder sweep (05:00 UTC = 10:30 IST).
   // Iterates active tenants and emits a tiered reminder (T-7d / T-3d / T-1d / T-0)
   // for each one whose prior-month GSTR filing is approaching its deadline. Notify
@@ -1133,6 +1378,27 @@ if (process.env.DISABLE_CRONS === '1') {
   // Initialize SLA Breach Engine (every 5 min — flips Ticket.breached + emits 'sla.breached')
   const { initSlaBreachCron } = require('./cron/slaBreachEngine');
   initSlaBreachCron();
+
+  // WhatsApp SaaS P3 — async outbound delivery (every 30s) + media download
+  // pipeline (every 60s). Both engines no-op gracefully when the underlying
+  // WhatsAppConfig is missing or token is unset, so they're safe to enable
+  // even before any tenant has completed onboarding. The outbound engine
+  // receives `io` to broadcast whatsapp:sent events back to the frontend
+  // as queued messages complete delivery.
+  const { initWhatsappOutboundCron } = require('./cron/whatsappOutboundEngine');
+  initWhatsappOutboundCron(io);
+  const { initWhatsappMediaCron } = require('./cron/whatsappMediaEngine');
+  initWhatsappMediaCron();
+
+  // WhatsApp SaaS P4 — daily token-refresh probe + template-sync safety net.
+  // Token refresh proactively extends short-lived tokens 7 days before expiry
+  // via fb_exchange_token; surfaces unrecoverable expiry via Notification +
+  // soft-disconnect. Template sync pulls every approved template from Meta
+  // nightly so the local table stays in sync even when webhook events drop.
+  const { initWhatsappTokenRefreshCron } = require('./cron/whatsappTokenRefreshEngine');
+  initWhatsappTokenRefreshCron();
+  const { initWhatsappTemplateSyncCron } = require('./cron/whatsappTemplateSyncEngine');
+  initWhatsappTemplateSyncCron();
 
   // #541 (OPS-1): Demo Hygiene — hourly purge of `_QA_PROBE_*` /
   // `E2E_FLOW_*` test residue from patient list + admin-config models.

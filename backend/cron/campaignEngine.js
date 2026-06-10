@@ -42,7 +42,7 @@ async function processDueCampaigns(options = {}) {
   // engine indirectly via server.js bootstrap).
   const sendCampaign =
     options.sendCampaignFn ||
-    // eslint-disable-next-line global-require
+     
     require("../routes/marketing").sendCampaign;
 
   // Query DB-backed schedule metadata. Match scheduleStatus='PENDING' so
@@ -78,6 +78,12 @@ async function processDueCampaigns(options = {}) {
   if (due.length === 0) return result;
 
   for (const campaign of due) {
+    const lock = await prisma.campaign.updateMany({
+      where: { id: campaign.id, scheduleStatus: "PENDING" },
+      data: { scheduleStatus: "PROCESSING" },
+    });
+    if (lock.count === 0) continue; // another worker got it
+
     try {
       // Hydrate audience filter from the persisted JSON column. Mirrors
       // the old shape: routes/marketing.js's sendCampaign reads

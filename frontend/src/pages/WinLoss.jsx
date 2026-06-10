@@ -8,7 +8,7 @@ import { useNotify } from '../utils/notify';
 import { formatMoney } from '../utils/money';
 import { formatDate } from '../utils/date';
 import {
-  BadgePercent, Trophy, X, DollarSign, Calendar, Plus, Trash2,
+  BadgePercent, Trophy, X, IndianRupee, Calendar, Plus, Trash2,
 } from 'lucide-react';
 
 // #626: was hardcoded USD; formatMoney reads tenant currency+locale
@@ -153,7 +153,7 @@ export default function WinLoss() {
         <div className="card" style={kpiCard}>
           <div style={kpiHead}>
             <span style={kpiLabel}>Avg Lost Deal</span>
-            <DollarSign size={20} color="#ef4444" />
+            <IndianRupee size={20} color="#ef4444" />
           </div>
           <div style={{ ...kpiValue, color: '#ef4444' }}>{fmtCurrency(avgLost)}</div>
           <div style={kpiSub}>across {lostCount} closed-lost</div>

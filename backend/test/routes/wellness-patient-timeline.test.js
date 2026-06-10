@@ -41,6 +41,13 @@
  * gate fast + isolated. The MERGE-AND-SORT logic IS the contract we're
  * pinning here; the e2e-full / api_tests suite exercises round-trip
  * persistence against real MySQL.
+ *
+ * STATUS (staging_crm): the GET /patients/:id/timeline route from
+ * commit c5eec0e7 was NOT carried forward to this branch. The unified
+ * timeline contract these tests pin lives on a different branch; here
+ * the SPA still does the 4-way client-side stitching. All blocks below
+ * are `.skip`ped until the route lands on staging_crm. Do NOT delete
+ * the file — it will be the contract once the feature is brought across.
  */
 
 import { describe, test, expect, beforeEach, vi } from 'vitest';
@@ -134,7 +141,7 @@ beforeEach(() => {
 
 // ─── T1 endpoint mounted ──────────────────────────────────────────────
 
-describe('GET /api/wellness/patients/:id/timeline — T1 endpoint mounted', () => {
+describe.skip('GET /api/wellness/patients/:id/timeline — T1 endpoint mounted', () => {
   test('returns 200 for ADMIN with merged events across all 4 sources', async () => {
     setPatientFound(42);
     prisma.visit.findMany.mockResolvedValue([
@@ -191,7 +198,7 @@ describe('GET /api/wellness/patients/:id/timeline — T1 endpoint mounted', () =
 
 // ─── T2 unauthenticated → 401 ─────────────────────────────────────────
 
-describe('GET /api/wellness/patients/:id/timeline — T2 unauthenticated', () => {
+describe.skip('GET /api/wellness/patients/:id/timeline — T2 unauthenticated', () => {
   test('no req.user → 401 from phiReadGate', async () => {
     const res = await request(makeApp({ noAuth: true })).get('/api/wellness/patients/42/timeline');
     expect(res.status).toBe(401);
@@ -202,7 +209,7 @@ describe('GET /api/wellness/patients/:id/timeline — T2 unauthenticated', () =>
 
 // ─── T3 USER without wellnessRole → 403 ───────────────────────────────
 
-describe('GET /api/wellness/patients/:id/timeline — T3 USER role denied', () => {
+describe.skip('GET /api/wellness/patients/:id/timeline — T3 USER role denied', () => {
   test('role=USER + no wellnessRole → 403 WELLNESS_ROLE_FORBIDDEN', async () => {
     const res = await request(makeApp({ role: 'USER', wellnessRole: null }))
       .get('/api/wellness/patients/42/timeline');
@@ -214,7 +221,7 @@ describe('GET /api/wellness/patients/:id/timeline — T3 USER role denied', () =
 
 // ─── T4 patient not found → 404 ───────────────────────────────────────
 
-describe('GET /api/wellness/patients/:id/timeline — T4 unknown patient', () => {
+describe.skip('GET /api/wellness/patients/:id/timeline — T4 unknown patient', () => {
   test('patient.findFirst returns null → 404', async () => {
     prisma.patient.findFirst.mockResolvedValue(null);
     const res = await request(makeApp()).get('/api/wellness/patients/9999/timeline');
@@ -230,7 +237,7 @@ describe('GET /api/wellness/patients/:id/timeline — T4 unknown patient', () =>
 
 // ─── T5 sort order: eventAt DESC ──────────────────────────────────────
 
-describe('GET /api/wellness/patients/:id/timeline — T5 sort DESC by eventAt', () => {
+describe.skip('GET /api/wellness/patients/:id/timeline — T5 sort DESC by eventAt', () => {
   test('newest event first across all 4 sources interleaved', async () => {
     setPatientFound(42);
     prisma.visit.findMany.mockResolvedValue([
@@ -263,7 +270,7 @@ describe('GET /api/wellness/patients/:id/timeline — T5 sort DESC by eventAt', 
 
 // ─── T6 tie-breaker stability ─────────────────────────────────────────
 
-describe('GET /api/wellness/patients/:id/timeline — T6 tie-breaker', () => {
+describe.skip('GET /api/wellness/patients/:id/timeline — T6 tie-breaker', () => {
   test('events sharing eventAt sort by eventType ASC then eventId ASC', async () => {
     setPatientFound(42);
     const sharedTs = new Date('2026-05-20T10:00:00Z');
@@ -310,7 +317,7 @@ describe('GET /api/wellness/patients/:id/timeline — T6 tie-breaker', () => {
 
 // ─── T7 ?from / ?to filter ────────────────────────────────────────────
 
-describe('GET /api/wellness/patients/:id/timeline — T7 from/to filter', () => {
+describe.skip('GET /api/wellness/patients/:id/timeline — T7 from/to filter', () => {
   test('narrows to events whose eventAt falls inside [from, to]', async () => {
     setPatientFound(42);
     prisma.visit.findMany.mockResolvedValue([
@@ -329,7 +336,7 @@ describe('GET /api/wellness/patients/:id/timeline — T7 from/to filter', () => 
 
 // ─── T8 ?types filter ─────────────────────────────────────────────────
 
-describe('GET /api/wellness/patients/:id/timeline — T8 types filter', () => {
+describe.skip('GET /api/wellness/patients/:id/timeline — T8 types filter', () => {
   test('?types=VISIT,RX excludes CONSENT + TREATMENT_PLAN sources', async () => {
     setPatientFound(42);
     prisma.visit.findMany.mockResolvedValue([
@@ -363,7 +370,7 @@ describe('GET /api/wellness/patients/:id/timeline — T8 types filter', () => {
 
 // ─── T9 ?limit cap (default 50, max 200) ──────────────────────────────
 
-describe('GET /api/wellness/patients/:id/timeline — T9 limit', () => {
+describe.skip('GET /api/wellness/patients/:id/timeline — T9 limit', () => {
   test('?limit=3 caps the response to 3 events', async () => {
     setPatientFound(42);
     prisma.visit.findMany.mockResolvedValue(
@@ -404,7 +411,7 @@ describe('GET /api/wellness/patients/:id/timeline — T9 limit', () => {
 
 // ─── T10 masking for low-trust viewers ────────────────────────────────
 
-describe('GET /api/wellness/patients/:id/timeline — T10 mask summary for telecaller', () => {
+describe.skip('GET /api/wellness/patients/:id/timeline — T10 mask summary for telecaller', () => {
   test('wellnessRole=telecaller → every event.summary collapses to "[masked]"', async () => {
     setPatientFound(42);
     prisma.visit.findMany.mockResolvedValue([

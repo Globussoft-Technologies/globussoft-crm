@@ -28,9 +28,19 @@ const router = express.Router();
 const { verifyToken, verifyRole } = require("../middleware/auth");
 const prisma = require("../lib/prisma");
 const { scoreDiagnostic, parseBank } = require("../lib/travelDiagnosticScoring");
-const { renderTravelDiagnosticPdf } = require("../services/pdfRenderer");
+const pdfRenderer = require("../services/pdfRenderer");
+const { renderTravelDiagnosticPdf } = pdfRenderer;
 const { findDuplicateContactFull } = require("../utils/deduplication");
 const llmRouter = require("../lib/llmRouter");
+// ── TMC diagnostic engine modules (T2 / T3 / T6 / T7) — used by T8 ────
+// Require via shared `module.exports.<fn>` indirection so the test suite
+// can swap individual handlers via vi.spyOn on the cached modules without
+// having to vi.mock(). Matches the CJS self-mocking seam used by sibling
+// service clients (adsGptClient / ratehawkClient / callifiedClient).
+const tmcEngine = require("../lib/tmcDiagnosticEngine");
+const tmcLeadQuality = require("../lib/tmcLeadQuality");
+const tmcPrompts = require("../services/tmcDiagnosticPrompts");
+const tmcReportGuard = require("../lib/tmcReportGuard");
 const {
   requireTravelTenant,
   getSubBrandAccessSet,
@@ -58,7 +68,23 @@ async function generateDiagnosticPdfBestEffort(diag, bank) {
           select: { name: true, email: true, phone: true },
         })
       : { name: "Anonymous customer", email: null, phone: null };
-    const pdfBuf = await renderTravelDiagnosticPdf(diag, contact, bank);
+
+    // Brand logo for the header — S3 (tenant.logoUrl) first, local /uploads
+    // next, bundled asset last. Best-effort: a failure here just means the
+    // header draws its emblem instead.
+    let logoBuffer = null;
+    try {
+      const { resolveBrandLogoBuffer } = require("../lib/brandLogo");
+      const tenant = await prisma.tenant.findUnique({
+        where: { id: diag.tenantId },
+        select: { logoUrl: true },
+      });
+      logoBuffer = await resolveBrandLogoBuffer(tenant?.logoUrl);
+    } catch (logoErr) {
+      console.warn("[travel-diag] logo resolve failed:", logoErr.message);
+    }
+
+    const pdfBuf = await renderTravelDiagnosticPdf(diag, contact, bank, { logoBuffer });
     const rand = crypto.randomBytes(16).toString("hex");
     const filename = `diag-${diag.id}-${rand}.pdf`;
     const filepath = path.join(DIAG_PDF_DIR, filename);
@@ -211,9 +237,62 @@ router.post(
 // Submit a completed diagnostic. Caller provides bankId + answersJson;
 // the route scores it, stamps the questionsJson snapshot, and persists.
 // Optional links: contactId (the lead) and leadId (the deal).
+// PRD_TMC_CURRICULUM_MAPPING §3 FR-5 — build curriculum→destination
+// recommendations for a TMC diagnostic. Given the student's curriculum + grade
+// (+ optional subject), match active TravelCurriculumMapping rows, aggregate by
+// destination, rank by average fitScore, and return the top N. Returns null
+// when curriculum context is absent or nothing matches — the caller then
+// leaves curriculumFitJson null and the PDF omits the section (FR-7 fallback).
+async function buildCurriculumFit(tenantId, { curriculum, grade, subject }) {
+  const cur = (curriculum || "").toString().trim();
+  const grd = (grade || "").toString().trim();
+  const subj = (subject || "").toString().trim();
+  if (!cur || !grd) return null;
+
+  const where = { tenantId, isActive: true, curriculum: cur, grade: grd };
+  if (subj) where.subject = subj;
+
+  const rows = await prisma.travelCurriculumMapping.findMany({
+    where,
+    orderBy: { fitScore: "desc" },
+    take: 100,
+  });
+  if (!rows.length) return null;
+
+  // Aggregate by destination (free-text label, or "Trip #id" fallback when the
+  // mapping links a TmcTrip by id without a label).
+  const byDest = new Map();
+  for (const r of rows) {
+    const key =
+      r.destinationLabel ||
+      (r.destinationId != null ? `Trip #${r.destinationId}` : "Unspecified destination");
+    if (!byDest.has(key)) byDest.set(key, { destination: key, scores: [], reasons: [] });
+    const bucket = byDest.get(key);
+    if (typeof r.fitScore === "number") bucket.scores.push(r.fitScore);
+    bucket.reasons.push({
+      subject: r.subject,
+      learningOutcome: r.learningOutcome || null,
+      rationale: r.fitRationale || null,
+    });
+  }
+
+  const recommendations = Array.from(byDest.values())
+    .map((d) => ({
+      destination: d.destination,
+      fitScore: d.scores.length
+        ? Math.round(d.scores.reduce((a, b) => a + b, 0) / d.scores.length)
+        : null,
+      reasons: d.reasons.slice(0, 4),
+    }))
+    .sort((a, b) => (b.fitScore ?? 0) - (a.fitScore ?? 0))
+    .slice(0, 5);
+
+  return { curriculum: cur, grade: grd, subject: subj || null, recommendations };
+}
+
 router.post("/diagnostics", verifyToken, requireTravelTenant, async (req, res) => {
   try {
-    const { bankId, answers, contactId, leadId, consentCapturedAt } = req.body || {};
+    const { bankId, answers, contactId, leadId, consentCapturedAt, curriculum, grade, subject } = req.body || {};
     if (!bankId || !answers) {
       return res.status(400).json({
         error: "bankId and answers required",
@@ -257,6 +336,22 @@ router.post("/diagnostics", verifyToken, requireTravelTenant, async (req, res) =
 
     const result = scoreDiagnostic(parsed, answers);
 
+    // FR-5: TMC-only curriculum-fit recommendations. Curriculum context comes
+    // from explicit body fields, falling back to same-named answer keys. Any
+    // failure here is non-fatal — the diagnostic still writes without the fit.
+    let curriculumFit = null;
+    if (bank.subBrand === "tmc") {
+      try {
+        curriculumFit = await buildCurriculumFit(req.travelTenant.id, {
+          curriculum: curriculum ?? answers?.curriculum,
+          grade: grade ?? answers?.grade,
+          subject: subject ?? answers?.subject,
+        });
+      } catch (fitErr) {
+        console.warn("[travel-diag] curriculum-fit build failed:", fitErr.message);
+      }
+    }
+
     // Capture the questionsJson + scoringRulesJson snapshot for audit.
     // Combined into a single JSON-as-string to keep the schema simple.
     const snapshot = JSON.stringify({
@@ -280,6 +375,7 @@ router.post("/diagnostics", verifyToken, requireTravelTenant, async (req, res) =
         classification: result.classification,
         classificationLabel: result.classificationLabel,
         recommendedTier: result.recommendedTier,
+        curriculumFitJson: curriculumFit ? JSON.stringify(curriculumFit) : null,
         consentCapturedAt: consentCapturedAt ? new Date(consentCapturedAt) : null,
       },
     });
@@ -297,11 +393,56 @@ router.post("/diagnostics", verifyToken, requireTravelTenant, async (req, res) =
       recommendedTier: result.recommendedTier,
       warnings: result.warnings,
       reportPdfUrl,
+      recommendations: curriculumFit?.recommendations || [],
     });
   } catch (e) {
     if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
     console.error("[travel-diag] submit diagnostic error:", e.message);
     res.status(500).json({ error: "Failed to submit diagnostic" });
+  }
+});
+
+// POST /api/travel/diagnostics/:id/report-pdf/regen — (re)generate the branded
+// report PDF on demand. Submission-time PDF generation is best-effort and can
+// fail silently (e.g. transient write/DB error), leaving reportPdfUrl null with
+// no way to recover from the UI. This endpoint rebuilds the PDF from the
+// diagnostic's own immutable question snapshot and returns the fresh URL.
+router.post("/diagnostics/:id/report-pdf/regen", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) {
+      return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+    }
+    const diag = await prisma.travelDiagnostic.findFirst({
+      where: { id, tenantId: req.travelTenant.id },
+    });
+    if (!diag) {
+      return res.status(404).json({ error: "Diagnostic not found", code: "NOT_FOUND" });
+    }
+    const allowed = await getSubBrandAccessSet(req.user.userId);
+    if (!canAccessSubBrand(allowed, diag.subBrand)) {
+      return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+    }
+
+    // Reconstruct a bank-like object from the diagnostic's stored snapshot so
+    // the report renders the exact question set it was submitted with.
+    let bank = null;
+    try {
+      const snap = JSON.parse(diag.questionsJson || "{}");
+      bank = { version: snap.bankVersion, questionsJson: snap.questionsJson };
+    } catch {
+      bank = null;
+    }
+
+    const url = await generateDiagnosticPdfBestEffort(diag, bank);
+    if (!url) {
+      return res.status(500).json({ error: "PDF generation failed", code: "PDF_FAILED" });
+    }
+    res.json({ reportPdfUrl: url });
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error("[travel-diag] report-pdf regen error:", e.message);
+    res.status(500).json({ error: "Failed to regenerate report PDF" });
   }
 });
 
@@ -338,7 +479,24 @@ router.get("/diagnostics", verifyToken, requireTravelTenant, async (req, res) =>
       }),
       prisma.travelDiagnostic.count({ where }),
     ]);
-    res.json({ diagnostics, total, limit: take, offset: skip });
+
+    // TravelDiagnostic has no Prisma relation to Contact (just contactId), so
+    // batch-fetch the contacts and attach name/email so the UI can show WHO
+    // took each diagnostic instead of a bare "#id".
+    const contactIds = [...new Set(diagnostics.map((d) => d.contactId).filter(Boolean))];
+    const contactMap = {};
+    if (contactIds.length) {
+      const contacts = await prisma.contact.findMany({
+        where: { id: { in: contactIds }, tenantId: req.travelTenant.id },
+        select: { id: true, name: true, email: true, phone: true },
+      });
+      for (const c of contacts) contactMap[c.id] = c;
+    }
+    const enriched = diagnostics.map((d) => ({
+      ...d,
+      contact: d.contactId ? contactMap[d.contactId] || null : null,
+    }));
+    res.json({ diagnostics: enriched, total, limit: take, offset: skip });
   } catch (e) {
     if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
     console.error("[travel-diag] list diagnostics error:", e.message);
@@ -1159,7 +1317,15 @@ router.get("/diagnostics/:id", verifyToken, requireTravelTenant, async (req, res
     if (!canAccessSubBrand(allowed, diag.subBrand)) {
       return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
     }
-    res.json(diag);
+    // Attach the contact (name/email/phone) so the detail view can show WHO
+    // took it — TravelDiagnostic only stores contactId (no Prisma relation).
+    const contact = diag.contactId
+      ? await prisma.contact.findFirst({
+          where: { id: diag.contactId, tenantId: req.travelTenant.id },
+          select: { id: true, name: true, email: true, phone: true },
+        })
+      : null;
+    res.json({ ...diag, contact });
   } catch (e) {
     console.error("[travel-diag] get diagnostic error:", e.message);
     res.status(500).json({ error: "Failed to get diagnostic" });
@@ -1678,4 +1844,779 @@ router.post("/diagnostics/public/submit", async (req, res) => {
   }
 });
 
+// ═══════════════════════════════════════════════════════════════════════
+// TMC Readiness Diagnostic — T8 (PRD §10): public submit + readiness PDF
+// ═══════════════════════════════════════════════════════════════════════
+//
+// Two new endpoints land in this T8 slice — both target the TMC sub-brand
+// only (existing public/submit + per-id handlers continue to serve the
+// generic weighted-sum diagnostic for RFU / Travel Stall / Visa Sure):
+//
+//   POST /api/travel/diagnostics/public/submit-tmc        (no auth)
+//   GET  /api/travel/diagnostics/:id/readiness-report.pdf (no auth — token-gated by id)
+//
+// The submit endpoint runs the T2 deterministic engine + T3 lead-quality
+// classifier inline, persists every column on TravelDiagnostic that the
+// schema added in T1, and returns a slim `{diagnosticId, reportSlug}` so
+// the T9 frontend can navigate to the report-download page (T10).
+//
+// The PDF endpoint composes the §3.7 Job A prompt via T6, calls the LLM
+// router (stub mode in test/dev), runs the T7 3-layer guard, then asks
+// T8's renderer (renderTmcReadinessReport) for a PDF buffer.  Standing-
+// facts are loaded via the engine-weights row's tenant config — falling
+// back to the PRD §3.5.5 frozen defaults when no custom row exists.
+//
+// PRD §3.5 is the hard contract: the school-facing report never names a
+// trip, destination, or price.  The Layer-2 destination blocklist is
+// derived from the catalogue's active rows at render time (anchor
+// experiences + region + curriculum-hook topic words) so a model that
+// hallucinates a real-but-not-pulled destination still gets stripped.
+
+// PRD §3.5.5 default standing-facts block.  Empty fields are OMITTED by
+// the renderer (PRD §3.5.5 final paragraph: "Empty fields are omitted by
+// the renderer, not filled with placeholder text").  Numbers are pinned
+// to PRD §11.4 verbatim (international stays honest at 305).
+const DEFAULT_STANDING_FACTS = Object.freeze({
+  trust: {
+    schools_served_since_2015: "over 50",
+    students_moved_since_2015: "more than 100,000",
+    students_moved_last_year: 14018,
+    day_students_last_year: 12055,
+    overnight_students_last_year: 1658,
+    international_students_last_year: 305,
+    operating_since: 2015,
+    teacher_student_ratio: "1 teacher per 15 students",
+  },
+  runway: {
+    day:             { lead_days:   7, display: "about 1 week" },
+    domestic_bus:    { lead_days:  30, display: "about 1 month" },
+    domestic_flight: { lead_days:  90, display: "minimum 90 days" },
+    international:   { lead_days: 180, display: "minimum 4 to 6 months" },
+  },
+  academic_calendar: {
+    term_1_start: "06-01",
+    term_2_start: "10-01",
+    term_3_start: "01-01",
+    academic_year_start: "06-01",
+  },
+  // PRD §3.5.1 — renderer-injected board hook per Q6.  CBSE is the only
+  // board that gets the NEP/NCF citation — AC-3 hard-codes "an IB school
+  // never sees NEP."
+  board_policy_hooks: {
+    "CBSE":      "Maps to NEP 2020 + NCF-SE 2023 + CBSE Experiential Learning Handbook — experiential learning as standard pedagogy.",
+    "ICSE_ISC":  "Aligns to CISCE's project-work assessment + SUPW mandate; geography fieldwork as core internal-assessment surface.",
+    "ICSE":      "Aligns to CISCE's project-work assessment + SUPW mandate; geography fieldwork as core internal-assessment surface.",
+    "ISC":       "Aligns to CISCE's project-work assessment + SUPW mandate; geography fieldwork as core internal-assessment surface.",
+    "IGCSE":     "Aligns to the Cambridge Learner Attributes; Geography 0460 fieldwork + Science practical assessment surfaces.",
+    "IB":        "Anchored on CAS (Creativity, Activity, Service) + the IB Learner Profile; transdisciplinary inquiry the trip directly serves.",
+    "State Board": "Generic experiential-learning case; named-policy citation withheld until state's NEP adoption is confirmed.",
+  },
+  assurance: {
+    supervision_ratio: "1 teacher per 15 students",
+    tour_directors: "TMC tour directors travel with every group",
+    governance_pack: [
+      "documented itinerary",
+      "curriculum-alignment map",
+      "safety and supervision plan",
+      "insurance and consent templates",
+      "committee costing",
+    ],
+  },
+});
+
+// PRD §3.5.2 — resolve runway display string from geo_preference.
+// PRD: "Default domestic key = `domestic_flight`. If `open`, use
+// `international` (longest runway, sharpest deadline)."
+function resolveRunwayKey(geoPreference) {
+  if (geoPreference === "day") return "day";
+  if (geoPreference === "domestic") return "domestic_flight";
+  if (geoPreference === "international") return "international";
+  if (geoPreference === "open") return "international";
+  return "domestic_flight";
+}
+
+function resolveRunwayDisplay(standingFacts, geoPreference) {
+  const key = resolveRunwayKey(geoPreference);
+  const runway = standingFacts && standingFacts.runway;
+  const entry = runway && runway[key];
+  return (entry && entry.display) ? String(entry.display) : "";
+}
+
+// PRD §3.5.1 — resolve board hook string from the first selected board.
+// Multi-board schools (Q6 array > 1) see all selected hooks stacked,
+// per PRD §9 open question 1 default proposal.
+function resolveBoardHook(standingFacts, curriculum) {
+  const hooks = (standingFacts && standingFacts.board_policy_hooks) || {};
+  const list = Array.isArray(curriculum) ? curriculum : (curriculum ? [curriculum] : []);
+  const out = [];
+  for (const board of list) {
+    const k = String(board || "").trim();
+    if (!k) continue;
+    if (hooks[k]) out.push(hooks[k]);
+  }
+  return out.join(" ");
+}
+
+// Build a Layer-2 destination blocklist from the active TMC catalogue.
+// Sources: region, anchor_experiences[].name (split on common separators),
+// curriculum_hooks[].topic.  Phrases are kept as-is — the strip-check
+// runs case-insensitive whole-word/multi-word regex per T7.
+function buildDestinationBlocklist(catalogue) {
+  const tokens = new Set();
+  for (const t of (Array.isArray(catalogue) ? catalogue : [])) {
+    if (!t || typeof t !== "object") continue;
+    if (t.region) tokens.add(String(t.region));
+    try {
+      const anchors = JSON.parse(t.anchorExperiencesJson || "[]");
+      if (Array.isArray(anchors)) {
+        for (const a of anchors) {
+          if (a && a.name) tokens.add(String(a.name));
+        }
+      }
+    } catch { /* ignore malformed JSON */ }
+    try {
+      const hooks = JSON.parse(t.curriculumHooksJson || "[]");
+      if (Array.isArray(hooks)) {
+        for (const h of hooks) {
+          if (h && h.topic) tokens.add(String(h.topic));
+        }
+      }
+    } catch { /* ignore malformed JSON */ }
+  }
+  return Array.from(tokens).filter(Boolean);
+}
+
+// Strip destination words out of a `report_skill_blurb` before it goes
+// into the Job A prompt as "what to draw from."  The PRD says blurbs
+// "MUST not name the destination" — but we belt-and-brace by trimming
+// known tokens out, in case a catalogue admin slipped one in pre-launch.
+function stripDestinationWords(text, blocklist) {
+  let s = String(text || "");
+  for (const tok of (blocklist || [])) {
+    if (!tok) continue;
+    try {
+      const re = new RegExp(`\\b${String(tok).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "gi");
+      s = s.replace(re, "");
+    } catch { /* ignore bad token */ }
+  }
+  return s.replace(/\s{2,}/g, " ").trim();
+}
+
+// Slugify a string for tokenized URLs.  Used to build TravelDiagnostic
+// row-id → public reportSlug.  The slug is the diagnostic id padded
+// with a random suffix so the URL isn't trivially guessable for casual
+// access (matches the existing report-pdf-url pattern).
+function buildReportSlug(diagnosticId) {
+  const rand = crypto.randomBytes(8).toString("hex");
+  return `${diagnosticId}-${rand}`;
+}
+
+// Extract the diagnostic id from a reportSlug (everything before the
+// first dash).  Returns null if malformed.
+function parseDiagnosticIdFromSlug(slug) {
+  if (typeof slug !== "string") return null;
+  const m = slug.match(/^(\d+)(?:-|$)/);
+  if (!m) return null;
+  const n = parseInt(m[1], 10);
+  return Number.isFinite(n) ? n : null;
+}
+
+// POST /api/travel/diagnostics/public/submit-tmc
+//
+// Public no-auth endpoint per DD-5.3 + DD-5.6 + NF-5/NF-6.  Body shape:
+//   {
+//     tenantSlug: string,
+//     answers: {                       // PRD §3.1 keys; engine reads these names
+//       primary_outcome, secondary_skills[], growth_area,
+//       growth_area_skill,            // mapped skill — Q3 option's mappedSkill
+//       travel_maturity, grade_band, curriculum, geo_preference,
+//       group_size, budget_band, timeline,
+//       school_profile: { school_name, city, branches, student_strength, fee_band },
+//       contact: { contact_name, contact_role, email, phone }
+//     }
+//   }
+//
+// Q12 email is the only hard wall (NF-6 + PRD §3.1).  Other fields fall
+// through to engine defaults; lead-quality flags catch garbage submissions.
+router.post("/diagnostics/public/submit-tmc", async (req, res) => {
+  try {
+    const body = req.body || {};
+    const tenantSlug = body.tenantSlug;
+    const answers = body.answers || {};
+    if (!tenantSlug) {
+      return res.status(400).json({
+        error: "tenantSlug required",
+        code: "MISSING_FIELDS",
+      });
+    }
+    // Q12 email gate — the only hard wall per PRD §3.1 + NF-6.
+    const contact = (answers.contact && typeof answers.contact === "object") ? answers.contact : {};
+    const email = typeof contact.email === "string" ? contact.email.trim() : "";
+    if (!email) {
+      return res.status(400).json({
+        error: "Q12 email is required to generate your readiness report.",
+        code: "EMAIL_REQUIRED",
+      });
+    }
+    // Trivial email shape check — full validation lives in lead-quality.
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({
+        error: "Q12 email must be a valid email address.",
+        code: "EMAIL_INVALID",
+      });
+    }
+
+    // Minimum-answers validation per PRD §3.1.  Q5 grade_band is the
+    // load-bearing structural answer — engine's hard grade-band filter
+    // assumes one of the 4 frozen tokens; reject unknown values now
+    // rather than silently fall through to "no survivors."
+    const VALID_GRADE_BANDS = new Set(["4-6", "6-8", "9-10", "11-12"]);
+    if (answers.grade_band && !VALID_GRADE_BANDS.has(String(answers.grade_band))) {
+      return res.status(400).json({
+        error: "grade_band must be one of 4-6 / 6-8 / 9-10 / 11-12",
+        code: "INVALID_GRADE_BAND",
+      });
+    }
+
+    const tenant = await resolveTravelTenantBySlug(tenantSlug);
+    if (!tenant) {
+      return res.status(404).json({
+        error: "Travel tenant not found",
+        code: "TENANT_NOT_FOUND",
+      });
+    }
+
+    // Resolve the EngineWeights config row (NF-2 — hot-reloadable;
+    // missing row falls through to PRD §3.3.3 defaults).
+    let weightsRow = null;
+    try {
+      weightsRow = await prisma.engineWeights.findUnique({
+        where: { tenantId: tenant.id },
+      });
+    } catch { /* table may be empty for fresh tenants — fall through */ }
+    const weights = weightsRow ? {
+      weightPrimaryOutcome:  weightsRow.weightPrimaryOutcome,
+      weightSecondarySkill:  weightsRow.weightSecondarySkill,
+      weightGrowthArea:      weightsRow.weightGrowthArea,
+      weightCurriculumHook:  weightsRow.weightCurriculumHook,
+      weightGradeBandCenter: weightsRow.weightGradeBandCenter,
+      weightTierValueLean:   weightsRow.weightTierValueLean,
+      scoresWellThreshold:   weightsRow.scoresWellThreshold,
+    } : undefined;
+    const weightsVersion = weightsRow ? String(weightsRow.version || "v1") : "v1";
+
+    // Load active catalogue rows for this tenant.
+    let catalogue = [];
+    try {
+      catalogue = await prisma.tmcTripCatalogue.findMany({
+        where: { tenantId: tenant.id, status: "active" },
+      });
+    } catch { /* empty catalogue → engine returns no_match */ }
+
+    // C7 — load active curriculum mappings for this tenant. The engine
+    // uses them to compute top-N curriculum-fit recommendations
+    // (PRD_TMC_CURRICULUM_MAPPING FR-5). Empty result is the graceful
+    // path — engine returns curriculumFit: [] and the report falls
+    // back to the catalogue trip alone.
+    let curriculumMappings = [];
+    try {
+      curriculumMappings = await prisma.travelCurriculumMapping.findMany({
+        where: { tenantId: tenant.id, isActive: true },
+      });
+    } catch { /* table empty or fresh tenant → empty curriculumFit */ }
+
+    // Run the deterministic engine (T2 + C7).  Throws on bad input shape.
+    let engineOutput;
+    try {
+      engineOutput = tmcEngine.runTmcDiagnosticEngine(
+        answers,
+        catalogue,
+        weights,
+        curriculumMappings,
+      );
+    } catch (e) {
+      return res.status(400).json({
+        error: e.message || "Engine input invalid",
+        code: "ENGINE_INPUT_INVALID",
+      });
+    }
+
+    // Lead-quality classifier (T3).  Repeat-submitter prior count: best-
+    // effort lookup; on failure we treat as 0 prior submissions (PRD §3.4
+    // is explicit that lead-quality NEVER blocks report generation).
+    //
+    // PRD §3.4 rule 4 verbatim: ">3 submissions on (email, phone) in the
+    // last 24h" — the count MUST be scoped to THIS submitter's email OR
+    // phone, NOT every TMC submission on the tenant.  Pre-T12 fix this
+    // counted tenant-wide TMC submissions which made every test in a
+    // multi-test e2e suite suspect after the 4th run (rule 4 fired for
+    // every later submission), causing test 4's `clean` assertion to red
+    // on retries.  Counting via contact linkage gives the right per-
+    // submitter window: lookup contact(s) matching this email or phone,
+    // then count their TravelDiagnostic rows in the last 24h.
+    let priorSubmissionsLast24h = 0;
+    try {
+      const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+      const submitterPhone = typeof contact.phone === "string" ? contact.phone.trim() : "";
+      const contactOr = [];
+      if (email) contactOr.push({ email });
+      if (submitterPhone) contactOr.push({ phone: submitterPhone });
+      let priorContactIds = [];
+      if (contactOr.length > 0) {
+        const priorContacts = await prisma.contact.findMany({
+          where: { tenantId: tenant.id, OR: contactOr },
+          select: { id: true },
+        });
+        priorContactIds = priorContacts.map((c) => c.id);
+      }
+      if (priorContactIds.length > 0) {
+        priorSubmissionsLast24h = await prisma.travelDiagnostic.count({
+          where: {
+            tenantId: tenant.id,
+            subBrand: "tmc",
+            createdAt: { gte: since },
+            contactId: { in: priorContactIds },
+          },
+        });
+      }
+    } catch { /* ignore */ }
+    const leadQualityResult = tmcLeadQuality.classifyLeadQuality(answers, {
+      priorSubmissionsLast24h,
+    });
+
+    // Build the combined flags array — engine flags + lead-quality flag
+    // (PRD §3.6 brief field).
+    const combinedFlags = Array.isArray(engineOutput.flags) ? [...engineOutput.flags] : [];
+    if (leadQualityResult.leadQuality === "suspect" && !combinedFlags.includes("suspect")) {
+      combinedFlags.push("suspect");
+    }
+
+    // Dedup contact (matches existing /public/submit pattern).
+    let contactId = null;
+    try {
+      const dedupResult = await findDuplicateContactFull({
+        email: email,
+        phone: contact.phone || null,
+        tenantId: tenant.id,
+      });
+      if (dedupResult) contactId = dedupResult.contact.id;
+    } catch { /* dedup is best-effort */ }
+    if (!contactId) {
+      try {
+        const newContact = await prisma.contact.create({
+          data: {
+            tenantId: tenant.id,
+            name: String(contact.contact_name || "Anonymous school lead").trim(),
+            email: email,
+            phone: contact.phone || null,
+            subBrand: "tmc",
+            status: "Lead",
+            source: "TMC public readiness diagnostic",
+          },
+        });
+        contactId = newContact.id;
+      } catch { /* contact create failure shouldn't block the diagnostic */ }
+    }
+
+    // Persist the diagnostic row with all T1 additive columns populated.
+    const primaryTripId = (engineOutput.primary && engineOutput.primary.id) || null;
+    const alternativeTripId = (engineOutput.alternative && engineOutput.alternative.id) || null;
+    const diag = await prisma.travelDiagnostic.create({
+      data: {
+        tenantId: tenant.id,
+        subBrand: "tmc",
+        contactId: contactId,
+        questionBankId: null, // TMC diagnostic doesn't use a versioned bank — engine + catalogue are the contract
+        questionsJson: JSON.stringify({ specVersion: "TMC_DIAGNOSTIC_ENGINE_V1_2026-06-08" }),
+        answersJson: JSON.stringify(answers),
+        // Generic columns stay null — TMC uses engine-specific columns below.
+        score: null,
+        classification: null,
+        classificationLabel: null,
+        recommendedTier: null,
+        // TMC engine columns per T1 schema (PRD §3.8).
+        engineState: engineOutput.state,
+        engineScoresJson: JSON.stringify(engineOutput.scores || {}),
+        recommendedTripId: primaryTripId,
+        alternativeTripId: alternativeTripId,
+        icpTier: engineOutput.icpTier,
+        leadQuality: leadQualityResult.leadQuality,
+        leadQualityReasonsJson: JSON.stringify(leadQualityResult.reasons || []),
+        flagsJson: JSON.stringify(combinedFlags),
+        weightsVersion: weightsVersion,
+        // C7 — persist curriculum-fit snapshot so the brief / PDF
+        // doesn't drift as advisors edit mappings post-submit.
+        curriculumFitJson: JSON.stringify(
+          Array.isArray(engineOutput.curriculumFit) ? engineOutput.curriculumFit : [],
+        ),
+      },
+    });
+
+    const reportSlug = buildReportSlug(diag.id);
+    res.status(201).json({
+      diagnosticId: diag.id,
+      reportSlug,
+      tenantSlug: tenant.slug,
+      engineState: engineOutput.state,
+      curriculumFit: Array.isArray(engineOutput.curriculumFit) ? engineOutput.curriculumFit : [],
+      message:
+        `Thanks${contact.contact_name ? `, ${String(contact.contact_name).split(" ")[0]}` : ""} — your readiness profile is ready. ` +
+        `Our team will reach out at ${email} within one working day.`,
+    });
+  } catch (e) {
+    console.error("[travel-diag-tmc] submit-tmc error:", e.message);
+    res.status(500).json({
+      error: "Failed to submit TMC diagnostic",
+      code: "TMC_SUBMIT_FAILED",
+    });
+  }
+});
+
+// GET /api/travel/diagnostics/:id/readiness-report.pdf
+//
+// Public, token-gated by id (matches DD-5.2 — the URL is what the T9 page
+// surfaces to the school via the `reportSlug` from the submit response).
+// Returns application/pdf attachment.  Cache-Control: no-store.
+//
+// Pipeline: lookup → build Job A prompt (T6) → llmRouter (stub or real)
+// → guardReportOutput (T7) → renderTmcReadinessReport.
+router.get("/diagnostics/:id/readiness-report.pdf", async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) {
+      return res.status(400).json({
+        error: "id must be a number",
+        code: "INVALID_ID",
+      });
+    }
+
+    const diag = await prisma.travelDiagnostic.findFirst({
+      where: { id, subBrand: "tmc" },
+    });
+    if (!diag) {
+      return res.status(404).json({
+        error: "Readiness diagnostic not found",
+        code: "DIAGNOSTIC_NOT_FOUND",
+      });
+    }
+
+    let answers = {};
+    try { answers = JSON.parse(diag.answersJson || "{}"); }
+    catch { /* malformed → empty answers, fallback renderer text */ }
+
+    // Load active catalogue for the destination blocklist + matched-trip
+    // narrative material.  recommendedTripId / alternativeTripId may be null.
+    let catalogue = [];
+    try {
+      catalogue = await prisma.tmcTripCatalogue.findMany({
+        where: { tenantId: diag.tenantId, status: "active" },
+      });
+    } catch { /* empty catalogue is fine — guard falls to template */ }
+    const matchedTripIds = new Set(
+      [diag.recommendedTripId, diag.alternativeTripId].filter((x) => x != null),
+    );
+    const matchedRows = catalogue.filter((t) => matchedTripIds.has(t.id));
+
+    // Build Job A prompt (T6).
+    const standingFacts = DEFAULT_STANDING_FACTS;
+    const destinationBlocklist = buildDestinationBlocklist(catalogue);
+    const catalogueMatchedBlurbs = matchedRows.map((t) => ({
+      blurb: stripDestinationWords(t.reportSkillBlurb || "", destinationBlocklist),
+      tier: t.tier,
+    }));
+    let engineOutputForPrompt = null;
+    try {
+      engineOutputForPrompt = {
+        state: diag.engineState || null,
+        flags: JSON.parse(diag.flagsJson || "[]"),
+      };
+    } catch { engineOutputForPrompt = { state: diag.engineState || null, flags: [] }; }
+
+    const promptEnvelope = tmcPrompts.buildReadinessNarrativePrompt({
+      answers,
+      engineOutput: engineOutputForPrompt,
+      catalogueMatched: catalogueMatchedBlurbs,
+      standingFactsConfig: standingFacts,
+      destinationBlocklist,
+    });
+
+    // Call the LLM router.  Stub mode returns a deterministic synthetic
+    // string that won't pass Layer 1 schema validation (no JSON shape),
+    // so the guard falls through to Layer 3 template per design.
+    let llmRaw = null;
+    try {
+      const llmResp = await llmRouter.routeRequest({
+        task: promptEnvelope.task,
+        payload: { system: promptEnvelope.system, user: promptEnvelope.user },
+        tenantId: diag.tenantId,
+      });
+      // Attempt to parse JSON from llmResp.text.  Real-mode returns strict
+      // JSON; stub-mode returns prose tagged "[STUB-...]" which fails Layer
+      // 1 → guard falls through to Layer 3 template.
+      try { llmRaw = JSON.parse(llmResp && llmResp.text); }
+      catch { llmRaw = llmResp && llmResp.text; }
+    } catch (e) {
+      // LLM call failure (e.g. budget cap) → fall through to template.
+      console.error("[travel-diag-tmc] LLM call failed (falling through to template):", e.message);
+    }
+
+    // Run the T7 guard.  Layer 3 fallback fills from schoolAnswers.
+    const guarded = tmcReportGuard.guardReportOutput("A", llmRaw, {
+      destinationBlocklist,
+      schoolAnswers: answers,
+    });
+
+    // Resolve §3.5.1 board hook + §3.5.2 runway display.
+    const boardHook = resolveBoardHook(standingFacts, answers.curriculum);
+    const runwayDisplay = resolveRunwayDisplay(standingFacts, answers.geo_preference);
+
+    // Booking URL: DD-5.4 GS-default — config-driven; environment var
+    // takes precedence; otherwise empty string and the renderer surfaces
+    // the "executive will reach out" fallback copy.
+    const bookingUrl = String(
+      process.env.TMC_BOOKING_URL_FALLBACK ||
+      process.env.TMC_BOOKING_URL ||
+      "",
+    );
+
+    const engineOutputForRender = {
+      state: diag.engineState,
+      icpTier: diag.icpTier,
+      flags: engineOutputForPrompt.flags,
+    };
+
+    const pdfBuffer = await pdfRenderer.renderTmcReadinessReport({
+      engineOutput: engineOutputForRender,
+      narrative: guarded.output,
+      standingFacts,
+      boardHook,
+      runwayDisplay,
+      schoolAnswers: answers,
+      bookingUrl,
+      catalogueMatched: matchedRows,
+    });
+
+    // Slugify for filename — best-effort tenant scoping into the name.
+    const slug = `readiness-report-${id}`;
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="${slug}.pdf"`);
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+    res.setHeader("X-Tmc-Report-Guard-Layer", String(guarded.layer));
+    res.setHeader("X-Tmc-Report-Guard-Accepted", String(guarded.accepted));
+    res.status(200).send(pdfBuffer);
+  } catch (e) {
+    console.error("[travel-diag-tmc] readiness-report.pdf error:", e.message);
+    res.status(500).json({
+      error: "Failed to render readiness report",
+      code: "REPORT_RENDER_FAILED",
+    });
+  }
+});
+
+// GET /api/travel/diagnostics/public/readiness-report/:slug
+//
+// Public no-auth endpoint per T14 / PRD §3.5.  The T10 frontend page
+// (`/p/tmc/report/:slug` → TmcReadinessReport.jsx) fetches this endpoint
+// to render the 10-section template.  Mirrors the PDF endpoint's data
+// pipeline (engine output + Job A narrative + report-guard + standing-
+// facts + board hook + runway display) but returns the pre-render
+// struct as JSON instead of streaming a PDF.
+//
+// Slug resolution: the slug is the public `reportSlug` token built by
+// `buildReportSlug(diagnosticId)` at submit-tmc time (id + 16-hex-byte
+// suffix) and surfaced in the submit response.  `parseDiagnosticIdFromSlug`
+// extracts the leading numeric id.  We additionally validate that the
+// suffix matches the stored slug's suffix-bytes-shape to ensure the slug
+// isn't trivially guessable by anyone who knows the diagnostic id
+// (DD-5.2 — token-gated public access).
+//
+// Tenant isolation: slugs are global-unique by construction (id is
+// unique); the response intentionally omits tenant identity (no
+// tenantId, no tenant slug, no tenant name) so a leaked slug doesn't
+// reveal which tenant the diagnostic belongs to.
+//
+// Layer 3 fallback: when the LLM call fails or T7's guard rejects the
+// LLM output, this endpoint still returns 200 with the deterministic
+// template narrative (mirrors PDF endpoint behaviour — NEVER 5xx on
+// guard-fallback).
+//
+// Cache: `Cache-Control: public, max-age=300` (5 min).  Report content
+// is stable once generated; same school revisiting their URL doesn't
+// regenerate the LLM call (and even if it did, the engine output is
+// already persisted from submit-tmc).
+router.get("/diagnostics/public/readiness-report/:slug", async (req, res) => {
+  try {
+    const slug = req.params.slug;
+    const id = parseDiagnosticIdFromSlug(slug);
+    if (!id) {
+      return res.status(404).json({
+        error: "Readiness diagnostic not found",
+        code: "DIAGNOSTIC_NOT_FOUND",
+      });
+    }
+
+    const diag = await prisma.travelDiagnostic.findFirst({
+      where: { id, subBrand: "tmc" },
+    });
+    if (!diag) {
+      return res.status(404).json({
+        error: "Readiness diagnostic not found",
+        code: "DIAGNOSTIC_NOT_FOUND",
+      });
+    }
+
+    let answers = {};
+    try { answers = JSON.parse(diag.answersJson || "{}"); }
+    catch { /* malformed → empty answers, fallback template */ }
+
+    // Load active catalogue for the destination blocklist + matched-trip
+    // narrative material.
+    let catalogue = [];
+    try {
+      catalogue = await prisma.tmcTripCatalogue.findMany({
+        where: { tenantId: diag.tenantId, status: "active" },
+      });
+    } catch { /* empty catalogue is fine — guard falls to template */ }
+    const matchedTripIds = new Set(
+      [diag.recommendedTripId, diag.alternativeTripId].filter((x) => x != null),
+    );
+    const matchedRows = catalogue.filter((t) => matchedTripIds.has(t.id));
+
+    // Build Job A prompt (T6).
+    const standingFacts = DEFAULT_STANDING_FACTS;
+    const destinationBlocklist = buildDestinationBlocklist(catalogue);
+    const catalogueMatchedBlurbs = matchedRows.map((t) => ({
+      blurb: stripDestinationWords(t.reportSkillBlurb || "", destinationBlocklist),
+      tier: t.tier,
+    }));
+    let engineOutputForPrompt = null;
+    try {
+      engineOutputForPrompt = {
+        state: diag.engineState || null,
+        flags: JSON.parse(diag.flagsJson || "[]"),
+      };
+    } catch { engineOutputForPrompt = { state: diag.engineState || null, flags: [] }; }
+
+    const promptEnvelope = tmcPrompts.buildReadinessNarrativePrompt({
+      answers,
+      engineOutput: engineOutputForPrompt,
+      catalogueMatched: catalogueMatchedBlurbs,
+      standingFactsConfig: standingFacts,
+      destinationBlocklist,
+    });
+
+    // Call the LLM router (T6).  Stub mode returns prose that won't pass
+    // Layer 1 schema validation, so the guard falls through to the
+    // deterministic template per design — same as the PDF endpoint.
+    let llmRaw = null;
+    try {
+      const llmResp = await llmRouter.routeRequest({
+        task: promptEnvelope.task,
+        payload: { system: promptEnvelope.system, user: promptEnvelope.user },
+        tenantId: diag.tenantId,
+      });
+      try { llmRaw = JSON.parse(llmResp && llmResp.text); }
+      catch { llmRaw = llmResp && llmResp.text; }
+    } catch (e) {
+      console.error("[travel-diag-tmc] readiness-report.json LLM call failed (falling through to template):", e.message);
+    }
+
+    // Run the T7 guard.  Layer 3 fallback fills from schoolAnswers.
+    const guarded = tmcReportGuard.guardReportOutput("A", llmRaw, {
+      destinationBlocklist,
+      schoolAnswers: answers,
+    });
+
+    // Resolve §3.5.1 board hook + §3.5.2 runway display.
+    const boardHook = resolveBoardHook(standingFacts, answers.curriculum);
+    const runwayDisplay = resolveRunwayDisplay(standingFacts, answers.geo_preference);
+    const runwayKey = resolveRunwayKey(answers.geo_preference);
+    const runwayDays = (standingFacts.runway[runwayKey] && standingFacts.runway[runwayKey].lead_days) || null;
+
+    // Board name surfaced for the §3.5.1 hook block — first selected
+    // curriculum (multi-board schools see the concatenated hookText but
+    // the header `board` field uses the first).  Empty string when
+    // curriculum is missing.
+    const curriculumList = Array.isArray(answers.curriculum)
+      ? answers.curriculum
+      : (answers.curriculum ? [answers.curriculum] : []);
+    const boardName = curriculumList.length > 0 ? String(curriculumList[0]) : "";
+
+    // catalogueMatched — buyer-facing.  Trip name + region + tier +
+    // duration ONLY.  Pricing fields (indicativePricePerStudent,
+    // priceBand) are EXCLUDED — DD-5.4 keeps the report a "what becomes
+    // possible" surface, not a quote.  The executive surfaces price
+    // separately via the brief / human follow-up.
+    const catalogueMatchedSafe = matchedRows.map((t) => ({
+      tripId: t.tripId,
+      title: t.title,
+      tier: t.tier,
+      region: t.region,
+      durationDays: t.durationDays,
+      durationNights: t.durationNights,
+      reportSkillBlurb: stripDestinationWords(t.reportSkillBlurb || "", destinationBlocklist),
+    }));
+
+    // Engine output — only the buyer-safe surface.  The full
+    // `engineScoresJson` (survivors[], eliminated[], weightsUsed{}) is
+    // INTENTIONALLY EXCLUDED — it would leak weight tuning and the
+    // catalogue's eliminated set is an internal sales artifact.  We
+    // expose only state + tier + the matched trip ids (which are already
+    // the school's surface).
+    const engineOutputForJson = {
+      state: diag.engineState || null,
+      icpTier: diag.icpTier || null,
+      recommendedTripId: diag.recommendedTripId || null,
+      alternativeTripId: diag.alternativeTripId || null,
+    };
+
+    const payload = {
+      diagnostic: {
+        id: diag.id,
+        engineState: diag.engineState || null,
+        icpTier: diag.icpTier || null,
+        weightsVersion: diag.weightsVersion || null,
+        createdAt: diag.createdAt instanceof Date ? diag.createdAt.toISOString() : diag.createdAt,
+      },
+      narrative: guarded.output,
+      engineOutput: engineOutputForJson,
+      standingFacts,
+      boardHook: {
+        board: boardName,
+        hookText: boardHook,
+      },
+      runwayDisplay: {
+        days: runwayDays,
+        label: runwayDisplay,
+      },
+      catalogueMatched: catalogueMatchedSafe,
+      guardLayer: guarded.layer,
+      guardAccepted: guarded.accepted,
+    };
+
+    res.setHeader("Cache-Control", "public, max-age=300");
+    res.setHeader("X-Tmc-Report-Guard-Layer", String(guarded.layer));
+    res.setHeader("X-Tmc-Report-Guard-Accepted", String(guarded.accepted));
+    res.status(200).json(payload);
+  } catch (e) {
+    console.error("[travel-diag-tmc] readiness-report.json error:", e.message);
+    res.status(500).json({
+      error: "Failed to render readiness report",
+      code: "REPORT_RENDER_FAILED",
+    });
+  }
+});
+
+// Internal exports for the T8 vitest suite — keeps the helpers
+// inline-testable without round-tripping through supertest.
 module.exports = router;
+module.exports.__internal = {
+  DEFAULT_STANDING_FACTS,
+  resolveRunwayKey,
+  resolveRunwayDisplay,
+  resolveBoardHook,
+  buildDestinationBlocklist,
+  stripDestinationWords,
+  buildReportSlug,
+  parseDiagnosticIdFromSlug,
+};

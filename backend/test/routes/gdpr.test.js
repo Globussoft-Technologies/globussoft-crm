@@ -459,6 +459,104 @@ describe('GET /api/gdpr/consent/:contactId — list consent records', () => {
   });
 });
 
+// ─── GET /consent/:contactId?fields=summary — #920 slice 32 ──────
+/**
+ * #920 slice 32 — `?fields=summary` slim-shape opt-in.
+ *
+ * ConsentRecord rows carry two forensic-evidence columns the
+ * consent-picker UI never shows (ipAddress + userAgent — captured for
+ * GDPR Art. 7 proof-of-consent, surfaced only on DSAR Art. 15 exports).
+ * The slim shape drops those plus tenantId, returning only the columns
+ * a status grid needs: id, contactId, type, granted, source, createdAt.
+ *
+ * What this describe pins
+ * ───────────────────────
+ *   1. Default GET (no ?fields) preserves full-shape Prisma call —
+ *      no `select` key, all forensic columns returned (the Art. 15
+ *      DSAR path depends on this — making `summary` the default would
+ *      break the legally mandated export payload).
+ *   2. ?fields=summary switches to `select` with the 6-field projection.
+ *   3. ?fields=summary EXCLUDES `ipAddress` + `userAgent` (the forensic
+ *      blobs that motivated the slim shape) — pinned via assertion on
+ *      the absence of those keys in the `select` object.
+ *   4. ?fields=summary EXCLUDES `tenantId` (leaked-tenant-id defence
+ *      surface — mirrors slices 20 / 21 / 23 / 24 / 25).
+ *   5. ?fields=summary still scopes tenantId in WHERE clause
+ *      (slim-shape is orthogonal to tenant-isolation — the response
+ *      shape narrows, the row set does not widen).
+ *   6. Bogus `?fields=junk` falls through to the full-shape branch
+ *      (defence-in-depth — only the exact literal `summary` opts in).
+ */
+
+describe('GET /api/gdpr/consent/:contactId?fields=summary — slim-shape opt-in (#920 slice 32)', () => {
+  test('default (no ?fields) → full-shape findMany (no `select` key, ipAddress + userAgent + tenantId returned)', async () => {
+    prisma.consentRecord.findMany.mockResolvedValue([
+      { id: 1, contactId: 42, type: 'marketing', granted: true, ipAddress: '203.0.113.7', userAgent: 'Mozilla/5.0', source: 'app', tenantId: 1, createdAt: new Date() },
+    ]);
+    const app = makeApp();
+    const res = await request(app).get('/api/gdpr/consent/42');
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    const findArgs = prisma.consentRecord.findMany.mock.calls[0][0];
+    // Default branch: no `select` key — Prisma returns ALL columns.
+    expect(findArgs.select).toBeUndefined();
+    expect(findArgs.where).toEqual({ contactId: 42, tenantId: 1 });
+    expect(findArgs.orderBy).toEqual({ createdAt: 'desc' });
+  });
+
+  test('?fields=summary → slim `select` with 6-field projection (id, contactId, type, granted, source, createdAt)', async () => {
+    prisma.consentRecord.findMany.mockResolvedValue([
+      { id: 1, contactId: 42, type: 'marketing', granted: true, source: 'app', createdAt: new Date() },
+    ]);
+    const app = makeApp();
+    const res = await request(app).get('/api/gdpr/consent/42?fields=summary');
+    expect(res.status).toBe(200);
+    const findArgs = prisma.consentRecord.findMany.mock.calls[0][0];
+    expect(findArgs.select).toEqual({
+      id: true,
+      contactId: true,
+      type: true,
+      granted: true,
+      source: true,
+      createdAt: true,
+    });
+  });
+
+  test('?fields=summary → slim shape EXCLUDES `ipAddress` + `userAgent` (the forensic blobs motivating slim shape)', async () => {
+    prisma.consentRecord.findMany.mockResolvedValue([]);
+    const app = makeApp();
+    await request(app).get('/api/gdpr/consent/42?fields=summary');
+    const findArgs = prisma.consentRecord.findMany.mock.calls[0][0];
+    expect(findArgs.select.ipAddress).toBeUndefined();
+    expect(findArgs.select.userAgent).toBeUndefined();
+  });
+
+  test('?fields=summary → slim shape EXCLUDES `tenantId` (leaked-tenant-id defence — mirrors slices 20/21/23/24/25)', async () => {
+    prisma.consentRecord.findMany.mockResolvedValue([]);
+    const app = makeApp();
+    await request(app).get('/api/gdpr/consent/42?fields=summary');
+    const findArgs = prisma.consentRecord.findMany.mock.calls[0][0];
+    expect(findArgs.select.tenantId).toBeUndefined();
+  });
+
+  test('?fields=summary still scopes tenantId in WHERE clause (slim shape orthogonal to tenant isolation)', async () => {
+    prisma.consentRecord.findMany.mockResolvedValue([]);
+    const app = makeApp({ tenantId: 99 });
+    await request(app).get('/api/gdpr/consent/42?fields=summary');
+    const findArgs = prisma.consentRecord.findMany.mock.calls[0][0];
+    expect(findArgs.where).toEqual({ contactId: 42, tenantId: 99 });
+    expect(findArgs.orderBy).toEqual({ createdAt: 'desc' });
+  });
+
+  test('bogus ?fields=junk → falls through to full-shape branch (only exact literal `summary` opts in)', async () => {
+    prisma.consentRecord.findMany.mockResolvedValue([]);
+    const app = makeApp();
+    await request(app).get('/api/gdpr/consent/42?fields=junk');
+    const findArgs = prisma.consentRecord.findMany.mock.calls[0][0];
+    expect(findArgs.select).toBeUndefined();
+  });
+});
+
 // ─── POST /consent ───────────────────────────────────────────────
 
 describe('POST /api/gdpr/consent — record a grant/revoke', () => {

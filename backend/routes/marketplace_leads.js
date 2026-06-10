@@ -4,10 +4,22 @@ const { findDuplicateContact, findDuplicateMarketplaceLead } = require("../utils
 
 const router = express.Router();
 const prisma = require("../lib/prisma");
+const listProjection = require("../lib/listProjection");
 
 // ── Authenticated routes ──────────────────────────────────────────
 
 // List marketplace leads with filters (scoped to current tenant)
+//
+// Slim-shape opt-in (#920 slice S3 — FR-3.5 PII payload reduction).
+// **High-value PII target.** Default shape ships every column —
+// `email`, `phone`, `company`, `product`, `city`, `message` (@db.Text),
+// AND `rawPayload` (@db.Text — could embed the entire raw IndiaMART /
+// JustDial / TradeIndia webhook envelope, often kilobytes per row).
+// Pass `?fields=summary` to opt into the slim projection (id + provider
+// + name + status + contactId + createdAt). Picker / sub-brand-tile
+// callers don't need the full PII; the existing `include: { contact: ... }`
+// join is SKIPPED on the slim path (the slim row already exposes the
+// FK; callers can fetch contact separately if they need it).
 router.get("/", verifyToken, async (req, res) => {
   try {
     const { provider, status, from, to, page = 1, limit = 50 } = req.query;
@@ -21,14 +33,23 @@ router.get("/", verifyToken, async (req, res) => {
     }
 
     const skip = (parseInt(page) - 1) * parseInt(limit);
+    const isSummary = req.query.fields === "summary";
+    const findManyArgs = {
+      where,
+      orderBy: { createdAt: "desc" },
+      skip,
+      take: parseInt(limit),
+    };
+    if (isSummary) {
+      // SQL-level field drop. `include` would conflict with `select`, so
+      // we drop the per-row contact-PII join on the slim path; callers
+      // navigate to /contacts/:id directly if they need it.
+      findManyArgs.select = listProjection("MarketplaceLead", false);
+    } else {
+      findManyArgs.include = { contact: { select: { id: true, name: true, email: true } } };
+    }
     const [leads, total] = await Promise.all([
-      prisma.marketplaceLead.findMany({
-        where,
-        include: { contact: { select: { id: true, name: true, email: true } } },
-        orderBy: { createdAt: "desc" },
-        skip,
-        take: parseInt(limit),
-      }),
+      prisma.marketplaceLead.findMany(findManyArgs),
       prisma.marketplaceLead.count({ where }),
     ]);
 
@@ -258,7 +279,7 @@ router.put("/config/:provider", verifyToken, verifyRole(["ADMIN"]), async (req, 
 router.post("/sync/:provider", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
   try {
     const { syncMarketplace } = require("../cron/marketplaceEngine");
-    const result = await syncMarketplace(req.params.provider, req.io);
+    const result = await syncMarketplace(req.user.tenantId, req.params.provider, req.io);
     res.json(result);
   } catch (err) {
     console.error("[MarketplaceLeads] Manual sync error:", err);

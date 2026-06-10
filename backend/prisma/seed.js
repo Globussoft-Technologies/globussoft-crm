@@ -13,6 +13,14 @@ dotenv.config({ path: path.resolve(__dirname, '../../.env') });
 const { PrismaClient } = require('@prisma/client');
 const bcrypt = require('bcryptjs');
 
+// S91 — POI catalog seeder wrapper (PRD_TRAVEL_ITINERARY_UPGRADES.md FR-3.5).
+// Fixture-mode by default so `prisma db seed` runs offline (no OPENTRIPMAP_API_KEY
+// required). S11 shipped the wrapper + dual-purpose seeder; S91 wires it into
+// the orchestrator. Try/catch isolation around the call (line ~1145) follows the
+// existing per-op error-isolation pattern (see lines 48 + 203-207 + 345-348) so a
+// POI seed failure doesn't abort the rest of the seed run.
+const { seedTravelPois } = require('./seed-travel-pois');
+
 // Verify DATABASE_URL is set
 if (!process.env.DATABASE_URL) {
   console.error('Error: DATABASE_URL not set in .env file');
@@ -30,7 +38,7 @@ async function main() {
   console.log('Wiping all tables...');
   await prisma.$executeRawUnsafe('SET FOREIGN_KEY_CHECKS = 0');
   const tables = [
-    'ReportSchedule', 'Notification', 'AuditLog', 'PipelineStage', 'EmailTemplate',
+    'ReportSchedule', 'Notification', 'AuditLog', 'RevokedToken', 'PipelineStage', 'EmailTemplate',
     'CustomValue', 'CustomRecord', 'CustomField', 'CustomEntity',
     'QuoteLineItem', 'Quote', 'Product',
     'EstimateLineItem', 'Estimate',
@@ -38,7 +46,9 @@ async function main() {
     'Attachment', 'CallLog', 'EmailMessage',
     'Activity', 'Task', 'Expense', 'Invoice', 'Contract', 'Project',
     'Deal', 'Ticket', 'Campaign', 'AutomationRule', 'Integration',
-    'Webhook', 'ApiKey', 'Touchpoint', 'Contact', 'User',
+    'Webhook', 'ApiKey', 'Touchpoint', 'Contact',
+    'UserRole', 'RolePermission', 'Role',
+    'User',
     'Subscription', 'SubscriptionPlan',
     'Tenant',
   ];
@@ -64,37 +74,73 @@ async function main() {
   // ══════════════════════════════════════════════════════════════
   // STEP 2: SUBSCRIPTION PLANS
   // ══════════════════════════════════════════════════════════════
+  // Plans drive the public /pricing page AND the Razorpay checkout. The
+  // `pricing` JSON carries all 4 display prices (usd/inr × annual/monthly)
+  // the marketing page needs; the legacy `price`+`currency` columns stay as
+  // the Razorpay charge fallback when /create-order is called without a
+  // currency+period preference. Owner can edit any of this from the in-app
+  // "Manage Subscription Plans" page — no redeploy needed.
   const plans = await Promise.all([
     prisma.subscriptionPlan.create({
       data: {
         name: 'Starter',
+        planKey: 'starter',
+        displayOrder: 0,
+        popular: false,
+        accentColor: '#4f46e5',
+        cta: 'Start Free Trial',
+        featuresLabel: 'Includes',
         price: 499,
         currency: 'INR',
         billingIntervalDays: 30,
         description: 'For startups & SMBs seeking efficient pipeline management.',
         features: JSON.stringify(['Contact, Account & Deal Management', 'Contact Lifecycle Stages', 'Built-in Chat, Email & Phone', 'Email Templates & Tracking', 'Custom Fields & Kanban Views', 'Basic Workflows (20)', 'Visual Sales Pipeline', 'Product Catalog', 'Curated Reports & Dashboards', 'Slack Integration & Marketplace', 'Mobile App & 24×5 Support']),
+        pricing: JSON.stringify({
+          usd: { annual: 6, monthly: 8, yearAnnualLabel: '$72 /user/year', yearMonthlyLabel: '$96 /user/year' },
+          inr: { annual: 499, monthly: 649, yearAnnualLabel: '₹5,988 /user/year', yearMonthlyLabel: '₹7,788 /user/year' },
+        }),
         isActive: true,
       }
     }),
     prisma.subscriptionPlan.create({
       data: {
         name: 'Professional',
+        planKey: 'pro',
+        displayOrder: 1,
+        popular: true,
+        accentColor: '#7c3aed',
+        cta: 'Start Free Trial',
+        featuresLabel: 'Everything in Starter, plus',
         price: 1499,
         currency: 'INR',
         billingIntervalDays: 30,
         description: 'For growing teams needing AI, automation & multi-pipeline.',
         features: JSON.stringify(['AI-Powered Contact Scoring', 'Multiple Sales Pipelines', 'Sales Sequences & Automation', 'Territory Management', 'Auto-assignment Rules', 'AI Email Writing & Enhancement', 'Deal Insights by AI', 'Advanced Workflows (50)', 'Custom Reports & Dashboards', 'Account Hierarchy & BYOC']),
+        pricing: JSON.stringify({
+          usd: { annual: 18, monthly: 22, yearAnnualLabel: '$216 /user/year', yearMonthlyLabel: '$264 /user/year' },
+          inr: { annual: '1,499', monthly: '1,899', yearAnnualLabel: '₹17,988 /user/year', yearMonthlyLabel: '₹22,788 /user/year' },
+        }),
         isActive: true,
       }
     }),
     prisma.subscriptionPlan.create({
       data: {
         name: 'Enterprise',
+        planKey: 'ent',
+        displayOrder: 2,
+        popular: false,
+        accentColor: '#d97706',
+        cta: 'Contact Sales',
+        featuresLabel: 'Everything in Professional, plus',
         price: 2499,
         currency: 'INR',
         billingIntervalDays: 30,
         description: 'For large teams needing customization, governance & AI forecasting.',
         features: JSON.stringify(['Custom Modules', 'AI Forecasting Insights', 'Field-level Permissions', 'Sandbox Environment', 'Audit Logs & Compliance', 'Auto Profile Enrichment', 'Deal Teams & Advanced Metrics', '5,000 Bulk Emails/user/day', '100 GB Storage/user', 'Dedicated Account Manager', 'Priority 24×7 Support']),
+        pricing: JSON.stringify({
+          usd: { annual: 29, monthly: 36, yearAnnualLabel: '$348 /user/year', yearMonthlyLabel: '$432 /user/year' },
+          inr: { annual: '2,499', monthly: '2,999', yearAnnualLabel: '₹29,988 /user/year', yearMonthlyLabel: '₹35,988 /user/year' },
+        }),
         isActive: true,
       }
     }),
@@ -851,6 +897,270 @@ async function main() {
     }
   });
   console.log('Report Schedules: 2 created');
+
+  // ══════════════════════════════════════════════════════════════
+  // STEP 2.5: RBAC — System Roles + Permissions
+  // ══════════════════════════════════════════════════════════════
+  const { PERMISSION_CATALOG } = require('../lib/permissionCatalog');
+
+  // Seed OWNER user (platform admin, no tenant)
+  const ownerUser = await prisma.user.create({
+    data: {
+      email: 'owner@globussoft.com',
+      password: await bcrypt.hash('password123', 10),
+      name: 'Globussoft Owner',
+      userType: 'OWNER',
+      role: 'ADMIN',
+      tenantId: 1, // Platform owner still needs a default tenant
+    },
+  });
+
+  // OWNER role (system, platform-level, tenantId = null)
+  const ownerRole = await prisma.role.create({
+    data: {
+      tenantId: null,
+      key: 'OWNER',
+      name: 'Platform Owner',
+      description: 'Unrestricted access across all organizations',
+      isSystem: true,
+      isActive: true,
+      userType: 'OWNER',
+      landingPath: '/dashboard',
+    },
+  });
+
+  // Assign OWNER user to OWNER role
+  await prisma.userRole.create({
+    data: {
+      userId: ownerUser.id,
+      roleId: ownerRole.id,
+    },
+  });
+
+  // For the NovaCrest tenant (id=1), seed ADMIN, MANAGER, and CUSTOMER system roles
+
+  // ADMIN role (system, tenant-scoped)
+  const adminRole = await prisma.role.create({
+    data: {
+      tenantId: 1,
+      key: 'ADMIN',
+      name: 'Admin',
+      description: 'Full access to all features within the organization',
+      isSystem: true,
+      isActive: true,
+      userType: 'STAFF',
+      landingPath: '/dashboard',
+    },
+  });
+
+  // Grant ADMIN all permissions
+  for (const [module, actions] of Object.entries(PERMISSION_CATALOG)) {
+    for (const action of actions) {
+      await prisma.rolePermission.create({
+        data: {
+          roleId: adminRole.id,
+          module,
+          action,
+        },
+      });
+    }
+  }
+
+  // MANAGER role (custom but seeded, tenant-scoped)
+  const managerRole = await prisma.role.create({
+    data: {
+      tenantId: 1,
+      key: 'MANAGER',
+      name: 'Manager',
+      description: 'Manager role with broad staff access',
+      isSystem: false,
+      isActive: true,
+      userType: 'STAFF',
+      landingPath: '/dashboard',
+    },
+  });
+
+  // Grant MANAGER specific permissions (subset of ADMIN)
+  const managerPermissions = [
+    'contacts.read', 'contacts.write', 'contacts.update',
+    'deals.read', 'deals.write', 'deals.update',
+    'leads.read', 'leads.write', 'leads.update', 'leads.delete', 'leads.export',
+    'tasks.read', 'tasks.write', 'tasks.update',
+    'projects.read', 'projects.write', 'projects.update',
+    'pipeline.read', 'pipeline.write', 'pipeline.update',
+    'quotes.read', 'quotes.write', 'quotes.update',
+    'reports.read', 'reports.export',
+    'dashboards.read',
+    'analytics.read', 'analytics.export',
+    // Finance modules — `billing` was decomposed in v3.8.x into invoices,
+    // gift_cards, and patient_wallets. MANAGER inherits read across all
+    // three so the Finance section of the sidebar stays visible.
+    'invoices.read',
+    'gift_cards.read',
+    'patient_wallets.read',
+    'staff.read',
+    'communications.read', 'communications.write',
+    'email.read', 'email.write',
+    'sms.read', 'sms.write',
+    'marketing.read', 'marketing.write', 'marketing.update',
+    'tickets.read', 'tickets.write', 'tickets.update',
+    'surveys.read', 'surveys.write', 'surveys.update',
+    'documents.read', 'documents.write', 'documents.update',
+    'contracts.read', 'contracts.write', 'contracts.update',
+    'estimates.read', 'estimates.write', 'estimates.update', 'estimates.export',
+    // Wellness master catalog — Manager curates products + auto-consumption
+    // rules. Mirrors MANAGER_PERMISSIONS in scripts/ensureRbacOnBoot.js.
+    'products.read', 'products.write', 'products.update',
+  ];
+
+  for (const perm of managerPermissions) {
+    const [module, action] = perm.split('.');
+    await prisma.rolePermission.create({
+      data: {
+        roleId: managerRole.id,
+        module,
+        action,
+      },
+    });
+  }
+
+  // CUSTOMER role (system, tenant-scoped, limited access)
+  const customerRole = await prisma.role.create({
+    data: {
+      tenantId: 1,
+      key: 'CUSTOMER',
+      name: 'Customer',
+      description: 'Customer access to booking and appointments only',
+      isSystem: true,
+      isActive: true,
+      userType: 'CUSTOMER',
+      landingPath: '/portal',
+    },
+  });
+
+  // Grant CUSTOMER limited permissions (customer-facing features only).
+  // `my_prescriptions.read` is the patient-portal-only counterpart to
+  // staff-wide `prescriptions.read`; CUSTOMER users get the scoped view
+  // (own Rx list + own PDF download) instead of the tenant-wide list.
+  const customerPermissions = [
+    'appointments.read',
+    'services.read',
+    // `billing.read` was split per-surface in v3.8.x; CUSTOMER gets
+    // invoices.read so they can still see their own invoice list.
+    'invoices.read',
+    'documents.read',
+    'my_prescriptions.read',
+    // Patient appointment management — /wellness/my-bookings page.
+    'my_bookings.read',
+    'consents.read',
+  ];
+
+  for (const perm of customerPermissions) {
+    const [module, action] = perm.split('.');
+    await prisma.rolePermission.create({
+      data: {
+        roleId: customerRole.id,
+        module,
+        action,
+      },
+    });
+  }
+
+  // Assign existing users (ADMIN/MANAGER/USER) to their corresponding roles
+  // This bridges the old User.role system with the new UserRole table
+  const adminUser = users[0]; // admin@globussoft.com is ADMIN
+  const managerUsers = [users[1], users[4]]; // manager@crm.com, vikram@globussoft.com are MANAGER
+  const userUsers = [users[2], users[3], users[5]]; // user@crm.com, sneha@globussoft.com, anita@globussoft.com are USER
+
+  // Assign ADMIN user to ADMIN role
+  await prisma.userRole.create({
+    data: {
+      userId: adminUser.id,
+      roleId: adminRole.id,
+    },
+  });
+
+  // Assign MANAGER users to MANAGER role
+  for (const u of managerUsers) {
+    await prisma.userRole.create({
+      data: {
+        userId: u.id,
+        roleId: managerRole.id,
+      },
+    });
+  }
+
+  // USER users get a basic "User" role (created as a custom role matching old USER permissions)
+  const userRole = await prisma.role.create({
+    data: {
+      tenantId: 1,
+      key: 'USER',
+      name: 'User',
+      description: 'Basic user role with limited CRM access',
+      isSystem: false,
+      isActive: true,
+      userType: 'STAFF',
+      landingPath: '/dashboard',
+    },
+  });
+
+  // Grant USER basic READ permissions
+  const userPermissions = [
+    'contacts.read',
+    'deals.read',
+    'leads.read',
+    'tasks.read',
+    'projects.read',
+    'pipeline.read',
+    'quotes.read',
+    'reports.read',
+    'dashboards.read',
+    'analytics.read',
+    'communications.read',
+    'email.read',
+    'sms.read',
+    'tickets.read',
+    'surveys.read',
+    'documents.read',
+    'contracts.read',
+    'estimates.read',
+  ];
+
+  for (const perm of userPermissions) {
+    const [module, action] = perm.split('.');
+    await prisma.rolePermission.create({
+      data: {
+        roleId: userRole.id,
+        module,
+        action,
+      },
+    });
+  }
+
+  for (const u of userUsers) {
+    await prisma.userRole.create({
+      data: {
+        userId: u.id,
+        roleId: userRole.id,
+      },
+    });
+  }
+
+  console.log('RBAC Roles: OWNER + ADMIN + MANAGER + CUSTOMER + USER system roles seeded with permissions');
+
+  // ══════════════════════════════════════════════════════════════
+  // STEP N: TRAVEL POI CATALOG (S91 — PRD_TRAVEL_ITINERARY_UPGRADES.md FR-3.5)
+  // ══════════════════════════════════════════════════════════════
+  // Fixture-mode default — no OPENTRIPMAP_API_KEY required, no network hits,
+  // CI-safe. Try/catch isolation so a POI seed failure doesn't abort the rest
+  // of the seed run (matches the per-op pattern at lines 48 + 203-207 + 345-348).
+  console.log('[seed] seeding POIs (fixture mode)…');
+  try {
+    const poiResult = await seedTravelPois({ prisma, useFixture: true });
+    console.log(`[seed] POIs done: upserted ${poiResult.totalUpserted} across ${poiResult.perDest.length} destinations`);
+  } catch (e) {
+    console.error('[seed] seedTravelPois failed:', e.message);
+  }
 
   // ══════════════════════════════════════════════════════════════
   // DONE

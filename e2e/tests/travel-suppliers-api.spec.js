@@ -278,3 +278,58 @@ test.describe("Travel suppliers API — rotate + delete", () => {
     expect((await res.json()).code).toBe("EMPTY_BODY");
   });
 });
+
+// ─── Supplier-master list — slim-shape opt-in (#920 slice S3) ────────
+//
+// Scope addition: the route file backend/routes/travel_suppliers.js carries
+// BOTH the supplier-credentials vault (above) AND the supplier-master
+// CRUD (`GET /api/travel/suppliers` — supplier directory used by quote /
+// invoice / payable forms). Per FR-3.5 the supplier-master list endpoint
+// gained a `?fields=summary` opt-in that drops every supplier PII column
+// (contactPerson, phone, email, gstin, addressLine, paymentTermsDays,
+// creditLimit, notes). Pins the slim shape here so a regression that
+// re-introduces PII into the default supplier-master list response
+// fails the gate.
+
+test.describe("Travel suppliers MASTER list — slim-shape opt-in (#920 S3)", () => {
+  test("GET /suppliers?fields=summary drops supplier PII (phone / email / gstin / contactPerson)", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, "no token");
+    const res = await get(request, token, "/api/travel/suppliers?fields=summary");
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(Array.isArray(body.suppliers)).toBe(true);
+    if (body.suppliers.length === 0) test.skip(true, "no suppliers seeded");
+    for (const s of body.suppliers) {
+      expect(s).toHaveProperty("id");
+      expect(s).toHaveProperty("name");
+      expect(s).toHaveProperty("subBrand");
+      expect(s).toHaveProperty("supplierCategory");
+      // Supplier-PII MUST be absent on slim path.
+      expect(s).not.toHaveProperty("phone");
+      expect(s).not.toHaveProperty("email");
+      expect(s).not.toHaveProperty("contactPerson");
+      expect(s).not.toHaveProperty("gstin");
+      expect(s).not.toHaveProperty("addressLine");
+      expect(s).not.toHaveProperty("notes");
+      expect(s).not.toHaveProperty("paymentTermsDays");
+      expect(s).not.toHaveProperty("creditLimit");
+    }
+  });
+
+  test("GET /suppliers (default shape) still ships supplier PII columns", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, "no token");
+    const res = await get(request, token, "/api/travel/suppliers");
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    if (body.suppliers.length === 0) test.skip(true, "no suppliers seeded");
+    const s = body.suppliers[0];
+    // Default shape: PII keys present (back-compat for existing
+    // SuppliersAdmin.jsx + travel_invoices.js callers).
+    expect(s).toHaveProperty("phone");
+    expect(s).toHaveProperty("email");
+    expect(s).toHaveProperty("contactPerson");
+    expect(s).toHaveProperty("gstin");
+  });
+});

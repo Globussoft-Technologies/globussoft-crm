@@ -26,7 +26,7 @@
 // Closes Phase 1.5 / 8e from the 2026-05-20 PM handoff. Backend routes were
 // already shipped; this is the missing admin UI on top.
 
-import { useEffect, useRef, useState } from "react";
+import { useContext, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   CalendarRange, ChevronLeft, Download, Edit2, Filter,
@@ -34,6 +34,13 @@ import {
 } from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
+import { AuthContext } from "../../App";
+import { useActiveSubBrand } from "../../utils/subBrand";
+import {
+  accessibleSubBrands,
+  defaultSubBrandFor,
+  subBrandShortLabel,
+} from "../../utils/travelSubBrand";
 
 // Shared helpers for the CSV Export / Import buttons on both sections.
 // Same pattern as CostMaster.jsx + DiagnosticBuilder.jsx in v3.9.1.
@@ -127,12 +134,18 @@ export default function PricingRules() {
 
 function SeasonsSection() {
   const notify = useNotify();
+  const { user } = useContext(AuthContext) || {};
+  const { activeSubBrand } = useActiveSubBrand();
+  // Sub-brands this user may create rows for. Single-brand users get a locked
+  // read-only field; ADMIN / multi-brand users get a dropdown of THEIR brands.
+  const myBrands = accessibleSubBrands(user);
+  const lockedBrand = myBrands.length === 1 ? myBrands[0] : null;
   const [seasons, setSeasons] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filterSubBrand, setFilterSubBrand] = useState("");
   const [adding, setAdding] = useState(false);
   const [editingId, setEditingId] = useState(null);
-  const blankForm = { subBrand: "rfu", seasonName: "", startDate: "", endDate: "", multiplier: "" };
+  const blankForm = { subBrand: defaultSubBrandFor(user, activeSubBrand, "rfu"), seasonName: "", startDate: "", endDate: "", multiplier: "" };
   const [form, setForm] = useState(blankForm);
   const fileRef = useRef(null);
 
@@ -269,15 +282,29 @@ function SeasonsSection() {
       {showForm && (
         <div style={formBox}>
           <div style={{ display: "grid", gap: 8, gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 160px), 1fr))" }}>
-            <select
-              value={form.subBrand}
-              onChange={(e) => setForm({ ...form, subBrand: e.target.value })}
-              style={input}
-              disabled={editingId != null}
-              aria-label="Sub-brand"
-            >
-              {SUB_BRANDS.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
-            </select>
+            {lockedBrand ? (
+              // Single-brand user: field is pinned to their assigned brand and
+              // shown read-only. The value is already set in form.subBrand via
+              // defaultSubBrandFor / startEdit.
+              <input
+                type="text"
+                value={subBrandShortLabel(form.subBrand)}
+                readOnly
+                disabled
+                aria-label="Sub-brand (locked to your assigned brand)"
+                style={{ ...input, opacity: 0.7, cursor: "not-allowed" }}
+              />
+            ) : (
+              <select
+                value={form.subBrand}
+                onChange={(e) => setForm({ ...form, subBrand: e.target.value })}
+                style={input}
+                disabled={editingId != null}
+                aria-label="Sub-brand"
+              >
+                {myBrands.map((b) => <option key={b} value={b}>{subBrandShortLabel(b)}</option>)}
+              </select>
+            )}
             <input
               placeholder="seasonName (e.g. ramadan-peak)"
               value={form.seasonName}
@@ -368,6 +395,12 @@ function SeasonsSection() {
 
 function MarkupRulesSection() {
   const notify = useNotify();
+  const { user } = useContext(AuthContext) || {};
+  const { activeSubBrand } = useActiveSubBrand();
+  // See SeasonsSection: single-brand users get a locked read-only sub-brand;
+  // ADMIN / multi-brand users get a dropdown of THEIR brands.
+  const myBrands = accessibleSubBrands(user);
+  const lockedBrand = myBrands.length === 1 ? myBrands[0] : null;
   const [rules, setRules] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filterSubBrand, setFilterSubBrand] = useState("");
@@ -376,7 +409,7 @@ function MarkupRulesSection() {
   const [adding, setAdding] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const blankForm = {
-    subBrand: "rfu", scope: "hotel", matchKeyJson: "{}",
+    subBrand: defaultSubBrandFor(user, activeSubBrand, "rfu"), scope: "hotel", matchKeyJson: "{}",
     markupType: "pct", markupValue: "", priority: "100",
   };
   const [form, setForm] = useState(blankForm);
@@ -559,15 +592,26 @@ function MarkupRulesSection() {
       {showForm && (
         <div style={formBox}>
           <div style={{ display: "grid", gap: 8, gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 160px), 1fr))" }}>
-            <select
-              value={form.subBrand}
-              onChange={(e) => setForm({ ...form, subBrand: e.target.value })}
-              style={input}
-              disabled={editingId != null}
-              aria-label="Sub-brand"
-            >
-              {SUB_BRANDS.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
-            </select>
+            {lockedBrand ? (
+              <input
+                type="text"
+                value={subBrandShortLabel(form.subBrand)}
+                readOnly
+                disabled
+                aria-label="Sub-brand (locked to your assigned brand)"
+                style={{ ...input, opacity: 0.7, cursor: "not-allowed" }}
+              />
+            ) : (
+              <select
+                value={form.subBrand}
+                onChange={(e) => setForm({ ...form, subBrand: e.target.value })}
+                style={input}
+                disabled={editingId != null}
+                aria-label="Sub-brand"
+              >
+                {myBrands.map((b) => <option key={b} value={b}>{subBrandShortLabel(b)}</option>)}
+              </select>
+            )}
             <select
               value={form.scope}
               onChange={(e) => setForm({ ...form, scope: e.target.value })}

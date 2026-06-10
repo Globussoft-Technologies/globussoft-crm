@@ -497,3 +497,116 @@ describe('POST /:id/send-email — render + dispatch via Mailgun', () => {
     expect(prisma.emailMessage.create).not.toHaveBeenCalled();
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────
+// GET /?fields=summary — slim-shape opt-in (#920 slice 36)
+// ─────────────────────────────────────────────────────────────────────────
+//
+// Mirrors the slim-shape contract pinned in slices 1-33. The default (no
+// ?fields) path continues to return the full row including content + variables
+// JSON. The ?fields=summary path drops the heavy content @db.LongText column
+// + variables @db.Text + tenantId + createdAt, passing a `select` to Prisma
+// so the wire payload (and the DB read) stay narrow. Anything other than the
+// exact string "summary" is treated as default (no `select` key forwarded).
+describe('GET /?fields=summary — slim-shape opt-in', () => {
+  test('omitted ?fields returns full row with content + variables (no select forwarded)', async () => {
+    prisma.documentTemplate.findMany.mockResolvedValue([
+      {
+        id: 1,
+        name: 'Sales Proposal',
+        type: 'PROPOSAL',
+        content: '<p>Hello {{contact.name}}</p>',
+        variables: '["contact.name"]',
+        tenantId: 42,
+        createdAt: new Date('2026-01-01T00:00:00Z'),
+        updatedAt: new Date('2026-01-15T00:00:00Z'),
+      },
+    ]);
+
+    const res = await request(makeApp({ tenantId: 42 })).get('/api/document-templates');
+
+    expect(res.status).toBe(200);
+    expect(res.body[0].content).toBe('<p>Hello {{contact.name}}</p>');
+    expect(res.body[0].variables).toBe('["contact.name"]');
+    // No `select` key forwarded — full-row default path.
+    const arg = prisma.documentTemplate.findMany.mock.calls[0][0];
+    expect(arg.select).toBeUndefined();
+    expect(arg).toEqual({
+      where: { tenantId: 42 },
+      orderBy: { updatedAt: 'desc' },
+    });
+  });
+
+  test('?fields=summary forwards select with id+name+type+updatedAt only', async () => {
+    prisma.documentTemplate.findMany.mockResolvedValue([
+      { id: 1, name: 'Sales Proposal', type: 'PROPOSAL', updatedAt: new Date('2026-01-15T00:00:00Z') },
+      { id: 2, name: 'NDA Standard', type: 'NDA', updatedAt: new Date('2026-01-10T00:00:00Z') },
+    ]);
+
+    const res = await request(makeApp({ tenantId: 42 }))
+      .get('/api/document-templates?fields=summary');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(2);
+    const arg = prisma.documentTemplate.findMany.mock.calls[0][0];
+    // Heavy content + variables + tenantId + createdAt MUST NOT be in select.
+    expect(arg.select).toEqual({
+      id: true,
+      name: true,
+      type: true,
+      updatedAt: true,
+    });
+    expect(arg.select.content).toBeUndefined();
+    expect(arg.select.variables).toBeUndefined();
+    expect(arg.select.tenantId).toBeUndefined();
+    expect(arg.select.createdAt).toBeUndefined();
+    // where + orderBy unchanged from default path.
+    expect(arg.where).toEqual({ tenantId: 42 });
+    expect(arg.orderBy).toEqual({ updatedAt: 'desc' });
+  });
+
+  test('?fields=summary composes with ?type filter — both narrow the read', async () => {
+    prisma.documentTemplate.findMany.mockResolvedValue([
+      { id: 2, name: 'NDA Standard', type: 'NDA', updatedAt: new Date('2026-01-10T00:00:00Z') },
+    ]);
+
+    const res = await request(makeApp({ tenantId: 1 }))
+      .get('/api/document-templates?fields=summary&type=NDA');
+
+    expect(res.status).toBe(200);
+    const arg = prisma.documentTemplate.findMany.mock.calls[0][0];
+    expect(arg.where).toEqual({ tenantId: 1, type: 'NDA' });
+    expect(arg.select).toEqual({
+      id: true,
+      name: true,
+      type: true,
+      updatedAt: true,
+    });
+  });
+
+  test('?fields=full (anything not exactly "summary") falls back to default full-row shape', async () => {
+    prisma.documentTemplate.findMany.mockResolvedValue([]);
+
+    const res = await request(makeApp({ tenantId: 1 }))
+      .get('/api/document-templates?fields=full');
+
+    expect(res.status).toBe(200);
+    const arg = prisma.documentTemplate.findMany.mock.calls[0][0];
+    // Exact-string gate: only "summary" trips the slim branch.
+    expect(arg.select).toBeUndefined();
+  });
+
+  test('?fields=SUMMARY (uppercase) is treated as default — case-sensitive gate', async () => {
+    prisma.documentTemplate.findMany.mockResolvedValue([]);
+
+    const res = await request(makeApp({ tenantId: 1 }))
+      .get('/api/document-templates?fields=SUMMARY');
+
+    expect(res.status).toBe(200);
+    const arg = prisma.documentTemplate.findMany.mock.calls[0][0];
+    // The gate is `req.query.fields === "summary"` (case-sensitive). Pin
+    // the contract so a future refactor to .toLowerCase() shows up as a
+    // deliberate spec edit, not a silent behaviour change.
+    expect(arg.select).toBeUndefined();
+  });
+});

@@ -23,15 +23,22 @@ beforeAll(() => {
   prisma.campaign = {
     findMany: vi.fn(),
     update: vi.fn(),
+    // Atomic per-row lock added by the cron-race hardening (214017c1):
+    // the engine flips scheduleStatus PENDING→PROCESSING via updateMany and
+    // only proceeds when count===1, so a sibling worker can't double-dispatch.
+    updateMany: vi.fn(),
   };
 });
 
 beforeEach(() => {
   prisma.campaign.findMany.mockReset();
   prisma.campaign.update.mockReset();
+  prisma.campaign.updateMany.mockReset();
 
   prisma.campaign.findMany.mockResolvedValue([]);
   prisma.campaign.update.mockResolvedValue({});
+  // Default: the atomic lock succeeds (this worker won the row).
+  prisma.campaign.updateMany.mockResolvedValue({ count: 1 });
 });
 
 describe('cron/campaignEngine — DB-backed schedule persistence (closes #412)', () => {

@@ -143,8 +143,35 @@ router.post("/visitor/:sessionId/rate", async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────
 
 // GET / — list active sessions for current tenant
+//
+// ?fields=summary opts into a slim shape: drops the N+1 lastMessage
+// preview fetch + the heavy message body, returning only the identifying
+// + status fields needed to render the session-list rail. Default shape
+// (no ?fields) preserves the full row + lastMessage envelope for the
+// existing LiveChat page consumer. Mirrors slices 1-27 of #920.
 router.get("/", async (req, res) => {
   try {
+    const isSummary = req.query.fields === "summary";
+
+    if (isSummary) {
+      const sessions = await prisma.liveChatSession.findMany({
+        where: {
+          tenantId: req.user.tenantId,
+          status: { not: "CLOSED" },
+        },
+        orderBy: { startedAt: "desc" },
+        select: {
+          id: true,
+          visitorId: true,
+          visitorName: true,
+          status: true,
+          agentId: true,
+          startedAt: true,
+        },
+      });
+      return res.json(sessions);
+    }
+
     const sessions = await prisma.liveChatSession.findMany({
       where: {
         tenantId: req.user.tenantId,

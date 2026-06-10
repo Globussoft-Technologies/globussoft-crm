@@ -2,294 +2,471 @@
 //
 // Wave 2 Agent KK companion to the backend's /api/whatsapp/threads + /opt-outs
 // endpoints. Implements:
-//   - Left rail with three tabs (All / Unread / Blocked), search box (phone or
-//     contact name)
+//   - Left rail with thread list, status filter, "show only unread" toggle,
+//     search box (phone or contact name)
 //   - Right pane with the selected thread's last 50 messages, reply textarea,
 //     "Assign to me" / "Close" / "Snooze" / "Mark read" buttons
 //   - Opt-out indicator chip + disabled reply box if the contact is opted out
 //   - Unread badge in the left rail entries
-//   - Meta 24-hour send-window banner + free-form gating outside the window
-//   - Template picker modal with {{variable}} substitution from active
-//     thread's contact / patient
 //
 // Lives under /wellness/whatsapp because the audit-call gap was wellness-
 // vertical-shaped (clinics on Meta Cloud API), but the routes themselves
 // are tenant-agnostic — adding a generic /whatsapp link later is one line.
-//
-// Zylu-Gap closures
-// -----------------
-//   #796 WA-001 — 3-tab layout (All / Unread / Blocked) with per-tab counts.
-//                 Blocked tab renders rows from /api/whatsapp/opt-outs.
-//   #797 WA-002 — Template picker (button in compose toolbar) + {{var}}
-//                 substitution from active thread's patient / contact name.
-//   #798 WA-003 — 24-hour send-window banner — green while inside, red
-//                 outside, with a hint to use a template; compose textarea
-//                 disabled outside window (forces template send). Server-
-//                 side already enforces this with 422 OUTSIDE_24H_WINDOW
-//                 (routes/whatsapp.js:138).
 
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import {
-  MessageCircle,
-  Search,
-  Send,
-  Check,
-  CheckCheck,
-  Clock,
-  XCircle,
-  UserCheck,
-  Ban,
-  RefreshCw,
-  AlertTriangle,
-  FileText,
-  X,
-} from 'lucide-react';
+import { useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { io as socketIO } from 'socket.io-client';
+import { AuthContext } from '../../App';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
-
-// #796 — All / Unread / Blocked tab layout. The old STATUS_OPTIONS dropdown
-// was replaced; the underlying backend filters still support per-status
-// filtering, but the Zylu reference uses these three buckets as the
-// primary surface. Status drill-downs (Open / Snoozed / Closed) are
-// available via search + thread-detail status pill.
-const TABS = [
-  { value: 'all', label: 'All' },
-  { value: 'unread', label: 'Unread' },
-  { value: 'blocked', label: 'Blocked' },
-];
-
-const TWENTY_FOUR_HOURS_MS = 24 * 3600 * 1000;
-
-function timeAgo(isoOrDate) {
-  if (!isoOrDate) return '';
-  const d = isoOrDate instanceof Date ? isoOrDate : new Date(isoOrDate);
-  const diffMs = Date.now() - d.getTime();
-  const mins = Math.round(diffMs / 60_000);
-  if (mins < 1) return 'just now';
-  if (mins < 60) return `${mins}m`;
-  const hours = Math.round(mins / 60);
-  if (hours < 24) return `${hours}h`;
-  const days = Math.round(hours / 24);
-  if (days < 7) return `${days}d`;
-  return d.toLocaleDateString();
-}
-
-// Wave 7D — PRD Gap §7 item 3 — delivery-tick icon per WhatsAppMessage.status.
-// Icons are familiar to anyone who's used WhatsApp on a phone:
-//   QUEUED → small clock (still being dispatched)
-//   SENT   → single grey check
-//   DELIVERED → double grey check
-//   READ   → double blue check
-//   FAILED → red triangle/exclamation
-// QUEUED is treated as "no checkmark yet" — the row's status text alongside
-// already says it. Returns null for inbound messages (we never emit these
-// statuses for INBOUND rows; they're stored as 'RECEIVED').
-function DeliveryTicks({ status, direction }) {
-  if (direction !== 'OUTBOUND') return null;
-  if (status === 'READ') {
-    return <CheckCheck size={14} color="#3b82f6" aria-label="Read" data-testid="delivery-tick-read" />;
-  }
-  if (status === 'DELIVERED') {
-    return <CheckCheck size={14} color="rgba(255,255,255,0.7)" aria-label="Delivered" data-testid="delivery-tick-delivered" />;
-  }
-  if (status === 'SENT') {
-    return <Check size={14} color="rgba(255,255,255,0.7)" aria-label="Sent" data-testid="delivery-tick-sent" />;
-  }
-  if (status === 'FAILED') {
-    return <AlertTriangle size={14} color="#ef4444" aria-label="Failed" data-testid="delivery-tick-failed" />;
-  }
-  if (status === 'QUEUED') {
-    return <Clock size={12} color="rgba(255,255,255,0.5)" aria-label="Queued" data-testid="delivery-tick-queued" />;
-  }
-  return null;
-}
-
-function StatusPill({ status }) {
-  const map = {
-    OPEN: { bg: 'rgba(16,185,129,0.15)', fg: '#10b981', label: 'Open' },
-    PENDING_AGENT: { bg: 'rgba(245,158,11,0.15)', fg: '#f59e0b', label: 'Pending' },
-    SNOOZED: { bg: 'rgba(99,102,241,0.15)', fg: '#6366f1', label: 'Snoozed' },
-    CLOSED: { bg: 'rgba(107,114,128,0.15)', fg: '#6b7280', label: 'Closed' },
-  };
-  const cfg = map[status] || map.OPEN;
-  return (
-    <span style={{
-      background: cfg.bg, color: cfg.fg, padding: '2px 8px', borderRadius: 10,
-      fontSize: '0.7rem', fontWeight: 600,
-    }}>{cfg.label}</span>
-  );
-}
-
-// #798 — compute whether free-form sends are inside Meta's 24-hour window.
-// Source of truth is the latest INBOUND message in the thread detail's
-// `messages` array. Falls back to `thread.lastInboundAt` if present
-// (schema.prisma:1362), otherwise null = no inbound = window CLOSED.
-function compute24hWindow(detail) {
-  if (!detail) return { open: false, lastInboundAt: null, msUntilClose: 0 };
-  // Latest inbound from the messages window first (most accurate; the
-  // /threads/:id response only returns the last 50 messages but that's
-  // also Meta's hard cutoff so a 24h-old inbound is always either inside
-  // the 50 or outside the window).
-  let lastInboundAt = null;
-  if (Array.isArray(detail.messages)) {
-    for (let i = detail.messages.length - 1; i >= 0; i--) {
-      const m = detail.messages[i];
-      if (m && m.direction === 'INBOUND' && m.createdAt) {
-        if (!lastInboundAt || new Date(m.createdAt) > new Date(lastInboundAt)) {
-          lastInboundAt = m.createdAt;
-        }
-      }
-    }
-  }
-  if (!lastInboundAt && detail.thread?.lastInboundAt) {
-    lastInboundAt = detail.thread.lastInboundAt;
-  }
-  if (!lastInboundAt) {
-    return { open: false, lastInboundAt: null, msUntilClose: 0 };
-  }
-  const elapsed = Date.now() - new Date(lastInboundAt).getTime();
-  const msUntilClose = TWENTY_FOUR_HOURS_MS - elapsed;
-  return {
-    open: msUntilClose > 0,
-    lastInboundAt,
-    msUntilClose: Math.max(0, msUntilClose),
-  };
-}
-
-function formatHoursMins(ms) {
-  if (!Number.isFinite(ms) || ms <= 0) return '0m';
-  const totalMins = Math.round(ms / 60_000);
-  const h = Math.floor(totalMins / 60);
-  const m = totalMins % 60;
-  if (h <= 0) return `${m}m`;
-  return `${h}h ${m}m`;
-}
-
-// #797 — apply {{variable}} substitution to a template body, sourcing values
-// from the active thread's contact + patient. Unknown variables are left
-// in-place (so the user can still see them and supply manually).
-//
-// Supported variables (case-insensitive, also matches snake/space variants):
-//   name / customer_name / contact_name / patient_name   → contact or patient name
-//   first_name                                            → first whitespace-token of name
-//   phone                                                 → contact phone
-function substituteTemplateVars(body, ctx) {
-  if (!body) return '';
-  // `ctx` is the thread-detail envelope { thread, messages, optedOut }; the
-  // contact/patient live under `thread`. Accept either shape so the helper
-  // is also usable on a bare thread object.
-  const thread = ctx?.thread || ctx || {};
-  const name = thread?.contact?.name || thread?.patient?.name || '';
-  const phone = thread?.contactPhone || '';
-  const firstName = name ? String(name).trim().split(/\s+/)[0] : '';
-  return String(body).replace(/\{\{\s*([^}]+?)\s*\}\}/g, (full, raw) => {
-    const key = String(raw).toLowerCase().replace(/[\s_-]+/g, '');
-    if (key === 'name' || key === 'customername' || key === 'contactname' || key === 'patientname') {
-      return name || full;
-    }
-    if (key === 'firstname') {
-      return firstName || full;
-    }
-    if (key === 'phone' || key === 'mobile') {
-      return phone || full;
-    }
-    return full;
-  });
-}
-
-// #797 — return the list of unresolved {{variables}} after substitution, so
-// the picker can flag the operator if they need to fill blanks before send.
-function unresolvedVars(text) {
-  const out = [];
-  const re = /\{\{\s*([^}]+?)\s*\}\}/g;
-  let m;
-  while ((m = re.exec(text || '')) !== null) {
-    out.push(m[1].trim());
-  }
-  return out;
-}
+import WhatsAppEmbeddedSignup from '../../components/WhatsAppEmbeddedSignup';
+import { WhatsAppThreadsContext } from './whatsapp/WhatsAppThreadsContext';
+import ThreadList from './whatsapp/ThreadList';
+import ThreadDetail from './whatsapp/ThreadDetail';
+import MessageContextMenu from './whatsapp/MessageContextMenu';
+import UnblockModal from './whatsapp/UnblockModal';
+import NewMessageModal from './whatsapp/NewMessageModal';
 
 export default function WhatsAppThreads() {
   const notify = useNotify();
+  // Tenant ADMIN can: edit the assign dropdown, see Manage / Disconnect
+  // buttons in the status bar, see the "+ New" composer button, and access
+  // the Templates page. MANAGER + below see read-only state. Backend RBAC
+  // gates the destructive routes too — this is the cosmetic mirror.
+  const { user: currentUser } = useContext(AuthContext) || {};
+  const isAdmin = currentUser?.role === 'ADMIN';
   const [threads, setThreads] = useState([]);
   const [loadingList, setLoadingList] = useState(true);
-  // #796 — replaces statusFilter + unreadOnly with a single tab selector.
-  const [tab, setTab] = useState('all');
+  const [statusFilter, setStatusFilter] = useState('');
+  const [unreadOnly, setUnreadOnly] = useState(false);
   const [q, setQ] = useState('');
   const [selectedId, setSelectedId] = useState(null);
   const [detail, setDetail] = useState(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [reply, setReply] = useState('');
   const [sending, setSending] = useState(false);
+  // The message being replied-to (set by Reply in the right-click menu).
+  // Renders as a WhatsApp-style quoted preview above the composer; nulled
+  // when sent or when the user dismisses via the X button.
+  const [replyToMsg, setReplyToMsg] = useState(null);
+  // Unblock reason modal state — replaces the browser-native window.prompt
+  // which looked off-theme. The modal collects the DPDP §11 audit reason
+  // (min 10 chars) before calling DELETE /opt-outs/:id.
+  const [unblockOpen, setUnblockOpen] = useState(false);
+  const [unblockReason, setUnblockReason] = useState('');
+  const [unblockSaving, setUnblockSaving] = useState(false);
+  const [unblockError, setUnblockError] = useState(null);
   const messagesEndRef = useRef(null);
 
-  // #796 — Blocked-tab data (rows from /api/whatsapp/opt-outs). Kept separate
-  // from `threads` because the shape is different (opt-out rows have no
-  // status / unreadCount / lastMessageAt).
-  const [blocked, setBlocked] = useState([]);
-  const [loadingBlocked, setLoadingBlocked] = useState(false);
-  // Lightweight counters for the tab strip — refreshed on every list reload
-  // so badges stay honest after sends / mark-reads / opt-outs.
-  const [counts, setCounts] = useState({ all: 0, unread: 0, blocked: 0 });
+  // ─── "New message" composer state ──────────────────────────
+  // Modal-driven outbound-first send. Hits POST /api/whatsapp/send
+  // with { to, body }. If the recipient hasn't messaged in 24h the
+  // backend returns 422 OUTSIDE_24H_WINDOW — surfaced in `newError`
+  // with hint about templates so the user knows the path forward.
+  const [showNewModal, setShowNewModal] = useState(false);
+  const [newPhone, setNewPhone] = useState('');
+  const [newBody, setNewBody] = useState('');
+  const [newSending, setNewSending] = useState(false);
+  const [newError, setNewError] = useState(null);
 
-  // #797 — Template picker modal state.
-  const [showTemplatePicker, setShowTemplatePicker] = useState(false);
+  // Staff list (for the assign dropdown) — fetched once on mount.
+  // Renders as a dropdown that replaces the single-purpose "Assign to me"
+  // button, so the operator can hand a thread off to any teammate.
+  const [staff, setStaff] = useState([]);
+
+  // Inline rename state — when the user clicks the pencil next to the contact
+  // name, this flips on and a small input box appears. Save → POST to the
+  // rename-contact route → re-fetch detail.
+  const [renaming, setRenaming] = useState(false);
+  const [renameValue, setRenameValue] = useState('');
+  const [renameSaving, setRenameSaving] = useState(false);
+
+  // Approved-template picker used inside the New Message modal so the user
+  // can bypass the 24-hour window for cold outreach. Fetched once on mount.
   const [templates, setTemplates] = useState([]);
-  const [loadingTemplates, setLoadingTemplates] = useState(false);
-  const [templatesLoaded, setTemplatesLoaded] = useState(false);
+  const [useTemplate, setUseTemplate] = useState(false);
+  const [selectedTemplateName, setSelectedTemplateName] = useState('');
+  const [templateParams, setTemplateParams] = useState([]); // string[]
+
+  // ─── Contacts + Patients with phone numbers — for the contact picker
+  //     in the New Message modal. Fetched once on mount so the dropdown
+  //     can filter client-side as the user types. Combines two sources
+  //     so a wellness operator picks from both lead/customer contacts
+  //     AND existing patients without two separate inputs.
+  const [contactOptions, setContactOptions] = useState([]);
+  // Whether the typed-phone input's dropdown is showing
+  const [pickerOpen, setPickerOpen] = useState(false);
+
+  // Track the lastMessageAt of the currently-selected thread between
+  // loadList calls so we can detect "a new message arrived on the open
+  // thread" purely from polling — without depending on the socket event.
+  // This is the safety net that makes real-time work even when the
+  // socket is dropped / the backend hasn't been restarted with the fix.
+  const lastSelectedMessageAtRef = useRef(null);
+  // Mirror selectedId in a ref so callbacks (loadList, socket handlers)
+  // see the latest value without recreating themselves. Declared up here
+  // because both loadList AND the socket effect need to read it.
+  const selectedIdRef = useRef(null);
+  // Generation counters to discard stale async results (§5.5 race guard).
+  const listGenRef = useRef(0);
+  const detailGenRef = useRef(0);
 
   // ─── Load thread list ──────────────────────────────────────
   const loadList = async () => {
+    const gen = ++listGenRef.current;
     setLoadingList(true);
     try {
+      // "Blocked" isn't a thread status — it lists the tenant's opt-out
+      // (blocked) numbers. Fetch from /opt-outs and map each row into the
+      // thread-shaped object the left rail already knows how to render. The
+      // `_blocked` marker drives the red pill + click-to-open behaviour.
+      if (statusFilter === 'BLOCKED') {
+        const params = new URLSearchParams({ limit: '100' });
+        if (q.trim()) params.set('phone', q.trim());
+        const data = await fetchApi(`/api/whatsapp/opt-outs?${params.toString()}`);
+        if (gen !== listGenRef.current) return;
+        const optOuts = Array.isArray(data?.optOuts) ? data.optOuts : [];
+        setThreads(optOuts.map((o) => ({
+          id: `optout-${o.id}`,
+          contactPhone: o.contactPhone,
+          status: 'BLOCKED',
+          lastMessageAt: o.capturedAt,
+          unreadCount: 0,
+          _blocked: o,
+        })));
+        setLoadingList(false);
+        return;
+      }
+
       const params = new URLSearchParams({ limit: '50' });
-      if (tab === 'unread') params.set('unread', 'true');
+      if (statusFilter) params.set('status', statusFilter);
+      if (unreadOnly) params.set('unread', 'true');
       if (q.trim()) params.set('q', q.trim());
       const data = await fetchApi(`/api/whatsapp/threads?${params.toString()}`);
-      const rows = Array.isArray(data?.threads) ? data.threads : [];
-      setThreads(rows);
-      // Maintain counts off whichever rows we just fetched. The unread tab
-      // already filtered to unread > 0 so its count is the row total;
-      // the all tab carries the same set with all statuses.
-      setCounts((prev) => ({
-        ...prev,
-        all: tab === 'all' ? rows.length : prev.all,
-        unread: tab === 'unread' ? rows.length : prev.unread,
-      }));
+      if (gen !== listGenRef.current) return;
+      const fresh = Array.isArray(data?.threads) ? data.threads : [];
+      setThreads(fresh);
+
+      // ── Detect new message on the open thread ──────────────
+      // If the lastMessageAt on the open thread advanced since the
+      // last poll, a new message landed — show a toast so the user
+      // notices even before scrolling. The detail refetch itself
+      // happens in the parallel 10s polling effect.
+      const selId = selectedIdRef.current;
+      if (selId) {
+        const selThread = fresh.find((t) => t.id === selId);
+        if (selThread) {
+          const newest = selThread.lastMessageAt ? new Date(selThread.lastMessageAt).getTime() : 0;
+          const prev = lastSelectedMessageAtRef.current;
+          if (prev != null && newest > prev) {
+            try {
+              notify.info(`New WhatsApp from ${selThread.contact?.name || selThread.contactPhone}`);
+            } catch { /* ignore */ }
+          }
+          lastSelectedMessageAtRef.current = newest;
+        }
+      }
     } catch (err) {
+      if (gen !== listGenRef.current) return;
       notify.error(err.message || 'Failed to load threads.');
       setThreads([]);
     }
-    setLoadingList(false);
+    if (gen === listGenRef.current) setLoadingList(false);
   };
 
-  // #796 — load opt-outs when the Blocked tab is active. Also refreshes
-  // the badge count so the chip stays accurate.
-  const loadBlocked = async () => {
-    setLoadingBlocked(true);
+  // Open the conversation behind a blocked number (rows in the Blocked list
+  // are opt-out records, not threads, so their id can't be loaded directly).
+  // Look the thread up by phone and select it if one exists — that opens the
+  // right pane where an admin can Unblock. If the number was blocked without
+  // ever messaging, there's no thread to show.
+  const openBlockedThread = async (phone) => {
     try {
-      const data = await fetchApi('/api/whatsapp/opt-outs?limit=100');
-      const rows = Array.isArray(data?.optOuts) ? data.optOuts : [];
-      setBlocked(rows);
-      setCounts((prev) => ({ ...prev, blocked: rows.length }));
+      const data = await fetchApi(`/api/whatsapp/threads?q=${encodeURIComponent(phone)}&limit=1`);
+      const t = Array.isArray(data?.threads) ? data.threads[0] : null;
+      if (t) setSelectedId(t.id);
+      else notify.info('No conversation thread exists for this blocked number.');
     } catch (err) {
-      notify.error(err.message || 'Failed to load blocked numbers.');
-      setBlocked([]);
+      notify.error(err.message || 'Failed to open thread.');
     }
-    setLoadingBlocked(false);
   };
+
+  // Re-run list fetch whenever status filter, unread toggle, OR search
+  // text changes. `loadList` closes over `q` so it must be in the deps.
+  useEffect(() => {
+    loadList();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [statusFilter, unreadOnly, q]);
+
+  // ─── Tick state for live "just now / 1m / 2m" timestamp updates ───
+  // The `timeAgo()` helper reads Date.now() at render time. Without a
+  // periodic re-render the thread badge would freeze on whatever value
+  // it had when the list was last fetched. A cheap 30-second tick keeps
+  // the relative timestamps current without needing to refetch the list.
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setTick((n) => n + 1), 30_000);
+    return () => clearInterval(id);
+  }, []);
+
+  // ─── Browser desktop-notification permission ────────────────
+  // Asked once on mount. The user must explicitly grant; we never nag.
+  // Used in the socket handler below to alert when a message arrives
+  // even if the operator is on another tab or another app.
+  useEffect(() => {
+    if (typeof window === 'undefined' || !('Notification' in window)) return;
+    if (Notification.permission === 'default') {
+      Notification.requestPermission().catch(() => { /* ignore — user denied */ });
+    }
+  }, []);
+
+  // ─── Aggressive safety-net polling ──────────────────────────
+  // The socket is the IDEAL real-time channel, but it depends on the
+  // backend mount order being correct + the network being stable. To
+  // make the UX bulletproof — even if the socket is completely broken
+  // — we poll BOTH the list AND the open detail every 10 seconds.
+  // Worst-case lag for a new message becoming visible: ~10 seconds.
+  // Cost: two lightweight GETs per user per 10s — negligible.
+  useEffect(() => {
+    const id = setInterval(() => {
+      loadList();
+      // Also refetch the currently-open detail so new bubbles appear
+      // even without the socket event firing. The detail-fetch is
+      // cheap (one thread + last 50 messages).
+      const selId = selectedIdRef.current;
+      if (selId) {
+        const gen = ++detailGenRef.current;
+        fetchApi(`/api/whatsapp/threads/${selId}`)
+          .then((fresh) => {
+            if (gen === detailGenRef.current && selectedIdRef.current === selId) {
+              setDetail(fresh);
+            }
+          })
+          .catch(() => { /* swallow — next tick retries */ });
+      }
+    }, 10_000);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [statusFilter, unreadOnly, q]);
+
+  // ─── Load staff list for assign dropdown (once on mount) ───
+  useEffect(() => {
+    (async () => {
+      try {
+        const data = await fetchApi('/api/staff');
+        const list = Array.isArray(data) ? data : Array.isArray(data?.users) ? data.users : [];
+        setStaff(list);
+      } catch {
+        /* non-fatal — dropdown just stays empty */
+      }
+    })();
+  }, []);
+
+  // ─── Load APPROVED templates for the picker ─────────────────
+  // Only APPROVED templates can be sent. PENDING/REJECTED are filtered out.
+  useEffect(() => {
+    (async () => {
+      try {
+        const data = await fetchApi('/api/whatsapp/templates');
+        const list = Array.isArray(data) ? data : Array.isArray(data?.templates) ? data.templates : [];
+        setTemplates(list.filter((t) => t.status === 'APPROVED'));
+      } catch {
+        /* non-fatal — picker just stays empty */
+      }
+    })();
+  }, []);
+
+  // ─── Load contacts + patients with phones (for the New Message
+  //     contact picker). Two parallel fetches; combine + dedupe by
+  //     phone. We tag the source so the dropdown can show whether a
+  //     row is a contact or a patient (helpful in wellness mode).
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const opts = [];
+      try {
+        const contacts = await fetchApi('/api/contacts?limit=200');
+        const list = Array.isArray(contacts) ? contacts : Array.isArray(contacts?.contacts) ? contacts.contacts : [];
+        for (const c of list) {
+          if (c.phone && c.name) opts.push({ id: `c-${c.id}`, name: c.name, phone: c.phone, source: 'contact' });
+        }
+      } catch { /* non-fatal */ }
+      try {
+        const patients = await fetchApi('/api/wellness/patients?limit=200');
+        const list = Array.isArray(patients) ? patients : Array.isArray(patients?.patients) ? patients.patients : [];
+        for (const p of list) {
+          if (p.phone && p.name) opts.push({ id: `p-${p.id}`, name: p.name, phone: p.phone, source: 'patient' });
+        }
+      } catch { /* non-fatal — generic CRM tenants don't have patients */ }
+      // Dedupe by phone — if same number exists in both contacts + patients,
+      // prefer the patient label since wellness is the primary context here.
+      const seen = new Map();
+      for (const o of opts) {
+        if (!seen.has(o.phone) || o.source === 'patient') seen.set(o.phone, o);
+      }
+      if (!cancelled) setContactOptions(Array.from(seen.values()));
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  // ─── Real-time Socket.IO push for inbound messages + delivery
+  //     status updates. The backend's whatsapp_webhook handler emits to
+  //     room `tenant:<tenantId>` on every new inbound + status change;
+  //     this hook joins the room and refreshes the list / detail when
+  //     events fire. Falls back to manual refresh if the socket fails.
+  //
+  //     We deliberately use `selectedIdRef` instead of `selectedId` in
+  //     the event handlers — closures over React state capture the value
+  //     at subscribe time, so a stale `selectedId` would always be 0/null
+  //     in the listener. The ref reads the latest value on every fire.
+  //     (The ref itself is declared higher up so loadList can use it too.)
+  useEffect(() => { selectedIdRef.current = selectedId; }, [selectedId]);
 
   useEffect(() => {
-    if (tab === 'blocked') {
-      loadBlocked();
-    } else {
+    const tenantId = currentUser?.tenantId;
+    if (!tenantId) return undefined;
+
+    // socket.io-client defaults to same-origin when no URL is passed —
+    // works for both local dev (Vite proxy) and prod (same domain).
+    const socket = socketIO({
+      // withCredentials lets cookie-based session info travel if used;
+      // harmless if absent. Path defaults to /socket.io.
+      withCredentials: true,
+      transports: ['websocket', 'polling'],
+    });
+
+    const joinRoom = () => socket.emit('join_room', `tenant:${tenantId}`);
+    socket.on('connect', joinRoom);
+    // Reconnects re-fire `connect` → room is re-joined automatically.
+
+    socket.on('whatsapp:received', (payload) => {
+      if (!payload || payload.tenantId !== tenantId) return;
+      // Refresh thread list so the new (or bumped) thread surfaces.
       loadList();
-    }
+      // If the operator is currently viewing the thread that just got
+      // a new inbound message, refresh the detail view too so the
+      // bubble appears without a manual click.
+      if (selectedIdRef.current && selectedIdRef.current === payload.threadId) {
+        (async () => {
+          try {
+            const gen = ++detailGenRef.current;
+            const fresh = await fetchApi(`/api/whatsapp/threads/${selectedIdRef.current}`);
+            if (gen === detailGenRef.current && selectedIdRef.current === payload.threadId) {
+              setDetail(fresh);
+            }
+          } catch { /* swallow — manual refresh still works */ }
+        })();
+      }
+
+      // ── User-visible alert layer ──────────────────────────────
+      // In-app toast — useful even when the WhatsApp tab IS focused
+      // so the operator notices the new message without scanning the
+      // thread list. Capped at first 80 chars of body so a long inbound
+      // doesn't blow up the toast container.
+      const senderLabel = payload.contactPhone || payload.from || 'Unknown';
+      const bodyPreview = (payload.body || '(media)').slice(0, 80);
+      try {
+        notify.info(`New WhatsApp from ${senderLabel}: ${bodyPreview}`);
+      } catch { /* notify can throw on early-unmount; swallow */ }
+
+      // Browser desktop notification — fires even when the tab isn't
+      // focused / on another app. Only attempts if the user previously
+      // granted permission (the mount-time request); we never re-ask.
+      // Skip if the page is already visible to avoid double-notification
+      // (toast already covers the foreground case).
+      if (
+        typeof window !== 'undefined' &&
+        'Notification' in window &&
+        Notification.permission === 'granted' &&
+        document.visibilityState !== 'visible'
+      ) {
+        try {
+          const n = new Notification(`WhatsApp · ${senderLabel}`, {
+            body: bodyPreview,
+            // Tag groups multiple notifications from the same sender so
+            // a burst of 5 messages doesn't stack into 5 system alerts.
+            tag: `wa-thread-${payload.threadId || payload.contactPhone}`,
+            renotify: false,
+          });
+          // Clicking the notification focuses the browser tab so the
+          // operator lands directly on the WhatsApp page.
+          n.onclick = () => { window.focus(); n.close(); };
+        } catch { /* some browsers throw if backgrounded; safe to ignore */ }
+      }
+    });
+
+    socket.on('whatsapp:status', (payload) => {
+      if (!payload || payload.tenantId !== tenantId) return;
+      // A delivery / read receipt landed. Only need to refresh detail
+      // if the operator is looking at the relevant thread.
+      if (selectedIdRef.current) {
+        (async () => {
+          try {
+            const gen = ++detailGenRef.current;
+            const fresh = await fetchApi(`/api/whatsapp/threads/${selectedIdRef.current}`);
+            if (gen === detailGenRef.current) {
+              setDetail(fresh);
+            }
+          } catch { /* swallow */ }
+        })();
+      }
+    });
+
+    socket.on('whatsapp:reaction', (payload) => {
+      if (!payload || payload.tenantId !== tenantId) return;
+      // Customer reacted to a message — refresh the open detail so
+      // the new reaction pill renders without a manual refresh.
+      if (selectedIdRef.current && selectedIdRef.current === payload.threadId) {
+        (async () => {
+          try {
+            const gen = ++detailGenRef.current;
+            const fresh = await fetchApi(`/api/whatsapp/threads/${selectedIdRef.current}`);
+            if (gen === detailGenRef.current && selectedIdRef.current === payload.threadId) {
+              setDetail(fresh);
+            }
+          } catch { /* swallow */ }
+        })();
+      }
+    });
+
+    socket.on('connect_error', (err) => {
+      // Visible enough to debug if the socket falls over, but quiet
+      // enough not to clutter the console during normal disconnects.
+      console.warn('[whatsapp-socket] connect error:', err?.message);
+    });
+
+    return () => {
+      socket.off('connect', joinRoom);
+      socket.off('whatsapp:received');
+      socket.off('whatsapp:status');
+      socket.disconnect();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab]);
+  }, [currentUser?.tenantId]);
+
+  // Detect placeholder count in a template body — used to render the
+  // right number of param inputs. {{1}}, {{2}} … {{N}}.
+  const countPlaceholders = (body) => {
+    if (!body) return 0;
+    const matches = body.match(/\{\{\d+\}\}/g) || [];
+    return new Set(matches).size;
+  };
+
+  // Whenever the selected template changes, reset the param array to match.
+  useEffect(() => {
+    if (!selectedTemplateName) {
+      setTemplateParams([]);
+      return;
+    }
+    const tpl = templates.find((t) => t.name === selectedTemplateName);
+    const n = countPlaceholders(tpl?.body || '');
+    setTemplateParams(Array(n).fill(''));
+  }, [selectedTemplateName, templates]);
 
   // ─── Load detail when selection changes ────────────────────
   useEffect(() => {
+    // Reset inline rename state whenever the user picks a different
+    // thread — stale rename input shouldn't bleed into the new selection.
+    setRenaming(false);
+    setRenameValue('');
     if (!selectedId) {
       setDetail(null);
       return;
@@ -334,17 +511,10 @@ export default function WhatsAppThreads() {
     }
   }, [detail]);
 
-  // #798 — 24h send-window state for the currently-open thread.
-  const sendWindow = useMemo(() => compute24hWindow(detail), [detail]);
-
   // ─── Actions ──────────────────────────────────────────────
   const handleSearch = (e) => {
     e.preventDefault();
-    if (tab === 'blocked') {
-      loadBlocked();
-    } else {
-      loadList();
-    }
+    loadList();
   };
 
   const sendReply = async () => {
@@ -353,21 +523,47 @@ export default function WhatsAppThreads() {
       notify.error('Contact has opted out — replies are blocked.');
       return;
     }
-    // #798 — client-side guard mirrors backend's 24h enforcement so the
-    // operator sees a clear error before paying a round-trip to Meta. The
-    // backend still returns 422 OUTSIDE_24H_WINDOW as the authoritative
-    // gate (routes/whatsapp.js:145).
-    if (!sendWindow.open) {
-      notify.error('24-hour window closed — pick an approved template to send.');
-      return;
-    }
     setSending(true);
     try {
-      await fetchApi('/api/whatsapp/send', {
-        method: 'POST',
-        body: JSON.stringify({ to: detail.thread.contactPhone, body: reply.trim() }),
-      });
+      // If this is a reply to another message, prefix the body with a
+      // quoted block so the recipient sees the context (Meta's true
+      // threaded reply via context.message_id is a future enhancement).
+      let outBody = reply.trim();
+      if (replyToMsg) {
+        const quote = (replyToMsg.body || '(media)')
+          .split('\n')
+          .map((l) => `> ${l}`)
+          .join('\n');
+        outBody = `${quote}\n${outBody}`;
+      }
+      try {
+        await fetchApi('/api/whatsapp/send', {
+          method: 'POST',
+          body: JSON.stringify({ to: detail.thread.contactPhone, body: outBody }),
+        });
+      } catch (sendErr) {
+        const msg = sendErr?.message || '';
+        // Meta 24h-window rejection — automatically open the template
+        // picker with this thread's phone pre-filled instead of just
+        // showing a toast. The operator can pick an approved template
+        // and send without leaving the chat.
+        if (msg.includes('OUTSIDE_24H_WINDOW')) {
+          notify.error(
+            'Last inbound from this contact was >24 hours ago. ' +
+            'WhatsApp policy requires you to send an approved template — picker opening now.'
+          );
+          setNewPhone(detail.thread.contactPhone);
+          setNewBody(outBody);
+          setUseTemplate(true);
+          setNewError(null);
+          setShowNewModal(true);
+          setSending(false);
+          return;
+        }
+        throw sendErr;
+      }
       setReply('');
+      setReplyToMsg(null);
       // Reload detail
       const fresh = await fetchApi(`/api/whatsapp/threads/${selectedId}`);
       setDetail(fresh);
@@ -376,8 +572,6 @@ export default function WhatsAppThreads() {
       const msg = err?.message || '';
       if (msg.includes('CONTACT_OPTED_OUT')) {
         notify.error('Contact has opted out — replies are blocked.');
-      } else if (msg.includes('OUTSIDE_24H_WINDOW')) {
-        notify.error('24-hour window closed — pick an approved template to send.');
       } else {
         notify.error(msg || 'Failed to send.');
       }
@@ -385,25 +579,90 @@ export default function WhatsAppThreads() {
     setSending(false);
   };
 
-  const assignToMe = async () => {
-    if (!detail?.thread) return;
-    try {
-      // Backend RBAC check: self-assign (targetUserId === req.user.userId)
-      // is open to all roles. Send the current user's id so the route can
-      // gate cross-assign vs self-assign.
-      //
-      // NOTE per CLAUDE.md "Standing rules" + backend route comment: the
-      // global stripDangerous middleware deletes req.body.userId on every
-      // request, so the field MUST be `targetUserId` — `userId` is silently
-      // dropped to undefined and the backend would unassign instead.
-      const me = JSON.parse(localStorage.getItem('user') || 'null');
-      if (!me?.id) {
-        notify.error('Cannot determine your user id. Re-login.');
+  // ─── Outbound-first send (modal) ───────────────────────────
+  //
+  // Two paths: free-form text (24h-window rule) OR approved template
+  // (works any time, any number). useTemplate toggle switches between them.
+  const sendNewMessage = async () => {
+    setNewError(null);
+    const phoneTrim = newPhone.trim();
+    if (!phoneTrim) {
+      setNewError('Phone is required.');
+      return;
+    }
+
+    let payload;
+    if (useTemplate) {
+      if (!selectedTemplateName) {
+        setNewError('Pick a template to send.');
         return;
       }
+      // Require all placeholders filled
+      if (templateParams.some((p) => !p.trim())) {
+        setNewError('Fill in every template variable before sending.');
+        return;
+      }
+      const tpl = templates.find((t) => t.name === selectedTemplateName);
+      payload = {
+        to: phoneTrim,
+        templateName: selectedTemplateName,
+        language: tpl?.language || 'en_US',
+        parameters: templateParams,
+      };
+    } else {
+      const bodyTrim = newBody.trim();
+      if (!bodyTrim) {
+        setNewError('Message body is required.');
+        return;
+      }
+      payload = { to: phoneTrim, body: bodyTrim };
+    }
+
+    setNewSending(true);
+    try {
+      const resp = await fetchApi('/api/whatsapp/send', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+      notify.info(useTemplate ? 'Template message sent.' : 'Message sent.');
+      setShowNewModal(false);
+      setNewPhone('');
+      setNewBody('');
+      setSelectedTemplateName('');
+      setTemplateParams([]);
+      setUseTemplate(false);
+      await loadList();
+      if (resp?.thread?.id) setSelectedId(resp.thread.id);
+    } catch (err) {
+      const msg = err?.message || 'Failed to send.';
+      if (msg.includes('OUTSIDE_24H_WINDOW')) {
+        setNewError(
+          'This number has not messaged you in the last 24 hours. ' +
+          'Toggle "Use Template" above and pick an approved template instead.'
+        );
+      } else if (msg.includes('CONTACT_OPTED_OUT')) {
+        setNewError('This contact has opted out of WhatsApp messages.');
+      } else {
+        setNewError(msg);
+      }
+    }
+    setNewSending(false);
+  };
+
+  // Generic assignment — works for self-assign AND cross-assign (backend
+  // RBAC-gates cross-assign to ADMIN/MANAGER; self-assign open to all roles).
+  // Pass null to unassign.
+  //
+  // NOTE per CLAUDE.md "Standing rules" + backend route comment: the global
+  // stripDangerous middleware deletes req.body.userId on every request, so
+  // the field MUST be `targetUserId` — `userId` is silently dropped to null
+  // and the backend would unassign instead of rejecting bad input.
+  const assignToUser = async (targetUserId) => {
+    if (!detail?.thread) return;
+    try {
       await fetchApi(`/api/whatsapp/threads/${detail.thread.id}/assign`, {
         method: 'POST',
-        body: JSON.stringify({ targetUserId: me.id }),
+        body: JSON.stringify({ targetUserId: targetUserId == null ? null : Number(targetUserId) }),
       });
       const fresh = await fetchApi(`/api/whatsapp/threads/${selectedId}`);
       setDetail(fresh);
@@ -411,6 +670,45 @@ export default function WhatsAppThreads() {
     } catch (err) {
       notify.error(err.message || 'Failed to assign.');
     }
+  };
+
+  // Rename contact — adds a friendly name to the phone number. Creates a new
+  // Contact row if none exists, otherwise updates the existing one.
+  const startRename = () => {
+    const currentName =
+      detail?.thread?.contact?.name ||
+      detail?.thread?.patient?.name ||
+      '';
+    setRenameValue(currentName);
+    setRenaming(true);
+  };
+  const cancelRename = () => {
+    setRenaming(false);
+    setRenameValue('');
+  };
+  const saveRename = async () => {
+    if (!detail?.thread || renameSaving) return;
+    const name = renameValue.trim();
+    if (!name) {
+      notify.error('Name cannot be empty.');
+      return;
+    }
+    setRenameSaving(true);
+    try {
+      await fetchApi(`/api/whatsapp/threads/${detail.thread.id}/rename-contact`, {
+        method: 'POST',
+        body: JSON.stringify({ name }),
+      });
+      const fresh = await fetchApi(`/api/whatsapp/threads/${selectedId}`);
+      setDetail(fresh);
+      loadList();
+      setRenaming(false);
+      setRenameValue('');
+      notify.info('Contact name saved.');
+    } catch (err) {
+      notify.error(err.message || 'Failed to save name.');
+    }
+    setRenameSaving(false);
   };
 
   const closeThread = async () => {
@@ -426,6 +724,26 @@ export default function WhatsAppThreads() {
       loadList();
     } catch (err) {
       notify.error(err.message || 'Failed to close.');
+    }
+  };
+
+  // Delete the whole conversation (thread + all messages). Irreversible —
+  // backend is ADMIN-only. After delete we drop the selection so the right
+  // pane returns to the empty-state and refresh the list.
+  const deleteThread = async () => {
+    if (!detail?.thread) return;
+    const who = detail.thread.contact?.name || detail.thread.patient?.name || detail.thread.contactPhone;
+    if (!await notify.confirm(
+      `Delete the entire conversation with ${who}? This permanently removes all messages from your CRM and cannot be undone. It does not delete messages on the recipient's phone.`
+    )) return;
+    try {
+      await fetchApi(`/api/whatsapp/threads/${detail.thread.id}`, { method: 'DELETE' });
+      notify.info('Conversation deleted.');
+      setSelectedId(null);
+      setDetail(null);
+      loadList();
+    } catch (err) {
+      notify.error(err.message || 'Failed to delete conversation.');
     }
   };
 
@@ -448,9 +766,190 @@ export default function WhatsAppThreads() {
     }
   };
 
+  // ─── Right-click context menu on message bubbles ────────────
+  // Stores { x, y, message } when open; null when closed. Closed on
+  // outside-click / Escape / after any action. Replaces the previous
+  // hover-button which was fragile (cursor leaving the bubble closed
+  // the hover before the click registered).
+  const [ctxMenu, setCtxMenu] = useState(null);
+  // Emoji-react sub-panel visibility within the context menu.
+  const [reactPanelOpen, setReactPanelOpen] = useState(false);
+
+  // Close the menu on outside click + Escape.
+  useEffect(() => {
+    if (!ctxMenu) return undefined;
+    const onClick = () => { setCtxMenu(null); setReactPanelOpen(false); };
+    const onKey = (e) => {
+      if (e.key === 'Escape') { setCtxMenu(null); setReactPanelOpen(false); }
+    };
+    window.addEventListener('click', onClick);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('click', onClick);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [ctxMenu]);
+
+  // Reply — WhatsApp-style. The replied-to message renders as a small
+  // bordered preview ABOVE the textarea, with an X to dismiss. When
+  // the reply sends, the quote is prepended to the body so the customer
+  // sees the context. (True Meta threaded reply via `context.message_id`
+  // is a backend extension we can add later.)
+  const replyToMessage = (msg) => {
+    if (!msg) return;
+    setReplyToMsg(msg);
+  };
+
+  // Forward — open the New Message modal pre-filled with the message body.
+  // Operator picks a recipient and sends.
+  const forwardMessage = (msg) => {
+    if (!msg) return;
+    setNewPhone('');
+    setNewBody(msg.body || '');
+    setUseTemplate(false);
+    setNewError(null);
+    setShowNewModal(true);
+  };
+
+  // React — emoji reactions via Meta Cloud API
+  // (POST /messages with type: "reaction"). Backend exposes this as
+  // POST /api/whatsapp/messages/:id/react with body { emoji }.
+  const reactToMessage = async (msg, emoji) => {
+    if (!msg || !emoji) return;
+    try {
+      await fetchApi(`/api/whatsapp/messages/${msg.id}/react`, {
+        method: 'POST',
+        body: JSON.stringify({ emoji }),
+      });
+      notify.info(`Reacted with ${emoji}`);
+      // Refresh detail so the reaction status is visible if the
+      // backend tracks it in the message status / metadata.
+      if (selectedIdRef.current) {
+        const fresh = await fetchApi(`/api/whatsapp/threads/${selectedIdRef.current}`);
+        setDetail(fresh);
+      }
+    } catch (err) {
+      notify.error(err.message || 'Failed to react.');
+    }
+  };
+
+  // ─── Delete message (soft-delete, "Delete for me") ──────────
+  const deleteMessage = async (messageId) => {
+    if (!messageId) return;
+    const ok = await notify.confirm('Delete this message from your side?');
+    if (!ok) return;
+    try {
+      await fetchApi(`/api/whatsapp/messages/${messageId}`, { method: 'DELETE' });
+      // Refresh the open thread so the bubble disappears immediately.
+      if (selectedIdRef.current) {
+        const fresh = await fetchApi(`/api/whatsapp/threads/${selectedIdRef.current}`);
+        setDetail(fresh);
+      }
+      notify.info('Message hidden from your CRM view.');
+    } catch (err) {
+      notify.error(err.message || 'Failed to delete message.');
+    }
+  };
+
+  // ─── Send media (paperclip in composer) ─────────────────────
+  // Uploads the file via multipart/form-data to the backend, which
+  // stores it in S3 and forwards to Meta as image/video/audio/document
+  // based on MIME type. We use a hidden file input + a paperclip
+  // button that triggers it.
+  const fileInputRef = useRef(null);
+  const [uploadingMedia, setUploadingMedia] = useState(false);
+  const openFilePicker = () => fileInputRef.current?.click();
+  const onFilePicked = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // reset so picking the same file twice still fires onChange
+    if (!file || !detail?.thread) return;
+    if (detail.optedOut) {
+      notify.error('Contact has opted out — cannot send media.');
+      return;
+    }
+    if (file.size > 16 * 1024 * 1024) {
+      notify.error('File too large — Meta WhatsApp limit is 16 MB.');
+      return;
+    }
+    setUploadingMedia(true);
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      form.append('to', detail.thread.contactPhone);
+      if (reply.trim()) form.append('caption', reply.trim());
+      // fetchApi adds 'Content-Type: application/json' by default; we
+      // need to use plain fetch here so the browser sets the multipart
+      // boundary automatically.
+      const token = localStorage.getItem('token');
+      const resp = await fetch('/api/whatsapp/send-media', {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: form,
+      });
+      if (!resp.ok) {
+        const errBody = await resp.json().catch(() => ({}));
+        throw new Error(errBody.error || `Upload failed (${resp.status})`);
+      }
+      notify.info('Media sent.');
+      setReply('');
+      // Refresh detail so the new bubble (with S3-hosted media) appears
+      if (selectedIdRef.current) {
+        const fresh = await fetchApi(`/api/whatsapp/threads/${selectedIdRef.current}`);
+        setDetail(fresh);
+      }
+      loadList();
+    } catch (err) {
+      notify.error(err.message || 'Failed to send media.');
+    }
+    setUploadingMedia(false);
+  };
+
+  // Unblock — opens a themed modal that collects the DPDP §11 audit
+  // reason (min 10 chars) before calling DELETE /api/whatsapp/opt-outs/:id.
+  // Backend RBAC: admin-only. Submit handler lives in `submitUnblock`.
+  const unblockContact = () => {
+    if (!detail?.optedOut?.id) {
+      notify.error('Cannot find opt-out record. Refresh the page and try again.');
+      return;
+    }
+    setUnblockReason('');
+    setUnblockError(null);
+    setUnblockOpen(true);
+  };
+
+  const submitUnblock = async () => {
+    setUnblockError(null);
+    const trimmed = unblockReason.trim();
+    if (trimmed.length < 10) {
+      setUnblockError('Reason must be at least 10 characters (DPDP §11 audit requirement).');
+      return;
+    }
+    if (!detail?.optedOut?.id) {
+      setUnblockError('Cannot find opt-out record. Refresh and try again.');
+      return;
+    }
+    setUnblockSaving(true);
+    try {
+      await fetchApi(`/api/whatsapp/opt-outs/${detail.optedOut.id}`, {
+        method: 'DELETE',
+        body: JSON.stringify({ reason: trimmed }),
+      });
+      const fresh = await fetchApi(`/api/whatsapp/threads/${selectedIdRef.current}`);
+      setDetail(fresh);
+      notify.info('Contact unblocked.');
+      setUnblockOpen(false);
+      setUnblockReason('');
+    } catch (err) {
+      setUnblockError(err.message || 'Failed to unblock.');
+    }
+    setUnblockSaving(false);
+  };
+
   const optOutContact = async () => {
     if (!detail?.thread) return;
-    if (!await notify.confirm(`Opt out ${detail.thread.contactPhone} from all WhatsApp messages? This is a DPDP/TRAI compliance action.`)) return;
+    if (!await notify.confirm(
+      `Block ${detail.thread.contactPhone}? This prevents your tenant from sending any further WhatsApp messages to this number, and the recipient cannot reach you either. Treated as a DPDP/TRAI compliance opt-out — captured in audit log. You can unblock from WhatsApp → Blocked Numbers later.`
+    )) return;
     try {
       await fetchApi('/api/whatsapp/opt-outs', {
         method: 'POST',
@@ -463,572 +962,133 @@ export default function WhatsAppThreads() {
     }
   };
 
-  // #797 — open template picker. Lazy-fetch templates on first open so the
-  // page isn't paying the round-trip every load.
-  const openTemplatePicker = async () => {
-    setShowTemplatePicker(true);
-    if (templatesLoaded || loadingTemplates) return;
-    setLoadingTemplates(true);
-    try {
-      const data = await fetchApi('/api/whatsapp/templates');
-      const rows = Array.isArray(data) ? data : (Array.isArray(data?.templates) ? data.templates : []);
-      setTemplates(rows);
-      setTemplatesLoaded(true);
-    } catch (err) {
-      notify.error(err.message || 'Failed to load templates.');
-      setTemplates([]);
-    }
-    setLoadingTemplates(false);
-  };
-
-  // #797 — apply the chosen template to the reply box. Substitutes any
-  // known variables from the active thread; leaves unknowns as-is so the
-  // operator can fill them. If the 24h window is closed, send via the
-  // template-name path (backend recognises templateName + parameters);
-  // otherwise just dump the substituted body into the textarea so the
-  // operator can edit before Send.
-  // Renamed from `useTemplate` (which tripped react-hooks/rules-of-hooks
-  // because the eslint rule treats any `use*` name as a hook call site).
-  const applyTemplate = (tpl) => {
-    if (!tpl) return;
-    const substituted = substituteTemplateVars(tpl.body || '', detail);
-    setReply(substituted);
-    setShowTemplatePicker(false);
-    const remaining = unresolvedVars(substituted);
-    if (remaining.length > 0) {
-      notify.info?.(`Fill remaining variables: ${remaining.map((v) => `{{${v}}}`).join(', ')}`);
-    }
-  };
-
   // ─── Render ─────────────────────────────────────────────
-  // Threads in the All tab include opted-out contacts; the Unread tab is
-  // unreadCount > 0; the Blocked tab renders opt-out rows directly.
   const filteredThreads = useMemo(() => threads, [threads]);
 
+  const contextValue = {
+    // Core state
+    threads: filteredThreads,
+    loadingList,
+    statusFilter,
+    unreadOnly,
+    q,
+    selectedId,
+    detail,
+    loadingDetail,
+    reply,
+    sending,
+    replyToMsg,
+    isAdmin,
+    staff,
+    renaming,
+    renameValue,
+    renameSaving,
+    templates,
+    useTemplate,
+    selectedTemplateName,
+    templateParams,
+    contactOptions,
+    pickerOpen,
+    // New message modal state
+    showNewModal,
+    newPhone,
+    newBody,
+    newSending,
+    newError,
+    // Unblock modal state
+    unblockOpen,
+    unblockReason,
+    unblockSaving,
+    unblockError,
+    // Context menu state
+    ctxMenu,
+    reactPanelOpen,
+    // Media upload
+    uploadingMedia,
+    // Refs
+    messagesEndRef,
+    fileInputRef,
+    // Setters
+    setThreads,
+    setLoadingList,
+    setStatusFilter,
+    setUnreadOnly,
+    setQ,
+    setSelectedId,
+    setDetail,
+    setLoadingDetail,
+    setReply,
+    setSending,
+    setReplyToMsg,
+    setRenaming,
+    setRenameValue,
+    setRenameSaving,
+    setShowNewModal,
+    setNewPhone,
+    setNewBody,
+    setNewSending,
+    setNewError,
+    setUseTemplate,
+    setSelectedTemplateName,
+    setTemplateParams,
+    setPickerOpen,
+    setUnblockOpen,
+    setUnblockReason,
+    setUnblockSaving,
+    setUnblockError,
+    setCtxMenu,
+    setReactPanelOpen,
+    setUploadingMedia,
+    // Handlers
+    loadList,
+    handleSearch,
+    openBlockedThread,
+    sendReply,
+    sendNewMessage,
+    assignToUser,
+    startRename,
+    cancelRename,
+    saveRename,
+    closeThread,
+    deleteThread,
+    snoozeThread,
+    replyToMessage,
+    forwardMessage,
+    reactToMessage,
+    deleteMessage,
+    openFilePicker,
+    onFilePicked,
+    unblockContact,
+    submitUnblock,
+    optOutContact,
+    countPlaceholders,
+  };
+
   return (
-    <div style={{
-      display: 'flex', height: 'calc(100vh - var(--top-nav-height, 0px))',
-      gap: 0, animation: 'fadeIn 0.4s ease-out',
-    }}>
-      {/* ─── Left rail ─── */}
-      <aside style={{
-        width: 360, borderRight: '1px solid var(--border-color)',
-        display: 'flex', flexDirection: 'column', minWidth: 0,
+    <WhatsAppThreadsContext.Provider value={contextValue}>
+      <div style={{
+        display: 'flex', flexDirection: 'column',
+        height: '100%', minHeight: 0,
+        animation: 'fadeIn 0.4s ease-out',
       }}>
-        <header style={{ padding: '1rem', borderBottom: '1px solid var(--border-color)' }}>
-          <h2 style={{
-            display: 'flex', alignItems: 'center', gap: 8,
-            fontSize: '1.15rem', fontWeight: 700, marginBottom: '0.75rem',
-          }}>
-            <MessageCircle size={20} color="var(--primary-color, var(--accent-color))" />
-            WhatsApp Threads
-          </h2>
-          {/* #796 — All / Unread / Blocked tab strip. */}
-          <div
-            role="tablist"
-            aria-label="Thread filter"
-            data-testid="whatsapp-thread-tabs"
-            style={{ display: 'flex', gap: 4, marginBottom: '0.75rem', borderBottom: '1px solid var(--border-color)' }}
-          >
-            {TABS.map((t) => {
-              const isActive = t.value === tab;
-              const count = counts[t.value] ?? 0;
-              return (
-                <button
-                  key={t.value}
-                  role="tab"
-                  aria-selected={isActive}
-                  data-testid={`whatsapp-tab-${t.value}`}
-                  onClick={() => setTab(t.value)}
-                  style={{
-                    flex: 1,
-                    padding: '0.5rem 0.25rem',
-                    background: 'transparent',
-                    border: 'none',
-                    borderBottom: isActive
-                      ? '2px solid var(--primary-color, var(--accent-color))'
-                      : '2px solid transparent',
-                    color: isActive ? 'var(--primary-color, var(--accent-color))' : 'var(--text-secondary)',
-                    fontWeight: isActive ? 700 : 500,
-                    fontSize: '0.85rem',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: 6,
-                  }}
-                >
-                  {t.label}
-                  <span
-                    style={{
-                      background: isActive
-                        ? 'var(--primary-color, var(--accent-color))'
-                        : 'rgba(107,114,128,0.2)',
-                      color: isActive ? '#fff' : 'var(--text-secondary)',
-                      padding: '1px 7px',
-                      borderRadius: 10,
-                      fontSize: '0.65rem',
-                      fontWeight: 700,
-                      minWidth: 18,
-                      textAlign: 'center',
-                    }}
-                  >
-                    {count}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-          <form onSubmit={handleSearch} style={{ display: 'flex', gap: 6, marginBottom: '0.25rem' }}>
-            <div style={{ flex: 1, position: 'relative' }}>
-              <Search size={14} style={{
-                position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)',
-                color: 'var(--text-secondary)',
-              }} />
-              <input
-                value={q}
-                onChange={(e) => setQ(e.target.value)}
-                placeholder={tab === 'blocked' ? 'Phone prefix' : 'Phone or contact name'}
-                className="input-field"
-                style={{ paddingLeft: 26, fontSize: '0.85rem' }}
-              />
-            </div>
-            <button type="submit" className="btn-secondary" style={{ padding: '0.4rem 0.75rem' }}>Go</button>
-            <button
-              onClick={() => (tab === 'blocked' ? loadBlocked() : loadList())}
-              type="button"
-              className="btn-secondary"
-              style={{ padding: '0.35rem', display: 'flex' }}
-              title="Refresh"
-            >
-              <RefreshCw size={14} />
-            </button>
-          </form>
-        </header>
-
-        <div style={{ flex: 1, overflowY: 'auto' }}>
-          {tab === 'blocked' ? (
-            loadingBlocked ? (
-              <p style={{ padding: '1rem', color: 'var(--text-secondary)', textAlign: 'center' }}>Loading…</p>
-            ) : blocked.length === 0 ? (
-              <p style={{ padding: '2rem 1rem', color: 'var(--text-secondary)', textAlign: 'center', fontSize: '0.9rem' }}>
-                No blocked numbers.
-              </p>
-            ) : (
-              blocked.map((b) => (
-                <div
-                  key={b.id}
-                  data-testid={`whatsapp-blocked-row-${b.id}`}
-                  style={{
-                    padding: '0.85rem 1rem',
-                    borderBottom: '1px solid var(--border-color)',
-                    display: 'flex', flexDirection: 'column', gap: 4,
-                  }}
-                >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6 }}>
-                    <span style={{ fontWeight: 600, fontSize: '0.9rem' }}>{b.contactPhone}</span>
-                    <span style={{
-                      background: 'rgba(239,68,68,0.12)', color: '#dc2626',
-                      padding: '1px 7px', borderRadius: 10, fontSize: '0.7rem', fontWeight: 700,
-                    }}>
-                      <Ban size={11} style={{ verticalAlign: 'middle', marginRight: 3 }} />
-                      {b.reason || 'BLOCKED'}
-                    </span>
-                  </div>
-                  <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
-                    Blocked {timeAgo(b.capturedAt)}
-                  </span>
-                </div>
-              ))
-            )
-          ) : loadingList ? (
-            <p style={{ padding: '1rem', color: 'var(--text-secondary)', textAlign: 'center' }}>Loading…</p>
-          ) : filteredThreads.length === 0 ? (
-            <p style={{ padding: '2rem 1rem', color: 'var(--text-secondary)', textAlign: 'center', fontSize: '0.9rem' }}>
-              No threads match your filters.
-            </p>
-          ) : (
-            filteredThreads.map((t) => {
-              const isSelected = t.id === selectedId;
-              const displayName = t.contact?.name || t.patient?.name || t.contactPhone;
-              return (
-                <div
-                  key={t.id}
-                  onClick={() => setSelectedId(t.id)}
-                  style={{
-                    padding: '0.85rem 1rem',
-                    borderBottom: '1px solid var(--border-color)',
-                    cursor: 'pointer',
-                    background: isSelected ? 'var(--card-bg-hover, rgba(59,130,246,0.08))' : 'transparent',
-                    display: 'flex', flexDirection: 'column', gap: 4,
-                  }}
-                >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6 }}>
-                    <span style={{
-                      fontWeight: t.unreadCount > 0 ? 700 : 500,
-                      fontSize: '0.9rem',
-                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, minWidth: 0,
-                    }}>{displayName}</span>
-                    {t.unreadCount > 0 && (
-                      <span style={{
-                        background: 'var(--primary-color, var(--accent-color))', color: '#fff',
-                        padding: '1px 7px', borderRadius: 10, fontSize: '0.7rem', fontWeight: 700,
-                      }}>{t.unreadCount}</span>
-                    )}
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6 }}>
-                    <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-                      {t.contactPhone}
-                    </span>
-                    <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
-                      {timeAgo(t.lastMessageAt)}
-                    </span>
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6 }}>
-                    <StatusPill status={t.status} />
-                    {t.assignedTo && (
-                      <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 3 }}>
-                        <UserCheck size={11} /> {t.assignedTo.name || t.assignedTo.email}
-                      </span>
-                    )}
-                  </div>
-                </div>
-              );
-            })
-          )}
+        {/* P2: WhatsApp connection panel — embedded above the threads grid.
+            Compact mode = slim status bar when CONNECTED, auto-expand on
+            any issue. Admin-only actions (Connect / Reconnect / Disconnect)
+            are RBAC-gated server-side; the UI surfaces buttons for everyone
+            but the API rejects non-admins. */}
+        <div style={{ padding: '0.75rem 1rem 0' }}>
+          <WhatsAppEmbeddedSignup compact />
         </div>
-      </aside>
 
-      {/* ─── Right pane ─── */}
-      <main style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0 }}>
-        {tab === 'blocked' && !selectedId ? (
-          <div style={{
-            flex: 1, display: 'flex', flexDirection: 'column',
-            alignItems: 'center', justifyContent: 'center',
-            color: 'var(--text-secondary)', gap: 8, padding: '2rem',
-          }}>
-            <Ban size={48} color="var(--text-secondary)" />
-            <p>Blocked numbers cannot be replied to. Use the Manage page to remove.</p>
-          </div>
-        ) : !selectedId ? (
-          <div style={{
-            flex: 1, display: 'flex', flexDirection: 'column',
-            alignItems: 'center', justifyContent: 'center',
-            color: 'var(--text-secondary)', gap: 8, padding: '2rem',
-          }}>
-            <MessageCircle size={48} color="var(--text-secondary)" />
-            <p>Select a thread to start replying.</p>
-          </div>
-        ) : loadingDetail || !detail?.thread ? (
-          <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <p style={{ color: 'var(--text-secondary)' }}>Loading thread…</p>
-          </div>
-        ) : (
-          <>
-            {/* Header */}
-            <header style={{
-              padding: '1rem 1.5rem', borderBottom: '1px solid var(--border-color)',
-              display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
-            }}>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <h2 style={{
-                  fontSize: '1.05rem', fontWeight: 700, display: 'flex',
-                  alignItems: 'center', gap: 6, marginBottom: 2,
-                }}>
-                  {detail.thread.contact?.name || detail.thread.patient?.name || detail.thread.contactPhone}
-                  <StatusPill status={detail.thread.status} />
-                </h2>
-                <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', margin: 0 }}>
-                  {detail.thread.contactPhone}
-                  {detail.thread.assignedTo && (
-                    <> · Assigned to {detail.thread.assignedTo.name || detail.thread.assignedTo.email}</>
-                  )}
-                  {detail.thread.snoozedUntil && (
-                    <> · Snoozed until {new Date(detail.thread.snoozedUntil).toLocaleString()}</>
-                  )}
-                </p>
-                {detail.optedOut && (
-                  <p style={{
-                    background: 'rgba(239,68,68,0.12)', color: '#dc2626',
-                    padding: '4px 10px', borderRadius: 8, fontSize: '0.75rem',
-                    marginTop: 6, display: 'inline-flex', alignItems: 'center', gap: 5,
-                  }}>
-                    <Ban size={12} /> Opted out ({detail.optedOut.reason})
-                    on {new Date(detail.optedOut.capturedAt).toLocaleDateString()}
-                  </p>
-                )}
-              </div>
-              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                <button onClick={assignToMe} className="btn-secondary" style={{ fontSize: '0.8rem', padding: '0.4rem 0.75rem', display: 'flex', alignItems: 'center', gap: 4 }}>
-                  <UserCheck size={14} /> Assign to me
-                </button>
-                <button onClick={snoozeThread} className="btn-secondary" style={{ fontSize: '0.8rem', padding: '0.4rem 0.75rem', display: 'flex', alignItems: 'center', gap: 4 }}>
-                  <Clock size={14} /> Snooze
-                </button>
-                <button onClick={closeThread} className="btn-secondary" style={{ fontSize: '0.8rem', padding: '0.4rem 0.75rem', display: 'flex', alignItems: 'center', gap: 4 }}>
-                  <CheckCheck size={14} /> Close
-                </button>
-                {!detail.optedOut && (
-                  <button onClick={optOutContact} className="btn-secondary" style={{ fontSize: '0.8rem', padding: '0.4rem 0.75rem', display: 'flex', alignItems: 'center', gap: 4, color: '#dc2626' }}>
-                    <XCircle size={14} /> Opt out
-                  </button>
-                )}
-              </div>
-            </header>
-
-            {/* #798 — Meta 24h window banner. Only shown when no opt-out
-                gate is already active (opt-out is the harder stop). */}
-            {!detail.optedOut && (
-              <div
-                role="status"
-                data-testid="whatsapp-24h-banner"
-                data-window-open={sendWindow.open ? 'true' : 'false'}
-                style={{
-                  padding: '0.55rem 1.5rem',
-                  background: sendWindow.open
-                    ? 'rgba(16,185,129,0.10)'
-                    : 'rgba(239,68,68,0.10)',
-                  color: sendWindow.open ? '#10b981' : '#dc2626',
-                  borderBottom: '1px solid var(--border-color)',
-                  fontSize: '0.78rem',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 8,
-                  flexWrap: 'wrap',
-                }}
-              >
-                {sendWindow.open ? (
-                  <>
-                    <CheckCheck size={14} />
-                    <strong>24-hour window open</strong>
-                    <span>
-                      — free-form replies allowed for another {formatHoursMins(sendWindow.msUntilClose)}
-                      {sendWindow.lastInboundAt && (
-                        <> (closes {new Date(new Date(sendWindow.lastInboundAt).getTime() + TWENTY_FOUR_HOURS_MS).toLocaleString()})</>
-                      )}
-                    </span>
-                  </>
-                ) : (
-                  <>
-                    <AlertTriangle size={14} />
-                    <strong>24-hour window closed</strong>
-                    <span>— only approved templates can be sent outside the window. Pick a template to re-engage.</span>
-                  </>
-                )}
-              </div>
-            )}
-
-            {/* Messages */}
-            <div style={{
-              flex: 1, overflowY: 'auto', padding: '1.5rem',
-              display: 'flex', flexDirection: 'column', gap: 10,
-              background: 'var(--bg-color, #0a0a0a)',
-            }}>
-              {(detail.messages || []).map((m) => {
-                const isOutbound = m.direction === 'OUTBOUND';
-                return (
-                  <div
-                    key={m.id}
-                    style={{
-                      maxWidth: '70%',
-                      alignSelf: isOutbound ? 'flex-end' : 'flex-start',
-                      background: isOutbound
-                        ? 'var(--primary-color, var(--accent-color))'
-                        : 'var(--card-bg, #1a1a1a)',
-                      color: isOutbound ? '#fff' : 'var(--text-primary)',
-                      padding: '0.6rem 0.85rem', borderRadius: 12,
-                      fontSize: '0.9rem', lineHeight: 1.4,
-                      wordBreak: 'break-word',
-                    }}
-                  >
-                    <div>{m.body || <em style={{ opacity: 0.6 }}>(media)</em>}</div>
-                    <div style={{
-                      fontSize: '0.65rem', opacity: 0.65, marginTop: 4,
-                      textAlign: isOutbound ? 'right' : 'left',
-                      display: 'flex',
-                      gap: 4,
-                      alignItems: 'center',
-                      justifyContent: isOutbound ? 'flex-end' : 'flex-start',
-                    }}>
-                      <span>{new Date(m.createdAt).toLocaleString()}</span>
-                      {/* Wave 7D delivery-ticks — outbound only. Status fed
-                          from Meta webhook (see backend/routes/whatsapp.js
-                          POST /webhook statuses[] handler). */}
-                      <DeliveryTicks status={m.status} direction={m.direction} />
-                    </div>
-                  </div>
-                );
-              })}
-              <div ref={messagesEndRef} />
-            </div>
-
-            {/* Reply box */}
-            <footer style={{ padding: '1rem 1.5rem', borderTop: '1px solid var(--border-color)' }}>
-              {detail.optedOut ? (
-                <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', textAlign: 'center', padding: '0.75rem' }}>
-                  Reply box disabled — contact has opted out (DPDP/TRAI compliance).
-                </p>
-              ) : (
-                <>
-                  {/* #797 — compose toolbar: Templates picker button. */}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-                    <button
-                      type="button"
-                      onClick={openTemplatePicker}
-                      data-testid="whatsapp-pick-template"
-                      className="btn-secondary"
-                      style={{ fontSize: '0.75rem', padding: '0.3rem 0.6rem', display: 'flex', alignItems: 'center', gap: 4 }}
-                      title="Pick a pre-approved template"
-                    >
-                      <FileText size={13} /> Templates
-                    </button>
-                    {!sendWindow.open && (
-                      <span style={{ fontSize: '0.7rem', color: '#dc2626' }}>
-                        Outside 24h window — template required.
-                      </span>
-                    )}
-                  </div>
-                  <div style={{ display: 'flex', gap: 8 }}>
-                    <textarea
-                      value={reply}
-                      onChange={(e) => setReply(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-                          e.preventDefault();
-                          sendReply();
-                        }
-                      }}
-                      placeholder={sendWindow.open
-                        ? 'Type a reply… (Ctrl+Enter to send)'
-                        : '24-hour window closed — pick a template to re-engage'}
-                      className="input-field"
-                      disabled={!sendWindow.open}
-                      data-testid="whatsapp-reply-textarea"
-                      style={{
-                        flex: 1, minHeight: 44, resize: 'vertical', fontSize: '0.9rem',
-                        opacity: sendWindow.open ? 1 : 0.6,
-                      }}
-                    />
-                    <button
-                      onClick={sendReply}
-                      disabled={sending || !reply.trim() || !sendWindow.open}
-                      className="btn-primary"
-                      style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '0 1rem' }}
-                    >
-                      <Send size={16} /> {sending ? 'Sending…' : 'Send'}
-                    </button>
-                  </div>
-                </>
-              )}
-            </footer>
-          </>
-        )}
-      </main>
-
-      {/* #797 — Template picker modal. Lists Meta-approved templates and lets
-          the operator preview the substituted body before applying. */}
-      {showTemplatePicker && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-label="Pick WhatsApp template"
-          data-testid="whatsapp-template-modal"
-          style={{
-            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)',
-            zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center',
-            padding: '2rem',
-          }}
-          onClick={(e) => { if (e.target === e.currentTarget) setShowTemplatePicker(false); }}
-        >
-          <div style={{
-            background: 'var(--card-bg, #1a1a1a)', color: 'var(--text-primary)',
-            borderRadius: 12, width: 'min(560px, 100%)', maxHeight: '80vh',
-            display: 'flex', flexDirection: 'column', overflow: 'hidden',
-            border: '1px solid var(--border-color)',
-          }}>
-            <header style={{
-              padding: '1rem 1.25rem', borderBottom: '1px solid var(--border-color)',
-              display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
-            }}>
-              <h3 style={{ fontSize: '1rem', fontWeight: 700, margin: 0, display: 'flex', alignItems: 'center', gap: 6 }}>
-                <FileText size={16} /> Pick template
-              </h3>
-              <button
-                onClick={() => setShowTemplatePicker(false)}
-                aria-label="Close template picker"
-                style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}
-              >
-                <X size={18} />
-              </button>
-            </header>
-            <div style={{ flex: 1, overflowY: 'auto', padding: '0.75rem 1.25rem' }}>
-              {loadingTemplates ? (
-                <p style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)' }}>Loading templates…</p>
-              ) : templates.length === 0 ? (
-                <p style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
-                  No templates configured. Add one under Settings → WhatsApp Templates.
-                </p>
-              ) : (
-                templates.map((tpl) => {
-                  const preview = substituteTemplateVars(tpl.body || '', detail);
-                  const remaining = unresolvedVars(preview);
-                  const approved = (tpl.status || '').toUpperCase() === 'APPROVED';
-                  return (
-                    <div
-                      key={tpl.id}
-                      data-testid={`whatsapp-template-row-${tpl.id}`}
-                      style={{
-                        padding: '0.75rem',
-                        border: '1px solid var(--border-color)',
-                        borderRadius: 8,
-                        marginBottom: 8,
-                        display: 'flex',
-                        flexDirection: 'column',
-                        gap: 6,
-                      }}
-                    >
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-                        <strong style={{ fontSize: '0.9rem' }}>{tpl.name}</strong>
-                        <span
-                          style={{
-                            background: approved ? 'rgba(16,185,129,0.15)' : 'rgba(245,158,11,0.15)',
-                            color: approved ? '#10b981' : '#f59e0b',
-                            padding: '1px 7px', borderRadius: 10, fontSize: '0.65rem', fontWeight: 700,
-                          }}
-                        >
-                          {tpl.status || 'PENDING'}
-                        </span>
-                      </div>
-                      <p style={{
-                        fontSize: '0.8rem', color: 'var(--text-secondary)', margin: 0,
-                        whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-                      }}>
-                        {preview}
-                      </p>
-                      {remaining.length > 0 && (
-                        <p style={{ fontSize: '0.7rem', color: '#f59e0b', margin: 0 }}>
-                          Unresolved variables: {remaining.map((v) => `{{${v}}}`).join(', ')}
-                        </p>
-                      )}
-                      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                        <button
-                          type="button"
-                          onClick={() => applyTemplate(tpl)}
-                          data-testid={`whatsapp-template-use-${tpl.id}`}
-                          className="btn-primary"
-                          style={{ fontSize: '0.75rem', padding: '0.3rem 0.75rem' }}
-                        >
-                          Use this template
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })
-              )}
-            </div>
-          </div>
+        <div style={{ display: 'flex', flex: 1, gap: 0, minHeight: 0 }}>
+          <ThreadList />
+          <ThreadDetail />
         </div>
-      )}
-    </div>
+
+        <MessageContextMenu />
+        <UnblockModal />
+        <NewMessageModal />
+      </div>
+    </WhatsAppThreadsContext.Provider>
   );
 }

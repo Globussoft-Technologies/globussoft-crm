@@ -333,9 +333,11 @@ describe('<Pricing /> -- public marketing pricing page', () => {
     expect(startFreeTrialLabels.length).toBeGreaterThanOrEqual(2);
     // "Contact Sales" is unique to the Enterprise card.
     expect(screen.getByText(/Contact Sales/i)).toBeInTheDocument();
-    // fetchApi should NOT have been called -- token is empty so the
-    // /api/subscriptions/plans fetch is gated.
-    expect(fetchApiMock).not.toHaveBeenCalled();
+    // The Pricing page DOES fire the subscriptions/plans fetch on mount
+    // for unauthenticated visitors too — the fetch isn't gated on token,
+    // it's a public endpoint that returns the active catalog. (The Link
+    // vs Pay-Now CTA flip IS gated on token at the render level.)
+    expect(fetchApiMock).toHaveBeenCalledWith('/api/subscriptions/plans');
   });
 
   it('authenticated mode fetches /api/subscriptions/plans on mount and renders Pay Now buttons', async () => {

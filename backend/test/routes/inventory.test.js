@@ -100,6 +100,7 @@ prisma.product = prisma.product || {};
 prisma.product.findMany = vi.fn();
 prisma.product.findFirst = vi.fn();
 prisma.product.update = vi.fn();
+prisma.product.create = vi.fn();
 
 prisma.vendor = prisma.vendor || {};
 prisma.vendor.findMany = vi.fn();
@@ -177,7 +178,12 @@ function makeApp({
   app.use(express.json());
   if (!skipAuth) {
     app.use((req, _res, next) => {
-      req.user = { userId, tenantId, role, wellnessRole, vertical };
+      // isOwner short-circuits requirePermission (the route's gate) so the
+      // synthetic ADMIN passes every products/inventory permission check
+      // without needing prisma.userRole stubs. The verifyWellnessRole
+      // adminGate (used only on /upload/service-* in this file) still
+      // honours role === 'ADMIN' under a wellness vertical.
+      req.user = { userId, tenantId, role, wellnessRole, vertical, isOwner: true };
       next();
     });
   }
@@ -195,6 +201,8 @@ beforeEach(() => {
   prisma.product.findMany.mockReset();
   prisma.product.findFirst.mockReset();
   prisma.product.update.mockReset();
+  prisma.product.create.mockReset();
+  prisma.product.create.mockImplementation(async ({ data }) => ({ id: 500, ...data }));
 
   prisma.vendor.findMany.mockReset();
   prisma.vendor.findFirst.mockReset();
@@ -541,5 +549,68 @@ describe('GET /inventory/movements — combined ledger', () => {
     expect(res.body.code).toBe('PRODUCT_REQUIRED');
     expect(prisma.inventoryReceipt.findMany).not.toHaveBeenCalled();
     expect(prisma.inventoryAdjustment.findMany).not.toHaveBeenCalled();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// Product write — non-negative numeric guards (stock / threshold / price)
+// ─────────────────────────────────────────────────────────────────────────
+//
+// A product's stock, reorder threshold, price and volume can never be
+// negative; stock + threshold must additionally be whole numbers. The
+// frontend guards too, but a direct API call must not be able to seed a
+// negative stock level — these pin the server-side guard.
+describe('POST /products — non-negative numeric guards', () => {
+  test('rejects a negative currentStock with 400 INVALID_QUANTITY (no create)', async () => {
+    const res = await request(makeApp())
+      .post('/api/wellness/products')
+      .send({ name: 'Massage Oil', currentStock: -1 });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_QUANTITY');
+    expect(prisma.product.create).not.toHaveBeenCalled();
+  });
+
+  test('rejects a fractional currentStock with 400 INVALID_QUANTITY', async () => {
+    const res = await request(makeApp())
+      .post('/api/wellness/products')
+      .send({ name: 'Massage Oil', currentStock: 2.5 });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_QUANTITY');
+  });
+
+  test('rejects a negative reorder threshold with 400 INVALID_QUANTITY', async () => {
+    const res = await request(makeApp())
+      .post('/api/wellness/products')
+      .send({ name: 'Massage Oil', threshold: -5 });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_QUANTITY');
+  });
+
+  test('rejects a negative price with 400 INVALID_NUMERIC', async () => {
+    const res = await request(makeApp())
+      .post('/api/wellness/products')
+      .send({ name: 'Massage Oil', price: -100 });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_NUMERIC');
+  });
+
+  test('allows currentStock = 0 (valid) → 201', async () => {
+    const res = await request(makeApp())
+      .post('/api/wellness/products')
+      .send({ name: 'Massage Oil', currentStock: 0, price: 899 });
+    expect(res.status).toBe(201);
+    expect(prisma.product.create).toHaveBeenCalled();
+  });
+});
+
+describe('PUT /products/:id — non-negative numeric guards', () => {
+  test('rejects updating to a negative currentStock (no update)', async () => {
+    prisma.product.findFirst.mockResolvedValue({ id: 9, tenantId: 1, name: 'Oil', currentStock: 5 });
+    const res = await request(makeApp())
+      .put('/api/wellness/products/9')
+      .send({ currentStock: -3 });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_QUANTITY');
+    expect(prisma.product.update).not.toHaveBeenCalled();
   });
 });

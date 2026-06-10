@@ -121,6 +121,27 @@ async function executeReport(config, tenantId) {
 // GET /api/custom-reports — list saved reports for tenant
 router.get("/", async (req, res) => {
   try {
+    // #920 slice 41: ?fields=summary slim-shape opt-in. Mirrors slices 1-39.
+    // The default list path returns the full CustomReport row including the
+    // heavy `config` @db.LongText JSON column (entity / filters / columns /
+    // groupBy / chartType — easily multi-KB for complex saved reports).
+    // Picker / dropdown UI (report-selector chip, "load saved report" combo,
+    // dashboard tile cross-linker) doesn't need the config blob — only
+    // id + name + description for label rendering. When the caller passes
+    // ?fields=summary we project to that minimal set via Prisma `select` so
+    // the heavy LongText never leaves the DB. Opt-in additive — existing
+    // callers (no ?fields, or any non-exact value) get the parsed-config
+    // shape unchanged so CustomReports.jsx's saved-list grid continues to
+    // round-trip the JSON config straight back into the builder.
+    const isSummary = req.query.fields === "summary";
+    if (isSummary) {
+      const slim = await prisma.customReport.findMany({
+        where: { tenantId: req.user.tenantId },
+        select: { id: true, name: true, description: true },
+        orderBy: { createdAt: "desc" },
+      });
+      return res.json(slim);
+    }
     const reports = await prisma.customReport.findMany({
       where: { tenantId: req.user.tenantId },
       orderBy: { createdAt: "desc" },

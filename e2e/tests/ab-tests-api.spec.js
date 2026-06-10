@@ -232,17 +232,14 @@ test.describe('AB Tests API — POST /', () => {
     expect(json.variantB.subject).toBe('string B');
   });
 
-  test('USER role can also create (route has no verifyRole gate)', async ({ request }) => {
+  test('USER role is rejected with 403 (#527)', async ({ request }) => {
     const token = await getGenericUser(request);
     if (!token) test.skip(true, 'no user@crm.com token');
     const res = await post(request, token, '/api/ab-tests', {
       name: `${RUN_TAG} user-create`,
       variantA: {}, variantB: {},
     });
-    // Asserting permissive behavior — if a future PR locks this down to
-    // ADMIN, flip this to expect 403 and update the JSDoc.
-    expect(res.status()).toBe(201);
-    createdGenericIds.add((await res.json()).id);
+    expect(res.status()).toBe(403);
   });
 });
 

@@ -681,6 +681,388 @@ describe('<BookingPages /> — CSV export', () => {
   });
 });
 
+// ─────────────────────────────────────────────────────────────────────
+// Extended branch coverage — availability windows, rich-content editor,
+// bookings drawer, CSV busy state, parseAvail JSON branch.
+// ─────────────────────────────────────────────────────────────────────
+
+describe('<BookingPages /> — availability window add / remove + buffer', () => {
+  beforeEach(() => {
+    resetAllMocks();
+  });
+
+  it('addWindow on Saturday creates a 9-17 default window (replaces Unavailable label)', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/booking-pages') return Promise.resolve([samplePage]);
+      if (url.endsWith('/bookings')) return Promise.resolve([]);
+      if (url === '/api/wellness/services') return Promise.resolve([]);
+      return Promise.resolve([]);
+    });
+    const user = userEvent.setup();
+    const { container } = renderBookingPages();
+    await waitFor(() => expect(screen.getByText('Discovery Call')).toBeInTheDocument());
+    await user.click(screen.getByText('Discovery Call'));
+    await waitFor(() => expect(screen.getByText(/Weekly Availability/i)).toBeInTheDocument());
+
+    // Before: 10 time inputs (5 weekdays × 2). After clicking Sat's "+" we
+    // expect 12 (Sat now has a 09:00-17:00 default window).
+    expect(container.querySelectorAll('input[type="time"]').length).toBe(10);
+
+    // The "Add window" buttons are the trailing icon buttons on each day row.
+    // Find them by their title attribute.
+    const addBtns = container.querySelectorAll('button[title="Add window"]');
+    expect(addBtns.length).toBe(7); // one per day row
+    // Saturday is the 6th day row (index 5).
+    await user.click(addBtns[5]);
+
+    await waitFor(() => {
+      expect(container.querySelectorAll('input[type="time"]').length).toBe(12);
+    });
+  });
+
+  it('removeWindow on Monday drops the default 09:00-17:00 window (back to Unavailable)', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/booking-pages') return Promise.resolve([samplePage]);
+      if (url.endsWith('/bookings')) return Promise.resolve([]);
+      if (url === '/api/wellness/services') return Promise.resolve([]);
+      return Promise.resolve([]);
+    });
+    const user = userEvent.setup();
+    const { container } = renderBookingPages();
+    await waitFor(() => expect(screen.getByText('Discovery Call')).toBeInTheDocument());
+    await user.click(screen.getByText('Discovery Call'));
+    await waitFor(() => expect(screen.getByText(/Weekly Availability/i)).toBeInTheDocument());
+
+    // Before removal: 5 weekdays × 2 inputs = 10.
+    expect(container.querySelectorAll('input[type="time"]').length).toBe(10);
+
+    // "Remove window" buttons sit next to each time pair. First weekday is Mon.
+    const removeBtns = container.querySelectorAll('button[title="Remove window"]');
+    expect(removeBtns.length).toBe(5); // one per weekday window (no weekend windows by default)
+    await user.click(removeBtns[0]);
+
+    // Removing Monday's only window leaves 8 time inputs (4 remaining weekdays × 2).
+    await waitFor(() => {
+      expect(container.querySelectorAll('input[type="time"]').length).toBe(8);
+    });
+  });
+
+  it('editing duration + buffer fields flows into the PUT payload', async () => {
+    fetchApi.mockImplementation((url, opts) => {
+      if (url === '/api/booking-pages' && (!opts || !opts.method)) return Promise.resolve([samplePage]);
+      if (url === '/api/booking-pages/7' && opts && opts.method === 'PUT') {
+        return Promise.resolve(samplePage);
+      }
+      if (url === '/api/booking-pages/7/bookings') return Promise.resolve([]);
+      if (url === '/api/wellness/services') return Promise.resolve([]);
+      return Promise.resolve([]);
+    });
+    const user = userEvent.setup();
+    renderBookingPages();
+    await waitFor(() => expect(screen.getByText('Discovery Call')).toBeInTheDocument());
+    await user.click(screen.getByText('Discovery Call'));
+
+    // Duration input has min=5/max=480, type=number. Buffer has min=0/max=120.
+    // Locate via their pre-filled values: 30 and 0.
+    await waitFor(() => expect(screen.getByDisplayValue('30')).toBeInTheDocument());
+    const durationInput = screen.getByDisplayValue('30');
+    const bufferInput = screen.getByDisplayValue('0');
+
+    await user.clear(durationInput);
+    await user.type(durationInput, '45');
+    await user.clear(bufferInput);
+    await user.type(bufferInput, '10');
+
+    await user.click(screen.getByText(/Save Changes/i));
+
+    await waitFor(() => {
+      const putCall = fetchApi.mock.calls.find(([url, opts]) => url === '/api/booking-pages/7' && opts && opts.method === 'PUT');
+      expect(putCall).toBeTruthy();
+      const body = JSON.parse(putCall[1].body);
+      expect(body.durationMins).toBe(45);
+      expect(body.bufferMins).toBe(10);
+    });
+  });
+});
+
+describe('<BookingPages /> — rich-content editor (Mini Website fields)', () => {
+  beforeEach(() => {
+    resetAllMocks();
+  });
+
+  it('hero headline + subheadline + contact phone + email + hours flow into PUT', async () => {
+    fetchApi.mockImplementation((url, opts) => {
+      if (url === '/api/booking-pages' && (!opts || !opts.method)) return Promise.resolve([samplePage]);
+      if (url === '/api/booking-pages/7' && opts && opts.method === 'PUT') {
+        return Promise.resolve(samplePage);
+      }
+      if (url === '/api/booking-pages/7/bookings') return Promise.resolve([]);
+      if (url === '/api/wellness/services') return Promise.resolve([]);
+      return Promise.resolve([]);
+    });
+    const user = userEvent.setup();
+    renderBookingPages();
+    await waitFor(() => expect(screen.getByText('Discovery Call')).toBeInTheDocument());
+    await user.click(screen.getByText('Discovery Call'));
+
+    await waitFor(() => expect(screen.getByTestId('hero-headline')).toBeInTheDocument());
+    await user.type(screen.getByTestId('hero-headline'), 'Welcome');
+    await user.type(screen.getByTestId('hero-subheadline'), 'Book now');
+    await user.type(screen.getByTestId('contact-phone'), '+91 99999 11111');
+    await user.type(screen.getByTestId('contact-email'), 'hi@clinic.test');
+    await user.type(screen.getByTestId('contact-hours'), 'Mon-Sat 9-19');
+
+    await user.click(screen.getByText(/Save Changes/i));
+
+    await waitFor(() => {
+      const putCall = fetchApi.mock.calls.find(([url, opts]) => url === '/api/booking-pages/7' && opts && opts.method === 'PUT');
+      expect(putCall).toBeTruthy();
+      const body = JSON.parse(putCall[1].body);
+      expect(body.heroHeadline).toBe('Welcome');
+      expect(body.heroSubheadline).toBe('Book now');
+      expect(body.contactPhone).toBe('+91 99999 11111');
+      expect(body.contactEmail).toBe('hi@clinic.test');
+      expect(body.hoursJson).toBe('Mon-Sat 9-19');
+      // Empty logo/hero stay null.
+      expect(body.logoUrl).toBeNull();
+      expect(body.heroImageUrl).toBeNull();
+    });
+  });
+
+  it('PUT sends empty featuredServiceIds when none configured', async () => {
+    fetchApi.mockImplementation((url, opts) => {
+      if (url === '/api/booking-pages' && (!opts || !opts.method)) return Promise.resolve([samplePage]);
+      if (url === '/api/booking-pages/7' && opts && opts.method === 'PUT') {
+        return Promise.resolve(samplePage);
+      }
+      if (url === '/api/booking-pages/7/bookings') return Promise.resolve([]);
+      if (url === '/api/wellness/services') return Promise.resolve([
+        { id: 1, name: 'Hair Treatment', isActive: true },
+        { id: 2, name: 'Skin Care', isActive: true },
+      ]);
+      return Promise.resolve([]);
+    });
+    const user = userEvent.setup();
+    renderBookingPages();
+    await waitFor(() => expect(screen.getByText('Discovery Call')).toBeInTheDocument());
+    await user.click(screen.getByText('Discovery Call'));
+
+    // Featured services empty-state text renders.
+    await waitFor(() => expect(screen.getByText(/No featured services/i)).toBeInTheDocument());
+    // The add-service dropdown is present because availableServices >0.
+    expect(screen.getByTestId('featured-services-add')).toBeInTheDocument();
+
+    await user.click(screen.getByText(/Save Changes/i));
+
+    await waitFor(() => {
+      const putCall = fetchApi.mock.calls.find(([url, opts]) => url === '/api/booking-pages/7' && opts && opts.method === 'PUT');
+      expect(putCall).toBeTruthy();
+      const body = JSON.parse(putCall[1].body);
+      expect(body.featuredServiceIds).toEqual([]);
+    });
+  });
+
+  it('adding a service to featured list shows it in the ordered list and removes it from the picker', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/booking-pages') return Promise.resolve([samplePage]);
+      if (url === '/api/booking-pages/7/bookings') return Promise.resolve([]);
+      if (url === '/api/wellness/services') return Promise.resolve([
+        { id: 1, name: 'Hair Treatment', isActive: true },
+        { id: 2, name: 'Skin Care', isActive: true },
+      ]);
+      return Promise.resolve([]);
+    });
+    const user = userEvent.setup();
+    renderBookingPages();
+    await waitFor(() => expect(screen.getByText('Discovery Call')).toBeInTheDocument());
+    await user.click(screen.getByText('Discovery Call'));
+
+    await waitFor(() => expect(screen.getByTestId('featured-services-add')).toBeInTheDocument());
+
+    const addSelect = screen.getByTestId('featured-services-add');
+    fireEvent.change(addSelect, { target: { value: '1' } });
+
+    // Ordered list now visible.
+    await waitFor(() => expect(screen.getByTestId('featured-services-list')).toBeInTheDocument());
+    expect(screen.getByText(/1\. Hair Treatment/)).toBeInTheDocument();
+  });
+});
+
+describe('<BookingPages /> — bookings drawer rendering + cancel', () => {
+  beforeEach(() => {
+    resetAllMocks();
+  });
+
+  it('renders bookings list with contact name + status badge; CANCELED rows hide the cancel button', async () => {
+    const bookings = [
+      { id: 101, contactName: 'Alice', contactEmail: 'alice@x.test', scheduledAt: '2026-06-01T10:00:00Z', status: 'BOOKED' },
+      { id: 102, contactName: 'Bob', contactEmail: 'bob@x.test', scheduledAt: '2026-06-02T11:00:00Z', status: 'CANCELED' },
+      { id: 103, contactName: 'Carol', contactEmail: 'carol@x.test', scheduledAt: '2026-06-03T12:00:00Z', status: 'COMPLETED' },
+    ];
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/booking-pages') return Promise.resolve([samplePage]);
+      if (url === '/api/booking-pages/7/bookings') return Promise.resolve(bookings);
+      if (url === '/api/wellness/services') return Promise.resolve([]);
+      return Promise.resolve([]);
+    });
+    const user = userEvent.setup();
+    const { container } = renderBookingPages();
+    await waitFor(() => expect(screen.getByText('Discovery Call')).toBeInTheDocument());
+    await user.click(screen.getByText('Discovery Call'));
+
+    await waitFor(() => expect(screen.getByText(/Recent Bookings \(3\)/i)).toBeInTheDocument());
+    expect(screen.getByText('Alice')).toBeInTheDocument();
+    expect(screen.getByText('Bob')).toBeInTheDocument();
+    expect(screen.getByText('Carol')).toBeInTheDocument();
+    expect(screen.getByText('BOOKED')).toBeInTheDocument();
+    expect(screen.getByText('CANCELED')).toBeInTheDocument();
+    expect(screen.getByText('COMPLETED')).toBeInTheDocument();
+
+    // The cancel button only renders for non-CANCELED bookings. There are
+    // 3 bookings × 2 non-canceled = 2 trailing cancel buttons. Find them via
+    // their "Cancel" title.
+    const cancelBtns = container.querySelectorAll('button[title="Cancel"]');
+    expect(cancelBtns.length).toBe(2);
+  });
+
+  it('cancel booking → confirm → POST /:id/cancel/:bid + refetch list', async () => {
+    notify.confirm.mockImplementation(() => Promise.resolve(true));
+
+    let listCalls = 0;
+    const initialBookings = [
+      { id: 101, contactName: 'Alice', contactEmail: 'a@x.test', scheduledAt: '2026-06-01T10:00:00Z', status: 'BOOKED' },
+    ];
+    fetchApi.mockImplementation((url, opts) => {
+      if (url === '/api/booking-pages' && (!opts || !opts.method)) return Promise.resolve([samplePage]);
+      if (url === '/api/booking-pages/7/bookings') {
+        listCalls += 1;
+        return Promise.resolve(initialBookings);
+      }
+      if (url === '/api/booking-pages/7/cancel/101' && opts && opts.method === 'POST') {
+        return Promise.resolve({});
+      }
+      if (url === '/api/wellness/services') return Promise.resolve([]);
+      return Promise.resolve([]);
+    });
+
+    const user = userEvent.setup();
+    const { container } = renderBookingPages();
+    await waitFor(() => expect(screen.getByText('Discovery Call')).toBeInTheDocument());
+    await user.click(screen.getByText('Discovery Call'));
+
+    await waitFor(() => expect(screen.getByText('Alice')).toBeInTheDocument());
+    const cancelBtns = container.querySelectorAll('button[title="Cancel"]');
+    await user.click(cancelBtns[0]);
+
+    await waitFor(() => {
+      expect(notify.confirm).toHaveBeenCalled();
+      const cancelCall = fetchApi.mock.calls.find(([url, opts]) => url === '/api/booking-pages/7/cancel/101' && opts && opts.method === 'POST');
+      expect(cancelCall).toBeTruthy();
+      // /bookings was refetched after cancel.
+      expect(listCalls).toBeGreaterThanOrEqual(2);
+    });
+  });
+
+  it('openPage gracefully falls through to empty bookings when /bookings rejects', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/booking-pages') return Promise.resolve([samplePage]);
+      if (url === '/api/booking-pages/7/bookings') return Promise.reject(new Error('500'));
+      if (url === '/api/wellness/services') return Promise.resolve([]);
+      return Promise.resolve([]);
+    });
+    const user = userEvent.setup();
+    renderBookingPages();
+    await waitFor(() => expect(screen.getByText('Discovery Call')).toBeInTheDocument());
+    await user.click(screen.getByText('Discovery Call'));
+
+    // Empty-state copy renders inside the drawer.
+    await waitFor(() => expect(screen.getByText(/No bookings yet\. Share your URL/i)).toBeInTheDocument());
+    expect(screen.getByText(/Recent Bookings \(0\)/i)).toBeInTheDocument();
+  });
+});
+
+describe('<BookingPages /> — CSV export busy state', () => {
+  beforeEach(() => {
+    resetAllMocks();
+  });
+
+  it('disables the Export Bookings CSV button while the request is in flight', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/booking-pages') return Promise.resolve([samplePage]);
+      return Promise.resolve([]);
+    });
+
+    // Long-pending fetch keeps csvBusy=true.
+    let resolveFetch;
+    const fetchSpy = vi.spyOn(global, 'fetch').mockImplementation(() => new Promise((res) => { resolveFetch = res; }));
+    try {
+      const user = userEvent.setup();
+      renderBookingPages();
+      await waitFor(() => expect(screen.getByText('Discovery Call')).toBeInTheDocument());
+
+      const exportBtn = screen.getByText(/Export Bookings CSV/i).closest('button');
+      expect(exportBtn).not.toBeDisabled();
+      await user.click(exportBtn);
+
+      await waitFor(() => expect(exportBtn).toBeDisabled());
+      // Resolve so the test cleans up.
+      resolveFetch({ ok: true, status: 200, blob: () => Promise.resolve(new Blob()) });
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+});
+
+describe('<BookingPages /> — parseAvail branches via opening a page with serialised availability', () => {
+  beforeEach(() => {
+    resetAllMocks();
+  });
+
+  it('JSON-string availability parses into the editor (Sat row carries a custom window)', async () => {
+    const customAvailJson = JSON.stringify({
+      saturday: [{ start: '10:00', end: '14:00' }],
+    });
+    const pageWithJsonAvail = { ...samplePage, availability: customAvailJson };
+
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/booking-pages') return Promise.resolve([pageWithJsonAvail]);
+      if (url === '/api/booking-pages/7/bookings') return Promise.resolve([]);
+      if (url === '/api/wellness/services') return Promise.resolve([]);
+      return Promise.resolve([]);
+    });
+    const user = userEvent.setup();
+    const { container } = renderBookingPages();
+    await waitFor(() => expect(screen.getByText('Discovery Call')).toBeInTheDocument());
+    await user.click(screen.getByText('Discovery Call'));
+    await waitFor(() => expect(screen.getByText(/Weekly Availability/i)).toBeInTheDocument());
+
+    // Weekdays default 5×2 = 10 inputs PLUS the Sat custom 1×2 = 12 total.
+    expect(container.querySelectorAll('input[type="time"]').length).toBe(12);
+    // Saturday's custom 10:00 start renders.
+    expect(screen.getByDisplayValue('10:00')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('14:00')).toBeInTheDocument();
+  });
+
+  it('malformed JSON availability falls back to DEFAULT_AVAIL (5 weekday windows)', async () => {
+    const pageWithBadAvail = { ...samplePage, availability: '{not valid json' };
+
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/booking-pages') return Promise.resolve([pageWithBadAvail]);
+      if (url === '/api/booking-pages/7/bookings') return Promise.resolve([]);
+      if (url === '/api/wellness/services') return Promise.resolve([]);
+      return Promise.resolve([]);
+    });
+    const user = userEvent.setup();
+    const { container } = renderBookingPages();
+    await waitFor(() => expect(screen.getByText('Discovery Call')).toBeInTheDocument());
+    await user.click(screen.getByText('Discovery Call'));
+    await waitFor(() => expect(screen.getByText(/Weekly Availability/i)).toBeInTheDocument());
+
+    // Falls back to default — 5 weekdays × 2 = 10 inputs.
+    expect(container.querySelectorAll('input[type="time"]').length).toBe(10);
+  });
+});
+
 describe('<BookingPages /> — Copy URL action', () => {
   beforeEach(() => {
     resetAllMocks();

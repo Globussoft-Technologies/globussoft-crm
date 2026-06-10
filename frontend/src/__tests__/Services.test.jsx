@@ -36,6 +36,27 @@ vi.mock('../utils/api', () => ({
   getAuthToken: vi.fn(() => 'test-token'),
 }));
 
+// Default to a fully-permissioned viewer so existing assertions on New
+// service / per-card Edit / Deactivate keep passing. The SUT now hides
+// these when the viewer lacks services.write.
+const FULL_PERMS = {
+  isReady: true,
+  hasPermission: () => true,
+  permissions: ['services.read', 'services.write'],
+  roles: [],
+  isOwner: false,
+  userType: null,
+  isLoading: false,
+  error: null,
+  refresh: () => Promise.resolve(),
+  hasAllPermissions: () => true,
+  hasAnyPermission: () => true,
+};
+const usePermissionsMock = vi.fn(() => FULL_PERMS);
+vi.mock('../hooks/usePermissions', () => ({
+  usePermissions: (...args) => usePermissionsMock(...args),
+}));
+
 import { fetchApi } from '../utils/api';
 import Services from '../pages/wellness/Services';
 
@@ -86,9 +107,12 @@ describe('<Services /> — Catalog tab', () => {
     render(<MemoryRouter><Services /></MemoryRouter>);
     await waitFor(() => expect(screen.getByText('GFC Hair')).toBeInTheDocument());
 
-    const editBtns = screen.getAllByTitle(/^Edit$/i);
+    // The catalog's card order is not pinned (sort criterion may change), so
+    // target the specific service via its per-card aria-label rather than
+    // a positional selector.
+    const editBtns = screen.getAllByLabelText(/^Edit service /i);
     expect(editBtns.length).toBe(2);
-    await user.click(editBtns[0]);
+    await user.click(screen.getByLabelText('Edit service GFC Hair'));
 
     // Edit mode shows a Save button + the name as an input value
     expect(screen.getByRole('button', { name: /^Save$/i })).toBeInTheDocument();
@@ -100,7 +124,7 @@ describe('<Services /> — Catalog tab', () => {
     render(<MemoryRouter><Services /></MemoryRouter>);
     await waitFor(() => expect(screen.getByText('GFC Hair')).toBeInTheDocument());
 
-    await user.click(screen.getAllByTitle(/^Edit$/i)[0]);
+    await user.click(screen.getByLabelText('Edit service GFC Hair'));
     await user.click(screen.getByRole('button', { name: /^Save$/i }));
 
     await waitFor(() => {
@@ -117,8 +141,7 @@ describe('<Services /> — Catalog tab', () => {
     render(<MemoryRouter><Services /></MemoryRouter>);
     await waitFor(() => expect(screen.getByText('GFC Hair')).toBeInTheDocument());
 
-    const deactivateBtns = screen.getAllByTitle(/Deactivate/i);
-    await user.click(deactivateBtns[0]);
+    await user.click(screen.getByLabelText('Deactivate service GFC Hair'));
 
     expect(confirmSpy).toHaveBeenCalledTimes(1);
     expect(confirmSpy.mock.calls[0][0]).toMatch(/GFC Hair/);
@@ -153,20 +176,24 @@ describe('<Services /> — header + tab navigation', () => {
     expect(screen.getByText(/Active Treatments/i)).toBeInTheDocument();
   });
 
-  it('switching to the Packages tab swaps the primary CTA to "Create Package"', async () => {
+  it('switching to the Packages tab hides the Catalog CTA and renders the package builder', async () => {
+    // Drift: the original "Create Package" button was removed when the
+    // Packages tab moved to compute-on-the-fly (no DB record per the
+    // SUT comment at Services.jsx:1097). The contract is now: switching
+    // tabs hides the Catalog "New service" CTA and the package-builder
+    // surface ("Build a package") appears.
     const user = userEvent.setup();
     render(<MemoryRouter><Services /></MemoryRouter>);
     await waitFor(() => expect(screen.getByText('GFC Hair')).toBeInTheDocument());
 
-    // Catalog tab default — "New service" CTA visible
     expect(screen.getByRole('button', { name: /New service/i })).toBeInTheDocument();
 
-    // Click Packages tab
     await user.click(screen.getByRole('button', { name: /^Packages$/i }));
 
-    // Catalog CTA gone; Packages CTA visible
     expect(screen.queryByRole('button', { name: /New service/i })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Create Package/i })).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByText(/Build a package/i)).toBeInTheDocument(),
+    );
   });
 
   it('switching to Active Treatments fetches /api/wellness/activetreatment', async () => {
@@ -213,8 +240,10 @@ describe('<Services /> — initial tab from URL search params', () => {
     // heading instead (it depends on the same load() that gates GFC Hair).
     await waitFor(() => expect(screen.getByText(/Build a package/i)).toBeInTheDocument());
 
-    // Packages CTA visible (Catalog CTA hidden)
-    expect(screen.getByRole('button', { name: /Create Package/i })).toBeInTheDocument();
+    // Drift: the original "Create Package" CTA was removed (packages
+    // are now computed on the fly per SUT line 1097). Pin only the
+    // Catalog CTA absence on this tab — the builder surface presence
+    // is already asserted by the waitFor above.
     expect(screen.queryByRole('button', { name: /New service/i })).not.toBeInTheDocument();
   });
 
@@ -327,8 +356,10 @@ describe('<Services /> — Create-service modal', () => {
       const body = JSON.parse(postCall[1].body);
       expect(body.name).toBe('Microneedling RF');
       expect(body.basePrice).toBe(7500);
-      // Sensible defaults from the initial state
-      expect(body.category).toBe('aesthetics');
+      // SUT moved from single `category` to multi-select `categoryIds` +
+      // primary `categoryId` (first picked). Defaults: empty selection.
+      expect(body.categoryIds).toEqual([]);
+      expect(body.categoryId).toBeNull();
       expect(body.ticketTier).toBe('medium');
     });
   });
@@ -345,9 +376,8 @@ describe('<Services /> — Edit-card mode', () => {
     render(<MemoryRouter><Services /></MemoryRouter>);
     await waitFor(() => expect(screen.getByText('Botox 50u')).toBeInTheDocument());
 
-    // Second card = Botox row
-    const editBtns = screen.getAllByTitle(/^Edit$/i);
-    await user.click(editBtns[1]);
+    // Catalog card order is NOT pinned (sort may change); target by aria-label.
+    await user.click(screen.getByLabelText('Edit service Botox 50u'));
 
     expect(screen.getByDisplayValue('Botox 50u')).toBeInTheDocument();
     expect(screen.getByDisplayValue('15000')).toBeInTheDocument();
@@ -360,7 +390,7 @@ describe('<Services /> — Edit-card mode', () => {
     render(<MemoryRouter><Services /></MemoryRouter>);
     await waitFor(() => expect(screen.getByText('GFC Hair')).toBeInTheDocument());
 
-    await user.click(screen.getAllByTitle(/^Edit$/i)[0]);
+    await user.click(screen.getByLabelText('Edit service GFC Hair'));
     expect(screen.getByDisplayValue('GFC Hair')).toBeInTheDocument();
 
     // The × button inside the edit card — find by lucide X icon's parent
@@ -380,7 +410,7 @@ describe('<Services /> — Edit-card mode', () => {
     render(<MemoryRouter><Services /></MemoryRouter>);
     await waitFor(() => expect(screen.getByText('GFC Hair')).toBeInTheDocument());
 
-    await user.click(screen.getAllByTitle(/^Edit$/i)[0]);
+    await user.click(screen.getByLabelText('Edit service GFC Hair'));
     await user.click(screen.getByRole('button', { name: /^Save$/i }));
 
     await waitFor(() => {
@@ -417,7 +447,7 @@ describe('<Services /> — Deactivate (soft delete)', () => {
     await waitFor(() => expect(screen.getByText('GFC Hair')).toBeInTheDocument());
 
     const before = fetchApi.mock.calls.length;
-    await user.click(screen.getAllByTitle(/Deactivate/i)[0]);
+    await user.click(screen.getByLabelText('Deactivate service GFC Hair'));
     // Confirm fired but no PUT followed
     expect(confirmSpy).toHaveBeenCalled();
     // Allow microtasks to flush
@@ -434,7 +464,7 @@ describe('<Services /> — Deactivate (soft delete)', () => {
     render(<MemoryRouter><Services /></MemoryRouter>);
     await waitFor(() => expect(screen.getByText('GFC Hair')).toBeInTheDocument());
 
-    await user.click(screen.getAllByTitle(/Deactivate/i)[0]);
+    await user.click(screen.getByLabelText('Deactivate service GFC Hair'));
 
     await waitFor(() => {
       const putCall = fetchApi.mock.calls.find(
@@ -502,6 +532,16 @@ describe('<Services /> — Package builder tab', () => {
       writable: true,
       value: { writeText },
     });
+    // PackageBuilder now copies via utils/clipboard.copyToClipboard, which only
+    // uses navigator.clipboard.writeText when window.isSecureContext is true
+    // (otherwise it falls back to the execCommand textarea trick). jsdom leaves
+    // isSecureContext undefined, so force it on to exercise the modern path the
+    // stub above is asserting against.
+    Object.defineProperty(window, 'isSecureContext', {
+      configurable: true,
+      writable: true,
+      value: true,
+    });
 
     render(<MemoryRouter><Services /></MemoryRouter>);
     await waitFor(() => expect(screen.getByText('GFC Hair')).toBeInTheDocument());
@@ -525,47 +565,35 @@ describe('<Services /> — Package builder tab', () => {
   });
 });
 
-describe('<Services /> — CSV export button state', () => {
+describe('<Services /> — CSV toolbar surface', () => {
   beforeEach(() => {
     fetchApi.mockReset();
   });
 
-  it('Export CSV button is disabled when the catalog is empty', async () => {
-    // Empty services list → button should be disabled.
-    fetchApi.mockImplementation((url) => {
-      if (url === '/api/wellness/services') return Promise.resolve([]);
-      if (url === '/api/wellness/activetreatment') return Promise.resolve({ data: [] });
-      return Promise.resolve({});
-    });
-
-    render(<MemoryRouter><Services /></MemoryRouter>);
-    // Wait for the initial load() to settle (the "Loading…" placeholder is gone)
-    await waitFor(() => expect(screen.queryByText(/^Loading…$/)).not.toBeInTheDocument());
-
-    const exportBtn = screen.getByRole('button', { name: /Export CSV/i });
-    expect(exportBtn).toBeDisabled();
-  });
-
-  it('Export CSV button is enabled when services are loaded', async () => {
+  it('Export CSV button is rendered and not in an exporting state on mount', async () => {
     fetchApi.mockImplementation(defaultFetchRouter);
     render(<MemoryRouter><Services /></MemoryRouter>);
     await waitFor(() => expect(screen.getByText('GFC Hair')).toBeInTheDocument());
 
-    const exportBtn = screen.getByRole('button', { name: /Export CSV/i });
+    // The toolbar button reads "Export CSV" idle / "Exporting…" busy. The
+    // SUT only disables it while an export is in flight (not on empty
+    // catalog), so we pin presence + idle label only.
+    // CsvImportExportToolbar with formats=['csv','xlsx'] renders a dropdown
+    // button: aria-label="Export Services", visible text "Export".
+    const exportBtn = screen.getByRole('button', { name: /^Export Services$/i });
     expect(exportBtn).not.toBeDisabled();
   });
 
-  it('Import CSV control is rendered as a file input wrapped in a label', async () => {
+  it('Import CSV control is rendered as a button (file input lives in the modal)', async () => {
     fetchApi.mockImplementation(defaultFetchRouter);
     render(<MemoryRouter><Services /></MemoryRouter>);
     await waitFor(() => expect(screen.getByText('GFC Hair')).toBeInTheDocument());
 
-    // Import CSV label
-    expect(screen.getByText(/Import CSV/i)).toBeInTheDocument();
-    // Hidden file input is the only <input type="file"> on the page
-    const fileInputs = document.querySelectorAll('input[type="file"]');
-    expect(fileInputs.length).toBe(1);
-    expect(fileInputs[0].accept).toMatch(/csv/);
+    // Import CSV button visible on the toolbar — SUT moved the file picker
+    // into a modal that opens on click, so no <input type="file"> exists
+    // on initial render.
+    expect(screen.getByRole('button', { name: /^Import Services$/i })).toBeInTheDocument();
+    expect(document.querySelectorAll('input[type="file"]').length).toBe(0);
   });
 });
 
@@ -622,7 +650,7 @@ describe('<Services /> — ServiceCard inline-edit validation', () => {
     render(<MemoryRouter><Services /></MemoryRouter>);
     await waitFor(() => expect(screen.getByText('GFC Hair')).toBeInTheDocument());
 
-    await user.click(screen.getAllByTitle(/^Edit$/i)[0]);
+    await user.click(screen.getByLabelText('Edit service GFC Hair'));
     // Clear price + set to 0
     const priceInput = screen.getByDisplayValue('8500');
     await user.clear(priceInput);
@@ -645,7 +673,7 @@ describe('<Services /> — ServiceCard inline-edit validation', () => {
     render(<MemoryRouter><Services /></MemoryRouter>);
     await waitFor(() => expect(screen.getByText('GFC Hair')).toBeInTheDocument());
 
-    await user.click(screen.getAllByTitle(/^Edit$/i)[0]);
+    await user.click(screen.getByLabelText('Edit service GFC Hair'));
     const durationInput = screen.getByDisplayValue('90');
     await user.clear(durationInput);
     await user.type(durationInput, '0');
@@ -666,7 +694,7 @@ describe('<Services /> — ServiceCard inline-edit validation', () => {
     render(<MemoryRouter><Services /></MemoryRouter>);
     await waitFor(() => expect(screen.getByText('GFC Hair')).toBeInTheDocument());
 
-    await user.click(screen.getAllByTitle(/^Edit$/i)[0]);
+    await user.click(screen.getByLabelText('Edit service GFC Hair'));
     const radiusInput = screen.getByDisplayValue('25');
     await user.clear(radiusInput);
     await user.type(radiusInput, '-5');
@@ -687,7 +715,7 @@ describe('<Services /> — ServiceCard inline-edit validation', () => {
     render(<MemoryRouter><Services /></MemoryRouter>);
     await waitFor(() => expect(screen.getByText('GFC Hair')).toBeInTheDocument());
 
-    await user.click(screen.getAllByTitle(/^Edit$/i)[0]);
+    await user.click(screen.getByLabelText('Edit service GFC Hair'));
     // Description textarea is the only textarea inside the edit form.
     const textarea = document.querySelector('textarea');
     expect(textarea).toBeTruthy();
@@ -821,40 +849,29 @@ describe('<Services /> — Active Treatments populated state', () => {
   });
 });
 
-describe('<Services /> — CSV import handler', () => {
+describe('<Services /> — CSV import modal flow', () => {
   beforeEach(() => {
     fetchApi.mockReset();
     fetchApi.mockImplementation(defaultFetchRouter);
   });
 
-  it('selecting a file on the hidden input triggers a multipart fetch to /api/csv/services/import.csv', async () => {
-    // The import path uses native fetch (not fetchApi) for multipart upload.
-    // Stub it on globalThis so we can capture the call.
-    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
-      ok: true,
-      json: async () => ({ imported: 2, skipped: 0, errors: [] }),
-    });
-
+  it('clicking Import CSV opens a dialog containing the file input', async () => {
     const user = userEvent.setup();
     render(<MemoryRouter><Services /></MemoryRouter>);
     await waitFor(() => expect(screen.getByText('GFC Hair')).toBeInTheDocument());
 
-    // Locate the file input + upload a fake CSV
-    const fileInput = document.querySelector('input[type="file"]');
-    expect(fileInput).toBeTruthy();
-    const csvFile = new File(['name,basePrice\nTestSvc,1000\n'], 'svc.csv', { type: 'text/csv' });
-    await user.upload(fileInput, csvFile);
+    // No file input until the modal opens.
+    expect(document.querySelectorAll('input[type="file"]').length).toBe(0);
 
+    await user.click(screen.getByRole('button', { name: /Import Services|^Import CSV$/i }));
+
+    // Dialog now mounted with a file input inside it.
     await waitFor(() => {
-      const importCall = fetchSpy.mock.calls.find(
-        ([url, opts]) => url === '/api/csv/services/import.csv' && opts?.method === 'POST'
-      );
-      expect(importCall).toBeTruthy();
-      // Body is a FormData instance carrying the file as "file"
-      expect(importCall[1].body).toBeInstanceOf(FormData);
+      expect(screen.getByRole('dialog')).toBeInTheDocument();
     });
-
-    fetchSpy.mockRestore();
+    const fileInputs = document.querySelectorAll('input[type="file"]');
+    expect(fileInputs.length).toBeGreaterThanOrEqual(1);
+    expect(fileInputs[0].accept).toMatch(/csv/);
   });
 });
 
@@ -864,24 +881,10 @@ describe('<Services /> — Packages CTA scroll anchor', () => {
     fetchApi.mockImplementation(defaultFetchRouter);
   });
 
-  it('"Create Package" button invokes scrollIntoView on the builder anchor', async () => {
-    const user = userEvent.setup();
-    render(<MemoryRouter><Services /></MemoryRouter>);
-    await waitFor(() => expect(screen.getByText('GFC Hair')).toBeInTheDocument());
-
-    await user.click(screen.getByRole('button', { name: /^Packages$/i }));
-    await waitFor(() => expect(screen.getByText(/Build a package/i)).toBeInTheDocument());
-
-    // Patch scrollIntoView on the anchor element. jsdom does not implement
-    // it natively — patching avoids the "not a function" error and lets us
-    // assert the call shape.
-    const anchor = document.getElementById('package-builder-anchor');
-    expect(anchor).toBeTruthy();
-    const scrollSpy = vi.fn();
-    anchor.scrollIntoView = scrollSpy;
-
-    await user.click(screen.getByRole('button', { name: /Create Package/i }));
-    expect(scrollSpy).toHaveBeenCalledTimes(1);
-    expect(scrollSpy.mock.calls[0][0]).toMatchObject({ behavior: 'smooth', block: 'start' });
-  });
+  // DRIFT: the "Create Package" CTA + its scroll-to-anchor handler were
+  // removed when packages moved to compute-on-the-fly (no DB record per
+  // Services.jsx:1097 comment). The builder is now rendered inline at
+  // the top of the Packages tab so scroll-down-to-builder UX is moot.
+  // Re-enable / rewrite this case if the CTA returns in a future redesign.
+  it.skip('"Create Package" button invokes scrollIntoView on the builder anchor (SUT no longer renders the CTA)', () => {});
 });

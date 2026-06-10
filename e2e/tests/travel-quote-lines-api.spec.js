@@ -424,3 +424,56 @@ test.describe("Travel quote-lines API — duplicate clones lines", () => {
     }
   });
 });
+
+// ─── Quote-list slim-shape opt-in (#920 slice S3 — FR-3.5) ────────────
+//
+// Scope addition: backend/routes/travel_quotes.js's `GET /quotes` list
+// endpoint gained a `?fields=summary` opt-in. Pinned here alongside the
+// existing quote-lines coverage because they share the same parent
+// route file + the beforeAll/afterAll quote seed. Default shape
+// unchanged — the slim path drops nothing of consequence on TravelQuote
+// (no @db.Text columns on the base model), but the contract pin
+// guarantees the projection set + asserts the round-trip works on the
+// live stack.
+
+test.describe("Travel quotes list — slim-shape opt-in (#920 S3)", () => {
+  test("GET /quotes?fields=summary returns slim projection", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || !parentQuoteId) test.skip(true, "no parent quote seeded");
+    const res = await get(request, token, "/api/travel/quotes?fields=summary&subBrand=tmc");
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(Array.isArray(body.quotes)).toBe(true);
+    if (body.quotes.length === 0) test.skip(true, "no quotes for this sub-brand");
+    for (const q of body.quotes) {
+      // Slim keys present.
+      expect(q).toHaveProperty("id");
+      expect(q).toHaveProperty("subBrand");
+      expect(q).toHaveProperty("contactId");
+      expect(q).toHaveProperty("status");
+      // Body still bounded — pin via positive-shape (the projection registry
+      // determines the shape; the assertion forbids drift via unexpected keys).
+      const allowed = new Set([
+        "id", "subBrand", "contactId", "status",
+        "totalAmount", "currency", "validUntil", "createdAt",
+      ]);
+      for (const k of Object.keys(q)) {
+        expect(allowed.has(k), `unexpected key "${k}" on slim TravelQuote shape`).toBe(true);
+      }
+    }
+  });
+
+  test("GET /quotes (default shape) ships full TravelQuote row", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || !parentQuoteId) test.skip(true, "no parent quote seeded");
+    const res = await get(request, token, "/api/travel/quotes?subBrand=tmc");
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    if (body.quotes.length === 0) test.skip(true, "no quotes");
+    const q = body.quotes[0];
+    // Default-shape keys include updatedAt + tenantId that the slim
+    // projection drops.
+    expect(q).toHaveProperty("updatedAt");
+    expect(q).toHaveProperty("tenantId");
+  });
+});

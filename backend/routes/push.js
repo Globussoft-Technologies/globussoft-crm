@@ -179,7 +179,8 @@ router.put("/templates/:id", verifyToken, async (req, res) => {
   try {
     const existing = await prisma.pushTemplate.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
     if (!existing) return res.status(404).json({ error: "Template not found" });
-    res.json(await prisma.pushTemplate.update({ where: { id: existing.id }, data: req.body }));
+    const { name, title, body, icon, url, category } = req.body;
+    res.json(await prisma.pushTemplate.update({ where: { id: existing.id }, data: { name, title, body, icon, url, category } }));
   } catch (_err) { res.status(500).json({ error: "Failed to update template" }); }
 });
 

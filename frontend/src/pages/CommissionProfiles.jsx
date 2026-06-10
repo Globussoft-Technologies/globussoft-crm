@@ -33,6 +33,7 @@ function emptyForm() {
     flatAmount: '',
     basis: 'REVENUE_PERCENT',
     appliesToCategory: '',
+    appliesToProduct: '',
     isActive: true,
   };
 }
@@ -40,17 +41,29 @@ function emptyForm() {
 export default function CommissionProfiles() {
   const notify = useNotify();
   const [rows, setRows] = useState([]);
+  const [commissionData, setCommissionData] = useState([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(null); // null | { id?, ...form }
   const [saving, setSaving] = useState(false);
+  const [activeTab, setActiveTab] = useState('rules'); // 'rules' or 'data'
+  const [services, setServices] = useState([]); // services/categories list
+  const [products, setProducts] = useState([]); // products list
 
   const load = async () => {
     setLoading(true);
     try {
-      const data = await fetchApi('/api/staff/commission-profiles');
-      setRows(Array.isArray(data) ? data : []);
+      const [profilesData, dataRecords, servicesData, productsData] = await Promise.all([
+        fetchApi('/api/staff/commission-profiles'),
+        fetchApi('/api/staff/commission-data'),
+        fetchApi('/api/wellness/services'), // fetch available services
+        fetchApi('/api/wellness/products') // fetch available products
+      ]);
+      setRows(Array.isArray(profilesData) ? profilesData : []);
+      setCommissionData(Array.isArray(dataRecords) ? dataRecords : []);
+      setServices(Array.isArray(servicesData) ? servicesData : []);
+      setProducts(Array.isArray(productsData) ? productsData : []);
     } catch (err) {
-      notify.error(err.message || 'Failed to load commission profiles.');
+      notify.error(err.message || 'Failed to load commission data.');
     } finally {
       setLoading(false);
     }
@@ -66,6 +79,7 @@ export default function CommissionProfiles() {
     flatAmount: row.flatAmount == null ? '' : String(row.flatAmount),
     basis: row.basis || 'REVENUE_PERCENT',
     appliesToCategory: row.appliesToCategory || '',
+    appliesToProduct: row.appliesToProduct || '',
     isActive: row.isActive !== false,
   });
 
@@ -87,6 +101,7 @@ export default function CommissionProfiles() {
         flatAmount: editing.flatAmount === '' ? null : Number(editing.flatAmount),
         basis: editing.basis,
         appliesToCategory: editing.appliesToCategory || null,
+        appliesToProduct: editing.appliesToProduct || null,
         isActive: editing.isActive,
       };
       if (editing.id) {
@@ -147,55 +162,132 @@ export default function CommissionProfiles() {
         </button>
       </header>
 
-      <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem' }}>
-          <thead>
-            <tr style={{ background: 'rgba(255,255,255,0.04)' }}>
-              <th style={th}>Name</th>
-              <th style={th}>Basis</th>
-              <th style={th}>Percent</th>
-              <th style={th}>Flat</th>
-              <th style={th}>Category filter</th>
-              <th style={th}>Active</th>
-              <th style={th}>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {loading ? (
-              <tr><td colSpan={7} style={{ ...td, textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)' }}>Loading…</td></tr>
-            ) : rows.length === 0 ? (
-              <tr><td colSpan={7} style={{ ...td, textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)' }}>
-                No commission profiles yet. Click &quot;New profile&quot; to add one.
-              </td></tr>
-            ) : rows.map((row) => (
-              <tr key={row.id} style={{ borderTop: '1px solid var(--border-color)' }} data-testid={`profile-row-${row.id}`}>
-                <td style={{ ...td, fontWeight: 600 }}>{row.name}</td>
-                <td style={td}>{BASIS_OPTIONS.find((b) => b.value === row.basis)?.label || row.basis}</td>
-                <td style={td}>{row.percentage == null ? '—' : `${row.percentage}%`}</td>
-                <td style={td}>{row.flatAmount == null ? '—' : Number(row.flatAmount).toLocaleString()}</td>
-                <td style={td}>{row.appliesToCategory || '—'}</td>
-                <td style={td}>
-                  {row.isActive ? (
-                    <span style={{ color: '#22c55e', fontWeight: 600 }}>Active</span>
-                  ) : (
-                    <span style={{ color: 'var(--text-secondary)' }}>Disabled</span>
-                  )}
-                </td>
-                <td style={td}>
-                  <div style={{ display: 'flex', gap: '0.4rem' }}>
-                    <button onClick={() => openEdit(row)} title="Edit" data-testid={`profile-edit-${row.id}`} style={iconBtn('var(--text-primary)')}>
-                      <Pencil size={14} />
-                    </button>
-                    <button onClick={() => remove(row)} title="Delete" data-testid={`profile-delete-${row.id}`} style={iconBtn('#ef4444')}>
-                      <Trash2 size={14} />
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      {/* Tabs */}
+      <div style={{ display: 'flex', gap: '1rem', marginBottom: '1.5rem', borderBottom: '1px solid var(--border-color)', paddingBottom: '0' }}>
+        <button
+          onClick={() => setActiveTab('rules')}
+          style={{
+            padding: '0.75rem 1rem',
+            background: 'transparent',
+            border: 'none',
+            color: activeTab === 'rules' ? 'var(--primary-color, var(--accent-color))' : 'var(--text-secondary)',
+            borderBottom: activeTab === 'rules' ? '2px solid var(--primary-color, var(--accent-color))' : 'none',
+            cursor: 'pointer',
+            fontWeight: activeTab === 'rules' ? 600 : 400,
+            fontSize: '0.95rem',
+          }}
+        >
+          Commission Rules ({rows.length})
+        </button>
+        <button
+          onClick={() => setActiveTab('data')}
+          style={{
+            padding: '0.75rem 1rem',
+            background: 'transparent',
+            border: 'none',
+            color: activeTab === 'data' ? 'var(--primary-color, var(--accent-color))' : 'var(--text-secondary)',
+            borderBottom: activeTab === 'data' ? '2px solid var(--primary-color, var(--accent-color))' : 'none',
+            cursor: 'pointer',
+            fontWeight: activeTab === 'data' ? 600 : 400,
+            fontSize: '0.95rem',
+          }}
+        >
+          Historical Data ({commissionData.length})
+        </button>
       </div>
+
+      {/* Rules Tab */}
+      {activeTab === 'rules' && (
+        <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem' }}>
+            <thead>
+              <tr style={{ background: 'rgba(255,255,255,0.04)' }}>
+                <th style={th}>Name</th>
+                <th style={th}>Basis</th>
+                <th style={th}>Percent</th>
+                <th style={th}>Flat</th>
+                <th style={th}>Category filter</th>
+                <th style={th}>Active</th>
+                <th style={th}>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loading ? (
+                <tr><td colSpan={7} style={{ ...td, textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)' }}>Loading…</td></tr>
+              ) : rows.length === 0 ? (
+                <tr><td colSpan={7} style={{ ...td, textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)' }}>
+                  No commission profiles yet. Click &quot;New profile&quot; to add one.
+                </td></tr>
+              ) : rows.map((row) => (
+                <tr key={row.id} style={{ borderTop: '1px solid var(--border-color)' }} data-testid={`profile-row-${row.id}`}>
+                  <td style={{ ...td, fontWeight: 600 }}>{row.name}</td>
+                  <td style={td}>{BASIS_OPTIONS.find((b) => b.value === row.basis)?.label || row.basis}</td>
+                  <td style={td}>{row.percentage == null ? '—' : `${row.percentage}%`}</td>
+                  <td style={td}>{row.flatAmount == null ? '—' : Number(row.flatAmount).toLocaleString()}</td>
+                  <td style={td}>{row.appliesToCategory || '—'}</td>
+                  <td style={td}>
+                    {row.isActive ? (
+                      <span style={{ color: '#22c55e', fontWeight: 600 }}>Active</span>
+                    ) : (
+                      <span style={{ color: 'var(--text-secondary)' }}>Disabled</span>
+                    )}
+                  </td>
+                  <td style={td}>
+                    <div style={{ display: 'flex', gap: '0.4rem' }}>
+                      <button onClick={() => openEdit(row)} title="Edit" data-testid={`profile-edit-${row.id}`} style={iconBtn('var(--text-primary)')}>
+                        <Pencil size={14} />
+                      </button>
+                      <button onClick={() => remove(row)} title="Delete" data-testid={`profile-delete-${row.id}`} style={iconBtn('#ef4444')}>
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Data Tab */}
+      {activeTab === 'data' && (
+        <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.875rem' }}>
+            <thead>
+              <tr style={{ background: 'rgba(255,255,255,0.04)' }}>
+                <th style={th}>Period</th>
+                <th style={th}>Employee</th>
+                <th style={th}>Service Revenue</th>
+                <th style={th}>Product Revenue</th>
+                <th style={th}>Total Sales</th>
+                <th style={th}>Discount</th>
+                <th style={th}>Net Sales</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loading ? (
+                <tr><td colSpan={7} style={{ ...td, textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)' }}>Loading…</td></tr>
+              ) : commissionData.length === 0 ? (
+                <tr><td colSpan={7} style={{ ...td, textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)' }}>
+                  No commission data available.
+                </td></tr>
+              ) : commissionData.map((record) => (
+                <tr key={record.id} style={{ borderTop: '1px solid var(--border-color)' }}>
+                  <td style={{ ...td, fontSize: '0.85rem' }}>
+                    {new Date(record.periodStart).toLocaleDateString()} - {new Date(record.periodEnd).toLocaleDateString()}
+                  </td>
+                  <td style={{ ...td, fontWeight: 500 }}>{record.employeeName}</td>
+                  <td style={{ ...td, textAlign: 'right' }}>₹{parseFloat(record.serviceRevenue || 0).toFixed(2)}</td>
+                  <td style={{ ...td, textAlign: 'right' }}>₹{parseFloat(record.productRevenue || 0).toFixed(2)}</td>
+                  <td style={{ ...td, textAlign: 'right', fontWeight: 600, color: '#fbbf24' }}>₹{parseFloat(record.totalSales || 0).toFixed(2)}</td>
+                  <td style={{ ...td, textAlign: 'right', color: '#ef4444' }}>-₹{parseFloat(record.discount || 0).toFixed(2)}</td>
+                  <td style={{ ...td, textAlign: 'right', color: '#22c55e' }}>₹{parseFloat(record.netSales || 0).toFixed(2)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       {editing && (
         <div
@@ -263,16 +355,40 @@ export default function CommissionProfiles() {
                   />
                 </Field>
               </div>
-              <Field label="Service category filter (optional)">
-                <input
-                  type="text"
-                  className="input-field"
-                  placeholder="e.g. Aesthetics"
-                  value={editing.appliesToCategory}
-                  onChange={(e) => setEditing({ ...editing, appliesToCategory: e.target.value })}
-                  style={{ width: '100%', marginTop: '0.25rem' }}
-                />
-              </Field>
+              {(editing.basis === 'PER_SERVICE' || editing.basis === 'REVENUE_PERCENT') && (
+                <Field label="Service filter (optional)">
+                  <select
+                    className="input-field"
+                    value={editing.appliesToCategory}
+                    onChange={(e) => setEditing({ ...editing, appliesToCategory: e.target.value })}
+                    style={{ width: '100%', marginTop: '0.25rem' }}
+                  >
+                    <option value="">All services</option>
+                    {services.map((service) => (
+                      <option key={service.id} value={service.name}>
+                        {service.name}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+              )}
+              {(editing.basis === 'PER_PRODUCT' || editing.basis === 'REVENUE_PERCENT') && (
+                <Field label="Product filter (optional)">
+                  <select
+                    className="input-field"
+                    value={editing.appliesToProduct}
+                    onChange={(e) => setEditing({ ...editing, appliesToProduct: e.target.value })}
+                    style={{ width: '100%', marginTop: '0.25rem' }}
+                  >
+                    <option value="">All products</option>
+                    {products.map((product) => (
+                      <option key={product.id} value={product.name}>
+                        {product.name}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+              )}
               <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85rem' }}>
                 <input
                   type="checkbox"

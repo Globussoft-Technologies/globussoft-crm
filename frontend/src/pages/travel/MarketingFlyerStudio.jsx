@@ -1,90 +1,32 @@
 /**
- * MarketingFlyerStudio.jsx — Phase 2 composer surface for the Travel
- * vertical Marketing Flyer Studio (GH #908). Slice 5 wires the SHELL
- * page to the /api/travel/flyer-templates CRUD endpoints shipped by
- * slice 3 (commit 5c2dd474):
+ * MarketingFlyerStudio.jsx — dedicated Marketing Flyer editor (GH #908;
+ * PRD docs/PRD_TRAVEL_MARKETING_FLYER.md). Client decision: build an in-house
+ * dedicated editor (not the landing-page-builder reuse, not Polotno).
  *
- *   - On mount: parse ?template=<id> from the URL. If present, GET
- *     /api/travel/flyer-templates/:id and seed the composer's local
- *     palette/layout/assets state from the parsed JSON columns.
- *   - "Save as Template" button → modal with name + sub-brand → POSTs
- *     to /api/travel/flyer-templates with palette/layout/assets
- *     serialized as JSON-string @db.Text payloads (matching the
- *     route's parseJsonColumn shape).
+ * Slice 1 (this file): a canvas editor that mutates the `layout` array —
+ *   - Add Text / Add Image blocks (absolute x/y/width/height in CANVAS space).
+ *   - Click to select; drag to move; numeric X/Y/W/H inputs for precision.
+ *   - Edit text content / colour / font-size; edit image URL; delete block.
+ *   - Edit the 5 palette colours via toolbar swatches (canvas bg = bgHex).
+ * The editor mutates the SAME palette/layout/assets state the existing
+ * load + Save-as-Template lifecycle serialises (slice 5, /api/travel/
+ * flyer-templates), so that flow is unchanged.
  *
- * The four sub-brand placeholder cards from the prior SHELL are kept
- * (Phase 2 follow-up ticks layer the canvas editor / asset library /
- * AI copy / PDF export onto this same page). The slice-5 surface is
- * additive: load + save template lifecycle without disturbing the
- * existing SHELL affordances.
+ * Follow-up slices: image upload (Multer), resize handles + more block types,
+ * PNG/PDF export, brand-lock to the sub-brand kit, WhatsApp/email share.
  *
- * PRD reference: docs/PRD_TRAVEL_MARKETING_FLYER.md §3.1 (template
- * editor) + §3.7 (templates marketplace). Companion: FlyerTemplates
- * .jsx (commit a64c1058) is the saved-templates LIST page; the
- * composer here is the load + save surface.
- *
- * Mount: /travel/marketing/flyer-studio — wrapped in <TravelOnly> +
- * <RoleGuard allow={['ADMIN','MANAGER']}/> per the PRD's NFR-4.8 RBAC
- * surface.
- *
- * Sub-brand pre-highlight: consumes useActiveSubBrand() so the
- * operator's session-scoped "I'm working on TMC today" preference
- * pre-highlights the matching sub-brand card AND pre-fills the "Save
- * as Template" modal's sub-brand dropdown.
- *
- * Save-template URL-update decision: on successful POST, the URL is
- * updated to ?template=<newId> via setSearchParams({ template: id })
- * so a subsequent page refresh re-loads the just-saved template
- * (otherwise the operator loses their work on refresh). This is
- * non-blocking — if setSearchParams isn't available (e.g. tests
- * without Router mounted), the save still succeeds; the URL just
- * stays as-is.
- *
- * Path: frontend/src/pages/travel/MarketingFlyerStudio.jsx — sibling
- * to FlyerTemplates.jsx (the list page) + the Phase 2 Travel scaffold
- * cohort.
+ * Mount: /travel/marketing/flyer-studio — <TravelOnly> + <RoleGuard
+ * allow={['ADMIN','MANAGER']}/> per the PRD NFR-4.8 RBAC surface.
  */
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Sparkles, FileImage, Lock, Save, Loader } from 'lucide-react';
+import { FileImage, Save, Loader } from 'lucide-react';
 import { useActiveSubBrand } from '../../utils/subBrand';
 import { useNotify } from '../../utils/notify';
-import { fetchApi } from '../../utils/api';
+import { fetchApi, getAuthToken } from '../../utils/api';
 
-// Canonical 4-sub-brand catalogue. Kept inline (rather than imported
-// from utils/travelSubBrand.js) so the SHELL is self-contained for
-// reviewers + grep — the canonical id set is asserted by
-// subBrand.test.jsx's cross-file invariant, so drift here would
-// surface upstream.
-const SUB_BRAND_CARDS = [
-  {
-    id: 'tmc',
-    label: 'TMC',
-    tagline: 'School trips — Bronze / Silver / Gold tiered packages',
-    sample: 'Summer Europe — Class IX-X — 12 nights',
-  },
-  {
-    id: 'rfu',
-    label: 'RFU',
-    tagline: 'Umrah & religious-tourism packages',
-    sample: 'Ramadan Umrah — Departures Mar / Apr / May',
-  },
-  {
-    id: 'travelstall',
-    label: 'Travel Stall',
-    tagline: 'Family weekend offers + seasonal getaways',
-    sample: 'Goa weekend — ₹14,999/pax — limited time',
-  },
-  {
-    id: 'visasure',
-    label: 'Visa Sure',
-    tagline: 'Visa-service flyers — KPI tiles + testimonials',
-    sample: 'UK Visa in 5 days — 97% approval rate',
-  },
-];
-
-// Sub-brand options for the "Save as Template" modal — the canonical
-// 4 ids plus "no sub-brand" (tenant-wide template).
+// Sub-brand options for the "Save as Template" modal — the canonical 4 ids
+// plus "no sub-brand" (tenant-wide template).
 const SAVE_SUB_BRAND_OPTIONS = [
   { value: '', label: 'Tenant-wide (no sub-brand)' },
   { value: 'tmc', label: 'TMC (schools)' },
@@ -93,11 +35,7 @@ const SAVE_SUB_BRAND_OPTIONS = [
   { value: 'visasure', label: 'Visa Sure' },
 ];
 
-// Default composer state. Matches the slice-1 validator's minimum-
-// valid shape: 4 required hex colors + 1 placeholder text block. The
-// renderer requires at least one block, so the default is a single
-// "Tap to edit" text block; operators replace it via the (future)
-// canvas editor.
+// Default composer state — minimum-valid shape: 4+ hex colours + 1 text block.
 const DEFAULT_PALETTE = {
   primaryHex: '#122647',
   secondaryHex: '#265855',
@@ -105,34 +43,28 @@ const DEFAULT_PALETTE = {
   textHex: '#222222',
   bgHex: '#FFFDF7',
 };
-
 const DEFAULT_LAYOUT = [
-  {
-    type: 'text',
-    x: 24,
-    y: 24,
-    width: 480,
-    height: 80,
-    content: 'Tap to edit headline',
-  },
+  { type: 'text', x: 24, y: 24, width: 480, height: 80, content: 'Tap to edit headline' },
 ];
-
 const DEFAULT_ASSETS = {};
+
+// Slice-1 editor: the 5 palette colours editable via the toolbar swatches.
+const PALETTE_KEYS = ['primaryHex', 'secondaryHex', 'accentHex', 'textHex', 'bgHex'];
+// Editor canvas dimensions (portrait flyer). Blocks are positioned in this
+// coordinate space; export-to-PNG/PDF lands in a later slice.
+const CANVAS_W = 540;
+const CANVAS_H = 720;
 
 export default function MarketingFlyerStudio() {
   const { activeSubBrand } = useActiveSubBrand() || { activeSubBrand: null };
   const notify = useNotify();
   const [searchParams, setSearchParams] = useSearchParams();
 
-  // Composer state — palette / layout / assets. Seeded from the
-  // template-load GET when ?template=<id> is present; otherwise
-  // initialised to the placeholder defaults above.
+  // Composer state — palette / layout / assets.
   const [palette, setPalette] = useState(DEFAULT_PALETTE);
   const [layout, setLayout] = useState(DEFAULT_LAYOUT);
   const [assets, setAssets] = useState(DEFAULT_ASSETS);
 
-  // Loaded-template metadata (display only — the canvas editor reads
-  // palette/layout/assets directly).
   const [loadedTemplate, setLoadedTemplate] = useState(null);
   const [loading, setLoading] = useState(false);
 
@@ -142,10 +74,76 @@ export default function MarketingFlyerStudio() {
   const [saveSubBrand, setSaveSubBrand] = useState(activeSubBrand || '');
   const [saving, setSaving] = useState(false);
 
-  // Parse @db.Text JSON columns from the load-template response.
-  // Each column may arrive as either a JSON string (the canonical
-  // storage shape) or — defensively — an already-parsed object if
-  // the backend ever changes its mind. Helper handles both.
+  // ── Slice-1 editor state + handlers ─────────────────────────────────
+  const [selectedIdx, setSelectedIdx] = useState(null);
+  const dragRef = useRef(null);
+  const fileInputRef = useRef(null);
+  const [uploading, setUploading] = useState(false);
+
+  const addBlock = useCallback((type) => {
+    setLayout((prev) => {
+      const offset = prev.length * 12;
+      const block = type === 'image'
+        ? { type: 'image', x: 24, y: 24 + offset, width: 180, height: 120, src: '' }
+        : { type: 'text', x: 24, y: 24 + offset, width: 240, height: 48, content: 'New text', color: palette.textHex || '#222222', fontSize: 18 };
+      return [...prev, block];
+    });
+  }, [palette]);
+
+  const updateBlock = useCallback((idx, patch) => {
+    setLayout((prev) => prev.map((b, i) => (i === idx ? { ...b, ...patch } : b)));
+  }, []);
+
+  const removeBlock = useCallback((idx) => {
+    setLayout((prev) => prev.filter((_, i) => i !== idx));
+    setSelectedIdx(null);
+  }, []);
+
+  // Pointer-drag to reposition a block; numeric X/Y inputs are the precise fallback.
+  const onBlockMouseDown = useCallback((e, idx) => {
+    e.preventDefault();
+    setSelectedIdx(idx);
+    const b = layout[idx] || {};
+    dragRef.current = { idx, startX: e.clientX, startY: e.clientY, origX: b.x || 0, origY: b.y || 0 };
+  }, [layout]);
+  const onCanvasMouseMove = useCallback((e) => {
+    const d = dragRef.current;
+    if (!d) return;
+    const nx = Math.max(0, Math.round(d.origX + (e.clientX - d.startX)));
+    const ny = Math.max(0, Math.round(d.origY + (e.clientY - d.startY)));
+    setLayout((prev) => prev.map((b, i) => (i === d.idx ? { ...b, x: nx, y: ny } : b)));
+  }, []);
+  const onCanvasMouseUp = useCallback(() => { dragRef.current = null; }, []);
+
+  // FR-3.2.2 — upload an image for the selected image block. Raw fetch + FormData
+  // (fetchApi forces JSON content-type, so we bypass it — same as the landing-page
+  // image upload). Server returns { url } (S3 when configured, else local).
+  const handleUploadImage = useCallback(async (file, idx) => {
+    if (!file) return;
+    setUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append('image', file);
+      const token = getAuthToken();
+      const res = await fetch('/api/travel/flyer-templates/upload', {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: fd,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        notify?.error?.(data?.error || 'Image upload failed');
+        return;
+      }
+      updateBlock(idx, { src: data.url });
+    } catch (e) {
+      notify?.error?.(e?.message || 'Image upload failed');
+    } finally {
+      setUploading(false);
+    }
+  }, [notify, updateBlock]);
+
+  // Parse @db.Text JSON columns — tolerates JSON string OR already-parsed object.
   const parseJsonField = useCallback((field, fallback) => {
     if (field == null) return fallback;
     if (typeof field === 'object') return field;
@@ -170,25 +168,18 @@ export default function MarketingFlyerStudio() {
         setPalette(parsedPalette || DEFAULT_PALETTE);
         setLayout(Array.isArray(parsedLayout) ? parsedLayout : DEFAULT_LAYOUT);
         setAssets(parsedAssets && typeof parsedAssets === 'object' ? parsedAssets : DEFAULT_ASSETS);
+        setSelectedIdx(null);
         setLoadedTemplate({
           id: data?.id ?? templateId,
           name: data?.name || `Template #${templateId}`,
           subBrand: data?.subBrand || null,
         });
-        // Pre-fill the save modal with the loaded template's metadata
-        // so "Save as Template" without rename overwrites cleanly
-        // (well — POST creates a new row; this is the suggested name).
         setSaveName(data?.name ? `${data.name} (copy)` : '');
         setSaveSubBrand(data?.subBrand || activeSubBrand || '');
         notify?.info?.(`Loaded template: ${data?.name || `#${templateId}`}`);
       } catch (err) {
-        // fetchApi already toasted via global notify on the 4xx/5xx
-        // path; the route-level handler here only needs to clear the
-        // loaded-template indicator and reset to defaults so the
-        // composer stays usable.
         setLoadedTemplate(null);
         if (!err?.status) {
-          // Non-HTTP error (parse / network race not handled by fetchApi).
           notify?.error?.(err?.message || 'Failed to load template');
         }
       } finally {
@@ -198,19 +189,12 @@ export default function MarketingFlyerStudio() {
     [activeSubBrand, notify, parseJsonField],
   );
 
-  // Mount effect: if ?template=<id> is in the URL, fire the load GET.
-  // Depends on the param VALUE (string), not the URLSearchParams
-  // object — useSearchParams returns a fresh object reference on
-  // every render, so depending on the object would re-fire the GET
-  // every render (thrashes the backend; also confuses tests).
+  // Mount effect: ?template=<id> → load. Depend on the param VALUE only.
   const templateIdParam = searchParams?.get?.('template') || null;
   useEffect(() => {
     if (templateIdParam && /^\d+$/.test(templateIdParam)) {
       loadTemplate(parseInt(templateIdParam, 10));
     }
-    // Intentionally only depend on the param string. loadTemplate
-    // captures the latest notify + activeSubBrand via useCallback,
-    // but we don't want the effect re-firing when those change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [templateIdParam]);
 
@@ -235,8 +219,6 @@ export default function MarketingFlyerStudio() {
     try {
       const body = {
         name: trimmedName,
-        // Empty-string sub-brand sends as omitted — the backend
-        // treats absent subBrand as "tenant-wide" (NULL column).
         paletteJson: JSON.stringify(palette),
         layoutJson: JSON.stringify(layout),
         assetsJson: JSON.stringify(assets),
@@ -248,10 +230,6 @@ export default function MarketingFlyerStudio() {
       });
       notify?.success?.(`Template "${trimmedName}" saved`);
       setShowSaveModal(false);
-      // Update the URL so a refresh re-loads what was just saved
-      // (otherwise the operator loses their work on refresh). The
-      // try/catch guards against test environments without a router
-      // (setSearchParams may throw).
       try {
         if (created?.id && setSearchParams) {
           setSearchParams({ template: String(created.id) });
@@ -259,8 +237,6 @@ export default function MarketingFlyerStudio() {
       } catch (_e) {
         /* no-op — URL update is best-effort */
       }
-      // Reflect the freshly-saved template as the active one so the
-      // next "Save as Template" pre-fills with the new name.
       if (created?.id) {
         setLoadedTemplate({
           id: created.id,
@@ -269,10 +245,6 @@ export default function MarketingFlyerStudio() {
         });
       }
     } catch (err) {
-      // fetchApi auto-toasted any 4xx/5xx via global notify. Only
-      // re-surface here for non-HTTP errors (validator parse failures
-      // bubble through fetchApi's err.data.errors path; for the
-      // first-cut wire-in we surface the generic message).
       if (!err?.status) {
         notify?.error?.(err?.message || 'Failed to save template');
       }
@@ -280,6 +252,8 @@ export default function MarketingFlyerStudio() {
       setSaving(false);
     }
   };
+
+  const selected = selectedIdx != null ? layout[selectedIdx] : null;
 
   return (
     <div style={pageWrap} data-testid="marketing-flyer-studio">
@@ -290,8 +264,8 @@ export default function MarketingFlyerStudio() {
           </h1>
           <p style={subtitleStyle}>
             Build branded flyers for TMC / RFU / Travel Stall / Visa Sure.
-            Pick a sub-brand template to get started — your sub-brand kit
-            (logo, palette, fonts) auto-loads from the tenant config.
+            Add blocks to the canvas, set the palette, then save as a reusable
+            template.
           </p>
         </div>
         <div style={headerActions}>
@@ -304,83 +278,189 @@ export default function MarketingFlyerStudio() {
           >
             <Save size={14} aria-hidden /> Save as Template
           </button>
-          <div style={comingSoonPill} aria-label="Feature status: coming soon">
-            <Sparkles size={14} aria-hidden /> Coming soon
-          </div>
         </div>
       </header>
 
-      {/* Loaded-template indicator — visible affordance that the
-          composer state reflects a stored row, not the placeholder
-          defaults. */}
       {loading && (
         <div role="status" style={statusBanner} data-testid="loading-template">
           <Loader size={14} aria-hidden /> Loading template&hellip;
         </div>
       )}
       {!loading && loadedTemplate && (
-        <div
-          role="status"
-          style={statusBanner}
-          data-testid="loaded-template-banner"
-        >
+        <div role="status" style={statusBanner} data-testid="loaded-template-banner">
           <strong>Editing:</strong> {loadedTemplate.name}
           {loadedTemplate.subBrand ? ` — ${loadedTemplate.subBrand.toUpperCase()}` : ''}
         </div>
       )}
-      {!loading && !loadedTemplate && (
-        <div role="status" style={statusBanner}>
-          <strong>Phase 2 scaffold.</strong> The Marketing Flyer Studio is
-          designed in <code>docs/PRD_TRAVEL_MARKETING_FLYER.md</code>;
-          implementation lands in follow-up ticks (canvas editor, asset
-          library, AI copy/image generation, PDF/PNG export, WhatsApp
-          share). This page previews the surface only.
+
+      {/* ── Editor: toolbar | canvas | properties (Slice 1) ───────────── */}
+      <div data-testid="flyer-editor" style={editorWrap}>
+        <div style={toolbarStyle}>
+          <button type="button" onClick={() => addBlock('text')} style={toolBtn} data-testid="flyer-add-text">
+            + Text
+          </button>
+          <button type="button" onClick={() => addBlock('image')} style={toolBtn} data-testid="flyer-add-image">
+            + Image
+          </button>
+          <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 8, alignItems: 'center' }}>
+            <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>Palette</span>
+            {PALETTE_KEYS.map((k) => (
+              <input
+                key={k}
+                type="color"
+                aria-label={k}
+                title={k}
+                data-testid={`palette-${k}`}
+                value={palette[k] || '#000000'}
+                onChange={(e) => setPalette({ ...palette, [k]: e.target.value })}
+                style={swatchStyle}
+              />
+            ))}
+          </span>
         </div>
-      )}
 
-      <section
-        aria-label="Sub-brand template cards"
-        style={cardsGrid}
-        data-testid="marketing-flyer-studio-cards"
-      >
-        {SUB_BRAND_CARDS.map((card) => {
-          const isActive = card.id === activeSubBrand;
-          return (
-            <article
-              key={card.id}
-              data-testid={`flyer-card-${card.id}`}
-              data-sub-brand={card.id}
-              data-active={isActive ? 'true' : 'false'}
-              aria-current={isActive ? 'true' : undefined}
-              style={isActive ? { ...cardStyle, ...cardActiveStyle } : cardStyle}
-            >
-              <div style={cardHeader}>
-                <FileImage size={22} aria-hidden />
-                <div>
-                  <h2 style={cardTitle}>{card.label}</h2>
-                  <p style={cardTagline}>{card.tagline}</p>
-                </div>
-              </div>
-              <div style={cardSample}>
-                <span style={cardSampleLabel}>Sample headline</span>
-                <span style={cardSampleText}>{card.sample}</span>
-              </div>
+        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+          {/* Canvas */}
+          <div
+            data-testid="flyer-canvas"
+            onMouseMove={onCanvasMouseMove}
+            onMouseUp={onCanvasMouseUp}
+            onMouseLeave={onCanvasMouseUp}
+            onClick={(e) => { if (e.target === e.currentTarget) setSelectedIdx(null); }}
+            style={{ ...canvasStyle, background: palette.bgHex || '#FFFFFF' }}
+          >
+            {layout.map((b, idx) => (
               <div
-                style={comingSoonOverlay}
-                data-testid={`flyer-card-${card.id}-coming-soon`}
-                role="note"
-                aria-label={`${card.label} flyer templates coming soon`}
+                key={idx}
+                data-testid={`flyer-block-${idx}`}
+                onMouseDown={(e) => onBlockMouseDown(e, idx)}
+                onClick={(e) => { e.stopPropagation(); setSelectedIdx(idx); }}
+                style={{
+                  position: 'absolute',
+                  left: b.x || 0,
+                  top: b.y || 0,
+                  width: b.width || 100,
+                  height: b.height || 40,
+                  boxSizing: 'border-box',
+                  padding: 4,
+                  overflow: 'hidden',
+                  cursor: 'move',
+                  border: selectedIdx === idx
+                    ? '2px solid var(--primary-color, var(--accent-color))'
+                    : '1px dashed rgba(0,0,0,0.25)',
+                  color: b.color || palette.textHex || '#222222',
+                  fontSize: b.fontSize || 16,
+                }}
               >
-                <Lock size={14} aria-hidden /> Coming soon
+                {b.type === 'image'
+                  ? (b.src
+                    ? <img src={b.src} alt="" style={{ maxWidth: '100%', maxHeight: '100%' }} />
+                    : <span style={{ fontSize: 11, opacity: 0.5 }}>Image — set URL →</span>)
+                  : (b.content || '')}
               </div>
-            </article>
-          );
-        })}
-      </section>
+            ))}
+          </div>
 
-      {/* "Save as Template" modal — minimal form with name + sub-brand.
-          Palette / layout / assets serialize from current composer
-          state. Full canvas editing lives in follow-up ticks. */}
+          {/* Properties */}
+          <div style={propsPanel} data-testid="flyer-properties">
+            {!selected ? (
+              <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: 0 }}>
+                Select a block to edit it — or use <strong>+ Text</strong> / <strong>+ Image</strong> to add one.
+              </p>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <strong style={{ fontSize: 12 }}>
+                  {selected.type === 'image' ? 'Image block' : 'Text block'}
+                </strong>
+                {selected.type === 'image' ? (
+                  <>
+                    <label style={propLabel}>
+                      Image URL
+                      <input
+                        type="text"
+                        aria-label="Image URL"
+                        value={selected.src || ''}
+                        onChange={(e) => updateBlock(selectedIdx, { src: e.target.value })}
+                        style={propInput}
+                        placeholder="https://… or /uploads/…"
+                      />
+                    </label>
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept="image/*"
+                      data-testid="flyer-image-file"
+                      style={{ display: 'none' }}
+                      onChange={(e) => handleUploadImage(e.target.files && e.target.files[0], selectedIdx)}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current && fileInputRef.current.click()}
+                      disabled={uploading}
+                      data-testid="flyer-image-upload"
+                      style={toolBtn}
+                    >
+                      {uploading ? 'Uploading…' : 'Upload image'}
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <label style={propLabel}>
+                      Text
+                      <textarea
+                        aria-label="Block text"
+                        value={selected.content || ''}
+                        onChange={(e) => updateBlock(selectedIdx, { content: e.target.value })}
+                        rows={3}
+                        style={propInput}
+                      />
+                    </label>
+                    <label style={propLabel}>
+                      Colour
+                      <input
+                        type="color"
+                        aria-label="Text colour"
+                        value={selected.color || '#222222'}
+                        onChange={(e) => updateBlock(selectedIdx, { color: e.target.value })}
+                        style={{ ...propInput, padding: 2, height: 30 }}
+                      />
+                    </label>
+                    <label style={propLabel}>
+                      Font size
+                      <input
+                        type="number"
+                        aria-label="Font size"
+                        value={selected.fontSize || 16}
+                        onChange={(e) => updateBlock(selectedIdx, { fontSize: Number(e.target.value) || 16 })}
+                        style={propInput}
+                      />
+                    </label>
+                  </>
+                )}
+                <div style={{ display: 'flex', gap: 8 }}>
+                  {['x', 'y', 'width', 'height'].map((dim) => (
+                    <label key={dim} style={{ ...propLabel, flex: 1 }}>
+                      {dim}
+                      <input
+                        type="number"
+                        aria-label={dim}
+                        value={selected[dim] || 0}
+                        onChange={(e) => updateBlock(selectedIdx, { [dim]: Math.max(0, Number(e.target.value) || 0) })}
+                        style={propInput}
+                      />
+                    </label>
+                  ))}
+                </div>
+                <button type="button" onClick={() => removeBlock(selectedIdx)} style={deleteBtn} data-testid="flyer-delete-block">
+                  Delete block
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* "Save as Template" modal — name + sub-brand; serialises palette/layout/assets. */}
       {showSaveModal && (
         <div
           role="dialog"
@@ -389,18 +469,13 @@ export default function MarketingFlyerStudio() {
           style={modalOverlay}
           data-testid="save-template-modal"
         >
-          <form
-            onSubmit={handleSaveTemplate}
-            style={modalDialog}
-            data-testid="save-template-form"
-          >
+          <form onSubmit={handleSaveTemplate} style={modalDialog} data-testid="save-template-form">
             <h2 id="save-template-heading" style={modalHeading}>
               Save as Template
             </h2>
             <p style={modalHint}>
               Capture the current palette + layout + assets as a reusable
-              template. You can find it later on the Flyer Templates list
-              page.
+              template. You can find it later on the Flyer Templates list page.
             </p>
             <label style={modalLabel}>
               Template name *
@@ -453,323 +528,33 @@ export default function MarketingFlyerStudio() {
           </form>
         </div>
       )}
-
-      {/* TODO chunks — each maps to a PRD §3 group. Follow-up ticks
-          should pick these in §8 dependency order. Grep markers
-          intentionally include the PRD-section anchor so a future
-          implementer's `grep -rn 'PRD §3.1'` finds the wire-in site. */}
-
-      {/* TODO(PRD §3.1 — flyer template editor):
-          Build the drag-drop block builder. Mirror the substrate from
-          frontend/src/pages/LandingPageBuilder.jsx — extract into a
-          shared <VisualBuilder/> first (PRD §8 dep #1). Block-type
-          registry per FR-3.1.2: header / image / text / button /
-          pricing-tile / testimonial / destination-grid / footer /
-          kpi-tile / badge / divider. Per-block style props per
-          FR-3.1.3; snap-to-grid + spacing visualizer FR-3.1.4; undo/
-          redo stack FR-3.1.5; responsive preview toggle FR-3.1.6;
-          concurrent-edit lock (60min TTL) FR-3.1.7. */}
-
-      {/* TODO(PRD §3.2 — asset library):
-          Per-tenant image library — new Asset model rows scoped by
-          tenantId + subBrandKey + kind (LOGO/PHOTO/ICON/ILLUSTRATION).
-          Multer pipeline upload FR-3.2.2; full-text tag search
-          FR-3.2.3; AI image generation STUB mode FR-3.2.4 (cred-
-          blocked Q-MF-2 — placeholder + ops-fulfillment queue until
-          DALL-E / Replicate / Midjourney key lands per DD-5.3).
-          Usage count + stale-flagging FR-3.2.5; ZIP bulk import
-          FR-3.2.6. */}
-
-      {/* TODO(PRD §3.3 — brand consistency):
-          Per-sub-brand brand kit reader. Pull from
-          Tenant.subBrandConfigJson.<subBrandKey> (commit 621aab7 wired
-          the consumer; this page consumes per FR-3.3.1). Brand-kit-
-          aware block defaults FR-3.3.2; lock-to-brand mode default
-          ON per DD-5.5 (operator with MANAGER+ can toggle FR-3.3.3);
-          "Apply latest brand kit" diff button FR-3.3.4. */}
-
-      {/* TODO(PRD §3.4 — output formats):
-          PDF export — extend backend/services/pdfRenderer.js with
-          renderFlyer(flyerId, format) for A4 / US-letter print-quality
-          (FR-3.4.1). PNG export — new backend service imageRenderer.js
-          using Puppeteer for square (1080×1080) / portrait (1080×1920)
-          / landscape (1920×1080) / email-banner (1200×628) aspects
-          (FR-3.4.2). WhatsApp-share-ready compression to ≤5MB
-          FR-3.4.3; draft-status diagonal watermark FR-3.4.4; output-
-          URL caching keyed by template-hash FR-3.4.5. */}
-
-      {/* TODO(PRD §3.5 — distribution flow):
-          Direct WhatsApp share FR-3.5.1 — consumes
-          whatsappProvider.sendMedia() + logs Touchpoint with flyerId.
-          Cred-blocked Q-MF-3 (overlaps with WHATSAPP_INTEGRATION_PRD
-          Q9 + PRD_TRAVEL_B2B_AGENT_PORTAL Q-B2B-3). Email-attach
-          single + bulk FR-3.5.2; public signed-URL share FR-3.5.3;
-          iframe embed-code snippet FR-3.5.4. */}
-
-      {/* TODO(PRD §3.6 — AI assistance):
-          Extend backend/lib/llmRouter.js with two task classes —
-          'marketing-flyer-copy' (headline / CTA / body variants
-          FR-3.6.1) and 'marketing-flyer-image' (DALL-E / Stable
-          Diffusion / Midjourney per DD-5.3; STUB until Q-MF-2 lands
-          FR-3.6.3). AI-suggested layouts FR-3.6.2 (rule-based Phase
-          1, ML-driven Phase 2). Performance-hint engine FR-3.6.4
-          deferred to Phase 2 (needs impression / conversion tracking
-          plumbing). */}
-
-      {/* TODO(PRD §3.7 — templates marketplace):
-          Curated templates per sub-brand FR-3.7.1 — TMC schools
-          (8-12) / RFU Umrah (6-10) / Travel Stall family (10-15) /
-          Visa Sure (5-8). Per-template metadata FR-3.7.2. Operator-
-          submitted templates with admin-moderated queue per DD-5.4
-          (FR-3.7.3). Marketplace search + filter FR-3.7.4. */}
-
-      {/* TODO(PRD §8 — dependency build order):
-          Phase 1 ships AC-6.1 through AC-6.10 except AC-6.9 (Q-MF-3
-          cred-blocked, stub mode acceptable). Phase 2 layers
-          analytics, A/B testing, animated MP4/GIF output. Phase 3
-          adds print-on-demand fulfillment via Printful / Vistaprint.
-          Do NOT start in-house editor build until DD-5.1 is resolved
-          (sunk cost: 4-6 weeks if Polotno would have worked). */}
     </div>
   );
 }
 
-const pageWrap = {
-  padding: 24,
-  maxWidth: 1200,
-  margin: '0 auto',
-};
+const pageWrap = { padding: 24, maxWidth: 1200, margin: '0 auto' };
+const headerWrap = { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 12, marginBottom: 16 };
+const headerActions = { display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' };
+const headingStyle = { display: 'flex', alignItems: 'center', gap: 10, margin: 0, marginBottom: 4, color: 'var(--text-primary)' };
+const subtitleStyle = { color: 'var(--text-secondary)', margin: 0, maxWidth: 720, lineHeight: 1.5 };
+const statusBanner = { padding: '12px 16px', borderRadius: 8, background: 'var(--surface-color)', border: '1px solid var(--border-color)', color: 'var(--text-primary)', fontSize: 13, lineHeight: 1.5, marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' };
 
-const headerWrap = {
-  display: 'flex',
-  justifyContent: 'space-between',
-  alignItems: 'flex-start',
-  flexWrap: 'wrap',
-  gap: 12,
-  marginBottom: 16,
-};
+const editorWrap = { display: 'flex', flexDirection: 'column', gap: 12 };
+const toolbarStyle = { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', padding: '8px 10px', borderRadius: 8, background: 'var(--surface-color)', border: '1px solid var(--border-color)' };
+const toolBtn = { display: 'inline-flex', alignItems: 'center', gap: 4, padding: '6px 12px', borderRadius: 6, fontSize: 13, fontWeight: 600, background: 'var(--primary-color, var(--accent-color))', color: 'var(--accent-text, #fff)', border: 'none', cursor: 'pointer' };
+const swatchStyle = { width: 26, height: 26, padding: 0, border: '1px solid var(--border-color)', borderRadius: 4, cursor: 'pointer', background: 'transparent' };
+const canvasStyle = { position: 'relative', width: CANVAS_W, height: CANVAS_H, flexShrink: 0, borderRadius: 8, border: '1px solid var(--border-color)', boxShadow: 'var(--glass-shadow)', overflow: 'hidden' };
+const propsPanel = { flex: '1 1 240px', minWidth: 220, padding: 12, borderRadius: 8, background: 'var(--surface-color)', border: '1px solid var(--border-color)' };
+const propLabel = { display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-secondary)' };
+const propInput = { padding: '6px 8px', borderRadius: 6, border: '1px solid var(--border-color)', background: 'var(--bg-color, rgba(255,255,255,0.05))', color: 'var(--text-primary)', fontSize: 13, outline: 'none', width: '100%', boxSizing: 'border-box' };
+const deleteBtn = { padding: '6px 12px', borderRadius: 6, fontSize: 12, fontWeight: 600, background: 'transparent', color: '#A8323F', border: '1px solid #A8323F', cursor: 'pointer' };
 
-const headerActions = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 10,
-  flexWrap: 'wrap',
-};
-
-const headingStyle = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 10,
-  margin: 0,
-  marginBottom: 4,
-  color: 'var(--text-primary)',
-};
-
-const subtitleStyle = {
-  color: 'var(--text-secondary)',
-  margin: 0,
-  maxWidth: 720,
-  lineHeight: 1.5,
-};
-
-const comingSoonPill = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 6,
-  padding: '6px 12px',
-  borderRadius: 999,
-  background: 'var(--primary-color, var(--accent-color))',
-  color: 'var(--accent-text, #fff)',
-  fontSize: 12,
-  fontWeight: 600,
-  letterSpacing: 0.3,
-};
-
-const statusBanner = {
-  padding: '12px 16px',
-  borderRadius: 8,
-  background: 'var(--surface-color)',
-  border: '1px solid var(--border-color)',
-  color: 'var(--text-primary)',
-  fontSize: 13,
-  lineHeight: 1.5,
-  marginBottom: 20,
-  display: 'flex',
-  alignItems: 'center',
-  gap: 8,
-  flexWrap: 'wrap',
-};
-
-const cardsGrid = {
-  display: 'grid',
-  gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 240px), 1fr))',
-  gap: 16,
-  marginBottom: 24,
-};
-
-const cardStyle = {
-  position: 'relative',
-  background: 'var(--surface-color)',
-  border: '1px solid var(--border-color)',
-  borderRadius: 10,
-  padding: 16,
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 12,
-  minHeight: 180,
-  transition: 'border-color 120ms ease, box-shadow 120ms ease',
-};
-
-const cardActiveStyle = {
-  borderColor: 'var(--primary-color, var(--accent-color))',
-  boxShadow: '0 0 0 2px rgba(38, 88, 85, 0.18)',
-};
-
-const cardHeader = {
-  display: 'flex',
-  alignItems: 'flex-start',
-  gap: 10,
-  color: 'var(--primary-color, var(--accent-color))',
-};
-
-const cardTitle = {
-  margin: 0,
-  fontSize: 16,
-  fontWeight: 600,
-  color: 'var(--text-primary)',
-};
-
-const cardTagline = {
-  margin: '2px 0 0',
-  fontSize: 12,
-  color: 'var(--text-secondary)',
-  lineHeight: 1.4,
-};
-
-const cardSample = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 4,
-  padding: '10px 12px',
-  borderRadius: 6,
-  background: 'var(--subtle-bg, rgba(0,0,0,0.03))',
-  border: '1px dashed var(--border-color)',
-};
-
-const cardSampleLabel = {
-  fontSize: 10,
-  textTransform: 'uppercase',
-  letterSpacing: 0.5,
-  color: 'var(--text-secondary)',
-};
-
-const cardSampleText = {
-  fontSize: 13,
-  color: 'var(--text-primary)',
-  fontStyle: 'italic',
-};
-
-const comingSoonOverlay = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 6,
-  alignSelf: 'flex-start',
-  padding: '4px 10px',
-  borderRadius: 999,
-  background: 'rgba(0, 0, 0, 0.08)',
-  color: 'var(--text-secondary)',
-  fontSize: 11,
-  fontWeight: 600,
-  letterSpacing: 0.3,
-  textTransform: 'uppercase',
-};
-
-const savePrimaryBtn = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 6,
-  padding: '8px 14px',
-  borderRadius: 6,
-  fontWeight: 600,
-  fontSize: 13,
-  background: 'var(--primary-color, var(--accent-color))',
-  color: 'var(--accent-text, #fff)',
-  border: 'none',
-  cursor: 'pointer',
-};
-
-const secondaryBtn = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 6,
-  padding: '8px 14px',
-  borderRadius: 6,
-  fontWeight: 600,
-  fontSize: 13,
-  background: 'var(--surface-color)',
-  color: 'var(--text-primary)',
-  border: '1px solid var(--border-color)',
-  cursor: 'pointer',
-};
-
-const modalOverlay = {
-  position: 'fixed',
-  inset: 0,
-  background: 'rgba(0, 0, 0, 0.5)',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  zIndex: 1000,
-  padding: 16,
-};
-
-const modalDialog = {
-  background: 'var(--surface-color)',
-  border: '1px solid var(--border-color)',
-  borderRadius: 10,
-  padding: 20,
-  width: '100%',
-  maxWidth: 480,
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 12,
-};
-
-const modalHeading = {
-  margin: 0,
-  fontSize: 18,
-  fontWeight: 600,
-  color: 'var(--text-primary)',
-};
-
-const modalHint = {
-  margin: 0,
-  fontSize: 12,
-  color: 'var(--text-secondary)',
-  lineHeight: 1.4,
-};
-
-const modalLabel = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 4,
-  fontSize: 12,
-  color: 'var(--text-secondary)',
-};
-
-const modalInput = {
-  padding: '8px 10px',
-  borderRadius: 6,
-  border: '1px solid var(--border-color)',
-  background: 'var(--bg-color, rgba(255,255,255,0.05))',
-  color: 'var(--text-primary)',
-  fontSize: 13,
-  outline: 'none',
-};
-
-const modalActions = {
-  display: 'flex',
-  justifyContent: 'flex-end',
-  gap: 8,
-  marginTop: 8,
-};
+const savePrimaryBtn = { display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 14px', borderRadius: 6, fontWeight: 600, fontSize: 13, background: 'var(--primary-color, var(--accent-color))', color: 'var(--accent-text, #fff)', border: 'none', cursor: 'pointer' };
+const secondaryBtn = { display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 14px', borderRadius: 6, fontWeight: 600, fontSize: 13, background: 'var(--surface-color)', color: 'var(--text-primary)', border: '1px solid var(--border-color)', cursor: 'pointer' };
+const modalOverlay = { position: 'fixed', inset: 0, background: 'rgba(0, 0, 0, 0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 16 };
+const modalDialog = { background: 'var(--surface-color)', border: '1px solid var(--border-color)', borderRadius: 10, padding: 20, width: '100%', maxWidth: 480, display: 'flex', flexDirection: 'column', gap: 12 };
+const modalHeading = { margin: 0, fontSize: 18, fontWeight: 600, color: 'var(--text-primary)' };
+const modalHint = { margin: 0, fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.4 };
+const modalLabel = { display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, color: 'var(--text-secondary)' };
+const modalInput = { padding: '8px 10px', borderRadius: 6, border: '1px solid var(--border-color)', background: 'var(--bg-color, rgba(255,255,255,0.05))', color: 'var(--text-primary)', fontSize: 13, outline: 'none' };
+const modalActions = { display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 8 };

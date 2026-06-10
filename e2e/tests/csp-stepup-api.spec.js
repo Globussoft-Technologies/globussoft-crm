@@ -111,11 +111,14 @@ test.describe('#654 Part 1 — Content-Security-Policy header is set', () => {
     expect(csp.toLowerCase()).toContain("default-src 'self'");
   });
 
-  test("CSP includes object-src 'none' + frame-ancestors 'self'", async ({ request }) => {
+  // #921 slice S4 (FR-3.6) — frame-ancestors flipped from 'self' to 'none'
+  // as the global default. Embed widget overrides per-route via
+  // allowIframeEmbedding(); see security.js + security-csp.test.js.
+  test("CSP includes object-src 'none' + frame-ancestors 'none' (S4 FR-3.6)", async ({ request }) => {
     const res = await request.get(`${BASE_URL}/api/health`, { timeout: REQUEST_TIMEOUT });
     const csp = res.headers()['content-security-policy'] || '';
     expect(csp.toLowerCase()).toContain("object-src 'none'");
-    expect(csp.toLowerCase()).toContain("frame-ancestors 'self'");
+    expect(csp.toLowerCase()).toContain("frame-ancestors 'none'");
   });
 
   test("CSP includes form-action 'self' + base-uri 'self'", async ({ request }) => {

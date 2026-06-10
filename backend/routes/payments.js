@@ -4,10 +4,18 @@
 const express = require("express");
 const path = require("path");
 const crypto = require("crypto");
-require("dotenv").config({ path: path.resolve(__dirname, "../../.env"), override: true });
+require("dotenv").config({
+  path: path.resolve(__dirname, "../../.env"),
+  override: true,
+});
 
 const prisma = require("../lib/prisma");
 const { writeAudit } = require("../lib/audit");
+const {
+  getTenantRazorpayClient,
+  getTenantRazorpayCreds,
+  NOT_CONFIGURED_MESSAGE,
+} = require("../lib/tenantPaymentGateway");
 
 const router = express.Router();
 
@@ -24,21 +32,9 @@ function getStripe() {
   return stripeClient;
 }
 
-let razorpayClient = null;
-function getRazorpay() {
-  if (!razorpayClient && process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET) {
-    try {
-      const Razorpay = require("razorpay");
-      razorpayClient = new Razorpay({
-        key_id: process.env.RAZORPAY_KEY_ID,
-        key_secret: process.env.RAZORPAY_KEY_SECRET,
-      });
-    } catch (err) {
-      console.error("[Payments] Failed to load Razorpay SDK:", err.message);
-    }
-  }
-  return razorpayClient;
-}
+// Razorpay clients are now built per-tenant from DB-stored keys via
+// lib/tenantPaymentGateway.js (customer → tenant payments). The platform's
+// own env keys are reserved for subscription billing in routes/subscriptions.js.
 
 // ── Helpers ──────────────────────────────────────────────────────
 function tenantOf(req) {
@@ -58,6 +54,124 @@ function safeJsonParse(value, fallback = {}) {
 function serialize(payment) {
   if (!payment) return payment;
   return { ...payment, metadata: safeJsonParse(payment.metadata, {}) };
+}
+
+// Resolve which Razorpay secret verifies an incoming webhook. Customer
+// payments (customer → tenant) are signed with the TENANT's own webhook
+// secret; we find the Payment row the event references and load that tenant's
+// secret. Platform / subscription payments (no per-tenant config) fall back to
+// the env secret. Read-only — no mutation happens here.
+async function resolveRazorpayWebhookSecret(event) {
+  const envSecret =
+    process.env.RAZORPAY_WEBHOOK_SECRET || process.env.RAZORPAY_KEY_SECRET || null;
+  try {
+    const payload = (event && event.payload) || {};
+    const paymentEnt =
+      payload.payment && (payload.payment.entity || payload.payment);
+    const orderEnt = payload.order && (payload.order.entity || payload.order);
+    const plinkEnt =
+      payload.payment_link &&
+      (payload.payment_link.entity || payload.payment_link);
+    // Candidate gatewayIds the order was stored under at creation time.
+    const candidates = [
+      paymentEnt && paymentEnt.order_id,
+      orderEnt && orderEnt.id,
+      paymentEnt && paymentEnt.id,
+      plinkEnt && plinkEnt.id,
+    ].filter(Boolean);
+    if (candidates.length) {
+      const payment = await prisma.payment.findFirst({
+        where: { gateway: "razorpay", gatewayId: { in: candidates } },
+        select: { tenantId: true },
+      });
+      if (payment) {
+        // No separate webhook secret is collected — verify with the tenant's
+        // Key Secret (mirrors the platform's
+        // `RAZORPAY_WEBHOOK_SECRET || RAZORPAY_KEY_SECRET` fallback).
+        const creds = await getTenantRazorpayCreds(payment.tenantId);
+        if (creds && creds.keySecret) return creds.keySecret;
+      }
+    }
+  } catch (err) {
+    console.error(
+      "[Payments] webhook tenant-secret resolution failed, falling back to env:",
+      err.message,
+    );
+  }
+  return envSecret;
+}
+
+// Strip anything that looks like a Stripe/Razorpay key out of a string. The
+// SDK error message "Invalid API Key provided: sk_test_...qRsT" leaks key
+// shape (prefix + last 4) to the browser, which a tenant user has no business
+// seeing. Belt-and-braces — every code path that surfaces a gateway message
+// also runs this.
+function scrubKeys(s) {
+  if (typeof s !== "string") return s;
+  return s.replace(
+    /\b(sk|pk|rk|rzp)_(test|live)_[A-Za-z0-9_*]+/g,
+    "[redacted]",
+  );
+}
+
+// Extract a clean, user-facing error from a gateway SDK throw. Razorpay's SDK
+// throws `{ statusCode, error: { code, description, field, ... } }`; Stripe's
+// SDK throws an Error with `.statusCode`, `.code`, `.type`, and `.raw.message`.
+// Bubbling the raw `err.message` to the client surfaces JSON blobs, "Server
+// error", or worse — the masked-but-still-leaky API key shape — so we map
+// known error classes to user-facing copy before sending anything back.
+function parseGatewayError(err, gateway) {
+  if (!err)
+    return { status: 500, message: "Payment gateway error", code: null };
+  const description =
+    (err.error && err.error.description) ||
+    (err.raw && err.raw.message) ||
+    err.message ||
+    "Payment gateway error";
+  const gatewayCode = (err.error && err.error.code) || err.code || null;
+  const gatewayStatus = err.statusCode || (err.raw && err.raw.statusCode) || 0;
+  const errType = err.type || (err.raw && err.raw.type) || null;
+
+  // Auth/config failures — Stripe 'StripeAuthenticationError', Razorpay 401,
+  // or any "Invalid API Key" message. These are operator-side misconfigurations
+  // that the user can't action; surface a friendly "contact support" copy and
+  // never echo the key shape back to the browser.
+  const looksLikeAuthIssue =
+    errType === "StripeAuthenticationError" ||
+    gatewayStatus === 401 ||
+    /invalid api key|authentication|unauthorized|key_invalid/i.test(
+      description,
+    );
+
+  if (looksLikeAuthIssue) {
+    return {
+      status: 503,
+      message: `${gateway} isn't available right now. Please contact support — the payment gateway needs to be reconfigured.`,
+      code: "GATEWAY_NOT_CONFIGURED",
+    };
+  }
+
+  const looksLikeAmountIssue =
+    /amount|limit|exceeds|maximum|minimum|atleast/i.test(description) ||
+    err.field === "amount";
+
+  if (looksLikeAmountIssue) {
+    return {
+      status: 400,
+      message: `This payment can't be processed: ${scrubKeys(description)}. Please use a smaller amount or split the invoice.`,
+      code: gatewayCode || "AMOUNT_NOT_ALLOWED",
+    };
+  }
+
+  if (gatewayStatus >= 400 && gatewayStatus < 500) {
+    return { status: 400, message: scrubKeys(description), code: gatewayCode };
+  }
+
+  return {
+    status: 502,
+    message: `${gateway} is temporarily unavailable. Please try again in a moment.`,
+    code: gatewayCode,
+  };
 }
 
 async function markInvoicePaid(invoiceId, tenantId) {
@@ -96,9 +210,11 @@ function emitPaymentCollected(payment) {
         paidAt: payment.paidAt,
       },
       payment.tenantId,
-      null
+      null,
     );
-  } catch (_e) { /* best-effort */ }
+  } catch (_e) {
+    /* best-effort */
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -111,11 +227,15 @@ router.post(
   express.raw({ type: "application/json" }),
   async (req, res) => {
     const stripe = getStripe();
-    if (!stripe) return res.status(503).json({ error: "Stripe not configured" });
+    if (!stripe)
+      return res.status(503).json({ error: "Stripe not configured" });
 
     const sig = req.headers["stripe-signature"];
     const secret = process.env.STRIPE_WEBHOOK_SECRET;
-    if (!secret) return res.status(503).json({ error: "Stripe webhook secret not configured" });
+    if (!secret)
+      return res
+        .status(503)
+        .json({ error: "Stripe webhook secret not configured" });
 
     let event;
     try {
@@ -150,30 +270,44 @@ router.post(
             data: { status: "FAILED" },
           });
         }
+      } else if (event.type === "checkout.session.completed") {
+        // Hosted Checkout Session paid out. We store session.id as gatewayId
+        // when creating the session, so look up by that.
+        const session = event.data.object;
+        if (session.payment_status === "paid") {
+          const payment = await prisma.payment.findFirst({
+            where: { gateway: "stripe", gatewayId: session.id },
+          });
+          if (payment && payment.status !== "SUCCESS") {
+            const updated = await prisma.payment.update({
+              where: { id: payment.id },
+              data: { status: "SUCCESS", paidAt: new Date() },
+            });
+            await markInvoicePaid(payment.invoiceId, payment.tenantId);
+            emitPaymentCollected(updated);
+          }
+        }
       }
       return res.json({ received: true });
     } catch (err) {
       console.error("[Payments] Stripe webhook handler error:", err);
       return res.status(500).json({ error: err.message });
     }
-  }
+  },
 );
 
 router.post(
   "/webhook/razorpay",
   express.raw({ type: "application/json" }),
   async (req, res) => {
-    const secret = process.env.RAZORPAY_WEBHOOK_SECRET || process.env.RAZORPAY_KEY_SECRET;
-    if (!secret) return res.status(503).json({ error: "Razorpay not configured" });
-
     const sig = req.headers["x-razorpay-signature"];
-    const bodyStr = Buffer.isBuffer(req.body) ? req.body.toString("utf8") : JSON.stringify(req.body);
-    const expected = crypto.createHmac("sha256", secret).update(bodyStr).digest("hex");
+    const bodyStr = Buffer.isBuffer(req.body)
+      ? req.body.toString("utf8")
+      : JSON.stringify(req.body);
 
-    if (sig !== expected) {
-      return res.status(400).json({ error: "Invalid signature" });
-    }
-
+    // Parse FIRST (read-only) so we can resolve which tenant this event
+    // belongs to, then verify the HMAC with THAT tenant's webhook secret.
+    // No DB mutation happens before signature verification below.
     let event;
     try {
       event = JSON.parse(bodyStr);
@@ -181,12 +315,32 @@ router.post(
       return res.status(400).json({ error: "Invalid JSON" });
     }
 
+    // Tenant resolution: find the Payment row referenced by the event and use
+    // its tenant's webhook secret. Falls back to the platform env secret for
+    // subscription / platform payments (no per-tenant config row).
+    const secret = await resolveRazorpayWebhookSecret(event);
+    if (!secret)
+      return res.status(503).json({ error: "Razorpay not configured" });
+
+    const expected = crypto
+      .createHmac("sha256", secret)
+      .update(bodyStr)
+      .digest("hex");
+
+    if (sig !== expected) {
+      return res.status(400).json({ error: "Invalid signature" });
+    }
+
     try {
       const eventName = event.event;
-      const entity = event.payload && (event.payload.payment || event.payload.order);
+      const entity =
+        event.payload && (event.payload.payment || event.payload.order);
       const ent = entity && entity.entity ? entity.entity : entity;
 
-      if (eventName === "payment.captured" || eventName === "payment.authorized") {
+      if (
+        eventName === "payment.captured" ||
+        eventName === "payment.authorized"
+      ) {
         const orderId = ent && ent.order_id;
         const paymentId = ent && ent.id;
         if (orderId) {
@@ -219,13 +373,41 @@ router.post(
             });
           }
         }
+      } else if (eventName === "payment_link.paid") {
+        // Hosted Payment Link (e.g. the auto-generated link a customer pays
+        // after signing an estimate). We store the payment-link id (plink_…)
+        // as gatewayId at creation, so reconcile on that. Razorpay also fires
+        // a sibling payment.captured, but its order_id won't match a link, so
+        // this branch owns payment-link reconciliation.
+        const plink = event.payload && event.payload.payment_link;
+        const plinkEnt = plink && (plink.entity || plink);
+        const plinkId = plinkEnt && plinkEnt.id;
+        const paymentEnt = event.payload && event.payload.payment &&
+          (event.payload.payment.entity || event.payload.payment);
+        if (plinkId) {
+          const payment = await prisma.payment.findFirst({
+            where: { gateway: "razorpay", gatewayId: plinkId },
+          });
+          if (payment && payment.status !== "SUCCESS") {
+            const updated = await prisma.payment.update({
+              where: { id: payment.id },
+              data: {
+                status: "SUCCESS",
+                paidAt: new Date(),
+                gatewayId: (paymentEnt && paymentEnt.id) || plinkId,
+              },
+            });
+            await markInvoicePaid(payment.invoiceId, payment.tenantId);
+            emitPaymentCollected(updated);
+          }
+        }
       }
       return res.json({ received: true });
     } catch (err) {
       console.error("[Payments] Razorpay webhook handler error:", err);
       return res.status(500).json({ error: err.message });
     }
-  }
+  },
 );
 
 // ─────────────────────────────────────────────────────────────────
@@ -302,7 +484,9 @@ router.get("/config", async (req, res) => {
   const body = {
     stripe: { configured: !!process.env.STRIPE_SECRET_KEY },
     razorpay: {
-      configured: !!(process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET),
+      configured: !!(
+        process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET
+      ),
     },
   };
 
@@ -312,7 +496,7 @@ router.get("/config", async (req, res) => {
       ? `${process.env.RAZORPAY_KEY_ID.slice(0, 8)}...`
       : null;
   }
-
+  //
   // Audit the disclosure surface (fire-and-forget; helper never throws).
   writeAudit(
     "PaymentConfig",
@@ -320,7 +504,10 @@ router.get("/config", async (req, res) => {
     null,
     req.user && req.user.userId,
     req.user && req.user.tenantId,
-    { role: (req.user && req.user.role) || null, disclosed: isAdmin ? "full" : "masked" }
+    {
+      role: (req.user && req.user.role) || null,
+      disclosed: isAdmin ? "full" : "masked",
+    },
   );
 
   res.json(body);
@@ -450,7 +637,8 @@ router.get("/:id", async (req, res) => {
 router.post("/create-stripe-intent", async (req, res) => {
   try {
     const stripe = getStripe();
-    if (!stripe) return res.status(503).json({ error: "Stripe not configured" });
+    if (!stripe)
+      return res.status(503).json({ error: "Stripe not configured" });
 
     const tenantId = tenantOf(req);
     const { invoiceId, amount } = req.body || {};
@@ -462,22 +650,38 @@ router.post("/create-stripe-intent", async (req, res) => {
 
     // Default currency from tenant if not provided
     if (!currency) {
-      const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { defaultCurrency: true } });
+      const tenant = await prisma.tenant.findUnique({
+        where: { id: tenantId },
+        select: { defaultCurrency: true },
+      });
       currency = tenant?.defaultCurrency || "USD";
     }
 
     // Stripe expects integer in smallest currency unit (cents/paise)
     const amountInt = Math.round(Number(amount) * 100);
 
-    const intent = await stripe.paymentIntents.create({
-      amount: amountInt,
-      currency: String(currency).toLowerCase(),
-      automatic_payment_methods: { enabled: true },
-      metadata: {
-        tenantId: String(tenantId),
-        invoiceId: invoiceId ? String(invoiceId) : "",
-      },
-    });
+    let intent;
+    try {
+      intent = await stripe.paymentIntents.create({
+        amount: amountInt,
+        currency: String(currency).toLowerCase(),
+        automatic_payment_methods: { enabled: true },
+        metadata: {
+          tenantId: String(tenantId),
+          invoiceId: invoiceId ? String(invoiceId) : "",
+        },
+      });
+    } catch (gatewayErr) {
+      const parsed = parseGatewayError(gatewayErr, "Stripe");
+      console.error(
+        "[Payments] Stripe order rejected:",
+        parsed.code,
+        parsed.message,
+      );
+      return res
+        .status(parsed.status)
+        .json({ error: parsed.message, code: parsed.code });
+    }
 
     const payment = await prisma.payment.create({
       data: {
@@ -506,13 +710,115 @@ router.post("/create-stripe-intent", async (req, res) => {
   }
 });
 
+// POST /create-stripe-checkout-session — hosted Stripe Checkout (redirect)
+// flow. Mirrors /create-stripe-intent's tenant/currency defaulting and
+// PENDING-row insertion, but instead of returning a clientSecret for
+// frontend Elements, returns a Stripe-hosted Checkout URL. The frontend
+// does `window.location.href = url`, Stripe handles the card form, then
+// redirects back to FRONTEND_URL/invoices with ?stripe=success&session_id=…
+// which the page detects on mount and POSTs to /confirm-stripe-session.
+router.post("/create-stripe-checkout-session", async (req, res) => {
+  try {
+    const stripe = getStripe();
+    if (!stripe)
+      return res.status(503).json({ error: "Stripe not configured" });
+
+    const tenantId = tenantOf(req);
+    const { invoiceId, amount } = req.body || {};
+    let { currency } = req.body || {};
+
+    if (!amount || isNaN(Number(amount))) {
+      return res.status(400).json({ error: "amount is required" });
+    }
+
+    if (!currency) {
+      const tenant = await prisma.tenant.findUnique({
+        where: { id: tenantId },
+        select: { defaultCurrency: true },
+      });
+      currency = tenant?.defaultCurrency || "USD";
+    }
+
+    const amountInt = Math.round(Number(amount) * 100);
+    const frontendBase = process.env.FRONTEND_URL || "http://localhost:5173";
+
+    let session;
+    try {
+      session = await stripe.checkout.sessions.create({
+        mode: "payment",
+        line_items: [
+          {
+            price_data: {
+              currency: String(currency).toLowerCase(),
+              product_data: {
+                name: invoiceId ? `Invoice #${invoiceId}` : "Payment",
+              },
+              unit_amount: amountInt,
+            },
+            quantity: 1,
+          },
+        ],
+        success_url: `${frontendBase}/invoices?stripe=success&session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: `${frontendBase}/invoices?stripe=cancel`,
+        metadata: {
+          tenantId: String(tenantId),
+          invoiceId: invoiceId ? String(invoiceId) : "",
+        },
+      });
+    } catch (gatewayErr) {
+      const parsed = parseGatewayError(gatewayErr, "Stripe");
+      console.error(
+        "[Payments] Stripe checkout session rejected:",
+        parsed.code,
+        parsed.message,
+      );
+      return res
+        .status(parsed.status)
+        .json({ error: parsed.message, code: parsed.code });
+    }
+
+    const payment = await prisma.payment.create({
+      data: {
+        invoiceId: invoiceId ? parseInt(invoiceId) : null,
+        amount: Number(amount),
+        currency: String(currency).toUpperCase(),
+        gateway: "stripe",
+        gatewayId: session.id,
+        status: "PENDING",
+        tenantId,
+        metadata: JSON.stringify({
+          mode: "checkout",
+          sessionUrl: session.url,
+        }),
+      },
+    });
+
+    res.json({
+      url: session.url,
+      sessionId: session.id,
+      paymentId: payment.id,
+    });
+  } catch (err) {
+    console.error("[Payments] create-stripe-checkout-session error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST /create-razorpay-order
 router.post("/create-razorpay-order", async (req, res) => {
   try {
-    const razorpay = getRazorpay();
-    if (!razorpay) return res.status(503).json({ error: "Razorpay not configured" });
-
     const tenantId = tenantOf(req);
+    // Customer payment (customer → tenant) — use the TENANT's own Razorpay
+    // keys, never the platform env keys (those are subscription-only). No
+    // silent fallback: if the tenant hasn't configured keys, money would
+    // otherwise land in the wrong account, so we disable with a clear message.
+    const rp = await getTenantRazorpayClient(tenantId);
+    if (!rp)
+      return res
+        .status(503)
+        .json({ error: NOT_CONFIGURED_MESSAGE, code: "GATEWAY_NOT_CONFIGURED" });
+    const razorpay = rp.client;
+
     const { invoiceId, amount, currency = "INR" } = req.body || {};
 
     if (!amount || isNaN(Number(amount))) {
@@ -522,15 +828,30 @@ router.post("/create-razorpay-order", async (req, res) => {
     // Razorpay expects integer in paise
     const amountInt = Math.round(Number(amount) * 100);
 
-    const order = await razorpay.orders.create({
-      amount: amountInt,
-      currency: String(currency).toUpperCase(),
-      receipt: invoiceId ? `inv_${invoiceId}_${Date.now()}` : `pay_${Date.now()}`,
-      notes: {
-        tenantId: String(tenantId),
-        invoiceId: invoiceId ? String(invoiceId) : "",
-      },
-    });
+    let order;
+    try {
+      order = await razorpay.orders.create({
+        amount: amountInt,
+        currency: String(currency).toUpperCase(),
+        receipt: invoiceId
+          ? `inv_${invoiceId}_${Date.now()}`
+          : `pay_${Date.now()}`,
+        notes: {
+          tenantId: String(tenantId),
+          invoiceId: invoiceId ? String(invoiceId) : "",
+        },
+      });
+    } catch (gatewayErr) {
+      const parsed = parseGatewayError(gatewayErr, "Razorpay");
+      console.error(
+        "[Payments] Razorpay order rejected:",
+        parsed.code,
+        parsed.message,
+      );
+      return res
+        .status(parsed.status)
+        .json({ error: parsed.message, code: parsed.code });
+    }
 
     const payment = await prisma.payment.create({
       data: {
@@ -551,7 +872,7 @@ router.post("/create-razorpay-order", async (req, res) => {
     res.json({
       orderId: order.id,
       paymentId: payment.id,
-      key: process.env.RAZORPAY_KEY_ID,
+      key: rp.keyId,
       amount: amountInt,
       currency: order.currency,
     });
@@ -565,14 +886,30 @@ router.post("/create-razorpay-order", async (req, res) => {
 router.post("/confirm-razorpay", async (req, res) => {
   try {
     const tenantId = tenantOf(req);
-    const { paymentId, razorpay_payment_id, razorpay_signature, razorpay_order_id } = req.body || {};
+    const {
+      paymentId,
+      razorpay_payment_id,
+      razorpay_signature,
+      razorpay_order_id,
+    } = req.body || {};
 
-    if (!paymentId || !razorpay_payment_id || !razorpay_signature || !razorpay_order_id) {
+    if (
+      !paymentId ||
+      !razorpay_payment_id ||
+      !razorpay_signature ||
+      !razorpay_order_id
+    ) {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
-    const secret = process.env.RAZORPAY_KEY_SECRET;
-    if (!secret) return res.status(503).json({ error: "Razorpay not configured" });
+    // Verify against the TENANT's own Razorpay secret (same account that
+    // created the order), not the platform env secret.
+    const creds = await getTenantRazorpayCreds(tenantId);
+    const secret = creds && creds.keySecret;
+    if (!secret)
+      return res
+        .status(503)
+        .json({ error: NOT_CONFIGURED_MESSAGE, code: "GATEWAY_NOT_CONFIGURED" });
 
     const payment = await prisma.payment.findFirst({
       where: { id: parseInt(paymentId), tenantId },
@@ -614,6 +951,72 @@ router.post("/confirm-razorpay", async (req, res) => {
     res.json({ success: true, payment: serialize(updated) });
   } catch (err) {
     console.error("[Payments] confirm-razorpay error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /confirm-stripe-session — finalize a Checkout Session after the user
+// redirects back from Stripe's hosted page. Idempotent: if the webhook has
+// already marked the Payment SUCCESS, returns the existing row. If it hasn't,
+// retrieves the session from Stripe and marks SUCCESS when payment_status=paid.
+// This means the flow works even when no webhook listener is running locally.
+router.post("/confirm-stripe-session", async (req, res) => {
+  try {
+    const stripe = getStripe();
+    if (!stripe)
+      return res.status(503).json({ error: "Stripe not configured" });
+
+    const tenantId = tenantOf(req);
+    const { sessionId } = req.body || {};
+    if (!sessionId)
+      return res.status(400).json({ error: "sessionId is required" });
+
+    const payment = await prisma.payment.findFirst({
+      where: { gateway: "stripe", gatewayId: String(sessionId), tenantId },
+    });
+    if (!payment) return res.status(404).json({ error: "Payment not found" });
+
+    if (payment.status === "SUCCESS") {
+      return res.json({ success: true, paid: true, payment: serialize(payment) });
+    }
+
+    let session;
+    try {
+      session = await stripe.checkout.sessions.retrieve(String(sessionId));
+    } catch (gatewayErr) {
+      const parsed = parseGatewayError(gatewayErr, "Stripe");
+      return res
+        .status(parsed.status)
+        .json({ error: parsed.message, code: parsed.code });
+    }
+
+    if (session.payment_status !== "paid") {
+      return res.json({
+        success: false,
+        paid: false,
+        status: session.payment_status,
+      });
+    }
+
+    const updated = await prisma.payment.update({
+      where: { id: payment.id },
+      data: {
+        status: "SUCCESS",
+        paidAt: new Date(),
+        metadata: JSON.stringify({
+          ...safeJsonParse(payment.metadata, {}),
+          paymentIntentId: session.payment_intent || null,
+          confirmedAt: new Date().toISOString(),
+        }),
+      },
+    });
+
+    await markInvoicePaid(payment.invoiceId, tenantId);
+    emitPaymentCollected(updated);
+
+    res.json({ success: true, paid: true, payment: serialize(updated) });
+  } catch (err) {
+    console.error("[Payments] confirm-stripe-session error:", err);
     res.status(500).json({ error: err.message });
   }
 });

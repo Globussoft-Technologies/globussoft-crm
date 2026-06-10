@@ -71,23 +71,53 @@ vi.mock('react-router-dom', async () => {
   };
 });
 
+import { AuthContext } from '../App';
 import DiagnosticBuilder from '../pages/travel/DiagnosticBuilder';
 
-function renderPage() {
+function renderPage({ role = 'ADMIN' } = {}) {
   return render(
     <MemoryRouter initialEntries={['/travel/diagnostics/banks/new']}>
-      <DiagnosticBuilder />
+      <AuthContext.Provider
+        value={{
+          user: { userId: 1, role },
+          setUser: vi.fn(),
+          token: 'tk',
+          tenant: { id: 1, vertical: 'travel' },
+          loading: false,
+        }}
+      >
+        <DiagnosticBuilder />
+      </AuthContext.Provider>
     </MemoryRouter>,
   );
 }
 
 beforeEach(() => {
   fetchApiMock.mockReset();
+  // The builder loads the selected sub-brand's current active bank on mount /
+  // brand-switch. Default: no existing bank → the editors keep their template
+  // seed. Tests that exercise the POST override this with a routing impl.
+  fetchApiMock.mockImplementation((url) =>
+    typeof url === 'string' && url.includes('/diagnostic-banks?')
+      ? Promise.resolve({ banks: [] })
+      : Promise.resolve({ id: 1, version: 1, subBrand: 'tmc' }),
+  );
   notifyObj.error.mockReset();
   notifyObj.success.mockReset();
   notifyObj.info.mockReset();
   navigateMock.mockReset();
 });
+
+// Helper: route the mount GET to "no existing bank" and the POST to a given
+// resolver/rejecter, so the *Once timing no longer collides with mount.
+function routePost(postHandler) {
+  fetchApiMock.mockImplementation((url, opts) => {
+    if (typeof url === 'string' && url.includes('/diagnostic-banks?')) {
+      return Promise.resolve({ banks: [] });
+    }
+    return postHandler(url, opts);
+  });
+}
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -197,7 +227,7 @@ describe('DiagnosticBuilder — Travel diagnostic-bank authoring (PRD §4 Q13 / 
   });
 
   it('Create POSTs to /api/travel/diagnostic-banks with the right shape + navigates on success', async () => {
-    fetchApiMock.mockResolvedValueOnce({ id: 99, version: 4, subBrand: 'tmc' });
+    routePost(() => Promise.resolve({ id: 99, version: 4, subBrand: 'tmc' }));
     renderPage();
     fireEvent.click(screen.getByRole('button', { name: /Create bank/i }));
     await waitFor(() => {
@@ -219,10 +249,10 @@ describe('DiagnosticBuilder — Travel diagnostic-bank authoring (PRD §4 Q13 / 
   });
 
   it('Create surfaces the backend error message on failure', async () => {
-    fetchApiMock.mockRejectedValueOnce({
+    routePost(() => Promise.reject({
       status: 400,
       body: { error: 'questionsJson schema invalid: question[0].options is empty' },
-    });
+    }));
     renderPage();
     fireEvent.click(screen.getByRole('button', { name: /Create bank/i }));
     await waitFor(() => {
@@ -410,7 +440,7 @@ describe('DiagnosticBuilder — Travel diagnostic-bank authoring (PRD §4 Q13 / 
   });
 
   it('Create uses the currently-selected sub-brand in the POST + uppercased success', async () => {
-    fetchApiMock.mockResolvedValueOnce({ id: 7, version: 2, subBrand: 'rfu' });
+    routePost(() => Promise.resolve({ id: 7, version: 2, subBrand: 'rfu' }));
     renderPage();
     fireEvent.click(screen.getByRole('button', { name: /RFU \(Umrah\)/i }));
     fireEvent.click(screen.getByRole('button', { name: /Create bank/i }));
@@ -430,7 +460,7 @@ describe('DiagnosticBuilder — Travel diagnostic-bank authoring (PRD §4 Q13 / 
   });
 
   it('Create swallows a rejection lacking body.error with a generic fallback message', async () => {
-    fetchApiMock.mockRejectedValueOnce({ status: 500 });
+    routePost(() => Promise.reject({ status: 500 }));
     renderPage();
     fireEvent.click(screen.getByRole('button', { name: /Create bank/i }));
     await waitFor(() => {
@@ -452,13 +482,14 @@ describe('DiagnosticBuilder — Travel diagnostic-bank authoring (PRD §4 Q13 / 
       const msg = notifyObj.error.mock.calls[0][0];
       expect(msg).toMatch(/Fix validation errors/i);
     });
-    expect(fetchApiMock).not.toHaveBeenCalled();
+    // The mount load may have queried the bank list, but no POST (create) fires.
+    expect(fetchApiMock.mock.calls.some(([, o]) => o?.method === 'POST')).toBe(false);
     expect(navigateMock).not.toHaveBeenCalled();
   });
 
   it('Create button shows "Creating…" + disabled state while the POST is in-flight', async () => {
     let resolveCreate;
-    fetchApiMock.mockReturnValueOnce(new Promise((resolve) => { resolveCreate = resolve; }));
+    routePost(() => new Promise((resolve) => { resolveCreate = resolve; }));
     renderPage();
     const createBtn = screen.getByRole('button', { name: /Create bank/i });
     fireEvent.click(createBtn);
@@ -679,5 +710,218 @@ describe('DiagnosticBuilder — Travel diagnostic-bank authoring (PRD §4 Q13 / 
     fireEvent.click(screen.getByRole('button', { name: /Validate JSON locally/i }));
     alert = screen.getByRole('alert');
     expect(alert.textContent).toMatch(/Both JSON payloads parse and have the required shape/i);
+  });
+
+  // ─── T11 Engine Weights tab (TMC-only) + Promote-to-active ─────────
+  // Pins PRD_TMC_DIAGNOSTIC_SALES_ROUTING_ENGINE §10 row T11 contract:
+  //   - Engine Weights tab visible only when subBrand=tmc
+  //   - 6 weight inputs default to §3.3.3 (50 / 20 / 15 / 10 / 10 / 8)
+  //   - Threshold defaults to 70
+  //   - Save PUTs to /api/travel/engine-weights
+  //   - Validation rejects negative weights / out-of-range threshold
+  //   - Version auto-bumps when weights change (v1 → v2)
+  //   - Promote-to-active button calls T5's POST /:id/promote-to-active
+
+  // GET /api/travel/engine-weights default-row resolver used across the
+  // T11 cases. Returns the §3.3.3 defaults so the form initial-render
+  // matches what the PRD pins.
+  function makeWeightsFetch({ existingWeights, archivedCatalogue } = {}) {
+    const weightsRow = existingWeights || {
+      id: 1,
+      tenantId: 1,
+      version: 'v1',
+      weightPrimaryOutcome: 50,
+      weightSecondarySkill: 20,
+      weightGrowthArea: 15,
+      weightCurriculumHook: 10,
+      weightGradeBandCenter: 10,
+      weightTierValueLean: 8,
+      scoresWellThreshold: 70,
+    };
+    const archived = archivedCatalogue || [];
+    return (url, opts) => {
+      if (typeof url === 'string' && url.startsWith('/api/travel/engine-weights')) {
+        if (opts?.method === 'PUT') {
+          const body = opts.body ? JSON.parse(opts.body) : {};
+          return Promise.resolve({ ...weightsRow, ...body });
+        }
+        return Promise.resolve(weightsRow);
+      }
+      if (typeof url === 'string' && url.startsWith('/api/travel-tmc-catalogue')) {
+        if (url.includes('/promote-to-active')) {
+          return Promise.resolve({ promoted: true });
+        }
+        return Promise.resolve(archived);
+      }
+      if (url === '/api/travel/diagnostic-banks' && opts?.method === 'POST') {
+        return Promise.resolve({ id: 1, version: 1, subBrand: 'tmc' });
+      }
+      return Promise.resolve(null);
+    };
+  }
+
+  it('T11: Engine Weights tab visible only when subBrand=tmc', async () => {
+    fetchApiMock.mockImplementation(makeWeightsFetch());
+    renderPage();
+    // TMC is default — tab is present.
+    expect(screen.getByRole('tab', { name: /Engine Weights/i })).toBeTruthy();
+    // Switch to RFU — tab disappears.
+    fireEvent.click(screen.getByRole('button', { name: /RFU \(Umrah\)/i }));
+    expect(screen.queryByRole('tab', { name: /Engine Weights/i })).toBeNull();
+    // Switch back to TMC — tab returns.
+    fireEvent.click(screen.getByRole('button', { name: /TMC \(school trips\)/i }));
+    expect(screen.getByRole('tab', { name: /Engine Weights/i })).toBeTruthy();
+  });
+
+  it('T11: 6 weight inputs render with PRD §3.3.3 defaults (50/20/15/10/10/8)', async () => {
+    fetchApiMock.mockImplementation(makeWeightsFetch());
+    renderPage();
+    fireEvent.click(screen.getByRole('tab', { name: /Engine Weights/i }));
+    await waitFor(() => {
+      expect(screen.getByLabelText(/Primary-outcome match/i)).toBeTruthy();
+    });
+    // Default values per PRD §3.3.3.
+    expect(screen.getByLabelText(/Primary-outcome match/i).value).toBe('50');
+    expect(screen.getByLabelText(/Secondary-skill match/i).value).toBe('20');
+    expect(screen.getByLabelText(/Growth-area match/i).value).toBe('15');
+    expect(screen.getByLabelText(/Curriculum hook depth/i).value).toBe('10');
+    expect(screen.getByLabelText(/Grade-band centering/i).value).toBe('10');
+    expect(screen.getByLabelText(/Tier-value lean/i).value).toBe('8');
+  });
+
+  it('T11: Threshold input renders with default 70 per §3.3.5', async () => {
+    fetchApiMock.mockImplementation(makeWeightsFetch());
+    renderPage();
+    fireEvent.click(screen.getByRole('tab', { name: /Engine Weights/i }));
+    await waitFor(() => {
+      expect(screen.getByLabelText(/Scores-well threshold/i)).toBeTruthy();
+    });
+    expect(screen.getByLabelText(/Scores-well threshold/i).value).toBe('70');
+    // Version label seeded from the persisted row.
+    expect(screen.getByLabelText(/Version label/i).value).toBe('v1');
+  });
+
+  it('T11: Save triggers PUT /api/travel/engine-weights with the right shape', async () => {
+    fetchApiMock.mockImplementation(makeWeightsFetch());
+    renderPage();
+    fireEvent.click(screen.getByRole('tab', { name: /Engine Weights/i }));
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Save engine weights/i })).toBeTruthy();
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Save engine weights/i }));
+    await waitFor(() => {
+      const putCall = fetchApiMock.mock.calls.find(
+        ([u, o]) => u === '/api/travel/engine-weights' && o?.method === 'PUT',
+      );
+      expect(putCall).toBeTruthy();
+      const body = JSON.parse(putCall[1].body);
+      expect(body.weightPrimaryOutcome).toBe(50);
+      expect(body.weightSecondarySkill).toBe(20);
+      expect(body.scoresWellThreshold).toBe(70);
+      expect(body.version).toBe('v1');
+    });
+    await waitFor(() => {
+      expect(notifyObj.success).toHaveBeenCalled();
+    });
+  });
+
+  it('T11: Validation rejects a negative weight + blocks the PUT', async () => {
+    fetchApiMock.mockImplementation(makeWeightsFetch());
+    renderPage();
+    fireEvent.click(screen.getByRole('tab', { name: /Engine Weights/i }));
+    await waitFor(() => {
+      expect(screen.getByLabelText(/Primary-outcome match/i)).toBeTruthy();
+    });
+    const primaryInput = screen.getByLabelText(/Primary-outcome match/i);
+    fireEvent.change(primaryInput, { target: { value: '-5' } });
+    fireEvent.click(screen.getByRole('button', { name: /Save engine weights/i }));
+    await waitFor(() => {
+      expect(notifyObj.error).toHaveBeenCalled();
+      const msg = notifyObj.error.mock.calls[0][0];
+      expect(msg).toMatch(/Fix validation errors/i);
+    });
+    // PUT was NOT issued.
+    const putCalls = fetchApiMock.mock.calls.filter(
+      ([u, o]) => u === '/api/travel/engine-weights' && o?.method === 'PUT',
+    );
+    expect(putCalls.length).toBe(0);
+    // Inline alert lists the specific error.
+    const alert = screen.getByRole('alert');
+    expect(alert.textContent).toMatch(/Primary-outcome match must be an integer ≥ 0/i);
+  });
+
+  it('T11: Validation rejects a threshold outside [0, 100]', async () => {
+    fetchApiMock.mockImplementation(makeWeightsFetch());
+    renderPage();
+    fireEvent.click(screen.getByRole('tab', { name: /Engine Weights/i }));
+    await waitFor(() => {
+      expect(screen.getByLabelText(/Scores-well threshold/i)).toBeTruthy();
+    });
+    fireEvent.change(screen.getByLabelText(/Scores-well threshold/i), { target: { value: '150' } });
+    fireEvent.click(screen.getByRole('button', { name: /Save engine weights/i }));
+    await waitFor(() => {
+      expect(notifyObj.error).toHaveBeenCalled();
+    });
+    const alert = screen.getByRole('alert');
+    expect(alert.textContent).toMatch(/threshold must be an integer in \[0, 100\]/i);
+  });
+
+  it('T11: Version auto-bumps from v1 → v2 when a weight changes and operator did not touch version', async () => {
+    fetchApiMock.mockImplementation(makeWeightsFetch());
+    renderPage();
+    fireEvent.click(screen.getByRole('tab', { name: /Engine Weights/i }));
+    await waitFor(() => {
+      expect(screen.getByLabelText(/Primary-outcome match/i)).toBeTruthy();
+    });
+    // Operator changes primary-outcome weight 50 → 60 (a real tuning move).
+    fireEvent.change(screen.getByLabelText(/Primary-outcome match/i), { target: { value: '60' } });
+    fireEvent.click(screen.getByRole('button', { name: /Save engine weights/i }));
+    await waitFor(() => {
+      const putCall = fetchApiMock.mock.calls.find(
+        ([u, o]) => u === '/api/travel/engine-weights' && o?.method === 'PUT',
+      );
+      expect(putCall).toBeTruthy();
+      const body = JSON.parse(putCall[1].body);
+      expect(body.weightPrimaryOutcome).toBe(60);
+      // Auto-bumped v1 → v2 because operator left the version field untouched.
+      expect(body.version).toBe('v2');
+    });
+  });
+
+  it('T11: ADMIN sees Save enabled; non-ADMIN role sees read-only notice', async () => {
+    fetchApiMock.mockImplementation(makeWeightsFetch());
+    renderPage({ role: 'MANAGER' });
+    fireEvent.click(screen.getByRole('tab', { name: /Engine Weights/i }));
+    await waitFor(() => {
+      expect(screen.getByLabelText(/Primary-outcome match/i)).toBeTruthy();
+    });
+    // Save button is disabled for non-ADMIN.
+    const saveBtn = screen.getByRole('button', { name: /Save engine weights/i });
+    expect(saveBtn.disabled).toBe(true);
+    // Read-only notice copy is visible.
+    expect(screen.getByText(/Read-only \(ADMIN required to save\)/i)).toBeTruthy();
+  });
+
+  // T25: the legacy in-tab Promote-to-active sub-panel was deprecated
+  // once T16 shipped the dedicated /travel/tmc/catalogue admin page
+  // (TmcCatalogueAdmin.jsx). Engine Weights tab now surfaces a single
+  // link to that page; the full archived-row list + promote flow lives
+  // there. The two prior T11 tests that pinned the in-tab archived
+  // list + per-row Promote button + empty-state copy were removed —
+  // those behaviours are now covered by TmcCatalogueAdmin.test.jsx.
+  it('T25: Engine Weights tab links to /travel/tmc/catalogue (T16 dedicated page)', async () => {
+    fetchApiMock.mockImplementation(makeWeightsFetch());
+    renderPage();
+    fireEvent.click(screen.getByRole('tab', { name: /Engine Weights/i }));
+    const link = await screen.findByRole('link', { name: /Open TMC Catalogue Admin/i });
+    expect(link).toBeTruthy();
+    expect(link.getAttribute('href')).toBe('/travel/tmc/catalogue');
+    // The page must NOT fire the legacy in-tab archived-list GET (T16's
+    // dedicated page does its own load). Confirm no archived-list call
+    // went out from this surface.
+    const archivedListCalls = fetchApiMock.mock.calls.filter(
+      ([u]) => typeof u === 'string' && u.startsWith('/api/travel-tmc-catalogue'),
+    );
+    expect(archivedListCalls.length).toBe(0);
   });
 });

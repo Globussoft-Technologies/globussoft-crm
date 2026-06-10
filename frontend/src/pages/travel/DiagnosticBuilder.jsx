@@ -20,14 +20,15 @@
 // goes to /api/travel/diagnostic-banks; backend revalidates server-side
 // and creates v(N+1). Per Q16, existing banks are not mutated.
 
-import { useRef, useState } from 'react';
+import { useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
   AlertTriangle, CheckCircle, ChevronDown, ChevronLeft, ChevronUp,
-  Download, FileJson, Plus, Save, Trash2, Upload,
+  Download, FileJson, Plus, Save, Settings, Trash2, Upload,
 } from 'lucide-react';
 import { fetchApi, getAuthToken } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
+import { AuthContext } from '../../App';
 
 const SUB_BRANDS = [
   { value: 'tmc', label: 'TMC (school trips)' },
@@ -86,6 +87,8 @@ const SCORING_EXAMPLE = JSON.stringify(
 export default function DiagnosticBuilder() {
   const notify = useNotify();
   const navigate = useNavigate();
+  const { user } = useContext(AuthContext) || {};
+  const isAdmin = user?.role === 'ADMIN';
 
   const [mode, setMode] = useState('visual');
   const [subBrand, setSubBrand] = useState('tmc');
@@ -93,7 +96,50 @@ export default function DiagnosticBuilder() {
   const [rJson, setRJson] = useState(SCORING_EXAMPLE);
   const [validation, setValidation] = useState(null);
   const [saving, setSaving] = useState(false);
+  // Current active bank for the selected sub-brand (so switching brand shows
+  // THAT brand's existing questions to edit, not a static template).
+  const [loadingBank, setLoadingBank] = useState(true);
+  const [bankInfo, setBankInfo] = useState(null); // { existing, version } | null
   const fileRef = useRef(null);
+  const firstLoad = useRef(true);
+
+  // Load the selected sub-brand's current active bank whenever it changes.
+  // Existing bank → pre-fill the editors with its questions + scoring (so
+  // admins edit a copy and ship v+1). No bank yet → start from a template.
+  // On a brand SWITCH with no bank we reset to the template; on the very
+  // first mount with no bank we leave the initial template untouched (so a
+  // late-resolving fetch can't wipe edits the admin already started).
+  useEffect(() => {
+    let cancelled = false;
+    setLoadingBank(true);
+    setValidation(null);
+    fetchApi(`/api/travel/diagnostic-banks?subBrand=${encodeURIComponent(subBrand)}&active=true`)
+      .then((res) => {
+        if (cancelled) return;
+        const bank = Array.isArray(res?.banks) ? res.banks[0] : null;
+        if (bank) {
+          setQJson(prettyJson(bank.questionsJson, QUESTIONS_EXAMPLE));
+          setRJson(prettyJson(bank.scoringRulesJson, SCORING_EXAMPLE));
+          setBankInfo({ existing: true, version: bank.version });
+        } else {
+          if (!firstLoad.current) {
+            setQJson(QUESTIONS_EXAMPLE);
+            setRJson(SCORING_EXAMPLE);
+          }
+          setBankInfo({ existing: false });
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setBankInfo({ existing: false });
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoadingBank(false);
+          firstLoad.current = false;
+        }
+      });
+    return () => { cancelled = true; };
+  }, [subBrand]);
 
   const exportCsv = async () => {
     try {
@@ -246,16 +292,24 @@ export default function DiagnosticBuilder() {
             </button>
           ))}
         </div>
+        <p style={{ color: 'var(--text-secondary)', fontSize: 13, margin: '10px 0 0' }}>
+          {loadingBank
+            ? 'Loading this brand’s current questions…'
+            : bankInfo?.existing
+              ? `Editing a copy of v${bankInfo.version}. Saving ships v${bankInfo.version + 1} for this brand.`
+              : 'No diagnostic bank yet for this brand — starting from a template. Saving ships v1.'}
+        </p>
       </section>
 
-      <ModeTabs mode={mode} onChange={setMode} />
+      <ModeTabs mode={mode} onChange={setMode} subBrand={subBrand} />
 
-      {mode === 'visual' ? (
+      {mode === 'visual' && (
         <>
           <QuestionsVisualEditor json={qJson} onChange={setQJson} onSwitchToJson={() => setMode('json')} />
           <ScoringVisualEditor json={rJson} onChange={setRJson} onSwitchToJson={() => setMode('json')} />
         </>
-      ) : (
+      )}
+      {mode === 'json' && (
         <>
           <section style={card}>
             <h2 style={cardTitle}>questionsJson</h2>
@@ -287,6 +341,25 @@ export default function DiagnosticBuilder() {
             />
           </section>
         </>
+      )}
+      {mode === 'engineWeights' && subBrand === 'tmc' && (
+        <EngineWeightsPanel notify={notify} isAdmin={isAdmin} />
+      )}
+      {mode === 'engineWeights' && subBrand === 'tmc' && (
+        <div
+          style={{
+            marginTop: '1.5rem', padding: '1rem',
+            background: 'var(--surface-subtle, #f5f5f5)', borderRadius: '8px',
+          }}
+        >
+          <strong>Promote trips to active:</strong>{' '}
+          <Link
+            to="/travel/tmc/catalogue"
+            style={{ color: 'var(--primary-color, var(--accent-color))', textDecoration: 'none' }}
+          >
+            Open TMC Catalogue Admin →
+          </Link>
+        </div>
       )}
 
       {validation && (
@@ -336,7 +409,11 @@ export default function DiagnosticBuilder() {
 
 // ─── Mode tabs ────────────────────────────────────────────────────────
 
-function ModeTabs({ mode, onChange }) {
+function ModeTabs({ mode, onChange, subBrand }) {
+  // Engine Weights tab is TMC-only — the §3.3 deterministic 6-signal
+  // engine is a TMC-specific contract; other sub-brands continue to use
+  // the generic weighted-sum scorer with no weight knobs to expose.
+  const showEngineWeights = subBrand === 'tmc';
   return (
     <div role="tablist" aria-label="Authoring mode" style={tabRow}>
       <button
@@ -357,6 +434,17 @@ function ModeTabs({ mode, onChange }) {
       >
         JSON (advanced)
       </button>
+      {showEngineWeights && (
+        <button
+          type="button"
+          role="tab"
+          aria-selected={mode === 'engineWeights'}
+          onClick={() => onChange('engineWeights')}
+          style={mode === 'engineWeights' ? tabActive : tabIdle}
+        >
+          Engine Weights
+        </button>
+      )}
     </div>
   );
 }
@@ -735,6 +823,297 @@ function tryParse(s) {
   }
 }
 
+// Pretty-print a stored JSON string for the editor; fall back to the raw
+// string (or a template) if it doesn't parse.
+function prettyJson(s, fallback) {
+  try {
+    return JSON.stringify(JSON.parse(s), null, 2);
+  } catch {
+    return s || fallback;
+  }
+}
+
+// ─── Engine Weights panel (TMC) ───────────────────────────────────────
+//
+// PRD_TMC_DIAGNOSTIC_SALES_ROUTING_ENGINE §3.3.3 + §3.3.7 + §3.8.
+// Six weight knobs + scoresWellThreshold + version label, sourced from
+// the EngineWeights config row (single-row-per-tenant).
+//
+// Endpoints (T11 backend follow-up — see PRD §10 row T11 notes):
+//   GET  /api/travel/engine-weights → current row (defaults if empty)
+//   PUT  /api/travel/engine-weights → save (auto-bumps version if any
+//                                     numeric weight changed)
+//
+// Validation: each weight must be an integer ≥ 0; threshold must be an
+// integer in [0, 100]. The Save button stays disabled while validation
+// is open until errors clear.
+
+const DEFAULT_TMC_WEIGHTS = {
+  version: 'v1',
+  weightPrimaryOutcome: 50,
+  weightSecondarySkill: 20,
+  weightGrowthArea: 15,
+  weightCurriculumHook: 10,
+  weightGradeBandCenter: 10,
+  weightTierValueLean: 8,
+  scoresWellThreshold: 70,
+};
+
+const WEIGHT_FIELDS = [
+  { key: 'weightPrimaryOutcome',  label: 'Primary-outcome match',  defaultValue: 50, hint: 'Q1 primary-outcome match. PRD §3.3.3 default 50.' },
+  { key: 'weightSecondarySkill',  label: 'Secondary-skill match',  defaultValue: 20, hint: 'Per Q2 match, capped at 40 (max 2 secondaries). PRD §3.3.3 default 20.' },
+  { key: 'weightGrowthArea',      label: 'Growth-area match',      defaultValue: 15, hint: 'Awarded once; 0 if duplicates a Q2 pick. PRD §3.3.3 default 15.' },
+  { key: 'weightCurriculumHook',  label: 'Curriculum hook depth',  defaultValue: 10, hint: 'Trip has a curriculum_hooks entry matching school board × grade. PRD §3.3.3 default 10.' },
+  { key: 'weightGradeBandCenter', label: 'Grade-band centering',   defaultValue: 10, hint: 'School band at/above trip range midpoint ceiling. PRD §3.3.3 default 10.' },
+  { key: 'weightTierValueLean',   label: 'Tier-value lean',        defaultValue:  8, hint: 'Only when geo_preference=open. Prefer higher affordable tier. PRD §3.3.3 default 8.' },
+];
+
+function validateWeights(weights) {
+  const errors = [];
+  for (const f of WEIGHT_FIELDS) {
+    const v = weights[f.key];
+    if (!Number.isInteger(v) || v < 0) {
+      errors.push(`${f.label} must be an integer ≥ 0 (got ${JSON.stringify(v)}).`);
+    }
+  }
+  const t = weights.scoresWellThreshold;
+  if (!Number.isInteger(t) || t < 0 || t > 100) {
+    errors.push(`Scores-well threshold must be an integer in [0, 100] (got ${JSON.stringify(t)}).`);
+  }
+  if (!weights.version || typeof weights.version !== 'string' || !weights.version.trim()) {
+    errors.push('Version label must be a non-empty string.');
+  }
+  return errors;
+}
+
+// Compute the next auto-bumped version when any numeric weight changed.
+// "vN" → "v(N+1)"; everything else gets a "-revised" suffix appended.
+function autoBumpVersion(prev) {
+  const m = /^v(\d+)$/i.exec(String(prev || '').trim());
+  if (m) return `v${Number(m[1]) + 1}`;
+  return `${prev || 'v1'}-revised`;
+}
+
+function weightsNumericallyEqual(a, b) {
+  for (const f of WEIGHT_FIELDS) {
+    if (Number(a[f.key]) !== Number(b[f.key])) return false;
+  }
+  return Number(a.scoresWellThreshold) !== Number(b.scoresWellThreshold) ? false : true;
+}
+
+function EngineWeightsPanel({ notify, isAdmin }) {
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
+  const [weights, setWeights] = useState(DEFAULT_TMC_WEIGHTS);
+  const [baseline, setBaseline] = useState(DEFAULT_TMC_WEIGHTS);
+  const [saving, setSaving] = useState(false);
+  const [errors, setErrors] = useState([]);
+
+  const load = useCallback(() => {
+    setLoading(true);
+    setLoadError(null);
+    fetchApi('/api/travel/engine-weights', { silent: true })
+      .then((res) => {
+        // Tolerate either a bare row OR an envelope { engineWeights }.
+        const row = res?.engineWeights || res;
+        if (row && typeof row === 'object') {
+          const merged = { ...DEFAULT_TMC_WEIGHTS, ...row };
+          setWeights(merged);
+          setBaseline(merged);
+        } else {
+          setWeights(DEFAULT_TMC_WEIGHTS);
+          setBaseline(DEFAULT_TMC_WEIGHTS);
+        }
+      })
+      .catch((e) => {
+        // 404 = no row yet; show the §3.3.3 defaults so the first save
+        // POSTs a brand-new row. Other errors surface to the operator.
+        if (e?.status === 404) {
+          setWeights(DEFAULT_TMC_WEIGHTS);
+          setBaseline(DEFAULT_TMC_WEIGHTS);
+        } else {
+          setLoadError(e?.message || 'Failed to load engine weights');
+        }
+      })
+      .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const updateField = (key, raw) => {
+    const next = { ...weights };
+    if (key === 'version') {
+      next.version = raw;
+    } else {
+      next[key] = raw === '' ? 0 : Number(raw);
+    }
+    setWeights(next);
+    setErrors([]);
+  };
+
+  const onSave = async () => {
+    if (!isAdmin) {
+      notify.error('Engine Weights save is ADMIN-only.');
+      return;
+    }
+    const v = validateWeights(weights);
+    if (v.length > 0) {
+      setErrors(v);
+      notify.error('Fix validation errors before saving.');
+      return;
+    }
+    // Auto-bump version if any numeric weight changed AND the operator
+    // didn't explicitly edit the version field themselves.
+    let payload = { ...weights };
+    const numericChanged = !weightsNumericallyEqual(weights, baseline);
+    const versionUntouched = weights.version === baseline.version;
+    if (numericChanged && versionUntouched) {
+      payload.version = autoBumpVersion(baseline.version);
+      setWeights(payload);
+    }
+    setSaving(true);
+    try {
+      const res = await fetchApi('/api/travel/engine-weights', {
+        method: 'PUT',
+        body: JSON.stringify(payload),
+      });
+      const row = res?.engineWeights || res || payload;
+      const merged = { ...DEFAULT_TMC_WEIGHTS, ...row };
+      setWeights(merged);
+      setBaseline(merged);
+      notify.success(`Engine weights saved (version ${merged.version}).`);
+    } catch (e) {
+      notify.error(e?.body?.error || e?.message || 'Failed to save engine weights');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <section style={card} aria-busy="true">
+        <h2 style={cardTitle}>
+          <Settings size={18} aria-hidden /> Engine Weights (TMC)
+        </h2>
+        <p style={{ color: 'var(--text-secondary)' }}>Loading current weights&hellip;</p>
+      </section>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <section style={{ ...card, borderLeft: '4px solid var(--danger-color)' }}>
+        <h2 style={cardTitle}>
+          <Settings size={18} aria-hidden /> Engine Weights (TMC)
+        </h2>
+        <div role="alert" style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--danger-color)' }}>
+          <AlertTriangle size={16} aria-hidden /> {loadError}
+        </div>
+        <div style={{ marginTop: 12 }}>
+          <button type="button" onClick={load} style={secondaryBtn}>Retry</button>
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <section style={card} aria-label="Engine Weights">
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, flexWrap: 'wrap', gap: 8 }}>
+        <h2 style={{ ...cardTitle, margin: 0 }}>
+          <Settings size={18} aria-hidden /> Engine Weights (TMC)
+        </h2>
+        <span style={versionPill} aria-label="Current version">
+          version: <strong style={{ marginLeft: 4 }}>{baseline.version}</strong>
+        </span>
+      </div>
+      <p style={{ color: 'var(--text-secondary)', fontSize: 13, margin: '0 0 12px' }}>
+        Per PRD §3.3.3 the six weights below + the §3.3.5 "scores-well" threshold drive the
+        deterministic 6-signal engine. Tuning here is config; the engine reads
+        the live row at submission time (§3.3.7). Changing any weight auto-bumps
+        the version so each scored submission's <code>weightsVersion</code> stays replayable.
+      </p>
+
+      <div style={fieldGrid}>
+        {WEIGHT_FIELDS.map((f) => (
+          <Field key={f.key} label={f.label}>
+            <input
+              type="number"
+              value={weights[f.key]}
+              onChange={(e) => updateField(f.key, e.target.value)}
+              style={input}
+              aria-label={f.label}
+              min={0}
+              step={1}
+            />
+            <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>{f.hint}</span>
+          </Field>
+        ))}
+        <Field label="Scores-well threshold (0-100)">
+          <input
+            type="number"
+            value={weights.scoresWellThreshold}
+            onChange={(e) => updateField('scoresWellThreshold', e.target.value)}
+            style={input}
+            aria-label="Scores-well threshold"
+            min={0}
+            max={100}
+            step={1}
+          />
+          <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+            PRD §3.3.5 "scores well" floor. Default 70.
+          </span>
+        </Field>
+        <Field label="Version label">
+          <input
+            type="text"
+            value={weights.version}
+            onChange={(e) => updateField('version', e.target.value)}
+            style={input}
+            aria-label="Version label"
+          />
+          <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+            Auto-bumps when weights change (vN → v(N+1)). Override freely if needed.
+          </span>
+        </Field>
+      </div>
+
+      {errors.length > 0 && (
+        <div
+          role="alert"
+          style={{
+            marginTop: 12, padding: 10, borderRadius: 6,
+            background: 'rgba(190, 50, 50, 0.08)',
+            border: '1px solid var(--danger-color)',
+            color: 'var(--danger-color)', fontSize: 13,
+          }}
+        >
+          <strong>Validation errors:</strong>
+          <ul style={{ margin: '6px 0 0', paddingLeft: 20 }}>
+            {errors.map((e, i) => <li key={i}>{e}</li>)}
+          </ul>
+        </div>
+      )}
+
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 12, gap: 8 }}>
+        {!isAdmin && (
+          <span style={{ color: 'var(--text-secondary)', fontSize: 12, alignSelf: 'center' }}>
+            Read-only (ADMIN required to save).
+          </span>
+        )}
+        <button
+          type="button"
+          onClick={onSave}
+          disabled={saving || !isAdmin}
+          style={saving || !isAdmin ? primaryBtnDisabled : primaryBtn}
+          aria-label="Save engine weights"
+        >
+          <Save size={14} aria-hidden /> {saving ? 'Saving…' : 'Save engine weights'}
+        </button>
+      </div>
+    </section>
+  );
+}
+
 // ─── Shared styles ────────────────────────────────────────────────────
 
 const card = {
@@ -838,4 +1217,10 @@ const optRow = {
 };
 const emptyHint = {
   color: 'var(--text-secondary)', fontSize: 13, fontStyle: 'italic', margin: '4px 0',
+};
+const versionPill = {
+  display: 'inline-flex', alignItems: 'center',
+  padding: '4px 10px', borderRadius: 999, fontSize: 12, fontWeight: 500,
+  background: 'var(--subtle-bg)', color: 'var(--text-primary)',
+  border: '1px solid var(--border-color)',
 };

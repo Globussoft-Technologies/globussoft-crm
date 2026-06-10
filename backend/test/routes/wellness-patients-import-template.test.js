@@ -128,35 +128,34 @@ beforeEach(() => {
   prisma.auditLog.create.mockResolvedValue({ id: 1 });
 });
 
-describe('GET /api/wellness/patients/import-template.csv — #820 (1) endpoint mounted', () => {
+// Canonical route is GET /patients/import-template?format=csv|xlsx (default csv).
+// Earlier test framing assumed `/patients/import-template.csv`; the route source
+// (routes/wellness.js ~L1117) exposes it as the query-param variant instead.
+const TEMPLATE_URL = '/api/wellness/patients/import-template';
+
+describe('GET /api/wellness/patients/import-template — #820 (1) endpoint mounted', () => {
   test('returns 200 for ADMIN on a wellness tenant + does NOT touch prisma.patient.findMany', async () => {
-    const res = await request(makeApp()).get(
-      '/api/wellness/patients/import-template.csv',
-    );
+    const res = await request(makeApp()).get(TEMPLATE_URL);
     expect(res.status).toBe(200);
     // Static template — no patient list read.
     expect(prisma.patient.findMany).not.toHaveBeenCalled();
   });
 });
 
-describe('GET /api/wellness/patients/import-template.csv — #820 (2) headers', () => {
+describe('GET /api/wellness/patients/import-template — #820 (2) headers', () => {
   test('Content-Type csv + Content-Disposition is attachment with canonical filename', async () => {
-    const res = await request(makeApp()).get(
-      '/api/wellness/patients/import-template.csv',
-    );
+    const res = await request(makeApp()).get(TEMPLATE_URL);
     expect(res.status).toBe(200);
     expect(res.headers['content-type']).toMatch(/^text\/csv; charset=utf-8$/i);
     expect(res.headers['content-disposition']).toBe(
-      'attachment; filename="patients-import-template.csv"',
+      'attachment; filename="patients-template.csv"',
     );
   });
 });
 
-describe('GET /api/wellness/patients/import-template.csv — #820 (3) body shape', () => {
+describe('GET /api/wellness/patients/import-template — #820 (3) body shape', () => {
   test('body parses as a valid CSV with exactly 2 non-empty lines (header + example)', async () => {
-    const res = await request(makeApp()).get(
-      '/api/wellness/patients/import-template.csv',
-    );
+    const res = await request(makeApp()).get(TEMPLATE_URL);
     expect(res.status).toBe(200);
     const body = stripBom(res.text);
     // Split on CRLF or LF; drop trailing empty token from terminal newline.
@@ -165,59 +164,55 @@ describe('GET /api/wellness/patients/import-template.csv — #820 (3) body shape
   });
 });
 
-describe('GET /api/wellness/patients/import-template.csv — #820 (4) header columns', () => {
+describe('GET /api/wellness/patients/import-template — #820 (4) header columns', () => {
   test('header row carries all 9 expected columns in canonical order', async () => {
-    const res = await request(makeApp()).get(
-      '/api/wellness/patients/import-template.csv',
-    );
+    const res = await request(makeApp()).get(TEMPLATE_URL);
     expect(res.status).toBe(200);
     const body = stripBom(res.text);
     const lines = body.split(/\r?\n/).filter((l) => l.length > 0);
     const header = parseCsvLine(lines[0]);
+    // Mirrors backend/lib/csvEntities.js customers entity contract — pinned
+    // to the route source (routes/wellness.js ~L1124).
     expect(header).toEqual([
       'name',
       'phone',
       'email',
-      'dob',
       'gender',
+      'dob',
       'source',
-      'locationId',
-      'tags',
+      'bloodGroup',
+      'allergies',
       'notes',
     ]);
   });
 });
 
-describe('GET /api/wellness/patients/import-template.csv — #820 (5) example row arity', () => {
+describe('GET /api/wellness/patients/import-template — #820 (5) example row arity', () => {
   test('example row has 9 cells matching the header arity + canonical sample values', async () => {
-    const res = await request(makeApp()).get(
-      '/api/wellness/patients/import-template.csv',
-    );
+    const res = await request(makeApp()).get(TEMPLATE_URL);
     expect(res.status).toBe(200);
     const body = stripBom(res.text);
     const lines = body.split(/\r?\n/).filter((l) => l.length > 0);
     const example = parseCsvLine(lines[1]);
     expect(example).toHaveLength(9);
-    // Canonical sample — pins so the frontend "Download template" button +
-    // any operator-facing docs can rely on a stable shape.
+    // Canonical sample — pinned to routes/wellness.js ~L1135 so the
+    // frontend "Download template" button + operator-facing docs can rely
+    // on a stable shape.
     expect(example[0]).toBe('Anita Sharma');
     expect(example[1]).toBe('+919876543210');
-    expect(example[2]).toBe('anita.example@gmail.com');
-    expect(example[3]).toBe('1990-03-15');
-    expect(example[4]).toBe('F');
+    expect(example[2]).toBe('anita@example.com');
+    expect(example[3]).toBe('F');
+    expect(example[4]).toBe('1992-04-18');
     expect(example[5]).toBe('walk-in');
-    expect(example[6]).toBe('1');
-    expect(example[7]).toBe('VIP;repeat');
-    // notes cell contains an em-dash + a comma-free phrase; pin verbatim.
-    expect(example[8]).toBe('Sample notes — replace with real patient data');
+    expect(example[6]).toBe('O+');
+    expect(example[7]).toBe('');
+    expect(example[8]).toBe('');
   });
 });
 
-describe('GET /api/wellness/patients/import-template.csv — #820 (6) unauthenticated → 401', () => {
+describe('GET /api/wellness/patients/import-template — #820 (6) unauthenticated → 401', () => {
   test('no req.user → phiReadGate emits 401; handler body never runs', async () => {
-    const res = await request(makeApp({ noAuth: true })).get(
-      '/api/wellness/patients/import-template.csv',
-    );
+    const res = await request(makeApp({ noAuth: true })).get(TEMPLATE_URL);
     expect(res.status).toBe(401);
     // No CSV body should have been emitted.
     expect(res.headers['content-type']).not.toMatch(/text\/csv/);

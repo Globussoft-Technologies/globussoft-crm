@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { Check, ArrowRight, X, Plus, Loader } from 'lucide-react';
 import { AuthContext } from '../App';
 import { fetchApi } from '../utils/api';
+import { useNotify } from '../utils/notify';
 
 const C = {
   bg: '#f8fafc', bg2: '#ffffff', text: '#1e293b', text2: '#334155', text3: '#64748b', text4: '#94a3b8',
@@ -14,31 +15,43 @@ const C = {
   shadow: '0 1px 3px rgba(0,0,0,0.06), 0 4px 12px rgba(0,0,0,0.04)',
 };
 
-const PRICES = {
-  usd: { sym: '$', starter: { annual: 6, monthly: 8, yearAnnual: '$72 /user/year', yearMonthly: '$96 /user/year' }, pro: { annual: 18, monthly: 22, yearAnnual: '$216 /user/year', yearMonthly: '$264 /user/year' }, ent: { annual: 29, monthly: 36, yearAnnual: '$348 /user/year', yearMonthly: '$432 /user/year' } },
-  inr: { sym: '\u20B9', starter: { annual: 499, monthly: 649, yearAnnual: '\u20B95,988 /user/year', yearMonthly: '\u20B97,788 /user/year' }, pro: { annual: '1,499', monthly: '1,899', yearAnnual: '\u20B917,988 /user/year', yearMonthly: '\u20B922,788 /user/year' }, ent: { annual: '2,499', monthly: '2,999', yearAnnual: '\u20B929,988 /user/year', yearMonthly: '\u20B935,988 /user/year' } },
-};
+// Fallback catalog used (a) while the API request is in flight and (b) if
+// the API is unreachable. The DB is the source of truth \u2014 edit prices /
+// features / labels from the admin "Manage Subscription Plans" page rather
+// than touching this file. Shape MUST match the API response from
+// GET /api/subscriptions/plans (see backend/routes/subscriptions.js).
+const CURRENCY_SYM = { usd: '$', inr: '\u20B9' };
 
-const PLANS = [
+const DEFAULT_PLANS = [
   {
-    key: 'starter', name: 'Starter', desc: 'For startups & SMBs seeking efficient pipeline management.',
-    priceKey: 'starter', checkColor: '#4f46e5',
+    id: null, planKey: 'starter', name: 'Starter',
+    description: 'For startups & SMBs seeking efficient pipeline management.',
+    accentColor: '#4f46e5', popular: false, cta: 'Start Free Trial', featuresLabel: 'Includes',
     features: ['Contact, Account & Deal Management', 'Contact Lifecycle Stages', 'Built-in Chat, Email & Phone', 'Email Templates & Tracking', 'Custom Fields & Kanban Views', 'Basic Workflows (20)', 'Visual Sales Pipeline', 'Product Catalog', 'Curated Reports & Dashboards', 'Slack Integration & Marketplace', 'Mobile App & 24\u00d75 Support'],
-    cta: 'Start Free Trial', popular: false,
+    pricing: {
+      usd: { annual: 6, monthly: 8, yearAnnualLabel: '$72 /user/year', yearMonthlyLabel: '$96 /user/year' },
+      inr: { annual: 499, monthly: 649, yearAnnualLabel: '\u20B95,988 /user/year', yearMonthlyLabel: '\u20B97,788 /user/year' },
+    },
   },
   {
-    key: 'pro', name: 'Professional', desc: 'For growing teams needing AI, automation & multi-pipeline.',
-    priceKey: 'pro', checkColor: '#7c3aed',
+    id: null, planKey: 'pro', name: 'Professional',
+    description: 'For growing teams needing AI, automation & multi-pipeline.',
+    accentColor: '#7c3aed', popular: true, cta: 'Start Free Trial', featuresLabel: 'Everything in Starter, plus',
     features: ['AI-Powered Contact Scoring', 'Multiple Sales Pipelines', 'Sales Sequences & Automation', 'Territory Management', 'Auto-assignment Rules', 'AI Email Writing & Enhancement', 'Deal Insights by AI', 'Advanced Workflows (50)', 'Custom Reports & Dashboards', 'Account Hierarchy & BYOC'],
-    featuresLabel: 'Everything in Starter, plus',
-    cta: 'Start Free Trial', popular: true,
+    pricing: {
+      usd: { annual: 18, monthly: 22, yearAnnualLabel: '$216 /user/year', yearMonthlyLabel: '$264 /user/year' },
+      inr: { annual: '1,499', monthly: '1,899', yearAnnualLabel: '\u20B917,988 /user/year', yearMonthlyLabel: '\u20B922,788 /user/year' },
+    },
   },
   {
-    key: 'ent', name: 'Enterprise', desc: 'For large teams needing customization, governance & AI forecasting.',
-    priceKey: 'ent', checkColor: '#d97706',
+    id: null, planKey: 'ent', name: 'Enterprise',
+    description: 'For large teams needing customization, governance & AI forecasting.',
+    accentColor: '#d97706', popular: false, cta: 'Contact Sales', featuresLabel: 'Everything in Professional, plus',
     features: ['Custom Modules', 'AI Forecasting Insights', 'Field-level Permissions', 'Sandbox Environment', 'Audit Logs & Compliance', 'Auto Profile Enrichment', 'Deal Teams & Advanced Metrics', '5,000 Bulk Emails/user/day', '100 GB Storage/user', 'Dedicated Account Manager', 'Priority 24\u00d77 Support'],
-    featuresLabel: 'Everything in Professional, plus',
-    cta: 'Contact Sales', popular: false,
+    pricing: {
+      usd: { annual: 29, monthly: 36, yearAnnualLabel: '$348 /user/year', yearMonthlyLabel: '$432 /user/year' },
+      inr: { annual: '2,499', monthly: '2,999', yearAnnualLabel: '\u20B929,988 /user/year', yearMonthlyLabel: '\u20B935,988 /user/year' },
+    },
   },
 ];
 
@@ -106,7 +119,12 @@ const FAQ_ITEMS = [
 
 export default function Pricing() {
   const navigate = useNavigate();
-  const { token } = useContext(AuthContext);
+  const notify = useNotify();
+  const { token, user } = useContext(AuthContext);
+  // Only tenant ADMINs can BUY a subscription — managers / staff (and the
+  // platform OWNER too, who never subscribes) see the page but get pushed
+  // through signup instead of the Razorpay popup.
+  const canPurchase = user?.role === 'ADMIN';
   const [annual, setAnnual] = useState(true);
   const [currency, setCurrency] = useState(() => {
     try {
@@ -120,18 +138,29 @@ export default function Pricing() {
   });
 
   const [apiPlans, setApiPlans] = useState(null);
+  const [plansError, setPlansError] = useState(null);
   const [loadingPayment, setLoadingPayment] = useState(null);
 
-  // Fetch subscription plans from API if authenticated
+  // Fetch the subscription catalog from the public endpoint. Runs for
+  // anonymous visitors AND authed users — same data either way. While the
+  // request is in flight or if it fails, the DEFAULT_PLANS fallback above
+  // keeps the page rendered.
   useEffect(() => {
-    if (token) {
-      fetchApi('/api/subscriptions/plans')
-        .then(plans => {
+    fetchApi('/api/subscriptions/plans')
+      .then(plans => {
+        if (Array.isArray(plans) && plans.length > 0) {
           setApiPlans(plans);
-        })
-        .catch(err => console.error('[Pricing] Failed to fetch plans:', err.message || err));
-    }
-  }, [token]);
+          setPlansError(null);
+        }
+      })
+      .catch(err => {
+        const msg = err?.message || 'Failed to load plans';
+        setPlansError(msg);
+        // Silent: the fallback catalog still renders, no need to badge the
+        // visitor with an error toast. Logged-in admins can see the issue
+        // from the Manage Plans page.
+      });
+  }, []);
 
   // Load Razorpay script
   useEffect(() => {
@@ -144,16 +173,21 @@ export default function Pricing() {
 
   const handlePayment = async (planId, planName) => {
     if (!window.Razorpay) {
-      alert('Payment system is not loaded. Please refresh and try again.');
+      notify.error('Payment system is still loading. Please try again in a moment.');
       return;
     }
 
     setLoadingPayment(planName);
     try {
-      // Create order
+      // Pass the currency + billing period the user actually saw on the card
+      // so the backend charges that exact price (not the legacy default).
       const orderData = await fetchApi('/api/subscriptions/create-order', {
         method: 'POST',
-        body: JSON.stringify({ planId: parseInt(planId) })
+        body: JSON.stringify({
+          planId: parseInt(planId),
+          currency,
+          billingPeriod: annual ? 'annual' : 'monthly',
+        })
       });
 
       const razorpayKeyId = import.meta.env.VITE_RAZORPAY_KEY_ID;
@@ -162,7 +196,7 @@ export default function Pricing() {
       }
 
       if (!orderData.orderId || !orderData.amount || !orderData.currency) {
-        throw new Error('Invalid order data from server: ' + JSON.stringify(orderData));
+        throw new Error('Invalid order data from server');
       }
 
       // Open Razorpay popup
@@ -174,7 +208,6 @@ export default function Pricing() {
         name: 'GlobusCRM',
         description: `${planName} Plan`,
         handler: async (response) => {
-          // Verify payment
           try {
             const verifyData = await fetchApi('/api/subscriptions/verify-payment', {
               method: 'POST',
@@ -187,7 +220,6 @@ export default function Pricing() {
             });
 
             if (verifyData?.success) {
-              // Pass subscription details to success page
               navigate('/payment-success', {
                 state: {
                   planName: planName,
@@ -196,11 +228,9 @@ export default function Pricing() {
                 }
               });
             } else {
-              console.error('[Pricing] Verification failed:', verifyData);
               navigate('/payment-failed');
             }
           } catch (err) {
-            console.error('[Pricing] Payment verification error:', err);
             navigate('/payment-failed');
           }
         },
@@ -216,9 +246,7 @@ export default function Pricing() {
       const rzp = new window.Razorpay(options);
       rzp.open();
     } catch (err) {
-      console.error('[Pricing] Payment error:', err.message);
-      alert(`Payment failed: ${err.message}`);
-      setLoadingPayment(null);
+      notify.error(`Payment failed: ${err.message}`);
     } finally {
       setLoadingPayment(null);
     }
@@ -228,28 +256,55 @@ export default function Pricing() {
   React.useEffect(() => { try { localStorage.setItem('pricingCurrency', currency); } catch {} }, [currency]);
   const [openFaq, setOpenFaq] = useState(null);
 
-  const prices = PRICES[currency];
+  // Effective catalog: API data wins, fallback otherwise. Always at least 1
+  // card so the page can render before the fetch resolves.
+  const plans = (apiPlans && apiPlans.length > 0) ? apiPlans : DEFAULT_PLANS;
+  const sym = CURRENCY_SYM[currency] || '$';
+  const prices = { sym };
 
-  const getPrice = (planKey) => {
-    const p = prices[planKey];
-    return annual ? p.annual : p.monthly;
+  // Read the price for a given plan from its pricing JSON for the current
+  // (currency, billing-period) selection. Falls back to the plan's legacy
+  // single `price`+`currency` columns when pricing JSON is absent.
+  const getPrice = (plan) => {
+    const bucket = plan?.pricing && plan.pricing[currency];
+    if (bucket) return annual ? bucket.annual : bucket.monthly;
+    // Legacy fallback — only the price's own currency makes sense to show.
+    if (plan?.currency && plan.currency.toLowerCase() === currency) return plan.price;
+    return plan?.price ?? '';
   };
 
-  const getYearLabel = (planKey) => {
-    const p = prices[planKey];
-    return annual ? p.yearAnnual : p.yearMonthly;
+  const getYearLabel = (plan) => {
+    const bucket = plan?.pricing && plan.pricing[currency];
+    if (bucket) return annual ? bucket.yearAnnualLabel : bucket.yearMonthlyLabel;
+    return '';
+  };
+
+  // Card / CTA styling derives from the plan's accent + popular fields so
+  // admins can theme a new plan without touching code. Falls back to the
+  // historical Starter/Pro/Ent palette by planKey if accentColor is unset.
+  const ACCENT_FALLBACK = { starter: C.accent, pro: C.pro, ent: C.ent };
+  const accentOf = (plan) => plan.accentColor || ACCENT_FALLBACK[plan.planKey] || C.accent;
+
+  const hexToRgba = (hex, alpha) => {
+    if (!hex || typeof hex !== 'string') return `rgba(79,70,229,${alpha})`;
+    const h = hex.replace('#', '');
+    if (h.length !== 6) return `rgba(79,70,229,${alpha})`;
+    const r = parseInt(h.slice(0, 2), 16);
+    const g = parseInt(h.slice(2, 4), 16);
+    const b = parseInt(h.slice(4, 6), 16);
+    return `rgba(${r},${g},${b},${alpha})`;
   };
 
   const getCardStyle = (plan) => {
-    if (plan.key === 'pro') return { background: C.card, border: `2px solid ${C.pro}`, borderRadius: 12, padding: '32px 28px', position: 'relative', boxShadow: `0 8px 30px ${C.proRing}`, display: 'flex', flexDirection: 'column' };
-    const topColor = plan.key === 'starter' ? C.accent : C.ent;
-    return { background: C.card, border: `1px solid ${C.border}`, borderTop: `3px solid ${topColor}`, borderRadius: 12, padding: '32px 28px', position: 'relative', boxShadow: C.shadow, display: 'flex', flexDirection: 'column', transition: 'all 0.25s' };
+    const accent = accentOf(plan);
+    if (plan.popular) return { background: C.card, border: `2px solid ${accent}`, borderRadius: 12, padding: '32px 28px', position: 'relative', boxShadow: `0 8px 30px ${hexToRgba(accent, 0.12)}`, display: 'flex', flexDirection: 'column' };
+    return { background: C.card, border: `1px solid ${C.border}`, borderTop: `3px solid ${accent}`, borderRadius: 12, padding: '32px 28px', position: 'relative', boxShadow: C.shadow, display: 'flex', flexDirection: 'column', transition: 'all 0.25s' };
   };
 
   const getCtaStyle = (plan) => {
-    if (plan.key === 'starter') return { display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, width: '100%', padding: '12px 0', borderRadius: 8, textDecoration: 'none', fontSize: '0.88rem', fontWeight: 600, background: C.accentBg, color: C.accent, border: `1px solid rgba(79,70,229,0.15)` };
-    if (plan.key === 'pro') return { display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, width: '100%', padding: '12px 0', borderRadius: 8, textDecoration: 'none', fontSize: '0.88rem', fontWeight: 600, background: C.pro, color: '#fff', border: 'none', boxShadow: `0 2px 8px ${C.proRing}` };
-    return { display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, width: '100%', padding: '12px 0', borderRadius: 8, textDecoration: 'none', fontSize: '0.88rem', fontWeight: 600, background: C.entBg, color: C.ent, border: '1px solid rgba(217,119,6,0.15)' };
+    const accent = accentOf(plan);
+    if (plan.popular) return { display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, width: '100%', padding: '12px 0', borderRadius: 8, textDecoration: 'none', fontSize: '0.88rem', fontWeight: 600, background: accent, color: '#fff', border: 'none', boxShadow: `0 2px 8px ${hexToRgba(accent, 0.12)}` };
+    return { display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, width: '100%', padding: '12px 0', borderRadius: 8, textDecoration: 'none', fontSize: '0.88rem', fontWeight: 600, background: hexToRgba(accent, 0.08), color: accent, border: `1px solid ${hexToRgba(accent, 0.15)}` };
   };
 
   const renderCell = (val) => {
@@ -312,34 +367,47 @@ export default function Pricing() {
       {/* Plans */}
       <section style={{ maxWidth: 1120, margin: '0 auto', padding: '0 20px 64px' }}>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 24, alignItems: 'start' }}>
-          {PLANS.map((plan, index) => (
-            <div key={plan.name} style={getCardStyle(plan)}>
+          {plans.map((plan) => {
+            const accent = accentOf(plan);
+            const hasRealId = Number.isInteger(plan.id);
+            return (
+            <div key={plan.planKey || plan.name} style={getCardStyle(plan)}>
               {plan.popular && (
-                <div style={{ position: 'absolute', top: -12, left: '50%', transform: 'translateX(-50%)', padding: '4px 14px', borderRadius: 100, background: C.pro, fontSize: '0.69rem', fontWeight: 700, color: '#fff', letterSpacing: '0.03em', whiteSpace: 'nowrap' }}>
+                <div style={{ position: 'absolute', top: -12, left: '50%', transform: 'translateX(-50%)', padding: '4px 14px', borderRadius: 100, background: accent, fontSize: '0.69rem', fontWeight: 700, color: '#fff', letterSpacing: '0.03em', whiteSpace: 'nowrap' }}>
                   MOST POPULAR
                 </div>
               )}
               <h3 style={{ fontSize: '1.12rem', fontWeight: 700, marginBottom: 4, color: C.text }}>{plan.name}</h3>
-              <p style={{ color: C.text3, fontSize: '0.82rem', lineHeight: 1.5, marginBottom: 24, minHeight: 36 }}>{plan.desc}</p>
+              <p style={{ color: C.text3, fontSize: '0.82rem', lineHeight: 1.5, marginBottom: 24, minHeight: 36 }}>{plan.description}</p>
 
               {/* Price card */}
               <div style={{ background: C.bg, border: `1px solid ${C.borderLight}`, borderRadius: 10, padding: '20px 16px', textAlign: 'center', marginBottom: 24 }}>
                 <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'center', gap: 2 }}>
                   <span style={{ fontSize: '1.35rem', fontWeight: 700, color: C.text3, alignSelf: 'flex-start', marginTop: 4 }}>{prices.sym}</span>
-                  <span style={{ fontSize: '3.25rem', fontWeight: 800, color: C.text, lineHeight: 1, letterSpacing: '-0.04em' }}>{getPrice(plan.priceKey)}</span>
+                  <span style={{ fontSize: '3.25rem', fontWeight: 800, color: C.text, lineHeight: 1, letterSpacing: '-0.04em' }}>{getPrice(plan)}</span>
                 </div>
                 <div style={{ fontSize: '0.75rem', color: C.text4, marginTop: 6 }}>/user/month, billed {annual ? 'annually' : 'monthly'}</div>
-                <div style={{ fontSize: '0.69rem', color: C.text4, marginTop: 3, opacity: 0.8 }}>{getYearLabel(plan.priceKey)}</div>
+                <div style={{ fontSize: '0.69rem', color: C.text4, marginTop: 3, opacity: 0.8 }}>{getYearLabel(plan)}</div>
               </div>
 
-              {token && apiPlans && apiPlans.length > 0 ? (
+              {!token ? (
+                // Anonymous visitor: drive them through signup → trial.
+                <Link to="/signup" style={getCtaStyle(plan)}>
+                  {plan.cta || 'Start Free Trial'} <ArrowRight size={14} />
+                </Link>
+              ) : !canPurchase ? (
+                // Logged-in but not an ADMIN — only the tenant admin buys
+                // the subscription. Managers / staff see a disabled CTA.
                 <button
-                  onClick={() => {
-                    const dbPlan = apiPlans[index];
-                    if (dbPlan) {
-                      handlePayment(dbPlan.id, plan.name);
-                    }
-                  }}
+                  disabled
+                  title="Only the workspace admin can purchase a subscription"
+                  style={{ ...getCtaStyle(plan), cursor: 'not-allowed', opacity: 0.55 }}
+                >
+                  Admin-only purchase
+                </button>
+              ) : hasRealId ? (
+                <button
+                  onClick={() => handlePayment(plan.id, plan.name)}
                   disabled={loadingPayment === plan.name}
                   style={{
                     ...getCtaStyle(plan),
@@ -359,9 +427,21 @@ export default function Pricing() {
                   )}
                 </button>
               ) : (
-                <Link to="/signup" style={getCtaStyle(plan)}>
-                  {plan.cta} <ArrowRight size={14} />
-                </Link>
+                // Logged-in but the API catalog hasn't arrived yet (or errored).
+                // Render the fallback card with a disabled CTA — never fall back
+                // to <Link to="/signup">, that route redirects logged-in users
+                // to /dashboard and silently swallowed the subscribe action.
+                <button
+                  disabled
+                  style={{ ...getCtaStyle(plan), cursor: 'not-allowed', opacity: 0.6 }}
+                >
+                  {plansError ? 'Unable to load plans' : (
+                    <>
+                      <Loader size={14} style={{ animation: 'spin 1s linear infinite' }} />
+                      Loading…
+                    </>
+                  )}
+                </button>
               )}
 
               {/* Separator */}
@@ -372,15 +452,16 @@ export default function Pricing() {
               </div>
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10, flex: 1 }}>
-                {plan.features.map(f => (
+                {(plan.features || []).map(f => (
                   <div key={f} style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
-                    <Check size={14} style={{ color: plan.checkColor, marginTop: 2, flexShrink: 0 }} />
+                    <Check size={14} style={{ color: accent, marginTop: 2, flexShrink: 0 }} />
                     <span style={{ fontSize: '0.82rem', color: C.text2, lineHeight: 1.45 }}>{f}</span>
                   </div>
                 ))}
               </div>
             </div>
-          ))}
+            );
+          })}
         </div>
       </section>
 
@@ -393,15 +474,31 @@ export default function Pricing() {
             <thead>
               <tr>
                 <th style={{ background: C.bg, padding: '14px 16px', textAlign: 'left', fontWeight: 700, fontSize: '0.82rem', color: C.text, borderBottom: `1px solid ${C.border}`, width: '38%' }}>Features</th>
-                <th style={{ background: C.bg, padding: '14px 16px', textAlign: 'center', fontWeight: 700, fontSize: '0.82rem', color: C.text, borderBottom: `1px solid ${C.border}` }}>
-                  Starter<br /><span style={{ display: 'block', fontSize: '0.69rem', fontWeight: 500, color: C.text4, marginTop: 2 }}>{prices.sym}{getPrice('starter')}/mo</span>
-                </th>
-                <th style={{ background: C.proBg, padding: '14px 16px', textAlign: 'center', fontWeight: 700, fontSize: '0.82rem', color: C.pro, borderBottom: `1px solid ${C.border}` }}>
-                  Professional<br /><span style={{ display: 'block', fontSize: '0.69rem', fontWeight: 500, color: 'rgba(124,58,237,0.5)', marginTop: 2 }}>{prices.sym}{getPrice('pro')}/mo</span>
-                </th>
-                <th style={{ background: C.bg, padding: '14px 16px', textAlign: 'center', fontWeight: 700, fontSize: '0.82rem', color: C.text, borderBottom: `1px solid ${C.border}` }}>
-                  Enterprise<br /><span style={{ display: 'block', fontSize: '0.69rem', fontWeight: 500, color: C.text4, marginTop: 2 }}>{prices.sym}{getPrice('ent')}/mo</span>
-                </th>
+                {(() => {
+                  // The comparison rows in COMPARE_SECTIONS are still keyed by
+                  // [starter, pro, ent] tuple position, so the header reads
+                  // those three plan slots by planKey. New plans created in
+                  // the admin UI won't appear in this table until the
+                  // comparison data gets a similar refactor — out of scope
+                  // for the editable-prices feature.
+                  const byKey = (k) => plans.find((p) => p.planKey === k);
+                  const starter = byKey('starter');
+                  const pro = byKey('pro');
+                  const ent = byKey('ent');
+                  return (
+                    <>
+                      <th style={{ background: C.bg, padding: '14px 16px', textAlign: 'center', fontWeight: 700, fontSize: '0.82rem', color: C.text, borderBottom: `1px solid ${C.border}` }}>
+                        {starter?.name || 'Starter'}<br /><span style={{ display: 'block', fontSize: '0.69rem', fontWeight: 500, color: C.text4, marginTop: 2 }}>{prices.sym}{starter ? getPrice(starter) : ''}/mo</span>
+                      </th>
+                      <th style={{ background: C.proBg, padding: '14px 16px', textAlign: 'center', fontWeight: 700, fontSize: '0.82rem', color: C.pro, borderBottom: `1px solid ${C.border}` }}>
+                        {pro?.name || 'Professional'}<br /><span style={{ display: 'block', fontSize: '0.69rem', fontWeight: 500, color: 'rgba(124,58,237,0.5)', marginTop: 2 }}>{prices.sym}{pro ? getPrice(pro) : ''}/mo</span>
+                      </th>
+                      <th style={{ background: C.bg, padding: '14px 16px', textAlign: 'center', fontWeight: 700, fontSize: '0.82rem', color: C.text, borderBottom: `1px solid ${C.border}` }}>
+                        {ent?.name || 'Enterprise'}<br /><span style={{ display: 'block', fontSize: '0.69rem', fontWeight: 500, color: C.text4, marginTop: 2 }}>{prices.sym}{ent ? getPrice(ent) : ''}/mo</span>
+                      </th>
+                    </>
+                  );
+                })()}
               </tr>
             </thead>
             <tbody>

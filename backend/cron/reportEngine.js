@@ -4,8 +4,11 @@ const PDFDocument = require('pdfkit');
 
 const prisma = require("../lib/prisma");
 const { formatMoney } = require("../utils/formatMoney");
+const { getSetting, KEYS } = require("../lib/tenantSettings");
 
-const transporter = nodemailer.createTransport({
+// Global fallback transporter (env-based). Per-tenant transporters are
+// built on-demand below so each tenant can use its own SMTP credentials.
+const fallbackTransporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST || 'smtp.ethereal.email',
   port: process.env.SMTP_PORT || 587,
   auth: {
@@ -13,6 +16,16 @@ const transporter = nodemailer.createTransport({
     pass: process.env.SMTP_PASS || 'demo123'
   }
 });
+
+async function getSmtpTransporterForTenant(tenantId) {
+  const host = await getSetting(tenantId, KEYS.REPORT_SMTP_HOST, { fallback: process.env.SMTP_HOST || "" });
+  if (!host || host === 'smtp.ethereal.email') return null; // no per-tenant config → use fallback or mock
+  const port = Number(await getSetting(tenantId, KEYS.REPORT_SMTP_PORT, { fallback: process.env.SMTP_PORT || "587", coerce: Number }));
+  const secure = String(await getSetting(tenantId, KEYS.REPORT_SMTP_SECURE, { fallback: process.env.SMTP_SECURE || "false" })).toLowerCase() === "true";
+  const user = await getSetting(tenantId, KEYS.REPORT_SMTP_USER, { fallback: process.env.SMTP_USER || "" });
+  const pass = await getSetting(tenantId, KEYS.REPORT_SMTP_PASS, { fallback: process.env.SMTP_PASS || "" });
+  return nodemailer.createTransport({ host, port, secure, auth: { user, pass } });
+}
 
 async function generateReportData(schedule) {
   const now = new Date();
@@ -30,10 +43,14 @@ async function generateReportData(schedule) {
     startDate.setMonth(startDate.getMonth() - 1);
   }
 
-  const dateWhere = { createdAt: { gte: startDate, lte: now } };
+  const dateWhere = { tenantId: schedule.tenantId, createdAt: { gte: startDate, lte: now } };
 
   if (schedule.reportType === 'agent-performance') {
-    const users = await prisma.user.findMany({ select: { id: true, name: true, email: true } });
+    const users = await prisma.user.findMany({
+      where: { tenantId: schedule.tenantId },
+      select: { id: true, name: true, email: true },
+      take: 200,
+    });
     const results = [];
     for (const user of users) {
       const [dw, rev, dt, tc, cm, es] = await Promise.all([
@@ -57,8 +74,10 @@ async function generateReportData(schedule) {
 
   if (schedule.reportType === 'deals' || schedule.reportType === 'pipeline') {
     const deals = await prisma.deal.findMany({
-      where: dateWhere, include: { owner: { select: { name: true } }, contact: { select: { name: true } } },
-      orderBy: { createdAt: 'desc' }
+      where: dateWhere,
+      include: { owner: { select: { name: true } }, contact: { select: { name: true } } },
+      orderBy: { createdAt: 'desc' },
+      take: 5000,
     });
     const totalRevenue = deals.reduce((sum, d) => sum + d.amount, 0);
     const won = deals.filter(d => d.stage === 'won').length;
@@ -70,8 +89,10 @@ async function generateReportData(schedule) {
 
   if (schedule.reportType === 'tasks') {
     const tasks = await prisma.task.findMany({
-      where: dateWhere, include: { user: { select: { name: true } } },
-      orderBy: { createdAt: 'desc' }
+      where: dateWhere,
+      include: { user: { select: { name: true } } },
+      orderBy: { createdAt: 'desc' },
+      take: 5000,
     });
     return { type: 'tasks', data: tasks, period: `${startDate.toLocaleDateString()} - ${now.toLocaleDateString()}` };
   }
@@ -204,18 +225,23 @@ async function processSchedule(schedule) {
     }
     htmlBody += `<p style="color:#999;font-size:12px;">This is an automated report from Globussoft CRM.</p>`;
 
-    // Send email
+    // Per-tenant SMTP + from address
+    const fromEmail = await getSetting(schedule.tenantId, KEYS.EMAIL_FROM_ADDRESS, { fallback: process.env.SMTP_FROM || 'Globussoft CRM <noreply@globussoft.com>' });
     const mailOptions = {
-      from: process.env.SMTP_FROM || 'Globussoft CRM <noreply@globussoft.com>',
+      from: fromEmail,
       to: recipients.join(', '),
       subject: `[CRM Report] ${schedule.name} — ${reportData.period}`,
       html: htmlBody,
       attachments,
     };
 
-    if (process.env.SMTP_HOST && process.env.SMTP_HOST !== 'smtp.ethereal.email') {
-      await transporter.sendMail(mailOptions);
-      console.log(`[Report Engine] Email sent to: ${recipients.join(', ')}`);
+    const tenantTransporter = await getSmtpTransporterForTenant(schedule.tenantId);
+    const activeTransporter = tenantTransporter || fallbackTransporter;
+    const hasRealSmtp = (tenantTransporter) || (process.env.SMTP_HOST && process.env.SMTP_HOST !== 'smtp.ethereal.email');
+
+    if (hasRealSmtp) {
+      await activeTransporter.sendMail(mailOptions);
+      console.log(`[Report Engine] Email sent to: ${recipients.join(', ')} (tenant ${schedule.tenantId})`);
     } else {
       console.log(`[Report Engine] Mock email to: ${recipients.join(', ')} — Subject: ${mailOptions.subject}`);
     }

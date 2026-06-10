@@ -35,6 +35,28 @@ const ITEM_ICON = {
   insurance: ShieldCheck,
 };
 
+// Lazily inject the Razorpay checkout SDK once. Resolves true when
+// window.Razorpay is available, false if the script fails to load (offline /
+// blocked). Idempotent — re-uses the already-loaded global on repeat calls.
+const RAZORPAY_SDK_SRC = "https://checkout.razorpay.com/v1/checkout.js";
+function loadRazorpayScript() {
+  return new Promise((resolve) => {
+    if (typeof window === "undefined") return resolve(false);
+    if (window.Razorpay) return resolve(true);
+    const existing = document.querySelector(`script[src="${RAZORPAY_SDK_SRC}"]`);
+    if (existing) {
+      existing.addEventListener("load", () => resolve(true));
+      existing.addEventListener("error", () => resolve(false));
+      return;
+    }
+    const s = document.createElement("script");
+    s.src = RAZORPAY_SDK_SRC;
+    s.onload = () => resolve(true);
+    s.onerror = () => resolve(false);
+    document.body.appendChild(s);
+  });
+}
+
 export default function TripBooking() {
   const { shareToken } = useParams();
   const [itin, setItin] = useState(null);
@@ -61,61 +83,88 @@ export default function TripBooking() {
 
   useEffect(load, [load]);
 
-  // PRD §4.7 — demo-mode advance payment. In production this button
-  // opens the gateway (Razorpay SDK / Stripe Elements) and the gateway
-  // webhook hits the record-advance endpoint with the real charge id.
-  // For demo, the page generates a sandbox reference and POSTs directly.
-  const payAdvance = async () => {
-    if (!itin || itin.advanceDue <= 0) return;
+  // PRD §4.7 — real Razorpay checkout (advance OR balance). Flow:
+  //   1. POST create-payment-order → server mints a Razorpay order using the
+  //      platform keys from env and returns { orderId, amount, currency, keyId }.
+  //   2. Open the Razorpay checkout modal with that order.
+  //   3. On success the modal returns a signed { order_id, payment_id,
+  //      signature }; POST verify-payment → server validates the signature +
+  //      refetches the captured amount + advances the itinerary state.
+  //   4. Re-fetch to show the new paid state.
+  const startPayment = async (kind) => {
+    if (!itin) return;
     setPaying(true);
     setPayError("");
     try {
-      const ref = `demo_pay_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-      const r = await fetch(
-        `/api/travel/itineraries/public/${encodeURIComponent(shareToken)}/record-advance-payment`,
+      const sdkReady = await loadRazorpayScript();
+      if (!sdkReady) {
+        throw new Error("Could not load the payment gateway. Check your connection and retry.");
+      }
+
+      const orderRes = await fetch(
+        `/api/travel/itineraries/public/${encodeURIComponent(shareToken)}/create-payment-order`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ amount: itin.advanceDue, paymentReference: ref }),
+          body: JSON.stringify({ kind }),
         },
       );
-      if (!r.ok) {
-        const body = await r.json().catch(() => ({}));
-        throw new Error(body.error || "Payment failed. Please try again.");
+      const order = await orderRes.json().catch(() => ({}));
+      if (!orderRes.ok) {
+        throw new Error(order.error || "Could not start payment. Please try again.");
       }
-      load(); // re-fetch to show new advance-paid state
+
+      await new Promise((resolve, reject) => {
+        const rzp = new window.Razorpay({
+          key: order.keyId,
+          amount: order.amount,
+          currency: order.currency,
+          order_id: order.orderId,
+          name: itin.tenantName || "Travel Stall",
+          description: `${kind === "balance" ? "Balance payment" : "Advance payment"} — ${itin.destination || "Trip"}`,
+          handler: async (resp) => {
+            try {
+              const vr = await fetch(
+                `/api/travel/itineraries/public/${encodeURIComponent(shareToken)}/verify-payment`,
+                {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    razorpay_order_id: resp.razorpay_order_id,
+                    razorpay_payment_id: resp.razorpay_payment_id,
+                    razorpay_signature: resp.razorpay_signature,
+                  }),
+                },
+              );
+              const vbody = await vr.json().catch(() => ({}));
+              if (!vr.ok) throw new Error(vbody.error || "Payment verification failed.");
+              resolve();
+            } catch (err) {
+              reject(err);
+            }
+          },
+          modal: {
+            // User closed the modal without paying — soft cancel, no error toast.
+            ondismiss: () => reject(new Error("__cancelled__")),
+          },
+          theme: { color: "#C89A4E" },
+        });
+        rzp.on("payment.failed", (resp) => {
+          reject(new Error(resp?.error?.description || "Payment failed. Please try again."));
+        });
+        rzp.open();
+      });
+
+      load(); // re-fetch to show the new paid state
     } catch (e) {
-      setPayError(e.message);
+      if (e.message !== "__cancelled__") setPayError(e.message);
     } finally {
       setPaying(false);
     }
   };
 
-  const payBalance = async () => {
-    if (!itin || itin.balanceDue <= 0) return;
-    setPaying(true);
-    setPayError("");
-    try {
-      const ref = `demo_bal_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-      const r = await fetch(
-        `/api/travel/itineraries/public/${encodeURIComponent(shareToken)}/record-advance-payment`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ amount: itin.balanceDue, paymentReference: ref }),
-        },
-      );
-      if (!r.ok) {
-        const body = await r.json().catch(() => ({}));
-        throw new Error(body.error || "Payment failed. Please try again.");
-      }
-      load();
-    } catch (e) {
-      setPayError(e.message);
-    } finally {
-      setPaying(false);
-    }
-  };
+  const payAdvance = () => startPayment("advance");
+  const payBalance = () => startPayment("balance");
 
   if (loading) return <Shell><p style={{ color: "#5a6275" }}>Loading your trip…</p></Shell>;
   if (loadError) {

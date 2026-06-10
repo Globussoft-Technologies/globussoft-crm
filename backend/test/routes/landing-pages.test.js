@@ -540,7 +540,7 @@ describe('GET /api/landing-pages/:id/analytics', () => {
 
 describe('GET /p/:slug (public render, no auth)', () => {
   test('happy path WITHOUT auth: PUBLISHED page renders HTML, visits incremented, VISIT event logged', async () => {
-    prisma.landingPage.findUnique.mockResolvedValue({
+    prisma.landingPage.findFirst.mockResolvedValue({
       id: 50, slug: 'live-page', status: 'PUBLISHED', title: 'Live Page',
       content: '[]', tenantId: 1,
     });
@@ -566,7 +566,7 @@ describe('GET /p/:slug (public render, no auth)', () => {
   });
 
   test('DRAFT (non-PUBLISHED) page → 404 HTML, NO visit recorded', async () => {
-    prisma.landingPage.findUnique.mockResolvedValue({
+    prisma.landingPage.findFirst.mockResolvedValue({
       id: 50, slug: 'draft-page', status: 'DRAFT', content: '[]', tenantId: 1,
     });
     const res = await request(makeApp()).get('/p/draft-page');
@@ -576,7 +576,7 @@ describe('GET /p/:slug (public render, no auth)', () => {
   });
 
   test('unknown slug → 404', async () => {
-    prisma.landingPage.findUnique.mockResolvedValue(null);
+    prisma.landingPage.findFirst.mockResolvedValue(null);
     const res = await request(makeApp()).get('/p/missing-slug');
     expect(res.status).toBe(404);
     expect(prisma.landingPage.update).not.toHaveBeenCalled();
@@ -587,7 +587,7 @@ describe('GET /p/:slug (public render, no auth)', () => {
 
 describe('POST /p/:slug/submit (public submission, no auth)', () => {
   test('happy path WITHOUT auth: upserts contact, creates deal, increments submissions, returns success envelope', async () => {
-    prisma.landingPage.findUnique.mockResolvedValue({
+    prisma.landingPage.findFirst.mockResolvedValue({
       id: 50, slug: 'live-page', status: 'PUBLISHED', title: 'Live Page',
       content: '[]', tenantId: 1,
     });
@@ -635,7 +635,7 @@ describe('POST /p/:slug/submit (public submission, no auth)', () => {
   });
 
   test('unknown slug → 404 (no contact/deal/analytics writes)', async () => {
-    prisma.landingPage.findUnique.mockResolvedValue(null);
+    prisma.landingPage.findFirst.mockResolvedValue(null);
     const res = await request(makeApp())
       .post('/p/missing/submit')
       .send({ email: 'asha@example.com', name: 'Asha' });
@@ -647,7 +647,7 @@ describe('POST /p/:slug/submit (public submission, no auth)', () => {
   });
 
   test('submission without an email synthesises a placeholder address (anonymous tracking)', async () => {
-    prisma.landingPage.findUnique.mockResolvedValue({
+    prisma.landingPage.findFirst.mockResolvedValue({
       id: 50, slug: 'live-page', status: 'PUBLISHED', title: 'Live Page',
       content: '[]', tenantId: 1,
     });
@@ -668,7 +668,7 @@ describe('POST /p/:slug/submit (public submission, no auth)', () => {
 
 describe('GET /p/:slug/track (public 1×1 pixel, no auth)', () => {
   test('happy path: returns 1×1 GIF with no-store cache; analytics event logged', async () => {
-    prisma.landingPage.findUnique.mockResolvedValue({
+    prisma.landingPage.findFirst.mockResolvedValue({
       id: 50, slug: 'live-page', status: 'PUBLISHED', tenantId: 1,
     });
     const res = await request(makeApp()).get('/p/live-page/track?event=VISIT');
@@ -687,10 +687,143 @@ describe('GET /p/:slug/track (public 1×1 pixel, no auth)', () => {
   });
 
   test('unknown slug still returns the GIF (silent) — no analytics insert', async () => {
-    prisma.landingPage.findUnique.mockResolvedValue(null);
+    prisma.landingPage.findFirst.mockResolvedValue(null);
     const res = await request(makeApp()).get('/p/missing/track');
     expect(res.status).toBe(200);
     expect(res.headers['content-type']).toBe('image/gif');
     expect(prisma.landingPageAnalytics.create).not.toHaveBeenCalled();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// GET /?fields=summary — slim-shape opt-in (#920 slice 38)
+// ─────────────────────────────────────────────────────────────────────────
+//
+// Mirrors the slim-shape contract pinned in slices 1-36. The default list
+// path already excludes the heavy content @db.LongText + cssOverrides @db.Text
+// + metaTitle/metaDescription columns (LandingPage schema's body JSON lives
+// in `content`). When the caller passes ?fields=summary the route projects
+// further down to only id + title + slug + status — exactly what a picker /
+// dropdown / slug-collision-check UI needs. Anything other than the exact
+// string "summary" is treated as default (analytics-bearing shape with
+// visits + submissions + templateType + createdAt + updatedAt).
+describe('GET /?fields=summary — slim-shape opt-in', () => {
+  test('omitted ?fields returns analytics-bearing default shape (visits/submissions/templateType included)', async () => {
+    prisma.landingPage.findMany.mockResolvedValue([
+      {
+        id: 1,
+        title: 'Spring Sale',
+        slug: 'spring-sale-abc',
+        status: 'PUBLISHED',
+        visits: 42,
+        submissions: 7,
+        templateType: 'lead_capture',
+        createdAt: new Date('2026-04-01T00:00:00Z'),
+        updatedAt: new Date('2026-04-10T00:00:00Z'),
+      },
+    ]);
+
+    const res = await request(makeApp())
+      .get('/api/landing-pages')
+      .set('Authorization', `Bearer ${tokenFor()}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body[0]).toMatchObject({ visits: 42, submissions: 7, templateType: 'lead_capture' });
+    const arg = prisma.landingPage.findMany.mock.calls[0][0];
+    // Default path: full analytics-bearing select.
+    expect(arg.select).toEqual({
+      id: true,
+      title: true,
+      slug: true,
+      status: true,
+      visits: true,
+      submissions: true,
+      templateType: true,
+      createdAt: true,
+      updatedAt: true,
+    });
+    expect(arg.where).toEqual({ tenantId: 1 });
+    expect(arg.orderBy).toEqual({ createdAt: 'desc' });
+  });
+
+  test('?fields=summary forwards select with id+title+slug+status only', async () => {
+    prisma.landingPage.findMany.mockResolvedValue([
+      { id: 1, title: 'Spring Sale', slug: 'spring-sale-abc', status: 'PUBLISHED' },
+      { id: 2, title: 'Demo Webinar', slug: 'demo-webinar-xyz', status: 'DRAFT' },
+    ]);
+
+    const res = await request(makeApp())
+      .get('/api/landing-pages?fields=summary')
+      .set('Authorization', `Bearer ${tokenFor()}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(2);
+    const arg = prisma.landingPage.findMany.mock.calls[0][0];
+    // Heavy/analytics columns MUST NOT appear in the slim select.
+    expect(arg.select).toEqual({
+      id: true,
+      title: true,
+      slug: true,
+      status: true,
+    });
+    expect(arg.select.visits).toBeUndefined();
+    expect(arg.select.submissions).toBeUndefined();
+    expect(arg.select.templateType).toBeUndefined();
+    expect(arg.select.createdAt).toBeUndefined();
+    expect(arg.select.updatedAt).toBeUndefined();
+    expect(arg.select.content).toBeUndefined();
+    expect(arg.select.cssOverrides).toBeUndefined();
+    // where + orderBy unchanged from default path.
+    expect(arg.where).toEqual({ tenantId: 1 });
+    expect(arg.orderBy).toEqual({ createdAt: 'desc' });
+  });
+
+  test('?fields=summary respects tenant scoping (cross-tenant token → different where)', async () => {
+    prisma.landingPage.findMany.mockResolvedValue([]);
+
+    await request(makeApp())
+      .get('/api/landing-pages?fields=summary')
+      .set('Authorization', `Bearer ${tokenFor({ tenantId: 99 })}`);
+
+    const arg = prisma.landingPage.findMany.mock.calls[0][0];
+    expect(arg.where).toEqual({ tenantId: 99 });
+    expect(arg.select).toEqual({
+      id: true,
+      title: true,
+      slug: true,
+      status: true,
+    });
+  });
+
+  test('?fields=full (anything not exactly "summary") falls back to default shape', async () => {
+    prisma.landingPage.findMany.mockResolvedValue([]);
+
+    const res = await request(makeApp())
+      .get('/api/landing-pages?fields=full')
+      .set('Authorization', `Bearer ${tokenFor()}`);
+
+    expect(res.status).toBe(200);
+    const arg = prisma.landingPage.findMany.mock.calls[0][0];
+    // Exact-string gate: only "summary" trips the slim branch.
+    expect(arg.select.visits).toBe(true);
+    expect(arg.select.submissions).toBe(true);
+    expect(arg.select.templateType).toBe(true);
+  });
+
+  test('?fields=SUMMARY (uppercase) is treated as default — case-sensitive gate', async () => {
+    prisma.landingPage.findMany.mockResolvedValue([]);
+
+    const res = await request(makeApp())
+      .get('/api/landing-pages?fields=SUMMARY')
+      .set('Authorization', `Bearer ${tokenFor()}`);
+
+    expect(res.status).toBe(200);
+    const arg = prisma.landingPage.findMany.mock.calls[0][0];
+    // The gate is `req.query.fields === "summary"` (case-sensitive). Pin
+    // the contract so a future refactor to .toLowerCase() shows up as a
+    // deliberate spec edit, not a silent behaviour change.
+    expect(arg.select.visits).toBe(true);
+    expect(arg.select.submissions).toBe(true);
+    expect(arg.select.templateType).toBe(true);
   });
 });

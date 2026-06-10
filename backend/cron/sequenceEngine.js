@@ -25,13 +25,33 @@
  */
 const cron = require('node-cron');
 const prisma = require('../lib/prisma');
+const { getSetting, KEYS } = require('../lib/tenantSettings');
 const { evaluateCondition, renderTemplate } = require('../lib/eventBus');
+const flyerRenderEngine = require('../services/flyerRenderEngine');
+const { writeAudit } = require('../lib/audit');
+
+// S19 (PRD_TRAVEL_MARKETING_FLYER FR-3.5 / AC-6.5) — render-on-send for
+// SequenceStep.attachmentRefsJson entries with kind='flyer'.
+//
+// Two thin wrappers below (`renderFlyerSafe` + `writeAuditSafe`) exist so
+// that unit tests can swap them via the CJS self-mocking-seam pattern
+// (CLAUDE.md cron-learnings 2026-05-24 ~01:43 UTC) — inter-function calls
+// MUST go through `module.exports.fn(...)` not the local closure binding,
+// or `vi.spyOn(engine, 'fn')` cannot intercept them.
+function renderFlyerSafe(args) {
+  return flyerRenderEngine.renderFlyer(args);
+}
+function writeAuditSafe(...args) {
+  return writeAudit(...args).catch((err) => {
+    console.warn(`[sequenceEngine] audit failed: ${err.message}`);
+  });
+}
 
 // ── SendGrid (best-effort) ─────────────────────────────────────────────
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY;
 const FROM_EMAIL = process.env.SENDGRID_FROM_EMAIL || 'noreply@crm.globusdemos.com';
 
-async function trySendGridSend(to, subject, body) {
+async function trySendGridSend(to, subject, body, attachments) {
   if (!SENDGRID_API_KEY || !to) return { sent: false, reason: 'no_api_key_or_to' };
   try {
     const htmlBody = String(body).replace(/\n/g, '<br>');
@@ -44,6 +64,27 @@ async function trySendGridSend(to, subject, body) {
         { type: 'text/html', value: htmlBody }
       ]
     };
+    // S19 — SendGrid v3 MIME attachments use base64-encoded `content`
+    // strings. Only flyer-rendered buffers can be transformed locally;
+    // kind='file' refs are URL-only and would need a separate upstream
+    // fetch — skipped here, the URL stays in the body if the operator
+    // wired one into the template.
+    if (Array.isArray(attachments) && attachments.length > 0) {
+      const sgAttachments = [];
+      for (const att of attachments) {
+        if (att && att.kind === 'flyer' && Buffer.isBuffer(att.buffer)) {
+          sgAttachments.push({
+            content: att.buffer.toString('base64'),
+            type: att.mimeType || 'application/octet-stream',
+            filename: att.filename || 'attachment',
+            disposition: 'attachment',
+          });
+        }
+      }
+      if (sgAttachments.length > 0) {
+        payload.attachments = sgAttachments;
+      }
+    }
     const response = await fetch('https://api.sendgrid.com/v3/mail/send', {
       method: 'POST',
       headers: {
@@ -87,6 +128,205 @@ function buildContextForEnrollment(enrollment) {
   };
 }
 
+// ── Flyer attachment rendering (S19, PRD_TRAVEL_MARKETING_FLYER FR-3.5) ──
+//
+// SequenceStep.attachmentRefsJson encodes an array of attachment refs:
+//   [{kind:'flyer', flyerId:42, format:'pdf-a4'},
+//    {kind:'file',  url:'https://…', filename:'brochure.pdf'}]
+//
+// At send time we resolve every flyer ref into a rendered buffer by looking
+// up the TravelFlyerTemplate by id (tenant-scoped) and calling the shared
+// `renderFlyer({template,data,format})` engine. Each entry is rendered
+// independently — a single failure (template not found / render exception
+// / unsupported format) is logged + that attachment is skipped, but the
+// surrounding step send continues.
+//
+// Audit: every SUCCESSFUL flyer render emits a `writeAudit(
+//   'SequenceStep', 'sequence.step.flyer-attached', stepId, null, tenantId,
+//   { enrollmentId, flyerId, format, channel, engine })` row so an operator
+// can later reconstruct which flyers went out via which steps. Failures
+// emit `'sequence.step.flyer-attach-failed'` with the error message in the
+// details JSON.
+//
+// Returns: `Promise<Array<{kind, filename, mimeType, buffer, flyerId,
+//   format, engine}>>` — an array of attachment descriptors the caller
+// embeds into the outbound message. Non-flyer refs (e.g. kind='file') are
+// passed through untouched as `{kind:'file', url, filename}` records — the
+// transport layer (SendGrid / SMTP / WhatsApp) handles those existing-URL
+// references.
+async function resolveStepAttachments(step, enrollment, channel) {
+  if (!step || typeof step.attachmentRefsJson !== 'string' || step.attachmentRefsJson.length === 0) {
+    return [];
+  }
+  let refs;
+  try {
+    refs = JSON.parse(step.attachmentRefsJson);
+  } catch (parseErr) {
+    console.warn(
+      `[sequenceEngine] step ${step.id} attachmentRefsJson is malformed; skipping all attachments:`,
+      parseErr.message,
+    );
+    return [];
+  }
+  if (!Array.isArray(refs) || refs.length === 0) return [];
+
+  const resolved = [];
+  for (const ref of refs) {
+    if (!ref || typeof ref !== 'object') continue;
+
+    if (ref.kind === 'file' && typeof ref.url === 'string' && ref.url.length > 0) {
+      // Pass through — transport layer dereferences the URL.
+      resolved.push({
+        kind: 'file',
+        url: ref.url,
+        filename: typeof ref.filename === 'string' ? ref.filename : 'attachment',
+      });
+      continue;
+    }
+
+    if (ref.kind !== 'flyer' || typeof ref.flyerId !== 'number') continue;
+
+    const fmt = typeof ref.format === 'string' && ref.format.length > 0 ? ref.format : 'pdf-a4';
+    let flyerRow = null;
+    try {
+      flyerRow = await prisma.travelFlyerTemplate.findFirst({
+        where: { id: ref.flyerId, tenantId: enrollment.tenantId },
+      });
+    } catch (lookupErr) {
+      console.warn(
+        `[sequenceEngine] flyer ${ref.flyerId} lookup failed for step ${step.id}:`,
+        lookupErr.message,
+      );
+      try {
+        await module.exports.writeAuditSafe(
+          'SequenceStep',
+          'sequence.step.flyer-attach-failed',
+          step.id,
+          null,
+          enrollment.tenantId,
+          {
+            enrollmentId: enrollment.id,
+            flyerId: ref.flyerId,
+            format: fmt,
+            channel,
+            reason: 'lookup_error',
+            message: lookupErr.message,
+          },
+          { actorType: 'system' },
+        );
+      } catch (_auditErr) { /* don't let audit failure block send */ }
+      continue;
+    }
+
+    if (!flyerRow) {
+      console.warn(
+        `[sequenceEngine] flyer ${ref.flyerId} not found (or wrong tenant) for step ${step.id}`,
+      );
+      try {
+        await module.exports.writeAuditSafe(
+          'SequenceStep',
+          'sequence.step.flyer-attach-failed',
+          step.id,
+          null,
+          enrollment.tenantId,
+          {
+            enrollmentId: enrollment.id,
+            flyerId: ref.flyerId,
+            format: fmt,
+            channel,
+            reason: 'template_not_found',
+          },
+          { actorType: 'system' },
+        );
+      } catch (_auditErr) { /* swallow */ }
+      continue;
+    }
+
+    // Parse the stored JSON columns into the shape renderFlyer expects.
+    let palette = {}, layout = [], assets = {};
+    try { palette = flyerRow.paletteJson ? JSON.parse(flyerRow.paletteJson) : {}; } catch (_e) { palette = {}; }
+    try { layout = flyerRow.layoutJson ? JSON.parse(flyerRow.layoutJson) : []; } catch (_e) { layout = []; }
+    try { assets = flyerRow.assetsJson ? JSON.parse(flyerRow.assetsJson) : {}; } catch (_e) { assets = {}; }
+    const template = { palette, layout, assets };
+
+    // Build a render-data overlay from enrollment context. The renderer
+    // honours { titleOverride, priceOverride, ctaOverride, dateOverride } —
+    // we project contact.name onto titleOverride so personalised flyers
+    // render with the recipient's name (or the original template title
+    // when the contact has no name). Operators get personalisation for
+    // free without authoring per-contact templates.
+    const renderData = {};
+    if (enrollment.contact?.name && typeof enrollment.contact.name === 'string') {
+      renderData.titleOverride = `${flyerRow.name} — for ${enrollment.contact.name}`;
+    }
+
+    let rendered;
+    try {
+      rendered = await module.exports.renderFlyerSafe({ template, data: renderData, format: fmt });
+    } catch (renderErr) {
+      console.warn(
+        `[sequenceEngine] flyer ${ref.flyerId} render failed for step ${step.id}:`,
+        renderErr.message,
+      );
+      try {
+        await module.exports.writeAuditSafe(
+          'SequenceStep',
+          'sequence.step.flyer-attach-failed',
+          step.id,
+          null,
+          enrollment.tenantId,
+          {
+            enrollmentId: enrollment.id,
+            flyerId: ref.flyerId,
+            format: fmt,
+            channel,
+            reason: 'render_error',
+            message: renderErr.message,
+          },
+          { actorType: 'system' },
+        );
+      } catch (_auditErr) { /* swallow */ }
+      continue;
+    }
+
+    const filename = `${flyerRow.name || 'flyer'}-${ref.flyerId}.${rendered.extension || 'bin'}`
+      .replace(/[^\w.-]+/g, '_');
+
+    resolved.push({
+      kind: 'flyer',
+      flyerId: ref.flyerId,
+      format: fmt,
+      filename,
+      mimeType: rendered.mimeType,
+      buffer: rendered.buffer,
+      engine: rendered.engine,
+    });
+
+    // Audit success — fire-and-forget so a slow audit write doesn't
+    // serialise the send loop.
+    try {
+      await module.exports.writeAuditSafe(
+        'SequenceStep',
+        'sequence.step.flyer-attached',
+        step.id,
+        null,
+        enrollment.tenantId,
+        {
+          enrollmentId: enrollment.id,
+          flyerId: ref.flyerId,
+          format: fmt,
+          channel,
+          engine: rendered.engine,
+          mimeType: rendered.mimeType,
+          byteLength: rendered.buffer ? rendered.buffer.length : 0,
+        },
+        { actorType: 'system' },
+      );
+    } catch (_auditErr) { /* swallow — audit is best-effort */ }
+  }
+  return resolved;
+}
+
 // ── New step-list dispatcher ──────────────────────────────────────────
 async function processStep(step, enrollment) {
   const ctx = buildContextForEnrollment(enrollment);
@@ -106,6 +346,11 @@ async function processStep(step, enrollment) {
       return { advance: true };
     }
 
+    // S19 — render-on-send for SequenceStep.attachmentRefsJson entries with
+    // kind='flyer'. Resolves to a list of attachment descriptors. Errors per
+    // ref are caught internally — the surrounding step send always proceeds.
+    const attachments = await resolveStepAttachments(step, enrollment, 'email');
+
     // Persist the outbound row (engine source of truth) before attempting
     // delivery. threadId convention is `seq-<enrollmentId>` so #7 reply
     // detection can recover the enrollment from an inbound reply.
@@ -123,9 +368,9 @@ async function processStep(step, enrollment) {
       },
     });
 
-    // Best-effort delivery.
+    // Best-effort delivery. Attachments threaded through for SendGrid MIME.
     if (SENDGRID_API_KEY) {
-      trySendGridSend(to, subject, body).catch(() => {});
+      trySendGridSend(to, subject, body, attachments).catch(() => {});
     }
     return { advance: true };
   }
@@ -133,6 +378,11 @@ async function processStep(step, enrollment) {
   if (step.kind === 'sms') {
     if (enrollment.contact?.phone) {
       const body = renderTemplate(step.smsBody || '', ctx);
+      // S19 — SMS doesn't natively carry binary attachments but flyer links
+      // are commonly sent as a separate URL line. Resolve attachments anyway
+      // so the audit row fires (operator sees "flyer attached to step N's
+      // SMS") and a future MMS/short-link wire-in can pick them up.
+      const attachments = await resolveStepAttachments(step, enrollment, 'sms');
       await prisma.smsMessage.create({
         data: {
           to: enrollment.contact.phone,
@@ -143,6 +393,10 @@ async function processStep(step, enrollment) {
           tenantId: enrollment.tenantId,
         },
       });
+      // Attachments are surfaced to the SMS branch's tests via the audit
+      // row (already written inside resolveStepAttachments). No body
+      // mutation here — short-link integration is a follow-up slice.
+      void attachments;
     }
     return { advance: true };
   }
@@ -230,11 +484,12 @@ const processNodeLegacy = async (node, enrollment) => {
   const label = node.data?.label || '';
 
   if (label.startsWith('ACTION: Send Email')) {
+    const fromAddress = await getSetting(enrollment.tenantId, KEYS.EMAIL_FROM_ADDRESS, { fallback: 'system@crm.com' });
     await prisma.emailMessage.create({
       data: {
         subject: `Automated Sequence: ${label}`,
         body: `This is an automated drip email generated by a Sequence Engine action.`,
-        from: 'system@crm.com',
+        from: fromAddress,
         to: enrollment.contact.email,
         direction: 'OUTBOUND',
         contactId: enrollment.contact.id,
@@ -316,8 +571,11 @@ async function processLegacyEnrollment(enrollment) {
 
   let keepProcessing = true;
   let nextRun = enrollment.nextRun;
+  let safety = 0;
+  const MAX_STEPS = 50;
 
-  while (activeNode && keepProcessing) {
+  while (activeNode && keepProcessing && safety < MAX_STEPS) {
+    safety++;
     const result = await processNodeLegacy(activeNode, enrollment);
     if (result.delayMinutes > 0) {
       nextRun = new Date(Date.now() + result.delayMinutes * 60000);
@@ -332,6 +590,15 @@ async function processLegacyEnrollment(enrollment) {
         activeNode = nodes.find(n => n.id === currentNodeId);
       }
     }
+  }
+
+  if (safety >= MAX_STEPS) {
+    console.error(`[sequenceEngine] enrollment ${enrollment.id} hit MAX_STEPS (${MAX_STEPS}) — possible cycle in sequence graph. Pausing enrollment.`);
+    await prisma.sequenceEnrollment.update({
+      where: { id: enrollment.id },
+      data: { status: 'Paused', nextRun: null },
+    });
+    return;
   }
 
   if (!currentNodeId) {
@@ -415,6 +682,9 @@ async function processInboundReplies() {
   }
 }
 
+// Worker identity for pessimistic locking — mirrors whatsappOutboundEngine.js.
+const WORKER_ID = `seq-worker-${process.pid}-${Date.now()}`;
+
 // ── Main tick ─────────────────────────────────────────────────────────
 const tickSequenceEngine = async () => {
   try {
@@ -423,11 +693,30 @@ const tickSequenceEngine = async () => {
     await processInboundReplies();
 
     const now = new Date();
-    const enrollments = await prisma.sequenceEnrollment.findMany({
+    // 2. Fetch candidate enrollment IDs only (lightweight).
+    const candidates = await prisma.sequenceEnrollment.findMany({
       where: {
         status: 'Active',
         OR: [{ nextRun: null }, { nextRun: { lte: now } }],
+        lockedAt: null,
       },
+      select: { id: true },
+      take: 100,
+    });
+
+    if (candidates.length === 0) return;
+
+    // 3. Lock the batch. updateMany with WHERE lockedAt IS NULL serializes
+    //    across concurrent workers (PM2 clusters, horizontal pods, etc.).
+    const ids = candidates.map((c) => c.id);
+    await prisma.sequenceEnrollment.updateMany({
+      where: { id: { in: ids }, lockedAt: null },
+      data: { lockedAt: new Date(), lockedBy: WORKER_ID },
+    });
+
+    // 4. Re-fetch only the rows this worker actually claimed.
+    const enrollments = await prisma.sequenceEnrollment.findMany({
+      where: { id: { in: ids }, lockedBy: WORKER_ID },
       include: {
         sequence: { include: { steps: { include: { emailTemplate: true }, orderBy: { position: 'asc' } } } },
         contact: true,
@@ -435,14 +724,36 @@ const tickSequenceEngine = async () => {
     });
 
     for (const enrollment of enrollments) {
-      const { sequence } = enrollment;
-      if (!sequence.isActive) continue;
+      try {
+        const { sequence } = enrollment;
+        if (!sequence.isActive) {
+          // Unlock and skip inactive sequences.
+          await prisma.sequenceEnrollment.update({
+            where: { id: enrollment.id },
+            data: { lockedAt: null, lockedBy: null },
+          });
+          continue;
+        }
 
-      const steps = sequence.steps || [];
-      if (steps.length > 0) {
-        await processStepListEnrollment(enrollment, steps);
-      } else if (sequence.nodes) {
-        await processLegacyEnrollment(enrollment);
+        const steps = sequence.steps || [];
+        if (steps.length > 0) {
+          await processStepListEnrollment(enrollment, steps);
+        } else if (sequence.nodes) {
+          await processLegacyEnrollment(enrollment);
+        }
+
+        // Unlock after successful processing.
+        await prisma.sequenceEnrollment.update({
+          where: { id: enrollment.id },
+          data: { lockedAt: null, lockedBy: null },
+        });
+      } catch (procErr) {
+        console.error(`[sequenceEngine] enrollment ${enrollment.id} failed:`, procErr.message);
+        // Unlock on error so the next tick can retry.
+        await prisma.sequenceEnrollment.update({
+          where: { id: enrollment.id },
+          data: { lockedAt: null, lockedBy: null },
+        }).catch(() => {});
       }
     }
   } catch (error) {
@@ -452,7 +763,9 @@ const tickSequenceEngine = async () => {
 
 const initSequenceCron = () => {
   cron.schedule('* * * * *', () => {
-    tickSequenceEngine();
+    tickSequenceEngine().catch((err) => {
+      console.error('[sequenceEngine] unhandled tick error:', err);
+    });
   });
   console.log('Sequence Execution Engine initialized (cron: * * * * *)');
 };
@@ -463,4 +776,10 @@ module.exports = {
   processInboundReplies, // exported for manual / test triggering
   processStep, // #616: exported so unit tests can pin step dispatch shape
   processStepListEnrollment, // #616: exported for wellness trigger unit tests
+  resolveStepAttachments, // S19: exported for flyer-attachment unit tests
+  // S19 — CJS self-mocking seams (cron-learnings 2026-05-24 ~01:43 UTC):
+  // tests reassign these to vi.fn() to intercept the SUT's calls without
+  // booting pdfkit / prisma.auditLog.
+  renderFlyerSafe,
+  writeAuditSafe,
 };

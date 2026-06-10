@@ -20,6 +20,23 @@
  *   - backend/services/digilockerClient.js (commit 1babe1b — original)
  *   - backend/services/googleDriveClient.js (commit 192de86 — same pattern)
  *   - backend/services/adsGptClient.js (commit 9f35040 — second cap consumer)
+ *
+ * Per-tenant credential resolution (S68 — 2026-06-10):
+ *   `getRatehawkCreds(tenantId)` mirrors S67's `getAdsGptKey` shape but
+ *   returns a multi-field object `{ keyId, apiKey }` instead of a single
+ *   string — RateHawk authenticates with TWO fields (the API ID / key-id
+ *   AND the API key). The SupplierCredential row uses BOTH encrypted
+ *   columns: `loginIdEncrypted` (key-id) AND `passwordEncrypted` (api-key).
+ *   Checks SupplierCredential category `'ratehawk-cred'` for the given
+ *   tenant; falls back to `process.env.RATEHAWK_API_ID` +
+ *   `process.env.RATEHAWK_API_KEY` on miss. Returns null when either field
+ *   is missing on both sides — partial creds are treated as a miss because
+ *   the upstream API requires both. NOTE: the env-var names match the
+ *   public PRD §5.1 column + docs/TRAVEL_API_KEYS_TO_REQUEST.md row 49
+ *   (`RATEHAWK_API_ID` = key-id, `RATEHAWK_API_KEY` = api-key); finalise
+ *   with Yasin's Q19 handover. Adopted ahead of cred-drop so the cred
+ *   wiring (operator seeds row → call uses it; no operator seeded → falls
+ *   back to ENV) is in place from day-1.
  */
 
 const { getBudgetCap, evaluateCap, KEYS } = require('../lib/tenantSettings');
@@ -72,6 +89,80 @@ async function computeMonthlySpendCents(_tenantId) {
 }
 
 /**
+ * Resolve the RateHawk credentials for a tenant. Multi-field shape
+ * (`{ keyId, apiKey }`) — RateHawk authenticates with BOTH the API ID
+ * (a.k.a. key-id) AND the API key. Returns null when either field is
+ * absent on both sides (partial creds are treated as a miss because the
+ * upstream HTTP call would fail without both):
+ *
+ *   1. Without `tenantId`        → ENV-only. If BOTH env vars set, returns
+ *                                  `{ keyId, apiKey }`; otherwise null.
+ *   2. With `tenantId`           → check SupplierCredential row first
+ *                                  (category 'ratehawk-cred', any
+ *                                  supplierName); both `loginIdEncrypted`
+ *                                  + `passwordEncrypted` must decrypt to
+ *                                  truthy plaintext or we fall back to ENV.
+ *   3. Both missing              → return null. Caller decides whether to
+ *                                  raise an "integration disabled" path
+ *                                  (real-mode swap will throw
+ *                                  RATEHAWK_NOT_YET_ENABLED).
+ *
+ * Best-effort: any Prisma / decrypt error is logged and treated as a
+ * miss (caller falls through to ENV). NEVER throws.
+ *
+ * Placeholder env-vars: `RATEHAWK_API_ID` (key-id) +
+ * `RATEHAWK_API_KEY` (api-key). Names match PRD §5.1 + the
+ * docs/TRAVEL_API_KEYS_TO_REQUEST.md row.
+ *
+ * @param {number} [tenantId] — optional. Omit for ENV-only behaviour.
+ * @returns {Promise<{keyId: string, apiKey: string}|null>}
+ */
+async function getRatehawkCreds(tenantId) {
+  // Placeholder env-var names — finalises with Yasin's Q19 handover.
+  const envKeyId = process.env.RATEHAWK_API_ID || null;
+  const envApiKey = process.env.RATEHAWK_API_KEY || null;
+  const envFallback = (envKeyId && envApiKey)
+    ? { keyId: envKeyId, apiKey: envApiKey }
+    : null;
+
+  // No tenant scope → ENV only.
+  if (!tenantId) {
+    return envFallback;
+  }
+
+  try {
+    const prisma = require('../lib/prisma');
+    if (
+      !prisma.supplierCredential ||
+      typeof prisma.supplierCredential.findFirst !== 'function'
+    ) {
+      return envFallback;
+    }
+    const row = await prisma.supplierCredential.findFirst({
+      where: { tenantId, category: 'ratehawk-cred' },
+      select: { loginIdEncrypted: true, passwordEncrypted: true },
+    });
+    if (row && row.loginIdEncrypted && row.passwordEncrypted) {
+      // Lazy require to avoid circular bombs in test harnesses that
+      // hand-roll the crypto layer (matches getLlmKey + getAdsGptKey shape).
+      const { decrypt } = require('../lib/fieldEncryption');
+      const keyId = decrypt(row.loginIdEncrypted);
+      const apiKey = decrypt(row.passwordEncrypted);
+      // BOTH must decrypt to truthy plaintext — partial decrypt failure
+      // (e.g. WELLNESS_FIELD_KEY rotated, only one column re-encrypted)
+      // is treated as a miss because the upstream auth needs both.
+      if (keyId && apiKey) return { keyId, apiKey };
+    }
+  } catch (e) {
+    console.error(
+      `[ratehawkClient] getRatehawkCreds supplierCredential lookup failed (non-fatal, falling back to ENV): ${e.message}`,
+    );
+  }
+
+  return envFallback;
+}
+
+/**
  * Hotel search — primary RateHawk operation for RFU unified-search flow.
  *
  * STUB: returns canned shape matching the contract described in
@@ -82,6 +173,22 @@ async function computeMonthlySpendCents(_tenantId) {
 async function searchHotels({ tenantId, destinationCity, checkInDate, checkOutDate, guests = 2, rooms = 1 }) {
   if (!tenantId) throw new Error('tenantId required');
   await checkBudgetCap(tenantId);
+
+  // Resolve creds via the per-tenant SupplierCredential resolver (S68).
+  // In stub mode the creds aren't actually used by the canned response, but
+  // we resolve here so:
+  //   (a) the cred-drop swap-in is a one-line change (just consume `keyId`
+  //       + `apiKey` in the real fetch() body that replaces this stub);
+  //   (b) operators with a SupplierCredential row seeded ahead of cred-drop
+  //       get the row's hit emitted in observability immediately;
+  //   (c) the `module.exports.getRatehawkCreds` indirection keeps the CJS
+  //       self-mocking seam intact for vitest.
+  // We deliberately do NOT throw on null — the stub must continue to
+  // return the canned shape regardless, so downstream UI keeps rendering
+  // the "integration pending" placeholder. Real implementation post-cred
+  // will branch: `if (!creds) throw new Error('RATEHAWK_NOT_YET_ENABLED')`.
+  const creds = await module.exports.getRatehawkCreds(tenantId);
+  void creds; // unused in stub mode — consumed in post-cred swap-in.
 
   console.log(`[ratehawkClient STUB] searchHotels: tenantId=${tenantId} city=${destinationCity} dates=${checkInDate}..${checkOutDate} guests=${guests} rooms=${rooms}`);
 
@@ -105,6 +212,10 @@ async function bookHotel({ tenantId, hotelId, roomType, checkInDate, checkOutDat
   if (!tenantId) throw new Error('tenantId required');
   await checkBudgetCap(tenantId);
 
+  // See searchHotels for the rationale on resolving here (S68).
+  const creds = await module.exports.getRatehawkCreds(tenantId);
+  void creds;
+
   console.log(`[ratehawkClient STUB] bookHotel: tenantId=${tenantId} hotelId=${hotelId} roomType=${roomType} dates=${checkInDate}..${checkOutDate} guests=${(guestNames || []).length}`);
 
   return {
@@ -124,6 +235,10 @@ async function cancelBooking({ tenantId, bookingId, reason }) {
   if (!tenantId) throw new Error('tenantId required');
   await checkBudgetCap(tenantId);
 
+  // See searchHotels for the rationale on resolving here (S68).
+  const creds = await module.exports.getRatehawkCreds(tenantId);
+  void creds;
+
   console.log(`[ratehawkClient STUB] cancelBooking: tenantId=${tenantId} bookingId=${bookingId} reason=${reason}`);
 
   return {
@@ -136,4 +251,4 @@ async function cancelBooking({ tenantId, bookingId, reason }) {
   };
 }
 
-module.exports = { searchHotels, bookHotel, cancelBooking, checkBudgetCap, computeMonthlySpendCents, INTEGRATION };
+module.exports = { searchHotels, bookHotel, cancelBooking, checkBudgetCap, computeMonthlySpendCents, getRatehawkCreds, INTEGRATION };

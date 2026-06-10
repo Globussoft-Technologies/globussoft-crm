@@ -6,17 +6,15 @@
  * page). The Settings page renders a 2-column grid of cards: Organization,
  * Appearance (theme radio group), Email Messages (retention toggle — already
  * pinned by Settings.emailRetention.test.jsx), Branding (logo + brand color),
- * Pipeline Stages, User Roster, Invite User, Notification Preferences, plus
- * a wellness-only ConsentTemplates card. This test pins the page-shell +
- * representative card behaviours WITHOUT duplicating Settings.emailRetention's
- * scope.
+ * Pipeline Stages, Invite User, Notification Preferences, plus a wellness-only
+ * ConsentTemplates card. The Access Control Roster lives on the separate
+ * RolesAdmin page — it is no longer rendered on Settings.
  *
  * Scope: pins the page-surface invariants:
  *   1. Smoke render — page renders with the "Organization Settings" header
  *      and the high-level subtitle.
  *   2. Initial-mount fetchApi calls — /api/tenants/current, /api/wellness/branding,
- *      /api/auth/users, /api/pipeline_stages, /api/notifications/preferences
- *      all fire on mount.
+ *      /api/pipeline_stages, /api/notifications/preferences all fire on mount.
  *   3. Organization card renders Name + Slug + Owner Email + Plan inputs
  *      after the tenant load resolves.
  *   4. Organization save — submitting the form PUTs to /api/tenants/current
@@ -29,20 +27,16 @@
  *      with { name, color, position } and then re-fetches the list.
  *   8. Invite user — submitting the invite form POSTs to /api/auth/register
  *      with the form values.
- *   9. User Roster card — loaded users render with their name + email + role
- *      badge.
- *  10. Loading state — while initial fetches are in-flight, the Organization
- *      card shows "Loading organization details…" and the roster shows
- *      "Loading team...".
- *  11. Slug field is read-only — its readOnly attribute and the helper text
+ *   9. Loading state — while initial fetches are in-flight, the Organization
+ *      card shows "Loading organization details…".
+ *  10. Slug field is read-only — its readOnly attribute and the helper text
  *      "Slug is read-only after organization creation." render together.
- *  12. Wellness-only Consent Templates card — does NOT render for generic
+ *  11. Wellness-only Consent Templates card — does NOT render for generic
  *      vertical; DOES render when tenant.vertical === 'wellness'.
  *
  * Backend contracts pinned:
  *   GET  /api/tenants/current             → tenant row
  *   PUT  /api/tenants/current  { name, ownerEmail }
- *   GET  /api/auth/users                  → User[]
  *   POST /api/auth/register   { name, email, password, role }
  *   GET  /api/pipeline_stages             → PipelineStage[]
  *   POST /api/pipeline_stages  { name, color, position }
@@ -123,11 +117,6 @@ const baseStages = [
   { id: 's2', name: 'Qualification', color: '#10b981', position: 1 },
 ];
 
-const baseUsers = [
-  { id: 'u1', name: 'Aditi Sharma', email: 'aditi@acme.com', role: 'ADMIN' },
-  { id: 'u2', name: 'Rohan Mehta', email: 'rohan@acme.com', role: 'USER' },
-];
-
 const basePrefs = {
   categoryToggles: { deal: true, task: true, ticket: true, lead: true, approval: true, leave: true, expense: true },
   channels: { db: true, socket: true, push: false, email: true },
@@ -139,7 +128,6 @@ const basePrefs = {
 function buildDefaultFetch(overrides = {}) {
   const tenant = overrides.tenant ?? baseTenant;
   const stages = overrides.stages ?? baseStages;
-  const users = overrides.users ?? baseUsers;
   const branding = overrides.branding ?? { logoUrl: null, brandColor: '' };
   const prefs = overrides.prefs ?? basePrefs;
 
@@ -151,7 +139,6 @@ function buildDefaultFetch(overrides = {}) {
       return Promise.resolve({ ...tenant, ...body });
     }
     if (url === '/api/wellness/branding' && method === 'GET') return Promise.resolve(branding);
-    if (url === '/api/auth/users' && method === 'GET') return Promise.resolve(users);
     if (url === '/api/auth/register' && method === 'POST') return Promise.resolve({ ok: true });
     if (url === '/api/pipeline_stages' && method === 'GET') return Promise.resolve(stages);
     if (url === '/api/pipeline_stages' && method === 'POST') return Promise.resolve({ ok: true });
@@ -187,10 +174,11 @@ describe('<Settings /> — page shell + representative card pin', () => {
       const calledUrls = fetchApiMock.mock.calls.map(([url]) => url);
       expect(calledUrls).toContain('/api/tenants/current');
       expect(calledUrls).toContain('/api/wellness/branding');
-      expect(calledUrls).toContain('/api/auth/users');
       expect(calledUrls).toContain('/api/pipeline_stages');
       expect(calledUrls).toContain('/api/notifications/preferences');
     });
+    // Access Control Roster now lives on /roles — Settings must NOT fetch users.
+    expect(fetchApiMock.mock.calls.map(([url]) => url)).not.toContain('/api/auth/users');
   });
 
   // 3 — Organization card renders inputs
@@ -301,25 +289,21 @@ describe('<Settings /> — page shell + representative card pin', () => {
     });
   });
 
-  // 9 — User Roster renders loaded users
-  it('renders the loaded users in the Access Control Roster with name + email + role badge', async () => {
+  // 9 — Access Control Roster has been moved to RolesAdmin — Settings must NOT
+  // render the roster card or the "Loading team..." copy.
+  it('does NOT render the Access Control Roster card (moved to RolesAdmin)', async () => {
     render(<Settings />);
-    await waitFor(() => expect(screen.getByText('Aditi Sharma')).toBeInTheDocument());
-    expect(screen.getByText('aditi@acme.com')).toBeInTheDocument();
-    expect(screen.getByText('Rohan Mehta')).toBeInTheDocument();
-    expect(screen.getByText('rohan@acme.com')).toBeInTheDocument();
-    // ADMIN badge text appears for Aditi
-    const adminBadges = screen.getAllByText('ADMIN');
-    expect(adminBadges.length).toBeGreaterThan(0);
+    await waitFor(() => expect(screen.getByDisplayValue('Acme Corp')).toBeInTheDocument());
+    expect(screen.queryByText(/Access Control Roster/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Loading team/i)).not.toBeInTheDocument();
   });
 
-  // 10 — Loading states (initial mount before fetches resolve)
-  it('shows the loading copy ("Loading organization details…" + "Loading team...") before fetches resolve', async () => {
+  // 10 — Loading state (initial mount before fetches resolve)
+  it('shows the "Loading organization details…" copy before tenant fetch resolves', async () => {
     // Make all fetches hang so the loading state stays visible.
     fetchApiMock.mockImplementation(() => new Promise(() => {}));
     render(<Settings />);
     expect(screen.getByText(/Loading organization details/i)).toBeInTheDocument();
-    expect(screen.getByText(/Loading team/i)).toBeInTheDocument();
   });
 
   // 11 — Slug field is read-only
@@ -352,13 +336,12 @@ describe('<Settings /> — page shell + representative card pin', () => {
 });
 
 // ============================================================================
-// EXTENSION WAVE — additional ≥10 cases covering uncovered card sections:
+// EXTENSION WAVE — additional cases covering uncovered card sections:
 // Branding (logo placeholder + brand color save), Pipeline Stages (delete +
 // reorder), Email Messages (retention toggle pins), Notification Preferences
 // (category + channel toggles, save, reset), Invite (role-select), Consent
-// (create + delete), Roster row controls (role-change + delete), Public
-// Booking URL copy. Same stable mock pattern; preserves the existing describe
-// block above. Pure pin — no SUT changes.
+// (create + delete), Public Booking URL copy. Same stable mock pattern;
+// preserves the existing describe block above. Pure pin — no SUT changes.
 // ============================================================================
 
 describe('<Settings /> — extended card coverage', () => {
@@ -619,48 +602,10 @@ describe('<Settings /> — extended card coverage', () => {
     });
   });
 
-  // 25 — Roster: change role on existing user PUTs /api/auth/users/:id/role
-  it('changing a roster user role PUTs /api/auth/users/:id/role with the new role', async () => {
-    const user = userEvent.setup();
-    render(<Settings />);
-    await waitFor(() => expect(screen.getByText('Rohan Mehta')).toBeInTheDocument());
-
-    // Find Rohan's row → its select element
-    const rohanRow = screen.getByText('Rohan Mehta').closest('div').parentElement;
-    const roleSelect = rohanRow.querySelector('select');
-    expect(roleSelect).toBeTruthy();
-    await user.selectOptions(roleSelect, 'MANAGER');
-
-    await waitFor(() => {
-      const puts = fetchApiMock.mock.calls.filter(
-        ([url, opts]) => /^\/api\/auth\/users\/u2\/role$/.test(url) && opts?.method === 'PUT'
-      );
-      expect(puts.length).toBe(1);
-      const body = JSON.parse(puts[0][1].body);
-      expect(body.role).toBe('MANAGER');
-    });
-  });
-
-  // 26 — Roster: delete non-ADMIN user DELETEs /api/auth/users/:id after confirm
-  it('clicking the trash icon on a non-ADMIN roster user DELETEs /api/auth/users/:id after confirm', async () => {
-    const user = userEvent.setup();
-    render(<Settings />);
-    await waitFor(() => expect(screen.getByText('Rohan Mehta')).toBeInTheDocument());
-
-    // Rohan is USER → trash button visible; Aditi is ADMIN → "—" placeholder.
-    const rohanCard = screen.getByText('Rohan Mehta').closest('div').parentElement;
-    const trashBtn = rohanCard.querySelector('button');
-    expect(trashBtn).toBeTruthy();
-    await user.click(trashBtn);
-
-    await waitFor(() => {
-      const deletes = fetchApiMock.mock.calls.filter(
-        ([url, opts]) => /^\/api\/auth\/users\/u2$/.test(url) && opts?.method === 'DELETE'
-      );
-      expect(deletes.length).toBe(1);
-    });
-    expect(notifyObj.confirm).toHaveBeenCalled();
-  });
+  // 25/26 — Access Control Roster row controls (role-change PUT + delete) used
+  // to live here; the roster moved to the RolesAdmin page (/roles) so those
+  // assertions are no longer applicable. The roster's absence from Settings is
+  // covered by test 9 above.
 
   // 27 — Consent Templates (wellness): seeded templates render + Add Template POSTs
   it('wellness Consent Templates card lists seeded rows and Add Template POSTs new row', async () => {
@@ -730,5 +675,280 @@ describe('<Settings /> — extended card coverage', () => {
       expect(writeTextMock).toHaveBeenCalledWith(expect.stringContaining('/book/acme'));
     });
     expect(notifyObj.success).toHaveBeenCalledWith(expect.stringMatching(/copied/i));
+  });
+});
+
+// ============================================================================
+// EXTENSION WAVE 2 — error-path + boundary coverage. Pins SUT branches not
+// previously exercised: failure-revert paths (tenant save / email retention /
+// notification prefs load+save), confirm-decline branches (reset declines →
+// no POST), boundary disabled states (first stage's Up button), quiet-hours
+// selector wiring, consent template toggleActive PUT, and stage-name
+// whitespace-only no-op. Each adds an assertion on the SUT-observable
+// effect (notify.error / no fetchApi call / DOM state) — no SUT changes.
+// ============================================================================
+
+describe('<Settings /> — error paths + boundary states', () => {
+  beforeEach(() => {
+    fetchApiMock.mockReset();
+    notifyObj.success.mockReset();
+    notifyObj.error.mockReset();
+    notifyObj.info.mockReset();
+    notifyObj.confirm.mockReset();
+    notifyObj.confirm.mockImplementation(() => Promise.resolve(true));
+    setThemeMock.mockReset();
+    fetchApiMock.mockImplementation(buildDefaultFetch());
+  });
+
+  // 29 — Tenant save failure → notify.error('Failed to update organization')
+  it('Organization save calls notify.error when PUT /api/tenants/current rejects', async () => {
+    const user = userEvent.setup();
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = opts?.method || 'GET';
+      if (url === '/api/tenants/current' && method === 'PUT') {
+        return Promise.reject(new Error('backend down'));
+      }
+      return buildDefaultFetch()(url, opts);
+    });
+
+    render(<Settings />);
+    await waitFor(() => expect(screen.getByDisplayValue('Acme Corp')).toBeInTheDocument());
+
+    await user.click(screen.getByRole('button', { name: /Save Organization Details/i }));
+
+    await waitFor(() => {
+      expect(notifyObj.error).toHaveBeenCalledWith(
+        expect.stringMatching(/Failed to update organization/i)
+      );
+    });
+  });
+
+  // 30 — Email retention toggle FAILURE reverts the checkbox + calls notify.error
+  it('toggling email retention reverts the checkbox state when PUT fails', async () => {
+    const user = userEvent.setup();
+    let putCount = 0;
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = opts?.method || 'GET';
+      if (url === '/api/tenants/current' && method === 'PUT') {
+        putCount++;
+        return Promise.reject(new Error('boom'));
+      }
+      return buildDefaultFetch()(url, opts);
+    });
+
+    render(<Settings />);
+    const toggle = await screen.findByTestId('email-retention-toggle');
+    expect(toggle).toBeChecked();
+    await user.click(toggle);
+
+    await waitFor(() => expect(putCount).toBeGreaterThan(0));
+    await waitFor(() => {
+      expect(notifyObj.error).toHaveBeenCalledWith(
+        expect.stringMatching(/Failed to update email retention/i)
+      );
+    });
+    // The optimistic flip must be reverted — toggle is checked again.
+    await waitFor(() => expect(screen.getByTestId('email-retention-toggle')).toBeChecked());
+  });
+
+  // 31 — Notification Preferences load FAILURE surfaces notify.error +
+  // the card does NOT render (loading→null branch via the !prefs guard).
+  it('Notification Preferences card calls notify.error when initial GET rejects', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = opts?.method || 'GET';
+      if (url === '/api/notifications/preferences' && method === 'GET') {
+        return Promise.reject(new Error('500'));
+      }
+      return buildDefaultFetch()(url, opts);
+    });
+
+    render(<Settings />);
+    await waitFor(() => {
+      expect(notifyObj.error).toHaveBeenCalledWith(
+        expect.stringMatching(/Failed to load notification preferences/i)
+      );
+    });
+    // The card returns null when prefs is null, so the section heading is
+    // never rendered.
+    expect(screen.queryByText(/Notification Preferences/i)).not.toBeInTheDocument();
+  });
+
+  // 32 — Notification Preferences SAVE FAILURE surfaces notify.error
+  it('Save Preferences calls notify.error when PUT /api/notifications/preferences rejects', async () => {
+    const user = userEvent.setup();
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = opts?.method || 'GET';
+      if (url === '/api/notifications/preferences' && method === 'PUT') {
+        return Promise.reject(new Error('save failed'));
+      }
+      return buildDefaultFetch()(url, opts);
+    });
+
+    render(<Settings />);
+    await waitFor(() => expect(screen.getByText(/Notification Preferences/i)).toBeInTheDocument());
+
+    await user.click(screen.getByRole('button', { name: /Save Preferences/i }));
+
+    await waitFor(() => {
+      expect(notifyObj.error).toHaveBeenCalledWith(
+        expect.stringMatching(/Failed to save notification preferences/i)
+      );
+    });
+  });
+
+  // 33 — Notification Preferences RESET DECLINE → no POST fires
+  it('Reset to Defaults does NOT POST when confirm resolves false', async () => {
+    const user = userEvent.setup();
+    notifyObj.confirm.mockImplementation(() => Promise.resolve(false));
+
+    render(<Settings />);
+    await waitFor(() => expect(screen.getByText(/Notification Preferences/i)).toBeInTheDocument());
+
+    await user.click(screen.getByRole('button', { name: /Reset to Defaults/i }));
+
+    // Allow any microtasks to settle then verify NO POST fired
+    await new Promise((r) => setTimeout(r, 50));
+    const posts = fetchApiMock.mock.calls.filter(
+      ([url, opts]) => url === '/api/notifications/preferences/reset' && opts?.method === 'POST'
+    );
+    expect(posts.length).toBe(0);
+    expect(notifyObj.confirm).toHaveBeenCalled();
+  });
+
+  // 34 — Quiet Hours: timezone select changes update the local state and
+  // the next Save PUT includes the new timezone value.
+  it('Quiet-hours timezone selection is persisted via the next Save Preferences PUT', async () => {
+    const user = userEvent.setup();
+    render(<Settings />);
+    await waitFor(() => expect(screen.getByText(/Notification Preferences/i)).toBeInTheDocument());
+
+    // Find the timezone select (the one containing 'America/New_York' option)
+    const allSelects = screen.getAllByRole('combobox');
+    const tzSelect = allSelects.find((sel) =>
+      Array.from(sel.options || []).some((opt) => opt.value === 'America/New_York')
+    );
+    expect(tzSelect).toBeTruthy();
+    await user.selectOptions(tzSelect, 'America/New_York');
+
+    await user.click(screen.getByRole('button', { name: /Save Preferences/i }));
+
+    await waitFor(() => {
+      const puts = fetchApiMock.mock.calls.filter(
+        ([url, opts]) => url === '/api/notifications/preferences' && opts?.method === 'PUT'
+      );
+      expect(puts.length).toBeGreaterThan(0);
+      const body = JSON.parse(puts[puts.length - 1][1].body);
+      expect(body.timezone).toBe('America/New_York');
+    });
+  });
+
+  // 35 — Stage Move-Up button is disabled on the FIRST stage (boundary)
+  it('first pipeline stage Up-arrow is disabled and clicking it does not PUT reorder', async () => {
+    const user = userEvent.setup();
+    render(<Settings />);
+    await waitFor(() => expect(screen.getByText('Prospecting')).toBeInTheDocument());
+
+    const stageRow = screen.getByText('Prospecting').closest('div').parentElement;
+    const upBtn = stageRow.querySelectorAll('button')[0]; // up / down / delete
+    expect(upBtn).toBeDisabled();
+
+    // Force-click via fireEvent (userEvent skips disabled targets) to verify
+    // the disabled state truly suppresses the handler.
+    fireEvent.click(upBtn);
+    await new Promise((r) => setTimeout(r, 30));
+    const reorderPuts = fetchApiMock.mock.calls.filter(
+      ([url, opts]) => url === '/api/pipeline_stages/reorder' && opts?.method === 'PUT'
+    );
+    expect(reorderPuts.length).toBe(0);
+  });
+
+  // 36 — Consent Templates: clicking Disable on an active row PUTs
+  // /api/wellness/consent-templates/:id with { isActive: false }.
+  it('wellness Consent Templates Disable button PUTs the row with { isActive: false }', async () => {
+    const user = userEvent.setup();
+    const seededTemplates = [
+      { id: 'ct1', key: 'general', label: 'General Consent', isActive: true, isSeed: true },
+    ];
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = opts?.method || 'GET';
+      if (url === '/api/wellness/consent-templates' && method === 'GET') {
+        return Promise.resolve(seededTemplates);
+      }
+      if (/^\/api\/wellness\/consent-templates\/ct1$/.test(url) && method === 'PUT') {
+        return Promise.resolve({ ok: true });
+      }
+      return buildDefaultFetch({ tenant: { ...baseTenant, vertical: 'wellness' } })(url, opts);
+    });
+
+    render(<Settings />);
+    await waitFor(() => expect(screen.getByTestId('consent-templates-card')).toBeInTheDocument());
+
+    const disableBtn = await screen.findByRole('button', { name: /^Disable$/i });
+    await user.click(disableBtn);
+
+    await waitFor(() => {
+      const puts = fetchApiMock.mock.calls.filter(
+        ([url, opts]) => /^\/api\/wellness\/consent-templates\/ct1$/.test(url) && opts?.method === 'PUT'
+      );
+      expect(puts.length).toBeGreaterThan(0);
+      const body = JSON.parse(puts[0][1].body);
+      expect(body).toEqual({ isActive: false });
+    });
+  });
+
+  // 37 — Add Stage form REJECTS whitespace-only stage name without POSTing.
+  // Pins the `if (!newStage.name.trim()) return;` guard in handleAddStage.
+  it('Add Stage with whitespace-only name does NOT POST /api/pipeline_stages', async () => {
+    const user = userEvent.setup();
+    render(<Settings />);
+    await waitFor(() => expect(screen.getByText('Prospecting')).toBeInTheDocument());
+
+    // HTML5 `required` would block the click, so bypass by setting value
+    // directly and dispatching submit via fireEvent.
+    const stageNameInput = screen.getByPlaceholderText(/Stage name/i);
+    // Override the required attribute so the form can submit empty/whitespace
+    // and we can pin the SUT's trim() guard rather than the browser's check.
+    stageNameInput.removeAttribute('required');
+    fireEvent.change(stageNameInput, { target: { value: '   ' } });
+
+    const form = stageNameInput.closest('form');
+    fireEvent.submit(form);
+
+    await new Promise((r) => setTimeout(r, 50));
+    const posts = fetchApiMock.mock.calls.filter(
+      ([url, opts]) => url === '/api/pipeline_stages' && opts?.method === 'POST'
+    );
+    expect(posts.length).toBe(0);
+  });
+
+  // 38 — Empty brand color save sends `brandColor: null` (not the empty string)
+  it('Save color with an empty hex sends { brandColor: null } and shows the saved message', async () => {
+    const user = userEvent.setup();
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = opts?.method || 'GET';
+      if (url === '/api/wellness/branding/color' && method === 'PUT') {
+        const body = JSON.parse(opts.body);
+        return Promise.resolve({ brandColor: body.brandColor || null });
+      }
+      return buildDefaultFetch()(url, opts);
+    });
+
+    render(<Settings />);
+    await waitFor(() => expect(screen.getByText(/^Branding$/)).toBeInTheDocument());
+
+    // hex text input starts empty (branding.brandColor: '' default)
+    const hexInput = screen.getByPlaceholderText('#3b82f6');
+    expect(hexInput.value).toBe('');
+
+    await user.click(screen.getByRole('button', { name: /Save color/i }));
+
+    await waitFor(() => {
+      const puts = fetchApiMock.mock.calls.filter(
+        ([url, opts]) => url === '/api/wellness/branding/color' && opts?.method === 'PUT'
+      );
+      expect(puts.length).toBeGreaterThan(0);
+      const body = JSON.parse(puts[0][1].body);
+      expect(body).toEqual({ brandColor: null });
+    });
   });
 });

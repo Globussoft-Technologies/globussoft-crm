@@ -5,35 +5,16 @@
 //   - Below: "My Last 30 Days" attendance grid
 //   - For ADMIN/MANAGER only: a "Today — All Staff" section listing every
 //     staff row's status for the current day. Plain users don't see it.
-//   - For ADMIN/MANAGER only: an "Export Payroll CSV" toolbar with from/to
-//     date pickers — downloads a CSV (staff_id, name, hours_worked, lates,
-//     absences, leaves) computed client-side from /api/attendance/summary.
 //
 // Uses /api/attendance/* endpoints. Dual-vertical (works under both wellness
 // and generic verticals); the route is mounted at /wellness/attendance for
 // the wellness sidebar but the page itself doesn't gate on tenant.vertical.
-//
-// #802 (Zylu-Gap ATT-001) — added Early + On-Time KPI tiles to the manager
-// staff section. Backend gap: /api/attendance/summary returns counts for
-// PRESENT/HALF_DAY/LATE/ABSENT only; Early/On-Time require either a
-// shift-policy table (clock-in vs scheduled start with tolerance) OR
-// extending the Attendance.status enum to include EARLY/ON_TIME. Today the
-// tiles read summary.early / summary.onTime which the backend doesn't yet
-// emit — they render 0 until that gap closes. Tiles are wired so a follow-up
-// backend change is purely additive.
-//
-// #804 (Zylu-Gap ATT-003) — added Export Payroll CSV button. Date-range
-// picker, CSV columns match Zylu spec (staff_id, name, hours_worked,
-// lates, absences, leaves). Today the CSV computes hours_worked + lates
-// from summary.byUser data; absences / leaves are surfaced as 0 with a
-// note in the CSV header line — backend gap is the same per-user
-// breakdown not yet returning lates/absences/leaves per row.
 import { useEffect, useState, useContext } from 'react';
-import { Clock, LogIn, LogOut, Calendar, Users, Download, List as ListIcon, CalendarDays } from 'lucide-react';
+import { Clock, LogIn, LogOut, Calendar, Users } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { AuthContext } from '../../App';
-import AttendanceCalendar from './AttendanceCalendar';
+import { DateRangeFilter, resolveDateRangeYmd } from '../../components/wellness/DateRangeFilter';
 
 function fmtDate(s) {
   if (!s) return '—';
@@ -68,14 +49,13 @@ export default function Attendance() {
   const { user } = useContext(AuthContext) || {};
   const isManager = user?.role === 'ADMIN' || user?.role === 'MANAGER';
 
-  // #803 (Zylu-Gap ATT-002) — view toggle. Default 'list' keeps the existing
-  // punch + history surface as-is (no regression for daily use); 'calendar'
-  // exposes the month-grid of leaves + attendance status.
-  const [view, setView] = useState('list');
-
   const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  // Attendance requires a window — opt out of "All time" and default to last30
+  // (matches the prior 30-day default).
+  const [dateFilter, setDateFilter] = useState({ preset: 'last30', start: '', end: '' });
+  const [from, to] = resolveDateRangeYmd(dateFilter);
 
   // Today's row (clockInAt/clockOutAt) — derived from history's first row.
   const todayKey = new Date().toISOString().slice(0, 10);
@@ -84,14 +64,14 @@ export default function Attendance() {
   const isClockedOut = todayRow && todayRow.clockOutAt;
 
   const load = () => {
+    if (!from || !to) return;
     setLoading(true);
-    const from = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
-    fetchApi(`/api/attendance/me?from=${from}`)
+    fetchApi(`/api/attendance/me?from=${from}&to=${to}`)
       .then((rows) => setHistory(Array.isArray(rows) ? rows : []))
       .catch(() => setHistory([]))
       .finally(() => setLoading(false));
   };
-  useEffect(load, []);
+  useEffect(load, [from, to]);
 
   const onClockIn = async () => {
     setBusy(true);
@@ -121,71 +101,12 @@ export default function Attendance() {
     }
   };
 
-  const tabStyle = (active) => ({
-    padding: '8px 16px', border: 'none', background: 'transparent',
-    fontWeight: 600, fontSize: 14, cursor: 'pointer',
-    borderBottom: active ? '2px solid var(--primary-color, var(--accent-color))' : '2px solid transparent',
-    color: active ? 'var(--primary-color, var(--accent-color))' : 'var(--text-secondary, #888)',
-    display: 'inline-flex', alignItems: 'center', gap: 6,
-    marginBottom: -1,
-  });
-
   return (
     <div style={{ padding: 24, maxWidth: 1100, margin: '0 auto' }}>
-      <h1 style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+      <h1 style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20 }}>
         <Clock size={28} aria-hidden /> Attendance
       </h1>
 
-      {/* #803 — View tabs. Default 'list' preserves the daily punch surface;
-          'calendar' is the new month grid. */}
-      <div role="tablist" aria-label="Attendance view" style={{
-        display: 'flex', gap: 4, borderBottom: '1px solid var(--border-color, #eee)',
-        marginBottom: 20,
-      }}>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={view === 'list'}
-          onClick={() => setView('list')}
-          style={tabStyle(view === 'list')}
-        >
-          <ListIcon size={16} aria-hidden /> List
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={view === 'calendar'}
-          onClick={() => setView('calendar')}
-          style={tabStyle(view === 'calendar')}
-        >
-          <CalendarDays size={16} aria-hidden /> Calendar
-        </button>
-      </div>
-
-      {view === 'calendar' ? (
-        <section style={{ background: 'var(--surface-color, #fff)', borderRadius: 12, padding: 24, boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
-          <AttendanceCalendar />
-        </section>
-      ) : (
-        <ListView
-          history={history}
-          loading={loading}
-          busy={busy}
-          todayRow={todayRow}
-          isClockedIn={isClockedIn}
-          isClockedOut={isClockedOut}
-          onClockIn={onClockIn}
-          onClockOut={onClockOut}
-          isManager={isManager}
-        />
-      )}
-    </div>
-  );
-}
-
-function ListView({ history, loading, busy, todayRow, isClockedIn, isClockedOut, onClockIn, onClockOut, isManager }) {
-  return (
-    <>
       {/* Today's punch card */}
       <section style={{ background: 'var(--surface-color, #fff)', borderRadius: 12, padding: 24, boxShadow: '0 1px 4px rgba(0,0,0,0.06)', marginBottom: 24 }}>
         <h2 style={{ marginTop: 0 }}>Today, {new Date().toLocaleDateString()}</h2>
@@ -241,11 +162,19 @@ function ListView({ history, loading, busy, todayRow, isClockedIn, isClockedOut,
         </div>
       </section>
 
-      {/* Last-30-days history */}
+      {/* My attendance history */}
       <section style={{ background: 'var(--surface-color, #fff)', borderRadius: 12, padding: 24, boxShadow: '0 1px 4px rgba(0,0,0,0.06)', marginBottom: 24 }}>
-        <h2 style={{ marginTop: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
-          <Calendar size={20} aria-hidden /> My Last 30 Days
-        </h2>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', marginBottom: 4 }}>
+          <h2 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Calendar size={20} aria-hidden /> My attendance
+          </h2>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+            <DateRangeFilter value={dateFilter} onChange={setDateFilter} label={null} includeAllOption={false} />
+          </div>
+        </div>
+        {dateFilter.preset === 'last30' && (
+          <div style={{ fontSize: 12, color: 'var(--text-secondary, #888)', marginBottom: 12 }}>My Last 30 Days</div>
+        )}
         {loading ? (
           <div>Loading&hellip;</div>
         ) : history.length === 0 ? (
@@ -287,7 +216,7 @@ function ListView({ history, loading, busy, todayRow, isClockedIn, isClockedOut,
 
       {/* Manager-only: today's staff snapshot */}
       {isManager && <ManagerStaffSnapshot />}
-    </>
+    </div>
   );
 }
 
@@ -295,118 +224,108 @@ function ManagerStaffSnapshot() {
   const notify = useNotify();
   const [summary, setSummary] = useState(null);
   const [loading, setLoading] = useState(true);
-  // #804: payroll-CSV date range. Defaults to the last 30 days so a manager
-  // hitting Export immediately gets a reasonable monthly slice. From/to are
-  // normal <input type="date"> values (YYYY-MM-DD).
-  const today = new Date().toISOString().slice(0, 10);
-  const thirtyAgo = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
-  const [csvFrom, setCsvFrom] = useState(thirtyAgo);
-  const [csvTo, setCsvTo] = useState(today);
+  const todayKey = new Date().toISOString().slice(0, 10);
+  const thirtyDaysAgo = (() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 30);
+    return d.toISOString().slice(0, 10);
+  })();
+  const [exportFrom, setExportFrom] = useState(thirtyDaysAgo);
+  const [exportTo, setExportTo] = useState(todayKey);
   const [exporting, setExporting] = useState(false);
 
   useEffect(() => {
-    const t = new Date().toISOString().slice(0, 10);
-    fetchApi(`/api/attendance/summary?from=${t}&to=${t}`)
+    fetchApi(`/api/attendance/summary?from=${todayKey}&to=${todayKey}`)
       .then(setSummary)
       .catch(() => setSummary(null))
       .finally(() => setLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // #802: total = present + absent + late + halfDay (the four counted statuses
-  // the backend currently emits). Early / On-Time are surfaced separately as
-  // a backend gap — neither contributes to `total` today because the schema
-  // doesn't yet distinguish them from PRESENT.
-  const total = summary
-    ? (summary.present || 0) + (summary.absent || 0) + (summary.late || 0) + (summary.halfDay || 0)
-    : 0;
-
-  // #804: compute payroll CSV client-side. Hits /api/attendance/summary for
-  // the requested range, then assembles a CSV from summary.byUser. Hours =
-  // minutes/60 (two decimals). Lates / absences / leaves are best-effort
-  // from summary.byUser.{late, absent, leaves} when the backend grows
-  // those per-user counters; today byUser only carries {userId, days,
-  // minutes, present, halfDay} so the columns render 0 — flagged in the
-  // CSV header note (#804 backend-gap).
-  const onExportCsv = async () => {
-    if (!csvFrom || !csvTo) { notify.error('Pick a date range first.'); return; }
-    if (csvFrom > csvTo) { notify.error('From date must be before To date.'); return; }
+  const onExport = async () => {
     setExporting(true);
     try {
-      const data = await fetchApi(`/api/attendance/summary?from=${csvFrom}&to=${csvTo}`);
-      const rows = Object.values(data?.byUser || {});
-      const header = [
-        'staff_id', 'name', 'hours_worked', 'lates', 'absences', 'leaves',
-      ];
+      const data = await fetchApi(`/api/attendance/summary?from=${exportFrom}&to=${exportTo}`);
+      const rows = Object.values((data && data.byUser) || {});
+      const header = ['User ID', 'Days', 'Minutes', 'Late', 'Absent', 'Leaves'];
       const lines = [header.join(',')];
-      for (const u of rows) {
-        const hours = Math.round(((u.minutes || 0) / 60) * 100) / 100;
-        const lates = u.late || 0;
-        const absences = u.absent || 0;
-        const leaves = u.leaves || 0;
-        // name field is not yet populated by /summary — manager-facing CSV
-        // identifies staff by id+placeholder until backend joins users into byUser.
-        const name = u.name || `User #${u.userId}`;
-        lines.push([u.userId, csvEscape(name), hours, lates, absences, leaves].join(','));
+      for (const r of rows) {
+        lines.push([
+          r.userId ?? '',
+          r.days ?? 0,
+          r.minutes ?? 0,
+          r.late ?? 0,
+          r.absent ?? 0,
+          r.leaves ?? 0,
+        ].join(','));
       }
       const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `payroll-${csvFrom}-to-${csvTo}.csv`;
+      a.download = `payroll-${exportFrom}-to-${exportTo}.csv`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
-      notify.success(`Payroll CSV exported (${rows.length} staff)`);
+      notify.success(`Payroll CSV exported (${rows.length} rows)`);
     } catch (e) {
       const msg = e && e.body && e.body.error;
-      notify.error(msg || 'Export failed');
+      notify.error(msg || 'Payroll CSV export failed');
     } finally {
       setExporting(false);
     }
   };
 
+  // Zylu-spec KPI numbers — backend may not emit early/onTime yet; default to 0.
+  const present = summary?.present || 0;
+  const halfDay = summary?.halfDay || 0;
+  const late = summary?.late || 0;
+  const absent = summary?.absent || 0;
+  const early = summary?.early || 0;
+  const onTime = summary?.onTime || 0;
+  const total = present + halfDay + late + absent;
+  const totalMinutes = summary?.totalMinutes || 0;
+
   return (
     <section style={{ background: 'var(--surface-color, #fff)', borderRadius: 12, padding: 24, boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12, marginBottom: 16 }}>
-        <h2 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12, marginBottom: 12 }}>
+        <h2 style={{ marginTop: 0, marginBottom: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
           <Users size={20} aria-hidden /> Today &mdash; All Staff
         </h2>
-        {/* #804: payroll-CSV export toolbar. Renders only for managers (already
-            gated by parent isManager). Inline label + two date inputs + the
-            export button so the whole toolbar fits in one row on desktop. */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          <label style={{ fontSize: 12, color: 'var(--text-secondary, #888)' }} htmlFor="payroll-from">From</label>
-          <input
-            id="payroll-from"
-            type="date"
-            value={csvFrom}
-            onChange={(e) => setCsvFrom(e.target.value)}
-            style={{ padding: '4px 8px', borderRadius: 6, border: '1px solid var(--border-color, #ddd)' }}
-            aria-label="Payroll CSV from date"
-          />
-          <label style={{ fontSize: 12, color: 'var(--text-secondary, #888)' }} htmlFor="payroll-to">To</label>
-          <input
-            id="payroll-to"
-            type="date"
-            value={csvTo}
-            onChange={(e) => setCsvTo(e.target.value)}
-            style={{ padding: '4px 8px', borderRadius: 6, border: '1px solid var(--border-color, #ddd)' }}
-            aria-label="Payroll CSV to date"
-          />
+          <label style={{ fontSize: 12, color: 'var(--text-secondary, #888)', display: 'flex', alignItems: 'center', gap: 4 }}>
+            From
+            <input
+              type="date"
+              aria-label="Payroll CSV from date"
+              value={exportFrom}
+              onChange={(e) => setExportFrom(e.target.value)}
+              style={{ padding: '4px 6px' }}
+            />
+          </label>
+          <label style={{ fontSize: 12, color: 'var(--text-secondary, #888)', display: 'flex', alignItems: 'center', gap: 4 }}>
+            To
+            <input
+              type="date"
+              aria-label="Payroll CSV to date"
+              value={exportTo}
+              onChange={(e) => setExportTo(e.target.value)}
+              style={{ padding: '4px 6px' }}
+            />
+          </label>
           <button
             type="button"
-            onClick={onExportCsv}
+            onClick={onExport}
             disabled={exporting}
-            aria-label="Export Payroll CSV"
             style={{
-              padding: '6px 14px', fontSize: 13, fontWeight: 600,
-              background: 'var(--primary-color, var(--accent-color))', color: '#fff',
-              border: 'none', borderRadius: 6, cursor: exporting ? 'not-allowed' : 'pointer',
-              display: 'inline-flex', alignItems: 'center', gap: 6,
+              padding: '6px 12px', borderRadius: 6,
+              border: '1px solid var(--border-color, #ddd)',
+              background: 'var(--surface-color, #fff)', color: 'var(--text-primary)',
+              cursor: exporting ? 'not-allowed' : 'pointer', fontSize: 13, fontWeight: 600,
             }}
           >
-            <Download size={14} aria-hidden /> {exporting ? 'Exporting…' : 'Export Payroll CSV'}
+            Export Payroll CSV
           </button>
         </div>
       </div>
@@ -416,26 +335,15 @@ function ManagerStaffSnapshot() {
         <div style={{ color: 'var(--text-secondary, #888)' }}>No data yet.</div>
       ) : (
         <div>
-          {/* #802: Zylu-spec KPI grid — six tiles in spec order. Total =
-              Present + Absent + Late + Half-day (Early/On-Time excluded
-              today since the backend doesn't yet emit those statuses). */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 140px), 1fr))', gap: 12, marginBottom: 16 }}>
             <Stat label="Total" value={total} />
-            <Stat label="Absent" value={summary.absent || 0} />
-            <Stat label="Present" value={summary.present || 0} />
-            <Stat
-              label="Early"
-              value={summary.early || 0}
-              title="Clock-in before shift start. Backend wiring pending (#802) — emits 0 until shift-policy ships."
-            />
-            <Stat
-              label="On-Time"
-              value={summary.onTime || 0}
-              title="Clock-in within tolerance of shift start. Backend wiring pending (#802) — emits 0 until shift-policy ships."
-            />
-            <Stat label="Late" value={summary.late || 0} />
-            <Stat label="Half-day" value={summary.halfDay || 0} />
-            <Stat label="Total minutes" value={summary.totalMinutes || 0} />
+            <Stat label="Absent" value={absent} />
+            <Stat label="Present" value={present} />
+            <Stat label="Early" value={early} />
+            <Stat label="On-Time" value={onTime} />
+            <Stat label="Late" value={late} />
+            <Stat label="Half-day" value={halfDay} />
+            <Stat label="Total minutes" value={totalMinutes} />
           </div>
           {Object.keys(summary.byUser || {}).length > 0 ? (
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
@@ -465,24 +373,9 @@ function ManagerStaffSnapshot() {
   );
 }
 
-// #804: CSV-escape helper — wraps in double-quotes only when the cell
-// contains a comma, double-quote, or newline. Doubles embedded quotes
-// per RFC 4180. Used for the `name` column where staff names can
-// contain commas (e.g. "Dr. Aaron, MD").
-function csvEscape(s) {
-  const v = String(s == null ? '' : s);
-  if (/[",\n]/.test(v)) {
-    return `"${v.replace(/"/g, '""')}"`;
-  }
-  return v;
-}
-
-function Stat({ label, value, title }) {
+function Stat({ label, value }) {
   return (
-    <div
-      style={{ background: 'var(--subtle-bg, #f7f7f7)', borderRadius: 8, padding: 12 }}
-      title={title}
-    >
+    <div style={{ background: 'var(--subtle-bg, #f7f7f7)', borderRadius: 8, padding: 12 }}>
       <div style={{ fontSize: 11, color: 'var(--text-secondary, #888)' }}>{label}</div>
       <div style={{ fontSize: 22, fontWeight: 700 }}>{value}</div>
     </div>

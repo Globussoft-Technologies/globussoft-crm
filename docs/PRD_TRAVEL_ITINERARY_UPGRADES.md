@@ -261,9 +261,36 @@ Sajid (RFU operator) is building an itinerary and types "Jeddah Corniche" in the
 
 ## §10 Status snapshot
 
-- **Current state:** Itinerary CRUD ships; `/draft/regen` LLM summary ships; `ItineraryDetail.jsx` is a typed list editor; no template library; no sightseeing master; no visual editor; no LLM suggest-itinerary.
-- **This PRD:** WRITTEN 2026-05-23 (tick #25). Status: DRAFT pending product-owner sign-off (Yasin) on DD-5.1 / DD-5.3 / OQ-9.1 / OQ-9.5 / OQ-9.8.
-- **Path to implementation:** 14-20 engineering days across 4 sub-features (template library 4d + sightseeing master 3d + visual editor 6d + LLM suggest 3d + cross-cutting QA + analytics + seed data 3d). Sequencing: sightseeing master + LLM task-class wire-in can start parallel; visual editor depends on POI master + template-clone path; template library depends on visual editor (save-as-template).
-- **Cred dependencies:** Q-IT-2 (Gemini, overlapping Q11) blocks production LLM flow but stub-mode unblocks dev/demo. Q-IT-3 (OpenTripMap license review) is ~1hr of Yasin's time.
+### 2026-06-09 refresh — template library + sightseeing master LIVE; visual editor + suggest-itinerary pending
+
+**Current state:** Itinerary CRUD + `/draft/regen` LLM summary + the template library + sightseeing master + typed-list editor are SHIPPED. The prior "no template library; no sightseeing master" claim is OBSOLETE. The visual day-by-day editor + LLM suggest-itinerary task class remain pending.
+
+**SHIPPED:**
+- ✅ `backend/routes/travel_itinerary_templates.js` — full CRUD + by-month/quarter/year + stats
+- ✅ `frontend/src/pages/travel/ItineraryTemplates.jsx` + tests
+- ✅ `backend/routes/travel_sightseeing.js` — CRUD + stats + by-period
+- ✅ `frontend/src/pages/travel/SightseeingMaster.jsx`
+- ✅ Itinerary CRUD + items polymorphic CRUD (`travel_itineraries.js` ~2800+ LOC with `/accept`/`/reject`/`/share`/PDF/public flows)
+- ✅ `frontend/src/pages/travel/Itineraries.jsx` + `ItineraryDetail.jsx` typed-list editor
+- ✅ `/draft/regen` LLM summary via `backend/lib/llmRouter.js` (commit `583c06b`)
+- ✅ `backend/lib/travelPricing.js` engine
+
+**Pending (in-PRD work):**
+- ⬜ `/travel/itineraries/:id/edit` day-by-day visual editor with drag-drop + map preview (FR-3.3) — ~6d
+- ⬜ `dayNumber` + `latitude`/`longitude` on `ItineraryItem` — ~½d
+- ⬜ LLM "Suggest itinerary" task class (`itinerary-suggest` not registered — only `/draft/regen` summary exists) — ~3d
+- ⬜ OpenTripMap POI seed import — ~1d
+- ⬜ Leaflet+OSM map provider integration — ~1d
+- ⬜ Inline Add-POI modal with `pendingApproval` queue (FR-3.7) — ~1d
+- ⬜ Brand-kit-aware template defaults from `subBrandConfigJson` — ~½d
+
+**Blocked / deferred:**
+- 🔵 Q-IT-2 Gemini API key (overlaps Q11) — stub-mode OK for dev
+- 🔵 Q-IT-3 OpenTripMap licensing review (Yasin ~1hr)
+- 🔵 Q-IT-1 Mapbox optional — DEFERRED (OSM default ships fine)
+
+**Net remaining: ~13 engineering days** + Yasin's licensing call. Template + sightseeing + LLM summary (the immediate prereqs) are off the critical path. Visual editor + suggest-itinerary task class are the next high-value slices.
+
+- **Status flag:** DRAFT — pending product-owner sign-off (Yasin) on DD-5.1 / DD-5.3 / OQ-9.1 / OQ-9.5 / OQ-9.8.
 - **Sibling PRDs:** PRD_AI_SURFACES (task-class infra), PRD_TRAVEL_QUOTE_BUILDER (cost-master substrate), PRD_TRAVEL_SUPPLIER_MASTER (supplier-id wiring), PRD_TRAVEL_BILLING (invoice handoff), PRD_TRAVEL_MARKETING_FLYER (shared `<VisualBuilder/>` substrate).
 - **Refs:** GH #907 • Travel Stall CRM Roadmap Tier P2 item 12.

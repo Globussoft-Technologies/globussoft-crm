@@ -1,12 +1,14 @@
 import React, { useState, useContext } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { AuthContext } from '../App';
+import PasswordInput from '../components/PasswordInput';
 
 const Signup = () => {
   const [name, setName] = useState('');
   const [organizationName, setOrganizationName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [vertical, setVertical] = useState('generic');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const { setUser, setToken, setTenant } = useContext(AuthContext);
@@ -22,7 +24,7 @@ const Signup = () => {
       const response = await fetch('/api/auth/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, email, password, organizationName })
+        body: JSON.stringify({ name, email, password, organizationName, vertical })
       });
 
       const data = await response.json();
@@ -31,7 +33,9 @@ const Signup = () => {
         setUser(data.user);
         setToken(data.token);
         if (data.tenant && setTenant) setTenant(data.tenant);
-        navigate('/dashboard');
+        const v = data.tenant?.vertical;
+        const destination = v === 'wellness' ? '/wellness' : v === 'travel' ? '/travel' : '/dashboard';
+        navigate(destination);
       } else {
         setError(data.message || data.error || 'Registration failed securely. Please verify fields.');
       }
@@ -69,6 +73,41 @@ const Signup = () => {
             />
           </div>
           <div style={{ marginBottom: '1rem' }}>
+            <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-secondary)' }}>Organization Type</label>
+            <div style={{ display: 'flex', gap: '1rem' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.875rem' }}>
+                <input
+                  type="radio"
+                  name="vertical"
+                  value="generic"
+                  checked={vertical === 'generic'}
+                  onChange={(e) => setVertical(e.target.value)}
+                />
+                Generic CRM
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.875rem' }}>
+                <input
+                  type="radio"
+                  name="vertical"
+                  value="wellness"
+                  checked={vertical === 'wellness'}
+                  onChange={(e) => setVertical(e.target.value)}
+                />
+                Wellness (Clinic/Salon)
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.875rem' }}>
+                <input
+                  type="radio"
+                  name="vertical"
+                  value="travel"
+                  checked={vertical === 'travel'}
+                  onChange={(e) => setVertical(e.target.value)}
+                />
+                Travel (Agency)
+              </label>
+            </div>
+          </div>
+          <div style={{ marginBottom: '1rem' }}>
             <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-secondary)' }}>Your Full Name</label>
             <input
               type="text"
@@ -92,14 +131,13 @@ const Signup = () => {
           </div>
           <div style={{ marginBottom: '1.5rem' }}>
             <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-secondary)' }}>Secure Password</label>
-            <input
-              type="password"
-              className="input-field"
+            <PasswordInput
               placeholder="••••••••"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               required
               minLength={6}
+              autoComplete="new-password"
             />
           </div>
           <button type="submit" className="btn-primary" style={{ width: '100%' }} disabled={loading}>

@@ -71,41 +71,56 @@ async function main() {
   const trialStartDate = new Date();
   const trialEndsAt = new Date(Date.now() + 15 * 86400000);
 
+  // subBrandAccess scopes which of the 4 travel sub-brands each user may
+  // act on (JSON array string on User.subBrandAccess). Policy: managers are
+  // scoped to the brand they run; the USER role (front-desk telecaller) and
+  // owners/admins see ALL brands. ADMINs are full-access regardless of this
+  // column (travelGuards.getSubBrandAccessSet short-circuits on role), but we
+  // set it explicitly so every user carries an intentional scope.
+  const ALL_BRANDS = ["tmc", "rfu", "travelstall", "visasure"];
   const users = [
     {
       email: "yasin@travelstall.in",
       role: "ADMIN",
       name: "Yasin (Owner)",
+      subBrandAccess: ALL_BRANDS,
     },
     {
       email: "admin@travelstall.demo",
       role: "ADMIN",
       name: "Demo Admin",
+      subBrandAccess: ALL_BRANDS,
     },
     {
       email: "tmc-ops@travelstall.demo",
       role: "MANAGER",
       name: "TMC Operator",
+      subBrandAccess: ["tmc"],
     },
     {
       email: "rfu-advisor@travelstall.demo",
       role: "MANAGER",
       name: "RFU Advisor",
+      subBrandAccess: ["rfu"],
     },
     {
       email: "telecaller@travelstall.demo",
       role: "USER",
       name: "Travel Telecaller",
+      subBrandAccess: ALL_BRANDS,
     },
   ];
 
   for (const u of users) {
+    // Composite-unique key per schema @@unique([email, tenantId]).
+    // Bare `where: { email }` throws PrismaClientValidationError.
     await prisma.user.upsert({
-      where: { email: u.email },
+      where: { email_tenantId: { email: u.email, tenantId: tenant.id } },
       update: {
         tenantId: tenant.id,
         role: u.role,
         name: u.name,
+        subBrandAccess: JSON.stringify(u.subBrandAccess),
       },
       create: {
         email: u.email,
@@ -113,6 +128,7 @@ async function main() {
         role: u.role,
         name: u.name,
         tenantId: tenant.id,
+        subBrandAccess: JSON.stringify(u.subBrandAccess),
         subscriptionStatus: "TRIAL",
         trialStartDate,
         trialEndsAt,
@@ -121,53 +137,55 @@ async function main() {
   }
   console.log(`[seed-travel] users upserted: ${users.length}`);
 
-  // ── 3. Placeholder diagnostic Q-sets ─────────────────────────────────
+  // ── 3. Diagnostic Q-sets ─────────────────────────────────────────────
   //
-  // Stand-in content until Yasin's Q13 deliverables land. The TMC bank
-  // is a 3-question short-form; the RFU bank uses 4 questions to cover
-  // the readiness-tier classification.
+  // TMC bank: the 12-question SPEC per PRD_TMC_DIAGNOSTIC_SALES_ROUTING_ENGINE
+  // §3.1. Replaces the previous 3-Q "Stand-in content until Yasin's Q13
+  // deliverables land" placeholder (T4 in the autonomous build cron's §10
+  // checklist). The TMC engine does NOT use the generic weighted-sum
+  // scorer in travelDiagnosticScoring.js — instead it reads
+  // backend/lib/tmcDiagnosticEngine.js (T2) against TmcTripCatalogue +
+  // EngineWeights (seeded below). The bank's scoringRulesJson here is a
+  // sentinel so the public-form code path still receives a "TMC uses
+  // its own engine" classification answer; the real scoring lives in T2.
+  //
+  // RFU / Travel Stall / Visa Sure remain stand-in content until Yasin's
+  // Q13 deliverables land; they keep using the generic weighted-sum
+  // scorer.
 
-  await seedDiagnosticBank(tenant.id, "tmc", {
-    questions: [
-      {
-        id: "q1",
-        text: "How many trips do you organise per year?",
-        type: "single-choice",
-        options: [
-          { value: "first", label: "First-time", weight: 1 },
-          { value: "few", label: "2-4 trips", weight: 3 },
-          { value: "many", label: "5+ trips", weight: 5 },
-        ],
-      },
-      {
-        id: "q2",
-        text: "Average group size?",
-        type: "single-choice",
-        options: [
-          { value: "small", label: "< 20", weight: 1 },
-          { value: "medium", label: "20-50", weight: 3 },
-          { value: "large", label: "50+", weight: 5 },
-        ],
-      },
-      {
-        id: "q3",
-        text: "Trip duration?",
-        type: "single-choice",
-        options: [
-          { value: "weekend", label: "Weekend", weight: 1 },
-          { value: "week", label: "5-7 days", weight: 3 },
-          { value: "longer", label: "10+ days", weight: 5 },
-        ],
-      },
-    ],
-  }, {
-    method: "weighted-sum",
+  await seedDiagnosticBank(tenant.id, "tmc", buildTmcQuestionBankV1(), {
+    // Sentinel scoring rules — the TMC sub-brand does NOT use this
+    // generic scoring path. The deterministic 6-signal engine in
+    // backend/lib/tmcDiagnosticEngine.js (T2) replaces it. Kept non-empty
+    // so any consumer that legacy-reads scoringRulesJson doesn't crash;
+    // the `method: "tmc-deterministic-engine"` sentinel makes intent
+    // unambiguous in the DB and tells the legacy scorer to skip.
+    method: "tmc-deterministic-engine",
     bands: [
-      { minScore: 0, maxScore: 5, classification: "level_1", label: "Starter", recommendedTier: "entry" },
-      { minScore: 6, maxScore: 10, classification: "level_2", label: "Established", recommendedTier: "primary" },
-      { minScore: 11, maxScore: 15, classification: "level_3", label: "Power User", recommendedTier: "premium" },
+      // Classification labels are surfaced only by §3.6 sales brief +
+      // §3.5 readiness report, both of which read engineState from
+      // TravelDiagnostic, not these bands. Kept here for compatibility
+      // with any list-view that displays band labels.
+      { minScore: 0, maxScore: 999, classification: "tmc_engine", label: "Routed by TMC Engine", recommendedTier: "engine" },
     ],
-  });
+  }, { overwrite: true });
+
+  // ── TMC trip catalogue + EngineWeights — T4 of PRD §10 checklist ────
+  //
+  // 5 starter TmcTripCatalogue records (PRD §3.2) — Golden Triangle /
+  // Madhya Pradesh / Ladakh / Europe / USA STEM — anchored on AC-12's
+  // worked example. Plus the default EngineWeights row at PRD §3.3.3
+  // defaults (50/20/15/10/10/8, threshold 70, version "v1").
+  //
+  // Idempotent — upsert keyed on (tenantId, tripId) for catalogue rows
+  // and on (tenantId) @unique for EngineWeights.
+  //
+  // Per PRD §3.2 + §5.2, every priceBand + every curriculum_hooks entry
+  // is human-verified before launch. These seeded records ship with
+  // status="active" so the engine + tests can read them; final ratify
+  // belongs to Yasin's tagger pass. See per-record inline TODOs.
+  await seedTmcTripCatalogue(tenant.id);
+  await seedTmcEngineWeights(tenant.id);
 
   await seedDiagnosticBank(tenant.id, "rfu", {
     questions: [
@@ -533,11 +551,25 @@ async function main() {
     { subBrand: "tmc", category: "flight", routeOrSku: "BLR-DPS-Economy", baseRate: 22000 },
     { subBrand: "tmc", category: "transport", routeOrSku: "DPS-Bali-AC-Coach", baseRate: 4500 },
   ];
+  // Idempotent guard: TravelCostMaster has no @unique constraint, so key
+  // on the natural business tuple (tenantId, subBrand, category, routeOrSku).
+  // Earlier versions used `upsert({ where: { id: -1 } })` which never matched
+  // and duplicated on every re-run — confirmed live by row-counts after a
+  // double-run (9 → 18). Fixed 2026-05-26.
+  let cmCreated = 0;
   for (const r of costRows) {
-    await prisma.travelCostMaster.upsert({
-      where: { id: -1 }, // never matches; forces create
-      update: {},
-      create: {
+    const existing = await prisma.travelCostMaster.findFirst({
+      where: {
+        tenantId: tenant.id,
+        subBrand: r.subBrand,
+        category: r.category,
+        routeOrSku: r.routeOrSku,
+      },
+      select: { id: true },
+    });
+    if (existing) continue;
+    await prisma.travelCostMaster.create({
+      data: {
         tenantId: tenant.id,
         subBrand: r.subBrand,
         category: r.category,
@@ -546,9 +578,10 @@ async function main() {
         currency: "INR",
         isActive: true,
       },
-    }).catch(() => null); // tolerate re-seed
+    });
+    cmCreated++;
   }
-  console.log(`[seed-travel] cost-master rows: ${costRows.length}`);
+  console.log(`[seed-travel] cost-master rows: ${cmCreated} created, ${costRows.length - cmCreated} already existed`);
 
   // ── 6. Season calendar ──────────────────────────────────────────────
   const seasons = [
@@ -558,7 +591,20 @@ async function main() {
     { subBrand: "tmc", seasonName: "school-summer", startDate: "2026-05-15", endDate: "2026-07-15", multiplier: 1.4 },
     { subBrand: "tmc", seasonName: "school-winter", startDate: "2026-12-15", endDate: "2027-01-15", multiplier: 1.2 },
   ];
+  // Idempotent guard: TravelSeasonCalendar has no @unique constraint —
+  // key on (tenantId, subBrand, seasonName) which is the natural business
+  // identifier. Previously `create()`-without-guard duplicated on re-run.
+  let scCreated = 0;
   for (const s of seasons) {
+    const existing = await prisma.travelSeasonCalendar.findFirst({
+      where: {
+        tenantId: tenant.id,
+        subBrand: s.subBrand,
+        seasonName: s.seasonName,
+      },
+      select: { id: true },
+    });
+    if (existing) continue;
     await prisma.travelSeasonCalendar.create({
       data: {
         tenantId: tenant.id,
@@ -568,9 +614,10 @@ async function main() {
         endDate: new Date(s.endDate),
         multiplier: s.multiplier,
       },
-    }).catch(() => null);
+    });
+    scCreated++;
   }
-  console.log(`[seed-travel] season calendar rows: ${seasons.length}`);
+  console.log(`[seed-travel] season calendar rows: ${scCreated} created, ${seasons.length - scCreated} already existed`);
 
   // ── 7. Markup rules ─────────────────────────────────────────────────
   const markupRules = [
@@ -580,7 +627,22 @@ async function main() {
     { subBrand: "tmc", scope: "hotel", markupPct: 12, priority: 100 },
     { subBrand: "tmc", scope: "flight", markupPct: 7, priority: 100 },
   ];
+  // Idempotent guard: TravelMarkupRule has no @unique constraint — key on
+  // (tenantId, subBrand, scope, priority) which uniquely identifies the
+  // placeholder default rule for the seed. Real admin-created rules carry
+  // distinct matchKeyJson/markupPct and won't collide with this guard.
+  let mrCreated = 0;
   for (const m of markupRules) {
+    const existing = await prisma.travelMarkupRule.findFirst({
+      where: {
+        tenantId: tenant.id,
+        subBrand: m.subBrand,
+        scope: m.scope,
+        priority: m.priority,
+      },
+      select: { id: true },
+    });
+    if (existing) continue;
     await prisma.travelMarkupRule.create({
       data: {
         tenantId: tenant.id,
@@ -591,9 +653,10 @@ async function main() {
         priority: m.priority,
         isActive: true,
       },
-    }).catch(() => null);
+    });
+    mrCreated++;
   }
-  console.log(`[seed-travel] markup rules: ${markupRules.length}`);
+  console.log(`[seed-travel] markup rules: ${mrCreated} created, ${markupRules.length - mrCreated} already existed`);
 
   // ── 8. Sample TMC trips + RFU itinerary + microsite ─────────────────
   // Without entity data the Dashboard tiles all read 0 — fine for a unit
@@ -639,6 +702,20 @@ async function main() {
   // Idempotent: skips if a kit with version=1 already exists for the
   // (tenantId, subBrand) tuple. Re-runs of seed do NOT create duplicates.
   await seedStarterBrandKits(tenant.id);
+
+  // ── 12. Default cancellation policies (S57 — flagged by S33) ────────
+  //
+  // S33 (commit 1614f88e) shipped the CancellationPolicy model + auto-CR-NOTE
+  // issuance on void. Without seed defaults, fresh demo deploys have an empty
+  // CancellationPolicy table → operators voiding an invoice see "no policy
+  // applied" / zero auto-refund, and the auto-issuance flow that's the whole
+  // point of S33 is invisible until a human manually POSTs a policy via
+  // /api/travel/cancellation-policies. S57 closes that gap with two starter
+  // sub-brand defaults (TMC + RFU) so the void-flow demo path Just Works.
+  //
+  // PRD anchor: PRD_TRAVEL_BILLING FR-3.7 (cancellation + refund flow).
+  // Idempotent — see seedDefaultCancellationPolicies doc-comment.
+  await seedDefaultCancellationPolicies(tenant.id);
 
   console.log("[seed-travel] done — Travel Stall demo tenant + placeholder content seeded.");
   console.log("[seed-travel] Login: yasin@travelstall.in / password123");
@@ -746,6 +823,103 @@ async function seedStarterBrandKits(tenantId) {
 }
 
 /**
+ * Seed 2 default CancellationPolicy rows — one per primary sub-brand.
+ *
+ * Pairs with S33 (commit 1614f88e) which shipped the model + auto-CR-NOTE
+ * issuance on POST /api/travel/invoices/:id/void. Without these defaults a
+ * fresh demo deploy has an empty CancellationPolicy table, so the void
+ * handler's resolveCancellationOutcome() falls through to no-policy → zero
+ * auto-refund → the demo experience hides the very flow S33 introduced.
+ *
+ * The two policies (TMC Default + RFU Default) are scoped to their
+ * respective sub-brand (`subBrand: 'tmc'` / `'rfu'`) so the resolver picks
+ * them up when an invoice's sub-brand context matches and no explicit
+ * `cancellationPolicyId` is set on the invoice. Travelstall + Visasure
+ * sub-brands are intentionally left without seeded defaults pending
+ * Yasin's product call on whether those sub-brands need tiered refunds at
+ * all (Q-marker tracked under DECISIONS_TRACKER).
+ *
+ * Tier shape:
+ *   TMC: 60d→100% / 30d→50% / 7d→25% / 0d→0% (school-trip-typical)
+ *   RFU: 90d→100% / 45d→75% / 14d→50% / 0d→0% (Umrah is harder to cancel
+ *        late because Saudi visa + hotel deposits land earlier)
+ *
+ * Idempotency:
+ *   - findFirst on (tenantId, name) — equivalent to the schema's
+ *     @@unique([tenantId, name]) composite but resilient to a future
+ *     constraint rename via @@unique(..., name: "...").
+ *   - The `update` payload deliberately only touches `description` +
+ *     `isActive` — NOT `tiersJson`. This means an operator who tuned the
+ *     tiers via the admin UI keeps their tuning across re-runs of seed.
+ *     If we ever need to force-update the seeded tiers (e.g. a tier shape
+ *     change in a future schema migration), this seeder's update block can
+ *     be widened — but the default behaviour is "first-write wins for
+ *     tiers".
+ */
+async function seedDefaultCancellationPolicies(tenantId) {
+  const POLICIES = [
+    {
+      name: "TMC Default",
+      subBrand: "tmc",
+      description: "Standard TMC school-trip cancellation policy",
+      tiersJson: JSON.stringify([
+        { daysBeforeServiceStart: 60, refundPercent: 100 },
+        { daysBeforeServiceStart: 30, refundPercent: 50 },
+        { daysBeforeServiceStart: 7, refundPercent: 25 },
+        { daysBeforeServiceStart: 0, refundPercent: 0 },
+      ]),
+    },
+    {
+      name: "RFU Default",
+      subBrand: "rfu",
+      description: "Standard RFU Umrah-trip cancellation policy",
+      tiersJson: JSON.stringify([
+        { daysBeforeServiceStart: 90, refundPercent: 100 },
+        { daysBeforeServiceStart: 45, refundPercent: 75 },
+        { daysBeforeServiceStart: 14, refundPercent: 50 },
+        { daysBeforeServiceStart: 0, refundPercent: 0 },
+      ]),
+    },
+  ];
+
+  let created = 0;
+  let updated = 0;
+  for (const spec of POLICIES) {
+    const existing = await prisma.cancellationPolicy.findFirst({
+      where: { tenantId, name: spec.name },
+      select: { id: true },
+    });
+    if (existing) {
+      // Update non-tier fields only — preserves operator-tuned tiers
+      // across re-runs of seed (see doc-comment above for the rationale).
+      await prisma.cancellationPolicy.update({
+        where: { id: existing.id },
+        data: {
+          description: spec.description,
+          isActive: true,
+        },
+      });
+      updated++;
+    } else {
+      await prisma.cancellationPolicy.create({
+        data: {
+          tenantId,
+          name: spec.name,
+          subBrand: spec.subBrand,
+          description: spec.description,
+          tiersJson: spec.tiersJson,
+          isActive: true,
+        },
+      });
+      created++;
+    }
+  }
+  console.log(
+    `[seed-travel] cancellation policies: ${created} created, ${updated} already existed (TMC Default + RFU Default — S33 auto-CR-NOTE defaults)`,
+  );
+}
+
+/**
  * Seed 3 sample TmcTrips + 1 RFU Itinerary + 1 published microsite.
  * Idempotent — each row keys on a stable natural identifier:
  *   - TmcTrip → tripCode (@unique)
@@ -774,6 +948,13 @@ async function seedSampleTrips(tenantId) {
   });
   // RFU pilgrim contact for the Umrah itinerary.
   const pilgrimEmail = "ahmed.pilgrim@demo.test";
+  // Seed a portal password so the travel customer can log into the
+  // Customer Portal (/api/portal/login). Same convention as the rest
+  // of the demo: "password123". Idempotent — upsert with both
+  // create-time AND update-time portalPasswordHash so re-runs don't
+  // null-out a manually-changed password but DO populate it on first
+  // seed.
+  const pilgrimPortalHash = await bcrypt.hash("password123", 10);
   const pilgrim = await prisma.contact.upsert({
     where: { email_tenantId: { email: pilgrimEmail, tenantId } },
     update: {},
@@ -784,8 +965,18 @@ async function seedSampleTrips(tenantId) {
       subBrand: "rfu",
       status: "Lead",
       tenantId,
+      portalPasswordHash: pilgrimPortalHash,
     },
   });
+  // Idempotent backfill for existing pilgrim rows that pre-date the
+  // portalPasswordHash addition (the upsert update={} above intentionally
+  // doesn't overwrite, so we set it explicitly only when null).
+  if (!pilgrim.portalPasswordHash) {
+    await prisma.contact.update({
+      where: { id: pilgrim.id },
+      data: { portalPasswordHash: pilgrimPortalHash },
+    });
+  }
 
   // Three TMC trips — confirmed (upcoming), in-trip (mid-flight), completed (past).
   const now = new Date();
@@ -824,7 +1015,7 @@ async function seedSampleTrips(tenantId) {
 
   for (const plan of tripPlans) {
     const trip = await prisma.tmcTrip.upsert({
-      where: { tripCode: plan.tripCode },
+      where: { tenantId_tripCode: { tenantId, tripCode: plan.tripCode } },
       update: {},
       create: {
         tenantId,
@@ -1027,7 +1218,7 @@ async function seedSampleTrips(tenantId) {
 async function seedTmcOperationalExtras(tenantId) {
   // 1. Find the anchor Bali trip + its participants.
   const baliTrip = await prisma.tmcTrip.findUnique({
-    where: { tripCode: "tmc-bali-2026" },
+    where: { tenantId_tripCode: { tenantId, tripCode: "tmc-bali-2026" } },
     select: { id: true },
   });
   if (!baliTrip) {
@@ -1307,18 +1498,461 @@ async function seedPipelineTaxonomies(tenantId) {
 }
 
 /**
- * Seed a diagnostic bank for the given sub-brand. Idempotent across re-
- * runs: existing v1 banks are not duplicated; if a v1 bank already
- * exists for (tenantId, subBrand), this no-ops. Used until Yasin's Q13
- * content lands.
+ * Seed 5 starter TmcTripCatalogue records — Golden Triangle / Madhya
+ * Pradesh / Ladakh / Europe / USA STEM. PRD §3.2 trip-database schema +
+ * §3.10 build-sequence step 1 ("Load 5 starter records").
+ *
+ * Per AC-12 the 4 of these 5 are the worked-example trips: budget
+ * filter removes USA; engine ranks Europe (primary) and Golden Triangle
+ * (alternative — different tier). USA STEM intentionally priced in
+ * `2l-plus` so the worked-example school's `10k-30k` budget filter
+ * removes it.
+ *
+ * Grade-band ranges anchored on AC-12 grade-centering expectations:
+ *   - Golden Triangle: midpoint ceiling 2 → 6-8 to 11-12
+ *   - Madhya Pradesh:  midpoint ceiling 2 → 6-8 to 11-12
+ *   - Ladakh:          midpoint ceiling 3 → 9-10 to 11-12
+ *   - Europe:          midpoint ceiling 3 → 9-10 to 11-12
+ *   - USA STEM:        midpoint ceiling 3 → 9-10 to 11-12
+ *
+ * EVERY trip ships with placeholder anchor experiences + curriculum
+ * hooks + report_skill_blurb that are CONSERVATIVE GS-defaults — Yasin's
+ * tagger pass owns final ratify per §5.2 item 1. Inline TODOs flag
+ * exactly which fields are placeholder vs spec-pinned.
+ *
+ * Idempotent — upsert on (tenantId, tripId).
  */
-async function seedDiagnosticBank(tenantId, subBrand, questions, scoringRules) {
+async function seedTmcTripCatalogue(tenantId) {
+  const STARTER_TRIPS = [
+    {
+      // AC-12 worked example: Golden Triangle scores 60 as alternative.
+      tripId: "golden-triangle-delhi-agra-jaipur",
+      title: "Golden Triangle (Delhi - Agra - Jaipur)",
+      tagline: "India's most-walked heritage route, structured as a learning trip.",
+      tier: "domestic",
+      region: "North India",
+      durationDays: 5,
+      durationNights: 4,
+      minGradeBand: "6-8",
+      maxGradeBand: "11-12",
+      boardsSupported: ["CBSE", "ICSE_ISC", "IGCSE", "IB", "State Board"],
+      minGroupSize: 30,
+      // TODO(spec §5.4): confirm priceBand with Yasin's catalogue export.
+      // Mid-tier domestic with flight + 4N hotel + transport sits in 30k-75k.
+      priceBand: "30k-75k",
+      indicativePricePerStudent: 4800000, // ₹48,000 in paise — placeholder
+      // AC-12: primary outcomes include cultural respect / pride.
+      primaryOutcomes: ["global_awareness", "pride", "curiosity"],
+      skillsDeveloped: [
+        "Cultural respect and inclusion",
+        "Lifelong learning and curiosity",
+        "Collaboration and teamwork",
+      ],
+      subjectsTouched: ["History", "Geography", "Civics", "Art"],
+      anchorExperiences: [
+        {
+          name: "Red Fort + Jama Masjid context walk",
+          what_students_do: "Map Mughal-period administration onto the actual fort + congregational mosque, working in groups against a worksheet.",
+          skill_link: "Cultural respect and inclusion",
+          subject_link: "History",
+        },
+        {
+          name: "Taj Mahal first-light visit + craftsman conversation",
+          what_students_do: "Observe inlay-stone artisans at work; document the supply chain from quarry to monument.",
+          skill_link: "Lifelong learning and curiosity",
+          subject_link: "Art / Economics",
+        },
+        {
+          name: "Amer Fort water-system walk",
+          what_students_do: "Trace the rainwater-harvesting + step-well design with a hydrology guide; produce a sketch + short presentation.",
+          skill_link: "Collaboration and teamwork",
+          subject_link: "Geography / Engineering",
+        },
+      ],
+      curriculumHooks: [
+        // TODO(spec §5.4): Yasin's curriculum mapper confirms board × grade-band hooks before launch (§5.2 item 1).
+        { board: "CBSE", grade_band: "6-8", subject: "History", topic: "The Mughal Empire", hook_text: "Maps directly to NCERT Class 7 Chapter 3 (The Mughal Empire) — students walk the textbook." },
+        { board: "CBSE", grade_band: "9-10", subject: "History", topic: "Heritage tourism + conservation", hook_text: "Anchors NEP 2020's experiential-learning mandate against a UNESCO World Heritage site." },
+        { board: "ICSE_ISC", grade_band: "9-10", subject: "History", topic: "Medieval Indian architecture", hook_text: "Project work aligned to ICSE History internal assessment." },
+      ],
+      reportSkillBlurb:
+        "Heritage routes done well build pride that holds steady — students return knowing their own past is a place they can name without flinching. A structured north-India week, with worksheets that demand observation rather than narration, leaves Grade 7-10 cohorts noticeably more confident with cultural complexity than a holiday would.",
+      summaryForBrief:
+        "Delhi + Agra + Jaipur, 5D/4N, anchored on Mughal-period history. Strong fit for CBSE history-block (Classes 6-9 Mughal chapters) and the 10-bagless-days NEP requirement. Tour director travels with group; 1:15 supervision ratio.",
+      imageUrl: null,
+      status: "active",
+    },
+    {
+      tripId: "madhya-pradesh-jungle-heritage",
+      title: "Madhya Pradesh (Bandhavgarh + Khajuraho)",
+      tagline: "India's heart — tiger reserves + temple sculpture in one structured route.",
+      tier: "domestic",
+      region: "Central India",
+      durationDays: 6,
+      durationNights: 5,
+      minGradeBand: "6-8",
+      maxGradeBand: "11-12",
+      boardsSupported: ["CBSE", "ICSE_ISC", "IGCSE", "IB", "State Board"],
+      minGroupSize: 25,
+      // TODO(spec §5.4): confirm priceBand with Yasin's catalogue export.
+      // Bandhavgarh safaris + Khajuraho heritage stay sits in 30k-75k.
+      priceBand: "30k-75k",
+      indicativePricePerStudent: 5500000, // ₹55,000 in paise — placeholder
+      primaryOutcomes: ["curiosity", "global_awareness"],
+      skillsDeveloped: [
+        "Lifelong learning and curiosity",
+        "Mindfulness",
+        "Cultural respect and inclusion",
+      ],
+      subjectsTouched: ["Biology", "Geography", "History", "Art"],
+      anchorExperiences: [
+        {
+          name: "Bandhavgarh tiger-tracking journal",
+          what_students_do: "Two safari mornings with naturalist; structured field journal on indicator species, scat, and pugmarks.",
+          skill_link: "Mindfulness",
+          subject_link: "Biology",
+        },
+        {
+          name: "Khajuraho sculpture-grammar workshop",
+          what_students_do: "Decode Chandela-period iconography in small groups; produce annotated sketches.",
+          skill_link: "Cultural respect and inclusion",
+          subject_link: "Art / History",
+        },
+        {
+          name: "Village-economy walk + craft sit-down",
+          what_students_do: "Visit a working pottery + handloom unit; trace the income chain from raw material to retail.",
+          skill_link: "Lifelong learning and curiosity",
+          subject_link: "Economics",
+        },
+      ],
+      curriculumHooks: [
+        // TODO(spec §5.4): Yasin's curriculum mapper confirms board × grade-band hooks before launch.
+        { board: "CBSE", grade_band: "9-10", subject: "Geography", topic: "Wildlife conservation + biome study", hook_text: "Direct fit with NCERT Class 9 Chapter 5 (Natural Vegetation and Wildlife) — students measure what the textbook describes." },
+        { board: "ICSE_ISC", grade_band: "9-10", subject: "Geography", topic: "Field study + map work", hook_text: "Supports ICSE Geography fieldwork + map-work assessment requirement." },
+        { board: "IB", grade_band: "11-12", subject: "Environmental Systems & Societies", topic: "Conservation case study", hook_text: "Anchors IB ESS internal assessment field trip; 25-hour Personal Project ready." },
+      ],
+      reportSkillBlurb:
+        "A week in central India does something rare for adolescent cohorts: it teaches the discipline of looking without doing. Two safari mornings + temple-grammar workshops + a village-economy walk pull students into a habit of careful observation that survives beyond the trip. Grade 8-11 cohorts return with field journals their science teachers can use for the rest of the year.",
+      summaryForBrief:
+        "Bandhavgarh + Khajuraho, 6D/5N, blends wildlife observation with temple-period heritage. Fit for CBSE Geography Class 9 + ICSE field-study + IB ESS IA. Tiger-reserve safety protocol + naturalist pairing standard.",
+      imageUrl: null,
+      status: "active",
+    },
+    {
+      // AC-12: midpoint ceiling 3 → older grade-band range.
+      tripId: "ladakh-himalayan-experience",
+      title: "Ladakh (Leh - Nubra - Pangong)",
+      tagline: "High-altitude desert + monastic culture — the senior-class flagship.",
+      tier: "domestic",
+      region: "North India / Himalayas",
+      durationDays: 7,
+      durationNights: 6,
+      minGradeBand: "9-10",
+      maxGradeBand: "11-12",
+      boardsSupported: ["CBSE", "ICSE_ISC", "IGCSE", "IB", "State Board"],
+      minGroupSize: 20,
+      // TODO(spec §5.4): confirm priceBand with Yasin's catalogue export.
+      // Domestic-flight + altitude logistics push this into 1l-2l band.
+      priceBand: "1l-2l",
+      indicativePricePerStudent: 13500000, // ₹1,35,000 in paise — placeholder
+      primaryOutcomes: ["resilience", "global_awareness", "pride"],
+      skillsDeveloped: [
+        "Emotional resilience",
+        "Self-awareness",
+        "Mindfulness",
+        "Cultural respect and inclusion",
+      ],
+      subjectsTouched: ["Geography", "Physical Education", "History", "Civics"],
+      anchorExperiences: [
+        {
+          name: "Acclimatisation hike + reflection circle",
+          what_students_do: "Group hike at 3,500m with paced rest stops; evening reflection in cohort circles.",
+          skill_link: "Emotional resilience",
+          subject_link: "Physical Education",
+        },
+        {
+          name: "Diskit Monastery conversation with monks",
+          what_students_do: "Structured Q&A on Tibetan Buddhist practice + daily monastic life.",
+          skill_link: "Cultural respect and inclusion",
+          subject_link: "Civics / History",
+        },
+        {
+          name: "Pangong sunrise journal session",
+          what_students_do: "Silent observation hour + written reflection on high-altitude environment + own response.",
+          skill_link: "Mindfulness",
+          subject_link: "Geography",
+        },
+      ],
+      curriculumHooks: [
+        // TODO(spec §5.4): Yasin's curriculum mapper confirms board × grade-band hooks.
+        { board: "CBSE", grade_band: "11-12", subject: "Geography", topic: "Cold deserts + altitude biome", hook_text: "Direct anchor to NCERT Class 11 (Physical Environment) cold-desert chapter; students stand inside the case study." },
+        { board: "IB", grade_band: "11-12", subject: "Geography / CAS", topic: "Service + adventure component", hook_text: "Strong CAS-component fit: adventure + service + creativity all addressable in one trip." },
+        { board: "ICSE_ISC", grade_band: "11-12", subject: "Geography", topic: "Altitude + climate", hook_text: "ISC Geography fieldwork-credit candidate." },
+      ],
+      reportSkillBlurb:
+        "Altitude is the most honest curriculum a senior cohort encounters — it cannot be argued with. A week in Ladakh, with acclimatisation paced as part of the design rather than treated as risk, leaves Grade 10-12 students measurably more self-aware and meaningfully more resilient. The trip's job is not the scenery; it's the patience the altitude demands.",
+      summaryForBrief:
+        "Leh + Nubra + Pangong, 7D/6N. Senior-class flagship — Grades 9-12. Strong fit for CAS, NCERT cold-desert geography, ISC fieldwork. Altitude acclimatisation protocol + medical kit + 1:12 supervision (lower than standard for safety). Tour director travels.",
+      imageUrl: null,
+      status: "active",
+    },
+    {
+      // AC-12 worked example: Europe scores 98 (primary), but the report
+      // never names it.
+      tripId: "europe-nl-be-fr-es",
+      title: "Europe (Netherlands - Belgium - France - Spain)",
+      tagline: "A four-country European route designed as a learning week, not a sightseeing one.",
+      tier: "international",
+      region: "Europe",
+      durationDays: 10,
+      durationNights: 9,
+      minGradeBand: "9-10",
+      maxGradeBand: "11-12",
+      boardsSupported: ["CBSE", "ICSE_ISC", "IGCSE", "IB", "State Board"],
+      minGroupSize: 25,
+      // TODO(spec §5.4): confirm priceBand with Yasin's catalogue export.
+      // International multi-country with Schengen visa sits in 2l-plus.
+      priceBand: "2l-plus",
+      indicativePricePerStudent: 28500000, // ₹2,85,000 in paise — placeholder
+      // AC-12: Europe matches the worked-example school's primary
+      // outcome ("global_awareness") AND both secondaries.
+      primaryOutcomes: ["global_awareness", "curiosity", "confidence"],
+      skillsDeveloped: [
+        "Cultural respect and inclusion",
+        "Lifelong learning and curiosity",
+        "Collaboration and teamwork",
+        "Self-awareness",
+      ],
+      subjectsTouched: ["History", "Civics", "Economics", "Art", "Science"],
+      anchorExperiences: [
+        {
+          name: "Anne Frank House structured visit",
+          what_students_do: "Pre-visit reading; on-site walk-through with reflection journal; debrief in cohort.",
+          skill_link: "Cultural respect and inclusion",
+          subject_link: "History / Civics",
+        },
+        {
+          name: "European Parliament education session",
+          what_students_do: "Visit Brussels with structured Q&A on EU governance + post-Brexit dynamics.",
+          skill_link: "Lifelong learning and curiosity",
+          subject_link: "Civics / Economics",
+        },
+        {
+          name: "Louvre cross-period art tour",
+          what_students_do: "Small-group tour with art-history guide; produce annotated sketches across 4 periods.",
+          skill_link: "Lifelong learning and curiosity",
+          subject_link: "Art / History",
+        },
+        {
+          name: "Sagrada Familia + Gaudí architecture walk",
+          what_students_do: "Guided walk linking organic-form architecture to its physics + biology references.",
+          skill_link: "Lifelong learning and curiosity",
+          subject_link: "Art / Engineering",
+        },
+      ],
+      curriculumHooks: [
+        // TODO(spec §5.4): Yasin's curriculum mapper confirms board × grade-band hooks.
+        { board: "CBSE", grade_band: "11-12", subject: "History", topic: "World wars + post-war Europe", hook_text: "Direct fit with NCERT Class 11 Themes in World History (post-1900 Europe) + Class 12 contemporary geopolitics." },
+        { board: "IB", grade_band: "11-12", subject: "CAS + History", topic: "Multi-country cultural immersion", hook_text: "High-value CAS component; strong IB DP History internal-assessment supplement." },
+        { board: "IGCSE", grade_band: "9-10", subject: "Geography / History", topic: "European integration", hook_text: "Cambridge IGCSE 0470 European history fieldwork supplement." },
+      ],
+      reportSkillBlurb:
+        "A first international experience done well is not about ticking countries; it is about the quiet recalibration that happens when senior students discover other ways of organising public life. The route is built around four structured encounters — a wartime testimony, a working parliament, a museum that catalogues five centuries, and an architect who treated organic form as engineering — so students return able to compare their own country against something specific.",
+      summaryForBrief:
+        "Netherlands + Belgium + France + Spain, 10D/9N. Senior-class international flagship (Grades 9-12). Anchored on Anne Frank House + EU Parliament + Louvre + Sagrada Familia. Schengen visa support included. Strong fit for IB CAS + History DP, CBSE Class 11 World History, IGCSE European modules. Tour director + on-ground country handlers + 1:12 supervision.",
+      imageUrl: null,
+      status: "active",
+    },
+    {
+      // AC-12 worked example: USA STEM is removed by the 10k-30k budget filter.
+      // Priced in 2l-plus to make that filter behaviour reliable.
+      tripId: "usa-stem-east-coast",
+      title: "USA STEM (Boston - New York - Washington DC)",
+      tagline: "Universities, museums, and labs — the senior STEM flagship.",
+      tier: "international",
+      region: "USA East Coast",
+      durationDays: 10,
+      durationNights: 9,
+      minGradeBand: "9-10",
+      maxGradeBand: "11-12",
+      boardsSupported: ["CBSE", "ICSE_ISC", "IGCSE", "IB", "State Board"],
+      minGroupSize: 20,
+      // TODO(spec §5.4): confirm priceBand with Yasin's catalogue export.
+      // USA visa + multi-city sits firmly in 2l-plus.
+      priceBand: "2l-plus",
+      indicativePricePerStudent: 38500000, // ₹3,85,000 in paise — placeholder
+      primaryOutcomes: ["curiosity", "global_awareness", "confidence"],
+      skillsDeveloped: [
+        "Lifelong learning and curiosity",
+        "Self-awareness",
+        "Collaboration and teamwork",
+        "Cultural respect and inclusion",
+      ],
+      subjectsTouched: ["Computer Science", "Physics", "Biology", "Civics", "Economics"],
+      anchorExperiences: [
+        {
+          name: "MIT campus + lab visit",
+          what_students_do: "Guided campus tour + structured visit to one undergraduate lab; Q&A with grad-student host.",
+          skill_link: "Lifelong learning and curiosity",
+          subject_link: "Engineering / Physics",
+        },
+        {
+          name: "Museum of Natural History deep-dive (NYC)",
+          what_students_do: "Self-led + guided session across paleontology + astrophysics galleries with structured worksheet.",
+          skill_link: "Lifelong learning and curiosity",
+          subject_link: "Biology / Physics",
+        },
+        {
+          name: "Smithsonian Air & Space behind-the-scenes",
+          what_students_do: "Curator-led tour of conservation lab; engineering-history workshop.",
+          skill_link: "Lifelong learning and curiosity",
+          subject_link: "Physics / Engineering",
+        },
+        {
+          name: "United Nations HQ education session",
+          what_students_do: "Structured education session on multilateral governance + sustainable-development goals.",
+          skill_link: "Cultural respect and inclusion",
+          subject_link: "Civics / Economics",
+        },
+      ],
+      curriculumHooks: [
+        // TODO(spec §5.4): Yasin's curriculum mapper confirms board × grade-band hooks.
+        { board: "CBSE", grade_band: "11-12", subject: "Computer Science / Physics", topic: "STEM career pathways", hook_text: "Senior STEM students see undergraduate research labs in operation; informs Class 12 CS + Physics electives." },
+        { board: "IB", grade_band: "11-12", subject: "DP Group 4 + CAS", topic: "Lab + service component", hook_text: "Lab visits feed Group 4 project; UN session counts toward CAS service hours." },
+        { board: "IGCSE", grade_band: "11-12", subject: "Science / Computing", topic: "International STEM immersion", hook_text: "Cambridge International AS/A Level Computing + Physics enrichment." },
+      ],
+      reportSkillBlurb:
+        "Visiting working laboratories changes what senior STEM students believe is available to them — the gap between textbook physics and a graduate-student bench is small enough to cross, and they need to see it to know that. A week between research universities, the country's largest natural history collection, and a multilateral institution gives them a frame for their own next decisions that no classroom lecture matches.",
+      summaryForBrief:
+        "Boston + NYC + Washington DC, 10D/9N. Premium senior-class STEM flagship. Anchored on MIT campus + lab, AMNH NYC, Smithsonian Air & Space, UN HQ. USA B1/B2 visa support included. Fit for CBSE Class 11-12 Science + CS streams, IB Group 4, IGCSE A Level. Tour director + ground handler + 1:10 supervision (premium ratio).",
+      imageUrl: null,
+      status: "active",
+    },
+  ];
+
+  let created = 0;
+  let updated = 0;
+  for (const t of STARTER_TRIPS) {
+    // Convert array/object fields to JSON-string per schema's @db.Text shape.
+    const data = {
+      tenantId,
+      tripId: t.tripId,
+      title: t.title,
+      tagline: t.tagline,
+      tier: t.tier,
+      region: t.region,
+      durationDays: t.durationDays,
+      durationNights: t.durationNights,
+      minGradeBand: t.minGradeBand,
+      maxGradeBand: t.maxGradeBand,
+      boardsSupportedJson: JSON.stringify(t.boardsSupported),
+      minGroupSize: t.minGroupSize,
+      priceBand: t.priceBand,
+      indicativePricePerStudent: t.indicativePricePerStudent,
+      primaryOutcomesJson: JSON.stringify(t.primaryOutcomes),
+      skillsDevelopedJson: JSON.stringify(t.skillsDeveloped),
+      subjectsTouchedJson: JSON.stringify(t.subjectsTouched),
+      anchorExperiencesJson: JSON.stringify(t.anchorExperiences),
+      curriculumHooksJson: JSON.stringify(t.curriculumHooks),
+      reportSkillBlurb: t.reportSkillBlurb,
+      summaryForBrief: t.summaryForBrief,
+      imageUrl: t.imageUrl,
+      status: t.status,
+    };
+    const existing = await prisma.tmcTripCatalogue.findUnique({
+      where: { tenantId_tripId: { tenantId, tripId: t.tripId } },
+      select: { id: true },
+    });
+    if (existing) {
+      await prisma.tmcTripCatalogue.update({ where: { id: existing.id }, data });
+      updated++;
+    } else {
+      await prisma.tmcTripCatalogue.create({ data });
+      created++;
+    }
+  }
+  console.log(
+    `[seed-travel] TMC trip catalogue: ${created} created, ${updated} updated (5 starter records — Golden Triangle / Madhya Pradesh / Ladakh / Europe / USA STEM)`,
+  );
+}
+
+/**
+ * Seed the default EngineWeights row for this tenant. PRD §3.3.3
+ * weights + §3.3.5 threshold + v1 version pin.
+ *
+ * Idempotent — EngineWeights.tenantId is @unique. Upsert pattern: if a
+ * row already exists for this tenant we LEAVE IT ALONE (an operator may
+ * have tuned weights via the §3.3.7 protocol; we don't trample). If
+ * none exists, we create with PRD defaults.
+ */
+async function seedTmcEngineWeights(tenantId) {
+  const existing = await prisma.engineWeights.findUnique({
+    where: { tenantId },
+    select: { id: true, version: true },
+  });
+  if (existing) {
+    console.log(
+      `[seed-travel] EngineWeights v${existing.version} already exists for tenant ${tenantId} (id=${existing.id}) — NOT overwriting (preserves operator-tuned weights)`,
+    );
+    return;
+  }
+  const row = await prisma.engineWeights.create({
+    data: {
+      tenantId,
+      version: "v1",
+      weightPrimaryOutcome: 50,
+      weightSecondarySkill: 20,
+      weightGrowthArea: 15,
+      weightCurriculumHook: 10,
+      weightGradeBandCenter: 10,
+      weightTierValueLean: 8,
+      scoresWellThreshold: 70,
+    },
+  });
+  console.log(
+    `[seed-travel] EngineWeights seeded for tenant ${tenantId} (id=${row.id}, v1 — PRD §3.3.3 defaults 50/20/15/10/10/8, threshold 70)`,
+  );
+}
+
+/**
+ * Seed a diagnostic bank for the given sub-brand. Idempotent across re-
+ * runs.
+ *
+ * Default behaviour (no opts): if a v1 bank already exists for
+ * (tenantId, subBrand), this no-ops. Used by RFU / Travel Stall / Visa
+ * Sure stand-in banks until Yasin's Q13 content lands.
+ *
+ * `opts.overwrite = true`: if a v1 bank already exists, UPDATE its
+ * questionsJson + scoringRulesJson in place (still keyed on the same
+ * unique (tenantId, subBrand, version=1)). Used by the TMC bank
+ * replacement so re-running the seed swaps the 3-Q placeholder for the
+ * 12-Q spec from PRD §3.1 without manual DB surgery. Existing
+ * TravelDiagnostic rows referencing this bank survive — they hold the
+ * old questionsJson snapshot in TravelDiagnostic.questionsJson per the
+ * existing capture-at-submission pattern (see routes/travel_diagnostics.js).
+ */
+async function seedDiagnosticBank(tenantId, subBrand, questions, scoringRules, opts = {}) {
+  const overwrite = opts.overwrite === true;
   const existing = await prisma.travelDiagnosticQuestionBank.findFirst({
     where: { tenantId, subBrand, version: 1 },
     select: { id: true },
   });
-  if (existing) {
+  if (existing && !overwrite) {
     console.log(`[seed-travel] diagnostic bank v1 already exists for ${subBrand} (id=${existing.id})`);
+    return;
+  }
+  if (existing && overwrite) {
+    await prisma.travelDiagnosticQuestionBank.update({
+      where: { id: existing.id },
+      data: {
+        questionsJson: JSON.stringify(questions),
+        scoringRulesJson: JSON.stringify(scoringRules),
+        isActive: true,
+      },
+    });
+    console.log(
+      `[seed-travel] diagnostic bank v1 UPDATED for ${subBrand} (id=${existing.id}, ${questions.questions.length} Qs — overwrite=true)`,
+    );
     return;
   }
   const bank = await prisma.travelDiagnosticQuestionBank.create({
@@ -1332,6 +1966,299 @@ async function seedDiagnosticBank(tenantId, subBrand, questions, scoringRules) {
     },
   });
   console.log(`[seed-travel] diagnostic bank v1 seeded for ${subBrand} (id=${bank.id}, ${questions.questions.length} Qs)`);
+}
+
+/**
+ * The 12-question TMC diagnostic bank, frozen contract per
+ * PRD_TMC_DIAGNOSTIC_SALES_ROUTING_ENGINE §3.1. The engine
+ * (backend/lib/tmcDiagnosticEngine.js, T2) reads named fields off the
+ * submitted answers, so field names + option `value` keys here MUST be
+ * stable. Do NOT add, drop, or reorder without sign-off.
+ *
+ * Q3 growth_area `skill` mapping cribbed from the PRD §3.3's "seven
+ * canonical skills" — exact keys with NO synonyms. The mapping below
+ * pairs each growth-area option to a canonical skill so the engine can
+ * apply the §3.3.3 +15 growth-area weight and the §3.3.4 no-double-pay
+ * guard. Yasin should ratify the option-to-skill mapping table before
+ * launch:
+ *
+ *   TODO(spec §4 Q3-option-to-skill-map): confirm option→skill pairings
+ *     with Yasin's tagger. Current mapping is a GS-default that satisfies
+ *     "one of the seven canonical skills" but Yasin may prefer different
+ *     pairings (e.g. "Comfort with the new" → "Lifelong learning and
+ *     curiosity" is one read; could also map to "Emotional resilience").
+ */
+function buildTmcQuestionBankV1() {
+  return {
+    // Spec-version pin so future schema migrations can detect which
+    // shape a bank was seeded against.
+    specVersion: "TMC_DIAGNOSTIC_ENGINE_V1_2026-06-08",
+    questions: [
+      {
+        id: "q1",
+        field: "primary_outcome",
+        text: "What's the one outcome you most want this trip to produce for your students?",
+        type: "single-choice",
+        required: true,
+        // The ONE forced single choice — drives the §6.5 two-key sort.
+        options: [
+          { value: "confidence", label: "Confidence" },
+          { value: "curiosity", label: "Curiosity" },
+          { value: "empathy", label: "Empathy" },
+          { value: "global_awareness", label: "Global awareness" },
+          { value: "resilience", label: "Resilience" },
+          { value: "pride", label: "Pride" },
+        ],
+      },
+      {
+        id: "q2",
+        field: "secondary_skills",
+        text: "Which two skills would you most want this trip to strengthen?",
+        type: "multi-select",
+        required: true,
+        minSelections: 2,
+        maxSelections: 2,
+        // The seven canonical skills — exact keys, no synonyms (§3.3).
+        options: [
+          { value: "Empathy", label: "Empathy" },
+          { value: "Self-awareness", label: "Self-awareness" },
+          { value: "Collaboration and teamwork", label: "Collaboration and teamwork" },
+          { value: "Mindfulness", label: "Mindfulness" },
+          { value: "Lifelong learning and curiosity", label: "Lifelong learning and curiosity" },
+          { value: "Cultural respect and inclusion", label: "Cultural respect and inclusion" },
+          { value: "Emotional resilience", label: "Emotional resilience" },
+        ],
+      },
+      {
+        id: "q3",
+        field: "growth_area",
+        text: "Where do your students have the most room to grow?",
+        type: "single-choice",
+        required: true,
+        // PRD §3.1 Q3 microcopy: must name a REAL uncomfortable gap. Each
+        // option carries a `mappedSkill` key the engine reads to apply the
+        // §3.3.3 +15 growth-area signal (with the no-double-pay guard
+        // against Q2 secondary picks).
+        options: [
+          {
+            value: "speaking_up",
+            label: "Speaking up in unfamiliar settings",
+            mappedSkill: "Self-awareness",
+          },
+          {
+            value: "handling_setbacks",
+            label: "Handling setbacks without giving up",
+            mappedSkill: "Emotional resilience",
+          },
+          {
+            value: "comfort_with_difference",
+            label: "Comfort with people unlike themselves",
+            mappedSkill: "Cultural respect and inclusion",
+          },
+          {
+            value: "working_with_peers",
+            label: "Working effectively with peers they didn't choose",
+            mappedSkill: "Collaboration and teamwork",
+          },
+          {
+            value: "curiosity_beyond_syllabus",
+            label: "Curiosity that survives beyond the syllabus",
+            mappedSkill: "Lifelong learning and curiosity",
+          },
+          {
+            value: "noticing_others",
+            label: "Noticing what others are feeling",
+            mappedSkill: "Empathy",
+          },
+          {
+            value: "attention_to_now",
+            label: "Slowing down and paying attention to the present",
+            mappedSkill: "Mindfulness",
+          },
+        ],
+      },
+      {
+        id: "q4",
+        field: "travel_maturity",
+        text: "How would you describe your school's travel maturity so far?",
+        type: "single-choice",
+        required: true,
+        // Does NOT gate any trip — shapes report tone + one brief line.
+        options: [
+          { value: "first_time", label: "First-time — we've never run a school trip" },
+          { value: "occasional_day", label: "Occasional day outings only" },
+          { value: "regular_domestic", label: "Regular domestic trips" },
+          { value: "already_international", label: "We've already run international" },
+        ],
+      },
+      {
+        id: "q5",
+        field: "grade_band",
+        text: "Which grade band is this trip for?",
+        type: "single-choice",
+        required: true,
+        options: [
+          { value: "4-6", label: "Grades 4-6" },
+          { value: "6-8", label: "Grades 6-8" },
+          { value: "9-10", label: "Grades 9-10" },
+          { value: "11-12", label: "Grades 11-12" },
+        ],
+      },
+      {
+        id: "q6",
+        field: "curriculum",
+        text: "Which curriculum does your school follow? (Select all that apply if more than one.)",
+        type: "multi-select",
+        required: true,
+        minSelections: 1,
+        options: [
+          { value: "CBSE", label: "CBSE" },
+          { value: "ICSE_ISC", label: "ICSE / ISC" },
+          { value: "IGCSE", label: "IGCSE (Cambridge)" },
+          { value: "IB", label: "IB" },
+          { value: "State Board", label: "State Board" },
+          // PRD §3.1 lists "More than one" as a sentinel for multi-board
+          // schools — handled here by the multi-select shape; the option
+          // is unnecessary because multi-select itself expresses it.
+        ],
+      },
+      {
+        id: "q7",
+        field: "geo_preference",
+        text: "What kind of trip are you considering?",
+        type: "single-choice",
+        required: true,
+        options: [
+          { value: "day", label: "A meaningful day out" },
+          { value: "domestic", label: "Domestic overnight" },
+          { value: "international", label: "International" },
+          { value: "open", label: "Open — show me what's possible" },
+        ],
+      },
+      {
+        id: "q8",
+        field: "group_size",
+        text: "How many students are likely to travel?",
+        type: "single-choice",
+        required: true,
+        // NOT a hard filter — produces a `below_min_group` flag if a
+        // matched trip's minGroupSize exceeds the school's pick.
+        options: [
+          { value: "under_35", label: "Under 35" },
+          { value: "35-45", label: "35-45" },
+          { value: "45-80", label: "45-80" },
+          { value: "80-150", label: "80-150" },
+          { value: "150_plus", label: "More than 150" },
+        ],
+      },
+      {
+        id: "q9",
+        field: "budget_band",
+        text: "What's a comfortable per-student budget for this trip? This helps tailor what we show your families.",
+        type: "single-choice",
+        required: true,
+        // PRD §3.1: `unknown` disables the hard budget filter AND sets
+        // the brief flag `budget_unknown`. Q9 microcopy frames this as
+        // tailoring not pricing.
+        // PRD §3.3.2: priceBand on TmcTripCatalogue MUST match these
+        // option values exactly — it's the filter key.
+        options: [
+          { value: "upto-5k", label: "Up to ₹5,000" },
+          { value: "10k-30k", label: "₹10,000 - ₹30,000" },
+          { value: "30k-75k", label: "₹30,000 - ₹75,000" },
+          { value: "1l-2l", label: "₹1L - ₹2L" },
+          { value: "2l-plus", label: "₹2L+" },
+          { value: "unknown", label: "Not sure yet — guide me" },
+        ],
+      },
+      {
+        id: "q10",
+        field: "timeline",
+        text: "When are you hoping to run this trip?",
+        type: "single-choice",
+        required: true,
+        options: [
+          { value: "this_term", label: "This term" },
+          { value: "next_term", label: "Next term" },
+          { value: "next_academic_year", label: "Next academic year" },
+          { value: "exploring", label: "Just exploring" },
+        ],
+      },
+      {
+        id: "q11",
+        field: "school_profile",
+        text: "Tell us a little about your school.",
+        type: "group",
+        required: true,
+        fields: [
+          { id: "school_name", label: "School name", type: "text", required: true },
+          { id: "city", label: "City", type: "text", required: true },
+          {
+            id: "branches",
+            label: "How many branches does your school operate?",
+            type: "single-choice",
+            required: true,
+            options: [
+              { value: "1", label: "1" },
+              { value: "2", label: "2" },
+              { value: "3_plus", label: "3 or more" },
+            ],
+          },
+          {
+            id: "student_strength",
+            label: "Total student strength across all branches",
+            type: "single-choice",
+            required: true,
+            options: [
+              { value: "under_500", label: "Under 500" },
+              { value: "500_1000", label: "500 - 1,000" },
+              { value: "1000_2000", label: "1,000 - 2,000" },
+              { value: "2000_plus", label: "More than 2,000" },
+            ],
+          },
+          {
+            id: "fee_band",
+            label: "Approximate annual fee per student",
+            type: "single-choice",
+            required: true,
+            options: [
+              { value: "under_75k", label: "Under ₹75,000" },
+              { value: "75k_1l", label: "₹75,000 - ₹1 lakh" },
+              { value: "1l_plus", label: "More than ₹1 lakh" },
+            ],
+          },
+        ],
+      },
+      {
+        id: "q12",
+        field: "contact",
+        text: "Where should we send your readiness profile?",
+        type: "group",
+        required: true,
+        // PRD §3.1: Q12 email is the ONLY hard wall. Email format
+        // validated; school domain preferred. Free-domain detection +
+        // senior role drives the §3.4 suspect-lead flag.
+        fields: [
+          { id: "contact_name", label: "Your name", type: "text", required: true },
+          {
+            id: "contact_role",
+            label: "Your role",
+            type: "single-choice",
+            required: true,
+            options: [
+              { value: "owner_trustee", label: "Owner / Trustee" },
+              { value: "principal", label: "Principal" },
+              { value: "academic_coordinator", label: "Academic Coordinator" },
+              { value: "vice_principal", label: "Vice Principal" },
+              { value: "other", label: "Other" },
+            ],
+          },
+          { id: "email", label: "Email", type: "email", required: true },
+          { id: "phone", label: "Phone", type: "tel", required: true },
+        ],
+      },
+    ],
+  };
 }
 
 /**

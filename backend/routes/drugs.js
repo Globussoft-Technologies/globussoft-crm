@@ -21,8 +21,21 @@ const { verifyWellnessRole } = require("../middleware/wellnessRole");
 const router = express.Router();
 
 const tenantWhere = (req, extra = {}) => ({ tenantId: req.user.tenantId, ...extra });
-const readGate = verifyWellnessRole(["admin", "manager", "doctor"]);
-const writeGate = verifyWellnessRole(["admin", "manager"]);
+// "clinical" meta-token resolves dynamically against the per-tenant
+// WellnessRoleType catalog (doctor / professional / nurse / stylist /
+// any future custom clinical role with canTakeVisits=true).
+// `anyOfPermissions` adds an RBAC-permission unlock: any custom role
+// granted `prescriptions.read` (the same permission that surfaces the
+// Drug Catalogue page in the sidebar, per the page catalog) hits the
+// route — no code change needed.
+const readGate = verifyWellnessRole(
+  ["admin", "manager", "clinical", "doctor"],
+  { anyOfPermissions: [{ module: "prescriptions", action: "read" }] },
+);
+const writeGate = verifyWellnessRole(
+  ["admin", "manager"],
+  { anyOfPermissions: [{ module: "prescriptions", action: "write" }] },
+);
 
 // ── Drug CRUD + typeahead ─────────────────────────────────────────
 
@@ -43,10 +56,28 @@ router.get("/", readGate, async (req, res) => {
 
     const limit = Math.min(parseInt(req.query.limit) || 50, 200);
 
+    // ?fields=summary → slim shape for typeahead callers. Drops heavy free-text
+    // `notes` (@db.Text — admin-only contraindications / scheduling info) and
+    // timestamps + tenantId chrome that the typeahead UI never renders.
+    // Opt-in additive — unspecified fields query returns the full row.
+    const isSummary = req.query.fields === "summary";
+    const select = isSummary
+      ? {
+          id: true,
+          name: true,
+          genericName: true,
+          dosageForm: true,
+          strengthValue: true,
+          strengthUnit: true,
+          isActive: true,
+        }
+      : undefined;
+
     const items = await prisma.drug.findMany({
       where,
       orderBy: [{ name: "asc" }],
       take: limit,
+      ...(select ? { select } : {}),
     });
     res.json(items);
   } catch (e) {

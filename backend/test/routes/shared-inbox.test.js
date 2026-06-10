@@ -163,6 +163,92 @@ describe('GET / — list shared inboxes', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────
+// GET /?fields=summary — slim-shape opt-in (#920)
+// ─────────────────────────────────────────────────────────────────────────
+
+describe('GET /?fields=summary — slim-shape opt-in (#920)', () => {
+  test('omits the `select` arg when ?fields is absent (back-compat full-shape + members JSON parsed back)', async () => {
+    prisma.sharedInbox.findMany.mockResolvedValue([
+      { id: 1, tenantId: 1, name: 'Support', emailAddress: 'support@x.com', members: '[7,8]', createdAt: new Date() },
+    ]);
+
+    const res = await request(makeApp({ tenantId: 1 })).get('/api/shared-inbox/');
+
+    expect(res.status).toBe(200);
+    const args = prisma.sharedInbox.findMany.mock.calls[0][0];
+    expect(args.select).toBeUndefined();
+    // Full-shape wire response still parses the JSON-string column back.
+    expect(res.body[0].members).toEqual([7, 8]);
+  });
+
+  test('passes a slim Prisma `select` dropping members when ?fields=summary', async () => {
+    prisma.sharedInbox.findMany.mockResolvedValue([
+      { id: 1, tenantId: 1, name: 'Support', emailAddress: 'support@x.com', createdAt: new Date() },
+    ]);
+
+    const res = await request(makeApp({ tenantId: 1 })).get('/api/shared-inbox/?fields=summary');
+
+    expect(res.status).toBe(200);
+    const args = prisma.sharedInbox.findMany.mock.calls[0][0];
+    expect(args.select).toBeDefined();
+    // Heavy / PII-surface field explicitly absent from the select:
+    expect(args.select.members).toBeUndefined();
+    // Lightweight admin-list fields present:
+    expect(args.select.id).toBe(true);
+    expect(args.select.name).toBe(true);
+    expect(args.select.emailAddress).toBe(true);
+    expect(args.select.tenantId).toBe(true);
+    expect(args.select.createdAt).toBe(true);
+  });
+
+  test('summary mode still applies the tenantId filter + createdAt-desc ordering', async () => {
+    prisma.sharedInbox.findMany.mockResolvedValue([]);
+
+    const res = await request(makeApp({ tenantId: 42 })).get('/api/shared-inbox/?fields=summary');
+
+    expect(res.status).toBe(200);
+    const args = prisma.sharedInbox.findMany.mock.calls[0][0];
+    expect(args.where).toEqual({ tenantId: 42 });
+    expect(args.orderBy).toEqual({ createdAt: 'desc' });
+    expect(args.select).toBeDefined();
+  });
+
+  test('unknown ?fields value (not "summary") falls back to full shape', async () => {
+    prisma.sharedInbox.findMany.mockResolvedValue([
+      { id: 1, tenantId: 1, name: 'Support', emailAddress: 'support@x.com', members: '[7,8]', createdAt: new Date() },
+    ]);
+
+    const res = await request(makeApp()).get('/api/shared-inbox/?fields=bogus');
+
+    expect(res.status).toBe(200);
+    const args = prisma.sharedInbox.findMany.mock.calls[0][0];
+    expect(args.select).toBeUndefined();
+    // Full-shape post-process ran — members parsed back from the JSON string.
+    expect(res.body[0].members).toEqual([7, 8]);
+  });
+
+  test('summary opt-in skips the members JSON post-process (slim rows go through as-is)', async () => {
+    // In summary mode the column is not selected, so the wire shape does not
+    // include `members` at all — the post-process map(shape) is skipped.
+    prisma.sharedInbox.findMany.mockResolvedValue([
+      { id: 1, tenantId: 1, name: 'Support', emailAddress: 'support@x.com', createdAt: new Date() },
+      { id: 2, tenantId: 1, name: 'Sales', emailAddress: 'sales@x.com', createdAt: new Date() },
+    ]);
+
+    const res = await request(makeApp({ tenantId: 1 })).get('/api/shared-inbox/?fields=summary');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(2);
+    // Slim rows have no `members` key — wire shape preserved verbatim.
+    expect(res.body[0].members).toBeUndefined();
+    expect(res.body[1].members).toBeUndefined();
+    // Lightweight fields preserved.
+    expect(res.body[0].name).toBe('Support');
+    expect(res.body[1].emailAddress).toBe('sales@x.com');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
 // POST / — create new shared inbox
 // ─────────────────────────────────────────────────────────────────────────
 

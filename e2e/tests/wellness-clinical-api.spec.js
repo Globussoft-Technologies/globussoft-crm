@@ -568,6 +568,65 @@ test.describe('Wellness API — POST /patients (create + validation)', () => {
     expect((await second.json()).code).toBe('DUPLICATE_PHONE');
   });
 
+  // ── S100 — structured firstName + lastName intake ──────────────────
+  // S62 added the columns; S96 surfaced them in the slim list shape; S97
+  // wired the create-customer modal to send them. S100 closes the loop by
+  // teaching the POST route handler to whitelist + persist them. This
+  // assertion pins the round-trip: POST with firstName + lastName, then
+  // GET ?fields=summary, and confirm both fields surface on the slim
+  // payload with the values we wrote.
+  test('S100: POST /patients with firstName + lastName persists both; GET round-trips on slim shape', async ({ request }) => {
+    const phone = nextPhone();
+    const createRes = await authPost(request, '/api/wellness/patients', {
+      name: `E2E ${RUN_TAG} structured-intake`,
+      phone,
+      firstName: `Riya${RUN_TAG}`,
+      lastName: `Sharma${RUN_TAG}`,
+    });
+    expect(createRes.status(), `create: ${await createRes.text()}`).toBe(201);
+    const created = await createRes.json();
+    expect(created.id).toBeTruthy();
+    // POST response echoes the persisted columns — pin both verbatim.
+    expect(created.firstName).toBe(`Riya${RUN_TAG}`);
+    expect(created.lastName).toBe(`Sharma${RUN_TAG}`);
+
+    // Round-trip via GET ?fields=summary (S96 slim shape) — surfaces the
+    // S62 columns we just populated. Use q=<phone-tail> to scope to this
+    // exact row: the GET /patients handler's OR clause searches
+    // name/phone/email — NOT firstName/lastName — so querying by a value
+    // present in `name`/`phone`/`email` is required for the row to land in
+    // the response. Phone-tail (last 5 digits of nextPhone()) is unique per
+    // call and matches the existing `?q filters by phone substring` pattern
+    // at line ~308.
+    const phoneTail = phone.replace(/\D/g, '').slice(-5);
+    const listRes = await authGet(
+      request,
+      `/api/wellness/patients?fields=summary&q=${phoneTail}&limit=10`,
+    );
+    expect(listRes.status()).toBe(200);
+    const listBody = await listRes.json();
+    const row = (listBody.patients || []).find((p) => p.id === created.id);
+    expect(row, 'created row visible on slim list').toBeTruthy();
+    expect(row.firstName).toBe(`Riya${RUN_TAG}`);
+    expect(row.lastName).toBe(`Sharma${RUN_TAG}`);
+  });
+
+  // S100 — lastName is OPTIONAL on POST (some legal-name cultures use a
+  // single name). firstName alone must persist + slim-list must round-trip
+  // with lastName as null.
+  test('S100: POST /patients with only firstName persists firstName + null lastName', async ({ request }) => {
+    const phone = nextPhone();
+    const createRes = await authPost(request, '/api/wellness/patients', {
+      name: `E2E ${RUN_TAG} single-name`,
+      phone,
+      firstName: `Madonna${RUN_TAG}`,
+    });
+    expect(createRes.status()).toBe(201);
+    const created = await createRes.json();
+    expect(created.firstName).toBe(`Madonna${RUN_TAG}`);
+    expect(created.lastName).toBeNull();
+  });
+
   test('PUT /patients/:id with another patient phone returns 409 DUPLICATE_PHONE', async ({ request }) => {
     const phoneA = nextPhone();
     const phoneB = nextPhone();
@@ -1193,13 +1252,21 @@ test.describe('Wellness API — Prescriptions', () => {
   test('GET /prescriptions returns array', async ({ request }) => {
     const res = await authGet(request, '/api/wellness/prescriptions?limit=5');
     expect(res.status()).toBe(200);
-    expect(Array.isArray(await res.json())).toBe(true);
+    // Drift: route returns a pagination envelope { items, total } now
+    // (wellness.js:3078) so frontend list pages can render counts. Accept
+    // both shapes so a future reversion to bare-array doesn't red-gate
+    // this assertion.
+    const body = await res.json();
+    const items = Array.isArray(body) ? body : body.items;
+    expect(Array.isArray(items)).toBe(true);
   });
 
   test('GET /prescriptions?patientId=… narrows', async ({ request }) => {
     const res = await authGet(request, `/api/wellness/prescriptions?patientId=${rxPatientId}`);
     expect(res.status()).toBe(200);
-    for (const r of await res.json()) {
+    const body = await res.json();
+    const items = Array.isArray(body) ? body : body.items;
+    for (const r of items) {
       expect(r.patientId).toBe(rxPatientId);
     }
   });
@@ -2754,7 +2821,11 @@ test.describe('Wellness clinical — #10 backlog extension (#114 #118 #159 #160 
     // GET via list filtered to this patient.
     const list = await authGet(request, `/api/wellness/prescriptions?patientId=${p.id}`);
     expect(list.status()).toBe(200);
-    const rxList = await list.json();
+    const listBody = await list.json();
+    // Drift: list now returns { items, total } envelope (wellness.js:3078)
+    // — keep tolerance for both shapes so a future reversion doesn't
+    // re-red this gate.
+    const rxList = Array.isArray(listBody) ? listBody : listBody.items;
     const row = rxList.find((r) => r.id === rxId);
     expect(row).toBeTruthy();
     expect(row.drugs, 'drugs must not be raw ENC:v1: ciphertext').not.toMatch(/^ENC:v1:/);
@@ -3243,5 +3314,487 @@ test.describe('#748 archive guard on membership purchase', () => {
     });
     expect(r.status()).toBe(409);
     expect((await r.json()).code).toBe('PLAN_INACTIVE');
+  });
+});
+
+// =====================================================================
+// #920 slice S42 — wellness PHI list-endpoint slim projection
+// =====================================================================
+//
+// The wellness clinical surface ships full PHI by default on three list
+// endpoints (GET /patients, /visits, /prescriptions). The slim shape opt-in
+// (`?fields=summary`) is the HIPAA-friendly picker surface: SQL-drops every
+// PHI column at the Prisma layer (phone, email, dob, allergies, notes,
+// drugs, instructions, vitals, photos, home-address, etc.) and SKIPS the
+// PII_DISCLOSED audit row (no PII columns in the response = no disclosure
+// event happened).
+//
+// Default shape stays full PHI (back-compat with 28 frontend wellness
+// pages that destructure patient.phone / patient.email directly — see
+// CLAUDE.md "Standing rules" §"API response shape change").
+//
+// Audit-coordination contract (the load-bearing semantic):
+//   - {PATIENT,VISIT,PRESCRIPTION}_LIST_READ fires on BOTH paths (the
+//     regulatory "an operator hit the list endpoint" visibility).
+//   - PII_DISCLOSED (Patient list only — the other two endpoints don't
+//     emit PII_DISCLOSED at all) is SKIPPED on slim path.
+//   - The audit details payload now carries `shape: 'full' | 'summary'`
+//     so reviewers can answer "did this op leak PHI?" without joining
+//     two tables.
+// S61: poll the /api/audit ADMIN list and return the row whose details
+// payload (JSON-parsed) satisfies `predicate`. Returns null after the
+// 3.5s budget without throwing — caller asserts row truthiness via expect.
+//
+// The audit list endpoint returns `desc` by createdAt and caps at 100.
+// We don't filter by createdAt at the predicate layer because the
+// row-identifying marker (q substring / patientId fk) is already unique
+// per call — see the describe-block header for the strategy rationale.
+//
+// Re-poll cadence: 6 attempts × 500ms — total ~3.5s. The writeAudit call
+// is fire-and-forget but typically settles within 50-300ms on the local
+// stack; the longer budget covers demo's 8-shard contention window.
+async function pollForAuditRow(request, entity, action, predicate) {
+  const deadline = Date.now() + 3500;
+  while (Date.now() < deadline) {
+    const auditRes = await authGet(
+      request,
+      `/api/audit?entity=${encodeURIComponent(entity)}&action=${encodeURIComponent(action)}`,
+    );
+    if (auditRes.status() === 200) {
+      const body = await auditRes.json();
+      const rows = Array.isArray(body) ? body : (body.items || body.rows || []);
+      for (const row of rows) {
+        if (row.entity !== entity || row.action !== action) continue;
+        let details;
+        try {
+          details = typeof row.details === 'string' ? JSON.parse(row.details) : row.details;
+        } catch (_e) {
+          continue;
+        }
+        if (predicate(details)) return row;
+      }
+    }
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  return null;
+}
+
+test.describe('Wellness API — #920 S42 PHI slim-shape opt-in', () => {
+  // ── Patients ─────────────────────────────────────────────────────────
+  test('GET /patients?fields=summary drops every PHI column', async ({ request }) => {
+    // Seed one patient with full PHI so a leak would show up.
+    await createPatient(request, {
+      suffix: 'S42SlimPatient',
+      email: `s42-${Date.now()}@example.com`,
+      gender: 'F',
+      dob: '1990-04-15',
+      notes: 'S42 PHI notes — MUST NOT leak through slim shape',
+      allergies: 'S42 allergies — MUST NOT leak',
+    });
+    const res = await authGet(request, '/api/wellness/patients?fields=summary&limit=10');
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(Array.isArray(body.patients)).toBe(true);
+    expect(body.patients.length).toBeGreaterThan(0);
+    for (const p of body.patients) {
+      // Slim keys present.
+      expect(p).toHaveProperty('id');
+      expect(p).toHaveProperty('name');
+      expect(p).toHaveProperty('createdAt');
+      // Load-bearing PHI assertions — every PHI column MUST be absent.
+      expect(p).not.toHaveProperty('phone');
+      expect(p).not.toHaveProperty('normalizedPhone');
+      expect(p).not.toHaveProperty('email');
+      expect(p).not.toHaveProperty('dob');
+      expect(p).not.toHaveProperty('gender');
+      expect(p).not.toHaveProperty('bloodGroup');
+      expect(p).not.toHaveProperty('allergies');
+      expect(p).not.toHaveProperty('notes');
+      expect(p).not.toHaveProperty('photoUrl');
+      expect(p).not.toHaveProperty('gst');
+      expect(p).not.toHaveProperty('tagsJson');
+      // The `tags` relation is also skipped on slim path (slim shape
+      // uses Prisma `select`, not `include` — tags aren't in the
+      // select list so the SQL JOIN is dropped entirely).
+      expect(p).not.toHaveProperty('tags');
+    }
+  });
+
+  test('GET /patients (default shape) still ships full PHI row + tags include', async ({ request }) => {
+    const res = await authGet(request, '/api/wellness/patients?limit=5');
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(Array.isArray(body.patients)).toBe(true);
+    expect(body.patients.length).toBeGreaterThan(0);
+    // At least one full-shape PHI key MUST be present on each row (the
+    // pre-S42 contract — back-compat for 28 frontend pages).
+    for (const p of body.patients) {
+      expect(p).toHaveProperty('id');
+      // `tags` is always present on default shape (the include).
+      expect(p).toHaveProperty('tags');
+      // Phone / email may be null per row but the KEYS exist.
+      expect(p).toHaveProperty('phone');
+      expect(p).toHaveProperty('email');
+      expect(p).toHaveProperty('dob');
+    }
+  });
+
+  test('GET /patients?fields=Summary (wrong case) falls through to full shape', async ({ request }) => {
+    // Strict-equality contract pinned by listProjection's isFullShape().
+    const res = await authGet(request, '/api/wellness/patients?fields=Summary&limit=2');
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    if (body.patients.length > 0) {
+      // Wrong-case → full shape → phone key present.
+      expect(body.patients[0]).toHaveProperty('phone');
+    }
+  });
+
+  // =====================================================================
+  // S61 — strict-pin audit-shape contract for PHI list reads.
+  //
+  // S42 landed the `details.shape` discriminator on the three PHI list-read
+  // audit rows (PATIENT_LIST_READ / VISIT_LIST_READ / PRESCRIPTION_LIST_READ)
+  // but pinned it SOFTLY: the original test grabbed the newest audit row
+  // within a 5s window, JSON-parsed details, and ran shape assertions only
+  // if a recent row was found. Under sustained background-cron write
+  // pressure on demo (e2e-full target) that window can be occupied by an
+  // UNRELATED PATIENT_LIST_READ row from another worker / wellness-read-
+  // audit-api.spec.js / portal access — so the "right shape" assertion
+  // would falsely pass against the wrong row, or silently fall through.
+  //
+  // The strict-pin strategy threads a unique deterministic marker through
+  // each endpoint's details payload so the lookup is row-identifiable:
+  //
+  //   Patient list      — pass `?q=<RUN_TAG>-pat-<rand>`. The route copies
+  //                       `q` verbatim into `details.query`. Filter audit
+  //                       rows by `details.query === <marker>` (exact
+  //                       string equality, not substring) — guaranteed
+  //                       0-or-1 matches because the marker is unique per
+  //                       test call.
+  //   Visit list        — pass `?patientId=<freshly-created-patient-id>`.
+  //                       The route copies it into `details.filters.patientId`.
+  //                       Filter by `details.filters.patientId === <id>`
+  //                       — guaranteed 0-or-1 matches because each test
+  //                       creates its own patient.
+  //   Prescription list — same approach: `?patientId=<freshly-created-id>`,
+  //                       filter by `details.filters.patientId === <id>`.
+  //
+  // Each strict pin runs the call twice (summary + full) on the SAME
+  // marker so the shape distinction is the load-bearing assertion (both
+  // requests SHOULD emit an audit row; the shape field MUST differ).
+  // =====================================================================
+  test('S61: GET /patients?fields=summary writes PATIENT_LIST_READ audit row with shape=summary (strict)', async ({ request }) => {
+    // Unique deterministic marker — `q` is copied verbatim into
+    // details.query (see backend/routes/wellness.js line ~755). Use a
+    // RUN_TAG + monotonic suffix + random tail so concurrent tests in
+    // this describe never collide.
+    const marker = `${RUN_TAG}-patq-summary-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const res = await authGet(
+      request,
+      `/api/wellness/patients?fields=summary&q=${encodeURIComponent(marker)}&limit=3`,
+    );
+    expect(res.status()).toBe(200);
+    // Allow the fire-and-forget writeAudit to settle. Poll up to ~3s.
+    const row = await pollForAuditRow(
+      request,
+      'Patient',
+      'PATIENT_LIST_READ',
+      (details) => details && details.query === marker,
+    );
+    expect(row, `audit row not found for marker=${marker}`).toBeTruthy();
+    const details = typeof row.details === 'string' ? JSON.parse(row.details) : row.details;
+    // Strict-pin contract: shape discriminator is the load-bearing field.
+    expect(details.shape).toBe('summary');
+    expect(details.query).toBe(marker);
+    // The route also pins `count` (number, may be 0 if no E2E patient
+    // matches the random marker — we don't assert non-zero count, only
+    // the count KEY's existence as part of the shape contract).
+    expect(typeof details.count).toBe('number');
+  });
+
+  test('S61: GET /patients (default = full) writes PATIENT_LIST_READ audit row with shape=full (strict)', async ({ request }) => {
+    const marker = `${RUN_TAG}-patq-full-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const res = await authGet(
+      request,
+      `/api/wellness/patients?q=${encodeURIComponent(marker)}&limit=3`,
+    );
+    expect(res.status()).toBe(200);
+    const row = await pollForAuditRow(
+      request,
+      'Patient',
+      'PATIENT_LIST_READ',
+      (details) => details && details.query === marker,
+    );
+    expect(row, `audit row not found for marker=${marker}`).toBeTruthy();
+    const details = typeof row.details === 'string' ? JSON.parse(row.details) : row.details;
+    // The other half of the discriminator pair — same marker, opposite shape.
+    expect(details.shape).toBe('full');
+    expect(details.query).toBe(marker);
+  });
+
+  test('S61: GET /visits?fields=summary writes VISIT_LIST_READ audit row with shape=summary (strict)', async ({ request }) => {
+    // Use a freshly-created patient's id as the deterministic marker.
+    // The route copies `?patientId=<n>` into details.filters.patientId
+    // (see backend/routes/wellness.js line ~2537). Per-call uniqueness
+    // is guaranteed because each test creates its own patient row.
+    const p = await createPatient(request, { suffix: 'S61VisitSummaryMarker' });
+    const res = await authGet(
+      request,
+      `/api/wellness/visits?fields=summary&patientId=${p.id}&limit=10`,
+    );
+    expect(res.status()).toBe(200);
+    const row = await pollForAuditRow(
+      request,
+      'Visit',
+      'VISIT_LIST_READ',
+      (details) => details && details.filters && details.filters.patientId === p.id,
+    );
+    expect(row, `audit row not found for patientId=${p.id}`).toBeTruthy();
+    const details = typeof row.details === 'string' ? JSON.parse(row.details) : row.details;
+    expect(details.shape).toBe('summary');
+    expect(details.filters.patientId).toBe(p.id);
+    expect(typeof details.count).toBe('number');
+  });
+
+  test('S61: GET /visits (default = full) writes VISIT_LIST_READ audit row with shape=full (strict)', async ({ request }) => {
+    const p = await createPatient(request, { suffix: 'S61VisitFullMarker' });
+    const res = await authGet(
+      request,
+      `/api/wellness/visits?patientId=${p.id}&limit=10`,
+    );
+    expect(res.status()).toBe(200);
+    const row = await pollForAuditRow(
+      request,
+      'Visit',
+      'VISIT_LIST_READ',
+      (details) => details && details.filters && details.filters.patientId === p.id,
+    );
+    expect(row, `audit row not found for patientId=${p.id}`).toBeTruthy();
+    const details = typeof row.details === 'string' ? JSON.parse(row.details) : row.details;
+    expect(details.shape).toBe('full');
+    expect(details.filters.patientId).toBe(p.id);
+  });
+
+  test('S61: GET /prescriptions?fields=summary writes PRESCRIPTION_LIST_READ audit row with shape=summary (strict)', async ({ request }) => {
+    // Same strategy as the Visit strict pin: freshly-created patientId
+    // threads into details.filters.patientId. The Prescription LIST
+    // endpoint (backend/routes/wellness.js line ~3451) echoes
+    // `?patientId=<n>` verbatim into the audit row.
+    const p = await createPatient(request, { suffix: 'S61RxSummaryMarker' });
+    const res = await authGet(
+      request,
+      `/api/wellness/prescriptions?fields=summary&patientId=${p.id}&limit=10`,
+    );
+    expect(res.status()).toBe(200);
+    const row = await pollForAuditRow(
+      request,
+      'Prescription',
+      'PRESCRIPTION_LIST_READ',
+      (details) => details && details.filters && details.filters.patientId === p.id,
+    );
+    expect(row, `audit row not found for patientId=${p.id}`).toBeTruthy();
+    const details = typeof row.details === 'string' ? JSON.parse(row.details) : row.details;
+    expect(details.shape).toBe('summary');
+    expect(details.filters.patientId).toBe(p.id);
+    expect(typeof details.count).toBe('number');
+  });
+
+  test('S61: GET /prescriptions (default = full) writes PRESCRIPTION_LIST_READ audit row with shape=full (strict)', async ({ request }) => {
+    const p = await createPatient(request, { suffix: 'S61RxFullMarker' });
+    const res = await authGet(
+      request,
+      `/api/wellness/prescriptions?patientId=${p.id}&limit=10`,
+    );
+    expect(res.status()).toBe(200);
+    const row = await pollForAuditRow(
+      request,
+      'Prescription',
+      'PRESCRIPTION_LIST_READ',
+      (details) => details && details.filters && details.filters.patientId === p.id,
+    );
+    expect(row, `audit row not found for patientId=${p.id}`).toBeTruthy();
+    const details = typeof row.details === 'string' ? JSON.parse(row.details) : row.details;
+    expect(details.shape).toBe('full');
+    expect(details.filters.patientId).toBe(p.id);
+  });
+
+  // ── Visits ───────────────────────────────────────────────────────────
+  test('GET /visits?fields=summary drops every PHI column + nested include', async ({ request }) => {
+    const res = await authGet(request, '/api/wellness/visits?fields=summary&limit=10');
+    expect(res.status()).toBe(200);
+    const visits = await res.json();
+    expect(Array.isArray(visits)).toBe(true);
+    if (visits.length === 0) test.skip(true, 'no visits seeded — slim shape needs at least one row to assert');
+    for (const v of visits) {
+      // Slim keys present.
+      expect(v).toHaveProperty('id');
+      expect(v).toHaveProperty('patientId');
+      expect(v).toHaveProperty('visitDate');
+      expect(v).toHaveProperty('status');
+      // Nested includes (patient/service/doctor) MUST be absent.
+      expect(v).not.toHaveProperty('patient');
+      expect(v).not.toHaveProperty('service');
+      expect(v).not.toHaveProperty('doctor');
+      // PHI columns on the Visit row itself MUST be absent.
+      expect(v).not.toHaveProperty('reason');
+      expect(v).not.toHaveProperty('notes');
+      expect(v).not.toHaveProperty('vitals');
+      expect(v).not.toHaveProperty('photosBefore');
+      expect(v).not.toHaveProperty('photosAfter');
+      expect(v).not.toHaveProperty('amountCharged');
+      expect(v).not.toHaveProperty('videoCallUrl');
+      expect(v).not.toHaveProperty('atHomeAddress');
+      expect(v).not.toHaveProperty('atHomePincode');
+    }
+  });
+
+  test('GET /visits (default shape) still ships patient + service + doctor includes', async ({ request }) => {
+    const res = await authGet(request, '/api/wellness/visits?limit=5');
+    expect(res.status()).toBe(200);
+    const visits = await res.json();
+    expect(Array.isArray(visits)).toBe(true);
+    if (visits.length > 0) {
+      // Includes are always present on default path even when null-FK.
+      const v = visits[0];
+      // The patient/service/doctor relation keys exist (may be null if FK is null).
+      expect(Object.prototype.hasOwnProperty.call(v, 'patient')).toBe(true);
+      expect(Object.prototype.hasOwnProperty.call(v, 'service')).toBe(true);
+      expect(Object.prototype.hasOwnProperty.call(v, 'doctor')).toBe(true);
+    }
+  });
+
+  // ── Prescriptions ────────────────────────────────────────────────────
+  test('GET /prescriptions?fields=summary drops drugs + instructions + nested includes', async ({ request }) => {
+    const res = await authGet(request, '/api/wellness/prescriptions?fields=summary&limit=10');
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(Array.isArray(body.items)).toBe(true);
+    expect(typeof body.total).toBe('number');
+    if (body.items.length === 0) test.skip(true, 'no prescriptions seeded — slim shape needs at least one row to assert');
+    for (const rx of body.items) {
+      // Slim keys present.
+      expect(rx).toHaveProperty('id');
+      expect(rx).toHaveProperty('patientId');
+      expect(rx).toHaveProperty('createdAt');
+      // Load-bearing assertions: the actual Rx contents MUST be dropped.
+      expect(rx).not.toHaveProperty('drugs');           // THE drug list
+      expect(rx).not.toHaveProperty('instructions');    // dosage narrative
+      expect(rx).not.toHaveProperty('pdfUrl');          // signed-URL leak vector
+      // Nested includes (patient/doctor) MUST be absent.
+      expect(rx).not.toHaveProperty('patient');
+      expect(rx).not.toHaveProperty('doctor');
+    }
+  });
+
+  test('GET /prescriptions (default shape) still ships drugs + patient/doctor includes', async ({ request }) => {
+    const res = await authGet(request, '/api/wellness/prescriptions?limit=5');
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(Array.isArray(body.items)).toBe(true);
+    if (body.items.length > 0) {
+      const rx = body.items[0];
+      expect(rx).toHaveProperty('drugs');
+      // Includes present (may be null if FK is null on legacy rows).
+      expect(Object.prototype.hasOwnProperty.call(rx, 'patient')).toBe(true);
+      expect(Object.prototype.hasOwnProperty.call(rx, 'doctor')).toBe(true);
+    }
+  });
+
+  // ── S96 — surface S62 slim-shape columns ─────────────────────────────
+  // S62 added firstName/lastName/displayName/lastVisitDate to Patient and
+  // status/dispensedAt to Prescription as additive-nullable columns. S42's
+  // slim projection (which shipped BEFORE S62) only selected the pre-S62
+  // column set, so the new columns were SQL-dropped on `?fields=summary`
+  // even though they were safe to surface (firstName/lastName/displayName
+  // are PII-name-class, governed by the same maskRows() viewer filter as
+  // `name`; lastVisitDate / status / dispensedAt are non-PHI workflow
+  // keys). S96 extends the slim projection to surface these columns. The
+  // assertions below pin THE KEY's PRESENCE in the slim-path response;
+  // they're nullability-tolerant because S62 columns are nullable + no
+  // backfill ran yet, so values are typically null in seed/test rows.
+  test('S96: GET /patients?fields=summary surfaces S62 columns (firstName/lastName/displayName/lastVisitDate)', async ({ request }) => {
+    // Seed a patient — the S62 PRD-additive columns are nullable + not
+    // backfilled, so we don't pass values for them; we only pin that the
+    // KEYS appear on every slim row (values may be null).
+    await createPatient(request, { suffix: 'S96PatientSlimKeys' });
+    const res = await authGet(request, '/api/wellness/patients?fields=summary&limit=10');
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(Array.isArray(body.patients)).toBe(true);
+    expect(body.patients.length).toBeGreaterThan(0);
+    for (const p of body.patients) {
+      // S62-shipped, S96-surfaced — the KEYS must be present on every
+      // slim row (values may be null since no backfill ran).
+      expect(p).toHaveProperty('firstName');
+      expect(p).toHaveProperty('lastName');
+      expect(p).toHaveProperty('displayName');
+      expect(p).toHaveProperty('lastVisitDate');
+      // Sanity: the pre-S96 slim shape (name + createdAt) is still present.
+      expect(p).toHaveProperty('id');
+      expect(p).toHaveProperty('name');
+      // And the PHI drops still hold (regression on the load-bearing S42
+      // contract — adding firstName/lastName MUST NOT have re-introduced
+      // a phone/email/dob leak).
+      expect(p).not.toHaveProperty('phone');
+      expect(p).not.toHaveProperty('email');
+      expect(p).not.toHaveProperty('dob');
+      expect(p).not.toHaveProperty('allergies');
+      expect(p).not.toHaveProperty('notes');
+    }
+  });
+
+  test('S96: GET /prescriptions?fields=summary surfaces S62 columns (status/dispensedAt)', async ({ request }) => {
+    // Use a freshly-created patient to scope the Rx list (avoids picking
+    // up unrelated seed/wellness-monitor Rx rows whose shape we don't
+    // control).
+    const p = await createPatient(request, { suffix: 'S96RxSlimKeys' });
+    const res = await authGet(
+      request,
+      `/api/wellness/prescriptions?fields=summary&patientId=${p.id}&limit=10`,
+    );
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(Array.isArray(body.items)).toBe(true);
+    expect(typeof body.total).toBe('number');
+    // No Rx seeded for this fresh patient — if items is empty, fall back
+    // to a tenant-wide slim call to pin the shape on whatever pre-existing
+    // Rx rows the test fixture / monitor seeded. The KEYS must be present
+    // either way; only the values vary per row.
+    let rows = body.items;
+    if (rows.length === 0) {
+      const tenantWide = await authGet(request, '/api/wellness/prescriptions?fields=summary&limit=10');
+      expect(tenantWide.status()).toBe(200);
+      const wideBody = await tenantWide.json();
+      rows = wideBody.items;
+      if (rows.length === 0) {
+        test.skip(true, 'no prescriptions seeded — slim shape needs at least one row to assert');
+      }
+    }
+    for (const rx of rows) {
+      // S62-shipped, S96-surfaced — the KEYS must be present.
+      expect(rx).toHaveProperty('status');
+      expect(rx).toHaveProperty('dispensedAt');
+      // Sanity: the pre-S96 slim shape still applies.
+      expect(rx).toHaveProperty('id');
+      expect(rx).toHaveProperty('patientId');
+      expect(rx).toHaveProperty('createdAt');
+      // Load-bearing PHI drops still hold — the medico-legal contract
+      // doesn't regress just because we added two workflow keys.
+      expect(rx).not.toHaveProperty('drugs');
+      expect(rx).not.toHaveProperty('instructions');
+      expect(rx).not.toHaveProperty('pdfUrl');
+    }
+  });
+
+  // ── Cross-endpoint sanity: phiReadGate still gates slim path ─────────
+  test('GET /patients?fields=summary still requires PHI-read role (gate applies pre-shape)', async ({ request }) => {
+    // Helper role is denied by phiReadGate's `deny: ["helper"]` clause —
+    // slim path MUST not bypass the access gate (the gate runs as
+    // middleware BEFORE the route's `?fields` branching).
+    const res = await authGet(request, '/api/wellness/patients?fields=summary&limit=3', 'helper');
+    expect(res.status()).toBe(403);
+    const body = await res.json();
+    expect(body.code).toBe('WELLNESS_ROLE_FORBIDDEN');
   });
 });

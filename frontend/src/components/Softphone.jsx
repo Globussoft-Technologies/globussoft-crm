@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Phone, PhoneOff, Mic, MicOff, Grid, Loader2, AlertTriangle } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 
@@ -14,11 +14,22 @@ export default function Softphone() {
   const [sessionId, setSessionId] = useState(null);
   const [errorMsg, setErrorMsg] = useState('');
 
-  const demoRefs = useRef({ stream: null, transcriptInterval: null });
+  const demoRefs = useRef({ stream: null, transcriptInterval: null, dialingTimeout: null });
+
+  // Cleanup on unmount: stop any dangling media streams / intervals / timeouts.
+  useEffect(() => {
+    return () => {
+      const { stream, transcriptInterval, dialingTimeout } = demoRefs.current;
+      if (dialingTimeout) clearTimeout(dialingTimeout);
+      if (transcriptInterval) clearInterval(transcriptInterval);
+      if (stream && stream.getTracks) stream.getTracks().forEach(t => t.stop());
+    };
+  }, []);
 
   const togglePhone = () => {
+    const closing = isOpen;
     setIsOpen(o => !o);
-    if (isOpen && status !== 'IDLE') endCall();
+    if (closing && status !== 'IDLE') endCall();
   };
 
   const startCall = async (e) => {
@@ -67,10 +78,17 @@ export default function Softphone() {
   // ─── Demo (fallback) call flow — only used when Twilio is not configured ───
   const startDemoCall = async () => {
     setStatus('DEMO_DIALING');
+    // Tear down any previous demo state before starting fresh
+    const prev = demoRefs.current;
+    if (prev.dialingTimeout) clearTimeout(prev.dialingTimeout);
+    if (prev.transcriptInterval) clearInterval(prev.transcriptInterval);
+    if (prev.stream && prev.stream.getTracks) prev.stream.getTracks().forEach(t => t.stop());
+    demoRefs.current = { stream: null, transcriptInterval: null, dialingTimeout: null };
+
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       demoRefs.current.stream = stream;
-      setTimeout(() => {
+      demoRefs.current.dialingTimeout = setTimeout(() => {
         setStatus('DEMO_CONNECTED');
         startDemoTranscription();
       }, 2000);
@@ -109,10 +127,11 @@ export default function Softphone() {
     }
 
     // Demo cleanup
-    const { stream, transcriptInterval } = demoRefs.current;
+    const { stream, transcriptInterval, dialingTimeout } = demoRefs.current;
+    if (dialingTimeout) clearTimeout(dialingTimeout);
     if (stream && stream.getTracks) stream.getTracks().forEach(t => t.stop());
     if (transcriptInterval) clearInterval(transcriptInterval);
-    demoRefs.current = { stream: null, transcriptInterval: null };
+    demoRefs.current = { stream: null, transcriptInterval: null, dialingTimeout: null };
 
     if (status === 'DEMO_CONNECTED' && transcript) {
       try {
@@ -134,6 +153,7 @@ export default function Softphone() {
     setContactId('');
     setSessionId(null);
     setIsMuted(false);
+    setDemoMode(false);
   };
 
   const isActive = status !== 'IDLE' && status !== 'COMPLETED' && status !== 'FAILED';

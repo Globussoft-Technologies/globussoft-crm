@@ -4,6 +4,7 @@ const prisma = require("../lib/prisma");
 const { verifyToken, verifyRole } = require("../middleware/auth");
 const { sendSms } = require("../services/smsProvider");
 const { computeFirstResponseDueAt } = require("../lib/leadSla");
+const { getSetting, KEYS } = require("../lib/tenantSettings");
 // v3.4.11: sanitization adopted from the v3.4.10 audit. Campaign.name is
 // rendered in the marketing admin UI cards; Campaign.scheduleFilters is
 // a JSON blob (String? @db.Text) re-rendered in the scheduled-campaigns
@@ -19,21 +20,21 @@ const MAILGUN_API_KEY = process.env.MAILGUN_API_KEY;
 const MAILGUN_DOMAIN = process.env.MAILGUN_DOMAIN || "crm.globusdemos.com";
 const FROM_EMAIL = `Globussoft CRM <noreply@${MAILGUN_DOMAIN}>`;
 
-async function sendMailgun(to, subject, html) {
+async function sendMailgun(to, subject, html, { from, domain } = {}) {
   const key = process.env.MAILGUN_API_KEY || MAILGUN_API_KEY;
-  const domain = process.env.MAILGUN_DOMAIN || MAILGUN_DOMAIN;
+  const resolvedDomain = domain || process.env.MAILGUN_DOMAIN || MAILGUN_DOMAIN;
   if (!key) {
     console.log(`[CampaignEngine] Mailgun not configured — email to ${to} logged but not sent`);
     return { sent: false, reason: "no_api_key" };
   }
   const fd = new URLSearchParams();
-  fd.append("from", `Globussoft CRM <noreply@${domain}>`);
+  fd.append("from", from || `Globussoft CRM <noreply@${resolvedDomain}>`);
   fd.append("to", to);
   fd.append("subject", subject);
   fd.append("text", html.replace(/<[^>]*>/g, ""));
   fd.append("html", html);
   try {
-    const response = await fetch(`https://api.mailgun.net/v3/${domain}/messages`, {
+    const response = await fetch(`https://api.mailgun.net/v3/${resolvedDomain}/messages`, {
       method: "POST",
       headers: { Authorization: "Basic " + Buffer.from("api:" + key).toString("base64") },
       body: fd,
@@ -225,12 +226,16 @@ async function sendCampaign(campaign, io) {
           // Create tracking pixel
           const trackingId = crypto.randomUUID();
 
+          // Per-tenant from address + Mailgun domain
+          const fromAddress = await getSetting(tenantId, KEYS.EMAIL_FROM_ADDRESS, { fallback: FROM_EMAIL });
+          const mailgunDomain = await getSetting(tenantId, "email.mailgunDomain", { fallback: process.env.MAILGUN_DOMAIN || MAILGUN_DOMAIN });
+
           // Create EmailMessage record
           const emailMsg = await prisma.emailMessage.create({
             data: {
               subject: campaign.name,
               body: `<p>Campaign: ${campaign.name}</p>`,
-              from: FROM_EMAIL,
+              from: fromAddress,
               to: contact.email,
               direction: "OUTBOUND",
               contactId: contact.id,
@@ -253,7 +258,7 @@ async function sendCampaign(campaign, io) {
           const body = `<p>Campaign: ${campaign.name}</p>${trackingPixel}`;
 
           // Send via Mailgun
-          const result = await sendMailgun(contact.email, campaign.name, body);
+          const result = await sendMailgun(contact.email, campaign.name, body, { from: fromAddress, domain: mailgunDomain });
           if (result.sent) {
             sentCount++;
           } else {

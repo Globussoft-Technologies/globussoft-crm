@@ -19,19 +19,43 @@ import { processRecurringInvoices } from '../../cron/recurringInvoiceEngine.js';
 beforeAll(() => {
   prisma.invoice = {
     findMany: vi.fn(),
+    findUnique: vi.fn(),
     create: vi.fn(),
     update: vi.fn(),
   };
   prisma.auditLog = { create: vi.fn() };
+  // Post-214017c1 each due row is processed inside a $transaction(tx => ...).
+  // The atomic-lock rewrite re-reads the parent via tx.invoice.findUnique and
+  // mints child invoices in a catch-up while-loop. Run the callback against
+  // the same singleton (tx === prisma); array form resolves in parallel.
+  prisma.$transaction = vi.fn(async (arg) =>
+    Array.isArray(arg) ? Promise.all(arg) : arg(prisma),
+  );
 });
 
 beforeEach(() => {
   prisma.invoice.findMany.mockReset();
+  prisma.invoice.findUnique.mockReset();
   prisma.invoice.create.mockReset();
   prisma.invoice.update.mockReset();
   prisma.auditLog.create.mockReset();
 
   prisma.invoice.findMany.mockResolvedValue([]);
+  // The transaction re-reads the parent by id (tx.invoice.findUnique). By
+  // default echo back the row the engine is iterating: resolve to whatever
+  // findMany already returned for that id (read from its recorded results so
+  // we do NOT inflate findMany's call count). Tests needing a specific parent
+  // state override findUnique directly.
+  prisma.invoice.findUnique.mockImplementation(async ({ where }) => {
+    const results = prisma.invoice.findMany.mock.results;
+    const last = results[results.length - 1];
+    const rows = last ? await last.value : null;
+    if (Array.isArray(rows)) {
+      const hit = rows.find((r) => r.id === where.id);
+      if (hit) return hit;
+    }
+    return null;
+  });
   prisma.invoice.create.mockResolvedValue({});
   prisma.invoice.update.mockResolvedValue({});
   prisma.auditLog.create.mockResolvedValue({});
@@ -133,7 +157,10 @@ describe('cron/recurringInvoiceEngine — cadence math + side-effects', () => {
     status: 'UNPAID',
     isRecurring: true,
     recurFrequency: 'monthly',
-    nextRecurDate: new Date('2026-01-15T00:00:00.000Z'),
+    // Default to ~2 days ago so the catch-up while-loop mints exactly ONE
+    // child (single missed period). Tests that exercise multi-period catch-up
+    // override nextRecurDate explicitly.
+    nextRecurDate: new Date(Date.now() - 2 * 86400000),
     invoiceNum: 'INV-PARENT',
     amount: 500,
     contactId: 9,
@@ -156,47 +183,60 @@ describe('cron/recurringInvoiceEngine — cadence math + side-effects', () => {
     expect(io.emit).not.toHaveBeenCalled();
   });
 
-  test('monthly cadence — next nextRecurDate advances by exactly 1 month from PRIOR nextRecurDate (not from now)', async () => {
-    // This pins the specific bug class: addInterval(inv.nextRecurDate, ...)
-    // walks from the PARENT's schedule, not from clock-now. Otherwise a
-    // late-running cron (e.g. server downtime for 3 days) would silently
-    // skip those 3 days of recurrence instead of catching up next tick.
-    const parentDate = new Date('2026-02-10T00:00:00.000Z');
+  // Post-214017c1 the transaction body runs a CATCH-UP while-loop: it mints
+  // one child for EVERY missed period from nextRecurDate up to now, then
+  // advances the parent to the first FUTURE period. To pin the per-interval
+  // `addInterval` math deterministically (independent of the wall-clock date
+  // the suite runs on) we seed nextRecurDate a few days in the PAST so the
+  // loop runs exactly once: one child minted, parent advanced by one interval.
+  const recentPast = (days = 2) => new Date(Date.now() - days * 86400000);
+
+  test('monthly cadence — advances by exactly 1 month from the missed nextRecurDate', async () => {
+    // This pins the specific bug class: addInterval(nextDate, ...) walks from
+    // the PARENT's schedule, not from clock-now. With a single missed period
+    // the parent advances by one month past the missed date.
+    const parentDate = recentPast();
     prisma.invoice.findMany.mockResolvedValue([dueRow({ nextRecurDate: parentDate, recurFrequency: 'monthly' })]);
 
     await processRecurringInvoices(null);
 
+    // One missed period → exactly one child minted, one parent advance.
+    expect(prisma.invoice.create).toHaveBeenCalledTimes(1);
     const updateArgs = prisma.invoice.update.mock.calls[0][0];
     expect(updateArgs.where).toEqual({ id: 100 });
-    // Parent was 2026-02-10; +1 month = 2026-03-10 (NOT today + 1 month).
-    expect(updateArgs.data.nextRecurDate.toISOString()).toBe('2026-03-10T00:00:00.000Z');
+    const expected = new Date(parentDate); expected.setMonth(expected.getMonth() + 1);
+    expect(updateArgs.data.nextRecurDate.toISOString()).toBe(expected.toISOString());
   });
 
   test('quarterly cadence — advances by 3 months', async () => {
-    const parentDate = new Date('2026-01-15T00:00:00.000Z');
+    const parentDate = recentPast();
     prisma.invoice.findMany.mockResolvedValue([dueRow({ nextRecurDate: parentDate, recurFrequency: 'quarterly' })]);
 
     await processRecurringInvoices(null);
 
+    expect(prisma.invoice.create).toHaveBeenCalledTimes(1);
     const updateArgs = prisma.invoice.update.mock.calls[0][0];
-    expect(updateArgs.data.nextRecurDate.toISOString()).toBe('2026-04-15T00:00:00.000Z');
+    const expected = new Date(parentDate); expected.setMonth(expected.getMonth() + 3);
+    expect(updateArgs.data.nextRecurDate.toISOString()).toBe(expected.toISOString());
   });
 
   test('yearly cadence — advances by 1 full year', async () => {
-    const parentDate = new Date('2026-03-20T00:00:00.000Z');
+    const parentDate = recentPast();
     prisma.invoice.findMany.mockResolvedValue([dueRow({ nextRecurDate: parentDate, recurFrequency: 'yearly' })]);
 
     await processRecurringInvoices(null);
 
+    expect(prisma.invoice.create).toHaveBeenCalledTimes(1);
     const updateArgs = prisma.invoice.update.mock.calls[0][0];
-    expect(updateArgs.data.nextRecurDate.toISOString()).toBe('2027-03-20T00:00:00.000Z');
+    const expected = new Date(parentDate); expected.setFullYear(expected.getFullYear() + 1);
+    expect(updateArgs.data.nextRecurDate.toISOString()).toBe(expected.toISOString());
   });
 
   test('unknown / malformed recurFrequency defaults to monthly (no throw)', async () => {
     // addInterval's switch has `default: d.setMonth(d.getMonth() + 1)`.
     // A row with a garbage frequency should NOT poison the loop; it
     // should fall through to the monthly default.
-    const parentDate = new Date('2026-05-01T00:00:00.000Z');
+    const parentDate = recentPast();
     prisma.invoice.findMany.mockResolvedValue([
       dueRow({ nextRecurDate: parentDate, recurFrequency: 'fortnightly' }),
     ]);
@@ -204,14 +244,37 @@ describe('cron/recurringInvoiceEngine — cadence math + side-effects', () => {
     await expect(processRecurringInvoices(null)).resolves.not.toThrow();
     expect(prisma.invoice.create).toHaveBeenCalledTimes(1);
     const updateArgs = prisma.invoice.update.mock.calls[0][0];
-    expect(updateArgs.data.nextRecurDate.toISOString()).toBe('2026-06-01T00:00:00.000Z');
+    const expected = new Date(parentDate); expected.setMonth(expected.getMonth() + 1);
+    expect(updateArgs.data.nextRecurDate.toISOString()).toBe(expected.toISOString());
   });
 
-  test('socket.io emit fires exactly once per tick with created count', async () => {
+  test('catch-up loop mints one child per missed period', async () => {
+    // New post-214017c1 behaviour: if the cron was down for several periods,
+    // the while-loop mints a child for EACH missed month, not just one. Three
+    // missed months (~70 days ago, monthly) → 3 children, single parent advance.
+    const parentDate = new Date(Date.now() - 70 * 86400000); // ~2 months + change
     prisma.invoice.findMany.mockResolvedValue([
-      dueRow({ id: 1, invoiceNum: 'INV-A' }),
-      dueRow({ id: 2, invoiceNum: 'INV-B' }),
-      dueRow({ id: 3, invoiceNum: 'INV-C' }),
+      dueRow({ nextRecurDate: parentDate, recurFrequency: 'monthly' }),
+    ]);
+
+    await processRecurringInvoices(null);
+
+    // Walk the periods to compute how many fall on/before now.
+    let n = 0; const cursor = new Date(parentDate);
+    while (cursor <= new Date()) { n++; cursor.setMonth(cursor.getMonth() + 1); }
+    expect(n).toBeGreaterThanOrEqual(2);
+    expect(prisma.invoice.create).toHaveBeenCalledTimes(n);
+    // Exactly one parent advance + one audit summary regardless of child count.
+    expect(prisma.invoice.update).toHaveBeenCalledTimes(1);
+    expect(prisma.auditLog.create).toHaveBeenCalledTimes(1);
+  });
+
+  test('socket.io emit fires exactly once per tick with total created count', async () => {
+    // Three parents, each one missed period (recent past) → 3 children total.
+    prisma.invoice.findMany.mockResolvedValue([
+      dueRow({ id: 1, invoiceNum: 'INV-A', nextRecurDate: recentPast() }),
+      dueRow({ id: 2, invoiceNum: 'INV-B', nextRecurDate: recentPast() }),
+      dueRow({ id: 3, invoiceNum: 'INV-C', nextRecurDate: recentPast() }),
     ]);
     const io = { emit: vi.fn() };
 
@@ -235,9 +298,9 @@ describe('cron/recurringInvoiceEngine — cadence math + side-effects', () => {
     expect(createdAudit.tenantId).toBe(1);
   });
 
-  test('audit log payload has correct shape — action/entity/details JSON references both invoices', async () => {
+  test('audit log payload has correct shape — single summary row referencing the batch of generated invoices', async () => {
     prisma.invoice.findMany.mockResolvedValue([
-      dueRow({ id: 77, invoiceNum: 'INV-PARENT-77', tenantId: 5 }),
+      dueRow({ id: 77, invoiceNum: 'INV-PARENT-77', tenantId: 5, nextRecurDate: recentPast() }),
     ]);
 
     await processRecurringInvoices(null);
@@ -248,12 +311,18 @@ describe('cron/recurringInvoiceEngine — cadence math + side-effects', () => {
     expect(auditData.entity).toBe('Invoice');
     expect(auditData.tenantId).toBe(5);
 
-    // details is a JSON-stringified blob — parse + assert structure.
+    // Post-214017c1 the audit row summarises the whole catch-up batch:
+    // details = { source, parentInvoice, generated: [...childNums], count }.
     const details = JSON.parse(auditData.details);
     expect(details.source).toBe('Recurring');
     expect(details.parentInvoice).toBe('INV-PARENT-77');
-    // newInvoice format is `INV-<6 hex uppercase>` from crypto.randomBytes(3).
-    expect(details.newInvoice).toMatch(/^INV-[0-9A-F]{6}$/);
+    expect(Array.isArray(details.generated)).toBe(true);
+    expect(details.count).toBe(details.generated.length);
+    expect(details.count).toBe(1); // one missed period → one child
+    // Each generated child number is `INV-<6 hex uppercase>` (crypto.randomBytes(3)).
+    for (const num of details.generated) {
+      expect(num).toMatch(/^INV-[0-9A-F]{6}$/);
+    }
   });
 
   test('findMany rejection — outer catch swallows; no socket emit, no throw', async () => {

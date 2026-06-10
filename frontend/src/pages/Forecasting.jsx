@@ -3,7 +3,7 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   LineChart, Line, Legend
 } from 'recharts';
-import { TrendingUp, DollarSign, Target, Save } from 'lucide-react';
+import { TrendingUp, IndianRupee, Target, Save } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { formatMoney, formatMoneyCompact } from '../utils/money';
 
@@ -190,7 +190,7 @@ export default function Forecasting() {
         gap: '1rem',
         marginBottom: '2rem',
       }}>
-        <KpiCard icon={DollarSign} label="Closed" value={fmt(current.total.closed)} accent="#10b981" />
+        <KpiCard icon={IndianRupee} label="Closed" value={fmt(current.total.closed)} accent="#10b981" />
         <KpiCard icon={Target} label="Committed" value={fmt(current.total.committed)} accent="#3b82f6" />
         <KpiCard icon={TrendingUp} label="Expected" value={fmt(current.total.expected)} accent="#a855f7" />
         <KpiCard icon={Target} label="Best Case" value={fmt(current.total.bestCase)} accent="#f59e0b" />

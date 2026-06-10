@@ -210,6 +210,21 @@ html[data-theme="dark"][data-vertical="wellness"],
   box-shadow: 0 0 0 3px rgba(38, 88, 85, 0.1) !important;
 }
 
+/* Opt-out: inputs nested in a styled wrapper (icon-prefixed search bars,
+   combo controls, etc.) where the WRAPPER provides the border + background.
+   Apply `className="naked-input"` to suppress the global input chrome. */
+[data-vertical="wellness"] input.naked-input,
+[data-vertical="wellness"] input.naked-input:focus,
+[data-theme="dark"][data-vertical="wellness"] input.naked-input,
+[data-theme="dark"][data-vertical="wellness"] input.naked-input:focus,
+[data-theme="dark"] [data-vertical="wellness"] input.naked-input,
+[data-theme="dark"] [data-vertical="wellness"] input.naked-input:focus {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+
 /* Tables — warm zebra stripes */
 [data-vertical="wellness"] table tbody tr:nth-child(even) {
   background: rgba(38, 88, 85, 0.02);

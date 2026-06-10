@@ -478,11 +478,15 @@ test.describe("Travel itineraries API — items", () => {
     if (!token || created.itemIds.length === 0) test.skip(true, "no items");
     const itinId = created.itineraryIds[0];
     const itemId = created.itemIds[0];
+    // The route never trusts a client-supplied totalPrice — it recomputes the
+    // line total from price-affecting fields (computeItemLineTotal:
+    // unitCost*quantity + markup + gstAmount). So drive the total via those
+    // fields: 2000*1 + 0 + 0 = 2000.
     const res = await patch(
       request,
       token,
       `/api/travel/itineraries/${itinId}/items/${itemId}`,
-      { description: `${RUN_TAG} amended desc`, totalPrice: 2000 },
+      { description: `${RUN_TAG} amended desc`, unitCost: 2000, quantity: 1, markup: 0, gstAmount: 0 },
     );
     expect(res.status()).toBe(200);
     const body = await res.json();
@@ -1060,5 +1064,346 @@ test.describe("Travel itineraries API — LLM draft regen (PRD §4.3 + §9.1)", 
     expect(res.status()).toBe(403);
     const body = await res.json();
     expect(body.code).toBe("WRONG_VERTICAL");
+  });
+});
+
+// ─── Slim-shape opt-in (#920 slice S3 — FR-3.5 PII payload reduction) ───
+//
+// `?fields=summary` on GET /itineraries drops shareToken (auth-bearing),
+// pricingJson (heavy @db.Text), pdfUrl, micrositeUrl AND skips the
+// `items` include. Default shape unchanged.
+
+test.describe("Travel itineraries API — slim-shape opt-in (#920 S3)", () => {
+  test("GET /itineraries?fields=summary returns slim projection (no shareToken, no pricingJson, no items include)", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, "travel admin not available");
+    const res = await get(request, token, "/api/travel/itineraries?fields=summary");
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(Array.isArray(body.itineraries)).toBe(true);
+    if (body.itineraries.length === 0) test.skip(true, "no itineraries seeded yet");
+    for (const it of body.itineraries) {
+      expect(it).toHaveProperty("id");
+      expect(it).toHaveProperty("subBrand");
+      expect(it).toHaveProperty("contactId");
+      expect(it).toHaveProperty("destination");
+      expect(it).toHaveProperty("status");
+      // SQL-dropped — never appear on slim path.
+      expect(it).not.toHaveProperty("shareToken");
+      expect(it).not.toHaveProperty("pricingJson");
+      expect(it).not.toHaveProperty("pdfUrl");
+      expect(it).not.toHaveProperty("micrositeUrl");
+      // items include is SKIPPED on slim path.
+      expect(it).not.toHaveProperty("items");
+    }
+  });
+
+  test("GET /itineraries (default shape) still ships full row + items include", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, "travel admin not available");
+    const res = await get(request, token, "/api/travel/itineraries");
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    if (body.itineraries.length === 0) test.skip(true, "no itineraries seeded");
+    const it = body.itineraries[0];
+    expect(it).toHaveProperty("items"); // include still fires on default path
+  });
+});
+
+// ─── S46: POST /api/travel/itineraries/suggest ───────────────────────
+//
+// Surfaces the S14 service module (backend/services/itinerarySuggestLLM.js,
+// commit 17449b35) as a public HTTP endpoint so the frontend "Suggest
+// itinerary" button (PRD docs/PRD_TRAVEL_ITINERARY_UPGRADES.md FR-3.6
+// step (a)) can call it. Until Q-IT-2 / Q11 keys arrive, the service
+// returns deterministic [STUB] content; both stub + real modes share
+// the same `{ suggestionJson, source, model, stub }` response envelope.
+//
+// Coverage:
+//   (a) happy path  — returns the canned-stub shape (stub: true,
+//                     source: 'stub', daySplit length === durationDays).
+//   (b) missing destination → 400 INVALID_DESTINATION.
+//   (c) durationDays out of range → 400 INVALID_DURATION_DAYS.
+//   (e) auth required (anon → 401 from verifyToken).
+//
+// (d) budget-cap exceeded → 500 with code ITINERARY_SUGGEST_BUDGET_EXCEEDED
+//     is covered at the UNIT layer (backend/test/services/
+//     itinerary-suggest-llm.test.js) via vi.spyOn(client, 'checkBudgetCap').
+//     Flipping the per-tenant TenantSetting LLM cap to 0 in an e2e context
+//     would interfere with sibling LLM tests (talking-points, form-vs-call,
+//     draft/regen, talking-points-api, etc.) running in parallel shards.
+//     The route's catch-handler is shape-pinned by (b) + (c) failing the
+//     validators before the service ever runs.
+
+test.describe("Travel itineraries API — S46 — POST /suggest", () => {
+  test("(a) happy path returns canned-stub shape (source=stub, daySplit length === durationDays)", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, "travel admin not available");
+    const res = await post(request, token, "/api/travel/itineraries/suggest", {
+      destination: `${RUN_TAG} Suggest Destination`,
+      durationDays: 3,
+      themeJson: { romantic: true },
+      budgetTier: "mid",
+    });
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    // Envelope contract from S14 (services/itinerarySuggestLLM.js).
+    expect(body).toHaveProperty("suggestionJson");
+    expect(body).toHaveProperty("source");
+    expect(body).toHaveProperty("model");
+    expect(body).toHaveProperty("stub");
+    // Stub-mode shape — until Q-IT-2 keys arrive, source is always 'stub'.
+    // (If keys land before this assertion is updated, the test fails loudly
+    // which is the desired signal — we want to know when real-mode flips.)
+    expect(body.source).toBe("stub");
+    expect(body.stub).toBe(true);
+    expect(body.model).toBe("gemini-2.5-flash");
+    // suggestionJson contract per S14 header.
+    const sj = body.suggestionJson;
+    expect(Array.isArray(sj.daySplit)).toBe(true);
+    expect(sj.daySplit.length).toBe(3); // matches durationDays
+    expect(Array.isArray(sj.poiSuggestions)).toBe(true);
+    expect(typeof sj.thematicNotes).toBe("string");
+    expect(typeof sj.summary).toBe("string");
+    // Each day has dayNumber + theme + items[].
+    for (const day of sj.daySplit) {
+      expect(day).toHaveProperty("dayNumber");
+      expect(day).toHaveProperty("theme");
+      expect(Array.isArray(day.items)).toBe(true);
+    }
+  });
+
+  test("(b) missing destination → 400 INVALID_DESTINATION", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, "travel admin not available");
+    const res = await post(request, token, "/api/travel/itineraries/suggest", {
+      durationDays: 3,
+    });
+    expect(res.status()).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("INVALID_DESTINATION");
+  });
+
+  test("(b.2) empty-string destination → 400 INVALID_DESTINATION", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, "travel admin not available");
+    const res = await post(request, token, "/api/travel/itineraries/suggest", {
+      destination: "   ",
+      durationDays: 3,
+    });
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe("INVALID_DESTINATION");
+  });
+
+  test("(c) durationDays=0 → 400 INVALID_DURATION_DAYS", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, "travel admin not available");
+    const res = await post(request, token, "/api/travel/itineraries/suggest", {
+      destination: `${RUN_TAG} Suggest Edge`,
+      durationDays: 0,
+    });
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe("INVALID_DURATION_DAYS");
+  });
+
+  test("(c.2) durationDays=31 (over upper bound) → 400 INVALID_DURATION_DAYS", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, "travel admin not available");
+    const res = await post(request, token, "/api/travel/itineraries/suggest", {
+      destination: `${RUN_TAG} Suggest Over`,
+      durationDays: 31,
+    });
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe("INVALID_DURATION_DAYS");
+  });
+
+  test("(c.3) durationDays=missing → 400 INVALID_DURATION_DAYS", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, "travel admin not available");
+    const res = await post(request, token, "/api/travel/itineraries/suggest", {
+      destination: `${RUN_TAG} Suggest NoDays`,
+    });
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe("INVALID_DURATION_DAYS");
+  });
+
+  test("(e) anonymous request → 401 from verifyToken", async ({ request }) => {
+    const res = await request.post(`${BASE_URL}/api/travel/itineraries/suggest`, {
+      headers: { "Content-Type": "application/json" },
+      data: { destination: "Paris", durationDays: 3 },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(res.status()).toBe(401);
+  });
+
+  test("invalid budgetTier → 400 INVALID_BUDGET_TIER", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, "travel admin not available");
+    const res = await post(request, token, "/api/travel/itineraries/suggest", {
+      destination: `${RUN_TAG} Suggest BadTier`,
+      durationDays: 3,
+      budgetTier: "platinum", // not in enum
+    });
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe("INVALID_BUDGET_TIER");
+  });
+
+  test("themeJson as array → 400 INVALID_THEME_JSON", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, "travel admin not available");
+    const res = await post(request, token, "/api/travel/itineraries/suggest", {
+      destination: `${RUN_TAG} Suggest BadTheme`,
+      durationDays: 3,
+      themeJson: ["romantic", "luxury"], // arrays not allowed
+    });
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe("INVALID_THEME_JSON");
+  });
+
+  test("happy path with no optional fields returns valid envelope", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, "travel admin not available");
+    const res = await post(request, token, "/api/travel/itineraries/suggest", {
+      destination: `${RUN_TAG} Minimal`,
+      durationDays: 1,
+    });
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(body.suggestionJson.daySplit.length).toBe(1);
+    expect(body.source).toBe("stub");
+  });
+});
+
+// ─── PRD FR-3.6 step (d) — POST /itineraries/from-suggestion (S90) ───
+//
+// Materialises an LLM/stub suggestion into a real Itinerary + N
+// ItineraryItem rows. Mirror of the existing /suggest gate. Tests:
+//   - happy round-trip (suggest → materialise → list contains new row)
+//   - validation 400s (missing suggestionJson, empty daySplit, missing
+//     contactId, item missing description, bad sub-brand)
+//   - tenant-scope (generic-tenant caller → 403 WRONG_VERTICAL via the
+//     same requireTravelTenant middleware that gates /suggest)
+//   - PRD §4.1 diagnostic-first guard
+test.describe("Travel itineraries API — POST /from-suggestion (PRD FR-3.6 step d)", () => {
+  test("happy path: suggest → materialise produces an Itinerary + items", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || !testContactId) test.skip(true, "deps missing");
+
+    // 1. Brainstorm a suggestion via the existing endpoint.
+    const suggestRes = await post(request, token, "/api/travel/itineraries/suggest", {
+      destination: `${RUN_TAG} Materialise Goa`,
+      durationDays: 2,
+      budgetTier: "mid",
+    });
+    expect(suggestRes.status()).toBe(200);
+    const suggestBody = await suggestRes.json();
+    expect(Array.isArray(suggestBody.suggestionJson.daySplit)).toBe(true);
+
+    // S109 (2026-06-10): service↔route itemType vocabularies are now
+    // reconciled — the stub suggest service emits canonical plural forms
+    // ('meals' not 'meal') that the materialise route's VALID_ITEM_TYPES
+    // enum accepts verbatim. The S108 alias-map workaround was removed
+    // in the same commit. Frontend modal / SDK consumers can now forward
+    // suggestionJson verbatim.
+
+    // 2. Materialise into a real Itinerary.
+    const matRes = await post(request, token, "/api/travel/itineraries/from-suggestion", {
+      suggestionJson: suggestBody.suggestionJson,
+      contactId: testContactId,
+      subBrand: "rfu",
+    });
+    expect(matRes.status(), `materialise: ${await matRes.text()}`).toBe(201);
+    const matBody = await matRes.json();
+    expect(matBody.itinerary).toBeTruthy();
+    expect(matBody.itinerary.id).toBeTruthy();
+    expect(matBody.itemsCreated).toBeGreaterThan(0);
+    expect(matBody.daysProcessed).toBe(2);
+    expect(matBody.itinerary.status).toBe("draft");
+    expect(Array.isArray(matBody.itinerary.items)).toBe(true);
+    expect(matBody.itinerary.items.length).toBe(matBody.itemsCreated);
+    // dayNumber populated on each item.
+    expect(matBody.itinerary.items.every(
+      (i) => Number.isFinite(i.dayNumber) && i.dayNumber >= 1,
+    )).toBe(true);
+    created.itineraryIds.push(matBody.itinerary.id);
+  });
+
+  test("missing suggestionJson → 400 INVALID_SUGGESTION_JSON", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || !testContactId) test.skip(true, "deps missing");
+    const res = await post(request, token, "/api/travel/itineraries/from-suggestion", {
+      contactId: testContactId,
+      subBrand: "rfu",
+    });
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe("INVALID_SUGGESTION_JSON");
+  });
+
+  test("empty daySplit → 400 INVALID_SUGGESTION_JSON", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || !testContactId) test.skip(true, "deps missing");
+    const res = await post(request, token, "/api/travel/itineraries/from-suggestion", {
+      suggestionJson: { daySplit: [], summary: "empty" },
+      contactId: testContactId,
+      subBrand: "rfu",
+    });
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe("INVALID_SUGGESTION_JSON");
+  });
+
+  test("missing contactId → 400 CONTACT_ID_REQUIRED (schema gap)", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, "travel admin not available");
+    const res = await post(request, token, "/api/travel/itineraries/from-suggestion", {
+      suggestionJson: {
+        daySplit: [{ dayNumber: 1, items: [{ itemType: "activity", description: "x" }] }],
+      },
+      subBrand: "rfu",
+    });
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe("CONTACT_ID_REQUIRED");
+  });
+
+  test("bad subBrand → 400 INVALID_SUB_BRAND", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || !testContactId) test.skip(true, "deps missing");
+    const res = await post(request, token, "/api/travel/itineraries/from-suggestion", {
+      suggestionJson: {
+        daySplit: [{ dayNumber: 1, items: [{ itemType: "activity", description: "x" }] }],
+      },
+      contactId: testContactId,
+      subBrand: "made-up",
+    });
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe("INVALID_SUB_BRAND");
+  });
+
+  test("generic-vertical caller → 403 WRONG_VERTICAL (tenant-scope)", async ({ request }) => {
+    const token = await getGenericAdmin(request);
+    if (!token) test.skip(true, "generic admin not seeded");
+    const res = await post(request, token, "/api/travel/itineraries/from-suggestion", {
+      suggestionJson: {
+        daySplit: [{ dayNumber: 1, items: [{ itemType: "activity", description: "x" }] }],
+      },
+      contactId: 1,
+      subBrand: "rfu",
+    });
+    expect(res.status()).toBe(403);
+    expect((await res.json()).code).toBe("WRONG_VERTICAL");
+  });
+
+  test("unauthenticated → 401/403", async ({ request }) => {
+    const res = await request.post(`${BASE_URL}/api/travel/itineraries/from-suggestion`, {
+      headers: { "Content-Type": "application/json" },
+      data: {
+        suggestionJson: {
+          daySplit: [{ dayNumber: 1, items: [{ itemType: "activity", description: "x" }] }],
+        },
+        contactId: 1,
+        subBrand: "rfu",
+      },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect([401, 403]).toContain(res.status());
   });
 });

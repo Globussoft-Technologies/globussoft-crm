@@ -59,6 +59,8 @@ Consolidated index of every credential, vendor doc, brand asset, or domain regis
 
 - **Q-IT-1** [DEFERRED] Mapbox API key — optional, DD-5.4 defaults to OSM + Leaflet (no key needed). Unlocks ~10 lines of provider-swap if polish tier matters later. **Source:** `PRD_TRAVEL_ITINERARY_UPGRADES.md` §5.
 
+- **Q-IT-3** [PENDING] OpenTripMap API key — `OPENTRIPMAP_API_KEY` env var consumed by `backend/scripts/seedOpenTripMapPois.js` for LIVE-mode TravelPoi catalog seeding (~500 POIs across ~10 destinations). **Owner:** Yasin (self-serve at https://opentripmap.io/, ~5min signup, free tier 1000 req/day). **Workaround:** seeder defaults to FIXTURE mode (20 sample POIs from `backend/test/fixtures/opentripmap-sample-response.json`) when env is unset or `__PLACEHOLDER__`. **Effort post-cred:** ~5min env wiring + ~30min seed run for real catalog. **Blocks:** richer Itinerary editor (S9 + PoiPicker S93) auto-suggest from full POI catalog; fixture mode already unblocks the schema + UI flow. **Source:** S92 in `docs/TRAVEL_BIG_SCOPE_BACKLOG.md` (carry-over from S11 ✅).
+
 - **Q-PB-1** [PENDING] Stripe Customer + Subscription API access — secret key + restricted-scope key for Subscription / Customer / PaymentMethod APIs. **Overlaps:** GH #896 cred chase. **Source:** `PRD_PLANS_BILLING_SELF_SERVE.md` §5.
 
 - **Q-PB-2** [PENDING] Razorpay subscriptions module — `rzp_live_*` key with Subscriptions module enabled on the Razorpay dashboard (current test key may have only orders + payments). **Decision pinned:** 2026-05-20 (Q4 — Razorpay for Travel). **Source:** `PRD_PLANS_BILLING_SELF_SERVE.md` §5.

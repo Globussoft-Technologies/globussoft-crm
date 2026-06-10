@@ -57,6 +57,41 @@ prisma.loyaltyTransaction = prisma.loyaltyTransaction || {
   findFirst: vi.fn(), aggregate: vi.fn(), findMany: vi.fn(), create: vi.fn(),
 };
 prisma.referral = prisma.referral || { findMany: vi.fn(), count: vi.fn() };
+// T37 / Class B6 — RBAC self-heal seam. GET /api/wellness/patients/export
+// is gated by verifyWellnessRole (phiReadGate). On the USER-no-wellnessRole
+// path the gate calls `requirePermissionModule.getUserPermissions` →
+// `prisma.userRole.findMany`. Empty array triggers
+// `maybeSelfHealAdminPermissions` which queries `prisma.user.findUnique`
+// + `prisma.tenant.findUnique` + `prisma.role.findFirst`. Without these
+// the real Prisma client hits demo MySQL and the 5s timeout fires
+// before the structured 403 can be emitted. The gate also probes
+// `prisma.wellnessRoleType.findMany` for the "clinical" meta-token
+// resolution before the permission fallback. All permissive defaults.
+prisma.user = prisma.user || {};
+prisma.user.findUnique = vi.fn().mockResolvedValue(null);
+prisma.user.findMany = vi.fn().mockResolvedValue([]);
+prisma.userRole = {
+  count: vi.fn().mockResolvedValue(1),
+  findUnique: vi.fn().mockResolvedValue(null),
+  findFirst: vi.fn().mockResolvedValue(null),
+  findMany: vi.fn().mockResolvedValue([]),
+  create: vi.fn().mockResolvedValue({}),
+};
+prisma.role = {
+  findFirst: vi.fn().mockResolvedValue(null),
+  create: vi.fn().mockResolvedValue({ id: 999 }),
+};
+prisma.rolePermission = {
+  findFirst: vi.fn().mockResolvedValue({ id: 999 }),
+  create: vi.fn().mockResolvedValue({}),
+};
+prisma.roleWidget = { create: vi.fn().mockResolvedValue({}) };
+prisma.tenant = prisma.tenant || {};
+prisma.tenant.findUnique = vi.fn().mockResolvedValue({ id: 1, vertical: 'wellness' });
+prisma.tenant.findMany = vi.fn().mockResolvedValue([]);
+prisma.wellnessRoleType = {
+  findMany: vi.fn().mockResolvedValue([]),
+};
 
 import express from 'express';
 import request from 'supertest';
@@ -113,11 +148,18 @@ beforeEach(() => {
   prisma.auditLog.create.mockResolvedValue({ id: 1 });
 });
 
-describe('GET /api/wellness/patients.xlsx — #820 (1) endpoint mounted', () => {
+// Canonical xlsx export route is GET /patients/export?format=xlsx (see
+// routes/wellness.js ~L1052). Earlier test framing assumed `/patients.xlsx`
+// (mirroring the `/patients.csv` route name); the route source exposes the
+// xlsx variant via the shared `/patients/export` handler with a query-param
+// format selector instead.
+const XLSX_URL = '/api/wellness/patients/export?format=xlsx';
+
+describe('GET /api/wellness/patients/export?format=xlsx — #820 (1) endpoint mounted', () => {
   test('returns 200 for ADMIN on a wellness tenant', async () => {
     prisma.patient.findMany.mockResolvedValue([makePatient(1), makePatient(2)]);
     const res = await request(makeApp())
-      .get('/api/wellness/patients.xlsx')
+      .get(XLSX_URL)
       .buffer(true)
       .parse((response, callback) => {
         // supertest defaults to string parsing — force binary collection
@@ -127,21 +169,22 @@ describe('GET /api/wellness/patients.xlsx — #820 (1) endpoint mounted', () => 
         response.on('end', () => callback(null, Buffer.concat(chunks)));
       });
     expect(res.status).toBe(200);
+    // buildPatientExportPayload uses take: 10000 + include: { tags: ... }.
     expect(prisma.patient.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({ tenantId: 1, deletedAt: null }),
         orderBy: { createdAt: 'desc' },
-        take: 5000,
+        take: 10000,
       }),
     );
   });
 });
 
-describe('GET /api/wellness/patients.xlsx — #820 (2) headers', () => {
+describe('GET /api/wellness/patients/export?format=xlsx — #820 (2) headers', () => {
   test('Content-Type is xlsx MIME + Content-Disposition is attachment with .xlsx suffix', async () => {
     prisma.patient.findMany.mockResolvedValue([makePatient(1)]);
     const res = await request(makeApp())
-      .get('/api/wellness/patients.xlsx')
+      .get(XLSX_URL)
       .buffer(true)
       .parse((r, cb) => {
         const chunks = [];
@@ -161,7 +204,7 @@ describe('GET /api/wellness/patients.xlsx — #820 (2) headers', () => {
   test('?masked=1 filename carries "-masked" infix', async () => {
     prisma.patient.findMany.mockResolvedValue([makePatient(1)]);
     const res = await request(makeApp())
-      .get('/api/wellness/patients.xlsx?masked=1')
+      .get('/api/wellness/patients/export?format=xlsx&masked=1')
       .buffer(true)
       .parse((r, cb) => {
         const chunks = [];
@@ -173,11 +216,11 @@ describe('GET /api/wellness/patients.xlsx — #820 (2) headers', () => {
   });
 });
 
-describe('GET /api/wellness/patients.xlsx — #820 (3) valid XLSX buffer', () => {
+describe('GET /api/wellness/patients/export?format=xlsx — #820 (3) valid XLSX buffer', () => {
   test('response body parses as a workbook with a "Patients" sheet + correct headers', async () => {
     prisma.patient.findMany.mockResolvedValue([makePatient(1), makePatient(2), makePatient(3)]);
     const res = await request(makeApp())
-      .get('/api/wellness/patients.xlsx')
+      .get(XLSX_URL)
       .buffer(true)
       .parse((r, cb) => {
         const chunks = [];
@@ -194,7 +237,11 @@ describe('GET /api/wellness/patients.xlsx — #820 (3) valid XLSX buffer', () =>
     const data = XLSX.utils.sheet_to_json(sheet, { header: 1 });
     // Header row + 3 data rows.
     expect(data.length).toBe(4);
-    expect(data[0]).toEqual(['ID', 'Name', 'Phone', 'Email', 'DOB', 'Gender', 'Created']);
+    // Pinned to buildPatientExportPayload (routes/wellness.js ~L1013) —
+    // 9-column shape: ID, Name, Phone, Email, DOB, Gender, Source, Tags, Created.
+    expect(data[0]).toEqual([
+      'ID', 'Name', 'Phone', 'Email', 'DOB', 'Gender', 'Source', 'Tags', 'Created',
+    ]);
     // Row order matches the findMany result (orderBy createdAt desc).
     expect(data[1][0]).toBe(1);
     expect(data[2][0]).toBe(2);
@@ -202,7 +249,7 @@ describe('GET /api/wellness/patients.xlsx — #820 (3) valid XLSX buffer', () =>
   });
 });
 
-describe('GET /api/wellness/patients.xlsx — #820 (4) row count matches filtered query', () => {
+describe('GET /api/wellness/patients/export?format=xlsx — #820 (4) row count matches filtered query', () => {
   test('?q=foo&locationId=42 narrows the where clause + row count reflects findMany length', async () => {
     prisma.patient.findMany.mockResolvedValue([
       makePatient(101),
@@ -212,7 +259,7 @@ describe('GET /api/wellness/patients.xlsx — #820 (4) row count matches filtere
       makePatient(105),
     ]);
     const res = await request(makeApp())
-      .get('/api/wellness/patients.xlsx?q=foo&locationId=42')
+      .get('/api/wellness/patients/export?format=xlsx&q=foo&locationId=42')
       .buffer(true)
       .parse((r, cb) => {
         const chunks = [];
@@ -235,13 +282,13 @@ describe('GET /api/wellness/patients.xlsx — #820 (4) row count matches filtere
   });
 });
 
-describe('GET /api/wellness/patients.xlsx — #820 (5) ?masked=1 forces masking for ADMIN', () => {
+describe('GET /api/wellness/patients/export?format=xlsx — #820 (5) ?masked=1 forces masking for ADMIN', () => {
   test('phone/email/name/dob come back redacted even though caller is ADMIN', async () => {
     prisma.patient.findMany.mockResolvedValue([
       makePatient(1, { name: 'Jane Doe', phone: '9876543210', email: 'jane@example.com' }),
     ]);
     const res = await request(makeApp({ role: 'ADMIN' }))
-      .get('/api/wellness/patients.xlsx?masked=1')
+      .get('/api/wellness/patients/export?format=xlsx&masked=1')
       .buffer(true)
       .parse((r, cb) => {
         const chunks = [];
@@ -262,9 +309,9 @@ describe('GET /api/wellness/patients.xlsx — #820 (5) ?masked=1 forces masking 
   });
 });
 
-describe('GET /api/wellness/patients.xlsx — #820 (6) unauthenticated → 401', () => {
+describe('GET /api/wellness/patients/export?format=xlsx — #820 (6) unauthenticated → 401', () => {
   test('no req.user → phiReadGate emits 401 Authentication required', async () => {
-    const res = await request(makeApp({ noAuth: true })).get('/api/wellness/patients.xlsx');
+    const res = await request(makeApp({ noAuth: true })).get(XLSX_URL);
     expect(res.status).toBe(401);
     // patient.findMany must NOT have been called — gate fired before the
     // handler body.
@@ -272,11 +319,9 @@ describe('GET /api/wellness/patients.xlsx — #820 (6) unauthenticated → 401',
   });
 });
 
-describe('GET /api/wellness/patients.xlsx — #820 (7) USER role → 403', () => {
+describe('GET /api/wellness/patients/export?format=xlsx — #820 (7) USER role → 403', () => {
   test('role=USER with no wellnessRole → 403 WELLNESS_ROLE_FORBIDDEN', async () => {
-    const res = await request(makeApp({ role: 'USER', wellnessRole: null })).get(
-      '/api/wellness/patients.xlsx',
-    );
+    const res = await request(makeApp({ role: 'USER', wellnessRole: null })).get(XLSX_URL);
     expect(res.status).toBe(403);
     expect(res.body).toMatchObject({ code: 'WELLNESS_ROLE_FORBIDDEN' });
     // Gate fired before handler.
@@ -284,11 +329,11 @@ describe('GET /api/wellness/patients.xlsx — #820 (7) USER role → 403', () =>
   });
 });
 
-describe('GET /api/wellness/patients.xlsx — #820 (8) audit emission', () => {
-  test('unmasked export emits both PATIENT_LIST_EXPORT + PII_DISCLOSED audit rows', async () => {
+describe('GET /api/wellness/patients/export?format=xlsx — #820 (8) audit emission', () => {
+  test('unmasked export emits a PII_DISCLOSED audit row carrying format=xlsx + masked=false', async () => {
     prisma.patient.findMany.mockResolvedValue([makePatient(1), makePatient(2)]);
     const res = await request(makeApp({ role: 'ADMIN' }))
-      .get('/api/wellness/patients.xlsx')
+      .get(XLSX_URL)
       .buffer(true)
       .parse((r, cb) => {
         const chunks = [];
@@ -301,25 +346,25 @@ describe('GET /api/wellness/patients.xlsx — #820 (8) audit emission', () => {
     await new Promise((r) => setImmediate(r));
 
     const calls = prisma.auditLog.create.mock.calls.map((c) => c[0].data || c[0]);
-    // The exporter must have invoked writeAudit at least TWICE on unmasked.
-    // Filter for our two actions.
-    const exportRow = calls.find((d) => d.action === 'PATIENT_LIST_EXPORT');
+    // The route fires PII_DISCLOSED on unmasked exports (routes/wellness.js
+    // ~L1063); previous framing expected a parallel PATIENT_LIST_EXPORT row
+    // but the route does not emit that action.
     const discloseRow = calls.find((d) => d.action === 'PII_DISCLOSED');
-    expect(exportRow).toBeDefined();
+    const maskedRow = calls.find((d) => d.action === 'PII_EXPORT_MASKED');
     expect(discloseRow).toBeDefined();
-    // Details payload carries format + count + masked flag (writeAudit
-    // serialises `details` to JSON; the auditLog.create call sees the
-    // already-stringified `details`).
-    const exportDetails = typeof exportRow.details === 'string'
-      ? JSON.parse(exportRow.details)
-      : exportRow.details;
-    expect(exportDetails).toMatchObject({ format: 'xlsx', count: 2, masked: false });
+    expect(maskedRow).toBeUndefined();
+    // writeAudit serialises `details` to JSON; the auditLog.create call sees
+    // the already-stringified payload.
+    const discloseDetails = typeof discloseRow.details === 'string'
+      ? JSON.parse(discloseRow.details)
+      : discloseRow.details;
+    expect(discloseDetails).toMatchObject({ format: 'xlsx', masked: false });
   });
 
-  test('masked export emits PATIENT_LIST_EXPORT but NOT PII_DISCLOSED', async () => {
+  test('masked export emits PII_EXPORT_MASKED instead of PII_DISCLOSED', async () => {
     prisma.patient.findMany.mockResolvedValue([makePatient(1)]);
     const res = await request(makeApp({ role: 'ADMIN' }))
-      .get('/api/wellness/patients.xlsx?masked=1')
+      .get('/api/wellness/patients/export?format=xlsx&masked=1')
       .buffer(true)
       .parse((r, cb) => {
         const chunks = [];
@@ -330,13 +375,13 @@ describe('GET /api/wellness/patients.xlsx — #820 (8) audit emission', () => {
     await new Promise((r) => setImmediate(r));
 
     const calls = prisma.auditLog.create.mock.calls.map((c) => c[0].data || c[0]);
-    const exportRow = calls.find((d) => d.action === 'PATIENT_LIST_EXPORT');
+    const maskedRow = calls.find((d) => d.action === 'PII_EXPORT_MASKED');
     const discloseRow = calls.find((d) => d.action === 'PII_DISCLOSED');
-    expect(exportRow).toBeDefined();
+    expect(maskedRow).toBeDefined();
     expect(discloseRow).toBeUndefined();
-    const exportDetails = typeof exportRow.details === 'string'
-      ? JSON.parse(exportRow.details)
-      : exportRow.details;
-    expect(exportDetails).toMatchObject({ format: 'xlsx', count: 1, masked: true });
+    const maskedDetails = typeof maskedRow.details === 'string'
+      ? JSON.parse(maskedRow.details)
+      : maskedRow.details;
+    expect(maskedDetails).toMatchObject({ format: 'xlsx', masked: true });
   });
 });

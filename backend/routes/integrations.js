@@ -81,11 +81,42 @@ const AVAILABLE_INTEGRATIONS = [
 
 router.get("/", verifyToken, async (req, res) => {
   try {
-    const connected = await prisma.integration.findMany({
+    // #920 slice 35: ?fields=summary slim-shape opt-in. Mirrors slices 1-33.
+    // The default catalogue-overlay row carries marketing-card metadata
+    // (name, description, category) plus connectedAt for the Settings →
+    // Integrations UI. Status-check-only callers (cap banners, dashboard
+    // "any active integration?" probes, OwnerDashboard fetch at
+    // wellness/OwnerDashboard.jsx:147) don't need the metadata — they only
+    // read provider + isActive (+ id for routing-by-row). When the caller
+    // passes ?fields=summary we project to that minimal set. Opt-in additive
+    // — existing callers (no ?fields, or any non-exact value) get the full
+    // catalogue-overlay shape unchanged. The slim Prisma select also drops
+    // any potential sensitive columns (token, settings) from the underlying
+    // findMany even though the existing overlay never surfaces them — slim
+    // by default is defense-in-depth in case the overlay shape ever drifts.
+    const isSummary = req.query.fields === "summary";
+    const findManyArgs = {
       where: { tenantId: req.user.tenantId },
-    });
+    };
+    if (isSummary) {
+      findManyArgs.select = {
+        id: true,
+        provider: true,
+        isActive: true,
+      };
+    }
+    const connected = await prisma.integration.findMany(findManyArgs);
     const connectedMap = {};
     for (const c of connected) connectedMap[c.provider] = c;
+
+    if (isSummary) {
+      const integrations = AVAILABLE_INTEGRATIONS.map((a) => ({
+        provider: a.provider,
+        isActive: connectedMap[a.provider]?.isActive || false,
+        id: connectedMap[a.provider]?.id || null,
+      }));
+      return res.json(integrations);
+    }
 
     const integrations = AVAILABLE_INTEGRATIONS.map((a) => ({
       ...a,
@@ -319,12 +350,13 @@ router.get("/callified/auth-url", verifyToken, async (req, res) => {
     });
 
     // 4. Construct the Callified auth URL with token and redirect params
-    // For development: use local Callified at http://localhost:8001
-    // For production: set CALLIFIED_DASHBOARD_URL env var
+    // Default is the live Callified SSO endpoint so the integration works
+    // out of the box. Override per-deploy with CALLIFIED_DASHBOARD_URL env
+    // var, or per-tenant via Integration.settings.dashboardUrl (DB row).
     const callifiedBaseUrl =
       process.env.CALLIFIED_DASHBOARD_URL ||
       settings.dashboardUrl ||
-      "http://localhost:8001/api/auth/sso/jwt";
+      "https://testgo1.callified.ai/api/auth/sso/jwt";
     const redirect = settings.redirectPath || "/crm";
     const authUrl = `${callifiedBaseUrl}?token=${encodeURIComponent(token)}&redirect=${encodeURIComponent(redirect)}`;
 
@@ -392,7 +424,7 @@ router.get("/callified/sso", verifyToken, async (req, res) => {
     const callifiedBaseUrl =
       process.env.CALLIFIED_DASHBOARD_URL ||
       settings.dashboardUrl ||
-      "http://localhost:8001/api/auth/sso/jwt";
+      "https://testgo1.callified.ai/api/auth/sso/jwt";
     const redirect = settings.redirectPath || "/crm";
     const authUrl = `${callifiedBaseUrl}?token=${encodeURIComponent(token)}&redirect=${encodeURIComponent(redirect)}`;
 
@@ -401,6 +433,144 @@ router.get("/callified/sso", verifyToken, async (req, res) => {
   } catch (err) {
     console.error("[integrations] callified sso:", err);
     res.status(500).send("Failed to redirect to Callified");
+  }
+});
+
+// GET /api/integrations/callified/external-transcripts
+// Fetches campaign and transcript data from Callified's external API.
+// Uses API key from database (stored via Settings UI).
+router.get("/callified/external-transcripts", verifyToken, async (req, res) => {
+  try {
+    const callifiedApiUrl = process.env.CALLIFIED_API_URL;
+    const tenantId = req.user.tenantId;
+
+    if (!callifiedApiUrl) {
+      return res.status(503).json({
+        error: "Callified API URL not configured",
+        help: "Contact your administrator to configure Callified integration"
+      });
+    }
+
+    // Get API key from database (Integration table)
+    const integration = await prisma.integration.findFirst({
+      where: {
+        tenantId,
+        provider: "callified",
+        isActive: true
+      }
+    });
+
+    if (!integration?.token) {
+      return res.status(503).json({
+        error: "Callified integration not configured for your organization",
+        help: "Go to Settings → Integrations → Callified and add your Callified API key"
+      });
+    }
+
+    const callifiedApiKey = integration.token;
+
+    console.log(`[integrations] Fetching Callified transcripts for tenant ${tenantId}`);
+
+    // Call Callified API with X-API-Key header
+    const response = await fetch(`${callifiedApiUrl}/api/external/transcripts`, {
+      method: "GET",
+      headers: {
+        "X-API-Key": callifiedApiKey,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`[integrations] Callified transcripts error: ${response.status}`, errorText);
+
+      if (response.status === 401) {
+        return res.status(401).json({
+          error: "Callified API key is invalid",
+          help: "Update your API key in Settings → Integrations → Callified"
+        });
+      }
+
+      throw new Error(`Callified API returned ${response.status}: ${response.statusText}`);
+    }
+
+    const data = await response.json();
+
+    // Update lastUsed timestamp
+    await prisma.integration.update({
+      where: { id: integration.id },
+      data: { updatedAt: new Date() }
+    });
+
+    res.json(data);
+  } catch (err) {
+    console.error("[integrations] callified external-transcripts:", err.message);
+
+    let statusCode = 503;
+    if (err.message?.includes("401")) statusCode = 401;
+    else if (err.message?.includes("404")) statusCode = 404;
+
+    res.status(statusCode).json({
+      error: "Failed to fetch Callified data",
+      details: process.env.NODE_ENV === "development" ? err.message : "Callified endpoint not available"
+    });
+  }
+});
+
+// AdsGPT Configuration — get/update tenant's AdsGPT aMember login (username or email)
+// GET is public (all authenticated users can read to USE their tenant's config)
+// PUT requires ADMIN (only admins can modify the config)
+router.get("/adsgpt/config", verifyToken, async (req, res) => {
+  try {
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: req.user.tenantId },
+      select: { adsgptLogin: true }
+    });
+
+    if (!tenant) return res.status(404).json({ error: "Tenant not found" });
+
+    res.json({
+      adsgptLogin: tenant.adsgptLogin || "",
+      configured: !!tenant.adsgptLogin
+    });
+  } catch (err) {
+    console.error("[integrations] adsgpt/config GET:", err);
+    res.status(500).json({ error: "Failed to fetch AdsGPT configuration" });
+  }
+});
+
+router.put("/adsgpt/config", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
+  try {
+    const { adsgptLogin } = req.body;
+
+    if (!adsgptLogin || typeof adsgptLogin !== "string") {
+      return res.status(400).json({ error: "Username or email is required" });
+    }
+
+    const login = adsgptLogin.trim();
+
+    // Validate format: either email or username
+    const isEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(login);
+    const isUsername = /^[a-zA-Z0-9_.-]+$/.test(login) && login.length >= 3;
+
+    if (!isEmail && !isUsername) {
+      return res.status(400).json({ error: "Enter a valid username (3+ characters) or email address" });
+    }
+
+    const tenant = await prisma.tenant.update({
+      where: { id: req.user.tenantId },
+      data: { adsgptLogin: login },
+      select: { adsgptLogin: true, name: true }
+    });
+
+    res.json({
+      success: true,
+      adsgptLogin: tenant.adsgptLogin,
+      message: `AdsGPT login updated to "${tenant.adsgptLogin}"`
+    });
+  } catch (err) {
+    console.error("[integrations] adsgpt/config PUT:", err);
+    res.status(500).json({ error: "Failed to update AdsGPT configuration" });
   }
 });
 

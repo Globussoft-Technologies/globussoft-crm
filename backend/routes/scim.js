@@ -108,7 +108,7 @@ async function scimAuth(req, res, next) {
     const tokens = await prisma.scimToken.findMany({});
     let match = null;
     for (const t of tokens) {
-      // eslint-disable-next-line no-await-in-loop
+       
       if (await bcrypt.compare(presented, t.token)) {
         match = t;
         break;
@@ -205,8 +205,9 @@ router.post("/v2/Users", scimAuth, async (req, res) => {
       });
     }
 
-    // Reject duplicates
-    const existing = await prisma.user.findUnique({ where: { email: userName } });
+    // Reject duplicates within this tenant (email is unique per-tenant, not
+    // globally — so findFirst scoped to the SCIM token's tenant).
+    const existing = await prisma.user.findFirst({ where: { email: userName, tenantId: req.scim.tenantId } });
     if (existing) {
       return res.status(409).json({
         schemas: ["urn:ietf:params:scim:api:messages:2.0:Error"],

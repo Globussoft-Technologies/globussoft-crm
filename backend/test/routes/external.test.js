@@ -636,6 +636,157 @@ describe('POST /api/v1/external/calls', () => {
   });
 });
 
+describe('GET /api/v1/external/patients/lookup — S104 firstName + lastName parity', () => {
+  // S104 audit summary
+  // ──────────────────
+  //   The External Partner API (Callified.ai, Globus Phone, AdsGPT) does
+  //   NOT have a POST /patients or PATCH /patients handler — only GET
+  //   /patients/lookup + GET /patients/:id. So the "whitelist drops
+  //   firstName/lastName" bug class from S97/S100 doesn't apply to a
+  //   write path here (no write path exists).
+  //
+  //   The actual S104 gap was on the READ side: /patients/lookup's
+  //   explicit `select` clause omitted firstName + lastName. S100
+  //   populated those columns for new patients, but partner SDKs
+  //   polling this endpoint couldn't see them. /patients/:id uses
+  //   `include` (not select), so it returned all columns including
+  //   firstName/lastName by default — no fix needed there.
+  //
+  //   These cases pin: (a) the select now includes firstName +
+  //   lastName, (b) the response surfaces them when populated, (c)
+  //   legacy rows with null firstName/lastName still return cleanly
+  //   (no breakage for pre-S100 intake), (d) tenant scope unchanged,
+  //   (e) the no-auth gate still applies, (f) MISSING_QUERY when
+  //   neither phone nor email supplied.
+
+  test('select includes firstName + lastName (regression pin against S100 drop)', async () => {
+    prisma.patient.findFirst.mockResolvedValueOnce({
+      id: 1001,
+      name: 'Anjali Sharma',
+      firstName: 'Anjali',
+      lastName: 'Sharma',
+      email: 'anjali@example.com',
+      phone: '+919811234567',
+      gender: 'F',
+      dob: new Date('1990-06-15'),
+      source: 'callified',
+      locationId: 1,
+      createdAt: new Date('2026-06-01T00:00:00Z'),
+    });
+    const app = makeApp();
+
+    const res = await request(app)
+      .get('/api/v1/external/patients/lookup')
+      .query({ phone: '+919811234567' });
+
+    expect(res.status).toBe(200);
+
+    // The select clause MUST include firstName + lastName so partner
+    // SDKs see them. This is the regression-pin: if a future refactor
+    // drops these from the select, this test catches it.
+    const selectArgs = prisma.patient.findFirst.mock.calls[0][0].select;
+    expect(selectArgs).toHaveProperty('firstName', true);
+    expect(selectArgs).toHaveProperty('lastName', true);
+    expect(selectArgs).toHaveProperty('name', true); // canonical stays too
+  });
+
+  test('returns firstName + lastName when populated (S100 intake flow)', async () => {
+    prisma.patient.findFirst.mockResolvedValueOnce({
+      id: 1002,
+      name: 'Priya Iyer',
+      firstName: 'Priya',
+      lastName: 'Iyer',
+      email: 'priya@example.com',
+      phone: '+919900112233',
+      gender: 'F',
+      dob: null,
+      source: 'web',
+      locationId: 1,
+      createdAt: new Date(),
+    });
+    const app = makeApp();
+
+    const res = await request(app)
+      .get('/api/v1/external/patients/lookup')
+      .query({ phone: '+919900112233' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.id).toBe(1002);
+    expect(res.body.name).toBe('Priya Iyer');
+    expect(res.body.firstName).toBe('Priya');
+    expect(res.body.lastName).toBe('Iyer');
+  });
+
+  test('returns null firstName + null lastName for legacy rows (pre-S100 intake)', async () => {
+    prisma.patient.findFirst.mockResolvedValueOnce({
+      id: 1003,
+      name: 'Legacy Patient',
+      firstName: null,
+      lastName: null,
+      email: 'legacy@example.com',
+      phone: '+919811000000',
+      gender: null,
+      dob: null,
+      source: null,
+      locationId: null,
+      createdAt: new Date('2024-01-01T00:00:00Z'),
+    });
+    const app = makeApp();
+
+    const res = await request(app)
+      .get('/api/v1/external/patients/lookup')
+      .query({ email: 'legacy@example.com' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.id).toBe(1003);
+    expect(res.body.name).toBe('Legacy Patient');
+    expect(res.body.firstName).toBeNull();
+    expect(res.body.lastName).toBeNull();
+  });
+
+  test('tenant-scoped lookup (no cross-tenant leak)', async () => {
+    prisma.patient.findFirst.mockResolvedValueOnce(null);
+    externalAuthState.tenantId = 99; // override default
+    externalAuthState.tenant = { ...externalAuthState.tenant, id: 99 };
+    const app = makeApp();
+
+    const res = await request(app)
+      .get('/api/v1/external/patients/lookup')
+      .query({ phone: '+919811234567' });
+
+    expect(res.status).toBe(404); // not found (correctly scoped to tenant 99)
+
+    // The where clause MUST include tenantId, never the patient row
+    // from a different tenant.
+    const whereArgs = prisma.patient.findFirst.mock.calls[0][0].where;
+    expect(whereArgs.tenantId).toBe(99);
+    expect(whereArgs.phone).toEqual({ contains: '9811234567' });
+  });
+
+  test('no phone + no email → 400 "phone or email required"', async () => {
+    const app = makeApp();
+
+    const res = await request(app).get('/api/v1/external/patients/lookup');
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/phone or email required/i);
+    expect(prisma.patient.findFirst).not.toHaveBeenCalled();
+  });
+
+  test('auth gate fires when shim unauthorized → 401', async () => {
+    externalAuthState.unauthorize = true;
+    const app = makeApp();
+
+    const res = await request(app)
+      .get('/api/v1/external/patients/lookup')
+      .query({ phone: '+919811234567' });
+
+    expect(res.status).toBe(401);
+    expect(res.body.error).toMatch(/X-API-Key/i);
+    expect(prisma.patient.findFirst).not.toHaveBeenCalled();
+  });
+});
+
 describe('GET /api/v1/external/services + appointments — catalog shape', () => {
   test('GET /services → { data, total } with tenantId + isActive filter', async () => {
     prisma.service.findMany.mockResolvedValueOnce([

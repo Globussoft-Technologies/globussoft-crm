@@ -434,7 +434,7 @@ describe('POST /api/booking-pages/:id/cancel/:bookingId', () => {
 
 describe('GET /api/booking-pages/public/:slug (no auth)', () => {
   test('happy path WITHOUT auth returns 14-day slot summary + public payload', async () => {
-    prisma.bookingPage.findUnique.mockResolvedValue({
+    prisma.bookingPage.findFirst.mockResolvedValue({
       id: 50,
       slug: 'discovery-call-abc',
       title: 'Discovery Call',
@@ -479,7 +479,7 @@ describe('GET /api/booking-pages/public/:slug (no auth)', () => {
   });
 
   test('inactive page → 404', async () => {
-    prisma.bookingPage.findUnique.mockResolvedValue({
+    prisma.bookingPage.findFirst.mockResolvedValue({
       id: 50, slug: 'foo', isActive: false, availability: DEFAULT_AVAILABILITY,
     });
     const res = await request(makeApp())
@@ -488,7 +488,7 @@ describe('GET /api/booking-pages/public/:slug (no auth)', () => {
   });
 
   test('unknown slug → 404', async () => {
-    prisma.bookingPage.findUnique.mockResolvedValue(null);
+    prisma.bookingPage.findFirst.mockResolvedValue(null);
     const res = await request(makeApp())
       .get('/api/booking-pages/public/missing-slug');
     expect(res.status).toBe(404);
@@ -499,7 +499,7 @@ describe('GET /api/booking-pages/public/:slug (no auth)', () => {
 
 describe('GET /api/booking-pages/public/:slug/slots (no auth)', () => {
   test('happy path returns slots for a given date', async () => {
-    prisma.bookingPage.findUnique.mockResolvedValue({
+    prisma.bookingPage.findFirst.mockResolvedValue({
       id: 50,
       slug: 'discovery-call-abc',
       durationMins: 30,
@@ -524,7 +524,7 @@ describe('GET /api/booking-pages/public/:slug/slots (no auth)', () => {
   });
 
   test('missing date query param → 400', async () => {
-    prisma.bookingPage.findUnique.mockResolvedValue({
+    prisma.bookingPage.findFirst.mockResolvedValue({
       id: 50, slug: 'discovery-call-abc', availability: DEFAULT_AVAILABILITY, isActive: true,
     });
     const res = await request(makeApp())
@@ -534,7 +534,7 @@ describe('GET /api/booking-pages/public/:slug/slots (no auth)', () => {
   });
 
   test('malformed date query (not YYYY-MM-DD) → 400', async () => {
-    prisma.bookingPage.findUnique.mockResolvedValue({
+    prisma.bookingPage.findFirst.mockResolvedValue({
       id: 50, slug: 'discovery-call-abc', availability: DEFAULT_AVAILABILITY, isActive: true,
     });
     const res = await request(makeApp())
@@ -547,7 +547,7 @@ describe('GET /api/booking-pages/public/:slug/slots (no auth)', () => {
 
 describe('POST /api/booking-pages/public/:slug/book (no auth)', () => {
   test('happy path: creates booking + returns confirmation envelope', async () => {
-    prisma.bookingPage.findUnique.mockResolvedValue({
+    prisma.bookingPage.findFirst.mockResolvedValue({
       id: 50,
       slug: 'discovery-call-abc',
       durationMins: 30,
@@ -593,7 +593,7 @@ describe('POST /api/booking-pages/public/:slug/book (no auth)', () => {
   });
 
   test('missing contactName → 400', async () => {
-    prisma.bookingPage.findUnique.mockResolvedValue({
+    prisma.bookingPage.findFirst.mockResolvedValue({
       id: 50, slug: 'foo', durationMins: 30, bufferMins: 0,
       availability: DEFAULT_AVAILABILITY, isActive: true, tenantId: 1,
     });
@@ -608,7 +608,7 @@ describe('POST /api/booking-pages/public/:slug/book (no auth)', () => {
   });
 
   test('past scheduledAt → 400 "must be in the future"', async () => {
-    prisma.bookingPage.findUnique.mockResolvedValue({
+    prisma.bookingPage.findFirst.mockResolvedValue({
       id: 50, slug: 'foo', durationMins: 30, bufferMins: 0,
       availability: DEFAULT_AVAILABILITY, isActive: true, tenantId: 1,
     });
@@ -626,7 +626,7 @@ describe('POST /api/booking-pages/public/:slug/book (no auth)', () => {
   });
 
   test('invalid scheduledAt string → 400 "Invalid scheduledAt"', async () => {
-    prisma.bookingPage.findUnique.mockResolvedValue({
+    prisma.bookingPage.findFirst.mockResolvedValue({
       id: 50, slug: 'foo', durationMins: 30, bufferMins: 0,
       availability: DEFAULT_AVAILABILITY, isActive: true, tenantId: 1,
     });
@@ -642,7 +642,7 @@ describe('POST /api/booking-pages/public/:slug/book (no auth)', () => {
   });
 
   test('scheduledAt not aligned to a valid slot → 409 "no longer available"', async () => {
-    prisma.bookingPage.findUnique.mockResolvedValue({
+    prisma.bookingPage.findFirst.mockResolvedValue({
       id: 50, slug: 'foo', durationMins: 30, bufferMins: 0,
       availability: DEFAULT_AVAILABILITY, isActive: true, tenantId: 1,
     });
@@ -666,7 +666,7 @@ describe('POST /api/booking-pages/public/:slug/book (no auth)', () => {
   });
 
   test('inactive page → 404 (public book gated on isActive)', async () => {
-    prisma.bookingPage.findUnique.mockResolvedValue({
+    prisma.bookingPage.findFirst.mockResolvedValue({
       id: 50, slug: 'foo', isActive: false, availability: DEFAULT_AVAILABILITY,
     });
     const res = await request(makeApp())
@@ -678,5 +678,110 @@ describe('POST /api/booking-pages/public/:slug/book (no auth)', () => {
       });
     expect(res.status).toBe(404);
     expect(prisma.booking.create).not.toHaveBeenCalled();
+  });
+});
+
+// ─── GET / ?fields=summary slim-shape opt-in (#920 slice 40) ──────────
+//
+// Mirrors slices 1-39 (landing-pages, signatures, brand-kits, integrations,
+// document-templates, …). The default list returns the full BookingPage
+// row including heavy @db.Text columns (availability JSON, logoUrl,
+// heroImageUrl, heroSubheadline, featuredServiceIds, hoursJson, description
+// blob). Picker / dropdown UI doesn't need any of that — only id + slug +
+// title + isActive + durationMins + bufferMins + createdAt + updatedAt +
+// the bookingCount roll-up. ?fields=summary projects to that minimal set.
+// Opt-in additive — back-compat for the BookingPages.jsx library page.
+describe('GET /api/booking-pages ?fields=summary (slim-shape)', () => {
+  test('?fields=summary triggers slim Prisma select projection', async () => {
+    prisma.bookingPage.findMany.mockResolvedValue([
+      { id: 1, slug: 'sales-call-abc', title: 'Sales Call', isActive: true, durationMins: 30, bufferMins: 0, createdAt: new Date(), updatedAt: new Date() },
+    ]);
+    const res = await request(makeApp())
+      .get('/api/booking-pages?fields=summary')
+      .set('Authorization', `Bearer ${tokenFor()}`);
+    expect(res.status).toBe(200);
+    const findManyArgs = prisma.bookingPage.findMany.mock.calls[0][0];
+    // Slim select drops heavy availability / logoUrl / heroImageUrl /
+    // heroSubheadline / featuredServiceIds / hoursJson / description.
+    expect(findManyArgs.select).toBeDefined();
+    expect(findManyArgs.select.availability).toBeUndefined();
+    expect(findManyArgs.select.logoUrl).toBeUndefined();
+    expect(findManyArgs.select.heroImageUrl).toBeUndefined();
+    expect(findManyArgs.select.heroSubheadline).toBeUndefined();
+    expect(findManyArgs.select.featuredServiceIds).toBeUndefined();
+    expect(findManyArgs.select.hoursJson).toBeUndefined();
+    expect(findManyArgs.select.description).toBeUndefined();
+    // Picker-essential keys present.
+    expect(findManyArgs.select.id).toBe(true);
+    expect(findManyArgs.select.slug).toBe(true);
+    expect(findManyArgs.select.title).toBe(true);
+    expect(findManyArgs.select.isActive).toBe(true);
+    expect(findManyArgs.select.durationMins).toBe(true);
+    expect(findManyArgs.select.bufferMins).toBe(true);
+  });
+
+  test('default list (no ?fields) returns full row shape (no select projection)', async () => {
+    prisma.bookingPage.findMany.mockResolvedValue([
+      { id: 1, slug: 'sales-call-abc', title: 'Sales Call', tenantId: 1, availability: DEFAULT_AVAILABILITY, logoUrl: '/uploads/booking-pages/logo.png', heroImageUrl: '/uploads/booking-pages/hero.png' },
+    ]);
+    const res = await request(makeApp())
+      .get('/api/booking-pages')
+      .set('Authorization', `Bearer ${tokenFor()}`);
+    expect(res.status).toBe(200);
+    const findManyArgs = prisma.bookingPage.findMany.mock.calls[0][0];
+    // Back-compat: no select arg → full row shape.
+    expect(findManyArgs.select).toBeUndefined();
+    // Heavy fields surface to caller when present on the row.
+    expect(res.body[0].availability).toBe(DEFAULT_AVAILABILITY);
+    expect(res.body[0].logoUrl).toBe('/uploads/booking-pages/logo.png');
+    expect(res.body[0].heroImageUrl).toBe('/uploads/booking-pages/hero.png');
+  });
+
+  test('?fields=summary still attaches bookingCount roll-up to each row', async () => {
+    prisma.bookingPage.findMany.mockResolvedValue([
+      { id: 1, slug: 'a', title: 'A', isActive: true, durationMins: 30, bufferMins: 0 },
+      { id: 2, slug: 'b', title: 'B', isActive: true, durationMins: 60, bufferMins: 5 },
+    ]);
+    prisma.booking.groupBy.mockResolvedValue([
+      { bookingPageId: 1, _count: { _all: 7 } },
+      { bookingPageId: 2, _count: { _all: 0 } },
+    ]);
+    const res = await request(makeApp())
+      .get('/api/booking-pages?fields=summary')
+      .set('Authorization', `Bearer ${tokenFor()}`);
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(2);
+    expect(res.body[0]).toMatchObject({ id: 1, bookingCount: 7 });
+    expect(res.body[1]).toMatchObject({ id: 2, bookingCount: 0 });
+    // groupBy still tenant-scoped to status≠CANCELED.
+    const groupByArgs = prisma.booking.groupBy.mock.calls[0][0];
+    expect(groupByArgs.where.tenantId).toBe(1);
+    expect(groupByArgs.where.status).toEqual({ not: 'CANCELED' });
+  });
+
+  test('?fields=summary preserves tenant scoping on the findMany where clause', async () => {
+    prisma.bookingPage.findMany.mockResolvedValue([]);
+    const res = await request(makeApp())
+      .get('/api/booking-pages?fields=summary')
+      .set('Authorization', `Bearer ${tokenFor({ tenantId: 42 })}`);
+    expect(res.status).toBe(200);
+    const findManyArgs = prisma.bookingPage.findMany.mock.calls[0][0];
+    expect(findManyArgs.where).toEqual({ tenantId: 42 });
+    expect(findManyArgs.orderBy).toEqual({ createdAt: 'desc' });
+  });
+
+  test('non-exact ?fields value falls back to full row shape (opt-in additive)', async () => {
+    prisma.bookingPage.findMany.mockResolvedValue([
+      { id: 9, title: 'Mistyped Fields Param', tenantId: 1 },
+    ]);
+    const res = await request(makeApp())
+      .get('/api/booking-pages?fields=SUMMARY')  // wrong case
+      .set('Authorization', `Bearer ${tokenFor()}`);
+    expect(res.status).toBe(200);
+    const findManyArgs = prisma.bookingPage.findMany.mock.calls[0][0];
+    // Only the exact "summary" sentinel triggers the projection. Any
+    // other value (including case-different / "minimal" / "slim") gets
+    // the back-compat full row shape.
+    expect(findManyArgs.select).toBeUndefined();
   });
 });

@@ -168,7 +168,18 @@ export default function Diagnostics() {
                       </Link>
                     </td>
                     <td style={td}><span style={brandBadge}>{d.subBrand}</span></td>
-                    <td style={td}>{d.contactId ? `#${d.contactId}` : '—'}</td>
+                    <td style={td}>
+                      {d.contact?.name || d.contact?.email
+                        ? (
+                          <span>
+                            {d.contact.name || d.contact.email}
+                            {d.contact.name && d.contact.email && (
+                              <span style={{ display: 'block', fontSize: 11, color: 'var(--text-secondary)' }}>{d.contact.email}</span>
+                            )}
+                          </span>
+                        )
+                        : (d.contactId ? `#${d.contactId}` : '—')}
+                    </td>
                     <td style={td}>{d.score !== null ? Number(d.score).toFixed(2) : '—'}</td>
                     <td style={td}>
                       {d.classificationLabel || d.classification || '—'}

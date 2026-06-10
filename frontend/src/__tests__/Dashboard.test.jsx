@@ -35,6 +35,7 @@ vi.mock('recharts', async () => {
 
 import { fetchApi } from '../utils/api';
 import Dashboard from '../pages/Dashboard';
+import { AuthContext } from '../App';
 
 // Force USD locale so formatMoney output is stable regardless of host
 // localStorage state. Other suites may have written 'tenant' to localStorage
@@ -48,11 +49,21 @@ beforeEach(() => {
   }
 });
 
-function renderDashboard() {
+// These suite-level tests pin the ADMIN variant of the Dashboard (Closed
+// Revenue / Total Contacts / Recent Deals — the org-wide view). The page
+// now branches its labels + widgets on `user.role` from AuthContext, so
+// we wrap with a Provider that supplies an ADMIN user. Pre-fix this suite
+// silently relied on the Dashboard's role-fallback defaulting to ADMIN —
+// that fallback was changed to 'USER' (least-privilege) after a security
+// review, so explicit ADMIN context is now required for these assertions.
+function renderDashboard(userOverride) {
+  const authValue = { user: { id: 1, role: 'ADMIN', email: 'admin@test.com' }, ...(userOverride || {}) };
   return render(
-    <MemoryRouter>
-      <Dashboard />
-    </MemoryRouter>
+    <AuthContext.Provider value={authValue}>
+      <MemoryRouter>
+        <Dashboard />
+      </MemoryRouter>
+    </AuthContext.Provider>
   );
 }
 

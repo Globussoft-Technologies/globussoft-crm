@@ -1,10 +1,12 @@
 import {
+  Fragment,
   useContext,
   useState,
   useRef,
   useLayoutEffect,
   useEffect,
   useCallback,
+  useMemo,
 } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import { io } from "socket.io-client";
@@ -31,13 +33,14 @@ import {
   FileText,
   FileSpreadsheet,
   FolderKanban,
-  DollarSign,
+  IndianRupee,
   Trophy,
   ShoppingBag,
   Radio,
   PanelTop,
   Calendar,
   Shield,
+  ShieldCheck,
   // #917 slice 5 — CSP Violations admin nav entry icon.
   ShieldAlert,
   ScrollText,
@@ -45,6 +48,7 @@ import {
   TrendingUp,
   BookOpen,
   PenTool,
+  Pill,
   ClipboardList,
   MessageSquare,
   Eye,
@@ -71,12 +75,11 @@ import {
   Truck,
   ArrowDownToLine,
   Recycle,
+  Package,
   // Wave 2 Agent II — POS / Cash Register / Shift / Sale
   Calculator,
-  // Zylu-Gap #770/#779/#780/#781 — Cash Register admin
-  Banknote,
-  // Zylu-Gap #800 (WA-005) — Blocked WhatsApp numbers admin entry
-  Ban,
+  // Used by the dynamic page-catalog → sidebar icon lookup for /portal
+  UserCircle,
   // Cron PRD Priority A #1 — LLM Spend admin dashboard
   Activity,
   // #898 — Campaigns sidebar surfacing (Email / SMS / Push)
@@ -107,8 +110,6 @@ import {
   // /api/booking-expedia (backend commit bb33cbe, tick #105). 4th and
   // FINAL cap-consumer UI in the wrapper-route series.
   BedDouble,
-  // Zylu-Gap #933 — Products admin entry (precursor for #816 CSV slice).
-  Package,
   // Arc 2 Travel Gap #907 slice 5/N — SightseeingMaster nav entry icon.
   // Sightseeing is framed as "the 6th category in Cost Master" per #907,
   // so the entry sits adjacent to Cost Master in renderTravelNav.
@@ -117,16 +118,21 @@ import {
   // Reusable itinerary template scaffolds — placed adjacent to Sightseeing
   // Master because both are #907 admin pages.
   LayoutTemplate,
+  // S49 (TRAVEL_BIG_SCOPE_BACKLOG) — QuoteTemplates nav entry icon. Stack
+  // of templates motif; sibling to FileText (Quotes). ADMIN+MANAGER gated.
+  FileStack,
+  // S55 (TRAVEL_BIG_SCOPE_BACKLOG) — CancellationPolicies nav entry icon.
+  // Ban-circle motif matches cancellation / refund semantics. ADMIN+MANAGER
+  // gated to mirror the backend POST/PATCH RBAC posture.
+  Ban,
 } from "lucide-react";
 import { AuthContext } from "../App";
 import { fetchApi } from "../utils/api";
-import { launchAdsGptAs, ADSGPT_DASHBOARD, ADSGPT_DEMO_LOGIN } from '../utils/adsgpt';
-// #832 — Callified link is now an internal NavLink to /wellness/callified
-// (the embedded iframe page). The launchCallifiedSSO util is still imported
-// by that page + by OwnerDashboard's "Open Callified" card (which now
-// navigates internally too), so the import is no longer needed in Sidebar.
-import { useNotify } from '../utils/notify';
-import { useActiveSubBrand } from '../utils/subBrand';
+import { launchAdsGptAs, ADSGPT_DASHBOARD } from "../utils/adsgpt";
+import { launchCallifiedSSO } from "../utils/callified";
+import { useNotify } from "../utils/notify";
+import { useActiveSubBrand } from "../utils/subBrand";
+import { usePermissions } from "../hooks/usePermissions";
 
 // T2.1: focus trap selector. Limited to actually-focusable elements inside the
 // drawer (anchors, buttons, [tabindex]). Used by the focus-trap effect below
@@ -146,11 +152,13 @@ const Sidebar = ({
   const role = user?.role || "USER";
   const isAdmin = role === "ADMIN";
   const isManager = role === "ADMIN" || role === "MANAGER";
+  // Customer-tier = the low-privilege end-customer roles. Drives the
+  // `customerOnly` page-catalog flag (e.g. Buy Gift Cards) so admin /
+  // manager / staff roles don't see customer-facing storefront entries
+  // in their nav. CUSTOMER is the self-service-registered role; USER is
+  // the default low-privilege end-user role.
+  const isCustomerTier = role === "USER" || role === "CUSTOMER";
   const wellnessRole = user?.wellnessRole || null;
-
-  // Parse User.subBrandAccess (stored as JSON-string array on the User row).
-  // null/empty/garbage => null = "no restriction" = all sub-brands visible.
-  // Admins always see all sub-brands regardless of this column.
   const subBrandAccess = (() => {
     if (isAdmin) return null;
     const raw = user?.subBrandAccess;
@@ -159,8 +167,20 @@ const Sidebar = ({
       const arr = JSON.parse(raw);
       if (!Array.isArray(arr) || arr.length === 0) return null;
       return arr;
-    } catch { return null; }
+    } catch {
+      return null;
+    }
   })();
+  // RBAC: fine-grained permission gate for new sidebar entries. Legacy
+  // adminOnly / managerOnly / wellnessRoles continue to work as before;
+  // requiredPermission stacks on top — only hides an entry once permissions
+  // have RESOLVED (permissionsReady) so admin users don't see a flash of an
+  // empty sidebar during the first 100ms of /auth/me/permissions resolving.
+  const {
+    hasPermission,
+    isReady: permissionsReady,
+    permissions,
+  } = usePermissions();
   const isWellness = tenant?.vertical === "wellness";
   const isTravel = tenant?.vertical === "travel";
   const location = useLocation();
@@ -308,6 +328,24 @@ const Sidebar = ({
     if (refreshCountsRef.current) refreshCountsRef.current();
   }, []);
 
+  // Simple debounce helper for socket events (v3.7.16 perf fix)
+  // Prevents rapid socket events (e.g. bulk import) from triggering
+  // 50+ NavLink re-evaluations. Debounce horizon is 300ms — batches
+  // events closer than 300ms apart into one re-render.
+  const createDebouncedSetter = (delay = 300) => {
+    let timeoutId = null;
+    let pendingUpdates = null;
+    return (updateFn) => {
+      pendingUpdates = updateFn;
+      clearTimeout(timeoutId);
+      timeoutId = setTimeout(() => {
+        if (pendingUpdates) pendingUpdates();
+        pendingUpdates = null;
+      }, delay);
+    };
+  };
+  const debouncedSetCounts = useRef(createDebouncedSetter(300)).current;
+
   useEffect(() => {
     if (!user) return;
     refreshCounts();
@@ -317,27 +355,40 @@ const Sidebar = ({
 
     // Live socket bumps — using the same single-namespace io('/') pattern as
     // NotificationBell. Failures are silent so the polling fallback owns
-    // correctness.
+    // correctness. (v3.7.16: socket events are now debounced to reduce
+    // re-renders from rapid bulk imports).
     const socket = io("/", { reconnection: false, timeout: 5000 });
     socket.on("connect_error", () => {});
     socket.on("error", () => {});
     socket.on("marketplace_lead_imported", () =>
-      setCounts((c) => ({ ...c, leads: c.leads + 1 })),
+      debouncedSetCounts(() =>
+        setCounts((c) => ({ ...c, leads: c.leads + 1 })),
+      ),
     );
     socket.on("marketplace_lead_new", (p) =>
-      setCounts((c) => ({ ...c, leads: c.leads + (p?.count || 1) })),
+      debouncedSetCounts(() =>
+        setCounts((c) => ({ ...c, leads: c.leads + (p?.count || 1) })),
+      ),
     );
     socket.on("email_received", () =>
-      setCounts((c) => ({ ...c, inbox: c.inbox + 1 })),
+      debouncedSetCounts(() =>
+        setCounts((c) => ({ ...c, inbox: c.inbox + 1 })),
+      ),
     );
     socket.on("lead_created", () =>
-      setCounts((c) => ({ ...c, leads: c.leads + 1 })),
+      debouncedSetCounts(() =>
+        setCounts((c) => ({ ...c, leads: c.leads + 1 })),
+      ),
     );
     socket.on("task_created", () =>
-      setCounts((c) => ({ ...c, tasks: c.tasks + 1 })),
+      debouncedSetCounts(() =>
+        setCounts((c) => ({ ...c, tasks: c.tasks + 1 })),
+      ),
     );
     socket.on("ticket_created", () =>
-      setCounts((c) => ({ ...c, tickets: c.tickets + 1 })),
+      debouncedSetCounts(() =>
+        setCounts((c) => ({ ...c, tickets: c.tickets + 1 })),
+      ),
     );
     // Generic invalidation event — any module can emit and we re-fetch.
     socket.on("sidebar_counts_changed", () => refreshCounts());
@@ -363,17 +414,17 @@ const Sidebar = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id, refreshCounts]);
 
-  // #625: re-fetch sidebar counters when the route changes. Without this,
-  // a user who marks a task complete on /tasks navigates to /contacts and
-  // sees the stale pre-mutation count in the sidebar (the original mount
-  // fetch + 60s polling alone aren't enough for cross-page mutations that
-  // don't have a backend socket emit). Cheap — one fetch per navigation,
-  // and refreshCounts itself is a stable useCallback so it won't loop.
-  useEffect(() => {
-    if (!user) return;
-    refreshCounts();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [location.pathname]);
+  // #625 (FIXED v3.7.16): re-fetch sidebar counters when the route changes.
+  // Previous logic: (original mount fetch + 60s polling) + route-change fetch.
+  // Issue: 4 unnecessary API calls on every navigation, causing sidebar lag.
+  // New logic: 60s polling + socket events cover normal use cases. Cross-page
+  // mutations (mark task complete, navigate away) can wait for the next 60s
+  // tick or socket event. Clients who need immediate visibility use the
+  // window.dispatchEvent('sidebar:counts-changed') invalidation mechanism
+  // (line 298) which is already wired in forms/modals. Removing this effect
+  // eliminates ~4 requests per navigation.
+  // Disabled to improve sidebar performance — 60s safety interval covers stale reads.
+  // If stale reads resurface, re-enable with higher debounce (5s instead of immediate).
 
   // #151: persist sidebar scroll across re-renders. The browser usually does this
   // for free, but route-driven re-renders sometimes cause the nav to reset to top
@@ -386,7 +437,25 @@ const Sidebar = ({
     if (navRef.current && scrollRef.current > 0) {
       navRef.current.scrollTop = scrollRef.current;
     }
-  });
+  }, []);
+  // Self-heal a stale/invalid active sub-brand. The selection persists in
+  // sessionStorage, which SURVIVES a logout→login in the SAME tab — so an
+  // admin who picked "RFU", logged out, and logged back in as a TMC-only
+  // manager would inherit activeSubBrand="rfu". Since that manager can't
+  // access RFU, the brand-scoped nav would then hide ALL their own items
+  // (including "TMC Trips") and the dashboard would scope to a brand they
+  // don't own. When the persisted brand isn't in the current user's access
+  // set, reset it to "All". Travel-only; generic/wellness never set a brand.
+  useEffect(() => {
+    if (
+      isTravel &&
+      activeSubBrand &&
+      subBrandAccess !== null &&
+      !subBrandAccess.includes(activeSubBrand)
+    ) {
+      setActiveSubBrand(null);
+    }
+  }, [isTravel, activeSubBrand, subBrandAccess, setActiveSubBrand]);
   const brand = tenant?.name || "Globussoft";
   const logoUrl = tenant?.logoUrl || null;
   const brandColor = tenant?.brandColor || null;
@@ -410,18 +479,56 @@ const Sidebar = ({
     const tail = current[target.length];
     return tail === "/" || tail === undefined;
   };
-  const Link = ({ to, icon: Icon, label, adminOnly, managerOnly, wellnessRoles, count, matchPaths = [] }) => {
+  // PERF: keep these inner components' identities STABLE across re-renders.
+  // Defining `const Link = (...) => {...}` inside the function body creates a
+  // fresh function reference every render. React treats fresh identities as
+  // a DIFFERENT component type and unmounts + remounts the entire subtree —
+  // ~50-60 NavLinks for a wellness admin, each with its own internal
+  // useLocation subscription + className evaluation. With Sidebar
+  // re-rendering on every route change, socket counter tick, permissions
+  // resolve, AdsGPT config fetch, and mobileOpen toggle, that's the
+  // dominant source of sidebar lag. Fix: ref-backed impls + useMemo([], …)
+  // so the component identity React sees is stable, while the closure-
+  // captured state (isAdmin, location, hasPermission, …) stays live.
+  const linkImplRef = useRef(null);
+  linkImplRef.current = ({
+    to,
+    icon: Icon,
+    label,
+    adminOnly,
+    managerOnly,
+    wellnessRoles,
+    requiredPermission,
+    count,
+    matchPaths = [],
+  }) => {
     if (adminOnly && !isAdmin) return null;
     if (managerOnly && !isManager) return null;
     // wellnessRoles gates a link to specific wellnessRole values. Managers
     // and admins always pass through (mirrors the server's verifyWellnessRole
     // gate which whitelists admin/manager alongside the named clinical roles).
-    if (wellnessRoles && !isManager && !wellnessRoles.includes(wellnessRole)) return null;
+    if (wellnessRoles && !isManager && !wellnessRoles.includes(wellnessRole))
+      return null;
+    // RBAC permission gate. Only HIDE once permissions have resolved so admin
+    // users don't see a flash of an empty sidebar during the first frame of
+    // /auth/me/permissions resolving. After the answer arrives, an entry with
+    // `requiredPermission={{module, action}}` is hidden when the user lacks
+    // that grant. Stacks ON TOP of the legacy gates above — if a link sets
+    // both `adminOnly` and `requiredPermission`, both must pass.
+    if (
+      requiredPermission &&
+      permissionsReady &&
+      !hasPermission(requiredPermission.module, requiredPermission.action)
+    ) {
+      return null;
+    }
     return (
       <NavLink
         to={to}
         className={({ isActive }) => {
-          const isPathMatch = matchPaths.some(path => location.pathname === path);
+          const isPathMatch = matchPaths.some(
+            (path) => location.pathname === path,
+          );
           const isSegmentMatch = segmentMatches(location.pathname, to);
           const active = isActive || isPathMatch || isSegmentMatch;
           return `nav-link ${active ? "active" : ""}`;
@@ -437,8 +544,16 @@ const Sidebar = ({
       </NavLink>
     );
   };
+  const Link = useMemo(
+    () =>
+      function Link(props) {
+        return linkImplRef.current(props);
+      },
+    [],
+  );
 
-  const ExtLink = ({ href, icon: Icon, label }) => (
+  const extLinkImplRef = useRef(null);
+  extLinkImplRef.current = ({ href, icon: Icon, label }) => (
     <a
       href={href}
       target="_blank"
@@ -450,21 +565,91 @@ const Sidebar = ({
       <ExternalLink size={14} style={{ opacity: 0.6 }} />
     </a>
   );
+  const ExtLink = useMemo(
+    () =>
+      function ExtLink(props) {
+        return extLinkImplRef.current(props);
+      },
+    [],
+  );
+
+  // Accessible pages — fetched from /api/pages/me (the server's
+  // intersection of the page catalog with the signed-in user's effective
+  // permissions). The wellness sidebar renders EVERY visible item from
+  // this list, so when admin grants/revokes a permission via the Roles
+  // & Permissions matrix the sidebar updates without a JSX change and
+  // without any role-string check anywhere.
+  //
+  // Re-fetch triggers:
+  //   • on mount (initial state)
+  //   • when the user's permission list changes (handles same-user perm
+  //     edits — usePermissions' module-level cache is invalidated by
+  //     RolesAdmin after every PUT, which propagates a new `permissions`
+  //     array here and re-fires this effect)
+  //   • on the `sidebar:pages-changed` window event — cross-component
+  //     invalidation channel for any code that mutates permissions
+  //     (RolesAdmin, the assign-roles flow on Staff, etc.) and wants
+  //     the sidebar to pick up the change immediately
+  const [accessiblePages, setAccessiblePages] = useState([]);
+  // Permissions from the shared usePermissions hook. Stable key avoids
+  // re-fetching on every render — only when the actual permission set
+  // changes (different membership, not same content).
+  const permissionsKey = (permissions || []).slice().sort().join("|");
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = () => {
+      fetchApi("/api/pages/me", { silent: true })
+        .then((res) => {
+          if (cancelled) return;
+          setAccessiblePages(Array.isArray(res?.pages) ? res.pages : []);
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setAccessiblePages([]);
+        });
+    };
+    refresh();
+    const onInvalidate = () => refresh();
+    window.addEventListener("sidebar:pages-changed", onInvalidate);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("sidebar:pages-changed", onInvalidate);
+    };
+  }, [permissionsKey]);
 
   // SSO-authenticated AdsGPT launcher — does the same token + Redis-key
   // handoff as the wellness OwnerDashboard card. If the SSO flow fails
   // (network / provider down), degrade to opening the plain dashboard URL
   // so the link is never dead.
   const [adsLoading, setAdsLoading] = useState(false);
-  const AdsGptLink = ({ icon: Icon = Sparkles, label = "AdsGPT" }) => {
+  const [adsgptLogin, setAdsgptLogin] = useState("");
+
+  useEffect(() => {
+    fetchApi("/api/integrations/adsgpt/config")
+      .then((res) => setAdsgptLogin(res.adsgptLogin || ""))
+      .catch(() => setAdsgptLogin(""));
+
+    // Listen for config updates from Settings page
+    const handleConfigUpdate = (event) => {
+      setAdsgptLogin(event.detail?.adsgptLogin || "");
+    };
+    window.addEventListener("adsgpt:config-updated", handleConfigUpdate);
+    return () =>
+      window.removeEventListener("adsgpt:config-updated", handleConfigUpdate);
+  }, []);
+
+  // Ref-backed impl + stable useMemo identity — same perf rationale as Link.
+  const adsGptImplRef = useRef(null);
+  adsGptImplRef.current = ({ icon: Icon = Sparkles, label = "AdsGPT" }) => {
     const handleClick = async (e) => {
       e.preventDefault();
       if (adsLoading) return;
       setAdsLoading(true);
       try {
-        await launchAdsGptAs(ADSGPT_DEMO_LOGIN);
+        await launchAdsGptAs(adsgptLogin);
       } catch (err) {
         console.error("[Sidebar] AdsGPT SSO error:", err.message);
+        notify.error(err.message || "Failed to open AdsGPT");
       } finally {
         setAdsLoading(false);
       }
@@ -475,8 +660,8 @@ const Sidebar = ({
         onClick={handleClick}
         disabled={adsLoading}
         className="nav-link"
-        aria-label={`Open AdsGPT as ${ADSGPT_DEMO_LOGIN}`}
-        title={`Open AdsGPT (${ADSGPT_DEMO_LOGIN}) in a new tab`}
+        aria-label="Open AdsGPT"
+        title="Open AdsGPT in a new tab"
         style={{
           ...navStyle,
           background: "transparent",
@@ -498,18 +683,73 @@ const Sidebar = ({
       </button>
     );
   };
+  const AdsGptLink = useMemo(
+    () =>
+      function AdsGptLink(props) {
+        return adsGptImplRef.current(props);
+      },
+    [],
+  );
 
-  // #832 — Callified link now navigates to the embedded `/wellness/callified`
-  // panel (iframe inside the CRM shell) instead of opening a new browser tab
-  // via launchCallifiedSSO. The pen-test framing was "external-link icon +
-  // new-tab launch reads as second-class compared with Unified Inbox /
-  // WhatsApp Threads which render inline." Keeps the SSO contract — the
-  // embed page fetches the same auth URL we used to call here. The
-  // launchCallifiedSSO util stays available for anywhere a true new-tab
-  // launch is still needed (e.g. an "Open in new tab" fallback CTA inside
-  // the embed page itself when iframe load fails).
-  const CallifiedLink = ({ icon: Icon = PhoneCall, label = "Callified" }) => (
-    <Link to="/wellness/callified" icon={Icon} label={label} />
+  // SSO-authenticated Callified launcher — generates a signed JWT and opens
+  // the Callified dashboard. If SSO fails, shows an error notification.
+  const [callifiedLoading, setCallifiedLoading] = useState(false);
+  const callifiedImplRef = useRef(null);
+  callifiedImplRef.current = ({
+    icon: Icon = PhoneCall,
+    label = "Callified",
+  }) => {
+    const handleClick = async (e) => {
+      e.preventDefault();
+      if (callifiedLoading) return;
+      setCallifiedLoading(true);
+      try {
+        await launchCallifiedSSO();
+      } catch (err) {
+        console.error("[Sidebar] Callified SSO error:", err.message);
+        const message = err.message?.includes("not yet available")
+          ? "Callified integration will be available soon. Please check back later."
+          : "Unable to open Callified. Please try again.";
+        notify.error(message);
+      } finally {
+        setCallifiedLoading(false);
+      }
+    };
+    return (
+      <button
+        type="button"
+        onClick={handleClick}
+        disabled={callifiedLoading}
+        className="nav-link"
+        aria-label="Open Callified dashboard"
+        title="Open Callified dashboard in a new tab"
+        style={{
+          ...navStyle,
+          background: "transparent",
+          border: "none",
+          width: "100%",
+          textAlign: "left",
+          cursor: callifiedLoading ? "wait" : "pointer",
+          fontFamily: "inherit",
+          fontSize: "inherit",
+        }}
+      >
+        {callifiedLoading ? (
+          <Loader2 size={20} className="spin" />
+        ) : (
+          <Icon size={20} />
+        )}
+        <span style={{ flex: 1 }}>{label}</span>
+        <ExternalLink size={14} style={{ opacity: 0.6 }} />
+      </button>
+    );
+  };
+  const CallifiedLink = useMemo(
+    () =>
+      function CallifiedLink(props) {
+        return callifiedImplRef.current(props);
+      },
+    [],
   );
 
   // T2.1: when the drawer is open at <900px, the sidebar IS a modal dialog —
@@ -554,49 +794,52 @@ const Sidebar = ({
             marginBottom: "1rem",
             display: "flex",
             alignItems: "center",
-            gap: "0.75rem",
+            gap: "1rem",
             flexShrink: 0,
           }}
         >
-          {logoUrl ? (
-            <img
-              src={logoUrl}
-              alt={brand}
-              style={{
-                width: 32,
-                height: 32,
-                borderRadius: 6,
-                objectFit: "cover",
-              }}
-            />
-          ) : (
-            <div
-              style={{
-                width: "32px",
-                height: "32px",
-                backgroundColor: brandColor || "var(--accent-color)",
-                borderRadius: "8px",
-                boxShadow: "0 0 15px var(--accent-glow)",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                color: "#fff",
-              }}
-            >
-              {isWellness ? <HeartPulse size={18} /> : null}
-            </div>
-          )}
+          <img
+            src={logoUrl || "/globussoft-logo.png"}
+            alt={brand}
+            onError={(e) => {
+              if (e.currentTarget.src.indexOf("/globussoft-logo.png") === -1) {
+                e.currentTarget.src = "/globussoft-logo.png";
+              }
+            }}
+            style={{
+              width: 44,
+              height: 44,
+              borderRadius: 6,
+              // object-fit:cover + object-position:left anchors a wide
+              // "icon + wordmark" source by its left edge so only the
+              // icon portion sits in the slot; icon-only square sources
+              // pass through unchanged.
+              objectFit: "cover",
+              objectPosition: "left center",
+              flexShrink: 0,
+              background: "#fff",
+            }}
+          />
           <h1
             style={{
-              fontSize: "1.1rem",
+              fontSize: "0.97rem",
               fontWeight: "bold",
               fontFamily: "var(--font-family)",
-              lineHeight: 1.1,
+              lineHeight: 1.15,
+              margin: 0,
             }}
           >
             {brand}
           </h1>
         </div>
+
+        {isTravel &&
+          renderTravelSubBrandHeader({
+            sectionLabelStyle,
+            subBrandAccess,
+            activeSubBrand,
+            setActiveSubBrand,
+          })}
 
         <nav
           ref={navRef}
@@ -615,34 +858,39 @@ const Sidebar = ({
           {isWellness
             ? renderWellnessNav({
                 Link,
-                ExtLink,
                 AdsGptLink,
                 CallifiedLink,
                 isAdmin,
                 isManager,
+                isCustomerTier,
+                hasPermission,
+                permissionsReady,
                 sectionLabelStyle,
                 counts,
+                accessiblePages,
               })
             : isTravel
-            ? renderTravelNav({
-                Link,
-                isAdmin,
-                isManager,
-                sectionLabelStyle,
-                counts,
-                subBrandAccess,
-                activeSubBrand,
-                setActiveSubBrand,
-              })
-            : renderGenericNav({
-                Link,
-                ExtLink,
-                AdsGptLink,
-                CallifiedLink,
-                isAdmin,
-                isManager,
-                counts,
-              })}
+              ? renderTravelNav({
+                  Link,
+                  isAdmin,
+                  isManager,
+                  sectionLabelStyle,
+                  counts,
+                  subBrandAccess,
+                  activeSubBrand,
+                })
+              : renderGenericNav({
+                  Link,
+                  ExtLink,
+                  AdsGptLink,
+                  CallifiedLink,
+                  isAdmin,
+                  isManager,
+                  hasPermission,
+                  permissionsReady,
+                  counts,
+                  user,
+                })}
         </nav>
       </aside>
     </>
@@ -651,379 +899,357 @@ const Sidebar = ({
 
 // ── Wellness sidebar — slim, clinic-focused ───────────────────────
 
+// Icon lookup keyed by page path. Each page-catalog entry doesn't carry
+// its own icon (the catalog lives on the backend; importing lucide icons
+// there would be wrong). Instead we look up the icon here by path, with
+// a sensible defaultIcon fallback so a brand-new catalog entry still
+// renders (just with a generic icon until someone adds a row here).
+const PAGE_ICON_BY_PATH = {
+  // Core
+  "/home": LayoutDashboard,
+  // Manager
+  "/wellness": LayoutDashboard,
+  "/wellness/recommendations": Sparkles,
+  // Clinical
+  "/wellness/calendar": Calendar,
+  "/wellness/appointments": Calendar,
+  "/wellness/my-appointments": Calendar,
+  "/wellness/patients": HeartPulse,
+  "/wellness/waitlist": Clock,
+  "/wellness/prescriptions": PenTool,
+  "/wellness/my-prescriptions": Pill,
+  "/wellness/visits": HeartPulse,
+  "/signatures": FileSignature,
+  "/wellness/inventory": Package,
+  // Catalog
+  "/wellness/services": Stethoscope,
+  "/wellness/service-categories": Layers,
+  "/wellness/drugs": Stethoscope,
+  "/wellness/memberships": Crown,
+  // Scheduling
+  "/wellness/resources": Building2,
+  "/wellness/holidays": Calendar,
+  "/wellness/working-hours": Clock,
+  // Staff self-service
+  "/wellness/attendance": Clock,
+  "/wellness/attendance-dashboard": ClipboardList,
+  "/wellness/leave": Calendar,
+  // Leads & Revenue
+  "/inbox": InboxIcon,
+  "/wellness/whatsapp": MessageSquare,
+  "/wellness/telecaller": PhoneCall,
+  "/leads": UserPlus,
+  "/converted-leads": UserPlus,
+  "/callified-data": PhoneCall,
+  "/tasks": CheckSquare,
+  "/lead-routing": Send,
+  // Sales (generic only, not in wellness sidebar)
+  "/dashboard": LayoutDashboard,
+  "/contacts": Users,
+  "/pipeline": Briefcase,
+  // Finance
+  "/wellness/pos": Calculator,
+  "/invoices": Receipt,
+  "/estimates": FileSpreadsheet,
+  "/expenses": IndianRupee,
+  "/payments": CreditCard,
+  "/wellness/wallet": WalletIcon,
+  "/wellness/giftcards": Gift,
+  "/wellness/buy-giftcards": ShoppingBag,
+  "/wellness/my-transactions": Receipt,
+  "/wellness/coupons": TicketPercent,
+  "/wellness/cashback-rules": Coins,
+  // Marketing
+  "/marketing": Send,
+  "/sequences": Network,
+  "/landing-pages": PanelTop,
+  // Reports
+  "/wellness/reports": BarChart3,
+  "/wellness/per-location": Building2,
+  "/wellness/loyalty": Award,
+  "/surveys": ClipboardList,
+  "/knowledge-base": BookOpen,
+  "/reports": BarChart3,
+  "/dashboards": LayoutDashboard,
+  // Appointments
+  "/wellness/book-appointment": Calendar,
+  // Patient portal
+  "/portal": UserCircle,
+  "/wellness/my-bookings": Calendar,
+  // Admin
+  "/wellness/locations": Building2,
+  "/staff": UsersRound,
+  "/settings/roles": ShieldCheck,
+  "/commission-profiles": Award,
+  "/revenue-goals": Target,
+  "/channels": Radio,
+  "/approvals": CheckSquare,
+  "/audit-log": ScrollText,
+  "/privacy": Shield,
+  "/settings": Settings,
+  // Inventory Admin
+  "/wellness/product-categories": Layers,
+  "/wellness/products": Package,
+  "/wellness/vendors": Truck,
+  "/wellness/inventory-receipts": ArrowDownToLine,
+  "/wellness/inventory-adjustments": Receipt,
+  "/wellness/auto-consumption-rules": Recycle,
+  // User self-service
+  "/notification-settings": Bell,
+};
+
+// Wellness sidebar — which catalog categories render here and in what
+// order. Categories not in this list (e.g. 'Sales' which holds generic-
+// CRM-only pages, or 'Patient' which is the customer-facing portal entry
+// surfaced elsewhere) are intentionally skipped so the wellness sidebar
+// stays clinic-focused even for users whose role happens to grant a
+// generic-CRM permission like contacts.read.
+const WELLNESS_CATEGORY_ORDER = [
+  "Core",
+  "Manager",
+  "Clinical",
+  "Catalog",
+  "Scheduling",
+  "Staff",
+  "Leads & Revenue",
+  "Finance",
+  "Marketing",
+  "Reports",
+  "Appointments",
+  // Products is the master catalog config (categories, products, auto-
+  // consumption rules); Inventory Admin is the operational ledger
+  // (vendors, receipts, adjustments). Same underlying permission module
+  // (`inventory`) — split into two sections only for sidebar grouping.
+  "Products",
+  "Inventory Admin",
+  // User holds personal-user surfaces (Notification Settings) — only
+  // rendered for non-admin-tier users. Admin sits last so admin sees
+  // management surfaces (Locations / Staff / Roles / Settings / etc.) at
+  // the very bottom of the nav; non-admin users see User there instead.
+  "User",
+  "Admin",
+];
+
+// Categories rendered without a section header — they appear at the top of
+// the sidebar as the landing items (Home + manager dashboards) so a label
+// above them would be redundant. Every other category gets its name as the
+// section header.
+const WELLNESS_HEADERLESS_CATEGORIES = new Set(["Core", "Manager"]);
+
+// Count-badge mapping. Path → key on the `counts` state object. Live counters
+// come from /api/{contacts|tasks|tickets|email} polling + socket events and
+// are rendered as a pill on the right side of the matching nav entry.
+const PATH_COUNT_KEY = {
+  "/inbox": "inbox",
+  "/leads": "leads",
+  "/tasks": "tasks",
+  "/tickets": "tickets",
+};
+
+// Some links want to highlight as active even when on a different path.
+// Path → list of additional pathnames to treat as matches.
+const PATH_MATCH_ALIASES = {};
+
 function renderWellnessNav({
   Link,
-  ExtLink,
   AdsGptLink,
   CallifiedLink,
   isAdmin,
   isManager,
+  isCustomerTier = false,
+  hasPermission = () => false,
+  permissionsReady = false,
   sectionLabelStyle,
   counts = {},
+  accessiblePages = [],
 }) {
+  // Sidebar is rendered ENTIRELY from `accessiblePages` — the per-user
+  // intersection of the server's page catalog and their effective RBAC
+  // permissions returned by /api/pages/me. Editing a role's permissions in
+  // RolesAdmin invalidates the cache + dispatches `sidebar:pages-changed`,
+  // so the sidebar updates without a page reload and with zero JSX edits.
+  //
+  // No hardcoded adminOnly / managerOnly / wellnessRoles gating here — the
+  // backend has already filtered the list by permission. The only role-
+  // sensitive UI bits left are:
+  //   • hideForAdminTier — catalog-level UX flag to hide clinical-day-to-
+  //     day surfaces from users who already see the Admin category.
+  //   • AdsGPT / Callified — external integrations, kept visible only for
+  //     admin/manager so doctors / nurses / telecallers don't see them in
+  //     their nav.
+  void hasPermission;
+  void permissionsReady;
   const labelStyle = sectionLabelStyle || sectionLabel;
+
+  // Group accessible pages by category for ordered rendering.
+  const byCategory = {};
+  for (const page of accessiblePages) {
+    if (!page || !page.category || !page.path) continue;
+    if (page.hideForAdminTier && isAdmin) continue;
+    // customerOnly pages (e.g. Buy Gift Cards storefront) only surface to
+    // customer-tier roles (USER / CUSTOMER). Admin / manager / staff don't
+    // see them in their nav. Sidebar-only UX rule; direct-URL access and
+    // the backend route's own auth are unchanged.
+    if (page.customerOnly && !isCustomerTier) continue;
+    if (!byCategory[page.category]) byCategory[page.category] = [];
+    byCategory[page.category].push(page);
+  }
+
+  const renderPage = (page) => {
+    const Icon = PAGE_ICON_BY_PATH[page.path] || LayoutDashboard;
+    const countKey = PATH_COUNT_KEY[page.path];
+    const matchPaths = PATH_MATCH_ALIASES[page.path] || [];
+    return (
+      <Link
+        key={page.path}
+        to={page.path}
+        icon={Icon}
+        label={page.label}
+        count={countKey ? counts[countKey] : undefined}
+        matchPaths={matchPaths}
+      />
+    );
+  };
+
+  const renderCategory = (category, { showHeader } = { showHeader: true }) => {
+    const items = byCategory[category];
+    if (!items || items.length === 0) return null;
+    return (
+      <Fragment key={category}>
+        {showHeader && <div style={labelStyle}>{category}</div>}
+        {items.map(renderPage)}
+      </Fragment>
+    );
+  };
+
+  // Render a category whose final list is (catalog items) ⊕ (non-catalog
+  // hardcoded `extras`). Used for sections that have one or two pages
+  // that aren't (yet) in the page catalog — Leads & Revenue (Blocked
+  // Numbers), Finance (Cash Registers), Marketing (Campaigns), Admin
+  // (Tenant Settings / AdsGPT Reports / Callified Calls / Wallet Bonus
+  // Rules). Without this helper, the hardcoded copies overlapped the
+  // catalog-driven copies and the user saw every item twice. Headers
+  // collapse if BOTH the catalog list AND extras are empty (e.g. a
+  // non-manager whose Marketing extras gate to null).
+  const renderMergedCategory = (category, extras) => {
+    const items = byCategory[category] || [];
+    const hasItems = items.length > 0;
+    const hasExtras =
+      extras !== null && extras !== undefined && extras !== false;
+    if (!hasItems && !hasExtras) return null;
+    return (
+      <Fragment key={category}>
+        <div style={labelStyle}>{category}</div>
+        {items.map(renderPage)}
+        {extras}
+      </Fragment>
+    );
+  };
+
+  // Non-catalog admin/manager pages that aren't (yet) in the page
+  // catalog. Each lives under the relevant catalog section header via
+  // renderMergedCategory above so the section reads as one unified
+  // block. As routes get catalogued (with proper requiredPermissions),
+  // entries here can drop out. `isManager` here is shorthand: literal-
+  // ADMIN passes isManager too.
+  const categoryExtras = {
+    // Cash Registers used to live here as its own sidebar entry, but
+    // `/wellness/cash-registers` has no route mounted in App.jsx and the
+    // dedicated page 404'd on every click. The CashRegisters component
+    // is now embedded inside Point of Sale as an admin/manager
+    // "Manage registers" panel, so this slot intentionally has no
+    // Finance extras.
+    //
+    // Campaigns used to render here as a hardcoded managerOnly link;
+    // removed by request. Route stays mounted in App.jsx so /campaigns
+    // remains reachable via deep-link.
+  };
+
   return (
     <>
-      {/* Daily essentials — Owner Dashboard + Recommendations are management
-          views over org-wide P&L / pending recommendation cards (#207/#216).
-          Clinical staff (doctor/professional/telecaller/helper) should not see
-          them in the nav. AdsGPT and Callified are external tools the whole
-          team uses, so they stay visible for everyone.
-          #833: the nav label was hard-coded "Owner Dashboard" for both ADMIN
-          and MANAGER, which read as a role-mismatch for Demo Admin (the avatar
-          said "Demo Admin" but the nav said "Owner"). Now label tracks the
-          role: ADMIN → "Admin Dashboard", MANAGER → "Manager Dashboard",
-          falls back to "Owner Dashboard" (true owner/superuser path). */}
-      <Link
-        to="/wellness"
-        icon={LayoutDashboard}
-        label={isAdmin ? 'Admin Dashboard' : isManager ? 'Manager Dashboard' : 'Owner Dashboard'}
-        managerOnly
-      />
-      <Link
-        to="/wellness/recommendations"
-        icon={Sparkles}
-        label="Recommendations"
-        managerOnly
-      />
-      <AdsGptLink icon={Sparkles} label="AdsGPT" />
-      <CallifiedLink icon={PhoneCall} label="Callified" />
+      {/* Core + Manager render at the top with no section header — they're
+          the landing-area items. Manager-tier dashboards (Owner Dashboard,
+          Recommendations) only appear when the user has reports.read, so
+          regular users (doctors, nurses, telecallers) won't see them even
+          though they're grouped near the top. */}
+      {renderCategory("Core", { showHeader: false })}
+      {renderCategory("Manager", { showHeader: false })}
 
-      {/* #756 — Clinical nav (Patients / Calendar / Waitlist) is gated to
-          clinical wellnessRoles. The backend PHI-read gate
-          (verifyWellnessRole(["doctor","professional","telecaller","admin",
-          "manager"])) rejects a USER with no wellnessRole — pre-fix these
-          links rendered for the Demo User account and only revealed the
-          denial on click. The Link helper's `wellnessRoles` prop hides them
-          for non-clinical roles; managers/admins auto-pass (isManager check
-          inside Link). Service Catalog stays managerOnly — clinical staff
-          read it via the API but only managers get the nav link. */}
-      <div style={labelStyle}>Clinical</div>
-      <Link to="/wellness/patients" icon={HeartPulse} label="Patients" wellnessRoles={["doctor", "professional", "telecaller"]} />
-      <Link to="/wellness/calendar" icon={Calendar} label="Calendar" wellnessRoles={["doctor", "professional", "telecaller"]} />
-      <Link to="/wellness/waitlist" icon={Clock} label="Waitlist" wellnessRoles={["doctor", "professional", "telecaller"]} />
-      <Link
-        to="/wellness/services"
-        icon={Stethoscope}
-        label="Service Catalog"
-        managerOnly
-      />
-      {/* Wave 7 Agent A — ServiceCategory hierarchical taxonomy (PRD Gap §10 #1) */}
-      <Link
-        to="/wellness/service-categories"
-        icon={Stethoscope}
-        label="Service Categories"
-        managerOnly
-      />
-      {/* Wave 7 Agent A — Drug catalogue for prescription writing (PRD Gap §10 #2) */}
-      <Link
-        to="/wellness/drugs"
-        icon={Stethoscope}
-        label="Drug Catalogue"
-        managerOnly
-      />
-      {/* Wave 11 Agent EE: Memberships catalog — manager+ only (mirrors Service Catalog) */}
-      <Link
-        to="/wellness/memberships"
-        icon={Crown}
-        label="Memberships"
-        managerOnly
-      />
-      <Link
-        to="/wellness/visits"
-        icon={HeartPulse}
-        label="Visits"
-        managerOnly
-      />
-      {/* Wave 11 Agent GG — Resource availability (rooms / holidays /
-          working hours). Manager+ only. */}
-      <Link
-        to="/wellness/resources"
-        icon={Building2}
-        label="Resources"
-        managerOnly
-      />
-      <Link
-        to="/wellness/holidays"
-        icon={Calendar}
-        label="Holidays"
-        managerOnly
-      />
-      <Link
-        to="/wellness/working-hours"
-        icon={Clock}
-        label="Working Hours"
-        managerOnly
-      />
+      {/* External integrations: admin/manager only. Doctors, nurses,
+          telecallers, etc. don't need AdsGPT (marketing tool) or Callified
+          (call-centre console) in their day-to-day nav — they land on the
+          role-aware /home dashboard instead. */}
+      {isManager && <AdsGptLink icon={Sparkles} label="AdsGPT" />}
+      {isManager && <CallifiedLink icon={PhoneCall} label="Callified" />}
 
-      {/* Wave 2 Agent JJ — Staff Attendance + Leave Management. */}
-      <div style={labelStyle}>Staff</div>
-      <Link to="/wellness/attendance" icon={Clock} label="Attendance" />
-      <Link to="/wellness/leave" icon={Calendar} label="Leave" />
+      {/* Remaining categories — order driven by WELLNESS_CATEGORY_ORDER so
+          a new catalog entry slots into the right section automatically.
+          WELLNESS_HEADERLESS_CATEGORIES is the set already rendered above
+          (Core / Manager); everything else gets its category name as the
+          section header. Empty categories (user has no accessible pages
+          in them) collapse silently. The "User" category holds personal-
+          user surfaces (Notification Settings) and is hidden from admin/
+          manager — they manage their own notification preferences via the
+          Settings surface, not via a dedicated sidebar entry. Mirrors the
+          guard on the generic-sidebar fallback below. */}
+      {/* Iterate WELLNESS_CATEGORY_ORDER once. Categories with non-catalog
+          stragglers (Leads & Revenue, Finance, Marketing) route through
+          renderMergedCategory so the catalog items + the hardcoded
+          straggler render under ONE shared header. Everything else uses
+          plain renderCategory. Admin is rendered explicitly below (last
+          section in the sidebar) so management surfaces sit at the bottom. */}
+      {WELLNESS_CATEGORY_ORDER.filter(
+        (cat) => !WELLNESS_HEADERLESS_CATEGORIES.has(cat),
+      )
+        .filter((cat) => cat !== "Admin")
+        .filter((cat) => !(cat === "User" && isManager))
+        .map((cat) => {
+          if (Object.prototype.hasOwnProperty.call(categoryExtras, cat)) {
+            return renderMergedCategory(cat, categoryExtras[cat]);
+          }
+          return renderCategory(cat, { showHeader: true });
+        })}
 
-      {/* Lead-to-revenue */}
-      <div style={labelStyle}>Leads & Revenue</div>
-      <Link
-        to="/inbox"
-        icon={InboxIcon}
-        label="Unified Inbox"
-        count={counts.inbox}
-      />
-      {/* Wave 2 Agent KK - WhatsApp 2-way threads (agent inbox). */}
-      <Link
-        to="/wellness/whatsapp"
-        icon={MessageSquare}
-        label="WhatsApp Threads"
-      />
-      {/* Zylu-Gap #800 — Blocked WhatsApp numbers admin (opt-outs).
-          managerOnly because /opt-outs POST is ADMIN+MANAGER (DELETE is
-          ADMIN-only; the page hides Unblock for non-admins inside). */}
-      <Link
-        to="/wellness/whatsapp/blocked-numbers"
-        icon={Ban}
-        label="Blocked Numbers"
-        managerOnly
-      />
-      {/* Telecaller Queue: visible to wellnessRole=telecaller and to
-          managers/admins for oversight. Plain users (and clinical staff
-          without the telecaller wellnessRole) saw a 403 toast on every
-          load, so the link is hidden for them — matches the server's
-          verifyWellnessRole(["telecaller","admin","manager"]) gate on
-          /api/wellness/telecaller/queue + /telecaller/dispose. */}
-      <Link
-        to="/wellness/telecaller"
-        icon={PhoneCall}
-        label="Telecaller Queue"
-        wellnessRoles={["telecaller"]}
-      />
-      <Link
-        to="/leads"
-        icon={UserPlus}
-        label="All Leads"
-        managerOnly
-        count={counts.leads}
-      />
-      <Link
-        to="/converted-leads"
-        icon={UserPlus}
-        label="Converted Leads"
-        managerOnly
-      />
-      <Link to="/tasks" icon={CheckSquare} label="Tasks" count={counts.tasks} />
-      <Link
-        to="/marketplace-leads"
-        icon={ShoppingBag}
-        label="Marketplace Leads"
-        managerOnly
-        matchPaths={["/marketplace"]}
-      />
-      <Link to="/lead-routing" icon={Send} label="Routing Rules" managerOnly />
+      {/* Admin — rendered LAST so management surfaces sit at the bottom of
+          the sidebar, below day-to-day operational entries (Leads & Revenue,
+          Finance, etc.). Catalog-driven entries pulled from /api/pages/me —
+          Locations, Staff, Roles, Commission Profiles, Revenue Goals,
+          Channels, Approvals, Audit Log, Privacy, Settings. These are
+          gated by the user's RolePermission grants, so a non-literal-ADMIN
+          custom role with `roles.read` (etc.) still sees the subset of
+          admin pages it can access.
 
-      {/* Money — clinic-side, in INR for Indian wellness tenants */}
-      <div style={labelStyle}>Finance</div>
-      {/* Wave 2 Agent II: POS / "New Sale" — open shifts, ring up cash-and-
-          carry sales, close shifts. All staff can use it (backend gates
-          to wellnessRole admin/manager/doctor/professional/telecaller/helper). */}
-      <Link to="/wellness/pos" icon={Calculator} label="Point of Sale" />
-      {/* Zylu-Gap #770/#779/#780/#781 — Cash Register admin (list + shift
-          lifecycle + status header + recent transactions). Without this
-          surface POS is permanently gated: /pos/sales needs an OPEN shift
-          on a Register, and the only place to create that Register is here. */}
-      <Link to="/wellness/cash-registers" icon={Banknote} label="Cash Registers" />
-      <Link to="/invoices" icon={Receipt} label="Invoices" />
-      <Link to="/estimates" icon={FileSpreadsheet} label="Estimates" />
-      <Link to="/expenses" icon={DollarSign} label="Expenses" />
-      <Link to="/payments" icon={CreditCard} label="Payments" managerOnly />
-      {/* Wave 11 Agent FF: Wallet + Gift Cards + Coupons + Cashback (manager+) */}
-      <Link to="/wellness/wallet" icon={WalletIcon} label="Patient Wallets" managerOnly />
-      <Link to="/wellness/giftcards" icon={Gift} label="Gift Cards" managerOnly />
-      <Link to="/wellness/coupons" icon={TicketPercent} label="Coupons" managerOnly />
-      <Link to="/wellness/cashback-rules" icon={Coins} label="Cashback Rules" managerOnly />
-
-      {/* Marketing — clinic-side comms (ad campaigns live in AdsGPT). All items are
-          managerOnly, so the whole section is hidden for plain users — otherwise the
-          header rendered as an orphan with no children (#107). */}
-      {isManager && (
-        <>
-          <div style={labelStyle}>Marketing</div>
-          {/* #898: Campaigns sidebar surfacing. Deep-links to the existing
-              Marketing page (Email / SMS / Push Campaigns tab is the default).
-              Backed by Campaign rows via GET /api/marketing/campaigns. */}
-          <Link
-            to="/campaigns"
-            icon={Megaphone}
-            label="Campaigns"
-            managerOnly
-          />
-          <Link
-            to="/marketing"
-            icon={Send}
-            label="SMS / Email Blasts"
-            managerOnly
-          />
-          <Link
-            to="/sequences"
-            icon={Network}
-            label="Drip Sequences"
-            managerOnly
-          />
-          <Link
-            to="/landing-pages"
-            icon={PanelTop}
-            label="Landing Pages"
-            managerOnly
-          />
-        </>
-      )}
-
-      {/* Reports — wellness-tuned, generic CRM reports removed. Same orphan-header
-          fix as Marketing above. */}
-      {isManager && (
-        <>
-          <div style={labelStyle}>Reports</div>
-          <Link
-            to="/wellness/reports"
-            icon={BarChart3}
-            label="P&L + Attribution"
-            managerOnly
-          />
-          <Link
-            to="/wellness/per-location"
-            icon={Building2}
-            label="Per-Location"
-            managerOnly
-          />
-          <Link
-            to="/wellness/loyalty"
-            icon={Award}
-            label="Loyalty + Referrals"
-            managerOnly
-          />
-          <Link
-            to="/surveys"
-            icon={ClipboardList}
-            label="Patient Surveys"
-            managerOnly
-          />
-          <Link
-            to="/knowledge-base"
-            icon={BookOpen}
-            label="Knowledge Base"
-            managerOnly
-          />
-        </>
-      )}
-
-      {/* Admin */}
-      {isAdmin && (
-        <>
-          <div style={labelStyle}>Admin</div>
-          <Link
-            to="/wellness/locations"
-            icon={Building2}
-            label="Locations"
-            adminOnly
-          />
-          {/* Wave 11 Agent HH — Inventory backbone admin entries.
-              Categories + Vendors are config; Receipts/Adjustments are the
-              operational ledger surfaces; Auto-consumption is the rules engine. */}
-          <div style={labelStyle}>Inventory</div>
-          {/* Zylu-Gap #933 — Products admin list (precursor for #816 CSV slice). */}
-          <Link to="/wellness/products" icon={Package} label="Products" managerOnly />
-          <Link to="/wellness/product-categories" icon={Layers} label="Categories" managerOnly />
-          <Link to="/wellness/vendors" icon={Truck} label="Vendors" managerOnly />
-          <Link to="/wellness/inventory-receipts" icon={ArrowDownToLine} label="Receipts" managerOnly />
-          <Link to="/wellness/inventory-adjustments" icon={Receipt} label="Adjustments" managerOnly />
-          <Link to="/wellness/auto-consumption-rules" icon={Recycle} label="Auto-consumption" managerOnly />
-          <Link to="/staff" icon={UsersRound} label="Staff" adminOnly />
-          {/* PRD Gap §1.5 / §1.6 — wellness admins also manage payroll. */}
-          <Link
-            to="/commission-profiles"
-            icon={Award}
-            label="Commission Profiles"
-            adminOnly
-          />
-          <Link
-            to="/revenue-goals"
-            icon={Target}
-            label="Revenue Goals"
-            adminOnly
-          />
-          <Link to="/channels" icon={Radio} label="Channels" adminOnly />
-          <Link to="/audit-log" icon={ScrollText} label="Audit Log" adminOnly />
-          <Link to="/privacy" icon={Shield} label="Privacy" adminOnly />
-          {/* Per-tenant cap-override admin UI. Surfaces /api/tenant-settings
-              CRUD (backend commit 1542b8e) so ADMINs can configure budget caps
-              for AdsGPT / AI calling / RateHawk / LLM without DB access. */}
-          <Link
-            to="/admin/tenant-settings"
-            icon={DollarSign}
-            label="Tenant Settings"
-            adminOnly
-          />
-          {/* Per-sub-brand BrandKit admin UI. Surfaces /api/brand-kits CRUD
-              (backend commit e4783e0) so ADMINs can manage logo / colors /
-              font / tagline per sub-brand without DB access. */}
-          <Link
-            to="/admin/brand-kits"
-            icon={Palette}
-            label="Brand Kits"
-            adminOnly
-          />
-          {/* AdsGPT Reports admin UI. Surfaces /api/adsgpt (backend commit
-              0d66a74) — per-platform ad performance + cap utilisation.
-              managerOnly so MANAGERs see it too (analytics, not config). */}
-          <Link
-            to="/admin/adsgpt-reports"
-            icon={TrendingUp}
-            label="AdsGPT Reports"
-            managerOnly
-          />
-          {/* RateHawk hotel-search admin UI. Surfaces /api/ratehawk (backend
-              commit be67789) — hotel inventory search + cap utilisation.
-              managerOnly so MANAGERs see it too (operator search, not config).
-              Stub-mode banner surfaces while Q19 cred-blocked. */}
-          <Link
-            to="/admin/ratehawk-search"
-            icon={Hotel}
-            label="RateHawk Search"
-            managerOnly
-          />
-          {/* Callified AI calls admin UI. Surfaces /api/callified (backend
-              commit cdad62d) — outbound AI call initiation + cap utilisation
-              + feature-flag check. managerOnly so MANAGERs see it too
-              (operator action, not config). Stub-mode banner surfaces while
-              Q1 cred-blocked (Yasin's Callified.ai handover). */}
-          <Link
-            to="/admin/callified-calls"
-            icon={PhoneCall}
-            label="Callified Calls"
-            managerOnly
-          />
-          {/* Booking.com / Expedia hotel-search admin UI. Surfaces
-              /api/booking-expedia (backend commit bb33cbe, tick #105) —
-              direct-API hotel inventory search + shared cap utilisation.
-              managerOnly so MANAGERs see it too (operator search, not
-              config). Phase 2 deferred-by-design: Expedia returns 503
-              EXPEDIA_NOT_YET_ENABLED until DC-4 flips + Q11 lands. */}
-          <Link
-            to="/admin/booking-expedia-search"
-            icon={BedDouble}
-            label="Booking / Expedia"
-            managerOnly
-          />
-          {/* Wallet bonus rule CRUD admin UI. Surfaces /api/wallet/rules
-              (Agent B ships next tick, slice 3 of PRD_WALLET_TOPUP). ADMIN-only
-              per PRD §3.9 RBAC matrix. Page is robust to backend absence. */}
-          <Link
-            to="/admin/wallet-rules"
-            icon={WalletIcon}
-            label="Wallet Bonus Rules"
-            adminOnly
-          />
-          <Link to="/settings" icon={Settings} label="Settings" adminOnly />
-        </>
-      )}
+          The Tenant Settings / AdsGPT Reports / Callified Calls / Wallet
+          Bonus Rules sidebar shortcuts were removed by request — the
+          underlying routes stay mounted in App.jsx and remain reachable
+          via deep-link (e.g. CapBanners' "Tenant Settings →" anchor). */}
+      {(() => {
+        const adminCatalogItems = byCategory["Admin"] || [];
+        // Pull Settings out of the catalog admin list — it MUST render
+        // last in the sidebar per UX requirement. If the user lacks
+        // settings.read, /api/pages/me already filtered Settings out so
+        // settingsPage is undefined and nothing renders for it — the
+        // matrix-is-authoritative contract stays intact.
+        const settingsPage = adminCatalogItems.find(
+          (p) => p.path === "/settings",
+        );
+        const otherAdminItems = adminCatalogItems.filter(
+          (p) => p.path !== "/settings",
+        );
+        if (otherAdminItems.length === 0 && !settingsPage) {
+          return null;
+        }
+        return (
+          <>
+            <div style={labelStyle}>Admin</div>
+            {otherAdminItems.map(renderPage)}
+            {/* Settings — pinned LAST in the sidebar per UX requirement.
+                Only renders if /api/pages/me granted access (i.e. the
+                user has settings.read on at least one assigned role). */}
+            {settingsPage && renderPage(settingsPage)}
+          </>
+        );
+      })()}
 
       {!isAdmin && isManager && (
         <>
@@ -1032,13 +1258,11 @@ function renderWellnessNav({
         </>
       )}
 
-      {/* User Notification Settings — only for regular users, not admin/manager */}
-      {!isAdmin && !isManager && (
-        <>
-          <div style={labelStyle}>User</div>
-          <Link to="/notification-settings" icon={Settings} label="Notification Settings" />
-        </>
-      )}
+      {/* Notification Settings is rendered via the page-catalog "User"
+          category iteration above (WELLNESS_CATEGORY_ORDER loop). The
+          previous hardcoded fallback block here caused a duplicate entry
+          for non-admin/non-manager users — the catalog version uses the
+          Bell icon, this one used Settings (gear). Removed to deduplicate. */}
     </>
   );
 }
@@ -1051,6 +1275,151 @@ function renderWellnessNav({
 // Microsites. For Day 1, only Dashboard is wired — everything else is
 // "Coming in Phase 1" so the user can see the planned navigation map
 // without dead links.
+// Travel "Travel" section label + Q25 sub-brand switcher. Rendered in the
+// sidebar's FIXED header zone (outside the scrollable <nav>) so the switcher
+// stays reachable without scrolling back to the top. Only render the dropdown
+// when the user has full access (subBrandAccess === null, includes admins) or
+// access to ≥2 sub-brands — a single-sub-brand user has no choice to make.
+// Travel-only; generic/wellness sidebars never call this.
+function renderTravelSubBrandHeader({
+  sectionLabelStyle,
+  subBrandAccess = null,
+  activeSubBrand = null,
+  setActiveSubBrand = () => {},
+}) {
+  const labelStyle = sectionLabelStyle || sectionLabel;
+  const ALL_SUB_BRANDS = [
+    { value: "tmc", label: "TMC" },
+    { value: "rfu", label: "RFU" },
+    { value: "travelstall", label: "Travel Stall" },
+    { value: "visasure", label: "Visa Sure" },
+  ];
+  const visibleSubBrands =
+    subBrandAccess === null
+      ? ALL_SUB_BRANDS
+      : ALL_SUB_BRANDS.filter((s) => subBrandAccess.includes(s.value));
+  const showSwitcher = visibleSubBrands.length >= 2;
+  // Single-brand scoped user (e.g. a TMC-only manager): there's nothing to
+  // switch between, so we don't render the dropdown — but we DO surface a
+  // static read-only chip so they can see which sub-brand they're scoped to
+  // ("TMC"). Full-access users (subBrandAccess === null) always get the
+  // switcher, never this chip.
+  const soleBrand =
+    !showSwitcher && subBrandAccess !== null && visibleSubBrands.length === 1
+      ? visibleSubBrands[0]
+      : null;
+  return (
+    <div style={{ flexShrink: 0 }}>
+      <div style={labelStyle}>Travel</div>
+      {soleBrand && (
+        <div
+          style={{
+            padding: "4px 12px 8px",
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+          }}
+        >
+          <span
+            style={{
+              fontSize: 10,
+              color: "var(--text-secondary)",
+              textTransform: "uppercase",
+              letterSpacing: 0.5,
+            }}
+          >
+            Sub-brand
+          </span>
+          <span
+            style={{
+              flex: 1,
+              fontSize: 12,
+              fontWeight: 600,
+              padding: "4px 8px",
+              borderRadius: 4,
+              border: "1px solid var(--border-color)",
+              background: "var(--surface-color)",
+              color: "var(--text-primary)",
+            }}
+            data-testid="travel-sub-brand-sole"
+            aria-label={`Sub-brand: ${soleBrand.label}`}
+          >
+            {soleBrand.label}
+          </span>
+        </div>
+      )}
+      {showSwitcher && (
+        <div
+          style={{
+            padding: "4px 12px 8px",
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+          }}
+        >
+          <label
+            htmlFor="travel-sub-brand-switcher"
+            style={{
+              fontSize: 10,
+              color: "var(--text-secondary)",
+              textTransform: "uppercase",
+              letterSpacing: 0.5,
+            }}
+          >
+            Sub-brand
+          </label>
+          <select
+            id="travel-sub-brand-switcher"
+            value={activeSubBrand || ""}
+            onChange={async (e) => {
+              const next = e.target.value || null;
+              // "All" (null) just clears the client-side filter — there's no
+              // sub-brand to validate, and server-side subBrandAccess still
+              // gates every data route. Clear immediately.
+              if (!next) {
+                setActiveSubBrand(null);
+                return;
+              }
+              // WS-1: authoritative server-side check before switching.
+              // fetchApi throws + auto-surfaces a toast on 400/403, so we only
+              // reach setActiveSubBrand on a 200 — never an optimistic switch.
+              try {
+                await fetchApi("/api/travel/session/switch-brand", {
+                  method: "POST",
+                  body: JSON.stringify({ subBrand: next }),
+                });
+                setActiveSubBrand(next);
+              } catch {
+                // Rejected (403 SUB_BRAND_FORBIDDEN) or invalid (400): the
+                // error toast was already shown by fetchApi. Leave the
+                // selection unchanged — the controlled <select value=...>
+                // snaps back to the prior activeSubBrand.
+              }
+            }}
+            style={{
+              flex: 1,
+              fontSize: 12,
+              padding: "4px 6px",
+              borderRadius: 4,
+              border: "1px solid var(--border-color)",
+              background: "var(--surface-color)",
+              color: "var(--text-primary)",
+            }}
+            aria-label="Switch active sub-brand"
+          >
+            <option value="">All ({visibleSubBrands.length})</option>
+            {visibleSubBrands.map((s) => (
+              <option key={s.value} value={s.value}>
+                {s.label}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function renderTravelNav({
   Link,
   isAdmin,
@@ -1059,50 +1428,33 @@ function renderTravelNav({
   counts = {},
   subBrandAccess = null,
   activeSubBrand = null,
-  setActiveSubBrand = () => {},
 }) {
   const labelStyle = sectionLabelStyle || sectionLabel;
-  // Q25 sub-brand switcher. Only render the dropdown when the user
-  // either has full access (subBrandAccess === null, includes admins)
-  // or has access to ≥2 sub-brands — a single-sub-brand user has no
-  // choice to make, so the dropdown would be noise. Selecting "All"
-  // clears the active filter back to null.
-  const ALL_SUB_BRANDS = [
-    { value: "tmc", label: "TMC" },
-    { value: "rfu", label: "RFU" },
-    { value: "travelstall", label: "Travel Stall" },
-    { value: "visasure", label: "Visa Sure" },
-  ];
-  const visibleSubBrands = subBrandAccess === null
-    ? ALL_SUB_BRANDS
-    : ALL_SUB_BRANDS.filter((s) => subBrandAccess.includes(s.value));
-  const showSwitcher = visibleSubBrands.length >= 2;
+  // Brand-scoped nav (travel-only). Two layers gate a brand-tagged entry:
+  //   1. ACCESS — the user must be entitled to that sub-brand. Full-access
+  //      users (subBrandAccess === null, includes admins) see every brand; a
+  //      scoped user (e.g. a TMC-only manager with subBrandAccess=["tmc"])
+  //      only ever sees their granted brands' entries, regardless of the
+  //      switcher. This is why a TMC manager must NOT see the Travel Stall /
+  //      RFU / Visa Sure brand sections.
+  //   2. SWITCHER — when a specific sub-brand is active, narrow further to
+  //      just that brand; "All" (activeSubBrand === null) shows every brand
+  //      the user can access.
+  // Items with no brand tag are shared cross-brand surfaces (Diagnostics,
+  // Itineraries, Cost Master, Reports, …) and always render — their pages
+  // filter by the caller's access server-side. Does NOT touch the generic
+  // or wellness navs.
+  //
+  // The "Travel" section label + sub-brand switcher render OUTSIDE this
+  // scrollable nav (renderTravelSubBrandHeader, in the sidebar's fixed
+  // header zone) so the switcher stays reachable without scrolling up.
+  const canAccessBrand = (brand) =>
+    subBrandAccess === null || subBrandAccess.includes(brand);
+  const inBrand = (brand) =>
+    canAccessBrand(brand) &&
+    (activeSubBrand === null || activeSubBrand === brand);
   return (
     <>
-      <div style={labelStyle}>Travel</div>
-      {showSwitcher && (
-        <div style={{ padding: "4px 12px 8px", display: "flex", alignItems: "center", gap: 6 }}>
-          <label htmlFor="travel-sub-brand-switcher" style={{ fontSize: 10, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: 0.5 }}>
-            Sub-brand
-          </label>
-          <select
-            id="travel-sub-brand-switcher"
-            value={activeSubBrand || ""}
-            onChange={(e) => setActiveSubBrand(e.target.value || null)}
-            style={{
-              flex: 1, fontSize: 12, padding: "4px 6px", borderRadius: 4,
-              border: "1px solid var(--border-color)",
-              background: "var(--surface-color)", color: "var(--text-primary)",
-            }}
-            aria-label="Switch active sub-brand"
-          >
-            <option value="">All ({visibleSubBrands.length})</option>
-            {visibleSubBrands.map((s) => (
-              <option key={s.value} value={s.value}>{s.label}</option>
-            ))}
-          </select>
-        </div>
-      )}
       <Link to="/travel" icon={Compass} label="Dashboard" />
       <Link to="/travel/leads" icon={UserPlus} label="Leads" />
       {/* Arc 2 #904 slice — InboundLeads admin (operator surface for inbound
@@ -1112,21 +1464,92 @@ function renderTravelNav({
           Leads page. InboxIcon (alias for Inbox) is already imported in
           the lucide-react block; matches the page's own icon choice. */}
       <Link to="/travel/inbound-leads" icon={InboxIcon} label="Inbound Leads" />
-      <Link to="/travel/diagnostics" icon={ClipboardCheck} label="Diagnostics" />
+      <Link
+        to="/travel/diagnostics"
+        icon={ClipboardCheck}
+        label="Diagnostics"
+      />
       <Link to="/travel/itineraries" icon={MapIcon} label="Itineraries" />
-      <Link to="/travel/trips" icon={Luggage} label="TMC Trips" />
+      {/* S99 (TRAVEL_BIG_SCOPE_BACKLOG) — POI rep-suggested pending-approval
+          queue. ADMIN-only — reps suggest POIs inline on itineraries
+          (FR-3.7); ADMIN reviews here. Sits directly under Itineraries
+          because the queue is the upstream review surface for inline POI
+          suggestions made on itineraries. CheckSquare icon mirrors the
+          approval/review semantic; already imported via the icon block. */}
+      {isAdmin && (
+        <Link
+          to="/travel/pois/pending"
+          icon={CheckSquare}
+          label="POI Approvals"
+        />
+      )}
+      {inBrand("tmc") && (
+        <Link to="/travel/trips" icon={Luggage} label="TMC Trips" />
+      )}
+      {/* T26 (PRD_TMC_DIAGNOSTIC_SALES_ROUTING_ENGINE §10) — TMC Trip
+          Catalogue admin (T16 shipped 6a034ebb). ADMIN+MANAGER visibility
+          mirrors the page's CRUD auth posture (verifyRole inside the route
+          handler); USER role sees no entry. Sits adjacent to "TMC Trips"
+          since both surfaces are TMC sub-brand operator tools — the
+          Catalogue is the upstream "library of bookable trip templates"
+          that "TMC Trips" instances are spawned from. Restored after the
+          #1139 merge dropped the link while wrapping TMC Trips in
+          inBrand("tmc"). */}
+      {isManager && inBrand("tmc") && (
+        <Link
+          to="/travel/tmc/catalogue"
+          icon={Package}
+          label="TMC Catalogue"
+        />
+      )}
       <Link to="/travel/web-checkins" icon={Ticket} label="Web Check-ins" />
-      <Link to="/travel/cost-master" icon={DollarSign} label="Cost Master" />
+      {/* Slice C2 — Passport OCR verification queue (ADMIN+MANAGER only).
+          PRD_PASSPORT_OCR §5.4 stub-mode drop. */}
+      {isManager && (
+        <Link to="/travel/passport-verification" icon={BadgeCheck} label="Passport Verification" />
+      )}
+      <Link to="/travel/cost-master" icon={IndianRupee} label="Cost Master" />
       {/* Arc 2 Travel Gap #907 slice 5/N — SightseeingMaster admin entry.
           Adjacent to Cost Master because #907 frames Sightseeing as "the
           6th category in Cost Master". */}
       <Link to="/travel/sightseeing" icon={Camera} label="Sightseeing Master" />
       {/* Arc 2 Travel Gap #907 slice 8/N — ItineraryTemplates admin entry.
           Adjacent to Sightseeing Master because both are #907 admin pages. */}
-      <Link to="/travel/itinerary-templates" icon={LayoutTemplate} label="Itinerary Templates" />
-      {isAdmin && <Link to="/travel/pricing-rules" icon={BadgePercent} label="Pricing Rules" />}
+      <Link
+        to="/travel/itinerary-templates"
+        icon={LayoutTemplate}
+        label="Itinerary Templates"
+      />
+      {isAdmin && (
+        <Link
+          to="/travel/pricing-rules"
+          icon={BadgePercent}
+          label="Pricing Rules"
+        />
+      )}
       <Link to="/travel/reports" icon={BarChart3} label="Reports" />
       <Link to="/travel/suppliers-admin" icon={Building2} label="Suppliers" />
+      {/* Hotel inventory search surfaces — moved from the wellness sidebar
+          (they were misplaced there). RateHawk = aggregator (Q19 cred);
+          Booking/Expedia = direct-API (Q11 cred). Both are travel-only by
+          design; routes are wrapped in <TravelOnly> in App.jsx so a direct
+          URL hit from a non-travel tenant bounces to landingFor. */}
+      {isManager && (
+        <Link
+          to="/admin/ratehawk-search"
+          icon={Hotel}
+          label="RateHawk Search"
+        />
+      )}
+      {isManager && (
+        <Link
+          to="/admin/booking-expedia-search"
+          icon={BedDouble}
+          label="Booking / Expedia"
+        />
+      )}
+      {/* Slice C1 — Voyagr per-site API key admin (ADMIN-only). */}
+      {isAdmin && (<Link to="/admin/voyagr-api-keys" icon={Key} label="Voyagr API Keys" />)}
       {/* Arc 2 #903 — cross-supplier Payables (A/P) review. Operator surface
           aggregating every TravelSupplierPayable across every supplier into
           one table; complements the per-supplier expand on SuppliersAdmin.
@@ -1138,28 +1561,104 @@ function renderTravelNav({
           so the link is visible to every role; canWrite + Delete gates live
           inside the page. Award icon picked over BadgePercent (taken by
           Pricing Rules) and TicketPercent (taken by wellness Coupons). */}
-      <Link to="/travel/commission-profiles" icon={Award} label="Commission Profiles" />
+      <Link
+        to="/travel/commission-profiles"
+        icon={Award}
+        label="Commission Profiles"
+      />
       <Link to="/travel/quotes-admin" icon={FileText} label="Quotes" />
       {/* Arc 2 #900 slice 2 — operator-facing Quote Builder (line items +
           totals + action cluster). Distinct from the CRUD list above.
           MANAGER+ per RoleGuard on the route element. */}
-      {isManager && <Link to="/travel/quotes/builder" icon={Calculator} label="Quote Builder" />}
+      {isManager && (
+        <Link
+          to="/travel/quotes/builder"
+          icon={Calculator}
+          label="Quote Builder"
+        />
+      )}
+      {/* S49 (TRAVEL_BIG_SCOPE_BACKLOG) — QuoteTemplates admin nav entry.
+          Sits in the Quotes cluster (under Quote Builder) because it's a
+          pre-filled-line-set library that operators apply to new quotes.
+          ADMIN+MANAGER visible; the page enforces its own canWrite/Delete
+          gates server-side. SUT page commit 8fb23237 (S31). FileStack icon
+          picked for the "stack of reusable templates" motif (FileText taken
+          by Quotes; LayoutTemplate taken by Itinerary Templates). */}
+      {isManager && (
+        <Link
+          to="/travel/quote-templates"
+          icon={FileStack}
+          label="Quote Templates"
+        />
+      )}
       <Link to="/travel/invoices-admin" icon={Receipt} label="Invoices" />
       {/* Arc 2 #901 slice 7 — cross-invoice payment-milestone dashboard
           (consumes /api/travel/payment-schedules/upcoming). Billing-adjacent
           slot under Invoices is the right home: operator surface for
           upcoming/overdue milestones across all travel invoices. */}
       <Link to="/travel/milestones" icon={Clock} label="Milestones" />
-      {isAdmin && <Link to="/travel/suppliers" icon={Key} label="Supplier credentials" />}
-      {isAdmin && <Link to="/travel/religious-packets" icon={BookOpen} label="Religious Packets" />}
+      {/* S55 (TRAVEL_BIG_SCOPE_BACKLOG) — CancellationPolicies admin nav
+          entry. Sits in the Invoices/Milestones billing cluster because
+          cancellation policies drive auto-issuance of credit notes when an
+          invoice is voided (S33 wire-in). ADMIN+MANAGER visible; the page
+          surfaces a Trash icon ADMIN-only mirroring the backend DELETE
+          verifyRole(["ADMIN"]) gate. SUT page commit 4823b160 (S54). Ban
+          icon picked for the cancellation/refund motif. */}
+      {isManager && (
+        <Link
+          to="/travel/cancellation-policies"
+          icon={Ban}
+          label="Cancellation Policies"
+        />
+      )}
+      {isAdmin && (
+        <Link to="/travel/suppliers" icon={Key} label="Supplier credentials" />
+      )}
+      {isAdmin && inBrand("rfu") && (
+        <Link
+          to="/travel/religious-packets"
+          icon={BookOpen}
+          label="Religious Packets"
+        />
+      )}
       {/* tick #181 — curriculum-mappings CRUD admin (consumes
           /api/travel-curriculum). TMC vertical school-trip pitch deck.
           ADMIN-only per backend RBAC + RoleGuard on the route element. */}
-      {isAdmin && <Link to="/travel/curriculum-mappings" icon={GraduationCap} label="Curriculum Mappings" />}
+      {isAdmin && inBrand("tmc") && (
+        <Link
+          to="/travel/curriculum-mappings"
+          icon={GraduationCap}
+          label="Curriculum Mappings"
+        />
+      )}
+      {/* TMC school term calendar — term/holiday/exam windows for trip scheduling. */}
+      {isAdmin && inBrand("tmc") && (
+        <Link
+          to="/travel/school-terms"
+          icon={Calendar}
+          label="School Term Calendar"
+        />
+      )}
+      {/* T26 (PRD_TMC_DIAGNOSTIC_SALES_ROUTING_ENGINE §10) — TMC trip-catalogue
+          admin (route /travel/tmc/catalogue → TmcCatalogueAdmin). ADMIN+MANAGER
+          visible, mirroring the page's verifyRole posture; TMC-brand scoped. */}
+      {isManager && inBrand("tmc") && (
+        <Link
+          to="/travel/tmc/catalogue"
+          icon={BookOpen}
+          label="TMC Catalogue"
+        />
+      )}
       {/* tick #186 — Marketing Flyer Studio Phase 2 SHELL (#908).
           MANAGER+ operator-facing surface; real impl per PRD §8 build
           order in docs/PRD_TRAVEL_MARKETING_FLYER.md. */}
-      {isManager && <Link to="/travel/marketing/flyer-studio" icon={FileImage} label="Marketing Flyer Studio" />}
+      {isManager && (
+        <Link
+          to="/travel/marketing/flyer-studio"
+          icon={FileImage}
+          label="Marketing Flyer Studio"
+        />
+      )}
       {/* #908 slice 2 — FlyerTemplates library list (companion to the live
           composer above). Operator-saved templates with palette-swatch
           preview; "Use as starting point" handoff into the Studio. Same
@@ -1167,25 +1666,43 @@ function renderTravelNav({
           Palette icon picked for the page's 5-hex palette swatch preview
           and to read as a "template library" (not the FileImage active
           composer). */}
-      {isManager && <Link to="/travel/flyer-templates" icon={Palette} label="Flyer Templates" />}
+      {isManager && (
+        <Link
+          to="/travel/flyer-templates"
+          icon={Palette}
+          label="Flyer Templates"
+        />
+      )}
 
       {/* Phase 3 Visa Sure scaffolding (cluster B3) — placeholder shells, admin-only.
           Real implementation gated on product calls in docs/PRD_VISA_SURE_PHASE_3.md §5 + §9. */}
-      {isAdmin && (
+      {isAdmin && inBrand("visasure") && (
         <>
           <div style={labelStyle}>Visa Sure</div>
           <Link to="/travel/visa" icon={Stamp} label="Dashboard" />
-          <Link to="/travel/visa/applications" icon={BadgeCheck} label="Applications" />
-          <Link to="/travel/visa/checklists" icon={ClipboardList} label="Checklists" />
+          <Link
+            to="/travel/visa/applications"
+            icon={BadgeCheck}
+            label="Applications"
+          />
+          <Link
+            to="/travel/visa/checklists"
+            icon={ClipboardList}
+            label="Checklists"
+          />
           {/* tick #178 — embassy-rules CRUD admin (consumes /api/embassy-rules).
               ADMIN-only per backend RBAC + RoleGuard on the route element. */}
-          <Link to="/travel/visa/embassy-rules" icon={Shield} label="Embassy Rules" />
+          <Link
+            to="/travel/visa/embassy-rules"
+            icon={Shield}
+            label="Embassy Rules"
+          />
         </>
       )}
 
       {/* Phase 2 Travel Stall operator landing (TS21) — scaffold shell.
           Operator-facing surface, visible to admin + manager. */}
-      {isManager && (
+      {isManager && inBrand("travelstall") && (
         <>
           <div style={labelStyle}>Travel Stall</div>
           <Link to="/travel-stall" icon={Sparkles} label="Dashboard" />
@@ -1201,10 +1718,13 @@ function renderTravelNav({
       <Link to="/inbox" icon={InboxIcon} label="Inbox" badge={counts.inbox} />
       <Link to="/sequences" icon={Send} label="Sequences" />
       <Link to="/tasks" icon={CheckSquare} label="Tasks" badge={counts.tasks} />
+      {/* T18 — consultation-call booking (Google Meet slot-picker). Reuses the
+          generic /calendar-sync surface; travel had no calendar entry before. */}
+      <Link to="/calendar-sync" icon={Calendar} label="Calendar" />
 
       <div style={labelStyle}>Financial</div>
       <Link to="/invoices" icon={Receipt} label="Invoices" />
-      <Link to="/payments" icon={DollarSign} label="Payments" />
+      <Link to="/payments" icon={IndianRupee} label="Payments" />
       <Link to="/quotes" icon={FileText} label="Quotes" />
 
       <div style={labelStyle}>Reports</div>
@@ -1224,13 +1744,22 @@ function renderTravelNav({
           <div style={labelStyle}>Platform</div>
           <Link to="/developer" icon={Code} label="Developer" />
           <Link to="/privacy" icon={Shield} label="Privacy" />
+          {/* Per-sub-brand BrandKit admin — moved from the wellness sidebar
+              (the sub-brand model is travel-only: TMC / RFU / Travel Stall
+              / Visa Sure per Q25). Route is wrapped in <TravelOnly> in
+              App.jsx so direct-URL hits from non-travel tenants bounce. */}
+          <Link to="/admin/brand-kits" icon={Palette} label="Brand Kits" />
         </>
       )}
 
       {!isAdmin && !isManager && (
         <>
           <div style={labelStyle}>User</div>
-          <Link to="/notification-settings" icon={Settings} label="Notification Settings" />
+          <Link
+            to="/notification-settings"
+            icon={Settings}
+            label="Notification Settings"
+          />
         </>
       )}
     </>
@@ -1246,22 +1775,47 @@ function renderGenericNav({
   CallifiedLink,
   isAdmin,
   isManager,
+  hasPermission = () => false,
+  permissionsReady = false,
   counts = {},
 }) {
+  // Generic-nav finance links use the per-link `requiredPermission` prop
+  // directly; the hook references here keep the destructure stable for
+  // when we promote generic to the same fully-dynamic shape wellness uses.
+  void hasPermission;
+  void permissionsReady;
   return (
     <>
-      {/* Core — visible to ALL roles */}
+      {/* Core — Home is the role-aware widget dashboard for non-admins.
+          Admins already see /dashboard (Enterprise Overview) which covers
+          the same ground, so the Home link is hidden for them to keep
+          their nav focused. Mirrors the catalog-level hideForAdminTier
+          flag used by the wellness sidebar. */}
+      {!isAdmin && <Link to="/home" icon={LayoutDashboard} label="Home" />}
       <Link to="/dashboard" icon={LayoutDashboard} label="Dashboard" />
-      <AdsGptLink icon={Sparkles} label="AdsGPT" />
-      <CallifiedLink icon={PhoneCall} label="Callified" />
+      {/* AdsGPT + Callified are marketing / call-centre integrations
+          intended for ADMIN + MANAGER only. Mirrors the same gate in the
+          wellness sidebar; keep both branches in sync. */}
+      {isManager && <AdsGptLink icon={Sparkles} label="AdsGPT" />}
+      {isManager && <CallifiedLink icon={PhoneCall} label="Callified" />}
       <Link to="/inbox" icon={InboxIcon} label="Inbox" count={counts.inbox} />
       <Link to="/contacts" icon={Users} label="Contacts" />
       <Link to="/pipeline" icon={Briefcase} label="Pipeline" />
       <Link to="/leads" icon={UserPlus} label="Leads" count={counts.leads} />
       <Link to="/converted-leads" icon={UserPlus} label="Converted Leads" />
       <Link to="/clients" icon={Building2} label="Clients" />
-      <Link to="/tasks" icon={CheckSquare} label="Task Queue" count={counts.tasks} />
-      <Link to="/tickets" icon={Ticket} label="Tickets" count={counts.tickets} />
+      <Link
+        to="/tasks"
+        icon={CheckSquare}
+        label="Task Queue"
+        count={counts.tasks}
+      />
+      <Link
+        to="/tickets"
+        icon={Ticket}
+        label="Tickets"
+        count={counts.tickets}
+      />
       {/* #474: label was "Calendar" pointing at /calendar-sync — the integration
           settings page (Google/Outlook bindings), not an event calendar. Users
           clicked expecting a day/week agenda view. There IS no generic event
@@ -1279,10 +1833,32 @@ function renderGenericNav({
       <Link to="/document-templates" icon={FileText} label="Doc Templates" />
       <Link to="/document-tracking" icon={Eye} label="Doc Tracking" />
 
-      <Link to="/invoices" icon={Receipt} label="Invoices" />
-      <Link to="/estimates" icon={FileSpreadsheet} label="Estimates" />
-      <Link to="/expenses" icon={DollarSign} label="Expenses" />
-      <Link to="/contracts" icon={FileText} label="Contracts" />
+      {/* Finance items gated on per-module read perms so a custom role
+          without billing access doesn't see the surfaces at all. */}
+      <Link
+        to="/invoices"
+        icon={Receipt}
+        label="Invoices"
+        requiredPermission={{ module: "invoices", action: "read" }}
+      />
+      <Link
+        to="/estimates"
+        icon={FileSpreadsheet}
+        label="Estimates"
+        requiredPermission={{ module: "estimates", action: "read" }}
+      />
+      <Link
+        to="/expenses"
+        icon={IndianRupee}
+        label="Expenses"
+        requiredPermission={{ module: "expenses", action: "read" }}
+      />
+      <Link
+        to="/contracts"
+        icon={FileText}
+        label="Contracts"
+        requiredPermission={{ module: "contracts", action: "read" }}
+      />
       <Link to="/projects" icon={FolderKanban} label="Projects" />
 
       <Link to="/pipelines" icon={GitBranch} label="Pipelines" managerOnly />
@@ -1318,9 +1894,6 @@ function renderGenericNav({
       <Link to="/lead-routing" icon={Send} label="Lead Routing" managerOnly />
       <Link to="/territories" icon={Network} label="Territories" managerOnly />
 
-      {/* #898: Campaigns alias for the generic sidebar (deep-links to /marketing
-          which defaults to the Email Campaigns tab). */}
-      <Link to="/campaigns" icon={Megaphone} label="Campaigns" managerOnly />
       <Link to="/marketing" icon={Send} label="Marketing" managerOnly />
       <Link to="/sequences" icon={Network} label="Sequences" managerOnly />
       <Link to="/ab-tests" icon={PenTool} label="A/B Tests" managerOnly />
@@ -1333,12 +1906,9 @@ function renderGenericNav({
         label="Landing Pages"
         managerOnly
       />
-      <Link
-        to="/marketplace-leads"
-        icon={ShoppingBag}
-        label="Marketplace Leads"
-        managerOnly
-      />
+      {/* Marketplace Leads sidebar link removed by request. Route stays
+          mounted in App.jsx so /marketplace-leads is reachable by deep
+          link / direct URL. */}
 
       <Link to="/support" icon={LifeBuoy} label="Support" managerOnly />
       <Link
@@ -1353,7 +1923,15 @@ function renderGenericNav({
       <Link to="/lead-scoring" icon={Target} label="Lead Scoring" managerOnly />
       <Link to="/cpq" icon={FileDigit} label="CPQ" managerOnly />
 
-      {isAdmin && (
+      {/* Admin section. Opens for the legacy `ADMIN` role-string AND for any
+          custom role granted `roles.read` via RBAC — without the latter,
+          custom-admin users would never see the Roles link (the only entry
+          in this block gated by permission rather than strict role-string)
+          even though /settings/roles route + RolesAdmin page are designed
+          to admit them. The inner `adminOnly` links keep gating on the
+          legacy role string, so a custom role with only roles.read sees just
+          the Roles entry under this divider — which is the correct UX. */}
+      {(isAdmin || (permissionsReady && hasPermission("roles", "read"))) && (
         <div
           style={{
             paddingTop: "0.75rem",
@@ -1365,10 +1943,15 @@ function renderGenericNav({
           }}
         >
           <Link to="/staff" icon={UsersRound} label="Staff" adminOnly />
+          {/* RBAC role + permission admin. Shown to anyone with `roles.read`
+              granted via RBAC (typically ADMIN). The page itself rechecks. */}
+          <Link
+            to="/settings/roles"
+            icon={ShieldCheck}
+            label="Roles"
+            requiredPermission={{ module: "roles", action: "read" }}
+          />
           <Link to="/audit-log" icon={ScrollText} label="Audit Log" adminOnly />
-          {/* Cron PRD Priority A #1 — LLM observability dashboard. ADMIN-only;
-              surfaces /api/admin/llm-spend rollups. */}
-          <Link to="/llm-spend" icon={Activity} label="LLM Spend" adminOnly />
           <Link to="/privacy" icon={Shield} label="Privacy" adminOnly />
           <Link
             to="/field-permissions"
@@ -1392,6 +1975,12 @@ function renderGenericNav({
             adminOnly
           />
           <Link
+            to="/commission-data"
+            icon={Award}
+            label="Commission Data"
+            adminOnly
+          />
+          <Link
             to="/revenue-goals"
             icon={Target}
             label="Revenue Goals"
@@ -1408,79 +1997,16 @@ function renderGenericNav({
           <Link to="/objects" icon={Database} label="App Builder" adminOnly />
           <Link
             to="/currencies"
-            icon={DollarSign}
+            icon={IndianRupee}
             label="Currencies"
             adminOnly
           />
           <Link to="/zapier" icon={Code} label="Zapier" adminOnly />
           <Link to="/developer" icon={Code} label="Developers" adminOnly />
-          {/* Per-tenant cap-override admin UI. Surfaces /api/tenant-settings
-              CRUD (backend commit 1542b8e) so ADMINs can configure budget caps
-              for AdsGPT / AI calling / RateHawk / LLM without DB access. */}
           <Link
-            to="/admin/tenant-settings"
-            icon={DollarSign}
-            label="Tenant Settings"
-            adminOnly
-          />
-          {/* Per-sub-brand BrandKit admin UI. Surfaces /api/brand-kits CRUD
-              (backend commit e4783e0) so ADMINs can manage logo / colors /
-              font / tagline per sub-brand without DB access. */}
-          <Link
-            to="/admin/brand-kits"
-            icon={Palette}
-            label="Brand Kits"
-            adminOnly
-          />
-          {/* AdsGPT Reports admin UI. Surfaces /api/adsgpt (backend commit
-              0d66a74) — per-platform ad performance + cap utilisation.
-              managerOnly so MANAGERs see it too (analytics, not config). */}
-          <Link
-            to="/admin/adsgpt-reports"
-            icon={TrendingUp}
-            label="AdsGPT Reports"
-            managerOnly
-          />
-          {/* RateHawk hotel-search admin UI. Surfaces /api/ratehawk (backend
-              commit be67789) — hotel inventory search + cap utilisation.
-              managerOnly so MANAGERs see it too (operator search, not config).
-              Stub-mode banner surfaces while Q19 cred-blocked. */}
-          <Link
-            to="/admin/ratehawk-search"
-            icon={Hotel}
-            label="RateHawk Search"
-            managerOnly
-          />
-          {/* Callified AI calls admin UI. Surfaces /api/callified (backend
-              commit cdad62d) — outbound AI call initiation + cap utilisation
-              + feature-flag check. managerOnly so MANAGERs see it too
-              (operator action, not config). Stub-mode banner surfaces while
-              Q1 cred-blocked (Yasin's Callified.ai handover). */}
-          <Link
-            to="/admin/callified-calls"
-            icon={PhoneCall}
-            label="Callified Calls"
-            managerOnly
-          />
-          {/* Booking.com / Expedia hotel-search admin UI. Surfaces
-              /api/booking-expedia (backend commit bb33cbe, tick #105) —
-              direct-API hotel inventory search + shared cap utilisation.
-              managerOnly so MANAGERs see it too (operator search, not
-              config). Phase 2 deferred-by-design: Expedia returns 503
-              EXPEDIA_NOT_YET_ENABLED until DC-4 flips + Q11 lands. */}
-          <Link
-            to="/admin/booking-expedia-search"
-            icon={BedDouble}
-            label="Booking / Expedia"
-            managerOnly
-          />
-          {/* Wallet bonus rule CRUD admin UI. Surfaces /api/wallet/rules
-              (Agent B ships next tick, slice 3 of PRD_WALLET_TOPUP). ADMIN-only
-              per PRD §3.9 RBAC matrix. Page is robust to backend absence. */}
-          <Link
-            to="/admin/wallet-rules"
-            icon={WalletIcon}
-            label="Wallet Bonus Rules"
+            to="/data-import-export"
+            icon={Database}
+            label="Import / Export"
             adminOnly
           />
           <Link to="/settings" icon={Settings} label="Settings" adminOnly />
@@ -1514,7 +2040,11 @@ function renderGenericNav({
             gap: "0.25rem",
           }}
         >
-          <Link to="/notification-settings" icon={Settings} label="Notification Settings" />
+          <Link
+            to="/notification-settings"
+            icon={Settings}
+            label="Notification Settings"
+          />
         </div>
       )}
     </>
@@ -1546,7 +2076,15 @@ const navStyle = {
   gap: "0.625rem",
   borderRadius: "8px",
   color: "var(--text-primary)",
-  transition: "all 0.2s ease",
+  // PERF: was `transition: "all 0.2s ease"`. `all` transitions every property
+  // change — including layout-affecting ones — and fires on every hover state
+  // change. Restrict to the properties the :hover/.active rules actually
+  // animate: background-color and color. (Earlier this list included
+  // `transform 0.2s ease` to cover a hover `translateX(4px)` effect, but
+  // that effect was removed because the visual wave during scroll read as
+  // lag. Listing transform here with no rule animating it kept the
+  // compositor in "live layer" mode for nav-links — drop it.)
+  transition: "background-color 0.2s ease, color 0.2s ease",
   textDecoration: "none",
   fontSize: "0.9rem",
   flexShrink: 0,

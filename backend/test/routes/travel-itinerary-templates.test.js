@@ -326,6 +326,227 @@ describe('POST /api/travel/itinerary-templates — create', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// S13 — brand-kit-aware POST defaults from tenant.subBrandConfigJson.
+//
+// Pins per docs/TRAVEL_BIG_SCOPE_BACKLOG.md S13 + PRD_TRAVEL_ITINERARY_
+// UPGRADES.md ("Brand-kit-aware itinerary template defaults from
+// subBrandConfigJson"). The brand-kit selector:
+//   - reads tenant.subBrandConfigJson (extra prisma.tenant.findUnique on
+//     create — requireTravelTenant doesn't project the column),
+//   - resolves per-sub-brand block first, top-level fallback second,
+//     hard-coded BRAND_KIT_FALLBACKS third,
+//   - mutates createData.thumbnailUrl + createData.templateJson.branding
+//     to seed defaults,
+//   - lets caller-supplied values win.
+//
+// Pinned cases:
+//   (a) POST with empty body brand fields + tenant.subBrandConfigJson set
+//       → brand fields applied from the per-sub-brand block; branding._source
+//       = "subBrandConfig"
+//   (b) POST with explicit thumbnailUrl + templateJson.branding overrides
+//       → caller values win; config / fallback don't clobber
+//   (c) POST when tenant.subBrandConfigJson is null → fallback colors apply;
+//       branding._source = "fallback"
+//   (d) Sub-brand routing: per-sub-brand block wins over top-level
+//   (e) Top-level fallback fires when template has no subBrand
+//   (f) Malformed subBrandConfigJson → silent fall-through to fallback
+//       defaults (no 500)
+// ---------------------------------------------------------------------------
+describe('POST /api/travel/itinerary-templates — S13 brand-kit defaults', () => {
+  // Helper: stub the tenant lookup for the brand-kit refetch path.
+  // requireTravelTenant calls prisma.tenant.findUnique first (selecting
+  // id/vertical/name/slug). The brand-kit refetch fires a second
+  // findUnique (selecting subBrandConfigJson). The shared mock returns
+  // the union of both so each call resolves correctly regardless of
+  // select clause.
+  function stubTenantConfig(configJson) {
+    prisma.tenant.findUnique.mockResolvedValue({
+      id: 1,
+      vertical: 'travel',
+      name: 'Test Travel',
+      slug: 'test-travel',
+      subBrandConfigJson: configJson,
+    });
+  }
+
+  beforeEach(() => {
+    prisma.itineraryTemplate.create.mockImplementation(({ data }) => ({
+      id: 9001,
+      ...data,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    }));
+  });
+
+  test('(a) POST without brand fields + config set → branding applied from sub-brand block; _source="subBrandConfig"', async () => {
+    stubTenantConfig(JSON.stringify({
+      rfu: {
+        thumbnailUrl: 'https://cdn.example.com/rfu-cover.jpg',
+        primaryColor: '#012345',
+        accentColor: '#abcdef',
+        headerColor: '#fedcba',
+        fontFamily: 'Cairo, sans-serif',
+      },
+    }));
+
+    const res = await request(makeApp())
+      .post('/api/travel/itinerary-templates')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({
+        name: '14-day Umrah Standard',
+        destinationName: 'Mecca',
+        durationDays: 14,
+        subBrand: 'rfu',
+      });
+
+    expect(res.status).toBe(201);
+    const data = prisma.itineraryTemplate.create.mock.calls[0][0].data;
+    expect(data.thumbnailUrl).toBe('https://cdn.example.com/rfu-cover.jpg');
+    expect(typeof data.templateJson).toBe('string');
+    const tj = JSON.parse(data.templateJson);
+    expect(tj.branding.primaryColor).toBe('#012345');
+    expect(tj.branding.accentColor).toBe('#abcdef');
+    expect(tj.branding.headerColor).toBe('#fedcba');
+    expect(tj.branding.fontFamily).toBe('Cairo, sans-serif');
+    expect(tj.branding._source).toBe('subBrandConfig');
+  });
+
+  test('(b) POST with explicit thumbnailUrl + branding overrides — caller wins', async () => {
+    stubTenantConfig(JSON.stringify({
+      tmc: { thumbnailUrl: 'https://cdn.example.com/tmc-default.jpg', primaryColor: '#000000' },
+    }));
+
+    const res = await request(makeApp())
+      .post('/api/travel/itinerary-templates')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({
+        name: 'Spain School Trip',
+        destinationName: 'Madrid',
+        durationDays: 6,
+        subBrand: 'tmc',
+        thumbnailUrl: 'https://cdn.example.com/operator-custom.jpg',
+        templateJson: JSON.stringify({
+          items: [{ day: 1, title: 'Arrival' }],
+          branding: { primaryColor: '#FF00FF' },
+        }),
+      });
+
+    expect(res.status).toBe(201);
+    const data = prisma.itineraryTemplate.create.mock.calls[0][0].data;
+    // Caller's thumbnailUrl wins
+    expect(data.thumbnailUrl).toBe('https://cdn.example.com/operator-custom.jpg');
+    const tj = JSON.parse(data.templateJson);
+    // Caller's items[] preserved
+    expect(tj.items).toEqual([{ day: 1, title: 'Arrival' }]);
+    // Caller's branding.primaryColor wins
+    expect(tj.branding.primaryColor).toBe('#FF00FF');
+    // Other branding fields backfilled from fallback (config didn't define
+    // them; sub-brand was tmc → tmc fallback)
+    expect(tj.branding.fontFamily).toBe('Inter, sans-serif');
+  });
+
+  test('(c) POST when subBrandConfigJson is null → fallback defaults applied; _source="fallback"', async () => {
+    stubTenantConfig(null);
+
+    const res = await request(makeApp())
+      .post('/api/travel/itinerary-templates')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({
+        name: '7-day Tokyo Discovery',
+        destinationName: 'Tokyo',
+        durationDays: 7,
+        subBrand: 'travelstall',
+      });
+
+    expect(res.status).toBe(201);
+    const data = prisma.itineraryTemplate.create.mock.calls[0][0].data;
+    // Hard-coded fallback color for travelstall is #C0392B
+    expect(data.thumbnailUrl).toBeNull();
+    const tj = JSON.parse(data.templateJson);
+    expect(tj.branding.primaryColor).toBe('#C0392B');
+    expect(tj.branding.accentColor).toBe('#F39C12');
+    expect(tj.branding.headerColor).toBe('#922B21');
+    expect(tj.branding.fontFamily).toBe('Inter, sans-serif');
+    expect(tj.branding._source).toBe('fallback');
+  });
+
+  test('(d) Sub-brand routing: per-sub-brand block wins over top-level', async () => {
+    stubTenantConfig(JSON.stringify({
+      // Top-level defaults (used when sub-brand block missing or template
+      // has no subBrand)
+      primaryColor: '#111111',
+      // Per-sub-brand wins for subBrand=visasure
+      visasure: { primaryColor: '#222222', fontFamily: 'Roboto, sans-serif' },
+    }));
+
+    const res = await request(makeApp())
+      .post('/api/travel/itinerary-templates')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({
+        name: 'Schengen Visa Application',
+        destinationName: 'Paris',
+        durationDays: 1,
+        subBrand: 'visasure',
+      });
+
+    expect(res.status).toBe(201);
+    const data = prisma.itineraryTemplate.create.mock.calls[0][0].data;
+    const tj = JSON.parse(data.templateJson);
+    expect(tj.branding.primaryColor).toBe('#222222'); // visasure block wins
+    expect(tj.branding.fontFamily).toBe('Roboto, sans-serif');
+    expect(tj.branding._source).toBe('subBrandConfig');
+  });
+
+  test('(e) Top-level config used when template has no subBrand', async () => {
+    stubTenantConfig(JSON.stringify({
+      primaryColor: '#777777',
+      fontFamily: 'Lato, sans-serif',
+    }));
+
+    const res = await request(makeApp())
+      .post('/api/travel/itinerary-templates')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({
+        name: 'Generic Trip Template',
+        destinationName: 'Worldwide',
+        durationDays: 3,
+        // No subBrand → tenant-wide template
+      });
+
+    expect(res.status).toBe(201);
+    const data = prisma.itineraryTemplate.create.mock.calls[0][0].data;
+    expect(data.subBrand).toBeNull();
+    const tj = JSON.parse(data.templateJson);
+    // Top-level wins; sub-brand fallback ("_generic") provides the rest
+    expect(tj.branding.primaryColor).toBe('#777777');
+    expect(tj.branding.fontFamily).toBe('Lato, sans-serif');
+    expect(tj.branding._source).toBe('subBrandConfig');
+    // Backfilled from _generic
+    expect(tj.branding.accentColor).toBe('#F2B544');
+  });
+
+  test('(f) Malformed subBrandConfigJson → fallback applied silently (no 500)', async () => {
+    stubTenantConfig('this is not JSON {{{');
+
+    const res = await request(makeApp())
+      .post('/api/travel/itinerary-templates')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({
+        name: 'Resilience Test',
+        destinationName: 'Anywhere',
+        durationDays: 2,
+        subBrand: 'tmc',
+      });
+
+    expect(res.status).toBe(201);
+    const data = prisma.itineraryTemplate.create.mock.calls[0][0].data;
+    const tj = JSON.parse(data.templateJson);
+    expect(tj.branding._source).toBe('fallback');
+    expect(tj.branding.primaryColor).toBe('#1F4E79'); // tmc fallback
+  });
+});
+
 describe('GET /api/travel/itinerary-templates/:id', () => {
   test('found → 200 + row', async () => {
     prisma.itineraryTemplate.findFirst.mockResolvedValue(sampleRows[0]);

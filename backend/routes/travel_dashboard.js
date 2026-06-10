@@ -32,6 +32,8 @@ const {
   requireTravelTenant,
   getSubBrandAccessSet,
   narrowWhereBySubBrand,
+  canAccessSubBrand,
+  assertValidSubBrand,
 } = require("../middleware/travelGuards");
 
 // Build a Prisma `where` clause for tenant + sub-brand scoping. The
@@ -56,8 +58,40 @@ function flattenGroupCount(rows, key) {
 
 router.get("/dashboard", verifyToken, requireTravelTenant, async (req, res) => {
   try {
-    const allowed = await getSubBrandAccessSet(req.user.userId);
+    let allowed = await getSubBrandAccessSet(req.user.userId);
     const tenantId = req.travelTenant.id;
+
+    // Optional ?subBrand= narrows the dashboard to a single sub-brand. This
+    // is what the sidebar sub-brand switcher drives — picking "TMC" should
+    // recompute every tile against TMC only, not the caller's full grant set.
+    // "All" (no param) leaves `allowed` at the caller's natural access.
+    //
+    // Security: we never WIDEN access here. We intersect the requested brand
+    // with what the caller may already see (canAccessSubBrand). A scoped user
+    // asking for a brand outside their grant collapses to a deny-all empty set
+    // → zero rows, consistent with narrowWhereBySubBrand's silent-empty rule
+    // (no 403; the user simply can't see what they aren't entitled to).
+    const requestedSubBrand = req.query.subBrand;
+    if (requestedSubBrand) {
+      assertValidSubBrand(requestedSubBrand); // 400 INVALID_SUB_BRAND on garbage
+      allowed = canAccessSubBrand(allowed, requestedSubBrand)
+        ? new Set([requestedSubBrand])
+        : new Set();
+    }
+
+    // TmcTrip is TMC-only and has NO `subBrand` column, so it must NOT go
+    // through narrowWhereBySubBrand (which would inject `subBrand: { in: [...] }`
+    // and crash Prisma with "Unknown argument `subBrand`" for any sub-brand-
+    // scoped caller). Instead gate on whether the caller can see TMC at all
+    // (admins/full-access → yes; scoped users → only if "tmc" is in their set),
+    // mirroring tmcSummary() in travel_reports.js. When they can't, force an
+    // unsatisfiable filter so the trip aggregates resolve to zero.
+    const canTmc = canAccessSubBrand(allowed, "tmc");
+    function tmcWhere(extra = {}) {
+      const where = { tenantId, ...extra };
+      if (!canTmc) where.id = -1; // unsatisfiable → zero rows, never matches
+      return where;
+    }
 
     // 30-day cutoff used by both diagnostics + trip "upcoming" tile.
     const now = new Date();
@@ -82,14 +116,14 @@ router.get("/dashboard", verifyToken, requireTravelTenant, async (req, res) => {
       markupRuleCount,
       recentTripsRaw,
     ] = await Promise.all([
-      prisma.tmcTrip.count({ where: scoped(req, allowed) }),
+      prisma.tmcTrip.count({ where: tmcWhere() }),
       prisma.tmcTrip.groupBy({
         by: ["status"],
-        where: scoped(req, allowed),
+        where: tmcWhere(),
         _count: { _all: true },
       }),
       prisma.tmcTrip.count({
-        where: scoped(req, allowed, { departDate: { gte: now, lte: thirtyDaysAhead } }),
+        where: tmcWhere({ departDate: { gte: now, lte: thirtyDaysAhead } }),
       }),
       prisma.travelDiagnostic.count({
         where: scoped(req, allowed, { createdAt: { gte: thirtyDaysAgo } }),
@@ -107,10 +141,12 @@ router.get("/dashboard", verifyToken, requireTravelTenant, async (req, res) => {
       }),
       // Microsites live on TmcTrip — only the TMC sub-brand has them. The
       // sub-brand scope on the parent trip is the source of truth; the
-      // microsite row has tenantId but inherits scope through the trip.
-      prisma.tripMicrosite.count({ where: { tenantId } }),
+      // microsite row has tenantId but inherits scope through the trip. Gate
+      // on canTmc so a non-TMC scope (e.g. switcher set to RFU) shows 0 rather
+      // than leaking tenant-wide microsite counts into an RFU-only view.
+      prisma.tripMicrosite.count({ where: tmcWhere() }),
       prisma.tripMicrosite.count({
-        where: { tenantId, expiresAt: { lt: now } },
+        where: tmcWhere({ expiresAt: { lt: now } }),
       }),
       prisma.travelCostMaster.count({
         where: scoped(req, allowed, { isActive: true }),
@@ -125,7 +161,7 @@ router.get("/dashboard", verifyToken, requireTravelTenant, async (req, res) => {
         where: scoped(req, allowed, { isActive: true }),
       }),
       prisma.tmcTrip.findMany({
-        where: scoped(req, allowed),
+        where: tmcWhere(),
         orderBy: { createdAt: "desc" },
         take: 5,
         select: {

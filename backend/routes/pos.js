@@ -34,25 +34,50 @@ const { verifyWellnessRole } = require("../middleware/wellnessRole");
 
 const router = express.Router();
 
-const tenantWhere = (req, extra = {}) => ({ tenantId: req.user.tenantId, ...extra });
+const tenantWhere = (req, extra = {}) => ({
+  tenantId: req.user.tenantId,
+  ...extra,
+});
 
 // admin/manager can do everything; clinical staff (doctor/professional/
 // telecaller/helper) can ring up sales + manage their own shift but not
 // configure registers / refund.
-const adminGate = verifyWellnessRole(["admin", "manager"]);
-// D17 slice 7 (PRD_POS_NEW_SALE §3.9 + DD-5.7 round-2 RESOLVED 2026-05-25
-// STRICT mode) — void + refund must be ADMIN-only (not manager). Stricter
-// than adminGate above; gives the cashier/manager no escape hatch from the
-// audited destruction of a completed sale + its wallet redemption.
-const strictAdminGate = verifyWellnessRole(["admin"]);
-const cashierGate = verifyWellnessRole([
-  "admin",
-  "manager",
-  "doctor",
-  "professional",
-  "telecaller",
-  "helper",
-]);
+// `anyOfPermissions` lets any RBAC role granted `pos.manage` (admin
+// surfaces — register config, refunds) reach the admin-gated endpoints.
+const adminGate = verifyWellnessRole(["admin", "manager"], {
+  anyOfPermissions: [{ module: "pos", action: "manage" }],
+});
+// DD-5.7 round-2 RESOLVED 2026-05-25: void + refund endpoints are
+// ADMIN-only (manager explicitly denied). See the §3.9 block below.
+const strictAdminGate = verifyWellnessRole(["admin"], {
+  anyOfPermissions: [{ module: "pos", action: "manage" }],
+});
+// "clinical" meta-token covers ALL clinical staff (doctor, professional,
+// nurse, stylist, plus any future custom clinical role with
+// canTakeVisits=true). Telecaller + helper stay as literals because they
+// are operational (canTakeVisits=false) and the cashier surface
+// explicitly includes them — we never want to auto-elevate a new
+// operational role to cashier access just because it appears in the
+// catalog. `anyOfPermissions` opens the cashier surface to any custom
+// role granted `pos.read` or `pos.write` (matches the page catalog's
+// /wellness/pos entry, which requires pos.read).
+const cashierGate = verifyWellnessRole(
+  [
+    "admin",
+    "manager",
+    "clinical",
+    "doctor",
+    "professional",
+    "telecaller",
+    "helper",
+  ],
+  {
+    anyOfPermissions: [
+      { module: "pos", action: "read" },
+      { module: "pos", action: "write" },
+    ],
+  },
+);
 
 // ── Sale-side loyalty auto-credit (PRD Gap §2 item 9) ────────────────
 // Sibling of routes/wellness.js maybeAutoCreditLoyalty(visit, ...). The
@@ -133,18 +158,15 @@ function parseInvoiceNumber(s) {
 
 async function generateInvoiceNumber(tx, tenantId, now = new Date()) {
   const year = now.getUTCFullYear();
-  const prefix = `POS-${year}-`;
-  const latest = await tx.sale.findFirst({
-    where: { tenantId, invoiceNumber: { startsWith: prefix } },
-    orderBy: { invoiceNumber: "desc" },
-    select: { invoiceNumber: true },
+  // Atomic counter table (replaces the racy findFirst+1 pattern).
+  // nextSeq is the value AFTER increment; invoice = nextSeq - 1.
+  // For a fresh tenant+year, create sets nextSeq=2 → invoice 1.
+  const counter = await tx.invoiceCounter.upsert({
+    where: { tenantId_year: { tenantId, year } },
+    update: { nextSeq: { increment: 1 } },
+    create: { tenantId, year, nextSeq: 2 },
   });
-  let nextSeq = 1;
-  if (latest) {
-    const parsed = parseInvoiceNumber(latest.invoiceNumber);
-    if (parsed && parsed.year === year) nextSeq = parsed.seq + 1;
-  }
-  return formatInvoiceNumber(year, nextSeq);
+  return formatInvoiceNumber(year, counter.nextSeq - 1);
 }
 
 // ── Register CRUD ────────────────────────────────────────────────────
@@ -158,6 +180,7 @@ router.get("/registers", cashierGate, async (req, res) => {
     const items = await prisma.register.findMany({
       where,
       orderBy: [{ name: "asc" }],
+      take: 200,
       include: { location: { select: { id: true, name: true, city: true } } },
     });
     res.json(items);
@@ -171,7 +194,9 @@ router.get("/registers/:id", cashierGate, async (req, res) => {
   try {
     const id = parseInt(req.params.id);
     if (!Number.isFinite(id)) {
-      return res.status(400).json({ error: "id must be numeric", code: "INVALID_ID" });
+      return res
+        .status(400)
+        .json({ error: "id must be numeric", code: "INVALID_ID" });
     }
     const reg = await prisma.register.findFirst({
       where: tenantWhere(req, { id }),
@@ -189,18 +214,33 @@ router.post("/registers", adminGate, async (req, res) => {
   try {
     const { locationId, name, openingFloat, isActive } = req.body;
     if (!name || typeof name !== "string" || !name.trim()) {
-      return res.status(400).json({ error: "name is required", code: "NAME_REQUIRED" });
+      return res
+        .status(400)
+        .json({ error: "name is required", code: "NAME_REQUIRED" });
     }
     if (!locationId || !Number.isFinite(parseInt(locationId))) {
-      return res.status(400).json({ error: "locationId is required", code: "LOCATION_REQUIRED" });
+      return res
+        .status(400)
+        .json({ error: "locationId is required", code: "LOCATION_REQUIRED" });
     }
     const loc = await prisma.location.findFirst({
       where: tenantWhere(req, { id: parseInt(locationId) }),
     });
-    if (!loc) return res.status(400).json({ error: "locationId does not exist in this tenant", code: "LOCATION_NOT_FOUND" });
+    if (!loc)
+      return res
+        .status(400)
+        .json({
+          error: "locationId does not exist in this tenant",
+          code: "LOCATION_NOT_FOUND",
+        });
     const float = openingFloat !== undefined ? parseFloat(openingFloat) : 0;
     if (!Number.isFinite(float) || float < 0) {
-      return res.status(400).json({ error: "openingFloat must be a non-negative number", code: "INVALID_FLOAT" });
+      return res
+        .status(400)
+        .json({
+          error: "openingFloat must be a non-negative number",
+          code: "INVALID_FLOAT",
+        });
     }
     const reg = await prisma.register.create({
       data: {
@@ -211,10 +251,17 @@ router.post("/registers", adminGate, async (req, res) => {
         tenantId: req.user.tenantId,
       },
     });
-    await writeAudit("Register", "CREATE", reg.id, req.user.userId, req.user.tenantId, {
-      name: reg.name,
-      locationId: reg.locationId,
-    });
+    await writeAudit(
+      "Register",
+      "CREATE",
+      reg.id,
+      req.user.userId,
+      req.user.tenantId,
+      {
+        name: reg.name,
+        locationId: reg.locationId,
+      },
+    );
     res.status(201).json(reg);
   } catch (e) {
     console.error("[pos] create register error:", e.message);
@@ -226,18 +273,28 @@ router.put("/registers/:id", adminGate, async (req, res) => {
   try {
     const id = parseInt(req.params.id);
     if (!Number.isFinite(id)) {
-      return res.status(400).json({ error: "id must be numeric", code: "INVALID_ID" });
+      return res
+        .status(400)
+        .json({ error: "id must be numeric", code: "INVALID_ID" });
     }
-    const existing = await prisma.register.findFirst({ where: tenantWhere(req, { id }) });
+    const existing = await prisma.register.findFirst({
+      where: tenantWhere(req, { id }),
+    });
     if (!existing) return res.status(404).json({ error: "Register not found" });
 
     const data = {};
     const allowed = ["name", "openingFloat", "isActive", "locationId"];
-    for (const k of allowed) if (req.body[k] !== undefined) data[k] = req.body[k];
+    for (const k of allowed)
+      if (req.body[k] !== undefined) data[k] = req.body[k];
     if (data.openingFloat !== undefined) {
       const f = parseFloat(data.openingFloat);
       if (!Number.isFinite(f) || f < 0) {
-        return res.status(400).json({ error: "openingFloat must be a non-negative number", code: "INVALID_FLOAT" });
+        return res
+          .status(400)
+          .json({
+            error: "openingFloat must be a non-negative number",
+            code: "INVALID_FLOAT",
+          });
       }
       data.openingFloat = f;
     }
@@ -245,19 +302,37 @@ router.put("/registers/:id", adminGate, async (req, res) => {
       const loc = await prisma.location.findFirst({
         where: tenantWhere(req, { id: parseInt(data.locationId) }),
       });
-      if (!loc) return res.status(400).json({ error: "locationId does not exist in this tenant", code: "LOCATION_NOT_FOUND" });
+      if (!loc)
+        return res
+          .status(400)
+          .json({
+            error: "locationId does not exist in this tenant",
+            code: "LOCATION_NOT_FOUND",
+          });
       data.locationId = parseInt(data.locationId);
     }
     if (data.name !== undefined) {
       if (typeof data.name !== "string" || !data.name.trim()) {
-        return res.status(400).json({ error: "name must be a non-empty string", code: "INVALID_NAME" });
+        return res
+          .status(400)
+          .json({
+            error: "name must be a non-empty string",
+            code: "INVALID_NAME",
+          });
       }
       data.name = data.name.trim();
     }
     const updated = await prisma.register.update({ where: { id }, data });
     const changes = diffFields(existing, updated, Object.keys(data));
     if (Object.keys(changes).length > 0) {
-      await writeAudit("Register", "UPDATE", id, req.user.userId, req.user.tenantId, { changedFields: changes });
+      await writeAudit(
+        "Register",
+        "UPDATE",
+        id,
+        req.user.userId,
+        req.user.tenantId,
+        { changedFields: changes },
+      );
     }
     res.json(updated);
   } catch (e) {
@@ -270,9 +345,13 @@ router.delete("/registers/:id", adminGate, async (req, res) => {
   try {
     const id = parseInt(req.params.id);
     if (!Number.isFinite(id)) {
-      return res.status(400).json({ error: "id must be numeric", code: "INVALID_ID" });
+      return res
+        .status(400)
+        .json({ error: "id must be numeric", code: "INVALID_ID" });
     }
-    const existing = await prisma.register.findFirst({ where: tenantWhere(req, { id }) });
+    const existing = await prisma.register.findFirst({
+      where: tenantWhere(req, { id }),
+    });
     if (!existing) return res.status(404).json({ error: "Register not found" });
 
     // Block delete if there's an OPEN shift on this register — operators
@@ -288,9 +367,16 @@ router.delete("/registers/:id", adminGate, async (req, res) => {
       });
     }
     await prisma.register.delete({ where: { id } });
-    await writeAudit("Register", "DELETE", id, req.user.userId, req.user.tenantId, {
-      name: existing.name,
-    });
+    await writeAudit(
+      "Register",
+      "DELETE",
+      id,
+      req.user.userId,
+      req.user.tenantId,
+      {
+        name: existing.name,
+      },
+    );
     res.status(204).end();
   } catch (e) {
     console.error("[pos] delete register error:", e.message);
@@ -304,14 +390,18 @@ router.post("/shifts/open", cashierGate, async (req, res) => {
   try {
     const { registerId, openingFloat } = req.body;
     if (!registerId || !Number.isFinite(parseInt(registerId))) {
-      return res.status(400).json({ error: "registerId is required", code: "REGISTER_REQUIRED" });
+      return res
+        .status(400)
+        .json({ error: "registerId is required", code: "REGISTER_REQUIRED" });
     }
     const reg = await prisma.register.findFirst({
       where: tenantWhere(req, { id: parseInt(registerId) }),
     });
     if (!reg) return res.status(404).json({ error: "Register not found" });
     if (!reg.isActive) {
-      return res.status(409).json({ error: "Register is inactive", code: "REGISTER_INACTIVE" });
+      return res
+        .status(409)
+        .json({ error: "Register is inactive", code: "REGISTER_INACTIVE" });
     }
     // 409 if a shift is already open on this register.
     const existing = await prisma.shift.findFirst({
@@ -329,7 +419,12 @@ router.post("/shifts/open", cashierGate, async (req, res) => {
         ? parseFloat(openingFloat)
         : reg.openingFloat;
     if (!Number.isFinite(float) || float < 0) {
-      return res.status(400).json({ error: "openingFloat must be a non-negative number", code: "INVALID_FLOAT" });
+      return res
+        .status(400)
+        .json({
+          error: "openingFloat must be a non-negative number",
+          code: "INVALID_FLOAT",
+        });
     }
     const shift = await prisma.shift.create({
       data: {
@@ -340,10 +435,17 @@ router.post("/shifts/open", cashierGate, async (req, res) => {
         status: "OPEN",
       },
     });
-    await writeAudit("Shift", "OPEN", shift.id, req.user.userId, req.user.tenantId, {
-      registerId: reg.id,
-      openingFloat: float,
-    });
+    await writeAudit(
+      "Shift",
+      "OPEN",
+      shift.id,
+      req.user.userId,
+      req.user.tenantId,
+      {
+        registerId: reg.id,
+        openingFloat: float,
+      },
+    );
     // PRD Gap §13 item 4 — emit shift.opened so AutomationRules + outbound
     // webhooks can react (e.g. Slack ping the manager when a register opens).
     // Failure here MUST NOT roll back the shift create — fire-and-forget with
@@ -359,9 +461,11 @@ router.post("/shifts/open", cashierGate, async (req, res) => {
           openingFloat: float,
         },
         req.user.tenantId,
-        req.io
+        req.io,
       );
-    } catch (_e) { /* event bus optional */ }
+    } catch (_e) {
+      /* event bus optional */
+    }
     res.status(201).json(shift);
   } catch (e) {
     console.error("[pos] open shift error:", e.message);
@@ -373,34 +477,40 @@ router.post("/shifts/:id/close", cashierGate, async (req, res) => {
   try {
     const id = parseInt(req.params.id);
     if (!Number.isFinite(id)) {
-      return res.status(400).json({ error: "id must be numeric", code: "INVALID_ID" });
+      return res
+        .status(400)
+        .json({ error: "id must be numeric", code: "INVALID_ID" });
     }
-    const shift = await prisma.shift.findFirst({ where: tenantWhere(req, { id }) });
+    const shift = await prisma.shift.findFirst({
+      where: tenantWhere(req, { id }),
+    });
     if (!shift) return res.status(404).json({ error: "Shift not found" });
     if (shift.status !== "OPEN") {
-      return res.status(409).json({ error: "Shift is not open", code: "SHIFT_NOT_OPEN", status: shift.status });
+      return res
+        .status(409)
+        .json({
+          error: "Shift is not open",
+          code: "SHIFT_NOT_OPEN",
+          status: shift.status,
+        });
     }
     // Only the cashier who opened the shift OR an admin can close it.
     if (req.user.role !== "ADMIN" && shift.userId !== req.user.userId) {
       return res.status(403).json({
-        error: "Only the cashier who opened this shift (or an admin) can close it",
+        error:
+          "Only the cashier who opened this shift (or an admin) can close it",
         code: "SHIFT_NOT_OWNER",
       });
     }
     const { closingTotal, notes } = req.body;
-    if (closingTotal === undefined || closingTotal === null) {
-      return res.status(400).json({ error: "closingTotal is required", code: "CLOSING_TOTAL_REQUIRED" });
-    }
-    const closing = parseFloat(closingTotal);
-    if (!Number.isFinite(closing) || closing < 0) {
-      return res.status(400).json({ error: "closingTotal must be a non-negative number", code: "INVALID_CLOSING_TOTAL" });
-    }
+
     // expectedCash = openingFloat + sum(CASH sales) + sum(DEPOSIT) - sum(WITHDRAWAL).
     // #779: petty-cash ledger now contributes to expected drawer balance.
     // Pre-#779 deposits/withdrawals lived in a paper notebook; close-shift
     // variance silently absorbed them. With ledger rows persisted, the
     // expected count is the precise drawer math, and variance reflects
-    // only true under/over-counts.
+    // only true under/over-counts. We compute it BEFORE reading closingTotal
+    // so the system can auto-close at this figure when no manual count is given.
     const cashSales = await prisma.sale.aggregate({
       where: {
         tenantId: req.user.tenantId,
@@ -412,17 +522,46 @@ router.post("/shifts/:id/close", cashierGate, async (req, res) => {
     });
     const cashTaken = cashSales._sum.paidAmount || 0;
     const deposits = await prisma.pettyCashLedger.aggregate({
-      where: { tenantId: req.user.tenantId, shiftId: shift.id, type: "DEPOSIT" },
+      where: {
+        tenantId: req.user.tenantId,
+        shiftId: shift.id,
+        type: "DEPOSIT",
+      },
       _sum: { amount: true },
     });
     const withdrawals = await prisma.pettyCashLedger.aggregate({
-      where: { tenantId: req.user.tenantId, shiftId: shift.id, type: "WITHDRAWAL" },
+      where: {
+        tenantId: req.user.tenantId,
+        shiftId: shift.id,
+        type: "WITHDRAWAL",
+      },
       _sum: { amount: true },
     });
     const depositsTotal = deposits._sum.amount || 0;
     const withdrawalsTotal = withdrawals._sum.amount || 0;
     const expectedCash =
       shift.openingFloat + cashTaken + depositsTotal - withdrawalsTotal;
+
+    // closingTotal is OPTIONAL. When omitted/blank the system AUTO-CLOSES the
+    // drawer at the computed expectedCash (variance 0) — no manual count
+    // required. When a counted total IS supplied we honour it and record the
+    // signed variance (over/under count) for review.
+    let closing;
+    if (
+      closingTotal === undefined ||
+      closingTotal === null ||
+      String(closingTotal).trim() === ""
+    ) {
+      closing = expectedCash;
+    } else {
+      closing = parseFloat(closingTotal);
+      if (!Number.isFinite(closing) || closing < 0) {
+        return res.status(400).json({
+          error: "closingTotal must be a non-negative number",
+          code: "INVALID_CLOSING_TOTAL",
+        });
+      }
+    }
     const variance = closing - expectedCash;
     const closed = await prisma.shift.update({
       where: { id },
@@ -456,9 +595,11 @@ router.post("/shifts/:id/close", cashierGate, async (req, res) => {
           variance,
         },
         req.user.tenantId,
-        req.io
+        req.io,
       );
-    } catch (_e) { /* event bus optional */ }
+    } catch (_e) {
+      /* event bus optional */
+    }
     res.json(closed);
   } catch (e) {
     console.error("[pos] close shift error:", e.message);
@@ -486,7 +627,8 @@ router.get("/shifts", adminGate, async (req, res) => {
   try {
     const { registerId, from, to, status } = req.query;
     const where = tenantWhere(req);
-    if (registerId && Number.isFinite(parseInt(registerId))) where.registerId = parseInt(registerId);
+    if (registerId && Number.isFinite(parseInt(registerId)))
+      where.registerId = parseInt(registerId);
     if (status) where.status = status;
     if (from || to) {
       where.openedAt = {};
@@ -513,14 +655,25 @@ router.get("/shifts/:id", cashierGate, async (req, res) => {
   try {
     const id = parseInt(req.params.id);
     if (!Number.isFinite(id)) {
-      return res.status(400).json({ error: "id must be numeric", code: "INVALID_ID" });
+      return res
+        .status(400)
+        .json({ error: "id must be numeric", code: "INVALID_ID" });
     }
     const shift = await prisma.shift.findFirst({
       where: tenantWhere(req, { id }),
       include: {
         register: { select: { id: true, name: true } },
         user: { select: { id: true, name: true, email: true } },
-        sales: { select: { id: true, invoiceNumber: true, total: true, paymentMethod: true, status: true, createdAt: true } },
+        sales: {
+          select: {
+            id: true,
+            invoiceNumber: true,
+            total: true,
+            paymentMethod: true,
+            status: true,
+            createdAt: true,
+          },
+        },
       },
     });
     if (!shift) return res.status(404).json({ error: "Shift not found" });
@@ -567,15 +720,22 @@ router.get("/shifts/:id", cashierGate, async (req, res) => {
 // at close, not silently rejected (the cashier may need to record an IOU
 // that pays back tomorrow).
 
-const VALID_PETTY_TYPES = new Set(["DEPOSIT", "WITHDRAWAL"]);
+// Allowed WITHDRAWAL categories for the Expenses tab. GENERAL is the default;
+// SUBSCRIPTION tags drawer cash spent on a platform subscription (auto-logged
+// on purchase + manually addable). Extend here as new expense types appear.
+const PETTY_CASH_CATEGORIES = ["GENERAL", "SUBSCRIPTION"];
 
 async function recordPettyCashEntry(req, res, type) {
   try {
     const id = parseInt(req.params.id);
     if (!Number.isFinite(id)) {
-      return res.status(400).json({ error: "id must be numeric", code: "INVALID_ID" });
+      return res
+        .status(400)
+        .json({ error: "id must be numeric", code: "INVALID_ID" });
     }
-    const shift = await prisma.shift.findFirst({ where: tenantWhere(req, { id }) });
+    const shift = await prisma.shift.findFirst({
+      where: tenantWhere(req, { id }),
+    });
     if (!shift) return res.status(404).json({ error: "Shift not found" });
     if (shift.status !== "OPEN") {
       return res.status(409).json({
@@ -583,7 +743,7 @@ async function recordPettyCashEntry(req, res, type) {
         code: "SHIFT_CLOSED",
       });
     }
-    const { amount, reason } = req.body || {};
+    const { amount, reason, category } = req.body || {};
     const amt = parseFloat(amount);
     if (!Number.isFinite(amt) || amt <= 0) {
       return res.status(400).json({
@@ -597,22 +757,45 @@ async function recordPettyCashEntry(req, res, type) {
         code: "REASON_REQUIRED",
       });
     }
+    // Category labels the expense for the Expenses tab. Only meaningful for
+    // WITHDRAWALs; deposits stay GENERAL. Validate against the allowed set so
+    // the UI's filters/badges stay stable.
+    let cat = "GENERAL";
+    if (type === "WITHDRAWAL" && category != null) {
+      const c = String(category).trim().toUpperCase();
+      if (!PETTY_CASH_CATEGORIES.includes(c)) {
+        return res.status(400).json({
+          error: `category must be one of ${PETTY_CASH_CATEGORIES.join(", ")}`,
+          code: "INVALID_CATEGORY",
+        });
+      }
+      cat = c;
+    }
     const entry = await prisma.pettyCashLedger.create({
       data: {
         tenantId: req.user.tenantId,
         shiftId: shift.id,
         type,
+        category: cat,
         amount: amt,
         reason: reason.trim().slice(0, 1000),
         userId: req.user.userId,
       },
     });
-    await writeAudit("Shift", "CASH_LEDGER", shift.id, req.user.userId, req.user.tenantId, {
-      ledgerId: entry.id,
-      type,
-      amount: amt,
-      reason: entry.reason,
-    });
+    await writeAudit(
+      "Shift",
+      "CASH_LEDGER",
+      shift.id,
+      req.user.userId,
+      req.user.tenantId,
+      {
+        ledgerId: entry.id,
+        type,
+        category: cat,
+        amount: amt,
+        reason: entry.reason,
+      },
+    );
     res.status(201).json(entry);
   } catch (e) {
     console.error(`[pos] petty-cash ${type} error:`, e.message);
@@ -621,11 +804,11 @@ async function recordPettyCashEntry(req, res, type) {
 }
 
 router.post("/shifts/:id/deposit", adminGate, (req, res) =>
-  recordPettyCashEntry(req, res, "DEPOSIT")
+  recordPettyCashEntry(req, res, "DEPOSIT"),
 );
 
 router.post("/shifts/:id/withdraw", adminGate, (req, res) =>
-  recordPettyCashEntry(req, res, "WITHDRAWAL")
+  recordPettyCashEntry(req, res, "WITHDRAWAL"),
 );
 
 // GET /api/pos/shifts/:id/petty-cash — list ledger entries for a shift.
@@ -635,9 +818,13 @@ router.get("/shifts/:id/petty-cash", cashierGate, async (req, res) => {
   try {
     const id = parseInt(req.params.id);
     if (!Number.isFinite(id)) {
-      return res.status(400).json({ error: "id must be numeric", code: "INVALID_ID" });
+      return res
+        .status(400)
+        .json({ error: "id must be numeric", code: "INVALID_ID" });
     }
-    const shift = await prisma.shift.findFirst({ where: tenantWhere(req, { id }) });
+    const shift = await prisma.shift.findFirst({
+      where: tenantWhere(req, { id }),
+    });
     if (!shift) return res.status(404).json({ error: "Shift not found" });
     if (
       req.user.role !== "ADMIN" &&
@@ -693,7 +880,12 @@ router.get("/sale-context/:patientId", cashierGate, async (req, res) => {
   try {
     const patientId = parseInt(req.params.patientId, 10);
     if (!Number.isFinite(patientId) || patientId <= 0) {
-      return res.status(400).json({ error: "patientId must be a positive integer", code: "INVALID_PATIENT_ID" });
+      return res
+        .status(400)
+        .json({
+          error: "patientId must be a positive integer",
+          code: "INVALID_PATIENT_ID",
+        });
     }
 
     // Tenant-scoped patient existence check first — cross-tenant probe
@@ -704,7 +896,9 @@ router.get("/sale-context/:patientId", cashierGate, async (req, res) => {
       select: { id: true },
     });
     if (!patient) {
-      return res.status(404).json({ error: "Patient not found", code: "PATIENT_NOT_FOUND" });
+      return res
+        .status(404)
+        .json({ error: "Patient not found", code: "PATIENT_NOT_FOUND" });
     }
 
     const wallet = await prisma.wallet.findFirst({
@@ -737,7 +931,13 @@ router.get("/sale-context/:patientId", cashierGate, async (req, res) => {
 
 // ── Sale create / list / get / refund ────────────────────────────────
 
-const VALID_LINE_TYPES = ["SERVICE", "PRODUCT", "MEMBERSHIP", "GIFTCARD", "PACKAGE"];
+const VALID_LINE_TYPES = [
+  "SERVICE",
+  "PRODUCT",
+  "MEMBERSHIP",
+  "GIFTCARD",
+  "PACKAGE",
+];
 // #789 — payment methods accepted at POS. CASHBACK / PAYLATER / ONLINE
 // were added 2026-05-18 to match the Zylu reference set + the PointOfSale
 // dropdown options. Treatment differs per method:
@@ -788,7 +988,9 @@ router.post("/sales", cashierGate, async (req, res) => {
 
     // Validate shift
     if (!shiftId || !Number.isFinite(parseInt(shiftId))) {
-      return res.status(400).json({ error: "shiftId is required", code: "SHIFT_REQUIRED" });
+      return res
+        .status(400)
+        .json({ error: "shiftId is required", code: "SHIFT_REQUIRED" });
     }
     const shift = await prisma.shift.findFirst({
       where: tenantWhere(req, { id: parseInt(shiftId) }),
@@ -814,16 +1016,31 @@ router.post("/sales", cashierGate, async (req, res) => {
 
     // Validate lineItems
     if (!Array.isArray(lineItems) || lineItems.length === 0) {
-      return res.status(400).json({ error: "lineItems must be a non-empty array", code: "LINE_ITEMS_REQUIRED" });
+      return res
+        .status(400)
+        .json({
+          error: "lineItems must be a non-empty array",
+          code: "LINE_ITEMS_REQUIRED",
+        });
     }
     if (lineItems.length > 200) {
-      return res.status(400).json({ error: "lineItems exceeds 200 rows", code: "LINE_ITEMS_TOO_MANY" });
+      return res
+        .status(400)
+        .json({
+          error: "lineItems exceeds 200 rows",
+          code: "LINE_ITEMS_TOO_MANY",
+        });
     }
     const normalisedLines = [];
     for (let i = 0; i < lineItems.length; i++) {
       const li = lineItems[i];
       if (!li || typeof li !== "object") {
-        return res.status(400).json({ error: `lineItems[${i}] must be an object`, code: "INVALID_LINE_ITEM" });
+        return res
+          .status(400)
+          .json({
+            error: `lineItems[${i}] must be an object`,
+            code: "INVALID_LINE_ITEM",
+          });
       }
       if (!VALID_LINE_TYPES.includes(li.lineType)) {
         return res.status(400).json({
@@ -833,23 +1050,47 @@ router.post("/sales", cashierGate, async (req, res) => {
       }
       const refId = parseInt(li.refId);
       if (!Number.isFinite(refId)) {
-        return res.status(400).json({ error: `lineItems[${i}].refId must be numeric`, code: "INVALID_REF_ID" });
+        return res
+          .status(400)
+          .json({
+            error: `lineItems[${i}].refId must be numeric`,
+            code: "INVALID_REF_ID",
+          });
       }
       // Use ?? not || so quantity=0 isn't silently coerced to 1.
       const quantity = parseInt(li.quantity ?? 1);
       if (!Number.isFinite(quantity) || quantity < 1) {
-        return res.status(400).json({ error: `lineItems[${i}].quantity must be >= 1`, code: "INVALID_QUANTITY" });
+        return res
+          .status(400)
+          .json({
+            error: `lineItems[${i}].quantity must be >= 1`,
+            code: "INVALID_QUANTITY",
+          });
       }
       const unitPrice = parseFloat(li.unitPrice);
       if (!Number.isFinite(unitPrice) || unitPrice < 0) {
-        return res.status(400).json({ error: `lineItems[${i}].unitPrice must be >= 0`, code: "INVALID_UNIT_PRICE" });
+        return res
+          .status(400)
+          .json({
+            error: `lineItems[${i}].unitPrice must be >= 0`,
+            code: "INVALID_UNIT_PRICE",
+          });
       }
       const lineDiscount = parseFloat(li.lineDiscount || 0);
       if (!Number.isFinite(lineDiscount) || lineDiscount < 0) {
-        return res.status(400).json({ error: `lineItems[${i}].lineDiscount must be >= 0`, code: "INVALID_LINE_DISCOUNT" });
+        return res
+          .status(400)
+          .json({
+            error: `lineItems[${i}].lineDiscount must be >= 0`,
+            code: "INVALID_LINE_DISCOUNT",
+          });
       }
       const lineTotal = Math.max(0, quantity * unitPrice - lineDiscount);
-      const name = (li.name && typeof li.name === "string" ? li.name : `${li.lineType} #${refId}`).slice(0, 240);
+      const name = (
+        li.name && typeof li.name === "string"
+          ? li.name
+          : `${li.lineType} #${refId}`
+      ).slice(0, 240);
       normalisedLines.push({
         lineType: li.lineType,
         refId,
@@ -871,15 +1112,26 @@ router.post("/sales", cashierGate, async (req, res) => {
     }
 
     // Compute totals
-    const subtotal = normalisedLines.reduce((acc, l) => acc + l.quantity * l.unitPrice, 0);
-    const lineDiscounts = normalisedLines.reduce((acc, l) => acc + l.lineDiscount, 0);
+    const subtotal = normalisedLines.reduce(
+      (acc, l) => acc + l.quantity * l.unitPrice,
+      0,
+    );
+    const lineDiscounts = normalisedLines.reduce(
+      (acc, l) => acc + l.lineDiscount,
+      0,
+    );
     const orderDiscount = Math.max(0, parseFloat(discountTotal || 0));
     const totalDiscount = lineDiscounts + orderDiscount;
     const tax = Math.max(0, parseFloat(taxTotal || 0));
     const total = Math.max(0, subtotal - totalDiscount + tax);
     const paid = paidAmount !== undefined ? parseFloat(paidAmount) : total;
     if (!Number.isFinite(paid) || paid < 0) {
-      return res.status(400).json({ error: "paidAmount must be >= 0", code: "INVALID_PAID_AMOUNT" });
+      return res
+        .status(400)
+        .json({
+          error: "paidAmount must be >= 0",
+          code: "INVALID_PAID_AMOUNT",
+        });
     }
 
     // PRD Gap §2 item 8 — `sum(payments) == grand_total ±0.01` validation.
@@ -892,13 +1144,21 @@ router.post("/sales", cashierGate, async (req, res) => {
     if (pm === "COMBINED") {
       let breakdown;
       if (typeof paymentBreakdownJson === "string") {
-        try { breakdown = JSON.parse(paymentBreakdownJson); } catch { breakdown = null; }
-      } else if (paymentBreakdownJson && typeof paymentBreakdownJson === "object") {
+        try {
+          breakdown = JSON.parse(paymentBreakdownJson);
+        } catch {
+          breakdown = null;
+        }
+      } else if (
+        paymentBreakdownJson &&
+        typeof paymentBreakdownJson === "object"
+      ) {
         breakdown = paymentBreakdownJson;
       }
       if (!Array.isArray(breakdown) || breakdown.length === 0) {
         return res.status(400).json({
-          error: "paymentBreakdownJson must be a non-empty array when paymentMethod=COMBINED",
+          error:
+            "paymentBreakdownJson must be a non-empty array when paymentMethod=COMBINED",
           code: "BREAKDOWN_REQUIRED",
         });
       }
@@ -933,10 +1193,23 @@ router.post("/sales", cashierGate, async (req, res) => {
     if (patientId !== undefined && patientId !== null && patientId !== "") {
       const pid = parseInt(patientId);
       if (!Number.isFinite(pid)) {
-        return res.status(400).json({ error: "patientId must be numeric", code: "INVALID_PATIENT_ID" });
+        return res
+          .status(400)
+          .json({
+            error: "patientId must be numeric",
+            code: "INVALID_PATIENT_ID",
+          });
       }
-      const p = await prisma.patient.findFirst({ where: tenantWhere(req, { id: pid }) });
-      if (!p) return res.status(400).json({ error: "patientId does not exist in this tenant", code: "PATIENT_NOT_FOUND" });
+      const p = await prisma.patient.findFirst({
+        where: tenantWhere(req, { id: pid }),
+      });
+      if (!p)
+        return res
+          .status(400)
+          .json({
+            error: "patientId does not exist in this tenant",
+            code: "PATIENT_NOT_FOUND",
+          });
       resolvedPatientId = pid;
     }
 
@@ -946,60 +1219,84 @@ router.post("/sales", cashierGate, async (req, res) => {
     // stock and ledger out of sync. SERVICE / MEMBERSHIP / GIFTCARD / PACKAGE
     // lines do not touch Product (they reference different tables via the
     // polymorphic refId).
-    const productLines = normalisedLines.filter((l) => l.lineType === "PRODUCT");
+    const productLines = normalisedLines.filter(
+      (l) => l.lineType === "PRODUCT",
+    );
 
     // Transactional create — invoiceNumber + Sale + SaleLineItem rows +
     // Product.currentStock decrements (PRODUCT lines only).
-    const sale = await prisma.$transaction(async (tx) => {
-      const invoiceNumber = await generateInvoiceNumber(tx, req.user.tenantId);
-      const created = await tx.sale.create({
-        data: {
-          tenantId: req.user.tenantId,
-          registerId: shift.registerId,
-          shiftId: shift.id,
-          cashierId: req.user.userId,
-          patientId: resolvedPatientId,
-          invoiceNumber,
-          subtotal,
-          taxTotal: tax,
-          discountTotal: totalDiscount,
-          total,
-          paidAmount: paid,
-          status: "COMPLETED",
-          paymentMethod: pm,
-          paymentBreakdownJson:
-            pm === "COMBINED" && typeof paymentBreakdownJson === "string"
-              ? paymentBreakdownJson.slice(0, 4000)
-              : null,
-          lineItems: {
-            create: normalisedLines.map((l) => ({
+    // invoiceNumber is sequential via InvoiceCounter atomic upsert
+    // (increment: 1 inside the transaction). The retry loop is a safety
+    // net for the rare case where two concurrent sales both hit the
+    // create branch of upsert for a brand-new (tenant, year) pair.
+    // Under normal operation the loop never iterates more than once.
+    let sale = null;
+    for (let _attempt = 0; sale === null; _attempt++) {
+      try {
+        sale = await prisma.$transaction(async (tx) => {
+          const invoiceNumber = await generateInvoiceNumber(tx, req.user.tenantId);
+          const created = await tx.sale.create({
+            data: {
               tenantId: req.user.tenantId,
-              ...l,
-            })),
-          },
-        },
-        include: { lineItems: true },
-      });
-      // Decrement Product.currentStock for each PRODUCT line. Tenant-scoped
-      // updateMany so a wrong tenantId can't decrement a sibling tenant's
-      // stock (Prisma update by-id alone wouldn't tenant-gate). Negative
-      // stock is permitted by design — backorder flow needs visibility into
-      // oversells; the LowStock alert engine surfaces sub-threshold counts.
-      for (const line of productLines) {
-        await tx.product.updateMany({
-          where: { id: line.refId, tenantId: req.user.tenantId },
-          data: { currentStock: { decrement: line.quantity } },
+              registerId: shift.registerId,
+              shiftId: shift.id,
+              cashierId: req.user.userId,
+              patientId: resolvedPatientId,
+              invoiceNumber,
+              subtotal,
+              taxTotal: tax,
+              discountTotal: totalDiscount,
+              total,
+              paidAmount: paid,
+              status: "COMPLETED",
+              paymentMethod: pm,
+              paymentBreakdownJson:
+                pm === "COMBINED" && typeof paymentBreakdownJson === "string"
+                  ? paymentBreakdownJson.slice(0, 4000)
+                  : null,
+              lineItems: {
+                create: normalisedLines.map((l) => ({
+                  tenantId: req.user.tenantId,
+                  ...l,
+                })),
+              },
+            },
+            include: { lineItems: true },
+          });
+          // Decrement Product.currentStock for each PRODUCT line. Tenant-scoped
+          // updateMany so a wrong tenantId can't decrement a sibling tenant's
+          // stock (Prisma update by-id alone wouldn't tenant-gate). Negative
+          // stock is permitted by design — backorder flow needs visibility into
+          // oversells; the LowStock alert engine surfaces sub-threshold counts.
+          for (const line of productLines) {
+            await tx.product.updateMany({
+              where: { id: line.refId, tenantId: req.user.tenantId },
+              data: { currentStock: { decrement: line.quantity } },
+            });
+          }
+          return created;
         });
+      } catch (_txErr) {
+        // P2002 = unique-constraint violation — the invoiceNumber race.
+        // Recompute + retry; rethrow anything else (or after 5 attempts).
+        if (_txErr && _txErr.code === "P2002" && _attempt < 4) continue;
+        throw _txErr;
       }
-      return created;
-    });
+    }
 
-    await writeAudit("Sale", "CREATE", sale.id, req.user.userId, req.user.tenantId, {
-      invoiceNumber: sale.invoiceNumber,
-      total: sale.total,
-      paymentMethod: sale.paymentMethod,
-      lineCount: sale.lineItems.length,
-    });
+    await writeAudit(
+      "Sale",
+      "CREATE",
+      sale.id,
+      req.user.userId,
+      req.user.tenantId,
+      {
+        invoiceNumber: sale.invoiceNumber,
+        total: sale.total,
+        paymentMethod: sale.paymentMethod,
+        lineCount: sale.lineItems.length,
+      },
+    );
 
     // PRD Gap §2 item 9 — auto-credit loyalty on Sale completion. Same
     // earn-rule shape as the visit-side hook; runs post-transaction so a
@@ -1026,9 +1323,11 @@ router.post("/sales", cashierGate, async (req, res) => {
           registerId: sale.registerId,
         },
         req.user.tenantId,
-        req.io
+        req.io,
       );
-    } catch (_e) { /* event bus optional */ }
+    } catch (_e) {
+      /* event bus optional */
+    }
 
     res.status(201).json(sale);
   } catch (e) {
@@ -1041,8 +1340,10 @@ router.get("/sales", cashierGate, async (req, res) => {
   try {
     const { shiftId, from, to, patientId, status } = req.query;
     const where = tenantWhere(req);
-    if (shiftId && Number.isFinite(parseInt(shiftId))) where.shiftId = parseInt(shiftId);
-    if (patientId && Number.isFinite(parseInt(patientId))) where.patientId = parseInt(patientId);
+    if (shiftId && Number.isFinite(parseInt(shiftId)))
+      where.shiftId = parseInt(shiftId);
+    if (patientId && Number.isFinite(parseInt(patientId)))
+      where.patientId = parseInt(patientId);
     if (status) where.status = status;
     if (from || to) {
       where.createdAt = {};
@@ -1161,6 +1462,8 @@ router.get("/sales/stats", adminGate, async (req, res) => {
     const sales = await prisma.sale.findMany({
       where,
       select: { total: true, status: true, createdAt: true },
+      orderBy: { createdAt: "desc" },
+      take: 5000,
     });
 
     // Empty short-circuit — return zeroed shape.
@@ -1312,6 +1615,8 @@ router.get("/sales/by-month", adminGate, async (req, res) => {
     const sales = await prisma.sale.findMany({
       where: { tenantId },
       select: { total: true, status: true, createdAt: true },
+      orderBy: { createdAt: "desc" },
+      take: 5000,
     });
 
     // Aggregate per-UTC-month. Map "YYYY-MM" → bucket. Null/invalid
@@ -1394,7 +1699,9 @@ router.get("/sales/:id", cashierGate, async (req, res) => {
   try {
     const id = parseInt(req.params.id);
     if (!Number.isFinite(id)) {
-      return res.status(400).json({ error: "id must be numeric", code: "INVALID_ID" });
+      return res
+        .status(400)
+        .json({ error: "id must be numeric", code: "INVALID_ID" });
     }
     const sale = await prisma.sale.findFirst({
       where: tenantWhere(req, { id }),
@@ -1509,7 +1816,9 @@ const FINALIZE_ITEM_TYPE_TO_LINE_TYPE = {
 router.post("/sales/finalize", cashierGate, async (req, res) => {
   try {
     if (!req.body || typeof req.body !== "object" || Array.isArray(req.body)) {
-      return res.status(400).json({ error: "Body must be an object", code: "INVALID_PAYLOAD" });
+      return res
+        .status(400)
+        .json({ error: "Body must be an object", code: "INVALID_PAYLOAD" });
     }
     const { patientId, items, payments, discountCents, taxCents } = req.body;
 
@@ -1758,7 +2067,9 @@ router.post("/sales/finalize", cashierGate, async (req, res) => {
             });
             remaining -= consumed;
           }
-          const newBalance = +(wallet.balance - walletDebitCents / 100).toFixed(2);
+          const newBalance = +(wallet.balance - walletDebitCents / 100).toFixed(
+            2,
+          );
           const txnRow = await tx.walletTransaction.create({
             data: {
               tenantId: req.user.tenantId,
@@ -1778,7 +2089,11 @@ router.post("/sales/finalize", cashierGate, async (req, res) => {
           });
         }
 
-        const invoiceNumber = await generateInvoiceNumber(tx, req.user.tenantId, now);
+        const invoiceNumber = await generateInvoiceNumber(
+          tx,
+          req.user.tenantId,
+          now,
+        );
         const grandTotalRupees = +(grandTotal / 100).toFixed(2);
         const subtotalRupees = +(itemsTotal / 100).toFixed(2);
         const discountRupees = +(discount / 100).toFixed(2);
@@ -1804,15 +2119,21 @@ router.post("/sales/finalize", cashierGate, async (req, res) => {
             total: grandTotalRupees,
             paidAmount: grandTotalRupees,
             status: "COMPLETED",
-            paymentMethod: normalisedPayments.length === 1
-              ? normalisedPayments[0].method.toUpperCase()
-              : "COMBINED",
+            paymentMethod:
+              normalisedPayments.length === 1
+                ? normalisedPayments[0].method.toUpperCase()
+                : "COMBINED",
             paymentBreakdownJson: JSON.stringify(
               normalisedPayments.map((p) => ({
                 method: p.method.toUpperCase(),
                 amountCents: p.amountCents,
               })),
             ).slice(0, 4000),
+            // Persist wallet portion so reports + void/refund flows don't
+            // have to recompute by summing the breakdown JSON. Mirrors
+            // the value already returned in the response envelope at
+            // line ~2228. Column added in schema.prisma model Sale.
+            walletDebitedCents: walletDebitCents,
             lineItems: {
               create: normalisedItems.map((it) => {
                 const unitPriceRupees = +(it.unitPriceCents / 100).toFixed(2);
@@ -1940,10 +2261,26 @@ router.post("/sales/finalize", cashierGate, async (req, res) => {
       status: txResult.sale.status,
     });
   } catch (e) {
-    console.error("[pos] sale finalize error:", e.message);
+    // Surface the actual error name + message in the diagnostic envelope so
+    // CI failures point at the real cause instead of generic "Failed to
+    // finalize sale". Pinned by pos-sale-finalize-api.spec.js:391 — when
+    // the spec failed in api_tests the response gave no useful clue.
+    // Prisma error codes (P2002, P2003, etc.) come through on e.code; the
+    // public `code` envelope stays SALE_FINALIZE_FAILED so existing 500
+    // assertions don't regress.
+    const safeMessage = (e && e.message) ? String(e.message).slice(0, 500) : "Unknown error";
+    const detailCode = e && e.code ? String(e.code) : null;
+    console.error(
+      "[pos] sale finalize error:",
+      safeMessage,
+      detailCode ? `(code: ${detailCode})` : "",
+      e && e.stack ? `\n${e.stack.split("\n").slice(0, 5).join("\n")}` : "",
+    );
     return res.status(500).json({
       error: "Failed to finalize sale",
       code: "SALE_FINALIZE_FAILED",
+      detail: safeMessage,
+      detailCode,
     });
   }
 });
@@ -2081,7 +2418,9 @@ router.post("/sales/:id/void", strictAdminGate, async (req, res) => {
         .json({ error: "reason exceeds 500 chars", code: "INVALID_REASON" });
     }
 
-    const sale = await prisma.sale.findFirst({ where: tenantWhere(req, { id }) });
+    const sale = await prisma.sale.findFirst({
+      where: tenantWhere(req, { id }),
+    });
     if (!sale) {
       return res
         .status(404)
@@ -2111,19 +2450,26 @@ router.post("/sales/:id/void", strictAdminGate, async (req, res) => {
     let walletIdFromAudit = null;
     if (finalizeAudit && finalizeAudit.details) {
       try {
-        const parsed = typeof finalizeAudit.details === "string"
-          ? JSON.parse(finalizeAudit.details)
-          : finalizeAudit.details;
+        const parsed =
+          typeof finalizeAudit.details === "string"
+            ? JSON.parse(finalizeAudit.details)
+            : finalizeAudit.details;
         if (Array.isArray(parsed.walletBatchesDebited)) {
           batchesToReverse = parsed.walletBatchesDebited.filter(
-            (b) => b && Number.isFinite(b.batchId) && Number.isFinite(b.consumedCents) && b.consumedCents > 0,
+            (b) =>
+              b &&
+              Number.isFinite(b.batchId) &&
+              Number.isFinite(b.consumedCents) &&
+              b.consumedCents > 0,
           );
         }
       } catch (_parseErr) {
         // Malformed audit JSON — proceed with empty reversal list (no wallet
         // path to undo). The void itself is still valid; the diagnostic is
         // logged for operators.
-        console.warn(`[pos] void: malformed finalize audit details for sale ${id}`);
+        console.warn(
+          `[pos] void: malformed finalize audit details for sale ${id}`,
+        );
       }
     }
     // Resolve walletId via the patient (Wallet has @unique patientId).
@@ -2277,15 +2623,15 @@ router.post("/sales/:id/refund", strictAdminGate, async (req, res) => {
     }
     const amt = parseInt(amountCents, 10);
     if (!Number.isFinite(amt) || amt <= 0) {
-      return res
-        .status(400)
-        .json({
-          error: "amountCents must be a positive integer",
-          code: "INVALID_AMOUNT",
-        });
+      return res.status(400).json({
+        error: "amountCents must be a positive integer",
+        code: "INVALID_AMOUNT",
+      });
     }
 
-    const sale = await prisma.sale.findFirst({ where: tenantWhere(req, { id }) });
+    const sale = await prisma.sale.findFirst({
+      where: tenantWhere(req, { id }),
+    });
     if (!sale) {
       return res
         .status(404)

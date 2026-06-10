@@ -106,6 +106,12 @@ prisma.automationRule.findMany = vi.fn().mockResolvedValue([]);
 prisma.auditLog = prisma.auditLog || {};
 prisma.auditLog.create = vi.fn().mockResolvedValue({ id: 1 });
 prisma.auditLog.findFirst = vi.fn().mockResolvedValue(null);
+// #848 — customer-payment endpoints now load the TENANT's own Razorpay keys
+// from PaymentGatewayConfig (BYOK) instead of the platform env vars. The
+// default mock below models a tenant whose configured keys mirror the env
+// fixtures, so the HMAC fixtures in these tests keep matching.
+prisma.paymentGatewayConfig = prisma.paymentGatewayConfig || {};
+prisma.paymentGatewayConfig.findFirst = vi.fn();
 
 import express from 'express';
 import request from 'supertest';
@@ -151,6 +157,7 @@ beforeEach(() => {
   prisma.invoice.findFirst.mockReset();
   prisma.invoice.update.mockReset();
   prisma.tenant.findUnique.mockReset();
+  prisma.paymentGatewayConfig.findFirst.mockReset();
   prisma.auditLog.create.mockClear();
   prisma.auditLog.findFirst.mockClear();
 
@@ -162,6 +169,14 @@ beforeEach(() => {
   prisma.invoice.findFirst.mockResolvedValue(null);
   prisma.invoice.update.mockResolvedValue({ id: 1, status: 'PAID' });
   prisma.tenant.findUnique.mockResolvedValue({ defaultCurrency: 'INR' });
+  // Default: tenant HAS configured its own Razorpay, mirroring the env
+  // fixtures so the HMAC fixtures keep matching. Tests that want the
+  // "not configured" path override this with mockResolvedValue(null).
+  prisma.paymentGatewayConfig.findFirst.mockResolvedValue({
+    keyId: process.env.RAZORPAY_KEY_ID,
+    keySecret: process.env.RAZORPAY_KEY_SECRET,
+    isActive: true,
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -510,6 +525,51 @@ describe('POST /confirm-razorpay — signature verification', () => {
     });
     // Invoice MUST NOT be touched on bad sig.
     expect(prisma.invoice.update).not.toHaveBeenCalled();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// #848 — customer payments require the TENANT's own Razorpay config (BYOK).
+// When the tenant hasn't configured/activated keys, the endpoints refuse with
+// 503 GATEWAY_NOT_CONFIGURED rather than silently charging the platform's
+// account. No env fallback for customer payments.
+// ─────────────────────────────────────────────────────────────────────────
+describe('customer payments require tenant Razorpay config (no env fallback)', () => {
+  test('create-razorpay-order → 503 GATEWAY_NOT_CONFIGURED when tenant has no config', async () => {
+    prisma.paymentGatewayConfig.findFirst.mockResolvedValue(null);
+    const res = await request(makeApp({ tenantId: 1 }))
+      .post('/api/payments/create-razorpay-order')
+      .send({ amount: 500, currency: 'INR' });
+    expect(res.status).toBe(503);
+    expect(res.body.code).toBe('GATEWAY_NOT_CONFIGURED');
+    expect(prisma.payment.create).not.toHaveBeenCalled();
+  });
+
+  test('create-razorpay-order → 503 when tenant config exists but is inactive', async () => {
+    prisma.paymentGatewayConfig.findFirst.mockResolvedValue({
+      keyId: 'rzp_live_abc',
+      keySecret: 'secret',
+      isActive: false,
+    });
+    const res = await request(makeApp({ tenantId: 1 }))
+      .post('/api/payments/create-razorpay-order')
+      .send({ amount: 500, currency: 'INR' });
+    expect(res.status).toBe(503);
+    expect(res.body.code).toBe('GATEWAY_NOT_CONFIGURED');
+  });
+
+  test('confirm-razorpay → 503 GATEWAY_NOT_CONFIGURED when tenant has no config', async () => {
+    prisma.paymentGatewayConfig.findFirst.mockResolvedValue(null);
+    const res = await request(makeApp({ tenantId: 1 }))
+      .post('/api/payments/confirm-razorpay')
+      .send({
+        paymentId: 7,
+        razorpay_payment_id: 'pay_x',
+        razorpay_signature: 'sig',
+        razorpay_order_id: 'order_x',
+      });
+    expect(res.status).toBe(503);
+    expect(res.body.code).toBe('GATEWAY_NOT_CONFIGURED');
   });
 });
 

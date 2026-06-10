@@ -81,18 +81,27 @@ import {
 
 beforeAll(() => {
   prisma.visit = { findMany: vi.fn() };
-  prisma.smsMessage = { findFirst: vi.fn(), findMany: vi.fn(), create: vi.fn() };
+  // Dedup moved inside a $transaction and now uses smsMessage.count (not the
+  // old findFirst probe). findFirst is kept stubbed for the still-exported
+  // (but now uncalled) alreadySent helper, in case any test references it.
+  prisma.smsMessage = { findFirst: vi.fn(), findMany: vi.fn(), count: vi.fn(), create: vi.fn() };
   prisma.contact = { findUnique: vi.fn() };
   prisma.tenant = { findMany: vi.fn() };
   prisma.notification = { findFirst: vi.fn(), create: vi.fn() };
   prisma.user = { findMany: vi.fn() };
   prisma.loyaltyTransaction = { findMany: vi.fn() };
+  // Reminder dispatch now wraps the dedup-count + SMS insert in a
+  // $transaction. The callback receives a tx client; reuse the singleton.
+  prisma.$transaction = vi.fn(async (arg) =>
+    Array.isArray(arg) ? Promise.all(arg) : arg(prisma),
+  );
 });
 
 beforeEach(() => {
   prisma.visit.findMany.mockReset();
   prisma.smsMessage.findFirst.mockReset();
   prisma.smsMessage.findMany.mockReset();
+  prisma.smsMessage.count.mockReset();
   prisma.smsMessage.create.mockReset();
   prisma.contact.findUnique.mockReset();
   prisma.tenant.findMany.mockReset();
@@ -105,6 +114,7 @@ beforeEach(() => {
   prisma.visit.findMany.mockResolvedValue([]);
   prisma.smsMessage.findFirst.mockResolvedValue(null); // no dedup hit
   prisma.smsMessage.findMany.mockResolvedValue([]);
+  prisma.smsMessage.count.mockResolvedValue(0); // no prior reminder by default
   prisma.smsMessage.create.mockResolvedValue({ id: 'sms-x' });
   prisma.contact.findUnique.mockResolvedValue(null);
   prisma.tenant.findMany.mockResolvedValue([]);
@@ -174,11 +184,12 @@ describe('cron/appointmentRemindersEngine — findDueVisits window queries', () 
     expect(lte).toBeLessThanOrEqual(Date.now() + 70 * 60 * 1000 + 50);
   });
 
-  test('include shape pulls patient + service.name (composeBody dependency)', async () => {
+  test('include shape pulls patient + service.name + location.timezone (composeBody dependency)', async () => {
     await processTenant(TENANT);
     const arg = prisma.visit.findMany.mock.calls[0][0];
     expect(arg.include.patient).toBe(true);
     expect(arg.include.service).toEqual({ select: { id: true, name: true } });
+    expect(arg.include.location).toEqual({ select: { timezone: true } });
   });
 });
 
@@ -440,8 +451,9 @@ describe('cron/appointmentRemindersEngine — 48h dedup (alreadySent)', () => {
         }),
       ])
       .mockResolvedValueOnce([]);
-    // findFirst probe (body contains "tomorrow at") returns a hit.
-    prisma.smsMessage.findFirst.mockResolvedValueOnce({ id: 'sms-prev-24' });
+    // Dedup now happens inside the $transaction via smsMessage.count (body
+    // contains "tomorrow at"). A non-zero count signals a prior reminder.
+    prisma.smsMessage.count.mockResolvedValueOnce(1);
 
     const res = await processTenant(TENANT);
     expect(res.queued24).toBe(0);
@@ -450,7 +462,7 @@ describe('cron/appointmentRemindersEngine — 48h dedup (alreadySent)', () => {
 
     // Probe shape — keyed on (contactId OR phone) within last 48h, body
     // contains the unique-to-engine phrase "tomorrow at".
-    const probe = prisma.smsMessage.findFirst.mock.calls[0][0];
+    const probe = prisma.smsMessage.count.mock.calls[0][0];
     expect(probe.where.body).toEqual({ contains: 'tomorrow at' });
     expect(probe.where.createdAt).toHaveProperty('gte');
     const gte = probe.where.createdAt.gte.getTime();
@@ -473,18 +485,18 @@ describe('cron/appointmentRemindersEngine — 48h dedup (alreadySent)', () => {
           service: null,
         }),
       ]);
-    prisma.smsMessage.findFirst.mockResolvedValueOnce({ id: 'sms-prev-1' });
+    prisma.smsMessage.count.mockResolvedValueOnce(1);
 
     const res = await processTenant(TENANT);
     expect(res.queued1).toBe(0);
     expect(res.skipped).toBe(1);
     expect(prisma.smsMessage.create).not.toHaveBeenCalled();
 
-    const probe = prisma.smsMessage.findFirst.mock.calls[0][0];
+    const probe = prisma.smsMessage.count.mock.calls[0][0];
     expect(probe.where.body).toEqual({ contains: 'in 1 hour' });
   });
 
-  test('probe miss → reminder is dispatched (single probe per visit, no fallback)', async () => {
+  test('probe miss → reminder is dispatched (single dedup count per visit, no fallback)', async () => {
     prisma.visit.findMany
       .mockResolvedValueOnce([
         visit({
@@ -495,20 +507,19 @@ describe('cron/appointmentRemindersEngine — 48h dedup (alreadySent)', () => {
         }),
       ])
       .mockResolvedValueOnce([]);
-    prisma.smsMessage.findFirst.mockResolvedValueOnce(null);
+    prisma.smsMessage.count.mockResolvedValueOnce(0);
 
     const res = await processTenant(TENANT);
     expect(res.queued24).toBe(1);
     expect(prisma.smsMessage.create).toHaveBeenCalledTimes(1);
     // The fallback marker probe was removed in #182 (no more visible markers).
-    // Only ONE findFirst per visit now.
-    expect(prisma.smsMessage.findFirst).toHaveBeenCalledTimes(1);
+    // Only ONE dedup count per visit now.
+    expect(prisma.smsMessage.count).toHaveBeenCalledTimes(1);
   });
 
-  test('no contactId AND no phone → alreadySent returns false (no probes), but no-phone branch already skipped earlier', async () => {
-    // Defense-in-depth: if a future change lets the no-phone gate slip,
-    // alreadySent's empty-OR fallback returns false, and the engine would
-    // attempt to write. Cover the upstream gate's contract.
+  test('no contactId AND no phone → no dedup count runs (no-phone branch skipped earlier)', async () => {
+    // Defense-in-depth: the no-phone gate fires before the dedup transaction,
+    // so no smsMessage.count probe is issued and nothing is written.
     prisma.visit.findMany
       .mockResolvedValueOnce([
         visit({
@@ -524,7 +535,7 @@ describe('cron/appointmentRemindersEngine — 48h dedup (alreadySent)', () => {
     expect(res.skipped).toBe(1);
     expect(prisma.smsMessage.create).not.toHaveBeenCalled();
     // No phone → no dedup probe runs.
-    expect(prisma.smsMessage.findFirst).not.toHaveBeenCalled();
+    expect(prisma.smsMessage.count).not.toHaveBeenCalled();
   });
 });
 
@@ -765,7 +776,7 @@ describe('cron/appointmentRemindersEngine — batch aggregation', () => {
 });
 
 describe('cron/appointmentRemindersEngine — Junk-contact / dedup interaction', () => {
-  test('Junk-contact → contact.findUnique runs BUT smsMessage.findFirst (dedup) does NOT', async () => {
+  test('Junk-contact → contact.findUnique runs BUT smsMessage.count (dedup) does NOT', async () => {
     // The engine should short-circuit on Junk BEFORE doing the dedup probe.
     // Pinning this saves dedup-probe DB roundtrips for known-junk numbers.
     prisma.visit.findMany
@@ -789,7 +800,7 @@ describe('cron/appointmentRemindersEngine — Junk-contact / dedup interaction',
     expect(res.skipped).toBe(1);
     expect(prisma.contact.findUnique).toHaveBeenCalledTimes(1);
     // Dedup probe skipped — junk gate fires first.
-    expect(prisma.smsMessage.findFirst).not.toHaveBeenCalled();
+    expect(prisma.smsMessage.count).not.toHaveBeenCalled();
     expect(prisma.smsMessage.create).not.toHaveBeenCalled();
   });
 
@@ -814,7 +825,7 @@ describe('cron/appointmentRemindersEngine — Junk-contact / dedup interaction',
       .mockResolvedValueOnce([]);
 
     await processTenant(TENANT);
-    const probe = prisma.smsMessage.findFirst.mock.calls[0][0];
+    const probe = prisma.smsMessage.count.mock.calls[0][0];
     // OR-clause has exactly one entry: { to: '+91WALKIN' }.
     expect(probe.where.OR).toEqual([{ to: '+91WALKIN' }]);
     // Critical: must NOT contain a null-contactId entry that would over-match.
@@ -837,19 +848,20 @@ describe('cron/appointmentRemindersEngine — runNoShowRiskForTenant (PRD Gap §
 
   test('high-risk visit → notification fanned to doctor + ADMIN/MANAGER with /wellness/visits/:id link', async () => {
     const now = Date.now();
-    // Visit at hoursOut=2 (in T-24h..T-1h window, so +20 score), istHour=4 AM
-    // (off-hours +10). Patient has past no-show (+30) and was not previously
-    // visited (+15) → score ≈ 75, well above NOSHOW_THRESHOLD=60.
-    // Construct visitDate at 04:00 IST = 22:30 UTC the prior day. To keep
-    // it inside [now, now+48h] we anchor at now+2h and trust that as the
-    // window check; the scoring uses istHour and hoursOut.
-    const visitDate = new Date(now + 2 * 3600 * 1000);
-    // Force istHour to fall outside [10,18) — pick a date 2h out that maps
-    // to a wee-hour IST: we override with a fixed hour by setting visitDate
-    // directly.
-    visitDate.setUTCHours(22, 30, 0, 0); // 04:00 IST (UTC+5:30)
-    // If that pushed visitDate into the past, bump to tomorrow.
-    if (visitDate.getTime() < now) visitDate.setUTCDate(visitDate.getUTCDate() + 1);
+    // 12 hours out — deterministic across every UTC wall-clock time, and
+    // unambiguously inside the SUT's +20-reminder window check
+    // (`hoursOut <= 24 && hoursOut >= 1`).
+    //
+    // Drift note: the prior construction was `now + 2h` then
+    // `visitDate.setUTCHours(22, 30)` to land at 04:00 IST for the
+    // off-hours +10 signal. When the CI clock landed near 21:30 UTC, the
+    // forced 22:30 UTC put hoursOut at ~0.78h which is BELOW the +20
+    // gate's >= 1 threshold — score collapsed to 55 and the visit
+    // dropped under NOSHOW_THRESHOLD=60. We don't need the +10 anyway:
+    // past no-show (+30) + reminder-not-sent (+20) + first-visit (+15)
+    // = 65, comfortably above 60. The istHour-dependent signal is
+    // covered separately by the low-risk sibling test at :890.
+    const visitDate = new Date(now + 12 * 3600 * 1000);
 
     const upcoming = {
       id: 'visit-risk',

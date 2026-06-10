@@ -65,6 +65,8 @@ const notify = {
   error: vi.fn(),
   info: vi.fn(),
   confirm: vi.fn(() => Promise.resolve(true)),
+
+  prompt: vi.fn(() => Promise.resolve("")),
 };
 vi.mock('../utils/notify', () => ({
   useNotify: () => notify,
@@ -306,62 +308,74 @@ describe('GiftCards — status filter', () => {
 
 // ─────────────────────────────────────────────────────────────────────
 // 4. Issue modal — open, validate, submit
+// SUT drift (v3.7.17): the modal was reshaped to a Zylu-style SKU/template
+// add form. New fields: Name, Validity (select with options), Gift value,
+// Price, Color swatches. "Recipient patient id" + "Expires" + "Amount" +
+// "Issue" button were replaced. Modal title is now "Add gift card", save
+// button is "Save", data-testid attributes target inputs precisely.
 // ─────────────────────────────────────────────────────────────────────
 describe('GiftCards — issue flow', () => {
-  it('clicking "Issue gift card" opens a modal with amount / expires / recipient fields', async () => {
+  it('clicking "Issue gift card" opens the Add gift card modal with name / gift value / price / color fields', async () => {
     fetchApiMock.mockImplementation(makeListMock([]));
     render(<GiftCardsPage />);
 
     await waitFor(() => expect(screen.getByText(/No gift cards yet/i)).toBeInTheDocument());
     fireEvent.click(screen.getByRole('button', { name: /Issue gift card/i }));
 
-    expect(screen.getByRole('heading', { name: /Issue gift card/i })).toBeInTheDocument();
-    expect(screen.getByLabelText(/Amount/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/Expires/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/Recipient patient id/i)).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /Add gift card/i })).toBeInTheDocument();
+    expect(screen.getByTestId('giftcard-name-input')).toBeInTheDocument();
+    expect(screen.getByTestId('giftcard-giftvalue-input')).toBeInTheDocument();
+    expect(screen.getByTestId('giftcard-price-input')).toBeInTheDocument();
+    expect(screen.getByTestId('giftcard-validity-select')).toBeInTheDocument();
+    expect(screen.getByTestId('giftcard-color-swatches')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^Cancel$/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /^Issue$/i })).toBeInTheDocument();
+    expect(screen.getByTestId('giftcard-save-btn')).toBeInTheDocument();
   });
 
-  it('rejects non-positive amount via notify.error and does NOT POST', async () => {
+  it('rejects empty name + non-positive gift value via notify.error and does NOT POST', async () => {
     fetchApiMock.mockImplementation(makeListMock([]));
     render(<GiftCardsPage />);
 
     await waitFor(() => expect(screen.getByText(/No gift cards yet/i)).toBeInTheDocument());
     fireEvent.click(screen.getByRole('button', { name: /Issue gift card/i }));
 
-    // Blank amount → submit → "positive amount" toast.
-    fireEvent.click(screen.getByRole('button', { name: /^Issue$/i }));
+    // Blank name → submit → "Enter a name" toast.
+    fireEvent.click(screen.getByTestId('giftcard-save-btn'));
     await waitFor(() =>
-      expect(notify.error).toHaveBeenCalledWith(expect.stringMatching(/positive amount/i)),
+      expect(notify.error).toHaveBeenCalledWith(expect.stringMatching(/name/i)),
     );
 
-    // Zero amount → still rejected.
-    fireEvent.change(screen.getByLabelText(/Amount/i), { target: { value: '0' } });
-    fireEvent.click(screen.getByRole('button', { name: /^Issue$/i }));
-    await waitFor(() => expect(notify.error).toHaveBeenCalledTimes(2));
+    // Fill name, leave gift value blank → "Gift value must be a positive number".
+    fireEvent.change(screen.getByTestId('giftcard-name-input'), { target: { value: 'Holiday card' } });
+    fireEvent.click(screen.getByTestId('giftcard-save-btn'));
+    await waitFor(() =>
+      expect(notify.error).toHaveBeenCalledWith(expect.stringMatching(/gift value/i)),
+    );
 
-    // Negative amount → still rejected.
-    fireEvent.change(screen.getByLabelText(/Amount/i), { target: { value: '-100' } });
-    fireEvent.click(screen.getByRole('button', { name: /^Issue$/i }));
-    await waitFor(() => expect(notify.error).toHaveBeenCalledTimes(3));
+    // Zero gift value → still rejected.
+    fireEvent.change(screen.getByTestId('giftcard-giftvalue-input'), { target: { value: '0' } });
+    fireEvent.click(screen.getByTestId('giftcard-save-btn'));
+    await waitFor(() =>
+      expect(notify.error).toHaveBeenCalledWith(expect.stringMatching(/gift value/i)),
+    );
 
     // No POST should have fired.
     const postCalls = fetchApiMock.mock.calls.filter(([, opts]) => opts?.method === 'POST');
     expect(postCalls.length).toBe(0);
   });
 
-  it('POSTs /api/wellness/giftcards with amount, expiresAt, and parsed issuedTo on submit', async () => {
+  it('POSTs /api/wellness/giftcards with { name, amount, price, color, validityDays } on submit', async () => {
     fetchApiMock.mockImplementation(makeListMock([]));
     render(<GiftCardsPage />);
 
     await waitFor(() => expect(screen.getByText(/No gift cards yet/i)).toBeInTheDocument());
     fireEvent.click(screen.getByRole('button', { name: /Issue gift card/i }));
 
-    fireEvent.change(screen.getByLabelText(/Amount/i), { target: { value: '2500' } });
-    fireEvent.change(screen.getByLabelText(/Expires/i), { target: { value: '2027-01-15' } });
-    fireEvent.change(screen.getByLabelText(/Recipient patient id/i), { target: { value: '42' } });
-    fireEvent.click(screen.getByRole('button', { name: /^Issue$/i }));
+    fireEvent.change(screen.getByTestId('giftcard-name-input'), { target: { value: 'NY 2027' } });
+    fireEvent.change(screen.getByTestId('giftcard-giftvalue-input'), { target: { value: '2500' } });
+    fireEvent.change(screen.getByTestId('giftcard-price-input'), { target: { value: '2000' } });
+    fireEvent.change(screen.getByTestId('giftcard-validity-select'), { target: { value: '90' } });
+    fireEvent.click(screen.getByTestId('giftcard-save-btn'));
 
     await waitFor(() => {
       const posts = fetchApiMock.mock.calls.filter(
@@ -369,24 +383,27 @@ describe('GiftCards — issue flow', () => {
       );
       expect(posts.length).toBe(1);
       const body = JSON.parse(posts[0][1].body);
-      expect(body).toEqual({
+      expect(body).toMatchObject({
+        name: 'NY 2027',
         amount: 2500,
-        expiresAt: '2027-01-15',
-        issuedTo: 42, // parseInt("42", 10) → 42 (number, not string)
+        price: 2000,
+        validityDays: 90,
       });
+      expect(typeof body.color).toBe('string');
     });
     expect(notify.success).toHaveBeenCalledWith(expect.stringMatching(/Gift card issued/i));
   });
 
-  it('POST without optional fields sends only { amount }', async () => {
+  it('POST without validity sends body with no validityDays key', async () => {
     fetchApiMock.mockImplementation(makeListMock([]));
     render(<GiftCardsPage />);
 
     await waitFor(() => expect(screen.getByText(/No gift cards yet/i)).toBeInTheDocument());
     fireEvent.click(screen.getByRole('button', { name: /Issue gift card/i }));
 
-    fireEvent.change(screen.getByLabelText(/Amount/i), { target: { value: '750' } });
-    fireEvent.click(screen.getByRole('button', { name: /^Issue$/i }));
+    fireEvent.change(screen.getByTestId('giftcard-name-input'), { target: { value: 'Basic' } });
+    fireEvent.change(screen.getByTestId('giftcard-giftvalue-input'), { target: { value: '750' } });
+    fireEvent.click(screen.getByTestId('giftcard-save-btn'));
 
     await waitFor(() => {
       const posts = fetchApiMock.mock.calls.filter(
@@ -394,10 +411,10 @@ describe('GiftCards — issue flow', () => {
       );
       expect(posts.length).toBe(1);
       const body = JSON.parse(posts[0][1].body);
-      expect(body).toEqual({ amount: 750 });
-      // No undefined keys leaked into the body.
-      expect('expiresAt' in body).toBe(false);
-      expect('issuedTo' in body).toBe(false);
+      expect(body.name).toBe('Basic');
+      expect(body.amount).toBe(750);
+      // validityDays NOT set when "No expiry" (empty string value) is selected.
+      expect('validityDays' in body).toBe(false);
     });
   });
 
@@ -407,11 +424,11 @@ describe('GiftCards — issue flow', () => {
 
     await waitFor(() => expect(screen.getByText(/No gift cards yet/i)).toBeInTheDocument());
     fireEvent.click(screen.getByRole('button', { name: /Issue gift card/i }));
-    expect(screen.getByRole('heading', { name: /Issue gift card/i })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /Add gift card/i })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /^Cancel$/i }));
     await waitFor(() => {
-      expect(screen.queryByRole('heading', { name: /Issue gift card/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole('heading', { name: /Add gift card/i })).not.toBeInTheDocument();
     });
     const postCalls = fetchApiMock.mock.calls.filter(([, opts]) => opts?.method === 'POST');
     expect(postCalls.length).toBe(0);
@@ -449,8 +466,9 @@ describe('GiftCards — latest-code banner', () => {
     await waitFor(() => expect(screen.getByText(/No gift cards yet/i)).toBeInTheDocument());
 
     fireEvent.click(screen.getByRole('button', { name: /Issue gift card/i }));
-    fireEvent.change(screen.getByLabelText(/Amount/i), { target: { value: '3000' } });
-    fireEvent.click(screen.getByRole('button', { name: /^Issue$/i }));
+    fireEvent.change(screen.getByTestId('giftcard-name-input'), { target: { value: 'Banner test' } });
+    fireEvent.change(screen.getByTestId('giftcard-giftvalue-input'), { target: { value: '3000' } });
+    fireEvent.click(screen.getByTestId('giftcard-save-btn'));
 
     // Banner appears with plaintext code + formatted amount.
     await waitFor(() => {
@@ -499,13 +517,14 @@ describe('GiftCards — error handling', () => {
 
     await waitFor(() => expect(screen.getByText(/No gift cards yet/i)).toBeInTheDocument());
     fireEvent.click(screen.getByRole('button', { name: /Issue gift card/i }));
-    fireEvent.change(screen.getByLabelText(/Amount/i), { target: { value: '999999' } });
-    fireEvent.click(screen.getByRole('button', { name: /^Issue$/i }));
+    fireEvent.change(screen.getByTestId('giftcard-name-input'), { target: { value: 'Will fail' } });
+    fireEvent.change(screen.getByTestId('giftcard-giftvalue-input'), { target: { value: '999999' } });
+    fireEvent.click(screen.getByTestId('giftcard-save-btn'));
 
     await waitFor(() =>
       expect(notify.error).toHaveBeenCalledWith(expect.stringMatching(/amount exceeds policy cap/i)),
     );
     // Modal stays open so the operator can correct + retry.
-    expect(screen.getByRole('heading', { name: /Issue gift card/i })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /Add gift card/i })).toBeInTheDocument();
   });
 });

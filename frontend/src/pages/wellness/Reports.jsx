@@ -5,6 +5,7 @@ import { fetchApi, getAuthToken } from '../../utils/api';
 import { formatMoney } from '../../utils/money';
 import { formatPercent } from '../../utils/percent';
 import Avatar from '../../components/Avatar';
+import { DateRangeFilter, resolveDateRangeYmd } from '../../components/wellness/DateRangeFilter';
 
 const TABS = [
   { key: 'pnl', label: 'P&L by Service', icon: BarChart3 },
@@ -30,22 +31,23 @@ const EXPORT_BASENAMES = {
   att: 'attribution',
 };
 
-const isoDay = (d) => d.toISOString().slice(0, 10);
-
 export default function Reports() {
   const navigate = useNavigate();
   const [tab, setTab] = useState('pnl');
-  const [from, setFrom] = useState(isoDay(new Date(Date.now() - 30 * 86400000)));
-  const [to, setTo] = useState(isoDay(new Date()));
+  // Reports require a window — opt out of "All time" and default to last30
+  // (matches the prior 30-day default).
+  const [filter, setFilter] = useState({ preset: 'last30', start: '', end: '' });
+  const [from, to] = resolveDateRangeYmd(filter);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
-  // #227: a single in-flight flag covers both buttons — clicking Export CSV
-  // disables Export PDF for the same tab while we wait, mirroring the UX of
+  // #227: a single in-flight flag covers all export buttons — clicking one
+  // disables the others for the same tab while we wait, mirroring the UX of
   // the prescription-PDF button in PatientDetail.jsx.
-  const [exporting, setExporting] = useState(null); // 'csv' | 'pdf' | null
+  const [exporting, setExporting] = useState(null); // 'csv' | 'xlsx' | 'pdf' | null
   const [exportError, setExportError] = useState(null);
 
   const load = () => {
+    if (!from || !to) return; // 'custom' preset with no dates yet — skip fetch
     setLoading(true);
     const url = `${ENDPOINTS[tab]}?from=${from}T00:00:00&to=${to}T23:59:59`;
     fetchApi(url).then(setData).catch(() => setData(null)).finally(() => setLoading(false));
@@ -66,6 +68,10 @@ export default function Reports() {
   // body into a blob URL — fetchApi assumes JSON. Same pattern used by the
   // RxDetailModal "Download PDF" button in PatientDetail.jsx.
   const downloadExport = async (format) => {
+    if (!from || !to) {
+      setExportError('Pick a date range before exporting.');
+      return;
+    }
     setExporting(format);
     setExportError(null);
     try {
@@ -125,9 +131,7 @@ export default function Reports() {
           );
         })}
         <div style={{ flex: 1 }} />
-        <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} style={dateInput} />
-        <span style={{ color: 'var(--text-secondary)' }}>→</span>
-        <input type="date" value={to} onChange={(e) => setTo(e.target.value)} style={dateInput} />
+        <DateRangeFilter value={filter} onChange={setFilter} label={null} includeAllOption={false} />
       </div>
 
       {/* #227: export bar — both buttons disabled while either is in flight, and
@@ -150,6 +154,18 @@ export default function Reports() {
             ? <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} />
             : <Download size={14} />}
           Export CSV
+        </button>
+        <button
+          type="button"
+          onClick={() => downloadExport('xlsx')}
+          disabled={loading || !!exporting}
+          aria-label="Export this report as Excel"
+          style={exportBtn(exporting === 'xlsx')}
+        >
+          {exporting === 'xlsx'
+            ? <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} />
+            : <Download size={14} />}
+          Export Excel
         </button>
         <button
           type="button"
@@ -398,7 +414,6 @@ const td = { padding: '0.65rem 1rem', fontSize: '0.85rem', borderBottom: '1px so
 // copy-paste + CSV alignment) and use tabular-nums so digit columns line up.
 // wordBreak overrides the inherited break-word from `td`.
 const tdR = { ...td, textAlign: 'right', whiteSpace: 'nowrap', wordBreak: 'normal', fontVariantNumeric: 'tabular-nums' };
-const dateInput = { padding: '0.45rem 0.6rem', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 8, color: 'var(--text-primary)', fontSize: '0.85rem' };
 // #227: export buttons sit next to the date picker — wait state shows a
 // spinner and dims the button without removing it from the layout.
 const exportBtn = (busy) => ({

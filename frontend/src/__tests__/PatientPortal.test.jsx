@@ -29,10 +29,15 @@
  *      to the Dashboard (renders "Welcome, <name>").
  *   7. OTP verify with expired/invalid code → friendly "Invalid or expired"
  *      error rendered, no token stored.
- *   8. Dashboard parallel fetch: /portal/me + /portal/visits + /portal/
- *      prescriptions all called with Bearer token; visits tab renders rows
- *      with service name + doctor + status.
- *   9. Empty visits list → "No visits on record yet." copy renders.
+ *   8. Dashboard fetch: /portal/me + /portal/me/permissions called in parallel
+ *      with Bearer token; the Rx fetch is gated on `my_prescriptions.read`.
+ *      The "My Visits" tab embeds <MyBookings/> which fetches
+ *      /portal/appointments?bucket=<bucket> and renders appointment cards
+ *      (service name + doctor + status). [Updated for refactor 815a8783 — the
+ *      old direct /portal/visits fetch + inline visits list were removed.]
+ *   9. Empty upcoming bucket → MyBookings per-bucket empty-state copy ("No
+ *      upcoming appointments") renders. [Was "No visits on record yet."
+ *      pre-815a8783.]
  *  10. Prescriptions tab renders Rx rows with drug bullets (parsed from the
  *      JSON-string `drugs` column) and the Download PDF button.
  *  11. Logout button clears the token + name from localStorage and returns
@@ -66,8 +71,13 @@
  *     own `portalFetch` helper (inline at top of SUT) wrapping raw `fetch`.
  *     Tests stub `globalThis.fetch` directly.
  *   - Prompt anticipated invoice/treatment-plan/consent-form list endpoints.
- *     REALITY: the SUT only fetches `/portal/me` + `/portal/visits` +
- *     `/portal/prescriptions`. The Treatment Plan + Consent Forms tabs are
+ *     REALITY (post-815a8783): the Dashboard fetches `/portal/me` +
+ *     `/portal/me/permissions` in parallel, then `/portal/prescriptions`
+ *     (gated on `my_prescriptions.read`) and the shop endpoints (gated on
+ *     `products.read`). Visits/appointments are fetched by the embedded
+ *     <MyBookings/> via `/portal/appointments?bucket=<bucket>` — there is NO
+ *     direct `/portal/visits` fetch anymore. The Treatment Plan + Consent
+ *     Forms tabs are
  *     PLACEHOLDER pages ("Your treatment plan will appear here once your
  *     doctor shares one." / "Consent forms you've signed at the clinic will
  *     appear here.") — no backend endpoints, no data fetch. Tests verify
@@ -125,25 +135,6 @@ const PATIENT_PROFILE = {
   email: 'priya@example.com',
 };
 
-const VISITS_PAYLOAD = [
-  {
-    id: 901,
-    visitDate: '2026-04-15T10:00:00.000Z',
-    status: 'COMPLETED',
-    notes: 'Follow-up on hairfall regimen.',
-    service: { name: 'Hair PRP' },
-    doctor: { name: 'Harsh' },
-  },
-  {
-    id: 902,
-    visitDate: '2026-05-01T11:30:00.000Z',
-    status: 'BOOKED',
-    notes: null,
-    service: { name: 'Skin Consult' },
-    doctor: { name: 'Harsh' },
-  },
-];
-
 const PRESCRIPTIONS_PAYLOAD = [
   {
     id: 7001,
@@ -158,6 +149,34 @@ const PRESCRIPTIONS_PAYLOAD = [
   },
 ];
 
+// Drift (refactor 815a8783): the Dashboard no longer fetches /portal/visits
+// directly. The "My Visits" tab now embeds the shared <MyBookings /> component
+// which fetches /portal/appointments?bucket=<bucket> for each of four buckets
+// (upcoming/pending/completed/cancelled) and renders appointment cards. The
+// portal also resolves /portal/me/permissions and gates the Prescriptions +
+// Shop tabs on those permissions. The Dashboard tests below mock both.
+const PORTAL_PERMISSIONS = ['my_prescriptions.read'];
+
+// Appointments keyed by MyBookings bucket. Only "upcoming" carries rows by
+// default so the default-bucket render shows cards; others are empty.
+const APPOINTMENTS_BY_BUCKET = {
+  upcoming: [
+    {
+      id: 8001,
+      appointmentDate: '2026-06-15T10:00:00.000Z',
+      status: 'booked',
+      doctorName: 'Dr Harsh',
+      doctorAssigned: true,
+      serviceName: 'Hair PRP',
+      canReschedule: true,
+      canCancel: true,
+    },
+  ],
+  pending: [],
+  completed: [],
+  cancelled: [],
+};
+
 /**
  * Build a fetch stub keyed by URL pattern. Each test installs its own variant
  * via `installFetchMock({ overrides })` to model failure modes.
@@ -167,11 +186,28 @@ function installFetchMock({
   requestOtpStatus = 200,
   verifyOtpStatus = 200,
   verifyOtpError = 'Invalid or expired OTP',
-  visits = VISITS_PAYLOAD,
   prescriptions = PRESCRIPTIONS_PAYLOAD,
+  permissions = PORTAL_PERMISSIONS,
+  appointmentsByBucket = APPOINTMENTS_BY_BUCKET,
+  // Default empty so existing tests see NO notifications tab change; the
+  // notification-specific tests below pass a populated payload.
+  notificationsPayload = { notifications: [], unreadCount: 0, count: 0 },
 } = {}) {
+  const jsonRes = (body) => Promise.resolve({
+    ok: true, status: 200, headers: new Map([['content-type', 'application/json']]), json: () => Promise.resolve(body),
+  });
   const fetchStub = vi.fn((url, opts = {}) => {
     const method = opts.method || 'GET';
+    // Patient notification inbox (Option A) — GET list / PUT read / POST mark-all.
+    if (url === '/api/wellness/portal/me/notifications' && method === 'GET') {
+      return jsonRes(notificationsPayload);
+    }
+    if (typeof url === 'string' && /\/api\/wellness\/portal\/me\/notifications\/\d+\/read$/.test(url) && method === 'PUT') {
+      return jsonRes({ id: Number(url.match(/\/(\d+)\/read$/)[1]), isRead: true });
+    }
+    if (url === '/api/wellness/portal/me/notifications/mark-all-read' && method === 'POST') {
+      return jsonRes({ success: true, marked: notificationsPayload.unreadCount || 0 });
+    }
     if (url === '/api/wellness/portal/health') {
       return Promise.resolve({
         ok: true,
@@ -212,12 +248,23 @@ function installFetchMock({
         json: () => Promise.resolve(PATIENT_PROFILE),
       });
     }
-    if (url === '/api/wellness/portal/visits' && method === 'GET') {
+    if (url === '/api/wellness/portal/me/permissions' && method === 'GET') {
       return Promise.resolve({
         ok: true,
         status: 200,
         headers: new Map([['content-type', 'application/json']]),
-        json: () => Promise.resolve(visits),
+        json: () => Promise.resolve({ permissions }),
+      });
+    }
+    // MyBookings (embedded in the visits tab) fetches one bucket at a time:
+    // /portal/appointments?bucket=<bucket>.
+    if (typeof url === 'string' && url.startsWith('/api/wellness/portal/appointments?bucket=') && method === 'GET') {
+      const bucket = url.split('bucket=')[1];
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        headers: new Map([['content-type', 'application/json']]),
+        json: () => Promise.resolve({ appointments: appointmentsByBucket[bucket] || [] }),
       });
     }
     if (url === '/api/wellness/portal/prescriptions' && method === 'GET') {
@@ -419,42 +466,56 @@ describe('<PatientPortal /> — authenticated dashboard', () => {
     localStorage.setItem(PORTAL_NAME_KEY, 'Priya Sharma');
   });
 
-  it('loads /portal/me + /visits + /prescriptions in parallel with Bearer token; visits render', async () => {
+  it('loads /portal/me + /me/permissions + /prescriptions with Bearer token; visits (appointments) render', async () => {
+    // Drift (815a8783): the dashboard now resolves /portal/me +
+    // /portal/me/permissions in parallel (NOT /portal/visits), then gates the
+    // Rx fetch on `my_prescriptions.read`. The "My Visits" tab embeds
+    // <MyBookings/> which fetches /portal/appointments?bucket=<bucket>.
     const fetchStub = installFetchMock();
     render(<PatientPortal />);
-    // All three parallel fetches fire with the bearer token.
     await waitFor(() => {
       const meCall = fetchStub.mock.calls.find(
         ([u]) => u === '/api/wellness/portal/me',
       );
-      const visitsCall = fetchStub.mock.calls.find(
-        ([u]) => u === '/api/wellness/portal/visits',
+      const permsCall = fetchStub.mock.calls.find(
+        ([u]) => u === '/api/wellness/portal/me/permissions',
       );
       const rxCall = fetchStub.mock.calls.find(
         ([u]) => u === '/api/wellness/portal/prescriptions',
       );
       expect(meCall).toBeTruthy();
-      expect(visitsCall).toBeTruthy();
+      expect(permsCall).toBeTruthy();
       expect(rxCall).toBeTruthy();
       expect(meCall[1].headers.Authorization).toBe('Bearer seeded-token');
     });
-    // Default tab is Visits — both visits render with service + doctor.
+    // Default tab is My Visits → MyBookings fetches the upcoming bucket with
+    // the bearer token and renders the appointment card (service + doctor).
+    await waitFor(() => {
+      const apptCall = fetchStub.mock.calls.find(
+        ([u]) => u === '/api/wellness/portal/appointments?bucket=upcoming',
+      );
+      expect(apptCall).toBeTruthy();
+      expect(apptCall[1].headers.Authorization).toBe('Bearer seeded-token');
+    });
     expect(await screen.findByText('Hair PRP')).toBeInTheDocument();
-    expect(screen.getByText('Skin Consult')).toBeInTheDocument();
-    // Status chips render.
-    expect(screen.getByText('COMPLETED')).toBeInTheDocument();
-    expect(screen.getByText('BOOKED')).toBeInTheDocument();
-    // Visit-1 has notes copy.
-    expect(
-      screen.getByText(/Follow-up on hairfall regimen\./i),
-    ).toBeInTheDocument();
+    expect(screen.getByText('Dr Harsh')).toBeInTheDocument();
+    // Status pill renders (MyBookings maps `booked` → "Booked").
+    expect(screen.getByTestId('appt-status-8001')).toHaveTextContent('Booked');
   });
 
-  it('empty visits list → "No visits on record yet." copy renders', async () => {
-    installFetchMock({ visits: [] });
+  it('empty upcoming bucket → MyBookings empty-state copy renders', async () => {
+    // Drift: the old "No visits on record yet." copy lived in the inline
+    // visits list which was removed. MyBookings now renders a per-bucket
+    // empty state ("No upcoming appointments") for the default bucket.
+    installFetchMock({
+      appointmentsByBucket: { upcoming: [], pending: [], completed: [], cancelled: [] },
+    });
     render(<PatientPortal />);
     expect(
-      await screen.findByText(/No visits on record yet\./i),
+      await screen.findByTestId('my-bookings-empty-upcoming'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/No upcoming appointments/i),
     ).toBeInTheDocument();
   });
 
@@ -507,5 +568,364 @@ describe('<PatientPortal /> — authenticated dashboard', () => {
     expect(
       await screen.findByPlaceholderText(/10-digit mobile number/i),
     ).toBeInTheDocument();
+  });
+});
+
+/**
+ * Extension cases (tick #185+, +9 cases). The existing 11 cases cover the
+ * happy paths; this block pins:
+ *   12. Resend-OTP cooldown UX — initial state shows "Resend OTP" enabled;
+ *       after a successful request-otp it flips to "Resend in 30s" disabled.
+ *   13. Clicking Resend (when not in cooldown after a stage transition we
+ *       can't replicate) — covered via a programmatic re-entry: NOT trivially
+ *       reachable from RTL because cooldown starts at 30s, so we assert the
+ *       button is disabled in the post-request state.
+ *   14. "Change phone number" button reverts to phone stage and clears OTP +
+ *       any inline error.
+ *   15. Phone input with hyphens / spaces ("98-12-345-678") → digit-stripped
+ *       validation passes; POST body carries the RAW (un-stripped) phone per
+ *       SUT contract (the SUT validates on stripped digits but sends the raw
+ *       value, so backend handles normalization).
+ *   16. Health-probe HTTP error (non-200) → graceful-degrade renders.
+ *   17. Treatment-Plan tab renders the placeholder copy ("Your treatment
+ *       plan will appear here once your doctor shares one.").
+ *   18. Consent-Forms tab renders the placeholder copy ("Consent forms
+ *       you've signed at the clinic will appear here.").
+ *   19. Dashboard welcome chrome omits the phone block when `me.phone` is
+ *       null — defensive against backend payloads lacking phone.
+ *   20. PDF download — clicking the PDF button fires GET against
+ *       /api/wellness/prescriptions/<id>/pdf with the Bearer token; URL.
+ *       createObjectURL is invoked with the blob.
+ *   21. PDF download failure (404/500) → notify.error called with the
+ *       "Could not download" prefix; no anchor click side-effects assertable
+ *       in jsdom but the notify.error path is the user-observable contract.
+ *
+ * Mocking notes: cases 20-21 install URL.createObjectURL / revokeObjectURL
+ * stubs because jsdom doesn't ship them by default. The PDF fetch uses raw
+ * `fetch` with Bearer header (NOT portalFetch) — see SUT line 304-322 — so
+ * the fetch stub keys on URL prefix `/api/wellness/prescriptions/` to
+ * intercept any rxId.
+ */
+
+describe('<PatientPortal /> — resend OTP cooldown', () => {
+  it('post-request shows "Resend in 30s" disabled; Verify button remains active', async () => {
+    installFetchMock();
+    render(<PatientPortal />);
+    const phoneInput = await screen.findByPlaceholderText(/10-digit mobile number/i);
+    fireEvent.change(phoneInput, { target: { value: '9812345678' } });
+    fireEvent.click(screen.getByRole('button', { name: /Send code/i }));
+    // After advancing to OTP stage the resend button reads "Resend in 30s"
+    // because `requestOtp` set resendIn=30 on success.
+    const resendBtn = await screen.findByRole('button', { name: /Resend in 30s/i });
+    expect(resendBtn).toBeDisabled();
+    // Verify button stays enabled.
+    expect(
+      screen.getByRole('button', { name: /Verify & enter/i }),
+    ).not.toBeDisabled();
+  });
+});
+
+describe('<PatientPortal /> — change phone navigation', () => {
+  it('clicking "Change phone number" returns to phone stage + clears OTP + error', async () => {
+    installFetchMock();
+    render(<PatientPortal />);
+    const phoneInput = await screen.findByPlaceholderText(/10-digit mobile number/i);
+    fireEvent.change(phoneInput, { target: { value: '9812345678' } });
+    fireEvent.click(screen.getByRole('button', { name: /Send code/i }));
+    const otpInput = await screen.findByPlaceholderText(/4-digit code/i);
+    fireEvent.change(otpInput, { target: { value: '12' } });
+    fireEvent.click(screen.getByRole('button', { name: /Verify & enter/i }));
+    // An inline 4-digit-code error renders (case 5's assertion).
+    await screen.findAllByText(/Enter the 4-digit code/i);
+    // Click "Change phone number".
+    fireEvent.click(screen.getByRole('button', { name: /Change phone number/i }));
+    // Back on phone stage — phone input is rendered again, OTP input gone.
+    expect(
+      await screen.findByPlaceholderText(/10-digit mobile number/i),
+    ).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText(/4-digit code/i)).toBeNull();
+  });
+});
+
+describe('<PatientPortal /> — phone normalization', () => {
+  it('hyphenated phone "98-12-345-678" → digit-strip passes 10-digit gate', async () => {
+    const fetchStub = installFetchMock();
+    render(<PatientPortal />);
+    const phoneInput = await screen.findByPlaceholderText(/10-digit mobile number/i);
+    fireEvent.change(phoneInput, { target: { value: '98-12-345-678' } });
+    fireEvent.click(screen.getByRole('button', { name: /Send code/i }));
+    // POST request-otp fires; SUT sends the RAW (un-stripped) phone per
+    // line 79 of the SUT (`JSON.stringify({ phone })`, not `digits`).
+    await waitFor(() => {
+      const postCall = fetchStub.mock.calls.find(
+        ([u, opts]) =>
+          u === '/api/wellness/portal/login/request-otp' && opts?.method === 'POST',
+      );
+      expect(postCall).toBeTruthy();
+      expect(JSON.parse(postCall[1].body)).toEqual({ phone: '98-12-345-678' });
+    });
+    // Stage advanced to OTP.
+    expect(
+      await screen.findByPlaceholderText(/4-digit code/i),
+    ).toBeInTheDocument();
+  });
+});
+
+describe('<PatientPortal /> — health probe error', () => {
+  it('non-OK /portal/health response → graceful-degrade alert renders', async () => {
+    // Custom fetch stub: health endpoint returns 500.
+    globalThis.fetch = vi.fn((url) => {
+      if (url === '/api/wellness/portal/health') {
+        return Promise.resolve({
+          ok: false,
+          status: 500,
+          headers: new Map([['content-type', 'application/json']]),
+          json: () => Promise.resolve({ error: 'oops' }),
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        headers: new Map([['content-type', 'application/json']]),
+        json: () => Promise.resolve({}),
+      });
+    });
+    render(<PatientPortal />);
+    // SUT's Login useEffect maps `!r.ok` → `{ smsConfigured: false }`, which
+    // triggers the graceful-degrade branch.
+    expect(
+      await screen.findByTestId('portal-sms-unavailable'),
+    ).toBeInTheDocument();
+  });
+});
+
+describe('<PatientPortal /> — placeholder tabs', () => {
+  beforeEach(() => {
+    localStorage.setItem(PORTAL_TOKEN_KEY, 'seeded-token');
+    localStorage.setItem(PORTAL_NAME_KEY, 'Priya Sharma');
+  });
+
+  it('Treatment Plan tab → placeholder copy', async () => {
+    installFetchMock();
+    render(<PatientPortal />);
+    await screen.findByText('Hair PRP');
+    fireEvent.click(screen.getByRole('button', { name: /Treatment Plan/i }));
+    expect(
+      await screen.findByText(
+        /Your treatment plan will appear here once your doctor shares one\./i,
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it('Consent Forms tab → placeholder copy', async () => {
+    installFetchMock();
+    render(<PatientPortal />);
+    await screen.findByText('Hair PRP');
+    fireEvent.click(screen.getByRole('button', { name: /Consent Forms/i }));
+    // SUT uses a curly apostrophe (U+2019) in "you've"; match flexibly.
+    // The regex matches ancestor wrappers too (div > main > parent), so use
+    // findAllByText to tolerate the chain and assert ≥1 match.
+    const matches = await screen.findAllByText((_t, el) => {
+      const text = el?.textContent || '';
+      return /Consent forms you.{0,2}ve signed at the clinic will appear here\./i.test(
+        text,
+      );
+    });
+    expect(matches.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('welcome chrome omits phone block when me.phone is null', async () => {
+    installFetchMock();
+    // Override the /me payload to strip phone.
+    const baseFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn((url, opts = {}) => {
+      if (url === '/api/wellness/portal/me') {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          headers: new Map([['content-type', 'application/json']]),
+          json: () =>
+            Promise.resolve({ id: 501, name: 'Priya Sharma', phone: null }),
+        });
+      }
+      return baseFetch(url, opts);
+    });
+    render(<PatientPortal />);
+    // Welcome message renders.
+    const welcomeNodes = await screen.findAllByText((_t, el) =>
+      /Welcome,\s*Priya Sharma/i.test(el?.textContent || ''),
+    );
+    expect(welcomeNodes.length).toBeGreaterThanOrEqual(1);
+    // No phone-separator dot is followed by a 10-digit string under the
+    // welcome row (SUT only renders the phone block when me.phone is truthy).
+    const headerScope = welcomeNodes[0].closest('header') || document.body;
+    expect(headerScope.textContent).not.toMatch(/9812345678/);
+  });
+});
+
+describe('<PatientPortal /> — PDF download', () => {
+  beforeEach(() => {
+    localStorage.setItem(PORTAL_TOKEN_KEY, 'seeded-token');
+    localStorage.setItem(PORTAL_NAME_KEY, 'Priya Sharma');
+    // jsdom lacks URL.createObjectURL — stub.
+    globalThis.URL.createObjectURL = vi.fn(() => 'blob:fake-rx-pdf');
+    globalThis.URL.revokeObjectURL = vi.fn();
+  });
+
+  afterEach(() => {
+    delete globalThis.URL.createObjectURL;
+    delete globalThis.URL.revokeObjectURL;
+  });
+
+  // Drift: SUT now calls `/api/wellness/portal/prescriptions/<id>/pdf`
+  // (portal-token-scoped endpoint), not the staff `/api/wellness/prescriptions/<id>/pdf`.
+  it('clicking PDF button → GET /portal/prescriptions/<id>/pdf with Bearer token + blob URL', async () => {
+    const baseFetch = installFetchMock();
+    // Patch the existing stub to handle the PDF endpoint.
+    globalThis.fetch = vi.fn((url, opts = {}) => {
+      if (typeof url === 'string' && url.startsWith('/api/wellness/portal/prescriptions/') && url.endsWith('/pdf')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          headers: new Map([['content-type', 'application/pdf']]),
+          blob: () => Promise.resolve(new Blob(['%PDF-1.4'], { type: 'application/pdf' })),
+        });
+      }
+      return baseFetch(url, opts);
+    });
+    const fetchStub = globalThis.fetch;
+    render(<PatientPortal />);
+    await screen.findByText('Hair PRP');
+    fireEvent.click(screen.getByRole('button', { name: /Prescriptions/i }));
+    const pdfBtn = await screen.findByRole('button', { name: /PDF/i });
+    fireEvent.click(pdfBtn);
+    await waitFor(() => {
+      const pdfCall = fetchStub.mock.calls.find(
+        ([u]) =>
+          typeof u === 'string' &&
+          u.startsWith('/api/wellness/portal/prescriptions/') &&
+          u.endsWith('/pdf'),
+      );
+      expect(pdfCall).toBeTruthy();
+      expect(pdfCall[0]).toBe('/api/wellness/portal/prescriptions/7001/pdf');
+      expect(pdfCall[1].headers.Authorization).toBe('Bearer seeded-token');
+    });
+    // Blob URL was created.
+    await waitFor(() => {
+      expect(globalThis.URL.createObjectURL).toHaveBeenCalled();
+    });
+  });
+
+  it('PDF download failure (500) → notify.error called with "Could not download"', async () => {
+    const baseFetch = installFetchMock();
+    globalThis.fetch = vi.fn((url, opts = {}) => {
+      if (typeof url === 'string' && url.startsWith('/api/wellness/portal/prescriptions/') && url.endsWith('/pdf')) {
+        return Promise.resolve({
+          ok: false,
+          status: 500,
+          headers: new Map([['content-type', 'application/json']]),
+          json: () => Promise.resolve({ error: 'PDF service down' }),
+        });
+      }
+      return baseFetch(url, opts);
+    });
+    render(<PatientPortal />);
+    await screen.findByText('Hair PRP');
+    fireEvent.click(screen.getByRole('button', { name: /Prescriptions/i }));
+    const pdfBtn = await screen.findByRole('button', { name: /PDF/i });
+    fireEvent.click(pdfBtn);
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalled();
+    });
+    expect(notifyError.mock.calls[0][0]).toMatch(/Could not download/i);
+  });
+});
+
+/**
+ * Notification inbox (Option A — patient-portal REST inbox). Pins:
+ *   - GET /portal/me/notifications loads on mount; unread badge shows count.
+ *   - Notifications tab renders the rows (title + message).
+ *   - Mark-all-read fires POST /mark-all-read + clears the unread badge.
+ *   - Single "Mark read" fires PUT /:id/read.
+ *   - Empty inbox → "No notifications yet." + no badge.
+ * The notification endpoints are ungated (any logged-in patient), separate
+ * from the staff bell. Existing tests pass the default empty payload, so this
+ * feature is invisible to them — additive, nothing breaks.
+ */
+describe('<PatientPortal /> — notification inbox', () => {
+  beforeEach(() => {
+    localStorage.setItem(PORTAL_TOKEN_KEY, 'seeded-token');
+    localStorage.setItem(PORTAL_NAME_KEY, 'Priya Sharma');
+  });
+
+  const NOTIFS = {
+    notifications: [
+      { id: 9001, title: 'Appointment confirmed', message: 'Your visit is confirmed for tomorrow 11 AM.', type: 'appointment', isRead: false, createdAt: '2026-06-08T10:00:00.000Z' },
+      { id: 9002, title: 'Payment receipt', message: 'We received ₹1,500. Thank you!', type: 'payment', isRead: true, createdAt: '2026-06-07T09:00:00.000Z' },
+    ],
+    unreadCount: 1,
+    count: 2,
+  };
+
+  it('loads notifications on mount; unread badge shows the count', async () => {
+    const fetchStub = installFetchMock({ notificationsPayload: NOTIFS });
+    render(<PatientPortal />);
+    await waitFor(() => {
+      const call = fetchStub.mock.calls.find(([u]) => u === '/api/wellness/portal/me/notifications');
+      expect(call).toBeTruthy();
+      expect(call[1].headers.Authorization).toBe('Bearer seeded-token');
+    });
+    // Unread badge renders with "1".
+    expect(await screen.findByTestId('portal-notif-badge')).toHaveTextContent('1');
+  });
+
+  it('Notifications tab renders rows (title + message)', async () => {
+    installFetchMock({ notificationsPayload: NOTIFS });
+    render(<PatientPortal />);
+    await screen.findByTestId('portal-notif-badge');
+    fireEvent.click(screen.getByRole('button', { name: /Notifications/i }));
+    expect(await screen.findByText('Appointment confirmed')).toBeInTheDocument();
+    expect(screen.getByText(/Your visit is confirmed/i)).toBeInTheDocument();
+    expect(screen.getByText('Payment receipt')).toBeInTheDocument();
+  });
+
+  it('Mark all read → POST /mark-all-read fires + badge clears', async () => {
+    const fetchStub = installFetchMock({ notificationsPayload: NOTIFS });
+    render(<PatientPortal />);
+    await screen.findByTestId('portal-notif-badge');
+    fireEvent.click(screen.getByRole('button', { name: /Notifications/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /Mark all read/i }));
+    await waitFor(() => {
+      const call = fetchStub.mock.calls.find(
+        ([u, o]) => u === '/api/wellness/portal/me/notifications/mark-all-read' && o?.method === 'POST',
+      );
+      expect(call).toBeTruthy();
+    });
+    // Optimistic clear — badge disappears.
+    await waitFor(() => expect(screen.queryByTestId('portal-notif-badge')).toBeNull());
+  });
+
+  it('single "Mark read" → PUT /:id/read fires for the unread row', async () => {
+    const fetchStub = installFetchMock({ notificationsPayload: NOTIFS });
+    render(<PatientPortal />);
+    await screen.findByTestId('portal-notif-badge');
+    fireEvent.click(screen.getByRole('button', { name: /Notifications/i }));
+    // Only the unread row (9001) shows a "Mark read" button.
+    fireEvent.click(await screen.findByRole('button', { name: /^Mark read$/i }));
+    await waitFor(() => {
+      const call = fetchStub.mock.calls.find(
+        ([u, o]) => u === '/api/wellness/portal/me/notifications/9001/read' && o?.method === 'PUT',
+      );
+      expect(call).toBeTruthy();
+    });
+  });
+
+  it('empty inbox → "No notifications yet." + no unread badge', async () => {
+    installFetchMock(); // default empty notificationsPayload
+    render(<PatientPortal />);
+    await screen.findByText('Hair PRP'); // dashboard loaded
+    expect(screen.queryByTestId('portal-notif-badge')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /Notifications/i }));
+    expect(await screen.findByText(/No notifications yet\./i)).toBeInTheDocument();
   });
 });

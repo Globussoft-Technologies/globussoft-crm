@@ -85,7 +85,53 @@ router.get("/me", async (req, res) => {
   });
 });
 
-// ── Contacts: lookup + fetch ───────────────────────────────────────
+// ── Contacts: list + lookup + fetch ────────────────────────────────
+
+router.get("/contacts", async (req, res) => {
+  try {
+    const limit = parseLimit(req.query.limit);
+    const offset = parseOffset(req.query.offset);
+    const { status, source, createdSince, q } = req.query;
+
+    const where = tenantWhere(req, { deletedAt: null });
+    if (status) where.status = status;
+    if (source) where.source = source;
+    if (createdSince) {
+      const since = new Date(createdSince);
+      if (Number.isNaN(since.getTime())) {
+        return res.status(400).json({ error: "createdSince must be a valid ISO date", code: "INVALID_QUERY" });
+      }
+      where.createdAt = { gte: since };
+    }
+    if (q) {
+      where.OR = [
+        { name: { contains: q } },
+        { email: { contains: q } },
+        { phone: { contains: q } },
+        { company: { contains: q } },
+      ];
+    }
+
+    const [data, total] = await Promise.all([
+      prisma.contact.findMany({
+        where,
+        orderBy: { createdAt: "desc" },
+        take: limit,
+        skip: offset,
+        select: {
+          id: true, name: true, email: true, phone: true, status: true, source: true,
+          company: true, aiScore: true, assignedToId: true, createdAt: true,
+        },
+      }),
+      prisma.contact.count({ where }),
+    ]);
+
+    res.json({ data, total, limit, offset });
+  } catch (e) {
+    console.error("[external] contacts list:", e.message);
+    res.status(500).json({ error: "List failed" });
+  }
+});
 
 router.get("/contacts/lookup", async (req, res) => {
   try {
@@ -140,9 +186,17 @@ router.get("/patients/lookup", async (req, res) => {
     if (phone) where.phone = phoneMatches(phone);
     if (email) where.email = email;
 
+    // S104 — structured-intake parity. S62 added Patient.firstName +
+    // Patient.lastName columns; S100 wired the internal POST/PUT to
+    // accept + persist them. Partner SDKs (Callified.ai / Globus Phone /
+    // AdsGPT) polling /patients/lookup MUST see the structured fields
+    // alongside the canonical `name` so they can render "Hi Anjali" in
+    // the call script without re-deriving it from `name`. Additive to
+    // the existing select; no behaviour change for partners that ignore
+    // the new keys. Null/empty for legacy rows (pre-S100 intake).
     const patient = await prisma.patient.findFirst({
       where,
-      select: { id: true, name: true, email: true, phone: true, gender: true, dob: true, source: true, locationId: true, createdAt: true },
+      select: { id: true, name: true, firstName: true, lastName: true, email: true, phone: true, gender: true, dob: true, source: true, locationId: true, createdAt: true },
     });
     if (!patient) return res.status(404).json({ error: "Patient not found" });
     res.json(patient);
@@ -209,7 +263,7 @@ router.get("/leads", async (req, res) => {
 
 router.post("/leads", async (req, res) => {
   try {
-    const { name, phone, email, source, note, utm } = req.body;
+    const { name, phone, email, source, note, utm, externalId } = req.body;
     if (!name && !phone && !email) {
       return res.status(400).json({ error: "name, phone, or email required", code: "INSUFFICIENT_IDENTITY" });
     }
@@ -263,11 +317,26 @@ router.post("/leads", async (req, res) => {
       aiScore: verdict.score,
       assignedToId: assignee.userId,
       firstResponseDueAt,
+      // [GP-CRM integration] Stable partner ID (e.g. GlobusPhone lead ULID).
+      // Stored verbatim so a retry can find-and-reuse instead of duplicating.
+      externalId: externalId ? String(externalId) : null,
       tenantId: req.tenantId,
     };
     let contact;
     let deduped = false;
-    if (email) {
+    // [GP-CRM integration] Dedup priority: externalId first (most specific —
+    // keeps partner outbox retries idempotent), then email. A partner re-POSTs
+    // the same externalId on retry, so matching here reuses the existing row.
+    if (externalId) {
+      const byExtId = await prisma.contact.findFirst({
+        where: { externalId: String(externalId), tenantId: req.tenantId },
+      });
+      if (byExtId) {
+        contact = byExtId;
+        deduped = true;
+      }
+    }
+    if (!contact && email) {
       // Upsert on the compound unique key (email + tenantId)
       const existing = await prisma.contact.findFirst({
         where: { email, tenantId: req.tenantId },
@@ -275,10 +344,9 @@ router.post("/leads", async (req, res) => {
       if (existing) {
         contact = existing;
         deduped = true;
-      } else {
-        contact = await prisma.contact.create({ data: contactData });
       }
-    } else {
+    }
+    if (!contact) {
       contact = await prisma.contact.create({ data: contactData });
     }
 
@@ -324,6 +392,79 @@ router.post("/leads", async (req, res) => {
   }
 });
 
+// ── Lead stage transitions (Task 9 — GP-CRM integration) ───────────
+//
+// GP stage → CRM status mapping (mirrors CRM_STATUS_TO_GP_STAGE on the GP side):
+//   NEW / CONTACTED   → Lead
+//   QUALIFIED         → Prospect
+//   WON               → Customer
+//   LOST              → Churned
+//   DNC / DO_NOT_CALL → Junk
+const GP_STAGE_TO_CRM_STATUS = {
+  NEW:         "Lead",
+  CONTACTED:   "Lead",
+  QUALIFIED:   "Prospect",
+  WON:         "Customer",
+  LOST:        "Churned",
+  DNC:         "Junk",
+  DO_NOT_CALL: "Junk",
+};
+const ALLOWED_CRM_STATUSES = new Set(["Lead", "Prospect", "Customer", "Churned", "Junk"]);
+
+router.patch("/leads/:id/stage", async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const { stage, status: directStatus } = req.body;
+
+    // Resolve to a CRM status string from either GP stage vocab or a direct status.
+    let newStatus;
+    if (stage) {
+      newStatus = GP_STAGE_TO_CRM_STATUS[String(stage).toUpperCase()];
+      if (!newStatus) {
+        return res.status(400).json({
+          error: `Unknown stage '${stage}'. Expected: NEW, CONTACTED, QUALIFIED, WON, LOST, DNC, DO_NOT_CALL`,
+          code: "INVALID_STAGE",
+        });
+      }
+    } else if (directStatus) {
+      if (!ALLOWED_CRM_STATUSES.has(directStatus)) {
+        return res.status(400).json({
+          error: `Unknown status '${directStatus}'. Expected: Lead, Prospect, Customer, Churned, Junk`,
+          code: "INVALID_STATUS",
+        });
+      }
+      newStatus = directStatus;
+    } else {
+      return res.status(400).json({ error: "stage or status required", code: "MISSING_STAGE" });
+    }
+
+    const existing = await prisma.contact.findFirst({ where: tenantWhere(req, { id }) });
+    if (!existing) return res.status(404).json({ error: "Lead not found" });
+
+    const contact = await prisma.contact.update({ where: { id }, data: { status: newStatus } });
+
+    // Notify registered webhooks that the stage changed (fire-and-forget,
+    // only when it actually changed so re-sending the same stage is idempotent).
+    if (existing.status !== newStatus) {
+      try {
+        const { deliverWebhooks } = require("../lib/webhookDelivery");
+        await deliverWebhooks("lead.stage_changed", {
+          id: contact.id,
+          status: contact.status,
+          previousStatus: existing.status,
+          assignedToId: contact.assignedToId,
+          tenantId: req.tenantId,
+        }, req.tenantId);
+      } catch (_e) { /* fire-and-forget */ }
+    }
+
+    res.json(contact);
+  } catch (e) {
+    console.error("[external] patch lead stage:", e.message);
+    res.status(500).json({ error: "Failed to update lead stage" });
+  }
+});
+
 // ── Activity logs: calls + messages ────────────────────────────────
 
 router.post("/calls", async (req, res) => {
@@ -347,6 +488,28 @@ router.post("/calls", async (req, res) => {
     }
 
     const dir = String(direction).toUpperCase();
+
+    // [GP-CRM integration] When no contactId is supplied, auto-link the call to
+    // a contact by phone suffix so it appears on the contact's CRM timeline.
+    // Uses the same last-10-digit suffix match as /contacts/lookup. Best-effort:
+    // a lookup miss or error must never block call logging.
+    let resolvedContactId = contactId ? parseInt(contactId) : null;
+    if (!resolvedContactId) {
+      const lookupPhone = dir === "INBOUND" ? (callerNumber || phone) : (calleeNumber || phone);
+      const suf = normalizedSuffix(lookupPhone);
+      if (suf) {
+        try {
+          const linked = await prisma.contact.findFirst({
+            where: { tenantId: req.tenantId, phone: { contains: suf } },
+            select: { id: true },
+          });
+          if (linked) resolvedContactId = linked.id;
+        } catch (_) {
+          // best-effort — contact lookup failure must not block call logging
+        }
+      }
+    }
+
     const call = await prisma.callLog.create({
       data: {
         direction: dir,
@@ -358,7 +521,7 @@ router.post("/calls", async (req, res) => {
         callerNumber: callerNumber || (dir === "INBOUND" ? phone : null),
         calleeNumber: calleeNumber || (dir === "OUTBOUND" ? phone : null),
         notes: notes || null,
-        contactId: contactId ? parseInt(contactId) : null,
+        contactId: resolvedContactId,
         userId: agentUserId ? parseInt(agentUserId) : null,
         tenantId: req.tenantId,
       },
@@ -393,6 +556,96 @@ router.patch("/calls/:id", async (req, res) => {
   } catch (e) {
     console.error("[external] patch call:", e.message);
     res.status(500).json({ error: "Failed to update call" });
+  }
+});
+
+// ── Voice transcripts: retrieve by call or date range ─────────────
+
+router.get("/transcripts", async (req, res) => {
+  try {
+    const { callId, from, to, limit, offset } = req.query;
+    const where = tenantWhere(req);
+
+    // Filter by specific call if provided
+    if (callId) {
+      where.id = parseInt(callId);
+    } else if (from || to) {
+      // Filter by date range
+      where.createdAt = {};
+      if (from) where.createdAt.gte = new Date(from);
+      if (to) where.createdAt.lte = new Date(to);
+    }
+
+    const calls = await prisma.callLog.findMany({
+      where,
+      orderBy: { createdAt: "desc" },
+      take: parseLimit(limit, 50),
+      skip: parseOffset(offset),
+      select: {
+        id: true,
+        duration: true,
+        notes: true,
+        direction: true,
+        recordingUrl: true,
+        provider: true,
+        providerCallId: true,
+        status: true,
+        callerNumber: true,
+        calleeNumber: true,
+        createdAt: true,
+        contact: { select: { id: true, name: true, phone: true } },
+        user: { select: { id: true, name: true, email: true } },
+      },
+    });
+
+    // Extract transcript from notes if it contains [transcript: ...]
+    const withTranscripts = calls.map(call => {
+      let transcript = null;
+      if (call.notes) {
+        const match = call.notes.match(/\[transcript:\s*(.+?)\]/);
+        if (match) transcript = match[1].trim();
+      }
+      return { ...call, transcript };
+    });
+
+    res.json({ data: withTranscripts, total: withTranscripts.length });
+  } catch (e) {
+    console.error("[external] transcripts:", e.message);
+    res.status(500).json({ error: "Failed to fetch transcripts" });
+  }
+});
+
+// ── Update transcript for a call ──────────────────────────────────
+
+router.post("/transcripts", async (req, res) => {
+  try {
+    const { callId, transcript, transcriptUrl } = req.body;
+    if (!callId) return res.status(400).json({ error: "callId required" });
+    if (!transcript && !transcriptUrl) {
+      return res.status(400).json({ error: "transcript or transcriptUrl required" });
+    }
+
+    const id = parseInt(callId);
+    const existing = await prisma.callLog.findFirst({ where: tenantWhere(req, { id }) });
+    if (!existing) return res.status(404).json({ error: "Call not found" });
+
+    const data = {};
+    if (transcriptUrl) {
+      // Append transcript URL to notes
+      const transcriptNote = `[transcript: ${transcriptUrl}]`;
+      data.notes = `${existing.notes || ""}${existing.notes ? "\n" : ""}${transcriptNote}`;
+    }
+    if (transcript) {
+      // Store transcript in notes with a marker
+      const transcriptNote = `[transcript-text]\n${transcript}\n[/transcript-text]`;
+      data.notes = `${existing.notes || ""}${existing.notes ? "\n" : ""}${transcriptNote}`;
+    }
+
+    const updated = await prisma.callLog.update({ where: { id }, data });
+    res.json(updated);
+  } catch (e) {
+    console.error("[external] create transcript:", e.message);
+    res.status(500).json({ error: "Failed to save transcript" });
   }
 });
 
@@ -552,6 +805,85 @@ router.post("/appointments", async (req, res) => {
   } catch (e) {
     console.error("[external] create appointment:", e.message);
     res.status(500).json({ error: "Failed to create appointment", detail: e.message });
+  }
+});
+
+// ── Webhook self-serve subscription (Task 11 — GP-CRM integration) ──
+//
+// Partners register a callback URL + event pattern(s) they want to receive.
+// One Webhook row is created per event pattern. Supports exact-match
+// ("lead.new") and wildcard ("lead.*") — deliverWebhooks() in
+// lib/webhookDelivery.js queries for both forms on every emission.
+// The subscription owner FK is req.apiKey.userId (the user the key belongs to);
+// we deliberately avoid req.user.id (the JWT key is userId, and reading
+// req.user.id is an ESLint error in routes/).
+
+router.post("/webhooks", async (req, res) => {
+  try {
+    const { url, event, events } = req.body;
+    if (!url) return res.status(400).json({ error: "url required", code: "MISSING_URL" });
+
+    try { new URL(url); } catch (_e) {
+      return res.status(400).json({ error: "url must be a valid HTTP or HTTPS URL", code: "INVALID_URL" });
+    }
+
+    // Accept a single event string, an array of events, or either field name.
+    const eventList = Array.isArray(events)
+      ? events
+      : events
+        ? [events]
+        : event
+          ? [event]
+          : [];
+    if (eventList.length === 0) {
+      return res.status(400).json({ error: "event or events required", code: "MISSING_EVENT" });
+    }
+
+    const created = await Promise.all(
+      eventList.map((ev) =>
+        prisma.webhook.create({
+          data: {
+            event: String(ev),
+            targetUrl: url,
+            isActive: true,
+            tenantId: req.tenantId,
+            userId: req.apiKey.userId,
+          },
+        })
+      )
+    );
+
+    res.status(201).json({ created });
+  } catch (e) {
+    console.error("[external] create webhook:", e.message);
+    res.status(500).json({ error: "Failed to register webhook" });
+  }
+});
+
+router.get("/webhooks", async (req, res) => {
+  try {
+    const webhooks = await prisma.webhook.findMany({
+      where: tenantWhere(req, { isActive: true }),
+      orderBy: { createdAt: "desc" },
+    });
+    res.json({ data: webhooks, total: webhooks.length });
+  } catch (e) {
+    console.error("[external] list webhooks:", e.message);
+    res.status(500).json({ error: "Failed to list webhooks" });
+  }
+});
+
+router.delete("/webhooks/:id", async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const existing = await prisma.webhook.findFirst({ where: tenantWhere(req, { id }) });
+    if (!existing) return res.status(404).json({ error: "Webhook not found" });
+    // Soft-deactivate (isActive=false) — keeps the audit trail; never hard-delete.
+    await prisma.webhook.update({ where: { id }, data: { isActive: false } });
+    res.json({ deactivated: true });
+  } catch (e) {
+    console.error("[external] deactivate webhook:", e.message);
+    res.status(500).json({ error: "Failed to deactivate webhook" });
   }
 });
 

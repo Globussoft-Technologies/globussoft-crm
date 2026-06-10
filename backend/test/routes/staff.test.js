@@ -51,9 +51,27 @@ prisma.user = {
   update: vi.fn(),
   delete: vi.fn(),
 };
+prisma.userRole = {
+  findFirst: vi.fn().mockResolvedValue(null),
+  deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
+  create: vi.fn().mockResolvedValue({}),
+};
 prisma.auditLog = {
   create: vi.fn().mockResolvedValue({}),
 };
+// T30 (Class B2 from docs/gaps/backend-test-routes-red-audit.md) —
+// routes/staff.js:49 getCallerVertical() reads tenant.findUnique to
+// decide whether wellnessRole validation should consult the per-tenant
+// catalog (wellness) or the legacy whitelist (generic). Without this
+// mock the route reaches the real DB connection string, can't connect,
+// and the wellnessRole-enum-validation tests time out at 5s.
+prisma.tenant = {
+  findUnique: vi.fn(),
+};
+// PUT /:id wraps the User.update + UserRole swap in prisma.$transaction.
+// Passthrough so the callback receives `prisma` itself as `tx`, and the
+// mocked tx.user.update / tx.userRole.* hits the same mocks above.
+prisma.$transaction = vi.fn(async (cb) => cb(prisma));
 
 import express from 'express';
 import request from 'supertest';
@@ -225,6 +243,19 @@ describe('PATCH /:id — deactivate', () => {
 // ── PRD_WELLNESS_RBAC DD-5.1 [RESOLVED 2026-05-24] — cashier wellnessRole ──
 
 describe('PUT /:id — wellnessRole enum (PRD_WELLNESS_RBAC DD-5.1)', () => {
+  beforeEach(() => {
+    // T30: stub the vertical-resolution lookup so getCallerVertical()
+    // (routes/staff.js:49) doesn't try to reach the real DB and time out.
+    // Resolve to 'generic' so validateWellnessRole hits the
+    // LEGACY_WELLNESS_ROLES whitelist branch (which includes "cashier"
+    // per DD-5.1) — that path needs zero further mocks. The wellness
+    // branch would additionally require mocking prisma.wellnessRoleType
+    // because isCatalogedKey() queries the per-tenant catalog. Either
+    // branch satisfies these two cases identically because "cashier" is
+    // valid in the whitelist AND seeded in the wellness catalog.
+    prisma.tenant.findUnique.mockResolvedValue({ id: 1, vertical: 'generic' });
+  });
+
   test('accepts "cashier" as a valid wellnessRole (POS sales role)', async () => {
     prisma.user.findFirst.mockResolvedValue({
       id: 22, tenantId: 1, email: 'cashier@x.com', name: 'C', role: 'USER', wellnessRole: null,
@@ -411,7 +442,13 @@ describe('GET /api/staff?fields=summary — opt-in slim shape (#920 slice 15)', 
     prisma.user.findMany.mockResolvedValue([]);
     await request(makeApp({ tenantId: 4242 })).get('/api/staff?fields=summary');
     const args = prisma.user.findMany.mock.calls[0][0];
-    expect(args.where).toEqual({ tenantId: 4242 });
+    // Security audit-fix (214017c1): staff list now excludes CUSTOMER
+    // role/userType so portal customers never surface in the staff directory.
+    expect(args.where).toEqual({
+      tenantId: 4242,
+      role: { not: 'CUSTOMER' },
+      userType: { not: 'CUSTOMER' },
+    });
   });
 
   test('?fields=summary + low-trust viewer (role=USER) → response is still PII-masked (name/email/id masked) — slim does not bypass #682', async () => {

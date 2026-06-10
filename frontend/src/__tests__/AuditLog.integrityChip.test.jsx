@@ -32,13 +32,17 @@ vi.mock('../utils/api', () => ({
 // each render invalidates the callback identity → useEffect re-fires →
 // setVerifying loops). One object, vi.fn() handles, for the whole run.
 const notifyError = vi.fn();
-const notifyObj = { error: notifyError, info: vi.fn(), success: vi.fn(), confirm: vi.fn() };
+// confirm default-resolves true so destructive-action paths (Run backfill)
+// auto-accept; the old test stubbed window.confirm — the page now uses
+// notify.confirm via useNotify, so we mock at the hook level instead.
+const notifyConfirm = vi.fn(() => Promise.resolve(true));
+const notifyObj = { error: notifyError, info: vi.fn(), success: vi.fn(), confirm: notifyConfirm };
 vi.mock('../utils/notify', () => ({
   useNotify: () => notifyObj,
 }));
 
 import { AuthContext } from '../App';
-import AuditLog from '../pages/AuditLog';
+import AuditLog, { __clearEntityCacheForTests } from '../pages/AuditLog';
 
 const ADMIN_USER = { userId: 1, name: 'Admin', email: 'a@x.com', role: 'ADMIN' };
 const REGULAR_USER = { userId: 2, name: 'User', email: 'u@x.com', role: 'USER' };
@@ -122,7 +126,11 @@ describe('<AuditLog /> — hash-chain integrity chip (#558)', () => {
     await waitFor(() => {
       expect(screen.getByTestId('integrity-chip-broken')).toBeInTheDocument();
     });
-    expect(screen.getByTestId('integrity-chip-broken').textContent).toMatch(/Chain broken/);
+    // v3.7.17: chip copy changed from "Chain broken — please contact support"
+    // to "Chain anomaly detected" because the chain-fork case is auto-
+    // repairable via the Repair button (the support hand-off only happens
+    // when the repair attempt comes back with a content-tamper 409).
+    expect(screen.getByTestId('integrity-chip-broken').textContent).toMatch(/Chain anomaly/i);
     expect(screen.getByTestId('integrity-chip-broken').textContent).toMatch(/1234/);
   });
 
@@ -186,8 +194,8 @@ describe('<AuditLog /> — hash-chain integrity chip (#558)', () => {
       return Promise.resolve({ logs: [], pages: 1, total: 0 });
     });
 
-    // Stub window.confirm so the "Continue?" prompt auto-accepts.
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    // notifyConfirm default-resolves true (see top-of-file mock), so the
+    // "Continue?" prompt auto-accepts.
 
     renderAuditLog();
     await waitFor(() => {
@@ -203,8 +211,6 @@ describe('<AuditLog /> — hash-chain integrity chip (#558)', () => {
       expect(screen.getByTestId('integrity-chip-ok')).toBeInTheDocument();
     });
     expect(screen.getByTestId('integrity-chip-ok').textContent).toMatch(/193 rows/);
-
-    confirmSpy.mockRestore();
   });
 
   it('non-admin (USER role): integrity row + Verify button are NOT rendered', async () => {
@@ -218,5 +224,155 @@ describe('<AuditLog /> — hash-chain integrity chip (#558)', () => {
     // And /api/audit/verify must NOT have been called for non-admins.
     const verifyCalls = fetchApiMock.mock.calls.filter(([url]) => url === '/api/audit/verify');
     expect(verifyCalls.length).toBe(0);
+  });
+});
+
+// ── v3.7.17 — RecordIdChips name resolver ─────────────────────────────
+//
+// The audit details payload often carries `recordIds: [24, 23, …]` — bare
+// integers that mean nothing to a non-engineer. The new resolver maps the
+// audit row's entity field ("User", "Patient", …) to a list endpoint
+// (/api/staff, /api/wellness/patients, …) and surfaces each record's
+// name alongside the numeric ID. These tests pin:
+//   1. Names render when the entity resolves + fetch succeeds.
+//   2. Unknown entity → bare "#N" chips, no fetch attempted.
+//   3. Missing row in the list → "#N" fallback (no "undefined" leak).
+//   4. Endpoint failure → "#N" fallback, view does not crash.
+// All four exercise the production component via the real AuditLog page,
+// so the entity → endpoint → chip pipeline is end-to-end.
+describe('<AuditLog /> — RecordIdChips name resolver (v3.7.17)', () => {
+  beforeEach(() => {
+    fetchApiMock.mockReset();
+    notifyError.mockReset();
+    __clearEntityCacheForTests();
+  });
+
+  function mockOpenableRowWith({ entity, details, staffRows = null, staffShouldFail = false }) {
+    fetchApiMock.mockImplementation((url) => {
+      if (url.startsWith('/api/audit/verify')) {
+        return Promise.resolve({
+          chainLength: 1, totalRows: 1, unhashedRows: 0,
+          brokenAt: null, reason: null,
+          integrityVerified: true, lastVerifiedAt: '2026-05-21T10:00:00.000Z',
+        });
+      }
+      if (url.startsWith('/api/audit-viewer/stats')) {
+        return Promise.resolve({ total: 1, byAction: {} });
+      }
+      if (url.startsWith('/api/audit-viewer')) {
+        return Promise.resolve({
+          logs: [{
+            id: 42,
+            createdAt: new Date('2026-05-21T09:00:00.000Z').toISOString(),
+            user: { id: 1, name: 'Admin', email: 'admin@x.test' },
+            action: 'PII_DISCLOSED',
+            entity,
+            entityId: null,
+            details: JSON.stringify(details),
+            hash: null,
+            prevHash: null,
+          }],
+          pages: 1,
+          total: 1,
+        });
+      }
+      if (url === '/api/staff') {
+        if (staffShouldFail) return Promise.reject(new Error('500 backend'));
+        return Promise.resolve(staffRows || []);
+      }
+      if (url === '/api/wellness/patients' || url === '/api/wellness/locations' || url === '/api/contacts') {
+        return Promise.resolve([]);
+      }
+      return Promise.resolve([]);
+    });
+  }
+
+  async function openOnlyRow() {
+    // The whole row is clickable in AuditLog.jsx. Wait for it to render
+    // first (it depends on the audit-viewer fetch resolving), then click.
+    await waitFor(() => {
+      expect(screen.getByText('PII_DISCLOSED')).toBeInTheDocument();
+    });
+    const cell = screen.getByText('PII_DISCLOSED');
+    // Walk up to the <tr> that owns the clickable handler.
+    let row = cell;
+    while (row && row.tagName !== 'TR') row = row.parentElement;
+    if (row) fireEvent.click(row);
+  }
+
+  it('renders the row name (Ganesh Sharma) alongside the numeric ID subtitle when entity=User resolves', async () => {
+    mockOpenableRowWith({
+      entity: 'User',
+      details: { scope: 'staff_list', recordIds: [1, 24] },
+      staffRows: [
+        { id: 1, name: 'Ganesh Sharma', email: 'ganesh@x.test' },
+        { id: 24, name: 'Priya Mehta', email: 'priya@x.test' },
+      ],
+    });
+    renderAuditLog();
+    await openOnlyRow();
+    const chips = await screen.findByTestId('record-id-chips');
+    await waitFor(() => {
+      expect(chips.textContent).toMatch(/Ganesh Sharma/);
+      expect(chips.textContent).toMatch(/Priya Mehta/);
+    });
+    // The numeric IDs must still appear as subtitles so Ctrl-F finds them.
+    // `\b` word-boundary doesn't fire between digit and letter since both
+    // are word chars (e.g. "#1Priya"). Use a negative lookahead so the
+    // pattern reads "#1 not followed by another digit" — that's the real
+    // assertion (the chip should carry the exact ID, not a prefix of a
+    // longer number).
+    expect(chips.textContent).toMatch(/#1(?!\d)/);
+    expect(chips.textContent).toMatch(/#24(?!\d)/);
+  });
+
+  it('falls back to bare #N chips when the entity is not in ENTITY_LOOKUP and skips any fetch', async () => {
+    mockOpenableRowWith({
+      entity: 'MysteryThing',
+      details: { recordIds: [5, 6] },
+    });
+    renderAuditLog();
+    await openOnlyRow();
+    const chips = await screen.findByTestId('record-id-chips');
+    expect(chips.textContent).toMatch(/#5\b/);
+    expect(chips.textContent).toMatch(/#6\b/);
+    // No entity-resolver fetch should have fired.
+    const lookupCalls = fetchApiMock.mock.calls.filter(([u]) =>
+      u === '/api/staff' || u === '/api/wellness/patients' ||
+      u === '/api/wellness/locations' || u === '/api/contacts');
+    expect(lookupCalls.length).toBe(0);
+  });
+
+  it('falls back to #N when a referenced row is missing from the list (no "undefined" leak)', async () => {
+    mockOpenableRowWith({
+      entity: 'User',
+      details: { recordIds: [1, 999] },
+      staffRows: [{ id: 1, name: 'Ganesh Sharma', email: 'g@x.test' }],
+    });
+    renderAuditLog();
+    await openOnlyRow();
+    const chips = await screen.findByTestId('record-id-chips');
+    await waitFor(() => {
+      expect(chips.textContent).toMatch(/Ganesh Sharma/);
+    });
+    expect(chips.textContent).toMatch(/#999\b/);
+    expect(chips.textContent).not.toMatch(/undefined/);
+  });
+
+  it('falls back to #N when the resolver endpoint throws (detail view stays mounted)', async () => {
+    mockOpenableRowWith({
+      entity: 'User',
+      details: { recordIds: [42] },
+      staffShouldFail: true,
+    });
+    renderAuditLog();
+    await openOnlyRow();
+    const chips = await screen.findByTestId('record-id-chips');
+    await waitFor(() => {
+      expect(chips.textContent).toMatch(/#42\b/);
+    });
+    // The Details surface itself must still be present — a transient
+    // fetch failure shouldn't blank the row.
+    expect(screen.getByText('Details')).toBeInTheDocument();
   });
 });

@@ -184,17 +184,21 @@ function listFrontendSourceFiles() {
 
 test.describe('#186/#342 — security headers (tightened pins)', () => {
   // Helmet 8.x sets these defaults via helmetMiddleware (security.js:27-41):
-  //   x-frame-options:           SAMEORIGIN
+  //   x-frame-options:           DENY                                    (#921 slice S4)
   //   x-content-type-options:    nosniff
   //   referrer-policy:           strict-origin-when-cross-origin
   //   permissions-policy:        camera=(), microphone=(), geolocation=(self), interest-cohort=()
-  //   strict-transport-security: max-age=31536000; includeSubDomains   (HTTPS only)
+  //   strict-transport-security: max-age=31536000; includeSubDomains     (HTTPS only)
   //   cross-origin-resource-policy: cross-origin
   //
-  // CSP is intentionally disabled (security.js:28) for the embed-widget
-  // cross-origin loads — pinning its absence so a refactor that re-enables
-  // it without nonce wiring fails fast (the embed widget would break
-  // silently on partner sites otherwise).
+  // #921 slice S4 (FR-3.6): X-Frame-Options flipped from SAMEORIGIN to
+  // DENY; CSP frame-ancestors flipped from 'self' to 'none'. The embed
+  // widget at /embed/lead-form.html now uses allowIframeEmbedding() per-
+  // route override to permit partner-site framing (X-Frame-Options removed
+  // + frame-ancestors *).
+  //
+  // #654 (v3.7.x): CSP enabled in transitional mode permitting 'unsafe-
+  // inline' on script-src/style-src; nonce wiring landed in #917 slice S1.
   for (const path of ['/api/health', '/api/auth/login']) {
     test(`${path} carries the canonical helmet header values`, async ({ request }) => {
       const res = path.endsWith('/login')
@@ -207,10 +211,10 @@ test.describe('#186/#342 — security headers (tightened pins)', () => {
 
       const headers = res.headers();
 
-      // Tighter pin: assert the EXACT value, not just truthy. A regression
-      // that flips X-Frame-Options to DENY (which would break /embed/lead-form.html
-      // preview inside our own admin UI) surfaces here.
-      expect(headers['x-frame-options']?.toUpperCase()).toBe('SAMEORIGIN');
+      // #921 slice S4 (FR-3.6) — tighter pin: SAMEORIGIN → DENY. Embed
+      // widget override keeps the legit cross-origin framing case working
+      // (XFO removed at /embed/lead-form.html, frame-ancestors splice).
+      expect(headers['x-frame-options']?.toUpperCase()).toBe('DENY');
       expect(headers['x-content-type-options']).toBe('nosniff');
       expect(headers['referrer-policy']).toBe('strict-origin-when-cross-origin');
 
@@ -243,7 +247,8 @@ test.describe('#186/#342 — security headers (tightened pins)', () => {
       const csp = headers['content-security-policy'] || '';
       expect(csp, '#654 — CSP must be present (was re-enabled in v3.7.x)').toBeTruthy();
       expect(csp).toContain("default-src 'self'");
-      expect(csp).toContain("frame-ancestors 'self'");
+      // #921 slice S4 (FR-3.6) — frame-ancestors flipped from 'self' to 'none'.
+      expect(csp).toContain("frame-ancestors 'none'");
       expect(csp).toContain("object-src 'none'");
     });
   }
@@ -641,12 +646,20 @@ test.describe('#343 — token storage policy (file-grep)', () => {
   // backend's vitest suite (backend/test/) NOT the frontend's — frontend
   // vitest is a separate gate (frontend_vitest_tests). If a regression
   // bypasses ONE gate, the OTHER catches it. Defense-in-depth.
-  test('no production source file writes the token to localStorage', () => {
+  test('no production source file writes the token to localStorage outside the canonical remember-me opt-in', () => {
     test.skip(!HAS_FRONTEND_SRC,
       `frontend/src not on disk at ${FRONTEND_SRC} — file-grep test only meaningful when running from a checkout`);
     const FORBIDDEN_RE = /localStorage\.setItem\s*\(\s*['"`]token['"`]/;
+    // #343 updated for the "remember me" opt-in: the canonical auth helper
+    // (utils/api.js) MAY persist the token to localStorage, but ONLY behind
+    // the explicit `opts.remember` opt-in (Login "remember me" checkbox).
+    // That file is verified separately by the test below (sessionStorage by
+    // default + the localStorage write must be remember-guarded). Every
+    // OTHER source file must never write the token to localStorage.
+    const apiHelper = path.resolve(path.join(FRONTEND_SRC, 'utils', 'api.js'));
     const violations = [];
     for (const file of listFrontendSourceFiles()) {
+      if (path.resolve(file) === apiHelper) continue;
       const text = fs.readFileSync(file, 'utf8');
       if (FORBIDDEN_RE.test(text)) {
         const lines = text.split('\n');
@@ -659,7 +672,7 @@ test.describe('#343 — token storage policy (file-grep)', () => {
     }
     expect(
       violations,
-      `#343 regression: token must NOT be written to localStorage in production code.\n` +
+      `#343 regression: token must NOT be written to localStorage outside the canonical remember-me opt-in (utils/api.js).\n` +
         `Use setAuthToken (utils/api.js) instead — sessionStorage-backed in-memory holder.\n` +
         `Hits:\n  - ${violations.join('\n  - ')}`,
     ).toEqual([]);
@@ -680,11 +693,27 @@ test.describe('#343 — token storage policy (file-grep)', () => {
     const setAuthTokenBody = text.match(/export\s+function\s+setAuthToken[^]*?\n\}/);
     expect(setAuthTokenBody, 'setAuthToken function body not parseable').toBeTruthy();
     if (setAuthTokenBody) {
-      expect(setAuthTokenBody[0]).toContain('sessionStorage');
-      // localStorage may appear in the helper's HEADER COMMENT explaining
-      // the migration history — that's fine. But a SETITEM call against
-      // localStorage inside the function body is a regression.
-      expect(setAuthTokenBody[0]).not.toMatch(/localStorage\.setItem\s*\(\s*['"`]token['"`]/);
+      const body = setAuthTokenBody[0];
+      // Default path MUST use sessionStorage (in-memory + per-tab holder).
+      expect(body).toContain('sessionStorage');
+      // #343 updated for the remember-me opt-in: a localStorage token write
+      // is allowed ONLY as the consequent of an `if (opts.remember && token)`
+      // guard — never unconditionally, never as the default path. We assert
+      // BOTH: (a) every localStorage token write is remember-guarded, and
+      // (b) there is at most ONE such write (no second, unguarded persist).
+      const tokenWriteRe = /localStorage\.setItem\s*\(\s*['"`]token['"`]/g;
+      const writeCount = (body.match(tokenWriteRe) || []).length;
+      if (writeCount > 0) {
+        const guardedRe = /if\s*\(\s*opts\.remember\s*&&\s*token\s*\)\s*\{[\s\S]*?localStorage\.setItem\s*\(\s*['"`]token['"`]/;
+        expect(
+          body,
+          'localStorage token write must be the consequent of `if (opts.remember && token)` — opt-in only, never the default path',
+        ).toMatch(guardedRe);
+        expect(
+          writeCount,
+          'expected exactly ONE (remember-guarded) localStorage token write; a second write would risk an unguarded/default persist',
+        ).toBe(1);
+      }
     }
   });
 });

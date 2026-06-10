@@ -110,6 +110,26 @@ const {
   buildOutputCacheKey,
 } = require("../lib/flyerExport");
 const { renderFlyerPdf } = require("../lib/flyerPdfRender");
+const multer = require("multer");
+const fs = require("fs");
+const path = require("path");
+const s3 = require("../services/s3Service");
+
+// Flyer asset upload (PRD_TRAVEL_MARKETING_FLYER FR-3.2.2). memoryStorage so the
+// buffer can route to S3 (when AWS_S3_BUCKET_NAME is set) OR local disk (dev /
+// no creds) — works now, uses S3 the moment the bucket env lands, no code change.
+const FLYER_IMAGE_MIMES = ["image/jpeg", "image/png", "image/gif", "image/webp", "image/svg+xml"];
+const flyerImageUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5 MB
+  fileFilter: (_req, file, cb) => {
+    if (FLYER_IMAGE_MIMES.includes(file.mimetype)) cb(null, true);
+    else cb(new Error("Only JPG, PNG, GIF, WebP, or SVG images are allowed"));
+  },
+});
+function flyerImageExt(mime) {
+  return ({ "image/jpeg": ".jpg", "image/png": ".png", "image/gif": ".gif", "image/webp": ".webp", "image/svg+xml": ".svg" })[mime] || ".img";
+}
 
 /**
  * Parse a `@db.Text` column expected to contain JSON. Accepts:
@@ -199,6 +219,54 @@ function withTemplateHash(row) {
   }
   return { ...row, templateHash: hashTemplateShape({ palette, layout, assets }) };
 }
+
+// POST /api/travel/flyer-templates/upload
+//
+// FR-3.2.2 — upload a flyer asset image (multipart/form-data, field "image").
+// Storage: AWS S3 via services/s3Service when AWS_S3_BUCKET_NAME is configured
+// (marketing flyers are public-shareable assets, so s3Service's public-read ACL
+// is appropriate here); otherwise written to local disk under
+// backend/uploads/flyer-assets/tenant-<id>/ (served by the /uploads static
+// mount). ADMIN/MANAGER + travel-vertical only (matches the studio RBAC).
+// Returns { url, storage }.
+router.post(
+  "/flyer-templates/upload",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  (req, res) => {
+    flyerImageUpload.single("image")(req, res, async (err) => {
+      if (err) {
+        const code = err.code === "LIMIT_FILE_SIZE" ? "FILE_TOO_LARGE" : "INVALID_UPLOAD";
+        return res.status(400).json({ error: err.message || "Upload failed", code });
+      }
+      if (!req.file) {
+        return res.status(400).json({ error: "image file is required (field 'image')", code: "MISSING_FILE" });
+      }
+      try {
+        const tenantId = req.travelTenant.id;
+        if (s3.BUCKET_NAME) {
+          const url = await s3.uploadImage(
+            req.file.buffer,
+            req.file.originalname || "flyer-asset",
+            req.file.mimetype,
+            `flyer-assets/tenant-${tenantId}`,
+          );
+          return res.status(201).json({ url, storage: "s3" });
+        }
+        // Local-disk fallback (no S3 configured).
+        const dir = path.join(__dirname, "..", "uploads", "flyer-assets", `tenant-${tenantId}`);
+        await fs.promises.mkdir(dir, { recursive: true });
+        const fileName = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}${flyerImageExt(req.file.mimetype)}`;
+        await fs.promises.writeFile(path.join(dir, fileName), req.file.buffer);
+        return res.status(201).json({ url: `/uploads/flyer-assets/tenant-${tenantId}/${fileName}`, storage: "local" });
+      } catch (e) {
+        console.error("[flyer-upload] store error:", e.message);
+        return res.status(500).json({ error: "Failed to store image", code: "UPLOAD_STORE_FAILED" });
+      }
+    });
+  },
+);
 
 // GET /api/travel/flyer-templates
 // Honors ?subBrand=tmc, ?isActive=true/false.
@@ -2870,6 +2938,175 @@ router.get(
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-flyer-templates] clone-history error:", e.message);
       res.status(500).json({ error: "Failed to read flyer template clone history" });
+    }
+  },
+);
+
+// POST /api/travel/flyer-templates/:id/render — synchronous multi-format render
+// (PRD_TRAVEL_MARKETING_FLYER #908 slice S17 — docs/TRAVEL_BIG_SCOPE_BACKLOG.md).
+//
+// Synchronous sibling of the slice 10/11 `/:id/export` async-queued surface.
+// Where /export returns a 202 envelope (queued render, picked up by a future
+// worker pool), this `/render` synchronously materialises one of FIVE format
+// outputs and streams the buffer back to the caller in a single response:
+//
+//   - pdf-a4            : 595×842 pt A4 PDF (Hassan / Priya / Arjun marketers — print)
+//   - pdf-a5            : 420×595 pt A5 PDF (compact drop-flyer half-page)
+//   - png-square        : 1200×1200 PNG (Instagram square / FB cover)
+//   - png-portrait-ig   : 1080×1920 PNG (Instagram story / WhatsApp story)
+//   - png-landscape-fb  : 1920×1080 PNG (Facebook landscape banner / YouTube card)
+//
+// Why synchronous: Hassan's clone-and-tweak flow (PRD §1 Story 1) needs the
+// rendered output IN THE MARKETER'S HAND to share via WhatsApp / print. A
+// queued envelope means a second poll-loop UI on top of an already-tight
+// 4-minute Hassan flow. The renderer's `lib/flyerPdfRender` PDF path
+// completes in <100ms for the placeholder layout; Puppeteer PNG path
+// completes in <2s per the NFR-4.2 budget. Both fit comfortably under
+// Express's 60s timeout.
+//
+// Auth + sub-brand gate: same envelope as `/:id/export` (slice 10) —
+// ADMIN/MANAGER write role + the sub-brand check on the source template
+// (mirroring the read-only gates on `/preview.pdf` slice 12 but at the
+// render-write tier because /render emits an audit trail). USER cannot
+// render directly — they're routed through the marketer's library page.
+//
+// Audit: every successful render writes a TRAVEL_FLYER_TEMPLATE_RENDERED
+// audit row with `{ format, bytes, engine, templateHash, cacheKey }` so
+// `/usage-stats` (slice 17) and per-template byte-volume rollups can see
+// the new action verb. The action verb is distinct from
+// TRAVEL_FLYER_TEMPLATE_EXPORTED (slice 11) — operators need to tell
+// "rendered inline via /render" apart from "queued + downloaded via
+// /export" in the audit-trail UI.
+//
+// Stub-render fallback: when Puppeteer isn't installed (today's state —
+// see backend/services/flyerRenderEngine.js header rationale), PNG
+// formats return a 1×1 placeholder PNG with `X-Flyer-Render-Engine:
+// stub-1x1`. The route still emits a real audit row + a real
+// Content-Type + Content-Disposition — only the bytes are placeholder.
+// Frontend can read the engine header to surface a "PNG renderer not
+// yet wired" toast.
+//
+// Error codes:
+//   - INVALID_ID           : non-numeric :id
+//   - INVALID_FORMAT       : format not in the 5-element supported set
+//   - TEMPLATE_NOT_FOUND   : cross-tenant or genuinely-missing :id
+//   - SUB_BRAND_DENIED     : MANAGER lacks sub-brand access to source row
+router.post(
+  "/flyer-templates/:id/render",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+      }
+
+      // Lazy-load the render engine so the route file's existing
+      // require list stays untouched at parse-time + Puppeteer-resolution
+      // is deferred to first /render call.
+      const {
+        renderFlyer,
+        SUPPORTED_FORMATS,
+      } = require("../services/flyerRenderEngine");
+
+      const { format, data } = req.body || {};
+
+      // Format-validity gate runs BEFORE the DB lookup so callers get
+      // the same 400 INVALID_FORMAT regardless of whether the template
+      // id is real. Same defensive ordering as /:id/export (slice 10).
+      if (typeof format !== "string" || !SUPPORTED_FORMATS.includes(format)) {
+        return res.status(400).json({
+          error: `format must be one of: ${SUPPORTED_FORMATS.join(", ")}`,
+          code: "INVALID_FORMAT",
+        });
+      }
+
+      const source = await prisma.travelFlyerTemplate.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+      });
+      if (!source) {
+        return res.status(404).json({
+          error: "Flyer template not found",
+          code: "TEMPLATE_NOT_FOUND",
+        });
+      }
+
+      if (source.subBrand) {
+        const allowed = await getSubBrandAccessSet(req.user.userId);
+        if (!canAccessSubBrand(allowed, source.subBrand)) {
+          return res.status(403).json({
+            error: "Sub-brand access denied",
+            code: "SUB_BRAND_DENIED",
+          });
+        }
+      }
+
+      // Parse stored JSON columns into the live shape the renderer
+      // consumes. Same defensive try/catch dance as /:id/export /
+      // /:id/preview.pdf — corrupted-stored-rows still render the
+      // renderer's placeholder rather than 500.
+      let palette = null;
+      let layout = null;
+      let assets = null;
+      if (source.paletteJson) {
+        try { palette = JSON.parse(source.paletteJson); } catch (_e) { palette = null; }
+      }
+      if (source.layoutJson) {
+        try { layout = JSON.parse(source.layoutJson); } catch (_e) { layout = null; }
+      }
+      if (source.assetsJson) {
+        try { assets = JSON.parse(source.assetsJson); } catch (_e) { assets = null; }
+      }
+
+      const templateHash = hashTemplateShape({ palette, layout, assets });
+      const cacheFormat = format.startsWith("pdf-") ? "pdf" : "png";
+      const cacheAspect = format.startsWith("pdf-")
+        ? format.slice("pdf-".length)
+        : format.slice("png-".length);
+      const cacheKey = buildOutputCacheKey({
+        format: cacheFormat,
+        aspect: cacheAspect,
+        hash: templateHash,
+      });
+
+      const result = await renderFlyer({
+        template: { palette, layout, assets },
+        data,
+        format,
+      });
+
+      await writeAudit(
+        "TravelFlyerTemplate",
+        "TRAVEL_FLYER_TEMPLATE_RENDERED",
+        source.id,
+        req.user.userId,
+        req.travelTenant.id,
+        {
+          format,
+          bytes: result.buffer.length,
+          engine: result.engine,
+          templateHash,
+          cacheKey,
+        },
+      );
+
+      res.setHeader("Content-Type", result.mimeType);
+      res.setHeader(
+        "Content-Disposition",
+        `inline; filename="flyer-${source.id}-${format}.${result.extension}"`,
+      );
+      res.setHeader("X-Flyer-Template-Hash", templateHash);
+      res.setHeader("X-Flyer-Cache-Key", cacheKey);
+      res.setHeader("X-Flyer-Render-Engine", result.engine);
+      if (result.widthPx) res.setHeader("X-Flyer-Width-Px", String(result.widthPx));
+      if (result.heightPx) res.setHeader("X-Flyer-Height-Px", String(result.heightPx));
+      return res.status(200).send(result.buffer);
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-flyer-templates] render error:", e.message);
+      res.status(500).json({ error: "Failed to render flyer" });
     }
   },
 );

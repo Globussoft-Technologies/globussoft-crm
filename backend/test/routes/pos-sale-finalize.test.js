@@ -80,6 +80,12 @@ prisma.sale = prisma.sale || {};
 prisma.sale.findFirst = vi.fn();
 prisma.sale.create = vi.fn();
 
+// Atomic invoice numbering (replaces the racy sale.findFirst lookup).
+// generateInvoiceNumber() now calls invoiceCounter.upsert and derives the
+// invoice number from (nextSeq - 1). Returning nextSeq=2 yields POS-YYYY-0001.
+prisma.invoiceCounter = prisma.invoiceCounter || {};
+prisma.invoiceCounter.upsert = vi.fn().mockResolvedValue({ nextSeq: 2 });
+
 prisma.invoice = prisma.invoice || {};
 prisma.invoice.create = vi.fn();
 
@@ -92,6 +98,20 @@ prisma.tenant.findUnique = vi.fn().mockResolvedValue({ vertical: 'wellness' });
 prisma.auditLog = prisma.auditLog || {};
 prisma.auditLog.create = vi.fn().mockResolvedValue({ id: 1 });
 prisma.auditLog.findFirst = vi.fn().mockResolvedValue(null);
+
+// requirePermission middleware (backend/middleware/requirePermission.js:178)
+// resolves the caller's effective roles via userRole.findMany. When the
+// route declares `anyOfPermissions` (POS cashierGate does), the deny path
+// for a non-allowed wellnessRole calls getUserPermissions → loadUserPermissions
+// → our empty-array mock → permSet.size === 0 → maybeSelfHealAdminPermissions
+// which queries prisma.user.findUnique. We stub both: userRole.findMany to []
+// (no role grants) AND user.findUnique to null (self-heal exits at the
+// "user not found" early return), so the middleware lands on the
+// 403 WELLNESS_ROLE_FORBIDDEN path the test asserts.
+prisma.userRole = prisma.userRole || {};
+prisma.userRole.findMany = vi.fn();
+prisma.user = prisma.user || {};
+prisma.user.findUnique = vi.fn().mockResolvedValue(null);
 
 // $transaction proxy — pass the same prisma singleton as `tx` so the
 // route's per-tx calls land on the same spies the test asserts against.
@@ -145,10 +165,13 @@ beforeEach(() => {
   prisma.shift.findFirst.mockReset();
   prisma.sale.findFirst.mockReset();
   prisma.sale.create.mockReset();
+  prisma.invoiceCounter.upsert.mockReset();
+  prisma.invoiceCounter.upsert.mockResolvedValue({ nextSeq: 2 });
   prisma.invoice.create.mockReset();
   prisma.payment.create.mockReset();
   prisma.auditLog.create.mockReset();
   prisma.auditLog.create.mockResolvedValue({ id: 1 });
+  prisma.userRole.findMany.mockReset().mockResolvedValue([]);
 
   // Default-pass shapes:
   prisma.patient.findFirst.mockResolvedValue({ id: 42 });

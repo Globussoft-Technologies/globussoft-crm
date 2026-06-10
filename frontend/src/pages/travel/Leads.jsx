@@ -14,13 +14,20 @@
 // page misses Travel-specific drilldown (diagnosticId link, sub-brand
 // pipeline stage labels). Phase 1 reuses the generic page.
 
-import { useEffect, useState } from "react";
+import { useContext, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   AlertCircle, Filter, Plus, RefreshCw, Tag, UserPlus, UserCircle, X,
 } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
+import { AuthContext } from "../../App";
+import { useActiveSubBrand } from "../../utils/subBrand";
+import {
+  accessibleSubBrands,
+  defaultSubBrandFor,
+  subBrandShortLabel,
+} from "../../utils/travelSubBrand";
 
 const SUB_BRANDS = [
   { value: "", label: "All sub-brands" },
@@ -46,6 +53,8 @@ const EMPTY_FORM = {
 
 export default function TravelLeads() {
   const notify = useNotify();
+  const { user } = useContext(AuthContext) || {};
+  const { activeSubBrand } = useActiveSubBrand();
   const [deals, setDeals] = useState([]);
   const [loading, setLoading] = useState(true);
   const [subBrand, setSubBrand] = useState("");
@@ -55,8 +64,14 @@ export default function TravelLeads() {
   const [saving, setSaving] = useState(false);
   const [contacts, setContacts] = useState([]);
 
+  // Sub-brands this user may create a lead under. A user restricted to a
+  // single brand has it auto-selected (no dropdown); admins + multi-brand
+  // users get a dropdown limited to THEIR brands. See defaultSubBrandFor.
+  const myBrands = accessibleSubBrands(user);
+  const lockedBrand = myBrands.length === 1 ? myBrands[0] : null;
+
   const openCreate = () => {
-    setForm(EMPTY_FORM);
+    setForm({ ...EMPTY_FORM, subBrand: defaultSubBrandFor(user, activeSubBrand) });
     setCreating(true);
     fetchApi("/api/contacts?limit=200")
       .then((res) => setContacts(Array.isArray(res) ? res : (res?.contacts || [])))
@@ -251,15 +266,28 @@ export default function TravelLeads() {
               </label>
               <label style={fieldLabel}>
                 Sub-brand
-                <select
-                  value={form.subBrand}
-                  onChange={(e) => setForm({ ...form, subBrand: e.target.value })}
-                  style={inputStyle}
-                >
-                  {SUB_BRANDS.filter((s) => s.value).map((s) => (
-                    <option key={s.value} value={s.value}>{s.label}</option>
-                  ))}
-                </select>
+                {lockedBrand ? (
+                  // Single-brand user: auto-selected, not editable. The value
+                  // is already pinned in form.subBrand via defaultSubBrandFor.
+                  <input
+                    type="text"
+                    value={subBrandShortLabel(lockedBrand)}
+                    readOnly
+                    disabled
+                    aria-label="Sub-brand (locked to your assigned brand)"
+                    style={{ ...inputStyle, opacity: 0.7, cursor: "not-allowed" }}
+                  />
+                ) : (
+                  <select
+                    value={form.subBrand}
+                    onChange={(e) => setForm({ ...form, subBrand: e.target.value })}
+                    style={inputStyle}
+                  >
+                    {myBrands.map((b) => (
+                      <option key={b} value={b}>{subBrandShortLabel(b)}</option>
+                    ))}
+                  </select>
+                )}
               </label>
               <label style={fieldLabel}>
                 Stage

@@ -1,7 +1,7 @@
-import React, { useContext, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import {
   CreditCard,
-  DollarSign,
+  IndianRupee,
   CheckCircle,
   XCircle,
   RefreshCw,
@@ -15,16 +15,8 @@ import { Link } from 'react-router-dom';
 import { fetchApi } from '../utils/api';
 import { AuthContext } from '../App';
 import { formatMoney } from '../utils/money';
-import { useNotify } from '../utils/notify';
-// Shared date-range picker — DRY follow-up to fabf035 (cron tick #27).
-// Centralises preset dropdown + Custom range UX so the three+ consumers
-// (Payments / InventoryReceipts / PatientDetail) stay in sync. Imports the
-// `rangeFromPreset` + `effectiveRangeFor` helpers used here for the KPI
-// pill row + the table-filter effective range.
-import DateRangePicker, {
-  rangeFromPreset,
-  effectiveRangeFor,
-} from '../components/DateRangePicker';
+import { DateRangeFilter, resolveDateRange, DATE_FILTER_OPTIONS } from '../components/wellness/DateRangeFilter';
+import RazorpayGatewayCard from '../components/RazorpayGatewayCard';
 
 // ── Style constants ───────────────────────────────────────────────
 const GLASS = {
@@ -87,11 +79,12 @@ function GatewayBadge({ gateway }) {
   );
 }
 
-// #286: use the canonical formatMoney() helper so wellness (INR) tenants no
-// longer see "$" on the dashboard. If the row carries its own currency
-// (multi-currency tenants), respect it; otherwise fall back to tenant default.
-function formatCurrency(amount, currency) {
-  return formatMoney(amount || 0, currency ? { currency } : undefined);
+// Always render in the tenant's default currency (INR for wellness tenants).
+// Per-row currency stamps were previously honored, which surfaced "$" rows on
+// INR tenants when historical payments were captured in USD — now display is
+// uniformly tenant-currency.
+function formatCurrency(amount) {
+  return formatMoney(amount || 0);
 }
 
 function formatDate(value) {
@@ -103,23 +96,9 @@ function formatDate(value) {
   }
 }
 
-// #846 — KPI pill control uses single-letter labels (W / 30D / 90D / Y) and is
-// intentionally distinct from the table-filter dropdown UX. The shared
-// <DateRangePicker> covers the table filter (preset dropdown + Custom range);
-// this list is the compact pill row rendered as `rightAccessory` on the Total
-// Collected card. `rangeFromPreset` is imported from the shared component so
-// the date math is single-sourced across consumers.
-const KPI_PRESETS = [
-  { value: 'week7',  label: 'W',   title: 'Last 7 days' },
-  { value: 'last30', label: '30D', title: 'Last 30 days' },
-  { value: 'last90', label: '90D', title: 'Last 90 days' },
-  { value: 'year',   label: 'Y',   title: 'Last 12 months' },
-];
-
 export default function Payments() {
   const { user } = useContext(AuthContext) || {};
   const isAdmin = user?.role === 'ADMIN';
-  const notify = useNotify();
 
   const [payments, setPayments] = useState([]);
   const [config, setConfig] = useState(null);
@@ -127,97 +106,26 @@ export default function Payments() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [selected, setSelected] = useState(null);
-
-  // #846 — date-range filter state for the transactions table. Single
-  // state object owned by the parent (controlled <DateRangePicker> input);
-  // `preset` drives the dropdown UI; `customFrom`/`customTo` are only
-  // meaningful when preset === 'custom'. The effective range used for
-  // fetching is computed by `effectiveRange` below and persists across the
-  // Stripe / Razorpay tab switches (the tab is gateway-only filtering,
-  // applied client-side).
-  const [dateRange, setDateRange] = useState({
-    preset: 'all',
-    customFrom: '',
-    customTo: '',
-  });
-
-  // #846 — Time-range window for the "Total Collected" KPI card. Independent
-  // from the table filter so the operator can keep the KPI on its trailing-
-  // 30-day default while drilling into a specific day's transactions in the
-  // table below. Pending + Failed cards follow the same window so the three
-  // KPIs read as one consistent header (per issue's "follow same range").
-  const [kpiWindow, setKpiWindow] = useState('last30');
-
-  // #895 — Record Payment drawer state. Operator-facing /payments previously
-  // had no way to capture a cash/UPI/manual receipt — the page was read-only
-  // ledger + admin-config. The drawer is opened from a header CTA and posts
-  // to /api/v1/invoices/:id/payments (canonical PRD §2 item 7c endpoint).
-  const [creating, setCreating] = useState(false);
-  const [recording, setRecording] = useState(false);
-  const [invoices, setInvoices] = useState([]);
-  const [form, setForm] = useState({
-    invoiceId: '',
-    amount: '',
-    method: 'cash',
-    reference: '',
-  });
-
-  // #846 — compute the effective {from, to} range to send to the backend.
-  // Delegates to the shared `effectiveRangeFor()` helper from
-  // ../components/DateRangePicker so the resolution logic stays
-  // single-sourced across consumers (Payments / InventoryReceipts /
-  // PatientDetail).
-  const effectiveRange = useMemo(
-    () => effectiveRangeFor(dateRange),
-    [dateRange],
-  );
+  // Default to last30 to preserve the prior "Total Collected (30D)" semantics —
+  // user can now switch to today / this week / this month / this year / custom
+  // and the KPI label and table follow.
+  const [dateFilter, setDateFilter] = useState({ preset: 'last30', start: '', end: '' });
+  const [rangeStart, rangeEnd] = resolveDateRange(dateFilter);
+  const filterLabel = useMemo(() => {
+    const o = DATE_FILTER_OPTIONS.find((x) => x.value === dateFilter.preset);
+    return o ? o.label : 'All time';
+  }, [dateFilter.preset]);
 
   useEffect(() => {
-    loadAll(effectiveRange);
-  }, [effectiveRange.from, effectiveRange.to]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // #895 — fetch the open-invoice list once for the picker. Kept separate
-  // from loadAll() so a Refresh-payments click doesn't re-fetch invoices
-  // unnecessarily. Filters client-side to non-PAID/VOIDED rows in the
-  // dropdown render below.
-  useEffect(() => {
-    fetchApi('/api/billing')
-      .then((rows) => setInvoices(Array.isArray(rows) ? rows : []))
-      .catch(() => setInvoices([]));
+    loadAll();
   }, []);
 
-  // #895 — close the Record-Payment drawer on Escape. Attached only while
-  // the drawer is open so we don't trap key events for users not actively
-  // recording.
-  useEffect(() => {
-    if (!creating) return undefined;
-    const onKey = (e) => {
-      if (e.key === 'Escape') setCreating(false);
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [creating]);
-
-  const openCreate = () => setCreating(true);
-  const closeCreate = () => {
-    setCreating(false);
-    setForm({ invoiceId: '', amount: '', method: 'cash', reference: '' });
-  };
-
-  async function loadAll(range) {
+  async function loadAll() {
     setLoading(true);
     setError('');
     try {
-      // #846 — build /api/payments query with optional from/to. Omit the
-      // params entirely when the range is empty so the backend returns
-      // unfiltered (preserves the pre-#846 default behaviour).
-      const params = new URLSearchParams();
-      if (range && range.from) params.set('from', range.from);
-      if (range && range.to) params.set('to', range.to);
-      const qs = params.toString();
-      const listUrl = qs ? `/api/payments?${qs}` : '/api/payments';
       const [list, cfg] = await Promise.all([
-        fetchApi(listUrl).catch(() => []),
+        fetchApi('/api/payments').catch(() => []),
         fetchApi('/api/payments/config').catch(() => null),
       ]);
       setPayments(Array.isArray(list) ? list : []);
@@ -229,82 +137,31 @@ export default function Payments() {
     }
   }
 
-  // #895 — Record Payment submit. Posts to the canonical /api/v1/invoices/:id/payments
-  // endpoint (v1_invoices.js:61), which writes a SUCCESS Payment row and auto-flips
-  // the invoice to PAID when sum-of-payments reaches grand_total ±0.01. The
-  // server stamps paidAt=now; we don't expose a "received date" field because
-  // it would be silently dropped on the server side — operator-honest UI.
-  async function handleRecord(e) {
-    e.preventDefault();
-    if (recording) return;
-    const invoiceId = parseInt(form.invoiceId, 10);
-    const amount = Number(form.amount);
-    if (!Number.isFinite(invoiceId) || invoiceId <= 0) {
-      notify.error('Please select an invoice');
-      return;
-    }
-    if (!Number.isFinite(amount) || amount <= 0) {
-      notify.error('Amount must be greater than 0');
-      return;
-    }
-    if (!form.method) {
-      notify.error('Please select a payment method');
-      return;
-    }
-    setRecording(true);
-    try {
-      await fetchApi(`/api/v1/invoices/${invoiceId}/payments`, {
-        method: 'POST',
-        body: JSON.stringify({
-          method: form.method,
-          amount,
-          reference: form.reference || undefined,
-        }),
-      });
-      notify.success('Payment recorded');
-      closeCreate();
-      loadAll(effectiveRange);
-    } catch (err) {
-      notify.error(err.message || 'Failed to record payment');
-    } finally {
-      setRecording(false);
-    }
-  }
+  // Row date: paidAt when set (SUCCESS / REFUNDED), createdAt otherwise.
+  // useCallback so it's stable across renders for the useMemo dep arrays below.
+  const inDateRange = useCallback((p) => {
+    if (!rangeStart || !rangeEnd) return true;
+    const ts = new Date(p.paidAt || p.createdAt).getTime();
+    return ts >= rangeStart.getTime() && ts <= rangeEnd.getTime();
+  }, [rangeStart, rangeEnd]);
 
   const filtered = useMemo(() => {
-    if (tab === 'all') return payments;
-    return payments.filter(p => String(p.gateway || '').toLowerCase() === tab);
-  }, [payments, tab]);
+    return payments.filter((p) => {
+      if (tab !== 'all' && String(p.gateway || '').toLowerCase() !== tab) return false;
+      return inDateRange(p);
+    });
+  }, [payments, tab, inDateRange]);
 
-  // #846 — KPI stats honour the selected `kpiWindow` (W / 30D / 90D / Y).
-  // Collected sums SUCCESS amounts whose paidAt (or createdAt fallback)
-  // falls within the window; Pending and Failed are row counts within
-  // the same window for consistency. When the operator narrows the table
-  // by date too, `payments` is already a subset, so the KPIs naturally
-  // reflect whichever is more restrictive (window intersect table-range).
   const stats = useMemo(() => {
-    const { from, to } = rangeFromPreset(kpiWindow);
-    const fromTs = from ? new Date(from).getTime() : -Infinity;
-    const toTs = to ? new Date(`${to}T23:59:59.999`).getTime() : Infinity;
     let collected = 0, pending = 0, failed = 0;
     for (const p of payments) {
-      const ts = p.paidAt ? new Date(p.paidAt).getTime() : new Date(p.createdAt).getTime();
-      if (ts < fromTs || ts > toTs) continue;
-      if (p.status === 'SUCCESS') {
-        collected += Number(p.amount || 0);
-      } else if (p.status === 'PENDING') {
-        pending += 1;
-      } else if (p.status === 'FAILED') {
-        failed += 1;
-      }
+      if (!inDateRange(p)) continue;
+      if (p.status === 'SUCCESS') collected += Number(p.amount || 0);
+      else if (p.status === 'PENDING') pending += 1;
+      else if (p.status === 'FAILED') failed += 1;
     }
     return { collected, pending, failed };
-  }, [payments, kpiWindow]);
-
-  const kpiWindowLabel = useMemo(() => {
-    const found = KPI_PRESETS.find(p => p.value === kpiWindow);
-    return found ? found.title : '';
-  }, [kpiWindow]);
+  }, [payments, inDateRange]);
 
   // ── Render ─────────────────────────────────────────────────────
   return (
@@ -315,49 +172,23 @@ export default function Payments() {
           <CreditCard size={28} style={{ color: '#635bff' }} />
           <h1 style={{ margin: 0, fontSize: '1.75rem', fontWeight: 700 }}>Payments</h1>
         </div>
-        <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}>
-          {/* #895 — Record Payment CTA (right-aligned, primary). Opens a drawer
-              capturing invoice + amount + method + reference for cash/UPI/
-              manual receipts. Mirrors the 50ac575 CTA + drawer pattern. */}
-          <button
-            type="button"
-            onClick={openCreate}
-            aria-label="Record a payment"
-            style={{
-              padding: '0.5rem 1rem',
-              background: 'rgba(99,91,255,0.18)',
-              border: '1px solid rgba(99,91,255,0.4)',
-              borderRadius: '8px',
-              color: '#a4a0ff',
-              cursor: 'pointer',
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '0.4rem',
-              fontSize: '0.85rem',
-              fontWeight: 600,
-            }}
-          >
-            <Plus size={14} />
-            Record Payment
-          </button>
-          <button
-            onClick={() => loadAll(effectiveRange)}
-            disabled={loading}
-            style={{
-              ...GLASS,
-              padding: '0.5rem 1rem',
-              color: 'var(--text-primary)',
-              cursor: loading ? 'not-allowed' : 'pointer',
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '0.4rem',
-              fontSize: '0.85rem',
-            }}
-          >
-            <RefreshCw size={14} style={{ animation: loading ? 'spin 1s linear infinite' : 'none' }} />
-            Refresh
-          </button>
-        </div>
+        <button
+          onClick={loadAll}
+          disabled={loading}
+          style={{
+            ...GLASS,
+            padding: '0.5rem 1rem',
+            color: 'var(--text-primary)',
+            cursor: loading ? 'not-allowed' : 'pointer',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '0.4rem',
+            fontSize: '0.85rem',
+          }}
+        >
+          <RefreshCw size={14} style={{ animation: loading ? 'spin 1s linear infinite' : 'none' }} />
+          Refresh
+        </button>
       </div>
 
       <p style={{ margin: '0 0 1.5rem 0', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
@@ -378,6 +209,11 @@ export default function Payments() {
           <AlertTriangle size={16} /> {error}
         </div>
       )}
+
+      {/* #848: per-tenant Razorpay keys (BYOK) for CUSTOMER payments. Admin-only.
+          Distinct from the platform env-var gateway below (which powers the
+          payments table + subscription billing). */}
+      {isAdmin && <RazorpayGatewayCard />}
 
       {/* #371: surface a clear configuration banner when neither Stripe
           nor Razorpay is wired up. Previously the page rendered a
@@ -400,95 +236,63 @@ export default function Payments() {
               <div style={{ fontWeight: 600, fontSize: '0.95rem', marginBottom: '0.2rem' }}>
                 Stripe / Razorpay not configured
               </div>
-              {/* #759 — the env-var NAMES + "restart the backend" ops
-                  instructions are server/devops detail. Show the full
-                  setup detail only to ADMIN; a non-admin staff user gets a
-                  plain "contact your administrator" line with no internal
-                  config surface. */}
               <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                {isAdmin
-                  ? 'Payment-gateway keys are configured server-side as environment variables (not via this UI). Set the variables below and restart the backend. Activating either gateway will enable the payment table + the per-invoice Pay-Now flow.'
-                  : 'Online payments are not available yet. Contact your administrator to enable a payment gateway.'}
+                Payment-gateway keys are configured server-side as environment variables (not via this UI). Ask your administrator to set the variables below and restart the backend. Activating either gateway will enable the payment table + the per-invoice Pay-Now flow.
               </div>
             </div>
           </div>
-          {isAdmin && (
-            <div style={{ marginLeft: '2.5rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-              <details style={{ background: 'rgba(0,0,0,0.18)', borderRadius: 6, padding: '0.5rem 0.75rem' }}>
-                <summary style={{ fontSize: '0.8rem', fontWeight: 600, cursor: 'pointer' }}>Stripe — required env vars</summary>
-                <pre style={{ fontSize: '0.75rem', margin: '0.5rem 0 0 0', color: 'var(--text-secondary)', whiteSpace: 'pre-wrap' }}>
+          <div style={{ marginLeft: '2.5rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+            <details style={{ background: 'rgba(0,0,0,0.18)', borderRadius: 6, padding: '0.5rem 0.75rem' }}>
+              <summary style={{ fontSize: '0.8rem', fontWeight: 600, cursor: 'pointer' }}>Stripe — required env vars</summary>
+              <pre style={{ fontSize: '0.75rem', margin: '0.5rem 0 0 0', color: 'var(--text-secondary)', whiteSpace: 'pre-wrap' }}>
 {`STRIPE_SECRET_KEY=sk_live_...        # from dashboard.stripe.com → Developers → API keys
 STRIPE_WEBHOOK_SECRET=whsec_...     # from dashboard.stripe.com → Developers → Webhooks
                                       # endpoint URL: <BASE_URL>/api/payments/webhook/stripe`}</pre>
-              </details>
-              <details style={{ background: 'rgba(0,0,0,0.18)', borderRadius: 6, padding: '0.5rem 0.75rem' }}>
-                <summary style={{ fontSize: '0.8rem', fontWeight: 600, cursor: 'pointer' }}>Razorpay — required env vars</summary>
-                <pre style={{ fontSize: '0.75rem', margin: '0.5rem 0 0 0', color: 'var(--text-secondary)', whiteSpace: 'pre-wrap' }}>
+            </details>
+            <details style={{ background: 'rgba(0,0,0,0.18)', borderRadius: 6, padding: '0.5rem 0.75rem' }}>
+              <summary style={{ fontSize: '0.8rem', fontWeight: 600, cursor: 'pointer' }}>Razorpay — required env vars</summary>
+              <pre style={{ fontSize: '0.75rem', margin: '0.5rem 0 0 0', color: 'var(--text-secondary)', whiteSpace: 'pre-wrap' }}>
 {`RAZORPAY_KEY_ID=rzp_live_...        # from dashboard.razorpay.com → Settings → API Keys
 RAZORPAY_KEY_SECRET=...
 RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com → Settings → Webhooks
                                       # endpoint URL: <BASE_URL>/api/payments/webhook/razorpay`}</pre>
-              </details>
-            </div>
-          )}
+            </details>
+          </div>
         </div>
       )}
 
-      {/* Stats row — #846: KPI window selector (W/30D/90D/Y pill) on the
-          Total Collected card. Pending + Failed follow the same window per
-          the issue's "ideally follow same range" note. */}
+      {/* Stats row — labels are window-aware so the KPI value the user sees
+          always matches what the date filter is showing. */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1rem', marginBottom: '1.5rem' }}>
         <StatCard
-          icon={<DollarSign size={20} />}
-          label={`Total Collected (${kpiWindowLabel})`}
+          icon={<IndianRupee size={20} />}
+          label={`Total Collected (${filterLabel})`}
           value={formatMoney(stats.collected)}
           color="#10b981"
-          rightAccessory={(
-            <div role="group" aria-label="Total Collected window" style={{ display: 'inline-flex', gap: '0.2rem' }}>
-              {KPI_PRESETS.map(p => (
-                <button
-                  key={p.value}
-                  type="button"
-                  title={p.title}
-                  aria-pressed={kpiWindow === p.value}
-                  onClick={() => setKpiWindow(p.value)}
-                  style={{
-                    padding: '0.2rem 0.45rem',
-                    borderRadius: '6px',
-                    fontSize: '0.7rem',
-                    fontWeight: 600,
-                    border: kpiWindow === p.value ? '1px solid #10b98180' : '1px solid rgba(255,255,255,0.12)',
-                    background: kpiWindow === p.value ? 'rgba(16,185,129,0.18)' : 'rgba(255,255,255,0.04)',
-                    color: kpiWindow === p.value ? '#10b981' : 'var(--text-secondary)',
-                    cursor: 'pointer',
-                  }}
-                >
-                  {p.label}
-                </button>
-              ))}
-            </div>
-          )}
         />
         <StatCard
           icon={<Clock size={20} />}
-          label="Pending"
+          label={`Pending (${filterLabel})`}
           value={stats.pending}
           color="#f59e0b"
         />
         <StatCard
           icon={<XCircle size={20} />}
-          label="Failed"
+          label={`Failed (${filterLabel})`}
           value={stats.failed}
           color="#ef4444"
         />
       </div>
 
-      {/* Tabs + date-range filter — #846: date filter sits next to gateway
-          tabs so an operator can narrow by date AND gateway at the same time.
-          The date selection persists across All / Stripe / Razorpay clicks
-          (the tab filters payments client-side; date filtering is server-
-          side and re-fetches on change). */}
-      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem' }}>
+      {/* Gateway chips + date filter — share a row, gateway chips on the left,
+          date picker right-pinned via marginLeft: auto so they wrap together
+          when the viewport narrows. */}
+      <div
+        style={{
+          display: 'flex', alignItems: 'center', gap: '0.5rem',
+          marginBottom: '1rem', flexWrap: 'wrap',
+        }}
+      >
         {['all', 'stripe', 'razorpay'].map(t => (
           <button
             key={t}
@@ -508,14 +312,8 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com → Settings �
             {t === 'all' ? 'All' : t}
           </button>
         ))}
-
-        <div style={{ marginLeft: 'auto' }}>
-          <DateRangePicker
-            id="payments-date-preset"
-            value={dateRange}
-            onChange={setDateRange}
-            presets={['all', 'today', 'yesterday', 'week7', 'month', 'custom']}
-          />
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+          <DateRangeFilter value={dateFilter} onChange={setDateFilter} />
         </div>
       </div>
 
@@ -591,7 +389,7 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com → Settings �
                 onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
               >
                 <Td>{p.invoiceId ? `#${p.invoiceId}` : <span style={{ color: 'var(--text-secondary)' }}>—</span>}</Td>
-                <Td><strong>{formatCurrency(p.amount, p.currency)}</strong></Td>
+                <Td><strong>{formatCurrency(p.amount)}</strong></Td>
                 <Td><GatewayBadge gateway={p.gateway} /></Td>
                 <Td><StatusBadge status={p.status} /></Td>
                 <Td>{formatDate(p.paidAt)}</Td>
@@ -674,164 +472,6 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com → Settings �
       {/* Detail modal */}
       {selected && <DetailModal payment={selected} onClose={() => setSelected(null)} />}
 
-      {/* #895 — Record Payment drawer. Mounted only when `creating` is true.
-          Close triggers: X button, ESC keypress (handled by the useEffect
-          above), click on the dark overlay backdrop, Cancel button, and
-          successful submit. Fields: invoice picker (from /api/billing),
-          amount, method (cash/upi/bank-transfer/cheque/card/other),
-          reference (optional). Submits to /api/v1/invoices/:id/payments. */}
-      {creating && (
-        <div
-          onClick={(e) => { if (e.target === e.currentTarget) closeCreate(); }}
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(0,0,0,0.55)',
-            backdropFilter: 'blur(4px)',
-            display: 'flex',
-            alignItems: 'flex-start',
-            justifyContent: 'flex-end',
-            zIndex: 1000,
-          }}
-          role="dialog"
-          aria-modal="true"
-          aria-label="Record Payment"
-        >
-          <div
-            style={{
-              background: 'rgba(20,20,30,0.98)',
-              color: 'var(--text-primary)',
-              width: '100%',
-              maxWidth: 460,
-              height: '100vh',
-              overflowY: 'auto',
-              padding: '1.5rem',
-              boxShadow: '-8px 0 24px rgba(0,0,0,0.4)',
-              borderLeft: '1px solid rgba(255,255,255,0.08)',
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
-              <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 600 }}>Record Payment</h3>
-              <button
-                type="button"
-                onClick={closeCreate}
-                aria-label="Close"
-                style={{ background: 'transparent', border: 'none', color: 'var(--text-primary)', cursor: 'pointer', padding: '0.25rem' }}
-              >
-                <X size={20} />
-              </button>
-            </div>
-
-            <p style={{ margin: '0 0 1rem 0', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-              Capture a cash, UPI, bank-transfer, cheque, card, or other manual receipt
-              against an open invoice. The invoice auto-flips to PAID when the sum of
-              recorded payments reaches its total.
-            </p>
-
-            <form onSubmit={handleRecord} style={{ display: 'flex', flexDirection: 'column', gap: '0.875rem' }}>
-              <label style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-                <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>Invoice *</span>
-                <select
-                  required
-                  value={form.invoiceId}
-                  onChange={(e) => setForm(f => ({ ...f, invoiceId: e.target.value }))}
-                  style={{ padding: '0.5rem', borderRadius: '6px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'var(--text-primary)' }}
-                >
-                  <option value="">Select an invoice…</option>
-                  {invoices
-                    .filter(inv => inv && inv.status !== 'PAID' && inv.status !== 'VOIDED')
-                    .map(inv => (
-                      <option key={inv.id} value={inv.id}>
-                        #{inv.invoiceNum || inv.id} — {formatCurrency(inv.amount, inv.currency)}
-                        {inv.contact && (inv.contact.name || inv.contact.email) ? ` (${inv.contact.name || inv.contact.email})` : ''}
-                      </option>
-                    ))}
-                </select>
-              </label>
-
-              <label style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-                <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>Amount *</span>
-                <input
-                  type="number"
-                  required
-                  min="0.01"
-                  step="0.01"
-                  value={form.amount}
-                  onChange={(e) => setForm(f => ({ ...f, amount: e.target.value }))}
-                  placeholder="0.00"
-                  style={{ padding: '0.5rem', borderRadius: '6px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'var(--text-primary)' }}
-                />
-              </label>
-
-              <label style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-                <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>Method *</span>
-                <select
-                  required
-                  value={form.method}
-                  onChange={(e) => setForm(f => ({ ...f, method: e.target.value }))}
-                  style={{ padding: '0.5rem', borderRadius: '6px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'var(--text-primary)' }}
-                >
-                  <option value="cash">Cash</option>
-                  <option value="upi">UPI</option>
-                  <option value="bank-transfer">Bank transfer</option>
-                  <option value="cheque">Cheque</option>
-                  <option value="card">Card</option>
-                  <option value="other">Other</option>
-                </select>
-              </label>
-
-              <label style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-                <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>Reference</span>
-                <input
-                  type="text"
-                  maxLength={128}
-                  value={form.reference}
-                  onChange={(e) => setForm(f => ({ ...f, reference: e.target.value }))}
-                  placeholder="UPI txn ID / cheque no. / etc. (optional)"
-                  style={{ padding: '0.5rem', borderRadius: '6px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'var(--text-primary)' }}
-                />
-              </label>
-
-              <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
-                <button
-                  type="submit"
-                  disabled={recording}
-                  style={{
-                    flex: 1,
-                    padding: '0.6rem 1rem',
-                    background: 'rgba(99,91,255,0.25)',
-                    border: '1px solid rgba(99,91,255,0.5)',
-                    borderRadius: '8px',
-                    color: '#a4a0ff',
-                    cursor: recording ? 'not-allowed' : 'pointer',
-                    fontSize: '0.85rem',
-                    fontWeight: 600,
-                  }}
-                >
-                  {recording ? 'Recording…' : 'Record Payment'}
-                </button>
-                <button
-                  type="button"
-                  onClick={closeCreate}
-                  disabled={recording}
-                  style={{
-                    padding: '0.6rem 1rem',
-                    background: 'rgba(255,255,255,0.05)',
-                    border: '1px solid rgba(255,255,255,0.1)',
-                    borderRadius: '8px',
-                    color: 'var(--text-primary)',
-                    cursor: recording ? 'not-allowed' : 'pointer',
-                    fontSize: '0.85rem',
-                  }}
-                >
-                  Cancel
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
       <style>{`@keyframes spin { from { transform: rotate(0); } to { transform: rotate(360deg); } }`}</style>
     </div>
   );
@@ -856,7 +496,7 @@ function Td({ children, onClick }) {
   return <td onClick={onClick} style={{ padding: '0.75rem 1rem', verticalAlign: 'middle' }}>{children}</td>;
 }
 
-function StatCard({ icon, label, value, color, rightAccessory }) {
+function StatCard({ icon, label, value, color }) {
   const bgAlpha = color === '#10b981' ? '0.08' : color === '#f59e0b' ? '0.08' : '0.08';
   const getBgColor = () => {
     if (color === '#10b981') return 'rgba(16,185,129,0.1)';
@@ -904,9 +544,6 @@ function StatCard({ icon, label, value, color, rightAccessory }) {
             {icon}
           </div>
           <span style={{ fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-secondary)', fontWeight: 600 }}>{label}</span>
-          {rightAccessory && (
-            <span style={{ marginLeft: 'auto' }}>{rightAccessory}</span>
-          )}
         </div>
         <div style={{ fontSize: '2.2rem', fontWeight: 700, color, lineHeight: 1 }}>{value}</div>
       </div>
@@ -987,8 +624,10 @@ function DetailModal({ payment, onClose }) {
       <div
         onClick={e => e.stopPropagation()}
         style={{
-          ...GLASS,
-          background: 'rgba(20,20,30,0.95)',
+          background: 'var(--bg-color)',
+          border: '1px solid var(--border-color)',
+          borderRadius: '12px',
+          boxShadow: 'var(--glass-shadow, 0 8px 32px rgba(0,0,0,0.25))',
           padding: '1.5rem',
           maxWidth: '560px',
           width: '100%',
@@ -1006,7 +645,7 @@ function DetailModal({ payment, onClose }) {
 
         <DetailRow label="Status"><StatusBadge status={payment.status} /></DetailRow>
         <DetailRow label="Gateway"><GatewayBadge gateway={payment.gateway} /></DetailRow>
-        <DetailRow label="Amount">{formatCurrency(payment.amount, payment.currency)}</DetailRow>
+        <DetailRow label="Amount">{formatCurrency(payment.amount)}</DetailRow>
         <DetailRow label="Currency">{payment.currency}</DetailRow>
         <DetailRow label="Invoice">{payment.invoiceId ? `#${payment.invoiceId}` : '—'}</DetailRow>
         <DetailRow label="Gateway ID"><code style={{ fontSize: '0.78rem' }}>{payment.gatewayId || '—'}</code></DetailRow>
@@ -1018,13 +657,14 @@ function DetailModal({ payment, onClose }) {
             Metadata
           </div>
           <pre style={{
-            background: 'rgba(0,0,0,0.4)',
+            background: 'var(--subtle-bg)',
+            border: '1px solid var(--border-color)',
             padding: '0.75rem',
             borderRadius: '8px',
             fontSize: '0.75rem',
             overflowX: 'auto',
             margin: 0,
-            color: '#9ca3af',
+            color: 'var(--text-secondary)',
           }}>
 {JSON.stringify(meta, null, 2)}
           </pre>
@@ -1036,7 +676,7 @@ function DetailModal({ payment, onClose }) {
 
 function DetailRow({ label, children }) {
   return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.45rem 0', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+    <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.45rem 0', borderBottom: '1px solid var(--border-color)' }}>
       <span style={{ color: 'var(--text-secondary)', fontSize: '0.82rem' }}>{label}</span>
       <span style={{ fontSize: '0.85rem' }}>{children}</span>
     </div>

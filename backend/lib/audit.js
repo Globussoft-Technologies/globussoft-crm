@@ -194,6 +194,12 @@ async function writeAudit(entity, action, entityId, userId, tenantId, details, o
       createdAt: createdAt.toISOString(),
     });
 
+    // #616: callers own userId validity. If a writeAudit lands with a
+    // userId that no longer references a real User row, the FK violation
+    // is caught by the outer try/catch (audit emission is fail-soft and
+    // must never break the user-facing request). Probing prisma.user on
+    // every audit write doubles DB round-trips and was breaking unit
+    // tests whose prisma.user mock didn't include findUnique.
     await prisma.auditLog.create({
       data: {
         action,

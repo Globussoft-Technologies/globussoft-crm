@@ -31,12 +31,11 @@
 //     reason; reason is logged into Sale.notes and AuditLog (server-side
 //     audit row written by routes/pos.js → writeAudit).
 
-import { useCallback, useEffect, useMemo, useRef, useState, useContext } from 'react';
-import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { useEffect, useMemo, useState, useContext } from 'react';
 import {
   Calculator,
   Plus,
-  Minus,
+  Trash2,
   Lock,
   Unlock,
   Receipt,
@@ -44,17 +43,22 @@ import {
   UserX,
   Tag,
   ShieldAlert,
-  Wallet as WalletIcon,
-  Gift,
-  CalendarCheck,
-  User as UserIcon,
-  Search,
-  X as XIcon,
+  MapPin,
+  Banknote,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { formatMoney } from '../../utils/money';
 import { AuthContext } from '../../App';
+// Embedded admin-only "Manage registers" panel. Renders without its
+// outer page chrome when given `embedded`. Previously lived at its own
+// /wellness/cash-registers route but that route was never mounted in
+// App.jsx — sidebar 404'd, surface was unreachable. Folded into POS so
+// register CRUD, shift open/close, petty cash, and recent transactions
+// are accessible from the same surface where sales are rung up.
+import CashRegisters from './CashRegisters';
 
 const LINE_TYPES = [
   { value: 'SERVICE', label: 'Service' },
@@ -64,98 +68,31 @@ const LINE_TYPES = [
   { value: 'PACKAGE', label: 'Package' },
 ];
 
-// #789 — payment methods exposed at POS. Backend
-// (routes/pos.js → VALID_PAYMENT_METHODS) accepts CASH | CARD | UPI |
-// WALLET | GIFTCARD | COMBINED | CASHBACK | PAYLATER | ONLINE. Labels here
-// are friendlier user-facing strings; the `value` is the enum the backend
-// expects on /api/pos/sales.
-// CASHBACK/PAYLATER/ONLINE were added 2026-05-18 — see the comment block
-// above VALID_PAYMENT_METHODS in routes/pos.js for the per-method
-// treatment + deferred-column notes (Sale.paid / Sale.paymentDueAt /
-// Sale.externalPaymentRef are tracked for follow-up).
-const PAYMENT_METHODS = [
-  { value: 'CASH', label: 'Cash' },
-  { value: 'CARD', label: 'Card' },
-  { value: 'UPI', label: 'UPI' },
-  { value: 'WALLET', label: 'Wallet' },
-  { value: 'GIFTCARD', label: 'Gift Card' },
-  { value: 'COMBINED', label: 'Split / combined' },
-  { value: 'CASHBACK', label: 'Cashback' },
-  { value: 'PAYLATER', label: 'Pay later' },
-  { value: 'ONLINE', label: 'Online (payment link)' },
-];
-
-// D17 Arc 1 slice 4 — Payment splitter method buttons. Drives the new
-// cents-native POST /api/pos/sales/finalize endpoint (separate from the
-// legacy single-select dropdown above which drives POST /api/pos/sales).
-// Order is most-common-first per PRD §3.5 — the dominant 1-tap cash
-// flow stays leftmost. Values are lowercase per the /finalize wire
-// contract (VALID_FINALIZE_PAYMENT_METHODS in backend/routes/pos.js).
-const SPLIT_PAYMENT_METHODS = [
-  { value: 'cash', label: 'Cash' },
-  { value: 'card', label: 'Card' },
-  { value: 'upi', label: 'UPI' },
-  { value: 'wallet', label: 'Wallet' },
-  { value: 'giftcard', label: 'Gift Card' },
-];
+const PAYMENT_METHODS = ['CASH', 'CARD', 'UPI', 'WALLET', 'GIFTCARD', 'COMBINED'];
 
 export default function PointOfSale() {
   const { user } = useContext(AuthContext) || {};
   const isAdminOrManager = user && (user.role === 'ADMIN' || user.role === 'MANAGER');
 
-  // D17 Arc 1 slice 1 (tick #N) — Booking | Walk-in tab switch.
-  // PRD_POS_NEW_SALE.md §3: the cashier may start a sale from an existing
-  // booking (pre-fill the basket from the booking's service) OR ring up a
-  // walk-in (the existing form, unchanged). DD-5.1 (Q&A round 2) picked
-  // URL-segment routing for shareability + back-button correctness — the
-  // tab is encoded as `?tab=booking` or `?tab=walkin` so refresh /
-  // bookmark / share-link / browser-back all land on the right tab.
-  //
-  // Default tab is "walkin" (existing behaviour — no URL param, no API
-  // contract change). Switching tabs does NOT reset basket / payment /
-  // discount / patient state so a cashier who started a walk-in can flip
-  // to Booking, pre-fill from a booking, and the in-progress sale lines
-  // are preserved + the booking's items append to whatever was already
-  // there. This matches the "switching tabs preserves data" PRD line.
-  const location = useLocation();
-  const navigate = useNavigate();
-  const initialTab = useMemo(() => {
-    const params = new URLSearchParams(location.search);
-    const t = params.get('tab');
-    return t === 'booking' ? 'booking' : 'walkin';
-  }, [location.search]);
-  const [tab, setTab] = useState(initialTab);
-  // Keep the local tab state in sync with the URL when the user navigates
-  // via back/forward (location.search changes). Direct user clicks update
-  // both setTab + the URL via switchTab below.
-  useEffect(() => {
-    setTab(initialTab);
-  }, [initialTab]);
-  const switchTab = useCallback((next) => {
-    setTab(next);
-    const params = new URLSearchParams(location.search);
-    if (next === 'walkin') {
-      params.delete('tab');
-    } else {
-      params.set('tab', next);
-    }
-    const qs = params.toString();
-    navigate({ pathname: location.pathname, search: qs ? `?${qs}` : '' }, { replace: false });
-  }, [location.pathname, location.search, navigate]);
-
-  // Today's bookings feed. The Visit list endpoint already pages by date
-  // (?from=…&to=…) and includes patient + service. We re-use it as the
-  // booking source so this slice ships without a new backend endpoint —
-  // Visit IS the canonical "booked appointment" row in the wellness data
-  // model. Fetched lazily on first switch to the Booking tab so the
-  // walk-in default path doesn't pay for it.
-  const [bookings, setBookings] = useState([]);
-  const [bookingsBusy, setBookingsBusy] = useState(false);
-  const [bookingsLoaded, setBookingsLoaded] = useState(false);
-
   const [registers, setRegisters] = useState([]);
+  const [locations, setLocations] = useState([]);
   const [currentShift, setCurrentShift] = useState(null);
   const [openingForm, setOpeningForm] = useState({ registerId: '', openingFloat: '' });
+  // Inline register creation (admin/manager only) — surfaced when there are
+  // zero registers configured OR via the "+ New register" link beside the
+  // existing dropdown. Avoids forcing the operator to leave the POS page
+  // just to spin up a till on first run.
+  const [showRegisterForm, setShowRegisterForm] = useState(false);
+  const [registerForm, setRegisterForm] = useState({ name: '', locationId: '', openingFloat: '0' });
+  const [registerBusy, setRegisterBusy] = useState(false);
+  // Catalog lookup for the line-item builder — replaces the manual
+  // "Ref ID + Name + Unit price" trio with a single pick-from-catalog
+  // dropdown that auto-fills the three fields. Lazy-loaded per type the
+  // first time the user selects it so the page boots fast even on
+  // tenants with hundreds of services / products.
+  const [catalogServices, setCatalogServices] = useState(null);
+  const [catalogProducts, setCatalogProducts] = useState(null);
+  const [catalogMemberships, setCatalogMemberships] = useState(null);
   const [closingTotal, setClosingTotal] = useState('');
   const [closingNotes, setClosingNotes] = useState('');
   const [basket, setBasket] = useState([]); // local lineItems
@@ -175,6 +112,11 @@ export default function PointOfSale() {
   const [lastReceipt, setLastReceipt] = useState(null);
   const notify = useNotify();
 
+  // Admin/manager-only "Manage registers" panel toggle. Renders the
+  // CashRegisters component embedded (no page chrome) when expanded.
+  // Default collapsed so the cashier-focused sale flow stays primary.
+  const [showRegistersPanel, setShowRegistersPanel] = useState(false);
+
   // Wave 7C extras (PRD Gap §2 items 2 + 10)
   const [guestCheckout, setGuestCheckout] = useState(false);
   const [patientId, setPatientId] = useState('');
@@ -191,203 +133,21 @@ export default function PointOfSale() {
   const [overrideAmount, setOverrideAmount] = useState('');
   const [overrideReason, setOverrideReason] = useState('');
 
-  // #789 / WAL-002 — Wallet + Gift Card flow state.
-  // When paymentMethod=WALLET we fetch the patient's wallet balance so the
-  // cashier can see what's available before completing the sale. When
-  // paymentMethod=GIFTCARD we surface a redeem mini-form — redeeming credits
-  // the patient's wallet, and the cashier then switches to WALLET to charge.
-  const [walletBalance, setWalletBalance] = useState(null);
-  const [walletBusy, setWalletBusy] = useState(false);
-  const [giftCardCode, setGiftCardCode] = useState('');
-  const [giftCardBusy, setGiftCardBusy] = useState(false);
-
-  // ── D17 Arc 1 slice 4 — Payment splitter state (PRD §3.5, DD-5.x round 2).
-  //
-  // DD-5.x resolved: one button per payment method (fastest UX for the
-  // typical 1-2 method splits). Click a method button → appends a new
-  // payment line for that method with amount=0; cashier types the ₹ amount.
-  // Live Paid / Balance label updates as they type. Drives the cents-native
-  // POST /api/pos/sales/finalize endpoint (tick #9 93bf816b).
-  //
-  // Wallet-button gate: pulled from GET /api/pos/sale-context/:patientId
-  // (tick #4 617b6e26) which returns walletBalanceCents.
-  //
-  // Computed deps (splitPaymentsTotal / splitBalance / canFinalize) +
-  // the finalizeSplitSale handler live BELOW the grandTotal useMemo block
-  // since they read grandTotal. State + handlers that don't depend on
-  // grandTotal sit here so the patientId effect chain stays compact.
-  const [splitPayments, setSplitPayments] = useState([]); // [{method, amountRupees}]
-  const [saleContext, setSaleContext] = useState(null); // {walletBalanceCents, currency}
-  const [finalizeBusy, setFinalizeBusy] = useState(false);
-
-  // Load sale-context whenever a non-guest patientId is set. Drives the
-  // Wallet-button-disabled affordance + the "Wallet balance: ₹X.XX" label.
-  useEffect(() => {
-    const pid = guestCheckout
-      ? null
-      : (patientId && Number.isFinite(parseInt(patientId)) ? parseInt(patientId) : null);
-    if (!pid) {
-      setSaleContext(null);
-      return;
-    }
-    let cancelled = false;
-    (async () => {
-      try {
-        const ctx = await fetchApi(`/api/pos/sale-context/${pid}`);
-        if (!cancelled) setSaleContext(ctx);
-      } catch (_e) {
-        if (!cancelled) setSaleContext(null);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [patientId, guestCheckout]);
-
-  const addSplitPayment = (method) => {
-    setSplitPayments((p) => [...p, { method, amountRupees: '' }]);
-  };
-  const updateSplitPaymentAmount = (idx, amountRupees) => {
-    setSplitPayments((p) => p.map((row, i) => (i === idx ? { ...row, amountRupees } : row)));
-  };
-  const removeSplitPayment = (idx) => {
-    setSplitPayments((p) => p.filter((_, i) => i !== idx));
-  };
-
-  // splitPaymentsTotal does NOT depend on grandTotal, so it can stay here.
-  // Sum across the splitter lines, in RUPEES (UI native), for the live
-  // Paid / Balance label. Convert to cents on submit only.
-  const splitPaymentsTotal = useMemo(
-    () => splitPayments.reduce((acc, p) => acc + (Number(p.amountRupees) || 0), 0),
-    [splitPayments],
-  );
-
-  // ── D17 Arc 1 slice 3 — Items picker autocomplete (DD-5.2 resolved →
-  //    autocomplete, not modal, not sidebar drawer).
-  //
-  // PRD_POS_NEW_SALE.md §3.4: a single search input that fans out to the
-  // existing Service + Product catalogues, debounced ~300ms, with a
-  // grouped dropdown of results. Clicking a result appends a line to the
-  // basket pre-filled with the catalogue's price + name + refId; the
-  // cashier can still tweak qty inline via row-level +/- buttons. Cuts
-  // the keystroke cost of the manual lineType/refId/name/unitPrice
-  // builder by a factor of ~6 for catalogue items (per the PRD's
-  // "current friction" measurement) while leaving the manual builder
-  // untouched as a fallback for one-off / ad-hoc charges.
-  //
-  // Endpoints:
-  //   GET /api/wellness/services           — all-active services
-  //   GET /api/wellness/products           — products (admin-gated today)
-  // Server-side ?q= filter is a no-op on both today (Agent A's backend
-  // slice will add it later); we filter client-side by name `includes`
-  // case-insensitively in the meantime. The products endpoint is
-  // admin/manager gated so plain USERs (cashiers) will see 403 — we
-  // swallow that to a silent empty-products result so the dropdown
-  // still surfaces services for cashier-level operators (acceptable
-  // degraded mode pending RBAC review in slice 5+).
-  const [itemsQuery, setItemsQuery] = useState('');
-  const [itemsResults, setItemsResults] = useState({ services: [], products: [] });
-  const [itemsBusy, setItemsBusy] = useState(false);
-  const [itemsDropdownOpen, setItemsDropdownOpen] = useState(false);
-  const itemsDebounceRef = useRef(null);
-
-  const fetchItemsCatalogue = useCallback(async (term) => {
-    const q = (term || '').trim();
-    if (!q) {
-      setItemsResults({ services: [], products: [] });
-      setItemsBusy(false);
-      return;
-    }
-    setItemsBusy(true);
-    try {
-      const qEnc = encodeURIComponent(q);
-      const [servicesRaw, productsRaw] = await Promise.all([
-        // Server doesn't currently honour ?q= (Agent A backend slice will
-        // wire it); send it anyway so the contract is forward-compatible.
-        fetchApi(`/api/wellness/services?q=${qEnc}`).catch(() => []),
-        // Products endpoint is admin/manager gated — swallow 403 to []
-        // so the picker still shows services for cashier-level users.
-        fetchApi(`/api/wellness/products?q=${qEnc}`).catch(() => []),
-      ]);
-      const needle = q.toLowerCase();
-      const services = Array.isArray(servicesRaw)
-        ? servicesRaw.filter((s) => s && typeof s.name === 'string' && s.name.toLowerCase().includes(needle)).slice(0, 10)
-        : [];
-      const products = Array.isArray(productsRaw)
-        ? productsRaw.filter((p) => p && typeof p.name === 'string' && p.name.toLowerCase().includes(needle)).slice(0, 10)
-        : [];
-      setItemsResults({ services, products });
-      setItemsDropdownOpen(true);
-    } catch (e) {
-      // Silent — the picker's empty-state messaging covers it; an error
-      // toast would be noisy on every keystroke if the network flapped.
-      setItemsResults({ services: [], products: [] });
-    } finally {
-      setItemsBusy(false);
-    }
-  }, []);
-
-  // Debounce the keystroke → fetch by ~300ms so typing "hydraf" doesn't
-  // fan out six parallel pairs of requests. Cleared on unmount + on
-  // every new keystroke.
-  useEffect(() => {
-    if (itemsDebounceRef.current) {
-      clearTimeout(itemsDebounceRef.current);
-    }
-    if (!itemsQuery.trim()) {
-      setItemsResults({ services: [], products: [] });
-      setItemsDropdownOpen(false);
-      return undefined;
-    }
-    itemsDebounceRef.current = setTimeout(() => {
-      fetchItemsCatalogue(itemsQuery);
-    }, 300);
-    return () => {
-      if (itemsDebounceRef.current) clearTimeout(itemsDebounceRef.current);
-    };
-  }, [itemsQuery, fetchItemsCatalogue]);
-
-  // Append a catalogue row to the basket. We map Service.basePrice and
-  // Product.price → the line's unitPrice (rupees, matching the existing
-  // manual builder convention — NOT cents; the prompt's `unitPriceCents`
-  // wording was a slice-level shorthand, the existing schema is rupees).
-  const addCatalogueLine = (kind, row) => {
-    if (!row || !row.id) return;
-    const unitPrice =
-      kind === 'SERVICE'
-        ? Number(row.basePrice || 0)
-        : Number(row.price || 0);
-    const line = {
-      lineType: kind,
-      refId: Number(row.id),
-      name: row.name || `${kind} #${row.id}`,
-      quantity: 1,
-      unitPrice,
-      lineDiscount: 0,
-      lineTotal: Math.max(0, 1 * unitPrice),
-    };
-    setBasket((b) => [...b, line]);
-    setItemsQuery('');
-    setItemsResults({ services: [], products: [] });
-    setItemsDropdownOpen(false);
-    notify.success(`Added ${line.name}`);
-  };
-
-  // Row-level qty controls — +/- buttons that recompute lineTotal in
-  // place. Qty cannot go below 1 (removal is via the × button).
-  const updateLineQty = useCallback((idx, delta) => {
-    setBasket((b) => b.map((l, i) => {
-      if (i !== idx) return l;
-      const nextQty = Math.max(1, Number(l.quantity || 1) + delta);
-      const lineTotal = Math.max(0, nextQty * Number(l.unitPrice || 0) - Number(l.lineDiscount || 0));
-      return { ...l, quantity: nextQty, lineTotal };
-    }));
-  }, []);
-
   const loadRegisters = async () => {
     try {
       const list = await fetchApi('/api/pos/registers?isActive=true');
       setRegisters(list || []);
     } catch (e) {
       notify.error(e.message || 'Failed to load registers');
+    }
+  };
+
+  const loadLocations = async () => {
+    try {
+      const list = await fetchApi('/api/wellness/locations');
+      setLocations(Array.isArray(list) ? list : []);
+    } catch (_e) {
+      setLocations([]);
     }
   };
 
@@ -401,81 +161,102 @@ export default function PointOfSale() {
     }
   };
 
+  // Auto-open the inline register form for admin/manager when there are
+  // no registers yet — turns the dead-end empty dropdown into a do-it-now
+  // setup card.
+  useEffect(() => {
+    if (isAdminOrManager && registers.length === 0) {
+      setShowRegisterForm(true);
+    }
+  }, [registers.length, isAdminOrManager]);
+
+  const createRegister = async () => {
+    if (!registerForm.name.trim()) return notify.error('Register name is required');
+    if (!registerForm.locationId) return notify.error('Pick a location');
+    setRegisterBusy(true);
+    try {
+      const created = await fetchApi('/api/pos/registers', {
+        method: 'POST',
+        body: JSON.stringify({
+          name: registerForm.name.trim(),
+          locationId: parseInt(registerForm.locationId, 10),
+          openingFloat: parseFloat(registerForm.openingFloat || '0'),
+        }),
+      });
+      notify.success(`Register "${created.name}" created`);
+      setRegisterForm({ name: '', locationId: '', openingFloat: '0' });
+      setShowRegisterForm(false);
+      // Refresh the list and auto-select the newly created register so the
+      // user can hit "Open shift" immediately.
+      await loadRegisters();
+      setOpeningForm((f) => ({ ...f, registerId: String(created.id) }));
+    } catch (e) {
+      // fetchApi already toasted the server error
+    } finally {
+      setRegisterBusy(false);
+    }
+  };
+
   useEffect(() => {
     loadRegisters();
     loadCurrentShift();
+    loadLocations();
   }, []);
 
-  // D17 Arc 1 slice 1 — load today's bookings the first time the cashier
-  // switches to the Booking tab. Re-fetches if they switch away + back so
-  // a stale list isn't shown when bookings get added/cancelled mid-shift.
-  const loadBookings = useCallback(async () => {
-    setBookingsBusy(true);
-    try {
-      // Today window: midnight today → midnight tomorrow (local TZ). The
-      // backend interprets `from`/`to` as Date.gte/Date.lte, so this gives
-      // us the calendar day "today" the cashier is staring at.
-      const start = new Date();
-      start.setHours(0, 0, 0, 0);
-      const end = new Date(start);
-      end.setDate(end.getDate() + 1);
-      const fromIso = start.toISOString();
-      const toIso = end.toISOString();
-      const rows = await fetchApi(
-        `/api/wellness/visits?from=${encodeURIComponent(fromIso)}&to=${encodeURIComponent(toIso)}&limit=100`,
-      );
-      setBookings(Array.isArray(rows) ? rows : []);
-      setBookingsLoaded(true);
-    } catch (e) {
-      notify.error(e.message || 'Failed to load today’s bookings');
-    } finally {
-      setBookingsBusy(false);
-    }
-  }, [notify]);
-
+  // Lazy-load the catalog for the currently-selected line type the first
+  // time the user picks it. `null` = not yet loaded, `[]` = loaded-empty
+  // — distinguishing the two lets us avoid re-fetching after a failed
+  // empty load and lets the dropdown show "Loading…" vs "No items".
   useEffect(() => {
-    if (tab === 'booking' && !bookingsBusy) {
-      loadBookings();
+    const lt = draftLine.lineType;
+    if (lt === 'SERVICE' && catalogServices === null) {
+      fetchApi('/api/wellness/services').then(
+        (rows) => setCatalogServices(Array.isArray(rows) ? rows : []),
+      ).catch(() => setCatalogServices([]));
+    } else if (lt === 'PRODUCT' && catalogProducts === null) {
+      fetchApi('/api/wellness/products').then(
+        (rows) => setCatalogProducts(Array.isArray(rows) ? rows : []),
+      ).catch(() => setCatalogProducts([]));
+    } else if (lt === 'MEMBERSHIP' && catalogMemberships === null) {
+      fetchApi('/api/wellness/membership-plans').then(
+        (rows) => setCatalogMemberships(Array.isArray(rows) ? rows : []),
+      ).catch(() => setCatalogMemberships([]));
     }
-    // We deliberately only re-fetch on tab transitions to "booking", not
-    // on every render. bookingsLoaded is the latch; clearing it elsewhere
-    // (future: after a sale completes) would re-fetch.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab]);
+  }, [draftLine.lineType, catalogServices, catalogProducts, catalogMemberships]);
 
-  // Pre-fill the basket from a booking row. Slice-1 keeps this simple:
-  // append ONE SERVICE line per booking (the booking's serviceId + name)
-  // at qty=1 and leave unitPrice blank so the cashier fills it from the
-  // visible service catalogue or the patient's package. Slice 2 (items
-  // picker autocomplete) will wire price-lookup; today we just stage the
-  // line. If the booking has no service we surface a notice rather than
-  // adding a blank row. We also remember the patientId so payment-method
-  // gates (Wallet / GiftCard) behave the same as in a manual entry.
-  const prefillFromBooking = (booking) => {
-    if (!booking) return;
-    if (booking.patient?.id) {
-      setPatientId(String(booking.patient.id));
-      setGuestCheckout(false);
+  // Resolve the right catalog + price field per line type. Returns
+  // { list, priceKey, supported } — when `supported` is false we keep
+  // the original manual-entry inputs (Gift Card + Package don't have
+  // a fixed catalog in this build).
+  const catalogForType = (() => {
+    switch (draftLine.lineType) {
+      case 'SERVICE':
+        return { list: catalogServices, priceKey: 'basePrice', supported: true };
+      case 'PRODUCT':
+        return { list: catalogProducts, priceKey: 'price', supported: true };
+      case 'MEMBERSHIP':
+        return { list: catalogMemberships, priceKey: 'price', supported: true };
+      default:
+        return { list: null, priceKey: null, supported: false };
     }
-    if (booking.service?.id) {
-      const line = {
-        lineType: 'SERVICE',
-        refId: Number(booking.service.id),
-        name: booking.service.name || `SERVICE #${booking.service.id}`,
-        quantity: 1,
-        unitPrice: 0,
-        lineDiscount: 0,
-        lineTotal: 0,
-      };
-      setBasket((b) => [...b, line]);
-      notify.success(`Pre-filled ${line.name} from booking`);
-    } else {
-      notify.info('Booking has no linked service — patient pre-filled; add line items manually.');
+  })();
+
+  // When the user picks an item from the catalog dropdown, auto-fill
+  // the three downstream fields (refId, name, unitPrice). The cashier
+  // can still tweak quantity / unit price / line discount afterwards.
+  const pickFromCatalog = (id) => {
+    if (!id) {
+      setDraftLine({ ...draftLine, refId: '', name: '', unitPrice: '' });
+      return;
     }
-    // Switch to the Walk-in tab so the cashier sees the basket they just
-    // populated and can edit the unit price. Tab state preserves the
-    // newly-pre-filled basket per the slice-1 invariant.
-    switchTab('walkin');
+    const row = (catalogForType.list || []).find((r) => String(r.id) === String(id));
+    if (!row) return;
+    setDraftLine({
+      ...draftLine,
+      refId: String(row.id),
+      name: row.name || '',
+      unitPrice: String(row[catalogForType.priceKey] ?? ''),
+    });
   };
 
   // ── Computed totals (denormalised on every render — small basket size) ──
@@ -523,87 +304,6 @@ export default function PointOfSale() {
     setPaidAmount(grandTotal);
   }, [grandTotal]);
 
-  // D17 Arc 1 slice 4 — derived splitter computations + finalize handler
-  // (grandTotal-dependent — must live AFTER the grandTotal useMemo).
-  const splitBalance = useMemo(
-    () => Number((grandTotal - splitPaymentsTotal).toFixed(2)),
-    [grandTotal, splitPaymentsTotal],
-  );
-  // Finalize-button gate:
-  //   - basket non-empty
-  //   - at least one payment line
-  //   - |sum(payments) − grandTotal| ≤ 1 cent (= ₹0.01)
-  //   - non-guest patient required (backend requires positive patientId)
-  // The 1-cent floor mirrors the backend's MISMATCHED_TOTAL tolerance.
-  const canFinalize = useMemo(() => {
-    if (basket.length === 0) return false;
-    if (splitPayments.length === 0) return false;
-    const pid = guestCheckout
-      ? null
-      : (patientId && Number.isFinite(parseInt(patientId)) ? parseInt(patientId) : null);
-    if (!pid) return false;
-    if (Math.abs(splitPaymentsTotal - grandTotal) > 0.01) return false;
-    return true;
-  }, [basket.length, splitPayments.length, splitPaymentsTotal, grandTotal, patientId, guestCheckout]);
-
-  const finalizeSplitSale = async () => {
-    if (!canFinalize) return;
-    const pid = parseInt(patientId, 10);
-    // Convert rupees → cents for the wire payload. Math.round to absorb
-    // float-rounding artifacts (e.g. 33.33 * 100 = 3332.9999999...).
-    const items = basket.map((l) => ({
-      // Only SERVICE + PRODUCT are accepted by /finalize; MEMBERSHIP /
-      // GIFTCARD / PACKAGE basket lines fall through to PRODUCT as the
-      // best available type. (Slice 5 hardens the basket builder to only
-      // expose SERVICE + PRODUCT for /finalize flow.)
-      type: l.lineType === 'SERVICE' ? 'service' : 'product',
-      refId: Number(l.refId),
-      qty: Number(l.quantity || 1),
-      unitPriceCents: Math.round(Number(l.unitPrice || 0) * 100),
-    }));
-    const payments = splitPayments.map((p) => ({
-      method: p.method,
-      amountCents: Math.round(Number(p.amountRupees || 0) * 100),
-    }));
-    const body = {
-      patientId: pid,
-      items,
-      payments,
-      discountCents: Math.round(Number(resolvedOrderDiscount || 0) * 100),
-      taxCents: Math.round(Number(taxTotal || 0) * 100),
-    };
-    setFinalizeBusy(true);
-    try {
-      const result = await fetchApi('/api/pos/sales/finalize', {
-        method: 'POST',
-        body: JSON.stringify(body),
-      });
-      notify.success(`Sale #${result.saleId} finalized`);
-      // Reset the sale draft so the cashier can ring up the next one.
-      setBasket([]);
-      setSplitPayments([]);
-      setDiscountTotal(0);
-      setDiscountPercent('');
-      setCouponCode('');
-      setCouponPreview(null);
-      setTaxTotal(0);
-      setPatientId('');
-      setGuestCheckout(false);
-      setOverrideEnabled(false);
-      setOverrideAmount('');
-      setOverrideReason('');
-      setSaleContext(null);
-      // Notify the sidebar so the POS / sales-of-day counter refreshes.
-      try {
-        window.dispatchEvent(new CustomEvent('sidebar:counts-changed'));
-      } catch (_) { /* SSR / jsdom edge */ }
-    } catch (e) {
-      notify.error(e.message || 'Failed to finalize sale');
-    } finally {
-      setFinalizeBusy(false);
-    }
-  };
-
   // ── Coupon preview (Wave 7C / PRD §2 item 10) ──────────────────────
   // Calls /api/wellness/coupons/preview to compute the discount the backend
   // would actually apply. We DON'T call /apply here — application increments
@@ -646,89 +346,6 @@ export default function PointOfSale() {
     }
   };
 
-  // ── Wallet balance fetch (#789 / WAL-002) ───────────────────────────
-  // Auto-loads the patient's wallet balance whenever the cashier picks
-  // Wallet OR Gift Card as the payment method AND a non-empty patientId is
-  // resolvable (guest checkout has no wallet — explicitly skip). Re-runs
-  // when patientId changes or guestCheckout toggles. The balance is shown
-  // under the payment-method dropdown so the cashier sees what's available
-  // before completing the sale.
-  const loadWalletBalance = async () => {
-    const pid = guestCheckout
-      ? null
-      : (patientId && Number.isFinite(parseInt(patientId)) ? parseInt(patientId) : null);
-    if (!pid) {
-      setWalletBalance(null);
-      return;
-    }
-    setWalletBusy(true);
-    try {
-      const data = await fetchApi(`/api/wellness/patients/${pid}/wallet`);
-      if (data && data.wallet) {
-        setWalletBalance(Number(data.wallet.balance || 0));
-      } else {
-        setWalletBalance(0);
-      }
-    } catch (e) {
-      // Patient may not have a wallet yet (404) — surface 0 rather than
-      // an error toast; backend auto-creates on first credit/debit.
-      setWalletBalance(0);
-    } finally {
-      setWalletBusy(false);
-    }
-  };
-
-  useEffect(() => {
-    if (paymentMethod === 'WALLET' || paymentMethod === 'GIFTCARD') {
-      loadWalletBalance();
-    } else {
-      setWalletBalance(null);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- loadWalletBalance is stable enough; deps are the inputs that affect its result.
-  }, [paymentMethod, patientId, guestCheckout]);
-
-  // #789 / WAL-002 — Gift card redeem flow.
-  // POST /api/wellness/giftcards/redeem with { code, patientId } credits the
-  // patient's wallet by the gift card's value (server-side: gift card status
-  // → redeemed, walletTransaction CREDIT_GIFTCARD). After a successful
-  // redeem, refresh the wallet balance + switch the cashier to WALLET so
-  // they can actually charge the sale against the now-funded wallet.
-  const redeemGiftCard = async () => {
-    if (!giftCardCode.trim()) {
-      notify.error('Enter a gift card code');
-      return;
-    }
-    const pid = guestCheckout
-      ? null
-      : (patientId && Number.isFinite(parseInt(patientId)) ? parseInt(patientId) : null);
-    if (!pid) {
-      notify.error('Gift card redemption requires a patient — disable guest checkout and enter a patient ID');
-      return;
-    }
-    setGiftCardBusy(true);
-    try {
-      const result = await fetchApi('/api/wellness/giftcards/redeem', {
-        method: 'POST',
-        body: JSON.stringify({ code: giftCardCode.trim(), patientId: pid }),
-      });
-      const amount = result?.giftCard?.amount;
-      notify.success(
-        amount
-          ? `Gift card redeemed — ${formatMoney(amount, 'INR', 'en-IN')} credited to wallet`
-          : 'Gift card redeemed',
-      );
-      setGiftCardCode('');
-      // Switch to WALLET so the cashier charges against the now-credited
-      // wallet. The wallet-balance fetch below picks up the new value.
-      setPaymentMethod('WALLET');
-      await loadWalletBalance();
-    } catch (e) {
-      notify.error(e.message || 'Failed to redeem gift card');
-    } finally {
-      setGiftCardBusy(false);
-    }
-  };
-
   // ── Shift open ──────────────────────────────────────────────────────
   const openShift = async () => {
     if (!openingForm.registerId) {
@@ -757,21 +374,28 @@ export default function PointOfSale() {
   // ── Shift close ─────────────────────────────────────────────────────
   const closeShift = async () => {
     if (!currentShift) return;
-    if (closingTotal === '' || Number(closingTotal) < 0) {
-      notify.error('Enter the cash drawer total at close');
-      return;
+    // Counted total is OPTIONAL — blank means "auto-close at the system-computed
+    // expected cash" (variance 0). A counted amount is only needed to record a
+    // variance (physical count ≠ expected).
+    const body = { notes: closingNotes };
+    const trimmed = String(closingTotal).trim();
+    if (trimmed !== '') {
+      const total = Number(trimmed);
+      if (!Number.isFinite(total) || total < 0) {
+        notify.error('Counted cash must be a non-negative number');
+        return;
+      }
+      body.closingTotal = total;
     }
     setBusy(true);
     try {
       const closed = await fetchApi(`/api/pos/shifts/${currentShift.id}/close`, {
         method: 'POST',
-        body: JSON.stringify({
-          closingTotal: Number(closingTotal),
-          notes: closingNotes,
-        }),
+        body: JSON.stringify(body),
       });
       notify.success(
-        `Shift closed. Variance: ${formatMoney(closed.variance, 'INR', 'en-IN')}`,
+        `Shift closed at ${formatMoney(closed.closingTotal, 'INR', 'en-IN')}. ` +
+        `Variance: ${formatMoney(closed.variance, 'INR', 'en-IN')}`,
       );
       setCurrentShift(null);
       setClosingTotal('');
@@ -880,9 +504,6 @@ export default function PointOfSale() {
       setOverrideEnabled(false);
       setOverrideAmount('');
       setOverrideReason('');
-      // #789 — clear wallet/giftcard state so the next sale starts fresh.
-      setWalletBalance(null);
-      setGiftCardCode('');
       notify.success(`Sale complete: ${sale.invoiceNumber}`);
     } catch (e) {
       notify.error(e.message || 'Failed to complete sale');
@@ -921,119 +542,93 @@ export default function PointOfSale() {
 
   return (
     <div style={{ padding: '2rem', animation: 'fadeIn 0.4s ease-out' }}>
-      <header style={{ marginBottom: '1.25rem' }}>
-        <h1 style={{ fontSize: '1.75rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-          <Calculator size={24} /> Point of Sale
-        </h1>
-        <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-          Cash-and-carry checkout. Open a shift, ring up sales, close the shift to reconcile the cash drawer.
-        </p>
+      <header
+        style={{
+          marginBottom: '1.25rem',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'flex-start',
+          flexWrap: 'wrap',
+          gap: '1rem',
+        }}
+      >
+        <div>
+          <h1 style={{ fontSize: '1.75rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <Calculator size={24} /> Point of Sale
+          </h1>
+          <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
+            Cash-and-carry checkout. Open a shift, ring up sales, close the shift to reconcile the cash drawer.
+          </p>
+        </div>
+        {/* Admin/manager-only "Manage registers" disclosure. Folds the
+            former /wellness/cash-registers page into this surface.
+            Collapsing the panel refreshes shift + register state so any
+            register CRUD / shift open-close performed inside the panel
+            reflects in the POS sale flow below without a manual reload. */}
+        {isAdminOrManager && (
+          <button
+            type="button"
+            onClick={() => {
+              setShowRegistersPanel((prev) => {
+                const next = !prev;
+                if (prev && !next) {
+                  // panel just closed — refresh POS-tracked state
+                  loadRegisters();
+                  loadCurrentShift();
+                }
+                return next;
+              });
+            }}
+            aria-expanded={showRegistersPanel}
+            aria-controls="pos-registers-panel"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.4rem',
+              padding: '0.55rem 0.9rem',
+              background: showRegistersPanel
+                ? 'var(--primary-color, var(--accent-color))'
+                : 'rgba(255,255,255,0.05)',
+              color: showRegistersPanel ? '#fff' : 'var(--text-primary)',
+              border: '1px solid var(--border-color)',
+              borderRadius: 8,
+              cursor: 'pointer',
+              fontSize: '0.9rem',
+              fontWeight: 500,
+            }}
+          >
+            <Banknote size={16} /> Manage registers
+            {showRegistersPanel ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+          </button>
+        )}
       </header>
 
-      {/* D17 Arc 1 slice 1 — Booking | Walk-in tab strip. Tab pattern
-          mirrors PatientDetail.jsx's tabStyle: pill-button with the
-          active background coloured by --accent-color. URL-segment
-          routing via `?tab=booking`/`?tab=walkin` (DD-5.1). Walk-in is
-          default + omits the param so the existing URL stays clean. */}
-      <div
-        role="tablist"
-        aria-label="POS sale entry mode"
-        style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', flexWrap: 'wrap' }}
-      >
-        <button
-          role="tab"
-          aria-selected={tab === 'booking'}
-          data-testid="pos-tab-booking"
-          onClick={() => switchTab('booking')}
-          style={posTabStyle(tab === 'booking')}
+      {/* Embedded register management panel — admin/manager only.
+          Renders the full CashRegisters surface (CRUD + shift open/close
+          + petty cash deposit/withdraw + transactions list) inline so
+          the operator never has to leave the POS page. */}
+      {isAdminOrManager && showRegistersPanel && (
+        <section
+          id="pos-registers-panel"
+          className="glass"
+          style={{
+            padding: '1.25rem',
+            marginBottom: '1.5rem',
+            borderLeft: '3px solid var(--primary-color, var(--accent-color))',
+          }}
         >
-          <CalendarCheck size={14} /> Booking
-        </button>
-        <button
-          role="tab"
-          aria-selected={tab === 'walkin'}
-          data-testid="pos-tab-walkin"
-          onClick={() => switchTab('walkin')}
-          style={posTabStyle(tab === 'walkin')}
-        >
-          <UserIcon size={14} /> Walk-in
-        </button>
-      </div>
-
-      {/* Booking tab — today's appointments. Click a row to pre-fill the
-          basket + patient, then the cashier is dropped on the Walk-in tab
-          to finalise. Empty / loading / list states. */}
-      {tab === 'booking' && (
-        <div style={cardStyle} data-testid="pos-booking-panel">
-          <h2 style={{ marginTop: 0, marginBottom: '0.75rem', fontSize: '1.05rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <CalendarCheck size={18} /> Today’s bookings
-          </h2>
-          <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', margin: '0 0 0.75rem 0' }}>
-            Pick a booking to pre-fill the sale with the patient + service. You can edit the line items + price on the Walk-in tab before completing the sale.
-          </p>
-          {bookingsBusy ? (
-            <p style={{ color: 'var(--text-secondary)', margin: 0 }}>Loading bookings…</p>
-          ) : bookings.length === 0 && bookingsLoaded ? (
-            <p style={{ color: 'var(--text-secondary)', margin: 0 }}>No bookings today — switch to Walk-in to ring up an ad-hoc sale.</p>
-          ) : (
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-              <thead>
-                <tr style={{ background: 'var(--surface-2, #f7f7f8)' }}>
-                  <th style={thStyle}>Time</th>
-                  <th style={thStyle}>Patient</th>
-                  <th style={thStyle}>Service</th>
-                  <th style={thStyle}>Doctor</th>
-                  <th style={thStyle}>Status</th>
-                  <th style={thStyle}></th>
-                </tr>
-              </thead>
-              <tbody>
-                {bookings.map((b) => (
-                  <tr key={b.id} style={{ borderTop: '1px solid var(--border-color)' }}>
-                    <td style={tdStyle}>
-                      {b.visitDate
-                        ? new Date(b.visitDate).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-                        : '—'}
-                    </td>
-                    <td style={tdStyle}>{b.patient?.name || '—'}</td>
-                    <td style={tdStyle}>{b.service?.name || '—'}</td>
-                    <td style={tdStyle}>{b.doctor?.name || '—'}</td>
-                    <td style={tdStyle}>{b.status || '—'}</td>
-                    <td style={tdStyle}>
-                      <button
-                        onClick={() => prefillFromBooking(b)}
-                        style={{
-                          padding: '0.4rem 0.8rem',
-                          background: 'var(--primary-color, var(--accent-color))',
-                          color: '#fff',
-                          border: 'none',
-                          borderRadius: 6,
-                          cursor: 'pointer',
-                          fontSize: '0.85rem',
-                        }}
-                        aria-label={`Pre-fill sale from booking for ${b.patient?.name || 'patient'}`}
-                      >
-                        Pre-fill sale
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
+          <CashRegisters embedded />
+        </section>
       )}
-
-      {/* Walk-in tab (default) — existing shift + sale-builder flow. */}
-      {tab === 'walkin' && <>
 
       {/* Shift status banner */}
       {currentShift ? (
         <div
           style={{
             ...cardStyle,
-            background: 'var(--success-bg, #e6f6ee)',
-            borderColor: 'var(--success-border, #a8d8b9)',
+            background: 'color-mix(in srgb, var(--success-color) 14%, transparent)',
+            border: '1px solid color-mix(in srgb, var(--success-color) 40%, transparent)',
+            color: 'var(--text-primary)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
@@ -1041,7 +636,7 @@ export default function PointOfSale() {
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <Unlock size={18} />
+            <Unlock size={18} color="var(--success-color)" />
             <strong>Shift open</strong>
             <span style={{ color: 'var(--text-secondary)', marginLeft: '0.5rem' }}>
               Register {currentShift.register?.name || `#${currentShift.registerId}`} ·
@@ -1055,14 +650,24 @@ export default function PointOfSale() {
             <Lock size={18} /> No shift open — open one to start a sale
           </h2>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))', gap: '0.75rem' }}>
-            <div>
+            <div style={{ position: 'relative' }}>
               <label style={labelStyle}>Register</label>
+              {isAdminOrManager && registers.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setShowRegisterForm((s) => !s)}
+                  style={{ position: 'absolute', top: 0, right: 0, background: 'transparent', border: 'none', color: 'var(--primary-color, var(--accent-color))', fontSize: '0.75rem', cursor: 'pointer', padding: 0, textDecoration: 'underline' }}
+                >
+                  {showRegisterForm ? 'Cancel' : '+ New register'}
+                </button>
+              )}
               <select
                 style={inputStyle}
                 value={openingForm.registerId}
                 onChange={(e) => setOpeningForm({ ...openingForm, registerId: e.target.value })}
+                disabled={registers.length === 0}
               >
-                <option value="">Select…</option>
+                <option value="">{registers.length === 0 ? 'Select…' : 'Select…'}</option>
                 {registers.map((r) => (
                   <option key={r.id} value={r.id}>
                     {r.name} {r.location?.name ? `— ${r.location.name}` : ''}
@@ -1083,32 +688,76 @@ export default function PointOfSale() {
               />
             </div>
             <div style={{ display: 'flex', alignItems: 'flex-end' }}>
-              <button onClick={openShift} disabled={busy} style={primaryBtnStyle}>
+              <button onClick={openShift} disabled={busy || registers.length === 0} style={primaryBtnStyle}>
                 <Unlock size={14} /> Open shift
               </button>
             </div>
           </div>
-          {registers.length === 0 && (
-            <p style={{ color: 'var(--text-secondary)', marginTop: '0.5rem', fontSize: '0.9rem' }}>
-              {/* #826 — Owner / Admin / Manager need an in-product path to
-                  the create-register UI. Pre-fix the message said "Ask an
-                  admin to create" — useless to an admin who IS the admin.
-                  Plain USERs (cashiers) keep the original copy since they
-                  legitimately need to escalate. */}
-              No registers configured.{' '}
-              {isAdminOrManager ? (
-                <>
-                  <Link
-                    to="/wellness/cash-registers"
-                    style={{ color: 'var(--accent-color)', textDecoration: 'underline', fontWeight: 500 }}
+
+          {/* Inline "create register" form — auto-opens for admin/manager
+              when there are zero registers, so the dropdown empty state is
+              never a dead-end. Non-admins still see the friendly hint. */}
+          {showRegisterForm && isAdminOrManager && (
+            <div style={{ marginTop: '0.85rem', padding: '0.85rem', background: 'rgba(38, 88, 85, 0.06)', border: '1px solid var(--border-color, rgba(0,0,0,0.08))', borderRadius: 8 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.5rem', fontSize: '0.9rem', fontWeight: 600 }}>
+                <Plus size={14} /> {registers.length === 0 ? 'Set up your first register' : 'Add a new register'}
+              </div>
+              <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', margin: '0 0 0.6rem' }}>
+                Registers map to physical cash drawers / till stations. You'll pick this register when opening a shift.
+              </p>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 200px), 1fr))', gap: '0.6rem', alignItems: 'flex-end' }}>
+                <div>
+                  <label style={labelStyle}>Name</label>
+                  <input
+                    type="text"
+                    style={inputStyle}
+                    placeholder="e.g. Reception Counter"
+                    value={registerForm.name}
+                    onChange={(e) => setRegisterForm({ ...registerForm, name: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <label style={labelStyle}><MapPin size={11} style={{ verticalAlign: 'middle' }} /> Location</label>
+                  <select
+                    style={inputStyle}
+                    value={registerForm.locationId}
+                    onChange={(e) => setRegisterForm({ ...registerForm, locationId: e.target.value })}
                   >
-                    Open Cash Registers
-                  </Link>{' '}
-                  to add one.
-                </>
-              ) : (
-                <>Ask an admin to create a Register first.</>
+                    <option value="">Select…</option>
+                    {locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label style={labelStyle}>Default opening float</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="any"
+                    style={inputStyle}
+                    value={registerForm.openingFloat}
+                    onChange={(e) => setRegisterForm({ ...registerForm, openingFloat: e.target.value })}
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={createRegister}
+                  disabled={registerBusy}
+                  style={{ ...primaryBtnStyle, whiteSpace: 'nowrap' }}
+                >
+                  {registerBusy ? 'Creating…' : 'Create register'}
+                </button>
+              </div>
+              {locations.length === 0 && (
+                <p style={{ color: 'var(--danger-color, #ef4444)', fontSize: '0.8rem', marginTop: '0.5rem' }}>
+                  No locations configured yet. Add one under <strong>Locations</strong> first, then come back.
+                </p>
               )}
+            </div>
+          )}
+
+          {!isAdminOrManager && registers.length === 0 && (
+            <p style={{ color: 'var(--text-secondary)', marginTop: '0.5rem', fontSize: '0.9rem' }}>
+              No registers configured. Ask an admin to create a Register first.
             </p>
           )}
         </div>
@@ -1147,141 +796,6 @@ export default function PointOfSale() {
       {/* New Sale builder — only when shift OPEN */}
       {currentShift && (
         <>
-          {/* D17 Arc 1 slice 3 — Items picker autocomplete (DD-5.2 →
-              autocomplete). Single input, parallel fan-out to services
-              + products, grouped dropdown. The manual builder below
-              stays as the fallback for ad-hoc / one-off charges that
-              aren't in the catalogue. */}
-          <div style={cardStyle} data-testid="pos-items-picker">
-            <h2 style={{ marginTop: 0, marginBottom: '0.75rem', fontSize: '1.05rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <Search size={18} /> Add from catalogue
-            </h2>
-            <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', margin: '0 0 0.75rem 0' }}>
-              Type to search services + products. Click a result to add it to the sale at the catalogue price.
-            </p>
-            <div style={{ position: 'relative' }}>
-              <input
-                type="text"
-                style={inputStyle}
-                value={itemsQuery}
-                onChange={(e) => setItemsQuery(e.target.value)}
-                onFocus={() => {
-                  if (itemsQuery.trim() && (itemsResults.services.length > 0 || itemsResults.products.length > 0)) {
-                    setItemsDropdownOpen(true);
-                  }
-                }}
-                placeholder="Add service or product..."
-                aria-label="Search services and products"
-                data-testid="pos-items-search-input"
-                autoComplete="off"
-              />
-              {itemsDropdownOpen && itemsQuery.trim() && (
-                <div
-                  role="listbox"
-                  aria-label="Catalogue search results"
-                  data-testid="pos-items-dropdown"
-                  style={{
-                    position: 'absolute',
-                    top: 'calc(100% + 4px)',
-                    left: 0,
-                    right: 0,
-                    background: 'var(--surface-color, #fff)',
-                    border: '1px solid var(--border-color)',
-                    borderRadius: 8,
-                    boxShadow: '0 8px 24px rgba(0,0,0,0.08)',
-                    maxHeight: 320,
-                    overflowY: 'auto',
-                    zIndex: 10,
-                  }}
-                >
-                  {itemsBusy && (
-                    <div style={{ padding: '0.6rem 0.8rem', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
-                      Searching…
-                    </div>
-                  )}
-                  {!itemsBusy && itemsResults.services.length === 0 && itemsResults.products.length === 0 && (
-                    <div style={{ padding: '0.6rem 0.8rem', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
-                      No matches. Try a different term or use the manual builder below.
-                    </div>
-                  )}
-                  {itemsResults.services.length > 0 && (
-                    <div role="group" aria-label="Services">
-                      <div style={{ padding: '0.4rem 0.8rem', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-secondary)', background: 'var(--surface-2, #f7f7f8)' }}>
-                        Services
-                      </div>
-                      {itemsResults.services.map((s) => (
-                        <button
-                          key={`svc-${s.id}`}
-                          type="button"
-                          role="option"
-                          aria-selected="false"
-                          onClick={() => addCatalogueLine('SERVICE', s)}
-                          data-testid={`pos-items-result-service-${s.id}`}
-                          style={{
-                            display: 'flex',
-                            width: '100%',
-                            justifyContent: 'space-between',
-                            alignItems: 'center',
-                            padding: '0.55rem 0.8rem',
-                            background: 'transparent',
-                            border: 'none',
-                            borderTop: '1px solid var(--border-color)',
-                            cursor: 'pointer',
-                            textAlign: 'left',
-                            fontSize: '0.9rem',
-                          }}
-                        >
-                          <span>{s.name}{s.category ? <span style={{ color: 'var(--text-secondary)', marginLeft: '0.4rem', fontSize: '0.8rem' }}>· {s.category}</span> : null}</span>
-                          <strong>{formatMoney(s.basePrice || 0, 'INR', 'en-IN')}</strong>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                  {itemsResults.products.length > 0 && (
-                    <div role="group" aria-label="Products">
-                      <div style={{ padding: '0.4rem 0.8rem', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-secondary)', background: 'var(--surface-2, #f7f7f8)' }}>
-                        Products
-                      </div>
-                      {itemsResults.products.map((p) => (
-                        <button
-                          key={`prd-${p.id}`}
-                          type="button"
-                          role="option"
-                          aria-selected="false"
-                          onClick={() => addCatalogueLine('PRODUCT', p)}
-                          data-testid={`pos-items-result-product-${p.id}`}
-                          style={{
-                            display: 'flex',
-                            width: '100%',
-                            justifyContent: 'space-between',
-                            alignItems: 'center',
-                            padding: '0.55rem 0.8rem',
-                            background: 'transparent',
-                            border: 'none',
-                            borderTop: '1px solid var(--border-color)',
-                            cursor: 'pointer',
-                            textAlign: 'left',
-                            fontSize: '0.9rem',
-                          }}
-                        >
-                          <span>
-                            {p.name}
-                            {typeof p.currentStock === 'number' && (
-                              <span style={{ color: p.currentStock <= 0 ? 'var(--danger-color, #c44)' : 'var(--text-secondary)', marginLeft: '0.4rem', fontSize: '0.8rem' }}>
-                                · stock {p.currentStock}
-                              </span>
-                            )}
-                          </span>
-                          <strong>{formatMoney(p.price || 0, 'INR', 'en-IN')}</strong>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          </div>
-
           <div style={cardStyle}>
             <h2 style={{ marginTop: 0, marginBottom: '0.75rem', fontSize: '1.05rem' }}>Add line item</h2>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 140px), 1fr))', gap: '0.5rem', alignItems: 'end' }}>
@@ -1290,13 +804,58 @@ export default function PointOfSale() {
                 <select
                   style={inputStyle}
                   value={draftLine.lineType}
-                  onChange={(e) => setDraftLine({ ...draftLine, lineType: e.target.value })}
+                  onChange={(e) => {
+                    // Switching type clears the previously-picked item so
+                    // the cashier doesn't accidentally book a service
+                    // priced at a product's amount.
+                    setDraftLine({ ...draftLine, lineType: e.target.value, refId: '', name: '', unitPrice: '' });
+                  }}
                 >
                   {LINE_TYPES.map((t) => (
                     <option key={t.value} value={t.value}>{t.label}</option>
                   ))}
                 </select>
               </div>
+              {/* Catalog picker — only shown for types that have a real
+                  catalog endpoint (Service / Product / Membership). Picking
+                  an item auto-fills Ref ID + Name + Unit price below; the
+                  cashier can then tweak qty / discount / override the
+                  pre-filled name (e.g. add a note like "— Promo"). */}
+              {catalogForType.supported && (
+                <div style={{ gridColumn: 'span 2' }}>
+                  <label style={labelStyle}>
+                    {draftLine.lineType === 'SERVICE' ? 'Pick service' : draftLine.lineType === 'PRODUCT' ? 'Pick product' : 'Pick membership plan'}
+                  </label>
+                  <select
+                    style={inputStyle}
+                    value={draftLine.refId}
+                    onChange={(e) => pickFromCatalog(e.target.value)}
+                  >
+                    {catalogForType.list === null ? (
+                      <option value="">Loading…</option>
+                    ) : (
+                      <>
+                        <option value="">
+                          {catalogForType.list.length === 0
+                            ? `No ${draftLine.lineType.toLowerCase()}s configured`
+                            : 'Select from catalog…'}
+                        </option>
+                        {catalogForType.list.map((r) => {
+                          const price = r[catalogForType.priceKey];
+                          const priceLabel = (price != null && Number.isFinite(Number(price)))
+                            ? ` — ${formatMoney(price, 'INR')}`
+                            : '';
+                          return (
+                            <option key={r.id} value={r.id}>
+                              {r.name}{priceLabel}
+                            </option>
+                          );
+                        })}
+                      </>
+                    )}
+                  </select>
+                </div>
+              )}
               <div>
                 <label style={labelStyle}>Ref ID</label>
                 <input
@@ -1314,7 +873,7 @@ export default function PointOfSale() {
                   style={inputStyle}
                   value={draftLine.name}
                   onChange={(e) => setDraftLine({ ...draftLine, name: e.target.value })}
-                  placeholder="Optional"
+                  placeholder={catalogForType.supported ? 'Auto-fills from catalog' : draftLine.lineType === 'GIFTCARD' ? 'e.g. ₹500 Gift Card' : 'Custom line name'}
                 />
               </div>
               <div>
@@ -1384,61 +943,17 @@ export default function PointOfSale() {
                     <tr key={i} style={{ borderTop: '1px solid var(--border-color)' }}>
                       <td style={tdStyle}>{l.lineType}</td>
                       <td style={tdStyle}>{l.name}</td>
-                      <td style={tdStyle}>
-                        {/* D17 Arc 1 slice 3 — qty +/- buttons. Replaces
-                            the read-only qty cell so catalogue-picked
-                            lines can be tweaked without re-opening the
-                            manual builder. Qty floor is 1 — removal goes
-                            through the × button to keep the destructive
-                            action explicit + audited. */}
-                        <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }} data-testid={`pos-line-qty-${i}`}>
-                          <button
-                            type="button"
-                            onClick={() => updateLineQty(i, -1)}
-                            disabled={Number(l.quantity || 1) <= 1}
-                            aria-label={`Decrease quantity for ${l.name}`}
-                            style={{
-                              padding: '0.2rem 0.35rem',
-                              border: '1px solid var(--border-color)',
-                              background: 'var(--surface-color, #fff)',
-                              borderRadius: 4,
-                              cursor: Number(l.quantity || 1) <= 1 ? 'not-allowed' : 'pointer',
-                              opacity: Number(l.quantity || 1) <= 1 ? 0.5 : 1,
-                            }}
-                          >
-                            <Minus size={12} />
-                          </button>
-                          <span style={{ minWidth: '1.5rem', textAlign: 'center', fontVariantNumeric: 'tabular-nums' }}>
-                            {l.quantity}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => updateLineQty(i, +1)}
-                            aria-label={`Increase quantity for ${l.name}`}
-                            style={{
-                              padding: '0.2rem 0.35rem',
-                              border: '1px solid var(--border-color)',
-                              background: 'var(--surface-color, #fff)',
-                              borderRadius: 4,
-                              cursor: 'pointer',
-                            }}
-                          >
-                            <Plus size={12} />
-                          </button>
-                        </div>
-                      </td>
+                      <td style={tdStyle}>{l.quantity}</td>
                       <td style={tdStyle}>{formatMoney(l.unitPrice, 'INR', 'en-IN')}</td>
                       <td style={tdStyle}>{formatMoney(l.lineDiscount, 'INR', 'en-IN')}</td>
-                      <td style={tdStyle} data-testid={`pos-line-total-${i}`}>
-                        {formatMoney(l.lineTotal, 'INR', 'en-IN')}
-                      </td>
+                      <td style={tdStyle}>{formatMoney(l.lineTotal, 'INR', 'en-IN')}</td>
                       <td style={tdStyle}>
                         <button
                           onClick={() => removeLine(i)}
                           style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--danger-color, #c44)' }}
-                          aria-label={`Remove ${l.name}`}
+                          aria-label="Remove line"
                         >
-                          <XIcon size={14} />
+                          <Trash2 size={14} />
                         </button>
                       </td>
                     </tr>
@@ -1642,10 +1157,9 @@ export default function PointOfSale() {
                   style={inputStyle}
                   value={paymentMethod}
                   onChange={(e) => setPaymentMethod(e.target.value)}
-                  aria-label="Payment method"
                 >
                   {PAYMENT_METHODS.map((p) => (
-                    <option key={p.value} value={p.value}>{p.label}</option>
+                    <option key={p} value={p}>{p}</option>
                   ))}
                 </select>
               </div>
@@ -1661,93 +1175,6 @@ export default function PointOfSale() {
                 />
               </div>
             </div>
-
-            {/* #789 / WAL-002 — Wallet balance hint + Gift card redeem mini-form.
-              * Rendered when the cashier picks WALLET (show balance) or
-              * GIFTCARD (show redeem form). For COMBINED + other methods we
-              * leave the grid alone. */}
-            {(paymentMethod === 'WALLET' || paymentMethod === 'GIFTCARD') && (
-              <div
-                role="region"
-                aria-label={paymentMethod === 'WALLET' ? 'Wallet balance' : 'Gift card redemption'}
-                style={{
-                  marginTop: '0.75rem',
-                  padding: '0.75rem 0.9rem',
-                  background: 'var(--surface-2, #f7f7f8)',
-                  border: '1px dashed var(--border-color)',
-                  borderRadius: 8,
-                }}
-              >
-                {paymentMethod === 'WALLET' && (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-                    <WalletIcon size={16} />
-                    {guestCheckout ? (
-                      <span style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
-                        Wallet payments need a registered patient — disable Guest checkout above.
-                      </span>
-                    ) : !patientId ? (
-                      <span style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
-                        Enter a Patient ID in the Customer card above to load the wallet balance.
-                      </span>
-                    ) : walletBusy ? (
-                      <span style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>Loading wallet…</span>
-                    ) : walletBalance === null ? (
-                      <span style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>Wallet balance unavailable.</span>
-                    ) : (
-                      <>
-                        <span style={{ fontSize: '0.95rem' }}>
-                          Wallet balance:{' '}
-                          <strong data-testid="wallet-balance">{formatMoney(walletBalance, 'INR', 'en-IN')}</strong>
-                        </span>
-                        {walletBalance < grandTotal && (
-                          <span style={{ color: 'var(--warning-color, #b16a00)', fontSize: '0.85rem' }}>
-                            Insufficient wallet balance for this sale ({formatMoney(grandTotal, 'INR', 'en-IN')}). Top up first or use Split / combined.
-                          </span>
-                        )}
-                      </>
-                    )}
-                  </div>
-                )}
-                {paymentMethod === 'GIFTCARD' && (
-                  <div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
-                      <Gift size={16} />
-                      <strong style={{ fontSize: '0.95rem' }}>Redeem gift card</strong>
-                    </div>
-                    <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', margin: '0 0 0.5rem 0' }}>
-                      Redeeming credits the patient's wallet; we then charge this sale against Wallet automatically.
-                    </p>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 200px), 1fr))', gap: '0.5rem', alignItems: 'end' }}>
-                      <div>
-                        <label style={labelStyle}>Gift card code</label>
-                        <input
-                          type="text"
-                          style={inputStyle}
-                          value={giftCardCode}
-                          onChange={(e) => setGiftCardCode(e.target.value)}
-                          placeholder="e.g. GIFT-XXXX-1234"
-                          aria-label="Gift card code"
-                        />
-                      </div>
-                      <div>
-                        <button
-                          onClick={redeemGiftCard}
-                          disabled={giftCardBusy || !giftCardCode.trim()}
-                          style={primaryBtnStyle}
-                        >
-                          <Gift size={14} /> {giftCardBusy ? 'Redeeming…' : 'Redeem'}
-                        </button>
-                      </div>
-                      {walletBalance !== null && !guestCheckout && patientId && (
-                        <div style={{ gridColumn: '1 / -1', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-                          Current wallet balance: <strong>{formatMoney(walletBalance, 'INR', 'en-IN')}</strong>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
 
             <div style={{ marginTop: '1rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
               <div>
@@ -1782,171 +1209,19 @@ export default function PointOfSale() {
             </div>
           </div>
 
-          {/* D17 Arc 1 slice 4 — Payment splitter (PRD §3.5, DD-5.x →
-              "one button per method"). Drives the cents-native POST
-              /api/pos/sales/finalize endpoint. Distinct from the legacy
-              single-tender block above which targets POST /sales. */}
-          <div style={cardStyle} data-testid="pos-payment-splitter">
-            <h2 style={{ marginTop: 0, marginBottom: '0.5rem', fontSize: '1.05rem' }}>
-              Payments
-            </h2>
-            <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', margin: '0 0 0.75rem 0' }}>
-              Tap a method to add a payment line, then enter the ₹ amount. Multiple lines per method
-              allowed; finalize once the total matches the grand total ({formatMoney(grandTotal, 'INR', 'en-IN')}).
-            </p>
-            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
-              {SPLIT_PAYMENT_METHODS.map((m) => {
-                const isWallet = m.value === 'wallet';
-                const walletBalanceCents = saleContext?.walletBalanceCents || 0;
-                const walletDisabled = isWallet && walletBalanceCents <= 0;
-                return (
-                  <div key={m.value} style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '0.25rem' }}>
-                    <button
-                      type="button"
-                      onClick={() => addSplitPayment(m.value)}
-                      disabled={walletDisabled}
-                      data-testid={`pos-split-method-${m.value}`}
-                      aria-label={`Add ${m.label} payment line`}
-                      style={{
-                        padding: '0.55rem 0.9rem',
-                        background: walletDisabled
-                          ? 'var(--surface-2, #f7f7f8)'
-                          : 'var(--primary-color, var(--accent-color))',
-                        color: walletDisabled ? 'var(--text-secondary)' : '#fff',
-                        border: 'none',
-                        borderRadius: 8,
-                        cursor: walletDisabled ? 'not-allowed' : 'pointer',
-                        fontWeight: 600,
-                        opacity: walletDisabled ? 0.6 : 1,
-                        minWidth: '5rem',
-                      }}
-                    >
-                      + {m.label}
-                    </button>
-                    {isWallet && (
-                      <span
-                        style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}
-                        data-testid="pos-split-wallet-balance-hint"
-                      >
-                        Wallet balance: {formatMoney(walletBalanceCents / 100, 'INR', 'en-IN')}
-                      </span>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-
-            {splitPayments.length === 0 ? (
-              <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', margin: '0.5rem 0 0 0' }}>
-                No payment lines yet — tap a method button above to add one.
-              </p>
-            ) : (
-              <div style={{ marginBottom: '0.75rem' }}>
-                {splitPayments.map((p, i) => {
-                  const methodLabel = SPLIT_PAYMENT_METHODS.find((m) => m.value === p.method)?.label || p.method;
-                  return (
-                    <div
-                      key={i}
-                      data-testid={`pos-split-line-${i}`}
-                      style={{
-                        display: 'grid',
-                        gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 2fr) auto',
-                        gap: '0.5rem',
-                        alignItems: 'center',
-                        padding: '0.4rem 0',
-                        borderBottom: '1px solid var(--border-color)',
-                      }}
-                    >
-                      <strong style={{ fontSize: '0.95rem' }}>{methodLabel}</strong>
-                      <input
-                        type="number"
-                        min="0"
-                        step="any"
-                        style={inputStyle}
-                        value={p.amountRupees}
-                        onChange={(e) => updateSplitPaymentAmount(i, e.target.value)}
-                        placeholder="₹ amount"
-                        aria-label={`${methodLabel} payment amount in rupees`}
-                        data-testid={`pos-split-amount-${i}`}
-                      />
-                      <button
-                        type="button"
-                        onClick={() => removeSplitPayment(i)}
-                        aria-label={`Remove ${methodLabel} payment line`}
-                        data-testid={`pos-split-remove-${i}`}
-                        style={{
-                          background: 'transparent',
-                          border: 'none',
-                          cursor: 'pointer',
-                          color: 'var(--danger-color, #c44)',
-                          padding: '0.25rem 0.4rem',
-                        }}
-                      >
-                        <XIcon size={16} />
-                      </button>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-
-            <div
-              style={{ marginTop: '0.75rem', fontSize: '0.95rem' }}
-              data-testid="pos-split-totals"
-            >
-              Paid: <strong>{formatMoney(splitPaymentsTotal, 'INR', 'en-IN')}</strong>{' '}
-              of <strong>{formatMoney(grandTotal, 'INR', 'en-IN')}</strong>{' '}
-              (Balance:{' '}
-              <strong
-                style={{
-                  color:
-                    Math.abs(splitBalance) <= 0.01
-                      ? 'var(--success-color, #2a8a3e)'
-                      : splitBalance > 0
-                      ? 'var(--warning-color, #b16a00)'
-                      : 'var(--danger-color, #c44)',
-                }}
-                data-testid="pos-split-balance"
-              >
-                {formatMoney(splitBalance, 'INR', 'en-IN')}
-              </strong>
-              )
-            </div>
-
-            <div style={{ marginTop: '0.75rem' }}>
-              <button
-                type="button"
-                onClick={finalizeSplitSale}
-                disabled={!canFinalize || finalizeBusy}
-                data-testid="pos-split-finalize"
-                style={{
-                  ...primaryBtnStyle,
-                  fontSize: '1rem',
-                  padding: '0.75rem 1.5rem',
-                  opacity: !canFinalize || finalizeBusy ? 0.5 : 1,
-                  cursor: !canFinalize || finalizeBusy ? 'not-allowed' : 'pointer',
-                  background:
-                    !canFinalize || finalizeBusy
-                      ? 'var(--surface-2, #cccccc)'
-                      : 'var(--primary-color, var(--accent-color))',
-                }}
-              >
-                <CheckCircle2 size={16} /> {finalizeBusy ? 'Finalizing…' : 'Finalize Sale'}
-              </button>
-            </div>
-          </div>
-
           {/* Close shift card */}
           <div style={cardStyle}>
             <h2 style={{ marginTop: 0, marginBottom: '0.75rem', fontSize: '1.05rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
               <Lock size={18} /> Close shift
             </h2>
             <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', margin: '0 0 0.75rem 0' }}>
-              Count the cash drawer at end of shift, enter the total, and submit. Variance = counted − expected.
+              Click <strong>Close shift</strong> to close the drawer at the system-computed
+              expected cash. Only enter a counted total if you want to record a variance
+              (counted − expected).
             </p>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))', gap: '0.75rem', alignItems: 'end' }}>
               <div>
-                <label style={labelStyle}>Closing total (cash drawer count)</label>
+                <label style={labelStyle}>Counted cash (optional)</label>
                 <input
                   type="number"
                   min="0"
@@ -1954,7 +1229,7 @@ export default function PointOfSale() {
                   style={inputStyle}
                   value={closingTotal}
                   onChange={(e) => setClosingTotal(e.target.value)}
-                  placeholder="0"
+                  placeholder="Leave blank to auto-close"
                 />
               </div>
               <div style={{ gridColumn: 'span 2' }}>
@@ -1980,27 +1255,9 @@ export default function PointOfSale() {
           </div>
         </>
       )}
-      </>}
     </div>
   );
 }
-
-// D17 Arc 1 slice 1 — POS tab strip style. Mirrors PatientDetail.jsx's
-// pill-button pattern (accent-color background when active, transparent
-// when inactive). Lives at module scope so the component closure stays
-// thin and the pattern can be lifted into a shared util in slice 6.
-const posTabStyle = (active) => ({
-  padding: '0.5rem 1rem',
-  border: 'none',
-  background: active ? 'var(--accent-color)' : 'transparent',
-  color: active ? '#fff' : 'var(--text-primary)',
-  cursor: 'pointer',
-  borderRadius: 8,
-  fontSize: '0.9rem',
-  display: 'flex',
-  alignItems: 'center',
-  gap: '0.35rem',
-});
 
 const thStyle = {
   textAlign: 'left',

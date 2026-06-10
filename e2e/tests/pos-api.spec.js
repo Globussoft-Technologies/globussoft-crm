@@ -91,6 +91,7 @@ const RUN_TAG = `E2E_FLOW_POS_${Date.now()}`;
 
 const FIXTURES = {
   admin:      { email: 'admin@wellness.demo',           password: 'password123' },
+  rishu:      { email: 'rishu@enhancedwellness.in',     password: 'password123' },
   drharsh:    { email: 'drharsh@enhancedwellness.in',   password: 'password123' },
   manager:    { email: 'manager@enhancedwellness.in',   password: 'password123' },
   generic:    { email: 'admin@globussoft.com',          password: 'password123' },
@@ -122,25 +123,37 @@ async function login(request, who) {
   return { token: null, userId: null };
 }
 
-const authHdr = async (request, who = 'admin') => ({
+// Worker-isolation (fullyParallel + 2 CI workers): GET /shifts/current
+// resolves the CALLER's latest OPEN shift by userId. pos-sale-finalize-api
+// also opens shifts as admin@wellness.demo, so when both files run on
+// different workers their shifts collide on /shifts/current and the
+// "returns the caller-owned open shift" assertion flakes. We default this
+// file to `rishu` (rishu@enhancedwellness.in) — a wellness ADMIN distinct
+// from pos-sale-finalize's admin@wellness.demo, so every shift this file
+// opens is isolated to its own user. It MUST be an ADMIN (not manager)
+// because the refund route is strictAdminGate'd (admin-only) — a manager
+// would 403 before the missing-reason 400 validation. Deterministic, no
+// test weakened. (Explicit-`who` callers below are unaffected.)
+const DEFAULT_WHO = 'rishu';
+const authHdr = async (request, who = DEFAULT_WHO) => ({
   Authorization: `Bearer ${(await login(request, who)).token}`,
 });
 
-async function authGet(request, path, who = 'admin') {
+async function authGet(request, path, who = DEFAULT_WHO) {
   return request.get(`${BASE_URL}${path}`, {
     headers: await authHdr(request, who),
     timeout: REQUEST_TIMEOUT,
   });
 }
-async function authPost(request, path, body, who = 'admin') {
+async function authPost(request, path, body, who = DEFAULT_WHO) {
   const headers = { ...(await authHdr(request, who)), 'Content-Type': 'application/json' };
   return request.post(`${BASE_URL}${path}`, { headers, data: body ?? {}, timeout: REQUEST_TIMEOUT });
 }
-async function authPut(request, path, body, who = 'admin') {
+async function authPut(request, path, body, who = DEFAULT_WHO) {
   const headers = { ...(await authHdr(request, who)), 'Content-Type': 'application/json' };
   return request.put(`${BASE_URL}${path}`, { headers, data: body ?? {}, timeout: REQUEST_TIMEOUT });
 }
-async function authDelete(request, path, who = 'admin') {
+async function authDelete(request, path, who = DEFAULT_WHO) {
   return request.delete(`${BASE_URL}${path}`, { headers: await authHdr(request, who), timeout: REQUEST_TIMEOUT });
 }
 
@@ -173,8 +186,8 @@ let seededServiceId = null;
 let seededPatientId = null;
 
 test.beforeAll(async ({ request }) => {
-  const tok = await login(request, 'admin');
-  test.skip(!tok.token, 'Wellness admin login failed — seed missing? Skipping POS spec.');
+  const tok = await login(request, DEFAULT_WHO);
+  test.skip(!tok.token, 'Wellness POS user login failed — seed missing? Skipping POS spec.');
 
   const r = await authGet(request, '/api/wellness/locations');
   if (r.ok()) {
@@ -713,10 +726,37 @@ test.describe('POS — POST /sales/:id/refund', () => {
 // ── Shifts: close ─────────────────────────────────────────────────
 
 test.describe('POS — POST /shifts/:id/close', () => {
-  test('400 when closingTotal is missing', async ({ request }) => {
-    const res = await authPost(request, `/api/pos/shifts/${mainShiftId}/close`, {});
-    expect(res.status()).toBe(400);
-    expect((await res.json()).code).toBe('CLOSING_TOTAL_REQUIRED');
+  test('200 auto-closes at expectedCash when closingTotal is omitted (variance 0)', async ({ request }) => {
+    // closingTotal is OPTIONAL — when omitted the system closes the drawer at
+    // the computed expectedCash. Use a FRESH register + shift so the main
+    // shift stays open for the manual-count happy-path test below.
+    const reg = await authPost(request, '/api/pos/registers', registerBody({
+      name: `${RUN_TAG} AutoClose Register`,
+    }));
+    expect(reg.status()).toBe(201);
+    const register = await reg.json();
+    createdRegisterIds.push(register.id);
+
+    const openRes = await authPost(request, '/api/pos/shifts/open', {
+      registerId: register.id,
+      openingFloat: 750,
+    });
+    expect(openRes.status(), `open: ${await openRes.text()}`).toBe(201);
+    const shift = await openRes.json();
+    createdShiftIds.push(shift.id);
+
+    // No closingTotal in the body → auto-close at expectedCash.
+    const res = await authPost(request, `/api/pos/shifts/${shift.id}/close`, {
+      notes: `${RUN_TAG} auto-close`,
+    });
+    expect(res.status(), `auto-close: ${await res.text()}`).toBe(200);
+    const body = await res.json();
+    expect(body.status).toBe('CLOSED');
+    // No sales / ledger movement on this fresh shift → expected = openingFloat,
+    // closingTotal defaulted to expected, variance exactly 0.
+    expect(body.expectedCash).toBe(750);
+    expect(body.closingTotal).toBe(750);
+    expect(body.variance).toBe(0);
   });
 
   test('200 happy path closes shift, computes variance', async ({ request }) => {

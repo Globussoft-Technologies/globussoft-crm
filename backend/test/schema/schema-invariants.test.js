@@ -114,6 +114,29 @@ const NON_TENANT_MODELS = new Set([
   'SequenceStep',
   'QuoteLineItem',
   'EstimateLineItem',
+  // Patient↔Tag junction. Both parents (Patient + Tag) carry tenantId and
+  // cascade on tenant delete; PatientTag rows are scoped through the
+  // patient join (routes/wellness.js bulk-tag handlers filter via
+  // `patient: { tenantId }` + `tag: { tenantId }`). A redundant
+  // PatientTag.tenantId would risk drift from the parents.
+  'PatientTag',
+  // PR #754 RBAC junction tables. UserRole bridges User↔Role and
+  // RolePermission bridges Role↔(module,action). Tenant isolation flows
+  // through the parents (User.tenantId and Role.tenantId). A redundant
+  // UserRole.tenantId or RolePermission.tenantId would create a
+  // consistency hazard — drift between the column and the parent's
+  // tenantId would silently leak across tenants. The Role model itself
+  // is tenant-scoped (Role.tenantId Int?, nullable only for the
+  // platform-level OWNER role). All RBAC query paths join through Role.
+  'UserRole',
+  'RolePermission',
+  // PR #925 — per-role widget layout persistence. RoleWidget bridges
+  // Role↔(widgetKey, position) for the role-aware /home dashboard.
+  // Same junction-table rationale as UserRole/RolePermission above:
+  // tenant scope flows through Role (Role.tenantId is tenant-scoped or
+  // null for platform-level roles). A redundant RoleWidget.tenantId
+  // would risk drift.
+  'RoleWidget',
   // Globally-shared templates (real-estate, healthcare, education, legal,
   // saas) — seeded once, read by all tenants when they pick an industry.
   // Read-only from a tenant's perspective; no tenant data lives here.

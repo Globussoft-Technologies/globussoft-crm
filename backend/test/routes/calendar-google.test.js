@@ -114,6 +114,9 @@ const calendarState = {
     list: vi.fn(),
     insert: vi.fn(),
   },
+  freebusy: {
+    query: vi.fn(),
+  },
 };
 
 // Replace google.auth.OAuth2 with a constructor that returns our mock
@@ -133,6 +136,9 @@ googleapis.google.calendar = function fakeCalendar() {
     events: {
       list: (...args) => calendarState.events.list(...args),
       insert: (...args) => calendarState.events.insert(...args),
+    },
+    freebusy: {
+      query: (...args) => calendarState.freebusy.query(...args),
     },
   };
 };
@@ -187,6 +193,7 @@ beforeEach(() => {
   oauth2State.on.mockReset();
   calendarState.events.list.mockReset();
   calendarState.events.insert.mockReset();
+  calendarState.freebusy.query.mockReset();
 
   // Reset prisma mocks.
   prisma.calendarIntegration.findUnique.mockReset();
@@ -676,6 +683,8 @@ describe('POST /api/calendar/google/events', () => {
       { email: 'a@example.com' },
       { email: 'b@example.com' },
     ]);
+    // With attendees present, Google is told to email the invite.
+    expect(insertArgs.sendUpdates).toBe('all');
 
     expect(prisma.calendarEvent.upsert).toHaveBeenCalledTimes(1);
     const upsertArgs = prisma.calendarEvent.upsert.mock.calls[0][0];
@@ -685,6 +694,177 @@ describe('POST /api/calendar/google/events', () => {
       externalId: 'gcal-new-id',
     });
     expect(upsertArgs.create.meetingUrl).toBe('https://meet.google.com/xyz');
+  });
+
+  test('backward-compat: WITHOUT createMeet, no conferenceData is sent (pre-T18 shape)', async () => {
+    prisma.calendarIntegration.findUnique.mockResolvedValue({
+      id: 1,
+      userId: 7,
+      tenantId: 1,
+      accessToken: 'at',
+      calendarId: 'primary',
+    });
+    calendarState.events.insert.mockResolvedValue({
+      data: { id: 'gcal-no-meet', summary: 'No meet' },
+    });
+    const app = makeApp();
+    const res = await request(app)
+      .post('/api/calendar/google/events')
+      .send({
+        title: 'No meet',
+        startTime: futureIso(3600_000),
+        endTime: futureIso(7200_000),
+      });
+    expect(res.status).toBe(201);
+    const insertArgs = calendarState.events.insert.mock.calls[0][0];
+    // The opt-in flag was absent → call shape must be unchanged.
+    expect('conferenceDataVersion' in insertArgs).toBe(false);
+    expect(insertArgs.requestBody.conferenceData).toBeUndefined();
+  });
+
+  test('T18: createMeet:true requests a Google Meet conference (conferenceDataVersion:1 + createRequest)', async () => {
+    prisma.calendarIntegration.findUnique.mockResolvedValue({
+      id: 1,
+      userId: 7,
+      tenantId: 1,
+      accessToken: 'at',
+      calendarId: 'primary',
+    });
+    calendarState.events.insert.mockResolvedValue({
+      data: {
+        id: 'gcal-meet-id',
+        summary: 'Consult call',
+        hangoutLink: 'https://meet.google.com/new-meet-link',
+      },
+    });
+    const app = makeApp();
+    const res = await request(app)
+      .post('/api/calendar/google/events')
+      .send({
+        title: 'Consult call',
+        startTime: futureIso(3600_000),
+        endTime: futureIso(7200_000),
+        createMeet: true,
+      });
+    expect(res.status).toBe(201);
+    const insertArgs = calendarState.events.insert.mock.calls[0][0];
+    expect(insertArgs.conferenceDataVersion).toBe(1);
+    expect(insertArgs.requestBody.conferenceData.createRequest.conferenceSolutionKey).toEqual({
+      type: 'hangoutsMeet',
+    });
+    expect(typeof insertArgs.requestBody.conferenceData.createRequest.requestId).toBe('string');
+    // The minted Meet link round-trips into the saved row.
+    const upsertArgs = prisma.calendarEvent.upsert.mock.calls[0][0];
+    expect(upsertArgs.create.meetingUrl).toBe('https://meet.google.com/new-meet-link');
+  });
+
+  test('T18: conferencing:"google_meet" is an accepted alias for createMeet', async () => {
+    prisma.calendarIntegration.findUnique.mockResolvedValue({
+      id: 1,
+      userId: 7,
+      tenantId: 1,
+      accessToken: 'at',
+      calendarId: 'primary',
+    });
+    calendarState.events.insert.mockResolvedValue({
+      data: { id: 'gcal-alias', summary: 'Alias' },
+    });
+    const app = makeApp();
+    const res = await request(app)
+      .post('/api/calendar/google/events')
+      .send({
+        title: 'Alias',
+        startTime: futureIso(3600_000),
+        endTime: futureIso(7200_000),
+        conferencing: 'google_meet',
+      });
+    expect(res.status).toBe(201);
+    const insertArgs = calendarState.events.insert.mock.calls[0][0];
+    expect(insertArgs.conferenceDataVersion).toBe(1);
+    expect(insertArgs.requestBody.conferenceData.createRequest.conferenceSolutionKey.type).toBe(
+      'hangoutsMeet'
+    );
+  });
+});
+
+// ─── GET /slots — free/busy slot-picker (T18) ─────────────────────
+
+describe('GET /api/calendar/google/slots', () => {
+  function connect() {
+    prisma.calendarIntegration.findUnique.mockResolvedValue({
+      id: 1,
+      userId: 7,
+      tenantId: 1,
+      accessToken: 'at',
+      calendarId: 'primary',
+    });
+  }
+
+  test('400 when date param is missing or malformed', async () => {
+    const app = makeApp();
+    const res = await request(app).get('/api/calendar/google/slots');
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/date is required/i);
+    expect(calendarState.freebusy.query).not.toHaveBeenCalled();
+  });
+
+  test('404 when calendar not connected', async () => {
+    prisma.calendarIntegration.findUnique.mockResolvedValue(null);
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const app = makeApp();
+    const res = await request(app).get('/api/calendar/google/slots?date=2999-01-15');
+    expect(res.status).toBe(404);
+    expect(res.body.error).toMatch(/not connected/i);
+    consoleSpy.mockRestore();
+  });
+
+  test('returns slots that exclude busy windows (UTC, far-future day so none are past)', async () => {
+    connect();
+    // 09:00–10:00 UTC busy on 2999-01-15. With 60-min slots over 09:00–18:00
+    // UTC that removes exactly the first slot.
+    calendarState.freebusy.query.mockResolvedValue({
+      data: {
+        calendars: {
+          primary: {
+            busy: [{ start: '2999-01-15T09:00:00Z', end: '2999-01-15T10:00:00Z' }],
+          },
+        },
+      },
+    });
+    const app = makeApp();
+    const res = await request(app).get(
+      '/api/calendar/google/slots?date=2999-01-15&durationMins=60&startHour=9&endHour=18&tzOffsetMins=0'
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.date).toBe('2999-01-15');
+    expect(res.body.durationMins).toBe(60);
+    // 9 one-hour slots in 09–18; the 09:00 slot is busy → 8 free.
+    expect(res.body.slots.length).toBe(8);
+    const starts = res.body.slots.map((s) => s.start);
+    expect(starts).not.toContain('2999-01-15T09:00:00.000Z');
+    expect(starts[0]).toBe('2999-01-15T10:00:00.000Z');
+    // Each slot is exactly durationMins long.
+    const first = res.body.slots[0];
+    expect(new Date(first.end) - new Date(first.start)).toBe(60 * 60_000);
+
+    // freebusy queried the connected calendar over the working window.
+    const fbArgs = calendarState.freebusy.query.mock.calls[0][0];
+    expect(fbArgs.requestBody.items).toEqual([{ id: 'primary' }]);
+    expect(fbArgs.requestBody.timeMin).toBe('2999-01-15T09:00:00.000Z');
+    expect(fbArgs.requestBody.timeMax).toBe('2999-01-15T18:00:00.000Z');
+  });
+
+  test('past slots are filtered out (a day in the past yields zero slots)', async () => {
+    connect();
+    calendarState.freebusy.query.mockResolvedValue({
+      data: { calendars: { primary: { busy: [] } } },
+    });
+    const app = makeApp();
+    const res = await request(app).get(
+      '/api/calendar/google/slots?date=2000-01-01&durationMins=30'
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.slots).toEqual([]);
   });
 });
 

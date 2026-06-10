@@ -6,11 +6,17 @@ import { useEffect, useState } from 'react';
 import { Recycle, Plus, Pencil, Trash2 } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
+import { usePermissions } from '../../hooks/usePermissions';
+import PageHeader from '../../components/PageHeader';
 
-const EMPTY = { serviceId: '', productId: '', quantityPerVisit: '', isActive: true };
+const UNIT_OPTIONS = ['ml', 'gm', 'kg', 'piece', 'unit', 'bottle', 'tube', 'pack', 'ltr'];
+const EMPTY = { serviceId: '', productId: '', quantityPerVisit: '', unit: '', isActive: true };
 
 export default function AutoConsumptionRules() {
   const notify = useNotify();
+  // Backend gates POST/PUT/DELETE /auto-consumption-rules on products.manage.
+  const { hasPermission, isReady: permsReady } = usePermissions();
+  const canManage = permsReady && hasPermission('products', 'manage');
   const [rules, setRules] = useState([]);
   const [services, setServices] = useState([]);
   const [products, setProducts] = useState([]);
@@ -41,10 +47,13 @@ export default function AutoConsumptionRules() {
       serviceId: String(r.serviceId),
       productId: String(r.productId),
       quantityPerVisit: String(r.quantityPerVisit),
+      unit: r.unit || '',
       isActive: r.isActive !== false,
     });
     setShowForm(true);
   };
+
+  const productForId = (id) => products.find((p) => String(p.id) === String(id));
 
   const submit = async (e) => {
     e.preventDefault();
@@ -54,14 +63,19 @@ export default function AutoConsumptionRules() {
         serviceId: parseInt(form.serviceId),
         productId: parseInt(form.productId),
         quantityPerVisit: parseFloat(form.quantityPerVisit),
+        unit: form.unit || null,
         isActive: form.isActive,
       };
       if (editingId) {
-        // Only quantityPerVisit + isActive are updatable; svc + product
+        // Only quantityPerVisit + unit + isActive are updatable; svc + product
         // changes require delete + recreate.
         await fetchApi(`/api/wellness/auto-consumption-rules/${editingId}`, {
           method: 'PUT',
-          body: JSON.stringify({ quantityPerVisit: payload.quantityPerVisit, isActive: payload.isActive }),
+          body: JSON.stringify({
+            quantityPerVisit: payload.quantityPerVisit,
+            unit: payload.unit,
+            isActive: payload.isActive,
+          }),
         });
         notify.success('Rule updated.');
       } else {
@@ -75,7 +89,14 @@ export default function AutoConsumptionRules() {
   };
 
   const remove = async (r) => {
-    if (!window.confirm('Delete this auto-consumption rule? Future visits will no longer auto-decrement stock for this service+product.')) return;
+    const ok = await notify.confirm({
+      title: 'Delete auto-consumption rule',
+      message:
+        'Delete this auto-consumption rule? Future visits will no longer auto-decrement stock for this service+product.',
+      confirmText: 'Delete',
+      destructive: true,
+    });
+    if (!ok) return;
     try {
       await fetchApi(`/api/wellness/auto-consumption-rules/${r.id}`, { method: 'DELETE' });
       notify.success('Rule deleted.');
@@ -85,21 +106,27 @@ export default function AutoConsumptionRules() {
 
   return (
     <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
-      <header style={{ marginBottom: '1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
-        <div>
-          <h1 style={{ fontSize: '1.75rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <Recycle size={24} /> Auto-consumption rules
-          </h1>
-          <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-            When a visit completes for the matching service, the listed product is automatically consumed in the configured quantity.
-          </p>
-        </div>
-        <button onClick={() => (showForm ? reset() : setShowForm(true))} style={primaryBtnStyle}>
-          <Plus size={16} /> {showForm ? 'Cancel' : 'New rule'}
-        </button>
-      </header>
+      <PageHeader
+        icon={Recycle}
+        title="Auto-consumption rules"
+        description="When a visit completes for the matching service, the listed product is automatically consumed in the configured quantity."
+        inlineBadge={permsReady && !canManage ? (
+          <span
+            title="You can view rules but can't make changes."
+            style={{ fontSize: '0.7rem', padding: '0.2rem 0.55rem', borderRadius: 999, background: 'var(--subtle-bg)', color: 'var(--text-secondary)', border: '1px solid var(--border-color)', fontWeight: 500 }}
+          >
+            View only
+          </span>
+        ) : null}
+      >
+        {canManage && (
+          <button onClick={() => (showForm ? reset() : setShowForm(true))} style={primaryBtnStyle}>
+            <Plus size={16} /> {showForm ? 'Cancel' : 'New rule'}
+          </button>
+        )}
+      </PageHeader>
 
-      {showForm && (
+      {showForm && canManage && (
         <form onSubmit={submit} className="glass" style={{ padding: '1.25rem', marginBottom: '1rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 240px), 1fr))', gap: '0.5rem' }}>
           <select required disabled={!!editingId} value={form.serviceId} onChange={(e) => setForm({ ...form, serviceId: e.target.value })} style={inputStyle}>
             <option value="">Service…</option>
@@ -109,7 +136,21 @@ export default function AutoConsumptionRules() {
             <option value="">Product…</option>
             {products.map((p) => (<option key={p.id} value={p.id}>{p.name}</option>))}
           </select>
-          <input type="number" min="0.01" step="0.01" required placeholder="Qty per visit" value={form.quantityPerVisit} onChange={(e) => setForm({ ...form, quantityPerVisit: e.target.value })} style={inputStyle} />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+            <input type="number" min="0.01" step="0.01" required placeholder="e.g., 15" value={form.quantityPerVisit} onChange={(e) => setForm({ ...form, quantityPerVisit: e.target.value })} style={inputStyle} title="Quantity consumed per completed treatment" />
+            <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Consumed per completed treatment</span>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+            <select value={form.unit} onChange={(e) => setForm({ ...form, unit: e.target.value })} style={inputStyle} title="Unit the quantity above is expressed in">
+              <option value="">Unit (default: product&apos;s){productForId(form.productId)?.unit ? ` — ${productForId(form.productId).unit}` : ''}</option>
+              {UNIT_OPTIONS.map((u) => (<option key={u} value={u}>{u}</option>))}
+            </select>
+            <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+              {productForId(form.productId)?.unit
+                ? `Product stocked in ${productForId(form.productId).unit}. ml↔ltr and gm↔kg auto-convert.`
+                : 'ml, gm, kg, piece, bottle, etc.'}
+            </span>
+          </div>
           <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.9rem' }}>
             <input type="checkbox" checked={form.isActive} onChange={(e) => setForm({ ...form, isActive: e.target.checked })} />
             Active
@@ -131,10 +172,11 @@ export default function AutoConsumptionRules() {
               <tr style={{ textAlign: 'left', borderBottom: '1px solid var(--border-color)' }}>
                 <th style={cellStyle}>Service</th>
                 <th style={cellStyle}>Product</th>
-                <th style={cellStyle}>Qty / visit</th>
+                <th style={cellStyle} title="Quantity consumed per completed visit">Qty / visit</th>
+                <th style={cellStyle}>Unit</th>
                 <th style={cellStyle}>Stock</th>
                 <th style={cellStyle}>Status</th>
-                <th style={cellStyle}></th>
+                {canManage && <th style={cellStyle}></th>}
               </tr>
             </thead>
             <tbody>
@@ -143,12 +185,15 @@ export default function AutoConsumptionRules() {
                   <td style={cellStyle}>{r.service?.name || `#${r.serviceId}`}</td>
                   <td style={cellStyle}>{r.product?.name || `#${r.productId}`}</td>
                   <td style={cellStyle}>{r.quantityPerVisit}</td>
+                  <td style={cellStyle}>{r.unit || r.product?.unit || '—'}</td>
                   <td style={cellStyle}>{r.product?.currentStock ?? '—'}</td>
                   <td style={cellStyle}>{r.isActive ? 'Active' : 'Inactive'}</td>
-                  <td style={{ ...cellStyle, textAlign: 'right' }}>
-                    <button onClick={() => startEdit(r)} style={iconBtnStyle} aria-label="Edit rule"><Pencil size={14} /></button>
-                    <button onClick={() => remove(r)} style={iconBtnStyle} aria-label="Delete rule"><Trash2 size={14} /></button>
-                  </td>
+                  {canManage && (
+                    <td style={{ ...cellStyle, textAlign: 'right' }}>
+                      <button onClick={() => startEdit(r)} style={iconBtnStyle} aria-label="Edit rule"><Pencil size={14} /></button>
+                      <button onClick={() => remove(r)} style={iconBtnStyle} aria-label="Delete rule"><Trash2 size={14} /></button>
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>

@@ -373,6 +373,7 @@ const {
   assertValidSubBrand,
 } = require("../middleware/travelGuards");
 const { writeAudit } = require("../lib/audit");
+const listProjection = require("../lib/listProjection");
 
 const VALID_SUPPLIER_CATEGORIES = ["hotel", "flight", "transport", "visa-consul", "other"];
 
@@ -435,6 +436,15 @@ function assertValidCreditLimit(c) {
 
 // GET /api/travel/suppliers
 // Honors ?subBrand=tmc (filter to that sub-brand) and ?includeInactive=1.
+// GET /api/travel/suppliers
+//
+// Slim-shape opt-in (#920 slice S3 — FR-3.5 PII payload reduction).
+// Default shape unchanged (full TravelSupplier row including supplier
+// PII — contactPerson, phone, email, gstin, addressLine, paymentTermsDays,
+// creditLimit, notes). Pass `?fields=summary` to opt into the slim
+// projection (id + subBrand + name + supplierCategory + isActive +
+// createdAt) — picker / dashboard-tile callers don't need supplier
+// PII. The detail endpoint GET /suppliers/:id surfaces the full row.
 router.get("/suppliers", verifyToken, requireTravelTenant, async (req, res) => {
   try {
     const where = { tenantId: req.travelTenant.id };
@@ -460,13 +470,18 @@ router.get("/suppliers", verifyToken, requireTravelTenant, async (req, res) => {
     const take = Math.min(parseInt(req.query.limit, 10) || 100, 500);
     const skip = parseInt(req.query.offset, 10) || 0;
 
+    const isSummary = req.query.fields === "summary";
+    const findManyArgs = {
+      where,
+      orderBy: [{ subBrand: "asc" }, { supplierCategory: "asc" }, { name: "asc" }],
+      take,
+      skip,
+    };
+    if (isSummary) {
+      findManyArgs.select = listProjection("TravelSupplier", false);
+    }
     const [suppliers, total] = await Promise.all([
-      prisma.travelSupplier.findMany({
-        where,
-        orderBy: [{ subBrand: "asc" }, { supplierCategory: "asc" }, { name: "asc" }],
-        take,
-        skip,
-      }),
+      prisma.travelSupplier.findMany(findManyArgs),
       prisma.travelSupplier.count({ where }),
     ]);
     res.json({ suppliers, total, limit: take, offset: skip });

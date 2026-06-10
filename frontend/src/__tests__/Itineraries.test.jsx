@@ -644,3 +644,736 @@ describe('<Itineraries /> — create drawer + submit', () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// S63 — "Suggest itinerary" CTA + modal + suggestionJson preview.
+//
+// PRD docs/PRD_TRAVEL_ITINERARY_UPGRADES.md FR-3.6 step (a) — wires
+// `POST /api/travel/itineraries/suggest` (S46) into a modal where the
+// operator picks destination / durationDays / budgetTier / themeJson and
+// renders the returned suggestionJson day-by-day so they can review +
+// optionally materialise.
+//
+// Endpoint contract pinned (backend/routes/travel_itineraries.js:4094):
+//   POST /api/travel/itineraries/suggest body:{destination, durationDays,
+//                                              budgetTier?, themeJson?}
+//          → 200 { suggestionJson, source, model, stub }
+//          | 400 INVALID_DESTINATION / INVALID_DURATION_DAYS /
+//                INVALID_BUDGET_TIER / INVALID_THEME_JSON
+//          | 500 ITINERARY_SUGGEST_FAILED
+//
+// Note: materialise-from-suggestion endpoint not yet shipped (gap row).
+// The "Create itinerary from this suggestion" button surfaces an info
+// notify for now (createFromSuggestion stub handler).
+// ---------------------------------------------------------------------------
+
+const STUB_SUGGESTION = {
+  suggestionJson: {
+    daySplit: [
+      {
+        dayNumber: 1,
+        theme: '[STUB] Day 1 — general theme placeholder',
+        items: [
+          { itemType: 'activity', description: 'Day 1 activity placeholder for Goa (mid tier).' },
+          { itemType: 'meal', description: 'Day 1 meal placeholder' },
+        ],
+      },
+      {
+        dayNumber: 2,
+        theme: '[STUB] Day 2 — general theme placeholder',
+        items: [
+          { itemType: 'activity', description: 'Day 2 activity placeholder.' },
+        ],
+      },
+    ],
+    poiSuggestions: [{ name: 'Beach POI', themeTag: 'beaches' }],
+    thematicNotes: 'Synthetic 2-day mid-tier outline for Goa.',
+    summary: '2-day Goa (mid) outline',
+  },
+  source: 'stub',
+  model: 'gemini-2.5-flash',
+  stub: true,
+};
+
+// Install the suggest endpoint into the existing routing fetch mock.
+// Tests that need a custom response (error / specific shape) override
+// fetchApiMock.mockImplementation directly.
+function installSuggestMock({ suggestResult = STUB_SUGGESTION } = {}) {
+  fetchApiMock.mockImplementation((url, opts) => {
+    const method = opts?.method || 'GET';
+    if (url === '/api/travel/itineraries/suggest' && method === 'POST') {
+      if (suggestResult instanceof Error) return Promise.reject(suggestResult);
+      return Promise.resolve(suggestResult);
+    }
+    if (url.startsWith('/api/travel/itineraries') && method === 'GET') {
+      return Promise.resolve({
+        itineraries: ITINS_DEFAULT,
+        total: ITINS_DEFAULT.length, limit: 100, offset: 0,
+      });
+    }
+    if (url.startsWith('/api/contacts')) {
+      return Promise.resolve(CONTACTS_DEFAULT);
+    }
+    return Promise.resolve(null);
+  });
+}
+
+describe('<Itineraries /> — S63 Suggest itinerary CTA + modal', () => {
+  it('renders the "Suggest itinerary" button in the header', async () => {
+    renderPage();
+    expect(
+      screen.getByRole('button', { name: /Suggest itinerary using AI/i }),
+    ).toBeInTheDocument();
+    // Distinct from the "Create Itinerary" CTA — both should coexist.
+    expect(
+      screen.getByRole('button', { name: /Create a new itinerary/i }),
+    ).toBeInTheDocument();
+  });
+
+  it('clicking the button opens the modal with all form fields + role=dialog', async () => {
+    renderPage();
+    await screen.findByText('Andaman Islands');
+    fireEvent.click(
+      screen.getByRole('button', { name: /Suggest itinerary using AI/i }),
+    );
+    // Modal heading present + role=dialog wired.
+    expect(
+      await screen.findByRole('heading', { name: /Suggest itinerary/i }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('dialog')).toHaveAttribute('aria-modal', 'true');
+    // Form fields present.
+    expect(screen.getByLabelText(/Destination/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Duration \(days\)/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Budget tier/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Theme JSON/i)).toBeInTheDocument();
+  });
+
+  it('Escape key closes the suggest modal', async () => {
+    renderPage();
+    await screen.findByText('Andaman Islands');
+    fireEvent.click(
+      screen.getByRole('button', { name: /Suggest itinerary using AI/i }),
+    );
+    await screen.findByRole('heading', { name: /Suggest itinerary/i });
+    fireEvent.keyDown(window, { key: 'Escape' });
+    await waitFor(() => {
+      expect(
+        screen.queryByRole('heading', { name: /Suggest itinerary/i }),
+      ).toBeNull();
+    });
+  });
+
+  it('clicking the backdrop closes the suggest modal', async () => {
+    renderPage();
+    await screen.findByText('Andaman Islands');
+    fireEvent.click(
+      screen.getByRole('button', { name: /Suggest itinerary using AI/i }),
+    );
+    await screen.findByRole('heading', { name: /Suggest itinerary/i });
+    // The backdrop element has the class travel-itin-suggest-backdrop.
+    const backdrop = document.querySelector('.travel-itin-suggest-backdrop');
+    expect(backdrop).toBeTruthy();
+    fireEvent.click(backdrop);
+    await waitFor(() => {
+      expect(
+        screen.queryByRole('heading', { name: /Suggest itinerary/i }),
+      ).toBeNull();
+    });
+  });
+
+  it('validation: empty destination on submit shows inline error + does NOT call POST', async () => {
+    renderPage();
+    await screen.findByText('Andaman Islands');
+    fireEvent.click(
+      screen.getByRole('button', { name: /Suggest itinerary using AI/i }),
+    );
+    await screen.findByRole('heading', { name: /Suggest itinerary/i });
+    fetchApiMock.mockClear();
+    installSuggestMock();
+    // Click submit with destination still blank.
+    fireEvent.click(screen.getByRole('button', { name: /^Suggest$/ }));
+    expect(
+      await screen.findByText(/Destination is required/i),
+    ).toBeInTheDocument();
+    const posts = fetchApiMock.mock.calls.filter(
+      ([u, o]) => u === '/api/travel/itineraries/suggest' && o?.method === 'POST',
+    );
+    expect(posts.length).toBe(0);
+  });
+
+  it('validation: durationDays out-of-range (35) shows inline error', async () => {
+    renderPage();
+    await screen.findByText('Andaman Islands');
+    fireEvent.click(
+      screen.getByRole('button', { name: /Suggest itinerary using AI/i }),
+    );
+    await screen.findByRole('heading', { name: /Suggest itinerary/i });
+    fireEvent.change(screen.getByLabelText(/Destination/i), {
+      target: { value: 'Goa' },
+    });
+    fireEvent.change(screen.getByLabelText(/Duration \(days\)/i), {
+      target: { value: '35' },
+    });
+    fetchApiMock.mockClear();
+    installSuggestMock();
+    // Bypass HTML5 max="30" constraint by submitting the form directly.
+    const dialog = screen.getByRole('dialog');
+    fireEvent.submit(dialog);
+    expect(
+      await screen.findByText(/Duration must be an integer 1\.\.30/i),
+    ).toBeInTheDocument();
+    const posts = fetchApiMock.mock.calls.filter(
+      ([u, o]) => u === '/api/travel/itineraries/suggest' && o?.method === 'POST',
+    );
+    expect(posts.length).toBe(0);
+  });
+
+  it('validation: invalid JSON in themeJson shows inline parse error on blur', async () => {
+    renderPage();
+    await screen.findByText('Andaman Islands');
+    fireEvent.click(
+      screen.getByRole('button', { name: /Suggest itinerary using AI/i }),
+    );
+    await screen.findByRole('heading', { name: /Suggest itinerary/i });
+    const themeField = screen.getByLabelText(/Theme JSON/i);
+    fireEvent.change(themeField, { target: { value: '{not valid json' } });
+    fireEvent.blur(themeField);
+    expect(
+      await screen.findByText(/Invalid JSON/i),
+    ).toBeInTheDocument();
+  });
+
+  it('validation: themeJson must be an object — array rejected with inline error', async () => {
+    renderPage();
+    await screen.findByText('Andaman Islands');
+    fireEvent.click(
+      screen.getByRole('button', { name: /Suggest itinerary using AI/i }),
+    );
+    await screen.findByRole('heading', { name: /Suggest itinerary/i });
+    const themeField = screen.getByLabelText(/Theme JSON/i);
+    fireEvent.change(themeField, { target: { value: '[1,2,3]' } });
+    fireEvent.blur(themeField);
+    expect(
+      await screen.findByText(/themeJson must be a JSON object/i),
+    ).toBeInTheDocument();
+  });
+
+  it('submit happy path: POSTs /api/travel/itineraries/suggest with correct body', async () => {
+    renderPage();
+    await screen.findByText('Andaman Islands');
+    fireEvent.click(
+      screen.getByRole('button', { name: /Suggest itinerary using AI/i }),
+    );
+    await screen.findByRole('heading', { name: /Suggest itinerary/i });
+    fireEvent.change(screen.getByLabelText(/Destination/i), {
+      target: { value: '  Goa  ' },
+    });
+    fireEvent.change(screen.getByLabelText(/Duration \(days\)/i), {
+      target: { value: '3' },
+    });
+    fireEvent.change(screen.getByLabelText(/Budget tier/i), {
+      target: { value: 'luxury' },
+    });
+    fireEvent.change(screen.getByLabelText(/Theme JSON/i), {
+      target: { value: '{"interests":["beaches"]}' },
+    });
+    fetchApiMock.mockClear();
+    installSuggestMock();
+    fireEvent.click(screen.getByRole('button', { name: /^Suggest$/ }));
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(
+        ([u, o]) => u === '/api/travel/itineraries/suggest' && o?.method === 'POST',
+      );
+      expect(call).toBeTruthy();
+      const body = JSON.parse(call[1].body);
+      // Destination is trimmed.
+      expect(body.destination).toBe('Goa');
+      // durationDays parsed to int.
+      expect(body.durationDays).toBe(3);
+      expect(body.budgetTier).toBe('luxury');
+      // themeJson parsed to object.
+      expect(body.themeJson).toEqual({ interests: ['beaches'] });
+    });
+  });
+
+  it('submit with no themeJson omits the field from the payload (optional)', async () => {
+    renderPage();
+    await screen.findByText('Andaman Islands');
+    fireEvent.click(
+      screen.getByRole('button', { name: /Suggest itinerary using AI/i }),
+    );
+    await screen.findByRole('heading', { name: /Suggest itinerary/i });
+    fireEvent.change(screen.getByLabelText(/Destination/i), {
+      target: { value: 'Goa' },
+    });
+    fetchApiMock.mockClear();
+    installSuggestMock();
+    fireEvent.click(screen.getByRole('button', { name: /^Suggest$/ }));
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(
+        ([u, o]) => u === '/api/travel/itineraries/suggest' && o?.method === 'POST',
+      );
+      expect(call).toBeTruthy();
+      const body = JSON.parse(call[1].body);
+      expect(body.themeJson).toBeUndefined();
+      // Defaults: durationDays=5, budgetTier=mid.
+      expect(body.durationDays).toBe(5);
+      expect(body.budgetTier).toBe('mid');
+    });
+  });
+
+  it('loading state: submit button disabled + label changes to "Generating suggestion…"', async () => {
+    renderPage();
+    await screen.findByText('Andaman Islands');
+    fireEvent.click(
+      screen.getByRole('button', { name: /Suggest itinerary using AI/i }),
+    );
+    await screen.findByRole('heading', { name: /Suggest itinerary/i });
+    fireEvent.change(screen.getByLabelText(/Destination/i), {
+      target: { value: 'Goa' },
+    });
+    // Install a fetch that hangs so we can observe the loading state.
+    let resolveSuggest;
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = opts?.method || 'GET';
+      if (url === '/api/travel/itineraries/suggest' && method === 'POST') {
+        return new Promise((res) => { resolveSuggest = res; });
+      }
+      if (url.startsWith('/api/travel/itineraries')) {
+        return Promise.resolve({
+          itineraries: ITINS_DEFAULT, total: ITINS_DEFAULT.length, limit: 100, offset: 0,
+        });
+      }
+      return Promise.resolve(null);
+    });
+    fireEvent.click(screen.getByRole('button', { name: /^Suggest$/ }));
+    expect(
+      await screen.findByRole('button', { name: /Generating suggestion…/i }),
+    ).toBeDisabled();
+    // Resolve so the test cleanup is tidy.
+    resolveSuggest(STUB_SUGGESTION);
+    await waitFor(() => {
+      expect(
+        screen.queryByRole('button', { name: /Generating suggestion…/i }),
+      ).toBeNull();
+    });
+  });
+
+  it('success path: renders suggestionJson preview pane with day-by-day breakdown', async () => {
+    renderPage();
+    await screen.findByText('Andaman Islands');
+    fireEvent.click(
+      screen.getByRole('button', { name: /Suggest itinerary using AI/i }),
+    );
+    await screen.findByRole('heading', { name: /Suggest itinerary/i });
+    fireEvent.change(screen.getByLabelText(/Destination/i), {
+      target: { value: 'Goa' },
+    });
+    installSuggestMock();
+    fireEvent.click(screen.getByRole('button', { name: /^Suggest$/ }));
+    // Preview pane appears.
+    expect(
+      await screen.findByTestId('suggest-preview-pane'),
+    ).toBeInTheDocument();
+    // Per-day breakdown rendered.
+    expect(screen.getByTestId('suggest-day-1')).toBeInTheDocument();
+    expect(screen.getByTestId('suggest-day-2')).toBeInTheDocument();
+    // Day theme renders.
+    expect(
+      within(screen.getByTestId('suggest-day-1')).getByText(/Day 1 — \[STUB\] Day 1/i),
+    ).toBeInTheDocument();
+    // Summary + thematicNotes render.
+    expect(screen.getByText(/2-day Goa \(mid\) outline/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Synthetic 2-day mid-tier outline for Goa\./i),
+    ).toBeInTheDocument();
+    // "Stub" badge present since source=stub.
+    expect(screen.getByText(/^Stub$/i)).toBeInTheDocument();
+  });
+
+  it('"Create itinerary from this suggestion" button is present + disabled until a contact is picked (S90 materialise picker)', async () => {
+    renderPage();
+    await screen.findByText('Andaman Islands');
+    fireEvent.click(
+      screen.getByRole('button', { name: /Suggest itinerary using AI/i }),
+    );
+    await screen.findByRole('heading', { name: /Suggest itinerary/i });
+    fireEvent.change(screen.getByLabelText(/Destination/i), {
+      target: { value: 'Goa' },
+    });
+    installSuggestMock();
+    fireEvent.click(screen.getByRole('button', { name: /^Suggest$/ }));
+    const createBtn = await screen.findByRole('button', {
+      name: /Create itinerary from this suggestion/i,
+    });
+    expect(createBtn).toBeInTheDocument();
+    // Discard button present too.
+    expect(
+      screen.getByRole('button', { name: /Discard suggestion/i }),
+    ).toBeInTheDocument();
+    // Materialise picker is rendered.
+    expect(screen.getByTestId('materialise-picker')).toBeInTheDocument();
+    // Button starts disabled (no contact picked yet).
+    expect(createBtn).toBeDisabled();
+  });
+});
+
+// S90 — Materialise-from-suggestion (POST /api/travel/itineraries/from-suggestion).
+//
+// Contracts pinned:
+//   1. Picking a contact + clicking "Create itinerary from this suggestion"
+//      POSTs to /api/travel/itineraries/from-suggestion with the
+//      { suggestionJson, contactId, subBrand } body.
+//   2. On 201 success → notify.success("Itinerary created with N items"),
+//      modal closes, navigate to /travel/itineraries/:id.
+//   3. On 4xx/5xx error → notify.error with the backend error body, no
+//      navigate.
+//   4. Loading state: button shows "Creating itinerary…" and stays
+//      disabled during the in-flight POST.
+//   5. Discard button works alongside the materialise picker (pane
+//      still closeable without committing).
+//   6. Backend 403 SUB_BRAND_DENIED surfaces notify.error.
+describe('<Itineraries /> — S90 materialise-from-suggestion', () => {
+  function installMaterialiseMock({
+    suggestResult = STUB_SUGGESTION,
+    materialiseResult = null,
+    materialiseError = null,
+  } = {}) {
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = opts?.method || 'GET';
+      if (url === '/api/travel/itineraries/suggest' && method === 'POST') {
+        return Promise.resolve(suggestResult);
+      }
+      if (
+        url === '/api/travel/itineraries/from-suggestion'
+        && method === 'POST'
+      ) {
+        if (materialiseError) return Promise.reject(materialiseError);
+        return Promise.resolve(materialiseResult || {
+          itinerary: {
+            id: 12345,
+            tenantId: 1,
+            subBrand: 'tmc',
+            contactId: 5001,
+            status: 'draft',
+            destination: 'Suggested itinerary',
+            currency: 'INR',
+            items: [
+              { id: 91, itemType: 'activity', description: 'd1 a1', position: 0, dayNumber: 1 },
+              { id: 92, itemType: 'meal', description: 'd1 m1', position: 1, dayNumber: 1 },
+              { id: 93, itemType: 'activity', description: 'd2 a1', position: 2, dayNumber: 2 },
+            ],
+          },
+          itemsCreated: 3,
+          daysProcessed: 2,
+        });
+      }
+      if (url.startsWith('/api/travel/itineraries') && method === 'GET') {
+        return Promise.resolve({
+          itineraries: ITINS_DEFAULT, total: ITINS_DEFAULT.length, limit: 100, offset: 0,
+        });
+      }
+      if (url.startsWith('/api/contacts')) {
+        return Promise.resolve(CONTACTS_DEFAULT);
+      }
+      return Promise.resolve(null);
+    });
+  }
+
+  async function openPreviewPane() {
+    renderPage();
+    await screen.findByText('Andaman Islands');
+    fireEvent.click(
+      screen.getByRole('button', { name: /Suggest itinerary using AI/i }),
+    );
+    await screen.findByRole('heading', { name: /Suggest itinerary/i });
+    fireEvent.change(screen.getByLabelText(/Destination/i), {
+      target: { value: 'Goa' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /^Suggest$/ }));
+    await screen.findByTestId('suggest-preview-pane');
+  }
+
+  it('happy path: pick contact + click materialise → POSTs correct body + notify.success + navigate', async () => {
+    installMaterialiseMock();
+    await openPreviewPane();
+    // Pick a contact.
+    fireEvent.change(
+      screen.getByLabelText(/Contact for materialised itinerary/i),
+      { target: { value: '5001' } },
+    );
+    const createBtn = screen.getByRole('button', {
+      name: /Create itinerary from this suggestion/i,
+    });
+    expect(createBtn).not.toBeDisabled();
+    fireEvent.click(createBtn);
+    // notify.success fires with "Itinerary created with 3 items".
+    await waitFor(() => {
+      expect(notifySuccess).toHaveBeenCalledWith(
+        expect.stringMatching(/Itinerary created with 3 items/i),
+      );
+    });
+    // POST body shape contract pin.
+    const materialiseCall = fetchApiMock.mock.calls.find(
+      ([url, opts]) =>
+        url === '/api/travel/itineraries/from-suggestion'
+        && opts?.method === 'POST',
+    );
+    expect(materialiseCall).toBeTruthy();
+    const body = JSON.parse(materialiseCall[1].body);
+    expect(body.contactId).toBe(5001);
+    expect(body.subBrand).toBeTruthy();
+    expect(body.suggestionJson).toBeTruthy();
+    expect(Array.isArray(body.suggestionJson.daySplit)).toBe(true);
+    // Navigation to the new itinerary's detail page.
+    await waitFor(() => {
+      expect(navigateMock).toHaveBeenCalledWith('/travel/itineraries/12345');
+    });
+  });
+
+  it('error path: backend 500 surfaces notify.error + no navigate', async () => {
+    const err = new Error('Materialise failed');
+    err.body = {
+      error: 'Failed to materialise itinerary from suggestion',
+      code: 'ITINERARY_MATERIALISE_FAILED',
+    };
+    installMaterialiseMock({ materialiseError: err });
+    await openPreviewPane();
+    fireEvent.change(
+      screen.getByLabelText(/Contact for materialised itinerary/i),
+      { target: { value: '5001' } },
+    );
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: /Create itinerary from this suggestion/i,
+      }),
+    );
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalledWith(
+        expect.stringMatching(/Failed to materialise itinerary from suggestion/i),
+      );
+    });
+    expect(navigateMock).not.toHaveBeenCalled();
+    expect(notifySuccess).not.toHaveBeenCalled();
+  });
+
+  it('backend 403 SUB_BRAND_DENIED → notify.error with backend message + no navigate', async () => {
+    const err = new Error('SUB_BRAND_DENIED');
+    err.body = {
+      error: 'Sub-brand access denied',
+      code: 'SUB_BRAND_DENIED',
+    };
+    installMaterialiseMock({ materialiseError: err });
+    await openPreviewPane();
+    fireEvent.change(
+      screen.getByLabelText(/Contact for materialised itinerary/i),
+      { target: { value: '5001' } },
+    );
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: /Create itinerary from this suggestion/i,
+      }),
+    );
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalledWith(
+        expect.stringMatching(/Sub-brand access denied/i),
+      );
+    });
+    expect(navigateMock).not.toHaveBeenCalled();
+  });
+
+  it('loading state: button shows "Creating itinerary…" + stays disabled during the in-flight POST', async () => {
+    let resolveMaterialise;
+    const pending = new Promise((resolve) => {
+      resolveMaterialise = resolve;
+    });
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = opts?.method || 'GET';
+      if (url === '/api/travel/itineraries/suggest' && method === 'POST') {
+        return Promise.resolve(STUB_SUGGESTION);
+      }
+      if (url === '/api/travel/itineraries/from-suggestion' && method === 'POST') {
+        return pending;
+      }
+      if (url.startsWith('/api/travel/itineraries') && method === 'GET') {
+        return Promise.resolve({
+          itineraries: ITINS_DEFAULT, total: ITINS_DEFAULT.length, limit: 100, offset: 0,
+        });
+      }
+      if (url.startsWith('/api/contacts')) {
+        return Promise.resolve(CONTACTS_DEFAULT);
+      }
+      return Promise.resolve(null);
+    });
+    await openPreviewPane();
+    fireEvent.change(
+      screen.getByLabelText(/Contact for materialised itinerary/i),
+      { target: { value: '5001' } },
+    );
+    const triggerBtn = screen.getByRole('button', {
+      name: /Create itinerary from this suggestion/i,
+    });
+    fireEvent.click(triggerBtn);
+    // Loading text + disabled state. The button's aria-label stays
+    // constant ("Create itinerary from this suggestion") for screen-
+    // reader stability; the inner TEXT swaps to "Creating itinerary…"
+    // during the in-flight POST.
+    await waitFor(() => {
+      expect(triggerBtn).toBeDisabled();
+      expect(triggerBtn.textContent).toMatch(/Creating itinerary/i);
+    });
+    // Resolve so vitest can complete cleanly.
+    resolveMaterialise({
+      itinerary: { id: 999, items: [] },
+      itemsCreated: 0,
+      daysProcessed: 1,
+    });
+    await waitFor(() => {
+      expect(notifySuccess).toHaveBeenCalled();
+    });
+  });
+
+  it('no contact picked → notify.error + no POST + button stays disabled', async () => {
+    installMaterialiseMock();
+    await openPreviewPane();
+    // Don't pick a contact.
+    const createBtn = screen.getByRole('button', {
+      name: /Create itinerary from this suggestion/i,
+    });
+    expect(createBtn).toBeDisabled();
+    // No materialise POST happened.
+    const materialiseCalls = fetchApiMock.mock.calls.filter(
+      ([url]) => url === '/api/travel/itineraries/from-suggestion',
+    );
+    expect(materialiseCalls).toHaveLength(0);
+  });
+
+  it('discard alongside materialise picker: discarding before pick → preview pane gone, no POST, modal still open', async () => {
+    installMaterialiseMock();
+    await openPreviewPane();
+    expect(screen.getByTestId('materialise-picker')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Discard suggestion/i }));
+    await waitFor(() => {
+      expect(screen.queryByTestId('suggest-preview-pane')).toBeNull();
+    });
+    // Modal still open (heading still present).
+    expect(
+      screen.getByRole('heading', { name: /Suggest itinerary/i }),
+    ).toBeInTheDocument();
+    // No materialise POST happened.
+    const materialiseCalls = fetchApiMock.mock.calls.filter(
+      ([url]) => url === '/api/travel/itineraries/from-suggestion',
+    );
+    expect(materialiseCalls).toHaveLength(0);
+  });
+
+  it('uses itinerary.items.length as fallback when backend omits itemsCreated', async () => {
+    installMaterialiseMock({
+      materialiseResult: {
+        itinerary: {
+          id: 7777,
+          items: [
+            { id: 1, itemType: 'activity', description: 'x', position: 0 },
+            { id: 2, itemType: 'meal', description: 'y', position: 1 },
+          ],
+        },
+        // itemsCreated intentionally omitted to exercise the fallback.
+      },
+    });
+    await openPreviewPane();
+    fireEvent.change(
+      screen.getByLabelText(/Contact for materialised itinerary/i),
+      { target: { value: '5001' } },
+    );
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: /Create itinerary from this suggestion/i,
+      }),
+    );
+    await waitFor(() => {
+      expect(notifySuccess).toHaveBeenCalledWith(
+        expect.stringMatching(/Itinerary created with 2 items/i),
+      );
+    });
+  });
+
+  it('discard button closes the preview pane (back to bare modal form)', async () => {
+    renderPage();
+    await screen.findByText('Andaman Islands');
+    fireEvent.click(
+      screen.getByRole('button', { name: /Suggest itinerary using AI/i }),
+    );
+    await screen.findByRole('heading', { name: /Suggest itinerary/i });
+    fireEvent.change(screen.getByLabelText(/Destination/i), {
+      target: { value: 'Goa' },
+    });
+    installSuggestMock();
+    fireEvent.click(screen.getByRole('button', { name: /^Suggest$/ }));
+    await screen.findByTestId('suggest-preview-pane');
+    fireEvent.click(screen.getByRole('button', { name: /Discard suggestion/i }));
+    await waitFor(() => {
+      expect(screen.queryByTestId('suggest-preview-pane')).toBeNull();
+    });
+    // Modal stays open.
+    expect(
+      screen.getByRole('heading', { name: /Suggest itinerary/i }),
+    ).toBeInTheDocument();
+  });
+
+  it('error path: backend 500 ITINERARY_SUGGEST_FAILED surfaces notify.error', async () => {
+    renderPage();
+    await screen.findByText('Andaman Islands');
+    fireEvent.click(
+      screen.getByRole('button', { name: /Suggest itinerary using AI/i }),
+    );
+    await screen.findByRole('heading', { name: /Suggest itinerary/i });
+    fireEvent.change(screen.getByLabelText(/Destination/i), {
+      target: { value: 'Goa' },
+    });
+    const err = new Error('Suggest failed');
+    err.body = { error: 'ITINERARY_SUGGEST_FAILED', code: 'ITINERARY_SUGGEST_BUDGET_EXCEEDED' };
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = opts?.method || 'GET';
+      if (url === '/api/travel/itineraries/suggest' && method === 'POST') {
+        return Promise.reject(err);
+      }
+      if (url.startsWith('/api/travel/itineraries')) {
+        return Promise.resolve({
+          itineraries: ITINS_DEFAULT, total: ITINS_DEFAULT.length, limit: 100, offset: 0,
+        });
+      }
+      return Promise.resolve(null);
+    });
+    fireEvent.click(screen.getByRole('button', { name: /^Suggest$/ }));
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalledWith('ITINERARY_SUGGEST_FAILED');
+    });
+    // Preview pane should NOT appear on error.
+    expect(screen.queryByTestId('suggest-preview-pane')).toBeNull();
+  });
+
+  it('fallback rendering: unfamiliar suggestionJson shape falls back to JSON.stringify pre block', async () => {
+    renderPage();
+    await screen.findByText('Andaman Islands');
+    fireEvent.click(
+      screen.getByRole('button', { name: /Suggest itinerary using AI/i }),
+    );
+    await screen.findByRole('heading', { name: /Suggest itinerary/i });
+    fireEvent.change(screen.getByLabelText(/Destination/i), {
+      target: { value: 'Goa' },
+    });
+    // Custom shape: no daySplit → fall through to JSON.stringify branch.
+    installSuggestMock({
+      suggestResult: {
+        suggestionJson: { weirdField: 'unknown shape', otherKey: 42 },
+        source: 'stub', model: 'gemini-2.5-flash', stub: true,
+      },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /^Suggest$/ }));
+    await screen.findByTestId('suggest-preview-pane');
+    // Raw JSON rendered somewhere in the pane.
+    const pane = screen.getByTestId('suggest-preview-pane');
+    expect(within(pane).getByText(/weirdField/)).toBeInTheDocument();
+    expect(within(pane).getByText(/unknown shape/)).toBeInTheDocument();
+  });
+});

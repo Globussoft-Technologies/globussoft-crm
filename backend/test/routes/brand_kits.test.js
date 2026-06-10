@@ -400,3 +400,159 @@ describe('GET /api/brand-kits/:id', () => {
     );
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────
+// GET /?fields=summary — slim-shape opt-in (#920 slice 37)
+// ─────────────────────────────────────────────────────────────────────────
+//
+// Mirrors the slim-shape contract pinned in slices 1-36. The default (no
+// ?fields) path continues to return the full row including every visual
+// asset column (logoUrl + logoDarkUrl + faviconUrl + the five color
+// columns + fontFamily + fontUrl + tagline). The ?fields=summary path
+// forwards a slim Prisma `select` keeping only the chrome columns —
+// id + subBrand + version + isActive + updatedAt — so list/picker UI can
+// fetch a narrow payload without dragging the heavy asset blobs across
+// the wire (or off the DB row). Anything other than the exact string
+// "summary" is treated as default (no `select` key forwarded).
+describe('GET /api/brand-kits?fields=summary — slim-shape opt-in', () => {
+  test('omitted ?fields returns full row with every visual asset (no select forwarded)', async () => {
+    prisma.brandKit.findMany.mockResolvedValue([
+      {
+        id: 1,
+        tenantId: 1,
+        subBrand: 'tmc',
+        version: 3,
+        isActive: true,
+        logoUrl: 'https://cdn.example/logo.png',
+        logoDarkUrl: 'https://cdn.example/logo-dark.png',
+        faviconUrl: 'https://cdn.example/favicon.ico',
+        primaryColor: '#265855',
+        secondaryColor: '#CD9481',
+        accentColor: '#F0E6D2',
+        bgColor: '#FFFFFF',
+        textColor: '#1A1A1A',
+        fontFamily: 'Inter, sans-serif',
+        fontUrl: 'https://fonts.googleapis.com/css2?family=Inter',
+        tagline: 'Travel beyond ordinary',
+        createdBy: 7,
+        createdAt: new Date('2026-01-01T00:00:00Z'),
+        updatedAt: new Date('2026-01-15T00:00:00Z'),
+      },
+    ]);
+    prisma.brandKit.count.mockResolvedValue(1);
+
+    const res = await request(makeApp())
+      .get('/api/brand-kits')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.brandKits[0].logoUrl).toBe('https://cdn.example/logo.png');
+    expect(res.body.brandKits[0].primaryColor).toBe('#265855');
+    expect(res.body.brandKits[0].fontFamily).toBe('Inter, sans-serif');
+    expect(res.body.brandKits[0].tagline).toBe('Travel beyond ordinary');
+    // No `select` key forwarded — full-row default path.
+    const arg = prisma.brandKit.findMany.mock.calls[0][0];
+    expect(arg.select).toBeUndefined();
+    expect(arg.where).toEqual({ tenantId: 1 });
+    expect(arg.orderBy).toEqual([{ subBrand: 'asc' }, { version: 'desc' }]);
+  });
+
+  test('?fields=summary forwards select with id+subBrand+version+isActive+updatedAt only', async () => {
+    prisma.brandKit.findMany.mockResolvedValue([
+      { id: 1, subBrand: 'tmc', version: 3, isActive: true, updatedAt: new Date('2026-01-15T00:00:00Z') },
+      { id: 2, subBrand: 'rfu', version: 1, isActive: false, updatedAt: new Date('2026-01-10T00:00:00Z') },
+    ]);
+    prisma.brandKit.count.mockResolvedValue(2);
+
+    const res = await request(makeApp())
+      .get('/api/brand-kits?fields=summary')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.brandKits).toHaveLength(2);
+    expect(res.body.total).toBe(2);
+    const arg = prisma.brandKit.findMany.mock.calls[0][0];
+    expect(arg.select).toEqual({
+      id: true,
+      subBrand: true,
+      version: true,
+      isActive: true,
+      updatedAt: true,
+    });
+    // Heavy visual-asset columns MUST NOT be present in select.
+    expect(arg.select.logoUrl).toBeUndefined();
+    expect(arg.select.logoDarkUrl).toBeUndefined();
+    expect(arg.select.faviconUrl).toBeUndefined();
+    expect(arg.select.primaryColor).toBeUndefined();
+    expect(arg.select.secondaryColor).toBeUndefined();
+    expect(arg.select.accentColor).toBeUndefined();
+    expect(arg.select.bgColor).toBeUndefined();
+    expect(arg.select.textColor).toBeUndefined();
+    expect(arg.select.fontFamily).toBeUndefined();
+    expect(arg.select.fontUrl).toBeUndefined();
+    expect(arg.select.tagline).toBeUndefined();
+    expect(arg.select.tenantId).toBeUndefined();
+    expect(arg.select.createdAt).toBeUndefined();
+    expect(arg.select.createdBy).toBeUndefined();
+    // where + orderBy unchanged from default path.
+    expect(arg.where).toEqual({ tenantId: 1 });
+    expect(arg.orderBy).toEqual([{ subBrand: 'asc' }, { version: 'desc' }]);
+  });
+
+  test('?fields=summary composes with ?subBrand + ?isActive filters — slim + narrow', async () => {
+    prisma.brandKit.findMany.mockResolvedValue([
+      { id: 1, subBrand: 'tmc', version: 3, isActive: true, updatedAt: new Date('2026-01-15T00:00:00Z') },
+    ]);
+    prisma.brandKit.count.mockResolvedValue(1);
+
+    const res = await request(makeApp())
+      .get('/api/brand-kits?fields=summary&subBrand=tmc&isActive=true')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    const arg = prisma.brandKit.findMany.mock.calls[0][0];
+    expect(arg.where).toEqual({ tenantId: 1, subBrand: 'tmc', isActive: true });
+    expect(arg.select).toEqual({
+      id: true,
+      subBrand: true,
+      version: true,
+      isActive: true,
+      updatedAt: true,
+    });
+    // The count() call uses the same where but NEVER a select — counts are
+    // intrinsically slim.
+    const countArg = prisma.brandKit.count.mock.calls[0][0];
+    expect(countArg.select).toBeUndefined();
+    expect(countArg.where).toEqual({ tenantId: 1, subBrand: 'tmc', isActive: true });
+  });
+
+  test('?fields=full (anything not exactly "summary") falls back to default full-row shape', async () => {
+    prisma.brandKit.findMany.mockResolvedValue([]);
+    prisma.brandKit.count.mockResolvedValue(0);
+
+    const res = await request(makeApp())
+      .get('/api/brand-kits?fields=full')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    const arg = prisma.brandKit.findMany.mock.calls[0][0];
+    // Exact-string gate: only "summary" trips the slim branch.
+    expect(arg.select).toBeUndefined();
+  });
+
+  test('?fields=SUMMARY (uppercase) is treated as default — case-sensitive gate', async () => {
+    prisma.brandKit.findMany.mockResolvedValue([]);
+    prisma.brandKit.count.mockResolvedValue(0);
+
+    const res = await request(makeApp())
+      .get('/api/brand-kits?fields=SUMMARY')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    const arg = prisma.brandKit.findMany.mock.calls[0][0];
+    // The gate is `req.query.fields === "summary"` (case-sensitive). Pin
+    // the contract so a future refactor to .toLowerCase() shows up as a
+    // deliberate spec edit, not a silent behaviour change.
+    expect(arg.select).toBeUndefined();
+  });
+});

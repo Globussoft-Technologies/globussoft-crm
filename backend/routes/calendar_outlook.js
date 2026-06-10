@@ -6,14 +6,15 @@ const router = express.Router();
 const { verifyToken } = require("../middleware/auth");
 
 const prisma = require("../lib/prisma");
+const { parseSlotWindow, freeSlots } = require("../lib/calendarSlots");
 
 const MS_CLIENT_ID = process.env.MS_CLIENT_ID;
 const MS_CLIENT_SECRET = process.env.MS_CLIENT_SECRET;
 const MS_REDIRECT_URI = process.env.MS_REDIRECT_URI;
 const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5173";
 
-const TOKEN_URL = "https://login.microsoftonline.com/common/oauth2/v2.0/token";
-const AUTH_URL = "https://login.microsoftonline.com/common/oauth2/v2.0/authorize";
+const TOKEN_URL = `https://login.microsoftonline.com/common/oauth2/v2.0/token`;
+const AUTH_URL = `https://login.microsoftonline.com/common/oauth2/v2.0/authorize`;
 const GRAPH_BASE = "https://graph.microsoft.com/v1.0";
 const SCOPES = "offline_access Calendars.ReadWrite User.Read";
 
@@ -289,10 +290,20 @@ router.get("/events", verifyToken, async (req, res) => {
 // POST /events — create new event in Outlook + DB
 router.post("/events", verifyToken, async (req, res) => {
   try {
-    const { title, description, startTime, endTime, attendees, contactId, dealId } = req.body;
+    const { title, description, startTime, endTime, attendees, contactId, dealId, createMeet, conferencing } = req.body;
     if (!title || !startTime || !endTime) {
       return res.status(400).json({ error: "title, startTime, endTime required" });
     }
+
+    // Opt-in online meeting. The Outlook equivalent of a Google Meet link is a
+    // Teams meeting; same flag (createMeet / conferencing) the Google route uses.
+    const wantsMeet =
+      createMeet === true ||
+      createMeet === "true" ||
+      conferencing === "teams" ||
+      conferencing === "google_meet" ||
+      conferencing === "meet" ||
+      conferencing === "online";
 
     // Validate and parse dates
     const start = new Date(startTime);
@@ -355,7 +366,14 @@ router.post("/events", verifyToken, async (req, res) => {
         };
       }),
     };
+    if (wantsMeet) {
+      // Graph mints a Teams join URL and returns it on created.onlineMeeting.
+      graphBody.isOnlineMeeting = true;
+      graphBody.onlineMeetingProvider = "teamsForBusiness";
+    }
 
+    // Graph emails the invitation to attendees automatically on create; no
+    // sendUpdates flag is required (unlike Google Calendar).
     const resp = await fetch(`${GRAPH_BASE}/me/calendar/events`, {
       method: "POST",
       headers: {
@@ -408,6 +426,84 @@ router.post("/events", verifyToken, async (req, res) => {
   } catch (err) {
     console.error("[outlook/events POST] error:", err);
     return res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /slots — free/busy availability for the slot-picker, via Graph
+// getSchedule. Mirrors the Google /slots contract so the same UI works for
+// both providers.
+router.get("/slots", verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    if (!userId) {
+      return res.status(401).json({ error: "User ID not found in token" });
+    }
+
+    const win = parseSlotWindow(req.query);
+    if (win.error) return res.status(400).json({ error: win.error });
+
+    let integration = await prisma.calendarIntegration.findUnique({
+      where: { userId_provider: { userId, provider: "microsoft" } },
+    });
+    if (!integration) {
+      return res.status(404).json({ error: "Outlook calendar not connected" });
+    }
+    integration = await refreshTokenIfNeeded(integration);
+
+    // getSchedule needs the mailbox address; resolve it from /me.
+    const meResp = await fetch(`${GRAPH_BASE}/me`, {
+      headers: { Authorization: `Bearer ${integration.accessToken}` },
+    });
+    const me = meResp.ok ? await meResp.json() : {};
+    const mailbox = me.mail || me.userPrincipalName;
+    if (!mailbox) {
+      return res.status(502).json({ error: "Could not resolve mailbox address" });
+    }
+
+    const schedResp = await fetch(`${GRAPH_BASE}/me/calendar/getSchedule`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${integration.accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        schedules: [mailbox],
+        startTime: { dateTime: new Date(win.windowStartMs).toISOString(), timeZone: "UTC" },
+        endTime: { dateTime: new Date(win.windowEndMs).toISOString(), timeZone: "UTC" },
+        availabilityViewInterval: win.stepMins,
+      }),
+    });
+    if (!schedResp.ok) {
+      const errText = await schedResp.text();
+      return res.status(502).json({ error: `getSchedule failed: ${errText}` });
+    }
+    const sched = await schedResp.json();
+    const items = (sched.value && sched.value[0] && sched.value[0].scheduleItems) || [];
+    const busy = items.map((it) => ({
+      // Graph returns naive datetimes in the requested timeZone (UTC here).
+      start: new Date(`${it.start.dateTime}Z`).getTime(),
+      end: new Date(`${it.end.dateTime}Z`).getTime(),
+    }));
+
+    const slots = freeSlots(
+      win.windowStartMs,
+      win.windowEndMs,
+      busy,
+      win.durationMins,
+      win.stepMins,
+      Date.now(),
+    );
+
+    return res.json({
+      date: win.dateStr,
+      durationMins: win.durationMins,
+      timeMin: new Date(win.windowStartMs).toISOString(),
+      timeMax: new Date(win.windowEndMs).toISOString(),
+      slots,
+    });
+  } catch (err) {
+    console.error("[outlook/slots] error:", err);
+    return res.status(500).json({ error: err.message || "Failed to load slots" });
   }
 });
 

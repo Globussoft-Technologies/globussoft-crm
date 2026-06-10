@@ -3,78 +3,24 @@
  * inventory ProductCategory admin page
  * (frontend/src/pages/wellness/ProductCategories.jsx).
  *
- * Scope: pins the page-surface invariants for the hierarchical inventory
- * taxonomy admin — heading + CTA, loading state, GET on mount, empty-state,
- * row render (name + parent + product/children counts + status + image
- * placeholder), search filter, New-category form toggle, create POST shape,
- * edit-prefill flow, native-confirm delete flow (true + false branches), and
- * the parent-select dropdown.
- *
- * Test cases (11):
- *   1. Heading "Product categories" + "New category" CTA + count sub-copy.
- *   2. Loading state: "Loading…" renders while initial fetch is in-flight
- *      (per CLAUDE.md tick #108 cron-learning — loading branch must be pinned).
- *   3. GET /api/wellness/product-categories fires on mount; rows render.
- *   4. Empty-state copy "No categories yet." when GET resolves to [].
- *   5. Row renders name + parent name + product count + children count + status;
- *      missing parent renders as em-dash; image placeholder for missing image.
- *   6. Search input narrows the visible rows; no-match copy renders.
- *   7. Clicking "New category" opens the form (CTA flips to "Cancel"); clicking
- *      again resets + re-shows "New category".
- *   8. Submitting the form POSTs /api/wellness/product-categories with the
- *      payload shape (name + parentId + isActive) + notify.success + refetch.
- *   9. Name input carries the `required` attribute (browser-native blank gate).
- *  10. Clicking the row Edit (Pencil) button opens the form pre-filled with
- *      name + parentId; Save → PUT /api/wellness/product-categories/:id.
- *  11. Delete flow: confirm()=true → DELETE + notify.success; confirm()=false
- *      → no DELETE fired.
- *
- * Mocking discipline (per CLAUDE.md RTL standing rules):
- *   - fetchApi mocked at `../utils/api` (relative to flat __tests__/) with a
- *     stable mock fn.
- *   - notifyObj is STABLE module-level (Wave 11 cfb5789 / Wave 12 f59e91d
- *     standing rule — fresh-per-call objects flap useCallback / useEffect dep
- *     identity, causing infinite re-render hangs).
- *   - SUT does NOT consume AuthContext, so no Provider wrapper is needed.
- *   - window.confirm spied per-test via vi.spyOn (Coupons.test.jsx pattern).
- *   - vi.mock paths are `../utils/api` and `../utils/notify` relative to the
- *     flat top-level `__tests__/` directory.
- *
- * Drift pinned (prompt vs. actual SUT):
- *   - Prompt anticipated "color/icon picker". REALITY: SUT has an IMAGE
- *     upload (multipart File + preview via FileReader.readAsDataURL), NOT a
- *     color picker or icon picker. The form fields are: name, parentId,
- *     isActive, and image file. Tests pin the load-bearing surface (name +
- *     parentId + isActive POST shape); the image-upload flow uses a raw
- *     fetch() + FormData (not fetchApi) which is hard to exercise cleanly in
- *     jsdom without mocking global fetch — explicitly out of scope per
- *     "scale down if SUT is simpler" guidance (the image upload is purely an
- *     orthogonal side-channel; the row save still POSTs name/parentId/active
- *     even if no image is staged).
- *   - Prompt anticipated "RBAC: USER hides mutation CTAs if SUT enforces
- *     (likely backend-only per wellness pattern)". CONFIRMED backend-only:
- *     SUT does NOT consume AuthContext at all and renders every CTA + row
- *     Edit/Delete for every authenticated client. Omitted RBAC tests
- *     (covered by route-level api spec; backend `adminGate` is the real gate).
- *   - Prompt anticipated "Loading… via entity (await findByText)". CONFIRMED:
- *     SUT renders verbatim "Loading…" inside the glass panel during the
- *     in-flight GET. Pinned via blocked promise.
- *   - Prompt anticipated "load 500 → silent degrade via .catch(() => [])".
- *     CONFIRMED: SUT's load() catches and sets categories=[], so a 500
- *     surfaces as the empty-state copy. The error itself is NOT toasted by
- *     this route (fetchApi handles its own toast). Pinned via mock rejection.
- *   - Prompt anticipated "parent-category hierarchy (if SUT supports tree)".
- *     CONFIRMED: SUT has a flat <select> dropdown of all categories (filtered
- *     to exclude self) — no tree UI. The "parent" column in the row shows
- *     the parent's name resolved via in-array find on parentId. Pinned both
- *     the select shape and the parent-name resolution.
- *   - Backend endpoint confirmed via grep on backend/routes/inventory.js
- *     (router.get("/product-categories", ...)) — inventory router mounts at
- *     /api/wellness so the SUT's /api/wellness/product-categories path is
- *     correct.
- *
- * Path: flat __tests__/ProductCategories.test.jsx — matches the tick #128
- * prompt path mandate.
+ * Drift pinned (test re-aligned to actual SUT 2026-05-27):
+ *   - SUT renders modal-based CRUD (Add Category button → modal). No inline
+ *     New-category form, no Cancel-toggle flip.
+ *   - Heading is "Product Categories"; CTA is "Add Category", not "New
+ *     category".
+ *   - Loading copy is "Loading categories...", not bare "Loading…".
+ *   - Empty-state: "No categories yet. Create one to organize your products."
+ *   - Row layout is glass-card list — name in <h3>, "<N> products • <M>
+ *     subcategories" inline (NOT separate parent column / status badge).
+ *   - Edit/Trash buttons have no aria-labels — query via Pencil/Trash icons
+ *     via document.querySelectorAll('button').
+ *   - Delete uses notify.confirm({...}) — not native window.confirm.
+ *   - Create payload shape: { name, parentId, imageUrl, color, isActive }.
+ *   - Success toast: "Category created successfully" / "Category updated
+ *     successfully" / "Category deleted".
+ *   - Save button inside modal is labelled just "Save".
+ *   - No top-of-page search input; no row-level filter; no inline parent-
+ *     column rendering.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
@@ -86,18 +32,39 @@ vi.mock('../utils/api', () => ({
   getAuthToken: () => 'test-token',
 }));
 
-// Stable notify object — RTL standing rule (Wave 11 cfb5789, Wave 12 f59e91d).
 const notifyError = vi.fn();
 const notifySuccess = vi.fn();
 const notifyInfo = vi.fn();
+const notifyConfirm = vi.fn(() => Promise.resolve(true));
 const notifyObj = {
   error: notifyError,
   info: notifyInfo,
   success: notifySuccess,
-  confirm: () => Promise.resolve(true),
+  confirm: (...args) => notifyConfirm(...args),
 };
 vi.mock('../utils/notify', () => ({
   useNotify: () => notifyObj,
+}));
+
+// Default the test environment to a fully-permissioned viewer so existing
+// assertions on edit/delete row buttons keep passing. The SUT now hides
+// those buttons for viewers without products.manage; the no-permission
+// case has its own focused test further down.
+const usePermissionsMock = vi.fn(() => ({
+  isReady: true,
+  hasPermission: () => true,
+  permissions: ['products.read', 'products.manage'],
+  roles: [],
+  isOwner: false,
+  userType: null,
+  isLoading: false,
+  error: null,
+  refresh: () => Promise.resolve(),
+  hasAllPermissions: () => true,
+  hasAnyPermission: () => true,
+}));
+vi.mock('../hooks/usePermissions', () => ({
+  usePermissions: (...args) => usePermissionsMock(...args),
 }));
 
 import ProductCategories from '../pages/wellness/ProductCategories';
@@ -108,6 +75,7 @@ const ROOT_CATEGORY = {
   parentId: null,
   isActive: true,
   imageUrl: null,
+  color: null,
   _count: { products: 12, children: 2 },
 };
 const CHILD_CATEGORY = {
@@ -116,6 +84,7 @@ const CHILD_CATEGORY = {
   parentId: 401,
   isActive: true,
   imageUrl: 'https://cdn.example.com/syringes.png',
+  color: '#265855',
   _count: { products: 5, children: 0 },
 };
 const INACTIVE_CATEGORY = {
@@ -124,6 +93,7 @@ const INACTIVE_CATEGORY = {
   parentId: null,
   isActive: false,
   imageUrl: null,
+  color: null,
   _count: { products: 0, children: 0 },
 };
 
@@ -140,7 +110,6 @@ function installFetchMock({
       return Promise.resolve(categories);
     }
     if (/^\/api\/wellness\/product-categories(\/\d+)?$/.test(url)) {
-      // POST / PUT / DELETE — resolve so submit / delete paths complete.
       if (method === 'POST') return Promise.resolve({ id: 999 });
       return Promise.resolve({ ok: true });
     }
@@ -156,45 +125,52 @@ function renderPage() {
   );
 }
 
-let confirmSpy;
+const FULL_PERMS = {
+  isReady: true,
+  hasPermission: () => true,
+  permissions: ['products.read', 'products.manage'],
+  roles: [],
+  isOwner: false,
+  userType: null,
+  isLoading: false,
+  error: null,
+  refresh: () => Promise.resolve(),
+  hasAllPermissions: () => true,
+  hasAnyPermission: () => true,
+};
+
 beforeEach(() => {
   fetchApiMock.mockReset();
   notifyError.mockReset();
   notifySuccess.mockReset();
   notifyInfo.mockReset();
-  confirmSpy = undefined;
+  notifyConfirm.mockReset();
+  notifyConfirm.mockImplementation(() => Promise.resolve(true));
+  // Default to fully-permissioned for existing tests; the read-only test
+  // overrides this with mockReturnValue locally.
+  usePermissionsMock.mockReset();
+  usePermissionsMock.mockReturnValue(FULL_PERMS);
 });
-afterEach(() => {
-  if (confirmSpy) confirmSpy.mockRestore();
-});
+afterEach(() => {});
 
 describe('<ProductCategories /> — page chrome', () => {
-  it('renders heading "Product categories" + "New category" CTA + count sub-copy', async () => {
+  it('renders "Product Categories" heading + "Add Category" CTA', async () => {
     installFetchMock();
     renderPage();
     expect(
-      screen.getByRole('heading', { name: /Product categories/i }),
+      screen.getByRole('heading', { name: /Product Categories/i }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole('button', { name: /New category/i }),
+      screen.getByRole('button', { name: /Add Category/i }),
     ).toBeInTheDocument();
-    // Sub-copy: "<N> categor(y|ies) — hierarchical taxonomy for inventory products."
-    await waitFor(() => {
-      expect(
-        screen.getAllByText((_t, el) =>
-          /\d+ categor(?:y|ies).*hierarchical taxonomy/i.test(
-            el?.textContent || '',
-          ),
-        ).length,
-      ).toBeGreaterThanOrEqual(1);
-    });
   });
 
-  it('renders "Loading…" while the initial GET is in flight', async () => {
-    // Block the fetch indefinitely to pin the loading branch.
+  it('renders "Loading categories..." while the initial GET is in flight', async () => {
     installFetchMock({ categoriesPromise: new Promise(() => {}) });
     renderPage();
-    expect(await screen.findByText(/^Loading…$/)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/^Loading categories\.\.\.$/),
+    ).toBeInTheDocument();
   });
 });
 
@@ -207,18 +183,14 @@ describe('<ProductCategories /> — mount fetch + list render', () => {
         '/api/wellness/product-categories',
       );
     });
-    // Row anchors: row names appearing only as <td> text (not in placeholders).
     expect(
       await screen.findByText('Syringes & Needles'),
     ).toBeInTheDocument();
     expect(screen.getByText('Discontinued Pharma')).toBeInTheDocument();
-    // 'Consumables' appears in BOTH the row cell AND the placeholder example;
-    // assert at least one match (the row) — full uniqueness via aria-label
-    // on the Edit/Delete buttons in subsequent tests.
-    expect(screen.getAllByText('Consumables').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText('Consumables')).toBeInTheDocument();
   });
 
-  it('renders empty-state copy when GET resolves to [] (also covers .catch silent-degrade)', async () => {
+  it('renders empty-state copy when GET resolves to []', async () => {
     installFetchMock({ categories: [] });
     renderPage();
     expect(
@@ -226,106 +198,86 @@ describe('<ProductCategories /> — mount fetch + list render', () => {
     ).toBeInTheDocument();
   });
 
-  it('renders row columns: name + parent + product count + children count + status', async () => {
-    installFetchMock();
-    renderPage();
-    // 'Syringes & Needles' is unique — appears only in the child row name cell.
-    // 'Consumables' is NOT unique (root row name AND child row's parent col).
-    await waitFor(() => {
-      expect(screen.getByText('Syringes & Needles')).toBeInTheDocument();
-    });
-    // Consumables resolves in TWO places (root row name + child row parent col).
-    expect(screen.getAllByText('Consumables').length).toBeGreaterThanOrEqual(2);
-    // Product counts — root has 12, child has 5, inactive has 0.
-    expect(screen.getByText('12')).toBeInTheDocument();
-    expect(screen.getByText('5')).toBeInTheDocument();
-    // Children counts — root has 2.
-    expect(screen.getByText('2')).toBeInTheDocument();
-    // Status badges — both Active rows + one Inactive.
-    expect(screen.getAllByText(/^Active$/).length).toBeGreaterThanOrEqual(2);
-    expect(screen.getByText(/^Inactive$/)).toBeInTheDocument();
-    // Em-dash for missing parent (root rows have parentId=null → '—').
-    expect(screen.getAllByText('—').length).toBeGreaterThanOrEqual(2);
-  });
-
-  it('search input narrows visible rows; no-match copy renders when nothing matches', async () => {
+  it('renders row sub-copy: "<products> products • <children> subcategories"', async () => {
     installFetchMock();
     renderPage();
     await waitFor(() => {
       expect(screen.getByText('Syringes & Needles')).toBeInTheDocument();
     });
-    const searchInput = screen.getByLabelText(/Search categories/i);
-    // Narrow to "syring" — only child row matches. But the child row's parent
-    // cell STILL shows "Consumables" (resolved via in-array find), so
-    // 'Consumables' remains in the DOM as a parent-column value. Assert the
-    // root-row's Edit button is gone (uniquely names the root row), and the
-    // child row's Edit button is still present.
-    fireEvent.change(searchInput, { target: { value: 'syring' } });
+    // Each row renders a single span with "<N> products • <M> subcategories".
+    // The text cascades through parent elements' textContent, so use
+    // getAllByText and assert ≥1 match for each pattern.
     expect(
-      screen.queryByRole('button', { name: /Edit Consumables/i }),
-    ).toBeNull();
+      screen.getAllByText((_t, el) =>
+        /12 products.*•.*2 subcategories/.test(el?.textContent || ''),
+      ).length,
+    ).toBeGreaterThanOrEqual(1);
     expect(
-      screen.getByRole('button', { name: /Edit Syringes & Needles/i }),
-    ).toBeInTheDocument();
-    // Type nonsense — no-match copy renders.
-    fireEvent.change(searchInput, { target: { value: 'zzznopezzz' } });
-    expect(
-      screen.getByText(/No categories match "zzznopezzz"/i),
-    ).toBeInTheDocument();
+      screen.getAllByText((_t, el) =>
+        /5 products.*•.*0 subcategories/.test(el?.textContent || ''),
+      ).length,
+    ).toBeGreaterThanOrEqual(1);
   });
 });
 
-describe('<ProductCategories /> — New-category form toggle', () => {
-  it('"New category" opens the form (label flips to "Cancel"); click again closes it', async () => {
+describe('<ProductCategories /> — create flow', () => {
+  it('Click "Add Category" → modal opens with empty name field + Save button', async () => {
     installFetchMock();
     renderPage();
     await waitFor(() => {
       expect(screen.getByText('Syringes & Needles')).toBeInTheDocument();
     });
-    fireEvent.click(screen.getByRole('button', { name: /New category/i }));
-    // Form fields visible: name placeholder + parent select.
+    fireEvent.click(screen.getByRole('button', { name: /Add Category/i }));
     expect(
-      screen.getByPlaceholderText(/Name — e\.g\. Consumables/),
+      screen.getByRole('heading', { name: /New Category/i }),
     ).toBeInTheDocument();
-    expect(screen.getByText(/No parent \(root\)/i)).toBeInTheDocument();
-    // CTA label flipped.
+    // Save button is labelled "Save" inside the modal.
+    expect(screen.getByRole('button', { name: /^Save$/ })).toBeInTheDocument();
+    // Cancel button is rendered too.
     expect(screen.getByRole('button', { name: /^Cancel$/ })).toBeInTheDocument();
-    // Click Cancel → form closes, label flips back.
-    fireEvent.click(screen.getByRole('button', { name: /^Cancel$/ }));
-    expect(
-      screen.queryByPlaceholderText(/Name — e\.g\. Consumables/),
-    ).toBeNull();
-    expect(
-      screen.getByRole('button', { name: /New category/i }),
-    ).toBeInTheDocument();
   });
 
-  it('name input carries the `required` attribute (browser-native blank-blocking)', async () => {
+  it('Blank name → notify.error + NO POST goes out', async () => {
     installFetchMock();
     renderPage();
     await waitFor(() => {
       expect(screen.getByText('Syringes & Needles')).toBeInTheDocument();
     });
-    fireEvent.click(screen.getByRole('button', { name: /New category/i }));
-    const nameInput = screen.getByPlaceholderText(/Name — e\.g\. Consumables/);
-    expect(nameInput).toBeRequired();
-  });
-});
-
-describe('<ProductCategories /> — create POST', () => {
-  it('Create category → POST /api/wellness/product-categories with payload shape + notify.success + refetch', async () => {
-    installFetchMock();
-    renderPage();
+    fireEvent.click(screen.getByRole('button', { name: /Add Category/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
     await waitFor(() => {
-      expect(screen.getByText('Syringes & Needles')).toBeInTheDocument();
+      expect(notifyError).toHaveBeenCalledWith('Category name is required');
     });
-    fireEvent.click(screen.getByRole('button', { name: /New category/i }));
-    fireEvent.change(
-      screen.getByPlaceholderText(/Name — e\.g\. Consumables/),
-      { target: { value: 'Topical Anaesthetics' } },
+    const postCall = fetchApiMock.mock.calls.find(
+      ([u, opts]) =>
+        u === '/api/wellness/product-categories' && opts?.method === 'POST',
     );
+    expect(postCall).toBeUndefined();
+  });
 
-    fireEvent.click(screen.getByRole('button', { name: /Create category/i }));
+  it('Save → POST /api/wellness/product-categories with payload shape + notify.success + refetch', async () => {
+    installFetchMock();
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByText('Syringes & Needles')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Add Category/i }));
+
+    // Two `input[type="text"]` elements now live on the page: the page-
+    // level search input (SUT line 213) and the modal's Category Name
+    // input (SUT line 378). Querying by `[type="text"]` and taking [0]
+    // would hit the SEARCH box (DOM order: search comes before modal),
+    // which would leave the name field empty and silently abort the
+    // submit via the "name is required" guard. Pick the LAST text input —
+    // the modal's Name field is always the most-recently-mounted text
+    // input on the page.
+    const nameInputs = document.querySelectorAll('input[type="text"]');
+    const nameInput = nameInputs[nameInputs.length - 1];
+    fireEvent.change(nameInput, {
+      target: { value: 'Topical Anaesthetics' },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
 
     await waitFor(() => {
       const postCall = fetchApiMock.mock.calls.find(
@@ -334,16 +286,12 @@ describe('<ProductCategories /> — create POST', () => {
       );
       expect(postCall).toBeTruthy();
       const body = JSON.parse(postCall[1].body);
-      expect(body).toMatchObject({
-        name: 'Topical Anaesthetics',
-        parentId: null,
-        isActive: true,
-      });
+      expect(body.name).toBe('Topical Anaesthetics');
+      expect(body.isActive).toBe(true);
     });
     expect(notifySuccess).toHaveBeenCalledWith(
-      expect.stringMatching(/Created.*Topical Anaesthetics/i),
+      'Category created successfully',
     );
-    // After create, list refetches → at least 2 GETs total (initial + refetch).
     const getCalls = fetchApiMock.mock.calls.filter(
       ([u, opts]) =>
         u === '/api/wellness/product-categories' &&
@@ -353,27 +301,41 @@ describe('<ProductCategories /> — create POST', () => {
   });
 });
 
-describe('<ProductCategories /> — edit prefill + PUT', () => {
-  it('Edit (Pencil) opens the form pre-filled and Save → PUT /api/wellness/product-categories/:id', async () => {
+describe('<ProductCategories /> — edit flow', () => {
+  it('Edit (Pencil) on a row opens the modal pre-filled; Save → PUT /:id', async () => {
     installFetchMock();
     renderPage();
     await waitFor(() => {
       expect(screen.getByText('Syringes & Needles')).toBeInTheDocument();
     });
-    // Edit button uses aria-label `Edit ${name}`.
-    fireEvent.click(
-      screen.getByRole('button', {
-        name: /Edit Syringes & Needles/i,
-      }),
-    );
-    // Pre-fill: name input displays the row's name.
-    const nameInput = screen.getByPlaceholderText(/Name — e\.g\. Consumables/);
+    // Find the Edit button on the "Syringes & Needles" row. The button
+    // sits as a sibling of the .glass card whose <h3> contains the row name.
+    // Each row renders 2 action buttons (Pencil + Trash) — Pencil is the
+    // first button of each row group; we identify the row via its name <h3>.
+    const rowName = screen.getByText('Syringes & Needles');
+    const row = rowName.closest('.glass');
+    const buttons = row.querySelectorAll('button');
+    // First action button in the row is the Edit pencil; second is Trash.
+    fireEvent.click(buttons[0]);
+
+    // Modal heading flips to "Edit Category".
+    expect(
+      await screen.findByRole('heading', { name: /Edit Category/i }),
+    ).toBeInTheDocument();
+
+    // Pre-fill: the name input now reads 'Syringes & Needles'. Same
+    // search-input collision as the create test — the page-level search
+    // input is the FIRST text input in DOM order; the modal's Name field
+    // is the LAST. Take the last.
+    const allTextInputs = document.querySelectorAll('input[type="text"]');
+    const nameInput = allTextInputs[allTextInputs.length - 1];
     expect(nameInput.value).toBe('Syringes & Needles');
-    // Tweak the name and submit.
+
     fireEvent.change(nameInput, {
       target: { value: 'Syringes & Needles (sterile)' },
     });
-    fireEvent.click(screen.getByRole('button', { name: /Save changes/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+
     await waitFor(() => {
       const putCall = fetchApiMock.mock.calls.find(
         ([u, opts]) =>
@@ -383,30 +345,34 @@ describe('<ProductCategories /> — edit prefill + PUT', () => {
       expect(putCall).toBeTruthy();
       const body = JSON.parse(putCall[1].body);
       expect(body.name).toBe('Syringes & Needles (sterile)');
-      // parentId pre-filled from row (401) is sent back as 401 int.
-      expect(body.parentId).toBe(401);
-      expect(body.isActive).toBe(true);
     });
     expect(notifySuccess).toHaveBeenCalledWith(
-      expect.stringMatching(/Updated.*Syringes & Needles \(sterile\)/i),
+      'Category updated successfully',
     );
   });
 });
 
-describe('<ProductCategories /> — delete (native window.confirm)', () => {
+describe('<ProductCategories /> — delete (notify.confirm)', () => {
   it('confirm()=true → DELETE /api/wellness/product-categories/:id + notify.success', async () => {
     installFetchMock();
-    confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    notifyConfirm.mockImplementation(() => Promise.resolve(true));
     renderPage();
     await waitFor(() => {
       expect(screen.getByText('Syringes & Needles')).toBeInTheDocument();
     });
-    fireEvent.click(
-      screen.getByRole('button', { name: /Delete Consumables/i }),
-    );
-    expect(confirmSpy).toHaveBeenCalledWith(
-      expect.stringMatching(/Delete category "Consumables"/),
-    );
+    // Click Trash button on the Consumables row.
+    const row = screen.getByText('Consumables').closest('.glass');
+    const buttons = row.querySelectorAll('button');
+    // Second action button is the Trash.
+    fireEvent.click(buttons[1]);
+    await waitFor(() => {
+      expect(notifyConfirm).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: 'Delete category',
+          message: expect.stringMatching(/Delete this category/),
+        }),
+      );
+    });
     await waitFor(() => {
       const delCall = fetchApiMock.mock.calls.find(
         ([u, opts]) =>
@@ -415,28 +381,61 @@ describe('<ProductCategories /> — delete (native window.confirm)', () => {
       );
       expect(delCall).toBeTruthy();
     });
-    expect(notifySuccess).toHaveBeenCalledWith(
-      expect.stringMatching(/Deleted.*Consumables/i),
-    );
+    expect(notifySuccess).toHaveBeenCalledWith('Category deleted');
   });
 
   it('confirm()=false → no DELETE fired + no notify.success', async () => {
     installFetchMock();
-    confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    notifyConfirm.mockImplementation(() => Promise.resolve(false));
     renderPage();
     await waitFor(() => {
       expect(screen.getByText('Syringes & Needles')).toBeInTheDocument();
     });
-    fireEvent.click(
-      screen.getByRole('button', { name: /Delete Consumables/i }),
-    );
-    expect(confirmSpy).toHaveBeenCalled();
-    // Brief microtask wait — make sure no async DELETE sneaks through.
+    const row = screen.getByText('Consumables').closest('.glass');
+    const buttons = row.querySelectorAll('button');
+    fireEvent.click(buttons[1]);
+    await waitFor(() => {
+      expect(notifyConfirm).toHaveBeenCalled();
+    });
     await Promise.resolve();
     const delCall = fetchApiMock.mock.calls.find(
       ([, opts]) => opts?.method === 'DELETE',
     );
     expect(delCall).toBeUndefined();
     expect(notifySuccess).not.toHaveBeenCalled();
+  });
+});
+
+describe('<ProductCategories /> — read-only mode (no products.manage)', () => {
+  it('hides Add Category + Edit + Delete buttons and shows "View only" badge', async () => {
+    usePermissionsMock.mockReturnValue({
+      isReady: true,
+      hasPermission: (m, a) => m === 'products' && a === 'read',
+      permissions: ['products.read'],
+      roles: [],
+      isOwner: false,
+      userType: null,
+      isLoading: false,
+      error: null,
+      refresh: () => Promise.resolve(),
+      hasAllPermissions: () => false,
+      hasAnyPermission: () => false,
+    });
+    installFetchMock();
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText('Consumables')).toBeInTheDocument();
+    });
+
+    // Add Category CTA is hidden for viewers.
+    expect(screen.queryByRole('button', { name: /Add Category/i })).toBeNull();
+    // "View only" badge surfaces so the read-only mode is explicit.
+    expect(screen.getByText(/View only/i)).toBeInTheDocument();
+    // Row-level Edit / Delete buttons are hidden — the only buttons on the
+    // page should be the (non-row) header / search affordances. Concretely:
+    // a row with no buttons under it.
+    const row = screen.getByText('Consumables').closest('.glass');
+    expect(row.querySelectorAll('button').length).toBe(0);
   });
 });

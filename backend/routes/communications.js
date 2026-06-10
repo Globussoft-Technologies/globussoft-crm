@@ -3,9 +3,48 @@ const path = require("path");
 require("dotenv").config({ path: path.resolve(__dirname, "../../.env"), override: true });
 
 const crypto = require("crypto");
+const multer = require("multer");
 
 const router = express.Router();
 const prisma = require("../lib/prisma");
+const { verifyRole } = require("../middleware/auth");
+
+// Compose-mail attachments: memory storage so the buffer can be base64'd
+// straight into the SendGrid payload without a disk round-trip. multer is a
+// no-op for non-multipart requests, so the legacy JSON path (no attachments)
+// keeps working unchanged.
+const ATTACHMENT_ALLOWED_MIMES = new Set([
+  "image/jpeg",
+  "image/png",
+  "image/gif",
+  "image/webp",
+  "application/pdf",
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.ms-excel",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "text/csv",
+  "text/plain",
+  "application/zip",
+]);
+const composeAttachmentMulter = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024, files: 5 }, // 10 MB per file, 5 files max
+  fileFilter: (req, file, cb) => {
+    if (ATTACHMENT_ALLOWED_MIMES.has(file.mimetype)) cb(null, true);
+    else cb(new Error(`Attachment type not allowed: ${file.mimetype}`));
+  },
+}).array("attachments", 5);
+
+// Convert multer errors (size/type/count) to JSON 400 so the SPA can surface
+// a useful message instead of the default Express HTML stack trace.
+function composeAttachmentUpload(req, res, next) {
+  composeAttachmentMulter(req, res, (err) => {
+    if (!err) return next();
+    const code = err.code === "LIMIT_FILE_SIZE" ? 413 : 400;
+    return res.status(code).json({ error: err.message || "Attachment upload failed" });
+  });
+}
 
 // SendGrid email sending via their REST API
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY;
@@ -36,7 +75,14 @@ async function sendSendGrid(to, subject, body, opts = {}) {
     return { sent: false, reason: "missing_subject_or_body" };
   }
 
-  const htmlBody = escapeHtml(body).replace(/\n/g, "<br>");
+  // Escape the user-supplied body so any HTML they typed renders as text (not
+  // markup). The tracking pixel is RAW trusted HTML we control, so it must be
+  // appended AFTER escaping — otherwise the <img> tag itself gets escaped to
+  // &lt;img&gt; and shows up as visible literal text in the email body.
+  let htmlBody = escapeHtml(body).replace(/\n/g, "<br>");
+  if (typeof opts.trackingPixelHtml === "string" && opts.trackingPixelHtml) {
+    htmlBody += opts.trackingPixelHtml;
+  }
   const personalization = { to: [{ email: to }] };
   // #623 — propagate cc/bcc through SendGrid personalization. Each recipient
   // here is a string; SendGrid wants {email}-shaped objects.
@@ -57,6 +103,13 @@ async function sendSendGrid(to, subject, body, opts = {}) {
       { type: "text/html", value: htmlBody }
     ]
   };
+
+  // Inline attachments → SendGrid's v3 `attachments` field. Caller passes
+  // already-shaped `{ content, filename, type, disposition }` objects so this
+  // helper stays a thin SendGrid wrapper.
+  if (Array.isArray(opts.attachments) && opts.attachments.length > 0) {
+    payload.attachments = opts.attachments;
+  }
 
   try {
     const response = await fetch("https://api.sendgrid.com/v3/mail/send", {
@@ -99,7 +152,7 @@ if (SENDGRID_API_KEY) {
 // Pre-this-change the Sent folder UI had nothing to query against — the
 // only filtering surface was GET /api/email?folder=sent which returns a
 // `{total}` count for the sidebar, not the row list.
-router.get("/inbox", async (req, res) => {
+router.get("/inbox", verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
   try {
     const where = { tenantId: req.user.tenantId };
     if (req.query.folder === 'sent') where.direction = 'OUTBOUND';
@@ -152,15 +205,43 @@ function parseRecipients(toField) {
 // Multi-recipient calls expose the full per-recipient breakdown via `results` /
 // `failures`. Mailgun is called once per valid recipient (no BCC fan-out — keeps
 // per-recipient tracking pixels distinct).
-router.post("/send-email", async (req, res) => {
+router.post("/send-email", verifyRole(["ADMIN", "MANAGER"]), composeAttachmentUpload, async (req, res) => {
   try {
     const { to, cc, bcc, subject, body, contactId } = req.body;
     if (!to || !subject) return res.status(400).json({ error: "Recipient and subject required" });
     if (!req.user) return res.status(401).json({ error: "Authentication required" });
 
+    // Build SendGrid-shaped attachments from multer-parsed buffers. Empty
+    // when the client posts plain JSON (no multipart files), so the legacy
+    // JSON path is unaffected.
+    const sendgridAttachments = Array.isArray(req.files)
+      ? req.files.map((f) => ({
+          content: f.buffer.toString("base64"),
+          filename: f.originalname,
+          type: f.mimetype,
+          disposition: "attachment",
+        }))
+      : [];
+
+    // Anti-DoS caps: prevent a malformed `to` string with thousands of
+    // addresses from creating N EmailMessage + EmailTracking rows.
+    const MAX_RECIPIENTS = 50;
+    const MAX_SUBJECT_LENGTH = 500;
+    const MAX_BODY_LENGTH = 100_000; // 100 KB
+
+    if (subject && subject.length > MAX_SUBJECT_LENGTH) {
+      return res.status(400).json({ error: `Subject exceeds ${MAX_SUBJECT_LENGTH} characters` });
+    }
+    if (body && body.length > MAX_BODY_LENGTH) {
+      return res.status(400).json({ error: `Body exceeds ${MAX_BODY_LENGTH} characters` });
+    }
+
     const recipients = parseRecipients(to);
     if (recipients.length === 0) {
       return res.status(400).json({ error: "No valid recipient parsed from 'to'" });
+    }
+    if (recipients.length > MAX_RECIPIENTS) {
+      return res.status(400).json({ error: `Too many recipients in 'to' (max ${MAX_RECIPIENTS})` });
     }
 
     // Pre-flight validation: split into deliverable + invalid before touching DB.
@@ -198,7 +279,11 @@ router.post("/send-email", async (req, res) => {
     const ccPersist = ccDeliverable.length > 0 ? ccDeliverable.join(', ') : null;
     const bccPersist = bccDeliverable.length > 0 ? bccDeliverable.join(', ') : null;
 
-    const baseUrl = process.env.BASE_URL || "https://crm.globusdemos.com";
+    const totalRecipients = deliverable.length + ccDeliverable.length + bccDeliverable.length;
+    if (totalRecipients > MAX_RECIPIENTS) {
+      return res.status(400).json({ error: `Too many total recipients (max ${MAX_RECIPIENTS}, got ${totalRecipients})` });
+    }
+
     const results = [];
 
     // #611: tenant emailRetention toggle. Default true (industry-norm Sent
@@ -250,9 +335,14 @@ router.post("/send-email", async (req, res) => {
         });
       }
 
-      // Inject tracking pixel into email body for SendGrid
+      // Build the open-tracking pixel as raw HTML and hand it to sendSendGrid
+      // via opts so it's appended to the HTML body AFTER the user body is
+      // escaped. It's an invisible 1×1 image (display:none) — present for
+      // open-tracking but never shown as text. (Previously it was concatenated
+      // into `body` and then escaped along with it, which rendered the <img>
+      // tag as visible literal text in the recipient's inbox.)
       const baseUrl = process.env.BASE_URL || "https://crm.globusdemos.com";
-      const trackedBody = `${body}\n\n<img src="${baseUrl}/api/communications/track/${trackingId}/open.gif" width="1" height="1" style="display:none" />`;
+      const trackingPixelHtml = `<img src="${baseUrl}/api/communications/track/${trackingId}/open.gif" width="1" height="1" style="display:none" alt="" />`;
 
 
       // Send via SendGrid with tracking pixel.
@@ -263,9 +353,11 @@ router.post("/send-email", async (req, res) => {
       // #623 — cc/bcc are propagated identically across the per-recipient
       // loop. The SendGrid carbon-copy semantics fan to every cc/bcc per
       // primary-recipient send (mirrors stock email-client behaviour).
-      const mailResult = await sendSendGrid(recipient, subject, trackedBody, {
+      const mailResult = await sendSendGrid(recipient, subject, body, {
         cc: ccDeliverable,
         bcc: bccDeliverable,
+        attachments: sendgridAttachments,
+        trackingPixelHtml,
       });
 
       // Per-recipient Activity on the linked contact (if any). Same pattern as
@@ -321,12 +413,13 @@ router.post("/send-email", async (req, res) => {
 });
 
 // GET all call logs — scoped to tenant
-router.get("/calls", async (req, res) => {
+router.get("/calls", verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
   try {
     const calls = await prisma.callLog.findMany({
       where: { tenantId: req.user.tenantId },
       include: { contact: true },
-      orderBy: { createdAt: 'desc' }
+      orderBy: { createdAt: 'desc' },
+      take: 200,
     });
     res.json(calls);
   } catch (_err) {
@@ -335,7 +428,7 @@ router.get("/calls", async (req, res) => {
 });
 
 // POST to log a call
-router.post("/log-call", async (req, res) => {
+router.post("/log-call", verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
   try {
     const { duration, notes, contactId, direction, recordingUrl } = req.body;
     const callLog = await prisma.callLog.create({
@@ -394,9 +487,12 @@ router.get("/track/:trackingId/click", async (req, res) => {
 });
 
 // Get tracking stats for an email
-router.get("/tracking/:emailId", async (req, res) => {
+router.get("/tracking/:emailId", verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
   try {
-    const tracks = await prisma.emailTracking.findMany({ where: { emailId: parseInt(req.params.emailId), tenantId: req.user.tenantId } });
+    const tracks = await prisma.emailTracking.findMany({
+      where: { emailId: parseInt(req.params.emailId), tenantId: req.user.tenantId },
+      take: 200,
+    });
     const opens = tracks.filter(t => t.openedAt).length;
     const clicks = tracks.filter(t => t.clickedAt).length;
     res.json({ emailId: parseInt(req.params.emailId), opens, clicks, events: tracks });

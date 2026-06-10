@@ -110,14 +110,31 @@ describe('utils/api — fetchApi', () => {
     expect(opts.headers.Authorization).toBe('Bearer rehydrated');
   });
 
-  it('IGNORES localStorage["token"] (regression guard for #343)', async () => {
-    // The old codepath read localStorage. The hardening MUST NOT regress —
-    // a tampered/stale localStorage entry should NEVER be sent as Bearer.
-    localStorage.setItem('token', 'should_not_be_used');
+  it('falls back to localStorage["token"] when sessionStorage is empty (v3.7.17 cross-tab remember-me)', async () => {
+    // v3.7.17 (Login "Keep me signed in"): localStorage holds the token
+    // ONLY when the user opted in at sign-in, and getAuthToken treats it as
+    // the cross-tab fallback after sessionStorage misses. The cold-tab
+    // path that drives shared-deep-link behavior must surface the
+    // localStorage value as the Bearer. sessionStorage is intentionally
+    // unset here to simulate a brand-new tab.
+    localStorage.setItem('token', 'persisted-remember-token');
     const spy = mockFetch({ body: { ok: true } });
     await fetchApi('/api/deals');
     const [, opts] = spy.mock.calls[0];
-    expect(opts.headers.Authorization).toBeUndefined();
+    expect(opts.headers.Authorization).toBe('Bearer persisted-remember-token');
+  });
+
+  it('sessionStorage wins over localStorage when both are populated (#343 layering)', async () => {
+    // Defence in depth: if sessionStorage has a token (normal in-session
+    // browsing), it must be used in preference to any leftover
+    // localStorage entry. The fallback-to-localStorage path is ONLY for
+    // tabs whose sessionStorage is empty.
+    sessionStorage.setItem('token', 'session-wins');
+    localStorage.setItem('token', 'should-not-win');
+    const spy = mockFetch({ body: { ok: true } });
+    await fetchApi('/api/deals');
+    const [, opts] = spy.mock.calls[0];
+    expect(opts.headers.Authorization).toBe('Bearer session-wins');
   });
 
   it('omits Authorization header when no token', async () => {

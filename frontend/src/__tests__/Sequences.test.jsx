@@ -337,4 +337,287 @@ describe('Sequences page — surface + CRUD pins', () => {
     const listCall = fetchApiMock.mock.calls.find((c) => c[0] === '/api/sequences');
     expect(listCall?.[1]?.silent).toBe(true);
   });
+
+  // ───────────────────────────────────────────────────────────────────────
+  // Extension cases (#NNN drain) — uncovered branches from 340L baseline:
+  //   - addLogicNode buttons (Email / Delay / Condition / SMS / WhatsApp /
+  //     Push) append nodes to the canvas with descriptive labels.
+  //   - Trigger picker <select> onChange appends a TRIGGER node.
+  //   - Modal Cancel button closes the modal without firing POST.
+  //   - Clicking a saved-sequence card hydrates the canvas (loadSequenceIntoCanvas).
+  //   - PATCH path: with an activeSeqId set (via clicking a card first),
+  //     a subsequent save fires PATCH /api/sequences/:id (not POST).
+  //   - Delete of the currently-active sequence resets the canvas to the
+  //     starter trigger and clears the activeSeqId.
+  //   - FALLBACK_TRIGGERS rendered when /triggers returns [] (empty array
+  //     does NOT overwrite the fallback per the loadTriggers guard).
+  //   - Each saved-sequence card surfaces a step-list builder Link to
+  //     /sequences/:id/builder (stopPropagation so card-click doesn't fire).
+  //   - sequenceStatusBadgeStyle helper export — direct branch coverage of
+  //     ACTIVE / PAUSED / DRAFT-unknown palettes (forward-compat for the
+  //     status enum landing per #640).
+  //   - Node-count display per card reads JSON.parse(seq.nodes) length.
+  // ───────────────────────────────────────────────────────────────────────
+
+  it('Add Email button appends an "ACTION: Send Email" node to the canvas', async () => {
+    wireDefaultFetchMocks([]);
+    const user = userEvent.setup();
+    renderPage();
+    // Initial canvas has the seed TRIGGER node.
+    await waitFor(() => {
+      expect(screen.getByTestId('reactflow-nodes')).toBeInTheDocument();
+    });
+    const before = screen.getByTestId('reactflow-nodes').children.length;
+    await user.click(screen.getByRole('button', { name: /add email/i }));
+    await waitFor(() => {
+      const list = screen.getByTestId('reactflow-nodes');
+      expect(list.children.length).toBe(before + 1);
+      expect(list.textContent).toMatch(/ACTION: Send Email/);
+    });
+  });
+
+  it('Add Delay / Condition / SMS / WhatsApp / Push buttons each append a labelled node', async () => {
+    wireDefaultFetchMocks([]);
+    const user = userEvent.setup();
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByTestId('reactflow-nodes')).toBeInTheDocument();
+    });
+    const start = screen.getByTestId('reactflow-nodes').children.length;
+    await user.click(screen.getByRole('button', { name: /add delay/i }));
+    await user.click(screen.getByRole('button', { name: /add condition/i }));
+    await user.click(screen.getByRole('button', { name: /^sms$/i }));
+    await user.click(screen.getByRole('button', { name: /^whatsapp$/i }));
+    await user.click(screen.getByRole('button', { name: /^push$/i }));
+    await waitFor(() => {
+      const list = screen.getByTestId('reactflow-nodes');
+      expect(list.children.length).toBe(start + 5);
+      expect(list.textContent).toMatch(/DELAY: Wait 72 Hours/);
+      expect(list.textContent).toMatch(/CONDITION: Tag Check/);
+      expect(list.textContent).toMatch(/ACTION: Send SMS/);
+      expect(list.textContent).toMatch(/ACTION: Send WhatsApp/);
+      expect(list.textContent).toMatch(/ACTION: Send Push/);
+    });
+  });
+
+  it('trigger picker onChange appends a TRIGGER node with the picked label', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/sequences') return Promise.resolve([]);
+      if (url === '/api/sequences/triggers') {
+        return Promise.resolve([
+          { value: 'visit.completed', label: 'Visit Completed', vertical: 'wellness' },
+        ]);
+      }
+      return Promise.resolve({});
+    });
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByTestId('trigger-picker')).toBeInTheDocument();
+    });
+    const before = screen.getByTestId('reactflow-nodes').children.length;
+    // userEvent.selectOptions doesn't fire onChange reliably across versions;
+    // use fireEvent.change directly to pin the contract.
+    fireEvent.change(screen.getByTestId('trigger-picker'), {
+      target: { value: 'visit.completed' },
+    });
+    await waitFor(() => {
+      const list = screen.getByTestId('reactflow-nodes');
+      expect(list.children.length).toBe(before + 1);
+      expect(list.textContent).toMatch(/TRIGGER: Visit Completed/);
+    });
+  });
+
+  it('Cancel button in the modal closes it without firing a POST', async () => {
+    wireDefaultFetchMocks([]);
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(screen.getByRole('button', { name: /create sequence/i }));
+    expect(
+      screen.getByRole('heading', { level: 3, name: /name your sequence/i })
+    ).toBeInTheDocument();
+    fetchApiMock.mockClear();
+    await user.click(screen.getByRole('button', { name: /cancel/i }));
+    // Modal closes — heading no longer in DOM.
+    await waitFor(() => {
+      expect(
+        screen.queryByRole('heading', { level: 3, name: /name your sequence/i })
+      ).not.toBeInTheDocument();
+    });
+    const postCall = fetchApiMock.mock.calls.find(
+      (c) => c[0] === '/api/sequences' && c[1]?.method === 'POST'
+    );
+    expect(postCall).toBeUndefined();
+  });
+
+  it('clicking a saved-sequence card loads its nodes/edges into the canvas (activeSeqId set)', async () => {
+    wireDefaultFetchMocks(SEQ_FIXTURE);
+    const user = userEvent.setup();
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByText('Welcome drip')).toBeInTheDocument();
+    });
+    // Click the card body (h4 is inside sequence-card div).
+    await user.click(screen.getByText('Welcome drip'));
+    // Welcome drip's nodes JSON has labels 'TRIGGER' and 'Email' — both should
+    // now appear in the canvas node list.
+    await waitFor(() => {
+      const list = screen.getByTestId('reactflow-nodes');
+      expect(list.textContent).toMatch(/Email/);
+    });
+  });
+
+  it('saving with an active sequence selected fires PATCH /api/sequences/:id (not POST)', async () => {
+    wireDefaultFetchMocks(SEQ_FIXTURE);
+    const user = userEvent.setup();
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByText('Welcome drip')).toBeInTheDocument();
+    });
+    // Load the first saved sequence so activeSeqId=11.
+    await user.click(screen.getByText('Welcome drip'));
+    await waitFor(() => {
+      const list = screen.getByTestId('reactflow-nodes');
+      expect(list.textContent).toMatch(/Email/);
+    });
+    // Now click Create Sequence and save — should PATCH the active sequence.
+    fetchApiMock.mockClear();
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/sequences/11' && opts?.method === 'PATCH') {
+        return Promise.resolve({ id: 11, name: 'Welcome drip v2' });
+      }
+      if (url === '/api/sequences') return Promise.resolve(SEQ_FIXTURE);
+      if (url === '/api/sequences/triggers') return Promise.resolve([]);
+      return Promise.resolve({});
+    });
+    await user.click(screen.getByRole('button', { name: /create sequence/i }));
+    const input = screen.getByPlaceholderText(/onboarding drip week 1/i);
+    await user.type(input, 'Welcome drip v2');
+    const saveButtons = screen.getAllByRole('button', { name: /^save$/i });
+    await user.click(saveButtons[saveButtons.length - 1]);
+
+    await waitFor(() => {
+      const patchCall = fetchApiMock.mock.calls.find(
+        (c) => c[0] === '/api/sequences/11' && c[1]?.method === 'PATCH'
+      );
+      expect(patchCall).toBeTruthy();
+      const body = JSON.parse(patchCall[1].body);
+      expect(body.name).toBe('Welcome drip v2');
+      // PATCH body must NOT include isActive (per #374 — plain saves never
+      // silently activate a paused/draft sequence).
+      expect(body.isActive).toBeUndefined();
+    });
+    // No POST should have fired alongside the PATCH.
+    const postCall = fetchApiMock.mock.calls.find(
+      (c) => c[0] === '/api/sequences' && c[1]?.method === 'POST'
+    );
+    expect(postCall).toBeUndefined();
+  });
+
+  it('deleting the active sequence resets the canvas to the starter trigger', async () => {
+    wireDefaultFetchMocks(SEQ_FIXTURE);
+    notifyObj.confirm.mockImplementation(() => Promise.resolve(true));
+    const user = userEvent.setup();
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByText('Welcome drip')).toBeInTheDocument();
+    });
+    // Load Welcome drip into the canvas so activeSeqId=11.
+    await user.click(screen.getByText('Welcome drip'));
+    await waitFor(() => {
+      expect(screen.getByTestId('reactflow-nodes').textContent).toMatch(/Email/);
+    });
+    // Wire DELETE then list-refresh returning the remaining sequence only.
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/sequences/11' && opts?.method === 'DELETE') {
+        return Promise.resolve({ deleted: true });
+      }
+      if (url === '/api/sequences') return Promise.resolve([SEQ_FIXTURE[1]]);
+      if (url === '/api/sequences/triggers') return Promise.resolve([]);
+      return Promise.resolve({});
+    });
+    const deleteBtns = screen.getAllByTitle(/delete sequence/i);
+    await user.click(deleteBtns[0]);
+    await waitFor(() => {
+      // Canvas got reset — Email label gone, only the starter trigger label
+      // (TRIGGER: Contact Subscribed) remains.
+      const list = screen.getByTestId('reactflow-nodes');
+      expect(list.textContent).not.toMatch(/Email/);
+      expect(list.textContent).toMatch(/TRIGGER: Contact Subscribed/);
+    });
+  });
+
+  it('saved-sequence card surfaces a step-list builder Link to /sequences/:id/builder', async () => {
+    wireDefaultFetchMocks(SEQ_FIXTURE);
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByText('Welcome drip')).toBeInTheDocument();
+    });
+    const builderLinks = screen.getAllByTitle(/open step-list builder/i);
+    expect(builderLinks.length).toBe(SEQ_FIXTURE.length);
+    // First card → /sequences/11/builder.
+    expect(builderLinks[0].getAttribute('href')).toBe('/sequences/11/builder');
+    expect(builderLinks[1].getAttribute('href')).toBe('/sequences/22/builder');
+  });
+
+  it('saved-sequence card displays the node count parsed from seq.nodes JSON', async () => {
+    wireDefaultFetchMocks(SEQ_FIXTURE);
+    renderPage();
+    await waitFor(() => {
+      // Welcome drip's nodes JSON has 2 entries; Post-purchase has 1.
+      expect(screen.getByText(/2 nodes/)).toBeInTheDocument();
+      expect(screen.getByText(/1 nodes/)).toBeInTheDocument();
+    });
+  });
+
+  it('trigger picker keeps FALLBACK_TRIGGERS when /triggers returns []', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/sequences') return Promise.resolve([]);
+      // Empty array — loadTriggers guard skips the setTriggers call so the
+      // FALLBACK_TRIGGERS (Contact Created / Lead Converted / Deal Won) stay.
+      if (url === '/api/sequences/triggers') return Promise.resolve([]);
+      return Promise.resolve({});
+    });
+    renderPage();
+    await waitFor(() => {
+      const picker = screen.getByTestId('trigger-picker');
+      expect(picker.textContent).toMatch(/Contact Created/);
+      expect(picker.textContent).toMatch(/Lead Converted/);
+      expect(picker.textContent).toMatch(/Deal Won/);
+    });
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// Direct unit coverage of the exported `sequenceStatusBadgeStyle` helper.
+// The page-level tests above pin the data-status attribute end-to-end; this
+// describe block pins the palette branch logic in isolation so the helper
+// can be reused by sibling pages (#640 forward-compat for the status enum
+// landing) without re-discovering the contract.
+// ───────────────────────────────────────────────────────────────────────────
+import { sequenceStatusBadgeStyle } from '../pages/Sequences';
+
+describe('sequenceStatusBadgeStyle helper', () => {
+  it('ACTIVE returns the success-green palette + badge-active class', () => {
+    const p = sequenceStatusBadgeStyle('ACTIVE');
+    expect(p.cls).toBe('badge-active');
+    expect(p.fg).toMatch(/success-color|#10b981/);
+    expect(p.bg).toMatch(/16, 185, 129/);
+  });
+
+  it('PAUSED returns the warning-amber palette + badge-paused class', () => {
+    const p = sequenceStatusBadgeStyle('PAUSED');
+    expect(p.cls).toBe('badge-paused');
+    expect(p.fg).toMatch(/warning-color|#f59e0b/);
+    expect(p.bg).toMatch(/245, 158, 11/);
+  });
+
+  it('DRAFT (or any unknown status) returns the neutral muted palette + badge-draft class', () => {
+    const draftPalette = sequenceStatusBadgeStyle('DRAFT');
+    expect(draftPalette.cls).toBe('badge-draft');
+    expect(draftPalette.fg).toMatch(/text-secondary/);
+    // Unknown status falls through to the same neutral default — same shape.
+    const unknownPalette = sequenceStatusBadgeStyle('SOMETHING_NEW');
+    expect(unknownPalette.cls).toBe('badge-draft');
+    expect(unknownPalette.fg).toBe(draftPalette.fg);
+  });
 });

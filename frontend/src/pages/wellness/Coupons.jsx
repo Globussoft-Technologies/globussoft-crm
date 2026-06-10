@@ -10,6 +10,7 @@ import { TicketPercent, Plus, Pencil, Trash2 } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { formatMoney } from '../../utils/money';
+import PageHeader from '../../components/PageHeader';
 
 export default function CouponsPage() {
   const [coupons, setCoupons] = useState([]);
@@ -33,7 +34,13 @@ export default function CouponsPage() {
   useEffect(() => { load(); }, []);
 
   const remove = async (id) => {
-    if (!confirm('Delete this coupon? This cannot be undone.')) return;
+    const ok = await notify.confirm({
+      title: 'Delete coupon',
+      message: 'Delete this coupon? This cannot be undone.',
+      confirmText: 'Delete',
+      destructive: true,
+    });
+    if (!ok) return;
     try {
       await fetchApi(`/api/wellness/coupons/${id}`, { method: 'DELETE' });
       notify.success('Coupon deleted');
@@ -45,20 +52,14 @@ export default function CouponsPage() {
 
   return (
     <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
-      <header style={{ marginBottom: '1.25rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div>
-          <h1 style={{ fontSize: '1.75rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <TicketPercent size={24} /> Coupons
-          </h1>
-          <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-            Promotional discounts (PERCENT or FLAT). Apply at checkout to credit the bill.
-          </p>
-        </div>
-        <div style={{ display: 'flex', gap: '0.5rem' }}>
-          <button onClick={() => setPreviewOpen(true)} style={btnSecondary}>Preview a code</button>
-          <button onClick={() => setEditOpen({})} style={btnPrimary}><Plus size={14} /> New coupon</button>
-        </div>
-      </header>
+      <PageHeader
+        icon={TicketPercent}
+        title="Coupons"
+        description="Promotional discounts (PERCENT or FLAT). Apply at checkout to credit the bill."
+      >
+        <button onClick={() => setPreviewOpen(true)} style={btnSecondary}>Preview a code</button>
+        <button onClick={() => setEditOpen({})} style={btnPrimary}><Plus size={14} /> New coupon</button>
+      </PageHeader>
 
       {loading ? (
         <div>Loading…</div>

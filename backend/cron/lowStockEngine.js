@@ -16,6 +16,7 @@
  */
 const cron = require("node-cron");
 const prisma = require("../lib/prisma");
+const { getSetting, KEYS } = require("../lib/tenantSettings");
 
 const NOTIF_TYPE = "warning";
 const NOTIF_LINK_PREFIX = "/inventory/low-stock?productId=";
@@ -42,9 +43,14 @@ async function runLowStockForTenant(tenant) {
   const lowProducts = products.filter((p) => p.currentStock <= p.threshold);
   if (lowProducts.length === 0) return { products: 0, notifications: 0, emails: 0 };
 
-  // MANAGER and ADMIN recipients within this tenant
+  // Per-tenant alert roles (default: MANAGER + ADMIN)
+  const alertRolesRaw = await getSetting(tenant.id, KEYS.INVENTORY_ALERT_ROLES, { fallback: JSON.stringify(["MANAGER", "ADMIN"]) });
+  let alertRoles = ["MANAGER", "ADMIN"];
+  try { alertRoles = JSON.parse(alertRolesRaw); } catch { /* keep default */ }
+  if (!Array.isArray(alertRoles) || alertRoles.length === 0) alertRoles = ["MANAGER", "ADMIN"];
+
   const recipients = await prisma.user.findMany({
-    where: { tenantId: tenant.id, role: { in: ["MANAGER", "ADMIN"] } },
+    where: { tenantId: tenant.id, role: { in: alertRoles } },
     select: { id: true },
   });
 
@@ -53,26 +59,41 @@ async function runLowStockForTenant(tenant) {
   let alerted = 0;
 
   for (const p of lowProducts) {
-    if (await alreadyAlertedRecently(tenant.id, p.id)) continue;
-    alerted++;
-
     const title = `Low stock: ${p.name}`;
     const message = `Stock for ${p.name}${p.sku ? ` (SKU ${p.sku})` : ""} is at ${p.currentStock} (threshold ${p.threshold}). Reorder soon.`;
     const link = `${NOTIF_LINK_PREFIX}${p.id}`;
 
-    if (recipients.length > 0) {
-      await prisma.notification.createMany({
-        data: recipients.map((u) => ({
-          tenantId: tenant.id,
-          userId: u.id,
-          title,
-          message,
-          type: NOTIF_TYPE,
-          link,
-        })),
+    let createdNotifs = 0;
+    let shouldAlert = false;
+
+    await prisma.$transaction(async (tx) => {
+      const since = new Date(Date.now() - 24 * 3600 * 1000);
+      const existing = await tx.notification.findFirst({
+        where: { tenantId: tenant.id, link, createdAt: { gte: since } },
+        select: { id: true },
       });
-      notifs += recipients.length;
-    }
+      if (existing) return;
+
+      shouldAlert = true;
+
+      if (recipients.length > 0) {
+        await tx.notification.createMany({
+          data: recipients.map((u) => ({
+            tenantId: tenant.id,
+            userId: u.id,
+            title,
+            message,
+            type: NOTIF_TYPE,
+            link,
+          })),
+        });
+        createdNotifs = recipients.length;
+      }
+    });
+
+    if (!shouldAlert) continue;
+    alerted++;
+    notifs += createdNotifs;
 
     if (tenant.ownerEmail) {
       await prisma.emailMessage.create({

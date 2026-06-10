@@ -8,7 +8,7 @@
  * Contracts asserted:
  *   - Read-only — no audit log writes, no eventBus emits.
  *   - Aggregates ItineraryItem rows for one itinerary; buckets per
- *     itemType (all 6 keys from VALID_ITEM_TYPES present + zero-filled
+ *     itemType (all 12 keys from VALID_ITEM_TYPES present + zero-filled
  *     when absent — stable shape for the planned dashboard tile).
  *   - Sums unitCost / markup / gstAmount / totalPrice per bucket and
  *     across the whole itinerary (`grand`); null money fields treated
@@ -112,7 +112,14 @@ function makeItem(overrides = {}) {
   };
 }
 
-const ALL_TYPES = ['flight', 'hotel', 'transfer', 'activity', 'visa', 'insurance'];
+// Mirrors VALID_ITEM_TYPES in backend/routes/travel_itineraries.js — the
+// totals route zero-fills one byItemType bucket per supported type, so this
+// list must stay in lockstep with the route's enum (widened from the original
+// 6 to 12: train/bus/cab/sightseeing/meals/other added).
+const ALL_TYPES = [
+  'flight', 'train', 'bus', 'cab', 'transfer', 'hotel',
+  'sightseeing', 'activity', 'meals', 'visa', 'insurance', 'other',
+];
 
 beforeEach(() => {
   prisma.itinerary.findFirst.mockReset();
@@ -128,7 +135,7 @@ beforeEach(() => {
 });
 
 describe('GET /api/travel/itineraries/:id/totals — happy paths', () => {
-  test('empty itinerary → totalItems=0, all-zero grand, all 6 byItemType buckets present + zero-filled', async () => {
+  test('empty itinerary → totalItems=0, all-zero grand, all 12 byItemType buckets present + zero-filled', async () => {
     prisma.itinerary.findFirst.mockResolvedValueOnce(parentItinerary());
     prisma.itineraryItem.findMany.mockResolvedValue([]);
 
@@ -142,7 +149,7 @@ describe('GET /api/travel/itineraries/:id/totals — happy paths', () => {
       totalItems: 0,
       grand: { totalUnitCost: 0, totalMarkup: 0, totalGstAmount: 0, totalPrice: 0 },
     });
-    // All 6 buckets must be present + zero-filled for stable consumer shape.
+    // All 12 buckets must be present + zero-filled for stable consumer shape.
     expect(Object.keys(res.body.byItemType).sort()).toEqual([...ALL_TYPES].sort());
     for (const t of ALL_TYPES) {
       expect(res.body.byItemType[t]).toEqual({
@@ -224,7 +231,7 @@ describe('GET /api/travel/itineraries/:id/totals — happy paths', () => {
     });
   });
 
-  test('?itemType=hotel filter narrows the prisma where + still returns all 6 buckets', async () => {
+  test('?itemType=hotel filter narrows the prisma where + still returns all buckets', async () => {
     prisma.itinerary.findFirst.mockResolvedValueOnce(parentItinerary());
     prisma.itineraryItem.findMany.mockResolvedValue([
       makeItem({

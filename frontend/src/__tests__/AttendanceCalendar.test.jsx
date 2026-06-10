@@ -157,18 +157,20 @@ function renderCalendar({ user = regularUser, tenant = wellnessTenant } = {}) {
   );
 }
 
-let dateSpy;
 beforeEach(() => {
   fetchApiMock.mockReset();
-  // Pin Date.now + the Date constructor so the SUT's `new Date()` resolves
-  // deterministically to mid-month May 2026. Using vi.useFakeTimers would
-  // also stop setTimeout, which can stall RTL's waitFor — using a spy on
-  // Date.now keeps timers alive.
-  dateSpy = vi.spyOn(Date, 'now').mockReturnValue(PINNED_NOW.getTime());
+  // Pin the Date constructor so the SUT's `new Date()` resolves deterministically
+  // to mid-month May 2026. The SUT derives the current month from `new Date()`
+  // (the constructor), NOT Date.now() — so a Date.now() spy alone would NOT
+  // affect it. vi.useFakeTimers({ toFake: ['Date'] }) fakes ONLY the Date
+  // class (both `new Date()` and Date.now()), leaving setTimeout/setInterval
+  // real so RTL's waitFor keeps working.
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(PINNED_NOW);
 });
 
 afterEach(() => {
-  if (dateSpy) dateSpy.mockRestore();
+  vi.useRealTimers();
 });
 
 describe('<AttendanceCalendar /> — toolbar chrome + loading state', () => {

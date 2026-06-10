@@ -3,22 +3,51 @@ import { Bell } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 
+// Notification categories ⇄ sidebar paths. A category renders only when at
+// least one of its mapped paths is in /api/pages/me, so the preferences
+// surface mirrors the sidebar the signed-in user actually sees:
+//   • Generic CRM users → Deals / Tasks / Tickets / Leads / Approvals / Expenses.
+//   • Wellness customer-tier → Appointments / Prescriptions / Visits /
+//     Memberships / Payments — the workflow categories their sidebar exposes.
+//   • Wellness staff (doctors / professionals / telecallers) → the clinical
+//     subset PLUS Waitlist / Inventory / Leads / Approvals as their role grants.
+// New categories are render-only today (the existing notify() callsites pass
+// the legacy keys); future notify() calls can adopt the new keys and the
+// surface is already there. Fetch failure degrades to "show everything" so a
+// transient network blip doesn't strand the user's settings page empty.
+const categoryOptions = [
+  // Generic CRM workflow surfaces
+  { key: 'deal', label: 'Deals & Opportunities', paths: ['/deals', '/pipeline', '/pipelines', '/deal-insights'] },
+  { key: 'task', label: 'Tasks', paths: ['/tasks'] },
+  { key: 'ticket', label: 'Support Tickets', paths: ['/tickets', '/support'] },
+  { key: 'lead', label: 'Leads', paths: ['/leads', '/converted-leads', '/lead-routing', '/lead-scoring'] },
+  { key: 'approval', label: 'Approvals', paths: ['/approvals'] },
+  { key: 'leave', label: 'Leave Requests', paths: ['/wellness/leave', '/leaves'] },
+  { key: 'expense', label: 'Expense Reports', paths: ['/expenses'] },
+  // Wellness vertical surfaces
+  { key: 'appointment', label: 'Appointments & Bookings', paths: ['/wellness/appointments', '/wellness/my-appointments', '/wellness/my-bookings', '/wellness/book-appointment', '/wellness/calendar', '/booking-pages'] },
+  { key: 'prescription', label: 'Prescriptions', paths: ['/wellness/prescriptions', '/wellness/my-prescriptions'] },
+  { key: 'visit', label: 'Visits', paths: ['/wellness/visits'] },
+  { key: 'membership', label: 'Memberships', paths: ['/wellness/memberships'] },
+  { key: 'payment', label: 'Payments & Transactions', paths: ['/payments', '/wellness/my-transactions', '/wellness/wallet', '/invoices'] },
+  { key: 'waitlist', label: 'Waitlist', paths: ['/wellness/waitlist'] },
+  { key: 'inventory', label: 'Inventory', paths: ['/wellness/inventory', '/wellness/inventory-receipts', '/wellness/inventory-adjustments'] },
+];
+
 export default function UserSettings() {
   const notify = useNotify();
   const [prefs, setPrefs] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [accessiblePaths, setAccessiblePaths] = useState(null);
 
-  // Category and channel options
-  const categoryOptions = [
-    { key: 'deal', label: 'Deals & Opportunities' },
-    { key: 'task', label: 'Tasks' },
-    { key: 'ticket', label: 'Support Tickets' },
-    { key: 'lead', label: 'Leads' },
-    { key: 'approval', label: 'Approvals' },
-    { key: 'leave', label: 'Leave Requests' },
-    { key: 'expense', label: 'Expense Reports' },
-  ];
+  const visibleCategories = (() => {
+    if (!Array.isArray(accessiblePaths)) return categoryOptions;
+    const pathSet = new Set(accessiblePaths);
+    return categoryOptions.filter((cat) =>
+      (cat.paths || []).some((p) => pathSet.has(p))
+    );
+  })();
 
   const channelOptions = [
     { key: 'db', label: 'In-App Bell' },
@@ -46,7 +75,26 @@ export default function UserSettings() {
     }
   };
 
-  useEffect(() => { load(); }, []);
+  // Fetch the user's accessible pages so the category list can mirror what
+  // they see in their sidebar. A failure here intentionally degrades to
+  // "show everything" (accessiblePaths stays null) — losing notification
+  // settings on a fetch hiccup is worse than over-displaying.
+  const loadAccessiblePages = async () => {
+    try {
+      const res = await fetchApi('/api/pages/me', { silent: true });
+      const paths = Array.isArray(res?.pages)
+        ? res.pages.map((p) => p?.path).filter(Boolean)
+        : [];
+      setAccessiblePaths(paths);
+    } catch {
+      setAccessiblePaths(null);
+    }
+  };
+
+  useEffect(() => {
+    load();
+    loadAccessiblePages();
+  }, []);
 
   const handleCategoryToggle = (category) => {
     setPrefs({
@@ -115,11 +163,12 @@ export default function UserSettings() {
             <Bell size={20} color="var(--accent-color)" /> Notification Preferences
           </h3>
 
+          {visibleCategories.length > 0 && (
           <div style={{ marginBottom: '2rem' }}>
             <h4 style={{ fontSize: '0.95rem', fontWeight: '600', marginBottom: '1rem', color: 'var(--text-primary)' }}>Notification Categories</h4>
             <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginBottom: '1rem' }}>Choose which types of notifications you want to receive.</p>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 200px), 1fr))', gap: '0.75rem' }}>
-              {categoryOptions.map(cat => (
+              {visibleCategories.map(cat => (
                 <label key={cat.key} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', padding: '0.5rem', borderRadius: 6, background: 'var(--surface-color)', border: '1px solid var(--border-color)' }}>
                   <input
                     type="checkbox"
@@ -132,6 +181,7 @@ export default function UserSettings() {
               ))}
             </div>
           </div>
+          )}
 
           <div style={{ marginBottom: '2rem' }}>
             <h4 style={{ fontSize: '0.95rem', fontWeight: '600', marginBottom: '1rem', color: 'var(--text-primary)' }}>Delivery Channels</h4>

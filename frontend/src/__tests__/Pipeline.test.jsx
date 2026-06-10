@@ -445,6 +445,154 @@ describe('Pipeline deal card details', () => {
   });
 });
 
+/**
+ * C3 (PRD_TRAVEL_PIPELINE_KANBAN FR-3.15) — Pipeline sub-brand URL-param
+ * persistence. The filter chip itself already shipped via #897; C3 adds a
+ * `?subBrand=tmc` URL-param sync via `useSearchParams` so the selection
+ * survives page reload + deep-link share + browser back-button navigation.
+ *
+ * These cases wrap the page in a Travel-vertical AuthContext so the
+ * dropdown actually renders (the earlier non-Travel test confirmed the
+ * dropdown stays hidden otherwise). `MemoryRouter` is seeded via
+ * `initialEntries=[...]` to simulate the URL-on-mount path; `LocationProbe`
+ * exposes the live URL so tests can assert sync direction without coupling
+ * to `window.location` (which jsdom + MemoryRouter intentionally don't wire).
+ *
+ * Contracts pinned:
+ *   1. Initial `?subBrand=tmc` → dropdown seeds to 'tmc'.
+ *   2. User selects 'rfu' → URL updates to `?subBrand=rfu`.
+ *   3. User selects 'All sub-brands' (empty) → `subBrand` param removed from URL.
+ *   4. URL changes to `?subBrand=visasure` via external nav (back-button shape)
+ *      → component re-syncs its dropdown to 'visasure'.
+ *   Plus a 5th: invalid `?subBrand=garbage` → falls back to '' (all).
+ */
+import { AuthContext } from '../App';
+import { Routes, Route, useLocation } from 'react-router-dom';
+
+function LocationProbe() {
+  const loc = useLocation();
+  return <div data-testid="location-probe">{`${loc.pathname}${loc.search}`}</div>;
+}
+
+function renderTravelPipelineAt(initialUrl) {
+  const travelUser = { tenant: { vertical: 'travel' } };
+  return render(
+    <AuthContext.Provider value={{ user: travelUser }}>
+      <MemoryRouter initialEntries={[initialUrl]}>
+        <Routes>
+          <Route
+            path="/pipeline"
+            element={
+              <>
+                <Pipeline />
+                <LocationProbe />
+              </>
+            }
+          />
+        </Routes>
+      </MemoryRouter>
+    </AuthContext.Provider>,
+  );
+}
+
+describe('Pipeline sub-brand URL-param persistence (C3 / FR-3.15)', () => {
+  beforeEach(() => {
+    mockApi({
+      stages: [{ id: 1, name: 'New Lead', color: '#3b82f6', position: 0 }],
+      deals: [],
+    });
+  });
+
+  it('seeds dropdown selection from `?subBrand=tmc` on initial mount', async () => {
+    renderTravelPipelineAt('/pipeline?subBrand=tmc');
+
+    await waitFor(() => {
+      expect(screen.queryByText('Loading deals...')).not.toBeInTheDocument();
+    });
+
+    const select = screen.getByLabelText('Filter by sub-brand');
+    expect(select).toHaveValue('tmc');
+    // URL stays at the seeded value (no echo-loop rewrite).
+    expect(screen.getByTestId('location-probe').textContent).toContain('subBrand=tmc');
+  });
+
+  it('updates URL to `?subBrand=rfu` when user selects RFU from the dropdown', async () => {
+    renderTravelPipelineAt('/pipeline');
+
+    await waitFor(() => {
+      expect(screen.queryByText('Loading deals...')).not.toBeInTheDocument();
+    });
+
+    const select = screen.getByLabelText('Filter by sub-brand');
+    expect(select).toHaveValue('');
+
+    fireEvent.change(select, { target: { value: 'rfu' } });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('location-probe').textContent).toContain('subBrand=rfu');
+    });
+    expect(select).toHaveValue('rfu');
+  });
+
+  it('removes the `subBrand` param from URL when user picks "All sub-brands"', async () => {
+    renderTravelPipelineAt('/pipeline?subBrand=tmc');
+
+    await waitFor(() => {
+      expect(screen.queryByText('Loading deals...')).not.toBeInTheDocument();
+    });
+
+    const select = screen.getByLabelText('Filter by sub-brand');
+    expect(select).toHaveValue('tmc');
+
+    // Empty-string option = "All sub-brands" — deselect.
+    fireEvent.change(select, { target: { value: '' } });
+
+    await waitFor(() => {
+      const probe = screen.getByTestId('location-probe').textContent;
+      expect(probe).not.toContain('subBrand');
+    });
+    expect(select).toHaveValue('');
+  });
+
+  it('re-syncs dropdown when URL changes externally to `?subBrand=visasure`', async () => {
+    // Same shape as a browser back-button hop: re-render the tree at a
+    // different initialEntries. With MemoryRouter, unmount + remount is the
+    // simplest way to simulate an external URL nav inside jsdom.
+    const { unmount } = renderTravelPipelineAt('/pipeline?subBrand=tmc');
+
+    await waitFor(() => {
+      expect(screen.queryByText('Loading deals...')).not.toBeInTheDocument();
+    });
+
+    expect(screen.getByLabelText('Filter by sub-brand')).toHaveValue('tmc');
+    unmount();
+
+    renderTravelPipelineAt('/pipeline?subBrand=visasure');
+
+    await waitFor(() => {
+      expect(screen.queryByText('Loading deals...')).not.toBeInTheDocument();
+    });
+
+    expect(screen.getByLabelText('Filter by sub-brand')).toHaveValue('visasure');
+    expect(screen.getByTestId('location-probe').textContent).toContain('subBrand=visasure');
+  });
+
+  it('falls back to "" (all) when URL carries an unknown sub-brand value', async () => {
+    renderTravelPipelineAt('/pipeline?subBrand=garbage');
+
+    await waitFor(() => {
+      expect(screen.queryByText('Loading deals...')).not.toBeInTheDocument();
+    });
+
+    // Unknown value isn't in TRAVEL_SUB_BRANDS — parseSubBrandParam returns ''.
+    expect(screen.getByLabelText('Filter by sub-brand')).toHaveValue('');
+    // Component-driven URL-cleanup strips the unknown param.
+    await waitFor(() => {
+      expect(screen.getByTestId('location-probe').textContent).not.toContain('garbage');
+    });
+  });
+});
+
 describe('Pipeline AI score fetch — error path', () => {
   it('surfaces a notify.error when /api/ai_scoring/score/<id> rejects', async () => {
     const calls = [];
@@ -483,5 +631,378 @@ describe('Pipeline AI score fetch — error path', () => {
     // The aiScoreModal must NOT render — error path swallows the modal open.
     // "Deal Predictive Score" is the modal's h3; absent on rejection.
     expect(screen.queryByText('Deal Predictive Score')).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * C4 (PRD_TRAVEL_PIPELINE_KANBAN FR-3.16 / 3.17 / 3.18) — Pipeline mobile-touch
+ * drag + keyboard a11y + windowed virtualization.
+ *
+ * Adds three orthogonal capabilities to the existing HTML5-drag kanban:
+ *
+ *   FR-3.16 (touch drag) — HTML5 DragEvent doesn't fire on touch devices.
+ *      We synthesize the drop by tracking the held card via onTouchStart and
+ *      finding the column at the touchEnd via elementFromPoint, then funnel
+ *      through the same handleDrop code path (so the optimistic-update +
+ *      rollback semantics are preserved across mouse + touch paths).
+ *
+ *   FR-3.17 (keyboard a11y) — every card is tabIndex={0} + has an aria-label.
+ *      Arrow keys move FOCUS when not in move mode; Space enters move mode
+ *      (visual outline + aria announcement); arrows in move mode move the
+ *      CARD across columns; second Space drops; Esc cancels. A visually-
+ *      hidden role="status" aria-live="polite" region announces every
+ *      pickup / move / drop / cancel for screen readers.
+ *
+ *   FR-3.18 (virtualization) — columns over VIRTUALIZATION_THRESHOLD (=100)
+ *      render only a windowed slice (~visible window + buffer) based on the
+ *      column's scrollTop. The count badge always shows the REAL total length,
+ *      not the windowed count. Top/bottom phantom-height spacers keep the
+ *      scrollbar position aligned with the un-rendered cards above/below.
+ *
+ * Reduced-motion: detected via matchMedia('(prefers-reduced-motion: reduce)');
+ * when set we drop CSS transitions on drag-related affordances.
+ *
+ * Library choices (per slice instructions):
+ *   - touch drag: native touch-event listeners (no @dnd-kit/core dep added —
+ *     that's a separate slice; @dnd-kit/core isn't in frontend/package.json).
+ *   - virtualization: lightweight in-component scroll-position-based slice
+ *     (no react-window / @tanstack/react-virtual dep added — same rationale).
+ *
+ * Contracts pinned by the 9 cases below:
+ *   1. Touch drag — touchStart + touchEnd over a different column → card moves
+ *      stages; the same PUT /api/deals/<id> network call HTML5 drop fires.
+ *   2. Tab focuses a card; arrow keys navigate focus across columns + within.
+ *   3. Space enters move mode; ArrowRight moves the card to the next column.
+ *   4. Esc cancels an in-progress move (card stays put; announcement updates).
+ *   5. aria-live region updates on pickup + drop for screen-reader audit.
+ *   6. >100-card column renders only a windowed slice (not all 200 cards in DOM).
+ *   7. Scroll position triggers re-render of a different card window.
+ *   8. Count badge always shows the REAL total (200), not the windowed count.
+ *   9. prefers-reduced-motion: reduce → transitions stripped from card.
+ */
+describe('Pipeline mobile touch drag (C4 / FR-3.16)', () => {
+  it('synthesizes a drop via touchStart + touchEnd → PUT /api/deals/<id> fires with new stage', async () => {
+    const putCalls = [];
+    fetchApi.mockImplementation((url, opts) => {
+      if (url.startsWith('/api/deals') && opts?.method === 'PUT') {
+        putCalls.push({ url, body: JSON.parse(opts.body) });
+        return Promise.resolve({ id: 801, stage: 'won', probability: 100 });
+      }
+      if (url.startsWith('/api/deals')) {
+        return Promise.resolve([
+          { id: 801, title: 'Touch Drag Card', amount: 1000, probability: 25, stage: 'lead' },
+        ]);
+      }
+      if (url.startsWith('/api/contacts')) return Promise.resolve([]);
+      if (url.startsWith('/api/pipeline_stages')) {
+        return Promise.resolve([
+          { id: 1, name: 'New Lead', color: '#3b82f6', position: 0 },
+          { id: 2, name: 'Closed Won', color: '#10b981', position: 1 },
+        ]);
+      }
+      return Promise.resolve([]);
+    });
+
+    renderPipeline();
+    await waitFor(() => {
+      expect(screen.queryByText('Loading deals...')).not.toBeInTheDocument();
+    });
+
+    const card = document.querySelector('[data-deal-id="801"]');
+    expect(card).toBeTruthy();
+    const wonColumn = document.querySelector('[data-stage-id="won"]');
+    expect(wonColumn).toBeTruthy();
+
+    // Stub elementFromPoint so the touchEnd path finds the "Closed Won"
+    // column (jsdom doesn't actually paint, so coords mean nothing).
+    const origElementFromPoint = document.elementFromPoint;
+    document.elementFromPoint = vi.fn(() => wonColumn);
+
+    fireEvent.touchStart(card, { touches: [{ clientY: 100, clientX: 50 }] });
+    fireEvent.touchEnd(card, { changedTouches: [{ clientY: 600, clientX: 50 }] });
+
+    await waitFor(() => {
+      expect(putCalls.length).toBeGreaterThan(0);
+    });
+    expect(putCalls[0].url).toBe('/api/deals/801');
+    expect(putCalls[0].body.stage).toBe('won');
+
+    document.elementFromPoint = origElementFromPoint;
+  });
+});
+
+describe('Pipeline keyboard a11y (C4 / FR-3.17)', () => {
+  beforeEach(() => {
+    mockApi({
+      stages: [
+        { id: 1, name: 'New Lead', color: '#3b82f6', position: 0 },
+        { id: 2, name: 'Contacted', color: '#f59e0b', position: 1 },
+        { id: 3, name: 'Closed Won', color: '#10b981', position: 2 },
+      ],
+      deals: [
+        { id: 901, title: 'Card One', amount: 1000, probability: 25, stage: 'lead' },
+        { id: 902, title: 'Card Two', amount: 2000, probability: 30, stage: 'lead' },
+        { id: 903, title: 'Contact Card', amount: 3000, probability: 40, stage: 'contacted' },
+      ],
+    });
+  });
+
+  it('cards are focusable (tabIndex=0) with descriptive aria-label', async () => {
+    renderPipeline();
+    await waitFor(() => {
+      expect(screen.queryByText('Loading deals...')).not.toBeInTheDocument();
+    });
+
+    const card = document.querySelector('[data-deal-id="901"]');
+    expect(card).toBeTruthy();
+    expect(card.getAttribute('tabindex')).toBe('0');
+    expect(card.getAttribute('aria-label')).toMatch(/Card One/);
+    expect(card.getAttribute('aria-label')).toMatch(/stage New Lead/);
+    expect(card.getAttribute('aria-label')).toMatch(/25%/);
+  });
+
+  it('ArrowDown moves focus to the next card within the same column', async () => {
+    renderPipeline();
+    await waitFor(() => {
+      expect(screen.queryByText('Loading deals...')).not.toBeInTheDocument();
+    });
+
+    const card1 = document.querySelector('[data-deal-id="901"]');
+    const card2 = document.querySelector('[data-deal-id="902"]');
+    card1.focus();
+    expect(document.activeElement).toBe(card1);
+
+    fireEvent.keyDown(card1, { key: 'ArrowDown' });
+    expect(document.activeElement).toBe(card2);
+  });
+
+  it('ArrowRight moves focus to the same-position card in the next column', async () => {
+    renderPipeline();
+    await waitFor(() => {
+      expect(screen.queryByText('Loading deals...')).not.toBeInTheDocument();
+    });
+
+    const card1 = document.querySelector('[data-deal-id="901"]');
+    const contactCard = document.querySelector('[data-deal-id="903"]');
+    card1.focus();
+
+    fireEvent.keyDown(card1, { key: 'ArrowRight' });
+    expect(document.activeElement).toBe(contactCard);
+  });
+
+  it('Space enters move mode + ArrowRight in move mode moves the CARD to the next column', async () => {
+    const putCalls = [];
+    fetchApi.mockImplementation((url, opts) => {
+      if (url.startsWith('/api/deals') && opts?.method === 'PUT') {
+        putCalls.push({ url, body: JSON.parse(opts.body) });
+        return Promise.resolve({ id: 901, stage: 'contacted', probability: 40 });
+      }
+      if (url.startsWith('/api/deals')) {
+        return Promise.resolve([
+          { id: 901, title: 'Card One', amount: 1000, probability: 25, stage: 'lead' },
+        ]);
+      }
+      if (url.startsWith('/api/contacts')) return Promise.resolve([]);
+      if (url.startsWith('/api/pipeline_stages')) {
+        return Promise.resolve([
+          { id: 1, name: 'New Lead', color: '#3b82f6', position: 0 },
+          { id: 2, name: 'Contacted', color: '#f59e0b', position: 1 },
+        ]);
+      }
+      return Promise.resolve([]);
+    });
+
+    renderPipeline();
+    await waitFor(() => {
+      expect(screen.queryByText('Loading deals...')).not.toBeInTheDocument();
+    });
+
+    const card = document.querySelector('[data-deal-id="901"]');
+    card.focus();
+
+    // Space enters move mode — card gains data-in-move-mode='true'.
+    fireEvent.keyDown(card, { key: ' ' });
+    await waitFor(() => {
+      expect(card.getAttribute('data-in-move-mode')).toBe('true');
+    });
+
+    // ArrowRight in move mode triggers PUT /api/deals/901 with stage='contacted'.
+    fireEvent.keyDown(card, { key: 'ArrowRight' });
+    await waitFor(() => {
+      expect(putCalls.length).toBeGreaterThan(0);
+    });
+    expect(putCalls[0].body.stage).toBe('contacted');
+  });
+
+  it('Escape cancels an in-progress move (data-in-move-mode flips back to false)', async () => {
+    renderPipeline();
+    await waitFor(() => {
+      expect(screen.queryByText('Loading deals...')).not.toBeInTheDocument();
+    });
+
+    const card = document.querySelector('[data-deal-id="901"]');
+    card.focus();
+
+    fireEvent.keyDown(card, { key: ' ' });
+    await waitFor(() => {
+      expect(card.getAttribute('data-in-move-mode')).toBe('true');
+    });
+
+    fireEvent.keyDown(card, { key: 'Escape' });
+    await waitFor(() => {
+      expect(card.getAttribute('data-in-move-mode')).toBe('false');
+    });
+  });
+
+  it('aria-live announcer updates on pickup (Space) and drop', async () => {
+    renderPipeline();
+    await waitFor(() => {
+      expect(screen.queryByText('Loading deals...')).not.toBeInTheDocument();
+    });
+
+    const announcer = screen.getByTestId('pipeline-announcer');
+    expect(announcer.textContent).toBe('');
+
+    const card = document.querySelector('[data-deal-id="901"]');
+    card.focus();
+
+    fireEvent.keyDown(card, { key: ' ' });
+    await waitFor(() => {
+      expect(announcer.textContent).toMatch(/Picked up Card One/);
+    });
+
+    // Second Space drops.
+    fireEvent.keyDown(card, { key: ' ' });
+    await waitFor(() => {
+      expect(announcer.textContent).toMatch(/Dropped Card One/);
+    });
+  });
+});
+
+describe('Pipeline virtualization (C4 / FR-3.18)', () => {
+  // Build a 200-card column to force the >100 threshold path.
+  const buildBigDealList = () => {
+    const arr = [];
+    for (let i = 0; i < 200; i++) {
+      arr.push({
+        id: 1000 + i,
+        title: `Big Deal ${i}`,
+        amount: 1000 + i,
+        probability: 25,
+        stage: 'lead',
+      });
+    }
+    return arr;
+  };
+
+  it('column with >100 cards renders only a windowed slice in the DOM, not all 200', async () => {
+    mockApi({
+      stages: [{ id: 1, name: 'New Lead', color: '#3b82f6', position: 0 }],
+      deals: buildBigDealList(),
+    });
+
+    renderPipeline();
+    await waitFor(() => {
+      expect(screen.queryByText('Loading deals...')).not.toBeInTheDocument();
+    });
+
+    // All 200 cards would be 200 [data-deal-id] elements. The windowed
+    // slice should render far fewer — visible window + buffer = ~10-30.
+    const rendered = document.querySelectorAll('[data-deal-id]');
+    expect(rendered.length).toBeLessThan(50);
+    expect(rendered.length).toBeGreaterThan(0);
+
+    // First card in the un-scrolled window is "Big Deal 0".
+    expect(screen.getByText('Big Deal 0')).toBeInTheDocument();
+    // Far-down card (e.g. "Big Deal 150") is NOT in the DOM (off-screen).
+    expect(screen.queryByText('Big Deal 150')).not.toBeInTheDocument();
+  });
+
+  it('scrolling the column triggers a re-render of a different card window', async () => {
+    mockApi({
+      stages: [{ id: 1, name: 'New Lead', color: '#3b82f6', position: 0 }],
+      deals: buildBigDealList(),
+    });
+
+    renderPipeline();
+    await waitFor(() => {
+      expect(screen.queryByText('Loading deals...')).not.toBeInTheDocument();
+    });
+
+    const body = screen.getByTestId('stage-body-lead');
+    expect(body).toBeTruthy();
+    // Initially the top of the window is rendered.
+    expect(screen.getByText('Big Deal 0')).toBeInTheDocument();
+
+    // Simulate a scroll far down. jsdom doesn't paint so we set scrollTop
+    // directly + fire onScroll with the new value. After the re-render,
+    // a card from the middle of the list should appear and "Big Deal 0"
+    // should drop out of the DOM.
+    fireEvent.scroll(body, { target: { scrollTop: 100 * 132 } }); // ~card 100
+
+    await waitFor(() => {
+      // A card near the new scroll position should now be present.
+      expect(screen.queryByText('Big Deal 100')).toBeInTheDocument();
+    });
+    // Pre-window card is no longer rendered.
+    expect(screen.queryByText('Big Deal 0')).not.toBeInTheDocument();
+  });
+
+  it('count badge shows real total (200), not the rendered/windowed count', async () => {
+    mockApi({
+      stages: [{ id: 1, name: 'New Lead', color: '#3b82f6', position: 0 }],
+      deals: buildBigDealList(),
+    });
+
+    renderPipeline();
+    await waitFor(() => {
+      expect(screen.queryByText('Loading deals...')).not.toBeInTheDocument();
+    });
+
+    const badge = screen.getByTestId('stage-count-lead');
+    expect(badge.textContent).toBe('200');
+
+    // Sanity: rendered card count is below 200 (virtualization is active).
+    const rendered = document.querySelectorAll('[data-deal-id]');
+    expect(rendered.length).toBeLessThan(200);
+  });
+});
+
+describe('Pipeline reduced-motion (C4)', () => {
+  it('drops CSS transitions when prefers-reduced-motion: reduce is set', async () => {
+    // Stub matchMedia to report reduced motion.
+    const origMatchMedia = window.matchMedia;
+    window.matchMedia = vi.fn().mockImplementation((q) => ({
+      matches: q === '(prefers-reduced-motion: reduce)',
+      media: q,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }));
+
+    mockApi({
+      stages: [{ id: 1, name: 'New Lead', color: '#3b82f6', position: 0 }],
+      deals: [
+        { id: 1101, title: 'Reduced Motion Card', amount: 1000, probability: 25, stage: 'lead' },
+      ],
+    });
+
+    renderPipeline();
+    await waitFor(() => {
+      expect(screen.queryByText('Loading deals...')).not.toBeInTheDocument();
+    });
+
+    // The card's inline style should have transition: 'none' when reduced
+    // motion is active. We assert via the rendered DOM style attribute.
+    const card = document.querySelector('[data-deal-id="1101"]');
+    expect(card).toBeTruthy();
+    // jsdom serializes camelCase style props to kebab-case; check the raw
+    // style attribute for the transition: none token.
+    expect(card.getAttribute('style')).toMatch(/transition:\s*none/);
+
+    window.matchMedia = origMatchMedia;
   });
 });

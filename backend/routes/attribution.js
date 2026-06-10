@@ -14,8 +14,13 @@ const { validateDateRange } = require("../lib/validateDateRange");
 
 const router = express.Router();
 
-function tenantOf(req) {
-  return (req.user && req.user.tenantId) || 1;
+function tenantOf(req, res) {
+  const id = req.user?.tenantId;
+  if (!id) {
+    res.status(401).json({ error: "Unauthorized" });
+    return null;
+  }
+  return id;
 }
 
 function parseDateRange(req) {
@@ -29,9 +34,10 @@ function parseDateRange(req) {
 
 // ── POST /track ──────────────────────────────────────────────────
 // body: { contactId, channel, source, medium, campaignId?, url? }
-router.post("/track", async (req, res) => {
+router.post("/track", verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
   try {
-    const tenantId = tenantOf(req);
+    const tenantId = tenantOf(req, res);
+    if (tenantId == null) return;
     const { contactId, channel, source, medium, campaignId, url } =
       req.body || {};
     if (!contactId || !channel) {
@@ -117,9 +123,10 @@ router.post("/track", async (req, res) => {
 // collision can occur. (Even though /stats and /contact/:id are distinct
 // paths, declaring /stats before any /:id-style route is the conservative
 // pattern from travel_suppliers.js /suppliers/stats.)
-router.get("/stats", async (req, res) => {
+router.get("/stats", verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
   try {
-    const tenantId = tenantOf(req);
+    const tenantId = tenantOf(req, res);
+    if (tenantId == null) return;
 
     // Per-field ISO validity — mirrors travel_suppliers.js /suppliers/stats.
     const where = { tenantId };
@@ -233,9 +240,10 @@ router.get("/stats", async (req, res) => {
 });
 
 // ── GET /contact/:id — timeline ──────────────────────────────────
-router.get("/contact/:id", async (req, res) => {
+router.get("/contact/:id", verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
   try {
-    const tenantId = tenantOf(req);
+    const tenantId = tenantOf(req, res);
+    if (tenantId == null) return;
     const contactId = Number(req.params.id);
     const contact = await prisma.contact.findFirst({
       where: { id: contactId, tenantId },
@@ -263,14 +271,15 @@ router.get("/contact/:id", async (req, res) => {
 // ── GET /report?from=&to= ────────────────────────────────────────
 // aggregates touchpoints by channel + source. deals = won deals tied to
 // contacts with at least one touchpoint of that channel/source.
-router.get("/report", async (req, res) => {
+router.get("/report", verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
   try {
     // #665: reject inverted / invalid date ranges with a 400 before we silently
     // return an empty aggregation.
     const dv = validateDateRange({ from: req.query.from, to: req.query.to });
     if (dv.error) return res.status(dv.error.status).json(dv.error);
 
-    const tenantId = tenantOf(req);
+    const tenantId = tenantOf(req, res);
+    if (tenantId == null) return;
     const dateFilter = parseDateRange(req);
     const where = { tenantId };
     if (dateFilter) where.timestamp = dateFilter;
@@ -371,9 +380,10 @@ router.get("/report", async (req, res) => {
 
 // ── GET /first-touch-revenue ─────────────────────────────────────
 // For each won deal, attribute revenue to the contact's firstTouchSource.
-router.get("/first-touch-revenue", async (req, res) => {
+router.get("/first-touch-revenue", verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
   try {
-    const tenantId = tenantOf(req);
+    const tenantId = tenantOf(req, res);
+    if (tenantId == null) return;
     const wonDeals = await prisma.deal.findMany({
       where: { tenantId, stage: "won" },
       select: { id: true, amount: true, contactId: true },
@@ -431,9 +441,10 @@ router.get("/first-touch-revenue", async (req, res) => {
 // ── GET /multi-touch-revenue ─────────────────────────────────────
 // Split each won deal's revenue equally across all unique touchpoint sources
 // for that contact.
-router.get("/multi-touch-revenue", async (req, res) => {
+router.get("/multi-touch-revenue", verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
   try {
-    const tenantId = tenantOf(req);
+    const tenantId = tenantOf(req, res);
+    if (tenantId == null) return;
     const wonDeals = await prisma.deal.findMany({
       where: { tenantId, stage: "won" },
       select: { id: true, amount: true, contactId: true },
@@ -550,7 +561,8 @@ router.get("/multi-touch-revenue", async (req, res) => {
 // strips body-supplied tenantId; ESLint rule blocks the read).
 router.get("/voyagr/summary", verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
   try {
-    const tenantId = tenantOf(req);
+    const tenantId = tenantOf(req, res);
+    if (tenantId == null) return;
 
     // days param: default 30, clamp to [1, 365], reject anything else
     // with a 400 so callers don't silently get a window other than the

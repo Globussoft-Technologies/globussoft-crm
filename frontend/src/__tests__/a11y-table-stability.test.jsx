@@ -76,9 +76,11 @@ const ICON_BUTTON_SITES = [
   // Dashboards — widget-remove + generic modal close
   { file: ['pages', 'Dashboards.jsx'], substr: 'aria-label="Remove widget"' },
   { file: ['pages', 'Dashboards.jsx'], substr: 'aria-label={`Close ${title} dialog`}' },
-  // wellness/Services — service edit + deactivate
-  { file: ['pages', 'wellness', 'Services.jsx'], substr: 'aria-label={`Edit service ${service.name}`}' },
-  { file: ['pages', 'wellness', 'Services.jsx'], substr: 'aria-label={`Deactivate service ${service.name}`}' },
+  // wellness/Services — service edit + deactivate. The 815a8783 refactor split
+  // Services.jsx into services/*.jsx subcomponents; the per-row edit/deactivate
+  // buttons (and their aria-labels) now live in services/ServiceCard.jsx.
+  { file: ['pages', 'wellness', 'services', 'ServiceCard.jsx'], substr: 'aria-label={`Edit service ${service.name}`}' },
+  { file: ['pages', 'wellness', 'services', 'ServiceCard.jsx'], substr: 'aria-label={`Deactivate service ${service.name}`}' },
   // #632 follow-up — Surveys + Loyalty (skipped from original sweep due to
   // peer-agent file contention; closed by the wave1-a-aria-632 dispatch).
   // Surveys — send-survey modal X, list-card delete X (per-survey context),

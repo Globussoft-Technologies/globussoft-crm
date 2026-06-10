@@ -408,6 +408,100 @@ describe('GET / — list active sessions (tenant-scoped, agent-authenticated)', 
 });
 
 // ─────────────────────────────────────────────────────────────────────────
+// GET /?fields=summary — slim-shape opt-in (#920 slice 29)
+//
+// The default GET / handler does an N+1 lastMessage fetch per session and
+// returns full message bodies. ?fields=summary drops both — slim Prisma
+// `select` returns only {id, visitorId, visitorName, status, agentId,
+// startedAt}, with NO lastMessage envelope. Opt-in additive; default
+// shape unchanged.
+// ─────────────────────────────────────────────────────────────────────────
+
+describe('GET /?fields=summary — slim-shape opt-in (#920 slice 29)', () => {
+  test('200 returns sessions WITHOUT lastMessage when ?fields=summary', async () => {
+    prisma.liveChatSession.findMany.mockResolvedValue([
+      { id: 1, visitorId: 'v-a', visitorName: 'Alice', status: 'OPEN', agentId: null, startedAt: new Date('2026-01-01') },
+      { id: 2, visitorId: 'v-b', visitorName: 'Bob', status: 'ASSIGNED', agentId: 11, startedAt: new Date('2026-01-02') },
+    ]);
+
+    const res = await request(makeApp({ tenantId: 42 }))
+      .get('/api/live-chat/?fields=summary');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(2);
+    // No lastMessage envelope on any row.
+    expect(res.body[0].lastMessage).toBeUndefined();
+    expect(res.body[1].lastMessage).toBeUndefined();
+    // Per-session findFirst lastMessage probe must NOT fire under slim mode.
+    expect(prisma.liveChatMessage.findFirst).not.toHaveBeenCalled();
+  });
+
+  test('slim mode uses Prisma select to project only summary fields', async () => {
+    prisma.liveChatSession.findMany.mockResolvedValue([]);
+
+    await request(makeApp({ tenantId: 42 })).get('/api/live-chat/?fields=summary');
+
+    expect(prisma.liveChatSession.findMany).toHaveBeenCalledWith({
+      where: { tenantId: 42, status: { not: 'CLOSED' } },
+      orderBy: { startedAt: 'desc' },
+      select: {
+        id: true,
+        visitorId: true,
+        visitorName: true,
+        status: true,
+        agentId: true,
+        startedAt: true,
+      },
+    });
+  });
+
+  test('slim mode preserves tenant scope + NOT-CLOSED status filter', async () => {
+    prisma.liveChatSession.findMany.mockResolvedValue([]);
+
+    await request(makeApp({ tenantId: 99 })).get('/api/live-chat/?fields=summary');
+
+    const args = prisma.liveChatSession.findMany.mock.calls[0][0];
+    expect(args.where).toEqual({ tenantId: 99, status: { not: 'CLOSED' } });
+  });
+
+  test('default shape (no ?fields) STILL attaches lastMessage envelope — opt-in is additive', async () => {
+    prisma.liveChatSession.findMany.mockResolvedValue([
+      { id: 1, tenantId: 42, status: 'OPEN', visitorId: 'v-a' },
+    ]);
+    prisma.liveChatMessage.findFirst.mockResolvedValue({
+      id: 100, sessionId: 1, body: 'hi from A',
+    });
+
+    const res = await request(makeApp({ tenantId: 42 })).get('/api/live-chat/');
+
+    expect(res.status).toBe(200);
+    // Default-shape lastMessage envelope still present + populated.
+    expect(res.body[0].lastMessage.body).toBe('hi from A');
+    // Default shape does NOT pass `select` (uses full row).
+    const args = prisma.liveChatSession.findMany.mock.calls[0][0];
+    expect(args.select).toBeUndefined();
+  });
+
+  test('unknown ?fields value falls back to default shape (lastMessage attached)', async () => {
+    prisma.liveChatSession.findMany.mockResolvedValue([
+      { id: 1, tenantId: 42, status: 'OPEN', visitorId: 'v-a' },
+    ]);
+    prisma.liveChatMessage.findFirst.mockResolvedValue({
+      id: 100, sessionId: 1, body: 'hi',
+    });
+
+    const res = await request(makeApp({ tenantId: 42 }))
+      .get('/api/live-chat/?fields=bogusvalue');
+
+    expect(res.status).toBe(200);
+    expect(res.body[0].lastMessage).toBeDefined();
+    expect(res.body[0].lastMessage.body).toBe('hi');
+    // findFirst (N+1 probe) DOES fire when not in slim mode.
+    expect(prisma.liveChatMessage.findFirst).toHaveBeenCalled();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
 // GET /stats — KPI summary envelope
 // ─────────────────────────────────────────────────────────────────────────
 

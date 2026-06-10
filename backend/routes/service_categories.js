@@ -16,10 +16,27 @@ const { verifyWellnessRole } = require("../middleware/wellnessRole");
 const router = express.Router();
 
 const tenantWhere = (req, extra = {}) => ({ tenantId: req.user.tenantId, ...extra });
-const adminGate = verifyWellnessRole(["admin", "manager"]);
+// Service-category mutations are operational config. `anyOfPermissions`
+// lets a custom RBAC role with `services.write` (the page catalog's
+// permission for /wellness/service-categories) perform the action even
+// without a matching wellnessRole.
+const adminGate = verifyWellnessRole(
+  ["admin", "manager"],
+  { anyOfPermissions: [{ module: "services", action: "write" }] },
+);
 
 // ── ServiceCategory CRUD ───────────────────────────────────────────
 
+// Slim-shape opt-in (#920 slice 48): when called with ?fields=summary,
+// the handler drops the `_count.{services, children}` nested aggregate
+// from the Prisma query and ships only the slim picker columns
+// (id, name, parentId, displayOrder, isActive). Useful for the wellness
+// service-form category picker / autocomplete that needs label+ordering
+// only, NOT the per-row child/service tallies the admin index renders.
+// Existing callers (no ?fields, or any non-exact value) keep the full
+// _count include shape unchanged. Same strict opt-in pattern as
+// routes/canned_responses.js + routes/sla.js + routes/ab_tests.js
+// (slices 1-45).
 router.get("/", async (req, res) => {
   // List is OPEN to any authenticated tenant user (the picker on the
   // wellness service form needs to read the list — no admin gate).
@@ -27,11 +44,23 @@ router.get("/", async (req, res) => {
     const where = tenantWhere(req);
     if (req.query.isActive === "true") where.isActive = true;
     if (req.query.isActive === "false") where.isActive = false;
-    const items = await prisma.serviceCategory.findMany({
+    const isSummary = req.query.fields === "summary";
+    const findManyArgs = {
       where,
       orderBy: [{ displayOrder: "asc" }, { name: "asc" }],
-      include: { _count: { select: { services: true, children: true } } },
-    });
+    };
+    if (isSummary) {
+      findManyArgs.select = {
+        id: true,
+        name: true,
+        parentId: true,
+        displayOrder: true,
+        isActive: true,
+      };
+    } else {
+      findManyArgs.include = { _count: { select: { services: true, children: true } } };
+    }
+    const items = await prisma.serviceCategory.findMany(findManyArgs);
     res.json(items);
   } catch (e) {
     console.error("[service-categories] list error:", e.message);
@@ -41,7 +70,7 @@ router.get("/", async (req, res) => {
 
 router.post("/", adminGate, async (req, res) => {
   try {
-    const { name, parentId, displayOrder, isActive } = req.body;
+    const { name, parentId, displayOrder, isActive, imageUrl, color, description } = req.body;
     if (!name || typeof name !== "string" || !name.trim()) {
       return res.status(400).json({ error: "name is required", code: "NAME_REQUIRED" });
     }
@@ -59,6 +88,9 @@ router.post("/", adminGate, async (req, res) => {
           parentId: parentId ? parseInt(parentId) : null,
           displayOrder: typeof displayOrder === "number" ? displayOrder : 0,
           isActive: isActive !== false,
+          imageUrl: imageUrl || null,
+          color: color || null,
+          description: description || null,
           tenantId: req.user.tenantId,
         },
       });
@@ -87,8 +119,12 @@ router.put("/:id", adminGate, async (req, res) => {
     if (!existing) return res.status(404).json({ error: "Service category not found" });
 
     const data = {};
-    const allowed = ["name", "parentId", "displayOrder", "isActive"];
+    const allowed = ["name", "parentId", "displayOrder", "isActive", "imageUrl", "color", "description"];
     for (const k of allowed) if (req.body[k] !== undefined) data[k] = req.body[k];
+    // Normalize empty strings to null for nullable fields.
+    if (data.imageUrl === "") data.imageUrl = null;
+    if (data.color === "") data.color = null;
+    if (data.description === "") data.description = null;
 
     if (data.parentId === id) {
       return res.status(400).json({ error: "category cannot be its own parent", code: "PARENT_SELF_REFERENCE" });

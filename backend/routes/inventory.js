@@ -30,58 +30,115 @@
 // Audit emitted on every mutation to feed the AuditLog hash chain.
 
 const express = require("express");
-const path = require("path");
-const fs = require("fs");
-const multer = require("multer");
 const prisma = require("../lib/prisma");
 const { writeAudit, diffFields } = require("../lib/audit");
+const { requirePermission } = require("../middleware/requirePermission");
 const { verifyWellnessRole } = require("../middleware/wellnessRole");
 const { generateReceiptNumber } = require("../lib/inventoryReceiptNumber");
+const { ALLOWED_UNITS, isAllowedUnit, isConvertible } = require("../lib/consumptionUnits");
 // #665: shared inverted-date-range guard — see lib/validateDateRange.js.
 const { validateDateRange } = require("../lib/validateDateRange");
+const multer = require("multer");
+const { uploadImage, deleteFile, extractKeyFromUrl } = require("../services/s3Service");
 
 const router = express.Router();
 
-// #845 — multer disk storage for ProductCategory image uploads. Mirrors the
-// booking_pages.js + landing_pages.js pattern: directory created on demand,
-// safe filename (no path traversal), 2 MB cap per the issue requirement, and
-// fileFilter restricts to JPG / PNG / SVG / WEBP. Served statically from
-// server.js's `/uploads` mount at line 744.
-const CATEGORY_UPLOAD_DIR = path.join(__dirname, "..", "uploads", "product-categories");
-try { fs.mkdirSync(CATEGORY_UPLOAD_DIR, { recursive: true }); } catch { /* best-effort */ }
-const categoryImageUpload = multer({
-  storage: multer.diskStorage({
-    destination: (_req, _file, cb) => cb(null, CATEGORY_UPLOAD_DIR),
-    filename: (_req, file, cb) => {
-      const ext = path.extname(file.originalname || "").toLowerCase();
-      const safeExt = /^\.(png|jpe?g|webp|svg)$/i.test(ext) ? ext.toLowerCase() : ".png";
-      const stamp = Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
-      cb(null, `pc-${stamp}${safeExt}`);
-    },
-  }),
-  limits: { fileSize: 2 * 1024 * 1024 }, // 2 MB cap per issue #845
-  fileFilter: (_req, file, cb) => {
-    if (/^image\/(png|jpe?g|webp|svg\+xml)$/i.test(file.mimetype || "")) return cb(null, true);
-    return cb(new Error("Only PNG / JPEG / WebP / SVG images are allowed"));
+// Memory storage for multer (files uploaded to S3, not kept locally)
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+  fileFilter: (req, file, cb) => {
+    const allowedMimes = ["image/jpeg", "image/png", "image/webp", "image/gif"];
+    if (allowedMimes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error("Only image files are allowed"));
+    }
   },
 });
 
 // Standard tenant-where helper used everywhere in wellness.js.
 const tenantWhere = (req, extra = {}) => ({ tenantId: req.user.tenantId, ...extra });
 
-// admin + manager are allowed to manage inventory config and run receipts/
-// adjustments. Clinical staff (doctor/professional/telecaller) cannot — they
-// trigger consumption indirectly via visits, not by editing the catalog.
+// Permission gates aligned with the page catalog (backend/lib/pageCatalog.js)
+// and the route-level RoleGuard wraps in frontend/src/App.jsx. Replaces the
+// legacy `verifyWellnessRole(["admin","manager"])` gate which forced
+// admin/manager wellnessRole even for staff with explicit RBAC grants.
+//
+// Two distinct permission modules:
+//   products   — master catalog: Product Categories, Products, Auto-
+//                consumption rules. Curating what the clinic sells/uses.
+//   inventory  — operational ledger: Vendors, Receipts, Adjustments,
+//                Movements. How much stock we have + how it changed.
+// Each module supports read/write/update/delete/manage. Action mapping:
+//   read    — viewing lists / dropdowns (GET, including dropdowns
+//             consumed by sibling pages)
+//   write   — creating new records (POST)
+//   update  — editing existing records (PUT)
+//   delete  — destructive ops (DELETE + reverse receipts)
+//   manage  — admin-tier config (categories, vendors, auto-consumption
+//             rules, image uploads for catalog masters)
+// `products.read` is on the central CUSTOMER_SAFE_PERMISSIONS whitelist
+// in middleware/requirePermission.js — CUSTOMER users with the grant
+// pass the staff-route deny automatically. The catalogue + category
+// handlers below detect req.user.userType === 'CUSTOMER' and return a
+// stripped field set (no SKU, stock, purchase/dealer/cost prices, tax
+// internals, threshold, or barcode) so we don't leak inventory data.
+//
+// Auto-consumption rules is admin-config — the route still uses the
+// shared products.read gate but the page catalog bumps the sidebar
+// entry to products.manage so CUSTOMER never sees it. Defence in
+// depth: even if a CUSTOMER URL-hops there, the handler's include
+// pulls product.currentStock — readable in principle but harmless
+// because the page-catalog hides it.
+//
+// Write / update / delete / manage stay blanket-denied for CUSTOMER —
+// none of those permissions are in CUSTOMER_SAFE_PERMISSIONS. The
+// matrix checkbox is a no-op on those even if ticked.
+const canReadProducts = requirePermission("products", "read");
+const canWriteProducts = requirePermission("products", "write");
+const canUpdateProducts = requirePermission("products", "update");
+const canDeleteProducts = requirePermission("products", "delete");
+const canManageProducts = requirePermission("products", "manage");
+const canReadInventory = requirePermission("inventory", "read");
+const canWriteInventory = requirePermission("inventory", "write");
+const canUpdateInventory = requirePermission("inventory", "update");
+const canDeleteInventory = requirePermission("inventory", "delete");
+const canManageInventory = requirePermission("inventory", "manage");
+
+// Service-catalog uploads (/upload/service-image, /upload/service-category-image)
+// have no `services:manage` RBAC permission yet, so they fall back to the same
+// admin/manager wellnessRole gate used in routes/service_categories.js and
+// routes/pos.js.
 const adminGate = verifyWellnessRole(["admin", "manager"]);
 
 // ── ProductCategory CRUD ───────────────────────────────────────────
 
-router.get("/product-categories", adminGate, async (req, res) => {
+router.get("/product-categories", canReadProducts, async (req, res) => {
   try {
+    const isCustomer = req.user?.userType === "CUSTOMER";
+    // Customer view: hide inactive categories + drop the _count (which
+    // includes inactive product counts they shouldn't infer). Staff view
+    // keeps everything for the management UI.
     const items = await prisma.productCategory.findMany({
-      where: tenantWhere(req),
+      where: isCustomer
+        ? { ...tenantWhere(req), isActive: true }
+        : tenantWhere(req),
       orderBy: [{ parentId: "asc" }, { name: "asc" }],
-      include: { _count: { select: { products: true, children: true } } },
+      take: 200,
+      ...(isCustomer
+        ? {
+            select: {
+              id: true,
+              name: true,
+              parentId: true,
+              imageUrl: true,
+              color: true,
+            },
+          }
+        : {
+            include: { _count: { select: { products: true, children: true } } },
+          }),
     });
     res.json(items);
   } catch (e) {
@@ -90,9 +147,9 @@ router.get("/product-categories", adminGate, async (req, res) => {
   }
 });
 
-router.post("/product-categories", adminGate, async (req, res) => {
+router.post("/product-categories", canManageProducts, async (req, res) => {
   try {
-    const { name, parentId, isActive, imageUrl } = req.body;
+    const { name, parentId, isActive, imageUrl, color } = req.body;
     if (!name || typeof name !== "string" || !name.trim()) {
       return res.status(400).json({ error: "name is required", code: "NAME_REQUIRED" });
     }
@@ -102,21 +159,19 @@ router.post("/product-categories", adminGate, async (req, res) => {
       });
       if (!parent) return res.status(400).json({ error: "parentId does not exist in this tenant", code: "PARENT_NOT_FOUND" });
     }
-    // #845 — imageUrl is set by the /upload endpoint or pre-existing; accept it
-    // here so the form can create-then-upload OR create-with-existing-url in one
-    // shot. Length cap mirrors the @db.VarChar(500) schema column.
-    if (imageUrl !== undefined && imageUrl !== null && imageUrl !== "") {
-      if (typeof imageUrl !== "string" || imageUrl.length > 500) {
-        return res.status(400).json({ error: "imageUrl must be a string ≤500 chars", code: "IMAGE_URL_INVALID" });
-      }
-    }
+    // Set parentId as a scalar (matches how tenantId is set on this same
+    // create). The previous shape — tenantId scalar + `parent: { connect }`
+    // relation — caused Prisma to throw because the create mixed two
+    // foreign-key idioms on the same row; the scalar form is the canonical
+    // one used everywhere else in this module.
     const cat = await prisma.productCategory.create({
       data: {
         name: name.trim(),
-        parentId: parentId ? parseInt(parentId) : null,
         isActive: isActive !== false,
         imageUrl: imageUrl || null,
+        color: color || null,
         tenantId: req.user.tenantId,
+        ...(parentId ? { parentId: parseInt(parentId) } : {}),
       },
     });
     await writeAudit("ProductCategory", "CREATE", cat.id, req.user.userId, req.user.tenantId, {
@@ -127,39 +182,45 @@ router.post("/product-categories", adminGate, async (req, res) => {
     res.status(201).json(cat);
   } catch (e) {
     console.error("[inventory] create category error:", e.message);
-    res.status(500).json({ error: "Failed to create product category" });
+    let errorMsg = "Failed to create product category";
+    if (e.code === "P2002") errorMsg = "A category with this name already exists";
+    else if (e.message.includes("Unique constraint")) errorMsg = "A category with this name already exists";
+    else if (e.message.includes("Foreign key")) errorMsg = "Invalid parent category selected";
+    res.status(500).json({ error: errorMsg, code: e.code || "CREATION_FAILED" });
   }
 });
 
-router.put("/product-categories/:id", adminGate, async (req, res) => {
+router.put("/product-categories/:id", canManageProducts, async (req, res) => {
   try {
     const id = parseInt(req.params.id);
     const existing = await prisma.productCategory.findFirst({ where: tenantWhere(req, { id }) });
     if (!existing) return res.status(404).json({ error: "Product category not found" });
 
     const data = {};
-    const allowed = ["name", "parentId", "isActive", "imageUrl"];
-    for (const k of allowed) if (req.body[k] !== undefined) data[k] = req.body[k];
+    const allowed = ["name", "parentId", "isActive", "imageUrl", "color"];
+    let parentId = undefined;
 
-    if (data.parentId === id) {
+    for (const k of allowed) {
+      if (req.body[k] !== undefined) {
+        if (k === "parentId") {
+          parentId = req.body[k];
+        } else {
+          data[k] = req.body[k];
+        }
+      }
+    }
+
+    if (parentId === id) {
       return res.status(400).json({ error: "category cannot be its own parent", code: "PARENT_SELF_REFERENCE" });
     }
-    if (data.parentId !== undefined && data.parentId !== null) {
+    if (parentId !== undefined && parentId !== null) {
       const parent = await prisma.productCategory.findFirst({
-        where: tenantWhere(req, { id: parseInt(data.parentId) }),
+        where: tenantWhere(req, { id: parseInt(parentId) }),
       });
       if (!parent) return res.status(400).json({ error: "parentId does not exist in this tenant", code: "PARENT_NOT_FOUND" });
-      data.parentId = parseInt(data.parentId);
-    }
-    // #845 — imageUrl can be set to a new string, cleared with `null`, or left
-    // alone by omission. Empty-string is normalised to null so the DB stores a
-    // single canonical absent-value form.
-    if (data.imageUrl !== undefined) {
-      if (data.imageUrl === null || data.imageUrl === "") {
-        data.imageUrl = null;
-      } else if (typeof data.imageUrl !== "string" || data.imageUrl.length > 500) {
-        return res.status(400).json({ error: "imageUrl must be a string ≤500 chars", code: "IMAGE_URL_INVALID" });
-      }
+      data.parent = { connect: { id: parseInt(parentId) } };
+    } else if (parentId === null) {
+      data.parent = { disconnect: true };
     }
 
     const updated = await prisma.productCategory.update({ where: { id }, data });
@@ -170,15 +231,29 @@ router.put("/product-categories/:id", adminGate, async (req, res) => {
     res.json(updated);
   } catch (e) {
     console.error("[inventory] update category error:", e.message);
-    res.status(500).json({ error: "Failed to update product category" });
+    let errorMsg = "Failed to update product category";
+    if (e.code === "P2002") errorMsg = "A category with this name already exists";
+    else if (e.message.includes("Unique constraint")) errorMsg = "A category with this name already exists";
+    else if (e.message.includes("Foreign key")) errorMsg = "Invalid parent category selected";
+    res.status(500).json({ error: errorMsg, code: e.code || "UPDATE_FAILED" });
   }
 });
 
-router.delete("/product-categories/:id", adminGate, async (req, res) => {
+router.delete("/product-categories/:id", canManageProducts, async (req, res) => {
   try {
     const id = parseInt(req.params.id);
     const existing = await prisma.productCategory.findFirst({ where: tenantWhere(req, { id }) });
     if (!existing) return res.status(404).json({ error: "Product category not found" });
+
+    // Delete associated S3 image if exists
+    if (existing.imageUrl) {
+      const fileKey = extractKeyFromUrl(existing.imageUrl);
+      if (fileKey) {
+        await deleteFile(fileKey).catch(err =>
+          console.warn(`Failed to delete S3 image: ${err.message}`)
+        );
+      }
+    }
 
     await prisma.productCategory.delete({ where: { id } });
     await writeAudit("ProductCategory", "DELETE", id, req.user.userId, req.user.tenantId, { name: existing.name });
@@ -189,89 +264,137 @@ router.delete("/product-categories/:id", adminGate, async (req, res) => {
   }
 });
 
-// #845 — Upload (or replace) the category's image. Mirrors the multer disk
-// pattern from routes/booking_pages.js:328. Multipart field name is "file".
-// Cleans up the orphan upload on tenant-scope miss so a 404 can't pollute
-// disk. On success, persists the new imageUrl, audit-logs the change, and
-// returns the updated row.
-router.post("/product-categories/:id/upload", adminGate, categoryImageUpload.single("file"), async (req, res) => {
+// ── Image upload for categories and products ───────────────────────
+
+router.post("/upload/category-image", canManageProducts, upload.single("file"), async (req, res) => {
   try {
-    const id = parseInt(req.params.id, 10);
-    if (!Number.isFinite(id)) {
-      if (req.file && req.file.path) { try { fs.unlinkSync(req.file.path); } catch { /* swallow */ } }
-      return res.status(400).json({ error: "invalid id" });
+    if (!req.file) {
+      return res.status(400).json({ error: "file is required (multipart field 'file')" });
     }
-    const existing = await prisma.productCategory.findFirst({ where: tenantWhere(req, { id }) });
-    if (!existing) {
-      if (req.file && req.file.path) { try { fs.unlinkSync(req.file.path); } catch { /* swallow */ } }
-      return res.status(404).json({ error: "Product category not found" });
-    }
-    if (!req.file) return res.status(400).json({ error: "file is required (multipart field 'file')" });
-
-    const imageUrl = `/uploads/product-categories/${req.file.filename}`;
-    const updated = await prisma.productCategory.update({
-      where: { id },
-      data: { imageUrl },
-    });
-
-    // Best-effort cleanup of the previous file once the row points at the new URL.
-    if (existing.imageUrl && existing.imageUrl.startsWith("/uploads/product-categories/")) {
-      const oldFilename = existing.imageUrl.replace("/uploads/product-categories/", "");
-      const oldPath = path.join(CATEGORY_UPLOAD_DIR, oldFilename);
-      try { if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath); } catch { /* swallow */ }
-    }
-
-    await writeAudit("ProductCategory", "UPDATE", id, req.user.userId, req.user.tenantId, {
-      changedFields: { imageUrl: { from: existing.imageUrl, to: imageUrl } },
-    });
-    res.status(201).json({ success: true, imageUrl, category: updated });
+    const url = await uploadImage(
+      req.file.buffer,
+      req.file.originalname,
+      req.file.mimetype,
+      'product-categories'
+    );
+    res.status(201).json({ success: true, url, filename: req.file.originalname });
   } catch (err) {
-    console.error("[inventory] category upload error:", err);
-    if (err && /file too large|allowed/i.test(err.message)) {
+    console.error("[inventory] category image upload error:", err.message);
+    if (/file too large|allowed/i.test(err.message)) {
       return res.status(400).json({ error: err.message });
     }
-    res.status(500).json({ error: "Failed to upload category image" });
+    res.status(500).json({ error: "Failed to upload image" });
   }
 });
 
-// #845 — Remove the category's image without deleting the row. Clears the
-// imageUrl column and best-effort unlinks the file on disk.
-router.delete("/product-categories/:id/upload", adminGate, async (req, res) => {
+router.post("/upload/product-image", canWriteProducts, upload.single("file"), async (req, res) => {
   try {
-    const id = parseInt(req.params.id, 10);
-    if (!Number.isFinite(id)) return res.status(400).json({ error: "invalid id" });
-    const existing = await prisma.productCategory.findFirst({ where: tenantWhere(req, { id }) });
-    if (!existing) return res.status(404).json({ error: "Product category not found" });
-    if (!existing.imageUrl) return res.status(200).json({ success: true, imageUrl: null, category: existing });
-
-    if (existing.imageUrl.startsWith("/uploads/product-categories/")) {
-      const oldFilename = existing.imageUrl.replace("/uploads/product-categories/", "");
-      const oldPath = path.join(CATEGORY_UPLOAD_DIR, oldFilename);
-      try { if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath); } catch { /* swallow */ }
+    if (!req.file) {
+      return res.status(400).json({ error: "file is required (multipart field 'file')" });
     }
-
-    const updated = await prisma.productCategory.update({
-      where: { id },
-      data: { imageUrl: null },
-    });
-    await writeAudit("ProductCategory", "UPDATE", id, req.user.userId, req.user.tenantId, {
-      changedFields: { imageUrl: { from: existing.imageUrl, to: null } },
-    });
-    res.json({ success: true, imageUrl: null, category: updated });
+    const url = await uploadImage(
+      req.file.buffer,
+      req.file.originalname,
+      req.file.mimetype,
+      'products'
+    );
+    res.status(201).json({ success: true, url, filename: req.file.originalname });
   } catch (err) {
-    console.error("[inventory] category image remove error:", err);
-    res.status(500).json({ error: "Failed to remove category image" });
+    console.error("[inventory] product image upload error:", err.message);
+    if (/file too large|allowed/i.test(err.message)) {
+      return res.status(400).json({ error: err.message });
+    }
+    res.status(500).json({ error: "Failed to upload image" });
+  }
+});
+
+// Service catalog + category image uploads — mirrors the product-image
+// shape above so the frontend uploader (multipart 'file' field, returns
+// `{ success, url, filename }`) is identical across both surfaces.
+router.post("/upload/service-image", adminGate, upload.single("file"), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: "file is required (multipart field 'file')" });
+    }
+    const url = await uploadImage(
+      req.file.buffer,
+      req.file.originalname,
+      req.file.mimetype,
+      'services'
+    );
+    res.status(201).json({ success: true, url, filename: req.file.originalname });
+  } catch (err) {
+    console.error("[inventory] service image upload error:", err.message);
+    if (/file too large|allowed/i.test(err.message)) {
+      return res.status(400).json({ error: err.message });
+    }
+    res.status(500).json({ error: "Failed to upload image" });
+  }
+});
+
+router.post("/upload/service-category-image", adminGate, upload.single("file"), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: "file is required (multipart field 'file')" });
+    }
+    const url = await uploadImage(
+      req.file.buffer,
+      req.file.originalname,
+      req.file.mimetype,
+      'service-categories'
+    );
+    res.status(201).json({ success: true, url, filename: req.file.originalname });
+  } catch (err) {
+    console.error("[inventory] service-category image upload error:", err.message);
+    if (/file too large|allowed/i.test(err.message)) {
+      return res.status(400).json({ error: err.message });
+    }
+    res.status(500).json({ error: "Failed to upload image" });
   }
 });
 
 // ── Product read (list for forms) ───────────────────────────────────
 
-router.get("/products", adminGate, async (req, res) => {
+router.get("/products", canReadProducts, async (req, res) => {
   try {
+    const isCustomer = req.user?.userType === "CUSTOMER";
+    // Customer view: only active, non-Consumption (clinic-only) products,
+    // and a safe field set — no SKU / stock counts / cost prices /
+    // manufacturer / tax internals / barcode / threshold. Staff view
+    // keeps the full row for the catalogue management UI.
     const items = await prisma.product.findMany({
-      where: tenantWhere(req),
+      where: isCustomer
+        ? {
+            ...tenantWhere(req),
+            isActive: true,
+            NOT: { productType: "Consumption" },
+          }
+        : tenantWhere(req),
       orderBy: { name: "asc" },
-      select: { id: true, name: true, sku: true, categoryId: true, currentStock: true, threshold: true, price: true },
+      take: 200,
+      ...(isCustomer
+        ? {
+            select: {
+              id: true,
+              name: true,
+              description: true,
+              price: true,
+              discountedPrice: true,
+              imageUrl: true,
+              brandName: true,
+              volume: true,
+              unit: true,
+              productType: true,
+              // categoryId kept so the frontend's category-filter
+              // dropdown still works; the field is a foreign key, not
+              // sensitive data.
+              categoryId: true,
+              category: { select: { id: true, name: true } },
+            },
+          }
+        : {
+            include: { category: { select: { id: true, name: true } } },
+          }),
     });
     res.json(items);
   } catch (e) {
@@ -280,9 +403,224 @@ router.get("/products", adminGate, async (req, res) => {
   }
 });
 
+// Reject negative numerics on product writes. Stock + threshold are unit
+// counts (non-negative integers); price/volume/cost fields are non-negative
+// numbers. Returns { error, code } on the first violation, else null. The
+// frontend guards too, but a direct API call must not be able to seed a
+// negative stock level. Only validates keys present in the body (PUT is
+// partial), so a blank/omitted field falls through to the column default.
+function checkProductNumerics(body) {
+  const intFields = ["threshold", "currentStock"];
+  const floatFields = ["price", "volume", "discountedPrice", "dealerPrice", "purchasePrice", "tax"];
+  for (const f of intFields) {
+    const v = body[f];
+    if (v === undefined || v === null || v === "") continue;
+    const n = Number(v);
+    if (!Number.isInteger(n) || n < 0) {
+      return { error: `${f} must be a non-negative whole number`, code: "INVALID_QUANTITY" };
+    }
+  }
+  for (const f of floatFields) {
+    const v = body[f];
+    if (v === undefined || v === null || v === "") continue;
+    const n = Number(v);
+    if (!Number.isFinite(n) || n < 0) {
+      return { error: `${f} must be a non-negative number`, code: "INVALID_NUMERIC" };
+    }
+  }
+  return null;
+}
+
+router.post("/products", canWriteProducts, async (req, res) => {
+  try {
+    const {
+      name, sku, description, price, categoryId, brandName, productType,
+      productCode, hsnCode, volume, unit, discountedPrice, dealerPrice,
+      purchasePrice, manufacturer, tax, isTaxIncluded, barcode, imageUrl,
+      threshold, currentStock, isActive
+    } = req.body;
+
+    if (!name || typeof name !== "string" || !name.trim()) {
+      return res.status(400).json({ error: "name is required", code: "NAME_REQUIRED" });
+    }
+
+    const numErr = checkProductNumerics(req.body);
+    if (numErr) return res.status(400).json(numErr);
+
+    // Check for duplicate SKU if provided
+    if (sku) {
+      const existing = await prisma.product.findFirst({
+        where: tenantWhere(req, { sku }),
+      });
+      if (existing) {
+        return res.status(400).json({ error: "SKU already exists", code: "SKU_DUPLICATE" });
+      }
+    }
+
+    // Verify category exists if provided
+    if (categoryId) {
+      const category = await prisma.productCategory.findFirst({
+        where: tenantWhere(req, { id: parseInt(categoryId) }),
+      });
+      if (!category) {
+        return res.status(400).json({ error: "Category not found", code: "CATEGORY_NOT_FOUND" });
+      }
+    }
+
+    const product = await prisma.product.create({
+      data: {
+        name: name.trim(),
+        sku: sku ? sku.trim() : null,
+        description: description || null,
+        price: parseFloat(price) || 0,
+        categoryId: categoryId ? parseInt(categoryId) : null,
+        brandName: brandName || null,
+        productType: productType || null,
+        productCode: productCode || null,
+        hsnCode: hsnCode || null,
+        volume: volume ? parseFloat(volume) : null,
+        unit: unit || null,
+        discountedPrice: discountedPrice ? parseFloat(discountedPrice) : null,
+        dealerPrice: dealerPrice ? parseFloat(dealerPrice) : null,
+        purchasePrice: purchasePrice ? parseFloat(purchasePrice) : null,
+        manufacturer: manufacturer || null,
+        tax: tax ? parseFloat(tax) : null,
+        isTaxIncluded: isTaxIncluded === true,
+        barcode: barcode || null,
+        imageUrl: imageUrl || null,
+        threshold: threshold ? parseInt(threshold) : 0,
+        currentStock: currentStock ? parseInt(currentStock) : 0,
+        isActive: isActive !== false,
+        tenantId: req.user.tenantId,
+      },
+      include: { category: { select: { id: true, name: true } } },
+    });
+
+    await writeAudit("Product", "CREATE", product.id, req.user.userId, req.user.tenantId, {
+      name: product.name,
+      sku: product.sku,
+      price: product.price,
+    });
+
+    res.status(201).json(product);
+  } catch (e) {
+    console.error("[inventory] create product error:", e.message);
+    let errorMsg = "Failed to create product";
+    if (e.code === "P2002") errorMsg = "A product with this SKU already exists";
+    else if (e.message.includes("Unique constraint")) errorMsg = "A product with this SKU already exists";
+    else if (e.message.includes("Foreign key")) errorMsg = "Invalid category selected";
+    res.status(500).json({ error: errorMsg, code: e.code || "CREATION_FAILED" });
+  }
+});
+
+router.put("/products/:id", canUpdateProducts, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const existing = await prisma.product.findFirst({ where: tenantWhere(req, { id }) });
+    if (!existing) return res.status(404).json({ error: "Product not found" });
+
+    const numErr = checkProductNumerics(req.body);
+    if (numErr) return res.status(400).json(numErr);
+
+    const allowed = [
+      "name", "sku", "description", "price", "categoryId", "brandName",
+      "productType", "productCode", "hsnCode", "volume", "unit",
+      "discountedPrice", "dealerPrice", "purchasePrice", "manufacturer",
+      "tax", "isTaxIncluded", "barcode", "imageUrl", "threshold",
+      "currentStock", "isActive"
+    ];
+
+    const data = {};
+    for (const k of allowed) {
+      if (req.body[k] !== undefined) {
+        if (k.includes("Price") || k === "price" || k === "volume" || k === "tax") {
+          data[k] = req.body[k] ? parseFloat(req.body[k]) : null;
+        } else if (k.includes("Stock") || k === "threshold") {
+          data[k] = req.body[k] ? parseInt(req.body[k]) : 0;
+        } else if (k === "isTaxIncluded" || k === "isActive") {
+          data[k] = req.body[k] === true;
+        } else if (k === "categoryId") {
+          data[k] = req.body[k] ? parseInt(req.body[k]) : null;
+        } else {
+          data[k] = req.body[k];
+        }
+      }
+    }
+
+    // Check SKU uniqueness if changing
+    if (data.sku && data.sku !== existing.sku) {
+      const duplicate = await prisma.product.findFirst({
+        where: tenantWhere(req, { sku: data.sku }),
+      });
+      if (duplicate) {
+        return res.status(400).json({ error: "SKU already exists", code: "SKU_DUPLICATE" });
+      }
+    }
+
+    // Verify new category exists if provided
+    if (data.categoryId && data.categoryId !== existing.categoryId) {
+      const category = await prisma.productCategory.findFirst({
+        where: tenantWhere(req, { id: data.categoryId }),
+      });
+      if (!category) {
+        return res.status(400).json({ error: "Category not found", code: "CATEGORY_NOT_FOUND" });
+      }
+    }
+
+    const updated = await prisma.product.update({
+      where: { id },
+      data,
+      include: { category: { select: { id: true, name: true } } },
+    });
+
+    const changes = diffFields(existing, updated, Object.keys(data));
+    if (Object.keys(changes).length > 0) {
+      await writeAudit("Product", "UPDATE", id, req.user.userId, req.user.tenantId, { changedFields: changes });
+    }
+
+    res.json(updated);
+  } catch (e) {
+    console.error("[inventory] update product error:", e.message);
+    let errorMsg = "Failed to update product";
+    if (e.code === "P2002") errorMsg = "A product with this SKU already exists";
+    else if (e.message.includes("Unique constraint")) errorMsg = "A product with this SKU already exists";
+    else if (e.message.includes("Foreign key")) errorMsg = "Invalid category selected";
+    res.status(500).json({ error: errorMsg, code: e.code || "UPDATE_FAILED" });
+  }
+});
+
+router.delete("/products/:id", canDeleteProducts, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const existing = await prisma.product.findFirst({ where: tenantWhere(req, { id }) });
+    if (!existing) return res.status(404).json({ error: "Product not found" });
+
+    // Delete associated S3 image if exists
+    if (existing.imageUrl) {
+      const fileKey = extractKeyFromUrl(existing.imageUrl);
+      if (fileKey) {
+        await deleteFile(fileKey).catch(err =>
+          console.warn(`Failed to delete S3 image: ${err.message}`)
+        );
+      }
+    }
+
+    await prisma.product.delete({ where: { id } });
+    await writeAudit("Product", "DELETE", id, req.user.userId, req.user.tenantId, {
+      name: existing.name,
+      sku: existing.sku,
+    });
+
+    res.status(204).send();
+  } catch (e) {
+    console.error("[inventory] delete product error:", e.message);
+    res.status(500).json({ error: "Failed to delete product" });
+  }
+});
+
 // ── Vendor CRUD ────────────────────────────────────────────────────
 
-router.get("/vendors", adminGate, async (req, res) => {
+router.get("/vendors", canReadInventory, async (req, res) => {
   try {
     const where = tenantWhere(req);
     if (req.query.isActive === "true") where.isActive = true;
@@ -290,6 +628,7 @@ router.get("/vendors", adminGate, async (req, res) => {
     const items = await prisma.vendor.findMany({
       where,
       orderBy: { name: "asc" },
+      take: 200,
     });
     res.json(items);
   } catch (e) {
@@ -298,7 +637,7 @@ router.get("/vendors", adminGate, async (req, res) => {
   }
 });
 
-router.post("/vendors", adminGate, async (req, res) => {
+router.post("/vendors", canManageInventory, async (req, res) => {
   try {
     const { name, contactPerson, phone, email, gstin, addressLine, isActive } = req.body;
     if (!name || typeof name !== "string" || !name.trim()) {
@@ -333,7 +672,7 @@ router.post("/vendors", adminGate, async (req, res) => {
   }
 });
 
-router.put("/vendors/:id", adminGate, async (req, res) => {
+router.put("/vendors/:id", canManageInventory, async (req, res) => {
   try {
     const id = parseInt(req.params.id);
     const existing = await prisma.vendor.findFirst({ where: tenantWhere(req, { id }) });
@@ -359,7 +698,7 @@ router.put("/vendors/:id", adminGate, async (req, res) => {
   }
 });
 
-router.delete("/vendors/:id", adminGate, async (req, res) => {
+router.delete("/vendors/:id", canManageInventory, async (req, res) => {
   try {
     const id = parseInt(req.params.id);
     const existing = await prisma.vendor.findFirst({ where: tenantWhere(req, { id }) });
@@ -539,7 +878,7 @@ router.get("/inventory/stats", adminGate, async (req, res) => {
 // immutable once written (no PUT/DELETE). Corrections happen via
 // InventoryAdjustment with the appropriate signed delta.
 
-router.get("/inventory/receipts", adminGate, async (req, res) => {
+router.get("/inventory/receipts", canReadInventory, async (req, res) => {
   try {
     // #665: reject inverted / invalid date ranges before they silently return empty.
     const dv = validateDateRange({ from: req.query.from, to: req.query.to });
@@ -559,19 +898,29 @@ router.get("/inventory/receipts", adminGate, async (req, res) => {
       take: Math.min(parseInt(req.query.limit) || 100, 500),
       include: {
         product: { select: { id: true, name: true, sku: true } },
-        vendor: { select: { id: true, name: true } },
+        vendor: { select: { id: true, name: true, phone: true, gstin: true } },
       },
     });
-    res.json(items);
+
+    const userIds = [...new Set(items.map((r) => r.receivedBy).filter(Boolean))];
+    const users = userIds.length
+      ? await prisma.user.findMany({ where: { id: { in: userIds } }, select: { id: true, name: true, email: true } })
+      : [];
+    const userById = new Map(users.map((u) => [u.id, u]));
+    const enriched = items.map((r) => ({
+      ...r,
+      receivedByUser: userById.get(r.receivedBy) || null,
+    }));
+    res.json(enriched);
   } catch (e) {
     console.error("[inventory] list receipts error:", e.message);
     res.status(500).json({ error: "Failed to list inventory receipts" });
   }
 });
 
-router.post("/inventory/receipts", adminGate, async (req, res) => {
+router.post("/inventory/receipts", canWriteInventory, async (req, res) => {
   try {
-    const { productId, vendorId, quantity, unitCost, batchNumber, expiryDate, notes } = req.body;
+    const { productId, vendorId, quantity, unitCost, batchNumber, expiryDate, notes, supplierInvoiceNumber } = req.body;
     if (!productId) return res.status(400).json({ error: "productId is required", code: "PRODUCT_REQUIRED" });
     if (quantity == null || Number(quantity) <= 0) {
       return res.status(400).json({ error: "quantity must be a positive number", code: "QUANTITY_INVALID" });
@@ -600,6 +949,7 @@ router.post("/inventory/receipts", adminGate, async (req, res) => {
       const r = await tx.inventoryReceipt.create({
         data: {
           receiptNumber,
+          supplierInvoiceNumber: supplierInvoiceNumber ? String(supplierInvoiceNumber).trim() || null : null,
           productId: parseInt(productId),
           vendorId: vendorId ? parseInt(vendorId) : null,
           quantity: qty,
@@ -640,9 +990,236 @@ router.post("/inventory/receipts", adminGate, async (req, res) => {
   }
 });
 
+// Edit a receipt with safety rails (Option B from product spec):
+//   - "Safe" fields (supplierInvoiceNumber, batchNumber, expiryDate, notes) are
+//     editable any time — they don't move stock.
+//   - "Unsafe" fields (productId, quantity, unitCost) are editable only within
+//     EDIT_WINDOW_MS of creation (the typo window). After that, callers must
+//     use Reverse + a new receipt, or an InventoryAdjustment.
+// Stock-impacting edits adjust Product.currentStock atomically with the row
+// update so the rolling stock count stays consistent.
+const EDIT_WINDOW_MS = 5 * 60 * 1000;
+const SAFE_FIELDS = ["supplierInvoiceNumber", "batchNumber", "expiryDate", "notes"];
+const UNSAFE_FIELDS = ["productId", "quantity", "unitCost"];
+
+router.put("/inventory/receipts/:id", canUpdateInventory, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const existing = await prisma.inventoryReceipt.findFirst({ where: tenantWhere(req, { id }) });
+    if (!existing) return res.status(404).json({ error: "Receipt not found" });
+
+    const ageMs = Date.now() - new Date(existing.createdAt).getTime();
+    const withinWindow = ageMs <= EDIT_WINDOW_MS;
+
+    const safeChanges = {};
+    for (const k of SAFE_FIELDS) {
+      if (req.body[k] === undefined) continue;
+      if (k === "expiryDate") {
+        safeChanges[k] = req.body[k] ? new Date(req.body[k]) : null;
+      } else {
+        const v = req.body[k];
+        safeChanges[k] = v === "" || v == null ? null : (typeof v === "string" ? v.trim() || null : v);
+      }
+    }
+
+    const unsafeTouched = UNSAFE_FIELDS.some((k) => req.body[k] !== undefined);
+    if (unsafeTouched && !withinWindow) {
+      return res.status(409).json({
+        error: "Quantity, unit cost, and product can only be edited within 5 minutes of recording. Reverse this receipt and record a new one, or use an Adjustment.",
+        code: "EDIT_WINDOW_CLOSED",
+        editableFields: SAFE_FIELDS,
+      });
+    }
+
+    const unsafeChanges = {};
+    let newProductId = existing.productId;
+    let newQty = existing.quantity;
+    let newCost = existing.unitCost;
+
+    if (req.body.productId !== undefined) {
+      const pid = parseInt(req.body.productId);
+      const product = await prisma.product.findFirst({ where: tenantWhere(req, { id: pid }) });
+      if (!product) return res.status(400).json({ error: "product not found in this tenant", code: "PRODUCT_NOT_FOUND" });
+      newProductId = pid;
+      unsafeChanges.productId = pid;
+    }
+    if (req.body.quantity !== undefined) {
+      const q = Number(req.body.quantity);
+      if (!(q > 0)) return res.status(400).json({ error: "quantity must be a positive number", code: "QUANTITY_INVALID" });
+      newQty = q;
+      unsafeChanges.quantity = q;
+    }
+    if (req.body.unitCost !== undefined) {
+      const c = Number(req.body.unitCost);
+      if (!(c >= 0)) return res.status(400).json({ error: "unitCost must be 0 or greater", code: "UNIT_COST_INVALID" });
+      newCost = c;
+      unsafeChanges.unitCost = c;
+    }
+    if (req.body.quantity !== undefined || req.body.unitCost !== undefined) {
+      unsafeChanges.totalCost = newQty * newCost;
+    }
+
+    const updated = await prisma.$transaction(async (tx) => {
+      if (newProductId !== existing.productId) {
+        await tx.product.update({
+          where: { id: existing.productId },
+          data: { currentStock: { decrement: Math.ceil(existing.quantity) } },
+        });
+        await tx.product.update({
+          where: { id: newProductId },
+          data: { currentStock: { increment: Math.ceil(newQty) } },
+        });
+      } else if (newQty !== existing.quantity) {
+        const delta = Math.ceil(newQty) - Math.ceil(existing.quantity);
+        if (delta !== 0) {
+          await tx.product.update({
+            where: { id: existing.productId },
+            data: { currentStock: { increment: delta } },
+          });
+        }
+      }
+      return tx.inventoryReceipt.update({
+        where: { id },
+        data: { ...safeChanges, ...unsafeChanges },
+      });
+    });
+
+    const allChanged = { ...safeChanges, ...unsafeChanges };
+    if (Object.keys(allChanged).length > 0) {
+      await writeAudit("InventoryReceipt", "UPDATE", id, req.user.userId, req.user.tenantId, {
+        receiptNumber: existing.receiptNumber,
+        changedFields: diffFields(existing, updated, Object.keys(allChanged)),
+      });
+    }
+    res.json(updated);
+  } catch (e) {
+    console.error("[inventory] update receipt error:", e.message);
+    res.status(500).json({ error: "Failed to update inventory receipt" });
+  }
+});
+
+// Hard-delete a receipt with safety rails (Option B):
+//   - Refused (409) if any ServiceConsumption for the same product has been
+//     recorded since the receipt was created — we can't prove the consumed
+//     stock didn't come from this batch.
+//   - Refused (409) if the delete would push currentStock negative.
+// In both refusal cases the response carries `code` so the UI can prompt the
+// caller to use Reverse instead. Delete decrements stock by the receipt qty.
+router.delete("/inventory/receipts/:id", canDeleteInventory, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const receipt = await prisma.inventoryReceipt.findFirst({ where: tenantWhere(req, { id }) });
+    if (!receipt) return res.status(404).json({ error: "Receipt not found" });
+
+    const consumedSince = await prisma.serviceConsumption.count({
+      where: tenantWhere(req, {
+        productId: receipt.productId,
+        createdAt: { gte: receipt.createdAt },
+      }),
+    });
+    if (consumedSince > 0) {
+      return res.status(409).json({
+        error: "This receipt cannot be deleted because stock of this product has been consumed since it was recorded. Reverse it instead — that preserves the audit trail.",
+        code: "RECEIPT_CONSUMED",
+        consumptionCount: consumedSince,
+      });
+    }
+
+    const product = await prisma.product.findFirst({ where: tenantWhere(req, { id: receipt.productId }), select: { currentStock: true } });
+    if (product && product.currentStock < Math.ceil(receipt.quantity)) {
+      return res.status(409).json({
+        error: "Deleting this receipt would push stock below zero. Reverse it instead.",
+        code: "WOULD_OVERDRAW",
+        currentStock: product.currentStock,
+        receiptQuantity: receipt.quantity,
+      });
+    }
+
+    await prisma.$transaction(async (tx) => {
+      await tx.product.update({
+        where: { id: receipt.productId },
+        data: { currentStock: { decrement: Math.ceil(receipt.quantity) } },
+      });
+      await tx.inventoryReceipt.delete({ where: { id } });
+    });
+
+    await writeAudit("InventoryReceipt", "DELETE", id, req.user.userId, req.user.tenantId, {
+      receiptNumber: receipt.receiptNumber,
+      productId: receipt.productId,
+      quantity: receipt.quantity,
+    });
+    res.status(204).send();
+  } catch (e) {
+    console.error("[inventory] delete receipt error:", e.message);
+    res.status(500).json({ error: "Failed to delete inventory receipt" });
+  }
+});
+
+// Reverse a previously-recorded receipt by creating a compensating
+// InventoryAdjustment with a negative delta equal to the receipt's quantity.
+// The original receipt stays in place (immutability rule from server header).
+// Idempotent: re-reversing returns 409 with the existing adjustment id.
+router.post("/inventory/receipts/:id/reverse", canDeleteInventory, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const receipt = await prisma.inventoryReceipt.findFirst({ where: tenantWhere(req, { id }) });
+    if (!receipt) return res.status(404).json({ error: "Receipt not found" });
+
+    const existing = await prisma.inventoryAdjustment.findFirst({
+      where: tenantWhere(req, {
+        productId: receipt.productId,
+        reason: "RECEIPT_REVERSAL",
+        notes: { contains: receipt.receiptNumber },
+      }),
+    });
+    if (existing) {
+      return res.status(409).json({
+        error: "Receipt has already been reversed",
+        code: "ALREADY_REVERSED",
+        adjustmentId: existing.id,
+      });
+    }
+
+    const delta = -Math.abs(Number(receipt.quantity));
+    const reverseNote = `Reversal of receipt ${receipt.receiptNumber}${req.body?.notes ? ` — ${String(req.body.notes).slice(0, 200)}` : ""}`;
+
+    const adjustment = await prisma.$transaction(async (tx) => {
+      const a = await tx.inventoryAdjustment.create({
+        data: {
+          productId: receipt.productId,
+          quantityDelta: delta,
+          reason: "RECEIPT_REVERSAL",
+          notes: reverseNote,
+          performedBy: req.user.userId,
+          tenantId: req.user.tenantId,
+        },
+      });
+      const stockDelta = delta > 0 ? Math.ceil(delta) : Math.floor(delta);
+      await tx.product.update({
+        where: { id: receipt.productId },
+        data: { currentStock: { increment: stockDelta } },
+      });
+      return a;
+    });
+
+    await writeAudit("InventoryAdjustment", "INVENTORY_ADJUST", adjustment.id, req.user.userId, req.user.tenantId, {
+      productId: adjustment.productId,
+      quantityDelta: adjustment.quantityDelta,
+      reason: adjustment.reason,
+      reversedReceiptId: receipt.id,
+      reversedReceiptNumber: receipt.receiptNumber,
+    });
+
+    res.status(201).json(adjustment);
+  } catch (e) {
+    console.error("[inventory] reverse receipt error:", e.message);
+    res.status(500).json({ error: "Failed to reverse inventory receipt" });
+  }
+});
+
 // ── Inventory Adjustments (signed deltas) ─────────────────────────
 
-router.get("/inventory/adjustments", adminGate, async (req, res) => {
+router.get("/inventory/adjustments", canReadInventory, async (req, res) => {
   try {
     // #665: reject inverted / invalid date ranges before they silently return empty.
     const dv = validateDateRange({ from: req.query.from, to: req.query.to });
@@ -669,10 +1246,10 @@ router.get("/inventory/adjustments", adminGate, async (req, res) => {
 });
 
 const VALID_ADJUSTMENT_REASONS = new Set([
-  "SHRINKAGE", "DAMAGE", "EXPIRY", "RECOUNT", "TRANSFER_OUT", "TRANSFER_IN", "MANUAL",
+  "SHRINKAGE", "DAMAGE", "EXPIRY", "RECOUNT", "TRANSFER_OUT", "TRANSFER_IN", "MANUAL", "RECEIPT_REVERSAL",
 ]);
 
-router.post("/inventory/adjustments", adminGate, async (req, res) => {
+router.post("/inventory/adjustments", canWriteInventory, async (req, res) => {
   try {
     const { productId, quantityDelta, reason, notes } = req.body;
     if (!productId) return res.status(400).json({ error: "productId is required", code: "PRODUCT_REQUIRED" });
@@ -729,7 +1306,7 @@ router.post("/inventory/adjustments", adminGate, async (req, res) => {
 
 // ── Auto-consumption rules (per-service-per-product) ─────────────
 
-router.get("/auto-consumption-rules", adminGate, async (req, res) => {
+router.get("/auto-consumption-rules", canReadProducts, async (req, res) => {
   try {
     const where = tenantWhere(req);
     if (req.query.serviceId) where.serviceId = parseInt(req.query.serviceId);
@@ -738,9 +1315,10 @@ router.get("/auto-consumption-rules", adminGate, async (req, res) => {
     const items = await prisma.autoConsumptionRule.findMany({
       where,
       orderBy: [{ serviceId: "asc" }, { productId: "asc" }],
+      take: 200,
       include: {
         service: { select: { id: true, name: true } },
-        product: { select: { id: true, name: true, sku: true, currentStock: true } },
+        product: { select: { id: true, name: true, sku: true, currentStock: true, unit: true } },
       },
     });
     res.json(items);
@@ -750,9 +1328,9 @@ router.get("/auto-consumption-rules", adminGate, async (req, res) => {
   }
 });
 
-router.post("/auto-consumption-rules", adminGate, async (req, res) => {
+router.post("/auto-consumption-rules", canManageProducts, async (req, res) => {
   try {
-    const { serviceId, productId, quantityPerVisit, isActive } = req.body;
+    const { serviceId, productId, quantityPerVisit, unit, isActive } = req.body;
     if (!serviceId) return res.status(400).json({ error: "serviceId is required", code: "SERVICE_REQUIRED" });
     if (!productId) return res.status(400).json({ error: "productId is required", code: "PRODUCT_REQUIRED" });
     if (quantityPerVisit == null || Number(quantityPerVisit) <= 0) {
@@ -764,12 +1342,34 @@ router.post("/auto-consumption-rules", adminGate, async (req, res) => {
     const product = await prisma.product.findFirst({ where: tenantWhere(req, { id: parseInt(productId) }) });
     if (!product) return res.status(400).json({ error: "product not found in this tenant", code: "PRODUCT_NOT_FOUND" });
 
+    // Validate optional unit. If supplied, it must be from the allowed enum
+    // AND convertible to the product's base unit (so the applier can
+    // deterministically deduct stock). If the product has no base unit set,
+    // we accept any allowed unit and treat them as equivalent.
+    let normalisedUnit = null;
+    if (unit !== undefined && unit !== null && unit !== "") {
+      if (!isAllowedUnit(unit)) {
+        return res.status(400).json({
+          error: `unit must be one of: ${ALLOWED_UNITS.join(", ")}`,
+          code: "UNIT_INVALID",
+        });
+      }
+      if (product.unit && !isConvertible(unit, product.unit)) {
+        return res.status(400).json({
+          error: `unit '${unit}' is not convertible to product unit '${product.unit}'`,
+          code: "UNIT_INCOMPATIBLE",
+        });
+      }
+      normalisedUnit = unit;
+    }
+
     try {
       const rule = await prisma.autoConsumptionRule.create({
         data: {
           serviceId: parseInt(serviceId),
           productId: parseInt(productId),
           quantityPerVisit: Number(quantityPerVisit),
+          unit: normalisedUnit,
           isActive: isActive !== false,
           tenantId: req.user.tenantId,
         },
@@ -778,6 +1378,7 @@ router.post("/auto-consumption-rules", adminGate, async (req, res) => {
         serviceId: rule.serviceId,
         productId: rule.productId,
         quantityPerVisit: rule.quantityPerVisit,
+        unit: rule.unit,
       });
       res.status(201).json(rule);
     } catch (createErr) {
@@ -795,7 +1396,7 @@ router.post("/auto-consumption-rules", adminGate, async (req, res) => {
   }
 });
 
-router.put("/auto-consumption-rules/:id", adminGate, async (req, res) => {
+router.put("/auto-consumption-rules/:id", canManageProducts, async (req, res) => {
   try {
     const id = parseInt(req.params.id);
     const existing = await prisma.autoConsumptionRule.findFirst({ where: tenantWhere(req, { id }) });
@@ -806,6 +1407,29 @@ router.put("/auto-consumption-rules/:id", adminGate, async (req, res) => {
       const q = Number(req.body.quantityPerVisit);
       if (q <= 0) return res.status(400).json({ error: "quantityPerVisit must be a positive number", code: "QUANTITY_INVALID" });
       data.quantityPerVisit = q;
+    }
+    if (req.body.unit !== undefined) {
+      if (req.body.unit === null || req.body.unit === "") {
+        data.unit = null;
+      } else {
+        if (!isAllowedUnit(req.body.unit)) {
+          return res.status(400).json({
+            error: `unit must be one of: ${ALLOWED_UNITS.join(", ")}`,
+            code: "UNIT_INVALID",
+          });
+        }
+        const product = await prisma.product.findFirst({
+          where: tenantWhere(req, { id: existing.productId }),
+          select: { unit: true },
+        });
+        if (product && product.unit && !isConvertible(req.body.unit, product.unit)) {
+          return res.status(400).json({
+            error: `unit '${req.body.unit}' is not convertible to product unit '${product.unit}'`,
+            code: "UNIT_INCOMPATIBLE",
+          });
+        }
+        data.unit = req.body.unit;
+      }
     }
     if (req.body.isActive !== undefined) data.isActive = !!req.body.isActive;
 
@@ -821,7 +1445,7 @@ router.put("/auto-consumption-rules/:id", adminGate, async (req, res) => {
   }
 });
 
-router.delete("/auto-consumption-rules/:id", adminGate, async (req, res) => {
+router.delete("/auto-consumption-rules/:id", canManageProducts, async (req, res) => {
   try {
     const id = parseInt(req.params.id);
     const existing = await prisma.autoConsumptionRule.findFirst({ where: tenantWhere(req, { id }) });
@@ -844,7 +1468,7 @@ router.delete("/auto-consumption-rules/:id", adminGate, async (req, res) => {
 // Used by the frontend Inventory.jsx → Movements tab. Returns a chronologically
 // sorted ledger of every stock change for the requested product. Enables an
 // auditor to reconstruct currentStock from zero.
-router.get("/inventory/movements", adminGate, async (req, res) => {
+router.get("/inventory/movements", canReadInventory, async (req, res) => {
   try {
     const productId = req.query.productId ? parseInt(req.query.productId) : null;
     if (!productId) return res.status(400).json({ error: "productId is required", code: "PRODUCT_REQUIRED" });

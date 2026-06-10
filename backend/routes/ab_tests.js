@@ -6,13 +6,19 @@ const prisma = require("../lib/prisma");
 // (potentially) email previews. HTML payloads here would land as stored
 // XSS the next time an admin opens the test or recipients receive a
 // preview email. Same #398/#447 class as lead_routing.js (v3.4.11 097ef5a).
+const { verifyRole } = require("../middleware/auth");
 const { sanitizeText, sanitizeJsonForStringColumn } = require("../lib/sanitizeJson");
 
 const router = express.Router();
 
 // ── Helpers ──────────────────────────────────────────────────────
-function tenantOf(req) {
-  return (req.user && req.user.tenantId) || 1;
+function tenantOf(req, res) {
+  const id = req.user?.tenantId;
+  if (!id) {
+    res.status(401).json({ error: "Unauthorized" });
+    return null;
+  }
+  return id;
 }
 
 function safeJsonParse(value, fallback = {}) {
@@ -65,13 +71,46 @@ function computeStats(test) {
 }
 
 // ── GET / — list AB tests ────────────────────────────────────────
-router.get("/", async (req, res) => {
+//
+// Slim-shape opt-in (#920 slice 45): when called with ?fields=summary,
+// the handler drops the heavy `variantA`/`variantB` JSON-text columns
+// from the Prisma select and skips the `serialize()` + `computeStats()`
+// decoration — useful for the marketing-AB-test admin index /
+// autocomplete / picker surfaces that only need id+name+status+counter
+// columns and don't render the variant bodies. Existing callers (no
+// ?fields, or any non-exact value) get the full row shape with parsed
+// variants + stats envelope unchanged. Same strict opt-in pattern as
+// routes/canned_responses.js + routes/sla.js (slices 1-42).
+router.get("/", verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
   try {
-    const tenantId = tenantOf(req);
-    const tests = await prisma.abTest.findMany({
+    const tenantId = tenantOf(req, res);
+    if (tenantId == null) return;
+    const isSummary = req.query.fields === "summary";
+    const findManyArgs = {
       where: { tenantId },
       orderBy: { createdAt: "desc" },
-    });
+    };
+    if (isSummary) {
+      findManyArgs.select = {
+        id: true,
+        name: true,
+        campaignId: true,
+        status: true,
+        winningVariant: true,
+        variantASent: true,
+        variantBSent: true,
+        variantAClicked: true,
+        variantBClicked: true,
+        createdAt: true,
+        updatedAt: true,
+      };
+    }
+    const tests = await prisma.abTest.findMany(findManyArgs);
+    if (isSummary) {
+      // Slim rows ship as-is — no variant JSON to parse, no stats envelope.
+      res.json(tests);
+      return;
+    }
     res.json(tests.map((t) => ({ ...serialize(t), stats: computeStats(t) })));
   } catch (err) {
     console.error("[ab_tests/list]", err);
@@ -80,9 +119,10 @@ router.get("/", async (req, res) => {
 });
 
 // ── POST / — create ──────────────────────────────────────────────
-router.post("/", async (req, res) => {
+router.post("/", verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
   try {
-    const tenantId = tenantOf(req);
+    const tenantId = tenantOf(req, res);
+    if (tenantId == null) return;
     const { name, campaignId, variantA, variantB } = req.body || {};
     if (!name) return res.status(400).json({ error: "name is required" });
 
@@ -133,9 +173,10 @@ router.post("/", async (req, res) => {
 //   - lastCreatedAt    max createdAt ISO string, or null when empty
 //
 // NO audit row written (read-only meta surface).
-router.get("/stats", async (req, res) => {
+router.get("/stats", verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
   try {
-    const tenantId = tenantOf(req);
+    const tenantId = tenantOf(req, res);
+    if (tenantId == null) return;
     const where = { tenantId };
 
     const fromRaw = req.query.from ? String(req.query.from) : null;
@@ -201,9 +242,10 @@ router.get("/stats", async (req, res) => {
 });
 
 // ── GET /:id — full details + stats ──────────────────────────────
-router.get("/:id", async (req, res) => {
+router.get("/:id", verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
   try {
-    const tenantId = tenantOf(req);
+    const tenantId = tenantOf(req, res);
+    if (tenantId == null) return;
     const id = Number(req.params.id);
     const test = await prisma.abTest.findFirst({ where: { id, tenantId } });
     if (!test) return res.status(404).json({ error: "AB test not found" });
@@ -215,9 +257,10 @@ router.get("/:id", async (req, res) => {
 });
 
 // ── PUT /:id — update ────────────────────────────────────────────
-router.put("/:id", async (req, res) => {
+router.put("/:id", verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
   try {
-    const tenantId = tenantOf(req);
+    const tenantId = tenantOf(req, res);
+    if (tenantId == null) return;
     const id = Number(req.params.id);
     const existing = await prisma.abTest.findFirst({ where: { id, tenantId } });
     if (!existing) return res.status(404).json({ error: "AB test not found" });
@@ -247,9 +290,10 @@ router.put("/:id", async (req, res) => {
 });
 
 // ── DELETE /:id ──────────────────────────────────────────────────
-router.delete("/:id", async (req, res) => {
+router.delete("/:id", verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
   try {
-    const tenantId = tenantOf(req);
+    const tenantId = tenantOf(req, res);
+    if (tenantId == null) return;
     const id = Number(req.params.id);
     const existing = await prisma.abTest.findFirst({ where: { id, tenantId } });
     if (!existing) return res.status(404).json({ error: "AB test not found" });
@@ -262,9 +306,10 @@ router.delete("/:id", async (req, res) => {
 });
 
 // ── POST /:id/start ──────────────────────────────────────────────
-router.post("/:id/start", async (req, res) => {
+router.post("/:id/start", verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
   try {
-    const tenantId = tenantOf(req);
+    const tenantId = tenantOf(req, res);
+    if (tenantId == null) return;
     const id = Number(req.params.id);
     const existing = await prisma.abTest.findFirst({ where: { id, tenantId } });
     if (!existing) return res.status(404).json({ error: "AB test not found" });
@@ -281,9 +326,10 @@ router.post("/:id/start", async (req, res) => {
 
 // ── POST /:id/track ──────────────────────────────────────────────
 // body: { variant: "A"|"B", action: "sent"|"clicked" }
-router.post("/:id/track", async (req, res) => {
+router.post("/:id/track", verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
   try {
-    const tenantId = tenantOf(req);
+    const tenantId = tenantOf(req, res);
+    if (tenantId == null) return;
     const id = Number(req.params.id);
     const { variant, action } = req.body || {};
     if (!["A", "B"].includes(variant)) {
@@ -314,9 +360,10 @@ router.post("/:id/track", async (req, res) => {
 });
 
 // ── POST /:id/declare-winner ─────────────────────────────────────
-router.post("/:id/declare-winner", async (req, res) => {
+router.post("/:id/declare-winner", verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
   try {
-    const tenantId = tenantOf(req);
+    const tenantId = tenantOf(req, res);
+    if (tenantId == null) return;
     const id = Number(req.params.id);
     const { winner } = req.body || {};
     if (!["A", "B"].includes(winner)) {
@@ -337,9 +384,10 @@ router.post("/:id/declare-winner", async (req, res) => {
 });
 
 // ── GET /:id/stats ───────────────────────────────────────────────
-router.get("/:id/stats", async (req, res) => {
+router.get("/:id/stats", verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
   try {
-    const tenantId = tenantOf(req);
+    const tenantId = tenantOf(req, res);
+    if (tenantId == null) return;
     const id = Number(req.params.id);
     const test = await prisma.abTest.findFirst({ where: { id, tenantId } });
     if (!test) return res.status(404).json({ error: "AB test not found" });

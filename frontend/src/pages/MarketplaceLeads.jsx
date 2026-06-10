@@ -3,6 +3,7 @@ import { formatDateTime as formatDate } from '../utils/date';
 import { formatPercent } from '../utils/percent';
 import React, { useState, useEffect } from 'react';
 import { ShoppingBag, Search, Download, RefreshCw, Settings, CheckCircle2, XCircle, AlertCircle, ExternalLink, Filter } from 'lucide-react';
+import PasswordInput from '../components/PasswordInput';
 
 const PROVIDERS = [
   { key: 'all', label: 'All Sources' },
@@ -210,13 +211,12 @@ const MarketplaceLeads = () => {
                   </div>
                   <div>
                     <label style={labelStyle}>API Secret</label>
-                    <input
-                      className="input-field"
+                    <PasswordInput
                       style={inputStyle}
-                      type="password"
                       placeholder="Enter API Secret"
                       defaultValue={existing.apiSecret || ''}
                       onChange={e => setConfigForm(f => ({ ...f, provider, apiSecret: e.target.value }))}
+                      autoComplete="off"
                     />
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginTop: '0.5rem' }}>

@@ -175,6 +175,30 @@ function renderPage({ role = 'ADMIN' } = {}) {
 }
 
 describe('DiagnosticDetail — advisor brief UI (PRD §4.1 + §4.2)', () => {
+  it('report PDF button POSTs to report-pdf/regen and opens the result', async () => {
+    const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/travel/diagnostics/42' && (!opts || opts.method === undefined || opts.method === 'GET')) {
+        return Promise.resolve(DIAGNOSTIC_NO_BRIEF);
+      }
+      if (url === '/api/travel/diagnostics/42/report-pdf/regen' && opts?.method === 'POST') {
+        return Promise.resolve({ reportPdfUrl: '/uploads/diagnostics/diag-42-new.pdf' });
+      }
+      return Promise.resolve(null);
+    });
+    renderPage();
+    const btn = await screen.findByRole('button', { name: /Regenerate PDF|Generate report PDF/i });
+    fireEvent.click(btn);
+    await waitFor(() => {
+      const post = fetchApiMock.mock.calls.find(
+        ([u, o]) => u === '/api/travel/diagnostics/42/report-pdf/regen' && o?.method === 'POST',
+      );
+      expect(post).toBeTruthy();
+    });
+    expect(openSpy).toHaveBeenCalledWith('/uploads/diagnostics/diag-42-new.pdf', '_blank', 'noopener,noreferrer');
+    openSpy.mockRestore();
+  });
+
   it('renders the page header with the diagnostic id', async () => {
     fetchApiMock.mockImplementation(makeFetchImpl(DIAGNOSTIC_NO_BRIEF));
     renderPage();
@@ -366,6 +390,31 @@ describe('DiagnosticDetail — advisor brief UI (PRD §4.1 + §4.2)', () => {
     );
   });
 
+  it('renders a Customer section with the contact name/email/phone when the diagnostic is enriched', async () => {
+    const enriched = {
+      ...DIAGNOSTIC_NO_BRIEF,
+      contactId: 100,
+      contact: { id: 100, name: 'Asha Verma', email: 'asha@x.com', phone: '+91 99999 00000' },
+    };
+    fetchApiMock.mockImplementation(makeFetchImpl(enriched));
+    renderPage();
+    await screen.findByRole('heading', { name: /Diagnostic #42/i });
+
+    // Header chip carries the name.
+    expect(screen.getByLabelText(/Customer/i).textContent).toMatch(/Asha Verma/i);
+    // Dedicated Customer section shows the full contact details.
+    expect(screen.getByRole('heading', { name: /^Customer$/i })).toBeTruthy();
+    expect(screen.getByText('asha@x.com')).toBeTruthy();
+    expect(screen.getByText('+91 99999 00000')).toBeTruthy();
+  });
+
+  it('Customer chip falls back to "Contact #<id>" when no enriched contact is attached', async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl(DIAGNOSTIC_NO_BRIEF));
+    renderPage();
+    await screen.findByRole('heading', { name: /Diagnostic #42/i });
+    expect(screen.getByLabelText(/Customer/i).textContent).toMatch(/Contact #100/i);
+  });
+
   it('falls back to the empty-state when questionsJson is missing — shows answers-map dump', async () => {
     const noQuestions = {
       ...DIAGNOSTIC_NO_BRIEF,
@@ -529,5 +578,574 @@ describe('DiagnosticDetail — advisor brief UI (PRD §4.1 + §4.2)', () => {
     });
     // No comparison-result block was painted.
     expect(screen.queryByTestId('comparison-result')).toBeNull();
+  });
+
+  // ── EXTENSION wave: SUT branches not yet exercised by the cases above.
+  //    Targets parser-helper edge cases (formatAnswer arrays/objects/empty,
+  //    parseQuestionList direct-array shape, talkingPointsJson-as-object,
+  //    answersJson-as-object), MANAGER-role regen gate, "review" palette
+  //    colour, raw-classification fallback when classificationLabel is
+  //    absent, comparison-response stub-pill, in-flight button copy, and
+  //    the envelope.text-empty fallback. All cases use the stable
+  //    notifyObj reference per CLAUDE.md feedback rule.
+
+  it('formatAnswer joins array answers with ", " in the answers table', async () => {
+    const diagWithArrayAnswers = {
+      ...DIAGNOSTIC_NO_BRIEF,
+      answersJson: JSON.stringify({
+        q1: ['Mecca', 'Medina', 'Jeddah'],
+        q2: 'October',
+        q3: '85000',
+      }),
+    };
+    fetchApiMock.mockImplementation(makeFetchImpl(diagWithArrayAnswers));
+    renderPage();
+    await screen.findByRole('heading', { name: /Diagnostic #42/i });
+    // Array elements collapse to comma-joined string in the answer cell.
+    expect(screen.getByText('Mecca, Medina, Jeddah')).toBeTruthy();
+  });
+
+  it('formatAnswer JSON.stringifies object answers and renders "—" for empty strings', async () => {
+    const diagWithObjectAnswer = {
+      ...DIAGNOSTIC_NO_BRIEF,
+      answersJson: JSON.stringify({
+        q1: { adults: 2, kids: 2 },
+        q2: '',
+        q3: '85000',
+      }),
+    };
+    fetchApiMock.mockImplementation(makeFetchImpl(diagWithObjectAnswer));
+    renderPage();
+    await screen.findByRole('heading', { name: /Diagnostic #42/i });
+    // Object value is JSON.stringified verbatim.
+    expect(screen.getByText('{"adults":2,"kids":2}')).toBeTruthy();
+    // Empty-string answer renders the "—" placeholder. There may be other
+    // "—" cells (e.g. recommended tier or score nulls), so accept ≥1.
+    expect(screen.getAllByText('—').length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('parseQuestionList accepts the direct-array snapshot shape (no inner questionsJson)', async () => {
+    // Snapshot shape #2: top-level `questions` array, no inner stringified blob.
+    const diagDirectArray = {
+      ...DIAGNOSTIC_NO_BRIEF,
+      questionsJson: JSON.stringify({
+        bankId: 1,
+        bankVersion: 1,
+        questions: [
+          { id: 'q1', text: 'Visa type?' },
+          { id: 'q2', label: 'Travel month?' },
+        ],
+      }),
+      answersJson: JSON.stringify({ q1: 'Tourist', q2: 'November' }),
+    };
+    fetchApiMock.mockImplementation(makeFetchImpl(diagDirectArray));
+    renderPage();
+    await screen.findByRole('heading', { name: /Diagnostic #42/i });
+    // Both question texts render — `text` AND `label` are both accepted.
+    expect(screen.getByText(/Visa type\?/i)).toBeTruthy();
+    expect(screen.getByText(/Travel month\?/i)).toBeTruthy();
+    expect(screen.getByText('Tourist')).toBeTruthy();
+    expect(screen.getByText('November')).toBeTruthy();
+  });
+
+  it('talkingPointsJson supplied as an already-parsed object renders correctly', async () => {
+    // Skips the JSON.parse branch in parseTalkingPointsEnvelope.
+    const diagWithObjectEnvelope = {
+      ...DIAGNOSTIC_NO_BRIEF,
+      talkingPointsJson: TALKING_POINTS_ENVELOPE, // object, NOT a string
+    };
+    fetchApiMock.mockImplementation(makeFetchImpl(diagWithObjectEnvelope));
+    renderPage();
+    await screen.findByRole('heading', { name: /Diagnostic #42/i });
+    const brief = await screen.findByTestId('talking-points-text');
+    expect(brief.textContent).toMatch(/high interest in Umrah/i);
+    expect(screen.getByText(/claude-3-opus-20240229/i)).toBeTruthy();
+  });
+
+  it('answersJson supplied as an already-parsed object skips the JSON.parse branch', async () => {
+    const diagWithObjectAnswers = {
+      ...DIAGNOSTIC_NO_BRIEF,
+      answersJson: { q1: '4', q2: 'October', q3: '85000' }, // object, NOT a string
+    };
+    fetchApiMock.mockImplementation(makeFetchImpl(diagWithObjectAnswers));
+    renderPage();
+    await screen.findByRole('heading', { name: /Diagnostic #42/i });
+    // Answers still render — the parser tolerated the object input shape.
+    expect(screen.getByText('4')).toBeTruthy();
+    expect(screen.getByText('October')).toBeTruthy();
+    expect(screen.getByText('85000')).toBeTruthy();
+  });
+
+  it('MANAGER role sees the regen button (parity with ADMIN gate)', async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl(DIAGNOSTIC_WITH_BRIEF));
+    renderPage({ role: 'MANAGER' });
+    await screen.findByRole('heading', { name: /Diagnostic #42/i });
+    // MANAGER is canRegen=true per the SUT's role gate.
+    expect(screen.getByRole('button', { name: /Regenerate talking points/i })).toBeTruthy();
+  });
+
+  it('USER-role empty-state hint says "Ask an admin or manager" (not the canRegen copy)', async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl(DIAGNOSTIC_NO_BRIEF));
+    renderPage({ role: 'USER' });
+    await screen.findByRole('heading', { name: /Diagnostic #42/i });
+    // USER sees the read-only nudge; the "Click Generate brief" copy is hidden.
+    expect(screen.getByText(/Ask an admin or manager to generate one/i)).toBeTruthy();
+    expect(screen.queryByText(/Click Generate brief/i)).toBeNull();
+  });
+
+  it('comparison.classification="review" paints the amber-palette colour', async () => {
+    const reviewResponse = {
+      ...COMPARE_RESPONSE_MATCH,
+      classification: 'review',
+      scorePercent: 70,
+      summary: 'Some answers diverge but the headline budget aligns.',
+    };
+    fetchApiMock.mockImplementation(
+      makeFetchImpl(DIAGNOSTIC_NO_BRIEF, { compareResponse: reviewResponse }),
+    );
+    renderPage();
+    await screen.findByRole('heading', { name: /Diagnostic #42/i });
+
+    const transcript = screen.getByLabelText(/Call transcript/i);
+    fireEvent.change(transcript, { target: { value: 'transcript' } });
+    fireEvent.click(screen.getByRole('button', { name: /Compare form vs call/i }));
+
+    const badge = await screen.findByTestId('comparison-classification-badge');
+    expect(badge.textContent.toLowerCase()).toBe('review');
+    const style = badge.getAttribute('style') || '';
+    // Review palette colour #9A6F2E == rgb(154, 111, 46).
+    expect(style).toMatch(/(#9A6F2E|rgb\(154,\s*111,\s*46\))/i);
+    expect(screen.getByText(/70%/)).toBeTruthy();
+  });
+
+  it('comparison.stub=true surfaces the STUB pill in the result row', async () => {
+    const stubCompare = { ...COMPARE_RESPONSE_MATCH, stub: true };
+    fetchApiMock.mockImplementation(
+      makeFetchImpl(DIAGNOSTIC_NO_BRIEF, { compareResponse: stubCompare }),
+    );
+    renderPage();
+    await screen.findByRole('heading', { name: /Diagnostic #42/i });
+
+    const transcript = screen.getByLabelText(/Call transcript/i);
+    fireEvent.change(transcript, { target: { value: 'transcript' } });
+    fireEvent.click(screen.getByRole('button', { name: /Compare form vs call/i }));
+
+    await screen.findByTestId('comparison-result');
+    // STUB pill renders inside the comparison-result block.
+    const pills = screen.getAllByText('STUB');
+    expect(pills.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('classification chip falls back to raw classification when classificationLabel is absent', async () => {
+    const noLabelDiag = {
+      ...DIAGNOSTIC_NO_BRIEF,
+      classificationLabel: null,
+      classification: 'level_2',
+    };
+    fetchApiMock.mockImplementation(makeFetchImpl(noLabelDiag));
+    renderPage();
+    await screen.findByRole('heading', { name: /Diagnostic #42/i });
+    // Raw value surfaces when no human-readable label is set.
+    expect(screen.getByLabelText(/Classification/i).textContent).toMatch(/level_2/);
+  });
+
+  it('SUT renders empty-answers-map "(empty)" copy when both questionsJson missing AND answersJson empty', async () => {
+    const stripped = {
+      ...DIAGNOSTIC_NO_BRIEF,
+      questionsJson: null,
+      answersJson: JSON.stringify({}),
+    };
+    fetchApiMock.mockImplementation(makeFetchImpl(stripped));
+    renderPage();
+    await screen.findByRole('heading', { name: /Diagnostic #42/i });
+    expect(screen.getByText(/No question snapshot found/i)).toBeTruthy();
+    // Empty answers-map collapses to "(empty)" placeholder.
+    expect(screen.getByText(/\(empty\)/)).toBeTruthy();
+  });
+
+  it('envelope.text=null falls back to "(no text returned)" placeholder', async () => {
+    const emptyTextEnvelope = { ...TALKING_POINTS_ENVELOPE, text: '' };
+    const diagWithEmpty = {
+      ...DIAGNOSTIC_NO_BRIEF,
+      talkingPointsJson: JSON.stringify(emptyTextEnvelope),
+    };
+    fetchApiMock.mockImplementation(makeFetchImpl(diagWithEmpty));
+    renderPage();
+    await screen.findByRole('heading', { name: /Diagnostic #42/i });
+    const brief = await screen.findByTestId('talking-points-text');
+    expect(brief.textContent).toMatch(/\(no text returned\)/i);
+  });
+
+  it('regen in-flight button copy flips to "Working…" while POST is pending', async () => {
+    let resolveRegen;
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/travel/diagnostics/42' && (!opts || opts.method === undefined)) {
+        return Promise.resolve(DIAGNOSTIC_NO_BRIEF);
+      }
+      if (url === '/api/travel/diagnostics/42/talking-points/regen' && opts?.method === 'POST') {
+        return new Promise((resolve) => { resolveRegen = resolve; });
+      }
+      return Promise.resolve(null);
+    });
+    renderPage();
+    await screen.findByRole('heading', { name: /Diagnostic #42/i });
+    fireEvent.click(screen.getByRole('button', { name: /Generate talking points/i }));
+    // Mid-flight copy surfaces before the promise resolves.
+    await waitFor(() => {
+      expect(screen.getByText(/Working/i)).toBeTruthy();
+    });
+    // Release the pending promise so React doesn't carry a leaked state into the next test.
+    resolveRegen({ diagnostic: DIAGNOSTIC_WITH_BRIEF, talkingPoints: TALKING_POINTS_ENVELOPE });
+    await screen.findByTestId('talking-points-text');
+  });
+
+  it('compare in-flight button copy flips to "Comparing…" while the POST is pending', async () => {
+    let resolveCompare;
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/travel/diagnostics/42' && (!opts || opts.method === undefined)) {
+        return Promise.resolve(DIAGNOSTIC_NO_BRIEF);
+      }
+      if (url === '/api/travel/diagnostics/42/form-vs-call/compare' && opts?.method === 'POST') {
+        return new Promise((resolve) => { resolveCompare = resolve; });
+      }
+      return Promise.resolve(null);
+    });
+    renderPage();
+    await screen.findByRole('heading', { name: /Diagnostic #42/i });
+
+    const transcript = screen.getByLabelText(/Call transcript/i);
+    fireEvent.change(transcript, { target: { value: 'transcript' } });
+    fireEvent.click(screen.getByRole('button', { name: /Compare form vs call/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/Comparing/i)).toBeTruthy();
+    });
+    // Resolve to clean up.
+    resolveCompare(COMPARE_RESPONSE_MATCH);
+    await screen.findByTestId('comparison-result');
+  });
+
+  it('invalid (NaN) diagnostic id renders the 400 "Invalid diagnostic id" error path', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      // The SUT should NOT call /api/... for a non-numeric id because the
+      // Number.isFinite guard short-circuits the load before fetch fires.
+      return Promise.resolve(null);
+    });
+    // Render with a non-numeric id so parseInt yields NaN.
+    render(
+      <MemoryRouter initialEntries={['/travel/diagnostics/not-a-number']}>
+        <AuthContext.Provider
+          value={{
+            user: { userId: 1, role: 'ADMIN' },
+            setUser: vi.fn(),
+            token: 'tk',
+            tenant: { id: 1, vertical: 'travel' },
+            loading: false,
+          }}
+        >
+          <Routes>
+            <Route path="/travel/diagnostics/:id" element={<DiagnosticDetail />} />
+          </Routes>
+        </AuthContext.Provider>
+      </MemoryRouter>,
+    );
+    await waitFor(() => {
+      expect(screen.getByText(/Invalid diagnostic id/i)).toBeTruthy();
+    });
+    // Network was never hit because the guard fired first.
+    const diagFetches = fetchApiMock.mock.calls.filter(([u]) =>
+      typeof u === 'string' && u.startsWith('/api/travel/diagnostics/'),
+    );
+    expect(diagFetches.length).toBe(0);
+  });
+
+  it('regen with a fetch that omits res.diagnostic falls back to a full reload', async () => {
+    let getCalls = 0;
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/travel/diagnostics/42' && (!opts || opts.method === undefined)) {
+        getCalls += 1;
+        // First call returns the no-brief diagnostic, subsequent calls return
+        // the populated one so the page re-renders the brief block.
+        return Promise.resolve(getCalls === 1 ? DIAGNOSTIC_NO_BRIEF : DIAGNOSTIC_WITH_BRIEF);
+      }
+      if (url === '/api/travel/diagnostics/42/talking-points/regen' && opts?.method === 'POST') {
+        // Response omits `diagnostic` — the SUT must fall back to load().
+        return Promise.resolve({ talkingPoints: TALKING_POINTS_ENVELOPE });
+      }
+      return Promise.resolve(null);
+    });
+    renderPage();
+    await screen.findByRole('heading', { name: /Diagnostic #42/i });
+
+    fireEvent.click(screen.getByRole('button', { name: /Generate talking points/i }));
+
+    await waitFor(() => {
+      // load() re-fires the GET — expect a SECOND /api/travel/diagnostics/42 call.
+      expect(getCalls).toBe(2);
+    });
+    await screen.findByTestId('talking-points-text');
+  });
+
+  // ─── T11 — human_pick recorder (DD-5.7) + collapsible engine output ─
+  // Pins PRD_TMC_DIAGNOSTIC_SALES_ROUTING_ENGINE §3.3.7 contract:
+  //   - human_pick dropdown shows 5 catalogue tripIds + "other" + "no_rec"
+  //   - ADMIN can edit; MANAGER/USER see read-only display only
+  //   - Engine output COLLAPSED until pick recorded (DD-5.7); REVEALS
+  //     automatically once saved
+  //   - PATCH /api/travel/diagnostics/:id with { humanPick: <slug> }
+
+  // TMC diagnostic with full engine output already persisted by the
+  // submit endpoint (T8). humanPick is null so the engine block stays
+  // collapsed until the senior reviewer records their blind pick.
+  const TMC_DIAGNOSTIC_NO_HUMAN_PICK = {
+    id: 42,
+    tenantId: 9,
+    subBrand: 'tmc',
+    contactId: 100,
+    questionsJson: JSON.stringify({
+      bankId: 7,
+      bankVersion: 1,
+      questionsJson: JSON.stringify({
+        questions: [
+          { id: 'primary_outcome', text: 'Primary outcome you want for students?' },
+          { id: 'grade_band', text: 'Which grade band?' },
+        ],
+      }),
+    }),
+    answersJson: JSON.stringify({ primary_outcome: 'confidence', grade_band: '9-10' }),
+    score: 78,
+    classification: 'strong_match',
+    classificationLabel: 'Strong match',
+    recommendedTier: 'domestic',
+    reportPdfUrl: null,
+    talkingPointsJson: null,
+    engineState: 'strong_match',
+    engineScoresJson: JSON.stringify({
+      'golden-triangle': { primaryOutcome: 50, secondarySkill: 20, total: 80 },
+      'madhya-pradesh':  { primaryOutcome: 50, secondarySkill: 20, total: 75 },
+    }),
+    recommendedTripId: 11,
+    alternativeTripId: 12,
+    icpTier: 'breadwinning',
+    leadQuality: 'clean',
+    leadQualityReasonsJson: null,
+    flagsJson: JSON.stringify(['scope_budget_conflict']),
+    humanPick: null,
+    weightsVersion: 'v1',
+    createdAt: '2026-06-08T08:00:00.000Z',
+  };
+
+  const TMC_DIAGNOSTIC_WITH_HUMAN_PICK = {
+    ...TMC_DIAGNOSTIC_NO_HUMAN_PICK,
+    humanPick: 'golden-triangle',
+  };
+
+  // Mock catalogue list (5 starter trips per PRD §3.2 / T4 seed).
+  const TMC_CATALOGUE_ACTIVE = [
+    { id: 11, tripId: 'golden-triangle',     title: 'Golden Triangle',         status: 'active' },
+    { id: 12, tripId: 'madhya-pradesh',      title: 'Madhya Pradesh Heritage', status: 'active' },
+    { id: 13, tripId: 'ladakh-expedition',   title: 'Ladakh Expedition',       status: 'active' },
+    { id: 14, tripId: 'europe-cultural',     title: 'Europe Cultural Tour',    status: 'active' },
+    { id: 15, tripId: 'usa-stem',            title: 'USA STEM Immersion',      status: 'active' },
+  ];
+
+  function makeTmcFetchImpl({ diagnostic, postPatchDiagnostic, catalogue } = {}) {
+    return (url, opts) => {
+      if (url === '/api/travel/diagnostics/42' && (!opts || opts.method === undefined || opts.method === 'GET')) {
+        return Promise.resolve(diagnostic);
+      }
+      if (url === '/api/travel/diagnostics/42' && opts?.method === 'PATCH') {
+        return Promise.resolve({ diagnostic: postPatchDiagnostic || { ...diagnostic, ...(opts.body ? JSON.parse(opts.body) : {}) } });
+      }
+      if (typeof url === 'string' && url.startsWith('/api/travel-tmc-catalogue')) {
+        return Promise.resolve(catalogue || TMC_CATALOGUE_ACTIVE);
+      }
+      return Promise.resolve(null);
+    };
+  }
+
+  it('T11: Engine output is COLLAPSED when humanPick is null + user is ADMIN', async () => {
+    fetchApiMock.mockImplementation(makeTmcFetchImpl({ diagnostic: TMC_DIAGNOSTIC_NO_HUMAN_PICK }));
+    renderPage();
+    await screen.findByRole('heading', { name: /Diagnostic #42/i });
+    // Collapsed sentinel surfaces.
+    expect(screen.getByTestId('engine-output-collapsed')).toBeTruthy();
+    expect(screen.getByText(/Engine output hidden/i)).toBeTruthy();
+    // Expanded block is NOT in the DOM.
+    expect(screen.queryByTestId('engine-output-expanded')).toBeNull();
+    // Reveal button is also absent (no pick recorded → no reveal CTA).
+    expect(screen.queryByTestId('engine-output-reveal')).toBeNull();
+  });
+
+  it('T11: Engine output is VISIBLE when humanPick is recorded (ADMIN)', async () => {
+    fetchApiMock.mockImplementation(makeTmcFetchImpl({ diagnostic: TMC_DIAGNOSTIC_WITH_HUMAN_PICK }));
+    renderPage();
+    await screen.findByRole('heading', { name: /Diagnostic #42/i });
+    await waitFor(() => {
+      expect(screen.getByTestId('engine-output-expanded')).toBeTruthy();
+    });
+    // The collapsed sentinel is NOT in the DOM.
+    expect(screen.queryByTestId('engine-output-collapsed')).toBeNull();
+    // Key engine fields are present.
+    expect(screen.getByText(/strong_match/i)).toBeTruthy();
+    expect(screen.getByText(/breadwinning/i)).toBeTruthy();
+    // Flags surface.
+    expect(screen.getByText(/scope_budget_conflict/i)).toBeTruthy();
+  });
+
+  it('T11: human_pick dropdown shows 5 catalogue tripIds + "other" + "no_rec"', async () => {
+    fetchApiMock.mockImplementation(makeTmcFetchImpl({ diagnostic: TMC_DIAGNOSTIC_NO_HUMAN_PICK }));
+    renderPage();
+    await screen.findByRole('heading', { name: /Diagnostic #42/i });
+    await waitFor(() => {
+      expect(screen.getByTestId('human-pick-select')).toBeTruthy();
+    });
+    const select = screen.getByTestId('human-pick-select');
+    // Wait for catalogue to load (async).
+    await waitFor(() => {
+      const optionValues = Array.from(select.querySelectorAll('option')).map((o) => o.value);
+      expect(optionValues).toContain('golden-triangle');
+      expect(optionValues).toContain('madhya-pradesh');
+      expect(optionValues).toContain('ladakh-expedition');
+      expect(optionValues).toContain('europe-cultural');
+      expect(optionValues).toContain('usa-stem');
+      expect(optionValues).toContain('other');
+      expect(optionValues).toContain('no_rec');
+    });
+  });
+
+  it('T11: human_pick dropdown is HIDDEN / read-only when user is MANAGER', async () => {
+    const withPick = { ...TMC_DIAGNOSTIC_WITH_HUMAN_PICK };
+    fetchApiMock.mockImplementation(makeTmcFetchImpl({ diagnostic: withPick }));
+    renderPage({ role: 'MANAGER' });
+    await screen.findByRole('heading', { name: /Diagnostic #42/i });
+    // No editable select for non-ADMIN.
+    expect(screen.queryByTestId('human-pick-select')).toBeNull();
+    // The read-only display shows the prior pick.
+    const readonly = await screen.findByTestId('human-pick-readonly');
+    expect(readonly.textContent).toMatch(/Golden Triangle/i);
+    // The "ADMIN only" annotation is present.
+    expect(readonly.textContent).toMatch(/ADMIN only/i);
+  });
+
+  it('T11: Selecting from dropdown + Save PATCHes /api/travel/diagnostics/:id with {humanPick}', async () => {
+    let patchBody = null;
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/travel/diagnostics/42' && (!opts || opts.method === undefined)) {
+        return Promise.resolve(TMC_DIAGNOSTIC_NO_HUMAN_PICK);
+      }
+      if (url === '/api/travel/diagnostics/42' && opts?.method === 'PATCH') {
+        patchBody = JSON.parse(opts.body);
+        return Promise.resolve({
+          diagnostic: { ...TMC_DIAGNOSTIC_NO_HUMAN_PICK, humanPick: patchBody.humanPick },
+        });
+      }
+      if (typeof url === 'string' && url.startsWith('/api/travel-tmc-catalogue')) {
+        return Promise.resolve(TMC_CATALOGUE_ACTIVE);
+      }
+      return Promise.resolve(null);
+    });
+    renderPage();
+    await screen.findByRole('heading', { name: /Diagnostic #42/i });
+    await waitFor(() => {
+      expect(screen.getByTestId('human-pick-select')).toBeTruthy();
+    });
+    const select = screen.getByTestId('human-pick-select');
+    fireEvent.change(select, { target: { value: 'madhya-pradesh' } });
+    fireEvent.click(screen.getByRole('button', { name: /Save human pick/i }));
+    await waitFor(() => {
+      expect(patchBody).toEqual({ humanPick: 'madhya-pradesh' });
+    });
+  });
+
+  it('T11: After PATCH success, engine output reveals automatically', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/travel/diagnostics/42' && (!opts || opts.method === undefined)) {
+        return Promise.resolve(TMC_DIAGNOSTIC_NO_HUMAN_PICK);
+      }
+      if (url === '/api/travel/diagnostics/42' && opts?.method === 'PATCH') {
+        const next = { ...TMC_DIAGNOSTIC_NO_HUMAN_PICK, humanPick: 'no_rec' };
+        return Promise.resolve({ diagnostic: next });
+      }
+      if (typeof url === 'string' && url.startsWith('/api/travel-tmc-catalogue')) {
+        return Promise.resolve(TMC_CATALOGUE_ACTIVE);
+      }
+      return Promise.resolve(null);
+    });
+    renderPage();
+    await screen.findByRole('heading', { name: /Diagnostic #42/i });
+    // Initially collapsed.
+    expect(screen.getByTestId('engine-output-collapsed')).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByTestId('human-pick-select')).toBeTruthy();
+    });
+    fireEvent.change(screen.getByTestId('human-pick-select'), { target: { value: 'no_rec' } });
+    fireEvent.click(screen.getByRole('button', { name: /Save human pick/i }));
+    await waitFor(() => {
+      expect(screen.getByTestId('engine-output-expanded')).toBeTruthy();
+    });
+    expect(screen.queryByTestId('engine-output-collapsed')).toBeNull();
+  });
+
+  it('T11: human_pick recorder section is NOT rendered for non-TMC diagnostics', async () => {
+    // DIAGNOSTIC_NO_BRIEF uses subBrand=rfu — recorder must stay hidden.
+    fetchApiMock.mockImplementation(makeFetchImpl(DIAGNOSTIC_NO_BRIEF));
+    renderPage();
+    await screen.findByRole('heading', { name: /Diagnostic #42/i });
+    expect(screen.queryByTestId('human-pick-select')).toBeNull();
+    expect(screen.queryByTestId('engine-output-collapsed')).toBeNull();
+    expect(screen.queryByTestId('engine-output-expanded')).toBeNull();
+    expect(screen.queryByText(/Senior reviewer — human pick/i)).toBeNull();
+  });
+
+  it('T11: Save with no selection surfaces a "pick first" notify + does NOT PATCH', async () => {
+    let patchCalled = false;
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/travel/diagnostics/42' && (!opts || opts.method === undefined)) {
+        return Promise.resolve(TMC_DIAGNOSTIC_NO_HUMAN_PICK);
+      }
+      if (url === '/api/travel/diagnostics/42' && opts?.method === 'PATCH') {
+        patchCalled = true;
+        return Promise.resolve({ diagnostic: TMC_DIAGNOSTIC_NO_HUMAN_PICK });
+      }
+      if (typeof url === 'string' && url.startsWith('/api/travel-tmc-catalogue')) {
+        return Promise.resolve(TMC_CATALOGUE_ACTIVE);
+      }
+      return Promise.resolve(null);
+    });
+    renderPage();
+    await screen.findByRole('heading', { name: /Diagnostic #42/i });
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Save human pick/i })).toBeTruthy();
+    });
+    // The button is disabled when no value selected — clicking is a no-op,
+    // but the test asserts the disabled-state contract + the lack of PATCH.
+    const saveBtn = screen.getByRole('button', { name: /Save human pick/i });
+    expect(saveBtn.disabled).toBe(true);
+    fireEvent.click(saveBtn);
+    // No PATCH triggered.
+    expect(patchCalled).toBe(false);
+  });
+
+  it('T11: Collapse button toggles engine output back to hidden after reveal', async () => {
+    fetchApiMock.mockImplementation(makeTmcFetchImpl({ diagnostic: TMC_DIAGNOSTIC_WITH_HUMAN_PICK }));
+    renderPage();
+    await screen.findByRole('heading', { name: /Diagnostic #42/i });
+    await waitFor(() => {
+      expect(screen.getByTestId('engine-output-expanded')).toBeTruthy();
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Collapse engine output/i }));
+    // Once collapsed by user, the Reveal CTA appears (NOT the "record your pick" sentinel —
+    // because a pick already exists).
+    await waitFor(() => {
+      expect(screen.getByTestId('engine-output-reveal')).toBeTruthy();
+    });
+    expect(screen.queryByTestId('engine-output-expanded')).toBeNull();
+    expect(screen.queryByTestId('engine-output-collapsed')).toBeNull();
+    // Click reveal → expands again.
+    fireEvent.click(screen.getByTestId('engine-output-reveal'));
+    await waitFor(() => {
+      expect(screen.getByTestId('engine-output-expanded')).toBeTruthy();
+    });
   });
 });

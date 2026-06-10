@@ -204,9 +204,11 @@ describe('<BookingExpediaSearch /> — operator-facing Booking.com / Expedia sea
     expect(pending.textContent).toMatch(/Booking\.com \/ Expedia integration — Phase 2/);
     expect(pending.textContent).toMatch(/Q11/);
     expect(pending.textContent).toMatch(/vendor handover/i);
-    // CTA links route to the readiness surfaces.
-    const tenantLink = screen.getByTestId('booking-expedia-tenant-settings-link');
-    expect(tenantLink.getAttribute('href')).toBe('/admin/tenant-settings');
+    // CTA: brand-kits stays a real link; the tenant-settings slot is a
+    // non-link hint now that /admin/tenant-settings has been removed.
+    const tenantHint = screen.getByTestId('booking-expedia-tenant-settings-link');
+    expect(tenantHint.tagName).toBe('SPAN');
+    expect(tenantHint.textContent).toMatch(/Pre-configure cap/i);
     const brandLink = screen.getByTestId('booking-expedia-brand-kits-link');
     expect(brandLink.getAttribute('href')).toBe('/admin/brand-kits');
     // "Show form anyway" ghost button is offered as the QA escape hatch.
@@ -307,7 +309,7 @@ describe('<BookingExpediaSearch /> — operator-facing Booking.com / Expedia sea
   it('Expedia 503 graceful: provider=expedia → notify.info fires (NOT notify.error), searchResult cleared', async () => {
     const err = new Error('Expedia disabled');
     err.status = 503;
-    err.body = {
+    err.data = {
       error: 'Expedia integration not yet enabled — pending DC-4 demand threshold',
       code: 'EXPEDIA_NOT_YET_ENABLED',
     };
@@ -339,7 +341,7 @@ describe('<BookingExpediaSearch /> — operator-facing Booking.com / Expedia sea
   it('search 402 cap-exceeded → CapExceededBanner renders with provider "Booking/Expedia" + cents pair', async () => {
     const err = new Error('Cap exceeded');
     err.status = 402;
-    err.body = {
+    err.data = {
       error: 'monthly cap exceeded',
       code: 'BOOKING_EXPEDIA_BUDGET_EXCEEDED',
       spentCents: 16000,
@@ -364,7 +366,7 @@ describe('<BookingExpediaSearch /> — operator-facing Booking.com / Expedia sea
   it('search 500 generic error → notify.error fires with server-supplied message', async () => {
     const err = new Error('boom');
     err.status = 500;
-    err.body = { error: 'Booking client crashed' };
+    err.data = { error: 'Booking client crashed' };
     installFetchMock({ enabled: { enabled: true, phase: 1 }, search: err });
     renderPage();
     await screen.findByTestId('booking-expedia-search-btn');
@@ -718,7 +720,7 @@ describe('<BookingExpediaSearch /> — operator-facing Booking.com / Expedia sea
   it('cap-status pill flips to red over-cap branch when GET resolves rejected with 402', async () => {
     const overCapErr = new Error('Over cap');
     overCapErr.status = 402;
-    overCapErr.body = {
+    overCapErr.data = {
       error: 'cap exceeded',
       code: 'BOOKING_EXPEDIA_BUDGET_EXCEEDED',
       spentCents: 16500,
@@ -739,7 +741,7 @@ describe('<BookingExpediaSearch /> — operator-facing Booking.com / Expedia sea
   it('cap-status 403 (MANAGER) is silently swallowed: no pill renders, no toast fires', async () => {
     const forbiddenErr = new Error('Forbidden');
     forbiddenErr.status = 403;
-    forbiddenErr.body = { error: 'ADMIN_ONLY' };
+    forbiddenErr.data = { error: 'ADMIN_ONLY' };
     installFetchMock({
       enabled: { enabled: true, phase: 1 },
       capStatus: forbiddenErr,
@@ -760,7 +762,7 @@ describe('<BookingExpediaSearch /> — operator-facing Booking.com / Expedia sea
     // First POST returns 402; second POST returns a stub success → banner clears.
     const capErr = new Error('Cap exceeded');
     capErr.status = 402;
-    capErr.body = {
+    capErr.data = {
       error: 'monthly cap exceeded',
       code: 'BOOKING_EXPEDIA_BUDGET_EXCEEDED',
       spentCents: 16000,

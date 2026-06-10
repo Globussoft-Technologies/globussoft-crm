@@ -12,13 +12,21 @@
 // the message. Itineraries can still be drafted from a Deal page once
 // the Day 7 Deal-extension CTA lands.
 
-import { useEffect, useState } from "react";
+import { useContext, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Map, Filter, Plane, Hotel, MapPin, Briefcase, FileText, Shield, Plus, X,
+  Sparkles,
 } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
+import { AuthContext } from "../../App";
+import { useActiveSubBrand } from "../../utils/subBrand";
+import {
+  accessibleSubBrands,
+  defaultSubBrandFor,
+  subBrandShortLabel,
+} from "../../utils/travelSubBrand";
 
 const SUB_BRANDS = [
   { value: "", label: "All sub-brands" },
@@ -77,6 +85,23 @@ const EMPTY_FORM = {
 
 const CURRENCIES = ["INR", "USD", "EUR"];
 
+// PRD FR-3.6 step (a) — Suggest itinerary CTA modal form. Defaults mirror
+// the route's valid ranges (durationDays 1..30; budgetTier economy|mid|luxury).
+// `themeJson` is a free-form textarea — operator types a JSON object;
+// validation happens on submit (parse + INVALID_THEME_JSON inline error).
+const SUGGEST_BUDGET_TIERS = [
+  { value: "economy", label: "Economy" },
+  { value: "mid", label: "Mid" },
+  { value: "luxury", label: "Luxury" },
+];
+
+const EMPTY_SUGGEST_FORM = {
+  destination: "",
+  durationDays: 5,
+  budgetTier: "mid",
+  themeJsonRaw: "",
+};
+
 function fmt(d) {
   if (!d) return "—";
   return new Date(d).toLocaleDateString();
@@ -106,6 +131,13 @@ function TierBadge({ tier }) {
 export default function Itineraries() {
   const notify = useNotify();
   const navigate = useNavigate();
+  const { user } = useContext(AuthContext) || {};
+  const { activeSubBrand } = useActiveSubBrand();
+  // Sub-brands this user may create itineraries under. Single-brand users
+  // are locked to their one brand (read-only field); multi-brand users get
+  // a dropdown limited to THEIR brands. See defaultSubBrandFor.
+  const myBrands = accessibleSubBrands(user);
+  const lockedBrand = myBrands.length === 1 ? myBrands[0] : null;
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [subBrand, setSubBrand] = useState("");
@@ -115,13 +147,196 @@ export default function Itineraries() {
   const [saving, setSaving] = useState(false);
   const [contacts, setContacts] = useState([]);
 
+  // PRD FR-3.6 — "Suggest itinerary" modal state. Separate from the create
+  // drawer above so the operator can iterate on suggestions independently
+  // of opening the manual-create flow.
+  const [suggesting, setSuggesting] = useState(false);
+  const [suggestForm, setSuggestForm] = useState(EMPTY_SUGGEST_FORM);
+  const [suggestLoading, setSuggestLoading] = useState(false);
+  const [suggestResult, setSuggestResult] = useState(null);
+  const [suggestThemeError, setSuggestThemeError] = useState("");
+  const [suggestFieldErrors, setSuggestFieldErrors] = useState({});
+
   const openCreate = () => {
-    setForm(EMPTY_FORM);
+    setForm({ ...EMPTY_FORM, subBrand: defaultSubBrandFor(user, activeSubBrand) });
     setCreating(true);
     fetchApi("/api/contacts?limit=200")
       .then((res) => setContacts(Array.isArray(res) ? res : (res?.contacts || [])))
       .catch(() => setContacts([]));
   };
+
+  // PRD FR-3.6 step (a) — open the Suggest Itinerary modal.
+  const openSuggest = () => {
+    setSuggestForm(EMPTY_SUGGEST_FORM);
+    setSuggestResult(null);
+    setSuggestThemeError("");
+    setSuggestFieldErrors({});
+    setSuggesting(true);
+  };
+
+  const closeSuggest = () => {
+    setSuggesting(false);
+    setSuggestResult(null);
+    setSuggestThemeError("");
+    setSuggestFieldErrors({});
+  };
+
+  // Validate the themeJson textarea on blur. Empty is fine (optional field).
+  // Non-empty must parse to a plain object — array / scalar rejected to
+  // match the route's INVALID_THEME_JSON gate.
+  const validateThemeJson = () => {
+    const raw = (suggestForm.themeJsonRaw || "").trim();
+    if (!raw) {
+      setSuggestThemeError("");
+      return { ok: true, parsed: undefined };
+    }
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed == null || typeof parsed !== "object" || Array.isArray(parsed)) {
+        setSuggestThemeError("themeJson must be a JSON object (not array / scalar).");
+        return { ok: false };
+      }
+      setSuggestThemeError("");
+      return { ok: true, parsed };
+    } catch (e) {
+      setSuggestThemeError(`Invalid JSON: ${e.message}`);
+      return { ok: false };
+    }
+  };
+
+  const submitSuggest = async (e) => {
+    e.preventDefault();
+    const errors = {};
+    const dest = (suggestForm.destination || "").trim();
+    if (!dest) errors.destination = "Destination is required";
+    const dd = Number(suggestForm.durationDays);
+    if (!Number.isInteger(dd) || dd < 1 || dd > 30) {
+      errors.durationDays = "Duration must be an integer 1..30";
+    }
+    if (!suggestForm.budgetTier) errors.budgetTier = "Budget tier is required";
+
+    const themeCheck = validateThemeJson();
+    if (!themeCheck.ok) {
+      setSuggestFieldErrors(errors);
+      // themeError is already set by validateThemeJson; abort.
+      return;
+    }
+    if (Object.keys(errors).length > 0) {
+      setSuggestFieldErrors(errors);
+      return;
+    }
+    setSuggestFieldErrors({});
+
+    setSuggestLoading(true);
+    setSuggestResult(null);
+    try {
+      const body = {
+        destination: dest,
+        durationDays: dd,
+        budgetTier: suggestForm.budgetTier,
+      };
+      if (themeCheck.parsed !== undefined) body.themeJson = themeCheck.parsed;
+      const res = await fetchApi("/api/travel/itineraries/suggest", {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+      setSuggestResult(res);
+    } catch (err) {
+      notify.error(
+        err?.body?.error
+        || err?.message
+        || "Failed to generate suggestion",
+      );
+    } finally {
+      setSuggestLoading(false);
+    }
+  };
+
+  // S90 — Materialise-from-suggestion materialise state.
+  //
+  // The /suggest endpoint doesn't need contactId or subBrand (it's a pure
+  // LLM/stub brainstorm). Materialising into a real Itinerary DOES — we
+  // surface a tiny picker inline in the preview pane so the operator can
+  // pick the contact + sub-brand at the moment of commit. (We could also
+  // navigate to the Create drawer pre-filled, but that's a heavier UX
+  // and would require lifting the suggestion through state. The inline
+  // picker keeps the flow one click.)
+  const [materialiseContactId, setMaterialiseContactId] = useState("");
+  const [materialiseSubBrand, setMaterialiseSubBrand] = useState("");
+  const [materialising, setMaterialising] = useState(false);
+
+  // PRD FR-3.6 step (d) — Materialise the suggestion into an Itinerary +
+  // ItineraryItem rows by POST /api/travel/itineraries/from-suggestion.
+  // On success → navigate to the detail page if it exists; otherwise
+  // close the modal and refresh the list.
+  const createFromSuggestion = async () => {
+    if (!suggestResult || !suggestResult.suggestionJson) {
+      notify.error("No suggestion to materialise");
+      return;
+    }
+    if (!materialiseContactId) {
+      notify.error("Pick a contact to attach the itinerary to");
+      return;
+    }
+    const cid = parseInt(materialiseContactId, 10);
+    if (!Number.isFinite(cid)) {
+      notify.error("Invalid contact selection");
+      return;
+    }
+    const effectiveSubBrand = materialiseSubBrand
+      || defaultSubBrandFor(user, activeSubBrand);
+    setMaterialising(true);
+    try {
+      const body = {
+        suggestionJson: suggestResult.suggestionJson,
+        contactId: cid,
+        subBrand: effectiveSubBrand,
+      };
+      const res = await fetchApi(
+        "/api/travel/itineraries/from-suggestion",
+        { method: "POST", body: JSON.stringify(body) },
+      );
+      const itemsCreated = (res && typeof res.itemsCreated === "number")
+        ? res.itemsCreated
+        : (res && res.itinerary && Array.isArray(res.itinerary.items))
+          ? res.itinerary.items.length
+          : 0;
+      notify.success(`Itinerary created with ${itemsCreated} items`);
+      closeSuggest();
+      const newId = res && res.itinerary && res.itinerary.id;
+      if (newId) {
+        // Detail page exists (Day 11 ItineraryDetail). Navigate so the
+        // operator can review + edit before sending.
+        navigate(`/travel/itineraries/${newId}`);
+      } else {
+        load();
+      }
+    } catch (err) {
+      notify.error(
+        err?.body?.error
+        || err?.message
+        || "Failed to materialise itinerary",
+      );
+    } finally {
+      setMaterialising(false);
+    }
+  };
+
+  // Load contacts for the materialise picker when the preview pane opens.
+  // Reuses the same /api/contacts feed as the Create drawer.
+  useEffect(() => {
+    if (!suggestResult || !suggestResult.suggestionJson) return;
+    if (contacts.length > 0) return;
+    fetchApi("/api/contacts?limit=200")
+      .then((res) => setContacts(Array.isArray(res) ? res : (res?.contacts || [])))
+      .catch(() => setContacts([]));
+  }, [suggestResult]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Reset materialise picker state every time the suggestion changes.
+  useEffect(() => {
+    setMaterialiseContactId("");
+    setMaterialiseSubBrand(defaultSubBrandFor(user, activeSubBrand));
+  }, [suggestResult]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const submitCreate = async (e) => {
     e.preventDefault();
@@ -184,6 +399,14 @@ export default function Itineraries() {
     return () => window.removeEventListener("keydown", onKey);
   }, [creating]);
 
+  // PRD FR-3.6 — close Suggest modal on Escape.
+  useEffect(() => {
+    if (!suggesting) return undefined;
+    const onKey = (e) => { if (e.key === "Escape") closeSuggest(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [suggesting]); // eslint-disable-line react-hooks/exhaustive-deps
+
   return (
     <div style={{ padding: 24, maxWidth: 1200, margin: "0 auto" }}>
       <header style={{
@@ -199,14 +422,24 @@ export default function Itineraries() {
             here or build from a linked Deal in the sales pipeline.
           </p>
         </div>
-        <button
-          type="button"
-          onClick={openCreate}
-          style={primaryBtn}
-          aria-label="Create a new itinerary"
-        >
-          <Plus size={14} /> Create Itinerary
-        </button>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button
+            type="button"
+            onClick={openSuggest}
+            style={secondaryBtn}
+            aria-label="Suggest itinerary using AI"
+          >
+            <Sparkles size={14} /> Suggest itinerary
+          </button>
+          <button
+            type="button"
+            onClick={openCreate}
+            style={primaryBtn}
+            aria-label="Create a new itinerary"
+          >
+            <Plus size={14} /> Create Itinerary
+          </button>
+        </div>
       </header>
 
       <div style={{
@@ -341,15 +574,28 @@ export default function Itineraries() {
               </label>
               <label style={fieldLabel}>
                 Sub-brand
-                <select
-                  value={form.subBrand}
-                  onChange={(e) => setForm({ ...form, subBrand: e.target.value })}
-                  style={inputStyle}
-                >
-                  {SUB_BRANDS.filter((s) => s.value).map((s) => (
-                    <option key={s.value} value={s.value}>{s.label}</option>
-                  ))}
-                </select>
+                {lockedBrand ? (
+                  // Single-brand users can't change sub-brand — the value
+                  // is already pinned in form.subBrand via defaultSubBrandFor.
+                  <input
+                    type="text"
+                    value={subBrandShortLabel(lockedBrand)}
+                    readOnly
+                    disabled
+                    aria-label="Sub-brand (locked to your assigned brand)"
+                    style={{ ...inputStyle, opacity: 0.7, cursor: "not-allowed" }}
+                  />
+                ) : (
+                  <select
+                    value={form.subBrand}
+                    onChange={(e) => setForm({ ...form, subBrand: e.target.value })}
+                    style={inputStyle}
+                  >
+                    {myBrands.map((b) => (
+                      <option key={b} value={b}>{subBrandShortLabel(b)}</option>
+                    ))}
+                  </select>
+                )}
               </label>
               <label style={fieldLabel}>
                 Destination
@@ -411,6 +657,267 @@ export default function Itineraries() {
                 {saving ? "Creating…" : "Create Itinerary"}
               </button>
             </div>
+          </form>
+        </div>
+      )}
+
+      {suggesting && (
+        <div
+          onClick={(e) => { if (e.target === e.currentTarget) closeSuggest(); }}
+          className="travel-itin-suggest-backdrop"
+          style={{
+            position: "fixed", inset: 0,
+            background: "rgba(0,0,0,0.4)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            zIndex: 1000, padding: 24,
+          }}
+        >
+          <form
+            onSubmit={submitSuggest}
+            role="dialog"
+            aria-labelledby="suggest-itin-title"
+            aria-modal="true"
+            style={suggestModalStyle}
+            className="travel-itin-suggest-modal"
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+              <h2 id="suggest-itin-title" style={{ margin: 0, fontSize: 18, fontWeight: 600, display: "flex", alignItems: "center", gap: 8 }}>
+                <Sparkles size={18} aria-hidden /> Suggest itinerary
+              </h2>
+              <button type="button" onClick={closeSuggest} aria-label="Close" style={iconBtn}>
+                <X size={16} />
+              </button>
+            </div>
+            <p style={{ margin: 0, marginBottom: 16, fontSize: 12, color: "var(--text-secondary)" }}>
+              AI-generated day-by-day outline. Review the suggestion below
+              before creating an itinerary. PRD FR-3.6.
+            </p>
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <label style={fieldLabel}>
+                Destination
+                <input
+                  type="text"
+                  value={suggestForm.destination}
+                  onChange={(e) => setSuggestForm({ ...suggestForm, destination: e.target.value })}
+                  style={inputStyle}
+                  placeholder='e.g. "Goa", "Paris", "Kyoto"'
+                  aria-invalid={suggestFieldErrors.destination ? "true" : "false"}
+                  aria-describedby={suggestFieldErrors.destination ? "suggest-dest-error" : undefined}
+                />
+                {suggestFieldErrors.destination && (
+                  <span id="suggest-dest-error" style={errorTextStyle}>
+                    {suggestFieldErrors.destination}
+                  </span>
+                )}
+              </label>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                <label style={fieldLabel}>
+                  Duration (days)
+                  <input
+                    type="number"
+                    min="1"
+                    max="30"
+                    step="1"
+                    value={suggestForm.durationDays}
+                    onChange={(e) => setSuggestForm({ ...suggestForm, durationDays: e.target.value })}
+                    style={inputStyle}
+                    aria-invalid={suggestFieldErrors.durationDays ? "true" : "false"}
+                    aria-describedby={suggestFieldErrors.durationDays ? "suggest-dur-error" : undefined}
+                  />
+                  {suggestFieldErrors.durationDays && (
+                    <span id="suggest-dur-error" style={errorTextStyle}>
+                      {suggestFieldErrors.durationDays}
+                    </span>
+                  )}
+                </label>
+                <label style={fieldLabel}>
+                  Budget tier
+                  <select
+                    value={suggestForm.budgetTier}
+                    onChange={(e) => setSuggestForm({ ...suggestForm, budgetTier: e.target.value })}
+                    style={inputStyle}
+                  >
+                    {SUGGEST_BUDGET_TIERS.map((t) => (
+                      <option key={t.value} value={t.value}>{t.label}</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <label style={fieldLabel}>
+                Theme JSON (optional)
+                <textarea
+                  value={suggestForm.themeJsonRaw}
+                  onChange={(e) => setSuggestForm({ ...suggestForm, themeJsonRaw: e.target.value })}
+                  onBlur={validateThemeJson}
+                  style={{ ...inputStyle, minHeight: 80, fontFamily: "monospace", fontSize: 12 }}
+                  placeholder='{"interests":["historical","beaches"],"pace":"relaxed"}'
+                  aria-invalid={suggestThemeError ? "true" : "false"}
+                  aria-describedby={suggestThemeError ? "suggest-theme-error" : undefined}
+                />
+                {suggestThemeError && (
+                  <span id="suggest-theme-error" style={errorTextStyle}>
+                    {suggestThemeError}
+                  </span>
+                )}
+              </label>
+            </div>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16 }}>
+              <button type="button" onClick={closeSuggest} style={refreshBtn}>
+                Cancel
+              </button>
+              <button type="submit" disabled={suggestLoading} style={primaryBtn}>
+                {suggestLoading ? "Generating suggestion…" : "Suggest"}
+              </button>
+            </div>
+
+            {suggestResult && suggestResult.suggestionJson && (
+              <div
+                style={{
+                  marginTop: 20, padding: 12, borderRadius: 8,
+                  border: "1px solid var(--border-color)",
+                  background: "var(--subtle-bg, var(--surface-color))",
+                }}
+                data-testid="suggest-preview-pane"
+                aria-label="Suggested itinerary preview"
+              >
+                <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600, marginBottom: 8 }}>
+                  Suggested itinerary
+                  {suggestResult.stub ? (
+                    <span
+                      style={{
+                        marginLeft: 8, padding: "2px 6px", borderRadius: 4, fontSize: 10,
+                        background: "var(--subtle-bg-3)", color: "var(--text-secondary)",
+                        textTransform: "uppercase", fontWeight: 600,
+                      }}
+                    >
+                      Stub
+                    </span>
+                  ) : null}
+                </h3>
+                {suggestResult.suggestionJson.summary && (
+                  <p style={{ margin: 0, fontSize: 12, color: "var(--text-secondary)", marginBottom: 8 }}>
+                    {suggestResult.suggestionJson.summary}
+                  </p>
+                )}
+                {Array.isArray(suggestResult.suggestionJson.daySplit) && suggestResult.suggestionJson.daySplit.length > 0 ? (
+                  <ol style={{ paddingLeft: 18, margin: 0, marginBottom: 8 }}>
+                    {suggestResult.suggestionJson.daySplit.map((day, idx) => (
+                      <li
+                        key={day.dayNumber ?? idx}
+                        style={{ marginBottom: 8 }}
+                        data-testid={`suggest-day-${day.dayNumber ?? idx + 1}`}
+                      >
+                        <div style={{ fontWeight: 600, fontSize: 13 }}>
+                          Day {day.dayNumber ?? idx + 1}
+                          {day.theme ? ` — ${day.theme}` : ""}
+                        </div>
+                        {Array.isArray(day.items) && day.items.length > 0 && (
+                          <ul style={{ paddingLeft: 18, margin: 0 }}>
+                            {day.items.map((item, i) => (
+                              <li key={i} style={{ fontSize: 12, color: "var(--text-primary)" }}>
+                                <strong>{item.itemType || "item"}</strong>
+                                {item.description ? ` — ${item.description}` : ""}
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </li>
+                    ))}
+                  </ol>
+                ) : (
+                  // Fallback: shape unfamiliar — render raw JSON so the
+                  // operator can still see what came back.
+                  <pre
+                    style={{
+                      background: "var(--surface-color)",
+                      padding: 8, borderRadius: 4, fontSize: 11,
+                      overflow: "auto", maxHeight: 200,
+                    }}
+                  >
+                    {JSON.stringify(suggestResult.suggestionJson, null, 2)}
+                  </pre>
+                )}
+                {suggestResult.suggestionJson.thematicNotes && (
+                  <p style={{ margin: 0, marginTop: 8, fontSize: 11, color: "var(--text-secondary)", fontStyle: "italic" }}>
+                    {suggestResult.suggestionJson.thematicNotes}
+                  </p>
+                )}
+                {/* S90 — materialise picker: contact + sub-brand inline so
+                    the operator picks them at commit time without leaving
+                    the modal. */}
+                <div
+                  style={{
+                    marginTop: 12,
+                    display: "grid",
+                    gridTemplateColumns: "1fr 1fr",
+                    gap: 8,
+                  }}
+                  data-testid="materialise-picker"
+                >
+                  <label style={fieldLabel}>
+                    Attach to contact
+                    <select
+                      value={materialiseContactId}
+                      onChange={(e) => setMaterialiseContactId(e.target.value)}
+                      style={inputStyle}
+                      aria-label="Contact for materialised itinerary"
+                    >
+                      <option value="">— pick a contact —</option>
+                      {contacts.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.name || c.email || `Contact #${c.id}`}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label style={fieldLabel}>
+                    Sub-brand
+                    <select
+                      value={materialiseSubBrand}
+                      onChange={(e) => setMaterialiseSubBrand(e.target.value)}
+                      style={inputStyle}
+                      aria-label="Sub-brand for materialised itinerary"
+                      disabled={!!lockedBrand}
+                    >
+                      {lockedBrand
+                        ? (
+                          <option value={lockedBrand}>
+                            {subBrandShortLabel(lockedBrand) || lockedBrand}
+                          </option>
+                        )
+                        : (myBrands.length > 0 ? myBrands : ["tmc", "rfu", "travelstall", "visasure"])
+                          .map((sb) => (
+                            <option key={sb} value={sb}>
+                              {subBrandShortLabel(sb) || sb}
+                            </option>
+                          ))}
+                    </select>
+                  </label>
+                </div>
+                <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 12 }}>
+                  <button
+                    type="button"
+                    onClick={() => setSuggestResult(null)}
+                    style={refreshBtn}
+                    aria-label="Discard suggestion"
+                    disabled={materialising}
+                  >
+                    Discard
+                  </button>
+                  <button
+                    type="button"
+                    onClick={createFromSuggestion}
+                    style={primaryBtn}
+                    aria-label="Create itinerary from this suggestion"
+                    disabled={materialising || !materialiseContactId}
+                  >
+                    {materialising
+                      ? "Creating itinerary…"
+                      : "Create itinerary from this suggestion"}
+                  </button>
+                </div>
+              </div>
+            )}
           </form>
         </div>
       )}
@@ -488,4 +995,29 @@ const inputStyle = {
   border: "1px solid var(--border-color)",
   background: "var(--input-bg, var(--surface-color))", color: "var(--text-primary)",
   fontSize: 14,
+};
+
+// PRD FR-3.6 — Suggest itinerary modal styling. Centred dialog (not the
+// right-edge drawer used by Create Itinerary) since the operator may need
+// to spend a moment reviewing the suggestion preview before committing.
+const suggestModalStyle = {
+  background: "var(--surface-color)", color: "var(--text-primary)",
+  width: "100%", maxWidth: 560, maxHeight: "90vh", overflowY: "auto",
+  padding: 20, borderRadius: 12,
+  border: "1px solid var(--border-color)",
+  boxShadow: "0 8px 32px rgba(0,0,0,0.18)",
+};
+
+const secondaryBtn = {
+  display: "inline-flex", alignItems: "center", gap: 6,
+  padding: "6px 12px", borderRadius: 6, fontWeight: 600, fontSize: 13,
+  background: "var(--surface-color)",
+  color: "var(--primary-color, var(--accent-color))",
+  border: "1px solid var(--primary-color, var(--accent-color))",
+  cursor: "pointer",
+};
+
+const errorTextStyle = {
+  fontSize: 11, color: "var(--danger-color, #c0392b)",
+  marginTop: 2,
 };

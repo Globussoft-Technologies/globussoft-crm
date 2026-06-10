@@ -11,14 +11,14 @@
 
 | Surface | Count |
 |---|---|
-| API routes | 103 (`backend/routes/*.js`) |
-| Data models | 152 (`prisma/schema.prisma`) |
-| UI pages | 124 (`frontend/src/pages/`) |
-| Automation engines | 22 (`backend/cron/`) |
-| Playwright spec files | 234 (`e2e/tests/`) — per-push gate runs a subset, e2e-full runs all |
-| Backend vitest files | 98 (`backend/test/`) |
-| Frontend vitest files | 76 (`frontend/src/__tests__/`) |
-| Reusable Claude Skills | 17 (`.claude/skills/`) |
+| API routes | 157 (`backend/routes/*.js`) |
+| Data models | 211 (`prisma/schema.prisma`) |
+| UI pages | 261 (`frontend/src/pages/`) |
+| Automation engines | 38 (`backend/cron/`) |
+| Playwright spec files | 282 (`e2e/tests/`) — per-push gate runs a subset, e2e-full runs all |
+| Backend vitest files | 543 (`backend/test/`) |
+| Frontend vitest files | 258 (`frontend/src/__tests__/`) |
+| Reusable Claude Skills | 20 (`.claude/skills/`) |
 
 **Deploy pipeline** *(GitHub Actions)*
 
@@ -28,7 +28,7 @@
 - **Demo monitor** — 30-min health cron against `crm.globusdemos.com`; auto-opens an issue on failure.
 - **Commit-message blessings** (e.g. `[allow-unique]`) waive specific migration-safety detectors for legitimate schema changes.
 
-**Live:** [crm.globusdemos.com](https://crm.globusdemos.com) | **Version:** v3.8.3
+**Live:** [crm.globusdemos.com](https://crm.globusdemos.com) | **Version:** v3.9.3
 **Wellness vertical docs:** [docs/wellness-client/](docs/wellness-client/) | **Partner API docs:** [EXTERNAL_API.md](docs/wellness-client/EXTERNAL_API.md) | **Embed widget docs:** [EMBED_WIDGET.md](docs/wellness-client/EMBED_WIDGET.md) | **API namespacing rules:** [API_NAMESPACING.md](docs/API_NAMESPACING.md) | **Cross-project monitor patterns:** [DEMO_MONITOR_PATTERN.md](docs/DEMO_MONITOR_PATTERN.md) + [LIVE_MONITOR_PATTERN.md](docs/LIVE_MONITOR_PATTERN.md)
 **Engineering backlog:** [TODOS.md](TODOS.md) — read this before picking up new work. **QA prompts:** [QA_README.md](docs/QA_README.md) (wellness + generic split).
 
@@ -51,7 +51,7 @@ This README documents the product as it stands today. It does not narrate per-ve
 | Payments | Stripe, Razorpay |
 | Communications | **SendGrid (transactional email — live on demo)**, Twilio (SMS/Voice), Fast2SMS / MSG91 (Indian SMS providers — DLT-aware), WhatsApp Cloud API, Web Push (VAPID), IMAP inbound email |
 | Production | PM2, Nginx reverse proxy, Certbot SSL, Sentry error tracking |
-| Testing | Playwright E2E (234 spec files — the per-push gate runs the gated API-spec subset, the rest in `e2e-full.yml` release-validation), vitest (98 backend + 76 frontend unit-test files) |
+| Testing | Playwright E2E (282 spec files — the per-push gate runs the gated API-spec subset, the rest in `e2e-full.yml` release-validation), vitest (543 backend + 258 frontend unit-test files) |
 | Styling | Vanilla CSS with glassmorphism design, dark/light theme support |
 
 ---
@@ -320,6 +320,8 @@ cd e2e && npm install
 npx playwright test --project=chromium
 ```
 
+> **After pulling main:** if `npx vitest run` reports `Failed to load module @aws-sdk/...` (or similar `Cannot find module` errors), your local `node_modules` is stale relative to `package.json`. Re-run `cd backend && npm install` (or `cd frontend && npm install` for frontend deps). CI's `npm ci` step covers this automatically; local dev boxes do not until you re-install after a deps-add commit.
+
 ## Demo Credentials
 
 The Login page has **one-click quick-login buttons** grouped by tenant — no typing.
@@ -403,12 +405,12 @@ Each engine has an admin-gated manual trigger at `POST /api/<area>/run` (forecas
 
 ## E2E Testing
 
-**Several thousand tests on every push** across 6 mandatory deploy gates; 234 spec files in `e2e/tests/` total. The per-push gate runs the gated subset of Playwright API specs against a CI-local MySQL stack. The full `e2e-full.yml` chromium suite runs sharded 4-way against the live demo on every `git tag` push (release validation).
+**Several thousand tests on every push** across 6 mandatory deploy gates; 282 spec files in `e2e/tests/` total. The per-push gate runs the gated subset of Playwright API specs against a CI-local MySQL stack. The full `e2e-full.yml` chromium suite runs sharded 4-way against the live demo on every `git tag` push (release validation).
 
 **Per-push gate composition:**
 - `api_tests` — the gated Playwright API specs against CI-local MySQL (~10 min)
-- `unit_tests` — 98 backend vitest files covering `lib/` + `middleware/` + `services/` + `utils/` + `cron/`
-- `frontend_unit_tests` — 76 frontend vitest files on critical components
+- `unit_tests` — 543 backend vitest files covering `lib/` + `middleware/` + `services/` + `utils/` + `cron/` + `routes/`
+- `frontend_unit_tests` — 258 frontend vitest files on critical components
 - `build` — vite build + `node --check` parse-check on every backend `.js`
 - `lint` — ESLint flat config + `npm audit` allowlist gate
 - `migration_check` — Prisma schema-safety detector with commit-message bless markers (`[allow-unique]`, `[allow-drop]`, `[allow-not-null]`, `[allow-narrow]`)

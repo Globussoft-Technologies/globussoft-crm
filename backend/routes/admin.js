@@ -26,6 +26,8 @@ const fs = require('fs');
 const prisma = require('../lib/prisma');
 const { verifyToken, verifyRole } = require('../middleware/auth');
 const { runBackup, listBackups, getBackupDir } = require('../cron/backupEngine');
+const backfillLastVisitEngine = require('../cron/backfillLastVisitEngine');
+const { writeAudit } = require('../lib/audit');
 
 const router = express.Router();
 
@@ -362,5 +364,136 @@ router.get('/llm-spend', verifyRole(['ADMIN']), async (req, res) => {
     });
   }
 });
+
+// ──────────────────────────────────────────────────────────────────
+// POST /api/admin/wellness/run-backfill-last-visit — S107 manual trigger
+// ──────────────────────────────────────────────────────────────────
+//
+// Mirrors cron/backfillLastVisitEngine.js's `tick()`, but invocable on-demand
+// by an ADMIN. S94 (the engine) is one-shot by design: start() is a no-op log
+// because scheduling it as recurring node-cron would waste cycles after the
+// historical sweep is done. The intended invocation path is THIS endpoint
+// (or a manual CLI on the demo box) — see backfillLastVisitEngine.js header.
+//
+// Pattern parity: routes/admin.js POST /backup/run and routes/gdpr.js POST
+// /retention/run. UNLIKE retention, this is NOT destructive — the engine
+// only writes Patient.lastVisitDate when the column is currently null AND a
+// most-recent Visit exists. No confirmDestructive guard required.
+//
+// Tenant scoping caveat:
+//   We FORWARD `{ tenantId: req.user.tenantId }` to tick() so when the engine
+//   gains per-tenant scoping (follow-up gap row), this endpoint becomes
+//   automatically tenant-isolated with zero route changes. As of S94 + S107
+//   land time the engine ignores the tenantId option and processes every
+//   active tenant in a single sweep. This is intentional for the initial
+//   historical-backfill — the demo box has one wellness tenant and the
+//   sweep is harmless (idempotent: NULL→date, never reverses) — but the
+//   per-tenant-scope follow-up gap row exists so a multi-tenant deploy
+//   doesn't accidentally fire a cross-tenant sweep on a single ADMIN's
+//   trigger. See gapsDiscovered in the S107 agent report.
+//
+// Response shape (200):
+//   {
+//     success: true,
+//     tenantId: <requesting admin's tenant — for audit context>,
+//     triggeredBy: <userId>,
+//     processed: <int — patients examined this tick>,
+//     updated:   <int — patients whose lastVisitDate was written>,
+//     errors:    <int — per-patient failures (already logged in engine)>
+//   }
+//
+// Response shape (500):
+//   {
+//     success: false,
+//     tenantId,
+//     triggeredBy,
+//     error: <string>,
+//     code: 'BACKFILL_FAILED'
+//   }
+//
+// The engine never throws on per-patient failures (it counts + logs). It
+// CAN throw on tenant.findMany failure — that case returns 500 BACKFILL_FAILED
+// with the underlying error message.
+//
+// Audit-log: writes one AuditLog row with entity='System',
+// action='admin.backfill.last-visit' and the envelope summary in details.
+// This captures who triggered the manual sweep + what it did, for
+// operational forensics.
+router.post(
+  '/wellness/run-backfill-last-visit',
+  verifyRole(['ADMIN']),
+  async (req, res) => {
+    const tenantId = req.user.tenantId;
+    const triggeredBy = req.user.userId;
+    try {
+      // Pass tenantId forward; the engine accepts opts but currently ignores
+      // tenantId (sweeps all tenants — documented gap). This call stays
+      // forward-compatible: when the engine gains per-tenant scoping the
+      // route doesn't need to change.
+      const result = await backfillLastVisitEngine.tick({ tenantId });
+
+      // Audit-log the run regardless of engine-success — operator forensics
+      // need to know about no-op runs too. Fire-and-forget; auditing is
+      // never allowed to block the response.
+      writeAudit(
+        'System',
+        'admin.backfill.last-visit',
+        null,
+        triggeredBy,
+        tenantId,
+        {
+          success: !!result.success,
+          processed: result.processed || 0,
+          updated: result.updated || 0,
+          errors: result.errors || 0,
+        },
+      ).catch((auditErr) => {
+        console.error('[admin/wellness/run-backfill-last-visit] audit failed:', auditErr.message);
+      });
+
+      if (!result.success) {
+        return res.status(500).json({
+          success: false,
+          tenantId,
+          triggeredBy,
+          processed: result.processed || 0,
+          updated: result.updated || 0,
+          errors: result.errors || 0,
+          error: 'Engine reported failure (tenant list unavailable or worse)',
+          code: 'BACKFILL_FAILED',
+        });
+      }
+
+      return res.json({
+        success: true,
+        tenantId,
+        triggeredBy,
+        processed: result.processed,
+        updated: result.updated,
+        errors: result.errors,
+      });
+    } catch (err) {
+      console.error('[admin/wellness/run-backfill-last-visit] error:', err);
+      // Mirror the audit emission even on hard failure so the operator who
+      // tried to trigger the run shows up in the audit trail.
+      writeAudit(
+        'System',
+        'admin.backfill.last-visit',
+        null,
+        triggeredBy,
+        tenantId,
+        { success: false, error: err.message || 'unknown' },
+      ).catch(() => {});
+
+      res.status(500).json({
+        success: false,
+        tenantId,
+        triggeredBy,
+        error: err.message || 'Failed to run last-visit backfill',
+        code: 'BACKFILL_FAILED',
+      });
+    }
+  },
+);
 
 module.exports = router;

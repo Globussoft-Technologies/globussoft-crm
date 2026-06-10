@@ -117,6 +117,86 @@ curl https://crm.globusdemos.com/api/health
 curl https://crm.globusdemos.com/api/v1/external/health
 ```
 
+---
+
+## 3a. Pre-deploy checklist (staging audit fixes — v3.4.15+)
+
+The following steps are **mandatory** when deploying the cumulative audit-fix batch (mass-assignment hardening, auth gaps, cron race guards, schema tightening, frontend component extraction). Skipping them will cause `prisma db push` to fail or the POS invoice counter to reset to 1.
+
+### 1. Backup
+```bash
+mysqldump -u root -p gbscrm > ~/backups/gbscrm-pre-audit-fix-$(date +%Y%m%d-%H%M).sql
+```
+
+### 2. Pre-deploy SQL checks (run before `prisma db push`)
+
+```sql
+-- Duplicate slugs / trip codes across tenants (will block new @@unique constraints)
+SELECT tenantId, tripCode, COUNT(*) AS c FROM TmcTrip GROUP BY tenantId, tripCode HAVING c > 1;
+SELECT tenantId, slug, COUNT(*) AS c FROM BookingPage GROUP BY tenantId, slug HAVING c > 1;
+SELECT tenantId, slug, COUNT(*) AS c FROM LandingPage GROUP BY tenantId, slug HAVING c > 1;
+
+-- Users holding multiple roles (will block UserRole @@unique([userId]))
+SELECT userId, COUNT(*) AS roleCount FROM UserRole GROUP BY userId HAVING roleCount > 1;
+```
+
+**If any row returns**, fix before proceeding:
+```sql
+-- Dedupe UserRole: keep only the most recently assigned role per user
+DELETE ur1 FROM UserRole ur1
+INNER JOIN UserRole ur2 ON ur1.userId = ur2.userId AND ur1.assignedAt < ur2.assignedAt;
+
+-- Fix duplicate slugs / trip codes manually (or archive the colliding row)
+```
+
+### 3. Required-field backfill (before `prisma db push`)
+
+`User.name` changed from `String?` → `String` (required). Backfill nulls/empties:
+```sql
+UPDATE User SET name = 'Unnamed User' WHERE name IS NULL OR TRIM(name) = '';
+```
+
+### 4. Invoice-counter seed (run AFTER `prisma db push`, BEFORE traffic)
+
+The POS engine now uses an atomic `InvoiceCounter` table. Seed it from existing sales so the next invoice continues the sequence instead of resetting to 1:
+```bash
+cd backend && node scripts/backfill-invoice-counters.js
+```
+
+### 5. Schema push + backend restart
+```bash
+cd backend
+npx prisma generate
+npx prisma db push --accept-data-loss
+pm2 restart globussoft-crm-backend
+```
+
+### 6. Post-deploy smoke tests
+
+Run these immediately after restart to verify the fixes took:
+- **POS**: Create a sale → invoice number should be `POS-YYYY-NNNN` with NNNN continuing from the pre-deploy max (not 0001).
+- **BookingPage / LandingPage**: Create two pages with the same slug across **different** tenants (should succeed); same tenant should 409.
+- **User creation**: Omit `name` → should 400 with validation error (was previously allowed).
+- **User role**: Assign a role to a user who already has one → should 409 or update-in-place (no duplicate row).
+- **Wellness dashboard** (`/wellness/dashboard`): Load with a fresh ADMIN login → no blank-screen crash if any KPI section returns partial data.
+- **WhatsApp threads** (`/wellness/whatsapp`): Switch threads rapidly → no stale-detail flash (race-guard verification).
+- **Patient detail tabs**: Open LogVisit / Photos / Inventory / Wallet tabs on a patient with zero visits → no `undefined` crash.
+
+### 7. New per-tenant settings (no backfill needed)
+
+The following `TenantSetting` keys were introduced to replace hardcoded defaults. They fall back to the previous hardcoded value if absent, so **no backfill is required**. Set them explicitly if a tenant needs a non-default:
+- `orchestrator.defaultWorkingMinutes`
+- `sms.dedupPhrase24h`, `sms.dedupPhrase1h`
+- `wellness.npsDelayHours`, `wellness.junkRetentionDays`, `wellness.membershipExpiryWindowDays`
+- `sla.terminalStatuses`
+- `inventory.alertRoles`
+- `email.fromAddress`, `email.mailgunDomain`
+- `report.smtpHost`, `report.smtpPort`, `report.smtpSecure`, `report.smtpUser`, `report.smtpPass`
+
+See `backend/lib/tenantSettings.js` for the canonical key list and default fallbacks.
+
+---
+
 ## 4. Adding a new clinic location to an existing tenant
 
 UI: log in as ADMIN of that tenant → sidebar → Locations → "New location".

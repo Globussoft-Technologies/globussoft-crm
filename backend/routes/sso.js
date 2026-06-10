@@ -54,11 +54,16 @@ async function generateUniqueSlug(base) {
     .slice(0, 40) || "org";
   let slug = root;
   let i = 1;
-  while (await prisma.tenant.findUnique({ where: { slug } })) {
+  const MAX_ATTEMPTS = 100;
+  while (i <= MAX_ATTEMPTS) {
+    const existing = await prisma.tenant.findUnique({ where: { slug } });
+    if (!existing) return slug;
     i += 1;
     slug = `${root}-${i}`;
   }
-  return slug;
+  // Fallback: UUID suffix guarantees uniqueness under collision storms.
+  const suffix = require("crypto").randomUUID().slice(0, 8);
+  return `${root}-${suffix}`;
 }
 
 // Find-or-create user given a verified SSO identity. Creates a new tenant for net-new users.
@@ -74,8 +79,9 @@ async function findOrCreateSsoUser({ provider, providerId, email, name }) {
   });
   if (user) return user;
 
-  // 2. Look up by email — link existing local account
-  user = await prisma.user.findUnique({ where: { email }, include: { tenant: true } });
+  // 2. Look up by email — link existing local account. Email is unique
+  // per-tenant now (not globally), so findFirst rather than findUnique.
+  user = await prisma.user.findFirst({ where: { email }, include: { tenant: true } });
   if (user) {
     user = await prisma.user.update({
       where: { id: user.id },

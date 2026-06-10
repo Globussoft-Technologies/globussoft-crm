@@ -52,10 +52,12 @@ async function processTenant(tenant) {
   for (const c of candidates) {
     try {
       const breachedAt = new Date();
-      await prisma.contact.update({
-        where: { id: c.id },
+      const updateResult = await prisma.contact.updateMany({
+        where: { id: c.id, slaBreached: false },
         data: { slaBreached: true, slaBreachedAt: breachedAt },
       });
+
+      if (updateResult.count !== 1) continue;
 
       const dueAt = c.firstResponseDueAt;
       const breachedBy = dueAt

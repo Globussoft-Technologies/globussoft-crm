@@ -1,0 +1,436 @@
+import { useContext, useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { CalendarClock, RefreshCw, Search } from 'lucide-react';
+import { fetchApi } from '../../utils/api';
+import { AuthContext } from '../../App';
+
+/**
+ * MyAppointments — doctor's own personal appointment list.
+ *
+ * Always queries with doctorId=<current user>. For wellnessRole=doctor
+ * users this is the same data the server would return without the
+ * filter (they're auto-scoped to their own anyway — see #324). For
+ * admin / manager users, this is the explicit "show me the
+ * appointments I'M assigned to as a practitioner" view — distinct from
+ * /wellness/appointments which shows everyone.
+ *
+ * Two surfaces, one endpoint: /api/wellness/visits?from=&to=&doctorId=.
+ * No new backend route needed.
+ */
+export default function MyAppointments() {
+  const { user } = useContext(AuthContext) || {};
+  const myUserId = user?.id;
+
+  const today = useMemo(() => todayLocalDate(), []);
+  const oneWeekFromToday = useMemo(() => addDaysLocal(today, 7), [today]);
+  const [from, setFrom] = useState(today);
+  const [to, setTo] = useState(oneWeekFromToday);
+  const [status, setStatus] = useState('');
+  const [search, setSearch] = useState('');
+  const [reloadTick, setReloadTick] = useState(0);
+
+  const [visits, setVisits] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    if (!myUserId) return;
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    const qs = new URLSearchParams();
+    qs.set('from', `${from}T00:00:00${localTzOffset()}`);
+    qs.set('to', `${to}T23:59:59${localTzOffset()}`);
+    qs.set('doctorId', String(myUserId));
+    qs.set('limit', '500');
+    if (status) qs.set('status', status);
+    fetchApi(`/api/wellness/visits?${qs.toString()}`, { silent: true })
+      .then((res) => {
+        if (cancelled) return;
+        setVisits(Array.isArray(res) ? res : Array.isArray(res?.visits) ? res.visits : []);
+        setLoading(false);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setError(err?.message || 'Failed to load your appointments');
+        setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [from, to, status, myUserId, reloadTick]);
+
+  const filtered = useMemo(() => {
+    const term = search.trim().toLowerCase();
+    if (!term) return visits;
+    return visits.filter((v) =>
+      `${v.patient?.name || ''} ${v.service?.name || ''}`.toLowerCase().includes(term),
+    );
+  }, [visits, search]);
+
+  const sorted = useMemo(
+    () =>
+      [...filtered].sort((a, b) => new Date(a.visitDate) - new Date(b.visitDate)),
+    [filtered],
+  );
+
+  // Split into Upcoming + Past for a friendlier read order. "Upcoming" =
+  // visitDate >= start-of-today; "Past" = before that.
+  const startOfToday = useMemo(() => {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    return d.getTime();
+  }, []);
+  const upcoming = sorted.filter((v) => new Date(v.visitDate).getTime() >= startOfToday);
+  const past = sorted.filter((v) => new Date(v.visitDate).getTime() < startOfToday);
+
+  return (
+    <div style={{ padding: '1.5rem', width: '100%' }}>
+      <header
+        style={{
+          display: 'flex',
+          alignItems: 'flex-start',
+          justifyContent: 'space-between',
+          gap: '1rem',
+          marginBottom: '1.25rem',
+          flexWrap: 'wrap',
+        }}
+      >
+        <div>
+          <h1 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <CalendarClock size={22} style={{ color: 'var(--primary-color, var(--accent-color))' }} />
+            My appointments
+          </h1>
+          <p style={{ margin: '0.2rem 0 0', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+            Appointments assigned to you as the practitioner.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => setReloadTick((n) => n + 1)}
+          className="btn-secondary"
+          style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}
+        >
+          <RefreshCw size={14} /> Refresh
+        </button>
+      </header>
+
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 180px), 1fr))',
+          gap: '0.6rem',
+          marginBottom: '1rem',
+          padding: '0.75rem',
+          border: '1px solid var(--border-color)',
+          borderRadius: 8,
+          background: 'var(--subtle-bg-2)',
+        }}
+      >
+        <label style={fieldLabel}>
+          From
+          <input
+            type="date"
+            className="input-field"
+            value={from}
+            onChange={(e) => setFrom(e.target.value)}
+            style={{ width: '100%' }}
+          />
+        </label>
+        <label style={fieldLabel}>
+          To
+          <input
+            type="date"
+            className="input-field"
+            value={to}
+            onChange={(e) => setTo(e.target.value)}
+            style={{ width: '100%' }}
+          />
+        </label>
+        <label style={fieldLabel}>
+          Status
+          <select
+            className="input-field"
+            value={status}
+            onChange={(e) => setStatus(e.target.value)}
+            style={{ width: '100%' }}
+          >
+            <option value="">Any status</option>
+            <option value="scheduled">Scheduled</option>
+            <option value="checked-in">Checked in</option>
+            <option value="in-progress">In progress</option>
+            <option value="completed">Completed</option>
+            <option value="cancelled">Cancelled</option>
+            <option value="no-show">No-show</option>
+          </select>
+        </label>
+        <label style={fieldLabel}>
+          Search
+          <div style={{ position: 'relative' }}>
+            <Search
+              size={14}
+              style={{
+                position: 'absolute',
+                top: '50%',
+                left: 8,
+                transform: 'translateY(-50%)',
+                color: 'var(--text-secondary)',
+                pointerEvents: 'none',
+              }}
+            />
+            <input
+              type="search"
+              className="input-field"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Patient or service…"
+              style={{ width: '100%', paddingLeft: 28 }}
+            />
+          </div>
+        </label>
+      </div>
+
+      {error && (
+        <div
+          role="alert"
+          style={{
+            background: 'rgba(239,68,68,0.1)',
+            color: '#ef4444',
+            padding: '0.75rem',
+            borderRadius: 8,
+            marginBottom: '1rem',
+          }}
+        >
+          {error}
+        </div>
+      )}
+
+      {loading ? (
+        <div style={{ color: 'var(--text-secondary)', padding: '1rem 0' }}>Loading…</div>
+      ) : (
+        <>
+          <Section title={`Upcoming (${upcoming.length})`} rows={upcoming} />
+          <Section title={`Past (${past.length})`} rows={past} muted />
+        </>
+      )}
+    </div>
+  );
+}
+
+function Section({ title, rows, muted }) {
+  return (
+    <div style={{ marginTop: '1rem', opacity: muted && rows.length === 0 ? 0.5 : 1 }}>
+      <h2
+        style={{
+          fontSize: '0.85rem',
+          textTransform: 'uppercase',
+          letterSpacing: '0.04em',
+          color: 'var(--text-secondary)',
+          margin: '0 0 0.5rem',
+        }}
+      >
+        {title}
+      </h2>
+      {rows.length === 0 ? (
+        <div
+          style={{
+            border: '1px dashed var(--border-color)',
+            borderRadius: 8,
+            padding: '0.85rem',
+            fontSize: '0.85rem',
+            color: 'var(--text-secondary)',
+          }}
+        >
+          Nothing here.
+        </div>
+      ) : (
+        <div
+          style={{
+            border: '1px solid var(--border-color)',
+            borderRadius: 12,
+            overflow: 'auto',
+          }}
+        >
+          <table
+            style={{
+              width: '100%',
+              borderCollapse: 'collapse',
+              fontSize: '0.9rem',
+              minWidth: 640,
+            }}
+          >
+            <thead>
+              <tr style={{ background: 'var(--subtle-bg-3)', textAlign: 'left' }}>
+                <Th>When</Th>
+                <Th>Patient</Th>
+                <Th>Service</Th>
+                <Th>Status</Th>
+                <Th>Actions</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((v) => (
+                <tr key={v.id} style={{ borderTop: '1px solid var(--border-color)' }}>
+                  <Td>
+                    <div style={{ fontWeight: 600 }}>
+                      {v.visitDate
+                        ? new Date(v.visitDate).toLocaleDateString(undefined, {
+                            month: 'short',
+                            day: 'numeric',
+                          })
+                        : '—'}
+                    </div>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                      {v.visitDate
+                        ? new Date(v.visitDate).toLocaleTimeString([], {
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          })
+                        : ''}
+                    </div>
+                  </Td>
+                  <Td>
+                    {v.patient?.id ? (
+                      <Link
+                        to={`/wellness/patients/${v.patient.id}`}
+                        style={{ color: 'inherit', textDecoration: 'none', fontWeight: 600 }}
+                      >
+                        {v.patient.name}
+                      </Link>
+                    ) : (
+                      '—'
+                    )}
+                  </Td>
+                  <Td>
+                    {v.service?.name || (
+                      <span style={{ color: 'var(--text-secondary)' }}>—</span>
+                    )}
+                  </Td>
+                  <Td>
+                    <StatusBadge status={v.status} />
+                  </Td>
+                  <Td>
+                    <Link
+                      to={`/wellness/calendar?focus=${v.id}${v.visitDate ? `&date=${isoLocalDate(v.visitDate)}` : ''}`}
+                      style={{
+                        fontSize: '0.8rem',
+                        color: 'var(--primary-color, var(--accent-color))',
+                        textDecoration: 'none',
+                      }}
+                    >
+                      Open →
+                    </Link>
+                  </Td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ───────────────────────────── helpers (mirror Appointments.jsx) ────
+
+function todayLocalDate() {
+  const d = new Date();
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+function addDaysLocal(yyyymmdd, days) {
+  const [y, m, d] = yyyymmdd.split('-').map(Number);
+  const dt = new Date(y, m - 1, d);
+  dt.setDate(dt.getDate() + days);
+  const yyyy = dt.getFullYear();
+  const mm = String(dt.getMonth() + 1).padStart(2, '0');
+  const dd = String(dt.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+function localTzOffset() {
+  const off = -new Date().getTimezoneOffset();
+  const sign = off >= 0 ? '+' : '-';
+  const abs = Math.abs(off);
+  return `${sign}${String(Math.floor(abs / 60)).padStart(2, '0')}:${String(abs % 60).padStart(2, '0')}`;
+}
+
+// Local-calendar-day for a Date / ISO string. Lets the calendar deep-link
+// land on the right day even when the visit fires outside business hours.
+function isoLocalDate(input) {
+  const d = input instanceof Date ? input : new Date(input);
+  if (Number.isNaN(d.getTime())) return '';
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function StatusBadge({ status }) {
+  const palette = {
+    scheduled: { fg: '#3b82f6', bg: 'rgba(59,130,246,0.1)' },
+    'checked-in': { fg: '#0ea5e9', bg: 'rgba(14,165,233,0.1)' },
+    'in-progress': { fg: '#a855f7', bg: 'rgba(168,85,247,0.1)' },
+    completed: { fg: '#10b981', bg: 'rgba(16,185,129,0.1)' },
+    cancelled: { fg: '#6b7280', bg: 'rgba(107,114,128,0.1)' },
+    'no-show': { fg: '#ef4444', bg: 'rgba(239,68,68,0.1)' },
+  };
+  const cfg = palette[status] || { fg: 'var(--text-secondary)', bg: 'var(--subtle-bg-3)' };
+  return (
+    <span
+      style={{
+        padding: '0.2rem 0.55rem',
+        borderRadius: 999,
+        fontSize: '0.7rem',
+        fontWeight: 600,
+        background: cfg.bg,
+        color: cfg.fg,
+        border: `1px solid ${cfg.fg}33`,
+        whiteSpace: 'nowrap',
+      }}
+    >
+      {status || '—'}
+    </span>
+  );
+}
+
+const fieldLabel = {
+  fontSize: '0.75rem',
+  color: 'var(--text-secondary)',
+  display: 'flex',
+  flexDirection: 'column',
+  gap: '0.25rem',
+};
+
+function Th({ children }) {
+  return (
+    <th
+      style={{
+        padding: '0.6rem 0.85rem',
+        fontWeight: 600,
+        fontSize: '0.75rem',
+        textTransform: 'uppercase',
+        letterSpacing: '0.04em',
+        color: 'var(--text-secondary)',
+        whiteSpace: 'nowrap',
+      }}
+    >
+      {children}
+    </th>
+  );
+}
+function Td({ children, colSpan, center }) {
+  return (
+    <td
+      colSpan={colSpan}
+      style={{
+        padding: '0.6rem 0.85rem',
+        verticalAlign: 'middle',
+        textAlign: center ? 'center' : 'left',
+      }}
+    >
+      {children}
+    </td>
+  );
+}

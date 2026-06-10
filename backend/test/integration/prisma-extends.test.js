@@ -1,5 +1,20 @@
 /**
- * Unit tests for backend/lib/prisma.js
+ * Integration tests for backend/lib/prisma.js
+ *
+ * NOTE — file location: this test lives under `backend/test/integration/`
+ * rather than `backend/test/lib/` because it intentionally exercises
+ * Prisma's REAL `$extends` machinery — it taps `prisma.$parent._engine` to
+ * swap `engine.request` and assert the encrypt/decrypt walker's behavior.
+ * That requires the genuine `@prisma/client` `PrismaClient`, not the
+ * T39 surface-guarded proxy that wraps it for unit tests. The companion
+ * `backend/vitest.integration.config.js` runs this file with
+ * `PRISMA_ALLOW_REAL_CALLS=1` (and `ALLOW_REMOTE_DB_IN_TESTS=1`) set in
+ * `backend/test/integration-setup.js` so the wrap is skipped. The main
+ * `backend/vitest.config.js` explicitly excludes this file via the
+ * `test/integration/prisma-extends.test.js` exclude entry.
+ *
+ * Original migration: T40 — moved from `backend/test/lib/prisma.test.js`
+ * 2026-06-08. The file's content is otherwise unchanged.
  *
  * What this covers:
  *   - The exported value is a real PrismaClient instance (or a $extends proxy

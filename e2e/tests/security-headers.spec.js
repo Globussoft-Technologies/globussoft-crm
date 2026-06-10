@@ -12,7 +12,7 @@
  *
  *   1. The "core six" headers helmet must emit on EVERY response:
  *        x-content-type-options:        nosniff
- *        x-frame-options:               SAMEORIGIN  (per security.js xFrameOptions config)
+ *        x-frame-options:               DENY  (#921 slice S4 — was SAMEORIGIN)
  *        referrer-policy:               strict-origin-when-cross-origin
  *        strict-transport-security:     max-age=31536000; includeSubDomains
  *        permissions-policy:            camera=(), microphone=(), geolocation=(self), interest-cohort=()
@@ -79,9 +79,13 @@ const REQUEST_TIMEOUT = 60000;
 // header normalisation. Values are the EXACT strings the current
 // security.js config + helmet 8.x defaults emit (verified by booting the
 // real middleware and probing the response on 2026-05-03).
+// #921 slice S4 (FR-3.6) — X-Frame-Options flipped from SAMEORIGIN to
+// DENY as the global default. Embed widget at /embed/lead-form.html gets
+// per-route override via allowIframeEmbedding(). CSP frame-ancestors
+// directive co-flipped to 'none' — checked in csp-stepup-api.spec.js.
 const PINNED_HEADERS = {
   'x-content-type-options': 'nosniff',
-  'x-frame-options': 'SAMEORIGIN',
+  'x-frame-options': 'DENY',
   'referrer-policy': 'strict-origin-when-cross-origin',
   'cross-origin-resource-policy': 'cross-origin',
   'permissions-policy':
@@ -187,7 +191,8 @@ test.describe('Security headers gate (G-25) — Helmet/CSP regression detection'
     // trail.
     expect(headers).toMatchObject({
       'x-content-type-options': 'nosniff',
-      'x-frame-options': 'SAMEORIGIN',
+      // #921 slice S4 (FR-3.6): SAMEORIGIN → DENY (clickjacking lockdown).
+      'x-frame-options': 'DENY',
       'referrer-policy': 'strict-origin-when-cross-origin',
       'cross-origin-resource-policy': 'cross-origin',
       'cross-origin-opener-policy': 'same-origin',

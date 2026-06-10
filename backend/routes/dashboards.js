@@ -332,6 +332,7 @@ async function resolveWidget(type, tenantId) {
       since.setDate(1);
       since.setHours(0, 0, 0, 0);
       const deals = await prisma.deal.findMany({
+        // eslint-disable-next-line gbscrm/tenant-scope-finder-heuristic -- safe: spread `...tenantWhere` (defined L284 as `{ tenantId }`) injects tenantId at runtime. ESLint AST can't see through the spread. S36 (FR-3.4 / #919) audit-reviewed false-positive.
         where: { ...tenantWhere, stage: 'won', createdAt: { gte: since } },
         select: { amount: true, createdAt: true },
       });
@@ -376,6 +377,7 @@ async function resolveWidget(type, tenantId) {
 
     case 'table-overdue-tasks': {
       return prisma.task.findMany({
+        // eslint-disable-next-line gbscrm/tenant-scope-finder-heuristic -- safe: spread `...tenantWhere` (defined L284 as `{ tenantId }`) injects tenantId at runtime. ESLint AST can't see through the spread. S36 (FR-3.4 / #919) audit-reviewed false-positive.
         where: {
           ...tenantWhere,
           status: 'Pending',

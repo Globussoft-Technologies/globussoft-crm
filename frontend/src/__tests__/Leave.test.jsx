@@ -64,13 +64,19 @@ vi.mock('../utils/api', () => ({
 const notifyError = vi.fn();
 const notifySuccess = vi.fn();
 const notifyInfo = vi.fn();
+// notifyConfirm / notifyPrompt back the destructive-action paths (cancel /
+// approve / reject). Default to "user clicked OK" + empty prompt; individual
+// tests override the prompt's return value with mockImplementationOnce to
+// inspect the value the route receives.
+const notifyConfirm = vi.fn(() => Promise.resolve(true));
+const notifyPrompt = vi.fn(() => Promise.resolve(''));
 vi.mock('../utils/notify', () => ({
   useNotify: () => ({
     error: notifyError,
     success: notifySuccess,
     info: notifyInfo,
-    confirm: () => Promise.resolve(true),
-    prompt: () => Promise.resolve(''),
+    confirm: (...args) => notifyConfirm(...args),
+    prompt: (...args) => notifyPrompt(...args),
   }),
 }));
 
@@ -181,14 +187,13 @@ beforeEach(() => {
   notifyError.mockReset();
   notifySuccess.mockReset();
   notifyInfo.mockReset();
-  // Native confirm/prompt — page uses window.confirm() for cancel/approve and
-  // window.prompt() for reject notes. Default both to "user clicked OK".
-  vi.stubGlobal('confirm', vi.fn(() => true));
-  vi.stubGlobal('prompt', vi.fn(() => 'looks fine'));
-});
-
-afterEach(() => {
-  vi.unstubAllGlobals();
+  // notify.confirm/prompt back the cancel/approve/reject paths. Reset to the
+  // defaults; individual tests override notifyPrompt with mockImplementationOnce
+  // when they need to inspect the value passed to the route.
+  notifyConfirm.mockReset();
+  notifyConfirm.mockResolvedValue(true);
+  notifyPrompt.mockReset();
+  notifyPrompt.mockResolvedValue('');
 });
 
 // ── 1. Balance summary cards ───────────────────────────────────────────────
@@ -489,8 +494,8 @@ describe('<Leave /> — manager approve / reject', () => {
 
   it('clicking Reject prompts for notes and POSTs them to /reject', async () => {
     const user = userEvent.setup();
-    // Override the prompt() stub so we can inspect the arg the route gets.
-    vi.stubGlobal('prompt', vi.fn(() => 'Out of balance — reapply next quarter'));
+    // Override notify.prompt so we can inspect the arg the route gets.
+    notifyPrompt.mockResolvedValueOnce('Out of balance — reapply next quarter');
 
     renderLeave({ user: { id: MANAGER_ID, role: 'ADMIN' } });
     await waitFor(() => expect(screen.getByText('All Leave Requests')).toBeInTheDocument());

@@ -19,17 +19,27 @@
 
 const cron = require("node-cron");
 const prisma = require("../lib/prisma");
+const { getSetting, KEYS } = require("../lib/tenantSettings");
 const { emitEvent } = require("../lib/eventBus");
 
-const TERMINAL_STATUSES = ["Resolved", "Closed", "Cancelled"];
+const TERMINAL_STATUSES_DEFAULT = ["Resolved", "Closed", "Cancelled"];
 
 async function processTenant(tenant) {
   const now = new Date();
 
+  // Per-tenant terminal statuses (e.g. some tenants may add "On-Hold" or
+  // remove "Cancelled" from the breach-exclusion list).
+  const terminalStatusesRaw = await getSetting(tenant.id, KEYS.SLA_TERMINAL_STATUSES, { fallback: JSON.stringify(TERMINAL_STATUSES_DEFAULT) });
+  let terminalStatuses = TERMINAL_STATUSES_DEFAULT;
+  try { terminalStatuses = JSON.parse(terminalStatusesRaw); } catch { /* keep default */ }
+  if (!Array.isArray(terminalStatuses) || terminalStatuses.length === 0) {
+    terminalStatuses = TERMINAL_STATUSES_DEFAULT;
+  }
+
   const candidates = await prisma.ticket.findMany({
     where: {
       tenantId: tenant.id,
-      status: { notIn: TERMINAL_STATUSES },
+      status: { notIn: terminalStatuses },
       firstResponseAt: null,
       slaResponseDue: { lt: now },
       breached: false,
@@ -55,10 +65,12 @@ async function processTenant(tenant) {
   for (const t of candidates) {
     try {
       const breachedAt = new Date();
-      await prisma.ticket.update({
-        where: { id: t.id },
+      const updateResult = await prisma.ticket.updateMany({
+        where: { id: t.id, breached: false },
         data: { breached: true, breachedAt },
       });
+
+      if (updateResult.count !== 1) continue;
 
       const dueAt = t.slaResponseDue;
       const breachedBy = dueAt

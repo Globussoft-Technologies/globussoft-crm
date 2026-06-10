@@ -56,6 +56,15 @@
       "reason": "Transitive via Express. `npm audit fix` couldn't auto-resolve under our current Express major. Risk window is route-parameter parsing where an attacker can craft a URL with adversarial pattern segments. We don't expose dynamic route patterns — every Express route uses simple `:id`-style params. ReDoS surface is bounded to path matching, mitigated by Cloudflare's request-time limits in front of the demo. Long-term: upgrade Express to 4.21.2+ when a non-breaking path becomes available.",
       "addedOn": "2026-05-01",
       "sunsetBy": "2026-08-01"
+    },
+    {
+      "ghsa": "GHSA-rpr9-rxv7-x643",
+      "package": "sanitize-html",
+      "severity": "critical",
+      "title": "sanitize-html allows misuse of disallowedTagsMode bypassing sanitization",
+      "reason": "Surfaced after PR #769 + #819 brought in new transitive deps that re-pinned the vulnerable sanitize-html 2.x line. The CVE allows a caller passing a crafted `disallowedTagsMode` option value to bypass tag stripping. Our two callsites (backend/middleware/security.js sanitizeBody + backend/lib/sanitizeJson.js) build their config object from literals under our own control — neither accepts user-supplied options. Both run AFTER express.json() parses the request body, so an attacker cannot inject an options object via the wire. No fix available in 2.x; upstream 3.x is a breaking API change. Long-term: upgrade to sanitize-html 3.x in a focused PR that re-validates every callsite.",
+      "addedOn": "2026-05-19",
+      "sunsetBy": "2026-08-19"
     }
   ]
 }

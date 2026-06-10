@@ -29,7 +29,7 @@ export const ADSGPT_DEMO_LOGIN = import.meta.env.VITE_ADSGPT_DEMO_LOGIN || 'sumi
  * @param {string} [login] - aMember login; defaults to ADSGPT_DEMO_LOGIN
  */
 export async function launchAdsGptAs(login = ADSGPT_DEMO_LOGIN) {
-  if (!login) throw new Error('No AdsGPT login configured (set VITE_ADSGPT_DEMO_LOGIN)');
+  if (!login) throw new Error('AdsGPT login not configured. Please set it in Settings.');
 
   // Step 1 — fetch impersonation token
   const tokenRes = await fetch(

@@ -1,0 +1,309 @@
+/**
+ * /api/travel/pois — Inline rep-suggested POI flow + ADMIN approval queue.
+ *
+ * Wave 18 slice S12. Depends on slice S11 (`TravelPoi` Prisma model shipped
+ * commit `5a03e3be`). Per PRD_TRAVEL_ITINERARY_UPGRADES.md FR-3.7.
+ *
+ * Endpoints (mount point `/api/travel/pois` — server.js wire-in deferred to
+ * a follow-up gap slice per the slice prompt's "do NOT mount the new route
+ * in server.js" sibling-isolation rule):
+ *
+ *   POST   /                Rep (USER+) suggests a new POI. Body:
+ *                           { name, nameLocal?, category, latitude,
+ *                             longitude, country?, destinationSlug,
+ *                             imageUrl?, descriptionShort? }
+ *                           Creates row with `pendingApproval = true`,
+ *                           `externalSource = 'operator'`,
+ *                           `externalId = crypto.randomUUID()`,
+ *                           `tenantId = req.user.tenantId`. Audit-logs
+ *                           `poi.suggested`. 201 + the created row.
+ *
+ *   GET    /pending         ADMIN+MANAGER list of pendingApproval rows for
+ *                           the caller's tenant, sorted createdAt desc.
+ *                           Paging: ?limit= (default 50, cap 200) +
+ *                           ?offset= (default 0). 200 + { pending, total }.
+ *
+ *   POST   /:id/approve     ADMIN only. Flips `pendingApproval` to false.
+ *                           Cross-tenant access returns 404 (deliberate —
+ *                           leaking 403 would expose existence). Audit-logs
+ *                           `poi.approved`. 200 + the updated row.
+ *
+ *   POST   /:id/reject      ADMIN only. Hard-deletes the row (soft-delete
+ *                           via a `rejectedAt` column would need a schema
+ *                           change which is out of scope for this slice).
+ *                           Audit-logs `poi.rejected`. 200 + { ok: true,
+ *                           id }.
+ *
+ * Auth chain:
+ *   verifyToken → [verifyRole(['ADMIN'(+'MANAGER')])] → handler
+ *
+ * Tenant scoping:
+ *   - tenantId always comes from `req.user.tenantId`. Never read from body
+ *     (the global `stripDangerous` middleware deletes body.tenantId anyway;
+ *     this handler also never references body.tenantId per the project's
+ *     ESLint rule that blocks `req.body.{id,userId,tenantId,createdAt,
+ *     updatedAt}` reads).
+ *   - All reads + writes filter on `tenantId: req.user.tenantId`. The POI
+ *     model permits `tenantId = NULL` for catalog-wide rows (the S11
+ *     OpenTripMap seed uses that); operator-suggested rows always carry a
+ *     concrete tenantId so the approval queue is per-tenant.
+ *
+ * Failure-path codes:
+ *   400 MISSING_FIELDS    — name or category absent on POST
+ *   400 INVALID_COORD     — latitude / longitude not a finite number in
+ *                           lat ∈ [-90, 90], lng ∈ [-180, 180]
+ *   400 INVALID_ID        — :id is not a positive integer
+ *   401                   — verifyToken (missing Authorization)
+ *   403 RBAC_DENIED       — verifyRole gate (USER → /pending, USER+MANAGER
+ *                           → /approve+/reject)
+ *   404 POI_NOT_FOUND     — POI not in caller's tenant (cross-tenant
+ *                           collapses to 404 to avoid existence leak)
+ *
+ * Test surface:
+ *   - backend/test/routes/travel-pois-api.test.js — vitest contract pin
+ *     (≥18 cases). Patches the prisma singleton with vi.fn() shapes BEFORE
+ *     requiring the router so the router's CJS require binds to the spies.
+ *     Mirrors travel-engine-weights.test.js pattern.
+ *   - e2e/tests/travel-pois-api.spec.js — Playwright API spec (≥10 cases)
+ *     with probe-skip pattern so the spec auto-skips when the route is
+ *     not yet mounted in server.js.
+ *
+ * Audit boundary:
+ *   The `writeAudit` payload deliberately carries field NAMES + tenant
+ *   scope only — never lat/lng raw values inside the audit row. The POI
+ *   record itself is the canonical store for those.
+ */
+
+const express = require("express");
+const router = express.Router();
+const crypto = require("crypto");
+
+const { verifyToken, verifyRole } = require("../middleware/auth");
+const prisma = require("../lib/prisma");
+const { writeAudit } = require("../lib/audit");
+
+const EXTERNAL_SOURCE_OPERATOR = "operator";
+
+// ───────────────────────────────────────────────────────────────────
+// Validation helpers
+// ───────────────────────────────────────────────────────────────────
+
+function badRequest(message, code) {
+  const err = new Error(message);
+  err.status = 400;
+  err.code = code;
+  throw err;
+}
+
+function parseIdParam(raw) {
+  const n = parseInt(raw, 10);
+  if (!Number.isFinite(n) || n <= 0 || String(n) !== String(raw)) {
+    badRequest("id must be a positive integer", "INVALID_ID");
+  }
+  return n;
+}
+
+function validateLatLng(rawLat, rawLng) {
+  const lat = typeof rawLat === "number" ? rawLat : Number(rawLat);
+  const lng = typeof rawLng === "number" ? rawLng : Number(rawLng);
+  if (!Number.isFinite(lat) || lat < -90 || lat > 90) {
+    badRequest("latitude must be a number in [-90, 90]", "INVALID_COORD");
+  }
+  if (!Number.isFinite(lng) || lng < -180 || lng > 180) {
+    badRequest("longitude must be a number in [-180, 180]", "INVALID_COORD");
+  }
+  return { lat, lng };
+}
+
+function pickString(raw, max = 255) {
+  if (raw === undefined || raw === null) return null;
+  if (typeof raw !== "string") return null;
+  const trimmed = raw.trim();
+  if (trimmed === "") return null;
+  return trimmed.slice(0, max);
+}
+
+// ───────────────────────────────────────────────────────────────────
+// POST / — rep suggests a POI (USER+ allowed; queue lives at /pending)
+// ───────────────────────────────────────────────────────────────────
+router.post("/", verifyToken, async (req, res) => {
+  try {
+    const body = req.body || {};
+
+    const name = pickString(body.name, 200);
+    if (!name) badRequest("name required", "MISSING_FIELDS");
+
+    const category = pickString(body.category, 80);
+    if (!category) badRequest("category required", "MISSING_FIELDS");
+
+    const { lat, lng } = validateLatLng(body.latitude, body.longitude);
+
+    const destinationSlug = pickString(body.destinationSlug, 80);
+    if (!destinationSlug) badRequest("destinationSlug required", "MISSING_FIELDS");
+
+    const data = {
+      tenantId: req.user.tenantId,
+      externalSource: EXTERNAL_SOURCE_OPERATOR,
+      externalId: crypto.randomUUID(),
+      name,
+      nameLocal: pickString(body.nameLocal, 200),
+      category,
+      latitude: lat,
+      longitude: lng,
+      country: pickString(body.country, 8),
+      destinationSlug,
+      imageUrl: pickString(body.imageUrl, 500),
+      descriptionShort: pickString(body.descriptionShort, 2000),
+      pendingApproval: true,
+    };
+
+    const created = await prisma.travelPoi.create({ data });
+
+    // Audit: capture field NAMES + tenant scope, not raw coords.
+    writeAudit(
+      "TravelPoi",
+      "poi.suggested",
+      created.id,
+      req.user.userId,
+      req.user.tenantId,
+      {
+        name: created.name,
+        category: created.category,
+        destinationSlug: created.destinationSlug,
+        externalSource: EXTERNAL_SOURCE_OPERATOR,
+      },
+    ).catch(() => {});
+
+    return res.status(201).json(created);
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error("[travel-pois] suggest error:", e.message);
+    return res.status(500).json({ error: "Failed to suggest POI" });
+  }
+});
+
+// ───────────────────────────────────────────────────────────────────
+// GET /pending — ADMIN+MANAGER review queue, tenant-scoped
+// ───────────────────────────────────────────────────────────────────
+router.get(
+  "/pending",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  async (req, res) => {
+    try {
+      const rawLimit = parseInt(req.query.limit, 10);
+      const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 200) : 50;
+      const rawOffset = parseInt(req.query.offset, 10);
+      const offset = Number.isFinite(rawOffset) && rawOffset >= 0 ? rawOffset : 0;
+
+      const where = {
+        pendingApproval: true,
+        tenantId: req.user.tenantId,
+      };
+
+      const [rows, total] = await Promise.all([
+        prisma.travelPoi.findMany({
+          where,
+          orderBy: { createdAt: "desc" },
+          take: limit,
+          skip: offset,
+        }),
+        prisma.travelPoi.count({ where }),
+      ]);
+
+      res.json({ pending: rows, total, limit, offset });
+    } catch (e) {
+      console.error("[travel-pois] queue error:", e.message);
+      res.status(500).json({ error: "Failed to load pending POI queue" });
+    }
+  },
+);
+
+// ───────────────────────────────────────────────────────────────────
+// POST /:id/approve — ADMIN only; flips pendingApproval to false
+// ───────────────────────────────────────────────────────────────────
+router.post(
+  "/:id/approve",
+  verifyToken,
+  verifyRole(["ADMIN"]),
+  async (req, res) => {
+    try {
+      const id = parseIdParam(req.params.id);
+
+      const existing = await prisma.travelPoi.findFirst({
+        where: { id, tenantId: req.user.tenantId },
+      });
+      if (!existing) {
+        return res.status(404).json({ error: "POI not found", code: "POI_NOT_FOUND" });
+      }
+
+      const updated = await prisma.travelPoi.update({
+        where: { id },
+        data: { pendingApproval: false },
+      });
+
+      writeAudit(
+        "TravelPoi",
+        "poi.approved",
+        id,
+        req.user.userId,
+        req.user.tenantId,
+        {
+          name: existing.name,
+          category: existing.category,
+          destinationSlug: existing.destinationSlug,
+        },
+      ).catch(() => {});
+
+      res.json(updated);
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-pois] approve error:", e.message);
+      res.status(500).json({ error: "Failed to approve POI" });
+    }
+  },
+);
+
+// ───────────────────────────────────────────────────────────────────
+// POST /:id/reject — ADMIN only; hard-deletes the row
+// ───────────────────────────────────────────────────────────────────
+router.post(
+  "/:id/reject",
+  verifyToken,
+  verifyRole(["ADMIN"]),
+  async (req, res) => {
+    try {
+      const id = parseIdParam(req.params.id);
+
+      const existing = await prisma.travelPoi.findFirst({
+        where: { id, tenantId: req.user.tenantId },
+      });
+      if (!existing) {
+        return res.status(404).json({ error: "POI not found", code: "POI_NOT_FOUND" });
+      }
+
+      await prisma.travelPoi.delete({ where: { id } });
+
+      writeAudit(
+        "TravelPoi",
+        "poi.rejected",
+        id,
+        req.user.userId,
+        req.user.tenantId,
+        {
+          name: existing.name,
+          category: existing.category,
+          destinationSlug: existing.destinationSlug,
+        },
+      ).catch(() => {});
+
+      res.json({ ok: true, id });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-pois] reject error:", e.message);
+      res.status(500).json({ error: "Failed to reject POI" });
+    }
+  },
+);
+
+module.exports = router;

@@ -1,501 +1,529 @@
-import { useEffect, useState } from 'react';
-import { Crown, Plus, Pencil, Trash2, X, Save, IndianRupee, Calendar, Package, AlertCircle, Clock, Download, Upload } from 'lucide-react';
-import { fetchApi, getAuthToken } from '../../utils/api';
-import { useNotify } from '../../utils/notify';
-import { formatMoney } from '../../utils/money';
-import { AuthContext } from '../../App';
+import { useEffect, useMemo, useState } from 'react';
 import { useContext } from 'react';
+import {
+  Crown, Plus, Search, Check,
+  HelpCircle, Users, Mail,
+} from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { fetchApi } from '../../utils/api';
+import { useNotify } from '../../utils/notify';
+import { usePermissions } from '../../hooks/usePermissions';
+import { AuthContext } from '../../App';
+import PageHeader from '../../components/PageHeader';
 
-// Empty form. The entitlements field is a non-trivial nested shape:
-// an array of { serviceId, quantity } rows. The UI keeps it as a
-// simple table — admins add rows by picking a service from the
-// catalog and typing a quantity.
-const EMPTY_FORM = {
-  name: '',
-  description: '',
-  durationDays: 180,
-  price: '',
-  currency: 'INR',
-  entitlements: [],
-};
+import { SEARCH_MIN_PLANS } from './memberships/utils';
+import { PlanCard, EmptyState } from './memberships/PlanCatalog';
+import { OwnedMembershipCard } from './memberships/MembershipStatusManager';
+import { PlanDetailModal } from './memberships/PlanDetailModal';
+import { PurchaseModal } from './memberships/RazorpayCheckout';
+import { PlanFormModal } from './memberships/PlanAdminCrud';
+
+// ── Main page ─────────────────────────────────────────────────────
 
 export default function Memberships() {
   const notify = useNotify();
+  const navigate = useNavigate();
   const { user } = useContext(AuthContext) || {};
   const isAdmin = user?.role === 'ADMIN' || user?.role === 'MANAGER';
+  // "View Members" routes to /wellness/patients (since members ARE patients
+  // until a dedicated members list ships). Backend gates the /patients
+  // endpoints on patients.read via phiReadGate, so showing the button when
+  // the user can't reach the destination would just dump them on a page that
+  // 403s every API call. Hide it when they don't have read access.
+  const { hasPermission, isReady: permsReady } = usePermissions();
+  const canViewPatients = permsReady && hasPermission('patients', 'read');
 
   const [plans, setPlans] = useState([]);
-  // #816 — Membership-plans CSV import/export. Backend at
-  // /api/csv/membership-plans/{export.csv,import.csv} (server.js:679).
-  // Mirrors the Services.jsx pattern landed at 41d15f8.
-  const [csvBusy, setCsvBusy] = useState(false);
   const [services, setServices] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [showForm, setShowForm] = useState(false);
-  const [editingId, setEditingId] = useState(null);
-  const [form, setForm] = useState(EMPTY_FORM);
-  const [saving, setSaving] = useState(false);
-  // Wave 7D — PRD Gap §4 item 8 — dashboard summary cards. Loaded only when
-  // the current user is an admin/manager (the backend gates the endpoint).
-  // Set to null on 403 / network error so the cards render gracefully blank.
-  const [dashboard, setDashboard] = useState(null);
+  // Filter set differs by role — admins see catalog-management filters;
+  // users see their own selection state. Default tab is "Active" for both,
+  // since that's the most useful first view in either role.
+  const [filter, setFilter] = useState('Active');
+  const [query, setQuery] = useState('');
+  const [openMenuId, setOpenMenuId] = useState(null);
+  const [editingPlan, setEditingPlan] = useState(null); // null = closed, {} = new, plan = edit
+  const [detailPlan, setDetailPlan] = useState(null);
+
+  // User-side "owned" plans — backed by real Membership rows in the DB
+  // now that purchase goes through Razorpay. Was previously a
+  // localStorage wishlist; the localStorage path is gone since the
+  // payment modal creates a real Membership on successful confirm.
+  // Admins don't read this; they use the catalog filters.
+  const [myMemberships, setMyMemberships] = useState([]);
+  const ownedPlanIds = useMemo(
+    () => new Set(myMemberships.map((m) => m.planId).filter(Boolean)),
+    [myMemberships],
+  );
+
+  // Plan currently in the payment modal (null = closed).
+  const [purchasePlan, setPurchasePlan] = useState(null);
+  const [paying, setPaying] = useState(false);
 
   const load = () => {
     setLoading(true);
+    // The membership listing call below is admin-only (phiReadGate via
+    // /patients/:id/memberships) — for non-admin viewers we fall back to
+    // /appointments/my-memberships which is scoped to the caller's own
+    // patient row. Admins don't render the "Selected" tab anyway so the
+    // null fetch is fine for them.
+    const memberCall = isAdmin
+      ? Promise.resolve([])
+      : fetchApi('/api/wellness/appointments/my-memberships').catch(() => []);
     Promise.all([
       fetchApi('/api/wellness/membership-plans?includeInactive=1').catch(() => []),
       fetchApi('/api/wellness/services').catch(() => []),
-      isAdmin
-        ? fetchApi('/api/wellness/memberships/dashboard').catch(() => null)
-        : Promise.resolve(null),
+      memberCall,
     ])
-      .then(([p, s, d]) => {
+      .then(([p, s, m]) => {
         setPlans(Array.isArray(p) ? p : []);
         setServices(Array.isArray(s) ? s : []);
-        setDashboard(d && typeof d === 'object' ? d : null);
+        setMyMemberships(Array.isArray(m) ? m : []);
       })
       .finally(() => setLoading(false));
   };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(load, [isAdmin]);
 
-  const resetForm = () => {
-    setForm(EMPTY_FORM);
-    setEditingId(null);
-    setShowForm(false);
-  };
-
-  const startEdit = (plan) => {
-    let entitlements = [];
+  // Razorpay handshake. Opens an order, launches the checkout modal, and
+  // on success POSTs the signature back so the backend creates the
+  // Membership row. Closing the Razorpay modal without paying just
+  // resets state — no Membership is created.
+  const startPurchase = async (plan) => {
+    if (!plan || paying) return;
+    setPaying(true);
     try {
-      entitlements = JSON.parse(plan.entitlements || '[]');
-    } catch { entitlements = []; }
-    setEditingId(plan.id);
-    setForm({
-      name: plan.name || '',
-      description: plan.description || '',
-      durationDays: plan.durationDays || 180,
-      price: plan.price ?? '',
-      currency: plan.currency || 'INR',
-      entitlements,
-    });
-    setShowForm(true);
-  };
-
-  const addEntitlement = () => {
-    const used = new Set(form.entitlements.map((e) => e.serviceId));
-    const available = services.find((s) => !used.has(s.id) && s.isActive);
-    if (!available) {
-      notify.error('No more services to add');
-      return;
-    }
-    setForm({ ...form, entitlements: [...form.entitlements, { serviceId: available.id, quantity: 1 }] });
-  };
-
-  const removeEntitlement = (idx) => {
-    setForm({ ...form, entitlements: form.entitlements.filter((_, i) => i !== idx) });
-  };
-
-  const updateEntitlement = (idx, key, value) => {
-    const next = [...form.entitlements];
-    next[idx] = { ...next[idx], [key]: key === 'quantity' || key === 'serviceId' ? parseInt(value, 10) || 0 : value };
-    setForm({ ...form, entitlements: next });
-  };
-
-  // #816 — Export membership plans as CSV. fetch+blob trick because plain
-  // <a href> can't set the Authorization header. Mirror of Services.jsx
-  // pattern (41d15f8).
-  const exportCsv = async () => {
-    setCsvBusy(true);
-    try {
-      const token = getAuthToken();
-      const res = await fetch('/api/csv/membership-plans/export.csv', {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      });
-      if (!res.ok) throw new Error(`Export failed (${res.status})`);
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `membership-plans-${new Date().toISOString().slice(0, 10)}.csv`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 60_000);
-      notify.success(`Exported ${plans.length} plan${plans.length === 1 ? '' : 's'}.`);
-    } catch (e) {
-      notify.error(e.message || 'CSV export failed.');
-    } finally {
-      setCsvBusy(false);
-    }
-  };
-
-  const importCsv = async (file) => {
-    if (!file) return;
-    setCsvBusy(true);
-    try {
-      const token = getAuthToken();
-      const fd = new FormData();
-      fd.append('file', file);
-      const res = await fetch('/api/csv/membership-plans/import.csv', {
-        method: 'POST',
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-        body: fd,
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || `Import failed (${res.status})`);
-      const imported = data.imported || 0;
-      const skipped = data.skipped || 0;
-      const errCount = (data.errors || []).length;
-      let msg = `Imported ${imported} plan${imported === 1 ? '' : 's'}`;
-      if (skipped) msg += `; skipped ${skipped}`;
-      if (errCount) msg += `; ${errCount} row${errCount === 1 ? '' : 's'} with errors (see network response)`;
-      notify.success(msg);
-      load();
-    } catch (e) {
-      notify.error(e.message || 'CSV import failed.');
-    } finally {
-      setCsvBusy(false);
-    }
-  };
-
-  const submit = async (e) => {
-    e.preventDefault();
-    if (!form.name.trim()) {
-      notify.error('Plan name is required');
-      return;
-    }
-    if (form.entitlements.length === 0) {
-      notify.error('At least one entitlement is required');
-      return;
-    }
-    setSaving(true);
-    try {
-      const body = {
-        name: form.name.trim(),
-        description: form.description || null,
-        durationDays: parseInt(form.durationDays, 10),
-        price: parseFloat(form.price),
-        currency: form.currency,
-        entitlements: form.entitlements,
-      };
-      if (editingId) {
-        await fetchApi(`/api/wellness/membership-plans/${editingId}`, {
-          method: 'PUT',
-          body: JSON.stringify(body),
-        });
-        notify.success(`Updated "${form.name}"`);
-      } else {
-        await fetchApi('/api/wellness/membership-plans', {
-          method: 'POST',
-          body: JSON.stringify(body),
-        });
-        notify.success(`Created "${form.name}"`);
+      const order = await fetchApi(
+        `/api/wellness/membership-plans/${plan.id}/purchase/order`,
+        { method: 'POST' },
+      );
+      if (!order?.orderId || !order?.paymentId || !order?.key) {
+        throw new Error(order?.error || 'Failed to create payment order');
       }
-      resetForm();
-      load();
-    } catch (_err) {
-      // fetchApi already toasted the server message
-    } finally {
-      setSaving(false);
+
+      const { loadRazorpaySdk } = await import('./memberships/RazorpayCheckout');
+      let Razorpay;
+      try {
+        Razorpay = await loadRazorpaySdk();
+      } catch (sdkErr) {
+        throw new Error(sdkErr.message || 'Razorpay SDK failed to load');
+      }
+
+      await new Promise((resolve) => {
+        const options = {
+          key: order.key,
+          order_id: order.orderId,
+          amount: order.amount,
+          currency: order.currency,
+          name: 'Membership Purchase',
+          description: plan.name,
+          prefill: {
+            name: user?.name || '',
+            email: user?.email || '',
+          },
+          theme: { color: '#265855' },
+          handler: async (response) => {
+            try {
+              const confirm = await fetchApi(
+                `/api/wellness/membership-plans/${plan.id}/purchase/confirm`,
+                {
+                  method: 'POST',
+                  body: JSON.stringify({
+                    paymentId: order.paymentId,
+                    razorpay_order_id: response.razorpay_order_id,
+                    razorpay_payment_id: response.razorpay_payment_id,
+                    razorpay_signature: response.razorpay_signature,
+                  }),
+                },
+              );
+              if (confirm?.success) {
+                notify.success(`${plan.name} activated. You can apply it when booking an appointment.`);
+                setPurchasePlan(null);
+                await load();
+              } else {
+                notify.error(confirm?.error || 'Payment verification failed');
+              }
+            } catch (err) {
+              notify.error(err?.message || 'Payment verification failed');
+            } finally {
+              setPaying(false);
+              resolve();
+            }
+          },
+          modal: {
+            ondismiss: () => {
+              setPaying(false);
+              resolve();
+            },
+          },
+        };
+        const rzp = new Razorpay(options);
+        rzp.open();
+      });
+    } catch (err) {
+      notify.error(err?.message || 'Failed to start payment');
+      setPaying(false);
     }
   };
 
-  const softDelete = async (plan) => {
-    if (!confirm(`Soft-delete "${plan.name}"? Existing patient memberships keep working until expiry; only new sales are blocked.`)) return;
+  // Close the per-card three-dot menu when the user clicks outside it.
+  useEffect(() => {
+    if (!openMenuId) return;
+    const onDoc = () => setOpenMenuId(null);
+    document.addEventListener('click', onDoc);
+    return () => document.removeEventListener('click', onDoc);
+  }, [openMenuId]);
+
+  // Filter tabs differ by role:
+  //   Admin   → All / Active / Expired / Inactive (catalog-management view)
+  //   User    → Active / My memberships ("Active" only surfaces plans the
+  //             user doesn't already own, so the tab stays actionable
+  //             instead of duplicating the owned tab)
+  // The Expired tab on the admin side still always reads 0 because the
+  // MembershipPlan model has no expiry — only individual Memberships do. It
+  // stays for visual parity with the design.
+  const filterTabs = isAdmin
+    ? ['All', 'Active', 'Expired', 'Inactive']
+    : ['Available Plans', 'My Memberships'];
+
+  const counts = useMemo(() => {
+    if (isAdmin) {
+      return {
+        All: plans.length,
+        Active: plans.filter((p) => p.isActive).length,
+        Inactive: plans.filter((p) => !p.isActive).length,
+        Expired: 0,
+      };
+    }
+    // User-side counts:
+    //   Available Plans → ALL active plans the clinic has published,
+    //     regardless of whether the user already owns them. Owned plans
+    //     stay visible as "Purchased" (disabled CTA) so the user can
+    //     still see what they bought without leaving this tab.
+    //   My Memberships → the user's purchased rows.
+    const availableForUser = plans.filter((p) => p.isActive);
+    const owned = plans.filter((p) => ownedPlanIds.has(p.id));
+    return { 'Available Plans': availableForUser.length, 'My Memberships': owned.length };
+  }, [plans, isAdmin, ownedPlanIds]);
+
+  // Reset to a valid filter if the user role changes mid-session (e.g. an
+  // admin demotes themselves) or the current filter doesn't exist for the
+  // current role. Without this, a stale "Inactive" filter on a non-admin
+  // viewer would render zero rows with no way to recover.
+  useEffect(() => {
+    if (!filterTabs.includes(filter)) setFilter(filterTabs[0]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAdmin]);
+
+  const visiblePlans = useMemo(() => {
+    let rows = plans;
+    if (isAdmin) {
+      if (filter === 'Active') rows = rows.filter((p) => p.isActive);
+      else if (filter === 'Inactive') rows = rows.filter((p) => !p.isActive);
+      else if (filter === 'Expired') rows = []; // see counts comment above
+    } else {
+      // User view: hide INACTIVE plans (admin soft-deletes), but show all
+      // active plans on the Available Plans tab — including ones the user
+      // has already purchased. Ownership is reflected on the card itself
+      // (Purchased badge + disabled CTA for active, Expired badge + Renew
+      // CTA for past-tense). The My Memberships tab is the alternate view
+      // and still filters to owned-only.
+      const activeOnly = rows.filter((p) => p.isActive);
+      if (filter === 'My Memberships') {
+        rows = activeOnly.filter((p) => ownedPlanIds.has(p.id));
+      } else {
+        rows = activeOnly;
+      }
+    }
+    if (query.trim()) {
+      const q = query.trim().toLowerCase();
+      rows = rows.filter((p) =>
+        String(p.name || '').toLowerCase().includes(q) ||
+        String(p.description || '').toLowerCase().includes(q),
+      );
+    }
+    return rows;
+  }, [plans, filter, query, isAdmin, ownedPlanIds]);
+
+  const softDeletePlan = async (plan, label = 'Deactivated') => {
     try {
       await fetchApi(`/api/wellness/membership-plans/${plan.id}`, { method: 'DELETE' });
-      notify.success(`Deactivated "${plan.name}"`);
+      notify.success(`${label} "${plan.name}"`);
       load();
-    } catch (_err) { /* toasted */ }
+    } catch (_err) { /* fetchApi already toasted */ }
   };
 
-  const serviceName = (id) => {
-    const s = services.find((x) => x.id === id);
-    return s ? s.name : `Service #${id}`;
+  const handleDelete = async (plan) => {
+    if (!await notify.confirm({
+      message: `Delete "${plan.name}"? Existing patient memberships keep their balance until expiry; only NEW sales are blocked.`,
+      destructive: true, confirmText: 'Delete',
+    })) return;
+    softDeletePlan(plan, 'Deleted');
+  };
+
+  const handleDeactivate = async (plan) => {
+    if (!plan.isActive) {
+      // Re-activate: PUT isActive: true.
+      try {
+        await fetchApi(`/api/wellness/membership-plans/${plan.id}`, {
+          method: 'PUT',
+          body: JSON.stringify({ isActive: true }),
+        });
+        notify.success(`Re-activated "${plan.name}"`);
+        load();
+      } catch (_err) { /* toasted */ }
+      return;
+    }
+    if (!await notify.confirm({
+      message: `Deactivate "${plan.name}"? It won't show in the booking page or new-purchase flow.`,
+      destructive: true, confirmText: 'Deactivate',
+    })) return;
+    softDeletePlan(plan, 'Deactivated');
   };
 
   return (
-    <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
-      <header style={{ marginBottom: '1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
-        <div>
-          <h1 style={{ fontSize: '1.75rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <Crown size={24} /> Memberships
-          </h1>
-          <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-            Time-bound packages of services patients buy upfront — track entitlements, redemptions, and revenue.
-          </p>
-        </div>
-        {isAdmin && (
-          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-            {/* #816 — CSV Import/Export (mirrors Services.jsx pattern, 41d15f8) */}
-            <button
-              type="button"
-              onClick={exportCsv}
-              disabled={csvBusy || plans.length === 0}
-              title="Download all membership plans as CSV"
-              style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 0.9rem', background: 'transparent', color: 'var(--text-primary)', border: '1px solid var(--border-color)', borderRadius: 8, cursor: csvBusy || plans.length === 0 ? 'not-allowed' : 'pointer', opacity: csvBusy || plans.length === 0 ? 0.6 : 1 }}
-            >
-              <Download size={16} /> Export CSV
-            </button>
-            <label
-              title="Upload membership plans from CSV (same columns as Export)"
-              style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 0.9rem', background: 'transparent', color: 'var(--text-primary)', border: '1px solid var(--border-color)', borderRadius: 8, cursor: csvBusy ? 'not-allowed' : 'pointer', opacity: csvBusy ? 0.6 : 1 }}
-            >
-              <Upload size={16} /> Import CSV
-              <input
-                type="file"
-                accept=".csv,text/csv"
-                disabled={csvBusy}
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  if (file) importCsv(file);
-                  e.target.value = '';
-                }}
-                style={{ display: 'none' }}
-              />
-            </label>
-            <button
-              onClick={() => (showForm ? resetForm() : setShowForm(true))}
-              style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.5rem 1rem', background: 'var(--primary-color, var(--accent-color))', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer' }}
-            >
-              <Plus size={16} /> {showForm ? 'Cancel' : 'New plan'}
-            </button>
+    <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out', position: 'relative', minHeight: '100%' }}>
+      <PageHeader
+        icon={Crown}
+        title="Memberships"
+        description="Offer membership plans with exclusive benefits for returning clients."
+      >
+        <button
+          type="button"
+          onClick={() => notify.info('Reach support via the in-app chat or open a ticket from Help → Contact.')}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', padding: '0.5rem 1rem', background: 'transparent', border: '1px solid var(--border-color, rgba(255,255,255,0.18))', borderRadius: 999, color: 'var(--text-primary)', cursor: 'pointer', fontSize: '0.85rem' }}
+        >
+          <HelpCircle size={14} /> Need Help?
+        </button>
+      </PageHeader>
+
+      {/* Toolbar: search + filter pills + View Members link.
+          Search is hidden when the visible-to-this-role plan count is below
+          SEARCH_MIN — at zero plans the search box adds friction without value;
+          for tiny catalogs the threshold avoids dropping the tabs onto a new
+          row on narrow viewports. Admins always see search (they manage the
+          catalog and may have many soft-deleted rows). */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', alignItems: 'center', marginBottom: '1.5rem' }}>
+        {(isAdmin || plans.filter((p) => p.isActive).length >= SEARCH_MIN_PLANS) && (
+          <div style={{ position: 'relative', flex: '1 1 240px', maxWidth: 360 }}>
+            <Search size={15} style={{ position: 'absolute', left: '0.75rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-secondary)' }} />
+            <input
+              type="text"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search memberships..."
+              aria-label="Search memberships"
+              style={{ width: '100%', padding: '0.55rem 0.75rem 0.55rem 2.25rem', borderRadius: 999, border: '1px solid var(--border-color, rgba(255,255,255,0.15))', background: 'var(--surface-color, rgba(255,255,255,0.04))', color: 'var(--text-primary)', fontSize: '0.9rem', outline: 'none' }}
+            />
           </div>
         )}
-      </header>
-
-      {showForm && isAdmin && (
-        <form onSubmit={submit} className="glass" style={{ padding: '1.5rem', marginBottom: '1.5rem' }}>
-          <h2 style={{ fontSize: '1.1rem', marginBottom: '1rem' }}>{editingId ? 'Edit plan' : 'New membership plan'}</h2>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 240px), 1fr))', gap: '1rem' }}>
-            <label style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-              <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Name</span>
-              <input
-                type="text"
-                value={form.name}
-                onChange={(e) => setForm({ ...form, name: e.target.value })}
-                placeholder="e.g. Gold Facial Pack 10x"
-                required
-                style={{ padding: '0.5rem', borderRadius: 6, border: '1px solid var(--border-color)', background: 'var(--surface-color)' }}
-              />
-            </label>
-            <label style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-              <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Validity (days)</span>
-              <input
-                type="number"
-                value={form.durationDays}
-                onChange={(e) => setForm({ ...form, durationDays: e.target.value })}
-                min={1}
-                max={3650}
-                required
-                style={{ padding: '0.5rem', borderRadius: 6, border: '1px solid var(--border-color)', background: 'var(--surface-color)' }}
-              />
-            </label>
-            <label style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-              <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Price ({form.currency})</span>
-              <input
-                type="number"
-                value={form.price}
-                onChange={(e) => setForm({ ...form, price: e.target.value })}
-                min={1}
-                step="0.01"
-                placeholder="15000"
-                required
-                style={{ padding: '0.5rem', borderRadius: 6, border: '1px solid var(--border-color)', background: 'var(--surface-color)' }}
-              />
-            </label>
-          </div>
-          <label style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', marginTop: '1rem' }}>
-            <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Description (optional)</span>
-            <textarea
-              value={form.description}
-              onChange={(e) => setForm({ ...form, description: e.target.value })}
-              rows={2}
-              style={{ padding: '0.5rem', borderRadius: 6, border: '1px solid var(--border-color)', background: 'var(--surface-color)' }}
-            />
-          </label>
-
-          <div style={{ marginTop: '1.5rem' }}>
-            <h3 style={{ fontSize: '1rem', marginBottom: '0.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span><Package size={16} style={{ verticalAlign: 'middle', marginRight: 6 }} /> Service entitlements</span>
-              <button type="button" onClick={addEntitlement} style={{ padding: '0.3rem 0.75rem', fontSize: '0.85rem', background: 'transparent', border: '1px solid var(--accent-color)', color: 'var(--accent-color)', borderRadius: 6, cursor: 'pointer' }}>
-                <Plus size={14} style={{ verticalAlign: 'middle' }} /> Add row
-              </button>
-            </h3>
-            {form.entitlements.length === 0 ? (
-              <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', fontStyle: 'italic' }}>Add at least one service + quantity (e.g. Facial × 10).</p>
-            ) : (
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.9rem' }}>
-                <thead>
-                  <tr style={{ borderBottom: '1px solid var(--border-color)' }}>
-                    <th style={{ textAlign: 'left', padding: '0.4rem 0' }}>Service</th>
-                    <th style={{ textAlign: 'left', padding: '0.4rem 0', width: 120 }}>Quantity</th>
-                    <th style={{ width: 60 }}></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {form.entitlements.map((row, idx) => (
-                    <tr key={idx} style={{ borderBottom: '1px solid var(--border-color)' }}>
-                      <td style={{ padding: '0.4rem 0' }}>
-                        <select
-                          value={row.serviceId}
-                          onChange={(e) => updateEntitlement(idx, 'serviceId', e.target.value)}
-                          style={{ width: '100%', padding: '0.4rem', borderRadius: 6, border: '1px solid var(--border-color)', background: 'var(--surface-color)' }}
-                        >
-                          {services.filter((s) => s.isActive).map((s) => (
-                            <option key={s.id} value={s.id}>{s.name}</option>
-                          ))}
-                        </select>
-                      </td>
-                      <td style={{ padding: '0.4rem 0' }}>
-                        <input
-                          type="number"
-                          value={row.quantity}
-                          onChange={(e) => updateEntitlement(idx, 'quantity', e.target.value)}
-                          min={1}
-                          style={{ width: 100, padding: '0.4rem', borderRadius: 6, border: '1px solid var(--border-color)', background: 'var(--surface-color)' }}
-                        />
-                      </td>
-                      <td>
-                        <button type="button" onClick={() => removeEntitlement(idx)} style={{ background: 'transparent', border: 'none', color: 'var(--danger-color, #ef4444)', cursor: 'pointer' }}>
-                          <X size={16} />
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
-
-          <div style={{ marginTop: '1.5rem', display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
-            <button type="button" onClick={resetForm} style={{ padding: '0.5rem 1rem', borderRadius: 6, border: '1px solid var(--border-color)', background: 'transparent', cursor: 'pointer' }}>
-              Cancel
-            </button>
-            <button type="submit" disabled={saving} style={{ padding: '0.5rem 1rem', borderRadius: 6, border: 'none', background: 'var(--primary-color, var(--accent-color))', color: '#fff', cursor: saving ? 'wait' : 'pointer', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
-              <Save size={14} /> {saving ? 'Saving…' : 'Save plan'}
-            </button>
-          </div>
-        </form>
-      )}
-
-      {/* Wave 7D — dashboard summary cards. Visible to ADMIN/MANAGER only;
-          backend already gates /memberships/dashboard so unauthenticated /
-          unauthorised callers get null and the cards section short-circuits. */}
-      {isAdmin && dashboard && (
-        <div
-          data-testid="memberships-dashboard-cards"
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 240px), 1fr))',
-            gap: '1rem',
-            marginBottom: '1.5rem',
-          }}
-        >
-          <div className="glass" style={{ padding: '1.25rem' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
-              <Crown size={16} /> ACTIVE MEMBERSHIPS
-            </div>
-            <div style={{ fontSize: '1.75rem', fontWeight: 700, marginTop: '0.5rem' }}>{dashboard.active?.count || 0}</div>
-            <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-              Deferred revenue: {formatMoney(dashboard.active?.deferredRevenue || 0, 'INR')}
-            </div>
-          </div>
-          <a
-            href="/wellness/memberships?expiresWithin=7d"
-            className="glass"
-            style={{ padding: '1.25rem', textDecoration: 'none', color: 'inherit', display: 'block' }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
-              <Clock size={16} /> EXPIRING THIS WEEK
-            </div>
-            <div style={{ fontSize: '1.75rem', fontWeight: 700, marginTop: '0.5rem', color: '#f59e0b' }}>
-              {dashboard.expiringThisWeek?.count || 0}
-            </div>
-            <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-              Active memberships ending in next 7 days
-            </div>
-          </a>
-          <a
-            href="/wellness/memberships?status=EXPIRED"
-            className="glass"
-            style={{ padding: '1.25rem', textDecoration: 'none', color: 'inherit', display: 'block' }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
-              <AlertCircle size={16} /> EXPIRED
-            </div>
-            <div style={{ fontSize: '1.75rem', fontWeight: 700, marginTop: '0.5rem', color: '#ef4444' }}>
-              {dashboard.expired?.count || 0}
-            </div>
-            <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-              Memberships past their end date
-            </div>
-          </a>
-        </div>
-      )}
-
-      {loading ? (
-        <p>Loading membership plans…</p>
-      ) : plans.length === 0 ? (
-        <div className="glass" style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
-          No membership plans yet.
-          {isAdmin && (
-            <span> Click <strong>New plan</strong> above to create one.</span>
-          )}
-        </div>
-      ) : (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 320px), 1fr))', gap: '1rem' }}>
-          {plans.map((p) => {
-            let entitlements = [];
-            try { entitlements = JSON.parse(p.entitlements || '[]'); } catch { entitlements = []; }
+        <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
+          {filterTabs.map((f) => {
+            const active = filter === f;
             return (
-              <div key={p.id} className="glass" style={{ padding: '1.25rem', opacity: p.isActive ? 1 : 0.55 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '0.5rem', marginBottom: '0.5rem' }}>
-                  <h3 style={{ fontSize: '1.1rem', fontWeight: 600 }}>{p.name}</h3>
-                  {!p.isActive && (
-                    <span style={{ fontSize: '0.7rem', padding: '0.15rem 0.4rem', borderRadius: 4, background: '#fee2e2', color: '#991b1b' }}>
-                      Inactive
-                    </span>
-                  )}
-                </div>
-                {p.description && <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '0.75rem' }}>{p.description}</p>}
-                <div style={{ display: 'flex', gap: '1rem', fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.2rem' }}>
-                    <IndianRupee size={14} /> {formatMoney(p.price, p.currency)}
-                  </span>
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.2rem' }}>
-                    <Calendar size={14} /> {p.durationDays} days
-                  </span>
-                </div>
-                <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '0.5rem', fontSize: '0.85rem' }}>
-                  <strong style={{ display: 'block', marginBottom: '0.25rem' }}>Includes:</strong>
-                  {entitlements.length === 0 ? (
-                    <em style={{ color: 'var(--text-secondary)' }}>(no entitlements)</em>
-                  ) : (
-                    <ul style={{ paddingLeft: '1.2rem', margin: 0 }}>
-                      {entitlements.map((e, i) => (
-                        <li key={i}>{serviceName(e.serviceId)} × {e.quantity}</li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-                {isAdmin && (
-                  <div style={{ marginTop: '1rem', display: 'flex', gap: '0.5rem' }}>
-                    <button onClick={() => startEdit(p)} style={{ flex: 1, padding: '0.4rem', borderRadius: 6, border: '1px solid var(--border-color)', background: 'transparent', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.3rem', fontSize: '0.85rem' }}>
-                      <Pencil size={14} /> Edit
-                    </button>
-                    {p.isActive && (
-                      <button onClick={() => softDelete(p)} style={{ padding: '0.4rem 0.75rem', borderRadius: 6, border: '1px solid var(--border-color)', background: 'transparent', color: 'var(--danger-color, #ef4444)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.85rem' }}>
-                        <Trash2 size={14} /> Deactivate
-                      </button>
-                    )}
-                  </div>
-                )}
-              </div>
+              <button
+                key={f}
+                type="button"
+                onClick={() => setFilter(f)}
+                style={{
+                  display: 'inline-flex', alignItems: 'center', gap: '0.3rem',
+                  padding: '0.45rem 0.95rem',
+                  background: active ? 'var(--primary-color, var(--accent-color))' : 'transparent',
+                  color: active ? '#fff' : 'var(--text-primary)',
+                  border: active ? '1px solid transparent' : '1px solid var(--border-color, rgba(255,255,255,0.18))',
+                  borderRadius: 999, cursor: 'pointer', fontSize: '0.85rem', fontWeight: 500,
+                }}
+              >
+                {active && <Check size={13} />} {f}
+                <span style={{ fontSize: '0.7rem', opacity: 0.7, marginLeft: '0.15rem' }}>{counts[f] != null ? `(${counts[f]})` : ''}</span>
+              </button>
             );
           })}
         </div>
+        {canViewPatients && (
+          <button
+            type="button"
+            // A dedicated members list isn't built yet, but members are
+            // patients — taking the user to the Patients page is the most
+            // useful version of "view members" we can ship today. Only
+            // surfaced when the viewer has patients.read; otherwise the
+            // destination would just 403 on every API call.
+            onClick={() => {
+              notify.info("Opening Patients — each member's plan and visits are on their patient page.");
+              navigate('/wellness/patients');
+            }}
+            style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: '0.4rem', padding: '0.5rem 1rem', background: 'transparent', border: '1px solid var(--border-color, rgba(255,255,255,0.18))', borderRadius: 8, color: 'var(--text-primary)', cursor: 'pointer', fontSize: '0.85rem' }}
+          >
+            <Users size={14} /> View Members
+          </button>
+        )}
+      </div>
+
+      {loading ? (
+        <p style={{ color: 'var(--text-secondary)' }} role="status" aria-live="polite">Loading membership plans…</p>
+      ) : !isAdmin && filter === 'My Memberships' ? (
+        // Owned-memberships tab renders membership rows (purchase / expiry /
+        // status / balance) not catalog rows — different shape, different
+        // card. We still filter by `query` against the plan name so the
+        // search field remains useful on this tab when present.
+        myMemberships.length === 0 ? (
+          <EmptyState
+            icon={Crown}
+            title="No Memberships Yet"
+            description="Once you join a plan it will appear here with your benefits, expiry date, and renewal options."
+            ctaLabel="Browse Plans"
+            onCta={() => setFilter('Available Plans')}
+          />
+        ) : (
+          (() => {
+            const q = query.trim().toLowerCase();
+            const rows = q
+              ? myMemberships.filter((m) => String(m.planName || '').toLowerCase().includes(q))
+              : myMemberships;
+            if (rows.length === 0) {
+              return (
+                <EmptyState
+                  icon={Search}
+                  title="No matches"
+                  description={`No memberships match "${query}".`}
+                  ctaLabel="Clear search"
+                  onCta={() => setQuery('')}
+                />
+              );
+            }
+            return (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 320px), 1fr))', gap: '1.25rem' }}>
+                {rows.map((m) => (
+                  <OwnedMembershipCard
+                    key={m.id}
+                    membership={m}
+                    plan={plans.find((p) => p.id === m.planId)}
+                    services={services}
+                    onView={() => {
+                      const plan = plans.find((p) => p.id === m.planId);
+                      if (plan) setDetailPlan(plan);
+                    }}
+                    onRenew={(mem) => {
+                      // Backend membership-purchase already detects prior
+                      // memberships and emits membership.renewed (see
+                      // wellness.js around "isRenewal"), so routing the
+                      // user back through the standard Razorpay handshake
+                      // gives them a renewed Membership row without
+                      // needing a separate /renew route.
+                      const plan = plans.find((p) => p.id === mem.planId);
+                      if (plan) {
+                        setPurchasePlan(plan);
+                      } else {
+                        notify.error('Plan no longer available. Please contact your clinic to renew.');
+                      }
+                    }}
+                  />
+                ))}
+              </div>
+            );
+          })()
+        )
+      ) : visiblePlans.length === 0 ? (
+        // Empty state — filter-aware so users get a useful next-step instead
+        // of the generic "no matches" line.
+        query.trim() ? (
+          <EmptyState
+            icon={Search}
+            title="No matches"
+            description={`No plans match "${query}".`}
+            ctaLabel="Clear search"
+            onCta={() => setQuery('')}
+          />
+        ) : !isAdmin ? (
+          <EmptyState
+            icon={Crown}
+            title="No Membership Plans Available"
+            description="Memberships unlock recurring benefits, prepaid services, and exclusive savings on visits. Plans aren't published yet — your clinic will notify you when they go live."
+            ctaLabel="Contact Clinic"
+            ctaIcon={Mail}
+            onCta={() => notify.info('Reach your clinic via the in-app chat or call the front desk for membership details.')}
+          />
+        ) : (
+          <EmptyState
+            icon={Crown}
+            title="No Plans Yet"
+            description={filter === 'Active'
+              ? 'No active plans. Tap the + button below to create one.'
+              : 'No plans match the current filter.'}
+          />
+        )
+      ) : (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 320px), 1fr))', gap: '1.25rem' }}>
+          {visiblePlans.map((p) => (
+            <PlanCard
+              key={p.id}
+              plan={p}
+              services={services}
+              isAdmin={isAdmin}
+              isOwned={ownedPlanIds.has(p.id)}
+              menuOpen={openMenuId === p.id}
+              onToggleMenu={(e) => { e.stopPropagation(); setOpenMenuId(openMenuId === p.id ? null : p.id); }}
+              onCloseMenu={() => setOpenMenuId(null)}
+              onView={() => setDetailPlan(p)}
+              onEdit={() => { setOpenMenuId(null); setEditingPlan(p); }}
+              onDelete={() => { setOpenMenuId(null); handleDelete(p); }}
+              onDeactivate={() => { setOpenMenuId(null); handleDeactivate(p); }}
+              onBuy={() => setPurchasePlan(p)}
+            />
+          ))}
+        </div>
+      )}
+
+      {/* Floating "+" — admin-only. Matches the design's bottom-right FAB. */}
+      {isAdmin && (
+        <button
+          type="button"
+          aria-label="New membership plan"
+          onClick={() => setEditingPlan({})}
+          style={{
+            position: 'fixed', bottom: '1.5rem', right: '1.5rem',
+            width: 52, height: 52, borderRadius: 12,
+            background: '#111', color: '#fff',
+            border: '1px solid rgba(255,255,255,0.15)',
+            boxShadow: '0 10px 25px rgba(0,0,0,0.4)',
+            cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+            zIndex: 50,
+          }}
+        >
+          <Plus size={22} />
+        </button>
+      )}
+
+      {editingPlan && (
+        <PlanFormModal
+          plan={editingPlan && editingPlan.id ? editingPlan : null}
+          services={services}
+          onClose={() => setEditingPlan(null)}
+          onSaved={() => { setEditingPlan(null); load(); }}
+        />
+      )}
+
+      {detailPlan && (
+        <PlanDetailModal
+          plan={detailPlan}
+          services={services}
+          isAdmin={isAdmin}
+          isOwned={ownedPlanIds.has(detailPlan.id)}
+          onClose={() => setDetailPlan(null)}
+          onEdit={() => { setDetailPlan(null); setEditingPlan(detailPlan); }}
+          onBuy={() => {
+            setPurchasePlan(detailPlan);
+            setDetailPlan(null);
+          }}
+        />
+      )}
+
+      {purchasePlan && (
+        <PurchaseModal
+          plan={purchasePlan}
+          paying={paying}
+          onClose={() => { if (!paying) setPurchasePlan(null); }}
+          onPay={() => startPurchase(purchasePlan)}
+        />
       )}
     </div>
   );

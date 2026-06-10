@@ -505,6 +505,179 @@ describe('GET /api/web-visitors', () => {
   });
 });
 
+// ─────────────────────────────────────────────────────────────────────────
+// GET /?fields=summary — slim-shape opt-in (#920)
+// ─────────────────────────────────────────────────────────────────────────
+
+describe('GET /api/web-visitors?fields=summary — slim-shape opt-in (#920)', () => {
+  test('omits the `select` arg when ?fields is absent (back-compat full-shape + contact hydration)', async () => {
+    const app = makeApp({ tenantId: 42 });
+    prisma.webVisitor.findMany.mockResolvedValue([
+      {
+        id: 1,
+        sessionId: 'sess-a',
+        ipAddress: '1.1.1.1',
+        userAgent: 'UA-heavy',
+        country: 'IN',
+        city: null,
+        identified: true,
+        contactId: 555,
+        pages: JSON.stringify([{ url: '/home', timestamp: '2026-05-25T00:00:00.000Z' }]),
+        firstSeen: new Date('2026-05-25T00:00:00.000Z'),
+        lastSeen: new Date('2026-05-25T00:00:00.000Z'),
+        tenantId: 42,
+      },
+    ]);
+    prisma.contact.findMany.mockResolvedValue([
+      { id: 555, name: 'Priya Sharma', email: 'priya@example.com', company: 'Acme' },
+    ]);
+
+    const res = await request(app).get('/api/web-visitors');
+
+    expect(res.status).toBe(200);
+    const args = prisma.webVisitor.findMany.mock.calls[0][0];
+    expect(args.select).toBeUndefined();
+    // Full-shape wire response still hydrates contact + parses pages JSON.
+    expect(res.body[0].contact).toEqual({
+      id: 555,
+      name: 'Priya Sharma',
+      email: 'priya@example.com',
+      company: 'Acme',
+    });
+    expect(res.body[0].pageCount).toBe(1);
+    expect(res.body[0].userAgent).toBe('UA-heavy');
+  });
+
+  test('passes a slim Prisma `select` dropping userAgent + pages when ?fields=summary', async () => {
+    const app = makeApp({ tenantId: 42 });
+    prisma.webVisitor.findMany.mockResolvedValue([
+      {
+        id: 1,
+        sessionId: 'sess-a',
+        country: 'IN',
+        city: null,
+        identified: true,
+        contactId: 555,
+        firstSeen: new Date('2026-05-25T00:00:00.000Z'),
+        lastSeen: new Date('2026-05-25T00:00:00.000Z'),
+        tenantId: 42,
+      },
+    ]);
+
+    const res = await request(app).get('/api/web-visitors?fields=summary');
+
+    expect(res.status).toBe(200);
+    const args = prisma.webVisitor.findMany.mock.calls[0][0];
+    expect(args.select).toBeDefined();
+    // Heavy / PII fields explicitly absent from the select:
+    expect(args.select.userAgent).toBeUndefined();
+    expect(args.select.pages).toBeUndefined();
+    expect(args.select.ipAddress).toBeUndefined();
+    // Lightweight admin-list fields present:
+    expect(args.select.id).toBe(true);
+    expect(args.select.sessionId).toBe(true);
+    expect(args.select.country).toBe(true);
+    expect(args.select.city).toBe(true);
+    expect(args.select.identified).toBe(true);
+    expect(args.select.contactId).toBe(true);
+    expect(args.select.firstSeen).toBe(true);
+    expect(args.select.lastSeen).toBe(true);
+    expect(args.select.tenantId).toBe(true);
+  });
+
+  test('summary mode still applies the tenantId + lastSeen-window filter + lastSeen-desc ordering + take=200 cap', async () => {
+    const app = makeApp({ tenantId: 42 });
+    prisma.webVisitor.findMany.mockResolvedValue([]);
+
+    const res = await request(app).get('/api/web-visitors?fields=summary');
+
+    expect(res.status).toBe(200);
+    const args = prisma.webVisitor.findMany.mock.calls[0][0];
+    expect(args.where.tenantId).toBe(42);
+    expect(args.where.lastSeen).toBeDefined();
+    expect(args.where.lastSeen.gte).toBeInstanceOf(Date);
+    expect(args.orderBy).toEqual({ lastSeen: 'desc' });
+    expect(args.take).toBe(200);
+    expect(args.select).toBeDefined();
+  });
+
+  test('summary mode SKIPS the per-row contact-hydration round-trip (no prisma.contact.findMany call)', async () => {
+    const app = makeApp({ tenantId: 42 });
+    // Even with identified visitors holding contactIds, summary mode must NOT
+    // fire the second prisma.contact.findMany query — that's the whole point
+    // of the slim shape (one DB round-trip instead of two).
+    prisma.webVisitor.findMany.mockResolvedValue([
+      {
+        id: 1,
+        sessionId: 'sess-a',
+        country: 'IN',
+        city: null,
+        identified: true,
+        contactId: 555,
+        firstSeen: new Date(),
+        lastSeen: new Date(),
+        tenantId: 42,
+      },
+      {
+        id: 2,
+        sessionId: 'sess-b',
+        country: 'US',
+        city: null,
+        identified: true,
+        contactId: 666,
+        firstSeen: new Date(),
+        lastSeen: new Date(),
+        tenantId: 42,
+      },
+    ]);
+
+    const res = await request(app).get('/api/web-visitors?fields=summary');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(2);
+    expect(prisma.contact.findMany).not.toHaveBeenCalled();
+    // Slim rows go through verbatim — no `contact` hydration key, no
+    // `pageCount` / `firstUrl` / `lastUrl` post-process fields.
+    expect(res.body[0].contact).toBeUndefined();
+    expect(res.body[0].pageCount).toBeUndefined();
+    expect(res.body[0].firstUrl).toBeUndefined();
+    expect(res.body[0].lastUrl).toBeUndefined();
+    // contactId surfaced so the admin UI can still show an "is-lead" chip
+    // without paying for the full hydration.
+    expect(res.body[0].contactId).toBe(555);
+    expect(res.body[0].identified).toBe(true);
+  });
+
+  test('unknown ?fields value (not "summary") falls back to full shape + hydration', async () => {
+    const app = makeApp({ tenantId: 42 });
+    prisma.webVisitor.findMany.mockResolvedValue([
+      {
+        id: 1,
+        sessionId: 'sess-a',
+        ipAddress: '1.1.1.1',
+        userAgent: 'UA',
+        country: 'IN',
+        city: null,
+        identified: false,
+        contactId: null,
+        pages: JSON.stringify([{ url: '/home', timestamp: '2026-05-25T00:00:00.000Z' }]),
+        firstSeen: new Date(),
+        lastSeen: new Date(),
+        tenantId: 42,
+      },
+    ]);
+
+    const res = await request(app).get('/api/web-visitors?fields=bogus');
+
+    expect(res.status).toBe(200);
+    const args = prisma.webVisitor.findMany.mock.calls[0][0];
+    expect(args.select).toBeUndefined();
+    // Full-shape post-process ran — pageCount + firstUrl present.
+    expect(res.body[0].pageCount).toBe(1);
+    expect(res.body[0].firstUrl).toBe('/home');
+  });
+});
+
 // ─── AUTHENTICATED: GET /:id ─────────────────────────────────────────
 
 describe('GET /api/web-visitors/:id', () => {

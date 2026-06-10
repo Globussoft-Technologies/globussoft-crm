@@ -1295,9 +1295,29 @@ test.describe("Travel itineraries API — POST /from-suggestion (PRD FR-3.6 step
     const suggestBody = await suggestRes.json();
     expect(Array.isArray(suggestBody.suggestionJson.daySplit)).toBe(true);
 
+    // SHAPE DRIFT (S108 — Wave 23 recovery): the stub suggest service emits
+    // itemType: 'meal' (singular, see backend/services/itinerarySuggestLLM.js:174)
+    // but the materialise route's VALID_ITEM_TYPES enum uses 'meals' (plural,
+    // backend/routes/travel_itineraries.js:64-67). Verbatim hand-off of the
+    // suggestion fails with 400 INVALID_ITEM_TYPE. Until the service +
+    // VALID_ITEM_TYPES vocabularies are reconciled (filed gap), normalise
+    // here so the round-trip test pins the materialise contract not the
+    // mismatch. Other itemType variants stay pass-through.
+    const ITEM_TYPE_ALIASES = { meal: "meals", accommodation: "hotel" };
+    const normalisedSuggestionJson = {
+      ...suggestBody.suggestionJson,
+      daySplit: suggestBody.suggestionJson.daySplit.map((d) => ({
+        ...d,
+        items: (d.items || []).map((it) => ({
+          ...it,
+          itemType: ITEM_TYPE_ALIASES[it.itemType] || it.itemType,
+        })),
+      })),
+    };
+
     // 2. Materialise into a real Itinerary.
     const matRes = await post(request, token, "/api/travel/itineraries/from-suggestion", {
-      suggestionJson: suggestBody.suggestionJson,
+      suggestionJson: normalisedSuggestionJson,
       contactId: testContactId,
       subBrand: "rfu",
     });

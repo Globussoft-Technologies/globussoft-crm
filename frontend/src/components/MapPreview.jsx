@@ -1,6 +1,31 @@
 import React, { useMemo } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
+import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
+
+// S84 — Vite asset-pipeline fix: leaflet's default marker icon URLs (encoded
+// in the published bundle as relative paths like `images/marker-icon.png`)
+// don't auto-resolve under Vite's asset pipeline — markers render as
+// broken-image placeholders in production builds. The canonical fix is to
+// import the three icon URLs explicitly so Vite hashes + emits them as
+// build assets, then merge the resolved URLs into `L.Icon.Default` so every
+// `new L.Marker()` (incl. react-leaflet's `<Marker>`) picks them up.
+// Tests don't exercise this path (react-leaflet's Marker is mocked) but
+// production renders use leaflet's real icon factory.
+import markerIcon2x from 'leaflet/dist/images/marker-icon-2x.png';
+import markerIcon from 'leaflet/dist/images/marker-icon.png';
+import markerShadow from 'leaflet/dist/images/marker-shadow.png';
+
+// Wipe the dynamic _getIconUrl resolver leaflet uses by default — it tries
+// to derive the icon URL from the script's location, which Vite-bundled
+// builds rewrite away. mergeOptions then supplies the explicit URLs.
+// eslint-disable-next-line no-prototype-builtins
+delete L.Icon.Default.prototype._getIconUrl;
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl: markerIcon2x,
+  iconUrl: markerIcon,
+  shadowUrl: markerShadow,
+});
 
 /**
  * frontend/src/components/MapPreview.jsx

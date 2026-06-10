@@ -591,10 +591,17 @@ test.describe('Wellness API — POST /patients (create + validation)', () => {
     expect(created.lastName).toBe(`Sharma${RUN_TAG}`);
 
     // Round-trip via GET ?fields=summary (S96 slim shape) — surfaces the
-    // S62 columns we just populated. Use q= to scope to this exact row.
+    // S62 columns we just populated. Use q=<phone-tail> to scope to this
+    // exact row: the GET /patients handler's OR clause searches
+    // name/phone/email — NOT firstName/lastName — so querying by a value
+    // present in `name`/`phone`/`email` is required for the row to land in
+    // the response. Phone-tail (last 5 digits of nextPhone()) is unique per
+    // call and matches the existing `?q filters by phone substring` pattern
+    // at line ~308.
+    const phoneTail = phone.replace(/\D/g, '').slice(-5);
     const listRes = await authGet(
       request,
-      `/api/wellness/patients?fields=summary&q=${encodeURIComponent(`Riya${RUN_TAG}`)}&limit=10`,
+      `/api/wellness/patients?fields=summary&q=${phoneTail}&limit=10`,
     );
     expect(listRes.status()).toBe(200);
     const listBody = await listRes.json();

@@ -78,6 +78,14 @@ const Login = () => {
       setOrgTenantId((prev) => (prev ? prev : String(match.id)));
     }
   }, [tenantSlugParam, orgs]);
+  // Pre-fill email when redirected from the /get-started wizard.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const prefilled = params.get("email");
+    if (prefilled) {
+      setEmail(prefilled);
+    }
+  }, []);
 
   // Handle SSO redirect callback — server bounces user here with ?sso_token=...&tenant=...
   useEffect(() => {

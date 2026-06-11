@@ -1,0 +1,40 @@
+# Development override for docker compose
+# Enables hot reload (HMR) for both frontend and backend.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+#   (or use the helper script: ./scripts/docker-dev-up.sh)
+#
+# What this changes:
+#   - Backend runs with nodemon (npm run dev) instead of node server.js
+#   - Frontend runs Vite dev server (npm run dev) instead of nginx
+#   - Source code is volume-mounted so changes reflect immediately
+#   - node_modules is preserved in anonymous volumes (not overwritten by host)
+
+services:
+  backend:
+    command: ["sh", "-c", "npx prisma generate && npm run dev"]
+    volumes:
+      - ./backend:/app
+      - /app/node_modules
+    environment:
+      - DATABASE_URL=mysql://root:local_dev_pw@mysql:3306/gbscrm_local
+      - JWT_SECRET=dev-jwt-secret-change-me-in-production
+      - PORTAL_JWT_SECRET=dev-portal-secret-change-me-in-production
+      - NODE_ENV=development
+      - PORT=3000
+      - FRONTEND_URL=http://localhost:5173
+      - CORS_ALLOWED_ORIGINS=http://localhost:5173
+      - RAZORPAY_KEY_ID=${RAZORPAY_KEY_ID:-}
+      - RAZORPAY_KEY_SECRET=${RAZORPAY_KEY_SECRET:-}
+
+  frontend:
+    command: ["sh", "-c", "npm run dev -- --host"]
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    environment:
+      - VITE_API_PROXY_TARGET=http://backend:3000
+      - VITE_RAZORPAY_KEY_ID=${RAZORPAY_KEY_ID:-}

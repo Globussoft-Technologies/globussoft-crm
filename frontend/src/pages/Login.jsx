@@ -24,8 +24,8 @@ const Login = () => {
   const _initialSearchParams = new URLSearchParams(typeof window !== "undefined" ? window.location.search : "");
   const _emailFromUrl = (_initialSearchParams.get("email") || "").trim().toLowerCase();
 
-  const [email, setEmail] = useState(_emailFromUrl || "admin@globussoft.com");
-  const [password, setPassword] = useState(_emailFromUrl ? "" : "password123");
+  const [email, setEmail] = useState(_emailFromUrl || "");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [showForgot, setShowForgot] = useState(false);
   const [forgotEmail, setForgotEmail] = useState("");
@@ -804,14 +804,16 @@ const Login = () => {
                 {
                   label: "Admin",
                   email: "admin@globussoft.com",
+                  password: "password123",
                   color: "#10b981",
                 },
                 {
                   label: "Manager",
                   email: "manager@crm.com",
+                  password: "password123",
                   color: "#f59e0b",
                 },
-                { label: "User", email: "user@crm.com", color: "#3b82f6" },
+                { label: "User", email: "user@crm.com", password: "password123", color: "#3b82f6" }
               ]}
               onLogin={quickLogin}
             />
@@ -822,18 +824,21 @@ const Login = () => {
                 {
                   label: "Owner (Rishu)",
                   email: "rishu@enhancedwellness.in",
+                  password: "password123",
                   color: "#a855f7",
                 },
                 {
                   label: "Demo Admin",
                   email: "admin@wellness.demo",
+                  password: "password123",
                   color: "#a855f7",
                 },
                 {
                   label: "Demo User",
                   email: "user@wellness.demo",
+                  password: "password123",
                   color: "#ec4899",
-                },
+                }
               ]}
               onLogin={quickLogin}
             />
@@ -845,28 +850,33 @@ const Login = () => {
                 {
                   label: "Owner (Yasin)",
                   email: "yasin@travelstall.in",
+                  password: "password123",
                   color: "#a855f7",
                 },
                 {
                   label: "Demo Admin",
                   email: "admin@travelstall.demo",
+                  password: "password123",
                   color: "#a855f7",
                 },
                 {
                   label: "TMC Operator",
                   email: "tmc-ops@travelstall.demo",
+                  password: "password123",
                   color: "#f59e0b",
                 },
                 {
                   label: "RFU Advisor",
                   email: "rfu-advisor@travelstall.demo",
+                  password: "password123",
                   color: "#10b981",
                 },
                 {
                   label: "Telecaller",
                   email: "telecaller@travelstall.demo",
+                  password: "password123",
                   color: "#3b82f6",
-                },
+                }
               ]}
               onLogin={quickLogin}
               extraCell={
@@ -1039,7 +1049,7 @@ function QuickLoginSection({ title, accounts, onLogin, columns, extraCell }) {
             <button
               key={a.email}
               type="button"
-              onClick={() => onLogin(a.email, "password123")}
+              onClick={() => onLogin(a.email, a.password || "password123")}
               style={{
                 padding: "0.55rem 0.45rem",
                 borderRadius: "8px",

@@ -125,6 +125,11 @@ import {
   // Ban-circle motif matches cancellation / refund semantics. ADMIN+MANAGER
   // gated to mirror the backend POST/PATCH RBAC posture.
   Ban,
+  // S79 (TRAVEL_BIG_SCOPE_BACKLOG) — Flyer Share Admin nav entry icon.
+  // Share2 motif matches the mint-link / shareable-URL semantics. ADMIN-only
+  // gated to mirror the share-link lifecycle's elevated-privilege posture
+  // (revoke is destructive).
+  Share2,
 } from "lucide-react";
 import { AuthContext } from "../App";
 import { fetchApi } from "../utils/api";
@@ -1671,6 +1676,18 @@ function renderTravelNav({
           to="/travel/flyer-templates"
           icon={Palette}
           label="Flyer Templates"
+        />
+      )}
+      {/* S79 (TRAVEL_BIG_SCOPE_BACKLOG) — operator UI for flyer share-link
+          admin (mint + history + revoke). Companion to FlyerTemplates above,
+          gated ADMIN-only since share-link lifecycle (including revocation)
+          is a higher-privilege surface than design-time CRUD. Share2 icon
+          mirrors the page header. */}
+      {isAdmin && (
+        <Link
+          to="/travel/flyer-share-admin"
+          icon={Share2}
+          label="Flyer Share Admin"
         />
       )}
 

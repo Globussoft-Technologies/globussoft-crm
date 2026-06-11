@@ -9,6 +9,15 @@ import PasswordInput from "../components/PasswordInput";
 // SSO config + provider credentials. Flip to true to re-enable.
 const SHOW_SSO = false;
 
+// Hosts where the demo quick-login buttons (Generic / Wellness / Travel Stall)
+// MUST NOT render — production customer-facing deployments. The JSX is skipped
+// entirely so the buttons leave no DOM nodes, no React tree, and nothing that
+// surfaces via DevTools inspect. Add new production hostnames to the set.
+const HIDE_QUICK_LOGIN_HOSTS = new Set(["globuscrm.globussoft.com"]);
+const SHOW_QUICK_LOGIN =
+  typeof window === "undefined" ||
+  !HIDE_QUICK_LOGIN_HOSTS.has(window.location.hostname);
+
 const Login = () => {
   // Read URL params up-front so the email field can be pre-filled from the
   // marketing-site handoff (?email=...) instead of the demo default.
@@ -787,6 +796,8 @@ const Login = () => {
               </div>
             )}
 
+            {SHOW_QUICK_LOGIN && (
+              <>
             <QuickLoginSection
               title="Generic CRM"
               accounts={[
@@ -914,6 +925,8 @@ const Login = () => {
                 </Link>
               }
             />
+              </>
+            )}
 
             <div
               style={{

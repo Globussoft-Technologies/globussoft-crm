@@ -1749,7 +1749,11 @@ function renderTravelNav({
       <div style={labelStyle}>Financial</div>
       <Link to="/invoices" icon={Receipt} label="Invoices" />
       <Link to="/payments" icon={IndianRupee} label="Payments" />
-      <Link to="/quotes" icon={FileText} label="Quotes" />
+      {/* /quotes route is not wired (page returns 404). Hide the entry until
+          the Quotes module ships under cluster B2 of MANUAL_CODING_BACKLOG.md.
+          The admin /travel/quotes-admin link at line ~1574 is a separate
+          (working) page and stays. */}
+      {/* <Link to="/quotes" icon={FileText} label="Quotes" /> */}
 
       <div style={labelStyle}>Reports</div>
       <Link to="/reports" icon={BarChart3} label="Reports" />

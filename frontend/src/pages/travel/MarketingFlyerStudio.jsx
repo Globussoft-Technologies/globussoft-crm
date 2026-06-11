@@ -911,8 +911,12 @@ const deleteBtn = { padding: '6px 12px', borderRadius: 6, fontSize: 12, fontWeig
 
 const savePrimaryBtn = { display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 14px', borderRadius: 6, fontWeight: 600, fontSize: 13, background: 'var(--primary-color, var(--accent-color))', color: 'var(--accent-text, #fff)', border: 'none', cursor: 'pointer' };
 const secondaryBtn = { display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 14px', borderRadius: 6, fontWeight: 600, fontSize: 13, background: 'var(--surface-color)', color: 'var(--text-primary)', border: '1px solid var(--border-color)', cursor: 'pointer' };
-const modalOverlay = { position: 'fixed', inset: 0, background: 'rgba(0, 0, 0, 0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 16 };
-const modalDialog = { background: 'var(--surface-color)', border: '1px solid var(--border-color)', borderRadius: 10, padding: 20, width: '100%', maxWidth: 480, display: 'flex', flexDirection: 'column', gap: 12 };
+// Backdrop + dialog chrome shared by the three Flyer Studio modals (Save
+// as Template / AI Copy / AI Image). Deeper dim + blur defeats the
+// readable-text-bleeding-through-backdrop look; opaque `--bg-color` on
+// the dialog defeats `--surface-color`'s glassmorphic rgba.
+const modalOverlay = { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(4px)', WebkitBackdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 16 };
+const modalDialog = { background: 'var(--bg-color)', color: 'var(--text-primary)', border: '1px solid var(--border-color)', borderRadius: 12, padding: 20, width: '100%', maxWidth: 480, maxHeight: '90vh', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 12, boxShadow: '0 8px 32px rgba(0,0,0,0.4)' };
 const modalHeading = { margin: 0, fontSize: 18, fontWeight: 600, color: 'var(--text-primary)' };
 const modalHint = { margin: 0, fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.4 };
 const modalLabel = { display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, color: 'var(--text-secondary)' };

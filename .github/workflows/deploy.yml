@@ -491,6 +491,7 @@ jobs:
             tests/wellness-portal-notifications-api.spec.js \
             tests/admin-backfill-last-visit-api.spec.js \
             tests/security-reports-violations-api.spec.js \
+            tests/travel-quote-templates-api.spec.js \
             tests/teardown-completeness.spec.js \
             tests/demo-hygiene-api.spec.js
           echo "::notice::API specs passed"

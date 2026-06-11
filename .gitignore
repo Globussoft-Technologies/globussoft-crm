@@ -1,3 +1,55 @@
+# ──────────────────────────────────────────────
+# iOS / Xcode
+# ──────────────────────────────────────────────
+
+# User-specific Xcode state (never commit)
+xcuserdata/
+*.xcuserstate
+*.xcuserdatad/
+
+# Xcode scheme management (user-specific)
+xcschememanagement.plist
+
+# Xcode build products
+DerivedData/
+build/
+*.ipa
+*.app
+*.dSYM
+*.dSYM.zip
+
+# Swift Package Manager
+.build/
+.swiftpm/
+*.resolved
+
+# CocoaPods (if used)
+Pods/
+*.xcworkspace
+!*.xcodeproj/*.xcworkspace
+
+# Carthage
+Carthage/Build/
+
+# fastlane
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/**/*.png
+fastlane/test_output/
+
+# Simulator & provisioning
+*.mobileprovision
+*.certSigningRequest
+*.p12
+
+# Playground output
+playground.xcworkspace
+timeline.xctimeline
+
+# ──────────────────────────────────────────────
+# Node / Web (existing rules below)
+# ──────────────────────────────────────────────
+
 node_modules
 .env
 .env.*

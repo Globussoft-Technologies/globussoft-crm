@@ -28,6 +28,7 @@ const prisma = require('../lib/prisma');
 const { getSetting, KEYS } = require('../lib/tenantSettings');
 const { evaluateCondition, renderTemplate } = require('../lib/eventBus');
 const flyerRenderEngine = require('../services/flyerRenderEngine');
+const shortUrlService = require('../services/shortUrl');
 const { writeAudit } = require('../lib/audit');
 
 // S19 (PRD_TRAVEL_MARKETING_FLYER FR-3.5 / AC-6.5) — render-on-send for
@@ -45,6 +46,14 @@ function writeAuditSafe(...args) {
   return writeAudit(...args).catch((err) => {
     console.warn(`[sequenceEngine] audit failed: ${err.message}`);
   });
+}
+// S87 — same CJS self-mocking-seam pattern as renderFlyerSafe. SMS branch
+// calls `module.exports.shortenUrlSafe(...)` so tests can reassign it to
+// a vi.fn() spy that returns canned short URLs without booting the real
+// shortener. Real-mode swap happens in services/shortUrl.js once the
+// provider decision lands (Bitly / Cloudflare / internal).
+function shortenUrlSafe(args) {
+  return shortUrlService.shortenUrl(args);
 }
 
 // ── SendGrid (best-effort) ─────────────────────────────────────────────
@@ -377,12 +386,86 @@ async function processStep(step, enrollment) {
 
   if (step.kind === 'sms') {
     if (enrollment.contact?.phone) {
-      const body = renderTemplate(step.smsBody || '', ctx);
+      let body = renderTemplate(step.smsBody || '', ctx);
       // S19 — SMS doesn't natively carry binary attachments but flyer links
-      // are commonly sent as a separate URL line. Resolve attachments anyway
-      // so the audit row fires (operator sees "flyer attached to step N's
-      // SMS") and a future MMS/short-link wire-in can pick them up.
+      // are commonly sent as a separate URL line.
+      // S87 — for each resolved flyer attachment, shorten the rendered
+      // buffer via services/shortUrl.shortenUrl and append the link to the
+      // SMS body. Short-link fails are fail-soft (audited, SMS still sends
+      // without a link) so an unimplemented provider never blocks delivery.
       const attachments = await resolveStepAttachments(step, enrollment, 'sms');
+      if (attachments.length > 0) {
+        const linkLines = [];
+        for (const att of attachments) {
+          // File-kind refs already carry a URL — use it verbatim, no
+          // shortener call. Only flyer-kind needs the buffer→URL hop.
+          if (att.kind === 'file' && typeof att.url === 'string' && att.url.length > 0) {
+            linkLines.push(`📎 ${att.url}`);
+            continue;
+          }
+          if (att.kind !== 'flyer' || !Buffer.isBuffer(att.buffer)) continue;
+          try {
+            const shortened = await module.exports.shortenUrlSafe({
+              buffer: att.buffer,
+              filename: att.filename,
+              mimeType: att.mimeType,
+            });
+            linkLines.push(`📎 ${shortened.shortUrl}`);
+            // Success audit row — operator-visible confirmation that the
+            // link landed in the SMS body. Payload mirrors the
+            // 'sequence.step.flyer-attached' shape but excludes the raw
+            // buffer (links only, never blob content in audit logs).
+            try {
+              await module.exports.writeAuditSafe(
+                'SequenceStep',
+                'sequence.step.sms-flyer-shortlinked',
+                step.id,
+                null,
+                enrollment.tenantId,
+                {
+                  enrollmentId: enrollment.id,
+                  flyerId: att.flyerId,
+                  format: att.format,
+                  filename: shortened.filename,
+                  mimeType: shortened.mimeType,
+                  shortUrl: shortened.shortUrl,
+                  source: shortened.source,
+                  channel: 'sms',
+                },
+                { actorType: 'system' },
+              );
+            } catch (_auditErr) { /* swallow — audit best-effort */ }
+          } catch (shortenErr) {
+            // Fail-soft: don't break the SMS send if the shortener trips.
+            // Operator-visible signal is the 'shortlink-failed' audit row.
+            console.warn(
+              `[sequenceEngine] short-URL failed for flyer ${att.flyerId} on step ${step.id}:`,
+              shortenErr.message,
+            );
+            try {
+              await module.exports.writeAuditSafe(
+                'SequenceStep',
+                'sequence.step.sms-flyer-shortlink-failed',
+                step.id,
+                null,
+                enrollment.tenantId,
+                {
+                  enrollmentId: enrollment.id,
+                  flyerId: att.flyerId,
+                  format: att.format,
+                  channel: 'sms',
+                  reason: 'shorten_error',
+                  message: shortenErr.message,
+                },
+                { actorType: 'system' },
+              );
+            } catch (_auditErr) { /* swallow */ }
+          }
+        }
+        if (linkLines.length > 0) {
+          body = `${body.trim()}\n\n${linkLines.join('\n')}`.trim();
+        }
+      }
       await prisma.smsMessage.create({
         data: {
           to: enrollment.contact.phone,
@@ -393,10 +476,6 @@ async function processStep(step, enrollment) {
           tenantId: enrollment.tenantId,
         },
       });
-      // Attachments are surfaced to the SMS branch's tests via the audit
-      // row (already written inside resolveStepAttachments). No body
-      // mutation here — short-link integration is a follow-up slice.
-      void attachments;
     }
     return { advance: true };
   }
@@ -777,9 +856,10 @@ module.exports = {
   processStep, // #616: exported so unit tests can pin step dispatch shape
   processStepListEnrollment, // #616: exported for wellness trigger unit tests
   resolveStepAttachments, // S19: exported for flyer-attachment unit tests
-  // S19 — CJS self-mocking seams (cron-learnings 2026-05-24 ~01:43 UTC):
+  // S19 + S87 — CJS self-mocking seams (cron-learnings 2026-05-24 ~01:43 UTC):
   // tests reassign these to vi.fn() to intercept the SUT's calls without
-  // booting pdfkit / prisma.auditLog.
+  // booting pdfkit / prisma.auditLog / shortener providers.
   renderFlyerSafe,
   writeAuditSafe,
+  shortenUrlSafe, // S87
 };

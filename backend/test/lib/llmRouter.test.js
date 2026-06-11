@@ -146,9 +146,9 @@ describe('llmRouter — module shape', () => {
     const r = loadRouter();
     // Pins PRD §9.1 (docs/TRAVEL_CRM_PRD.md lines 700-708) + the
     // 'itinerary-suggest' extension landed for S14 (PRD_TRAVEL_ITINERARY_UPGRADES
-    // FR-3.6 — gemini-flash primary, claude-haiku fallback; 2K in / 4K out
-    // routed via backend/services/itinerarySuggestLLM.js for structured-JSON
-    // shape; this scaffold's stub-text path returns a tagged synthetic string)
+    // FR-3.6 — gemini-flash primary, claude-haiku fallback; 2K in / 4K out;
+    // structured-JSON shape emitted inline by routes/travel_itineraries.js
+    // FR-3.4 handler; this scaffold's stub-text path returns a tagged synthetic string)
     // + the 'marketing-flyer-copy' extension landed for S15
     // (PRD_TRAVEL_MARKETING_FLYER FR-3.6.1 — gemini-flash primary, claude-haiku
     // fallback; 1K in / 1K out headline+body+CTA JSON routed via
@@ -254,7 +254,7 @@ describe('llmEnabled', () => {
 // category 'llm-key'. The getLlmKey helper resolves SupplierCredential
 // first (per-tenant override) then process.env (dev/CI fallback). These
 // cases pin the contract that downstream LLM clients
-// (services/itinerarySuggestLLM.realModeEnabled etc.) rely on.
+// (marketingFlyerCopyLLM.realModeEnabled, etc.) rely on.
 
 describe('getLlmKey — S45 per-tenant SupplierCredential resolution', () => {
   test('returns null when neither SupplierCredential nor ENV is present', async () => {

@@ -58,8 +58,8 @@ const requireCjs = createRequire(import.meta.url);
 // Hoisted Prisma mock — the cap helper does
 // `prisma.tenantSetting.findUnique(...)` to read per-tenant cap rows.
 // Same Module._cache install pattern as the marketingFlyerCopyLLM /
-// adsGptClient / llmRouter / itinerarySuggestLLM tests (vitest's
-// ESM-level vi.mock can't intercept CJS require()).
+// adsGptClient / llmRouter tests (vitest's ESM-level vi.mock can't
+// intercept CJS require()).
 const prismaMock = vi.hoisted(() => {
   const mock = {
     tenantSetting: {

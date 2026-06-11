@@ -4264,11 +4264,12 @@ router.get("/itineraries/:id/totals", verifyToken, requireTravelTenant, async (r
 //   - e2e/tests/travel-itinerary-suggest-api.spec.js (PR #1142 sibling)
 //   - the FR-3.4 handler block earlier in this file
 //
-// services/itinerarySuggestLLM.js is RETAINED — still has its own vitest
-// at backend/test/services/itinerary-suggest-llm.test.js and is referenced
-// as the design pattern by marketingFlyerCopyLLM / marketingFlyerImageLLM.
-// It is currently not consumed by a live route; whether to delete it is a
-// separate call (CREDS_TRACKER Q-IT-2 may revive a structured-JSON path).
+// The structured-JSON suggestionJson shape is produced inline in the
+// FR-3.4 handler above (S120 removed a prototype service module that
+// duplicated this logic — dead code). The canonical alive LLM service
+// pattern is now tmcDiagnosticPrompts + marketingFlyerCopyLLM /
+// marketingFlyerImageLLM. Real-mode swap is gated on CREDS_TRACKER
+// Q-IT-2 (Gemini key).
 
 // POST /api/travel/itineraries/from-suggestion
 //
@@ -4286,8 +4287,8 @@ router.get("/itineraries/:id/totals", verifyToken, requireTravelTenant, async (r
 // Request body:
 //   {
 //     suggestionJson: {                            // REQUIRED — output of /suggest
-//       daySplit?: [ {                             // Service emits `daySplit`
-//         dayNumber: int,                          //   per itinerarySuggestLLM.js
+//       daySplit?: [ {                             // FR-3.4 handler emits `daySplit`
+//         dayNumber: int,                          //   (canonical key)
 //         theme?: string,
 //         items: [ { itemType, description,
 //                    estimatedCost?, latitude?,
@@ -4338,11 +4339,10 @@ router.get("/itineraries/:id/totals", verifyToken, requireTravelTenant, async (r
 //     attempts that die at the DB layer with an opaque P2003, this route
 //     ENFORCES contactId as required + returns CONTACT_ID_REQUIRED 400.
 //     This is consistent with the canonical POST /itineraries route.
-//   - Prompt says items come from `suggestionJson.days[]`. The actual
-//     service (backend/services/itinerarySuggestLLM.js) emits
-//     `suggestionJson.daySplit[]`. We accept both keys (daySplit takes
-//     precedence) so the prompt's example works AND the production
-//     pipeline works.
+//   - Prompt says items come from `suggestionJson.days[]`. The FR-3.4
+//     handler emits `suggestionJson.daySplit[]`. We accept both keys
+//     (daySplit takes precedence) so the prompt's example works AND the
+//     production pipeline works.
 //   - Service items shape uses `description` + `itemType` (NOT `name`).
 //     We treat `name` OR `description` as the source; whichever is set
 //     becomes ItineraryItem.description (which is required per schema).

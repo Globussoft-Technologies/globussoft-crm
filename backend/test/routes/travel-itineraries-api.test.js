@@ -110,9 +110,9 @@ function tokenFor(role = 'USER', { userId = 7, tenantId = 1 } = {}) {
   );
 }
 
-// Canonical suggestionJson shape — matches what itinerarySuggestLLM.js's
-// buildStubSuggestion emits. Operator gets this from POST /suggest and
-// POSTs it back to /from-suggestion.
+// Canonical suggestionJson shape — matches what the FR-3.4 /suggest
+// handler emits. Operator gets this from POST /suggest and POSTs it
+// back to /from-suggestion.
 const SUGGESTION_2D_3I = {
   daySplit: [
     {
@@ -542,15 +542,15 @@ describe('POST /api/travel/itineraries/from-suggestion (S90)', () => {
   });
 
   test('S109e. suggest→materialise verbatim round-trip: stub emit shape is accepted by route', async () => {
-    // The full contract S109 unlocks: the service's stub emit goes
-    // verbatim to the route. We construct a suggestion that mirrors what
-    // backend/services/itinerarySuggestLLM.js's buildStubSuggestion emits
-    // post-S109 (only 'activity' + 'meals' itemTypes) and confirm the
-    // materialise route accepts every item.
+    // The full contract S109 unlocks: the /suggest handler's stub emit
+    // goes verbatim to the materialise route. We construct a suggestion
+    // that mirrors what the FR-3.4 buildStubSuggestion emits post-S109
+    // (only 'activity' + 'meals' itemTypes) and confirm the materialise
+    // route accepts every item.
     const app = makeApp();
     const token = tokenFor('USER');
-    // Mirror buildStubSuggestion shape — pinned at the service level by
-    // backend/test/services/itinerary-suggest-llm.test.js S109 cases.
+    // Mirror buildStubSuggestion shape — pinned by the FR-3.4 handler
+    // in routes/travel_itineraries.js.
     const stubShape = {
       daySplit: [
         {

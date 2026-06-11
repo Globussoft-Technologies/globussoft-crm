@@ -734,7 +734,7 @@ app.use("/api", (req, res, next) => {
   // promotes a contact to a portal user. Removing the entry routes the
   // unauthenticated case through the global guard's 401 (RFC 7235), and
   // the authenticated case continues unaffected.
-  const openPaths = ["/auth/login", "/auth/signup", "/auth/register", "/auth/customer/register", "/auth/check-email", "/auth/public/tenants", "/auth/forgot-password", "/auth/reset-password", "/auth/2fa/verify", "/health", "/marketplace-leads/webhook", "/sms/webhook", "/whatsapp/webhook", "/telephony/webhook", "/push/subscribe/visitor", "/push/vapid-key", "/communications/track/", "/sso/google/callback", "/sso/microsoft/callback", "/sso/google/start", "/sso/microsoft/start", "/email/inbound", "/calendar/google/callback", "/calendar/outlook/callback", "/voice/webhook", "/portal/login", "/portal/forgot", "/portal/reset", "/portal/me", "/portal/tickets", "/portal/invoices", "/portal/contracts", "/portal/travel", "/portal/kyc", "/signatures/sign", "/surveys/respond", "/surveys/public", "/chatbots/chat", "/web-visitors/track", "/payments/webhook", "/accounting/webhook", "/scim/v2", "/booking-pages/public", "/knowledge-base/public", "/live-chat/visitor", "/document-views/track", "/zapier/webhook", "/marketing/submit", "/v1/external", "/v1/voyagr", "/v1/flight-plugin", "/wellness/public", "/wellness/portal", "/attendance/biometric/webhook", "/travel/microsites/public", "/travel/diagnostics/public", "/travel/itineraries/public", "/travel/inbound/leads", "/v1/flyers/public", "/security/csp-report", "/privacy-policy", "/deleted-account-policy", "/terms-and-conditions"];
+  const openPaths = ["/auth/login", "/auth/signup", "/auth/register", "/auth/customer/register", "/auth/check-email", "/auth/public/tenants", "/auth/forgot-password", "/auth/reset-password", "/auth/2fa/verify", "/health", "/marketplace-leads/webhook", "/sms/webhook", "/whatsapp/webhook", "/telephony/webhook", "/push/subscribe/visitor", "/push/vapid-key", "/communications/track/", "/sso/google/callback", "/sso/microsoft/callback", "/sso/google/start", "/sso/microsoft/start", "/email/inbound", "/calendar/google/callback", "/calendar/outlook/callback", "/voice/webhook", "/portal/login", "/portal/forgot", "/portal/reset", "/portal/me", "/portal/tickets", "/portal/invoices", "/portal/contracts", "/portal/travel", "/portal/kyc", "/signatures/sign", "/surveys/respond", "/surveys/public", "/chatbots/chat", "/web-visitors/track", "/payments/webhook", "/accounting/webhook", "/scim/v2", "/booking-pages/public", "/knowledge-base/public", "/live-chat/visitor", "/document-views/track", "/zapier/webhook", "/marketing/submit", "/v1/external", "/v1/voyagr", "/v1/flight-plugin", "/wellness/public", "/wellness/portal", "/attendance/biometric/webhook", "/travel/microsites/public", "/travel/diagnostics/public", "/travel/itineraries/public", "/travel/inbound/leads", "/travel/whatsapp/webhook", "/travel/whatsapp/media", "/v1/flyers/public", "/security/csp-report", "/privacy-policy", "/deleted-account-policy", "/terms-and-conditions"];
   if (openPaths.some(p => req.path.startsWith(p))) return next();
   // Public marketing catalog — the /pricing page hits GET /subscriptions/plans
   // anonymously. Admin CRUD (POST/PUT/DELETE + GET /plans/admin) stays gated
@@ -951,7 +951,13 @@ app.use("/api/travel", travelSuppliersRoutes);
 // at validateNumericId and 400 INVALID_ID before reaching the public router.
 app.use("/api/travel/quotes/public", require("./routes/travel_quotes_public"));
 app.use("/api/travel/quote-templates", require("./routes/travel_quote_templates"));
-app.use("/api/travel/cancellation-policies", require("./routes/travel_cancellation_policies"));
+// Mount at "/api/travel" (NOT "/api/travel/cancellation-policies"): the
+// router already carries the full "/cancellation-policies" path segment on
+// every route internally (matching its vitest mount `app.use('/api/travel',
+// router)`). Mounting at the over-specific prefix double-prefixed every path
+// to /api/travel/cancellation-policies/cancellation-policies, so the real
+// /api/travel/cancellation-policies fell through to the global 404.
+app.use("/api/travel", require("./routes/travel_cancellation_policies"));
 app.use("/api/travel", travelQuotesRoutes);
 app.use("/api/travel", travelInvoicesRoutes);
 app.use("/api/travel", require("./routes/travel_flyer_templates"));
@@ -966,6 +972,13 @@ app.use("/api/travel", require("./routes/travel_commission_profiles"));
 // /session/active-brand). Authoritative server-side validation behind the
 // sidebar sub-brand switcher; reuses middleware/travelGuards.js plumbing.
 app.use("/api/travel", require("./routes/travel_session"));
+// Q9 — travel 2-way WhatsApp chat (Wati transport): /whatsapp/status +
+// /whatsapp/send + /whatsapp/webhook. Router carries the full /whatsapp/*
+// segment internally, so the mount prefix is /api/travel (NOT
+// /api/travel/whatsapp — see the cancellation-policies double-prefix
+// post-mortem at the mount above). The webhook sub-path is in openPaths.
+// Wellness/generic WhatsApp (routes/whatsapp*.js, Meta Cloud) is untouched.
+app.use("/api/travel", require("./routes/travel_whatsapp"));
 app.use("/api/brand-kits", brandKitsRoutes);
 app.use("/api/adsgpt", adsgptRoutes);
 app.use("/api/ratehawk", ratehawkRoutes);

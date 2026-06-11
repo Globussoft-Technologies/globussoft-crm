@@ -35,6 +35,7 @@ const prisma = require("../lib/prisma");
 const { requireTravelTenant, getSubBrandAccessSet } = require("../middleware/travelGuards");
 const { resolveForSubBrand } = require("../lib/subBrandConfig");
 const digilockerClient = require("../services/digilockerClient");
+const watiClient = require("../services/watiClient");
 
 // Aadhaar/DigiLocker microsite-verification tuning. A session is only
 // valid to call back within SESSION_TTL_MS of /start (matches the
@@ -61,21 +62,44 @@ const OTP_COOLDOWN_MS = 60 * 1000;
 const OTP_ACCESS_TTL = "30m";
 const VALID_OTP_PURPOSES = ["registration", "payment-plan", "document-checklist", "teacher-access"];
 
-// SMS dispatch stub — when Wati BSP creds (Q9) land, replace the
-// console.log with a prisma.whatsAppMessage.create call. The function
-// signature is intentionally minimal so the cutover is a one-line
-// substitution.
+// OTP dispatch — routed through backend/services/watiClient.js (Q9). With
+// WATI_API_ENDPOINT + WATI_ACCESS_TOKEN set this sends a real WhatsApp
+// message; without them the client stays in stub mode (logs + a QUEUED
+// WhatsAppMessage row), preserving the original stub behaviour.
 //
-// wabaId is the resolved per-sub-brand WABA id (see lib/subBrandConfig)
-// — included for observability so operators can confirm which Wati
-// account the OTP WOULD route through once creds land. Microsites are
-// always TMC sub-brand per the route's domain ownership.
-async function sendOtpStub(phone, code, purpose, wabaId) {
+// Template: name comes from WATI_OTP_TEMPLATE_NAME (default
+// "otp_verification" per WHATSAPP_INTEGRATION_PRD OQ-1 starter set). The
+// code is bound under BOTH the named param "otp" and positional "1" so
+// either placeholder style ({{otp}} / {{1}}) works. If the template isn't
+// approved on the Wati account yet, the client falls back to a session
+// message (delivers when the recipient messaged the business number
+// within 24h — the standard dev-test flow).
+//
+// wabaId stays in the signature for observability parity with the old
+// stub line. Microsites are always TMC sub-brand per the route's domain
+// ownership.
+async function sendOtpStub(phone, code, purpose, wabaId, tenantId) {
+  const result = await watiClient.sendBestEffort({
+    tenantId,
+    subBrand: "tmc",
+    toPhone: phone,
+    templateName: process.env.WATI_OTP_TEMPLATE_NAME || "otp_verification",
+    parameters: [
+      { name: "otp", value: String(code) },
+      { name: "1", value: String(code) },
+    ],
+    broadcastName: "travel-microsite-otp",
+    fallbackText: `Your Travel Stall verification code is ${code}. It is valid for 10 minutes.`,
+  });
+  // Stub mode logs the code so dev flows can complete (the API response
+  // intentionally never returns it). Real mode never logs the code.
+  const codeSuffix = result.stub === true ? ` code=${code}` : "";
   console.log(
-    `[travel-microsite] OTP dispatch stub — phone=${phone} purpose=${purpose} code=${code} ` +
-      `(will route through Wati once creds land — would-route subBrand=tmc ` +
-      `wabaId=${wabaId || "(no-config)"})`,
+    `[travel-microsite] OTP dispatch via watiClient — phone=${phone} purpose=${purpose} ` +
+      `status=${result.status} stub=${result.stub === true} subBrand=tmc ` +
+      `wabaId=${wabaId || "(no-config)"}${codeSuffix}`,
   );
+  return result;
 }
 
 // Image upload for the microsite editor. Mirrors routes/booking_pages.js's
@@ -1130,7 +1154,7 @@ router.post("/microsites/public/:publicUuid/request-otp", async (req, res) => {
       select: { subBrandConfigJson: true },
     });
     const tmcCfg = resolveForSubBrand(tenant, "tmc");
-    await sendOtpStub(phone, code, purpose, tmcCfg.wabaId);
+    await sendOtpStub(phone, code, purpose, tmcCfg.wabaId, ms.tenantId);
     res.status(201).json({
       sent: true,
       expiresAt: expiresAt.toISOString(),

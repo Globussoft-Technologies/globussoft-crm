@@ -1733,6 +1733,13 @@ function renderTravelNav({
 
       <div style={labelStyle}>Customer comms</div>
       <Link to="/inbox" icon={InboxIcon} label="Inbox" badge={counts.inbox} />
+      {/* Q9 — Wati WhatsApp dispatch log (travel-only transport). Sits
+          directly under Inbox since both are customer-comms surfaces; the
+          page is the per-message log (OTPs, reminders, itinerary shares,
+          boarding passes) the watiClient persists. MessageSquare is already
+          imported in the lucide block. Wellness/generic navs untouched —
+          this entry lives only in renderTravelNav. */}
+      <Link to="/travel/whatsapp" icon={MessageSquare} label="WhatsApp" />
       <Link to="/sequences" icon={Send} label="Sequences" />
       <Link to="/tasks" icon={CheckSquare} label="Tasks" badge={counts.tasks} />
       {/* T18 — consultation-call booking (Google Meet slot-picker). Reuses the

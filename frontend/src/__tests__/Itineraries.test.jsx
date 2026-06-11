@@ -698,53 +698,49 @@ describe('<Itineraries /> — create drawer + submit', () => {
 });
 
 // ---------------------------------------------------------------------------
-// S63 — "Suggest itinerary" CTA + modal + suggestionJson preview.
+// S63 — "Suggest itinerary" CTA + modal + suggestion preview.
 //
 // PRD docs/PRD_TRAVEL_ITINERARY_UPGRADES.md FR-3.6 step (a) — wires
-// `POST /api/travel/itineraries/suggest` (S46) into a modal where the
-// operator picks destination / durationDays / budgetTier / themeJson and
-// renders the returned suggestionJson day-by-day so they can review +
-// optionally materialise.
+// `POST /api/travel/itineraries/suggest` into a modal where the operator
+// picks destination / duration / budget tier and types interests + pace as
+// PLAIN TEXT (the backend assembles the theme JSON), then renders the
+// returned suggestion day-by-day so they can review + optionally materialise.
 //
-// Endpoint contract pinned (backend/routes/travel_itineraries.js:4094):
-//   POST /api/travel/itineraries/suggest body:{destination, durationDays,
-//                                              budgetTier?, themeJson?}
-//          → 200 { suggestionJson, source, model, stub }
-//          | 400 INVALID_DESTINATION / INVALID_DURATION_DAYS /
-//                INVALID_BUDGET_TIER / INVALID_THEME_JSON
-//          | 500 ITINERARY_SUGGEST_FAILED
-//
-// Note: materialise-from-suggestion endpoint not yet shipped (gap row).
-// The "Create itinerary from this suggestion" button surfaces an info
-// notify for now (createFromSuggestion stub handler).
+// Endpoint contract pinned (FR-3.4 handler in travel_itineraries.js):
+//   POST /api/travel/itineraries/suggest
+//     body: { destination, days, budgetTier?, interests?, pace? }
+//          → 200 { suggestion: { summary, days[] }, theme, model, stub }
+//          | 400 MISSING_DESTINATION / INVALID_DAYS / INVALID_SUB_BRAND
+//          | 500 (generic failure)
 // ---------------------------------------------------------------------------
 
 const STUB_SUGGESTION = {
-  suggestionJson: {
-    daySplit: [
+  suggestion: {
+    summary: '2-day Goa (mid) outline',
+    days: [
       {
         dayNumber: 1,
-        theme: '[STUB] Day 1 — general theme placeholder',
         items: [
-          { itemType: 'activity', description: 'Day 1 activity placeholder for Goa (mid tier).' },
-          { itemType: 'meal', description: 'Day 1 meal placeholder' },
+          { itemType: 'flight', description: 'Arrival in Goa', estimatedCost: 6000 },
+          { itemType: 'hotel', description: 'Night 1 — stay in Goa', estimatedCost: 5000 },
+          { itemType: 'activity', description: 'Day 1 — sightseeing in Goa', estimatedCost: 1500 },
         ],
       },
       {
         dayNumber: 2,
-        theme: '[STUB] Day 2 — general theme placeholder',
         items: [
-          { itemType: 'activity', description: 'Day 2 activity placeholder.' },
+          { itemType: 'hotel', description: 'Night 2 — stay in Goa', estimatedCost: 5000 },
+          { itemType: 'activity', description: 'Day 2 — sightseeing in Goa', estimatedCost: 1500 },
+          { itemType: 'flight', description: 'Departure from Goa', estimatedCost: 6000 },
         ],
       },
     ],
-    poiSuggestions: [{ name: 'Beach POI', themeTag: 'beaches' }],
-    thematicNotes: 'Synthetic 2-day mid-tier outline for Goa.',
-    summary: '2-day Goa (mid) outline',
   },
-  source: 'stub',
+  theme: { interests: ['beaches'], pace: 'relaxed' },
+  subBrand: null,
   model: 'gemini-2.5-flash',
   stub: true,
+  costSource: 'llm',
 };
 
 // Install the suggest endpoint into the existing routing fetch mock.
@@ -797,7 +793,8 @@ describe('<Itineraries /> — S63 Suggest itinerary CTA + modal', () => {
     expect(screen.getByLabelText(/Destination/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Duration \(days\)/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Budget tier/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/Theme JSON/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Interests/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Pace/i)).toBeInTheDocument();
   });
 
   it('Escape key closes the suggest modal', async () => {
@@ -880,34 +877,36 @@ describe('<Itineraries /> — S63 Suggest itinerary CTA + modal', () => {
     expect(posts.length).toBe(0);
   });
 
-  it('validation: invalid JSON in themeJson shows inline parse error on blur', async () => {
+  it('sends interests + pace as plain text (backend assembles the theme JSON)', async () => {
     renderPage();
     await screen.findByText('Andaman Islands');
     fireEvent.click(
       screen.getByRole('button', { name: /Suggest itinerary using AI/i }),
     );
     await screen.findByRole('heading', { name: /Suggest itinerary/i });
-    const themeField = screen.getByLabelText(/Theme JSON/i);
-    fireEvent.change(themeField, { target: { value: '{not valid json' } });
-    fireEvent.blur(themeField);
-    expect(
-      await screen.findByText(/Invalid JSON/i),
-    ).toBeInTheDocument();
-  });
-
-  it('validation: themeJson must be an object — array rejected with inline error', async () => {
-    renderPage();
-    await screen.findByText('Andaman Islands');
-    fireEvent.click(
-      screen.getByRole('button', { name: /Suggest itinerary using AI/i }),
-    );
-    await screen.findByRole('heading', { name: /Suggest itinerary/i });
-    const themeField = screen.getByLabelText(/Theme JSON/i);
-    fireEvent.change(themeField, { target: { value: '[1,2,3]' } });
-    fireEvent.blur(themeField);
-    expect(
-      await screen.findByText(/themeJson must be a JSON object/i),
-    ).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText(/Destination/i), {
+      target: { value: 'Goa' },
+    });
+    fireEvent.change(screen.getByLabelText(/Interests/i), {
+      target: { value: 'historical, beaches' },
+    });
+    fireEvent.change(screen.getByLabelText(/Pace/i), {
+      target: { value: 'packed' },
+    });
+    fetchApiMock.mockClear();
+    installSuggestMock();
+    fireEvent.click(screen.getByRole('button', { name: /^Suggest$/ }));
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(
+        ([u, o]) => u === '/api/travel/itineraries/suggest' && o?.method === 'POST',
+      );
+      expect(call).toBeTruthy();
+      const body = JSON.parse(call[1].body);
+      // Plain-text passthrough — the client does NOT pre-build any JSON.
+      expect(body.interests).toBe('historical, beaches');
+      expect(body.pace).toBe('packed');
+      expect(body.themeJson).toBeUndefined();
+    });
   });
 
   it('submit happy path: POSTs /api/travel/itineraries/suggest with correct body', async () => {
@@ -926,9 +925,6 @@ describe('<Itineraries /> — S63 Suggest itinerary CTA + modal', () => {
     fireEvent.change(screen.getByLabelText(/Budget tier/i), {
       target: { value: 'luxury' },
     });
-    fireEvent.change(screen.getByLabelText(/Theme JSON/i), {
-      target: { value: '{"interests":["beaches"]}' },
-    });
     fetchApiMock.mockClear();
     installSuggestMock();
     fireEvent.click(screen.getByRole('button', { name: /^Suggest$/ }));
@@ -940,15 +936,13 @@ describe('<Itineraries /> — S63 Suggest itinerary CTA + modal', () => {
       const body = JSON.parse(call[1].body);
       // Destination is trimmed.
       expect(body.destination).toBe('Goa');
-      // durationDays parsed to int.
-      expect(body.durationDays).toBe(3);
+      // Sent as `days` (the backend contract), parsed to int.
+      expect(body.days).toBe(3);
       expect(body.budgetTier).toBe('luxury');
-      // themeJson parsed to object.
-      expect(body.themeJson).toEqual({ interests: ['beaches'] });
     });
   });
 
-  it('submit with no themeJson omits the field from the payload (optional)', async () => {
+  it('submit with defaults sends days=5, budgetTier=mid, pace=relaxed', async () => {
     renderPage();
     await screen.findByText('Andaman Islands');
     fireEvent.click(
@@ -967,10 +961,11 @@ describe('<Itineraries /> — S63 Suggest itinerary CTA + modal', () => {
       );
       expect(call).toBeTruthy();
       const body = JSON.parse(call[1].body);
-      expect(body.themeJson).toBeUndefined();
-      // Defaults: durationDays=5, budgetTier=mid.
-      expect(body.durationDays).toBe(5);
+      // Defaults: days=5, budgetTier=mid, pace=relaxed, interests empty.
+      expect(body.days).toBe(5);
       expect(body.budgetTier).toBe('mid');
+      expect(body.pace).toBe('relaxed');
+      expect(body.interests).toBe('');
     });
   });
 
@@ -1030,16 +1025,21 @@ describe('<Itineraries /> — S63 Suggest itinerary CTA + modal', () => {
     // Per-day breakdown rendered.
     expect(screen.getByTestId('suggest-day-1')).toBeInTheDocument();
     expect(screen.getByTestId('suggest-day-2')).toBeInTheDocument();
-    // Day theme renders.
+    // Day-1 items render (flight + hotel + activity from the skeleton).
     expect(
-      within(screen.getByTestId('suggest-day-1')).getByText(/Day 1 — \[STUB\] Day 1/i),
+      within(screen.getByTestId('suggest-day-1')).getByText(/Arrival in Goa/i),
     ).toBeInTheDocument();
-    // Summary + thematicNotes render.
+    // Summary renders.
     expect(screen.getByText(/2-day Goa \(mid\) outline/i)).toBeInTheDocument();
+    // Per-person estimated total renders (6000+5000+1500 + 5000+1500+6000 = 25000).
     expect(
-      screen.getByText(/Synthetic 2-day mid-tier outline for Goa\./i),
+      within(screen.getByTestId('suggest-est-total')).getByText(/25,000/),
     ).toBeInTheDocument();
-    // "Stub" badge present since source=stub.
+    // A per-item cost renders in the day breakdown.
+    expect(
+      within(screen.getByTestId('suggest-day-1')).getByText(/₹6,000/),
+    ).toBeInTheDocument();
+    // "Stub" badge present since stub=true.
     expect(screen.getByText(/^Stub$/i)).toBeInTheDocument();
   });
 
@@ -1176,7 +1176,9 @@ describe('<Itineraries /> — S90 materialise-from-suggestion', () => {
     expect(body.contactId).toBe(5001);
     expect(body.subBrand).toBeTruthy();
     expect(body.suggestionJson).toBeTruthy();
-    expect(Array.isArray(body.suggestionJson.daySplit)).toBe(true);
+    // The component forwards the /suggest result (shape: { summary, days[] })
+    // verbatim as suggestionJson; from-suggestion accepts .days (or .daySplit).
+    expect(Array.isArray(body.suggestionJson.days)).toBe(true);
     // Navigation to the new itinerary's detail page.
     await waitFor(() => {
       expect(navigateMock).toHaveBeenCalledWith('/travel/itineraries/12345');
@@ -1414,11 +1416,12 @@ describe('<Itineraries /> — S90 materialise-from-suggestion', () => {
     fireEvent.change(screen.getByLabelText(/Destination/i), {
       target: { value: 'Goa' },
     });
-    // Custom shape: no daySplit → fall through to JSON.stringify branch.
+    // Custom shape: suggestion present but no days[] → fall through to the
+    // JSON.stringify branch.
     installSuggestMock({
       suggestResult: {
-        suggestionJson: { weirdField: 'unknown shape', otherKey: 42 },
-        source: 'stub', model: 'gemini-2.5-flash', stub: true,
+        suggestion: { weirdField: 'unknown shape', otherKey: 42 },
+        model: 'gemini-2.5-flash', stub: true,
       },
     });
     fireEvent.click(screen.getByRole('button', { name: /^Suggest$/ }));

@@ -30,7 +30,13 @@ export default function ThreadList() {
     openBlockedThread,
     setShowNewModal,
     setNewError,
+    // Optional override so non-wellness hosts (the travel Wati chat) can
+    // route the templates link to their own surface. Wellness's
+    // WhatsAppThreads.jsx doesn't set it → default preserved.
+    templatesPath,
   } = useWhatsAppThreads();
+
+  const tplPath = templatesPath || '/wellness/whatsapp/templates';
 
   return (
     <aside style={{
@@ -52,7 +58,7 @@ export default function ThreadList() {
           {isAdmin && (
             <div style={{ display: 'flex', gap: 6 }}>
               <Link
-                to="/wellness/whatsapp/templates"
+                to={tplPath}
                 title="Manage WhatsApp Templates"
                 style={{
                   display: 'flex', alignItems: 'center', gap: 4,

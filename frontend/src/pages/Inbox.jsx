@@ -98,11 +98,16 @@ export default function Inbox() {
       fetchApi(inboxPath),
       fetchApi('/api/communications/calls'),
       fetchApi('/api/contacts'),
-      fetchApi('/api/sms/messages').catch(() => []),
-      fetchApi('/api/whatsapp/messages').catch(() => []),
-      // Wellness patients aren't CRM Contacts, so they're a separate fetch.
-      // Generic (non-wellness) tenants 404 here — swallow and fall back to [].
-      fetchApi('/api/wellness/patients').catch(() => ({ patients: [] })),
+      // These three are OPTIONAL enrichment fetches: SMS/WhatsApp may be
+      // unprovisioned, and /api/wellness/patients 403s (WELLNESS_TENANT_REQUIRED)
+      // for non-wellness tenants like the travel sub-brands. They're already
+      // swallowed with .catch(), but fetchApi auto-toasts non-2xx responses at
+      // the util level, so the swallowed 403 still leaked a "You don't have
+      // permission…" toast to admins on travel/generic tenants. { silent: true }
+      // opts these probes out of the global toast — failure here is expected.
+      fetchApi('/api/sms/messages', { silent: true }).catch(() => []),
+      fetchApi('/api/whatsapp/messages', { silent: true }).catch(() => []),
+      fetchApi('/api/wellness/patients', { silent: true }).catch(() => ({ patients: [] })),
     ]).then(([emailData, callData, contactData, smsData, waData, patientData]) => {
       setEmails(Array.isArray(emailData) ? emailData : []);
       setCalls(Array.isArray(callData) ? callData : []);

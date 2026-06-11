@@ -22,6 +22,7 @@
 const cron = require("node-cron");
 const prisma = require("../lib/prisma");
 const { resolveForSubBrand } = require("../lib/subBrandConfig");
+const watiClient = require("../services/watiClient");
 
 const WINDOW_FLOOR_DAYS = 7;
 const WINDOW_CEILING_HOURS = 24;
@@ -95,6 +96,36 @@ async function runPostTripFeedbackForTenant(tenantId) {
           `survey ${survey.id} created; dispatch link: ${link} — would-route ` +
           `subBrand=tmc wabaId=${tmcCfg.wabaId || "(no-config)"}`,
       );
+      // WhatsApp dispatch via watiClient (Q9) — stub when creds absent.
+      // Own try/catch: a contact-lookup or send failure must not eat the
+      // created++ below (the survey row already landed). Per-created-survey
+      // contact lookup is fine: created counts are small.
+      try {
+        if (trip.schoolContactId) {
+          const contact = await prisma.contact.findFirst({
+            where: { id: trip.schoolContactId, tenantId },
+            select: { id: true, phone: true, name: true },
+          });
+          if (contact && contact.phone) {
+            await watiClient.sendBestEffort({
+              tenantId,
+              subBrand: "tmc",
+              toPhone: contact.phone,
+              contactId: contact.id,
+              templateName: process.env.WATI_POST_TRIP_FEEDBACK_TEMPLATE || "post_trip_feedback",
+              parameters: [
+                { name: "name", value: contact.name || "there" },
+                { name: "destination", value: trip.destination || "" },
+                { name: "link", value: link },
+              ],
+              broadcastName: "travel-post-trip-feedback",
+              fallbackText: `How was your ${trip.destination} trip with us? Tell us here: ${link}`,
+            });
+          }
+        }
+      } catch (waErr) {
+        console.error(`[TripPostTripFeedback] WA dispatch failed (survey ${survey.id} still created): ${waErr.message}`);
+      }
       created++;
     } catch (e) {
       // Race-condition tolerance: another worker may have inserted the

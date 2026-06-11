@@ -29,6 +29,7 @@
 const cron = require("node-cron");
 const prisma = require("../lib/prisma");
 const { resolveForSubBrand } = require("../lib/subBrandConfig");
+const watiClient = require("../services/watiClient");
 
 const FALLBACK_STALL_MIN = 30;
 const FUTURE_LOOK_AHEAD_DAYS = 7;
@@ -78,12 +79,25 @@ async function runWebCheckinSchedulerForTenant(tenantId) {
   });
   const itinIds = [...new Set(rows.map((r) => r.itineraryId).filter(Boolean))];
   let subBrandByItin = {};
+  let contactByItin = {};
   if (itinIds.length > 0) {
     const itins = await prisma.itinerary.findMany({
       where: { id: { in: itinIds }, tenantId },
-      select: { id: true, subBrand: true },
+      select: { id: true, subBrand: true, contactId: true },
     });
     subBrandByItin = Object.fromEntries(itins.map((i) => [i.id, i.subBrand]));
+    // Contact phones for the WhatsApp dispatch leg (Q9) — one batched read.
+    const contactIds = [...new Set(itins.map((i) => i.contactId).filter(Boolean))];
+    if (contactIds.length > 0) {
+      const contacts = await prisma.contact.findMany({
+        where: { id: { in: contactIds } },
+        select: { id: true, phone: true, name: true },
+      });
+      const byId = Object.fromEntries(contacts.map((c) => [c.id, c]));
+      contactByItin = Object.fromEntries(
+        itins.filter((i) => i.contactId).map((i) => [i.id, byId[i.contactId] || null]),
+      );
+    }
   }
 
   let reminded = 0;
@@ -125,9 +139,29 @@ async function runWebCheckinSchedulerForTenant(tenantId) {
         console.log(
           `[WebCheckinScheduler] tenant ${tenantId} checkin ${row.id} ` +
             `(${row.airlineCode} ${row.flightNumber}/${row.pnr}) → reminded ` +
-            `(WhatsApp + email dispatch pending Wati creds — would-route ` +
+            `(WhatsApp dispatch via watiClient — ` +
             `subBrand=${subBrand || "(none)"} wabaId=${cfg.wabaId || "(no-config)"})`,
         );
+        // WhatsApp dispatch via watiClient (Q9) — stub when creds absent.
+        const contact = row.itineraryId ? contactByItin[row.itineraryId] : null;
+        if (contact && contact.phone) {
+          await watiClient.sendBestEffort({
+            tenantId,
+            subBrand,
+            toPhone: contact.phone,
+            contactId: contact.id,
+            templateName: process.env.WATI_WEB_CHECKIN_TEMPLATE || "web_checkin_nudge",
+            parameters: [
+              { name: "name", value: contact.name || row.passengerName || "there" },
+              { name: "flight", value: `${row.airlineCode} ${row.flightNumber}` },
+              { name: "pnr", value: row.pnr || "" },
+            ],
+            broadcastName: "travel-web-checkin-nudges",
+            fallbackText:
+              `Web check-in is now open for ${row.passengerName} — flight ` +
+              `${row.airlineCode} ${row.flightNumber}, PNR ${row.pnr}. Please complete check-in.`,
+          });
+        }
         reminded++;
       } catch (e) {
         console.error(

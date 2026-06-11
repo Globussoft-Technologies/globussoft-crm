@@ -908,3 +908,36 @@ table.stable-table td {
      card. Block restores the expected stacked-card behaviour. */
   display: block;
 }
+
+/* Suggest Itinerary modal — force an opaque panel surface across themes.
+ * The inline `style={{ background: "var(--surface-color)" }}` resolves to a
+ * translucent rgba in base index.css scope (light: rgba(255,255,255,0.7),
+ * dark: rgba(22,24,29,0.6)) — readable in glassmorphism cards but
+ * unreadable for a centred dialog where the dimmed page content bleeds
+ * through. Travel + wellness theme files override --surface-color to
+ * opaque values, but if the cascade doesn't reach the modal (e.g. during
+ * vertical transitions), the panel goes translucent. These rules guarantee
+ * an opaque modal in every theme regardless of variable resolution. */
+.travel-itin-suggest-modal {
+  background-color: #ffffff !important;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.28) !important;
+}
+[data-theme="dark"] .travel-itin-suggest-modal,
+html[data-theme="dark"] .travel-itin-suggest-modal {
+  background-color: #1a1d24 !important;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.6) !important;
+}
+[data-vertical="travel"] .travel-itin-suggest-modal {
+  background-color: #ffffff !important;
+}
+[data-theme="dark"] [data-vertical="travel"] .travel-itin-suggest-modal,
+html[data-theme="dark"][data-vertical="travel"] .travel-itin-suggest-modal {
+  background-color: #19243A !important;
+}
+[data-vertical="wellness"] .travel-itin-suggest-modal {
+  background-color: #ffffff !important;
+}
+[data-theme="dark"] [data-vertical="wellness"] .travel-itin-suggest-modal,
+html[data-theme="dark"][data-vertical="wellness"] .travel-itin-suggest-modal {
+  background-color: #1e2628 !important;
+}

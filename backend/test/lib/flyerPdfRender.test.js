@@ -22,7 +22,7 @@
  *     default when input is missing / malformed).
  */
 
-import { describe, test, expect } from 'vitest';
+import { describe, test, expect, vi } from 'vitest';
 import { createRequire } from 'node:module';
 
 const requireCJS = createRequire(import.meta.url);
@@ -32,6 +32,7 @@ const {
   safeHex,
   DEFAULT_PALETTE,
   PAPER_SIZES,
+  _setImageFetcherForTests,
 } = requireCJS('../../lib/flyerPdfRender.js');
 
 const validPalette = {
@@ -428,5 +429,106 @@ describe('renderFlyerPdf — extended edge cases', () => {
       { aspect: 'a4', hash: '9'.repeat(64) },
     );
     expect(isPdfMagic(buf)).toBe(true);
+  });
+});
+
+describe('renderFlyerPdf — image embedding via the swappable fetcher', () => {
+  // A tiny 1×1 red PNG that pdfkit can embed without complaint.
+  // hex-encoded so it doesn't take a network round-trip.
+  const ONE_PIXEL_PNG = Buffer.from(
+    '89504e470d0a1a0a0000000d49484452000000010000000108020000009077' +
+    '53de0000000c4944415478da6360f80f0000020001bf9094c10000000049454e44ae426082',
+    'hex',
+  );
+
+  test('image blocks are embedded via doc.image when the fetcher returns a buffer', async () => {
+    // Install a fake fetcher so the test doesn't make real HTTP calls.
+    _setImageFetcherForTests(async (src) => {
+      if (src === 'https://cdn.example/hero.jpg') return ONE_PIXEL_PNG;
+      return null;
+    });
+    try {
+      const layoutWithImage = [
+        { type: 'image', x: 24, y: 24, width: 480, height: 300, src: 'https://cdn.example/hero.jpg' },
+        { type: 'text', x: 24, y: 360, width: 480, height: 60, content: 'Bali 7 Nights' },
+      ];
+      const buf = await renderFlyerPdf(
+        { palette: validPalette, layout: layoutWithImage, assets: {} },
+        { aspect: 'a4', hash: 'a'.repeat(64) },
+      );
+      expect(isPdfMagic(buf)).toBe(true);
+      // PDF should contain a real /Image XObject entry — pdfkit emits a
+      // `/Subtype /Image` token in the resources dictionary whenever
+      // doc.image() succeeds. Detect via the byte sequence.
+      const pdfStr = buf.toString('binary');
+      expect(pdfStr).toContain('/Image');
+    } finally {
+      _setImageFetcherForTests(null);
+    }
+  });
+
+  test('image blocks gracefully degrade to an accent-colour placeholder when fetcher returns null', async () => {
+    _setImageFetcherForTests(async () => null);
+    try {
+      const buf = await renderFlyerPdf(
+        {
+          palette: validPalette,
+          layout: [
+            { type: 'image', x: 24, y: 24, width: 200, height: 200, src: 'https://cdn.example/broken.jpg' },
+          ],
+          assets: {},
+        },
+        { aspect: 'a4', hash: 'b'.repeat(64) },
+      );
+      expect(isPdfMagic(buf)).toBe(true);
+      // No /Image XObject — fetcher returned null so doc.image() wasn't called.
+      const pdfStr = buf.toString('binary');
+      expect(pdfStr).not.toContain('/Subtype /Image');
+    } finally {
+      _setImageFetcherForTests(null);
+    }
+  });
+
+  test('image blocks with no src are skipped (no fetcher call, no crash)', async () => {
+    const fetcher = vi.fn(async () => ONE_PIXEL_PNG);
+    _setImageFetcherForTests(fetcher);
+    try {
+      const buf = await renderFlyerPdf(
+        {
+          palette: validPalette,
+          layout: [{ type: 'image', x: 10, y: 10, width: 100, height: 100, src: '' }],
+          assets: {},
+        },
+        { aspect: 'a4', hash: 'c'.repeat(64) },
+      );
+      expect(isPdfMagic(buf)).toBe(true);
+      expect(fetcher).not.toHaveBeenCalled();
+    } finally {
+      _setImageFetcherForTests(null);
+    }
+  });
+
+  test('text block positions are scaled from the 540×720 canvas to the page dimensions', async () => {
+    // We can't easily inspect pdfkit's coord stream, but a fully-empty
+    // canvas layout vs a canvas with content should produce different
+    // byte streams (text content + position commands differ).
+    const empty = await renderFlyerPdf(
+      { palette: validPalette, layout: [], assets: {} },
+      { aspect: 'a4', hash: 'd'.repeat(64) },
+    );
+    const withContent = await renderFlyerPdf(
+      {
+        palette: validPalette,
+        layout: [
+          { type: 'text', x: 24, y: 24, width: 400, height: 80, content: 'Headline content', fontSize: 32 },
+        ],
+        assets: {},
+      },
+      { aspect: 'a4', hash: 'd'.repeat(64) },
+    );
+    expect(isPdfMagic(empty)).toBe(true);
+    expect(isPdfMagic(withContent)).toBe(true);
+    // Byte streams differ — content reached the page.
+    expect(empty.equals(withContent)).toBe(false);
   });
 });

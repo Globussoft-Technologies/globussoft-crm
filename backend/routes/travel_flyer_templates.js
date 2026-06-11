@@ -217,7 +217,17 @@ function withTemplateHash(row) {
   if (row.assetsJson) {
     try { assets = JSON.parse(row.assetsJson); } catch (_e) { assets = null; }
   }
-  return { ...row, templateHash: hashTemplateShape({ palette, layout, assets }) };
+  // Expose the parsed shapes alongside the raw JSON strings so the
+  // FlyerTemplates list page can render a scaled-down preview of each
+  // template's layout without parsing on the client. Additive — older
+  // callers still see paletteJson / layoutJson / assetsJson untouched.
+  return {
+    ...row,
+    palette,
+    layout,
+    assets,
+    templateHash: hashTemplateShape({ palette, layout, assets }),
+  };
 }
 
 // POST /api/travel/flyer-templates/upload
@@ -265,6 +275,134 @@ router.post(
         return res.status(500).json({ error: "Failed to store image", code: "UPLOAD_STORE_FAILED" });
       }
     });
+  },
+);
+
+// POST /api/travel/flyer-templates/suggest-copy
+//
+// S71 — AI-generated marketing flyer copy via Gemini 2.5 Flash.
+// Body: { destination (required), subBrand?, themeJson?, targetAudience? }
+// Returns: { headline, body, cta, source, model, stub }
+//
+// Stub mode (no GEMINI_API_KEY) returns [STUB]-prefixed strings so the
+// UI keeps working; real mode returns parsed Gemini JSON. Budget cap
+// enforced inside marketingFlyerCopyLLM via checkBudgetCap.
+router.post(
+  "/flyer-templates/suggest-copy",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const { destination, subBrand, themeJson, targetAudience } = req.body || {};
+      const dest = typeof destination === "string" ? destination.trim() : "";
+      if (!dest) {
+        return res.status(400).json({ error: "destination is required", code: "MISSING_DESTINATION" });
+      }
+      let resolvedSubBrand = null;
+      if (subBrand != null && String(subBrand).trim() !== "") {
+        assertValidSubBrand(String(subBrand).trim());
+        resolvedSubBrand = String(subBrand).trim();
+        const allowed = await getSubBrandAccessSet(req.user.userId);
+        if (!canAccessSubBrand(allowed, resolvedSubBrand)) {
+          return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+        }
+      }
+      const audience = typeof targetAudience === "string" ? targetAudience.slice(0, 200) : null;
+      const svc = require("../services/marketingFlyerCopyLLM");
+      const result = await svc.generateFlyerCopy({
+        tenantId: req.travelTenant.id,
+        destination: dest,
+        subBrand: resolvedSubBrand,
+        themeJson: themeJson || null,
+        targetAudience: audience,
+      });
+      return res.status(200).json({
+        headline: result.copyJson.headline,
+        body: result.copyJson.body,
+        cta: result.copyJson.cta,
+        source: result.source,
+        model: result.model,
+        stub: Boolean(result.stub),
+        realModeError: result.realModeError || null,
+      });
+    } catch (e) {
+      if (e.code === "MARKETING_FLYER_COPY_BUDGET_EXCEEDED") {
+        return res.status(429).json({
+          error: "Monthly AI budget reached for this tenant.",
+          code: "LLM_BUDGET_EXCEEDED",
+          spentCents: e.spentCents,
+          capCents: e.capCents,
+        });
+      }
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[flyer-suggest-copy] error:", e.message);
+      return res.status(500).json({ error: "Failed to generate flyer copy" });
+    }
+  },
+);
+
+// POST /api/travel/flyer-templates/suggest-image
+//
+// S72 — AI-generated flyer hero image via OpenAI DALL-E 3.
+// Body: { destination (required), subBrand?, themeJson?, aspectRatio? }
+//   aspectRatio ∈ '1:1' | '9:16' | '16:9' (default '1:1')
+// Returns: { imageUrl, source, model, stub }
+//
+// imageUrl is an OpenAI CDN URL with a ~1h TTL. Operator should save the
+// flyer template (encodes URL into assetsJson) shortly after generating —
+// persistence to local storage is a follow-up. Stub mode returns a
+// deterministic placeholder URL. Budget cap enforced inside
+// marketingFlyerImageLLM via checkBudgetCap.
+router.post(
+  "/flyer-templates/suggest-image",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const { destination, subBrand, themeJson, aspectRatio } = req.body || {};
+      const dest = typeof destination === "string" ? destination.trim() : "";
+      if (!dest) {
+        return res.status(400).json({ error: "destination is required", code: "MISSING_DESTINATION" });
+      }
+      let resolvedSubBrand = null;
+      if (subBrand != null && String(subBrand).trim() !== "") {
+        assertValidSubBrand(String(subBrand).trim());
+        resolvedSubBrand = String(subBrand).trim();
+        const allowed = await getSubBrandAccessSet(req.user.userId);
+        if (!canAccessSubBrand(allowed, resolvedSubBrand)) {
+          return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+        }
+      }
+      const svc = require("../services/marketingFlyerImageLLM");
+      const result = await svc.generateFlyerImage({
+        tenantId: req.travelTenant.id,
+        destination: dest,
+        subBrand: resolvedSubBrand,
+        themeJson: themeJson || null,
+        aspectRatio: typeof aspectRatio === "string" ? aspectRatio : undefined,
+      });
+      return res.status(200).json({
+        imageUrl: result.imageUrl,
+        source: result.source,
+        model: result.model,
+        stub: Boolean(result.stub),
+        realModeError: result.realModeError || null,
+      });
+    } catch (e) {
+      if (e.code === "MARKETING_FLYER_IMAGE_BUDGET_EXCEEDED") {
+        return res.status(429).json({
+          error: "Monthly AI budget reached for this tenant.",
+          code: "LLM_BUDGET_EXCEEDED",
+          spentCents: e.spentCents,
+          capCents: e.capCents,
+        });
+      }
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[flyer-suggest-image] error:", e.message);
+      return res.status(500).json({ error: "Failed to generate flyer image" });
+    }
   },
 );
 
@@ -3071,6 +3209,13 @@ router.post(
         hash: templateHash,
       });
 
+      // Both PDF and PNG renderers now honour the operator's absolute-
+      // positioned canvas blocks block-for-block (lib/flyerPdfRender +
+      // services/flyerRenderEngine.buildHtmlShellForPng). The PDF
+      // renderer fetches image bytes via axios + embeds via doc.image()
+      // so DALL-E / uploaded images appear in the PDF exactly as in
+      // the PNG screenshot. The adapter (adaptCanvasForRenderer) is no
+      // longer needed for either format.
       const result = await renderFlyer({
         template: { palette, layout, assets },
         data,

@@ -14,29 +14,42 @@
  *     (route surfaces this as a clean 400 INVALID_FORMAT).
  *   - PDF branch: returns Buffer with %PDF magic bytes, mimeType
  *     'application/pdf', extension 'pdf', engine 'pdfkit'.
- *   - PNG branch (Puppeteer absent — today's state): returns the
- *     deterministic 1×1 stub PNG with the correct mimeType +
- *     `engine: 'stub-1x1'`. Confirms the graceful-degradation contract.
+ *   - PNG branch (Puppeteer mocked): returns the screenshot buffer
+ *     produced by puppeteer.launch().newPage().screenshot(), tagged
+ *     `engine: 'puppeteer'`. The real Chrome launch is replaced by
+ *     `vi.mock('puppeteer', ...)` so tests stay fast + hermetic.
  *   - `data` overrides flow into the layout block content (Hassan
  *     clone-and-tweak flow) — assert via the helper export
  *     `applyDataOverrides` so we're testing the transform without
  *     spelunking inside the PDF/PNG bytes.
  *   - `buildHtmlShellForPng` helper produces a valid HTML5 document
- *     containing the template's title + price + CTA text — the future
- *     Puppeteer-real-render branch loads this exact HTML.
- *
- * Mocking note: Puppeteer is intentionally NOT installed in
- * backend/package.json as of this slice's dispatch. The PNG branch's
- * `tryRequirePuppeteer()` lazy-resolution will return `{ ok: false }`,
- * which is exactly the "stub fallback" path we want to pin. Once
- * Puppeteer lands (deferred slice), a follow-up test extends this file
- * with a `vi.mock('puppeteer', ...)` block that asserts the real
- * branch.
+ *     containing absolute-positioned blocks scaled from the editor's
+ *     540×720 canvas to the requested output dimensions.
  */
 
-import { describe, test, expect, beforeEach } from 'vitest';
-import { createRequire } from 'node:module';
+import { describe, test, expect, beforeEach, afterAll } from 'vitest';
 
+// Mocking strategy — dependency-injection via _setPuppeteerImplForTests.
+//
+// Puppeteer v25 exports are ESM-frozen + non-configurable, so the usual
+// require-cache monkey-patch (used elsewhere for @google/generative-ai
+// in test/cron/leadScoringEngine.test.js) throws "Cannot redefine
+// property". And vi.mock('puppeteer', factory) is silently bypassed by
+// the SUT's CJS `require('puppeteer')` in this vitest setup. So the
+// service exposes a `_setPuppeteerImplForTests({ launch })` hook —
+// tests install a fake before exercising renderFlyer; production code
+// uses the lazy `require('puppeteer')` default.
+const puppeteerMockState = {
+  screenshotBuffer: null,
+  lastViewport: null,
+  lastHtml: null,
+  lastWaitUntil: null,
+  launchArgs: null,
+  closeCount: 0,
+  launchShouldThrow: null,
+};
+
+const { createRequire } = await import('node:module');
 const requireCJS = createRequire(import.meta.url);
 const flyerRenderEngine = requireCJS('../../services/flyerRenderEngine.js');
 const {
@@ -45,9 +58,38 @@ const {
   FORMAT_TABLE,
   applyDataOverrides,
   buildHtmlShellForPng,
-  STUB_PNG_BUFFER,
-  _resetPuppeteerCacheForTests,
+  _setPuppeteerImplForTests,
 } = flyerRenderEngine;
+
+// Install the fake puppeteer impl that records call args + returns the
+// configured screenshot buffer. Real Chrome is never launched.
+_setPuppeteerImplForTests({
+  launch: async (args) => {
+    if (puppeteerMockState.launchShouldThrow) {
+      const e = puppeteerMockState.launchShouldThrow;
+      puppeteerMockState.launchShouldThrow = null;
+      throw e;
+    }
+    puppeteerMockState.launchArgs = args;
+    return {
+      newPage: async () => ({
+        setViewport: async (vp) => { puppeteerMockState.lastViewport = vp; },
+        setContent: async (html, opts) => {
+          puppeteerMockState.lastHtml = html;
+          puppeteerMockState.lastWaitUntil = opts && opts.waitUntil;
+        },
+        screenshot: async () => puppeteerMockState.screenshotBuffer,
+      }),
+      close: async () => { puppeteerMockState.closeCount += 1; },
+    };
+  },
+});
+
+afterAll(() => {
+  // Restore the lazy default so any later tests in the same process
+  // (or a watch-mode re-run) get real puppeteer back.
+  _setPuppeteerImplForTests(null);
+});
 
 const validPalette = {
   primaryHex: '#122647',
@@ -87,10 +129,22 @@ function isPngMagic(buf) {
   );
 }
 
+// Hand-built minimal-valid PNG (the well-known 67-byte 1×1 transparent
+// pixel). Used as the mocked Chrome screenshot buffer so the assertion
+// surface is "engine returned what Chrome handed back", not the bytes.
+const MOCK_PNG_BUFFER = Buffer.from(
+  '89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c63000100000005000100' +
+    '0d0a2db40000000049454e44ae426082',
+  'hex',
+);
+
 beforeEach(() => {
-  // Each test starts with a fresh puppeteer-resolution lookup so we're
-  // not bleeding cache between cases.
-  _resetPuppeteerCacheForTests();
+  puppeteerMockState.screenshotBuffer = MOCK_PNG_BUFFER;
+  puppeteerMockState.lastViewport = null;
+  puppeteerMockState.lastHtml = null;
+  puppeteerMockState.lastWaitUntil = null;
+  puppeteerMockState.launchArgs = null;
+  puppeteerMockState.closeCount = 0;
 });
 
 describe('module shape', () => {
@@ -219,40 +273,76 @@ describe('renderFlyer — pdf-a5 format', () => {
   });
 });
 
-describe('renderFlyer — png-square format (Puppeteer absent → stub fallback)', () => {
-  test('returns the deterministic 1×1 stub PNG when Puppeteer is not installed', async () => {
+describe('renderFlyer — png-square format (Puppeteer mocked)', () => {
+  test('launches Chrome, screenshots at 1200×1200, returns engine=puppeteer', async () => {
     const result = await renderFlyer({ template: fullTemplate, format: 'png-square' });
     expect(result.mimeType).toBe('image/png');
     expect(result.extension).toBe('png');
-    // Puppeteer is NOT in package.json as of slice S17 — fallback branch.
-    expect(result.engine).toBe('stub-1x1');
+    expect(result.engine).toBe('puppeteer');
+    // The buffer is whatever Chrome's page.screenshot() returned — the
+    // mock hands back a valid PNG with magic bytes.
     expect(isPngMagic(result.buffer)).toBe(true);
-    // Stub PNG should match the canonical buffer byte-for-byte (deterministic).
-    expect(Buffer.compare(result.buffer, STUB_PNG_BUFFER)).toBe(0);
     expect(result.widthPx).toBe(1200);
     expect(result.heightPx).toBe(1200);
+    // Viewport matches output dimensions, so the screenshot fills the page.
+    expect(puppeteerMockState.lastViewport).toEqual({
+      width: 1200,
+      height: 1200,
+      deviceScaleFactor: 1,
+    });
+    // setContent waited for networkidle0 — pinned so DALL-E / uploaded
+    // image URLs get loaded before the screenshot fires.
+    expect(puppeteerMockState.lastWaitUntil).toBe('networkidle0');
+    // HTML payload contains the operator's title text.
+    expect(puppeteerMockState.lastHtml).toContain('Summer Umrah 2026');
+    // Browser was closed exactly once — no leaked Chrome process.
+    expect(puppeteerMockState.closeCount).toBe(1);
   });
 });
 
 describe('renderFlyer — png-portrait-ig format', () => {
-  test('returns stub PNG with 1080×1920 advertised dimensions', async () => {
+  test('viewport is 1080×1920 and engine=puppeteer', async () => {
     const result = await renderFlyer({ template: fullTemplate, format: 'png-portrait-ig' });
     expect(result.mimeType).toBe('image/png');
-    expect(result.engine).toBe('stub-1x1');
+    expect(result.engine).toBe('puppeteer');
     expect(isPngMagic(result.buffer)).toBe(true);
     expect(result.widthPx).toBe(1080);
     expect(result.heightPx).toBe(1920);
+    expect(puppeteerMockState.lastViewport).toEqual({
+      width: 1080,
+      height: 1920,
+      deviceScaleFactor: 1,
+    });
   });
 });
 
 describe('renderFlyer — png-landscape-fb format', () => {
-  test('returns stub PNG with 1920×1080 advertised dimensions', async () => {
+  test('viewport is 1920×1080 and engine=puppeteer', async () => {
     const result = await renderFlyer({ template: fullTemplate, format: 'png-landscape-fb' });
     expect(result.mimeType).toBe('image/png');
-    expect(result.engine).toBe('stub-1x1');
+    expect(result.engine).toBe('puppeteer');
     expect(isPngMagic(result.buffer)).toBe(true);
     expect(result.widthPx).toBe(1920);
     expect(result.heightPx).toBe(1080);
+    expect(puppeteerMockState.lastViewport).toEqual({
+      width: 1920,
+      height: 1080,
+      deviceScaleFactor: 1,
+    });
+  });
+});
+
+describe('renderFlyer — Chrome-launch failure surfaces as a real error', () => {
+  test('puppeteer.launch rejection bubbles up (no stub fallback)', async () => {
+    puppeteerMockState.launchShouldThrow = new Error('Chrome binary not found');
+    let err = null;
+    try {
+      await renderFlyer({ template: fullTemplate, format: 'png-square' });
+    } catch (e) {
+      err = e;
+    }
+    expect(err).not.toBeNull();
+    expect(err.message).toContain('Chrome binary not found');
   });
 });
 
@@ -322,7 +412,7 @@ describe('applyDataOverrides — Hassan clone-and-tweak transform', () => {
   });
 });
 
-describe('buildHtmlShellForPng — the future Puppeteer-real-render document', () => {
+describe('buildHtmlShellForPng — Chrome-rendered document', () => {
   test('builds a valid HTML5 document at the requested dimensions', () => {
     const html = buildHtmlShellForPng(fullTemplate, 1200, 1200);
     expect(html.startsWith('<!DOCTYPE html>')).toBe(true);
@@ -332,14 +422,40 @@ describe('buildHtmlShellForPng — the future Puppeteer-real-render document', (
     expect(html).toContain('height: 1200px');
   });
 
-  test('embeds the template title + price + CTA text', () => {
+  test('embeds the template title text inside an absolute-positioned block', () => {
     const html = buildHtmlShellForPng(fullTemplate, 1080, 1920);
     expect(html).toContain('Summer Umrah 2026');
     expect(html).toContain('Book Now');
     expect(html).toContain('1,29,000');
+    // Absolute positioning is the contract — operator's composition
+    // lands at the same proportional positions in the output.
+    expect(html).toContain('position:absolute');
   });
 
-  test('uses primary palette colour for the strip + CTA backgrounds', () => {
+  test('scales block x/y from editor canvas (540×720) to output dimensions', () => {
+    // A block at canvas position (x=20, y=100) renders at:
+    //   left = round(20 * 1080/540)  = 40
+    //   top  = round(100 * 1920/720) = 267
+    // (using png-portrait-ig dimensions for clean integer math).
+    const html = buildHtmlShellForPng(fullTemplate, 1080, 1920);
+    expect(html).toContain('left:40px');
+    expect(html).toContain('top:267px');
+  });
+
+  test('renders image blocks as <img> with object-fit:cover', () => {
+    const tpl = {
+      palette: validPalette,
+      layout: [
+        { type: 'image', x: 24, y: 24, width: 320, height: 320, src: 'https://cdn.example/bali.jpg' },
+      ],
+    };
+    const html = buildHtmlShellForPng(tpl, 1200, 1200);
+    expect(html).toContain('<img');
+    expect(html).toContain('https://cdn.example/bali.jpg');
+    expect(html).toContain('object-fit:cover');
+  });
+
+  test('uses primary palette colour in the body styling', () => {
     const html = buildHtmlShellForPng(fullTemplate, 1200, 1200);
     expect(html).toContain('#122647');
   });
@@ -348,9 +464,9 @@ describe('buildHtmlShellForPng — the future Puppeteer-real-render document', (
     const evilTemplate = {
       ...fullTemplate,
       layout: [
-        { type: 'text', content: '<script>alert(1)</script>' },
-        { type: 'price', content: '₹100 & up' },
-        { type: 'cta', content: '"Click"' },
+        { type: 'text', x: 10, y: 10, width: 100, height: 30, content: '<script>alert(1)</script>' },
+        { type: 'price', x: 10, y: 50, width: 100, height: 30, content: '₹100 & up' },
+        { type: 'cta', x: 10, y: 100, width: 100, height: 30, content: '"Click"' },
       ],
     };
     const html = buildHtmlShellForPng(evilTemplate, 1200, 1200);
@@ -361,11 +477,22 @@ describe('buildHtmlShellForPng — the future Puppeteer-real-render document', (
     expect(html).toContain('&quot;');
   });
 
-  test('renders a readable shell when palette / layout / assets are missing', () => {
+  test('renders a readable shell when palette / layout are missing', () => {
     const html = buildHtmlShellForPng({}, 1200, 1200);
     expect(html.startsWith('<!DOCTYPE html>')).toBe(true);
-    expect(html).toContain('Untitled Flyer');
-    expect(html).toContain('Price on request');
-    expect(html).toContain('Book Now');
+    // Empty layout still produces a valid body (just the page background).
+    expect(html).toContain('<body');
+    expect(html).toContain('</body>');
+  });
+
+  test('drops image blocks with no src (no broken <img> tags)', () => {
+    const tpl = {
+      palette: validPalette,
+      layout: [
+        { type: 'image', x: 10, y: 10, width: 100, height: 100, src: '' },
+      ],
+    };
+    const html = buildHtmlShellForPng(tpl, 1200, 1200);
+    expect(html).not.toContain('<img');
   });
 });

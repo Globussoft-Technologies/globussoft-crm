@@ -85,6 +85,41 @@ const EMPTY_FORM = {
 
 const CURRENCIES = ["INR", "USD", "EUR"];
 
+// Translate the verbose raw AI-provider error (Google dumps 500+ chars
+// of JSON + stack into the message) into a short plain-English sentence
+// the operator can act on. Mirrors the helper in MarketingFlyerStudio.jsx
+// — kept inline rather than extracted to a shared util because the two
+// pages are the only consumers today.
+function friendlyAiError(rawError) {
+  if (!rawError) return "AI service is temporarily unavailable. Please try again.";
+  const m = String(rawError).toLowerCase();
+  if (/429|too many requests|exceeded.*quota|quota exceeded|rate limit/.test(m)) {
+    return "AI service is currently busy — daily limit reached on multiple models. Please try again later or upgrade the API plan.";
+  }
+  if (/401|unauthorized|invalid.*api.*key|api key.*invalid|incorrect.*key/.test(m)) {
+    return "AI service rejected the API key. Please check the key configuration in the backend .env file.";
+  }
+  if (/403|forbidden|permission/.test(m)) {
+    return "AI service blocked the request. Your API key may not have access to this model.";
+  }
+  if (/404|does not exist|unknown model|model.*not.*found/.test(m)) {
+    return "AI model not available. Please contact support to update the model configuration.";
+  }
+  if (/timeout|abort|aborted/.test(m)) {
+    return "AI service timed out. Please try again in a moment.";
+  }
+  if (/safety|blocked|finishreason.*safety/.test(m)) {
+    return "AI service blocked the prompt for safety reasons. Try rephrasing the destination or theme.";
+  }
+  if (/json.*parse|parse.*failed|invalid.*response/.test(m)) {
+    return "AI service returned a malformed response. Please try again.";
+  }
+  if (/network|fetch.*failed|enotfound|econnrefused/.test(m)) {
+    return "Cannot reach the AI service. Please check your internet connection.";
+  }
+  return "AI service is temporarily unavailable. Please try again in a moment.";
+}
+
 // PRD FR-3.6 step (a) — Suggest itinerary CTA modal form. Defaults mirror
 // the route's valid ranges (durationDays 1..30; budgetTier economy|mid|luxury).
 // `themeJson` is a free-form textarea — operator types a JSON object;
@@ -240,12 +275,18 @@ export default function Itineraries() {
         method: "POST",
         body: JSON.stringify(body),
       });
+      // When real-mode tried but failed, the backend returns the stub
+      // envelope + a `realModeError` field. Surface a friendly toast
+      // instead of silently showing the synthetic [STUB] content as
+      // if it were a real Gemini suggestion.
+      if (res?.stub && res?.realModeError) {
+        notify.error(friendlyAiError(res.realModeError));
+        return;
+      }
       setSuggestResult(res);
     } catch (err) {
       notify.error(
-        err?.body?.error
-        || err?.message
-        || "Failed to generate suggestion",
+        friendlyAiError(err?.body?.error || err?.message || "")
       );
     } finally {
       setSuggestLoading(false);

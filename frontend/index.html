@@ -32,7 +32,7 @@
          Netlify-style apps. The existing React effect in App.jsx still runs
          post-mount and stays the source of truth for runtime theme changes;
          this script only seeds the initial value. -->
-    <script>
+    <script nonce="__CSP_NONCE__">
       (function () {
         try {
           var saved = localStorage.getItem('theme');

@@ -64,6 +64,14 @@ prisma.tenant = {
   ...(realTenant || {}),
   findUnique: vi.fn(),
 };
+// auditLog delegate is touched by S121's GET /violations handler — reads
+// CSPViolation rows written by routes/csp.js's POST /report. Default to
+// empty list so clean24h=true unless a test overrides.
+const realAuditLog = prisma.auditLog;
+prisma.auditLog = {
+  ...(realAuditLog || {}),
+  findMany: vi.fn(),
+};
 
 import express from 'express';
 import request from 'supertest';
@@ -104,6 +112,7 @@ beforeEach(() => {
   prisma.securityIncident.findUnique.mockReset();
   prisma.securityIncident.update.mockReset();
   prisma.tenant.findUnique.mockReset();
+  prisma.auditLog.findMany.mockReset();
 
   // Default fallbacks
   prisma.securityIncident.create.mockResolvedValue({ id: 1 });
@@ -112,6 +121,7 @@ beforeEach(() => {
   prisma.securityIncident.findUnique.mockResolvedValue(null);
   prisma.securityIncident.update.mockResolvedValue({ id: 1 });
   prisma.tenant.findUnique.mockResolvedValue(null);
+  prisma.auditLog.findMany.mockResolvedValue([]);
 });
 
 // ─────────────────────────────────────────────────────────────────────
@@ -376,5 +386,135 @@ describe('POST /api/security/incidents/:id/review', () => {
       .send({ reviewNote: 'urgent', severity: 'critical' });
     const data = prisma.securityIncident.update.mock.calls[0][0].data;
     expect(data.severity).toBe('critical');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────
+// GET /violations — S121 ADMIN-only CSP-observability surface
+// ─────────────────────────────────────────────────────────────────────
+
+describe('GET /api/security/violations (S121 — CSP observability for CSP_ENFORCE go/no-go)', () => {
+  test('no token (withAuth=false) → not a 200 (real mount catches via global verifyToken)', async () => {
+    // The makeApp() shim short-circuits verifyToken with next() unconditionally
+    // when withAuth=true. With withAuth=false there is NO req.user — the route
+    // handler tries to read req.user.tenantId and the 500 catch fires. The
+    // production mount catches the missing token first via the global guard;
+    // in this isolated app we assert the route does NOT proceed to a 200 envelope.
+    const res = await request(makeApp({ withAuth: false })).get(
+      '/api/security/violations',
+    );
+    expect(res.status).not.toBe(200);
+    expect(prisma.auditLog.findMany).not.toHaveBeenCalled();
+  });
+
+  test('USER role → 403 RBAC_DENIED', async () => {
+    const res = await request(makeApp({ role: 'USER' })).get(
+      '/api/security/violations',
+    );
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe('RBAC_DENIED');
+    expect(prisma.auditLog.findMany).not.toHaveBeenCalled();
+  });
+
+  test('ADMIN happy path: returns { violations, total, sinceIso, clean24h } envelope', async () => {
+    prisma.auditLog.findMany.mockResolvedValue([]);
+    const res = await request(makeApp({ tenantId: 42 })).get(
+      '/api/security/violations',
+    );
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveProperty('violations');
+    expect(res.body).toHaveProperty('total');
+    expect(res.body).toHaveProperty('sinceIso');
+    expect(res.body).toHaveProperty('clean24h');
+    expect(Array.isArray(res.body.violations)).toBe(true);
+    expect(res.body.total).toBe(0);
+    // sinceIso parses to a valid date.
+    expect(Number.isNaN(Date.parse(res.body.sinceIso))).toBe(false);
+  });
+
+  test('default `since` is ~24h ago (within a small skew)', async () => {
+    const before = Date.now();
+    await request(makeApp()).get('/api/security/violations');
+    const after = Date.now();
+    const call = prisma.auditLog.findMany.mock.calls[0][0];
+    const sinceMs = call.where.createdAt.gte.getTime();
+    // The handler computes `new Date(Date.now() - 24h)`. Allow ±5s skew for
+    // the test wall-clock between `before` and the handler's `now`.
+    const expectedLo = before - 24 * 60 * 60 * 1000 - 5000;
+    const expectedHi = after - 24 * 60 * 60 * 1000 + 5000;
+    expect(sinceMs).toBeGreaterThanOrEqual(expectedLo);
+    expect(sinceMs).toBeLessThanOrEqual(expectedHi);
+  });
+
+  test('explicit ?since=ISO honored + forwarded to WHERE.createdAt.gte', async () => {
+    const iso = '2026-06-01T00:00:00.000Z';
+    const res = await request(makeApp()).get(
+      `/api/security/violations?since=${encodeURIComponent(iso)}`,
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.sinceIso).toBe(iso);
+    const call = prisma.auditLog.findMany.mock.calls[0][0];
+    expect(call.where.createdAt.gte).toBeInstanceOf(Date);
+    expect(call.where.createdAt.gte.toISOString()).toBe(iso);
+  });
+
+  test('clean24h=true when zero CSPViolation rows in default 24h window', async () => {
+    prisma.auditLog.findMany.mockResolvedValue([]);
+    const res = await request(makeApp()).get('/api/security/violations');
+    expect(res.status).toBe(200);
+    expect(res.body.clean24h).toBe(true);
+    expect(res.body.total).toBe(0);
+  });
+
+  test('clean24h=false when at least one CSPViolation row in window', async () => {
+    prisma.auditLog.findMany.mockResolvedValue([
+      {
+        id: 1,
+        entity: 'CSPViolation',
+        action: 'REPORT',
+        tenantId: 1,
+        createdAt: new Date(),
+        details: '{"csp-report":{"violated-directive":"script-src"}}',
+      },
+    ]);
+    const res = await request(makeApp()).get('/api/security/violations');
+    expect(res.status).toBe(200);
+    expect(res.body.clean24h).toBe(false);
+    expect(res.body.total).toBe(1);
+    expect(res.body.violations).toHaveLength(1);
+  });
+
+  test('clean24h=false when ?since= is narrower than 24h, even if zero rows', async () => {
+    // Narrower window can't prove "24h clean" — the operator queried only the
+    // last hour, so the answer must default to false until they query a wider
+    // window covering the full 24h.
+    prisma.auditLog.findMany.mockResolvedValue([]);
+    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    const res = await request(makeApp()).get(
+      `/api/security/violations?since=${encodeURIComponent(oneHourAgo)}`,
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(0);
+    // Narrower window — handler must NOT claim 24h-clean.
+    expect(res.body.clean24h).toBe(false);
+  });
+
+  test('tenant-scoping: WHERE includes caller tenantId + entity=CSPViolation', async () => {
+    await request(makeApp({ tenantId: 99 })).get('/api/security/violations');
+    const call = prisma.auditLog.findMany.mock.calls[0][0];
+    expect(call.where.tenantId).toBe(99);
+    expect(call.where.entity).toBe('CSPViolation');
+  });
+
+  test('limit clamps: ?limit=9999 → 500 cap', async () => {
+    await request(makeApp()).get('/api/security/violations?limit=9999');
+    const call = prisma.auditLog.findMany.mock.calls[0][0];
+    expect(call.take).toBe(500);
+  });
+
+  test('limit default: missing ?limit → 100', async () => {
+    await request(makeApp()).get('/api/security/violations');
+    const call = prisma.auditLog.findMany.mock.calls[0][0];
+    expect(call.take).toBe(100);
   });
 });

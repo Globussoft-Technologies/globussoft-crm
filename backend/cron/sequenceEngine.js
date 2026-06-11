@@ -609,6 +609,104 @@ const processNodeLegacy = async (node, enrollment) => {
 
   if (label.startsWith('ACTION: Send WhatsApp')) {
     if (enrollment.contact.phone) {
+      // S88 — channel-parity with email (S19) + SMS (S87). The legacy
+      // ReactFlow path receives a `node`, not a SequenceStep row; synthesise
+      // a step-shaped object so resolveStepAttachments can run unchanged.
+      // The synthetic `id` is the node id (string in legacy land — cast to
+      // a deterministic string for the audit row).
+      const syntheticStep = {
+        id: node.id || `legacy-${enrollment.id}`,
+        attachmentRefsJson:
+          typeof node.data?.attachmentRefsJson === 'string'
+            ? node.data.attachmentRefsJson
+            : null,
+      };
+
+      let attachments = [];
+      try {
+        attachments = await resolveStepAttachments(
+          syntheticStep,
+          enrollment,
+          'whatsapp',
+        );
+      } catch (resolveErr) {
+        // Fail-soft: WhatsApp message still sends without media. Per-ref
+        // failures inside resolveStepAttachments are already swallowed
+        // (lookup_error / template_not_found / render_error audited there).
+        // This outer catch only fires for unexpected resolver crashes —
+        // surface them via a dedicated audit row so the operator sees the
+        // signal in the SequenceStep audit trail.
+        console.warn(
+          `[sequenceEngine] WhatsApp flyer resolution failed for node ${node.id}:`,
+          resolveErr.message,
+        );
+        try {
+          await module.exports.writeAuditSafe(
+            'SequenceStep',
+            'sequence.step.wa-flyer-attach-failed',
+            syntheticStep.id,
+            null,
+            enrollment.tenantId,
+            {
+              enrollmentId: enrollment.id,
+              channel: 'whatsapp',
+              reason: 'resolver_error',
+              message: resolveErr.message,
+            },
+            { actorType: 'system' },
+          );
+        } catch (_auditErr) { /* swallow */ }
+        attachments = [];
+      }
+
+      // STUB-MODE — real Meta WhatsApp Cloud API media upload is BLOCKED
+      // on Q9 (Wati creds). For each resolved flyer/file ref, build a
+      // stub-flagged media-ref entry that captures enough provenance
+      // (flyerId / format / mimeType) for the real swap point. The
+      // single-column WhatsAppMessage.mediaUrl + mediaType pair can only
+      // surface ONE attachment; the full list goes through the audit log
+      // — operators read the audit trail to see all attached flyers.
+      // Schema gap noted in return: WhatsAppMessage lacks a mediaRefsJson
+      // column for multi-attachment payloads.
+      const stubMediaRefs = [];
+      for (const att of attachments) {
+        if (att.kind === 'flyer' && Buffer.isBuffer(att.buffer)) {
+          stubMediaRefs.push({
+            kind: 'flyer',
+            flyerId: att.flyerId,
+            format: att.format,
+            mimeType: att.mimeType,
+            filename: att.filename,
+            stub: true,
+            plannedAction: 'upload-when-Q9-lands',
+          });
+        } else if (att.kind === 'file' && typeof att.url === 'string') {
+          // File-kind refs already carry a URL — WhatsApp Cloud API can
+          // dereference public URLs directly, so no stub needed.
+          stubMediaRefs.push({
+            kind: 'file',
+            url: att.url,
+            filename: att.filename,
+          });
+        }
+      }
+
+      // Pick the first eligible attachment for the single-column mediaUrl
+      // / mediaType surface. Stub-mode: synthesise a placeholder URL the
+      // real swap point replaces with the Meta media_id once Q9 lands.
+      let mediaUrl = null;
+      let mediaType = null;
+      if (stubMediaRefs.length > 0) {
+        const head = stubMediaRefs[0];
+        if (head.kind === 'file') {
+          mediaUrl = head.url;
+          mediaType = null; // unknown for upstream URLs
+        } else {
+          mediaUrl = `stub://flyer/${head.flyerId}.${head.format || 'pdf-a4'}`;
+          mediaType = head.mimeType || null;
+        }
+      }
+
       await prisma.whatsAppMessage.create({
         data: {
           to: enrollment.contact.phone,
@@ -616,8 +714,43 @@ const processNodeLegacy = async (node, enrollment) => {
           direction: 'OUTBOUND',
           status: 'QUEUED',
           contactId: enrollment.contact.id,
+          ...(mediaUrl ? { mediaUrl } : {}),
+          ...(mediaType ? { mediaType } : {}),
         },
       });
+
+      // One success-audit row PER attachment so operators can see exactly
+      // which flyers were attached / would be uploaded. Payload omits the
+      // raw buffer (mirrors S87's discipline — links / refs only, never
+      // blob content in audit logs).
+      for (const ref of stubMediaRefs) {
+        try {
+          await module.exports.writeAuditSafe(
+            'SequenceStep',
+            'sequence.step.wa-flyer-attached',
+            syntheticStep.id,
+            null,
+            enrollment.tenantId,
+            {
+              enrollmentId: enrollment.id,
+              channel: 'whatsapp',
+              ...(ref.kind === 'flyer'
+                ? {
+                    flyerId: ref.flyerId,
+                    format: ref.format,
+                    mimeType: ref.mimeType,
+                    stub: true,
+                    plannedAction: ref.plannedAction,
+                  }
+                : {
+                    fileUrl: ref.url,
+                    filename: ref.filename,
+                  }),
+            },
+            { actorType: 'system' },
+          );
+        } catch (_auditErr) { /* swallow — audit is best-effort */ }
+      }
     }
     return { delayMinutes: 0 };
   }
@@ -855,6 +988,7 @@ module.exports = {
   processInboundReplies, // exported for manual / test triggering
   processStep, // #616: exported so unit tests can pin step dispatch shape
   processStepListEnrollment, // #616: exported for wellness trigger unit tests
+  processNodeLegacy, // S88: exported for WhatsApp legacy-branch unit tests
   resolveStepAttachments, // S19: exported for flyer-attachment unit tests
   // S19 + S87 — CJS self-mocking seams (cron-learnings 2026-05-24 ~01:43 UTC):
   // tests reassign these to vi.fn() to intercept the SUT's calls without

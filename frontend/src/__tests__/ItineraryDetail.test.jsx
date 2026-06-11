@@ -33,6 +33,18 @@ vi.mock("../utils/api", () => ({
   getAuthToken: () => "test-token",
 }));
 
+// S82 — geocode-on-create wire-in. Mock the lib/geocoder.js surface so we
+// can pin (a) when geocode() is called vs skipped, (b) how the resolved
+// {lat, lng} lands in the POST body, and (c) fail-soft behaviour when
+// the resolver returns null / throws. Stable references per the
+// CLAUDE.md feedback-rule for hook-dependency object identity.
+const geocodeMock = vi.fn();
+vi.mock("../lib/geocoder", () => ({
+  geocode: (...args) => geocodeMock(...args),
+  reverseGeocode: vi.fn(),
+  clearCache: vi.fn(),
+}));
+
 const notifyObj = {
   error: vi.fn(),
   success: vi.fn(),
@@ -197,6 +209,10 @@ function makeFetchImpl(getResponse = ITIN_WITH_ITEMS, opts = {}) {
 
 beforeEach(() => {
   fetchApiMock.mockReset();
+  geocodeMock.mockReset();
+  // Default: no geocode hit unless a test overrides — so non-S82 tests
+  // don't accidentally start sending unexpected lat/lng in their POST.
+  geocodeMock.mockResolvedValue(null);
   notifyObj.error.mockReset();
   notifyObj.success.mockReset();
   notifyObj.info.mockReset();
@@ -1049,5 +1065,201 @@ describe("ItineraryDetail — regen stub label + form validation", () => {
     });
     // Page falls into the "not found" state when load rejects.
     expect(screen.getByText(/Itinerary not found/i)).toBeTruthy();
+  });
+});
+
+// ─── S82 — geocode-on-create wire-in ─────────────────────────────────
+//
+// Pins the addItem() flow's call into lib/geocoder.js before POSTing the
+// new ItineraryItem. Contract (PRD FR-3.4 + S10 carry-over):
+//   - Item created with `description` only (no manual lat/lng) → geocode()
+//     is called with the description; resolved {lat, lng} land on the
+//     POST body as `latitude` + `longitude`.
+//   - Description blank → geocode() is NOT called (early-validation guard
+//     fires before the geocoder anyway).
+//   - geocode() resolves null (no match) → POST proceeds without lat/lng.
+//   - geocode() throws (network) → POST still proceeds (fail-soft).
+//   - While geocode() is in flight, the Save button is disabled (loading
+//     copy "Resolving location…") so the user can't double-fire.
+//
+// Mock: geocode() is replaced module-level; tests configure its return
+// value per case. The fetch mock for POST /items echoes the body back so
+// the assertions read the body the SUT actually built.
+describe("ItineraryDetail — S82 geocode-on-create", () => {
+  it("calls geocode(description) and posts the resolved lat/lng when no manual coords", async () => {
+    geocodeMock.mockResolvedValueOnce({
+      lat: 15.4909,
+      lng: 73.8278,
+      display_name: "Goa, India",
+    });
+    fetchApiMock.mockImplementation(makeFetchImpl(ITIN_WITH_ITEMS));
+    renderPage();
+    await screen.findByText(/Goa school trip/);
+
+    fireEvent.click(screen.getByRole("button", { name: /^Add item$/i }));
+    fireEvent.change(screen.getByPlaceholderText(/IndiGo 6E-237/i), {
+      target: { value: "Goa beach" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Save item|Resolving location/i }));
+
+    await waitFor(() => {
+      expect(geocodeMock).toHaveBeenCalledWith("Goa beach");
+    });
+    await waitFor(() => {
+      const post = fetchApiMock.mock.calls.find(
+        (c) => c[0] === "/api/travel/itineraries/42/items" && c[1]?.method === "POST",
+      );
+      expect(post).toBeTruthy();
+      const body = JSON.parse(post[1].body);
+      expect(body.latitude).toBeCloseTo(15.4909, 4);
+      expect(body.longitude).toBeCloseTo(73.8278, 4);
+      expect(body.description).toBe("Goa beach");
+    });
+  });
+
+  it("does NOT call geocode() when description is blank (early guard fires first)", async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl(ITIN_WITH_ITEMS));
+    renderPage();
+    await screen.findByText(/Goa school trip/);
+
+    fireEvent.click(screen.getByRole("button", { name: /^Add item$/i }));
+    // Type whitespace only → addItem's early validation rejects on
+    // description.trim() === "".
+    const desc = screen.getByPlaceholderText(/IndiGo 6E-237/i);
+    fireEvent.change(desc, { target: { value: "   " } });
+    fireEvent.click(screen.getByRole("button", { name: /Save item|Resolving location/i }));
+
+    await waitFor(() => {
+      expect(notifyObj.error).toHaveBeenCalledWith(
+        expect.stringMatching(/description required/i),
+      );
+    });
+    expect(geocodeMock).not.toHaveBeenCalled();
+    // And no POST went out.
+    const post = fetchApiMock.mock.calls.find(
+      (c) => c[0] === "/api/travel/itineraries/42/items" && c[1]?.method === "POST",
+    );
+    expect(post).toBeFalsy();
+  });
+
+  it("does NOT call geocode() when the user has never entered any description (initial blank)", async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl(ITIN_WITH_ITEMS));
+    renderPage();
+    await screen.findByText(/Goa school trip/);
+
+    fireEvent.click(screen.getByRole("button", { name: /^Add item$/i }));
+    // Click Save without touching description at all.
+    fireEvent.click(screen.getByRole("button", { name: /Save item|Resolving location/i }));
+
+    await waitFor(() => {
+      expect(notifyObj.error).toHaveBeenCalledWith(
+        expect.stringMatching(/description required/i),
+      );
+    });
+    expect(geocodeMock).not.toHaveBeenCalled();
+  });
+
+  it("posts WITHOUT lat/lng when geocode() returns null (no match)", async () => {
+    geocodeMock.mockResolvedValueOnce(null);
+    fetchApiMock.mockImplementation(makeFetchImpl(ITIN_WITH_ITEMS));
+    renderPage();
+    await screen.findByText(/Goa school trip/);
+
+    fireEvent.click(screen.getByRole("button", { name: /^Add item$/i }));
+    fireEvent.change(screen.getByPlaceholderText(/IndiGo 6E-237/i), {
+      target: { value: "Some unmatchable place name xyz123" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Save item|Resolving location/i }));
+
+    await waitFor(() => {
+      expect(geocodeMock).toHaveBeenCalledWith("Some unmatchable place name xyz123");
+    });
+    await waitFor(() => {
+      const post = fetchApiMock.mock.calls.find(
+        (c) => c[0] === "/api/travel/itineraries/42/items" && c[1]?.method === "POST",
+      );
+      expect(post).toBeTruthy();
+      const body = JSON.parse(post[1].body);
+      expect(body.latitude).toBeUndefined();
+      expect(body.longitude).toBeUndefined();
+      expect(body.description).toBe("Some unmatchable place name xyz123");
+    });
+    // Item still added — fail-soft.
+    expect(notifyObj.success).toHaveBeenCalledWith("Item added");
+  });
+
+  it("posts WITHOUT lat/lng when geocode() throws (network outage fail-soft)", async () => {
+    geocodeMock.mockRejectedValueOnce(new Error("network down"));
+    fetchApiMock.mockImplementation(makeFetchImpl(ITIN_WITH_ITEMS));
+    renderPage();
+    await screen.findByText(/Goa school trip/);
+
+    fireEvent.click(screen.getByRole("button", { name: /^Add item$/i }));
+    fireEvent.change(screen.getByPlaceholderText(/IndiGo 6E-237/i), {
+      target: { value: "Paris Eiffel Tower" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Save item|Resolving location/i }));
+
+    await waitFor(() => {
+      expect(geocodeMock).toHaveBeenCalled();
+    });
+    await waitFor(() => {
+      const post = fetchApiMock.mock.calls.find(
+        (c) => c[0] === "/api/travel/itineraries/42/items" && c[1]?.method === "POST",
+      );
+      expect(post).toBeTruthy();
+      const body = JSON.parse(post[1].body);
+      expect(body.latitude).toBeUndefined();
+      expect(body.longitude).toBeUndefined();
+    });
+    // Item still added — fail-soft.
+    expect(notifyObj.success).toHaveBeenCalledWith("Item added");
+    // No user-visible error — the swallowed throw stays internal.
+    expect(notifyObj.error).not.toHaveBeenCalled();
+  });
+
+  it("disables the Save button while geocode() is in flight (loading state)", async () => {
+    // Hold the geocode promise open so we can assert the disabled state
+    // mid-flight. Resolve it manually at the end so the test cleans up.
+    let resolveGeocode;
+    geocodeMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveGeocode = resolve;
+        }),
+    );
+    fetchApiMock.mockImplementation(makeFetchImpl(ITIN_WITH_ITEMS));
+    renderPage();
+    await screen.findByText(/Goa school trip/);
+
+    fireEvent.click(screen.getByRole("button", { name: /^Add item$/i }));
+    fireEvent.change(screen.getByPlaceholderText(/IndiGo 6E-237/i), {
+      target: { value: "Sheikh Zayed Mosque Abu Dhabi" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /^Save item$/i }));
+
+    // Mid-flight: button shows "Resolving location…" and is disabled.
+    await waitFor(() => {
+      const btn = screen.getByRole("button", { name: /Resolving location/i });
+      expect(btn).toBeTruthy();
+      expect(btn).toBeDisabled();
+    });
+
+    // Resolve the geocode → flow completes.
+    resolveGeocode({
+      lat: 24.4128,
+      lng: 54.4747,
+      display_name: "Sheikh Zayed Grand Mosque, Abu Dhabi",
+    });
+
+    await waitFor(() => {
+      const post = fetchApiMock.mock.calls.find(
+        (c) => c[0] === "/api/travel/itineraries/42/items" && c[1]?.method === "POST",
+      );
+      expect(post).toBeTruthy();
+      const body = JSON.parse(post[1].body);
+      expect(body.latitude).toBeCloseTo(24.4128, 4);
+      expect(body.longitude).toBeCloseTo(54.4747, 4);
+    });
   });
 });

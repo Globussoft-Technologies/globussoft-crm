@@ -76,7 +76,6 @@
  * Cred chase: docs/CREDS_TRACKER.md Q-MF-2 row (image-gen key).
  * Mirror clients:
  *   - backend/services/marketingFlyerCopyLLM.js (commit 866a147c, S15) — text counterpart
- *   - backend/services/itinerarySuggestLLM.js   (commit 17449b35, S14)
  *   - backend/services/adsGptClient.js          (commit 9f35040)
  *   - backend/services/ratehawkClient.js        (commit 2852b82)
  *   - backend/services/callifiedClient.js       (commit 9ec52df)
@@ -126,7 +125,7 @@ function slugify(s) {
  *
  * CJS self-mocking seam: calls `module.exports.computeMonthlySpendCents(...)`
  * via the exports indirection. Mirrors marketingFlyerCopyLLM (S15) +
- * itinerarySuggestLLM (S14) + callifiedClient / ratehawkClient / adsGptClient.
+ * callifiedClient / ratehawkClient / adsGptClient.
  */
 async function checkBudgetCap(tenantId) {
   const capCents = await getBudgetCap(tenantId, INTEGRATION);
@@ -174,8 +173,7 @@ async function computeMonthlySpendCents(_tenantId) {
  *
  * The `[STUB-FLYER-IMAGE]` prefix is visible to operators so they don't
  * mistake a placeholder image for real creative output. Same discipline
- * as marketingFlyerCopyLLM's `[STUB]` markers + itinerarySuggestLLM's
- * `[STUB-ITINERARY-SUGGEST]` markers.
+ * as marketingFlyerCopyLLM's `[STUB]` markers.
  */
 function buildStubImageUrl({ destination, themeJson, aspectRatio }) {
   const destSlug = slugify(destination || 'destination');
@@ -358,7 +356,7 @@ async function generateFlyerImage(args = {}, _ctx = {}) {
 module.exports = {
   // Primary surface
   generateFlyerImage,
-  // Budget-cap surface (mirrors marketingFlyerCopyLLM / itinerarySuggestLLM /
+  // Budget-cap surface (mirrors marketingFlyerCopyLLM /
   // adsGptClient / ratehawkClient / callifiedClient)
   checkBudgetCap,
   computeMonthlySpendCents,

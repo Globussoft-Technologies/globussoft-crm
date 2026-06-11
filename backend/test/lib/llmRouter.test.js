@@ -165,6 +165,9 @@ describe('llmRouter — module shape', () => {
       "form-vs-call": { primary: "claude-opus-4-7", fallback: "gpt-4" },
       "bulk-text": { primary: "gemini-flash", fallback: "claude-haiku" },
       "call-summary": { primary: "gemini-flash", fallback: null },
+      "itinerary-suggest": { primary: "gemini-flash", fallback: "claude-haiku" },
+      "marketing-flyer-copy": { primary: "gemini-flash", fallback: "claude-haiku" },
+      "marketing-flyer-image": { primary: "dall-e-3", fallback: "stability-xl" },
     });
   });
 
@@ -217,13 +220,13 @@ describe('llmEnabled', () => {
     expect(await r.llmEnabled('reasoning')).toBe(false);
   });
 
-  test('"itinerary-suggest" follows the Gemini key (gemini-flash provider slot)', () => {
+  test('"itinerary-suggest" follows the Gemini key (gemini-flash provider slot)', async () => {
     delete process.env.PERPLEXITY_API_KEY;
     delete process.env.ANTHROPIC_API_KEY;
     delete process.env.OPENAI_API_KEY;
     process.env.GEMINI_API_KEY = 'AIzaSy-real';
     const r = loadRouter();
-    expect(r.llmEnabled('itinerary-suggest')).toBe(true);
+    expect(await r.llmEnabled('itinerary-suggest')).toBe(true);
   });
 
   test('returns false for an unknown task even when every env is set', async () => {
@@ -232,7 +235,7 @@ describe('llmEnabled', () => {
     delete process.env.OPENAI_API_KEY;
     process.env.GEMINI_API_KEY = 'AIzaSy-real';
     const r = loadRouter();
-    expect(r.llmEnabled('itinerary-suggest')).toBe(true);
+    expect(await r.llmEnabled('itinerary-suggest')).toBe(true);
   });
 
   test('returns false for an unknown task even when every env is set', async () => {

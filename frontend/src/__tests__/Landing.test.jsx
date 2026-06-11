@@ -3,51 +3,35 @@
  * page (the unauthenticated `/` shell that's served by Nginx + React Router
  * before any auth gate fires).
  *
- * SUT: frontend/src/pages/Landing.jsx (229 LOC, was previously untested at
- *      the page level; closes the test-coverage gap).
+ * SUT: frontend/src/pages/Landing.jsx
  *
  * Scope — pure static-surface pin. Landing.jsx is presentational only:
  *   - No `useEffect` / no API calls / no state.
  *   - No `useNotify` / `fetchApi` / `useNavigate` consumption.
- *   - Just `<Link>` from react-router-dom + a fixed FEATURES / MODULES /
- *     SCREENSHOTS array iterated into the DOM.
+ *   - Just `<Link>` from react-router-dom + fixed FEATURES / MODULES arrays.
  *
  * Cases pinned here:
  *   1. Smoke render — `<Landing />` mounts inside `<MemoryRouter>` without
  *      throwing.
- *   2. Hero CTAs — both the "Start Free Trial" link (→ /signup) and the
- *      "Explore Features" anchor (→ #features) are present in the hero.
+ *   2. Hero CTAs — "Start Free Trial" (→ /get-started) and "Explore Features"
+ *      anchor (→ #features) are present in the hero.
  *   3. Hero stats row — the 4 stat tiles (25+ Modules, 313 E2E Tests,
  *      30+ API Endpoints, 100% Pass Rate) all render.
- *   4. Features section — every entry in the FEATURES array (Agent
- *      Assignment, Agent-wise Reports, Detailed Reports + Download, Auto
- *      Email Reports, AI Lead Scoring, Drag-Drop Pipeline) has its title
- *      rendered as a heading.
- *   5. Modules pill row — the MODULES array (30 modules incl. Dashboard,
- *      Pipeline (Kanban), CPQ Builder, Softphone) all render as pills.
- *   6. Internal nav links — `<Link to="/login">`, `<Link to="/signup">`,
- *      `<Link to="/pricing">`, `<Link to="/portal">` all resolve to the
- *      correct href on the rendered anchor.
- *   7. CTA tail-section — the bottom CTA's "Get Started Free" + "View
- *      Pricing" links are present and resolve to /signup and /pricing.
- *   8. Footer copyright + branding — the &copy; 2026 Globussoft line and
- *      the "Globus CRM" wordmark both render (latter appears in nav AND
- *      footer → uses `getAllByText` per the 2026-05-23 standing rule).
- *   9. Idempotent re-render — re-rendering the same `<Landing />` element
- *      under a fresh `<MemoryRouter>` doesn't throw and still shows the
- *      hero headline.
- *
- * Per the 2026-05-23 standing rule on stable mock refs: Landing.jsx has
- * no hooks to mock, so no `useNotify` / `fetchApi` stubs are needed. The
- * only mock surface is `<MemoryRouter>` wrapping for `<Link>`.
- *
- * Drift / known-bug discipline: if any assertion catches a real bug, the
- * test is marked `it.skip()` with a TODO referencing a GH issue filed via
- * `gh issue create` (no source-file edits in this scope).
+ *   4. Features section — every entry in the FEATURES array renders as a
+ *      heading.
+ *   5. Modules pill row — the MODULES array (30 modules) all render.
+ *   6. Internal nav links — `/get-started`, `/login`, `/pricing`, `/portal`
+ *      resolve to the correct href.
+ *   7. CTA tail-section — "Get Started Free" (→ /get-started) and
+ *      "View Pricing" (→ /pricing) links are present.
+ *   8. Footer copyright + branding — the © 2026 Globussoft line and the
+ *      "Globus CRM" logo (image alt) render in both nav and footer.
+ *   9. Idempotent re-render — re-rendering under a fresh `<MemoryRouter>`
+ *      doesn't throw and still shows the hero headline.
  */
 import React from 'react';
 import { describe, it, expect } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import Landing from '../pages/Landing';
 
@@ -67,32 +51,26 @@ describe('Landing (public marketing page)', () => {
 
   it('renders the hero headline + primary CTA + secondary CTA', () => {
     renderLanding();
-    // Hero copy is split across <br /> tags, so each fragment renders
-    // as its own text node — match the most stable one.
     expect(screen.getByText(/Close more deals\./i)).toBeInTheDocument();
     expect(screen.getByText(/Know every customer\./i)).toBeInTheDocument();
     expect(screen.getByText(/Powered by AI\./i)).toBeInTheDocument();
 
-    // Primary hero CTA → /signup
+    // Primary hero CTA → /get-started
     const startFreeTrial = screen.getByRole('link', { name: /Start Free Trial/i });
-    expect(startFreeTrial).toHaveAttribute('href', '/signup');
+    expect(startFreeTrial).toHaveAttribute('href', '/get-started');
 
-    // Secondary hero CTA — anchor to #features (an `<a href>`, not a Link)
+    // Secondary hero CTA — anchor to #features
     const exploreFeatures = screen.getByRole('link', { name: /Explore Features/i });
     expect(exploreFeatures).toHaveAttribute('href', '#features');
   });
 
   it('renders the hero stats row (4 tiles)', () => {
     renderLanding();
-    // Each stat = number + label rendered separately. Pin labels (more
-    // stable than numbers, which marketing copy may bump).
     expect(screen.getByText('25+')).toBeInTheDocument();
     expect(screen.getByText('313')).toBeInTheDocument();
     expect(screen.getByText('30+')).toBeInTheDocument();
     expect(screen.getByText('100%')).toBeInTheDocument();
 
-    // "Modules" label appears in stats row AND in the section header
-    // ("25+ Integrated Modules") — use getAllByText.
     expect(screen.getAllByText(/Modules/i).length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText('E2E Tests')).toBeInTheDocument();
     expect(screen.getByText('API Endpoints')).toBeInTheDocument();
@@ -124,9 +102,6 @@ describe('Landing (public marketing page)', () => {
       'Tickets', 'Support', 'App Builder', 'Developer Portal', 'Staff / RBAC',
       'Notifications', 'Audit Log', 'CSV Import', 'Softphone', 'Command Palette',
     ];
-    // Some module labels (Dashboard, Auto Email Reports, AI Lead Scoring,
-    // Sequences) also appear elsewhere on the page (footer / features /
-    // section text). Use getAllByText and assert ≥1 match per label.
     for (const m of expectedModules) {
       expect(screen.getAllByText(m).length).toBeGreaterThanOrEqual(1);
     }
@@ -134,17 +109,15 @@ describe('Landing (public marketing page)', () => {
 
   it('renders internal Link nav targets with correct href attributes', () => {
     renderLanding();
-    // /signup appears 3× (navbar "Get Started Free", hero "Start Free
-    // Trial", CTA tail "Get Started Free", footer "Sign Up"). All anchors
-    // must point at /signup.
-    const signupLinks = screen.getAllByRole('link').filter(a => a.getAttribute('href') === '/signup');
-    expect(signupLinks.length).toBeGreaterThanOrEqual(3);
+    // /get-started appears in navbar, hero, CTA tail, footer Sign Up.
+    const getStartedLinks = screen.getAllByRole('link').filter(a => a.getAttribute('href') === '/get-started');
+    expect(getStartedLinks.length).toBeGreaterThanOrEqual(3);
 
-    // /login appears 2× (navbar Login, footer Login).
+    // /login appears in navbar + footer.
     const loginLinks = screen.getAllByRole('link').filter(a => a.getAttribute('href') === '/login');
     expect(loginLinks.length).toBeGreaterThanOrEqual(2);
 
-    // /pricing appears 3× (navbar Pricing, CTA "View Pricing", footer Pricing).
+    // /pricing appears in navbar, CTA tail, footer.
     const pricingLinks = screen.getAllByRole('link').filter(a => a.getAttribute('href') === '/pricing');
     expect(pricingLinks.length).toBeGreaterThanOrEqual(3);
 
@@ -153,7 +126,7 @@ describe('Landing (public marketing page)', () => {
     expect(portalLinks.length).toBe(1);
   });
 
-  it('renders the bottom CTA section with /signup + /pricing links', () => {
+  it('renders the bottom CTA section with /get-started + /pricing links', () => {
     renderLanding();
     expect(
       screen.getByRole('heading', { name: /Ready to transform your sales process\?/i })
@@ -162,37 +135,27 @@ describe('Landing (public marketing page)', () => {
       screen.getByText(/Start your free trial today\. No credit card required\./i)
     ).toBeInTheDocument();
 
-    // "Get Started Free" appears in navbar + CTA tail — both should
-    // resolve to /signup.
     const getStartedFreeLinks = screen.getAllByRole('link', { name: /Get Started Free/i });
-    expect(getStartedFreeLinks.length).toBeGreaterThanOrEqual(2);
+    expect(getStartedFreeLinks.length).toBeGreaterThanOrEqual(1);
     for (const link of getStartedFreeLinks) {
-      expect(link).toHaveAttribute('href', '/signup');
+      expect(link).toHaveAttribute('href', '/get-started');
     }
 
-    // "View Pricing" is unique to the CTA tail.
     const viewPricing = screen.getByRole('link', { name: /View Pricing/i });
     expect(viewPricing).toHaveAttribute('href', '/pricing');
   });
 
-  it('renders the footer with copyright + branding (wordmark appears 2× per nav + footer)', () => {
+  it('renders the footer with copyright + logo branding', () => {
     renderLanding();
-    // © 2026 line. Use a regex because the `&copy;` entity gets resolved
-    // to the literal `©` character at render time.
     expect(
       screen.getByText(/2026 Globussoft Technologies\. All rights reserved\./)
     ).toBeInTheDocument();
 
-    // "Globus" wordmark text appears in navbar AND footer — must use
-    // getAllByText per the standing rule on duplicate labels.
-    const globusMarks = screen.getAllByText(/^Globus\s*$/);
-    expect(globusMarks.length).toBeGreaterThanOrEqual(2);
+    // Logo image renders in nav and footer with alt "Globus CRM".
+    const logos = screen.getAllByAltText('Globus CRM');
+    expect(logos.length).toBeGreaterThanOrEqual(2);
 
-    // "CRM" sibling of the wordmark appears in navbar AND footer.
-    const crmMarks = screen.getAllByText('CRM');
-    expect(crmMarks.length).toBeGreaterThanOrEqual(2);
-
-    // Footer product / account column headers.
+    // Footer column headers.
     expect(screen.getByText(/^Product$/)).toBeInTheDocument();
     expect(screen.getByText(/^Account$/)).toBeInTheDocument();
   });
@@ -200,7 +163,6 @@ describe('Landing (public marketing page)', () => {
   it('re-rendering under a fresh MemoryRouter is idempotent (no errors, hero still visible)', () => {
     const { unmount } = renderLanding();
     unmount();
-    // Fresh tree, fresh router — should mount cleanly.
     renderLanding();
     expect(screen.getByText(/Close more deals\./i)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Start Free Trial/i })).toBeInTheDocument();

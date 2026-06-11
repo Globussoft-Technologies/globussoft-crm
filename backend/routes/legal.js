@@ -261,4 +261,26 @@ router.get("/privacy-policy", serveLegal("/privacy-policy"));
 router.get("/deleted-account-policy", serveLegal("/deleted-account-policy"));
 router.get("/terms-and-conditions", serveLegal("/terms-and-conditions"));
 
+// JSON API variants — consumed by the SPA so legal pages work inside the
+// React shell (nginx serves the SPA for all non-/api/ routes, so the
+// backend HTML pages above are unreachable in production).
+function serveLegalApi(route) {
+  return (req, res) => {
+    const filePath = path.join(DOCS_DIR, FILES[route]);
+    let mdSource;
+    try {
+      mdSource = fs.readFileSync(filePath, "utf-8");
+    } catch (err) {
+      console.error(`[legal] failed to read ${filePath}:`, err.message);
+      return res.status(500).json({ error: "Document unavailable" });
+    }
+    const bodyHtml = marked(mdSource, { headerIds: true, mangle: false });
+    res.json({ title: TITLES[route] || "Globus CRM", html: bodyHtml });
+  };
+}
+
+router.get("/api/legal/terms-and-conditions", serveLegalApi("/terms-and-conditions"));
+router.get("/api/legal/privacy-policy", serveLegalApi("/privacy-policy"));
+router.get("/api/legal/deleted-account-policy", serveLegalApi("/deleted-account-policy"));
+
 module.exports = router;

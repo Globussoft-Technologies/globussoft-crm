@@ -89,6 +89,7 @@ const ManagePlans = lazy(() => import("./pages/ManagePlans"));
 const Channels = lazy(() => import("./pages/Channels"));
 const LandingPages = lazy(() => import("./pages/LandingPages"));
 const LandingPageBuilder = lazy(() => import("./pages/LandingPageBuilder"));
+const LegalPage = lazy(() => import("./pages/LegalPage"));
 const AuditLog = lazy(() => import("./pages/AuditLog"));
 const Privacy = lazy(() => import("./pages/Privacy"));
 const CalendarSync = lazy(() => import("./pages/CalendarSync"));
@@ -917,6 +918,9 @@ export default function App() {
                     element={!token ? <GetStarted /> : <Navigate to={landingFor(user, tenant)} replace />}
                   />
                   <Route path="/register-success" element={<RegisterSuccess />} />
+                  <Route path="/terms-and-conditions" element={<LegalPage page="terms-and-conditions" />} />
+                  <Route path="/privacy-policy" element={<LegalPage page="privacy-policy" />} />
+                  <Route path="/deleted-account-policy" element={<LegalPage page="deleted-account-policy" />} />
                   <Route path="/portal" element={<Portal />} />
                   {/* Travel customer portal — end-user (Contact) login + dashboard
                       + DigiLocker / Aadhaar verification (PRD §4.5 extended).

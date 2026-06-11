@@ -7,7 +7,6 @@ plugins {
     alias(libs.plugins.ksp)
     alias(libs.plugins.hilt)
     alias(libs.plugins.google.services)
-    alias(libs.plugins.sentry)
     alias(libs.plugins.junit5.plugin)
 }
 
@@ -21,12 +20,12 @@ if (keystorePropertiesFile.exists()) {
 
 android {
     namespace = "com.globus.crm"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.globus.crm"
         minSdk = 26
-        targetSdk = 35
+        targetSdk = 36
         versionCode = 1
         versionName = "1.0.0"
 
@@ -137,9 +136,6 @@ dependencies {
     // Socket.IO (real-time notification delivery when app is open)
     implementation(libs.socket.io.client)
 
-    // Sentry
-    implementation(libs.sentry.android)
-
     // Razorpay
     implementation(libs.razorpay)
 
@@ -167,11 +163,4 @@ dependencies {
 
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
-}
-
-sentry {
-    org = "globussoft"
-    projectName = "wellness-patient-android"
-    authToken = System.getenv("SENTRY_AUTH_TOKEN") ?: ""
-    includeSourceContext = true
 }

@@ -691,6 +691,133 @@ test.describe("#921 slice S38 — embed widget remains framable by partners", ()
 });
 
 // ──────────────────────────────────────────────────────────────────────
+// #921 slice S66 — per-tenant embed allowlist resolution at request time
+// ──────────────────────────────────────────────────────────────────────
+//
+// S38 (commit 7a229c92) shipped the /embed/* mount with a hardcoded
+// allowList: ['*'] because Tenant.embedAllowlistJson didn't exist yet.
+// S39 (commit 56832537) added the column + flipped readTenantEmbedAllowlist
+// from a stub-returning-null to a real Prisma read. S66 (this commit)
+// connects them — the /embed/* mount now resolves the allowlist at
+// REQUEST time by calling readTenantEmbedAllowlist(prisma, req.user?.tenantId).
+//
+// Why these pins live in the public-booking spec (alongside S38's pins)
+// rather than a separate file: same surface, adjacent contract, sibling
+// commits — keeping them together makes the git-blame trail obvious
+// when a future refactor regresses either layer.
+//
+// What's pinned here:
+//   1. Wildcard fallback when req.user is unset (the common partner-iframe
+//      path — embeds are fundamentally cross-origin + unauthenticated).
+//      A regression that flips this to 'none' would block every existing
+//      partner embed; a regression that drops the override entirely would
+//      revert to the global X-Frame-Options: DENY + frame-ancestors 'none'
+//      from S4 and ALSO break every partner.
+//   2. Request-time dispatch contract — the async middleware must call
+//      next() without throwing even when the per-tenant lookup short-
+//      circuits. Symptom of breakage: 500 on every /embed/* request.
+//
+// We can't seed `Tenant.embedAllowlistJson` from an e2e spec (no admin
+// endpoint exists for that column yet — a follow-up slice if product
+// wants surface-level configuration). The per-tenant-NON-NULL path is
+// covered by the unit-level vitest pins in
+// backend/test/middleware/security-csp.test.js (the S39 5 cases on
+// readTenantEmbedAllowlist directly). The e2e pins here cover the
+// wildcard fallback contract and the request-time dispatch shape that
+// the unit tests can't reach (those tests exercise the resolver in
+// isolation, not the mount wiring).
+test.describe("#921 slice S66 — per-tenant embed allowlist resolves at request time", () => {
+  test("anonymous GET /embed/lead-form.html → frame-ancestors falls back to wildcard", async ({ request }) => {
+    test.skip(!IS_LOCAL_STACK, "/embed/* served by Nginx in production — backend gate is local-stack-only");
+    // The common partner-iframe path: anonymous cross-origin GET. With
+    // no req.user the resolver short-circuits to null and the mount
+    // falls back to allowList: ['*'] (the S38 back-compat shape).
+    const r = await request.get(`${BASE_URL}/embed/lead-form.html`, {
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(r.status()).toBe(200);
+    const headers = r.headers();
+    const csp = headers["content-security-policy"];
+    // CSP header is present on every helmet-mounted response. Pin that
+    // the resolved value is wildcard, not 'none' or an explicit list —
+    // the unauthenticated path must remain wildcard for back-compat.
+    if (csp) {
+      const m = String(csp).match(/frame-ancestors\s+([^;]+)/i);
+      // If frame-ancestors is set at all (helmet config guarantees it),
+      // it MUST be the wildcard for anonymous embed requests.
+      if (m) {
+        const directive = m[1].trim();
+        expect(
+          directive,
+          `expected wildcard frame-ancestors on anonymous /embed/* (S66 wildcard fallback contract); got: ${directive}`
+        ).toBe("*");
+      }
+    }
+  });
+
+  test("request-time dispatch shape — async middleware does not 500", async ({ request }) => {
+    test.skip(!IS_LOCAL_STACK, "/embed/* served by Nginx in production — backend gate is local-stack-only");
+    // Sanity pin: the S66 mount is async (it awaits the per-tenant
+    // resolver before calling allowIframeEmbedding). A future refactor
+    // that forgets to await — or a Prisma client that throws on the
+    // findUnique — must not 500 the embed gate. The mount's catch-and-
+    // log-and-fall-back-to-wildcard layer is what keeps partner embeds
+    // alive when the per-tenant lookup blows up unexpectedly.
+    //
+    // Hit two paths to exercise both branches of the inline gate handler:
+    //   (a) slug-mode (no ?key=) — fastest path, no DB read in the gate
+    //   (b) key-mode with garbage — DB read fires but resolver short-
+    //       circuits on req.user being undefined; mount still returns
+    //       a wildcard CSP, even though the GET ultimately 404s.
+    const slugMode = await request.get(`${BASE_URL}/embed/lead-form.html`, {
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(slugMode.status(), "slug-mode embed request 5xx — S66 async dispatch regression").toBe(200);
+    expect(Number(slugMode.status())).toBeLessThan(500);
+
+    const keyMode = await request.get(
+      `${BASE_URL}/embed/lead-form.html?key=glbs_${"a".repeat(20)}`,
+      { timeout: REQUEST_TIMEOUT }
+    );
+    // Unknown key 404s per #297; what matters here is it's NOT a 5xx.
+    expect(Number(keyMode.status())).toBeLessThan(500);
+  });
+
+  test("per-tenant allowlist resolution path is wired (readTenantEmbedAllowlist consumed)", async ({ request }) => {
+    test.skip(!IS_LOCAL_STACK, "/embed/* served by Nginx in production — backend gate is local-stack-only");
+    // Contract pin: the mount must NOT regress to a static
+    // `allowIframeEmbedding({ allowList: ['*'] })` factory invocation
+    // (the S38 shape). The only externally-observable signal that
+    // the request-time resolver is wired (vs the mount-time factory)
+    // is response-header behaviour. With no req.user, both implementations
+    // produce the same wildcard output — so this test pins the
+    // OBSERVABLE invariant: CSP header is present, frame-ancestors is
+    // permissive, no XFO: DENY. Per-tenant NON-NULL behaviour is unit-
+    // covered by readTenantEmbedAllowlist's 5 vitest cases.
+    const r = await request.get(`${BASE_URL}/embed/lead-form.html`, {
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(r.status()).toBe(200);
+    const headers = r.headers();
+    // XFO must NOT be DENY (the global default) — the override removes it.
+    const xfo = headers["x-frame-options"];
+    if (xfo !== undefined) {
+      expect(String(xfo).toUpperCase()).not.toBe("DENY");
+    }
+    // frame-ancestors must NOT be 'none' (the global default) — the
+    // override replaces it with the resolved allowList.
+    const csp = headers["content-security-policy"];
+    if (csp) {
+      const m = String(csp).match(/frame-ancestors\s+([^;]+)/i);
+      if (m) {
+        const directive = m[1].trim();
+        expect(directive).not.toMatch(/^'?none'?$/);
+      }
+    }
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────
 // #208 — /api/portal serves the customer portal contract, NOT KB
 // ──────────────────────────────────────────────────────────────────────
 

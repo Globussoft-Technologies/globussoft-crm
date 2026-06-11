@@ -62,15 +62,9 @@ export default function LegalPage({ page }) {
         color: "var(--text-primary)",
       }}
     >
-      <h1 style={{ fontSize: "2rem", fontWeight: 800, margin: "0 0 8px", letterSpacing: "-0.02em", lineHeight: 1.2 }}>
-        {content?.title || TITLES[page]}
-      </h1>
       <div
         className="legal-content"
         dangerouslySetInnerHTML={{ __html: content?.html || "" }}
-        style={{
-          marginTop: 32,
-        }}
       />
       <style>{`
         .legal-content h2 { font-size: 1.35rem; font-weight: 700; margin: 40px 0 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border-color); }

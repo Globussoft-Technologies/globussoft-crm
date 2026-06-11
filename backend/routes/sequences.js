@@ -490,6 +490,119 @@ const ALLOWED_KINDS = ["email", "sms", "wait", "condition"];
 // inherently destructive if mis-edited.
 const stepGuard = [verifyToken, verifyRole(["ADMIN"])];
 
+// S85 (PRD_TRAVEL_MARKETING_FLYER FR-3.5 / AC-6.5) — operator-facing
+// route-layer forward for SequenceStep.attachmentRefsJson. S19 shipped the
+// schema column + cron engine consumer; S85 closes the API loop so operators
+// can actually set the field via POST/PUT /sequences/:id/steps.
+//
+// Storage column shape (schema.prisma:1264 — `attachmentRefsJson String? @db.Text`):
+//   JSON-encoded array of refs, e.g.
+//     [{"kind":"flyer","flyerId":42,"format":"pdf-a4"},
+//      {"kind":"file","url":"https://...","filename":"brochure.pdf"}]
+//
+// Validation contract (pre-persist):
+//   - null / undefined / empty string → null (clears the field)
+//   - non-string + non-array input → 400 INVALID_ATTACHMENT_REFS
+//   - string longer than 16KB (raw) → 400 ATTACHMENT_REFS_TOO_LARGE
+//   - string-not-parseable-as-JSON → 400 INVALID_ATTACHMENT_REFS
+//   - parsed root not an array → 400 INVALID_ATTACHMENT_REFS
+//   - any array entry missing a `kind` string field → 400 INVALID_ATTACHMENT_REFS
+//
+// 16KB cap (raw input bytes) bounds the worst-case `@db.Text` row size while
+// still leaving headroom for the typical ~10-flyer payload (~2KB). The cron
+// engine (sequenceEngine.resolveStepAttachments) tolerates malformed JSON at
+// send-time by logging + skipping — but the route layer rejects malformed
+// shapes up-front so operators get immediate feedback.
+const ATTACHMENT_REFS_MAX_BYTES = 16 * 1024;
+
+function normaliseAttachmentRefsJson(input) {
+  // Returns { ok: true, value: string | null } on success;
+  // { ok: false, status: 400, code, error } on rejection.
+  if (input == null || input === "") {
+    return { ok: true, value: null };
+  }
+  // Accept either a JSON string (the canonical wire shape; operators paste it
+  // raw or the UI stringifies before send) OR a JS array (operators using a
+  // typed client may post the array directly; we stringify on store).
+  let rawString;
+  if (Array.isArray(input)) {
+    try {
+      rawString = JSON.stringify(input);
+    } catch (_e) {
+      return {
+        ok: false,
+        status: 400,
+        code: "INVALID_ATTACHMENT_REFS",
+        error: "attachmentRefsJson could not be serialised",
+      };
+    }
+  } else if (typeof input === "string") {
+    rawString = input;
+  } else {
+    return {
+      ok: false,
+      status: 400,
+      code: "INVALID_ATTACHMENT_REFS",
+      error: "attachmentRefsJson must be a JSON-encoded array of refs",
+    };
+  }
+
+  // Byte-cap on raw input. Using Buffer.byteLength gives a true UTF-8 size
+  // (a copy-pasted blob with multi-byte chars wouldn't slip past a .length
+  // check that counts UTF-16 code units).
+  if (Buffer.byteLength(rawString, "utf8") > ATTACHMENT_REFS_MAX_BYTES) {
+    return {
+      ok: false,
+      status: 400,
+      code: "ATTACHMENT_REFS_TOO_LARGE",
+      error: `attachmentRefsJson exceeds ${ATTACHMENT_REFS_MAX_BYTES}-byte limit`,
+    };
+  }
+
+  // Parse-and-validate shape. Empty string already returned above.
+  let parsed;
+  try {
+    parsed = JSON.parse(rawString);
+  } catch (_e) {
+    return {
+      ok: false,
+      status: 400,
+      code: "INVALID_ATTACHMENT_REFS",
+      error: "attachmentRefsJson must be valid JSON",
+    };
+  }
+  if (!Array.isArray(parsed)) {
+    return {
+      ok: false,
+      status: 400,
+      code: "INVALID_ATTACHMENT_REFS",
+      error: "attachmentRefsJson root must be an array",
+    };
+  }
+  for (const entry of parsed) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      return {
+        ok: false,
+        status: 400,
+        code: "INVALID_ATTACHMENT_REFS",
+        error: "every attachmentRefsJson entry must be a {kind,…} object",
+      };
+    }
+    if (typeof entry.kind !== "string" || entry.kind.length === 0) {
+      return {
+        ok: false,
+        status: 400,
+        code: "INVALID_ATTACHMENT_REFS",
+        error: "every attachmentRefsJson entry must include a string `kind`",
+      };
+    }
+  }
+  // Route shape-pin via sanitizeJsonForStringColumn (CLAUDE.md JSON-string
+  // column convention) — walks every string value recursively to scrub HTML,
+  // then re-stringifies for Prisma's `String? @db.Text` storage.
+  return { ok: true, value: sanitizeJsonForStringColumn(parsed) };
+}
+
 // Helper: confirm sequence belongs to caller's tenant.
 const findSequenceForTenant = async (id, tenantId) => {
   if (isNaN(id)) return null;
@@ -524,7 +637,7 @@ router.post("/:id/steps", ...stepGuard, async (req, res) => {
     const {
       kind, emailTemplateId, smsBody, delayMinutes,
       conditionJson, trueNextPosition, falseNextPosition,
-      pauseOnReply, position,
+      pauseOnReply, position, attachmentRefsJson,
     } = req.body || {};
 
     if (!ALLOWED_KINDS.includes(kind)) {
@@ -542,6 +655,17 @@ router.post("/:id/steps", ...stepGuard, async (req, res) => {
           code: "INVALID_DELAY",
         });
       }
+    }
+
+    // S85: validate attachmentRefsJson up-front so the operator gets clean
+    // 400 feedback rather than a Prisma write that silently persists a bad
+    // blob the engine then has to skip at send-time.
+    const attachmentResult = normaliseAttachmentRefsJson(attachmentRefsJson);
+    if (!attachmentResult.ok) {
+      return res.status(attachmentResult.status).json({
+        error: attachmentResult.error,
+        code: attachmentResult.code,
+      });
     }
 
     // Determine target position.
@@ -590,6 +714,8 @@ router.post("/:id/steps", ...stepGuard, async (req, res) => {
         trueNextPosition: trueNextPosition != null ? parseInt(trueNextPosition, 10) : null,
         falseNextPosition: falseNextPosition != null ? parseInt(falseNextPosition, 10) : null,
         pauseOnReply: pauseOnReply == null ? true : !!pauseOnReply,
+        // S85 — flyer attachment refs (validated above). null clears.
+        attachmentRefsJson: attachmentResult.value,
       },
     });
     res.status(201).json(created);
@@ -612,7 +738,7 @@ router.put("/steps/:id", ...stepGuard, async (req, res) => {
     const {
       kind, emailTemplateId, smsBody, delayMinutes,
       conditionJson, trueNextPosition, falseNextPosition,
-      pauseOnReply,
+      pauseOnReply, attachmentRefsJson,
     } = req.body || {};
 
     if (kind != null && !ALLOWED_KINDS.includes(kind)) {
@@ -628,6 +754,21 @@ router.put("/steps/:id", ...stepGuard, async (req, res) => {
           code: "INVALID_DELAY",
         });
       }
+    }
+
+    // S85: validate attachmentRefsJson on update too. Note `undefined` means
+    // "not provided in body → skip" (so we never overwrite an existing value
+    // with null by accident); `null` / "" / [] explicitly clear the field.
+    let attachmentUpdate;
+    if (attachmentRefsJson !== undefined) {
+      const result = normaliseAttachmentRefsJson(attachmentRefsJson);
+      if (!result.ok) {
+        return res.status(result.status).json({
+          error: result.error,
+          code: result.code,
+        });
+      }
+      attachmentUpdate = result.value;
     }
 
     // v3.4.9 carry-over #1: same step-level sanitization on update.
@@ -650,6 +791,7 @@ router.put("/steps/:id", ...stepGuard, async (req, res) => {
           falseNextPosition: falseNextPosition == null ? null : parseInt(falseNextPosition, 10),
         }),
         ...(pauseOnReply !== undefined && { pauseOnReply: !!pauseOnReply }),
+        ...(attachmentRefsJson !== undefined && { attachmentRefsJson: attachmentUpdate }),
       },
     });
     res.json(updated);

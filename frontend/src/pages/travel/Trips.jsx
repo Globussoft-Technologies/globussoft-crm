@@ -208,12 +208,15 @@ export default function Trips() {
         <div
           onClick={(e) => { if (e.target === e.currentTarget) setCreating(false); }}
           style={{
-            position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)",
-            display: "flex", alignItems: "flex-start", justifyContent: "flex-end",
-            zIndex: 1000,
+            position: "fixed", inset: 0,
+            background: "rgba(0,0,0,0.75)",
+            backdropFilter: "blur(4px)",
+            WebkitBackdropFilter: "blur(4px)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            zIndex: 1000, padding: "1rem",
           }}
         >
-          <form onSubmit={submitCreate} style={drawerStyle}>
+          <form onSubmit={submitCreate} className="card" role="dialog" aria-modal="true" style={drawerStyle}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
               <h2 style={{ margin: 0, fontSize: 18, fontWeight: 600 }}>New Trip</h2>
               <button type="button" onClick={() => setCreating(false)} aria-label="Close" style={iconBtn}>
@@ -327,10 +330,14 @@ const primaryBtn = {
   border: "1px solid var(--primary-color, var(--accent-color))",
   cursor: "pointer",
 };
+// Centred modal — mirrors the Itineraries + Staff add-staff-member pattern.
+// `.card` (set on the form element) supplies border-radius, border, blur
+// and lifted shadow; we force opaque `--bg-color` here so the panel
+// doesn't read as glassmorphic over the page content behind it.
 const drawerStyle = {
-  background: "var(--surface-color)", color: "var(--text-primary)",
-  width: "100%", maxWidth: 460, height: "100vh", overflowY: "auto",
-  padding: 20, boxShadow: "-8px 0 24px rgba(0,0,0,0.2)",
+  background: "var(--bg-color)", color: "var(--text-primary)",
+  width: "100%", maxWidth: 480, maxHeight: "90vh", overflowY: "auto",
+  padding: "1.5rem",
 };
 const iconBtn = {
   background: "transparent", border: "none", color: "var(--text-secondary)",

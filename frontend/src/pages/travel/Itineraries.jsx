@@ -691,11 +691,14 @@ export default function Itineraries() {
           className="travel-itin-drawer-backdrop"
           style={{
             position: "fixed", inset: 0,
-            display: "flex", alignItems: "flex-start", justifyContent: "flex-end",
-            zIndex: 1000,
+            background: "rgba(0,0,0,0.75)",
+            backdropFilter: "blur(4px)",
+            WebkitBackdropFilter: "blur(4px)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            zIndex: 1000, padding: "1rem",
           }}
         >
-          <form onSubmit={submitCreate} style={drawerStyle} className="travel-itin-drawer">
+          <form onSubmit={submitCreate} className="card travel-itin-drawer" role="dialog" aria-modal="true" style={createModalStyle}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
               <h2 style={{ margin: 0, fontSize: 18, fontWeight: 600 }}>New Itinerary</h2>
               <button type="button" onClick={() => setCreating(false)} aria-label="Close" style={iconBtn}>
@@ -814,9 +817,11 @@ export default function Itineraries() {
           className="travel-itin-suggest-backdrop"
           style={{
             position: "fixed", inset: 0,
-            background: "rgba(0,0,0,0.4)",
+            background: "rgba(0,0,0,0.75)",
+            backdropFilter: "blur(4px)",
+            WebkitBackdropFilter: "blur(4px)",
             display: "flex", alignItems: "center", justifyContent: "center",
-            zIndex: 1000, padding: 24,
+            zIndex: 1000, padding: "1rem",
           }}
         >
           <form
@@ -825,7 +830,7 @@ export default function Itineraries() {
             aria-labelledby="suggest-itin-title"
             aria-modal="true"
             style={suggestModalStyle}
-            className="travel-itin-suggest-modal"
+            className="card travel-itin-suggest-modal"
           >
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
               <h2 id="suggest-itin-title" style={{ margin: 0, fontSize: 18, fontWeight: 600, display: "flex", alignItems: "center", gap: 8 }}>
@@ -1172,13 +1177,23 @@ const primaryBtn = {
   cursor: "pointer",
 };
 
-// #879 — boxShadow refactored to a CSS class so the dark-mode override can
-// deepen the shadow opacity (`rgba(0,0,0,0.5)`) to read as a real lifted
-// surface against the dark body. Light-mode preserved byte-for-byte.
-const drawerStyle = {
-  background: "var(--surface-color)", color: "var(--text-primary)",
-  width: "100%", maxWidth: 460, height: "100vh", overflowY: "auto",
-  padding: 20,
+// Centred modal for the "Create Itinerary" form. Mirrors suggestModalStyle
+// below so the two creation flows feel consistent. Earlier this was a
+// right-edge drawer (`width: 100%; maxWidth: 460; height: 100vh`) but
+// against the dark travel theme the side panel read as semi-transparent
+// (table content visible behind the form header), so the operator
+// couldn't distinguish modal chrome from page chrome. Centred dialog +
+// explicit backdrop + boxShadow gives a clean lifted surface in both
+// light and dark themes.
+// `.card` provides the chrome (border-radius, border, box-shadow, blur);
+// we force `background: var(--bg-color)` inline to override its
+// glassmorphic `var(--surface-color)` rgba — without this, the panel
+// reads as semi-transparent over the page content behind it.
+const createModalStyle = {
+  background: "var(--bg-color)",
+  color: "var(--text-primary)",
+  width: "100%", maxWidth: 480, maxHeight: "90vh", overflowY: "auto",
+  padding: "1.5rem",
 };
 
 const iconBtn = {
@@ -1202,11 +1217,10 @@ const inputStyle = {
 // right-edge drawer used by Create Itinerary) since the operator may need
 // to spend a moment reviewing the suggestion preview before committing.
 const suggestModalStyle = {
-  background: "var(--surface-color)", color: "var(--text-primary)",
+  background: "var(--bg-color)",
+  color: "var(--text-primary)",
   width: "100%", maxWidth: 560, maxHeight: "90vh", overflowY: "auto",
-  padding: 20, borderRadius: 12,
-  border: "1px solid var(--border-color)",
-  boxShadow: "0 8px 32px rgba(0,0,0,0.18)",
+  padding: "1.5rem",
 };
 
 const secondaryBtn = {

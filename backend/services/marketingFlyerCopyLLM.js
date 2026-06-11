@@ -260,13 +260,14 @@ async function callGemini({ destination, subBrand, themeJson, targetAudience }) 
   //   - gemini-2.5-flash:      10 RPM / 20 RPD  (primary, often exhausted)
   //   - gemini-2.0-flash:      15 RPM / 1500 RPD
   //   - gemini-2.0-flash-lite: 30 RPM / 1500 RPD
-  //   - gemini-1.5-flash:      15 RPM / 50 RPD
+  //   - gemini-2.5-flash-lite: 15 RPM / 1000 RPD
+  // gemini-1.5-flash was removed Sept 2025 — drop it; v1beta returns 404.
   // Dedup so an env override doesn't double-up an attempt.
   const cascade = Array.from(new Set([
     process.env.LLM_MODEL_GEMINI || MODEL_PRIMARY,
     process.env.LLM_MODEL_GEMINI_FALLBACK || MODEL_PRIMARY_FALLBACK,
     'gemini-2.0-flash-lite',
-    'gemini-1.5-flash',
+    'gemini-2.5-flash-lite',
   ]));
   let raw;
   let lastError;
@@ -277,10 +278,16 @@ async function callGemini({ destination, subBrand, themeJson, targetAudience }) 
       break;
     } catch (e) {
       lastError = e;
-      const isQuota = /429|Too Many Requests|exceeded.*quota|Quota exceeded/i.test(e.message || '');
-      if (!isQuota) throw e; // non-quota errors abort the cascade
+      const msg = e.message || '';
+      const isQuota = /429|Too Many Requests|exceeded.*quota|Quota exceeded/i.test(msg);
+      // Treat "model not found / not supported" 404s the same as quota —
+      // a Gemini model deprecation should let the cascade walk to the next
+      // entry, not hard-abort. Without this, a single removed model in
+      // the chain (like gemini-1.5-flash Sept 2025) blows the whole call.
+      const isModelGone = /404.*Not Found|is not found for API version|is not supported for generateContent/i.test(msg);
+      if (!isQuota && !isModelGone) throw e;
       console.warn(
-        `[marketingFlyerCopyLLM] '${m}' hit quota — falling through cascade`,
+        `[marketingFlyerCopyLLM] '${m}' ${isQuota ? 'hit quota' : 'model unavailable'} — falling through cascade`,
       );
     }
   }

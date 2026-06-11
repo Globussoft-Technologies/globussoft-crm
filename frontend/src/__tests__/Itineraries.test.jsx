@@ -1398,7 +1398,7 @@ describe('<Itineraries /> — S90 materialise-from-suggestion', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: /^Suggest$/ }));
     await waitFor(() => {
-      expect(notifyError).toHaveBeenCalledWith('ITINERARY_SUGGEST_FAILED');
+      expect(notifyError).toHaveBeenCalledWith('AI service is temporarily unavailable. Please try again in a moment.');
     });
     // Preview pane should NOT appear on error.
     expect(screen.queryByTestId('suggest-preview-pane')).toBeNull();

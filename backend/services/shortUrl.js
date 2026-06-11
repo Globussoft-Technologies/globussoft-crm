@@ -38,7 +38,7 @@
  * Mirror clients (CJS self-mocking seam, cron-learning 2026-05-24 ~01:43 UTC):
  *   - backend/services/marketingFlyerCopyLLM.js (S15) — stub-mode pattern
  *   - backend/services/marketingFlyerImageLLM.js (S16) — stub-mode pattern
- *   - backend/services/itinerarySuggestLLM.js   (S14) — provider-swap surface
+ *   - backend/services/tmcDiagnosticPrompts.js  (S99) — provider-swap surface
  *
  * Cred / decision chase:
  *   - docs/CREDS_TRACKER.md (Q-marker pending — short-URL provider pick)

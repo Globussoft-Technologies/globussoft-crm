@@ -297,13 +297,14 @@ describe('generateFlyerCopy — REAL mode swap', () => {
     logSpy.mockRestore();
   });
 
-  test('callGemini in stub-mode-as-shipped throws (real-mode wire-in pending Q-AI-3)', async () => {
+  test('callGemini throws when GEMINI_API_KEY is absent (real-mode wired but no key)', async () => {
     const c = loadClient();
-    // Even with a fake key set, the shipped callGemini throws — real swap
-    // is a follow-up gap (documented in module header). Tests that exercise
-    // the real-mode path MUST mock callGemini.
-    process.env.GEMINI_API_KEY = 'fake';
-    await expect(c.callGemini({ destination: 'X' })).rejects.toThrow(/real-mode not yet wired/);
+    // S71 real-mode wire-in landed — callGemini now invokes the SDK when
+    // the key is present. Tests that exercise the real-mode SUCCESS path
+    // continue to mock callGemini directly (see test #5 above) to avoid
+    // hitting the network. Here we only assert the no-key guard.
+    delete process.env.GEMINI_API_KEY;
+    await expect(c.callGemini({ destination: 'X' })).rejects.toThrow(/GEMINI_API_KEY not set/);
   });
 });
 

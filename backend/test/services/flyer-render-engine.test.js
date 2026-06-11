@@ -601,3 +601,212 @@ describe('renderFlyer — graceful degradation when puppeteer require throws', (
     expect(isPngMagic(result.buffer)).toBe(true);
   });
 });
+
+/**
+ * S74 — Puppeteer real-render path tests.
+ *
+ * Mocking strategy: the SUT's `renderPngBranch` calls
+ * `module.exports._tryRequirePuppeteer()` (NOT the closure binding) so the
+ * test can override the puppeteer-resolution surface by replacing the
+ * exported helper. This is the CJS self-mocking seam pattern documented
+ * in the 2026-05-24 cron-learning (adsGptClient / ratehawkClient /
+ * callifiedClient — all use `module.exports.fn(...)` for inter-function
+ * calls so `vi.fn`-style overrides on the exports surface intercept them).
+ *
+ * Why not `vi.mock('puppeteer')`: vitest's hoisting targets ESM imports,
+ * but our SUT uses `require('puppeteer')` inside a runtime function for
+ * graceful degradation. The seam-via-module.exports approach sidesteps
+ * the constraint AND avoids puppeteer's read-only ESM exports.
+ */
+describe('renderFlyer — png with real Puppeteer render (S74)', () => {
+  let originalTry;
+
+  beforeEach(() => {
+    originalTry = flyerRenderEngine._tryRequirePuppeteer;
+  });
+
+  afterEach(() => {
+    // Restore the real resolver so other tests don't pick up our fake.
+    flyerRenderEngine._tryRequirePuppeteer = originalTry;
+    _resetPuppeteerCacheForTests();
+  });
+
+  test('invokes puppeteer.launch + emits puppeteer-headless engine label', async () => {
+    const screenshotBuffer = Buffer.from([
+      // PNG magic bytes
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+      // Arbitrary trailing bytes to prove the buffer flows through unchanged
+      0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe, 0xba, 0xbe,
+    ]);
+    const launchMock = vi.fn();
+    const newPageMock = vi.fn();
+    const setViewportMock = vi.fn().mockResolvedValue(undefined);
+    const setContentMock = vi.fn().mockResolvedValue(undefined);
+    const screenshotMock = vi.fn().mockResolvedValue(screenshotBuffer);
+    const closeMock = vi.fn().mockResolvedValue(undefined);
+
+    const fakePage = {
+      setViewport: setViewportMock,
+      setContent: setContentMock,
+      screenshot: screenshotMock,
+    };
+    const fakeBrowser = {
+      newPage: newPageMock.mockResolvedValue(fakePage),
+      close: closeMock,
+    };
+    launchMock.mockResolvedValue(fakeBrowser);
+    flyerRenderEngine._tryRequirePuppeteer = () => ({
+      ok: true,
+      puppeteer: { launch: launchMock },
+    });
+
+    const result = await renderFlyer({ template: fullTemplate, format: 'png-square' });
+
+    expect(launchMock).toHaveBeenCalledTimes(1);
+    const launchArgs = launchMock.mock.calls[0][0];
+    expect(launchArgs.headless).toBe(true);
+    expect(launchArgs.args).toContain('--no-sandbox');
+
+    expect(newPageMock).toHaveBeenCalledTimes(1);
+    expect(setViewportMock).toHaveBeenCalledWith(
+      expect.objectContaining({ width: 1200, height: 1200 }),
+    );
+    expect(setContentMock).toHaveBeenCalledTimes(1);
+    // setContent receives the HTML shell that buildHtmlShellForPng built.
+    const htmlArg = setContentMock.mock.calls[0][0];
+    expect(htmlArg).toContain('<!DOCTYPE html>');
+    expect(htmlArg).toContain('Summer Umrah 2026');
+
+    expect(screenshotMock).toHaveBeenCalledTimes(1);
+    expect(screenshotMock.mock.calls[0][0]).toMatchObject({ type: 'png' });
+
+    // The screenshot buffer flows out as the response body.
+    expect(Buffer.compare(result.buffer, screenshotBuffer)).toBe(0);
+    expect(result.engine).toBe('puppeteer-headless');
+    expect(result.mimeType).toBe('image/png');
+    expect(result.widthPx).toBe(1200);
+    expect(result.heightPx).toBe(1200);
+
+    // browser.close() called even on success (try/finally cleanup).
+    expect(closeMock).toHaveBeenCalledTimes(1);
+  });
+
+  test('honours per-format viewport dimensions (png-portrait-ig → 1080×1920)', async () => {
+    const launchMock = vi.fn();
+    const setViewportMock = vi.fn().mockResolvedValue(undefined);
+    const fakePage = {
+      setViewport: setViewportMock,
+      setContent: vi.fn().mockResolvedValue(undefined),
+      screenshot: vi.fn().mockResolvedValue(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])),
+    };
+    launchMock.mockResolvedValue({
+      newPage: vi.fn().mockResolvedValue(fakePage),
+      close: vi.fn().mockResolvedValue(undefined),
+    });
+    flyerRenderEngine._tryRequirePuppeteer = () => ({
+      ok: true,
+      puppeteer: { launch: launchMock },
+    });
+
+    await renderFlyer({ template: fullTemplate, format: 'png-portrait-ig' });
+
+    expect(setViewportMock).toHaveBeenCalledWith(
+      expect.objectContaining({ width: 1080, height: 1920 }),
+    );
+  });
+
+  test('closes the browser even when screenshot throws (try/finally cleanup)', async () => {
+    const closeMock = vi.fn().mockResolvedValue(undefined);
+    const fakePage = {
+      setViewport: vi.fn().mockResolvedValue(undefined),
+      setContent: vi.fn().mockResolvedValue(undefined),
+      screenshot: vi.fn().mockRejectedValue(new Error('chromium crashed')),
+    };
+    const launchMock = vi.fn().mockResolvedValue({
+      newPage: vi.fn().mockResolvedValue(fakePage),
+      close: closeMock,
+    });
+    flyerRenderEngine._tryRequirePuppeteer = () => ({
+      ok: true,
+      puppeteer: { launch: launchMock },
+    });
+
+    let err = null;
+    try {
+      await renderFlyer({ template: fullTemplate, format: 'png-square' });
+    } catch (e) {
+      err = e;
+    }
+    expect(err).not.toBeNull();
+    expect(err.message).toContain('chromium crashed');
+    // Finally block fires the close even on the throw path.
+    expect(closeMock).toHaveBeenCalledTimes(1);
+  });
+
+  test('FLYER_RENDER_FORCE_STUB=1 takes precedence even when puppeteer is installed', async () => {
+    const launchMock = vi.fn();
+    flyerRenderEngine._tryRequirePuppeteer = () => ({
+      ok: true,
+      puppeteer: { launch: launchMock },
+    });
+    process.env.FLYER_RENDER_FORCE_STUB = '1';
+
+    const result = await renderFlyer({ template: fullTemplate, format: 'png-square' });
+
+    // Stub path, NOT the real puppeteer path.
+    expect(result.engine).toBe('stub-1x1');
+    expect(Buffer.compare(result.buffer, STUB_PNG_BUFFER)).toBe(0);
+    // Critical: launch() was never invoked when force-stub is set.
+    expect(launchMock).toHaveBeenCalledTimes(0);
+  });
+});
+
+/**
+ * S74 — graceful degradation when puppeteer is unloadable.
+ *
+ * Simulates the MODULE_NOT_FOUND path by overriding the SUT's
+ * `_tryRequirePuppeteer` exported helper to return `{ ok: false }` —
+ * the same shape the real helper returns when `require('puppeteer')`
+ * throws. Exercises the fallback branch without actually uninstalling
+ * the dep.
+ */
+describe('renderFlyer — graceful degradation when puppeteer require throws', () => {
+  let originalTry;
+
+  beforeEach(() => {
+    originalTry = flyerRenderEngine._tryRequirePuppeteer;
+  });
+
+  afterEach(() => {
+    flyerRenderEngine._tryRequirePuppeteer = originalTry;
+    _resetPuppeteerCacheForTests();
+  });
+
+  test('falls back to stub PNG without crashing when require(puppeteer) returns {ok: false}', async () => {
+    // Simulate MODULE_NOT_FOUND: helper returns the fallback shape.
+    flyerRenderEngine._tryRequirePuppeteer = () => ({ ok: false, puppeteer: null });
+
+    const result = await renderFlyer({ template: fullTemplate, format: 'png-square' });
+
+    // Fallback path → stub PNG, never throws.
+    expect(result.engine).toBe('stub-1x1');
+    expect(Buffer.compare(result.buffer, STUB_PNG_BUFFER)).toBe(0);
+    expect(result.mimeType).toBe('image/png');
+    expect(result.widthPx).toBe(1200);
+    expect(result.heightPx).toBe(1200);
+  });
+
+  test('FLYER_RENDER_FORCE_STUB=1 is the operator knob for graceful-degradation environments', async () => {
+    // Even when puppeteer IS installed, force-stub gives operators a
+    // single env-var lever to opt every PNG render down to stub mode.
+    // Useful for: CI runners missing Chromium libs, dev boxes with no
+    // GPU, automated screenshot tests where the byte-for-byte stub is
+    // the desired baseline.
+    process.env.FLYER_RENDER_FORCE_STUB = '1';
+    const result = await renderFlyer({ template: fullTemplate, format: 'png-landscape-fb' });
+    expect(result.engine).toBe('stub-1x1');
+    expect(result.widthPx).toBe(1920);
+    expect(result.heightPx).toBe(1080);
+    expect(isPngMagic(result.buffer)).toBe(true);
+  });
+});

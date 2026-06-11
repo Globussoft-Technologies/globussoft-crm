@@ -1,6 +1,8 @@
 const EventEmitter = require("events");
 const path = require("path");
-require("dotenv").config({ path: path.resolve(__dirname, "../../.env"), override: true });
+// Mirror server.js — try root .env then backend/.env with override.
+require("dotenv").config({ path: path.resolve(__dirname, "../../.env"), override: false });
+require("dotenv").config({ path: path.resolve(__dirname, "../.env"), override: true });
 const prisma = require("./prisma");
 
 const bus = new EventEmitter();

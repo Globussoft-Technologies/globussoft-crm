@@ -1,5 +1,17 @@
 const path = require("path");
-require("dotenv").config({ path: path.resolve(__dirname, "../.env"), override: true }); // load root .env for API keys (Gemini, Mailgun, etc.)
+// Load env. Historical convention pointed at the repo root, but in practice
+// the keys (GEMINI_API_KEY, OPENAI_API_KEY, Mailgun, etc.) live in
+// backend/.env. Load root first (no-op if absent), then backend/.env with
+// override so backend/.env wins on duplicates. Either file can be empty;
+// system env still wins over both if exported in the shell.
+require("dotenv").config({ path: path.resolve(__dirname, "../.env"), override: false });
+require("dotenv").config({ path: path.resolve(__dirname, ".env"), override: true });
+// One-line startup probe so an operator can confirm AI keys actually
+// loaded without grepping logs for fail-soft messages later.
+console.log(
+  `[env] AI keys: GEMINI=${process.env.GEMINI_API_KEY ? "set" : "MISSING"} ` +
+  `OPENAI=${process.env.OPENAI_API_KEY ? "set" : "MISSING"}`,
+);
 
 // Fail fast in production if JWT secrets are missing — refuses to boot rather than
 // silently fall back to the dev secret baked into the source.

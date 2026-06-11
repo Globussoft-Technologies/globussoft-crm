@@ -67,11 +67,23 @@
 
 'use strict';
 
+// Defensive .env load — mirrors itinerarySuggestLLM (see comment there).
+// Skipped under NODE_ENV=test so tests can drive env shape per case.
+if (process.env.NODE_ENV !== 'test') {
+  const _path = require('path');
+  require('dotenv').config({ path: _path.resolve(__dirname, '..', '.env'), override: false });
+}
+
 const { getBudgetCap, evaluateCap, KEYS } = require('../lib/tenantSettings');
 
 const INTEGRATION = 'llm'; // share the LLM monthly cap envelope
 const TASK_NAME = 'marketing-flyer-copy'; // PRD §9.1 + FR-3.6.1
 const MODEL_PRIMARY = 'gemini-2.5-flash'; // PRD FR-3.6.1 + AI_SURFACES §3
+// Auto-fallback when MODEL_PRIMARY returns 429 (free-tier quota: only
+// 20 RPD on 2.5-flash). 2.0-flash has 1500 RPD on a separate quota
+// pool, so a single retry typically lands clean. Env-overridable via
+// `LLM_MODEL_GEMINI_FALLBACK=...` in backend/.env.
+const MODEL_PRIMARY_FALLBACK = 'gemini-2.0-flash';
 const GEMINI_KEY_ENV = 'GEMINI_API_KEY'; // matches lib/llmRouter ENV_FOR_MODEL
 
 // Touch KEYS so the imported binding isn't flagged unused — also makes
@@ -206,24 +218,103 @@ async function realModeEnabled(tenantId) {
  * falls through to the stub via try/catch.
  */
 async function callGemini({ destination, subBrand, themeJson, targetAudience }) {
-  // Touch params so linter doesn't flag unused — and so the real-mode
-  // implementation has the same destructure shape ready.
-  void destination;
-  void subBrand;
-  void themeJson;
-  void targetAudience;
-  // Real-mode TODO (post-Q-AI-3):
-  //   const { GoogleGenerativeAI } = require('@google/generative-ai');
-  //   const ai = new GoogleGenerativeAI(process.env[GEMINI_KEY_ENV]);
-  //   const model = ai.getGenerativeModel({ model: MODEL_PRIMARY,
-  //     generationConfig: { responseMimeType: 'application/json',
-  //                         maxOutputTokens: 1024 } });
-  //   const prompt = buildFlyerCopyPrompt({ destination, subBrand,
-  //     themeJson, targetAudience });
-  //   const res = await model.generateContent(prompt);
-  //   const parsed = JSON.parse(res.response.text());
-  //   return { ...parsed, _source: 'gemini' };
-  throw new Error('marketingFlyerCopyLLM real-mode not yet wired (Q-AI-3 pending).');
+  const apiKey = process.env[GEMINI_KEY_ENV];
+  if (!apiKey) {
+    throw new Error(`marketingFlyerCopyLLM: ${GEMINI_KEY_ENV} not set`);
+  }
+  const { GoogleGenerativeAI } = require('@google/generative-ai');
+  const ai = new GoogleGenerativeAI(apiKey);
+  const themeStr = themeJson && typeof themeJson === 'object'
+    ? JSON.stringify(themeJson)
+    : (themeJson || '');
+  const prompt = [
+    'You write short, punchy marketing copy for travel flyers. Return JSON ONLY.',
+    `Destination: ${destination}`,
+    `Sub-brand: ${subBrand || 'travel'}`,
+    `Target audience: ${targetAudience || 'travellers'}`,
+    `Theme hints: ${themeStr || '(none)'}`,
+    '',
+    'Return JSON matching exactly this shape:',
+    '{ "headline": "<max 10 words>", "body": "<2-3 sentences, max 60 words>", "cta": "<2-4 words>" }',
+    'Do not include placeholders, brackets, or quotes inside the values.',
+  ].join('\n');
+
+  // Single attempt against a specific Gemini model. Pure — caller wraps
+  // in retry logic.
+  const tryGemini = async (modelName) => {
+    const model = ai.getGenerativeModel({
+      model: modelName,
+      generationConfig: {
+        responseMimeType: 'application/json',
+        maxOutputTokens: 1024,
+      },
+    });
+    const res = await model.generateContent(prompt);
+    return res.response.text();
+  };
+
+  // Multi-model cascade on 429 (each Gemini model on the free tier has
+  // its OWN per-day / per-minute quota pool). When the primary hits a
+  // limit, walk down the chain. Order chosen so the highest-quality
+  // model is tried first; later entries are cheaper but lower-RPM/RPD.
+  //   - gemini-2.5-flash:      10 RPM / 20 RPD  (primary, often exhausted)
+  //   - gemini-2.0-flash:      15 RPM / 1500 RPD
+  //   - gemini-2.0-flash-lite: 30 RPM / 1500 RPD
+  //   - gemini-1.5-flash:      15 RPM / 50 RPD
+  // Dedup so an env override doesn't double-up an attempt.
+  const cascade = Array.from(new Set([
+    process.env.LLM_MODEL_GEMINI || MODEL_PRIMARY,
+    process.env.LLM_MODEL_GEMINI_FALLBACK || MODEL_PRIMARY_FALLBACK,
+    'gemini-2.0-flash-lite',
+    'gemini-1.5-flash',
+  ]));
+  let raw;
+  let lastError;
+  for (const m of cascade) {
+    try {
+      raw = await tryGemini(m);
+      lastError = null;
+      break;
+    } catch (e) {
+      lastError = e;
+      const isQuota = /429|Too Many Requests|exceeded.*quota|Quota exceeded/i.test(e.message || '');
+      if (!isQuota) throw e; // non-quota errors abort the cascade
+      console.warn(
+        `[marketingFlyerCopyLLM] '${m}' hit quota — falling through cascade`,
+      );
+    }
+  }
+  if (raw === undefined) throw lastError;
+
+  const parsed = parseGeminiJson(raw);
+  return { ...parsed, _source: 'gemini' };
+}
+
+/**
+ * Defensive JSON parser — mirrors the same helper in itinerarySuggestLLM.
+ * Strips markdown code fences / BOM / surrounding prose so the parse
+ * succeeds even when Gemini ignores `responseMimeType: 'application/json'`.
+ */
+function parseGeminiJson(raw) {
+  if (!raw || typeof raw !== 'string') {
+    throw new Error(`Gemini returned empty / non-string response (type=${typeof raw})`);
+  }
+  let cleaned = raw.trim();
+  if (cleaned.charCodeAt(0) === 0xFEFF) cleaned = cleaned.slice(1);
+  if (cleaned.startsWith('```')) {
+    cleaned = cleaned.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
+  }
+  if (!cleaned.startsWith('{')) {
+    const start = cleaned.indexOf('{');
+    const end = cleaned.lastIndexOf('}');
+    if (start >= 0 && end > start) cleaned = cleaned.slice(start, end + 1);
+  }
+  try {
+    return JSON.parse(cleaned);
+  } catch (e) {
+    const preview = raw.length > 240 ? `${raw.slice(0, 240)}…(+${raw.length - 240} more chars)` : raw;
+    throw new Error(`Gemini JSON parse failed: ${e.message}. Raw response: ${preview}`);
+  }
 }
 
 /**
@@ -271,6 +362,7 @@ async function generateFlyerCopy(args = {}, _ctx = {}) {
   // Real-mode dispatch — try the Gemini call; fall through to stub on
   // any error or when key is absent. Pass tenantId so the resolver picks
   // up a per-tenant SupplierCredential row before the ENV fallback.
+  let realModeError = null;
   if (await module.exports.realModeEnabled(tenantId)) {
     try {
       const realJson = await module.exports.callGemini({
@@ -288,9 +380,13 @@ async function generateFlyerCopy(args = {}, _ctx = {}) {
     } catch (e) {
       // Fail-soft: never break the operator UX on a Gemini hiccup.
       // Stub shape is the same; the operator just sees the [STUB]
-      // markers on the headline / body.
+      // markers on the headline / body. Full stack so the backend
+      // console makes the cause obvious. Capture the message so the
+      // route can pass it to the frontend as an error-toast reason.
+      realModeError = e.message || String(e);
       console.error(
-        `[marketingFlyerCopyLLM] real-mode call failed (falling through to stub): ${e.message}`,
+        `[marketingFlyerCopyLLM] real-mode call failed (falling through to stub): ${realModeError}`,
+        e.stack ? `\n${e.stack}` : '',
       );
     }
   }
@@ -306,6 +402,7 @@ async function generateFlyerCopy(args = {}, _ctx = {}) {
     source: 'stub',
     model: MODEL_PRIMARY,
     stub: true,
+    realModeError, // null when stub was deliberate (no key), string when real-mode tried + failed
   };
 }
 

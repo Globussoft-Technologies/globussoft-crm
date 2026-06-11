@@ -85,11 +85,22 @@
 
 'use strict';
 
+// Defensive .env load — mirrors itinerarySuggestLLM (see comment there).
+// Skipped under NODE_ENV=test so tests can drive env shape per case.
+if (process.env.NODE_ENV !== 'test') {
+  const _path = require('path');
+  require('dotenv').config({ path: _path.resolve(__dirname, '..', '.env'), override: false });
+}
+
 const { getBudgetCap, evaluateCap, KEYS } = require('../lib/tenantSettings');
 
 const INTEGRATION = 'image-llm'; // S73: separate envelope from text-LLM (DALL-E HD $0.12/image)
 const TASK_NAME = 'marketing-flyer-image'; // PRD FR-3.6.3
-const MODEL_PRIMARY = 'dall-e-3'; // OpenAI DALL-E 3
+const MODEL_PRIMARY = 'dall-e-3'; // OpenAI DALL-E 3 — spec / PRD primary
+// Auto-fallback when OpenAI says "model does not exist" (project keys no
+// longer have dall-e-3 access — gpt-image-1 is the live successor).
+// Env-overridable: `LLM_MODEL_OPENAI_IMAGE=...` in backend/.env wins.
+const MODEL_PRIMARY_FALLBACK = 'gpt-image-1';
 const MODEL_FALLBACK = 'stability-xl'; // Stability AI XL
 const OPENAI_KEY_ENV = 'OPENAI_API_KEY'; // DALL-E provider
 const STABILITY_KEY_ENV = 'STABILITY_API_KEY'; // Stability fallback provider
@@ -252,32 +263,149 @@ async function realModeEnabled(tenantId) {
  *
  * Throws on any error — caller falls through to the stub via try/catch.
  */
-async function callImageProvider({ destination, subBrand, themeJson, aspectRatio, provider, model }) {
-  // Touch params so linter doesn't flag unused.
-  void destination;
-  void subBrand;
-  void themeJson;
-  void aspectRatio;
-  void provider;
-  void model;
-  // Real-mode TODO (post-Q-MF-2):
-  //   if (provider === 'dalle') {
-  //     const OpenAI = require('openai');
-  //     const client = new OpenAI({ apiKey: process.env[OPENAI_KEY_ENV] });
-  //     const res = await client.images.generate({
-  //       model: MODEL_PRIMARY,
-  //       prompt: buildFlyerImagePrompt({ destination, subBrand, themeJson }),
-  //       size: aspectRatioToSize(aspectRatio),  // 1024x1024 / 1024x1792 / 1792x1024
-  //       n: 1,
-  //       response_format: 'url',
-  //     });
-  //     return { imageUrl: res.data[0].url, provider: 'dalle', model: MODEL_PRIMARY };
-  //   } else if (provider === 'stability') {
-  //     // axios.post('https://api.stability.ai/v2beta/stable-image/generate/sd3', ...)
-  //     // + decode base64 response → upload to S3 → return CDN URL.
-  //     return { imageUrl, provider: 'stability', model: MODEL_FALLBACK };
-  //   }
-  throw new Error('marketingFlyerImageLLM real-mode not yet wired (Q-MF-2 pending).');
+async function callImageProvider({ destination, subBrand, themeJson, aspectRatio, provider, model, tenantId }) {
+  if (provider !== 'dalle') {
+    throw new Error(`marketingFlyerImageLLM: provider '${provider}' not implemented (only 'dalle' wired)`);
+  }
+  const apiKey = process.env[OPENAI_KEY_ENV];
+  if (!apiKey) {
+    throw new Error(`marketingFlyerImageLLM: ${OPENAI_KEY_ENV} not set`);
+  }
+  // Resolve actual model: env override > caller-supplied > module default.
+  const firstModel = process.env.LLM_MODEL_OPENAI_IMAGE || model || MODEL_PRIMARY;
+  const ratio = ALLOWED_ASPECT_RATIOS.includes(aspectRatio) ? aspectRatio : DEFAULT_ASPECT_RATIO;
+  const themeStr = themeJson && typeof themeJson === 'object'
+    ? Object.values(themeJson).filter(Boolean).join(', ')
+    : (themeJson || '');
+  const prompt = [
+    `Travel marketing flyer hero image for ${destination}.`,
+    subBrand ? `Sub-brand: ${subBrand}.` : '',
+    themeStr ? `Theme: ${themeStr}.` : '',
+    'Vibrant, professional, on-brand travel photography style. No text overlays.',
+  ].filter(Boolean).join(' ');
+
+  // Single attempt against OpenAI for a given model. Returns the parsed
+  // body envelope on success; throws on HTTP failure. The aspect-ratio
+  // size map differs per model:
+  //   - dall-e-3:    1024x1024 / 1024x1792 / 1792x1024
+  //   - gpt-image-1: 1024x1024 / 1024x1536 / 1536x1024
+  // NOTE: `response_format` is NOT sent — OpenAI deprecated it on
+  // /images/generations when gpt-image-1 launched. DALL-E 3 returns
+  // data[0].url by default; gpt-image-1 returns data[0].b64_json. Both
+  // shapes are handled by the caller below.
+  const tryOpenAI = async (modelName) => {
+    const isGptImage1 = /gpt-image/i.test(modelName);
+    const sizeMap = isGptImage1
+      ? { '1:1': '1024x1024', '9:16': '1024x1536', '16:9': '1536x1024' }
+      : { '1:1': '1024x1024', '9:16': '1024x1792', '16:9': '1792x1024' };
+    const size = sizeMap[ratio];
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 60000);
+    let resp;
+    let bodyJson;
+    try {
+      resp = await fetch('https://api.openai.com/v1/images/generations', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({ model: modelName, prompt, size, n: 1 }),
+        signal: ctrl.signal,
+      });
+      bodyJson = await resp.json().catch(() => ({}));
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!resp.ok) {
+      const msg = (bodyJson && bodyJson.error && (bodyJson.error.message || bodyJson.error)) || resp.statusText;
+      const err = new Error(`${resp.status} ${msg}`);
+      err.openaiStatus = resp.status;
+      err.openaiMessage = msg;
+      throw err;
+    }
+    return bodyJson;
+  };
+
+  // Auto-fallback: if the primary model returns "model does not exist"
+  // (happens on every project key created after OpenAI's image-model
+  // migration retired dall-e-3 for new keys), silently retry once with
+  // gpt-image-1. Keeps MODEL_PRIMARY pinned to dall-e-3 (spec/tests
+  // pin that constant) while still producing real output in production.
+  let body;
+  try {
+    body = await tryOpenAI(firstModel);
+  } catch (e) {
+    const looksLikeModelMissing =
+      e.openaiStatus === 404 ||
+      /does not exist/i.test(e.openaiMessage || e.message || '') ||
+      /unknown model/i.test(e.openaiMessage || e.message || '');
+    if (looksLikeModelMissing && firstModel !== MODEL_PRIMARY_FALLBACK) {
+      console.warn(
+        `[marketingFlyerImageLLM] model '${firstModel}' rejected by OpenAI — retrying with '${MODEL_PRIMARY_FALLBACK}'`,
+      );
+      body = await tryOpenAI(MODEL_PRIMARY_FALLBACK);
+    } else {
+      throw e;
+    }
+  }
+
+  const datum = body && body.data && body.data[0];
+  if (!datum) {
+    throw new Error('marketingFlyerImageLLM: OpenAI response missing data[0]');
+  }
+  let imageUrl;
+  if (datum.url) {
+    imageUrl = datum.url;
+  } else if (datum.b64_json) {
+    // gpt-image-1 returns base64. A 1024×1024 PNG ≈ 1.4 MB base64 — far
+    // too large to embed in a template's layoutJson (TEXT column caps at
+    // 64 KB and triggers a save-template 500). Persist to local uploads
+    // (or S3 if configured) and return a normal URL instead. Mirrors the
+    // existing /api/travel/flyer-templates/upload storage logic so the
+    // operational footprint stays identical.
+    imageUrl = await persistBase64Image(datum.b64_json, tenantId);
+  } else {
+    throw new Error('marketingFlyerImageLLM: OpenAI response missing both url and b64_json');
+  }
+  // Report back the model that actually answered (after any auto-fallback).
+  return { imageUrl, provider: 'dalle', model: body.model || firstModel };
+}
+
+/**
+ * Decode a base64 PNG payload and persist it to S3 (when
+ * AWS_S3_BUCKET_NAME is configured) or to the local uploads dir
+ * (dev/demo fallback). Returns the public URL or relative path the
+ * frontend's <img src> can render.
+ *
+ * Tenant scoping: writes under flyer-assets/tenant-<id>/ for
+ * traceability and so cleanup scripts can scope to one tenant.
+ * Defaults tenantId to 0 if absent (shouldn't happen in practice — the
+ * route always supplies it via generateFlyerImage).
+ */
+async function persistBase64Image(b64, tenantId) {
+  const buffer = Buffer.from(b64, 'base64');
+  const tid = tenantId || 0;
+  const stamp = Date.now();
+  const rand = Math.random().toString(36).slice(2, 8);
+  const fileName = `ai-flyer-${stamp}-${rand}.png`;
+  try {
+    const s3 = require('./s3Service');
+    if (s3 && s3.BUCKET_NAME) {
+      return await s3.uploadImage(buffer, fileName, 'image/png', `flyer-assets/tenant-${tid}`);
+    }
+  } catch (e) {
+    console.warn(`[marketingFlyerImageLLM] S3 upload failed, falling back to local disk: ${e.message}`);
+  }
+  // Local-disk fallback. Path mirrors the existing flyer-templates/upload
+  // route at travel_flyer_templates.js so the static-file server picks it
+  // up at /uploads/flyer-assets/tenant-<id>/<name>.
+  const fs = require('fs');
+  const path = require('path');
+  const dir = path.join(__dirname, '..', 'uploads', 'flyer-assets', `tenant-${tid}`);
+  await fs.promises.mkdir(dir, { recursive: true });
+  await fs.promises.writeFile(path.join(dir, fileName), buffer);
+  return `/uploads/flyer-assets/tenant-${tid}/${fileName}`;
 }
 
 /**
@@ -321,6 +449,7 @@ async function generateFlyerImage(args = {}, _ctx = {}) {
 
   // Real-mode dispatch — try the provider call; fall through to stub on
   // any error or when no provider key is present.
+  let realModeError = null;
   if (await module.exports.realModeEnabled(tenantId)) {
     try {
       const resolved = await module.exports.resolveProvider(tenantId);
@@ -331,6 +460,7 @@ async function generateFlyerImage(args = {}, _ctx = {}) {
         aspectRatio,
         provider: resolved.provider,
         model: resolved.model,
+        tenantId, // needed so persistBase64Image scopes to this tenant
       });
       return {
         imageUrl: realResult.imageUrl,
@@ -340,8 +470,12 @@ async function generateFlyerImage(args = {}, _ctx = {}) {
       };
     } catch (e) {
       // Fail-soft: never break the operator UX on a provider hiccup.
+      // Capture the message so the route can pass it through to the
+      // frontend (which shows it as an error toast instead of silently
+      // inserting an unreachable [STUB-FLYER-IMAGE] URL into the canvas).
+      realModeError = e.message || String(e);
       console.error(
-        `[marketingFlyerImageLLM] real-mode call failed (falling through to stub): ${e.message}`,
+        `[marketingFlyerImageLLM] real-mode call failed (falling through to stub): ${realModeError}`,
       );
     }
   }
@@ -350,8 +484,9 @@ async function generateFlyerImage(args = {}, _ctx = {}) {
   return {
     imageUrl,
     source: 'stub',
-    model: MODEL_PRIMARY, // intended real-mode model per slice spec
+    model: MODEL_PRIMARY,
     stub: true,
+    realModeError, // null when stub was deliberate (no key), string when real-mode tried + failed
   };
 }
 

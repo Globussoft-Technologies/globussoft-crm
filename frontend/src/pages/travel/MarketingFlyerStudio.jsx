@@ -20,10 +20,45 @@
  */
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { FileImage, Save, Loader } from 'lucide-react';
+import { FileImage, Save, Loader, Sparkles, Image as ImageIcon } from 'lucide-react';
 import { useActiveSubBrand } from '../../utils/subBrand';
 import { useNotify } from '../../utils/notify';
 import { fetchApi, getAuthToken } from '../../utils/api';
+
+// Translate the verbose raw AI-provider error (Google / OpenAI dump 500+
+// chars of JSON + stack into the message) into a short, plain-English
+// sentence operators can act on. Falls through to a generic message if
+// no pattern matches. Keep order specific → generic.
+function friendlyAiError(rawError) {
+  if (!rawError) return 'AI service is temporarily unavailable. Please try again.';
+  const m = String(rawError).toLowerCase();
+  if (/429|too many requests|exceeded.*quota|quota exceeded|rate limit/.test(m)) {
+    return "AI service is currently busy — daily limit reached on multiple models. Please try again later or upgrade the API plan.";
+  }
+  if (/401|unauthorized|invalid.*api.*key|api key.*invalid|incorrect.*key/.test(m)) {
+    return 'AI service rejected the API key. Please check the key configuration in the backend .env file.';
+  }
+  if (/403|forbidden|permission/.test(m)) {
+    return "AI service blocked the request. Your API key may not have access to this model.";
+  }
+  if (/404|does not exist|unknown model|model.*not.*found/.test(m)) {
+    return 'AI model not available. Please contact support to update the model configuration.';
+  }
+  if (/timeout|abort|aborted/.test(m)) {
+    return 'AI service timed out. Please try again in a moment.';
+  }
+  if (/safety|blocked|finishreason.*safety/.test(m)) {
+    return 'AI service blocked the prompt for safety reasons. Try rephrasing the destination or theme.';
+  }
+  if (/json.*parse|parse.*failed|invalid.*response/.test(m)) {
+    return "AI service returned a malformed response. Please try again.";
+  }
+  if (/network|fetch.*failed|enotfound|econnrefused/.test(m)) {
+    return 'Cannot reach the AI service. Please check your internet connection.';
+  }
+  // Generic fallback — short, friendly, doesn't dump raw error to user.
+  return 'AI service is temporarily unavailable. Please try again in a moment.';
+}
 
 // Sub-brand options for the "Save as Template" modal — the canonical 4 ids
 // plus "no sub-brand" (tenant-wide template).
@@ -80,6 +115,14 @@ export default function MarketingFlyerStudio() {
   const fileInputRef = useRef(null);
   const [uploading, setUploading] = useState(false);
 
+  // S71 / S72 — AI copy + image generation modal state.
+  const [showCopyModal, setShowCopyModal] = useState(false);
+  const [showImageModal, setShowImageModal] = useState(false);
+  const [aiDestination, setAiDestination] = useState('');
+  const [aiAudience, setAiAudience] = useState('');
+  const [aiAspectRatio, setAiAspectRatio] = useState('1:1');
+  const [aiBusy, setAiBusy] = useState(false);
+
   const addBlock = useCallback((type) => {
     setLayout((prev) => {
       const offset = prev.length * 12;
@@ -98,6 +141,160 @@ export default function MarketingFlyerStudio() {
     setLayout((prev) => prev.filter((_, i) => i !== idx));
     setSelectedIdx(null);
   }, []);
+
+  // S71 — POST destination + audience to /suggest-copy. On success insert
+  // three new text blocks (headline / body / cta) into the canvas. Smart
+  // placement: if the canvas is "fresh" (only the default "Tap to edit
+  // headline" placeholder) REPLACE it with the AI copy; otherwise append
+  // the new blocks BELOW the bottom-most existing block with a 24px gap.
+  // Prevents the overlapping-blocks-at-same-position bug that happens
+  // when blocks are pinned to fixed y coordinates.
+  const handleSuggestCopy = useCallback(async (e) => {
+    e?.preventDefault?.();
+    const dest = (aiDestination || '').trim();
+    if (!dest) {
+      notify?.error?.('Destination is required');
+      return;
+    }
+    setAiBusy(true);
+    try {
+      const body = { destination: dest };
+      if (aiAudience.trim()) body.targetAudience = aiAudience.trim();
+      if (activeSubBrand) body.subBrand = activeSubBrand;
+      const data = await fetchApi('/api/travel/flyer-templates/suggest-copy', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+      // Real-mode tried + failed (e.g. Gemini 429 / 401 / parse error).
+      // Show the actual reason instead of silently inserting [STUB]
+      // marker text into the canvas.
+      if (data.stub && data.realModeError) {
+        notify?.error?.(friendlyAiError(data.realModeError));
+        setShowCopyModal(false);
+        return;
+      }
+      setLayout((prev) => {
+        const isFresh =
+          prev.length === 1 &&
+          prev[0].type === 'text' &&
+          prev[0].content === 'Tap to edit headline';
+        const startY = isFresh
+          ? 24
+          : Math.max(0, ...prev.map((b) => (b.y || 0) + (b.height || 0))) + 24;
+        const newBlocks = [
+          {
+            type: 'text',
+            x: 24,
+            y: startY,
+            width: 480,
+            height: 100,
+            content: data.headline || '',
+            color: palette.primaryHex || '#122647',
+            fontSize: 28,
+          },
+          {
+            type: 'text',
+            x: 24,
+            y: startY + 116,
+            width: 480,
+            height: 140,
+            content: data.body || '',
+            color: palette.textHex || '#222222',
+            fontSize: 16,
+          },
+          {
+            type: 'text',
+            x: 24,
+            y: startY + 272,
+            width: 220,
+            height: 50,
+            content: data.cta || '',
+            color: palette.accentHex || '#C89A4E',
+            fontSize: 18,
+          },
+        ];
+        return isFresh ? newBlocks : [...prev, ...newBlocks];
+      });
+      // Select the headline so the operator can immediately edit / restyle it.
+      setSelectedIdx(null);
+      setShowCopyModal(false);
+      notify?.success?.(
+        data.stub
+          ? 'AI copy inserted (stub — set GEMINI_API_KEY for real output)'
+          : 'AI copy inserted',
+      );
+    } catch (err) {
+      if (!err?.status) notify?.error?.(err?.message || 'Failed to generate copy');
+    } finally {
+      setAiBusy(false);
+    }
+  }, [aiDestination, aiAudience, activeSubBrand, palette, notify]);
+
+  // S72 — POST destination + aspectRatio to /suggest-image. On success
+  // EITHER replace the selected image block's src OR add a new image block
+  // pre-filled with the imageUrl. DALL-E URLs are time-limited (~1h) —
+  // operator should Save-as-Template promptly to capture into assetsJson.
+  const handleSuggestImage = useCallback(async (e) => {
+    e?.preventDefault?.();
+    const dest = (aiDestination || '').trim();
+    if (!dest) {
+      notify?.error?.('Destination is required');
+      return;
+    }
+    setAiBusy(true);
+    try {
+      const body = { destination: dest, aspectRatio: aiAspectRatio };
+      if (activeSubBrand) body.subBrand = activeSubBrand;
+      const data = await fetchApi('/api/travel/flyer-templates/suggest-image', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+      // Real-mode tried + failed (e.g. OpenAI 400/401/429 or unknown
+      // model). Show the actual reason instead of silently inserting a
+      // [STUB-FLYER-IMAGE] URL the browser can't render → empty box.
+      if (data.stub && data.realModeError) {
+        notify?.error?.(friendlyAiError(data.realModeError));
+        setShowImageModal(false);
+        return;
+      }
+      const url = data.imageUrl;
+      // Smart placement, mirroring the copy flow:
+      //   1. Selected block is image  → replace its src
+      //   2. Canvas is fresh (default placeholder only) → REPLACE with image
+      //   3. Otherwise → append below the bottom-most existing block
+      const sel = selectedIdx != null ? layout[selectedIdx] : null;
+      if (sel && sel.type === 'image') {
+        updateBlock(selectedIdx, { src: url });
+      } else {
+        const dim = aiAspectRatio === '9:16'
+          ? { width: 240, height: 426 }
+          : aiAspectRatio === '16:9'
+            ? { width: 480, height: 270 }
+            : { width: 320, height: 320 };
+        setLayout((prev) => {
+          const isFresh =
+            prev.length === 1 &&
+            prev[0].type === 'text' &&
+            prev[0].content === 'Tap to edit headline';
+          const startY = isFresh
+            ? 24
+            : Math.max(0, ...prev.map((b) => (b.y || 0) + (b.height || 0))) + 24;
+          const newBlock = { type: 'image', x: 24, y: startY, ...dim, src: url };
+          return isFresh ? [newBlock] : [...prev, newBlock];
+        });
+      }
+      setShowImageModal(false);
+      notify?.success?.(
+        data.stub
+          ? 'AI image inserted (stub — set OPENAI_API_KEY for real output)'
+          : 'AI image inserted — save the template soon (DALL-E URLs expire in ~1h)',
+      );
+    } catch (err) {
+      if (!err?.status) notify?.error?.(err?.message || 'Failed to generate image');
+    } finally {
+      setAiBusy(false);
+    }
+  }, [aiDestination, aiAspectRatio, activeSubBrand, selectedIdx, layout, updateBlock, notify]);
 
   // Pointer-drag to reposition a block; numeric X/Y inputs are the precise fallback.
   const onBlockMouseDown = useCallback((e, idx) => {
@@ -302,6 +499,24 @@ export default function MarketingFlyerStudio() {
           <button type="button" onClick={() => addBlock('image')} style={toolBtn} data-testid="flyer-add-image">
             + Image
           </button>
+          <button
+            type="button"
+            onClick={() => { setAiDestination(''); setAiAudience(''); setShowCopyModal(true); }}
+            style={toolBtn}
+            data-testid="flyer-ai-copy"
+            aria-label="Generate AI marketing copy"
+          >
+            <Sparkles size={14} aria-hidden /> AI Copy
+          </button>
+          <button
+            type="button"
+            onClick={() => { setAiDestination(''); setAiAspectRatio('1:1'); setShowImageModal(true); }}
+            style={toolBtn}
+            data-testid="flyer-ai-image"
+            aria-label="Generate AI flyer image"
+          >
+            <ImageIcon size={14} aria-hidden /> AI Image
+          </button>
           <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 8, alignItems: 'center' }}>
             <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>Palette</span>
             {PALETTE_KEYS.map((k) => (
@@ -460,6 +675,137 @@ export default function MarketingFlyerStudio() {
         </div>
       </div>
 
+      {/* S71 — AI Copy modal */}
+      {showCopyModal && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="ai-copy-heading"
+          style={modalOverlay}
+          data-testid="ai-copy-modal"
+        >
+          <form onSubmit={handleSuggestCopy} style={modalDialog}>
+            <h2 id="ai-copy-heading" style={modalHeading}>Generate AI marketing copy</h2>
+            <p style={modalHint}>
+              Returns a headline, body paragraph, and CTA. Three new text blocks
+              will be added to the canvas — drag and restyle as needed.
+            </p>
+            <label style={modalLabel}>
+              Destination *
+              <input
+                type="text"
+                value={aiDestination}
+                onChange={(e) => setAiDestination(e.target.value)}
+                style={modalInput}
+                aria-label="Destination"
+                data-testid="ai-copy-destination"
+                placeholder="e.g. Bali, Greece, Kashmir"
+                autoFocus
+              />
+            </label>
+            <label style={modalLabel}>
+              Target audience (optional)
+              <input
+                type="text"
+                value={aiAudience}
+                onChange={(e) => setAiAudience(e.target.value)}
+                style={modalInput}
+                aria-label="Target audience"
+                data-testid="ai-copy-audience"
+                placeholder="e.g. school principals, young families"
+              />
+            </label>
+            <div style={modalActions}>
+              <button
+                type="button"
+                onClick={() => setShowCopyModal(false)}
+                style={secondaryBtn}
+                disabled={aiBusy}
+                data-testid="ai-copy-cancel"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={aiBusy}
+                style={savePrimaryBtn}
+                data-testid="ai-copy-submit"
+              >
+                {aiBusy ? 'Generating…' : 'Generate'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* S72 — AI Image modal */}
+      {showImageModal && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="ai-image-heading"
+          style={modalOverlay}
+          data-testid="ai-image-modal"
+        >
+          <form onSubmit={handleSuggestImage} style={modalDialog}>
+            <h2 id="ai-image-heading" style={modalHeading}>Generate AI flyer image</h2>
+            <p style={modalHint}>
+              {selectedIdx != null && layout[selectedIdx]?.type === 'image'
+                ? 'Replaces the selected image block.'
+                : 'Adds a new image block to the canvas.'}{' '}
+              <strong>Heads up:</strong> the returned URL expires after ~1 hour —
+              save the template promptly to capture the image.
+            </p>
+            <label style={modalLabel}>
+              Destination *
+              <input
+                type="text"
+                value={aiDestination}
+                onChange={(e) => setAiDestination(e.target.value)}
+                style={modalInput}
+                aria-label="Destination"
+                data-testid="ai-image-destination"
+                placeholder="e.g. Bali, Greece, Kashmir"
+                autoFocus
+              />
+            </label>
+            <label style={modalLabel}>
+              Aspect ratio
+              <select
+                value={aiAspectRatio}
+                onChange={(e) => setAiAspectRatio(e.target.value)}
+                style={modalInput}
+                aria-label="Aspect ratio"
+                data-testid="ai-image-aspect"
+              >
+                <option value="1:1">1:1 (square)</option>
+                <option value="9:16">9:16 (portrait)</option>
+                <option value="16:9">16:9 (landscape)</option>
+              </select>
+            </label>
+            <div style={modalActions}>
+              <button
+                type="button"
+                onClick={() => setShowImageModal(false)}
+                style={secondaryBtn}
+                disabled={aiBusy}
+                data-testid="ai-image-cancel"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={aiBusy}
+                style={savePrimaryBtn}
+                data-testid="ai-image-submit"
+              >
+                {aiBusy ? 'Generating…' : 'Generate'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
       {/* "Save as Template" modal — name + sub-brand; serialises palette/layout/assets. */}
       {showSaveModal && (
         <div
@@ -543,7 +889,21 @@ const editorWrap = { display: 'flex', flexDirection: 'column', gap: 12 };
 const toolbarStyle = { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', padding: '8px 10px', borderRadius: 8, background: 'var(--surface-color)', border: '1px solid var(--border-color)' };
 const toolBtn = { display: 'inline-flex', alignItems: 'center', gap: 4, padding: '6px 12px', borderRadius: 6, fontSize: 13, fontWeight: 600, background: 'var(--primary-color, var(--accent-color))', color: 'var(--accent-text, #fff)', border: 'none', cursor: 'pointer' };
 const swatchStyle = { width: 26, height: 26, padding: 0, border: '1px solid var(--border-color)', borderRadius: 4, cursor: 'pointer', background: 'transparent' };
-const canvasStyle = { position: 'relative', width: CANVAS_W, height: CANVAS_H, flexShrink: 0, borderRadius: 8, border: '1px solid var(--border-color)', boxShadow: 'var(--glass-shadow)', overflow: 'hidden' };
+// Canvas reads as a "sheet of paper" floating on the page. Stronger
+// shadow + a neutral semi-transparent border so the boundary stays
+// visible in BOTH themes — in light mode the cream palette.bgHex
+// otherwise blends into the cream page background, and in dark mode
+// var(--border-color) alone is too subtle against the dark surround.
+const canvasStyle = {
+  position: 'relative',
+  width: CANVAS_W,
+  height: CANVAS_H,
+  flexShrink: 0,
+  borderRadius: 10,
+  border: '1px solid rgba(0,0,0,0.18)',
+  boxShadow: '0 14px 48px rgba(0,0,0,0.32), 0 4px 12px rgba(0,0,0,0.18)',
+  overflow: 'hidden',
+};
 const propsPanel = { flex: '1 1 240px', minWidth: 220, padding: 12, borderRadius: 8, background: 'var(--surface-color)', border: '1px solid var(--border-color)' };
 const propLabel = { display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, color: 'var(--text-secondary)' };
 const propInput = { padding: '6px 8px', borderRadius: 6, border: '1px solid var(--border-color)', background: 'var(--bg-color, rgba(255,255,255,0.05))', color: 'var(--text-primary)', fontSize: 13, outline: 'none', width: '100%', boxSizing: 'border-box' };

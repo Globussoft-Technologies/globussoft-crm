@@ -55,6 +55,8 @@
 "use strict";
 
 const PDFDocument = require("pdfkit");
+const fs = require("fs");
+const path = require("path");
 
 const DEFAULT_PALETTE = Object.freeze({
   primaryHex: "#122647",
@@ -63,6 +65,62 @@ const DEFAULT_PALETTE = Object.freeze({
   textHex: "#1A1A1A",
   bgHex: "#FFFFFF",
 });
+
+// Source-canvas dimensions (matches MarketingFlyerStudio's
+// CANVAS_W / CANVAS_H). The editor positions every block absolutely
+// inside this 540×720 space; the PDF renderer scales each block to the
+// page dimensions using independent X/Y factors so the operator's
+// composition lands at the same proportional positions in the PDF.
+const CANVAS_W = 540;
+const CANVAS_H = 720;
+
+// Image fetcher — held in a swappable holder so unit tests can replace
+// the network/disk reads with a fake. Default impl uses axios for
+// remote URLs and fs.promises for local paths under /uploads/.
+let _imageFetcher = null;
+async function _defaultImageFetcher(src) {
+  if (typeof src !== "string" || !src) return null;
+  // data:image/png;base64,... — decode inline.
+  if (src.startsWith("data:")) {
+    const m = src.match(/^data:[^;]+;base64,(.+)$/);
+    return m ? Buffer.from(m[1], "base64") : null;
+  }
+  // Local upload path served by Express static — read from disk.
+  if (src.startsWith("/uploads/")) {
+    const uploadsRoot = path.resolve(__dirname, "..", "uploads");
+    const rel = src.slice("/uploads/".length);
+    const abs = path.resolve(uploadsRoot, rel);
+    // Path-traversal guard — refuse anything outside uploadsRoot.
+    if (!abs.startsWith(uploadsRoot)) return null;
+    try {
+      return await fs.promises.readFile(abs);
+    } catch (_e) {
+      return null;
+    }
+  }
+  // Remote URL — axios fetch. Time-limited so a stuck OpenAI / S3
+  // fetch doesn't hang the entire PDF render.
+  if (/^https?:\/\//.test(src)) {
+    try {
+      const axios = require("axios");
+      const r = await axios.get(src, {
+        responseType: "arraybuffer",
+        timeout: 8000,
+        maxContentLength: 25 * 1024 * 1024,
+      });
+      return Buffer.from(r.data);
+    } catch (_e) {
+      return null;
+    }
+  }
+  return null;
+}
+function _getImageFetcher() {
+  return _imageFetcher || _defaultImageFetcher;
+}
+function _setImageFetcherForTests(fn) {
+  _imageFetcher = fn;
+}
 
 // pdfkit page-size tokens. We accept the same `aspect` taxonomy as
 // lib/flyerExport.js (PDF_PAPER_SIZES = ['a4', 'us_letter']) plus 'a5'
@@ -135,10 +193,6 @@ async function renderFlyerPdf(template, opts = {}) {
       ? safeTemplate.palette
       : {};
   const layout = Array.isArray(safeTemplate.layout) ? safeTemplate.layout : [];
-  const assets =
-    safeTemplate.assets && typeof safeTemplate.assets === "object"
-      ? safeTemplate.assets
-      : {};
 
   const primaryHex = safeHex(palette.primaryHex, DEFAULT_PALETTE.primaryHex);
   const secondaryHex = safeHex(
@@ -149,99 +203,84 @@ async function renderFlyerPdf(template, opts = {}) {
   const textHex = safeHex(palette.textHex, DEFAULT_PALETTE.textHex);
   const bgHex = safeHex(palette.bgHex, DEFAULT_PALETTE.bgHex);
 
-  const doc = new PDFDocument({ size, margin: 36 });
+  const doc = new PDFDocument({ size, margin: 0 });
   const bufferPromise = streamToBuffer(doc);
 
   const pageWidth = doc.page.width;
   const pageHeight = doc.page.height;
-  const inset = 36;
-  const contentWidth = pageWidth - inset * 2;
 
   // Page background.
   doc.rect(0, 0, pageWidth, pageHeight).fill(bgHex);
 
-  // Logo strip: primary-colour band at the top with the sub-brand logo URL
-  // (placeholder — Puppeteer rasteriser slot fetches the actual image).
-  const logoStripTop = inset;
-  const logoStripHeight = 60;
-  doc
-    .rect(inset, logoStripTop, contentWidth, logoStripHeight)
-    .fill(primaryHex);
-  doc
-    .fillColor("#FFFFFF")
-    .fontSize(11)
-    .text(
-      assets.logo ? `LOGO: ${assets.logo}` : "Sub-brand logo",
-      inset + 12,
-      logoStripTop + 22,
-      { width: contentWidth - 24, align: "left" },
-    );
+  // Independent X/Y scale: stretch each block from the editor's
+  // 540×720 canvas to the PDF page dimensions. Mirrors the PNG
+  // renderer's scaling so PDF + PNG show the same composition.
+  const scaleX = pageWidth / CANVAS_W;
+  const scaleY = pageHeight / CANVAS_H;
 
-  // Title block: first 'text' block content, falling back to a generic
-  // placeholder so empty layouts still render readable PDFs.
-  const titleBlock = pickBlock(layout, "text");
-  const titleTop = logoStripTop + logoStripHeight + 16;
-  const titleHeight = 90;
-  doc
-    .fillColor(textHex)
-    .fontSize(28)
-    .text(
-      titleBlock && typeof titleBlock.content === "string"
-        ? titleBlock.content
-        : "Untitled Flyer",
-      inset,
-      titleTop,
-      { width: contentWidth, height: titleHeight, ellipsis: true },
-    );
+  // Pre-fetch every image block's bytes in parallel so the synchronous
+  // pdfkit render loop can drop them into doc.image() without awaiting
+  // mid-stream. A failed fetch leaves the block's buffer as null; the
+  // render loop draws a coloured placeholder rectangle in that slot
+  // instead of crashing the PDF.
+  const fetcher = _getImageFetcher();
+  const imageBuffers = await Promise.all(
+    layout.map(async (b) => {
+      if (!b || b.type !== "image" || typeof b.src !== "string" || !b.src) {
+        return null;
+      }
+      return fetcher(b.src);
+    }),
+  );
 
-  // Hero placeholder: accent-colour fill + the asset URL (rendered as
-  // text, not the actual image — see file header rationale).
-  const heroTop = titleTop + titleHeight + 8;
-  const heroHeight = 280;
-  doc.rect(inset, heroTop, contentWidth, heroHeight).fill(accentHex);
-  doc
-    .fillColor(textHex)
-    .fontSize(10)
-    .text(
-      assets.hero ? `HERO IMAGE: ${assets.hero}` : "Hero image placeholder",
-      inset + 12,
-      heroTop + heroHeight - 20,
-      { width: contentWidth - 24, align: "left" },
-    );
+  for (let i = 0; i < layout.length; i += 1) {
+    const b = layout[i];
+    if (!b || typeof b !== "object") continue;
+    const x = Math.round((Number(b.x) || 0) * scaleX);
+    const y = Math.round((Number(b.y) || 0) * scaleY);
+    const w = Math.round((Number(b.width) || 0) * scaleX);
+    const h = Math.round((Number(b.height) || 0) * scaleY);
+    if (w <= 0 || h <= 0) continue;
 
-  // Price box: first 'price' block content + secondary-colour fill.
-  const priceBlock = pickBlock(layout, "price");
-  const priceTop = heroTop + heroHeight + 16;
-  const priceHeight = 70;
-  doc.rect(inset, priceTop, contentWidth, priceHeight).fill(secondaryHex);
-  doc
-    .fillColor("#FFFFFF")
-    .fontSize(20)
-    .text(
-      priceBlock && typeof priceBlock.content === "string"
-        ? priceBlock.content
-        : "Price on request",
-      inset + 12,
-      priceTop + 22,
-      { width: contentWidth - 24, align: "center" },
-    );
+    if (b.type === "image") {
+      const buf = imageBuffers[i];
+      if (buf) {
+        try {
+          // `cover` would crop; PDF preview should show the WHOLE
+          // operator-uploaded image inside the block (no surprise
+          // cropping when comparing PNG vs PDF). pdfkit's `fit` scales
+          // the image proportionally within the (w, h) box and pads
+          // with the page background.
+          doc.image(buf, x, y, { fit: [w, h], align: "center", valign: "center" });
+        } catch (_e) {
+          // pdfkit throws on unsupported image formats (e.g. WebP) —
+          // fall through to the placeholder rectangle below.
+          doc.rect(x, y, w, h).fill(accentHex);
+        }
+      } else {
+        doc.rect(x, y, w, h).fill(accentHex);
+      }
+      continue;
+    }
 
-  // CTA: first 'cta' block content + primary-colour fill.
-  const ctaBlock = pickBlock(layout, "cta");
-  const ctaTop = priceTop + priceHeight + 16;
-  const ctaHeight = 60;
-  doc.rect(inset, ctaTop, contentWidth, ctaHeight).fill(primaryHex);
-  doc
-    .fillColor("#FFFFFF")
-    .fontSize(18)
-    .text(
-      ctaBlock && typeof ctaBlock.content === "string"
-        ? ctaBlock.content
-        : "Book Now",
-      inset + 12,
-      ctaTop + 18,
-      { width: contentWidth - 24, align: "center" },
-    );
+    // text / price / cta blocks. Font-size scaled by the X factor so
+    // type stays readable at the page dimensions.
+    const content = typeof b.content === "string" ? b.content : "";
+    if (!content) continue;
+    const color = b.type === "price" ? secondaryHex
+      : b.type === "cta" ? primaryHex
+        : (typeof b.color === "string" && /^#[0-9A-Fa-f]{3,8}$/.test(b.color))
+          ? b.color
+          : textHex;
+    const fontSize = Math.max(6, Math.round(((Number(b.fontSize) || 18)) * scaleX));
+    doc.fillColor(color).fontSize(fontSize);
+    doc.text(content, x, y, {
+      width: w,
+      height: h,
+      ellipsis: true,
+      lineBreak: true,
+    });
+  }
 
   // Footer: provenance line so the recipient can verify the rendered
   // PDF against a known template hash (FR-3.4.5 cache audit). We render
@@ -254,12 +293,12 @@ async function renderFlyerPdf(template, opts = {}) {
   const generatedIso = new Date().toISOString();
   doc
     .fillColor(textHex)
-    .fontSize(8)
+    .fontSize(7)
     .text(
       `Generated ${generatedIso} · template ${hashPreview}`,
-      inset,
-      pageHeight - inset - 12,
-      { width: contentWidth, align: "right" },
+      8,
+      pageHeight - 12,
+      { width: pageWidth - 16, align: "right" },
     );
 
   doc.end();
@@ -272,4 +311,5 @@ module.exports = {
   safeHex,
   DEFAULT_PALETTE,
   PAPER_SIZES,
+  _setImageFetcherForTests,
 };

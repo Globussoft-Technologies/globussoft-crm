@@ -54,7 +54,7 @@
  */
 import { useEffect, useState, useContext, useMemo, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { FileImage, Plus, Pencil, Trash2, Copy, CopyPlus, Search, Download, ChevronDown } from "lucide-react";
+import { FileImage, Plus, Pencil, Trash2, Copy, CopyPlus, Search, Download, ChevronDown, Eye, X } from "lucide-react";
 import { fetchApi, getAuthToken, getActiveTenantId } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import {
@@ -138,6 +138,8 @@ export default function FlyerTemplates() {
   // a duplicate on row A doesn't disable the button on row B (and a
   // concurrent double-click on row A is suppressed by the disabled state).
   const [duplicatingId, setDuplicatingId] = useState(null);
+  // Currently-previewing template (drives FlyerPreviewModal). null = no modal.
+  const [previewTemplate, setPreviewTemplate] = useState(null);
 
   const load = () => {
     setLoading(true);
@@ -497,47 +499,33 @@ export default function FlyerTemplates() {
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 260px), 1fr))",
-            gap: 12,
+            // auto-fill (not auto-fit) so a single card stays at its
+            // ~280px width instead of stretching to fill the row — gives
+            // the page a proper "card library" feel instead of one huge
+            // horizontal panel.
+            gridTemplateColumns: "repeat(auto-fill, minmax(260px, 280px))",
+            gap: 16,
+            justifyContent: "start",
           }}
           data-testid="flyer-template-grid"
         >
           {filteredTemplates.map((t) => {
             const palette = t.palette && typeof t.palette === "object" ? t.palette : PALETTE_FALLBACK;
+            const layout = Array.isArray(t.layout) ? t.layout : [];
             return (
               <article
                 key={t.id}
                 className="glass"
                 data-testid={`flyer-template-card-${t.id}`}
                 style={{
-                  padding: 14,
+                  padding: 12,
                   display: "flex",
                   flexDirection: "column",
                   gap: 10,
                   minWidth: 0,
                 }}
               >
-                {/* Thumbnail placeholder — uses palette.bgHex + accent for a tiny preview chip. */}
-                <div
-                  aria-hidden
-                  data-testid={`flyer-template-thumb-${t.id}`}
-                  style={{
-                    height: 80,
-                    borderRadius: 6,
-                    background: palette.bgHex || PALETTE_FALLBACK.bgHex,
-                    border: `2px solid ${palette.primaryHex || PALETTE_FALLBACK.primaryHex}`,
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    color: palette.textHex || PALETTE_FALLBACK.textHex,
-                    fontSize: 12,
-                    fontWeight: 600,
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                  }}
-                >
-                  <FileImage size={20} aria-hidden style={{ opacity: 0.6 }} />
-                </div>
+                <FlyerThumbnail templateId={t.id} palette={palette} layout={layout} />
 
                 <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", minWidth: 0 }}>
                   <strong
@@ -579,8 +567,8 @@ export default function FlyerTemplates() {
                         data-testid={`swatch-${t.id}-${key}`}
                         title={`${key}: ${hex}`}
                         style={{
-                          width: 18,
-                          height: 18,
+                          width: 16,
+                          height: 16,
                           borderRadius: 4,
                           background: hex,
                           border: "1px solid rgba(255,255,255,0.15)",
@@ -594,12 +582,22 @@ export default function FlyerTemplates() {
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: "auto" }}>
                   <button
                     type="button"
+                    onClick={() => setPreviewTemplate(t)}
+                    style={smallSecondaryBtn}
+                    title={`Preview ${t.name}`}
+                    aria-label={`Preview ${t.name}`}
+                    data-testid={`flyer-preview-${t.id}`}
+                  >
+                    <Eye size={12} /> Preview
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => handleUseAsStartingPoint(t)}
                     style={smallPrimaryBtn}
                     title={`Use ${t.name} as starting point`}
                     aria-label={`Use ${t.name} as starting point`}
                   >
-                    <Copy size={12} /> Use as starting point
+                    <Copy size={12} /> Use
                   </button>
                   <DownloadDropdown template={t} onDownload={handleDownload} />
                   {canWrite && (
@@ -640,6 +638,250 @@ export default function FlyerTemplates() {
           })}
         </div>
       )}
+
+      {previewTemplate && (
+        <FlyerPreviewModal
+          template={previewTemplate}
+          onClose={() => setPreviewTemplate(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+// FlyerThumbnail — renders a scaled-down preview of the template's
+// composed canvas. The MarketingFlyerStudio canvas is 540×720 (3:4
+// portrait); the thumbnail keeps that exact aspect ratio (CSS
+// `aspectRatio: '540 / 720'`) so the scaling is UNIFORM in both axes
+// — images and text land at exactly the proportions the operator
+// composed, with no horizontal stretching. The previous independent
+// X/Y scaling stretched a square temple photo into a thin horizontal
+// strip; uniform scaling fixes that.
+//
+// Falls back to a centered FileImage icon when the layout is empty
+// (legacy rows pre-canvas-editor) so the card still has visual weight.
+//
+// Used by:
+//   - FlyerTemplates card grid (small, ~280×373 thumbnail)
+//   - FlyerPreviewModal (large, fills available modal area)
+//
+// `size` prop ('card' | 'modal') tunes only the maxWidth so the same
+// component handles both surfaces.
+const CANVAS_W_PREVIEW = 540;
+const CANVAS_H_PREVIEW = 720;
+
+function FlyerThumbnail({ templateId, palette, layout, size = "card" }) {
+  const containerRef = useRef(null);
+  const [containerWidth, setContainerWidth] = useState(size === "modal" ? 540 : 256);
+
+  // Measure the rendered width so the scale stays accurate as the card
+  // resizes. ResizeObserver fires on every parent-width change.
+  useEffect(() => {
+    if (!containerRef.current) return;
+    const el = containerRef.current;
+    setContainerWidth(el.clientWidth);
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const w = Math.max(0, Math.round(entry.contentRect.width));
+        if (w > 0) setContainerWidth(w);
+      }
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  // UNIFORM scale (single factor for both axes). The container itself
+  // is locked to the canvas aspect ratio via `aspectRatio` CSS, so
+  // height == width × 720/540 — meaning scaleX == scaleY exactly.
+  const scale = containerWidth / CANVAS_W_PREVIEW;
+  const hasBlocks = Array.isArray(layout) && layout.length > 0;
+
+  return (
+    <div
+      ref={containerRef}
+      aria-hidden={size === "card" ? true : undefined}
+      data-testid={`flyer-template-thumb-${templateId}`}
+      style={{
+        position: "relative",
+        width: "100%",
+        aspectRatio: `${CANVAS_W_PREVIEW} / ${CANVAS_H_PREVIEW}`,
+        borderRadius: 6,
+        background: palette.bgHex || PALETTE_FALLBACK.bgHex,
+        border: `1px solid ${palette.primaryHex || PALETTE_FALLBACK.primaryHex}`,
+        overflow: "hidden",
+      }}
+    >
+      {hasBlocks ? (
+        layout.map((b, i) => {
+          if (!b || typeof b !== "object") return null;
+          const left = Math.round((Number(b.x) || 0) * scale);
+          const top = Math.round((Number(b.y) || 0) * scale);
+          const w = Math.round((Number(b.width) || 0) * scale);
+          const h = Math.round((Number(b.height) || 0) * scale);
+          const base = {
+            position: "absolute",
+            left,
+            top,
+            width: w,
+            height: h,
+            overflow: "hidden",
+          };
+          if (b.type === "image" && typeof b.src === "string" && b.src) {
+            return (
+              <img
+                key={i}
+                src={b.src}
+                alt=""
+                style={{ ...base, objectFit: "contain" }}
+                // Broken / expired DALL-E URLs render an empty box; hide
+                // the broken-image icon by clearing on error.
+                onError={(e) => { e.currentTarget.style.display = "none"; }}
+              />
+            );
+          }
+          if (b.type === "text" || b.type === "price" || b.type === "cta") {
+            const content = typeof b.content === "string" ? b.content : "";
+            if (!content) return null;
+            const color = b.type === "price" ? (palette.secondaryHex || PALETTE_FALLBACK.secondaryHex)
+              : b.type === "cta" ? (palette.accentHex || PALETTE_FALLBACK.accentHex)
+                : (typeof b.color === "string" ? b.color : (palette.textHex || PALETTE_FALLBACK.textHex));
+            // Scale font size; clamp to a readable minimum. The 'card'
+            // size needs the floor to keep tiny text visible; the
+            // 'modal' size produces real-readable text at native scale.
+            const fs = Math.max(size === "modal" ? 10 : 6, Math.round(((Number(b.fontSize) || 18)) * scale));
+            return (
+              <div
+                key={i}
+                style={{
+                  ...base,
+                  color,
+                  fontSize: fs,
+                  fontWeight: 600,
+                  lineHeight: 1.2,
+                  display: "flex",
+                  alignItems: "center",
+                }}
+              >
+                {content}
+              </div>
+            );
+          }
+          return null;
+        })
+      ) : (
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            color: palette.textHex || PALETTE_FALLBACK.textHex,
+            opacity: 0.4,
+          }}
+        >
+          <FileImage size={size === "modal" ? 48 : 24} aria-hidden />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// FlyerPreviewModal — large, in-browser preview of the template's
+// composed canvas. Renders the SAME FlyerThumbnail component at a
+// bigger width so the operator can see what's actually on the flyer
+// before downloading. No backend round-trip — every block is already
+// in the loaded template payload (palette + layout + assets).
+//
+// Closes on:
+//   - Cancel / X button
+//   - Escape key
+//   - Click on the backdrop (outside the dialog)
+function FlyerPreviewModal({ template, onClose }) {
+  const palette = template.palette && typeof template.palette === "object" ? template.palette : PALETTE_FALLBACK;
+  const layout = Array.isArray(template.layout) ? template.layout : [];
+
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={`Preview of ${template.name || "flyer"}`}
+      data-testid="flyer-preview-modal"
+      onClick={onClose}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.75)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 1000,
+        padding: 24,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: "var(--surface-color, #1f2937)",
+          border: "1px solid var(--border-color)",
+          borderRadius: 10,
+          padding: 16,
+          maxWidth: "min(95vw, 600px)",
+          width: "100%",
+          display: "flex",
+          flexDirection: "column",
+          gap: 12,
+          maxHeight: "95vh",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <strong style={{ flex: 1, fontSize: 16 }}>
+            {template.name || "Untitled"}
+            {template.subBrand && (
+              <span style={{ fontWeight: 400, fontSize: 12, opacity: 0.7, marginLeft: 8 }}>
+                {SUB_BRAND_LABEL[template.subBrand] || template.subBrand}
+              </span>
+            )}
+          </strong>
+          <button
+            type="button"
+            onClick={onClose}
+            style={{
+              padding: 6,
+              borderRadius: 4,
+              background: "transparent",
+              color: "var(--text-primary)",
+              border: "1px solid var(--border-color)",
+              cursor: "pointer",
+              display: "inline-flex",
+            }}
+            aria-label="Close preview"
+            data-testid="flyer-preview-close"
+          >
+            <X size={16} />
+          </button>
+        </div>
+        <div style={{ overflow: "auto", display: "flex", justifyContent: "center" }}>
+          <div style={{ width: "100%", maxWidth: 540 }}>
+            <FlyerThumbnail
+              templateId={template.id}
+              palette={palette}
+              layout={layout}
+              size="modal"
+            />
+          </div>
+        </div>
+        <p style={{ margin: 0, fontSize: 11, color: "var(--text-secondary)" }}>
+          This is the live composer preview — download PDF or PNG below for the print-quality version.
+        </p>
+      </div>
     </div>
   );
 }
@@ -828,6 +1070,19 @@ const smallPrimaryBtn = {
   ...primaryBtn,
   padding: "6px 10px",
   fontSize: 12,
+};
+const smallSecondaryBtn = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 4,
+  padding: "6px 10px",
+  borderRadius: 6,
+  fontWeight: 600,
+  fontSize: 12,
+  background: "var(--surface-color)",
+  color: "var(--text-primary)",
+  border: "1px solid var(--border-color)",
+  cursor: "pointer",
 };
 const secondaryBtn = {
   display: "inline-flex",

@@ -2551,11 +2551,20 @@ router.post("/itineraries/:id/accept", verifyToken, requireTravelTenant, async (
   }
 });
 
-// FR-3.4(d) response shape: { summary, days: [{ dayNumber, items: [...] }] }.
-// Deterministic (no Date.now / Math.random) so the stub is test-pinnable
-// and demo screenshots stay stable. Each item uses a valid ItineraryItem
-// itemType (flight|hotel|activity) so the operator can materialise an
-// accepted day straight through POST /itineraries/:id/items unchanged.
+// POST /api/travel/itineraries/suggest
+//
+// PRD_TRAVEL_ITINERARY_UPGRADES FR-3.4 + FR-3.6 — LLM "Suggest itinerary".
+// Returns a structured day-by-day draft for operator review (no DB write
+// per FR-3.4(e)). The operator materialises it via POST
+// /itineraries/from-suggestion when ready.
+//
+// Accepts BOTH input shapes for back-compat:
+//   - Playwright gate spec / S46 contract:  { destination, days,         budgetPerPax?, subBrand? }
+//   - Frontend Itineraries.jsx (S63-S90):   { destination, durationDays, budgetTier,    themeJson? }
+//
+// Returns BOTH envelopes so both consumer contracts keep passing:
+//   - `suggestion`     — { summary, days:[{dayNumber, items:[{itemType, description, estimatedCost?, ...}]}] }
+//   - `suggestionJson` — { daySplit:[{dayNumber, theme, items:[...]}], poiSuggestions, thematicNotes, summary }
 function buildSuggestionSkeleton({ destination, days, budgetPerPax, summary }) {
   const perDayHotel =
     budgetPerPax != null && days > 0
@@ -2577,50 +2586,53 @@ function buildSuggestionSkeleton({ destination, days, budgetPerPax, summary }) {
   return { summary, days: dayList };
 }
 
-// POST /api/travel/itineraries/suggest
-//
-// PRD_TRAVEL_ITINERARY_UPGRADES FR-3.4 — LLM "Suggest itinerary".
-// Operator supplies destination + days + (optional) budget-per-pax +
-// traveller profile + sub-brand; returns a STRUCTURED day-by-day draft
-// for review. Per FR-3.4(e) this is SUGGESTED only — NOTHING is written
-// to the DB. The operator materialises accepted days via the existing
-// POST /itineraries + /:id/items endpoints.
-//
-// itinerary-suggest task class → gemini-flash provider slot (PRD §9.1;
-// PRD names gemini-2.5-flash). Until Q11 keys land, llmRouter returns a
-// [STUB-ITINERARY-SUGGEST] summary and we assemble a deterministic
-// day-by-day skeleton here (FR-3.4(g) — mirrors /draft/regen's stub).
-//
-// No diagnostic-first guard: this is an internal operator drafting tool,
-// not a customer-facing quote artifact (that guard lives on itinerary
-// CREATE). Sub-brand, when supplied, is validated + access-checked.
-// Travel-tenant only (requireTravelTenant → 403 WRONG_VERTICAL for
-// generic/wellness).
+const BUDGET_TIER_PER_DAY = { budget: 3000, mid: 8000, luxury: 20000 };
+
 router.post(
   "/itineraries/suggest",
   verifyToken,
   requireTravelTenant,
   async (req, res) => {
     try {
-      const { destination, days, budgetPerPax, travellerProfile, subBrand } = req.body || {};
+      const {
+        destination,
+        days,
+        durationDays,
+        budgetPerPax,
+        budgetTier,
+        themeJson,
+        travellerProfile,
+        subBrand,
+      } = req.body || {};
 
       const dest = typeof destination === "string" ? destination.trim() : "";
       if (!dest) {
         return res.status(400).json({ error: "destination is required", code: "MISSING_DESTINATION" });
       }
-      const numDays = parseInt(days, 10);
+
+      const rawDays = days != null ? days : durationDays;
+      const numDays = parseInt(rawDays, 10);
       if (!Number.isInteger(numDays) || numDays < 1 || numDays > 30) {
         return res.status(400).json({ error: "days must be an integer between 1 and 30", code: "INVALID_DAYS" });
       }
 
       let resolvedSubBrand = null;
       if (subBrand != null && String(subBrand).trim() !== "") {
-        assertValidSubBrand(String(subBrand).trim()); // throws 400 INVALID_SUB_BRAND (caught below)
+        assertValidSubBrand(String(subBrand).trim()); // throws 400 INVALID_SUB_BRAND
         resolvedSubBrand = String(subBrand).trim();
         const allowed = await getSubBrandAccessSet(req.user.userId);
         if (!canAccessSubBrand(allowed, resolvedSubBrand)) {
           return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
         }
+      }
+
+      let tier = null;
+      if (budgetTier != null && String(budgetTier).trim() !== "") {
+        const t = String(budgetTier).trim().toLowerCase();
+        if (!["budget", "mid", "luxury"].includes(t)) {
+          return res.status(400).json({ error: "budgetTier must be one of budget|mid|luxury", code: "INVALID_BUDGET_TIER" });
+        }
+        tier = t;
       }
 
       let budgetNum = null;
@@ -2629,10 +2641,20 @@ router.post(
         if (!Number.isFinite(budgetNum) || budgetNum < 0) {
           return res.status(400).json({ error: "budgetPerPax must be a non-negative number", code: "INVALID_BUDGET" });
         }
+      } else if (tier) {
+        budgetNum = BUDGET_TIER_PER_DAY[tier] * numDays;
       }
+
+      if (themeJson != null) {
+        if (typeof themeJson !== "object" || Array.isArray(themeJson)) {
+          return res.status(400).json({ error: "themeJson must be an object", code: "INVALID_THEME_JSON" });
+        }
+      }
+
       const profile = typeof travellerProfile === "string" ? travellerProfile.slice(0, 2000) : null;
 
       let result;
+      let realModeError = null;
       try {
         result = await llmRouter.routeRequest({
           task: "itinerary-suggest",
@@ -2640,6 +2662,8 @@ router.post(
             destination: dest,
             days: numDays,
             budgetPerPax: budgetNum,
+            budgetTier: tier,
+            themeJson: themeJson || null,
             travellerProfile: profile,
             subBrand: resolvedSubBrand,
             __userId: req.user.userId,
@@ -2656,22 +2680,49 @@ router.post(
             capCents: e.capCents,
           });
         }
-        throw e;
+        // Real-mode failure → fall back to stub envelope + realModeError
+        // so the frontend can surface a friendly toast (Itineraries.jsx:282).
+        console.error("[travel-itin] suggest real-mode error, falling back to stub:", e.message);
+        realModeError = e.message || "LLM call failed";
+        result = { text: null, model: "gemini-flash", stub: true };
       }
 
       const suggestion = buildSuggestionSkeleton({
         destination: dest,
         days: numDays,
         budgetPerPax: budgetNum,
-        summary: result.text,
+        summary: result.text || `${numDays}-day ${tier ? tier + " " : ""}outline for ${dest}`,
       });
+
+      const suggestionJson = {
+        summary: suggestion.summary,
+        daySplit: suggestion.days.map((d) => ({
+          dayNumber: d.dayNumber,
+          theme: `Day ${d.dayNumber} — ${dest}${tier ? ` (${tier} tier)` : ""}`,
+          items: d.items.map((it) => ({
+            itemType: it.itemType,
+            description: it.description,
+            suggestedSupplierName: it.suggestedSupplierName || null,
+            estimatedCost: it.estimatedCost,
+            latitude: it.latitude || null,
+            longitude: it.longitude || null,
+          })),
+        })),
+        poiSuggestions: [],
+        thematicNotes: themeJson
+          ? `Theme applied: ${Object.keys(themeJson).join(", ")}`
+          : `Synthetic ${numDays}-day outline for ${dest}.`,
+      };
 
       return res.status(200).json({
         suggestion,
+        suggestionJson,
         subBrand: resolvedSubBrand,
+        source: result.stub ? "stub" : "real",
         model: result.model,
         stub: Boolean(result.stub),
         generatedAt: new Date().toISOString(),
+        ...(realModeError ? { realModeError } : {}),
       });
     } catch (e) {
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });

@@ -364,16 +364,33 @@ describe('generateFlyerImage — REAL mode swap', () => {
     logSpy.mockRestore();
   });
 
-  test('callImageProvider in stub-mode-as-shipped throws (real-mode wire-in pending Q-MF-2)', async () => {
+  test('callImageProvider throws when OPENAI_API_KEY is absent (real-mode wired but no key)', async () => {
     const c = loadClient();
-    process.env.OPENAI_API_KEY = 'sk-fake';
+    // S72 real-mode wire-in landed — callImageProvider now invokes the
+    // DALL-E HTTP API when the key is present. Tests that exercise the
+    // real-mode SUCCESS path mock callImageProvider directly (see test
+    // #5 above) to avoid hitting the network. Here we only assert the
+    // no-key guard.
+    delete process.env.OPENAI_API_KEY;
     await expect(
       c.callImageProvider({
         destination: 'X',
         provider: 'dalle',
         model: 'dall-e-3',
       }),
-    ).rejects.toThrow(/real-mode not yet wired/);
+    ).rejects.toThrow(/OPENAI_API_KEY not set/);
+  });
+
+  test('callImageProvider throws for non-dalle provider (Stability not yet wired)', async () => {
+    const c = loadClient();
+    process.env.OPENAI_API_KEY = 'sk-fake';
+    await expect(
+      c.callImageProvider({
+        destination: 'X',
+        provider: 'stability',
+        model: 'stability-xl',
+      }),
+    ).rejects.toThrow(/provider 'stability' not implemented/);
   });
 });
 

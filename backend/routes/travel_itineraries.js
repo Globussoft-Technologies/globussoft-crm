@@ -1917,7 +1917,12 @@ async function syncItineraryAfterItemChange(itineraryId) {
 router.post("/itineraries/:id/items", verifyToken, requireTravelTenant, async (req, res) => {
   try {
     const itin = await loadItineraryWithGuard(req);
-    const { itemType, description, position, detailsJson, supplierId, unitCost, markup, gstAmount, unit, quantity, direction } = req.body || {};
+    // S118 — accept latitude + longitude + dayNumber (mirrors PATCH handler at
+    // ~line 1985 + bulk-import path at ~line 4575). Pre-S118 the destructure
+    // dropped lat/lng silently, so S82's frontend geocode-on-create flow
+    // (Nominatim → lat/lng in POST body) was a no-op until a follow-up PATCH.
+    // All three are additive nullable columns from S8; "" / null clears them.
+    const { itemType, description, position, detailsJson, supplierId, unitCost, markup, gstAmount, unit, quantity, direction, dayNumber, latitude, longitude } = req.body || {};
     if (!itemType || !description) {
       return res.status(400).json({ error: "itemType + description required", code: "ITEM_MISSING_FIELDS" });
     }
@@ -1927,6 +1932,33 @@ router.post("/itineraries/:id/items", verifyToken, requireTravelTenant, async (r
     }
     if (direction != null && direction !== "" && !VALID_ITEM_DIRECTIONS.includes(String(direction))) {
       return res.status(400).json({ error: `direction must be one of: ${VALID_ITEM_DIRECTIONS.join(", ")}`, code: "INVALID_DIRECTION" });
+    }
+
+    // S118 — dayNumber / latitude / longitude validation mirrors the PATCH
+    // handler exactly. `undefined` / `null` / "" → persist as null.
+    let dayNumberValue = null;
+    if (dayNumber !== undefined && dayNumber !== null && dayNumber !== "") {
+      const dn = parseInt(dayNumber, 10);
+      if (!Number.isInteger(dn) || dn < 1 || dn > 365) {
+        return res.status(400).json({ error: "dayNumber must be an integer between 1 and 365", code: "INVALID_DAY_NUMBER" });
+      }
+      dayNumberValue = dn;
+    }
+    let latitudeValue = null;
+    if (latitude !== undefined && latitude !== null && latitude !== "") {
+      const lat = Number(latitude);
+      if (!Number.isFinite(lat) || lat < -90 || lat > 90) {
+        return res.status(400).json({ error: "latitude must be between -90 and 90", code: "INVALID_LATITUDE" });
+      }
+      latitudeValue = lat;
+    }
+    let longitudeValue = null;
+    if (longitude !== undefined && longitude !== null && longitude !== "") {
+      const lng = Number(longitude);
+      if (!Number.isFinite(lng) || lng < -180 || lng > 180) {
+        return res.status(400).json({ error: "longitude must be between -180 and 180", code: "INVALID_LONGITUDE" });
+      }
+      longitudeValue = lng;
     }
 
     // Auto-position if not provided — append to the end.
@@ -1955,6 +1987,11 @@ router.post("/itineraries/:id/items", verifyToken, requireTravelTenant, async (r
         unit: unit ? String(unit) : "per_person",
         quantity: Number.isFinite(qty) && qty >= 0 ? qty : 1,
         direction: direction ? String(direction) : null,
+        // S118 — persist S8 columns (additive nullable; null preserves legacy
+        // POST shape so pre-S118 clients keep working).
+        dayNumber: dayNumberValue,
+        latitude: latitudeValue,
+        longitude: longitudeValue,
         // Total is computed, never trusted from the client.
         totalPrice: computeItemLineTotal({ unitCost, quantity, markup, gstAmount }),
       },

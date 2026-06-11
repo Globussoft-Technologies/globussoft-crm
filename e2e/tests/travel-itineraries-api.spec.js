@@ -519,6 +519,52 @@ test.describe("Travel itineraries API — items", () => {
     expect(res.status()).toBe(404);
     expect((await res.json()).code).toBe("ITEM_NOT_FOUND");
   });
+
+  // S118 — POST /items must accept latitude + longitude (was silently
+  // dropping them pre-S118; S82's frontend geocode-on-create flow then
+  // had to round-trip via PATCH to actually persist coords). Mirrors
+  // the PATCH validation (lat ∈ [-90, 90], lng ∈ [-180, 180]).
+  test("POST /:id/items with lat/lng → coords round-trip via GET (S118)", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || created.itineraryIds.length === 0) test.skip(true, "no itineraries");
+    const id = created.itineraryIds[0];
+    const res = await post(request, token, `/api/travel/itineraries/${id}/items`, {
+      itemType: "activity",
+      description: `${RUN_TAG} geo activity`,
+      latitude: 15.2993,
+      longitude: 74.124,
+    });
+    expect(res.status()).toBe(201);
+    const body = await res.json();
+    expect(Number(body.latitude)).toBeCloseTo(15.2993, 4);
+    expect(Number(body.longitude)).toBeCloseTo(74.124, 3);
+    created.itemIds.push(body.id);
+    // Round-trip: GET the itinerary back and confirm coords persisted.
+    const after = await get(request, token, `/api/travel/itineraries/${id}`);
+    const items = (await after.json()).items || [];
+    const persisted = items.find((it) => it.id === body.id);
+    expect(persisted).toBeTruthy();
+    expect(Number(persisted.latitude)).toBeCloseTo(15.2993, 4);
+    expect(Number(persisted.longitude)).toBeCloseTo(74.124, 3);
+  });
+
+  test("POST /:id/items with lat=91 → 400 INVALID_LATITUDE (S118)", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || created.itineraryIds.length === 0) test.skip(true, "no itineraries");
+    const res = await post(
+      request,
+      token,
+      `/api/travel/itineraries/${created.itineraryIds[0]}/items`,
+      {
+        itemType: "activity",
+        description: `${RUN_TAG} bad lat`,
+        latitude: 91,
+        longitude: 0,
+      },
+    );
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe("INVALID_LATITUDE");
+  });
 });
 
 // ─── Version chain + accept/reject + share (PRD §4.3 / §6.1) ────────

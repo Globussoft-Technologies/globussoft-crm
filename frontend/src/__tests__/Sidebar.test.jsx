@@ -803,8 +803,15 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(screen.getByText('Flyer Templates')).toBeTruthy();
       // T26 (PRD_TMC_DIAGNOSTIC_SALES_ROUTING_ENGINE §10) — TMC Catalogue
       // admin entry is ADMIN+MANAGER visible. Page CRUD is verifyRole
-      // ADMIN+MANAGER server-side; nav mirrors that posture.
-      expect(screen.getByText('TMC Catalogue')).toBeTruthy();
+      // ADMIN+MANAGER server-side; nav mirrors that posture. PR #1142 added
+      // a second TMC Catalogue link adjacent to TMC Trips (Sidebar.jsx L1498)
+      // alongside the original adjacent to Curriculum Mappings (L1645) —
+      // both are `isManager && inBrand("tmc")` gated, so under MANAGER with
+      // no subBrandAccess filter (inBrand returns true) both render. Use
+      // getAllByText + length>=1 instead of getByText to tolerate either
+      // single- or duplicate-render shape without re-pinning the count.
+      const tmcCatalogueMatches = screen.getAllByText('TMC Catalogue');
+      expect(tmcCatalogueMatches.length).toBeGreaterThanOrEqual(1);
       // Travel Stall section label is `isManager` gated. The string also
       // appears as an <option> in the sub-brand switcher — filter to the
       // section-label DIV node (not the OPTION).

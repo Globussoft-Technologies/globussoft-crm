@@ -22,15 +22,26 @@
  * prompt's "Stub fallback" clause + PRD FR-3.4.2's Puppeteer dep
  * (cred-blocked / infra-blocked):
  *
- *   - If `require('puppeteer')` resolves, we launch headless Chrome,
- *     render an HTML template at the requested aspect, screenshot to PNG,
- *     and return a real PNG Buffer.
- *   - If `require('puppeteer')` throws (MODULE_NOT_FOUND), we return a
- *     deterministic minimal PNG Buffer (an 8-byte PNG signature + a single
+ *   - If `require('puppeteer')` resolves AND `FLYER_RENDER_FORCE_STUB`
+ *     is not set, we launch headless Chrome, render an HTML template at
+ *     the requested aspect, screenshot to PNG, and return a real PNG
+ *     Buffer. The response header reads
+ *     `X-Flyer-Render-Engine: puppeteer-headless`.
+ *   - If `require('puppeteer')` throws (MODULE_NOT_FOUND) — e.g. a CI
+ *     box where the Chromium download was skipped and the package never
+ *     resolved — OR `FLYER_RENDER_FORCE_STUB=1` is set (test stability /
+ *     CI without headless-Chrome libs), we return a deterministic
+ *     minimal PNG Buffer (an 8-byte PNG signature + a single
  *     IHDR/IDAT/IEND chunk set encoding a 1×1 transparent placeholder
- *     pixel — small but VALID PNG). Callers can distinguish stub vs real
- *     by reading the `X-Flyer-Render-Engine` response header set by the
- *     route layer (`stub-1x1` vs `puppeteer-1.x`).
+ *     pixel — small but VALID PNG). The header reads
+ *     `X-Flyer-Render-Engine: stub-1x1`.
+ *
+ * S74 (this slice) landed `puppeteer@^25.1.0` in `backend/package.json`,
+ * so the default branch on a non-CI dev box is the real Puppeteer render.
+ * S17 (the engine surface) shipped with the stub branch ONLY; S74 added
+ * the install + real-render wiring with zero caller-side changes (route
+ * response shape — Content-Type + Content-Disposition + bytes — is
+ * identical between modes).
  *
  * This degraded behaviour mirrors slice 10/11's STUB pattern in the
  * existing `routes/travel_flyer_templates.js` (`/:id/export` returns a 202
@@ -41,11 +52,6 @@
  * preview that shows a 1×1 placeholder is a useful operator signal that
  * "PNG renderer is not yet wired".
  *
- * Once `puppeteer` lands in package.json (the deferred infra slice), this
- * module's PNG branch starts returning real rendered images with zero
- * caller-side changes — the route's response shape (Content-Type +
- * Content-Disposition + bytes) is identical.
- *
  * === Module API ===
  *
  *   renderFlyer({ template, data, format }) → Promise<{
@@ -54,7 +60,7 @@
  *     extension: 'pdf' | 'png',
  *     widthPx: number | null,   // PNG only (PDF dimensions in pt, exposed via aspect)
  *     heightPx: number | null,  // PNG only
- *     engine: 'pdfkit' | 'puppeteer' | 'stub-1x1',  // for X-Flyer-Render-Engine
+ *     engine: 'pdfkit' | 'puppeteer-headless' | 'stub-1x1',  // for X-Flyer-Render-Engine
  *   }>
  *
  *   - `template`  : { palette?, layout?, assets? } — parsed JSON columns
@@ -80,9 +86,9 @@
  *   |-------------------|--------------------|----------------|-----------|
  *   | pdf-a4            | 595 × 842 pt       | application/pdf| pdfkit    |
  *   | pdf-a5            | 420 × 595 pt       | application/pdf| pdfkit    |
- *   | png-square        | 1200 × 1200        | image/png      | puppeteer |
- *   | png-portrait-ig   | 1080 × 1920        | image/png      | puppeteer |
- *   | png-landscape-fb  | 1920 × 1080        | image/png      | puppeteer |
+ *   | png-square        | 1200 × 1200        | image/png      | puppeteer-headless |
+ *   | png-portrait-ig   | 1080 × 1920        | image/png      | puppeteer-headless |
+ *   | png-landscape-fb  | 1920 × 1080        | image/png      | puppeteer-headless |
  *
  * === Testability ===
  *
@@ -368,22 +374,50 @@ function buildHtmlShellForPng(template, widthPx, heightPx) {
 }
 
 /**
- * Render the PNG path. When Puppeteer is installed, launches headless
- * Chrome + screenshots a viewport-sized page. When Puppeteer is absent,
- * returns the 1×1 stub PNG. See module header for the contract on the
- * fallback.
+ * Returns the stub PNG response shape. Pulled out so both the
+ * MODULE_NOT_FOUND fallback AND the FLYER_RENDER_FORCE_STUB=1 override
+ * share a single source of truth.
+ */
+function buildStubPngResponse(formatMeta) {
+  return {
+    buffer: STUB_PNG_BUFFER,
+    mimeType: formatMeta.mimeType,
+    extension: formatMeta.extension,
+    widthPx: formatMeta.widthPx,
+    heightPx: formatMeta.heightPx,
+    engine: "stub-1x1",
+  };
+}
+
+/**
+ * Render the PNG path. When Puppeteer is installed AND the
+ * `FLYER_RENDER_FORCE_STUB` env var is not truthy, launches headless
+ * Chrome + screenshots a viewport-sized page (real render). Otherwise
+ * returns the 1×1 stub PNG.
+ *
+ * The env-var override exists for CI: the `unit_tests` gate's Linux
+ * runners don't ship the libnss3 / libatk1.0-0 / libcups2 libs Puppeteer
+ * needs to launch headless-Chrome, so setting `FLYER_RENDER_FORCE_STUB=1`
+ * in deploy.yml's unit_tests env block forces the stub fast-path and
+ * keeps the per-push gate green. Production + dev boxes can install the
+ * libs (or use puppeteer's bundled chromium download) and run the real
+ * render branch.
  */
 async function renderPngBranch({ template, formatMeta }) {
-  const resolution = tryRequirePuppeteer();
+  // Honour the force-stub override BEFORE attempting to require puppeteer
+  // — this avoids spinning up a Chrome process on test runs that explicitly
+  // opt-out of the real render (deploy.yml's unit_tests + most vitest cases).
+  if (process.env.FLYER_RENDER_FORCE_STUB === "1") {
+    return buildStubPngResponse(formatMeta);
+  }
+
+  // Go through module.exports indirection so vitest can override the
+  // resolution path without monkey-patching puppeteer's read-only ESM
+  // exports. CJS self-mocking seam pattern — same shape as the cap-consumer
+  // service clients (adsGptClient / ratehawkClient / callifiedClient).
+  const resolution = module.exports._tryRequirePuppeteer();
   if (!resolution.ok) {
-    return {
-      buffer: STUB_PNG_BUFFER,
-      mimeType: formatMeta.mimeType,
-      extension: formatMeta.extension,
-      widthPx: formatMeta.widthPx,
-      heightPx: formatMeta.heightPx,
-      engine: "stub-1x1",
-    };
+    return buildStubPngResponse(formatMeta);
   }
 
   const { puppeteer } = resolution;
@@ -411,7 +445,7 @@ async function renderPngBranch({ template, formatMeta }) {
       extension: formatMeta.extension,
       widthPx: formatMeta.widthPx,
       heightPx: formatMeta.heightPx,
-      engine: "puppeteer",
+      engine: "puppeteer-headless",
     };
   } finally {
     if (browser) {

@@ -21,6 +21,7 @@
 const cron = require("node-cron");
 const prisma = require("../lib/prisma");
 const { resolveForSubBrand } = require("../lib/subBrandConfig");
+const watiClient = require("../services/watiClient");
 
 const STALL_WINDOW_MIN = 30;
 const STALL_LOOKBACK_HOURS = 24; // don't escalate diagnostics older than 24h — the alert is
@@ -169,6 +170,20 @@ async function runDiagnosticAlertsForTenant(tenantId) {
           `${elapsedMin}m elapsed) escalated to advisor queue — would-route ` +
           `wabaId=${cfg.wabaId || "(no-config)"}`,
       );
+      // Operator-facing WhatsApp alert via watiClient (Q9). The User model
+      // carries no phone column, so the ops-shared recipient comes from
+      // WATI_OPS_ALERT_PHONE (the ops desk's WhatsApp number); unset = the
+      // in-app notification above remains the only alert surface.
+      const opsPhone = process.env.WATI_OPS_ALERT_PHONE;
+      if (opsPhone) {
+        await watiClient.sendBestEffort({
+          tenantId,
+          subBrand: diag.subBrand,
+          toPhone: opsPhone,
+          fallbackText: `⚠ ${title} — ${message}`,
+          broadcastName: "travel-diagnostic-advisor-alerts",
+        });
+      }
       alerted++;
     } catch (e) {
       console.error(

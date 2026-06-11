@@ -1,5 +1,5 @@
 import React, { useContext, useEffect, useRef, useState } from "react";
-import { Outlet, useNavigate } from "react-router-dom";
+import { Outlet, useLocation, useNavigate } from "react-router-dom";
 // #475: removed ChevronDown import — the chevron next to the user name
 // implied a dropdown affordance that didn't exist; clicking it just navigated
 // to /profile. Logout is already a separate sibling button, so the simplest
@@ -143,8 +143,13 @@ const Layout = () => {
   // was buried in /settings.
   const { theme, toggleTheme } = useContext(ThemeContext) || {};
   const navigate = useNavigate();
+  const location = useLocation();
   // Wellness tenants use Callified.ai for voice — hide the built-in softphone
   const isWellness = tenant?.vertical === "wellness";
+  // The softphone FAB is fixed at bottom-right (2rem/2rem) — on the WhatsApp
+  // chat page that is exactly where the composer's send button sits, so the
+  // FAB covers it. Hide the FAB there; every other page keeps it.
+  const isWhatsAppChat = location.pathname === "/travel/whatsapp";
   // T2.1 (extends #228): drawer state for the mobile sidebar (<900px). Desktop
   // (>=900px) ignores this — CSS keeps the sidebar statically positioned.
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -537,7 +542,7 @@ const Layout = () => {
           </small>
         </footer>
       </div>
-      {!isWellness && <Softphone />}
+      {!isWellness && !isWhatsAppChat && <Softphone />}
       <Presence />
     </div>
   );

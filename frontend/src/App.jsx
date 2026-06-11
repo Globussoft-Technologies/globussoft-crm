@@ -241,6 +241,20 @@ const TravelMilestoneTracker = lazy(() => import("./pages/travel/MilestoneTracke
 // will swap to GET /api/travel/payables once slice 6 ships the consolidating
 // endpoint (shipped page commit 2a0b00ab).
 const TravelPayables = lazy(() => import("./pages/travel/Payables"));
+// Q9 — travel WhatsApp dispatch log (Wati transport). Read-only list of the
+// WhatsAppMessage rows backend/services/watiClient.js persists (OTPs,
+// reminders, itinerary shares, boarding-pass deliveries). Consumes the
+// existing tenant-scoped GET /api/whatsapp/messages — no new backend
+// surface. Travel-only; the wellness/generic WhatsApp surfaces are separate.
+const TravelWhatsAppLog = lazy(() => import("./pages/travel/WhatsAppLog"));
+// Q9 — travel 2-way WhatsApp chat (Wati). Clone of the wellness agent inbox
+// with sends routed via POST /api/travel/whatsapp/send (watiClient) and
+// inbound delivered by the Wati webhook through the same socket events.
+// The wellness page + its Meta Cloud transport are untouched.
+const TravelWhatsAppChat = lazy(() => import("./pages/travel/WhatsAppChat"));
+// Q9 — read-only Wati template library (templates are authored/approved in
+// the Wati dashboard). Target of the chat sub-components' templatesPath.
+const TravelWhatsAppTemplates = lazy(() => import("./pages/travel/WhatsAppTemplates"));
 // #905 slice 3 frontend consumer — TravelCommissionProfile CRUD admin.
 // Consumes /api/travel/commission-profiles (backend slice 2 b5042743). GET
 // is verifyToken-only (any role can view); POST/PUT gated to ADMIN+MANAGER
@@ -1414,6 +1428,13 @@ export default function App() {
                   Operator-facing aggregate of upcoming/overdue payment
                   milestones across all travel invoices. */}
               <Route path="travel/milestones" element={<TravelOnly><TravelMilestoneTracker /></TravelOnly>} />
+              {/* Q9 — travel 2-way WhatsApp chat (Wati transport). The sidebar
+                  WhatsApp item lands here; the read-only dispatch log moved to
+                  the /log sub-path (linked from the chat's status strip).
+                  TravelOnly bounces wellness/generic tenants on both. */}
+              <Route path="travel/whatsapp" element={<TravelOnly><TravelWhatsAppChat /></TravelOnly>} />
+              <Route path="travel/whatsapp/log" element={<TravelOnly><TravelWhatsAppLog /></TravelOnly>} />
+              <Route path="travel/whatsapp/templates" element={<TravelOnly><TravelWhatsAppTemplates /></TravelOnly>} />
               {/* Arc 2 #903 — cross-supplier A/P review (all payables across
                   all suppliers in one table, distinct from per-supplier expand
                   on SuppliersAdmin). Placeholder client-side fan-out fetch

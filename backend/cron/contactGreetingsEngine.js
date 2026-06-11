@@ -22,6 +22,7 @@
 const cron = require("node-cron");
 const prisma = require("../lib/prisma");
 const { resolveForSubBrand } = require("../lib/subBrandConfig");
+const watiClient = require("../services/watiClient");
 
 const PORTAL_BASE = process.env.PUBLIC_BASE_URL || "https://crm.globusdemos.com";
 
@@ -120,9 +121,22 @@ async function runContactGreetingsForTenant(tenantId) {
           const cfg = c.subBrand ? resolveForSubBrand(tenant, c.subBrand) : {};
           console.log(
             `[ContactGreetings] tenant ${tenantId} contact ${c.id} → birthday notification ` +
-              `(WhatsApp dispatch pending Wati creds — would-route ` +
+              `(WhatsApp dispatch via watiClient — ` +
               `subBrand=${c.subBrand || "(none)"} wabaId=${cfg.wabaId || "(no-config)"})`,
           );
+          // WhatsApp greeting via watiClient (Q9) — stub when creds absent.
+          if (c.phone) {
+            await watiClient.sendBestEffort({
+              tenantId,
+              subBrand: c.subBrand,
+              toPhone: c.phone,
+              contactId: c.id,
+              templateName: process.env.WATI_BIRTHDAY_TEMPLATE || "birthday_greeting",
+              parameters: [{ name: "name", value: c.name || "there" }],
+              broadcastName: "travel-birthday-greetings",
+              fallbackText: `Happy birthday, ${c.name || "from all of us"}! 🎂 Warm wishes from the Travel Stall family.`,
+            });
+          }
           birthdays++;
         } catch (e) {
           console.error(
@@ -163,9 +177,22 @@ async function runContactGreetingsForTenant(tenantId) {
           const cfg = c.subBrand ? resolveForSubBrand(tenant, c.subBrand) : {};
           console.log(
             `[ContactGreetings] tenant ${tenantId} contact ${c.id} → anniversary notification ` +
-              `(WhatsApp dispatch pending Wati creds — would-route ` +
+              `(WhatsApp dispatch via watiClient — ` +
               `subBrand=${c.subBrand || "(none)"} wabaId=${cfg.wabaId || "(no-config)"})`,
           );
+          // WhatsApp greeting via watiClient (Q9) — stub when creds absent.
+          if (c.phone) {
+            await watiClient.sendBestEffort({
+              tenantId,
+              subBrand: c.subBrand,
+              toPhone: c.phone,
+              contactId: c.id,
+              templateName: process.env.WATI_ANNIVERSARY_TEMPLATE || "birthday_greeting",
+              parameters: [{ name: "name", value: c.name || "there" }],
+              broadcastName: "travel-anniversary-greetings",
+              fallbackText: `Happy anniversary, ${c.name || "from all of us"}! 💐 Warm wishes from the Travel Stall family.`,
+            });
+          }
           anniversaries++;
         } catch (e) {
           console.error(

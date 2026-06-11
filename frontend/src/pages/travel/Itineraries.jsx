@@ -131,19 +131,26 @@ function friendlyAiError(rawError) {
 
 // PRD FR-3.6 step (a) — Suggest itinerary CTA modal form. Defaults mirror
 // the route's valid ranges (durationDays 1..30; budgetTier economy|mid|luxury).
-// `themeJson` is a free-form textarea — operator types a JSON object;
-// validation happens on submit (parse + INVALID_THEME_JSON inline error).
+// Interests + pace are captured as plain text; the backend assembles the
+// structured theme JSON from them, so operators never hand-author JSON.
 const SUGGEST_BUDGET_TIERS = [
   { value: "economy", label: "Economy" },
   { value: "mid", label: "Mid" },
   { value: "luxury", label: "Luxury" },
 ];
 
+const SUGGEST_PACE_OPTIONS = [
+  { value: "relaxed", label: "Relaxed" },
+  { value: "moderate", label: "Moderate" },
+  { value: "packed", label: "Packed" },
+];
+
 const EMPTY_SUGGEST_FORM = {
   destination: "",
   durationDays: 5,
   budgetTier: "mid",
-  themeJsonRaw: "",
+  interests: "",
+  pace: "relaxed",
 };
 
 function fmt(d) {
@@ -160,6 +167,23 @@ function fmtMoney(amt, currency = "INR") {
     return `₹${(n / 100000).toFixed(2)}L`;
   }
   return `${currency === "INR" ? "₹" : currency + " "}${n.toLocaleString()}`;
+}
+
+// Sum the per-person estimated costs of a suggestion day's items (FR-3.6 —
+// Gemini supplies per-item estimatedCost; the operator reviews these before
+// materialising + can edit each line afterwards).
+function dayEstTotal(day) {
+  if (!day || !Array.isArray(day.items)) return 0;
+  return day.items.reduce((s, it) => {
+    const c = Number(it.estimatedCost);
+    return s + (Number.isFinite(c) && c > 0 ? c : 0);
+  }, 0);
+}
+
+// Sum every day's per-person estimate across the whole suggestion.
+function suggestionEstTotal(suggestion) {
+  if (!suggestion || !Array.isArray(suggestion.days)) return 0;
+  return suggestion.days.reduce((s, day) => s + dayEstTotal(day), 0);
 }
 
 function TierBadge({ tier }) {
@@ -214,7 +238,6 @@ export default function Itineraries() {
   const [suggestForm, setSuggestForm] = useState(EMPTY_SUGGEST_FORM);
   const [suggestLoading, setSuggestLoading] = useState(false);
   const [suggestResult, setSuggestResult] = useState(null);
-  const [suggestThemeError, setSuggestThemeError] = useState("");
   const [suggestFieldErrors, setSuggestFieldErrors] = useState({});
 
   const openCreate = () => {
@@ -229,7 +252,6 @@ export default function Itineraries() {
   const openSuggest = () => {
     setSuggestForm(EMPTY_SUGGEST_FORM);
     setSuggestResult(null);
-    setSuggestThemeError("");
     setSuggestFieldErrors({});
     setSuggesting(true);
   };
@@ -237,31 +259,7 @@ export default function Itineraries() {
   const closeSuggest = () => {
     setSuggesting(false);
     setSuggestResult(null);
-    setSuggestThemeError("");
     setSuggestFieldErrors({});
-  };
-
-  // Validate the themeJson textarea on blur. Empty is fine (optional field).
-  // Non-empty must parse to a plain object — array / scalar rejected to
-  // match the route's INVALID_THEME_JSON gate.
-  const validateThemeJson = () => {
-    const raw = (suggestForm.themeJsonRaw || "").trim();
-    if (!raw) {
-      setSuggestThemeError("");
-      return { ok: true, parsed: undefined };
-    }
-    try {
-      const parsed = JSON.parse(raw);
-      if (parsed == null || typeof parsed !== "object" || Array.isArray(parsed)) {
-        setSuggestThemeError("themeJson must be a JSON object (not array / scalar).");
-        return { ok: false };
-      }
-      setSuggestThemeError("");
-      return { ok: true, parsed };
-    } catch (e) {
-      setSuggestThemeError(`Invalid JSON: ${e.message}`);
-      return { ok: false };
-    }
   };
 
   const submitSuggest = async (e) => {
@@ -275,12 +273,6 @@ export default function Itineraries() {
     }
     if (!suggestForm.budgetTier) errors.budgetTier = "Budget tier is required";
 
-    const themeCheck = validateThemeJson();
-    if (!themeCheck.ok) {
-      setSuggestFieldErrors(errors);
-      // themeError is already set by validateThemeJson; abort.
-      return;
-    }
     if (Object.keys(errors).length > 0) {
       setSuggestFieldErrors(errors);
       return;
@@ -290,12 +282,16 @@ export default function Itineraries() {
     setSuggestLoading(true);
     setSuggestResult(null);
     try {
+      // The backend reads `days` (not durationDays) and assembles the theme
+      // JSON from the plain-text interests + pace fields, so we send them raw
+      // and let the server normalise + convert.
       const body = {
         destination: dest,
-        durationDays: dd,
+        days: dd,
         budgetTier: suggestForm.budgetTier,
+        interests: (suggestForm.interests || "").trim(),
+        pace: suggestForm.pace || "",
       };
-      if (themeCheck.parsed !== undefined) body.themeJson = themeCheck.parsed;
       const res = await fetchApi("/api/travel/itineraries/suggest", {
         method: "POST",
         body: JSON.stringify(body),
@@ -336,7 +332,7 @@ export default function Itineraries() {
   // On success → navigate to the detail page if it exists; otherwise
   // close the modal and refresh the list.
   const createFromSuggestion = async () => {
-    if (!suggestResult || !suggestResult.suggestionJson) {
+    if (!suggestResult || !suggestResult.suggestion) {
       notify.error("No suggestion to materialise");
       return;
     }
@@ -354,9 +350,13 @@ export default function Itineraries() {
     setMaterialising(true);
     try {
       const body = {
-        suggestionJson: suggestResult.suggestionJson,
+        suggestionJson: suggestResult.suggestion,
         contactId: cid,
         subBrand: effectiveSubBrand,
+        // Send the real destination the suggestion was generated for, so the
+        // backend doesn't fall back to the (long) summary for the Itinerary's
+        // destination column.
+        destination: (suggestForm.destination || "").trim(),
       };
       const res = await fetchApi(
         "/api/travel/itineraries/from-suggestion",
@@ -391,7 +391,7 @@ export default function Itineraries() {
   // Load contacts for the materialise picker when the preview pane opens.
   // Reuses the same /api/contacts feed as the Create drawer.
   useEffect(() => {
-    if (!suggestResult || !suggestResult.suggestionJson) return;
+    if (!suggestResult || !suggestResult.suggestion) return;
     if (contacts.length > 0) return;
     fetchApi("/api/contacts?limit=200")
       .then((res) => setContacts(Array.isArray(res) ? res : (res?.contacts || [])))
@@ -891,21 +891,28 @@ export default function Itineraries() {
                 </label>
               </div>
               <label style={fieldLabel}>
-                Theme JSON (optional)
-                <textarea
-                  value={suggestForm.themeJsonRaw}
-                  onChange={(e) => setSuggestForm({ ...suggestForm, themeJsonRaw: e.target.value })}
-                  onBlur={validateThemeJson}
-                  style={{ ...inputStyle, minHeight: 80, fontFamily: "monospace", fontSize: 12 }}
-                  placeholder='{"interests":["historical","beaches"],"pace":"relaxed"}'
-                  aria-invalid={suggestThemeError ? "true" : "false"}
-                  aria-describedby={suggestThemeError ? "suggest-theme-error" : undefined}
+                Interests (optional)
+                <input
+                  type="text"
+                  value={suggestForm.interests}
+                  onChange={(e) => setSuggestForm({ ...suggestForm, interests: e.target.value })}
+                  style={inputStyle}
+                  placeholder="e.g. historical, beaches, food (comma-separated)"
+                  aria-label="Interests, comma-separated"
                 />
-                {suggestThemeError && (
-                  <span id="suggest-theme-error" style={errorTextStyle}>
-                    {suggestThemeError}
-                  </span>
-                )}
+              </label>
+              <label style={fieldLabel}>
+                Pace (optional)
+                <select
+                  value={suggestForm.pace}
+                  onChange={(e) => setSuggestForm({ ...suggestForm, pace: e.target.value })}
+                  style={inputStyle}
+                  aria-label="Trip pace"
+                >
+                  {SUGGEST_PACE_OPTIONS.map((p) => (
+                    <option key={p.value} value={p.value}>{p.label}</option>
+                  ))}
+                </select>
               </label>
             </div>
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16 }}>
@@ -917,7 +924,7 @@ export default function Itineraries() {
               </button>
             </div>
 
-            {suggestResult && suggestResult.suggestionJson && (
+            {suggestResult && suggestResult.suggestion && (
               <div
                 style={{
                   marginTop: 20, padding: 12, borderRadius: 8,
@@ -941,14 +948,33 @@ export default function Itineraries() {
                     </span>
                   ) : null}
                 </h3>
-                {suggestResult.suggestionJson.summary && (
+                {suggestResult.suggestion.summary && (
                   <p style={{ margin: 0, fontSize: 12, color: "var(--text-secondary)", marginBottom: 8 }}>
-                    {suggestResult.suggestionJson.summary}
+                    {suggestResult.suggestion.summary}
                   </p>
                 )}
-                {Array.isArray(suggestResult.suggestionJson.daySplit) && suggestResult.suggestionJson.daySplit.length > 0 ? (
+                {suggestionEstTotal(suggestResult.suggestion) > 0 && (
+                  <div
+                    data-testid="suggest-est-total"
+                    style={{
+                      fontSize: 13,
+                      fontWeight: 600,
+                      color: "var(--text-primary)",
+                      marginBottom: 8,
+                    }}
+                  >
+                    Estimated total:{" "}
+                    {fmtMoney(suggestionEstTotal(suggestResult.suggestion), "INR")} / person
+                    {suggestResult.costSource === "stub" && (
+                      <span style={{ fontWeight: 400, fontSize: 11, color: "var(--text-secondary)" }}>
+                        {" "}— rough fallback estimate (AI pricing unavailable)
+                      </span>
+                    )}
+                  </div>
+                )}
+                {Array.isArray(suggestResult.suggestion.days) && suggestResult.suggestion.days.length > 0 ? (
                   <ol style={{ paddingLeft: 18, margin: 0, marginBottom: 8 }}>
-                    {suggestResult.suggestionJson.daySplit.map((day, idx) => (
+                    {suggestResult.suggestion.days.map((day, idx) => (
                       <li
                         key={day.dayNumber ?? idx}
                         style={{ marginBottom: 8 }}
@@ -961,12 +987,40 @@ export default function Itineraries() {
                         {Array.isArray(day.items) && day.items.length > 0 && (
                           <ul style={{ paddingLeft: 18, margin: 0 }}>
                             {day.items.map((item, i) => (
-                              <li key={i} style={{ fontSize: 12, color: "var(--text-primary)" }}>
-                                <strong>{item.itemType || "item"}</strong>
-                                {item.description ? ` — ${item.description}` : ""}
+                              <li
+                                key={i}
+                                style={{
+                                  fontSize: 12,
+                                  color: "var(--text-primary)",
+                                  display: "flex",
+                                  justifyContent: "space-between",
+                                  gap: 8,
+                                }}
+                              >
+                                <span>
+                                  <strong>{item.itemType || "item"}</strong>
+                                  {item.description ? ` — ${item.description}` : ""}
+                                </span>
+                                {item.estimatedCost != null && (
+                                  <span style={{ whiteSpace: "nowrap", color: "var(--text-secondary)" }}>
+                                    {fmtMoney(item.estimatedCost, "INR")}
+                                  </span>
+                                )}
                               </li>
                             ))}
                           </ul>
+                        )}
+                        {dayEstTotal(day) > 0 && (
+                          <div
+                            style={{
+                              fontSize: 11,
+                              color: "var(--text-secondary)",
+                              marginTop: 2,
+                              textAlign: "right",
+                            }}
+                          >
+                            Day subtotal: {fmtMoney(dayEstTotal(day), "INR")} / person
+                          </div>
                         )}
                       </li>
                     ))}
@@ -981,12 +1035,12 @@ export default function Itineraries() {
                       overflow: "auto", maxHeight: 200,
                     }}
                   >
-                    {JSON.stringify(suggestResult.suggestionJson, null, 2)}
+                    {JSON.stringify(suggestResult.suggestion, null, 2)}
                   </pre>
                 )}
-                {suggestResult.suggestionJson.thematicNotes && (
+                {suggestResult.suggestion.thematicNotes && (
                   <p style={{ margin: 0, marginTop: 8, fontSize: 11, color: "var(--text-secondary)", fontStyle: "italic" }}>
-                    {suggestResult.suggestionJson.thematicNotes}
+                    {suggestResult.suggestion.thematicNotes}
                   </p>
                 )}
                 {/* S90 — materialise picker: contact + sub-brand inline so

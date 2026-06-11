@@ -28,7 +28,13 @@ export default function NewMessageModal() {
     contactOptions,
     pickerOpen,
     setPickerOpen,
+    // Optional override so non-wellness hosts (the travel Wati chat) can
+    // route the "manage templates" links to their own templates surface.
+    // Wellness's WhatsAppThreads.jsx doesn't set it → default preserved.
+    templatesPath,
   } = useWhatsAppThreads();
+
+  const tplPath = templatesPath || '/wellness/whatsapp/templates';
 
   if (!showNewModal) return null;
 
@@ -163,7 +169,7 @@ export default function NewMessageModal() {
             Use Template (required to message cold numbers)
           </label>
           {templates.length === 0 && useTemplate && (
-            <Link to="/wellness/whatsapp/templates" style={{ fontSize: '0.75rem', color: 'var(--primary-color, #25D366)' }}>
+            <Link to={tplPath} style={{ fontSize: '0.75rem', color: 'var(--primary-color, #25D366)' }}>
               Create one →
             </Link>
           )}
@@ -191,7 +197,7 @@ export default function NewMessageModal() {
               </select>
               {templates.length === 0 && (
                 <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-                  No approved templates yet. <Link to="/wellness/whatsapp/templates" style={{ color: 'var(--primary-color, #25D366)' }}>Create one</Link> first.
+                  No approved templates yet. <Link to={tplPath} style={{ color: 'var(--primary-color, #25D366)' }}>Create one</Link> first.
                 </span>
               )}
             </label>

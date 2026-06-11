@@ -53,6 +53,7 @@ const { findLatestDiagnostic } = require("../lib/travelLatestDiagnostic");
 const { getTravelAdvanceRatio } = require("../lib/tenantSettings");
 const { computeWindowOpenAt } = require("../lib/webCheckinWindow");
 const { resolveForSubBrand } = require("../lib/subBrandConfig");
+const watiClient = require("../services/watiClient");
 const llmRouter = require("../lib/llmRouter");
 const { computeDayCosts } = require("../lib/itineraryDayCostCalculator");
 const listProjection = require("../lib/listProjection");
@@ -2551,33 +2552,114 @@ router.post("/itineraries/:id/accept", verifyToken, requireTravelTenant, async (
   }
 });
 
-// POST /api/travel/itineraries/suggest
+// Per-PERSON INR cost averages by budget tier. These are EDITABLE placeholder
+// estimates so the operator gets a priced draft they can adjust per item
+// before sending to the client — NOT authoritative rates. Tune freely.
+const SUGGEST_TIER_COSTS = {
+  economy: { hotel: 2500, transfer: 400, sightseeing: 600, activity: 800, meals: 500 },
+  mid: { hotel: 5000, transfer: 800, sightseeing: 1200, activity: 1500, meals: 1000 },
+  luxury: { hotel: 12000, transfer: 2000, sightseeing: 3000, activity: 4000, meals: 2500 },
+};
+function tierCost(kind, budgetTier) {
+  const t = SUGGEST_TIER_COSTS[budgetTier];
+  return t && t[kind] != null ? t[kind] : null;
+}
+
+// Parse + normalise the structured JSON the LLM returns for itinerary-suggest
+// (real mode). Gemini is prompted to emit { summary, days:[{ dayNumber,
+// items:[{ itemType, description, estimatedCost }] }] } with realistic
+// per-person INR costs. We defensively strip markdown fences / stray prose,
+// validate the shape, clamp itemType to VALID_ITEM_TYPES, and coerce costs.
+// Returns a clean suggestion or null so the caller can fall back to the
+// deterministic skeleton (stub mode / transient failure / unparseable output).
+function parseLlmSuggestion(rawText, { destination }) {
+  if (typeof rawText !== "string" || rawText.trim() === "") return null;
+  let text = rawText.trim();
+  const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fence) text = fence[1].trim();
+  if (text[0] !== "{") {
+    const first = text.indexOf("{");
+    const last = text.lastIndexOf("}");
+    if (first === -1 || last === -1 || last <= first) return null;
+    text = text.slice(first, last + 1);
+  }
+  let parsed;
+  try { parsed = JSON.parse(text); } catch { return null; }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  const srcDays = Array.isArray(parsed.days) ? parsed.days : null;
+  if (!srcDays || srcDays.length === 0) return null;
+
+  const cleanDays = [];
+  for (let i = 0; i < srcDays.length; i += 1) {
+    const day = srcDays[i];
+    if (!day || typeof day !== "object") continue;
+    const dayNumber = Number.isInteger(day.dayNumber) && day.dayNumber > 0
+      ? day.dayNumber
+      : cleanDays.length + 1;
+    const srcItems = Array.isArray(day.items) ? day.items : [];
+    const items = [];
+    for (const it of srcItems) {
+      if (!it || typeof it !== "object") continue;
+      const desc = typeof it.description === "string" && it.description.trim() !== ""
+        ? it.description.trim().slice(0, 500)
+        : (typeof it.name === "string" ? it.name.trim().slice(0, 500) : "");
+      if (!desc) continue;
+      let itemType = typeof it.itemType === "string" ? it.itemType.trim().toLowerCase() : "activity";
+      if (!VALID_ITEM_TYPES.includes(itemType)) itemType = "activity";
+      let estimatedCost = null;
+      const c = Number(it.estimatedCost != null ? it.estimatedCost : it.unitCost);
+      if (Number.isFinite(c) && c >= 0) estimatedCost = Math.round(c * 100) / 100;
+      items.push({
+        itemType,
+        description: desc,
+        suggestedSupplierName: null,
+        estimatedCost,
+        latitude: null,
+        longitude: null,
+      });
+    }
+    if (items.length === 0) continue;
+    cleanDays.push({ dayNumber, items });
+  }
+  if (cleanDays.length === 0) return null;
+
+  const summary = typeof parsed.summary === "string" && parsed.summary.trim() !== ""
+    ? parsed.summary.trim()
+    : `Suggested ${cleanDays.length}-day outline for ${destination}.`;
+  return { summary, days: cleanDays };
+}
+
+// FR-3.4(d) response shape: { summary, days: [{ dayNumber, items: [...] }] }.
+// Deterministic (no Date.now / Math.random) so the stub is test-pinnable
+// and demo screenshots stay stable. Each item uses a valid ItineraryItem
+// itemType (flight|transfer|hotel|sightseeing|activity|meals) so the operator
+// can materialise an accepted day straight through /from-suggestion unchanged.
 //
-// PRD_TRAVEL_ITINERARY_UPGRADES FR-3.4 + FR-3.6 — LLM "Suggest itinerary".
-// Returns a structured day-by-day draft for operator review (no DB write
-// per FR-3.4(e)). The operator materialises it via POST
-// /itineraries/from-suggestion when ready.
-//
-// Accepts BOTH input shapes for back-compat:
-//   - Playwright gate spec / S46 contract:  { destination, days,         budgetPerPax?, subBrand? }
-//   - Frontend Itineraries.jsx (S63-S90):   { destination, durationDays, budgetTier,    themeJson? }
-//
-// Returns BOTH envelopes so both consumer contracts keep passing:
-//   - `suggestion`     — { summary, days:[{dayNumber, items:[{itemType, description, estimatedCost?, ...}]}] }
-//   - `suggestionJson` — { daySplit:[{dayNumber, theme, items:[...]}], poiSuggestions, thematicNotes, summary }
-function buildSuggestionSkeleton({ destination, days, budgetPerPax, summary }) {
-  const perDayHotel =
+// Costs: when an explicit numeric `budgetPerPax` is supplied the per-night
+// hotel cost is derived from it (budgetPerPax / days), preserving the FR-3.4
+// budget-split contract pinned by the spec. Otherwise the per-item estimate
+// comes from the budget-tier table above (null when no tier is supplied).
+function buildSuggestionSkeleton({ destination, days, budgetPerPax, budgetTier, summary }) {
+  const perNightHotel =
     budgetPerPax != null && days > 0
       ? Math.round((budgetPerPax / days) * 100) / 100
-      : null;
+      : tierCost("hotel", budgetTier);
+  const transferCost = tierCost("transfer", budgetTier);
+  const sightseeingCost = tierCost("sightseeing", budgetTier);
+  const activityCost = tierCost("activity", budgetTier);
+  const mealsCost = tierCost("meals", budgetTier);
+
   const dayList = [];
   for (let d = 1; d <= days; d++) {
     const items = [];
     if (d === 1) {
       items.push({ itemType: "flight", description: `Arrival in ${destination}`, suggestedSupplierName: null, estimatedCost: null, latitude: null, longitude: null });
+      items.push({ itemType: "transfer", description: `Airport transfer to hotel in ${destination}`, suggestedSupplierName: null, estimatedCost: transferCost, latitude: null, longitude: null });
     }
-    items.push({ itemType: "hotel", description: `Night ${d} — stay in ${destination}`, suggestedSupplierName: null, estimatedCost: perDayHotel, latitude: null, longitude: null });
-    items.push({ itemType: "activity", description: `Day ${d} — sightseeing in ${destination}`, suggestedSupplierName: null, estimatedCost: null, latitude: null, longitude: null });
+    items.push({ itemType: "hotel", description: `Night ${d} — stay in ${destination}`, suggestedSupplierName: null, estimatedCost: perNightHotel, latitude: null, longitude: null });
+    items.push({ itemType: "sightseeing", description: `Day ${d} — morning sightseeing in ${destination}`, suggestedSupplierName: null, estimatedCost: sightseeingCost, latitude: null, longitude: null });
+    items.push({ itemType: "activity", description: `Day ${d} — afternoon activity in ${destination}`, suggestedSupplierName: null, estimatedCost: activityCost, latitude: null, longitude: null });
+    items.push({ itemType: "meals", description: `Day ${d} — dinner in ${destination}`, suggestedSupplierName: null, estimatedCost: mealsCost, latitude: null, longitude: null });
     if (d === days) {
       items.push({ itemType: "flight", description: `Departure from ${destination}`, suggestedSupplierName: null, estimatedCost: null, latitude: null, longitude: null });
     }
@@ -2586,53 +2668,101 @@ function buildSuggestionSkeleton({ destination, days, budgetPerPax, summary }) {
   return { summary, days: dayList };
 }
 
-const BUDGET_TIER_PER_DAY = { budget: 3000, mid: 8000, luxury: 20000 };
+// FR-3.6: the "Suggest itinerary" modal collects interests + pace as plain
+// text so operators never hand-author JSON. We assemble the structured theme
+// object here. `interests` accepts an array OR a comma/newline-separated
+// string; `pace` is a short label/free-text. Returns { interests?, pace? }
+// or null when nothing usable was supplied.
+function buildThemeFromInputs(rawInterests, rawPace) {
+  const theme = {};
+  let list = [];
+  if (Array.isArray(rawInterests)) list = rawInterests;
+  else if (typeof rawInterests === "string") list = rawInterests.split(/[,\n]/);
 
+  const seen = new Set();
+  const interests = [];
+  for (const entry of list) {
+    const s = typeof entry === "string" ? entry.trim().slice(0, 60) : "";
+    if (!s) continue;
+    const key = s.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    interests.push(s);
+    if (interests.length >= 20) break;
+  }
+  if (interests.length > 0) theme.interests = interests;
+  if (typeof rawPace === "string" && rawPace.trim() !== "") {
+    theme.pace = rawPace.trim().slice(0, 40);
+  }
+  return Object.keys(theme).length > 0 ? theme : null;
+}
+
+// Fold the structured theme + any explicit free-text profile into one
+// human-readable traveller-profile string for the LLM prompt / stub. Keeps
+// the existing `travellerProfile` payload contract intact while letting the
+// new interests/pace inputs steer the suggestion.
+function composeTravellerProfile(explicitProfile, theme) {
+  const parts = [];
+  if (typeof explicitProfile === "string" && explicitProfile.trim() !== "") {
+    parts.push(explicitProfile.trim());
+  }
+  if (theme) {
+    if (Array.isArray(theme.interests) && theme.interests.length > 0) {
+      parts.push(`Interests: ${theme.interests.join(", ")}.`);
+    }
+    if (theme.pace) parts.push(`Pace: ${theme.pace}.`);
+  }
+  const text = parts.join(" ").trim();
+  return text ? text.slice(0, 2000) : null;
+}
+
+// POST /api/travel/itineraries/suggest
+//
+// PRD_TRAVEL_ITINERARY_UPGRADES FR-3.4 — LLM "Suggest itinerary".
+// Operator supplies destination + days + (optional) budget-per-pax +
+// traveller profile + sub-brand; returns a STRUCTURED day-by-day draft
+// for review. Per FR-3.4(e) this is SUGGESTED only — NOTHING is written
+// to the DB. The operator materialises accepted days via the existing
+// POST /itineraries + /:id/items endpoints.
+//
+// itinerary-suggest task class → gemini-flash provider slot (PRD §9.1;
+// PRD names gemini-2.5-flash). Until Q11 keys land, llmRouter returns a
+// [STUB-ITINERARY-SUGGEST] summary and we assemble a deterministic
+// day-by-day skeleton here (FR-3.4(g) — mirrors /draft/regen's stub).
+//
+// No diagnostic-first guard: this is an internal operator drafting tool,
+// not a customer-facing quote artifact (that guard lives on itinerary
+// CREATE). Sub-brand, when supplied, is validated + access-checked.
+// Travel-tenant only (requireTravelTenant → 403 WRONG_VERTICAL for
+// generic/wellness).
 router.post(
   "/itineraries/suggest",
   verifyToken,
   requireTravelTenant,
   async (req, res) => {
     try {
-      const {
-        destination,
-        days,
-        durationDays,
-        budgetPerPax,
-        budgetTier,
-        themeJson,
-        travellerProfile,
-        subBrand,
-      } = req.body || {};
+      const { destination, days, budgetPerPax, travellerProfile, subBrand, interests, pace, budgetTier } = req.body || {};
+      // Budget tier drives per-item cost estimates in the skeleton; ignore
+      // unknown values (an explicit numeric budgetPerPax still wins for hotel).
+      const tier = typeof budgetTier === "string" && SUGGEST_TIER_COSTS[budgetTier] ? budgetTier : null;
 
       const dest = typeof destination === "string" ? destination.trim() : "";
       if (!dest) {
         return res.status(400).json({ error: "destination is required", code: "MISSING_DESTINATION" });
       }
-
-      const rawDays = days != null ? days : durationDays;
-      const numDays = parseInt(rawDays, 10);
+      const numDays = parseInt(days, 10);
       if (!Number.isInteger(numDays) || numDays < 1 || numDays > 30) {
         return res.status(400).json({ error: "days must be an integer between 1 and 30", code: "INVALID_DAYS" });
       }
 
       let resolvedSubBrand = null;
       if (subBrand != null && String(subBrand).trim() !== "") {
-        assertValidSubBrand(String(subBrand).trim()); // throws 400 INVALID_SUB_BRAND
+        assertValidSubBrand(String(subBrand).trim()); // throws 400 INVALID_SUB_BRAND (caught below)
         resolvedSubBrand = String(subBrand).trim();
         const allowed = await getSubBrandAccessSet(req.user.userId);
         if (!canAccessSubBrand(allowed, resolvedSubBrand)) {
           return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
         }
-      }
-
-      let tier = null;
-      if (budgetTier != null && String(budgetTier).trim() !== "") {
-        const t = String(budgetTier).trim().toLowerCase();
-        if (!["budget", "mid", "luxury"].includes(t)) {
-          return res.status(400).json({ error: "budgetTier must be one of budget|mid|luxury", code: "INVALID_BUDGET_TIER" });
-        }
-        tier = t;
       }
 
       let budgetNum = null;
@@ -2641,20 +2771,14 @@ router.post(
         if (!Number.isFinite(budgetNum) || budgetNum < 0) {
           return res.status(400).json({ error: "budgetPerPax must be a non-negative number", code: "INVALID_BUDGET" });
         }
-      } else if (tier) {
-        budgetNum = BUDGET_TIER_PER_DAY[tier] * numDays;
       }
-
-      if (themeJson != null) {
-        if (typeof themeJson !== "object" || Array.isArray(themeJson)) {
-          return res.status(400).json({ error: "themeJson must be an object", code: "INVALID_THEME_JSON" });
-        }
-      }
-
-      const profile = typeof travellerProfile === "string" ? travellerProfile.slice(0, 2000) : null;
+      // FR-3.6: assemble the theme JSON server-side from the operator's
+      // plain-text interests + pace (the client no longer hand-authors JSON),
+      // then fold it into the traveller-profile text the LLM / stub consumes.
+      const theme = buildThemeFromInputs(interests, pace);
+      const profile = composeTravellerProfile(travellerProfile, theme);
 
       let result;
-      let realModeError = null;
       try {
         result = await llmRouter.routeRequest({
           task: "itinerary-suggest",
@@ -2663,8 +2787,8 @@ router.post(
             days: numDays,
             budgetPerPax: budgetNum,
             budgetTier: tier,
-            themeJson: themeJson || null,
             travellerProfile: profile,
+            theme,
             subBrand: resolvedSubBrand,
             __userId: req.user.userId,
             __surface: "itinerary-suggest",
@@ -2680,49 +2804,55 @@ router.post(
             capCents: e.capCents,
           });
         }
-        // Real-mode failure → fall back to stub envelope + realModeError
-        // so the frontend can surface a friendly toast (Itineraries.jsx:282).
-        console.error("[travel-itin] suggest real-mode error, falling back to stub:", e.message);
-        realModeError = e.message || "LLM call failed";
-        result = { text: null, model: "gemini-flash", stub: true };
+        // FR-3.4(g): the day-by-day skeleton is deterministic and does NOT
+        // depend on the LLM — only the prose summary does. When the provider
+        // is transiently unavailable (e.g. Gemini 503 "high demand"), still
+        // return a usable outline instead of failing the whole request. The
+        // operator gets the full structured days; only the summary is the
+        // generic stub line. (In CI the router is already in stub mode, so
+        // this branch never runs there and the spec's model/stub pins hold.)
+        console.error("[travel-itin] suggest LLM fallback:", e.message);
+        result = {
+          text: `Suggested ${numDays}-day outline for ${dest}.`,
+          model: "stub-fallback",
+          stub: true,
+        };
       }
 
-      const suggestion = buildSuggestionSkeleton({
-        destination: dest,
-        days: numDays,
-        budgetPerPax: budgetNum,
-        summary: result.text || `${numDays}-day ${tier ? tier + " " : ""}outline for ${dest}`,
-      });
-
-      const suggestionJson = {
-        summary: suggestion.summary,
-        daySplit: suggestion.days.map((d) => ({
-          dayNumber: d.dayNumber,
-          theme: `Day ${d.dayNumber} — ${dest}${tier ? ` (${tier} tier)` : ""}`,
-          items: d.items.map((it) => ({
-            itemType: it.itemType,
-            description: it.description,
-            suggestedSupplierName: it.suggestedSupplierName || null,
-            estimatedCost: it.estimatedCost,
-            latitude: it.latitude || null,
-            longitude: it.longitude || null,
-          })),
-        })),
-        poiSuggestions: [],
-        thematicNotes: themeJson
-          ? `Theme applied: ${Object.keys(themeJson).join(", ")}`
-          : `Synthetic ${numDays}-day outline for ${dest}.`,
-      };
+      // Prefer the LLM's structured, destination-specific items + per-person
+      // costs when the real provider answered. Fall back to the deterministic
+      // tier-priced skeleton in stub mode (CI), on a transient LLM failure
+      // (503), or if the model returned unparseable JSON — so the operator
+      // always gets a usable, priced draft.
+      let suggestion = null;
+      let costSource = "stub";
+      if (result && !result.stub) {
+        suggestion = parseLlmSuggestion(result.text, { destination: dest });
+        if (suggestion) costSource = "llm";
+      }
+      if (!suggestion) {
+        const stubSummary = (result && result.stub && typeof result.text === "string")
+          ? result.text
+          : `Suggested ${numDays}-day outline for ${dest}.`;
+        suggestion = buildSuggestionSkeleton({
+          destination: dest,
+          days: numDays,
+          budgetPerPax: budgetNum,
+          budgetTier: tier,
+          summary: stubSummary,
+        });
+      }
 
       return res.status(200).json({
         suggestion,
-        suggestionJson,
+        theme,
         subBrand: resolvedSubBrand,
-        source: result.stub ? "stub" : "real",
         model: result.model,
         stub: Boolean(result.stub),
+        // "llm" = costs/items came from Gemini; "stub" = deterministic
+        // tier-priced fallback (CI / transient failure / unparseable output).
+        costSource,
         generatedAt: new Date().toISOString(),
-        ...(realModeError ? { realModeError } : {}),
       });
     } catch (e) {
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
@@ -2987,7 +3117,7 @@ router.post("/itineraries/:id/share", verifyToken, requireTravelTenant, async (r
     // narrow (id + subBrand); we want shareToken here too.
     const full = await prisma.itinerary.findFirst({
       where: { id: itin.id, tenantId: req.travelTenant.id },
-      select: { id: true, shareToken: true },
+      select: { id: true, shareToken: true, contactId: true, destination: true },
     });
     if (!full) {
       // Belt-and-braces — loadItineraryWithGuard just succeeded, so this
@@ -3020,9 +3150,40 @@ router.post("/itineraries/:id/share", verifyToken, requireTravelTenant, async (r
     const cfg = resolveForSubBrand(tenantCfgRow, itin.subBrand);
     console.log(
       `[travel-itin] share token minted for itin ${full.id} (sub-brand=${itin.subBrand}) — ` +
-      `would WhatsApp-blast via wabaId=${cfg.wabaId || "(no-config)"} pending Wati creds`,
+      `WhatsApp dispatch via watiClient (wabaId=${cfg.wabaId || "(no-config)"})`,
     );
-    res.json({ shareToken: token, shareUrl });
+    // WhatsApp dispatch via watiClient (Q9) — sends the share URL to the
+    // itinerary's contact. Stub mode (no WATI creds) logs + writes a QUEUED
+    // row, keeping the historical "advisor pastes the URL manually" flow as
+    // the fallback. `whatsapp` in the response is additive — existing
+    // consumers that only read shareToken/shareUrl are unaffected.
+    let whatsappStatus = "SKIPPED";
+    if (full.contactId) {
+      const contact = await prisma.contact.findFirst({
+        where: { id: full.contactId, tenantId: req.travelTenant.id },
+        select: { id: true, phone: true, name: true },
+      });
+      if (contact && contact.phone) {
+        // Legacy rows can carry a long prose summary in `destination`
+        // (pre-S113 materialise bug) — fall back to "trip" past 60 chars
+        // so the customer-facing message stays clean.
+        const destLabel = full.destination && full.destination.length <= 60
+          ? full.destination
+          : "trip";
+        const sendResult = await watiClient.sendBestEffort({
+          tenantId: req.travelTenant.id,
+          subBrand: itin.subBrand,
+          toPhone: contact.phone,
+          contactId: contact.id,
+          fallbackText:
+            `Hi ${contact.name || "there"}! Your ${destLabel} itinerary is ready. ` +
+            `View it here: ${shareUrl}`,
+          broadcastName: "travel-itinerary-share",
+        });
+        whatsappStatus = sendResult.status;
+      }
+    }
+    res.json({ shareToken: token, shareUrl, whatsapp: whatsappStatus });
   } catch (e) {
     if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
     if (e.code === "P2002") {
@@ -4620,10 +4781,15 @@ router.post(
       const productTier = (latest && latest.recommendedTier) || null;
 
       // 9. Resolve destination — body > suggestionJson.summary > placeholder.
+      //    The `destination` column is VARCHAR(191); cap to 190 on EVERY
+      //    branch. The summary fallback in particular is the LLM's multi-
+      //    paragraph prose, which overflowed the column (Column: destination
+      //    "value too long") when the client didn't pass an explicit
+      //    destination. Clients should send `destination`; this is the guard.
       const effectiveDestination = (destination && String(destination).trim() !== "")
-        ? String(destination).trim()
+        ? String(destination).trim().slice(0, 190)
         : (suggestionJson.summary && String(suggestionJson.summary).trim() !== "")
-          ? String(suggestionJson.summary).trim().slice(0, 200)
+          ? String(suggestionJson.summary).trim().slice(0, 190)
           : "Suggested itinerary";
 
       // 10. Transactional create — Itinerary + ItineraryItem rows in one

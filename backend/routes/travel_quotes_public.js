@@ -39,14 +39,16 @@
  * AC-6.6). On customer accept, the route looks up the current FX rate for
  * (quote.currency → tenant.defaultCurrency) and persists it into the
  * Accepted-transition snapshotJson under fxLock = { sourceCurrency,
- * targetCurrency, rate, lockedAt }. Why-store-in-snapshotJson: TravelQuote
- * has no fxRateSnapshot column yet (schema add is a follow-up slice — see
- * S47), and the snapshotJson field on TravelQuoteSnapshot is freeform JSON
- * already written on every transition. This delivers the FX-lock contract
- * (margin-shift prevention) without a schema migration. When schema columns
- * land, the helper readFxLockFromAcceptSnapshot() becomes the migration
- * path: the accept route also writes to the column going forward; old
- * pre-migration rows keep their snapshotJson form.
+ * targetCurrency, rate, lockedAt }.
+ *
+ * S47 — fxLock promoted to dedicated columns on TravelQuote
+ * (fxRateSnapshot Decimal(15,6) + fxRateSourceCurrency + fxRateTargetCurrency
+ * + fxRateLockedAt + fxRateExpiresAt). The accept path now writes to BOTH
+ * the columns AND snapshotJson — billing reports can query the locked rate
+ * via the columns without parsing JSON, and the snapshotJson form remains
+ * for forensic per-transition history + pre-S47 quote backward-compat. The
+ * helper readFxLockFromAcceptSnapshot() stays as the fallback reader for
+ * pre-S47 quotes whose columns are null.
  *
  * Idempotency: if the customer re-hits /accept on a quote already in
  * Accepted status, the route returns 409 ALREADY_ACTIONED with the
@@ -267,8 +269,15 @@ async function nextVersionNumber(quoteId) {
  * Common action handler: applies the transition, writes the snapshot, and
  * returns the response envelope. Caller passes the wanted new status +
  * change-reason payload.
+ *
+ * S47 — `quoteUpdateExtras` lets the accept-path also write the dedicated
+ * fxRate* columns on TravelQuote alongside the status flip. Merged into the
+ * prisma.travelQuote.update.data so the columns are queryable for billing
+ * reports without parsing snapshotJson. Backward-compat: snapshotJson under
+ * `extraSnapshot.fxLock` keeps being populated for pre-S47 consumers + per-
+ * transition forensic history.
  */
-async function applyCustomerTransition({ quote, statusAfter, changedBy, changeReason, customerName, extraSnapshot }) {
+async function applyCustomerTransition({ quote, statusAfter, changedBy, changeReason, customerName, extraSnapshot, quoteUpdateExtras }) {
   const statusBefore = quote.status;
   const versionNumber = await nextVersionNumber(quote.id);
 
@@ -306,9 +315,16 @@ async function applyCustomerTransition({ quote, statusAfter, changedBy, changeRe
   }
   const snapshotJson = JSON.stringify(snapshotPayload);
 
+  // S47 — merge transition-specific column writes (e.g. fxRate* on Accepted).
+  // Falls back to the bare status flip when no extras are passed (reject /
+  // counter paths don't have lock state to persist).
+  const updateData = { status: statusAfter };
+  if (quoteUpdateExtras && typeof quoteUpdateExtras === 'object') {
+    Object.assign(updateData, quoteUpdateExtras);
+  }
   const updated = await prisma.travelQuote.update({
     where: { id: quote.id },
-    data: { status: statusAfter },
+    data: updateData,
   });
 
   await prisma.travelQuoteSnapshot.create({
@@ -454,6 +470,21 @@ router.post('/quote/:shareToken/accept', async (req, res) => {
     // Fail-soft: rate=null + reason is recorded if lookup can't resolve.
     const fxLock = await lookupFxRate(prisma, quote.currency, quote.tenantId);
 
+    // S47 — promote fxLock fields to dedicated TravelQuote columns so
+    // billing reports can query them without parsing snapshotJson. Keep
+    // populating snapshotJson too for forensic history + pre-S47 reader
+    // backward-compat. Null-safe: if fxLock is somehow null, columns stay
+    // null (additive-nullable schema permits this).
+    const quoteUpdateExtras = fxLock
+      ? {
+          fxRateSnapshot: fxLock.rate != null ? fxLock.rate : null,
+          fxRateSourceCurrency: fxLock.sourceCurrency || null,
+          fxRateTargetCurrency: fxLock.targetCurrency || null,
+          fxRateLockedAt: fxLock.lockedAt ? new Date(fxLock.lockedAt) : null,
+          fxRateExpiresAt: fxLock.expiresAt ? new Date(fxLock.expiresAt) : null,
+        }
+      : undefined;
+
     const { updated, statusBefore } = await applyCustomerTransition({
       quote,
       statusAfter: 'Accepted',
@@ -461,6 +492,7 @@ router.post('/quote/:shareToken/accept', async (req, res) => {
       changeReason: customerNote,
       customerName,
       extraSnapshot: { fxLock },
+      quoteUpdateExtras,
     });
 
     return res.status(200).json({

@@ -93,6 +93,13 @@ const KEYS = {
   AI_CALLING_MONTHLY_CAP_USD_CENTS:      "budgetCap_ai_calling_monthly_usd_cents",
   RATEHAWK_MONTHLY_CAP_USD_CENTS:        "budgetCap_ratehawk_monthly_usd_cents",
   LLM_MONTHLY_CAP_USD_CENTS:             "budgetCap_llm_monthly_usd_cents",
+  // S73 split: image-gen LLM (DALL-E 3 / Stability XL) gets its own
+  // monthly envelope, separate from the text-LLM cap. Rationale:
+  // DALL-E 3 HD is $0.12/image vs Gemini Flash $0.0001/1K tokens; a
+  // runaway image-gen burst could otherwise silently exhaust the
+  // text-LLM budget. Default matches LLM_MONTHLY_CAP ($100 = 10000c)
+  // as a sensible starting point; ops can tune per-tenant.
+  IMAGE_LLM_MONTHLY_CAP_USD_CENTS:       "budgetCap_image_llm_monthly_usd_cents",
   BOOKING_EXPEDIA_MONTHLY_CAP_USD_CENTS: "budgetCap_booking_expedia_monthly_usd_cents",
   // Cron / operational settings (§4.5 hardcoded-value fixes)
   ORCHESTRATOR_DEFAULT_WORKING_MINUTES:  "orchestrator.defaultWorkingMinutes",
@@ -125,6 +132,10 @@ const DEFAULTS = {
     Number(process.env.RATEHAWK_MONTHLY_CAP_USD_CENTS ?? 5000),
   [KEYS.LLM_MONTHLY_CAP_USD_CENTS]:
     Number(process.env.LLM_MONTHLY_CAP_USD_CENTS ?? 10000),
+  // S73: matches text-LLM cap value as a starting point — separate
+  // envelope so an image-gen burst doesn't eat the text-LLM budget.
+  [KEYS.IMAGE_LLM_MONTHLY_CAP_USD_CENTS]:
+    Number(process.env.IMAGE_LLM_MONTHLY_CAP_USD_CENTS ?? 10000),
   [KEYS.BOOKING_EXPEDIA_MONTHLY_CAP_USD_CENTS]:
     Number(process.env.BOOKING_EXPEDIA_MONTHLY_CAP_USD_CENTS ?? 10000),
   // Cron / operational defaults (§4.5 hardcoded-value fixes)
@@ -191,11 +202,22 @@ async function setSetting(tenantId, key, value, { category = null } = {}) {
 /**
  * Convenience: get budget cap in USD cents for an integration name.
  * Integration name is the short token used in KEYS (e.g. "adsgpt",
- * "ai_calling", "ratehawk", "llm"). Throws on unknown integration
- * names so callers don't silently fall through to a null cap.
+ * "ai_calling", "ratehawk", "llm", "image-llm"). Throws on unknown
+ * integration names so callers don't silently fall through to a null cap.
+ *
+ * Hyphens in the integration name are normalised to underscores when
+ * constructing the TenantSetting key (S73: callers can pass
+ * `'image-llm'` per the slice spec; the table key remains the canonical
+ * `budgetCap_image_llm_monthly_usd_cents` underscore-form so it lines up
+ * with the other capped integrations in KEYS). The accepted-name check
+ * is strict — case + form mismatches still throw.
  */
 async function getBudgetCap(tenantId, integration) {
-  const key = `budgetCap_${integration}_monthly_usd_cents`;
+  // Normalise hyphens → underscores for the key construction so
+  // 'image-llm' (slice-spec verbatim) lines up with the canonical
+  // underscore-form KEYS entry.
+  const keyToken = String(integration).replace(/-/g, '_');
+  const key = `budgetCap_${keyToken}_monthly_usd_cents`;
   if (!Object.values(KEYS).includes(key)) {
     throw new Error(`Unknown integration: ${integration}`);
   }

@@ -57,9 +57,9 @@
  *   |-------------------|--------------------|----------------|-----------|
  *   | pdf-a4            | 595 × 842 pt       | application/pdf| pdfkit    |
  *   | pdf-a5            | 420 × 595 pt       | application/pdf| pdfkit    |
- *   | png-square        | 1200 × 1200        | image/png      | puppeteer |
- *   | png-portrait-ig   | 1080 × 1920        | image/png      | puppeteer |
- *   | png-landscape-fb  | 1920 × 1080        | image/png      | puppeteer |
+ *   | png-square        | 1200 × 1200        | image/png      | puppeteer-headless |
+ *   | png-portrait-ig   | 1080 × 1920        | image/png      | puppeteer-headless |
+ *   | png-landscape-fb  | 1920 × 1080        | image/png      | puppeteer-headless |
  *
  * === Testability ===
  *
@@ -386,7 +386,7 @@ async function renderPngBranch({ template, formatMeta }) {
       extension: formatMeta.extension,
       widthPx: formatMeta.widthPx,
       heightPx: formatMeta.heightPx,
-      engine: "puppeteer",
+      engine: "puppeteer-headless",
     };
   } finally {
     if (browser) {

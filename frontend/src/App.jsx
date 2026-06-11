@@ -247,6 +247,12 @@ const TravelCommissionProfilesAdmin = lazy(() => import("./pages/travel/Commissi
 // CRUD at /api/travel/flyer-templates) shipped 5c2dd474. Shipped page commit
 // a64c1058.
 const TravelFlyerTemplates = lazy(() => import("./pages/travel/FlyerTemplates"));
+// S79 (TRAVEL_BIG_SCOPE_BACKLOG) — operator-facing flyer share-link admin
+// (companion to S18's backend POST /api/v1/flyers/:id/share mint route).
+// Pick a template → mint → modal with shareUrl + embedCode + copy-clipboards.
+// History panel reads /api/audit-viewer for past mints + Revoke button with
+// graceful 404 when S80 revoke endpoint not yet shipped. ADMIN-gated.
+const TravelFlyerShareAdmin = lazy(() => import("./pages/travel/FlyerShareAdmin"));
 const TravelReligiousPackets = lazy(() => import("./pages/travel/ReligiousPackets"));
 const TravelTmcMicrositePreview = lazy(() => import("./pages/travel/TmcMicrositePreview"));
 const TravelItineraryDetail = lazy(() => import("./pages/travel/ItineraryDetail"));
@@ -1414,6 +1420,19 @@ export default function App() {
                   page. Same no-RoleGuard convention as the other view-by-
                   default travel admin pages. */}
               <Route path="travel/flyer-templates" element={<TravelOnly><TravelFlyerTemplates /></TravelOnly>} />
+              {/* S79 — operator UI for flyer share-link admin (mint + revoke +
+                  history). ADMIN-gated. Page itself also surfaces an
+                  access-denied card for non-ADMIN as a defensive layer. */}
+              <Route
+                path="travel/flyer-share-admin"
+                element={
+                  <TravelOnly>
+                    <RoleGuard allow={["ADMIN"]} feature="Flyer Share Admin" roles="admin" lockedInPlace>
+                      <TravelFlyerShareAdmin />
+                    </RoleGuard>
+                  </TravelOnly>
+                }
+              />
               <Route path="travel/religious-packets" element={<TravelOnly><TravelReligiousPackets /></TravelOnly>} />
               <Route path="travel/tmc/microsite-preview" element={<TravelOnly><TravelTmcMicrositePreview /></TravelOnly>} />
               {/* T16 — dedicated TMC catalogue admin page; the

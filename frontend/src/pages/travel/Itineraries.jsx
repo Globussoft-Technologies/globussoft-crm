@@ -12,7 +12,7 @@
 // the message. Itineraries can still be drafted from a Deal page once
 // the Day 7 Deal-extension CTA lands.
 
-import { useContext, useEffect, useState } from "react";
+import { useContext, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Map, Filter, Plane, Hotel, MapPin, Briefcase, FileText, Shield, Plus, X,
@@ -27,6 +27,15 @@ import {
   defaultSubBrandFor,
   subBrandShortLabel,
 } from "../../utils/travelSubBrand";
+// S81 — MapPreview wire-in. Items in the list response already include
+// latitude/longitude/dayNumber per backend/routes/travel_itineraries.js:141
+// (`include: { items: { orderBy: { position: "asc" } } }`), so we can render
+// the selected itinerary's map directly from list state without fanning out
+// per-row fetches. The S10 MapPreview component is fully self-contained
+// (leaflet + OSM tiles, no API key) and pinnableItems silently drops draft
+// rows without lat/lng — so a partially-geocoded itinerary still maps the
+// rows that do have coordinates.
+import MapPreview from "../../components/MapPreview";
 
 const SUB_BRANDS = [
   { value: "", label: "All sub-brands" },
@@ -181,6 +190,22 @@ export default function Itineraries() {
   const [form, setForm] = useState(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
   const [contacts, setContacts] = useState([]);
+
+  // S81 — selected itinerary for the top-of-page MapPreview panel. Null →
+  // no map shown (default). User picks a row's "Map" button to surface the
+  // selected itinerary's items on a Leaflet+OSM canvas. Re-clicking the
+  // same row's Map button clears the selection (toggle).
+  const [selectedItineraryId, setSelectedItineraryId] = useState(null);
+  const selectedItinerary = useMemo(
+    () => (selectedItineraryId
+      ? items.find((it) => it.id === selectedItineraryId)
+      : null),
+    [items, selectedItineraryId],
+  );
+  // Items array passed to MapPreview. pinnableItems inside MapPreview
+  // silently drops rows without lat/lng, so partially-geocoded itineraries
+  // still surface their pinnable subset.
+  const mapItems = selectedItinerary?.items || [];
 
   // PRD FR-3.6 — "Suggest itinerary" modal state. Separate from the create
   // drawer above so the operator can iterate on suggestions independently
@@ -498,6 +523,57 @@ export default function Itineraries() {
         <button type="button" onClick={load} style={refreshBtn} aria-label="Reload list">Refresh</button>
       </div>
 
+      {/* S81 — selected-itinerary map panel. Shown only when the operator
+          picks a row's "Map" button. Items in the list response already
+          include latitude/longitude/dayNumber (backend list endpoint
+          includes items by default), so no extra fetch is needed.
+          MapPreview's pinnableItems silently drops rows without
+          coordinates, so an itinerary with only some geocoded items
+          still maps the geocoded subset; a fully-empty result still
+          renders the world-view fallback rather than nothing. */}
+      {selectedItinerary && (
+        <div
+          data-testid="itineraries-selected-map"
+          style={{
+            background: "var(--surface-color)", borderRadius: 8,
+            border: "1px solid var(--border-color)", overflow: "hidden",
+            marginBottom: 16,
+          }}
+        >
+          <div style={{
+            display: "flex", alignItems: "center", justifyContent: "space-between",
+            padding: "8px 12px", borderBottom: "1px solid var(--border-light)",
+          }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <Map size={14} aria-hidden style={{ color: "var(--text-secondary)" }} />
+              <strong style={{ fontSize: 13 }}>{selectedItinerary.destination}</strong>
+              <span style={{ fontSize: 11, color: "var(--text-secondary)" }}>
+                {mapItems.length} item{mapItems.length === 1 ? "" : "s"}
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setSelectedItineraryId(null)}
+              aria-label="Close map preview"
+              style={iconBtn}
+            >
+              <X size={14} />
+            </button>
+          </div>
+          <MapPreview
+            items={mapItems}
+            height={320}
+            onMarkerClick={(it) => {
+              // Optional UX: log marker click for now. Future: scroll the
+              // row into view or open a side-panel with the item detail.
+              if (typeof console !== "undefined") {
+                console.log("[Itineraries] map marker click", it);
+              }
+            }}
+          />
+        </div>
+      )}
+
       <div style={{
         background: "var(--surface-color)", borderRadius: 8,
         border: "1px solid var(--border-color)", overflow: "hidden",
@@ -522,6 +598,7 @@ export default function Itineraries() {
                 <th style={th}>Status</th>
                 <th style={th}>Tier</th>
                 <th style={th}>Updated</th>
+                <th style={th}>Map</th>
               </tr>
             </thead>
             <tbody>
@@ -571,6 +648,35 @@ export default function Itineraries() {
                     </td>
                     <td style={td}><TierBadge tier={it.productTier} /></td>
                     <td style={td}>{new Date(it.updatedAt).toLocaleDateString()}</td>
+                    <td style={td}>
+                      {/* S81 — per-row Map toggle. stopPropagation so the
+                          row's navigate-on-click doesn't fire alongside. */}
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedItineraryId((prev) =>
+                            (prev === it.id ? null : it.id));
+                        }}
+                        aria-label={
+                          selectedItineraryId === it.id
+                            ? `Hide map for ${it.destination}`
+                            : `Show map for ${it.destination}`
+                        }
+                        aria-pressed={selectedItineraryId === it.id}
+                        style={{
+                          ...refreshBtn,
+                          padding: "4px 8px",
+                          fontSize: 12,
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 4,
+                        }}
+                      >
+                        <Map size={12} aria-hidden />
+                        {selectedItineraryId === it.id ? "Hide" : "Map"}
+                      </button>
+                    </td>
                   </tr>
                 );
               })}

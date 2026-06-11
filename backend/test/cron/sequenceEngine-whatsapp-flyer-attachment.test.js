@@ -599,3 +599,181 @@ describe('S88 — WhatsAppMessage row shape preserved', () => {
     expect(waArg.data.mediaType).toBe('application/pdf');
   });
 });
+
+// ── 13. S124 — mediaRefsJson multi-attachment full-list column ────────
+//
+// S88 only persisted the FIRST attachment via the single-column
+// mediaUrl/mediaType pair; the full list lived audit-only. S124 adds an
+// additive nullable mediaRefsJson @db.Text column so multi-attachment WA
+// sends carry the full ref list ON THE ROW (not just in audit). Pins:
+//
+//   (a) 2-flyer step → mediaRefsJson is JSON-stringified array of BOTH
+//       refs (stub-flagged flyer descriptors), in order.
+//   (b) 1-flyer step → mediaRefsJson is JSON-stringified array of the
+//       single ref (NOT null — a single-element list is still a list).
+//   (c) 0-attachment step → mediaRefsJson is undefined on the row (NOT
+//       set, NOT 'null'-string, NOT empty array). Preserves the
+//       zero-attachment shape every prior test pins.
+//   (d) Mixed flyer+file refs → mediaRefsJson contains both kinds in
+//       order; file refs carry url/filename, flyer refs carry
+//       flyerId/format/mimeType/stub flag.
+//   (e) Sanitisation guard: raw buffer NEVER leaks into mediaRefsJson
+//       (same security guard as audit payload).
+
+describe('S124 — mediaRefsJson multi-attachment column', () => {
+  test('2 flyer attachments → mediaRefsJson is JSON array of both stub refs in order', async () => {
+    prisma.travelFlyerTemplate.findFirst.mockImplementation(({ where: { id } }) =>
+      Promise.resolve(makeFlyerRow({ id, name: `flyer-${id}` })),
+    );
+    renderFlyer.mockImplementation(({ format }) =>
+      Promise.resolve({
+        buffer: Buffer.from(`BUF-${format}`),
+        mimeType: format.startsWith('pdf') ? 'application/pdf' : 'image/png',
+        extension: format.startsWith('pdf') ? 'pdf' : 'png',
+        engine: 'pdfkit',
+      }),
+    );
+
+    const node = makeWaNode({
+      data: {
+        label: 'ACTION: Send WhatsApp',
+        attachmentRefsJson: JSON.stringify([
+          { kind: 'flyer', flyerId: 1, format: 'pdf-a4' },
+          { kind: 'flyer', flyerId: 2, format: 'png-square' },
+        ]),
+      },
+    });
+    await processNodeLegacy(node, makeEnrollment());
+
+    const waArg = prisma.whatsAppMessage.create.mock.calls[0][0];
+    expect(typeof waArg.data.mediaRefsJson).toBe('string');
+    const parsed = JSON.parse(waArg.data.mediaRefsJson);
+    expect(Array.isArray(parsed)).toBe(true);
+    expect(parsed).toHaveLength(2);
+    expect(parsed[0]).toMatchObject({
+      kind: 'flyer',
+      flyerId: 1,
+      format: 'pdf-a4',
+      mimeType: 'application/pdf',
+      stub: true,
+      plannedAction: 'upload-when-Q9-lands',
+    });
+    expect(parsed[1]).toMatchObject({
+      kind: 'flyer',
+      flyerId: 2,
+      format: 'png-square',
+      mimeType: 'image/png',
+      stub: true,
+      plannedAction: 'upload-when-Q9-lands',
+    });
+  });
+
+  test('1 flyer attachment → mediaRefsJson is JSON array of the single ref (not null)', async () => {
+    prisma.travelFlyerTemplate.findFirst.mockResolvedValue(makeFlyerRow());
+    renderFlyer.mockResolvedValue({
+      buffer: Buffer.from('PDF'),
+      mimeType: 'application/pdf',
+      extension: 'pdf',
+      engine: 'pdfkit',
+    });
+
+    const node = makeWaNode({
+      data: {
+        label: 'ACTION: Send WhatsApp',
+        attachmentRefsJson: JSON.stringify([
+          { kind: 'flyer', flyerId: 99, format: 'pdf-a4' },
+        ]),
+      },
+    });
+    await processNodeLegacy(node, makeEnrollment());
+
+    const waArg = prisma.whatsAppMessage.create.mock.calls[0][0];
+    expect(typeof waArg.data.mediaRefsJson).toBe('string');
+    const parsed = JSON.parse(waArg.data.mediaRefsJson);
+    expect(Array.isArray(parsed)).toBe(true);
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0]).toMatchObject({
+      kind: 'flyer',
+      flyerId: 99,
+      format: 'pdf-a4',
+      mimeType: 'application/pdf',
+      stub: true,
+    });
+  });
+
+  test('0 attachments → mediaRefsJson is undefined on row (preserves zero-attachment shape)', async () => {
+    const node = makeWaNode();
+    await processNodeLegacy(node, makeEnrollment());
+
+    const waArg = prisma.whatsAppMessage.create.mock.calls[0][0];
+    // S124 zero-attachment guard: mediaRefsJson is NOT set on the row when
+    // there are no attachments. Specifically NOT set (undefined), NOT a
+    // null literal, NOT an empty-array JSON string. Matches the shape every
+    // prior S88 zero-attachment test pins for mediaUrl/mediaType.
+    expect(waArg.data.mediaRefsJson).toBeUndefined();
+  });
+
+  test('mixed flyer + file refs → mediaRefsJson contains both kinds in order', async () => {
+    prisma.travelFlyerTemplate.findFirst.mockResolvedValue(makeFlyerRow());
+    renderFlyer.mockResolvedValue({
+      buffer: Buffer.from('PDF'),
+      mimeType: 'application/pdf',
+      extension: 'pdf',
+      engine: 'pdfkit',
+    });
+
+    const node = makeWaNode({
+      data: {
+        label: 'ACTION: Send WhatsApp',
+        attachmentRefsJson: JSON.stringify([
+          { kind: 'flyer', flyerId: 99, format: 'pdf-a4' },
+          { kind: 'file', url: 'https://cdn.example.com/brochure.pdf', filename: 'brochure.pdf' },
+        ]),
+      },
+    });
+    await processNodeLegacy(node, makeEnrollment());
+
+    const waArg = prisma.whatsAppMessage.create.mock.calls[0][0];
+    expect(typeof waArg.data.mediaRefsJson).toBe('string');
+    const parsed = JSON.parse(waArg.data.mediaRefsJson);
+    expect(Array.isArray(parsed)).toBe(true);
+    expect(parsed).toHaveLength(2);
+    expect(parsed[0]).toMatchObject({
+      kind: 'flyer',
+      flyerId: 99,
+      stub: true,
+    });
+    expect(parsed[1]).toMatchObject({
+      kind: 'file',
+      url: 'https://cdn.example.com/brochure.pdf',
+      filename: 'brochure.pdf',
+    });
+    // File refs do NOT carry a stub flag (real URL, not a stub).
+    expect(parsed[1].stub).toBeUndefined();
+  });
+
+  test('mediaRefsJson never contains the raw buffer (regression security guard)', async () => {
+    prisma.travelFlyerTemplate.findFirst.mockResolvedValue(makeFlyerRow());
+    renderFlyer.mockResolvedValue({
+      buffer: Buffer.from('SENSITIVE-PDF-BYTES-MUST-NOT-LEAK-VIA-ROW'),
+      mimeType: 'application/pdf',
+      extension: 'pdf',
+      engine: 'pdfkit',
+    });
+
+    const node = makeWaNode({
+      data: {
+        label: 'ACTION: Send WhatsApp',
+        attachmentRefsJson: JSON.stringify([
+          { kind: 'flyer', flyerId: 99, format: 'pdf-a4' },
+        ]),
+      },
+    });
+    await processNodeLegacy(node, makeEnrollment());
+
+    const waArg = prisma.whatsAppMessage.create.mock.calls[0][0];
+    expect(waArg.data.mediaRefsJson).not.toContain('SENSITIVE-PDF-BYTES-MUST-NOT-LEAK-VIA-ROW');
+    const parsed = JSON.parse(waArg.data.mediaRefsJson);
+    expect(parsed[0].buffer).toBeUndefined();
+  });
+});

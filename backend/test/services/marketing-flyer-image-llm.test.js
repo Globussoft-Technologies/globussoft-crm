@@ -4,7 +4,10 @@
 //   Stub-mode wrapper for the `marketing-flyer-image` LLM task class
 //   (PRD_TRAVEL_MARKETING_FLYER FR-3.6.3). Real DALL-E 3 (OpenAI) /
 //   Stability AI XL call lands when Q-MF-2 key drops. Exports:
-//     - INTEGRATION                 — short token 'llm' (shares LLM monthly cap)
+//     - INTEGRATION                 — short token 'image-llm' (S73 split —
+//                                      separate envelope from the text-LLM
+//                                      'llm' cap so a DALL-E 3 HD burst
+//                                      doesn't silently exhaust text-LLM budget)
 //     - TASK_NAME                   — 'marketing-flyer-image' (matches llmRouter TASK_ROUTING)
 //     - MODEL_PRIMARY               — 'dall-e-3' per FR-3.6.3 + S16 spec
 //     - MODEL_FALLBACK              — 'stability-xl'
@@ -135,7 +138,9 @@ describe('marketingFlyerImageLLM — module shape', () => {
     expect(typeof c.callImageProvider).toBe('function');
     expect(typeof c.buildStubImageUrl).toBe('function');
     expect(typeof c.slugify).toBe('function');
-    expect(c.INTEGRATION).toBe('llm');
+    // S73: distinct INTEGRATION token ('image-llm') so the cap envelope
+    // is separate from the text-LLM ('llm') cap shared by marketingFlyerCopyLLM.
+    expect(c.INTEGRATION).toBe('image-llm');
     expect(c.TASK_NAME).toBe('marketing-flyer-image');
     expect(c.MODEL_PRIMARY).toBe('dall-e-3');
     expect(c.MODEL_FALLBACK).toBe('stability-xl');
@@ -485,7 +490,7 @@ describe('checkBudgetCap', () => {
     }
     expect(caught).toBeDefined();
     expect(caught.code).toBe('MARKETING_FLYER_IMAGE_BUDGET_EXCEEDED');
-    expect(caught.message).toMatch(/Monthly LLM spend cap reached/);
+    expect(caught.message).toMatch(/Monthly image-LLM spend cap reached/);
     expect(caught.spentCents).toBe(10001);
     expect(caught.capCents).toBe(10000);
 
@@ -511,6 +516,9 @@ describe('checkBudgetCap', () => {
     expect(warnMsgs).toMatch(/tenant 7/);
     expect(warnMsgs).toMatch(/85%/);
     expect(warnMsgs).toMatch(/marketingFlyerImageLLM/);
+    // S73 split — warn message names the image-LLM cap explicitly so ops
+    // can tell which envelope is approaching exhaustion.
+    expect(warnMsgs).toMatch(/image-LLM/);
 
     spendSpy.mockRestore();
     logSpy.mockRestore();
@@ -537,7 +545,7 @@ describe('checkBudgetCap', () => {
     warnSpy.mockRestore();
   });
 
-  test('falls back to LLM_MONTHLY_CAP default ($100 = 10000c) when no TenantSetting row exists', async () => {
+  test('falls back to IMAGE_LLM_MONTHLY_CAP default ($100 = 10000c) when no TenantSetting row exists', async () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     prismaMock.tenantSetting.findUnique.mockResolvedValueOnce(null);
 
@@ -551,6 +559,99 @@ describe('checkBudgetCap', () => {
 
     spendSpy.mockRestore();
     logSpy.mockRestore();
+  });
+
+  // ── S73 split: cap-envelope separation regression pins ────────────
+  //
+  // The whole point of S73 is to keep image-gen budget separate from
+  // text-LLM budget. These tests pin that the lookup key sent to the
+  // TenantSetting table is the image-LLM one, not the text-LLM one —
+  // so an admin override on either cap takes effect only on its own
+  // side and an exhausted budget on one side does not block the other.
+
+  test('S73 — checkBudgetCap queries the IMAGE_LLM TenantSetting key, NOT the text-LLM key', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    prismaMock.tenantSetting.findUnique.mockResolvedValueOnce(null);
+
+    const c = loadClient();
+    const spendSpy = vi.spyOn(c, 'computeMonthlySpendCents').mockResolvedValue(0);
+
+    await c.checkBudgetCap(42);
+
+    expect(prismaMock.tenantSetting.findUnique).toHaveBeenCalledWith({
+      where: {
+        tenantId_key: {
+          tenantId: 42,
+          key: 'budgetCap_image_llm_monthly_usd_cents',
+        },
+      },
+      select: { value: true },
+    });
+    // Defensive: it must NOT have queried the text-LLM key.
+    const allKeys = prismaMock.tenantSetting.findUnique.mock.calls
+      .map((args) => args[0]?.where?.tenantId_key?.key);
+    expect(allKeys).not.toContain('budgetCap_llm_monthly_usd_cents');
+
+    spendSpy.mockRestore();
+    logSpy.mockRestore();
+  });
+
+  test('S73 — per-tenant IMAGE_LLM cap override takes precedence over the env default', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    // Tenant 11 has a custom cap of 25000c ($250) for image-LLM —
+    // higher than the $100 default to give one ops-power-user tenant
+    // more breathing room for image-heavy flyer batches.
+    prismaMock.tenantSetting.findUnique.mockResolvedValueOnce({ value: '25000' });
+
+    const c = loadClient();
+    const spendSpy = vi.spyOn(c, 'computeMonthlySpendCents').mockResolvedValue(20000);
+
+    const evaluation = await c.checkBudgetCap(11);
+    expect(evaluation.capCents).toBe(25000); // per-tenant override
+    expect(evaluation.spentCents).toBe(20000);
+    expect(evaluation.withinCap).toBe(true); // 20000c < 25000c
+
+    spendSpy.mockRestore();
+    logSpy.mockRestore();
+  });
+
+  test('S73 — exhausted IMAGE_LLM budget does NOT affect text-LLM budget queries (envelopes are independent)', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    // Image-LLM cap is fully consumed for tenant 99.
+    prismaMock.tenantSetting.findUnique.mockResolvedValueOnce({ value: '5000' });
+
+    const c = loadClient();
+    const spendSpy = vi.spyOn(c, 'computeMonthlySpendCents').mockResolvedValue(5000);
+
+    await expect(c.checkBudgetCap(99)).rejects.toMatchObject({
+      code: 'MARKETING_FLYER_IMAGE_BUDGET_EXCEEDED',
+    });
+
+    // Crucial: the prisma lookup was on the image-LLM key. The text-LLM
+    // cap envelope for tenant 99 is independent — a separate lookup on
+    // the 'budgetCap_llm_monthly_usd_cents' key would still resolve to
+    // its own (untouched) cap. Pin: only the image key was queried.
+    expect(prismaMock.tenantSetting.findUnique).toHaveBeenCalledTimes(1);
+    const queriedKey = prismaMock.tenantSetting.findUnique.mock.calls[0][0]
+      .where.tenantId_key.key;
+    expect(queriedKey).toBe('budgetCap_image_llm_monthly_usd_cents');
+
+    spendSpy.mockRestore();
+    logSpy.mockRestore();
+  });
+
+  test('S73 — tenantSettings.getBudgetCap("image-llm") accepts the new integration name', async () => {
+    // Pin the lib-level integration registration — getBudgetCap throws on
+    // unknown integration names, so this test fails loudly if the KEYS
+    // entry is dropped or mis-spelled in a future refactor.
+    const { getBudgetCap, KEYS, DEFAULTS } = requireCjs('../../lib/tenantSettings');
+    expect(KEYS.IMAGE_LLM_MONTHLY_CAP_USD_CENTS).toBe('budgetCap_image_llm_monthly_usd_cents');
+    expect(typeof DEFAULTS[KEYS.IMAGE_LLM_MONTHLY_CAP_USD_CENTS]).toBe('number');
+    expect(DEFAULTS[KEYS.IMAGE_LLM_MONTHLY_CAP_USD_CENTS]).toBeGreaterThan(0);
+
+    prismaMock.tenantSetting.findUnique.mockResolvedValueOnce(null);
+    const out = await getBudgetCap(1, 'image-llm');
+    expect(out).toBe(DEFAULTS[KEYS.IMAGE_LLM_MONTHLY_CAP_USD_CENTS]);
   });
 });
 

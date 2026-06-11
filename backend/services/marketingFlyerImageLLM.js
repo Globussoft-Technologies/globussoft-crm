@@ -58,14 +58,16 @@
  * pipeline) and S20 (canvas editor) as a stable contract that doesn't
  * change when real-mode lands.
  *
- * Budget cap: shares the LLM monthly cap envelope via the
- * `tenantSettings.getBudgetCap(tenantId, 'llm')` helper. IMAGE TASKS
- * MAY BE PRICED SEPARATELY FROM TEXT — DALL-E 3 HD is $0.12/image vs
- * Gemini Flash $0.0001/1K tokens. **Flagged for future product call**:
- * when real-mode lands, consider splitting `marketing-flyer-image` cap
- * into its own `image-llm` integration token so a runaway image-gen
- * burst doesn't silently exhaust the text-LLM budget. Until then both
- * share. (Documented in CREDS_TRACKER follow-up for S71 sibling.)
+ * Budget cap: SEPARATE envelope via `tenantSettings.getBudgetCap(tenantId,
+ * 'image-llm')` (S73 split). DALL-E 3 HD is $0.12/image vs Gemini Flash
+ * $0.0001/1K tokens, so a runaway image-gen burst would otherwise silently
+ * exhaust the text-LLM budget. The split lets ops set finer per-tenant
+ * caps on each side. Default `IMAGE_LLM_MONTHLY_CAP_USD_CENTS` matches
+ * the text-LLM default ($100 = 10000c) as a sensible starting point;
+ * ops can tune per-tenant. Pre-S73 this client shared INTEGRATION='llm'
+ * with marketingFlyerCopyLLM — the split is a back-compat-safe re-key
+ * because no TenantSetting rows exist yet for either integration on
+ * any tenant (no real-mode call has fired in production).
  *
  * CJS self-mocking seam: every internal call goes through
  * `module.exports.fn(...)` indirection so vitest can
@@ -92,7 +94,7 @@ if (process.env.NODE_ENV !== 'test') {
 
 const { getBudgetCap, evaluateCap, KEYS } = require('../lib/tenantSettings');
 
-const INTEGRATION = 'llm'; // share the LLM monthly cap envelope (flag for split — see header)
+const INTEGRATION = 'image-llm'; // S73: separate envelope from text-LLM (DALL-E HD $0.12/image)
 const TASK_NAME = 'marketing-flyer-image'; // PRD FR-3.6.3
 const MODEL_PRIMARY = 'dall-e-3'; // OpenAI DALL-E 3 — spec / PRD primary
 // Auto-fallback when OpenAI says "model does not exist" (project keys no
@@ -143,7 +145,7 @@ async function checkBudgetCap(tenantId) {
   const spentCents = await module.exports.computeMonthlySpendCents(tenantId);
   const evaluation = evaluateCap(spentCents, capCents);
   if (!evaluation.withinCap) {
-    const err = new Error('Monthly LLM spend cap reached for this tenant.');
+    const err = new Error('Monthly image-LLM spend cap reached for this tenant.');
     err.code = 'MARKETING_FLYER_IMAGE_BUDGET_EXCEEDED';
     err.spentCents = spentCents;
     err.capCents = capCents;
@@ -153,7 +155,7 @@ async function checkBudgetCap(tenantId) {
     console.warn(
       `[marketingFlyerImageLLM] tenant ${tenantId} at ${Math.round(
         evaluation.percent * 100,
-      )}% of monthly LLM cap ($${(spentCents / 100).toFixed(2)} / $${(capCents / 100).toFixed(2)})`,
+      )}% of monthly image-LLM cap ($${(spentCents / 100).toFixed(2)} / $${(capCents / 100).toFixed(2)})`,
     );
   }
   return evaluation;

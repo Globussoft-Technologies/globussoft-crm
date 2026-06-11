@@ -203,7 +203,7 @@ app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
 // Security middleware
 const cookieParser = require('cookie-parser');
-const { attachNonce, helmetMiddleware, helmetStrictReportOnlyMiddleware, permissionsPolicyMiddleware, sanitizeBody, stripTenantOverride, allowIframeEmbedding } = require('./middleware/security');
+const { attachNonce, helmetMiddleware, helmetStrictReportOnlyMiddleware, permissionsPolicyMiddleware, sanitizeBody, stripTenantOverride, allowIframeEmbedding, readTenantEmbedAllowlist } = require('./middleware/security');
 const { originCheck } = require('./middleware/originCheck');
 // #917 slice S35 (FR-3.X) — CSP-nonce static-file middleware. Substitutes
 // `__CSP_NONCE__` placeholders in frontend/index.html with the per-request
@@ -1021,18 +1021,108 @@ app.use("/api/security", require("./routes/security_reports"));
 // Public landing pages (outside /api/ prefix, no auth guard)
 app.use("/p", landingPagesPublic);
 
-// #921 slice S38 — wire the iframe-embedding override on /embed/* BEFORE
-// the lead-form gate handler. S4 (commit 6561bdc) made the global default
-// X-Frame-Options: DENY + CSP frame-ancestors 'none' so no page can be
-// iframed by anyone — but the embed widget is the ONE intentionally-public
-// iframe surface (partner sites embed our /embed/lead-form.html into their
-// own pages via an iframe pointing at our origin). Without this override
-// every partner-side embed silently broke when S4 landed. allowList: ['*']
-// = "anyone can frame me" — appropriate because the embed widget is
-// intentionally public and partner origins aren't known upfront. Once
-// Tenant.embedAllowlistJson lands (flagged follow-up in security.js:355+),
-// this mount can read per-tenant allowList instead of the wildcard.
-app.use("/embed", allowIframeEmbedding({ allowList: ["*"] }));
+// #921 slice S38 → S66 → S129 — wire the iframe-embedding override on /embed/*
+// BEFORE the lead-form gate handler. S4 (commit 6561bdc) made the global
+// default X-Frame-Options: DENY + CSP frame-ancestors 'none' so no page
+// can be iframed by anyone — but the embed widget is the ONE intentionally-
+// public iframe surface (partner sites embed our /embed/lead-form.html
+// into their own pages via an iframe pointing at our origin). Without
+// this override every partner-side embed silently broke when S4 landed.
+//
+// S38 (commit 7a229c92) shipped this mount with a hardcoded
+// `allowList: ['*']` because `Tenant.embedAllowlistJson` didn't exist yet.
+// S39 (commit 56832537) added the column + flipped `readTenantEmbedAllowlist`
+// from a stub-returning-null to a real Prisma read. S66 connected them:
+// the embed mount reads the tenant's allowlist at REQUEST time via a thin
+// async middleware that delegates to the per-request resolver.
+//
+// S129 (this slice, 2026-06-11) closes the per-tenant-enforcement loop for
+// the DOMINANT use case: cross-origin partner iframes. S66's per-tenant
+// lookup needs `req.user?.tenantId`, but partner-iframe requests are
+// fundamentally unauthenticated + sit OUTSIDE the `/api` prefix, so the
+// global JWT guard never runs and `req.user` is always undefined → the
+// S66 lookup short-circuited to the wildcard fallback for every real-
+// world partner embed. The fix is to give partners an EXPLICIT opt-in
+// channel: append `?key=glbs_…` to the iframe src. The new pre-S66
+// middleware below resolves that key → tenant via `prisma.apiKey.findUnique`
+// and synthesises `req.user = { tenantId: apiKey.tenantId, userId: null }`
+// so S66's existing logic finds the tenant and applies its per-tenant
+// `embedAllowlistJson` allowlist.
+//
+// Tenant resolution (in order):
+//   - `?key=glbs_…` query param (S129 — partner-iframe opt-in path,
+//     resolved by the pre-mount middleware below).
+//   - `req.user?.tenantId` already populated by upstream auth — e.g. a
+//     future "preview your own embed inside the admin UI" flow.
+//   - Otherwise: `req.user` remains undefined, S66 short-circuits to null,
+//     wildcard `['*']` is applied (the partner-iframe back-compat default).
+//
+// Fail-soft per the canonical middleware/auth.js pattern: a Prisma error
+// or shape-invalid key never 500s the /embed/* response — it leaves
+// `req.user` unset and lets the S66 wildcard fallback do its job. The
+// existing #297 `/embed/lead-form.html` 404 gate handler runs AFTER this
+// middleware (different express verb mount), so an unknown key still 404s
+// at the lead-form level while the CSP override remains permissive for
+// any other /embed/* asset that may legitimately load before the gate
+// fires (e.g. preflight, future /embed/preview/*).
+app.use("/embed", async (req, res, next) => {
+  // S129 — pre-mount tenant resolution from `?key=glbs_…`. Only fires
+  // when `req.user` is currently undefined (so an upstream-auth flow that
+  // already set it wins) AND the query param is present + shape-valid.
+  if (!req.user && req.query && typeof req.query.key === "string") {
+    const key = req.query.key;
+    // Same shape check as the #297 lead-form gate so behaviour stays
+    // consistent across both handlers: `glbs_` prefix + ≥8 base64ish chars.
+    if (/^glbs_[A-Za-z0-9_-]{8,}$/.test(key)) {
+      try {
+        const prismaClient = require("./lib/prisma");
+        const apiKey = await prismaClient.apiKey.findUnique({
+          where: { keySecret: key },
+          select: { tenantId: true },
+        });
+        if (apiKey && apiKey.tenantId) {
+          // Synthesise the minimal req.user shape S66 reads. userId stays
+          // null because this is an unauthenticated partner-iframe path —
+          // anything downstream that wants a real user must re-authenticate.
+          req.user = { tenantId: apiKey.tenantId, userId: null };
+        }
+        // Unknown key → leave req.user unset → S66 falls back to wildcard.
+        // (The #297 gate handler will still 404 the lead-form for an
+        // unknown key; the wildcard CSP applies to any other /embed/*
+        // path the partner might request alongside the form.)
+      } catch (e) {
+        // Fail-soft per middleware/auth.js Issue #180 pattern — log + leave
+        // req.user unset so the S66 wildcard fallback keeps partner embeds
+        // alive even if the lookup blows up unexpectedly.
+        console.warn("[embed] ?key= → tenant resolution failed:", e.message);
+      }
+    }
+  }
+  // S66 — resolve per-tenant allowlist from req.user.tenantId. The S129
+  // block above is what populates req.user.tenantId on the partner-iframe
+  // `?key=` path; this block reads it (whether S129 set it or upstream
+  // auth set it) and falls through to wildcard when no tenant is resolved.
+  let allowList = ["*"];
+  try {
+    const tenantId = req.user && req.user.tenantId;
+    if (tenantId) {
+      // Lazy-require the prisma singleton — the canonical const lives
+      // further down in the file (line ~1117 below); this mount runs
+      // earlier in the middleware stack than that declaration, but
+      // `require()` is idempotent + the cached module exports work fine.
+      const prismaClient = require("./lib/prisma");
+      const perTenant = await readTenantEmbedAllowlist(prismaClient, tenantId);
+      if (Array.isArray(perTenant) && perTenant.length > 0) {
+        allowList = perTenant;
+      }
+    }
+  } catch (e) {
+    // Fail-open — log + fall back to wildcard so partner embeds keep
+    // working even if the per-tenant lookup blows up unexpectedly.
+    console.warn("[embed] per-tenant allowlist lookup failed:", e.message);
+  }
+  return allowIframeEmbedding({ allowList })(req, res, next);
+});
 
 // #297: /embed/lead-form.html — server-side gate so a malformed/revoked
 // API key returns 404 at GET time rather than letting the form render and

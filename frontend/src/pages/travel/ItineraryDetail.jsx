@@ -10,6 +10,10 @@
 //   3. Items table — flight / hotel / transfer / activity / visa /
 //      insurance rows with edit + delete (admin/manager). "Add item"
 //      inline form.
+//   3a. Trip map (S127) — Leaflet+OSM MapPreview rendered above the day-
+//       by-day breakdown when the itinerary has ≥1 item. Items already
+//       carry lat/lng from the GET response; MapPreview drops rows
+//       without coordinates silently. Mirrors the S81 list-page pattern.
 //   4. Day costs panel (#907 slice 4) — collapsible section consuming
 //      GET /api/travel/itineraries/:id/day-costs (slice 2, commit
 //      5ca25585). Shows summary tiles (totalDays / grandTotal /
@@ -35,6 +39,13 @@ import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { geocode } from "../../lib/geocoder";
 import { AuthContext } from "../../App";
+// S127 — MapPreview wire-in for the detail surface. The /api/travel/itineraries/:id
+// GET already includes items with latitude/longitude/dayNumber, so the spatial
+// preview renders directly off itin.items with no extra fetch. pinnableItems
+// inside MapPreview silently drops draft rows without coordinates, so a
+// partially-geocoded itinerary still maps the subset that has coords.
+// Mirrors the S81 list-page wire-in pattern.
+import MapPreview from "../../components/MapPreview";
 
 // Item types cover both fly + non-fly (domestic) trips and general expenses.
 // Keep in sync with VALID_ITEM_TYPES in backend/routes/travel_itineraries.js.
@@ -668,6 +679,37 @@ export default function ItineraryDetail() {
           )}
         </div>
       </section>
+
+      {/* S127 — MapPreview block above the day-by-day breakdown. Items
+          returned by GET /api/travel/itineraries/:id already carry
+          latitude/longitude/dayNumber (backend includes items in the
+          detail-endpoint response), so the map renders directly off
+          itin.items without an extra fetch. Suppressed when the
+          itinerary has no items at all — MapPreview's own pinnableItems
+          handles the partially-geocoded case (some items missing
+          coords) by silently skipping them, so we only short-circuit on
+          truly-empty lists. */}
+      {Array.isArray(itin.items) && itin.items.length > 0 && (
+        <section style={{ marginTop: 20 }}>
+          <div style={{
+            display: "flex", justifyContent: "space-between", alignItems: "center",
+            marginBottom: 8,
+          }}>
+            <h2 style={{ margin: 0, fontSize: 16, display: "flex", alignItems: "center", gap: 8 }}>
+              <MapIcon size={18} aria-hidden /> Trip map
+            </h2>
+            <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+              Items with coordinates appear as pins; rows without lat/lng are skipped.
+            </span>
+          </div>
+          <div style={{
+            background: "var(--surface-color)", borderRadius: 8,
+            border: "1px solid var(--border-color)", overflow: "hidden",
+          }}>
+            <MapPreview items={itin.items} height={320} />
+          </div>
+        </section>
+      )}
 
       <section style={{ marginTop: 20 }}>
         <button

@@ -90,6 +90,7 @@
 const express = require('express');
 const router = express.Router();
 
+const jwt = require('jsonwebtoken');
 const prisma = require('../lib/prisma');
 const { verifyToken, verifyRole } = require('../middleware/auth');
 const {
@@ -179,10 +180,18 @@ async function resolveFlyerForToken(tenantId, flyerId, slug) {
  * Convert a token-verification error into the route's HTTP envelope.
  * Mirrors travel_quotes_public.js's loadQuoteByShareToken error mapping
  * so the frontend can treat both share surfaces identically.
+ *
+ * S80 added the REVOKED_TOKEN case — surfaces as 401 INVALID_TOKEN per the
+ * route's standing rule (don't reveal whether the token was malformed vs
+ * deliberately revoked; operators just need "this link no longer works",
+ * end-customers shouldn't know the distinction either).
  */
 function tokenErrorEnvelope(e) {
   if (e.name === 'TokenExpiredError') {
     return { status: 410, code: 'LINK_EXPIRED', message: 'Share link has expired' };
+  }
+  if (e && e.code === 'REVOKED_TOKEN') {
+    return { status: 401, code: 'INVALID_TOKEN', message: 'Share link has been revoked' };
   }
   return { status: 401, code: 'INVALID_TOKEN', message: 'Invalid share token' };
 }
@@ -238,6 +247,16 @@ router.post(
         expiresInSec,
       });
 
+      // S80 — decode the just-minted token to extract its jti so we can
+      // persist it on the audit row. The revoke endpoint (POST /:id/
+      // revoke-share) reads back this row to translate a {slug, mintedAt}
+      // pair (what the operator UI knows) into the {jti} required to
+      // populate the RevokedToken table.
+      // jwt.decode is unauthenticated parse — safe here because we just
+      // minted the token ourselves above.
+      const decoded = jwt.decode(token) || {};
+      const jti = decoded.jti || null;
+
       const slug = slugify(template.name);
       const host = getPublicHost();
       const shareUrl = `https://${host}/p/flyer/${slug}?t=${encodeURIComponent(token)}`;
@@ -261,6 +280,7 @@ router.post(
             slug,
             expiresAt,
             expiresInSec,
+            jti, // S80 — needed by revoke-share lookup
           },
         );
       } catch (e) {
@@ -284,6 +304,186 @@ router.post(
 );
 
 // ---------------------------------------------------------------------------
+// POST /:id/revoke-share — operator invalidates a previously-minted share JWT
+// ---------------------------------------------------------------------------
+//
+// S80 — completes the share-link lifecycle. The operator UI (S79's
+// FlyerShareAdmin.jsx) renders a Revoke button on each historical mint row;
+// clicking it POSTs here with `{slug, mintedAt}` (what the UI knows from the
+// audit-log row). The endpoint resolves that pair → the original mint's jti
+// (stored in the SHARE_MINTED audit row's metadata since S80) → writes a
+// RevokedToken row that the next verifyShareToken() call will see and
+// reject with REVOKED_TOKEN.
+//
+// Body accepts EITHER form:
+//   { jti }                    — API consumer who knows the jti directly
+//   { slug, mintedAt }         — operator UI working from the audit log
+//
+// 200 { revoked: true, jti, alreadyRevoked: false } on first revoke
+// 200 { revoked: true, jti, alreadyRevoked: true  } on idempotent re-revoke
+// 400 INVALID_BODY              — neither {jti} nor {slug, mintedAt} provided
+// 404 SHARE_MINT_NOT_FOUND      — {slug, mintedAt} pair doesn't match any
+//                                  audit row for this flyer
+// 404 TEMPLATE_NOT_FOUND        — flyer doesn't exist or is cross-tenant
+// 403 SUB_BRAND_DENIED          — operator lacks sub-brand access
+//
+// Audit row TRAVEL_FLYER_PUBLIC_SHARE_REVOKED is written either way (first
+// revoke OR idempotent re-revoke) so the audit chain reflects the operator
+// intent even if the underlying row was already in place.
+router.post(
+  '/:id/revoke-share',
+  verifyToken,
+  verifyRole(['ADMIN', 'MANAGER']),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: 'id must be a number', code: 'INVALID_ID' });
+      }
+
+      const template = await prisma.travelFlyerTemplate.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+      });
+      if (!template) {
+        return res.status(404).json({
+          error: 'Flyer template not found',
+          code: 'TEMPLATE_NOT_FOUND',
+        });
+      }
+      if (template.subBrand) {
+        const allowed = await getSubBrandAccessSet(req.user.userId);
+        if (!canAccessSubBrand(allowed, template.subBrand)) {
+          return res.status(403).json({
+            error: 'Sub-brand access denied',
+            code: 'SUB_BRAND_DENIED',
+          });
+        }
+      }
+
+      const body = req.body || {};
+      let jti = body.jti ? String(body.jti) : null;
+
+      // If the caller gave us {slug, mintedAt} instead of {jti}, resolve via
+      // the audit log. mintedAt = the SHARE_MINTED audit row's createdAt
+      // (the UI captures it verbatim from the audit-viewer response).
+      if (!jti && body.slug && body.mintedAt) {
+        try {
+          const mintedAt = new Date(body.mintedAt);
+          if (Number.isFinite(mintedAt.getTime())) {
+            // Window the lookup to ±5s around mintedAt — audit rows record
+            // wall-clock from writeAudit's Date.now() at the SAME tick, but
+            // serialisation through JSON drops sub-second precision so an
+            // exact-equals comparison risks dropping legitimate matches.
+            const windowStart = new Date(mintedAt.getTime() - 5000);
+            const windowEnd = new Date(mintedAt.getTime() + 5000);
+            const auditRows = await prisma.auditLog.findMany({
+              where: {
+                entity: 'TravelFlyerTemplate',
+                entityId: template.id,
+                action: 'TRAVEL_FLYER_PUBLIC_SHARE_MINTED',
+                tenantId: req.travelTenant.id,
+                createdAt: { gte: windowStart, lte: windowEnd },
+              },
+              orderBy: { createdAt: 'desc' },
+              take: 50,
+            });
+            const matched = auditRows.find((row) => {
+              try {
+                const meta = typeof row.metadata === 'string'
+                  ? JSON.parse(row.metadata)
+                  : (row.metadata || {});
+                return meta.slug === body.slug && meta.jti;
+              } catch (_e) {
+                return false;
+              }
+            });
+            if (matched) {
+              const meta = typeof matched.metadata === 'string'
+                ? JSON.parse(matched.metadata)
+                : (matched.metadata || {});
+              jti = meta.jti || null;
+            }
+          }
+        } catch (lookupErr) {
+          // Fall through to the missing-jti branch below.
+          console.error('[travel-flyer-public] revoke-share audit lookup failed:', lookupErr.message);
+        }
+        if (!jti) {
+          return res.status(404).json({
+            error: 'No matching share-mint audit row found for slug+mintedAt',
+            code: 'SHARE_MINT_NOT_FOUND',
+          });
+        }
+      }
+
+      if (!jti) {
+        return res.status(400).json({
+          error: 'Must provide either {jti} or {slug, mintedAt} in body',
+          code: 'INVALID_BODY',
+        });
+      }
+
+      // S80 — upsert so the endpoint is idempotent. Repeated revoke calls
+      // for the same jti return 200 with alreadyRevoked: true; the
+      // RevokedToken row stays put. Mirrors auth.js#L1262's pattern.
+      const existing = await prisma.revokedToken.findUnique({
+        where: { jti },
+        select: { id: true, revokedAt: true },
+      });
+      let alreadyRevoked = false;
+      if (existing) {
+        alreadyRevoked = true;
+      } else {
+        // Expiry window: we don't know the original token's exp, so use the
+        // 7-day DEFAULT_EXPIRES_IN_SEC. Auth-side revoked tokens use the
+        // same 7-day window for cleanup (auth.js#L1270). The cleanup cron
+        // is responsible for pruning rows past expiresAt.
+        await prisma.revokedToken.create({
+          data: {
+            jti,
+            userId: req.user.userId,
+            tenantId: req.travelTenant.id,
+            expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+            reason: 'flyer_share_revoked',
+          },
+        });
+      }
+
+      try {
+        await writeAudit(
+          'TravelFlyerTemplate',
+          'TRAVEL_FLYER_PUBLIC_SHARE_REVOKED',
+          template.id,
+          req.user.userId,
+          req.travelTenant.id,
+          {
+            flyerId: template.id,
+            jti,
+            slug: body.slug || null,
+            mintedAt: body.mintedAt || null,
+            alreadyRevoked,
+          },
+        );
+      } catch (e) {
+        console.error('[travel-flyer-public] audit share-revoke failed:', e.message);
+      }
+
+      return res.status(200).json({
+        revoked: true,
+        jti,
+        alreadyRevoked,
+        flyerId: template.id,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error('[travel-flyer-public] revoke-share error:', e.message);
+      return res.status(500).json({ error: 'Failed to revoke share link', code: 'INTERNAL_ERROR' });
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
 // GET /public/:slug — render the flyer (PUBLIC, no auth)
 // ---------------------------------------------------------------------------
 router.get('/public/:slug', async (req, res) => {
@@ -295,7 +495,8 @@ router.get('/public/:slug', async (req, res) => {
     }
     let payload;
     try {
-      payload = verifyShareToken(token);
+      // S80 — verifyShareToken is async (checks RevokedToken table).
+      payload = await verifyShareToken(token);
     } catch (e) {
       const env = tokenErrorEnvelope(e);
       return res.status(env.status).json({ error: env.message, code: env.code });
@@ -398,7 +599,8 @@ router.get('/public/:slug/meta', async (req, res) => {
     }
     let payload;
     try {
-      payload = verifyShareToken(token);
+      // S80 — verifyShareToken is async (checks RevokedToken table).
+      payload = await verifyShareToken(token);
     } catch (e) {
       const env = tokenErrorEnvelope(e);
       return res.status(env.status).json({ error: env.message, code: env.code });

@@ -63,6 +63,7 @@ prisma.auditLog = {
 };
 prisma.revokedToken = prisma.revokedToken || {};
 prisma.revokedToken.findUnique = vi.fn().mockResolvedValue(null);
+prisma.revokedToken.create = vi.fn().mockResolvedValue({ id: 1 });
 
 import express from 'express';
 import request from 'supertest';
@@ -139,6 +140,19 @@ beforeEach(() => {
   prisma.tenant.findUnique.mockReset();
   prisma.user.findUnique.mockReset();
   prisma.auditLog.create.mockReset();
+  // S80 — RevokedToken default behavior is "not in list, fresh row creates".
+  prisma.revokedToken.findUnique.mockReset();
+  prisma.revokedToken.findUnique.mockResolvedValue(null);
+  prisma.revokedToken.create.mockReset();
+  prisma.revokedToken.create.mockResolvedValue({ id: 1 });
+  // S80 — auditLog.findMany used by revoke-share's {slug, mintedAt} lookup.
+  prisma.auditLog.findMany = prisma.auditLog.findMany || vi.fn();
+  if (typeof prisma.auditLog.findMany.mockReset === 'function') {
+    prisma.auditLog.findMany.mockReset();
+  } else {
+    prisma.auditLog.findMany = vi.fn();
+  }
+  prisma.auditLog.findMany.mockResolvedValue([]);
 
   writeAuditMock.mockReset();
   writeAuditMock.mockResolvedValue(undefined);
@@ -496,16 +510,182 @@ describe('GET /api/v1/flyers/public/:slug/meta — meta', () => {
 });
 
 // ============================================================================
-// 4. flyerShareToken helper — mint/verify round-trip + edge cases
+// 4. POST /:id/revoke-share — S80 token-revocation surface
+// ============================================================================
+describe('POST /api/v1/flyers/:id/revoke-share — share-revoke', () => {
+  test('no Authorization header → 401/403 (verifyToken)', async () => {
+    const res = await request(makeApp())
+      .post('/api/v1/flyers/42/revoke-share')
+      .send({ jti: 'some-jti' });
+    expect([401, 403]).toContain(res.status);
+  });
+
+  test('USER role → 403 (RBAC denies USER)', async () => {
+    const userToken = tokenFor('USER');
+    const res = await request(makeApp())
+      .post('/api/v1/flyers/42/revoke-share')
+      .set('Authorization', `Bearer ${userToken}`)
+      .send({ jti: 'some-jti' });
+    expect(res.status).toBe(403);
+  });
+
+  test('ADMIN + valid jti → 200, revoked: true, alreadyRevoked: false', async () => {
+    prisma.travelFlyerTemplate.findFirst.mockResolvedValue(makeTemplate());
+    const adminToken = tokenFor('ADMIN');
+    const res = await request(makeApp())
+      .post('/api/v1/flyers/42/revoke-share')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ jti: 'abc-123-jti' });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.body.revoked).toBe(true);
+    expect(res.body.jti).toBe('abc-123-jti');
+    expect(res.body.alreadyRevoked).toBe(false);
+    expect(res.body.flyerId).toBe(42);
+    expect(prisma.revokedToken.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        jti: 'abc-123-jti',
+        userId: 7,
+        tenantId: 1,
+        reason: 'flyer_share_revoked',
+      }),
+    });
+  });
+
+  test('idempotent: second revoke of same jti → 200, alreadyRevoked: true, no double-create', async () => {
+    prisma.travelFlyerTemplate.findFirst.mockResolvedValue(makeTemplate());
+    prisma.revokedToken.findUnique.mockResolvedValueOnce({ id: 99, revokedAt: new Date() });
+    const adminToken = tokenFor('ADMIN');
+    const res = await request(makeApp())
+      .post('/api/v1/flyers/42/revoke-share')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ jti: 'already-revoked-jti' });
+    expect(res.status).toBe(200);
+    expect(res.body.revoked).toBe(true);
+    expect(res.body.alreadyRevoked).toBe(true);
+    expect(prisma.revokedToken.create).not.toHaveBeenCalled();
+  });
+
+  test('missing jti AND missing slug/mintedAt → 400 INVALID_BODY', async () => {
+    prisma.travelFlyerTemplate.findFirst.mockResolvedValue(makeTemplate());
+    const adminToken = tokenFor('ADMIN');
+    const res = await request(makeApp())
+      .post('/api/v1/flyers/42/revoke-share')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({});
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_BODY');
+  });
+
+  test('cross-tenant or missing template → 404 TEMPLATE_NOT_FOUND', async () => {
+    prisma.travelFlyerTemplate.findFirst.mockResolvedValue(null);
+    const adminToken = tokenFor('ADMIN');
+    const res = await request(makeApp())
+      .post('/api/v1/flyers/999/revoke-share')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ jti: 'doesnt-matter' });
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('TEMPLATE_NOT_FOUND');
+  });
+
+  test('non-numeric :id → 400 INVALID_ID', async () => {
+    const adminToken = tokenFor('ADMIN');
+    const res = await request(makeApp())
+      .post('/api/v1/flyers/abc/revoke-share')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ jti: 'x' });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_ID');
+  });
+
+  test('{slug, mintedAt} pair with matching audit row → resolves jti + revokes', async () => {
+    prisma.travelFlyerTemplate.findFirst.mockResolvedValue(makeTemplate());
+    const mintedAt = new Date('2026-06-10T12:00:00Z');
+    prisma.auditLog.findMany.mockResolvedValueOnce([
+      {
+        id: 1,
+        entity: 'TravelFlyerTemplate',
+        entityId: 42,
+        action: 'TRAVEL_FLYER_PUBLIC_SHARE_MINTED',
+        tenantId: 1,
+        createdAt: mintedAt,
+        metadata: JSON.stringify({
+          flyerId: 42,
+          slug: 'summer-umrah-2026',
+          jti: 'audit-resolved-jti',
+        }),
+      },
+    ]);
+    const adminToken = tokenFor('ADMIN');
+    const res = await request(makeApp())
+      .post('/api/v1/flyers/42/revoke-share')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ slug: 'summer-umrah-2026', mintedAt: mintedAt.toISOString() });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.body.jti).toBe('audit-resolved-jti');
+    expect(res.body.revoked).toBe(true);
+  });
+
+  test('{slug, mintedAt} with no matching audit row → 404 SHARE_MINT_NOT_FOUND', async () => {
+    prisma.travelFlyerTemplate.findFirst.mockResolvedValue(makeTemplate());
+    prisma.auditLog.findMany.mockResolvedValueOnce([]);
+    const adminToken = tokenFor('ADMIN');
+    const res = await request(makeApp())
+      .post('/api/v1/flyers/42/revoke-share')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ slug: 'wrong-slug', mintedAt: new Date().toISOString() });
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('SHARE_MINT_NOT_FOUND');
+  });
+
+  test('audit row TRAVEL_FLYER_PUBLIC_SHARE_REVOKED emitted on success', async () => {
+    prisma.travelFlyerTemplate.findFirst.mockResolvedValue(makeTemplate());
+    const adminToken = tokenFor('ADMIN');
+    const res = await request(makeApp())
+      .post('/api/v1/flyers/42/revoke-share')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ jti: 'audit-test-jti' });
+    expect(res.status).toBe(200);
+    const call = writeAuditMock.mock.calls.find((c) =>
+      c[1] === 'TRAVEL_FLYER_PUBLIC_SHARE_REVOKED',
+    );
+    expect(call).toBeTruthy();
+    expect(call[0]).toBe('TravelFlyerTemplate');
+    expect(call[2]).toBe(42);
+    expect(call[4]).toBe(1);
+    expect(call[5].jti).toBe('audit-test-jti');
+    expect(call[5].alreadyRevoked).toBe(false);
+  });
+
+  test('after revoke: GET /public/:slug with the revoked-jti token → 401 INVALID_TOKEN', async () => {
+    prisma.travelFlyerTemplate.findFirst.mockResolvedValue(makeTemplate());
+    const token = mintShareToken({ flyerId: 42, tenantId: 1 });
+    // Decode to fish out the jti the mint just stamped.
+    const decoded = jwt.decode(token);
+    expect(decoded.jti).toBeTruthy();
+    // Simulate the revocation having landed by making the next findUnique
+    // call return a hit.
+    prisma.revokedToken.findUnique.mockResolvedValueOnce({ id: 1 });
+    const res = await request(makeApp())
+      .get(`/api/v1/flyers/public/summer-umrah-2026?t=${encodeURIComponent(token)}&format=pdf-a4`);
+    expect(res.status).toBe(401);
+    expect(res.body.code).toBe('INVALID_TOKEN');
+    expect(res.body.error).toMatch(/revoked/i);
+  });
+});
+
+// ============================================================================
+// 5. flyerShareToken helper — mint/verify round-trip + edge cases
 // ============================================================================
 describe('flyerShareToken — mint + verify contract', () => {
-  test('mint → verify round-trip preserves flyerId + tenantId', () => {
+  test('mint → verify round-trip preserves flyerId + tenantId', async () => {
     const { verifyShareToken } = requireCJS('../../lib/flyerShareToken');
     const token = mintShareToken({ flyerId: 42, tenantId: 7 });
-    const decoded = verifyShareToken(token);
+    // S80 — verifyShareToken is async (RevokedToken DB lookup).
+    const decoded = await verifyShareToken(token);
     expect(decoded.flyerId).toBe(42);
     expect(decoded.tenantId).toBe(7);
     expect(decoded.exp).toBeGreaterThan(Math.floor(Date.now() / 1000));
+    expect(decoded.jti).toBeTruthy(); // S80 — jti present on the round-trip
   });
 
   test('default TTL is 7 days', () => {

@@ -33,6 +33,29 @@ vi.mock("../utils/api", () => ({
   getAuthToken: () => "test-token",
 }));
 
+// S127 — MapPreview wire-in. Mock the leaflet-backed component to avoid
+// jsdom's lack of getBoundingClientRect/transform support (leaflet bails).
+// Tests assert the SUT renders MapPreview with the right items prop +
+// height + that empty itineraries short-circuit the block. The real
+// MapPreview render path is exercised by the dedicated MapPreview.test.jsx.
+// Mirrors the S81 Itineraries.test.jsx pattern.
+const mapPreviewMock = vi.fn();
+vi.mock("../components/MapPreview", () => ({
+  __esModule: true,
+  default: (props) => {
+    mapPreviewMock(props);
+    return (
+      <div
+        data-testid="map-preview-mock"
+        data-pin-count={(props.items || []).length}
+        data-height={props.height ?? ""}
+      >
+        MapPreview stub — {(props.items || []).length} items
+      </div>
+    );
+  },
+}));
+
 // S82 — geocode-on-create wire-in. Mock the lib/geocoder.js surface so we
 // can pin (a) when geocode() is called vs skipped, (b) how the resolved
 // {lat, lng} lands in the POST body, and (c) fail-soft behaviour when
@@ -210,6 +233,7 @@ function makeFetchImpl(getResponse = ITIN_WITH_ITEMS, opts = {}) {
 beforeEach(() => {
   fetchApiMock.mockReset();
   geocodeMock.mockReset();
+  mapPreviewMock.mockReset();
   // Default: no geocode hit unless a test overrides — so non-S82 tests
   // don't accidentally start sending unexpected lat/lng in their POST.
   geocodeMock.mockResolvedValue(null);
@@ -1261,5 +1285,70 @@ describe("ItineraryDetail — S82 geocode-on-create", () => {
       expect(body.latitude).toBeCloseTo(24.4128, 4);
       expect(body.longitude).toBeCloseTo(54.4747, 4);
     });
+  });
+});
+
+// ─── S127 — MapPreview wire-in on the detail page ────────────────────
+//
+// Pins the spatial preview block above the day-by-day breakdown. The
+// itinerary fetch already includes items with latitude/longitude, so
+// MapPreview renders directly off itin.items with no extra fetch.
+// Contract:
+//   - Map renders when the itinerary has ≥1 item.
+//   - items prop is the full itin.items array (MapPreview's own
+//     pinnableItems handles partial geocoding by skipping rows without
+//     coords — we deliberately do NOT pre-filter here).
+//   - height={320} matches the S81 list-page wire-in default.
+//   - Empty itineraries (items: []) short-circuit the entire section
+//     so we don't render an empty world-view map below an empty Items
+//     table.
+//
+// MapPreview itself is mocked (see top-of-file vi.mock) — leaflet
+// breaks under jsdom. The real render path is covered by
+// MapPreview.test.jsx.
+describe("ItineraryDetail — S127 MapPreview wire-in", () => {
+  it("renders MapPreview when the itinerary has items", async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl(ITIN_WITH_ITEMS));
+    renderPage();
+    await screen.findByText(/Goa school trip/);
+    expect(await screen.findByTestId("map-preview-mock")).toBeInTheDocument();
+    // The "Trip map" header label is present alongside the mock.
+    expect(screen.getByText(/Trip map/i)).toBeInTheDocument();
+  });
+
+  it("passes itin.items as the items prop and height=320", async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl(ITIN_WITH_ITEMS));
+    renderPage();
+    await screen.findByText(/Goa school trip/);
+    const mapNode = await screen.findByTestId("map-preview-mock");
+    // The seed has 2 items (flight + hotel).
+    expect(mapNode.getAttribute("data-pin-count")).toBe("2");
+    expect(mapNode.getAttribute("data-height")).toBe("320");
+    // Inspect the recorded props directly — items should be the same
+    // array the page received from the GET.
+    await waitFor(() => {
+      expect(mapPreviewMock).toHaveBeenCalled();
+    });
+    const lastCall = mapPreviewMock.mock.calls[mapPreviewMock.mock.calls.length - 1][0];
+    expect(Array.isArray(lastCall.items)).toBe(true);
+    expect(lastCall.items.length).toBe(2);
+    expect(lastCall.height).toBe(320);
+    // Items pass through unfiltered (MapPreview's own pinnableItems
+    // handles row-level lat/lng skipping). Pin first row's id to
+    // prove we're forwarding the array shape, not derived data.
+    expect(lastCall.items[0].id).toBe(101);
+  });
+
+  it("does NOT render MapPreview when the itinerary has no items", async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl(ITIN_EMPTY));
+    renderPage();
+    await screen.findByText(/Goa school trip/);
+    // Confirm the empty-items state is rendered (sanity check that the
+    // page actually mounted with the empty fixture).
+    await screen.findByText(/No items yet/i);
+    // No map block — the section is short-circuited entirely.
+    expect(screen.queryByTestId("map-preview-mock")).toBeNull();
+    expect(screen.queryByText(/Trip map/i)).toBeNull();
+    expect(mapPreviewMock).not.toHaveBeenCalled();
   });
 });

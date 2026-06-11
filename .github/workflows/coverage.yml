@@ -317,6 +317,9 @@ jobs:
             tests/webhook-credential-api.spec.js \
             tests/wellness-portal-notifications-api.spec.js \
             tests/admin-backfill-last-visit-api.spec.js \
+            tests/security-reports-violations-api.spec.js \
+            tests/travel-quote-templates-api.spec.js \
+            tests/travel-flyer-templates-api.spec.js \
             tests/teardown-completeness.spec.js \
             tests/demo-hygiene-api.spec.js
 

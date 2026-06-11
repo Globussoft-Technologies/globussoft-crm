@@ -664,10 +664,11 @@ const processNodeLegacy = async (node, enrollment) => {
       // stub-flagged media-ref entry that captures enough provenance
       // (flyerId / format / mimeType) for the real swap point. The
       // single-column WhatsAppMessage.mediaUrl + mediaType pair can only
-      // surface ONE attachment; the full list goes through the audit log
-      // — operators read the audit trail to see all attached flyers.
-      // Schema gap noted in return: WhatsAppMessage lacks a mediaRefsJson
-      // column for multi-attachment payloads.
+      // surface ONE attachment; the full list also persists to
+      // WhatsAppMessage.mediaRefsJson (S124 — JSON-stringified array of
+      // every resolved attachment ref). The audit trail still mirrors the
+      // list per-attachment for forensic completeness, but operators no
+      // longer need to cross-reference audit rows to see the full list.
       const stubMediaRefs = [];
       for (const att of attachments) {
         if (att.kind === 'flyer' && Buffer.isBuffer(att.buffer)) {
@@ -716,6 +717,13 @@ const processNodeLegacy = async (node, enrollment) => {
           contactId: enrollment.contact.id,
           ...(mediaUrl ? { mediaUrl } : {}),
           ...(mediaType ? { mediaType } : {}),
+          // S124: multi-attachment full list. Null when no attachments —
+          // preserves the existing "no media columns set" shape for the
+          // zero-attachment path so unit tests pinning `data.mediaUrl ===
+          // undefined` keep passing.
+          ...(stubMediaRefs.length > 0
+            ? { mediaRefsJson: JSON.stringify(stubMediaRefs) }
+            : {}),
         },
       });
 

@@ -502,27 +502,27 @@ model User {
   tenantId Int    @default(1)
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  deals             Deal[]             @relation("OwnerDeals")
-  tickets           Ticket[]           @relation("AssignedTickets")
-  apiKeys           ApiKey[]
-  webhooks          Webhook[]
+  deals              Deal[]              @relation("OwnerDeals")
+  tickets            Ticket[]            @relation("AssignedTickets")
+  apiKeys            ApiKey[]
+  webhooks           Webhook[]
   webhookCredentials WebhookCredential[] @relation("UserWebhookCredentials")
-  tasks             Task[]
-  expenses          Expense[]
-  approvedExpenses  Expense[]          @relation("ExpenseApprover")
-  projects          Project[]          @relation("ProjectOwner")
-  notifications     Notification[]
-  auditLogs         AuditLog[]
-  assignedContacts  Contact[]          @relation("AssignedContacts")
-  activities        Activity[]
-  callLogs          CallLog[]
-  emailMessages     EmailMessage[]
-  reportSchedules   ReportSchedule[]
-  smsMessages       SmsMessage[]
-  whatsappMessages  WhatsAppMessage[]
-  whatsappThreads   WhatsAppThread[]   @relation("WhatsAppThreadAssignee")
-  pushSubscriptions PushSubscription[]
-  landingPages      LandingPage[]
+  tasks              Task[]
+  expenses           Expense[]
+  approvedExpenses   Expense[]           @relation("ExpenseApprover")
+  projects           Project[]           @relation("ProjectOwner")
+  notifications      Notification[]
+  auditLogs          AuditLog[]
+  assignedContacts   Contact[]           @relation("AssignedContacts")
+  activities         Activity[]
+  callLogs           CallLog[]
+  emailMessages      EmailMessage[]
+  reportSchedules    ReportSchedule[]
+  smsMessages        SmsMessage[]
+  whatsappMessages   WhatsAppMessage[]
+  whatsappThreads    WhatsAppThread[]    @relation("WhatsAppThreadAssignee")
+  pushSubscriptions  PushSubscription[]
+  landingPages       LandingPage[]
 
   // Wellness vertical
   doctorVisits        Visit[]        @relation("DoctorVisits")
@@ -1828,6 +1828,13 @@ model WhatsAppMessage {
   // schema churn.
   metaType        String?
   interactiveJson String? @db.Text
+
+  // S124: full multi-attachment refs list (mediaUrl/mediaType only surface
+  // the first attachment due to single-column legacy schema; mediaRefsJson
+  // holds JSON-stringified array of all resolved attachment refs for
+  // multi-attachment WhatsApp sends from the sequence engine). Additive
+  // nullable — existing rows + single-attachment callers unaffected.
+  mediaRefsJson String? @db.Text
 
   @@index([tenantId, createdAt])
   @@index([threadId, createdAt])
@@ -6053,20 +6060,43 @@ model TripMicrositeOtp {
 // (tenantId, subBrand). The voyagrAuth + apiKeyAuth.requireSubBrandMatch
 // helpers enforce sub-brand isolation at the route layer.
 model TravelQuote {
-  id          Int                   @id @default(autoincrement())
-  tenantId    Int                   @default(1)
-  subBrand    String
-  contactId   Int
-  status      String                @default("Draft") // Draft | Sent | Accepted | Rejected | Expired
-  totalAmount Decimal?              @db.Decimal(15, 2)
-  currency    String                @default("INR")
-  validUntil  DateTime?
-  lines       TravelQuoteLine[]
-  invoices    TravelInvoice[]
-  snapshots   TravelQuoteSnapshot[]
-  tenant      Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  createdAt   DateTime              @default(now())
-  updatedAt   DateTime              @updatedAt
+  id                   Int                   @id @default(autoincrement())
+  tenantId             Int                   @default(1)
+  subBrand             String
+  contactId            Int
+  status               String                @default("Draft") // Draft | Sent | Accepted | Rejected | Expired
+  totalAmount          Decimal?              @db.Decimal(15, 2)
+  currency             String                @default("INR")
+  validUntil           DateTime?
+  // S47 — FX-lock dedicated columns. Populated at customer-accept time
+  // by routes/travel_quotes_public.js (mirrors the fxLock block also
+  // persisted in TravelQuoteSnapshot.snapshotJson for forensic history /
+  // pre-S47 backward-compat). Letting aggregate-level reporting + billing
+  // joins query the locked rate without parsing snapshot JSON.
+  //   fxRateSnapshot:        source→target rate at lock-time (e.g. 83.4
+  //                          means 1 sourceCurrency = 83.4 targetCurrency).
+  //                          Null when same-currency / no source rate / lookup
+  //                          failed (the route's fail-soft contract).
+  //   fxRateSourceCurrency:  the quote's currency at lock-time (mirror of
+  //                          quote.currency captured at accept; kept here
+  //                          so a later currency change on the quote doesn't
+  //                          lose the lock's original source).
+  //   fxRateTargetCurrency:  tenant.defaultCurrency at lock-time.
+  //   fxRateLockedAt:        accept-time timestamp.
+  //   fxRateExpiresAt:       optional expiry for the lock (PRD §3.4.2 — not
+  //                          enforced today; reserved for future "lock
+  //                          expires after N days" gate).
+  fxRateSnapshot       Decimal?              @db.Decimal(15, 6)
+  fxRateSourceCurrency String?
+  fxRateTargetCurrency String?
+  fxRateLockedAt       DateTime?
+  fxRateExpiresAt      DateTime?
+  lines                TravelQuoteLine[]
+  invoices             TravelInvoice[]
+  snapshots            TravelQuoteSnapshot[]
+  tenant               Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt            DateTime              @default(now())
+  updatedAt            DateTime              @updatedAt
 
   @@index([tenantId, subBrand])
   @@index([tenantId, subBrand, status])

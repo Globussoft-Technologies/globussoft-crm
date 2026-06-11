@@ -1,12 +1,34 @@
 /**
- * /api/travel/pois — Inline rep-suggested POI flow + ADMIN approval queue.
+ * /api/travel/pois — POI catalog read path + inline rep-suggested POI
+ * flow + ADMIN approval queue.
  *
- * Wave 18 slice S12. Depends on slice S11 (`TravelPoi` Prisma model shipped
- * commit `5a03e3be`). Per PRD_TRAVEL_ITINERARY_UPGRADES.md FR-3.7.
+ * Wave 18 slices S12 (suggest + approve/reject) and S93 (catalog list).
+ * Depends on slice S11 (`TravelPoi` Prisma model shipped commit
+ * `5a03e3be`). Per PRD_TRAVEL_ITINERARY_UPGRADES.md FR-3.6 (catalog
+ * read path consumed by the itinerary editor + Inline Add-POI modal)
+ * and FR-3.7 (suggest + approve).
  *
- * Endpoints (mount point `/api/travel/pois` — server.js wire-in deferred to
- * a follow-up gap slice per the slice prompt's "do NOT mount the new route
- * in server.js" sibling-isolation rule):
+ * Endpoints (mount point `/api/travel/pois`, wired in server.js
+ * line 946 — `app.use("/api/travel/pois", require("./routes/travel_pois"))`):
+ *
+ *   GET    /                Catalog list for the itinerary editor's
+ *                           PoiPicker. USER+ allowed (every Travel rep
+ *                           builds itineraries). Query params:
+ *                             destinationSlug (REQUIRED)
+ *                             category (optional exact match)
+ *                             q (optional fuzzy LIKE on `name` /
+ *                               `nameLocal`, case-insensitive)
+ *                             limit (default 50, cap 200)
+ *                             offset (default 0)
+ *                           Tenant scope: returns rows where
+ *                           `tenantId = req.user.tenantId` OR
+ *                           `tenantId IS NULL` (catalog-wide rows seeded
+ *                           by S11's OpenTripMap importer). Hides
+ *                           `pendingApproval = true` rows — those live
+ *                           in the operator's approval queue, not the
+ *                           picker. Sort by `name ASC` (deterministic +
+ *                           good UX for a typeahead). 200 + `{ pois,
+ *                           total, limit, offset }`.
  *
  *   POST   /                Rep (USER+) suggests a new POI. Body:
  *                           { name, nameLocal?, category, latitude,
@@ -35,7 +57,11 @@
  *                           id }.
  *
  * Auth chain:
- *   verifyToken → [verifyRole(['ADMIN'(+'MANAGER')])] → handler
+ *   GET  /                  verifyToken (USER+ — picker is for every rep)
+ *   POST /                  verifyToken (USER+)
+ *   GET  /pending           verifyToken → verifyRole(['ADMIN','MANAGER'])
+ *   POST /:id/approve       verifyToken → verifyRole(['ADMIN'])
+ *   POST /:id/reject        verifyToken → verifyRole(['ADMIN'])
  *
  * Tenant scoping:
  *   - tenantId always comes from `req.user.tenantId`. Never read from body
@@ -49,7 +75,8 @@
  *     concrete tenantId so the approval queue is per-tenant.
  *
  * Failure-path codes:
- *   400 MISSING_FIELDS    — name or category absent on POST
+ *   400 MISSING_FIELDS    — name or category absent on POST; or
+ *                           destinationSlug absent on GET /
  *   400 INVALID_COORD     — latitude / longitude not a finite number in
  *                           lat ∈ [-90, 90], lng ∈ [-180, 180]
  *   400 INVALID_ID        — :id is not a positive integer
@@ -122,6 +149,71 @@ function pickString(raw, max = 255) {
   if (trimmed === "") return null;
   return trimmed.slice(0, max);
 }
+
+// ───────────────────────────────────────────────────────────────────
+// GET / — catalog list for the itinerary editor's PoiPicker (S93)
+// ───────────────────────────────────────────────────────────────────
+// USER+ allowed. Required query: destinationSlug. Optional: category,
+// q (fuzzy match on name + nameLocal), limit (default 50, max 200),
+// offset (default 0). Tenant scope: returns rows where
+// tenantId = req.user.tenantId OR tenantId IS NULL (S11 OpenTripMap
+// seed uses null for catalog-wide rows). Hides pendingApproval rows
+// — those live in the approval queue, not the picker.
+router.get("/", verifyToken, async (req, res) => {
+  try {
+    const destinationSlug = pickString(req.query.destinationSlug, 80);
+    if (!destinationSlug) {
+      return res
+        .status(400)
+        .json({ error: "destinationSlug required", code: "MISSING_FIELDS" });
+    }
+
+    const category = pickString(req.query.category, 80);
+    const q = pickString(req.query.q, 200);
+
+    const rawLimit = parseInt(req.query.limit, 10);
+    const limit =
+      Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 200) : 50;
+    const rawOffset = parseInt(req.query.offset, 10);
+    const offset = Number.isFinite(rawOffset) && rawOffset >= 0 ? rawOffset : 0;
+
+    // Catalog rows: own tenant's approved rows + catalog-wide null-tenant
+    // rows. Hide pendingApproval=true.
+    const where = {
+      destinationSlug,
+      pendingApproval: false,
+      OR: [{ tenantId: req.user.tenantId }, { tenantId: null }],
+    };
+    if (category) where.category = category;
+    if (q) {
+      // MySQL collation is case-insensitive by default (utf8mb4_unicode_ci).
+      // Prisma's `contains` translates to LIKE '%q%'.
+      where.AND = [
+        {
+          OR: [
+            { name: { contains: q } },
+            { nameLocal: { contains: q } },
+          ],
+        },
+      ];
+    }
+
+    const [rows, total] = await Promise.all([
+      prisma.travelPoi.findMany({
+        where,
+        orderBy: { name: "asc" },
+        take: limit,
+        skip: offset,
+      }),
+      prisma.travelPoi.count({ where }),
+    ]);
+
+    res.json({ pois: rows, total, limit, offset });
+  } catch (e) {
+    console.error("[travel-pois] list error:", e.message);
+    res.status(500).json({ error: "Failed to load POI catalog" });
+  }
+});
 
 // ───────────────────────────────────────────────────────────────────
 // POST / — rep suggests a POI (USER+ allowed; queue lives at /pending)

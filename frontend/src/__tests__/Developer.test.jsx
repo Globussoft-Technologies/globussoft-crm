@@ -145,6 +145,17 @@ function defaultFetchMock(url, opts) {
   if (url.startsWith('/api/developer/agent-activity')) {
     return Promise.resolve({ activity: [] });
   }
+  // S121 — CSP Violations observability surface. Default clean24h=true so
+  // tests that don't care about the CSP card see the green "safe to enforce"
+  // badge. Override in specific tests for violation-list / badge variants.
+  if (url.startsWith('/api/security/violations')) {
+    return Promise.resolve({
+      violations: [],
+      total: 0,
+      sinceIso: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+      clean24h: true,
+    });
+  }
   return Promise.resolve(null);
 }
 
@@ -511,5 +522,131 @@ describe('<Developer /> — page surface, API key + webhook CRUD, agent activity
     expect(screen.getByText(/polling every 3s · 2 entries/i)).toBeInTheDocument();
     // Commit short-hash (first 7 chars) renders in the Detail cell.
     expect(screen.getByText(/\[abc1234\]/)).toBeInTheDocument();
+  });
+
+  // ─────────────────────────────────────────────────────────────────────
+  // S121 — CSP Violations observability surface (operator go/no-go for
+  // CSP_ENFORCE=1 flip per backend/middleware/security.js S117 changes).
+  // ─────────────────────────────────────────────────────────────────────
+
+  it('S121: CSP Violations card renders + fires GET /api/security/violations on mount', async () => {
+    renderDeveloper();
+    expect(await screen.findByText('CSP Violations')).toBeInTheDocument();
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(([u]) =>
+        typeof u === 'string' && u.startsWith('/api/security/violations'),
+      );
+      expect(call).toBeTruthy();
+    });
+  });
+
+  it('S121: clean24h=true → green "safe to enforce" badge renders', async () => {
+    // Default mock already returns clean24h:true — pin the exact copy.
+    renderDeveloper();
+    expect(
+      await screen.findByText(/CSP-clean \(24h\) — safe to enforce/i),
+    ).toBeInTheDocument();
+  });
+
+  it('S121: clean24h=false → red warning badge tells operator NOT to flip', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url.startsWith('/api/security/violations')) {
+        return Promise.resolve({
+          violations: [
+            {
+              id: 1,
+              entity: 'CSPViolation',
+              action: 'REPORT',
+              tenantId: 1,
+              createdAt: '2026-06-11T10:00:00.000Z',
+              details: JSON.stringify({
+                'csp-report': {
+                  'effective-directive': 'script-src',
+                  'blocked-uri': 'https://evil.example/x.js',
+                  'document-uri': 'https://crm.globusdemos.com/dashboard',
+                },
+              }),
+            },
+          ],
+          total: 1,
+          sinceIso: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+          clean24h: false,
+        });
+      }
+      return defaultFetchMock(url, opts);
+    });
+    renderDeveloper();
+    expect(
+      await screen.findByText(/DO NOT flip CSP_ENFORCE yet/i),
+    ).toBeInTheDocument();
+  });
+
+  it('S121: violation rows render in table with parsed directive / blocked-uri', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url.startsWith('/api/security/violations')) {
+        return Promise.resolve({
+          violations: [
+            {
+              id: 7,
+              entity: 'CSPViolation',
+              action: 'REPORT',
+              tenantId: 1,
+              createdAt: '2026-06-11T10:00:00.000Z',
+              details: JSON.stringify({
+                'csp-report': {
+                  'effective-directive': 'script-src',
+                  'blocked-uri': 'https://evil.example/payload.js',
+                  'document-uri': 'https://crm.globusdemos.com/p/tmc/report',
+                },
+              }),
+            },
+          ],
+          total: 1,
+          sinceIso: new Date().toISOString(),
+          clean24h: false,
+        });
+      }
+      return defaultFetchMock(url, opts);
+    });
+    renderDeveloper();
+    // Parsed CSP fields render in their cells.
+    expect(await screen.findByText('script-src')).toBeInTheDocument();
+    expect(screen.getByText('https://evil.example/payload.js')).toBeInTheDocument();
+    expect(
+      screen.getByText('https://crm.globusdemos.com/p/tmc/report'),
+    ).toBeInTheDocument();
+  });
+
+  it('S121: empty-state copy renders when no violations in window', async () => {
+    // Default mock returns violations: [] — pin the empty-state copy.
+    renderDeveloper();
+    expect(
+      await screen.findByText(/No CSP violations in the selected window\./i),
+    ).toBeInTheDocument();
+  });
+
+  it('S121: Refresh button triggers a re-fetch of /api/security/violations', async () => {
+    renderDeveloper();
+    // Wait for initial mount fetch.
+    await screen.findByText('CSP Violations');
+    await waitFor(() => {
+      const calls = fetchApiMock.mock.calls.filter(([u]) =>
+        typeof u === 'string' && u.startsWith('/api/security/violations'),
+      );
+      expect(calls.length).toBeGreaterThanOrEqual(1);
+    });
+    const initialCount = fetchApiMock.mock.calls.filter(([u]) =>
+      typeof u === 'string' && u.startsWith('/api/security/violations'),
+    ).length;
+
+    // Click the refresh button (aria-label="Refresh CSP violations").
+    fireEvent.click(screen.getByLabelText(/Refresh CSP violations/i));
+
+    await waitFor(() => {
+      const newCount = fetchApiMock.mock.calls.filter(([u]) =>
+        typeof u === 'string' && u.startsWith('/api/security/violations'),
+      ).length;
+      expect(newCount).toBeGreaterThan(initialCount);
+    });
   });
 });

@@ -110,9 +110,9 @@ function tokenFor(role = 'USER', { userId = 7, tenantId = 1 } = {}) {
   );
 }
 
-// Canonical suggestionJson shape — matches what itinerarySuggestLLM.js's
-// buildStubSuggestion emits. Operator gets this from POST /suggest and
-// POSTs it back to /from-suggestion.
+// Canonical suggestionJson shape — matches what the FR-3.4 /suggest
+// handler emits. Operator gets this from POST /suggest and POSTs it
+// back to /from-suggestion.
 const SUGGESTION_2D_3I = {
   daySplit: [
     {
@@ -542,15 +542,15 @@ describe('POST /api/travel/itineraries/from-suggestion (S90)', () => {
   });
 
   test('S109e. suggest→materialise verbatim round-trip: stub emit shape is accepted by route', async () => {
-    // The full contract S109 unlocks: the service's stub emit goes
-    // verbatim to the route. We construct a suggestion that mirrors what
-    // backend/services/itinerarySuggestLLM.js's buildStubSuggestion emits
-    // post-S109 (only 'activity' + 'meals' itemTypes) and confirm the
-    // materialise route accepts every item.
+    // The full contract S109 unlocks: the /suggest handler's stub emit
+    // goes verbatim to the materialise route. We construct a suggestion
+    // that mirrors what the FR-3.4 buildStubSuggestion emits post-S109
+    // (only 'activity' + 'meals' itemTypes) and confirm the materialise
+    // route accepts every item.
     const app = makeApp();
     const token = tokenFor('USER');
-    // Mirror buildStubSuggestion shape — pinned at the service level by
-    // backend/test/services/itinerary-suggest-llm.test.js S109 cases.
+    // Mirror buildStubSuggestion shape — pinned by the FR-3.4 handler
+    // in routes/travel_itineraries.js.
     const stubShape = {
       daySplit: [
         {
@@ -652,5 +652,248 @@ describe('POST /api/travel/itineraries/from-suggestion (S90)', () => {
     // locationName persisted in detailsJson.
     const parsed = JSON.parse(callArg.data.items.create[0].detailsJson);
     expect(parsed.locationName).toBe('Goa Beach');
+  });
+});
+
+// ─── S118 — POST /api/travel/itineraries/:id/items lat/lng whitelist ───
+//
+// S82 shipped frontend geocode-on-create (Nominatim → lat/lng in POST body)
+// but the route handler destructure dropped latitude + longitude silently.
+// The PATCH handler accepted them; the bulk-import path accepted them;
+// only the single-item POST was missing the field. S118 closes the loop —
+// destructure + validate + persist, mirroring the PATCH validation exactly
+// (Number.isFinite + lat ∈ [-90,90] + lng ∈ [-180,180] → 400 with
+// INVALID_LATITUDE / INVALID_LONGITUDE codes that mirror PATCH).
+//
+// Tests pin:
+//   1.  POST with valid lat + lng → both persisted into prisma create payload.
+//   2.  POST without lat/lng → both null (legacy clients unaffected).
+//   3.  POST lat=0, lng=0 → both persisted (0 is a legitimate coord).
+//   4.  POST lat=90, lng=180 → both persisted (max-boundary inclusive).
+//   5.  POST lat=-90, lng=-180 → both persisted (min-boundary inclusive).
+//   6.  POST lat=91 → 400 INVALID_LATITUDE.
+//   7.  POST lng=181 → 400 INVALID_LONGITUDE.
+//   8.  POST lat="not a number" → 400 INVALID_LATITUDE.
+//   9.  POST lat=null → persisted as null (explicit-clear path).
+//  10.  POST lat="" → persisted as null (form-empty-input path).
+//  11.  POST with valid dayNumber → persisted (S118 also added dayNumber).
+//  12.  Cross-tenant POST rejects → 404 ITEM_NOT_FOUND-style (regression).
+//  13.  POST lng="not a number" → 400 INVALID_LONGITUDE.
+
+describe('POST /api/travel/itineraries/:id/items lat/lng whitelist (S118)', () => {
+  let itineraryItemCreateMock;
+  let itineraryItemFindFirstMock;
+  let itineraryFindFirstMock;
+
+  beforeEach(() => {
+    // The router needs to load the parent itinerary first via
+    // loadItineraryWithGuard → prisma.itinerary.findFirst.
+    itineraryFindFirstMock = vi.fn().mockResolvedValue({
+      id: 99,
+      tenantId: 1,
+      subBrand: 'tmc',
+      contactId: 501,
+      status: 'draft',
+    });
+    prisma.itinerary.findFirst = itineraryFindFirstMock;
+    // Auto-position lookup — pretend it's the first item.
+    itineraryItemFindFirstMock = vi.fn().mockResolvedValue(null);
+    prisma.itineraryItem.findFirst = itineraryItemFindFirstMock;
+    // Capture what gets created so the assertions can read the data payload.
+    itineraryItemCreateMock = vi.fn().mockImplementation(async ({ data }) => ({
+      id: 1234,
+      itineraryId: data.itineraryId,
+      itemType: data.itemType,
+      description: data.description,
+      position: data.position,
+      latitude: data.latitude ?? null,
+      longitude: data.longitude ?? null,
+      dayNumber: data.dayNumber ?? null,
+    }));
+    prisma.itineraryItem.create = itineraryItemCreateMock;
+    // syncItineraryAfterItemChange touches itinerary.findUnique + update +
+    // items.findMany. Stub all three so the post-create housekeeping
+    // doesn't 500.
+    prisma.itinerary.findUnique = vi.fn().mockResolvedValue({ id: 99, status: 'draft' });
+    prisma.itinerary.update = vi.fn().mockResolvedValue({ id: 99 });
+    prisma.itineraryItem.findMany = vi.fn().mockResolvedValue([]);
+  });
+
+  test('1. POST with valid lat + lng → both persisted into create payload', async () => {
+    const app = makeApp();
+    const token = tokenFor('USER');
+    const res = await request(app)
+      .post('/api/travel/itineraries/99/items')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        itemType: 'activity',
+        description: 'Beach walk',
+        latitude: 15.2993,
+        longitude: 74.124,
+      });
+    expect(res.status).toBe(201);
+    expect(itineraryItemCreateMock).toHaveBeenCalledTimes(1);
+    const data = itineraryItemCreateMock.mock.calls[0][0].data;
+    expect(data.latitude).toBe(15.2993);
+    expect(data.longitude).toBe(74.124);
+    expect(res.body.latitude).toBe(15.2993);
+    expect(res.body.longitude).toBe(74.124);
+  });
+
+  test('2. POST without lat/lng → both null (legacy-client regression)', async () => {
+    const app = makeApp();
+    const token = tokenFor('USER');
+    const res = await request(app)
+      .post('/api/travel/itineraries/99/items')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ itemType: 'activity', description: 'No coords' });
+    expect(res.status).toBe(201);
+    const data = itineraryItemCreateMock.mock.calls[0][0].data;
+    expect(data.latitude).toBe(null);
+    expect(data.longitude).toBe(null);
+  });
+
+  test('3. POST lat=0, lng=0 → both persisted (0 is valid)', async () => {
+    const app = makeApp();
+    const token = tokenFor('USER');
+    const res = await request(app)
+      .post('/api/travel/itineraries/99/items')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ itemType: 'activity', description: 'Null Island', latitude: 0, longitude: 0 });
+    expect(res.status).toBe(201);
+    const data = itineraryItemCreateMock.mock.calls[0][0].data;
+    expect(data.latitude).toBe(0);
+    expect(data.longitude).toBe(0);
+  });
+
+  test('4. POST lat=90, lng=180 → both persisted (max-boundary inclusive)', async () => {
+    const app = makeApp();
+    const token = tokenFor('USER');
+    const res = await request(app)
+      .post('/api/travel/itineraries/99/items')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ itemType: 'activity', description: 'North Pole-ish', latitude: 90, longitude: 180 });
+    expect(res.status).toBe(201);
+    const data = itineraryItemCreateMock.mock.calls[0][0].data;
+    expect(data.latitude).toBe(90);
+    expect(data.longitude).toBe(180);
+  });
+
+  test('5. POST lat=-90, lng=-180 → both persisted (min-boundary inclusive)', async () => {
+    const app = makeApp();
+    const token = tokenFor('USER');
+    const res = await request(app)
+      .post('/api/travel/itineraries/99/items')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ itemType: 'activity', description: 'South Pole-ish', latitude: -90, longitude: -180 });
+    expect(res.status).toBe(201);
+    const data = itineraryItemCreateMock.mock.calls[0][0].data;
+    expect(data.latitude).toBe(-90);
+    expect(data.longitude).toBe(-180);
+  });
+
+  test('6. POST lat=91 → 400 INVALID_LATITUDE', async () => {
+    const app = makeApp();
+    const token = tokenFor('USER');
+    const res = await request(app)
+      .post('/api/travel/itineraries/99/items')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ itemType: 'activity', description: 'too far north', latitude: 91, longitude: 0 });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_LATITUDE');
+    expect(itineraryItemCreateMock).not.toHaveBeenCalled();
+  });
+
+  test('7. POST lng=181 → 400 INVALID_LONGITUDE', async () => {
+    const app = makeApp();
+    const token = tokenFor('USER');
+    const res = await request(app)
+      .post('/api/travel/itineraries/99/items')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ itemType: 'activity', description: 'too far east', latitude: 0, longitude: 181 });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_LONGITUDE');
+    expect(itineraryItemCreateMock).not.toHaveBeenCalled();
+  });
+
+  test('8. POST lat="not a number" → 400 INVALID_LATITUDE', async () => {
+    const app = makeApp();
+    const token = tokenFor('USER');
+    const res = await request(app)
+      .post('/api/travel/itineraries/99/items')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ itemType: 'activity', description: 'bad coord', latitude: 'not-a-number', longitude: 0 });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_LATITUDE');
+    expect(itineraryItemCreateMock).not.toHaveBeenCalled();
+  });
+
+  test('9. POST lat=null → persisted as null (explicit-clear path)', async () => {
+    const app = makeApp();
+    const token = tokenFor('USER');
+    const res = await request(app)
+      .post('/api/travel/itineraries/99/items')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ itemType: 'activity', description: 'explicit null', latitude: null, longitude: null });
+    expect(res.status).toBe(201);
+    const data = itineraryItemCreateMock.mock.calls[0][0].data;
+    expect(data.latitude).toBe(null);
+    expect(data.longitude).toBe(null);
+  });
+
+  test('10. POST lat="" → persisted as null (form-empty-input path)', async () => {
+    const app = makeApp();
+    const token = tokenFor('USER');
+    const res = await request(app)
+      .post('/api/travel/itineraries/99/items')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ itemType: 'activity', description: 'empty string', latitude: '', longitude: '' });
+    expect(res.status).toBe(201);
+    const data = itineraryItemCreateMock.mock.calls[0][0].data;
+    expect(data.latitude).toBe(null);
+    expect(data.longitude).toBe(null);
+  });
+
+  test('11. POST with valid dayNumber → persisted (S118 also wired dayNumber)', async () => {
+    const app = makeApp();
+    const token = tokenFor('USER');
+    const res = await request(app)
+      .post('/api/travel/itineraries/99/items')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ itemType: 'activity', description: 'Day 3 item', dayNumber: 3 });
+    expect(res.status).toBe(201);
+    const data = itineraryItemCreateMock.mock.calls[0][0].data;
+    expect(data.dayNumber).toBe(3);
+  });
+
+  test('12. cross-tenant POST → 404 (itinerary guard rejects)', async () => {
+    // loadItineraryWithGuard does findFirst({ where: { id, tenantId } }) so
+    // a cross-tenant lookup returns null → 404. Simulate by returning null.
+    itineraryFindFirstMock.mockResolvedValueOnce(null);
+    const app = makeApp();
+    const token = tokenFor('USER');
+    const res = await request(app)
+      .post('/api/travel/itineraries/77777/items')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        itemType: 'activity',
+        description: 'cross-tenant attempt',
+        latitude: 15.2993,
+        longitude: 74.124,
+      });
+    expect(res.status).toBe(404);
+    expect(itineraryItemCreateMock).not.toHaveBeenCalled();
+  });
+
+  test('13. POST lng="not a number" → 400 INVALID_LONGITUDE', async () => {
+    const app = makeApp();
+    const token = tokenFor('USER');
+    const res = await request(app)
+      .post('/api/travel/itineraries/99/items')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ itemType: 'activity', description: 'bad lng', latitude: 0, longitude: 'NaN-string' });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_LONGITUDE');
+    expect(itineraryItemCreateMock).not.toHaveBeenCalled();
   });
 });

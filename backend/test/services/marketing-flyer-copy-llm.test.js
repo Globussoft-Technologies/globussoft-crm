@@ -47,8 +47,7 @@ const requireCjs = createRequire(import.meta.url);
 // Hoisted Prisma mock — the cap helper does
 // `prisma.tenantSetting.findUnique(...)` to read per-tenant cap rows.
 // Same Module._cache install pattern as the adsGptClient + llmRouter
-// + itinerarySuggestLLM tests (vitest's ESM-level vi.mock can't
-// intercept CJS require()).
+// tests (vitest's ESM-level vi.mock can't intercept CJS require()).
 const prismaMock = vi.hoisted(() => {
   const mock = {
     tenantSetting: {
@@ -99,8 +98,8 @@ afterEach(() => {
 
 function loadClient() {
   // Reload fresh between tests so the spend-stub mock + module state are
-  // pristine. Same pattern as adsGptClient.test.js / itinerarySuggestLLM.test.js
-  // / llmRouter.test.js. Also reload llmRouter so its ENV_FOR_MODEL capture
+  // pristine. Same pattern as adsGptClient.test.js / llmRouter.test.js.
+  // Also reload llmRouter so its ENV_FOR_MODEL capture
   // is rebuilt — `realModeEnabled` require()s llmRouter lazily so a stale
   // router would read stale env on the first invocation.
   delete requireCjs.cache[requireCjs.resolve('../../services/marketingFlyerCopyLLM.js')];

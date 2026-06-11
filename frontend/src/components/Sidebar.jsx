@@ -125,6 +125,11 @@ import {
   // Ban-circle motif matches cancellation / refund semantics. ADMIN+MANAGER
   // gated to mirror the backend POST/PATCH RBAC posture.
   Ban,
+  // S79 (TRAVEL_BIG_SCOPE_BACKLOG) — Flyer Share Admin nav entry icon.
+  // Share2 motif matches the mint-link / shareable-URL semantics. ADMIN-only
+  // gated to mirror the share-link lifecycle's elevated-privilege posture
+  // (revoke is destructive).
+  Share2,
 } from "lucide-react";
 import { AuthContext } from "../App";
 import { fetchApi } from "../utils/api";
@@ -1673,6 +1678,18 @@ function renderTravelNav({
           label="Flyer Templates"
         />
       )}
+      {/* S79 (TRAVEL_BIG_SCOPE_BACKLOG) — operator UI for flyer share-link
+          admin (mint + history + revoke). Companion to FlyerTemplates above,
+          gated ADMIN-only since share-link lifecycle (including revocation)
+          is a higher-privilege surface than design-time CRUD. Share2 icon
+          mirrors the page header. */}
+      {isAdmin && (
+        <Link
+          to="/travel/flyer-share-admin"
+          icon={Share2}
+          label="Flyer Share Admin"
+        />
+      )}
 
       {/* Phase 3 Visa Sure scaffolding (cluster B3) — placeholder shells, admin-only.
           Real implementation gated on product calls in docs/PRD_VISA_SURE_PHASE_3.md §5 + §9. */}
@@ -1965,6 +1982,15 @@ function renderGenericNav({
             to="/admin/csp-violations"
             icon={ShieldAlert}
             label="CSP Violations"
+            adminOnly
+          />
+          {/* S128 — Embed allowlist admin (Tenant.embedAllowlistJson editor).
+              Pairs with CSP Violations: both surface iframe-embed security
+              controls in one cluster. */}
+          <Link
+            to="/admin/embed-allowlist"
+            icon={Shield}
+            label="Embed Allowlist"
             adminOnly
           />
           {/* PRD Gap §1.5 / §1.6 — Commission profiles + revenue goals admin pages. */}

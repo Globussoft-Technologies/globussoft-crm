@@ -360,6 +360,135 @@ describe("backfillLastVisitEngine — top-level failure", () => {
   });
 });
 
+// ─── S110: opts.tenantId per-tenant scoping ────────────────────────────────
+
+describe("backfillLastVisitEngine — S110 opts.tenantId scoping", () => {
+  test("tick({}) with no tenantId → tenant.findMany WHERE = {isActive: true} (all active tenants)", async () => {
+    prisma.tenant.findMany.mockResolvedValueOnce([TENANT_A, TENANT_B]);
+    prisma.patient.findMany
+      .mockResolvedValueOnce([]) // tenant A
+      .mockResolvedValueOnce([]); // tenant B
+
+    const res = await tick({});
+
+    expect(res.success).toBe(true);
+    expect(prisma.tenant.findMany).toHaveBeenCalledWith({
+      where: { isActive: true },
+      select: { id: true, slug: true },
+    });
+    // Both tenants were swept
+    expect(prisma.patient.findMany).toHaveBeenCalledTimes(2);
+  });
+
+  test("tick({ tenantId: 1 }) → tenant.findMany WHERE narrows to {id:1, isActive:true}; only tenant 1 swept", async () => {
+    // findMany respects the WHERE; in this test the mock only returns the
+    // matching tenant. Real prisma would do the filtering for us — here we
+    // just assert the WHERE clause was right + that no other patient.findMany
+    // calls happened for tenant 2.
+    prisma.tenant.findMany.mockResolvedValueOnce([TENANT_A]);
+    prisma.patient.findMany.mockResolvedValueOnce([{ id: 10 }]);
+    prisma.visit.findFirst.mockResolvedValueOnce({
+      visitDate: new Date("2026-06-01"),
+    });
+
+    const res = await tick({ tenantId: 1 });
+
+    expect(res.success).toBe(true);
+    expect(res.processed).toBe(1);
+    expect(res.updated).toBe(1);
+    expect(prisma.tenant.findMany).toHaveBeenCalledWith({
+      where: { isActive: true, id: 1 },
+      select: { id: true, slug: true },
+    });
+    // Only tenant A's patient.findMany was invoked — tenant B never touched
+    const patientCalls = prisma.patient.findMany.mock.calls;
+    for (const call of patientCalls) {
+      expect(call[0].where.tenantId).toBe(1);
+      expect(call[0].where.tenantId).not.toBe(2);
+    }
+  });
+
+  test("tick({ tenantId: 999 }) for non-existent tenant → success envelope, processed=0, updated=0", async () => {
+    // Real prisma filters down to zero rows; mock returns empty array.
+    prisma.tenant.findMany.mockResolvedValueOnce([]);
+
+    const res = await tick({ tenantId: 999 });
+
+    expect(res).toEqual({
+      success: true,
+      processed: 0,
+      updated: 0,
+      errors: 0,
+    });
+    expect(prisma.tenant.findMany).toHaveBeenCalledWith({
+      where: { isActive: true, id: 999 },
+      select: { id: true, slug: true },
+    });
+    expect(prisma.patient.findMany).not.toHaveBeenCalled();
+  });
+
+  test("tick({ tenantId: null }) → treated as 'all tenants' (regression-safe)", async () => {
+    prisma.tenant.findMany.mockResolvedValueOnce([TENANT_A, TENANT_B]);
+    prisma.patient.findMany
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([]);
+
+    const res = await tick({ tenantId: null });
+
+    expect(res.success).toBe(true);
+    expect(prisma.tenant.findMany).toHaveBeenCalledWith({
+      where: { isActive: true },
+      select: { id: true, slug: true },
+    });
+    expect(prisma.patient.findMany).toHaveBeenCalledTimes(2);
+  });
+
+  test("tick({ tenantId: undefined }) → treated as 'all tenants' (regression-safe)", async () => {
+    prisma.tenant.findMany.mockResolvedValueOnce([TENANT_A, TENANT_B]);
+    prisma.patient.findMany
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([]);
+
+    const res = await tick({ tenantId: undefined });
+
+    expect(res.success).toBe(true);
+    expect(prisma.tenant.findMany).toHaveBeenCalledWith({
+      where: { isActive: true },
+      select: { id: true, slug: true },
+    });
+    expect(prisma.patient.findMany).toHaveBeenCalledTimes(2);
+  });
+
+  test("tick() (no opts arg) → unchanged legacy behavior (all active tenants)", async () => {
+    prisma.tenant.findMany.mockResolvedValueOnce([TENANT_A]);
+    prisma.patient.findMany.mockResolvedValueOnce([]);
+
+    await tick();
+
+    expect(prisma.tenant.findMany).toHaveBeenCalledWith({
+      where: { isActive: true },
+      select: { id: true, slug: true },
+    });
+  });
+
+  test("tick({ tenantId: 1 }) with no matching tenant in fixture → no patient.findMany calls (other tenants never touched)", async () => {
+    // Real prisma would filter to zero rows when id=1 doesn't match an
+    // active tenant; mock returns empty to mirror that. This pins that the
+    // engine doesn't fall back to all-tenants when the scoped tenant is
+    // missing — it correctly processes zero.
+    prisma.tenant.findMany.mockResolvedValueOnce([]);
+
+    const res = await tick({ tenantId: 1 });
+
+    expect(res.processed).toBe(0);
+    expect(res.updated).toBe(0);
+    expect(res.errors).toBe(0);
+    expect(prisma.patient.findMany).not.toHaveBeenCalled();
+    expect(prisma.visit.findFirst).not.toHaveBeenCalled();
+    expect(prisma.patient.update).not.toHaveBeenCalled();
+  });
+});
+
 // ─── processTenant standalone ──────────────────────────────────────────────
 
 describe("backfillLastVisitEngine — processTenant standalone", () => {

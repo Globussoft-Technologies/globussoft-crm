@@ -58,14 +58,16 @@
  * pipeline) and S20 (canvas editor) as a stable contract that doesn't
  * change when real-mode lands.
  *
- * Budget cap: shares the LLM monthly cap envelope via the
- * `tenantSettings.getBudgetCap(tenantId, 'llm')` helper. IMAGE TASKS
- * MAY BE PRICED SEPARATELY FROM TEXT — DALL-E 3 HD is $0.12/image vs
- * Gemini Flash $0.0001/1K tokens. **Flagged for future product call**:
- * when real-mode lands, consider splitting `marketing-flyer-image` cap
- * into its own `image-llm` integration token so a runaway image-gen
- * burst doesn't silently exhaust the text-LLM budget. Until then both
- * share. (Documented in CREDS_TRACKER follow-up for S71 sibling.)
+ * Budget cap: SEPARATE envelope via `tenantSettings.getBudgetCap(tenantId,
+ * 'image-llm')` (S73 split). DALL-E 3 HD is $0.12/image vs Gemini Flash
+ * $0.0001/1K tokens, so a runaway image-gen burst would otherwise silently
+ * exhaust the text-LLM budget. The split lets ops set finer per-tenant
+ * caps on each side. Default `IMAGE_LLM_MONTHLY_CAP_USD_CENTS` matches
+ * the text-LLM default ($100 = 10000c) as a sensible starting point;
+ * ops can tune per-tenant. Pre-S73 this client shared INTEGRATION='llm'
+ * with marketingFlyerCopyLLM — the split is a back-compat-safe re-key
+ * because no TenantSetting rows exist yet for either integration on
+ * any tenant (no real-mode call has fired in production).
  *
  * CJS self-mocking seam: every internal call goes through
  * `module.exports.fn(...)` indirection so vitest can
@@ -76,7 +78,6 @@
  * Cred chase: docs/CREDS_TRACKER.md Q-MF-2 row (image-gen key).
  * Mirror clients:
  *   - backend/services/marketingFlyerCopyLLM.js (commit 866a147c, S15) — text counterpart
- *   - backend/services/itinerarySuggestLLM.js   (commit 17449b35, S14)
  *   - backend/services/adsGptClient.js          (commit 9f35040)
  *   - backend/services/ratehawkClient.js        (commit 2852b82)
  *   - backend/services/callifiedClient.js       (commit 9ec52df)
@@ -86,7 +87,7 @@
 
 const { getBudgetCap, evaluateCap, KEYS } = require('../lib/tenantSettings');
 
-const INTEGRATION = 'llm'; // share the LLM monthly cap envelope (flag for split — see header)
+const INTEGRATION = 'image-llm'; // S73: separate envelope from text-LLM (DALL-E HD $0.12/image)
 const TASK_NAME = 'marketing-flyer-image'; // PRD FR-3.6.3
 const MODEL_PRIMARY = 'dall-e-3'; // OpenAI DALL-E 3
 const MODEL_FALLBACK = 'stability-xl'; // Stability AI XL
@@ -126,14 +127,14 @@ function slugify(s) {
  *
  * CJS self-mocking seam: calls `module.exports.computeMonthlySpendCents(...)`
  * via the exports indirection. Mirrors marketingFlyerCopyLLM (S15) +
- * itinerarySuggestLLM (S14) + callifiedClient / ratehawkClient / adsGptClient.
+ * callifiedClient / ratehawkClient / adsGptClient.
  */
 async function checkBudgetCap(tenantId) {
   const capCents = await getBudgetCap(tenantId, INTEGRATION);
   const spentCents = await module.exports.computeMonthlySpendCents(tenantId);
   const evaluation = evaluateCap(spentCents, capCents);
   if (!evaluation.withinCap) {
-    const err = new Error('Monthly LLM spend cap reached for this tenant.');
+    const err = new Error('Monthly image-LLM spend cap reached for this tenant.');
     err.code = 'MARKETING_FLYER_IMAGE_BUDGET_EXCEEDED';
     err.spentCents = spentCents;
     err.capCents = capCents;
@@ -143,7 +144,7 @@ async function checkBudgetCap(tenantId) {
     console.warn(
       `[marketingFlyerImageLLM] tenant ${tenantId} at ${Math.round(
         evaluation.percent * 100,
-      )}% of monthly LLM cap ($${(spentCents / 100).toFixed(2)} / $${(capCents / 100).toFixed(2)})`,
+      )}% of monthly image-LLM cap ($${(spentCents / 100).toFixed(2)} / $${(capCents / 100).toFixed(2)})`,
     );
   }
   return evaluation;
@@ -174,8 +175,7 @@ async function computeMonthlySpendCents(_tenantId) {
  *
  * The `[STUB-FLYER-IMAGE]` prefix is visible to operators so they don't
  * mistake a placeholder image for real creative output. Same discipline
- * as marketingFlyerCopyLLM's `[STUB]` markers + itinerarySuggestLLM's
- * `[STUB-ITINERARY-SUGGEST]` markers.
+ * as marketingFlyerCopyLLM's `[STUB]` markers.
  */
 function buildStubImageUrl({ destination, themeJson, aspectRatio }) {
   const destSlug = slugify(destination || 'destination');
@@ -358,7 +358,7 @@ async function generateFlyerImage(args = {}, _ctx = {}) {
 module.exports = {
   // Primary surface
   generateFlyerImage,
-  // Budget-cap surface (mirrors marketingFlyerCopyLLM / itinerarySuggestLLM /
+  // Budget-cap surface (mirrors marketingFlyerCopyLLM /
   // adsGptClient / ratehawkClient / callifiedClient)
   checkBudgetCap,
   computeMonthlySpendCents,

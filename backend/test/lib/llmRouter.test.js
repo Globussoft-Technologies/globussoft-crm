@@ -146,9 +146,9 @@ describe('llmRouter — module shape', () => {
     const r = loadRouter();
     // Pins PRD §9.1 (docs/TRAVEL_CRM_PRD.md lines 700-708) + the
     // 'itinerary-suggest' extension landed for S14 (PRD_TRAVEL_ITINERARY_UPGRADES
-    // FR-3.6 — gemini-flash primary, claude-haiku fallback; 2K in / 4K out
-    // routed via backend/services/itinerarySuggestLLM.js for structured-JSON
-    // shape; this scaffold's stub-text path returns a tagged synthetic string)
+    // FR-3.6 — gemini-flash primary, claude-haiku fallback; 2K in / 4K out;
+    // structured-JSON shape emitted inline by routes/travel_itineraries.js
+    // FR-3.4 handler; this scaffold's stub-text path returns a tagged synthetic string)
     // + the 'marketing-flyer-copy' extension landed for S15
     // (PRD_TRAVEL_MARKETING_FLYER FR-3.6.1 — gemini-flash primary, claude-haiku
     // fallback; 1K in / 1K out headline+body+CTA JSON routed via
@@ -165,6 +165,9 @@ describe('llmRouter — module shape', () => {
       "form-vs-call": { primary: "claude-opus-4-7", fallback: "gpt-4" },
       "bulk-text": { primary: "gemini-flash", fallback: "claude-haiku" },
       "call-summary": { primary: "gemini-flash", fallback: null },
+      "itinerary-suggest": { primary: "gemini-flash", fallback: "claude-haiku" },
+      "marketing-flyer-copy": { primary: "gemini-flash", fallback: "claude-haiku" },
+      "marketing-flyer-image": { primary: "dall-e-3", fallback: "stability-xl" },
     });
   });
 
@@ -217,13 +220,13 @@ describe('llmEnabled', () => {
     expect(await r.llmEnabled('reasoning')).toBe(false);
   });
 
-  test('"itinerary-suggest" follows the Gemini key (gemini-flash provider slot)', () => {
+  test('"itinerary-suggest" follows the Gemini key (gemini-flash provider slot)', async () => {
     delete process.env.PERPLEXITY_API_KEY;
     delete process.env.ANTHROPIC_API_KEY;
     delete process.env.OPENAI_API_KEY;
     process.env.GEMINI_API_KEY = 'AIzaSy-real';
     const r = loadRouter();
-    expect(r.llmEnabled('itinerary-suggest')).toBe(true);
+    expect(await r.llmEnabled('itinerary-suggest')).toBe(true);
   });
 
   test('returns false for an unknown task even when every env is set', async () => {
@@ -232,7 +235,7 @@ describe('llmEnabled', () => {
     delete process.env.OPENAI_API_KEY;
     process.env.GEMINI_API_KEY = 'AIzaSy-real';
     const r = loadRouter();
-    expect(r.llmEnabled('itinerary-suggest')).toBe(true);
+    expect(await r.llmEnabled('itinerary-suggest')).toBe(true);
   });
 
   test('returns false for an unknown task even when every env is set', async () => {
@@ -251,7 +254,7 @@ describe('llmEnabled', () => {
 // category 'llm-key'. The getLlmKey helper resolves SupplierCredential
 // first (per-tenant override) then process.env (dev/CI fallback). These
 // cases pin the contract that downstream LLM clients
-// (services/itinerarySuggestLLM.realModeEnabled etc.) rely on.
+// (marketingFlyerCopyLLM.realModeEnabled, etc.) rely on.
 
 describe('getLlmKey — S45 per-tenant SupplierCredential resolution', () => {
   test('returns null when neither SupplierCredential nor ENV is present', async () => {

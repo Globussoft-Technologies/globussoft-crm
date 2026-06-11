@@ -1,11 +1,21 @@
 // @ts-check
 /**
- * backend/routes/travel_pois.js — Inline Add-POI rep-suggest +
- * pendingApproval queue contract pin (Wave 18 slice S12, PRD
- * TRAVEL_ITINERARY_UPGRADES FR-3.7).
+ * backend/routes/travel_pois.js — POI catalog list + Inline Add-POI
+ * rep-suggest + pendingApproval queue contract pin (Wave 18 slices
+ * S12 + S93, PRD TRAVEL_ITINERARY_UPGRADES FR-3.6 + FR-3.7).
  *
  * What's pinned
  * -------------
+ *   - GET /api/travel/pois (USER+) [S93]
+ *       happy path returns { pois, total, limit, offset } scoped to
+ *         destinationSlug + tenant-or-null catalog rows
+ *       hides pendingApproval=true rows
+ *       category filter narrows to exact match
+ *       q filter applies LIKE on name + nameLocal
+ *       paging: limit defaults 50, capped at 200; offset honored
+ *       missing destinationSlug -> 400 MISSING_FIELDS
+ *       no Authorization -> 401
+ *
  *   - POST /api/travel/pois (USER+)
  *       happy path creates with pendingApproval=true, externalSource
  *         'operator', tenantId from req.user (NEVER body)
@@ -120,6 +130,146 @@ beforeEach(() => {
   prisma.travelPoi.delete.mockReset();
   prisma.revokedToken.findUnique.mockReset().mockResolvedValue(null);
   writeAuditSpy.mockReset().mockResolvedValue(undefined);
+});
+
+// ────────────────────────────────────────────────────────────────────
+// GET / — catalog list for the PoiPicker (S93)
+// ────────────────────────────────────────────────────────────────────
+
+describe('GET /api/travel/pois — catalog list (S93)', () => {
+  test('happy path — returns { pois, total, limit, offset } scoped to destinationSlug + tenant-or-null', async () => {
+    const rows = [
+      {
+        id: 1,
+        tenantId: null,
+        name: 'Anjuna Beach',
+        category: 'natural',
+        destinationSlug: 'goa',
+        pendingApproval: false,
+      },
+      {
+        id: 2,
+        tenantId: 1,
+        name: 'Bom Jesus Basilica',
+        category: 'religious',
+        destinationSlug: 'goa',
+        pendingApproval: false,
+      },
+    ];
+    prisma.travelPoi.findMany.mockResolvedValue(rows);
+    prisma.travelPoi.count.mockResolvedValue(2);
+
+    const res = await request(makeApp())
+      .get('/api/travel/pois?destinationSlug=goa')
+      .set('Authorization', `Bearer ${tokenFor('USER', { tenantId: 1 })}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      total: 2,
+      limit: 50,
+      offset: 0,
+    });
+    expect(res.body.pois).toHaveLength(2);
+
+    const findCall = prisma.travelPoi.findMany.mock.calls[0][0];
+    expect(findCall.where.destinationSlug).toBe('goa');
+    expect(findCall.where.pendingApproval).toBe(false);
+    // Tenant-OR-null scope.
+    expect(findCall.where.OR).toEqual([{ tenantId: 1 }, { tenantId: null }]);
+    expect(findCall.orderBy).toEqual({ name: 'asc' });
+    expect(findCall.take).toBe(50);
+    expect(findCall.skip).toBe(0);
+  });
+
+  test('missing destinationSlug -> 400 MISSING_FIELDS', async () => {
+    const res = await request(makeApp())
+      .get('/api/travel/pois')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'MISSING_FIELDS' });
+    expect(prisma.travelPoi.findMany).not.toHaveBeenCalled();
+  });
+
+  test('category filter narrows where clause to exact match', async () => {
+    prisma.travelPoi.findMany.mockResolvedValue([]);
+    prisma.travelPoi.count.mockResolvedValue(0);
+
+    await request(makeApp())
+      .get('/api/travel/pois?destinationSlug=goa&category=religious')
+      .set('Authorization', `Bearer ${tokenFor('USER', { tenantId: 1 })}`);
+
+    const findCall = prisma.travelPoi.findMany.mock.calls[0][0];
+    expect(findCall.where.category).toBe('religious');
+  });
+
+  test('q filter applies LIKE on name AND nameLocal (case-insensitive collation)', async () => {
+    prisma.travelPoi.findMany.mockResolvedValue([]);
+    prisma.travelPoi.count.mockResolvedValue(0);
+
+    await request(makeApp())
+      .get('/api/travel/pois?destinationSlug=goa&q=basilica')
+      .set('Authorization', `Bearer ${tokenFor('USER', { tenantId: 1 })}`);
+
+    const findCall = prisma.travelPoi.findMany.mock.calls[0][0];
+    expect(findCall.where.AND).toEqual([
+      {
+        OR: [
+          { name: { contains: 'basilica' } },
+          { nameLocal: { contains: 'basilica' } },
+        ],
+      },
+    ]);
+  });
+
+  test('paging — ?limit and ?offset honored, capped at 200', async () => {
+    prisma.travelPoi.findMany.mockResolvedValue([]);
+    prisma.travelPoi.count.mockResolvedValue(0);
+
+    await request(makeApp())
+      .get('/api/travel/pois?destinationSlug=goa&limit=20&offset=40')
+      .set('Authorization', `Bearer ${tokenFor('USER', { tenantId: 1 })}`);
+    let findCall = prisma.travelPoi.findMany.mock.calls[0][0];
+    expect(findCall.take).toBe(20);
+    expect(findCall.skip).toBe(40);
+
+    // Cap at 200.
+    prisma.travelPoi.findMany.mockClear();
+    await request(makeApp())
+      .get('/api/travel/pois?destinationSlug=goa&limit=999')
+      .set('Authorization', `Bearer ${tokenFor('USER', { tenantId: 1 })}`);
+    findCall = prisma.travelPoi.findMany.mock.calls[0][0];
+    expect(findCall.take).toBe(200);
+  });
+
+  test('hides pendingApproval=true rows — picker only shows approved + catalog-wide', async () => {
+    prisma.travelPoi.findMany.mockResolvedValue([]);
+    prisma.travelPoi.count.mockResolvedValue(0);
+
+    await request(makeApp())
+      .get('/api/travel/pois?destinationSlug=goa')
+      .set('Authorization', `Bearer ${tokenFor('USER', { tenantId: 1 })}`);
+
+    const findCall = prisma.travelPoi.findMany.mock.calls[0][0];
+    expect(findCall.where.pendingApproval).toBe(false);
+  });
+
+  test('cross-tenant — tenant 2 caller scopes OR-clause to tenant 2 + null', async () => {
+    prisma.travelPoi.findMany.mockResolvedValue([]);
+    prisma.travelPoi.count.mockResolvedValue(0);
+
+    await request(makeApp())
+      .get('/api/travel/pois?destinationSlug=goa')
+      .set('Authorization', `Bearer ${tokenFor('USER', { tenantId: 2 })}`);
+
+    const findCall = prisma.travelPoi.findMany.mock.calls[0][0];
+    expect(findCall.where.OR).toEqual([{ tenantId: 2 }, { tenantId: null }]);
+  });
+
+  test('missing Authorization -> 401', async () => {
+    const res = await request(makeApp()).get('/api/travel/pois?destinationSlug=goa');
+    expect(res.status).toBe(401);
+  });
 });
 
 // ────────────────────────────────────────────────────────────────────

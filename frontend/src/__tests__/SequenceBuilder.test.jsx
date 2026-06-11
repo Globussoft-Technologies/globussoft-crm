@@ -117,6 +117,14 @@ const sampleSteps = [
   },
 ];
 
+// S86 — flyer template pool the operator picks from. Three rows, distinct
+// names, fixed ids so test assertions can pin specific selections + IDs.
+const sampleFlyerTemplates = [
+  { id: 201, name: 'Diwali Promo Flyer' },
+  { id: 202, name: 'Umrah Package Flyer' },
+  { id: 203, name: 'School Trip Brochure' },
+];
+
 function defaultFetchMock(url, opts) {
   const method = opts?.method || 'GET';
   if (url === '/api/sequences' && method === 'GET') {
@@ -127,6 +135,10 @@ function defaultFetchMock(url, opts) {
   }
   if (url === '/api/email-templates' && method === 'GET') {
     return Promise.resolve(sampleTemplates);
+  }
+  // S86: flyer templates list endpoint. Backend returns `{templates,total,limit,offset}`.
+  if (url === '/api/travel/flyer-templates' && method === 'GET') {
+    return Promise.resolve({ templates: sampleFlyerTemplates, total: sampleFlyerTemplates.length, limit: 100, offset: 0 });
   }
   return Promise.resolve(null);
 }
@@ -451,5 +463,371 @@ describe('<SequenceBuilder /> — page surface', () => {
       ([, o]) => o?.method === 'PUT'
     );
     expect(putCall).toBeUndefined();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// S86 — operator flyer-picker for SequenceStep.attachmentRefsJson
+// PRD_TRAVEL_MARKETING_FLYER FR-3.5 / AC-6.5
+//
+// Pinned contract:
+//   - StepEditor renders an "Attach Flyer" toggle inside the email + sms
+//     branches (not wait / condition — engine's resolveStepAttachments
+//     short-circuits on those kinds).
+//   - GET /api/travel/flyer-templates on mount populates the picker.
+//   - Picker = template dropdown (5 sample rows by name) + format selector
+//     (5 canonical formats from FlyerTemplates.jsx RENDER_FORMATS) + Add btn.
+//   - Add appends a `{kind:'flyer',flyerId,format}` to the local attachments
+//     list; same flyer+format combo can't be added twice.
+//   - Remove-X drops an attachment.
+//   - On Save, the patch body includes `attachmentRefsJson` — JSON.stringify
+//     of the local array when non-empty; null when empty.
+//   - Pre-fill: editing a step with existing attachmentRefsJson hydrates the
+//     local attachments list.
+// ─────────────────────────────────────────────────────────────────────────
+describe('<SequenceBuilder /> — S86 flyer picker', () => {
+  beforeEach(() => {
+    fetchApiMock.mockReset();
+    fetchApiMock.mockImplementation(defaultFetchMock);
+    notifyError.mockReset();
+    notifySuccess.mockReset();
+    notifyConfirm.mockReset();
+    notifyConfirm.mockImplementation(() => Promise.resolve(true));
+  });
+
+  it('GET /api/travel/flyer-templates fires on initial mount (flyer pool populated)', async () => {
+    renderBuilder();
+    await waitFor(() => {
+      expect(screen.getByText('Welcome Drip')).toBeInTheDocument();
+    });
+    const flyerCall = fetchApiMock.mock.calls.find(
+      ([u]) => u === '/api/travel/flyer-templates',
+    );
+    expect(flyerCall).toBeTruthy();
+  });
+
+  it('renders the "Attach Flyer" toggle inside the email step editor', async () => {
+    renderBuilder();
+    await waitFor(() => {
+      expect(screen.getByText('Welcome email')).toBeInTheDocument();
+    });
+    // Open the email step editor (step #1).
+    fireEvent.click(screen.getByText('Welcome email'));
+    await waitFor(() => {
+      expect(screen.getByText(/Edit step #1/i)).toBeInTheDocument();
+    });
+    // Section header — the empty-state row also contains "flyer attachments"
+    // (lowercase) so use a case-sensitive match on the title-cased label to
+    // disambiguate.
+    expect(screen.getByText(/^Flyer attachments$/)).toBeInTheDocument();
+    expect(screen.getByTestId('toggle-flyer-picker')).toBeInTheDocument();
+    // Empty-state copy renders when there are no attachments + picker is closed.
+    expect(screen.getByText(/No flyer attachments\./i)).toBeInTheDocument();
+  });
+
+  it('renders the "Attach Flyer" toggle inside the SMS step editor too', async () => {
+    renderBuilder();
+    await waitFor(() => {
+      expect(screen.getByText(/quick reminder about your booking/i)).toBeInTheDocument();
+    });
+    // Open the SMS step editor (step #3).
+    fireEvent.click(screen.getByText(/quick reminder about your booking/i));
+    await waitFor(() => {
+      expect(screen.getByText(/Edit step #3/i)).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('toggle-flyer-picker')).toBeInTheDocument();
+  });
+
+  it('does NOT render the flyer picker on the wait step (engine ignores attachments on wait)', async () => {
+    renderBuilder();
+    await waitFor(() => {
+      expect(screen.getByText(/Wait 1440 min/i)).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByText(/Wait 1440 min/i));
+    await waitFor(() => {
+      expect(screen.getByText(/Edit step #2/i)).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('toggle-flyer-picker')).not.toBeInTheDocument();
+  });
+
+  it('clicking "Attach Flyer" opens the picker panel with the template dropdown populated', async () => {
+    renderBuilder();
+    await waitFor(() => {
+      expect(screen.getByText('Welcome email')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByText('Welcome email'));
+    await waitFor(() => {
+      expect(screen.getByText(/Edit step #1/i)).toBeInTheDocument();
+    });
+
+    // Panel hidden by default.
+    expect(screen.queryByTestId('flyer-picker-panel')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('toggle-flyer-picker'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('flyer-picker-panel')).toBeInTheDocument();
+    });
+    // The flyer template dropdown lists the three sample rows.
+    expect(screen.getByRole('option', { name: 'Diwali Promo Flyer' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Umrah Package Flyer' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'School Trip Brochure' })).toBeInTheDocument();
+    // Format selector lists the 5 canonical RENDER_FORMATS labels.
+    expect(screen.getByRole('option', { name: /PDF — A4/ })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /PDF — A5/ })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /Square PNG/ })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /Instagram Story/ })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /Facebook Cover/ })).toBeInTheDocument();
+  });
+
+  it('picking a template + format + clicking Add appends the attachment to the list', async () => {
+    renderBuilder();
+    await waitFor(() => {
+      expect(screen.getByText('Welcome email')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByText('Welcome email'));
+    await waitFor(() => {
+      expect(screen.getByText(/Edit step #1/i)).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByTestId('toggle-flyer-picker'));
+    await waitFor(() => {
+      expect(screen.getByTestId('flyer-picker-panel')).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByTestId('flyer-template-select'), { target: { value: '202' } });
+    fireEvent.change(screen.getByTestId('flyer-format-select'), { target: { value: 'pdf-a5' } });
+    fireEvent.click(screen.getByTestId('add-flyer-attachment-btn'));
+
+    // Attachment row renders with the template name + format label.
+    await waitFor(() => {
+      const list = screen.getByTestId('attached-flyers-list');
+      expect(list).toBeInTheDocument();
+      expect(list.textContent).toMatch(/Umrah Package Flyer/);
+      expect(list.textContent).toMatch(/PDF — A5/);
+    });
+  });
+
+  it('attempting to add a duplicate (same flyer + same format) surfaces a notify.error and does NOT double-up', async () => {
+    renderBuilder();
+    await waitFor(() => {
+      expect(screen.getByText('Welcome email')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByText('Welcome email'));
+    await waitFor(() => {
+      expect(screen.getByText(/Edit step #1/i)).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByTestId('toggle-flyer-picker'));
+    await waitFor(() => {
+      expect(screen.getByTestId('flyer-picker-panel')).toBeInTheDocument();
+    });
+
+    // First add — succeeds.
+    fireEvent.change(screen.getByTestId('flyer-template-select'), { target: { value: '201' } });
+    fireEvent.change(screen.getByTestId('flyer-format-select'), { target: { value: 'pdf-a4' } });
+    fireEvent.click(screen.getByTestId('add-flyer-attachment-btn'));
+    await waitFor(() => {
+      expect(screen.getByTestId('attached-flyers-list')).toBeInTheDocument();
+    });
+    // Second add — same flyer + same format. Should error.
+    fireEvent.change(screen.getByTestId('flyer-template-select'), { target: { value: '201' } });
+    fireEvent.change(screen.getByTestId('flyer-format-select'), { target: { value: 'pdf-a4' } });
+    fireEvent.click(screen.getByTestId('add-flyer-attachment-btn'));
+
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalledWith(
+        expect.stringMatching(/already attached/i),
+      );
+    });
+    // List length stayed at 1 — count the rendered <li> entries.
+    const list = screen.getByTestId('attached-flyers-list');
+    expect(list.querySelectorAll('li').length).toBe(1);
+  });
+
+  it('clicking the remove-X drops the attachment from the list', async () => {
+    renderBuilder();
+    await waitFor(() => {
+      expect(screen.getByText('Welcome email')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByText('Welcome email'));
+    await waitFor(() => {
+      expect(screen.getByText(/Edit step #1/i)).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByTestId('toggle-flyer-picker'));
+    await waitFor(() => {
+      expect(screen.getByTestId('flyer-picker-panel')).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByTestId('flyer-template-select'), { target: { value: '203' } });
+    fireEvent.change(screen.getByTestId('flyer-format-select'), { target: { value: 'png-square' } });
+    fireEvent.click(screen.getByTestId('add-flyer-attachment-btn'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('attached-flyers-list')).toBeInTheDocument();
+    });
+
+    // One row added — index 0.
+    fireEvent.click(screen.getByTestId('remove-attachment-0'));
+
+    await waitFor(() => {
+      // Empty-state copy returns (list element disappears).
+      expect(screen.queryByTestId('attached-flyers-list')).not.toBeInTheDocument();
+    });
+  });
+
+  it('Save on an email step with one flyer attachment PUTs attachmentRefsJson with the JSON-stringified array', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/sequences/steps/100' && opts?.method === 'PUT') {
+        return Promise.resolve({ id: 100, position: 1, kind: 'email' });
+      }
+      return defaultFetchMock(url, opts);
+    });
+    renderBuilder();
+    await waitFor(() => {
+      expect(screen.getByText('Welcome email')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByText('Welcome email'));
+    await waitFor(() => {
+      expect(screen.getByText(/Edit step #1/i)).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByTestId('toggle-flyer-picker'));
+    await waitFor(() => {
+      expect(screen.getByTestId('flyer-picker-panel')).toBeInTheDocument();
+    });
+    fireEvent.change(screen.getByTestId('flyer-template-select'), { target: { value: '202' } });
+    fireEvent.change(screen.getByTestId('flyer-format-select'), { target: { value: 'png-portrait-ig' } });
+    fireEvent.click(screen.getByTestId('add-flyer-attachment-btn'));
+    await waitFor(() => {
+      expect(screen.getByTestId('attached-flyers-list')).toBeInTheDocument();
+    });
+
+    fetchApiMock.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/i }));
+
+    await waitFor(() => {
+      const putCall = fetchApiMock.mock.calls.find(
+        ([u, o]) => u === '/api/sequences/steps/100' && o?.method === 'PUT',
+      );
+      expect(putCall).toBeTruthy();
+      const body = JSON.parse(putCall[1].body);
+      // Field is a string (JSON-encoded); parse it and assert shape.
+      expect(typeof body.attachmentRefsJson).toBe('string');
+      const refs = JSON.parse(body.attachmentRefsJson);
+      expect(refs).toEqual([
+        { kind: 'flyer', flyerId: 202, format: 'png-portrait-ig' },
+      ]);
+    });
+  });
+
+  it('Save on an email step with NO attachments PUTs attachmentRefsJson:null (engine short-circuit)', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/sequences/steps/100' && opts?.method === 'PUT') {
+        return Promise.resolve({ id: 100, position: 1, kind: 'email' });
+      }
+      return defaultFetchMock(url, opts);
+    });
+    renderBuilder();
+    await waitFor(() => {
+      expect(screen.getByText('Welcome email')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByText('Welcome email'));
+    await waitFor(() => {
+      expect(screen.getByText(/Edit step #1/i)).toBeInTheDocument();
+    });
+
+    fetchApiMock.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/i }));
+
+    await waitFor(() => {
+      const putCall = fetchApiMock.mock.calls.find(
+        ([u, o]) => u === '/api/sequences/steps/100' && o?.method === 'PUT',
+      );
+      expect(putCall).toBeTruthy();
+      const body = JSON.parse(putCall[1].body);
+      // No local attachments → null sent (engine treats null/empty as "no attachments").
+      expect(body.attachmentRefsJson).toBeNull();
+    });
+  });
+
+  it('editing a step with existing attachmentRefsJson pre-fills the local attachments list', async () => {
+    // Override sampleSteps for this test so step 102 (SMS) ships with a
+    // pre-existing attachmentRefsJson payload.
+    const stepsWithFlyer = [
+      ...sampleSteps.slice(0, 2),
+      {
+        ...sampleSteps[2],
+        attachmentRefsJson: JSON.stringify([
+          { kind: 'flyer', flyerId: 203, format: 'png-landscape-fb' },
+        ]),
+      },
+      sampleSteps[3],
+    ];
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === `/api/sequences/${SEQ_ID}/steps` && opts?.method !== 'POST' && opts?.method !== 'PUT' && opts?.method !== 'DELETE') {
+        return Promise.resolve(stepsWithFlyer);
+      }
+      return defaultFetchMock(url, opts);
+    });
+
+    renderBuilder();
+    await waitFor(() => {
+      expect(screen.getByText(/quick reminder about your booking/i)).toBeInTheDocument();
+    });
+    // Open the SMS step editor.
+    fireEvent.click(screen.getByText(/quick reminder about your booking/i));
+    await waitFor(() => {
+      expect(screen.getByText(/Edit step #3/i)).toBeInTheDocument();
+    });
+
+    // Pre-filled attachment row renders immediately — no toggle needed.
+    const list = screen.getByTestId('attached-flyers-list');
+    expect(list).toBeInTheDocument();
+    expect(list.textContent).toMatch(/School Trip Brochure/);
+    expect(list.textContent).toMatch(/Facebook Cover/);
+  });
+
+  it('Add without picking a flyer surfaces notify.error and does NOT add a row', async () => {
+    renderBuilder();
+    await waitFor(() => {
+      expect(screen.getByText('Welcome email')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByText('Welcome email'));
+    await waitFor(() => {
+      expect(screen.getByText(/Edit step #1/i)).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByTestId('toggle-flyer-picker'));
+    await waitFor(() => {
+      expect(screen.getByTestId('flyer-picker-panel')).toBeInTheDocument();
+    });
+
+    // No template picked.
+    fireEvent.click(screen.getByTestId('add-flyer-attachment-btn'));
+
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalledWith(
+        expect.stringMatching(/Pick a flyer template/i),
+      );
+    });
+    expect(screen.queryByTestId('attached-flyers-list')).not.toBeInTheDocument();
+  });
+
+  it('renders "No flyer templates available" fallback when the flyer pool is empty', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/travel/flyer-templates') {
+        return Promise.resolve({ templates: [], total: 0, limit: 100, offset: 0 });
+      }
+      return defaultFetchMock(url, opts);
+    });
+    renderBuilder();
+    await waitFor(() => {
+      expect(screen.getByText('Welcome email')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByText('Welcome email'));
+    await waitFor(() => {
+      expect(screen.getByText(/Edit step #1/i)).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByTestId('toggle-flyer-picker'));
+    await waitFor(() => {
+      expect(screen.getByText(/No flyer templates available/i)).toBeInTheDocument();
+    });
   });
 });

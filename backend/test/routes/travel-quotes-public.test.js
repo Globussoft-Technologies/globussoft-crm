@@ -45,6 +45,21 @@
  *   - Already-Rejected quote → 409 with fxLock=null (rejected quotes don't
  *     carry an FX lock).
  *
+ * S47 — promote fxLock to dedicated columns on TravelQuote (additive
+ * nullable: fxRateSnapshot, fxRateSourceCurrency, fxRateTargetCurrency,
+ * fxRateLockedAt, fxRateExpiresAt). Additional pins:
+ *   - Accept (cross-currency) → prisma.travelQuote.update.data carries the
+ *     5 fxRate* fields populated from the fxLock block.
+ *   - Accept (same-currency) → fxRateSnapshot=1.0, fxRateSourceCurrency=INR,
+ *     fxRateTargetCurrency=INR.
+ *   - Accept (no source rate) → fxRateSnapshot=null but
+ *     fxRateSourceCurrency/TargetCurrency still recorded for forensic value.
+ *   - snapshotJson STILL contains fxLock block (backward-compat preserved).
+ *   - snapshotJson.fxLock vs the new columns are in-sync (the column write
+ *     and the JSON write derive from the same lookupFxRate() result).
+ *   - Reject / counter paths DO NOT write fxRate* columns (no
+ *     quoteUpdateExtras; update.data only contains status).
+ *
  * Strategy: monkey-patch prisma singleton BEFORE the router require, mount
  * into bare express app, drive via supertest. JWT helper is real (not
  * mocked) — we use it to mint real tokens against the test secret.
@@ -242,9 +257,12 @@ describe('POST /api/travel/quotes/public/quote/:shareToken/accept', () => {
     expect(res.status).toBe(200);
     expect(res.body.status).toBe('accepted');
     expect(res.body.previousStatus).toBe('Draft');
+    // S47 — accept-path now also writes fxRate* columns alongside the
+    // status flip. Use objectContaining to verify status is set without
+    // pinning the exact shape (other tests cover the fxRate* fields).
     expect(prisma.travelQuote.update).toHaveBeenCalledWith({
       where: { id: 42 },
-      data: { status: 'Accepted' },
+      data: expect.objectContaining({ status: 'Accepted' }),
     });
     expect(prisma.travelQuoteSnapshot.create).toHaveBeenCalled();
     const snapArg = prisma.travelQuoteSnapshot.create.mock.calls[0][0].data;
@@ -568,5 +586,185 @@ describe('S32 — FX-rate lock on accept', () => {
 
     expect(res.status).toBe(409);
     expect(res.body.fxLock).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// S47 — Promote fxLock from snapshotJson to dedicated TravelQuote columns
+// ---------------------------------------------------------------------------
+describe('S47 — fxLock columns on TravelQuote', () => {
+  test('cross-currency accept → prisma.travelQuote.update.data carries fxRate* column writes', async () => {
+    const quote = makeQuote({ status: 'Sent', currency: 'USD' });
+    prisma.travelQuote.findFirst.mockResolvedValue(quote);
+    prisma.travelQuote.update.mockResolvedValue({
+      ...quote, status: 'Accepted', updatedAt: new Date('2026-06-09T10:00:00Z'),
+    });
+    prisma.tenant.findUnique.mockResolvedValue({ defaultCurrency: 'INR' });
+    prisma.currency.findFirst.mockResolvedValue({ exchangeRate: 83.4 });
+
+    const token = mintShareToken({ quoteId: 42, tenantId: 7 });
+    const res = await request(makeApp())
+      .post(`/api/travel/quotes/public/quote/${token}/accept`)
+      .send({});
+
+    expect(res.status).toBe(200);
+    // Inspect the update call to verify the new columns were written.
+    const updateArg = prisma.travelQuote.update.mock.calls[0][0];
+    expect(updateArg.where).toEqual({ id: 42 });
+    expect(updateArg.data.status).toBe('Accepted');
+    expect(updateArg.data.fxRateSnapshot).toBe(83.4);
+    expect(updateArg.data.fxRateSourceCurrency).toBe('USD');
+    expect(updateArg.data.fxRateTargetCurrency).toBe('INR');
+    // lockedAt converted from ISO string → Date
+    expect(updateArg.data.fxRateLockedAt).toBeInstanceOf(Date);
+    // expiresAt is currently not populated by lookupFxRate (reserved field).
+    expect(updateArg.data.fxRateExpiresAt).toBeNull();
+  });
+
+  test('same-currency accept → fxRateSnapshot=1.0, both currency columns recorded', async () => {
+    const quote = makeQuote({ status: 'Sent', currency: 'INR' });
+    prisma.travelQuote.findFirst.mockResolvedValue(quote);
+    prisma.travelQuote.update.mockResolvedValue({
+      ...quote, status: 'Accepted', updatedAt: new Date(),
+    });
+    prisma.tenant.findUnique.mockResolvedValue({ defaultCurrency: 'INR' });
+
+    const token = mintShareToken({ quoteId: 42, tenantId: 7 });
+    const res = await request(makeApp())
+      .post(`/api/travel/quotes/public/quote/${token}/accept`)
+      .send({});
+
+    expect(res.status).toBe(200);
+    const updateArg = prisma.travelQuote.update.mock.calls[0][0];
+    expect(updateArg.data.fxRateSnapshot).toBe(1.0);
+    expect(updateArg.data.fxRateSourceCurrency).toBe('INR');
+    expect(updateArg.data.fxRateTargetCurrency).toBe('INR');
+    expect(updateArg.data.fxRateLockedAt).toBeInstanceOf(Date);
+  });
+
+  test('no source rate → fxRateSnapshot=null but currency columns still recorded (forensic value)', async () => {
+    const quote = makeQuote({ status: 'Sent', currency: 'EUR' });
+    prisma.travelQuote.findFirst.mockResolvedValue(quote);
+    prisma.travelQuote.update.mockResolvedValue({
+      ...quote, status: 'Accepted', updatedAt: new Date(),
+    });
+    prisma.tenant.findUnique.mockResolvedValue({ defaultCurrency: 'INR' });
+    prisma.currency.findFirst.mockResolvedValue(null);
+
+    const token = mintShareToken({ quoteId: 42, tenantId: 7 });
+    const res = await request(makeApp())
+      .post(`/api/travel/quotes/public/quote/${token}/accept`)
+      .send({});
+
+    expect(res.status).toBe(200);
+    const updateArg = prisma.travelQuote.update.mock.calls[0][0];
+    expect(updateArg.data.fxRateSnapshot).toBeNull();
+    expect(updateArg.data.fxRateSourceCurrency).toBe('EUR');
+    expect(updateArg.data.fxRateTargetCurrency).toBe('INR');
+    // lockedAt still recorded (the attempt was logged even though rate failed)
+    expect(updateArg.data.fxRateLockedAt).toBeInstanceOf(Date);
+  });
+
+  test('snapshotJson still carries fxLock block (backward-compat preserved)', async () => {
+    const quote = makeQuote({ status: 'Sent', currency: 'USD' });
+    prisma.travelQuote.findFirst.mockResolvedValue(quote);
+    prisma.travelQuote.update.mockResolvedValue({
+      ...quote, status: 'Accepted', updatedAt: new Date(),
+    });
+    prisma.tenant.findUnique.mockResolvedValue({ defaultCurrency: 'INR' });
+    prisma.currency.findFirst.mockResolvedValue({ exchangeRate: 83.4 });
+
+    const token = mintShareToken({ quoteId: 42, tenantId: 7 });
+    const res = await request(makeApp())
+      .post(`/api/travel/quotes/public/quote/${token}/accept`)
+      .send({});
+
+    expect(res.status).toBe(200);
+    // Snapshot row still has the fxLock block.
+    const snapArg = prisma.travelQuoteSnapshot.create.mock.calls[0][0].data;
+    const parsed = JSON.parse(snapArg.snapshotJson);
+    expect(parsed.fxLock).toBeDefined();
+    expect(parsed.fxLock.sourceCurrency).toBe('USD');
+    expect(parsed.fxLock.targetCurrency).toBe('INR');
+    expect(parsed.fxLock.rate).toBe(83.4);
+  });
+
+  test('column writes and snapshotJson fxLock block are in-sync (single lookup, both writes derive from it)', async () => {
+    const quote = makeQuote({ status: 'Sent', currency: 'USD' });
+    prisma.travelQuote.findFirst.mockResolvedValue(quote);
+    prisma.travelQuote.update.mockResolvedValue({
+      ...quote, status: 'Accepted', updatedAt: new Date(),
+    });
+    prisma.tenant.findUnique.mockResolvedValue({ defaultCurrency: 'INR' });
+    prisma.currency.findFirst.mockResolvedValue({ exchangeRate: 83.4 });
+
+    const token = mintShareToken({ quoteId: 42, tenantId: 7 });
+    await request(makeApp())
+      .post(`/api/travel/quotes/public/quote/${token}/accept`)
+      .send({});
+
+    const updateArg = prisma.travelQuote.update.mock.calls[0][0];
+    const snapArg = prisma.travelQuoteSnapshot.create.mock.calls[0][0].data;
+    const parsed = JSON.parse(snapArg.snapshotJson);
+
+    // Same lookup → identical values on both writes.
+    expect(updateArg.data.fxRateSnapshot).toBe(parsed.fxLock.rate);
+    expect(updateArg.data.fxRateSourceCurrency).toBe(parsed.fxLock.sourceCurrency);
+    expect(updateArg.data.fxRateTargetCurrency).toBe(parsed.fxLock.targetCurrency);
+    // Compare lockedAt as ISO strings since one is Date and the other is string.
+    expect(updateArg.data.fxRateLockedAt.toISOString()).toBe(parsed.fxLock.lockedAt);
+    // Currency lookup was called exactly once — both writes share the same FX read.
+    expect(prisma.currency.findFirst).toHaveBeenCalledTimes(1);
+  });
+
+  test('reject path does NOT write fxRate* columns (only status flip)', async () => {
+    const quote = makeQuote({ status: 'Sent', currency: 'USD' });
+    prisma.travelQuote.findFirst.mockResolvedValue(quote);
+    prisma.travelQuote.update.mockResolvedValue({
+      ...quote, status: 'Rejected', updatedAt: new Date(),
+    });
+
+    const token = mintShareToken({ quoteId: 42, tenantId: 7 });
+    const res = await request(makeApp())
+      .post(`/api/travel/quotes/public/quote/${token}/reject`)
+      .send({ rejectionReason: 'Too expensive' });
+
+    expect(res.status).toBe(200);
+    const updateArg = prisma.travelQuote.update.mock.calls[0][0];
+    expect(updateArg.data.status).toBe('Rejected');
+    // No fxRate* fields — they should be undefined (not null) so Prisma
+    // doesn't blank existing columns. The accept path is the only one
+    // with knowledge of fxLock; reject/counter don't lookup or write it.
+    expect(updateArg.data.fxRateSnapshot).toBeUndefined();
+    expect(updateArg.data.fxRateSourceCurrency).toBeUndefined();
+    expect(updateArg.data.fxRateTargetCurrency).toBeUndefined();
+    expect(updateArg.data.fxRateLockedAt).toBeUndefined();
+    expect(updateArg.data.fxRateExpiresAt).toBeUndefined();
+    // FX lookup was never called on the reject path.
+    expect(prisma.currency.findFirst).not.toHaveBeenCalled();
+    expect(prisma.tenant.findUnique).not.toHaveBeenCalled();
+  });
+
+  test('column write is null-safe when fxLock.rate is missing entirely (e.g. tenant lookup throws)', async () => {
+    const quote = makeQuote({ status: 'Sent', currency: 'USD' });
+    prisma.travelQuote.findFirst.mockResolvedValue(quote);
+    prisma.travelQuote.update.mockResolvedValue({
+      ...quote, status: 'Accepted', updatedAt: new Date(),
+    });
+    prisma.tenant.findUnique.mockRejectedValue(new Error('DB down'));
+
+    const token = mintShareToken({ quoteId: 42, tenantId: 7 });
+    const res = await request(makeApp())
+      .post(`/api/travel/quotes/public/quote/${token}/accept`)
+      .send({});
+
+    expect(res.status).toBe(200);
+    const updateArg = prisma.travelQuote.update.mock.calls[0][0];
+    // fxLock has rate=null + reason='lookup_error'; columns reflect that.
+    expect(updateArg.data.fxRateSnapshot).toBeNull();
+    expect(updateArg.data.fxRateSourceCurrency).toBe('USD');
+    // targetCurrency null because tenant lookup failed
+    expect(updateArg.data.fxRateTargetCurrency).toBeNull();
+    expect(updateArg.data.fxRateLockedAt).toBeInstanceOf(Date);
   });
 });

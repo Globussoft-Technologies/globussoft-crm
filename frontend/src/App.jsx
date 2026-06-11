@@ -123,6 +123,10 @@ const CSPViolations = lazy(() => import("./pages/admin/CSPViolations"));
 // Voyagr (OJR) per-site API key admin — slice C1 of TRAVEL_CODEABLE_BACKLOG.
 // ADMIN-only; provisions per-sub-brand API keys consumed by /api/v1/voyagr.
 const VoyagrApiKeys = lazy(() => import("./pages/admin/VoyagrApiKeys"));
+// Embed allowlist admin — S128 of TRAVEL_BIG_SCOPE_BACKLOG. ADMIN-only;
+// sets Tenant.embedAllowlistJson which controls per-tenant iframe
+// frame-ancestors enforcement (S38/S39/S66/S129 chain).
+const EmbedAllowlist = lazy(() => import("./pages/admin/EmbedAllowlist"));
 // PRD Gap §1.5 / §1.6 — admin pages for commission profiles + per-staff
 // revenue goals.
 const CommissionProfiles = lazy(() => import("./pages/CommissionProfiles"));
@@ -247,6 +251,12 @@ const TravelCommissionProfilesAdmin = lazy(() => import("./pages/travel/Commissi
 // CRUD at /api/travel/flyer-templates) shipped 5c2dd474. Shipped page commit
 // a64c1058.
 const TravelFlyerTemplates = lazy(() => import("./pages/travel/FlyerTemplates"));
+// S79 (TRAVEL_BIG_SCOPE_BACKLOG) — operator-facing flyer share-link admin
+// (companion to S18's backend POST /api/v1/flyers/:id/share mint route).
+// Pick a template → mint → modal with shareUrl + embedCode + copy-clipboards.
+// History panel reads /api/audit-viewer for past mints + Revoke button with
+// graceful 404 when S80 revoke endpoint not yet shipped. ADMIN-gated.
+const TravelFlyerShareAdmin = lazy(() => import("./pages/travel/FlyerShareAdmin"));
 const TravelReligiousPackets = lazy(() => import("./pages/travel/ReligiousPackets"));
 const TravelTmcMicrositePreview = lazy(() => import("./pages/travel/TmcMicrositePreview"));
 const TravelItineraryDetail = lazy(() => import("./pages/travel/ItineraryDetail"));
@@ -1219,6 +1229,8 @@ export default function App() {
                     <Route path="admin/csp-violations" element={<CSPViolations />} />
                     {/* Slice C1 — Voyagr per-site API key admin. ADMIN-only. */}
                     <Route path="admin/voyagr-api-keys" element={<RoleGuard allow={["ADMIN"]} message="Voyagr API Keys requires admin access."><VoyagrApiKeys /></RoleGuard>} />
+                    {/* S128 — Embed allowlist admin (sets Tenant.embedAllowlistJson). ADMIN-only. */}
+                    <Route path="admin/embed-allowlist" element={<RoleGuard allow={["ADMIN"]} message="Embed Allowlist requires admin access."><EmbedAllowlist /></RoleGuard>} />
                     {/* PRD Gap §1.5 / §1.6 */}
                     <Route
                       path="commission-profiles"
@@ -1414,6 +1426,19 @@ export default function App() {
                   page. Same no-RoleGuard convention as the other view-by-
                   default travel admin pages. */}
               <Route path="travel/flyer-templates" element={<TravelOnly><TravelFlyerTemplates /></TravelOnly>} />
+              {/* S79 — operator UI for flyer share-link admin (mint + revoke +
+                  history). ADMIN-gated. Page itself also surfaces an
+                  access-denied card for non-ADMIN as a defensive layer. */}
+              <Route
+                path="travel/flyer-share-admin"
+                element={
+                  <TravelOnly>
+                    <RoleGuard allow={["ADMIN"]} feature="Flyer Share Admin" roles="admin" lockedInPlace>
+                      <TravelFlyerShareAdmin />
+                    </RoleGuard>
+                  </TravelOnly>
+                }
+              />
               <Route path="travel/religious-packets" element={<TravelOnly><TravelReligiousPackets /></TravelOnly>} />
               <Route path="travel/tmc/microsite-preview" element={<TravelOnly><TravelTmcMicrositePreview /></TravelOnly>} />
               {/* T16 — dedicated TMC catalogue admin page; the

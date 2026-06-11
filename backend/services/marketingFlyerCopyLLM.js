@@ -52,14 +52,14 @@
  * pattern (LLM_MONTHLY_CAP_USD_CENTS = 10000 cents default per
  * backend/lib/tenantSettings.js DEFAULTS — shares the cap with the rest
  * of the LLM router because every gemini-flash / claude-opus call goes
- * through the same monthly budget envelope). Mirrors itinerarySuggestLLM +
+ * through the same monthly budget envelope). Mirrors tmcDiagnosticPrompts +
  * callifiedClient + adsGptClient + ratehawkClient self-mocking seam
  * (`module.exports.fn(...)` indirection) so vitest can `vi.spyOn(client,
  * 'computeMonthlySpendCents')`.
  *
  * Cred chase: docs/CREDS_TRACKER.md Q-AI-3 row (Gemini key) / Q11 (LLM keys).
  * Mirror clients:
- *   - backend/services/itinerarySuggestLLM.js   (commit 17449b35, S14)
+ *   - backend/services/tmcDiagnosticPrompts.js  (canonical LLM design pattern)
  *   - backend/services/adsGptClient.js          (commit 9f35040)
  *   - backend/services/ratehawkClient.js        (commit 2852b82)
  *   - backend/services/callifiedClient.js       (commit 9ec52df)
@@ -87,7 +87,7 @@ void KEYS;
  * CJS self-mocking seam: calls `module.exports.computeMonthlySpendCents(...)`
  * via the exports indirection so vitest spies installed via
  * `vi.spyOn(client, 'computeMonthlySpendCents')` intercept correctly.
- * Mirrors itinerarySuggestLLM / callifiedClient / ratehawkClient / adsGptClient.
+ * Mirrors tmcDiagnosticPrompts / callifiedClient / ratehawkClient / adsGptClient.
  */
 async function checkBudgetCap(tenantId) {
   const capCents = await getBudgetCap(tenantId, INTEGRATION);
@@ -141,14 +141,14 @@ async function computeMonthlySpendCents(_tenantId) {
  * Stub copy is intentionally generic + clearly marked `[STUB]` so
  * operators do NOT mistake synthetic content for real creative output
  * and accidentally publish a flyer with placeholder text. Same discipline
- * as itinerarySuggestLLM's `[STUB-ITINERARY-SUGGEST]` markers.
+ * as adsGptClient's `[STUB]` markers.
  */
 function buildStubCopy({ destination, subBrand, themeJson, targetAudience }) {
   const destLabel = destination || 'destination';
   const audience = (typeof targetAudience === 'string' && targetAudience.trim())
     ? targetAudience.trim().slice(0, 80)
     : 'travellers';
-  // Theme tag derivation mirrors itinerarySuggestLLM — accept object
+  // Theme tag derivation: accept object
   // (first key wins) or string. Used as a body-line hint so the stub
   // doesn't look identical across destinations.
   let themeTag = 'general';
@@ -250,9 +250,8 @@ async function generateFlyerCopy(args = {}, _ctx = {}) {
   const { tenantId, destination, subBrand, themeJson, targetAudience } = args;
 
   if (!tenantId) {
-    // Same shape as adsGptClient / itinerarySuggestLLM — fail fast before
-    // the cap query so a null tenant doesn't silently fall through to
-    // tenant-0 cap lookup.
+    // Same shape as adsGptClient — fail fast before the cap query so a
+    // null tenant doesn't silently fall through to tenant-0 cap lookup.
     throw new Error('tenantId required');
   }
   if (!destination || typeof destination !== 'string' || !destination.trim()) {
@@ -262,9 +261,9 @@ async function generateFlyerCopy(args = {}, _ctx = {}) {
   // Pre-call cap check via the self-mocking seam.
   await module.exports.checkBudgetCap(tenantId);
 
-  // STUB observability log (matches adsGptClient / itinerarySuggestLLM
-  // format). Token counts not yet measured in stub mode — would land
-  // with real-mode swap alongside the LlmCallLog persist.
+  // STUB observability log (matches adsGptClient format). Token counts
+  // not yet measured in stub mode — would land with real-mode swap
+  // alongside the LlmCallLog persist.
   console.log(
     `[marketingFlyerCopyLLM STUB] generateFlyerCopy called: tenantId=${tenantId} destination=${destination || '?'} subBrand=${subBrand || '?'} audience=${targetAudience || '?'}`,
   );
@@ -313,8 +312,7 @@ async function generateFlyerCopy(args = {}, _ctx = {}) {
 module.exports = {
   // Primary surface
   generateFlyerCopy,
-  // Budget-cap surface (mirrors adsGptClient / ratehawkClient / callifiedClient /
-  // itinerarySuggestLLM)
+  // Budget-cap surface (mirrors adsGptClient / ratehawkClient / callifiedClient)
   checkBudgetCap,
   computeMonthlySpendCents,
   // Real-mode probe + dispatch (exported for vi.spyOn in tests)

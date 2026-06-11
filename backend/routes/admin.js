@@ -496,4 +496,232 @@ router.post(
   },
 );
 
+// ──────────────────────────────────────────────────────────────────
+// GET /api/admin/tenants/:id/embed-allowlist — read tenant embed allowlist (S128)
+// ──────────────────────────────────────────────────────────────────
+//
+// PRD §3.6 / Travel Security PRD FR-3.6 (iframe-isolation operability) —
+// completes the embed-allowlist admin surface chain (S38 mount + S39 column
+// + S66 read + S129 ?key= resolution + S128 admin UI).
+//
+// Why this endpoint exists
+// ────────────────────────
+// S39 added the `Tenant.embedAllowlistJson` column + S66 wired the embed
+// mount to read it per request; S129 added ?key=glbs_… resolution so
+// cross-origin partner iframes can populate a synthetic req.user. Without
+// THIS surface (S128), operators have no UI/API to set the column. The
+// admin page (frontend/src/pages/admin/EmbedAllowlist.jsx) consumes both
+// this GET and the sibling PATCH below.
+//
+// Tenant scoping
+// ──────────────
+// An ADMIN can ONLY view/modify their OWN tenant. There is no platform-
+// admin / super-admin concept in this codebase — req.user.tenantId is
+// always the active tenant. We require :id === req.user.tenantId and 403
+// otherwise. The :id param is therefore redundant on paper but kept in
+// the URL for two reasons: (a) it makes the route shape RESTful + reads
+// naturally (PATCH /tenants/:id/embed-allowlist), (b) if a platform-admin
+// concept ever lands, the gate becomes "platform-admin OR self-tenant"
+// without breaking existing callers.
+//
+// Response shape (200):
+//   { tenantId, origins: ["https://partner1.com", "https://partner2.com"] }
+//   origins is [] when the column is null OR an empty array (the "no
+//   restriction / wildcard back-compat" state per S66's fallback).
+//
+// Response shape (403): { error, code: 'CROSS_TENANT_DENIED' }
+// Response shape (400): { error, code: 'INVALID_TENANT_ID' }
+router.get(
+  '/tenants/:id/embed-allowlist',
+  verifyRole(['ADMIN']),
+  async (req, res) => {
+    try {
+      const targetTenantId = parseInt(req.params.id, 10);
+      if (!Number.isFinite(targetTenantId) || targetTenantId < 1) {
+        return res.status(400).json({
+          error: 'Invalid tenantId',
+          code: 'INVALID_TENANT_ID',
+        });
+      }
+      if (targetTenantId !== req.user.tenantId) {
+        return res.status(403).json({
+          error: 'Cross-tenant access denied — admins can only view their own tenant',
+          code: 'CROSS_TENANT_DENIED',
+        });
+      }
+      const tenant = await prisma.tenant.findUnique({
+        where: { id: targetTenantId },
+        select: { id: true, embedAllowlistJson: true, updatedAt: true },
+      });
+      if (!tenant) {
+        return res.status(404).json({
+          error: 'Tenant not found',
+          code: 'TENANT_NOT_FOUND',
+        });
+      }
+      // Parse the stored JSON; if it's malformed return [] (the S66 fallback
+      // path also treats malformed JSON as "no allowlist set" — keep parity).
+      let origins = [];
+      if (tenant.embedAllowlistJson) {
+        try {
+          const parsed = JSON.parse(tenant.embedAllowlistJson);
+          if (Array.isArray(parsed)) {
+            origins = parsed.filter((o) => typeof o === 'string');
+          }
+        } catch (_e) {
+          origins = [];
+        }
+      }
+      return res.json({
+        tenantId: tenant.id,
+        origins,
+        updatedAt: tenant.updatedAt,
+      });
+    } catch (err) {
+      console.error('[admin/tenants/embed-allowlist GET] error:', err);
+      res.status(500).json({
+        error: err.message || 'Failed to read embed allowlist',
+        code: 'INTERNAL_ERROR',
+      });
+    }
+  },
+);
+
+// ──────────────────────────────────────────────────────────────────
+// PATCH /api/admin/tenants/:id/embed-allowlist — set tenant embed allowlist (S128)
+// ──────────────────────────────────────────────────────────────────
+//
+// Body shape: { origins: string[] }
+//   - Each entry must match HTTPS_ORIGIN_RE: HTTPS scheme, hostname required,
+//     optional port + path. Wildcards in the middle of the hostname
+//     (`https://*.foo.com`) are NOT supported in v1 — the CSP frame-ancestors
+//     spec accepts them but parsing + validating wildcard origins safely
+//     adds surface area for little payoff. Operators can list every concrete
+//     partner origin explicitly; if a partner needs N subdomains, add N rows.
+//   - HTTP origins are rejected — partners embedding via insecure transport
+//     are a CSP-bypass risk. The PRD pins HTTPS-only.
+//   - Empty array → embedAllowlistJson = null (the "no restriction" /
+//     wildcard back-compat per S66's fallback behavior). This is the way
+//     to REMOVE all restrictions: PATCH with { origins: [] }.
+//
+// Response shape (200):
+//   { tenantId, origins, updatedAt, updatedBy }
+//
+// Audit row written via writeAudit() with entity='Tenant',
+// action='admin.embed-allowlist.update', and the before/after values in
+// the details blob for forensics.
+const HTTPS_ORIGIN_RE = /^https:\/\/[^\s/]+(:\d+)?(\/.*)?$/;
+
+router.patch(
+  '/tenants/:id/embed-allowlist',
+  verifyRole(['ADMIN']),
+  async (req, res) => {
+    try {
+      const targetTenantId = parseInt(req.params.id, 10);
+      const triggeredBy = req.user.userId;
+      if (!Number.isFinite(targetTenantId) || targetTenantId < 1) {
+        return res.status(400).json({
+          error: 'Invalid tenantId',
+          code: 'INVALID_TENANT_ID',
+        });
+      }
+      if (targetTenantId !== req.user.tenantId) {
+        return res.status(403).json({
+          error: 'Cross-tenant access denied — admins can only modify their own tenant',
+          code: 'CROSS_TENANT_DENIED',
+        });
+      }
+      const { origins } = req.body || {};
+      if (!Array.isArray(origins)) {
+        return res.status(400).json({
+          error: 'origins must be an array of HTTPS origin strings',
+          code: 'INVALID_BODY',
+        });
+      }
+      // Validate every origin. Collect all invalid entries so the UI can
+      // surface them in one round-trip instead of one-at-a-time.
+      const invalid = [];
+      for (const o of origins) {
+        if (typeof o !== 'string' || !HTTPS_ORIGIN_RE.test(o.trim())) {
+          invalid.push(o);
+        }
+      }
+      if (invalid.length > 0) {
+        return res.status(400).json({
+          error: 'One or more origins are invalid. Must be HTTPS URLs (e.g. https://partner.com).',
+          code: 'INVALID_ORIGIN',
+          invalid,
+        });
+      }
+      // Cap the list at 100 entries — a sane upper bound that prevents
+      // accidental DoS via a 1MB JSON payload. CSP frame-ancestors values
+      // beyond a few dozen origins are operationally pathological anyway.
+      if (origins.length > 100) {
+        return res.status(400).json({
+          error: 'Allowlist exceeds maximum size (100 entries)',
+          code: 'ALLOWLIST_TOO_LARGE',
+        });
+      }
+      // Trim + dedupe (preserve first-occurrence order).
+      const trimmed = origins.map((o) => o.trim());
+      const seen = new Set();
+      const deduped = [];
+      for (const o of trimmed) {
+        if (!seen.has(o)) {
+          seen.add(o);
+          deduped.push(o);
+        }
+      }
+      // Read the existing row for audit forensics + the 404 case.
+      const existing = await prisma.tenant.findUnique({
+        where: { id: targetTenantId },
+        select: { id: true, embedAllowlistJson: true },
+      });
+      if (!existing) {
+        return res.status(404).json({
+          error: 'Tenant not found',
+          code: 'TENANT_NOT_FOUND',
+        });
+      }
+      // Empty array → null (matches S66 fallback semantics). Non-empty →
+      // JSON.stringify. The column is `String? @db.Text` per S39.
+      const nextJson = deduped.length === 0 ? null : JSON.stringify(deduped);
+      const updated = await prisma.tenant.update({
+        where: { id: targetTenantId },
+        data: { embedAllowlistJson: nextJson },
+        select: { id: true, embedAllowlistJson: true, updatedAt: true },
+      });
+      // Audit-log the change with before/after for forensics. Fire-and-forget
+      // per the canonical writeAudit pattern; auditing must never block the
+      // response.
+      writeAudit(
+        'Tenant',
+        'admin.embed-allowlist.update',
+        targetTenantId,
+        triggeredBy,
+        targetTenantId,
+        {
+          before: existing.embedAllowlistJson,
+          after: nextJson,
+          origins: deduped,
+        },
+      ).catch((auditErr) => {
+        console.error('[admin/tenants/embed-allowlist PATCH] audit failed:', auditErr.message);
+      });
+      return res.json({
+        tenantId: updated.id,
+        origins: deduped,
+        updatedAt: updated.updatedAt,
+        updatedBy: triggeredBy,
+      });
+    } catch (err) {
+      console.error('[admin/tenants/embed-allowlist PATCH] error:', err);
+      res.status(500).json({
+        error: err.message || 'Failed to update embed allowlist',
+        code: 'INTERNAL_ERROR',
+      });
+    }
+  },
+);
+
 module.exports = router;

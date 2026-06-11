@@ -75,9 +75,8 @@ const TASK_ROUTING = {
   // table). 2K in / 4K out — larger out than bulk-text because the full
   // itinerary JSON shape (daySplit + poiSuggestions + thematicNotes) lands
   // in one response. Routed to gemini-flash to match PRD §9.1's locked
-  // routing table for Travel Stall's bulk-shape Gemini calls. Real-mode
-  // swap lives in backend/services/itinerarySuggestLLM.js (S14 — same
-  // commit). Real call gated on Q-IT-2 / Q11 GEMINI_API_KEY.
+  // routing table for Travel Stall's bulk-shape Gemini calls. Real call
+  // gated on Q-IT-2 / Q11 GEMINI_API_KEY (see CREDS_TRACKER).
   "itinerary-suggest": { primary: "gemini-flash", fallback: "claude-haiku" },
   // Marketing-flyer-copy (PRD_TRAVEL_MARKETING_FLYER FR-3.6.1 + AC-6.8).
   // 1K in / 1K out — short-form headline + body + CTA JSON. Routed to
@@ -405,13 +404,13 @@ function buildStubText(task, _payload) {
     case "bulk-text":
       return `${tag} Bulk text output (synthetic). Real Gemini Flash lands when Q11 keys arrive.`;
     case "itinerary-suggest":
-      // Routed to gemini-flash per PRD §9.1 + FR-3.6 (S14). Detailed
-      // suggestionJson shape (daySplit + poiSuggestions + thematicNotes)
-      // is produced by backend/services/itinerarySuggestLLM.js — this
-      // stub-text exists only so unrecognised-task callers of routeRequest
-      // get a sensible string. The structured-JSON path uses the service
-      // module directly, not routeRequest's text envelope.
-      return `${tag} Itinerary suggestion (synthetic). Real Gemini Flash itinerary lands when Q-IT-2 / Q11 keys arrive — see backend/services/itinerarySuggestLLM.js for the structured-JSON path.`;
+      // Routed to gemini-flash per PRD §9.1 + FR-3.6 (S14). This stub-text
+      // exists only so unrecognised-task callers of routeRequest get a
+      // sensible string. The structured-JSON path (daySplit +
+      // poiSuggestions + thematicNotes) is produced inline in
+      // routes/travel_itineraries.js's FR-3.4 handler, not via this
+      // text envelope.
+      return `${tag} Itinerary suggestion (synthetic). Real-mode swap pending Q-IT-2 (Gemini key) — see CREDS_TRACKER.`;
     case "marketing-flyer-copy":
       // Routed to gemini-flash per PRD §9.1 + FR-3.6.1 (S15). Detailed
       // copyJson shape (headline + body + cta) is produced by

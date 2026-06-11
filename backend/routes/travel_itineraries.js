@@ -56,7 +56,6 @@ const { resolveForSubBrand } = require("../lib/subBrandConfig");
 const llmRouter = require("../lib/llmRouter");
 const { computeDayCosts } = require("../lib/itineraryDayCostCalculator");
 const listProjection = require("../lib/listProjection");
-const itinerarySuggestLLM = require("../services/itinerarySuggestLLM");
 const { writeAudit } = require("../lib/audit");
 
 // Covers fly + non-fly (domestic) transport and general trip expenses. Keep
@@ -1917,7 +1916,12 @@ async function syncItineraryAfterItemChange(itineraryId) {
 router.post("/itineraries/:id/items", verifyToken, requireTravelTenant, async (req, res) => {
   try {
     const itin = await loadItineraryWithGuard(req);
-    const { itemType, description, position, detailsJson, supplierId, unitCost, markup, gstAmount, unit, quantity, direction } = req.body || {};
+    // S118 — accept latitude + longitude + dayNumber (mirrors PATCH handler at
+    // ~line 1985 + bulk-import path at ~line 4575). Pre-S118 the destructure
+    // dropped lat/lng silently, so S82's frontend geocode-on-create flow
+    // (Nominatim → lat/lng in POST body) was a no-op until a follow-up PATCH.
+    // All three are additive nullable columns from S8; "" / null clears them.
+    const { itemType, description, position, detailsJson, supplierId, unitCost, markup, gstAmount, unit, quantity, direction, dayNumber, latitude, longitude } = req.body || {};
     if (!itemType || !description) {
       return res.status(400).json({ error: "itemType + description required", code: "ITEM_MISSING_FIELDS" });
     }
@@ -1927,6 +1931,33 @@ router.post("/itineraries/:id/items", verifyToken, requireTravelTenant, async (r
     }
     if (direction != null && direction !== "" && !VALID_ITEM_DIRECTIONS.includes(String(direction))) {
       return res.status(400).json({ error: `direction must be one of: ${VALID_ITEM_DIRECTIONS.join(", ")}`, code: "INVALID_DIRECTION" });
+    }
+
+    // S118 — dayNumber / latitude / longitude validation mirrors the PATCH
+    // handler exactly. `undefined` / `null` / "" → persist as null.
+    let dayNumberValue = null;
+    if (dayNumber !== undefined && dayNumber !== null && dayNumber !== "") {
+      const dn = parseInt(dayNumber, 10);
+      if (!Number.isInteger(dn) || dn < 1 || dn > 365) {
+        return res.status(400).json({ error: "dayNumber must be an integer between 1 and 365", code: "INVALID_DAY_NUMBER" });
+      }
+      dayNumberValue = dn;
+    }
+    let latitudeValue = null;
+    if (latitude !== undefined && latitude !== null && latitude !== "") {
+      const lat = Number(latitude);
+      if (!Number.isFinite(lat) || lat < -90 || lat > 90) {
+        return res.status(400).json({ error: "latitude must be between -90 and 90", code: "INVALID_LATITUDE" });
+      }
+      latitudeValue = lat;
+    }
+    let longitudeValue = null;
+    if (longitude !== undefined && longitude !== null && longitude !== "") {
+      const lng = Number(longitude);
+      if (!Number.isFinite(lng) || lng < -180 || lng > 180) {
+        return res.status(400).json({ error: "longitude must be between -180 and 180", code: "INVALID_LONGITUDE" });
+      }
+      longitudeValue = lng;
     }
 
     // Auto-position if not provided — append to the end.
@@ -1955,6 +1986,11 @@ router.post("/itineraries/:id/items", verifyToken, requireTravelTenant, async (r
         unit: unit ? String(unit) : "per_person",
         quantity: Number.isFinite(qty) && qty >= 0 ? qty : 1,
         direction: direction ? String(direction) : null,
+        // S118 — persist S8 columns (additive nullable; null preserves legacy
+        // POST shape so pre-S118 clients keep working).
+        dayNumber: dayNumberValue,
+        latitude: latitudeValue,
+        longitude: longitudeValue,
         // Total is computed, never trusted from the client.
         totalPrice: computeItemLineTotal({ unitCost, quantity, markup, gstAmount }),
       },
@@ -4218,126 +4254,22 @@ router.get("/itineraries/:id/totals", verifyToken, requireTravelTenant, async (r
   }
 });
 
-// ─── AI itinerary suggestion (S46 — surfaces S14 service to the frontend) ─
+// ─── S113 (2026-06-11): the FR-3.6/S14-S46 POST /itineraries/suggest
+// handler that previously lived here has been removed. PR #1142 added a
+// NEW POST /itineraries/suggest handler higher in this file (FR-3.4 path,
+// "Suggest itinerary" wired through llmRouter) that Express dispatches
+// first-match-wins — making the original block unreachable dead code.
 //
-// POST /api/travel/itineraries/suggest
+// The new canonical contract is pinned by:
+//   - e2e/tests/travel-itinerary-suggest-api.spec.js (PR #1142 sibling)
+//   - the FR-3.4 handler block earlier in this file
 //
-// PRD docs/PRD_TRAVEL_ITINERARY_UPGRADES.md FR-3.6: the operator-facing
-// "Suggest itinerary" button on Itineraries.jsx + the blank-state of the
-// visual editor (S9) post a destination + duration + theme + budget tier
-// here and get back a structured suggestionJson (daySplit / poiSuggestions
-// / thematicNotes / summary). Items materialise into ItineraryItem rows
-// only on operator-accept (UI flow — this endpoint is read-only re: DB).
-//
-// USER+ gate — every travel sales operator should be able to brainstorm
-// (no ADMIN/MANAGER restriction). Real-mode token cost is governed by the
-// $100/month per-tenant LLM cap shared across all gemini-flash consumers
-// (see lib/tenantSettings.js LLM_MONTHLY_CAP_USD_CENTS).
-//
-// Until Q-IT-2 / Q11 keys land (CREDS_TRACKER.md), the service returns
-// deterministic [STUB] synthetic content so the frontend can render the
-// flow today.
-//
-// Request body:
-//   {
-//     destination: string,                                     // 1..200 chars, required
-//     durationDays: integer,                                   // 1..30, required
-//     themeJson?: object,                                      // optional theme hints
-//     budgetTier?: 'economy' | 'mid' | 'luxury',               // optional
-//   }
-//
-// Response 200:
-//   { suggestionJson: {...}, source: 'stub'|'gemini', model: string, stub: boolean }
-//
-// Errors:
-//   400 INVALID_DESTINATION    — destination missing / empty / >200 chars
-//   400 INVALID_DURATION_DAYS  — durationDays missing / not int / outside 1..30
-//   400 INVALID_BUDGET_TIER    — budgetTier outside enum
-//   500 ITINERARY_SUGGEST_FAILED — service threw; `code` field carries
-//                                  the original error code (e.g.
-//                                  ITINERARY_SUGGEST_BUDGET_EXCEEDED for
-//                                  cap-exceeded) so the frontend can
-//                                  branch on it.
-const VALID_BUDGET_TIERS = ["economy", "mid", "luxury"];
-
-router.post("/itineraries/suggest", verifyToken, requireTravelTenant, async (req, res) => {
-  try {
-    const { destination, durationDays, themeJson, budgetTier } = req.body || {};
-
-    // destination — required, 1..200 chars after trim
-    if (typeof destination !== "string" || destination.trim().length === 0) {
-      return res
-        .status(400)
-        .json({ error: "destination required", code: "INVALID_DESTINATION" });
-    }
-    const trimmedDest = destination.trim();
-    if (trimmedDest.length > 200) {
-      return res
-        .status(400)
-        .json({ error: "destination must be ≤200 chars", code: "INVALID_DESTINATION" });
-    }
-
-    // durationDays — required integer in 1..30
-    const dd = Number(durationDays);
-    if (
-      durationDays == null ||
-      !Number.isInteger(dd) ||
-      dd < 1 ||
-      dd > 30
-    ) {
-      return res
-        .status(400)
-        .json({
-          error: "durationDays must be an integer in [1, 30]",
-          code: "INVALID_DURATION_DAYS",
-        });
-    }
-
-    // budgetTier — optional, must be in enum if present
-    if (budgetTier != null && !VALID_BUDGET_TIERS.includes(String(budgetTier))) {
-      return res.status(400).json({
-        error: `budgetTier must be one of: ${VALID_BUDGET_TIERS.join(", ")}`,
-        code: "INVALID_BUDGET_TIER",
-      });
-    }
-
-    // themeJson — optional. If present, must be a plain object (not array
-    // / string / number). Mirrors the service's tolerant signature but
-    // we reject obviously-wrong shapes at the route layer so the API
-    // contract is explicit.
-    if (
-      themeJson != null &&
-      (typeof themeJson !== "object" || Array.isArray(themeJson))
-    ) {
-      return res.status(400).json({
-        error: "themeJson must be an object",
-        code: "INVALID_THEME_JSON",
-      });
-    }
-
-    const result = await itinerarySuggestLLM.suggestItinerary(
-      {
-        tenantId: req.travelTenant.id,
-        destination: trimmedDest,
-        durationDays: dd,
-        themeJson: themeJson || undefined,
-        budgetTier: budgetTier || undefined,
-      },
-      { prisma },
-    );
-
-    // Return the service envelope verbatim: { suggestionJson, source, model, stub }
-    return res.json(result);
-  } catch (e) {
-    // Service throws { code: 'ITINERARY_SUGGEST_BUDGET_EXCEEDED', ... } on cap.
-    // Surface the original error code so the frontend can branch.
-    const code = e.code || "UNKNOWN";
-    console.error("[travel-itin] suggest error:", code, e.message);
-    return res
-      .status(500)
-      .json({ error: "ITINERARY_SUGGEST_FAILED", code });
-  }
-});
+// The structured-JSON suggestionJson shape is produced inline in the
+// FR-3.4 handler above (S120 removed a prototype service module that
+// duplicated this logic — dead code). The canonical alive LLM service
+// pattern is now tmcDiagnosticPrompts + marketingFlyerCopyLLM /
+// marketingFlyerImageLLM. Real-mode swap is gated on CREDS_TRACKER
+// Q-IT-2 (Gemini key).
 
 // POST /api/travel/itineraries/from-suggestion
 //
@@ -4355,8 +4287,8 @@ router.post("/itineraries/suggest", verifyToken, requireTravelTenant, async (req
 // Request body:
 //   {
 //     suggestionJson: {                            // REQUIRED — output of /suggest
-//       daySplit?: [ {                             // Service emits `daySplit`
-//         dayNumber: int,                          //   per itinerarySuggestLLM.js
+//       daySplit?: [ {                             // FR-3.4 handler emits `daySplit`
+//         dayNumber: int,                          //   (canonical key)
 //         theme?: string,
 //         items: [ { itemType, description,
 //                    estimatedCost?, latitude?,
@@ -4407,11 +4339,10 @@ router.post("/itineraries/suggest", verifyToken, requireTravelTenant, async (req
 //     attempts that die at the DB layer with an opaque P2003, this route
 //     ENFORCES contactId as required + returns CONTACT_ID_REQUIRED 400.
 //     This is consistent with the canonical POST /itineraries route.
-//   - Prompt says items come from `suggestionJson.days[]`. The actual
-//     service (backend/services/itinerarySuggestLLM.js) emits
-//     `suggestionJson.daySplit[]`. We accept both keys (daySplit takes
-//     precedence) so the prompt's example works AND the production
-//     pipeline works.
+//   - Prompt says items come from `suggestionJson.days[]`. The FR-3.4
+//     handler emits `suggestionJson.daySplit[]`. We accept both keys
+//     (daySplit takes precedence) so the prompt's example works AND the
+//     production pipeline works.
 //   - Service items shape uses `description` + `itemType` (NOT `name`).
 //     We treat `name` OR `description` as the source; whichever is set
 //     becomes ItineraryItem.description (which is required per schema).

@@ -259,10 +259,11 @@ test.describe("Travel flyer-templates POST /:id/render — 5 formats", () => {
     expect(res.headers()["content-type"]).toContain("image/png");
     expect(res.headers()["x-flyer-width-px"]).toBe("1200");
     expect(res.headers()["x-flyer-height-px"]).toBe("1200");
-    // Puppeteer-or-stub: today's CI stack does not have Puppeteer in
-    // package.json, so we expect 'stub-1x1'. Once Puppeteer lands, this
-    // assertion relaxes to (stub-1x1 | puppeteer).
-    expect(["stub-1x1", "puppeteer"]).toContain(res.headers()["x-flyer-render-engine"]);
+    // Puppeteer-or-stub: S74 added puppeteer to backend/package.json with
+    // PUPPETEER_SKIP_DOWNLOAD=true so the api_tests CI gate either has the
+    // real Chromium (engine='puppeteer-headless') or falls back to the
+    // FLYER_RENDER_FORCE_STUB / null-puppeteer path (engine='stub-1x1').
+    expect(["stub-1x1", "puppeteer-headless"]).toContain(res.headers()["x-flyer-render-engine"]);
     const body = await res.body();
     expect(isPngMagic(body)).toBe(true);
   });

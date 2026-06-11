@@ -1,6 +1,6 @@
 // @ts-check
 /**
- * Sequence engine — flyer attachment integration (S19).
+ * Sequence engine — flyer attachment integration (S19 + S85).
  *
  * PRD_TRAVEL_MARKETING_FLYER FR-3.5 / AC-6.5. Pins the contract for the
  * SequenceStep.attachmentRefsJson column when set with a flyer ref:
@@ -12,23 +12,16 @@
  * attaches the buffer to the outbound email + emits an audit row
  * 'sequence.step.flyer-attached'.
  *
- * This spec is gated on TWO probes that must both pass:
- *   1. The schema migration shipped — the SequenceStep model accepts
- *      attachmentRefsJson on create. We probe by posting a sequence step
- *      with the new field. A 400 INVALID_FIELD / 422 / 500 with a Prisma
- *      "Unknown arg" error indicates the route layer hasn't been
- *      extended yet → describe-skip with a structured reason.
- *   2. The current backend (BASE_URL) has the route layer wired to
- *      forward attachmentRefsJson. The probe above implicitly covers
- *      this too.
+ * History:
+ *   - S19 (`e23e321f`) — shipped the schema column + cron engine consumer.
+ *   - S85 (this slice) — extended POST + PUT /sequences/:id/steps to
+ *     accept + persist + validate attachmentRefsJson with 16KB cap +
+ *     INVALID_ATTACHMENT_REFS / ATTACHMENT_REFS_TOO_LARGE codes.
  *
- * Until the sequence-step route accepts the new field (a follow-up
- * slice — out of scope for S19 which only adds the schema + engine
- * support), the spec emits a `test.skip` with a clear reason so future
- * runs reactivate it as soon as the route catches up.
- *
- * Not in the deploy.yml api_tests gate spec list yet. Will be wired in a
- * follow-up slice once the route layer exposes the field.
+ * Probe gate kept (now reads "is the deployed backend caught up to S85?"):
+ *   POST a sequence step with attachmentRefsJson and confirm the field
+ *   round-trips. If the route silently drops the field (legacy backend
+ *   pre-S85), the spec falls back to test.skip with a structured reason.
  */
 const { test, expect } = require('@playwright/test');
 
@@ -114,15 +107,78 @@ test.describe('S19 — sequenceEngine flyer-attachment route probe', () => {
   test('Sequence-step route accepts and round-trips attachmentRefsJson', async ({ request }) => {
     test.skip(
       routeAcceptsAttachmentRefs !== true,
-      'Sequence-step route does not yet accept attachmentRefsJson — follow-up route slice required. Engine support is shipped per S19; this spec activates once /api/sequences/:id/steps adds the field to its allow-list.',
+      'Sequence-step route does not yet accept attachmentRefsJson — pre-S85 backend. Engine support is shipped per S19; this spec activates once /api/sequences/:id/steps adds the field to its allow-list.',
+    );
+    expect(routeAcceptsAttachmentRefs).toBe(true);
+  });
+
+  test('S85 — POST + PUT round-trip + validation envelope', async ({ request }) => {
+    test.skip(
+      routeAcceptsAttachmentRefs !== true,
+      'Backend pre-S85; skipping end-to-end assertions.',
     );
 
-    // Once the route is wired, end-to-end assertions land here:
-    //   - Create sequence + flyer template + contact
-    //   - POST step with attachmentRefsJson:[{kind:'flyer',flyerId:X,format:'pdf-a4'}]
-    //   - Enroll contact + manual tick
-    //   - Assert EmailMessage row written + audit row
-    //     'sequence.step.flyer-attached' present
-    expect(routeAcceptsAttachmentRefs).toBe(true);
+    const token = await authAdmin(request);
+    const seqResp = await request.post(`${BASE_URL}/api/sequences`, {
+      headers: { Authorization: `Bearer ${token}` },
+      data: { name: `${RUN_TAG}_s85`, isActive: false },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(seqResp.ok()).toBe(true);
+    const seq = await seqResp.json();
+    const sequenceId = seq.id;
+
+    // Happy path POST — array shape persists + round-trips.
+    const refs = [
+      { kind: 'flyer', flyerId: 1, format: 'pdf-a4' },
+      { kind: 'file', url: 'https://example.com/x.pdf', filename: 'x.pdf' },
+    ];
+    const postResp = await request.post(`${BASE_URL}/api/sequences/${sequenceId}/steps`, {
+      headers: { Authorization: `Bearer ${token}` },
+      data: {
+        kind: 'email',
+        position: 0,
+        attachmentRefsJson: JSON.stringify(refs),
+      },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(postResp.ok()).toBe(true);
+    const stepBody = await postResp.json();
+    expect(typeof stepBody.attachmentRefsJson).toBe('string');
+    const parsedBack = JSON.parse(stepBody.attachmentRefsJson);
+    expect(Array.isArray(parsedBack)).toBe(true);
+    expect(parsedBack.length).toBe(2);
+    expect(parsedBack[0].kind).toBe('flyer');
+    expect(parsedBack[1].kind).toBe('file');
+
+    // PUT clears via null.
+    const putResp = await request.put(`${BASE_URL}/api/sequences/steps/${stepBody.id}`, {
+      headers: { Authorization: `Bearer ${token}` },
+      data: { attachmentRefsJson: null },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(putResp.ok()).toBe(true);
+    const cleared = await putResp.json();
+    expect(cleared.attachmentRefsJson == null || cleared.attachmentRefsJson === '').toBe(true);
+
+    // Validation: non-array root → 400 INVALID_ATTACHMENT_REFS.
+    const badResp = await request.post(`${BASE_URL}/api/sequences/${sequenceId}/steps`, {
+      headers: { Authorization: `Bearer ${token}` },
+      data: {
+        kind: 'email',
+        position: 1,
+        attachmentRefsJson: JSON.stringify({ kind: 'flyer' }),
+      },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect(badResp.status()).toBe(400);
+    const badBody = await badResp.json();
+    expect(badBody.code).toBe('INVALID_ATTACHMENT_REFS');
+
+    // Cleanup the test sequence.
+    await request.delete(`${BASE_URL}/api/sequences/${sequenceId}`, {
+      headers: { Authorization: `Bearer ${token}` },
+      timeout: REQUEST_TIMEOUT,
+    }).catch(() => {});
   });
 });

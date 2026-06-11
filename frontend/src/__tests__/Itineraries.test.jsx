@@ -173,6 +173,28 @@ vi.mock('react-router-dom', async () => {
   };
 });
 
+// S81 — MapPreview wire-in. Mock the leaflet-backed component to avoid
+// jsdom's lack of getBoundingClientRect/transform support (leaflet bails).
+// Tests assert the SUT renders MapPreview with the right items prop +
+// selection lifecycle; the real MapPreview's render path is exercised by
+// the dedicated MapPreview.test.jsx.
+const mapPreviewMock = vi.fn();
+vi.mock('../components/MapPreview', () => ({
+  __esModule: true,
+  default: (props) => {
+    mapPreviewMock(props);
+    return (
+      <div
+        data-testid="map-preview-mock"
+        data-pin-count={(props.items || []).length}
+        data-height={props.height ?? ''}
+      >
+        MapPreview stub — {(props.items || []).length} items
+      </div>
+    );
+  },
+}));
+
 import { AuthContext } from '../App';
 import Itineraries from '../pages/travel/Itineraries';
 
@@ -211,8 +233,19 @@ const ITINS_DEFAULT = [
     currency: 'INR',
     contactId: 5001,
     items: [
-      { id: 9001, itemType: 'flight', description: 'CCU → IXZ' },
-      { id: 9002, itemType: 'hotel', description: 'Port Blair stay' },
+      // S81 — items include lat/lng/dayNumber per backend list endpoint
+      // (include: { items }). MapPreview wire-in renders these on Map-button
+      // click. Rows without lat/lng are silently dropped by pinnableItems.
+      {
+        id: 9001, itemType: 'flight', description: 'CCU → IXZ',
+        latitude: 11.6234, longitude: 92.7265,
+        locationName: 'Port Blair', dayNumber: 1, sortOrder: 0,
+      },
+      {
+        id: 9002, itemType: 'hotel', description: 'Port Blair stay',
+        latitude: 11.6700, longitude: 92.7470,
+        locationName: 'Port Blair hotel', dayNumber: 1, sortOrder: 1,
+      },
     ],
   }),
   makeItin({
@@ -225,9 +258,22 @@ const ITINS_DEFAULT = [
     currency: 'INR',
     contactId: 5002,
     items: [
-      { id: 9003, itemType: 'flight', description: 'DEL → JED' },
-      { id: 9004, itemType: 'hotel', description: 'Mecca hotel' },
-      { id: 9005, itemType: 'visa', description: 'Umrah visa' },
+      {
+        id: 9003, itemType: 'flight', description: 'DEL → JED',
+        latitude: 21.4225, longitude: 39.8262,
+        locationName: 'Jeddah', dayNumber: 1, sortOrder: 0,
+      },
+      {
+        id: 9004, itemType: 'hotel', description: 'Mecca hotel',
+        latitude: 21.4225, longitude: 39.8262,
+        locationName: 'Mecca hotel', dayNumber: 1, sortOrder: 1,
+      },
+      {
+        id: 9005, itemType: 'visa', description: 'Umrah visa',
+        // No lat/lng — pinnableItems drops it, but should NOT break render.
+        latitude: null, longitude: null,
+        locationName: 'Umrah visa', dayNumber: 0, sortOrder: 2,
+      },
     ],
   }),
   makeItin({
@@ -239,7 +285,12 @@ const ITINS_DEFAULT = [
     totalAmount: 12000,
     currency: 'USD',
     contactId: 5003,
-    items: [{ id: 9006, itemType: 'visa', description: 'Schengen tourist' }],
+    // No items with coords — exercises the empty-MapPreview branch.
+    items: [{
+      id: 9006, itemType: 'visa', description: 'Schengen tourist',
+      latitude: null, longitude: null,
+      locationName: 'Schengen application', dayNumber: 1, sortOrder: 0,
+    }],
   }),
 ];
 
@@ -292,6 +343,7 @@ beforeEach(() => {
   notifyConfirm.mockReset();
   notifyConfirm.mockResolvedValue(true);
   navigateMock.mockReset();
+  mapPreviewMock.mockReset();
   installFetchMock();
 });
 
@@ -1375,5 +1427,183 @@ describe('<Itineraries /> — S90 materialise-from-suggestion', () => {
     const pane = screen.getByTestId('suggest-preview-pane');
     expect(within(pane).getByText(/weirdField/)).toBeInTheDocument();
     expect(within(pane).getByText(/unknown shape/)).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// S81 — MapPreview consumer wire-in on the Itineraries list page.
+//
+// Contract pinned:
+//   1. No selection on initial render → MapPreview is NOT rendered + the
+//      `itineraries-selected-map` panel is absent. Default state is map-less
+//      so the page chrome doesn't visually shift on first load.
+//   2. Each row has a "Map" button (one per itinerary). aria-label is
+//      "Show map for <destination>" when not selected; "Hide map for ..."
+//      when selected. aria-pressed mirrors the selection state.
+//   3. Clicking a Map button selects that itinerary → MapPreview renders
+//      above the table with the itinerary's items as the `items` prop.
+//      Map height is the documented S81 default (320). pinnableItems
+//      inside MapPreview silently drops rows without lat/lng, so the
+//      Mecca itinerary (2 pinnable + 1 non-pinnable visa item) still
+//      surfaces with all 3 items in the prop (filtering happens inside
+//      MapPreview, not the consumer — see MapPreview.test.jsx for that).
+//   4. Re-clicking the SAME row's Map button toggles off (selection
+//      cleared, panel removed).
+//   5. Clicking a DIFFERENT row's Map button switches the selection
+//      without an intermediate "no selection" state.
+//   6. The panel's Close button (X icon, aria-label "Close map preview")
+//      also clears the selection.
+//   7. Clicking the Map button does NOT fire the row's
+//      navigate-on-click (stopPropagation prevents the click bubbling).
+//
+// Why mock MapPreview: leaflet's render path uses getBoundingClientRect
+// + CSS transforms that jsdom doesn't model. Tests assert the wire-in
+// invariants — items prop, height, when it's rendered — without
+// exercising leaflet itself. The real MapPreview render path is covered
+// by frontend/src/__tests__/MapPreview.test.jsx.
+//
+// Per the S81 slice-scope note: the ItineraryDetail.jsx + ItineraryEditor.jsx
+// wire-ins are out of scope for this slice — ItineraryEditor.jsx already
+// has its own inline Leaflet map (PR #1142), so MapPreview wouldn't add
+// value there; ItineraryDetail.jsx is left for a follow-up slice if an
+// explicit map block is needed alongside the day-by-day cost breakdown.
+// ---------------------------------------------------------------------------
+describe('<Itineraries /> — S81 MapPreview wire-in (list page)', () => {
+  it('does NOT render MapPreview when no itinerary is selected (initial state)', async () => {
+    renderPage();
+    // Wait for the list to settle so we're past initial load.
+    await screen.findByText('Andaman Islands');
+    expect(screen.queryByTestId('itineraries-selected-map')).toBeNull();
+    expect(screen.queryByTestId('map-preview-mock')).toBeNull();
+    expect(mapPreviewMock).not.toHaveBeenCalled();
+  });
+
+  it('each row exposes a "Map" button with row-specific aria-label', async () => {
+    renderPage();
+    await screen.findByText('Andaman Islands');
+    expect(
+      screen.getByRole('button', { name: /Show map for Andaman Islands/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: /Show map for Mecca Umrah Package/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: /Show map for Schengen visa/i }),
+    ).toBeInTheDocument();
+  });
+
+  it("clicking a Map button renders MapPreview with that itinerary's items prop", async () => {
+    renderPage();
+    await screen.findByText('Andaman Islands');
+    fireEvent.click(
+      screen.getByRole('button', { name: /Show map for Andaman Islands/i }),
+    );
+    // Map panel + mock render.
+    expect(
+      await screen.findByTestId('itineraries-selected-map'),
+    ).toBeInTheDocument();
+    const mapMock = screen.getByTestId('map-preview-mock');
+    expect(mapMock).toBeInTheDocument();
+    // The Andaman itinerary has 2 items with lat/lng.
+    expect(mapMock.getAttribute('data-pin-count')).toBe('2');
+    // Height default per S81 wire-in is 320.
+    expect(mapMock.getAttribute('data-height')).toBe('320');
+    // Last call to MapPreview received the right items prop shape.
+    const lastCall = mapPreviewMock.mock.calls[mapPreviewMock.mock.calls.length - 1];
+    expect(lastCall).toBeTruthy();
+    const props = lastCall[0];
+    expect(Array.isArray(props.items)).toBe(true);
+    expect(props.items.length).toBe(2);
+    expect(props.items[0].id).toBe(9001);
+    expect(props.items[1].id).toBe(9002);
+    // Panel header surfaces the destination + item count text. React
+    // renders the pluralised "N item(s)" as 3 sibling text nodes (number,
+    // " item", "s") plus the MapPreview stub's own "N items" copy — so we
+    // assert the panel's textContent contains "2 item" rather than
+    // querying by getByText (which would match multiple nodes).
+    const panel = screen.getByTestId('itineraries-selected-map');
+    expect(within(panel).getByText('Andaman Islands')).toBeInTheDocument();
+    expect(panel.textContent).toMatch(/2\s*item/);
+  });
+
+  it('Map button click does NOT trigger row navigation (stopPropagation)', async () => {
+    renderPage();
+    await screen.findByText('Andaman Islands');
+    fireEvent.click(
+      screen.getByRole('button', { name: /Show map for Andaman Islands/i }),
+    );
+    expect(navigateMock).not.toHaveBeenCalled();
+  });
+
+  it("re-clicking the same row's Map button toggles the panel off", async () => {
+    renderPage();
+    await screen.findByText('Andaman Islands');
+    const mapBtn = screen.getByRole('button', { name: /Show map for Andaman Islands/i });
+    fireEvent.click(mapBtn);
+    await screen.findByTestId('itineraries-selected-map');
+    // Same row's button is now labelled "Hide map for Andaman Islands".
+    const hideBtn = screen.getByRole('button', { name: /Hide map for Andaman Islands/i });
+    expect(hideBtn).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(hideBtn);
+    await waitFor(() => {
+      expect(screen.queryByTestId('itineraries-selected-map')).toBeNull();
+    });
+  });
+
+  it("clicking a different row's Map button switches the selection", async () => {
+    renderPage();
+    await screen.findByText('Andaman Islands');
+    fireEvent.click(
+      screen.getByRole('button', { name: /Show map for Andaman Islands/i }),
+    );
+    await screen.findByTestId('itineraries-selected-map');
+    // Switch to the Mecca Umrah Package row.
+    fireEvent.click(
+      screen.getByRole('button', { name: /Show map for Mecca Umrah Package/i }),
+    );
+    await waitFor(() => {
+      const panel = screen.getByTestId('itineraries-selected-map');
+      // Panel now shows the Mecca destination header.
+      expect(within(panel).getByText('Mecca Umrah Package')).toBeInTheDocument();
+    });
+    // MapPreview re-rendered with the Mecca items prop (3 items: 2 with
+    // lat/lng + 1 visa without — pinnableItems inside MapPreview drops
+    // the 3rd. The consumer passes ALL 3; filtering is the component's
+    // job per S10 contract).
+    const lastCall = mapPreviewMock.mock.calls[mapPreviewMock.mock.calls.length - 1];
+    const props = lastCall[0];
+    expect(props.items.length).toBe(3);
+    expect(props.items.map((it) => it.id).sort()).toEqual([9003, 9004, 9005]);
+  });
+
+  it('panel Close button (X) clears the selection', async () => {
+    renderPage();
+    await screen.findByText('Andaman Islands');
+    fireEvent.click(
+      screen.getByRole('button', { name: /Show map for Andaman Islands/i }),
+    );
+    await screen.findByTestId('itineraries-selected-map');
+    fireEvent.click(
+      screen.getByRole('button', { name: /Close map preview/i }),
+    );
+    await waitFor(() => {
+      expect(screen.queryByTestId('itineraries-selected-map')).toBeNull();
+    });
+  });
+
+  it("itinerary with only non-pinnable items still passes through to MapPreview (filtering is the component's job)", async () => {
+    renderPage();
+    await screen.findByText('Schengen visa');
+    // Schengen has 1 item with null lat/lng — still selectable. The
+    // consumer passes the items through; MapPreview's pinnableItems
+    // drops the non-pinnable row internally.
+    fireEvent.click(
+      screen.getByRole('button', { name: /Show map for Schengen visa/i }),
+    );
+    await screen.findByTestId('itineraries-selected-map');
+    const lastCall = mapPreviewMock.mock.calls[mapPreviewMock.mock.calls.length - 1];
+    const props = lastCall[0];
+    expect(props.items.length).toBe(1);
+    expect(props.items[0].id).toBe(9006);
   });
 });

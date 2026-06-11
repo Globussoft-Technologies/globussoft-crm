@@ -125,20 +125,35 @@ async function processTenant(tenant) {
  * tenant.vertical filter is relaxed in the future). The envelope shape
  * matches the standing cron-engine contract.
  *
- * @param {object} _opts - currently unused; reserved for future dry-run /
- *                          single-tenant flags
+ * When `opts.tenantId` is set (number), the tenant.findMany WHERE clause is
+ * narrowed to `{ id: opts.tenantId, isActive: true }` so only that tenant is
+ * swept. This is the path used by the S107 admin endpoint where a single
+ * ADMIN's manual trigger must NOT cross-tenant-sweep on a multi-tenant deploy.
+ * null/undefined tenantId preserves the legacy all-tenants behavior.
+ *
+ * @param {object} opts - optional flags
+ * @param {number} [opts.tenantId] - scope sweep to a single tenant id
  * @returns {Promise<{success: boolean, processed: number, updated: number, errors: number}>}
  */
-async function tick(_opts = {}) {
+async function tick(opts = {}) {
   const started = Date.now();
   let totalProcessed = 0;
   let totalUpdated = 0;
   let totalErrors = 0;
 
+  const scopedTenantId =
+    opts && opts.tenantId !== null && opts.tenantId !== undefined
+      ? opts.tenantId
+      : null;
+
   let tenants;
   try {
+    const tenantWhere = { isActive: true };
+    if (scopedTenantId !== null) {
+      tenantWhere.id = scopedTenantId;
+    }
     tenants = await prisma.tenant.findMany({
-      where: { isActive: true },
+      where: tenantWhere,
       select: { id: true, slug: true },
     });
   } catch (err) {
@@ -163,9 +178,15 @@ async function tick(_opts = {}) {
   }
 
   const ms = Date.now() - started;
-  console.log(
-    `[backfillLastVisit] tenants=${tenants.length} processed=${totalProcessed} updated=${totalUpdated} errors=${totalErrors} (${ms}ms)`,
-  );
+  if (scopedTenantId !== null) {
+    console.log(
+      `[backfillLastVisit] scoped to tenantId=${scopedTenantId} tenants=${tenants.length} processed=${totalProcessed} updated=${totalUpdated} errors=${totalErrors} (${ms}ms)`,
+    );
+  } else {
+    console.log(
+      `[backfillLastVisit] tenants=${tenants.length} processed=${totalProcessed} updated=${totalUpdated} errors=${totalErrors} (${ms}ms)`,
+    );
+  }
 
   return {
     success: true,

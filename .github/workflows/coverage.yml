@@ -320,6 +320,7 @@ jobs:
             tests/security-reports-violations-api.spec.js \
             tests/travel-quote-templates-api.spec.js \
             tests/travel-flyer-templates-api.spec.js \
+            tests/admin-tenants-embed-allowlist-api.spec.js \
             tests/teardown-completeness.spec.js \
             tests/demo-hygiene-api.spec.js
 

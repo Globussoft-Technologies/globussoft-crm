@@ -123,6 +123,10 @@ const CSPViolations = lazy(() => import("./pages/admin/CSPViolations"));
 // Voyagr (OJR) per-site API key admin — slice C1 of TRAVEL_CODEABLE_BACKLOG.
 // ADMIN-only; provisions per-sub-brand API keys consumed by /api/v1/voyagr.
 const VoyagrApiKeys = lazy(() => import("./pages/admin/VoyagrApiKeys"));
+// Embed allowlist admin — S128 of TRAVEL_BIG_SCOPE_BACKLOG. ADMIN-only;
+// sets Tenant.embedAllowlistJson which controls per-tenant iframe
+// frame-ancestors enforcement (S38/S39/S66/S129 chain).
+const EmbedAllowlist = lazy(() => import("./pages/admin/EmbedAllowlist"));
 // PRD Gap §1.5 / §1.6 — admin pages for commission profiles + per-staff
 // revenue goals.
 const CommissionProfiles = lazy(() => import("./pages/CommissionProfiles"));
@@ -1225,6 +1229,8 @@ export default function App() {
                     <Route path="admin/csp-violations" element={<CSPViolations />} />
                     {/* Slice C1 — Voyagr per-site API key admin. ADMIN-only. */}
                     <Route path="admin/voyagr-api-keys" element={<RoleGuard allow={["ADMIN"]} message="Voyagr API Keys requires admin access."><VoyagrApiKeys /></RoleGuard>} />
+                    {/* S128 — Embed allowlist admin (sets Tenant.embedAllowlistJson). ADMIN-only. */}
+                    <Route path="admin/embed-allowlist" element={<RoleGuard allow={["ADMIN"]} message="Embed Allowlist requires admin access."><EmbedAllowlist /></RoleGuard>} />
                     {/* PRD Gap §1.5 / §1.6 */}
                     <Route
                       path="commission-profiles"

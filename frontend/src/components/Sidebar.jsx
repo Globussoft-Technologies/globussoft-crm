@@ -1984,6 +1984,15 @@ function renderGenericNav({
             label="CSP Violations"
             adminOnly
           />
+          {/* S128 — Embed allowlist admin (Tenant.embedAllowlistJson editor).
+              Pairs with CSP Violations: both surface iframe-embed security
+              controls in one cluster. */}
+          <Link
+            to="/admin/embed-allowlist"
+            icon={Shield}
+            label="Embed Allowlist"
+            adminOnly
+          />
           {/* PRD Gap §1.5 / §1.6 — Commission profiles + revenue goals admin pages. */}
           <Link
             to="/commission-profiles"

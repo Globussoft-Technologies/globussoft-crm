@@ -41,6 +41,7 @@ vi.mock('../utils/notify', () => ({
   }),
 }));
 
+import { MemoryRouter } from 'react-router-dom';
 import { AuthContext } from '../App';
 import Profile from '../pages/Profile';
 
@@ -67,14 +68,17 @@ function setupApi(updatedProfile = BASELINE_PROFILE) {
 }
 
 function renderProfile() {
+  // MemoryRouter: Profile's danger-zone delete flow calls useNavigate().
   return render(
-    <AuthContext.Provider value={{
-      user: { ...BASELINE_PROFILE, userId: BASELINE_PROFILE.id },
-      setUser: vi.fn(),
-      token: 'tk', tenant: { id: 1 }, loading: false,
-    }}>
-      <Profile />
-    </AuthContext.Provider>
+    <MemoryRouter>
+      <AuthContext.Provider value={{
+        user: { ...BASELINE_PROFILE, userId: BASELINE_PROFILE.id },
+        setUser: vi.fn(),
+        token: 'tk', tenant: { id: 1 }, loading: false,
+      }}>
+        <Profile />
+      </AuthContext.Provider>
+    </MemoryRouter>
   );
 }
 

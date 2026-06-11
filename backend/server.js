@@ -1009,7 +1009,7 @@ app.use("/api/security", require("./routes/security_reports"));
 // Public landing pages (outside /api/ prefix, no auth guard)
 app.use("/p", landingPagesPublic);
 
-// #921 slice S38 → S66 — wire the iframe-embedding override on /embed/*
+// #921 slice S38 → S66 → S129 — wire the iframe-embedding override on /embed/*
 // BEFORE the lead-form gate handler. S4 (commit 6561bdc) made the global
 // default X-Frame-Options: DENY + CSP frame-ancestors 'none' so no page
 // can be iframed by anyone — but the embed widget is the ONE intentionally-
@@ -1020,26 +1020,76 @@ app.use("/p", landingPagesPublic);
 // S38 (commit 7a229c92) shipped this mount with a hardcoded
 // `allowList: ['*']` because `Tenant.embedAllowlistJson` didn't exist yet.
 // S39 (commit 56832537) added the column + flipped `readTenantEmbedAllowlist`
-// from a stub-returning-null to a real Prisma read. S66 connects them:
-// the embed mount now reads the tenant's allowlist at REQUEST time via
-// a thin async middleware that delegates to the per-request resolver.
+// from a stub-returning-null to a real Prisma read. S66 connected them:
+// the embed mount reads the tenant's allowlist at REQUEST time via a thin
+// async middleware that delegates to the per-request resolver.
 //
-// Tenant resolution:
-//   - `req.user?.tenantId` — populated when an authenticated session lands
-//     on /embed/* (rare today, but a future "preview your own embed inside
-//     the admin UI" flow would hit it).
-//   - When `req.user` is undefined (the common partner-iframe path — the
-//     embed widget is fundamentally cross-origin + unauthenticated), the
-//     resolver returns null and the middleware falls back to wildcard
-//     `['*']`. This preserves S38's back-compat shape for tenants that
-//     haven't configured a per-tenant allowlist.
+// S129 (this slice, 2026-06-11) closes the per-tenant-enforcement loop for
+// the DOMINANT use case: cross-origin partner iframes. S66's per-tenant
+// lookup needs `req.user?.tenantId`, but partner-iframe requests are
+// fundamentally unauthenticated + sit OUTSIDE the `/api` prefix, so the
+// global JWT guard never runs and `req.user` is always undefined → the
+// S66 lookup short-circuited to the wildcard fallback for every real-
+// world partner embed. The fix is to give partners an EXPLICIT opt-in
+// channel: append `?key=glbs_…` to the iframe src. The new pre-S66
+// middleware below resolves that key → tenant via `prisma.apiKey.findUnique`
+// and synthesises `req.user = { tenantId: apiKey.tenantId, userId: null }`
+// so S66's existing logic finds the tenant and applies its per-tenant
+// `embedAllowlistJson` allowlist.
 //
-// Per-tenant lookup runs once per /embed/* request. Failure modes are
-// fail-open (fall back to wildcard) so a transient Prisma error doesn't
-// brick partner-site embeds. The resolver itself catches + warns; this
-// middleware also defensively catches at the outer layer in case the
-// resolver shape ever changes.
+// Tenant resolution (in order):
+//   - `?key=glbs_…` query param (S129 — partner-iframe opt-in path,
+//     resolved by the pre-mount middleware below).
+//   - `req.user?.tenantId` already populated by upstream auth — e.g. a
+//     future "preview your own embed inside the admin UI" flow.
+//   - Otherwise: `req.user` remains undefined, S66 short-circuits to null,
+//     wildcard `['*']` is applied (the partner-iframe back-compat default).
+//
+// Fail-soft per the canonical middleware/auth.js pattern: a Prisma error
+// or shape-invalid key never 500s the /embed/* response — it leaves
+// `req.user` unset and lets the S66 wildcard fallback do its job. The
+// existing #297 `/embed/lead-form.html` 404 gate handler runs AFTER this
+// middleware (different express verb mount), so an unknown key still 404s
+// at the lead-form level while the CSP override remains permissive for
+// any other /embed/* asset that may legitimately load before the gate
+// fires (e.g. preflight, future /embed/preview/*).
 app.use("/embed", async (req, res, next) => {
+  // S129 — pre-mount tenant resolution from `?key=glbs_…`. Only fires
+  // when `req.user` is currently undefined (so an upstream-auth flow that
+  // already set it wins) AND the query param is present + shape-valid.
+  if (!req.user && req.query && typeof req.query.key === "string") {
+    const key = req.query.key;
+    // Same shape check as the #297 lead-form gate so behaviour stays
+    // consistent across both handlers: `glbs_` prefix + ≥8 base64ish chars.
+    if (/^glbs_[A-Za-z0-9_-]{8,}$/.test(key)) {
+      try {
+        const prismaClient = require("./lib/prisma");
+        const apiKey = await prismaClient.apiKey.findUnique({
+          where: { keySecret: key },
+          select: { tenantId: true },
+        });
+        if (apiKey && apiKey.tenantId) {
+          // Synthesise the minimal req.user shape S66 reads. userId stays
+          // null because this is an unauthenticated partner-iframe path —
+          // anything downstream that wants a real user must re-authenticate.
+          req.user = { tenantId: apiKey.tenantId, userId: null };
+        }
+        // Unknown key → leave req.user unset → S66 falls back to wildcard.
+        // (The #297 gate handler will still 404 the lead-form for an
+        // unknown key; the wildcard CSP applies to any other /embed/*
+        // path the partner might request alongside the form.)
+      } catch (e) {
+        // Fail-soft per middleware/auth.js Issue #180 pattern — log + leave
+        // req.user unset so the S66 wildcard fallback keeps partner embeds
+        // alive even if the lookup blows up unexpectedly.
+        console.warn("[embed] ?key= → tenant resolution failed:", e.message);
+      }
+    }
+  }
+  // S66 — resolve per-tenant allowlist from req.user.tenantId. The S129
+  // block above is what populates req.user.tenantId on the partner-iframe
+  // `?key=` path; this block reads it (whether S129 set it or upstream
+  // auth set it) and falls through to wildcard when no tenant is resolved.
   let allowList = ["*"];
   try {
     const tenantId = req.user && req.user.tenantId;

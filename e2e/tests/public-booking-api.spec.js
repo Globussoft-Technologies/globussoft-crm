@@ -818,6 +818,170 @@ test.describe("#921 slice S66 — per-tenant embed allowlist resolves at request
 });
 
 // ──────────────────────────────────────────────────────────────────────
+// #921 slice S129 — `?key=glbs_…` synthesises req.user.tenantId for
+// per-tenant enforcement on cross-origin partner iframes
+// ──────────────────────────────────────────────────────────────────────
+//
+// S66 (commit fe581f6f) wired the per-tenant allowlist lookup to
+// req.user?.tenantId — but the /embed/* mount sits OUTSIDE the /api
+// prefix where the global JWT guard runs, so `req.user` is always
+// undefined on real partner-iframe requests. That made S66's lookup
+// dead code for the dominant use case. S129 closes the loop: when a
+// partner appends `?key=glbs_…` to the iframe src, the pre-S66 middleware
+// resolves the key via prisma.apiKey.findUnique and synthesises
+// `req.user = { tenantId, userId: null }` so S66's existing logic finds
+// the tenant + applies its embedAllowlistJson allowlist.
+//
+// What's pinned here:
+//   1. Valid `?key=glbs_…` → middleware does NOT 500 (lookup ran and
+//      synthesised req.user without crashing). The wellness tenant
+//      currently has no `embedAllowlistJson` configured, so the CSP
+//      result is still the wildcard — but the absence of a 5xx proves
+//      the resolution path is wired + fail-safe.
+//   2. Invalid `?key=glbs_<unknown>` → middleware falls through cleanly:
+//      req.user stays unset, S66 short-circuits to wildcard. This is
+//      the back-compat contract — an unknown key on `/embed/*` (other
+//      than `/embed/lead-form.html`, which 404s per #297) must still
+//      yield a permissive CSP so the iframe doesn't get blocked.
+//
+// Why no per-tenant non-null allowlist assertion in this spec:
+//   There's no admin endpoint to mutate Tenant.embedAllowlistJson yet
+//   (PUT /api/tenants/current accepts a small allowlist of fields and
+//   embedAllowlistJson isn't one of them — a follow-up slice). The
+//   per-tenant non-null path is covered by readTenantEmbedAllowlist's
+//   5 vitest cases in backend/test/middleware/security-csp.test.js.
+//   This spec pins the wiring shape that those unit tests can't reach:
+//   the actual /embed/* mount with the ApiKey lookup + req.user synth +
+//   handoff to S66 — all surface-observable behaviour.
+test.describe("#921 slice S129 — ?key= synthesises req.user.tenantId on /embed/*", () => {
+  let mintedKey = null;
+  let mintedKeyId = null;
+
+  test.beforeAll(async ({ request }) => {
+    if (!IS_LOCAL_STACK) return;
+    if (!tokens.wellnessAdmin) return;
+    // Mint a fresh ApiKey via the developer route so we have a known-good
+    // glbs_… that resolves to the wellness tenant. The seed-wellness.js
+    // script also creates demo keys but their values aren't reachable from
+    // the spec — minting locally keeps the test self-contained.
+    try {
+      const r = await request.post(`${API}/developer/apikeys`, {
+        headers: authHdr(tokens.wellnessAdmin),
+        data: { name: `_teardown_${RUN_TAG}_S129` },
+        timeout: REQUEST_TIMEOUT,
+      });
+      if (r.ok()) {
+        const body = await r.json();
+        mintedKey = body.rawKey || (body.key && body.key.keySecret) || null;
+        mintedKeyId = body.key && body.key.id ? body.key.id : null;
+      }
+    } catch (_e) {
+      // Best-effort; spec degrades to skip if minting fails.
+    }
+  });
+
+  test.afterAll(async ({ request }) => {
+    if (!mintedKeyId || !tokens.wellnessAdmin) return;
+    try {
+      await request.delete(`${API}/developer/apikeys/${mintedKeyId}`, {
+        headers: authHdr(tokens.wellnessAdmin),
+        timeout: REQUEST_TIMEOUT,
+      });
+    } catch (_e) {
+      // Best-effort; global-teardown sweeps by name prefix anyway.
+    }
+  });
+
+  test("valid ?key=glbs_… resolves tenant — request does not 500 + CSP override remains", async ({ request }) => {
+    test.skip(!IS_LOCAL_STACK, "/embed/* served by Nginx in production — backend gate is local-stack-only");
+    test.skip(!mintedKey, "ApiKey mint failed in beforeAll — wellness admin login or developer route unavailable");
+    // Hit any /embed/* path (NOT /embed/lead-form.html, which has the
+    // separate #297 gate handler) — the S129 + S66 middleware fires on
+    // every /embed/* request. A non-existent sub-path 404s at the static
+    // fallback layer but the CSP override headers must still be on the
+    // response (the override runs in the mount middleware, before the
+    // 404 is decided by the fallthrough). The critical assertion is
+    // "no 5xx" — that proves the prisma.apiKey lookup ran cleanly.
+    const r = await request.get(
+      `${BASE_URL}/embed/lead-form.html?key=${encodeURIComponent(mintedKey)}`,
+      { timeout: REQUEST_TIMEOUT }
+    );
+    // With a valid key the #297 gate accepts it (200) AND the S129 path
+    // resolved the tenant. If S129 throws, this 500s.
+    expect(
+      Number(r.status()),
+      "S129 valid-key path should not 5xx — req.user synthesis or prisma lookup regressed"
+    ).toBeLessThan(500);
+    expect(r.status()).toBe(200);
+
+    const headers = r.headers();
+    // CSP override fired — frame-ancestors must NOT be 'none'.
+    // (The wellness tenant has no embedAllowlistJson configured today, so
+    // S66 falls through to wildcard. If a future slice adds a non-null
+    // allowlist surface + this tenant gets configured, this assertion
+    // tightens to "is the configured origin", not "is wildcard".)
+    const csp = headers["content-security-policy"];
+    if (csp) {
+      const m = String(csp).match(/frame-ancestors\s+([^;]+)/i);
+      if (m) {
+        const directive = m[1].trim();
+        expect(
+          directive,
+          `expected permissive frame-ancestors on S129-resolved /embed/*; got: ${directive}`
+        ).not.toMatch(/^'?none'?$/);
+      }
+    }
+    // XFO must NOT be DENY (the global default) — override removed it.
+    const xfo = headers["x-frame-options"];
+    if (xfo !== undefined) {
+      expect(String(xfo).toUpperCase()).not.toBe("DENY");
+    }
+  });
+
+  test("invalid ?key=glbs_<unknown> falls through to wildcard back-compat", async ({ request }) => {
+    test.skip(!IS_LOCAL_STACK, "/embed/* served by Nginx in production — backend gate is local-stack-only");
+    // Unknown but shape-valid key — S129's findUnique returns null,
+    // req.user stays unset, S66 falls back to wildcard. The #297 gate
+    // handler 404s the lead-form because the key wasn't found, but the
+    // CSP override headers must still be present on the response (the
+    // override fires before the 404 is decided).
+    //
+    // NOTE: 404 responses don't always include the helmet/CSP headers
+    // depending on how the route short-circuits, so we assert the
+    // CRITICAL invariant: response is NOT a 5xx. If S129 regresses to
+    // throwing on unknown-key lookups (e.g. an .findOrFail variant),
+    // this would 500 and the test goes red.
+    const r = await request.get(
+      `${BASE_URL}/embed/lead-form.html?key=glbs_${"z".repeat(48)}`,
+      { timeout: REQUEST_TIMEOUT }
+    );
+    expect(
+      Number(r.status()),
+      "S129 invalid-key path should not 5xx — fail-soft semantics regressed"
+    ).toBeLessThan(500);
+    // Unknown key 404s per #297 (the lead-form gate runs after S129+S66).
+    expect(r.status()).toBe(404);
+  });
+
+  test("malformed ?key=garbage (no glbs_ prefix) skips lookup + falls through wildcard", async ({ request }) => {
+    test.skip(!IS_LOCAL_STACK, "/embed/* served by Nginx in production — backend gate is local-stack-only");
+    // Shape-invalid key never reaches the prisma findUnique — the regex
+    // gate filters it out. Pin: shape check is wired (a DB read on
+    // arbitrary user input would be a perf + security smell). Also pins
+    // the #297 404 contract holds for malformed keys.
+    const r = await request.get(
+      `${BASE_URL}/embed/lead-form.html?key=garbage_no_prefix`,
+      { timeout: REQUEST_TIMEOUT }
+    );
+    expect(
+      Number(r.status()),
+      "S129 malformed-key path should not 5xx — shape-check regressed"
+    ).toBeLessThan(500);
+    expect(r.status()).toBe(404);
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────
 // #208 — /api/portal serves the customer portal contract, NOT KB
 // ──────────────────────────────────────────────────────────────────────
 

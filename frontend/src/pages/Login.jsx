@@ -53,6 +53,25 @@ const Login = () => {
     return () => { cancelled = true; };
   }, []);
 
+  // When the marketing-site handoff passes ?tenantSlug=, pre-select the
+  // dropdown once the list arrives. The select is rendered disabled (below)
+  // so the user stays scoped to the clinic they started from.
+  useEffect(() => {
+    if (!tenantSlugParam || orgs.length === 0) return;
+    const match = orgs.find((t) => t.slug === tenantSlugParam);
+    if (match) {
+      setOrgTenantId((prev) => (prev ? prev : String(match.id)));
+    }
+  }, [tenantSlugParam, orgs]);
+  // Pre-fill email when redirected from the /get-started wizard.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const prefilled = params.get("email");
+    if (prefilled) {
+      setEmail(prefilled);
+    }
+  }, []);
+
   // Handle SSO redirect callback — server bounces user here with ?sso_token=...&tenant=...
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);

@@ -4,294 +4,290 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Globus CRM — Enterprise Sales Intelligence Platform</title>
-  <meta name="description" content="Globus CRM is a full-stack enterprise CRM with AI-powered lead scoring, agent performance analytics, automated email reports, and 25+ integrated modules.">
+  <meta name="description" content="Globus CRM gives your sales team a 360-degree view of every lead, deal, and customer — with AI scoring, automated reports, and real-time pipeline analytics across 25+ integrated modules.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; background: #ffffff; color: #0f172a; overflow-x: hidden; }
+    a { text-decoration: none; color: inherit; }
+    img { max-width: 100%; display: block; }
+  </style>
 </head>
 <body>
 
   <!-- Navbar -->
-  <nav class="navbar">
-    <div class="container nav-inner">
-      <a href="#" class="logo">
-        <div class="logo-icon"></div>
-        <span>Globus <strong>CRM</strong></span>
+  <nav style="position: fixed; top: 0; left: 0; right: 0; z-index: 100; background: rgba(255,255,255,0.9); backdrop-filter: blur(20px); border-bottom: 1px solid #e2e8f0;">
+    <div style="max-width: 1200px; margin: 0 auto; padding: 0 24px; display: flex; align-items: center; justify-content: space-between; height: 64px;">
+      <a href="/" style="display: flex; align-items: center;">
+        <img src="../frontend/public/globussoft-logo.png" alt="Globus CRM" style="height: 36px; width: auto; max-width: 160px; object-fit: contain;">
       </a>
-      <div class="nav-links">
-        <a href="#features">Features</a>
-        <a href="#modules">Modules</a>
-        <a href="#screenshots">Screenshots</a>
-        <a href="#testing">Quality</a>
-        <a href="https://crm.globusdemos.com" target="_blank" class="btn btn-primary btn-sm">Live Demo</a>
+      <div style="display: flex; align-items: center; gap: 28px;">
+        <a href="#features" style="font-size: 0.9rem; color: #64748b;">Features</a>
+        <a href="#screenshots" style="font-size: 0.9rem; color: #64748b;">Screenshots</a>
+        <a href="/pricing" style="font-size: 0.9rem; color: #64748b;">Pricing</a>
+        <a href="/login" style="font-size: 0.9rem; color: #64748b;">Login</a>
+        <a href="/get-started" style="padding: 8px 20px; font-size: 0.85rem; border-radius: 10px; background: #2563eb; color: #fff; font-weight: 600;">Get Started Free</a>
       </div>
-      <button class="mobile-menu-btn" onclick="document.querySelector('.nav-links').classList.toggle('open')">
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
-      </button>
     </div>
   </nav>
 
   <!-- Hero -->
-  <section class="hero">
-    <div class="hero-glow hero-glow-1"></div>
-    <div class="hero-glow hero-glow-2"></div>
-    <div class="container hero-inner">
-      <div class="hero-badge">Enterprise-Grade CRM Platform</div>
-      <h1>Close more deals.<br>Know every customer.<br><span class="gradient-text">Powered by AI.</span></h1>
-      <p class="hero-sub">Globus CRM gives your sales team a 360-degree view of every lead, deal, and customer — with AI scoring, automated reports, and real-time pipeline analytics across 25+ integrated modules.</p>
-      <div class="hero-actions">
-        <a href="https://crm.globusdemos.com" target="_blank" class="btn btn-primary btn-lg">Try Live Demo</a>
-        <a href="#features" class="btn btn-outline btn-lg">Explore Features</a>
+  <section style="position: relative; padding: 150px 0 80px; text-align: center; overflow: hidden; background: linear-gradient(180deg, #ffffff, #f8fafc);">
+    <div style="position: absolute; width: 600px; height: 600px; top: -200px; left: -100px; background: rgba(59,130,246,0.08); border-radius: 50%; filter: blur(120px); pointer-events: none;"></div>
+    <div style="position: absolute; width: 500px; height: 500px; top: -100px; right: -150px; background: rgba(139,92,246,0.06); border-radius: 50%; filter: blur(120px); pointer-events: none;"></div>
+    <div style="position: relative; z-index: 1; max-width: 1200px; margin: 0 auto; padding: 0 24px;">
+      <div style="display: inline-block; padding: 6px 16px; border-radius: 50px; background: rgba(37,99,235,0.08); border: 1px solid #e2e8f0; font-size: 0.8rem; color: #2563eb; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; margin-bottom: 24px;">
+        Enterprise-Grade CRM Platform
       </div>
-      <div class="hero-stats">
-        <div class="stat"><span class="stat-num">25+</span><span class="stat-label">Modules</span></div>
-        <div class="stat"><span class="stat-num">313</span><span class="stat-label">E2E Tests</span></div>
-        <div class="stat"><span class="stat-num">30+</span><span class="stat-label">API Endpoints</span></div>
-        <div class="stat"><span class="stat-num">100%</span><span class="stat-label">Pass Rate</span></div>
+      <h1 style="font-size: clamp(2.5rem, 5.5vw, 4.2rem); font-weight: 800; line-height: 1.15; margin-bottom: 24px; letter-spacing: -0.02em; color: #0f172a;">
+        Close more deals.<br>Know every customer.<br>
+        <span style="background: linear-gradient(135deg, #2563eb, #7c3aed, #db2777); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">Powered by AI.</span>
+      </h1>
+      <p style="max-width: 680px; margin: 0 auto 40px; font-size: 1.15rem; color: #64748b; line-height: 1.7;">
+        Globus CRM gives your sales team a 360-degree view of every lead, deal, and customer — with AI scoring, automated reports, and real-time pipeline analytics across 25+ integrated modules.
+      </p>
+      <div style="display: flex; gap: 16px; justify-content: center; margin-bottom: 60px; flex-wrap: wrap;">
+        <a href="/get-started" style="padding: 16px 36px; font-size: 1.05rem; border-radius: 12px; display: inline-flex; align-items: center; gap: 8px; background: #2563eb; color: #fff; font-weight: 600; box-shadow: 0 4px 14px rgba(37,99,235,0.3);">
+          Start Free Trial
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+        </a>
+        <a href="#features" style="padding: 16px 36px; font-size: 1.05rem; border-radius: 12px; border: 1px solid #e2e8f0; color: #0f172a; display: inline-flex; align-items: center; gap: 8px; font-weight: 500; background: #ffffff;">
+          Explore Features
+        </a>
+      </div>
+      <div style="display: flex; justify-content: center; gap: 48px; flex-wrap: wrap;">
+        <div style="text-align: center;"><div style="font-size: 2rem; font-weight: 800; color: #0f172a;">25+</div><div style="font-size: 0.8rem; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.08em;">Modules</div></div>
+        <div style="text-align: center;"><div style="font-size: 2rem; font-weight: 800; color: #0f172a;">313</div><div style="font-size: 0.8rem; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.08em;">E2E Tests</div></div>
+        <div style="text-align: center;"><div style="font-size: 2rem; font-weight: 800; color: #0f172a;">30+</div><div style="font-size: 0.8rem; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.08em;">API Endpoints</div></div>
+        <div style="text-align: center;"><div style="font-size: 2rem; font-weight: 800; color: #0f172a;">100%</div><div style="font-size: 0.8rem; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.08em;">Pass Rate</div></div>
       </div>
     </div>
-    <div class="hero-image-wrap">
-      <div class="hero-image-glow"></div>
-      <img src="../qa_screenshots/feature-dashboard.png" alt="Globus CRM Dashboard" class="hero-image" loading="eager">
+    <div style="position: relative; max-width: 1100px; margin: 60px auto 0; padding: 0 24px;">
+      <div style="position: absolute; inset: 20px; border-radius: 20px; background: linear-gradient(135deg, rgba(37,99,235,0.1), rgba(124,58,237,0.08)); filter: blur(40px);"></div>
+      <img src="../frontend/public/screenshots/feature-dashboard.png" alt="Globus CRM Dashboard" style="position: relative; border-radius: 16px; border: 1px solid #e2e8f0; box-shadow: 0 25px 60px rgba(0,0,0,0.12); width: 100%;">
     </div>
   </section>
 
   <!-- Features -->
-  <section id="features" class="section">
-    <div class="container">
-      <div class="section-header">
-        <div class="section-badge">Core Capabilities</div>
-        <h2>Everything your sales team needs</h2>
-        <p>From first contact to closed deal — Globus CRM covers the entire customer lifecycle with intelligent automation.</p>
+  <section id="features" style="padding: 100px 0; background: #ffffff;">
+    <div style="max-width: 1200px; margin: 0 auto; padding: 0 24px;">
+      <div style="text-align: center; max-width: 640px; margin: 0 auto 60px;">
+        <div style="display: inline-block; padding: 5px 14px; border-radius: 50px; background: rgba(37,99,235,0.08); border: 1px solid #e2e8f0; font-size: 0.75rem; color: #2563eb; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; margin-bottom: 16px;">Core Capabilities</div>
+        <h2 style="font-size: clamp(1.8rem, 3.5vw, 2.8rem); font-weight: 800; margin-bottom: 16px; color: #0f172a;">Everything your sales team needs</h2>
+        <p style="color: #64748b; font-size: 1.1rem;">From first contact to closed deal — Globus CRM covers the entire customer lifecycle.</p>
       </div>
-      <div class="features-grid">
-        <div class="feature-card feature-highlight">
-          <div class="feature-icon" style="background: linear-gradient(135deg, #3b82f6, #8b5cf6);">
-            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 24px;">
+        <!-- Agent Assignment -->
+        <div style="background: linear-gradient(135deg, rgba(37,99,235,0.04), rgba(124,58,237,0.03)); border: 1px solid rgba(37,99,235,0.15); border-radius: 16px; padding: 32px; box-shadow: 0 1px 3px rgba(0,0,0,0.06), 0 4px 12px rgba(0,0,0,0.04); transition: all 0.3s ease;">
+          <div style="width: 52px; height: 52px; border-radius: 14px; background: linear-gradient(135deg, #3b82f6, #8b5cf6); display: flex; align-items: center; justify-content: center; margin-bottom: 20px; color: #fff;">
+            <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
           </div>
-          <h3>Agent Assignment</h3>
-          <p>Assign sales agents to leads and contacts with one click. Bulk-assign multiple leads at once. Round-robin distribution built into the seed.</p>
+          <h3 style="font-size: 1.2rem; font-weight: 700; margin-bottom: 10px; color: #0f172a;">Agent Assignment</h3>
+          <p style="color: #64748b; font-size: 0.92rem; line-height: 1.6;">Assign sales agents to leads and contacts with one click. Bulk-assign multiple leads. Round-robin distribution.</p>
         </div>
-        <div class="feature-card">
-          <div class="feature-icon" style="background: linear-gradient(135deg, #f59e0b, #ef4444);">
-            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><path d="M12 20V10"/><path d="M18 20V4"/><path d="M6 20v-4"/></svg>
+        <!-- Agent-wise Reports -->
+        <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 16px; padding: 32px; box-shadow: 0 1px 3px rgba(0,0,0,0.06), 0 4px 12px rgba(0,0,0,0.04); transition: all 0.3s ease;">
+          <div style="width: 52px; height: 52px; border-radius: 14px; background: linear-gradient(135deg, #f59e0b, #ef4444); display: flex; align-items: center; justify-content: center; margin-bottom: 20px; color: #fff;">
+            <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20V10"/><path d="M18 20V4"/><path d="M6 20v-4"/></svg>
           </div>
-          <h3>Agent-wise Reports</h3>
-          <p>Performance leaderboard ranking every agent by revenue, deals won, win rate, tasks, calls, and emails sent.</p>
+          <h3 style="font-size: 1.2rem; font-weight: 700; margin-bottom: 10px; color: #0f172a;">Agent-wise Reports</h3>
+          <p style="color: #64748b; font-size: 0.92rem; line-height: 1.6;">Performance leaderboard ranking agents by revenue, deals won, win rate, tasks, calls, and emails.</p>
         </div>
-        <div class="feature-card">
-          <div class="feature-icon" style="background: linear-gradient(135deg, #10b981, #059669);">
-            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/></svg>
+        <!-- Detailed Reports -->
+        <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 16px; padding: 32px; box-shadow: 0 1px 3px rgba(0,0,0,0.06), 0 4px 12px rgba(0,0,0,0.04); transition: all 0.3s ease;">
+          <div style="width: 52px; height: 52px; border-radius: 14px; background: linear-gradient(135deg, #10b981, #059669); display: flex; align-items: center; justify-content: center; margin-bottom: 20px; color: #fff;">
+            <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/></svg>
           </div>
-          <h3>Detailed Reports + Download</h3>
-          <p>8 metric types, date range filters, chart + table views. Export any report as PDF or CSV with one click.</p>
+          <h3 style="font-size: 1.2rem; font-weight: 700; margin-bottom: 10px; color: #0f172a;">Detailed Reports + Download</h3>
+          <p style="color: #64748b; font-size: 0.92rem; line-height: 1.6;">8 metric types, date range filters, chart + table views. Export any report as PDF or CSV.</p>
         </div>
-        <div class="feature-card">
-          <div class="feature-icon" style="background: linear-gradient(135deg, #ec4899, #8b5cf6);">
-            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+        <!-- Auto Email Reports -->
+        <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 16px; padding: 32px; box-shadow: 0 1px 3px rgba(0,0,0,0.06), 0 4px 12px rgba(0,0,0,0.04); transition: all 0.3s ease;">
+          <div style="width: 52px; height: 52px; border-radius: 14px; background: linear-gradient(135deg, #ec4899, #8b5cf6); display: flex; align-items: center; justify-content: center; margin-bottom: 20px; color: #fff;">
+            <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/></svg>
           </div>
-          <h3>Auto Email Reports</h3>
-          <p>Schedule daily, weekly, or monthly reports delivered via email as PDF or CSV. Manage recipients and toggle schedules from the UI.</p>
+          <h3 style="font-size: 1.2rem; font-weight: 700; margin-bottom: 10px; color: #0f172a;">Auto Email Reports</h3>
+          <p style="color: #64748b; font-size: 0.92rem; line-height: 1.6;">Schedule daily, weekly, or monthly reports delivered via email as PDF or CSV to any recipient.</p>
         </div>
-        <div class="feature-card">
-          <div class="feature-icon" style="background: linear-gradient(135deg, #6366f1, #3b82f6);">
-            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+        <!-- AI Lead Scoring -->
+        <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 16px; padding: 32px; box-shadow: 0 1px 3px rgba(0,0,0,0.06), 0 4px 12px rgba(0,0,0,0.04); transition: all 0.3s ease;">
+          <div style="width: 52px; height: 52px; border-radius: 14px; background: linear-gradient(135deg, #6366f1, #3b82f6); display: flex; align-items: center; justify-content: center; margin-bottom: 20px; color: #fff;">
+            <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18a4 4 0 1 0 4.967-4.524 4 4 0 0 0 .556-6.588 4 4 0 0 0-2.526-5.77A3 3 0 1 0 12 5"/><path d="M12 5v14"/></svg>
           </div>
-          <h3>AI Lead Scoring</h3>
-          <p>Machine learning engine scores every contact 1-100 based on engagement, company profile, and deal history. Runs on cron every 10 minutes.</p>
+          <h3 style="font-size: 1.2rem; font-weight: 700; margin-bottom: 10px; color: #0f172a;">AI Lead Scoring</h3>
+          <p style="color: #64748b; font-size: 0.92rem; line-height: 1.6;">ML engine scores every contact 1-100 based on engagement, company profile, and deal history.</p>
         </div>
-        <div class="feature-card">
-          <div class="feature-icon" style="background: linear-gradient(135deg, #14b8a6, #10b981);">
-            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+        <!-- Drag-Drop Pipeline -->
+        <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 16px; padding: 32px; box-shadow: 0 1px 3px rgba(0,0,0,0.06), 0 4px 12px rgba(0,0,0,0.04); transition: all 0.3s ease;">
+          <div style="width: 52px; height: 52px; border-radius: 14px; background: linear-gradient(135deg, #14b8a6, #10b981); display: flex; align-items: center; justify-content: center; margin-bottom: 20px; color: #fff;">
+            <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
           </div>
-          <h3>Drag-Drop Pipeline</h3>
-          <p>Kanban board with real-time Socket.io sync. Drag deals between stages — all connected users see changes instantly.</p>
+          <h3 style="font-size: 1.2rem; font-weight: 700; margin-bottom: 10px; color: #0f172a;">Drag-Drop Pipeline</h3>
+          <p style="color: #64748b; font-size: 0.92rem; line-height: 1.6;">Kanban board with real-time Socket.io sync. All connected users see changes instantly.</p>
         </div>
       </div>
     </div>
   </section>
 
   <!-- Screenshots -->
-  <section id="screenshots" class="section section-dark">
-    <div class="container">
-      <div class="section-header">
-        <div class="section-badge">Product Tour</div>
-        <h2>See it in action</h2>
-        <p>Every screen is production-ready with glassmorphism design, dark/light theme, and responsive layout.</p>
+  <section id="screenshots" style="padding: 100px 0; background: #f8fafc;">
+    <div style="max-width: 1200px; margin: 0 auto; padding: 0 24px;">
+      <div style="text-align: center; max-width: 640px; margin: 0 auto 60px;">
+        <div style="display: inline-block; padding: 5px 14px; border-radius: 50px; background: rgba(37,99,235,0.08); border: 1px solid #e2e8f0; font-size: 0.75rem; color: #2563eb; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; margin-bottom: 16px;">Product Tour</div>
+        <h2 style="font-size: clamp(1.8rem, 3.5vw, 2.8rem); font-weight: 800; margin-bottom: 16px; color: #0f172a;">See it in action</h2>
+        <p style="color: #64748b; font-size: 1.1rem;">Every screen is production-ready with glassmorphism design and dark/light theme.</p>
       </div>
-      <div class="screenshots-grid">
-        <div class="screenshot-card">
-          <div class="screenshot-label">Agent Assignment on Leads</div>
-          <img src="../qa_screenshots/feature-agent-assignment-leads.png" alt="Agent Assignment" loading="lazy">
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 24px;">
+        <div style="border-radius: 16px; overflow: hidden; border: 1px solid #e2e8f0; background: #ffffff; position: relative; box-shadow: 0 8px 30px rgba(0,0,0,0.08);">
+          <img src="../frontend/public/screenshots/feature-dashboard.png" alt="Executive Dashboard" style="width: 100%; display: block;" loading="lazy">
+          <div style="position: absolute; bottom: 0; left: 0; right: 0; background: linear-gradient(transparent, rgba(0,0,0,0.75)); padding: 40px 20px 16px; font-weight: 600; font-size: 0.9rem; color: #fff;">Executive Dashboard</div>
         </div>
-        <div class="screenshot-card">
-          <div class="screenshot-label">Agent Performance Reports</div>
-          <img src="../qa_screenshots/feature-agent-reports.png" alt="Agent Reports" loading="lazy">
+        <div style="border-radius: 16px; overflow: hidden; border: 1px solid #e2e8f0; background: #ffffff; position: relative; box-shadow: 0 8px 30px rgba(0,0,0,0.08);">
+          <img src="../frontend/public/screenshots/feature-agent-reports.png" alt="Agent Performance Reports" style="width: 100%; display: block;" loading="lazy">
+          <div style="position: absolute; bottom: 0; left: 0; right: 0; background: linear-gradient(transparent, rgba(0,0,0,0.75)); padding: 40px 20px 16px; font-weight: 600; font-size: 0.9rem; color: #fff;">Agent Performance Reports</div>
         </div>
-        <div class="screenshot-card">
-          <div class="screenshot-label">Reports & Analytics — Charts</div>
-          <img src="../qa_screenshots/feature-reports-charts.png" alt="Reports Charts" loading="lazy">
+        <div style="border-radius: 16px; overflow: hidden; border: 1px solid #e2e8f0; background: #ffffff; position: relative; box-shadow: 0 8px 30px rgba(0,0,0,0.08);">
+          <img src="../frontend/public/screenshots/feature-reports-charts.png" alt="Reports & Analytics" style="width: 100%; display: block;" loading="lazy">
+          <div style="position: absolute; bottom: 0; left: 0; right: 0; background: linear-gradient(transparent, rgba(0,0,0,0.75)); padding: 40px 20px 16px; font-weight: 600; font-size: 0.9rem; color: #fff;">Reports & Analytics</div>
         </div>
-        <div class="screenshot-card">
-          <div class="screenshot-label">Detailed Data Tables</div>
-          <img src="../qa_screenshots/feature-reports-detailed.png" alt="Reports Detailed" loading="lazy">
+        <div style="border-radius: 16px; overflow: hidden; border: 1px solid #e2e8f0; background: #ffffff; position: relative; box-shadow: 0 8px 30px rgba(0,0,0,0.08);">
+          <img src="../frontend/public/screenshots/feature-reports-detailed.png" alt="Detailed Data Tables" style="width: 100%; display: block;" loading="lazy">
+          <div style="position: absolute; bottom: 0; left: 0; right: 0; background: linear-gradient(transparent, rgba(0,0,0,0.75)); padding: 40px 20px 16px; font-weight: 600; font-size: 0.9rem; color: #fff;">Detailed Data Tables</div>
         </div>
-        <div class="screenshot-card">
-          <div class="screenshot-label">Schedule Email Reports</div>
-          <img src="../qa_screenshots/feature-auto-email-schedule.png" alt="Auto Email Reports" loading="lazy">
+        <div style="border-radius: 16px; overflow: hidden; border: 1px solid #e2e8f0; background: #ffffff; position: relative; box-shadow: 0 8px 30px rgba(0,0,0,0.08);">
+          <img src="../frontend/public/screenshots/feature-agent-assignment-leads.png" alt="Agent Assignment" style="width: 100%; display: block;" loading="lazy">
+          <div style="position: absolute; bottom: 0; left: 0; right: 0; background: linear-gradient(transparent, rgba(0,0,0,0.75)); padding: 40px 20px 16px; font-weight: 600; font-size: 0.9rem; color: #fff;">Agent Assignment</div>
         </div>
-        <div class="screenshot-card">
-          <div class="screenshot-label">Executive Dashboard</div>
-          <img src="../qa_screenshots/feature-dashboard.png" alt="Dashboard" loading="lazy">
+        <div style="border-radius: 16px; overflow: hidden; border: 1px solid #e2e8f0; background: #ffffff; position: relative; box-shadow: 0 8px 30px rgba(0,0,0,0.08);">
+          <img src="../frontend/public/screenshots/feature-auto-email-schedule.png" alt="Schedule Email Reports" style="width: 100%; display: block;" loading="lazy">
+          <div style="position: absolute; bottom: 0; left: 0; right: 0; background: linear-gradient(transparent, rgba(0,0,0,0.75)); padding: 40px 20px 16px; font-weight: 600; font-size: 0.9rem; color: #fff;">Schedule Email Reports</div>
         </div>
       </div>
     </div>
   </section>
 
   <!-- Modules -->
-  <section id="modules" class="section">
-    <div class="container">
-      <div class="section-header">
-        <h2>25+ Integrated Modules</h2>
-        <p>One platform. Every department. No silos.</p>
+  <section style="padding: 100px 0; background: #ffffff;">
+    <div style="max-width: 1200px; margin: 0 auto; padding: 0 24px;">
+      <div style="text-align: center; margin: 0 auto 60px;">
+        <h2 style="font-size: clamp(1.8rem, 3.5vw, 2.8rem); font-weight: 800; margin-bottom: 16px; color: #0f172a;">25+ Integrated Modules</h2>
+        <p style="color: #64748b; font-size: 1.1rem;">One platform. Every department. No silos.</p>
       </div>
-      <div class="modules-grid">
-        <div class="module-chip">Dashboard</div>
-        <div class="module-chip">Pipeline (Kanban)</div>
-        <div class="module-chip">Contacts 360</div>
-        <div class="module-chip">Leads</div>
-        <div class="module-chip">Clients</div>
-        <div class="module-chip">Agent Reports</div>
-        <div class="module-chip">BI Analytics</div>
-        <div class="module-chip">Auto Email Reports</div>
-        <div class="module-chip">AI Lead Scoring</div>
-        <div class="module-chip">Sequences</div>
-        <div class="module-chip">Workflows</div>
-        <div class="module-chip">Inbox</div>
-        <div class="module-chip">Marketing</div>
-        <div class="module-chip">Invoices</div>
-        <div class="module-chip">Estimates</div>
-        <div class="module-chip">Expenses</div>
-        <div class="module-chip">Contracts</div>
-        <div class="module-chip">CPQ Builder</div>
-        <div class="module-chip">Projects</div>
-        <div class="module-chip">Task Queue</div>
-        <div class="module-chip">Tickets</div>
-        <div class="module-chip">Support</div>
-        <div class="module-chip">App Builder</div>
-        <div class="module-chip">Developer Portal</div>
-        <div class="module-chip">Staff / RBAC</div>
-        <div class="module-chip">Notifications</div>
-        <div class="module-chip">Audit Log</div>
-        <div class="module-chip">CSV Import</div>
-        <div class="module-chip">Softphone</div>
-        <div class="module-chip">Command Palette</div>
-      </div>
-    </div>
-  </section>
-
-  <!-- Tech Stack -->
-  <section class="section section-dark">
-    <div class="container">
-      <div class="section-header">
-        <h2>Built on Modern Technology</h2>
-      </div>
-      <div class="tech-grid">
-        <div class="tech-card">
-          <h4>Frontend</h4>
-          <p>React 18, Vite, React Router v6, Recharts, ReactFlow, Socket.io</p>
-        </div>
-        <div class="tech-card">
-          <h4>Backend</h4>
-          <p>Node.js, Express.js, Prisma ORM, MySQL, PDFKit, Nodemailer</p>
-        </div>
-        <div class="tech-card">
-          <h4>Auth & Security</h4>
-          <p>JWT + bcrypt, RBAC (Admin/Manager/User), rate limiting, CORS</p>
-        </div>
-        <div class="tech-card">
-          <h4>Infrastructure</h4>
-          <p>PM2, Nginx, Certbot SSL, node-cron, Swagger API docs</p>
-        </div>
+      <div style="display: flex; flex-wrap: wrap; gap: 12px; justify-content: center;">
+        <span style="padding: 10px 20px; border-radius: 50px; background: #f8fafc; border: 1px solid #e2e8f0; font-size: 0.88rem; font-weight: 500; color: #64748b;">Dashboard</span>
+        <span style="padding: 10px 20px; border-radius: 50px; background: #f8fafc; border: 1px solid #e2e8f0; font-size: 0.88rem; font-weight: 500; color: #64748b;">Pipeline (Kanban)</span>
+        <span style="padding: 10px 20px; border-radius: 50px; background: #f8fafc; border: 1px solid #e2e8f0; font-size: 0.88rem; font-weight: 500; color: #64748b;">Contacts 360</span>
+        <span style="padding: 10px 20px; border-radius: 50px; background: #f8fafc; border: 1px solid #e2e8f0; font-size: 0.88rem; font-weight: 500; color: #64748b;">Leads</span>
+        <span style="padding: 10px 20px; border-radius: 50px; background: #f8fafc; border: 1px solid #e2e8f0; font-size: 0.88rem; font-weight: 500; color: #64748b;">Clients</span>
+        <span style="padding: 10px 20px; border-radius: 50px; background: #f8fafc; border: 1px solid #e2e8f0; font-size: 0.88rem; font-weight: 500; color: #64748b;">Agent Reports</span>
+        <span style="padding: 10px 20px; border-radius: 50px; background: #f8fafc; border: 1px solid #e2e8f0; font-size: 0.88rem; font-weight: 500; color: #64748b;">BI Analytics</span>
+        <span style="padding: 10px 20px; border-radius: 50px; background: #f8fafc; border: 1px solid #e2e8f0; font-size: 0.88rem; font-weight: 500; color: #64748b;">Auto Email Reports</span>
+        <span style="padding: 10px 20px; border-radius: 50px; background: #f8fafc; border: 1px solid #e2e8f0; font-size: 0.88rem; font-weight: 500; color: #64748b;">AI Lead Scoring</span>
+        <span style="padding: 10px 20px; border-radius: 50px; background: #f8fafc; border: 1px solid #e2e8f0; font-size: 0.88rem; font-weight: 500; color: #64748b;">Sequences</span>
+        <span style="padding: 10px 20px; border-radius: 50px; background: #f8fafc; border: 1px solid #e2e8f0; font-size: 0.88rem; font-weight: 500; color: #64748b;">Workflows</span>
+        <span style="padding: 10px 20px; border-radius: 50px; background: #f8fafc; border: 1px solid #e2e8f0; font-size: 0.88rem; font-weight: 500; color: #64748b;">Inbox</span>
+        <span style="padding: 10px 20px; border-radius: 50px; background: #f8fafc; border: 1px solid #e2e8f0; font-size: 0.88rem; font-weight: 500; color: #64748b;">Marketing</span>
+        <span style="padding: 10px 20px; border-radius: 50px; background: #f8fafc; border: 1px solid #e2e8f0; font-size: 0.88rem; font-weight: 500; color: #64748b;">Invoices</span>
+        <span style="padding: 10px 20px; border-radius: 50px; background: #f8fafc; border: 1px solid #e2e8f0; font-size: 0.88rem; font-weight: 500; color: #64748b;">Estimates</span>
+        <span style="padding: 10px 20px; border-radius: 50px; background: #f8fafc; border: 1px solid #e2e8f0; font-size: 0.88rem; font-weight: 500; color: #64748b;">Expenses</span>
+        <span style="padding: 10px 20px; border-radius: 50px; background: #f8fafc; border: 1px solid #e2e8f0; font-size: 0.88rem; font-weight: 500; color: #64748b;">Contracts</span>
+        <span style="padding: 10px 20px; border-radius: 50px; background: #f8fafc; border: 1px solid #e2e8f0; font-size: 0.88rem; font-weight: 500; color: #64748b;">CPQ Builder</span>
+        <span style="padding: 10px 20px; border-radius: 50px; background: #f8fafc; border: 1px solid #e2e8f0; font-size: 0.88rem; font-weight: 500; color: #64748b;">Projects</span>
+        <span style="padding: 10px 20px; border-radius: 50px; background: #f8fafc; border: 1px solid #e2e8f0; font-size: 0.88rem; font-weight: 500; color: #64748b;">Task Queue</span>
+        <span style="padding: 10px 20px; border-radius: 50px; background: #f8fafc; border: 1px solid #e2e8f0; font-size: 0.88rem; font-weight: 500; color: #64748b;">Tickets</span>
+        <span style="padding: 10px 20px; border-radius: 50px; background: #f8fafc; border: 1px solid #e2e8f0; font-size: 0.88rem; font-weight: 500; color: #64748b;">Support</span>
+        <span style="padding: 10px 20px; border-radius: 50px; background: #f8fafc; border: 1px solid #e2e8f0; font-size: 0.88rem; font-weight: 500; color: #64748b;">App Builder</span>
+        <span style="padding: 10px 20px; border-radius: 50px; background: #f8fafc; border: 1px solid #e2e8f0; font-size: 0.88rem; font-weight: 500; color: #64748b;">Developer Portal</span>
+        <span style="padding: 10px 20px; border-radius: 50px; background: #f8fafc; border: 1px solid #e2e8f0; font-size: 0.88rem; font-weight: 500; color: #64748b;">Staff / RBAC</span>
+        <span style="padding: 10px 20px; border-radius: 50px; background: #f8fafc; border: 1px solid #e2e8f0; font-size: 0.88rem; font-weight: 500; color: #64748b;">Notifications</span>
+        <span style="padding: 10px 20px; border-radius: 50px; background: #f8fafc; border: 1px solid #e2e8f0; font-size: 0.88rem; font-weight: 500; color: #64748b;">Audit Log</span>
+        <span style="padding: 10px 20px; border-radius: 50px; background: #f8fafc; border: 1px solid #e2e8f0; font-size: 0.88rem; font-weight: 500; color: #64748b;">CSV Import</span>
+        <span style="padding: 10px 20px; border-radius: 50px; background: #f8fafc; border: 1px solid #e2e8f0; font-size: 0.88rem; font-weight: 500; color: #64748b;">Softphone</span>
+        <span style="padding: 10px 20px; border-radius: 50px; background: #f8fafc; border: 1px solid #e2e8f0; font-size: 0.88rem; font-weight: 500; color: #64748b;">Command Palette</span>
       </div>
     </div>
   </section>
 
-  <!-- Testing / Quality -->
-  <section id="testing" class="section">
-    <div class="container">
-      <div class="section-header">
-        <h2>Production-Grade Quality</h2>
-        <p>313 automated tests. 10 deep workflow verifications. 30 API endpoints validated. Zero failures.</p>
-      </div>
-      <div class="test-results">
-        <table>
-          <thead>
-            <tr>
-              <th>#</th>
-              <th>Workflow</th>
-              <th>Status</th>
-              <th>Details</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr><td>1</td><td>Lead Creation + Agent Assignment</td><td><span class="badge-pass">PASS</span></td><td>Create lead, assign agent, verify across pages</td></tr>
-            <tr><td>2</td><td>Pipeline Deal Lifecycle</td><td><span class="badge-pass">PASS</span></td><td>6 stages, 29 deals, create via modal, detail view</td></tr>
-            <tr><td>3</td><td>Reports: Charts + Metrics</td><td><span class="badge-pass">PASS</span></td><td>Revenue, deal count, win rate metrics render</td></tr>
-            <tr><td>4</td><td>Reports: Detailed Data Tables</td><td><span class="badge-pass">PASS</span></td><td>6 data types with 27-35 records each</td></tr>
-            <tr><td>5</td><td>PDF + CSV Export</td><td><span class="badge-pass">PASS</span></td><td>Both formats generate valid files</td></tr>
-            <tr><td>6</td><td>Agent Reports Leaderboard</td><td><span class="badge-pass">PASS</span></td><td>6 agents, charts, stat cards, drill-down</td></tr>
-            <tr><td>7</td><td>Auto Email Report Scheduling</td><td><span class="badge-pass">PASS</span></td><td>Full CRUD: create, pause, delete</td></tr>
-            <tr><td>8</td><td>Forgot Password Flow</td><td><span class="badge-pass">PASS</span></td><td>Token generation + password reset API</td></tr>
-            <tr><td>9</td><td>Invoice / Task / Ticket Management</td><td><span class="badge-pass">PASS</span></td><td>Records loaded, Mark Paid workflow</td></tr>
-            <tr><td>10</td><td>API Endpoint Health Sweep</td><td><span class="badge-pass">PASS</span></td><td>30/30 endpoints return 200</td></tr>
-          </tbody>
-        </table>
+  <!-- Trust / Tech -->
+  <section style="padding: 80px 0; background: #f8fafc;">
+    <div style="max-width: 1200px; margin: 0 auto; padding: 0 24px;">
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 24px;">
+        <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 16px; padding: 28px; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.06), 0 4px 12px rgba(0,0,0,0.04);">
+          <div style="color: #2563eb; margin-bottom: 12px; display: flex; justify-content: center;">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></svg>
+          </div>
+          <h4 style="font-size: 1rem; font-weight: 700; margin-bottom: 8px; color: #0f172a;">Enterprise Security</h4>
+          <p style="font-size: 0.85rem; color: #64748b; line-height: 1.6;">JWT auth, bcrypt hashing, RBAC roles, rate limiting, CORS protection</p>
+        </div>
+        <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 16px; padding: 28px; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.06), 0 4px 12px rgba(0,0,0,0.04);">
+          <div style="color: #2563eb; margin-bottom: 12px; display: flex; justify-content: center;">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/></svg>
+          </div>
+          <h4 style="font-size: 1rem; font-weight: 700; margin-bottom: 8px; color: #0f172a;">Real-time Sync</h4>
+          <p style="font-size: 0.85rem; color: #64748b; line-height: 1.6;">Socket.io live collaboration with presence cursors and instant deal updates</p>
+        </div>
+        <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 16px; padding: 28px; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.06), 0 4px 12px rgba(0,0,0,0.04);">
+          <div style="color: #2563eb; margin-bottom: 12px; display: flex; justify-content: center;">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg>
+          </div>
+          <h4 style="font-size: 1rem; font-weight: 700; margin-bottom: 8px; color: #0f172a;">REST API + Swagger</h4>
+          <p style="font-size: 0.85rem; color: #64748b; line-height: 1.6;">30+ documented endpoints, API key provisioning, webhook streams</p>
+        </div>
+        <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 16px; padding: 28px; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.06), 0 4px 12px rgba(0,0,0,0.04);">
+          <div style="color: #2563eb; margin-bottom: 12px; display: flex; justify-content: center;">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg>
+          </div>
+          <h4 style="font-size: 1rem; font-weight: 700; margin-bottom: 8px; color: #0f172a;">313 E2E Tests</h4>
+          <p style="font-size: 0.85rem; color: #64748b; line-height: 1.6;">100% pass rate. 10 deep workflow verifications. Production-validated.</p>
+        </div>
       </div>
     </div>
   </section>
 
   <!-- CTA -->
-  <section class="section-cta">
-    <div class="container">
-      <h2>Ready to transform your sales process?</h2>
-      <p>See Globus CRM in action with our live demo — fully loaded with realistic enterprise data.</p>
-      <div class="hero-actions">
-        <a href="https://crm.globusdemos.com" target="_blank" class="btn btn-primary btn-lg">Launch Live Demo</a>
-        <a href="https://github.com/Globussoft-Technologies/globussoft-crm" target="_blank" class="btn btn-outline btn-lg">View on GitHub</a>
+  <section style="padding: 100px 0; text-align: center; background: linear-gradient(180deg, #ffffff, rgba(37,99,235,0.04), #ffffff);">
+    <div style="max-width: 1200px; margin: 0 auto; padding: 0 24px;">
+      <h2 style="font-size: clamp(1.8rem, 3.5vw, 2.8rem); font-weight: 800; margin-bottom: 16px; color: #0f172a;">Ready to transform your sales process?</h2>
+      <p style="color: #64748b; font-size: 1.1rem; margin-bottom: 32px;">Start your free trial today. No credit card required.</p>
+      <div style="display: flex; gap: 16px; justify-content: center; flex-wrap: wrap;">
+        <a href="/get-started" style="padding: 16px 36px; font-size: 1.05rem; border-radius: 12px; display: inline-flex; align-items: center; gap: 8px; background: #2563eb; color: #fff; font-weight: 600; box-shadow: 0 4px 14px rgba(37,99,235,0.3);">
+          Get Started Free
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+        </a>
+        <a href="/pricing" style="padding: 16px 36px; font-size: 1.05rem; border-radius: 12px; border: 1px solid #e2e8f0; color: #0f172a; font-weight: 500; background: #ffffff;">
+          View Pricing
+        </a>
       </div>
-      <p class="cta-creds">Demo login: <code>admin@globussoft.com</code> / <code>password123</code></p>
     </div>
   </section>
 
   <!-- Footer -->
-  <footer class="footer">
-    <div class="container footer-inner">
-      <div class="footer-brand">
-        <a href="#" class="logo">
-          <div class="logo-icon"></div>
-          <span>Globus <strong>CRM</strong></span>
-        </a>
-        <p>Enterprise sales intelligence platform built by Globussoft Technologies.</p>
+  <footer style="padding: 60px 0 40px; border-top: 1px solid #e2e8f0; background: #f8fafc;">
+    <div style="max-width: 1200px; margin: 0 auto; padding: 0 24px; display: flex; flex-wrap: wrap; gap: 48px;">
+      <div style="flex: 1; min-width: 250px;">
+        <div style="display: flex; align-items: center; margin-bottom: 12px; color: #0f172a;">
+          <img src="../frontend/public/globussoft-logo.png" alt="Globus CRM" style="height: 38px; width: auto; max-width: 170px; object-fit: contain;">
+        </div>
+        <p style="color: #64748b; font-size: 0.88rem; max-width: 300px;">Enterprise sales intelligence platform built by Globussoft Technologies.</p>
       </div>
-      <div class="footer-links">
+      <div style="display: flex; gap: 64px;">
         <div>
-          <h4>Product</h4>
-          <a href="#features">Features</a>
-          <a href="#screenshots">Screenshots</a>
-          <a href="#modules">Modules</a>
-          <a href="#testing">Quality</a>
+          <h4 style="font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.08em; color: #94a3b8; margin-bottom: 16px;">Product</h4>
+          <a href="#features" style="display: block; font-size: 0.88rem; color: #64748b; margin-bottom: 10px; text-decoration: none;">Features</a>
+          <a href="#screenshots" style="display: block; font-size: 0.88rem; color: #64748b; margin-bottom: 10px; text-decoration: none;">Screenshots</a>
+          <a href="/pricing" style="display: block; font-size: 0.88rem; color: #64748b; margin-bottom: 10px; text-decoration: none;">Pricing</a>
         </div>
         <div>
-          <h4>Resources</h4>
-          <a href="https://crm.globusdemos.com" target="_blank">Live Demo</a>
-          <a href="https://crm.globusdemos.com/api-docs" target="_blank">API Docs</a>
-          <a href="https://github.com/Globussoft-Technologies/globussoft-crm" target="_blank">GitHub</a>
+          <h4 style="font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.08em; color: #94a3b8; margin-bottom: 16px;">Account</h4>
+          <a href="/login" style="display: block; font-size: 0.88rem; color: #64748b; margin-bottom: 10px; text-decoration: none;">Login</a>
+          <a href="/get-started" style="display: block; font-size: 0.88rem; color: #64748b; margin-bottom: 10px; text-decoration: none;">Sign Up</a>
+          <a href="/portal" style="display: block; font-size: 0.88rem; color: #64748b; margin-bottom: 10px; text-decoration: none;">Support Portal</a>
         </div>
       </div>
-      <div class="footer-bottom">
-        <p>&copy; 2026 Globussoft Technologies. All rights reserved.</p>
-      </div>
+    </div>
+    <div style="max-width: 1200px; margin: 48px auto 0; padding: 24px 24px 0; border-top: 1px solid #e2e8f0; text-align: center; font-size: 0.8rem; color: #94a3b8;">
+      &copy; 2026 Globussoft Technologies. All rights reserved.
     </div>
   </footer>
 

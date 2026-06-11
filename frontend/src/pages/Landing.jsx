@@ -53,16 +53,15 @@ export default function Landing() {
       {/* Navbar */}
       <nav style={{ position: 'fixed', top: 0, left: 0, right: 0, zIndex: 100, background: 'rgba(255,255,255,0.9)', backdropFilter: 'blur(20px)', borderBottom: `1px solid ${C.border}` }}>
         <div style={{ maxWidth: 1200, margin: '0 auto', padding: '0 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', height: 64 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: '1.2rem', color: C.text }}>
-            <div style={{ width: 28, height: 28, borderRadius: 8, background: 'linear-gradient(135deg, #3b82f6, #8b5cf6)' }} />
-            <span>Globus <strong style={{ color: C.accent }}>CRM</strong></span>
-          </div>
+          <Link to="/" style={{ display: 'flex', alignItems: 'center', textDecoration: 'none' }}>
+            <img src="/globussoft-logo.png" alt="Globus CRM" style={{ height: 36, width: 'auto', maxWidth: 160, objectFit: 'contain' }} />
+          </Link>
           <div style={{ display: 'flex', alignItems: 'center', gap: 28 }}>
             <a href="#features" style={{ fontSize: '0.9rem', color: C.text2, textDecoration: 'none' }}>Features</a>
             <a href="#screenshots" style={{ fontSize: '0.9rem', color: C.text2, textDecoration: 'none' }}>Screenshots</a>
             <Link to="/pricing" style={{ fontSize: '0.9rem', color: C.text2, textDecoration: 'none' }}>Pricing</Link>
             <Link to="/login" style={{ fontSize: '0.9rem', color: C.text2, textDecoration: 'none' }}>Login</Link>
-            <Link to="/signup" style={{ padding: '8px 20px', fontSize: '0.85rem', borderRadius: 10, textDecoration: 'none', background: C.accent, color: '#fff', fontWeight: 600 }}>Get Started Free</Link>
+            <Link to="/get-started" style={{ padding: '8px 20px', fontSize: '0.85rem', borderRadius: 10, textDecoration: 'none', background: C.accent, color: '#fff', fontWeight: 600 }}>Get Started Free</Link>
           </div>
         </div>
       </nav>
@@ -83,7 +82,7 @@ export default function Landing() {
             Globus CRM gives your sales team a 360-degree view of every lead, deal, and customer — with AI scoring, automated reports, and real-time pipeline analytics across 25+ integrated modules.
           </p>
           <div style={{ display: 'flex', gap: 16, justifyContent: 'center', marginBottom: 60, flexWrap: 'wrap' }}>
-            <Link to="/signup" style={{ padding: '16px 36px', fontSize: '1.05rem', borderRadius: 12, textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 8, background: C.accent, color: '#fff', fontWeight: 600, boxShadow: '0 4px 14px rgba(37,99,235,0.3)' }}>
+            <Link to="/get-started" style={{ padding: '16px 36px', fontSize: '1.05rem', borderRadius: 12, textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 8, background: C.accent, color: '#fff', fontWeight: 600, boxShadow: '0 4px 14px rgba(37,99,235,0.3)' }}>
               Start Free Trial <ArrowRight size={18} />
             </Link>
             <a href="#features" style={{ padding: '16px 36px', fontSize: '1.05rem', borderRadius: 12, border: `1px solid ${C.border}`, color: C.text, textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 8, fontWeight: 500, background: C.card }}>
@@ -185,7 +184,7 @@ export default function Landing() {
           <h2 style={{ fontSize: 'clamp(1.8rem, 3.5vw, 2.8rem)', fontWeight: 800, marginBottom: 16, color: C.text }}>Ready to transform your sales process?</h2>
           <p style={{ color: C.text2, fontSize: '1.1rem', marginBottom: 32 }}>Start your free trial today. No credit card required.</p>
           <div style={{ display: 'flex', gap: 16, justifyContent: 'center', flexWrap: 'wrap' }}>
-            <Link to="/signup" style={{ padding: '16px 36px', fontSize: '1.05rem', borderRadius: 12, textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 8, background: C.accent, color: '#fff', fontWeight: 600, boxShadow: '0 4px 14px rgba(37,99,235,0.3)' }}>
+            <Link to="/get-started" style={{ padding: '16px 36px', fontSize: '1.05rem', borderRadius: 12, textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 8, background: C.accent, color: '#fff', fontWeight: 600, boxShadow: '0 4px 14px rgba(37,99,235,0.3)' }}>
               Get Started Free <ArrowRight size={18} />
             </Link>
             <Link to="/pricing" style={{ padding: '16px 36px', fontSize: '1.05rem', borderRadius: 12, border: `1px solid ${C.border}`, color: C.text, textDecoration: 'none', fontWeight: 500, background: C.card }}>
@@ -199,9 +198,12 @@ export default function Landing() {
       <footer style={{ padding: '60px 0 40px', borderTop: `1px solid ${C.border}`, background: C.bg2 }}>
         <div style={{ maxWidth: 1200, margin: '0 auto', padding: '0 24px', display: 'flex', flexWrap: 'wrap', gap: 48 }}>
           <div style={{ flex: 1, minWidth: 250 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: '1.2rem', marginBottom: 12, color: C.text }}>
-              <div style={{ width: 28, height: 28, borderRadius: 8, background: 'linear-gradient(135deg, #3b82f6, #8b5cf6)' }} />
-              <span>Globus <strong style={{ color: C.accent }}>CRM</strong></span>
+            <div style={{ display: 'flex', alignItems: 'center', marginBottom: 12, color: C.text }}>
+              <img
+                src="/globussoft-logo.png"
+                alt="Globus CRM"
+                style={{ height: 38, width: 'auto', maxWidth: 170, objectFit: 'contain' }}
+              />
             </div>
             <p style={{ color: C.text2, fontSize: '0.88rem', maxWidth: 300 }}>Enterprise sales intelligence platform built by Globussoft Technologies.</p>
           </div>
@@ -215,7 +217,7 @@ export default function Landing() {
             <div>
               <h4 style={{ fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '0.08em', color: C.text3, marginBottom: 16 }}>Account</h4>
               <Link to="/login" style={{ display: 'block', fontSize: '0.88rem', color: C.text2, marginBottom: 10, textDecoration: 'none' }}>Login</Link>
-              <Link to="/signup" style={{ display: 'block', fontSize: '0.88rem', color: C.text2, marginBottom: 10, textDecoration: 'none' }}>Sign Up</Link>
+              <Link to="/get-started" style={{ display: 'block', fontSize: '0.88rem', color: C.text2, marginBottom: 10, textDecoration: 'none' }}>Sign Up</Link>
               <Link to="/portal" style={{ display: 'block', fontSize: '0.88rem', color: C.text2, marginBottom: 10, textDecoration: 'none' }}>Support Portal</Link>
             </div>
           </div>

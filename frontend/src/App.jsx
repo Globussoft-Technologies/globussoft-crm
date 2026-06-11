@@ -152,6 +152,9 @@ const StaffPermissions = lazy(() => import("./pages/StaffPermissions"));
 const SsoReturn = lazy(() => import("./pages/SsoReturn"));
 const PaymentSuccess = lazy(() => import("./pages/PaymentSuccess"));
 const PaymentFailed = lazy(() => import("./pages/PaymentFailed"));
+// Landing-page marketing funnel: email check → register → plan selection → Razorpay → success.
+const GetStarted = lazy(() => import("./pages/GetStarted"));
+const RegisterSuccess = lazy(() => import("./pages/RegisterSuccess"));
 // Self-service customer registration. Creates a User with userType='CUSTOMER'
 // — distinct from the wellness patient portal (OTP-based, /wellness/portal).
 const CustomerRegister = lazy(() => import("./pages/CustomerRegister"));
@@ -806,6 +809,11 @@ export default function App() {
                   <Route path="/pricing" element={<Pricing />} />
                   <Route path="/payment-success" element={<PaymentSuccess />} />
                   <Route path="/payment-failed" element={<PaymentFailed />} />
+                  <Route
+                    path="/get-started"
+                    element={!token ? <GetStarted /> : <Navigate to={landingFor(user, tenant)} replace />}
+                  />
+                  <Route path="/register-success" element={<RegisterSuccess />} />
                   <Route path="/portal" element={<Portal />} />
                   {/* Travel customer portal — end-user (Contact) login + dashboard
                       + DigiLocker / Aadhaar verification (PRD §4.5 extended).
@@ -857,18 +865,14 @@ export default function App() {
                     path="/kb/:tenantSlug/:slug"
                     element={<KbArticleView />}
                   />
-                  {/* #240: unauthenticated visitors to `/` should land on /login, not the
-                marketing Landing page. The Landing component is still importable
-                for any explicit /landing CTA but is no longer the implicit root.
-                For logged-in users, route to the per-role landingPath when
-                configured (Roles & Permissions admin), falling back to the
-                vertical default — so a new role lands on its configured page
-                even when the user types `/` in the URL bar. */}
+                  {/* Landing page for unauthenticated visitors; authenticated users
+                route to their per-role landingPath. The marketing Landing page
+                links to /login and /signup in its navbar, hero, and footer. */}
                   <Route
                     path="/"
                     element={
                       !token ? (
-                        <Navigate to="/login" replace />
+                        <Landing />
                       ) : (
                         <Navigate to={landingFor(user, tenant)} replace />
                       )

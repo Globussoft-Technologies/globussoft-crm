@@ -117,6 +117,45 @@ router.get("/public/tenants", async (req, res) => {
   }
 });
 
+// Marketing /get-started wizard: check whether an email already belongs to
+// any active user in the system. Returns { exists: boolean } so the frontend
+// can route existing users to /login and new users into the register flow.
+// Intentionally scoped globally (not per-tenant) for the landing-page funnel.
+router.post("/check-email", async (req, res) => {
+  try {
+    const rawEmail = req.body?.email;
+    const email = typeof rawEmail === "string" ? rawEmail.toLowerCase().trim() : "";
+
+    // Consistent-timing guard: even invalid emails run a short fixed delay
+    // so response timing does not leak whether an email exists. 80 ms is
+    // enough to smooth Prisma variance without hurting UX.
+    const checkStart = Date.now();
+
+    let exists = false;
+    if (email && email.includes("@")) {
+      const count = await prisma.user.count({
+        where: {
+          email,
+          deactivatedAt: null,
+        },
+      });
+      exists = count > 0;
+    }
+
+    const elapsed = Date.now() - checkStart;
+    const minDelay = 80;
+    if (elapsed < minDelay) {
+      await new Promise((r) => setTimeout(r, minDelay - elapsed));
+    }
+
+    res.json({ exists });
+  } catch (err) {
+    console.error("[auth/check-email] error:", err.message);
+    // Never expose internal errors; still return the same shape.
+    res.status(500).json({ exists: false });
+  }
+});
+
 // #526 (CRIT-01): Send password-reset link via SendGrid. Local helper
 // because the same `sendSendGrid` function is duplicated in
 // `lib/notificationService.js` and `routes/email_scheduling.js`; promoting
@@ -213,7 +252,7 @@ function validatePasswordComplexity(password) {
 // Register Epic — creates a new Tenant + first User (org owner)
 router.post("/register", async (req, res) => {
   try {
-    const { email, password, name, organizationName, vertical } = req.body;
+    const { email, password, name, organizationName, vertical, themePreference } = req.body;
 
     const pwErr = validatePasswordComplexity(password);
     if (pwErr) return res.status(400).json({ error: pwErr });
@@ -225,6 +264,9 @@ router.post("/register", async (req, res) => {
 
     const validVerticals = ['generic', 'wellness', 'travel'];
     const selectedVertical = validVerticals.includes(vertical) ? vertical : 'generic';
+
+    const validThemes = ['light', 'dark', 'system'];
+    const selectedTheme = validThemes.includes(themePreference) ? themePreference : 'system';
 
     const hashedPassword = await bcrypt.hash(password, 10);
 
@@ -248,7 +290,8 @@ router.post("/register", async (req, res) => {
         tenantId: tenant.id,
         trialStartDate: now,
         trialEndsAt: trialEnd,
-        subscriptionStatus: "TRIAL"
+        subscriptionStatus: "TRIAL",
+        themePreference: selectedTheme
       }
     });
 
@@ -265,7 +308,7 @@ router.post("/register", async (req, res) => {
     setAuthCookie(res, token); // #914 slice 1 — additive HttpOnly cookie (no consumer reads it yet)
     res.status(201).json({
       token,
-      user: { id: user.id, email: user.email, name: user.name, role: user.role, wellnessRole: user.wellnessRole || null },
+      user: { id: user.id, email: user.email, name: user.name, role: user.role, wellnessRole: user.wellnessRole || null, themePreference: user.themePreference || 'system' },
       tenant: { id: tenant.id, name: tenant.name, slug: tenant.slug, plan: tenant.plan, vertical: tenant.vertical || "generic", country: tenant.country || "US", defaultCurrency: tenant.defaultCurrency || "USD", locale: tenant.locale || "en-US", logoUrl: tenant.logoUrl, brandColor: tenant.brandColor }
     });
 
@@ -278,7 +321,7 @@ router.post("/register", async (req, res) => {
 // Signup alias (matches signup page) — same behavior as register
 router.post("/signup", async (req, res) => {
   try {
-    const { email, password, name, organizationName, vertical } = req.body;
+    const { email, password, name, organizationName, vertical, themePreference } = req.body;
 
     const pwErr = validatePasswordComplexity(password);
     if (pwErr) return res.status(400).json({ error: pwErr });
@@ -290,6 +333,9 @@ router.post("/signup", async (req, res) => {
 
     const validVerticals = ['generic', 'wellness', 'travel'];
     const selectedVertical = validVerticals.includes(vertical) ? vertical : 'generic';
+
+    const validThemes = ['light', 'dark', 'system'];
+    const selectedTheme = validThemes.includes(themePreference) ? themePreference : 'system';
 
     const hashedPassword = await bcrypt.hash(password, 10);
 
@@ -313,7 +359,8 @@ router.post("/signup", async (req, res) => {
         tenantId: tenant.id,
         trialStartDate: now,
         trialEndsAt: trialEnd,
-        subscriptionStatus: "TRIAL"
+        subscriptionStatus: "TRIAL",
+        themePreference: selectedTheme
       }
     });
 
@@ -328,7 +375,7 @@ router.post("/signup", async (req, res) => {
     setAuthCookie(res, token); // #914 slice 1 — additive HttpOnly cookie (no consumer reads it yet)
     res.status(201).json({
       token,
-      user: { id: user.id, email: user.email, name: user.name, role: user.role, wellnessRole: user.wellnessRole || null },
+      user: { id: user.id, email: user.email, name: user.name, role: user.role, wellnessRole: user.wellnessRole || null, themePreference: user.themePreference || 'system' },
       tenant: { id: tenant.id, name: tenant.name, slug: tenant.slug, plan: tenant.plan, vertical: tenant.vertical || "generic", country: tenant.country || "US", defaultCurrency: tenant.defaultCurrency || "USD", locale: tenant.locale || "en-US", logoUrl: tenant.logoUrl, brandColor: tenant.brandColor }
     });
 

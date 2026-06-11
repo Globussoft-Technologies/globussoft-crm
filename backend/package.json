@@ -43,6 +43,7 @@
     "imap": "^0.8.19",
     "jsonwebtoken": "^9.0.3",
     "mailgun.js": "^13.0.0",
+    "marked": "^18.0.5",
     "multer": "^2.1.1",
     "mysql2": "^3.22.3",
     "node-cron": "^4.2.1",

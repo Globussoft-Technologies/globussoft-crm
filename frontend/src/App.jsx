@@ -979,17 +979,9 @@ export default function App() {
                     path="/kb/:tenantSlug/:slug"
                     element={<KbArticleView />}
                   />
-                  {/* Temporary: marketing Landing page mounted at /landing (no
-                auth). Slated for replacement — keep it public-route only; the
-                `/` root behaviour below (#240) is unchanged. */}
-                  <Route path="/landing" element={<Landing />} />
-                  {/* #240: unauthenticated visitors to `/` should land on /login, not the
-                marketing Landing page. The Landing component is still importable
-                for any explicit /landing CTA but is no longer the implicit root.
-                For logged-in users, route to the per-role landingPath when
-                configured (Roles & Permissions admin), falling back to the
-                vertical default — so a new role lands on its configured page
-                even when the user types `/` in the URL bar. */}
+                  {/* Landing page for unauthenticated visitors; authenticated users
+                route to their per-role landingPath. The marketing Landing page
+                links to /login and /signup in its navbar, hero, and footer. */}
                   <Route
                     path="/"
                     element={

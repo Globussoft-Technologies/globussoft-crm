@@ -209,14 +209,13 @@ app.use(helmetMiddleware);
 // blocking. Promotion to enforce-mode is a future slice once inline-script /
 // inline-style surface is migrated to external bundles + nonces.
 app.use(helmetStrictReportOnlyMiddleware);
-// #917 slice S115 (FR-3.X) — wire S35's cspNonceStaticMiddleware. Mounted
-// AFTER `attachNonce` (populates res.locals.cspNonce) and AFTER
-// `helmetStrictReportOnlyMiddleware` (sets the CSP header with the matching
-// nonce in the source-list), BEFORE any downstream route that could serve
-// HTML (notably `app.get("/", ...)` and the /uploads static mounts). The
-// middleware only acts on GET requests for non-/api/* paths with no dot in
-// the URL — anything else falls through untouched.
-app.use(cspNonceStaticMiddleware);
+// #917 slice S119 (FR-3.X) — cspNonceStaticMiddleware mount MOVED to AFTER
+// the swagger-ui mount further down. S115 placed it here, but the
+// middleware's fall-through rules (GET + non-`/api/` prefix + no dot)
+// MATCH `/api-docs` and `/api-docs/` — so the SPA index.html was being
+// served instead of Swagger UI's HTML, reding the e2e api-docs spec and
+// the per-push api_tests gate. See the new mount immediately after
+// `app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(...))` below.
 app.use(permissionsPolicyMiddleware); // #186 — Permissions-Policy header
 app.use(cookieParser());
 // #657 — CSRF defense layer for browser flows. Mounted EARLY (before
@@ -667,6 +666,26 @@ app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument, {
   customCss: '.swagger-ui .topbar { display: none }',
   customSiteTitle: "Globussoft CRM Docs"
 }));
+
+// #917 slice S119 (FR-3.X) — wire S35's cspNonceStaticMiddleware. Mounted
+// here (AFTER swagger-ui's `/api-docs` mount) because the middleware's
+// fall-through rules (GET + non-`/api/` prefix + no dot) match `/api-docs`
+// and `/api-docs/` — placing it BEFORE swagger-ui (S115's mount position)
+// caused the SPA index.html to be served instead of Swagger UI's HTML,
+// reding the e2e api-docs spec and the api_tests deploy gate.
+//
+// Positional constraints (all still satisfied at this site):
+//   - AFTER `attachNonce`                    (line ~205 — populates res.locals.cspNonce)
+//   - AFTER `helmetStrictReportOnlyMiddleware` (line ~211 — sets the CSP header)
+//   - AFTER swagger-ui mount                 (line ~666 — swagger-ui wins /api-docs)
+//   - BEFORE `app.get("/", ...)`             (line ~1110 — SPA shell fallback)
+//   - BEFORE `/uploads` static mounts        (line ~1060 — static asset paths
+//     contain dots and so fall through the middleware's own rules anyway)
+//
+// Express routes are first-match-wins on mount order — moving the mount to
+// AFTER swagger-ui means `/api-docs` requests reach swagger-ui's handler
+// before this middleware can intercept them.
+app.use(cspNonceStaticMiddleware);
 
 // Global auth guard — protects all /api/ routes EXCEPT auth login/signup and health
 app.use("/api", (req, res, next) => {

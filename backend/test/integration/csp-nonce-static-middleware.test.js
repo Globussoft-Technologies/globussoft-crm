@@ -148,3 +148,95 @@ describe('S115 — cspNonceStaticMiddleware wire-in (HTTP smoke)', () => {
     expect(res.text).not.toContain('<meta name="csp-nonce"');
   });
 });
+
+// ─────────────────────────────────────────────────────────────────
+// S119 — handler-precedence regression pin
+// ─────────────────────────────────────────────────────────────────
+// What's tested:
+//   The mount-order contract that S119 fixed. S115 mounted
+//   cspNonceStaticMiddleware BEFORE the swagger-ui mount in server.js,
+//   so requests to `/api-docs` (no trailing slash, no dot, GET, not
+//   `/api/`-prefixed) cleared all 3 fall-through MISS conditions and
+//   the middleware served the SPA index.html instead of letting
+//   swagger-ui's handler win. Result: e2e `api-docs.spec.js` red,
+//   per-push api_tests gate red.
+//
+// Fix (server.js): move `app.use(cspNonceStaticMiddleware)` to AFTER
+// `app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(...))`.
+// Express matches handlers in mount order — swagger-ui now wins.
+//
+// This describe pins the contract at the integration tier by mounting
+// a swagger-ui-like handler FIRST, then the cspNonceStaticMiddleware,
+// and asserting:
+//   - GET /api-docs       → swagger-ui-like handler wins (returns its
+//                           response body, NOT the SPA index.html).
+//   - GET /api-docs/      → same (trailing-slash variant — e2e test
+//                           target shape).
+//   - GET /some-spa-route → cspNonceStaticMiddleware wins (substituted
+//                           SPA index.html still served on non-handler
+//                           paths — proves the mount-order fix didn't
+//                           break the original wire-in).
+//
+// Why this matters: if a future refactor inverts the mount order back
+// to S115's broken state (cspNonceStaticMiddleware before swagger-ui),
+// these tests go red instantly — before the e2e gate catches it.
+
+function makeAppWithSwaggerFirst() {
+  const app = express();
+  // Production order (server.js post-S119):
+  //   1. attachNonce
+  //   2. helmetStrictReportOnlyMiddleware
+  //   3. swagger-ui mount on /api-docs
+  //   4. cspNonceStaticMiddleware
+  app.use(attachNonce);
+  app.use(helmetStrictReportOnlyMiddleware);
+  // Swagger-ui-like handler mounted BEFORE the SPA-shell middleware.
+  // We don't import swagger-ui-express here (heavy dep with its own
+  // setup contract); a tiny inline handler is enough to prove the
+  // mount-order contract — the SUT is the middleware, not swagger-ui.
+  app.use('/api-docs', (req, res) => {
+    res.set('Content-Type', 'text/html; charset=utf-8');
+    res.send('<!DOCTYPE html><html><head><title>Swagger</title></head><body>swagger-ui-stub</body></html>');
+  });
+  app.use(cspNonceStaticMiddleware);
+  return app;
+}
+
+describe('S119 — cspNonceStaticMiddleware mount order (swagger-ui precedence)', () => {
+  let app2;
+  beforeAll(() => {
+    app2 = makeAppWithSwaggerFirst();
+  });
+
+  test('GET /api-docs → swagger-ui handler wins (NOT the SPA shell)', async () => {
+    const res = await request(app2).get('/api-docs');
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toMatch(/text\/html/);
+    // Swagger stub-handler payload should appear; the SPA shell's
+    // meta-csp-nonce tag must NOT (which would prove the middleware
+    // intercepted instead of falling through to swagger-ui).
+    expect(res.text).toContain('swagger-ui-stub');
+    expect(res.text).not.toContain('<meta name="csp-nonce"');
+  });
+
+  test('GET /api-docs/ → swagger-ui handler wins (trailing-slash variant)', async () => {
+    // The e2e test (e2e/tests/api-docs.spec.js) hits this exact path.
+    const res = await request(app2).get('/api-docs/');
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toMatch(/text\/html/);
+    expect(res.text).toContain('swagger-ui-stub');
+    expect(res.text).not.toContain('<meta name="csp-nonce"');
+  });
+
+  test('GET /some-spa-route → cspNonceStaticMiddleware still wins on non-handler paths', async () => {
+    // Sanity: moving the middleware mount didn't break the original
+    // wire-in. SPA-shaped paths (no dot, not /api/, GET, not a registered
+    // handler) still hit the substitution path.
+    const res = await request(app2).get('/some-spa-route');
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toMatch(/text\/html/);
+    expect(res.text).toContain('<meta name="csp-nonce"');
+    expect(res.text).not.toContain('__CSP_NONCE__');
+    expect(res.text).not.toContain('swagger-ui-stub');
+  });
+});

@@ -193,6 +193,12 @@ app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 const cookieParser = require('cookie-parser');
 const { attachNonce, helmetMiddleware, helmetStrictReportOnlyMiddleware, permissionsPolicyMiddleware, sanitizeBody, stripTenantOverride, allowIframeEmbedding } = require('./middleware/security');
 const { originCheck } = require('./middleware/originCheck');
+// #917 slice S35 (FR-3.X) — CSP-nonce static-file middleware. Substitutes
+// `__CSP_NONCE__` placeholders in frontend/index.html with the per-request
+// nonce minted by attachNonce so the strict Report-Only CSP header's
+// `'nonce-<base64>'` source-list value matches what the browser sees on the
+// served inline `<script>` / `<style>` / `<meta name="csp-nonce">` tags.
+const cspNonceStaticMiddleware = require('./middleware/cspNonceStaticMiddleware');
 // #917 slice S1 (FR-3.2) — mint a per-request CSP nonce BEFORE the strict
 // Report-Only CSP middleware runs. The CSP function-directives read
 // res.locals.cspNonce to advertise `'nonce-<base64>'` on script-src/style-src.
@@ -203,6 +209,14 @@ app.use(helmetMiddleware);
 // blocking. Promotion to enforce-mode is a future slice once inline-script /
 // inline-style surface is migrated to external bundles + nonces.
 app.use(helmetStrictReportOnlyMiddleware);
+// #917 slice S115 (FR-3.X) — wire S35's cspNonceStaticMiddleware. Mounted
+// AFTER `attachNonce` (populates res.locals.cspNonce) and AFTER
+// `helmetStrictReportOnlyMiddleware` (sets the CSP header with the matching
+// nonce in the source-list), BEFORE any downstream route that could serve
+// HTML (notably `app.get("/", ...)` and the /uploads static mounts). The
+// middleware only acts on GET requests for non-/api/* paths with no dot in
+// the URL — anything else falls through untouched.
+app.use(cspNonceStaticMiddleware);
 app.use(permissionsPolicyMiddleware); // #186 — Permissions-Policy header
 app.use(cookieParser());
 // #657 — CSRF defense layer for browser flows. Mounted EARLY (before

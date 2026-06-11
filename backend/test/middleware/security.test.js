@@ -3,7 +3,7 @@
 // (sets the right policy string), sanitizeBody (strips dangerous tags / urls /
 // event handlers, preserves benign characters, recurses into nested objects),
 // and stripTenantOverride (deletes tenantId/userId from req.body).
-import { describe, test, expect, vi } from 'vitest';
+import { afterEach, beforeEach, describe, test, expect, vi } from 'vitest';
 import {
   attachNonce,
   helmetMiddleware,
@@ -469,5 +469,117 @@ describe('stripTenantOverride', () => {
     });
     stripTenantOverride(req, res, next);
     expect(req.body).toEqual({ name: 'Acme', role: 'USER', contactId: 7 });
+  });
+});
+
+// S117 (FR-3.7) — CSP enforce-mode flip via process.env.CSP_ENFORCE.
+// The historical export `helmetStrictReportOnlyMiddleware` now dispatches
+// per-request between two pre-built helmet instances:
+//   - CSP_ENFORCE unset/'0'/'false'/anything else → reportOnly: true →
+//     emits `Content-Security-Policy-Report-Only` (browser logs violations
+//     but does not block — matches pre-S117 behaviour).
+//   - CSP_ENFORCE === '1' || CSP_ENFORCE === 'true' → reportOnly: false →
+//     emits `Content-Security-Policy` (browser BLOCKS violators — full
+//     enforce mode lights up the strict policy as actual defense).
+// The directive content is identical across both modes; only the header
+// name swaps. The production flip is a deploy-time env-var change AFTER
+// 24h of clean Report-Only violation observability — NOT a code change.
+describe('helmetStrictReportOnlyMiddleware — S117 CSP_ENFORCE env gating (FR-3.7)', () => {
+  // Save + restore process.env.CSP_ENFORCE around each test so toggling it
+  // in one case doesn't leak into the next.
+  let savedCspEnforce;
+  beforeEach(() => {
+    savedCspEnforce = process.env.CSP_ENFORCE;
+    delete process.env.CSP_ENFORCE;
+  });
+  afterEach(() => {
+    if (savedCspEnforce === undefined) {
+      delete process.env.CSP_ENFORCE;
+    } else {
+      process.env.CSP_ENFORCE = savedCspEnforce;
+    }
+  });
+
+  test('CSP_ENFORCE unset → emits Content-Security-Policy-Report-Only (default)', () => {
+    const { req, res, next } = makeReqRes();
+    helmetStrictReportOnlyMiddleware(req, res, next);
+    expect(res.headers['Content-Security-Policy-Report-Only']).toBeTruthy();
+    expect(res.headers['Content-Security-Policy']).toBeUndefined();
+  });
+
+  test("CSP_ENFORCE='0' → Report-Only mode (any non-truthy value defaults to Report-Only)", () => {
+    process.env.CSP_ENFORCE = '0';
+    const { req, res, next } = makeReqRes();
+    helmetStrictReportOnlyMiddleware(req, res, next);
+    expect(res.headers['Content-Security-Policy-Report-Only']).toBeTruthy();
+    expect(res.headers['Content-Security-Policy']).toBeUndefined();
+  });
+
+  test("CSP_ENFORCE='false' → Report-Only mode (defensive: only '1'/'true' flip)", () => {
+    process.env.CSP_ENFORCE = 'false';
+    const { req, res, next } = makeReqRes();
+    helmetStrictReportOnlyMiddleware(req, res, next);
+    expect(res.headers['Content-Security-Policy-Report-Only']).toBeTruthy();
+    expect(res.headers['Content-Security-Policy']).toBeUndefined();
+  });
+
+  test("CSP_ENFORCE='1' → emits Content-Security-Policy (enforce mode lights up)", () => {
+    process.env.CSP_ENFORCE = '1';
+    const { req, res, next } = makeReqRes();
+    helmetStrictReportOnlyMiddleware(req, res, next);
+    expect(res.headers['Content-Security-Policy']).toBeTruthy();
+    expect(res.headers['Content-Security-Policy-Report-Only']).toBeUndefined();
+  });
+
+  test("CSP_ENFORCE='true' → enforce mode (string boolean accepted as truthy)", () => {
+    process.env.CSP_ENFORCE = 'true';
+    const { req, res, next } = makeReqRes();
+    helmetStrictReportOnlyMiddleware(req, res, next);
+    expect(res.headers['Content-Security-Policy']).toBeTruthy();
+    expect(res.headers['Content-Security-Policy-Report-Only']).toBeUndefined();
+  });
+
+  test('directive content is identical across Report-Only and enforce modes (only header name changes)', () => {
+    // The semantic contract of S117 is that the FLIP is operational, not
+    // structural: the same strict CSP that's been observed-clean in
+    // Report-Only mode for 24h becomes the actual enforced policy. The
+    // directive lists must match byte-for-byte — script-src, style-src,
+    // frame-ancestors, object-src, base-uri, form-action, report-uri.
+    delete process.env.CSP_ENFORCE;
+    const { req: reqA, res: resA, next: nextA } = makeReqRes();
+    helmetStrictReportOnlyMiddleware(reqA, resA, nextA);
+    const reportOnlyHeader = resA.headers['Content-Security-Policy-Report-Only'];
+
+    process.env.CSP_ENFORCE = '1';
+    const { req: reqB, res: resB, next: nextB } = makeReqRes();
+    helmetStrictReportOnlyMiddleware(reqB, resB, nextB);
+    const enforceHeader = resB.headers['Content-Security-Policy'];
+
+    expect(reportOnlyHeader).toBeTruthy();
+    expect(enforceHeader).toBeTruthy();
+    expect(enforceHeader).toBe(reportOnlyHeader);
+  });
+
+  test('re-reads env var per request (toggling between calls switches header name)', () => {
+    // The dispatcher reads process.env.CSP_ENFORCE on every invocation so
+    // an operator can flip enforce on/off without a process restart. Verify
+    // by flipping the env var between two sequential calls on this module
+    // instance and confirming each call honours the current reading.
+    delete process.env.CSP_ENFORCE;
+    const { req: req1, res: res1, next: next1 } = makeReqRes();
+    helmetStrictReportOnlyMiddleware(req1, res1, next1);
+    expect(res1.headers['Content-Security-Policy-Report-Only']).toBeTruthy();
+
+    process.env.CSP_ENFORCE = '1';
+    const { req: req2, res: res2, next: next2 } = makeReqRes();
+    helmetStrictReportOnlyMiddleware(req2, res2, next2);
+    expect(res2.headers['Content-Security-Policy']).toBeTruthy();
+    expect(res2.headers['Content-Security-Policy-Report-Only']).toBeUndefined();
+
+    delete process.env.CSP_ENFORCE;
+    const { req: req3, res: res3, next: next3 } = makeReqRes();
+    helmetStrictReportOnlyMiddleware(req3, res3, next3);
+    expect(res3.headers['Content-Security-Policy-Report-Only']).toBeTruthy();
+    expect(res3.headers['Content-Security-Policy']).toBeUndefined();
   });
 });

@@ -151,9 +151,19 @@ const helmetMiddleware = helmet({
 // landed here is "backend mints + advertises the nonce; frontend has the
 // hook; report-only header surfaces what enforce mode would block".
 //
-// Promotion to enforce mode is gated on CSP_ENFORCE=1 (planned follow-up
-// per FR-3.7 backward-compat cadence); the report-only header continues to
-// ship alongside until a clean violation window is observed.
+// Promotion to enforce mode is gated on CSP_ENFORCE=1 (S117, this slice).
+// The export name `helmetStrictReportOnlyMiddleware` is HISTORICAL — kept
+// for back-compat with server.js mount + the security-csp.test.js +
+// security.test.js fixtures that import it by name. When CSP_ENFORCE is
+// unset/0/false (the default), the middleware ships the strict CSP as the
+// `Content-Security-Policy-Report-Only` header (browser logs violations
+// but does not block — matches pre-S117 behaviour). When CSP_ENFORCE=1 or
+// CSP_ENFORCE='true' (the deploy-time opt-in flip, set AFTER 24h of clean
+// Report-Only observability), the SAME directive set ships as the
+// `Content-Security-Policy` header (browser BLOCKS violators — full
+// XSS-via-inline defense lights up). The code-side change here is safe to
+// merge: the default header name does not change. The production flip is
+// a deploy-time env-var change, NOT a code change.
 //
 // Why a second helmet instance rather than `reportOnly: true` on the existing
 // one: we want BOTH headers on the response — the enforce-mode transitional
@@ -169,66 +179,99 @@ const helmetMiddleware = helmet({
 const nonceScriptSrc = (req, res) => `'nonce-${res.locals && res.locals.cspNonce ? res.locals.cspNonce : ''}'`;
 const nonceStyleSrc = (req, res) => `'nonce-${res.locals && res.locals.cspNonce ? res.locals.cspNonce : ''}'`;
 
-const helmetStrictReportOnlyMiddleware = helmet({
-  // Disable every header this second helmet would otherwise duplicate; we
-  // only want the strict Report-Only CSP.
-  contentSecurityPolicy: {
-    useDefaults: false,
-    reportOnly: true,
-    directives: {
-      defaultSrc: ["'self'"],
-      // No 'unsafe-inline'. The per-request nonce minted by attachNonce
-      // (mounted upstream in server.js) is spliced in via the function
-      // directive — the only inline scripts/styles the browser will allow
-      // (when enforce-mode flips) are ones explicitly carrying the matching
-      // nonce attribute set by the HTML template substitution layer.
-      scriptSrc: ["'self'", 'https://cdn.jsdelivr.net', nonceScriptSrc],
-      styleSrc: ["'self'", 'https://fonts.googleapis.com', nonceStyleSrc],
-      imgSrc: ["'self'", 'data:', 'blob:', 'https:'],
-      connectSrc: [
-        "'self'",
-        'https://api.sendgrid.com',
-        'https://api.razorpay.com',
-        'https://checkout.razorpay.com',
-        'https://api.stripe.com',
-        'https://*.sentry.io',
-        'wss:',
-      ],
-      fontSrc: ["'self'", 'data:', 'https://fonts.gstatic.com'],
-      objectSrc: ["'none'"],
-      formAction: ["'self'"],
-      // Strict 'none' here (vs 'self' in transitional) — clickjacking defense
-      // tightens once observed-clean.
-      frameAncestors: ["'none'"],
-      baseUri: ["'self'"],
-      // #917 slice 2b — point violation reports at the slice 2a ingestion
-      // endpoint (backend/routes/csp.js → POST /api/csp/report). Browsers
-      // deliver violation reports here as application/csp-report or
-      // application/reports+json; the route persists each as an AuditLog
-      // row with entity='CSPViolation'. `report-uri` is the legacy
-      // (CSP2-era) directive — universally supported. The newer
-      // `report-to` directive needs a Reporting-Endpoints HTTP header
-      // companion, deferred until we wire that header in a future slice.
-      reportUri: ["/api/csp/report"],
+// S117 — env-gated CSP enforce-mode flip. The directive map below is
+// identical across the two helmet factories (`reportOnly: true` vs
+// `reportOnly: false`); only the header name differs. We build BOTH at
+// module-load time and dispatch per-request based on the current env-var
+// reading (re-read on every call so that vitest can toggle the env var
+// with beforeEach/afterEach without re-importing the module).
+//
+// Default: CSP_ENFORCE unset/0/false → ships Content-Security-Policy-Report-Only.
+// Flip:    CSP_ENFORCE=1 / CSP_ENFORCE='true' → ships Content-Security-Policy.
+function isCspEnforceEnabled() {
+  const v = process.env.CSP_ENFORCE;
+  return v === '1' || v === 'true';
+}
+
+function buildStrictCspHelmet(reportOnly) {
+  return helmet({
+    // Disable every header this second helmet would otherwise duplicate; we
+    // only want the strict CSP (Report-Only or enforce, gated by reportOnly).
+    contentSecurityPolicy: {
+      useDefaults: false,
+      reportOnly,
+      directives: {
+        defaultSrc: ["'self'"],
+        // No 'unsafe-inline'. The per-request nonce minted by attachNonce
+        // (mounted upstream in server.js) is spliced in via the function
+        // directive — the only inline scripts/styles the browser will allow
+        // (when enforce-mode flips) are ones explicitly carrying the matching
+        // nonce attribute set by the HTML template substitution layer.
+        scriptSrc: ["'self'", 'https://cdn.jsdelivr.net', nonceScriptSrc],
+        styleSrc: ["'self'", 'https://fonts.googleapis.com', nonceStyleSrc],
+        imgSrc: ["'self'", 'data:', 'blob:', 'https:'],
+        connectSrc: [
+          "'self'",
+          'https://api.sendgrid.com',
+          'https://api.razorpay.com',
+          'https://checkout.razorpay.com',
+          'https://api.stripe.com',
+          'https://*.sentry.io',
+          'wss:',
+        ],
+        fontSrc: ["'self'", 'data:', 'https://fonts.gstatic.com'],
+        objectSrc: ["'none'"],
+        formAction: ["'self'"],
+        // Strict 'none' here (vs 'self' in transitional) — clickjacking defense
+        // tightens once observed-clean.
+        frameAncestors: ["'none'"],
+        baseUri: ["'self'"],
+        // #917 slice 2b — point violation reports at the slice 2a ingestion
+        // endpoint (backend/routes/csp.js → POST /api/csp/report). Browsers
+        // deliver violation reports here as application/csp-report or
+        // application/reports+json; the route persists each as an AuditLog
+        // row with entity='CSPViolation'. `report-uri` is the legacy
+        // (CSP2-era) directive — universally supported. The newer
+        // `report-to` directive needs a Reporting-Endpoints HTTP header
+        // companion, deferred until we wire that header in a future slice.
+        reportUri: ["/api/csp/report"],
+      },
     },
-  },
-  // Disable all other headers — the transitional helmetMiddleware above
-  // already sets them. Layering a second helmet should only contribute the
-  // strict Report-Only CSP header, nothing else.
-  crossOriginEmbedderPolicy: false,
-  crossOriginOpenerPolicy: false,
-  crossOriginResourcePolicy: false,
-  dnsPrefetchControl: false,
-  frameguard: false,
-  hidePoweredBy: false,
-  hsts: false,
-  ieNoOpen: false,
-  noSniff: false,
-  originAgentCluster: false,
-  permittedCrossDomainPolicies: false,
-  referrerPolicy: false,
-  xssFilter: false,
-});
+    // Disable all other headers — the transitional helmetMiddleware above
+    // already sets them. Layering a second helmet should only contribute the
+    // strict CSP header (Report-Only or enforce), nothing else.
+    crossOriginEmbedderPolicy: false,
+    crossOriginOpenerPolicy: false,
+    crossOriginResourcePolicy: false,
+    dnsPrefetchControl: false,
+    frameguard: false,
+    hidePoweredBy: false,
+    hsts: false,
+    ieNoOpen: false,
+    noSniff: false,
+    originAgentCluster: false,
+    permittedCrossDomainPolicies: false,
+    referrerPolicy: false,
+    xssFilter: false,
+  });
+}
+
+// Pre-built helmet instances — created once at module-load time (helmet's
+// per-request work is cheap, but building the factory is not). The dispatcher
+// below picks one per request based on the current env-var reading.
+const strictCspReportOnlyHelmet = buildStrictCspHelmet(true);
+const strictCspEnforceHelmet = buildStrictCspHelmet(false);
+
+// Public export — historical name (server.js + tests import it). The
+// 3-arg middleware re-reads process.env.CSP_ENFORCE on every request so
+// the deploy-time env-var flip takes effect without a process restart
+// being strictly required (helmet itself caches nothing across calls).
+// Vitest can toggle CSP_ENFORCE between cases via beforeEach/afterEach
+// and see the header name swap as expected.
+function helmetStrictReportOnlyMiddleware(req, res, next) {
+  const mw = isCspEnforceEnabled() ? strictCspEnforceHelmet : strictCspReportOnlyHelmet;
+  return mw(req, res, next);
+}
 
 // 1b. Permissions-Policy — helmet 8.x doesn't ship this header, so set it
 // manually. Camera/mic OFF (consent canvas is pointer-events, not getUserMedia;

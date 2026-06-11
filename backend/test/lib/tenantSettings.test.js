@@ -236,7 +236,7 @@ beforeEach(() => {
 });
 
 describe('budget-cap helpers — KEYS + DEFAULTS shape', () => {
-  test('KEYS exposes all canonical integration keys (4 base + booking_expedia)', () => {
+  test('KEYS exposes all canonical integration keys (4 base + booking_expedia + image_llm)', () => {
     expect(KEYS.ADSGPT_MONTHLY_CAP_USD_CENTS).toBe('budgetCap_adsgpt_monthly_usd_cents');
     expect(KEYS.AI_CALLING_MONTHLY_CAP_USD_CENTS).toBe('budgetCap_ai_calling_monthly_usd_cents');
     expect(KEYS.RATEHAWK_MONTHLY_CAP_USD_CENTS).toBe('budgetCap_ratehawk_monthly_usd_cents');
@@ -244,6 +244,18 @@ describe('budget-cap helpers — KEYS + DEFAULTS shape', () => {
     // Tick #101: booking_expedia added so bookingExpediaClient can drop
     // its getSetting() workaround in favour of canonical getBudgetCap().
     expect(KEYS.BOOKING_EXPEDIA_MONTHLY_CAP_USD_CENTS).toBe('budgetCap_booking_expedia_monthly_usd_cents');
+    // S73 (2026-06-11): image-LLM gets its own envelope so a DALL-E 3 HD
+    // burst doesn't silently exhaust the text-LLM budget.
+    expect(KEYS.IMAGE_LLM_MONTHLY_CAP_USD_CENTS).toBe('budgetCap_image_llm_monthly_usd_cents');
+  });
+
+  test('S73 — image_llm and llm are DISTINCT keys (envelope separation regression pin)', () => {
+    // If a future refactor collapses these back into one key, this test
+    // fails loudly. The whole point of S73 is that image-gen budget and
+    // text-LLM budget are tracked separately in TenantSetting.
+    expect(KEYS.IMAGE_LLM_MONTHLY_CAP_USD_CENTS).not.toBe(KEYS.LLM_MONTHLY_CAP_USD_CENTS);
+    expect(KEYS.IMAGE_LLM_MONTHLY_CAP_USD_CENTS).toContain('image_llm');
+    expect(KEYS.LLM_MONTHLY_CAP_USD_CENTS).not.toContain('image');
   });
 
   test('DEFAULTS map covers every KEYS entry', () => {
@@ -257,6 +269,7 @@ describe('budget-cap helpers — KEYS + DEFAULTS shape', () => {
       KEYS.AI_CALLING_MONTHLY_CAP_USD_CENTS,
       KEYS.RATEHAWK_MONTHLY_CAP_USD_CENTS,
       KEYS.LLM_MONTHLY_CAP_USD_CENTS,
+      KEYS.IMAGE_LLM_MONTHLY_CAP_USD_CENTS,
       KEYS.BOOKING_EXPEDIA_MONTHLY_CAP_USD_CENTS,
     ];
     for (const k of Object.values(KEYS)) {
@@ -326,6 +339,11 @@ describe('budget-cap helpers — KEYS + DEFAULTS shape', () => {
     }
     if (process.env.BOOKING_EXPEDIA_MONTHLY_CAP_USD_CENTS == null) {
       expect(DEFAULTS[KEYS.BOOKING_EXPEDIA_MONTHLY_CAP_USD_CENTS]).toBe(10000);
+    }
+    // S73 — image-LLM default matches text-LLM default ($100 = 10000c)
+    // as a sensible starting point; ops can tune per-tenant.
+    if (process.env.IMAGE_LLM_MONTHLY_CAP_USD_CENTS == null) {
+      expect(DEFAULTS[KEYS.IMAGE_LLM_MONTHLY_CAP_USD_CENTS]).toBe(10000);
     }
   });
 });
@@ -463,18 +481,69 @@ describe('budget-cap helpers — getBudgetCap', () => {
     expect(out).toBe(12345);
   });
 
+  test('S73 — returns the DEFAULTS $100 cap for image-llm when no row exists', async () => {
+    // S73 regression guard — `image-llm` is the post-S73 integration name
+    // for the marketingFlyerImageLLM cap envelope (DALL-E 3 / Stability XL).
+    // Pre-S73 this client shared INTEGRATION='llm' with the text-LLM
+    // marketingFlyerCopyLLM; post-split they are independent envelopes.
+    singletonPrisma.tenantSetting.findUnique.mockResolvedValueOnce(null);
+    const out = await getBudgetCap(1, 'image-llm');
+    expect(out).toBe(DEFAULTS[KEYS.IMAGE_LLM_MONTHLY_CAP_USD_CENTS]);
+  });
+
+  test('S73 — per-tenant override for image-llm wins over env default', async () => {
+    singletonPrisma.tenantSetting.findUnique.mockResolvedValueOnce({ value: '33000' });
+    const out = await getBudgetCap(1, 'image-llm');
+    expect(out).toBe(33000);
+  });
+
+  test('S73 — image-llm and llm queries hit DIFFERENT TenantSetting keys (envelope independence)', async () => {
+    // Pin that calling getBudgetCap for the two integrations queries the
+    // distinct keys — this is what makes the split meaningful. A future
+    // refactor that aliases one to the other will fail this test.
+    singletonPrisma.tenantSetting.findUnique.mockResolvedValue(null);
+
+    await getBudgetCap(1, 'llm');
+    await getBudgetCap(1, 'image-llm');
+
+    const keys = singletonPrisma.tenantSetting.findUnique.mock.calls
+      .map((args) => args[0].where.tenantId_key.key);
+    expect(keys).toContain('budgetCap_llm_monthly_usd_cents');
+    expect(keys).toContain('budgetCap_image_llm_monthly_usd_cents');
+    expect(new Set(keys).size).toBe(2); // they MUST be distinct
+  });
+
   test('throws on unknown integration name', async () => {
     await expect(getBudgetCap(1, 'not-a-real-integration')).rejects.toThrow(
       /Unknown integration/,
     );
   });
 
-  test('throw-on-unknown path still works after booking_expedia addition (regression guard)', async () => {
-    // Adding a 5th KEYS entry must not weaken the throw-on-unknown contract —
-    // unknown names still throw, only the 5 canonical names are accepted.
+  test('throw-on-unknown path still works after booking_expedia + image-llm additions (regression guard)', async () => {
+    // Adding new KEYS entries must not weaken the throw-on-unknown contract —
+    // unknown names still throw, only the canonical names are accepted.
     await expect(getBudgetCap(1, 'expedia')).rejects.toThrow(/Unknown integration/);
     await expect(getBudgetCap(1, 'booking')).rejects.toThrow(/Unknown integration/);
     await expect(getBudgetCap(1, 'BOOKING_EXPEDIA')).rejects.toThrow(/Unknown integration/);
+    // S73 — case + arbitrary-alias mismatches throw. Note: hyphen + underscore
+    // forms ('image-llm' AND 'image_llm') both resolve to the same canonical
+    // key (hyphens normalise to underscores), so 'image_llm' does NOT throw
+    // — that's intentional caller-friendly handling.
+    await expect(getBudgetCap(1, 'IMAGE-LLM')).rejects.toThrow(/Unknown integration/);
+    await expect(getBudgetCap(1, 'imagellm')).rejects.toThrow(/Unknown integration/);
+    await expect(getBudgetCap(1, 'image llm')).rejects.toThrow(/Unknown integration/);
+  });
+
+  test('S73 — hyphen-form and underscore-form of image-llm resolve to the SAME key (normalisation)', async () => {
+    // The slice spec dictates INTEGRATION='image-llm' (hyphen). The KEYS
+    // entry uses the underscore form to match the existing pattern
+    // (ai_calling, booking_expedia). The lib normalises hyphens to
+    // underscores so callers can pass either form without surprise.
+    singletonPrisma.tenantSetting.findUnique.mockResolvedValue(null);
+    const hyphenOut = await getBudgetCap(1, 'image-llm');
+    const underscoreOut = await getBudgetCap(1, 'image_llm');
+    expect(hyphenOut).toBe(underscoreOut);
+    expect(hyphenOut).toBe(DEFAULTS[KEYS.IMAGE_LLM_MONTHLY_CAP_USD_CENTS]);
   });
 });
 

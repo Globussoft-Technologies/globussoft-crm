@@ -735,8 +735,8 @@ jobs:
             echo "=== git state before ==="
             echo "before SHA: $(git rev-parse --short HEAD)"
 
-            git fetch origin main
-            git reset --hard origin/main
+            git fetch origin ${{ github.ref_name }}
+            git reset --hard origin/${{ github.ref_name }}
             echo "after  SHA: $(git rev-parse --short HEAD)"
             git log --oneline -3
 

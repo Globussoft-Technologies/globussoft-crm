@@ -1,4 +1,4 @@
-import React, { useState, useContext, useEffect } from "react";
+import React, { useState, useContext, useEffect, useMemo } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { Mail, Square } from "lucide-react";
 import { AuthContext } from "../App";
@@ -42,6 +42,13 @@ const Login = () => {
 
   const { setUser, setToken, setTenant } = useContext(AuthContext);
   const navigate = useNavigate();
+
+  // Pre-fill organization slug when the marketing-site handoff passes
+  // ?tenantSlug= in the URL.
+  const tenantSlugParam = useMemo(
+    () => new URLSearchParams(window.location.search).get("tenantSlug") || "",
+    []
+  );
 
   // Load the public tenant list to populate the Organization dropdown.
   useEffect(() => {

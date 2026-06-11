@@ -30,6 +30,14 @@
  *  13. Load error: a rejected GET surfaces an error banner with the server
  *      message + a Retry button.
  *
+ * S131 extensions — leftmost-wildcard subdomain support
+ * ─────────────────────────────────────────────────────
+ *  14. Add valid wildcard `https://*.partner.com` → chip rendered + Save
+ *      becomes enabled (mirror of backend HTTPS_ORIGIN_RE_V2).
+ *  15. Add invalid non-leftmost wildcard `https://foo.*.com` → inline error
+ *      and chip NOT added (mirror of backend rejection).
+ *  16. Add invalid bare `https://*` → inline error and chip NOT added.
+ *
  * Mocking discipline (per TenantSettings.test.jsx + CLAUDE.md RTL standing rule)
  * ─────────────────────────────────────────────────────────────────────────────
  *   - fetchApi mocked at ../utils/api (the page's dependency surface, NOT
@@ -269,5 +277,61 @@ describe('<EmbedAllowlist /> — S128 admin embed-allowlist editor', () => {
       await screen.findByTestId('embed-allowlist-load-error'),
     ).toHaveTextContent(/Forbidden/);
     expect(screen.getByRole('button', { name: /Retry/i })).toBeInTheDocument();
+  });
+
+  // ── S131 wildcard support ────────────────────────────────────────────
+  it('14. add valid leftmost wildcard `https://*.example-w.test` → chip + Save enables', async () => {
+    // Note: use an origin whose literal text doesn't appear in the page
+    // chrome (the help paragraph references `https://*.partner.com` as
+    // an example, which would collide with getByText). Targeting the chip
+    // by testid is more robust.
+    fetchApiMock.mockResolvedValue(listResponse([]));
+    render(<EmbedAllowlist />);
+    await screen.findByText(/No allowlist set/i);
+
+    const input = screen.getByTestId('embed-allowlist-input');
+    fireEvent.change(input, { target: { value: 'https://*.example-w.test' } });
+    fireEvent.click(screen.getByTestId('embed-allowlist-add'));
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId('embed-allowlist-chip-https://*.example-w.test'),
+      ).toBeInTheDocument();
+    });
+    expect(input.value).toBe('');
+    const saveBtn = screen.getByTestId('embed-allowlist-save');
+    expect(saveBtn).not.toBeDisabled();
+  });
+
+  it('15. add non-leftmost wildcard `https://foo.*.com` → inline error, chip NOT added', async () => {
+    fetchApiMock.mockResolvedValue(listResponse([]));
+    render(<EmbedAllowlist />);
+    await screen.findByText(/No allowlist set/i);
+
+    const input = screen.getByTestId('embed-allowlist-input');
+    fireEvent.change(input, { target: { value: 'https://foo.*.com' } });
+    // Add button is disabled when invalid (inputIsValid=false); fire Enter
+    // to force the handleAdd path which sets inputError.
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    expect(screen.queryByText('https://foo.*.com')).not.toBeInTheDocument();
+    expect(
+      screen.getByTestId('embed-allowlist-input-error'),
+    ).toHaveTextContent(/HTTPS URL/i);
+  });
+
+  it('16. add bare `https://*` (no host suffix) → inline error, chip NOT added', async () => {
+    fetchApiMock.mockResolvedValue(listResponse([]));
+    render(<EmbedAllowlist />);
+    await screen.findByText(/No allowlist set/i);
+
+    const input = screen.getByTestId('embed-allowlist-input');
+    fireEvent.change(input, { target: { value: 'https://*' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    expect(screen.queryByText(/^https:\/\/\*$/)).not.toBeInTheDocument();
+    expect(
+      screen.getByTestId('embed-allowlist-input-error'),
+    ).toHaveTextContent(/HTTPS URL/i);
   });
 });

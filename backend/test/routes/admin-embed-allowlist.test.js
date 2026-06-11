@@ -39,6 +39,20 @@
  *  17. RBAC: USER → 403 RBAC_DENIED, prisma never touched.
  *  18. RBAC: MANAGER → 403 RBAC_DENIED.
  *
+ * S131 extensions — leftmost-wildcard subdomain support
+ * ─────────────────────────────────────────────────────
+ *  19. PATCH accepts `https://*.partner.com` (single-label wildcard).
+ *  20. PATCH accepts `https://*.example.co.uk`, `https://*.foo.bar:8443`,
+ *      and `https://*.x.y.z/path` (wildcard + multi-label + port + path).
+ *  21. PATCH rejects `https://*` (no host suffix) → 400 INVALID_ORIGIN.
+ *  22. PATCH rejects `https://*.` (empty host suffix) → 400 INVALID_ORIGIN.
+ *  23. PATCH rejects `https://**.com` (double-wildcard) → 400 INVALID_ORIGIN.
+ *  24. PATCH rejects `https://foo.*.com` (non-leftmost wildcard) → 400
+ *      INVALID_ORIGIN.
+ *  25. Empty wildcard list still saves as null (S66 wildcard-fallback parity
+ *      preserved across S131 — extending the regex must NOT change the
+ *      empty-array semantics).
+ *
  * Pattern mirrors backend/test/routes/admin-backfill-last-visit.test.js —
  * same monkey-patch approach. We patch prisma + audit BEFORE requiring the
  * router so its destructured references capture the mock surfaces.
@@ -386,5 +400,118 @@ describe('PATCH /api/admin/tenants/:id/embed-allowlist (S128)', () => {
     expect(res.status).toBe(403);
     expect(res.body.code).toBe('RBAC_DENIED');
     expect(prismaMod.tenant.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('PATCH /api/admin/tenants/:id/embed-allowlist — S131 wildcard support', () => {
+  test('19. accepts leftmost-wildcard `https://*.partner.com`', async () => {
+    prismaMod.tenant.findUnique.mockResolvedValue({
+      id: 42,
+      embedAllowlistJson: null,
+    });
+    prismaMod.tenant.update.mockResolvedValue({
+      id: 42,
+      embedAllowlistJson: JSON.stringify(['https://*.partner.com']),
+      updatedAt: new Date('2026-06-11T00:00:00Z'),
+    });
+
+    const res = await request(makeApp({ tenantId: 42 }))
+      .patch('/api/admin/tenants/42/embed-allowlist')
+      .send({ origins: ['https://*.partner.com'] });
+
+    expect(res.status).toBe(200);
+    expect(res.body.origins).toEqual(['https://*.partner.com']);
+    const updateArgs = prismaMod.tenant.update.mock.calls[0][0];
+    expect(updateArgs.data.embedAllowlistJson).toBe(
+      JSON.stringify(['https://*.partner.com']),
+    );
+  });
+
+  test('20. accepts wildcard + multi-label + port + path variants', async () => {
+    const origins = [
+      'https://*.example.co.uk',
+      'https://*.foo.bar:8443',
+      'https://*.x.y.z/path',
+    ];
+    prismaMod.tenant.findUnique.mockResolvedValue({
+      id: 42,
+      embedAllowlistJson: null,
+    });
+    prismaMod.tenant.update.mockResolvedValue({
+      id: 42,
+      embedAllowlistJson: JSON.stringify(origins),
+      updatedAt: new Date(),
+    });
+
+    const res = await request(makeApp({ tenantId: 42 }))
+      .patch('/api/admin/tenants/42/embed-allowlist')
+      .send({ origins });
+
+    expect(res.status).toBe(200);
+    expect(res.body.origins).toEqual(origins);
+  });
+
+  test('21. rejects `https://*` (no host suffix) → 400 INVALID_ORIGIN', async () => {
+    const res = await request(makeApp({ tenantId: 42 }))
+      .patch('/api/admin/tenants/42/embed-allowlist')
+      .send({ origins: ['https://*'] });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_ORIGIN');
+    expect(res.body.invalid).toContain('https://*');
+    expect(prismaMod.tenant.update).not.toHaveBeenCalled();
+  });
+
+  test('22. rejects `https://*.` (empty host suffix) → 400 INVALID_ORIGIN', async () => {
+    const res = await request(makeApp({ tenantId: 42 }))
+      .patch('/api/admin/tenants/42/embed-allowlist')
+      .send({ origins: ['https://*.'] });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_ORIGIN');
+    expect(res.body.invalid).toContain('https://*.');
+  });
+
+  test('23. rejects `https://**.com` (double-wildcard) → 400 INVALID_ORIGIN', async () => {
+    const res = await request(makeApp({ tenantId: 42 }))
+      .patch('/api/admin/tenants/42/embed-allowlist')
+      .send({ origins: ['https://**.com'] });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_ORIGIN');
+    expect(res.body.invalid).toContain('https://**.com');
+  });
+
+  test('24. rejects `https://foo.*.com` (non-leftmost wildcard) → 400 INVALID_ORIGIN', async () => {
+    const res = await request(makeApp({ tenantId: 42 }))
+      .patch('/api/admin/tenants/42/embed-allowlist')
+      .send({ origins: ['https://foo.*.com'] });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_ORIGIN');
+    expect(res.body.invalid).toContain('https://foo.*.com');
+  });
+
+  test('25. empty wildcard-list still saves as null (S66 fallback parity)', async () => {
+    // Wildcard support must NOT change empty-array semantics — empty list
+    // still clears the column to null so the S66 wildcard-fallback applies.
+    prismaMod.tenant.findUnique.mockResolvedValue({
+      id: 42,
+      embedAllowlistJson: JSON.stringify(['https://*.partner.com']),
+    });
+    prismaMod.tenant.update.mockResolvedValue({
+      id: 42,
+      embedAllowlistJson: null,
+      updatedAt: new Date(),
+    });
+
+    const res = await request(makeApp({ tenantId: 42 }))
+      .patch('/api/admin/tenants/42/embed-allowlist')
+      .send({ origins: [] });
+
+    expect(res.status).toBe(200);
+    expect(res.body.origins).toEqual([]);
+    const updateArgs = prismaMod.tenant.update.mock.calls[0][0];
+    expect(updateArgs.data).toEqual({ embedAllowlistJson: null });
   });
 });

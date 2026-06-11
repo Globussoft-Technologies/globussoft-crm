@@ -588,16 +588,20 @@ router.get(
 );
 
 // ──────────────────────────────────────────────────────────────────
-// PATCH /api/admin/tenants/:id/embed-allowlist — set tenant embed allowlist (S128)
+// PATCH /api/admin/tenants/:id/embed-allowlist — set tenant embed allowlist (S128, extended S131)
 // ──────────────────────────────────────────────────────────────────
 //
 // Body shape: { origins: string[] }
-//   - Each entry must match HTTPS_ORIGIN_RE: HTTPS scheme, hostname required,
-//     optional port + path. Wildcards in the middle of the hostname
-//     (`https://*.foo.com`) are NOT supported in v1 — the CSP frame-ancestors
-//     spec accepts them but parsing + validating wildcard origins safely
-//     adds surface area for little payoff. Operators can list every concrete
-//     partner origin explicitly; if a partner needs N subdomains, add N rows.
+//   - Each entry must match HTTPS_ORIGIN_RE_V2: HTTPS scheme, hostname required,
+//     optional port + path. As of S131, a leftmost wildcard label
+//     (`https://*.partner.com`) is ACCEPTED — this matches the CSP
+//     `frame-ancestors` spec's host-source production where a leftmost `*`
+//     label expands to "any subdomain of partner.com". One wildcard label
+//     replaces N concrete subdomain enumerations, which is the usual reason
+//     a partner needs 10+ allowlist entries. Non-leftmost wildcards
+//     (`https://foo.*.com`), double wildcards (`https://**.com`), and bare
+//     `https://*` (no host suffix) remain REJECTED — those forms are not
+//     in the CSP host-source production.
 //   - HTTP origins are rejected — partners embedding via insecure transport
 //     are a CSP-bypass risk. The PRD pins HTTPS-only.
 //   - Empty array → embedAllowlistJson = null (the "no restriction" /
@@ -610,7 +614,26 @@ router.get(
 // Audit row written via writeAudit() with entity='Tenant',
 // action='admin.embed-allowlist.update', and the before/after values in
 // the details blob for forensics.
-const HTTPS_ORIGIN_RE = /^https:\/\/[^\s/]+(:\d+)?(\/.*)?$/;
+//
+// S131 — HTTPS_ORIGIN_RE_V2 design notes:
+//   Grouping: `https://` scheme + optional leftmost `*.` wildcard + host body
+//   (no whitespace, no `/`, no `*` — the last exclusion prevents non-leftmost
+//   wildcards like `https://foo.*.com` and double wildcards like
+//   `https://**.com`) + optional `:PORT` + optional `/PATH`.
+//
+//   The same regex is mirrored verbatim in
+//   `frontend/src/pages/admin/EmbedAllowlist.jsx` — keep in sync.
+//
+// CSP passthrough (security.js verified S131): the existing
+// `allowIframeEmbedding` composer in backend/middleware/security.js joins
+// allowlist entries with spaces (the canonical CSP `frame-ancestors`
+// source-list format), so `https://*.partner.com` flows through unchanged.
+// No security.js diff needed — the browser receives the wildcard form as
+// the spec defines it.
+const HTTPS_ORIGIN_RE_V2 = /^https:\/\/(\*\.)?[^\s/*]+(:\d+)?(\/.*)?$/;
+// Legacy alias retained for any internal grep paths that still reference
+// the original name. New code should use HTTPS_ORIGIN_RE_V2.
+const HTTPS_ORIGIN_RE = HTTPS_ORIGIN_RE_V2;
 
 router.patch(
   '/tenants/:id/embed-allowlist',
@@ -642,13 +665,15 @@ router.patch(
       // surface them in one round-trip instead of one-at-a-time.
       const invalid = [];
       for (const o of origins) {
-        if (typeof o !== 'string' || !HTTPS_ORIGIN_RE.test(o.trim())) {
+        if (typeof o !== 'string' || !HTTPS_ORIGIN_RE_V2.test(o.trim())) {
           invalid.push(o);
         }
       }
       if (invalid.length > 0) {
         return res.status(400).json({
-          error: 'One or more origins are invalid. Must be HTTPS URLs (e.g. https://partner.com).',
+          error:
+            'One or more origins are invalid. Must be HTTPS URLs ' +
+            '(e.g. https://partner.com or https://*.partner.com for wildcard subdomains).',
           code: 'INVALID_ORIGIN',
           invalid,
         });

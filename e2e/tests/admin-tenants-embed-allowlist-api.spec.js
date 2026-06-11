@@ -346,3 +346,101 @@ test.describe('Admin embed-allowlist — validation', () => {
     expect((await r.json()).code).toBe('INVALID_TENANT_ID');
   });
 });
+
+// ────────────────────────────────────────────────────────────────────
+// S131 — leftmost-wildcard subdomain support
+// ────────────────────────────────────────────────────────────────────
+// HTTPS_ORIGIN_RE_V2 extends HTTPS_ORIGIN_RE to accept a leftmost `*.`
+// wildcard label per the CSP `frame-ancestors` host-source production.
+// One wildcard entry replaces N concrete subdomain enumerations.
+// security.js verified as passthrough — `list.join(' ')` in
+// allowIframeEmbedding emits the wildcard verbatim into the CSP header.
+test.describe('Admin embed-allowlist — S131 wildcard subdomain support', () => {
+  test('PATCH accepts `https://*.partner.com` and round-trips through GET', async ({
+    request,
+  }) => {
+    test.skip(!routeMounted, 'route not mounted');
+    test.skip(!adminToken, 'admin not seeded');
+    test.skip(!adminTenantId, 'tenantId not resolved');
+
+    const TAG = `s131-${Date.now()}`;
+    const origins = [
+      `https://*.partner-${TAG}.com`,
+      `https://*.foo-${TAG}.bar:8443`,
+      `https://*.x-${TAG}.y.z/embed`,
+    ];
+
+    const setRes = await authReq(
+      request,
+      'patch',
+      adminToken,
+      `/api/admin/tenants/${adminTenantId}/embed-allowlist`,
+      { origins },
+    );
+    expect(setRes.status(), `body: ${await setRes.text()}`).toBe(200);
+    const setBody = await setRes.json();
+    expect(setBody.origins).toEqual(origins);
+
+    const getRes = await authReq(
+      request,
+      'get',
+      adminToken,
+      `/api/admin/tenants/${adminTenantId}/embed-allowlist`,
+    );
+    expect(getRes.status()).toBe(200);
+    expect((await getRes.json()).origins).toEqual(origins);
+  });
+
+  test('PATCH rejects `https://*` (no host suffix) → 400 INVALID_ORIGIN', async ({
+    request,
+  }) => {
+    test.skip(!routeMounted, 'route not mounted');
+    test.skip(!adminToken, 'admin not seeded');
+    test.skip(!adminTenantId, 'tenantId not resolved');
+    const r = await authReq(
+      request,
+      'patch',
+      adminToken,
+      `/api/admin/tenants/${adminTenantId}/embed-allowlist`,
+      { origins: ['https://*'] },
+    );
+    expect(r.status()).toBe(400);
+    const body = await r.json();
+    expect(body.code).toBe('INVALID_ORIGIN');
+    expect(body.invalid).toContain('https://*');
+  });
+
+  test('PATCH rejects `https://**.com` (double-wildcard) → 400 INVALID_ORIGIN', async ({
+    request,
+  }) => {
+    test.skip(!routeMounted, 'route not mounted');
+    test.skip(!adminToken, 'admin not seeded');
+    test.skip(!adminTenantId, 'tenantId not resolved');
+    const r = await authReq(
+      request,
+      'patch',
+      adminToken,
+      `/api/admin/tenants/${adminTenantId}/embed-allowlist`,
+      { origins: ['https://**.com'] },
+    );
+    expect(r.status()).toBe(400);
+    expect((await r.json()).code).toBe('INVALID_ORIGIN');
+  });
+
+  test('PATCH rejects `https://foo.*.com` (non-leftmost wildcard) → 400 INVALID_ORIGIN', async ({
+    request,
+  }) => {
+    test.skip(!routeMounted, 'route not mounted');
+    test.skip(!adminToken, 'admin not seeded');
+    test.skip(!adminTenantId, 'tenantId not resolved');
+    const r = await authReq(
+      request,
+      'patch',
+      adminToken,
+      `/api/admin/tenants/${adminTenantId}/embed-allowlist`,
+      { origins: ['https://foo.*.com'] },
+    );
+    expect(r.status()).toBe(400);
+    expect((await r.json()).code).toBe('INVALID_ORIGIN');
+  });
+});

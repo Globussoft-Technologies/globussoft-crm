@@ -22,10 +22,15 @@
  *
  * Validation parity with backend
  * ──────────────────────────────
- * The frontend HTTPS_ORIGIN_RE must match backend/routes/admin.js verbatim
+ * The frontend HTTPS_ORIGIN_RE_V2 must match backend/routes/admin.js verbatim
  * so an origin accepted on the frontend isn't rejected on PATCH (or vice
  * versa). The regex pins HTTPS-only + hostname required + optional port +
- * optional path. Wildcard subdomains are NOT supported in v1.
+ * optional path. As of S131, a leftmost wildcard label
+ * (`https://*.partner.com`) is accepted to match the CSP `frame-ancestors`
+ * host-source production — one wildcard entry replaces N concrete
+ * subdomain enumerations. Non-leftmost wildcards
+ * (`https://foo.*.com`), double-wildcards (`https://**.com`), and bare
+ * `https://*` (no host suffix) remain rejected.
  *
  * Mock surface for tests (per TenantSettings.test.jsx pattern)
  * ──────────────────────────────
@@ -40,11 +45,13 @@ import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { AuthContext } from '../../App';
 
-// MUST mirror backend HTTPS_ORIGIN_RE in backend/routes/admin.js
-const HTTPS_ORIGIN_RE = /^https:\/\/[^\s/]+(:\d+)?(\/.*)?$/;
+// MIRROR of backend/routes/admin.js HTTPS_ORIGIN_RE_V2 (S131) — keep in sync.
+// Accepts HTTPS scheme + optional leftmost `*.` wildcard + host (no
+// whitespace, no `/`, no `*`) + optional port + optional path.
+const HTTPS_ORIGIN_RE_V2 = /^https:\/\/(\*\.)?[^\s/*]+(:\d+)?(\/.*)?$/;
 
 function isValidOrigin(s) {
-  return typeof s === 'string' && HTTPS_ORIGIN_RE.test(s.trim());
+  return typeof s === 'string' && HTTPS_ORIGIN_RE_V2.test(s.trim());
 }
 
 export default function EmbedAllowlist() {
@@ -184,10 +191,12 @@ export default function EmbedAllowlist() {
           }}
         >
           Which partner websites are allowed to iframe-embed your CRM widgets.
-          Each entry must be a full HTTPS origin (e.g. <code>https://partner.com</code>).
-          An empty allowlist means <strong>no restrictions</strong> (any site
-          can embed — the wildcard fallback). Add at least one origin to enforce
-          per-tenant CSP <code>frame-ancestors</code> control.
+          Each entry must be a full HTTPS origin (e.g. <code>https://partner.com</code>)
+          or a leftmost wildcard subdomain (e.g. <code>https://*.partner.com</code>,
+          which covers any subdomain of partner.com — handy when a partner has
+          10+ subdomains). An empty allowlist means <strong>no restrictions</strong>
+          (any site can embed — the wildcard fallback). Add at least one origin
+          to enforce per-tenant CSP <code>frame-ancestors</code> control.
         </p>
       </header>
 
@@ -389,9 +398,9 @@ export default function EmbedAllowlist() {
                 color: 'var(--text-secondary)',
               }}
             >
-              HTTPS only. Up to 100 origins. Wildcard subdomains
-              (<code>https://*.partner.com</code>) are not supported — list
-              every concrete origin.
+              HTTPS only. Up to 100 origins. Leftmost wildcard subdomains
+              (<code>https://*.partner.com</code>) are accepted — one wildcard
+              entry covers any subdomain of <code>partner.com</code>.
             </div>
           </div>
 

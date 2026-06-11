@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useContext, useRef } from 'react';
-import { User, Mail, Key, Save, Stethoscope, Download, FileText, Camera, Trash2 } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { User, Mail, Key, Save, Stethoscope, Download, FileText, Camera, Trash2, AlertTriangle } from 'lucide-react';
 import { fetchApi, getAuthToken } from '../utils/api';
 import { AuthContext } from '../App';
 import { useNotify } from '../utils/notify';
@@ -20,8 +21,9 @@ function isPractitioner(profile) {
 }
 
 const Profile = () => {
-  const { user: authUser, setUser: setAuthUser, subscription } = useContext(AuthContext);
+  const { user: authUser, setUser: setAuthUser, setToken, subscription } = useContext(AuthContext);
   const notify = useNotify();
+  const navigate = useNavigate();
   const [profile, setProfile] = useState(null);
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -41,6 +43,12 @@ const Profile = () => {
   const [downloadingId, setDownloadingId] = useState(null);
   const [uploadingPicture, setUploadingPicture] = useState(false);
   const fileInputRef = useRef(null);
+  // Danger zone — two-stage: "Delete account" arms the confirm area
+  // (password / TOTP inputs), then a destructive modal is the final gate.
+  const [deleteArmed, setDeleteArmed] = useState(false);
+  const [deletePassword, setDeletePassword] = useState('');
+  const [deleteCode, setDeleteCode] = useState('');
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     loadProfile();
@@ -237,6 +245,56 @@ const Profile = () => {
       setPasswordMsg({ text: err.message || 'Failed to change password', type: 'error' });
     }
     setChangingPassword(false);
+  };
+
+  const handleDeleteAccount = async () => {
+    // SSO accounts have no usable password (the backend skips the check for
+    // them); everyone else must re-authenticate before the final modal.
+    if (!profile?.ssoProvider && !deletePassword) {
+      notify.error('Enter your current password to delete your account.');
+      return;
+    }
+    if (profile?.twoFactorEnabled && !deleteCode.trim()) {
+      notify.error('Enter your two-factor verification code to delete your account.');
+      return;
+    }
+
+    const ok = await notify.confirm({
+      title: 'Delete your account?',
+      message: 'This action is irreversible. Your account and all data associated with it will be permanently deleted, and you will be signed out immediately.',
+      confirmText: 'Delete my account',
+      cancelText: 'Cancel',
+      destructive: true,
+    });
+    if (!ok) return;
+
+    setDeleting(true);
+    try {
+      await fetchApi('/api/auth/me/account', {
+        method: 'DELETE',
+        body: JSON.stringify({
+          confirmDestructive: true,
+          ...(profile?.ssoProvider ? {} : { password: deletePassword }),
+          ...(profile?.twoFactorEnabled ? { code: deleteCode.trim() } : {}),
+        }),
+      });
+      // The server already revoked the session jti and dropped the auth
+      // cookie — mirror Layout's handleLogout local cleanup, minus the
+      // POST /logout call (the token is dead and the user row is gone).
+      notify.success('Your account has been permanently deleted.');
+      if (setAuthUser) setAuthUser(null);
+      if (setToken) setToken(null);
+      try {
+        localStorage.removeItem('token');
+      } catch {
+        /* ignore */
+      }
+      navigate('/login', { replace: true });
+    } catch {
+      // fetchApi already surfaced the server error as a toast (wrong
+      // password, last admin, etc.) — just unfreeze the button.
+      setDeleting(false);
+    }
   };
 
   if (loading) {
@@ -649,6 +707,92 @@ const Profile = () => {
             <Key size={16} /> {changingPassword ? 'Changing...' : 'Change Password'}
           </button>
         </form>
+      </div>
+
+      {/* Danger Zone — self-service account deletion (privacy policy §10.1).
+          Renders identically for all three verticals (generic / wellness /
+          travel); --danger-color is themed per vertical in CSS. */}
+      <div
+        className="card glass"
+        data-testid="profile-danger-zone"
+        style={{ padding: '1.5rem', marginTop: '1.5rem', border: '1px solid rgba(239,68,68,0.45)' }}
+      >
+        <h3 style={{ fontSize: '1rem', fontWeight: '600', color: 'var(--danger-color, #ef4444)', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <AlertTriangle size={18} /> Danger Zone
+        </h3>
+        <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginBottom: '1rem' }}>
+          Permanently delete your account. This action is irreversible — your account and all data
+          associated with it will be deleted, and you will be signed out immediately.
+        </p>
+
+        {!deleteArmed ? (
+          <button
+            type="button"
+            className="btn-danger"
+            data-testid="profile-delete-account-button"
+            onClick={() => setDeleteArmed(true)}
+            style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+          >
+            <Trash2 size={16} /> Delete account
+          </button>
+        ) : (
+          <div data-testid="profile-delete-account-confirm">
+            {!profile?.ssoProvider && (
+              <div style={{ marginBottom: '1rem' }}>
+                <label style={{ display: 'block', marginBottom: '0.4rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                  Confirm with your current password
+                </label>
+                <PasswordInput
+                  value={deletePassword}
+                  onChange={(e) => setDeletePassword(e.target.value)}
+                  placeholder="Current password"
+                  autoComplete="current-password"
+                />
+              </div>
+            )}
+            {profile?.twoFactorEnabled && (
+              <div style={{ marginBottom: '1rem' }}>
+                <label style={{ display: 'block', marginBottom: '0.4rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                  Two-factor verification code
+                </label>
+                <input
+                  type="text"
+                  className="input-field"
+                  value={deleteCode}
+                  onChange={(e) => setDeleteCode(e.target.value)}
+                  placeholder="6-digit code"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                />
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                className="btn-danger"
+                data-testid="profile-delete-account-submit"
+                onClick={handleDeleteAccount}
+                disabled={deleting}
+                style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+              >
+                <Trash2 size={16} /> {deleting ? 'Deleting…' : 'Permanently delete my account'}
+              </button>
+              <button
+                type="button"
+                className="btn-secondary"
+                data-testid="profile-delete-account-cancel"
+                onClick={() => {
+                  setDeleteArmed(false);
+                  setDeletePassword('');
+                  setDeleteCode('');
+                }}
+                disabled={deleting}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

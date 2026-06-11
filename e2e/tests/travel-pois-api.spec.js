@@ -1,12 +1,15 @@
 // @ts-check
 /**
- * Gate spec — Inline rep-suggested POI + pendingApproval queue (Wave 18
- * slice S12, PRD_TRAVEL_ITINERARY_UPGRADES FR-3.7).
+ * Gate spec — POI catalog list + Inline rep-suggested POI + pendingApproval
+ * queue (Wave 18 slices S12 + S93, PRD_TRAVEL_ITINERARY_UPGRADES FR-3.6 +
+ * FR-3.7).
  *
  * Pins:
- *   - probe-skip: if `/api/travel/pois` is not mounted (server.js mount
- *     deferred per the slice prompt's sibling-isolation rule), every
- *     test auto-skips.
+ *   - probe-skip: if `/api/travel/pois` is not mounted, every test
+ *     auto-skips.
+ *   - GET / (USER+) [S93] — catalog list scoped to destinationSlug +
+ *     tenant-or-null; missing destinationSlug -> 400 MISSING_FIELDS;
+ *     paging honored.
  *   - POST / (USER+) — rep suggests; lands with pendingApproval=true,
  *     externalSource=operator.
  *   - GET /pending (ADMIN+MANAGER) — tenant-scoped list of pendingApproval
@@ -149,6 +152,52 @@ function validSuggestBody(extra = {}) {
 test.describe("Travel POIs — rep suggest + approval queue", () => {
   test.beforeEach(async () => {
     test.skip(!routeMounted, "/api/travel/pois not mounted (server.js wire-in deferred)");
+  });
+
+  // ── GET / — catalog list for the PoiPicker (S93) ─────────────────
+  test("GET / — happy path: returns envelope { pois, total, limit, offset } scoped to destinationSlug", async ({ request }) => {
+    const userToken = await getTravelUser(request);
+    test.skip(!userToken, "travel user not seeded");
+
+    const r = await get(request, userToken, "/api/travel/pois?destinationSlug=goa&limit=10");
+    expect(r.status()).toBe(200);
+    const body = await r.json();
+    expect(Array.isArray(body.pois)).toBe(true);
+    expect(typeof body.total).toBe("number");
+    expect(body.limit).toBe(10);
+    expect(body.offset).toBe(0);
+    // Picker must never see pendingApproval=true rows.
+    for (const poi of body.pois) {
+      expect(poi.pendingApproval).toBe(false);
+      expect(poi.destinationSlug).toBe("goa");
+    }
+  });
+
+  test("GET / — missing destinationSlug -> 400 MISSING_FIELDS", async ({ request }) => {
+    const userToken = await getTravelUser(request);
+    test.skip(!userToken, "travel user not seeded");
+
+    const r = await get(request, userToken, "/api/travel/pois");
+    expect(r.status()).toBe(400);
+    const body = await r.json();
+    expect(body.code).toBe("MISSING_FIELDS");
+  });
+
+  test("GET / — no auth -> 401", async ({ request }) => {
+    const r = await request.get(`${BASE_URL}/api/travel/pois?destinationSlug=goa`);
+    expect(r.status()).toBe(401);
+  });
+
+  test("GET / — paging: ?limit and ?offset honored", async ({ request }) => {
+    const userToken = await getTravelUser(request);
+    test.skip(!userToken, "travel user not seeded");
+
+    const r = await get(request, userToken, "/api/travel/pois?destinationSlug=goa&limit=5&offset=2");
+    expect(r.status()).toBe(200);
+    const body = await r.json();
+    expect(body.limit).toBe(5);
+    expect(body.offset).toBe(2);
+    expect(body.pois.length).toBeLessThanOrEqual(5);
   });
 
   test("happy path — USER suggests POI, ADMIN sees it in /pending, ADMIN approves", async ({ request }) => {

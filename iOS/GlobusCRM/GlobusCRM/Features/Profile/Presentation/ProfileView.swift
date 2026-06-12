@@ -381,6 +381,12 @@ struct DeleteAccountSheet: View {
 
     @State private var password = ""
     @State private var twoFACode = ""
+    @State private var confirmation = ""
+    @State private var countdown = 5
+
+    private var canSubmit: Bool {
+        !password.isEmpty && confirmation == "DELETE" && countdown == 0 && !viewModel.isSaving
+    }
 
     var body: some View {
         NavigationStack {
@@ -409,6 +415,18 @@ struct DeleteAccountSheet: View {
                         .keyboardType(.numberPad)
                 }
 
+                Section {
+                    VStack(alignment: .leading, spacing: WellnessSpacing.xs) {
+                        Text("Type DELETE to confirm")
+                            .font(.wellnessCaption)
+                            .foregroundColor(.wellnessMuted)
+                        TextField("DELETE", text: $confirmation)
+                            .autocorrectionDisabled()
+                            .textInputAutocapitalization(.characters)
+                            .foregroundColor(confirmation == "DELETE" ? .wellnessError : .wellnessOnSurface)
+                    }
+                }
+
                 if let error = viewModel.error {
                     Section {
                         Label(error, systemImage: "exclamationmark.triangle")
@@ -430,6 +448,10 @@ struct DeleteAccountSheet: View {
                 ToolbarItem(placement: .confirmationAction) {
                     if viewModel.isSaving {
                         ProgressView()
+                    } else if countdown > 0 {
+                        Text("Delete (\(countdown))")
+                            .foregroundColor(.wellnessError.opacity(0.4))
+                            .font(.wellnessCallout)
                     } else {
                         Button("Delete") {
                             Task {
@@ -440,13 +462,22 @@ struct DeleteAccountSheet: View {
                             }
                         }
                         .foregroundColor(.wellnessError)
-                        .disabled(password.isEmpty)
+                        .disabled(!canSubmit)
                     }
                 }
             }
         }
         .presentationDetents([.medium])
         .interactiveDismissDisabled(viewModel.isSaving)
+        .onAppear {
+            countdown = 5
+            Task {
+                for _ in 0..<5 {
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                    countdown -= 1
+                }
+            }
+        }
     }
 }
 

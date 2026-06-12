@@ -281,7 +281,7 @@ components:
           description: Travel-vertical only — which sub-brands this user can act on.
           items:
             type: string
-            enum: [tmc, rfu, travel_stall, visa_sure]
+            enum: [tmc, rfu, travelstall, visasure]
         createdAt: { type: string, format: date-time, readOnly: true }
     Tenant:
       type: object
@@ -710,7 +710,7 @@ components:
         id: { type: integer, readOnly: true }
         subBrand:
           type: string
-          enum: [tmc, rfu, travel_stall, visa_sure]
+          enum: [tmc, rfu, travelstall, visasure]
         title: { type: string, example: "DPS Year 10 — Manali Adventure" }
         schoolName: { type: string, nullable: true }
         startDate: { type: string, format: date }
@@ -730,7 +730,7 @@ components:
       description: "[TRAVEL] Day-by-day itinerary attached to a trip or sent standalone to a lead."
       properties:
         id: { type: integer, readOnly: true }
-        subBrand: { type: string, enum: [tmc, rfu, travel_stall, visa_sure] }
+        subBrand: { type: string, enum: [tmc, rfu, travelstall, visasure] }
         title: { type: string }
         contactId: { type: integer, nullable: true }
         tripId: { type: integer, nullable: true }
@@ -772,7 +772,7 @@ components:
       properties:
         id: { type: integer, readOnly: true }
         contactId: { type: integer }
-        subBrand: { type: string, enum: [tmc, rfu, travel_stall, visa_sure] }
+        subBrand: { type: string, enum: [tmc, rfu, travelstall, visasure] }
         itineraryId: { type: integer, nullable: true }
         totalCents: { type: integer }
         currency: { type: string }
@@ -781,6 +781,61 @@ components:
         shareToken: { type: string, readOnly: true }
       allOf:
         - $ref: '#/components/schemas/AuditMeta'
+    TravelInvoice:
+      type: object
+      description: |
+        [TRAVEL] Customer-facing invoice issued by a travel sub-brand. Distinct
+        from the generic CRM `Invoice` schema — different status enum
+        (Draft|Issued|Partial|Paid|Voided, capitalised), tenant-scoped
+        `invoiceNum` of form `TINV-YYYY-NNNN` reassigned to `<SUBBRAND>/YY-YY/NNNN`
+        on Issue, and travel-specific tax columns (TCS Sec 206C, docType
+        taxonomy, parentInvoiceId for credit-/debit-note adjustment trail,
+        cancellationPolicyId for refund-tier resolution at void-time).
+      properties:
+        id: { type: integer, readOnly: true }
+        tenantId: { type: integer, readOnly: true }
+        subBrand: { type: string, enum: [tmc, rfu, travelstall, visasure] }
+        contactId: { type: integer }
+        quoteId: { type: integer, nullable: true, description: "Optional source TravelQuote; null for direct-billing or supplier-passthrough." }
+        invoiceNum: { type: string, example: "TINV-2026-0001", readOnly: true, description: "Reassigned to per-sub-brand serial (e.g. TMC/26-27/0001) on POST /:id/issue." }
+        status: { type: string, enum: [Draft, Issued, Partial, Paid, Voided], default: Draft }
+        docType:
+          type: string
+          enum: [Proforma, TaxInvoice, CreditNote, DebitNote, TravelVoucher]
+          nullable: true
+          default: TaxInvoice
+          description: "NULL on pre-slice-11 rows; route layer treats NULL as TaxInvoice."
+        totalAmount: { type: number, format: float, nullable: true }
+        currency: { type: string, example: "INR" }
+        dueDate: { type: string, format: date, nullable: true }
+        paidAt: { type: string, format: date-time, nullable: true, readOnly: true }
+        tcsAmount: { type: number, format: float, nullable: true, description: "Section 206C(1G) TCS amount (additive once applied)." }
+        tcsRate: { type: number, format: float, nullable: true }
+        tcsExceedingAmount: { type: number, format: float, nullable: true }
+        tcsAppliedAt: { type: string, format: date-time, nullable: true, readOnly: true, description: "Idempotency sentinel for POST /:id/apply-tcs." }
+        parentInvoiceId: { type: integer, nullable: true, description: "Self-FK linking a CreditNote/DebitNote back to its original TaxInvoice." }
+        cancellationPolicyId: { type: integer, nullable: true, description: "Optional FK; NULL falls back to sub-brand default at cancel-time." }
+        lines:
+          type: array
+          description: "Only present when GET /:id is called with ?include=lines."
+          items: { $ref: '#/components/schemas/TravelInvoiceLine' }
+      allOf:
+        - $ref: '#/components/schemas/AuditMeta'
+    TravelInvoiceLine:
+      type: object
+      description: "[TRAVEL] Line item under TravelInvoice. `amount` is server-derived (quantity * unitPrice) at write time."
+      properties:
+        id: { type: integer, readOnly: true }
+        invoiceId: { type: integer }
+        lineType:
+          type: string
+          enum: [per_pax, per_room, per_night, per_trip, tax, fee, addon, tcs, tds, other]
+          default: other
+        description: { type: string }
+        quantity: { type: integer, default: 1 }
+        unitPrice: { type: number, format: float }
+        amount: { type: number, format: float, readOnly: true }
+        sortOrder: { type: integer, nullable: true }
     VisaApplication:
       type: object
       description: "[TRAVEL][Visa Sure] A visa case being processed for a contact."
@@ -827,7 +882,7 @@ components:
       properties:
         id: { type: integer, readOnly: true }
         slug: { type: string }
-        subBrand: { type: string, enum: [tmc, rfu, travel_stall, visa_sure] }
+        subBrand: { type: string, enum: [tmc, rfu, travelstall, visasure] }
         title: { type: string }
         pages:
           type: array
@@ -1208,7 +1263,7 @@ paths:
                 wellnessRole: { type: string, enum: [doctor, professional, telecaller, helper], nullable: true }
                 subBrandAccess:
                   type: array
-                  items: { type: string, enum: [tmc, rfu, travel_stall, visa_sure] }
+                  items: { type: string, enum: [tmc, rfu, travelstall, visasure] }
       responses:
         "201":
           description: User invited (invite email queued).
@@ -1329,7 +1384,7 @@ paths:
             schema:
               type: object
               properties:
-                subBrand: { type: string, enum: [tmc, rfu, travel_stall, visa_sure] }
+                subBrand: { type: string, enum: [tmc, rfu, travelstall, visasure] }
                 primaryColor: { type: string, example: "#122647" }
                 accentColor: { type: string, example: "#C89A4E" }
                 logoUrl: { type: string }
@@ -3622,7 +3677,7 @@ paths:
               schema:
                 type: object
                 properties:
-                  subBrand: { type: string, enum: [tmc, rfu, travel_stall, visa_sure] }
+                  subBrand: { type: string, enum: [tmc, rfu, travelstall, visasure] }
     post:
       summary: "[TRAVEL] Switch active sub-brand for the session"
       tags: [Travel — Operations]
@@ -3634,7 +3689,7 @@ paths:
               type: object
               required: [subBrand]
               properties:
-                subBrand: { type: string, enum: [tmc, rfu, travel_stall, visa_sure] }
+                subBrand: { type: string, enum: [tmc, rfu, travelstall, visasure] }
       responses:
         "200": { description: Switched. }
         "403":
@@ -3788,7 +3843,7 @@ paths:
           schema: { type: string, enum: [draft, sent, accepted, rejected, expired] }
         - in: query
           name: subBrand
-          schema: { type: string, enum: [tmc, rfu, travel_stall, visa_sure] }
+          schema: { type: string, enum: [tmc, rfu, travelstall, visasure] }
       responses:
         "200":
           description: Itineraries.
@@ -4291,15 +4346,278 @@ paths:
   /travel/invoices:
     get:
       summary: "[TRAVEL] List travel invoices"
+      description: |
+        Paginated. Sub-brand visibility is intersected with the caller's
+        `subBrandAccess[]` — passing `?subBrand=` outside the allowed set
+        returns an empty page rather than 403.
       tags: [Travel — Quotes & Billing]
+      parameters:
+        - in: query
+          name: subBrand
+          schema: { type: string, enum: [tmc, rfu, travelstall, visasure] }
+        - in: query
+          name: status
+          schema: { type: string, enum: [Draft, Issued, Partial, Paid, Voided] }
+        - in: query
+          name: contactId
+          schema: { type: integer }
+        - in: query
+          name: quoteId
+          schema: { type: integer }
+        - in: query
+          name: docType
+          schema: { type: string, enum: [Proforma, TaxInvoice, CreditNote, DebitNote, TravelVoucher] }
+        - in: query
+          name: fields
+          description: "`summary` opts into the slim PII-reduced projection (#920 slice S3)."
+          schema: { type: string, enum: [summary] }
+        - in: query
+          name: limit
+          schema: { type: integer, default: 100, maximum: 500 }
+        - in: query
+          name: offset
+          schema: { type: integer, default: 0 }
       responses:
         "200":
-          description: Invoices.
+          description: Page of invoices.
           content:
             application/json:
               schema:
-                type: array
-                items: { $ref: '#/components/schemas/Invoice' }
+                type: object
+                properties:
+                  invoices:
+                    type: array
+                    items: { $ref: '#/components/schemas/TravelInvoice' }
+                  total: { type: integer }
+                  limit: { type: integer }
+                  offset: { type: integer }
+    post:
+      summary: "[TRAVEL] Create a travel invoice (Draft)"
+      description: |
+        ADMIN/MANAGER only. The new invoice always lands in `Draft` (or the
+        explicit status passed in `req.body.status` if forward-only-allowed).
+        `invoiceNum` is auto-assigned (TINV-YYYY-NNNN); the per-sub-brand
+        serial is reassigned later by POST /:id/issue. Rejects on
+        sub-brand-access denial, tombstoned contact, or a byte-identical
+        Draft already existing for the same (contact, subBrand, currency,
+        totalAmount, dueDate) tuple.
+      tags: [Travel — Quotes & Billing]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [contactId, totalAmount, currency, dueDate]
+              properties:
+                contactId: { type: integer }
+                totalAmount: { type: number, format: float }
+                currency: { type: string, example: "INR" }
+                dueDate: { type: string, format: date }
+                subBrand: { type: string, enum: [tmc, rfu, travelstall, visasure], default: tmc }
+                quoteId: { type: integer, nullable: true }
+                status: { type: string, enum: [Draft, Issued, Partial, Paid, Voided], default: Draft }
+                docType: { type: string, enum: [Proforma, TaxInvoice, CreditNote, DebitNote, TravelVoucher], default: TaxInvoice }
+      responses:
+        "201":
+          description: Created invoice.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TravelInvoice' }
+        "400": { description: MISSING_FIELDS | INVALID_CONTACT_ID | INVALID_QUOTE_ID | INVALID_DOC_TYPE | INVALID_SUB_BRAND. }
+        "403": { description: SUB_BRAND_DENIED — caller lacks subBrandAccess for the target sub-brand. }
+        "409": { description: "DUPLICATE_DRAFT_INVOICE — a byte-identical Draft already exists; envelope includes `existing.id` + `existing.invoiceNum`." }
+        "422": { description: CONTACT_NOT_FOUND — contactId is missing, tombstoned, or in a different tenant. }
+  /travel/invoices/{id}:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    get:
+      summary: "[TRAVEL] Get a travel invoice"
+      description: |
+        Pass `?include=lines` to embed line items in the response. Unknown
+        include tokens are silently ignored (forward-compat for payments etc.).
+      tags: [Travel — Quotes & Billing]
+      parameters:
+        - in: query
+          name: include
+          schema: { type: string, example: "lines" }
+      responses:
+        "200":
+          description: Invoice.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TravelInvoice' }
+        "403": { description: SUB_BRAND_DENIED. }
+        "404": { description: NOT_FOUND. }
+    put:
+      summary: "[TRAVEL] Update a travel invoice"
+      description: |
+        ADMIN/MANAGER only. `invoiceNum` is immutable. Status transitions
+        are forward-only with any status → Voided always allowed —
+        rejecting backward moves with 422 INVALID_INVOICE_TRANSITION.
+      tags: [Travel — Quotes & Billing]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                contactId: { type: integer }
+                totalAmount: { type: number, format: float }
+                currency: { type: string }
+                dueDate: { type: string, format: date }
+                subBrand: { type: string, enum: [tmc, rfu, travelstall, visasure] }
+                quoteId: { type: integer, nullable: true }
+                status: { type: string, enum: [Draft, Issued, Partial, Paid, Voided] }
+                paidAt: { type: string, format: date-time, nullable: true }
+                docType: { type: string, enum: [Proforma, TaxInvoice, CreditNote, DebitNote, TravelVoucher] }
+      responses:
+        "200":
+          description: Updated invoice.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TravelInvoice' }
+        "400": { description: INVALID_ID | INVALID_CONTACT_ID | INVALID_QUOTE_ID | INVALID_DOC_TYPE | INVALID_SUB_BRAND. }
+        "403": { description: SUB_BRAND_DENIED. }
+        "404": { description: NOT_FOUND. }
+        "422": { description: INVALID_INVOICE_TRANSITION — forward-only status guard rejected the move. }
+    delete:
+      summary: "[TRAVEL] Hard-delete a Draft travel invoice"
+      description: |
+        ADMIN/MANAGER only. Only `Draft` invoices may be hard-deleted; any
+        other status returns 422 INVOICE_DELETE_FORBIDDEN. Voided invoices
+        stay for audit trail. Cascades to TravelInvoiceLine rows.
+      tags: [Travel — Quotes & Billing]
+      responses:
+        "204": { description: Deleted. }
+        "403": { description: SUB_BRAND_DENIED. }
+        "404": { description: NOT_FOUND. }
+        "422": { description: INVOICE_DELETE_FORBIDDEN — not in Draft. }
+  /travel/invoices/{id}/issue:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    post:
+      summary: "[TRAVEL] Promote Draft → Issued; reassign customer-facing invoiceNum"
+      description: |
+        Operator action. ADMIN/MANAGER only. Reassigns invoiceNum from the
+        create-time TINV-YYYY-NNNN serial to a per-sub-brand per-fiscal-year
+        customer-facing number (e.g. `TMC/26-27/0001`). Audit-stamped
+        `TRAVEL_INVOICE_ISSUED` with old/new invoiceNum.
+      tags: [Travel — Quotes & Billing]
+      responses:
+        "200":
+          description: Updated invoice (status=Issued, new invoiceNum).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TravelInvoice' }
+        "400": { description: INVALID_ID | INVALID_STATE — invoice not in Draft. }
+        "403": { description: SUB_BRAND_DENIED. }
+        "404": { description: INVOICE_NOT_FOUND. }
+  /travel/invoices/{id}/void:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    post:
+      summary: "[TRAVEL] Void an invoice + auto-issue cancellation-policy credit note"
+      description: |
+        ADMIN/MANAGER only. Requires a `reason` (5..500 chars). Voiding a
+        Draft is a state-flip only. Voiding any other status walks the
+        resolved cancellation policy (sub-brand-specific override > tenant-
+        wide default) and auto-issues a CreditNote sibling row when the
+        matched tier yields refundAmount > 0. The auto-CreditNote shape is
+        returned in the envelope alongside the updated invoice.
+      tags: [Travel — Quotes & Billing]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string, minLength: 5, maxLength: 500 }
+      responses:
+        "200":
+          description: Voided invoice + optional auto-issued CreditNote.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/TravelInvoice'
+                  - type: object
+                    properties:
+                      creditNote:
+                        nullable: true
+                        oneOf: [{ $ref: '#/components/schemas/TravelInvoice' }]
+                      policyApplied:
+                        type: object
+                        nullable: true
+                        properties:
+                          policyId: { type: integer }
+                          policyName: { type: string }
+                          tier: { type: object }
+                          refundPercent: { type: number, format: float }
+        "400": { description: INVALID_VOID_REASON | ALREADY_VOIDED. }
+        "403": { description: SUB_BRAND_DENIED. }
+        "404": { description: INVOICE_NOT_FOUND. }
+  /travel/invoices/{id}/cancel-preview:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    get:
+      summary: "[TRAVEL] Preview the cancellation-policy outcome that POST /:id/void would apply"
+      description: |
+        Read-only. Powers the void-confirmation modal so operators see the
+        refund tier + amount BEFORE clicking Confirm Void. Same auth gate
+        as the void endpoint (ADMIN/MANAGER).
+      tags: [Travel — Quotes & Billing]
+      responses:
+        "200":
+          description: Resolved preview.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  invoiceId: { type: integer }
+                  status: { type: string }
+                  policyApplied:
+                    type: object
+                    nullable: true
+                    properties:
+                      policyId: { type: integer }
+                      policyName: { type: string }
+                      tier: { type: object }
+                      refundPercent: { type: number, format: float }
+                  refundAmount: { type: number, format: float, nullable: true }
+                  refundPercent: { type: number, format: float, nullable: true }
+                  daysBeforeServiceStart: { type: integer, nullable: true }
+                  serviceStartDate: { type: string, format: date-time, nullable: true }
+                  reason: { type: string, enum: [OK, NO_POLICY_RESOLVED] }
+        "400": { description: INVALID_ID. }
+        "403": { description: SUB_BRAND_DENIED. }
+        "404": { description: INVOICE_NOT_FOUND. }
+        "409": { description: ALREADY_VOIDED — preview only makes sense pre-void. }
+  /travel/invoices/{id}/pdf:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    get:
+      summary: "[TRAVEL] Download a rendered PDF for the invoice"
+      description: |
+        ADMIN/MANAGER only. Streams an application/pdf body rendered via
+        `pdfRenderer.generateTravelInvoicePdf`. Audit-stamped
+        `TRAVEL_INVOICE_PDF_DOWNLOADED` BEFORE the body is sent so the row
+        is durable even on a client-side abort mid-download.
+      tags: [Travel — Quotes & Billing]
+      responses:
+        "200":
+          description: PDF body.
+          content:
+            application/pdf:
+              schema: { type: string, format: binary }
+        "400": { description: INVALID_ID. }
+        "403": { description: SUB_BRAND_DENIED. }
+        "404": { description: INVOICE_NOT_FOUND. }
+        "500": { description: PDF_RENDER_FAILED. }
   /travel/trip-billing/{tripId}:
     parameters:
       - in: path
@@ -4476,7 +4794,7 @@ paths:
               required: [contactId]
               properties:
                 contactId: { type: integer }
-                subBrand: { type: string, enum: [tmc, rfu, travel_stall, visa_sure] }
+                subBrand: { type: string, enum: [tmc, rfu, travelstall, visasure] }
                 channel: { type: string, enum: [voice, whatsapp] }
       responses:
         "200": { description: Call initiated. }

@@ -4418,8 +4418,12 @@ router.post(
       // Block with 422 CONTACT_NOT_FOUND when the contact isn't in the
       // caller's tenant (same-tenant scope; the contact table is multi-
       // tenant-isolated, so a cross-tenant contactId reads as "missing").
+      // deletedAt: null guards the soft-delete window — without it, a row
+      // GDPR-erased or operator-deleted via the standard Contact DELETE
+      // (which sets deletedAt, doesn't remove) would still pass this check
+      // and let an invoice be raised against a tombstoned contact.
       const contactExists = await prisma.contact.findFirst({
-        where: { id: contactIdInt, tenantId: req.travelTenant.id },
+        where: { id: contactIdInt, tenantId: req.travelTenant.id, deletedAt: null },
         select: { id: true },
       });
       if (!contactExists) {

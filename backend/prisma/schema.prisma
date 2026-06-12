@@ -6331,6 +6331,15 @@ model TravelInvoice {
   @@index([tenantId, subBrand, status])
   @@index([tenantId, parentInvoiceId])
   @@index([tenantId, cancellationPolicyId])
+  // Draft-invoice dedup guard (routes/travel_invoices.js POST /invoices).
+  // The duplicate check filters on (tenantId, contactId, subBrand, status,
+  // currency, totalAmount, dueDate); the first four cover selectivity, the
+  // rest filter in-row. Without this, the dedup query scanned every invoice
+  // for the contact regardless of status — fine at seed scale, bad once
+  // a tenant accumulates >10k invoices per contact. Also serves the
+  // "all invoices for one contact" lookups that the UI hits on contact
+  // detail pages.
+  @@index([tenantId, contactId, status])
 }
 
 // S33 (#920) — PRD_TRAVEL_BILLING FR-3.7.a cancellation-policy table.

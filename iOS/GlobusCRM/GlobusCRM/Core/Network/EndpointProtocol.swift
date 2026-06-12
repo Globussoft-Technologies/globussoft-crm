@@ -82,7 +82,7 @@ enum WellnessEndpoint {
     case getNotificationPreferences(patientId: String)
     case updateNotificationPreferences(patientId: String)
     case requestDataExport(patientId: String)
-    case requestAccountDeletion(patientId: String)
+    case requestAccountDeletion
     // Server Notifications
     case getNotifications(page: Int, limit: Int)
     case markNotificationRead(id: String)
@@ -154,7 +154,7 @@ enum WellnessEndpoint {
         case .getNotificationPreferences:         return "wellness/portal/me/notification-preferences"
         case .updateNotificationPreferences:      return "wellness/portal/me/notification-preferences"
         case .requestDataExport:                  return "wellness/portal/export"
-        case .requestAccountDeletion:             return "wellness/portal/me/delete-account"
+        case .requestAccountDeletion:             return "auth/me/account"
         case .getNotifications:                   return "wellness/portal/me/notifications"
         case .markNotificationRead(let id):       return "wellness/portal/me/notifications/\(id)/read"
         case .markAllNotificationsRead:           return "wellness/portal/me/notifications/read-all"
@@ -169,7 +169,7 @@ enum WellnessEndpoint {
              .cancelAppointment, .addWaitlist, .purchaseGiftCardOrder,
              .purchaseGiftCardConfirm, .refundPayment, .uploadProfilePicture,
              .uploadAvatar, .changePassword, .joinMembership, .redeemGiftCard,
-             .requestDataExport, .requestAccountDeletion, .markAllNotificationsRead:
+             .requestDataExport, .markAllNotificationsRead:
             return .POST
         case .markNotificationRead:
             return .PUT
@@ -177,7 +177,7 @@ enum WellnessEndpoint {
             return .PUT
         case .rescheduleAppointment:
             return .PATCH
-        case .deleteProfilePicture:
+        case .deleteProfilePicture, .requestAccountDeletion:
             return .DELETE
         default:
             return .GET

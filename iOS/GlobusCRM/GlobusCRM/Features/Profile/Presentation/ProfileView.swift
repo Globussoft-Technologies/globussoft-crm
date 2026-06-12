@@ -3,13 +3,13 @@ import PhotosUI
 
 struct ProfileView: View {
     @StateObject var viewModel: ProfileViewModel
-    @EnvironmentObject var appState: AppState
     @EnvironmentObject var router: AppRouter
-    @EnvironmentObject var sessionManager: SessionManager
 
     @State private var exportRequested = false
     @State private var showSuccessToast = false
     @State private var showSignOutAlert = false
+    @State private var showDeleteAccountAlert = false
+    @State private var showDeleteAccountSheet = false
 
     var body: some View {
         ScrollView {
@@ -54,6 +54,17 @@ struct ProfileView: View {
                     .animation(.spring(response: 0.3), value: showSuccessToast)
                     .padding(.bottom, 24)
             }
+        }
+        .alert("Delete Account", isPresented: $showDeleteAccountAlert) {
+            Button("Cancel", role: .cancel) { }
+            Button("Continue", role: .destructive) {
+                showDeleteAccountSheet = true
+            }
+        } message: {
+            Text("This will permanently delete your account and all your data. This action cannot be undone.")
+        }
+        .sheet(isPresented: $showDeleteAccountSheet) {
+            DeleteAccountSheet(viewModel: viewModel, isPresented: $showDeleteAccountSheet)
         }
     }
 
@@ -304,6 +315,20 @@ struct ProfileView: View {
                     }
                 }
             }
+
+            Divider()
+
+            Button {
+                showDeleteAccountAlert = true
+            } label: {
+                Text("Delete Account")
+                    .font(.wellnessCallout)
+                    .fontWeight(.medium)
+                    .foregroundColor(.wellnessError)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: Layout.minTapTarget)
+            }
+            .buttonStyle(.plain)
         }
         .padding(Layout.cardPadding)
         .background(Color.wellnessSurface)
@@ -327,9 +352,9 @@ struct ProfileView: View {
         .buttonStyle(.plain)
         .alert("Sign Out", isPresented: $showSignOutAlert) {
             Button("Sign Out", role: .destructive) {
-                router.popToRoot()
-                appState.clearPermissions()
-                sessionManager.setUnauthenticated()
+                Task {
+                    await viewModel.logout()
+                }
             }
             Button("Cancel", role: .cancel) { }
         } message: {
@@ -345,6 +370,83 @@ struct ProfileView: View {
         case "M", "MALE":   return "Male"
         default:            return raw
         }
+    }
+}
+
+// MARK: - Delete Account Sheet
+
+struct DeleteAccountSheet: View {
+    @ObservedObject var viewModel: ProfileViewModel
+    @Binding var isPresented: Bool
+
+    @State private var password = ""
+    @State private var twoFACode = ""
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    VStack(spacing: WellnessSpacing.md) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: IconSize.large))
+                            .foregroundColor(.wellnessError)
+                        Text("Permanent Deletion")
+                            .font(.wellnessSubheadline)
+                            .fontWeight(.semibold)
+                            .foregroundColor(.wellnessOnSurface)
+                        Text("All your appointments, medical records, wallet balance, and personal data will be permanently and irreversibly deleted.")
+                            .font(.wellnessCaption)
+                            .foregroundColor(.wellnessMuted)
+                            .multilineTextAlignment(.center)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, WellnessSpacing.sm)
+                }
+
+                Section("Confirm your identity") {
+                    SecureField("Current password", text: $password)
+                    TextField("2FA code (if enabled)", text: $twoFACode)
+                        .keyboardType(.numberPad)
+                }
+
+                if let error = viewModel.error {
+                    Section {
+                        Label(error, systemImage: "exclamationmark.triangle")
+                            .font(.wellnessCaption)
+                            .foregroundColor(.wellnessError)
+                    }
+                }
+            }
+            .navigationTitle("Delete Account")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        viewModel.error = nil
+                        isPresented = false
+                    }
+                    .disabled(viewModel.isSaving)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    if viewModel.isSaving {
+                        ProgressView()
+                    } else {
+                        Button("Delete") {
+                            Task {
+                                await viewModel.deleteAccount(
+                                    password: password,
+                                    code: twoFACode.isEmpty ? nil : twoFACode
+                                )
+                            }
+                        }
+                        .foregroundColor(.wellnessError)
+                        .disabled(password.isEmpty)
+                    }
+                }
+            }
+        }
+        .presentationDetents([.medium])
+        .interactiveDismissDisabled(viewModel.isSaving)
     }
 }
 

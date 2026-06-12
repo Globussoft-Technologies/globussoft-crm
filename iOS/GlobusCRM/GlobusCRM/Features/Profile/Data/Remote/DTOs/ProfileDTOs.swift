@@ -32,6 +32,12 @@ struct ChangePasswordRequestDTO: Codable {
     let newPassword: String
 }
 
+struct DeleteAccountRequestDTO: Encodable {
+    let confirmDestructive: Bool
+    let password: String?
+    let code: String?
+}
+
 // GET /wellness/portal/me/notification-preferences — endpoint not yet implemented in backend
 struct NotificationPreferenceResponseDTO: Codable {
     let data: NotificationPreferenceDTO?

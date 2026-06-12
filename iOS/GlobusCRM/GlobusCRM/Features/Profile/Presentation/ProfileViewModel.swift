@@ -25,6 +25,11 @@ final class ProfileViewModel: ObservableObject {
     private let changePasswordUseCase: ChangePasswordUseCase
     private let requestDataExportUseCase: RequestDataExportUseCase
     private let requestAccountDeletionUseCase: RequestAccountDeletionUseCase
+    private let logoutUseCase: LogoutUseCase
+    private let notificationDAO: NotificationDAO
+    private let appState: AppState
+    private let router: AppRouter
+    private let sessionManager: SessionManager
     private let keychain: KeychainManager
     private var cancellables = Set<AnyCancellable>()
 
@@ -36,6 +41,11 @@ final class ProfileViewModel: ObservableObject {
          changePasswordUseCase: ChangePasswordUseCase,
          requestDataExportUseCase: RequestDataExportUseCase,
          requestAccountDeletionUseCase: RequestAccountDeletionUseCase,
+         logoutUseCase: LogoutUseCase,
+         notificationDAO: NotificationDAO,
+         appState: AppState,
+         router: AppRouter,
+         sessionManager: SessionManager,
          keychain: KeychainManager) {
         self.getProfileUseCase = getProfileUseCase
         self.getAuthProfileUseCase = getAuthProfileUseCase
@@ -45,6 +55,11 @@ final class ProfileViewModel: ObservableObject {
         self.changePasswordUseCase = changePasswordUseCase
         self.requestDataExportUseCase = requestDataExportUseCase
         self.requestAccountDeletionUseCase = requestAccountDeletionUseCase
+        self.logoutUseCase = logoutUseCase
+        self.notificationDAO = notificationDAO
+        self.appState = appState
+        self.router = router
+        self.sessionManager = sessionManager
         self.keychain = keychain
 
         $selectedPhotoItem
@@ -163,14 +178,46 @@ final class ProfileViewModel: ObservableObject {
         }
     }
 
-    func requestAccountDeletion() async {
-        guard let patientId = keychain.getPatientIdString() else { return }
-        let result = await requestAccountDeletionUseCase(patientId: patientId)
-        if case .success = result {
-            successMessage = "Account deletion request submitted."
-        } else if case .failure(let e) = result {
-            error = e.localizedDescription
+    func deleteAccount(password: String, code: String?) async {
+        isSaving = true
+        error = nil
+        let result = await requestAccountDeletionUseCase(password: password, code: code)
+        isSaving = false
+        guard case .success = result else {
+            if case .failure(let e) = result { error = e.localizedDescription }
+            return
         }
+        // Account deleted server-side — clear local state identically to logout
+        await logoutUseCase()
+        notificationDAO.deleteAll()
+        profile = nil
+        editedProfile = nil
+        avatarImage = nil
+        selectedPhotoItem = nil
+        isEditing = false
+        appState.clearPermissions()
+        appState.unreadNotificationCount = 0
+        router.popToRoot()
+        router.authPath = []
+        sessionManager.setUnauthenticated()
+    }
+
+    func logout() async {
+        isSaving = true
+        await logoutUseCase()
+        notificationDAO.deleteAll()
+
+        profile = nil
+        editedProfile = nil
+        avatarImage = nil
+        selectedPhotoItem = nil
+        isEditing = false
+        appState.clearPermissions()
+        appState.unreadNotificationCount = 0
+        router.popToRoot()
+        router.authPath = []
+        sessionManager.setUnauthenticated()
+        isSaving = false
     }
 
     func removeAvatar() async {

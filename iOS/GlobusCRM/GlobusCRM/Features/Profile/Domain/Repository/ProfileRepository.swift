@@ -10,5 +10,5 @@ protocol ProfileRepository {
     func getNotificationPreferences(patientId: String) async -> Result<NotificationPreference, AppError>
     func updateNotificationPreferences(_ prefs: NotificationPreference, patientId: String) async -> Result<Void, AppError>
     func requestDataExport(patientId: String) async -> Result<Void, AppError>
-    func requestAccountDeletion(patientId: String) async -> Result<Void, AppError>
+    func deleteAccount(password: String?, code: String?) async -> Result<Void, AppError>
 }

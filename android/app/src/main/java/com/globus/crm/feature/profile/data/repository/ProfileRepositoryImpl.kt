@@ -5,6 +5,7 @@ import com.globus.crm.core.storage.DataStoreManager
 import com.globus.crm.core.storage.EncryptedPrefsManager
 import com.globus.crm.feature.profile.data.mapper.mergeInto
 import com.globus.crm.feature.profile.data.mapper.toDomain
+import com.globus.crm.feature.profile.data.remote.dto.DeleteAccountRequestDto
 import com.globus.crm.feature.profile.data.remote.dto.UpdateAuthProfileDto
 import com.globus.crm.feature.profile.domain.model.Profile
 import com.globus.crm.feature.profile.domain.repository.ProfileRepository
@@ -82,6 +83,13 @@ class ProfileRepositoryImpl @Inject constructor(
     override suspend fun requestDsarExport() {
         val response = api.requestDsarExport()
         if (!response.isSuccessful) throw HttpException(response)
+    }
+
+    override suspend fun deleteAccount() {
+        val response = api.deleteAccount(DeleteAccountRequestDto(confirmDestructive = true))
+        if (!response.isSuccessful) throw HttpException(response)
+        dataStore.clearAll()
+        encryptedPrefs.clear()
     }
 
     override suspend fun logout() {

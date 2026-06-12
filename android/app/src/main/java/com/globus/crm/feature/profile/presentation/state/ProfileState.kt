@@ -17,6 +17,9 @@ data class ProfileUiState(
     val exportRequested: Boolean = false,
     val isPhotoUploading: Boolean = false,
     val photoError: String? = null,
+    val showDeleteAccountDialog: Boolean = false,
+    val isDeletingAccount: Boolean = false,
+    val deleteAccountError: String? = null,
 )
 
 sealed class ProfileUiEvent {
@@ -32,6 +35,9 @@ sealed class ProfileUiEvent {
     object RemovePhoto : ProfileUiEvent()
     object RequestDsarExport : ProfileUiEvent()
     object Logout : ProfileUiEvent()
+    object ShowDeleteAccountDialog : ProfileUiEvent()
+    object DismissDeleteAccountDialog : ProfileUiEvent()
+    object ConfirmDeleteAccount : ProfileUiEvent()
     object NavigateBack : ProfileUiEvent()
     object ToNotificationSettings : ProfileUiEvent()
 }

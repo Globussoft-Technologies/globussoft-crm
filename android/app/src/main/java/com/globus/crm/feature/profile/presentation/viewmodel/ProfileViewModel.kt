@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.globus.crm.core.util.Result
 import com.globus.crm.feature.auth.domain.usecase.LogoutUseCase
+import com.globus.crm.feature.profile.domain.usecase.DeleteAccountUseCase
 import com.globus.crm.feature.profile.domain.usecase.GetProfileUseCase
 import com.globus.crm.feature.profile.domain.usecase.RemoveProfilePictureUseCase
 import com.globus.crm.feature.profile.domain.usecase.RequestDsarExportUseCase
@@ -33,6 +34,7 @@ class ProfileViewModel @Inject constructor(
     private val uploadProfilePicture: UploadProfilePictureUseCase,
     private val removeProfilePicture: RemoveProfilePictureUseCase,
     private val requestDsarExport: RequestDsarExportUseCase,
+    private val deleteAccount: DeleteAccountUseCase,
     private val logout: LogoutUseCase,
 ) : ViewModel() {
 
@@ -70,6 +72,13 @@ class ProfileViewModel @Inject constructor(
             ProfileUiEvent.RemovePhoto -> doRemovePhoto()
             ProfileUiEvent.RequestDsarExport -> requestExport()
             ProfileUiEvent.Logout -> doLogout()
+            ProfileUiEvent.ShowDeleteAccountDialog -> _uiState.value = _uiState.value.copy(
+                showDeleteAccountDialog = true, deleteAccountError = null,
+            )
+            ProfileUiEvent.DismissDeleteAccountDialog -> _uiState.value = _uiState.value.copy(
+                showDeleteAccountDialog = false, deleteAccountError = null,
+            )
+            ProfileUiEvent.ConfirmDeleteAccount -> doDeleteAccount()
             ProfileUiEvent.NavigateBack -> viewModelScope.launch { _navEvent.send(ProfileNavEvent.Back) }
             ProfileUiEvent.ToNotificationSettings -> viewModelScope.launch { _navEvent.send(ProfileNavEvent.ToNotificationSettings) }
         }
@@ -144,6 +153,20 @@ class ProfileViewModel @Inject constructor(
         viewModelScope.launch {
             requestDsarExport()
             _uiState.value = _uiState.value.copy(exportRequested = true)
+        }
+    }
+
+    private fun doDeleteAccount() {
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(isDeletingAccount = true, deleteAccountError = null)
+            when (val result = deleteAccount()) {
+                is Result.Success -> _navEvent.send(ProfileNavEvent.ToLogin)
+                is Result.Error -> _uiState.value = _uiState.value.copy(
+                    isDeletingAccount = false,
+                    deleteAccountError = result.message,
+                )
+                Result.Loading -> Unit
+            }
         }
     }
 

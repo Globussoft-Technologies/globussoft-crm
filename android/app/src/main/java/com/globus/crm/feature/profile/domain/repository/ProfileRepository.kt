@@ -8,5 +8,6 @@ interface ProfileRepository {
     suspend fun uploadProfilePicture(bytes: ByteArray, mimeType: String): Profile
     suspend fun removeProfilePicture(): Profile
     suspend fun requestDsarExport()
+    suspend fun deleteAccount()
     suspend fun logout()
 }

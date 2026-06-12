@@ -45,3 +45,16 @@ data class AuthProfileResponseDto(
     val profilePicture: String?,
     val createdAt: String? = null,
 )
+
+@JsonClass(generateAdapter = true)
+data class DeleteAccountRequestDto(
+    val confirmDestructive: Boolean = true,
+    val password: String? = null,
+    val code: String? = null,
+)
+
+@JsonClass(generateAdapter = true)
+data class DeleteAccountResponseDto(
+    val ok: Boolean,
+    val deleted: String?,
+)

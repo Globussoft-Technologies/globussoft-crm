@@ -27,6 +27,8 @@ import com.globus.crm.feature.loyalty.data.remote.dto.LoyaltyResponseDto
 import com.globus.crm.feature.membership.data.remote.dto.MembershipDto
 import com.globus.crm.feature.membership.data.remote.dto.MembershipPlanDto
 import com.globus.crm.feature.profile.data.remote.dto.AuthProfileResponseDto
+import com.globus.crm.feature.profile.data.remote.dto.DeleteAccountRequestDto
+import com.globus.crm.feature.profile.data.remote.dto.DeleteAccountResponseDto
 import com.globus.crm.feature.profile.data.remote.dto.DsarExportResponseDto
 import com.globus.crm.feature.profile.data.remote.dto.ProfileDto
 import com.globus.crm.feature.profile.data.remote.dto.UpdateAuthProfileDto
@@ -108,6 +110,11 @@ interface WellnessApiService {
 
     @POST("portal/export")
     suspend fun requestDsarExport(): Response<DsarExportResponseDto>
+
+    @DELETE("/api/auth/me/account")
+    suspend fun deleteAccount(
+        @Body body: DeleteAccountRequestDto,
+    ): Response<DeleteAccountResponseDto>
 
     // ── Portal Notifications ──────────────────────────────────────────────────
     @GET("portal/me/notifications")

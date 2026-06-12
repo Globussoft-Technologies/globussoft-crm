@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
@@ -29,6 +30,8 @@ import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Button
@@ -314,6 +317,26 @@ private fun ViewProfileContent(state: ProfileUiState, onEvent: (ProfileUiEvent) 
             }
         }
 
+        // ── Delete Account ───────────────────────────────────────────────────
+        OutlinedButton(
+            onClick = { onEvent(ProfileUiEvent.ShowDeleteAccountDialog) },
+            modifier = Modifier.fillMaxWidth(),
+            shape = MaterialTheme.shapes.extraLarge,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.error),
+            colors = ButtonDefaults.outlinedButtonColors(
+                containerColor = MaterialTheme.colorScheme.error.copy(alpha = 0.06f),
+                contentColor = MaterialTheme.colorScheme.error,
+            ),
+        ) {
+            Icon(
+                imageVector = Icons.Default.DeleteOutline,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp),
+            )
+            Spacer(Modifier.width(6.dp))
+            Text("Delete Account")
+        }
+
         // ── Log out ─────────────────────────────────────────────────────────
         Button(
             onClick = { onEvent(ProfileUiEvent.Logout) },
@@ -328,6 +351,92 @@ private fun ViewProfileContent(state: ProfileUiState, onEvent: (ProfileUiEvent) 
 
         Spacer(Modifier.height(16.dp))
     }
+
+    // ── Delete Account confirmation dialog ───────────────────────────────────
+    if (state.showDeleteAccountDialog) {
+        DeleteAccountDialog(
+            isDeletingAccount = state.isDeletingAccount,
+            errorMessage = state.deleteAccountError,
+            onConfirm = { onEvent(ProfileUiEvent.ConfirmDeleteAccount) },
+            onDismiss = { onEvent(ProfileUiEvent.DismissDeleteAccountDialog) },
+        )
+    }
+}
+
+@Composable
+private fun DeleteAccountDialog(
+    isDeletingAccount: Boolean,
+    errorMessage: String?,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = { if (!isDeletingAccount) onDismiss() },
+        icon = {
+            Icon(
+                imageVector = Icons.Default.Warning,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.error,
+                modifier = Modifier.size(28.dp),
+            )
+        },
+        title = {
+            Text(
+                text = "Delete Account",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.error,
+            )
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = "This action is permanent and cannot be undone.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    text = "Deleting your account will:\n• Remove all your personal data\n• Cancel any active memberships\n• Delete your appointment history\n• Revoke access to this app",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (errorMessage != null) {
+                    Text(
+                        text = errorMessage,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onConfirm,
+                enabled = !isDeletingAccount,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.error,
+                ),
+            ) {
+                if (isDeletingAccount) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(16.dp),
+                        strokeWidth = 2.dp,
+                        color = MaterialTheme.colorScheme.onError,
+                    )
+                    Spacer(Modifier.width(8.dp))
+                }
+                Text("Delete Account")
+            }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = onDismiss,
+                enabled = !isDeletingAccount,
+            ) {
+                Text("Cancel")
+            }
+        },
+    )
 }
 
 @Composable

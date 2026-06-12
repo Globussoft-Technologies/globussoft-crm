@@ -1011,7 +1011,7 @@ async function collectAccountingExportRows(req) {
   let contactById = new Map();
   if (contactIds.length > 0) {
     const contacts = await prisma.contact.findMany({
-      where: { id: { in: contactIds } },
+      where: { id: { in: contactIds }, tenantId: req.travelTenant.id },
       select: { id: true, name: true, gst: true },
     });
     contactById = new Map(contacts.map((c) => [c.id, c]));
@@ -1888,7 +1888,7 @@ router.get(
       let contactById = new Map();
       if (byContact.size > 0) {
         const contacts = await prisma.contact.findMany({
-          where: { id: { in: [...byContact.keys()] } },
+          where: { id: { in: [...byContact.keys()] }, tenantId: req.travelTenant.id },
           select: { id: true, name: true, gst: true },
         });
         contactById = new Map(contacts.map((c) => [c.id, c]));

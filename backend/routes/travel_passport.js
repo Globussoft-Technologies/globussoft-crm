@@ -240,8 +240,9 @@ router.post(
         },
       });
 
-      // Supersede the previous scan so a re-upload doesn't orphan it.
-      removeScanFromEnvelopeJson(participant.passportExtractionJson, req.file.filename);
+      // Supersede the previous scan so a re-upload doesn't orphan it. Awaited
+      // so the delete completes before we respond (no leak on a sudden restart).
+      await removeScanFromEnvelopeJson(participant.passportExtractionJson, req.file.filename);
 
       // Audit: field NAMES only, never field VALUES.
       writeAudit(
@@ -520,8 +521,9 @@ router.delete(
           passportRejectedAt: null,
         },
       });
-      // Delete the stored scan (S3/disk) so "Clear → re-upload" doesn't orphan it.
-      removeScanFromEnvelopeJson(participant.passportExtractionJson);
+      // Delete the stored scan (S3/disk) so "Clear → re-upload" doesn't orphan
+      // it. Awaited so the delete completes before responding.
+      await removeScanFromEnvelopeJson(participant.passportExtractionJson);
       writeAudit(
         "TripParticipant",
         "passport.extraction_cleared",
@@ -668,7 +670,8 @@ router.delete(
       });
       // Delete the stored scan (S3/disk) — portal uploads live in S3, so a
       // "Clear → re-upload" must remove the old object, not just the DB row.
-      removeScanFromEnvelopeJson(traveller.passportExtractionJson);
+      // Awaited so the delete completes before responding.
+      await removeScanFromEnvelopeJson(traveller.passportExtractionJson);
       writeAudit(
         "CustomerTraveller",
         "passport.extraction_cleared",

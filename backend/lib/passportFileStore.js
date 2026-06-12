@@ -43,8 +43,13 @@ async function storeScan(buffer, mimeType) {
 async function removeScan(descriptor) {
   if (!descriptor || !descriptor.key) return;
   try {
-    if (descriptor.storage === "s3") await s3Service.deleteFile(descriptor.key);
-    else fs.unlink(path.join(uploadDir, descriptor.key), () => {});
+    if (descriptor.storage === "s3") {
+      await s3Service.deleteFile(descriptor.key);
+    } else {
+      // path.basename strips any directory components so a poisoned envelope
+      // key (e.g. "../../etc/x") can never make us unlink outside uploadDir.
+      fs.unlink(path.join(uploadDir, path.basename(descriptor.key)), () => {});
+    }
   } catch (_e) { /* best effort — never block the request on cleanup */ }
 }
 

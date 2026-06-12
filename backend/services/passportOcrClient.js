@@ -24,6 +24,7 @@
 // null fields + a note so the upload still lands and the operator completes it.
 
 const fs = require("fs");
+const path = require("path");
 const { parseMrz } = require("../lib/mrzParser");
 const { parseViz } = require("../lib/passportVizParser");
 
@@ -33,6 +34,37 @@ const PROVIDER = "local-mrz-v1";
 // request thread indefinitely (review: OCR runs inline in the HTTP request).
 const OCR_TIMEOUT_MS = Number(process.env.PASSPORT_OCR_TIMEOUT_MS || 30000);
 const MRZ_WHITELIST = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<";
+
+// tesseract.js fetches the `eng` traineddata (~10 MB) from a CDN on first use
+// and caches it. On an OUTBOUND-RESTRICTED server that download fails and OCR
+// degrades to manual entry. To run fully offline, drop eng.traineddata into a
+// directory and point PASSPORT_OCR_LANG_PATH at it (the file must be
+// uncompressed, i.e. eng.traineddata, not .gz). When set we pass it as the
+// worker's langPath with gzip:false; otherwise the default CDN path is used.
+const LANG_PATH = process.env.PASSPORT_OCR_LANG_PATH
+  || (fs.existsSync(path.join(__dirname, "..", "eng.traineddata")) ? path.join(__dirname, "..") : null);
+
+// OCR is CPU/RAM heavy and runs inline in the request (review #3). A small
+// in-process semaphore bounds how many recognitions run at once so a burst of
+// uploads can't spawn unbounded tesseract workers and exhaust the box. A real
+// job queue / worker pool is the answer for high volume; this is the cheap
+// guard until then. Configurable; default 2.
+const OCR_MAX_CONCURRENCY = Math.max(1, Number(process.env.PASSPORT_OCR_MAX_CONCURRENCY || 2));
+let ocrActive = 0;
+const ocrWaiters = [];
+async function withOcrSlot(fn) {
+  if (ocrActive >= OCR_MAX_CONCURRENCY) {
+    await new Promise((resolve) => ocrWaiters.push(resolve));
+  }
+  ocrActive++;
+  try {
+    return await fn();
+  } finally {
+    ocrActive--;
+    const next = ocrWaiters.shift();
+    if (next) next();
+  }
+}
 
 function isEnabledForTenant(tenantId) {
   if (!tenantId) return false;
@@ -98,7 +130,10 @@ async function runOcr(imageBuffer, opts = {}) {
     };
   }
   const { createWorker } = await import("tesseract.js");
-  const worker = await createWorker("eng");
+  // langPath (when configured) makes tesseract load a local traineddata file
+  // instead of the CDN — required on outbound-restricted servers.
+  const workerOpts = LANG_PATH ? { langPath: LANG_PATH, gzip: false } : {};
+  const worker = await createWorker("eng", 1, workerOpts);
   try {
     const band = await preprocessImage(imageBuffer, { mrzBand: true });
     const full = await preprocessImage(imageBuffer, { mrzBand: false });
@@ -234,7 +269,7 @@ async function extractPassport({ tenantId, filePath, fileBuffer, fileName, mimeT
   let vizText = "";
   let ocrConfidence = null;
   try {
-    const result = await withTimeout(runOcr(buffer, { ocr }), OCR_TIMEOUT_MS);
+    const result = await withOcrSlot(() => withTimeout(runOcr(buffer, { ocr }), OCR_TIMEOUT_MS));
     mrzText = result?.mrzText || "";
     vizText = result?.vizText || "";
     ocrConfidence = result?.confidence ?? null;

@@ -404,12 +404,12 @@ final class GiftCardsViewModel: ObservableObject {
     func load() async {
         guard !isLoading else { return }
         isLoading = true
+        defer { isLoading = false }
         loadError = nil
         async let storefrontResult = getStorefrontUseCase()
         let patientId = keychain.getPatientIdString() ?? ""
         async let ownedResult = getGiftCardsUseCase(patientId: patientId)
         let (storefront, owned) = await (storefrontResult, ownedResult)
-        isLoading = false
         hasLoaded = true
         switch storefront {
         case .success(let cards): storefrontCards = cards

@@ -27,9 +27,9 @@ final class WalletViewModel: ObservableObject {
             return
         }
         isLoading = true
+        defer { isLoading = false }
         error = nil
         let (balResult, txResult) = await getWalletUseCase(patientId: patientId)
-        isLoading = false
         hasLoaded = true
         if case .success(let b) = balResult {
             balance = b

@@ -193,10 +193,12 @@ describe('Marketing-site → CRM redirect handoff', () => {
   });
 
   describe('Login', () => {
-    // Login.jsx pre-fills its email + password with demo credentials, so we
-    // submit without changing them — the mocked /api/auth/login returns
-    // success regardless of body. The load-bearing assertion is the
-    // post-success navigate, not the form-fill mechanics.
+    // Login.jsx no longer pre-fills email + password (commit 46247368 removed
+    // the hardcoded demo creds, moving them onto per-quick-login buttons). Fill
+    // them explicitly before submit, otherwise performLogin's empty-field guard
+    // short-circuits with "Please fill out all required fields" and navigate is
+    // never called. The mocked /api/auth/login returns success regardless of
+    // body — the load-bearing assertion is the post-success navigate.
     it('navigates to ?next= after a successful password login (in-app path is preserved)', async () => {
       global.fetch = mockFetch([
         ['/api/auth/public/tenants', TENANTS],
@@ -212,6 +214,14 @@ describe('Marketing-site → CRM redirect handoff', () => {
         expect(orgSelect.value).toBe('2');
       });
 
+      // Labels in Login.jsx aren't associated via htmlFor/id, so getByLabelText
+      // can't find these inputs — match by placeholder instead.
+      fireEvent.change(screen.getByPlaceholderText('admin@globussoft.com'), {
+        target: { value: 'patient@example.com' },
+      });
+      fireEvent.change(screen.getByPlaceholderText('••••••••'), {
+        target: { value: 'Secret123' },
+      });
       fireEvent.click(screen.getByRole('button', { name: /^Sign in$/i }));
 
       await waitFor(() => {
@@ -241,6 +251,14 @@ describe('Marketing-site → CRM redirect handoff', () => {
         expect(screen.getAllByRole('combobox')[0]).toBeDisabled();
       });
 
+      // Login.jsx no longer pre-fills demo creds (commit 46247368) — fill the
+      // required fields by placeholder so performLogin reaches the navigate.
+      fireEvent.change(screen.getByPlaceholderText('admin@globussoft.com'), {
+        target: { value: 'patient@example.com' },
+      });
+      fireEvent.change(screen.getByPlaceholderText('••••••••'), {
+        target: { value: 'Secret123' },
+      });
       fireEvent.click(screen.getByRole('button', { name: /^Sign in$/i }));
 
       await waitFor(() => {

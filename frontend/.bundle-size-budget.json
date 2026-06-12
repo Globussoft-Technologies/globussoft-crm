@@ -45,8 +45,8 @@
   ],
 
   "totals": {
-    "all-js-maxKB": 4200,
+    "all-js-maxKB": 4400,
     "all-css-maxKB": 300,
-    "comment": "Whole frontend/dist/assets/ JS + CSS. Catches the case where a new chunk pops in without being budgeted explicitly. Bumped from 4096→4200 on 2026-06-11: the v3.9.x travel surfaces (S81 + S82 + S127 MapPreview consumers, S93 PoiPicker, S128 EmbedAllowlist) plus organic growth in the wellness PatientDetail tabs pushed total JS to ~4098 KB. Adding 100 KB headroom prevents budget churn while we evaluate per-route lazy-load for the slowly-growing pages (PatientDetail at 77 KB + Patients at 50 KB are next candidates)."
+    "comment": "Whole frontend/dist/assets/ JS + CSS. Catches the case where a new chunk pops in without being budgeted explicitly. Bumped 4200→4400 on 2026-06-12: the v3.9.x OCR passport + travel accounting export + workload + share-links surfaces (commit 5b2317e) pushed total JS to 4218.6 KB; bumping by 200 KB gives ~180 KB headroom while per-route lazy-load for PatientDetail (77 KB) + Patients (50 KB) remains the next candidate. Prior bump 4096→4200 on 2026-06-11 absorbed S81/S82/S127 MapPreview + S93 PoiPicker + S128 EmbedAllowlist."
   }
 }

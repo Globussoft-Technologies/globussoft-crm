@@ -150,16 +150,30 @@ describe('<Login /> — page surface', () => {
     renderLogin();
     expect(screen.getByRole('heading', { name: /Globussoft CRM/i })).toBeInTheDocument();
     expect(screen.getByText(/Sign in to your account/i)).toBeInTheDocument();
-    // The page seeds email='admin@globussoft.com' + password='password123'
-    // in initial state — the inputs render with those values.
+    // Post-46247368 refactor: email + password inputs render EMPTY on
+    // initial mount (the hardcoded admin@globussoft.com / password123
+    // defaults were removed; demo creds now live on the quick-login
+    // account objects). The placeholder strings stay the same.
     const emailInput = screen.getByPlaceholderText('admin@globussoft.com');
     expect(emailInput).toBeInTheDocument();
-    expect(emailInput.value).toBe('admin@globussoft.com');
+    expect(emailInput.value).toBe('');
     const passwordInput = screen.getByPlaceholderText('••••••••');
     expect(passwordInput).toBeInTheDocument();
-    expect(passwordInput.value).toBe('password123');
+    expect(passwordInput.value).toBe('');
     expect(screen.getByRole('button', { name: /Sign In$/i })).toBeInTheDocument();
   });
+
+  // Helper: type the canonical demo credentials into the empty form so
+  // performLogin() reaches the fetch call. Post-46247368 the form starts
+  // empty, so every Sign-In-path test must type before clicking.
+  function fillCredentials(email = 'admin@globussoft.com', password = 'password123') {
+    fireEvent.change(screen.getByPlaceholderText('admin@globussoft.com'), {
+      target: { value: email },
+    });
+    fireEvent.change(screen.getByPlaceholderText('••••••••'), {
+      target: { value: password },
+    });
+  }
 
   it('renders quick-login sections grouped by tenant — Generic / Wellness / Travel', () => {
     renderLogin();
@@ -198,6 +212,7 @@ describe('<Login /> — page surface', () => {
     });
     renderLogin();
 
+    fillCredentials();
     fireEvent.click(screen.getByRole('button', { name: /Sign In$/i }));
 
     await waitFor(() => {
@@ -237,6 +252,7 @@ describe('<Login /> — page surface', () => {
     });
     renderLogin();
 
+    fillCredentials('rishu@enhancedwellness.in');
     fireEvent.click(screen.getByRole('button', { name: /Sign In$/i }));
 
     await waitFor(() => {
@@ -257,6 +273,7 @@ describe('<Login /> — page surface', () => {
     });
     renderLogin();
 
+    fillCredentials('yasin@travelstall.in');
     fireEvent.click(screen.getByRole('button', { name: /Sign In$/i }));
 
     await waitFor(() => {
@@ -273,6 +290,7 @@ describe('<Login /> — page surface', () => {
     });
     renderLogin();
 
+    fillCredentials();
     fireEvent.click(screen.getByRole('button', { name: /Sign In$/i }));
 
     expect(await screen.findByText(/Invalid credentials/i)).toBeInTheDocument();
@@ -285,6 +303,7 @@ describe('<Login /> — page surface', () => {
     global.fetch.mockImplementation(() => Promise.reject(new Error('ECONNREFUSED')));
     renderLogin();
 
+    fillCredentials();
     fireEvent.click(screen.getByRole('button', { name: /Sign In$/i }));
 
     expect(await screen.findByText(/Server error\. Ensure backend is running\./i)).toBeInTheDocument();
@@ -315,6 +334,7 @@ describe('<Login /> — page surface', () => {
     });
     renderLogin();
 
+    fillCredentials();
     fireEvent.click(screen.getByRole('button', { name: /Sign In$/i }));
 
     // 2FA chrome appears.
@@ -349,6 +369,7 @@ describe('<Login /> — page surface', () => {
     });
     renderLogin();
 
+    fillCredentials();
     fireEvent.click(screen.getByRole('button', { name: /Sign In$/i }));
     const codeInput = await screen.findByPlaceholderText('123456');
     fireEvent.change(codeInput, { target: { value: '123456' } });

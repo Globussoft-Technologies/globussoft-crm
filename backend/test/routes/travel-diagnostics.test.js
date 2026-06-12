@@ -21,6 +21,10 @@
  *                                                   talkingPointsJson envelope
  *       POST   /diagnostics/:id/form-vs-call/compare ADMIN/MANAGER-gated, requires
  *                                                   callAnswers OR callTranscript
+ *       POST   /diagnostics/banks/:id/request-change any travel role; files a GS
+ *                                                   change-request Ticket (PRD §4.2
+ *                                                   Phase-1 view-only scoring);
+ *                                                   sanitizes summary/details
  *   - Public endpoints (no auth — Phase 2 Travel Stall wizard):
  *       GET    /diagnostics/public/banks            tenant resolved by ?tenantSlug,
  *                                                   scoringRulesJson STRIPPED
@@ -130,6 +134,11 @@ prisma.auditLog = {
   create: vi.fn().mockResolvedValue({ id: 1 }),
   findFirst: vi.fn().mockResolvedValue(null),
 };
+// PRD §4.2 request-change → Ticket write.
+prisma.ticket = {
+  ...(prisma.ticket || {}),
+  create: vi.fn(),
+};
 
 const router = requireCJS('../../routes/travel_diagnostics');
 
@@ -207,6 +216,11 @@ beforeEach(() => {
   prisma.tenant.findFirst.mockReset().mockResolvedValue(null);
   prisma.user.findUnique.mockReset().mockResolvedValue({ role: 'ADMIN', subBrandAccess: null });
   prisma.revokedToken.findUnique.mockReset().mockResolvedValue(null);
+  prisma.auditLog.create.mockReset().mockResolvedValue({ id: 1 });
+  prisma.auditLog.findFirst.mockReset().mockResolvedValue(null);
+  // Echo the create payload back so subject/status assertions read the row
+  // the route actually wrote.
+  prisma.ticket.create.mockReset().mockImplementation(async ({ data }) => ({ id: 321, ...data }));
   llmRouter.routeRequest.mockReset().mockResolvedValue({
     text: '[STUB-TALKING-POINTS] 85% match (synthetic)',
     model: 'stub-claude-opus',
@@ -718,6 +732,141 @@ describe('POST /diagnostics/:id/form-vs-call/compare', () => {
     expect(res.status).toBe(200);
     expect(res.body.scorePercent).toBeNull();
     expect(res.body.classification).toBe('unknown');
+  });
+});
+
+// ─── POST /diagnostics/banks/:id/request-change (PRD §4.2) ────────────
+//
+// Phase-1 scoring is view-only — the endpoint routes a change request to
+// GS as a tenant-scoped Ticket (status Open, priority Medium) and writes
+// a best-effort DIAGNOSTIC_BANK_CHANGE_REQUESTED audit row. Any travel
+// role may request (no verifyRole gate); sub-brand access still enforced.
+
+describe('POST /diagnostics/banks/:id/request-change', () => {
+  test('missing Bearer → 401, no Ticket written', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/diagnostics/banks/100/request-change')
+      .send({ summary: 'Band 2 threshold too low' });
+    expect(res.status).toBe(401);
+    expect(prisma.ticket.create).not.toHaveBeenCalled();
+  });
+
+  test('missing summary → 400 MISSING_FIELDS', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/diagnostics/banks/100/request-change')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`)
+      .send({ details: 'no summary supplied' });
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'MISSING_FIELDS' });
+    expect(prisma.ticket.create).not.toHaveBeenCalled();
+  });
+
+  test('markup-only summary sanitizes to empty → 400 MISSING_FIELDS', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/diagnostics/banks/100/request-change')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`)
+      .send({ summary: '<script>alert(1)</script>' });
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'MISSING_FIELDS' });
+    expect(prisma.ticket.create).not.toHaveBeenCalled();
+  });
+
+  test('non-numeric id → 400 INVALID_ID', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/diagnostics/banks/abc/request-change')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`)
+      .send({ summary: 'Band 2 threshold too low' });
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_ID' });
+  });
+
+  test('bank not found → 404 NOT_FOUND', async () => {
+    prisma.travelDiagnosticQuestionBank.findFirst.mockResolvedValue(null);
+    const res = await request(makeApp())
+      .post('/api/travel/diagnostics/banks/100/request-change')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`)
+      .send({ summary: 'Band 2 threshold too low' });
+    expect(res.status).toBe(404);
+    expect(res.body).toMatchObject({ code: 'NOT_FOUND' });
+    expect(prisma.ticket.create).not.toHaveBeenCalled();
+  });
+
+  test('happy: USER role files a ticket — 201 {ticket:{id,subject,status}} + audit row', async () => {
+    // Any travel role may request — USER is enough (no verifyRole gate).
+    prisma.user.findUnique.mockResolvedValue({ role: 'USER', subBrandAccess: null });
+    prisma.travelDiagnosticQuestionBank.findFirst.mockResolvedValue(bankRow());
+    const res = await request(makeApp())
+      .post('/api/travel/diagnostics/banks/100/request-change')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`)
+      .send({
+        summary: 'Band 2 threshold too low',
+        details: 'Repeat organisers keep landing in level_1.',
+        proposedChangesJson: { bands: [{ minScore: 0, maxScore: 3 }] },
+      });
+    expect(res.status).toBe(201);
+    expect(res.body.ticket).toMatchObject({
+      id: 321,
+      status: 'Open',
+      subject: '[Diagnostic change request] tmc bank v1: Band 2 threshold too low',
+    });
+
+    // Ticket row: tenant-scoped, Open status, Medium ("normal") priority.
+    const createCall = prisma.ticket.create.mock.calls[0][0];
+    expect(createCall.data).toMatchObject({
+      tenantId: 1,
+      status: 'Open',
+      priority: 'Medium',
+    });
+    // Description carries requester + bank id/version + details + proposal.
+    expect(createCall.data.description).toContain('Requested by: user #7');
+    expect(createCall.data.description).toContain('Question bank: #100 — tmc v1');
+    expect(createCall.data.description).toContain('Details: Repeat organisers keep landing in level_1.');
+    expect(createCall.data.description).toContain('"minScore":0');
+
+    // Best-effort audit row (writeAudit → prisma.auditLog.create).
+    const auditCall = prisma.auditLog.create.mock.calls[0][0];
+    expect(auditCall.data).toMatchObject({
+      entity: 'TravelDiagnosticQuestionBank',
+      action: 'DIAGNOSTIC_BANK_CHANGE_REQUESTED',
+      entityId: 100,
+      userId: 7,
+      tenantId: 1,
+    });
+  });
+
+  test('script tags stripped from summary + details before the Ticket write', async () => {
+    prisma.travelDiagnosticQuestionBank.findFirst.mockResolvedValue(bankRow());
+    const res = await request(makeApp())
+      .post('/api/travel/diagnostics/banks/100/request-change')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({
+        summary: 'Fix <script>alert(1)</script>weights',
+        details: '<img src=x onerror=alert(2)>raise band 2',
+      });
+    expect(res.status).toBe(201);
+    const data = prisma.ticket.create.mock.calls[0][0].data;
+    expect(data.subject).not.toMatch(/<script|alert\(1\)/);
+    expect(data.subject).toContain('Fix');
+    expect(data.subject).toContain('weights');
+    expect(data.description).not.toMatch(/<img|onerror|alert\(2\)/);
+    expect(data.description).toContain('raise band 2');
+    // Sanitized subject also echoes back in the response envelope.
+    expect(res.body.ticket.subject).not.toMatch(/<script/);
+  });
+
+  test('sub-brand-restricted user denied → 403 SUB_BRAND_DENIED, no Ticket written', async () => {
+    prisma.user.findUnique.mockResolvedValue({
+      role: 'MANAGER',
+      subBrandAccess: JSON.stringify(['rfu']),
+    });
+    prisma.travelDiagnosticQuestionBank.findFirst.mockResolvedValue(bankRow({ subBrand: 'tmc' }));
+    const res = await request(makeApp())
+      .post('/api/travel/diagnostics/banks/100/request-change')
+      .set('Authorization', `Bearer ${tokenFor('MANAGER')}`)
+      .send({ summary: 'Band 2 threshold too low' });
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ code: 'SUB_BRAND_DENIED' });
+    expect(prisma.ticket.create).not.toHaveBeenCalled();
   });
 });
 

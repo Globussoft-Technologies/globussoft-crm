@@ -58,6 +58,10 @@ const llmRouter = require("../lib/llmRouter");
 const { computeDayCosts } = require("../lib/itineraryDayCostCalculator");
 const listProjection = require("../lib/listProjection");
 const { writeAudit } = require("../lib/audit");
+// PRD §4.7 (gap A3) — share-link expiry/revocation policy. Pure helpers
+// (clamp 1..30 days, default 7; revoked > expired > active precedence)
+// unit-tested in test/lib/shareLinkPolicy.test.js.
+const { computeShareExpiresAt, shareLinkState } = require("../lib/shareLinkPolicy");
 
 // Covers fly + non-fly (domestic) transport and general trip expenses. Keep
 // in sync with ITEM_TYPES in frontend/src/pages/travel/ItineraryDetail.jsx.
@@ -1339,6 +1343,7 @@ router.patch("/itineraries/:id", verifyToken, requireTravelTenant, async (req, r
     const {
       status, destination, startDate, endDate,
       pricingJson, totalAmount, currency, pdfUrl, shareToken, pax,
+      shareExpiresAt,
     } = req.body || {};
 
     if (status !== undefined) {
@@ -1359,6 +1364,25 @@ router.patch("/itineraries/:id", verifyToken, requireTravelTenant, async (req, r
     if (currency !== undefined) data.currency = currency || "INR";
     if (pdfUrl !== undefined) data.pdfUrl = pdfUrl || null;
     if (shareToken !== undefined) data.shareToken = shareToken || null;
+    // PRD §4.7 (gap A3) — advisor-facing shorten/extend control for the
+    // share-link expiry. ISO date string (or null/"" to clear → legacy
+    // non-expiring link). Garbage is REJECTED (unlike expiryDays at mint
+    // time, which clamps): a typo here would silently re-arm/kill a live
+    // customer link, so the advisor must see the error.
+    if (shareExpiresAt !== undefined) {
+      if (shareExpiresAt === null || shareExpiresAt === "") {
+        data.shareExpiresAt = null;
+      } else {
+        const parsed = new Date(shareExpiresAt);
+        if (typeof shareExpiresAt !== "string" || Number.isNaN(parsed.getTime())) {
+          return res.status(400).json({
+            error: "shareExpiresAt must be an ISO-8601 date string",
+            code: "INVALID_SHARE_EXPIRES_AT",
+          });
+        }
+        data.shareExpiresAt = parsed;
+      }
+    }
 
     // Reviving a declined offer: when the advisor edits a REJECTED itinerary
     // without explicitly setting a status, flip it back to "revised" so it
@@ -3109,15 +3133,25 @@ router.put("/itineraries/:id", verifyToken, requireTravelTenant, async (req, res
 // the advisor pastes into WhatsApp/email. Idempotent: re-calling on an
 // itinerary that already has a shareToken returns the existing one
 // rather than minting a new one (so old WhatsApp links keep working).
+//
+// PRD §4.7 (gap A3) — share-link security:
+//   - Optional body `expiryDays` (CLAMPED to [1, 30], default 7 — see
+//     lib/shareLinkPolicy). Every mint/re-mint refreshes shareExpiresAt,
+//     which the response now carries.
+//   - Re-sharing AFTER a revoke mints a FRESH token (the leaked/revoked
+//     URL must stay dead forever) and clears shareRevokedAt.
 router.post("/itineraries/:id/share", verifyToken, requireTravelTenant, async (req, res) => {
   try {
     const itin = await loadItineraryWithGuard(req);
 
     // Re-fetch with the columns we need. loadItineraryWithGuard's select is
-    // narrow (id + subBrand); we want shareToken here too.
+    // narrow (id + subBrand); we want shareToken + revocation state here too.
     const full = await prisma.itinerary.findFirst({
       where: { id: itin.id, tenantId: req.travelTenant.id },
-      select: { id: true, shareToken: true, contactId: true, destination: true },
+      select: {
+        id: true, shareToken: true, shareRevokedAt: true,
+        contactId: true, destination: true,
+      },
     });
     if (!full) {
       // Belt-and-braces — loadItineraryWithGuard just succeeded, so this
@@ -3126,14 +3160,17 @@ router.post("/itineraries/:id/share", verifyToken, requireTravelTenant, async (r
     }
 
     let token = full.shareToken;
-    if (!token) {
+    if (!token || full.shareRevokedAt != null) {
+      // First share OR re-share after revoke. A revoked token is burned —
+      // minting a fresh slug guarantees the old URL 404s on every row.
       // 32-char random → base64url. crypto already required at the top.
       token = crypto.randomBytes(24).toString("base64url");
-      await prisma.itinerary.update({
-        where: { id: full.id },
-        data: { shareToken: token },
-      });
     }
+    const shareExpiresAt = computeShareExpiresAt((req.body || {}).expiryDays);
+    await prisma.itinerary.update({
+      where: { id: full.id },
+      data: { shareToken: token, shareExpiresAt, shareRevokedAt: null },
+    });
 
     const portalBase = process.env.PUBLIC_BASE_URL || "https://crm.globusdemos.com";
     const shareUrl = `${portalBase}/p/itinerary/${token}`;
@@ -3183,7 +3220,7 @@ router.post("/itineraries/:id/share", verifyToken, requireTravelTenant, async (r
         whatsappStatus = sendResult.status;
       }
     }
-    res.json({ shareToken: token, shareUrl, whatsapp: whatsappStatus });
+    res.json({ shareToken: token, shareUrl, shareExpiresAt, whatsapp: whatsappStatus });
   } catch (e) {
     if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
     if (e.code === "P2002") {
@@ -3195,6 +3232,61 @@ router.post("/itineraries/:id/share", verifyToken, requireTravelTenant, async (r
     // we couldn't see what threw.
     console.error("[travel-itin] share error:", e.message, "\nstack:", e.stack);
     res.status(500).json({ error: "Failed to mint share token", code: "SHARE_FAILED" });
+  }
+});
+
+// POST /api/travel/itineraries/:id/share/revoke
+//
+// PRD §4.7 (gap A3) — kill a live share link immediately (forwarded URL,
+// deal fell through, wrong recipient). Same auth + tenant + sub-brand
+// guards as the share-mint endpoint above.
+//
+// Semantics:
+//   - 409 NOT_SHARED if the itinerary was never shared (no shareToken).
+//   - Idempotent: re-revoking returns 200 with alreadyRevoked=true and
+//     the ORIGINAL shareRevokedAt stamp (audit timeline stays truthful).
+//   - The public route answers 410 SHARE_REVOKED while the token row is
+//     revoked; a later re-share mints a FRESH token (see share above), so
+//     the revoked URL stays dead forever.
+//   - Best-effort ITINERARY_SHARE_REVOKED audit row — never blocks.
+router.post("/itineraries/:id/share/revoke", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const itin = await loadItineraryWithGuard(req);
+    const full = await prisma.itinerary.findFirst({
+      where: { id: itin.id, tenantId: req.travelTenant.id },
+      select: { id: true, shareToken: true, shareRevokedAt: true },
+    });
+    if (!full) {
+      return res.status(404).json({ error: "Itinerary not found", code: "NOT_FOUND" });
+    }
+    if (!full.shareToken) {
+      return res.status(409).json({ error: "Itinerary has never been shared", code: "NOT_SHARED" });
+    }
+
+    const alreadyRevoked = full.shareRevokedAt != null;
+    let revokedAt = full.shareRevokedAt;
+    if (!alreadyRevoked) {
+      revokedAt = new Date();
+      await prisma.itinerary.update({
+        where: { id: full.id },
+        data: { shareRevokedAt: revokedAt },
+      });
+      // Best-effort audit (mirrors travel_visa.js) — never blocks the response.
+      writeAudit(
+        "Itinerary",
+        "ITINERARY_SHARE_REVOKED",
+        full.id,
+        req.user.userId,
+        req.travelTenant.id,
+        { subBrand: itin.subBrand, shareToken: full.shareToken },
+      ).catch(() => {});
+    }
+
+    res.json({ revoked: true, alreadyRevoked, shareRevokedAt: revokedAt });
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error("[travel-itin] share revoke error:", e.message, "\nstack:", e.stack);
+    res.status(500).json({ error: "Failed to revoke share link", code: "SHARE_REVOKE_FAILED" });
   }
 });
 
@@ -3228,7 +3320,41 @@ router.get("/itineraries/:id/pdf", verifyToken, requireTravelTenant, async (req,
         select: { name: true, email: true, phone: true },
       })
       : { name: "Customer", email: null, phone: null };
-    const pdfBuf = await renderTravelItineraryPdf(full, contact);
+    // PRD §4.7 (gap A3) — per-viewer diagonal watermark so a leaked or
+    // forwarded PDF identifies who pulled it and when. The JWT only
+    // carries userId (NOT name/email), so resolve the User row here.
+    // Best-effort: a missing row still renders (timestamp-only mark).
+    let viewerName = null;
+    let viewerEmail = null;
+    try {
+      const viewer = await prisma.user.findUnique({
+        where: { id: req.user.userId },
+        select: { name: true, email: true },
+      });
+      if (viewer) {
+        viewerName = viewer.name || null;
+        viewerEmail = viewer.email || null;
+      }
+    } catch (viewerErr) {
+      console.error("[travel-itin] pdf viewer lookup failed:", viewerErr.message);
+    }
+    const pdfBuf = await renderTravelItineraryPdf(full, contact, {
+      viewerWatermark: {
+        viewerName,
+        viewerEmail,
+        timestamp: new Date().toISOString(),
+      },
+    });
+    // Best-effort ITINERARY_PDF_DOWNLOAD audit row (PRD §4.7 — every
+    // document pull is traceable). Never blocks the download.
+    writeAudit(
+      "Itinerary",
+      "ITINERARY_PDF_DOWNLOAD",
+      full.id,
+      req.user.userId,
+      req.travelTenant.id,
+      { subBrand: full.subBrand, version: full.version || 1 },
+    ).catch(() => {});
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader(
       "Content-Disposition",
@@ -3298,6 +3424,30 @@ router.get("/itineraries/public/:shareToken", async (req, res) => {
     if (itin.status === "draft") {
       return res.status(404).json({ error: "Itinerary not yet shared", code: "NOT_SHARED" });
     }
+    // PRD §4.7 (gap A3) — expiry/revocation gate. 410 Gone (not 404: the
+    // resource existed; the link was withdrawn). Revoked wins over
+    // expired; legacy rows with NULL shareExpiresAt never expire — see
+    // lib/shareLinkPolicy.js for the full precedence contract.
+    const linkState = shareLinkState(itin);
+    if (linkState.code) {
+      return res.status(410).json({
+        error: linkState.code === "SHARE_REVOKED"
+          ? "This share link has been revoked"
+          : "This share link has expired",
+        code: linkState.code,
+      });
+    }
+    // Best-effort ITINERARY_SHARE_VIEW audit row (PRD §4.7 — who-viewed
+    // traceability for shared docs). Anonymous public viewer → no userId;
+    // writeAudit records it as a system-actor row. Never blocks.
+    writeAudit(
+      "Itinerary",
+      "ITINERARY_SHARE_VIEW",
+      itin.id,
+      null,
+      itin.tenantId,
+      { subBrand: itin.subBrand, shareToken: itin.shareToken },
+    ).catch(() => {});
     const total = itin.totalAmount ? Number(itin.totalAmount) : 0;
     const advanceRatio = await getTravelAdvanceRatio(prisma, itin.tenantId, itin.subBrand);
     const advanceDue = total > 0 ? Math.round(total * advanceRatio * 100) / 100 : 0;

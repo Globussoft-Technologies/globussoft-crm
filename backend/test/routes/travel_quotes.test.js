@@ -58,6 +58,20 @@ prisma.auditLog = {
 };
 prisma.revokedToken = prisma.revokedToken || {};
 prisma.revokedToken.findUnique = vi.fn().mockResolvedValue(null);
+// PRD §4.1 diagnostic-first guard (gap A6/A9): POST /quotes calls
+// assertCompletedDiagnostic → prisma.travelDiagnostic.count. Default to 1
+// (diagnostic exists) so the pre-guard contract tests stay green; the
+// guard-specific test below overrides to 0.
+prisma.travelDiagnostic = {
+  ...(prisma.travelDiagnostic || {}),
+  count: vi.fn().mockResolvedValue(1),
+};
+// Visa Sure complexity gate — only fires for subBrand visasure; stub so
+// non-tmc probes can't 500.
+prisma.visaApplication = {
+  ...(prisma.visaApplication || {}),
+  findFirst: vi.fn().mockResolvedValue(null),
+};
 
 import express from 'express';
 import request from 'supertest';
@@ -109,6 +123,8 @@ beforeEach(() => {
   prisma.user.findUnique.mockReset().mockResolvedValue({ role: 'ADMIN', subBrandAccess: null });
   prisma.auditLog.create.mockReset().mockResolvedValue({ id: 1 });
   prisma.auditLog.findFirst.mockReset().mockResolvedValue(null);
+  prisma.travelDiagnostic.count.mockReset().mockResolvedValue(1);
+  prisma.visaApplication.findFirst.mockReset().mockResolvedValue(null);
 });
 
 describe('POST /api/travel/quotes', () => {
@@ -146,6 +162,26 @@ describe('POST /api/travel/quotes', () => {
     );
     // Audit row must be written on create.
     expect(prisma.auditLog.create).toHaveBeenCalled();
+  });
+
+  test('rejects 422 DIAGNOSTIC_REQUIRED when contact has no completed diagnostic (PRD §4.1 gap A6/A9)', async () => {
+    prisma.travelDiagnostic.count.mockResolvedValue(0);
+    const res = await request(makeApp())
+      .post('/api/travel/quotes')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({
+        contactId: 99,
+        totalAmount: '45000.00',
+        currency: 'INR',
+        subBrand: 'tmc',
+        validUntil: tomorrowIso,
+      });
+    expect(res.status).toBe(422);
+    expect(res.body).toMatchObject({ code: 'DIAGNOSTIC_REQUIRED' });
+    expect(prisma.travelDiagnostic.count).toHaveBeenCalledWith({
+      where: { tenantId: 1, contactId: 99, subBrand: 'tmc' },
+    });
+    expect(prisma.travelQuote.create).not.toHaveBeenCalled();
   });
 
   test('rejects missing contactId with 400 MISSING_FIELDS', async () => {

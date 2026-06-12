@@ -321,6 +321,9 @@ jobs:
             tests/travel-quote-templates-api.spec.js \
             tests/travel-flyer-templates-api.spec.js \
             tests/admin-tenants-embed-allowlist-api.spec.js \
+            tests/travel-invoices-export-api.spec.js \
+            tests/travel-quotes-guards-api.spec.js \
+            tests/travel-flight-quotes-api.spec.js \
             tests/teardown-completeness.spec.js \
             tests/demo-hygiene-api.spec.js
 

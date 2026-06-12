@@ -25,7 +25,10 @@ import {
   runRetentionSweep,
   WELLNESS_DEFAULT_POLICIES,
   seedWellnessRetentionPolicies,
+  TRAVEL_DEFAULT_POLICIES,
+  seedTravelRetentionPolicies,
   ENTITY_MAP,
+  ENTITY_GUARDS,
   SOFT_DELETE_ENTITIES,
 } from '../../cron/retentionEngine.js';
 
@@ -48,6 +51,10 @@ beforeAll(() => {
   prisma.consentForm = { deleteMany: vi.fn(), updateMany: vi.fn() };
   prisma.treatmentPlan = { deleteMany: vi.fn(), updateMany: vi.fn() };
   prisma.attachment = { deleteMany: vi.fn(), updateMany: vi.fn() };
+  // Gap A4 (Q14) — travel models added to ENTITY_MAP.
+  prisma.contactAttachment = { deleteMany: vi.fn() };
+  prisma.voiceSession = { deleteMany: vi.fn() };
+  prisma.travelInvoice = { deleteMany: vi.fn() };
 });
 
 beforeEach(() => {
@@ -71,6 +78,9 @@ beforeEach(() => {
   prisma.treatmentPlan.updateMany.mockReset();
   prisma.attachment.deleteMany.mockReset();
   prisma.attachment.updateMany.mockReset();
+  prisma.contactAttachment.deleteMany.mockReset();
+  prisma.voiceSession.deleteMany.mockReset();
+  prisma.travelInvoice.deleteMany.mockReset();
   prisma.auditLog.create.mockReset();
   prisma.auditLog.create.mockResolvedValue({});
 });
@@ -465,6 +475,162 @@ describe('cron/retentionEngine — extended coverage', () => {
     expect(JSON.parse(byTenant[200].details).deleted).toBe(7);
   });
 
+});
+
+// ────────────────────────────────────────────────────────────────────
+// Gap A4 (Q14) — travel-vertical per-type retention.
+// PRD §4.7 + Q14 accepted GS defaults: passport/Aadhaar/PAN docs 24m,
+// call recordings 12m, financial 84m, diagnostic responses lifetime.
+// ────────────────────────────────────────────────────────────────────
+describe('cron/retentionEngine — travel entities (gap A4 / Q14)', () => {
+  test('ENTITY_MAP exposes the 3 travel entities; TravelDiagnostic is intentionally absent', () => {
+    expect(ENTITY_MAP).toMatchObject({
+      ContactAttachment: 'contactAttachment',
+      VoiceSession: 'voiceSession',
+      TravelInvoice: 'travelInvoice',
+    });
+    // Q14: diagnostic responses = lifetime of profile. No ENTITY_MAP
+    // entry means even a manually-created policy row can never purge it.
+    expect(ENTITY_MAP).not.toHaveProperty('TravelDiagnostic');
+  });
+
+  test('travel entities are hard-delete (not in SOFT_DELETE_ENTITIES)', () => {
+    expect(SOFT_DELETE_ENTITIES.has('ContactAttachment')).toBe(false);
+    expect(SOFT_DELETE_ENTITIES.has('VoiceSession')).toBe(false);
+    expect(SOFT_DELETE_ENTITIES.has('TravelInvoice')).toBe(false);
+  });
+
+  test('ContactAttachment sweep hard-deletes tenant-scoped rows older than cutoff', async () => {
+    prisma.retentionPolicy.findMany.mockResolvedValue([
+      { id: 21, isActive: true, entity: 'ContactAttachment', tenantId: 9, retainDays: 730 },
+    ]);
+    prisma.contactAttachment.deleteMany.mockResolvedValue({ count: 3 });
+
+    const summary = await runRetentionSweep();
+    expect(summary[0]).toMatchObject({ tenantId: 9, entity: 'ContactAttachment', deleted: 3 });
+    expect(prisma.contactAttachment.deleteMany).toHaveBeenCalledTimes(1);
+    const where = prisma.contactAttachment.deleteMany.mock.calls[0][0].where;
+    expect(where.tenantId).toBe(9);
+    expect(where.createdAt.lt).toBeInstanceOf(Date);
+    // No status guard on document sweeps — only tenant + cutoff.
+    expect(where.status).toBeUndefined();
+    const audit = prisma.auditLog.create.mock.calls[0][0].data;
+    expect(audit.entity).toBe('ContactAttachment');
+    expect(JSON.parse(audit.details).deleted).toBe(3);
+  });
+
+  test('VoiceSession sweep hard-deletes tenant-scoped rows older than cutoff', async () => {
+    prisma.retentionPolicy.findMany.mockResolvedValue([
+      { id: 22, isActive: true, entity: 'VoiceSession', tenantId: 9, retainDays: 365 },
+    ]);
+    prisma.voiceSession.deleteMany.mockResolvedValue({ count: 2 });
+
+    const summary = await runRetentionSweep();
+    expect(summary[0]).toMatchObject({ tenantId: 9, entity: 'VoiceSession', deleted: 2 });
+    const where = prisma.voiceSession.deleteMany.mock.calls[0][0].where;
+    expect(where.tenantId).toBe(9);
+    expect(where.createdAt.lt).toBeInstanceOf(Date);
+  });
+
+  test('TravelInvoice sweep applies the open-receivable guard (Issued/Partial never purged)', async () => {
+    prisma.retentionPolicy.findMany.mockResolvedValue([
+      { id: 23, isActive: true, entity: 'TravelInvoice', tenantId: 9, retainDays: 2555 },
+    ]);
+    prisma.travelInvoice.deleteMany.mockResolvedValue({ count: 4 });
+
+    const summary = await runRetentionSweep();
+    expect(summary[0]).toMatchObject({ tenantId: 9, entity: 'TravelInvoice', deleted: 4 });
+
+    expect(prisma.travelInvoice.deleteMany).toHaveBeenCalledTimes(1);
+    const where = prisma.travelInvoice.deleteMany.mock.calls[0][0].where;
+    // Status allowlist — open receivables (Issued/Partial) excluded.
+    expect(where.status).toEqual({ in: ['Draft', 'Paid', 'Voided'] });
+    expect(where.status.in).not.toContain('Issued');
+    expect(where.status.in).not.toContain('Partial');
+    // Guard merges in FIRST — tenant scope + cutoff still win.
+    expect(where.tenantId).toBe(9);
+    expect(where.createdAt.lt).toBeInstanceOf(Date);
+  });
+
+  test('ENTITY_GUARDS shape is pinned — TravelInvoice only, allowlist form', () => {
+    expect(Object.keys(ENTITY_GUARDS)).toEqual(['TravelInvoice']);
+    expect(ENTITY_GUARDS.TravelInvoice).toEqual({ status: { in: ['Draft', 'Paid', 'Voided'] } });
+  });
+
+  test('a guard can never widen the sweep — tenantId/createdAt are spread after the guard', async () => {
+    // Even if a (hypothetical, misconfigured) guard carried tenantId or
+    // createdAt keys, the engine spreads the mandatory scoping LAST so
+    // the policy's tenant + cutoff always apply. Pin via the real
+    // TravelInvoice guard: tenantId in the final where equals the
+    // policy's tenant, not anything guard-derived.
+    prisma.retentionPolicy.findMany.mockResolvedValue([
+      { id: 24, isActive: true, entity: 'TravelInvoice', tenantId: 314, retainDays: 2555 },
+    ]);
+    prisma.travelInvoice.deleteMany.mockResolvedValue({ count: 0 });
+
+    await runRetentionSweep();
+    const where = prisma.travelInvoice.deleteMany.mock.calls[0][0].where;
+    expect(where.tenantId).toBe(314);
+    expect(where.createdAt.lt).toBeInstanceOf(Date);
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────
+// Gap A4 (Q14) — seedTravelRetentionPolicies idempotent helper.
+// ────────────────────────────────────────────────────────────────────
+describe('seedTravelRetentionPolicies (gap A4 / Q14)', () => {
+  test('creates the 4 default rows when none exist', async () => {
+    prisma.retentionPolicy.findUnique.mockResolvedValue(null);
+    prisma.retentionPolicy.create.mockImplementation(async ({ data }) => ({ id: 1, ...data }));
+
+    const created = await seedTravelRetentionPolicies(42);
+
+    expect(created.length).toBe(4);
+    expect(created.map(r => r.entity).sort()).toEqual([
+      'CallLog', 'ContactAttachment', 'TravelInvoice', 'VoiceSession',
+    ]);
+  });
+
+  test('skips rows that already exist (idempotent — admin tweaks survive re-runs)', async () => {
+    prisma.retentionPolicy.findUnique.mockImplementation(async ({ where }) => {
+      const e = where.tenantId_entity.entity;
+      return (e === 'CallLog' || e === 'TravelInvoice') ? { id: 1, entity: e } : null;
+    });
+    prisma.retentionPolicy.create.mockImplementation(async ({ data }) => ({ id: 1, ...data }));
+
+    const created = await seedTravelRetentionPolicies(42);
+
+    expect(created.length).toBe(2);
+    expect(created.map(r => r.entity).sort()).toEqual(['ContactAttachment', 'VoiceSession']);
+  });
+
+  test('returns [] for falsy tenantId', async () => {
+    expect(await seedTravelRetentionPolicies(null)).toEqual([]);
+    expect(await seedTravelRetentionPolicies(0)).toEqual([]);
+    expect(prisma.retentionPolicy.create).not.toHaveBeenCalled();
+  });
+
+  test('default windows match Q14: docs 24m, calls 12m, financial 84m; all isActive=false', () => {
+    const byEntity = Object.fromEntries(TRAVEL_DEFAULT_POLICIES.map(p => [p.entity, p]));
+    // 730 days = 24 months (passport/Aadhaar/PAN documents).
+    expect(byEntity.ContactAttachment.retainDays).toBe(730);
+    // 365 days = 12 months (call recordings, both telephony surfaces).
+    expect(byEntity.CallLog.retainDays).toBe(365);
+    expect(byEntity.VoiceSession.retainDays).toBe(365);
+    // 2555 days = ~84 months / 7y (financial records).
+    expect(byEntity.TravelInvoice.retainDays).toBe(2555);
+    // Q14: diagnostic responses = lifetime of profile → NO policy row.
+    expect(byEntity.TravelDiagnostic).toBeUndefined();
+    expect(TRAVEL_DEFAULT_POLICIES.length).toBe(4);
+    // isActive=false — admins must explicitly enable purge (mirrors the
+    // wellness clinical-defaults convention).
+    TRAVEL_DEFAULT_POLICIES.forEach(p => {
+      expect(p.isActive).toBe(false);
+    });
+  });
+});
+
+describe('cron/retentionEngine — extended coverage (cont.)', () => {
   test('hard-delete entities report softDeleted=0 in summary (no double-counting)', async () => {
     // The summary shape always carries softDeleted, but for non-SOFT_DELETE
     // entities it must be 0 — never inherit a stale value from a prior loop

@@ -22,6 +22,12 @@
 // Pins use L.divIcon (a numbered circle) rather than the default Leaflet
 // marker image, which sidesteps the well-known marker-asset 404 under
 // bundlers — no icon-image import/patch needed.
+//
+// PRD §4.3 RFU preference filters (gap A7): a collapsible "Hotel rates"
+// finder panel queries the cost-master rate book filtered by hotel
+// preference attributes (Haram/Kaaba-facing view, floor level, room
+// category) so advisors can check preference-matching supplier rates while
+// organising days. Read-only lookup — adding items stays on the detail page.
 
 import { useEffect, useState, useCallback, useMemo } from "react";
 import { useParams, Link } from "react-router-dom";
@@ -39,6 +45,42 @@ const ITEM_ICONS = {
   flight: Plane, train: Train, bus: Bus, cab: Car, transfer: MapPin,
   hotel: Hotel, sightseeing: Camera, activity: Briefcase, meals: Utensils,
   visa: FileText, insurance: Shield, other: Package,
+};
+
+// Hotel preference vocabulary — mirrors backend/routes/travel_cost_master.js
+// HOTEL_ATTRIBUTES (PRD §4.3 RFU preference filters).
+const HOTEL_VIEWS = [
+  { value: "", label: "View (any)" },
+  { value: "haram_facing", label: "Haram facing" },
+  { value: "kaaba_facing", label: "Kaaba facing" },
+  { value: "city_view", label: "City view" },
+  { value: "standard", label: "Standard" },
+];
+const HOTEL_FLOORS = [
+  { value: "", label: "Floor (any)" },
+  { value: "low", label: "Low floor" },
+  { value: "mid", label: "Mid floor" },
+  { value: "high", label: "High floor" },
+];
+const ATTR_LABELS = {
+  haram_facing: "Haram facing", kaaba_facing: "Kaaba facing",
+  city_view: "City view", standard: "Standard",
+  low: "Low floor", mid: "Mid floor", high: "High floor",
+};
+
+function rateAttrChips(attributes) {
+  const chips = [];
+  if (attributes?.view) chips.push(ATTR_LABELS[attributes.view] || String(attributes.view));
+  if (attributes?.floorLevel) chips.push(ATTR_LABELS[attributes.floorLevel] || String(attributes.floorLevel));
+  if (attributes?.roomCategory) chips.push(String(attributes.roomCategory));
+  return chips;
+}
+
+const rateSelect = {
+  padding: "0.35rem 0.5rem", borderRadius: 6,
+  border: "1px solid var(--border-color)",
+  background: "var(--surface-color)", color: "var(--text-primary)",
+  fontSize: "0.8rem", minWidth: 140,
 };
 
 function dayPin(dayNumber) {
@@ -85,6 +127,32 @@ export default function ItineraryEditor() {
   const [extraDays, setExtraDays] = useState(0); // local "+ Add day" beyond derived count
   const [dragId, setDragId] = useState(null);
   const [selectedId, setSelectedId] = useState(null); // item selected for "click map to place"
+
+  // Hotel rate finder (PRD §4.3 preference filters) — collapsible panel
+  // querying /api/travel/cost-master?category=hotel with view/floorLevel/
+  // roomCategory filters.
+  const [showRates, setShowRates] = useState(false);
+  const [ratePrefs, setRatePrefs] = useState({ view: "", floorLevel: "", roomCategory: "" });
+  const [rateResults, setRateResults] = useState([]);
+  const [ratesLoading, setRatesLoading] = useState(false);
+
+  useEffect(() => {
+    if (!showRates) return undefined;
+    let cancelled = false;
+    // Small debounce so the roomCategory text input doesn't fire per keystroke.
+    const t = setTimeout(() => {
+      const qs = new URLSearchParams({ category: "hotel", active: "true", limit: "20" });
+      if (ratePrefs.view) qs.set("view", ratePrefs.view);
+      if (ratePrefs.floorLevel) qs.set("floorLevel", ratePrefs.floorLevel);
+      if (ratePrefs.roomCategory.trim()) qs.set("roomCategory", ratePrefs.roomCategory.trim());
+      setRatesLoading(true);
+      fetchApi(`/api/travel/cost-master?${qs.toString()}`)
+        .then((res) => { if (!cancelled) setRateResults(Array.isArray(res?.rates) ? res.rates : []); })
+        .catch(() => { if (!cancelled) setRateResults([]); })
+        .finally(() => { if (!cancelled) setRatesLoading(false); });
+    }, 300);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [showRates, ratePrefs]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -217,7 +285,67 @@ export default function ItineraryEditor() {
         <span style={{ fontSize: "0.78rem", color: "var(--text-secondary)" }}>
           Drag items between days · {mapItems.length}/{items.length} plotted on map
         </span>
+        <button
+          type="button"
+          onClick={() => setShowRates((s) => !s)}
+          style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: "0.35rem", padding: "0.35rem 0.7rem", border: "1px solid var(--border-color)", borderRadius: 6, background: showRates ? "var(--subtle-bg, rgba(0,0,0,0.04))" : "transparent", color: "var(--text-primary)", cursor: "pointer", fontSize: "0.8rem" }}
+        >
+          <Hotel size={14} /> Hotel rates {showRates ? "▾" : "▸"}
+        </button>
       </div>
+
+      {/* Hotel rate finder — preference-filtered cost-master lookup (PRD §4.3). */}
+      {showRates && (
+        <div style={{ border: "1px solid var(--border-color)", borderRadius: 10, background: "var(--surface-color)", padding: "0.75rem", display: "flex", flexDirection: "column", gap: "0.6rem" }}>
+          <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", alignItems: "center" }}>
+            <select
+              value={ratePrefs.view}
+              onChange={(e) => setRatePrefs((p) => ({ ...p, view: e.target.value }))}
+              style={rateSelect}
+              aria-label="View preference"
+            >
+              {HOTEL_VIEWS.map((v) => <option key={v.value} value={v.value}>{v.label}</option>)}
+            </select>
+            <select
+              value={ratePrefs.floorLevel}
+              onChange={(e) => setRatePrefs((p) => ({ ...p, floorLevel: e.target.value }))}
+              style={rateSelect}
+              aria-label="Floor preference"
+            >
+              {HOTEL_FLOORS.map((f) => <option key={f.value} value={f.value}>{f.label}</option>)}
+            </select>
+            <input
+              value={ratePrefs.roomCategory}
+              onChange={(e) => setRatePrefs((p) => ({ ...p, roomCategory: e.target.value }))}
+              placeholder="Room category (e.g. Deluxe)"
+              style={{ ...rateSelect, minWidth: 180 }}
+              aria-label="Room category"
+            />
+            <span style={{ fontSize: "0.72rem", color: "var(--text-secondary)" }}>
+              {ratesLoading ? "Searching…" : `${rateResults.length} matching rate${rateResults.length === 1 ? "" : "s"}`}
+            </span>
+          </div>
+          {!ratesLoading && rateResults.length === 0 && (
+            <div style={{ fontSize: "0.78rem", color: "var(--text-secondary)", padding: "0.4rem 0" }}>
+              No hotel rates match these preferences.
+            </div>
+          )}
+          {rateResults.map((r) => (
+            <div key={r.id} style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap", padding: "0.4rem 0.5rem", border: "1px solid var(--border-color)", borderRadius: 6, background: "var(--subtle-bg, rgba(0,0,0,0.02))" }}>
+              <Hotel size={14} style={{ color: "var(--primary-color, var(--accent-color))", flexShrink: 0 }} />
+              <code style={{ fontSize: "0.75rem" }}>{r.routeOrSku}</code>
+              <span style={{ fontSize: "0.8rem", fontWeight: 600, color: "var(--text-primary)" }}>
+                ₹{Number(r.baseRate).toLocaleString()}
+              </span>
+              {rateAttrChips(r.attributes).map((c) => (
+                <span key={c} style={{ padding: "1px 7px", borderRadius: 10, fontSize: "0.68rem", fontWeight: 600, border: "1px solid var(--border-color)", color: "var(--text-secondary)", whiteSpace: "nowrap" }}>
+                  {c}
+                </span>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
 
       <div style={{ display: "flex", gap: "1rem", flex: 1, minHeight: 0, flexWrap: "wrap" }}>
         {/* Day cards */}

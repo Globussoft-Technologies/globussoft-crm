@@ -14,14 +14,16 @@
 //   - Pricing rules     seasons + markup rules
 //
 // Plus a "Recent trips" panel below with the newest 5 trips and quick
-// links into the detail page.
+// links into the detail page, and — for MANAGER/ADMIN — a "Team workload"
+// panel backed by GET /api/travel/dashboard/workload (PRD §4.1 manager
+// view: open/overdue tasks per staff member with a per-brand split).
 
 import { useContext, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   AlertCircle, BadgePercent, Calendar as CalendarIcon,
   ClipboardCheck, Compass, IndianRupee, FileText, Globe, Luggage,
-  Map as MapIcon, RefreshCw,
+  Map as MapIcon, RefreshCw, Users,
 } from "lucide-react";
 import { AuthContext } from "../../App";
 import { fetchApi } from "../../utils/api";
@@ -34,6 +36,10 @@ export default function TravelDashboard() {
   const { activeSubBrand } = useActiveSubBrand();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  // Team workload (PRD §4.1 manager view, gap A9b) — MANAGER/ADMIN only;
+  // the endpoint 403s for USER role so we don't even fetch for them.
+  const isManager = user?.role === "ADMIN" || user?.role === "MANAGER";
+  const [workload, setWorkload] = useState(null);
 
   const load = () => {
     setLoading(true);
@@ -48,6 +54,13 @@ export default function TravelDashboard() {
         setData(null);
       })
       .finally(() => setLoading(false));
+    // Workload is a secondary panel — failures degrade to "panel hidden"
+    // rather than a page-level error toast.
+    if (isManager) {
+      fetchApi(`/api/travel/dashboard/workload${qs}`)
+        .then(setWorkload)
+        .catch(() => setWorkload(null));
+    }
   };
   // Re-fetch on mount AND whenever the active sub-brand changes, so flipping
   // the switcher recomputes the KPI tiles instead of showing stale "All" data.
@@ -164,6 +177,60 @@ export default function TravelDashboard() {
             )}
           </section>
 
+          {isManager && workload && (
+            <section style={{ ...card, marginTop: 16 }}>
+              <h2 style={sectionTitle}>
+                <Users size={18} aria-hidden style={{ marginRight: 6, verticalAlign: -3 }} />
+                Team workload
+              </h2>
+              {workload.perUser.length === 0 && workload.unassigned.openTasks === 0 ? (
+                <div style={empty}>No open tasks across the team.</div>
+              ) : (
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr>
+                      <th style={th}>Staff</th>
+                      <th style={th}>Role</th>
+                      <th style={th}>Open</th>
+                      <th style={th}>Overdue</th>
+                      <th style={th}>By brand</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {workload.perUser.map((r) => (
+                      <tr key={r.userId} style={trStyle}>
+                        <td style={td}>{r.name || r.email || `User #${r.userId}`}</td>
+                        <td style={td}>{r.role || "—"}</td>
+                        <td style={td}>{r.openTasks}</td>
+                        <td style={td}>
+                          <span style={overdueStyle(r.overdueTasks)}>{r.overdueTasks}</span>
+                        </td>
+                        <td style={td}>{brandSplit(r.bySubBrand)}</td>
+                      </tr>
+                    ))}
+                    {workload.unassigned.openTasks > 0 && (
+                      <tr style={trStyle}>
+                        <td style={{ ...td, fontStyle: "italic" }}>Unassigned</td>
+                        <td style={td}>—</td>
+                        <td style={td}>{workload.unassigned.openTasks}</td>
+                        <td style={td}>
+                          <span style={overdueStyle(workload.unassigned.overdueTasks)}>
+                            {workload.unassigned.overdueTasks}
+                          </span>
+                        </td>
+                        <td style={td}>{brandSplit(workload.unassigned.bySubBrand)}</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              )}
+              <p style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 8, marginBottom: 0 }}>
+                {workload.totals.openTasks} open · {workload.totals.overdueTasks} overdue team-wide.
+                Brand split comes from each task&apos;s linked contact; untagged tasks show as &ldquo;untagged&rdquo;.
+              </p>
+            </section>
+          )}
+
           <p style={{ marginTop: 16, fontSize: 12, color: "var(--text-secondary)" }}>
             <FileText size={12} aria-hidden style={{ marginRight: 4, verticalAlign: -1 }} />
             Sub-brand scope, RBAC, and PII gates apply server-side. Drill into the linked surfaces above to see participant-level detail.
@@ -215,6 +282,23 @@ function byKeyFooter(obj) {
 function fmtDate(d) {
   if (!d) return "—";
   return new Date(d).toLocaleDateString();
+}
+
+// "tmc: 3 (1 late) · rfu: 2" from a workload bySubBrand split. "_none"
+// (task whose contact carries no sub-brand tag, or no contact at all)
+// renders as "untagged".
+function brandSplit(by) {
+  const entries = Object.entries(by || {}).filter(([, v]) => v && v.open > 0);
+  if (entries.length === 0) return "—";
+  return entries
+    .map(([k, v]) => `${k === "_none" ? "untagged" : k}: ${v.open}${v.overdue > 0 ? ` (${v.overdue} late)` : ""}`)
+    .join(" · ");
+}
+
+function overdueStyle(count) {
+  return count > 0
+    ? { color: "var(--danger-color)", fontWeight: 600 }
+    : { color: "var(--text-secondary)" };
 }
 
 function statusBadge(status) {

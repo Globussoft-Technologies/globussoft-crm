@@ -5420,6 +5420,8 @@ model Itinerary {
   pax               Int             @default(1)
   pdfUrl            String?
   shareToken        String?         @unique // WhatsApp/email share link
+  shareExpiresAt    DateTime?
+  shareRevokedAt    DateTime?
   // Phase 2 — 50% advance booking pattern (PRD §4.7 Travel Stall). All
   // three fields nullable + additive so existing Itinerary rows backfill
   // implicitly. advancePaidAmount is the rupee amount the customer has
@@ -5699,6 +5701,38 @@ model TripParticipant {
   updatedAt              DateTime            @updatedAt
 
   @@index([tripId])
+}
+
+// Unified customer-portal passport store — PRD_PASSPORT_OCR, all 4 sub-brands
+// (TMC parents, RFU pilgrims, Travel Stall families, Visa Sure applicants).
+// Customers register the people travelling with them + upload each passport
+// from the portal, keyed to the owning Contact (contactId) rather than to a
+// sub-brand-specific booking model (TmcTrip / Itinerary / VisaApplication) —
+// so the one "Travel Documents" surface works regardless of sub-brand.
+//
+// Mirrors the passport extraction + verification columns on TripParticipant
+// so the staff verification queue (routes/travel_passport.js) reviews both
+// sources in one place. contactId / tenantId are bare scalars (no relation
+// navigation needed; tenant scoping is enforced in the route WHERE clause).
+model CustomerTraveller {
+  id                     Int       @id @default(autoincrement())
+  tenantId               Int       @default(1)
+  contactId              Int // owning portal customer (Contact)
+  subBrand               String // tmc | rfu | travel_stall | visa_sure (snapshot of Contact.subBrand)
+  fullName               String
+  relationship           String? // self | spouse | child | parent | other
+  passportNumber         String?
+  passportExpiry         DateTime?
+  passportExtractionJson String?   @db.Text
+  passportExtractedAt    DateTime?
+  passportVerifiedAt     DateTime?
+  passportVerifiedById   Int?
+  passportRejectedAt     DateTime?
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+
+  @@index([tenantId, contactId])
+  @@index([tenantId, passportVerifiedAt])
 }
 
 // PRD §4.5 + §4.7 — DigiLocker OAuth flow state. Created on /initiate

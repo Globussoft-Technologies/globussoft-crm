@@ -12,7 +12,7 @@ import { useParams, Link } from "react-router-dom";
 import {
   Luggage, ChevronLeft, ChevronUp, ChevronDown, Users, BedDouble, Wallet, Globe,
   ExternalLink, Plus, Trash2, Edit3, Calendar as CalendarIcon, Copy, Save,
-  Bold, Italic, Heading, Link2, List, Image as ImageIcon, Eye, Download,
+  Bold, Italic, Heading, Link2, List, Image as ImageIcon, Eye, Download, Upload,
 } from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
@@ -257,14 +257,172 @@ function ParticipantsTab({ trip, onChange, notify }) {
                 {p.parentName && <span style={{ color: "var(--text-secondary)", marginLeft: 8, fontSize: 13 }}>· parent: {p.parentName}</span>}
                 {p.parentPhone && <span style={{ color: "var(--text-secondary)", marginLeft: 8, fontSize: 13 }}>{p.parentPhone}</span>}
               </div>
-              <button type="button" onClick={() => remove(p.id)} style={iconBtn} aria-label={`Remove ${p.fullName}`}>
-                <Trash2 size={14} />
-              </button>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <PassportCell participant={p} notify={notify} onChange={onChange} />
+                <button type="button" onClick={() => remove(p.id)} style={iconBtn} aria-label={`Remove ${p.fullName}`}>
+                  <Trash2 size={14} />
+                </button>
+              </div>
             </div>
           ))
         )}
       </div>
     </div>
+  );
+}
+
+// ─── Passport upload cell (PRD_PASSPORT_OCR FR-1 operator-side) ──────
+//
+// Per-participant upload control feeding the verification queue at
+// /travel/passport-verification. Status derives from the passport columns
+// the trip GET already returns on each participant row:
+//   passportVerifiedAt   → "Passport verified" badge + Clear & re-upload
+//   passportRejectedAt   → "Passport rejected" badge + Re-upload CTA
+//   passportExtractedAt  → "Pending verification" badge + Re-upload CTA
+//   (none)               → "No passport" badge + Upload CTA
+// No plain upload CTA once verified: the upload route keeps
+// passportVerifiedAt intact, so a fresh extraction would never re-enter
+// the queue (it filters on verifiedAt IS NULL). The Clear & re-upload
+// action calls DELETE /passport-extraction (ADMIN/MANAGER-gated
+// server-side), which resets all markers so the next upload queues
+// normally. The queue page can't host that reset — it only lists
+// unverified rows.
+//
+// Upload calls pass { silent: true } and own ALL error toasts locally:
+// fetchApi's auto-toast would otherwise show the raw server string next
+// to (not deduped against) the friendlier vendor-pending copy below.
+
+const PASSPORT_ACCEPT = ".jpg,.jpeg,.png,.pdf,image/jpeg,image/png,application/pdf";
+// Mirrors the multer cap in backend/routes/travel_passport.js (PRD FR-1).
+const PASSPORT_MAX_BYTES = 5 * 1024 * 1024;
+
+function passportState(p) {
+  if (p.passportVerifiedAt) return { label: "Passport verified", bg: "rgba(47,122,77,0.14)", color: "#2F7A4D", canUpload: false };
+  if (p.passportRejectedAt) return { label: "Passport rejected", bg: "rgba(168,50,63,0.14)", color: "#A8323F", canUpload: true };
+  if (p.passportExtractedAt) return { label: "Pending verification", bg: "rgba(200,154,78,0.18)", color: "#9A6F2E", canUpload: true };
+  return { label: "No passport", bg: "var(--subtle-bg)", color: "var(--text-secondary)", canUpload: true };
+}
+
+function PassportCell({ participant: p, notify, onChange }) {
+  const fileRef = useRef(null);
+  const [busy, setBusy] = useState(false);
+  const state = passportState(p);
+  // WCAG 2.5.3 Label in Name — the accessible name must contain the
+  // visible text, so the aria-label tracks the Re-upload/Upload state.
+  const isReupload = Boolean(p.passportExtractedAt || p.passportRejectedAt);
+  const ctaText = isReupload ? "Re-upload" : "Upload passport";
+  const ctaAria = `${isReupload ? "Re-upload" : "Upload"} passport for ${p.fullName}`;
+
+  const handleFile = async (e) => {
+    const file = e.target.files && e.target.files[0];
+    // Reset so picking the same file again still fires onChange.
+    e.target.value = "";
+    if (!file) return;
+    const mime = (file.type || "").toLowerCase();
+    if (!["image/jpeg", "image/png", "application/pdf"].includes(mime)) {
+      notify.error("Unsupported file type — JPG, PNG or PDF only");
+      return;
+    }
+    if (file.size > PASSPORT_MAX_BYTES) {
+      notify.error("File exceeds the 5 MB limit");
+      return;
+    }
+    const fd = new FormData();
+    fd.append("file", file);
+    setBusy(true);
+    try {
+      await fetchApi(`/api/travel/passport/participants/${p.id}/passport-upload`, {
+        method: "POST",
+        body: fd,
+        silent: true,
+      });
+      notify.success(`Passport uploaded for ${p.fullName} — queued for verification`);
+      onChange();
+    } catch (err) {
+      // silent:true skips fetchApi's 401 redirect — restore it here since
+      // this is a user-initiated action (an expired session must boot).
+      if (err?.status === 401) {
+        window.location.href = "/login";
+        return;
+      }
+      if (err?.code === "PASSPORT_OCR_NOT_YET_ENABLED") {
+        notify.error("Passport OCR isn't enabled for this tenant yet (vendor integration pending) — please try again after it goes live.");
+      } else {
+        notify.error(err?.data?.error || err?.message || "Failed to upload passport");
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Verified-state escape hatch: a verified passport that needs replacing
+  // (renewal, mistaken approval) has to be cleared first. Rendered for all
+  // roles (this page does no client-side role gating); the DELETE route
+  // 403s non-ADMIN/MANAGER users with a friendly RBAC toast.
+  const clearAndReupload = async () => {
+    if (!confirm(`Clear ${p.fullName}'s verified passport so a new one can be uploaded?`)) return;
+    setBusy(true);
+    try {
+      await fetchApi(`/api/travel/passport/participants/${p.id}/passport-extraction`, {
+        method: "DELETE",
+      });
+      notify.success("Passport extraction cleared — upload a new one");
+      onChange();
+    } catch (err) {
+      notify.error(err?.data?.error || "Failed to clear passport extraction");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+      <span style={{
+        background: state.bg, color: state.color,
+        padding: "3px 10px", borderRadius: 12, fontSize: 11, fontWeight: 600,
+        whiteSpace: "nowrap",
+      }}>
+        {state.label}
+      </span>
+      {state.canUpload ? (
+        <>
+          <button
+            type="button"
+            onClick={() => fileRef.current && fileRef.current.click()}
+            disabled={busy}
+            aria-label={ctaAria}
+            style={{
+              ...secondaryBtn, padding: "5px 10px", fontSize: 12,
+              opacity: busy ? 0.6 : 1, cursor: busy ? "wait" : "pointer",
+            }}
+          >
+            <Upload size={13} aria-hidden /> {busy ? "Uploading…" : ctaText}
+          </button>
+          <input
+            ref={fileRef}
+            type="file"
+            accept={PASSPORT_ACCEPT}
+            onChange={handleFile}
+            disabled={busy}
+            aria-label={`Passport file for ${p.fullName}`}
+            style={visuallyHiddenInput}
+          />
+        </>
+      ) : (
+        <button
+          type="button"
+          onClick={clearAndReupload}
+          disabled={busy}
+          aria-label={`Clear & re-upload passport for ${p.fullName}`}
+          style={{
+            ...secondaryBtn, padding: "5px 10px", fontSize: 12,
+            opacity: busy ? 0.6 : 1, cursor: busy ? "wait" : "pointer",
+          }}
+        >
+          Clear &amp; re-upload
+        </button>
+      )}
+    </span>
   );
 }
 
@@ -1320,4 +1478,10 @@ const iconBtn = {
   padding: 6, borderRadius: 4,
   background: "transparent", color: "var(--text-secondary)",
   border: "none", cursor: "pointer",
+};
+// Visually hidden but still in the accessibility tree (display:none would
+// drop it for screen readers AND RTL label queries).
+const visuallyHiddenInput = {
+  position: "absolute", width: 1, height: 1, padding: 0, margin: -1,
+  overflow: "hidden", clip: "rect(0 0 0 0)", whiteSpace: "nowrap", border: 0,
 };

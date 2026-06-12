@@ -141,6 +141,23 @@ test.beforeAll(async ({ request }) => {
   }
   if (!testContactId) return;
 
+  // PRD §4.1 diagnostic-first guard: POST /quotes now refuses 422
+  // DIAGNOSTIC_REQUIRED for a contact without a prior diagnostic for the
+  // subBrand. Submit one against the seeded TMC bank v1 so the parent
+  // quote create below passes the guard (seed-travel.js seeds one).
+  const banksRes = await get(request, token, "/api/travel/diagnostic-banks?subBrand=tmc&active=true");
+  if (banksRes.ok()) {
+    const banks = (await banksRes.json()).banks || [];
+    const tmcBank = banks.find((b) => b.subBrand === "tmc");
+    if (tmcBank) {
+      await post(request, token, "/api/travel/diagnostics", {
+        bankId: tmcBank.id,
+        answers: { q1: "few", q2: "medium" },
+        contactId: testContactId,
+      }).catch(() => null);
+    }
+  }
+
   // Create the parent TravelQuote that all line-item tests will attach to.
   // Status Draft + a far-future validUntil so the row stays valid across
   // the spec's wall-clock + any retry budget.

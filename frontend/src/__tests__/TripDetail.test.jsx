@@ -1185,3 +1185,240 @@ describe('<TripDetail /> — StatusBadge fallback', () => {
     expect(screen.getByText('pending-approval')).toBeInTheDocument();
   });
 });
+
+// ─── EXTENSION WAVE 3 — 2026-06-12 ──────────────────────────────────────
+//
+// Passport OCR upload cell (PassportCell) on the Participants tab —
+// the operator-side upload surface feeding the verification queue
+// (backend/routes/travel_passport.js POST /participants/:id/passport-upload).
+//
+// Backend contract pinned:
+//   POST /api/travel/passport/participants/:id/passport-upload
+//     multipart, field name "file" → 201 { extraction, confidence, ... }
+//     503 { code: 'PASSPORT_OCR_NOT_YET_ENABLED' } when vendor disabled.
+// Client-side guards mirror the route's multer config: 5 MB cap, JPG/PNG/PDF.
+//
+// Badge state matrix (from participant passport columns on the trip GET):
+//   passportVerifiedAt   → "Passport verified", NO upload CTA, Clear &
+//                          re-upload CTA instead (DELETE /passport-extraction)
+//   passportRejectedAt   → "Passport rejected" + Re-upload CTA
+//   passportExtractedAt  → "Pending verification" + Re-upload CTA
+//   none                 → "No passport" + "Upload passport" CTA
+//
+// The upload POST passes { silent: true } — fetchApi's auto-toast would
+// stack a second (different-string, so un-deduped) toast next to the
+// component's vendor-pending copy. The component owns all error toasts.
+
+describe('<TripDetail /> — Participants passport upload', () => {
+  function makeFile(name = 'passport.jpg', type = 'image/jpeg', size = 1024) {
+    const f = new File(['x'], name, { type });
+    Object.defineProperty(f, 'size', { value: size });
+    return f;
+  }
+
+  async function openParticipantsTab() {
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
+    await screen.findByText('Anaya Sharma');
+  }
+
+  it('renders the four passport status badges from the participant columns', async () => {
+    installFetchMock({
+      trip: makeTrip({
+        participants: [
+          { id: 901, fullName: 'Anaya Sharma' },
+          { id: 902, fullName: 'Kabir Mehta', passportExtractedAt: '2026-06-01T10:00:00.000Z' },
+          { id: 903, fullName: 'Riya Singh', passportExtractedAt: '2026-06-01T10:00:00.000Z', passportVerifiedAt: '2026-06-02T10:00:00.000Z' },
+          { id: 904, fullName: 'Dev Patel', passportExtractedAt: '2026-06-01T10:00:00.000Z', passportRejectedAt: '2026-06-02T10:00:00.000Z' },
+        ],
+      }),
+    });
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
+    expect(await screen.findByText('No passport')).toBeInTheDocument();
+    expect(screen.getByText('Pending verification')).toBeInTheDocument();
+    expect(screen.getByText('Passport verified')).toBeInTheDocument();
+    expect(screen.getByText('Passport rejected')).toBeInTheDocument();
+    // Un-uploaded participant gets the "Upload passport" CTA; extracted +
+    // rejected get "Re-upload".
+    expect(screen.getByRole('button', { name: /Upload passport for Anaya Sharma/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Upload passport for Kabir Mehta/i })).toHaveTextContent(/Re-upload/);
+    expect(screen.getByRole('button', { name: /Upload passport for Dev Patel/i })).toHaveTextContent(/Re-upload/);
+  });
+
+  it('VERIFIED participant shows the badge + Clear & re-upload CTA but NO upload CTA', async () => {
+    installFetchMock({
+      trip: makeTrip({
+        participants: [
+          { id: 903, fullName: 'Riya Singh', passportExtractedAt: '2026-06-01T10:00:00.000Z', passportVerifiedAt: '2026-06-02T10:00:00.000Z' },
+        ],
+      }),
+    });
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
+    expect(await screen.findByText('Passport verified')).toBeInTheDocument();
+    // Anchored — the Clear CTA's name ends with "...passport for Riya Singh"
+    // too, so an unanchored regex would false-match it.
+    expect(screen.queryByRole('button', { name: /^Upload passport for Riya Singh$/i })).toBeNull();
+    expect(screen.queryByLabelText(/Passport file for Riya Singh/i)).toBeNull();
+    // The escape hatch for verified passports needing replacement.
+    expect(
+      screen.getByRole('button', { name: /Clear & re-upload passport for Riya Singh/i }),
+    ).toBeInTheDocument();
+  });
+
+  it('Clear & re-upload on a VERIFIED participant DELETEs the extraction + reloads', async () => {
+    installFetchMock({
+      trip: makeTrip({
+        participants: [
+          { id: 903, fullName: 'Riya Singh', passportExtractedAt: '2026-06-01T10:00:00.000Z', passportVerifiedAt: '2026-06-02T10:00:00.000Z' },
+        ],
+      }),
+    });
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
+    await screen.findByText('Passport verified');
+    fireEvent.click(screen.getByRole('button', { name: /Clear & re-upload passport for Riya Singh/i }));
+    await waitFor(() => {
+      const del = fetchApiMock.mock.calls.find(
+        ([u, o]) => u === '/api/travel/passport/participants/903/passport-extraction' && o?.method === 'DELETE',
+      );
+      expect(del).toBeTruthy();
+    });
+    expect(notifySuccess).toHaveBeenCalledWith(
+      expect.stringMatching(/cleared/i),
+    );
+  });
+
+  it('Clear & re-upload with confirm()=false short-circuits — no DELETE fires', async () => {
+    vi.stubGlobal('confirm', vi.fn(() => false));
+    installFetchMock({
+      trip: makeTrip({
+        participants: [
+          { id: 903, fullName: 'Riya Singh', passportExtractedAt: '2026-06-01T10:00:00.000Z', passportVerifiedAt: '2026-06-02T10:00:00.000Z' },
+        ],
+      }),
+    });
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
+    await screen.findByText('Passport verified');
+    fetchApiMock.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: /Clear & re-upload passport for Riya Singh/i }));
+    await Promise.resolve();
+    const dels = fetchApiMock.mock.calls.filter(([, o]) => o?.method === 'DELETE');
+    expect(dels.length).toBe(0);
+  });
+
+  it('happy path: selecting a JPG POSTs FormData to the passport-upload endpoint + notify.success + trip reload', async () => {
+    await openParticipantsTab();
+    fetchApiMock.mockClear();
+    installFetchMock();
+    const fileInput = screen.getByLabelText(/Passport file for Anaya Sharma/i);
+    fireEvent.change(fileInput, { target: { files: [makeFile()] } });
+    await waitFor(() => {
+      const post = fetchApiMock.mock.calls.find(
+        ([u, o]) => u === '/api/travel/passport/participants/901/passport-upload' && o?.method === 'POST',
+      );
+      expect(post).toBeTruthy();
+      expect(post[1].body).toBeInstanceOf(FormData);
+      const sent = post[1].body.get('file');
+      expect(sent).toBeTruthy();
+      expect(sent.name).toBe('passport.jpg');
+      // silent:true — the component owns error toasts; fetchApi's
+      // auto-toast must stay off for this call.
+      expect(post[1].silent).toBe(true);
+    });
+    expect(notifySuccess).toHaveBeenCalledWith(
+      expect.stringMatching(/queued for verification/i),
+    );
+    // onChange() → load() refires the trip GET so the badge refreshes.
+    await waitFor(() => {
+      const reload = fetchApiMock.mock.calls.find(
+        ([u, o]) => u === '/api/travel/trips/101' && (!o?.method || o.method === 'GET'),
+      );
+      expect(reload).toBeTruthy();
+    });
+  });
+
+  it('oversize file (>5 MB) surfaces notify.error + no POST fires', async () => {
+    await openParticipantsTab();
+    fetchApiMock.mockClear();
+    installFetchMock();
+    const fileInput = screen.getByLabelText(/Passport file for Anaya Sharma/i);
+    fireEvent.change(fileInput, {
+      target: { files: [makeFile('big.jpg', 'image/jpeg', 6 * 1024 * 1024)] },
+    });
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalledWith(expect.stringMatching(/5 MB limit/i));
+    });
+    const posts = fetchApiMock.mock.calls.filter(([, o]) => o?.method === 'POST');
+    expect(posts.length).toBe(0);
+  });
+
+  it('unsupported mime (.txt) surfaces notify.error + no POST fires', async () => {
+    await openParticipantsTab();
+    fetchApiMock.mockClear();
+    installFetchMock();
+    const fileInput = screen.getByLabelText(/Passport file for Anaya Sharma/i);
+    fireEvent.change(fileInput, {
+      target: { files: [makeFile('notes.txt', 'text/plain')] },
+    });
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalledWith(
+        expect.stringMatching(/JPG, PNG or PDF only/i),
+      );
+    });
+    const posts = fetchApiMock.mock.calls.filter(([, o]) => o?.method === 'POST');
+    expect(posts.length).toBe(0);
+  });
+
+  it('PASSPORT_OCR_NOT_YET_ENABLED rejection surfaces the vendor-pending message', async () => {
+    await openParticipantsTab();
+    fetchApiMock.mockClear();
+    const err = new Error('Passport OCR vendor not yet enabled for this tenant');
+    err.code = 'PASSPORT_OCR_NOT_YET_ENABLED';
+    err.status = 503;
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = opts?.method || 'GET';
+      if (method === 'POST' && /passport-upload$/.test(url)) return Promise.reject(err);
+      if (method === 'GET' && /^\/api\/travel\/trips\/\d+$/.test(url)) {
+        return Promise.resolve(makeTrip());
+      }
+      return Promise.resolve(null);
+    });
+    const fileInput = screen.getByLabelText(/Passport file for Anaya Sharma/i);
+    fireEvent.change(fileInput, { target: { files: [makeFile()] } });
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalledWith(
+        expect.stringMatching(/vendor integration pending/i),
+      );
+    });
+    // No success toast + no reload on the failure path.
+    expect(notifySuccess).not.toHaveBeenCalled();
+  });
+
+  it('generic upload failure surfaces the server error body', async () => {
+    await openParticipantsTab();
+    fetchApiMock.mockClear();
+    const err = new Error('boom');
+    err.data = { error: 'Failed to process passport upload' };
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = opts?.method || 'GET';
+      if (method === 'POST' && /passport-upload$/.test(url)) return Promise.reject(err);
+      if (method === 'GET' && /^\/api\/travel\/trips\/\d+$/.test(url)) {
+        return Promise.resolve(makeTrip());
+      }
+      return Promise.resolve(null);
+    });
+    const fileInput = screen.getByLabelText(/Passport file for Anaya Sharma/i);
+    fireEvent.change(fileInput, { target: { files: [makeFile()] } });
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalledWith('Failed to process passport upload');
+    });
+  });
+});

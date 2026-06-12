@@ -45,6 +45,7 @@ const {
   getSubBrandAccessSet,
   canAccessSubBrand,
   assertValidSubBrand,
+  assertCompletedDiagnostic,
 } = require("../middleware/travelGuards");
 const { writeAudit } = require("../lib/audit");
 const { generateTravelQuotePdf } = require("../services/pdfRenderer");
@@ -167,6 +168,65 @@ function parseValidUntil(input) {
     throw err;
   }
   return d;
+}
+
+// ─── PRD §4.1 diagnostic-first guard (gap A9a) ───────────────────────
+//
+// Quote creation mirrors the itinerary guard's exact semantics (see
+// middleware/travelGuards.assertCompletedDiagnostic, used by
+// travel_itineraries.js POST /itineraries): any TravelDiagnostic row for
+// (tenantId, contactId, subBrand) counts as "completed diagnostic" — row
+// existence is the contract, classification may be null. There is no
+// admin/override bypass on the itinerary side, so none exists here.
+//
+// One deliberate divergence: the itinerary surface rejects 403; the quote
+// surface rejects 422 Unprocessable Entity (the request is well-formed and
+// the caller is authorised — a business precondition is unmet). Error code
+// stays the canonical DIAGNOSTIC_REQUIRED so dashboards/specs can match on
+// code regardless of surface.
+async function assertQuoteDiagnosticFirst(tenantId, contactId, subBrand) {
+  try {
+    await assertCompletedDiagnostic(prisma, tenantId, contactId, subBrand);
+  } catch (e) {
+    if (e && e.code === "DIAGNOSTIC_REQUIRED") e.status = 422;
+    throw e;
+  }
+}
+
+// ─── PRD §4.4 Visa Sure complexity gate (gap A6) ─────────────────────
+//
+// "Manual or structured quotation (Visa Sure) depending on case
+// complexity." TravelQuote has NO quoteMode column (schema is owned by a
+// concurrent change-set), so mode is a REQUEST-level contract only:
+//   - POST /quotes accepts optional body.quoteMode: "manual"|"structured"
+//     (default "manual"; anything else → 400 INVALID_QUOTE_MODE).
+//   - For subBrand "visasure", a contact with ANY complexCase=true
+//     VisaApplication on this tenant is manual-only:
+//       * structured-mode creation rejects 422 VISA_COMPLEX_CASE_MANUAL_ONLY
+//       * the structured auto-pricing surface (GET /quotes/:id/
+//         pricing-preview, the markup-rule composer) rejects with the
+//         same code for such quotes
+//       * the creation response + CREATE audit row echo
+//         complexCase: true + the effective (forced-manual) quoteMode so
+//         operators and downstream consumers see the gate fired.
+// When a quoteMode column lands in the schema, persist effectiveQuoteMode
+// instead of echoing it.
+const VALID_QUOTE_MODES = ["manual", "structured"];
+
+async function findComplexVisaCase(tenantId, contactId) {
+  return prisma.visaApplication.findFirst({
+    where: { tenantId, contactId, complexCase: true },
+    select: { id: true },
+  });
+}
+
+function visaComplexCaseError() {
+  const err = new Error(
+    "Contact has a complex visa case — structured quotation is disabled; build this quote manually",
+  );
+  err.status = 422;
+  err.code = "VISA_COMPLEX_CASE_MANUAL_ONLY";
+  return err;
 }
 
 // GET /api/travel/quotes
@@ -1764,7 +1824,7 @@ router.post(
     try {
       const {
         contactId, totalAmount, currency,
-        subBrand, status, validUntil,
+        subBrand, status, validUntil, quoteMode,
       } = req.body || {};
 
       if (contactId == null || totalAmount == null || !currency) {
@@ -1786,6 +1846,20 @@ router.post(
       if (subBrand) assertValidSubBrand(subBrand);
       const parsedValidUntil = parseValidUntil(validUntil);
 
+      // Optional request-level quote mode (PRD §4.4 — see the gap-A6
+      // block above parseValidUntil). Not persisted: TravelQuote has no
+      // quoteMode column yet.
+      let requestedQuoteMode = "manual";
+      if (quoteMode != null && quoteMode !== "") {
+        if (!VALID_QUOTE_MODES.includes(quoteMode)) {
+          return res.status(400).json({
+            error: `quoteMode must be one of: ${VALID_QUOTE_MODES.join(", ")}`,
+            code: "INVALID_QUOTE_MODE",
+          });
+        }
+        requestedQuoteMode = quoteMode;
+      }
+
       // Sub-brand isolation: reject create that targets a sub-brand the
       // caller can't access. Same pattern as travel_suppliers POST.
       const targetSubBrand = subBrand || "tmc";
@@ -1793,6 +1867,25 @@ router.post(
       if (!canAccessSubBrand(allowed, targetSubBrand)) {
         return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
       }
+
+      // PRD §4.1 diagnostic-first guard (gap A9a): no completed
+      // diagnostic for (tenant, contact, subBrand) → 422
+      // DIAGNOSTIC_REQUIRED. Runs BEFORE the visa complexity gate — the
+      // diagnostic is the universal Phase-1 wall across all four brands.
+      await assertQuoteDiagnosticFirst(req.travelTenant.id, contactIdInt, targetSubBrand);
+
+      // PRD §4.4 Visa Sure complexity gate (gap A6): complex cases are
+      // manual-only.
+      let complexVisaCase = false;
+      if (targetSubBrand === "visasure") {
+        complexVisaCase = Boolean(
+          await findComplexVisaCase(req.travelTenant.id, contactIdInt),
+        );
+        if (complexVisaCase && requestedQuoteMode === "structured") {
+          throw visaComplexCaseError();
+        }
+      }
+      const effectiveQuoteMode = complexVisaCase ? "manual" : requestedQuoteMode;
 
       const created = await prisma.travelQuote.create({
         data: {
@@ -1817,9 +1910,23 @@ router.post(
           contactId: created.contactId,
           status: created.status,
           currency: created.currency,
+          // PRD §4.4 (gap A6): audit note so the manual-vs-structured
+          // decision is traceable for Visa Sure quotes.
+          ...(targetSubBrand === "visasure"
+            ? { quoteMode: effectiveQuoteMode, complexCase: complexVisaCase }
+            : {}),
         },
       );
 
+      // Visa Sure quotes echo the complexity verdict (additive fields —
+      // non-visasure responses keep the exact pre-gap shape).
+      if (targetSubBrand === "visasure") {
+        return res.status(201).json({
+          ...created,
+          quoteMode: effectiveQuoteMode,
+          complexCase: complexVisaCase,
+        });
+      }
       res.status(201).json(created);
     } catch (e) {
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
@@ -2863,6 +2970,18 @@ router.get(
       const quoteId = parseInt(req.params.id, 10);
       const quote = await loadParentQuote(req, res, quoteId);
       if (!quote) return;
+
+      // PRD §4.4 Visa Sure complexity gate (gap A6): the markup-rule
+      // composer below IS the "structured quotation" surface, so complex
+      // visa cases reject here with the same code as structured-mode
+      // creation. Manual line totals (GET /:id/lines) and tax math
+      // (GET /:id/tax-preview) stay open — manual quotes need both.
+      if (
+        quote.subBrand === "visasure"
+        && (await findComplexVisaCase(req.travelTenant.id, quote.contactId))
+      ) {
+        throw visaComplexCaseError();
+      }
 
       const lines = await prisma.travelQuoteLine.findMany({
         where: { quoteId, tenantId: req.travelTenant.id },

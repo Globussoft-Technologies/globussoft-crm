@@ -811,7 +811,25 @@ router.get("/trips/:id", verifyToken, requireTravelTenant, requireTmcAccess, asy
     const trip = await prisma.tmcTrip.findFirst({
       where: { id, tenantId: req.travelTenant.id },
       include: {
-        participants: { orderBy: { id: "asc" } },
+        // PII payload reduction (same rationale as the #920 FR-3.5
+        // ?fields=summary projection on GET /:id/participants): a bare
+        // include ships passportNumber / passportExtractionJson (MRZ,
+        // DOB) / aadhaar / medical columns to every role with trip
+        // access, bypassing the ADMIN+MANAGER gate the passport routes
+        // enforce. The detail page only needs identity + parent contact
+        // + the three passport status timestamps for its badges.
+        participants: {
+          orderBy: { id: "asc" },
+          select: {
+            id: true,
+            fullName: true,
+            parentName: true,
+            parentPhone: true,
+            passportExtractedAt: true,
+            passportVerifiedAt: true,
+            passportRejectedAt: true,
+          },
+        },
         documentRequirements: { orderBy: { id: "asc" } },
         paymentPlan: true,
         microsite: true,

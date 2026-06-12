@@ -167,6 +167,43 @@ describe('PassportVerificationQueue — operator queue (PRD FR-6)', () => {
     });
   });
 
+  it('customer (portal) rows route verify to the customer-travellers endpoint', async () => {
+    const customerRow = {
+      kind: 'customer',
+      id: 7,
+      fullName: 'Ahmed Khan',
+      subBrand: 'rfu',
+      relationship: 'self',
+      extractedAt: '2026-06-10T10:00:00.000Z',
+      rejectedAt: null,
+      extraction: { passportNumber: 'M9999999', surname: 'KHAN', givenNames: 'AHMED', dateOfExpiry: '2031-01-01' },
+      confidence: 0.9,
+      provider: 'stub-mode-v1',
+      imageUrl: '/api/uploads/passport-ocr/c.jpg',
+      trip: null,
+    };
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/travel/passport/verification-queue') {
+        return Promise.resolve({ pending: [customerRow], total: 1 });
+      }
+      if (url.match(/\/customer-travellers\/\d+\/passport-verify$/) && opts?.method === 'POST') {
+        return Promise.resolve({ ok: true });
+      }
+      return Promise.resolve({});
+    });
+    renderPage();
+    await screen.findByText('Ahmed Khan');
+    // Source label shows the sub-brand, not a trip code.
+    expect(screen.getByText(/RFU/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /Approve passport for Ahmed Khan/i }));
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledWith(
+        '/api/travel/passport/customer-travellers/7/passport-verify',
+        expect.objectContaining({ method: 'POST', body: expect.stringContaining('"approved":true') }),
+      );
+    });
+  });
+
   it('edit-then-approve flow sends editedFields in the POST body', async () => {
     fetchApiMock.mockImplementation(defaultFetchImpl(SAMPLE_PENDING));
     renderPage();

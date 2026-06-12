@@ -542,6 +542,217 @@ describe('DELETE /api/travel/cost-master/:id', () => {
 });
 
 // -----------------------------------------------------------------------------
+// Hotel preference attributes (PRD §4.3 RFU preference filters — gap A7)
+//
+// Structured `attributes` body field (view/floorLevel/roomCategory) validates
+// against routes/travel_cost_master.js HOTEL_ATTRIBUTES, stores stringified
+// into attributesJson (String? @db.Text), and every read surface echoes the
+// defensively-parsed `attributes` object. List endpoint grows ?view= /
+// ?floorLevel= / ?roomCategory= post-fetch filters (pagination applied AFTER
+// filtering, same discipline as /cost-master/by-month).
+// -----------------------------------------------------------------------------
+
+describe('hotel preference attributes (PRD §4.3 gap A7)', () => {
+  const hotelBody = () => ({
+    subBrand: 'rfu',
+    category: 'hotel',
+    routeOrSku: 'Makkah:Hilton:Deluxe',
+    baseRate: 12000,
+  });
+
+  test('POST with valid attributes persists stringified attributesJson + echoes parsed attributes', async () => {
+    prisma.travelCostMaster.create.mockImplementation(({ data }) =>
+      Promise.resolve({ id: 70, ...data }),
+    );
+    const res = await request(makeApp())
+      .post('/api/travel/cost-master')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({
+        ...hotelBody(),
+        attributes: { view: 'haram_facing', floorLevel: 'high', roomCategory: 'Deluxe' },
+      });
+    expect(res.status).toBe(201);
+    // Stored value is a JSON string (call-site stringify per lib/sanitizeJson).
+    const calledData = prisma.travelCostMaster.create.mock.calls[0][0].data;
+    expect(typeof calledData.attributesJson).toBe('string');
+    expect(JSON.parse(calledData.attributesJson)).toEqual({
+      view: 'haram_facing',
+      floorLevel: 'high',
+      roomCategory: 'Deluxe',
+    });
+    // Response echoes the parsed attributes object alongside the raw column.
+    expect(res.body.attributes).toEqual({
+      view: 'haram_facing',
+      floorLevel: 'high',
+      roomCategory: 'Deluxe',
+    });
+  });
+
+  test('POST with unknown view value returns 400 INVALID_ATTRIBUTES (no create)', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/cost-master')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ ...hotelBody(), attributes: { view: 'ocean_facing' } });
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_ATTRIBUTES' });
+    expect(res.body.error).toMatch(/haram_facing/);
+    expect(prisma.travelCostMaster.create).not.toHaveBeenCalled();
+  });
+
+  test('POST with unknown floorLevel value returns 400 INVALID_ATTRIBUTES (no create)', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/cost-master')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ ...hotelBody(), attributes: { floorLevel: 'penthouse' } });
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_ATTRIBUTES' });
+    expect(prisma.travelCostMaster.create).not.toHaveBeenCalled();
+  });
+
+  test('PATCH with structured attributes stores stringified + echoes parsed', async () => {
+    prisma.travelCostMaster.findFirst.mockResolvedValue({
+      id: 71, tenantId: 1, subBrand: 'rfu', category: 'hotel',
+    });
+    prisma.travelCostMaster.update.mockImplementation(({ data }) =>
+      Promise.resolve({ id: 71, tenantId: 1, subBrand: 'rfu', category: 'hotel', ...data }),
+    );
+    const res = await request(makeApp())
+      .patch('/api/travel/cost-master/71')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ attributes: { view: 'kaaba_facing', roomCategory: 'Suite' } });
+    expect(res.status).toBe(200);
+    const calledData = prisma.travelCostMaster.update.mock.calls[0][0].data;
+    expect(JSON.parse(calledData.attributesJson)).toEqual({
+      view: 'kaaba_facing',
+      roomCategory: 'Suite',
+    });
+    expect(res.body.attributes).toEqual({ view: 'kaaba_facing', roomCategory: 'Suite' });
+  });
+
+  test('PATCH with invalid attributes returns 400 INVALID_ATTRIBUTES (no update)', async () => {
+    prisma.travelCostMaster.findFirst.mockResolvedValue({
+      id: 71, tenantId: 1, subBrand: 'rfu', category: 'hotel',
+    });
+    const res = await request(makeApp())
+      .patch('/api/travel/cost-master/71')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ attributes: { view: 'garden' } });
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_ATTRIBUTES' });
+    expect(prisma.travelCostMaster.update).not.toHaveBeenCalled();
+  });
+
+  test('PATCH attributes:null clears attributesJson', async () => {
+    prisma.travelCostMaster.findFirst.mockResolvedValue({
+      id: 72, tenantId: 1, subBrand: 'rfu', category: 'hotel',
+      attributesJson: '{"view":"standard"}',
+    });
+    prisma.travelCostMaster.update.mockImplementation(({ data }) =>
+      Promise.resolve({ id: 72, tenantId: 1, subBrand: 'rfu', category: 'hotel', ...data }),
+    );
+    const res = await request(makeApp())
+      .patch('/api/travel/cost-master/72')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ attributes: null });
+    expect(res.status).toBe(200);
+    expect(prisma.travelCostMaster.update.mock.calls[0][0].data.attributesJson).toBeNull();
+    expect(res.body.attributes).toBeNull();
+  });
+
+  test('list ?view= filter returns only matching rows (post-fetch filter, paginated after)', async () => {
+    prisma.travelCostMaster.findMany.mockResolvedValue([
+      { id: 1, tenantId: 1, subBrand: 'rfu', category: 'hotel', routeOrSku: 'Makkah:Hilton:Deluxe', attributesJson: '{"view":"haram_facing","floorLevel":"high"}' },
+      { id: 2, tenantId: 1, subBrand: 'rfu', category: 'hotel', routeOrSku: 'Makkah:Pullman:Std', attributesJson: '{"view":"city_view"}' },
+      { id: 3, tenantId: 1, subBrand: 'rfu', category: 'hotel', routeOrSku: 'Makkah:Raffles:Suite', attributesJson: 'not-json{{{' },
+      { id: 4, tenantId: 1, subBrand: 'rfu', category: 'hotel', routeOrSku: 'Makkah:Swissotel:Std', attributesJson: null },
+    ]);
+    const res = await request(makeApp())
+      .get('/api/travel/cost-master?category=hotel&view=haram_facing')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(1);
+    expect(res.body.rates).toHaveLength(1);
+    expect(res.body.rates[0]).toMatchObject({
+      id: 1,
+      attributes: { view: 'haram_facing', floorLevel: 'high' },
+    });
+    // Post-filter path fetches the full tenant-scoped where (no take/skip)
+    // and paginates AFTER filtering — count() is not used.
+    const findArgs = prisma.travelCostMaster.findMany.mock.calls[0][0];
+    expect(findArgs.take).toBeUndefined();
+    expect(findArgs.skip).toBeUndefined();
+    expect(prisma.travelCostMaster.count).not.toHaveBeenCalled();
+  });
+
+  test('list ?roomCategory= is a case-insensitive substring match', async () => {
+    prisma.travelCostMaster.findMany.mockResolvedValue([
+      { id: 5, tenantId: 1, subBrand: 'rfu', category: 'hotel', routeOrSku: 'A', attributesJson: '{"roomCategory":"Deluxe Twin"}' },
+      { id: 6, tenantId: 1, subBrand: 'rfu', category: 'hotel', routeOrSku: 'B', attributesJson: '{"roomCategory":"Suite"}' },
+    ]);
+    const res = await request(makeApp())
+      .get('/api/travel/cost-master?roomCategory=deluxe')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(200);
+    expect(res.body.rates).toHaveLength(1);
+    expect(res.body.rates[0].id).toBe(5);
+  });
+
+  test('list ?view=bogus returns 400 INVALID_ATTRIBUTES (no query)', async () => {
+    const res = await request(makeApp())
+      .get('/api/travel/cost-master?view=bogus')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_ATTRIBUTES' });
+    expect(prisma.travelCostMaster.findMany).not.toHaveBeenCalled();
+  });
+
+  test('list ?floorLevel=bogus returns 400 INVALID_ATTRIBUTES', async () => {
+    const res = await request(makeApp())
+      .get('/api/travel/cost-master?floorLevel=basement')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_ATTRIBUTES' });
+  });
+
+  test('unfiltered list parses attributesJson into attributes (null on garbage)', async () => {
+    prisma.travelCostMaster.findMany.mockResolvedValue([
+      { id: 7, tenantId: 1, subBrand: 'rfu', category: 'hotel', routeOrSku: 'A', attributesJson: '{"view":"standard"}' },
+      { id: 8, tenantId: 1, subBrand: 'rfu', category: 'hotel', routeOrSku: 'B', attributesJson: '[1,2,3]' },
+      { id: 9, tenantId: 1, subBrand: 'rfu', category: 'hotel', routeOrSku: 'C', attributesJson: '}{garbage' },
+    ]);
+    prisma.travelCostMaster.count.mockResolvedValue(3);
+    const res = await request(makeApp())
+      .get('/api/travel/cost-master')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(200);
+    expect(res.body.rates[0].attributes).toEqual({ view: 'standard' });
+    expect(res.body.rates[1].attributes).toBeNull(); // array → not an attributes object
+    expect(res.body.rates[2].attributes).toBeNull(); // garbage → defensive null
+  });
+
+  test('GET /:id echoes parsed attributes', async () => {
+    prisma.travelCostMaster.findFirst.mockResolvedValue({
+      id: 73, tenantId: 1, subBrand: 'rfu', category: 'hotel', routeOrSku: 'Makkah:Hilton:Deluxe',
+      attributesJson: '{"view":"kaaba_facing","floorLevel":"mid","roomCategory":"Suite"}',
+    });
+    const res = await request(makeApp())
+      .get('/api/travel/cost-master/73')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(200);
+    expect(res.body.attributes).toEqual({
+      view: 'kaaba_facing', floorLevel: 'mid', roomCategory: 'Suite',
+    });
+  });
+
+  test('exported HOTEL_ATTRIBUTES vocabulary is the canonical set', () => {
+    expect(costMasterRouter.HOTEL_ATTRIBUTES).toEqual({
+      view: ['haram_facing', 'kaaba_facing', 'city_view', 'standard'],
+      floorLevel: ['low', 'mid', 'high'],
+    });
+  });
+});
+
+// -----------------------------------------------------------------------------
 // Auth gate
 // -----------------------------------------------------------------------------
 

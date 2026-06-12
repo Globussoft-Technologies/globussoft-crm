@@ -338,6 +338,19 @@ export default function ThreadDetail() {
                       <span>{new Date(m.createdAt).toLocaleString()}</span>
                       <DeliveryTicks status={m.status} direction={m.direction} />
                     </div>
+                    {isOutbound && m.status === 'FAILED' && (
+                      <div
+                        data-testid="message-failed-reason"
+                        style={{
+                          fontSize: '0.7rem',
+                          color: '#ef4444',
+                          marginTop: 2,
+                          textAlign: 'right',
+                        }}
+                      >
+                        Not delivered{m.errorMessage ? ` — ${m.errorMessage}` : ''}
+                      </div>
+                    )}
                   </div>
                 );
               })}

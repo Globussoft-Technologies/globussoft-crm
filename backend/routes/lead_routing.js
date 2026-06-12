@@ -18,6 +18,15 @@ const rrCounters = {};
 const ALLOWED_STATUSES = ["Lead", "Prospect", "Customer", "Churned", "Junk"];
 const ALLOWED_STATUSES_LOWER = ALLOWED_STATUSES.map(s => s.toLowerCase());
 
+// TRAVEL_CRM_PRD §4.1 (gap A8) — rule-based brand assignment. `subBrand` is a
+// first-class condition key validated against the canonical travel sub-brand
+// codes (tmc | rfu | travelstall | visasure). Imported from the shared
+// resolver so the routing vocabulary can't drift from the rest of the travel
+// vertical. Matching itself rides the generic checkConditionsMatch path
+// (Contact.subBrand is a plain nullable column), so rules WITHOUT a subBrand
+// condition keep matching every contact — fully backward compatible.
+const { VALID_SUB_BRANDS } = require("../lib/subBrandConfig");
+
 // ─── Helpers ────────────────────────────────────────────────────────
 
 function safeJson(str, fallback) {
@@ -26,10 +35,23 @@ function safeJson(str, fallback) {
   try { return JSON.parse(str); } catch { return fallback; }
 }
 
+// Normalizes the three accepted condition shapes — scalar, array, and
+// { op, value } — into a flat array of scalar values for enum validation.
+function collectConditionValues(raw) {
+  if (raw && typeof raw === "object" && !Array.isArray(raw) && raw.op) {
+    // { op: "...", value: ... }
+    return Array.isArray(raw.value) ? raw.value : [raw.value];
+  }
+  if (Array.isArray(raw)) return raw;
+  return [raw];
+}
+
 // Returns null if conditions object is valid, or an error message string if not.
 // Enforces:
 //   #299 — when `status` is a condition, value must be in ALLOWED_STATUSES
 //   #302 — at least one condition is required (no "any" rules allowed)
+//   PRD §4.1 (gap A8) — when `subBrand` is a condition, value must be a
+//     canonical travel sub-brand code (case-insensitive, like status)
 function validateConditions(conditions) {
   if (!conditions || typeof conditions !== "object" || Array.isArray(conditions)) {
     return "At least one condition is required";
@@ -41,22 +63,22 @@ function validateConditions(conditions) {
 
   // status enum validation
   if (Object.prototype.hasOwnProperty.call(conditions, "status")) {
-    const raw = conditions.status;
-    let values = [];
-    if (raw && typeof raw === "object" && !Array.isArray(raw) && raw.op) {
-      // { op: "...", value: ... }
-      if (Array.isArray(raw.value)) values = raw.value;
-      else values = [raw.value];
-    } else if (Array.isArray(raw)) {
-      values = raw;
-    } else {
-      values = [raw];
-    }
-
-    for (const v of values) {
+    for (const v of collectConditionValues(conditions.status)) {
       if (v == null || v === "") continue;
       if (!ALLOWED_STATUSES_LOWER.includes(String(v).toLowerCase())) {
         return `Invalid status "${v}". Allowed: ${ALLOWED_STATUSES.join(", ")}`;
+      }
+    }
+  }
+
+  // subBrand enum validation (PRD §4.1 gap A8). VALID_SUB_BRANDS is already
+  // lowercase; accept any casing on the wire. Rules without a subBrand
+  // condition are untouched (backward compatible).
+  if (Object.prototype.hasOwnProperty.call(conditions, "subBrand")) {
+    for (const v of collectConditionValues(conditions.subBrand)) {
+      if (v == null || v === "") continue;
+      if (!VALID_SUB_BRANDS.includes(String(v).toLowerCase())) {
+        return `Invalid subBrand "${v}". Allowed: ${VALID_SUB_BRANDS.join(", ")}`;
       }
     }
   }
@@ -66,6 +88,12 @@ function validateConditions(conditions) {
 
 function checkConditionsMatch(conditions, contact) {
   // conditions = { field: value } OR { field: { op: "eq|contains|in", value: ... } }
+  // PRD §4.1 (gap A8): `subBrand` is matched via this generic field path —
+  // a rule with { subBrand: "rfu" } only matches contacts whose
+  // Contact.subBrand is "rfu" (case-insensitive); contacts with a null
+  // subBrand fail the eq-compare against any code. Rules WITHOUT a subBrand
+  // condition never inspect contact.subBrand, so they keep matching
+  // everything they matched before.
   if (!conditions || typeof conditions !== "object") return true;
   const keys = Object.keys(conditions);
   if (keys.length === 0) return true;

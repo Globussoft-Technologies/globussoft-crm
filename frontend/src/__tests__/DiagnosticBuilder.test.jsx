@@ -924,4 +924,131 @@ describe('DiagnosticBuilder — Travel diagnostic-bank authoring (PRD §4 Q13 / 
     );
     expect(archivedListCalls.length).toBe(0);
   });
+
+  // ─── PRD §4.2 — Request change (Phase-1 view-only scoring) ─────────
+  // Scoring is view-only in Phase 1; the bank header surfaces a
+  // "Request change" button (only when an existing bank loaded) that
+  // opens a summary+details modal and POSTs to
+  // /api/travel/diagnostics/banks/:id/request-change, toasting the
+  // created GS ticket id.
+
+  // Mount-GET resolver that returns one existing TMC bank (id 42, v3)
+  // so the Request-change button renders; optional postHandler routes
+  // everything else (the modal's POST).
+  function makeExistingBankFetch(postHandler) {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (typeof url === 'string' && url.includes('/diagnostic-banks?')) {
+        return Promise.resolve({
+          banks: [{
+            id: 42,
+            version: 3,
+            subBrand: 'tmc',
+            isActive: true,
+            questionsJson: JSON.stringify({
+              questions: [{ id: 'q1', text: 'T?', type: 'single-choice', options: [{ value: 'a', label: 'A', weight: 1 }] }],
+            }),
+            scoringRulesJson: JSON.stringify({
+              method: 'weighted-sum',
+              bands: [{ minScore: 0, maxScore: 9, classification: 'level_1', label: 'L1', recommendedTier: 'entry' }],
+            }),
+          }],
+        });
+      }
+      if (postHandler) return postHandler(url, opts);
+      return Promise.resolve(null);
+    });
+  }
+
+  it('Request change button renders for an existing bank and opens the modal', async () => {
+    makeExistingBankFetch();
+    renderPage();
+    const btn = await screen.findByRole('button', { name: /^Request change$/i });
+    // No dialog until clicked.
+    expect(screen.queryByRole('dialog', { name: /Request scoring change/i })).toBeNull();
+    fireEvent.click(btn);
+    expect(screen.getByRole('dialog', { name: /Request scoring change/i })).toBeTruthy();
+    expect(screen.getByLabelText(/Change request summary/i)).toBeTruthy();
+    expect(screen.getByLabelText(/Change request details/i)).toBeTruthy();
+  });
+
+  it('Request change button does NOT render when no bank exists yet', async () => {
+    renderPage(); // beforeEach default: { banks: [] }
+    await waitFor(() => {
+      expect(screen.getByText(/No diagnostic bank yet for this brand/i)).toBeTruthy();
+    });
+    expect(screen.queryByRole('button', { name: /^Request change$/i })).toBeNull();
+  });
+
+  it('Submitting the modal POSTs summary+details to /request-change and toasts the ticket id', async () => {
+    makeExistingBankFetch((url, opts) => {
+      if (url === '/api/travel/diagnostics/banks/42/request-change' && opts?.method === 'POST') {
+        return Promise.resolve({ ticket: { id: 555, subject: 'x', status: 'Open' } });
+      }
+      return Promise.resolve(null);
+    });
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: /^Request change$/i }));
+    fireEvent.change(screen.getByLabelText(/Change request summary/i), {
+      target: { value: 'Band 2 threshold too low' },
+    });
+    fireEvent.change(screen.getByLabelText(/Change request details/i), {
+      target: { value: 'Repeat organisers keep landing in level_1.' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Submit change request/i }));
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(
+        ([u, o]) => u === '/api/travel/diagnostics/banks/42/request-change' && o?.method === 'POST',
+      );
+      expect(call).toBeTruthy();
+      const body = JSON.parse(call[1].body);
+      expect(body.summary).toBe('Band 2 threshold too low');
+      expect(body.details).toBe('Repeat organisers keep landing in level_1.');
+    });
+    await waitFor(() => {
+      expect(notifyObj.success).toHaveBeenCalled();
+      expect(notifyObj.success.mock.calls[0][0]).toMatch(/ticket #555/i);
+    });
+    // Modal closes on success.
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: /Request scoring change/i })).toBeNull();
+    });
+  });
+
+  it('Submitting with an empty summary blocks the POST with a notify', async () => {
+    makeExistingBankFetch();
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: /^Request change$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Submit change request/i }));
+    await waitFor(() => {
+      expect(notifyObj.error).toHaveBeenCalled();
+      expect(notifyObj.error.mock.calls[0][0]).toMatch(/Summary is required/i);
+    });
+    expect(
+      fetchApiMock.mock.calls.some(
+        ([u, o]) => typeof u === 'string' && u.includes('/request-change') && o?.method === 'POST',
+      ),
+    ).toBe(false);
+    // Modal stays open so the user can fill the summary in.
+    expect(screen.getByRole('dialog', { name: /Request scoring change/i })).toBeTruthy();
+  });
+
+  it('Request-change failure surfaces the backend error and keeps the modal open', async () => {
+    makeExistingBankFetch((url, opts) => {
+      if (typeof url === 'string' && url.includes('/request-change') && opts?.method === 'POST') {
+        return Promise.reject({ status: 404, data: { error: 'Bank not found' } });
+      }
+      return Promise.resolve(null);
+    });
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: /^Request change$/i }));
+    fireEvent.change(screen.getByLabelText(/Change request summary/i), {
+      target: { value: 'Band 2 threshold too low' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Submit change request/i }));
+    await waitFor(() => {
+      expect(notifyObj.error).toHaveBeenCalled();
+      expect(notifyObj.error.mock.calls[0][0]).toMatch(/Bank not found/i);
+    });
+    expect(screen.getByRole('dialog', { name: /Request scoring change/i })).toBeTruthy();
+  });
 });

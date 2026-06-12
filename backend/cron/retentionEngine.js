@@ -21,6 +21,46 @@ const ENTITY_MAP = {
   ConsentForm: 'consentForm',
   TreatmentPlan: 'treatmentPlan',
   MedicalAttachment: 'attachment',
+  // Gap A4 (Q14, travel vertical) — per-type document/communication/
+  // financial retention. TRAVEL_CRM_PRD.md §4.7 / Q14 accepted GS
+  // defaults: passport/Aadhaar/PAN docs 24m post-trip, call recordings
+  // 12m, financial 84m, diagnostic responses = lifetime of profile.
+  //
+  //   ContactAttachment — uploaded identity documents (passport scans,
+  //     Aadhaar, PAN). TripParticipant.passportDocId points at a
+  //     ContactAttachment row (bare Int, no enforced FK), so purging the
+  //     attachment removes the document file reference while keeping the
+  //     trip roster intact. Engine cuts on createdAt — "post-trip"
+  //     anchoring is approximated by upload date (documented residual).
+  //   VoiceSession — telephony sessions carrying recordingUrl +
+  //     transcript (call-recording retention, alongside CallLog which is
+  //     already mapped above).
+  //   TravelInvoice — financial records. Guarded by ENTITY_GUARDS below
+  //     so open receivables (Issued / Partial) are NEVER auto-purged.
+  //
+  // TravelDiagnostic is INTENTIONALLY absent — Q14 mandates lifetime-of-
+  // profile retention for diagnostic responses, and the engine's
+  // "unknown entity → skip + warn" behaviour makes absence a hard
+  // never-purge guarantee even if a policy row were created manually.
+  ContactAttachment: 'contactAttachment',
+  VoiceSession: 'voiceSession',
+  TravelInvoice: 'travelInvoice',
+};
+
+// Gap A4 (Q14) — per-entity extra where-conditions merged into the
+// hard-delete filter. Spread FIRST in the where clause so the mandatory
+// tenantId + createdAt scoping can never be overridden by a guard.
+//
+// TravelInvoice: allowlist of terminal/abandoned states. 'Issued' and
+// 'Partial' (open receivables — money still owed or under dispute) are
+// excluded so the 84-month financial sweep never destroys an unpaid or
+// disputed invoice, mirroring the route layer's DELETE handler which
+// only permits Draft deletion (routes/travel_invoices.js,
+// INVOICE_DELETE_FORBIDDEN). Hard-deleting a TravelInvoice cascades to
+// TravelInvoiceLine + TravelPaymentSchedule (schema onDelete: Cascade);
+// child credit-notes survive via parentInvoiceId onDelete: SetNull.
+const ENTITY_GUARDS = {
+  TravelInvoice: { status: { in: ['Draft', 'Paid', 'Voided'] } },
 };
 
 // #628 + #576 — entities that support soft-delete (have a `deletedAt`
@@ -92,8 +132,12 @@ async function runRetentionSweep() {
           });
           deleted = hardResult?.count || 0;
         } else {
+          // Per-entity guard (ENTITY_GUARDS) merged in FIRST — the
+          // tenantId scope + createdAt cutoff are spread last so a guard
+          // can never widen the sweep beyond the policy's tenant/window.
+          const guard = ENTITY_GUARDS[policy.entity] || {};
           const result = await model.deleteMany({
-            where: { tenantId: policy.tenantId, createdAt: { lt: cutoff } },
+            where: { ...guard, tenantId: policy.tenantId, createdAt: { lt: cutoff } },
           });
           deleted = result?.count || 0;
         }
@@ -179,11 +223,63 @@ async function seedWellnessRetentionPolicies(tenantId) {
   return created;
 }
 
+// Gap A4 — default retention windows for travel tenants per
+// TRAVEL_CRM_PRD.md §4.7 + Q14 (accepted GS defaults):
+//   passport / Aadhaar / PAN documents  →  24 months post-trip
+//   call recordings                     →  12 months
+//   financial records                   →  84 months (~7y)
+//   diagnostic responses                →  lifetime of profile (NO row)
+// 730 days = 24m; 365 days = 12m; 2555 days = ~84m/7y (same constant the
+// wellness clinical defaults use for 7y). isActive=false by default —
+// admins must explicitly enable purge from /privacy, matching the
+// wellness convention above.
+//
+// TravelDiagnostic deliberately has NO policy row here (and no
+// ENTITY_MAP entry) — Q14 sets diagnostic responses to lifetime-of-
+// profile retention, and "no policy row" is the engine's never-purge
+// representation.
+const TRAVEL_DEFAULT_POLICIES = [
+  // Identity documents (passport/Aadhaar/PAN uploads live in
+  // ContactAttachment; TripParticipant.passportDocId references them).
+  { entity: 'ContactAttachment', retainDays: 730, isActive: false },
+  // Call recordings — both telephony surfaces.
+  { entity: 'CallLog', retainDays: 365, isActive: false },
+  { entity: 'VoiceSession', retainDays: 365, isActive: false },
+  // Financial records — sweep guarded by ENTITY_GUARDS.TravelInvoice so
+  // open receivables (Issued/Partial) are never auto-purged.
+  { entity: 'TravelInvoice', retainDays: 2555, isActive: false },
+];
+
+/**
+ * Idempotent seed — for a given travel tenantId, ensure the 4 Q14
+ * RetentionPolicy rows exist. Re-runnable; existing rows are left alone
+ * so admins keep their tweaks. Used by prisma/seed-travel.js on tenant
+ * create (mirrors seedWellnessRetentionPolicies above).
+ */
+async function seedTravelRetentionPolicies(tenantId) {
+  if (!tenantId) return [];
+  const created = [];
+  for (const p of TRAVEL_DEFAULT_POLICIES) {
+    const existing = await prisma.retentionPolicy.findUnique({
+      where: { tenantId_entity: { tenantId, entity: p.entity } },
+    }).catch(() => null);
+    if (existing) continue;
+    const row = await prisma.retentionPolicy.create({
+      data: { tenantId, entity: p.entity, retainDays: p.retainDays, isActive: p.isActive },
+    }).catch(() => null);
+    if (row) created.push(row);
+  }
+  return created;
+}
+
 module.exports = {
   initRetentionCron,
   runRetentionSweep,
   ENTITY_MAP,
+  ENTITY_GUARDS,
   SOFT_DELETE_ENTITIES,
   WELLNESS_DEFAULT_POLICIES,
   seedWellnessRetentionPolicies,
+  TRAVEL_DEFAULT_POLICIES,
+  seedTravelRetentionPolicies,
 };

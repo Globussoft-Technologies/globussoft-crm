@@ -745,6 +745,186 @@ test.describe("Travel itineraries API — version chain + status transitions", (
   });
 });
 
+// ─── Share-link expiry + revoke (PRD §4.7 document-security, gap A3) ──
+//
+// Policy under test (backend/lib/shareLinkPolicy.js):
+//   - POST /:id/share accepts optional expiryDays, CLAMPED to [1, 30]
+//     (default 7) → response carries shareExpiresAt.
+//   - Public view of an expired link → 410 SHARE_EXPIRED; of a revoked
+//     link → 410 SHARE_REVOKED (revoked wins over expired).
+//   - POST /:id/share/revoke — idempotent, audited, owner-tenant scoped.
+//   - Re-sharing AFTER a revoke mints a FRESH token; the revoked URL
+//     stays dead (404 — the old token no longer exists on any row).
+//
+// Expiry is made deterministic via PATCH /:id { shareExpiresAt } (the
+// advisor-facing shorten/extend control) — the spec back-dates the
+// expiry instead of waiting days.
+test.describe("Travel itineraries API — share expiry + revoke (PRD §4.7 gap A3)", () => {
+  // Days between now and an ISO date — wide tolerances below absorb
+  // client/server clock skew + request latency.
+  const daysFromNow = (iso) => (new Date(iso).getTime() - Date.now()) / 86_400_000;
+
+  async function createSentItinerary(request, token, label) {
+    const res = await post(request, token, "/api/travel/itineraries", {
+      subBrand: "rfu",
+      contactId: testContactId,
+      destination: `${RUN_TAG} ${label}`,
+      status: "sent",
+      totalAmount: 50000,
+      currency: "INR",
+    });
+    expect(res.status(), `create ${label}: ${await res.text()}`).toBe(201);
+    const id = (await res.json()).id;
+    created.itineraryIds.push(id);
+    return id;
+  }
+
+  test("share mint defaults shareExpiresAt to ~7 days out", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || !testContactId) test.skip(true, "deps missing");
+    const id = await createSentItinerary(request, token, "expiry-default");
+    const res = await post(request, token, `/api/travel/itineraries/${id}/share`);
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(body.shareExpiresAt).toBeTruthy();
+    const d = daysFromNow(body.shareExpiresAt);
+    expect(d).toBeGreaterThan(6.5);
+    expect(d).toBeLessThan(7.5);
+  });
+
+  test("expiryDays is clamped: 365 → 30 days, 0 → 1 day; in-window passes through", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || !testContactId) test.skip(true, "deps missing");
+    const id = await createSentItinerary(request, token, "expiry-clamp");
+
+    // Above max → 30 (re-mint refreshes expiry on the same token).
+    const high = await post(request, token, `/api/travel/itineraries/${id}/share`, { expiryDays: 365 });
+    expect(high.status()).toBe(200);
+    const dHigh = daysFromNow((await high.json()).shareExpiresAt);
+    expect(dHigh).toBeGreaterThan(29.5);
+    expect(dHigh).toBeLessThan(30.5);
+
+    // Below min → 1.
+    const low = await post(request, token, `/api/travel/itineraries/${id}/share`, { expiryDays: 0 });
+    expect(low.status()).toBe(200);
+    const dLow = daysFromNow((await low.json()).shareExpiresAt);
+    expect(dLow).toBeGreaterThan(0.5);
+    expect(dLow).toBeLessThan(1.5);
+
+    // In-window → honored.
+    const mid = await post(request, token, `/api/travel/itineraries/${id}/share`, { expiryDays: 14 });
+    expect(mid.status()).toBe(200);
+    const dMid = daysFromNow((await mid.json()).shareExpiresAt);
+    expect(dMid).toBeGreaterThan(13.5);
+    expect(dMid).toBeLessThan(14.5);
+  });
+
+  test("expired link → public view 410 SHARE_EXPIRED", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || !testContactId) test.skip(true, "deps missing");
+    const id = await createSentItinerary(request, token, "expiry-410");
+    const share = await post(request, token, `/api/travel/itineraries/${id}/share`);
+    expect(share.status()).toBe(200);
+    const shareToken = (await share.json()).shareToken;
+
+    // Link is live while unexpired.
+    const live = await request.get(`${BASE_URL}/api/travel/itineraries/public/${shareToken}`, { timeout: REQUEST_TIMEOUT });
+    expect(live.status()).toBe(200);
+
+    // Back-date the expiry via the advisor PATCH control → 410.
+    const backdate = await patch(request, token, `/api/travel/itineraries/${id}`, {
+      shareExpiresAt: new Date(Date.now() - 60_000).toISOString(),
+    });
+    expect(backdate.status()).toBe(200);
+    const after = await request.get(`${BASE_URL}/api/travel/itineraries/public/${shareToken}`, { timeout: REQUEST_TIMEOUT });
+    expect(after.status()).toBe(410);
+    expect((await after.json()).code).toBe("SHARE_EXPIRED");
+
+    // Extending the expiry forward revives the SAME link (no revoke involved).
+    const extend = await patch(request, token, `/api/travel/itineraries/${id}`, {
+      shareExpiresAt: new Date(Date.now() + 86_400_000).toISOString(),
+    });
+    expect(extend.status()).toBe(200);
+    const revived = await request.get(`${BASE_URL}/api/travel/itineraries/public/${shareToken}`, { timeout: REQUEST_TIMEOUT });
+    expect(revived.status()).toBe(200);
+  });
+
+  test("PATCH /:id with garbage shareExpiresAt → 400 INVALID_SHARE_EXPIRES_AT", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || !testContactId) test.skip(true, "deps missing");
+    const id = await createSentItinerary(request, token, "expiry-bad-date");
+    const res = await patch(request, token, `/api/travel/itineraries/${id}`, { shareExpiresAt: "not-a-date" });
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe("INVALID_SHARE_EXPIRES_AT");
+  });
+
+  test("revoke → 410 SHARE_REVOKED; idempotent re-revoke; re-share mints a FRESH token", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || !testContactId) test.skip(true, "deps missing");
+    const id = await createSentItinerary(request, token, "revoke-flow");
+    const share = await post(request, token, `/api/travel/itineraries/${id}/share`);
+    expect(share.status()).toBe(200);
+    const originalToken = (await share.json()).shareToken;
+
+    // Revoke.
+    const revoke = await post(request, token, `/api/travel/itineraries/${id}/share/revoke`);
+    expect(revoke.status()).toBe(200);
+    const revokeBody = await revoke.json();
+    expect(revokeBody.revoked).toBe(true);
+    expect(revokeBody.shareRevokedAt).toBeTruthy();
+    expect(revokeBody.alreadyRevoked).toBe(false);
+
+    // Public view now 410 SHARE_REVOKED (revoked wins over any expiry state).
+    const dead = await request.get(`${BASE_URL}/api/travel/itineraries/public/${originalToken}`, { timeout: REQUEST_TIMEOUT });
+    expect(dead.status()).toBe(410);
+    expect((await dead.json()).code).toBe("SHARE_REVOKED");
+
+    // Second revoke is an idempotent no-op preserving the original stamp.
+    const again = await post(request, token, `/api/travel/itineraries/${id}/share/revoke`);
+    expect(again.status()).toBe(200);
+    const againBody = await again.json();
+    expect(againBody.alreadyRevoked).toBe(true);
+    expect(againBody.shareRevokedAt).toBe(revokeBody.shareRevokedAt);
+
+    // Re-share after revoke → FRESH token; the leaked URL stays dead forever.
+    const reshare = await post(request, token, `/api/travel/itineraries/${id}/share`);
+    expect(reshare.status()).toBe(200);
+    const reshareBody = await reshare.json();
+    expect(reshareBody.shareToken).toBeTruthy();
+    expect(reshareBody.shareToken).not.toBe(originalToken);
+
+    const oldUrl = await request.get(`${BASE_URL}/api/travel/itineraries/public/${originalToken}`, { timeout: REQUEST_TIMEOUT });
+    expect(oldUrl.status()).toBe(404); // old token no longer exists on any row
+
+    const newUrl = await request.get(`${BASE_URL}/api/travel/itineraries/public/${reshareBody.shareToken}`, { timeout: REQUEST_TIMEOUT });
+    expect(newUrl.status()).toBe(200);
+  });
+
+  test("revoke on a never-shared itinerary → 409 NOT_SHARED", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || !testContactId) test.skip(true, "deps missing");
+    const id = await createSentItinerary(request, token, "revoke-unshared");
+    const res = await post(request, token, `/api/travel/itineraries/${id}/share/revoke`);
+    expect(res.status()).toBe(409);
+    expect((await res.json()).code).toBe("NOT_SHARED");
+  });
+
+  test("revoke without token → 401/403; generic-vertical admin → 403 WRONG_VERTICAL", async ({ request }) => {
+    const noAuth = await request.post(`${BASE_URL}/api/travel/itineraries/1/share/revoke`, {
+      data: {},
+      headers: { "Content-Type": "application/json" },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect([401, 403]).toContain(noAuth.status());
+
+    const genericToken = await getGenericAdmin(request);
+    if (!genericToken) test.skip(true, "no generic admin token");
+    const wrongVertical = await post(request, genericToken, "/api/travel/itineraries/1/share/revoke");
+    expect(wrongVertical.status()).toBe(403);
+    expect((await wrongVertical.json()).code).toBe("WRONG_VERTICAL");
+  });
+});
+
 // Phase 2 (PRD §4.7) — Travel Stall 50%-advance booking flow on public
 // itinerary share-token endpoints. Unauthenticated; allowlisted in
 // server.js openPaths under /travel/itineraries/public.

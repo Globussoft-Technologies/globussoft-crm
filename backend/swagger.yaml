@@ -1,26 +1,82 @@
-openapi: 3.0.0
+openapi: 3.0.3
 info:
   title: Globussoft Enterprise CRM API
-  version: 3.4.13
-  description: |
-    Public REST API for Globussoft Enterprise CRM. Authenticated endpoints
-    require a Bearer JWT obtained from `POST /api/auth/login`. External
-    integrations (Callified.ai, Globus Phone, AdsGPT, etc.) authenticate
-    using `X-API-Key` against the `/api/v1/external/*` surface — see
-    `docs/wellness-client/EXTERNAL_API.md` in the repo for the contract.
-
-    This spec covers the canonical auth, health, and representative-route
-    contracts. The full route table (~91 route files) is documented inline
-    in the source under `backend/routes/*.js`; this file is the
-    machine-readable surface for SDK generators and Postman imports.
-  contact:
-    name: Globussoft Engineering
-    url: https://github.com/Globussoft-Technologies/globussoft-crm
+  version: 3.9.2
+  description: Multi-tenant CRM serving generic, wellness, and travel verticals from one codebase. Bearer JWT auth on most endpoints; partner integrations use `X-API-Key` on `/v1/external/*`.
 servers:
-  - url: https://crm.globusdemos.com/api
-    description: Demo (always-on)
   - url: http://localhost:5000/api
-    description: Local dev
+    description: Local
+  - url: https://crm.globusdemos.com/api
+    description: Demo
+  - url: https://globuscrm.globussoft.com/api
+    description: Production
+security:
+  - BearerAuth: []
+tags:
+  - name: Platform
+    description: Health, version, platform meta.
+  - name: Auth
+    description: Login, signup, 2FA, password reset, SSO, SCIM.
+  - name: Users & Roles
+    description: User management, RBAC, current session, preferences.
+  - name: Tenants
+    description: Tenant CRUD, settings, brand kits, sub-brand themes.
+  - name: Contacts
+    description: Address book — leads, prospects, customers, churned.
+  - name: Deals
+    description: Pipeline deals — stages, won/lost, insights, timeline.
+  - name: Pipelines & Stages
+    description: Pipeline + stage CRUD and ordering.
+  - name: Marketing
+    description: Campaigns, sequences, A/B tests, attribution, landing pages.
+  - name: Communications
+    description: Email, SMS, WhatsApp, voice, push, shared inbox, live chat.
+  - name: Financial
+    description: Invoices, payments, estimates, expenses, wallet, POS.
+  - name: Service & Support
+    description: Tickets, SLA, knowledge base, surveys, portal.
+  - name: Documents
+    description: Templates, e-signatures, document views, file uploads.
+  - name: Analytics
+    description: Reports, dashboards, forecasting, quotas, funnel.
+  - name: Automation
+    description: Workflows, approvals, lead routing, territories.
+  - name: AI
+    description: Gemini-powered scoring, insights, sentiment, chat.
+  - name: Integrations
+    description: Marketplace inbound, Zapier, calendar sync, SSO, SCIM.
+  - name: Admin & Platform
+    description: Audit log, GDPR, field permissions, sandbox, developer.
+  - name: Wellness — Patients & PHI
+    description: "[Wellness] Patient records, tags, activities. PHI-gated."
+  - name: Wellness — Visits & Clinical
+    description: "[Wellness] Visits, prescriptions, consents, treatment plans."
+  - name: Wellness — Catalog & Inventory
+    description: "[Wellness] Services, drugs, inventory, block times."
+  - name: Wellness — Operations
+    description: "[Wellness] Dashboard, recommendations, reports, telecaller queue."
+  - name: Wellness — Portal & Public
+    description: "[Wellness] Patient portal, public booking, clinic page."
+  - name: Travel — Trips & Itineraries
+    description: "[Travel] TMC trips, participants, itineraries, share tokens."
+  - name: Travel — Visa & Documents
+    description: "[Travel] Visa Sure — applications, embassy rules, passports."
+  - name: Travel — Suppliers & Pricing
+    description: "[Travel] Suppliers, cost master, pricing engine, commissions."
+  - name: Travel — Microsites & Marketing
+    description: "[Travel] Microsites, flyers, religious packets, sightseeing."
+  - name: Travel — Quotes & Billing
+    description: "[Travel] Quotes, invoices, trip billing, RFU profiles."
+  - name: Travel — Diagnostics & Sales
+    description: "[Travel] TMC readiness diagnostic, lead quality, sales brief."
+  - name: Travel — Operations
+    description: "[Travel] Dashboard, reports, CSV I/O, inbound leads, web check-in."
+  - name: Travel — Sub-Brand Integrations
+    description: "[Travel] RateHawk, AdsGPT, Callified.ai, Booking-Expedia, TMC catalogue."
+  - name: External Partner API
+    description: API-key surface for sister Globussoft products (`/v1/external/*`).
+  - name: Public
+    description: Unauthenticated — webhooks, public booking, share-token views.
 components:
   securitySchemes:
     BearerAuth:
@@ -28,8 +84,9 @@ components:
       scheme: bearer
       bearerFormat: JWT
       description: |
-        JWT issued by `POST /api/auth/login`. The token payload includes
-        `userId`, `tenantId`, and `role`. Pass as `Authorization: Bearer <token>`.
+        JWT issued by `POST /api/auth/login`. Payload contains `userId`,
+        `tenantId`, `role`. Pass as `Authorization: Bearer <token>`.
+        Token is valid for 7 days.
     ApiKeyAuth:
       type: apiKey
       in: header
@@ -37,63 +94,83 @@ components:
       description: |
         External-partner API key (prefix `glbs_`). Issued out-of-band per
         partner integration. Used only on `/api/v1/external/*` routes.
+    WebhookSignature:
+      type: apiKey
+      in: header
+      name: X-Webhook-Signature
+      description: |
+        HMAC-SHA256 signature of the raw request body, hex-encoded. Used
+        on inbound webhook endpoints (marketplace leads, WhatsApp,
+        payment-gateway callbacks).
+  parameters:
+    Page:
+      in: query
+      name: page
+      schema: { type: integer, minimum: 1, default: 1 }
+      description: 1-indexed page number (list endpoints).
+    Limit:
+      in: query
+      name: limit
+      schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+      description: Page size (list endpoints).
+    Search:
+      in: query
+      name: q
+      schema: { type: string }
+      description: Free-text search (most list endpoints).
+    IdPath:
+      in: path
+      name: id
+      required: true
+      schema: { type: integer }
+      description: Numeric primary key.
+  responses:
+    Unauthorized:
+      description: Missing or invalid bearer token.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: "Authentication required"
+            code: "AUTH_REQUIRED"
+    Forbidden:
+      description: Authenticated but lacking required role / vertical / scope.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: "Insufficient permissions"
+            code: "ROLE_DENIED"
+    NotFound:
+      description: Resource not found in this tenant scope.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: "Not found"
+            code: "RESOURCE_NOT_FOUND"
+    ValidationError:
+      description: Request payload failed validation.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ValidationErrorResponse'
+    RateLimited:
+      description: Rate limit exceeded (general 5000/15min, auth 1000/15min).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: "Too many requests"
+            code: "RATE_LIMITED"
+    Created:
+      description: Resource created successfully.
   schemas:
-    LoginRequest:
-      type: object
-      required: [email, password]
-      properties:
-        email:
-          type: string
-          format: email
-          example: admin@globussoft.com
-        password:
-          type: string
-          format: password
-          example: password123
-    LoginResponse:
-      type: object
-      properties:
-        token:
-          type: string
-          description: JWT bearer token. Include in `Authorization` header.
-        user:
-          type: object
-          properties:
-            id: { type: integer }
-            email: { type: string, format: email }
-            name: { type: string }
-            role: { type: string, enum: [ADMIN, MANAGER, USER] }
-            tenantId: { type: integer }
-    HealthResponse:
-      type: object
-      properties:
-        status: { type: string, example: ok }
-        version: { type: string, example: "3.4.13" }
-        uptime: { type: number, description: "Process uptime in seconds (authenticated callers only)" }
-        database: { type: string, enum: [up, down], description: "Authenticated callers only" }
-    Contact:
-      type: object
-      properties:
-        id: { type: integer }
-        name: { type: string }
-        email: { type: string, format: email }
-        phone: { type: string }
-        company: { type: string }
-        status: { type: string, enum: [Lead, Prospect, Customer, Churned] }
-        tenantId: { type: integer, readOnly: true }
-        createdAt: { type: string, format: date-time, readOnly: true }
-        updatedAt: { type: string, format: date-time, readOnly: true }
-    Deal:
-      type: object
-      properties:
-        id: { type: integer }
-        title: { type: string }
-        value: { type: number }
-        currency: { type: string, example: "USD" }
-        stage: { type: string }
-        contactId: { type: integer }
-        ownerId: { type: integer }
-        tenantId: { type: integer, readOnly: true }
+    # ─── Shared envelope ──────────────────────────────────────────────
     ErrorResponse:
       type: object
       properties:
@@ -101,56 +178,927 @@ components:
         code: { type: string, example: "API_ROUTE_NOT_FOUND" }
         path: { type: string, example: "/api/foo" }
         method: { type: string, example: "GET" }
+    ValidationErrorResponse:
+      type: object
+      properties:
+        error: { type: string, example: "Validation failed" }
+        code: { type: string, example: "VALIDATION_ERROR" }
+        details:
+          type: array
+          items:
+            type: object
+            properties:
+              field: { type: string, example: "email" }
+              message: { type: string, example: "must be a valid email" }
+    PaginatedEnvelope:
+      type: object
+      properties:
+        items:
+          type: array
+          items: { type: object }
+        total: { type: integer, example: 142 }
+        page: { type: integer, example: 1 }
+        limit: { type: integer, example: 50 }
+        hasMore: { type: boolean, example: true }
+    AuditMeta:
+      type: object
+      description: Tenant-scoped audit fields stamped on every record.
+      properties:
+        tenantId: { type: integer, readOnly: true }
+        createdAt: { type: string, format: date-time, readOnly: true }
+        updatedAt: { type: string, format: date-time, readOnly: true }
+        createdById: { type: integer, readOnly: true, nullable: true }
+
+    # ─── Auth ─────────────────────────────────────────────────────────
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email, example: "admin@globussoft.com" }
+        password: { type: string, format: password, example: "password123" }
+        rememberMe: { type: boolean, default: false }
+    LoginResponse:
+      type: object
+      properties:
+        token:
+          type: string
+          description: JWT bearer token; include in `Authorization` header.
+          example: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+        user:
+          $ref: '#/components/schemas/User'
+        tenant:
+          $ref: '#/components/schemas/Tenant'
+    SignupRequest:
+      type: object
+      required: [email, password, name, companyName]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string, format: password, minLength: 8 }
+        name: { type: string }
+        companyName: { type: string }
+        vertical:
+          type: string
+          enum: [generic, wellness, travel]
+          default: generic
+        country: { type: string, example: "IN" }
+        defaultCurrency: { type: string, example: "INR" }
+    TwoFactorEnableRequest:
+      type: object
+      properties:
+        password: { type: string, format: password }
+    TwoFactorEnableResponse:
+      type: object
+      properties:
+        secret: { type: string, description: TOTP shared secret. }
+        otpauthUrl: { type: string, description: otpauth:// URI for QR provisioning. }
+        recoveryCodes:
+          type: array
+          items: { type: string }
+    TwoFactorVerifyRequest:
+      type: object
+      required: [token]
+      properties:
+        token: { type: string, example: "123456" }
+
+    # ─── Core entities ────────────────────────────────────────────────
+    User:
+      type: object
+      properties:
+        id: { type: integer, readOnly: true }
+        email: { type: string, format: email }
+        name: { type: string }
+        role: { type: string, enum: [ADMIN, MANAGER, USER] }
+        wellnessRole:
+          type: string
+          nullable: true
+          enum: [doctor, professional, telecaller, helper, null]
+          description: Wellness-vertical only.
+        tenantId: { type: integer, readOnly: true }
+        isActive: { type: boolean, default: true }
+        twoFactorEnabled: { type: boolean, readOnly: true }
+        subBrandAccess:
+          type: array
+          description: Travel-vertical only — which sub-brands this user can act on.
+          items:
+            type: string
+            enum: [tmc, rfu, travel_stall, visa_sure]
+        createdAt: { type: string, format: date-time, readOnly: true }
+    Tenant:
+      type: object
+      properties:
+        id: { type: integer, readOnly: true }
+        name: { type: string, example: "Globussoft Demo" }
+        slug: { type: string, example: "globussoft-demo" }
+        vertical:
+          type: string
+          enum: [generic, wellness, travel]
+          description: Drives sidebar, theme, landing route, currency defaults.
+        country: { type: string, example: "IN" }
+        defaultCurrency: { type: string, example: "INR" }
+        locale: { type: string, example: "en-IN" }
+        timezone: { type: string, example: "Asia/Kolkata" }
+        createdAt: { type: string, format: date-time, readOnly: true }
+    Contact:
+      type: object
+      required: [name]
+      properties:
+        id: { type: integer, readOnly: true }
+        name: { type: string }
+        email: { type: string, format: email, nullable: true }
+        phone: { type: string, nullable: true }
+        company: { type: string, nullable: true }
+        title: { type: string, nullable: true }
+        status:
+          type: string
+          enum: [Lead, Prospect, Customer, Churned]
+          default: Lead
+        ownerId: { type: integer, nullable: true }
+        leadScore: { type: integer, nullable: true, minimum: 0, maximum: 100 }
+        source: { type: string, nullable: true, example: "IndiaMART" }
+        tags:
+          type: array
+          items: { type: string }
+        deletedAt: { type: string, format: date-time, nullable: true, readOnly: true }
+      allOf:
+        - $ref: '#/components/schemas/AuditMeta'
+    Deal:
+      type: object
+      required: [title, value]
+      properties:
+        id: { type: integer, readOnly: true }
+        title: { type: string }
+        value: { type: number, format: float, example: 25000.00 }
+        currency: { type: string, example: "USD" }
+        stageId: { type: integer, description: Foreign key into PipelineStage. }
+        pipelineId: { type: integer }
+        contactId: { type: integer, nullable: true }
+        ownerId: { type: integer, nullable: true }
+        status:
+          type: string
+          enum: [open, won, lost]
+          default: open
+        winProbability: { type: integer, minimum: 0, maximum: 100, nullable: true }
+        expectedCloseDate: { type: string, format: date, nullable: true }
+        wonAt: { type: string, format: date-time, nullable: true, readOnly: true }
+        lostAt: { type: string, format: date-time, nullable: true, readOnly: true }
+        lostReason: { type: string, nullable: true }
+      allOf:
+        - $ref: '#/components/schemas/AuditMeta'
+    Pipeline:
+      type: object
+      properties:
+        id: { type: integer, readOnly: true }
+        name: { type: string, example: "Sales Pipeline" }
+        isDefault: { type: boolean }
+        stages:
+          type: array
+          items:
+            $ref: '#/components/schemas/PipelineStage'
+    PipelineStage:
+      type: object
+      properties:
+        id: { type: integer, readOnly: true }
+        name: { type: string, example: "Qualified" }
+        order: { type: integer }
+        winProbability: { type: integer, minimum: 0, maximum: 100 }
+        pipelineId: { type: integer }
+
+    # ─── Communications ──────────────────────────────────────────────
+    EmailMessage:
+      type: object
+      properties:
+        id: { type: integer, readOnly: true }
+        to:
+          type: array
+          items: { type: string, format: email }
+        subject: { type: string }
+        body: { type: string, description: HTML body. Sanitized server-side. }
+        scheduledFor: { type: string, format: date-time, nullable: true }
+        status:
+          type: string
+          enum: [draft, queued, sent, delivered, opened, clicked, bounced, failed]
+        threadId: { type: string, nullable: true }
+        templateId: { type: integer, nullable: true }
+      allOf:
+        - $ref: '#/components/schemas/AuditMeta'
+    SmsMessage:
+      type: object
+      properties:
+        id: { type: integer, readOnly: true }
+        to: { type: string, example: "+919999999999" }
+        body: { type: string, maxLength: 1600 }
+        provider: { type: string, enum: [twilio, msg91] }
+        status: { type: string, enum: [queued, sent, delivered, failed] }
+        senderId: { type: string, maxLength: 6, nullable: true }
+        providerMessageId: { type: string, nullable: true }
+      allOf:
+        - $ref: '#/components/schemas/AuditMeta'
+    WhatsAppMessage:
+      type: object
+      properties:
+        id: { type: integer, readOnly: true }
+        to: { type: string, description: E.164 phone number. }
+        templateName: { type: string, nullable: true }
+        body: { type: string }
+        mediaUrl: { type: string, nullable: true }
+        status: { type: string, enum: [queued, sent, delivered, read, failed] }
+      allOf:
+        - $ref: '#/components/schemas/AuditMeta'
+    Notification:
+      type: object
+      properties:
+        id: { type: integer, readOnly: true }
+        userId: { type: integer }
+        title: { type: string }
+        body: { type: string }
+        link: { type: string, nullable: true }
+        readAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time, readOnly: true }
+
+    # ─── Financial ───────────────────────────────────────────────────
+    Invoice:
+      type: object
+      properties:
+        id: { type: integer, readOnly: true }
+        invoiceNumber: { type: string, readOnly: true, example: "INV-2026-0142" }
+        contactId: { type: integer, nullable: true }
+        dealId: { type: integer, nullable: true }
+        amount: { type: number, format: float }
+        tax: { type: number, format: float, default: 0 }
+        total: { type: number, format: float }
+        currency: { type: string, example: "INR" }
+        status:
+          type: string
+          enum: [draft, sent, partial, paid, overdue, void, refunded]
+        dueDate: { type: string, format: date }
+        paidAt: { type: string, format: date-time, nullable: true, readOnly: true }
+        lineItems:
+          type: array
+          items:
+            $ref: '#/components/schemas/InvoiceLineItem'
+        recurring:
+          type: boolean
+          default: false
+      allOf:
+        - $ref: '#/components/schemas/AuditMeta'
+    InvoiceLineItem:
+      type: object
+      properties:
+        description: { type: string }
+        quantity: { type: number, format: float, example: 1 }
+        unitPrice: { type: number, format: float }
+        taxRate: { type: number, format: float, default: 0 }
+        amount: { type: number, format: float, readOnly: true }
+    Payment:
+      type: object
+      properties:
+        id: { type: integer, readOnly: true }
+        invoiceId: { type: integer }
+        amount: { type: number, format: float }
+        currency: { type: string }
+        gateway:
+          type: string
+          enum: [manual, stripe, razorpay, paypal, bank_transfer]
+        gatewayChargeId: { type: string, nullable: true }
+        status: { type: string, enum: [pending, succeeded, failed, refunded] }
+        paidAt: { type: string, format: date-time }
+      allOf:
+        - $ref: '#/components/schemas/AuditMeta'
+
+    # ─── Tickets ─────────────────────────────────────────────────────
+    Ticket:
+      type: object
+      properties:
+        id: { type: integer, readOnly: true }
+        ticketNumber: { type: string, readOnly: true, example: "TKT-0042" }
+        subject: { type: string }
+        body: { type: string }
+        priority: { type: string, enum: [low, medium, high, urgent] }
+        status: { type: string, enum: [open, pending, resolved, closed] }
+        contactId: { type: integer, nullable: true }
+        assigneeId: { type: integer, nullable: true }
+        slaPolicyId: { type: integer, nullable: true }
+        slaBreachedAt: { type: string, format: date-time, nullable: true, readOnly: true }
+        firstResponseAt: { type: string, format: date-time, nullable: true, readOnly: true }
+        resolvedAt: { type: string, format: date-time, nullable: true, readOnly: true }
+      allOf:
+        - $ref: '#/components/schemas/AuditMeta'
+
+    # ─── Marketing ───────────────────────────────────────────────────
+    Campaign:
+      type: object
+      properties:
+        id: { type: integer, readOnly: true }
+        name: { type: string }
+        channel: { type: string, enum: [email, sms, whatsapp, push, multi] }
+        status:
+          type: string
+          enum: [draft, scheduled, running, paused, completed, archived]
+        audienceFilter:
+          type: object
+          description: JSON filter — see `lib/audienceFilter.js`.
+        scheduledFor: { type: string, format: date-time, nullable: true }
+        sent: { type: integer, readOnly: true }
+        opened: { type: integer, readOnly: true }
+        clicked: { type: integer, readOnly: true }
+      allOf:
+        - $ref: '#/components/schemas/AuditMeta'
+    Sequence:
+      type: object
+      properties:
+        id: { type: integer, readOnly: true }
+        name: { type: string }
+        isActive: { type: boolean }
+        triggerType: { type: string, enum: [manual, event, schedule] }
+        steps:
+          type: array
+          items:
+            type: object
+            properties:
+              delayMinutes: { type: integer }
+              channel: { type: string, enum: [email, sms, whatsapp, task] }
+              templateId: { type: integer, nullable: true }
+              conditionJson: { type: string, description: JSON-encoded condition tree. }
+      allOf:
+        - $ref: '#/components/schemas/AuditMeta'
+
+    # ─── Workflow / Automation ───────────────────────────────────────
+    Workflow:
+      type: object
+      properties:
+        id: { type: integer, readOnly: true }
+        name: { type: string }
+        triggerEvent: { type: string, example: "contact.created" }
+        conditions:
+          type: object
+          description: JSON condition tree evaluated by `workflowEngine`.
+        actions:
+          type: array
+          items:
+            type: object
+            properties:
+              type: { type: string, example: "send_email" }
+              params: { type: object }
+        isActive: { type: boolean }
+      allOf:
+        - $ref: '#/components/schemas/AuditMeta'
+
+    # ─── Reports ─────────────────────────────────────────────────────
+    Report:
+      type: object
+      properties:
+        id: { type: integer, readOnly: true }
+        name: { type: string }
+        type: { type: string, enum: [revenue, pipeline, activity, custom] }
+        filtersJson: { type: string }
+        scheduleCron: { type: string, nullable: true }
+        recipients:
+          type: array
+          items: { type: string, format: email }
+      allOf:
+        - $ref: '#/components/schemas/AuditMeta'
+
+    # ─── Wellness vertical ───────────────────────────────────────────
+    Patient:
+      type: object
+      description: "[WELLNESS] Patient (clinical-record subject). PII fields are AES-256-GCM encrypted at rest when `WELLNESS_FIELD_KEY` is set."
+      properties:
+        id: { type: integer, readOnly: true }
+        firstName: { type: string }
+        lastName: { type: string }
+        phone: { type: string }
+        email: { type: string, format: email, nullable: true }
+        dob: { type: string, format: date, nullable: true }
+        gender: { type: string, enum: [male, female, other, prefer_not_to_say], nullable: true }
+        locationId: { type: integer, nullable: true, description: Multi-clinic support. }
+        primaryDoctorId: { type: integer, nullable: true }
+        leadSource: { type: string, nullable: true }
+        leadScore: { type: integer, nullable: true }
+        leadStatus: { type: string, enum: [new, contacted, qualified, junk, lost, converted], default: new }
+        tags:
+          type: array
+          items: { type: string }
+        consentMarketing: { type: boolean }
+        notes: { type: string, nullable: true }
+      allOf:
+        - $ref: '#/components/schemas/AuditMeta'
+    Visit:
+      type: object
+      description: "[WELLNESS] A booked or completed clinical visit (appointment)."
+      properties:
+        id: { type: integer, readOnly: true }
+        patientId: { type: integer }
+        doctorId: { type: integer, nullable: true }
+        professionalId: { type: integer, nullable: true }
+        locationId: { type: integer }
+        serviceId: { type: integer, nullable: true }
+        visitDate: { type: string, format: date-time }
+        durationMinutes: { type: integer, default: 30 }
+        status:
+          type: string
+          enum: [booked, confirmed, checked_in, in_consultation, completed, cancelled, no_show]
+        chiefComplaint: { type: string, nullable: true }
+        notes: { type: string, nullable: true }
+        chargeAmount: { type: number, format: float, nullable: true }
+        npsScore: { type: integer, nullable: true, minimum: 0, maximum: 10 }
+      allOf:
+        - $ref: '#/components/schemas/AuditMeta'
+    Prescription:
+      type: object
+      description: "[WELLNESS] Doctor / clinician-only resource."
+      properties:
+        id: { type: integer, readOnly: true }
+        patientId: { type: integer }
+        visitId: { type: integer, nullable: true }
+        prescriberId: { type: integer, description: Must be a User with clinical wellnessRole. }
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              drugId: { type: integer, nullable: true }
+              drugName: { type: string }
+              dosage: { type: string, example: "500mg" }
+              frequency: { type: string, example: "BID" }
+              duration: { type: string, example: "7 days" }
+              instructions: { type: string, nullable: true }
+        notes: { type: string, nullable: true }
+        pdfUrl: { type: string, readOnly: true, nullable: true }
+      allOf:
+        - $ref: '#/components/schemas/AuditMeta'
+    ConsentForm:
+      type: object
+      description: "[WELLNESS] Procedure consent with embedded patient signature (base64 PNG)."
+      properties:
+        id: { type: integer, readOnly: true }
+        patientId: { type: integer }
+        visitId: { type: integer, nullable: true }
+        formType: { type: string, example: "aesthetic_treatment_consent" }
+        bodyMarkdown: { type: string }
+        signatureBase64: { type: string, description: PNG data URI of patient signature. }
+        signedAt: { type: string, format: date-time, readOnly: true }
+        witnessUserId: { type: integer, nullable: true }
+        pdfUrl: { type: string, readOnly: true, nullable: true }
+      allOf:
+        - $ref: '#/components/schemas/AuditMeta'
+    TreatmentPlan:
+      type: object
+      description: "[WELLNESS] Multi-visit clinical plan."
+      properties:
+        id: { type: integer, readOnly: true }
+        patientId: { type: integer }
+        title: { type: string }
+        diagnosis: { type: string, nullable: true }
+        sessionsPlanned: { type: integer }
+        sessionsCompleted: { type: integer }
+        startDate: { type: string, format: date }
+        endDate: { type: string, format: date, nullable: true }
+        status: { type: string, enum: [active, paused, completed, cancelled] }
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              serviceId: { type: integer }
+              quantity: { type: integer }
+              completed: { type: integer }
+      allOf:
+        - $ref: '#/components/schemas/AuditMeta'
+    Service:
+      type: object
+      description: "[WELLNESS] A clinic-provided service (catalog entry). Can be standalone or grouped into a Package."
+      properties:
+        id: { type: integer, readOnly: true }
+        name: { type: string }
+        sku: { type: string, nullable: true }
+        categoryId: { type: integer, nullable: true }
+        priceCents: { type: integer }
+        durationMinutes: { type: integer }
+        isPackage: { type: boolean }
+        packageItems:
+          type: array
+          items:
+            type: object
+            properties:
+              serviceId: { type: integer }
+              quantity: { type: integer }
+        active: { type: boolean, default: true }
+      allOf:
+        - $ref: '#/components/schemas/AuditMeta'
+    AgentRecommendation:
+      type: object
+      description: "[WELLNESS] Daily AI-generated owner-dashboard recommendation card. Produced by `orchestratorEngine`."
+      properties:
+        id: { type: integer, readOnly: true }
+        category: { type: string, example: "revenue_opportunity" }
+        title: { type: string }
+        body: { type: string }
+        impactCents: { type: integer, nullable: true }
+        cta:
+          type: object
+          properties:
+            label: { type: string }
+            href: { type: string }
+        dismissedAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time, readOnly: true }
+
+    # ─── Travel vertical ─────────────────────────────────────────────
+    TravelTrip:
+      type: object
+      description: "[TRAVEL][TMC] A school / corporate trip — the parent record for participants, accommodation, transport, billing."
+      properties:
+        id: { type: integer, readOnly: true }
+        subBrand:
+          type: string
+          enum: [tmc, rfu, travel_stall, visa_sure]
+        title: { type: string, example: "DPS Year 10 — Manali Adventure" }
+        schoolName: { type: string, nullable: true }
+        startDate: { type: string, format: date }
+        endDate: { type: string, format: date }
+        destinationSummary: { type: string, nullable: true }
+        participantCount: { type: integer, default: 0 }
+        status:
+          type: string
+          enum: [enquiry, quoted, confirmed, in_progress, completed, cancelled]
+        leadAdvisorId: { type: integer, nullable: true }
+        priceCents: { type: integer, nullable: true }
+        currency: { type: string, example: "INR" }
+      allOf:
+        - $ref: '#/components/schemas/AuditMeta'
+    TravelItinerary:
+      type: object
+      description: "[TRAVEL] Day-by-day itinerary attached to a trip or sent standalone to a lead."
+      properties:
+        id: { type: integer, readOnly: true }
+        subBrand: { type: string, enum: [tmc, rfu, travel_stall, visa_sure] }
+        title: { type: string }
+        contactId: { type: integer, nullable: true }
+        tripId: { type: integer, nullable: true }
+        days:
+          type: array
+          items:
+            type: object
+            properties:
+              dayNumber: { type: integer }
+              date: { type: string, format: date, nullable: true }
+              items:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TravelItineraryItem'
+        totalPriceCents: { type: integer }
+        currency: { type: string, example: "INR" }
+        status:
+          type: string
+          enum: [draft, sent, accepted, rejected, expired]
+        shareToken: { type: string, readOnly: true, description: Public-view token. }
+        sharedAt: { type: string, format: date-time, nullable: true, readOnly: true }
+        acceptedAt: { type: string, format: date-time, nullable: true, readOnly: true }
+      allOf:
+        - $ref: '#/components/schemas/AuditMeta'
+    TravelItineraryItem:
+      type: object
+      properties:
+        id: { type: integer, readOnly: true }
+        itemType: { type: string, enum: [flight, hotel, transfer, activity, meal, note] }
+        description: { type: string }
+        location: { type: string, nullable: true }
+        startTime: { type: string, format: date-time, nullable: true }
+        endTime: { type: string, format: date-time, nullable: true }
+        supplierId: { type: integer, nullable: true }
+        priceCents: { type: integer, default: 0 }
+    TravelQuote:
+      type: object
+      description: "[TRAVEL] A formal price quote sent to a lead, with public share-token surface."
+      properties:
+        id: { type: integer, readOnly: true }
+        contactId: { type: integer }
+        subBrand: { type: string, enum: [tmc, rfu, travel_stall, visa_sure] }
+        itineraryId: { type: integer, nullable: true }
+        totalCents: { type: integer }
+        currency: { type: string }
+        validUntil: { type: string, format: date }
+        status: { type: string, enum: [draft, sent, accepted, rejected, expired] }
+        shareToken: { type: string, readOnly: true }
+      allOf:
+        - $ref: '#/components/schemas/AuditMeta'
+    VisaApplication:
+      type: object
+      description: "[TRAVEL][Visa Sure] A visa case being processed for a contact."
+      properties:
+        id: { type: integer, readOnly: true }
+        contactId: { type: integer }
+        country: { type: string, example: "USA" }
+        visaType: { type: string, example: "B1/B2 tourist" }
+        applicationDate: { type: string, format: date }
+        appointmentDate: { type: string, format: date, nullable: true }
+        status:
+          type: string
+          enum: [intake, document_collection, application_filed, appointment_booked, biometrics_done, decision_pending, approved, rejected, withdrawn]
+        notes: { type: string, nullable: true }
+        checklist:
+          type: array
+          items:
+            type: object
+            properties:
+              label: { type: string }
+              required: { type: boolean }
+              done: { type: boolean }
+              fileUrl: { type: string, nullable: true }
+      allOf:
+        - $ref: '#/components/schemas/AuditMeta'
+    TravelSupplier:
+      type: object
+      description: "[TRAVEL] Hotel / airline / ground-handler / DMC supplier. Credentials are stored encrypted in a vault row."
+      properties:
+        id: { type: integer, readOnly: true }
+        name: { type: string }
+        type: { type: string, enum: [hotel, airline, ground_handler, dmc, restaurant, activity, other] }
+        country: { type: string, nullable: true }
+        contactEmail: { type: string, format: email, nullable: true }
+        contactPhone: { type: string, nullable: true }
+        gstin: { type: string, nullable: true }
+        commissionPercent: { type: number, format: float, nullable: true }
+        active: { type: boolean, default: true }
+      allOf:
+        - $ref: '#/components/schemas/AuditMeta'
+    TravelMicrosite:
+      type: object
+      description: "[TRAVEL] Multi-page public micro-site — brochures, religious-trip packets, school-trip packs."
+      properties:
+        id: { type: integer, readOnly: true }
+        slug: { type: string }
+        subBrand: { type: string, enum: [tmc, rfu, travel_stall, visa_sure] }
+        title: { type: string }
+        pages:
+          type: array
+          items:
+            type: object
+            properties:
+              slug: { type: string }
+              title: { type: string }
+              bodyHtml: { type: string }
+        otpRequired: { type: boolean, default: false }
+        publishedAt: { type: string, format: date-time, nullable: true }
+      allOf:
+        - $ref: '#/components/schemas/AuditMeta'
+    TravelDiagnosticSubmission:
+      type: object
+      description: "[TRAVEL][TMC] Submission to the public 12-question school-trip readiness form."
+      properties:
+        id: { type: integer, readOnly: true }
+        schoolName: { type: string }
+        contactName: { type: string }
+        contactPhone: { type: string }
+        contactEmail: { type: string, format: email, nullable: true }
+        answersJson:
+          type: object
+          description: 12-question raw answers keyed by question ID.
+        scoreNumeric: { type: integer, minimum: 0, maximum: 100, readOnly: true }
+        readinessTier:
+          type: string
+          enum: [low, medium, high]
+          readOnly: true
+        leadQualityTier:
+          type: string
+          enum: [cold, warm, hot]
+          readOnly: true
+        reportSlug: { type: string, readOnly: true, description: Public report URL slug. }
+        reportPdfUrl: { type: string, readOnly: true, nullable: true }
+      allOf:
+        - $ref: '#/components/schemas/AuditMeta'
+    TravelRfuLeadProfile:
+      type: object
+      description: "[TRAVEL][RFU Umrah] Religious-fitness-and-Umrah pilgrim profile."
+      properties:
+        id: { type: integer, readOnly: true }
+        contactId: { type: integer }
+        ageBand: { type: string, enum: [under_30, 30_45, 46_60, over_60] }
+        mobilityNeeds: { type: string, nullable: true }
+        familyGroupSize: { type: integer }
+        passportCountry: { type: string }
+        budgetTierIndianRupees: { type: string, enum: [economy, comfort, premium, luxury] }
+        preferredSeason: { type: string, nullable: true }
+      allOf:
+        - $ref: '#/components/schemas/AuditMeta'
+
+    # ─── External Partner API ─────────────────────────────────────────
+    ExternalLead:
+      type: object
+      properties:
+        id: { type: integer, readOnly: true }
+        name: { type: string }
+        email: { type: string, format: email, nullable: true }
+        phone: { type: string }
+        source: { type: string, example: "callified" }
+        sourcePayload:
+          type: object
+          description: Raw payload from the partner system.
+        stage: { type: string }
+        createdAt: { type: string, format: date-time, readOnly: true }
+    ExternalCall:
+      type: object
+      properties:
+        id: { type: integer, readOnly: true }
+        contactId: { type: integer, nullable: true }
+        patientId: { type: integer, nullable: true }
+        direction: { type: string, enum: [inbound, outbound] }
+        durationSeconds: { type: integer, nullable: true }
+        recordingUrl: { type: string, nullable: true }
+        transcriptText: { type: string, nullable: true, description: Late-bound — patched via PATCH /calls/:id. }
+        provider: { type: string, example: "callified" }
+        externalCallSid: { type: string }
+        startedAt: { type: string, format: date-time }
+        endedAt: { type: string, format: date-time, nullable: true }
+
 paths:
+  # ════════════════════════════════════════════════════════════════════
+  # PLATFORM
+  # ════════════════════════════════════════════════════════════════════
   /health:
     get:
-      summary: Health check
+      summary: Liveness + version probe
       description: |
-        Liveness + version probe. Public (no auth required); returns minimal
-        envelope without an Authorization header. With a valid Bearer token,
-        the response also includes `uptime` and `database` status.
+        Public liveness check. Returns minimal `{ status, version }` without
+        an Authorization header. With a valid Bearer token also returns
+        `uptime` (process seconds) and `database` status — used by the
+        deploy-gate health poll and the demo-monitor cron.
       tags: [Platform]
+      security: []
       responses:
         "200":
-          description: Service is up
+          description: Service is up.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HealthResponse'
+                type: object
+                properties:
+                  status: { type: string, example: "ok" }
+                  version: { type: string, example: "3.9.2" }
+                  uptime: { type: number, description: Process uptime in seconds (auth callers only). }
+                  database: { type: string, enum: [up, down], description: Auth callers only. }
+              examples:
+                public:
+                  summary: Unauthenticated response
+                  value: { status: "ok", version: "3.9.2" }
+                authenticated:
+                  summary: Authenticated response
+                  value: { status: "ok", version: "3.9.2", uptime: 18234, database: "up" }
+
+  # ════════════════════════════════════════════════════════════════════
+  # AUTH
+  # ════════════════════════════════════════════════════════════════════
   /auth/login:
     post:
       summary: Authenticate and receive a JWT
       description: |
-        Exchanges email + password for a JWT. Tokens are valid for 7 days
-        and carry `userId`, `tenantId`, `role` claims. Pass returned
-        `token` as `Authorization: Bearer <token>` on all subsequent
-        authenticated endpoints. Rate-limited to 1000 req/15min per IP.
+        Exchanges email + password for a JWT. Tokens carry `userId`,
+        `tenantId`, `role` claims and are valid for 7 days. Pass the
+        returned `token` as `Authorization: Bearer <token>` on every
+        subsequent authenticated request.
+
+        **Rate limit:** 1000 req / 15 min per IP.
       tags: [Auth]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoginRequest' }
+      responses:
+        "200":
+          description: Authentication successful.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LoginResponse' }
+        "401":
+          description: Invalid credentials.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        "429":
+          $ref: '#/components/responses/RateLimited'
+  /auth/signup:
+    post:
+      summary: Register a new tenant + admin user
+      description: |
+        Creates a new `Tenant` and its founding `ADMIN` `User` in a single
+        transaction. Optionally accepts `vertical` to provision the tenant
+        directly into the wellness or travel surface; defaults to `generic`.
+      tags: [Auth]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SignupRequest' }
+      responses:
+        "201":
+          description: Tenant + user created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LoginResponse' }
+        "400":
+          $ref: '#/components/responses/ValidationError'
+  /auth/register:
+    post:
+      summary: Self-serve user registration
+      description: Used by signup pages where a new user joins an existing tenant via invite code.
+      tags: [Auth]
+      security: []
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/LoginRequest'
+              type: object
+              required: [email, password, inviteToken]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, format: password }
+                name: { type: string }
+                inviteToken: { type: string }
+      responses:
+        "201": { description: User created. }
+        "400": { $ref: '#/components/responses/ValidationError' }
+  /auth/forgot-password:
+    post:
+      summary: Request password-reset email
+      tags: [Auth]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+      responses:
+        "200": { description: Reset email queued (silent — never leaks whether email exists). }
+  /auth/reset-password:
+    post:
+      summary: Reset password with one-time token
+      tags: [Auth]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, password]
+              properties:
+                token: { type: string }
+                password: { type: string, format: password, minLength: 8 }
+      responses:
+        "200": { description: Password updated. }
+        "400": { $ref: '#/components/responses/ValidationError' }
+  /auth/2fa/enable:
+    post:
+      summary: Begin TOTP 2FA enrollment
+      description: |
+        Generates a TOTP secret and otpauth URI for the caller. Client
+        renders the URI as a QR code (e.g. Google Authenticator). 2FA is
+        not activated until `POST /auth/2fa/verify` succeeds.
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TwoFactorEnableRequest' }
       responses:
         "200":
-          description: Authentication successful
+          description: Enrollment artefacts.
           content:
             application/json:
-              schema:
-                $ref: '#/components/schemas/LoginResponse'
-        "401":
-          description: Invalid credentials
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        "429":
-          description: Rate limit exceeded
-  /auth/signup:
+              schema: { $ref: '#/components/schemas/TwoFactorEnableResponse' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+  /auth/2fa/verify:
     post:
-      summary: Register a new tenant + admin user
-      description: Creates a new Tenant and the founding ADMIN user in one transaction.
+      summary: Verify TOTP code and activate 2FA
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TwoFactorVerifyRequest' }
+      responses:
+        "200": { description: 2FA activated. }
+        "400": { $ref: '#/components/responses/ValidationError' }
+  /auth/2fa/disable:
+    post:
+      summary: Disable TOTP 2FA for the caller
+      tags: [Auth]
+      responses:
+        "200": { description: 2FA deactivated. }
+  /auth/step-up:
+    post:
+      summary: Issue a short-lived elevated session
+      description: |
+        For sensitive write actions (delete-tenant, rotate keys, payout).
+        Caller submits current password + optional TOTP; returns a 5-minute
+        step-up token to attach via `X-Step-Up-Token`.
       tags: [Auth]
       requestBody:
         required: true
@@ -158,107 +1106,3637 @@ paths:
           application/json:
             schema:
               type: object
-              required: [email, password, name, companyName]
+              required: [password]
               properties:
-                email: { type: string, format: email }
                 password: { type: string, format: password }
-                name: { type: string }
-                companyName: { type: string }
-      responses:
-        "201": { description: Tenant + user created; returns LoginResponse }
-        "400": { description: Validation error }
-  /contacts:
-    get:
-      summary: List contacts
-      description: Returns contacts scoped to the caller's tenant.
-      tags: [Contacts]
-      security:
-        - BearerAuth: []
-      parameters:
-        - in: query
-          name: status
-          schema:
-            type: string
-            enum: [Lead, Prospect, Customer, Churned]
-          description: Optional status filter.
+                totp: { type: string, nullable: true }
       responses:
         "200":
-          description: Array of contacts
+          description: Step-up token issued.
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/Contact'
-        "401":
-          description: Missing or invalid bearer token
+                type: object
+                properties:
+                  stepUpToken: { type: string }
+                  expiresIn: { type: integer, example: 300 }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+  /sso/initiate:
     post:
-      summary: Create a contact
-      tags: [Contacts]
-      security:
-        - BearerAuth: []
+      summary: Initiate SSO redirect flow
+      description: Returns the IdP redirect URL for SAML / OIDC sign-in.
+      tags: [Auth]
+      security: []
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/Contact'
+              type: object
+              required: [tenantSlug]
+              properties:
+                tenantSlug: { type: string }
       responses:
-        "201":
-          description: Contact created
+        "200": { description: Redirect URL returned. }
+  /scim/v2/Users:
+    get:
+      summary: List provisioned users (SCIM 2.0)
+      tags: [Auth]
+      security:
+        - ApiKeyAuth: []
+      responses:
+        "200": { description: SCIM ListResponse. }
+
+  # ════════════════════════════════════════════════════════════════════
+  # USERS & ROLES
+  # ════════════════════════════════════════════════════════════════════
+  /me:
+    get:
+      summary: Get the authenticated user's session
+      description: |
+        Returns the current `User` plus their `Tenant` and the resolved
+        permissions matrix. Front-end calls this on every page load to
+        populate `AuthContext`.
+      tags: [Users & Roles]
+      responses:
+        "200":
+          description: Current session.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Contact'
-        "400": { description: Validation error }
-        "401": { description: Missing or invalid bearer token }
-  /deals:
+                type: object
+                properties:
+                  user: { $ref: '#/components/schemas/User' }
+                  tenant: { $ref: '#/components/schemas/Tenant' }
+                  permissions:
+                    type: array
+                    items: { type: string }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+  /users:
     get:
-      summary: List deals (pipeline)
-      description: Returns deals scoped to the caller's tenant, with optional pipeline-stage filter.
-      tags: [Deals]
-      security:
-        - BearerAuth: []
+      summary: List tenant users
+      tags: [Users & Roles]
       parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
         - in: query
-          name: stageId
-          schema: { type: integer }
-          description: Optional pipeline-stage filter.
+          name: role
+          schema: { type: string, enum: [ADMIN, MANAGER, USER] }
       responses:
         "200":
-          description: Array of deals
+          description: Array of users.
           content:
             application/json:
               schema:
                 type: array
+                items: { $ref: '#/components/schemas/User' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+    post:
+      summary: Invite a new user
+      tags: [Users & Roles]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, role]
+              properties:
+                email: { type: string, format: email }
+                name: { type: string }
+                role: { type: string, enum: [ADMIN, MANAGER, USER] }
+                wellnessRole: { type: string, enum: [doctor, professional, telecaller, helper], nullable: true }
+                subBrandAccess:
+                  type: array
+                  items: { type: string, enum: [tmc, rfu, travel_stall, visa_sure] }
+      responses:
+        "201":
+          description: User invited (invite email queued).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+        "400": { $ref: '#/components/responses/ValidationError' }
+        "403": { $ref: '#/components/responses/Forbidden' }
+  /users/{id}:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    get:
+      summary: Get a single user
+      tags: [Users & Roles]
+      responses:
+        "200":
+          description: User.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+        "404": { $ref: '#/components/responses/NotFound' }
+    put:
+      summary: Update a user (role, wellnessRole, subBrandAccess, isActive)
+      tags: [Users & Roles]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/User' }
+      responses:
+        "200":
+          description: Updated user.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+    delete:
+      summary: Soft-delete (deactivate) a user
+      description: Requires ADMIN. Sets `isActive=false`; user is purged after 90 days by retention engine.
+      tags: [Users & Roles]
+      responses:
+        "204": { description: Deactivated. }
+        "403": { $ref: '#/components/responses/Forbidden' }
+  /roles:
+    get:
+      summary: List role definitions + permissions
+      tags: [Users & Roles]
+      responses:
+        "200": { description: Role list. }
+
+  # ════════════════════════════════════════════════════════════════════
+  # TENANTS
+  # ════════════════════════════════════════════════════════════════════
+  /tenants:
+    get:
+      summary: List tenants (super-admin only)
+      tags: [Tenants]
+      responses:
+        "200":
+          description: Tenant list.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Tenant' }
+        "403": { $ref: '#/components/responses/Forbidden' }
+  /tenants/{id}:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    get:
+      summary: Get a single tenant
+      tags: [Tenants]
+      responses:
+        "200":
+          description: Tenant.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Tenant' }
+    put:
+      summary: Update a tenant (name, vertical, defaults)
+      tags: [Tenants]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Tenant' }
+      responses:
+        "200": { description: Updated tenant. }
+  /tenant-settings:
+    get:
+      summary: Get the caller's tenant settings (theme, features, defaults)
+      tags: [Tenants]
+      responses:
+        "200": { description: Settings KV map. }
+    put:
+      summary: Update tenant settings
+      tags: [Tenants]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        "200": { description: Updated. }
+  /tenant/sub-brand-themes:
+    get:
+      summary: "[TRAVEL] List sub-brand theme overrides"
+      description: Per-sub-brand colour palette, logo, fonts. Drives the SPA theme when the user switches sub-brand via `/api/travel/session/sub-brand`.
+      tags: [Tenants]
+      responses:
+        "200": { description: Array of sub-brand themes. }
+    post:
+      summary: "[TRAVEL] Upsert a sub-brand theme"
+      tags: [Tenants]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                subBrand: { type: string, enum: [tmc, rfu, travel_stall, visa_sure] }
+                primaryColor: { type: string, example: "#122647" }
+                accentColor: { type: string, example: "#C89A4E" }
+                logoUrl: { type: string }
+                font: { type: string }
+      responses:
+        "200": { description: Upserted. }
+
+  # ════════════════════════════════════════════════════════════════════
+  # CONTACTS
+  # ════════════════════════════════════════════════════════════════════
+  /contacts:
+    get:
+      summary: List contacts
+      description: |
+        Returns contacts scoped to the caller's tenant. Supports filter by
+        `status`, full-text `q`, and pagination.
+      tags: [Contacts]
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Search'
+        - in: query
+          name: status
+          schema: { type: string, enum: [Lead, Prospect, Customer, Churned] }
+        - in: query
+          name: ownerId
+          schema: { type: integer }
+        - in: query
+          name: tag
+          schema: { type: string }
+      responses:
+        "200":
+          description: Array of contacts.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Contact' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+    post:
+      summary: Create a contact
+      tags: [Contacts]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Contact' }
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Contact' }
+        "400": { $ref: '#/components/responses/ValidationError' }
+  /contacts/{id}:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    get:
+      summary: Get one contact
+      tags: [Contacts]
+      responses:
+        "200":
+          description: Contact.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Contact' }
+        "404": { $ref: '#/components/responses/NotFound' }
+    put:
+      summary: Update a contact
+      tags: [Contacts]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Contact' }
+      responses:
+        "200": { description: Updated contact. }
+    delete:
+      summary: Soft-delete a contact (ADMIN only)
+      tags: [Contacts]
+      responses:
+        "204": { description: Soft-deleted. }
+        "403": { $ref: '#/components/responses/Forbidden' }
+  /contacts/by-status:
+    get:
+      summary: Bucketed counts by status
+      tags: [Contacts]
+      responses:
+        "200":
+          description: Counts.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  Lead: { type: integer }
+                  Prospect: { type: integer }
+                  Customer: { type: integer }
+                  Churned: { type: integer }
+  /contacts/import-csv:
+    post:
+      summary: Bulk-import contacts from a CSV upload
+      description: Multipart `file=<csv>`. Returns import summary with row-level errors.
+      tags: [Contacts]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        "200":
+          description: Import summary.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  imported: { type: integer }
+                  skipped: { type: integer }
+                  errors:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        row: { type: integer }
+                        message: { type: string }
+  /contacts/duplicates/find:
+    get:
+      summary: Find probable-duplicate contact clusters
+      description: Phone-normalised + email-normalised matching via `lib/deduplication.js`.
+      tags: [Contacts]
+      responses:
+        "200": { description: Duplicate clusters. }
+  /contacts/merge:
+    post:
+      summary: Merge two contacts (one survives, the other is soft-deleted)
+      tags: [Contacts]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [primaryId, mergedId]
+              properties:
+                primaryId: { type: integer }
+                mergedId: { type: integer }
+      responses:
+        "200": { description: Merged. }
+  /contacts/{id}/activities:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    post:
+      summary: Log an activity (call / note / meeting) on a contact
+      tags: [Contacts]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type]
+              properties:
+                type: { type: string, enum: [call, note, meeting, email, sms] }
+                body: { type: string }
+                durationSeconds: { type: integer, nullable: true }
+      responses:
+        "201": { description: Activity created. }
+
+  # ════════════════════════════════════════════════════════════════════
+  # DEALS / PIPELINES
+  # ════════════════════════════════════════════════════════════════════
+  /deals:
+    get:
+      summary: List deals (pipeline)
+      description: |
+        Returns deals scoped to the caller's tenant. Supports filter by
+        `stageId`, `ownerId`, `status`.
+      tags: [Deals]
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+        - in: query
+          name: stageId
+          schema: { type: integer }
+        - in: query
+          name: ownerId
+          schema: { type: integer }
+        - in: query
+          name: status
+          schema: { type: string, enum: [open, won, lost] }
+      responses:
+        "200":
+          description: Array of deals.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Deal' }
+    post:
+      summary: Create a deal
+      tags: [Deals]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Deal' }
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Deal' }
+  /deals/stats:
+    get:
+      summary: Aggregate deal counters
+      description: |
+        Server-side aggregation over **all** deals in the tenant — used by
+        the dashboard KPIs. Returns won/lost counts + values, total deals,
+        and expected revenue. Never client-side reduce over a paginated
+        list (see Standing Rules → client-side aggregation bug class).
+      tags: [Deals]
+      responses:
+        "200":
+          description: Aggregate counters.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  totalDeals: { type: integer }
+                  wonCount: { type: integer }
+                  lostCount: { type: integer }
+                  wonValue: { type: number }
+                  lostValue: { type: number }
+                  expectedValue: { type: number }
+  /deals/{id}:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    get:
+      summary: Get a deal
+      tags: [Deals]
+      responses:
+        "200":
+          description: Deal.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Deal' }
+    put:
+      summary: Update a deal
+      tags: [Deals]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Deal' }
+      responses:
+        "200": { description: Updated. }
+  /deals/{id}/stage:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    put:
+      summary: Move a deal to a new pipeline stage
+      tags: [Deals]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [stageId]
+              properties:
+                stageId: { type: integer }
+      responses:
+        "200": { description: Stage changed. }
+  /deals/{id}/won:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    post:
+      summary: Mark a deal as won
+      tags: [Deals]
+      responses:
+        "200": { description: Won. }
+  /deals/{id}/lost:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    post:
+      summary: Mark a deal as lost
+      tags: [Deals]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                lostReason: { type: string }
+      responses:
+        "200": { description: Lost. }
+  /deals/{id}/timeline:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    get:
+      summary: Get a deal's activity timeline
+      tags: [Deals]
+      responses:
+        "200": { description: Timeline entries. }
+  /pipelines:
+    get:
+      summary: List pipelines
+      tags: [Pipelines & Stages]
+      responses:
+        "200":
+          description: Pipelines.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Pipeline' }
+    post:
+      summary: Create a pipeline
+      tags: [Pipelines & Stages]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Pipeline' }
+      responses:
+        "201": { description: Created. }
+  /pipeline_stages:
+    get:
+      summary: List stages across all pipelines
+      tags: [Pipelines & Stages]
+      responses:
+        "200":
+          description: Stages.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/PipelineStage' }
+    post:
+      summary: Create a stage
+      tags: [Pipelines & Stages]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PipelineStage' }
+      responses:
+        "201": { description: Created. }
+
+  # ════════════════════════════════════════════════════════════════════
+  # MARKETING
+  # ════════════════════════════════════════════════════════════════════
+  /marketing/campaigns:
+    get:
+      summary: List campaigns
+      tags: [Marketing]
+      responses:
+        "200":
+          description: Campaign list.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Campaign' }
+    post:
+      summary: Create a campaign
+      tags: [Marketing]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Campaign' }
+      responses:
+        "201": { description: Created. }
+  /sequences:
+    get:
+      summary: List drip sequences
+      tags: [Marketing]
+      responses:
+        "200":
+          description: Sequences.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Sequence' }
+    post:
+      summary: Create a sequence
+      tags: [Marketing]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Sequence' }
+      responses:
+        "201": { description: Created. }
+  /sequences/{id}/enroll:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    post:
+      summary: Enroll a contact (or list of contacts) into a sequence
+      tags: [Marketing]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                contactIds:
+                  type: array
+                  items: { type: integer }
+      responses:
+        "200": { description: Enrolled. }
+  /ab-tests:
+    get:
+      summary: List A/B tests
+      tags: [Marketing]
+      responses:
+        "200": { description: Tests. }
+    post:
+      summary: Create an A/B test
+      tags: [Marketing]
+      responses:
+        "201": { description: Created. }
+  /attribution:
+    get:
+      summary: Multi-touch attribution report
+      description: |
+        Returns revenue attributed to each campaign / source. Honours the
+        configured attribution model (first-touch / last-touch / linear /
+        time-decay). Test/junk sources are filtered via `lib/junkSourceFilter.js`.
+      tags: [Marketing]
+      parameters:
+        - in: query
+          name: from
+          schema: { type: string, format: date }
+        - in: query
+          name: to
+          schema: { type: string, format: date }
+      responses:
+        "200": { description: Attribution buckets. }
+  /landing-pages:
+    get:
+      summary: List landing pages
+      tags: [Marketing]
+      responses:
+        "200": { description: Pages. }
+    post:
+      summary: Create a landing page
+      tags: [Marketing]
+      responses:
+        "201": { description: Created. }
+  /web-visitors:
+    get:
+      summary: List anonymous web visitors (pixel events)
+      tags: [Marketing]
+      responses:
+        "200": { description: Visitor sessions. }
+  /chatbots:
+    get:
+      summary: List chatbots
+      tags: [Marketing]
+      responses:
+        "200": { description: Chatbots. }
+
+  # ════════════════════════════════════════════════════════════════════
+  # COMMUNICATIONS
+  # ════════════════════════════════════════════════════════════════════
+  /email/send:
+    post:
+      summary: Send transactional email
+      description: |
+        Sends an email through the tenant's configured provider (Mailgun /
+        Nodemailer / SMTP). Supports template substitution + multi-recipient
+        in a single call.
+
+        **Rate-limited** per tenant via `sendLimiter`.
+      tags: [Communications]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [to, subject, body]
+              properties:
+                to:
+                  oneOf:
+                    - type: string
+                    - type: array
+                      items: { type: string, format: email }
+                subject: { type: string }
+                body: { type: string }
+                templateId: { type: integer, nullable: true }
+                templateVars: { type: object, nullable: true }
+                contactId: { type: integer, nullable: true }
+      responses:
+        "200":
+          description: Sent.
+          content:
+            application/json:
+              schema:
+                type: object
+                description: |
+                  For single-recipient calls the response is `{ email, messageId, delivered }`
+                  with extra top-level back-compat fields. For multi-recipient calls (#435)
+                  the response also carries `{ totalSent, totalFailed, results, failures }`.
+                properties:
+                  email: { type: object }
+                  messageId: { type: string }
+                  delivered: { type: boolean }
+                  totalSent: { type: integer }
+                  totalFailed: { type: integer }
+                  results:
+                    type: array
+                    items: { type: object }
+                  failures:
+                    type: array
+                    items: { type: object }
+        "429":
+          $ref: '#/components/responses/RateLimited'
+  /email-scheduling:
+    post:
+      summary: Schedule an email for future send
+      tags: [Communications]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [to, subject, body, scheduledFor]
+              properties:
+                to: { type: string, format: email }
+                subject: { type: string }
+                body: { type: string }
+                scheduledFor: { type: string, format: date-time }
+      responses:
+        "201": { description: Scheduled. }
+  /email/inbound:
+    post:
+      summary: Mailgun / SMTP inbound-email webhook
+      description: Routed to `email_inbound.js`. HMAC verified.
+      tags: [Communications]
+      security:
+        - WebhookSignature: []
+      responses:
+        "200": { description: Ack. }
+  /sms/send:
+    post:
+      summary: Send an SMS
+      description: |
+        Outbound SMS via the configured provider. `senderId` is validated
+        per provider (MSG91 requires exactly 6 alpha chars).
+      tags: [Communications]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [to, body]
+              properties:
+                to: { type: string }
+                body: { type: string, maxLength: 1600 }
+                senderId: { type: string, maxLength: 6, nullable: true }
+                templateId: { type: integer, nullable: true }
+      responses:
+        "200":
+          description: Sent.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SmsMessage' }
+        "400": { $ref: '#/components/responses/ValidationError' }
+        "429": { $ref: '#/components/responses/RateLimited' }
+  /whatsapp/send:
+    post:
+      summary: Send a WhatsApp message
+      description: |
+        Outbound WhatsApp Cloud API message. Uses an approved template
+        outside the 24-h customer-service window, free-form text inside it.
+      tags: [Communications]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [to]
+              properties:
+                to: { type: string, description: E.164 phone number. }
+                body: { type: string }
+                templateName: { type: string, nullable: true }
+                templateVars:
+                  type: array
+                  items: { type: string }
+                mediaUrl: { type: string, nullable: true }
+      responses:
+        "200":
+          description: Sent.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WhatsAppMessage' }
+  /whatsapp/webhook:
+    post:
+      summary: WhatsApp Cloud API webhook (inbound + status callbacks)
+      tags: [Communications]
+      security:
+        - WebhookSignature: []
+      responses:
+        "200": { description: Ack. }
+  /whatsapp/onboard:
+    post:
+      summary: Embedded-signup onboarding flow
+      tags: [Communications]
+      responses:
+        "200": { description: Onboarding state. }
+  /telephony/click-to-call:
+    post:
+      summary: Initiate a click-to-call session
+      description: Provider-agnostic — bridges agent <-> contact via MyOperator / Knowlarity / Callified.ai.
+      tags: [Communications]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [contactId]
+              properties:
+                contactId: { type: integer }
+                agentExtension: { type: string, nullable: true }
+      responses:
+        "200": { description: Call queued. }
+  /voice/recordings:
+    get:
+      summary: List call recordings
+      tags: [Communications]
+      responses:
+        "200": { description: Recordings. }
+  /voice-transcription:
+    post:
+      summary: Submit a recording for transcription
+      tags: [Communications]
+      responses:
+        "202": { description: Queued. }
+  /shared-inbox:
+    get:
+      summary: List shared-inbox threads
+      tags: [Communications]
+      responses:
+        "200": { description: Threads. }
+  /live-chat/sessions:
+    get:
+      summary: List live-chat sessions
+      tags: [Communications]
+      responses:
+        "200": { description: Sessions. }
+  /push/send:
+    post:
+      summary: Send a web-push notification
+      tags: [Communications]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [userId, title, body]
+              properties:
+                userId: { type: integer }
+                title: { type: string }
+                body: { type: string }
+                link: { type: string, nullable: true }
+      responses:
+        "200": { description: Sent. }
+  /notifications:
+    get:
+      summary: List the caller's notifications
+      tags: [Communications]
+      parameters:
+        - in: query
+          name: unreadOnly
+          schema: { type: boolean }
+      responses:
+        "200":
+          description: Notifications.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Notification' }
+  /notifications/{id}/read:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    post:
+      summary: Mark a notification as read
+      tags: [Communications]
+      responses:
+        "200": { description: Marked read. }
+
+  # ════════════════════════════════════════════════════════════════════
+  # FINANCIAL
+  # ════════════════════════════════════════════════════════════════════
+  /billing:
+    get:
+      summary: List invoices
+      tags: [Financial]
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+        - in: query
+          name: status
+          schema: { type: string, enum: [draft, sent, partial, paid, overdue, void, refunded] }
+      responses:
+        "200":
+          description: Invoices.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Invoice' }
+    post:
+      summary: Create an invoice
+      tags: [Financial]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Invoice' }
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Invoice' }
+  /billing/stats:
+    get:
+      summary: Aggregate invoice statistics
+      tags: [Financial]
+      responses:
+        "200":
+          description: Stats.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  totalOutstanding: { type: number }
+                  totalPaid: { type: number }
+                  totalOverdue: { type: number }
+                  countByStatus: { type: object, additionalProperties: { type: integer } }
+  /billing/{id}:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    get:
+      summary: Get an invoice
+      tags: [Financial]
+      responses:
+        "200":
+          description: Invoice.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Invoice' }
+  /billing/{id}/mark-paid:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    post:
+      summary: Mark an invoice as paid (manual / offline payment)
+      tags: [Financial]
+      responses:
+        "200": { description: Marked paid. }
+  /billing/{id}/pay:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    post:
+      summary: Charge an invoice via configured payment gateway
+      tags: [Financial]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                gateway: { type: string, enum: [stripe, razorpay] }
+                paymentMethodId: { type: string }
+      responses:
+        "200":
+          description: Charge result.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Payment' }
+  /billing/{id}/pdf:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    get:
+      summary: Download invoice PDF
+      tags: [Financial]
+      responses:
+        "200":
+          description: PDF stream.
+          content:
+            application/pdf: {}
+  /billing/{id}/void:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    put:
+      summary: Void an invoice (ADMIN/MANAGER)
+      tags: [Financial]
+      responses:
+        "200": { description: Voided. }
+  /billing/{id}/refund:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    post:
+      summary: Refund a paid invoice (ADMIN/MANAGER)
+      tags: [Financial]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                amount: { type: number, description: Partial refund supported. }
+                reason: { type: string }
+      responses:
+        "200": { description: Refund issued. }
+  /billing/{id}/credit-note:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    post:
+      summary: Issue a credit note against an invoice
+      tags: [Financial]
+      responses:
+        "200": { description: Credit note created. }
+  /billing/recurring/run:
+    post:
+      summary: Manually trigger the recurring-invoice engine (ADMIN)
+      tags: [Financial]
+      responses:
+        "200": { description: Engine run summary. }
+  /v1/invoices:
+    get:
+      summary: List invoices (v1 — modern envelope)
+      description: |
+        Newer invoice surface used by POS + travel verticals. Shares the
+        `Invoice` schema; differs from `/api/billing` only in paging
+        envelope shape.
+      tags: [Financial]
+      responses:
+        "200":
+          description: Invoice list (paginated).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PaginatedEnvelope' }
+  /payments:
+    get:
+      summary: List payments
+      tags: [Financial]
+      responses:
+        "200":
+          description: Payments.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Payment' }
+  /payment-gateways:
+    get:
+      summary: List configured payment gateways for the tenant
+      tags: [Financial]
+      responses:
+        "200": { description: Gateways. }
+  /currencies:
+    get:
+      summary: List enabled currencies + FX rates
+      tags: [Financial]
+      responses:
+        "200": { description: Currencies. }
+  /estimates:
+    get:
+      summary: List estimates / quotes
+      tags: [Financial]
+      responses:
+        "200": { description: Estimates. }
+    post:
+      summary: Create an estimate
+      tags: [Financial]
+      responses:
+        "201": { description: Created. }
+  /expenses:
+    get:
+      summary: List expenses
+      tags: [Financial]
+      responses:
+        "200": { description: Expenses. }
+    post:
+      summary: Create an expense
+      tags: [Financial]
+      responses:
+        "201": { description: Created. }
+  /contracts:
+    get:
+      summary: List contracts
+      tags: [Financial]
+      responses:
+        "200": { description: Contracts. }
+  /accounting/sync:
+    post:
+      summary: Sync invoices / payments to the configured accounting system
+      description: Tally / Zoho Books / QuickBooks adapter.
+      tags: [Financial]
+      responses:
+        "200": { description: Sync summary. }
+  /wallet:
+    get:
+      summary: Get the caller's wallet balance + transactions
+      tags: [Financial]
+      responses:
+        "200": { description: Wallet state. }
+  /wallet/admin/credit:
+    post:
+      summary: Credit a user's wallet (ADMIN, step-up gated)
+      tags: [Financial]
+      responses:
+        "200": { description: Credited. }
+  /subscriptions:
+    get:
+      summary: List subscriptions
+      tags: [Financial]
+      responses:
+        "200": { description: Subscriptions. }
+  /pos/registers:
+    get:
+      summary: List POS registers (POS surface)
+      description: Point-of-sale registers for wellness / retail tenants.
+      tags: [Financial]
+      responses:
+        "200": { description: Registers. }
+  /pos/shifts/open:
+    post:
+      summary: Open a POS shift
+      tags: [Financial]
+      responses:
+        "201": { description: Shift opened. }
+  /pos/sales:
+    post:
+      summary: Record a POS sale
+      tags: [Financial]
+      responses:
+        "201":
+          description: Sale recorded; returns invoice.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Invoice' }
+
+  # ════════════════════════════════════════════════════════════════════
+  # SERVICE & SUPPORT
+  # ════════════════════════════════════════════════════════════════════
+  /tickets:
+    get:
+      summary: List support tickets
+      tags: [Service & Support]
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+        - in: query
+          name: status
+          schema: { type: string, enum: [open, pending, resolved, closed] }
+      responses:
+        "200":
+          description: Tickets.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Ticket' }
+    post:
+      summary: Open a ticket
+      tags: [Service & Support]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Ticket' }
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Ticket' }
+  /tickets/{id}:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    get:
+      summary: Get a ticket
+      tags: [Service & Support]
+      responses:
+        "200":
+          description: Ticket.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Ticket' }
+    put:
+      summary: Update a ticket
+      tags: [Service & Support]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Ticket' }
+      responses:
+        "200": { description: Updated. }
+  /sla:
+    get:
+      summary: List SLA policies
+      tags: [Service & Support]
+      responses:
+        "200": { description: SLA policies. }
+  /lead-sla:
+    get:
+      summary: Lead-response SLA stats
+      tags: [Service & Support]
+      responses:
+        "200": { description: Lead-SLA report. }
+  /canned-responses:
+    get:
+      summary: List canned-response snippets
+      tags: [Service & Support]
+      responses:
+        "200": { description: Canned responses. }
+  /surveys:
+    get:
+      summary: List surveys / NPS
+      tags: [Service & Support]
+      responses:
+        "200": { description: Surveys. }
+  /knowledge-base/articles:
+    get:
+      summary: List KB articles
+      tags: [Service & Support]
+      responses:
+        "200": { description: KB articles. }
+    post:
+      summary: Publish a KB article
+      tags: [Service & Support]
+      responses:
+        "201": { description: Created. }
+  /portal:
+    get:
+      summary: Customer-portal landing data
+      tags: [Service & Support]
+      responses:
+        "200": { description: Portal payload. }
+
+  # ════════════════════════════════════════════════════════════════════
+  # DOCUMENTS
+  # ════════════════════════════════════════════════════════════════════
+  /document-templates:
+    get:
+      summary: List document templates
+      tags: [Documents]
+      responses:
+        "200": { description: Templates. }
+    post:
+      summary: Create a document template
+      tags: [Documents]
+      responses:
+        "201": { description: Created. }
+  /signatures:
+    get:
+      summary: List e-signature requests
+      tags: [Documents]
+      responses:
+        "200": { description: Signature requests. }
+    post:
+      summary: Create an e-signature request
+      tags: [Documents]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [documentUrl, signerEmail]
+              properties:
+                documentUrl: { type: string }
+                signerEmail: { type: string, format: email }
+                signerName: { type: string }
+      responses:
+        "201": { description: Created. }
+  /document-views:
+    get:
+      summary: List document view events
+      tags: [Documents]
+      responses:
+        "200": { description: Views. }
+  /deals_documents:
+    get:
+      summary: List documents attached to deals
+      tags: [Documents]
+      responses:
+        "200": { description: Documents. }
+  /file-uploads:
+    post:
+      summary: Upload a file (generic blob)
+      tags: [Documents]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        "201":
+          description: Upload metadata.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  url: { type: string }
+                  filename: { type: string }
+                  size: { type: integer }
+
+  # ════════════════════════════════════════════════════════════════════
+  # ANALYTICS
+  # ════════════════════════════════════════════════════════════════════
+  /reports:
+    get:
+      summary: List saved reports
+      tags: [Analytics]
+      responses:
+        "200":
+          description: Reports.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Report' }
+  /reports/{id}/run:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    post:
+      summary: Run a report and return rows
+      tags: [Analytics]
+      responses:
+        "200": { description: Report rows. }
+  /report-schedules:
+    get:
+      summary: List scheduled report exports
+      tags: [Analytics]
+      responses:
+        "200": { description: Schedules. }
+    post:
+      summary: Create a scheduled report export
+      tags: [Analytics]
+      responses:
+        "201": { description: Created. }
+  /custom-reports:
+    get:
+      summary: List custom-report definitions
+      tags: [Analytics]
+      responses:
+        "200": { description: Custom reports. }
+  /dashboards:
+    get:
+      summary: List dashboards
+      tags: [Analytics]
+      responses:
+        "200": { description: Dashboards. }
+  /forecasting:
+    get:
+      summary: Revenue forecast snapshot
+      tags: [Analytics]
+      responses:
+        "200": { description: Forecast. }
+  /quotas:
+    get:
+      summary: List sales quotas
+      tags: [Analytics]
+      responses:
+        "200": { description: Quotas. }
+  /win-loss:
+    get:
+      summary: Win-loss analysis report
+      tags: [Analytics]
+      responses:
+        "200": { description: Win-loss buckets. }
+  /funnel:
+    get:
+      summary: Pipeline funnel conversion analysis
+      tags: [Analytics]
+      responses:
+        "200": { description: Funnel rows. }
+
+  # ════════════════════════════════════════════════════════════════════
+  # AUTOMATION
+  # ════════════════════════════════════════════════════════════════════
+  /workflows:
+    get:
+      summary: List automation workflows
+      tags: [Automation]
+      responses:
+        "200":
+          description: Workflows.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Workflow' }
+    post:
+      summary: Create a workflow
+      tags: [Automation]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Workflow' }
+      responses:
+        "201": { description: Created. }
+  /workflows/{id}/run:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    post:
+      summary: Manually fire a workflow against an entity
+      tags: [Automation]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                entityType: { type: string, enum: [contact, deal, ticket, patient, visit] }
+                entityId: { type: integer }
+      responses:
+        "200": { description: Run summary. }
+  /approvals:
+    get:
+      summary: List approval requests
+      tags: [Automation]
+      responses:
+        "200": { description: Approval requests. }
+  /lead-routing:
+    get:
+      summary: List lead-routing rules
+      tags: [Automation]
+      responses:
+        "200": { description: Rules. }
+  /territories:
+    get:
+      summary: List territories (geo / account assignment)
+      tags: [Automation]
+      responses:
+        "200": { description: Territories. }
+
+  # ════════════════════════════════════════════════════════════════════
+  # AI
+  # ════════════════════════════════════════════════════════════════════
+  /ai/chat:
+    post:
+      summary: Send a chat completion to the configured AI provider (Gemini 2.5)
+      tags: [AI]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [messages]
+              properties:
+                messages:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      role: { type: string, enum: [system, user, assistant] }
+                      content: { type: string }
+                model: { type: string, default: "gemini-2.5-flash" }
+                tenantContext: { type: boolean, description: Inject tenant + vertical context. }
+      responses:
+        "200":
+          description: Completion.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  text: { type: string }
+                  tokens:
+                    type: object
+                    properties:
+                      input: { type: integer }
+                      output: { type: integer }
+        "402":
+          description: Budget cap exceeded for this tenant for this month.
+  /ai_scoring/recalculate:
+    post:
+      summary: Recalculate AI lead scores
+      tags: [AI]
+      responses:
+        "200": { description: Recalculated. }
+  /deal-insights:
+    get:
+      summary: List Gemini-generated deal insights
+      tags: [AI]
+      responses:
+        "200": { description: Insights. }
+  /sentiment/{type}/{id}:
+    parameters:
+      - in: path
+        name: type
+        required: true
+        schema: { type: string, enum: [contact, ticket, patient] }
+      - $ref: '#/components/parameters/IdPath'
+    get:
+      summary: Get latest sentiment score for an entity
+      tags: [AI]
+      responses:
+        "200": { description: Sentiment. }
+
+  # ════════════════════════════════════════════════════════════════════
+  # INTEGRATIONS
+  # ════════════════════════════════════════════════════════════════════
+  /integrations:
+    get:
+      summary: List enabled integrations
+      tags: [Integrations]
+      responses:
+        "200": { description: Integrations. }
+  /marketplace-leads/webhook:
+    post:
+      summary: Marketplace inbound webhook (IndiaMART / JustDial / TradeIndia)
+      description: |
+        Inbound lead webhook from a marketplace provider. HMAC-signed.
+        Routed through `lib/leadJunkFilter.js` + `lib/leadAutoRouter.js`
+        before insert. **Unauthenticated** — provider IP allowlist + HMAC
+        is the gate.
+      tags: [Integrations, Public]
+      security:
+        - WebhookSignature: []
+      responses:
+        "200": { description: Lead ingested. }
+        "401": { description: Signature mismatch. }
+  /zapier/triggers:
+    get:
+      summary: Zapier-discoverable trigger list
+      tags: [Integrations]
+      responses:
+        "200": { description: Triggers. }
+  /calendar/google/connect:
+    get:
+      summary: OAuth-2 connect for Google Calendar
+      tags: [Integrations]
+      responses:
+        "302": { description: Redirect to Google consent screen. }
+  /calendar/outlook/connect:
+    get:
+      summary: OAuth-2 connect for Outlook Calendar
+      tags: [Integrations]
+      responses:
+        "302": { description: Redirect to Microsoft consent screen. }
+  /calendar/events:
+    get:
+      summary: List unified calendar events (CRM + Google + Outlook)
+      tags: [Integrations]
+      responses:
+        "200": { description: Events. }
+
+  # ════════════════════════════════════════════════════════════════════
+  # ADMIN & PLATFORM
+  # ════════════════════════════════════════════════════════════════════
+  /audit:
+    get:
+      summary: List audit-log entries
+      description: |
+        Tamper-evident hash-chain audit log. `integrityVerified` and
+        `unhashedRows` are reported by `GET /audit/verify`.
+      tags: [Admin & Platform]
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+        - in: query
+          name: actorUserId
+          schema: { type: integer }
+        - in: query
+          name: entityType
+          schema: { type: string }
+        - in: query
+          name: from
+          schema: { type: string, format: date-time }
+        - in: query
+          name: to
+          schema: { type: string, format: date-time }
+      responses:
+        "200": { description: Audit rows. }
+  /audit/verify:
+    get:
+      summary: Verify the audit hash-chain integrity
+      tags: [Admin & Platform]
+      responses:
+        "200":
+          description: Integrity result.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  integrityVerified: { type: boolean }
+                  unhashedRows: { type: integer }
+                  brokenAt: { type: integer, nullable: true }
+                  reason: { type: string, nullable: true }
+  /audit/backfill:
+    post:
+      summary: Backfill missing hash-chain rows (ADMIN)
+      tags: [Admin & Platform]
+      responses:
+        "200": { description: Backfill complete. }
+  /gdpr/export:
+    post:
+      summary: Export all personal data for a contact / patient (GDPR DSAR)
+      tags: [Admin & Platform]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                contactId: { type: integer, nullable: true }
+                patientId: { type: integer, nullable: true }
+      responses:
+        "202": { description: Export queued; emailed when ready. }
+  /gdpr/delete:
+    post:
+      summary: Hard-delete personal data after a DSAR request
+      description: Step-up auth required. Cascades through audit chain + maintains hash integrity.
+      tags: [Admin & Platform]
+      responses:
+        "200": { description: Deletion complete. }
+  /field-permissions:
+    get:
+      summary: List field-level permission rules
+      tags: [Admin & Platform]
+      responses:
+        "200": { description: Rules. }
+  /sandbox/snapshots:
+    get:
+      summary: List sandbox snapshots
+      tags: [Admin & Platform]
+      responses:
+        "200": { description: Snapshots. }
+  /industry-templates:
+    get:
+      summary: List industry-specific config templates
+      tags: [Admin & Platform]
+      responses:
+        "200": { description: Templates. }
+  /security/reports:
+    get:
+      summary: Get security-event reports
+      tags: [Admin & Platform]
+      responses:
+        "200": { description: Security reports. }
+  /developer/agent-activity:
+    post:
+      summary: Append an agent-activity log entry (Developer page live view)
+      description: Used by background agents + cron-fired workflows to publish progress to the Developer page.
+      tags: [Admin & Platform]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [agent, status, message]
+              properties:
+                agent: { type: string }
+                status: { type: string, enum: [started, progress, completed, failed] }
+                message: { type: string }
+      responses:
+        "201": { description: Logged. }
+  /admin/trigger-engine:
+    post:
+      summary: Manually trigger a cron engine for this tenant (ADMIN)
+      description: |
+        Pattern endpoint shared by every cron engine that supports manual
+        trigger (G-9/G-10/G-11/G-12/G-14/G-15 spec class). Body specifies
+        which engine to run.
+      tags: [Admin & Platform]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [engine]
+              properties:
+                engine:
+                  type: string
+                  enum:
+                    - lead_scoring
+                    - sequence
+                    - marketplace
+                    - workflow
+                    - campaign
+                    - report
+                    - recurring_invoice
+                    - forecast_snapshot
+                    - deal_insights
+                    - sentiment
+                    - scheduled_email
+                    - retention
+                    - backup
+                    - orchestrator
+                    - appointment_reminders
+                    - wellness_ops
+                    - sla_breach
+                    - lead_sla
+                    - low_stock
+                    - leave_policy
+                    - demo_hygiene
+                    - audit_integrity
+                confirmDestructive:
+                  type: boolean
+                  description: Required for `retention` + `demo_hygiene` engines (data-destroying).
+      responses:
+        "200": { description: Engine run summary. }
+        "403": { $ref: '#/components/responses/Forbidden' }
+
+  # ════════════════════════════════════════════════════════════════════
+  # ════ WELLNESS VERTICAL ════
+  # ════════════════════════════════════════════════════════════════════
+  /wellness/dashboard:
+    get:
+      summary: "[WELLNESS] Owner-dashboard KPIs"
+      description: |
+        Returns the wellness owner-dashboard payload — today's revenue,
+        booked vs walk-ins, no-show rate, top services, top doctors,
+        AI recommendations from the orchestrator engine.
+
+        **Tenant gate:** `tenant.vertical === 'wellness'`.
+      tags: [Wellness — Operations]
+      responses:
+        "200":
+          description: Dashboard payload.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  todayRevenueCents: { type: integer }
+                  todayVisits: { type: integer }
+                  noShowRate: { type: number }
+                  topServices:
+                    type: array
+                    items: { type: object }
+                  recommendations:
+                    type: array
+                    items: { $ref: '#/components/schemas/AgentRecommendation' }
+        "403": { $ref: '#/components/responses/Forbidden' }
+  /wellness/recommendations:
+    get:
+      summary: "[WELLNESS] List orchestrator-generated recommendations"
+      tags: [Wellness — Operations]
+      responses:
+        "200":
+          description: Recommendations.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/AgentRecommendation' }
+  /wellness/recommendations/{id}/dismiss:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    post:
+      summary: "[WELLNESS] Dismiss a recommendation card"
+      tags: [Wellness — Operations]
+      responses:
+        "200": { description: Dismissed. }
+  /wellness/orchestrator/run:
+    post:
+      summary: "[WELLNESS] Manually trigger the daily orchestrator engine"
+      tags: [Wellness — Operations]
+      responses:
+        "200": { description: Engine run summary. }
+
+  /wellness/patients:
+    get:
+      summary: "[WELLNESS] List patients (PHI gated)"
+      description: |
+        Returns patients scoped to the tenant. **All access is audit-logged
+        via `phiReadGate`.** Supports filter by `locationId`, `leadStatus`,
+        and full-text search across name / phone / email.
+      tags: [Wellness — Patients & PHI]
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Search'
+        - in: query
+          name: locationId
+          schema: { type: integer }
+        - in: query
+          name: leadStatus
+          schema: { type: string, enum: [new, contacted, qualified, junk, lost, converted] }
+        - in: query
+          name: tag
+          schema: { type: string }
+      responses:
+        "200":
+          description: Patients.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Patient' }
+        "403": { $ref: '#/components/responses/Forbidden' }
+    post:
+      summary: "[WELLNESS] Register a new patient"
+      tags: [Wellness — Patients & PHI]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Patient' }
+      responses:
+        "201":
+          description: Patient created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Patient' }
+  /wellness/patients/{id}:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    get:
+      summary: "[WELLNESS] Get one patient (PHI gated)"
+      tags: [Wellness — Patients & PHI]
+      responses:
+        "200":
+          description: Patient.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Patient' }
+        "404": { $ref: '#/components/responses/NotFound' }
+    put:
+      summary: "[WELLNESS] Update a patient"
+      tags: [Wellness — Patients & PHI]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Patient' }
+      responses:
+        "200": { description: Updated. }
+    delete:
+      summary: "[WELLNESS] Hard-delete a patient (ADMIN only, DSAR-style)"
+      tags: [Wellness — Patients & PHI]
+      responses:
+        "204": { description: Deleted. }
+  /wellness/patients/{id}/visits:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    get:
+      summary: "[WELLNESS] List a patient's visit history"
+      tags: [Wellness — Patients & PHI]
+      responses:
+        "200":
+          description: Visits.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Visit' }
+  /wellness/patients/{id}/prescriptions:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    get:
+      summary: "[WELLNESS] List a patient's prescriptions"
+      tags: [Wellness — Patients & PHI]
+      responses:
+        "200":
+          description: Prescriptions.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Prescription' }
+  /wellness/patients/{id}/consents:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    get:
+      summary: "[WELLNESS] List a patient's consent forms"
+      tags: [Wellness — Patients & PHI]
+      responses:
+        "200":
+          description: Consents.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/ConsentForm'  }
+  /wellness/patients/{id}/treatment-plans:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    get:
+      summary: "[WELLNESS] List a patient's treatment plans"
+      tags: [Wellness — Patients & PHI]
+      responses:
+        "200":
+          description: Plans.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/TreatmentPlan' }
+  /wellness/patients/{id}/tags:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    post:
+      summary: "[WELLNESS] Add a tag to a patient"
+      tags: [Wellness — Patients & PHI]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tag]
+              properties:
+                tag: { type: string }
+      responses:
+        "201": { description: Tagged. }
+  /wellness/patients/export:
+    get:
+      summary: "[WELLNESS] Export patients (CSV / XLSX)"
+      tags: [Wellness — Patients & PHI]
+      responses:
+        "200":
+          description: CSV / XLSX stream.
+          content:
+            text/csv: {}
+            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet: {}
+
+  /wellness/visits:
+    get:
+      summary: "[WELLNESS] List visits / appointments"
+      tags: [Wellness — Visits & Clinical]
+      parameters:
+        - in: query
+          name: from
+          schema: { type: string, format: date }
+        - in: query
+          name: to
+          schema: { type: string, format: date }
+        - in: query
+          name: doctorId
+          schema: { type: integer }
+        - in: query
+          name: status
+          schema: { type: string, enum: [booked, confirmed, checked_in, in_consultation, completed, cancelled, no_show] }
+      responses:
+        "200":
+          description: Visits.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Visit' }
+    post:
+      summary: "[WELLNESS] Book a visit (booking gate: no doctor double-book within the same UTC hour)"
+      tags: [Wellness — Visits & Clinical]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Visit' }
+      responses:
+        "201":
+          description: Booked.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Visit' }
+        "409":
+          description: Doctor already booked in this hour.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              example:
+                error: "Doctor already booked"
+                code: "DOCTOR_DOUBLE_BOOKED"
+  /wellness/visits/{id}:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    get:
+      summary: "[WELLNESS] Get a visit"
+      tags: [Wellness — Visits & Clinical]
+      responses:
+        "200":
+          description: Visit.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Visit' }
+    put:
+      summary: "[WELLNESS] Update a visit (status, notes, charge)"
+      tags: [Wellness — Visits & Clinical]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Visit' }
+      responses:
+        "200": { description: Updated. }
+  /wellness/visits/{id}/assign-doctor:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    patch:
+      summary: "[WELLNESS] Reassign visit doctor"
+      tags: [Wellness — Visits & Clinical]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [doctorId]
+              properties:
+                doctorId: { type: integer }
+      responses:
+        "200": { description: Reassigned. }
+  /wellness/visits/{id}/photos:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    post:
+      summary: "[WELLNESS] Upload before/after photos for a visit"
+      tags: [Wellness — Visits & Clinical]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file: { type: string, format: binary }
+                stage: { type: string, enum: [before, during, after] }
+      responses:
+        "201": { description: Uploaded. }
+  /wellness/visits/{id}/consumptions:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    get:
+      summary: "[WELLNESS] List consumable items used during a visit (decrements inventory)"
+      tags: [Wellness — Visits & Clinical]
+      responses:
+        "200": { description: Consumptions. }
+    post:
+      summary: "[WELLNESS] Add a consumption (auto-decrements drug / consumable stock)"
+      tags: [Wellness — Visits & Clinical]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [serviceId, quantity]
+              properties:
+                serviceId: { type: integer }
+                drugId: { type: integer, nullable: true }
+                quantity: { type: integer }
+      responses:
+        "201": { description: Logged. }
+
+  /wellness/prescriptions:
+    get:
+      summary: "[WELLNESS] List prescriptions"
+      tags: [Wellness — Visits & Clinical]
+      responses:
+        "200":
+          description: Prescriptions.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Prescription' }
+    post:
+      summary: "[WELLNESS] Issue a prescription (clinical role required)"
+      description: Only users with `wellnessRole ∈ {doctor, professional}` may write prescriptions.
+      tags: [Wellness — Visits & Clinical]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Prescription' }
+      responses:
+        "201":
+          description: Created; PDF rendered.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Prescription' }
+        "403":
+          description: Caller's `wellnessRole` is not clinical.
+  /wellness/prescriptions/{id}:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    put:
+      summary: "[WELLNESS] Update a prescription (clinical role required; only the original prescriber)"
+      tags: [Wellness — Visits & Clinical]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Prescription' }
+      responses:
+        "200": { description: Updated. }
+        "403": { description: Not the original prescriber. }
+  /wellness/consents:
+    get:
+      summary: "[WELLNESS] List consent forms"
+      tags: [Wellness — Visits & Clinical]
+      responses:
+        "200":
+          description: Consents.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/ConsentForm' }
+    post:
+      summary: "[WELLNESS] Record a consent (signature canvas → PDF)"
+      tags: [Wellness — Visits & Clinical]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ConsentForm' }
+      responses:
+        "201": { description: Consent stored, PDF generated. }
+  /wellness/treatment-plans:
+    get:
+      summary: "[WELLNESS] List treatment plans"
+      tags: [Wellness — Visits & Clinical]
+      responses:
+        "200":
+          description: Plans.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/TreatmentPlan' }
+    post:
+      summary: "[WELLNESS] Create a treatment plan (clinical role)"
+      tags: [Wellness — Visits & Clinical]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TreatmentPlan' }
+      responses:
+        "201": { description: Created. }
+  /wellness/treatment-plans/{id}:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    put:
+      summary: "[WELLNESS] Update a treatment plan"
+      tags: [Wellness — Visits & Clinical]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TreatmentPlan' }
+      responses:
+        "200": { description: Updated. }
+
+  /wellness/services:
+    get:
+      summary: "[WELLNESS] List catalog services + packages"
+      tags: [Wellness — Catalog & Inventory]
+      responses:
+        "200":
+          description: Services.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Service' }
+    post:
+      summary: "[WELLNESS] Create a service or package"
+      tags: [Wellness — Catalog & Inventory]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Service' }
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Service' }
+  /wellness/service-categories:
+    get:
+      summary: "[WELLNESS] List service categories (used in reports/per-category)"
+      tags: [Wellness — Catalog & Inventory]
+      responses:
+        "200": { description: Categories. }
+  /wellness/drugs:
+    get:
+      summary: "[WELLNESS] List drug catalog (formulary)"
+      tags: [Wellness — Catalog & Inventory]
+      responses:
+        "200": { description: Drugs. }
+  /wellness/inventory:
+    get:
+      summary: "[WELLNESS] List on-hand inventory (drug + consumable stock)"
+      tags: [Wellness — Catalog & Inventory]
+      responses:
+        "200": { description: Inventory rows. }
+  /wellness/inventory/receipts:
+    post:
+      summary: "[WELLNESS] Record a stock receipt (PO delivery)"
+      tags: [Wellness — Catalog & Inventory]
+      responses:
+        "201": { description: Receipt logged. }
+  /wellness/inventory/adjustments:
+    post:
+      summary: "[WELLNESS] Record a stock adjustment (write-off, expired, recount)"
+      tags: [Wellness — Catalog & Inventory]
+      responses:
+        "201": { description: Adjustment logged. }
+  /wellness/inventory/low-stock:
+    get:
+      summary: "[WELLNESS] List items below reorder threshold"
+      tags: [Wellness — Catalog & Inventory]
+      responses:
+        "200": { description: Low-stock items. }
+  /wellness/block-times:
+    get:
+      summary: "[WELLNESS] List non-bookable time blocks per doctor"
+      tags: [Wellness — Catalog & Inventory]
+      responses:
+        "200": { description: Block times. }
+
+  /wellness/locations:
+    get:
+      summary: "[WELLNESS] List clinic locations (multi-clinic)"
+      tags: [Wellness — Operations]
+      responses:
+        "200": { description: Locations. }
+  /wellness/calendar:
+    get:
+      summary: "[WELLNESS] Day-grid calendar (visits per doctor per slot)"
+      tags: [Wellness — Operations]
+      parameters:
+        - in: query
+          name: date
+          schema: { type: string, format: date }
+        - in: query
+          name: locationId
+          schema: { type: integer }
+      responses:
+        "200": { description: Calendar grid. }
+  /wellness/reports/pnl-by-service:
+    get:
+      summary: "[WELLNESS] P&L attribution by service"
+      tags: [Wellness — Operations]
+      parameters:
+        - in: query
+          name: from
+          schema: { type: string, format: date }
+        - in: query
+          name: to
+          schema: { type: string, format: date }
+      responses:
+        "200": { description: P&L rows. }
+  /wellness/reports/per-professional:
+    get:
+      summary: "[WELLNESS] Per-professional revenue + utilisation"
+      tags: [Wellness — Operations]
+      responses:
+        "200": { description: Per-pro report. }
+  /wellness/reports/per-location:
+    get:
+      summary: "[WELLNESS] Per-location revenue + utilisation"
+      tags: [Wellness — Operations]
+      responses:
+        "200": { description: Per-location report. }
+  /wellness/reports/attribution:
+    get:
+      summary: "[WELLNESS] Patient-source attribution"
+      tags: [Wellness — Operations]
+      responses:
+        "200": { description: Attribution rows. }
+  /wellness/telecaller/queue:
+    get:
+      summary: "[WELLNESS] Telecaller work queue (open leads + SLA timer)"
+      tags: [Wellness — Operations]
+      responses:
+        "200": { description: Queue rows. }
+  /wellness/telecaller/queue/{id}/dispose:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    post:
+      summary: "[WELLNESS] Dispose a queued lead with one of 6 outcomes"
+      tags: [Wellness — Operations]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [disposition]
+              properties:
+                disposition:
+                  type: string
+                  enum: [contacted_qualified, contacted_not_interested, junk, callback_later, no_response, converted_booked]
+                notes: { type: string }
+      responses:
+        "200": { description: Disposed. }
+
+  /wellness/portal/login:
+    post:
+      summary: "[WELLNESS] Patient-portal phone+OTP login"
+      tags: [Wellness — Portal & Public]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [phone]
+              properties:
+                phone: { type: string }
+                otp: { type: string, nullable: true, description: First call omits; second call submits the SMS-delivered OTP. }
+      responses:
+        "200":
+          description: OTP sent (no `otp`) or patient JWT issued (with `otp`).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  otpSent: { type: boolean }
+                  token: { type: string, nullable: true }
+                  patient: { $ref: '#/components/schemas/Patient' }
+        "401": { description: Invalid OTP. }
+  /wellness/portal/me:
+    get:
+      summary: "[WELLNESS] Patient-portal session"
+      tags: [Wellness — Portal & Public]
+      responses:
+        "200": { description: Patient session. }
+  /wellness/portal/visits:
+    get:
+      summary: "[WELLNESS] Patient-portal visit history"
+      tags: [Wellness — Portal & Public]
+      responses:
+        "200": { description: Visits. }
+  /wellness/portal/prescriptions:
+    get:
+      summary: "[WELLNESS] Patient-portal prescription history"
+      tags: [Wellness — Portal & Public]
+      responses:
+        "200": { description: Prescriptions. }
+  /wellness/public/tenant/{slug}:
+    parameters:
+      - in: path
+        name: slug
+        required: true
+        schema: { type: string }
+    get:
+      summary: "[WELLNESS] Public clinic page (unauthenticated)"
+      tags: [Wellness — Portal & Public, Public]
+      security: []
+      responses:
+        "200":
+          description: Public clinic info (name, services, opening hours).
+        "404": { $ref: '#/components/responses/NotFound' }
+  /wellness/public/book:
+    post:
+      summary: "[WELLNESS] Public booking — book a visit from the clinic's public page"
+      tags: [Wellness — Portal & Public, Public]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tenantSlug, name, phone, serviceId, requestedDate]
+              properties:
+                tenantSlug: { type: string }
+                name: { type: string }
+                phone: { type: string }
+                email: { type: string, format: email, nullable: true }
+                serviceId: { type: integer }
+                doctorId: { type: integer, nullable: true }
+                requestedDate: { type: string, format: date-time }
+                notes: { type: string, nullable: true }
+      responses:
+        "201":
+          description: Booking confirmation.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  bookingId: { type: integer }
+                  confirmationMessage: { type: string }
+
+  # ════════════════════════════════════════════════════════════════════
+  # ════ TRAVEL VERTICAL ════
+  # ════════════════════════════════════════════════════════════════════
+  /travel/health:
+    get:
+      summary: "[TRAVEL] Vertical health probe + tenant identity"
+      description: |
+        Day-1 sanity check used by the SPA to confirm the travel module is
+        wired correctly end-to-end. Requires the caller's tenant to have
+        `vertical === 'travel'`.
+      tags: [Travel — Operations]
+      responses:
+        "200":
+          description: Healthy.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: "healthy" }
+                  vertical: { type: string, example: "travel" }
+                  tenantId: { type: integer }
+                  tenantSlug: { type: string }
+                  tenantName: { type: string }
+                  phase: { type: string, example: "1-day-1-scaffolding" }
+                  timestamp: { type: string, format: date-time }
+        "403": { $ref: '#/components/responses/Forbidden' }
+  /travel/utils/validate-gstin:
+    get:
+      summary: "[TRAVEL] Validate / lookup an Indian GSTIN"
+      description: |
+        Operator-facing lookup wrapping `lib/gstinValidator.js`. No side
+        effects; ADMIN+MANAGER gate.
+
+        Returns 200 on both valid AND invalid inputs — the route's job is
+        to **report** validity, not to gate on it.
+      tags: [Travel — Operations]
+      parameters:
+        - in: query
+          name: gstin
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Lookup result.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  gstin: { type: string, description: Normalised uppercase. }
+                  valid: { type: boolean }
+                  stateName: { type: string, nullable: true }
+                  stateCode: { type: string, nullable: true }
+                  errors:
+                    type: array
+                    items: { type: string, enum: [INVALID_FORMAT, INVALID_STATE_CODE, INVALID_CHECKSUM] }
+
+  /travel/session/sub-brand:
+    get:
+      summary: "[TRAVEL] Get the active sub-brand for the caller's session"
+      tags: [Travel — Operations]
+      responses:
+        "200":
+          description: Active sub-brand.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  subBrand: { type: string, enum: [tmc, rfu, travel_stall, visa_sure] }
+    post:
+      summary: "[TRAVEL] Switch active sub-brand for the session"
+      tags: [Travel — Operations]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [subBrand]
+              properties:
+                subBrand: { type: string, enum: [tmc, rfu, travel_stall, visa_sure] }
+      responses:
+        "200": { description: Switched. }
+        "403":
+          description: User's `subBrandAccess` does not include the requested sub-brand.
+
+  # ── Trips ────────────────────────────────────────────────────────
+  /travel/trips:
+    get:
+      summary: "[TRAVEL][TMC] List trips"
+      description: |
+        Lists TMC trips (school / corporate). Sub-brand scoped via
+        `requireTmcAccess`.
+      tags: [Travel — Trips & Itineraries]
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+        - in: query
+          name: status
+          schema: { type: string, enum: [enquiry, quoted, confirmed, in_progress, completed, cancelled] }
+        - in: query
+          name: schoolName
+          schema: { type: string }
+      responses:
+        "200":
+          description: Trips.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/TravelTrip' }
+    post:
+      summary: "[TRAVEL][TMC] Create a trip"
+      tags: [Travel — Trips & Itineraries]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TravelTrip' }
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TravelTrip' }
+  /travel/trips/by-month:
+    get:
+      summary: "[TRAVEL][TMC] Trips bucketed by month (operations calendar)"
+      tags: [Travel — Trips & Itineraries]
+      responses:
+        "200": { description: Month buckets. }
+  /travel/trips/by-quarter:
+    get:
+      summary: "[TRAVEL][TMC] Trips bucketed by quarter"
+      tags: [Travel — Trips & Itineraries]
+      responses:
+        "200": { description: Quarter buckets. }
+  /travel/trips/by-year:
+    get:
+      summary: "[TRAVEL][TMC] Trips bucketed by year"
+      tags: [Travel — Trips & Itineraries]
+      responses:
+        "200": { description: Year buckets. }
+  /travel/trips/{id}:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    get:
+      summary: "[TRAVEL][TMC] Get a trip"
+      tags: [Travel — Trips & Itineraries]
+      responses:
+        "200":
+          description: Trip.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TravelTrip' }
+    patch:
+      summary: "[TRAVEL][TMC] Update a trip"
+      tags: [Travel — Trips & Itineraries]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TravelTrip' }
+      responses:
+        "200": { description: Updated. }
+    delete:
+      summary: "[TRAVEL][TMC] Cancel a trip"
+      tags: [Travel — Trips & Itineraries]
+      responses:
+        "204": { description: Cancelled. }
+  /travel/trips/{id}/participants:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    get:
+      summary: "[TRAVEL][TMC] List participants on a trip"
+      tags: [Travel — Trips & Itineraries]
+      responses:
+        "200": { description: Participants. }
+    post:
+      summary: "[TRAVEL][TMC] Add a participant"
+      tags: [Travel — Trips & Itineraries]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, dob]
+              properties:
+                name: { type: string }
+                dob: { type: string, format: date }
+                passportNumber: { type: string, nullable: true }
+                dietaryNeeds: { type: string, nullable: true }
+                medicalNotes: { type: string, nullable: true }
+                guardianName: { type: string, nullable: true }
+                guardianPhone: { type: string, nullable: true }
+      responses:
+        "201": { description: Added. }
+  /travel/trips/{id}/documents:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    get:
+      summary: "[TRAVEL][TMC] List trip-attached documents"
+      tags: [Travel — Trips & Itineraries]
+      responses:
+        "200": { description: Documents. }
+    post:
+      summary: "[TRAVEL][TMC] Attach a document to a trip"
+      tags: [Travel — Trips & Itineraries]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file: { type: string, format: binary }
+                category: { type: string, enum: [permission_slip, insurance, medical_form, itinerary_pdf, other] }
+      responses:
+        "201": { description: Attached. }
+
+  # ── Itineraries ──────────────────────────────────────────────────
+  /travel/itineraries:
+    get:
+      summary: "[TRAVEL] List itineraries"
+      tags: [Travel — Trips & Itineraries]
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+        - in: query
+          name: status
+          schema: { type: string, enum: [draft, sent, accepted, rejected, expired] }
+        - in: query
+          name: subBrand
+          schema: { type: string, enum: [tmc, rfu, travel_stall, visa_sure] }
+      responses:
+        "200":
+          description: Itineraries.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/TravelItinerary' }
+    post:
+      summary: "[TRAVEL] Create an itinerary"
+      tags: [Travel — Trips & Itineraries]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TravelItinerary' }
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TravelItinerary' }
+  /travel/itineraries/{id}:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    get:
+      summary: "[TRAVEL] Get an itinerary"
+      tags: [Travel — Trips & Itineraries]
+      responses:
+        "200":
+          description: Itinerary.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TravelItinerary' }
+    put:
+      summary: "[TRAVEL] Replace an itinerary"
+      tags: [Travel — Trips & Itineraries]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TravelItinerary' }
+      responses:
+        "200": { description: Replaced. }
+    patch:
+      summary: "[TRAVEL] Partial-update an itinerary"
+      tags: [Travel — Trips & Itineraries]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TravelItinerary' }
+      responses:
+        "200": { description: Updated. }
+  /travel/itineraries/{id}/items:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    post:
+      summary: "[TRAVEL] Add an item (flight / hotel / activity) to an itinerary"
+      tags: [Travel — Trips & Itineraries]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TravelItineraryItem' }
+      responses:
+        "201": { description: Added. }
+  /travel/itineraries/{id}/items/{itemId}:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+      - in: path
+        name: itemId
+        required: true
+        schema: { type: integer }
+    patch:
+      summary: "[TRAVEL] Update an itinerary item"
+      tags: [Travel — Trips & Itineraries]
+      responses:
+        "200": { description: Updated. }
+    delete:
+      summary: "[TRAVEL] Remove an itinerary item"
+      tags: [Travel — Trips & Itineraries]
+      responses:
+        "204": { description: Removed. }
+  /travel/itineraries/{id}/accept:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    post:
+      summary: "[TRAVEL] Mark an itinerary as accepted by the lead"
+      tags: [Travel — Trips & Itineraries]
+      responses:
+        "200": { description: Accepted. }
+  /travel/itineraries/{id}/reject:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    post:
+      summary: "[TRAVEL] Mark an itinerary as rejected"
+      tags: [Travel — Trips & Itineraries]
+      responses:
+        "200": { description: Rejected. }
+  /travel/itineraries/{id}/share:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    post:
+      summary: "[TRAVEL] Generate a public share-token URL + WhatsApp/email"
+      tags: [Travel — Trips & Itineraries]
+      responses:
+        "200":
+          description: Share URL.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  shareToken: { type: string }
+                  shareUrl: { type: string }
+  /travel/itineraries/{id}/pdf:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    get:
+      summary: "[TRAVEL] Download branded PDF"
+      tags: [Travel — Trips & Itineraries]
+      responses:
+        "200":
+          description: PDF.
+          content:
+            application/pdf: {}
+  /travel/itineraries/public/{shareToken}:
+    parameters:
+      - in: path
+        name: shareToken
+        required: true
+        schema: { type: string }
+    get:
+      summary: "[TRAVEL][PUBLIC] Public itinerary view (share-token gated)"
+      tags: [Travel — Trips & Itineraries, Public]
+      security: []
+      responses:
+        "200":
+          description: Itinerary.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TravelItinerary' }
+        "404": { $ref: '#/components/responses/NotFound' }
+  /travel/itineraries/public/{shareToken}/create-payment-order:
+    parameters:
+      - in: path
+        name: shareToken
+        required: true
+        schema: { type: string }
+    post:
+      summary: "[TRAVEL][PUBLIC] Create a Razorpay/Stripe payment order from public share"
+      tags: [Travel — Trips & Itineraries, Public]
+      security: []
+      responses:
+        "200": { description: Gateway order. }
+  /travel/itineraries/public/{shareToken}/verify-payment:
+    parameters:
+      - in: path
+        name: shareToken
+        required: true
+        schema: { type: string }
+    post:
+      summary: "[TRAVEL][PUBLIC] Verify payment callback signature"
+      tags: [Travel — Trips & Itineraries, Public]
+      security: []
+      responses:
+        "200": { description: Verified + invoice issued. }
+        "400": { description: Signature mismatch. }
+
+  /travel/itinerary-templates:
+    get:
+      summary: "[TRAVEL] List itinerary templates"
+      tags: [Travel — Trips & Itineraries]
+      responses:
+        "200": { description: Templates. }
+
+  # ── Visa ─────────────────────────────────────────────────────────
+  /travel/visa:
+    get:
+      summary: "[TRAVEL][Visa Sure] List visa applications"
+      tags: [Travel — Visa & Documents]
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+        - in: query
+          name: status
+          schema:
+            type: string
+            enum: [intake, document_collection, application_filed, appointment_booked, biometrics_done, decision_pending, approved, rejected, withdrawn]
+      responses:
+        "200":
+          description: Visa applications.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/VisaApplication' }
+    post:
+      summary: "[TRAVEL][Visa Sure] Create a visa application (intake)"
+      tags: [Travel — Visa & Documents]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/VisaApplication' }
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/VisaApplication' }
+  /travel/visa/{id}:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    get:
+      summary: "[TRAVEL][Visa Sure] Get a visa application"
+      tags: [Travel — Visa & Documents]
+      responses:
+        "200":
+          description: Application.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/VisaApplication' }
+    patch:
+      summary: "[TRAVEL][Visa Sure] Update an application (status, notes, checklist)"
+      tags: [Travel — Visa & Documents]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/VisaApplication' }
+      responses:
+        "200": { description: Updated. }
+  /travel/visa/analytics:
+    get:
+      summary: "[TRAVEL][Visa Sure] Visa funnel + approval-rate analytics"
+      tags: [Travel — Visa & Documents]
+      responses:
+        "200": { description: Analytics buckets. }
+  /embassy-rules:
+    get:
+      summary: "[TRAVEL][Visa Sure] List embassy rule definitions"
+      description: Country × visa-type rule cards used by the visa-readiness checker.
+      tags: [Travel — Visa & Documents]
+      responses:
+        "200": { description: Rules. }
+  /travel/passport/upload:
+    post:
+      summary: "[TRAVEL][Visa Sure] Upload + OCR-parse a passport"
+      tags: [Travel — Visa & Documents]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        "200":
+          description: Parsed passport data.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  passportNumber: { type: string }
+                  name: { type: string }
+                  dob: { type: string, format: date }
+                  expiryDate: { type: string, format: date }
+                  country: { type: string }
+
+  # ── Suppliers / Pricing ──────────────────────────────────────────
+  /travel/suppliers:
+    get:
+      summary: "[TRAVEL] List suppliers"
+      tags: [Travel — Suppliers & Pricing]
+      responses:
+        "200":
+          description: Suppliers.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/TravelSupplier' }
+    post:
+      summary: "[TRAVEL] Create a supplier"
+      tags: [Travel — Suppliers & Pricing]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TravelSupplier' }
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TravelSupplier' }
+  /travel/suppliers/{id}/credentials:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    post:
+      summary: "[TRAVEL] Store encrypted supplier credentials (vault)"
+      description: Step-up auth required; credentials are masked in responses.
+      tags: [Travel — Suppliers & Pricing]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                portalUrl: { type: string }
+                username: { type: string }
+                password: { type: string, format: password }
+                apiKey: { type: string, nullable: true }
+      responses:
+        "201": { description: Stored. }
+  /travel/cost-master:
+    get:
+      summary: "[TRAVEL] List cost-master line items (pricing components)"
+      tags: [Travel — Suppliers & Pricing]
+      responses:
+        "200": { description: Cost-master rows. }
+  /travel/pricing/quote:
+    post:
+      summary: "[TRAVEL] Compute a price quote (pure pricing engine)"
+      description: Pure math — does not persist. Backed by `lib/travelPricing.js`.
+      tags: [Travel — Suppliers & Pricing]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
                 items:
-                  $ref: '#/components/schemas/Deal'
-        "401": { description: Missing or invalid bearer token }
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      costMasterId: { type: integer }
+                      quantity: { type: number }
+                markupPercent: { type: number }
+                discountPercent: { type: number }
+                season: { type: string, nullable: true }
+                currency: { type: string }
+      responses:
+        "200":
+          description: Quote.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  subtotalCents: { type: integer }
+                  markupCents: { type: integer }
+                  discountCents: { type: integer }
+                  taxCents: { type: integer }
+                  totalCents: { type: integer }
+                  breakdown:
+                    type: array
+                    items: { type: object }
+  /travel/commission-profiles:
+    get:
+      summary: "[TRAVEL] List supplier commission profiles"
+      tags: [Travel — Suppliers & Pricing]
+      responses:
+        "200": { description: Profiles. }
+  /travel/cancellation-policies:
+    get:
+      summary: "[TRAVEL] List cancellation-policy templates"
+      tags: [Travel — Suppliers & Pricing]
+      responses:
+        "200": { description: Policies. }
+  /travel/engine-weights:
+    get:
+      summary: "[TRAVEL][TMC] Diagnostic engine scoring weights"
+      tags: [Travel — Suppliers & Pricing]
+      responses:
+        "200": { description: Weights. }
+
+  # ── Microsites / Marketing ───────────────────────────────────────
+  /travel/microsites:
+    get:
+      summary: "[TRAVEL] List microsites"
+      tags: [Travel — Microsites & Marketing]
+      responses:
+        "200":
+          description: Microsites.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/TravelMicrosite' }
+    post:
+      summary: "[TRAVEL] Create a microsite"
+      tags: [Travel — Microsites & Marketing]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TravelMicrosite' }
+      responses:
+        "201": { description: Created. }
+  /travel/flyer-templates:
+    get:
+      summary: "[TRAVEL] List flyer / brochure templates"
+      tags: [Travel — Microsites & Marketing]
+      responses:
+        "200": { description: Templates. }
+  /v1/flyers/{slug}:
+    parameters:
+      - in: path
+        name: slug
+        required: true
+        schema: { type: string }
+    get:
+      summary: "[TRAVEL][PUBLIC] Public flyer surface (no auth)"
+      tags: [Travel — Microsites & Marketing, Public]
+      security: []
+      responses:
+        "200": { description: Flyer HTML / JSON. }
+  /travel/religious-packets:
+    get:
+      summary: "[TRAVEL][RFU Umrah] List religious-trip packets"
+      tags: [Travel — Microsites & Marketing]
+      responses:
+        "200": { description: Packets. }
+  /travel-personalised-destinations:
+    get:
+      summary: "[TRAVEL] List personalised-destination recommendations"
+      tags: [Travel — Microsites & Marketing]
+      responses:
+        "200": { description: Destinations. }
+  /travel/sightseeing:
+    get:
+      summary: "[TRAVEL] List sightseeing entries"
+      tags: [Travel — Microsites & Marketing]
+      responses:
+        "200": { description: Sightseeing. }
+  /travel/pois:
+    get:
+      summary: "[TRAVEL] List points of interest"
+      tags: [Travel — Microsites & Marketing]
+      responses:
+        "200": { description: POIs. }
+
+  # ── Quotes / Billing ─────────────────────────────────────────────
+  /travel/quotes:
+    get:
+      summary: "[TRAVEL] List quotes"
+      tags: [Travel — Quotes & Billing]
+      responses:
+        "200":
+          description: Quotes.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/TravelQuote' }
+    post:
+      summary: "[TRAVEL] Create a quote"
+      tags: [Travel — Quotes & Billing]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TravelQuote' }
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TravelQuote' }
+  /travel/quotes/public/{shareToken}:
+    parameters:
+      - in: path
+        name: shareToken
+        required: true
+        schema: { type: string }
+    get:
+      summary: "[TRAVEL][PUBLIC] Public quote surface"
+      tags: [Travel — Quotes & Billing, Public]
+      security: []
+      responses:
+        "200":
+          description: Quote.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TravelQuote' }
+  /travel/quote-templates:
+    get:
+      summary: "[TRAVEL] List quote templates"
+      tags: [Travel — Quotes & Billing]
+      responses:
+        "200": { description: Templates. }
+  /travel/invoices:
+    get:
+      summary: "[TRAVEL] List travel invoices"
+      tags: [Travel — Quotes & Billing]
+      responses:
+        "200":
+          description: Invoices.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Invoice' }
+  /travel/trip-billing/{tripId}:
+    parameters:
+      - in: path
+        name: tripId
+        required: true
+        schema: { type: integer }
+    get:
+      summary: "[TRAVEL][TMC] Trip billing summary (advance, balance, refunds)"
+      tags: [Travel — Quotes & Billing]
+      responses:
+        "200": { description: Billing summary. }
+  /travel/rfu/profiles:
+    get:
+      summary: "[TRAVEL][RFU Umrah] List pilgrim profiles"
+      tags: [Travel — Quotes & Billing]
+      responses:
+        "200":
+          description: Profiles.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/TravelRfuLeadProfile' }
+
+  # ── Diagnostics & Sales ──────────────────────────────────────────
+  /travel/diagnostics:
+    get:
+      summary: "[TRAVEL][TMC] List diagnostic submissions"
+      description: |
+        Lists submissions from the public 12-question school-trip readiness
+        form (`/p/tmc/readiness`).
+
+        Each submission is scored by the deterministic
+        engine + LLM-generated report; gated by 3-layer guardrail.
+      tags: [Travel — Diagnostics & Sales]
+      responses:
+        "200":
+          description: Submissions.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/TravelDiagnosticSubmission' }
+  /travel/diagnostics/{id}:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    get:
+      summary: "[TRAVEL][TMC] Get a diagnostic submission"
+      tags: [Travel — Diagnostics & Sales]
+      responses:
+        "200":
+          description: Submission.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TravelDiagnosticSubmission' }
+
+  # ── Travel ops / dashboard ───────────────────────────────────────
+  /travel/dashboard:
+    get:
+      summary: "[TRAVEL] Travel CRM owner dashboard"
+      tags: [Travel — Operations]
+      responses:
+        "200": { description: Dashboard. }
+  /travel/reports:
+    get:
+      summary: "[TRAVEL] Travel CRM reports index"
+      tags: [Travel — Operations]
+      responses:
+        "200": { description: Reports. }
+  /travel/csv/export:
+    get:
+      summary: "[TRAVEL] Bulk CSV exports (contacts / leads / trips / quotes)"
+      tags: [Travel — Operations]
+      parameters:
+        - in: query
+          name: entity
+          required: true
+          schema:
+            type: string
+            enum: [contacts, leads, trips, quotes, suppliers, microsites]
+      responses:
+        "200":
+          description: CSV.
+          content:
+            text/csv: {}
+  /travel/csv/import:
+    post:
+      summary: "[TRAVEL] Bulk CSV import"
+      tags: [Travel — Operations]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file: { type: string, format: binary }
+                entity: { type: string, enum: [contacts, leads, suppliers, cost_master] }
+      responses:
+        "200": { description: Import summary. }
+  /travel/inbound-leads:
+    post:
+      summary: "[TRAVEL] Inbound lead ingest endpoint (form-submit, social, etc.)"
+      tags: [Travel — Operations]
+      responses:
+        "201": { description: Lead ingested. }
+  /travel-curriculum:
+    get:
+      summary: "[TRAVEL][TMC] List school-curriculum tags (Indian boards)"
+      tags: [Travel — Operations]
+      responses:
+        "200": { description: Curriculum. }
+  /travel-school-terms:
+    get:
+      summary: "[TRAVEL][TMC] List Indian-school term dates"
+      tags: [Travel — Operations]
+      responses:
+        "200": { description: Term dates. }
+  /travel/webcheckin:
+    post:
+      summary: "[TRAVEL] Trigger automated web-check-in for an itinerary's flights"
+      tags: [Travel — Operations]
+      responses:
+        "200": { description: Check-in queued. }
+
+  # ── Sub-brand integrations ───────────────────────────────────────
+  /ratehawk/search:
+    post:
+      summary: "[TRAVEL] Search RateHawk hotel inventory"
+      description: |
+        Proxies to RateHawk's search API. Enforces per-tenant monthly
+        budget cap via `lib/ratehawkClient.js`.
+      tags: [Travel — Sub-Brand Integrations]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [destination, checkIn, checkOut, guests]
+              properties:
+                destination: { type: string }
+                checkIn: { type: string, format: date }
+                checkOut: { type: string, format: date }
+                guests: { type: integer }
+      responses:
+        "200": { description: Hotel results. }
+        "402": { description: Budget cap exceeded for the tenant this month. }
+  /adsgpt/campaigns:
+    get:
+      summary: "[TRAVEL] List AdsGPT campaign drafts"
+      tags: [Travel — Sub-Brand Integrations]
+      responses:
+        "200": { description: Campaigns. }
+    post:
+      summary: "[TRAVEL] Create an AdsGPT campaign"
+      tags: [Travel — Sub-Brand Integrations]
+      responses:
+        "201": { description: Created (budget-cap enforced). }
+        "402": { description: Budget cap exceeded. }
+  /callified/initiate-call:
+    post:
+      summary: "[TRAVEL] Initiate a Callified.ai voice/WhatsApp outreach"
+      description: |
+        Delegates to `lib/callifiedClient.js`, which enforces enablement,
+        budget cap, sub-brand persona resolution before the upstream call.
+      tags: [Travel — Sub-Brand Integrations]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [contactId]
+              properties:
+                contactId: { type: integer }
+                subBrand: { type: string, enum: [tmc, rfu, travel_stall, visa_sure] }
+                channel: { type: string, enum: [voice, whatsapp] }
+      responses:
+        "200": { description: Call initiated. }
+        "402": { description: Budget cap exceeded. }
+        "403": { description: Disabled for this tenant. }
+  /booking-expedia/search:
+    post:
+      summary: "[TRAVEL] Search Booking.com / Expedia inventory"
+      tags: [Travel — Sub-Brand Integrations]
+      responses:
+        "200": { description: Inventory. }
+  /travel-tmc-catalogue:
+    get:
+      summary: "[TRAVEL][TMC] List human-verified TMC trip catalogue entries"
+      tags: [Travel — Sub-Brand Integrations]
+      responses:
+        "200": { description: Catalogue. }
+  /travel/travelstall:
+    get:
+      summary: "[TRAVEL][Travel Stall] Family-holiday packs"
+      tags: [Travel — Sub-Brand Integrations]
+      responses:
+        "200": { description: Packs. }
+
+  # ════════════════════════════════════════════════════════════════════
+  # EXTERNAL PARTNER API (X-API-Key)
+  # ════════════════════════════════════════════════════════════════════
   /v1/external/health:
     get:
-      summary: External-partner API health probe
+      summary: "[EXTERNAL] API-key liveness probe"
       description: |
-        Verifies the API key is valid and returns the partner identity. Used
-        by Callified.ai / Globus Phone / AdsGPT integrations as a liveness +
-        auth probe.
+        Verifies the API key is valid and returns the partner identity.
+        Used by Callified.ai / Globus Phone / AdsGPT integrations as a
+        liveness + auth probe.
       tags: [External Partner API]
       security:
         - ApiKeyAuth: []
       responses:
         "200":
-          description: Authenticated; returns partner identity envelope.
+          description: Authenticated.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: "ok" }
+                  partner: { type: string, example: "callified" }
+                  tenantId: { type: integer }
         "401":
-          description: Missing or invalid API key
-tags:
-  - name: Platform
-    description: Health, version, and platform-level endpoints.
-  - name: Auth
-    description: User authentication, signup, password reset, 2FA.
-  - name: Contacts
-    description: Address-book contacts (leads, prospects, customers, churned).
-  - name: Deals
-    description: Pipeline deals across configurable stages.
-  - name: External Partner API
-    description: |
-      API-key-authenticated surface consumed by sister Globussoft products
-      (Callified.ai, Globus Phone, AdsGPT). Mounted at `/api/v1/external/*`.
+          description: Missing or invalid API key.
+  /v1/external/me:
+    get:
+      summary: "[EXTERNAL] Get the partner identity tied to the API key"
+      tags: [External Partner API]
+      security:
+        - ApiKeyAuth: []
+      responses:
+        "200": { description: Partner identity envelope. }
+  /v1/external/contacts:
+    get:
+      summary: "[EXTERNAL] List contacts visible to this API key"
+      tags: [External Partner API]
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        "200":
+          description: Contacts.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Contact' }
+  /v1/external/contacts/lookup:
+    get:
+      summary: "[EXTERNAL] Lookup contact by phone or email"
+      tags: [External Partner API]
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - in: query
+          name: phone
+          schema: { type: string }
+        - in: query
+          name: email
+          schema: { type: string, format: email }
+      responses:
+        "200":
+          description: Match (or empty).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Contact' }
+  /v1/external/patients/lookup:
+    get:
+      summary: "[EXTERNAL][WELLNESS] Lookup patient by phone (wellness tenants only)"
+      tags: [External Partner API]
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - in: query
+          name: phone
+          schema: { type: string }
+      responses:
+        "200":
+          description: Match.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Patient' }
+  /v1/external/leads:
+    get:
+      summary: "[EXTERNAL] Poll for newly-assigned leads (long-polling friendly)"
+      tags: [External Partner API]
+      security:
+        - ApiKeyAuth: []
+      responses:
+        "200":
+          description: Leads.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/ExternalLead' }
+    post:
+      summary: "[EXTERNAL] Push a new lead into the CRM"
+      description: |
+        Used by Callified.ai (voice intake → lead) and AdsGPT (ad-form
+        submission → lead). Runs through `lib/leadJunkFilter.js` and
+        `lib/leadAutoRouter.js` before insert.
+      tags: [External Partner API]
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ExternalLead' }
+      responses:
+        "201":
+          description: Lead created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExternalLead' }
+  /v1/external/leads/{id}/stage:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    patch:
+      summary: "[EXTERNAL] Move a lead to a new pipeline stage"
+      tags: [External Partner API]
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [stage]
+              properties:
+                stage: { type: string }
+      responses:
+        "200": { description: Stage updated. }
+  /v1/external/calls:
+    post:
+      summary: "[EXTERNAL] Record a call session (placement + recording metadata)"
+      tags: [External Partner API]
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ExternalCall' }
+      responses:
+        "201":
+          description: Call recorded.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExternalCall' }
+  /v1/external/calls/{id}:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    patch:
+      summary: "[EXTERNAL] Late-bind a transcript / sentiment to an existing call"
+      tags: [External Partner API]
+      security:
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                transcriptText: { type: string }
+                sentiment: { type: string, enum: [positive, neutral, negative] }
+      responses:
+        "200": { description: Patched. }
+  /v1/external/messages:
+    post:
+      summary: "[EXTERNAL] Push an SMS / WhatsApp message into the CRM thread"
+      tags: [External Partner API]
+      security:
+        - ApiKeyAuth: []
+      responses:
+        "201": { description: Message ingested. }
+  /v1/external/appointments:
+    get:
+      summary: "[EXTERNAL][WELLNESS] List wellness appointments visible to the API key"
+      tags: [External Partner API]
+      security:
+        - ApiKeyAuth: []
+      responses:
+        "200": { description: Appointments. }
+    post:
+      summary: "[EXTERNAL][WELLNESS] Book a wellness appointment from the partner"
+      tags: [External Partner API]
+      security:
+        - ApiKeyAuth: []
+      responses:
+        "201": { description: Booked. }
+  /v1/external/services:
+    get:
+      summary: "[EXTERNAL][WELLNESS] List service catalog"
+      tags: [External Partner API]
+      security:
+        - ApiKeyAuth: []
+      responses:
+        "200": { description: Services. }
+  /v1/external/staff:
+    get:
+      summary: "[EXTERNAL][WELLNESS] List staff (doctors / professionals)"
+      tags: [External Partner API]
+      security:
+        - ApiKeyAuth: []
+      responses:
+        "200": { description: Staff. }
+  /v1/external/locations:
+    get:
+      summary: "[EXTERNAL][WELLNESS] List clinic locations"
+      tags: [External Partner API]
+      security:
+        - ApiKeyAuth: []
+      responses:
+        "200": { description: Locations. }
+
+  /v1/voyagr/manifest:
+    get:
+      summary: "[EXTERNAL] Voyagr manifest endpoint (sister-product feed)"
+      tags: [External Partner API]
+      security:
+        - ApiKeyAuth: []
+      responses:
+        "200": { description: Manifest. }
+  /v1/flight-plugin/quote:
+    post:
+      summary: "[EXTERNAL][TRAVEL] Flight-quote plugin (Chrome ext / sister product)"
+      tags: [External Partner API]
+      security:
+        - ApiKeyAuth: []
+      responses:
+        "200": { description: Quote. }

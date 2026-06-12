@@ -66,6 +66,12 @@ prisma.auditLog = {
 };
 prisma.revokedToken = prisma.revokedToken || {};
 prisma.revokedToken.findUnique = vi.fn().mockResolvedValue(null);
+// #996 — POST /invoices now validates contact existence before create.
+// Default mock returns a present contact in the test tenant so the
+// happy-path tests keep passing; the CONTACT_NOT_FOUND test overrides
+// per-call to return null.
+prisma.contact = prisma.contact || {};
+prisma.contact.findFirst = vi.fn().mockResolvedValue({ id: 99, tenantId: 1 });
 
 import express from 'express';
 import request from 'supertest';
@@ -114,6 +120,7 @@ beforeEach(() => {
   prisma.user.findUnique.mockReset().mockResolvedValue({ role: 'ADMIN', subBrandAccess: null });
   prisma.auditLog.create.mockReset().mockResolvedValue({ id: 1 });
   prisma.auditLog.findFirst.mockReset().mockResolvedValue(null);
+  prisma.contact.findFirst.mockReset().mockResolvedValue({ id: 99, tenantId: 1 });
 });
 
 describe('POST /api/travel/invoices', () => {
@@ -202,8 +209,11 @@ describe('POST /api/travel/invoices', () => {
   });
 
   test('sequential POSTs return TINV-YYYY-NNNN with serial incremented', async () => {
-    // First POST — no prior invoice, serial = 1.
-    prisma.travelInvoice.findFirst.mockResolvedValueOnce(null);
+    // First POST — dedup check returns null (no recent dup), then
+    // nextInvoiceNum's findFirst returns null (no prior invoice, serial = 1).
+    prisma.travelInvoice.findFirst
+      .mockResolvedValueOnce(null) // #996 dedup pre-check
+      .mockResolvedValueOnce(null); // nextInvoiceNum latest-serial lookup
     prisma.travelInvoice.create.mockImplementationOnce(async ({ data }) => ({
       id: 1, createdAt: new Date(), updatedAt: new Date(), paidAt: null, ...data,
     }));
@@ -218,10 +228,13 @@ describe('POST /api/travel/invoices', () => {
     expect(r1.status).toBe(201);
     expect(r1.body.invoiceNum).toBe(`TINV-${CURRENT_YEAR}-0001`);
 
-    // Second POST — latest serial is now 0001, next is 0002.
-    prisma.travelInvoice.findFirst.mockResolvedValueOnce({
-      invoiceNum: `TINV-${CURRENT_YEAR}-0001`,
-    });
+    // Second POST — different totalAmount so dedup pre-check returns null
+    // (no match); nextInvoiceNum's findFirst returns the previous serial.
+    prisma.travelInvoice.findFirst
+      .mockResolvedValueOnce(null) // #996 dedup pre-check
+      .mockResolvedValueOnce({
+        invoiceNum: `TINV-${CURRENT_YEAR}-0001`,
+      });
     prisma.travelInvoice.create.mockImplementationOnce(async ({ data }) => ({
       id: 2, createdAt: new Date(), updatedAt: new Date(), paidAt: null, ...data,
     }));
@@ -235,6 +248,98 @@ describe('POST /api/travel/invoices', () => {
       });
     expect(r2.status).toBe(201);
     expect(r2.body.invoiceNum).toBe(`TINV-${CURRENT_YEAR}-0002`);
+  });
+
+  // #996 — Contact existence + draft-dedup guards.
+  test('rejects unknown contactId with 422 CONTACT_NOT_FOUND', async () => {
+    prisma.contact.findFirst.mockResolvedValueOnce(null);
+    const res = await request(makeApp())
+      .post('/api/travel/invoices')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({
+        contactId: 999999,
+        totalAmount: '120000.00',
+        currency: 'INR',
+        subBrand: 'tmc',
+        dueDate: tomorrowIso,
+      });
+    expect(res.status).toBe(422);
+    expect(res.body).toMatchObject({ code: 'CONTACT_NOT_FOUND' });
+    expect(res.body.error).toMatch(/999999/);
+    expect(prisma.travelInvoice.create).not.toHaveBeenCalled();
+  });
+
+  test('blocks any identical Draft (no time window) with 409 DUPLICATE_DRAFT_INVOICE + existing envelope', async () => {
+    // Dedup pre-check returns a matching Draft — its age is irrelevant.
+    // Use a clearly-stale createdAt to lock in the "no time window" contract.
+    prisma.travelInvoice.findFirst.mockResolvedValueOnce({
+      id: 77,
+      invoiceNum: `TINV-${CURRENT_YEAR}-0002`,
+      createdAt: new Date(Date.now() - 6 * 60 * 60 * 1000), // 6 hours ago
+    });
+    const res = await request(makeApp())
+      .post('/api/travel/invoices')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({
+        contactId: 99,
+        totalAmount: '120000.00',
+        currency: 'INR',
+        subBrand: 'tmc',
+        dueDate: tomorrowIso,
+      });
+    expect(res.status).toBe(409);
+    expect(res.body).toMatchObject({
+      code: 'DUPLICATE_DRAFT_INVOICE',
+      existing: { id: 77, invoiceNum: `TINV-${CURRENT_YEAR}-0002` },
+    });
+    expect(res.body.error).toMatch(/TINV-/);
+    expect(res.body.error).toMatch(/already exists/);
+    expect(prisma.travelInvoice.create).not.toHaveBeenCalled();
+  });
+
+  test('dedup query does NOT pass a createdAt window — operators creating identical Drafts hours apart still get blocked', async () => {
+    // Capture the where clause the route sends to Prisma so we can assert
+    // the absence of a createdAt window. Mock a matching dupe so the route
+    // returns 409.
+    prisma.travelInvoice.findFirst.mockResolvedValueOnce({
+      id: 77, invoiceNum: `TINV-${CURRENT_YEAR}-0002`, createdAt: new Date(),
+    });
+    await request(makeApp())
+      .post('/api/travel/invoices')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({
+        contactId: 99,
+        totalAmount: '120000.00',
+        currency: 'INR',
+        subBrand: 'tmc',
+        dueDate: tomorrowIso,
+      });
+    const dedupCallArgs = prisma.travelInvoice.findFirst.mock.calls[0][0];
+    expect(dedupCallArgs.where.status).toBe('Draft');
+    expect(dedupCallArgs.where).not.toHaveProperty('createdAt');
+  });
+
+  test('dedup guard only fires on Draft — Issued create skips the pre-check', async () => {
+    // No dedup mock queued. If the route fires the pre-check we'd error
+    // (the dedup result would leak into nextInvoiceNum's lookup). Confirm
+    // the route skipped it by checking findFirst was called exactly once.
+    prisma.travelInvoice.findFirst.mockResolvedValueOnce(null); // nextInvoiceNum
+    prisma.travelInvoice.create.mockImplementationOnce(async ({ data }) => ({
+      id: 100, createdAt: new Date(), updatedAt: new Date(), paidAt: null, ...data,
+    }));
+    const res = await request(makeApp())
+      .post('/api/travel/invoices')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({
+        contactId: 99,
+        totalAmount: '120000.00',
+        currency: 'INR',
+        subBrand: 'tmc',
+        dueDate: tomorrowIso,
+        status: 'Issued',
+      });
+    expect(res.status).toBe(201);
+    expect(prisma.travelInvoice.findFirst).toHaveBeenCalledTimes(1);
   });
 });
 

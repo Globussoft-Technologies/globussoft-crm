@@ -25,7 +25,7 @@ struct WalletView: View {
         .background(Color.wellnessBackground.ignoresSafeArea())
         .navigationTitle("My Wallet")
         .navigationBarTitleDisplayMode(.large)
-        .task { await viewModel.load() }
+        .task { if !viewModel.hasLoaded { await viewModel.load() } }
         .refreshable { await viewModel.load() }
         .sheet(item: $selectedTransaction) { tx in
             TransactionDetailSheet(transaction: tx)

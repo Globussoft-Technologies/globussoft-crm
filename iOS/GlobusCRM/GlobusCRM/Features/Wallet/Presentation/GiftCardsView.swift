@@ -79,7 +79,7 @@ struct GiftCardsView: View {
                 .accessibilityLabel("Purchase history")
             }
         }
-        .task { await viewModel.load() }
+        .task { if !viewModel.hasLoaded { await viewModel.load() } }
         .refreshable { await viewModel.load() }
         .sheet(item: $activeSheet) { sheet in
             switch sheet {

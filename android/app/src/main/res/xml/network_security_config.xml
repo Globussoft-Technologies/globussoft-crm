@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+
+    <!-- Production: HTTPS only + certificate pinning (SPKI SHA-256, fetched 2026-06-09).
+         IMPORTANT: leaf cert expires 2026-09-05 — renew pins before 2026-09-04. -->
+    <domain-config cleartextTrafficPermitted="false">
+        <domain includeSubdomains="true">crm.globusdemos.com</domain>
+        <pin-set expiration="2026-09-04">
+            <!-- Leaf cert SPKI -->
+            <pin digest="SHA-256">zSXIC6P2U1KV2fG8e5wZ9LqOeWPHu0+4qU+NZ1rW2ss=</pin>
+            <!-- Intermediate CA SPKI (backup pin) -->
+            <pin digest="SHA-256">kIdp6NNEd8wsugYyyIYFsi1ylMCED3hZbSR8ZFsa/A4=</pin>
+        </pin-set>
+    </domain-config>
+
+    <!-- Debug only: allow cleartext to local dev servers (AVD emulator + LAN device) -->
+    <debug-overrides>
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="user" />
+        </trust-anchors>
+    </debug-overrides>
+
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+
+</network-security-config>

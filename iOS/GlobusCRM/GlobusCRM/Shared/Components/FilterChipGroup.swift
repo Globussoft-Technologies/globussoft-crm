@@ -56,11 +56,18 @@ private struct FilterChip: View {
     }
 }
 
+private struct FilterChipGroupPreview: View {
+    @State private var selected = "All"
+
+    var body: some View {
+        FilterChipGroup(
+            options: ["All", "Wallet", "Gift Cards", "Memberships", "Treatments"],
+            selected: $selected
+        )
+        .padding(.vertical)
+    }
+}
+
 #Preview {
-    @State var selected = "All"
-    return FilterChipGroup(
-        options: ["All", "Wallet", "Gift Cards", "Memberships", "Treatments"],
-        selected: $selected
-    )
-    .padding(.vertical)
+    FilterChipGroupPreview()
 }

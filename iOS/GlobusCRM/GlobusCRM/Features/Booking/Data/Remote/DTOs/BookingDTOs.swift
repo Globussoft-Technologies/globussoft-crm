@@ -23,7 +23,7 @@ struct AddWaitlistDTO: Encodable {
 }
 
 // Response DTOs
-struct AppointmentDTO: Decodable {
+nonisolated struct AppointmentDTO: Decodable {
     let id: Int
     let doctorName: String?
     let serviceName: String?
@@ -37,7 +37,7 @@ struct AppointmentDTO: Decodable {
     let canReschedule: Bool?
 }
 
-struct AppointmentListResponseDTO: Decodable {
+nonisolated struct AppointmentListResponseDTO: Decodable {
     let bucket: String
     let count: Int
     let appointments: [AppointmentDTO]
@@ -90,12 +90,12 @@ struct ProductDTO: Decodable {
 }
 
 // Shared across dashboard + wallet
-struct MyTransactionsResponseDTO: Decodable {
+nonisolated struct MyTransactionsResponseDTO: Decodable {
     let currency: String
     let summary: Summary
     let transactions: [TransactionDTO]
 
-    struct Summary: Decodable {
+    nonisolated struct Summary: Decodable {
         let totalPaid: Double?
         let posTotal: Double?
         let onlineTotal: Double?
@@ -106,7 +106,7 @@ struct MyTransactionsResponseDTO: Decodable {
     }
 }
 
-struct TransactionDTO: Decodable {
+nonisolated struct TransactionDTO: Decodable {
     let id: String
     let type: String?
     let category: String?

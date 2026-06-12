@@ -1,5 +1,6 @@
 import Foundation
 
+@MainActor
 final class DashboardRepositoryImpl: DashboardRepository {
     private let apiClient: WellnessAPIClient
     private let keychainManager: KeychainManager

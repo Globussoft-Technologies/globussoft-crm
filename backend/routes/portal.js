@@ -7,8 +7,10 @@ const multer = require("multer");
 const prisma = require("../lib/prisma");
 const digilockerClient = require("../services/digilockerClient");
 const s3Service = require("../services/s3Service");
+const passportOcrClient = require("../services/passportOcrClient");
 const { scoreDiagnostic, parseBank } = require("../lib/travelDiagnosticScoring");
 const { notifyMany } = require("../lib/notificationService");
+const { writeAudit } = require("../lib/audit");
 
 // Memory-storage multer for the travel customer's profile avatar — 5 MB cap,
 // image-only (s3Service.uploadImage re-gates the mimetype). Mirrors the staff
@@ -603,6 +605,277 @@ router.post(
     } catch (err) {
       console.error("[Portal][travel/avatar]", err);
       res.status(500).json({ error: "Failed to upload avatar" });
+    }
+  },
+);
+
+// ─── Travel customer-portal — travellers + passport upload ───────────
+//
+// Customer-side half of the passport OCR flow (PRD_PASSPORT_OCR AC-1):
+// the customer registers their own travellers (children / family /
+// themselves) on a trip and uploads each traveller's passport from the
+// portal. Linkage: TripParticipant has no contactId column — ownership is
+// TripParticipant.parentEmail === the portal contact's email. Rows the
+// customer creates here always stamp that email; staff-created rows that
+// share the email surface for the customer too, by design.
+//
+// Uploads write the SAME TripParticipant extraction columns as the staff
+// route (routes/travel_passport.js), so they feed the same operator
+// verification queue at /travel/passport-verification.
+//
+// PII boundary (PRD FR-8/FR-9): the portal NEVER gets extraction VALUES
+// back — only status timestamps. The verified extraction is reviewed by
+// ADMIN/MANAGER in the queue; audit rows log field NAMES, never values.
+
+// Passport scan storage (S3 with disk fallback) lives in the shared helper so
+// the customer + staff routes delete from the same backend on re-upload/clear.
+const {
+  storeScan: storePassportScan,
+  removeScan: removePassportScan,
+  descriptorFromEnvelope,
+  PASSPORT_MIME_EXT,
+} = require("../lib/passportFileStore");
+
+// memoryStorage: the file stays in req.file.buffer and is NOT written anywhere
+// until the handler explicitly stores it — so ownership/verified checks run
+// BEFORE any persistence (no orphaned files), and the buffer feeds both OCR
+// and the S3/disk upload.
+const portalPassportUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (PASSPORT_MIME_EXT[(file.mimetype || "").toLowerCase()]) {
+      return cb(null, true);
+    }
+    cb(new Error("UNSUPPORTED_MIME"));
+  },
+});
+const portalPassportUploadHandler = (req, res, next) => {
+  portalPassportUpload.single("file")(req, res, (err) => {
+    if (err instanceof multer.MulterError) {
+      if (err.code === "LIMIT_FILE_SIZE") {
+        return res.status(413).json({ error: "file exceeds 5 MB limit", code: "FILE_TOO_LARGE" });
+      }
+      return res.status(400).json({ error: err.message, code: err.code });
+    }
+    if (err && err.message === "UNSUPPORTED_MIME") {
+      return res.status(415).json({ error: "unsupported file type — JPG / PNG / PDF only", code: "UNSUPPORTED_MIME" });
+    }
+    if (err) return next(err);
+    next();
+  });
+};
+
+// Sub-brands that the unified Travel Documents surface serves. Snapshot of
+// the customer's Contact.subBrand at traveller-creation; falls back to "rfu"
+// when a contact has no sub-brand set (RFU is the default B2C pilgrim brand).
+const TRAVEL_SUB_BRANDS = ["tmc", "rfu", "travel_stall", "visa_sure"];
+// Bound per-customer travellers so a logged-in customer can't pollute the
+// staff verification queue at scale.
+const PORTAL_MAX_TRAVELLERS = 20;
+
+// GET /api/portal/travel/travellers — the customer's own travellers with
+// passport STATUS timestamps only (never extraction VALUES — those stay
+// staff-side until verified, per the PII boundary).
+router.get("/travel/travellers", verifyPortalToken, requireTravelPortalTenant, async (req, res) => {
+  try {
+    const travellers = await prisma.customerTraveller.findMany({
+      where: { contactId: req.portal.contactId, tenantId: req.portal.tenantId },
+      orderBy: { id: "asc" },
+      select: {
+        id: true,
+        fullName: true,
+        relationship: true,
+        subBrand: true,
+        passportExtractedAt: true,
+        passportVerifiedAt: true,
+        passportRejectedAt: true,
+      },
+    });
+    res.json({ travellers });
+  } catch (err) {
+    console.error("[Portal][travel/travellers]", err);
+    res.status(500).json({ error: "Failed to fetch travellers" });
+  }
+});
+
+// POST /api/portal/travel/travellers — { fullName, relationship? }. Creates a
+// traveller owned by this customer (contactId), tagged with the customer's
+// sub-brand. Works for all 4 sub-brands — no trip/booking selection needed.
+router.post("/travel/travellers", verifyPortalToken, requireTravelPortalTenant, async (req, res) => {
+  try {
+    const { fullName, relationship } = req.body || {};
+    if (!fullName || !String(fullName).trim()) {
+      return res.status(400).json({ error: "fullName is required", code: "MISSING_FIELDS" });
+    }
+    const me = await prisma.contact.findUnique({
+      where: { id: req.portal.contactId },
+      select: { subBrand: true },
+    });
+    const subBrand = (me && TRAVEL_SUB_BRANDS.includes(me.subBrand)) ? me.subBrand : "rfu";
+
+    const count = await prisma.customerTraveller.count({
+      where: { contactId: req.portal.contactId, tenantId: req.portal.tenantId },
+    });
+    if (count >= PORTAL_MAX_TRAVELLERS) {
+      return res.status(429).json({
+        error: `You can register at most ${PORTAL_MAX_TRAVELLERS} travellers — contact your advisor if you need more.`,
+        code: "TRAVELLER_LIMIT_REACHED",
+      });
+    }
+
+    const rel = typeof relationship === "string" && relationship.trim()
+      ? relationship.trim().slice(0, 40)
+      : null;
+    const traveller = await prisma.customerTraveller.create({
+      data: {
+        tenantId: req.portal.tenantId,
+        contactId: req.portal.contactId,
+        subBrand,
+        fullName: String(fullName).trim().slice(0, 200),
+        relationship: rel,
+      },
+      select: { id: true, fullName: true, relationship: true, subBrand: true },
+    });
+
+    writeAudit(
+      "CustomerTraveller",
+      "traveller.portal_added",
+      traveller.id,
+      null,
+      req.portal.tenantId,
+      { portalContactId: req.portal.contactId, subBrand },
+      { actorType: "portal" },
+    ).catch(() => {});
+
+    res.status(201).json({ traveller });
+  } catch (err) {
+    console.error("[Portal][travel/travellers:add]", err);
+    res.status(500).json({ error: "Failed to add traveller" });
+  }
+});
+
+// POST /api/portal/travel/travellers/:id/passport-upload — multipart single
+// "file". Ownership-scoped (contactId), 404 on foreign rows (don't leak
+// existence). Feeds the same staff verification queue as the TMC flow.
+router.post(
+  "/travel/travellers/:id/passport-upload",
+  verifyPortalToken,
+  requireTravelPortalTenant,
+  portalPassportUploadHandler,
+  async (req, res) => {
+    // memoryStorage: nothing is persisted until storePassportScan() below, so
+    // all the ownership/state early-returns leave NO file behind (the buffer
+    // is just GC'd) — only post-store branches need cleanup.
+    try {
+      const tid = parseInt(req.params.id, 10);
+      if (!Number.isFinite(tid)) {
+        return res.status(400).json({ error: "id must be a number", code: "INVALID_TRAVELLER_ID" });
+      }
+      const traveller = await prisma.customerTraveller.findFirst({
+        where: { id: tid, contactId: req.portal.contactId, tenantId: req.portal.tenantId },
+        select: { id: true, fullName: true, passportVerifiedAt: true, passportExtractionJson: true },
+      });
+      if (!traveller) {
+        return res.status(404).json({ error: "Traveller not found", code: "TRAVELLER_NOT_FOUND" });
+      }
+      if (traveller.passportVerifiedAt) {
+        // A verified passport is replaced by staff (queue Clear), not
+        // silently overwritten from the portal.
+        return res.status(409).json({ error: "Passport already verified — contact your advisor to replace it", code: "ALREADY_VERIFIED" });
+      }
+      if (!req.file || !req.file.buffer) {
+        return res.status(400).json({ error: "no file uploaded (field name: 'file')", code: "NO_FILE" });
+      }
+
+      // OCR runs on the in-memory buffer — nothing is stored yet.
+      let result;
+      try {
+        result = await passportOcrClient.extractPassport({
+          tenantId: req.portal.tenantId,
+          fileBuffer: req.file.buffer,
+          fileName: req.file.originalname || null,
+          mimeType: req.file.mimetype,
+        });
+      } catch (e) {
+        if (e.code === "PASSPORT_OCR_NOT_YET_ENABLED") {
+          return res.status(503).json({
+            error: "Passport upload is temporarily unavailable — please try again later",
+            code: "PASSPORT_OCR_NOT_YET_ENABLED",
+          });
+        }
+        throw e;
+      }
+
+      // Persist the scan (S3 when configured, disk fallback) AFTER all checks
+      // pass, so there's nothing to orphan on a rejected request.
+      let stored;
+      try {
+        stored = await storePassportScan(req.file.buffer, req.file.mimetype);
+      } catch (e) {
+        console.error("[Portal][travel/travellers:passport-upload] storage error:", e.message);
+        return res.status(502).json({ error: "Couldn't store the uploaded file — please try again", code: "STORAGE_FAILED" });
+      }
+
+      const persistedEnvelope = {
+        ...result,
+        imageFilename: stored.imageFilename, // disk-mode filename (null on S3)
+        imageKey: stored.key,
+        storage: stored.storage,
+        imageUrl: stored.url,
+        originalName: req.file.originalname || null,
+        uploadedVia: "portal",
+        portalContactId: req.portal.contactId,
+      };
+
+      // Conditional update guarded on passportVerifiedAt: null — closes the
+      // TOCTOU window where a staff verify lands between our read and write.
+      const writeRes = await prisma.customerTraveller.updateMany({
+        where: { id: traveller.id, passportVerifiedAt: null },
+        data: {
+          passportExtractionJson: JSON.stringify(persistedEnvelope),
+          passportExtractedAt: new Date(),
+          passportRejectedAt: null,
+        },
+      });
+      if (!writeRes.count) {
+        // Lost the race — a staff verify committed first. Remove what we stored.
+        await removePassportScan(stored);
+        return res.status(409).json({ error: "Passport already verified — contact your advisor to replace it", code: "ALREADY_VERIFIED" });
+      }
+
+      // Supersede the previous scan, if any, so re-uploads don't orphan it.
+      if (traveller.passportExtractionJson) {
+        try {
+          const prevDesc = descriptorFromEnvelope(JSON.parse(traveller.passportExtractionJson));
+          if (prevDesc && prevDesc.key !== stored.key) await removePassportScan(prevDesc);
+        } catch (_e) { /* prior envelope unparseable — nothing to clean */ }
+      }
+
+      writeAudit(
+        "CustomerTraveller",
+        "passport.uploaded",
+        traveller.id,
+        null,
+        req.portal.tenantId,
+        {
+          extractedFieldNames: Object.keys(result.extraction || {}),
+          confidence: result.confidence,
+          provider: result.provider,
+          storage: stored.storage,
+          portalContactId: req.portal.contactId,
+        },
+        { actorType: "portal" },
+      ).catch(() => {});
+
+      // Status only — extraction values stay staff-side until verified.
+      res.status(201).json({
+        travellerId: traveller.id,
+        status: "pending-verification",
+      });
+    } catch (err) {
+      console.error("[Portal][travel/travellers:passport-upload]", err);
+      res.status(500).json({ error: "Failed to process passport upload" });
     }
   },
 );

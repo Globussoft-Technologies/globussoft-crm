@@ -37,7 +37,8 @@ const REQUEST_TIMEOUT = 60000;
 
 let token = null;
 const RUN_TAG = `E2E_LR_${Date.now()}`;
-const created = []; // ids for cleanup
+const created = []; // rule ids for cleanup
+const createdContacts = []; // contact ids for cleanup (subBrand matching suite)
 
 async function login(request) {
   const r = await request.post(`${API}/auth/login`, {
@@ -71,6 +72,9 @@ test.beforeAll(async ({ request }) => {
 test.afterAll(async ({ request }) => {
   for (const id of created) {
     await authDelete(request, `/api/lead-routing/${id}`).catch(() => {});
+  }
+  for (const id of createdContacts) {
+    await authDelete(request, `/api/contacts/${id}`).catch(() => {});
   }
 });
 
@@ -412,5 +416,125 @@ test.describe('Lead-routing API — sanitization (#398/#447 class, v3.4.10 audit
     const condStr = JSON.stringify(body.conditions);
     expect(condStr).toContain('{{firstName}}');
     expect(condStr).toContain('{{company}}');
+  });
+});
+
+// ── TRAVEL_CRM_PRD §4.1 (gap A8) — subBrand rule condition ─────────────
+//
+// "Rule-based brand assignment — extend rule schema to filter on subBrand."
+// subBrand is a first-class condition key validated against the canonical
+// travel sub-brand codes (tmc | rfu | travelstall | visasure — see
+// backend/lib/subBrandConfig.js VALID_SUB_BRANDS), persisted in the
+// conditions JSON, and honored by the matching engine against
+// Contact.subBrand. Rules WITHOUT a subBrand condition keep matching
+// everything (backward compatible — pre-travel rules are untouched).
+//
+// Matching tests create their own contacts with a RUN_TAG-unique `source`
+// + status 'Churned' so seeded demo rules (which key on Lead-ish statuses
+// and real sources) can't shadow the priority-1 rules created here.
+test.describe('Lead-routing API — subBrand condition (PRD §4.1 gap A8)', () => {
+  async function createContact(request, overrides = {}) {
+    const r = await authPost(request, '/api/contacts', {
+      name: `${RUN_TAG} subbrand contact`,
+      email: `e2e_lr_subbrand_${Date.now()}_${Math.floor(Math.random() * 1e6)}@example.com`,
+      status: 'Churned',
+      ...overrides,
+    });
+    expect(r.status(), `contact-create-helper: ${await r.text()}`).toBe(201);
+    const contact = await r.json();
+    createdContacts.push(contact.id);
+    return contact;
+  }
+
+  test('POST accepts a subBrand condition and returns it parsed in conditions', async ({ request }) => {
+    test.skip(!token, 'auth unavailable');
+    const rule = await createValidRule(request, {
+      name: `${RUN_TAG} rfu-brand`,
+      conditions: { subBrand: 'rfu' },
+    });
+    expect(typeof rule.conditions).toBe('object');
+    expect(rule.conditions.subBrand).toBe('rfu');
+  });
+
+  test('POST rejects an unknown subBrand code with 400', async ({ request }) => {
+    test.skip(!token, 'auth unavailable');
+    const r = await authPost(request, '/api/lead-routing', {
+      name: `${RUN_TAG} bad-brand`,
+      conditions: { subBrand: 'acme' },
+    });
+    expect(r.status()).toBe(400);
+    const body = await r.json();
+    expect(body.error).toMatch(/invalid subbrand/i);
+    expect(body.error).toMatch(/tmc, rfu, travelstall, visasure/);
+  });
+
+  test('POST accepts every canonical subBrand code case-insensitively', async ({ request }) => {
+    test.skip(!token, 'auth unavailable');
+    for (const v of ['tmc', 'RFU', 'travelstall', 'Visasure']) {
+      const r = await authPost(request, '/api/lead-routing', {
+        name: `${RUN_TAG} brand-${v}`,
+        conditions: { subBrand: v },
+      });
+      expect(r.status(), `subBrand accept failed for "${v}": ${await r.text()}`).toBe(201);
+      created.push((await r.json()).id);
+    }
+  });
+
+  test('apply: rule with subBrand matches a contact carrying the same subBrand', async ({ request }) => {
+    test.skip(!token, 'auth unavailable');
+    const tag = `${RUN_TAG}_match`;
+    const contact = await createContact(request, { source: tag, subBrand: 'rfu' });
+    const rule = await createValidRule(request, {
+      name: `${RUN_TAG} rfu-match`,
+      conditions: { subBrand: 'rfu', source: tag },
+      assignType: 'round_robin',
+      priority: 1,
+    });
+
+    const r = await authPost(request, `/api/lead-routing/apply/${contact.id}`, {});
+    expect(r.status()).toBe(200);
+    const body = await r.json();
+    expect(body.matchedRule, `expected rule ${rule.id} to match: ${JSON.stringify(body)}`).toBeTruthy();
+    expect(body.matchedRule.id).toBe(rule.id);
+    expect(typeof body.assignedUserId).toBe('number');
+  });
+
+  test('apply: rule with subBrand never matches a contact with a DIFFERENT subBrand', async ({ request }) => {
+    test.skip(!token, 'auth unavailable');
+    const tag = `${RUN_TAG}_mismatch`;
+    // Contact is tmc; rule demands visasure — even though `source` matches,
+    // the subBrand condition must veto the rule.
+    const contact = await createContact(request, { source: tag, subBrand: 'tmc' });
+    const rule = await createValidRule(request, {
+      name: `${RUN_TAG} visasure-only`,
+      conditions: { subBrand: 'visasure', source: tag },
+      assignType: 'round_robin',
+      priority: 1,
+    });
+
+    const r = await authPost(request, `/api/lead-routing/apply/${contact.id}`, {});
+    expect(r.status()).toBe(200);
+    const body = await r.json();
+    // Whatever else happens (another rule may match, or none), OUR
+    // sub-brand-mismatched rule must not be the one selected.
+    expect(body.matchedRule?.id, 'subBrand-mismatched rule was selected').not.toBe(rule.id);
+  });
+
+  test('apply: rule WITHOUT subBrand still matches a sub-branded contact (backward compat)', async ({ request }) => {
+    test.skip(!token, 'auth unavailable');
+    const tag = `${RUN_TAG}_bc`;
+    const contact = await createContact(request, { source: tag, subBrand: 'travelstall' });
+    const rule = await createValidRule(request, {
+      name: `${RUN_TAG} legacy-no-brand`,
+      conditions: { source: tag },
+      assignType: 'round_robin',
+      priority: 1,
+    });
+
+    const r = await authPost(request, `/api/lead-routing/apply/${contact.id}`, {});
+    expect(r.status()).toBe(200);
+    const body = await r.json();
+    expect(body.matchedRule, `expected legacy rule ${rule.id} to match: ${JSON.stringify(body)}`).toBeTruthy();
+    expect(body.matchedRule.id).toBe(rule.id);
   });
 });

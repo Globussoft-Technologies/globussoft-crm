@@ -5,10 +5,19 @@
 // canned extraction lets the operator UI ship + go green on CI ahead
 // of the cred drop. Real-mode swap touches only the service client.
 //
-// Endpoints consumed:
-//   GET    /api/travel/passport/verification-queue                      — pending list
-//   POST   /api/travel/passport/participants/:id/passport-verify        — approve/reject
-//   DELETE /api/travel/passport/participants/:id/passport-extraction    — clear (re-upload)
+// Endpoints consumed (per row kind — see below):
+//   GET    /api/travel/passport/verification-queue                          — pending list
+//   POST   /api/travel/passport/participants/:id/passport-verify            — trip rows
+//   DELETE /api/travel/passport/participants/:id/passport-extraction        — trip rows
+//   POST   /api/travel/passport/customer-travellers/:id/passport-verify     — customer rows
+//   DELETE /api/travel/passport/customer-travellers/:id/passport-extraction — customer rows
+//
+// The queue unions two passport sources: TMC TripParticipant rows
+// (kind "trip") and unified customer-portal CustomerTraveller rows
+// (kind "customer", any of the 4 sub-brands). Each row carries a `kind`
+// discriminator; ids can collide across the two tables, so the UI keys on
+// `${kind}:${id}` and routes verify/reject/clear to the kind-correct
+// endpoint.
 //
 // Access: ADMIN+MANAGER only. Backend RBAC enforces the gate; this page
 // renders a graceful "access denied" surface for USER role rather than
@@ -47,6 +56,25 @@ function fmtConfidence(c) {
   return `${Math.round(c * 100)}%`;
 }
 
+// Rows come from two tables (TripParticipant vs CustomerTraveller) whose ids
+// can collide, so identity + endpoint routing key on (kind, id).
+function rowKey(row) {
+  return `${row.kind || "trip"}:${row.id ?? row.participantId}`;
+}
+function rowBase(row) {
+  const id = row.id ?? row.participantId;
+  return row.kind === "customer"
+    ? `/api/travel/passport/customer-travellers/${id}`
+    : `/api/travel/passport/participants/${id}`;
+}
+
+const SUB_BRAND_LABEL = {
+  tmc: "TMC",
+  rfu: "RFU",
+  travel_stall: "Travel Stall",
+  visa_sure: "Visa Sure",
+};
+
 export default function PassportVerificationQueue() {
   const notify = useNotify();
   const [rows, setRows] = useState([]);
@@ -75,7 +103,7 @@ export default function PassportVerificationQueue() {
   useEffect(() => { load(); }, []);
 
   const startEdit = (row) => {
-    setEditingId(row.participantId);
+    setEditingId(rowKey(row));
     setEditDraft({
       passportNumber: row.extraction?.passportNumber || "",
       dateOfExpiry: row.extraction?.dateOfExpiry || "",
@@ -91,10 +119,10 @@ export default function PassportVerificationQueue() {
   };
 
   const handleApprove = (row, withEdits = false) => {
-    setBusyId(row.participantId);
+    setBusyId(rowKey(row));
     const body = { approved: true };
     if (withEdits) body.editedFields = editDraft;
-    fetchApi(`/api/travel/passport/participants/${row.participantId}/passport-verify`, {
+    fetchApi(`${rowBase(row)}/passport-verify`, {
       method: "POST",
       body: JSON.stringify(body),
     })
@@ -108,7 +136,7 @@ export default function PassportVerificationQueue() {
   };
 
   const startReject = (row) => {
-    setRejectingId(row.participantId);
+    setRejectingId(rowKey(row));
     setRejectReason("blurry_photo");
   };
 
@@ -117,8 +145,8 @@ export default function PassportVerificationQueue() {
   };
 
   const confirmReject = (row) => {
-    setBusyId(row.participantId);
-    fetchApi(`/api/travel/passport/participants/${row.participantId}/passport-verify`, {
+    setBusyId(rowKey(row));
+    fetchApi(`${rowBase(row)}/passport-verify`, {
       method: "POST",
       body: JSON.stringify({ approved: false, reason: rejectReason }),
     })
@@ -132,8 +160,8 @@ export default function PassportVerificationQueue() {
   };
 
   const clearExtraction = (row) => {
-    setBusyId(row.participantId);
-    fetchApi(`/api/travel/passport/participants/${row.participantId}/passport-extraction`, {
+    setBusyId(rowKey(row));
+    fetchApi(`${rowBase(row)}/passport-extraction`, {
       method: "DELETE",
     })
       .then(() => {
@@ -251,12 +279,13 @@ export default function PassportVerificationQueue() {
 
       {!loading && !error && rows.map((row) => {
         const ex = row.extraction || {};
-        const isEditing = editingId === row.participantId;
-        const isRejecting = rejectingId === row.participantId;
-        const isBusy = busyId === row.participantId;
+        const key = rowKey(row);
+        const isEditing = editingId === key;
+        const isRejecting = rejectingId === key;
+        const isBusy = busyId === key;
 
         return (
-          <div key={row.participantId} style={card}>
+          <div key={key} style={card}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
               <div>
                 <div style={{ fontSize: 16, fontWeight: 600, color: "var(--text-primary)" }}>
@@ -272,8 +301,18 @@ export default function PassportVerificationQueue() {
                   )}
                 </div>
                 <div style={{ fontSize: 13, color: "var(--text-secondary)", marginTop: 4 }}>
-                  Trip: <strong>{row.trip?.tripCode || "—"}</strong>
-                  {row.trip?.destination ? ` · ${row.trip.destination}` : ""}
+                  {row.kind === "customer" ? (
+                    <>
+                      Source: <strong>{SUB_BRAND_LABEL[row.subBrand] || row.subBrand || "Customer"}</strong>
+                      {" · "}customer portal
+                      {row.relationship ? ` · ${row.relationship}` : ""}
+                    </>
+                  ) : (
+                    <>
+                      Trip: <strong>{row.trip?.tripCode || "—"}</strong>
+                      {row.trip?.destination ? ` · ${row.trip.destination}` : ""}
+                    </>
+                  )}
                 </div>
                 <div style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 2 }}>
                   Extracted {fmtDateTime(row.extractedAt)}
@@ -297,6 +336,17 @@ export default function PassportVerificationQueue() {
                 </a>
               )}
             </div>
+
+            {/* Manual-entry guidance when OCR couldn't extract the MRZ. */}
+            {row.note && (
+              <div style={{
+                marginTop: 12, padding: "8px 12px", borderRadius: 4, fontSize: 13,
+                background: "rgba(200,154,78,0.12)", color: "#9A6F2E",
+                display: "flex", alignItems: "center", gap: 8,
+              }}>
+                <ShieldAlert size={14} aria-hidden /> {row.note}
+              </div>
+            )}
 
             {/* Extracted fields */}
             <div style={fieldGrid}>

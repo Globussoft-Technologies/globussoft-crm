@@ -89,6 +89,9 @@ import {
   ClipboardCheck,
   Map as MapIcon,
   Luggage,
+  // PRD §7 — FlightQuoteAgent nav entry icon (Flight quick-quote, the in-CRM
+  // fallback for the Chrome flight plugin). Sits in the Quotes cluster.
+  Plane,
   Key,
   // Phase 3 Visa Sure scaffolding (cluster B3) — admin-only sidebar group
   Stamp,
@@ -1572,6 +1575,17 @@ function renderTravelNav({
         label="Commission Profiles"
       />
       <Link to="/travel/quotes-admin" icon={FileText} label="Quotes" />
+      {/* PRD §7 — Flight quick-quote (FlightQuoteAgent): in-CRM fallback for
+          the Chrome flight plugin. Advisor keys in up to 4 flight options,
+          markup applies server-side, branded PDF + WhatsApp share. Sits in
+          the Quotes cluster because the output artifact IS a quote (a draft
+          itinerary of flight items). Visible to every travel operator —
+          backend gates on tenant vertical + sub-brand access. */}
+      <Link
+        to="/travel/flights/quote"
+        icon={Plane}
+        label="Flight quick-quote"
+      />
       {/* Arc 2 #900 slice 2 — operator-facing Quote Builder (line items +
           totals + action cluster). Distinct from the CRUD list above.
           MANAGER+ per RoleGuard on the route element. */}

@@ -17,6 +17,7 @@ const express = require("express");
 const router = express.Router();
 const { verifyToken, verifyRole } = require("../middleware/auth");
 const prisma = require("../lib/prisma");
+const { sanitizeJsonForStringColumn } = require("../lib/sanitizeJson");
 const {
   requireTravelTenant,
   getSubBrandAccessSet,
@@ -26,6 +27,86 @@ const {
 } = require("../middleware/travelGuards");
 
 const VALID_CATEGORIES = ["hotel", "flight", "transport", "visa", "insurance"];
+
+// ============================================================================
+// Hotel preference attributes (PRD §4.3 RFU preference filters — gap A7).
+//
+// Canonical vocabulary for the structured attributes stored in
+// TravelCostMaster.attributesJson (String? @db.Text, JSON-stringified at the
+// call site per lib/sanitizeJson.js conventions):
+//   - view:         haram_facing | kaaba_facing | city_view | standard
+//   - floorLevel:   low | mid | high
+//   - roomCategory: free string (e.g. "Deluxe", "Suite")
+//
+// The structured `attributes` body field is the supported write path; the
+// legacy raw `attributesJson` string passthrough is kept for the CSV
+// import/export round-trip (travel_csv_io.js) and pre-existing rows.
+// ============================================================================
+const HOTEL_ATTRIBUTES = Object.freeze({
+  view: Object.freeze(["haram_facing", "kaaba_facing", "city_view", "standard"]),
+  floorLevel: Object.freeze(["low", "mid", "high"]),
+});
+
+function attributesError(message) {
+  const err = new Error(message);
+  err.status = 400;
+  err.code = "INVALID_ATTRIBUTES";
+  return err;
+}
+
+// Validates + normalises a structured `attributes` body object against the
+// canonical vocabulary. Unknown view/floorLevel values → 400
+// INVALID_ATTRIBUTES. Unknown keys are dropped so the stored shape stays
+// canonical (view/floorLevel/roomCategory only). Returns the normalised
+// object, or null when nothing usable was provided.
+function assertValidAttributes(attrs) {
+  if (attrs == null) return null;
+  if (typeof attrs !== "object" || Array.isArray(attrs)) {
+    throw attributesError("attributes must be an object");
+  }
+  const out = {};
+  if (attrs.view != null && attrs.view !== "") {
+    const v = String(attrs.view);
+    if (!HOTEL_ATTRIBUTES.view.includes(v)) {
+      throw attributesError(`attributes.view must be one of: ${HOTEL_ATTRIBUTES.view.join(", ")}`);
+    }
+    out.view = v;
+  }
+  if (attrs.floorLevel != null && attrs.floorLevel !== "") {
+    const f = String(attrs.floorLevel);
+    if (!HOTEL_ATTRIBUTES.floorLevel.includes(f)) {
+      throw attributesError(`attributes.floorLevel must be one of: ${HOTEL_ATTRIBUTES.floorLevel.join(", ")}`);
+    }
+    out.floorLevel = f;
+  }
+  if (attrs.roomCategory != null && attrs.roomCategory !== "") {
+    if (typeof attrs.roomCategory !== "string") {
+      throw attributesError("attributes.roomCategory must be a string");
+    }
+    const rc = attrs.roomCategory.trim();
+    if (rc) out.roomCategory = rc;
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+// Defensive parse of the stored attributesJson column → plain object or null
+// (null on garbage / non-object JSON, never throws).
+function parseAttributes(attributesJson) {
+  if (!attributesJson) return null;
+  try {
+    const parsed = JSON.parse(attributesJson);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
+    return null;
+  } catch (_e) {
+    return null;
+  }
+}
+
+// Response decorator — every read surface echoes the parsed `attributes`
+// object alongside the raw attributesJson column.
+function withAttributes(row) {
+  return { ...row, attributes: parseAttributes(row.attributesJson) };
+}
 
 function assertValidCategory(c) {
   if (!VALID_CATEGORIES.includes(c)) {
@@ -58,11 +139,53 @@ router.get("/cost-master", verifyToken, requireTravelTenant, async (req, res) =>
       where.routeOrSku = { contains: String(req.query.routeOrSku) };
     }
 
+    // Hotel preference filters (PRD §4.3 — gap A7): ?view= / ?floorLevel= /
+    // ?roomCategory=. view + floorLevel are validated against the canonical
+    // vocabulary (400 INVALID_ATTRIBUTES on unknown values); roomCategory is
+    // a case-insensitive substring match on the stored free string.
+    const viewFilter = req.query.view ? String(req.query.view) : null;
+    const floorFilter = req.query.floorLevel ? String(req.query.floorLevel) : null;
+    const roomCategoryFilter = req.query.roomCategory ? String(req.query.roomCategory) : null;
+    if (viewFilter && !HOTEL_ATTRIBUTES.view.includes(viewFilter)) {
+      throw attributesError(`view must be one of: ${HOTEL_ATTRIBUTES.view.join(", ")}`);
+    }
+    if (floorFilter && !HOTEL_ATTRIBUTES.floorLevel.includes(floorFilter)) {
+      throw attributesError(`floorLevel must be one of: ${HOTEL_ATTRIBUTES.floorLevel.join(", ")}`);
+    }
+    const hasAttrFilter = !!(viewFilter || floorFilter || roomCategoryFilter);
+
     const allowed = await getSubBrandAccessSet(req.user.userId);
     narrowWhereBySubBrand(where, allowed);
 
     const take = Math.min(parseInt(req.query.limit, 10) || 50, 200);
     const skip = parseInt(req.query.offset, 10) || 0;
+
+    if (hasAttrFilter) {
+      // Attribute filters live inside the attributesJson text column, so a
+      // SQL where can't apply them reliably (JSON LIKE is key-order/whitespace
+      // fragile). Honest approach at current rate-book sizes (hundreds of
+      // rows/tenant): fetch the tenant-scoped where, post-filter in JS, then
+      // paginate AFTER filtering — same discipline as /cost-master/by-month's
+      // JS-side aggregation. Revisit with a native Json column if the rate
+      // book grows past ~10k rows/tenant.
+      const all = await prisma.travelCostMaster.findMany({
+        where,
+        orderBy: [{ category: "asc" }, { routeOrSku: "asc" }],
+      });
+      const matched = all.filter((r) => {
+        const attrs = parseAttributes(r.attributesJson);
+        if (!attrs) return false;
+        if (viewFilter && attrs.view !== viewFilter) return false;
+        if (floorFilter && attrs.floorLevel !== floorFilter) return false;
+        if (roomCategoryFilter) {
+          const rc = typeof attrs.roomCategory === "string" ? attrs.roomCategory : "";
+          if (!rc.toLowerCase().includes(roomCategoryFilter.toLowerCase())) return false;
+        }
+        return true;
+      });
+      const paged = matched.slice(skip, skip + take).map(withAttributes);
+      return res.json({ rates: paged, total: matched.length, limit: take, offset: skip });
+    }
 
     const [rates, total] = await Promise.all([
       prisma.travelCostMaster.findMany({
@@ -73,7 +196,7 @@ router.get("/cost-master", verifyToken, requireTravelTenant, async (req, res) =>
       }),
       prisma.travelCostMaster.count({ where }),
     ]);
-    res.json({ rates, total, limit: take, offset: skip });
+    res.json({ rates: rates.map(withAttributes), total, limit: take, offset: skip });
   } catch (e) {
     if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
     console.error("[travel-cost] list error:", e.message);
@@ -91,7 +214,7 @@ router.post(
     try {
       const {
         subBrand, category, routeOrSku, baseRate,
-        supplierId, attributesJson, currency,
+        supplierId, attributesJson, attributes, currency,
         seasonId, validFrom, validTo, isActive,
       } = req.body || {};
 
@@ -114,6 +237,15 @@ router.post(
         return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
       }
 
+      // Structured `attributes` (view/floorLevel/roomCategory) wins over the
+      // legacy raw attributesJson passthrough when both are present. The
+      // column is String? @db.Text, so the object is sanitized + stringified
+      // at the call site (lib/sanitizeJson.js conventions).
+      const normalizedAttrs = assertValidAttributes(attributes);
+      const storedAttributesJson = normalizedAttrs
+        ? sanitizeJsonForStringColumn(normalizedAttrs)
+        : (attributesJson ? String(attributesJson) : null);
+
       const created = await prisma.travelCostMaster.create({
         data: {
           tenantId: req.travelTenant.id,
@@ -122,7 +254,7 @@ router.post(
           routeOrSku: String(routeOrSku),
           baseRate: rate,
           supplierId: supplierId ? parseInt(supplierId, 10) : null,
-          attributesJson: attributesJson ? String(attributesJson) : null,
+          attributesJson: storedAttributesJson,
           currency: currency || "INR",
           seasonId: seasonId ? parseInt(seasonId, 10) : null,
           validFrom: validFrom ? new Date(validFrom) : null,
@@ -130,7 +262,7 @@ router.post(
           isActive: isActive !== false,
         },
       });
-      res.status(201).json(created);
+      res.status(201).json(withAttributes(created));
     } catch (e) {
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-cost] create error:", e.message);
@@ -438,7 +570,7 @@ router.get("/cost-master/:id", verifyToken, requireTravelTenant, async (req, res
     if (!canAccessSubBrand(allowed, row.subBrand)) {
       return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
     }
-    res.json(row);
+    res.json(withAttributes(row));
   } catch (e) {
     console.error("[travel-cost] get error:", e.message);
     res.status(500).json({ error: "Failed to get rate" });
@@ -483,6 +615,12 @@ router.patch(
       }
       if (body.supplierId !== undefined) data.supplierId = body.supplierId ? parseInt(body.supplierId, 10) : null;
       if (body.attributesJson !== undefined) data.attributesJson = body.attributesJson ? String(body.attributesJson) : null;
+      if (body.attributes !== undefined) {
+        // Structured attributes win over raw attributesJson when both sent.
+        // attributes:null clears the column.
+        const normalizedAttrs = assertValidAttributes(body.attributes);
+        data.attributesJson = normalizedAttrs ? sanitizeJsonForStringColumn(normalizedAttrs) : null;
+      }
       if (body.currency !== undefined) data.currency = body.currency || "INR";
       if (body.seasonId !== undefined) data.seasonId = body.seasonId ? parseInt(body.seasonId, 10) : null;
       if (body.validFrom !== undefined) data.validFrom = body.validFrom ? new Date(body.validFrom) : null;
@@ -493,7 +631,7 @@ router.patch(
         return res.status(400).json({ error: "no updatable fields provided", code: "EMPTY_BODY" });
       }
       const updated = await prisma.travelCostMaster.update({ where: { id }, data });
-      res.json(updated);
+      res.json(withAttributes(updated));
     } catch (e) {
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-cost] patch error:", e.message);
@@ -528,3 +666,7 @@ router.delete(
 );
 
 module.exports = router;
+// Canonical hotel-preference vocabulary (PRD §4.3 gap A7) — exported so the
+// quote/search layers + tests share one source of truth.
+module.exports.HOTEL_ATTRIBUTES = HOTEL_ATTRIBUTES;
+module.exports.parseAttributes = parseAttributes;

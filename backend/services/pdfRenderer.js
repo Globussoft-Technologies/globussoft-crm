@@ -2549,6 +2549,78 @@ function resolveAnswerLabel(question, rawAnswer) {
   return String(rawAnswer);
 }
 
+// ── Travel CRM — dynamic viewer-identity watermark (PRD §4.7, gap A3) ──
+//
+// applyViewerWatermark(doc, { viewerName, viewerEmail, timestamp })
+//
+// Draws a light diagonal repeating "<name> · <email> · <ISO timestamp>"
+// text watermark across the CURRENT page so a leaked/forwarded travel
+// document identifies who pulled it and when. Distinct from the wellness
+// design-system watermark (a static brand mark) — this one is per-viewer
+// and only applied when a renderer is called with `opts.viewerWatermark`
+// (default OFF, so existing callers + pinned vitest output are
+// byte-stable).
+//
+// Drawn FIRST on each page so real content paints over it — at 0.08 fill
+// opacity the body text stays fully readable. Cursor (doc.x/doc.y) and
+// graphics state are restored afterwards so the watermark never disturbs
+// the calling renderer's layout flow. Exported for unit tests + reused
+// via the module.exports self-mocking seam (same pattern as
+// fetchLogoBuffer) so vitest can spy on application.
+function applyViewerWatermark(doc, viewer = {}) {
+  // Re-entrancy guard: this helper is wired to the document's pageAdded
+  // hook, and doc.text() can itself trigger pdfkit auto-pagination.
+  // Auto-paging is suppressed below (maxY shadow) but belt-and-braces:
+  // never let a nested pageAdded re-enter the draw loop.
+  if (doc._viewerWatermarkActive) return;
+
+  const name = viewer.viewerName != null ? String(viewer.viewerName).trim() : "";
+  const email = viewer.viewerEmail != null ? String(viewer.viewerEmail).trim() : "";
+  const ts = viewer.timestamp != null && String(viewer.timestamp).trim() !== ""
+    ? String(viewer.timestamp).trim()
+    : new Date().toISOString();
+  const label = [name, email, ts].filter(Boolean).join(" · ");
+  if (!label) return;
+
+  const w = doc.page.width;
+  const h = doc.page.height;
+  const prevX = doc.x;
+  const prevY = doc.y;
+  const page = doc.page;
+  // pdfkit auto-adds a page when a text line lands past page.maxY() —
+  // for a watermark that intentionally tiles beyond the page bounds
+  // (rotation coverage), that would addPage → fire pageAdded → recurse.
+  // Shadow maxY() with an own-property no-limit stub for the duration of
+  // the draw; rows past the physical page are simply clipped, which is
+  // exactly what a watermark wants.
+  const hadOwnMaxY = Object.prototype.hasOwnProperty.call(page, "maxY");
+  const prevMaxY = page.maxY;
+  page.maxY = () => Number.MAX_SAFE_INTEGER;
+  doc._viewerWatermarkActive = true;
+  doc.save();
+  try {
+    // Diagonal repeat: rotate the canvas around the page centre, then lay
+    // the label out in evenly spaced rows spanning beyond the page bounds
+    // so the rotation leaves no unwatermarked corners.
+    doc.rotate(-35, { origin: [w / 2, h / 2] });
+    doc.font("Helvetica").fontSize(11).fillColor("#000").fillOpacity(0.08);
+    const stepY = 90;
+    for (let y = -h; y < h * 2; y += stepY) {
+      doc.text(label, -w / 2, y, { width: w * 2, align: "center", lineBreak: false });
+    }
+  } finally {
+    doc.restore();
+    if (hadOwnMaxY) page.maxY = prevMaxY;
+    else delete page.maxY; // fall back to the PDFPage prototype method
+    doc._viewerWatermarkActive = false;
+    // pdfkit's q/Q save/restore covers the PDF graphics state, but the
+    // JS-side opacity/cursor trackers are ours to put back.
+    doc.fillOpacity(1);
+    doc.x = prevX;
+    doc.y = prevY;
+  }
+}
+
 // ── Travel CRM — branded itinerary PDF (PRD §6.1) ────────────────────
 // Ported from the canonical implementation; the routes
 // (travel_itineraries.js / travel_travelstall.js) reference these two
@@ -2584,6 +2656,15 @@ async function renderTravelItineraryPdf(itinerary, contact, opts = {}) {
 
   const doc = new PDFDocument({ size: "A4", margin: 50 });
   const bufPromise = streamToBuffer(doc);
+
+  // PRD §4.7 (gap A3) — per-viewer watermark, opt-in via
+  // opts.viewerWatermark ({ viewerName, viewerEmail, timestamp }).
+  // Default OFF so existing callers/tests are unaffected. Re-applied on
+  // every page the items table spills onto via the pageAdded hook.
+  if (opts.viewerWatermark) {
+    module.exports.applyViewerWatermark(doc, opts.viewerWatermark);
+    doc.on("pageAdded", () => module.exports.applyViewerWatermark(doc, opts.viewerWatermark));
+  }
 
   // Brand header band
   doc.rect(0, 0, doc.page.width, 60).fill(accent);
@@ -2900,6 +2981,14 @@ async function renderTravelDiagnosticPdf(diagnostic, contact, bank, opts = {}) {
 
   const doc = new PDFDocument({ size: "A4", margin: 50 });
   const bufPromise = streamToBuffer(doc);
+
+  // PRD §4.7 (gap A3) — per-viewer watermark, opt-in via
+  // opts.viewerWatermark. Default OFF (existing diagnostic callers and
+  // pinned tests are unaffected). Re-applied on overflow pages.
+  if (opts.viewerWatermark) {
+    module.exports.applyViewerWatermark(doc, opts.viewerWatermark);
+    doc.on("pageAdded", () => module.exports.applyViewerWatermark(doc, opts.viewerWatermark));
+  }
 
   // ── Header band: brand logo (left) + label ──────────────────────────
   const headerH = 66;
@@ -4132,6 +4221,10 @@ module.exports = {
   renderTravelDiagnosticPdf,
   renderTmcReadinessReport,
   renderTravelItineraryPdf,
+  // PRD §4.7 (gap A3) — per-viewer diagonal watermark for travel docs.
+  // Exported for unit tests AND consumed internally via the
+  // module.exports self-mocking seam so vitest can spy on application.
+  applyViewerWatermark,
   renderTravelStallPersonalisedPdf,
   renderTravelQuotePdf,
   generateTravelQuotePdf,

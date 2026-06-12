@@ -31,6 +31,44 @@ const CATEGORIES = [
   { value: "insurance", label: "Insurance" },
 ];
 
+// PRD §4.3 RFU preference attributes — canonical vocabulary mirrors
+// backend/routes/travel_cost_master.js HOTEL_ATTRIBUTES.
+const HOTEL_VIEWS = [
+  { value: "", label: "View (none)" },
+  { value: "haram_facing", label: "Haram facing" },
+  { value: "kaaba_facing", label: "Kaaba facing" },
+  { value: "city_view", label: "City view" },
+  { value: "standard", label: "Standard" },
+];
+const HOTEL_FLOORS = [
+  { value: "", label: "Floor (none)" },
+  { value: "low", label: "Low floor" },
+  { value: "mid", label: "Mid floor" },
+  { value: "high", label: "High floor" },
+];
+const VIEW_LABELS = {
+  haram_facing: "Haram facing", kaaba_facing: "Kaaba facing",
+  city_view: "City view", standard: "Standard",
+};
+const FLOOR_LABELS = { low: "Low floor", mid: "Mid floor", high: "High floor" };
+
+// Renders the parsed `attributes` object (view/floorLevel/roomCategory) as
+// small chips in the list table; em-dash when a row has none.
+function AttributeChips({ attributes }) {
+  const chips = [];
+  if (attributes?.view) chips.push(VIEW_LABELS[attributes.view] || String(attributes.view));
+  if (attributes?.floorLevel) chips.push(FLOOR_LABELS[attributes.floorLevel] || String(attributes.floorLevel));
+  if (attributes?.roomCategory) chips.push(String(attributes.roomCategory));
+  if (chips.length === 0) {
+    return <span style={{ color: "var(--text-secondary)", fontSize: 12 }}>&mdash;</span>;
+  }
+  return (
+    <span style={{ display: "inline-flex", gap: 4, flexWrap: "wrap" }}>
+      {chips.map((c) => <span key={c} style={attrChip}>{c}</span>)}
+    </span>
+  );
+}
+
 export default function CostMaster() {
   const notify = useNotify();
   const { user } = useContext(AuthContext) || {};
@@ -50,6 +88,9 @@ export default function CostMaster() {
     routeOrSku: "",
     baseRate: "",
     currency: "INR",
+    view: "",
+    floorLevel: "",
+    roomCategory: "",
   });
 
   const load = () => {
@@ -75,12 +116,24 @@ export default function CostMaster() {
       return;
     }
     try {
+      const { view, floorLevel, roomCategory, ...rest } = form;
+      const body = { ...rest, baseRate: Number(form.baseRate) };
+      // Hotel rows carry structured preference attributes (PRD §4.3):
+      // view / floorLevel / roomCategory. Backend validates the vocabulary
+      // and stores them into attributesJson.
+      if (form.category === "hotel") {
+        const attributes = {};
+        if (view) attributes.view = view;
+        if (floorLevel) attributes.floorLevel = floorLevel;
+        if (roomCategory.trim()) attributes.roomCategory = roomCategory.trim();
+        if (Object.keys(attributes).length > 0) body.attributes = attributes;
+      }
       await fetchApi("/api/travel/cost-master", {
         method: "POST",
-        body: JSON.stringify({ ...form, baseRate: Number(form.baseRate) }),
+        body: JSON.stringify(body),
       });
       notify.success("Rate added");
-      setForm({ ...form, routeOrSku: "", baseRate: "" });
+      setForm({ ...form, routeOrSku: "", baseRate: "", view: "", floorLevel: "", roomCategory: "" });
       setAdding(false);
       load();
     } catch (e) {
@@ -256,6 +309,33 @@ export default function CostMaster() {
               onChange={(e) => setForm({ ...form, baseRate: e.target.value })}
               style={input}
             />
+            {form.category === "hotel" && (
+              <>
+                <select
+                  value={form.view}
+                  onChange={(e) => setForm({ ...form, view: e.target.value })}
+                  style={input}
+                  aria-label="Hotel view preference"
+                >
+                  {HOTEL_VIEWS.map((v) => <option key={v.value} value={v.value}>{v.label}</option>)}
+                </select>
+                <select
+                  value={form.floorLevel}
+                  onChange={(e) => setForm({ ...form, floorLevel: e.target.value })}
+                  style={input}
+                  aria-label="Hotel floor level"
+                >
+                  {HOTEL_FLOORS.map((f) => <option key={f.value} value={f.value}>{f.label}</option>)}
+                </select>
+                <input
+                  placeholder="Room category (e.g. Deluxe)"
+                  value={form.roomCategory}
+                  onChange={(e) => setForm({ ...form, roomCategory: e.target.value })}
+                  style={input}
+                  aria-label="Room category"
+                />
+              </>
+            )}
           </div>
           <div style={{ marginTop: 8, display: "flex", gap: 8 }}>
             <button type="button" onClick={add} style={primaryBtn}>Save</button>
@@ -281,6 +361,7 @@ export default function CostMaster() {
                 <th style={th}>Route / SKU</th>
                 <th style={th}>Base rate</th>
                 <th style={th}>Currency</th>
+                <th style={th}>Attributes</th>
                 <th style={th}>Active</th>
               </tr>
             </thead>
@@ -292,6 +373,7 @@ export default function CostMaster() {
                   <td style={td}><code style={{ fontSize: 12 }}>{r.routeOrSku}</code></td>
                   <td style={td}>₹{Number(r.baseRate).toLocaleString()}</td>
                   <td style={td}>{r.currency}</td>
+                  <td style={td}><AttributeChips attributes={r.attributes} /></td>
                   <td style={td}>
                     <button type="button" onClick={() => toggleActive(r)} style={iconBtn} aria-label={`Toggle active for ${r.routeOrSku}`}>
                       {r.isActive ? <ToggleRight size={20} style={{ color: "var(--success-color)" }} /> : <ToggleLeft size={20} />}
@@ -330,6 +412,11 @@ const brandBadge = {
   padding: "2px 8px", borderRadius: 4, fontSize: 11, fontWeight: 600,
   background: "var(--subtle-bg-3)", color: "var(--primary-color)",
   textTransform: "uppercase", letterSpacing: 0.5,
+};
+const attrChip = {
+  padding: "2px 8px", borderRadius: 10, fontSize: 11, fontWeight: 600,
+  background: "var(--subtle-bg)", color: "var(--text-secondary)",
+  border: "1px solid var(--border-color)", whiteSpace: "nowrap",
 };
 const primaryBtn = {
   display: "inline-flex", alignItems: "center", gap: 6,

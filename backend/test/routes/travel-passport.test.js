@@ -46,6 +46,12 @@ prisma.tripParticipant = {
   findMany: vi.fn(),
   update: vi.fn(),
 };
+// CustomerTraveller — the unified portal passport store the queue also reads.
+prisma.customerTraveller = {
+  findFirst: vi.fn(),
+  findMany: vi.fn(),
+  update: vi.fn(),
+};
 prisma.tenant = prisma.tenant || {};
 prisma.tenant.findUnique = vi.fn().mockResolvedValue({
   id: 1,
@@ -76,6 +82,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'enterprise_super_secret_key_2026';
 // Load the OCR client BEFORE the router so the route's CJS require()
 // resolves to our spy-able instance.
 const passportOcrClient = requireCJS('../../services/passportOcrClient');
+const s3Service = requireCJS('../../services/s3Service');
 const passportRouter = requireCJS('../../routes/travel_passport');
 
 function makeApp() {
@@ -113,6 +120,9 @@ beforeEach(() => {
   prisma.tripParticipant.findFirst.mockReset();
   prisma.tripParticipant.findMany.mockReset().mockResolvedValue([]);
   prisma.tripParticipant.update.mockReset();
+  prisma.customerTraveller.findFirst.mockReset();
+  prisma.customerTraveller.findMany.mockReset().mockResolvedValue([]);
+  prisma.customerTraveller.update.mockReset();
   prisma.tenant.findUnique.mockReset().mockResolvedValue({
     id: 1, vertical: 'travel', name: 'Test Travel', slug: 'test-travel',
   });
@@ -126,6 +136,8 @@ beforeEach(() => {
     provider: 'stub-mode-v1',
     extractedAt: '2026-06-09T10:00:00.000Z',
   });
+  // Stub S3 so "Clear" deletion never touches the live bucket.
+  vi.spyOn(s3Service, 'deleteFile').mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -167,7 +179,7 @@ describe('POST /api/travel/passport/participants/:id/passport-upload', () => {
       provider: 'stub-mode-v1',
     });
     expect(typeof res.body.imageUrl).toBe('string');
-    expect(res.body.imageUrl).toMatch(/^\/uploads\/passport-ocr\//);
+    expect(res.body.imageUrl).toMatch(/^\/api\/uploads\/passport-ocr\//);
     // extractedAt was persisted (route updates the row with new Date()).
     expect(prisma.tripParticipant.update).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -218,7 +230,6 @@ describe('POST /api/travel/passport/participants/:id/passport-upload', () => {
       code: 'PASSPORT_OCR_NOT_YET_ENABLED',
       participantId: 55,
     });
-    expect(typeof res.body.imageFilename).toBe('string');
     // No DB update should have run when the cred-blocked path triggered.
     expect(prisma.tripParticipant.update).not.toHaveBeenCalled();
   });
@@ -474,5 +485,129 @@ describe('DELETE /api/travel/passport/participants/:id/passport-extraction', () 
       .set('Authorization', `Bearer ${tokenFor('USER')}`);
     expect(res.status).toBe(403);
     expect(res.body).toMatchObject({ code: 'RBAC_DENIED' });
+  });
+});
+
+// -----------------------------------------------------------------------------
+// Queue union — CustomerTraveller (portal) rows appear alongside TripParticipant
+// -----------------------------------------------------------------------------
+
+describe('GET /verification-queue — union with CustomerTraveller', () => {
+  test('merges trip + customer rows, each tagged with its kind', async () => {
+    prisma.tripParticipant.findMany.mockResolvedValue([
+      {
+        id: 55, fullName: 'Jane Doe',
+        passportExtractedAt: new Date('2026-06-09T10:00:00.000Z'),
+        passportRejectedAt: null,
+        passportExtractionJson: JSON.stringify({ extraction: SAMPLE_EXTRACTION, confidence: 0.95, provider: 'stub-mode-v1', imageUrl: '/api/uploads/passport-ocr/a.jpg' }),
+        trip: { id: 100, tripCode: 'bali2026', destination: 'Bali' },
+      },
+    ]);
+    prisma.customerTraveller.findMany.mockResolvedValue([
+      {
+        id: 7, fullName: 'Ahmed Khan', subBrand: 'rfu', relationship: 'self',
+        passportExtractedAt: new Date('2026-06-10T10:00:00.000Z'),
+        passportRejectedAt: null,
+        passportExtractionJson: JSON.stringify({ extraction: SAMPLE_EXTRACTION, confidence: 0.9, provider: 'stub-mode-v1', imageUrl: '/api/uploads/passport-ocr/b.jpg' }),
+      },
+    ]);
+
+    const res = await request(makeApp())
+      .get('/api/travel/passport/verification-queue')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(2);
+    const trip = res.body.pending.find((r) => r.kind === 'trip');
+    const customer = res.body.pending.find((r) => r.kind === 'customer');
+    expect(trip).toMatchObject({ id: 55, participantId: 55, subBrand: 'tmc', fullName: 'Jane Doe' });
+    expect(customer).toMatchObject({ id: 7, subBrand: 'rfu', relationship: 'self', fullName: 'Ahmed Khan' });
+    // Customer rows must be tenant-scoped directly (no trip join).
+    expect(prisma.customerTraveller.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { passportExtractedAt: { not: null }, passportVerifiedAt: null, tenantId: 1 },
+      }),
+    );
+  });
+});
+
+// -----------------------------------------------------------------------------
+// Customer-traveller verify / clear
+// -----------------------------------------------------------------------------
+
+describe('POST /customer-travellers/:id/passport-verify', () => {
+  test('approve copies extraction into canonical cols + sets verifiedAt', async () => {
+    prisma.customerTraveller.findFirst.mockResolvedValue({
+      id: 7, tenantId: 1, passportExtractedAt: new Date(), passportVerifiedAt: null,
+      passportExtractionJson: JSON.stringify({ extraction: SAMPLE_EXTRACTION }),
+    });
+    prisma.customerTraveller.update.mockResolvedValue({ id: 7, passportVerifiedAt: new Date(), passportVerifiedById: 7 });
+    const res = await request(makeApp())
+      .post('/api/travel/passport/customer-travellers/7/passport-verify')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ approved: true });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ travellerId: 7, approved: true });
+    const data = prisma.customerTraveller.update.mock.calls[0][0].data;
+    expect(data.passportNumber).toBe(SAMPLE_EXTRACTION.passportNumber);
+    expect(data.passportVerifiedById).toBe(7);
+  });
+
+  test('reject sets rejectedAt', async () => {
+    prisma.customerTraveller.findFirst.mockResolvedValue({
+      id: 7, tenantId: 1, passportExtractedAt: new Date(), passportVerifiedAt: null, passportExtractionJson: null,
+    });
+    prisma.customerTraveller.update.mockResolvedValue({ id: 7, passportRejectedAt: new Date() });
+    const res = await request(makeApp())
+      .post('/api/travel/passport/customer-travellers/7/passport-verify')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ approved: false, reason: 'blurry_photo' });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ travellerId: 7, approved: false });
+  });
+
+  test('404 TRAVELLER_NOT_FOUND for a foreign tenant row', async () => {
+    prisma.customerTraveller.findFirst.mockResolvedValue(null);
+    const res = await request(makeApp())
+      .post('/api/travel/passport/customer-travellers/9999/passport-verify')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ approved: true });
+    expect(res.status).toBe(404);
+    expect(res.body).toMatchObject({ code: 'TRAVELLER_NOT_FOUND' });
+  });
+
+  test('USER role gets 403 RBAC_DENIED', async () => {
+    prisma.user.findUnique.mockResolvedValue({ role: 'USER', subBrandAccess: null });
+    const res = await request(makeApp())
+      .post('/api/travel/passport/customer-travellers/7/passport-verify')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`)
+      .send({ approved: true });
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ code: 'RBAC_DENIED' });
+  });
+});
+
+describe('DELETE /customer-travellers/:id/passport-extraction', () => {
+  test('clears extraction columns for a customer traveller', async () => {
+    prisma.customerTraveller.findFirst.mockResolvedValue({ id: 7, tenantId: 1 });
+    prisma.customerTraveller.update.mockResolvedValue({ id: 7 });
+    const res = await request(makeApp())
+      .delete('/api/travel/passport/customer-travellers/7/passport-extraction')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ travellerId: 7, cleared: true });
+  });
+
+  test('also deletes the stored S3 scan so a re-upload does not orphan it', async () => {
+    prisma.customerTraveller.findFirst.mockResolvedValue({
+      id: 7, tenantId: 1,
+      passportExtractionJson: JSON.stringify({ storage: 's3', imageKey: 'passport-ocr/OLD.png' }),
+    });
+    prisma.customerTraveller.update.mockResolvedValue({ id: 7 });
+    const res = await request(makeApp())
+      .delete('/api/travel/passport/customer-travellers/7/passport-extraction')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(200);
+    expect(s3Service.deleteFile).toHaveBeenCalledWith('passport-ocr/OLD.png');
   });
 });

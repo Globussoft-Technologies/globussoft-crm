@@ -616,3 +616,165 @@ describe('TravelCustomerPortal — customer accept / decline of an offer', () =>
     await waitFor(() => expect(declineBody && declineBody.reason).toBe('Budget too high'));
   });
 });
+
+// ─── Travel Documents — unified travellers + passport upload ────────────
+//
+// Customer-side passport flow for ALL 4 sub-brands (PRD_PASSPORT_OCR):
+// add travellers (POST /portal/travel/travellers) keyed to the customer +
+// upload each one's passport (multipart POST .../travellers/:id/passport-upload).
+// No trip-picking. The portal receives STATUS timestamps only — never
+// extracted passport values.
+
+describe('TravelCustomerPortal — Travel Documents (travellers + passports)', () => {
+  const TRAVELLERS = [
+    {
+      id: 901, fullName: 'Fatima Khan', relationship: 'spouse', subBrand: 'rfu',
+      passportExtractedAt: null, passportVerifiedAt: null, passportRejectedAt: null,
+    },
+    {
+      id: 902, fullName: 'Yusuf Khan', relationship: 'child', subBrand: 'rfu',
+      passportExtractedAt: '2026-06-01T10:00:00.000Z',
+      passportVerifiedAt: '2026-06-02T10:00:00.000Z',
+      passportRejectedAt: null,
+    },
+  ];
+
+  function mockDocuments({ travellers = TRAVELLERS, onAddTraveller, onUpload } = {}) {
+    globalThis.fetch = vi.fn((url, opts) => {
+      const method = (opts && opts.method) || 'GET';
+      if (url.includes('/portal/kyc/status')) return mockJsonResponse({ kycStatus: 'unverified', mode: 'stub' });
+      if (url.includes('/portal/travel/itineraries')) return mockJsonResponse([]);
+      // Match the upload BEFORE the travellers list — the URL contains both.
+      if (url.includes('/passport-upload') && method === 'POST') {
+        if (onUpload) onUpload(url, opts);
+        return mockJsonResponse({ travellerId: 901, status: 'pending-verification' }, { status: 201 });
+      }
+      if (url.includes('/portal/travel/travellers') && method === 'POST') {
+        if (onAddTraveller) onAddTraveller(JSON.parse(opts.body));
+        return mockJsonResponse({ traveller: { id: 905, fullName: 'New Kid', relationship: 'child', subBrand: 'rfu' } }, { status: 201 });
+      }
+      if (url.includes('/portal/travel/travellers')) return mockJsonResponse({ travellers });
+      return mockJsonResponse({});
+    });
+  }
+
+  test('lists travellers with status badges; verified traveller has no upload control', async () => {
+    setupLoggedIn();
+    mockDocuments();
+    renderPortal();
+    await gotoView(/travel documents/i);
+    expect(await screen.findByText('Fatima Khan')).toBeInTheDocument();
+    expect(screen.getByText('Yusuf Khan')).toBeInTheDocument();
+    // Badges per the state matrix.
+    expect(screen.getByText('Passport needed')).toBeInTheDocument();
+    expect(screen.getByText('Verified')).toBeInTheDocument();
+    // Fatima (no passport) gets an upload control; Yusuf (verified) does not.
+    expect(screen.getByLabelText('Passport file for Fatima Khan')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Passport file for Yusuf Khan')).toBeNull();
+  });
+
+  test('empty state renders the add-travellers hint', async () => {
+    setupLoggedIn();
+    mockDocuments({ travellers: [] });
+    renderPortal();
+    await gotoView(/travel documents/i);
+    expect(await screen.findByText(/no travellers yet/i)).toBeInTheDocument();
+  });
+
+  test('Add traveller posts { fullName, relationship } and reloads the list', async () => {
+    setupLoggedIn();
+    let addBody = null;
+    mockDocuments({ onAddTraveller: (b) => { addBody = b; } });
+    renderPortal();
+    await gotoView(/travel documents/i);
+    await screen.findByText('Fatima Khan');
+    fireEvent.click(screen.getByRole('button', { name: /add traveller/i }));
+    fireEvent.change(screen.getByLabelText(/traveller full name/i), { target: { value: 'New Kid' } });
+    fireEvent.change(screen.getByLabelText(/who is this/i), { target: { value: 'child' } });
+    // The header toggle hides while the form is open, so the only
+    // "Add traveller" button left is the form's submit.
+    fireEvent.click(screen.getByRole('button', { name: /add traveller/i }));
+    await waitFor(() => {
+      expect(addBody).toEqual({ fullName: 'New Kid', relationship: 'child' });
+    });
+    expect(await screen.findByText(/now upload their passport/i)).toBeInTheDocument();
+  });
+
+  test('uploading a JPG posts FormData to the travellers passport-upload endpoint', async () => {
+    setupLoggedIn();
+    let uploadUrl = null;
+    let uploadBody = null;
+    mockDocuments({ onUpload: (url, opts) => { uploadUrl = url; uploadBody = opts.body; } });
+    renderPortal();
+    await gotoView(/travel documents/i);
+    const input = await screen.findByLabelText('Passport file for Fatima Khan');
+    const file = new File(['x'], 'passport.jpg', { type: 'image/jpeg' });
+    fireEvent.change(input, { target: { files: [file] } });
+    await waitFor(() => {
+      expect(uploadUrl).toContain('/portal/travel/travellers/901/passport-upload');
+    });
+    expect(uploadBody).toBeInstanceOf(FormData);
+    expect(uploadBody.get('file').name).toBe('passport.jpg');
+    expect(await screen.findByText(/our team will verify it shortly/i)).toBeInTheDocument();
+  });
+
+  test('unsupported file type shows an error banner and never hits the network', async () => {
+    setupLoggedIn();
+    let uploaded = false;
+    mockDocuments({ onUpload: () => { uploaded = true; } });
+    renderPortal();
+    await gotoView(/travel documents/i);
+    const input = await screen.findByLabelText('Passport file for Fatima Khan');
+    fireEvent.change(input, {
+      target: { files: [new File(['x'], 'notes.txt', { type: 'text/plain' })] },
+    });
+    expect(await screen.findByText(/jpg, png or pdf only/i)).toBeInTheDocument();
+    expect(uploaded).toBe(false);
+  });
+
+  test('oversize file (>5 MB) shows the limit banner and never hits the network', async () => {
+    setupLoggedIn();
+    let uploaded = false;
+    mockDocuments({ onUpload: () => { uploaded = true; } });
+    renderPortal();
+    await gotoView(/travel documents/i);
+    const input = await screen.findByLabelText('Passport file for Fatima Khan');
+    const big = new File(['x'], 'big.jpg', { type: 'image/jpeg' });
+    Object.defineProperty(big, 'size', { value: 6 * 1024 * 1024 });
+    fireEvent.change(input, { target: { files: [big] } });
+    expect(await screen.findByText(/5 MB limit/i)).toBeInTheDocument();
+    expect(uploaded).toBe(false);
+  });
+
+  test('upload control is a real button whose accessible name contains the visible label (WCAG 2.5.3)', async () => {
+    setupLoggedIn();
+    mockDocuments();
+    renderPortal();
+    await gotoView(/travel documents/i);
+    // Real <button>, accessible name "Upload passport for Fatima Khan"
+    // (contains the visible "Upload passport" text).
+    const btn = await screen.findByRole('button', { name: /upload passport for fatima khan/i });
+    expect(btn.tagName).toBe('BUTTON');
+    expect(btn).toHaveTextContent(/upload passport/i);
+  });
+
+  test('a 401 on the documents load boots the customer back to the login screen', async () => {
+    setupLoggedIn();
+    globalThis.fetch = vi.fn((url) => {
+      if (url.includes('/portal/kyc/status')) return mockJsonResponse({ kycStatus: 'unverified', mode: 'stub' });
+      if (url.includes('/portal/travel/itineraries')) return mockJsonResponse([]);
+      // Session expired mid-session — the documents fetch 401s.
+      if (url.includes('/portal/travel/travellers')) {
+        return mockJsonResponse({ error: 'Portal session expired' }, { status: 401 });
+      }
+      return mockJsonResponse({});
+    });
+    renderPortal();
+    await gotoView(/travel documents/i);
+    // onLogout clears the token + returns to LoginScreen.
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: /customer portal/i })).toBeInTheDocument();
+    });
+    expect(localStorage.getItem('portalToken')).toBeNull();
+  });
+});

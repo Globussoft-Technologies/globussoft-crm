@@ -16,6 +16,17 @@
  *   - That the count values match a specific seed state — demo seed
  *     drift would red-line this routinely. We only assert shape +
  *     numericness.
+ *
+ * Also covers GET /api/travel/dashboard/workload (gap A9b — PRD §4.1
+ * manager view: pending/delayed tasks + staff-wise workload across
+ * brands). Pins:
+ *   - auth gate (401/403 without token)
+ *   - RBAC gate (travel USER role → 403 RBAC_DENIED; MANAGER + ADMIN pass)
+ *   - vertical gate (generic ADMIN → 403 WRONG_VERTICAL)
+ *   - envelope shape (perUser/unassigned/totals/staffCount/generatedAt)
+ *   - per-row invariants (overdueTasks ⊆ openTasks; bySubBrand keys are
+ *     valid sub-brands or "_none")
+ *   - ?subBrand= narrowing + 400 INVALID_SUB_BRAND on garbage
  */
 
 const { test, expect } = require("@playwright/test");
@@ -25,6 +36,8 @@ const REQUEST_TIMEOUT = 60000;
 
 let travelAdminToken = null;
 let genericAdminToken = null;
+let travelManagerToken = null;
+let travelUserToken = null;
 
 async function loginAs(request, email, password) {
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -53,6 +66,22 @@ async function getGenericAdmin(request) {
     genericAdminToken = await loginAs(request, "admin@globussoft.com", "password123");
   }
   return genericAdminToken;
+}
+// seed-travel.js: MANAGER scoped to ["tmc"] — exercises the workload
+// endpoint's MANAGER acceptance + sub-brand-narrowed task query.
+async function getTravelManager(request) {
+  if (!travelManagerToken) {
+    travelManagerToken = await loginAs(request, "tmc-ops@travelstall.demo", "password123");
+  }
+  return travelManagerToken;
+}
+// seed-travel.js: USER role (front-desk telecaller) — exercises the 403
+// RBAC gate.
+async function getTravelUser(request) {
+  if (!travelUserToken) {
+    travelUserToken = await loginAs(request, "telecaller@travelstall.demo", "password123");
+  }
+  return travelUserToken;
 }
 
 const headers = (token) => ({
@@ -268,6 +297,146 @@ test.describe("Travel dashboard API — ?subBrand= scoping", () => {
     if (!token) test.skip(true, "travel admin login unavailable");
     const r = await retryOn5xx(() =>
       request.get(`${BASE_URL}/api/travel/dashboard?subBrand=not-a-brand`, {
+        headers: headers(token),
+        timeout: REQUEST_TIMEOUT,
+      }),
+    );
+    expect(r.status()).toBe(400);
+    expect((await r.json()).code).toBe("INVALID_SUB_BRAND");
+  });
+});
+
+// ─── GET /dashboard/workload (gap A9b — PRD §4.1 manager view) ──────
+
+const VALID_WORKLOAD_BRAND_KEYS = new Set(["tmc", "rfu", "travelstall", "visasure", "_none"]);
+
+function assertWorkloadBucket(bucket) {
+  expect(Number.isInteger(bucket.openTasks)).toBe(true);
+  expect(Number.isInteger(bucket.overdueTasks)).toBe(true);
+  expect(bucket.openTasks).toBeGreaterThanOrEqual(0);
+  expect(bucket.overdueTasks).toBeGreaterThanOrEqual(0);
+  expect(bucket.overdueTasks).toBeLessThanOrEqual(bucket.openTasks);
+  expect(bucket.bySubBrand).toBeTruthy();
+  expect(typeof bucket.bySubBrand).toBe("object");
+  for (const [key, split] of Object.entries(bucket.bySubBrand)) {
+    expect(VALID_WORKLOAD_BRAND_KEYS.has(key), `unexpected bySubBrand key ${key}`).toBe(true);
+    expect(Number.isInteger(split.open)).toBe(true);
+    expect(Number.isInteger(split.overdue)).toBe(true);
+    expect(split.overdue).toBeLessThanOrEqual(split.open);
+  }
+}
+
+test.describe("Travel dashboard API — workload (manager view)", () => {
+  test("GET /dashboard/workload without token → 401/403", async ({ request }) => {
+    const r = await retryOn5xx(() =>
+      request.get(`${BASE_URL}/api/travel/dashboard/workload`, { timeout: REQUEST_TIMEOUT }),
+    );
+    expect([401, 403]).toContain(r.status());
+  });
+
+  test("travel USER role → 403 RBAC_DENIED (MANAGER/ADMIN only)", async ({ request }) => {
+    const token = await getTravelUser(request);
+    if (!token) test.skip(true, "telecaller@travelstall.demo not seeded");
+    const r = await retryOn5xx(() =>
+      request.get(`${BASE_URL}/api/travel/dashboard/workload`, {
+        headers: headers(token),
+        timeout: REQUEST_TIMEOUT,
+      }),
+    );
+    expect(r.status()).toBe(403);
+    expect((await r.json()).code).toBe("RBAC_DENIED");
+  });
+
+  test("generic-vertical ADMIN → 403 WRONG_VERTICAL", async ({ request }) => {
+    const token = await getGenericAdmin(request);
+    if (!token) test.skip(true, "generic admin login unavailable");
+    const r = await retryOn5xx(() =>
+      request.get(`${BASE_URL}/api/travel/dashboard/workload`, {
+        headers: headers(token),
+        timeout: REQUEST_TIMEOUT,
+      }),
+    );
+    expect(r.status()).toBe(403);
+    expect((await r.json()).code).toBe("WRONG_VERTICAL");
+  });
+
+  test("travel ADMIN → 200 with the full workload envelope", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, "travel admin login unavailable");
+    const r = await retryOn5xx(() =>
+      request.get(`${BASE_URL}/api/travel/dashboard/workload`, {
+        headers: headers(token),
+        timeout: REQUEST_TIMEOUT,
+      }),
+    );
+    expect(r.status(), `workload: ${await r.text()}`).toBe(200);
+    const body = await r.json();
+
+    expect(Array.isArray(body.perUser)).toBe(true);
+    expect(Number.isInteger(body.staffCount)).toBe(true);
+    expect(body.staffCount).toBe(body.perUser.length);
+    expect(typeof body.generatedAt).toBe("string");
+    expect(Number.isNaN(new Date(body.generatedAt).getTime())).toBe(false);
+
+    assertWorkloadBucket(body.totals);
+    assertWorkloadBucket(body.unassigned);
+
+    let perUserOpen = 0;
+    let perUserOverdue = 0;
+    for (const row of body.perUser) {
+      expect(Number.isInteger(row.userId)).toBe(true);
+      assertWorkloadBucket(row);
+      perUserOpen += row.openTasks;
+      perUserOverdue += row.overdueTasks;
+    }
+    // totals = unassigned + Σ perUser (the lib invariant, end-to-end).
+    expect(body.totals.openTasks).toBe(perUserOpen + body.unassigned.openTasks);
+    expect(body.totals.overdueTasks).toBe(perUserOverdue + body.unassigned.overdueTasks);
+  });
+
+  test("travel MANAGER → 200 (RBAC accepts MANAGER)", async ({ request }) => {
+    const token = await getTravelManager(request);
+    if (!token) test.skip(true, "tmc-ops@travelstall.demo not seeded");
+    const r = await retryOn5xx(() =>
+      request.get(`${BASE_URL}/api/travel/dashboard/workload`, {
+        headers: headers(token),
+        timeout: REQUEST_TIMEOUT,
+      }),
+    );
+    expect(r.status(), `workload as MANAGER: ${await r.text()}`).toBe(200);
+    const body = await r.json();
+    expect(Array.isArray(body.perUser)).toBe(true);
+    // tmc-ops is narrowed to ["tmc"] — every brand split key must be tmc.
+    // (Tasks without a tmc-tagged contact are excluded from a narrowed
+    // view, so "_none" must not appear either.)
+    for (const row of [...body.perUser, body.unassigned, body.totals]) {
+      for (const key of Object.keys(row.bySubBrand)) {
+        expect(key).toBe("tmc");
+      }
+    }
+  });
+
+  test("?subBrand=tmc narrows the brand split to tmc keys only", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, "travel admin login unavailable");
+    const r = await retryOn5xx(() =>
+      request.get(`${BASE_URL}/api/travel/dashboard/workload?subBrand=tmc`, {
+        headers: headers(token),
+        timeout: REQUEST_TIMEOUT,
+      }),
+    );
+    expect(r.status()).toBe(200);
+    const body = await r.json();
+    for (const key of Object.keys(body.totals.bySubBrand)) {
+      expect(key).toBe("tmc");
+    }
+  });
+
+  test("invalid ?subBrand= → 400 INVALID_SUB_BRAND", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, "travel admin login unavailable");
+    const r = await retryOn5xx(() =>
+      request.get(`${BASE_URL}/api/travel/dashboard/workload?subBrand=not-a-brand`, {
         headers: headers(token),
         timeout: REQUEST_TIMEOUT,
       }),

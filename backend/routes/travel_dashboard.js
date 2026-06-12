@@ -1,8 +1,11 @@
 // Travel CRM — Owner Dashboard aggregate (Phase 1).
 //
 // Replaces the Day-1 placeholder Dashboard.jsx with a real KPI surface.
-// One endpoint: GET /api/travel/dashboard returns counts + recent-activity
-// payload composed via Promise.all so the page renders in one round-trip.
+// GET /api/travel/dashboard returns counts + recent-activity payload
+// composed via Promise.all so the page renders in one round-trip.
+// GET /api/travel/dashboard/workload (MANAGER/ADMIN) returns the staff-wise
+// open/overdue task rollup (PRD §4.1 manager view — see the handler's
+// JSDoc at the bottom of this file).
 //
 // Endpoint shape:
 //   {
@@ -26,7 +29,7 @@
 
 const express = require("express");
 const router = express.Router();
-const { verifyToken } = require("../middleware/auth");
+const { verifyToken, verifyRole } = require("../middleware/auth");
 const prisma = require("../lib/prisma");
 const {
   requireTravelTenant,
@@ -35,6 +38,7 @@ const {
   canAccessSubBrand,
   assertValidSubBrand,
 } = require("../middleware/travelGuards");
+const { computeTeamWorkload } = require("../lib/travelWorkload");
 
 // Build a Prisma `where` clause for tenant + sub-brand scoping. The
 // narrowWhereBySubBrand helper mutates and returns; we wrap it so each
@@ -209,5 +213,104 @@ router.get("/dashboard", verifyToken, requireTravelTenant, async (req, res) => {
     res.status(500).json({ error: "Failed to compute dashboard" });
   }
 });
+
+// GET /api/travel/dashboard/workload — MANAGER/ADMIN only (PRD §4.1
+// gap A9b: "Manager view — pending tasks, delayed tasks, staff-wise
+// workload across brands").
+//
+// Aggregates OPEN tasks (status != "Completed", not soft-deleted) for the
+// caller's travel tenant into per-staff + tenant-level counts via
+// lib/travelWorkload.computeTeamWorkload (pure math; vitest-covered).
+//
+// Response shape:
+//   {
+//     perUser: [{ userId, name, email, role, openTasks, overdueTasks,
+//                 bySubBrand: { tmc: {open, overdue}, ..., _none: {...} } }],
+//     unassigned: { openTasks, overdueTasks, bySubBrand },
+//     totals:     { openTasks, overdueTasks, bySubBrand },
+//     staffCount,
+//     generatedAt,
+//   }
+//
+// Semantics:
+//   - "pending" = open task (status != "Completed"); "delayed" = open AND
+//     dueDate < now. overdueTasks ⊆ openTasks. Tasks with no dueDate are
+//     never overdue.
+//   - Task has NO subBrand column — brand attribution is derived from the
+//     linked Contact.subBrand. Tasks without a contact (or with an
+//     untagged contact) bucket under "_none". Per-user/tenant TOTALS are
+//     therefore always complete; the bySubBrand split is best-effort by
+//     design (documented PRD-gap note: work items aren't brand-scoped in
+//     the schema).
+//   - RBAC: MANAGER/ADMIN (verifyRole) — staff names/emails are a
+//     manager-grade surface, same posture as /api/users.
+//   - Sub-brand narrowing: optional ?subBrand= mirrors GET /dashboard
+//     (intersected with the caller's access set, never widened; garbage →
+//     400 INVALID_SUB_BRAND). When a narrowing applies, only tasks whose
+//     contact carries one of the allowed brands are counted — a deny-all
+//     intersection returns the zeroed envelope (silent-empty rule), not
+//     403. Full-access callers (?subBrand absent, allowed=null) see every
+//     open task including contact-less ones.
+router.get(
+  "/dashboard/workload",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const tenantId = req.travelTenant.id;
+      let allowed = await getSubBrandAccessSet(req.user.userId);
+
+      const requestedSubBrand = req.query.subBrand;
+      if (requestedSubBrand) {
+        assertValidSubBrand(requestedSubBrand); // 400 INVALID_SUB_BRAND
+        allowed = canAccessSubBrand(allowed, requestedSubBrand)
+          ? new Set([requestedSubBrand])
+          : new Set();
+      }
+
+      const taskWhere = {
+        tenantId,
+        deletedAt: null,
+        status: { not: "Completed" },
+      };
+      if (allowed instanceof Set) {
+        if (allowed.size === 0) {
+          // Deny-all intersection → unsatisfiable filter → zeroed
+          // envelope (consistent with narrowWhereBySubBrand's
+          // silent-empty rule).
+          taskWhere.id = -1;
+        } else {
+          taskWhere.contact = { subBrand: { in: [...allowed] } };
+        }
+      }
+
+      const [users, tasks] = await Promise.all([
+        prisma.user.findMany({
+          where: { tenantId },
+          select: { id: true, name: true, email: true, role: true, userType: true },
+        }),
+        prisma.task.findMany({
+          where: taskWhere,
+          select: {
+            userId: true,
+            dueDate: true,
+            contact: { select: { subBrand: true } },
+          },
+        }),
+      ]);
+
+      const now = new Date();
+      res.json({
+        ...computeTeamWorkload(users, tasks, now),
+        generatedAt: now.toISOString(),
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-dashboard] workload error:", e.message);
+      res.status(500).json({ error: "Failed to compute workload" });
+    }
+  },
+);
 
 module.exports = router;

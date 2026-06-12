@@ -37,8 +37,9 @@
  *                                  "whatsapp:received" to room tenant:<id> —
  *                                  the SAME event the chat UI already
  *                                  subscribes to, so bubbles appear live.
- *                                eventType matching DELIVERED/READ → status
- *                                  update on the row matched by providerMsgId
+ *                                eventType matching DELIVERED/READ/FAILED →
+ *                                  status update on the row matched by
+ *                                  providerMsgId (+ errorMessage on FAILED)
  *                                  + "whatsapp:status" emit.
  *                              ALWAYS answers 200 { received: true } so Wati
  *                              never retry-bombs on processing hiccups.
@@ -565,6 +566,8 @@ router.post(
 // to reach this backend — impossible on localhost dev without a tunnel.
 // This endpoint pulls the recent Wati conversations instead:
 //   getContacts (most recently active) → getMessages per contact →
+//   reconcile OUTBOUND rows' delivery state (statusString/failedDetail →
+//   status/errorMessage, "whatsapp:status" emit per change) →
 //   upsert threads + insert NEW inbound rows (deduped by providerMsgId)
 //   → emit "whatsapp:received" per new inbound so the chat updates.
 //
@@ -586,6 +589,13 @@ const SYNC_DEBOUNCE_MS = (() => {
 })();
 const SYNC_CONTACTS = 15;
 
+// Wati statusString → our enum, rank-ordered so reconciliation only ever
+// ADVANCES a row (an older poll item saying DELIVERED must not downgrade a
+// READ row). FAILED and DELIVERED share a rank because neither can follow
+// the other: a failed message never delivered, a delivered one can't
+// retroactively fail.
+const OUTBOUND_STATUS_RANK = { QUEUED: 0, SENT: 1, FAILED: 2, DELIVERED: 2, READ: 3 };
+
 router.post(
   "/whatsapp/sync",
   verifyToken,
@@ -606,6 +616,7 @@ router.post(
       const { contacts } = await watiClient.getContacts({ pageSize: SYNC_CONTACTS });
       let newMessages = 0;
       let threadsTouched = 0;
+      let statusUpdates = 0;
 
       for (const c of contacts) {
         const rawPhone = c.wAid || c.waId || c.phone || c.whatsappNumber;
@@ -623,6 +634,45 @@ router.post(
             console.error(`[travel-whatsapp] sync getMessages(${phone}) failed: ${e.message}`);
           }
           continue;
+        }
+
+        // ── Outbound delivery-state reconciliation ──────────────────
+        // The send path stamps SENT the moment Wati's HTTP API accepts the
+        // call, but Meta can still reject asynchronously (live-confirmed
+        // 2026-06-12: "(#131037) display name approval" failed every send
+        // while the UI showed a grey SENT tick). Without a public webhook
+        // that verdict only surfaces here: Wati's getMessages items carry
+        // the real state (statusString SENT|DELIVERED|READ|FAILED +
+        // failedDetail with Meta's error). Items match our rows by id →
+        // providerMsgId; rank-guarded so a stale poll never downgrades.
+        for (const m of items) {
+          if (!m || m.owner !== true || !m.id || !m.statusString) continue;
+          const next = String(m.statusString).toUpperCase();
+          if (!(next in OUTBOUND_STATUS_RANK)) continue;
+          const row = await prisma.whatsAppMessage.findFirst({
+            where: { tenantId, providerMsgId: String(m.id), direction: "OUTBOUND" },
+            select: { id: true, status: true, threadId: true },
+          });
+          if (!row) continue;
+          const currentRank = OUTBOUND_STATUS_RANK[row.status] !== undefined
+            ? OUTBOUND_STATUS_RANK[row.status]
+            : 0;
+          if (OUTBOUND_STATUS_RANK[next] <= currentRank) continue;
+          const failDetail = next === "FAILED" && m.failedDetail ? String(m.failedDetail) : null;
+          await prisma.whatsAppMessage.update({
+            where: { id: row.id },
+            data: { status: next, ...(failDetail ? { errorMessage: failDetail } : {}) },
+          });
+          statusUpdates += 1;
+          if (req.io) {
+            req.io.to(`tenant:${tenantId}`).emit("whatsapp:status", {
+              tenantId,
+              threadId: row.threadId,
+              providerMsgId: String(m.id),
+              status: next,
+              errorMessage: failDetail,
+            });
+          }
         }
 
         // Oldest-first so lastMessageAt/unread ordering lands naturally.
@@ -725,7 +775,7 @@ router.post(
         }
       }
 
-      res.json({ synced: true, contactsChecked: contacts.length, newMessages, threadsTouched });
+      res.json({ synced: true, contactsChecked: contacts.length, newMessages, threadsTouched, statusUpdates });
     } catch (e) {
       console.error("[travel-whatsapp] sync error:", e.message);
       res.json({ synced: false, error: e.message });
@@ -783,22 +833,31 @@ router.post("/whatsapp/webhook", async (req, res) => {
     const p = req.body || {};
     const eventType = String(p.eventType || p.event || "").trim();
 
-    // ── Delivery / read receipts ─────────────────────────────────
+    // ── Delivery / read / failure receipts ───────────────────────
     // Wati event names vary across account versions (sentMessageDELIVERED,
-    // sentMessageREAD, deliveredMessage…) — match liberally on the verb.
-    if (/delivered/i.test(eventType) || /read/i.test(eventType)) {
+    // sentMessageREAD, deliveredMessage, sentMessageFAILED…) — match
+    // liberally on the verb. Failure wins the tie-break: Meta rejections
+    // (e.g. "(#131037) display name approval") must flip the row to FAILED
+    // with the reason, or the operator sees a grey SENT tick forever.
+    if (/delivered/i.test(eventType) || /read/i.test(eventType) || /fail/i.test(eventType)) {
       const providerMsgId = p.whatsappMessageId || p.id || null;
-      const newStatus = /read/i.test(eventType) ? "READ" : "DELIVERED";
+      const newStatus = /fail/i.test(eventType)
+        ? "FAILED"
+        : /read/i.test(eventType) ? "READ" : "DELIVERED";
       if (providerMsgId) {
+        const failDetail = newStatus === "FAILED"
+          ? String(p.failedDetail || p.failureReason || p.errorMessage || "send failed at provider")
+          : null;
         const updated = await prisma.whatsAppMessage.updateMany({
           where: { tenantId, providerMsgId: String(providerMsgId) },
-          data: { status: newStatus },
+          data: { status: newStatus, ...(failDetail ? { errorMessage: failDetail } : {}) },
         });
         if (updated.count > 0 && req.io) {
           req.io.to(`tenant:${tenantId}`).emit("whatsapp:status", {
             tenantId,
             providerMsgId: String(providerMsgId),
             status: newStatus,
+            errorMessage: failDetail,
           });
         }
       }

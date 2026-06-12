@@ -229,6 +229,13 @@ const TravelQuotesAdmin = lazy(() => import("./pages/travel/QuotesAdmin"));
 // docs/PRD_TRAVEL_QUOTE_BUILDER.md §3. RoleGuard allow=[ADMIN,MANAGER]
 // mirrors backend write RBAC.
 const TravelQuoteBuilder = lazy(() => import("./pages/travel/QuoteBuilder"));
+// PRD §7 page plan — Flight quick-quote (in-CRM fallback for the not-yet-built
+// Chrome flight plugin). Advisor manually enters up to 4 flight options;
+// markup applies server-side (POST /api/v1/flight-plugin/agent-quotes) and
+// the result panel surfaces the branded PDF + WhatsApp share. No RoleGuard —
+// backend gates on travel tenant + sub-brand access; any travel operator may
+// raise a quick quote (view-by-default convention like QuotesAdmin).
+const TravelFlightQuoteAgent = lazy(() => import("./pages/travel/FlightQuoteAgent"));
 const TravelInvoicesAdmin = lazy(() => import("./pages/travel/InvoicesAdmin"));
 // Arc 2 #901 slice 7 frontend consumer — cross-invoice payment-milestone
 // dashboard. Consumes /api/travel/payment-schedules/upcoming (backend commit
@@ -1427,6 +1434,10 @@ export default function App() {
                   RoleGuard allow=[ADMIN,MANAGER] mirrors backend write RBAC. */}
               <Route path="travel/quotes/builder" element={<TravelOnly><RoleGuard allow={["ADMIN", "MANAGER"]} feature="Quote Builder" roles="manager or admin"><TravelQuoteBuilder /></RoleGuard></TravelOnly>} />
               <Route path="travel/quotes/builder/:id" element={<TravelOnly><RoleGuard allow={["ADMIN", "MANAGER"]} feature="Quote Builder" roles="manager or admin"><TravelQuoteBuilder /></RoleGuard></TravelOnly>} />
+              {/* PRD §7 — Flight quick-quote (FlightQuoteAgent). Manual
+                  fallback for the Chrome flight plugin: up to 4 options,
+                  server-side markup, branded PDF + WhatsApp share. */}
+              <Route path="travel/flights/quote" element={<TravelOnly><TravelFlightQuoteAgent /></TravelOnly>} />
               <Route path="travel/invoices-admin" element={<TravelOnly><TravelInvoicesAdmin /></TravelOnly>} />
               {/* Arc 2 #901 slice 7 — cross-invoice milestone dashboard.
                   Operator-facing aggregate of upcoming/overdue payment

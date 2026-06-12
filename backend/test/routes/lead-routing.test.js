@@ -46,6 +46,11 @@
  *     specific_user (2)
  *   apply-all: 200 returns { processed, assigned } envelope, scoped to
  *     unassigned contacts only (assignedToId=null filter) (1)
+ *   subBrand condition (TRAVEL_CRM_PRD §4.1 gap A8): 400 unknown code on
+ *     create + update; 201 case-insensitive accept (scalar + in-op shapes);
+ *     apply matches only contacts whose Contact.subBrand equals the rule
+ *     value (null subBrand never matches); rules WITHOUT subBrand keep
+ *     matching sub-branded contacts (backward compat) (7)
  *
  * Test pattern
  * ────────────
@@ -585,5 +590,195 @@ describe('POST /apply-all — bulk apply rules', () => {
     // Only the matching contact is updated.
     expect(prisma.contact.update).toHaveBeenCalledTimes(1);
     expect(prisma.contact.update.mock.calls[0][0].where).toEqual({ id: 1 });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// subBrand condition — TRAVEL_CRM_PRD §4.1 (gap A8)
+//
+// "Rule-based brand assignment — extend rule schema to filter on subBrand."
+// subBrand is a first-class condition key: validated against the canonical
+// sub-brand codes from lib/subBrandConfig.js (tmc | rfu | travelstall |
+// visasure, case-insensitive like #299 status) and honored by the generic
+// checkConditionsMatch path against Contact.subBrand. Rules WITHOUT a
+// subBrand condition must keep matching everything (backward compat).
+// ─────────────────────────────────────────────────────────────────────────
+
+describe('subBrand condition (TRAVEL_CRM_PRD §4.1 gap A8)', () => {
+  test('400 when conditions.subBrand is not a canonical sub-brand code', async () => {
+    const res = await request(makeApp())
+      .post('/api/lead-routing')
+      .send({ name: 'Bogus brand rule', conditions: { subBrand: 'acme' } });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/invalid subBrand "acme"/i);
+    expect(res.body.error).toMatch(/tmc, rfu, travelstall, visasure/);
+    expect(prisma.leadRoutingRule.create).not.toHaveBeenCalled();
+  });
+
+  test('400 when conditions.subBrand is invalid on PUT update (revalidated like status)', async () => {
+    prisma.leadRoutingRule.findFirst.mockResolvedValue({
+      id: 60, tenantId: 1, name: 'Existing', conditions: '{}',
+    });
+
+    const res = await request(makeApp({ tenantId: 1 }))
+      .put('/api/lead-routing/60')
+      .send({ conditions: { subBrand: 'umrah' } });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/invalid subBrand "umrah"/i);
+    expect(prisma.leadRoutingRule.update).not.toHaveBeenCalled();
+  });
+
+  test('201 accepts canonical subBrand case-insensitively + persists it into the stringified conditions', async () => {
+    prisma.leadRoutingRule.create.mockImplementation(({ data }) =>
+      Promise.resolve({ id: 200, ...data })
+    );
+
+    const res = await request(makeApp({ tenantId: 42 }))
+      .post('/api/lead-routing')
+      .send({ name: 'RFU leads', conditions: { subBrand: 'RFU' } });
+
+    expect(res.status).toBe(201);
+    const args = prisma.leadRoutingRule.create.mock.calls[0][0];
+    // Stored as a JSON STRING per the @db.Text column convention; the value
+    // keeps its wire casing (validation is case-insensitive, matching too).
+    expect(typeof args.data.conditions).toBe('string');
+    expect(JSON.parse(args.data.conditions).subBrand).toBe('RFU');
+    expect(res.body.conditions).toEqual({ subBrand: 'RFU' });
+  });
+
+  test('201 accepts the { op: "in", value: [...] } shape with canonical codes only', async () => {
+    prisma.leadRoutingRule.create.mockImplementation(({ data }) =>
+      Promise.resolve({ id: 201, ...data })
+    );
+
+    const ok = await request(makeApp())
+      .post('/api/lead-routing')
+      .send({ name: 'Multi-brand', conditions: { subBrand: { op: 'in', value: ['tmc', 'rfu'] } } });
+    expect(ok.status).toBe(201);
+
+    const bad = await request(makeApp())
+      .post('/api/lead-routing')
+      .send({ name: 'Multi-brand bad', conditions: { subBrand: { op: 'in', value: ['tmc', 'acme'] } } });
+    expect(bad.status).toBe(400);
+    expect(bad.body.error).toMatch(/invalid subBrand "acme"/i);
+  });
+
+  test('apply: rule with subBrand matches a contact whose Contact.subBrand equals the rule value', async () => {
+    prisma.contact.findFirst.mockResolvedValue({
+      id: 300, tenantId: 1, status: 'Lead', subBrand: 'rfu',
+    });
+    prisma.leadRoutingRule.findMany.mockResolvedValue([
+      {
+        id: 70,
+        tenantId: 1,
+        name: 'RFU brand rule',
+        conditions: JSON.stringify({ subBrand: 'rfu' }),
+        assignType: 'specific_user',
+        assignTo: 77,
+        isActive: true,
+        priority: 10,
+      },
+    ]);
+    prisma.contact.update.mockResolvedValue({ id: 300, assignedToId: 77 });
+
+    const res = await request(makeApp({ tenantId: 1 }))
+      .post('/api/lead-routing/apply/300')
+      .send({});
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      contactId: 300,
+      assignedUserId: 77,
+      matchedRule: { id: 70, name: 'RFU brand rule' },
+    });
+    expect(prisma.contact.update).toHaveBeenCalledWith({
+      where: { id: 300 },
+      data: { assignedToId: 77 },
+    });
+  });
+
+  test('apply: rule with subBrand does NOT match a contact with a different subBrand', async () => {
+    prisma.contact.findFirst.mockResolvedValue({
+      id: 301, tenantId: 1, status: 'Lead', subBrand: 'tmc',
+    });
+    prisma.leadRoutingRule.findMany.mockResolvedValue([
+      {
+        id: 70,
+        tenantId: 1,
+        name: 'RFU brand rule',
+        conditions: JSON.stringify({ subBrand: 'rfu' }),
+        assignType: 'specific_user',
+        assignTo: 77,
+        isActive: true,
+        priority: 10,
+      },
+    ]);
+
+    const res = await request(makeApp({ tenantId: 1 }))
+      .post('/api/lead-routing/apply/301')
+      .send({});
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ contactId: 301, assignedUserId: null, matchedRule: null });
+    expect(prisma.contact.update).not.toHaveBeenCalled();
+  });
+
+  test('apply: contact with NULL subBrand never matches a sub-branded rule', async () => {
+    prisma.contact.findFirst.mockResolvedValue({
+      id: 302, tenantId: 1, status: 'Lead', subBrand: null,
+    });
+    prisma.leadRoutingRule.findMany.mockResolvedValue([
+      {
+        id: 70,
+        tenantId: 1,
+        name: 'RFU brand rule',
+        conditions: JSON.stringify({ subBrand: 'rfu' }),
+        assignType: 'specific_user',
+        assignTo: 77,
+        isActive: true,
+        priority: 10,
+      },
+    ]);
+
+    const res = await request(makeApp({ tenantId: 1 }))
+      .post('/api/lead-routing/apply/302')
+      .send({});
+
+    expect(res.status).toBe(200);
+    expect(res.body.assignedUserId).toBeNull();
+    expect(res.body.matchedRule).toBeNull();
+    expect(prisma.contact.update).not.toHaveBeenCalled();
+  });
+
+  test('apply: rule WITHOUT a subBrand condition still matches a sub-branded contact (backward compat)', async () => {
+    prisma.contact.findFirst.mockResolvedValue({
+      id: 303, tenantId: 1, status: 'Lead', subBrand: 'travelstall',
+    });
+    prisma.leadRoutingRule.findMany.mockResolvedValue([
+      {
+        id: 71,
+        tenantId: 1,
+        name: 'Pre-travel legacy rule',
+        conditions: JSON.stringify({ status: 'Lead' }),
+        assignType: 'specific_user',
+        assignTo: 88,
+        isActive: true,
+        priority: 10,
+      },
+    ]);
+    prisma.contact.update.mockResolvedValue({ id: 303, assignedToId: 88 });
+
+    const res = await request(makeApp({ tenantId: 1 }))
+      .post('/api/lead-routing/apply/303')
+      .send({});
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      contactId: 303,
+      assignedUserId: 88,
+      matchedRule: { id: 71, name: 'Pre-travel legacy rule' },
+    });
   });
 });

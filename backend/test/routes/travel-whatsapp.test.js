@@ -13,9 +13,17 @@
  *   POST /api/travel/whatsapp/webhook  — inbound ingest: thread upsert
  *                                        (unread semantics mirror the Meta
  *                                        webhook), INBOUND row, socket emit
- *                                        "whatsapp:received"; DELIVERED/READ
- *                                        receipts via providerMsgId; token
- *                                        guard via WATI_WEBHOOK_TOKEN.
+ *                                        "whatsapp:received"; DELIVERED/READ/
+ *                                        FAILED receipts via providerMsgId
+ *                                        (FAILED persists failedDetail as
+ *                                        errorMessage); token guard via
+ *                                        WATI_WEBHOOK_TOKEN.
+ *   POST /api/travel/whatsapp/sync     — outbound delivery-state
+ *                                        reconciliation: Wati getMessages
+ *                                        statusString/failedDetail adopted
+ *                                        onto OUTBOUND rows by providerMsgId,
+ *                                        rank-guarded (never downgrades),
+ *                                        "whatsapp:status" emit per change.
  *
  * Harness mirrors travel-cancellation-policies.test.js — patch the prisma
  * singleton BEFORE requiring the router; real HS256 JWTs so the full
@@ -43,6 +51,8 @@ prisma.whatsAppMessage = {
   ...(prisma.whatsAppMessage || {}),
   create: vi.fn(),
   updateMany: vi.fn(),
+  findFirst: vi.fn(),
+  update: vi.fn(),
 };
 prisma.contact = { ...(prisma.contact || {}), findFirst: vi.fn() };
 prisma.tenant = prisma.tenant || {};
@@ -61,6 +71,9 @@ import { createRequire } from 'node:module';
 const requireCJS = createRequire(import.meta.url);
 const JWT_SECRET = process.env.JWT_SECRET || 'enterprise_super_secret_key_2026';
 const router = requireCJS('../../routes/travel_whatsapp');
+// Same CJS module instance the router holds — spies on it intercept the
+// router's calls (watiClient's documented self-mocking seam).
+const watiClient = requireCJS('../../services/watiClient');
 
 // Captured socket emits — the fake req.io mirror of server.js's injection.
 let emits = [];
@@ -96,6 +109,8 @@ beforeEach(() => {
   prisma.whatsAppThread.create.mockReset().mockResolvedValue({ ...THREAD, unreadCount: 1 });
   prisma.whatsAppMessage.create.mockReset().mockResolvedValue({ id: 991 });
   prisma.whatsAppMessage.updateMany.mockReset().mockResolvedValue({ count: 1 });
+  prisma.whatsAppMessage.findFirst.mockReset().mockResolvedValue(null);
+  prisma.whatsAppMessage.update.mockReset().mockResolvedValue({ id: 47 });
   prisma.contact.findFirst.mockReset().mockResolvedValue(null);
   prisma.tenant.findUnique.mockReset().mockResolvedValue(TRAVEL_TENANT);
   prisma.tenant.findFirst.mockReset().mockResolvedValue(TRAVEL_TENANT);
@@ -244,6 +259,117 @@ describe('POST /api/travel/whatsapp/sync', () => {
   });
 });
 
+// ─── Sync outbound delivery-state reconciliation ────────────────────
+// The send path stamps SENT when Wati's HTTP API accepts the call, but
+// Meta can reject asynchronously (live-confirmed 2026-06-12: "(#131037)
+// display name approval" failed every send while the UI showed a grey
+// SENT tick). The sync must adopt getMessages' statusString/failedDetail.
+
+describe('POST /api/travel/whatsapp/sync — outbound status reconciliation', () => {
+  const FAIL_DETAIL =
+    '(#131037) WhatsApp provided number needs display name approval before message can be sent.';
+
+  function outboundItem(overrides = {}) {
+    return {
+      id: '6a2bb9c00e16a58679f56ae4',
+      eventType: 'message',
+      type: 'text',
+      text: 'hello',
+      owner: true,
+      statusString: 'FAILED',
+      failedDetail: FAIL_DETAIL,
+      created: '2026-06-12T07:48:16.823Z',
+      ...overrides,
+    };
+  }
+
+  function primeWati(items) {
+    vi.spyOn(watiClient, 'isEnabled').mockReturnValue(true);
+    vi.spyOn(watiClient, 'getContacts').mockResolvedValue({
+      stub: false,
+      contacts: [{ wAid: '916200039874' }],
+    });
+    vi.spyOn(watiClient, 'getMessages').mockResolvedValue({ stub: false, items });
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  test('20. FAILED statusString flips a SENT row to FAILED + errorMessage + whatsapp:status emit', async () => {
+    primeWati([outboundItem()]);
+    prisma.whatsAppMessage.findFirst.mockResolvedValue({ id: 47, status: 'SENT', threadId: 11 });
+
+    const res = await request(makeApp())
+      .post('/api/travel/whatsapp/sync?force=1')
+      .set('Authorization', `Bearer ${tokenFor()}`);
+    expect(res.status).toBe(200);
+    expect(res.body.synced).toBe(true);
+    expect(res.body.statusUpdates).toBe(1);
+
+    // Row matched by providerMsgId, scoped to OUTBOUND + tenant.
+    const findArg = prisma.whatsAppMessage.findFirst.mock.calls[0][0];
+    expect(findArg.where).toMatchObject({
+      tenantId: 3,
+      providerMsgId: '6a2bb9c00e16a58679f56ae4',
+      direction: 'OUTBOUND',
+    });
+
+    const upd = prisma.whatsAppMessage.update.mock.calls[0][0];
+    expect(upd.where).toEqual({ id: 47 });
+    expect(upd.data.status).toBe('FAILED');
+    expect(upd.data.errorMessage).toMatch(/131037/);
+
+    const statusEmit = emits.find((e) => e.ev === 'whatsapp:status');
+    expect(statusEmit.room).toBe('tenant:3');
+    expect(statusEmit.payload).toMatchObject({
+      tenantId: 3,
+      threadId: 11,
+      status: 'FAILED',
+      errorMessage: FAIL_DETAIL,
+    });
+  });
+
+  test('21. never downgrades — READ row ignores a DELIVERED statusString', async () => {
+    primeWati([outboundItem({ statusString: 'DELIVERED', failedDetail: null })]);
+    prisma.whatsAppMessage.findFirst.mockResolvedValue({ id: 47, status: 'READ', threadId: 11 });
+
+    const res = await request(makeApp())
+      .post('/api/travel/whatsapp/sync?force=1')
+      .set('Authorization', `Bearer ${tokenFor()}`);
+    expect(res.status).toBe(200);
+    expect(res.body.statusUpdates).toBe(0);
+    expect(prisma.whatsAppMessage.update).not.toHaveBeenCalled();
+    expect(emits.find((e) => e.ev === 'whatsapp:status')).toBeUndefined();
+  });
+
+  test('22. unknown providerMsgId is skipped without writes', async () => {
+    primeWati([outboundItem()]);
+    prisma.whatsAppMessage.findFirst.mockResolvedValue(null);
+
+    const res = await request(makeApp())
+      .post('/api/travel/whatsapp/sync?force=1')
+      .set('Authorization', `Bearer ${tokenFor()}`);
+    expect(res.status).toBe(200);
+    expect(res.body.statusUpdates).toBe(0);
+    expect(prisma.whatsAppMessage.update).not.toHaveBeenCalled();
+  });
+
+  test('23. DELIVERED statusString advances a SENT row (no errorMessage written)', async () => {
+    primeWati([outboundItem({ statusString: 'DELIVERED', failedDetail: null })]);
+    prisma.whatsAppMessage.findFirst.mockResolvedValue({ id: 47, status: 'SENT', threadId: 11 });
+
+    const res = await request(makeApp())
+      .post('/api/travel/whatsapp/sync?force=1')
+      .set('Authorization', `Bearer ${tokenFor()}`);
+    expect(res.status).toBe(200);
+    expect(res.body.statusUpdates).toBe(1);
+    const upd = prisma.whatsAppMessage.update.mock.calls[0][0];
+    expect(upd.data.status).toBe('DELIVERED');
+    expect(upd.data.errorMessage).toBeUndefined();
+  });
+});
+
 // ─── Wati webhook ───────────────────────────────────────────────────
 
 describe('GET /api/travel/whatsapp/webhook', () => {
@@ -334,6 +460,24 @@ describe('POST /api/travel/whatsapp/webhook', () => {
       .post('/api/travel/whatsapp/webhook?tenantId=3')
       .send({ eventType: 'sentMessageREAD', whatsappMessageId: 'wamid-9' });
     expect(prisma.whatsAppMessage.updateMany.mock.calls[0][0].data.status).toBe('READ');
+  });
+
+  test('15b. FAILED receipt maps to FAILED + persists failedDetail as errorMessage', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/whatsapp/webhook?tenantId=3')
+      .send({
+        eventType: 'sentMessageFAILED',
+        whatsappMessageId: 'wamid-9',
+        failedDetail: '(#131037) WhatsApp provided number needs display name approval before message can be sent.',
+      });
+    expect(res.status).toBe(200);
+    const arg = prisma.whatsAppMessage.updateMany.mock.calls[0][0];
+    expect(arg.where).toMatchObject({ tenantId: 3, providerMsgId: 'wamid-9' });
+    expect(arg.data.status).toBe('FAILED');
+    expect(arg.data.errorMessage).toMatch(/131037/);
+    expect(emits[0].ev).toBe('whatsapp:status');
+    expect(emits[0].payload).toMatchObject({ status: 'FAILED' });
+    expect(emits[0].payload.errorMessage).toMatch(/display name approval/);
   });
 
   test('16. token guard: WATI_WEBHOOK_TOKEN set + wrong token → 401; right token → 200', async () => {

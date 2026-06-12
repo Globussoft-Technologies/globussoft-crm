@@ -58,6 +58,16 @@ const {
   groupLinesBySac,
 } = require("../lib/hsnSacMapper");
 const listProjection = require("../lib/listProjection");
+// PRD §4.4 gap A2 — CA / Tally file-download exporters (pure helpers; the
+// route handlers below do the Prisma fetch + GST math then delegate).
+// Renamed on import to avoid clashing with the generic-CRM exporters
+// (lib/tallyXmlExport.js + lib/caCsvExport.js used by routes/billing.js).
+const {
+  buildTallyXml: buildTravelTallyXml,
+  buildCaCsv: buildTravelCaCsv,
+} = require("../lib/travelAccountingExport");
+// Sub-brand → legal-entity / GSTIN resolution (Q21 config blob on Tenant).
+const { resolveForSubBrand } = require("../lib/subBrandConfig");
 
 const VALID_INVOICE_STATUSES = ["Draft", "Issued", "Partial", "Paid", "Voided"];
 
@@ -867,6 +877,301 @@ router.get(
 );
 
 // ============================================================================
+// GET /api/travel/invoices/export/tally.xml — Tally-importable Sales vouchers
+// GET /api/travel/invoices/export/ca.csv   — CA-handover line-level CSV
+//
+// TRAVEL_CRM_PRD §4.4 ("CA / Tally export — exportable financial reports;
+// light accounting only") — gap A2, docs/TRAVEL_PRD_GAP_ANALYSIS_2026-06-12.md.
+// Travel-invoice analogue of routes/billing.js GET /export/tally.xml +
+// /export/ca-summary.csv (generic-CRM Invoice flavour of the same PRD
+// section). File building delegated to lib/travelAccountingExport.js (pure);
+// these handlers do the fetch + per-invoice GST math + sub-brand
+// legal-entity resolution, then stream the attachment.
+//
+// === Auth ===
+// ADMIN | MANAGER only (verifyRole) + travel vertical (requireTravelTenant)
+// — mirrors gstr1-export / aged-receivable: finance surfaces are not
+// exposed to USER role.
+//
+// === Query params (both endpoints) ===
+//   ?from=YYYY-MM-DD  — optional range start (inclusive) on the invoice date
+//   ?to=YYYY-MM-DD    — optional range end (inclusive; date-only values are
+//                        pushed to end-of-day). Defaults: current Indian
+//                        financial year (Apr 1 → Mar 31) — CA exports are
+//                        FY-shaped by convention (mirrors billing.js).
+//                        Invalid value → 400 INVALID_DATE_RANGE.
+//   ?subBrand=tmc     — optional explicit sub-brand filter (validated via
+//                        assertValidSubBrand → 400 INVALID_SUB_BRAND),
+//                        intersected with the caller's subBrandAccess set
+//                        (silent-empty "__none__" substitution, same as
+//                        gstr1-export).
+//
+// === Invoice-date semantics ===
+// TravelInvoice has no issuedAt column (see the slice-5 NOTE near the
+// /:id/issue handler) — createdAt is the file-wide invoice-date proxy
+// (by-month / by-quarter / gstr1-export all filter on it), so the
+// ?from/?to range filters createdAt here too.
+//
+// === Scope ===
+// Voided invoices are EXCLUDED (cancelled paper doesn't belong in the
+// books; their financial effect rides on the linked CreditNote rows,
+// which ARE exported as their own — negative-total — vouchers/rows).
+// All docTypes included. Draft invoices included (light accounting —
+// the CA filters by the Status column; Tally users can drop unwanted
+// vouchers at import preview).
+//
+// === GST math ===
+// Same conventions as gstr1-export's B2B section: taxable = sum of
+// SAC-bearing lines only (tax/fee/tcs/tds withholding lines are skipped —
+// TCS rides the invoice-level tcsAmount column instead), per-line rate
+// via gstRateForCategory, CGST/SGST-vs-IGST split via the per-contact
+// interstate resolution (resolveStateCodes + isInterstateSupply, cached
+// per contactId).
+// ============================================================================
+
+// Parse optional ?from/?to into an inclusive Date range. Defaults to the
+// current Indian financial year (Apr 1 → Mar 31) — mirrors billing.js's
+// §4.4 exporters. Throws 400 INVALID_DATE_RANGE on unparseable input.
+function parseAccountingExportRange(query) {
+  const now = new Date();
+  const fyStartYear = now.getMonth() < 3 ? now.getFullYear() - 1 : now.getFullYear();
+  let from = new Date(fyStartYear, 3, 1, 0, 0, 0, 0);
+  let to = new Date(fyStartYear + 1, 2, 31, 23, 59, 59, 999);
+
+  if (query.from != null && String(query.from).trim() !== "") {
+    from = new Date(String(query.from).trim());
+  }
+  if (query.to != null && String(query.to).trim() !== "") {
+    to = new Date(String(query.to).trim());
+    // Date-only "YYYY-MM-DD" → push to end-of-day so the inclusive range
+    // matches operator expectation ("to 2026-06-30" includes the 30th).
+    if (/^\d{4}-\d{2}-\d{2}$/.test(String(query.to).trim())) {
+      to.setHours(23, 59, 59, 999);
+    }
+  }
+  if (!Number.isFinite(from.getTime()) || !Number.isFinite(to.getTime())) {
+    const err = new Error("from/to must be valid dates (YYYY-MM-DD)");
+    err.status = 400;
+    err.code = "INVALID_DATE_RANGE";
+    throw err;
+  }
+  return { from, to };
+}
+
+// Shared collector for both export endpoints: fetch in-scope invoices +
+// lines + contacts + sub-brand config, compute per-invoice GST, and return
+// normalized rows in the lib/travelAccountingExport.js shape.
+async function collectAccountingExportRows(req) {
+  const { from, to } = parseAccountingExportRange(req.query);
+
+  let subBrandFilter = null;
+  if (req.query.subBrand != null && String(req.query.subBrand).trim() !== "") {
+    const sb = String(req.query.subBrand).trim();
+    assertValidSubBrand(sb);
+    subBrandFilter = sb;
+  }
+
+  const where = {
+    tenantId: req.travelTenant.id,
+    createdAt: { gte: from, lte: to },
+    status: { not: "Voided" },
+  };
+  if (subBrandFilter) where.subBrand = subBrandFilter;
+
+  const allowed = await getSubBrandAccessSet(req.user.userId);
+  if (allowed) {
+    where.subBrand = where.subBrand
+      ? canAccessSubBrand(allowed, where.subBrand)
+        ? where.subBrand
+        : "__none__"
+      : { in: [...allowed] };
+  }
+
+  const invoices = await prisma.travelInvoice.findMany({
+    where,
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+  });
+
+  // Bulk-load lines + contacts in one round-trip each (no N+1).
+  const invoiceIds = invoices.map((i) => i.id);
+  const allLines =
+    invoiceIds.length > 0
+      ? await prisma.travelInvoiceLine.findMany({
+          where: { invoiceId: { in: invoiceIds }, tenantId: req.travelTenant.id },
+          orderBy: [{ invoiceId: "asc" }, { sortOrder: "asc" }, { id: "asc" }],
+        })
+      : [];
+  const linesByInvoice = new Map();
+  for (const l of allLines) {
+    if (!linesByInvoice.has(l.invoiceId)) linesByInvoice.set(l.invoiceId, []);
+    linesByInvoice.get(l.invoiceId).push(l);
+  }
+
+  const contactIds = [...new Set(invoices.map((i) => i.contactId))];
+  let contactById = new Map();
+  if (contactIds.length > 0) {
+    const contacts = await prisma.contact.findMany({
+      where: { id: { in: contactIds }, tenantId: req.travelTenant.id },
+      select: { id: true, name: true, gst: true },
+    });
+    contactById = new Map(contacts.map((c) => [c.id, c]));
+  }
+
+  // Tenant row with the sub-brand config blob (requireTravelTenant only
+  // selects id/vertical/name/slug, so re-fetch with subBrandConfigJson).
+  const tenantRow = await prisma.tenant.findUnique({
+    where: { id: req.travelTenant.id },
+    select: { name: true, slug: true, subBrandConfigJson: true },
+  });
+
+  // Per-contact interstate resolution, cached — same pattern as
+  // gstr1-export (multiple invoices for one contact share a state pair).
+  const interstateCache = new Map();
+  async function isInterstateFor(contactId) {
+    if (interstateCache.has(contactId)) return interstateCache.get(contactId);
+    let result = false;
+    try {
+      const codes = await resolveStateCodes({
+        prisma,
+        tenantId: req.travelTenant.id,
+        contactId,
+        operatorOverride: null,
+        customerOverride: null,
+      });
+      result = isInterstateSupply(codes.operatorStateCode, codes.customerStateCode);
+    } catch (_e) {
+      result = false; // conservative intra-state fallback (mirrors gstr1-export)
+    }
+    interstateCache.set(contactId, result);
+    return result;
+  }
+
+  const rows = [];
+  for (const inv of invoices) {
+    const isInterstate = await isInterstateFor(inv.contactId);
+    const contact = contactById.get(inv.contactId) || {};
+    const exportLines = [];
+    let taxable = 0;
+    let cgst = 0;
+    let sgst = 0;
+    let igst = 0;
+    for (const l of linesByInvoice.get(inv.id) || []) {
+      const sacCode = sacForLineType(l.lineType);
+      // Withholding / passthrough lines (tax/fee/tcs/tds → null SAC) are
+      // excluded from the taxable base; invoice-level TCS rides the
+      // tcsAmount column (same exclusion as gstr1-export's B2B rows).
+      if (sacCode === null) continue;
+      const amt = Number(l.amount || 0);
+      const rate = gstRateForCategory(l.lineType);
+      const tax = round2((amt * rate) / 100);
+      let lineCgst = 0;
+      let lineSgst = 0;
+      let lineIgst = 0;
+      if (isInterstate) {
+        lineIgst = tax;
+      } else {
+        lineCgst = round2(tax / 2);
+        lineSgst = round2(tax / 2);
+      }
+      taxable = round2(taxable + amt);
+      cgst = round2(cgst + lineCgst);
+      sgst = round2(sgst + lineSgst);
+      igst = round2(igst + lineIgst);
+      exportLines.push({
+        description: l.description || "",
+        sacCode,
+        taxableValue: amt,
+        cgst: lineCgst,
+        sgst: lineSgst,
+        igst: lineIgst,
+      });
+    }
+    const tcs = Number(inv.tcsAmount == null ? 0 : inv.tcsAmount);
+    const brandConfig = resolveForSubBrand(tenantRow, inv.subBrand);
+    rows.push({
+      invoiceNum: inv.invoiceNum,
+      date: inv.createdAt,
+      customerName: contact.name || `Contact #${inv.contactId}`,
+      customerGstin: contact.gst || null,
+      subBrand: inv.subBrand,
+      legalEntityCode: brandConfig.legalEntityCode || null,
+      status: inv.status,
+      taxableAmount: taxable,
+      cgstAmount: cgst,
+      sgstAmount: sgst,
+      igstAmount: igst,
+      tcsAmount: tcs,
+      totalAmount: round2(taxable + cgst + sgst + igst + tcs),
+      lines: exportLines,
+    });
+  }
+
+  return {
+    rows,
+    tenantRow,
+    subBrandFilter,
+    fromIso: from.toISOString().slice(0, 10),
+    toIso: to.toISOString().slice(0, 10),
+  };
+}
+
+router.get(
+  "/invoices/export/tally.xml",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const { rows, fromIso, toIso, subBrandFilter } =
+        await collectAccountingExportRows(req);
+
+      const xml = buildTravelTallyXml(rows, {
+        tenantName: req.travelTenant.name,
+      });
+
+      const filename = `travel-tally-${fromIso}-${toIso}-${subBrandFilter || "all"}.xml`;
+      res.setHeader("Content-Type", "application/xml; charset=utf-8");
+      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+      return res.status(200).send(xml);
+    } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-invoices] export/tally.xml error:", e.message);
+      res.status(500).json({ error: "Failed to generate Tally XML export" });
+    }
+  },
+);
+
+router.get(
+  "/invoices/export/ca.csv",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const { rows, fromIso, toIso, subBrandFilter } =
+        await collectAccountingExportRows(req);
+
+      // BOM prefix so Excel auto-detects UTF-8 (gstr1-export convention);
+      // the lib output itself stays BOM-free for easy test/tooling parses.
+      const csv = "\uFEFF" + buildTravelCaCsv(rows);
+
+      const filename = `travel-ca-${fromIso}-${toIso}-${subBrandFilter || "all"}.csv`;
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+      return res.status(200).send(csv);
+    } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-invoices] export/ca.csv error:", e.message);
+      res.status(500).json({ error: "Failed to generate CA CSV export" });
+    }
+  },
+);
+
+// ============================================================================
 // GET /api/travel/invoices/aged-receivable — Aged Receivable report
 // (Arc 2 #901 slice 23 — PRD_TRAVEL_BILLING FR-3.6.a).
 //
@@ -1583,7 +1888,7 @@ router.get(
       let contactById = new Map();
       if (byContact.size > 0) {
         const contacts = await prisma.contact.findMany({
-          where: { id: { in: [...byContact.keys()] } },
+          where: { id: { in: [...byContact.keys()] }, tenantId: req.travelTenant.id },
           select: { id: true, name: true, gst: true },
         });
         contactById = new Map(contacts.map((c) => [c.id, c]));

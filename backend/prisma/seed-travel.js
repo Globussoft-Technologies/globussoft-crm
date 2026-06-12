@@ -717,6 +717,42 @@ async function main() {
   // Idempotent — see seedDefaultCancellationPolicies doc-comment.
   await seedDefaultCancellationPolicies(tenant.id);
 
+  // ── 13. Q14 per-type retention policies (gap A4) ─────────────────────
+  //
+  // TRAVEL_CRM_PRD.md §4.7 + Q14 accepted GS defaults, seeded as
+  // RetentionPolicy rows for this tenant (idempotent — existing rows are
+  // left alone so admin tweaks survive re-runs):
+  //   ContactAttachment 730d  — passport/Aadhaar/PAN document uploads,
+  //                             24 months post-trip (engine cuts on
+  //                             createdAt; upload date approximates the
+  //                             post-trip anchor)
+  //   CallLog           365d  — call recordings, 12 months
+  //   VoiceSession      365d  — telephony recordings/transcripts, 12 months
+  //   TravelInvoice     2555d — financial records, 84 months (~7y); the
+  //                             engine's ENTITY_GUARDS allowlist excludes
+  //                             Issued/Partial so open receivables are
+  //                             never auto-purged
+  //
+  // INTENTIONAL OMISSION (per Q14): TravelDiagnostic gets NO retention
+  // policy — diagnostic responses are retained for the lifetime of the
+  // profile. The engine never sweeps an entity without a policy row, so
+  // "no row" IS the lifetime-retention representation. Do not add one.
+  //
+  // All seeded rows ship isActive=false — admins must explicitly enable
+  // purge from /privacy (same convention as the wellness clinical
+  // defaults in seed-wellness.js).
+  try {
+    const { seedTravelRetentionPolicies } = require("../cron/retentionEngine");
+    const created = await seedTravelRetentionPolicies(tenant.id);
+    if (created.length) {
+      console.log(`[seed-travel] retention policies seeded: ${created.map((r) => r.entity).join(", ")}`);
+    } else {
+      console.log("[seed-travel] retention policies already present — skipping");
+    }
+  } catch (e) {
+    console.warn(`[seed-travel] retention-policy seed skipped: ${e.message}`);
+  }
+
   console.log("[seed-travel] done — Travel Stall demo tenant + placeholder content seeded.");
   console.log("[seed-travel] Login: yasin@travelstall.in / password123");
 }
@@ -1075,6 +1111,27 @@ async function seedSampleTrips(tenantId) {
     }
   }
   console.log(`[seed-travel] sample trips: ${tripPlans.length} (+ 1 microsite)`);
+
+  // Seed a couple of CustomerTraveller rows for the portal demo customer
+  // (Ahmed, RFU pilgrim) so the unified "Travel Documents" surface
+  // (routes/portal.js GET/POST /travel/travellers) shows data on first
+  // login. Keyed to contactId — works for all 4 sub-brands. Idempotent:
+  // only seed when the pilgrim has no travellers yet.
+  const pilgrimTravellers = await prisma.customerTraveller.count({
+    where: { contactId: pilgrim.id, tenantId },
+  });
+  if (pilgrimTravellers === 0) {
+    const pilgrimSubBrand = ["tmc", "rfu", "travel_stall", "visa_sure"].includes(pilgrim.subBrand)
+      ? pilgrim.subBrand
+      : "rfu";
+    await prisma.customerTraveller.createMany({
+      data: [
+        { tenantId, contactId: pilgrim.id, subBrand: pilgrimSubBrand, fullName: pilgrim.name || "Ahmed Khan", relationship: "self" },
+        { tenantId, contactId: pilgrim.id, subBrand: pilgrimSubBrand, fullName: "Fatima Khan", relationship: "spouse" },
+      ],
+    }).catch(() => null);
+    console.log(`[seed-travel] seeded 2 CustomerTraveller rows for ${pilgrim.email} (portal Travel Documents demo)`);
+  }
 
   // One accepted RFU itinerary for the pilgrim contact. Diagnostic-first
   // guard requires a TravelDiagnostic for (pilgrim, rfu) before an

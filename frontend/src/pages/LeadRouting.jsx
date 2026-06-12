@@ -1,5 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import React, { useContext, useEffect, useState } from 'react';
 import { Send, Plus, Trash2, Edit2, Play, X, ToggleLeft, ToggleRight, Filter, Loader2 } from 'lucide-react';
+import { AuthContext } from '../App';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 
@@ -10,7 +11,7 @@ const ASSIGN_TYPES = [
 ];
 
 const FIELD_OPTIONS = [
-  'source', 'status', 'country', 'city', 'state', 'industry',
+  'source', 'status', 'subBrand', 'country', 'city', 'state', 'industry',
   'companySize', 'company', 'firstTouchSource', 'lastTouchSource',
 ];
 
@@ -24,6 +25,12 @@ const OP_OPTIONS = [
 // #299: canonical lead pipeline statuses. Must stay in sync with backend
 // ALLOWED_STATUSES in backend/routes/lead_routing.js.
 const STATUS_OPTIONS = ['Lead', 'Prospect', 'Customer', 'Churned', 'Junk'];
+
+// TRAVEL_CRM_PRD §4.1 (gap A8): canonical travel sub-brand codes. Must stay
+// in sync with VALID_SUB_BRANDS in backend/lib/subBrandConfig.js. Picking
+// "— any —" leaves the value empty, which drops the row from the payload —
+// i.e. the rule places no subBrand filter at all (backward compatible).
+const SUB_BRAND_OPTIONS = ['tmc', 'rfu', 'travelstall', 'visasure'];
 
 // #370: country list for the routing-rule typeahead. A long unsearchable
 // <select> was unusable on real devices, so we render a free-text input
@@ -109,6 +116,12 @@ function formatConditions(conds) {
 
 export default function LeadRouting() {
   const notify = useNotify();
+  const { user } = useContext(AuthContext) || {};
+  // subBrand is a travel-vertical concept (TRAVEL_CRM_PRD §4.1) — hide the
+  // condition field entirely for wellness/generic tenants so their rule
+  // builder is unchanged.
+  const isTravelTenant = user?.tenant?.vertical === 'travel';
+  const fieldOptions = isTravelTenant ? FIELD_OPTIONS : FIELD_OPTIONS.filter(f => f !== 'subBrand');
   const [rules, setRules] = useState([]);
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -403,7 +416,7 @@ export default function LeadRouting() {
                 {form.rows.map((row, idx) => (
                   <div key={idx} style={{ display: 'grid', gridTemplateColumns: '1fr 110px 1.4fr 36px', gap: '0.4rem' }}>
                     <select className="input-field" value={row.field} onChange={e => updateRow(idx, 'field', e.target.value)}>
-                      {FIELD_OPTIONS.map(f => <option key={f} value={f}>{f}</option>)}
+                      {fieldOptions.map(f => <option key={f} value={f}>{f}</option>)}
                     </select>
                     <select className="input-field" value={row.op} onChange={e => updateRow(idx, 'op', e.target.value)}>
                       {OP_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
@@ -421,6 +434,14 @@ export default function LeadRouting() {
                         <option value="">— select —</option>
                         {STATUS_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
                       </select>
+                    ) : row.field === 'subBrand' && row.op !== 'in' ? (
+                      /* PRD §4.1 (gap A8): constrain subBrand to the canonical
+                         sub-brand codes, mirroring the status select. "Any"
+                         keeps the value empty so no subBrand filter is sent. */
+                      <select className="input-field" value={row.value} onChange={e => updateRow(idx, 'value', e.target.value)}>
+                        <option value="">— any —</option>
+                        {SUB_BRAND_OPTIONS.map(b => <option key={b} value={b}>{b}</option>)}
+                      </select>
                     ) : row.field === 'country' && row.op !== 'in' ? (
                       <input
                         className="input-field"
@@ -431,7 +452,7 @@ export default function LeadRouting() {
                         autoComplete="off"
                       />
                     ) : (
-                      <input className="input-field" value={row.value} onChange={e => updateRow(idx, 'value', e.target.value)} placeholder={row.op === 'in' ? (row.field === 'status' ? 'Lead,Prospect,Customer' : 'Website,Referral,Ad') : 'value'} />
+                      <input className="input-field" value={row.value} onChange={e => updateRow(idx, 'value', e.target.value)} placeholder={row.op === 'in' ? (row.field === 'status' ? 'Lead,Prospect,Customer' : row.field === 'subBrand' ? 'tmc,rfu' : 'Website,Referral,Ad') : 'value'} />
                     )}
                     <button onClick={() => removeRow(idx)} className="btn-secondary" style={{ padding: '0.4rem' }} title="Remove"><Trash2 size={14} /></button>
                   </div>

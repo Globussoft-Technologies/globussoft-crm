@@ -172,6 +172,23 @@ test.beforeAll(async ({ request }) => {
   }
   if (!testContactId) return;
 
+  // PRD §4.1 diagnostic-first guard: POST /quotes now refuses 422
+  // DIAGNOSTIC_REQUIRED for a contact without a prior diagnostic for the
+  // subBrand. Submit one against the seeded RFU bank v1 so the quote
+  // create below passes the guard (seed-travel.js seeds one).
+  const banksRes = await get(request, token, "/api/travel/diagnostic-banks?subBrand=rfu&active=true");
+  if (banksRes.ok()) {
+    const banks = (await banksRes.json()).banks || [];
+    const rfuBank = banks.find((b) => b.subBrand === "rfu");
+    if (rfuBank) {
+      await post(request, token, "/api/travel/diagnostics", {
+        bankId: rfuBank.id,
+        answers: { q1: "few", q2: "medium" },
+        contactId: testContactId,
+      }).catch(() => null);
+    }
+  }
+
   const qRes = await post(request, token, "/api/travel/quotes", {
     subBrand: "rfu",
     contactId: testContactId,

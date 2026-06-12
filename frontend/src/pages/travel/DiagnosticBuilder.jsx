@@ -24,7 +24,7 @@ import { useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
   AlertTriangle, CheckCircle, ChevronDown, ChevronLeft, ChevronUp,
-  Download, FileJson, Plus, Save, Settings, Trash2, Upload,
+  Download, FileJson, Plus, Save, Send, Settings, Trash2, Upload,
 } from 'lucide-react';
 import { fetchApi, getAuthToken } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
@@ -99,7 +99,9 @@ export default function DiagnosticBuilder() {
   // Current active bank for the selected sub-brand (so switching brand shows
   // THAT brand's existing questions to edit, not a static template).
   const [loadingBank, setLoadingBank] = useState(true);
-  const [bankInfo, setBankInfo] = useState(null); // { existing, version } | null
+  const [bankInfo, setBankInfo] = useState(null); // { existing, id?, version? } | null
+  // PRD §4.2 — Phase-1 scoring is view-only; "Request change" files a GS ticket.
+  const [showRequestChange, setShowRequestChange] = useState(false);
   const fileRef = useRef(null);
   const firstLoad = useRef(true);
 
@@ -120,7 +122,7 @@ export default function DiagnosticBuilder() {
         if (bank) {
           setQJson(prettyJson(bank.questionsJson, QUESTIONS_EXAMPLE));
           setRJson(prettyJson(bank.scoringRulesJson, SCORING_EXAMPLE));
-          setBankInfo({ existing: true, version: bank.version });
+          setBankInfo({ existing: true, id: bank.id, version: bank.version });
         } else {
           if (!firstLoad.current) {
             setQJson(QUESTIONS_EXAMPLE);
@@ -299,7 +301,34 @@ export default function DiagnosticBuilder() {
               ? `Editing a copy of v${bankInfo.version}. Saving ships v${bankInfo.version + 1} for this brand.`
               : 'No diagnostic bank yet for this brand — starting from a template. Saving ships v1.'}
         </p>
+        {!loadingBank && bankInfo?.existing && (
+          <div style={{ marginTop: 10 }}>
+            <button
+              type="button"
+              onClick={() => setShowRequestChange(true)}
+              style={secondaryBtn}
+              title="Scoring is view-only in Phase 1 — this routes a change-request ticket to GS."
+              aria-label="Request change"
+            >
+              <Send size={14} aria-hidden style={{ verticalAlign: -2, marginRight: 6 }} />
+              Request change
+            </button>
+            <span style={{ color: 'var(--text-secondary)', fontSize: 12, marginLeft: 8 }}>
+              Scoring is view-only in Phase 1 — file a change request and GS will pick it up.
+            </span>
+          </div>
+        )}
       </section>
+
+      {showRequestChange && bankInfo?.existing && (
+        <RequestChangeModal
+          bankId={bankInfo.id}
+          subBrand={subBrand}
+          version={bankInfo.version}
+          notify={notify}
+          onClose={() => setShowRequestChange(false)}
+        />
+      )}
 
       <ModeTabs mode={mode} onChange={setMode} subBrand={subBrand} />
 
@@ -771,6 +800,91 @@ function ScoringBandCard({ band, index, total, onChange, onRemove, onMoveUp, onM
   );
 }
 
+// ─── Request-change modal (PRD §4.2 — Phase-1 view-only scoring) ──────
+//
+// Scoring rules can't be edited in place during Phase 1 (protects the
+// 90-day analytics baseline). This modal files a change-request ticket
+// to GS via POST /api/travel/diagnostics/banks/:id/request-change and
+// toasts the created ticket id.
+
+function RequestChangeModal({ bankId, subBrand, version, notify, onClose }) {
+  const [summary, setSummary] = useState('');
+  const [details, setDetails] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  const onSubmit = async () => {
+    if (!summary.trim()) {
+      notify.error('Summary is required.');
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const res = await fetchApi(`/api/travel/diagnostics/banks/${bankId}/request-change`, {
+        method: 'POST',
+        body: JSON.stringify({
+          summary: summary.trim(),
+          details: details.trim() || undefined,
+        }),
+      });
+      notify.success(`Change request submitted — ticket #${res?.ticket?.id} routed to GS.`);
+      onClose();
+    } catch (e) {
+      notify.error(e?.data?.error || e?.message || 'Failed to submit change request');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div role="dialog" aria-modal="true" aria-label="Request scoring change" style={modalOverlay}>
+      <div style={modalCard}>
+        <h2 style={{ ...cardTitle, marginBottom: 4 }}>Request change</h2>
+        <p style={{ color: 'var(--text-secondary)', fontSize: 13, marginTop: 0 }}>
+          Scoring is view-only in Phase 1. This files a ticket to GS against the{' '}
+          {String(subBrand).toUpperCase()} bank v{version}.
+        </p>
+        <Field label="Summary (required)">
+          <input
+            type="text"
+            value={summary}
+            onChange={(e) => setSummary(e.target.value)}
+            style={input}
+            maxLength={140}
+            placeholder="e.g. Band 2 threshold feels too low for repeat organisers"
+            aria-label="Change request summary"
+          />
+        </Field>
+        <div style={{ marginTop: 10 }}>
+          <Field label="Details (optional)">
+            <textarea
+              value={details}
+              onChange={(e) => setDetails(e.target.value)}
+              rows={5}
+              style={{ ...textareaStyle, fontFamily: 'inherit' }}
+              placeholder="What should change, and why?"
+              aria-label="Change request details"
+            />
+          </Field>
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
+          <button type="button" onClick={onClose} style={secondaryBtn} disabled={submitting}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onSubmit}
+            disabled={submitting}
+            style={submitting ? primaryBtnDisabled : primaryBtn}
+            aria-label="Submit change request"
+          >
+            <Send size={14} aria-hidden /> {submitting ? 'Submitting…' : 'Submit request'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Small helpers ────────────────────────────────────────────────────
 
 function Field({ label, children }) {
@@ -1223,4 +1337,15 @@ const versionPill = {
   padding: '4px 10px', borderRadius: 999, fontSize: 12, fontWeight: 500,
   background: 'var(--subtle-bg)', color: 'var(--text-primary)',
   border: '1px solid var(--border-color)',
+};
+const modalOverlay = {
+  position: 'fixed', inset: 0, zIndex: 1000,
+  background: 'rgba(0, 0, 0, 0.45)',
+  display: 'flex', alignItems: 'center', justifyContent: 'center',
+  padding: 16,
+};
+const modalCard = {
+  ...card,
+  width: 'min(520px, 100%)', marginBottom: 0,
+  maxHeight: '90vh', overflowY: 'auto',
 };

@@ -187,8 +187,26 @@ const DASHBOARD_DEFAULT = {
   ],
 };
 
-function installFetchMock({ data = DASHBOARD_DEFAULT } = {}) {
+// Team-workload payload (PRD §4.1 gap A9b) — fetched on mount alongside the
+// dashboard GET for ADMIN/MANAGER users only.
+const WORKLOAD_DEFAULT = {
+  perUser: [
+    {
+      userId: 7, name: 'Bob Agent', email: 'bob@x.com',
+      openTasks: 3, overdueTasks: 1, bySubBrand: { tmc: 2, rfu: 1 },
+    },
+  ],
+  unassigned: { openTasks: 0, overdueTasks: 0, bySubBrand: {} },
+  totals: { openTasks: 3, overdueTasks: 1 },
+};
+
+function installFetchMock({ data = DASHBOARD_DEFAULT, workload = WORKLOAD_DEFAULT } = {}) {
   fetchApiMock.mockImplementation((url) => {
+    // Workload panel fetch (managers only) — match with or without ?subBrand=.
+    if (url === '/api/travel/dashboard/workload' || url.startsWith('/api/travel/dashboard/workload?')) {
+      if (workload instanceof Error) return Promise.reject(workload);
+      return Promise.resolve(workload);
+    }
     // Match the base path with OR without the ?subBrand= query the SUT appends
     // when a sidebar sub-brand is active.
     if (url === '/api/travel/dashboard' || url.startsWith('/api/travel/dashboard?')) {
@@ -254,13 +272,17 @@ describe('<TravelDashboard /> — loading / fetch / error', () => {
     expect(screen.getByText(/Loading dashboard/i)).toBeInTheDocument();
   });
 
-  it('hits GET /api/travel/dashboard exactly once on mount', async () => {
+  it('hits GET /api/travel/dashboard once on mount (+ workload for managers)', async () => {
     installFetchMock();
     renderPage();
     // Await the data-dependent render so we know the GET completed.
     await screen.findByText('47'); // trips.total
-    expect(fetchApiMock).toHaveBeenCalledTimes(1);
+    // ADMIN mounts fire exactly two GETs: the dashboard payload and the
+    // team-workload panel (PRD §4.1 gap A9b). USER-role mounts skip the
+    // workload fetch entirely (endpoint 403s for them).
+    expect(fetchApiMock).toHaveBeenCalledTimes(2);
     expect(fetchApiMock).toHaveBeenCalledWith('/api/travel/dashboard');
+    expect(fetchApiMock).toHaveBeenCalledWith('/api/travel/dashboard/workload');
   });
 
   it('renders the unavailable state and notifies on error', async () => {
@@ -421,16 +443,19 @@ describe('<TravelDashboard /> — sub-brand scoping', () => {
 });
 
 describe('<TravelDashboard /> — Refresh control', () => {
-  it('clicking Refresh re-fires the GET (initial + refresh = 2 calls)', async () => {
+  it('clicking Refresh re-fires the GETs (initial 2 + refresh 2 = 4 calls for managers)', async () => {
     installFetchMock();
     renderPage();
     await screen.findByText('47');
-    expect(fetchApiMock).toHaveBeenCalledTimes(1);
+    // ADMIN mount = dashboard + workload (PRD §4.1 gap A9b).
+    expect(fetchApiMock).toHaveBeenCalledTimes(2);
 
     const refresh = screen.getByRole('button', { name: /Refresh/i });
     fireEvent.click(refresh);
-    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledTimes(2));
-    // Same endpoint on the second call.
-    expect(fetchApiMock).toHaveBeenNthCalledWith(2, '/api/travel/dashboard');
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledTimes(4));
+    // Both endpoints re-fired with the same URLs.
+    const urls = fetchApiMock.mock.calls.map((c) => c[0]);
+    expect(urls.filter((u) => u === '/api/travel/dashboard')).toHaveLength(2);
+    expect(urls.filter((u) => u === '/api/travel/dashboard/workload')).toHaveLength(2);
   });
 });

@@ -318,11 +318,8 @@ export default function Pricing() {
       {/* Navbar */}
       <nav style={{ position: 'sticky', top: 0, left: 0, right: 0, zIndex: 100, background: C.card, borderBottom: `1px solid ${C.border}` }}>
         <div style={{ maxWidth: 1200, margin: '0 auto', padding: '14px 28px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <Link to="/" style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '1.1rem', textDecoration: 'none', color: C.text }}>
-            <div style={{ width: 32, height: 32, borderRadius: 8, background: 'linear-gradient(135deg, #4f46e5, #7c3aed)', display: 'grid', placeItems: 'center' }}>
-              <svg viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" width="18" height="18"><circle cx="12" cy="12" r="10" /><path d="M2 12h20" /><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10A15.3 15.3 0 0 1 12 2z" /></svg>
-            </div>
-            <span style={{ fontWeight: 700, letterSpacing: '-0.02em' }}>Globus<strong style={{ color: C.accent }}>CRM</strong></span>
+          <Link to="/" style={{ display: 'flex', alignItems: 'center', textDecoration: 'none' }}>
+            <img src="/globussoft-logo.png" alt="Globus CRM" style={{ height: 36, width: 'auto', maxWidth: 160, objectFit: 'contain' }} />
           </Link>
           <div style={{ display: 'flex', alignItems: 'center', gap: 28 }}>
             <Link to="/" style={{ fontSize: '0.88rem', color: C.text3, textDecoration: 'none', fontWeight: 500 }}>Home</Link>

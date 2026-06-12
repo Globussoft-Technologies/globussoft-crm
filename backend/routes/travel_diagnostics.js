@@ -8,6 +8,8 @@
 //   GET    /api/travel/diagnostics                          — list diagnostics (paginated, filterable)
 //   GET    /api/travel/diagnostics/:id                      — fetch one diagnostic
 //   POST   /api/travel/diagnostics/:id/talking-points/regen — ADMIN/MANAGER: regen LLM brief (PRD §4.2)
+//   POST   /api/travel/diagnostics/banks/:id/request-change — any travel role: file a scoring
+//                                                             change-request Ticket to GS (PRD §4.2)
 //
 // Mounted at /api/travel by server.js. All endpoints scope to
 // req.user.tenantId + vertical=travel (via requireTravelTenant guard,
@@ -47,6 +49,8 @@ const {
   canAccessSubBrand,
   assertValidSubBrand,
 } = require("../middleware/travelGuards");
+const { writeAudit } = require("../lib/audit");
+const { sanitizeText, sanitizeJsonForStringColumn } = require("../lib/sanitizeJson");
 
 // PRD §4.2 branded PDF — saved under backend/uploads/diagnostics/ and
 // served via the existing /uploads static mount (server.js:710). Filename
@@ -227,6 +231,111 @@ router.post(
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-diag] create bank error:", e.message);
       res.status(500).json({ error: "Failed to create bank" });
+    }
+  },
+);
+
+// ─── PRD §4.2 — Phase-1 "Request change" ticket (view-only scoring) ────
+//
+// POST /api/travel/diagnostics/banks/:id/request-change
+//
+// Diagnostic scoring is VIEW-ONLY in Phase 1 (Response A.6 — protects the
+// 90-day analytics baseline). Advisors who spot a question/band problem
+// can't edit the bank; this endpoint routes a change request to GS as a
+// support Ticket instead. ANY travel role may request (verifyToken +
+// requireTravelTenant only — no verifyRole, mirrors GET /diagnostic-banks
+// posture), but sub-brand access is still enforced so a MANAGER locked to
+// one sub-brand can't file tickets against another brand's bank.
+//
+// Body: { summary (required), details?, proposedChangesJson? }
+//   summary + details run through lib/sanitizeJson.js sanitizeText (same
+//   #398-class XSS posture as the other text writers); proposedChangesJson
+//   goes through sanitizeJsonForStringColumn so the ticket description
+//   carries a clean JSON string.
+//
+// Creates a tenant-scoped Ticket (status "Open", priority "Medium" — the
+// "normal" tier of routes/tickets.js VALID_PRIORITIES) with subject
+// `[Diagnostic change request] <subBrand> bank v<version>: <summary>`,
+// then writes a best-effort DIAGNOSTIC_BANK_CHANGE_REQUESTED audit row
+// (writeAudit is fail-soft by contract — never blocks the response).
+//
+// Returns 201 { ticket: { id, subject, status } }.
+router.post(
+  "/diagnostics/banks/:id/request-change",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+      }
+
+      const { summary, details, proposedChangesJson } = req.body || {};
+      // Sanitize BEFORE the required-check so a value that is nothing but
+      // markup (e.g. "<script>…</script>") rejects as missing.
+      const cleanSummary = typeof summary === "string" ? sanitizeText(summary) : "";
+      if (!cleanSummary) {
+        return res.status(400).json({
+          error: "summary is required",
+          code: "MISSING_FIELDS",
+        });
+      }
+      const cleanDetails = typeof details === "string" ? sanitizeText(details) : null;
+      const cleanProposed =
+        proposedChangesJson != null ? sanitizeJsonForStringColumn(proposedChangesJson) : null;
+
+      const bank = await prisma.travelDiagnosticQuestionBank.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+      });
+      if (!bank) return res.status(404).json({ error: "Bank not found", code: "NOT_FOUND" });
+
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (!canAccessSubBrand(allowed, bank.subBrand)) {
+        return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+      }
+
+      // Cap the summary inside the subject so the row stays well under the
+      // column's VARCHAR budget; the full text still lands in description.
+      const subjectSummary = cleanSummary.length > 140 ? `${cleanSummary.slice(0, 140)}…` : cleanSummary;
+      const subject = `[Diagnostic change request] ${bank.subBrand} bank v${bank.version}: ${subjectSummary}`;
+      const requester = `user #${req.user.userId}${req.user.email ? ` (${req.user.email})` : ""}`;
+      const descLines = [
+        "Diagnostic scoring is view-only in Phase 1 (PRD §4.2) — change request routed to GS.",
+        `Requested by: ${requester}`,
+        `Question bank: #${bank.id} — ${bank.subBrand} v${bank.version}`,
+        `Summary: ${cleanSummary}`,
+      ];
+      if (cleanDetails) descLines.push(`Details: ${cleanDetails}`);
+      if (cleanProposed) descLines.push(`Proposed changes: ${cleanProposed}`);
+
+      const ticket = await prisma.ticket.create({
+        data: {
+          tenantId: req.travelTenant.id,
+          subject,
+          description: descLines.join("\n"),
+          status: "Open",
+          priority: "Medium",
+        },
+      });
+
+      // Best-effort audit row — writeAudit swallows its own failures.
+      await writeAudit(
+        "TravelDiagnosticQuestionBank",
+        "DIAGNOSTIC_BANK_CHANGE_REQUESTED",
+        bank.id,
+        req.user.userId,
+        req.travelTenant.id,
+        { ticketId: ticket.id, subBrand: bank.subBrand, version: bank.version, summary: subjectSummary },
+      );
+
+      res.status(201).json({
+        ticket: { id: ticket.id, subject: ticket.subject, status: ticket.status },
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-diag] request-change error:", e.message);
+      res.status(500).json({ error: "Failed to submit change request" });
     }
   },
 );

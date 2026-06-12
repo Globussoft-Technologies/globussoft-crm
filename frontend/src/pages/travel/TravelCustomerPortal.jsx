@@ -33,11 +33,11 @@
  *   for customers; staff use /dashboard). The customer's role is implied
  *   by holding a PORTAL JWT, not by a User row.
  */
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   ShieldCheck, ShieldAlert, LogOut, Plane, User as UserIcon,
   CheckCircle2, AlertCircle, Loader2, ClipboardCheck, Award, LayoutDashboard,
-  ChevronRight, ChevronLeft, Hotel, Ticket,
+  ChevronRight, ChevronLeft, Hotel, Ticket, FileUp, Upload, UserPlus,
 } from "lucide-react";
 
 const PORTAL_TOKEN_KEY = "portalToken";
@@ -56,6 +56,24 @@ function readStoredAuth() {
 function clearStoredAuth() {
   localStorage.removeItem(PORTAL_TOKEN_KEY);
   localStorage.removeItem(PORTAL_CONTACT_KEY);
+}
+
+// Multipart variant of portalFetch — no Content-Type header (the browser
+// sets the multipart boundary itself when the body is FormData).
+async function portalUploadFetch(path, { token, formData }) {
+  const res = await fetch(`/api/portal${path}`, {
+    method: "POST",
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: formData,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const err = new Error(data.error || `HTTP ${res.status}`);
+    err.status = res.status;
+    err.code = data.code;
+    throw err;
+  }
+  return data;
 }
 
 async function portalFetch(path, { token, method = "GET", body } = {}) {
@@ -333,6 +351,7 @@ function Dashboard({ token, contact, onUpdateContact, onLogout }) {
           <strong style={{ fontSize: 16 }}>
             {view === "overview" && "Dashboard"}
             {view === "bookings" && "My Bookings"}
+            {view === "documents" && "Travel Documents"}
             {view === "diagnostic" && "Travel Diagnostic"}
             {view === "profile" && "My Profile"}
           </strong>
@@ -396,6 +415,8 @@ function Dashboard({ token, contact, onUpdateContact, onLogout }) {
             )
           )}
 
+          {view === "documents" && <TravellersCard token={token} onLogout={onLogout} />}
+
           {view === "diagnostic" && <DiagnosticsCard token={token} />}
 
           {view === "profile" && (
@@ -422,6 +443,7 @@ function Dashboard({ token, contact, onUpdateContact, onLogout }) {
 const NAV_ITEMS = [
   { key: "overview", label: "Dashboard", icon: LayoutDashboard },
   { key: "bookings", label: "My Bookings", icon: Plane },
+  { key: "documents", label: "Travel Documents", icon: FileUp },
   { key: "diagnostic", label: "Travel Diagnostic", icon: ClipboardCheck },
 ];
 
@@ -535,6 +557,13 @@ function Overview({ contact, itineraries, loading, verified, onOpen }) {
           value={loading ? "…" : String(itineraries.length)}
           hint={loading ? "Loading…" : `${accepted} confirmed`}
           onClick={() => onOpen("bookings")}
+        />
+        <OverviewCard
+          icon={FileUp}
+          label="Travel Documents"
+          value="Open"
+          hint="Add travellers + upload their passports"
+          onClick={() => onOpen("documents")}
         />
         <OverviewCard
           icon={ClipboardCheck}
@@ -770,6 +799,278 @@ const SUB_BRAND_LABELS = {
   visasure: "Visa Sure",
 };
 const brandLabel = (b) => SUB_BRAND_LABELS[b] || b;
+
+// ─── Travel Documents — travellers + passport upload ─────────────────
+//
+// Customer-side half of the passport OCR flow (PRD_PASSPORT_OCR AC-1).
+// The customer registers travellers on a trip and uploads each one's
+// passport; uploads land in the staff verification queue. The portal only
+// ever sees STATUS (timestamps), never extracted passport fields.
+
+const PORTAL_PASSPORT_ACCEPT = ".jpg,.jpeg,.png,.pdf,image/jpeg,image/png,application/pdf";
+const PORTAL_PASSPORT_MAX_BYTES = 5 * 1024 * 1024; // mirror the route's multer cap
+
+function travellerPassportState(t) {
+  if (t.passportVerifiedAt) return { label: "Verified", bg: "rgba(47, 122, 77, 0.12)", color: "#2F7A4D", canUpload: false };
+  if (t.passportRejectedAt) return { label: "Rejected — please re-upload", bg: "rgba(168, 50, 63, 0.12)", color: "#A8323F", canUpload: true };
+  if (t.passportExtractedAt) return { label: "Under review", bg: "rgba(200, 154, 78, 0.16)", color: "#9A6F2E", canUpload: true };
+  return { label: "Passport needed", bg: "rgba(18, 38, 71, 0.08)", color: "var(--text-secondary)", canUpload: true };
+}
+
+const RELATIONSHIP_OPTIONS = [
+  { value: "self", label: "Myself" },
+  { value: "spouse", label: "Spouse" },
+  { value: "child", label: "Child" },
+  { value: "parent", label: "Parent" },
+  { value: "other", label: "Other" },
+];
+
+function TravellersCard({ token, onLogout }) {
+  const [travellers, setTravellers] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [busyId, setBusyId] = useState(null); // traveller id mid-upload
+  const [banner, setBanner] = useState(null); // { ok, text }
+  const [adding, setAdding] = useState(false);
+  const [addForm, setAddForm] = useState({ fullName: "", relationship: "self" });
+  const [addBusy, setAddBusy] = useState(false);
+
+  // An expired PORTAL JWT returns 401 — boot to the login screen rather than
+  // rendering a misleading empty/"failed" state (matches Dashboard.loadAll).
+  const isExpiry = (err) => err && err.status === 401;
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await portalFetch("/travel/travellers", { token });
+      setTravellers(Array.isArray(res?.travellers) ? res.travellers : []);
+    } catch (err) {
+      if (isExpiry(err)) { onLogout(); return; }
+      // Non-auth failure — surface it instead of a false empty state.
+      setBanner({ ok: false, text: "Couldn't load your travellers. Please try again." });
+    } finally {
+      setLoading(false);
+    }
+  }, [token, onLogout]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const addTraveller = async (e) => {
+    e.preventDefault();
+    setBanner(null);
+    if (!addForm.fullName.trim()) {
+      setBanner({ ok: false, text: "Enter the traveller's full name." });
+      return;
+    }
+    setAddBusy(true);
+    try {
+      await portalFetch("/travel/travellers", {
+        token,
+        method: "POST",
+        body: { fullName: addForm.fullName.trim(), relationship: addForm.relationship },
+      });
+      setBanner({ ok: true, text: `${addForm.fullName.trim()} added — now upload their passport.` });
+      setAddForm({ fullName: "", relationship: "self" });
+      setAdding(false);
+      await load();
+    } catch (err) {
+      if (isExpiry(err)) { onLogout(); return; }
+      setBanner({ ok: false, text: err.message || "Failed to add traveller" });
+    } finally {
+      setAddBusy(false);
+    }
+  };
+
+  const uploadPassport = async (t, file) => {
+    setBanner(null);
+    const mime = (file.type || "").toLowerCase();
+    if (!["image/jpeg", "image/png", "application/pdf"].includes(mime)) {
+      setBanner({ ok: false, text: "Unsupported file type — JPG, PNG or PDF only." });
+      return;
+    }
+    if (file.size > PORTAL_PASSPORT_MAX_BYTES) {
+      setBanner({ ok: false, text: "File exceeds the 5 MB limit." });
+      return;
+    }
+    const formData = new FormData();
+    formData.append("file", file);
+    setBusyId(t.id);
+    try {
+      await portalUploadFetch(`/travel/travellers/${t.id}/passport-upload`, { token, formData });
+      setBanner({ ok: true, text: `Passport uploaded for ${t.fullName} — our team will verify it shortly.` });
+      await load();
+    } catch (err) {
+      if (isExpiry(err)) { onLogout(); return; }
+      if (err.code === "PASSPORT_OCR_NOT_YET_ENABLED") {
+        setBanner({ ok: false, text: "Passport upload is temporarily unavailable — please try again later." });
+      } else {
+        setBanner({ ok: false, text: err.message || "Failed to upload passport" });
+      }
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  return (
+    <section style={cardStyle} aria-labelledby="travellers-heading">
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+        <h2 id="travellers-heading" style={{ display: "flex", alignItems: "center", gap: 8, margin: 0 }}>
+          <FileUp size={20} aria-hidden /> Travel Documents
+        </h2>
+        {!adding && (
+          <button type="button" onClick={() => { setAdding(true); setBanner(null); }} style={portalPrimaryBtnStyle}>
+            <UserPlus size={15} aria-hidden /> Add traveller
+          </button>
+        )}
+      </div>
+      <p style={{ color: "var(--text-secondary)", marginTop: 6, marginBottom: 0, fontSize: 14 }}>
+        Add everyone travelling under your booking, then upload each traveller&apos;s
+        passport (JPG, PNG or PDF, up to 5 MB). Our team verifies every upload.
+      </p>
+
+      {banner && (
+        <div role="status" style={{
+          marginTop: 12, padding: "10px 14px", borderRadius: 10, fontSize: 14,
+          display: "flex", alignItems: "center", gap: 8,
+          background: banner.ok ? "rgba(47, 122, 77, 0.10)" : "rgba(168, 50, 63, 0.10)",
+          color: banner.ok ? "var(--success-color, #2F7A4D)" : "var(--danger-color, #A8323F)",
+        }}>
+          {banner.ok ? <CheckCircle2 size={16} aria-hidden /> : <AlertCircle size={16} aria-hidden />}
+          {banner.text}
+        </div>
+      )}
+
+      {adding && (
+        <form onSubmit={addTraveller} style={{
+          marginTop: 14, padding: 14, borderRadius: 10,
+          border: "1px solid var(--border-color, rgba(18, 38, 71, 0.12))",
+          display: "grid", gap: 10,
+        }}>
+          <div style={{ display: "grid", gap: 10, gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 220px), 1fr))" }}>
+            <label style={{ display: "grid", gap: 4, fontSize: 13 }}>
+              Traveller full name
+              <input
+                value={addForm.fullName}
+                onChange={(e) => setAddForm((f) => ({ ...f, fullName: e.target.value }))}
+                placeholder="As printed on the passport"
+                style={inputStyle}
+              />
+            </label>
+            <label style={{ display: "grid", gap: 4, fontSize: 13 }}>
+              Who is this?
+              <select
+                value={addForm.relationship}
+                onChange={(e) => setAddForm((f) => ({ ...f, relationship: e.target.value }))}
+                style={inputStyle}
+              >
+                {RELATIONSHIP_OPTIONS.map((r) => (
+                  <option key={r.value} value={r.value}>{r.label}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button type="submit" disabled={addBusy} style={{ ...portalPrimaryBtnStyle, opacity: addBusy ? 0.6 : 1 }}>
+              {addBusy ? "Adding…" : "Add traveller"}
+            </button>
+            <button type="button" onClick={() => { setAdding(false); setBanner(null); }} style={backBtnStyle}>
+              Cancel
+            </button>
+          </div>
+        </form>
+      )}
+
+      <div style={{ marginTop: 14, display: "grid", gap: 8 }}>
+        {loading ? (
+          <div style={{ color: "var(--text-secondary)", fontSize: 14, display: "flex", alignItems: "center", gap: 8 }}>
+            <Loader2 size={16} aria-hidden className="spin" /> Loading travellers…
+          </div>
+        ) : travellers.length === 0 ? (
+          <div style={{ color: "var(--text-secondary)", fontSize: 14, padding: "18px 0", textAlign: "center" }}>
+            No travellers yet — add the people travelling under your booking to get started.
+          </div>
+        ) : (
+          travellers.map((t) => (
+            <TravellerDocRow
+              key={t.id}
+              traveller={t}
+              busy={busyId === t.id}
+              onUpload={uploadPassport}
+            />
+          ))
+        )}
+      </div>
+    </section>
+  );
+}
+
+// One traveller row. The upload control is a real <button> that triggers a
+// ref'd hidden file input via .click(): a button is keyboard-operable and
+// gets the app's global :focus-visible ring (WCAG 2.4.7), and its accessible
+// name "Upload passport for <name>" contains the visible label text
+// (WCAG 2.5.3 Label in Name) — both of which a <label htmlFor> trick fails.
+function TravellerDocRow({ traveller: t, busy, onUpload }) {
+  const fileRef = useRef(null);
+  const st = travellerPassportState(t);
+  const isReupload = Boolean(t.passportExtractedAt || t.passportRejectedAt);
+  const ctaText = isReupload ? "Re-upload passport" : "Upload passport";
+
+  const onFile = (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = ""; // same file can be re-picked later
+    if (file) onUpload(t, file);
+  };
+
+  return (
+    <div style={{
+      display: "flex", alignItems: "center", justifyContent: "space-between",
+      gap: 10, flexWrap: "wrap", padding: "10px 12px", borderRadius: 10,
+      border: "1px solid var(--border-color, rgba(18, 38, 71, 0.12))",
+    }}>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontWeight: 600, fontSize: 14 }}>{t.fullName}</div>
+        {t.relationship && (
+          <div style={{ fontSize: 12, color: "var(--text-secondary)", textTransform: "capitalize" }}>
+            {t.relationship === "self" ? "You" : t.relationship}
+          </div>
+        )}
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <span style={{
+          background: st.bg, color: st.color, padding: "3px 10px",
+          borderRadius: 12, fontSize: 11, fontWeight: 600, whiteSpace: "nowrap",
+        }}>
+          {st.label}
+        </span>
+        {st.canUpload && (
+          <>
+            <button
+              type="button"
+              onClick={() => fileRef.current && fileRef.current.click()}
+              disabled={busy}
+              aria-label={`${ctaText} for ${t.fullName}`}
+              style={{
+                ...backBtnStyle, gap: 6, color: "var(--text-primary)",
+                opacity: busy ? 0.6 : 1, cursor: busy ? "wait" : "pointer",
+              }}
+            >
+              <Upload size={14} aria-hidden /> {busy ? "Uploading…" : ctaText}
+            </button>
+            <input
+              ref={fileRef}
+              type="file"
+              accept={PORTAL_PASSPORT_ACCEPT}
+              disabled={busy}
+              tabIndex={-1}
+              onChange={onFile}
+              aria-label={`Passport file for ${t.fullName}`}
+              style={visuallyHiddenInputStyle}
+            />
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
 
 function DiagnosticsCard({ token }) {
   const [brands, setBrands] = useState([]); // [{ subBrand }]
@@ -1512,6 +1813,25 @@ const cardStyle = {
   border: "1px solid var(--border-color, rgba(18, 38, 71, 0.12))",
   borderRadius: 12,
   padding: 20,
+};
+const portalPrimaryBtnStyle = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 6,
+  padding: "8px 14px",
+  borderRadius: 8,
+  fontSize: 13,
+  fontWeight: 600,
+  background: "var(--primary-color, #122647)",
+  color: "#fff",
+  border: "none",
+  cursor: "pointer",
+};
+// Visually hidden but still in the accessibility tree (display:none would
+// drop it for screen readers AND RTL label queries).
+const visuallyHiddenInputStyle = {
+  position: "absolute", width: 1, height: 1, padding: 0, margin: -1,
+  overflow: "hidden", clip: "rect(0 0 0 0)", whiteSpace: "nowrap", border: 0,
 };
 const dtStyle = { color: "var(--text-secondary)" };
 const ddStyle = { margin: 0, color: "var(--text-primary)" };

@@ -6,7 +6,6 @@ plugins {
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.ksp)
     alias(libs.plugins.hilt)
-    alias(libs.plugins.google.services)
     alias(libs.plugins.junit5.plugin)
 }
 
@@ -128,10 +127,6 @@ dependencies {
     // DataStore + Security
     implementation(libs.datastore.preferences)
     implementation(libs.security.crypto)
-
-    // Firebase (analytics only — no FCM)
-    implementation(platform(libs.firebase.bom))
-    implementation(libs.firebase.analytics)
 
     // Socket.IO (real-time notification delivery when app is open)
     implementation(libs.socket.io.client)

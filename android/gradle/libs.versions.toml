@@ -15,7 +15,6 @@ moshi = "1.15.1"
 room = "2.6.1"
 datastore = "1.1.1"
 securityCrypto = "1.1.0-alpha06"
-firebaseBom = "33.7.0"
 socketIo = "2.1.0"
 sentry = "7.20.0"
 razorpay = "1.6.40"
@@ -76,10 +75,6 @@ room-testing = { group = "androidx.room", name = "room-testing", version.ref = "
 datastore-preferences = { group = "androidx.datastore", name = "datastore-preferences", version.ref = "datastore" }
 security-crypto = { group = "androidx.security", name = "security-crypto", version.ref = "securityCrypto" }
 
-# Firebase (analytics only)
-firebase-bom = { group = "com.google.firebase", name = "firebase-bom", version.ref = "firebaseBom" }
-firebase-analytics = { group = "com.google.firebase", name = "firebase-analytics-ktx" }
-
 # Socket.IO
 socket-io-client = { group = "io.socket", name = "socket.io-client", version.ref = "socketIo" }
 
@@ -113,6 +108,5 @@ kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
 hilt = { id = "com.google.dagger.hilt.android", version.ref = "hilt" }
-google-services = { id = "com.google.gms.google-services", version = "4.4.2" }
 sentry = { id = "io.sentry.android.gradle", version = "4.14.1" }
 junit5-plugin = { id = "de.mannodermaus.android-junit5", version.ref = "junit5Plugin" }

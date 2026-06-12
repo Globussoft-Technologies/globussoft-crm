@@ -3,6 +3,13 @@
 // Module under test: listProjection(modelName, fullShape) + the auxiliary
 // exports (getProjections + isFullShape).
 //
+// Slice S42 extension — wellness PHI list-endpoint slim projections.
+// Adds Patient / Visit / Prescription entries to KNOWN_MODELS + PII_FIELDS
+// and pins their shape contract. The PII-absence assertions are the load-
+// bearing HIPAA contract on this slice: a future contributor including
+// e.g. `Patient.phone` in the slim shape (because "it's small") triggers
+// these tests to red and forces a PRD-level conversation.
+//
 // What this pins
 // --------------
 // The helper consolidates the per-model summary projection lookup that
@@ -81,6 +88,12 @@ const KNOWN_MODELS = [
   'TravelSupplier',
   'RfuLeadProfile',
   'MarketplaceLead',
+  // S42 — wellness PHI slim projections (HIPAA / DPDP-Act-regulated).
+  'Patient',
+  'Visit',
+  'Prescription',
+  // S43 — Visa Sure applications PII slim projection.
+  'VisaApplication',
 ];
 
 // PII / sensitive fields per model — fields the slim projection MUST NOT
@@ -118,6 +131,40 @@ const PII_FIELDS = Object.freeze({
   MarketplaceLead: [
     'email', 'phone', 'company', 'product', 'message', 'city',
     'rawPayload', 'externalLeadId',
+  ],
+  // S42 — wellness PHI (HIPAA / DPDP-Act-regulated). Every column dropped
+  // here would constitute a "PHI disclosure" under PRD §11 if it leaked
+  // through a list response — pinned absent.
+  Patient: [
+    'phone', 'normalizedPhone', 'email', 'dob', 'gender', 'bloodGroup',
+    'allergies', 'notes', 'photoUrl', 'gst', 'tagsJson',
+    'anniversary', 'walletBalance', 'taxType', 'instagramHandle',
+    'contactId', 'userId',
+  ],
+  Visit: [
+    'reason', 'notes', 'vitals', 'photosBefore', 'photosAfter',
+    'amountCharged', 'videoRoom', 'videoCallUrl',
+    'atHomeAddress', 'atHomeCity', 'atHomePincode',
+    'travelTimeMinutes',
+    'utmSource', 'utmMedium', 'utmCampaign', 'utmTerm', 'utmContent',
+    'referrer',
+  ],
+  Prescription: [
+    'drugs',          // load-bearing — the actual prescription contents
+    'instructions',   // patient-specific dosage narrative
+    'pdfUrl',         // signed URL with the same drug list once opened
+  ],
+  // S43 — Visa Sure applications (Phase 3). PII / sensitive fields the
+  // slim projection MUST drop. Sourced from prisma/schema.prisma:5725+ +
+  // the per-route adoption contract (decoration MUST be skipped on slim).
+  VisaApplication: [
+    'rejectionHistoryJson', // @db.Text — prior refusal reasons + dates
+    'outcomeReason',        // @db.Text — decision narrative
+    'familySize',           // dependent count — demographic metadata
+    'priorApplicationId',   // recovery-FK revealing prior rejection
+    'recoveryProgramId',    // FK to RejectionRecoveryProgram — same risk
+    'tenantId',             // strip per stripDangerous convention
+    'updatedAt',            // admin/audit metadata
   ],
 });
 
@@ -385,6 +432,201 @@ describe('listProjection(modelName, fullShape)', () => {
       expect(p).not.toHaveProperty('rawPayload');
       expect(p).not.toHaveProperty('product');
       expect(p).not.toHaveProperty('city');
+    });
+
+    // ── S42 wellness PHI projections ──────────────────────────────────
+    test('Patient slim shape — phone/email/dob/allergies/notes EXCLUDED (HIPAA-load-bearing)', () => {
+      const p = listProjection('Patient', false);
+      expect(p).toEqual({
+        id: true,
+        name: true,         // operator headline (masking still applied
+                            // route-side for low-trust viewers).
+        // S96 — S62 PRD columns surfaced on slim shape.
+        firstName: true,
+        lastName: true,
+        displayName: true,
+        lastVisitDate: true,
+        locationId: true,
+        source: true,
+        createdAt: true,
+      });
+      // Every PHI column on the Patient schema MUST be absent. These
+      // assertions are the load-bearing privacy contract for S42 — if
+      // they break, the slice is invalid.
+      expect(p).not.toHaveProperty('phone');
+      expect(p).not.toHaveProperty('normalizedPhone');
+      expect(p).not.toHaveProperty('email');
+      expect(p).not.toHaveProperty('dob');
+      expect(p).not.toHaveProperty('gender');
+      expect(p).not.toHaveProperty('bloodGroup');
+      expect(p).not.toHaveProperty('allergies');
+      expect(p).not.toHaveProperty('notes');
+      expect(p).not.toHaveProperty('photoUrl');
+      expect(p).not.toHaveProperty('gst');
+      expect(p).not.toHaveProperty('tagsJson');
+      expect(p).not.toHaveProperty('anniversary');
+      expect(p).not.toHaveProperty('walletBalance');
+      expect(p).not.toHaveProperty('taxType');
+      expect(p).not.toHaveProperty('instagramHandle');
+    });
+
+    test('Visit slim shape — clinical narrative + vitals + photos + home-address EXCLUDED', () => {
+      const p = listProjection('Visit', false);
+      expect(p).toEqual({
+        id: true,
+        patientId: true,    // FK only — patient PHI follows separate fetch
+        visitDate: true,
+        status: true,
+        doctorId: true,
+        serviceId: true,
+        locationId: true,
+        bookingType: true,  // CLINIC_VISIT | IN_HOME | VIDEO | PHONE
+        createdAt: true,
+      });
+      // Clinical PHI columns — MUST NOT leak.
+      expect(p).not.toHaveProperty('reason');
+      expect(p).not.toHaveProperty('notes');
+      expect(p).not.toHaveProperty('vitals');
+      expect(p).not.toHaveProperty('photosBefore');
+      expect(p).not.toHaveProperty('photosAfter');
+      // Financial-PHI columns.
+      expect(p).not.toHaveProperty('amountCharged');
+      // Telehealth-session identifiers (auth-bearing).
+      expect(p).not.toHaveProperty('videoRoom');
+      expect(p).not.toHaveProperty('videoCallUrl');
+      // Patient home-address PHI.
+      expect(p).not.toHaveProperty('atHomeAddress');
+      expect(p).not.toHaveProperty('atHomeCity');
+      expect(p).not.toHaveProperty('atHomePincode');
+    });
+
+    test('Prescription slim shape — drugs + instructions + pdfUrl EXCLUDED (medico-legal load-bearing)', () => {
+      const p = listProjection('Prescription', false);
+      expect(p).toEqual({
+        id: true,
+        patientId: true,
+        visitId: true,
+        doctorId: true,
+        // S96 — S62 PRD columns surfaced on slim shape (workflow keys,
+        // not PHI on their own — they don't reveal the prescription
+        // contents, only its lifecycle / dispense timestamp).
+        status: true,
+        dispensedAt: true,
+        createdAt: true,
+      });
+      // The Rx contents — load-bearing drop for HIPAA compliance.
+      // Shipping `drugs` in a list response is what makes the bare-list
+      // call a regulated PHI read.
+      expect(p).not.toHaveProperty('drugs');
+      expect(p).not.toHaveProperty('instructions');
+      expect(p).not.toHaveProperty('pdfUrl');
+    });
+
+    // ── S96 — S62 column surface assertions (explicit per-column) ─────
+    // Eight strict pins matching the slice spec's case enumeration. The
+    // Patient + Prescription `toEqual` blocks above ALREADY pin the full
+    // slim shape including these columns, but the per-column inclusion
+    // pins below isolate the S96 contract so a future contributor
+    // accidentally dropping ONE column (e.g. while reshuffling) gets a
+    // single-purpose failure rather than a noisy whole-shape diff.
+
+    test('S96: Patient slim shape INCLUDES firstName', () => {
+      const p = listProjection('Patient', false);
+      expect(p).toHaveProperty('firstName', true);
+    });
+
+    test('S96: Patient slim shape INCLUDES lastName', () => {
+      const p = listProjection('Patient', false);
+      expect(p).toHaveProperty('lastName', true);
+    });
+
+    test('S96: Patient slim shape INCLUDES displayName', () => {
+      const p = listProjection('Patient', false);
+      expect(p).toHaveProperty('displayName', true);
+    });
+
+    test('S96: Patient slim shape INCLUDES lastVisitDate', () => {
+      const p = listProjection('Patient', false);
+      expect(p).toHaveProperty('lastVisitDate', true);
+    });
+
+    test('S96: Prescription slim shape INCLUDES status', () => {
+      const p = listProjection('Prescription', false);
+      expect(p).toHaveProperty('status', true);
+    });
+
+    test('S96: Prescription slim shape INCLUDES dispensedAt', () => {
+      const p = listProjection('Prescription', false);
+      expect(p).toHaveProperty('dispensedAt', true);
+    });
+
+    // ── S96 — regression: full path UNCHANGED ─────────────────────────
+    // The non-slim (default) path always returns undefined so Prisma
+    // ships the full row. S96 must NOT change this. Pinning that the
+    // full-path return contract is still `undefined` for both models
+    // catches a future refactor that accidentally inverts the slim/full
+    // gate.
+
+    test('S96 regression: Patient full path (fullShape=true) UNCHANGED — returns undefined', () => {
+      // The full path is the helper's "ship whatever Prisma's default is"
+      // signal. Adding columns to the slim shape MUST NOT alter the
+      // full-path contract.
+      expect(listProjection('Patient', true)).toBeUndefined();
+    });
+
+    test('S96 regression: Prescription full path (fullShape=true) UNCHANGED — returns undefined', () => {
+      expect(listProjection('Prescription', true)).toBeUndefined();
+    });
+
+    // Sanity-pin the slim-shape FIELD COUNT for both models so a future
+    // contributor accidentally REMOVING a slim column (rather than just
+    // changing what's in it) is caught by these counters. Patient: 9
+    // keys (id, name, firstName, lastName, displayName, lastVisitDate,
+    // locationId, source, createdAt). Prescription: 7 keys (id,
+    // patientId, visitId, doctorId, status, dispensedAt, createdAt).
+    test('S96 regression: Patient slim shape has exactly 9 keys', () => {
+      const p = listProjection('Patient', false);
+      expect(Object.keys(p)).toHaveLength(9);
+    });
+
+    test('S96 regression: Prescription slim shape has exactly 7 keys', () => {
+      const p = listProjection('Prescription', false);
+      expect(Object.keys(p)).toHaveLength(7);
+    });
+
+    // ── S43 VisaApplication projection ────────────────────────────────
+    test('VisaApplication slim shape — rejection history + outcome reason + family size EXCLUDED', () => {
+      const p = listProjection('VisaApplication', false);
+      expect(p).toEqual({
+        id: true,
+        contactId: true,         // FK only — contact PII NOT joined on slim
+        applicationType: true,   // catalogue chip (tourist | business | ...)
+        destinationCountry: true,// ISO country code — non-PII
+        status: true,            // workflow filter pivot
+        readinessLevel: true,    // 1-4 diagnostic tier — non-PII
+        advisorRiskFlag: true,   // workflow chip — non-PII
+        complexCase: true,       // boolean workflow chip
+        filedAt: true,           // queue sort key
+        decidedAt: true,         // outcomes sort key
+        outcome: true,           // null | approved | rejected — chip
+        createdAt: true,         // default-sort stability
+      });
+      // Load-bearing PII drops — these MUST stay absent or the slim
+      // payload regresses to the full-shape risk class.
+      expect(p).not.toHaveProperty('rejectionHistoryJson');
+      expect(p).not.toHaveProperty('outcomeReason');
+      expect(p).not.toHaveProperty('familySize');
+      expect(p).not.toHaveProperty('priorApplicationId');
+      expect(p).not.toHaveProperty('recoveryProgramId');
+      // tenantId + updatedAt — strip-per-convention.
+      expect(p).not.toHaveProperty('tenantId');
+      expect(p).not.toHaveProperty('updatedAt');
+      // The contact decoration the route applies on full path must NOT
+      // appear here either — the projection is the SQL select; the
+      // decoration is a post-query step the route skips on slim. We
+      // pin the absence so a future refactor doesn't accidentally add
+      // contact PII back via a Prisma include.
+      expect(p).not.toHaveProperty('contact');
     });
   });
 });

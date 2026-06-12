@@ -26,6 +26,7 @@
 const cron = require("node-cron");
 const prisma = require("../lib/prisma");
 const { resolveForSubBrand } = require("../lib/subBrandConfig");
+const watiClient = require("../services/watiClient");
 
 const DEFAULT_REMINDER_DAYS = 7;
 const OVERDUE_LOOKBACK_DAYS = 30;
@@ -73,6 +74,24 @@ async function runPaymentRemindersForTenant(tenantId) {
     select: { subBrandConfigJson: true },
   });
   const tmcCfg = resolveForSubBrand(tenant, "tmc");
+
+  // Batch-fetch participant parent phones for the WhatsApp dispatch leg.
+  // Best-effort: a lookup failure only skips the WA leg — the notification
+  // loop below must keep running regardless (mirrors the advisor-alerts
+  // cron's tolerate-missing-table posture).
+  let participantById = {};
+  try {
+    const participantIds = [...new Set(instalments.map((i) => i.participantId).filter(Boolean))];
+    const participants = participantIds.length
+      ? await prisma.tripParticipant.findMany({
+          where: { id: { in: participantIds } },
+          select: { id: true, parentPhone: true, parentName: true, fullName: true },
+        })
+      : [];
+    participantById = Object.fromEntries(participants.map((p) => [p.id, p]));
+  } catch (e) {
+    console.error(`[TripPaymentReminders] participant phone lookup failed (WA leg skipped): ${e.message}`);
+  }
 
   // Batch-fetch parent plans so we can look up reminderDays per instalment.
   const tripIds = [...new Set(instalments.map((i) => i.tripId))];
@@ -144,6 +163,25 @@ async function runPaymentRemindersForTenant(tenantId) {
         `[TripPaymentReminders] tenant ${tenantId} inst ${inst.id} (${phaseType}) → notification created; ` +
           `admin link: ${link} — would-route subBrand=tmc wabaId=${tmcCfg.wabaId || "(no-config)"}`,
       );
+      // WhatsApp dispatch via watiClient (Q9) — stub-logs + QUEUED row when
+      // WATI creds are absent; real template send when they're set. Best-
+      // effort: a send failure never blocks the notification loop.
+      const participant = inst.participantId ? participantById[inst.participantId] : null;
+      if (participant && participant.parentPhone) {
+        await watiClient.sendBestEffort({
+          tenantId,
+          subBrand: "tmc",
+          toPhone: participant.parentPhone,
+          templateName: process.env.WATI_PAYMENT_REMINDER_TEMPLATE || "payment_reminder_t_minus_n",
+          parameters: [
+            { name: "name", value: participant.parentName || participant.fullName || "Parent" },
+            { name: "amount", value: `₹${amountStr}` },
+            { name: "due_date", value: dueIso },
+          ],
+          broadcastName: "travel-trip-payment-reminders",
+          fallbackText: messageBody,
+        });
+      }
       if (isOverdue) overdue++;
       else dueSoon++;
     } catch (e) {

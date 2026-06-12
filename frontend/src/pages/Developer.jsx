@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useContext } from 'react';
-import { Key, Globe, Plus, Trash2, Copy, CheckCircle2, Activity } from 'lucide-react';
+import React, { useState, useEffect, useContext, useCallback } from 'react';
+import { Key, Globe, Plus, Trash2, Copy, CheckCircle2, Activity, ShieldCheck, ShieldAlert, RefreshCw } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { AuthContext } from '../App';
@@ -46,9 +46,39 @@ export default function Developer() {
   const [newKeySubBrand, setNewKeySubBrand] = useState('');
   const [newHook, setNewHook] = useState({ event: 'deal.created', targetUrl: '' });
 
+  // ── S121 — CSP Violations observability surface ───────────────────────
+  // Operators check this card BEFORE flipping CSP_ENFORCE=1 in production
+  // env vars. The green "safe to enforce" badge needs to be stable for
+  // 24h before the env-var change is considered safe.
+  const [cspViolations, setCspViolations] = useState([]);
+  const [cspClean24h, setCspClean24h] = useState(false);
+  const [cspSinceIso, setCspSinceIso] = useState(null);
+  const [cspLoading, setCspLoading] = useState(false);
+  const [cspError, setCspError] = useState(null);
+
+  const loadCspViolations = useCallback(async () => {
+    setCspLoading(true);
+    setCspError(null);
+    try {
+      const r = await fetchApi('/api/security/violations?limit=100');
+      setCspViolations(Array.isArray(r?.violations) ? r.violations : []);
+      setCspClean24h(Boolean(r?.clean24h));
+      setCspSinceIso(r?.sinceIso || null);
+    } catch (err) {
+      setCspError(err?.message || 'Failed to load CSP violations');
+    } finally {
+      setCspLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     loadDevData();
   }, []);
+
+  // S121 — load CSP violations once on mount. Refresh button drives re-fetch.
+  useEffect(() => {
+    loadCspViolations();
+  }, [loadCspViolations]);
 
   // Poll the agent-activity log every 3s. Cleans up on unmount.
   useEffect(() => {
@@ -73,7 +103,7 @@ export default function Developer() {
     try {
       const k = await fetchApi('/api/developer/apikeys');
       setKeys(Array.isArray(k) ? k : []);
-      
+
       const h = await fetchApi('/api/developer/webhooks');
       setHooks(Array.isArray(h) ? h : []);
     } catch (err) {
@@ -217,7 +247,7 @@ export default function Developer() {
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2rem' }}>
-        
+
         {/* API Keys */}
         <div className="card" style={{ padding: '2rem' }}>
           <h3 style={{ fontSize: '1.25rem', fontWeight: '600', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
@@ -339,6 +369,145 @@ export default function Developer() {
           </div>
         </div>
 
+      </div>
+
+      {/* S121 — CSP Violations observability card.
+          Lists recent AuditLog rows where entity='CSPViolation' (written by
+          backend/routes/csp.js POST /report) so operators can visually
+          verify "24h of clean Report-Only logs" BEFORE setting CSP_ENFORCE=1
+          in production env vars. Without this surface, the only way to
+          check was SSH-into-demo + raw Prisma query.
+
+          See backend/middleware/security.js for the S117 env-gated
+          helmetStrictReportOnlyMiddleware that reads CSP_ENFORCE and
+          swaps the response header from CSP-Report-Only → CSP. */}
+      <div className="card" style={{ padding: '1.5rem', marginTop: '2rem' }}>
+        <h3 style={{ fontSize: '1.25rem', fontWeight: 600, marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          {cspClean24h
+            ? <ShieldCheck size={20} color="var(--success-color, #10b981)" />
+            : <ShieldAlert size={20} color="var(--danger-color, #ef4444)" />}
+          CSP Violations
+          <button
+            onClick={loadCspViolations}
+            disabled={cspLoading}
+            title="Refresh"
+            aria-label="Refresh CSP violations"
+            style={{
+              marginLeft: 'auto',
+              background: 'transparent',
+              border: '1px solid var(--border-color, #e5e7eb)',
+              borderRadius: 6,
+              padding: '0.25rem 0.6rem',
+              cursor: cspLoading ? 'not-allowed' : 'pointer',
+              color: 'var(--text-secondary)',
+              fontSize: '0.85rem',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '0.35rem',
+            }}
+          >
+            <RefreshCw size={14} /> Refresh
+          </button>
+        </h3>
+
+        {/* go/no-go badge — green when clean24h===true, red when violations
+            in the last 24h. Operators check this card before flipping
+            CSP_ENFORCE=1 in production. */}
+        <div
+          role="status"
+          style={{
+            padding: '0.75rem 1rem',
+            borderRadius: 6,
+            marginBottom: '1rem',
+            fontSize: '0.9rem',
+            fontWeight: 500,
+            background: cspClean24h ? 'rgba(16,185,129,0.12)' : 'rgba(239,68,68,0.12)',
+            color: cspClean24h ? 'var(--success-color, #10b981)' : 'var(--danger-color, #ef4444)',
+            border: `1px solid ${cspClean24h ? 'rgba(16,185,129,0.3)' : 'rgba(239,68,68,0.3)'}`,
+          }}
+        >
+          {cspClean24h
+            ? 'CSP-clean (24h) — safe to enforce'
+            : `${cspViolations.length} violation${cspViolations.length === 1 ? '' : 's'} in last 24h — DO NOT flip CSP_ENFORCE yet`}
+        </div>
+
+        <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '1rem' }}>
+          Set <code style={{ background: 'var(--subtle-bg)', padding: '0.1rem 0.35rem', borderRadius: 3 }}>CSP_ENFORCE=1</code> in production env vars after 24h of green-badge state to switch CSP from Report-Only to enforce mode.
+        </p>
+
+        {cspError && (
+          <p style={{ fontSize: '0.85rem', color: 'var(--danger-color, #ef4444)', marginBottom: '0.75rem' }}>
+            Couldn't load CSP violations: {cspError}
+          </p>
+        )}
+
+        {cspViolations.length === 0 ? (
+          <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', padding: '0.75rem', background: 'var(--subtle-bg)', borderRadius: 6, textAlign: 'center' }}>
+            No CSP violations in the selected window.
+          </p>
+        ) : (
+          <div style={{ maxHeight: 320, overflowY: 'auto', fontSize: '0.85rem' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead style={{ position: 'sticky', top: 0, background: 'var(--surface-color, #fff)' }}>
+                <tr style={{ textAlign: 'left', borderBottom: '1px solid var(--border-color, #e5e7eb)' }}>
+                  <th style={{ padding: '0.4rem 0.5rem', fontWeight: 600 }}>Time</th>
+                  <th style={{ padding: '0.4rem 0.5rem', fontWeight: 600 }}>Directive</th>
+                  <th style={{ padding: '0.4rem 0.5rem', fontWeight: 600 }}>Blocked URI</th>
+                  <th style={{ padding: '0.4rem 0.5rem', fontWeight: 600 }}>Document URI</th>
+                  <th style={{ padding: '0.4rem 0.5rem', fontWeight: 600 }}>Source</th>
+                </tr>
+              </thead>
+              <tbody>
+                {cspViolations.map((row, i) => {
+                  // Parse the AuditLog details JSON. The csp.js POST /report
+                  // handler writes the raw browser report into the `details`
+                  // column as a JSON string. Tolerate parse errors gracefully.
+                  let parsed = null;
+                  try {
+                    parsed = row.details ? JSON.parse(row.details) : null;
+                  } catch (_) {
+                    parsed = null;
+                  }
+                  // The W3C shape nests under `csp-report`; the Reporting-API
+                  // shape is a top-level array; plain JSON uses dotted keys.
+                  const report = parsed?.['csp-report'] || (Array.isArray(parsed) ? parsed[0]?.body : null) || parsed || {};
+                  const directive = report['effective-directive'] || report['violated-directive'] || report.effectiveDirective || report.violatedDirective || '—';
+                  const blockedUri = report['blocked-uri'] || report.blockedURL || '—';
+                  const documentUri = report['document-uri'] || report.documentURL || '—';
+                  const sourceFile = report['source-file'] || report.sourceFile || '';
+                  const lineNumber = report['line-number'] || report.lineNumber || '';
+                  const sourceCell = sourceFile ? `${sourceFile}${lineNumber ? `:${lineNumber}` : ''}` : '—';
+
+                  return (
+                    <tr key={row.id || i} style={{ borderBottom: '1px solid var(--border-color, rgba(0,0,0,0.05))' }}>
+                      <td style={{ padding: '0.35rem 0.5rem', whiteSpace: 'nowrap', color: 'var(--text-secondary)' }}>
+                        {row.createdAt ? new Date(row.createdAt).toLocaleString() : '?'}
+                      </td>
+                      <td style={{ padding: '0.35rem 0.5rem', fontFamily: 'monospace' }}>
+                        {directive}
+                      </td>
+                      <td style={{ padding: '0.35rem 0.5rem', fontFamily: 'monospace', wordBreak: 'break-all', maxWidth: 220 }}>
+                        {blockedUri}
+                      </td>
+                      <td style={{ padding: '0.35rem 0.5rem', fontFamily: 'monospace', wordBreak: 'break-all', maxWidth: 220 }}>
+                        {documentUri}
+                      </td>
+                      <td style={{ padding: '0.35rem 0.5rem', fontFamily: 'monospace', wordBreak: 'break-all', maxWidth: 200 }}>
+                        {sourceCell}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {cspSinceIso && (
+          <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.75rem', textAlign: 'right' }}>
+            Window since: {new Date(cspSinceIso).toLocaleString()}
+          </p>
+        )}
       </div>
     </div>
   );

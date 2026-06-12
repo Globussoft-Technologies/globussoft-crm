@@ -7553,6 +7553,24 @@ router.post(
 //     which permits Paid -> Voided) — needed for refund/cancellation flow.
 //   - Reason persisted in the audit log only (TravelInvoice has no `notes`
 //     column; the audit-row is the authoritative reason record).
+//
+// S33 (#920) — PRD_TRAVEL_BILLING FR-3.7.b cancellation-policy wire-up.
+//   When a non-Draft invoice is voided, the handler looks up the applicable
+//   CancellationPolicy (by invoice.cancellationPolicyId if set, otherwise
+//   by sub-brand default, otherwise tenant-wide default). If a policy is
+//   matched AND any line has a serviceStartDate AND the tier-resolved
+//   refundPercent > 0, the handler ALSO auto-creates a CreditNote row
+//   (parentInvoiceId = the voided invoice, totalAmount = NEGATIVE refund
+//   amount, docType = 'CreditNote'). Draft invoices never auto-issue
+//   (nothing was billed yet; no refund obligation).
+//
+//   Response envelope (additive — single top-level invoice keeps working
+//   for existing destructurers):
+//     {
+//       ...voided invoice fields...,
+//       creditNote: { ...CR row... } | null,
+//       policyApplied: { policyId, policyName, tier, refundPercent } | null,
+//     }
 router.post(
   "/invoices/:id/void",
   verifyToken,
@@ -7601,7 +7619,88 @@ router.post(
         },
       );
 
-      return res.status(200).json(updated);
+      // S33 — Cancellation-policy → auto-CreditNote issuance.
+      // Skip on Draft (nothing was billed; no refund obligation). Skip on
+      // CreditNote / DebitNote parents (you don't re-credit an adjustment).
+      let creditNote = null;
+      let policyApplied = null;
+      try {
+        if (
+          prevStatus !== "Draft" &&
+          invoice.docType !== "CreditNote" &&
+          invoice.docType !== "DebitNote"
+        ) {
+          const resolved = await resolveCancellationOutcome(
+            req,
+            invoice,
+          );
+          if (resolved && resolved.refundAmount > 0) {
+            const creditInvoiceNum = `CN-${invoice.invoiceNum}`;
+            creditNote = await prisma.travelInvoice.create({
+              data: {
+                tenantId: req.travelTenant.id,
+                subBrand: invoice.subBrand,
+                contactId: invoice.contactId,
+                invoiceNum: creditInvoiceNum,
+                docType: "CreditNote",
+                status: "Issued",
+                totalAmount: -resolved.refundAmount,
+                currency: invoice.currency,
+                parentInvoiceId: invoice.id,
+              },
+            });
+            await writeAudit(
+              "TravelInvoice",
+              "TRAVEL_INVOICE_CREDIT_NOTE_ISSUED",
+              creditNote.id,
+              req.user.userId,
+              req.travelTenant.id,
+              {
+                parentId: invoice.id,
+                parentInvoiceNum: invoice.invoiceNum,
+                amount: resolved.refundAmount,
+                reason: `Auto-issued from cancellation policy: ${resolved.policyName}`,
+                policyId: resolved.policyId,
+                tier: resolved.tier,
+                refundPercent: resolved.refundPercent,
+                subBrand: invoice.subBrand,
+                autoIssued: true,
+              },
+            );
+            policyApplied = {
+              policyId: resolved.policyId,
+              policyName: resolved.policyName,
+              tier: resolved.tier,
+              refundPercent: resolved.refundPercent,
+            };
+          } else if (resolved) {
+            // Policy matched but refund was 0% (no-refund tier) or invoice
+            // had no service-start date or totalAmount was null. We still
+            // surface the policy in the envelope for operator clarity.
+            policyApplied = {
+              policyId: resolved.policyId,
+              policyName: resolved.policyName,
+              tier: resolved.tier,
+              refundPercent: resolved.refundPercent,
+            };
+          }
+        }
+      } catch (cancelErr) {
+        // Defensive — auto-issuance failure should NOT roll back the void
+        // itself. The invoice IS voided; the credit-note can be issued
+        // manually via the existing POST /credit-note endpoint. Log and
+        // continue.
+        console.error(
+          "[travel-invoices] cancellation-policy auto-issuance error:",
+          cancelErr.message,
+        );
+      }
+
+      return res.status(200).json({
+        ...updated,
+        creditNote,
+        policyApplied,
+      });
     } catch (e) {
       if (e.status) {
         return res.status(e.status).json({ error: e.message, code: e.code });
@@ -7611,6 +7710,244 @@ router.post(
     }
   },
 );
+
+// ============================================================================
+// GET /api/travel/invoices/:id/cancel-preview
+// S58 — PRD_TRAVEL_BILLING FR-3.7.b cancellation-policy preview surface.
+//
+// READ-ONLY. Calls the shared resolveCancellationOutcome() helper (the same
+// resolver that POST /:id/void uses to drive its auto-CreditNote issuance)
+// WITHOUT mutating the invoice or creating any rows. Powers the void-
+// confirmation modal (S56 InvoiceDetail.jsx): operators can see the refund
+// amount + matched policy tier BEFORE clicking "Confirm Void", so they
+// don't accidentally trigger a refund they didn't intend.
+//
+// Auth: same gate as POST /:id/void — verifyToken + verifyRole(ADMIN,MANAGER).
+// USER role denied (helper-shape; can't void → can't preview either).
+// Tenant + sub-brand scoped via loadParentInvoice (same path as void).
+//
+// Status guard: already-Voided invoices return 409 ALREADY_VOIDED (matches
+// the void endpoint's idempotency guard semantics, surfaced one tier
+// stricter via 409 instead of 400 since the resource state is the conflict,
+// not the input shape).
+//
+// Response envelope (200):
+//   {
+//     invoiceId,
+//     status,                       // current invoice status (Issued/Paid/Draft/Partial)
+//     policyApplied: { policyId, policyName, tier, refundPercent } | null,
+//     refundAmount: number | null,  // INR / invoice.currency; null if no policy resolved
+//     refundPercent: number | null,
+//     daysBeforeServiceStart: number | null,
+//     serviceStartDate: ISO string | null,
+//     reason: 'OK' | 'NO_POLICY_RESOLVED'  // why preview is null/empty
+//   }
+//
+// Error envelopes:
+//   400 INVALID_ID            (from loadParentInvoice)
+//   403 SUB_BRAND_DENIED      (from loadParentInvoice)
+//   404 INVOICE_NOT_FOUND     (cross-tenant or nonexistent)
+//   409 ALREADY_VOIDED        (invoice already Voided — cannot preview a void)
+// ============================================================================
+router.get(
+  "/invoices/:id/cancel-preview",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const invoiceId = parseInt(req.params.id, 10);
+      const invoice = await loadParentInvoice(req, res, invoiceId);
+      if (!invoice) return;
+
+      if (invoice.status === "Voided") {
+        return res.status(409).json({
+          error: "Invoice already voided",
+          code: "ALREADY_VOIDED",
+        });
+      }
+
+      // Defensive try/catch around the resolver — mirrors the void
+      // endpoint's defensive shell so a transient DB hiccup on policy
+      // lookup yields a "no preview available" response instead of a 500.
+      let resolved = null;
+      try {
+        resolved = await resolveCancellationOutcome(req, invoice);
+      } catch (resolverErr) {
+        console.error(
+          "[travel-invoices] cancel-preview resolver error:",
+          resolverErr.message,
+        );
+        resolved = null;
+      }
+
+      if (!resolved) {
+        return res.status(200).json({
+          invoiceId: invoice.id,
+          status: invoice.status,
+          policyApplied: null,
+          refundAmount: null,
+          refundPercent: null,
+          daysBeforeServiceStart: null,
+          serviceStartDate: null,
+          reason: "NO_POLICY_RESOLVED",
+        });
+      }
+
+      return res.status(200).json({
+        invoiceId: invoice.id,
+        status: invoice.status,
+        policyApplied: {
+          policyId: resolved.policyId,
+          policyName: resolved.policyName,
+          tier: resolved.tier,
+          refundPercent: resolved.refundPercent,
+        },
+        refundAmount: resolved.refundAmount,
+        refundPercent: resolved.refundPercent,
+        daysBeforeServiceStart: resolved.daysBeforeStart,
+        serviceStartDate: resolved.serviceStartDate,
+        reason: "OK",
+      });
+    } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-invoices] cancel-preview error:", e.message);
+      res.status(500).json({ error: "Failed to preview cancellation" });
+    }
+  },
+);
+
+// S33 (#920) — Cancellation-policy resolver helper.
+//
+// Given a voided invoice, finds the applicable CancellationPolicy and
+// computes the refund amount under it. Returns:
+//   {
+//     policyId, policyName, tier, refundPercent, refundAmount,
+//     daysBeforeStart, serviceStartDate
+//   }
+// or null if no policy applies OR the invoice has no service-start date
+// (we can't compute days-before-start without one).
+//
+// Lookup precedence:
+//   1. invoice.cancellationPolicyId (operator-pinned at issue time).
+//   2. Active policy where subBrand === invoice.subBrand (sub-brand-specific).
+//   3. Active policy where subBrand IS NULL (tenant-wide default).
+//   First match wins; deterministic ordering by id ASC for repeatability.
+//
+// Tier-walking algorithm:
+//   - Parse tiersJson (assertValidTiers canonicalises sort DESC by
+//     daysBeforeServiceStart at write-time, but we re-sort here defensively).
+//   - daysBeforeStart = floor( (earliestServiceStartDate - now) / 1 day ).
+//   - Walk tiers in DESC threshold order; pick the FIRST tier whose
+//     daysBeforeServiceStart <= daysBeforeStart. That tier's refundPercent
+//     drives the refund amount.
+//   - If daysBeforeStart < smallest threshold (e.g. all tiers say >= 7
+//     days but cancellation is today), no tier matches → refundPercent = 0.
+//
+// refundAmount = invoice.totalAmount * (refundPercent / 100), rounded
+// to 2dp (matching the Decimal(15,2) column precision on TravelInvoice).
+async function resolveCancellationOutcome(req, invoice) {
+  // Resolve policy.
+  let policy = null;
+  if (invoice.cancellationPolicyId) {
+    policy = await prisma.cancellationPolicy.findFirst({
+      where: {
+        id: invoice.cancellationPolicyId,
+        tenantId: req.travelTenant.id,
+        isActive: true,
+      },
+    });
+  }
+  if (!policy) {
+    policy = await prisma.cancellationPolicy.findFirst({
+      where: {
+        tenantId: req.travelTenant.id,
+        subBrand: invoice.subBrand,
+        isActive: true,
+      },
+      orderBy: { id: "asc" },
+    });
+  }
+  if (!policy) {
+    policy = await prisma.cancellationPolicy.findFirst({
+      where: {
+        tenantId: req.travelTenant.id,
+        subBrand: null,
+        isActive: true,
+      },
+      orderBy: { id: "asc" },
+    });
+  }
+  if (!policy) return null;
+
+  // Parse tiers.
+  let tiers;
+  try {
+    tiers = JSON.parse(policy.tiersJson);
+  } catch (e) {
+    return null;
+  }
+  if (!Array.isArray(tiers) || tiers.length === 0) return null;
+  // Defensive re-sort DESC by daysBeforeServiceStart (assertValidTiers
+  // canonicalises at write, but legacy / manually-inserted rows may not).
+  tiers.sort(
+    (a, b) =>
+      Number(b.daysBeforeServiceStart) - Number(a.daysBeforeServiceStart),
+  );
+
+  // Find earliest service-start date across lines.
+  const lines = await prisma.travelInvoiceLine.findMany({
+    where: { invoiceId: invoice.id, tenantId: req.travelTenant.id },
+    select: { serviceStartDate: true },
+  });
+  let earliest = null;
+  for (const l of lines) {
+    if (!l.serviceStartDate) continue;
+    const d =
+      l.serviceStartDate instanceof Date
+        ? l.serviceStartDate
+        : new Date(l.serviceStartDate);
+    if (Number.isNaN(d.getTime())) continue;
+    if (!earliest || d < earliest) earliest = d;
+  }
+  if (!earliest) return null; // No service-start date → cannot compute tier.
+
+  const now = new Date();
+  const daysBeforeStart = Math.floor(
+    (earliest.getTime() - now.getTime()) / 86_400_000,
+  );
+
+  // Walk tiers DESC; pick first whose threshold <= daysBeforeStart.
+  let matched = null;
+  for (const t of tiers) {
+    const threshold = Number(t.daysBeforeServiceStart);
+    if (Number.isFinite(threshold) && daysBeforeStart >= threshold) {
+      matched = t;
+      break;
+    }
+  }
+  // No match (cancellation closer than the smallest threshold) → 0% refund.
+  const refundPercent = matched ? Number(matched.refundPercent) : 0;
+  const total = Number(invoice.totalAmount || 0);
+  const refundAmount = Math.round(total * (refundPercent / 100) * 100) / 100;
+
+  return {
+    policyId: policy.id,
+    policyName: policy.name,
+    tier: matched
+      ? {
+          daysBeforeServiceStart: Number(matched.daysBeforeServiceStart),
+          refundPercent: Number(matched.refundPercent),
+        }
+      : null,
+    refundPercent,
+    refundAmount,
+    daysBeforeStart,
+    serviceStartDate: earliest.toISOString(),
+  };
+}
 
 // ============================================================================
 // GET /api/travel/invoices/:id/timeline

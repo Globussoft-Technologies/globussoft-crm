@@ -703,6 +703,20 @@ async function main() {
   // (tenantId, subBrand) tuple. Re-runs of seed do NOT create duplicates.
   await seedStarterBrandKits(tenant.id);
 
+  // ── 12. Default cancellation policies (S57 — flagged by S33) ────────
+  //
+  // S33 (commit 1614f88e) shipped the CancellationPolicy model + auto-CR-NOTE
+  // issuance on void. Without seed defaults, fresh demo deploys have an empty
+  // CancellationPolicy table → operators voiding an invoice see "no policy
+  // applied" / zero auto-refund, and the auto-issuance flow that's the whole
+  // point of S33 is invisible until a human manually POSTs a policy via
+  // /api/travel/cancellation-policies. S57 closes that gap with two starter
+  // sub-brand defaults (TMC + RFU) so the void-flow demo path Just Works.
+  //
+  // PRD anchor: PRD_TRAVEL_BILLING FR-3.7 (cancellation + refund flow).
+  // Idempotent — see seedDefaultCancellationPolicies doc-comment.
+  await seedDefaultCancellationPolicies(tenant.id);
+
   console.log("[seed-travel] done — Travel Stall demo tenant + placeholder content seeded.");
   console.log("[seed-travel] Login: yasin@travelstall.in / password123");
 }
@@ -805,6 +819,103 @@ async function seedStarterBrandKits(tenantId) {
   }
   console.log(
     `[seed-travel] BrandKits: ${created} created, ${skipped} already existed (4 starter kits, placeholder palette pending Yasin Q22)`,
+  );
+}
+
+/**
+ * Seed 2 default CancellationPolicy rows — one per primary sub-brand.
+ *
+ * Pairs with S33 (commit 1614f88e) which shipped the model + auto-CR-NOTE
+ * issuance on POST /api/travel/invoices/:id/void. Without these defaults a
+ * fresh demo deploy has an empty CancellationPolicy table, so the void
+ * handler's resolveCancellationOutcome() falls through to no-policy → zero
+ * auto-refund → the demo experience hides the very flow S33 introduced.
+ *
+ * The two policies (TMC Default + RFU Default) are scoped to their
+ * respective sub-brand (`subBrand: 'tmc'` / `'rfu'`) so the resolver picks
+ * them up when an invoice's sub-brand context matches and no explicit
+ * `cancellationPolicyId` is set on the invoice. Travelstall + Visasure
+ * sub-brands are intentionally left without seeded defaults pending
+ * Yasin's product call on whether those sub-brands need tiered refunds at
+ * all (Q-marker tracked under DECISIONS_TRACKER).
+ *
+ * Tier shape:
+ *   TMC: 60d→100% / 30d→50% / 7d→25% / 0d→0% (school-trip-typical)
+ *   RFU: 90d→100% / 45d→75% / 14d→50% / 0d→0% (Umrah is harder to cancel
+ *        late because Saudi visa + hotel deposits land earlier)
+ *
+ * Idempotency:
+ *   - findFirst on (tenantId, name) — equivalent to the schema's
+ *     @@unique([tenantId, name]) composite but resilient to a future
+ *     constraint rename via @@unique(..., name: "...").
+ *   - The `update` payload deliberately only touches `description` +
+ *     `isActive` — NOT `tiersJson`. This means an operator who tuned the
+ *     tiers via the admin UI keeps their tuning across re-runs of seed.
+ *     If we ever need to force-update the seeded tiers (e.g. a tier shape
+ *     change in a future schema migration), this seeder's update block can
+ *     be widened — but the default behaviour is "first-write wins for
+ *     tiers".
+ */
+async function seedDefaultCancellationPolicies(tenantId) {
+  const POLICIES = [
+    {
+      name: "TMC Default",
+      subBrand: "tmc",
+      description: "Standard TMC school-trip cancellation policy",
+      tiersJson: JSON.stringify([
+        { daysBeforeServiceStart: 60, refundPercent: 100 },
+        { daysBeforeServiceStart: 30, refundPercent: 50 },
+        { daysBeforeServiceStart: 7, refundPercent: 25 },
+        { daysBeforeServiceStart: 0, refundPercent: 0 },
+      ]),
+    },
+    {
+      name: "RFU Default",
+      subBrand: "rfu",
+      description: "Standard RFU Umrah-trip cancellation policy",
+      tiersJson: JSON.stringify([
+        { daysBeforeServiceStart: 90, refundPercent: 100 },
+        { daysBeforeServiceStart: 45, refundPercent: 75 },
+        { daysBeforeServiceStart: 14, refundPercent: 50 },
+        { daysBeforeServiceStart: 0, refundPercent: 0 },
+      ]),
+    },
+  ];
+
+  let created = 0;
+  let updated = 0;
+  for (const spec of POLICIES) {
+    const existing = await prisma.cancellationPolicy.findFirst({
+      where: { tenantId, name: spec.name },
+      select: { id: true },
+    });
+    if (existing) {
+      // Update non-tier fields only — preserves operator-tuned tiers
+      // across re-runs of seed (see doc-comment above for the rationale).
+      await prisma.cancellationPolicy.update({
+        where: { id: existing.id },
+        data: {
+          description: spec.description,
+          isActive: true,
+        },
+      });
+      updated++;
+    } else {
+      await prisma.cancellationPolicy.create({
+        data: {
+          tenantId,
+          name: spec.name,
+          subBrand: spec.subBrand,
+          description: spec.description,
+          tiersJson: spec.tiersJson,
+          isActive: true,
+        },
+      });
+      created++;
+    }
+  }
+  console.log(
+    `[seed-travel] cancellation policies: ${created} created, ${updated} already existed (TMC Default + RFU Default — S33 auto-CR-NOTE defaults)`,
   );
 }
 

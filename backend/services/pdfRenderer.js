@@ -23,6 +23,74 @@ const PDFDocument = require("pdfkit");
 const hsnSacMapper = require("../lib/hsnSacMapper");
 const gstCalculation = require("../lib/gstCalculation");
 
+// ── S51 logo-image fetch + in-memory LRU cache ──────────────────────
+// Contract (called from renderTravelInvoicePdf):
+//   fetchLogoBuffer(url, opts?) -> Promise<Buffer|null>
+//
+//   - Returns null on ANY fetch failure (404, network error, timeout,
+//     non-image content-type, oversize body). The PDF renderer treats
+//     null as "skip the doc.image() call" — invoice still renders, just
+//     without a logo. Fail-soft because a flaky CDN should NOT block an
+//     accountant from downloading their invoice.
+//   - In-memory Map cache (process-lifetime). Max 50 entries; FIFO
+//     eviction when full. TTL 1h (3_600_000 ms).
+//   - HTTP timeout 5s, max content-length 5MB.
+//   - opts: { axios?, ttlMs?, maxEntries?, cache? } — DI hooks for tests.
+//
+// axios is lazy-required inside the function so unit tests that never
+// touch this code path don't pull the axios surface.
+const LOGO_CACHE = new Map();
+const LOGO_CACHE_TTL_MS = 60 * 60 * 1000;
+const LOGO_CACHE_MAX = 50;
+const LOGO_FETCH_TIMEOUT_MS = 5_000;
+const LOGO_FETCH_MAX_BYTES = 5 * 1024 * 1024;
+
+async function fetchLogoBuffer(url, opts) {
+  if (!url || typeof url !== "string") return null;
+  const o = opts || {};
+  const ttl = typeof o.ttlMs === "number" ? o.ttlMs : LOGO_CACHE_TTL_MS;
+  const max = typeof o.maxEntries === "number" ? o.maxEntries : LOGO_CACHE_MAX;
+  const cache = o.cache || LOGO_CACHE;
+  const now = Date.now();
+
+  const hit = cache.get(url);
+  if (hit && hit.expiresAt > now) return hit.buf;
+  if (hit) cache.delete(url);
+
+  while (cache.size >= max) {
+    const firstKey = cache.keys().next().value;
+    if (firstKey === undefined) break;
+    cache.delete(firstKey);
+  }
+
+  let buf = null;
+  try {
+    const axios = o.axios || require("axios");
+    const resp = await axios.get(url, {
+      responseType: "arraybuffer",
+      timeout: LOGO_FETCH_TIMEOUT_MS,
+      maxContentLength: LOGO_FETCH_MAX_BYTES,
+      validateStatus: (s) => s >= 200 && s < 300,
+    });
+    if (!resp || !resp.data) return null;
+    buf = Buffer.isBuffer(resp.data) ? resp.data : Buffer.from(resp.data);
+    if (buf.length === 0 || buf.length > LOGO_FETCH_MAX_BYTES) return null;
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[pdfRenderer/S51] logo fetch failed for ${url}: ${err && err.message ? err.message : err}`,
+    );
+    return null;
+  }
+
+  cache.set(url, { buf, expiresAt: now + ttl });
+  return buf;
+}
+
+function _resetLogoCache() {
+  LOGO_CACHE.clear();
+}
+
 // ── Helpers ────────────────────────────────────────────────────────
 
 function streamToBuffer(doc) {
@@ -2288,6 +2356,185 @@ const SUB_BRAND_ACCENT = {
   visasure: "#7A2F5C",
 };
 
+// ---------------------------------------------------------------------------
+// Brand-kit-aware invoice PDF defaults — S34 (TRAVEL_BIG_SCOPE_BACKLOG.md,
+// PRD_TRAVEL_BILLING.md "Per-sub-brand PDF invoice templates").
+//
+// Same shape as the S13 itinerary-template selector
+// (backend/routes/travel_itinerary_templates.js, commit 1541a063) — same key
+// set, same fallback hex values per sub-brand, same precedence chain. The
+// FALLBACKS constant is replicated VERBATIM from S13 to keep cross-doc
+// consistency between itinerary templates + invoice PDFs (an admin who
+// configures a sub-brand block once gets matching colors across both surfaces).
+//
+// On PDF render, when the caller doesn't override branding, we read
+// `tenant.subBrandConfigJson` (legacy admin-curated per-sub-brand kit) and
+// resolve deterministic defaults for the invoice's `subBrand` (or top-level /
+// generic fall-through).
+//
+// Q22 (Yasin brand pack) is the content-blocker for the actual logo asset URLs
+// + final-approved hex codes; until then `subBrandConfigJson` is typically
+// empty/null in production, so this slice falls back to a hard-coded
+// sensible-default palette per sub-brand. When the brand pack lands, an ADMIN
+// PATCH of the tenant's subBrandConfigJson (single update) cascades into every
+// future invoice + itinerary render — no per-route edit needed.
+//
+// JSON shape consumed (one of):
+//   { tmc:        { thumbnailUrl?, primaryColor?, accentColor?,
+//                   headerColor?, fontFamily? },
+//     rfu:        { ... }, travelstall: { ... }, visasure: { ... },
+//     // optional top-level fallback used when invoice has no subBrand
+//     thumbnailUrl?, primaryColor?, accentColor?, headerColor?, fontFamily?
+//   }
+//
+// Output (consumed by renderTravelInvoicePdf):
+//   - branding.headerColor   ← cfg.headerColor   (top-band fill)
+//   - branding.primaryColor  ← cfg.primaryColor  (totals + section accents)
+//   - branding.accentColor   ← cfg.accentColor   (divider rules, secondary)
+//   - branding.fontFamily    ← cfg.fontFamily    (reserved — pdfkit is
+//                                                 limited to Helvetica /
+//                                                 Times / Courier built-ins,
+//                                                 so this field is recorded
+//                                                 for forward-compat once
+//                                                 we wire a custom font
+//                                                 loader; today it's a
+//                                                 metadata-only field).
+//   - branding.thumbnailUrl  ← cfg.thumbnailUrl  (logo for top-band; null
+//                                                 fallback means "skip logo
+//                                                 image" — operator hasn't
+//                                                 uploaded one yet).
+//   - branding._source       ← "subBrandConfig" | "fallback"
+//
+// Caller precedence (highest first):
+//   1. Explicit per-render override (opts.branding.*)
+//   2. Per-sub-brand block in subBrandConfigJson[subBrand]
+//   3. Top-level block in subBrandConfigJson
+//   4. Hard-coded fallback per sub-brand (INVOICE_BRAND_KIT_FALLBACKS below)
+//
+// Backward compat: wellness invoices (renderBrandedInvoicePdf) don't have
+// a `subBrand` and don't pass through this selector at all — that path is
+// unchanged. Travel invoices without a subBrand (defensive — TravelInvoice's
+// schema requires subBrand so this is a paranoid fallback) drop to _generic.
+const INVOICE_BRAND_KIT_FIELDS = [
+  "thumbnailUrl",
+  "primaryColor",
+  "accentColor",
+  "headerColor",
+  "fontFamily",
+];
+
+// Per-sub-brand fallback defaults — replicated VERBATIM from S13's
+// BRAND_KIT_FALLBACKS (backend/routes/travel_itinerary_templates.js:123-129).
+// Colors are WCAG-AA on white; Inter is the same family Marketing Flyer Studio
+// + main app use. thumbnailUrl=null because Q22 hasn't landed (operator
+// uploads on save).
+const INVOICE_BRAND_KIT_FALLBACKS = {
+  tmc:         { thumbnailUrl: null, primaryColor: "#1F4E79", accentColor: "#F2B544", headerColor: "#1F4E79", fontFamily: "Inter, sans-serif" },
+  rfu:         { thumbnailUrl: null, primaryColor: "#0B5345", accentColor: "#D4AC0D", headerColor: "#0B5345", fontFamily: "Inter, sans-serif" },
+  travelstall: { thumbnailUrl: null, primaryColor: "#C0392B", accentColor: "#F39C12", headerColor: "#922B21", fontFamily: "Inter, sans-serif" },
+  visasure:    { thumbnailUrl: null, primaryColor: "#283747", accentColor: "#5DADE2", headerColor: "#283747", fontFamily: "Inter, sans-serif" },
+  _generic:    { thumbnailUrl: null, primaryColor: "#1F4E79", accentColor: "#F2B544", headerColor: "#1F4E79", fontFamily: "Inter, sans-serif" },
+};
+
+function parseInvoiceSubBrandConfig(jsonString) {
+  if (!jsonString || typeof jsonString !== "string") return {};
+  try {
+    const obj = JSON.parse(jsonString);
+    if (!obj || typeof obj !== "object" || Array.isArray(obj)) return {};
+    return obj;
+  } catch (_e) {
+    // Malformed JSON → return empty so we fall through to hard-coded
+    // fallback. Don't throw — a bad admin-saved blob shouldn't kill an
+    // invoice download.
+    return {};
+  }
+}
+
+// S52 — alias for the parser so the generic name (`parseTravelSubBrandConfig`)
+// is available to sibling travel PDF helpers (itinerary / quote / diagnostic /
+// tmc-readiness / travelstall-personalised) that now consume the same selector.
+// `parseInvoiceSubBrandConfig` is kept as the S34 export name for back-compat
+// with the existing brand-kit test suite + the invoice renderer.
+const parseTravelSubBrandConfig = parseInvoiceSubBrandConfig;
+
+// Pick brand-kit fields for a given sub-brand from the parsed config blob.
+// Sub-brand block first, then top-level fallback, then hard-coded
+// per-sub-brand defaults. Returns { fields: {...}, source: "..." } where
+// source ∈ {"subBrandConfig" | "fallback"} for downstream callers + tests
+// that want to assert the resolution path.
+function resolveInvoiceBrandKit(cfg, subBrand) {
+  const out = {};
+  let usedConfig = false;
+  const subBlock = subBrand && cfg && typeof cfg[subBrand] === "object" && !Array.isArray(cfg[subBrand])
+    ? cfg[subBrand]
+    : null;
+
+  for (const f of INVOICE_BRAND_KIT_FIELDS) {
+    if (subBlock && subBlock[f] !== undefined && subBlock[f] !== null && subBlock[f] !== "") {
+      out[f] = subBlock[f];
+      usedConfig = true;
+    } else if (cfg && cfg[f] !== undefined && cfg[f] !== null && cfg[f] !== "") {
+      out[f] = cfg[f];
+      usedConfig = true;
+    }
+  }
+
+  // Backfill missing fields from the hard-coded fallback so the returned
+  // object is always shape-complete. Source remains "subBrandConfig" if at
+  // least one field came from config; "fallback" only when ZERO fields came
+  // from config.
+  const fallbackKey = subBrand && INVOICE_BRAND_KIT_FALLBACKS[subBrand] ? subBrand : "_generic";
+  const fallback = INVOICE_BRAND_KIT_FALLBACKS[fallbackKey];
+  for (const f of INVOICE_BRAND_KIT_FIELDS) {
+    if (out[f] === undefined) out[f] = fallback[f];
+  }
+
+  return { fields: out, source: usedConfig ? "subBrandConfig" : "fallback" };
+}
+
+// S52 — alias the resolver under the generic name (`resolveTravelBrandKit`)
+// so sibling travel PDF helpers don't carry an "Invoice" suffix when reading
+// it. Same body, same shape, same precedence chain. Keeping the original
+// `resolveInvoiceBrandKit` name as an alias retains the S34 test surface +
+// the invoice renderer's call-site verbatim.
+const resolveTravelBrandKit = resolveInvoiceBrandKit;
+
+// S52 — shared brand-kit resolution helper for the 5 sibling travel PDF
+// helpers (itinerary / quote / diagnostic / tmc-readiness / travelstall-
+// personalised). Each renderer threads `opts.tenant` + `opts.branding` and
+// calls this once at top-of-body to resolve the effective brand kit.
+//
+// Precedence (matches S34 for invoice PDFs):
+//   1. opts.branding override fields (per-render explicit, layer 1)
+//   2. tenant.subBrandConfigJson[subBrand] (per-sub-brand config, layer 2)
+//   3. tenant.subBrandConfigJson top-level keys (top-level fallback, layer 3)
+//   4. INVOICE_BRAND_KIT_FALLBACKS[subBrand] (hard-coded, layer 4)
+//
+// Returns { branding, source } where:
+//   - branding has every BRAND_KIT_FIELD shape-complete (headerColor,
+//     primaryColor, accentColor, thumbnailUrl, fontFamily).
+//   - source ∈ {"subBrandConfig", "fallback"} for observability (the invoice
+//     renderer stamps it into PDF Producer metadata; the sibling renderers
+//     don't currently surface it but the same field is available).
+//
+// Sibling helpers used to read `accent = SUB_BRAND_ACCENT[sub] || "#111111"`.
+// After S52, the call site reads `branding.headerColor` from this helper,
+// which sources from tenant.subBrandConfigJson when available and falls back
+// to INVOICE_BRAND_KIT_FALLBACKS otherwise. The SUB_BRAND_ACCENT constant is
+// retained for any non-travel call sites (none today, but leaving it in case
+// a future deletion would surface an unexpected consumer).
+function resolveTravelHeaderBrandKit(subBrand, opts = {}) {
+  const tenant = opts && opts.tenant;
+  const cfg = parseTravelSubBrandConfig(tenant && tenant.subBrandConfigJson);
+  const { fields, source } = resolveTravelBrandKit(cfg, subBrand);
+  const callerBranding = (opts && opts.branding && typeof opts.branding === "object")
+    ? opts.branding
+    : {};
+  const branding = { ...fields, ...callerBranding };
+  return { branding, source };
+}
+// ---------------------------------------------------------------------------
+
 function resolveAnswerLabel(question, rawAnswer) {
   if (rawAnswer == null) return "—";
   if (Array.isArray(question?.options) && question.options.length > 0) {
@@ -2307,12 +2554,33 @@ function resolveAnswerLabel(question, rawAnswer) {
 // (travel_itineraries.js / travel_travelstall.js) reference these two
 // renderers but they were missing from this worktree's pdfRenderer.js,
 // so every /itineraries/:id/pdf + personalised-pdf call 500'd.
-function renderTravelItineraryPdf(itinerary, contact) {
+//
+// S52 — `opts.tenant` (optional) threads `tenant.subBrandConfigJson` into
+// the shared brand-kit selector so an admin POST to that column cascades
+// into this PDF too. `opts.branding` (optional) per-render override is the
+// highest-precedence layer. When `opts` is omitted (legacy caller), the
+// renderer falls back to INVOICE_BRAND_KIT_FALLBACKS per sub-brand — same
+// palette the invoice renderer uses, so the four travel sub-brands now
+// share one curated color set. Pre-S52, the header color came from the
+// legacy SUB_BRAND_ACCENT constant; that constant is retained for any
+// non-travel call site but no longer consulted here.
+async function renderTravelItineraryPdf(itinerary, contact, opts = {}) {
   const sub = itinerary.subBrand;
   const brandLabel = SUB_BRAND_LABEL[sub] || "Travel CRM";
-  const accent = SUB_BRAND_ACCENT[sub] || "#111111";
+  const { branding } = resolveTravelHeaderBrandKit(sub, opts);
+  const accent = branding.headerColor || INVOICE_BRAND_KIT_FALLBACKS._generic.headerColor;
   const currency = itinerary.currency || "INR";
   const items = Array.isArray(itinerary.items) ? itinerary.items : [];
+
+  // S65 — fetch the per-sub-brand logo (if any) BEFORE we start drawing.
+  // pdfkit's doc.image() needs the buffer synchronously, so we resolve the
+  // remote URL up front. Goes through module.exports.fetchLogoBuffer so
+  // unit tests can vi.spyOn(...) the seam without reaching into axios.
+  // Fail-soft: on any error, the helper returns null and we render a
+  // logo-less header band (back-compat with pre-S65 output).
+  const logoBuffer = branding.thumbnailUrl
+    ? await module.exports.fetchLogoBuffer(branding.thumbnailUrl)
+    : null;
 
   const doc = new PDFDocument({ size: "A4", margin: 50 });
   const bufPromise = streamToBuffer(doc);
@@ -2325,6 +2593,26 @@ function renderTravelItineraryPdf(itinerary, contact) {
     `Itinerary v${itinerary.version || 1}`,
     50, 42, { align: "left" },
   );
+
+  // S65 — embed brand logo into the header band's top-right (80×40 fit box
+  // at right edge). doc.image() throws on invalid buffers; wrap in try/catch
+  // so a malformed logo can't 500 the download. The brand color band still
+  // renders behind the logo regardless.
+  if (logoBuffer) {
+    try {
+      const LOGO_W = 80;
+      const LOGO_H = 40;
+      const LOGO_X = doc.page.width - LOGO_W - 50;
+      const LOGO_Y = 10;
+      doc.image(logoBuffer, LOGO_X, LOGO_Y, { fit: [LOGO_W, LOGO_H] });
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[pdfRenderer/S65] doc.image() rejected logo buffer (itinerary): ${err && err.message ? err.message : err}`,
+      );
+    }
+  }
+
   doc.fillColor("#111").moveDown(2);
 
   // Customer block
@@ -2410,12 +2698,31 @@ function renderTravelItineraryPdf(itinerary, contact) {
 }
 
 // ── Travel CRM — Travel Stall personalised 3-5 destination PDF (PRD §4.5)
-// Downstream artefact of the llmRouter bulk-text consumer. STUB branding
-// (SUB_BRAND_ACCENT.travelstall + Helvetica) pending Q22 brand assets.
-function renderTravelStallPersonalisedPdf(payload) {
+// Downstream artefact of the llmRouter bulk-text consumer.
+//
+// S52 — header band sources from the shared brand-kit selector. `payload.tenant`
+// (optional) threads `tenant.subBrandConfigJson` into the resolver so an admin
+// POST to that column cascades into this PDF. `payload.branding` (optional)
+// per-render override wins (precedence layer 1). When neither is supplied
+// (legacy caller), the renderer falls back to INVOICE_BRAND_KIT_FALLBACKS.
+// travelstall — the S13-aligned palette (headerColor #922B21). Pre-S52 this
+// was the legacy SUB_BRAND_ACCENT.travelstall (#122647 navy). The new color
+// is what S34's invoice renderer ships today; we adopt the same so the four
+// travel sub-brands share one curated palette. Logo embedding remains pending
+// Q22 brand assets — the `branding.thumbnailUrl` field is plumbed end-to-end
+// but the Travel Stall personalised template doesn't yet doc.image() the
+// logo (only the invoice renderer does that today via S51's fetchLogoBuffer).
+async function renderTravelStallPersonalisedPdf(payload) {
   const sub = "travelstall";
   const brandLabel = SUB_BRAND_LABEL[sub] || "Travel Stall";
-  const accent = SUB_BRAND_ACCENT[sub] || "#122647";
+  // S52 — resolve via the shared brand-kit selector. The payload object may
+  // carry `tenant` and `branding` keys; treat the whole payload as the opts
+  // bag so route handlers can pass tenant alongside contact/destinations.
+  const { branding } = resolveTravelHeaderBrandKit(sub, {
+    tenant: payload && payload.tenant,
+    branding: payload && payload.branding,
+  });
+  const accent = branding.headerColor || INVOICE_BRAND_KIT_FALLBACKS.travelstall.headerColor;
   const contact = payload?.contact || {};
   const destinations = Array.isArray(payload?.destinations) ? payload.destinations.slice(0, 5) : [];
   const budget = payload?.budget != null ? Number(payload.budget) : null;
@@ -2423,6 +2730,13 @@ function renderTravelStallPersonalisedPdf(payload) {
   const diagnostic = payload?.diagnostic || null;
   const proseText = String(payload?.proseText || "");
   const generatedAt = payload?.generatedAt || new Date().toISOString();
+
+  // S65 — fetch the per-sub-brand logo (if any) BEFORE we start drawing.
+  // Same pattern as renderTravelInvoicePdf — module.exports indirection
+  // keeps the CJS self-mocking seam intact for vitest spies.
+  const logoBuffer = branding.thumbnailUrl
+    ? await module.exports.fetchLogoBuffer(branding.thumbnailUrl)
+    : null;
 
   const doc = new PDFDocument({ size: "A4", margin: 50 });
   const bufPromise = streamToBuffer(doc);
@@ -2432,6 +2746,24 @@ function renderTravelStallPersonalisedPdf(payload) {
   doc.font("Helvetica-Bold").fontSize(18).fillColor("#fff")
     .text(brandLabel, 50, 22, { align: "left" });
   doc.fillColor("#fff").fontSize(10).text("Personalised Recommendations", 50, 42, { align: "left" });
+
+  // S65 — embed brand logo into the header band's top-right (80×40 fit box).
+  // Fail-soft try/catch matches the invoice renderer.
+  if (logoBuffer) {
+    try {
+      const LOGO_W = 80;
+      const LOGO_H = 40;
+      const LOGO_X = doc.page.width - LOGO_W - 50;
+      const LOGO_Y = 10;
+      doc.image(logoBuffer, LOGO_X, LOGO_Y, { fit: [LOGO_W, LOGO_H] });
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[pdfRenderer/S65] doc.image() rejected logo buffer (travelstall): ${err && err.message ? err.message : err}`,
+      );
+    }
+  }
+
   doc.fillColor("#111").moveDown(2);
 
   // Customer block
@@ -2532,10 +2864,19 @@ function loadTravelHeaderLogo() {
   return _travelHeaderLogo;
 }
 
-function renderTravelDiagnosticPdf(diagnostic, contact, bank, opts = {}) {
+// S52 — `opts.tenant` (optional) threads `tenant.subBrandConfigJson` into
+// the shared brand-kit selector; `opts.branding` (optional) per-render
+// override wins. `opts.logoBuffer` (pre-S52) is retained — that path is
+// route-resolved from S3 / tenant assets and still drawn into the header.
+// When neither tenant nor branding is supplied (legacy caller), the
+// header color falls back to INVOICE_BRAND_KIT_FALLBACKS[subBrand]. Pre-S52
+// the color came from SUB_BRAND_ACCENT[sub]; the four travel sub-brands
+// now share the S13-aligned palette.
+async function renderTravelDiagnosticPdf(diagnostic, contact, bank, opts = {}) {
   const sub = diagnostic.subBrand;
   const brandLabel = SUB_BRAND_LABEL[sub] || "Travel CRM";
-  const accent = SUB_BRAND_ACCENT[sub] || "#111111";
+  const { branding } = resolveTravelHeaderBrandKit(sub, opts);
+  const accent = branding.headerColor || INVOICE_BRAND_KIT_FALLBACKS._generic.headerColor;
 
   let questions = [];
   try {
@@ -2547,6 +2888,16 @@ function renderTravelDiagnosticPdf(diagnostic, contact, bank, opts = {}) {
     answers = JSON.parse(diagnostic.answersJson || "{}");
   } catch { /* leave empty */ }
 
+  // S65 — when the brand-kit selector surfaces a thumbnailUrl AND the route
+  // didn't already pass an explicit opts.logoBuffer, fetch the remote logo
+  // through the shared LRU cache. Explicit logoBuffer (route-resolved from
+  // S3 / tenant) stays as the highest-precedence layer (pre-S65 contract).
+  // Fail-soft: null buffer falls back to the bundled asset → emblem badge.
+  let brandKitLogoBuf = null;
+  if (!opts.logoBuffer && branding.thumbnailUrl) {
+    brandKitLogoBuf = await module.exports.fetchLogoBuffer(branding.thumbnailUrl);
+  }
+
   const doc = new PDFDocument({ size: "A4", margin: 50 });
   const bufPromise = streamToBuffer(doc);
 
@@ -2554,9 +2905,13 @@ function renderTravelDiagnosticPdf(diagnostic, contact, bank, opts = {}) {
   const headerH = 66;
   doc.rect(0, 0, doc.page.width, headerH).fill(accent);
   let headerTextX = 50;
-  // Logo priority: route-resolved buffer (S3 / tenant) → bundled asset →
-  // drawn emblem badge. The route passes opts.logoBuffer from S3.
-  const logoBuf = opts.logoBuffer || loadTravelHeaderLogo();
+  // Logo priority: opts.logoBuffer (route-resolved S3 / tenant — pre-S65) →
+  // branding.thumbnailUrl fetched via S65 cache → bundled asset → emblem
+  // badge. The diagnostic renderer keeps its left-aligned 36×36 emblem slot
+  // (existing layout) — that's distinct from S65's 80×40 top-right slot
+  // used by the other 4 sibling renderers, because the diagnostic header
+  // band was designed left-anchored before S65.
+  const logoBuf = opts.logoBuffer || brandKitLogoBuf || loadTravelHeaderLogo();
   let logoDrawn = false;
   if (logoBuf) {
     try {
@@ -2711,7 +3066,15 @@ function renderTravelDiagnosticPdf(diagnostic, contact, bank, opts = {}) {
 //   - Board hook is rendered ONLY when boardHook is a non-empty string.
 //
 // Returns Promise<Buffer> (matches sibling renderers' contract).
-function renderTmcReadinessReport({
+// S52 — accepts `tenant` (optional) for the shared brand-kit selector
+// (reads `tenant.subBrandConfigJson` → tmc block → headerColor) and
+// `branding` (optional) for per-render explicit override (precedence
+// layer 1). Pre-S52 the report used `SUB_BRAND_ACCENT.tmc` (#0B4F6C).
+// The TMC report is always sub-brand "tmc" so the resolver always reads
+// the tmc block; when neither tenant nor branding is supplied (legacy
+// caller), the renderer falls back to INVOICE_BRAND_KIT_FALLBACKS.tmc
+// (#1F4E79, the S13-aligned palette).
+async function renderTmcReadinessReport({
   engineOutput = null,
   narrative = null,
   standingFacts = null,
@@ -2720,6 +3083,8 @@ function renderTmcReadinessReport({
   schoolAnswers = null,
   bookingUrl = "",
   catalogueMatched = [], // kept on the API for forward-compat; not rendered as named trips per §3.5
+  tenant = null,
+  branding: brandingOverride = null,
 } = {}) {
   // Defensively coerce — the route handler passes structured JSON but
   // a malformed call shouldn't bomb the PDF generation.
@@ -2764,13 +3129,28 @@ function renderTmcReadinessReport({
   const vendorVetting = String(assurance.vendor_transport_vetting || "").trim();
   const governancePack = Array.isArray(assurance.governance_pack) ? assurance.governance_pack : [];
 
+  // S52 — TMC readiness report is fixed sub-brand "tmc"; pull the header
+  // color from the shared brand-kit selector so admin-curated palettes
+  // cascade in via `tenant.subBrandConfigJson`. Per-render override via
+  // `branding` is precedence layer 1.
+  const { branding: tmcBranding } = resolveTravelHeaderBrandKit("tmc", {
+    tenant,
+    branding: brandingOverride,
+  });
+  const accent = tmcBranding.headerColor || INVOICE_BRAND_KIT_FALLBACKS.tmc.headerColor;
+
+  // S65 — fetch the TMC sub-brand logo (if any) BEFORE drawing the cover.
+  // pdfkit's doc.image() needs the buffer synchronously; resolve up front.
+  const tmcLogoBuffer = tmcBranding.thumbnailUrl
+    ? await module.exports.fetchLogoBuffer(tmcBranding.thumbnailUrl)
+    : null;
+
   // Document scaffold.
   const doc = new PDFDocument({ size: "A4", margin: 50 });
   const bufPromise = streamToBuffer(doc);
   const pageW = doc.page.width;
   const pageMargin = 50;
   const contentW = pageW - pageMargin * 2;
-  const accent = SUB_BRAND_ACCENT.tmc || "#0B4F6C";
 
   // ── Section 1: Cover ────────────────────────────────────────────────
   doc.rect(0, 0, pageW, 110).fill(accent);
@@ -2780,6 +3160,25 @@ function renderTmcReadinessReport({
     .text("Student experiential readiness profile", pageMargin, 56);
   doc.fillColor("#fff").font("Helvetica").fontSize(9)
     .text("Diagnostic-led, never destination-led.", pageMargin, 74);
+
+  // S65 — embed brand logo in the cover band's top-right (80×40 fit box at
+  // right edge). The 110px-tall cover band gives more vertical room than
+  // the sibling renderers' 60px header, so we keep the same 80×40 fit slot
+  // for visual consistency across all 5 travel PDFs. Fail-soft try/catch.
+  if (tmcLogoBuffer) {
+    try {
+      const LOGO_W = 80;
+      const LOGO_H = 40;
+      const LOGO_X = pageW - LOGO_W - pageMargin;
+      const LOGO_Y = 30;
+      doc.image(tmcLogoBuffer, LOGO_X, LOGO_Y, { fit: [LOGO_W, LOGO_H] });
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[pdfRenderer/S65] doc.image() rejected logo buffer (tmc-readiness): ${err && err.message ? err.message : err}`,
+      );
+    }
+  }
 
   doc.fillColor(BRAND.textDark).font("Helvetica-Bold").fontSize(16)
     .text(schoolName, pageMargin, 140, { width: contentW });
@@ -2971,11 +3370,29 @@ function renderTmcReportSection(doc, { num, title, body, accent }) {
 }
 
 // ── Travel CRM — quote PDF (DD-5.6) ─────────────────────────────────
-function renderTravelQuotePdf(quote) {
+// S52 — optional second `opts` arg (back-compat with single-arg legacy
+// callers) threads `opts.tenant` + `opts.branding` into the shared
+// brand-kit selector. Precedence chain (highest first):
+//   1. `quote.brandKit.accent` (pre-S52 inline override — preserved
+//      so the existing quote-template callers keep working)
+//   2. `opts.branding.*`        (S52 per-render explicit override)
+//   3. `opts.tenant.subBrandConfigJson[subBrand]` (S52 admin config)
+//   4. `opts.tenant.subBrandConfigJson` top-level (S52 admin config)
+//   5. INVOICE_BRAND_KIT_FALLBACKS[subBrand]      (S52 hard-coded)
+// Pre-S52 fallback was SUB_BRAND_ACCENT[sub]; the four travel sub-brands
+// now share the S13-aligned palette through #5.
+async function renderTravelQuotePdf(quote, opts = {}) {
   const q = quote || {};
   const sub = q.subBrand;
   const brandLabel = SUB_BRAND_LABEL[sub] || "Travel CRM";
-  const accent = (q.brandKit && q.brandKit.accent) || SUB_BRAND_ACCENT[sub] || "#111111";
+  const { branding } = resolveTravelHeaderBrandKit(sub, opts);
+  // Layer 1 — legacy `q.brandKit.accent` inline override still wins (back-
+  // compat with pre-S52 quote-template callers). Layer 2 — branding.headerColor
+  // from the shared selector. Layer 3 — hard-coded fallback (defensive — every
+  // sub-brand has a fallback entry so this fires only on unknown sub-brand).
+  const accent = (q.brandKit && q.brandKit.accent)
+    || branding.headerColor
+    || INVOICE_BRAND_KIT_FALLBACKS._generic.headerColor;
   const currency = q.currency || "INR";
   const rawItems = Array.isArray(q.items)
     ? q.items
@@ -2993,6 +3410,19 @@ function renderTravelQuotePdf(quote) {
     return `${currency} ${v.toFixed(2)}`;
   }
 
+  // S65 — resolve logo URL BEFORE drawing. Precedence:
+  //   1. q.brandKit.logoUrl  — pre-S65 inline override (the quote-template
+  //      caller could carry an explicit logo URL alongside the accent
+  //      override). Honored if present to preserve back-compat with any
+  //      template that supplied logoUrl.
+  //   2. branding.thumbnailUrl — admin-curated via tenant.subBrandConfigJson.
+  // Either way, the buffer is fetched through module.exports.fetchLogoBuffer
+  // so vitest spies catch it. Fail-soft on any network / parse error.
+  const quoteLogoUrl = (q.brandKit && q.brandKit.logoUrl) || branding.thumbnailUrl || null;
+  const logoBuffer = quoteLogoUrl
+    ? await module.exports.fetchLogoBuffer(quoteLogoUrl)
+    : null;
+
   const doc = new PDFDocument({ size: "A4", margin: 50 });
   const bufPromise = streamToBuffer(doc);
 
@@ -3001,10 +3431,25 @@ function renderTravelQuotePdf(quote) {
     .text(brandLabel, 50, 22, { align: "left" });
   doc.fillColor("#fff").fontSize(10).text("Quote", 50, 42, { align: "left" });
 
-  if (q.brandKit && q.brandKit.logoUrl) {
-    doc.font("Helvetica").fontSize(8).fillColor("#fff")
-      .text(`[Logo: ${q.brandKit.logoUrl}]`, doc.page.width - 250, 22, { width: 200, align: "right" });
+  // S65 — embed brand logo into the header band's top-right (80×40 fit box).
+  // Replaces the pre-S65 `[Logo: <url>]` text-placeholder that the quote
+  // renderer used to emit when q.brandKit.logoUrl was set. Fail-soft: a
+  // malformed buffer falls through to a logo-less header band.
+  if (logoBuffer) {
+    try {
+      const LOGO_W = 80;
+      const LOGO_H = 40;
+      const LOGO_X = doc.page.width - LOGO_W - 50;
+      const LOGO_Y = 10;
+      doc.image(logoBuffer, LOGO_X, LOGO_Y, { fit: [LOGO_W, LOGO_H] });
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[pdfRenderer/S65] doc.image() rejected logo buffer (quote): ${err && err.message ? err.message : err}`,
+      );
+    }
   }
+
   doc.fillColor("#111").moveDown(2);
 
   const metaTop = 80;
@@ -3315,7 +3760,7 @@ function extractTravellerListFromInvoice(invoice, lines) {
   return "—";
 }
 
-function renderTravelInvoicePdf(opts) {
+async function renderTravelInvoicePdf(opts) {
   const o = opts || {};
   const invoice = o.invoice || {};
   const lines = Array.isArray(o.lines)
@@ -3327,7 +3772,40 @@ function renderTravelInvoicePdf(opts) {
 
   const sub = invoice.subBrand;
   const brandLabel = SUB_BRAND_LABEL[sub] || "Travel CRM";
-  const accent = SUB_BRAND_ACCENT[sub] || "#111111";
+
+  // S34 — resolve brand-kit colors from tenant.subBrandConfigJson with
+  // per-sub-brand fallbacks. Caller can override per-render via opts.branding
+  // (highest precedence, layer 1). When tenant or subBrandConfigJson is null,
+  // we fall through to INVOICE_BRAND_KIT_FALLBACKS (sensible WCAG-AA per
+  // sub-brand defaults, replicated from S13's itinerary-template selector
+  // so colors are consistent across both surfaces).
+  const cfg = parseInvoiceSubBrandConfig(tenant && tenant.subBrandConfigJson);
+  const { fields: brandKit, source: brandSource } = resolveInvoiceBrandKit(cfg, sub);
+  // Per-render explicit overrides win (precedence layer 1). Callers can pass
+  // { branding: { headerColor: "#000", ... } } to opts to bypass the kit.
+  const callerBranding = (o.branding && typeof o.branding === "object") ? o.branding : {};
+  const branding = { ...brandKit, ...callerBranding };
+
+  // S51 — fetch the per-sub-brand logo (if any) BEFORE we start drawing.
+  // pdfkit's doc.image() needs the buffer synchronously, so we resolve the
+  // remote URL up front. Goes through module.exports.fetchLogoBuffer so
+  // unit tests can vi.spyOn(...) the seam without reaching into axios.
+  // Fail-soft: on any error, the helper returns null and we render a
+  // logo-less header band (back-compat with pre-S51 output).
+  const logoBuffer = branding.thumbnailUrl
+    ? await module.exports.fetchLogoBuffer(branding.thumbnailUrl)
+    : null;
+  // The header band fill — was bare SUB_BRAND_ACCENT[sub] pre-S34. Now
+  // sources from the brand-kit so the admin-curated palette wins.
+  const accent = branding.headerColor || INVOICE_BRAND_KIT_FALLBACKS._generic.headerColor;
+  // primaryColor drives the "Total Due" line + section accents downstream.
+  // accentColor drives secondary dividers (header band underline).
+  const primaryColor = branding.primaryColor || INVOICE_BRAND_KIT_FALLBACKS._generic.primaryColor;
+  // _brandingSource: stamped into PDF Producer metadata so we can observe in
+  // a tester / smoke check which resolution path fired without parsing PDF
+  // body text. Values: "subBrandConfig" | "fallback".
+  void brandSource;
+
   const currency = invoice.currency || "INR";
   const docType = invoice.docType || "TaxInvoice";
   const docHeaderTitle = docTypeHeader(docType);
@@ -3341,7 +3819,17 @@ function renderTravelInvoicePdf(opts) {
     return `${currency} ${v.toFixed(2)}`;
   }
 
-  const doc = new PDFDocument({ size: "A4", margin: 50 });
+  const doc = new PDFDocument({
+    size: "A4",
+    margin: 50,
+    info: {
+      // S34 — stamp brand-kit resolution path into PDF Producer metadata so
+      // downstream observers (tests, ops greps) can see whether the rendered
+      // colors came from subBrandConfigJson or from the hard-coded fallback
+      // without parsing body-text. Format: "Globussoft CRM (brand-kit: <src>)"
+      Producer: `Globussoft CRM (brand-kit: ${brandSource})`,
+    },
+  });
   const bufPromise = streamToBuffer(doc);
 
   doc.rect(0, 0, doc.page.width, 60).fill(accent);
@@ -3351,6 +3839,26 @@ function renderTravelInvoicePdf(opts) {
     .toLowerCase()
     .replace(/(^|\s)\S/g, (c) => c.toUpperCase());
   doc.fillColor("#fff").fontSize(10).text(bandSubLabel, 50, 42, { align: "left" });
+
+  // S51 — embed brand logo into the header band's top-right (80×40 fit
+  // box at right edge). doc.image() throws on invalid buffers; wrap in
+  // try/catch so a malformed logo can't 500 the download. The brand
+  // color band still renders behind the logo regardless.
+  if (logoBuffer) {
+    try {
+      const LOGO_W = 80;
+      const LOGO_H = 40;
+      const LOGO_X = doc.page.width - LOGO_W - 50;
+      const LOGO_Y = 10;
+      doc.image(logoBuffer, LOGO_X, LOGO_Y, { fit: [LOGO_W, LOGO_H] });
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[pdfRenderer/S51] doc.image() rejected logo buffer: ${err && err.message ? err.message : err}`,
+      );
+    }
+  }
+
   doc.fillColor("#111").moveDown(2);
 
   const metaTop = 80;
@@ -3531,8 +4039,12 @@ function renderTravelInvoicePdf(opts) {
 
   doc.moveTo(350, ty).lineTo(545, ty).lineWidth(0.5).strokeColor("#bbb").stroke();
   ty += 6;
-  doc.font("Helvetica-Bold").fontSize(11).fillColor("#111");
+  // S34 — paint "Total Due" label in the sub-brand's primaryColor so the
+  // page's most-load-bearing figure is brand-tinted. Numeric value stays
+  // #111 (high-contrast black) for readability.
+  doc.font("Helvetica-Bold").fontSize(11).fillColor(primaryColor);
   doc.text("Total Due", 350, ty, { width: 95, align: "right" });
+  doc.fillColor("#111");
   doc.text(fmt(grandTotal), 450, ty, { width: 95, align: "right" });
   ty += 18;
   doc.y = ty + 8;
@@ -3628,4 +4140,27 @@ module.exports = {
   voucherSubtypeForLine,
   formatVoucherServiceRange,
   extractTravellerListFromInvoice,
+  // S34 — brand-kit selector helpers exported so unit tests (and any
+  // future routes that need to preview brand-kit resolution before
+  // rendering the PDF) can exercise the same code path the renderer uses.
+  INVOICE_BRAND_KIT_FIELDS,
+  INVOICE_BRAND_KIT_FALLBACKS,
+  parseInvoiceSubBrandConfig,
+  resolveInvoiceBrandKit,
+  // S52 — generic-named aliases so sibling travel PDF helpers + their
+  // tests can read the selector under a name that doesn't carry an
+  // "Invoice" suffix (the same helper body powers itinerary / quote /
+  // diagnostic / tmc-readiness / travelstall-personalised PDFs after
+  // the brand-kit adoption sweep). + shared header-brand-kit resolver
+  // for one-call use inside the renderers.
+  parseTravelSubBrandConfig,
+  resolveTravelBrandKit,
+  resolveTravelHeaderBrandKit,
+  // S51 — logo-image fetch + LRU cache. Exported via module.exports so the
+  // renderer can call `module.exports.fetchLogoBuffer(...)` (the CJS self-
+  // mocking seam pattern) and vitest cases can vi.spyOn(...) the surface
+  // without touching axios. `_resetLogoCache` is a test-only nuker so the
+  // module-level cache doesn't bleed between cases.
+  fetchLogoBuffer,
+  _resetLogoCache,
 };

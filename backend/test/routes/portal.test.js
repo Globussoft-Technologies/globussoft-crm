@@ -198,6 +198,10 @@ describe('POST /login — body validation + auth', () => {
     expect(res.body.contact).toEqual({
       id: 99, name: 'Alice Sharma',
       email: 'alice@example.com', company: 'Acme Co',
+      // Login response includes the portal avatar (routes/portal.js maps
+      // `avatarUrl: contact.avatarUrl || null`). This mock contact has no
+      // avatarUrl set, so the route returns null.
+      avatarUrl: null,
     });
     // Token claim shape — tenantId MUST come from contact row, NOT request body
     const decoded = jwt.verify(res.body.token, JWT_SECRET);

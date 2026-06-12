@@ -276,6 +276,8 @@ jobs:
             tests/travel-tmc-diagnostic-api.spec.js \
             tests/travel-digilocker-stub-api.spec.js \
             tests/travel-itineraries-api.spec.js \
+            tests/travel-itinerary-suggest-api.spec.js \
+            tests/travel-flight-plugin-api.spec.js \
             tests/travel-trips-api.spec.js \
             tests/travel-cost-master-api.spec.js \
             tests/travel-suppliers-api.spec.js \
@@ -309,6 +311,16 @@ jobs:
             tests/wellness-my-transactions-api.spec.js \
             tests/staff-api.spec.js \
             tests/portal-appointments-api.spec.js \
+            tests/security-headers-api.spec.js \
+            tests/travel-flyer-public-api.spec.js \
+            tests/travel-pois-api.spec.js \
+            tests/webhook-credential-api.spec.js \
+            tests/wellness-portal-notifications-api.spec.js \
+            tests/admin-backfill-last-visit-api.spec.js \
+            tests/security-reports-violations-api.spec.js \
+            tests/travel-quote-templates-api.spec.js \
+            tests/travel-flyer-templates-api.spec.js \
+            tests/admin-tenants-embed-allowlist-api.spec.js \
             tests/teardown-completeness.spec.js \
             tests/demo-hygiene-api.spec.js
 

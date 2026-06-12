@@ -69,6 +69,15 @@ vi.mock('../utils/notify', () => ({
   useNotify: () => notifyObj,
 }));
 
+// Profile's danger-zone delete flow calls useNavigate(); several tests in
+// this file render <Profile /> bare (no Router), so stub the hook instead
+// of wrapping every render in a MemoryRouter. The deletion flow itself is
+// covered in ProfileDeleteAccount.test.jsx.
+vi.mock('react-router-dom', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, useNavigate: () => vi.fn() };
+});
+
 import { AuthContext } from '../App';
 import Profile from '../pages/Profile';
 

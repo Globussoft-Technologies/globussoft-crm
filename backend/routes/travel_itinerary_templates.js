@@ -62,6 +62,175 @@ const MUTABLE_FIELDS = [
   "isActive",
 ];
 
+// ---------------------------------------------------------------------------
+// Brand-kit-aware template defaults — S13 (#920 slice, PRD_TRAVEL_ITINERARY_
+// UPGRADES.md "Brand-kit-aware itinerary template defaults from
+// subBrandConfigJson").
+//
+// On POST, when the caller does NOT supply a `thumbnailUrl` or doesn't embed
+// a `branding` block in `templateJson`, we read `tenant.subBrandConfigJson`
+// (legacy admin-curated per-sub-brand kit) and seed deterministic defaults
+// for the template's `subBrand` (or top-level / generic fall-through).
+//
+// Q22 (Yasin brand pack) is the content-blocker for the actual asset URLs +
+// hex codes; until then `subBrandConfigJson` is typically empty/null in
+// production, so this slice falls back to a hard-coded sensible-default
+// palette per sub-brand. The point of wiring it now is that when Yasin's
+// brand pack lands, an ADMIN PATCH of the tenant's subBrandConfigJson
+// (single POST) cascades into every NEW template's defaults — no per-route
+// edit needed.
+//
+// JSON shape consumed (one of):
+//   { tmc:        { thumbnailUrl?, primaryColor?, accentColor?,
+//                   headerColor?, fontFamily? },
+//     rfu:        { ... }, travelstall: { ... }, visasure: { ... },
+//     // optional top-level fallback used when template has no subBrand
+//     thumbnailUrl?, primaryColor?, accentColor?, headerColor?, fontFamily?
+//   }
+//
+// Output mapping (deterministic):
+//   - thumbnailUrl  (top-level template field)         ← cfg.thumbnailUrl
+//   - templateJson.branding.primaryColor               ← cfg.primaryColor
+//   - templateJson.branding.accentColor                ← cfg.accentColor
+//   - templateJson.branding.headerColor                ← cfg.headerColor
+//   - templateJson.branding.fontFamily                 ← cfg.fontFamily
+//   - templateJson.branding._source                    ← "subBrandConfig" |
+//                                                       "fallback"
+//
+// Caller precedence (highest first):
+//   1. Explicit body field (e.g. body.thumbnailUrl, body.templateJson.branding.*)
+//   2. Per-sub-brand block in subBrandConfigJson[subBrand]
+//   3. Top-level block in subBrandConfigJson (when template has no subBrand
+//      OR sub-brand block is empty)
+//   4. Hard-coded fallback per sub-brand (BRAND_KIT_FALLBACKS below)
+//
+// Branding fields are namespaced under templateJson.branding so the day-by-
+// day item list (the original templateJson contract) is unaffected. Existing
+// templates with no branding block continue to load correctly.
+const BRAND_KIT_FIELDS = [
+  "thumbnailUrl",
+  "primaryColor",
+  "accentColor",
+  "headerColor",
+  "fontFamily",
+];
+
+// Per-sub-brand fallback defaults — used when subBrandConfigJson is
+// null/empty/missing. Colors are WCAG-AA on white. Fonts default to "Inter,
+// sans-serif" (the same family Marketing Flyer Studio + main app use).
+// thumbnailUrl fallback is null (operator picks one on save) — we don't ship
+// a default image asset because Q22 hasn't landed.
+const BRAND_KIT_FALLBACKS = {
+  tmc:         { thumbnailUrl: null, primaryColor: "#1F4E79", accentColor: "#F2B544", headerColor: "#1F4E79", fontFamily: "Inter, sans-serif" },
+  rfu:         { thumbnailUrl: null, primaryColor: "#0B5345", accentColor: "#D4AC0D", headerColor: "#0B5345", fontFamily: "Inter, sans-serif" },
+  travelstall: { thumbnailUrl: null, primaryColor: "#C0392B", accentColor: "#F39C12", headerColor: "#922B21", fontFamily: "Inter, sans-serif" },
+  visasure:    { thumbnailUrl: null, primaryColor: "#283747", accentColor: "#5DADE2", headerColor: "#283747", fontFamily: "Inter, sans-serif" },
+  _generic:    { thumbnailUrl: null, primaryColor: "#1F4E79", accentColor: "#F2B544", headerColor: "#1F4E79", fontFamily: "Inter, sans-serif" },
+};
+
+function parseSubBrandConfig(jsonString) {
+  if (!jsonString || typeof jsonString !== "string") return {};
+  try {
+    const obj = JSON.parse(jsonString);
+    if (!obj || typeof obj !== "object" || Array.isArray(obj)) return {};
+    return obj;
+  } catch (_e) {
+    // Malformed JSON → return empty so we fall through to hard-coded
+    // fallback. Don't throw — a bad admin-saved blob shouldn't kill
+    // template creation.
+    return {};
+  }
+}
+
+// Pick brand-kit fields for a given sub-brand from the parsed config blob.
+// Sub-brand block first, then top-level fallback, then hard-coded
+// per-sub-brand defaults. Returns { fields: {...}, source: "..." } where
+// source ∈ {"subBrandConfig" | "fallback"} for downstream callers + tests
+// that want to assert the resolution path.
+function resolveBrandKitDefaults(cfg, subBrand) {
+  const out = {};
+  let usedConfig = false;
+  const subBlock = subBrand && cfg && typeof cfg[subBrand] === "object" && !Array.isArray(cfg[subBrand])
+    ? cfg[subBrand]
+    : null;
+
+  for (const f of BRAND_KIT_FIELDS) {
+    if (subBlock && subBlock[f] !== undefined && subBlock[f] !== null && subBlock[f] !== "") {
+      out[f] = subBlock[f];
+      usedConfig = true;
+    } else if (cfg && cfg[f] !== undefined && cfg[f] !== null && cfg[f] !== "") {
+      out[f] = cfg[f];
+      usedConfig = true;
+    }
+  }
+
+  // Backfill missing fields from the hard-coded fallback so the returned
+  // object is always shape-complete. Source remains "subBrandConfig" if at
+  // least one field came from config; "fallback" only when ZERO fields came
+  // from config.
+  const fallbackKey = subBrand && BRAND_KIT_FALLBACKS[subBrand] ? subBrand : "_generic";
+  const fallback = BRAND_KIT_FALLBACKS[fallbackKey];
+  for (const f of BRAND_KIT_FIELDS) {
+    if (out[f] === undefined) out[f] = fallback[f];
+  }
+
+  return { fields: out, source: usedConfig ? "subBrandConfig" : "fallback" };
+}
+
+// Apply brand-kit defaults onto the prisma-bound create-data object. Mutates
+// `data` in place. Caller-supplied values win (precedence layer 1) — we only
+// fill blanks. The templateJson column is String? @db.LongText, so the
+// branding block is merged with any caller-supplied template payload then
+// re-stringified before write.
+function applyBrandKitDefaults(data, tenant, subBrand) {
+  const cfg = parseSubBrandConfig(tenant && tenant.subBrandConfigJson);
+  const { fields, source } = resolveBrandKitDefaults(cfg, subBrand);
+
+  // thumbnailUrl: top-level template column. Only fill if caller didn't
+  // supply one. null/undefined/empty-string from the caller all count as
+  // "not supplied" — operator deferred to defaults.
+  if (
+    (data.thumbnailUrl === undefined || data.thumbnailUrl === null || data.thumbnailUrl === "")
+    && fields.thumbnailUrl
+  ) {
+    data.thumbnailUrl = fields.thumbnailUrl;
+  }
+
+  // templateJson: parse caller-supplied JSON (or start fresh). Merge our
+  // branding block in WITHOUT clobbering caller's day-by-day items[] or any
+  // caller-supplied branding.* keys. Caller's templateJson.branding.* wins
+  // per precedence layer 1.
+  let existing = {};
+  if (typeof data.templateJson === "string" && data.templateJson.trim() !== "") {
+    try {
+      const parsed = JSON.parse(data.templateJson);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        existing = parsed;
+      }
+    } catch (_e) {
+      // Caller's templateJson was non-JSON (e.g. plain text). Leave it alone
+      // — don't risk corrupting their day-by-day payload. Skip branding
+      // injection for this template.
+      return;
+    }
+  } else if (data.templateJson && typeof data.templateJson === "object") {
+    // Some callers pass an object directly (we re-stringify on write).
+    existing = data.templateJson;
+  }
+
+  const callerBranding = (existing.branding && typeof existing.branding === "object")
+    ? existing.branding
+    : {};
+  const mergedBranding = { ...fields, ...callerBranding };
+  // Stamp the resolution source for observability. Caller can override.
+  if (!callerBranding._source) mergedBranding._source = source;
+
+  const merged = { ...existing, branding: mergedBranding };
+  // Persist back as a string (templateJson is String? @db.LongText).
+  data.templateJson = JSON.stringify(merged);
+}
+// ---------------------------------------------------------------------------
+
 function pickMutable(body) {
   const out = {};
   for (const f of MUTABLE_FIELDS) {
@@ -203,29 +372,49 @@ router.post(
         }
       }
 
-      const created = await prisma.itineraryTemplate.create({
-        data: {
-          tenantId: req.travelTenant.id,
-          name: body.name,
-          destinationName: body.destinationName,
-          durationDays,
-          description: body.description ?? null,
-          thumbnailUrl: body.thumbnailUrl ?? null,
-          category: body.category ?? null,
-          subBrand: body.subBrand ?? null,
-          defaultMarkupPercent:
-            body.defaultMarkupPercent != null
-              ? Number(body.defaultMarkupPercent)
-              : null,
-          basePriceMinor:
-            body.basePriceMinor != null ? Number(body.basePriceMinor) : null,
-          currency: body.currency ?? null,
-          templateJson: body.templateJson ?? null,
-          llmGeneratedBy: body.llmGeneratedBy ?? null,
-          isActive: body.isActive === false ? false : true,
-          usageCount: 0,
-        },
-      });
+      // S13 — brand-kit-aware defaults from tenant.subBrandConfigJson.
+      // Build the create-data dict FIRST so applyBrandKitDefaults can fill
+      // any blanks (thumbnailUrl, templateJson.branding.*) before the
+      // prisma.create call. requireTravelTenant projects only id/vertical/
+      // name/slug onto req.travelTenant — refetch with subBrandConfigJson
+      // here since it's the brand-kit input. Failure to fetch (e.g.
+      // tenant deleted concurrently) is non-fatal — applyBrandKitDefaults
+      // safely falls through to hard-coded fallbacks per BRAND_KIT_FALLBACKS.
+      let brandKitTenant = req.travelTenant;
+      try {
+        const t = await prisma.tenant.findUnique({
+          where: { id: req.travelTenant.id },
+          select: { subBrandConfigJson: true },
+        });
+        if (t) brandKitTenant = { ...req.travelTenant, subBrandConfigJson: t.subBrandConfigJson };
+      } catch (_e) {
+        // Swallow — fallback path handles missing config.
+      }
+
+      const createData = {
+        tenantId: req.travelTenant.id,
+        name: body.name,
+        destinationName: body.destinationName,
+        durationDays,
+        description: body.description ?? null,
+        thumbnailUrl: body.thumbnailUrl ?? null,
+        category: body.category ?? null,
+        subBrand: body.subBrand ?? null,
+        defaultMarkupPercent:
+          body.defaultMarkupPercent != null
+            ? Number(body.defaultMarkupPercent)
+            : null,
+        basePriceMinor:
+          body.basePriceMinor != null ? Number(body.basePriceMinor) : null,
+        currency: body.currency ?? null,
+        templateJson: body.templateJson ?? null,
+        llmGeneratedBy: body.llmGeneratedBy ?? null,
+        isActive: body.isActive === false ? false : true,
+        usageCount: 0,
+      };
+      applyBrandKitDefaults(createData, brandKitTenant, createData.subBrand);
+
+      const created = await prisma.itineraryTemplate.create({ data: createData });
       res.status(201).json(created);
     } catch (err) {
       if (err.status) {

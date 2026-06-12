@@ -160,7 +160,13 @@ async function runImport(def, fileBuffer, tenantId, ctx, format = "csv") {
     format === "xlsx" ? parseXlsxBuffer(fileBuffer) : parseCsv(fileBuffer.toString("utf8"));
 
   // Header check.
-  const missing = def.headers.filter((h) => !headers.includes(h));
+  // S103 — `def.optionalHeaders` (array, possibly undefined) lists columns
+  // that are accepted but NOT required. Lets entities carry additive
+  // columns (e.g. customers' firstName + lastName) without breaking
+  // legacy CSVs that pre-date the column. Defaults to [] so existing
+  // entities behave identically.
+  const optionalHeaders = new Set(def.optionalHeaders || []);
+  const missing = def.headers.filter((h) => !headers.includes(h) && !optionalHeaders.has(h));
   // We tolerate EXTRA columns silently — only flag MISSING required headers.
   if (missing.length) {
     return {

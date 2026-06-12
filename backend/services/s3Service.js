@@ -49,9 +49,16 @@ if (!BUCKET_NAME) {
  * @param {string} subfolder - Subfolder in bucket (e.g. 'avatars', 'prescriptions')
  * @returns {Promise<string>} - Full S3 URL of uploaded file
  */
-async function uploadFile(fileBuffer, fileName, mimeType, subfolder = "uploads") {
+async function uploadFile(
+  fileBuffer,
+  fileName,
+  mimeType,
+  subfolder = "uploads",
+) {
   if (!BUCKET_NAME) {
-    throw new Error("S3 bucket not configured. Set AWS_S3_BUCKET_NAME env var.");
+    throw new Error(
+      "S3 bucket not configured. Set AWS_S3_BUCKET_NAME env var.",
+    );
   }
 
   const timestamp = Date.now();
@@ -66,7 +73,6 @@ async function uploadFile(fileBuffer, fileName, mimeType, subfolder = "uploads")
     Key: fileKey,
     Body: fileBuffer,
     ContentType: mimeType,
-    ACL: "public-read",
   });
 
   try {
@@ -92,7 +98,7 @@ async function uploadImage(
   fileBuffer,
   fileName,
   mimeType,
-  subfolder = "images"
+  subfolder = "images",
 ) {
   const validImageMimes = [
     "image/jpeg",

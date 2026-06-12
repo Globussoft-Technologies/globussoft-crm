@@ -62,6 +62,15 @@ prisma.sequenceEnrollment = {
   update: vi.fn(),
   deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
 };
+// S85 — SequenceStep CRUD is pinned via the dedicated /steps describe blocks
+// at the bottom. attachmentRefsJson POST/PUT forward is the new contract.
+prisma.sequenceStep = {
+  findFirst: vi.fn(),
+  findMany: vi.fn().mockResolvedValue([]),
+  create: vi.fn(),
+  update: vi.fn(),
+  delete: vi.fn(),
+};
 prisma.contact = prisma.contact || {};
 prisma.contact.findFirst = vi.fn();
 prisma.revokedToken = prisma.revokedToken || {};
@@ -101,6 +110,11 @@ beforeEach(() => {
   prisma.sequenceEnrollment.create.mockReset();
   prisma.sequenceEnrollment.update.mockReset();
   prisma.sequenceEnrollment.deleteMany.mockReset().mockResolvedValue({ count: 0 });
+  prisma.sequenceStep.findFirst.mockReset();
+  prisma.sequenceStep.findMany.mockReset().mockResolvedValue([]);
+  prisma.sequenceStep.create.mockReset();
+  prisma.sequenceStep.update.mockReset();
+  prisma.sequenceStep.delete.mockReset();
   prisma.contact.findFirst.mockReset();
   prisma.revokedToken.findUnique.mockReset().mockResolvedValue(null);
 });
@@ -740,5 +754,293 @@ describe('module.exports — test helper surface', () => {
     expect(cleaned[0].data.label).toMatch(/Step 1/);
     expect(cleaned[1].data.label).toBe('Clean label');
     expect(cleaned[2]).toEqual({ id: 'n3' });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// S85 — SequenceStep route forwards attachmentRefsJson on POST + PUT
+// (PRD_TRAVEL_MARKETING_FLYER FR-3.5 / AC-6.5)
+//
+// S19 shipped the schema column + cron consumer; S85 closes the API loop
+// so operators can set flyer attachments via the route layer. The probe-
+// skip e2e spec (sequence-engine-flyer-attachment-api.spec.js) flips green
+// once the round-trip works — these vitest cases pin the contract from the
+// unit-test side.
+//
+// Contract pinned:
+//   - POST /:id/steps with valid attachmentRefsJson (string OR array) → persisted
+//   - POST /:id/steps without attachmentRefsJson → unchanged, field null
+//   - POST with invalid JSON string → 400 INVALID_ATTACHMENT_REFS
+//   - POST with non-array JSON → 400 INVALID_ATTACHMENT_REFS
+//   - POST with entry missing `kind` → 400 INVALID_ATTACHMENT_REFS
+//   - POST with oversized JSON (>16KB) → 400 ATTACHMENT_REFS_TOO_LARGE
+//   - POST sanitizes HTML inside JSON string values (HTML inside ref → stripped)
+//   - PUT /steps/:id updates attachmentRefsJson
+//   - PUT /steps/:id with null clears
+//   - PUT /steps/:id with "" clears
+//   - PUT /steps/:id with invalid JSON → 400 INVALID_ATTACHMENT_REFS
+//   - Cross-tenant POST step is blocked (sequence findFirst returns null → 404)
+//   - Auth gate: POST + PUT require Bearer
+// ─────────────────────────────────────────────────────────────────────────
+
+describe('S85 — SequenceStep route forwards attachmentRefsJson', () => {
+  // POST /:id/steps lookup short-circuits on `findSequenceForTenant` (sequence.findFirst);
+  // we mock a valid parent sequence + no prior steps so the create proceeds.
+  function arrangeStepCreateMocks({ tenantId = 1 } = {}) {
+    prisma.sequence.findFirst.mockResolvedValue({ id: 50, tenantId });
+    prisma.sequenceStep.findFirst.mockResolvedValue(null);      // no prior steps → position 0
+    prisma.sequenceStep.findMany.mockResolvedValue([]);          // no shift required
+    prisma.sequenceStep.create.mockImplementation(async (args) => ({
+      id: 900,
+      ...args.data,
+    }));
+  }
+
+  function arrangeStepPutMocks(existing = { id: 901, sequenceId: 50, attachmentRefsJson: null }) {
+    prisma.sequenceStep.findFirst.mockResolvedValue(existing);
+    prisma.sequenceStep.update.mockImplementation(async (args) => ({
+      ...existing,
+      ...args.data,
+      id: existing.id,
+    }));
+  }
+
+  // ── POST: happy path with string-encoded JSON ─────────────────────────
+  test('POST /:id/steps with valid attachmentRefsJson string → persisted', async () => {
+    arrangeStepCreateMocks();
+    const refs = [
+      { kind: 'flyer', flyerId: 42, format: 'pdf-a4' },
+    ];
+    const res = await request(makeApp())
+      .post('/api/sequences/50/steps')
+      .set('Authorization', `Bearer ${tokenFor()}`)
+      .send({ kind: 'email', position: 0, attachmentRefsJson: JSON.stringify(refs) });
+    expect(res.status).toBe(201);
+    const createArgs = prisma.sequenceStep.create.mock.calls[0][0];
+    // sanitizeJsonForStringColumn round-trips JSON-string → string (no HTML to strip)
+    expect(typeof createArgs.data.attachmentRefsJson).toBe('string');
+    expect(JSON.parse(createArgs.data.attachmentRefsJson)).toEqual(refs);
+    // Response body forwards the stored value verbatim
+    expect(typeof res.body.attachmentRefsJson).toBe('string');
+    expect(res.body.attachmentRefsJson.length).toBeGreaterThan(0);
+  });
+
+  // ── POST: accept array-typed body (typed-client path) ─────────────────
+  test('POST /:id/steps accepts a JS array (typed-client) and stringifies before store', async () => {
+    arrangeStepCreateMocks();
+    const refs = [
+      { kind: 'flyer', flyerId: 7, format: 'png-square' },
+      { kind: 'file', url: 'https://example.com/brochure.pdf', filename: 'brochure.pdf' },
+    ];
+    const res = await request(makeApp())
+      .post('/api/sequences/50/steps')
+      .set('Authorization', `Bearer ${tokenFor()}`)
+      .send({ kind: 'email', position: 0, attachmentRefsJson: refs });
+    expect(res.status).toBe(201);
+    const createArgs = prisma.sequenceStep.create.mock.calls[0][0];
+    expect(typeof createArgs.data.attachmentRefsJson).toBe('string');
+    const parsed = JSON.parse(createArgs.data.attachmentRefsJson);
+    expect(parsed).toHaveLength(2);
+    expect(parsed[0]).toMatchObject({ kind: 'flyer', flyerId: 7 });
+  });
+
+  // ── POST: omitted field → null (existing behavior preserved) ──────────
+  test('POST /:id/steps without attachmentRefsJson → field null, existing behavior unchanged', async () => {
+    arrangeStepCreateMocks();
+    const res = await request(makeApp())
+      .post('/api/sequences/50/steps')
+      .set('Authorization', `Bearer ${tokenFor()}`)
+      .send({ kind: 'email', position: 0 });
+    expect(res.status).toBe(201);
+    const createArgs = prisma.sequenceStep.create.mock.calls[0][0];
+    expect(createArgs.data.attachmentRefsJson).toBeNull();
+  });
+
+  // ── POST: malformed JSON string → 400 INVALID_ATTACHMENT_REFS ─────────
+  test('POST /:id/steps with un-parseable JSON string → 400 INVALID_ATTACHMENT_REFS', async () => {
+    arrangeStepCreateMocks();
+    const res = await request(makeApp())
+      .post('/api/sequences/50/steps')
+      .set('Authorization', `Bearer ${tokenFor()}`)
+      .send({ kind: 'email', position: 0, attachmentRefsJson: '{not valid json' });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_ATTACHMENT_REFS');
+    expect(prisma.sequenceStep.create).not.toHaveBeenCalled();
+  });
+
+  // ── POST: parsed root not an array → 400 ──────────────────────────────
+  test('POST /:id/steps with non-array JSON root → 400 INVALID_ATTACHMENT_REFS', async () => {
+    arrangeStepCreateMocks();
+    const res = await request(makeApp())
+      .post('/api/sequences/50/steps')
+      .set('Authorization', `Bearer ${tokenFor()}`)
+      .send({ kind: 'email', position: 0, attachmentRefsJson: JSON.stringify({ kind: 'flyer' }) });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_ATTACHMENT_REFS');
+    expect(prisma.sequenceStep.create).not.toHaveBeenCalled();
+  });
+
+  // ── POST: entry missing `kind` → 400 ──────────────────────────────────
+  test('POST /:id/steps with array entry missing `kind` → 400 INVALID_ATTACHMENT_REFS', async () => {
+    arrangeStepCreateMocks();
+    const res = await request(makeApp())
+      .post('/api/sequences/50/steps')
+      .set('Authorization', `Bearer ${tokenFor()}`)
+      .send({
+        kind: 'email',
+        position: 0,
+        attachmentRefsJson: JSON.stringify([{ flyerId: 1, format: 'pdf-a4' }]),
+      });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_ATTACHMENT_REFS');
+    expect(prisma.sequenceStep.create).not.toHaveBeenCalled();
+  });
+
+  // ── POST: oversized blob → 400 ATTACHMENT_REFS_TOO_LARGE ─────────────
+  test('POST /:id/steps with >16KB attachmentRefsJson → 400 ATTACHMENT_REFS_TOO_LARGE', async () => {
+    arrangeStepCreateMocks();
+    // Construct a > 16KB JSON-array payload — many flyer entries with padding.
+    const padding = 'x'.repeat(2000);
+    const bigRefs = [];
+    for (let i = 0; i < 20; i += 1) {
+      bigRefs.push({ kind: 'flyer', flyerId: i, format: 'pdf-a4', note: padding });
+    }
+    const oversized = JSON.stringify(bigRefs);
+    expect(Buffer.byteLength(oversized, 'utf8')).toBeGreaterThan(16 * 1024);
+    const res = await request(makeApp())
+      .post('/api/sequences/50/steps')
+      .set('Authorization', `Bearer ${tokenFor()}`)
+      .send({ kind: 'email', position: 0, attachmentRefsJson: oversized });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('ATTACHMENT_REFS_TOO_LARGE');
+    expect(prisma.sequenceStep.create).not.toHaveBeenCalled();
+  });
+
+  // ── POST: HTML inside string value scrubbed via sanitizeJsonForStringColumn ─
+  test('POST /:id/steps strips HTML from string values inside attachmentRefsJson', async () => {
+    arrangeStepCreateMocks();
+    const refs = [
+      { kind: 'flyer', flyerId: 1, format: 'pdf-a4', caption: '<script>alert(1)</script>Clean caption' },
+    ];
+    const res = await request(makeApp())
+      .post('/api/sequences/50/steps')
+      .set('Authorization', `Bearer ${tokenFor()}`)
+      .send({ kind: 'email', position: 0, attachmentRefsJson: JSON.stringify(refs) });
+    expect(res.status).toBe(201);
+    const createArgs = prisma.sequenceStep.create.mock.calls[0][0];
+    const persisted = JSON.parse(createArgs.data.attachmentRefsJson);
+    expect(persisted[0].caption).not.toMatch(/<script>/i);
+    expect(persisted[0].caption).toMatch(/Clean caption/);
+  });
+
+  // ── POST: cross-tenant rejection (parent sequence not found) ──────────
+  test('POST /:id/steps cross-tenant → 404; sequenceStep.create never called', async () => {
+    prisma.sequence.findFirst.mockResolvedValue(null);
+    const res = await request(makeApp())
+      .post('/api/sequences/999/steps')
+      .set('Authorization', `Bearer ${tokenFor({ tenantId: 2 })}`)
+      .send({
+        kind: 'email',
+        position: 0,
+        attachmentRefsJson: JSON.stringify([{ kind: 'flyer', flyerId: 1 }]),
+      });
+    expect(res.status).toBe(404);
+    expect(prisma.sequenceStep.create).not.toHaveBeenCalled();
+  });
+
+  // ── PUT: updates the field ────────────────────────────────────────────
+  test('PUT /steps/:id with valid attachmentRefsJson → persisted', async () => {
+    arrangeStepPutMocks();
+    const refs = [{ kind: 'flyer', flyerId: 99, format: 'pdf-a5' }];
+    const res = await request(makeApp())
+      .put('/api/sequences/steps/901')
+      .set('Authorization', `Bearer ${tokenFor()}`)
+      .send({ attachmentRefsJson: JSON.stringify(refs) });
+    expect(res.status).toBe(200);
+    const updateArgs = prisma.sequenceStep.update.mock.calls[0][0];
+    expect(typeof updateArgs.data.attachmentRefsJson).toBe('string');
+    expect(JSON.parse(updateArgs.data.attachmentRefsJson)).toEqual(refs);
+  });
+
+  // ── PUT: null clears the field ────────────────────────────────────────
+  test('PUT /steps/:id with attachmentRefsJson=null clears the column', async () => {
+    arrangeStepPutMocks({
+      id: 901, sequenceId: 50,
+      attachmentRefsJson: JSON.stringify([{ kind: 'flyer', flyerId: 1 }]),
+    });
+    const res = await request(makeApp())
+      .put('/api/sequences/steps/901')
+      .set('Authorization', `Bearer ${tokenFor()}`)
+      .send({ attachmentRefsJson: null });
+    expect(res.status).toBe(200);
+    const updateArgs = prisma.sequenceStep.update.mock.calls[0][0];
+    expect(updateArgs.data.attachmentRefsJson).toBeNull();
+  });
+
+  // ── PUT: empty string also clears ─────────────────────────────────────
+  test('PUT /steps/:id with attachmentRefsJson="" also clears the column', async () => {
+    arrangeStepPutMocks();
+    const res = await request(makeApp())
+      .put('/api/sequences/steps/901')
+      .set('Authorization', `Bearer ${tokenFor()}`)
+      .send({ attachmentRefsJson: '' });
+    expect(res.status).toBe(200);
+    const updateArgs = prisma.sequenceStep.update.mock.calls[0][0];
+    expect(updateArgs.data.attachmentRefsJson).toBeNull();
+  });
+
+  // ── PUT: omitted field → no overwrite ─────────────────────────────────
+  test('PUT /steps/:id without attachmentRefsJson key → field NOT touched on update', async () => {
+    arrangeStepPutMocks({
+      id: 901, sequenceId: 50,
+      attachmentRefsJson: JSON.stringify([{ kind: 'flyer', flyerId: 1 }]),
+    });
+    const res = await request(makeApp())
+      .put('/api/sequences/steps/901')
+      .set('Authorization', `Bearer ${tokenFor()}`)
+      .send({ smsBody: 'Hello' });
+    expect(res.status).toBe(200);
+    const updateArgs = prisma.sequenceStep.update.mock.calls[0][0];
+    // attachmentRefsJson must NOT appear in data.* — undefined-body fields skip.
+    expect(updateArgs.data).not.toHaveProperty('attachmentRefsJson');
+  });
+
+  // ── PUT: invalid JSON → 400 ───────────────────────────────────────────
+  test('PUT /steps/:id with un-parseable JSON → 400 INVALID_ATTACHMENT_REFS', async () => {
+    arrangeStepPutMocks();
+    const res = await request(makeApp())
+      .put('/api/sequences/steps/901')
+      .set('Authorization', `Bearer ${tokenFor()}`)
+      .send({ attachmentRefsJson: '{nope' });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_ATTACHMENT_REFS');
+    expect(prisma.sequenceStep.update).not.toHaveBeenCalled();
+  });
+
+  // ── Auth gate ─────────────────────────────────────────────────────────
+  test('POST /:id/steps without Bearer → 401', async () => {
+    const res = await request(makeApp())
+      .post('/api/sequences/50/steps')
+      .send({ kind: 'email', position: 0, attachmentRefsJson: '[]' });
+    expect(res.status).toBe(401);
+    expect(prisma.sequenceStep.create).not.toHaveBeenCalled();
+  });
+
+  test('PUT /steps/:id without Bearer → 401', async () => {
+    const res = await request(makeApp())
+      .put('/api/sequences/steps/901')
+      .send({ attachmentRefsJson: '[]' });
+    expect(res.status).toBe(401);
+    expect(prisma.sequenceStep.update).not.toHaveBeenCalled();
+  });
+
+  // ── ADMIN guard: USER role rejected (stepGuard = ADMIN-only) ─────────
+  test('POST /:id/steps with USER role → 403 (stepGuard = ADMIN-only)', async () => {
+    const res = await request(makeApp())
+      .post('/api/sequences/50/steps')
+      .set('Authorization', `Bearer ${tokenFor({ role: 'USER' })}`)
+      .send({ kind: 'email', position: 0 });
+    expect(res.status).toBe(403);
+    expect(prisma.sequenceStep.create).not.toHaveBeenCalled();
   });
 });

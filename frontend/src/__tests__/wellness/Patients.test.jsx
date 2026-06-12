@@ -259,9 +259,13 @@ describe('<wellness/Patients /> — page surface', () => {
 
     const dialog = await screen.findByRole('dialog', { name: /Create customer/i });
 
-    // Fill name + a clearly invalid phone (starts with "1", not 6-9).
-    fireEvent.change(within(dialog).getByLabelText(/Full name/i), {
-      target: { value: 'Test Patient' },
+    // Fill firstName + a clearly invalid phone (starts with "1", not 6-9).
+    // S97 — `firstName` is now the required structured field (validated
+    // BEFORE phone in PatientCreateModal.submit); filling the read-only
+    // "Full name (auto)" preview here would short-circuit validation on
+    // "First name is required" before the mobile regex ever fires.
+    fireEvent.change(within(dialog).getByLabelText(/First name/i), {
+      target: { value: 'Test' },
     });
     fireEvent.change(within(dialog).getByLabelText(/Phone number/i), {
       target: { value: '1234567890' },

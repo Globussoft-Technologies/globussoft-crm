@@ -315,7 +315,8 @@ jobs:
           #   - wellness-consent-archive-api.spec.js (10 tests: #564 consent captureMethod allowlist + BLOB archive idempotence + RBAC — orphan-wave 2026-05-18)
           #   - voyagr-lead-capture-api.spec.js (15 tests: routes/voyagr.js + middleware/voyagrAuth.js — cluster F1 voyagr/OJR CMS lead capture, locked 2026-05-23)
           #   - wellness-patient-timeline-api.spec.js (13 tests: routes/wellness.js patient timeline JSON + CSV — ticks #198/#200)
-          # Total: ~1725 API tests run on every push.
+          #   - security-headers-api.spec.js ( 8 tests: #921 slice S4 FR-3.6 iframe-isolation — X-Frame-Options: DENY + CSP frame-ancestors 'none' + SRI build tags)
+          # Total: ~1733 API tests run on every push.
           # Next candidate specs (under-covered list): cron/orchestratorEngine.js,
           # routes/billing.js, routes/sandbox.js, routes/payments.js,
           # routes/auth.js, routes/approvals.js, cron/wellnessOpsEngine.js (G-7).
@@ -448,6 +449,8 @@ jobs:
             tests/travel-tmc-diagnostic-api.spec.js \
             tests/travel-digilocker-stub-api.spec.js \
             tests/travel-itineraries-api.spec.js \
+            tests/travel-itinerary-suggest-api.spec.js \
+            tests/travel-flight-plugin-api.spec.js \
             tests/travel-trips-api.spec.js \
             tests/travel-cost-master-api.spec.js \
             tests/travel-suppliers-api.spec.js \
@@ -481,6 +484,16 @@ jobs:
             tests/wellness-my-transactions-api.spec.js \
             tests/staff-api.spec.js \
             tests/portal-appointments-api.spec.js \
+            tests/security-headers-api.spec.js \
+            tests/travel-flyer-public-api.spec.js \
+            tests/travel-pois-api.spec.js \
+            tests/webhook-credential-api.spec.js \
+            tests/wellness-portal-notifications-api.spec.js \
+            tests/admin-backfill-last-visit-api.spec.js \
+            tests/security-reports-violations-api.spec.js \
+            tests/travel-quote-templates-api.spec.js \
+            tests/travel-flyer-templates-api.spec.js \
+            tests/admin-tenants-embed-allowlist-api.spec.js \
             tests/teardown-completeness.spec.js \
             tests/demo-hygiene-api.spec.js
           echo "::notice::API specs passed"

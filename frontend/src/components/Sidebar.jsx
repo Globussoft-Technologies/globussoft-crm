@@ -118,6 +118,18 @@ import {
   // Reusable itinerary template scaffolds — placed adjacent to Sightseeing
   // Master because both are #907 admin pages.
   LayoutTemplate,
+  // S49 (TRAVEL_BIG_SCOPE_BACKLOG) — QuoteTemplates nav entry icon. Stack
+  // of templates motif; sibling to FileText (Quotes). ADMIN+MANAGER gated.
+  FileStack,
+  // S55 (TRAVEL_BIG_SCOPE_BACKLOG) — CancellationPolicies nav entry icon.
+  // Ban-circle motif matches cancellation / refund semantics. ADMIN+MANAGER
+  // gated to mirror the backend POST/PATCH RBAC posture.
+  Ban,
+  // S79 (TRAVEL_BIG_SCOPE_BACKLOG) — Flyer Share Admin nav entry icon.
+  // Share2 motif matches the mint-link / shareable-URL semantics. ADMIN-only
+  // gated to mirror the share-link lifecycle's elevated-privilege posture
+  // (revoke is destructive).
+  Share2,
 } from "lucide-react";
 import { AuthContext } from "../App";
 import { fetchApi } from "../utils/api";
@@ -1463,8 +1475,37 @@ function renderTravelNav({
         label="Diagnostics"
       />
       <Link to="/travel/itineraries" icon={MapIcon} label="Itineraries" />
+      {/* S99 (TRAVEL_BIG_SCOPE_BACKLOG) — POI rep-suggested pending-approval
+          queue. ADMIN-only — reps suggest POIs inline on itineraries
+          (FR-3.7); ADMIN reviews here. Sits directly under Itineraries
+          because the queue is the upstream review surface for inline POI
+          suggestions made on itineraries. CheckSquare icon mirrors the
+          approval/review semantic; already imported via the icon block. */}
+      {isAdmin && (
+        <Link
+          to="/travel/pois/pending"
+          icon={CheckSquare}
+          label="POI Approvals"
+        />
+      )}
       {inBrand("tmc") && (
         <Link to="/travel/trips" icon={Luggage} label="TMC Trips" />
+      )}
+      {/* T26 (PRD_TMC_DIAGNOSTIC_SALES_ROUTING_ENGINE §10) — TMC Trip
+          Catalogue admin (T16 shipped 6a034ebb). ADMIN+MANAGER visibility
+          mirrors the page's CRUD auth posture (verifyRole inside the route
+          handler); USER role sees no entry. Sits adjacent to "TMC Trips"
+          since both surfaces are TMC sub-brand operator tools — the
+          Catalogue is the upstream "library of bookable trip templates"
+          that "TMC Trips" instances are spawned from. Restored after the
+          #1139 merge dropped the link while wrapping TMC Trips in
+          inBrand("tmc"). */}
+      {isManager && inBrand("tmc") && (
+        <Link
+          to="/travel/tmc/catalogue"
+          icon={Package}
+          label="TMC Catalogue"
+        />
       )}
       <Link to="/travel/web-checkins" icon={Ticket} label="Web Check-ins" />
       {/* Slice C2 — Passport OCR verification queue (ADMIN+MANAGER only).
@@ -1541,12 +1582,40 @@ function renderTravelNav({
           label="Quote Builder"
         />
       )}
+      {/* S49 (TRAVEL_BIG_SCOPE_BACKLOG) — QuoteTemplates admin nav entry.
+          Sits in the Quotes cluster (under Quote Builder) because it's a
+          pre-filled-line-set library that operators apply to new quotes.
+          ADMIN+MANAGER visible; the page enforces its own canWrite/Delete
+          gates server-side. SUT page commit 8fb23237 (S31). FileStack icon
+          picked for the "stack of reusable templates" motif (FileText taken
+          by Quotes; LayoutTemplate taken by Itinerary Templates). */}
+      {isManager && (
+        <Link
+          to="/travel/quote-templates"
+          icon={FileStack}
+          label="Quote Templates"
+        />
+      )}
       <Link to="/travel/invoices-admin" icon={Receipt} label="Invoices" />
       {/* Arc 2 #901 slice 7 — cross-invoice payment-milestone dashboard
           (consumes /api/travel/payment-schedules/upcoming). Billing-adjacent
           slot under Invoices is the right home: operator surface for
           upcoming/overdue milestones across all travel invoices. */}
       <Link to="/travel/milestones" icon={Clock} label="Milestones" />
+      {/* S55 (TRAVEL_BIG_SCOPE_BACKLOG) — CancellationPolicies admin nav
+          entry. Sits in the Invoices/Milestones billing cluster because
+          cancellation policies drive auto-issuance of credit notes when an
+          invoice is voided (S33 wire-in). ADMIN+MANAGER visible; the page
+          surfaces a Trash icon ADMIN-only mirroring the backend DELETE
+          verifyRole(["ADMIN"]) gate. SUT page commit 4823b160 (S54). Ban
+          icon picked for the cancellation/refund motif. */}
+      {isManager && (
+        <Link
+          to="/travel/cancellation-policies"
+          icon={Ban}
+          label="Cancellation Policies"
+        />
+      )}
       {isAdmin && (
         <Link to="/travel/suppliers" icon={Key} label="Supplier credentials" />
       )}
@@ -1575,6 +1644,16 @@ function renderTravelNav({
           label="School Term Calendar"
         />
       )}
+      {/* T26 (PRD_TMC_DIAGNOSTIC_SALES_ROUTING_ENGINE §10) — TMC trip-catalogue
+          admin (route /travel/tmc/catalogue → TmcCatalogueAdmin). ADMIN+MANAGER
+          visible, mirroring the page's verifyRole posture; TMC-brand scoped. */}
+      {isManager && inBrand("tmc") && (
+        <Link
+          to="/travel/tmc/catalogue"
+          icon={BookOpen}
+          label="TMC Catalogue"
+        />
+      )}
       {/* tick #186 — Marketing Flyer Studio Phase 2 SHELL (#908).
           MANAGER+ operator-facing surface; real impl per PRD §8 build
           order in docs/PRD_TRAVEL_MARKETING_FLYER.md. */}
@@ -1597,6 +1676,18 @@ function renderTravelNav({
           to="/travel/flyer-templates"
           icon={Palette}
           label="Flyer Templates"
+        />
+      )}
+      {/* S79 (TRAVEL_BIG_SCOPE_BACKLOG) — operator UI for flyer share-link
+          admin (mint + history + revoke). Companion to FlyerTemplates above,
+          gated ADMIN-only since share-link lifecycle (including revocation)
+          is a higher-privilege surface than design-time CRUD. Share2 icon
+          mirrors the page header. */}
+      {isAdmin && (
+        <Link
+          to="/travel/flyer-share-admin"
+          icon={Share2}
+          label="Flyer Share Admin"
         />
       )}
 
@@ -1642,6 +1733,13 @@ function renderTravelNav({
 
       <div style={labelStyle}>Customer comms</div>
       <Link to="/inbox" icon={InboxIcon} label="Inbox" badge={counts.inbox} />
+      {/* Q9 — Wati WhatsApp dispatch log (travel-only transport). Sits
+          directly under Inbox since both are customer-comms surfaces; the
+          page is the per-message log (OTPs, reminders, itinerary shares,
+          boarding passes) the watiClient persists. MessageSquare is already
+          imported in the lucide block. Wellness/generic navs untouched —
+          this entry lives only in renderTravelNav. */}
+      <Link to="/travel/whatsapp" icon={MessageSquare} label="WhatsApp" />
       <Link to="/sequences" icon={Send} label="Sequences" />
       <Link to="/tasks" icon={CheckSquare} label="Tasks" badge={counts.tasks} />
       {/* T18 — consultation-call booking (Google Meet slot-picker). Reuses the
@@ -1651,7 +1749,11 @@ function renderTravelNav({
       <div style={labelStyle}>Financial</div>
       <Link to="/invoices" icon={Receipt} label="Invoices" />
       <Link to="/payments" icon={IndianRupee} label="Payments" />
-      <Link to="/quotes" icon={FileText} label="Quotes" />
+      {/* /quotes route is not wired (page returns 404). Hide the entry until
+          the Quotes module ships under cluster B2 of MANUAL_CODING_BACKLOG.md.
+          The admin /travel/quotes-admin link at line ~1574 is a separate
+          (working) page and stays. */}
+      {/* <Link to="/quotes" icon={FileText} label="Quotes" /> */}
 
       <div style={labelStyle}>Reports</div>
       <Link to="/reports" icon={BarChart3} label="Reports" />
@@ -1891,6 +1993,15 @@ function renderGenericNav({
             to="/admin/csp-violations"
             icon={ShieldAlert}
             label="CSP Violations"
+            adminOnly
+          />
+          {/* S128 — Embed allowlist admin (Tenant.embedAllowlistJson editor).
+              Pairs with CSP Violations: both surface iframe-embed security
+              controls in one cluster. */}
+          <Link
+            to="/admin/embed-allowlist"
+            icon={Shield}
+            label="Embed Allowlist"
             adminOnly
           />
           {/* PRD Gap §1.5 / §1.6 — Commission profiles + revenue goals admin pages. */}

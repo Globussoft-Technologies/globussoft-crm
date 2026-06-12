@@ -10,6 +10,8 @@ import {
   Download,
   Calendar as CalendarIcon,
   ShoppingBag,
+  Bell,
+  CheckCheck,
 } from 'lucide-react';
 import { useNotify } from '../../utils/notify';
 import { formatDate } from '../../utils/date';
@@ -288,6 +290,10 @@ function Dashboard({ token, onLogout }) {
   // sidebar/tab visibility.
   const [permissions, setPermissions] = useState(null);
   const [loading, setLoading] = useState(true);
+  // Patient notification inbox (Option A). Always available to a logged-in
+  // patient — no permission gate — so no hasPerm dependency here.
+  const [notifications, setNotifications] = useState([]);
+  const [unreadCount, setUnreadCount] = useState(0);
 
   const hasPerm = useCallback(
     (key) => Array.isArray(permissions) && permissions.includes(key),
@@ -308,6 +314,21 @@ function Dashboard({ token, onLogout }) {
       const permList = Array.isArray(perms?.permissions) ? perms.permissions : [];
       setMe(m);
       setPermissions(permList);
+
+      // Notification inbox — ungated (any logged-in patient). Non-fatal: a
+      // failure leaves the inbox empty without breaking the rest of the portal.
+      try {
+        const n = await portalFetch('/api/wellness/portal/me/notifications', token);
+        if (!signal?.aborted) {
+          setNotifications(Array.isArray(n?.notifications) ? n.notifications : []);
+          setUnreadCount(typeof n?.unreadCount === 'number' ? n.unreadCount : 0);
+        }
+      } catch (_nEx) {
+        if (!signal?.aborted) {
+          setNotifications([]);
+          setUnreadCount(0);
+        }
+      }
 
       // Visits/appointments fetching moved into the embedded
       // <MyBookings /> component which hits the new
@@ -364,6 +385,32 @@ function Dashboard({ token, onLogout }) {
     return () => ctrl.abort();
   }, [loadAll]);
 
+  // Mark ONE notification read (optimistic; backend is the source of truth).
+  // No-op if already read so the unread count never drifts negative.
+  const markNotificationRead = useCallback(async (id) => {
+    setNotifications((prev) => {
+      const item = prev.find((n) => n.id === id);
+      if (!item || item.isRead) return prev;
+      setUnreadCount((c) => Math.max(0, c - 1));
+      return prev.map((n) => (n.id === id ? { ...n, isRead: true } : n));
+    });
+    try {
+      await portalFetch(`/api/wellness/portal/me/notifications/${id}/read`, token, { method: 'PUT' });
+    } catch (_e) {
+      /* optimistic UI already applied; a transient failure self-heals on next load */
+    }
+  }, [token]);
+
+  const markAllNotificationsRead = useCallback(async () => {
+    setNotifications((prev) => prev.map((n) => ({ ...n, isRead: true })));
+    setUnreadCount(0);
+    try {
+      await portalFetch('/api/wellness/portal/me/notifications/mark-all-read', token, { method: 'POST' });
+    } catch (_e) {
+      /* optimistic; self-heals on next load */
+    }
+  }, [token]);
+
   const downloadRx = async (rxId) => {
     try {
       // Patient-portal tokens carry { patientId } not { userId }, so the
@@ -399,6 +446,7 @@ function Dashboard({ token, onLogout }) {
   const tabs = useMemo(() => {
     const allTabs = [
       { key: 'visits', label: 'My Visits', icon: CalendarIcon },
+      { key: 'notifications', label: 'Notifications', icon: Bell },
       {
         key: 'prescriptions',
         label: 'Prescriptions',
@@ -515,6 +563,25 @@ function Dashboard({ token, onLogout }) {
               }}
             >
               <Icon size={15} /> {t.label}
+              {t.key === 'notifications' && unreadCount > 0 && (
+                <span
+                  data-testid="portal-notif-badge"
+                  style={{
+                    marginLeft: 2,
+                    minWidth: 18,
+                    textAlign: 'center',
+                    fontSize: '0.7rem',
+                    fontWeight: 700,
+                    background: '#ef4444',
+                    color: '#fff',
+                    borderRadius: 10,
+                    padding: '0 0.35rem',
+                    lineHeight: '1.5',
+                  }}
+                >
+                  {unreadCount}
+                </span>
+              )}
             </button>
           );
         })}
@@ -534,6 +601,100 @@ function Dashboard({ token, onLogout }) {
             fetcher={(url, options = {}) => portalFetch(url, token, options)}
             hideBookCta={true}
           />
+        )}
+
+        {!loading && tab === 'notifications' && (
+          <div style={{ display: 'grid', gap: '0.75rem' }}>
+            {unreadCount > 0 && (
+              <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                <button
+                  onClick={markAllNotificationsRead}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.3rem',
+                    padding: '0.4rem 0.8rem',
+                    background: 'rgba(255,255,255,0.05)',
+                    border: '1px solid rgba(255,255,255,0.08)',
+                    borderRadius: 6,
+                    color: 'var(--text-primary)',
+                    cursor: 'pointer',
+                    fontSize: '0.8rem',
+                  }}
+                >
+                  <CheckCheck size={14} /> Mark all read
+                </button>
+              </div>
+            )}
+
+            {notifications.length === 0 && (
+              <div
+                className="glass"
+                style={{ padding: '1.5rem', textAlign: 'center', color: 'var(--text-secondary)' }}
+              >
+                No notifications yet.
+              </div>
+            )}
+
+            {notifications.map((n) => (
+              <div
+                key={n.id}
+                className="glass"
+                style={{
+                  padding: '1rem',
+                  display: 'flex',
+                  gap: '0.75rem',
+                  alignItems: 'flex-start',
+                  // Unread rows get an accent left-stripe + slightly stronger tint.
+                  borderLeft: n.isRead ? '3px solid transparent' : '3px solid var(--accent-color)',
+                  opacity: n.isRead ? 0.8 : 1,
+                }}
+              >
+                {/* Unread dot */}
+                <span
+                  style={{
+                    marginTop: 6,
+                    width: 8,
+                    height: 8,
+                    borderRadius: '50%',
+                    flexShrink: 0,
+                    background: n.isRead ? 'transparent' : 'var(--accent-color)',
+                    border: n.isRead ? '1px solid rgba(255,255,255,0.2)' : 'none',
+                  }}
+                />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
+                    <div style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                      <Bell size={14} /> {n.title}
+                    </div>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
+                      {formatDate(n.createdAt)}
+                    </span>
+                  </div>
+                  <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '0.35rem', lineHeight: 1.5 }}>
+                    {n.message}
+                  </p>
+                  {!n.isRead && (
+                    <button
+                      onClick={() => markNotificationRead(n.id)}
+                      style={{
+                        marginTop: '0.5rem',
+                        padding: '0.25rem 0.6rem',
+                        background: 'transparent',
+                        border: '1px solid rgba(255,255,255,0.12)',
+                        borderRadius: 6,
+                        color: 'var(--text-secondary)',
+                        cursor: 'pointer',
+                        fontSize: '0.75rem',
+                      }}
+                    >
+                      Mark read
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
         )}
 
         {!loading && tab === 'prescriptions' && (

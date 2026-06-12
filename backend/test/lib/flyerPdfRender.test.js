@@ -22,7 +22,7 @@
  *     default when input is missing / malformed).
  */
 
-import { describe, test, expect } from 'vitest';
+import { describe, test, expect, vi } from 'vitest';
 import { createRequire } from 'node:module';
 
 const requireCJS = createRequire(import.meta.url);
@@ -32,6 +32,7 @@ const {
   safeHex,
   DEFAULT_PALETTE,
   PAPER_SIZES,
+  _setImageFetcherForTests,
 } = requireCJS('../../lib/flyerPdfRender.js');
 
 const validPalette = {
@@ -212,8 +213,98 @@ describe('module exports', () => {
     expect(Object.isFrozen(DEFAULT_PALETTE)).toBe(true);
   });
 
-  test('exports PAPER_SIZES mapping aspect → pdfkit token', () => {
-    expect(PAPER_SIZES).toMatchObject({ a4: 'A4', us_letter: 'LETTER' });
+  test('exports PAPER_SIZES mapping aspect → pdfkit token (S75 added a5)', () => {
+    // S75: A5 added to the table so flyerRenderEngine.js's pdf-a5
+    // dispatch can pass `aspect: 'a5'` instead of silently coercing to a4.
+    expect(PAPER_SIZES).toMatchObject({ a4: 'A4', a5: 'A5', us_letter: 'LETTER' });
+  });
+});
+
+describe('renderFlyerPdf — S75 A5 aspect support', () => {
+  test('renders a valid PDF with %PDF magic bytes for a5 aspect', async () => {
+    const buf = await renderFlyerPdf(
+      { palette: validPalette, layout: validLayout, assets: validAssets },
+      { aspect: 'a5', hash: '5'.repeat(64) },
+    );
+    expect(Buffer.isBuffer(buf)).toBe(true);
+    expect(isPdfMagic(buf)).toBe(true);
+    expect(buf.length).toBeGreaterThan(500);
+  });
+
+  test('a4 and a5 produce different byte streams (page size honoured)', async () => {
+    const a4 = await renderFlyerPdf(
+      { palette: validPalette, layout: validLayout, assets: validAssets },
+      { aspect: 'a4', hash: 'aa'.repeat(32) },
+    );
+    const a5 = await renderFlyerPdf(
+      { palette: validPalette, layout: validLayout, assets: validAssets },
+      { aspect: 'a5', hash: 'aa'.repeat(32) },
+    );
+    // Different page sizes → different page dimensions baked into the PDF
+    // catalog → different byte streams. (Both share the same hash so the
+    // footer line is identical — the divergence is purely page-size.)
+    expect(a4.equals(a5)).toBe(false);
+  });
+
+  test('a5 and us_letter produce different byte streams', async () => {
+    const a5 = await renderFlyerPdf(
+      { palette: validPalette, layout: validLayout, assets: validAssets },
+      { aspect: 'a5', hash: 'bb'.repeat(32) },
+    );
+    const letter = await renderFlyerPdf(
+      { palette: validPalette, layout: validLayout, assets: validAssets },
+      { aspect: 'us_letter', hash: 'bb'.repeat(32) },
+    );
+    expect(a5.equals(letter)).toBe(false);
+  });
+
+  test('empty template still renders an a5-sized placeholder PDF', async () => {
+    const buf = await renderFlyerPdf({}, { aspect: 'a5' });
+    expect(isPdfMagic(buf)).toBe(true);
+    expect(buf.length).toBeGreaterThan(500);
+  });
+
+  test('unknown aspect still folds to a4 (a5 specifically uses A5; a3 falls back)', async () => {
+    // Regression-pin: an unknown aspect ('a3') folds to a4 — only the
+    // three known aspects (a4, a5, us_letter) get their declared sizes.
+    // We can't byte-compare two PDFs because the footer line includes
+    // a per-call ISO timestamp; instead compare LENGTHS as a proxy —
+    // a3-folded-to-a4 should be the same length range as explicit a4,
+    // and BOTH should differ from a5 (which is physically smaller).
+    const a3 = await renderFlyerPdf(
+      { palette: validPalette, layout: validLayout, assets: validAssets },
+      { aspect: 'a3', hash: 'cc'.repeat(32) },
+    );
+    const a4 = await renderFlyerPdf(
+      { palette: validPalette, layout: validLayout, assets: validAssets },
+      { aspect: 'a4', hash: 'cc'.repeat(32) },
+    );
+    const a5 = await renderFlyerPdf(
+      { palette: validPalette, layout: validLayout, assets: validAssets },
+      { aspect: 'a5', hash: 'cc'.repeat(32) },
+    );
+    // a3 should land in the a4 size class (lengths within 50 bytes of each
+    // other — timestamp + same MediaBox + same content). a5 has a smaller
+    // MediaBox, so even though pdfkit's output isn't strictly length-
+    // ordered by page-size, the byte stream itself differs from both.
+    expect(Math.abs(a3.length - a4.length)).toBeLessThan(50);
+    expect(a3.equals(a4)).toBe(false); // ISO timestamps differ
+    expect(a3.equals(a5)).toBe(false); // page size differs
+  });
+
+  test('a5 still rejects bad palette gracefully (cross-aspect degraded-input contract)', async () => {
+    // Pre-S75 the renderer was hardcoded into A4 for any unknown aspect
+    // so degraded-palette + non-a4 aspect was never exercised. Pin that
+    // the safeHex/empty-template fallbacks still fire for a5 too.
+    const buf = await renderFlyerPdf(
+      {
+        palette: { primaryHex: 'garbage', bgHex: 42 },
+        layout: { not: 'array' },
+        assets: 'nope',
+      },
+      { aspect: 'a5', hash: 'dd'.repeat(32) },
+    );
+    expect(isPdfMagic(buf)).toBe(true);
   });
 });
 
@@ -338,5 +429,106 @@ describe('renderFlyerPdf — extended edge cases', () => {
       { aspect: 'a4', hash: '9'.repeat(64) },
     );
     expect(isPdfMagic(buf)).toBe(true);
+  });
+});
+
+describe('renderFlyerPdf — image embedding via the swappable fetcher', () => {
+  // A tiny 1×1 red PNG that pdfkit can embed without complaint.
+  // hex-encoded so it doesn't take a network round-trip.
+  const ONE_PIXEL_PNG = Buffer.from(
+    '89504e470d0a1a0a0000000d49484452000000010000000108020000009077' +
+    '53de0000000c4944415478da6360f80f0000020001bf9094c10000000049454e44ae426082',
+    'hex',
+  );
+
+  test('image blocks are embedded via doc.image when the fetcher returns a buffer', async () => {
+    // Install a fake fetcher so the test doesn't make real HTTP calls.
+    _setImageFetcherForTests(async (src) => {
+      if (src === 'https://cdn.example/hero.jpg') return ONE_PIXEL_PNG;
+      return null;
+    });
+    try {
+      const layoutWithImage = [
+        { type: 'image', x: 24, y: 24, width: 480, height: 300, src: 'https://cdn.example/hero.jpg' },
+        { type: 'text', x: 24, y: 360, width: 480, height: 60, content: 'Bali 7 Nights' },
+      ];
+      const buf = await renderFlyerPdf(
+        { palette: validPalette, layout: layoutWithImage, assets: {} },
+        { aspect: 'a4', hash: 'a'.repeat(64) },
+      );
+      expect(isPdfMagic(buf)).toBe(true);
+      // PDF should contain a real /Image XObject entry — pdfkit emits a
+      // `/Subtype /Image` token in the resources dictionary whenever
+      // doc.image() succeeds. Detect via the byte sequence.
+      const pdfStr = buf.toString('binary');
+      expect(pdfStr).toContain('/Image');
+    } finally {
+      _setImageFetcherForTests(null);
+    }
+  });
+
+  test('image blocks gracefully degrade to an accent-colour placeholder when fetcher returns null', async () => {
+    _setImageFetcherForTests(async () => null);
+    try {
+      const buf = await renderFlyerPdf(
+        {
+          palette: validPalette,
+          layout: [
+            { type: 'image', x: 24, y: 24, width: 200, height: 200, src: 'https://cdn.example/broken.jpg' },
+          ],
+          assets: {},
+        },
+        { aspect: 'a4', hash: 'b'.repeat(64) },
+      );
+      expect(isPdfMagic(buf)).toBe(true);
+      // No /Image XObject — fetcher returned null so doc.image() wasn't called.
+      const pdfStr = buf.toString('binary');
+      expect(pdfStr).not.toContain('/Subtype /Image');
+    } finally {
+      _setImageFetcherForTests(null);
+    }
+  });
+
+  test('image blocks with no src are skipped (no fetcher call, no crash)', async () => {
+    const fetcher = vi.fn(async () => ONE_PIXEL_PNG);
+    _setImageFetcherForTests(fetcher);
+    try {
+      const buf = await renderFlyerPdf(
+        {
+          palette: validPalette,
+          layout: [{ type: 'image', x: 10, y: 10, width: 100, height: 100, src: '' }],
+          assets: {},
+        },
+        { aspect: 'a4', hash: 'c'.repeat(64) },
+      );
+      expect(isPdfMagic(buf)).toBe(true);
+      expect(fetcher).not.toHaveBeenCalled();
+    } finally {
+      _setImageFetcherForTests(null);
+    }
+  });
+
+  test('text block positions are scaled from the 540×720 canvas to the page dimensions', async () => {
+    // We can't easily inspect pdfkit's coord stream, but a fully-empty
+    // canvas layout vs a canvas with content should produce different
+    // byte streams (text content + position commands differ).
+    const empty = await renderFlyerPdf(
+      { palette: validPalette, layout: [], assets: {} },
+      { aspect: 'a4', hash: 'd'.repeat(64) },
+    );
+    const withContent = await renderFlyerPdf(
+      {
+        palette: validPalette,
+        layout: [
+          { type: 'text', x: 24, y: 24, width: 400, height: 80, content: 'Headline content', fontSize: 32 },
+        ],
+        assets: {},
+      },
+      { aspect: 'a4', hash: 'd'.repeat(64) },
+    );
+    expect(isPdfMagic(empty)).toBe(true);
+    expect(isPdfMagic(withContent)).toBe(true);
+    // Byte streams differ — content reached the page.
+    expect(empty.equals(withContent)).toBe(false);
   });
 });

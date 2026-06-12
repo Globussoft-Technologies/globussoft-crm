@@ -28,6 +28,7 @@
 const cron = require("node-cron");
 const prisma = require("../lib/prisma");
 const { resolveForSubBrand } = require("../lib/subBrandConfig");
+const watiClient = require("../services/watiClient");
 
 const PORTAL_BASE = process.env.PUBLIC_BASE_URL || "https://crm.globusdemos.com";
 
@@ -157,11 +158,36 @@ async function runReligiousGuidanceForTenant(tenantId) {
         for (const ch of channels) {
           if (ch === "wa") {
             console.log(
-              `[wati-stub] would send religious-guidance packet ${packet.id} ` +
+              `[wati] religious-guidance packet ${packet.id} ` +
                 `to itin ${itin.id} contact ${itin.contactId} (T-${dtd}d, ${packet.title}) ` +
-                `— pending Wati creds (Q9) — would-route subBrand=rfu ` +
+                `— dispatch via watiClient — subBrand=rfu ` +
                 `wabaId=${rfuCfg.wabaId || "(no-config)"}`,
             );
+            // WhatsApp dispatch via watiClient (Q9) — stub when creds absent.
+            // Own try/catch: a contact-lookup or send failure must not eat
+            // the fired++ below (the notification row already landed).
+            // Per-fired-packet contact lookup: fired volume is small (T-day
+            // exact matches only), so no batching needed here.
+            try {
+              if (itin.contactId) {
+                const contact = await prisma.contact.findFirst({
+                  where: { id: itin.contactId, tenantId },
+                  select: { id: true, phone: true, name: true },
+                });
+                if (contact && contact.phone) {
+                  await watiClient.sendBestEffort({
+                    tenantId,
+                    subBrand: "rfu",
+                    toPhone: contact.phone,
+                    contactId: contact.id,
+                    fallbackText: `${packet.title} (T-${dtd} days): ${snippet}`,
+                    broadcastName: "travel-religious-guidance",
+                  });
+                }
+              }
+            } catch (waErr) {
+              console.error(`[ReligiousGuidance] WA dispatch failed (notification still fired): ${waErr.message}`);
+            }
           } else if (ch === "email") {
             console.log(
               `[religious-guidance] email channel — TODO wire scheduledEmail ` +

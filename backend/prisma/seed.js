@@ -13,6 +13,14 @@ dotenv.config({ path: path.resolve(__dirname, '../../.env') });
 const { PrismaClient } = require('@prisma/client');
 const bcrypt = require('bcryptjs');
 
+// S91 — POI catalog seeder wrapper (PRD_TRAVEL_ITINERARY_UPGRADES.md FR-3.5).
+// Fixture-mode by default so `prisma db seed` runs offline (no OPENTRIPMAP_API_KEY
+// required). S11 shipped the wrapper + dual-purpose seeder; S91 wires it into
+// the orchestrator. Try/catch isolation around the call (line ~1145) follows the
+// existing per-op error-isolation pattern (see lines 48 + 203-207 + 345-348) so a
+// POI seed failure doesn't abort the rest of the seed run.
+const { seedTravelPois } = require('./seed-travel-pois');
+
 // Verify DATABASE_URL is set
 if (!process.env.DATABASE_URL) {
   console.error('Error: DATABASE_URL not set in .env file');
@@ -1139,6 +1147,20 @@ async function main() {
   }
 
   console.log('RBAC Roles: OWNER + ADMIN + MANAGER + CUSTOMER + USER system roles seeded with permissions');
+
+  // ══════════════════════════════════════════════════════════════
+  // STEP N: TRAVEL POI CATALOG (S91 — PRD_TRAVEL_ITINERARY_UPGRADES.md FR-3.5)
+  // ══════════════════════════════════════════════════════════════
+  // Fixture-mode default — no OPENTRIPMAP_API_KEY required, no network hits,
+  // CI-safe. Try/catch isolation so a POI seed failure doesn't abort the rest
+  // of the seed run (matches the per-op pattern at lines 48 + 203-207 + 345-348).
+  console.log('[seed] seeding POIs (fixture mode)…');
+  try {
+    const poiResult = await seedTravelPois({ prisma, useFixture: true });
+    console.log(`[seed] POIs done: upserted ${poiResult.totalUpserted} across ${poiResult.perDest.length} destinations`);
+  } catch (e) {
+    console.error('[seed] seedTravelPois failed:', e.message);
+  }
 
   // ══════════════════════════════════════════════════════════════
   // DONE

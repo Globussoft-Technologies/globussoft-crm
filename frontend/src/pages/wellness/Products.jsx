@@ -3,6 +3,7 @@ import { Package, Plus, Edit2, Trash2, AlertCircle, Search, Upload } from 'lucid
 import { fetchApi, getAuthToken } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { usePermissions } from '../../hooks/usePermissions';
+import PageHeader from '../../components/PageHeader';
 
 export default function Products() {
   const notify = useNotify();
@@ -271,27 +272,27 @@ export default function Products() {
 
   return (
     <div style={{ maxWidth: 1400, margin: '0 auto', padding: '2rem 1rem' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
-          <Package size={28} color="var(--accent-color)" />
-          <h1 style={{ fontSize: '1.5rem', fontWeight: 600, margin: 0 }}>Products</h1>
-          {permsReady && !canMutateProducts && (
-            <span
-              title="You can view products but can't make changes."
-              style={{
-                fontSize: '0.7rem',
-                padding: '0.2rem 0.55rem',
-                borderRadius: 999,
-                background: 'var(--subtle-bg)',
-                color: 'var(--text-secondary)',
-                border: '1px solid var(--border-color)',
-                fontWeight: 500,
-              }}
-            >
-              View only
-            </span>
-          )}
-        </div>
+      <PageHeader
+        icon={Package}
+        title="Products"
+        description="Manage inventory, pricing, stock levels, and category assignments."
+        inlineBadge={permsReady && !canMutateProducts ? (
+          <span
+            title="You can view products but can't make changes."
+            style={{
+              fontSize: '0.7rem',
+              padding: '0.2rem 0.55rem',
+              borderRadius: 999,
+              background: 'var(--subtle-bg)',
+              color: 'var(--text-secondary)',
+              border: '1px solid var(--border-color)',
+              fontWeight: 500,
+            }}
+          >
+            View only
+          </span>
+        ) : null}
+      >
         {canWriteProducts && (
           <button
             onClick={() => handleOpenModal()}
@@ -311,7 +312,7 @@ export default function Products() {
             <Plus size={16} /> Add Product
           </button>
         )}
-      </div>
+      </PageHeader>
 
       <div style={{ display: 'flex', gap: '1rem', marginBottom: '2rem' }}>
         <div style={{ flex: 1, position: 'relative' }}>

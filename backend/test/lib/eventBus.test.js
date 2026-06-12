@@ -343,6 +343,9 @@ beforeAll(() => {
   prisma.approvalRequest = { create: vi.fn() };
   prisma.auditLog = { create: vi.fn() };
   prisma.webhook = { findMany: vi.fn() };
+  // send_webhook now resolves the tenant's signing secret via
+  // lib/webhookEntitlement.resolveTenantWebhookSecret → webhookCredential.findFirst.
+  prisma.webhookCredential = { findFirst: vi.fn() };
 });
 
 beforeEach(() => {
@@ -356,6 +359,9 @@ beforeEach(() => {
   });
   prisma.auditLog.create.mockReset().mockResolvedValue({});
   prisma.webhook.findMany.mockReset().mockResolvedValue([]);
+  // Default: no per-tenant credential → send_webhook falls back to the env/null
+  // secret (unsigned) without a real DB hit.
+  prisma.webhookCredential.findFirst.mockReset().mockResolvedValue(null);
 });
 
 describe('emitEvent — prisma async tail (rule fan-out + webhook delivery)', () => {

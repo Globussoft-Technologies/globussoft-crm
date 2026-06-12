@@ -1,5 +1,17 @@
 const path = require("path");
-require("dotenv").config({ path: path.resolve(__dirname, "../.env"), override: true }); // load root .env for API keys (Gemini, Mailgun, etc.)
+// Load env. Historical convention pointed at the repo root, but in practice
+// the keys (GEMINI_API_KEY, OPENAI_API_KEY, Mailgun, etc.) live in
+// backend/.env. Load root first (no-op if absent), then backend/.env with
+// override so backend/.env wins on duplicates. Either file can be empty;
+// system env still wins over both if exported in the shell.
+require("dotenv").config({ path: path.resolve(__dirname, "../.env"), override: false });
+require("dotenv").config({ path: path.resolve(__dirname, ".env"), override: true });
+// One-line startup probe so an operator can confirm AI keys actually
+// loaded without grepping logs for fail-soft messages later.
+console.log(
+  `[env] AI keys: GEMINI=${process.env.GEMINI_API_KEY ? "set" : "MISSING"} ` +
+  `OPENAI=${process.env.OPENAI_API_KEY ? "set" : "MISSING"}`,
+);
 
 // Fail fast in production if JWT secrets are missing — refuses to boot rather than
 // silently fall back to the dev secret baked into the source.
@@ -132,6 +144,13 @@ const ALLOWED_ORIGINS = [
   "http://127.0.0.1:5173",
   "http://127.0.0.1:5000",
   "https://globuscrm.globussoft.com",
+  // Dr. Haror's external marketing site — consumes the public wellness
+  // catalog + payment endpoints (POST /api/wellness/public/payment/order +
+  // /confirm). Hardcoded because it's part of the product surface, not a
+  // one-off env override.
+  "https://enhancewellness.globusdemos.com",
+  "http://localhost:8080",
+  "http://127.0.0.1:8080",
   ...(process.env.FRONTEND_URL ? [process.env.FRONTEND_URL] : []),
   ...(process.env.CORS_ALLOWED_ORIGINS
     ? process.env.CORS_ALLOWED_ORIGINS.split(",").map((s) => s.trim()).filter(Boolean)
@@ -184,8 +203,14 @@ app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
 // Security middleware
 const cookieParser = require('cookie-parser');
-const { attachNonce, helmetMiddleware, helmetStrictReportOnlyMiddleware, permissionsPolicyMiddleware, sanitizeBody, stripTenantOverride } = require('./middleware/security');
+const { attachNonce, helmetMiddleware, helmetStrictReportOnlyMiddleware, permissionsPolicyMiddleware, sanitizeBody, stripTenantOverride, allowIframeEmbedding, readTenantEmbedAllowlist } = require('./middleware/security');
 const { originCheck } = require('./middleware/originCheck');
+// #917 slice S35 (FR-3.X) — CSP-nonce static-file middleware. Substitutes
+// `__CSP_NONCE__` placeholders in frontend/index.html with the per-request
+// nonce minted by attachNonce so the strict Report-Only CSP header's
+// `'nonce-<base64>'` source-list value matches what the browser sees on the
+// served inline `<script>` / `<style>` / `<meta name="csp-nonce">` tags.
+const cspNonceStaticMiddleware = require('./middleware/cspNonceStaticMiddleware');
 // #917 slice S1 (FR-3.2) — mint a per-request CSP nonce BEFORE the strict
 // Report-Only CSP middleware runs. The CSP function-directives read
 // res.locals.cspNonce to advertise `'nonce-<base64>'` on script-src/style-src.
@@ -196,6 +221,13 @@ app.use(helmetMiddleware);
 // blocking. Promotion to enforce-mode is a future slice once inline-script /
 // inline-style surface is migrated to external bundles + nonces.
 app.use(helmetStrictReportOnlyMiddleware);
+// #917 slice S119 (FR-3.X) — cspNonceStaticMiddleware mount MOVED to AFTER
+// the swagger-ui mount further down. S115 placed it here, but the
+// middleware's fall-through rules (GET + non-`/api/` prefix + no dot)
+// MATCH `/api-docs` and `/api-docs/` — so the SPA index.html was being
+// served instead of Swagger UI's HTML, reding the e2e api-docs spec and
+// the per-push api_tests gate. See the new mount immediately after
+// `app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(...))` below.
 app.use(permissionsPolicyMiddleware); // #186 — Permissions-Policy header
 app.use(cookieParser());
 // #657 — CSRF defense layer for browser flows. Mounted EARLY (before
@@ -300,6 +332,32 @@ const forgotPasswordEmailLimiter = rateLimit({
   validate: { trustProxy: false, xForwardedForHeader: false },
 });
 app.post("/api/auth/forgot-password", forgotPasswordIpLimiter, forgotPasswordEmailLimiter, (req, res, next) => next());
+
+// Email-existence pre-check used by the marketing /get-started wizard.
+// Moderate limits: this is a normal onboarding step, but we still cap
+// enumeration. Response shape is identical regardless of outcome.
+const checkEmailIpLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 min
+  max: process.env.NODE_ENV === "test" ? 10000 : 30, // 30 requests/15min/IP
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  keyGenerator: (req, res) => ipKeyGenerator(req, res),
+  message: { error: "Too many requests from this IP, please try again later." },
+  validate: { trustProxy: false, xForwardedForHeader: false },
+});
+const checkEmailEmailLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: process.env.NODE_ENV === "test" ? 10000 : 10, // 10 requests/hour/email
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  keyGenerator: (req, res) => {
+    const email = (req.body?.email || "").toLowerCase().trim();
+    return email || `noemail:${ipKeyGenerator(req, res)}`;
+  },
+  message: { error: "Too many requests for this email, please try again later." },
+  validate: { trustProxy: false, xForwardedForHeader: false },
+});
+app.post("/api/auth/check-email", checkEmailIpLimiter, checkEmailEmailLimiter, (req, res, next) => next());
 
 app.use("/api", apiLimiter);
 
@@ -419,6 +477,7 @@ const dealsDocumentsRoutes = require("./routes/deals_documents");
 const marketingRoutes = require("./routes/marketing");
 const reportsRoutes = require("./routes/reports");
 const developerRoutes = require("./routes/developer");
+const settingsRoutes = require("./routes/settings");
 const billingRoutes = require("./routes/billing");
 const v1InvoicesRoutes = require("./routes/v1_invoices");
 const searchRoutes = require("./routes/search");
@@ -596,6 +655,8 @@ const attendanceRoutes = require("./routes/attendance");
 const leaveRoutes = require("./routes/leave");
 // External partner API v1 (Callified.ai, Globus Phone, etc. — API key auth)
 const externalRoutes = require("./routes/external");
+// Flight Quotation plugin endpoint (#908) — API key auth via X-API-Key
+const travelFlightQuotesRoutes = require("./routes/travel_flight_quotes");
 // Voyagr (OJR) CMS lead-capture API v1 — API key auth via X-API-Key
 // (mirror partner-API pattern). See docs/MANUAL_CODING_BACKLOG.md cluster F1.
 // CORS: voyagr's server-to-server call (Next.js API route → CRM) has no
@@ -644,6 +705,26 @@ app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument, {
   customSiteTitle: "Globussoft CRM Docs"
 }));
 
+// #917 slice S119 (FR-3.X) — wire S35's cspNonceStaticMiddleware. Mounted
+// here (AFTER swagger-ui's `/api-docs` mount) because the middleware's
+// fall-through rules (GET + non-`/api/` prefix + no dot) match `/api-docs`
+// and `/api-docs/` — placing it BEFORE swagger-ui (S115's mount position)
+// caused the SPA index.html to be served instead of Swagger UI's HTML,
+// reding the e2e api-docs spec and the api_tests deploy gate.
+//
+// Positional constraints (all still satisfied at this site):
+//   - AFTER `attachNonce`                    (line ~205 — populates res.locals.cspNonce)
+//   - AFTER `helmetStrictReportOnlyMiddleware` (line ~211 — sets the CSP header)
+//   - AFTER swagger-ui mount                 (line ~666 — swagger-ui wins /api-docs)
+//   - BEFORE `app.get("/", ...)`             (line ~1110 — SPA shell fallback)
+//   - BEFORE `/uploads` static mounts        (line ~1060 — static asset paths
+//     contain dots and so fall through the middleware's own rules anyway)
+//
+// Express routes are first-match-wins on mount order — moving the mount to
+// AFTER swagger-ui means `/api-docs` requests reach swagger-ui's handler
+// before this middleware can intercept them.
+app.use(cspNonceStaticMiddleware);
+
 // Global auth guard — protects all /api/ routes EXCEPT auth login/signup and health
 app.use("/api", (req, res, next) => {
   // /portal/set-password was previously in openPaths — that's a real
@@ -653,7 +734,7 @@ app.use("/api", (req, res, next) => {
   // promotes a contact to a portal user. Removing the entry routes the
   // unauthenticated case through the global guard's 401 (RFC 7235), and
   // the authenticated case continues unaffected.
-  const openPaths = ["/auth/login", "/auth/signup", "/auth/register", "/auth/customer/register", "/auth/public/tenants", "/auth/forgot-password", "/auth/reset-password", "/auth/2fa/verify", "/health", "/marketplace-leads/webhook", "/sms/webhook", "/whatsapp/webhook", "/telephony/webhook", "/push/subscribe/visitor", "/push/vapid-key", "/communications/track/", "/sso/google/callback", "/sso/microsoft/callback", "/sso/google/start", "/sso/microsoft/start", "/email/inbound", "/calendar/google/callback", "/calendar/outlook/callback", "/voice/webhook", "/portal/login", "/portal/forgot", "/portal/reset", "/portal/me", "/portal/tickets", "/portal/invoices", "/portal/contracts", "/portal/travel", "/portal/kyc", "/signatures/sign", "/surveys/respond", "/surveys/public", "/chatbots/chat", "/web-visitors/track", "/payments/webhook", "/accounting/webhook", "/scim/v2", "/booking-pages/public", "/knowledge-base/public", "/live-chat/visitor", "/document-views/track", "/zapier/webhook", "/marketing/submit", "/v1/external", "/v1/voyagr", "/wellness/public", "/wellness/portal", "/attendance/biometric/webhook", "/travel/microsites/public", "/travel/diagnostics/public", "/travel/itineraries/public", "/travel/inbound/leads", "/security/csp-report"];
+  const openPaths = ["/auth/login", "/auth/signup", "/auth/register", "/auth/customer/register", "/auth/check-email", "/auth/public/tenants", "/auth/forgot-password", "/auth/reset-password", "/auth/2fa/verify", "/health", "/marketplace-leads/webhook", "/sms/webhook", "/whatsapp/webhook", "/telephony/webhook", "/push/subscribe/visitor", "/push/vapid-key", "/communications/track/", "/sso/google/callback", "/sso/microsoft/callback", "/sso/google/start", "/sso/microsoft/start", "/email/inbound", "/calendar/google/callback", "/calendar/outlook/callback", "/voice/webhook", "/portal/login", "/portal/forgot", "/portal/reset", "/portal/me", "/portal/tickets", "/portal/invoices", "/portal/contracts", "/portal/travel", "/portal/kyc", "/signatures/sign", "/surveys/respond", "/surveys/public", "/chatbots/chat", "/web-visitors/track", "/payments/webhook", "/accounting/webhook", "/scim/v2", "/booking-pages/public", "/knowledge-base/public", "/live-chat/visitor", "/document-views/track", "/zapier/webhook", "/marketing/submit", "/v1/external", "/v1/voyagr", "/v1/flight-plugin", "/wellness/public", "/wellness/portal", "/attendance/biometric/webhook", "/travel/microsites/public", "/travel/diagnostics/public", "/travel/itineraries/public", "/travel/inbound/leads", "/travel/whatsapp/webhook", "/travel/whatsapp/media", "/v1/flyers/public", "/security/csp-report", "/privacy-policy", "/deleted-account-policy", "/terms-and-conditions", "/legal"];
   if (openPaths.some(p => req.path.startsWith(p))) return next();
   // Public marketing catalog — the /pricing page hits GET /subscriptions/plans
   // anonymously. Admin CRUD (POST/PUT/DELETE + GET /plans/admin) stays gated
@@ -730,6 +811,7 @@ app.use("/api/deals_documents", dealsDocumentsRoutes);
 app.use("/api/marketing", marketingRoutes);
 app.use("/api/reports", reportsRoutes);
 app.use("/api/developer", developerRoutes);
+app.use("/api/settings", settingsRoutes);
 app.use("/api/billing", billingRoutes);
 // PRD Gap §2 items 7a-d — `/api/v1/invoices` stable public-API alias for the
 // legacy /api/billing surface. Includes a NEW POST /:id/payments endpoint
@@ -868,14 +950,35 @@ app.use("/api/travel", travelSuppliersRoutes);
 // `:id` capture on `/quotes/:id` which would otherwise match `/quotes/public/...`
 // at validateNumericId and 400 INVALID_ID before reaching the public router.
 app.use("/api/travel/quotes/public", require("./routes/travel_quotes_public"));
+app.use("/api/travel/quote-templates", require("./routes/travel_quote_templates"));
+// Mount at "/api/travel" (NOT "/api/travel/cancellation-policies"): the
+// router already carries the full "/cancellation-policies" path segment on
+// every route internally (matching its vitest mount `app.use('/api/travel',
+// router)`). Mounting at the over-specific prefix double-prefixed every path
+// to /api/travel/cancellation-policies/cancellation-policies, so the real
+// /api/travel/cancellation-policies fell through to the global 404.
+app.use("/api/travel", require("./routes/travel_cancellation_policies"));
 app.use("/api/travel", travelQuotesRoutes);
 app.use("/api/travel", travelInvoicesRoutes);
 app.use("/api/travel", require("./routes/travel_flyer_templates"));
+// S78 (Marketing Flyer #908) — mount the mixed-auth flyer share + public render
+// router. POST /:id/share is auth-gated inside the router (verifyToken +
+// verifyRole + requireTravelTenant); GET /public/:slug + /public/:slug/meta
+// bypass auth via the '/v1/flyers/public' entry added to openPaths above.
+// Same shape as travel_quotes_public mount (line 877).
+app.use("/api/v1/flyers", require("./routes/travel_flyer_public"));
 app.use("/api/travel", require("./routes/travel_commission_profiles"));
 // WS-1 — sub-brand session scope (POST /session/switch-brand + GET
 // /session/active-brand). Authoritative server-side validation behind the
 // sidebar sub-brand switcher; reuses middleware/travelGuards.js plumbing.
 app.use("/api/travel", require("./routes/travel_session"));
+// Q9 — travel 2-way WhatsApp chat (Wati transport): /whatsapp/status +
+// /whatsapp/send + /whatsapp/webhook. Router carries the full /whatsapp/*
+// segment internally, so the mount prefix is /api/travel (NOT
+// /api/travel/whatsapp — see the cancellation-policies double-prefix
+// post-mortem at the mount above). The webhook sub-path is in openPaths.
+// Wellness/generic WhatsApp (routes/whatsapp*.js, Meta Cloud) is untouched.
+app.use("/api/travel", require("./routes/travel_whatsapp"));
 app.use("/api/brand-kits", brandKitsRoutes);
 app.use("/api/adsgpt", adsgptRoutes);
 app.use("/api/ratehawk", ratehawkRoutes);
@@ -891,6 +994,7 @@ app.use("/api/travel", travelTravelStallRoutes);
 app.use("/api/travel", require("./routes/travel_inbound_leads"));
 app.use("/api/travel/itinerary-templates", require("./routes/travel_itinerary_templates"));
 app.use("/api/travel/sightseeing", require("./routes/travel_sightseeing"));
+app.use("/api/travel/pois", require("./routes/travel_pois"));
 app.use("/api/embassy-rules", embassyRulesRoutes);
 app.use("/api/travel-curriculum", travelCurriculumRoutes);
 app.use("/api/travel-school-terms", travelSchoolTermRoutes);
@@ -940,6 +1044,9 @@ app.use("/api/v1/external", externalRoutes);
 // verifyToken via /v1/voyagr entry in openPaths above; uses its own
 // X-API-Key middleware).
 app.use("/api/v1/voyagr", voyagrRoutes);
+// Flight Quotation plugin endpoint (#908 FR-5) — X-API-Key auth (externalAuth);
+// applies markup server-side + persists a flight ItineraryItem.
+app.use("/api/v1/flight-plugin", travelFlightQuotesRoutes);
 // Admin tooling (ADMIN-only ops triggers + read APIs)
 app.use("/api/admin", adminRoutes);
 
@@ -952,6 +1059,112 @@ app.use("/api/security", require("./routes/security_reports"));
 
 // Public landing pages (outside /api/ prefix, no auth guard)
 app.use("/p", landingPagesPublic);
+
+// Public legal/policy pages — rendered from Markdown (no auth)
+app.use(require("./routes/legal"));
+
+// #921 slice S38 → S66 → S129 — wire the iframe-embedding override on /embed/*
+// BEFORE the lead-form gate handler. S4 (commit 6561bdc) made the global
+// default X-Frame-Options: DENY + CSP frame-ancestors 'none' so no page
+// can be iframed by anyone — but the embed widget is the ONE intentionally-
+// public iframe surface (partner sites embed our /embed/lead-form.html
+// into their own pages via an iframe pointing at our origin). Without
+// this override every partner-side embed silently broke when S4 landed.
+//
+// S38 (commit 7a229c92) shipped this mount with a hardcoded
+// `allowList: ['*']` because `Tenant.embedAllowlistJson` didn't exist yet.
+// S39 (commit 56832537) added the column + flipped `readTenantEmbedAllowlist`
+// from a stub-returning-null to a real Prisma read. S66 connected them:
+// the embed mount reads the tenant's allowlist at REQUEST time via a thin
+// async middleware that delegates to the per-request resolver.
+//
+// S129 (this slice, 2026-06-11) closes the per-tenant-enforcement loop for
+// the DOMINANT use case: cross-origin partner iframes. S66's per-tenant
+// lookup needs `req.user?.tenantId`, but partner-iframe requests are
+// fundamentally unauthenticated + sit OUTSIDE the `/api` prefix, so the
+// global JWT guard never runs and `req.user` is always undefined → the
+// S66 lookup short-circuited to the wildcard fallback for every real-
+// world partner embed. The fix is to give partners an EXPLICIT opt-in
+// channel: append `?key=glbs_…` to the iframe src. The new pre-S66
+// middleware below resolves that key → tenant via `prisma.apiKey.findUnique`
+// and synthesises `req.user = { tenantId: apiKey.tenantId, userId: null }`
+// so S66's existing logic finds the tenant and applies its per-tenant
+// `embedAllowlistJson` allowlist.
+//
+// Tenant resolution (in order):
+//   - `?key=glbs_…` query param (S129 — partner-iframe opt-in path,
+//     resolved by the pre-mount middleware below).
+//   - `req.user?.tenantId` already populated by upstream auth — e.g. a
+//     future "preview your own embed inside the admin UI" flow.
+//   - Otherwise: `req.user` remains undefined, S66 short-circuits to null,
+//     wildcard `['*']` is applied (the partner-iframe back-compat default).
+//
+// Fail-soft per the canonical middleware/auth.js pattern: a Prisma error
+// or shape-invalid key never 500s the /embed/* response — it leaves
+// `req.user` unset and lets the S66 wildcard fallback do its job. The
+// existing #297 `/embed/lead-form.html` 404 gate handler runs AFTER this
+// middleware (different express verb mount), so an unknown key still 404s
+// at the lead-form level while the CSP override remains permissive for
+// any other /embed/* asset that may legitimately load before the gate
+// fires (e.g. preflight, future /embed/preview/*).
+app.use("/embed", async (req, res, next) => {
+  // S129 — pre-mount tenant resolution from `?key=glbs_…`. Only fires
+  // when `req.user` is currently undefined (so an upstream-auth flow that
+  // already set it wins) AND the query param is present + shape-valid.
+  if (!req.user && req.query && typeof req.query.key === "string") {
+    const key = req.query.key;
+    // Same shape check as the #297 lead-form gate so behaviour stays
+    // consistent across both handlers: `glbs_` prefix + ≥8 base64ish chars.
+    if (/^glbs_[A-Za-z0-9_-]{8,}$/.test(key)) {
+      try {
+        const prismaClient = require("./lib/prisma");
+        const apiKey = await prismaClient.apiKey.findUnique({
+          where: { keySecret: key },
+          select: { tenantId: true },
+        });
+        if (apiKey && apiKey.tenantId) {
+          // Synthesise the minimal req.user shape S66 reads. userId stays
+          // null because this is an unauthenticated partner-iframe path —
+          // anything downstream that wants a real user must re-authenticate.
+          req.user = { tenantId: apiKey.tenantId, userId: null };
+        }
+        // Unknown key → leave req.user unset → S66 falls back to wildcard.
+        // (The #297 gate handler will still 404 the lead-form for an
+        // unknown key; the wildcard CSP applies to any other /embed/*
+        // path the partner might request alongside the form.)
+      } catch (e) {
+        // Fail-soft per middleware/auth.js Issue #180 pattern — log + leave
+        // req.user unset so the S66 wildcard fallback keeps partner embeds
+        // alive even if the lookup blows up unexpectedly.
+        console.warn("[embed] ?key= → tenant resolution failed:", e.message);
+      }
+    }
+  }
+  // S66 — resolve per-tenant allowlist from req.user.tenantId. The S129
+  // block above is what populates req.user.tenantId on the partner-iframe
+  // `?key=` path; this block reads it (whether S129 set it or upstream
+  // auth set it) and falls through to wildcard when no tenant is resolved.
+  let allowList = ["*"];
+  try {
+    const tenantId = req.user && req.user.tenantId;
+    if (tenantId) {
+      // Lazy-require the prisma singleton — the canonical const lives
+      // further down in the file (line ~1117 below); this mount runs
+      // earlier in the middleware stack than that declaration, but
+      // `require()` is idempotent + the cached module exports work fine.
+      const prismaClient = require("./lib/prisma");
+      const perTenant = await readTenantEmbedAllowlist(prismaClient, tenantId);
+      if (Array.isArray(perTenant) && perTenant.length > 0) {
+        allowList = perTenant;
+      }
+    }
+  } catch (e) {
+    // Fail-open — log + fall back to wildcard so partner embeds keep
+    // working even if the per-tenant lookup blows up unexpectedly.
+    console.warn("[embed] per-tenant allowlist lookup failed:", e.message);
+  }
+  return allowIframeEmbedding({ allowList })(req, res, next);
+});
 
 // #297: /embed/lead-form.html — server-side gate so a malformed/revoked
 // API key returns 404 at GET time rather than letting the form render and

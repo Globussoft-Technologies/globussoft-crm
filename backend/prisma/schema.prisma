@@ -56,34 +56,40 @@ datasource db {
 }
 
 model Tenant {
-  id              Int      @id @default(autoincrement())
-  name            String
-  slug            String   @unique
-  plan            String   @default("starter") // starter, professional, enterprise
-  vertical        String   @default("generic") // generic, wellness (more verticals later)
+  id                 Int      @id @default(autoincrement())
+  name               String
+  slug               String   @unique
+  plan               String   @default("starter") // starter, professional, enterprise
+  vertical           String   @default("generic") // generic, wellness (more verticals later)
   // Geographic + monetary defaults — used to default currency on Deal/Payment
   // and to drive money formatting in the UI. ISO-3166-1-alpha-2 + ISO-4217.
-  country         String   @default("US")
-  defaultCurrency String   @default("USD")
-  locale          String   @default("en-US") // BCP-47 for date/number formatting
+  country            String   @default("US")
+  defaultCurrency    String   @default("USD")
+  locale             String   @default("en-US") // BCP-47 for date/number formatting
   // #902 slice 3 — Operator's GST-registration state for place-of-supply
   // decisions in the travel-vertical GST module. ISO 3166-2 like "IN-MH".
   // Nullable; backend/lib/gstStateCodeResolver.js falls back to "IN-MH"
   // (legacy default) when null. Set per-tenant during onboarding.
-  gstStateCode    String?
+  gstStateCode       String?
   // Agent C: white-label branding
-  logoUrl         String? // path to uploaded logo, e.g. /uploads/branding/tenant-2/logo.png
-  brandColor      String? // hex like #265855, overrides theme accent when set
+  logoUrl            String? // path to uploaded logo, e.g. /uploads/branding/tenant-2/logo.png
+  brandColor         String? // hex like #265855, overrides theme accent when set
   // #611: when true, OUTBOUND EmailMessage rows are persisted on send
   // (industry default — Sent folder, threading, audit trail). Admins
   // may opt out for storage / compliance reasons; existing tenants
   // pre-flag default to true at first read of the column.
-  emailRetention  Boolean  @default(true)
-  isActive        Boolean  @default(true)
-  ownerEmail      String?
-  adsgptLogin     String? // AdsGPT aMember username or email for SSO
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  emailRetention     Boolean  @default(true)
+  isActive           Boolean  @default(true)
+  ownerEmail         String?
+  adsgptLogin        String? // AdsGPT aMember username or email for SSO
+  // #921 slice S39 — per-tenant iframe-embed allowlist (FR-3.6). JSON array of
+  // allowed-origin strings, e.g. ["https://partner-a.com","https://partner-b.com"].
+  // Consumed by readTenantEmbedAllowlist() in backend/middleware/security.js to
+  // splice frame-ancestors via allowIframeEmbedding(). Null = no per-tenant
+  // override (fall back to wildcard or route-level allowList).
+  embedAllowlistJson String?  @db.Text
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
 
   users                 User[]
   contacts              Contact[]
@@ -97,6 +103,8 @@ model Tenant {
   attachments           Attachment[]
   apiKeys               ApiKey[]
   webhooks              Webhook[]
+  webhookCredential     WebhookCredential?
+  patientNotifications  PatientNotification[]
   invoices              Invoice[]
   integrations          Integration[]
   customEntities        CustomEntity[]
@@ -182,11 +190,14 @@ model Tenant {
   // the generic Quote / Invoice / Vendor. See model docs at bottom of file.
   travelQuotes             TravelQuote[]
   travelQuoteLines         TravelQuoteLine[]
+  travelQuoteTemplates     TravelQuoteTemplate[]
   travelInvoices           TravelInvoice[]
   travelInvoiceLines       TravelInvoiceLine[]
   travelPaymentSchedules   TravelPaymentSchedule[]
   travelSuppliers          TravelSupplier[]
   travelSupplierPayables   TravelSupplierPayable[]
+  // S33 (#920) — PRD_TRAVEL_BILLING FR-3.7 cancellation policies.
+  cancellationPolicies     CancellationPolicy[]
   // PRD_TRAVEL_B2B_AGENT_PORTAL #905 slice 2 — commission profiles
   // (additive; consumes lib/agentCommissionCalculator.js from slice 1
   // commit cb284098). Each row is one named operator-facing pricing
@@ -491,26 +502,27 @@ model User {
   tenantId Int    @default(1)
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  deals             Deal[]             @relation("OwnerDeals")
-  tickets           Ticket[]           @relation("AssignedTickets")
-  apiKeys           ApiKey[]
-  webhooks          Webhook[]
-  tasks             Task[]
-  expenses          Expense[]
-  approvedExpenses  Expense[]          @relation("ExpenseApprover")
-  projects          Project[]          @relation("ProjectOwner")
-  notifications     Notification[]
-  auditLogs         AuditLog[]
-  assignedContacts  Contact[]          @relation("AssignedContacts")
-  activities        Activity[]
-  callLogs          CallLog[]
-  emailMessages     EmailMessage[]
-  reportSchedules   ReportSchedule[]
-  smsMessages       SmsMessage[]
-  whatsappMessages  WhatsAppMessage[]
-  whatsappThreads   WhatsAppThread[]   @relation("WhatsAppThreadAssignee")
-  pushSubscriptions PushSubscription[]
-  landingPages      LandingPage[]
+  deals              Deal[]              @relation("OwnerDeals")
+  tickets            Ticket[]            @relation("AssignedTickets")
+  apiKeys            ApiKey[]
+  webhooks           Webhook[]
+  webhookCredentials WebhookCredential[] @relation("UserWebhookCredentials")
+  tasks              Task[]
+  expenses           Expense[]
+  approvedExpenses   Expense[]           @relation("ExpenseApprover")
+  projects           Project[]           @relation("ProjectOwner")
+  notifications      Notification[]
+  auditLogs          AuditLog[]
+  assignedContacts   Contact[]           @relation("AssignedContacts")
+  activities         Activity[]
+  callLogs           CallLog[]
+  emailMessages      EmailMessage[]
+  reportSchedules    ReportSchedule[]
+  smsMessages        SmsMessage[]
+  whatsappMessages   WhatsAppMessage[]
+  whatsappThreads    WhatsAppThread[]    @relation("WhatsAppThreadAssignee")
+  pushSubscriptions  PushSubscription[]
+  landingPages       LandingPage[]
 
   // Wellness vertical
   doctorVisits        Visit[]        @relation("DoctorVisits")
@@ -993,6 +1005,11 @@ model ApiKey {
   // req.requireSubBrandMatch(targetSubBrand) helper — a key with subBrand='tmc'
   // posting a lead with subBrand='rfu' is rejected 403 SUB_BRAND_MISMATCH.
   subBrand  String?
+  // #908 (PRD_FLIGHT_PLUGIN_CHROME_EXTENSION FR-4/FR-5) — scopes a key to a
+  // specific consumer. null = tenant-wide (legacy / partner API); when set
+  // (e.g. "flight-plugin") the matching endpoint enforces it. Additive nullable
+  // so existing keys keep working unchanged.
+  purpose   String?
   createdAt DateTime  @default(now())
   lastUsed  DateTime?
 
@@ -1017,6 +1034,36 @@ model Webhook {
 
   userId Int
   user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+}
+
+// Per-tenant HMAC signing credential for outbound webhooks (the lead-sync
+// stream GlobusPhone consumes). Replaces the single global
+// `process.env.WEBHOOK_HMAC_SECRET`: each tenant's outbound webhooks are
+// signed with THIS tenant's `secret` instead. One row per tenant
+// (`tenantId @unique`) — rotation/regeneration overwrites `secret` in place;
+// revoke flips `status` to REVOKED (kept for audit, but delivery stops).
+//
+// Show-once model (Stripe/GitHub/AWS): the raw secret is only ever returned
+// in the generate/rotate HTTP response — never re-served afterwards. It is
+// stored encrypted-at-rest via lib/fieldEncryption.js (AES-256-GCM, opt-in
+// via WELLNESS_FIELD_KEY) because the SERVER still needs it to sign; the
+// `ENC:v1:...` wrapper means a plaintext secret (key unset) and an encrypted
+// one coexist transparently. Delivery is also subscription-gated — see
+// lib/webhookEntitlement.js + lib/webhookDelivery.js deliverWebhooks().
+model WebhookCredential {
+  id            Int       @id @default(autoincrement())
+  tenantId      Int       @unique // one signing secret per tenant
+  tenant        Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  secret        String    @db.Text // raw 64-hex OR "ENC:v1:..." (fieldEncryption)
+  signingId     String    @unique // public, non-secret ref e.g. "whid_<hex>"
+  status        String    @default("ACTIVE") // ACTIVE | REVOKED
+  lastRotatedAt DateTime?
+  createdById   Int
+  createdBy     User      @relation("UserWebhookCredentials", fields: [createdById], references: [id], onDelete: Cascade)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
   @@index([tenantId])
 }
@@ -1201,6 +1248,20 @@ model SequenceStep {
   // Engine pauses the enrollment if an inbound EmailMessage with
   // threadId='seq-<enrollmentId>' arrives while parked on this step.
   pauseOnReply Boolean @default(true)
+
+  // S19 (PRD_TRAVEL_MARKETING_FLYER FR-3.5 / AC-6.5) — optional outbound
+  // attachment metadata. JSON-encoded array of refs, e.g.
+  //   [{"kind":"flyer","flyerId":42,"format":"pdf-a4"},
+  //    {"kind":"file","url":"https://...","filename":"brochure.pdf"}]
+  // For kind='flyer', the engine looks up the TravelFlyerTemplate by id and
+  // calls services/flyerRenderEngine.renderFlyer({template, data, format}) at
+  // send-time so a single template can be reused across departure-date
+  // variants without persisting a fresh template row per send. Nullable +
+  // additive — existing steps with no attachments leave this null. Stored
+  // as @db.Text so MySQL can hold larger arrays; route layer stringifies
+  // before save + the cron engine JSON.parse-with-try at send-time (a
+  // corrupt JSON blob logs + skips attachments rather than aborting send).
+  attachmentRefsJson String? @db.Text
 
   createdAt DateTime @default(now())
 
@@ -1419,6 +1480,35 @@ model Notification {
   @@index([userId, isRead])
   @@index([tenantId, userId, isRead])
   @@index([tenantId, createdAt])
+}
+
+// Patient-facing notification inbox (wellness patient portal + Android app).
+//
+// DELIBERATELY SEPARATE from the staff `Notification` model above: that one is
+// keyed on `userId` (staff Users) and is consumed by the web notification bell
+// + /api/notifications. Patients are a distinct `Patient` model (not Users) and
+// portal JWTs are rejected by the staff verifyToken middleware, so they could
+// never use that table. This additive table is patient-scoped (patientId) and
+// served by the portal endpoints in routes/wellness.js (/portal/me/notifications*)
+// behind verifyPatientToken — nothing in the staff notification path is touched.
+model PatientNotification {
+  id        Int       @id @default(autoincrement())
+  title     String
+  message   String    @db.Text
+  type      String    @default("info") // info | appointment | prescription | payment | system
+  link      String? // optional deep-link the app/portal can navigate to
+  isRead    Boolean   @default(false)
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  patientId Int
+  patient   Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  tenantId Int
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([patientId, isRead])
+  @@index([patientId, createdAt])
 }
 
 model AuditLog {
@@ -1738,6 +1828,13 @@ model WhatsAppMessage {
   // schema churn.
   metaType        String?
   interactiveJson String? @db.Text
+
+  // S124: full multi-attachment refs list (mediaUrl/mediaType only surface
+  // the first attachment due to single-column legacy schema; mediaRefsJson
+  // holds JSON-stringified array of all resolved attachment refs for
+  // multi-attachment WhatsApp sends from the sequence engine). Additive
+  // nullable — existing rows + single-attachment callers unaffected.
+  mediaRefsJson String? @db.Text
 
   @@index([tenantId, createdAt])
   @@index([threadId, createdAt])
@@ -3181,6 +3278,34 @@ model Patient {
   taxType         String?
   instagramHandle String?
 
+  // S62 — slim-shape PRD additions per S42 carry-over. The slim
+  // projection contract surfaces a row's "header" (id + name parts +
+  // last-visit anchor) without loading the full PHI payload — useful
+  // for list views, Omnibar quick-pick, and external-API minimal
+  // projections.
+  //   firstName     : structured given name (legacy `name` stays the
+  //                   canonical "as-displayed" full name; firstName +
+  //                   lastName are additive split fields populated by
+  //                   intake form when available).
+  //   lastName      : structured family name (paired with firstName).
+  //   displayName   : operator-set / computed UI-rendered name. Useful
+  //                   for "name-as-displayed" vs canonical legal name
+  //                   (e.g. "Dr. K. Reddy" displayName over the legal
+  //                   "Kavita Reddy" name). Null falls back to `name`.
+  //   lastVisitDate : denormalized cache of MAX(visits.visitDate) for
+  //                   this patient. THIS SLICE adds the column ONLY;
+  //                   population logic (Visit insert hook + backfill
+  //                   cron) is deferred as a follow-up gap row. Reads
+  //                   without population logic SHOULD treat null as
+  //                   "unknown / not yet computed", not "no visits".
+  // All four are additive nullable — no default backfill needed; the
+  // slim-projection consumer in lib/listProjection.js will be updated
+  // in a paired follow-up slice (S42 consumer extension).
+  firstName     String?
+  lastName      String?
+  displayName   String?
+  lastVisitDate DateTime?
+
   // #413 — Restrict (not Cascade) on Tenant deletion. Patient is PHI
   // (medical history, allergies, photos, prescriptions cascade-from-here).
   // A misclick on tenant.delete() must NOT silently destroy clinical
@@ -3232,6 +3357,9 @@ model Patient {
   // the route handler filters by patient.deletedAt at read time, so dangling
   // tag links resurrect on patient restore.
   tags PatientTag[]
+
+  // Patient-portal notification inbox (additive — see PatientNotification).
+  patientNotifications PatientNotification[]
 
   /// One Patient per (tenant, normalized phone number). DB-level dedup gate guarding against the recurring "same patient created N times by overlapping intake flows" inflation pattern. Cross-tenant duplicates allowed — different clinics can each have a Patient with phone +91-9876543210.
   // #401 — DB-level dedup gate. Pre-this-constraint, the dedup logic
@@ -3441,6 +3569,25 @@ model Prescription {
   drugs        String  @db.Text // JSON array: [{name, dosage, frequency, duration}]
   instructions String? @db.Text
   pdfUrl       String?
+
+  // S62 — slim-shape PRD additions per S42 carry-over.
+  //   status       : lifecycle marker. Conventional values:
+  //                  'draft'     — composed, not yet issued
+  //                  'issued'    — handed to / sent to patient
+  //                  'dispensed' — pharmacy filled (paired with dispensedAt)
+  //                  'cancelled' — voided post-issue
+  //                  Stored as String? (not enum) for additive safety +
+  //                  future enum upgrade once the value set stabilises.
+  //                  Null = legacy row (pre-S62); route layer treats
+  //                  null as 'issued' for back-compat. Enum-upgrade
+  //                  decision deferred as a follow-up gap row.
+  //   dispensedAt  : timestamp the prescription was dispensed by the
+  //                  pharmacy. Set by POS pharmacy-dispense action;
+  //                  null until that action fires. Used by clinical-audit
+  //                  reports + controlled-substance compliance views.
+  // Both additive nullable — no bless marker needed.
+  status      String?
+  dispensedAt DateTime?
 
   visitId Int?
   visit   Visit? @relation(fields: [visitId], references: [id], onDelete: SetNull)
@@ -5337,6 +5484,13 @@ model ItineraryItem {
   updatedAt   DateTime  @updatedAt
 
   @@index([itineraryId, position])
+  // S37 — composite index for S9's day-by-day editor: query shape is
+  // `WHERE itineraryId = X AND dayNumber = Y ORDER BY position` (group
+  // items by day, then preserve in-day order). The existing
+  // @@index([itineraryId, position]) covers ordered-list reads but won't
+  // be hit on the day-filtered read. Additive index — non-destructive,
+  // no bless marker required per CLAUDE.md migration-safety rule.
+  @@index([itineraryId, dayNumber])
 }
 
 // ── Cost master + seasonal calendar + markup rules ───────────────────
@@ -5906,20 +6060,43 @@ model TripMicrositeOtp {
 // (tenantId, subBrand). The voyagrAuth + apiKeyAuth.requireSubBrandMatch
 // helpers enforce sub-brand isolation at the route layer.
 model TravelQuote {
-  id          Int                   @id @default(autoincrement())
-  tenantId    Int                   @default(1)
-  subBrand    String
-  contactId   Int
-  status      String                @default("Draft") // Draft | Sent | Accepted | Rejected | Expired
-  totalAmount Decimal?              @db.Decimal(15, 2)
-  currency    String                @default("INR")
-  validUntil  DateTime?
-  lines       TravelQuoteLine[]
-  invoices    TravelInvoice[]
-  snapshots   TravelQuoteSnapshot[]
-  tenant      Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  createdAt   DateTime              @default(now())
-  updatedAt   DateTime              @updatedAt
+  id                   Int                   @id @default(autoincrement())
+  tenantId             Int                   @default(1)
+  subBrand             String
+  contactId            Int
+  status               String                @default("Draft") // Draft | Sent | Accepted | Rejected | Expired
+  totalAmount          Decimal?              @db.Decimal(15, 2)
+  currency             String                @default("INR")
+  validUntil           DateTime?
+  // S47 — FX-lock dedicated columns. Populated at customer-accept time
+  // by routes/travel_quotes_public.js (mirrors the fxLock block also
+  // persisted in TravelQuoteSnapshot.snapshotJson for forensic history /
+  // pre-S47 backward-compat). Letting aggregate-level reporting + billing
+  // joins query the locked rate without parsing snapshot JSON.
+  //   fxRateSnapshot:        source→target rate at lock-time (e.g. 83.4
+  //                          means 1 sourceCurrency = 83.4 targetCurrency).
+  //                          Null when same-currency / no source rate / lookup
+  //                          failed (the route's fail-soft contract).
+  //   fxRateSourceCurrency:  the quote's currency at lock-time (mirror of
+  //                          quote.currency captured at accept; kept here
+  //                          so a later currency change on the quote doesn't
+  //                          lose the lock's original source).
+  //   fxRateTargetCurrency:  tenant.defaultCurrency at lock-time.
+  //   fxRateLockedAt:        accept-time timestamp.
+  //   fxRateExpiresAt:       optional expiry for the lock (PRD §3.4.2 — not
+  //                          enforced today; reserved for future "lock
+  //                          expires after N days" gate).
+  fxRateSnapshot       Decimal?              @db.Decimal(15, 6)
+  fxRateSourceCurrency String?
+  fxRateTargetCurrency String?
+  fxRateLockedAt       DateTime?
+  fxRateExpiresAt      DateTime?
+  lines                TravelQuoteLine[]
+  invoices             TravelInvoice[]
+  snapshots            TravelQuoteSnapshot[]
+  tenant               Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt            DateTime              @default(now())
+  updatedAt            DateTime              @updatedAt
 
   @@index([tenantId, subBrand])
   @@index([tenantId, subBrand, status])
@@ -6005,39 +6182,89 @@ model TravelQuoteLine {
   @@index([quoteId, sortOrder])
 }
 
+// PRD_TRAVEL_QUOTE_BUILDER §3.5 — Template library.
+//
+// S31 slice (#920 / TRAVEL_BIG_SCOPE_BACKLOG). A TravelQuoteTemplate is a
+// saved pre-filled set of TravelQuoteLine shapes that operators can clone
+// into a new quote at build-time. Canonical examples: Umrah-7d, Golden-
+// Triangle-5d, Schengen-visa-checklist. Saves operator typing on common
+// itineraries.
+//
+// linesJson holds a JSON array of line shapes (without binding prices —
+// prices may re-resolve at quote-build time via the pricing engine; the
+// snapshot here is the operator's reference set). Each item in the array:
+//   {
+//     lineType: "hotel" | "flight" | "transport" | "visa" | "service" | "other",
+//     description: string,
+//     quantity: int (default 1),
+//     unitPrice: number,
+//     currency: string (3-letter ISO; defaults to template.currency),
+//     supplierId: int|null,
+//     sortOrder: int (default 0),
+//     notes: string|null
+//   }
+//
+// Sub-brand scoping: nullable subBrand. NULL = tenant-wide (visible to all
+// users); named sub-brand = scoped to caller's subBrandAccess[] (mirrors
+// ItineraryTemplate semantics from commit 1c01111a).
+//
+// category provides a coarse filter dimension ("Umrah" / "India-tour" /
+// "Europe-tour" / "Visa" / etc.) for the dropdown picker UI.
+//
+// Additive nullable schema — NO bless marker. Brand-new model; no UNIQUE
+// constraints, no backfilled NOT NULL columns. Per CLAUDE.md standing
+// rule: only re-shapes need bless markers, fresh additive models don't.
+model TravelQuoteTemplate {
+  id          Int      @id @default(autoincrement())
+  tenantId    Int      @default(1)
+  name        String   @db.VarChar(255)
+  description String?  @db.Text
+  subBrand    String? // tmc | rfu | travelstall | visasure | null (tenant-wide)
+  category    String? // Umrah | India-tour | Europe-tour | Visa | etc.
+  currency    String   @default("INR")
+  linesJson   String   @db.LongText // JSON array of line shapes; see model docs
+  isActive    Boolean  @default(true)
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([tenantId, isActive])
+  @@index([tenantId, subBrand, isActive])
+}
+
 model TravelInvoice {
-  id                 Int                     @id @default(autoincrement())
-  tenantId           Int                     @default(1)
-  subBrand           String
-  contactId          Int
+  id                   Int                     @id @default(autoincrement())
+  tenantId             Int                     @default(1)
+  subBrand             String
+  contactId            Int
   // Optional FK to TravelQuote — an invoice can be generated without a
   // prior quote (direct billing, supplier-passthrough scenarios).
-  quoteId            Int?
+  quoteId              Int?
   // Tenant-scoped human-readable identifier (e.g. "TINV-2026-0001"). The
   // route layer assigns sequentially per tenant + sub-brand at create time.
-  invoiceNum         String
-  status             String                  @default("Draft") // Draft | Issued | Partial | Paid | Voided
-  totalAmount        Decimal?                @db.Decimal(15, 2)
-  currency           String                  @default("INR")
-  dueDate            DateTime?
-  paidAt             DateTime?
+  invoiceNum           String
+  status               String                  @default("Draft") // Draft | Issued | Partial | Paid | Voided
+  totalAmount          Decimal?                @db.Decimal(15, 2)
+  currency             String                  @default("INR")
+  dueDate              DateTime?
+  paidAt               DateTime?
   // Arc 2 #901 slice 10 — Section 206C(1G) TCS persistence (PRD_TRAVEL_BILLING
   // UC-2.6 + FR-3.5). All four fields nullable + additive — invoices that
   // never get TCS applied (domestic, below-threshold, pre-slice-10 historical)
   // leave them null. tcsAppliedAt doubles as the idempotency sentinel — once
   // set, POST /:id/apply-tcs rejects with TCS_ALREADY_APPLIED. Line-level
   // TCS persistence (separate TravelInvoiceLine row) is deferred to slice 11.
-  tcsAmount          Decimal?                @db.Decimal(15, 2)
-  tcsRate            Decimal?                @db.Decimal(5, 2)
-  tcsExceedingAmount Decimal?                @db.Decimal(15, 2)
-  tcsAppliedAt       DateTime?
+  tcsAmount            Decimal?                @db.Decimal(15, 2)
+  tcsRate              Decimal?                @db.Decimal(5, 2)
+  tcsExceedingAmount   Decimal?                @db.Decimal(15, 2)
+  tcsAppliedAt         DateTime?
   // Arc 2 #901 slice 11 — Doc-type taxonomy (PRD_TRAVEL_BILLING FR-3.x).
   // Nullable with default "TaxInvoice"; new rows get the default, existing
   // rows remain NULL (route layer treats NULL as "TaxInvoice"). Enum values:
   // Proforma | TaxInvoice | CreditNote | DebitNote | TravelVoucher.
   // Separate CreditNote/DebitNote workflows deferred to slice 12; this slice
   // ships the field + validation + filter only.
-  docType            String?                 @default("TaxInvoice")
+  docType              String?                 @default("TaxInvoice")
   // Arc 2 #901 slice 14 — CreditNote workflow (PRD_TRAVEL_BILLING UC-2.7).
   // Self-relation linking a CreditNote (or DebitNote) row back to the
   // original invoice it adjusts. Nullable + onDelete SetNull — if the parent
@@ -6045,20 +6272,83 @@ model TravelInvoice {
   // record (audit-trail preservation; deletion of a parent in Issued/Paid
   // state is already prevented at the route layer). Existing rows get NULL
   // (additive safe — no bless marker needed).
-  parentInvoiceId    Int?
-  parentInvoice      TravelInvoice?          @relation("InvoiceCreditNotes", fields: [parentInvoiceId], references: [id], onDelete: SetNull)
-  creditNotes        TravelInvoice[]         @relation("InvoiceCreditNotes")
-  lines              TravelInvoiceLine[]
-  schedule           TravelPaymentSchedule[]
-  quote              TravelQuote?            @relation(fields: [quoteId], references: [id], onDelete: SetNull)
-  tenant             Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  createdAt          DateTime                @default(now())
-  updatedAt          DateTime                @updatedAt
+  parentInvoiceId      Int?
+  parentInvoice        TravelInvoice?          @relation("InvoiceCreditNotes", fields: [parentInvoiceId], references: [id], onDelete: SetNull)
+  creditNotes          TravelInvoice[]         @relation("InvoiceCreditNotes")
+  // S33 (#920) — PRD_TRAVEL_BILLING FR-3.7 cancellation-policy wire-up.
+  // Optional FK pointing at a CancellationPolicy row the operator chose
+  // at issue-time (or auto-picked at void-time as the sub-brand's active
+  // default). NULL means "fall back to sub-brand default at cancel-time"
+  // so historical invoices and policy-less sub-brands keep working.
+  // onDelete: SetNull — deleting a policy mid-flight leaves the invoice
+  // intact + falls back to default resolution on the next cancel.
+  // Nullable + additive (no bless marker needed).
+  cancellationPolicyId Int?
+  cancellationPolicy   CancellationPolicy?     @relation(fields: [cancellationPolicyId], references: [id], onDelete: SetNull)
+  lines                TravelInvoiceLine[]
+  schedule             TravelPaymentSchedule[]
+  quote                TravelQuote?            @relation(fields: [quoteId], references: [id], onDelete: SetNull)
+  tenant               Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt            DateTime                @default(now())
+  updatedAt            DateTime                @updatedAt
 
   @@unique([tenantId, invoiceNum])
   @@index([tenantId, subBrand])
   @@index([tenantId, subBrand, status])
   @@index([tenantId, parentInvoiceId])
+  @@index([tenantId, cancellationPolicyId])
+}
+
+// S33 (#920) — PRD_TRAVEL_BILLING FR-3.7.a cancellation-policy table.
+//
+// Per-tenant policy rows mapping "days before service start" → refund
+// percent. When an invoice is voided (cancellation), the route layer
+// walks the tiers (sorted DESC by daysBeforeServiceStart) and picks the
+// first tier whose threshold is <= the actual days-before-start; the
+// matched tier's refundPercent drives the credit-note amount.
+//
+// tiersJson stores the policy as a JSON array of
+//   { daysBeforeServiceStart: <int>, refundPercent: <0..100> }
+// e.g. [
+//   {"daysBeforeServiceStart": 30, "refundPercent": 100},  // full refund 30d+ out
+//   {"daysBeforeServiceStart": 7,  "refundPercent": 50},   // 50% refund 7..29d
+//   {"daysBeforeServiceStart": 0,  "refundPercent": 0}     // no refund <7d
+// ]
+//
+// PRD note: PRD uses "retentionPercent" (% kept by operator). We store
+// the inverse "refundPercent" (% returned to customer) because that's
+// the value that directly drives the credit-note amount — saves an
+// arithmetic flip in every consumer. refundPercent + retentionPercent
+// always = 100. Operator-facing UI may render either; the route layer
+// reports both in the cancel-preview response.
+//
+// subBrand is OPTIONAL — NULL means "tenant-wide default applied to any
+// sub-brand without its own policy"; a named sub-brand scopes the
+// policy to that sub-brand only. Sub-brand-specific overrides win over
+// tenant-wide defaults at lookup time.
+//
+// @@unique([tenantId, name]) prevents duplicate policy names per tenant
+// (humans address policies by name in the admin UI). Multiple active
+// policies per tenant are legal — they just need distinct names.
+//
+// Additive nullable schema — NO bless marker. Brand-new model; the FK
+// on TravelInvoice.cancellationPolicyId is nullable.
+model CancellationPolicy {
+  id          Int             @id @default(autoincrement())
+  tenantId    Int             @default(1)
+  name        String          @db.VarChar(255) // e.g. "TMC Default" / "RFU Default"
+  subBrand    String? // tmc | rfu | travelstall | visasure | null (tenant-wide)
+  description String?         @db.Text
+  tiersJson   String          @db.LongText // JSON array; see model docs above
+  isActive    Boolean         @default(true)
+  invoices    TravelInvoice[]
+  tenant      Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  @@unique([tenantId, name])
+  @@index([tenantId, isActive])
+  @@index([tenantId, subBrand, isActive])
 }
 
 // PRD_TRAVEL_BILLING FR-3.1.a — line-item composition under TravelInvoice.
@@ -6627,4 +6917,48 @@ model SecurityIncident {
   @@index([tenantId])
   @@index([incidentType])
   @@index([createdAt])
+}
+
+// ── Travel POI catalog (S11 — PRD_TRAVEL_ITINERARY_UPGRADES FR-3.5) ──
+//
+// Points-of-interest catalog populated from OpenTripMap (+ future
+// providers). Rows are shared across tenants by default (tenantId NULL —
+// catalog data). Tenant-pinned overrides land in a later slice via
+// tenantId-scoped duplicates.
+//
+// Idempotent upsert key: (externalSource, externalId). Re-running the
+// seeder doesn't create duplicates — re-runs refresh name / category /
+// imageUrl / descriptionShort while preserving the local id and any
+// pendingApproval / tenant-tagging fields set after import.
+//
+// Additive model — no FKs, no UNIQUE on existing data, no column changes
+// elsewhere. Migration-safety bless markers not required.
+//
+// S12 (Inline Add-POI modal) uses pendingApproval=true for rep-suggested
+// POIs that need ADMIN approval before being itinerary-eligible. The
+// seeder always upserts with pendingApproval=false (catalog imports are
+// pre-approved by virtue of being curated by the seeder script).
+model TravelPoi {
+  id               Int      @id @default(autoincrement())
+  tenantId         Int? // null = catalog-wide; set when an admin pins / forks a row to a tenant
+  externalSource   String // 'opentripmap' | future providers
+  externalId       String // upstream xid / external identifier
+  name             String
+  nameLocal        String? // transliteration / local-language label
+  category         String? // 'religious' | 'historical' | 'natural' | 'cultural' | ...
+  latitude         Float?
+  longitude        Float?
+  country          String? // ISO-3166-1-alpha-2
+  destinationSlug  String? // grouping key for top-N destinations (e.g. 'goa', 'paris')
+  imageUrl         String?
+  wikidataId       String?
+  descriptionShort String?  @db.Text // cached short description
+  pendingApproval  Boolean  @default(false) // S12 uses this for rep-suggested rows
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@unique([externalSource, externalId])
+  @@index([tenantId, destinationSlug])
+  @@index([country, category])
+  @@index([pendingApproval])
 }

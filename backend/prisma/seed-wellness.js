@@ -20,6 +20,7 @@ dotenv.config({ path: path.resolve(__dirname, "../../.env") });
 const { PrismaClient } = require("@prisma/client");
 const bcrypt = require("bcryptjs");
 const crypto = require("crypto");
+const { encrypt } = require("../lib/fieldEncryption");
 
 // Verify DATABASE_URL is set
 if (!process.env.DATABASE_URL) {
@@ -381,11 +382,11 @@ async function main() {
   // Requires WELLNESS_DEMO_OTP env var to actually unlock; this just ensures
   // the patient row exists so verify-otp can resolve a tenant.
   const demoPortalPhone = "+919876500001";
-  const existingDemo = await prisma.patient.findFirst({
+  let demoPortalPatient = await prisma.patient.findFirst({
     where: { tenantId: tenant.id, phone: demoPortalPhone },
   });
-  if (!existingDemo) {
-    await prisma.patient.create({
+  if (!demoPortalPatient) {
+    demoPortalPatient = await prisma.patient.create({
       data: {
         name: "Demo Portal Patient",
         email: "demo.portal@enhancedwellness.in",
@@ -399,6 +400,26 @@ async function main() {
       },
     });
     console.log(`[seed-wellness] demo portal patient seeded at ${demoPortalPhone}`);
+  }
+
+  // 4a-bis. Demo patient-portal notifications (Option A inbox). Additive +
+  // idempotent: only seed when this patient has none, so re-runs don't pile up.
+  // Gives the patient app / portal a non-empty inbox to render + the e2e spec
+  // deterministic rows to read.
+  if (demoPortalPatient) {
+    const notifCount = await prisma.patientNotification.count({
+      where: { patientId: demoPortalPatient.id },
+    });
+    if (notifCount === 0) {
+      await prisma.patientNotification.createMany({
+        data: [
+          { patientId: demoPortalPatient.id, tenantId: tenant.id, type: "appointment", title: "Appointment confirmed", message: "Your consultation at Enhanced Wellness (Ranchi) is confirmed for tomorrow at 11:00 AM.", link: "/portal/visits" },
+          { patientId: demoPortalPatient.id, tenantId: tenant.id, type: "prescription", title: "Prescription ready", message: "Dr. Harsh has issued a new prescription. Tap to view your medicines and dosage.", link: "/portal/prescriptions" },
+          { patientId: demoPortalPatient.id, tenantId: tenant.id, type: "payment", title: "Payment receipt", message: "We received your payment of ₹1,500. Thank you!", link: "/portal/visits", isRead: true },
+        ],
+      });
+      console.log(`[seed-wellness] seeded 3 demo patient-portal notifications`);
+    }
   }
 
   // 4. Patients (50) — only seed if we have fewer than 10 already (idempotency)
@@ -698,6 +719,33 @@ async function main() {
     console.log("[seed-wellness] partner API keys (give these to the respective teams):");
     for (const k of printedKeys) {
       console.log(`  ${k.fresh ? "[NEW]    " : "[exists] "}${k.name.padEnd(32)} ${k.key}`);
+    }
+
+    // 8a-bis. Migrate the legacy global webhook secret to a per-tenant
+    // WebhookCredential so this tenant's GlobusPhone integration keeps working
+    // under the new subscription-gated, per-tenant signing model (see
+    // lib/webhookEntitlement.js + lib/webhookDelivery.js). Idempotent: only
+    // seeds when (a) the env secret is set and (b) no credential exists yet, so
+    // a real generated/rotated secret is never overwritten by a re-seed.
+    const legacySecret = process.env.WEBHOOK_HMAC_SECRET;
+    if (legacySecret) {
+      const existingCred = await prisma.webhookCredential.findUnique({
+        where: { tenantId: tenant.id },
+      });
+      if (!existingCred) {
+        await prisma.webhookCredential.create({
+          data: {
+            tenantId: tenant.id,
+            secret: encrypt(legacySecret), // ENC:v1:... when WELLNESS_FIELD_KEY set, else raw
+            signingId: `whid_${crypto.randomBytes(8).toString("hex")}`,
+            status: "ACTIVE",
+            createdById: adminUser.id,
+          },
+        });
+        console.log("[seed-wellness] migrated WEBHOOK_HMAC_SECRET → per-tenant WebhookCredential (Enhanced Wellness)");
+      } else {
+        console.log("[seed-wellness] WebhookCredential already present — left untouched");
+      }
     }
   }
 

@@ -1,6 +1,8 @@
 const EventEmitter = require("events");
 const path = require("path");
-require("dotenv").config({ path: path.resolve(__dirname, "../../.env"), override: true });
+// Mirror server.js — try root .env then backend/.env with override.
+require("dotenv").config({ path: path.resolve(__dirname, "../../.env"), override: false });
+require("dotenv").config({ path: path.resolve(__dirname, "../.env"), override: true });
 const prisma = require("./prisma");
 
 const bus = new EventEmitter();
@@ -299,7 +301,14 @@ async function executeAction(rule, payload, tenantId, io) {
 
     case "send_webhook": {
       const { deliverSingle } = require("./webhookDelivery");
-      await deliverSingle(config.url, rule.triggerType, payload, tenantId);
+      // Sign with the tenant's per-tenant secret (same as deliverWebhooks) so
+      // every outbound webhook from this tenant carries one consistent
+      // signature a partner can verify. Not subscription-gated here — this is
+      // a user-authored automation action, distinct from the Webhook-model
+      // lead-sync stream which IS gated in deliverWebhooks().
+      const { resolveTenantWebhookSecret } = require("./webhookEntitlement");
+      const { secret } = await resolveTenantWebhookSecret(tenantId);
+      await deliverSingle(config.url, rule.triggerType, payload, tenantId, secret);
       break;
     }
 

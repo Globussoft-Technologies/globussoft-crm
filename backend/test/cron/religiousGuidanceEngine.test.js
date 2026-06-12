@@ -228,7 +228,10 @@ describe("cron/religiousGuidanceEngine — runReligiousGuidanceForTenant", () =>
     await runReligiousGuidanceForTenant(42);
 
     const allLogs = logSpy.mock.calls.flat().join("\n");
-    expect(allLogs).toMatch(/\[wati-stub\] would send religious-guidance packet 11/);
+    // Log format changed when the wa channel went from pure stub-log to a
+    // real watiClient dispatch (Q9 wiring) — the line is now "[wati] ..."
+    // and the send itself stubs inside watiClient when creds are absent.
+    expect(allLogs).toMatch(/\[wati\] religious-guidance packet 11/);
     expect(allLogs).toMatch(/\[religious-guidance\] email channel — TODO wire scheduledEmail/);
     logSpy.mockRestore();
   });
@@ -301,7 +304,7 @@ describe("cron/religiousGuidanceEngine — runReligiousGuidanceForTenant", () =>
     const out = logSpy.mock.calls.flat().join("\n");
 
     expect(result.fired).toBe(1);
-    expect(out).toMatch(/\[wati-stub\] would send religious-guidance packet 33/);
+    expect(out).toMatch(/\[wati\] religious-guidance packet 33/);
     expect(out).toMatch(/\[religious-guidance\] email channel — TODO wire scheduledEmail/);
     expect(out).toMatch(/\[religious-guidance\] sms channel — TODO/);
     logSpy.mockRestore();

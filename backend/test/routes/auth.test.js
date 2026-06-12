@@ -68,6 +68,7 @@ prisma.user = {
   create: vi.fn(),
   update: vi.fn(),
   delete: vi.fn(),
+  count: vi.fn(),
 };
 prisma.tenant = {
   findUnique: vi.fn().mockResolvedValue(null),
@@ -149,6 +150,7 @@ beforeEach(() => {
   prisma.user.findUnique.mockReset();
   prisma.user.findFirst.mockReset();
   prisma.user.findMany.mockReset().mockResolvedValue([]);
+  prisma.user.count.mockReset();
   prisma.user.create.mockReset();
   prisma.user.update.mockReset();
   prisma.tenant.findUnique.mockReset().mockResolvedValue(null);
@@ -387,6 +389,65 @@ describe('POST /api/auth/register', () => {
   // duplicate email (see routes/auth.js:217-220). Composite-unique
   // [email, tenantId] makes the same email valid across orgs.
   test.skip('duplicate email → 400 "User already exists" (SUT no longer dup-checks)', () => {});
+
+  test('persists themePreference when supplied', async () => {
+    prisma.user.findUnique.mockResolvedValue(null);
+    prisma.tenant.create.mockResolvedValue({
+      id: 44, name: 'Theme Inc', slug: 'theme-inc', plan: 'TRIAL', vertical: 'generic',
+      country: 'US', defaultCurrency: 'USD', locale: 'en-US', logoUrl: null, brandColor: null,
+    });
+    prisma.user.create.mockResolvedValue({
+      id: 102, email: 'theme@user.com', name: 'Theme User', role: 'ADMIN', wellnessRole: null, themePreference: 'dark',
+    });
+
+    const res = await request(makeApp())
+      .post('/api/auth/register')
+      .send({ email: 'theme@user.com', password: 'password123', name: 'Theme User', organizationName: 'Theme Inc', themePreference: 'dark' });
+
+    expect(res.status).toBe(201);
+    expect(res.body.user.themePreference).toBe('dark');
+    const createArg = prisma.user.create.mock.calls[0][0];
+    expect(createArg.data.themePreference).toBe('dark');
+  });
+});
+
+// ── POST /api/auth/check-email ───────────────────────────────────────
+
+describe('POST /api/auth/check-email', () => {
+  test('known active email → 200 { exists: true }', async () => {
+    prisma.user.count.mockResolvedValue(1);
+
+    const res = await request(makeApp())
+      .post('/api/auth/check-email')
+      .send({ email: 'known@example.com' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ exists: true });
+    expect(prisma.user.count).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ email: 'known@example.com', deactivatedAt: null }) })
+    );
+  });
+
+  test('unknown email → 200 { exists: false }', async () => {
+    prisma.user.count.mockResolvedValue(0);
+
+    const res = await request(makeApp())
+      .post('/api/auth/check-email')
+      .send({ email: 'unknown@example.com' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ exists: false });
+  });
+
+  test('malformed email → 200 { exists: false }', async () => {
+    const res = await request(makeApp())
+      .post('/api/auth/check-email')
+      .send({ email: 'not-an-email' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ exists: false });
+    expect(prisma.user.count).not.toHaveBeenCalled();
+  });
 });
 
 // ── GET /api/auth/me ─────────────────────────────────────────────────

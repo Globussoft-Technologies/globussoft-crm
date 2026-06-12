@@ -30,7 +30,24 @@ const {
   renderPatientSummaryPdf,
 } = require("../services/pdfRenderer");
 const { writeAudit, diffFields } = require("../lib/audit");
+// #920 slice S42 — wellness PHI list-endpoint slim projections.
+// `?fields=summary` opts into a SQL-level slim shape that drops every PHI
+// column from Patient / Visit / Prescription list responses; default shape
+// stays full row (back-compat). The PRD §11 PHI-read audit row is still
+// written on both paths, but the PII_DISCLOSED row is SKIPPED on the slim
+// path because no PHI columns are in the response — the operator never
+// SAW PHI, so no disclosure event happened.
+const listProjection = require("../lib/listProjection");
+const { isFullShape } = listProjection;
 const { verifyToken } = require("../middleware/auth");
+// Patient-portal notification inbox (additive — patient-scoped, separate from
+// the staff Notification table). Backs /portal/me/notifications* below.
+const {
+  listPatientNotifications,
+  markPatientNotificationRead,
+  markAllPatientNotificationsRead,
+  toPublic: toPublicNotification,
+} = require("../lib/patientNotificationService");
 // #679/#680/#681/#682 PII masking helpers + viewer policy. Used on list views
 // (Locations, Patients list, Telecaller Queue) so low-trust viewers
 // (telecaller / helper / generic USER on wellness tenant) see masked
@@ -77,6 +94,16 @@ const { verifyRole } = require("../middleware/auth");
 // `my_prescriptions.read` view their OWN linked Patient's Rx without
 // needing the tenant-wide `prescriptions.read`.
 const { requirePermission } = require("../middleware/requirePermission");
+// #920 slice S59 — canonical PHI-read gate factory. The original inline
+// declaration of `phiReadGate` (which lived just below the `phiReadGate`
+// JSDoc block ~line 365) has been replaced with this factory call so the
+// gate's policy is defined ONCE in middleware/phiReadGate.js and reused by
+// any future route that needs the same PHI-read access semantics. The
+// JSDoc block at lines 320-365 below documents WHY the gate exists; the
+// factory call returns byte-equivalent behaviour to the prior inline
+// `verifyWellnessRole([...], { anyOfPermissions: [...], deny: ["helper"] })`
+// declaration. See middleware/phiReadGate.js for the canonical policy.
+const { makePhiReadGate } = require("../middleware/phiReadGate");
 const {
   uploadImage,
   deleteFile,
@@ -353,31 +380,15 @@ const tenantWhere = (req, extra = {}) => ({
 // backend page catalog (lib/pageCatalog.js) — granting the page's
 // listed `requiredPermissions` to a custom role makes that role
 // immediately usable end-to-end (sidebar → page → API).
-const phiReadGate = verifyWellnessRole(
-  ["clinical", "doctor", "professional", "telecaller", "admin", "manager"],
-  {
-    anyOfPermissions: [
-      { module: "patients", action: "read" },
-      { module: "appointments", action: "read" },
-      // `my_appointments.read` + `waitlist.read` opened in v3.8.x when
-      // the `appointments` module was split per-page — a doctor with
-      // only `my_appointments.read` still needs to call the underlying
-      // /api/wellness/* read endpoints to hydrate their page.
-      { module: "my_appointments", action: "read" },
-      { module: "waitlist", action: "read" },
-      { module: "calendar", action: "read" },
-      { module: "visits", action: "read" },
-      { module: "prescriptions", action: "read" },
-      { module: "consents", action: "read" },
-    ],
-    // helpers are seeded with role=USER (per seed-wellness.js:218-219)
-    // which grants appointments.read for self-service. Without an
-    // explicit deny, that backdoor lets a helper through phiReadGate
-    // and read full patient PHI. Pinned by
-    // wellness-rbac-regression-api.spec.js:488.
-    deny: ["helper"],
-  },
-);
+// #920 slice S59 — was previously an inline `verifyWellnessRole([...], {
+// anyOfPermissions: [...], deny: ["helper"] })` declaration here. The
+// policy now lives in middleware/phiReadGate.js (imported at the top of
+// this file). `makePhiReadGate()` returns the IDENTICAL middleware the
+// inline form did — same allow list, same `anyOfPermissions` cluster,
+// same `deny: ["helper"]`. The JSDoc above documents the WHY; the
+// middleware module documents the policy contents. All 30+ callsites of
+// `phiReadGate` below continue to work unchanged.
+const phiReadGate = makePhiReadGate();
 const phiWriteGate = verifyWellnessRole(
   ["clinical", "doctor", "professional", "admin", "manager"],
   {
@@ -705,18 +716,28 @@ router.get("/patients", phiReadGate, async (req, res) => {
     ) {
       where.deletedAt = null;
     }
-    const [patients, total] = await Promise.all([
-      prisma.patient.findMany({
-        where,
-        take: Math.min(parseInt(limit, 10) || 50, 200),
-        skip: parseInt(offset, 10) || 0,
-        orderBy: { createdAt: "desc" },
-        include: {
-          tags: {
-            include: { tag: { select: { id: true, name: true, color: true } } },
-          },
+    // #920 slice S42: opt-in slim shape via `?fields=summary`. SQL-drops
+    // every PHI column at the Prisma layer; default shape stays full row.
+    // Slim path also skips the `tags` include (pickers don't render tags;
+    // the full-row path keeps it for the patient-list UI).
+    const wantFullShape = isFullShape(req.query);
+    const findManyArgs = {
+      where,
+      take: Math.min(parseInt(limit, 10) || 50, 200),
+      skip: parseInt(offset, 10) || 0,
+      orderBy: { createdAt: "desc" },
+    };
+    if (wantFullShape) {
+      findManyArgs.include = {
+        tags: {
+          include: { tag: { select: { id: true, name: true, color: true } } },
         },
-      }),
+      };
+    } else {
+      findManyArgs.select = listProjection("Patient", false);
+    }
+    const [patients, total] = await Promise.all([
+      prisma.patient.findMany(findManyArgs),
       prisma.patient.count({ where }),
     ]);
     // PRD §11: HIPAA / DPDP Act — log every PHI read. Patient list is a
@@ -725,6 +746,12 @@ router.get("/patients", phiReadGate, async (req, res) => {
     // not a response-time critical write — awaiting it added 30-100ms to
     // every list call on a cold connection. The promise still completes
     // (its catch logs to console); response goes out without blocking.
+    //
+    // S42 audit-coordination contract: the PATIENT_LIST_READ row fires on
+    // BOTH paths (full + slim). The regulatory "an operator hit the list
+    // endpoint" visibility is required regardless of payload shape; what
+    // changes on the slim path is the absence of PII_DISCLOSED (because
+    // no PII columns are in the response).
     writeAudit(
       "Patient",
       "PATIENT_LIST_READ",
@@ -735,6 +762,9 @@ router.get("/patients", phiReadGate, async (req, res) => {
         count: patients.length,
         query: q || null,
         locationId: locationId ? parseInt(locationId) : null,
+        // Pin the shape into the audit row so reviewers can answer "did
+        // this list call disclose PHI?" without joining two tables.
+        shape: wantFullShape ? "full" : "summary",
       },
     ).catch((auditErr) => {
       console.warn(
@@ -749,6 +779,28 @@ router.get("/patients", phiReadGate, async (req, res) => {
     // payload). Unmasked-disclosure emits a PII_DISCLOSED audit row in
     // addition to PATIENT_LIST_READ so reviewers can answer "who saw the
     // unmasked names + phones?" without joining two log tables.
+    //
+    // S42: slim path skips the PII_DISCLOSED row (no PHI columns in
+    // response = no disclosure event happened). BUT we still apply the
+    // existing maskRows() viewer-policy filter on `name` for low-trust
+    // viewers — telecallers and any generic-USER who bypassed via an
+    // RBAC permission grant. Patient name CAN be PII when combined with
+    // other context (a telecaller seeing "Ravi Kumar, location=Mumbai-1"
+    // still has actionable PII on slim path). Masking the name preserves
+    // the #680 viewer-tier privacy contract on the slim path too.
+    //
+    // No PII_DISCLOSED audit is written even on the un-masked slim path —
+    // the slim response shape doesn't ship phone/email/dob, so the
+    // disclosure surface is structurally narrower than the masked column
+    // list (`['name','phone','email','dob']`). Reviewers querying for
+    // PII_DISCLOSED rows are looking for phone/email/dob leaks; a
+    // name-only slim read isn't in that risk class.
+    if (!wantFullShape) {
+      const outPatientsSlim = shouldMaskForViewer(req)
+        ? maskRows(patients, ["name"])
+        : patients;
+      return res.json({ patients: outPatientsSlim, total });
+    }
     const piiFields = ["name", "phone", "email", "dob"];
     const outPatients = shouldMaskForViewer(req)
       ? maskRows(patients, piiFields)
@@ -2028,6 +2080,54 @@ router.post("/patients", phiWriteGate, async (req, res) => {
       source,
       contactId,
     } = req.body;
+    // S100 — structured-intake whitelist for firstName + lastName.
+    // S62 added the Patient.firstName + Patient.lastName columns (additive-
+    // nullable). S96 surfaced them in the slim list projection. S97 wired
+    // the create-customer modal to send them in POST/PUT bodies. But the
+    // route handlers (this file, lines ~2063 POST + ~2210 PUT) did NOT
+    // whitelist the fields — they were silently dropped at the destructure
+    // boundary, so every new row landed with both columns null despite the
+    // modal sending the data. This closes the S62 → S96 → S97 chain.
+    //
+    // Validation: each is OPTIONAL (some legal-name cultures have a single
+    // name, so lastName especially must be optional). When provided, must
+    // be a non-empty string ≤80 chars. Empty string → null (don't persist
+    // blank-string columns; aligns with how `name` is normalised below).
+    // Reject 400 INVALID_NAME_FIELD on length / type violations so the SPA
+    // surfaces the error before the user hits "save".
+    function normaliseStructuredName(raw, fieldLabel) {
+      if (raw === undefined || raw === null) return { value: null, error: null };
+      if (typeof raw !== "string") {
+        return {
+          value: null,
+          error: {
+            status: 400,
+            error: `${fieldLabel} must be a string`,
+            code: "INVALID_NAME_FIELD",
+          },
+        };
+      }
+      const trimmed = raw.trim();
+      if (trimmed === "") return { value: null, error: null };
+      if (trimmed.length > 80) {
+        return {
+          value: null,
+          error: {
+            status: 400,
+            error: `${fieldLabel} must be 80 characters or fewer`,
+            code: "INVALID_NAME_FIELD",
+          },
+        };
+      }
+      return { value: trimmed, error: null };
+    }
+    const firstNameResult = normaliseStructuredName(req.body.firstName, "firstName");
+    if (firstNameResult.error) return res.status(firstNameResult.error.status).json(firstNameResult.error);
+    const lastNameResult = normaliseStructuredName(req.body.lastName, "lastName");
+    if (lastNameResult.error) return res.status(lastNameResult.error.status).json(lastNameResult.error);
+    const firstName = firstNameResult.value;
+    const lastName = lastNameResult.value;
+
     // New CRM-create-customer fields (taxType, instagramHandle, anniversary).
     // All optional; validated lightly here because validatePatientInput
     // only knows the legacy field set.
@@ -2071,6 +2171,11 @@ router.post("/patients", phiWriteGate, async (req, res) => {
     const patient = await prisma.patient.create({
       data: {
         name: normalisedName,
+        // S100 — structured intake additive to canonical `name`. Existing
+        // clients that send only `name` continue to work unchanged (both
+        // columns stay null); S97-modal clients populate both.
+        firstName,
+        lastName,
         email,
         phone: e164Phone,
         normalizedPhone,
@@ -2178,6 +2283,38 @@ router.put("/patients/:id", phiWriteGate, async (req, res) => {
       if (req.body[k] !== undefined) data[k] = req.body[k];
     if (req.body.dob !== undefined)
       data.dob = req.body.dob ? new Date(req.body.dob) : null;
+    // S100 — structured firstName + lastName whitelist (PUT). Mirrors POST
+    // semantics: ≤80-char string, empty → null. Explicit null on either
+    // field CLEARS that column on the row (this is the inline-edit /
+    // form-clear path; an admin editing a row may legitimately blank the
+    // last name on a single-name patient). When the body omits the key
+    // entirely, the field stays unchanged.
+    for (const fld of ["firstName", "lastName"]) {
+      if (req.body[fld] === undefined) continue;
+      const raw = req.body[fld];
+      if (raw === null) {
+        data[fld] = null;
+        continue;
+      }
+      if (typeof raw !== "string") {
+        return res.status(400).json({
+          error: `${fld} must be a string`,
+          code: "INVALID_NAME_FIELD",
+        });
+      }
+      const trimmed = raw.trim();
+      if (trimmed === "") {
+        data[fld] = null;
+        continue;
+      }
+      if (trimmed.length > 80) {
+        return res.status(400).json({
+          error: `${fld} must be 80 characters or fewer`,
+          code: "INVALID_NAME_FIELD",
+        });
+      }
+      data[fld] = trimmed;
+    }
     // New customer-create-modal fields. Same enum-clamp / length checks
     // as the POST handler; anniversary parses YYYY-MM-DD or ISO.
     if (req.body.taxType !== undefined) {
@@ -2452,21 +2589,35 @@ router.get("/visits", phiReadGate, async (req, res) => {
       where.doctorId = req.user.userId;
     }
 
-    const visits = await prisma.visit.findMany({
+    // #920 slice S42: opt-in slim shape via `?fields=summary`. Drops the
+    // patient/service/doctor INCLUDES (they ship PHI: patient.name +
+    // patient.phone, doctor.name). Slim shape ships only FKs the picker
+    // can hop on (patientId, doctorId, serviceId, locationId).
+    const wantFullShape = isFullShape(req.query);
+    const visitFindArgs = {
       where,
       take: Math.min(parseInt(limit, 10) || 100, 500),
       skip: parseInt(offset, 10) || 0,
       orderBy: { visitDate: "desc" },
-      include: {
+    };
+    if (wantFullShape) {
+      visitFindArgs.include = {
         patient: { select: { id: true, name: true, phone: true } },
         service: { select: { id: true, name: true, category: true } },
         doctor: { select: { id: true, name: true } },
-      },
-    });
+      };
+    } else {
+      visitFindArgs.select = listProjection("Visit", false);
+    }
+    const visits = await prisma.visit.findMany(visitFindArgs);
     // PRD §11 / T2.2: staff-side cross-patient visit list is a PHI read
-    // (response includes patient name + phone). One audit row per request,
-    // with the filter params and result count — never the row contents.
-    // #534 (PERF-1): fire-and-forget — see PATIENT_LIST_READ above.
+    // (response includes patient name + phone on full path). One audit row
+    // per request, with the filter params and result count — never the row
+    // contents. #534 (PERF-1): fire-and-forget — see PATIENT_LIST_READ above.
+    //
+    // S42 audit-coordination: VISIT_LIST_READ fires on BOTH paths (the
+    // regulatory "operator hit list endpoint" record); the `shape` field
+    // distinguishes full vs slim for reviewer queries.
     writeAudit(
       "Visit",
       "VISIT_LIST_READ",
@@ -2482,6 +2633,7 @@ router.get("/visits", phiReadGate, async (req, res) => {
           from: from || null,
           to: to || null,
         },
+        shape: wantFullShape ? "full" : "summary",
       },
     ).catch((auditErr) => {
       console.warn("[wellness] audit /visits list failed:", auditErr.message);
@@ -2661,6 +2813,25 @@ router.post("/visits", phiWriteGate, async (req, res) => {
     // completed visits. Idempotency via unique-per-visit ledger row keyed
     // by (visitId, type='earned'). Failures must not roll back the visit.
     await maybeAutoCreditLoyalty(visit, req.user.tenantId);
+
+    // S94: denormalize Patient.lastVisitDate cache from the just-created
+    // visit. Best-effort — a failure here MUST NOT abort the visit insert
+    // (the source-of-truth Visit row exists; the cron/backfillLastVisitEngine
+    // sweep will reconcile any drift on its next run). The column was added
+    // by S62; population is THIS slice. Read path (S96 listProjection slim
+    // Select) returns null until this hook lands, so this is the first write
+    // path that surfaces it.
+    try {
+      await prisma.patient.update({
+        where: { id: visit.patientId },
+        data: { lastVisitDate: visit.visitDate },
+      });
+    } catch (denormErr) {
+      console.error(
+        "[wellness] lastVisitDate denorm-update failed",
+        denormErr.message,
+      );
+    }
 
     // #616: emit wellness sequence triggers. visit.scheduled fires on every
     // create (covers booking-confirmation drips); visit.completed also fires
@@ -3347,22 +3518,40 @@ router.get("/prescriptions", phiReadGate, async (req, res) => {
     if (patientId) where.patientId = parseInt(patientId);
     const take = Math.min(parseInt(limit, 10) || 50, 200);
     const skipN = Math.max(parseInt(skip, 10) || 0, 0);
+    // #920 slice S42: opt-in slim shape via `?fields=summary`. Drops the
+    // patient/doctor includes (patient.name is PHI under the strict
+    // medico-legal classification — and crucially, the `drugs` @db.Text
+    // column on Prescription is the load-bearing PHI drop: that's what
+    // makes the bare-list call a regulated PHI read). Slim shape returns
+    // only FKs the picker can hop on.
+    const wantFullShape = isFullShape(req.query);
+    const rxFindArgs = {
+      where,
+      take,
+      skip: skipN,
+      orderBy: { createdAt: "desc" },
+    };
+    if (wantFullShape) {
+      rxFindArgs.include = {
+        patient: { select: { id: true, name: true } },
+        doctor: { select: { id: true, name: true } },
+      };
+    } else {
+      rxFindArgs.select = listProjection("Prescription", false);
+    }
     const [items, total] = await Promise.all([
-      prisma.prescription.findMany({
-        where,
-        take,
-        skip: skipN,
-        orderBy: { createdAt: "desc" },
-        include: {
-          patient: { select: { id: true, name: true } },
-          doctor: { select: { id: true, name: true } },
-        },
-      }),
+      prisma.prescription.findMany(rxFindArgs),
       prisma.prescription.count({ where }),
     ]);
-    // PRD §11 / T2.2: staff-side prescription list is a PHI read
-    // (response embeds patient name + drugs JSON). Medico-legal trail.
-    // #534 (PERF-1): fire-and-forget — see PATIENT_LIST_READ above.
+    // PRD §11 / T2.2: staff-side prescription list is a PHI read on the
+    // full path (response embeds patient name + the drugs JSON). Medico-
+    // legal trail. #534 (PERF-1): fire-and-forget — see PATIENT_LIST_READ
+    // above.
+    //
+    // S42 audit-coordination: PRESCRIPTION_LIST_READ fires on BOTH paths;
+    // `shape: 'summary'` indicates no drug list / no patient name was
+    // disclosed. A reviewer can answer "did this op leak Rx contents?"
+    // without joining tables.
     writeAudit(
       "Prescription",
       "PRESCRIPTION_LIST_READ",
@@ -3372,6 +3561,7 @@ router.get("/prescriptions", phiReadGate, async (req, res) => {
       {
         count: items.length,
         filters: { patientId: patientId ? parseInt(patientId) : null },
+        shape: wantFullShape ? "full" : "summary",
       },
     ).catch((auditErr) => {
       console.warn(
@@ -10223,6 +10413,65 @@ router.get("/portal/me/permissions", verifyPatientToken, async (req, res) => {
   }
 });
 
+// ── Patient notification inbox (Option A: REST inbox for the patient app) ──
+//
+// Patient-scoped notifications served from the PatientNotification table —
+// distinct from the staff /api/notifications bell (which the portal JWT can't
+// reach by design). All three sit behind verifyPatientToken and scope every
+// query to req.patient.id, so a patient only ever sees / mutates their own
+// rows. The Android app's Room-backed inbox + the web portal can consume these.
+
+// GET /portal/me/notifications — newest-first inbox + live unread count.
+//   ?limit=N (default 50, capped 200)   ?unreadOnly=true
+router.get("/portal/me/notifications", verifyPatientToken, async (req, res) => {
+  try {
+    const unreadOnly = req.query.unreadOnly === "true" || req.query.unreadOnly === "1";
+    const { items, unreadCount } = await listPatientNotifications(req.patient.id, {
+      limit: req.query.limit,
+      unreadOnly,
+    });
+    res.json({
+      notifications: items.map(toPublicNotification),
+      unreadCount,
+      count: items.length,
+    });
+  } catch (e) {
+    console.error("[wellness] portal/me/notifications error:", e.message);
+    res.status(500).json({ error: "Failed to load notifications" });
+  }
+});
+
+// PUT /portal/me/notifications/:id/read — mark ONE read (scoped to patient).
+router.put("/portal/me/notifications/:id/read", verifyPatientToken, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isInteger(id)) {
+      return res.status(400).json({ error: "Invalid notification id", code: "INVALID_ID" });
+    }
+    const updated = await markPatientNotificationRead(req.patient.id, id);
+    if (!updated) {
+      // Either no such id, or it belongs to another patient — same 404 either
+      // way so a patient can't probe other patients' notification ids.
+      return res.status(404).json({ error: "Notification not found", code: "NOTIFICATION_NOT_FOUND" });
+    }
+    res.json(toPublicNotification(updated));
+  } catch (e) {
+    console.error("[wellness] portal/me/notifications/:id/read error:", e.message);
+    res.status(500).json({ error: "Failed to update notification" });
+  }
+});
+
+// POST /portal/me/notifications/mark-all-read — mark all unread read.
+router.post("/portal/me/notifications/mark-all-read", verifyPatientToken, async (req, res) => {
+  try {
+    const marked = await markAllPatientNotificationsRead(req.patient.id);
+    res.json({ success: true, marked });
+  } catch (e) {
+    console.error("[wellness] portal/me/notifications/mark-all-read error:", e.message);
+    res.status(500).json({ error: "Failed to mark all read" });
+  }
+});
+
 router.get("/portal/visits", verifyPatientToken, async (req, res) => {
   try {
     // ?upcoming=true returns only future, non-cancelled visits, ordered
@@ -13875,10 +14124,12 @@ router.delete("/coupons/:id", verifyRole(["ADMIN"]), async (req, res) => {
   }
 });
 
-async function loadCouponForApply(req, code) {
+// tenantId is passed explicitly so callers without a req.user (anonymous public
+// payment flow) can reuse this. Existing auth'd callers pass req.user.tenantId.
+async function loadCouponForApply(tenantId, code) {
   const coupon = await prisma.coupon.findFirst({
     where: {
-      tenantId: req.user.tenantId,
+      tenantId,
       code: String(code || "")
         .trim()
         .toUpperCase(),
@@ -13947,7 +14198,7 @@ router.post("/coupons/preview", async (req, res) => {
         .status(400)
         .json({ error: "baseAmount must be a positive number" });
     }
-    const lookup = await loadCouponForApply(req, code);
+    const lookup = await loadCouponForApply(req.user.tenantId, code);
     if (lookup.error) {
       return res
         .status(lookup.error.status)
@@ -13980,7 +14231,7 @@ router.post("/coupons/apply", phiReadGate, async (req, res) => {
         .status(400)
         .json({ error: "baseAmount must be a positive number" });
     }
-    const lookup = await loadCouponForApply(req, code);
+    const lookup = await loadCouponForApply(req.user.tenantId, code);
     if (lookup.error) {
       return res
         .status(lookup.error.status)
@@ -14578,6 +14829,316 @@ router.post("/appointments/book", verifyToken, async (req, res) => {
       error: "Failed to book appointment",
       code: "APPOINTMENT_BOOKING_FAILED",
     });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────
+// Pay-now booking flow: customer pays via Razorpay BEFORE the slot is
+// reserved. Two-step handshake mirrors the gift-card storefront pattern.
+//   1. POST /appointments/book-and-pay
+//        Creates Razorpay Order + PENDING Payment row with booking intent
+//        stashed in metadata. Does NOT create the Visit yet.
+//   2. POST /appointments/confirm-payment
+//        Verifies the HMAC signature, creates the Visit using the
+//        existing appointmentService, marks Payment SUCCESS.
+// "Pay later" path is the existing /appointments/book — Visit created
+// immediately, no payment row.
+// ─────────────────────────────────────────────────────────────────
+
+const APPOINTMENT_GST_RATE = 0.18;
+const APPOINTMENT_CONVENIENCE_FEE = 49;
+
+router.post("/appointments/book-and-pay", verifyToken, async (req, res) => {
+  try {
+    const crypto = require("crypto");
+    const {
+      getTenantRazorpayClient,
+      NOT_CONFIGURED_MESSAGE,
+    } = require("../lib/tenantPaymentGateway");
+
+    const { userId, tenantId } = req.user;
+    const {
+      reason,
+      doctorId,
+      serviceId,
+      membershipId,
+      appointmentDate,
+      appointmentTime,
+      bookingType,
+    } = req.body || {};
+
+    if (!reason || !serviceId || !appointmentDate || !appointmentTime) {
+      return res.status(400).json({
+        error: "reason, serviceId, appointmentDate, appointmentTime required",
+        code: "INVALID_INPUT",
+      });
+    }
+
+    // Resolve the service + its price. Pay-now requires a real basePrice.
+    const service = await prisma.service.findFirst({
+      where: { id: parseInt(serviceId, 10), tenantId, isActive: true },
+    });
+    if (!service) {
+      return res.status(404).json({ error: "Service not found", code: "SERVICE_NOT_FOUND" });
+    }
+    if (service.basePrice == null || Number(service.basePrice) <= 0) {
+      return res.status(409).json({
+        error: "This service is consultation-priced. Please choose 'Pay after service' instead.",
+        code: "SERVICE_NOT_PAYABLE",
+      });
+    }
+
+    // Server-side price computation. baseAmount + 18% GST + ₹49 convenience.
+    const baseAmount = Number(service.basePrice);
+    const tax = Math.round(baseAmount * APPOINTMENT_GST_RATE * 100) / 100;
+    const total = Math.round((baseAmount + tax + APPOINTMENT_CONVENIENCE_FEE) * 100) / 100;
+
+    // Load the tenant's Razorpay client (BYOK).
+    const rp = await getTenantRazorpayClient(tenantId);
+    if (!rp) {
+      return res.status(503).json({
+        error: NOT_CONFIGURED_MESSAGE,
+        code: "GATEWAY_NOT_CONFIGURED",
+      });
+    }
+
+    let order;
+    try {
+      order = await rp.client.orders.create({
+        amount: Math.round(total * 100),
+        currency: "INR",
+        receipt: `apt_${userId}_${Date.now()}`,
+        notes: {
+          tenantId: String(tenantId),
+          userId: String(userId),
+          serviceId: String(service.id),
+          kind: "appointment_payment",
+        },
+      });
+    } catch (gatewayErr) {
+      console.error("[wellness] book-and-pay order failed:", gatewayErr && gatewayErr.message);
+      return res.status(502).json({ error: "Failed to create payment order", code: "GATEWAY_ERROR" });
+    }
+
+    const breakdown = {
+      baseAmount: +baseAmount.toFixed(2),
+      tax: +tax.toFixed(2),
+      convenienceFee: APPOINTMENT_CONVENIENCE_FEE,
+      total: +total.toFixed(2),
+    };
+
+    const payment = await prisma.payment.create({
+      data: {
+        invoiceId: null,
+        amount: total,
+        currency: "INR",
+        gateway: "razorpay",
+        gatewayId: order.id,
+        status: "PENDING",
+        tenantId,
+        metadata: JSON.stringify({
+          kind: "appointment_payment",
+          userId,
+          serviceId: service.id,
+          doctorId: doctorId ? parseInt(doctorId, 10) : null,
+          membershipId: membershipId ? parseInt(membershipId, 10) : null,
+          appointmentDate,
+          appointmentTime,
+          reason: String(reason).slice(0, 1000),
+          bookingType: bookingType || "CLINIC_VISIT",
+          breakdown,
+        }),
+      },
+    });
+
+    res.status(201).json({
+      orderId: order.id,
+      paymentId: payment.id,
+      key: rp.keyId,
+      amount: Math.round(total * 100),
+      currency: "INR",
+      breakdown,
+      service: { id: service.id, name: service.name },
+    });
+  } catch (err) {
+    console.error("[wellness] book-and-pay error:", err.message, err.stack);
+    res.status(500).json({ error: "Failed to start payment", code: "BOOK_AND_PAY_FAILED" });
+  }
+});
+
+router.post("/appointments/confirm-payment", verifyToken, async (req, res) => {
+  try {
+    const crypto = require("crypto");
+    const {
+      getTenantRazorpayCreds,
+      NOT_CONFIGURED_MESSAGE,
+    } = require("../lib/tenantPaymentGateway");
+
+    const { userId, tenantId } = req.user;
+    const {
+      paymentId,
+      razorpay_order_id,
+      razorpay_payment_id,
+      razorpay_signature,
+    } = req.body || {};
+
+    if (!paymentId || !razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+      return res
+        .status(400)
+        .json({ error: "Missing required fields", code: "INVALID_INPUT" });
+    }
+
+    const payment = await prisma.payment.findFirst({
+      where: { id: parseInt(paymentId, 10), tenantId },
+    });
+    if (!payment) {
+      return res.status(404).json({ error: "Payment not found" });
+    }
+
+    // Idempotency: if a prior call already finalized this payment, return
+    // the existing visit instead of double-charging or double-creating.
+    const existingMeta = (() => {
+      try { return JSON.parse(payment.metadata || "{}"); } catch { return {}; }
+    })();
+    if (payment.status === "SUCCESS" && existingMeta.visitId) {
+      return res.json({
+        success: true,
+        visitId: existingMeta.visitId,
+        alreadyConfirmed: true,
+      });
+    }
+
+    // HMAC verify against tenant's Razorpay secret.
+    const creds = await getTenantRazorpayCreds(tenantId);
+    if (!creds || !creds.keySecret) {
+      return res
+        .status(503)
+        .json({ error: NOT_CONFIGURED_MESSAGE, code: "GATEWAY_NOT_CONFIGURED" });
+    }
+    const expected = crypto
+      .createHmac("sha256", creds.keySecret)
+      .update(`${razorpay_order_id}|${razorpay_payment_id}`)
+      .digest("hex");
+    if (expected !== razorpay_signature) {
+      await prisma.payment.update({
+        where: { id: payment.id },
+        data: { status: "FAILED" },
+      });
+      return res
+        .status(400)
+        .json({ error: "Signature verification failed", code: "BAD_SIGNATURE" });
+    }
+
+    // Resolve / lazy-create the Patient row for this user (same shape as
+    // /appointments/book) so appointmentService has a patient to bind to.
+    let patient = await prisma.patient.findFirst({
+      where: { tenant: { id: tenantId }, user: { id: userId } },
+    });
+    if (!patient) {
+      const user = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { name: true, email: true },
+      });
+      patient = await prisma.patient.create({
+        data: {
+          name: user?.name || user?.email || "Patient",
+          email: user?.email || null,
+          source: "self-booking",
+          tenant: { connect: { id: tenantId } },
+          user: { connect: { id: userId } },
+        },
+      });
+    }
+
+    // Create the visit using the same service that backs /appointments/book.
+    let visit;
+    try {
+      const result = await appointmentService.bookAppointment({
+        tenantId,
+        patientId: patient.id,
+        doctorId: existingMeta.doctorId,
+        serviceId: existingMeta.serviceId,
+        membershipId: existingMeta.membershipId,
+        appointmentDate: existingMeta.appointmentDate,
+        appointmentTime: existingMeta.appointmentTime,
+        reason: existingMeta.reason,
+        bookingType: existingMeta.bookingType || "CLINIC_VISIT",
+        actor: { type: "user", id: userId },
+      });
+      visit = result.visit;
+    } catch (bookErr) {
+      // The Razorpay charge already succeeded, so we can't reject here.
+      // Mark payment SUCCESS but record the failure for ops follow-up.
+      await prisma.payment.update({
+        where: { id: payment.id },
+        data: {
+          status: "SUCCESS",
+          paidAt: new Date(),
+          gatewayId: razorpay_payment_id,
+          metadata: JSON.stringify({
+            ...existingMeta,
+            razorpay_order_id,
+            razorpay_payment_id,
+            bookingError: bookErr.message || String(bookErr),
+            needsManualBooking: true,
+          }),
+        },
+      });
+      return res.status(500).json({
+        error: "Payment succeeded but the slot couldn't be reserved automatically. Our team will reach out shortly.",
+        code: "BOOKING_AFTER_PAYMENT_FAILED",
+        paymentId: payment.id,
+      });
+    }
+
+    // Mark Payment SUCCESS + stash visitId for idempotency.
+    await prisma.payment.update({
+      where: { id: payment.id },
+      data: {
+        status: "SUCCESS",
+        paidAt: new Date(),
+        gatewayId: razorpay_payment_id,
+        metadata: JSON.stringify({
+          ...existingMeta,
+          razorpay_order_id,
+          razorpay_payment_id,
+          visitId: visit.id,
+          verifiedAt: new Date().toISOString(),
+        }),
+      },
+    });
+
+    // Emit payment.collected so workflow rules / notifications run, same
+    // shape as the existing payments.js handlers use.
+    try {
+      require("../lib/eventBus").emitEvent(
+        "payment.collected",
+        {
+          invoiceId: null,
+          paymentId: payment.id,
+          amount: Number(payment.amount),
+          method: "razorpay",
+          currency: "INR",
+          paidAt: new Date(),
+        },
+        tenantId,
+        userId,
+      );
+    } catch (_e) { /* best-effort */ }
+
+    res.json({
+      success: true,
+      visitId: visit.id,
+      appointment: {
+        id: visit.id,
+        serviceName: visit.service?.name || "General",
+        appointmentDate: visit.visitDate,
+        status: visit.status,
+      },
+    });
+  } catch (err) {
+    console.error("[wellness] confirm-payment error:", err.message, err.stack);
+    res.status(500).json({ error: "Failed to confirm payment", code: "CONFIRM_PAYMENT_FAILED" });
   }
 });
 

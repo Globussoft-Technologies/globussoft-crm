@@ -45,9 +45,10 @@ const requireCjs = createRequire(import.meta.url);
 // Hoisted Prisma mock — the cap helper does
 // `prisma.tenantSetting.findUnique(...)` to read per-tenant cap rows AND
 // per-tenant feature-flag rows. resolveSubBrandPersona also does
-// `prisma.tenant.findUnique(...)`. Installed into Node's Module._cache the
-// same way as the ratehawkClient / adsGptClient tests (vitest's ESM-level
-// vi.mock can't intercept CJS require()).
+// `prisma.tenant.findUnique(...)`. `getCallifiedKey` (S69) does
+// `prisma.supplierCredential.findFirst(...)`. Installed into Node's
+// Module._cache the same way as the ratehawkClient / adsGptClient tests
+// (vitest's ESM-level vi.mock can't intercept CJS require()).
 const prismaMock = vi.hoisted(() => {
   const mock = {
     tenantSetting: {
@@ -55,6 +56,9 @@ const prismaMock = vi.hoisted(() => {
     },
     tenant: {
       findUnique: vi.fn().mockResolvedValue(null),
+    },
+    supplierCredential: {
+      findFirst: vi.fn().mockResolvedValue(null), // default → ENV fallback in getCallifiedKey
     },
   };
   const Module = require('node:module');
@@ -71,12 +75,54 @@ const prismaMock = vi.hoisted(() => {
   return mock;
 });
 
+// Hoisted fieldEncryption mock — `getCallifiedKey` (S69) lazy-requires this
+// to decrypt SupplierCredential.passwordEncrypted. We install a Module._cache
+// shim so the decrypt() call inside the SUT returns a known plaintext per
+// test. Same shape as the prisma shim above + the adsGptClient S67 pattern.
+const fieldEncryptionMock = vi.hoisted(() => {
+  const mock = {
+    decrypt: vi.fn((cipher) => {
+      // Default behaviour: strip a known "ENC:" prefix if present, else
+      // return the input verbatim. Per-test cases override via mockReturnValue.
+      if (typeof cipher === 'string' && cipher.startsWith('ENC:')) {
+        return cipher.slice(4);
+      }
+      return cipher;
+    }),
+    encrypt: vi.fn((plain) => `ENC:${plain}`),
+    isEncrypted: vi.fn((s) => typeof s === 'string' && s.startsWith('ENC:')),
+  };
+  const Module = require('node:module');
+  const requireFromCwd = Module.createRequire(process.cwd() + '/');
+  const fePath = requireFromCwd.resolve('./lib/fieldEncryption');
+  Module._cache[fePath] = {
+    id: fePath,
+    filename: fePath,
+    loaded: true,
+    exports: mock,
+    children: [],
+    paths: [],
+  };
+  return mock;
+});
+
 afterEach(() => {
   vi.restoreAllMocks();
   prismaMock.tenantSetting.findUnique.mockReset();
   prismaMock.tenantSetting.findUnique.mockResolvedValue(null);
   prismaMock.tenant.findUnique.mockReset();
   prismaMock.tenant.findUnique.mockResolvedValue(null);
+  prismaMock.supplierCredential.findFirst.mockReset();
+  prismaMock.supplierCredential.findFirst.mockResolvedValue(null);
+  fieldEncryptionMock.decrypt.mockReset();
+  fieldEncryptionMock.decrypt.mockImplementation((cipher) => {
+    if (typeof cipher === 'string' && cipher.startsWith('ENC:')) {
+      return cipher.slice(4);
+    }
+    return cipher;
+  });
+  // Clean CALLIFIED_API_KEY between tests so ENV-fallback cases are deterministic.
+  delete process.env.CALLIFIED_API_KEY;
 });
 
 function loadClient() {
@@ -99,6 +145,7 @@ describe('callifiedClient — module shape', () => {
     expect(typeof c.computeMonthlySpendCents).toBe('function');
     expect(typeof c.isEnabledForTenant).toBe('function');
     expect(typeof c.resolveSubBrandPersona).toBe('function');
+    expect(typeof c.getCallifiedKey).toBe('function');
     expect(c.INTEGRATION).toBe('ai_calling');
     expect(c.FEATURE_FLAG_KEY).toBe('featureFlag_ai_calling_enabled');
     expect(c.MAX_CALL_DURATION_SECONDS).toBe(90);
@@ -545,6 +592,220 @@ describe('callifiedClient — extension', () => {
     expect(out.persona).toBe('umrah-counsellor-v3');
     expect(out.subBrand).toBe('rfu');
 
+    logSpy.mockRestore();
+  });
+});
+
+// ─── EXTENSION: S69 — per-tenant SupplierCredential resolver ───────────
+//
+// Mirror of S45's `getLlmKey` (commit dd654e4f) and S67's `getAdsGptKey`
+// (commit 996bb4f2). Tests the SupplierCredential → ENV → null fallback
+// chain, the no-tenantId ENV-only short-circuit, and best-effort error
+// handling (Prisma throw / decrypt failure / model missing → ENV fallback,
+// never crashes the caller).
+
+describe('getCallifiedKey — per-tenant SupplierCredential resolver (S69)', () => {
+  test('SupplierCredential row present → decrypts + returns plaintext (wins over ENV)', async () => {
+    // Operator has seeded a tenant-scoped row with the real key encrypted.
+    // ENV is also set to a different value to prove SupplierCredential wins.
+    process.env.CALLIFIED_API_KEY = 'env-only-key';
+    prismaMock.supplierCredential.findFirst.mockResolvedValueOnce({
+      passwordEncrypted: 'ENC:tenant-scoped-real-key',
+    });
+
+    const c = loadClient();
+    const key = await c.getCallifiedKey(42);
+    expect(key).toBe('tenant-scoped-real-key');
+
+    // Lookup MUST have been by (tenantId, category='ai-calling-key').
+    expect(prismaMock.supplierCredential.findFirst).toHaveBeenCalledWith({
+      where: { tenantId: 42, category: 'ai-calling-key' },
+      select: { passwordEncrypted: true },
+    });
+    expect(fieldEncryptionMock.decrypt).toHaveBeenCalledWith('ENC:tenant-scoped-real-key');
+  });
+
+  test('SupplierCredential absent + ENV present → returns ENV value', async () => {
+    process.env.CALLIFIED_API_KEY = 'env-fallback-key';
+    prismaMock.supplierCredential.findFirst.mockResolvedValueOnce(null);
+
+    const c = loadClient();
+    const key = await c.getCallifiedKey(42);
+    expect(key).toBe('env-fallback-key');
+    // Lookup was attempted before the ENV fallback fired.
+    expect(prismaMock.supplierCredential.findFirst).toHaveBeenCalledTimes(1);
+  });
+
+  test('SupplierCredential absent + ENV absent → returns null (integration disabled signal)', async () => {
+    // Pre-cred-drop production state: no row seeded, no env-var set.
+    // getCallifiedKey returns null. Future initiateCall (post-stub) will
+    // branch on this and throw `CALLIFIED_NOT_YET_ENABLED`.
+    delete process.env.CALLIFIED_API_KEY;
+    prismaMock.supplierCredential.findFirst.mockResolvedValueOnce(null);
+
+    const c = loadClient();
+    const key = await c.getCallifiedKey(42);
+    expect(key).toBeNull();
+  });
+
+  test('no tenantId → ENV-only (skips DB lookup, matches pre-S69 contract)', async () => {
+    process.env.CALLIFIED_API_KEY = 'env-only-key';
+
+    const c = loadClient();
+    const key = await c.getCallifiedKey();
+    expect(key).toBe('env-only-key');
+    // Critical: NO DB hit when tenantId is missing. Saves a round-trip on
+    // sync probes (matches getLlmKey / getAdsGptKey behaviour).
+    expect(prismaMock.supplierCredential.findFirst).not.toHaveBeenCalled();
+  });
+
+  test('no tenantId + no ENV → returns null without DB hit', async () => {
+    delete process.env.CALLIFIED_API_KEY;
+
+    const c = loadClient();
+    const key = await c.getCallifiedKey();
+    expect(key).toBeNull();
+    expect(prismaMock.supplierCredential.findFirst).not.toHaveBeenCalled();
+  });
+
+  test('Prisma lookup throws → logs error + falls back to ENV (never throws out)', async () => {
+    // Best-effort discipline: a transient DB error must NOT crash the
+    // caller; falls through to ENV. Matches getLlmKey / getAdsGptKey semantics.
+    process.env.CALLIFIED_API_KEY = 'env-fallback-after-error';
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    prismaMock.supplierCredential.findFirst.mockRejectedValueOnce(
+      new Error('connection reset'),
+    );
+
+    const c = loadClient();
+    const key = await c.getCallifiedKey(42);
+    expect(key).toBe('env-fallback-after-error');
+
+    const errMsgs = errSpy.mock.calls.flat().map(String).join(' ');
+    expect(errMsgs).toMatch(/\[callifiedClient\] getCallifiedKey/);
+    expect(errMsgs).toMatch(/connection reset/);
+    expect(errMsgs).toMatch(/non-fatal/);
+
+    errSpy.mockRestore();
+  });
+
+  test('decrypt returns falsy → falls back to ENV (treats decrypt failure as miss)', async () => {
+    // Corrupt/legacy SupplierCredential row whose passwordEncrypted can't
+    // be decrypted (e.g. WELLNESS_FIELD_KEY rotated). Module must NOT
+    // surface garbage to caller; falls back to ENV.
+    process.env.CALLIFIED_API_KEY = 'env-fallback-after-decrypt-fail';
+    prismaMock.supplierCredential.findFirst.mockResolvedValueOnce({
+      passwordEncrypted: 'ENC:bogus',
+    });
+    fieldEncryptionMock.decrypt.mockReturnValueOnce(null);
+
+    const c = loadClient();
+    const key = await c.getCallifiedKey(42);
+    expect(key).toBe('env-fallback-after-decrypt-fail');
+  });
+
+  test('prisma.supplierCredential model unavailable → ENV fallback without throwing', async () => {
+    // Test-harness scenario or partial Prisma client: the model isn't
+    // registered. Module must NOT throw; falls back to ENV.
+    process.env.CALLIFIED_API_KEY = 'env-fallback-no-model';
+    const Module = require('node:module');
+    const requireFromCwd = Module.createRequire(process.cwd() + '/');
+    const prismaLibPath = requireFromCwd.resolve('./lib/prisma');
+    const saved = Module._cache[prismaLibPath].exports.supplierCredential;
+    // Simulate the model being absent for this test only.
+    Module._cache[prismaLibPath].exports.supplierCredential = undefined;
+
+    try {
+      const c = loadClient();
+      const key = await c.getCallifiedKey(42);
+      expect(key).toBe('env-fallback-no-model');
+    } finally {
+      Module._cache[prismaLibPath].exports.supplierCredential = saved;
+    }
+  });
+});
+
+describe('initiateCall / fetchCallResult — getCallifiedKey integration (S69)', () => {
+  // Post-S69 contract: initiateCall and fetchCallResult each call
+  // `module.exports.getCallifiedKey` exactly once with the request's
+  // tenantId. The CJS self-mocking seam is critical — future post-cred
+  // swap-in will replace `void apiKey` with a real fetch() using the
+  // resolved value; downstream tests must be able to spy on the resolver
+  // to control that fetch path.
+
+  test('CJS self-mocking seam: initiateCall calls getCallifiedKey via module.exports indirection (regression-pin)', async () => {
+    // Mirrors the existing CJS-seam regression tests above for
+    // checkBudgetCap / isEnabledForTenant / resolveSubBrandPersona. If a
+    // future refactor switches back to a local-name call, this test reds
+    // — protecting the post-cred swap-in.
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    const c = loadClient();
+    const keySpy = vi.spyOn(c, 'getCallifiedKey').mockResolvedValue('spied-key');
+
+    await c.initiateCall({
+      tenantId: 91,
+      toPhone: '+919999000020',
+    });
+
+    expect(keySpy).toHaveBeenCalledTimes(1);
+    expect(keySpy).toHaveBeenCalledWith(91);
+
+    keySpy.mockRestore();
+    logSpy.mockRestore();
+  });
+
+  test('CJS self-mocking seam: fetchCallResult calls getCallifiedKey via module.exports indirection (regression-pin)', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    const c = loadClient();
+    const keySpy = vi.spyOn(c, 'getCallifiedKey').mockResolvedValue('spied-key-result');
+
+    await c.fetchCallResult({ tenantId: 73, callId: 'cl_xyz9' });
+
+    expect(keySpy).toHaveBeenCalledTimes(1);
+    expect(keySpy).toHaveBeenCalledWith(73);
+
+    keySpy.mockRestore();
+    logSpy.mockRestore();
+  });
+
+  test('null-key path: initiateCall still returns the stub envelope (no integration enabled yet)', async () => {
+    // Stub-mode contract: even when getCallifiedKey returns null (pre-cred
+    // production), initiateCall returns the canned envelope. Downstream
+    // UI keeps rendering the "integration pending" message. Post-cred
+    // implementation will branch on null and throw CALLIFIED_NOT_YET_ENABLED.
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    const c = loadClient();
+    const keySpy = vi.spyOn(c, 'getCallifiedKey').mockResolvedValue(null);
+
+    const out = await c.initiateCall({
+      tenantId: 73,
+      toPhone: '+919999000021',
+    });
+
+    expect(out.stub).toBe(true);
+    expect(out.status).toBe('pending-cred-drop');
+    expect(keySpy).toHaveBeenCalledTimes(1);
+
+    keySpy.mockRestore();
+    logSpy.mockRestore();
+  });
+
+  test('null-key path: fetchCallResult still returns the stub envelope (no integration enabled yet)', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    const c = loadClient();
+    const keySpy = vi.spyOn(c, 'getCallifiedKey').mockResolvedValue(null);
+
+    const out = await c.fetchCallResult({ tenantId: 73, callId: 'cl_null_key' });
+
+    expect(out.stub).toBe(true);
+    expect(out.outcome).toBe('pending-cred-drop');
+    expect(keySpy).toHaveBeenCalledTimes(1);
+
+    keySpy.mockRestore();
     logSpy.mockRestore();
   });
 });

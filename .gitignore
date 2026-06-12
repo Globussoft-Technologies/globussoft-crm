@@ -55,6 +55,9 @@ node_modules
 .env.*
 !.env.example
 !**/.env.example
+
+# IDE project files
+.idea/
 local.env
 dev.db
 dev.db-journal
@@ -168,3 +171,8 @@ staging_crm_audit_report*.md
 # CLAUDE.md — agents write `.tmp-agent-<slice>-msg.txt` instead of /tmp/
 # paths since Windows git doesn't write to /tmp).
 .tmp-agent-*-msg.txt
+
+# Dr. Haror's external marketing site — separate static site that runs on
+# its own server (enhancewellness.globusdemos.com). Kept on disk for the
+# CRM ↔ marketing-site handoff work but never pushed to this repo.
+drharors-wellness/

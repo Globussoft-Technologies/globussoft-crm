@@ -27,13 +27,17 @@ const requireCjs = createRequire(import.meta.url);
 // override per case via mock of tenantSetting.findUnique.
 
 // Hoisted Prisma mock — the cap helper does
-// `prisma.tenantSetting.findUnique(...)` to read per-tenant cap rows.
+// `prisma.tenantSetting.findUnique(...)` to read per-tenant cap rows; the
+// S67 resolver (`getAdsGptKey`) does `prisma.supplierCredential.findFirst`.
 // Installed into Node's Module._cache the same way as the llmRouter
 // test (vitest's ESM-level vi.mock can't intercept CJS require()).
 const prismaMock = vi.hoisted(() => {
   const mock = {
     tenantSetting: {
       findUnique: vi.fn().mockResolvedValue(null), // default → DEFAULTS fallback
+    },
+    supplierCredential: {
+      findFirst: vi.fn().mockResolvedValue(null), // default → ENV fallback
     },
   };
   const Module = require('node:module');
@@ -50,10 +54,52 @@ const prismaMock = vi.hoisted(() => {
   return mock;
 });
 
+// Hoisted fieldEncryption mock — `getAdsGptKey` lazy-requires this to
+// decrypt SupplierCredential.passwordEncrypted. We install a Module._cache
+// shim so the decrypt() call inside the SUT returns a known plaintext per
+// test. Same shape as the prisma shim above.
+const fieldEncryptionMock = vi.hoisted(() => {
+  const mock = {
+    decrypt: vi.fn((cipher) => {
+      // Default behaviour: strip a known "ENC:" prefix if present, else
+      // return the input verbatim. Per-test cases override via mockReturnValue.
+      if (typeof cipher === 'string' && cipher.startsWith('ENC:')) {
+        return cipher.slice(4);
+      }
+      return cipher;
+    }),
+    encrypt: vi.fn((plain) => `ENC:${plain}`),
+    isEncrypted: vi.fn((s) => typeof s === 'string' && s.startsWith('ENC:')),
+  };
+  const Module = require('node:module');
+  const requireFromCwd = Module.createRequire(process.cwd() + '/');
+  const fePath = requireFromCwd.resolve('./lib/fieldEncryption');
+  Module._cache[fePath] = {
+    id: fePath,
+    filename: fePath,
+    loaded: true,
+    exports: mock,
+    children: [],
+    paths: [],
+  };
+  return mock;
+});
+
 afterEach(() => {
   vi.restoreAllMocks();
   prismaMock.tenantSetting.findUnique.mockReset();
   prismaMock.tenantSetting.findUnique.mockResolvedValue(null);
+  prismaMock.supplierCredential.findFirst.mockReset();
+  prismaMock.supplierCredential.findFirst.mockResolvedValue(null);
+  fieldEncryptionMock.decrypt.mockReset();
+  fieldEncryptionMock.decrypt.mockImplementation((cipher) => {
+    if (typeof cipher === 'string' && cipher.startsWith('ENC:')) {
+      return cipher.slice(4);
+    }
+    return cipher;
+  });
+  // Clean ADSGPT_API_KEY between tests so ENV-fallback cases are deterministic.
+  delete process.env.ADSGPT_API_KEY;
 });
 
 function loadClient() {
@@ -69,6 +115,7 @@ describe('adsGptClient — module shape', () => {
     expect(typeof c.fetchAdReport).toBe('function');
     expect(typeof c.checkBudgetCap).toBe('function');
     expect(typeof c.computeMonthlySpendCents).toBe('function');
+    expect(typeof c.getAdsGptKey).toBe('function');
     expect(c.INTEGRATION).toBe('adsgpt');
   });
 });
@@ -395,6 +442,191 @@ describe('fetchAdReport — additional shape / arg pinning', () => {
     expect(logMsgs).toMatch(/platform=tiktok/);
     expect(logMsgs).toMatch(/2026-05-01\.\.2026-05-31/);
 
+    logSpy.mockRestore();
+    warnSpy.mockRestore();
+  });
+});
+
+describe('getAdsGptKey — per-tenant SupplierCredential resolver (S67)', () => {
+  // S67 mirror of S45's `getLlmKey` resolver: SupplierCredential category
+  // 'adsgpt-key' wins over ENV; ENV wins over null. Pins the shape future
+  // post-cred fetchAdReport implementations rely on for key resolution.
+
+  test('SupplierCredential row present → decrypts + returns plaintext (wins over ENV)', async () => {
+    // Operator has seeded a tenant-scoped row with the real key encrypted.
+    // ENV is also set to a different value to prove SupplierCredential wins.
+    process.env.ADSGPT_API_KEY = 'env-only-key';
+    prismaMock.supplierCredential.findFirst.mockResolvedValueOnce({
+      passwordEncrypted: 'ENC:tenant-scoped-real-key',
+    });
+
+    const c = loadClient();
+    const key = await c.getAdsGptKey(42);
+    expect(key).toBe('tenant-scoped-real-key');
+
+    // Lookup MUST have been by (tenantId, category='adsgpt-key').
+    expect(prismaMock.supplierCredential.findFirst).toHaveBeenCalledWith({
+      where: { tenantId: 42, category: 'adsgpt-key' },
+      select: { passwordEncrypted: true },
+    });
+    expect(fieldEncryptionMock.decrypt).toHaveBeenCalledWith('ENC:tenant-scoped-real-key');
+  });
+
+  test('SupplierCredential absent + ENV present → returns ENV value', async () => {
+    process.env.ADSGPT_API_KEY = 'env-fallback-key';
+    prismaMock.supplierCredential.findFirst.mockResolvedValueOnce(null);
+
+    const c = loadClient();
+    const key = await c.getAdsGptKey(42);
+    expect(key).toBe('env-fallback-key');
+    // Lookup was attempted before the ENV fallback fired.
+    expect(prismaMock.supplierCredential.findFirst).toHaveBeenCalledTimes(1);
+  });
+
+  test('SupplierCredential absent + ENV absent → returns null (integration disabled signal)', async () => {
+    // Pre-cred-drop production state: no row seeded, no env-var set.
+    // getAdsGptKey returns null. Future fetchAdReport (post-stub) will
+    // branch on this and throw `ADSGPT_NOT_YET_ENABLED`.
+    delete process.env.ADSGPT_API_KEY;
+    prismaMock.supplierCredential.findFirst.mockResolvedValueOnce(null);
+
+    const c = loadClient();
+    const key = await c.getAdsGptKey(42);
+    expect(key).toBeNull();
+  });
+
+  test('no tenantId → ENV-only (skips DB lookup, matches pre-S67 contract)', async () => {
+    process.env.ADSGPT_API_KEY = 'env-only-key';
+
+    const c = loadClient();
+    const key = await c.getAdsGptKey();
+    expect(key).toBe('env-only-key');
+    // Critical: NO DB hit when tenantId is missing. Saves a round-trip on
+    // sync probes (matches getLlmKey behaviour).
+    expect(prismaMock.supplierCredential.findFirst).not.toHaveBeenCalled();
+  });
+
+  test('no tenantId + no ENV → returns null without DB hit', async () => {
+    delete process.env.ADSGPT_API_KEY;
+
+    const c = loadClient();
+    const key = await c.getAdsGptKey();
+    expect(key).toBeNull();
+    expect(prismaMock.supplierCredential.findFirst).not.toHaveBeenCalled();
+  });
+
+  test('Prisma lookup throws → logs error + falls back to ENV (never throws out)', async () => {
+    // Best-effort discipline: a transient DB error must NOT crash the
+    // caller; falls through to ENV. Matches getLlmKey semantics.
+    process.env.ADSGPT_API_KEY = 'env-fallback-after-error';
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    prismaMock.supplierCredential.findFirst.mockRejectedValueOnce(
+      new Error('connection reset'),
+    );
+
+    const c = loadClient();
+    const key = await c.getAdsGptKey(42);
+    expect(key).toBe('env-fallback-after-error');
+
+    const errMsgs = errSpy.mock.calls.flat().map(String).join(' ');
+    expect(errMsgs).toMatch(/\[adsGptClient\] getAdsGptKey/);
+    expect(errMsgs).toMatch(/connection reset/);
+    expect(errMsgs).toMatch(/non-fatal/);
+
+    errSpy.mockRestore();
+  });
+
+  test('decrypt returns falsy → falls back to ENV (treats decrypt failure as miss)', async () => {
+    // Corrupt/legacy SupplierCredential row whose passwordEncrypted can't
+    // be decrypted (e.g. WELLNESS_FIELD_KEY rotated). Module must NOT
+    // surface garbage to caller; falls back to ENV.
+    process.env.ADSGPT_API_KEY = 'env-fallback-after-decrypt-fail';
+    prismaMock.supplierCredential.findFirst.mockResolvedValueOnce({
+      passwordEncrypted: 'ENC:bogus',
+    });
+    fieldEncryptionMock.decrypt.mockReturnValueOnce(null);
+
+    const c = loadClient();
+    const key = await c.getAdsGptKey(42);
+    expect(key).toBe('env-fallback-after-decrypt-fail');
+  });
+
+  test('prisma.supplierCredential model unavailable → ENV fallback without throwing', async () => {
+    // Test-harness scenario or partial Prisma client: the model isn't
+    // registered. Module must NOT throw; falls back to ENV.
+    process.env.ADSGPT_API_KEY = 'env-fallback-no-model';
+    const Module = require('node:module');
+    const requireFromCwd = Module.createRequire(process.cwd() + '/');
+    const prismaLibPath = requireFromCwd.resolve('./lib/prisma');
+    const saved = Module._cache[prismaLibPath].exports.supplierCredential;
+    // Simulate the model being absent for this test only.
+    Module._cache[prismaLibPath].exports.supplierCredential = undefined;
+
+    try {
+      const c = loadClient();
+      const key = await c.getAdsGptKey(42);
+      expect(key).toBe('env-fallback-no-model');
+    } finally {
+      Module._cache[prismaLibPath].exports.supplierCredential = saved;
+    }
+  });
+});
+
+describe('fetchAdReport — getAdsGptKey integration', () => {
+  // Post-S67 contract: fetchAdReport calls module.exports.getAdsGptKey
+  // exactly once with the request's tenantId. The CJS self-mocking seam
+  // is critical — future post-cred swap-in will replace `void apiKey`
+  // with a real fetch() using the resolved value; downstream tests must
+  // be able to spy on the resolver to control that fetch path.
+
+  test('CJS self-mocking seam: fetchAdReport calls getAdsGptKey via module.exports indirection (regression-pin)', async () => {
+    // Mirrors the existing computeMonthlySpendCents seam regression test
+    // above. If a future refactor switches back to a local-name call, this
+    // test reds — protecting the post-cred swap-in.
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const c = loadClient();
+    const keySpy = vi.spyOn(c, 'getAdsGptKey').mockResolvedValue('spied-key');
+
+    await c.fetchAdReport({
+      tenantId: 91,
+      subBrand: 'tmc',
+      fromDate: '2026-05-01',
+      toDate: '2026-05-31',
+    });
+
+    expect(keySpy).toHaveBeenCalledTimes(1);
+    expect(keySpy).toHaveBeenCalledWith(91);
+
+    keySpy.mockRestore();
+    logSpy.mockRestore();
+    warnSpy.mockRestore();
+  });
+
+  test('null-key path: fetchAdReport still returns the stub envelope (no integration enabled yet)', async () => {
+    // Stub-mode contract: even when getAdsGptKey returns null (pre-cred
+    // production), fetchAdReport returns the canned envelope. Downstream
+    // UI keeps rendering the "integration pending" message. Post-cred
+    // implementation will branch on null and throw ADSGPT_NOT_YET_ENABLED.
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const c = loadClient();
+    const keySpy = vi.spyOn(c, 'getAdsGptKey').mockResolvedValue(null);
+
+    const out = await c.fetchAdReport({
+      tenantId: 73,
+      subBrand: 'rfu',
+      fromDate: '2026-05-01',
+      toDate: '2026-05-31',
+    });
+
+    expect(out.stub).toBe(true);
+    expect(out.note).toMatch(/Q1 creds/);
+    expect(keySpy).toHaveBeenCalledTimes(1);
+
+    keySpy.mockRestore();
     logSpy.mockRestore();
     warnSpy.mockRestore();
   });

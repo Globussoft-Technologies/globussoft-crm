@@ -53,9 +53,11 @@ const { findLatestDiagnostic } = require("../lib/travelLatestDiagnostic");
 const { getTravelAdvanceRatio } = require("../lib/tenantSettings");
 const { computeWindowOpenAt } = require("../lib/webCheckinWindow");
 const { resolveForSubBrand } = require("../lib/subBrandConfig");
+const watiClient = require("../services/watiClient");
 const llmRouter = require("../lib/llmRouter");
 const { computeDayCosts } = require("../lib/itineraryDayCostCalculator");
 const listProjection = require("../lib/listProjection");
+const { writeAudit } = require("../lib/audit");
 
 // Covers fly + non-fly (domestic) transport and general trip expenses. Keep
 // in sync with ITEM_TYPES in frontend/src/pages/travel/ItineraryDetail.jsx.
@@ -1159,13 +1161,13 @@ router.get("/itineraries/stats", verifyToken, requireTravelTenant, async (req, r
     const zeroed = {
       total: 0,
       byStatus: {
-        draft:        { count: 0, totalValue: 0 },
-        sent:         { count: 0, totalValue: 0 },
-        revised:      { count: 0, totalValue: 0 },
-        accepted:     { count: 0, totalValue: 0 },
-        rejected:     { count: 0, totalValue: 0 },
+        draft: { count: 0, totalValue: 0 },
+        sent: { count: 0, totalValue: 0 },
+        revised: { count: 0, totalValue: 0 },
+        accepted: { count: 0, totalValue: 0 },
+        rejected: { count: 0, totalValue: 0 },
         advance_paid: { count: 0, totalValue: 0 },
-        fully_paid:   { count: 0, totalValue: 0 },
+        fully_paid: { count: 0, totalValue: 0 },
       },
       bySubBrand: {},
       grandTotalValue: 0,
@@ -1203,13 +1205,13 @@ router.get("/itineraries/stats", verifyToken, requireTravelTenant, async (req, r
     const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 
     const byStatus = {
-      draft:        { count: 0, totalValue: 0 },
-      sent:         { count: 0, totalValue: 0 },
-      revised:      { count: 0, totalValue: 0 },
-      accepted:     { count: 0, totalValue: 0 },
-      rejected:     { count: 0, totalValue: 0 },
+      draft: { count: 0, totalValue: 0 },
+      sent: { count: 0, totalValue: 0 },
+      revised: { count: 0, totalValue: 0 },
+      accepted: { count: 0, totalValue: 0 },
+      rejected: { count: 0, totalValue: 0 },
       advance_paid: { count: 0, totalValue: 0 },
-      fully_paid:   { count: 0, totalValue: 0 },
+      fully_paid: { count: 0, totalValue: 0 },
     };
     const bySubBrand = {};
     let grandTotalValue = 0;
@@ -1915,7 +1917,12 @@ async function syncItineraryAfterItemChange(itineraryId) {
 router.post("/itineraries/:id/items", verifyToken, requireTravelTenant, async (req, res) => {
   try {
     const itin = await loadItineraryWithGuard(req);
-    const { itemType, description, position, detailsJson, supplierId, unitCost, markup, gstAmount, unit, quantity, direction } = req.body || {};
+    // S118 — accept latitude + longitude + dayNumber (mirrors PATCH handler at
+    // ~line 1985 + bulk-import path at ~line 4575). Pre-S118 the destructure
+    // dropped lat/lng silently, so S82's frontend geocode-on-create flow
+    // (Nominatim → lat/lng in POST body) was a no-op until a follow-up PATCH.
+    // All three are additive nullable columns from S8; "" / null clears them.
+    const { itemType, description, position, detailsJson, supplierId, unitCost, markup, gstAmount, unit, quantity, direction, dayNumber, latitude, longitude } = req.body || {};
     if (!itemType || !description) {
       return res.status(400).json({ error: "itemType + description required", code: "ITEM_MISSING_FIELDS" });
     }
@@ -1925,6 +1932,33 @@ router.post("/itineraries/:id/items", verifyToken, requireTravelTenant, async (r
     }
     if (direction != null && direction !== "" && !VALID_ITEM_DIRECTIONS.includes(String(direction))) {
       return res.status(400).json({ error: `direction must be one of: ${VALID_ITEM_DIRECTIONS.join(", ")}`, code: "INVALID_DIRECTION" });
+    }
+
+    // S118 — dayNumber / latitude / longitude validation mirrors the PATCH
+    // handler exactly. `undefined` / `null` / "" → persist as null.
+    let dayNumberValue = null;
+    if (dayNumber !== undefined && dayNumber !== null && dayNumber !== "") {
+      const dn = parseInt(dayNumber, 10);
+      if (!Number.isInteger(dn) || dn < 1 || dn > 365) {
+        return res.status(400).json({ error: "dayNumber must be an integer between 1 and 365", code: "INVALID_DAY_NUMBER" });
+      }
+      dayNumberValue = dn;
+    }
+    let latitudeValue = null;
+    if (latitude !== undefined && latitude !== null && latitude !== "") {
+      const lat = Number(latitude);
+      if (!Number.isFinite(lat) || lat < -90 || lat > 90) {
+        return res.status(400).json({ error: "latitude must be between -90 and 90", code: "INVALID_LATITUDE" });
+      }
+      latitudeValue = lat;
+    }
+    let longitudeValue = null;
+    if (longitude !== undefined && longitude !== null && longitude !== "") {
+      const lng = Number(longitude);
+      if (!Number.isFinite(lng) || lng < -180 || lng > 180) {
+        return res.status(400).json({ error: "longitude must be between -180 and 180", code: "INVALID_LONGITUDE" });
+      }
+      longitudeValue = lng;
     }
 
     // Auto-position if not provided — append to the end.
@@ -1953,6 +1987,11 @@ router.post("/itineraries/:id/items", verifyToken, requireTravelTenant, async (r
         unit: unit ? String(unit) : "per_person",
         quantity: Number.isFinite(qty) && qty >= 0 ? qty : 1,
         direction: direction ? String(direction) : null,
+        // S118 — persist S8 columns (additive nullable; null preserves legacy
+        // POST shape so pre-S118 clients keep working).
+        dayNumber: dayNumberValue,
+        latitude: latitudeValue,
+        longitude: longitudeValue,
         // Total is computed, never trusted from the client.
         totalPrice: computeItemLineTotal({ unitCost, quantity, markup, gstAmount }),
       },
@@ -1980,7 +2019,7 @@ router.patch("/itineraries/:id/items/:itemId", verifyToken, requireTravelTenant,
     if (!existing) return res.status(404).json({ error: "Item not found", code: "ITEM_NOT_FOUND" });
 
     const data = {};
-    const { itemType, position, description, detailsJson, supplierId, unitCost, markup, gstAmount, unit, quantity, direction } = req.body || {};
+    const { itemType, position, description, detailsJson, supplierId, unitCost, markup, gstAmount, unit, quantity, direction, dayNumber, latitude, longitude, totalPrice } = req.body || {};
     if (itemType !== undefined) {
       assertValidItemType(itemType);
       data.itemType = itemType;
@@ -2009,16 +2048,60 @@ router.patch("/itineraries/:id/items/:itemId", verifyToken, requireTravelTenant,
       data.direction = direction ? String(direction) : null;
     }
 
+    // FR-3.3 day-by-day editor + FR-3.4 map preview
+    // (PRD_TRAVEL_ITINERARY_UPGRADES). The visual editor moves items across
+    // day cards (dayNumber) and plots them on the map (latitude/longitude).
+    // All three are additive nullable columns (S8); "" / null clears them.
+    if (dayNumber !== undefined) {
+      if (dayNumber === null || dayNumber === "") {
+        data.dayNumber = null;
+      } else {
+        const dn = parseInt(dayNumber, 10);
+        if (!Number.isInteger(dn) || dn < 1 || dn > 365) {
+          return res.status(400).json({ error: "dayNumber must be an integer between 1 and 365", code: "INVALID_DAY_NUMBER" });
+        }
+        data.dayNumber = dn;
+      }
+    }
+    if (latitude !== undefined) {
+      if (latitude === null || latitude === "") {
+        data.latitude = null;
+      } else {
+        const lat = Number(latitude);
+        if (!Number.isFinite(lat) || lat < -90 || lat > 90) {
+          return res.status(400).json({ error: "latitude must be between -90 and 90", code: "INVALID_LATITUDE" });
+        }
+        data.latitude = lat;
+      }
+    }
+    if (longitude !== undefined) {
+      if (longitude === null || longitude === "") {
+        data.longitude = null;
+      } else {
+        const lng = Number(longitude);
+        if (!Number.isFinite(lng) || lng < -180 || lng > 180) {
+          return res.status(400).json({ error: "longitude must be between -180 and 180", code: "INVALID_LONGITUDE" });
+        }
+        data.longitude = lng;
+      }
+    }
+
     // Recompute the line total whenever a price-affecting field changes,
-    // merging the patch with the item's existing values. Never trust a
-    // client-supplied total.
-    if ([unitCost, markup, gstAmount, quantity].some((v) => v !== undefined)) {
+    // merging the patch with the item's existing values. A client-supplied
+    // `totalPrice` is only honoured when NONE of the cost components are
+    // being patched — that's the "override the total directly" path (used
+    // by ad-hoc line items where unitCost/markup don't apply). If both
+    // arrive in the same body, server-recomputed wins.
+    const costFieldsPatched = [unitCost, markup, gstAmount, quantity].some((v) => v !== undefined);
+    if (costFieldsPatched) {
       data.totalPrice = computeItemLineTotal({
         unitCost: unitCost !== undefined ? unitCost : existing.unitCost,
         quantity: quantity !== undefined ? quantity : existing.quantity,
         markup: markup !== undefined ? markup : existing.markup,
         gstAmount: gstAmount !== undefined ? gstAmount : existing.gstAmount,
       });
+    } else if (totalPrice !== undefined) {
+      data.totalPrice = totalPrice != null && totalPrice !== "" ? Number(totalPrice) : 0;
     }
 
     if (Object.keys(data).length === 0) {
@@ -2349,9 +2432,9 @@ async function autoCreateWebCheckinsForItinerary(itineraryId, tenantId) {
     }
     const airlineCode = String(
       details.airlineCode
-        || (typeof details.flightNumber === "string"
-          && details.flightNumber.match(/^[A-Z0-9]{2}/)?.[0])
-        || "",
+      || (typeof details.flightNumber === "string"
+        && details.flightNumber.match(/^[A-Z0-9]{2}/)?.[0])
+      || "",
     ).toUpperCase();
     const dep = new Date(details.departureAt);
     if (!Number.isFinite(dep.getTime())) {
@@ -2380,7 +2463,7 @@ async function autoCreateWebCheckinsForItinerary(itineraryId, tenantId) {
     } catch (e) {
       console.error(
         `[travel-itin] webcheckin auto-create for itinerary ${itineraryId} ` +
-          `(PNR ${details.pnr}) failed (non-fatal):`,
+        `(PNR ${details.pnr}) failed (non-fatal):`,
         e.message,
       );
       skipped++;
@@ -2469,6 +2552,316 @@ router.post("/itineraries/:id/accept", verifyToken, requireTravelTenant, async (
   }
 });
 
+// Per-PERSON INR cost averages by budget tier. These are EDITABLE placeholder
+// estimates so the operator gets a priced draft they can adjust per item
+// before sending to the client — NOT authoritative rates. Tune freely.
+const SUGGEST_TIER_COSTS = {
+  economy: { hotel: 2500, transfer: 400, sightseeing: 600, activity: 800, meals: 500 },
+  mid: { hotel: 5000, transfer: 800, sightseeing: 1200, activity: 1500, meals: 1000 },
+  luxury: { hotel: 12000, transfer: 2000, sightseeing: 3000, activity: 4000, meals: 2500 },
+};
+function tierCost(kind, budgetTier) {
+  const t = SUGGEST_TIER_COSTS[budgetTier];
+  return t && t[kind] != null ? t[kind] : null;
+}
+
+// Parse + normalise the structured JSON the LLM returns for itinerary-suggest
+// (real mode). Gemini is prompted to emit { summary, days:[{ dayNumber,
+// items:[{ itemType, description, estimatedCost }] }] } with realistic
+// per-person INR costs. We defensively strip markdown fences / stray prose,
+// validate the shape, clamp itemType to VALID_ITEM_TYPES, and coerce costs.
+// Returns a clean suggestion or null so the caller can fall back to the
+// deterministic skeleton (stub mode / transient failure / unparseable output).
+function parseLlmSuggestion(rawText, { destination }) {
+  if (typeof rawText !== "string" || rawText.trim() === "") return null;
+  let text = rawText.trim();
+  const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fence) text = fence[1].trim();
+  if (text[0] !== "{") {
+    const first = text.indexOf("{");
+    const last = text.lastIndexOf("}");
+    if (first === -1 || last === -1 || last <= first) return null;
+    text = text.slice(first, last + 1);
+  }
+  let parsed;
+  try { parsed = JSON.parse(text); } catch { return null; }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  const srcDays = Array.isArray(parsed.days) ? parsed.days : null;
+  if (!srcDays || srcDays.length === 0) return null;
+
+  const cleanDays = [];
+  for (let i = 0; i < srcDays.length; i += 1) {
+    const day = srcDays[i];
+    if (!day || typeof day !== "object") continue;
+    const dayNumber = Number.isInteger(day.dayNumber) && day.dayNumber > 0
+      ? day.dayNumber
+      : cleanDays.length + 1;
+    const srcItems = Array.isArray(day.items) ? day.items : [];
+    const items = [];
+    for (const it of srcItems) {
+      if (!it || typeof it !== "object") continue;
+      const desc = typeof it.description === "string" && it.description.trim() !== ""
+        ? it.description.trim().slice(0, 500)
+        : (typeof it.name === "string" ? it.name.trim().slice(0, 500) : "");
+      if (!desc) continue;
+      let itemType = typeof it.itemType === "string" ? it.itemType.trim().toLowerCase() : "activity";
+      if (!VALID_ITEM_TYPES.includes(itemType)) itemType = "activity";
+      let estimatedCost = null;
+      const c = Number(it.estimatedCost != null ? it.estimatedCost : it.unitCost);
+      if (Number.isFinite(c) && c >= 0) estimatedCost = Math.round(c * 100) / 100;
+      items.push({
+        itemType,
+        description: desc,
+        suggestedSupplierName: null,
+        estimatedCost,
+        latitude: null,
+        longitude: null,
+      });
+    }
+    if (items.length === 0) continue;
+    cleanDays.push({ dayNumber, items });
+  }
+  if (cleanDays.length === 0) return null;
+
+  const summary = typeof parsed.summary === "string" && parsed.summary.trim() !== ""
+    ? parsed.summary.trim()
+    : `Suggested ${cleanDays.length}-day outline for ${destination}.`;
+  return { summary, days: cleanDays };
+}
+
+// FR-3.4(d) response shape: { summary, days: [{ dayNumber, items: [...] }] }.
+// Deterministic (no Date.now / Math.random) so the stub is test-pinnable
+// and demo screenshots stay stable. Each item uses a valid ItineraryItem
+// itemType (flight|transfer|hotel|sightseeing|activity|meals) so the operator
+// can materialise an accepted day straight through /from-suggestion unchanged.
+//
+// Costs: when an explicit numeric `budgetPerPax` is supplied the per-night
+// hotel cost is derived from it (budgetPerPax / days), preserving the FR-3.4
+// budget-split contract pinned by the spec. Otherwise the per-item estimate
+// comes from the budget-tier table above (null when no tier is supplied).
+function buildSuggestionSkeleton({ destination, days, budgetPerPax, budgetTier, summary }) {
+  const perNightHotel =
+    budgetPerPax != null && days > 0
+      ? Math.round((budgetPerPax / days) * 100) / 100
+      : tierCost("hotel", budgetTier);
+  const transferCost = tierCost("transfer", budgetTier);
+  const sightseeingCost = tierCost("sightseeing", budgetTier);
+  const activityCost = tierCost("activity", budgetTier);
+  const mealsCost = tierCost("meals", budgetTier);
+
+  const dayList = [];
+  for (let d = 1; d <= days; d++) {
+    const items = [];
+    if (d === 1) {
+      items.push({ itemType: "flight", description: `Arrival in ${destination}`, suggestedSupplierName: null, estimatedCost: null, latitude: null, longitude: null });
+      items.push({ itemType: "transfer", description: `Airport transfer to hotel in ${destination}`, suggestedSupplierName: null, estimatedCost: transferCost, latitude: null, longitude: null });
+    }
+    items.push({ itemType: "hotel", description: `Night ${d} — stay in ${destination}`, suggestedSupplierName: null, estimatedCost: perNightHotel, latitude: null, longitude: null });
+    items.push({ itemType: "sightseeing", description: `Day ${d} — morning sightseeing in ${destination}`, suggestedSupplierName: null, estimatedCost: sightseeingCost, latitude: null, longitude: null });
+    items.push({ itemType: "activity", description: `Day ${d} — afternoon activity in ${destination}`, suggestedSupplierName: null, estimatedCost: activityCost, latitude: null, longitude: null });
+    items.push({ itemType: "meals", description: `Day ${d} — dinner in ${destination}`, suggestedSupplierName: null, estimatedCost: mealsCost, latitude: null, longitude: null });
+    if (d === days) {
+      items.push({ itemType: "flight", description: `Departure from ${destination}`, suggestedSupplierName: null, estimatedCost: null, latitude: null, longitude: null });
+    }
+    dayList.push({ dayNumber: d, items });
+  }
+  return { summary, days: dayList };
+}
+
+// FR-3.6: the "Suggest itinerary" modal collects interests + pace as plain
+// text so operators never hand-author JSON. We assemble the structured theme
+// object here. `interests` accepts an array OR a comma/newline-separated
+// string; `pace` is a short label/free-text. Returns { interests?, pace? }
+// or null when nothing usable was supplied.
+function buildThemeFromInputs(rawInterests, rawPace) {
+  const theme = {};
+  let list = [];
+  if (Array.isArray(rawInterests)) list = rawInterests;
+  else if (typeof rawInterests === "string") list = rawInterests.split(/[,\n]/);
+
+  const seen = new Set();
+  const interests = [];
+  for (const entry of list) {
+    const s = typeof entry === "string" ? entry.trim().slice(0, 60) : "";
+    if (!s) continue;
+    const key = s.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    interests.push(s);
+    if (interests.length >= 20) break;
+  }
+  if (interests.length > 0) theme.interests = interests;
+  if (typeof rawPace === "string" && rawPace.trim() !== "") {
+    theme.pace = rawPace.trim().slice(0, 40);
+  }
+  return Object.keys(theme).length > 0 ? theme : null;
+}
+
+// Fold the structured theme + any explicit free-text profile into one
+// human-readable traveller-profile string for the LLM prompt / stub. Keeps
+// the existing `travellerProfile` payload contract intact while letting the
+// new interests/pace inputs steer the suggestion.
+function composeTravellerProfile(explicitProfile, theme) {
+  const parts = [];
+  if (typeof explicitProfile === "string" && explicitProfile.trim() !== "") {
+    parts.push(explicitProfile.trim());
+  }
+  if (theme) {
+    if (Array.isArray(theme.interests) && theme.interests.length > 0) {
+      parts.push(`Interests: ${theme.interests.join(", ")}.`);
+    }
+    if (theme.pace) parts.push(`Pace: ${theme.pace}.`);
+  }
+  const text = parts.join(" ").trim();
+  return text ? text.slice(0, 2000) : null;
+}
+
+// POST /api/travel/itineraries/suggest
+//
+// PRD_TRAVEL_ITINERARY_UPGRADES FR-3.4 — LLM "Suggest itinerary".
+// Operator supplies destination + days + (optional) budget-per-pax +
+// traveller profile + sub-brand; returns a STRUCTURED day-by-day draft
+// for review. Per FR-3.4(e) this is SUGGESTED only — NOTHING is written
+// to the DB. The operator materialises accepted days via the existing
+// POST /itineraries + /:id/items endpoints.
+//
+// itinerary-suggest task class → gemini-flash provider slot (PRD §9.1;
+// PRD names gemini-2.5-flash). Until Q11 keys land, llmRouter returns a
+// [STUB-ITINERARY-SUGGEST] summary and we assemble a deterministic
+// day-by-day skeleton here (FR-3.4(g) — mirrors /draft/regen's stub).
+//
+// No diagnostic-first guard: this is an internal operator drafting tool,
+// not a customer-facing quote artifact (that guard lives on itinerary
+// CREATE). Sub-brand, when supplied, is validated + access-checked.
+// Travel-tenant only (requireTravelTenant → 403 WRONG_VERTICAL for
+// generic/wellness).
+router.post(
+  "/itineraries/suggest",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const { destination, days, budgetPerPax, travellerProfile, subBrand, interests, pace, budgetTier } = req.body || {};
+      // Budget tier drives per-item cost estimates in the skeleton; ignore
+      // unknown values (an explicit numeric budgetPerPax still wins for hotel).
+      const tier = typeof budgetTier === "string" && SUGGEST_TIER_COSTS[budgetTier] ? budgetTier : null;
+
+      const dest = typeof destination === "string" ? destination.trim() : "";
+      if (!dest) {
+        return res.status(400).json({ error: "destination is required", code: "MISSING_DESTINATION" });
+      }
+      const numDays = parseInt(days, 10);
+      if (!Number.isInteger(numDays) || numDays < 1 || numDays > 30) {
+        return res.status(400).json({ error: "days must be an integer between 1 and 30", code: "INVALID_DAYS" });
+      }
+
+      let resolvedSubBrand = null;
+      if (subBrand != null && String(subBrand).trim() !== "") {
+        assertValidSubBrand(String(subBrand).trim()); // throws 400 INVALID_SUB_BRAND (caught below)
+        resolvedSubBrand = String(subBrand).trim();
+        const allowed = await getSubBrandAccessSet(req.user.userId);
+        if (!canAccessSubBrand(allowed, resolvedSubBrand)) {
+          return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+        }
+      }
+
+      let budgetNum = null;
+      if (budgetPerPax != null && budgetPerPax !== "") {
+        budgetNum = Number(budgetPerPax);
+        if (!Number.isFinite(budgetNum) || budgetNum < 0) {
+          return res.status(400).json({ error: "budgetPerPax must be a non-negative number", code: "INVALID_BUDGET" });
+        }
+      }
+      // FR-3.6: assemble the theme JSON server-side from the operator's
+      // plain-text interests + pace (the client no longer hand-authors JSON),
+      // then fold it into the traveller-profile text the LLM / stub consumes.
+      const theme = buildThemeFromInputs(interests, pace);
+      const profile = composeTravellerProfile(travellerProfile, theme);
+
+      let result;
+      try {
+        result = await llmRouter.routeRequest({
+          task: "itinerary-suggest",
+          payload: {
+            destination: dest,
+            days: numDays,
+            budgetPerPax: budgetNum,
+            budgetTier: tier,
+            travellerProfile: profile,
+            theme,
+            subBrand: resolvedSubBrand,
+            __userId: req.user.userId,
+            __surface: "itinerary-suggest",
+          },
+          tenantId: req.travelTenant.id,
+        });
+      } catch (e) {
+        if (e.code === "LLM_BUDGET_EXCEEDED") {
+          return res.status(429).json({
+            error: "Monthly AI budget reached for this tenant.",
+            code: "LLM_BUDGET_EXCEEDED",
+            spentCents: e.spentCents,
+            capCents: e.capCents,
+          });
+        }
+        // FR-3.4(g): the day-by-day skeleton is deterministic and does NOT
+        // depend on the LLM — only the prose summary does. When the provider
+        // is transiently unavailable (e.g. Gemini 503 "high demand"), still
+        // return a usable outline instead of failing the whole request. The
+        // operator gets the full structured days; only the summary is the
+        // generic stub line. (In CI the router is already in stub mode, so
+        // this branch never runs there and the spec's model/stub pins hold.)
+        console.error("[travel-itin] suggest LLM fallback:", e.message);
+        result = {
+          text: `Suggested ${numDays}-day outline for ${dest}.`,
+          model: "stub-fallback",
+          stub: true,
+        };
+      }
+
+      // Prefer the LLM's structured, destination-specific items + per-person
+      // costs when the real provider answered. Fall back to the deterministic
+      // tier-priced skeleton in stub mode (CI), on a transient LLM failure
+      // (503), or if the model returned unparseable JSON — so the operator
+      // always gets a usable, priced draft.
+      let suggestion = null;
+      let costSource = "stub";
+      if (result && !result.stub) {
+        suggestion = parseLlmSuggestion(result.text, { destination: dest });
+        if (suggestion) costSource = "llm";
+      }
+      if (!suggestion) {
+        const stubSummary = (result && result.stub && typeof result.text === "string")
+          ? result.text
+          : `Suggested ${numDays}-day outline for ${dest}.`;
+        suggestion = buildSuggestionSkeleton({
+          destination: dest,
+          days: numDays,
+          budgetPerPax: budgetNum,
+          budgetTier: tier,
+          summary: stubSummary,
+        });
+      }
+
+      return res.status(200).json({
+        suggestion,
+        theme,
+        subBrand: resolvedSubBrand,
+        model: result.model,
+        stub: Boolean(result.stub),
+        // "llm" = costs/items came from Gemini; "stub" = deterministic
+        // tier-priced fallback (CI / transient failure / unparseable output).
+        costSource,
+        generatedAt: new Date().toISOString(),
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-itin] suggest error:", e.message);
+      res.status(500).json({ error: "Failed to generate itinerary suggestion" });
+    }
+  },
+);
+
 // POST /api/travel/itineraries/:id/draft/regen
 //
 // PRD §4.3 + §9.1: regenerate the customer-facing draft summary block
@@ -2520,9 +2913,9 @@ router.post(
       // structure alone, just without the recipient framing.
       const contact = full.contactId
         ? await prisma.contact.findFirst({
-            where: { id: full.contactId, tenantId: req.travelTenant.id },
-            select: { name: true },
-          })
+          where: { id: full.contactId, tenantId: req.travelTenant.id },
+          select: { name: true },
+        })
         : null;
 
       // PII-minimal payload — mirrors talking-points pattern. NO contact
@@ -2724,7 +3117,7 @@ router.post("/itineraries/:id/share", verifyToken, requireTravelTenant, async (r
     // narrow (id + subBrand); we want shareToken here too.
     const full = await prisma.itinerary.findFirst({
       where: { id: itin.id, tenantId: req.travelTenant.id },
-      select: { id: true, shareToken: true },
+      select: { id: true, shareToken: true, contactId: true, destination: true },
     });
     if (!full) {
       // Belt-and-braces — loadItineraryWithGuard just succeeded, so this
@@ -2757,9 +3150,40 @@ router.post("/itineraries/:id/share", verifyToken, requireTravelTenant, async (r
     const cfg = resolveForSubBrand(tenantCfgRow, itin.subBrand);
     console.log(
       `[travel-itin] share token minted for itin ${full.id} (sub-brand=${itin.subBrand}) — ` +
-        `would WhatsApp-blast via wabaId=${cfg.wabaId || "(no-config)"} pending Wati creds`,
+      `WhatsApp dispatch via watiClient (wabaId=${cfg.wabaId || "(no-config)"})`,
     );
-    res.json({ shareToken: token, shareUrl });
+    // WhatsApp dispatch via watiClient (Q9) — sends the share URL to the
+    // itinerary's contact. Stub mode (no WATI creds) logs + writes a QUEUED
+    // row, keeping the historical "advisor pastes the URL manually" flow as
+    // the fallback. `whatsapp` in the response is additive — existing
+    // consumers that only read shareToken/shareUrl are unaffected.
+    let whatsappStatus = "SKIPPED";
+    if (full.contactId) {
+      const contact = await prisma.contact.findFirst({
+        where: { id: full.contactId, tenantId: req.travelTenant.id },
+        select: { id: true, phone: true, name: true },
+      });
+      if (contact && contact.phone) {
+        // Legacy rows can carry a long prose summary in `destination`
+        // (pre-S113 materialise bug) — fall back to "trip" past 60 chars
+        // so the customer-facing message stays clean.
+        const destLabel = full.destination && full.destination.length <= 60
+          ? full.destination
+          : "trip";
+        const sendResult = await watiClient.sendBestEffort({
+          tenantId: req.travelTenant.id,
+          subBrand: itin.subBrand,
+          toPhone: contact.phone,
+          contactId: contact.id,
+          fallbackText:
+            `Hi ${contact.name || "there"}! Your ${destLabel} itinerary is ready. ` +
+            `View it here: ${shareUrl}`,
+          broadcastName: "travel-itinerary-share",
+        });
+        whatsappStatus = sendResult.status;
+      }
+    }
+    res.json({ shareToken: token, shareUrl, whatsapp: whatsappStatus });
   } catch (e) {
     if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
     if (e.code === "P2002") {
@@ -2800,9 +3224,9 @@ router.get("/itineraries/:id/pdf", verifyToken, requireTravelTenant, async (req,
     }
     const contact = full.contactId
       ? await prisma.contact.findUnique({
-          where: { id: full.contactId },
-          select: { name: true, email: true, phone: true },
-        })
+        where: { id: full.contactId },
+        select: { name: true, email: true, phone: true },
+      })
       : { name: "Customer", email: null, phone: null };
     const pdfBuf = await renderTravelItineraryPdf(full, contact);
     res.setHeader("Content-Type", "application/pdf");
@@ -4041,5 +4465,390 @@ router.get("/itineraries/:id/totals", verifyToken, requireTravelTenant, async (r
     res.status(500).json({ error: "Failed to compute itinerary totals" });
   }
 });
+
+// ─── S113 (2026-06-11): the FR-3.6/S14-S46 POST /itineraries/suggest
+// handler that previously lived here has been removed. PR #1142 added a
+// NEW POST /itineraries/suggest handler higher in this file (FR-3.4 path,
+// "Suggest itinerary" wired through llmRouter) that Express dispatches
+// first-match-wins — making the original block unreachable dead code.
+//
+// The new canonical contract is pinned by:
+//   - e2e/tests/travel-itinerary-suggest-api.spec.js (PR #1142 sibling)
+//   - the FR-3.4 handler block earlier in this file
+//
+// The structured-JSON suggestionJson shape is produced inline in the
+// FR-3.4 handler above (S120 removed a prototype service module that
+// duplicated this logic — dead code). The canonical alive LLM service
+// pattern is now tmcDiagnosticPrompts + marketingFlyerCopyLLM /
+// marketingFlyerImageLLM. Real-mode swap is gated on CREDS_TRACKER
+// Q-IT-2 (Gemini key).
+
+// POST /api/travel/itineraries/from-suggestion
+//
+// S90 — PRD docs/PRD_TRAVEL_ITINERARY_UPGRADES.md FR-3.6 step (d). Operator
+// has used POST /itineraries/suggest to brainstorm; this endpoint
+// materialises the accepted suggestion into a real `Itinerary` row +
+// `ItineraryItem` children. Transactional — either everything lands or
+// nothing does (no half-baked itineraries left behind on a mid-stream
+// item insert failure).
+//
+// USER+ gate (every travel sales operator). PRD §4.1 diagnostic-first
+// guard applies: the contact must have a completed diagnostic for the
+// chosen sub-brand or 403 DIAGNOSTIC_REQUIRED comes back.
+//
+// Request body:
+//   {
+//     suggestionJson: {                            // REQUIRED — output of /suggest
+//       daySplit?: [ {                             // FR-3.4 handler emits `daySplit`
+//         dayNumber: int,                          //   (canonical key)
+//         theme?: string,
+//         items: [ { itemType, description,
+//                    estimatedCost?, latitude?,
+//                    longitude?, suggestedSupplierName? }, ... ]
+//       }, ... ],
+//       days?: [ {...same shape...} ],             // Accepted alias for forward-
+//                                                  //   compat with the prompt's
+//                                                  //   `suggestionJson.days[]`
+//                                                  //   wording.
+//       summary?: string,                          // Used as itinerary.name
+//                                                  //   default if no name given.
+//       thematicNotes?: string,
+//     },
+//     contactId: int,                              // REQUIRED — see SHAPE-DRIFT
+//                                                  //   below; schema makes
+//                                                  //   contactId NON-NULL.
+//     subBrand?: string,                           // Optional; defaults from the
+//                                                  //   contact's accessible
+//                                                  //   sub-brand if missing.
+//     destination?: string,                        // Optional; defaults from
+//                                                  //   suggestionJson.summary
+//                                                  //   or 'Suggested itinerary'.
+//   }
+//
+// Response 201:
+//   {
+//     itinerary: { id, ..., items: [...] },
+//     itemsCreated: int,
+//     daysProcessed: int,
+//   }
+//
+// Errors:
+//   400 INVALID_SUGGESTION_JSON  — missing / not-object / no day array
+//   400 INVALID_DAY              — day missing dayNumber or items
+//   400 ITEM_MISSING_NAME        — item missing name/description
+//   400 INVALID_ITEM_TYPE        — item itemType outside VALID_ITEM_TYPES
+//   400 CONTACT_ID_REQUIRED      — contactId not provided (schema gap below)
+//   400 INVALID_CONTACT_ID       — contactId not a positive int
+//   400 INVALID_SUB_BRAND        — subBrand outside enum
+//   403 SUB_BRAND_DENIED         — caller lacks sub-brand access
+//   403 DIAGNOSTIC_REQUIRED      — PRD §4.1 guard
+//   404 CONTACT_NOT_FOUND        — cross-tenant contact lookup
+//   500 ITINERARY_MATERIALISE_FAILED
+//
+// SHAPE DRIFT (prompt vs schema vs service):
+//   - Prompt body says `contactId` is optional. Prisma schema says
+//     `Itinerary.contactId Int` (not nullable). To avoid orphan-create
+//     attempts that die at the DB layer with an opaque P2003, this route
+//     ENFORCES contactId as required + returns CONTACT_ID_REQUIRED 400.
+//     This is consistent with the canonical POST /itineraries route.
+//   - Prompt says items come from `suggestionJson.days[]`. The FR-3.4
+//     handler emits `suggestionJson.daySplit[]`. We accept both keys
+//     (daySplit takes precedence) so the prompt's example works AND the
+//     production pipeline works.
+//   - Service items shape uses `description` + `itemType` (NOT `name`).
+//     We treat `name` OR `description` as the source; whichever is set
+//     becomes ItineraryItem.description (which is required per schema).
+//   - Service items can supply `estimatedCost` (number); we map to
+//     ItineraryItem.unitCost. quantity defaults to 1, totalPrice computed
+//     via computeItemLineTotal.
+router.post(
+  "/itineraries/from-suggestion",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const { suggestionJson, contactId, subBrand, destination } = req.body || {};
+
+      // 1. suggestionJson validation
+      if (
+        !suggestionJson
+        || typeof suggestionJson !== "object"
+        || Array.isArray(suggestionJson)
+      ) {
+        return res.status(400).json({
+          error: "suggestionJson required (must be an object)",
+          code: "INVALID_SUGGESTION_JSON",
+        });
+      }
+      // Accept both `daySplit` (service-emitted) and `days` (prompt-named).
+      const days = Array.isArray(suggestionJson.daySplit)
+        ? suggestionJson.daySplit
+        : Array.isArray(suggestionJson.days)
+          ? suggestionJson.days
+          : null;
+      if (!days || days.length === 0) {
+        return res.status(400).json({
+          error: "suggestionJson.daySplit (or .days) must be a non-empty array",
+          code: "INVALID_SUGGESTION_JSON",
+        });
+      }
+
+      // 2. contactId validation — REQUIRED at the route layer (schema gap;
+      //    see SHAPE DRIFT note above).
+      if (contactId == null || contactId === "") {
+        return res.status(400).json({
+          error: "contactId required",
+          code: "CONTACT_ID_REQUIRED",
+        });
+      }
+      const cid = parseInt(contactId, 10);
+      if (!Number.isFinite(cid) || cid < 1) {
+        return res.status(400).json({
+          error: "contactId must be a positive integer",
+          code: "INVALID_CONTACT_ID",
+        });
+      }
+
+      // 3. Verify contact belongs to caller's tenant. Cross-tenant → 404
+      //    (not 403) so we don't leak the existence of other tenants' rows.
+      const contact = await prisma.contact.findFirst({
+        where: { id: cid, tenantId: req.travelTenant.id },
+        select: { id: true },
+      });
+      if (!contact) {
+        return res.status(404).json({
+          error: "Contact not found",
+          code: "CONTACT_NOT_FOUND",
+        });
+      }
+
+      // 4. subBrand validation (optional but enum-validated when present).
+      let effectiveSubBrand = subBrand;
+      if (effectiveSubBrand) {
+        assertValidSubBrand(effectiveSubBrand);
+      } else {
+        // Default to the operator's first accessible sub-brand when omitted.
+        const allowed = await getSubBrandAccessSet(req.user.userId);
+        if (allowed instanceof Set && allowed.size > 0) {
+          effectiveSubBrand = [...allowed][0];
+        } else {
+          // No access set narrowing (ADMIN) — fall through to 'travelstall'
+          // as a sane default matching the other create paths' habit.
+          effectiveSubBrand = "travelstall";
+        }
+      }
+
+      // 5. Sub-brand access check (mirrors POST /itineraries).
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (!canAccessSubBrand(allowed, effectiveSubBrand)) {
+        return res.status(403).json({
+          error: "Sub-brand access denied",
+          code: "SUB_BRAND_DENIED",
+        });
+      }
+
+      // 6. PRD §4.1 diagnostic-first guard (mirrors POST /itineraries).
+      await assertCompletedDiagnostic(prisma, req.travelTenant.id, cid, effectiveSubBrand);
+
+      // 7. Flatten days/items into ItineraryItem rows with up-front
+      //    validation so any bad row rejects before the transaction opens.
+      const itemRows = [];
+      let position = 0;
+      for (let dIdx = 0; dIdx < days.length; dIdx += 1) {
+        const day = days[dIdx];
+        if (!day || typeof day !== "object") {
+          return res.status(400).json({
+            error: `day[${dIdx}] must be an object`,
+            code: "INVALID_DAY",
+          });
+        }
+        const dayNumber = day.dayNumber != null
+          ? parseInt(day.dayNumber, 10)
+          : dIdx + 1;
+        if (!Number.isFinite(dayNumber) || dayNumber < 1) {
+          return res.status(400).json({
+            error: `day[${dIdx}].dayNumber must be a positive integer`,
+            code: "INVALID_DAY",
+          });
+        }
+        const dayItems = Array.isArray(day.items) ? day.items : null;
+        if (!dayItems) {
+          return res.status(400).json({
+            error: `day[${dIdx}].items must be an array`,
+            code: "INVALID_DAY",
+          });
+        }
+
+        for (let iIdx = 0; iIdx < dayItems.length; iIdx += 1) {
+          const src = dayItems[iIdx];
+          if (!src || typeof src !== "object") {
+            return res.status(400).json({
+              error: `day[${dIdx}].items[${iIdx}] must be an object`,
+              code: "ITEM_MISSING_NAME",
+            });
+          }
+          // Accept either `name` (prompt wording) or `description` (service
+          // shape). Whichever is present becomes ItineraryItem.description.
+          const desc = (src.description != null && String(src.description).trim() !== "")
+            ? String(src.description)
+            : (src.name != null && String(src.name).trim() !== "")
+              ? String(src.name)
+              : null;
+          if (!desc) {
+            return res.status(400).json({
+              error: `day[${dIdx}].items[${iIdx}] missing name/description`,
+              code: "ITEM_MISSING_NAME",
+            });
+          }
+          // itemType defaults to 'activity' when absent (service-emitted
+          // items always set it; user-supplied days[] from the prompt
+          // example may not).
+          const itemType = src.itemType ? String(src.itemType) : "activity";
+          assertValidItemType(itemType);
+
+          // Map cost: service uses `estimatedCost`; the create route uses
+          // `unitCost`. Either is acceptable from the suggestion source.
+          const unitCost = src.unitCost != null && src.unitCost !== ""
+            ? Number(src.unitCost)
+            : (src.estimatedCost != null && src.estimatedCost !== "")
+              ? Number(src.estimatedCost)
+              : null;
+
+          // Lat/lng pass-through (Float? in schema).
+          const latitude = (src.latitude != null && src.latitude !== "")
+            ? Number(src.latitude)
+            : (src.lat != null && src.lat !== "")
+              ? Number(src.lat)
+              : null;
+          const longitude = (src.longitude != null && src.longitude !== "")
+            ? Number(src.longitude)
+            : (src.lng != null && src.lng !== "")
+              ? Number(src.lng)
+              : null;
+
+          // notes pass-through — into detailsJson as { notes, suggestedSupplierName? }
+          const detailsObj = {};
+          if (src.notes != null && String(src.notes).trim() !== "") {
+            detailsObj.notes = String(src.notes);
+          }
+          if (src.suggestedSupplierName != null
+            && String(src.suggestedSupplierName).trim() !== "") {
+            detailsObj.suggestedSupplierName = String(src.suggestedSupplierName);
+          }
+          if (src.durationMinutes != null && src.durationMinutes !== "") {
+            const dm = Number(src.durationMinutes);
+            if (Number.isFinite(dm) && dm >= 0) detailsObj.durationMinutes = dm;
+          }
+          if (src.locationName != null && String(src.locationName).trim() !== "") {
+            detailsObj.locationName = String(src.locationName);
+          }
+
+          const itemRow = {
+            itemType,
+            position,
+            description: desc,
+            detailsJson: Object.keys(detailsObj).length > 0
+              ? JSON.stringify(detailsObj)
+              : null,
+            unitCost,
+            quantity: 1,
+            markup: null,
+            gstAmount: null,
+            unit: "per_person",
+            dayNumber,
+            latitude: Number.isFinite(latitude) ? latitude : null,
+            longitude: Number.isFinite(longitude) ? longitude : null,
+            totalPrice: computeItemLineTotal({
+              unitCost,
+              quantity: 1,
+              markup: null,
+              gstAmount: null,
+            }),
+          };
+          itemRows.push(itemRow);
+          position += 1;
+        }
+      }
+
+      // 8. Resolve productTier default from latest diagnostic (PRD §6.4 —
+      //    mirrors POST /itineraries).
+      const latest = await findLatestDiagnostic(
+        prisma,
+        req.travelTenant.id,
+        cid,
+        effectiveSubBrand,
+      );
+      const productTier = (latest && latest.recommendedTier) || null;
+
+      // 9. Resolve destination — body > suggestionJson.summary > placeholder.
+      //    The `destination` column is VARCHAR(191); cap to 190 on EVERY
+      //    branch. The summary fallback in particular is the LLM's multi-
+      //    paragraph prose, which overflowed the column (Column: destination
+      //    "value too long") when the client didn't pass an explicit
+      //    destination. Clients should send `destination`; this is the guard.
+      const effectiveDestination = (destination && String(destination).trim() !== "")
+        ? String(destination).trim().slice(0, 190)
+        : (suggestionJson.summary && String(suggestionJson.summary).trim() !== "")
+          ? String(suggestionJson.summary).trim().slice(0, 190)
+          : "Suggested itinerary";
+
+      // 10. Transactional create — Itinerary + ItineraryItem rows in one
+      //     shot via Prisma's nested create. Atomic by Prisma's contract.
+      const itinerary = await prisma.itinerary.create({
+        data: {
+          tenantId: req.travelTenant.id,
+          subBrand: effectiveSubBrand,
+          contactId: cid,
+          status: "draft",
+          productTier,
+          destination: effectiveDestination,
+          currency: "INR",
+          totalAmount: itemRows.reduce(
+            (s, it) => s + (Number.isFinite(it.totalPrice) ? Number(it.totalPrice) : 0),
+            0,
+          ),
+          items: itemRows.length > 0 ? { create: itemRows } : undefined,
+        },
+        include: { items: { orderBy: { position: "asc" } } },
+      });
+
+      // 11. Audit-log emission. PRD FR-3.6 (d) needs to be traceable when
+      //     an operator materialises an LLM suggestion into committed rows.
+      try {
+        await writeAudit(
+          "Itinerary",
+          "itinerary.materialised-from-suggestion",
+          itinerary.id,
+          req.user.userId,
+          req.travelTenant.id,
+          {
+            subBrand: effectiveSubBrand,
+            contactId: cid,
+            daysProcessed: days.length,
+            itemsCreated: itemRows.length,
+            destination: effectiveDestination,
+            summarySource: !!suggestionJson.summary,
+          },
+        );
+      } catch (auditErr) {
+        // Audit failure is non-fatal — itinerary has landed; log + move on.
+        console.error("[travel-itin] materialise audit failed:", auditErr.message);
+      }
+
+      return res.status(201).json({
+        itinerary,
+        itemsCreated: itemRows.length,
+        daysProcessed: days.length,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-itin] materialise error:", e.message);
+      return res.status(500).json({
+        error: "Failed to materialise itinerary from suggestion",
+        code: "ITINERARY_MATERIALISE_FAILED",
+      });
+    }
+  },
+);
 
 module.exports = router;

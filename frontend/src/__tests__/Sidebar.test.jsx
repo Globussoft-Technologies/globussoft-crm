@@ -803,8 +803,15 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(screen.getByText('Flyer Templates')).toBeTruthy();
       // T26 (PRD_TMC_DIAGNOSTIC_SALES_ROUTING_ENGINE §10) — TMC Catalogue
       // admin entry is ADMIN+MANAGER visible. Page CRUD is verifyRole
-      // ADMIN+MANAGER server-side; nav mirrors that posture.
-      expect(screen.getByText('TMC Catalogue')).toBeTruthy();
+      // ADMIN+MANAGER server-side; nav mirrors that posture. PR #1142 added
+      // a second TMC Catalogue link adjacent to TMC Trips (Sidebar.jsx L1498)
+      // alongside the original adjacent to Curriculum Mappings (L1645) —
+      // both are `isManager && inBrand("tmc")` gated, so under MANAGER with
+      // no subBrandAccess filter (inBrand returns true) both render. Use
+      // getAllByText + length>=1 instead of getByText to tolerate either
+      // single- or duplicate-render shape without re-pinning the count.
+      const tmcCatalogueMatches = screen.getAllByText('TMC Catalogue');
+      expect(tmcCatalogueMatches.length).toBeGreaterThanOrEqual(1);
       // Travel Stall section label is `isManager` gated. The string also
       // appears as an <option> in the sub-brand switcher — filter to the
       // section-label DIV node (not the OPTION).
@@ -829,6 +836,28 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(nonOption.length).toBe(0);
       // Plus admin entries hidden.
       expect(screen.queryByText('Pricing Rules')).toBeNull();
+    });
+
+    it('renders POI Approvals nav entry for ADMIN under travel (S99)', () => {
+      // S99 (TRAVEL_BIG_SCOPE_BACKLOG) — POI rep-suggested approval queue is
+      // ADMIN-only. Backend RBAC on /api/travel/pois/pending + approve +
+      // reject enforces; sidebar entry mirrors that gate so non-ADMINs do
+      // not even see the link. Page commit: PoiPendingApprovalQueue.jsx S12.
+      renderSidebar({ vertical: 'travel', role: 'ADMIN' });
+      const link = screen.getByText('POI Approvals').closest('a');
+      expect(link).toBeTruthy();
+      expect(link.getAttribute('href')).toBe('/travel/pois/pending');
+    });
+
+    it('hides POI Approvals nav entry for MANAGER + USER under travel (S99)', () => {
+      // Manager + User MUST NOT see the entry — backend rejects with 403
+      // and the page renders an access-denied surface; UX is to not even
+      // surface the link to non-ADMINs.
+      const managerEnv = renderSidebar({ vertical: 'travel', role: 'MANAGER' });
+      expect(screen.queryByText('POI Approvals')).toBeNull();
+      managerEnv.unmount();
+      renderSidebar({ vertical: 'travel', role: 'USER' });
+      expect(screen.queryByText('POI Approvals')).toBeNull();
     });
 
     it('renders Sales pipeline / Customer comms / Financial / Reports section headers under travel', () => {
@@ -1358,6 +1387,53 @@ describe('Sidebar — load-bearing render surface', () => {
       });
       await screen.findByText('Point of Sale');
       expect(screen.queryByText('My Transactions')).toBeNull();
+    });
+  });
+
+  // ── S49 + S55 (TRAVEL_BIG_SCOPE_BACKLOG) — App.jsx route + Sidebar
+  //    nav entry wirings for QuoteTemplates.jsx + CancellationPolicies.jsx.
+  //    Both entries are wrapped in `isManager` so ADMIN + MANAGER see them
+  //    but USER does NOT. Hrefs pin the route paths that App.jsx registers
+  //    (`/travel/quote-templates` + `/travel/cancellation-policies`) so a
+  //    future App.jsx rename would be caught here in addition to in the
+  //    page-specific test files.
+  describe('Travel vertical — S49 + S55 admin entries (QuoteTemplates + CancellationPolicies)', () => {
+    it('renders Quote Templates nav entry with href /travel/quote-templates for ADMIN', () => {
+      renderSidebar({ vertical: 'travel', role: 'ADMIN' });
+      const link = screen.getByText('Quote Templates').closest('a');
+      expect(link).toBeTruthy();
+      expect(link.getAttribute('href')).toBe('/travel/quote-templates');
+    });
+
+    it('renders Quote Templates nav entry for MANAGER under travel', () => {
+      renderSidebar({ vertical: 'travel', role: 'MANAGER' });
+      const link = screen.getByText('Quote Templates').closest('a');
+      expect(link).toBeTruthy();
+      expect(link.getAttribute('href')).toBe('/travel/quote-templates');
+    });
+
+    it('hides Quote Templates nav entry for USER role under travel', () => {
+      renderSidebar({ vertical: 'travel', role: 'USER' });
+      expect(screen.queryByText('Quote Templates')).toBeNull();
+    });
+
+    it('renders Cancellation Policies nav entry with href /travel/cancellation-policies for ADMIN', () => {
+      renderSidebar({ vertical: 'travel', role: 'ADMIN' });
+      const link = screen.getByText('Cancellation Policies').closest('a');
+      expect(link).toBeTruthy();
+      expect(link.getAttribute('href')).toBe('/travel/cancellation-policies');
+    });
+
+    it('renders Cancellation Policies nav entry for MANAGER under travel', () => {
+      renderSidebar({ vertical: 'travel', role: 'MANAGER' });
+      const link = screen.getByText('Cancellation Policies').closest('a');
+      expect(link).toBeTruthy();
+      expect(link.getAttribute('href')).toBe('/travel/cancellation-policies');
+    });
+
+    it('hides Cancellation Policies nav entry for USER role under travel', () => {
+      renderSidebar({ vertical: 'travel', role: 'USER' });
+      expect(screen.queryByText('Cancellation Policies')).toBeNull();
     });
   });
 });

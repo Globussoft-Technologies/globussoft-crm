@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useContext, useRef } from "react";
 import { Link } from "react-router-dom";
 import {
-  Shield,
   UserPlus,
   Trash2,
   Key,
@@ -33,6 +32,7 @@ import { useNotify } from "../utils/notify";
 import { usePermissions } from "../hooks/usePermissions";
 import { ThemeContext, AuthContext } from "../App";
 import PasswordInput from "../components/PasswordInput";
+import WebhookSigningCredential from "../components/WebhookSigningCredential";
 
 // #391: single source of truth for the default brand color so the color
 // picker swatch, the placeholder hint, and the color actually applied
@@ -45,8 +45,6 @@ export default function Settings() {
   const { theme, setTheme, toggleTheme } = useContext(ThemeContext);
   const { tenant: ctxTenant, setTenant } = useContext(AuthContext);
   const { isOwner } = usePermissions();
-  const [users, setUsers] = useState([]);
-  const [loading, setLoading] = useState(true);
   const [newUser, setNewUser] = useState({
     name: "",
     email: "",
@@ -357,12 +355,6 @@ export default function Settings() {
   };
 
   useEffect(() => {
-    fetchApi("/api/auth/users")
-      .then((res) => {
-        setUsers(res);
-        setLoading(false);
-      })
-      .catch((err) => console.error(err));
     fetchStages();
   }, []);
 
@@ -435,27 +427,11 @@ export default function Settings() {
         method: "POST",
         body: JSON.stringify(newUser),
       });
-      const data = await fetchApi("/api/auth/users");
-      setUsers(data);
       setNewUser({ name: "", email: "", password: "", role: "USER" });
+      notify.success("Team member invited.");
     } catch (err) {
       notify.error("Failed to create user.");
     }
-  };
-
-  const handleDelete = async (id) => {
-    if (await notify.confirm("Delete this user?")) {
-      await fetchApi(`/api/auth/users/${id}`, { method: "DELETE" });
-      setUsers(users.filter((u) => u.id !== id));
-    }
-  };
-
-  const handleChangeRole = async (id, newRole) => {
-    await fetchApi(`/api/auth/users/${id}/role`, {
-      method: "PUT",
-      body: JSON.stringify({ role: newRole }),
-    });
-    setUsers(users.map((u) => (u.id === id ? { ...u, role: newRole } : u)));
   };
 
   // #479/#484: clamp horizontal padding so narrow viewports get 1rem of
@@ -503,31 +479,14 @@ export default function Settings() {
         )}
       </header>
 
-      {/* #479/#484: outer two-column grid uses auto-fit + minmax so the
-          right column collapses below the second card under ~700px viewports
-          rather than squeezing both columns until labels/buttons clip.
-          alignItems:'start' keeps each column at its natural height so the
-          shorter column's cards don't get spread apart vertically to match
-          the taller column's stretch height. */}
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns:
-            "repeat(auto-fit, minmax(min(100%, 320px), 1fr))",
-          gap: "1.5rem",
-          maxWidth: "1400px",
-          alignItems: "start",
-        }}
-      >
-        {/* Left Column */}
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "1fr",
-            gap: "1.5rem",
-            minWidth: 0,
-          }}
-        >
+      {/* Cards flow through a CSS multi-column container so heights balance
+          automatically across the two columns instead of pooling into two
+          fixed lists (which left a tall empty gutter on the right whenever
+          the wellness-only cards on the left pushed that column past the
+          right one). Each card carries `break-inside: avoid` + its own
+          bottom margin via the `.settings-grid > .card` rule in index.css.
+          Below ~720px the columns collapse to a single column. */}
+      <div className="settings-grid">
           {/* Organization Card */}
           <div
             className="card"
@@ -1157,157 +1116,6 @@ export default function Settings() {
               </button>
             </form>
           </div>
-        </div>
-
-        {/* Right Column - Roster */}
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "1fr",
-            gap: "1.5rem",
-            minWidth: 0,
-          }}
-        >
-          {/* User Roster */}
-          <div
-            className="card"
-            style={{
-              padding: "clamp(1.25rem, 3vw, 2rem)",
-              height: "fit-content",
-            }}
-          >
-            <h3
-              style={{
-                fontSize: "1.25rem",
-                fontWeight: "600",
-                marginBottom: "1.5rem",
-                display: "flex",
-                alignItems: "center",
-                gap: "0.5rem",
-              }}
-            >
-              <Shield size={20} color="var(--success-color)" /> Access Control
-              Roster
-            </h3>
-
-            {loading ? (
-              <p>Loading team...</p>
-            ) : (
-              <div
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: "1rem",
-                  maxHeight: "700px",
-                  overflowY: "auto",
-                }}
-              >
-                {users.map((u) => (
-                  // #479: roster row wraps on narrow viewports so the role
-                  // dropdown + delete button drop below the name/email block
-                  // instead of squeezing the email into truncation.
-                  <div
-                    key={u.id}
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      alignItems: "center",
-                      background: "var(--surface-color)",
-                      border: "1px solid var(--border-color)",
-                      padding: "1.25rem",
-                      borderRadius: "8px",
-                      flexWrap: "wrap",
-                      gap: "0.75rem",
-                    }}
-                  >
-                    <div style={{ minWidth: 0, flex: "1 1 180px" }}>
-                      <h4
-                        style={{
-                          fontWeight: "600",
-                          fontSize: "1.1rem",
-                          wordBreak: "break-word",
-                        }}
-                      >
-                        {u.name || "Unknown User"}{" "}
-                        <span
-                          style={{
-                            fontSize: "0.75rem",
-                            padding: "0.2rem 0.6rem",
-                            background:
-                              u.role === "ADMIN"
-                                ? "rgba(239, 68, 68, 0.2)"
-                                : "rgba(59, 130, 246, 0.2)",
-                            color: u.role === "ADMIN" ? "#ef4444" : "#3b82f6",
-                            borderRadius: "12px",
-                            marginLeft: "0.5rem",
-                          }}
-                        >
-                          {u.role}
-                        </span>
-                      </h4>
-                      <p
-                        style={{
-                          color: "var(--text-secondary)",
-                          fontSize: "0.875rem",
-                          marginTop: "0.25rem",
-                          wordBreak: "break-all",
-                        }}
-                      >
-                        {u.email}
-                      </p>
-                    </div>
-
-                    <div
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: "1rem",
-                      }}
-                    >
-                      <select
-                        value={u.role}
-                        onChange={(e) => handleChangeRole(u.id, e.target.value)}
-                        style={{
-                          padding: "0.5rem",
-                          borderRadius: "4px",
-                          background: "var(--input-bg)",
-                          color: "var(--text-primary)",
-                          border: "1px solid var(--border-color)",
-                        }}
-                      >
-                        <option value="USER">Standard Rep</option>
-                        <option value="MANAGER">Manager</option>
-                        <option value="ADMIN">Admin</option>
-                      </select>
-                      {u.role !== "ADMIN" ? (
-                        <button
-                          onClick={() => handleDelete(u.id)}
-                          style={{
-                            background: "transparent",
-                            border: "none",
-                            color: "var(--danger-color)",
-                            cursor: "pointer",
-                            padding: "0.5rem",
-                          }}
-                        >
-                          <Trash2 size={18} />
-                        </button>
-                      ) : (
-                        <span
-                          style={{
-                            color: "var(--text-secondary)",
-                            fontSize: "0.875rem",
-                          }}
-                        >
-                          —
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
 
           {/* Invite User Card */}
           <div
@@ -1668,6 +1476,11 @@ export default function Settings() {
             )}
           </div>
 
+          {/* Webhook Signing Credential — per-tenant HMAC secret for outbound
+              webhooks (GlobusPhone lead-sync). Self-contained admin component;
+              ADMIN-only + subscription-gated server-side. */}
+          <WebhookSigningCredential />
+
           {/* Notification Preferences Card */}
           <NotificationPreferencesCard notify={notify} />
 
@@ -1983,7 +1796,6 @@ export default function Settings() {
               </p>
             )}
           </div>
-        </div>
       </div>
     </div>
   );

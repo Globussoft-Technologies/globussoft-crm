@@ -91,10 +91,12 @@ import express from 'express';
 import request from 'supertest';
 import jwt from 'jsonwebtoken';
 import { createRequire } from 'node:module';
+import fs from 'node:fs';
 
 const requireCJS = createRequire(import.meta.url);
 const JWT_SECRET = process.env.JWT_SECRET || 'enterprise_super_secret_key_2026';
 const templatesRouter = requireCJS('../../routes/travel_flyer_templates');
+const s3Mod = requireCJS('../../services/s3Service');
 
 function makeApp() {
   const app = express();
@@ -660,6 +662,53 @@ describe('DELETE /api/travel/flyer-templates/:id (ADMIN-only hard delete)', () =
     expect(res.body).toMatchObject({ code: 'RBAC_DENIED' });
     expect(prisma.travelFlyerTemplate.findFirst).not.toHaveBeenCalled();
     expect(prisma.travelFlyerTemplate.delete).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/travel/flyer-templates/upload (FR-3.2.2 image upload)', () => {
+  test('missing file → 400 MISSING_FILE', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/flyer-templates/upload')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'MISSING_FILE' });
+  });
+
+  test('non-image file is rejected with 400', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/flyer-templates/upload')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .attach('image', Buffer.from('hello'), { filename: 'notes.txt', contentType: 'text/plain' });
+    expect(res.status).toBe(400);
+  });
+
+  test('USER role is blocked (ADMIN/MANAGER only) → 403', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/flyer-templates/upload')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+    expect(res.status).toBe(403);
+  });
+
+  test('happy path stores the image + returns 201 with a url', async () => {
+    // Mock BOTH storage paths so the result is deterministic regardless of
+    // whether AWS_S3_BUCKET_NAME happens to be set in the run env.
+    const mkdir = vi.spyOn(fs.promises, 'mkdir').mockResolvedValue(undefined);
+    const writeFile = vi.spyOn(fs.promises, 'writeFile').mockResolvedValue(undefined);
+    const uploadImage = vi.spyOn(s3Mod, 'uploadImage').mockResolvedValue('https://s3.example/flyer-assets/x.png');
+    try {
+      const png = Buffer.from('89504e470d0a1a0a', 'hex'); // PNG magic bytes
+      const res = await request(makeApp())
+        .post('/api/travel/flyer-templates/upload')
+        .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+        .attach('image', png, { filename: 'logo.png', contentType: 'image/png' });
+      expect(res.status).toBe(201);
+      expect(typeof res.body.url).toBe('string');
+      expect(res.body.url.length).toBeGreaterThan(0);
+    } finally {
+      mkdir.mockRestore();
+      writeFile.mockRestore();
+      uploadImage.mockRestore();
+    }
   });
 });
 

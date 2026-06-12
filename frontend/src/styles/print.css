@@ -1,0 +1,88 @@
+/*
+ * frontend/src/styles/print.css — S83
+ *
+ * Print-mode hardening for embedded surfaces that ship in PDF / printed
+ * itinerary flyers (PRD_TRAVEL_ITINERARY_UPGRADES.md FR-3.5).
+ *
+ * Why it exists
+ *   Components that render visual overlays via CSS `position: absolute`
+ *   (e.g. MapPreview's OSM attribution chip) are silently dropped by
+ *   some print engines:
+ *     - Chrome's "Print to PDF" mostly honours absolute positioning, but
+ *     - Firefox's print preview, headless Chromium with
+ *       `printBackground: false`, and Edge's print-to-PDF have all been
+ *       observed clipping or omitting absolutely-positioned chrome that
+ *       falls outside the parent's print box.
+ *   The OSM tile-server attribution is REQUIRED by the OpenStreetMap
+ *   tile usage policy (https://operations.osmfoundation.org/policies/tiles/).
+ *   Losing the visible attribution on a printed flyer would put the
+ *   tenant in violation of the license.
+ *
+ * The fix
+ *   At @media print, demote the attribution overlay from absolute to
+ *   static block flow + force readable on-paper contrast (#000 on
+ *   transparent) so it lays out below the map container in normal flow
+ *   — guaranteed to print regardless of engine quirks.
+ *
+ * Also: ensure the map container itself doesn't clip overflow in print
+ * mode, and stays on a single page (page-break-inside: avoid).
+ *
+ * Scope
+ *   Rules are wrapped in @media print so screen-mode rendering is
+ *   untouched. Class hooks come from MapPreview.jsx:
+ *     - .map-preview              — outer wrapper div
+ *     - .map-preview__attribution — visible OSM attribution chip
+ *
+ * jsdom note
+ *   vitest's jsdom does NOT evaluate @media print rules — the CSSOM
+ *   shape is present but the matched-rule resolution is window-based.
+ *   The companion MapPreview.test.jsx pins the className + text contract
+ *   (the structural part), and this comment is the print-mode-rule
+ *   contract (the behavioural part). Manually verify in browser print
+ *   preview when changing the rules below.
+ *
+ * Follow-up (NOT this slice, allowed-files constraint)
+ *   print.css must be imported from a global entry point (likely
+ *   frontend/src/main.jsx alongside the existing `./styles/responsive.css`
+ *   import). This file's allowed-files for S83 does NOT include main.jsx,
+ *   so the import wire-in is flagged as a separate gap.
+ */
+
+@media print {
+  /* ── MapPreview: attribution must remain visible on paper ─────── */
+
+  .map-preview__attribution {
+    /* Drop absolute positioning — let it flow naturally below the map. */
+    position: static !important;
+    /* Force visible — some engines respect visibility:hidden on
+       parents that overflow the print box. */
+    display: block !important;
+    visibility: visible !important;
+    /* High-contrast for paper. The screen-mode rgba(255,255,255,0.8)
+       background is invisible on white paper; black-on-transparent is
+       the safe combo. */
+    color: #000 !important;
+    background: transparent !important;
+    /* Print typography baseline — 9pt is the standard fineprint size
+       for OSM attribution + license notices. */
+    font-size: 9pt !important;
+    /* Sit immediately after the map. */
+    margin-top: 4px;
+    text-align: right;
+    /* Don't split the attribution across a page break. */
+    page-break-inside: avoid;
+    /* Strip residual screen-mode chrome that might survive into print. */
+    padding: 0 !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+  }
+
+  /* Ensure the map container doesn't clip its overflow in print. The
+     overlay is absolutely-positioned at screen-time; once it goes
+     static at print, the container's overflow:hidden could clip the
+     trailing flow. */
+  .map-preview {
+    overflow: visible !important;
+    page-break-inside: avoid;
+  }
+}

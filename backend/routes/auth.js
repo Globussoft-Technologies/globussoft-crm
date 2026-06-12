@@ -2,6 +2,7 @@ const express = require("express");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const multer = require("multer");
+const speakeasy = require("speakeasy");
 const { verifyToken, verifyRole } = require("../middleware/auth");
 
 const crypto = require("crypto");
@@ -106,14 +107,57 @@ const resetTokens = new Map();
 router.get("/public/tenants", async (req, res) => {
   try {
     const tenants = await prisma.tenant.findMany({
+      // eslint-disable-next-line gbscrm/tenant-scope-finder-heuristic -- safe: PUBLIC route (no verifyToken) listing tenants for the registration dropdown — there is no req.user.tenantId to scope by; the response is intentionally cross-tenant. S36 (FR-3.4 / #919) audit-reviewed false-positive.
       where: { isActive: true },
-      select: { id: true, name: true },
+      // `slug` is included so the customer-register + login pages can map a
+      // `?tenantSlug=` handoff param (e.g. from the Dr. Haror's marketing
+      // site) to a tenant id and pre-select the dropdown.
+      select: { id: true, name: true, slug: true },
       orderBy: { name: 'asc' },
     });
     res.json(tenants);
   } catch (err) {
     console.error("[auth/public/tenants] error:", err.message);
     res.status(500).json({ error: "Failed to load tenants" });
+  }
+});
+
+// Marketing /get-started wizard: check whether an email already belongs to
+// any active user in the system. Returns { exists: boolean } so the frontend
+// can route existing users to /login and new users into the register flow.
+// Intentionally scoped globally (not per-tenant) for the landing-page funnel.
+router.post("/check-email", async (req, res) => {
+  try {
+    const rawEmail = req.body?.email;
+    const email = typeof rawEmail === "string" ? rawEmail.toLowerCase().trim() : "";
+
+    // Consistent-timing guard: even invalid emails run a short fixed delay
+    // so response timing does not leak whether an email exists. 80 ms is
+    // enough to smooth Prisma variance without hurting UX.
+    const checkStart = Date.now();
+
+    let exists = false;
+    if (email && email.includes("@")) {
+      const count = await prisma.user.count({
+        where: {
+          email,
+          deactivatedAt: null,
+        },
+      });
+      exists = count > 0;
+    }
+
+    const elapsed = Date.now() - checkStart;
+    const minDelay = 80;
+    if (elapsed < minDelay) {
+      await new Promise((r) => setTimeout(r, minDelay - elapsed));
+    }
+
+    res.json({ exists });
+  } catch (err) {
+    console.error("[auth/check-email] error:", err.message);
+    // Never expose internal errors; still return the same shape.
+    res.status(500).json({ exists: false });
   }
 });
 
@@ -213,7 +257,7 @@ function validatePasswordComplexity(password) {
 // Register Epic — creates a new Tenant + first User (org owner)
 router.post("/register", async (req, res) => {
   try {
-    const { email, password, name, organizationName, vertical } = req.body;
+    const { email, password, name, organizationName, vertical, themePreference } = req.body;
 
     const pwErr = validatePasswordComplexity(password);
     if (pwErr) return res.status(400).json({ error: pwErr });
@@ -225,6 +269,9 @@ router.post("/register", async (req, res) => {
 
     const validVerticals = ['generic', 'wellness', 'travel'];
     const selectedVertical = validVerticals.includes(vertical) ? vertical : 'generic';
+
+    const validThemes = ['light', 'dark', 'system'];
+    const selectedTheme = validThemes.includes(themePreference) ? themePreference : 'system';
 
     const hashedPassword = await bcrypt.hash(password, 10);
 
@@ -248,7 +295,8 @@ router.post("/register", async (req, res) => {
         tenantId: tenant.id,
         trialStartDate: now,
         trialEndsAt: trialEnd,
-        subscriptionStatus: "TRIAL"
+        subscriptionStatus: "TRIAL",
+        themePreference: selectedTheme
       }
     });
 
@@ -265,7 +313,7 @@ router.post("/register", async (req, res) => {
     setAuthCookie(res, token); // #914 slice 1 — additive HttpOnly cookie (no consumer reads it yet)
     res.status(201).json({
       token,
-      user: { id: user.id, email: user.email, name: user.name, role: user.role, wellnessRole: user.wellnessRole || null },
+      user: { id: user.id, email: user.email, name: user.name, role: user.role, wellnessRole: user.wellnessRole || null, themePreference: user.themePreference || 'system' },
       tenant: { id: tenant.id, name: tenant.name, slug: tenant.slug, plan: tenant.plan, vertical: tenant.vertical || "generic", country: tenant.country || "US", defaultCurrency: tenant.defaultCurrency || "USD", locale: tenant.locale || "en-US", logoUrl: tenant.logoUrl, brandColor: tenant.brandColor }
     });
 
@@ -278,7 +326,7 @@ router.post("/register", async (req, res) => {
 // Signup alias (matches signup page) — same behavior as register
 router.post("/signup", async (req, res) => {
   try {
-    const { email, password, name, organizationName, vertical } = req.body;
+    const { email, password, name, organizationName, vertical, themePreference } = req.body;
 
     const pwErr = validatePasswordComplexity(password);
     if (pwErr) return res.status(400).json({ error: pwErr });
@@ -290,6 +338,9 @@ router.post("/signup", async (req, res) => {
 
     const validVerticals = ['generic', 'wellness', 'travel'];
     const selectedVertical = validVerticals.includes(vertical) ? vertical : 'generic';
+
+    const validThemes = ['light', 'dark', 'system'];
+    const selectedTheme = validThemes.includes(themePreference) ? themePreference : 'system';
 
     const hashedPassword = await bcrypt.hash(password, 10);
 
@@ -313,7 +364,8 @@ router.post("/signup", async (req, res) => {
         tenantId: tenant.id,
         trialStartDate: now,
         trialEndsAt: trialEnd,
-        subscriptionStatus: "TRIAL"
+        subscriptionStatus: "TRIAL",
+        themePreference: selectedTheme
       }
     });
 
@@ -328,7 +380,7 @@ router.post("/signup", async (req, res) => {
     setAuthCookie(res, token); // #914 slice 1 — additive HttpOnly cookie (no consumer reads it yet)
     res.status(201).json({
       token,
-      user: { id: user.id, email: user.email, name: user.name, role: user.role, wellnessRole: user.wellnessRole || null },
+      user: { id: user.id, email: user.email, name: user.name, role: user.role, wellnessRole: user.wellnessRole || null, themePreference: user.themePreference || 'system' },
       tenant: { id: tenant.id, name: tenant.name, slug: tenant.slug, plan: tenant.plan, vertical: tenant.vertical || "generic", country: tenant.country || "US", defaultCurrency: tenant.defaultCurrency || "USD", locale: tenant.locale || "en-US", logoUrl: tenant.logoUrl, brandColor: tenant.brandColor }
     });
 
@@ -347,6 +399,7 @@ router.post("/signup", async (req, res) => {
 router.get("/customer/tenants", async (req, res) => {
   try {
     const tenants = await prisma.tenant.findMany({
+      // eslint-disable-next-line gbscrm/tenant-scope-finder-heuristic -- safe: PUBLIC route (no verifyToken) for the customer self-registration dropdown — no req.user.tenantId exists pre-registration. Returns minimal display fields only (id, name, vertical) — no plan, owner, billing, or branding metadata. S36 (FR-3.4 / #919) audit-reviewed false-positive.
       where: { isActive: true },
       select: { id: true, name: true, vertical: true },
       orderBy: { name: "asc" },
@@ -760,7 +813,10 @@ router.get("/me", verifyToken, async (req, res) => {
   try {
     const user = await prisma.user.findUnique({
       where: { id: req.user.userId },
-      select: { id: true, name: true, email: true, role: true, wellnessRole: true, subBrandAccess: true, profilePicture: true, tenantId: true, createdAt: true, tenant: { select: { id: true, name: true, slug: true, plan: true, vertical: true, country: true, defaultCurrency: true, locale: true, logoUrl: true, brandColor: true } } }
+      // ssoProvider + twoFactorEnabled are additive (no consumer strips the
+      // envelope) — the Profile danger zone uses them to decide whether the
+      // delete-account flow asks for a current password and/or a TOTP code.
+      select: { id: true, name: true, email: true, role: true, wellnessRole: true, subBrandAccess: true, profilePicture: true, tenantId: true, createdAt: true, ssoProvider: true, twoFactorEnabled: true, tenant: { select: { id: true, name: true, slug: true, plan: true, vertical: true, country: true, defaultCurrency: true, locale: true, logoUrl: true, brandColor: true } } }
     });
     if (!user) {
       return res.status(404).json({ error: "User not found" });
@@ -1075,6 +1131,153 @@ router.delete("/me/profile-picture", verifyToken, async (req, res) => {
   } catch (err) {
     console.error("[auth/me/profile-picture] delete error:", err && err.message);
     res.status(500).json({ error: "Failed to remove profile picture" });
+  }
+});
+
+// DELETE /api/auth/me/account — self-service account deletion (all verticals).
+//
+// Privacy policy §10.1 promises in-app account deletion; this is that
+// endpoint. Hard delete, irreversible — relations on User carry explicit
+// onDelete rules (Cascade for personal rows like Notification/ApiKey/
+// Attendance, SetNull for shared business records like Deal/Task/Activity)
+// so a bare user.delete is safe and leaves tenant business data intact.
+//
+// Scope rules:
+//   - sole user of the tenant     → delete the whole TENANT (every model
+//     carries tenant onDelete: Cascade, so this erases all workspace data —
+//     a personal workspace with no remaining members must not orphan data)
+//   - last ADMIN, others remain   → 409 LAST_ADMIN (transfer admin first;
+//     deleting would orphan the workspace for the remaining members)
+//   - everyone else               → delete the USER row only
+//
+// Re-authentication (mirrors the 2FA-disable bar in auth_2fa.js):
+//   - password accounts must present the current password
+//   - SSO accounts hold an unusable random hash (routes/sso.js) so the
+//     confirmDestructive flag is their bar — they re-auth via their IdP
+//   - 2FA-enabled accounts must also present a valid TOTP code
+router.delete("/me/account", verifyToken, async (req, res) => {
+  try {
+    const { password, code, confirmDestructive } = req.body || {};
+
+    // Same explicit-confirmation gate as the GDPR retention endpoints —
+    // a stray scripted DELETE without the flag must not erase an account.
+    if (confirmDestructive !== true) {
+      return res.status(400).json({
+        error: "Account deletion requires explicit confirmation",
+        code: "CONFIRMATION_REQUIRED",
+      });
+    }
+
+    const user = await prisma.user.findFirst({
+      where: { id: req.user.userId, tenantId: req.user.tenantId },
+    });
+    if (!user) return res.status(404).json({ error: "User not found" });
+
+    const isSsoAccount = !!user.ssoProvider;
+    if (!isSsoAccount) {
+      if (!password) {
+        return res.status(400).json({
+          error: "Current password is required to delete your account",
+          code: "PASSWORD_REQUIRED",
+        });
+      }
+      const passwordOk = await bcrypt.compare(password, user.password);
+      if (!passwordOk) {
+        return res.status(400).json({
+          error: "Current password is incorrect",
+          code: "PASSWORD_INCORRECT",
+        });
+      }
+    }
+
+    if (user.twoFactorEnabled) {
+      const totpOk =
+        !!code &&
+        speakeasy.totp.verify({
+          secret: user.twoFactorSecret,
+          encoding: "base32",
+          token: String(code).trim(),
+          window: 1,
+        });
+      if (!totpOk) {
+        return res.status(400).json({
+          error: "A valid two-factor verification code is required",
+          code: "TOTP_REQUIRED",
+        });
+      }
+    }
+
+    const otherUsers = await prisma.user.count({
+      where: { tenantId: req.user.tenantId, id: { not: user.id } },
+    });
+    const deleteScope = otherUsers === 0 ? "tenant" : "user";
+
+    if (deleteScope === "user" && user.role === "ADMIN") {
+      const otherAdmins = await prisma.user.count({
+        where: {
+          tenantId: req.user.tenantId,
+          id: { not: user.id },
+          role: "ADMIN",
+          deactivatedAt: null,
+        },
+      });
+      if (otherAdmins === 0) {
+        return res.status(409).json({
+          error:
+            "You are the only admin of this organization. Promote another member to admin before deleting your account.",
+          code: "LAST_ADMIN",
+        });
+      }
+    }
+
+    // Audit BEFORE the destructive delete (mirrors DELETE /users/:id) so a
+    // mid-cascade failure still leaves a trail. For tenant-scope deletions
+    // the audit row itself is cascaded away with the tenant — full erasure
+    // is the intent there, so that is correct, not a gap.
+    await writeAudit("User", "DELETE_ACCOUNT_SELF", user.id, user.id, req.user.tenantId, {
+      email: user.email,
+      name: user.name,
+      role: user.role,
+      scope: deleteScope,
+      ssoProvider: user.ssoProvider || null,
+    });
+
+    if (deleteScope === "tenant") {
+      await prisma.tenant.delete({ where: { id: req.user.tenantId } });
+    } else {
+      await prisma.user.delete({ where: { id: user.id } });
+    }
+
+    // Kill the session on the same response: drop the HttpOnly cookie and
+    // revoke the jti so the bearer dies server-side immediately (the
+    // frontend also clears its local copy and redirects to /login).
+    clearAuthCookie(res);
+    if (req.user.jti) {
+      try {
+        await prisma.revokedToken.upsert({
+          where: { jti: req.user.jti },
+          update: {},
+          create: {
+            jti: req.user.jti,
+            userId: user.id,
+            tenantId: req.user.tenantId,
+            expiresAt: jtiExpiresAt(req),
+            reason: "account_deleted",
+          },
+        });
+      } catch (revokeErr) {
+        // Tenant-scope deletions cascade RevokedToken's tenant FK away, so
+        // this insert can fail — the tenant (and all its data) is already
+        // gone, so the orphaned-but-signed JWT can only reach empty scopes
+        // until its natural expiry. Non-fatal by design.
+        console.warn("[auth/me/account] post-delete jti revoke failed:", revokeErr.message);
+      }
+    }
+
+    res.json({ ok: true, deleted: deleteScope });
+  } catch (err) {
+    console.error("[auth/me/account] delete error:", err && err.message);
+    res.status(500).json({ error: "Failed to delete account" });
   }
 });
 

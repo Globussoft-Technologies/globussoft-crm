@@ -283,6 +283,108 @@ router.get("/incidents", verifyToken, verifyRole(["ADMIN"]), async (req, res) =>
 });
 
 // ─────────────────────────────────────────────────────────────────────
+// GET /violations — ADMIN-only, tenant-scoped CSP violation observability
+// (S121 — Developer-page tab go/no-go signal for CSP_ENFORCE flip)
+//
+// Why this lives alongside the existing GET /incidents
+// ────────────────────────────────────────────────────
+// /incidents reads from the SecurityIncident model (S5 / FR-3.7 — the
+// MORE-than-just-CSP incident surface with review-trail columns). The
+// existing /api/csp/violations endpoint (slice 3 of #917) reads from
+// AuditLog rows where entity='CSPViolation' — written by routes/csp.js's
+// POST /report handler, which is what S117's CSP_ENFORCE flip cares about.
+//
+// S121 is the operator-facing observability surface for THAT lineage. It
+// gives the Developer-page UI a single endpoint to:
+//   1. List recent CSPViolation AuditLog rows (within the lookback window).
+//   2. Return a `clean24h` boolean — the go/no-go signal for flipping
+//      CSP_ENFORCE=1. The flag is TRUE when zero violations have landed in
+//      the last 24h AND the queried window covers at least the last 24h.
+//
+// The frontend uses `clean24h===true` to render a green "safe to enforce"
+// badge; FALSE renders a red "do not flip yet" warning. Operators only
+// set the env var when the green badge has been stable for 24h.
+//
+// Auth: verifyToken + verifyRole(['ADMIN']). Tenant-scoped via
+// req.user.tenantId so ADMIN of tenant A cannot see tenant B's reports.
+//
+// Query params
+// ────────────
+//   ?limit=N        — clamp 1..500, default 100
+//   ?since=ISO      — lookback lower bound on createdAt, default now-24h
+//
+// Response envelope
+// ─────────────────
+//   {
+//     violations: [<AuditLog row>...],   // newest-first
+//     total:      <int>,                 // length of violations array
+//     sinceIso:   <ISO string>,          // resolved lower bound
+//     clean24h:   <bool>,                // go/no-go signal for CSP_ENFORCE
+//   }
+//
+// NO audit row written — anodyne read-only surface.
+// ─────────────────────────────────────────────────────────────────────
+const VIOLATIONS_DEFAULT_LIMIT = 100;
+const VIOLATIONS_MAX_LIMIT = 500;
+const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
+
+router.get(
+  "/violations",
+  verifyToken,
+  verifyRole(["ADMIN"]),
+  async (req, res) => {
+    try {
+      let limit = parseInt(req.query.limit, 10);
+      if (!Number.isFinite(limit) || limit <= 0) limit = VIOLATIONS_DEFAULT_LIMIT;
+      if (limit > VIOLATIONS_MAX_LIMIT) limit = VIOLATIONS_MAX_LIMIT;
+
+      const now = Date.now();
+      const defaultSince = new Date(now - TWENTY_FOUR_HOURS_MS);
+      let since = defaultSince;
+      if (req.query.since) {
+        const parsed = new Date(String(req.query.since));
+        if (!Number.isNaN(parsed.getTime())) {
+          since = parsed;
+        }
+      }
+
+      const where = {
+        entity: "CSPViolation",
+        tenantId: req.user.tenantId,
+        createdAt: { gte: since },
+      };
+
+      const rows = await prisma.auditLog.findMany({
+        where,
+        orderBy: { createdAt: "desc" },
+        take: limit,
+      });
+
+      // clean24h is the go/no-go signal: ZERO rows AND the lookback window
+      // covers at least the last 24h. A narrower `since=` window (e.g. last
+      // hour) being empty is NOT enough to prove "24h clean" — the operator
+      // hasn't asked the question that S121 is supposed to answer.
+      const windowCoversLast24h = since.getTime() <= now - TWENTY_FOUR_HOURS_MS + 1000;
+      const clean24h = rows.length === 0 && windowCoversLast24h;
+
+      return res.json({
+        violations: rows,
+        total: rows.length,
+        sinceIso: since.toISOString(),
+        clean24h,
+      });
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error("[security/violations] list failed:", err && err.message);
+      return res.status(500).json({
+        error: "Failed to fetch CSP violations",
+        code: "SECURITY_VIOLATIONS_LIST_FAILED",
+      });
+    }
+  },
+);
+
+// ─────────────────────────────────────────────────────────────────────
 // POST /incidents/:id/review — ADMIN, tenant-scoped triage marker
 //
 // Body: { reviewNote: string, severity?: string }

@@ -1,0 +1,13 @@
+node_modules
+dist
+.env
+.env.*
+!.env.example
+coverage
+.nyc_output
+*.test.js
+*.spec.js
+*.test.jsx
+*.spec.jsx
+playwright-report
+test-results

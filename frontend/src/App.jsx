@@ -89,6 +89,7 @@ const ManagePlans = lazy(() => import("./pages/ManagePlans"));
 const Channels = lazy(() => import("./pages/Channels"));
 const LandingPages = lazy(() => import("./pages/LandingPages"));
 const LandingPageBuilder = lazy(() => import("./pages/LandingPageBuilder"));
+const LegalPage = lazy(() => import("./pages/LegalPage"));
 const AuditLog = lazy(() => import("./pages/AuditLog"));
 const Privacy = lazy(() => import("./pages/Privacy"));
 const CalendarSync = lazy(() => import("./pages/CalendarSync"));
@@ -123,6 +124,10 @@ const CSPViolations = lazy(() => import("./pages/admin/CSPViolations"));
 // Voyagr (OJR) per-site API key admin — slice C1 of TRAVEL_CODEABLE_BACKLOG.
 // ADMIN-only; provisions per-sub-brand API keys consumed by /api/v1/voyagr.
 const VoyagrApiKeys = lazy(() => import("./pages/admin/VoyagrApiKeys"));
+// Embed allowlist admin — S128 of TRAVEL_BIG_SCOPE_BACKLOG. ADMIN-only;
+// sets Tenant.embedAllowlistJson which controls per-tenant iframe
+// frame-ancestors enforcement (S38/S39/S66/S129 chain).
+const EmbedAllowlist = lazy(() => import("./pages/admin/EmbedAllowlist"));
 // PRD Gap §1.5 / §1.6 — admin pages for commission profiles + per-staff
 // revenue goals.
 const CommissionProfiles = lazy(() => import("./pages/CommissionProfiles"));
@@ -164,6 +169,9 @@ const StaffPermissions = lazy(() => import("./pages/StaffPermissions"));
 const SsoReturn = lazy(() => import("./pages/SsoReturn"));
 const PaymentSuccess = lazy(() => import("./pages/PaymentSuccess"));
 const PaymentFailed = lazy(() => import("./pages/PaymentFailed"));
+// Landing-page marketing funnel: email check → register → plan selection → Razorpay → success.
+const GetStarted = lazy(() => import("./pages/GetStarted"));
+const RegisterSuccess = lazy(() => import("./pages/RegisterSuccess"));
 // Self-service customer registration. Creates a User with userType='CUSTOMER'
 // — distinct from the wellness patient portal (OTP-based, /wellness/portal).
 const CustomerRegister = lazy(() => import("./pages/CustomerRegister"));
@@ -192,6 +200,22 @@ const TravelSightseeingMaster = lazy(() => import("./pages/travel/SightseeingMas
 // shipped slice 7 (f8768836); this lazy import + Route below register the
 // admin-facing CRUD surface for reusable itinerary templates.
 const TravelItineraryTemplates = lazy(() => import("./pages/travel/ItineraryTemplates"));
+// S99 (TRAVEL_BIG_SCOPE_BACKLOG) — POI rep-suggested pending-approval queue
+// wire-in. SUT page shipped S12 (PoiPendingApprovalQueue.jsx). ADMIN-only
+// surface — backend RBAC enforces; frontend RoleGuard mirrors so non-ADMIN
+// roles hit a friendly access-denied surface rather than a 403 from the
+// queue fetch. Backend route mounted S98 (commit 37d9ce40).
+const TravelPoiPendingApprovalQueue = lazy(() => import("./pages/travel/PoiPendingApprovalQueue"));
+// S49 (TRAVEL_BIG_SCOPE_BACKLOG) — App.jsx route registration for the S31
+// QuoteTemplates admin page (frontend/src/pages/travel/QuoteTemplates.jsx,
+// commit 8fb23237). Sibling to ItineraryTemplates above. Without this lazy
+// import + Route below, the page is unreachable from the running app.
+const TravelQuoteTemplates = lazy(() => import("./pages/travel/QuoteTemplates"));
+// S55 (TRAVEL_BIG_SCOPE_BACKLOG) — App.jsx route registration for the S54
+// CancellationPolicies admin page (frontend/src/pages/travel/CancellationPolicies.jsx,
+// commit 4823b160). Sibling to QuoteTemplates above; both are travel admin
+// CRUD surfaces that mirror the QuotesAdmin / InvoicesAdmin pattern.
+const TravelCancellationPolicies = lazy(() => import("./pages/travel/CancellationPolicies"));
 const TravelLeads = lazy(() => import("./pages/travel/Leads"));
 const TravelPricingRules = lazy(() => import("./pages/travel/PricingRules"));
 const TravelReports = lazy(() => import("./pages/travel/Reports"));
@@ -218,6 +242,20 @@ const TravelMilestoneTracker = lazy(() => import("./pages/travel/MilestoneTracke
 // will swap to GET /api/travel/payables once slice 6 ships the consolidating
 // endpoint (shipped page commit 2a0b00ab).
 const TravelPayables = lazy(() => import("./pages/travel/Payables"));
+// Q9 — travel WhatsApp dispatch log (Wati transport). Read-only list of the
+// WhatsAppMessage rows backend/services/watiClient.js persists (OTPs,
+// reminders, itinerary shares, boarding-pass deliveries). Consumes the
+// existing tenant-scoped GET /api/whatsapp/messages — no new backend
+// surface. Travel-only; the wellness/generic WhatsApp surfaces are separate.
+const TravelWhatsAppLog = lazy(() => import("./pages/travel/WhatsAppLog"));
+// Q9 — travel 2-way WhatsApp chat (Wati). Clone of the wellness agent inbox
+// with sends routed via POST /api/travel/whatsapp/send (watiClient) and
+// inbound delivered by the Wati webhook through the same socket events.
+// The wellness page + its Meta Cloud transport are untouched.
+const TravelWhatsAppChat = lazy(() => import("./pages/travel/WhatsAppChat"));
+// Q9 — read-only Wati template library (templates are authored/approved in
+// the Wati dashboard). Target of the chat sub-components' templatesPath.
+const TravelWhatsAppTemplates = lazy(() => import("./pages/travel/WhatsAppTemplates"));
 // #905 slice 3 frontend consumer — TravelCommissionProfile CRUD admin.
 // Consumes /api/travel/commission-profiles (backend slice 2 b5042743). GET
 // is verifyToken-only (any role can view); POST/PUT gated to ADMIN+MANAGER
@@ -231,9 +269,16 @@ const TravelCommissionProfilesAdmin = lazy(() => import("./pages/travel/Commissi
 // CRUD at /api/travel/flyer-templates) shipped 5c2dd474. Shipped page commit
 // a64c1058.
 const TravelFlyerTemplates = lazy(() => import("./pages/travel/FlyerTemplates"));
+// S79 (TRAVEL_BIG_SCOPE_BACKLOG) — operator-facing flyer share-link admin
+// (companion to S18's backend POST /api/v1/flyers/:id/share mint route).
+// Pick a template → mint → modal with shareUrl + embedCode + copy-clipboards.
+// History panel reads /api/audit-viewer for past mints + Revoke button with
+// graceful 404 when S80 revoke endpoint not yet shipped. ADMIN-gated.
+const TravelFlyerShareAdmin = lazy(() => import("./pages/travel/FlyerShareAdmin"));
 const TravelReligiousPackets = lazy(() => import("./pages/travel/ReligiousPackets"));
 const TravelTmcMicrositePreview = lazy(() => import("./pages/travel/TmcMicrositePreview"));
 const TravelItineraryDetail = lazy(() => import("./pages/travel/ItineraryDetail"));
+const TravelItineraryEditor = lazy(() => import("./pages/travel/ItineraryEditor"));
 const TravelLeadDetail = lazy(() => import("./pages/travel/LeadDetail"));
 // Arc 2 #904 slice — InboundLeads admin page (STUB consumer). Operator-facing
 // list of inbound leads ingested via POST /api/travel/inbound/leads/:channel
@@ -422,6 +467,35 @@ function landingFor(user, tenant) {
     return '/dashboard';
   }
   return configured;
+}
+
+// Honour the marketing-site `?next=` handoff when an already-authenticated
+// user hits /login or /customer/register (the route guards normally bounce
+// them to their landing page, which loses the handoff context). Only
+// accepts in-app paths so a hostile `?next=https://evil.com/phish` falls
+// back to the supplied default.
+function landingWithHandoff(fallback) {
+  try {
+    const next = new URLSearchParams(window.location.search).get('next');
+    if (next && next.startsWith('/') && !next.startsWith('//')) {
+      return decodeURIComponent(next);
+    }
+  } catch (_e) { /* fall through */ }
+  return fallback;
+}
+
+// Detect whether the URL carries marketing-site handoff params. When yes,
+// /customer/register should ALWAYS render its form — even if there's an
+// existing session — because the user explicitly came in to create a new
+// customer account (often distinct from whatever stale admin/staff session
+// happens to be lingering in their browser).
+function hasMarketingHandoff() {
+  try {
+    const p = new URLSearchParams(window.location.search);
+    return !!(p.get('tenantSlug') && p.get('next'));
+  } catch (_e) {
+    return false;
+  }
 }
 
 // Route guard: bounces wellness tenants away from generic-CRM-only pages.
@@ -800,10 +874,15 @@ export default function App() {
                   <Route
                     path="/login"
                     element={
-                      !token ? (
+                      // Same handoff treatment as /customer/register — when
+                      // the marketing-site link is present, let the user
+                      // sign in as whoever they actually came in to be (the
+                      // pre-filled customer email is rarely the same as the
+                      // stale admin/staff session their browser holds).
+                      (!token || hasMarketingHandoff()) ? (
                         <Login />
                       ) : (
-                        <Navigate to={landingFor(user, tenant)} replace />
+                        <Navigate to={landingWithHandoff(landingFor(user, tenant))} replace />
                       )
                     }
                   />
@@ -819,12 +898,29 @@ export default function App() {
                   />
                   <Route
                     path="/customer/register"
-                    element={!token ? <CustomerRegister /> : <Navigate to="/home" />}
+                    element={
+                      // Always show the form when the URL carries a marketing
+                      // handoff — even if there's an existing session — so
+                      // users coming from Dr. Haror's checkout can register a
+                      // new customer account regardless of whatever stale
+                      // staff/admin session their browser is holding.
+                      (!token || hasMarketingHandoff())
+                        ? <CustomerRegister />
+                        : <Navigate to={landingWithHandoff("/home")} replace />
+                    }
                   />
                   <Route path="/sso/return" element={<SsoReturn />} />
                   <Route path="/pricing" element={<Pricing />} />
                   <Route path="/payment-success" element={<PaymentSuccess />} />
                   <Route path="/payment-failed" element={<PaymentFailed />} />
+                  <Route
+                    path="/get-started"
+                    element={!token ? <GetStarted /> : <Navigate to={landingFor(user, tenant)} replace />}
+                  />
+                  <Route path="/register-success" element={<RegisterSuccess />} />
+                  <Route path="/terms-and-conditions" element={<LegalPage page="terms-and-conditions" />} />
+                  <Route path="/privacy-policy" element={<LegalPage page="privacy-policy" />} />
+                  <Route path="/deleted-account-policy" element={<LegalPage page="deleted-account-policy" />} />
                   <Route path="/portal" element={<Portal />} />
                   {/* Travel customer portal — end-user (Contact) login + dashboard
                       + DigiLocker / Aadhaar verification (PRD §4.5 extended).
@@ -887,18 +983,14 @@ export default function App() {
                     path="/kb/:tenantSlug/:slug"
                     element={<KbArticleView />}
                   />
-                  {/* #240: unauthenticated visitors to `/` should land on /login, not the
-                marketing Landing page. The Landing component is still importable
-                for any explicit /landing CTA but is no longer the implicit root.
-                For logged-in users, route to the per-role landingPath when
-                configured (Roles & Permissions admin), falling back to the
-                vertical default — so a new role lands on its configured page
-                even when the user types `/` in the URL bar. */}
+                  {/* Landing page for unauthenticated visitors; authenticated users
+                route to their per-role landingPath. The marketing Landing page
+                links to /login and /signup in its navbar, hero, and footer. */}
                   <Route
                     path="/"
                     element={
                       !token ? (
-                        <Navigate to="/login" replace />
+                        <Landing />
                       ) : (
                         <Navigate to={landingFor(user, tenant)} replace />
                       )
@@ -1159,6 +1251,8 @@ export default function App() {
                     <Route path="admin/csp-violations" element={<CSPViolations />} />
                     {/* Slice C1 — Voyagr per-site API key admin. ADMIN-only. */}
                     <Route path="admin/voyagr-api-keys" element={<RoleGuard allow={["ADMIN"]} message="Voyagr API Keys requires admin access."><VoyagrApiKeys /></RoleGuard>} />
+                    {/* S128 — Embed allowlist admin (sets Tenant.embedAllowlistJson). ADMIN-only. */}
+                    <Route path="admin/embed-allowlist" element={<RoleGuard allow={["ADMIN"]} message="Embed Allowlist requires admin access."><EmbedAllowlist /></RoleGuard>} />
                     {/* PRD Gap §1.5 / §1.6 */}
                     <Route
                       path="commission-profiles"
@@ -1288,6 +1382,39 @@ export default function App() {
                   CRUD surface. Adjacent to sightseeing because both are #907
                   admin pages. SUT page commit f8768836. */}
               <Route path="travel/itinerary-templates" element={<TravelOnly><TravelItineraryTemplates /></TravelOnly>} />
+              {/* S99 (TRAVEL_BIG_SCOPE_BACKLOG) — POI rep-suggested
+                  pending-approval queue. ADMIN-only — backend RBAC enforces
+                  on /api/travel/pois/pending + approve + reject, frontend
+                  RoleGuard mirrors to surface an access-denied panel for
+                  non-ADMIN roles rather than the route's 403. SUT page
+                  shipped S12; backend mount S98 (commit 37d9ce40). */}
+              <Route path="travel/pois/pending" element={
+                <TravelOnly>
+                  <RoleGuard allow={["ADMIN"]} message="POI approval queue requires admin access.">
+                    <TravelPoiPendingApprovalQueue />
+                  </RoleGuard>
+                </TravelOnly>
+              } />
+              {/* S49 (TRAVEL_BIG_SCOPE_BACKLOG) — QuoteTemplates admin
+                  route registration. SUT page commit 8fb23237 (S31). Sits
+                  adjacent to ItineraryTemplates because both are reusable-
+                  template admin surfaces. Backend route mounted as
+                  /api/travel/quote-templates (S48, commit 32630ec1).
+                  No RoleGuard wrap — page is view-by-default for any
+                  logged-in travel-tenant user; write gates (canWrite for
+                  POST/PATCH; Delete for ADMIN-only) live inside the page,
+                  mirroring the QuotesAdmin / InvoicesAdmin convention. */}
+              <Route path="travel/quote-templates" element={<TravelOnly><TravelQuoteTemplates /></TravelOnly>} />
+              {/* S55 (TRAVEL_BIG_SCOPE_BACKLOG) — CancellationPolicies
+                  admin route registration. SUT page commit 4823b160 (S54).
+                  Sits adjacent to QuoteTemplates because both are tenant-
+                  policy admin CRUD surfaces. Backend route mounted as
+                  /api/travel/cancellation-policies (S53, commit 7e6a98b1).
+                  No RoleGuard wrap — page is view-by-default for any
+                  logged-in travel-tenant user; write gates (canWrite for
+                  POST/PATCH; Delete for ADMIN-only) live inside the page,
+                  mirroring the QuotesAdmin / InvoicesAdmin convention. */}
+              <Route path="travel/cancellation-policies" element={<TravelOnly><TravelCancellationPolicies /></TravelOnly>} />
               <Route path="travel/leads" element={<TravelOnly><TravelLeads /></TravelOnly>} />
               <Route path="travel/rfu/customers/:contactId" element={<TravelOnly><TravelRfuCustomerProfile /></TravelOnly>} />
               <Route path="travel/pricing-rules" element={<TravelOnly><TravelPricingRules /></TravelOnly>} />
@@ -1305,6 +1432,13 @@ export default function App() {
                   Operator-facing aggregate of upcoming/overdue payment
                   milestones across all travel invoices. */}
               <Route path="travel/milestones" element={<TravelOnly><TravelMilestoneTracker /></TravelOnly>} />
+              {/* Q9 — travel 2-way WhatsApp chat (Wati transport). The sidebar
+                  WhatsApp item lands here; the read-only dispatch log moved to
+                  the /log sub-path (linked from the chat's status strip).
+                  TravelOnly bounces wellness/generic tenants on both. */}
+              <Route path="travel/whatsapp" element={<TravelOnly><TravelWhatsAppChat /></TravelOnly>} />
+              <Route path="travel/whatsapp/log" element={<TravelOnly><TravelWhatsAppLog /></TravelOnly>} />
+              <Route path="travel/whatsapp/templates" element={<TravelOnly><TravelWhatsAppTemplates /></TravelOnly>} />
               {/* Arc 2 #903 — cross-supplier A/P review (all payables across
                   all suppliers in one table, distinct from per-supplier expand
                   on SuppliersAdmin). Placeholder client-side fan-out fetch
@@ -1321,6 +1455,19 @@ export default function App() {
                   page. Same no-RoleGuard convention as the other view-by-
                   default travel admin pages. */}
               <Route path="travel/flyer-templates" element={<TravelOnly><TravelFlyerTemplates /></TravelOnly>} />
+              {/* S79 — operator UI for flyer share-link admin (mint + revoke +
+                  history). ADMIN-gated. Page itself also surfaces an
+                  access-denied card for non-ADMIN as a defensive layer. */}
+              <Route
+                path="travel/flyer-share-admin"
+                element={
+                  <TravelOnly>
+                    <RoleGuard allow={["ADMIN"]} feature="Flyer Share Admin" roles="admin" lockedInPlace>
+                      <TravelFlyerShareAdmin />
+                    </RoleGuard>
+                  </TravelOnly>
+                }
+              />
               <Route path="travel/religious-packets" element={<TravelOnly><TravelReligiousPackets /></TravelOnly>} />
               <Route path="travel/tmc/microsite-preview" element={<TravelOnly><TravelTmcMicrositePreview /></TravelOnly>} />
               {/* T16 — dedicated TMC catalogue admin page; the
@@ -1328,6 +1475,7 @@ export default function App() {
                   inside DiagnosticBuilder's EngineWeights tab for now. */}
               <Route path="travel/tmc/catalogue" element={<TravelOnly><TravelTmcCatalogueAdmin /></TravelOnly>} />
               <Route path="travel/itineraries/:id" element={<TravelOnly><TravelItineraryDetail /></TravelOnly>} />
+              <Route path="travel/itineraries/:id/edit" element={<TravelOnly><TravelItineraryEditor /></TravelOnly>} />
               <Route path="travel/leads/:contactId" element={<TravelOnly><TravelLeadDetail /></TravelOnly>} />
               {/* Arc 2 #904 slice — InboundLeads admin (STUB client-side
                   filter pending dedicated GET endpoint). Operator surface

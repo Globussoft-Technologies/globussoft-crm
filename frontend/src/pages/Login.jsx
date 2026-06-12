@@ -1,16 +1,31 @@
 import React, { useState, useContext, useEffect } from "react";
-import { useNavigate, Link } from "react-router-dom";
+import { useNavigate, Link, useSearchParams } from "react-router-dom";
 import { Mail, Square } from "lucide-react";
 import { AuthContext } from "../App";
+import { safeNext } from "../utils/safeNext";
 import PasswordInput from "../components/PasswordInput";
 
 // SSO providers (Google / Microsoft) hidden for now — pending tenant-level
 // SSO config + provider credentials. Flip to true to re-enable.
 const SHOW_SSO = false;
 
+// Hosts where the demo quick-login buttons (Generic / Wellness / Travel Stall)
+// MUST NOT render — production customer-facing deployments. The JSX is skipped
+// entirely so the buttons leave no DOM nodes, no React tree, and nothing that
+// surfaces via DevTools inspect. Add new production hostnames to the set.
+const HIDE_QUICK_LOGIN_HOSTS = new Set(["globuscrm.globussoft.com"]);
+const SHOW_QUICK_LOGIN =
+  typeof window === "undefined" ||
+  !HIDE_QUICK_LOGIN_HOSTS.has(window.location.hostname);
+
 const Login = () => {
-  const [email, setEmail] = useState("admin@globussoft.com");
-  const [password, setPassword] = useState("password123");
+  // Read URL params up-front so the email field can be pre-filled from the
+  // marketing-site handoff (?email=...) instead of the demo default.
+  const _initialSearchParams = new URLSearchParams(typeof window !== "undefined" ? window.location.search : "");
+  const _emailFromUrl = (_initialSearchParams.get("email") || "").trim().toLowerCase();
+
+  const [email, setEmail] = useState(_emailFromUrl || "");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [showForgot, setShowForgot] = useState(false);
   const [forgotEmail, setForgotEmail] = useState("");
@@ -42,6 +57,15 @@ const Login = () => {
 
   const { setUser, setToken, setTenant } = useContext(AuthContext);
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+
+  // Handoff params from the external Dr. Haror's marketing site:
+  //   ?tenantSlug=enhanced-wellness — pre-selects + locks the org dropdown
+  //   ?next=/wellness/book-appointment?... — post-login landing path
+  // safeNext() rejects external URLs so a hostile ?next= can't redirect off-app.
+  const nextParam = searchParams.get("next");
+  const tenantSlugParam = searchParams.get("tenantSlug");
+  const lockedToTenantSlug = !!tenantSlugParam;
 
   // Load the public tenant list to populate the Organization dropdown.
   useEffect(() => {
@@ -51,6 +75,25 @@ const Login = () => {
       .then((data) => { if (!cancelled) setOrgs(Array.isArray(data) ? data : []); })
       .catch(() => { if (!cancelled) setOrgs([]); });
     return () => { cancelled = true; };
+  }, []);
+
+  // When the marketing-site handoff passes ?tenantSlug=, pre-select the
+  // dropdown once the list arrives. The select is rendered disabled (below)
+  // so the user stays scoped to the clinic they started from.
+  useEffect(() => {
+    if (!tenantSlugParam || orgs.length === 0) return;
+    const match = orgs.find((t) => t.slug === tenantSlugParam);
+    if (match) {
+      setOrgTenantId((prev) => (prev ? prev : String(match.id)));
+    }
+  }, [tenantSlugParam, orgs]);
+  // Pre-fill email when redirected from the /get-started wizard.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const prefilled = params.get("email");
+    if (prefilled) {
+      setEmail(prefilled);
+    }
   }, []);
 
   // Handle SSO redirect callback — server bounces user here with ?sso_token=...&tenant=...
@@ -109,13 +152,16 @@ const Login = () => {
             document.title,
             window.location.pathname,
           );
-          const destination =
+          const verticalDefault =
             parsedTenant?.vertical === "wellness"
               ? "/wellness"
               : parsedTenant?.vertical === "travel"
               ? "/travel"
               : "/dashboard";
-          navigate(destination);
+          // Honour the ?next= handoff from the external marketing site if it
+          // came along on the SSO callback URL. safeNext() rejects external
+          // hosts so a hostile ?next= can't redirect off-app.
+          navigate(safeNext(nextParam) || verticalDefault);
         });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -244,8 +290,32 @@ const Login = () => {
     const v = data.tenant?.vertical || "generic";
     document.documentElement.setAttribute("data-vertical", v);
     document.body.setAttribute("data-vertical", v);
-    const target = await resolveLandingPath(data);
-    navigate(target);
+    // Honour the ?next= handoff from the marketing site (safeNext rejects
+    // external URLs); fall back to the existing role/vertical-aware resolver.
+    const target = safeNext(nextParam) || (await resolveLandingPath(data));
+    console.warn(`[Login handoff] navigating to="${target}"`);
+    // Critical: when the handoff target carries a query string (the
+    // marketing-site serviceId/date/time prefill), use a full page reload
+    // instead of react-router's navigate(). React batches setToken /
+    // setUser / setTenant state updates, so navigate() runs while the
+    // outer route guard still sees `token === null` and renders
+    // <Navigate to="/login" /> — that re-render strips the query string.
+    // window.location.assign forces a fresh page load; the token survives
+    // via sessionStorage and user/tenant via localStorage (both written
+    // synchronously above).
+    const hasHandoff = target.indexOf("?") > -1;
+    if (hasHandoff) {
+      // Mirror user/tenant to localStorage explicitly so the fresh page
+      // load has them on first render (the useEffect that normally does
+      // this hasn't fired yet).
+      try {
+        if (data.user) localStorage.setItem("user", JSON.stringify(data.user));
+        if (data.tenant) localStorage.setItem("tenant", JSON.stringify(data.tenant));
+      } catch { /* ignore */ }
+      window.location.assign(target);
+    } else {
+      navigate(target);
+    }
   };
 
   const performLogin = async (loginEmail, loginPassword, tenantId) => {
@@ -455,6 +525,8 @@ const Login = () => {
                   className="input-field"
                   value={orgTenantId}
                   onChange={(e) => setOrgTenantId(e.target.value)}
+                  disabled={lockedToTenantSlug}
+                  title={lockedToTenantSlug ? "Scoped by the booking link you arrived from" : undefined}
                 >
                   <option value="">All organizations</option>
                   {orgs.map((o) => (
@@ -724,20 +796,24 @@ const Login = () => {
               </div>
             )}
 
+            {SHOW_QUICK_LOGIN && (
+              <>
             <QuickLoginSection
               title="Generic CRM"
               accounts={[
                 {
                   label: "Admin",
                   email: "admin@globussoft.com",
+                  password: "password123",
                   color: "#10b981",
                 },
                 {
                   label: "Manager",
                   email: "manager@crm.com",
+                  password: "password123",
                   color: "#f59e0b",
                 },
-                { label: "User", email: "user@crm.com", color: "#3b82f6" },
+                { label: "User", email: "user@crm.com", password: "password123", color: "#3b82f6" }
               ]}
               onLogin={quickLogin}
             />
@@ -748,18 +824,21 @@ const Login = () => {
                 {
                   label: "Owner (Rishu)",
                   email: "rishu@enhancedwellness.in",
+                  password: "password123",
                   color: "#a855f7",
                 },
                 {
                   label: "Demo Admin",
                   email: "admin@wellness.demo",
+                  password: "password123",
                   color: "#a855f7",
                 },
                 {
                   label: "Demo User",
                   email: "user@wellness.demo",
+                  password: "password123",
                   color: "#ec4899",
-                },
+                }
               ]}
               onLogin={quickLogin}
             />
@@ -771,28 +850,33 @@ const Login = () => {
                 {
                   label: "Owner (Yasin)",
                   email: "yasin@travelstall.in",
+                  password: "password123",
                   color: "#a855f7",
                 },
                 {
                   label: "Demo Admin",
                   email: "admin@travelstall.demo",
+                  password: "password123",
                   color: "#a855f7",
                 },
                 {
                   label: "TMC Operator",
                   email: "tmc-ops@travelstall.demo",
+                  password: "password123",
                   color: "#f59e0b",
                 },
                 {
                   label: "RFU Advisor",
                   email: "rfu-advisor@travelstall.demo",
+                  password: "password123",
                   color: "#10b981",
                 },
                 {
                   label: "Telecaller",
                   email: "telecaller@travelstall.demo",
+                  password: "password123",
                   color: "#3b82f6",
-                },
+                }
               ]}
               onLogin={quickLogin}
               extraCell={
@@ -851,6 +935,8 @@ const Login = () => {
                 </Link>
               }
             />
+              </>
+            )}
 
             <div
               style={{
@@ -963,7 +1049,7 @@ function QuickLoginSection({ title, accounts, onLogin, columns, extraCell }) {
             <button
               key={a.email}
               type="button"
-              onClick={() => onLogin(a.email, "password123")}
+              onClick={() => onLogin(a.email, a.password || "password123")}
               style={{
                 padding: "0.55rem 0.45rem",
                 borderRadius: "8px",

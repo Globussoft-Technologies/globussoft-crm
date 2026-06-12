@@ -51,6 +51,7 @@ const {
 } = require("../middleware/travelGuards");
 const { computeWindowOpenAt } = require("../lib/webCheckinWindow");
 const { resolveForSubBrand } = require("../lib/subBrandConfig");
+const watiClient = require("../services/watiClient");
 
 const VALID_STATUSES = Object.freeze([
   "pending",
@@ -1307,10 +1308,30 @@ router.post(
       });
       const cfg = subBrand ? resolveForSubBrand(tenantCfgRow, subBrand) : {};
       console.log(
-        `[wati-stub] would have sent boarding pass for PNR ${existing.pnr} ` +
-          `to ${passengerPhone || "<unknown phone>"} via WhatsApp (pending Q9 creds) — ` +
-          `would-route subBrand=${subBrand || "(none)"} wabaId=${cfg.wabaId || "(no-config)"}`,
+        `[wati] boarding pass for PNR ${existing.pnr} ` +
+          `to ${passengerPhone || "<unknown phone>"} — dispatch via watiClient — ` +
+          `subBrand=${subBrand || "(none)"} wabaId=${cfg.wabaId || "(no-config)"}`,
       );
+      // WhatsApp dispatch via watiClient (Q9) — sends the boarding-pass
+      // link. Stub mode (no WATI creds) logs + writes a QUEUED row; the
+      // deliveredAt mark below happens either way (matches the old stub
+      // contract where the DB transition was always real).
+      if (passengerPhone) {
+        const portalBase = process.env.PUBLIC_BASE_URL || "https://crm.globusdemos.com";
+        const passLink = /^https?:\/\//i.test(existing.boardingPassUrl)
+          ? existing.boardingPassUrl
+          : `${portalBase}${existing.boardingPassUrl}`;
+        await watiClient.sendBestEffort({
+          tenantId: req.travelTenant.id,
+          subBrand,
+          toPhone: passengerPhone,
+          contactId: existing.contactId || null,
+          fallbackText:
+            `Boarding pass for ${existing.passengerName} — flight ` +
+            `${existing.airlineCode} ${existing.flightNumber}, PNR ${existing.pnr}: ${passLink}`,
+          broadcastName: "travel-boarding-pass-delivery",
+        });
+      }
 
       const updated = await prisma.webCheckin.update({
         where: { id },

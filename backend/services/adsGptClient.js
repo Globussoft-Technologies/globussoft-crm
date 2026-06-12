@@ -11,6 +11,15 @@
  * is the second consumer of the cap helper (first: backend/lib/llmRouter.js
  * at commit cb0901f).
  *
+ * Per-tenant API-key resolution (S67 — 2026-06-10):
+ *   `getAdsGptKey(tenantId)` mirrors `getLlmKey` from backend/lib/llmRouter.js
+ *   (S45 commit dd654e4f). Checks SupplierCredential category 'adsgpt-key'
+ *   for the given tenant; falls back to process.env.ADSGPT_API_KEY on miss.
+ *   Returns null if both miss. NOTE: `process.env.ADSGPT_API_KEY` is the
+ *   placeholder name — final env-var lands with Yasin's handover. Adopted
+ *   ahead of cred-drop so the cred wiring (operator seeds row → call uses
+ *   it; no operator seeded → falls back to ENV) is in place from day-1.
+ *
  * Cred chase: docs/CREDS_TRACKER.md Cat 1 Q1 row + docs/PRD_ADSGPT_MARKETING_REPORTS.md §5.
  * Mirror clients for the swap-when-cred pattern:
  *   - backend/services/digilockerClient.js (commit 1babe1b — STUB to real swap reference)
@@ -62,6 +71,66 @@ async function computeMonthlySpendCents(_tenantId) {
 }
 
 /**
+ * Resolve the AdsGPT API key for a tenant. Mirrors `getLlmKey` from
+ * backend/lib/llmRouter.js (S45) so operator UX stays consistent across
+ * integrations:
+ *
+ *   1. Without `tenantId`        → ENV only (matches pre-S67 contract).
+ *   2. With `tenantId`           → check SupplierCredential row first
+ *                                  (category 'adsgpt-key', any supplierName);
+ *                                  fall back to ENV on miss.
+ *   3. Both missing              → return null. Caller decides whether to
+ *                                  raise an "integration disabled" path.
+ *
+ * Best-effort: any Prisma / decrypt error is logged and treated as a
+ * miss (caller falls through to ENV). NEVER throws.
+ *
+ * Placeholder env-var: `ADSGPT_API_KEY`. Yasin's handover (Q1 cred chase)
+ * may pick a different final name (e.g. `ADSGPT_KEY`); when it lands, just
+ * update the `process.env.<NAME>` read here — the SupplierCredential
+ * lookup layer above stays unchanged.
+ *
+ * @param {number} [tenantId] — optional. Omit for ENV-only behaviour.
+ * @returns {Promise<string|null>}
+ */
+async function getAdsGptKey(tenantId) {
+  // Placeholder env-var name — finalises with Yasin's handover. See header.
+  const envValue = process.env.ADSGPT_API_KEY || null;
+
+  // No tenant scope → ENV only.
+  if (!tenantId) {
+    return envValue;
+  }
+
+  try {
+    const prisma = require('../lib/prisma');
+    if (
+      !prisma.supplierCredential ||
+      typeof prisma.supplierCredential.findFirst !== 'function'
+    ) {
+      return envValue;
+    }
+    const row = await prisma.supplierCredential.findFirst({
+      where: { tenantId, category: 'adsgpt-key' },
+      select: { passwordEncrypted: true },
+    });
+    if (row && row.passwordEncrypted) {
+      // Lazy require to avoid circular bombs in test harnesses that
+      // hand-roll the crypto layer (matches llmRouter.getLlmKey shape).
+      const { decrypt } = require('../lib/fieldEncryption');
+      const plaintext = decrypt(row.passwordEncrypted);
+      if (plaintext) return plaintext;
+    }
+  } catch (e) {
+    console.error(
+      `[adsGptClient] getAdsGptKey supplierCredential lookup failed (non-fatal, falling back to ENV): ${e.message}`,
+    );
+  }
+
+  return envValue;
+}
+
+/**
  * Fetch ad-platform performance report from AdsGPT.
  *
  * STUB: returns canned shape matching the contract described in
@@ -72,6 +141,22 @@ async function computeMonthlySpendCents(_tenantId) {
 async function fetchAdReport({ tenantId, subBrand, fromDate, toDate, platform = 'all' }) {
   if (!tenantId) throw new Error('tenantId required');
   await checkBudgetCap(tenantId);
+
+  // Resolve API key via the per-tenant SupplierCredential resolver (S67).
+  // In stub mode the key isn't actually used by the canned response, but
+  // we resolve it here so:
+  //   (a) the cred-drop swap-in is a one-line change (just consume the key
+  //       in the real fetch() body that replaces this stub);
+  //   (b) operators with a SupplierCredential row seeded ahead of cred-drop
+  //       get the row's row-row hit emitted in observability immediately;
+  //   (c) the `module.exports.getAdsGptKey` indirection keeps the CJS
+  //       self-mocking seam intact for vitest.
+  // We deliberately do NOT throw on null — the stub must continue to
+  // return the canned shape regardless, so downstream UI keeps rendering
+  // the "integration pending" placeholder. Real implementation post-cred
+  // will branch: `if (!apiKey) throw new Error('ADSGPT_NOT_YET_ENABLED')`.
+  const apiKey = await module.exports.getAdsGptKey(tenantId);
+  void apiKey; // unused in stub mode — consumed in post-cred swap-in.
 
   console.log(`[adsGptClient STUB] fetchAdReport called: tenantId=${tenantId} subBrand=${subBrand} platform=${platform} window=${fromDate}..${toDate}`);
 
@@ -95,4 +180,4 @@ async function fetchAdReport({ tenantId, subBrand, fromDate, toDate, platform = 
   };
 }
 
-module.exports = { fetchAdReport, checkBudgetCap, computeMonthlySpendCents, INTEGRATION };
+module.exports = { fetchAdReport, checkBudgetCap, computeMonthlySpendCents, getAdsGptKey, INTEGRATION };

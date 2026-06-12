@@ -39,7 +39,7 @@
 // mode allows any starting status (Draft is the sensible default).
 
 import { useEffect, useState, useContext } from "react";
-import { Receipt, Plus, Pencil, Trash2, FileDown } from "lucide-react";
+import { Receipt, Plus, Pencil, Trash2, FileDown, Ban } from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { formatMoney } from "../../utils/money";
@@ -203,6 +203,33 @@ export default function InvoicesAdmin() {
   // math). totalTds=0 OR status not in {Issued,Paid} → tiles hidden so
   // operators never see a "TDS: 0" row on routine invoices. PRD §3.
   const [editingTds, setEditingTds] = useState(null); // { totalTds, totalAmount, currency } | null
+
+  // S56 (#920) — Void-confirmation modal state.
+  //
+  // Surfaces the cancel-preview payload from S58's
+  // GET /api/travel/invoices/:id/cancel-preview BEFORE the operator
+  // commits POST /:id/void. Per the S33 follow-up #4 backlog item:
+  // operators need to see "Refund: ₹X per TMC Default tier — 14d before
+  // service" up-front so they understand what auto-issuance the void
+  // will trigger.
+  //
+  // Discriminator key is `preview.reason` ('OK' | 'NO_POLICY_RESOLVED'),
+  // NOT `refundAmount === null` — `refundAmount: 0` is a valid
+  // no-refund-but-policy-matched state (the 0% tier surfaces the matched
+  // policy without auto-issuing a credit note).
+  //
+  // The reason text input is REQUIRED by the backend (5..500 chars,
+  // INVALID_VOID_REASON). The preview panel is purely informational.
+  //
+  // On preview-fetch failure (network / 404 / 409) we render a soft
+  // error line and STILL allow the operator to proceed with the void —
+  // the preview is a courtesy surface, not a hard gate.
+  const [voidingInv, setVoidingInv] = useState(null); // { id, invoiceNum, currency } | null
+  const [voidPreview, setVoidPreview] = useState(null);
+  const [voidPreviewLoading, setVoidPreviewLoading] = useState(false);
+  const [voidPreviewError, setVoidPreviewError] = useState(false);
+  const [voidReason, setVoidReason] = useState("");
+  const [voiding, setVoiding] = useState(false);
 
   const load = () => {
     setLoading(true);
@@ -374,6 +401,82 @@ export default function InvoicesAdmin() {
       load();
     } catch (err) {
       notify.error(err?.body?.error || err?.message || "Delete failed");
+    }
+  };
+
+  // S56 — open the void-confirmation modal. Fires the cancel-preview
+  // fetch immediately so the operator sees the refund tier before
+  // confirming. Preview fetch failures degrade gracefully (panel
+  // surfaces "Could not load refund preview…" but Confirm stays
+  // available).
+  const openVoid = (inv) => {
+    if (!inv?.id) return;
+    setVoidingInv({
+      id: inv.id,
+      invoiceNum: inv.invoiceNum || `#${inv.id}`,
+      currency: inv.currency || "INR",
+    });
+    setVoidPreview(null);
+    setVoidPreviewError(false);
+    setVoidReason("");
+    setVoidPreviewLoading(true);
+    fetchApi(`/api/travel/invoices/${inv.id}/cancel-preview`)
+      .then((preview) => {
+        setVoidPreview(preview || null);
+        setVoidPreviewError(false);
+      })
+      .catch(() => {
+        // Network failure / 404 / 409 — soft error in the modal,
+        // operator can still proceed.
+        setVoidPreview(null);
+        setVoidPreviewError(true);
+      })
+      .finally(() => setVoidPreviewLoading(false));
+  };
+
+  const closeVoid = () => {
+    setVoidingInv(null);
+    setVoidPreview(null);
+    setVoidPreviewError(false);
+    setVoidPreviewLoading(false);
+    setVoidReason("");
+    setVoiding(false);
+  };
+
+  // S56 — confirm the void. POSTs the reason to /:id/void (the dedicated
+  // audit-logged void endpoint — separate from the PUT /:id status
+  // transition which doesn't capture a reason). On success the response
+  // envelope (additive) may carry `creditNote` + `policyApplied` from
+  // S33's auto-CR-NOTE issuance — we surface a contextual success toast.
+  const confirmVoid = async () => {
+    if (!voidingInv?.id) return;
+    const reason = (voidReason || "").trim();
+    if (reason.length < 5 || reason.length > 500) {
+      notify.error("Void reason must be 5..500 characters");
+      return;
+    }
+    setVoiding(true);
+    try {
+      const resp = await fetchApi(
+        `/api/travel/invoices/${voidingInv.id}/void`,
+        {
+          method: "POST",
+          body: JSON.stringify({ reason }),
+        },
+      );
+      // S33-aware success copy: surface auto-issued credit note if any.
+      if (resp?.creditNote && resp?.policyApplied) {
+        notify.success(
+          `Invoice ${voidingInv.invoiceNum} voided + credit note auto-issued (${resp.policyApplied.policyName})`,
+        );
+      } else {
+        notify.success(`Invoice ${voidingInv.invoiceNum} voided`);
+      }
+      closeVoid();
+      load();
+    } catch (err) {
+      notify.error(err?.body?.error || err?.message || "Failed to void invoice");
+      setVoiding(false);
     }
   };
 
@@ -722,6 +825,24 @@ export default function InvoicesAdmin() {
                             <FileDown size={16} />
                           )}
                         </button>
+                        {/* S56 — dedicated Void button (POST /:id/void with
+                            audit-logged reason + cancel-preview surface).
+                            Hidden once an invoice is Voided (terminal state).
+                            Draft invoices skip the policy resolver (nothing
+                            was billed), but the operator may still want a
+                            reasoned void rather than the silent PUT-status
+                            transition, so we surface the button for Draft too. */}
+                        {inv.status !== "Voided" && (
+                          <button
+                            type="button"
+                            onClick={() => openVoid(inv)}
+                            title={`Void invoice ${inv.invoiceNum}`}
+                            aria-label={`Void invoice ${inv.invoiceNum}`}
+                            style={{ ...iconBtn, color: "var(--warning-color, #f59e0b)" }}
+                          >
+                            <Ban size={16} />
+                          </button>
+                        )}
                         <button
                           type="button"
                           onClick={() => handleDelete(inv)}
@@ -784,6 +905,123 @@ export default function InvoicesAdmin() {
           </table>
         )}
       </div>
+
+      {/* S56 — Void-confirmation modal.
+          Renders the cancel-preview panel BEFORE the operator commits
+          POST /:id/void so they see the refund tier the policy resolver
+          will apply (and the credit-note that S33's auto-issuance will
+          create). Preview-fetch failures degrade to a soft error line;
+          Confirm stays available so a missed preview doesn't block
+          operator action. */}
+      {voidingInv && (
+        <div
+          data-testid="void-modal-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Void invoice ${voidingInv.invoiceNum}`}
+          style={modalOverlay}
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !voiding) closeVoid();
+          }}
+        >
+          <div className="glass" style={modalCard} data-testid="void-modal">
+            <h2 style={{ margin: 0, fontSize: "1.15rem", fontWeight: 600 }}>
+              Void invoice {voidingInv.invoiceNum}?
+            </h2>
+            <p
+              style={{
+                margin: "8px 0 12px",
+                color: "var(--text-secondary)",
+                fontSize: "0.9rem",
+              }}
+            >
+              This marks the invoice as Voided. The cancellation policy below
+              determines whether a credit note is auto-issued.
+            </p>
+
+            {/* Cancel-preview panel — shows ONE of:
+                  - Loading (preview fetch in flight)
+                  - reason='OK' refund line
+                  - reason='NO_POLICY_RESOLVED' warning line
+                  - fetch-failure soft error line. */}
+            <div data-testid="void-preview-panel" style={previewPanel}>
+              {voidPreviewLoading ? (
+                <div style={previewLoading}>Loading refund preview&hellip;</div>
+              ) : voidPreviewError ? (
+                <div style={previewError}>
+                  Could not load refund preview &mdash; review the policy before confirming.
+                </div>
+              ) : voidPreview && voidPreview.reason === "OK" && voidPreview.policyApplied ? (
+                <div style={previewOk}>
+                  Refund: ₹{Number(voidPreview.refundAmount || 0).toLocaleString("en-IN")} per{" "}
+                  {voidPreview.policyApplied.policyName} (
+                  {voidPreview.refundPercent}% &mdash;{" "}
+                  {voidPreview.daysBeforeServiceStart}d before service)
+                </div>
+              ) : voidPreview && voidPreview.reason === "NO_POLICY_RESOLVED" ? (
+                <div style={previewWarn}>
+                  No matching cancellation policy. Voiding will NOT auto-issue a credit note.
+                </div>
+              ) : (
+                // Defensive fallback — preview shape unrecognised (e.g.
+                // missing reason field). Treat as no-policy.
+                <div style={previewWarn}>
+                  No matching cancellation policy. Voiding will NOT auto-issue a credit note.
+                </div>
+              )}
+            </div>
+
+            <label
+              htmlFor="void-reason-input"
+              style={{
+                display: "block",
+                marginTop: 12,
+                marginBottom: 4,
+                fontSize: 12,
+                fontWeight: 600,
+                color: "var(--text-secondary)",
+                textTransform: "uppercase",
+                letterSpacing: 0.4,
+              }}
+            >
+              Void reason (required, 5..500 chars)
+            </label>
+            <textarea
+              id="void-reason-input"
+              value={voidReason}
+              onChange={(e) => setVoidReason(e.target.value)}
+              aria-label="Void reason"
+              placeholder="e.g. Customer cancelled trip — full refund issued via card."
+              rows={3}
+              style={textareaStyle}
+              disabled={voiding}
+            />
+
+            <div style={{ display: "flex", gap: 8, marginTop: 14, justifyContent: "flex-end" }}>
+              <button
+                type="button"
+                onClick={closeVoid}
+                disabled={voiding}
+                style={secondaryBtn}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmVoid}
+                disabled={voiding}
+                style={{
+                  ...primaryBtn,
+                  background: "var(--danger-color, #f43f5e)",
+                }}
+                aria-label={`Confirm void of invoice ${voidingInv.invoiceNum}`}
+              >
+                {voiding ? "Voiding…" : "Confirm Void"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -894,4 +1132,61 @@ const tdsTileValue = {
   fontSize: 18,
   fontWeight: 700,
   color: "var(--text-primary)",
+};
+// S56 — void-confirmation modal styling. Overlay dims the page, modal
+// card sits centered. Preview panel + textarea borrow the existing
+// inputStyle / tdsTile shape so the visual continuity reads as part of
+// the page's design language.
+const modalOverlay = {
+  position: "fixed",
+  inset: 0,
+  background: "rgba(0,0,0,0.55)",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  zIndex: 1000,
+  padding: 16,
+};
+const modalCard = {
+  width: "min(540px, 100%)",
+  padding: 20,
+  borderRadius: 10,
+  background: "var(--surface-color, #1f2937)",
+  border: "1px solid var(--border-color)",
+};
+const previewPanel = {
+  padding: "10px 12px",
+  borderRadius: 6,
+  border: "1px solid var(--border-color)",
+  background: "var(--bg-color, rgba(255,255,255,0.04))",
+  fontSize: 13,
+};
+const previewLoading = {
+  color: "var(--text-secondary)",
+  fontStyle: "italic",
+};
+const previewOk = {
+  color: "var(--success-color, #22c55e)",
+  fontWeight: 600,
+};
+const previewWarn = {
+  color: "var(--warning-color, #f59e0b)",
+  fontWeight: 600,
+};
+const previewError = {
+  color: "var(--danger-color, #f43f5e)",
+  fontWeight: 600,
+};
+const textareaStyle = {
+  width: "100%",
+  padding: "8px 10px",
+  borderRadius: 6,
+  border: "1px solid var(--border-color)",
+  background: "var(--bg-color, rgba(255,255,255,0.05))",
+  color: "var(--text-primary)",
+  fontSize: 13,
+  outline: "none",
+  resize: "vertical",
+  fontFamily: "inherit",
+  boxSizing: "border-box",
 };

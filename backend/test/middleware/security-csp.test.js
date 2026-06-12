@@ -197,19 +197,73 @@ describe('#921 slice S4 — allowIframeEmbedding factory', () => {
   });
 });
 
-describe('#921 slice S4 — readTenantEmbedAllowlist', () => {
-  // Pinned to null today — the Tenant.embedAllowlistJson column doesn't
-  // exist yet (FOLLOW-UP gap). When the schema slice lands, this test
-  // must be updated to assert the JSON.parse(t.embedAllowlistJson) path
-  // alongside the Prisma findUnique. Keeping the pin prevents accidental
-  // shipping of a half-wired reader.
-  test('returns null today (Tenant.embedAllowlistJson column not yet shipped)', async () => {
-    const fakePrisma = { tenant: { findUnique: vi.fn() } };
+describe('#921 slice S39 — readTenantEmbedAllowlist (real Prisma read)', () => {
+  // Slice S39 (2026-06-10) added the `Tenant.embedAllowlistJson String? @db.Text`
+  // column and flipped this reader from a stub-returning-null to a real
+  // `prisma.tenant.findUnique({ select: { embedAllowlistJson: true } })` →
+  // `JSON.parse` → `Array.isArray` chain. The reader returns null whenever
+  // (a) the column is null, (b) the JSON is malformed, (c) the parsed value
+  // is non-array, or (d) `prisma`/`tenantId` is missing — never throws.
+  // S4's "returns null today" pin is intentionally rewritten here; the new
+  // pins cover the real read paths.
+
+  test('returns the parsed array when the column holds a valid JSON array', async () => {
+    const fakePrisma = {
+      tenant: {
+        findUnique: vi.fn().mockResolvedValue({
+          embedAllowlistJson: '["https://partner-a.test","https://partner-b.test"]',
+        }),
+      },
+    };
+    const result = await readTenantEmbedAllowlist(fakePrisma, 7);
+    expect(result).toEqual(['https://partner-a.test', 'https://partner-b.test']);
+    expect(fakePrisma.tenant.findUnique).toHaveBeenCalledWith({
+      where: { id: 7 },
+      select: { embedAllowlistJson: true },
+    });
+  });
+
+  test('returns null when tenant.embedAllowlistJson is null', async () => {
+    const fakePrisma = {
+      tenant: { findUnique: vi.fn().mockResolvedValue({ embedAllowlistJson: null }) },
+    };
+    const result = await readTenantEmbedAllowlist(fakePrisma, 42);
+    expect(result).toBeNull();
+    expect(fakePrisma.tenant.findUnique).toHaveBeenCalledOnce();
+  });
+
+  test('returns null on malformed JSON (catch-and-warn, never throws)', async () => {
+    const fakePrisma = {
+      tenant: {
+        findUnique: vi.fn().mockResolvedValue({ embedAllowlistJson: 'not-json{[' }),
+      },
+    };
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const result = await readTenantEmbedAllowlist(fakePrisma, 1);
     expect(result).toBeNull();
-    // findUnique not called — the function short-circuits to null until
-    // the column lands.
-    expect(fakePrisma.tenant.findUnique).not.toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
+  test('returns null when parsed JSON is not an array (defensive — object/string/number)', async () => {
+    const fakePrisma = {
+      tenant: {
+        findUnique: vi
+          .fn()
+          .mockResolvedValueOnce({ embedAllowlistJson: '{"not":"array"}' })
+          .mockResolvedValueOnce({ embedAllowlistJson: '"plain-string"' })
+          .mockResolvedValueOnce({ embedAllowlistJson: '42' }),
+      },
+    };
+    await expect(readTenantEmbedAllowlist(fakePrisma, 1)).resolves.toBeNull();
+    await expect(readTenantEmbedAllowlist(fakePrisma, 1)).resolves.toBeNull();
+    await expect(readTenantEmbedAllowlist(fakePrisma, 1)).resolves.toBeNull();
+  });
+
+  test('short-circuits to null when prisma or tenantId is missing', async () => {
+    await expect(readTenantEmbedAllowlist(null, 1)).resolves.toBeNull();
+    await expect(readTenantEmbedAllowlist({}, null)).resolves.toBeNull();
+    await expect(readTenantEmbedAllowlist(undefined, undefined)).resolves.toBeNull();
   });
 
   test('is async (returns a Promise)', async () => {

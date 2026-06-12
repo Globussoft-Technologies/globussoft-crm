@@ -29,6 +29,7 @@
 const cron = require("node-cron");
 const prisma = require("../lib/prisma");
 const { resolveForSubBrand } = require("../lib/subBrandConfig");
+const watiClient = require("../services/watiClient");
 
 const PORTAL_BASE = process.env.PUBLIC_BASE_URL || "https://crm.globusdemos.com";
 
@@ -97,6 +98,23 @@ async function runJourneyRemindersForTenant(tenantId) {
   });
   const rfuCfg = resolveForSubBrand(tenant, "rfu");
 
+  // Batch-fetch contact phones for the WhatsApp dispatch leg (Q9).
+  // Best-effort: a lookup failure only skips the WA leg — the milestone
+  // notification loop below keeps running regardless.
+  let contactById = {};
+  try {
+    const contactIds = [...new Set(itineraries.map((i) => i.contactId).filter(Boolean))];
+    const contacts = contactIds.length
+      ? await prisma.contact.findMany({
+          where: { id: { in: contactIds } },
+          select: { id: true, phone: true, name: true },
+        })
+      : [];
+    contactById = Object.fromEntries(contacts.map((c) => [c.id, c]));
+  } catch (e) {
+    console.error(`[TravelJourneyReminders] contact phone lookup failed (WA leg skipped): ${e.message}`);
+  }
+
   let fired = 0;
   let skipped = 0;
 
@@ -136,9 +154,27 @@ async function runJourneyRemindersForTenant(tenantId) {
         });
         console.log(
           `[TravelJourneyReminders] tenant ${tenantId} itin ${itin.id} milestone ${m.tag} fired ` +
-            `(WhatsApp/email dispatch pending Wati creds — would-route subBrand=rfu ` +
+            `(WhatsApp dispatch via watiClient — subBrand=rfu ` +
             `wabaId=${rfuCfg.wabaId || "(no-config)"})`,
         );
+        // WhatsApp dispatch via watiClient (Q9) — stub when creds absent;
+        // best-effort, never blocks the milestone loop.
+        const contact = itin.contactId ? contactById[itin.contactId] : null;
+        if (contact && contact.phone) {
+          await watiClient.sendBestEffort({
+            tenantId,
+            subBrand: "rfu",
+            toPhone: contact.phone,
+            contactId: contact.id,
+            templateName: process.env.WATI_JOURNEY_REMINDER_TEMPLATE || "journey_reminder",
+            parameters: [
+              { name: "name", value: contact.name || "Pilgrim" },
+              { name: "destination", value: itin.destination || "" },
+            ],
+            broadcastName: "travel-journey-reminders",
+            fallbackText: `${m.body} (${itin.destination})`,
+          });
+        }
         fired++;
       } catch (e) {
         console.error(

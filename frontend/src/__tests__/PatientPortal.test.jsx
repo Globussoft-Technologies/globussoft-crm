@@ -189,9 +189,25 @@ function installFetchMock({
   prescriptions = PRESCRIPTIONS_PAYLOAD,
   permissions = PORTAL_PERMISSIONS,
   appointmentsByBucket = APPOINTMENTS_BY_BUCKET,
+  // Default empty so existing tests see NO notifications tab change; the
+  // notification-specific tests below pass a populated payload.
+  notificationsPayload = { notifications: [], unreadCount: 0, count: 0 },
 } = {}) {
+  const jsonRes = (body) => Promise.resolve({
+    ok: true, status: 200, headers: new Map([['content-type', 'application/json']]), json: () => Promise.resolve(body),
+  });
   const fetchStub = vi.fn((url, opts = {}) => {
     const method = opts.method || 'GET';
+    // Patient notification inbox (Option A) — GET list / PUT read / POST mark-all.
+    if (url === '/api/wellness/portal/me/notifications' && method === 'GET') {
+      return jsonRes(notificationsPayload);
+    }
+    if (typeof url === 'string' && /\/api\/wellness\/portal\/me\/notifications\/\d+\/read$/.test(url) && method === 'PUT') {
+      return jsonRes({ id: Number(url.match(/\/(\d+)\/read$/)[1]), isRead: true });
+    }
+    if (url === '/api/wellness/portal/me/notifications/mark-all-read' && method === 'POST') {
+      return jsonRes({ success: true, marked: notificationsPayload.unreadCount || 0 });
+    }
     if (url === '/api/wellness/portal/health') {
       return Promise.resolve({
         ok: true,
@@ -822,5 +838,94 @@ describe('<PatientPortal /> — PDF download', () => {
       expect(notifyError).toHaveBeenCalled();
     });
     expect(notifyError.mock.calls[0][0]).toMatch(/Could not download/i);
+  });
+});
+
+/**
+ * Notification inbox (Option A — patient-portal REST inbox). Pins:
+ *   - GET /portal/me/notifications loads on mount; unread badge shows count.
+ *   - Notifications tab renders the rows (title + message).
+ *   - Mark-all-read fires POST /mark-all-read + clears the unread badge.
+ *   - Single "Mark read" fires PUT /:id/read.
+ *   - Empty inbox → "No notifications yet." + no badge.
+ * The notification endpoints are ungated (any logged-in patient), separate
+ * from the staff bell. Existing tests pass the default empty payload, so this
+ * feature is invisible to them — additive, nothing breaks.
+ */
+describe('<PatientPortal /> — notification inbox', () => {
+  beforeEach(() => {
+    localStorage.setItem(PORTAL_TOKEN_KEY, 'seeded-token');
+    localStorage.setItem(PORTAL_NAME_KEY, 'Priya Sharma');
+  });
+
+  const NOTIFS = {
+    notifications: [
+      { id: 9001, title: 'Appointment confirmed', message: 'Your visit is confirmed for tomorrow 11 AM.', type: 'appointment', isRead: false, createdAt: '2026-06-08T10:00:00.000Z' },
+      { id: 9002, title: 'Payment receipt', message: 'We received ₹1,500. Thank you!', type: 'payment', isRead: true, createdAt: '2026-06-07T09:00:00.000Z' },
+    ],
+    unreadCount: 1,
+    count: 2,
+  };
+
+  it('loads notifications on mount; unread badge shows the count', async () => {
+    const fetchStub = installFetchMock({ notificationsPayload: NOTIFS });
+    render(<PatientPortal />);
+    await waitFor(() => {
+      const call = fetchStub.mock.calls.find(([u]) => u === '/api/wellness/portal/me/notifications');
+      expect(call).toBeTruthy();
+      expect(call[1].headers.Authorization).toBe('Bearer seeded-token');
+    });
+    // Unread badge renders with "1".
+    expect(await screen.findByTestId('portal-notif-badge')).toHaveTextContent('1');
+  });
+
+  it('Notifications tab renders rows (title + message)', async () => {
+    installFetchMock({ notificationsPayload: NOTIFS });
+    render(<PatientPortal />);
+    await screen.findByTestId('portal-notif-badge');
+    fireEvent.click(screen.getByRole('button', { name: /Notifications/i }));
+    expect(await screen.findByText('Appointment confirmed')).toBeInTheDocument();
+    expect(screen.getByText(/Your visit is confirmed/i)).toBeInTheDocument();
+    expect(screen.getByText('Payment receipt')).toBeInTheDocument();
+  });
+
+  it('Mark all read → POST /mark-all-read fires + badge clears', async () => {
+    const fetchStub = installFetchMock({ notificationsPayload: NOTIFS });
+    render(<PatientPortal />);
+    await screen.findByTestId('portal-notif-badge');
+    fireEvent.click(screen.getByRole('button', { name: /Notifications/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /Mark all read/i }));
+    await waitFor(() => {
+      const call = fetchStub.mock.calls.find(
+        ([u, o]) => u === '/api/wellness/portal/me/notifications/mark-all-read' && o?.method === 'POST',
+      );
+      expect(call).toBeTruthy();
+    });
+    // Optimistic clear — badge disappears.
+    await waitFor(() => expect(screen.queryByTestId('portal-notif-badge')).toBeNull());
+  });
+
+  it('single "Mark read" → PUT /:id/read fires for the unread row', async () => {
+    const fetchStub = installFetchMock({ notificationsPayload: NOTIFS });
+    render(<PatientPortal />);
+    await screen.findByTestId('portal-notif-badge');
+    fireEvent.click(screen.getByRole('button', { name: /Notifications/i }));
+    // Only the unread row (9001) shows a "Mark read" button.
+    fireEvent.click(await screen.findByRole('button', { name: /^Mark read$/i }));
+    await waitFor(() => {
+      const call = fetchStub.mock.calls.find(
+        ([u, o]) => u === '/api/wellness/portal/me/notifications/9001/read' && o?.method === 'PUT',
+      );
+      expect(call).toBeTruthy();
+    });
+  });
+
+  it('empty inbox → "No notifications yet." + no unread badge', async () => {
+    installFetchMock(); // default empty notificationsPayload
+    render(<PatientPortal />);
+    await screen.findByText('Hair PRP'); // dashboard loaded
+    expect(screen.queryByTestId('portal-notif-badge')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /Notifications/i }));
+    expect(await screen.findByText(/No notifications yet\./i)).toBeInTheDocument();
   });
 });

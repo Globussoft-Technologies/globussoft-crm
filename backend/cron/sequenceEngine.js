@@ -27,12 +27,40 @@ const cron = require('node-cron');
 const prisma = require('../lib/prisma');
 const { getSetting, KEYS } = require('../lib/tenantSettings');
 const { evaluateCondition, renderTemplate } = require('../lib/eventBus');
+const flyerRenderEngine = require('../services/flyerRenderEngine');
+const shortUrlService = require('../services/shortUrl');
+const { writeAudit } = require('../lib/audit');
+
+// S19 (PRD_TRAVEL_MARKETING_FLYER FR-3.5 / AC-6.5) — render-on-send for
+// SequenceStep.attachmentRefsJson entries with kind='flyer'.
+//
+// Two thin wrappers below (`renderFlyerSafe` + `writeAuditSafe`) exist so
+// that unit tests can swap them via the CJS self-mocking-seam pattern
+// (CLAUDE.md cron-learnings 2026-05-24 ~01:43 UTC) — inter-function calls
+// MUST go through `module.exports.fn(...)` not the local closure binding,
+// or `vi.spyOn(engine, 'fn')` cannot intercept them.
+function renderFlyerSafe(args) {
+  return flyerRenderEngine.renderFlyer(args);
+}
+function writeAuditSafe(...args) {
+  return writeAudit(...args).catch((err) => {
+    console.warn(`[sequenceEngine] audit failed: ${err.message}`);
+  });
+}
+// S87 — same CJS self-mocking-seam pattern as renderFlyerSafe. SMS branch
+// calls `module.exports.shortenUrlSafe(...)` so tests can reassign it to
+// a vi.fn() spy that returns canned short URLs without booting the real
+// shortener. Real-mode swap happens in services/shortUrl.js once the
+// provider decision lands (Bitly / Cloudflare / internal).
+function shortenUrlSafe(args) {
+  return shortUrlService.shortenUrl(args);
+}
 
 // ── SendGrid (best-effort) ─────────────────────────────────────────────
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY;
 const FROM_EMAIL = process.env.SENDGRID_FROM_EMAIL || 'noreply@crm.globusdemos.com';
 
-async function trySendGridSend(to, subject, body) {
+async function trySendGridSend(to, subject, body, attachments) {
   if (!SENDGRID_API_KEY || !to) return { sent: false, reason: 'no_api_key_or_to' };
   try {
     const htmlBody = String(body).replace(/\n/g, '<br>');
@@ -45,6 +73,27 @@ async function trySendGridSend(to, subject, body) {
         { type: 'text/html', value: htmlBody }
       ]
     };
+    // S19 — SendGrid v3 MIME attachments use base64-encoded `content`
+    // strings. Only flyer-rendered buffers can be transformed locally;
+    // kind='file' refs are URL-only and would need a separate upstream
+    // fetch — skipped here, the URL stays in the body if the operator
+    // wired one into the template.
+    if (Array.isArray(attachments) && attachments.length > 0) {
+      const sgAttachments = [];
+      for (const att of attachments) {
+        if (att && att.kind === 'flyer' && Buffer.isBuffer(att.buffer)) {
+          sgAttachments.push({
+            content: att.buffer.toString('base64'),
+            type: att.mimeType || 'application/octet-stream',
+            filename: att.filename || 'attachment',
+            disposition: 'attachment',
+          });
+        }
+      }
+      if (sgAttachments.length > 0) {
+        payload.attachments = sgAttachments;
+      }
+    }
     const response = await fetch('https://api.sendgrid.com/v3/mail/send', {
       method: 'POST',
       headers: {
@@ -88,6 +137,205 @@ function buildContextForEnrollment(enrollment) {
   };
 }
 
+// ── Flyer attachment rendering (S19, PRD_TRAVEL_MARKETING_FLYER FR-3.5) ──
+//
+// SequenceStep.attachmentRefsJson encodes an array of attachment refs:
+//   [{kind:'flyer', flyerId:42, format:'pdf-a4'},
+//    {kind:'file',  url:'https://…', filename:'brochure.pdf'}]
+//
+// At send time we resolve every flyer ref into a rendered buffer by looking
+// up the TravelFlyerTemplate by id (tenant-scoped) and calling the shared
+// `renderFlyer({template,data,format})` engine. Each entry is rendered
+// independently — a single failure (template not found / render exception
+// / unsupported format) is logged + that attachment is skipped, but the
+// surrounding step send continues.
+//
+// Audit: every SUCCESSFUL flyer render emits a `writeAudit(
+//   'SequenceStep', 'sequence.step.flyer-attached', stepId, null, tenantId,
+//   { enrollmentId, flyerId, format, channel, engine })` row so an operator
+// can later reconstruct which flyers went out via which steps. Failures
+// emit `'sequence.step.flyer-attach-failed'` with the error message in the
+// details JSON.
+//
+// Returns: `Promise<Array<{kind, filename, mimeType, buffer, flyerId,
+//   format, engine}>>` — an array of attachment descriptors the caller
+// embeds into the outbound message. Non-flyer refs (e.g. kind='file') are
+// passed through untouched as `{kind:'file', url, filename}` records — the
+// transport layer (SendGrid / SMTP / WhatsApp) handles those existing-URL
+// references.
+async function resolveStepAttachments(step, enrollment, channel) {
+  if (!step || typeof step.attachmentRefsJson !== 'string' || step.attachmentRefsJson.length === 0) {
+    return [];
+  }
+  let refs;
+  try {
+    refs = JSON.parse(step.attachmentRefsJson);
+  } catch (parseErr) {
+    console.warn(
+      `[sequenceEngine] step ${step.id} attachmentRefsJson is malformed; skipping all attachments:`,
+      parseErr.message,
+    );
+    return [];
+  }
+  if (!Array.isArray(refs) || refs.length === 0) return [];
+
+  const resolved = [];
+  for (const ref of refs) {
+    if (!ref || typeof ref !== 'object') continue;
+
+    if (ref.kind === 'file' && typeof ref.url === 'string' && ref.url.length > 0) {
+      // Pass through — transport layer dereferences the URL.
+      resolved.push({
+        kind: 'file',
+        url: ref.url,
+        filename: typeof ref.filename === 'string' ? ref.filename : 'attachment',
+      });
+      continue;
+    }
+
+    if (ref.kind !== 'flyer' || typeof ref.flyerId !== 'number') continue;
+
+    const fmt = typeof ref.format === 'string' && ref.format.length > 0 ? ref.format : 'pdf-a4';
+    let flyerRow = null;
+    try {
+      flyerRow = await prisma.travelFlyerTemplate.findFirst({
+        where: { id: ref.flyerId, tenantId: enrollment.tenantId },
+      });
+    } catch (lookupErr) {
+      console.warn(
+        `[sequenceEngine] flyer ${ref.flyerId} lookup failed for step ${step.id}:`,
+        lookupErr.message,
+      );
+      try {
+        await module.exports.writeAuditSafe(
+          'SequenceStep',
+          'sequence.step.flyer-attach-failed',
+          step.id,
+          null,
+          enrollment.tenantId,
+          {
+            enrollmentId: enrollment.id,
+            flyerId: ref.flyerId,
+            format: fmt,
+            channel,
+            reason: 'lookup_error',
+            message: lookupErr.message,
+          },
+          { actorType: 'system' },
+        );
+      } catch (_auditErr) { /* don't let audit failure block send */ }
+      continue;
+    }
+
+    if (!flyerRow) {
+      console.warn(
+        `[sequenceEngine] flyer ${ref.flyerId} not found (or wrong tenant) for step ${step.id}`,
+      );
+      try {
+        await module.exports.writeAuditSafe(
+          'SequenceStep',
+          'sequence.step.flyer-attach-failed',
+          step.id,
+          null,
+          enrollment.tenantId,
+          {
+            enrollmentId: enrollment.id,
+            flyerId: ref.flyerId,
+            format: fmt,
+            channel,
+            reason: 'template_not_found',
+          },
+          { actorType: 'system' },
+        );
+      } catch (_auditErr) { /* swallow */ }
+      continue;
+    }
+
+    // Parse the stored JSON columns into the shape renderFlyer expects.
+    let palette = {}, layout = [], assets = {};
+    try { palette = flyerRow.paletteJson ? JSON.parse(flyerRow.paletteJson) : {}; } catch (_e) { palette = {}; }
+    try { layout = flyerRow.layoutJson ? JSON.parse(flyerRow.layoutJson) : []; } catch (_e) { layout = []; }
+    try { assets = flyerRow.assetsJson ? JSON.parse(flyerRow.assetsJson) : {}; } catch (_e) { assets = {}; }
+    const template = { palette, layout, assets };
+
+    // Build a render-data overlay from enrollment context. The renderer
+    // honours { titleOverride, priceOverride, ctaOverride, dateOverride } —
+    // we project contact.name onto titleOverride so personalised flyers
+    // render with the recipient's name (or the original template title
+    // when the contact has no name). Operators get personalisation for
+    // free without authoring per-contact templates.
+    const renderData = {};
+    if (enrollment.contact?.name && typeof enrollment.contact.name === 'string') {
+      renderData.titleOverride = `${flyerRow.name} — for ${enrollment.contact.name}`;
+    }
+
+    let rendered;
+    try {
+      rendered = await module.exports.renderFlyerSafe({ template, data: renderData, format: fmt });
+    } catch (renderErr) {
+      console.warn(
+        `[sequenceEngine] flyer ${ref.flyerId} render failed for step ${step.id}:`,
+        renderErr.message,
+      );
+      try {
+        await module.exports.writeAuditSafe(
+          'SequenceStep',
+          'sequence.step.flyer-attach-failed',
+          step.id,
+          null,
+          enrollment.tenantId,
+          {
+            enrollmentId: enrollment.id,
+            flyerId: ref.flyerId,
+            format: fmt,
+            channel,
+            reason: 'render_error',
+            message: renderErr.message,
+          },
+          { actorType: 'system' },
+        );
+      } catch (_auditErr) { /* swallow */ }
+      continue;
+    }
+
+    const filename = `${flyerRow.name || 'flyer'}-${ref.flyerId}.${rendered.extension || 'bin'}`
+      .replace(/[^\w.-]+/g, '_');
+
+    resolved.push({
+      kind: 'flyer',
+      flyerId: ref.flyerId,
+      format: fmt,
+      filename,
+      mimeType: rendered.mimeType,
+      buffer: rendered.buffer,
+      engine: rendered.engine,
+    });
+
+    // Audit success — fire-and-forget so a slow audit write doesn't
+    // serialise the send loop.
+    try {
+      await module.exports.writeAuditSafe(
+        'SequenceStep',
+        'sequence.step.flyer-attached',
+        step.id,
+        null,
+        enrollment.tenantId,
+        {
+          enrollmentId: enrollment.id,
+          flyerId: ref.flyerId,
+          format: fmt,
+          channel,
+          engine: rendered.engine,
+          mimeType: rendered.mimeType,
+          byteLength: rendered.buffer ? rendered.buffer.length : 0,
+        },
+        { actorType: 'system' },
+      );
+    } catch (_auditErr) { /* swallow — audit is best-effort */ }
+  }
+  return resolved;
+}
+
 // ── New step-list dispatcher ──────────────────────────────────────────
 async function processStep(step, enrollment) {
   const ctx = buildContextForEnrollment(enrollment);
@@ -107,6 +355,11 @@ async function processStep(step, enrollment) {
       return { advance: true };
     }
 
+    // S19 — render-on-send for SequenceStep.attachmentRefsJson entries with
+    // kind='flyer'. Resolves to a list of attachment descriptors. Errors per
+    // ref are caught internally — the surrounding step send always proceeds.
+    const attachments = await resolveStepAttachments(step, enrollment, 'email');
+
     // Persist the outbound row (engine source of truth) before attempting
     // delivery. threadId convention is `seq-<enrollmentId>` so #7 reply
     // detection can recover the enrollment from an inbound reply.
@@ -124,16 +377,95 @@ async function processStep(step, enrollment) {
       },
     });
 
-    // Best-effort delivery.
+    // Best-effort delivery. Attachments threaded through for SendGrid MIME.
     if (SENDGRID_API_KEY) {
-      trySendGridSend(to, subject, body).catch(() => {});
+      trySendGridSend(to, subject, body, attachments).catch(() => {});
     }
     return { advance: true };
   }
 
   if (step.kind === 'sms') {
     if (enrollment.contact?.phone) {
-      const body = renderTemplate(step.smsBody || '', ctx);
+      let body = renderTemplate(step.smsBody || '', ctx);
+      // S19 — SMS doesn't natively carry binary attachments but flyer links
+      // are commonly sent as a separate URL line.
+      // S87 — for each resolved flyer attachment, shorten the rendered
+      // buffer via services/shortUrl.shortenUrl and append the link to the
+      // SMS body. Short-link fails are fail-soft (audited, SMS still sends
+      // without a link) so an unimplemented provider never blocks delivery.
+      const attachments = await resolveStepAttachments(step, enrollment, 'sms');
+      if (attachments.length > 0) {
+        const linkLines = [];
+        for (const att of attachments) {
+          // File-kind refs already carry a URL — use it verbatim, no
+          // shortener call. Only flyer-kind needs the buffer→URL hop.
+          if (att.kind === 'file' && typeof att.url === 'string' && att.url.length > 0) {
+            linkLines.push(`📎 ${att.url}`);
+            continue;
+          }
+          if (att.kind !== 'flyer' || !Buffer.isBuffer(att.buffer)) continue;
+          try {
+            const shortened = await module.exports.shortenUrlSafe({
+              buffer: att.buffer,
+              filename: att.filename,
+              mimeType: att.mimeType,
+            });
+            linkLines.push(`📎 ${shortened.shortUrl}`);
+            // Success audit row — operator-visible confirmation that the
+            // link landed in the SMS body. Payload mirrors the
+            // 'sequence.step.flyer-attached' shape but excludes the raw
+            // buffer (links only, never blob content in audit logs).
+            try {
+              await module.exports.writeAuditSafe(
+                'SequenceStep',
+                'sequence.step.sms-flyer-shortlinked',
+                step.id,
+                null,
+                enrollment.tenantId,
+                {
+                  enrollmentId: enrollment.id,
+                  flyerId: att.flyerId,
+                  format: att.format,
+                  filename: shortened.filename,
+                  mimeType: shortened.mimeType,
+                  shortUrl: shortened.shortUrl,
+                  source: shortened.source,
+                  channel: 'sms',
+                },
+                { actorType: 'system' },
+              );
+            } catch (_auditErr) { /* swallow — audit best-effort */ }
+          } catch (shortenErr) {
+            // Fail-soft: don't break the SMS send if the shortener trips.
+            // Operator-visible signal is the 'shortlink-failed' audit row.
+            console.warn(
+              `[sequenceEngine] short-URL failed for flyer ${att.flyerId} on step ${step.id}:`,
+              shortenErr.message,
+            );
+            try {
+              await module.exports.writeAuditSafe(
+                'SequenceStep',
+                'sequence.step.sms-flyer-shortlink-failed',
+                step.id,
+                null,
+                enrollment.tenantId,
+                {
+                  enrollmentId: enrollment.id,
+                  flyerId: att.flyerId,
+                  format: att.format,
+                  channel: 'sms',
+                  reason: 'shorten_error',
+                  message: shortenErr.message,
+                },
+                { actorType: 'system' },
+              );
+            } catch (_auditErr) { /* swallow */ }
+          }
+        }
+        if (linkLines.length > 0) {
+          body = `${body.trim()}\n\n${linkLines.join('\n')}`.trim();
+        }
+      }
       await prisma.smsMessage.create({
         data: {
           to: enrollment.contact.phone,
@@ -277,6 +609,105 @@ const processNodeLegacy = async (node, enrollment) => {
 
   if (label.startsWith('ACTION: Send WhatsApp')) {
     if (enrollment.contact.phone) {
+      // S88 — channel-parity with email (S19) + SMS (S87). The legacy
+      // ReactFlow path receives a `node`, not a SequenceStep row; synthesise
+      // a step-shaped object so resolveStepAttachments can run unchanged.
+      // The synthetic `id` is the node id (string in legacy land — cast to
+      // a deterministic string for the audit row).
+      const syntheticStep = {
+        id: node.id || `legacy-${enrollment.id}`,
+        attachmentRefsJson:
+          typeof node.data?.attachmentRefsJson === 'string'
+            ? node.data.attachmentRefsJson
+            : null,
+      };
+
+      let attachments = [];
+      try {
+        attachments = await resolveStepAttachments(
+          syntheticStep,
+          enrollment,
+          'whatsapp',
+        );
+      } catch (resolveErr) {
+        // Fail-soft: WhatsApp message still sends without media. Per-ref
+        // failures inside resolveStepAttachments are already swallowed
+        // (lookup_error / template_not_found / render_error audited there).
+        // This outer catch only fires for unexpected resolver crashes —
+        // surface them via a dedicated audit row so the operator sees the
+        // signal in the SequenceStep audit trail.
+        console.warn(
+          `[sequenceEngine] WhatsApp flyer resolution failed for node ${node.id}:`,
+          resolveErr.message,
+        );
+        try {
+          await module.exports.writeAuditSafe(
+            'SequenceStep',
+            'sequence.step.wa-flyer-attach-failed',
+            syntheticStep.id,
+            null,
+            enrollment.tenantId,
+            {
+              enrollmentId: enrollment.id,
+              channel: 'whatsapp',
+              reason: 'resolver_error',
+              message: resolveErr.message,
+            },
+            { actorType: 'system' },
+          );
+        } catch (_auditErr) { /* swallow */ }
+        attachments = [];
+      }
+
+      // STUB-MODE — real Meta WhatsApp Cloud API media upload is BLOCKED
+      // on Q9 (Wati creds). For each resolved flyer/file ref, build a
+      // stub-flagged media-ref entry that captures enough provenance
+      // (flyerId / format / mimeType) for the real swap point. The
+      // single-column WhatsAppMessage.mediaUrl + mediaType pair can only
+      // surface ONE attachment; the full list also persists to
+      // WhatsAppMessage.mediaRefsJson (S124 — JSON-stringified array of
+      // every resolved attachment ref). The audit trail still mirrors the
+      // list per-attachment for forensic completeness, but operators no
+      // longer need to cross-reference audit rows to see the full list.
+      const stubMediaRefs = [];
+      for (const att of attachments) {
+        if (att.kind === 'flyer' && Buffer.isBuffer(att.buffer)) {
+          stubMediaRefs.push({
+            kind: 'flyer',
+            flyerId: att.flyerId,
+            format: att.format,
+            mimeType: att.mimeType,
+            filename: att.filename,
+            stub: true,
+            plannedAction: 'upload-when-Q9-lands',
+          });
+        } else if (att.kind === 'file' && typeof att.url === 'string') {
+          // File-kind refs already carry a URL — WhatsApp Cloud API can
+          // dereference public URLs directly, so no stub needed.
+          stubMediaRefs.push({
+            kind: 'file',
+            url: att.url,
+            filename: att.filename,
+          });
+        }
+      }
+
+      // Pick the first eligible attachment for the single-column mediaUrl
+      // / mediaType surface. Stub-mode: synthesise a placeholder URL the
+      // real swap point replaces with the Meta media_id once Q9 lands.
+      let mediaUrl = null;
+      let mediaType = null;
+      if (stubMediaRefs.length > 0) {
+        const head = stubMediaRefs[0];
+        if (head.kind === 'file') {
+          mediaUrl = head.url;
+          mediaType = null; // unknown for upstream URLs
+        } else {
+          mediaUrl = `stub://flyer/${head.flyerId}.${head.format || 'pdf-a4'}`;
+          mediaType = head.mimeType || null;
+        }
+      }
+
       await prisma.whatsAppMessage.create({
         data: {
           to: enrollment.contact.phone,
@@ -284,8 +715,50 @@ const processNodeLegacy = async (node, enrollment) => {
           direction: 'OUTBOUND',
           status: 'QUEUED',
           contactId: enrollment.contact.id,
+          ...(mediaUrl ? { mediaUrl } : {}),
+          ...(mediaType ? { mediaType } : {}),
+          // S124: multi-attachment full list. Null when no attachments —
+          // preserves the existing "no media columns set" shape for the
+          // zero-attachment path so unit tests pinning `data.mediaUrl ===
+          // undefined` keep passing.
+          ...(stubMediaRefs.length > 0
+            ? { mediaRefsJson: JSON.stringify(stubMediaRefs) }
+            : {}),
         },
       });
+
+      // One success-audit row PER attachment so operators can see exactly
+      // which flyers were attached / would be uploaded. Payload omits the
+      // raw buffer (mirrors S87's discipline — links / refs only, never
+      // blob content in audit logs).
+      for (const ref of stubMediaRefs) {
+        try {
+          await module.exports.writeAuditSafe(
+            'SequenceStep',
+            'sequence.step.wa-flyer-attached',
+            syntheticStep.id,
+            null,
+            enrollment.tenantId,
+            {
+              enrollmentId: enrollment.id,
+              channel: 'whatsapp',
+              ...(ref.kind === 'flyer'
+                ? {
+                    flyerId: ref.flyerId,
+                    format: ref.format,
+                    mimeType: ref.mimeType,
+                    stub: true,
+                    plannedAction: ref.plannedAction,
+                  }
+                : {
+                    fileUrl: ref.url,
+                    filename: ref.filename,
+                  }),
+            },
+            { actorType: 'system' },
+          );
+        } catch (_auditErr) { /* swallow — audit is best-effort */ }
+      }
     }
     return { delayMinutes: 0 };
   }
@@ -523,4 +996,12 @@ module.exports = {
   processInboundReplies, // exported for manual / test triggering
   processStep, // #616: exported so unit tests can pin step dispatch shape
   processStepListEnrollment, // #616: exported for wellness trigger unit tests
+  processNodeLegacy, // S88: exported for WhatsApp legacy-branch unit tests
+  resolveStepAttachments, // S19: exported for flyer-attachment unit tests
+  // S19 + S87 — CJS self-mocking seams (cron-learnings 2026-05-24 ~01:43 UTC):
+  // tests reassign these to vi.fn() to intercept the SUT's calls without
+  // booting pdfkit / prisma.auditLog / shortener providers.
+  renderFlyerSafe,
+  writeAuditSafe,
+  shortenUrlSafe, // S87
 };

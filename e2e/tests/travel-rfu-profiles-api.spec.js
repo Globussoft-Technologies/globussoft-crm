@@ -186,6 +186,17 @@ test.describe("Travel RFU profiles API — CRUD", () => {
     expect((await res.json()).code).toBe("INVALID_TIER");
   });
 
+  test("GET /rfu-profiles?fields=summary omits sensitive PII columns", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || created.profileIds.length === 0) test.skip(true, "no profiles");
+    const res = await get(request, token, "/api/travel/rfu-profiles?fields=summary");
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    const seeded = body.profiles.find((p) => p.id === created.profileIds[0]);
+    expect(seeded.passportNumber).toBeUndefined();
+    expect(seeded.contactId).toBeDefined();
+  });
+
   test("GET /rfu-profiles/by-contact/:contactId returns the profile", async ({ request }) => {
     const token = await getTravelAdmin(request);
     if (!token || !contactId) test.skip(true, "no contact");

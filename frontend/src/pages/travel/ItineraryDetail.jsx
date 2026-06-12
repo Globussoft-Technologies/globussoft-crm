@@ -10,6 +10,10 @@
 //   3. Items table — flight / hotel / transfer / activity / visa /
 //      insurance rows with edit + delete (admin/manager). "Add item"
 //      inline form.
+//   3a. Trip map (S127) — Leaflet+OSM MapPreview rendered above the day-
+//       by-day breakdown when the itinerary has ≥1 item. Items already
+//       carry lat/lng from the GET response; MapPreview drops rows
+//       without coordinates silently. Mirrors the S81 list-page pattern.
 //   4. Day costs panel (#907 slice 4) — collapsible section consuming
 //      GET /api/travel/itineraries/:id/day-costs (slice 2, commit
 //      5ca25585). Shows summary tiles (totalDays / grandTotal /
@@ -24,7 +28,7 @@
 //      PRD §3.6(d) pricing transparency.
 
 import { useEffect, useState, useContext } from "react";
-import { useParams } from "react-router-dom";
+import { useParams, Link } from "react-router-dom";
 import {
   Map as MapIcon, Plane, Hotel, MapPin, Briefcase, FileText, Shield,
   Plus, Pencil, Trash2, X, Sparkles, Share2, Download, Check, XCircle, Copy,
@@ -33,7 +37,15 @@ import {
 } from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
+import { geocode } from "../../lib/geocoder";
 import { AuthContext } from "../../App";
+// S127 — MapPreview wire-in for the detail surface. The /api/travel/itineraries/:id
+// GET already includes items with latitude/longitude/dayNumber, so the spatial
+// preview renders directly off itin.items with no extra fetch. pinnableItems
+// inside MapPreview silently drops draft rows without coordinates, so a
+// partially-geocoded itinerary still maps the subset that has coords.
+// Mirrors the S81 list-page wire-in pattern.
+import MapPreview from "../../components/MapPreview";
 
 // Item types cover both fly + non-fly (domestic) trips and general expenses.
 // Keep in sync with VALID_ITEM_TYPES in backend/routes/travel_itineraries.js.
@@ -171,6 +183,10 @@ export default function ItineraryDetail() {
   const [adding, setAdding] = useState(false);
   const [newItem, setNewItem] = useState(EMPTY_ITEM);
   const [editing, setEditing] = useState(null);
+  // S82 — true while geocode(description) is in flight before the POST so the
+  // Save button is locked. PRD FR-3.4 + carry-over from S10 (frontend-side
+  // wire-in keeps the per-user rate-limit semantics of lib/geocoder.js).
+  const [geocoding, setGeocoding] = useState(false);
   // Day costs panel (#907 slice 4) — collapsible + lazy-fetched.
   const [dayCostsOpen, setDayCostsOpen] = useState(false);
   const [dayCosts, setDayCosts] = useState(null); // { days, grandTotal, totalDays, averageDailyCost }
@@ -289,6 +305,45 @@ export default function ItineraryDetail() {
       if (newItem.unit) body.unit = newItem.unit;
       if (newItem.quantity !== "") body.quantity = Number(newItem.quantity);
       if (newItem.direction) body.direction = newItem.direction;
+
+      // S82 — geocode-on-create (PRD FR-3.4 carry-over from S10). If the
+      // user hasn't manually placed the item on the map (latitude/longitude
+      // not provided), try resolving the typed description ("Goa beach",
+      // "Sheikh Zayed Mosque Abu Dhabi") via lib/geocoder.js's
+      // free-text → {lat, lng} Nominatim wrapper.
+      //
+      // Fail-soft: geocode returns null on no-match, throws on network
+      // outage — either way the POST proceeds without coords so the item
+      // create flow is never blocked by a transient geocoder hiccup. The
+      // 1-req/sec rate-limit + 500-entry LRU live inside lib/geocoder.js
+      // so this call site stays trivially small.
+      const manualLat = newItem.latitude;
+      const manualLng = newItem.longitude;
+      const hasManual =
+        (manualLat !== undefined && manualLat !== null && manualLat !== "") ||
+        (manualLng !== undefined && manualLng !== null && manualLng !== "");
+      if (hasManual) {
+        if (manualLat !== undefined && manualLat !== null && manualLat !== "") {
+          body.latitude = Number(manualLat);
+        }
+        if (manualLng !== undefined && manualLng !== null && manualLng !== "") {
+          body.longitude = Number(manualLng);
+        }
+      } else if (newItem.description && newItem.description.trim()) {
+        setGeocoding(true);
+        try {
+          const hit = await geocode(newItem.description);
+          if (hit && Number.isFinite(hit.lat) && Number.isFinite(hit.lng)) {
+            body.latitude = hit.lat;
+            body.longitude = hit.lng;
+          }
+        } catch (_e) {
+          // Swallow — the user can still place the pin manually on the
+          // day-planner page after the item is created.
+        } finally {
+          setGeocoding(false);
+        }
+      }
       // totalPrice is computed server-side (Rate × Qty + Markup + GST).
       await fetchApi(`/api/travel/itineraries/${id}/items`, {
         method: "POST",
@@ -478,6 +533,10 @@ export default function ItineraryDetail() {
             <a href={pdfHref} target="_blank" rel="noreferrer" style={{ ...secondaryBtn, textDecoration: "none" }}>
               <Download size={14} /> PDF
             </a>
+            {/* FR-3.3/3.4 — open the visual day-by-day planner + map editor. */}
+            <Link to={`/travel/itineraries/${id}/edit`} style={{ ...secondaryBtn, textDecoration: "none" }} aria-label="Open the day-by-day planner and map">
+              <MapIcon size={14} /> Day planner
+            </Link>
           </div>
         </div>
         {shareUrl && (
@@ -533,7 +592,14 @@ export default function ItineraryDetail() {
           <div style={{ background: "var(--surface-color)", padding: 16, borderRadius: 8, border: "1px solid var(--border-color)", marginBottom: 16 }}>
             <ItemFields values={newItem} suppliers={suppliers} onChange={(patch) => setNewItem({ ...newItem, ...patch })} />
             <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
-              <button type="button" onClick={addItem} style={primaryBtn}>Save item</button>
+              <button
+                type="button"
+                onClick={addItem}
+                disabled={geocoding}
+                style={{ ...primaryBtn, opacity: geocoding ? 0.6 : 1, cursor: geocoding ? "wait" : "pointer" }}
+              >
+                {geocoding ? "Resolving location…" : "Save item"}
+              </button>
               <button type="button" onClick={() => { setNewItem(EMPTY_ITEM); setAdding(false); }} style={secondaryBtn}>Cancel</button>
             </div>
           </div>
@@ -613,6 +679,37 @@ export default function ItineraryDetail() {
           )}
         </div>
       </section>
+
+      {/* S127 — MapPreview block above the day-by-day breakdown. Items
+          returned by GET /api/travel/itineraries/:id already carry
+          latitude/longitude/dayNumber (backend includes items in the
+          detail-endpoint response), so the map renders directly off
+          itin.items without an extra fetch. Suppressed when the
+          itinerary has no items at all — MapPreview's own pinnableItems
+          handles the partially-geocoded case (some items missing
+          coords) by silently skipping them, so we only short-circuit on
+          truly-empty lists. */}
+      {Array.isArray(itin.items) && itin.items.length > 0 && (
+        <section style={{ marginTop: 20 }}>
+          <div style={{
+            display: "flex", justifyContent: "space-between", alignItems: "center",
+            marginBottom: 8,
+          }}>
+            <h2 style={{ margin: 0, fontSize: 16, display: "flex", alignItems: "center", gap: 8 }}>
+              <MapIcon size={18} aria-hidden /> Trip map
+            </h2>
+            <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+              Items with coordinates appear as pins; rows without lat/lng are skipped.
+            </span>
+          </div>
+          <div style={{
+            background: "var(--surface-color)", borderRadius: 8,
+            border: "1px solid var(--border-color)", overflow: "hidden",
+          }}>
+            <MapPreview items={itin.items} height={320} />
+          </div>
+        </section>
+      )}
 
       <section style={{ marginTop: 20 }}>
         <button

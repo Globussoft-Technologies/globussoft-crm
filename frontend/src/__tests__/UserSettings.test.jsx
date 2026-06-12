@@ -86,10 +86,35 @@ const SAMPLE_PREFS = {
   quietHoursEnd: '07:00',
 };
 
-function setSuccessfulLoad(prefs = SAMPLE_PREFS) {
+// Page-catalog paths covering every notification category — by default the
+// suite acts as if the signed-in user has every relevant sidebar surface, so
+// the "all categories visible" contract holds without each test having to
+// set up the catalog mock by hand. New categories added to UserSettings'
+// categoryOptions need a representative path here.
+const ALL_CATEGORY_PATHS = [
+  { path: '/pipeline' },
+  { path: '/tasks' },
+  { path: '/tickets' },
+  { path: '/leads' },
+  { path: '/approvals' },
+  { path: '/wellness/leave' },
+  { path: '/expenses' },
+  { path: '/wellness/book-appointment' },
+  { path: '/wellness/my-prescriptions' },
+  { path: '/wellness/visits' },
+  { path: '/wellness/memberships' },
+  { path: '/wellness/my-transactions' },
+  { path: '/wellness/waitlist' },
+  { path: '/wellness/inventory' },
+];
+
+function setSuccessfulLoad(prefs = SAMPLE_PREFS, pages = ALL_CATEGORY_PATHS) {
   fetchApiMock.mockImplementation((url) => {
     if (url === '/api/notifications/preferences') {
       return Promise.resolve(prefs);
+    }
+    if (url === '/api/pages/me') {
+      return Promise.resolve({ pages });
     }
     return Promise.resolve({});
   });
@@ -146,13 +171,13 @@ describe('UserSettings (Notification Settings)', () => {
     });
   });
 
-  it('renders the 7 notification category checkboxes after load', async () => {
+  it('renders every notification category when the user has all mapped paths', async () => {
     setSuccessfulLoad();
     render(<UserSettings />);
     await waitFor(() => {
       expect(screen.getByText(/Notification Settings/i)).toBeInTheDocument();
     });
-    // Spot-check labels from categoryOptions.
+    // Spot-check the generic CRM workflow categories.
     expect(screen.getByText('Deals & Opportunities')).toBeInTheDocument();
     expect(screen.getByText('Tasks')).toBeInTheDocument();
     expect(screen.getByText('Support Tickets')).toBeInTheDocument();
@@ -160,6 +185,110 @@ describe('UserSettings (Notification Settings)', () => {
     expect(screen.getByText('Approvals')).toBeInTheDocument();
     expect(screen.getByText('Leave Requests')).toBeInTheDocument();
     expect(screen.getByText('Expense Reports')).toBeInTheDocument();
+    // And the wellness vertical categories.
+    expect(screen.getByText('Appointments & Bookings')).toBeInTheDocument();
+    expect(screen.getByText('Prescriptions')).toBeInTheDocument();
+    expect(screen.getByText('Visits')).toBeInTheDocument();
+    expect(screen.getByText('Memberships')).toBeInTheDocument();
+    expect(screen.getByText('Payments & Transactions')).toBeInTheDocument();
+  });
+
+  it('shows wellness-relevant categories for a wellness customer-tier sidebar', async () => {
+    // Mirrors the screenshot: a wellness customer-tier user whose sidebar
+    // surfaces prescriptions / visits / memberships / transactions / bookings
+    // but none of the generic CRM workflow surfaces. The category list should
+    // show the wellness categories AND hide every generic-only category.
+    setSuccessfulLoad(SAMPLE_PREFS, [
+      { path: '/wellness/my-prescriptions' },
+      { path: '/wellness/visits' },
+      { path: '/wellness/memberships' },
+      { path: '/wellness/my-transactions' },
+      { path: '/wellness/book-appointment' },
+      { path: '/wellness/my-bookings' },
+      { path: '/notification-settings' },
+    ]);
+    render(<UserSettings />);
+    await waitFor(() => {
+      expect(screen.getByText('Prescriptions')).toBeInTheDocument();
+    });
+    expect(screen.getByText('Visits')).toBeInTheDocument();
+    expect(screen.getByText('Memberships')).toBeInTheDocument();
+    expect(screen.getByText('Payments & Transactions')).toBeInTheDocument();
+    expect(screen.getByText('Appointments & Bookings')).toBeInTheDocument();
+    // Generic CRM categories — hidden because their paths aren't in the catalog.
+    expect(screen.queryByText('Deals & Opportunities')).toBeNull();
+    expect(screen.queryByText('Tasks')).toBeNull();
+    expect(screen.queryByText('Support Tickets')).toBeNull();
+    expect(screen.queryByText('Leads')).toBeNull();
+    expect(screen.queryByText('Approvals')).toBeNull();
+    expect(screen.queryByText('Leave Requests')).toBeNull();
+    expect(screen.queryByText('Expense Reports')).toBeNull();
+  });
+
+  it('hides the entire Categories section when no sidebar paths match', async () => {
+    // Pathological case: the user can access pages but none map to any
+    // notification category (e.g. only /notification-settings + /home).
+    // The "Notification Categories" sub-block hides; the rest of the
+    // settings surface (delivery channels + quiet hours) stays usable.
+    setSuccessfulLoad(SAMPLE_PREFS, [
+      { path: '/home' },
+      { path: '/notification-settings' },
+    ]);
+    render(<UserSettings />);
+    await waitFor(() => {
+      expect(screen.getByText(/Delivery Channels/i)).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/Notification Categories/i)).toBeNull();
+    expect(screen.queryByText('Deals & Opportunities')).toBeNull();
+    expect(screen.queryByText('Prescriptions')).toBeNull();
+    expect(screen.queryByText('Appointments & Bookings')).toBeNull();
+  });
+
+  it('shows only the subset of categories whose paths the user can access', async () => {
+    // Wellness manager with leave + expense + approvals workflows but no
+    // sales / support / patient-facing surfaces — only the matching subset
+    // renders; everything else is hidden.
+    setSuccessfulLoad(SAMPLE_PREFS, [
+      { path: '/wellness/leave' },
+      { path: '/expenses' },
+      { path: '/approvals' },
+    ]);
+    render(<UserSettings />);
+    await waitFor(() => {
+      expect(screen.getByText('Leave Requests')).toBeInTheDocument();
+    });
+    expect(screen.getByText('Expense Reports')).toBeInTheDocument();
+    expect(screen.getByText('Approvals')).toBeInTheDocument();
+    expect(screen.queryByText('Deals & Opportunities')).toBeNull();
+    expect(screen.queryByText('Tasks')).toBeNull();
+    expect(screen.queryByText('Support Tickets')).toBeNull();
+    expect(screen.queryByText('Leads')).toBeNull();
+    expect(screen.queryByText('Prescriptions')).toBeNull();
+  });
+
+  it('falls back to all categories when /api/pages/me fails', async () => {
+    // Catalog fetch rejects — accessiblePaths stays null and the surface
+    // degrades to showing every category. Losing the notification settings
+    // entirely on a fetch hiccup would be worse than over-displaying.
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/notifications/preferences') {
+        return Promise.resolve(SAMPLE_PREFS);
+      }
+      if (url === '/api/pages/me') {
+        return Promise.reject(new Error('500'));
+      }
+      return Promise.resolve({});
+    });
+    render(<UserSettings />);
+    await waitFor(() => {
+      expect(screen.getByText('Deals & Opportunities')).toBeInTheDocument();
+    });
+    // Generic + wellness categories all show on the fallback path.
+    expect(screen.getByText('Tasks')).toBeInTheDocument();
+    expect(screen.getByText('Leads')).toBeInTheDocument();
+    expect(screen.getByText('Appointments & Bookings')).toBeInTheDocument();
+    expect(screen.getByText('Prescriptions')).toBeInTheDocument();
+    expect(screen.getByText('Payments & Transactions')).toBeInTheDocument();
   });
 
   it('renders the 4 delivery channel checkboxes after load', async () => {

@@ -186,9 +186,17 @@ router.get("/patients/lookup", async (req, res) => {
     if (phone) where.phone = phoneMatches(phone);
     if (email) where.email = email;
 
+    // S104 — structured-intake parity. S62 added Patient.firstName +
+    // Patient.lastName columns; S100 wired the internal POST/PUT to
+    // accept + persist them. Partner SDKs (Callified.ai / Globus Phone /
+    // AdsGPT) polling /patients/lookup MUST see the structured fields
+    // alongside the canonical `name` so they can render "Hi Anjali" in
+    // the call script without re-deriving it from `name`. Additive to
+    // the existing select; no behaviour change for partners that ignore
+    // the new keys. Null/empty for legacy rows (pre-S100 intake).
     const patient = await prisma.patient.findFirst({
       where,
-      select: { id: true, name: true, email: true, phone: true, gender: true, dob: true, source: true, locationId: true, createdAt: true },
+      select: { id: true, name: true, firstName: true, lastName: true, email: true, phone: true, gender: true, dob: true, source: true, locationId: true, createdAt: true },
     });
     if (!patient) return res.status(404).json({ error: "Patient not found" });
     res.json(patient);

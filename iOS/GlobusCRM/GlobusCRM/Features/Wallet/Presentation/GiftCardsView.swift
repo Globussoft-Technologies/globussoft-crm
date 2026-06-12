@@ -21,9 +21,6 @@ struct GiftCardsView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: WellnessSpacing.xl) {
                         header
-                        if let error = viewModel.loadError {
-                            ErrorBanner(message: "Refresh failed: \(error)")
-                        }
                         LazyVGrid(columns: columns, spacing: WellnessSpacing.md) {
                             ForEach(viewModel.storefrontCards) { card in
                                 StorefrontGiftCardTile(card: card) {
@@ -101,7 +98,7 @@ struct GiftCardsView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: WellnessSpacing.xs) {
-            Text("Dr. Haror's Wellness Gift Cards")
+            Text("Gift Cards")
                 .font(.wellnessHeadline)
                 .fontWeight(.bold)
                 .foregroundColor(.wellnessOnSurface)

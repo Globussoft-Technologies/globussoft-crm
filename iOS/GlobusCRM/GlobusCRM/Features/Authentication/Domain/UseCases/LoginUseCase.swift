@@ -7,7 +7,7 @@ final class LoginUseCase {
 
     func callAsFunction(email: String, password: String) async -> Result<Void, AppError> {
         do {
-            let (token, userId, name) = try await repository.login(email: email, password: password)
+            let (_, userId, _) = try await repository.login(email: email, password: password)
             // Fetch portal/me so the patientId is persisted before any screen loads.
             // All patient-scoped endpoints (loyalty, wallet, etc.) depend on this.
             _ = try? await repository.getPatientProfile()

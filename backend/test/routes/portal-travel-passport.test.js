@@ -58,10 +58,16 @@ const JWT_SECRET = process.env.JWT_SECRET || 'enterprise_super_secret_key_2026';
 const passportOcrClient = requireCJS('../../services/passportOcrClient');
 const auditLib = requireCJS('../../lib/audit');
 const writeAudit = vi.spyOn(auditLib, 'writeAudit').mockResolvedValue(undefined);
-// s3Service is configured in this env (real bucket), so we MUST stub it or the
-// route would upload to the live bucket during tests. Patch the module object
-// (createRequire bypasses vi.mock); BUCKET_NAME stays truthy → the S3 path.
+// s3Service must be stubbed so tests never touch a real bucket. Patch the
+// module object (createRequire bypasses vi.mock). Force BUCKET_NAME truthy
+// here: passportFileStore.storeScan reads `s3Service.BUCKET_NAME` at call
+// time to choose S3 vs disk fallback. Locally dev's .env sets it, but CI's
+// unit_tests gate has no AWS_S3_BUCKET_NAME, so without this override the
+// route silently takes the disk path and the spies on uploadFile/deleteFile
+// never fire (CLAUDE.md "CI env-block parity" standing rule).
 const s3Service = requireCJS('../../services/s3Service');
+s3Service.BUCKET_NAME = 'test-bucket';
+s3Service.S3_BASE_URL = 'https://s3.test';
 const portalRouter = requireCJS('../../routes/portal');
 
 function makeApp() {

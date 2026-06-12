@@ -78,6 +78,9 @@ prisma.auditLog = {
 };
 prisma.revokedToken = prisma.revokedToken || {};
 prisma.revokedToken.findUnique = vi.fn().mockResolvedValue(null);
+// #996 — POST /invoices now validates contact existence before create.
+prisma.contact = prisma.contact || {};
+prisma.contact.findFirst = vi.fn().mockResolvedValue({ id: 999, tenantId: 1 });
 
 import express from 'express';
 import request from 'supertest';
@@ -146,6 +149,7 @@ beforeEach(() => {
   });
   prisma.auditLog.create.mockReset().mockResolvedValue({ id: 1 });
   prisma.auditLog.findFirst.mockReset().mockResolvedValue(null);
+  prisma.contact.findFirst.mockReset().mockResolvedValue({ id: 999, tenantId: 1 });
 });
 
 describe('POST /api/travel/invoices — docType taxonomy', () => {

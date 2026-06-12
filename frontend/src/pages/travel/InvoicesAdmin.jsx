@@ -38,7 +38,8 @@
 // modal only shows the current status + the legal next-states. CREATE
 // mode allows any starting status (Draft is the sensible default).
 
-import { useEffect, useState, useContext } from "react";
+import { useEffect, useRef, useState, useContext } from "react";
+import { Link } from "react-router-dom";
 import { Receipt, Plus, Pencil, Trash2, FileDown, Ban } from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
@@ -177,6 +178,11 @@ export default function InvoicesAdmin() {
   const [invoices, setInvoices] = useState([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
+  // #1051 — resolve contactId -> { name, email } so the CONTACT column renders
+  // a human-readable name instead of "#<id>". Backend list-GET doesn't include
+  // the contact relation, so we batch-fetch unique IDs after the invoices land.
+  // Resolved-but-unknown IDs are cached with name=null so we don't re-request.
+  const [contactsById, setContactsById] = useState({});
   // #829 — distinguish 403 from genuine empty so the empty-state copy
   // honestly says "Access restricted" instead of "No invoices match."
   const [permissionDenied, setPermissionDenied] = useState(false);
@@ -191,6 +197,13 @@ export default function InvoicesAdmin() {
   const [editingStatus, setEditingStatus] = useState(null); // server-side starting status, drives transition narrowing
   const [form, setForm] = useState(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
+  // #996 — synchronous re-entry guard. `saving` is React state, so a fast
+  // double-click can fire handleSubmit twice before setSaving(true) has
+  // rendered the disabled button — and the dedup pre-check on the second
+  // POST runs BEFORE the first POST's row lands in the DB, so BOTH pass and
+  // a byte-identical duplicate gets created. The ref is updated
+  // synchronously on the first call so the second call short-circuits.
+  const inFlightSubmit = useRef(false);
   // Per-row PDF download in-flight tracker. Holds the invoice.id while its
   // GET /:id/pdf is hitting the server so the action button can flip to
   // "Downloading…" and be disabled (defence against double-click producing
@@ -255,6 +268,44 @@ export default function InvoicesAdmin() {
   };
 
   useEffect(load, [subBrand, status, contactIdFilter, quoteIdFilter]);
+
+  // #1051 — fetch contact display names for the IDs we haven't seen yet so the
+  // CONTACT column can render names instead of raw IDs. /api/contacts has no
+  // batch-by-ids surface, so we parallel-fetch /api/contacts/:id and cache.
+  useEffect(() => {
+    const ids = Array.from(
+      new Set(
+        invoices
+          .map((i) => i.contactId)
+          .filter((id) => Number.isFinite(id) && !(id in contactsById)),
+      ),
+    );
+    if (ids.length === 0) return;
+    let cancelled = false;
+    Promise.allSettled(ids.map((id) => fetchApi(`/api/contacts/${id}`))).then((results) => {
+      if (cancelled) return;
+      setContactsById((prev) => {
+        const next = { ...prev };
+        results.forEach((r, idx) => {
+          const id = ids[idx];
+          if (r.status === "fulfilled" && r.value) {
+            next[id] = { name: r.value.name || null, email: r.value.email || null };
+          } else {
+            // Cache the miss so we don't refetch a deleted/inaccessible contact
+            // on every list-load.
+            next[id] = { name: null, email: null };
+          }
+        });
+        return next;
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+    // contactsById intentionally omitted — we only care to fetch when the
+    // invoices set changes; the filter above already skips IDs we've cached.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [invoices]);
 
   const resetForm = () => {
     setForm(EMPTY_FORM);
@@ -329,22 +380,31 @@ export default function InvoicesAdmin() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    // #996 — synchronous re-entry guard. `saving` state takes a render
+    // cycle; a fast double-submit can both pass through before the disabled
+    // button takes effect. The ref blocks the second call immediately.
+    if (inFlightSubmit.current) return;
+    inFlightSubmit.current = true;
     const contactIdInt = parseInt(form.contactId, 10);
     if (!Number.isFinite(contactIdInt)) {
       notify.error("Contact ID is required (must be a number)");
+      inFlightSubmit.current = false;
       return;
     }
     const totalAmountNum = parseFloat(form.totalAmount);
     if (!Number.isFinite(totalAmountNum)) {
       notify.error("Total amount is required (must be a number)");
+      inFlightSubmit.current = false;
       return;
     }
     if (!form.currency) {
       notify.error("Currency is required");
+      inFlightSubmit.current = false;
       return;
     }
     if (!form.dueDate) {
       notify.error("Due date is required");
+      inFlightSubmit.current = false;
       return;
     }
     setSaving(true);
@@ -371,19 +431,43 @@ export default function InvoicesAdmin() {
         });
         notify.success(`Invoice #${editingId} updated`);
       } else {
-        await fetchApi("/api/travel/invoices", {
-          method: "POST",
-          body: JSON.stringify(payload),
-        });
+        // #996 — silent first attempt so a 409 DUPLICATE_DRAFT_INVOICE
+        // surfaces as our own info toast (instead of a generic auto-toast
+        // error). On 409 we HARD-BLOCK — no auto-retry, no force-true
+        // bypass. Operator either uses the existing draft or changes a
+        // field. This eliminates the "click → confirm-prompt → duplicate
+        // anyway" loop and keeps the dedup guard meaningful.
+        try {
+          await fetchApi("/api/travel/invoices", {
+            method: "POST",
+            body: JSON.stringify(payload),
+            silent: true,
+          });
+        } catch (err) {
+          if (err?.status === 409 && err?.code === "DUPLICATE_DRAFT_INVOICE") {
+            const existing = err?.data?.existing;
+            notify.info(
+              `An identical Draft invoice (${existing?.invoiceNum || "TINV-???"}) already exists for this contact. Use that one, or change a field (amount / due date / sub-brand) to create a distinct invoice.`,
+              { ttl: 8000 },
+            );
+            // Leave the form open with current values so the operator can
+            // tweak a field and try again. Do NOT close + reset.
+            return;
+          }
+          // Any other status: surface as an error toast.
+          notify.error(err?.data?.error || err?.message || "Save failed");
+          return;
+        }
         notify.success(`Invoice for contact ${contactIdInt} created`);
       }
       setShowForm(false);
       resetForm();
       load();
     } catch (err) {
-      notify.error(err?.body?.error || err?.message || "Save failed");
+      notify.error(err?.data?.error || err?.message || "Save failed");
     } finally {
       setSaving(false);
+      inFlightSubmit.current = false;
     }
   };
 
@@ -394,13 +478,20 @@ export default function InvoicesAdmin() {
       notify.error(`Only Draft invoices may be deleted (current: ${inv.status})`);
       return;
     }
-    if (!confirm(`Delete invoice ${inv.invoiceNum} for contact ${inv.contactId}? (Hard delete — no undo.)`)) return;
+    const ok = await notify.confirm({
+      title: `Delete invoice ${inv.invoiceNum}?`,
+      message: `Hard delete — no undo. Contact #${inv.contactId}.`,
+      confirmText: "Delete",
+      cancelText: "Keep",
+      destructive: true,
+    });
+    if (!ok) return;
     try {
       await fetchApi(`/api/travel/invoices/${inv.id}`, { method: "DELETE" });
       notify.success(`Invoice ${inv.invoiceNum} deleted`);
       load();
     } catch (err) {
-      notify.error(err?.body?.error || err?.message || "Delete failed");
+      notify.error(err?.data?.error || err?.message || "Delete failed");
     }
   };
 
@@ -767,7 +858,22 @@ export default function InvoicesAdmin() {
                     <td style={{ ...td, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 13 }}>
                       {inv.invoiceNum || "—"}
                     </td>
-                    <td style={td}><strong>#{inv.contactId}</strong></td>
+                    <td style={td}>
+                      {(() => {
+                        const c = contactsById[inv.contactId];
+                        const name = c?.name;
+                        const tooltip = `Contact #${inv.contactId}${c?.email ? ` · ${c.email}` : ""}`;
+                        return (
+                          <Link
+                            to={`/contacts/${inv.contactId}`}
+                            title={tooltip}
+                            style={{ color: "var(--text-primary)", textDecoration: "none", fontWeight: 500 }}
+                          >
+                            {name || `#${inv.contactId}`}
+                          </Link>
+                        );
+                      })()}
+                    </td>
                     <td style={td}>
                       <span
                         style={{

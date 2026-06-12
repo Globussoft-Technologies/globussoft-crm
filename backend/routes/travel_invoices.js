@@ -4412,6 +4412,74 @@ router.post(
           .json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
       }
 
+      // #996 — Contact existence check. Pre-fix, operators could save an
+      // invoice for a non-existent contactId; the row landed orphaned and
+      // the CONTACT column rendered "#<id>" with no resolvable name.
+      // Block with 422 CONTACT_NOT_FOUND when the contact isn't in the
+      // caller's tenant (same-tenant scope; the contact table is multi-
+      // tenant-isolated, so a cross-tenant contactId reads as "missing").
+      // deletedAt: null guards the soft-delete window — without it, a row
+      // GDPR-erased or operator-deleted via the standard Contact DELETE
+      // (which sets deletedAt, doesn't remove) would still pass this check
+      // and let an invoice be raised against a tombstoned contact.
+      const contactExists = await prisma.contact.findFirst({
+        where: { id: contactIdInt, tenantId: req.travelTenant.id, deletedAt: null },
+        select: { id: true },
+      });
+      if (!contactExists) {
+        return res.status(422).json({
+          error: `Contact #${contactIdInt} not found in this tenant`,
+          code: "CONTACT_NOT_FOUND",
+        });
+      }
+
+      // #996 — Draft-invoice dedup guard. Pre-fix, clicking "New Invoice"
+      // twice with identical values created two byte-identical TINV rows
+      // for the same contact + total + dueDate. Block any create that
+      // would land a second Draft matching an existing Draft on
+      // (tenantId, contactId, subBrand, currency, totalAmount, dueDate).
+      //
+      // No time window: a previous version of this guard used a 5-minute
+      // window so operators could "intentionally repeat" identical
+      // Drafts later in the session, but pen-test #996 showed every
+      // observed duplicate was the same byte-identical shape across
+      // arbitrary delays — there is no legitimate operator workflow that
+      // produces two indistinguishable Drafts for the same contact. If
+      // the operator genuinely needs two invoices with identical values,
+      // they change a distinguishing field (dueDate, subBrand, or the
+      // associated line items via the line-item editor on the saved
+      // Draft). Scope stays Draft-only — promoting Draft → Issued
+      // removes the row from the dedup set, so the operator's normal
+      // "issue this one, draft another for the next cycle" flow still
+      // works.
+      const targetStatus = status || "Draft";
+      if (targetStatus === "Draft") {
+        const dupe = await prisma.travelInvoice.findFirst({
+          where: {
+            tenantId: req.travelTenant.id,
+            contactId: contactIdInt,
+            subBrand: targetSubBrand,
+            status: "Draft",
+            currency: String(currency),
+            totalAmount: totalAmount,
+            dueDate: parsedDueDate,
+          },
+          orderBy: { createdAt: "desc" },
+          select: { id: true, invoiceNum: true, createdAt: true },
+        });
+        if (dupe) {
+          return res.status(409).json({
+            error: `An identical Draft invoice (${dupe.invoiceNum}) already exists for this contact.`,
+            code: "DUPLICATE_DRAFT_INVOICE",
+            existing: {
+              id: dupe.id,
+              invoiceNum: dupe.invoiceNum,
+              createdAt: dupe.createdAt,
+            },
+          });
+        }
+      }
+
       const invoiceNum = await nextInvoiceNum(req.travelTenant.id);
 
       const createData = {

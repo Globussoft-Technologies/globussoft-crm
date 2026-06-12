@@ -100,6 +100,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 
 const fetchApiMock = vi.fn();
 vi.mock('../utils/api', () => ({
@@ -221,9 +222,11 @@ function installFetchMock({
 function renderPage({ role = 'ADMIN' } = {}) {
   const value = { user: { role, userId: 1, name: 'Tester' } };
   return render(
-    <AuthContext.Provider value={value}>
-      <InvoicesAdmin />
-    </AuthContext.Provider>,
+    <MemoryRouter>
+      <AuthContext.Provider value={value}>
+        <InvoicesAdmin />
+      </AuthContext.Provider>
+    </MemoryRouter>,
   );
 }
 
@@ -291,7 +294,10 @@ describe('<InvoicesAdmin /> — list fetch + filter chrome', () => {
     renderPage();
     // Row renders the verbatim TINV-YYYY-NNNN backend-assigned serial.
     expect(await screen.findByText('TINV-2026-0001')).toBeInTheDocument();
-    // Contact id rendered as "#42".
+    // #1051 — CONTACT column falls back to "#<id>" when the /api/contacts/:id
+    // lookup returns null (default mock); when it returns a Contact row the
+    // cell renders `contact.name` instead. See the "#1051 — contact name
+    // resolution" describe block below for the success path.
     expect(screen.getByText('#42')).toBeInTheDocument();
     // No-querystring GET fired exactly once.
     const gets = fetchApiMock.mock.calls.filter(
@@ -401,6 +407,42 @@ describe('<InvoicesAdmin /> — row rendering', () => {
     // serial (race-safe assignment is BACKEND-side per tick #97).
     expect(await screen.findByText('TINV-2026-0007')).toBeInTheDocument();
     expect(screen.getByText('TINV-2026-0042')).toBeInTheDocument();
+  });
+
+  it('#1051 — CONTACT column renders the contact name (with link to /contacts/:id) once the lookup resolves', async () => {
+    installFetchMock({
+      list: {
+        invoices: [
+          makeInvoice({ id: 401, invoiceNum: 'TINV-2026-0401', contactId: 37207 }),
+          makeInvoice({ id: 402, invoiceNum: 'TINV-2026-0402', contactId: 24566 }),
+        ],
+        total: 2,
+      },
+    });
+    // Layer a contact-resolution branch on top of the default list/PDF mock.
+    const baseImpl = fetchApiMock.getMockImplementation();
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = opts?.method || 'GET';
+      if (url === '/api/contacts/37207' && method === 'GET') {
+        return Promise.resolve({ id: 37207, name: 'Aarav Sharma', email: 'aarav@example.com' });
+      }
+      if (url === '/api/contacts/24566' && method === 'GET') {
+        return Promise.resolve({ id: 24566, name: 'Sneha Patel', email: 'sneha@example.com' });
+      }
+      return baseImpl(url, opts);
+    });
+    renderPage();
+    // Names resolve and replace the raw ID once the per-row GETs land.
+    expect(await screen.findByText('Aarav Sharma')).toBeInTheDocument();
+    expect(screen.getByText('Sneha Patel')).toBeInTheDocument();
+    // The raw "#37207" / "#24566" placeholders are gone.
+    expect(screen.queryByText('#37207')).toBeNull();
+    expect(screen.queryByText('#24566')).toBeNull();
+    // Each name is a link to the contact detail page (tooltip via title).
+    const aaravLink = screen.getByRole('link', { name: 'Aarav Sharma' });
+    expect(aaravLink.getAttribute('href')).toBe('/contacts/37207');
+    expect(aaravLink.getAttribute('title')).toMatch(/#37207/);
+    expect(aaravLink.getAttribute('title')).toMatch(/aarav@example\.com/);
   });
 
   it('sub-brand badge uses real travelSubBrand palette (SUB_BRAND_BG resolves "rfu" + "visasure")', async () => {
@@ -515,6 +557,93 @@ describe('<InvoicesAdmin /> — new-invoice modal', () => {
       ([url, opts]) => url === '/api/travel/invoices' && opts?.method === 'POST',
     );
     expect(posts.length).toBe(0);
+  });
+
+  // #996 — 409 DUPLICATE_DRAFT_INVOICE hard-block behavior (no force-retry).
+  it('on 409 DUPLICATE_DRAFT_INVOICE: fires a single POST, surfaces notify.info naming the existing draft, does NOT auto-retry', async () => {
+    const dupeErr = Object.assign(new Error('An identical Draft invoice (TINV-2026-0002) was created in the last 5 minutes for this contact.'), {
+      status: 409,
+      code: 'DUPLICATE_DRAFT_INVOICE',
+      data: {
+        code: 'DUPLICATE_DRAFT_INVOICE',
+        error: 'An identical Draft invoice (TINV-2026-0002) was created in the last 5 minutes for this contact.',
+        existing: { id: 102, invoiceNum: 'TINV-2026-0002', createdAt: '2026-05-20T00:00:01.000Z' },
+      },
+    });
+    fetchApiMock.mockReset();
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = opts?.method || 'GET';
+      if (url.startsWith('/api/travel/invoices') && method === 'GET') {
+        return Promise.resolve({ invoices: [makeInvoice()], total: 1 });
+      }
+      if (url === '/api/travel/invoices' && method === 'POST') {
+        return Promise.reject(dupeErr);
+      }
+      return Promise.resolve(null);
+    });
+    renderPage();
+    await screen.findByText('TINV-2026-0001');
+    fireEvent.click(screen.getByRole('button', { name: /New Invoice/i }));
+    fireEvent.change(await screen.findByLabelText(/^Contact ID$/i), { target: { value: '888' } });
+    fireEvent.change(screen.getByLabelText(/^Total amount$/i), { target: { value: '120000' } });
+    fireEvent.change(screen.getByLabelText(/^Due date$/i), { target: { value: '2026-12-31' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+    await waitFor(() => {
+      expect(notifyInfo).toHaveBeenCalled();
+    });
+    // Info toast names the existing draft so the operator knows the keeper.
+    expect(notifyInfo.mock.calls[0][0]).toMatch(/TINV-2026-0002/);
+    // Exactly one POST — the silent first attempt. NO force-true retry.
+    const posts = fetchApiMock.mock.calls.filter(
+      ([u, o]) => u === '/api/travel/invoices' && o?.method === 'POST',
+    );
+    expect(posts.length).toBe(1);
+    expect(posts[0][1].silent).toBe(true);
+    const body = JSON.parse(posts[0][1].body);
+    expect(body.force).toBeUndefined();
+    // No success toast (nothing was created) and no error toast (the info
+    // toast carried the explanation; we don't double-up).
+    expect(notifySuccess).not.toHaveBeenCalled();
+    expect(notifyError).not.toHaveBeenCalled();
+  });
+
+  // #996 — synchronous re-entry guard prevents the double-fire race.
+  it('rapid double-submit fires exactly ONE POST (re-entry guard short-circuits the second call)', async () => {
+    // Slow POST so the second submit overlaps the first's in-flight phase.
+    let resolveFirst;
+    const firstPromise = new Promise((resolve) => { resolveFirst = resolve; });
+    fetchApiMock.mockReset();
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = opts?.method || 'GET';
+      if (url.startsWith('/api/travel/invoices') && method === 'GET') {
+        return Promise.resolve({ invoices: [makeInvoice()], total: 1 });
+      }
+      if (url === '/api/travel/invoices' && method === 'POST') {
+        return firstPromise;
+      }
+      return Promise.resolve(null);
+    });
+    renderPage();
+    await screen.findByText('TINV-2026-0001');
+    fireEvent.click(screen.getByRole('button', { name: /New Invoice/i }));
+    fireEvent.change(await screen.findByLabelText(/^Contact ID$/i), { target: { value: '888' } });
+    fireEvent.change(screen.getByLabelText(/^Total amount$/i), { target: { value: '120000' } });
+    fireEvent.change(screen.getByLabelText(/^Due date$/i), { target: { value: '2026-12-31' } });
+    const form = screen.getByLabelText(/^Total amount$/i).closest('form');
+    // Fire submit TWICE synchronously — simulating a fast double-click before
+    // setSaving(true) has rendered the disabled button.
+    fireEvent.submit(form);
+    fireEvent.submit(form);
+    // Resolve the first POST so the handler can finish.
+    resolveFirst(makeInvoice({ id: 999, invoiceNum: 'TINV-2026-0999' }));
+    await waitFor(() => {
+      expect(notifySuccess).toHaveBeenCalled();
+    });
+    // Exactly ONE POST despite TWO submits — the re-entry guard fired.
+    const posts = fetchApiMock.mock.calls.filter(
+      ([u, o]) => u === '/api/travel/invoices' && o?.method === 'POST',
+    );
+    expect(posts.length).toBe(1);
   });
 });
 

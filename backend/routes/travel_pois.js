@@ -85,6 +85,14 @@
  *                           → /approve+/reject)
  *   404 POI_NOT_FOUND     — POI not in caller's tenant (cross-tenant
  *                           collapses to 404 to avoid existence leak)
+ *   409 POI_DUPLICATE_NEARBY — POST / found an APPROVED POI within
+ *                           50 metres of the requested (lat, lng) in the
+ *                           caller's tenant scope. Body includes
+ *                           { existingId, distance } so the UI can deep-link
+ *                           to the existing row. Caller can pass
+ *                           `?force=true` to bypass (Mughal-complex case
+ *                           — multiple monuments genuinely <50m apart).
+ *                           Slice G055, PRD FR-3.2.f.
  *
  * Test surface:
  *   - backend/test/routes/travel-pois-api.test.js — vitest contract pin
@@ -108,8 +116,10 @@ const crypto = require("crypto");
 const { verifyToken, verifyRole } = require("../middleware/auth");
 const prisma = require("../lib/prisma");
 const { writeAudit } = require("../lib/audit");
+const { findNearbyPoi } = require("../lib/poiDedup");
 
 const EXTERNAL_SOURCE_OPERATOR = "operator";
+const POI_DEDUP_RADIUS_METERS = 50;
 
 // ───────────────────────────────────────────────────────────────────
 // Validation helpers
@@ -232,6 +242,29 @@ router.post("/", verifyToken, async (req, res) => {
 
     const destinationSlug = pickString(body.destinationSlug, 80);
     if (!destinationSlug) badRequest("destinationSlug required", "MISSING_FIELDS");
+
+    // ── G055 / PRD FR-3.2.f — ±50m POI dedup gate ────────────────────
+    // Block on an APPROVED nearby match unless the caller explicitly
+    // opts out via ?force=true. Approved-only on purpose; see
+    // lib/poiDedup.js header for the rationale.
+    const force =
+      req.query.force === "true" || req.query.force === "1" || req.query.force === true;
+    if (!force) {
+      const nearby = await findNearbyPoi(prisma, {
+        tenantId: req.user.tenantId,
+        lat,
+        lng,
+        radiusMeters: POI_DEDUP_RADIUS_METERS,
+      });
+      if (nearby) {
+        return res.status(409).json({
+          error: "An approved POI already exists within 50 metres",
+          code: "POI_DUPLICATE_NEARBY",
+          existingId: nearby.id,
+          distance: Math.round(nearby.distance * 10) / 10,
+        });
+      }
+    }
 
     const data = {
       tenantId: req.user.tenantId,

@@ -342,6 +342,74 @@ test.describe("Travel POIs — rep suggest + approval queue", () => {
     await post(request, travelAdmin, `/api/travel/pois/${suggested.id}/reject`).catch(() => {});
   });
 
+  // ── G055 / PRD FR-3.2.f — ±50m POI dedup gate ─────────────────────
+  test("dedup — second POST at same lat/lng -> 409 POI_DUPLICATE_NEARBY once first is approved", async ({ request }) => {
+    const userToken = await getTravelUser(request);
+    const adminToken = await getTravelAdmin(request);
+    test.skip(!userToken || !adminToken, "travel test users not seeded");
+
+    // Step 1: suggest the original POI at a unique RUN_TAG-derived coordinate
+    // so two parallel runs of this spec on the same demo don't collide.
+    // Use the tail of Date.now() to derive a unique lat/lng offset (~10m
+    // per +0.0001° at this latitude).
+    const offset = (Date.now() % 10_000) * 0.00001;
+    const lat = 15.5673 + offset;
+    const lng = 73.7397 + offset;
+
+    const firstRes = await post(
+      request,
+      userToken,
+      "/api/travel/pois",
+      validSuggestBody({
+        name: `${RUN_TAG} Dedup Original`,
+        latitude: lat,
+        longitude: lng,
+      }),
+    );
+    expect([200, 201]).toContain(firstRes.status());
+    const first = await firstRes.json();
+
+    // Approve so it counts as an APPROVED comparison row.
+    const approveRes = await post(request, adminToken, `/api/travel/pois/${first.id}/approve`);
+    expect(approveRes.status()).toBe(200);
+
+    // Step 2: a second POST at THE SAME (lat, lng) must 409.
+    const dupRes = await post(
+      request,
+      userToken,
+      "/api/travel/pois",
+      validSuggestBody({
+        name: `${RUN_TAG} Dedup Should Block`,
+        latitude: lat,
+        longitude: lng,
+      }),
+    );
+    expect(dupRes.status()).toBe(409);
+    const dupBody = await dupRes.json();
+    expect(dupBody.code).toBe("POI_DUPLICATE_NEARBY");
+    expect(dupBody.existingId).toBe(first.id);
+    expect(typeof dupBody.distance).toBe("number");
+
+    // Step 3: ?force=true override bypasses the dedup gate.
+    const forceRes = await post(
+      request,
+      userToken,
+      "/api/travel/pois?force=true",
+      validSuggestBody({
+        name: `${RUN_TAG} Dedup Force Bypass`,
+        latitude: lat,
+        longitude: lng,
+      }),
+    );
+    expect([200, 201]).toContain(forceRes.status());
+    const forced = await forceRes.json();
+    expect(forced.pendingApproval).toBe(true);
+
+    // Cleanup — reject all 3 rows.
+    await post(request, adminToken, `/api/travel/pois/${forced.id}/reject`).catch(() => {});
+    await post(request, adminToken, `/api/travel/pois/${first.id}/reject`).catch(() => {});
+  });
+
   test("MANAGER role denied on /approve -> 403 RBAC_DENIED (ADMIN-only)", async ({ request }) => {
     // Use generic-admin's tenant since we don't have a guaranteed travel-MANAGER seed.
     // Fall back: query the queue endpoint with the user token instead.

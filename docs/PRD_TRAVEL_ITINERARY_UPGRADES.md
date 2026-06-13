@@ -101,9 +101,9 @@ Sajid (RFU operator) is building an itinerary and types "Jeddah Corniche" in the
 - (g) **Initial seed:** ~50 templates spanning all 4 sub-brands (12 TMC / 14 RFU / 18 Travel Stall / 6 Visa Sure). CSV-import path supports the seed + ongoing additions.
 - (h) **Library metrics:** per-template `usageCount`, `acceptedCount` (clones that became `status: accepted`), `avgFinalPrice`, `lastUsedAt` — surfaced on cards for operator ranking.
 
-### FR-3.2 Sightseeing master (6th Cost Master category)
+### FR-3.2 Sightseeing master (~~6th Cost Master category~~ → standalone `TravelSightseeing` model)
 
-- (a) **Cost Master enum extended.** `VALID_CATEGORIES` in `travel_cost_master.js` adds `"sightseeing"` as the 6th value. DD-5.2 confirmed — no new Prisma model.
+- (a) ✅ **DECISION REVERSED 2026-06-13 — implemented as a standalone `TravelSightseeing` model + `backend/routes/travel_sightseeing.js` + `frontend/src/pages/travel/SightseeingMaster.jsx`, NOT as a 6th Cost Master category.** Original DD-5.2 (extend Cost Master) was retired during build because POI-specific attributes (image, lat/lng, duration, operating-hours, kid-suitability) outgrew the Cost Master `attributesJson` envelope and warranted a typed schema. See §10 Decisions log entry for full rationale.
 - (b) **POI-specific attributes** live in `TravelCostMaster.attributesJson` per existing pattern: `imageUrl`, `latitude`, `longitude`, `durationMinutes`, `category` (cultural / nature / adventure / religious / shopping / food / family), `entryFee`, `bestSeason`, `description`, `accessibility` (mobility-friendly flag), `kidsAppropriate`.
 - (c) **POI search** API: `GET /api/travel/sightseeing?destination=Paris&category=cultural` — substring + category filter, returns top-50 by usage count.
 - (d) **POI seed data.** Sourced from a curated free-license POI dataset (DD-5.3 picks WikiVoyage CSV export vs OpenTripMap free tier — both viable, both Q-IT-3-blocked on licensing review). Initial seed ~500 POIs across top-20 destinations.
@@ -312,3 +312,12 @@ Sajid (RFU operator) is building an itinerary and types "Jeddah Corniche" in the
 - **Status flag:** DRAFT — pending product-owner sign-off (Yasin) on DD-5.1 / DD-5.3 / OQ-9.1 / OQ-9.5 / OQ-9.8.
 - **Sibling PRDs:** PRD_AI_SURFACES (task-class infra), PRD_TRAVEL_QUOTE_BUILDER (cost-master substrate), PRD_TRAVEL_SUPPLIER_MASTER (supplier-id wiring), PRD_TRAVEL_BILLING (invoice handoff), PRD_TRAVEL_MARKETING_FLYER (shared `<VisualBuilder/>` substrate).
 - **Refs:** GH #907 • Travel Stall CRM Roadmap Tier P2 item 12.
+
+---
+
+### §10.1 Decisions log
+
+| Date | Decision | Rationale | Slice |
+|---|---|---|---|
+| 2026-06-13 | **FR-3.2.a — sightseeing master implemented as a standalone `TravelSightseeing` Prisma model + `backend/routes/travel_sightseeing.js` + `frontend/src/pages/travel/SightseeingMaster.jsx`, NOT as a 6th Cost Master category.** Original DD-5.2 ("extend Cost Master") is RETIRED. | Cost Master's flat `(routeOrSku, attributesJson)` envelope couldn't carry the typed POI fields cleanly — image URL, lat/lng, duration, operating hours, kid-suitability, accessibility flags all want first-class columns + indexes. A separate model gave: typed `latitude`/`longitude` (Float, indexed) feeding the map preview without `attributesJson.latitude` parsing; typed `durationMinutes` for itinerary day-budgeting math; cleaner CSV import path (one row per POI, one column per attribute) vs sightseeing-rows-shaped-like-cost-rows polymorphism. The richer schema also de-risks the FR-3.3 visual editor map-preview integration. POI volume projection (~3k rows by year 3) is well-within standalone-model index economics — there's no operational reason to multiplex through Cost Master. | G054 (doc-only) |
+| 2026-06-13 | **FR-3.2.f — POI deduplication enforced server-side at POST `/api/travel/pois` via a ±50m haversine check against APPROVED rows, with `?force=true` operator override.** | Operators sometimes re-key existing POIs because the catalog search miss is silent — same Eiffel Tower entered three times because the search typo'd "Eifel". 50m is the right threshold for distinct places (closer than that and you're inside the same monument); the `?force=true` override handles the genuine "Mughal complex with multiple shrines <50m apart" case. Approved-only on purpose: pending-approval rows are a shared queue; two reps independently suggesting the same place need the ADMIN to pick one rather than the second SUGGEST silently failing on a still-uncommitted first. Helper lives at `backend/lib/poiDedup.js` (haversine + bounding-box prefilter + exact-haversine survivor scan); 24 vitest cases pin the haversine constant + tenant-scope behaviour + threshold edges. | G055 |

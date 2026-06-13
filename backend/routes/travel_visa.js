@@ -2067,4 +2067,509 @@ router.get(
   },
 );
 
+// ─────────────────────────────────────────────────────────────────────
+// G107 — RejectionRecoveryProgram endpoints
+// ─────────────────────────────────────────────────────────────────────
+//
+// PRD_VISA_SURE_PHASE_3 §FR-7. Advisor-curated second-attempt programs for
+// previously-rejected applicants. Programs are tenant-scoped; enrolment
+// links a VisaApplication to a program via VisaApplication.recoveryProgramId
+// (already a forward-ref Int column on the model; the schema-first commit
+// f03ea3e8 connected the relation).
+//
+//   POST  /api/travel/visa/recovery-programs           — create program (ADMIN/MANAGER)
+//   GET   /api/travel/visa/recovery-programs           — list (filter by country/active)
+//   GET   /api/travel/visa/recovery-programs/:id       — detail + enrolled applications count
+//   PUT   /api/travel/visa/recovery-programs/:id       — update program (ADMIN/MANAGER)
+//   POST  /api/travel/visa/applications/:id/enrol-recovery
+//                                                       — enrol VisaApplication; writes audit
+
+function validateRecoveryProgramBody(body, { partial = false } = {}) {
+  if (!body || typeof body !== "object") {
+    return { error: "Request body required", code: "MISSING_FIELDS" };
+  }
+
+  // name + destinationCountry required on create.
+  if (!partial) {
+    const name = typeof body.name === "string" ? body.name.trim() : "";
+    if (!name) {
+      return { error: "name is required", code: "MISSING_FIELDS" };
+    }
+    if (name.length > 200) {
+      return { error: "name must be 1..200 chars", code: "INVALID_NAME" };
+    }
+
+    const destinationCountry =
+      typeof body.destinationCountry === "string"
+        ? body.destinationCountry.trim()
+        : "";
+    if (!destinationCountry) {
+      return {
+        error: "destinationCountry is required",
+        code: "MISSING_FIELDS",
+      };
+    }
+    if (destinationCountry.length > 100) {
+      return {
+        error: "destinationCountry must be 1..100 chars",
+        code: "INVALID_DESTINATION",
+      };
+    }
+  } else {
+    // On PUT, name/destinationCountry are optional but if provided must be valid.
+    if (body.name !== undefined) {
+      const name = typeof body.name === "string" ? body.name.trim() : "";
+      if (!name) {
+        return { error: "name must be non-empty", code: "INVALID_NAME" };
+      }
+      if (name.length > 200) {
+        return { error: "name must be 1..200 chars", code: "INVALID_NAME" };
+      }
+    }
+    if (body.destinationCountry !== undefined) {
+      const dc =
+        typeof body.destinationCountry === "string"
+          ? body.destinationCountry.trim()
+          : "";
+      if (!dc) {
+        return {
+          error: "destinationCountry must be non-empty",
+          code: "INVALID_DESTINATION",
+        };
+      }
+      if (dc.length > 100) {
+        return {
+          error: "destinationCountry must be 1..100 chars",
+          code: "INVALID_DESTINATION",
+        };
+      }
+    }
+  }
+
+  // visaType: optional enum-aligned (loose — applicationType enum).
+  if (
+    body.visaType !== undefined &&
+    body.visaType !== null &&
+    body.visaType !== ""
+  ) {
+    if (typeof body.visaType !== "string" || body.visaType.length > 40) {
+      return { error: "visaType must be a short string", code: "INVALID_VISA_TYPE" };
+    }
+  }
+
+  // durationDays: positive integer if provided.
+  if (
+    body.durationDays !== undefined &&
+    body.durationDays !== null &&
+    body.durationDays !== ""
+  ) {
+    const d = Number(body.durationDays);
+    if (!Number.isFinite(d) || d < 0 || !Number.isInteger(d)) {
+      return {
+        error: "durationDays must be a non-negative integer",
+        code: "INVALID_DURATION",
+      };
+    }
+  }
+
+  // successRate: 0..100 number if provided.
+  if (
+    body.successRate !== undefined &&
+    body.successRate !== null &&
+    body.successRate !== ""
+  ) {
+    const r = Number(body.successRate);
+    if (!Number.isFinite(r) || r < 0 || r > 100) {
+      return {
+        error: "successRate must be a number in [0, 100]",
+        code: "INVALID_SUCCESS_RATE",
+      };
+    }
+  }
+
+  // feeAmount: positive number if provided.
+  if (
+    body.feeAmount !== undefined &&
+    body.feeAmount !== null &&
+    body.feeAmount !== ""
+  ) {
+    const f = Number(body.feeAmount);
+    if (!Number.isFinite(f) || f < 0) {
+      return {
+        error: "feeAmount must be a non-negative number",
+        code: "INVALID_FEE_AMOUNT",
+      };
+    }
+  }
+
+  return null;
+}
+
+function coerceRecoveryProgramData(body) {
+  const data = {};
+  if (body.name !== undefined) data.name = String(body.name).trim();
+  if (body.destinationCountry !== undefined) {
+    data.destinationCountry = String(body.destinationCountry).trim();
+  }
+  if (body.visaType !== undefined) {
+    data.visaType =
+      body.visaType === "" || body.visaType === null
+        ? null
+        : String(body.visaType).trim();
+  }
+  if (body.description !== undefined) {
+    data.description =
+      body.description === "" || body.description === null
+        ? null
+        : String(body.description);
+  }
+  if (body.durationDays !== undefined) {
+    data.durationDays =
+      body.durationDays === "" || body.durationDays === null
+        ? null
+        : Number(body.durationDays);
+  }
+  if (body.successRate !== undefined) {
+    data.successRate =
+      body.successRate === "" || body.successRate === null
+        ? null
+        : Number(body.successRate);
+  }
+  if (body.feeAmount !== undefined) {
+    data.feeAmount =
+      body.feeAmount === "" || body.feeAmount === null
+        ? null
+        : Number(body.feeAmount);
+  }
+  if (body.feeCurrency !== undefined) {
+    data.feeCurrency =
+      body.feeCurrency === "" || body.feeCurrency === null
+        ? null
+        : String(body.feeCurrency).trim().toUpperCase().slice(0, 8);
+  }
+  if (body.enrolmentCriteriaJson !== undefined) {
+    data.enrolmentCriteriaJson =
+      body.enrolmentCriteriaJson === "" || body.enrolmentCriteriaJson === null
+        ? null
+        : typeof body.enrolmentCriteriaJson === "string"
+          ? body.enrolmentCriteriaJson
+          : JSON.stringify(body.enrolmentCriteriaJson);
+  }
+  if (body.programSteps !== undefined) {
+    data.programSteps =
+      body.programSteps === "" || body.programSteps === null
+        ? null
+        : String(body.programSteps);
+  }
+  if (body.isActive !== undefined) {
+    data.isActive = body.isActive === true || body.isActive === "true";
+  }
+  return data;
+}
+
+// POST /api/travel/visa/recovery-programs — create program.
+router.post(
+  "/recovery-programs",
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const tenantId = req.travelTenant.id;
+      const validation = validateRecoveryProgramBody(req.body, { partial: false });
+      if (validation) {
+        return res.status(400).json(validation);
+      }
+      const data = coerceRecoveryProgramData(req.body);
+      const created = await prisma.rejectionRecoveryProgram.create({
+        data: {
+          tenantId,
+          name: data.name,
+          destinationCountry: data.destinationCountry,
+          visaType: data.visaType ?? null,
+          description: data.description ?? null,
+          durationDays: data.durationDays ?? null,
+          successRate: data.successRate ?? null,
+          feeAmount: data.feeAmount ?? null,
+          feeCurrency: data.feeCurrency ?? null,
+          enrolmentCriteriaJson: data.enrolmentCriteriaJson ?? null,
+          programSteps: data.programSteps ?? null,
+          isActive: data.isActive !== undefined ? data.isActive : true,
+          createdBy: req.user.userId ?? null,
+        },
+      });
+      writeAudit(
+        "RejectionRecoveryProgram",
+        "CREATE",
+        created.id,
+        req.user.userId,
+        tenantId,
+        {
+          name: created.name,
+          destinationCountry: created.destinationCountry,
+        },
+      ).catch(() => {});
+      res.status(201).json(created);
+    } catch (e) {
+      console.error("[travel-visa/recovery-programs] POST error:", e.message);
+      res.status(500).json({
+        error: "Failed to create recovery program",
+        code: "INTERNAL_ERROR",
+      });
+    }
+  },
+);
+
+// GET /api/travel/visa/recovery-programs — list with filters.
+router.get(
+  "/recovery-programs",
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const tenantId = req.travelTenant.id;
+      const where = { tenantId };
+      if (req.query.country) {
+        where.destinationCountry = String(req.query.country).trim();
+      }
+      if (req.query.active !== undefined && req.query.active !== "") {
+        const a = String(req.query.active).toLowerCase();
+        if (a === "true" || a === "1") where.isActive = true;
+        else if (a === "false" || a === "0") where.isActive = false;
+      }
+      const take = Math.min(parseInt(req.query.limit, 10) || 100, 500);
+      const skip = parseInt(req.query.offset, 10) || 0;
+      const [programs, total] = await Promise.all([
+        prisma.rejectionRecoveryProgram.findMany({
+          where,
+          orderBy: { createdAt: "desc" },
+          take,
+          skip,
+        }),
+        prisma.rejectionRecoveryProgram.count({ where }),
+      ]);
+      res.json({ programs, total, limit: take, offset: skip });
+    } catch (e) {
+      console.error("[travel-visa/recovery-programs] GET error:", e.message);
+      res.status(500).json({
+        error: "Failed to list recovery programs",
+        code: "INTERNAL_ERROR",
+      });
+    }
+  },
+);
+
+// GET /api/travel/visa/recovery-programs/:id — detail + enrolled count.
+router.get(
+  "/recovery-programs/:id",
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const tenantId = req.travelTenant.id;
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({
+          error: "id must be a number",
+          code: "INVALID_ID",
+        });
+      }
+      const program = await prisma.rejectionRecoveryProgram.findFirst({
+        where: { id, tenantId },
+      });
+      if (!program) {
+        return res.status(404).json({
+          error: "Recovery program not found",
+          code: "PROGRAM_NOT_FOUND",
+        });
+      }
+      const enrolledCount = await prisma.visaApplication.count({
+        where: { tenantId, recoveryProgramId: id },
+      });
+      res.json({ ...program, enrolledCount });
+    } catch (e) {
+      console.error(
+        "[travel-visa/recovery-programs] GET detail error:",
+        e.message,
+      );
+      res.status(500).json({
+        error: "Failed to load recovery program",
+        code: "INTERNAL_ERROR",
+      });
+    }
+  },
+);
+
+// PUT /api/travel/visa/recovery-programs/:id — update program.
+router.put(
+  "/recovery-programs/:id",
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const tenantId = req.travelTenant.id;
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({
+          error: "id must be a number",
+          code: "INVALID_ID",
+        });
+      }
+      const validation = validateRecoveryProgramBody(req.body, { partial: true });
+      if (validation) {
+        return res.status(400).json(validation);
+      }
+      const existing = await prisma.rejectionRecoveryProgram.findFirst({
+        where: { id, tenantId },
+      });
+      if (!existing) {
+        return res.status(404).json({
+          error: "Recovery program not found",
+          code: "PROGRAM_NOT_FOUND",
+        });
+      }
+      const data = coerceRecoveryProgramData(req.body);
+      const updated = await prisma.rejectionRecoveryProgram.update({
+        where: { id },
+        data,
+      });
+      writeAudit(
+        "RejectionRecoveryProgram",
+        "UPDATE",
+        updated.id,
+        req.user.userId,
+        tenantId,
+        { changedFields: Object.keys(data) },
+      ).catch(() => {});
+      res.json(updated);
+    } catch (e) {
+      console.error(
+        "[travel-visa/recovery-programs] PUT error:",
+        e.message,
+      );
+      res.status(500).json({
+        error: "Failed to update recovery program",
+        code: "INTERNAL_ERROR",
+      });
+    }
+  },
+);
+
+// POST /api/travel/visa/applications/:id/enrol-recovery — enrol application.
+//
+// Body: { recoveryProgramId: <int> }  (use null to UN-enrol)
+//
+// Writes audit row APPLICATION_ENROL_RECOVERY with old/new programId.
+// Tenant-scoped + sub-brand-scoped (Contact.subBrand === 'visasure').
+router.post(
+  "/applications/:id/enrol-recovery",
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const tenantId = req.travelTenant.id;
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({
+          error: "id must be a number",
+          code: "INVALID_ID",
+        });
+      }
+
+      const body = req.body || {};
+      let programId = null;
+      if (
+        body.recoveryProgramId !== undefined &&
+        body.recoveryProgramId !== null &&
+        body.recoveryProgramId !== ""
+      ) {
+        const p = Number(body.recoveryProgramId);
+        if (!Number.isFinite(p) || !Number.isInteger(p)) {
+          return res.status(400).json({
+            error: "recoveryProgramId must be an integer or null",
+            code: "INVALID_PROGRAM_ID",
+          });
+        }
+        programId = p;
+      }
+
+      // Resolve application with tenant + sub-brand gate.
+      const application = await prisma.visaApplication.findFirst({
+        where: { id, tenantId },
+        select: { id: true, contactId: true, recoveryProgramId: true },
+      });
+      if (!application) {
+        return res.status(404).json({
+          error: "Visa application not found",
+          code: "APPLICATION_NOT_FOUND",
+        });
+      }
+      const contact = await prisma.contact.findFirst({
+        where: { id: application.contactId, tenantId },
+        select: { id: true, subBrand: true },
+      });
+      if (!contact || contact.subBrand !== VISA_SUB_BRAND) {
+        return res.status(404).json({
+          error: "Visa application not found",
+          code: "NOT_VISA_SURE",
+        });
+      }
+
+      // Resolve program when set.
+      if (programId !== null) {
+        const program = await prisma.rejectionRecoveryProgram.findFirst({
+          where: { id: programId, tenantId },
+          select: { id: true, isActive: true },
+        });
+        if (!program) {
+          return res.status(404).json({
+            error: "Recovery program not found on this tenant",
+            code: "PROGRAM_NOT_FOUND",
+          });
+        }
+        if (!program.isActive) {
+          return res.status(400).json({
+            error: "Recovery program is inactive",
+            code: "PROGRAM_INACTIVE",
+          });
+        }
+      }
+
+      const updated = await prisma.visaApplication.update({
+        where: { id },
+        data: { recoveryProgramId: programId },
+      });
+
+      writeAudit(
+        "VisaApplication",
+        "ENROL_RECOVERY",
+        updated.id,
+        req.user.userId,
+        tenantId,
+        {
+          fromProgramId: application.recoveryProgramId ?? null,
+          toProgramId: programId,
+        },
+      ).catch(() => {});
+
+      res.json({
+        applicationId: updated.id,
+        recoveryProgramId: updated.recoveryProgramId,
+        message:
+          programId === null
+            ? "Application un-enrolled from recovery program"
+            : "Application enrolled in recovery program",
+      });
+    } catch (e) {
+      console.error(
+        "[travel-visa/applications/enrol-recovery] error:",
+        e.message,
+      );
+      res.status(500).json({
+        error: "Failed to enrol application in recovery program",
+        code: "INTERNAL_ERROR",
+      });
+    }
+  },
+);
+
 module.exports = router;

@@ -115,6 +115,63 @@ function parseTalkingPointsEnvelope(raw) {
   try { return JSON.parse(raw); } catch { return null; }
 }
 
+// G104 — DD-5.7 blind-collapsed section parser. Splits the LLM-returned
+// brief text into named sections so each can render in its own collapsed
+// <details>. The brief may carry an explicit `sections` array (real LLM
+// output) OR be flat prose with markdown-ish headings (`## Lead with`,
+// `Lead with:`, etc.). Falls back to a single "Advisor brief" section
+// when no structural cues are present.
+function parseBriefSections(envelope) {
+  if (!envelope) return [];
+  // Explicit array — preferred shape when the LLM router returns structured JSON.
+  if (Array.isArray(envelope.sections)) {
+    return envelope.sections
+      .filter((s) => s && (s.key || s.title) && (s.body || s.text))
+      .map((s, i) => ({
+        key: String(s.key || s.title || `section-${i}`).trim(),
+        title: String(s.title || s.key || `Section ${i + 1}`).trim(),
+        body: String(s.body || s.text || "").trim(),
+      }));
+  }
+  const text = String(envelope.text || "").trim();
+  if (!text) return [];
+  // Try to split on bold/markdown-style headings.
+  // Patterns:
+  //   ## Section title
+  //   **Section title**
+  //   Section title:        (line ending with colon)
+  const lines = text.split(/\r?\n/);
+  const sections = [];
+  let current = null;
+  const headingRegex = /^(?:#{1,4}\s+)?(?:\*\*)?\s*(lead with|concerns?|objections?|next step|alternatives?|ladder|pricing|why now|skills?|outcomes?|board hook|runway|family fit|qualification|tier match)\b[:\-*\s]*$/i;
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line) {
+      if (current) current.body += "\n";
+      continue;
+    }
+    const m = headingRegex.exec(line);
+    if (m) {
+      if (current && current.body.trim()) sections.push(current);
+      const title = m[1].replace(/\b\w/g, (c) => c.toUpperCase());
+      const key = title.toLowerCase().replace(/\s+/g, "_");
+      current = { key, title, body: "" };
+      continue;
+    }
+    if (!current) {
+      current = { key: "advisor_brief", title: "Advisor brief", body: "" };
+    }
+    current.body += rawLine + "\n";
+  }
+  if (current && current.body.trim()) sections.push(current);
+  // Trim bodies.
+  for (const s of sections) s.body = s.body.trim();
+  if (sections.length === 0 && text) {
+    return [{ key: "advisor_brief", title: "Advisor brief", body: text }];
+  }
+  return sections;
+}
+
 function formatAnswer(value) {
   if (value === null || value === undefined || value === "") return "—";
   if (Array.isArray(value)) return value.join(", ");
@@ -148,6 +205,13 @@ export default function DiagnosticDetail() {
   const [humanPickDraft, setHumanPickDraft] = useState("");
   const [humanPickSaving, setHumanPickSaving] = useState(false);
   const [catalogue, setCatalogue] = useState([]);
+
+  // G104 — DD-5.7 blind-collapsed sales brief. Each parsed section starts
+  // closed; per-section reveal-click fires a fire-and-forget audit POST
+  // so we can prove "advisor saw section X at time Y" without re-billing
+  // the LLM. The Set tracks already-revealed keys (deduped audit emits).
+  const [briefOpenKeys, setBriefOpenKeys] = useState(new Set());
+  const [briefRevealedKeys, setBriefRevealedKeys] = useState(new Set());
   const [catalogueLoading, setCatalogueLoading] = useState(false);
   const [engineExpanded, setEngineExpanded] = useState(false);
 
@@ -552,9 +616,128 @@ export default function DiagnosticDetail() {
         </div>
         {envelope ? (
           <>
-            <div style={proseBox} data-testid="talking-points-text">
-              {envelope.text || "(no text returned)"}
-            </div>
+            {(() => {
+              // G104 — DD-5.7 blind-collapsed UX. Each Job-B sales-brief
+              // section starts CLOSED. Per-section reveal-click fires an
+              // audit POST (deduped per session). Open-all / Close-all
+              // toggles bulk the section state.
+              const sections = parseBriefSections(envelope);
+              if (sections.length === 0) {
+                return (
+                  <div style={emptyBox} role="status">
+                    <Sparkles
+                      size={18}
+                      aria-hidden
+                      style={{ color: "var(--text-secondary)" }}
+                    />
+                    <div>(no brief content returned)</div>
+                  </div>
+                );
+              }
+              const allOpen = sections.every((s) =>
+                briefOpenKeys.has(s.key),
+              );
+              const openAll = () => {
+                const next = new Set(briefOpenKeys);
+                for (const s of sections) {
+                  next.add(s.key);
+                  if (!briefRevealedKeys.has(s.key)) {
+                    fetchApi(`/api/travel/diagnostics/${diagId}/brief-reveal`, {
+                      method: "POST",
+                      body: JSON.stringify({ sectionKey: s.key }),
+                    }).catch(() => {});
+                  }
+                }
+                setBriefOpenKeys(next);
+                setBriefRevealedKeys((prev) => {
+                  const n = new Set(prev);
+                  for (const s of sections) n.add(s.key);
+                  return n;
+                });
+              };
+              const closeAll = () => setBriefOpenKeys(new Set());
+              return (
+                <>
+                  <div
+                    style={{
+                      display: "flex",
+                      gap: 8,
+                      marginBottom: 8,
+                      alignItems: "center",
+                    }}
+                    data-testid="brief-collapse-toolbar"
+                  >
+                    <span
+                      style={{
+                        fontSize: 12,
+                        color: "var(--text-secondary)",
+                      }}
+                    >
+                      Sections start collapsed (DD-5.7 blind-collapsed UX —
+                      open as you read).
+                    </span>
+                    {sections.length > 1 && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={allOpen ? closeAll : openAll}
+                          style={collapseToggleBtn}
+                          aria-label={
+                            allOpen ? "Close all sections" : "Open all sections"
+                          }
+                        >
+                          {allOpen ? (
+                            <>
+                              <EyeOff size={12} aria-hidden /> Close all
+                            </>
+                          ) : (
+                            <>
+                              <Eye size={12} aria-hidden /> Open all
+                            </>
+                          )}
+                        </button>
+                      </>
+                    )}
+                  </div>
+                  {sections.map((s) => (
+                    <details
+                      key={s.key}
+                      open={briefOpenKeys.has(s.key)}
+                      data-testid={`brief-section-${s.key}`}
+                      style={detailsStyle}
+                      onToggle={(e) => {
+                        const isOpen = e.currentTarget.open;
+                        setBriefOpenKeys((prev) => {
+                          const next = new Set(prev);
+                          if (isOpen) next.add(s.key);
+                          else next.delete(s.key);
+                          return next;
+                        });
+                        if (isOpen && !briefRevealedKeys.has(s.key)) {
+                          setBriefRevealedKeys((prev) => {
+                            const n = new Set(prev);
+                            n.add(s.key);
+                            return n;
+                          });
+                          fetchApi(
+                            `/api/travel/diagnostics/${diagId}/brief-reveal`,
+                            {
+                              method: "POST",
+                              body: JSON.stringify({ sectionKey: s.key }),
+                            },
+                          ).catch(() => {});
+                        }
+                      }}
+                    >
+                      <summary style={summaryStyle}>{s.title}</summary>
+                      <div style={proseBox} data-testid={`brief-body-${s.key}`}>
+                        {s.body}
+                      </div>
+                    </details>
+                  ))}
+                </>
+              );
+            })()}
             <div style={metaLine}>
               Generated by <strong>{envelope.model || "unknown model"}</strong>
               {" "}on {fmtDate(envelope.generatedAt)} &middot;{" "}
@@ -942,6 +1125,39 @@ const metaLine = {
   marginTop: 8,
   fontSize: 12,
   color: "var(--text-secondary)",
+};
+
+// G104 — DD-5.7 blind-collapsed UX styles.
+const detailsStyle = {
+  border: "1px solid var(--border-light)",
+  borderRadius: 8,
+  background: "var(--bg-color)",
+  marginBottom: 8,
+  padding: "8px 12px",
+};
+
+const summaryStyle = {
+  cursor: "pointer",
+  fontSize: 14,
+  fontWeight: 600,
+  padding: "4px 0",
+  color: "var(--text-primary)",
+  listStyle: "revert",
+};
+
+const collapseToggleBtn = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 4,
+  marginLeft: "auto",
+  padding: "4px 10px",
+  borderRadius: 6,
+  fontSize: 12,
+  fontWeight: 500,
+  background: "transparent",
+  color: "var(--text-secondary)",
+  border: "1px solid var(--border-color)",
+  cursor: "pointer",
 };
 
 const emptyBox = {

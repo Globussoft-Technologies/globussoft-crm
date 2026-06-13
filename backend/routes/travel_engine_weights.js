@@ -141,6 +141,32 @@ function validateAndCoercePutBody(body) {
     coerced.version = body.version.trim();
   }
 
+  // G103 — §3.5.5 standing-facts: assuranceFactsJson + trustFactsJson.
+  // Both optional. Accept either a raw JSON string OR an object/array (we
+  // stringify on save per CLAUDE.md JSON-string-column convention).
+  // Empty string + null both clear the override (renderer falls back to
+  // DEFAULT_STANDING_FACTS).
+  for (const factsKey of ["assuranceFactsJson", "trustFactsJson"]) {
+    if (body[factsKey] !== undefined) {
+      const raw = body[factsKey];
+      if (raw === null || raw === "") {
+        coerced[factsKey] = null;
+      } else if (typeof raw === "string") {
+        // Validate it's parseable JSON (don't store malformed JSON in the row).
+        try {
+          JSON.parse(raw);
+        } catch (_e) {
+          badRequest(`${factsKey} must be a valid JSON string`, "INVALID_FACTS_JSON");
+        }
+        coerced[factsKey] = raw;
+      } else if (typeof raw === "object") {
+        coerced[factsKey] = JSON.stringify(raw);
+      } else {
+        badRequest(`${factsKey} must be JSON string or object`, "INVALID_FACTS_JSON");
+      }
+    }
+  }
+
   return coerced;
 }
 
@@ -257,6 +283,15 @@ router.put(
         scoresWellThreshold: coerced.scoresWellThreshold,
         version: finalVersion,
       };
+      // G103 standing-facts JSON overrides — only attach when the caller
+      // explicitly provided them so a PUT that doesn't include them does
+      // NOT clobber an existing override.
+      if (Object.prototype.hasOwnProperty.call(coerced, "assuranceFactsJson")) {
+        data.assuranceFactsJson = coerced.assuranceFactsJson;
+      }
+      if (Object.prototype.hasOwnProperty.call(coerced, "trustFactsJson")) {
+        data.trustFactsJson = coerced.trustFactsJson;
+      }
 
       // Use the upsert primitive against the @@unique([tenantId]) index so
       // concurrent PUTs to the same tenant don't race into duplicate-row

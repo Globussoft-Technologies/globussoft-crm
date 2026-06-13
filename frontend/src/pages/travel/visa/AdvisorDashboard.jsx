@@ -31,7 +31,7 @@
  * Mirrors frontend/src/pages/travel/LeadDetail.jsx parallel-fetch shape
  * for the data flow; visual shell matches the 875c082 SHELL it replaces.
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useContext } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import {
   Stamp,
@@ -43,8 +43,11 @@ import {
   Sparkles,
   CheckCircle2,
   ArrowRight,
+  HeartHandshake,
 } from 'lucide-react';
 import { fetchApi } from '../../../utils/api';
+import { useNotify } from '../../../utils/notify';
+import { AuthContext } from '../../../App';
 
 const SECTION = {
   background: 'rgba(255, 255, 255, 0.03)',
@@ -106,6 +109,20 @@ const PILL_YELLOW = {
   color: 'rgb(255, 220, 140)',
 };
 
+const enrolBtn = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 6,
+  padding: '6px 14px',
+  borderRadius: 6,
+  fontWeight: 600,
+  fontSize: 13,
+  background: 'var(--primary-color, var(--accent-color))',
+  color: '#fff',
+  border: 'none',
+  cursor: 'pointer',
+};
+
 // Helpers — keep the JSX readable by hoisting the boolean checks here.
 
 // FR-3.2: rejectionHistoryJson is a String? @db.Text — treat null /
@@ -129,9 +146,23 @@ const isAdvisorRiskActive = (flag) => {
 
 const VisaAdvisorDashboard = () => {
   const { applicationId } = useParams();
+  const notify = useNotify();
+  const { user } = useContext(AuthContext) || {};
+  const canEnrol = user?.role === 'ADMIN' || user?.role === 'MANAGER';
   const [application, setApplication] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+
+  // G107 — recovery-program enrolment UX. We surface "Enrol in recovery"
+  // as a CTA when the application status is "rejected" OR the application
+  // already has rejection history on file. Selecting a program POSTs to
+  // /api/travel/visa/applications/:id/enrol-recovery; the response carries
+  // the new recoveryProgramId which we mirror into local state.
+  const [showEnrol, setShowEnrol] = useState(false);
+  const [programs, setPrograms] = useState([]);
+  const [programsLoading, setProgramsLoading] = useState(false);
+  const [enrolBusy, setEnrolBusy] = useState(false);
+  const [selectedProgramId, setSelectedProgramId] = useState('');
 
   useEffect(() => {
     let cancelled = false;
@@ -406,6 +437,188 @@ const VisaAdvisorDashboard = () => {
               commit <code>9e8c28f</code>).
             </p>
           </section>
+
+          {/* G107 — Rejection-recovery enrolment. Surfaces a CTA when the
+              advisor sees a rejected application OR the row already has
+              rejection history. The dropdown is loaded lazily on click to
+              avoid a per-render programs fetch. */}
+          {(application.status === 'rejected' ||
+            rejectionActive ||
+            application.recoveryProgramId != null) && (
+            <section style={SECTION}>
+              <h2 style={SECTION_HEADER}>
+                <HeartHandshake size={16} aria-hidden /> Rejection recovery
+              </h2>
+              {application.recoveryProgramId != null ? (
+                <div
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 6,
+                    fontSize: '0.9rem',
+                  }}
+                >
+                  <div>
+                    Currently enrolled in program{' '}
+                    <strong>#{application.recoveryProgramId}</strong>.
+                  </div>
+                  <Link
+                    to="/travel/visa/recovery-programs"
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 6,
+                      marginTop: 6,
+                      color: 'var(--primary-color, var(--accent-color))',
+                      textDecoration: 'none',
+                      fontSize: '0.85rem',
+                      fontWeight: 600,
+                    }}
+                  >
+                    Manage programs <ArrowRight size={14} />
+                  </Link>
+                </div>
+              ) : (
+                <div style={EMPTY_LINE}>
+                  No recovery program selected yet.
+                </div>
+              )}
+              {canEnrol && (
+                <div style={{ marginTop: 10 }}>
+                  {!showEnrol ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowEnrol(true);
+                        if (programs.length === 0 && !programsLoading) {
+                          setProgramsLoading(true);
+                          fetchApi(
+                            '/api/travel/visa/recovery-programs?active=true',
+                          )
+                            .then((res) => {
+                              setPrograms(
+                                Array.isArray(res?.programs)
+                                  ? res.programs
+                                  : [],
+                              );
+                            })
+                            .catch(() => setPrograms([]))
+                            .finally(() => setProgramsLoading(false));
+                        }
+                      }}
+                      style={enrolBtn}
+                      aria-label="Enrol in recovery program"
+                    >
+                      Enrol in recovery
+                    </button>
+                  ) : (
+                    <div
+                      style={{
+                        display: 'flex',
+                        gap: 8,
+                        flexWrap: 'wrap',
+                        alignItems: 'center',
+                      }}
+                    >
+                      <select
+                        value={selectedProgramId}
+                        onChange={(e) => setSelectedProgramId(e.target.value)}
+                        aria-label="Pick recovery program"
+                        style={{
+                          padding: '6px 10px',
+                          borderRadius: 6,
+                          border: '1px solid var(--border-color)',
+                          background: 'var(--bg-color)',
+                          color: 'var(--text-primary)',
+                          fontSize: 13,
+                        }}
+                      >
+                        <option value="">
+                          {programsLoading
+                            ? 'Loading…'
+                            : programs.length === 0
+                              ? 'No active programs'
+                              : 'Pick a program'}
+                        </option>
+                        {programs.map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {p.name} ({p.destinationCountry})
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          if (!selectedProgramId) return;
+                          setEnrolBusy(true);
+                          try {
+                            const res = await fetchApi(
+                              `/api/travel/visa/applications/${applicationId}/enrol-recovery`,
+                              {
+                                method: 'POST',
+                                body: JSON.stringify({
+                                  recoveryProgramId: Number(selectedProgramId),
+                                }),
+                              },
+                            );
+                            notify.success(
+                              res?.message ||
+                                'Application enrolled in recovery program',
+                            );
+                            setApplication((prev) =>
+                              prev
+                                ? {
+                                    ...prev,
+                                    recoveryProgramId:
+                                      res?.recoveryProgramId ?? null,
+                                  }
+                                : prev,
+                            );
+                            setShowEnrol(false);
+                            setSelectedProgramId('');
+                          } catch (err) {
+                            notify.error(
+                              err?.body?.error ||
+                                err?.message ||
+                                'Failed to enrol',
+                            );
+                          } finally {
+                            setEnrolBusy(false);
+                          }
+                        }}
+                        disabled={!selectedProgramId || enrolBusy}
+                        style={{
+                          ...enrolBtn,
+                          opacity: !selectedProgramId || enrolBusy ? 0.6 : 1,
+                          cursor:
+                            !selectedProgramId || enrolBusy
+                              ? 'not-allowed'
+                              : 'pointer',
+                        }}
+                      >
+                        {enrolBusy ? 'Enrolling…' : 'Save'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowEnrol(false);
+                          setSelectedProgramId('');
+                        }}
+                        style={{
+                          ...enrolBtn,
+                          background: 'transparent',
+                          color: 'var(--text-secondary)',
+                          border: '1px solid var(--border-color)',
+                        }}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </section>
+          )}
 
           {/* Section 4 (bonus) — Document checklist progress.
               Surfaces the X-of-Y verified ratio across REQUIRED items;

@@ -17,6 +17,8 @@ const express = require("express");
 const router = express.Router();
 const { verifyToken, verifyRole } = require("../middleware/auth");
 const { requireTravelTenant } = require("../middleware/travelGuards");
+const prisma = require("../lib/prisma");
+const { writeAudit } = require("../lib/audit");
 const {
   validateGstinFormat,
   normaliseGstin,
@@ -242,6 +244,144 @@ router.get(
       results,
     });
   }
+);
+
+// ─── G105 — TMC §3.9 Calendar booking-link config ──────────────────────
+//
+// PRD_TMC_DIAGNOSTIC_SALES_ROUTING_ENGINE §3.9 (DD-5.4). The TMC readiness
+// report's call-to-action surfaces a deep link to book a follow-up call.
+// Tenant-configurable via tenant.subBrandConfigJson under the "tmc" block
+// at key "bookingLinkUrl" (Calendly URL OR Google Calendar appointment-slot
+// URL). When unset, the renderer falls back to the existing TMC_BOOKING_URL
+// env-var, then to the "executive will reach out" prose.
+//
+// GET  /api/travel/tmc/booking-link-config — returns { bookingLinkUrl: <str|null> }
+// PUT  /api/travel/tmc/booking-link-config — sets it (ADMIN only)
+//
+// Tenant-scoped: reads/writes the caller's Tenant.subBrandConfigJson row.
+// Body shape: { bookingLinkUrl: <string|null|""> }   (null/empty clears it)
+
+const MAX_BOOKING_LINK_LEN = 500;
+
+function parseSubBrandConfigSafe(raw) {
+  if (!raw || typeof raw !== "string") return {};
+  try {
+    const obj = JSON.parse(raw);
+    if (!obj || typeof obj !== "object" || Array.isArray(obj)) return {};
+    return obj;
+  } catch (_e) {
+    return {};
+  }
+}
+
+router.get(
+  "/tmc/booking-link-config",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const tenant = await prisma.tenant.findUnique({
+        where: { id: req.travelTenant.id },
+        select: { subBrandConfigJson: true },
+      });
+      const cfg = parseSubBrandConfigSafe(tenant?.subBrandConfigJson);
+      const tmcBlock =
+        cfg.tmc && typeof cfg.tmc === "object" && !Array.isArray(cfg.tmc)
+          ? cfg.tmc
+          : {};
+      const bookingLinkUrl =
+        typeof tmcBlock.bookingLinkUrl === "string" && tmcBlock.bookingLinkUrl
+          ? tmcBlock.bookingLinkUrl
+          : null;
+      res.json({ bookingLinkUrl });
+    } catch (e) {
+      console.error("[travel/tmc/booking-link-config] GET error:", e.message);
+      res.status(500).json({
+        error: "Failed to load booking-link config",
+        code: "INTERNAL_ERROR",
+      });
+    }
+  },
+);
+
+router.put(
+  "/tmc/booking-link-config",
+  verifyToken,
+  verifyRole(["ADMIN"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const body = req.body || {};
+      let next = null;
+      if (
+        body.bookingLinkUrl !== undefined &&
+        body.bookingLinkUrl !== null &&
+        body.bookingLinkUrl !== ""
+      ) {
+        if (typeof body.bookingLinkUrl !== "string") {
+          return res.status(400).json({
+            error: "bookingLinkUrl must be a string",
+            code: "INVALID_URL",
+          });
+        }
+        const trimmed = body.bookingLinkUrl.trim();
+        if (trimmed.length > MAX_BOOKING_LINK_LEN) {
+          return res.status(400).json({
+            error: `bookingLinkUrl must be <= ${MAX_BOOKING_LINK_LEN} chars`,
+            code: "INVALID_URL",
+          });
+        }
+        // Loose URL check — accepts http/https. Calendly + Google Calendar
+        // appointment-slot URLs are both https.
+        if (!/^https?:\/\//i.test(trimmed)) {
+          return res.status(400).json({
+            error: "bookingLinkUrl must start with http:// or https://",
+            code: "INVALID_URL",
+          });
+        }
+        next = trimmed;
+      }
+
+      const tenant = await prisma.tenant.findUnique({
+        where: { id: req.travelTenant.id },
+        select: { subBrandConfigJson: true },
+      });
+      const cfg = parseSubBrandConfigSafe(tenant?.subBrandConfigJson);
+      const tmcBlock =
+        cfg.tmc && typeof cfg.tmc === "object" && !Array.isArray(cfg.tmc)
+          ? { ...cfg.tmc }
+          : {};
+      if (next === null) {
+        delete tmcBlock.bookingLinkUrl;
+      } else {
+        tmcBlock.bookingLinkUrl = next;
+      }
+      cfg.tmc = tmcBlock;
+
+      await prisma.tenant.update({
+        where: { id: req.travelTenant.id },
+        data: { subBrandConfigJson: JSON.stringify(cfg) },
+      });
+
+      writeAudit(
+        "Tenant",
+        "TMC_BOOKING_LINK_UPDATE",
+        req.travelTenant.id,
+        req.user.userId,
+        req.travelTenant.id,
+        { bookingLinkUrl: next },
+      ).catch(() => {});
+
+      res.json({ bookingLinkUrl: next });
+    } catch (e) {
+      console.error("[travel/tmc/booking-link-config] PUT error:", e.message);
+      res.status(500).json({
+        error: "Failed to save booking-link config",
+        code: "INTERNAL_ERROR",
+      });
+    }
+  },
 );
 
 module.exports = router;

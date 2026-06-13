@@ -2033,6 +2033,43 @@ const DEFAULT_STANDING_FACTS = Object.freeze({
   },
 });
 
+// G103 — merge per-tenant EngineWeights standing-facts overrides into the
+// default. PRD §3.5.5: empty fields fall back to DEFAULT_STANDING_FACTS;
+// admin-curated values override per-key. Returns the merged structure
+// (shallow merge on trust + assurance — array fields like governance_pack
+// replace rather than merge to keep the override authoritative).
+async function resolveStandingFacts(prismaClient, tenantId) {
+  try {
+    const ew = await prismaClient.engineWeights.findFirst({
+      where: { tenantId },
+      select: { assuranceFactsJson: true, trustFactsJson: true },
+    });
+    if (!ew) return DEFAULT_STANDING_FACTS;
+    let trustOverride = null;
+    let assuranceOverride = null;
+    if (ew.trustFactsJson) {
+      try { trustOverride = JSON.parse(ew.trustFactsJson); }
+      catch { trustOverride = null; }
+    }
+    if (ew.assuranceFactsJson) {
+      try { assuranceOverride = JSON.parse(ew.assuranceFactsJson); }
+      catch { assuranceOverride = null; }
+    }
+    if (!trustOverride && !assuranceOverride) return DEFAULT_STANDING_FACTS;
+    return {
+      ...DEFAULT_STANDING_FACTS,
+      trust: trustOverride && typeof trustOverride === "object"
+        ? { ...DEFAULT_STANDING_FACTS.trust, ...trustOverride }
+        : DEFAULT_STANDING_FACTS.trust,
+      assurance: assuranceOverride && typeof assuranceOverride === "object"
+        ? { ...DEFAULT_STANDING_FACTS.assurance, ...assuranceOverride }
+        : DEFAULT_STANDING_FACTS.assurance,
+    };
+  } catch (_e) {
+    return DEFAULT_STANDING_FACTS;
+  }
+}
+
 // PRD §3.5.2 — resolve runway display string from geo_preference.
 // PRD: "Default domestic key = `domestic_flight`. If `open`, use
 // `international` (longest runway, sharpest deadline)."
@@ -2427,7 +2464,9 @@ router.get("/diagnostics/:id/readiness-report.pdf", async (req, res) => {
     const matchedRows = catalogue.filter((t) => matchedTripIds.has(t.id));
 
     // Build Job A prompt (T6).
-    const standingFacts = DEFAULT_STANDING_FACTS;
+    // G103 — resolve standingFacts with per-tenant EngineWeights overrides
+    // (assuranceFactsJson + trustFactsJson). Empty tenant config → defaults.
+    const standingFacts = await resolveStandingFacts(prisma, diag.tenantId);
     const destinationBlocklist = buildDestinationBlocklist(catalogue);
     const catalogueMatchedBlurbs = matchedRows.map((t) => ({
       blurb: stripDestinationWords(t.reportSkillBlurb || "", destinationBlocklist),
@@ -2479,14 +2518,25 @@ router.get("/diagnostics/:id/readiness-report.pdf", async (req, res) => {
     const boardHook = resolveBoardHook(standingFacts, answers.curriculum);
     const runwayDisplay = resolveRunwayDisplay(standingFacts, answers.geo_preference);
 
-    // Booking URL: DD-5.4 GS-default — config-driven; environment var
-    // takes precedence; otherwise empty string and the renderer surfaces
-    // the "executive will reach out" fallback copy.
+    // Booking URL: DD-5.4 GS-default — env-var override; otherwise the renderer
+    // resolves from tenant.subBrandConfigJson.tmc.bookingLinkUrl per G105
+    // (PRD_TMC §3.9 admin-curated link). Empty string falls back to the
+    // "executive will reach out" copy.
     const bookingUrl = String(
       process.env.TMC_BOOKING_URL_FALLBACK ||
       process.env.TMC_BOOKING_URL ||
       "",
     );
+
+    // G105 — load tenant for subBrandConfigJson booking-link resolution.
+    // Best-effort: render proceeds with tenant=null if lookup fails.
+    let tenantForRender = null;
+    try {
+      tenantForRender = await prisma.tenant.findUnique({
+        where: { id: diag.tenantId },
+        select: { id: true, subBrandConfigJson: true, logoUrl: true },
+      });
+    } catch (_e) { /* fall through to null */ }
 
     const engineOutputForRender = {
       state: diag.engineState,
@@ -2503,6 +2553,7 @@ router.get("/diagnostics/:id/readiness-report.pdf", async (req, res) => {
       schoolAnswers: answers,
       bookingUrl,
       catalogueMatched: matchedRows,
+      tenant: tenantForRender,
     });
 
     // Slugify for filename — best-effort tenant scoping into the name.
@@ -2592,7 +2643,9 @@ router.get("/diagnostics/public/readiness-report/:slug", async (req, res) => {
     const matchedRows = catalogue.filter((t) => matchedTripIds.has(t.id));
 
     // Build Job A prompt (T6).
-    const standingFacts = DEFAULT_STANDING_FACTS;
+    // G103 — resolve standingFacts with per-tenant EngineWeights overrides
+    // (assuranceFactsJson + trustFactsJson). Empty tenant config → defaults.
+    const standingFacts = await resolveStandingFacts(prisma, diag.tenantId);
     const destinationBlocklist = buildDestinationBlocklist(catalogue);
     const catalogueMatchedBlurbs = matchedRows.map((t) => ({
       blurb: stripDestinationWords(t.reportSkillBlurb || "", destinationBlocklist),
@@ -2715,6 +2768,82 @@ router.get("/diagnostics/public/readiness-report/:slug", async (req, res) => {
     });
   }
 });
+
+// ─────────────────────────────────────────────────────────────────────
+// G104 — DD-5.7 blind-collapsed brief-reveal audit endpoint
+// ─────────────────────────────────────────────────────────────────────
+//
+// PRD_TMC_DIAGNOSTIC_SALES_ROUTING_ENGINE DD-5.7. DiagnosticDetail.jsx
+// renders Job-B sales-brief sections collapsed by default to avoid biasing
+// the advisor before they choose a section to read. Per-section reveal
+// clicks POST here so we can audit "advisor saw section X at time Y" — the
+// brief itself is render-time content, but the reveal-action is governance.
+//
+// POST /api/travel/diagnostics/:id/brief-reveal
+// Body: { sectionKey: <string> }   e.g. "lead_with", "objections", "ladder"
+// Response: 200 { ok: true }
+// Audit: action="BRIEF_SECTION_REVEALED", details={ sectionKey }
+router.post(
+  "/diagnostics/:id/brief-reveal",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({
+          error: "id must be a number",
+          code: "INVALID_ID",
+        });
+      }
+      const sectionKey =
+        typeof req.body?.sectionKey === "string"
+          ? req.body.sectionKey.trim()
+          : "";
+      if (!sectionKey) {
+        return res.status(400).json({
+          error: "sectionKey is required",
+          code: "MISSING_SECTION_KEY",
+        });
+      }
+      if (sectionKey.length > 100) {
+        return res.status(400).json({
+          error: "sectionKey must be 1..100 chars",
+          code: "INVALID_SECTION_KEY",
+        });
+      }
+
+      // Tenant-scope: verify the diagnostic belongs to caller's tenant.
+      const diag = await prisma.travelDiagnostic.findFirst({
+        where: { id, tenantId: req.user.tenantId },
+        select: { id: true, subBrand: true },
+      });
+      if (!diag) {
+        return res.status(404).json({
+          error: "Diagnostic not found",
+          code: "DIAGNOSTIC_NOT_FOUND",
+        });
+      }
+
+      writeAudit(
+        "TravelDiagnostic",
+        "BRIEF_SECTION_REVEALED",
+        id,
+        req.user.userId,
+        req.user.tenantId,
+        { sectionKey, subBrand: diag.subBrand || null },
+      ).catch(() => {});
+
+      res.json({ ok: true });
+    } catch (e) {
+      console.error("[travel-diag/brief-reveal] error:", e.message);
+      res.status(500).json({
+        error: "Failed to record brief-reveal",
+        code: "INTERNAL_ERROR",
+      });
+    }
+  },
+);
 
 // Internal exports for the T8 vitest suite — keeps the helpers
 // inline-testable without round-tripping through supertest.

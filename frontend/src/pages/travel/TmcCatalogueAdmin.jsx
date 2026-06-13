@@ -31,7 +31,16 @@
 // Edit / Delete / Promote buttons) but still browse the catalogue.
 
 import React, { useCallback, useContext, useEffect, useState } from 'react';
-import { Edit2, Plus, RotateCw, ShieldCheck, Trash2, X } from 'lucide-react';
+import {
+  Edit2,
+  Plus,
+  RotateCw,
+  ShieldCheck,
+  Trash2,
+  X,
+  Calendar,
+  Settings,
+} from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { AuthContext } from '../../App';
@@ -362,6 +371,12 @@ export default function TmcCatalogueAdmin() {
           </button>
         )}
       </div>
+
+      {/* G103 + G105 — TMC config sub-section (standing-facts override +
+          booking-link URL). Renders only when the operator can write
+          (ADMIN+MANAGER for the standing-facts override; ADMIN-only for
+          the booking-link save per backend gate). */}
+      {canWrite && <TmcConfigPanel notify={notify} isAdmin={isAdmin} />}
 
       {/* Tabs */}
       <div role="tablist" aria-label="Catalogue status tabs" style={tabRow}>
@@ -779,6 +794,294 @@ function Field({ label, children }) {
     </label>
   );
 }
+
+// ────────────────────────────────────────────────────────────────────
+// TmcConfigPanel — G103 standing-facts + G105 booking-link admin sub-form.
+//
+// G103: /api/travel/engine-weights GET/PUT carries assuranceFactsJson +
+// trustFactsJson (extension on EngineWeights model — JSON-string columns
+// per CLAUDE.md convention). Empty / null → renderer falls back to
+// DEFAULT_STANDING_FACTS.
+//
+// G105: /api/travel/tmc/booking-link-config GET/PUT manages the URL stored
+// in tenant.subBrandConfigJson.tmc.bookingLinkUrl (admin-only PUT).
+// ────────────────────────────────────────────────────────────────────
+function TmcConfigPanel({ notify, isAdmin }) {
+  const [collapsed, setCollapsed] = useState(true);
+  // G105
+  const [bookingLinkUrl, setBookingLinkUrl] = useState('');
+  const [bookingSaving, setBookingSaving] = useState(false);
+  // G103
+  const [assuranceFactsJson, setAssuranceFactsJson] = useState('');
+  const [trustFactsJson, setTrustFactsJson] = useState('');
+  const [ewSaving, setEwSaving] = useState(false);
+  const [ewLoaded, setEwLoaded] = useState(false);
+
+  // Load once when the panel is first expanded.
+  useEffect(() => {
+    if (collapsed || ewLoaded) return;
+    let cancelled = false;
+    Promise.all([
+      fetchApi('/api/travel/tmc/booking-link-config').catch(() => ({})),
+      fetchApi('/api/travel/engine-weights').catch(() => ({})),
+    ]).then(([booking, ew]) => {
+      if (cancelled) return;
+      setBookingLinkUrl(booking?.bookingLinkUrl || '');
+      setAssuranceFactsJson(ew?.assuranceFactsJson || '');
+      setTrustFactsJson(ew?.trustFactsJson || '');
+      setEwLoaded(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [collapsed, ewLoaded]);
+
+  const saveBookingLink = async (e) => {
+    e.preventDefault();
+    if (!isAdmin) {
+      notify.error('Booking-link save is ADMIN-only.');
+      return;
+    }
+    setBookingSaving(true);
+    try {
+      const res = await fetchApi('/api/travel/tmc/booking-link-config', {
+        method: 'PUT',
+        body: JSON.stringify({ bookingLinkUrl: bookingLinkUrl.trim() || null }),
+      });
+      notify.success('Booking link saved');
+      setBookingLinkUrl(res?.bookingLinkUrl || '');
+    } catch (err) {
+      notify.error(err?.body?.error || err?.message || 'Failed to save booking link');
+    } finally {
+      setBookingSaving(false);
+    }
+  };
+
+  const saveStandingFacts = async (e) => {
+    e.preventDefault();
+    setEwSaving(true);
+    try {
+      // Validate both JSON inputs locally before round-tripping to the backend.
+      if (assuranceFactsJson.trim()) {
+        try { JSON.parse(assuranceFactsJson); }
+        catch { throw new Error('assuranceFactsJson must be valid JSON'); }
+      }
+      if (trustFactsJson.trim()) {
+        try { JSON.parse(trustFactsJson); }
+        catch { throw new Error('trustFactsJson must be valid JSON'); }
+      }
+      // PUT requires the full 6-weight + threshold surface. Load existing
+      // first so we don't truncate the row's other knobs.
+      const current = await fetchApi('/api/travel/engine-weights');
+      const body = {
+        weightPrimaryOutcome: current?.weightPrimaryOutcome ?? 50,
+        weightSecondarySkill: current?.weightSecondarySkill ?? 20,
+        weightGrowthArea: current?.weightGrowthArea ?? 15,
+        weightCurriculumHook: current?.weightCurriculumHook ?? 10,
+        weightGradeBandCenter: current?.weightGradeBandCenter ?? 10,
+        weightTierValueLean: current?.weightTierValueLean ?? 8,
+        scoresWellThreshold: current?.scoresWellThreshold ?? 70,
+        assuranceFactsJson: assuranceFactsJson.trim() || null,
+        trustFactsJson: trustFactsJson.trim() || null,
+      };
+      await fetchApi('/api/travel/engine-weights', {
+        method: 'PUT',
+        body: JSON.stringify(body),
+      });
+      notify.success('Standing facts saved');
+    } catch (err) {
+      notify.error(err?.body?.error || err?.message || 'Failed to save standing facts');
+    } finally {
+      setEwSaving(false);
+    }
+  };
+
+  return (
+    <section
+      aria-label="TMC configuration"
+      style={{
+        background: 'var(--surface-color)',
+        border: '1px solid var(--border-color)',
+        borderRadius: 8,
+        padding: 14,
+        marginBottom: 16,
+      }}
+    >
+      <button
+        type="button"
+        onClick={() => setCollapsed((v) => !v)}
+        style={{
+          ...secondaryBtnInline,
+          width: '100%',
+          justifyContent: 'space-between',
+        }}
+        aria-expanded={!collapsed}
+        aria-controls="tmc-config-body"
+      >
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+          <Settings size={14} aria-hidden /> TMC configuration (booking link + standing facts)
+        </span>
+        <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+          {collapsed ? 'Show' : 'Hide'}
+        </span>
+      </button>
+
+      {!collapsed && (
+        <div id="tmc-config-body" style={{ marginTop: 14 }}>
+          {/* G105 — booking link */}
+          <form
+            onSubmit={saveBookingLink}
+            style={{
+              display: 'grid',
+              gap: 12,
+              gridTemplateColumns: '1fr',
+              marginBottom: 16,
+            }}
+          >
+            <Field label="Calendar booking link URL (Calendly / Google Calendar appointment slot)">
+              <input
+                type="url"
+                value={bookingLinkUrl}
+                onChange={(e) => setBookingLinkUrl(e.target.value)}
+                placeholder="https://calendly.com/tmc-team/30min"
+                aria-label="bookingLinkUrl"
+                style={{
+                  padding: '8px 10px',
+                  borderRadius: 6,
+                  border: '1px solid var(--border-color)',
+                  background: 'var(--bg-color)',
+                  color: 'var(--text-primary)',
+                  fontSize: 13,
+                  width: '100%',
+                  boxSizing: 'border-box',
+                }}
+              />
+            </Field>
+            <div>
+              <button
+                type="submit"
+                disabled={bookingSaving || !isAdmin}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  padding: '8px 14px',
+                  borderRadius: 6,
+                  fontWeight: 600,
+                  fontSize: 13,
+                  background: 'var(--primary-color, var(--accent-color))',
+                  color: '#fff',
+                  border: 'none',
+                  cursor: bookingSaving || !isAdmin ? 'not-allowed' : 'pointer',
+                  opacity: bookingSaving || !isAdmin ? 0.5 : 1,
+                }}
+                aria-label="Save booking link"
+              >
+                <Calendar size={14} aria-hidden />
+                {bookingSaving ? 'Saving…' : 'Save booking link'}
+              </button>
+              {!isAdmin && (
+                <span style={{ marginLeft: 8, fontSize: 12, color: 'var(--text-secondary)' }}>
+                  ADMIN-only save
+                </span>
+              )}
+            </div>
+          </form>
+
+          {/* G103 — standing facts overrides */}
+          <form
+            onSubmit={saveStandingFacts}
+            style={{ display: 'grid', gap: 12, gridTemplateColumns: '1fr' }}
+          >
+            <Field label="Trust facts JSON override (renderer §3.5.5)">
+              <textarea
+                rows={5}
+                value={trustFactsJson}
+                onChange={(e) => setTrustFactsJson(e.target.value)}
+                placeholder={'{ "schools_served_since_2015": "over 50", "students_moved_last_year": 14018 }'}
+                aria-label="trustFactsJson"
+                style={{
+                  padding: '8px 10px',
+                  borderRadius: 6,
+                  border: '1px solid var(--border-color)',
+                  background: 'var(--bg-color)',
+                  color: 'var(--text-primary)',
+                  fontSize: 12,
+                  fontFamily: 'ui-monospace, SFMono-Regular, monospace',
+                  resize: 'vertical',
+                  width: '100%',
+                  boxSizing: 'border-box',
+                }}
+              />
+            </Field>
+            <Field label="Assurance facts JSON override (renderer §3.5.5)">
+              <textarea
+                rows={5}
+                value={assuranceFactsJson}
+                onChange={(e) => setAssuranceFactsJson(e.target.value)}
+                placeholder={'{ "supervision_ratio": "1 teacher per 15 students", "governance_pack": ["safety plan", "consent template"] }'}
+                aria-label="assuranceFactsJson"
+                style={{
+                  padding: '8px 10px',
+                  borderRadius: 6,
+                  border: '1px solid var(--border-color)',
+                  background: 'var(--bg-color)',
+                  color: 'var(--text-primary)',
+                  fontSize: 12,
+                  fontFamily: 'ui-monospace, SFMono-Regular, monospace',
+                  resize: 'vertical',
+                  width: '100%',
+                  boxSizing: 'border-box',
+                }}
+              />
+            </Field>
+            <div>
+              <button
+                type="submit"
+                disabled={ewSaving}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  padding: '8px 14px',
+                  borderRadius: 6,
+                  fontWeight: 600,
+                  fontSize: 13,
+                  background: 'var(--primary-color, var(--accent-color))',
+                  color: '#fff',
+                  border: 'none',
+                  cursor: ewSaving ? 'not-allowed' : 'pointer',
+                  opacity: ewSaving ? 0.5 : 1,
+                }}
+                aria-label="Save standing facts"
+              >
+                <ShieldCheck size={14} aria-hidden />
+                {ewSaving ? 'Saving…' : 'Save standing facts'}
+              </button>
+              <p style={{ marginTop: 8, marginBottom: 0, fontSize: 12, color: 'var(--text-secondary)' }}>
+                Empty fields fall back to PRD §3.5.5 default standing facts.
+              </p>
+            </div>
+          </form>
+        </div>
+      )}
+    </section>
+  );
+}
+
+const secondaryBtnInline = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 6,
+  padding: '8px 14px',
+  borderRadius: 6,
+  fontWeight: 600,
+  fontSize: 13,
+  background: 'var(--surface-color)',
+  color: 'var(--text-primary)',
+  border: '1px solid var(--border-color)',
+  cursor: 'pointer',
+};
 
 // ── Shared styles ──────────────────────────────────────────────────────
 

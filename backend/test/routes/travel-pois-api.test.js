@@ -123,7 +123,11 @@ function validSuggestBody(overrides = {}) {
 
 beforeEach(() => {
   prisma.travelPoi.create.mockReset();
-  prisma.travelPoi.findMany.mockReset();
+  // Default findMany to empty — the G055 POI dedup gate inside POST /
+  // calls findNearbyPoi(prisma, …) which does a findMany on travelPoi.
+  // Without a default, undefined.filter(...) throws and the POST 500s.
+  // Tests that need specific rows back override via mockResolvedValueOnce.
+  prisma.travelPoi.findMany.mockReset().mockResolvedValue([]);
   prisma.travelPoi.count.mockReset();
   prisma.travelPoi.findFirst.mockReset();
   prisma.travelPoi.update.mockReset();

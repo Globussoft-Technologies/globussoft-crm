@@ -227,6 +227,10 @@ const TravelPurchaseOrders = lazy(() => import("./pages/travel/PurchaseOrders"))
 // PRD_TRAVEL_SUPPLIER_MASTER G045 (FR-3.1.e, FR-3.5.a, FR-3.5.b) —
 // per-supplier commission ledger landing at /travel/suppliers/:id/commissions.
 const TravelSupplierCommissions = lazy(() => import("./pages/travel/SupplierCommissions"));
+// PRD_TRAVEL_SUPPLIER_MASTER G044 + G046 (FR-3.3.c, FR-3.4.a-c) —
+// per-supplier statement reconciliation + invoice-PDF uploads, lands at
+// /travel/suppliers/:id/reconcile.
+const TravelSupplierReconciliation = lazy(() => import("./pages/travel/SupplierReconciliation"));
 const TravelQuotesAdmin = lazy(() => import("./pages/travel/QuotesAdmin"));
 // Arc 2 #900 slice 2 — operator-facing single-quote builder (line items +
 // totals panel + Save/Send/Duplicate/Download-PDF action cluster). Distinct
@@ -1437,6 +1441,9 @@ export default function App() {
               <Route path="travel/purchase-orders" element={<TravelOnly><TravelPurchaseOrders /></TravelOnly>} />
               {/* PRD_TRAVEL_SUPPLIER_MASTER G045 — per-supplier commission ledger */}
               <Route path="travel/suppliers/:id/commissions" element={<TravelOnly><TravelSupplierCommissions /></TravelOnly>} />
+              {/* PRD_TRAVEL_SUPPLIER_MASTER G044 + G046 — per-supplier statement
+                  reconciliation + invoice-PDF uploads. */}
+              <Route path="travel/suppliers/:id/reconcile" element={<TravelOnly><TravelSupplierReconciliation /></TravelOnly>} />
               <Route path="travel/quotes-admin" element={<TravelOnly><TravelQuotesAdmin /></TravelOnly>} />
               {/* Arc 2 #900 slice 2 — Quote Builder (line-items composition).
                   Optional :id param (`/builder` = new; `/builder/:id` = edit).

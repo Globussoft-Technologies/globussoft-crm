@@ -978,6 +978,13 @@ app.use("/api/travel", require("./routes/travel_commission_profiles"));
 // Distinct from travel_commission_profiles (B2B sub-agent commission shapes):
 // this ledger tracks SUPPLIER-side commissions EARNED on confirmed bookings.
 app.use("/api/travel", require("./routes/travel_supplier_commissions"));
+// PRD_TRAVEL_SUPPLIER_MASTER G044 + G046 (FR-3.3.c, FR-3.4.a-c) —
+// supplier-statement reconciliation (PNR-keyed line match + tolerance +
+// bulk-reconcile) plus supplier-invoice PDF uploads + match-to-payable.
+// Distinct file from travel_suppliers.js to avoid merge collisions with
+// G040-G043 (status/payment-terms enums) which is concurrently editing
+// the parent suppliers router.
+app.use("/api/travel", require("./routes/travel_supplier_reconciliation"));
 // WS-1 — sub-brand session scope (POST /session/switch-brand + GET
 // /session/active-brand). Authoritative server-side validation behind the
 // sidebar sub-brand switcher; reuses middleware/travelGuards.js plumbing.

@@ -141,8 +141,8 @@ Highest-impact gap. PO/dispute/KYC/reconciliation entirely absent.
 | G035 | `TravelPurchaseOrder` + `TravelPurchaseOrderLine` models + state machine (Draft→Sent→Acknowledged→Fulfilled→Cancelled) (FR-3.2.a, b, c) | schema + `routes/travel_purchase_orders.js` (NEW) + state-machine lib | 3d | ✅ DONE 2026-06-13 — `5bf44124` |
 | G036 | PO PDF export via `renderSupplierPo()` (FR-3.2.d) | `services/pdfRenderer.js` extension | 1d | ✅ DONE 2026-06-13 — `5bf44124` |
 | G037 | Auto-PO-on-booking-confirm trigger (FR-3.2.a) + `TravelSupplierPayable.purchaseOrderId` FK (FR-3.3.a) | hook into booking-confirm + schema | 1.5d | ✅ DONE 2026-06-13 — `5bf44124` |
-| G038 | Supplier KYC + onboarding checklist (FR-3.1.h) | schema (`TravelSupplierKyc` + checklist) + route + admin UI | 2d | ⬜ |
-| G039 | Supplier dispute history + chargeback log (FR-3.1.g, FR-3.6.a-c) | schema (`TravelSupplierDispute`) + route + UI | 2.5d | ⬜ |
+| G038 | Supplier KYC + onboarding checklist (FR-3.1.h) | schema (`TravelSupplierKyc` + checklist) + route + admin UI | 2d | ✅ DONE 2026-06-13 — `6ede25d4` |
+| G039 | Supplier dispute history + chargeback log (FR-3.1.g, FR-3.6.a-c) | schema (`TravelSupplierDispute`) + route + UI | 2.5d | ✅ DONE 2026-06-13 — `6ede25d4` |
 | G040 | Supplier status enum (`active`/`paused`/`blocked-disputed`/`archived`) replacing `isActive` (FR-3.1.f) — `[allow-type-narrow]` bless | schema migration + route + UI | 1d | ⬜ |
 | G041 | Payment-terms enum (`net30`/`net45`/`prepay`/`on-departure`) (FR-3.1.d) | schema (string enum) + UI | 0.5d | ⬜ |
 | G042 | Credit-limit hard-block guard on booking-confirm (FR-3.3.e) | hook + UI warning | 1d | ⬜ |

@@ -157,11 +157,11 @@ Highest-impact gap. PO/dispute/KYC/reconciliation entirely absent.
 
 | ID | Slice | Files | Effort | Status |
 |---|---|---|---|---|
-| G047 | `Itinerary.clonedFromTemplateId` lineage column + UI surface (FR-3.1.e) | schema + route + UI | 1d | ✅ DONE 2026-06-13 — <SHA> |
+| G047 | `Itinerary.clonedFromTemplateId` lineage column + UI surface (FR-3.1.e) | schema + route + UI | 1d | ✅ DONE 2026-06-13 — da5cc682 |
 | G048 | Template versioning: `version`, `isLatest`, `archivedAt` on `ItineraryTemplate` (FR-3.5.a, FR-3.5.b) | schema (additive) + route | 1.5d | ⬜ |
-| G049 | Template metrics: `acceptedCount`, `avgFinalPrice`, `lastUsedAt` (FR-3.1.h) | schema + on-quote-accept hook | 1d | ✅ DONE 2026-06-13 — <SHA> |
+| G049 | Template metrics: `acceptedCount`, `avgFinalPrice`, `lastUsedAt` (FR-3.1.h) | schema + on-quote-accept hook | 1d | ✅ DONE 2026-06-13 — da5cc682 |
 | G050 | "Save current itinerary as template" action (FR-3.1.f) | route + UI button | 1d | ⬜ |
-| G051 | `ItineraryItem.draftedByAi: boolean` provenance (FR-3.4.h) | schema + suggest endpoint + UI badge | 0.5d | ✅ DONE 2026-06-13 — <SHA> |
+| G051 | `ItineraryItem.draftedByAi: boolean` provenance (FR-3.4.h) | schema + suggest endpoint + UI badge | 0.5d | ✅ DONE 2026-06-13 — da5cc682 |
 | G052 | Bulk-day-add "extend by N days" (FR-3.3.g) | UI + route | 1d | ⬜ |
 | G053 | Conflict warnings (overlapping times, closed POIs) (FR-3.3.h) | UI + warnings lib | 1.5d | ⬜ |
 | G054 | Cost Master sightseeing 6th category — OR document decision that `TravelSightseeing` is the canonical path (FR-3.2.a) | schema decision + doc update | 0.5d | ⬜ |

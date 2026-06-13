@@ -972,6 +972,11 @@ app.use("/api/travel/quote-templates", require("./routes/travel_quote_templates"
 // /api/travel/cancellation-policies fell through to the global 404.
 app.use("/api/travel", require("./routes/travel_cancellation_policies"));
 app.use("/api/travel", travelQuotesRoutes);
+// MUST mount travel_invoice_ledgers BEFORE travelInvoicesRoutes — the latter has
+// GET /invoices/:id which would otherwise catch /invoices/customer-ledger,
+// /invoices/tds-register, /invoices/commission-ledger as :id="customer-ledger" etc.
+// See G030 spec failure (run 27463877000) for the original collision report.
+app.use("/api/travel", require("./routes/travel_invoice_ledgers"));
 app.use("/api/travel", travelInvoicesRoutes);
 app.use("/api/travel", require("./routes/travel_flyer_templates"));
 // S78 (Marketing Flyer #908) — mount the mixed-auth flyer share + public render
@@ -990,7 +995,10 @@ app.use("/api/travel", require("./routes/travel_supplier_commissions"));
 // GST ledger endpoints cluster (customer-ledger + TDS register + commission-ledger).
 // Read-only analytics on existing TravelInvoice + TravelPaymentSchedule +
 // TravelSupplierCommissionEntry rows. JSON or CSV per ?format=csv flag.
-app.use("/api/travel", require("./routes/travel_invoice_ledgers"));
+// NOTE: also mounted above (before travelInvoicesRoutes) to avoid /invoices/:id
+// collision on /invoices/customer-ledger etc. This second mount is a no-op
+// because Express short-circuits on the first match; leaving the line documents
+// the route's location in the topology.
 // PRD_TRAVEL_SUPPLIER_MASTER G044 + G046 (FR-3.3.c, FR-3.4.a-c) —
 // supplier-statement reconciliation (PNR-keyed line match + tolerance +
 // bulk-reconcile) plus supplier-invoice PDF uploads + match-to-payable.

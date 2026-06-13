@@ -109,12 +109,12 @@ PRD §10 is stale (claims 11/18; actual is 16/18). Update PRD §10 in same commi
 | ID | Slice | Files | Effort | Status |
 |---|---|---|---|---|
 | G021 | `TravelInvoiceLine` extension: `supplierId`, `isAddon`, `lineCost`, `lineSell`, per-line `cgstAmount/sgstAmount/igstAmount` (FR-3.1.c, e, f, g) | schema (additive) + route + UI | 2d | ✅ DONE 2026-06-13 — `15613ada` |
-| G022 | Supplier-payable batch run (FR-3.5.e) + invoice-line origin FK (`TravelSupplierPayable.invoiceLineId`) | schema + route | 2d | ⬜ |
-| G023 | Supplier-payable dispute workflow (FR-3.5.f) | schema (`TravelSupplierPayableDispute`) + route + UI | 2d | ⬜ |
-| G024 | Settlement-timeline Gantt view (FR-3.6.c) | `frontend/.../SettlementGantt.jsx` (NEW) | 2d | ⬜ |
-| G025 | Anchor-relative due-date on `TravelPaymentSchedule` (bookingDate / departureDate / returnDate offset) (FR-3.2.e) | schema + scheduler | 1d | ⬜ |
-| G026 | T+3/T+7/T+14 overdue escalation chain (FR-3.2.g) | extend `paymentScheduleReminderEngine.js` | 1d | ⬜ |
-| G027 | Operator schedule-override audit-log tag ("deviation from template") (FR-3.2.f) | `routes/travel_invoices.js` writeAudit extension | 0.5d | ⬜ |
+| G022 | Supplier-payable batch run (FR-3.5.e) + invoice-line origin FK (`TravelSupplierPayable.invoiceLineId`) | schema + route | 2d | ✅ DONE 2026-06-13 — `ef65df7e` |
+| G023 | Supplier-payable dispute workflow (FR-3.5.f) | schema (`TravelSupplierPayableDispute`) + route + UI | 2d | ✅ DONE 2026-06-13 — closed by G039 (`6ede25d4`) |
+| G024 | Settlement-timeline Gantt view (FR-3.6.c) | `frontend/.../SettlementGantt.jsx` (NEW) | 2d | ✅ DONE 2026-06-13 — `ef65df7e` |
+| G025 | Anchor-relative due-date on `TravelPaymentSchedule` (bookingDate / departureDate / returnDate offset) (FR-3.2.e) | schema + scheduler | 1d | ✅ DONE 2026-06-13 — `ef65df7e` |
+| G026 | T+3/T+7/T+14 overdue escalation chain (FR-3.2.g) | extend `paymentScheduleReminderEngine.js` | 1d | ✅ DONE 2026-06-13 — `ef65df7e` |
+| G027 | Operator schedule-override audit-log tag ("deviation from template") (FR-3.2.f) | `routes/travel_invoices.js` writeAudit extension | 0.5d | ✅ DONE 2026-06-13 — `ef65df7e` |
 
 **§3.4 net effort: ~10.5 eng-days** (plus Q-BILL-1 for FR-3.4.b non-filer rate, Q22 for FR-3.8.d per-sub-brand PDF branding)
 

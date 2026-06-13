@@ -148,7 +148,7 @@ Highest-impact gap. PO/dispute/KYC/reconciliation entirely absent.
 | G042 | Credit-limit hard-block guard on booking-confirm (FR-3.3.e) | hook + UI warning | 1d | ⬜ |
 | G043 | Quote-time + booking-time advisory chip ("near credit limit") (FR-3.7.c) | QuoteBuilder + booking UI | 0.5d | ⬜ |
 | G044 | Reconciliation: PNR-keyed line match (FR-3.4.a) + tolerance threshold (FR-3.4.b) + bulk-reconcile UI (FR-3.4.c) | new route + `frontend/.../SupplierReconciliation.jsx` (NEW) | 3d | ⬜ |
-| G045 | Supplier-commission link (`TravelCommissionProfile.supplierId` FK) + `SupplierCommissionEntry` ledger per FY (FR-3.1.e, FR-3.5.a, FR-3.5.b) | schema + route | 2d | ⬜ |
+| G045 | Supplier-commission link (`TravelCommissionProfile.supplierId` FK) + `SupplierCommissionEntry` ledger per FY (FR-3.1.e, FR-3.5.a, FR-3.5.b) | schema + route | 2d | ✅ DONE 2026-06-13 — `dcc95c8e` |
 | G046 | Supplier invoice PDF upload + match-to-payable (FR-3.3.c) | Multer + route | 1.5d | ⬜ |
 
 **§3.6 net effort: ~20 eng-days** (DD-5.5 blocks FR-3.5.c TDS auto-deduct only — everything else buildable now)

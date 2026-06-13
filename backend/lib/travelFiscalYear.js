@@ -48,6 +48,45 @@ function fiscalYearLabel(date = new Date()) {
 }
 
 /**
+ * Long-form Indian fiscal-year label e.g. "FY2025-26" / "FY2026-27".
+ * Used by the public-facing supplier-commission statement + CSV exports
+ * (PRD_TRAVEL_SUPPLIER_MASTER G045 — FR-3.5.a / FR-3.5.b). Stored verbatim
+ * on the TravelSupplierCommissionEntry row so historical queries stay
+ * stable across future FY-helper changes.
+ *
+ *   fiscalYearLabelLong(new Date('2026-05-15')) → "FY2026-27"
+ *   fiscalYearLabelLong(new Date('2026-02-15')) → "FY2025-26"
+ *
+ * @param {Date} [date=new Date()] - input date
+ * @returns {string} "FY<startYear>-<endTwo>" e.g. "FY2025-26"
+ */
+function fiscalYearLabelLong(date = new Date()) {
+  const fyStartYear = _fyStartYear(date);
+  const endTwo = String((fyStartYear + 1) % 100).padStart(2, '0');
+  return `FY${fyStartYear}-${endTwo}`;
+}
+
+/**
+ * Validates a long-form FY label string. Returns true iff the input
+ * matches the `FY<4-digit-start>-<2-digit-end>` shape AND the end-year
+ * literally follows the start-year (e.g. "FY2025-26" ✓, "FY2025-27" ✗,
+ * "FY2025-25" ✗). Used by the commission-entry route layer to validate
+ * caller-supplied ?fiscalYear filters.
+ *
+ * @param {string} s - candidate FY label
+ * @returns {boolean}
+ */
+function isValidFyLongLabel(s) {
+  if (typeof s !== 'string') return false;
+  const m = s.match(/^FY(\d{4})-(\d{2})$/);
+  if (!m) return false;
+  const start = parseInt(m[1], 10);
+  const endTwo = parseInt(m[2], 10);
+  const expectedEnd = (start + 1) % 100;
+  return endTwo === expectedEnd;
+}
+
+/**
  * Returns the inclusive start Date of the FY containing the input date.
  * For 2026-05-15 → returns Date for 2026-04-01T00:00:00Z (UTC midnight).
  *
@@ -114,4 +153,11 @@ function _fyStartYear(date) {
   return m >= 3 ? y : y - 1;
 }
 
-module.exports = { fiscalYearLabel, fiscalYearStart, fiscalYearEnd, invoicePrefixFor };
+module.exports = {
+  fiscalYearLabel,
+  fiscalYearLabelLong,
+  isValidFyLongLabel,
+  fiscalYearStart,
+  fiscalYearEnd,
+  invoicePrefixFor,
+};

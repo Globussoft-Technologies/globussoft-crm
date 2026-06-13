@@ -324,6 +324,7 @@ jobs:
             tests/travel-invoices-export-api.spec.js \
             tests/travel-quotes-guards-api.spec.js \
             tests/travel-flight-quotes-api.spec.js \
+            tests/travel-supplier-commissions-api.spec.js \
             tests/teardown-completeness.spec.js \
             tests/demo-hygiene-api.spec.js
 

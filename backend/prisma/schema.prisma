@@ -165,71 +165,74 @@ model Tenant {
 
   // Travel vertical — Day 2 schema migration. Back-relations only (FK
   // cascade behavior lives on each child via @relation onDelete).
-  travelDiagnostics        TravelDiagnostic[]
-  travelDiagQuestionBanks  TravelDiagnosticQuestionBank[]
-  itineraries              Itinerary[]
+  travelDiagnostics               TravelDiagnostic[]
+  travelDiagQuestionBanks         TravelDiagnosticQuestionBank[]
+  itineraries                     Itinerary[]
   // #907 slice 4 — Itinerary template library (Pre-loaded ~50, expand over time).
   // Subsequent slices: CRUD route + admin library UI + "Create from template" hook.
-  itineraryTemplates       ItineraryTemplate[]
-  travelCostMasters        TravelCostMaster[]
+  itineraryTemplates              ItineraryTemplate[]
+  travelCostMasters               TravelCostMaster[]
   // #907 slice 1 — Sightseeing master (destination → POIs). Future slices
   // wire CRUD route + admin UI page + Cost Master "6th category" surface.
-  travelSightseeing        TravelSightseeing[]
-  travelSeasonCalendars    TravelSeasonCalendar[]
-  travelMarkupRules        TravelMarkupRule[]
-  tmcTrips                 TmcTrip[]
-  webCheckins              WebCheckin[]
-  supplierCredentials      SupplierCredential[]
-  visaApplications         VisaApplication[]
-  embassyRules             EmbassyRule[]
-  rfuLeadProfiles          RfuLeadProfile[]
-  religiousGuidancePackets ReligiousGuidancePacket[]
-  tripMicrosites           TripMicrosite[]
+  travelSightseeing               TravelSightseeing[]
+  travelSeasonCalendars           TravelSeasonCalendar[]
+  travelMarkupRules               TravelMarkupRule[]
+  tmcTrips                        TmcTrip[]
+  webCheckins                     WebCheckin[]
+  supplierCredentials             SupplierCredential[]
+  visaApplications                VisaApplication[]
+  embassyRules                    EmbassyRule[]
+  rfuLeadProfiles                 RfuLeadProfile[]
+  religiousGuidancePackets        ReligiousGuidancePacket[]
+  tripMicrosites                  TripMicrosite[]
   // Travel-vertical financial fork (PRD_TRAVEL_{QUOTE_BUILDER,BILLING,
   // SUPPLIER_MASTER} DD-5.1 [RESOLVED 2026-05-24]) — fork models alongside
   // the generic Quote / Invoice / Vendor. See model docs at bottom of file.
-  travelQuotes             TravelQuote[]
-  travelQuoteLines         TravelQuoteLine[]
-  travelQuoteTemplates     TravelQuoteTemplate[]
-  travelInvoices           TravelInvoice[]
-  travelInvoiceLines       TravelInvoiceLine[]
-  travelPaymentSchedules   TravelPaymentSchedule[]
-  travelSuppliers          TravelSupplier[]
-  travelSupplierPayables   TravelSupplierPayable[]
+  travelQuotes                    TravelQuote[]
+  travelQuoteLines                TravelQuoteLine[]
+  travelQuoteTemplates            TravelQuoteTemplate[]
+  travelInvoices                  TravelInvoice[]
+  travelInvoiceLines              TravelInvoiceLine[]
+  travelPaymentSchedules          TravelPaymentSchedule[]
+  travelSuppliers                 TravelSupplier[]
+  travelSupplierPayables          TravelSupplierPayable[]
+  // PRD_TRAVEL_SUPPLIER_MASTER G045 — supplier-side commission ledger per FY
+  // (FR-3.5.a, FR-3.5.b).
+  travelSupplierCommissionEntries TravelSupplierCommissionEntry[]
   // S33 (#920) — PRD_TRAVEL_BILLING FR-3.7 cancellation policies.
-  cancellationPolicies     CancellationPolicy[]
+  cancellationPolicies            CancellationPolicy[]
   // PRD_TRAVEL_B2B_AGENT_PORTAL #905 slice 2 — commission profiles
   // (additive; consumes lib/agentCommissionCalculator.js from slice 1
   // commit cb284098). Each row is one named operator-facing pricing
   // profile (flat_percent | tiered | per_pax_flat | hybrid).
-  travelCommissionProfiles TravelCommissionProfile[]
+  travelCommissionProfiles        TravelCommissionProfile[]
   // PRD_TRAVEL_MARKETING_FLYER #908 slice 3 — saved flyer templates
   // (additive; consumes lib/flyerTemplateValidator.js from slice 1
   // commit 28146498). Each row is one operator-composed flyer (palette
   // + layout + asset placeholders) validated before persistence.
-  travelFlyerTemplates     TravelFlyerTemplate[]
+  travelFlyerTemplates            TravelFlyerTemplate[]
   // TMC curriculum→destination mapping (PRD_TMC_CURRICULUM_MAPPING PC-1
   // RESOLVED 2026-05-24). 100-200 starter rows seeded by GS; TMC academic
   // team validates + extends over 6-week window.
-  curriculumMappings       TravelCurriculumMapping[]
+  curriculumMappings              TravelCurriculumMapping[]
   // TMC school term/holiday/exam windows for trip scheduling. Baseline seeded;
   // each school's actual dates captured by asking them (no public API exists).
-  travelSchoolTerms        TravelSchoolTerm[]
+  travelSchoolTerms               TravelSchoolTerm[]
   // Per-sub-brand brand kits (PRD_TRAVEL_PER_SUBBRAND_BRANDING DD-5.2
   // [RESOLVED 2026-05-24]) — versioned brand-asset storage forked out of
   // subBrandConfigJson. See BrandKit model at bottom of file.
-  brandKits                BrandKit[]
+  brandKits                       BrandKit[]
   // Sub-brand config (Q9, Q14, Q21) — JSON keyed by sub-brand storing
   // per-brand WhatsApp number / Wati WABA id / legal entity / GSTIN /
   // Drive folder root / microsite domain. Nullable; sub-brands without
   // an entry inherit tenant-level defaults.
-  subBrandConfigJson       String?                        @db.Text
+  subBrandConfigJson              String?                         @db.Text
   /// Per-sub-brand default theme. Resolved at runtime by chain:
   /// user.themePreference → tenant.subBrandThemes[activeSubBrand] → 'system'.
   /// Per #876 + DD-5.3 RESOLVED 2026-05-24. JSON-string column per
   /// CLAUDE.md convention (call site stringifies; sanitizeJson preserves shape).
   /// Shape: { "tmc": "light", "rfu": "dark", "travelstall": "system", "visasure": "light" }
-  subBrandThemes           String?                        @db.Text
+  subBrandThemes                  String?                         @db.Text
 
   // Subscriptions
   subscriptions Subscription[]
@@ -6350,8 +6353,8 @@ model TravelQuoteTemplate {
 }
 
 model TravelInvoice {
-  id                   Int                     @id @default(autoincrement())
-  tenantId             Int                     @default(1)
+  id                   Int                             @id @default(autoincrement())
+  tenantId             Int                             @default(1)
   subBrand             String
   contactId            Int
   // Optional FK to TravelQuote — an invoice can be generated without a
@@ -6360,9 +6363,9 @@ model TravelInvoice {
   // Tenant-scoped human-readable identifier (e.g. "TINV-2026-0001"). The
   // route layer assigns sequentially per tenant + sub-brand at create time.
   invoiceNum           String
-  status               String                  @default("Draft") // Draft | Issued | Partial | Paid | Voided
-  totalAmount          Decimal?                @db.Decimal(15, 2)
-  currency             String                  @default("INR")
+  status               String                          @default("Draft") // Draft | Issued | Partial | Paid | Voided
+  totalAmount          Decimal?                        @db.Decimal(15, 2)
+  currency             String                          @default("INR")
   dueDate              DateTime?
   paidAt               DateTime?
   // Arc 2 #901 slice 10 — Section 206C(1G) TCS persistence (PRD_TRAVEL_BILLING
@@ -6371,9 +6374,9 @@ model TravelInvoice {
   // leave them null. tcsAppliedAt doubles as the idempotency sentinel — once
   // set, POST /:id/apply-tcs rejects with TCS_ALREADY_APPLIED. Line-level
   // TCS persistence (separate TravelInvoiceLine row) is deferred to slice 11.
-  tcsAmount            Decimal?                @db.Decimal(15, 2)
-  tcsRate              Decimal?                @db.Decimal(5, 2)
-  tcsExceedingAmount   Decimal?                @db.Decimal(15, 2)
+  tcsAmount            Decimal?                        @db.Decimal(15, 2)
+  tcsRate              Decimal?                        @db.Decimal(5, 2)
+  tcsExceedingAmount   Decimal?                        @db.Decimal(15, 2)
   tcsAppliedAt         DateTime?
   // Arc 2 #901 slice 11 — Doc-type taxonomy (PRD_TRAVEL_BILLING FR-3.x).
   // Nullable with default "TaxInvoice"; new rows get the default, existing
@@ -6381,7 +6384,7 @@ model TravelInvoice {
   // Proforma | TaxInvoice | CreditNote | DebitNote | TravelVoucher.
   // Separate CreditNote/DebitNote workflows deferred to slice 12; this slice
   // ships the field + validation + filter only.
-  docType              String?                 @default("TaxInvoice")
+  docType              String?                         @default("TaxInvoice")
   // Arc 2 #901 slice 14 — CreditNote workflow (PRD_TRAVEL_BILLING UC-2.7).
   // Self-relation linking a CreditNote (or DebitNote) row back to the
   // original invoice it adjusts. Nullable + onDelete SetNull — if the parent
@@ -6390,8 +6393,8 @@ model TravelInvoice {
   // state is already prevented at the route layer). Existing rows get NULL
   // (additive safe — no bless marker needed).
   parentInvoiceId      Int?
-  parentInvoice        TravelInvoice?          @relation("InvoiceCreditNotes", fields: [parentInvoiceId], references: [id], onDelete: SetNull)
-  creditNotes          TravelInvoice[]         @relation("InvoiceCreditNotes")
+  parentInvoice        TravelInvoice?                  @relation("InvoiceCreditNotes", fields: [parentInvoiceId], references: [id], onDelete: SetNull)
+  creditNotes          TravelInvoice[]                 @relation("InvoiceCreditNotes")
   // S33 (#920) — PRD_TRAVEL_BILLING FR-3.7 cancellation-policy wire-up.
   // Optional FK pointing at a CancellationPolicy row the operator chose
   // at issue-time (or auto-picked at void-time as the sub-brand's active
@@ -6401,13 +6404,16 @@ model TravelInvoice {
   // intact + falls back to default resolution on the next cancel.
   // Nullable + additive (no bless marker needed).
   cancellationPolicyId Int?
-  cancellationPolicy   CancellationPolicy?     @relation(fields: [cancellationPolicyId], references: [id], onDelete: SetNull)
+  cancellationPolicy   CancellationPolicy?             @relation(fields: [cancellationPolicyId], references: [id], onDelete: SetNull)
   lines                TravelInvoiceLine[]
   schedule             TravelPaymentSchedule[]
-  quote                TravelQuote?            @relation(fields: [quoteId], references: [id], onDelete: SetNull)
-  tenant               Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  createdAt            DateTime                @default(now())
-  updatedAt            DateTime                @updatedAt
+  quote                TravelQuote?                    @relation(fields: [quoteId], references: [id], onDelete: SetNull)
+  tenant               Tenant                          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  // PRD_TRAVEL_SUPPLIER_MASTER G045 — back-relation for supplier commission
+  // entries pinned to this customer-facing invoice (FR-3.5.a).
+  commissionEntries    TravelSupplierCommissionEntry[]
+  createdAt            DateTime                        @default(now())
+  updatedAt            DateTime                        @updatedAt
 
   @@unique([tenantId, invoiceNum])
   @@index([tenantId, subBrand])
@@ -6599,8 +6605,8 @@ model TravelPaymentSchedule {
 }
 
 model TravelSupplier {
-  id                 Int                     @id @default(autoincrement())
-  tenantId           Int                     @default(1)
+  id                 Int                             @id @default(autoincrement())
+  tenantId           Int                             @default(1)
   subBrand           String
   name               String
   contactPerson      String?
@@ -6609,8 +6615,8 @@ model TravelSupplier {
   gstin              String?
   addressLine        String?
   // hotel | flight | transport | visa-consul | other
-  supplierCategory   String                  @default("other")
-  isActive           Boolean                 @default(true)
+  supplierCategory   String                          @default("other")
+  isActive           Boolean                         @default(true)
   // PRD_TRAVEL_SUPPLIER_MASTER slice 1 (#903) — payment terms + credit tracking.
   // All NULLABLE — additive safe migration (no bless marker needed).
   // paymentTermsDays: free-form NET-N day count (e.g. 30 for NET-30, 45 for NET-45).
@@ -6620,15 +6626,24 @@ model TravelSupplier {
   // primaryContactRole: e.g. "Accounts payable" | "Sales rep" — distinct from contactPerson name.
   // notes:            unstructured operator notes blob.
   paymentTermsDays   Int?
-  creditLimit        Decimal?                @db.Decimal(15, 2)
-  creditCurrency     String?                 @default("INR")
+  creditLimit        Decimal?                        @db.Decimal(15, 2)
+  creditCurrency     String?                         @default("INR")
   taxRegimeCode      String?
   primaryContactRole String?
-  notes              String?                 @db.Text
-  tenant             Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  notes              String?                         @db.Text
+  // PRD_TRAVEL_SUPPLIER_MASTER G045 (FR-3.1.e) — default supplier-side
+  // commission rate (e.g. 7.50% IATA inward commission for air bookings,
+  // 10% hotel commission, etc.). Override-able per
+  // TravelSupplierCommissionEntry row at accrue time. Nullable + additive
+  // (no bless marker needed).
+  commissionPercent  Decimal?                        @db.Decimal(5, 2)
+  tenant             Tenant                          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   payables           TravelSupplierPayable[]
-  createdAt          DateTime                @default(now())
-  updatedAt          DateTime                @updatedAt
+  // PRD_TRAVEL_SUPPLIER_MASTER G045 — supplier-side commission ledger per FY
+  // (FR-3.5.a, FR-3.5.b).
+  commissionEntries  TravelSupplierCommissionEntry[]
+  createdAt          DateTime                        @default(now())
+  updatedAt          DateTime                        @updatedAt
 
   @@index([tenantId, subBrand])
   @@index([tenantId, subBrand, supplierCategory])
@@ -7087,4 +7102,86 @@ model TravelPoi {
   @@index([tenantId, destinationSlug])
   @@index([country, category])
   @@index([pendingApproval])
+}
+
+// PRD_TRAVEL_SUPPLIER_MASTER G045 (FR-3.1.e, FR-3.5.a, FR-3.5.b) —
+// Supplier-side commission ledger per fiscal year.
+//
+// Distinct from TravelCommissionProfile (which scopes B2B sub-agent
+// commission shapes — see #905 slice 2). This ledger tracks supplier-side
+// commissions EARNED on confirmed bookings — IATA inward commission for
+// air bookings, hotel commission percentages, RFU Umrah supplier kickbacks
+// etc. — and settles per fiscal year.
+//
+// Lifecycle: accrued → settled → reversed.
+//   - accrued:   recorded against a confirmed booking / invoice. baseAmount
+//                + commissionPercent → commissionAmount. Optional TDS
+//                (section 194H, default 5%) → netAmount.
+//   - settled:   payment received from supplier; settledAt stamped.
+//   - reversed:  refund / cancellation; reversedAt + reversalReason stamped.
+//   - adjustment: manual operator correction (rare).
+//
+// All-NULLABLE FK strategy on bookingId / purchaseOrderId / invoiceId —
+// a commission can accrue against a manual operator entry with no upstream
+// link, or against any combination of the three. purchaseOrderId is
+// reserved for future G035 PO landing (no FK constraint yet — defer until
+// the PO model lands).
+//
+// Sub-brand isolation: inherited through the parent TravelSupplier
+// (.subBrand). The route layer scopes every list / get / write via
+// getSubBrandAccessSet + canAccessSubBrand against the parent supplier.
+//
+// Schema additivity: net-new model + nullable FKs. No bless marker
+// required.
+model TravelSupplierCommissionEntry {
+  id                Int            @id @default(autoincrement())
+  tenantId          Int            @default(1)
+  supplierId        Int
+  // Optional FK shapes — see model comment. Booking + PO stay as Int? with
+  // no relation block (deferred until those models land). Invoice has a
+  // real relation (the model exists today).
+  bookingId         Int?
+  purchaseOrderId   Int?
+  invoiceId         Int?
+  // Indian FY label e.g. "FY2025-26" (matches the public-facing FY
+  // shape used in supplier statements + CSV exports). Computed by the
+  // route layer via lib/travelFiscalYear.js fiscalYearLabelLong() at
+  // accrue time; stored verbatim so historical queries are stable across
+  // any future FY-helper changes.
+  fiscalYear        String
+  // accrued | settled | reversed | adjustment
+  entryType         String         @default("accrued")
+  // Override-able per entry (defaults from TravelSupplier.commissionPercent
+  // when accrued through the auto-path). Free-form Decimal 5,2 so e.g.
+  // 7.50, 12.00, 0.25 all fit.
+  commissionPercent Decimal?       @db.Decimal(5, 2)
+  baseAmount        Decimal        @db.Decimal(15, 2)
+  commissionAmount  Decimal        @db.Decimal(15, 2)
+  currency          String         @default("INR")
+  // Section 194H TDS (commission / brokerage). Default 5% per DD-5.5;
+  // configurable via accrue body. Stored verbatim — auto-deduct workflow
+  // is deferred to a future slice.
+  tdsAmount         Decimal?       @db.Decimal(15, 2)
+  // commissionAmount - tdsAmount. Stored verbatim so statement queries
+  // don't recompute on every list.
+  netAmount         Decimal?       @db.Decimal(15, 2)
+  // accrued | settled | reversed. Distinct from entryType — status tracks
+  // the lifecycle stage; entryType tracks the row's origin shape.
+  status            String         @default("accrued")
+  accruedAt         DateTime       @default(now())
+  settledAt         DateTime?
+  reversedAt        DateTime?
+  reversalReason    String?        @db.Text
+  notes             String?        @db.Text
+  createdBy         Int?
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+  tenant            Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  supplier          TravelSupplier @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  invoice           TravelInvoice? @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, supplierId, fiscalYear])
+  @@index([tenantId, fiscalYear, status])
+  @@index([tenantId, supplierId, status])
+  @@index([tenantId, invoiceId])
 }

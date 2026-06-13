@@ -583,6 +583,9 @@ const travelItinerariesRoutes = require("./routes/travel_itineraries");
 const travelTripsRoutes = require("./routes/travel_trips");
 const travelCostMasterRoutes = require("./routes/travel_cost_master");
 const travelSuppliersRoutes = require("./routes/travel_suppliers");
+// PRD_TRAVEL_SUPPLIER_MASTER G035/G036/G037 — supplier PO ledger + state
+// machine + PDF + auto-PO on booking-confirm.
+const travelPurchaseOrdersRoutes = require("./routes/travel_purchase_orders");
 const travelQuotesRoutes = require("./routes/travel_quotes");
 const travelInvoicesRoutes = require("./routes/travel_invoices");
 // Brand kits — multi-vertical (travel + generic + wellness). Mounted at
@@ -945,6 +948,8 @@ app.use("/api/travel", travelTripsRoutes);
 app.use("/api/travel/passport", require("./routes/travel_passport"));
 app.use("/api/travel", travelCostMasterRoutes);
 app.use("/api/travel", travelSuppliersRoutes);
+// PRD_TRAVEL_SUPPLIER_MASTER G035/G036/G037 — supplier PO ledger.
+app.use("/api/travel", travelPurchaseOrdersRoutes);
 // Slice C9 — TravelQuote customer-share public landing (PRD §3.7).
 // MUST be mounted BEFORE travelQuotesRoutes — the operator route has
 // `:id` capture on `/quotes/:id` which would otherwise match `/quotes/public/...`
@@ -968,6 +973,11 @@ app.use("/api/travel", require("./routes/travel_flyer_templates"));
 // Same shape as travel_quotes_public mount (line 877).
 app.use("/api/v1/flyers", require("./routes/travel_flyer_public"));
 app.use("/api/travel", require("./routes/travel_commission_profiles"));
+// PRD_TRAVEL_SUPPLIER_MASTER G045 (FR-3.1.e, FR-3.5.a, FR-3.5.b) —
+// supplier-side commission ledger CRUD + per-FY statement + CSV + stats.
+// Distinct from travel_commission_profiles (B2B sub-agent commission shapes):
+// this ledger tracks SUPPLIER-side commissions EARNED on confirmed bookings.
+app.use("/api/travel", require("./routes/travel_supplier_commissions"));
 // WS-1 — sub-brand session scope (POST /session/switch-brand + GET
 // /session/active-brand). Authoritative server-side validation behind the
 // sidebar sub-brand switcher; reuses middleware/travelGuards.js plumbing.

@@ -1135,6 +1135,45 @@ router.patch("/trips/:id", verifyToken, requireTravelTenant, requireTmcAccess, a
     // NOT block the PATCH. Pending Q1 (Workspace admin creds).
     const flippingToConfirmed =
       data.status === "confirmed" && existing.status !== "confirmed";
+
+    // PRD_TRAVEL_SUPPLIER_MASTER G042 — credit-limit hard-block.
+    // When the trip flips to "confirmed" AND req.body carries a supplierId
+    // + a totalAmount (the booking value being projected against the
+    // supplier's outstanding A/P), call the credit-check helper. If the
+    // projected total exceeds the supplier's configured creditLimit,
+    // return 409 CREDIT_LIMIT_EXCEEDED. ADMIN may override via
+    // req.body.overrideCreditLimit=true (operator escalation path —
+    // logged at write time so the override is auditable).
+    if (flippingToConfirmed) {
+      const { supplierId: sIdRaw, totalAmount, overrideCreditLimit } = req.body || {};
+      const sId = sIdRaw != null ? parseInt(sIdRaw, 10) : null;
+      const addAmount = totalAmount != null ? Number(totalAmount) : 0;
+      if (Number.isFinite(sId) && Number.isFinite(addAmount) && addAmount > 0) {
+        // Look up the caller's role from the DB (verifyToken populates
+        // req.user with {userId, tenantId, role}). ADMIN can override.
+        const isAdmin = req.user && req.user.role === "ADMIN";
+        const overrideRequested = overrideCreditLimit === true || overrideCreditLimit === "true";
+        if (!(overrideRequested && isAdmin)) {
+          const { checkCreditLimit } = require("../lib/supplierCreditCheck");
+          const check = await checkCreditLimit({
+            prisma,
+            tenantId: req.travelTenant.id,
+            supplierId: sId,
+            addAmount,
+          });
+          if (!check.allowed) {
+            return res.status(409).json({
+              error: "Booking would exceed supplier credit limit",
+              code: "CREDIT_LIMIT_EXCEEDED",
+              supplierId: sId,
+              current: check.current,
+              limit: check.limit,
+              projected: check.projected,
+            });
+          }
+        }
+      }
+    }
     if (
       flippingToConfirmed &&
       !existing.driveFolderId &&

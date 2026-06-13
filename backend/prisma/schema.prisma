@@ -165,78 +165,85 @@ model Tenant {
 
   // Travel vertical — Day 2 schema migration. Back-relations only (FK
   // cascade behavior lives on each child via @relation onDelete).
-  travelDiagnostics               TravelDiagnostic[]
-  travelDiagQuestionBanks         TravelDiagnosticQuestionBank[]
-  itineraries                     Itinerary[]
+  travelDiagnostics                   TravelDiagnostic[]
+  travelDiagQuestionBanks             TravelDiagnosticQuestionBank[]
+  itineraries                         Itinerary[]
   // #907 slice 4 — Itinerary template library (Pre-loaded ~50, expand over time).
   // Subsequent slices: CRUD route + admin library UI + "Create from template" hook.
-  itineraryTemplates              ItineraryTemplate[]
-  travelCostMasters               TravelCostMaster[]
+  itineraryTemplates                  ItineraryTemplate[]
+  travelCostMasters                   TravelCostMaster[]
   // #907 slice 1 — Sightseeing master (destination → POIs). Future slices
   // wire CRUD route + admin UI page + Cost Master "6th category" surface.
-  travelSightseeing               TravelSightseeing[]
-  travelSeasonCalendars           TravelSeasonCalendar[]
-  travelMarkupRules               TravelMarkupRule[]
-  tmcTrips                        TmcTrip[]
-  webCheckins                     WebCheckin[]
-  supplierCredentials             SupplierCredential[]
-  visaApplications                VisaApplication[]
-  embassyRules                    EmbassyRule[]
-  rfuLeadProfiles                 RfuLeadProfile[]
-  religiousGuidancePackets        ReligiousGuidancePacket[]
-  tripMicrosites                  TripMicrosite[]
+  travelSightseeing                   TravelSightseeing[]
+  travelSeasonCalendars               TravelSeasonCalendar[]
+  travelMarkupRules                   TravelMarkupRule[]
+  tmcTrips                            TmcTrip[]
+  webCheckins                         WebCheckin[]
+  supplierCredentials                 SupplierCredential[]
+  visaApplications                    VisaApplication[]
+  embassyRules                        EmbassyRule[]
+  rfuLeadProfiles                     RfuLeadProfile[]
+  religiousGuidancePackets            ReligiousGuidancePacket[]
+  tripMicrosites                      TripMicrosite[]
   // Travel-vertical financial fork (PRD_TRAVEL_{QUOTE_BUILDER,BILLING,
   // SUPPLIER_MASTER} DD-5.1 [RESOLVED 2026-05-24]) — fork models alongside
   // the generic Quote / Invoice / Vendor. See model docs at bottom of file.
-  travelQuotes                    TravelQuote[]
-  travelQuoteLines                TravelQuoteLine[]
-  travelQuoteTemplates            TravelQuoteTemplate[]
-  travelInvoices                  TravelInvoice[]
-  travelInvoiceLines              TravelInvoiceLine[]
-  travelPaymentSchedules          TravelPaymentSchedule[]
-  travelSuppliers                 TravelSupplier[]
-  travelSupplierPayables          TravelSupplierPayable[]
+  travelQuotes                        TravelQuote[]
+  travelQuoteLines                    TravelQuoteLine[]
+  travelQuoteTemplates                TravelQuoteTemplate[]
+  travelInvoices                      TravelInvoice[]
+  travelInvoiceLines                  TravelInvoiceLine[]
+  travelPaymentSchedules              TravelPaymentSchedule[]
+  travelSuppliers                     TravelSupplier[]
+  travelSupplierPayables              TravelSupplierPayable[]
   // PRD_TRAVEL_SUPPLIER_MASTER G045 — supplier-side commission ledger per FY
   // (FR-3.5.a, FR-3.5.b).
-  travelSupplierCommissionEntries TravelSupplierCommissionEntry[]
+  travelSupplierCommissionEntries     TravelSupplierCommissionEntry[]
   // PRD_TRAVEL_SUPPLIER_MASTER G038 + G039 — KYC + dispute log.
-  travelSupplierKycs              TravelSupplierKyc[]
-  travelSupplierKycChecks         TravelSupplierKycChecklistItem[]
-  travelSupplierDisputes          TravelSupplierDispute[]
+  travelSupplierKycs                  TravelSupplierKyc[]
+  travelSupplierKycChecks             TravelSupplierKycChecklistItem[]
+  travelSupplierDisputes              TravelSupplierDispute[]
+  // PRD_TRAVEL_SUPPLIER_MASTER G044 (FR-3.4.a-c) — supplier-statement
+  // reconciliation batches + PNR-keyed line match + tolerance auto-match.
+  travelSupplierReconciliationBatches TravelSupplierReconciliationBatch[]
+  travelSupplierReconciliationLines   TravelSupplierReconciliationLine[]
+  // PRD_TRAVEL_SUPPLIER_MASTER G046 (FR-3.3.c) — supplier-invoice PDF
+  // uploads with optional match-to-payable linkage.
+  travelSupplierInvoiceUploads        TravelSupplierInvoiceUpload[]
   // S33 (#920) — PRD_TRAVEL_BILLING FR-3.7 cancellation policies.
-  cancellationPolicies            CancellationPolicy[]
+  cancellationPolicies                CancellationPolicy[]
   // PRD_TRAVEL_B2B_AGENT_PORTAL #905 slice 2 — commission profiles
   // (additive; consumes lib/agentCommissionCalculator.js from slice 1
   // commit cb284098). Each row is one named operator-facing pricing
   // profile (flat_percent | tiered | per_pax_flat | hybrid).
-  travelCommissionProfiles        TravelCommissionProfile[]
+  travelCommissionProfiles            TravelCommissionProfile[]
   // PRD_TRAVEL_MARKETING_FLYER #908 slice 3 — saved flyer templates
   // (additive; consumes lib/flyerTemplateValidator.js from slice 1
   // commit 28146498). Each row is one operator-composed flyer (palette
   // + layout + asset placeholders) validated before persistence.
-  travelFlyerTemplates            TravelFlyerTemplate[]
+  travelFlyerTemplates                TravelFlyerTemplate[]
   // TMC curriculum→destination mapping (PRD_TMC_CURRICULUM_MAPPING PC-1
   // RESOLVED 2026-05-24). 100-200 starter rows seeded by GS; TMC academic
   // team validates + extends over 6-week window.
-  curriculumMappings              TravelCurriculumMapping[]
+  curriculumMappings                  TravelCurriculumMapping[]
   // TMC school term/holiday/exam windows for trip scheduling. Baseline seeded;
   // each school's actual dates captured by asking them (no public API exists).
-  travelSchoolTerms               TravelSchoolTerm[]
+  travelSchoolTerms                   TravelSchoolTerm[]
   // Per-sub-brand brand kits (PRD_TRAVEL_PER_SUBBRAND_BRANDING DD-5.2
   // [RESOLVED 2026-05-24]) — versioned brand-asset storage forked out of
   // subBrandConfigJson. See BrandKit model at bottom of file.
-  brandKits                       BrandKit[]
+  brandKits                           BrandKit[]
   // Sub-brand config (Q9, Q14, Q21) — JSON keyed by sub-brand storing
   // per-brand WhatsApp number / Wati WABA id / legal entity / GSTIN /
   // Drive folder root / microsite domain. Nullable; sub-brands without
   // an entry inherit tenant-level defaults.
-  subBrandConfigJson              String?                          @db.Text
+  subBrandConfigJson                  String?                             @db.Text
   /// Per-sub-brand default theme. Resolved at runtime by chain:
   /// user.themePreference → tenant.subBrandThemes[activeSubBrand] → 'system'.
   /// Per #876 + DD-5.3 RESOLVED 2026-05-24. JSON-string column per
   /// CLAUDE.md convention (call site stringifies; sanitizeJson preserves shape).
   /// Shape: { "tmc": "light", "rfu": "dark", "travelstall": "system", "visasure": "light" }
-  subBrandThemes                  String?                          @db.Text
+  subBrandThemes                      String?                             @db.Text
 
   // Subscriptions
   subscriptions Subscription[]
@@ -6614,18 +6621,29 @@ model TravelPaymentSchedule {
 }
 
 model TravelSupplier {
-  id                   Int                             @id @default(autoincrement())
-  tenantId             Int                             @default(1)
-  subBrand             String
-  name                 String
-  contactPerson        String?
-  phone                String?
-  email                String?
-  gstin                String?
-  addressLine          String?
+  id                    Int                                 @id @default(autoincrement())
+  tenantId              Int                                 @default(1)
+  subBrand              String
+  name                  String
+  contactPerson         String?
+  phone                 String?
+  email                 String?
+  gstin                 String?
+  addressLine           String?
   // hotel | flight | transport | visa-consul | other
-  supplierCategory     String                          @default("other")
-  isActive             Boolean                         @default(true)
+  supplierCategory      String                              @default("other")
+  isActive              Boolean                             @default(true)
+  // PRD_TRAVEL_SUPPLIER_MASTER G040 — supplier governance status enum.
+  // Values: active | paused | blocked_disputed | archived.
+  // isActive STAYS as the back-compat derived flag (status='active' → isActive=true;
+  // other → false). Existing rows default to "active" via the column default —
+  // additive migration, no bless marker needed.
+  status                String                              @default("active")
+  // PRD_TRAVEL_SUPPLIER_MASTER G041 — payment-terms kind enum.
+  // Values: net | prepay | on_departure | on_arrival.
+  // When kind='net', paymentTermsDays is the N (NET-N days). For non-net kinds
+  // paymentTermsDays MUST be null — the route auto-nulls on write.
+  paymentTermsKind      String                              @default("net")
   // PRD_TRAVEL_SUPPLIER_MASTER slice 1 (#903) — payment terms + credit tracking.
   // All NULLABLE — additive safe migration (no bless marker needed).
   // paymentTermsDays: free-form NET-N day count (e.g. 30 for NET-30, 45 for NET-45).
@@ -6634,31 +6652,37 @@ model TravelSupplier {
   // taxRegimeCode:    "regular" | "composite" | "exempt" (free-form; will tighten in Phase 2).
   // primaryContactRole: e.g. "Accounts payable" | "Sales rep" — distinct from contactPerson name.
   // notes:            unstructured operator notes blob.
-  paymentTermsDays     Int?
-  creditLimit          Decimal?                        @db.Decimal(15, 2)
-  creditCurrency       String?                         @default("INR")
-  taxRegimeCode        String?
-  primaryContactRole   String?
-  notes                String?                         @db.Text
+  paymentTermsDays      Int?
+  creditLimit           Decimal?                            @db.Decimal(15, 2)
+  creditCurrency        String?                             @default("INR")
+  taxRegimeCode         String?
+  primaryContactRole    String?
+  notes                 String?                             @db.Text
   // PRD_TRAVEL_SUPPLIER_MASTER G045 (FR-3.1.e) — default supplier-side
   // commission rate (e.g. 7.50% IATA inward commission for air bookings,
   // 10% hotel commission, etc.). Override-able per
   // TravelSupplierCommissionEntry row at accrue time. Nullable + additive
   // (no bless marker needed).
-  commissionPercent    Decimal?                        @db.Decimal(5, 2)
-  tenant               Tenant                          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  payables             TravelSupplierPayable[]
+  commissionPercent     Decimal?                            @db.Decimal(5, 2)
+  tenant                Tenant                              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  payables              TravelSupplierPayable[]
   // PRD_TRAVEL_SUPPLIER_MASTER G045 — supplier-side commission ledger per FY
   // (FR-3.5.a, FR-3.5.b).
-  commissionEntries    TravelSupplierCommissionEntry[]
+  commissionEntries     TravelSupplierCommissionEntry[]
   // PRD_TRAVEL_SUPPLIER_MASTER G038 — KYC + onboarding checklist (FR-3.1.h).
-  kyc                  TravelSupplierKyc?
+  kyc                   TravelSupplierKyc?
   // PRD_TRAVEL_SUPPLIER_MASTER G039 — dispute history + chargeback log
   // (FR-3.1.g, FR-3.6.a-c).
-  disputes             TravelSupplierDispute[]
-  createdAt            DateTime                        @default(now())
-  updatedAt            DateTime                        @updatedAt
-  travelPurchaseOrders TravelPurchaseOrder[]
+  disputes              TravelSupplierDispute[]
+  // PRD_TRAVEL_SUPPLIER_MASTER G044 (FR-3.4.a-c) — supplier-statement
+  // reconciliation batches (per supplier + statementMonth).
+  reconciliationBatches TravelSupplierReconciliationBatch[]
+  // PRD_TRAVEL_SUPPLIER_MASTER G046 (FR-3.3.c) — invoice PDF uploads,
+  // optionally linked to a TravelSupplierPayable.
+  invoiceUploads        TravelSupplierInvoiceUpload[]
+  createdAt             DateTime                            @default(now())
+  updatedAt             DateTime                            @updatedAt
+  travelPurchaseOrders  TravelPurchaseOrder[]
 
   @@index([tenantId, subBrand])
   @@index([tenantId, subBrand, supplierCategory])
@@ -6676,27 +6700,34 @@ model TravelSupplier {
 // the parent TravelSupplier — every payable is scoped through its
 // supplier's subBrand + tenantId.
 model TravelSupplierPayable {
-  id              Int                     @id @default(autoincrement())
-  tenantId        Int                     @default(1)
-  supplierId      Int
-  poNumber        String? // free-form purchase-order or booking reference
-  description     String // "50 PNRs Apr 2026" / "Hotel block 25-28 May" etc.
-  amount          Decimal                 @db.Decimal(15, 2)
-  currency        String                  @default("INR")
-  dueDate         DateTime?
-  status          String                  @default("pending") // pending | scheduled | paid | cancelled
-  paidAt          DateTime?
-  notes           String?                 @db.Text
+  id                  Int                                @id @default(autoincrement())
+  tenantId            Int                                @default(1)
+  supplierId          Int
+  poNumber            String? // free-form purchase-order or booking reference
+  description         String // "50 PNRs Apr 2026" / "Hotel block 25-28 May" etc.
+  amount              Decimal                            @db.Decimal(15, 2)
+  currency            String                             @default("INR")
+  dueDate             DateTime?
+  status              String                             @default("pending") // pending | scheduled | paid | cancelled
+  paidAt              DateTime?
+  notes               String?                            @db.Text
   // PRD_TRAVEL_SUPPLIER_MASTER FR-3.3.a (G037) — optional PO→Payable linkage.
   // Set on auto-creation when a TravelPurchaseOrder transitions to `fulfilled`.
-  purchaseOrderId Int?
-  supplier        TravelSupplier          @relation(fields: [supplierId], references: [id], onDelete: Cascade)
-  tenant          Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  purchaseOrder   TravelPurchaseOrder?    @relation(fields: [purchaseOrderId], references: [id])
+  purchaseOrderId     Int?
+  supplier            TravelSupplier                     @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  tenant              Tenant                             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  purchaseOrder       TravelPurchaseOrder?               @relation(fields: [purchaseOrderId], references: [id])
   // PRD_TRAVEL_SUPPLIER_MASTER G039 — disputes tied to a specific payable.
-  disputes        TravelSupplierDispute[]
-  createdAt       DateTime                @default(now())
-  updatedAt       DateTime                @updatedAt
+  disputes            TravelSupplierDispute[]
+  // PRD_TRAVEL_SUPPLIER_MASTER G044 (FR-3.4.a) — reconciliation lines that
+  // matched THIS payable. Optional; a payable can be matched against many
+  // statement lines across batches (e.g. partial payments).
+  reconciliationLines TravelSupplierReconciliationLine[]
+  // PRD_TRAVEL_SUPPLIER_MASTER G046 (FR-3.3.c) — invoice uploads matched to
+  // this payable.
+  invoiceUploads      TravelSupplierInvoiceUpload[]
+  createdAt           DateTime                           @default(now())
+  updatedAt           DateTime                           @updatedAt
 
   @@index([tenantId, supplierId])
   @@index([tenantId, supplierId, status])
@@ -6752,19 +6783,22 @@ model TravelPurchaseOrder {
 
 // Line items on a TravelPurchaseOrder.
 model TravelPurchaseOrderLine {
-  id              Int                 @id @default(autoincrement())
-  tenantId        Int                 @default(1)
-  purchaseOrderId Int
-  lineType        String // service | tax | fee | discount
-  description     String
-  quantity        Decimal             @default(1) @db.Decimal(10, 2)
-  unitPrice       Decimal             @db.Decimal(15, 2)
-  lineTotal       Decimal             @db.Decimal(15, 2)
-  pnr             String?
-  bookingRef      String?
-  sortOrder       Int                 @default(0)
-  createdAt       DateTime            @default(now())
-  purchaseOrder   TravelPurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  id                  Int                                @id @default(autoincrement())
+  tenantId            Int                                @default(1)
+  purchaseOrderId     Int
+  lineType            String // service | tax | fee | discount
+  description         String
+  quantity            Decimal                            @default(1) @db.Decimal(10, 2)
+  unitPrice           Decimal                            @db.Decimal(15, 2)
+  lineTotal           Decimal                            @db.Decimal(15, 2)
+  pnr                 String?
+  bookingRef          String?
+  sortOrder           Int                                @default(0)
+  createdAt           DateTime                           @default(now())
+  purchaseOrder       TravelPurchaseOrder                @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  // PRD_TRAVEL_SUPPLIER_MASTER G044 (FR-3.4.a) — supplier-statement
+  // reconciliation lines that matched THIS PO line by pnr+amount.
+  reconciliationLines TravelSupplierReconciliationLine[]
 
   @@index([tenantId, purchaseOrderId])
   @@index([pnr])
@@ -7384,4 +7418,135 @@ model TravelSupplierDispute {
 
   @@index([tenantId, supplierId, status])
   @@index([tenantId, status, raisedAt])
+}
+
+// PRD_TRAVEL_SUPPLIER_MASTER G044 (FR-3.4.a-c) — supplier-statement
+// reconciliation batches.
+//
+// Supplier statements arrive monthly with a list of PNR / booking-ref +
+// amounts. Operators load a batch (CSV or hand-entered) and the
+// auto-matcher (backend/lib/supplierReconciliation.js) pairs each line
+// against TravelPurchaseOrderLine rows by PNR (case-insensitive) +
+// amount within tolerancePct. State machine: draft → reviewed → reconciled
+// (or disputed). All fields nullable / additive — new model, no migration
+// risk. Sub-brand isolation inherited via TravelSupplier.subBrand.
+model TravelSupplierReconciliationBatch {
+  id                  Int                                @id @default(autoincrement())
+  tenantId            Int
+  supplierId          Int
+  // Free-form "YYYY-MM" label (e.g. "2026-05") — what month of statement
+  // this batch represents. NOT used in unique index because operators
+  // may re-issue corrected statements within the same month.
+  statementMonth      String
+  // Optional uploaded statement PDF / CSV reference (free-form URL or
+  // storage key). The line-items themselves live in
+  // TravelSupplierReconciliationLine; this is just a pointer back to
+  // the source file the operator uploaded.
+  statementUrl        String?
+  // Reported totals (from the supplier statement) and our side (sum of
+  // matched-PoLine lineTotals) — kept side-by-side so operators see the
+  // discrepancy at a glance on the dashboard panel.
+  totalSupplierAmount Decimal                            @db.Decimal(15, 2)
+  totalOursAmount     Decimal                            @db.Decimal(15, 2)
+  // % tolerance within which auto-match accepts an amount mismatch as
+  // "matched" (e.g. 1.0 = ±1% accepted). Default 1.00; override per batch.
+  tolerancePct        Decimal                            @default(1) @db.Decimal(5, 2)
+  // draft | reviewed | reconciled | disputed
+  status              String                             @default("draft")
+  reviewedBy          Int?
+  reviewedAt          DateTime?
+  reconciledBy        Int?
+  reconciledAt        DateTime?
+  notes               String?                            @db.Text
+  createdBy           Int?
+  createdAt           DateTime                           @default(now())
+  updatedAt           DateTime                           @updatedAt
+  tenant              Tenant                             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  supplier            TravelSupplier                     @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  lines               TravelSupplierReconciliationLine[]
+
+  @@index([tenantId, supplierId, statementMonth])
+  @@index([tenantId, status])
+}
+
+// PRD_TRAVEL_SUPPLIER_MASTER G044 (FR-3.4.a) — individual statement line.
+//
+// One row per line in the supplier's monthly statement. matchStatus
+// progresses from `unmatched` (initial), to `auto_matched` (set by the
+// auto-matcher when a PoLine is found within tolerance), or
+// `manual_matched` (operator-set via the manual-match endpoint), or
+// `disputed` / `resolved`. matchedPoLineId is the FK to the PoLine that
+// satisfied the match; matchedPayableId is the FK to the payable that
+// settles it (set later in the lifecycle, often when the payment fires).
+// varianceAmount = supplierAmount - PoLine.lineTotal at match time.
+model TravelSupplierReconciliationLine {
+  id               Int                               @id @default(autoincrement())
+  tenantId         Int
+  batchId          Int
+  pnr              String?
+  bookingRef       String?
+  supplierAmount   Decimal                           @db.Decimal(15, 2)
+  // FK to TravelPurchaseOrderLine when matched
+  matchedPoLineId  Int?
+  // FK to TravelSupplierPayable when matched
+  matchedPayableId Int?
+  // unmatched | auto_matched | manual_matched | disputed | resolved
+  matchStatus      String                            @default("unmatched")
+  varianceAmount   Decimal?                          @db.Decimal(15, 2)
+  notes            String?                           @db.Text
+  createdAt        DateTime                          @default(now())
+  updatedAt        DateTime                          @updatedAt
+  tenant           Tenant                            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  batch            TravelSupplierReconciliationBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  matchedPoLine    TravelPurchaseOrderLine?          @relation(fields: [matchedPoLineId], references: [id], onDelete: SetNull)
+  matchedPayable   TravelSupplierPayable?            @relation(fields: [matchedPayableId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, batchId, matchStatus])
+  @@index([tenantId, pnr])
+}
+
+// PRD_TRAVEL_SUPPLIER_MASTER G046 (FR-3.3.c) — supplier invoice PDF uploads.
+//
+// When a supplier sends an invoice PDF (separate from the monthly
+// statement), the operator uploads it and links it to a
+// TravelSupplierPayable row. The actual file lives on disk under
+// `backend/uploads/supplier-invoices/`; this row stores the metadata +
+// match-to-payable linkage. matchStatus flips to `matched` when the
+// operator confirms which payable the invoice covers. DELETE is
+// ADMIN-only (audit-trail concern — invoice PDFs are tax-evidence).
+model TravelSupplierInvoiceUpload {
+  id                    Int                    @id @default(autoincrement())
+  tenantId              Int
+  supplierId            Int
+  // FK to TravelSupplierPayable when matched. Null until the operator
+  // confirms which payable this invoice covers.
+  payableId             Int?
+  filename              String
+  // Storage path (relative to the uploads dir or absolute URL when
+  // backed by Vault / S3). Non-guessable; multer.diskStorage names files
+  // `<uuid>.<ext>` (ext pinned to validated mimeType).
+  fileUrl               String
+  fileMimeType          String
+  fileSize              Int
+  // Metadata extracted from the supplier's PDF — operator fills these in
+  // post-upload (OCR is out of scope for slice 1).
+  supplierInvoiceNumber String?
+  invoiceDate           DateTime?
+  invoiceAmount         Decimal?               @db.Decimal(15, 2)
+  currency              String                 @default("INR")
+  // unmatched | matched | disputed
+  matchStatus           String                 @default("unmatched")
+  uploadedBy            Int?
+  uploadedAt            DateTime               @default(now())
+  matchedBy             Int?
+  matchedAt             DateTime?
+  notes                 String?                @db.Text
+  createdAt             DateTime               @default(now())
+  updatedAt             DateTime               @updatedAt
+  tenant                Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  supplier              TravelSupplier         @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  payable               TravelSupplierPayable? @relation(fields: [payableId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, supplierId, matchStatus])
+  @@index([tenantId, payableId])
 }

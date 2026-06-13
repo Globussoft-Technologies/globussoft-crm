@@ -453,3 +453,170 @@ test.describe("G039 dispute history + stats rollup", () => {
     expect(body.code).toBe("MISSING_FIELDS");
   });
 });
+
+// PRD_TRAVEL_SUPPLIER_MASTER G040/G041/G042/G043 — supplier governance suite.
+//
+// Pins:
+//   - POST + PUT accept new fields: status + paymentTermsKind (whitelist).
+//   - State-transition endpoints: /pause, /block, /archive, /reactivate.
+//   - Credit-status endpoint: GET /suppliers/:id/credit-status returns
+//     { current, limit, utilizationPct, status, currency }.
+//   - Invalid enum values return 400 with the right error code.
+test.describe("Supplier governance (G040/G041/G042/G043)", () => {
+  test("POST /suppliers with status=paused returns 201 + status persisted", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, "no token");
+    const res = await post(request, token, "/api/travel/suppliers", {
+      name: `_teardown_${RUN_TAG}_paused`,
+      subBrand: "tmc",
+      status: "paused",
+    });
+    expect(res.status()).toBe(201);
+    const body = await res.json();
+    expect(body.status).toBe("paused");
+    expect(body.isActive).toBe(false);
+    // teardown
+    await del(request, token, `/api/travel/suppliers/${body.id}`).catch(() => {});
+  });
+
+  test("POST /suppliers with invalid status → 400 INVALID_STATUS", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, "no token");
+    const res = await post(request, token, "/api/travel/suppliers", {
+      name: `_teardown_${RUN_TAG}_badstatus`,
+      subBrand: "tmc",
+      status: "frozen_solid",
+    });
+    expect(res.status()).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("INVALID_STATUS");
+  });
+
+  test("POST /suppliers with paymentTermsKind=prepay; days auto-nulled", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, "no token");
+    const res = await post(request, token, "/api/travel/suppliers", {
+      name: `_teardown_${RUN_TAG}_prepay`,
+      subBrand: "tmc",
+      paymentTermsKind: "prepay",
+      paymentTermsDays: 30,
+    });
+    expect(res.status()).toBe(201);
+    const body = await res.json();
+    expect(body.paymentTermsKind).toBe("prepay");
+    expect(body.paymentTermsDays).toBeNull();
+    await del(request, token, `/api/travel/suppliers/${body.id}`).catch(() => {});
+  });
+
+  test("POST /suppliers invalid paymentTermsKind → 400", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, "no token");
+    const res = await post(request, token, "/api/travel/suppliers", {
+      name: `_teardown_${RUN_TAG}_badkind`,
+      subBrand: "tmc",
+      paymentTermsKind: "barter",
+    });
+    expect(res.status()).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("INVALID_PAYMENT_TERMS_KIND");
+  });
+
+  test("/suppliers/:id/pause flips status + isActive", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, "no token");
+    const createRes = await post(request, token, "/api/travel/suppliers", {
+      name: `_teardown_${RUN_TAG}_topause`,
+      subBrand: "tmc",
+    });
+    if (createRes.status() !== 201) test.skip(true, "create failed");
+    const supplier = await createRes.json();
+    const res = await post(request, token, `/api/travel/suppliers/${supplier.id}/pause`, {});
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(body.status).toBe("paused");
+    expect(body.isActive).toBe(false);
+    await del(request, token, `/api/travel/suppliers/${supplier.id}`).catch(() => {});
+  });
+
+  test("/suppliers/:id/block without reason → 400 MISSING_FIELDS", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, "no token");
+    const createRes = await post(request, token, "/api/travel/suppliers", {
+      name: `_teardown_${RUN_TAG}_toblock`,
+      subBrand: "tmc",
+    });
+    if (createRes.status() !== 201) test.skip(true, "create failed");
+    const supplier = await createRes.json();
+    const res = await post(request, token, `/api/travel/suppliers/${supplier.id}/block`, {});
+    expect(res.status()).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("MISSING_FIELDS");
+    await del(request, token, `/api/travel/suppliers/${supplier.id}`).catch(() => {});
+  });
+
+  test("/suppliers/:id/block with reason → 200 + status=blocked_disputed", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, "no token");
+    const createRes = await post(request, token, "/api/travel/suppliers", {
+      name: `_teardown_${RUN_TAG}_blocked`,
+      subBrand: "tmc",
+    });
+    if (createRes.status() !== 201) test.skip(true, "create failed");
+    const supplier = await createRes.json();
+    const res = await post(request, token, `/api/travel/suppliers/${supplier.id}/block`, {
+      reason: "chargeback under review",
+    });
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(body.status).toBe("blocked_disputed");
+    await del(request, token, `/api/travel/suppliers/${supplier.id}`).catch(() => {});
+  });
+
+  test("/suppliers/:id/reactivate flips from non-active back to active", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, "no token");
+    const createRes = await post(request, token, "/api/travel/suppliers", {
+      name: `_teardown_${RUN_TAG}_react`,
+      subBrand: "tmc",
+      status: "paused",
+    });
+    if (createRes.status() !== 201) test.skip(true, "create failed");
+    const supplier = await createRes.json();
+    const res = await post(request, token, `/api/travel/suppliers/${supplier.id}/reactivate`, {});
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(body.status).toBe("active");
+    expect(body.isActive).toBe(true);
+    await del(request, token, `/api/travel/suppliers/${supplier.id}`).catch(() => {});
+  });
+
+  test("GET /suppliers/:id/credit-status returns 5-field shape with no limit set", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, "no token");
+    const createRes = await post(request, token, "/api/travel/suppliers", {
+      name: `_teardown_${RUN_TAG}_credit`,
+      subBrand: "tmc",
+    });
+    if (createRes.status() !== 201) test.skip(true, "create failed");
+    const supplier = await createRes.json();
+    const res = await get(request, token, `/api/travel/suppliers/${supplier.id}/credit-status`);
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(body).toHaveProperty("supplierId");
+    expect(body).toHaveProperty("current");
+    expect(body).toHaveProperty("limit");
+    expect(body).toHaveProperty("utilizationPct");
+    expect(body).toHaveProperty("status");
+    expect(body).toHaveProperty("currency");
+    // No limit configured → status: ok
+    expect(body.status).toBe("ok");
+    await del(request, token, `/api/travel/suppliers/${supplier.id}`).catch(() => {});
+  });
+
+  test("GET /suppliers/:id/credit-status returns 404 for unknown id", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, "no token");
+    const res = await get(request, token, "/api/travel/suppliers/9999999/credit-status");
+    expect(res.status()).toBe(404);
+  });
+});

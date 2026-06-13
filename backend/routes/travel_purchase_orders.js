@@ -594,12 +594,69 @@ function buildTransitionHandler(toStatus, timestampField) {
   };
 }
 
+// PRD_TRAVEL_SUPPLIER_MASTER G042 — credit-limit hard-block on draft → sent.
+// The PO `total` (computed by recomputePoTotals from line totals) is the
+// projected amount; check against supplier.creditLimit + outstanding
+// payables (excluding paid + cancelled). Returns 409 CREDIT_LIMIT_EXCEEDED
+// on breach. ADMIN can override via body.overrideCreditLimit=true.
 router.post(
   "/purchase-orders/:id/send",
   verifyToken,
   verifyRole(["ADMIN", "MANAGER"]),
   requireTravelTenant,
-  buildTransitionHandler("sent", "sentAt"),
+  async (req, res) => {
+    try {
+      const po = await loadPo(req);
+      if (!TRANSITIONS[po.status] || !TRANSITIONS[po.status].has("sent")) {
+        return res.status(409).json({
+          error: `Cannot transition from ${po.status} to sent`,
+          code: "INVALID_STATUS_TRANSITION",
+          from: po.status,
+          to: "sent",
+          allowed: Array.from(TRANSITIONS[po.status] || []),
+        });
+      }
+
+      // G042 — credit-limit hard-block. PO.totalAmount comes from
+      // recomputePoTotals (the per-line line-total sum). When > 0, run the
+      // check; null/zero PO skips the check (creating an empty PO is allowed
+      // but the operator gets the credit-block at /send time if there's
+      // a non-zero total).
+      const projectedAmount = Number(po.totalAmount != null ? po.totalAmount : 0);
+      const overrideRequested =
+        req.body && (req.body.overrideCreditLimit === true || req.body.overrideCreditLimit === "true");
+      const isAdmin = req.user && req.user.role === "ADMIN";
+      if (Number.isFinite(projectedAmount) && projectedAmount > 0 && !(overrideRequested && isAdmin)) {
+        const { checkCreditLimit } = require("../lib/supplierCreditCheck");
+        const check = await checkCreditLimit({
+          prisma,
+          tenantId: req.travelTenant.id,
+          supplierId: po.supplierId,
+          addAmount: projectedAmount,
+        });
+        if (!check.allowed) {
+          return res.status(409).json({
+            error: "Purchase order would exceed supplier credit limit",
+            code: "CREDIT_LIMIT_EXCEEDED",
+            supplierId: po.supplierId,
+            current: check.current,
+            limit: check.limit,
+            projected: check.projected,
+          });
+        }
+      }
+
+      const updated = await prisma.travelPurchaseOrder.update({
+        where: { id: po.id },
+        data: { status: "sent", sentAt: new Date() },
+      });
+      res.json(updated);
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-po] transition sent error:", e.message);
+      res.status(500).json({ error: "Failed to transition to sent" });
+    }
+  },
 );
 
 router.post(

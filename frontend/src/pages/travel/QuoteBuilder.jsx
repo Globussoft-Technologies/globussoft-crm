@@ -170,6 +170,12 @@ export default function QuoteBuilder() {
   // Supplier list for the current subBrand (refetched on subBrand change).
   const [suppliers, setSuppliers] = useState([]);
   const [suppliersLoading, setSuppliersLoading] = useState(false);
+  // PRD_TRAVEL_SUPPLIER_MASTER G043 — per-supplier credit-utilization chips.
+  // Keyed by supplierId → { current, limit, utilizationPct, status, currency }
+  // (status ∈ "ok" | "warning" | "exceeded"). Populated on demand for the
+  // suppliers actually referenced by line items; "ok" status renders no chip
+  // (avoid visual noise for the common case).
+  const [creditStatus, setCreditStatus] = useState({});
   // Delete-confirm modal target.
   const [deleteTarget, setDeleteTarget] = useState(null);
   // Send-to-customer confirm modal flag (slice 6 — Q9 STUB).
@@ -293,6 +299,45 @@ export default function QuoteBuilder() {
     (a, b) => (a.sortOrder || 0) - (b.sortOrder || 0) || (a.id || 0) - (b.id || 0),
   );
   const visibleLines = [...sortedPersisted, ...draftLines];
+
+  // PRD_TRAVEL_SUPPLIER_MASTER G043 — fetch credit utilization for every
+  // distinct supplier referenced by a line. Skips lines without a supplierId
+  // and suppliers we've already fetched (poor-man's cache; the endpoint
+  // sends Cache-Control: max-age=60 too). Best-effort: a failed fetch leaves
+  // the chip absent for that supplier (no error toast — chip is advisory).
+  useEffect(() => {
+    const supplierIds = new Set();
+    for (const ln of visibleLines) {
+      if (ln.supplierId !== "" && ln.supplierId != null) {
+        const sid = parseInt(ln.supplierId, 10);
+        if (Number.isFinite(sid)) supplierIds.add(sid);
+      }
+    }
+    let cancelled = false;
+    for (const sid of supplierIds) {
+      if (creditStatus[sid] !== undefined) continue;
+      fetchApi(`/api/travel/suppliers/${sid}/credit-status`)
+        .then((resp) => {
+          if (cancelled || !resp) return;
+          setCreditStatus((prev) => ({ ...prev, [sid]: resp }));
+        })
+        .catch(() => {
+          // Best-effort — record null so we don't retry every render.
+          if (!cancelled) setCreditStatus((prev) => ({ ...prev, [sid]: null }));
+        });
+    }
+    return () => {
+      cancelled = true;
+    };
+    // visibleLines is rebuilt every render — gate the effect on a stable
+    // signal (sorted supplierId set) so we don't fire fetches on every
+    // unrelated state change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    JSON.stringify(
+      visibleLines.map((l) => l.supplierId).filter((s) => s != null && s !== ""),
+    ),
+  ]);
 
   const subtotal = visibleLines.reduce((acc, it) => acc + lineAmount(it), 0);
   const discountAmount = subtotal * (Number(discountPct) || 0) / 100;
@@ -940,6 +985,72 @@ export default function QuoteBuilder() {
           />
         </label>
       </section>
+
+      {/* PRD_TRAVEL_SUPPLIER_MASTER G043 — credit-utilization advisory chips.
+          Renders one chip per supplier referenced by a line whose credit
+          utilization is at warning (≥80%) or exceeded (≥100%) bands. The
+          "ok" band renders nothing — chip rail is only visible when there's
+          something the operator needs to know. */}
+      {(() => {
+        const chips = [];
+        const seen = new Set();
+        for (const ln of visibleLines) {
+          if (ln.supplierId === "" || ln.supplierId == null) continue;
+          const sid = parseInt(ln.supplierId, 10);
+          if (!Number.isFinite(sid) || seen.has(sid)) continue;
+          seen.add(sid);
+          const cs = creditStatus[sid];
+          if (!cs || cs.status === "ok") continue;
+          const supplier = suppliers.find((s) => s.id === sid);
+          const name = supplier ? supplier.name : `Supplier ${sid}`;
+          const isExceeded = cs.status === "exceeded";
+          const bg = isExceeded ? "rgba(168, 50, 63, 0.14)" : "rgba(200, 154, 78, 0.16)";
+          const color = isExceeded ? "#A8323F" : "#9A6F2E";
+          const cur = (cs.currency || "INR") === "INR" ? "₹" : `${cs.currency} `;
+          const fmtNum = (n) => Number(n || 0).toLocaleString();
+          chips.push(
+            <span
+              key={sid}
+              role="status"
+              aria-label={`${name} credit ${cs.status}`}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                padding: "4px 10px",
+                borderRadius: 999,
+                fontSize: 12,
+                fontWeight: 600,
+                background: bg,
+                color,
+              }}
+              title={isExceeded
+                ? "Booking will be blocked — supplier credit limit exceeded"
+                : "Approaching supplier credit limit"}
+            >
+              {isExceeded ? "Credit exceeded" : "Near credit limit"}
+              {" · "}
+              {name}
+              {" · "}
+              {cur}{fmtNum(cs.current)} / {cur}{fmtNum(cs.limit)}
+            </span>,
+          );
+        }
+        if (chips.length === 0) return null;
+        return (
+          <section
+            aria-label="Supplier credit warnings"
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              gap: 8,
+              marginBottom: 12,
+            }}
+          >
+            {chips}
+          </section>
+        );
+      })()}
 
       <section
         className="glass"

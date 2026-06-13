@@ -434,6 +434,48 @@ function assertValidCreditLimit(c) {
   }
 }
 
+// PRD_TRAVEL_SUPPLIER_MASTER G040 — status enum.
+// Values map to operator-facing governance states:
+//   active           — default, listed in pickers, can be booked against.
+//   paused           — temporarily off-limits (e.g. vendor on vacation). MANAGER+ may pause/reactivate.
+//   blocked_disputed — open chargeback / dispute, blocked from new POs. ADMIN-only flip + reason required.
+//   archived         — terminal soft-delete (replaces isActive=false). ADMIN-only.
+const VALID_SUPPLIER_STATUSES = ["active", "paused", "blocked_disputed", "archived"];
+
+function assertValidStatus(s) {
+  if (s == null) return;
+  if (!VALID_SUPPLIER_STATUSES.includes(s)) {
+    const err = new Error(
+      `status must be one of: ${VALID_SUPPLIER_STATUSES.join(", ")}`,
+    );
+    err.status = 400;
+    err.code = "INVALID_STATUS";
+    throw err;
+  }
+}
+
+// Derive the legacy isActive flag from the new status enum. Active → true;
+// every non-active state → false (paused / blocked_disputed / archived all
+// hide the supplier from default pickers).
+function deriveIsActive(status) {
+  return status === "active";
+}
+
+// PRD_TRAVEL_SUPPLIER_MASTER G041 — payment-terms kind enum.
+const VALID_PAYMENT_TERMS_KINDS = ["net", "prepay", "on_departure", "on_arrival"];
+
+function assertValidPaymentTermsKind(k) {
+  if (k == null) return;
+  if (!VALID_PAYMENT_TERMS_KINDS.includes(k)) {
+    const err = new Error(
+      `paymentTermsKind must be one of: ${VALID_PAYMENT_TERMS_KINDS.join(", ")}`,
+    );
+    err.status = 400;
+    err.code = "INVALID_PAYMENT_TERMS_KIND";
+    throw err;
+  }
+}
+
 // GET /api/travel/suppliers
 // Honors ?subBrand=tmc (filter to that sub-brand) and ?includeInactive=1.
 // GET /api/travel/suppliers
@@ -3063,6 +3105,8 @@ router.post(
         // G045 — supplier-side default commission rate (used as fallback
         // by the commission ledger when an accrual omits commissionPercent).
         commissionPercent,
+        // G040 / G041 — governance status + payment-terms kind enums.
+        status, paymentTermsKind,
       } = req.body || {};
 
       if (!name || !String(name).trim()) {
@@ -3075,6 +3119,8 @@ router.post(
       assertValidGstin(gstin);
       assertValidPaymentTerms(paymentTermsDays);
       assertValidCreditLimit(creditLimit);
+      assertValidStatus(status);
+      assertValidPaymentTermsKind(paymentTermsKind);
       if (subBrand) assertValidSubBrand(subBrand);
       if (commissionPercent != null) {
         const cp = Number(commissionPercent);
@@ -3085,6 +3131,19 @@ router.post(
           });
         }
       }
+
+      // G041 — when kind != "net", paymentTermsDays must be null (auto-null
+      // for the operator instead of 400'ing — friendlier and matches the
+      // intent of the kind=prepay / on_departure / on_arrival states which
+      // have no NET-N day count).
+      const effectiveKind = paymentTermsKind || "net";
+      const effectiveDays = effectiveKind === "net" && paymentTermsDays != null
+        ? parseInt(paymentTermsDays, 10)
+        : null;
+
+      // G040 — status default is "active" and isActive is derived from it
+      // for backwards compatibility with the existing list filter.
+      const effectiveStatus = status || "active";
 
       // Sub-brand isolation: reject create that targets a sub-brand the
       // caller can't access. Same pattern as travel_itineraries POST.
@@ -3105,8 +3164,10 @@ router.post(
           gstin: gstin ? String(gstin) : null,
           addressLine: addressLine ? String(addressLine) : null,
           supplierCategory: supplierCategory || "other",
-          isActive: true,
-          paymentTermsDays: paymentTermsDays != null ? parseInt(paymentTermsDays, 10) : null,
+          isActive: deriveIsActive(effectiveStatus),
+          status: effectiveStatus,
+          paymentTermsKind: effectiveKind,
+          paymentTermsDays: effectiveDays,
           creditLimit: creditLimit != null ? String(creditLimit) : null,
           creditCurrency: creditCurrency ? String(creditCurrency) : undefined,
           taxRegimeCode: taxRegimeCode ? String(taxRegimeCode) : null,
@@ -3167,6 +3228,8 @@ router.put(
         primaryContactRole, notes,
         // G045 — supplier-side default commission rate.
         commissionPercent,
+        // G040 / G041 — governance status + payment-terms kind enums.
+        status, paymentTermsKind,
       } = req.body || {};
 
       if (name !== undefined) {
@@ -3230,6 +3293,25 @@ router.put(
           data.commissionPercent = String(commissionPercent);
         } else {
           data.commissionPercent = null;
+        }
+      }
+
+      // G040 / G041 — status + paymentTermsKind enum patches.
+      // Status flips also propagate to isActive (back-compat derived flag) so
+      // the existing /suppliers list filter (where.isActive=true by default)
+      // keeps the right set of suppliers hidden.
+      if (status !== undefined) {
+        assertValidStatus(status);
+        data.status = status;
+        data.isActive = deriveIsActive(status);
+      }
+      if (paymentTermsKind !== undefined) {
+        assertValidPaymentTermsKind(paymentTermsKind);
+        data.paymentTermsKind = paymentTermsKind;
+        // When operator switches to a non-net kind, auto-null any existing
+        // NET-N day count to keep the row coherent.
+        if (paymentTermsKind !== "net") {
+          data.paymentTermsDays = null;
         }
       }
 
@@ -3305,6 +3387,189 @@ router.delete(
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[travel-sup] delete supplier error:", e.message);
       res.status(500).json({ error: "Failed to delete supplier" });
+    }
+  },
+);
+
+// ─── G040 — Supplier governance state transitions ─────────────────────
+//
+// Four POST endpoints (one per state) that flip the supplier's status enum
+// + sync the legacy isActive flag in the same write. Same access-control
+// pattern as the rest of /suppliers: tenant + sub-brand isolation.
+//
+// /pause       — ADMIN/MANAGER, no body required.
+// /block       — ADMIN only, body.reason required (free-text — auditing
+//                the reason is the dispute-master gate per PRD §3.1.g).
+// /archive     — ADMIN only, terminal state (soft-delete via isActive=false
+//                + status='archived').
+// /reactivate  — ADMIN only, flips back to active from ANY non-active state.
+//                Use case: dispute resolved → operator reactivates the row.
+//
+// Every transition writes an audit row { fields: ['status'], from, to,
+// reason? } so the supplier-timeline composer can surface the events.
+//
+// Why 4 endpoints not 1 generic /:id/transition? The body-strip middleware
+// guarantees req.body fields are operator-supplied (not id/userId/tenantId)
+// but the verb-per-state pattern matches the existing PO state-machine
+// (/:id/send, /:id/acknowledge, /:id/fulfill, /:id/cancel) and makes the
+// access-control + audit-narrative simpler — each verb has its own role
+// gate and its own audit shape.
+
+function buildStateTransitionHandler({ toStatus, requireReason }) {
+  return async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+      }
+      const existing = await prisma.travelSupplier.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+      });
+      if (!existing) {
+        return res.status(404).json({ error: "Supplier not found", code: "NOT_FOUND" });
+      }
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (!canAccessSubBrand(allowed, existing.subBrand)) {
+        return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+      }
+
+      // Block transition requires a reason (audit + dispute correlation).
+      let reason = null;
+      if (requireReason) {
+        reason = req.body && req.body.reason ? String(req.body.reason).trim() : "";
+        if (!reason) {
+          return res.status(400).json({
+            error: "reason required for this transition",
+            code: "MISSING_FIELDS",
+          });
+        }
+      }
+
+      const updated = await prisma.travelSupplier.update({
+        where: { id },
+        data: {
+          status: toStatus,
+          isActive: deriveIsActive(toStatus),
+        },
+      });
+
+      await writeAudit(
+        "TravelSupplier",
+        "STATUS_TRANSITION",
+        updated.id,
+        req.user.userId,
+        req.travelTenant.id,
+        {
+          from: existing.status || (existing.isActive ? "active" : "archived"),
+          to: toStatus,
+          ...(reason ? { reason } : {}),
+        },
+      );
+
+      res.json(updated);
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error(`[travel-sup] transition ${toStatus} error:`, e.message);
+      res.status(500).json({ error: `Failed to transition supplier to ${toStatus}` });
+    }
+  };
+}
+
+router.post(
+  "/suppliers/:id/pause",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  buildStateTransitionHandler({ toStatus: "paused", requireReason: false }),
+);
+
+router.post(
+  "/suppliers/:id/block",
+  verifyToken,
+  verifyRole(["ADMIN"]),
+  requireTravelTenant,
+  buildStateTransitionHandler({ toStatus: "blocked_disputed", requireReason: true }),
+);
+
+router.post(
+  "/suppliers/:id/archive",
+  verifyToken,
+  verifyRole(["ADMIN"]),
+  requireTravelTenant,
+  buildStateTransitionHandler({ toStatus: "archived", requireReason: false }),
+);
+
+router.post(
+  "/suppliers/:id/reactivate",
+  verifyToken,
+  verifyRole(["ADMIN"]),
+  requireTravelTenant,
+  buildStateTransitionHandler({ toStatus: "active", requireReason: false }),
+);
+
+// ─── G043 — Credit utilization status endpoint ────────────────────────
+//
+// Lightweight endpoint that returns the supplier's current outstanding
+// payable balance + configured creditLimit + 3-band advisory status.
+// Wired into the frontend quote-builder / trip-list / trip-detail surfaces
+// (G043 frontend chip) so operators see early warning before the booking
+// confirm step actually fires the hard-block 409.
+//
+// Response shape: { current, limit, utilizationPct, status, currency }
+//   status: "ok" | "warning" | "exceeded"
+//     ok        — utilization < 80% OR no limit configured
+//     warning   — 80% ≤ utilization < 100%
+//     exceeded  — utilization ≥ 100%  (booking will be hard-blocked)
+//
+// Caching: this endpoint returns a 60-second Cache-Control header so the
+// frontend chip can be polled without hammering the aggregate query.
+// 60s is the right band — fresh enough for an operator's reading mid-quote;
+// stale enough to amortise the SUM aggregate across multiple page loads.
+const { checkCreditLimit, deriveCreditStatus } = require("../lib/supplierCreditCheck");
+
+router.get(
+  "/suppliers/:id/credit-status",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+      }
+      const supplier = await prisma.travelSupplier.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+        select: { id: true, subBrand: true, creditCurrency: true },
+      });
+      if (!supplier) {
+        return res.status(404).json({ error: "Supplier not found", code: "NOT_FOUND" });
+      }
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (!canAccessSubBrand(allowed, supplier.subBrand)) {
+        return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+      }
+
+      const check = await checkCreditLimit({
+        prisma,
+        tenantId: req.travelTenant.id,
+        supplierId: id,
+        addAmount: 0,
+      });
+      const band = deriveCreditStatus({ current: check.current, limit: check.limit });
+
+      res.set("Cache-Control", "private, max-age=60");
+      res.json({
+        supplierId: id,
+        current: check.current,
+        limit: check.limit,
+        utilizationPct: band.utilizationPct,
+        status: band.status,
+        currency: supplier.creditCurrency || "INR",
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-sup] credit-status error:", e.message);
+      res.status(500).json({ error: "Failed to compute credit status" });
     }
   },
 );

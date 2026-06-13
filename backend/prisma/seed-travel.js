@@ -753,6 +753,26 @@ async function main() {
     console.warn(`[seed-travel] retention-policy seed skipped: ${e.message}`);
   }
 
+  // ── 14. Initial Itinerary template library (G059 — FR-3.1.g) ────────
+  //
+  // PRD_TRAVEL_ITINERARY_UPGRADES FR-3.1.g: ship a starter library of
+  // realistic templates spanning all 4 sub-brands so the Itinerary
+  // Library page isn't empty on a fresh demo deploy and operators have
+  // a credible "clone from template" path on day one. ~14 templates
+  // covering real destinations, each with a 3-7 day day-by-day
+  // `templateJson.items[]` skeleton suitable for the FR-3.3 day-by-day
+  // editor + FR-3.4 map preview consumers.
+  //
+  // Engine-bumped columns (G049) — acceptedCount, avgFinalPrice,
+  // lastUsedAt — are intentionally left at defaults (0 / null / null);
+  // the clone + accept engines populate them. Versioning columns
+  // (G048 — version, isLatest, archivedAt) are additive-with-defaults
+  // and omitted here so the column-add migration drives the defaults.
+  //
+  // Idempotent: `findFirst` keyed on (tenantId, name) skips templates
+  // that already exist. Re-runs do NOT create duplicates.
+  await seedItineraryTemplates(tenant.id);
+
   console.log("[seed-travel] done — Travel Stall demo tenant + placeholder content seeded.");
   console.log("[seed-travel] Login: yasin@travelstall.in / password123");
 }
@@ -2395,6 +2415,601 @@ async function seedReligiousGuidancePackets(tenantId) {
   }
   console.log(
     `[seed-travel] religious-guidance packets: ${created} created, ${skipped} already existed (RFU placeholder set)`,
+  );
+}
+
+/**
+ * G059 — Initial Itinerary template library (PRD FR-3.1.g).
+ *
+ * Seeds ~14 realistic templates across all 4 sub-brands so the Itinerary
+ * Library page is populated on a fresh demo deploy and operators have a
+ * credible "clone from template" path on day one.
+ *
+ * Coverage by sub-brand:
+ *   - tmc         (4): Singapore STEM, Vietnam History, Goa Marine Biology, Rajasthan Heritage
+ *   - rfu         (3): Umrah Standard 10D, Umrah Premium 14D, Ramadan Umrah 21D
+ *   - travelstall (4): Bali Honeymoon, Kerala Backwaters, Maldives Romantic, Dubai Family
+ *   - visasure    (3): USA B1/B2 prep, Schengen support, UK skilled-worker prep
+ *
+ * Each template ships:
+ *   - identity      name / destinationName / durationDays / description / category
+ *   - sub-brand     subBrand (lowercase canonical: tmc | rfu | travelstall | visasure)
+ *   - pricing       basePriceMinor (INR minor units, i.e. paise) + currency=INR
+ *                   + defaultMarkupPercent (sub-brand-typical: TMC 16-18%,
+ *                   RFU 10-12%, Travel Stall 18-22%, Visa Sure 25-30%)
+ *   - day-by-day    templateJson as JSON string holding { items: [...] };
+ *                   items[] mirror the ItineraryItem shape (itemType,
+ *                   description, dayNumber, position, unit) so the FR-3.3
+ *                   day-by-day editor + FR-3.4 map preview render
+ *                   correctly when an operator clones from the template.
+ *
+ * Engine-bumped fields left at defaults (NOT seeded):
+ *   - acceptedCount = 0           (bumped on /itineraries/:id/accept)
+ *   - avgFinalPrice = null        (recomputed on accept)
+ *   - lastUsedAt    = null        (bumped on clone-from-template)
+ *   - usageCount    = 0           (bumped on clone)
+ *
+ * G048 versioning columns (version=1, isLatest=true, archivedAt=null) are
+ * additive-with-defaults — omitted here so the schema-level defaults
+ * apply uniformly. When sibling G048 ships the migration, every seeded
+ * template starts at version=1 and is the latest.
+ *
+ * Idempotent: existing (tenantId, name) tuples are skipped (no schema-
+ * level @@unique exists; findFirst guard handles it).
+ */
+async function seedItineraryTemplates(tenantId) {
+  // ── helper: build a day-by-day items[] skeleton ───────────────────
+  // Items mirror the ItineraryItem shape (itemType, description,
+  // dayNumber, position, unit). Position is 0-indexed within the
+  // overall template; dayNumber is 1-indexed.
+  function buildItems(daySegments) {
+    const items = [];
+    let position = 0;
+    daySegments.forEach((seg) => {
+      const day = seg.day;
+      const lines = seg.items || [];
+      lines.forEach((it) => {
+        items.push({
+          dayNumber: day,
+          position: position++,
+          itemType: it.itemType,
+          description: it.description,
+          unit: it.unit || "per_person",
+          latitude: it.latitude ?? null,
+          longitude: it.longitude ?? null,
+        });
+      });
+    });
+    return items;
+  }
+
+  const TEMPLATES = [
+    // ── TMC (school trips, educational focus) ───────────────────────
+    {
+      name: "Singapore STEM 5-day",
+      destinationName: "Singapore",
+      durationDays: 5,
+      subBrand: "tmc",
+      category: "Educational",
+      description:
+        "5-day STEM-focused school trip to Singapore combining hands-on robotics labs, the Universal Studios experiential physics tour, and the Sentosa science museum. Aligned to CBSE/ICSE Class 8-10 physics + computer-science syllabi. Tour director + 1:15 supervision ratio.",
+      thumbnailUrl: null,
+      defaultMarkupPercent: 18.0,
+      basePriceMinor: 8500000, // ₹85,000 / student
+      daySegments: [
+        { day: 1, items: [
+          { itemType: "flight", description: "Delhi → Singapore (Singapore Airlines economy)" },
+          { itemType: "transfer", description: "Changi Airport → Hotel transfer (private coach)" },
+          { itemType: "hotel", description: "Check-in: Furama RiverFront (twin-share)", unit: "per_room_night" },
+        ]},
+        { day: 2, items: [
+          { itemType: "activity", description: "Singapore Science Centre — robotics + AI gallery (guided)", latitude: 1.3329, longitude: 103.7351 },
+          { itemType: "meals", description: "Indian-vegetarian lunch at Komala's", unit: "per_person" },
+          { itemType: "sightseeing", description: "Gardens by the Bay — supertree biodome walk", latitude: 1.2816, longitude: 103.8636 },
+        ]},
+        { day: 3, items: [
+          { itemType: "activity", description: "Universal Studios Singapore — physics-of-motion workshop + rides", latitude: 1.2540, longitude: 103.8238 },
+          { itemType: "meals", description: "Group dinner — Sentosa food street" },
+        ]},
+        { day: 4, items: [
+          { itemType: "activity", description: "S.E.A. Aquarium — marine science guided session", latitude: 1.2585, longitude: 103.8237 },
+          { itemType: "sightseeing", description: "Marina Bay Sands skypark observation deck", latitude: 1.2834, longitude: 103.8607 },
+        ]},
+        { day: 5, items: [
+          { itemType: "transfer", description: "Hotel → Changi Airport transfer" },
+          { itemType: "flight", description: "Singapore → Delhi (Singapore Airlines economy)" },
+        ]},
+      ],
+    },
+    {
+      name: "Vietnam History 6-day",
+      destinationName: "Ho Chi Minh City",
+      durationDays: 6,
+      subBrand: "tmc",
+      category: "Educational",
+      description:
+        "6-day Vietnam school trip pairing 20th-century history (Cu Chi tunnels + War Remnants Museum) with UNESCO heritage at Hoi An. Strong fit for ICSE History 9-10 modern-world units. Includes a heritage-craft hands-on workshop.",
+      thumbnailUrl: null,
+      defaultMarkupPercent: 17.5,
+      basePriceMinor: 7800000, // ₹78,000 / student
+      daySegments: [
+        { day: 1, items: [
+          { itemType: "flight", description: "Delhi → Ho Chi Minh City (Vietnam Airlines)" },
+          { itemType: "transfer", description: "Airport → Hotel transfer" },
+          { itemType: "hotel", description: "Hotel Continental Saigon — check-in", unit: "per_room_night" },
+        ]},
+        { day: 2, items: [
+          { itemType: "activity", description: "Cu Chi tunnels guided history tour", latitude: 11.1429, longitude: 106.4625 },
+          { itemType: "sightseeing", description: "War Remnants Museum (guided)", latitude: 10.7798, longitude: 106.6917 },
+        ]},
+        { day: 3, items: [
+          { itemType: "flight", description: "HCMC → Da Nang domestic flight" },
+          { itemType: "transfer", description: "Da Nang → Hoi An transfer" },
+          { itemType: "hotel", description: "Hoi An Riverside Resort", unit: "per_room_night" },
+        ]},
+        { day: 4, items: [
+          { itemType: "sightseeing", description: "Hoi An UNESCO Old Town heritage walk", latitude: 15.8801, longitude: 108.3380 },
+          { itemType: "activity", description: "Lantern-making workshop (traditional Vietnamese craft)" },
+        ]},
+        { day: 5, items: [
+          { itemType: "activity", description: "My Son Sanctuary — Cham-era ruins guided", latitude: 15.7637, longitude: 108.1240 },
+          { itemType: "meals", description: "Group dinner — Hoi An ancient quarter" },
+        ]},
+        { day: 6, items: [
+          { itemType: "transfer", description: "Hoi An → Da Nang airport transfer" },
+          { itemType: "flight", description: "Da Nang → Delhi (via HCMC connection)" },
+        ]},
+      ],
+    },
+    {
+      name: "Goa Marine Biology 4-day",
+      destinationName: "Goa",
+      durationDays: 4,
+      subBrand: "tmc",
+      category: "Educational",
+      description:
+        "4-day marine-biology field trip to Goa anchored on a Goa University marine-lab session, dolphin-watching at Chapora, and a heritage stop at Reis Magos fort. Aligned to Class 9-12 biology field-study requirements. Budget-friendly domestic option.",
+      thumbnailUrl: null,
+      defaultMarkupPercent: 16.0,
+      basePriceMinor: 2400000, // ₹24,000 / student
+      daySegments: [
+        { day: 1, items: [
+          { itemType: "flight", description: "Delhi → Goa (IndiGo economy)" },
+          { itemType: "transfer", description: "Dabolim Airport → North Goa coach transfer" },
+          { itemType: "hotel", description: "Whispering Palms Beach Resort — check-in", unit: "per_room_night" },
+        ]},
+        { day: 2, items: [
+          { itemType: "activity", description: "Dolphin-watching cruise from Chapora jetty (with marine guide)", latitude: 15.6068, longitude: 73.7384 },
+          { itemType: "activity", description: "Intertidal-zone field session — Vagator beach (guided)" },
+        ]},
+        { day: 3, items: [
+          { itemType: "activity", description: "Goa University Marine Sciences department — lab session", latitude: 15.4593, longitude: 73.8260 },
+          { itemType: "sightseeing", description: "Reis Magos Fort — Portuguese-era heritage walk", latitude: 15.5023, longitude: 73.8011 },
+        ]},
+        { day: 4, items: [
+          { itemType: "transfer", description: "Hotel → Dabolim airport transfer" },
+          { itemType: "flight", description: "Goa → Delhi (IndiGo economy)" },
+        ]},
+      ],
+    },
+    {
+      name: "Rajasthan Heritage 7-day",
+      destinationName: "Jaipur",
+      durationDays: 7,
+      subBrand: "tmc",
+      category: "Educational",
+      description:
+        "7-day Rajasthan heritage tour: Jaipur (Amber Fort + City Palace) → Jodhpur (Mehrangarh) → Jaisalmer desert camp. Maps to CBSE/ICSE Class 6-9 medieval-history (Mughal + Rajput) chapters and the NEP 10-bagless-days field-study requirement. Domestic, no passport needed.",
+      thumbnailUrl: null,
+      defaultMarkupPercent: 17.0,
+      basePriceMinor: 3500000, // ₹35,000 / student
+      daySegments: [
+        { day: 1, items: [
+          { itemType: "transfer", description: "Delhi → Jaipur coach transfer (5h)" },
+          { itemType: "hotel", description: "Hotel Clarks Amer Jaipur", unit: "per_room_night" },
+        ]},
+        { day: 2, items: [
+          { itemType: "sightseeing", description: "Amber Fort — guided heritage walk + elephant pavilion", latitude: 26.9855, longitude: 75.8513 },
+          { itemType: "sightseeing", description: "City Palace + Jantar Mantar (astronomy field session)", latitude: 26.9258, longitude: 75.8267 },
+        ]},
+        { day: 3, items: [
+          { itemType: "transfer", description: "Jaipur → Jodhpur coach transfer (6h)" },
+          { itemType: "hotel", description: "Indana Palace Jodhpur", unit: "per_room_night" },
+        ]},
+        { day: 4, items: [
+          { itemType: "sightseeing", description: "Mehrangarh Fort — guided Rajput-era history tour", latitude: 26.2981, longitude: 73.0186 },
+          { itemType: "sightseeing", description: "Jaswant Thada cenotaph + clock-tower bazaar walk" },
+        ]},
+        { day: 5, items: [
+          { itemType: "transfer", description: "Jodhpur → Jaisalmer coach transfer (5h)" },
+          { itemType: "hotel", description: "Sam Sand Dunes desert camp (tent)", unit: "per_room_night" },
+          { itemType: "activity", description: "Camel-back desert safari + folk-music evening" },
+        ]},
+        { day: 6, items: [
+          { itemType: "sightseeing", description: "Jaisalmer Fort + Patwon ki Haveli guided walk", latitude: 26.9124, longitude: 70.9123 },
+        ]},
+        { day: 7, items: [
+          { itemType: "flight", description: "Jaisalmer → Delhi (return)" },
+        ]},
+      ],
+    },
+
+    // ── RFU (Umrah, religious focus) ────────────────────────────────
+    {
+      name: "Umrah Standard 10-day",
+      destinationName: "Makkah",
+      durationDays: 10,
+      subBrand: "rfu",
+      category: "Religious",
+      description:
+        "Standard Umrah package: 4 nights in Madinah + 5 nights in Makkah + a Ziyarat city tour. 4-star accommodation within walking distance of the Haram + Masjid an-Nabawi. Mehram letter assistance included for female pilgrims.",
+      thumbnailUrl: null,
+      defaultMarkupPercent: 12.0,
+      basePriceMinor: 12000000, // ₹1,20,000 / pilgrim
+      daySegments: [
+        { day: 1, items: [
+          { itemType: "flight", description: "Delhi → Madinah (Saudia direct)" },
+          { itemType: "transfer", description: "Madinah airport → hotel transfer" },
+          { itemType: "hotel", description: "Madinah hotel check-in (4-star, walking distance to Masjid an-Nabawi)", unit: "per_room_night" },
+        ]},
+        { day: 2, items: [
+          { itemType: "activity", description: "Madinah Ziyarat tour — Quba mosque, Uhud, Qiblatain", latitude: 24.4416, longitude: 39.6113 },
+        ]},
+        { day: 5, items: [
+          { itemType: "transfer", description: "Madinah → Makkah coach (Miqat stop for Ihram)" },
+          { itemType: "hotel", description: "Makkah hotel check-in (4-star, near Haram)", unit: "per_room_night" },
+          { itemType: "activity", description: "First Umrah — Tawaf + Sa'i (group leader accompanies)" },
+        ]},
+        { day: 8, items: [
+          { itemType: "activity", description: "Makkah Ziyarat tour — Jabal-e-Noor, Mina, Arafat, Muzdalifah" },
+        ]},
+        { day: 10, items: [
+          { itemType: "transfer", description: "Makkah → Jeddah airport transfer" },
+          { itemType: "flight", description: "Jeddah → Delhi (return)" },
+        ]},
+      ],
+    },
+    {
+      name: "Umrah Premium 14-day",
+      destinationName: "Makkah",
+      durationDays: 14,
+      subBrand: "rfu",
+      category: "Religious",
+      description:
+        "Premium Umrah package with extended Makkah stay: 5 nights Madinah + 7 nights Makkah + Taif excursion + Jeddah day trip. 5-star accommodation with Haram-view rooms where available. Personal Mualim throughout.",
+      thumbnailUrl: null,
+      defaultMarkupPercent: 11.0,
+      basePriceMinor: 18500000, // ₹1,85,000 / pilgrim
+      daySegments: [
+        { day: 1, items: [
+          { itemType: "flight", description: "Delhi → Madinah (Saudia direct)" },
+          { itemType: "transfer", description: "Madinah airport → 5-star hotel transfer" },
+          { itemType: "hotel", description: "Pullman ZamZam Madinah (Haram-view)", unit: "per_room_night" },
+        ]},
+        { day: 3, items: [
+          { itemType: "activity", description: "Madinah Ziyarat tour — Quba, Uhud, Qiblatain (private Mualim)" },
+        ]},
+        { day: 6, items: [
+          { itemType: "transfer", description: "Madinah → Makkah private coach via Miqat" },
+          { itemType: "hotel", description: "Swissotel Makkah (Haram-view tower)", unit: "per_room_night" },
+          { itemType: "activity", description: "First Umrah — Tawaf + Sa'i with personal Mualim" },
+        ]},
+        { day: 10, items: [
+          { itemType: "activity", description: "Taif excursion — Jabal Kara + Shafa viewpoint" },
+        ]},
+        { day: 12, items: [
+          { itemType: "sightseeing", description: "Jeddah day trip — Al-Balad UNESCO heritage walk + corniche" },
+        ]},
+        { day: 14, items: [
+          { itemType: "transfer", description: "Makkah → Jeddah airport transfer" },
+          { itemType: "flight", description: "Jeddah → Delhi (return)" },
+        ]},
+      ],
+    },
+    {
+      name: "Ramadan Umrah 21-day",
+      destinationName: "Makkah",
+      durationDays: 21,
+      subBrand: "rfu",
+      category: "Religious",
+      description:
+        "Full-Ramadan Umrah package: 18 nights in Makkah covering the last 10 nights (Laylatul Qadr) + 3-day Madinah segment for Jummah. Iftar + Suhoor included daily. High-demand season — book 4+ months out.",
+      thumbnailUrl: null,
+      defaultMarkupPercent: 10.0,
+      basePriceMinor: 28000000, // ₹2,80,000 / pilgrim
+      daySegments: [
+        { day: 1, items: [
+          { itemType: "flight", description: "Delhi → Jeddah (pre-Ramadan arrival, Saudia)" },
+          { itemType: "transfer", description: "Jeddah → Makkah coach via Miqat for Ihram" },
+          { itemType: "hotel", description: "Anjum Makkah Hotel (Haram-walkable)", unit: "per_room_night" },
+        ]},
+        { day: 2, items: [
+          { itemType: "activity", description: "First Umrah on Ramadan eve — Tawaf + Sa'i" },
+          { itemType: "meals", description: "Iftar + Suhoor (hotel daily buffet, full Ramadan)" },
+        ]},
+        { day: 11, items: [
+          { itemType: "activity", description: "Last-10-nights I'tikaaf programme + Laylatul Qadr observance" },
+        ]},
+        { day: 18, items: [
+          { itemType: "transfer", description: "Makkah → Madinah coach transfer" },
+          { itemType: "hotel", description: "Dar Al Taqwa Madinah", unit: "per_room_night" },
+        ]},
+        { day: 21, items: [
+          { itemType: "transfer", description: "Madinah airport transfer" },
+          { itemType: "flight", description: "Madinah → Delhi (post-Eid return)" },
+        ]},
+      ],
+    },
+
+    // ── Travel Stall (family holidays) ──────────────────────────────
+    {
+      name: "Bali Honeymoon 6-day",
+      destinationName: "Bali",
+      durationDays: 6,
+      subBrand: "travelstall",
+      category: "Honeymoon",
+      description:
+        "Romantic 6-day Bali honeymoon split across Ubud (cultural heart) and Seminyak (beach). Includes a private candlelit dinner at Jimbaran beach, Tegalalang rice-terrace walk, and a couples' spa session.",
+      thumbnailUrl: null,
+      defaultMarkupPercent: 20.0,
+      basePriceMinor: 11500000, // ₹1,15,000 / couple
+      daySegments: [
+        { day: 1, items: [
+          { itemType: "flight", description: "Delhi → Denpasar (Singapore Airlines via SIN)" },
+          { itemType: "transfer", description: "Denpasar Airport → Ubud private transfer" },
+          { itemType: "hotel", description: "Komaneka at Bisma — Ubud (Pool Villa)", unit: "per_room_night" },
+        ]},
+        { day: 2, items: [
+          { itemType: "sightseeing", description: "Tegalalang rice terraces guided walk", latitude: -8.4317, longitude: 115.2780 },
+          { itemType: "activity", description: "Ubud monkey forest + traditional craft villages" },
+        ]},
+        { day: 3, items: [
+          { itemType: "activity", description: "Couples' spa session (90-min Balinese massage)" },
+          { itemType: "transfer", description: "Ubud → Seminyak transfer" },
+          { itemType: "hotel", description: "The Legian Seminyak — beachfront suite", unit: "per_room_night" },
+        ]},
+        { day: 4, items: [
+          { itemType: "activity", description: "Sunset cruise — Benoa harbour" },
+          { itemType: "meals", description: "Candlelit dinner on Jimbaran beach" },
+        ]},
+        { day: 5, items: [
+          { itemType: "sightseeing", description: "Tanah Lot temple + Uluwatu Kecak fire-dance" },
+        ]},
+        { day: 6, items: [
+          { itemType: "transfer", description: "Seminyak → Denpasar airport transfer" },
+          { itemType: "flight", description: "Denpasar → Delhi (return)" },
+        ]},
+      ],
+    },
+    {
+      name: "Kerala Backwaters 5-day",
+      destinationName: "Kerala",
+      durationDays: 5,
+      subBrand: "travelstall",
+      category: "Family",
+      description:
+        "Classic Kerala family circuit: Cochin (Fort Kochi heritage) → Munnar (tea-country) → Alleppey houseboat. Domestic, no passport, family-friendly pace. Vegetarian-meal options throughout.",
+      thumbnailUrl: null,
+      defaultMarkupPercent: 19.0,
+      basePriceMinor: 5500000, // ₹55,000 / family of 4
+      daySegments: [
+        { day: 1, items: [
+          { itemType: "flight", description: "Delhi → Kochi (IndiGo)" },
+          { itemType: "transfer", description: "Kochi airport → Fort Kochi hotel" },
+          { itemType: "hotel", description: "Brunton Boatyard heritage hotel", unit: "per_room_night" },
+          { itemType: "sightseeing", description: "Chinese fishing nets + Mattancherry palace evening walk", latitude: 9.9658, longitude: 76.2421 },
+        ]},
+        { day: 2, items: [
+          { itemType: "transfer", description: "Cochin → Munnar private cab (4h scenic drive)" },
+          { itemType: "hotel", description: "Tea County Munnar (KTDC)", unit: "per_room_night" },
+        ]},
+        { day: 3, items: [
+          { itemType: "sightseeing", description: "Eravikulam National Park (Nilgiri tahr habitat)", latitude: 10.1817, longitude: 77.0596 },
+          { itemType: "activity", description: "Tea Museum + plantation walk" },
+        ]},
+        { day: 4, items: [
+          { itemType: "transfer", description: "Munnar → Alleppey transfer (4.5h)" },
+          { itemType: "hotel", description: "Alleppey houseboat — full-board overnight", unit: "per_room_night" },
+        ]},
+        { day: 5, items: [
+          { itemType: "transfer", description: "Alleppey → Kochi airport" },
+          { itemType: "flight", description: "Kochi → Delhi (return)" },
+        ]},
+      ],
+    },
+    {
+      name: "Maldives Romantic 5-day",
+      destinationName: "Maldives",
+      durationDays: 5,
+      subBrand: "travelstall",
+      category: "Honeymoon",
+      description:
+        "5-day Maldives overwater-villa getaway: speedboat transfer, sunset dolphin cruise, snorkelling on the house reef, and a couples' private sandbank picnic. High-end honeymoon staple.",
+      thumbnailUrl: null,
+      defaultMarkupPercent: 22.0,
+      basePriceMinor: 21000000, // ₹2,10,000 / couple
+      daySegments: [
+        { day: 1, items: [
+          { itemType: "flight", description: "Delhi → Male (IndiGo direct)" },
+          { itemType: "transfer", description: "Male airport → resort speedboat transfer" },
+          { itemType: "hotel", description: "Centara Ras Fushi — overwater villa", unit: "per_room_night" },
+        ]},
+        { day: 2, items: [
+          { itemType: "activity", description: "House-reef snorkelling (gear included)" },
+          { itemType: "activity", description: "Sunset dolphin cruise" },
+        ]},
+        { day: 3, items: [
+          { itemType: "activity", description: "Couples' private sandbank picnic (resort excursion)" },
+        ]},
+        { day: 4, items: [
+          { itemType: "activity", description: "Spa session (couples' 90-min)" },
+          { itemType: "meals", description: "Beach dinner — private setup" },
+        ]},
+        { day: 5, items: [
+          { itemType: "transfer", description: "Resort → Male airport speedboat" },
+          { itemType: "flight", description: "Male → Delhi (return)" },
+        ]},
+      ],
+    },
+    {
+      name: "Dubai Family 5-day",
+      destinationName: "Dubai",
+      durationDays: 5,
+      subBrand: "travelstall",
+      category: "Family",
+      description:
+        "5-day Dubai family package: Burj Khalifa observation deck, Atlantis Aquaventure water park, Dubai-desert safari with BBQ dinner, and a day at IMG Worlds of Adventure indoor theme park. Pre-booked attraction tickets.",
+      thumbnailUrl: null,
+      defaultMarkupPercent: 18.0,
+      basePriceMinor: 9800000, // ₹98,000 / family of 4
+      daySegments: [
+        { day: 1, items: [
+          { itemType: "flight", description: "Delhi → Dubai (Emirates / IndiGo)" },
+          { itemType: "transfer", description: "DXB airport → hotel transfer" },
+          { itemType: "hotel", description: "Rove Downtown Dubai (family room)", unit: "per_room_night" },
+        ]},
+        { day: 2, items: [
+          { itemType: "sightseeing", description: "Burj Khalifa observation deck (level 124+125)", latitude: 25.1972, longitude: 55.2744 },
+          { itemType: "sightseeing", description: "Dubai Mall + Fountain Show evening walk" },
+        ]},
+        { day: 3, items: [
+          { itemType: "activity", description: "Atlantis Aquaventure water park full-day", latitude: 25.1308, longitude: 55.1170 },
+        ]},
+        { day: 4, items: [
+          { itemType: "activity", description: "Dubai-desert safari — dune-bashing + camel ride + BBQ dinner" },
+        ]},
+        { day: 5, items: [
+          { itemType: "activity", description: "IMG Worlds of Adventure (indoor theme park) — morning session" },
+          { itemType: "transfer", description: "Hotel → DXB airport transfer" },
+          { itemType: "flight", description: "Dubai → Delhi (return)" },
+        ]},
+      ],
+    },
+
+    // ── Visa Sure (consultation packages, lightweight) ─────────────
+    {
+      name: "USA B1/B2 prep",
+      destinationName: "United States",
+      durationDays: 3,
+      subBrand: "visasure",
+      category: "Visa Consultation",
+      description:
+        "USA B1/B2 (visitor) visa preparation package: 2 expert consultation sessions + complete document-review pass + 1 mock embassy-interview session. Targets first-time applicants and prior refusals. ~3-week timeline end-to-end.",
+      thumbnailUrl: null,
+      defaultMarkupPercent: 30.0,
+      basePriceMinor: 1500000, // ₹15,000 / applicant
+      daySegments: [
+        { day: 1, items: [
+          { itemType: "activity", description: "Consultation Session 1 — eligibility assessment + DS-160 walkthrough" },
+          { itemType: "activity", description: "Document checklist review (passport, bank statements, ITR, employment letter)" },
+        ]},
+        { day: 2, items: [
+          { itemType: "activity", description: "DS-160 form-filling assisted session + photograph review" },
+          { itemType: "activity", description: "Consultation Session 2 — financial documentation + ties-to-home strategy" },
+        ]},
+        { day: 3, items: [
+          { itemType: "activity", description: "Mock embassy interview (60-min, recorded, with feedback)" },
+          { itemType: "activity", description: "Final pre-interview brief + day-of-interview checklist" },
+        ]},
+      ],
+    },
+    {
+      name: "Schengen visa support",
+      destinationName: "Schengen Area",
+      durationDays: 2,
+      subBrand: "visasure",
+      category: "Visa Consultation",
+      description:
+        "Schengen short-stay (Type C) visa support: complete application kit + VFS / consulate appointment booking + KYC + financial document review. Covers all 27 Schengen states; primary-destination rule applied.",
+      thumbnailUrl: null,
+      defaultMarkupPercent: 28.0,
+      basePriceMinor: 800000, // ₹8,000 / applicant
+      daySegments: [
+        { day: 1, items: [
+          { itemType: "activity", description: "Eligibility + primary-destination rule consultation" },
+          { itemType: "activity", description: "Application kit prep (visa form, cover letter template, travel insurance referral)" },
+          { itemType: "activity", description: "KYC + financial document review (bank statements, ITR)" },
+        ]},
+        { day: 2, items: [
+          { itemType: "activity", description: "VFS / consulate appointment booking" },
+          { itemType: "activity", description: "Pre-submission final review + handover" },
+        ]},
+      ],
+    },
+    {
+      name: "UK skilled worker prep",
+      destinationName: "United Kingdom",
+      durationDays: 4,
+      subBrand: "visasure",
+      category: "Visa Consultation",
+      description:
+        "UK Skilled Worker visa preparation: Certificate of Sponsorship (CoS) review, Statement of Purpose drafting assistance, English-test (IELTS/PTE) guidance, and biometric-appointment booking. Multi-week engagement; this is the operator-facing template.",
+      thumbnailUrl: null,
+      defaultMarkupPercent: 25.0,
+      basePriceMinor: 2500000, // ₹25,000 / applicant
+      daySegments: [
+        { day: 1, items: [
+          { itemType: "activity", description: "Initial consultation + Skilled-Worker route eligibility check" },
+          { itemType: "activity", description: "Certificate of Sponsorship (CoS) review with employer liaison" },
+        ]},
+        { day: 2, items: [
+          { itemType: "activity", description: "Statement of Purpose draft (career narrative + UK-relevance angle)" },
+          { itemType: "activity", description: "English-language requirement strategy (IELTS-UKVI vs PTE-Academic)" },
+        ]},
+        { day: 3, items: [
+          { itemType: "activity", description: "Financial-maintenance documentation review" },
+          { itemType: "activity", description: "TB-test referral + ATAS certificate guidance (if applicable)" },
+        ]},
+        { day: 4, items: [
+          { itemType: "activity", description: "Online application form completion + payment guidance" },
+          { itemType: "activity", description: "Biometric appointment booking (UKVCAS) + post-submission timeline brief" },
+        ]},
+      ],
+    },
+  ];
+
+  let created = 0;
+  let skipped = 0;
+  for (const tpl of TEMPLATES) {
+    const existing = await prisma.itineraryTemplate.findFirst({
+      where: { tenantId, name: tpl.name },
+      select: { id: true },
+    });
+    if (existing) {
+      skipped++;
+      continue;
+    }
+
+    const items = buildItems(tpl.daySegments);
+    const templateJson = JSON.stringify({ items });
+
+    await prisma.itineraryTemplate.create({
+      data: {
+        tenantId,
+        name: tpl.name,
+        destinationName: tpl.destinationName,
+        durationDays: tpl.durationDays,
+        description: tpl.description,
+        thumbnailUrl: tpl.thumbnailUrl,
+        category: tpl.category,
+        subBrand: tpl.subBrand,
+        defaultMarkupPercent: tpl.defaultMarkupPercent,
+        basePriceMinor: tpl.basePriceMinor,
+        currency: "INR",
+        templateJson,
+        llmGeneratedBy: null,
+        isActive: true,
+        // usageCount / acceptedCount / avgFinalPrice / lastUsedAt left
+        // at schema defaults — engine-bumped, never seeded.
+        // G048 version / isLatest / archivedAt left at schema defaults
+        // (additive-with-defaults — sibling agent G048 owns those).
+      },
+    });
+    created++;
+  }
+  console.log(
+    `[seed-travel] itinerary templates (G059): ${created} created, ${skipped} already existed ` +
+      `(${TEMPLATES.length} total across tmc/rfu/travelstall/visasure)`,
   );
 }
 

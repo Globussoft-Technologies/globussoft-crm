@@ -75,8 +75,8 @@ Each row is a coherent PR scope. Effort estimates assume one senior engineer.
 | G006 | Intake response envelope: `action: created\|merged\|touchpoint_appended\|duplicate_suppressed`, `matchedRoutingRuleId`, `touchpointId` (FR-3.1.8) | route | 0.5d | ⬜ |
 | G007 | `LeadRoutingRule.channel`, `.subBrand`, `.rrCursor`, `.priority` columns + most-specific-rule resolver (FR-3.3.1, 3.3.2, 3.3.4) | schema (additive) + `lib/leadAutoRouter.js` | 1.5d | ✅ DONE 2026-06-13 — `c2c33d6a` |
 | G008 | `User.isAvailable` + unavailability fallback in router (FR-3.3.5) | schema + router | 0.5d | ✅ DONE 2026-06-13 — `c2c33d6a` |
-| G009 | `/settings/lead-capture` admin page (toggles + cooldown UI + FormRoutingMapping UI) (FR-3.7) | `frontend/src/pages/settings/LeadCapture.jsx` (NEW) + 2 routes | 2d | ⬜ |
-| G010 | `/leads?view=inbox` cross-channel filter inbox + chip filter on Leads.jsx (FR-3.6.2, 3.6.3) | `frontend/src/pages/travel/Leads.jsx` | 1.5d | ⬜ |
+| G009 | `/settings/lead-capture` admin page (toggles + cooldown UI + FormRoutingMapping UI) (FR-3.7) | `frontend/src/pages/settings/LeadCapture.jsx` (NEW) + 2 routes | 2d | ✅ DONE 2026-06-13 — `e3d59b7b` |
+| G010 | `/leads?view=inbox` cross-channel filter inbox + chip filter on Leads.jsx (FR-3.6.2, 3.6.3) | `frontend/src/pages/travel/Leads.jsx` | 1.5d | ✅ DONE 2026-06-13 — `e3d59b7b` |
 | G011 | `TenantSettings.leadCaptureCooldowns` + cooldown enforcement (FR-3.2.3) | schema + intake | 1d | ⬜ |
 | G012 | Referral channel + `referrerContactId` link (FR-3.4.5) | schema + intake + route | 0.5d | ⬜ |
 | G013 | Voice channel `subStatus='callback_pending'` (FR-3.4.1) | schema + intake | 0.5d | ⬜ |

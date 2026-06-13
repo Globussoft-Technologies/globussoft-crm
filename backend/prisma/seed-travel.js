@@ -773,6 +773,12 @@ async function main() {
   // that already exist. Re-runs do NOT create duplicates.
   await seedItineraryTemplates(tenant.id);
 
+  // PRD_TRAVEL_GST_COMPLIANCE G033 (FR-3.1.4) — seed default SAC codes on
+  // a starter set of travel ServiceCategory rows. Idempotent: upsert by
+  // (tenantId, name). When ServiceCategory rows already exist with a
+  // non-null defaultSacCode, the upsert leaves them alone.
+  await seedTravelServiceCategorySacCodes(tenant.id);
+
   console.log("[seed-travel] done — Travel Stall demo tenant + placeholder content seeded.");
   console.log("[seed-travel] Login: yasin@travelstall.in / password123");
 }
@@ -3010,6 +3016,95 @@ async function seedItineraryTemplates(tenantId) {
   console.log(
     `[seed-travel] itinerary templates (G059): ${created} created, ${skipped} already existed ` +
       `(${TEMPLATES.length} total across tmc/rfu/travelstall/visasure)`,
+  );
+}
+
+/**
+ * Seed default SAC (Services Accounting Code) values on a starter set
+ * of travel-vertical ServiceCategory rows. Per PRD_TRAVEL_GST_COMPLIANCE
+ * G033 / FR-3.1.4.
+ *
+ * SAC codes per CBIC Notification 11/2017 Central Tax (Rate):
+ *   - 998552 Travel arrangement, tour operator and related services
+ *   - 996311 Lodging in hotels, inns, guest houses, clubs, campsites
+ *   - 998555 Tour operator services
+ *   - 998599 Other support services n.e.c. (used for ad-hoc consultancy)
+ *   - 997139 Other financial services (insurance support)
+ *
+ * Idempotent — uses upsert keyed on the @@unique([tenantId, name])
+ * constraint. Re-runs do not duplicate; if an operator manually edited
+ * defaultSacCode in the admin UI, the upsert's update block overwrites it
+ * with the seed value — this is intentional for re-seed reproducibility
+ * but operators who want custom values should add new rows rather than
+ * editing the seeded ones.
+ */
+async function seedTravelServiceCategorySacCodes(tenantId) {
+  const TRAVEL_SAC_CATEGORIES = [
+    {
+      name: "Air tickets",
+      defaultSacCode: "998552",
+      description: "Travel arrangement, tour operator services (air ticket booking)",
+      displayOrder: 10,
+    },
+    {
+      name: "Hotel bookings",
+      defaultSacCode: "996311",
+      description: "Lodging services — hotels, inns, guest houses",
+      displayOrder: 20,
+    },
+    {
+      name: "Tour packages",
+      defaultSacCode: "998555",
+      description: "Tour operator services — packaged itineraries",
+      displayOrder: 30,
+    },
+    {
+      name: "Visa consultation",
+      defaultSacCode: "998599",
+      description: "Other professional services — visa filing + consultancy",
+      displayOrder: 40,
+    },
+    {
+      name: "Travel insurance",
+      defaultSacCode: "997139",
+      description: "Insurance services for travel risks",
+      displayOrder: 50,
+    },
+  ];
+
+  let created = 0;
+  let updated = 0;
+  for (const cat of TRAVEL_SAC_CATEGORIES) {
+    const existing = await prisma.serviceCategory.findUnique({
+      where: { tenantId_name: { tenantId, name: cat.name } },
+    });
+    if (existing) {
+      // Only update if the SAC code is empty or different — preserves
+      // operator overrides that already match the seed value.
+      if (existing.defaultSacCode !== cat.defaultSacCode) {
+        await prisma.serviceCategory.update({
+          where: { id: existing.id },
+          data: { defaultSacCode: cat.defaultSacCode },
+        });
+        updated++;
+      }
+      continue;
+    }
+    await prisma.serviceCategory.create({
+      data: {
+        tenantId,
+        name: cat.name,
+        description: cat.description,
+        displayOrder: cat.displayOrder,
+        defaultSacCode: cat.defaultSacCode,
+        isActive: true,
+      },
+    });
+    created++;
+  }
+  console.log(
+    `[seed-travel] ServiceCategory SAC codes (G033): ${created} created, ${updated} SAC backfilled ` +
+      `(${TRAVEL_SAC_CATEGORIES.length} total)`,
   );
 }
 

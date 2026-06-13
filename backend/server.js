@@ -986,6 +986,11 @@ app.use("/api/travel", require("./routes/travel_commission_profiles"));
 // Distinct from travel_commission_profiles (B2B sub-agent commission shapes):
 // this ledger tracks SUPPLIER-side commissions EARNED on confirmed bookings.
 app.use("/api/travel", require("./routes/travel_supplier_commissions"));
+// PRD_TRAVEL_GST_COMPLIANCE G030 + G031 + G032 (FR-3.4.4 / FR-3.4.6 / FR-3.4.7) —
+// GST ledger endpoints cluster (customer-ledger + TDS register + commission-ledger).
+// Read-only analytics on existing TravelInvoice + TravelPaymentSchedule +
+// TravelSupplierCommissionEntry rows. JSON or CSV per ?format=csv flag.
+app.use("/api/travel", require("./routes/travel_invoice_ledgers"));
 // PRD_TRAVEL_SUPPLIER_MASTER G044 + G046 (FR-3.3.c, FR-3.4.a-c) —
 // supplier-statement reconciliation (PNR-keyed line match + tolerance +
 // bulk-reconcile) plus supplier-invoice PDF uploads + match-to-payable.

@@ -5005,6 +5005,21 @@ model ServiceCategory {
   description String? @db.Text
   imageUrl    String?
 
+  // PRD_TRAVEL_GST_COMPLIANCE G033 / FR-3.1.4 — Service-category default SAC
+  // (Services Accounting Code). When an invoice line is created from a
+  // catalog service whose category has a defaultSacCode, the line auto-picks
+  // this value into hsnSac. Operator may override at line edit time.
+  //
+  // 4-6 digit string (e.g. "9985" for travel services, "998552" for travel
+  // arrangement, "996311" for hotel lodging). Stored verbatim — no
+  // validation beyond presence at write-site. Optional + nullable so:
+  //   - existing categories backfill on first write
+  //   - non-Indian / non-GST tenants ignore it entirely
+  //   - wellness categories that have no relevant SAC may stay null
+  //
+  // Additive nullable — no bless marker needed.
+  defaultSacCode String?
+
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

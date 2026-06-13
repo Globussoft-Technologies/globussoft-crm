@@ -500,6 +500,7 @@ jobs:
             tests/travel-flight-quotes-api.spec.js \
             tests/travel-supplier-commissions-api.spec.js \
             tests/travel-supplier-reconciliation-api.spec.js \
+            tests/travel-invoice-ledgers-api.spec.js \
             tests/lead-capture-settings-api.spec.js \
             tests/teardown-completeness.spec.js \
             tests/demo-hygiene-api.spec.js

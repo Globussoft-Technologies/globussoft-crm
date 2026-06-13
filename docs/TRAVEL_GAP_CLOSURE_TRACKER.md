@@ -143,10 +143,10 @@ Highest-impact gap. PO/dispute/KYC/reconciliation entirely absent.
 | G037 | Auto-PO-on-booking-confirm trigger (FR-3.2.a) + `TravelSupplierPayable.purchaseOrderId` FK (FR-3.3.a) | hook into booking-confirm + schema | 1.5d | ✅ DONE 2026-06-13 — `5bf44124` |
 | G038 | Supplier KYC + onboarding checklist (FR-3.1.h) | schema (`TravelSupplierKyc` + checklist) + route + admin UI | 2d | ✅ DONE 2026-06-13 — `6ede25d4` |
 | G039 | Supplier dispute history + chargeback log (FR-3.1.g, FR-3.6.a-c) | schema (`TravelSupplierDispute`) + route + UI | 2.5d | ✅ DONE 2026-06-13 — `6ede25d4` |
-| G040 | Supplier status enum (`active`/`paused`/`blocked-disputed`/`archived`) replacing `isActive` (FR-3.1.f) — `[allow-type-narrow]` bless | schema migration + route + UI | 1d | ⬜ |
-| G041 | Payment-terms enum (`net30`/`net45`/`prepay`/`on-departure`) (FR-3.1.d) | schema (string enum) + UI | 0.5d | ⬜ |
-| G042 | Credit-limit hard-block guard on booking-confirm (FR-3.3.e) | hook + UI warning | 1d | ⬜ |
-| G043 | Quote-time + booking-time advisory chip ("near credit limit") (FR-3.7.c) | QuoteBuilder + booking UI | 0.5d | ⬜ |
+| G040 | Supplier status enum (`active`/`paused`/`blocked-disputed`/`archived`) replacing `isActive` (FR-3.1.f) — additive (no `[allow-type-narrow]` needed) | schema migration + route + UI | 1d | ✅ DONE 2026-06-13 — `be6c946f` |
+| G041 | Payment-terms enum (`net30`/`net45`/`prepay`/`on-departure`) (FR-3.1.d) | schema (string enum) + UI | 0.5d | ✅ DONE 2026-06-13 — `be6c946f` |
+| G042 | Credit-limit hard-block guard on booking-confirm (FR-3.3.e) | hook + UI warning | 1d | ✅ DONE 2026-06-13 — `be6c946f` |
+| G043 | Quote-time + booking-time advisory chip ("near credit limit") (FR-3.7.c) | QuoteBuilder + booking UI | 0.5d | ✅ DONE 2026-06-13 — `be6c946f` |
 | G044 | Reconciliation: PNR-keyed line match (FR-3.4.a) + tolerance threshold (FR-3.4.b) + bulk-reconcile UI (FR-3.4.c) | new route + `frontend/.../SupplierReconciliation.jsx` (NEW) | 3d | ⬜ |
 | G045 | Supplier-commission link (`TravelCommissionProfile.supplierId` FK) + `SupplierCommissionEntry` ledger per FY (FR-3.1.e, FR-3.5.a, FR-3.5.b) | schema + route | 2d | ✅ DONE 2026-06-13 — `dcc95c8e` |
 | G046 | Supplier invoice PDF upload + match-to-payable (FR-3.3.c) | Multer + route | 1.5d | ⬜ |

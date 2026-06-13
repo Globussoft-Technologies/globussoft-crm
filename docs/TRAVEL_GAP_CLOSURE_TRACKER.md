@@ -147,9 +147,9 @@ Highest-impact gap. PO/dispute/KYC/reconciliation entirely absent.
 | G041 | Payment-terms enum (`net30`/`net45`/`prepay`/`on-departure`) (FR-3.1.d) | schema (string enum) + UI | 0.5d | ✅ DONE 2026-06-13 — `be6c946f` |
 | G042 | Credit-limit hard-block guard on booking-confirm (FR-3.3.e) | hook + UI warning | 1d | ✅ DONE 2026-06-13 — `be6c946f` |
 | G043 | Quote-time + booking-time advisory chip ("near credit limit") (FR-3.7.c) | QuoteBuilder + booking UI | 0.5d | ✅ DONE 2026-06-13 — `be6c946f` |
-| G044 | Reconciliation: PNR-keyed line match (FR-3.4.a) + tolerance threshold (FR-3.4.b) + bulk-reconcile UI (FR-3.4.c) | new route + `frontend/.../SupplierReconciliation.jsx` (NEW) | 3d | ⬜ |
+| G044 | Reconciliation: PNR-keyed line match (FR-3.4.a) + tolerance threshold (FR-3.4.b) + bulk-reconcile UI (FR-3.4.c) | new route + `frontend/.../SupplierReconciliation.jsx` (NEW) | 3d | ✅ DONE 2026-06-13 — `24b586b9` |
 | G045 | Supplier-commission link (`TravelCommissionProfile.supplierId` FK) + `SupplierCommissionEntry` ledger per FY (FR-3.1.e, FR-3.5.a, FR-3.5.b) | schema + route | 2d | ✅ DONE 2026-06-13 — `dcc95c8e` |
-| G046 | Supplier invoice PDF upload + match-to-payable (FR-3.3.c) | Multer + route | 1.5d | ⬜ |
+| G046 | Supplier invoice PDF upload + match-to-payable (FR-3.3.c) | Multer + route | 1.5d | ✅ DONE 2026-06-13 — `24b586b9` |
 
 **§3.6 net effort: ~20 eng-days** (DD-5.5 blocks FR-3.5.c TDS auto-deduct only — everything else buildable now)
 

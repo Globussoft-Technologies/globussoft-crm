@@ -169,6 +169,14 @@ const NON_TENANT_MODELS = new Set([
   'SupplierCredentialAccessLog',
   'VisaDocumentChecklistItem',
   'TripMicrositeOtp',
+  // G018 FX rate cache (PRD_TRAVEL_QUOTE_BUILDER FR-3.4). Currency-pair
+  // rates are GLOBAL by design — every tenant shares the same INR/USD rate
+  // for a given (baseCurrency, quoteCurrency, fetchedAt) tuple. The
+  // fxRateEngine cron polls a public source (frankfurter.dev) hourly and
+  // upserts one row per pair per hour, then `/api/fx/latest` reads the
+  // most recent row for the requested pair. Adding tenantId would
+  // multiply the table size by tenant count for zero behavioural benefit.
+  'FxRate',
 ]);
 
 // ── Expected AuditLog shape ──────────────────────────────────────────

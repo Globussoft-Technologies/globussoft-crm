@@ -8,6 +8,24 @@ Phase: pre-implementation — needs DD-5.4 + Q-GST-2 BEFORE backend work begins
 
 ---
 
+## Implementation Status (audited 2026-06-13 against HEAD `043b9ab3`)
+
+| Metric | Value |
+|---|---|
+| Total FRs | 24 |
+| ✅ Shipped | 13 (54%) |
+| 🟡 Partial | 4 |
+| 🔌 Stub | 3 |
+| ❌ Missing | 4 |
+| **Net gap** | **11 items** (~5.5 eng-days + DD-5.2 + Q-GST-2/3/4 creds) |
+| Primary blocker | `TaxRateMaster` model (DD-5.2 — rates currently hard-coded in `gstCalculation.js` with TODO comment at `routes/travel_invoices.js:6991`); customer-ledger / TDS register / commission-ledger endpoints; per-line GST persistence |
+
+Shipped: GSTR-1 / GSTR-3B / HSN-summary / TCS-27EQ exports, GSTIN format+checksum validator wired into 5 consumers, Tally XML + CA CSV travel-invoice exporters (post-PR #1150).
+
+**Single source of truth for all gap items:** [TRAVEL_GAP_CLOSURE_TRACKER.md §3.5 + §4 + §5.OTHER](TRAVEL_GAP_CLOSURE_TRACKER.md).
+
+---
+
 ## 1. Background
 
 ### India GST regime (intro for non-India readers)

@@ -6,6 +6,24 @@
 
 ---
 
+## Implementation Status (audited 2026-06-13 against HEAD `043b9ab3`)
+
+| Metric | Value |
+|---|---|
+| Total FRs | 30 |
+| ✅ Shipped | 19 (63%) |
+| 🟡 Partial | 5 |
+| 🔌 Stub | 2 |
+| ❌ Missing | 4 |
+| **Net gap** | **11 items** (~10.5 eng-days + Q-BILL-1 + Q22 creds) |
+| Primary blocker | Supplier-payable batch run + dispute workflow; `TravelInvoiceLine` schema extension; settlement-timeline Gantt; T+3/T+7/T+14 overdue chain |
+
+PR #1150 + #1151 closed: TCS auto-detection (`/tcs-preview` + `/apply-tcs` + Form 27EQ), Tally XML + CA CSV exporters (`travelAccountingExport.js`), aged-receivable/payable, credit-note refund chain.
+
+**Single source of truth for all gap items:** [TRAVEL_GAP_CLOSURE_TRACKER.md §3.4 + §4 (Q22, Q-BILL-1)](TRAVEL_GAP_CLOSURE_TRACKER.md).
+
+---
+
 ## §1 Background + source attribution
 
 ### Current state (shipped)

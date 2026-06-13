@@ -21,6 +21,24 @@ Q25), Rishu (wellness vertical reuses the envelope post-launch).
 
 ---
 
+## Implementation Status (audited 2026-06-13 against HEAD `043b9ab3`)
+
+| Metric | Value |
+|---|---|
+| Total FRs | 32 |
+| ✅ Shipped | 8 (25%) |
+| 🟡 Partial | 7 |
+| 🔌 Stub | 3 |
+| ❌ Missing | 14 |
+| **Net gap** | **21 items** |
+| Primary blocker | Touchpoint chain + `/settings/lead-capture` UI + `LeadRoutingRule` schema extension |
+
+**Single source of truth for all gap items, prioritisation, and execution waves:** [TRAVEL_GAP_CLOSURE_TRACKER.md §3.1 + §4 (Q9, Q1 AdsGPT)](TRAVEL_GAP_CLOSURE_TRACKER.md).
+
+Path-mismatch drift to flag: code shipped intake as `POST /api/travel/inbound/leads/:channel` (travel-namespaced, channel-as-path); PRD specs cross-vertical `POST /api/leads/intake` (channel-in-body). G015 in the tracker adds the canonical alias.
+
+---
+
 ## 1. Background
 
 Travel businesses capture inbound leads from **10+ channels concurrently** —

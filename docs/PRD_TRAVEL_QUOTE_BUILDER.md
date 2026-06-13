@@ -10,6 +10,22 @@
 
 ---
 
+## Implementation Status (audited 2026-06-13 against HEAD `043b9ab3`)
+
+| Metric | Value |
+|---|---|
+| Total FRs | 31 |
+| ✅ Shipped | 22 (71%) |
+| 🟡 Partial | 5 |
+| 🔌 Stub | 1 |
+| ❌ Missing | 3 |
+| **Net gap** | **8 items** (~6 eng-days + Q9 Wati cred) |
+| Primary blocker | Sub-agent clone-with-margin; FX-rate cron (DD-5.4); counter-offer review UI; quote-line schema extension; Q9 Wati for send |
+
+**Single source of truth for all gap items:** [TRAVEL_GAP_CLOSURE_TRACKER.md §3.3 + §4 (Q9)](TRAVEL_GAP_CLOSURE_TRACKER.md).
+
+---
+
 ## 1. Background
 
 ### 1.1 Today's surface

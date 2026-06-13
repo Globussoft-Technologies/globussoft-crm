@@ -10,6 +10,23 @@
 
 ---
 
+## Implementation Status (audited 2026-06-13 against HEAD `043b9ab3`)
+
+| Metric | Value |
+|---|---|
+| Total FRs | 18 |
+| ✅ Shipped | 16 (89%) |
+| 🟡 Partial | 1 |
+| ❌ Missing | 0 |
+| **Net gap** | **1 item** (FR-3.14 visual QA + assertion) |
+| Primary blocker | PRD §10 stale (claims 11/18 shipped; actual is 16/18) |
+
+PRD §10 needs updating — the 3 originally-deferred hardening items (FR-3.16 mobile touch, FR-3.17 keyboard a11y, FR-3.18 virtualization) all shipped after PRD's last edit. Code citations: `frontend/src/pages/Pipeline.jsx:11-19, 76-82, 299-319`.
+
+**Single source of truth for gap items:** [TRAVEL_GAP_CLOSURE_TRACKER.md §3.2](TRAVEL_GAP_CLOSURE_TRACKER.md).
+
+---
+
 ## 1. Background
 
 ### 1.1 The phantom-with-residual

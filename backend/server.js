@@ -592,6 +592,10 @@ const travelSuppliersRoutes = require("./routes/travel_suppliers");
 const travelPurchaseOrdersRoutes = require("./routes/travel_purchase_orders");
 const travelQuotesRoutes = require("./routes/travel_quotes");
 const travelInvoicesRoutes = require("./routes/travel_invoices");
+// G018 (PRD_TRAVEL_QUOTE_BUILDER DD-5.4) — FX-rate read endpoints.
+// /api/fx/latest + /api/fx/history serve the cached rates that
+// cron/fxRateEngine.js refreshes hourly.
+const travelFxRoutes = require("./routes/travel_fx");
 // Brand kits — multi-vertical (travel + generic + wellness). Mounted at
 // /api/brand-kits, not /api/travel, because subBrand is optional.
 const brandKitsRoutes = require("./routes/brand_kits");
@@ -972,6 +976,9 @@ app.use("/api/travel/quote-templates", require("./routes/travel_quote_templates"
 // /api/travel/cancellation-policies fell through to the global 404.
 app.use("/api/travel", require("./routes/travel_cancellation_policies"));
 app.use("/api/travel", travelQuotesRoutes);
+// G018 — FX-rate read endpoints. Mounted at /api/fx (cross-currency
+// reference data; tenant-agnostic; verifyToken at the router level).
+app.use("/api/fx", travelFxRoutes);
 // MUST mount travel_invoice_ledgers BEFORE travelInvoicesRoutes — the latter has
 // GET /invoices/:id which would otherwise catch /invoices/customer-ledger,
 // /invoices/tds-register, /invoices/commission-ledger as :id="customer-ledger" etc.
@@ -1574,6 +1581,13 @@ if (process.env.DISABLE_CRONS === '1') {
   // to status='Expired' + writes a TravelQuoteSnapshot history row per transition.
   const { initCron: initQuoteExpirySweepCron } = require('./cron/quoteExpirySweep');
   initQuoteExpirySweepCron();
+
+  // G018 (PRD_TRAVEL_QUOTE_BUILDER DD-5.4) — hourly FX-rate cache refresh.
+  // Polls frankfurter.dev for a fixed (base, quote) pair list and upserts
+  // FxRate rows. The /api/fx/latest read endpoint then serves cached rates
+  // in O(1). DISABLE_CRONS=1 guard inside the engine.
+  const { initCron: initFxRateCron } = require('./cron/fxRateEngine');
+  initFxRateCron();
 
   // #902 GST slice 12 — daily GSTR filing reminder sweep (05:00 UTC = 10:30 IST).
   // Iterates active tenants and emits a tiered reminder (T-7d / T-3d / T-1d / T-0)

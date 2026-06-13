@@ -242,6 +242,8 @@ const TravelQuotesAdmin = lazy(() => import("./pages/travel/QuotesAdmin"));
 // docs/PRD_TRAVEL_QUOTE_BUILDER.md §3. RoleGuard allow=[ADMIN,MANAGER]
 // mirrors backend write RBAC.
 const TravelQuoteBuilder = lazy(() => import("./pages/travel/QuoteBuilder"));
+// G019 — operator-facing counter-offer review surface.
+const TravelQuoteCounterReview = lazy(() => import("./pages/travel/QuoteCounterReview"));
 // PRD §7 page plan — Flight quick-quote (in-CRM fallback for the not-yet-built
 // Chrome flight plugin). Advisor manually enters up to 4 flight options;
 // markup applies server-side (POST /api/v1/flight-plugin/agent-quotes) and
@@ -328,6 +330,8 @@ const TravelVisaReports = lazy(() => import("./pages/travel/visa/Reports"));
 // from backend commit 05587ac7). ADMIN-only mutation gate; route wrapped in
 // RoleGuard allow=["ADMIN"] mirroring backend POST/PUT/DELETE RBAC.
 const TravelVisaEmbassyRulesAdmin = lazy(() => import("./pages/travel/visa/EmbassyRulesAdmin"));
+// G107 — Visa Sure rejection-recovery program admin (PRD_VISA_SURE_PHASE_3 §FR-7).
+const TravelVisaRecoveryProgram = lazy(() => import("./pages/travel/visa/RecoveryProgram"));
 // Phase 1 TMC curriculum-mappings admin (tick #181, consumes /api/travel-curriculum
 // from backend commit 6d5919a8 — tick #180). ADMIN-only mutation gate;
 // route wrapped in RoleGuard allow=["ADMIN"] mirroring backend
@@ -1472,6 +1476,9 @@ export default function App() {
                   RoleGuard allow=[ADMIN,MANAGER] mirrors backend write RBAC. */}
               <Route path="travel/quotes/builder" element={<TravelOnly><RoleGuard allow={["ADMIN", "MANAGER"]} feature="Quote Builder" roles="manager or admin"><TravelQuoteBuilder /></RoleGuard></TravelOnly>} />
               <Route path="travel/quotes/builder/:id" element={<TravelOnly><RoleGuard allow={["ADMIN", "MANAGER"]} feature="Quote Builder" roles="manager or admin"><TravelQuoteBuilder /></RoleGuard></TravelOnly>} />
+              {/* G019 — operator-facing counter-offer review (side-by-side
+                  ours vs customer counter). Accept / Reject / Counter back. */}
+              <Route path="travel/quotes/:id/counter-review" element={<TravelOnly><RoleGuard allow={["ADMIN", "MANAGER"]} feature="Counter Review" roles="manager or admin"><TravelQuoteCounterReview /></RoleGuard></TravelOnly>} />
               {/* PRD §7 — Flight quick-quote (FlightQuoteAgent). Manual
                   fallback for the Chrome flight plugin: up to 4 options,
                   server-side markup, branded PDF + WhatsApp share. */}
@@ -1561,6 +1568,13 @@ export default function App() {
                   <RoleGuard allow={["ADMIN"]} message="Embassy Rules admin requires admin access.">
                     <TravelVisaEmbassyRulesAdmin />
                   </RoleGuard>
+                </TravelOnly>
+              } />
+              {/* G107 — Visa Sure rejection-recovery program admin (PRD §FR-7).
+                  ADMIN+MANAGER CRUD backend; non-write roles see read-only cards. */}
+              <Route path="travel/visa/recovery-programs" element={
+                <TravelOnly>
+                  <TravelVisaRecoveryProgram />
                 </TravelOnly>
               } />
               {/* Phase 1 TMC curriculum-mappings admin (tick #181) — consumes

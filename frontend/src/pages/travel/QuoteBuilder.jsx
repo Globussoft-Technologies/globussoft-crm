@@ -194,6 +194,42 @@ export default function QuoteBuilder() {
   const [pricingPreview, setPricingPreview] = useState(null);
   const [previewLoading, setPreviewLoading] = useState(false);
 
+  // G017 — clone-with-margin modal state. The duplicate button opens this
+  // modal so the operator can either (a) raw-duplicate (margin=0 or
+  // blank) or (b) clone with a markup % applied to every line. Empty /
+  // 0 input is treated as raw-clone; a number triggers the marginPercent
+  // body field on POST /quotes/:id/duplicate.
+  const [duplicateOpen, setDuplicateOpen] = useState(false);
+  const [duplicateMargin, setDuplicateMargin] = useState("");
+  const [duplicating, setDuplicating] = useState(false);
+
+  // G018 — per-line FX-rate panel. When the quote currency is non-INR (or
+  // any non-tenant-default), we fetch the latest INR→quote rate from the
+  // FX cache and surface it as a small reference line beneath the totals
+  // strip. fail-soft: a missing rate just hides the widget.
+  const [fxRate, setFxRate] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    async function loadFxRate() {
+      if (!currency || currency === "INR") {
+        setFxRate(null);
+        return;
+      }
+      try {
+        const r = await fetchApi(`/api/fx/latest?base=INR&quote=${encodeURIComponent(currency)}`);
+        if (!cancelled && r && r.rate != null) {
+          setFxRate({ base: r.base, quote: r.quote, rate: r.rate, fetchedAt: r.fetchedAt });
+        } else if (!cancelled) {
+          setFxRate(null);
+        }
+      } catch {
+        if (!cancelled) setFxRate(null);
+      }
+    }
+    loadFxRate();
+    return () => { cancelled = true; };
+  }, [currency]);
+
   // Re-fetch the parent quote (used after line writes — server recomputes
   // totalAmount and we don't want the UI to drift from what's persisted).
   const refreshParentQuote = useCallback(async (id) => {
@@ -537,22 +573,54 @@ export default function QuoteBuilder() {
     }
   };
 
-  const handleDuplicate = async () => {
+  // G017 — open the clone-with-margin modal. The legacy raw-clone behaviour
+  // is preserved by the modal's "Clone (no markup)" option (empty input
+  // submits without a marginPercent field).
+  const handleDuplicate = () => {
     if (!quoteId) {
       notify.error("Save the quote first before duplicating");
       return;
     }
+    setDuplicateMargin("");
+    setDuplicateOpen(true);
+  };
+
+  const closeDuplicateModal = () => {
+    if (duplicating) return;
+    setDuplicateOpen(false);
+  };
+
+  const confirmDuplicate = async () => {
+    if (!quoteId) return;
+    const trimmed = String(duplicateMargin).trim();
+    let body = {};
+    if (trimmed !== "") {
+      const n = Number(trimmed);
+      if (!Number.isFinite(n) || n < 0 || n > 1000) {
+        notify.error("Markup % must be a number between 0 and 1000");
+        return;
+      }
+      body = { marginPercent: n };
+    }
+    setDuplicating(true);
     try {
       const dup = await fetchApi(`/api/travel/quotes/${quoteId}/duplicate`, {
         method: "POST",
+        body: JSON.stringify(body),
       });
-      notify.success(`Quote duplicated as #${dup?.id ?? "new"}`);
+      const label = trimmed === "" || Number(trimmed) === 0
+        ? `Quote duplicated as #${dup?.id ?? "new"}`
+        : `Quote duplicated as #${dup?.id ?? "new"} with ${trimmed}% markup`;
+      notify.success(label);
+      setDuplicateOpen(false);
     } catch (err) {
       if (err?.status === 404) {
         notify.info("Duplicate endpoint not yet available — try again after backend deploy");
         return;
       }
       notify.error(err?.body?.error || err?.message || "Duplicate failed");
+    } finally {
+      setDuplicating(false);
     }
   };
 
@@ -1334,6 +1402,29 @@ export default function QuoteBuilder() {
               {currency} {fmt(grandTotal)}
             </span>
           </div>
+
+          {fxRate && (
+            <div
+              aria-label="FX conversion reference"
+              style={{
+                marginTop: 10,
+                paddingTop: 10,
+                borderTop: "1px dashed var(--border-color, rgba(148, 163, 184, 0.4))",
+                fontSize: 12,
+                color: "var(--text-secondary)",
+              }}
+            >
+              1 {fxRate.base} = {Number(fxRate.rate).toFixed(4)} {fxRate.quote}
+              {fxRate.fetchedAt && (
+                <span style={{ marginLeft: 6 }}>
+                  (as of {new Date(fxRate.fetchedAt).toLocaleString()})
+                </span>
+              )}
+              <span style={{ marginLeft: 6 }}>
+                ≈ {fxRate.quote} {fmt(Number(grandTotal) * Number(fxRate.rate))}
+              </span>
+            </div>
+          )}
         </div>
       </section>
 
@@ -1579,6 +1670,69 @@ export default function QuoteBuilder() {
               >
                 <ThumbsDown size={14} />{" "}
                 {declineInFlight ? "Declining…" : "Confirm decline"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {duplicateOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Duplicate quote with markup"
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.5)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1000,
+          }}
+        >
+          <div
+            className="glass"
+            style={{ padding: 24, minWidth: 320, maxWidth: 480, borderRadius: 8 }}
+          >
+            <h3 style={{ margin: "0 0 12px", fontSize: "1.1rem" }}>
+              Duplicate quote #{quoteId}
+            </h3>
+            <p style={{ color: "var(--text-secondary)", fontSize: 14, marginBottom: 16 }}>
+              Optionally apply a markup % to every line. Leave blank for a raw clone.
+              Useful for sub-agents who price-up a parent quote before forwarding it.
+            </p>
+            <label style={fieldLabel}>
+              Clone with markup %
+              <input
+                type="number"
+                min={0}
+                max={1000}
+                step="0.01"
+                value={duplicateMargin}
+                onChange={(e) => setDuplicateMargin(e.target.value)}
+                placeholder="e.g. 10 for +10%"
+                style={inputStyle}
+                aria-label="Markup percent"
+              />
+            </label>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16 }}>
+              <button
+                type="button"
+                onClick={closeDuplicateModal}
+                style={secondaryBtn}
+                disabled={duplicating}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmDuplicate}
+                style={primaryBtn}
+                aria-label="Confirm duplicate"
+                disabled={duplicating}
+              >
+                <Copy size={14} /> {duplicating ? "Cloning…" : "Clone"}
               </button>
             </div>
           </div>

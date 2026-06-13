@@ -69,6 +69,12 @@ const bookingExpediaClient = require("../services/bookingExpediaClient");
 
 const VALID_QUOTE_STATUSES = ["Draft", "Sent", "Accepted", "Rejected"];
 const VALID_LINE_TYPES = ["hotel", "flight", "transport", "visa", "service", "other"];
+// G020 (PRD §3.2 FR-3.2.3) — dimension drives how the line's quantity
+// renders in the quote PDF (e.g. "₹15,000 per pax × 4 pax = ₹60,000" when
+// dimension="perPax"). Null is accepted by the validator (back-compat
+// with pre-G020 lines that have no dimension); the PDF renderer falls
+// back to "flatRate" formatting when null.
+const VALID_DIMENSIONS = ["perPax", "perRoomPerNight", "perTrip", "flatRate"];
 
 function assertValidLineType(t) {
   if (t == null) return;
@@ -80,6 +86,34 @@ function assertValidLineType(t) {
     err.code = "INVALID_LINE_TYPE";
     throw err;
   }
+}
+
+function assertValidDimension(d) {
+  if (d == null || d === "") return;
+  if (!VALID_DIMENSIONS.includes(d)) {
+    const err = new Error(
+      `dimension must be one of: ${VALID_DIMENSIONS.join(", ")}`,
+    );
+    err.status = 400;
+    err.code = "INVALID_DIMENSION";
+    throw err;
+  }
+}
+
+// Parse a percentage value (taxPercent, discountPercent, marginPercent).
+// Bounds: 0 ≤ x ≤ 1000 (allows 100% discount + headroom for accidental
+// over-shoot detection; 1000% would be obvious operator error). Returns
+// null on null/undefined/empty input. Throws 400 on invalid number.
+function parsePercent(input, fieldName) {
+  if (input == null || input === "") return null;
+  const n = Number(input);
+  if (!Number.isFinite(n) || n < 0 || n > 1000) {
+    const err = new Error(`${fieldName} must be a number between 0 and 1000`);
+    err.status = 400;
+    err.code = "INVALID_PERCENT";
+    throw err;
+  }
+  return n;
 }
 
 function parsePositiveDecimal(input, fieldName) {
@@ -2148,6 +2182,8 @@ router.post(
       const {
         lineType, description, quantity, unitPrice,
         currency, supplierId, sortOrder, notes,
+        // G020 — new optional fields
+        hsnSac, taxPercent, discountPercent, dimension, isAddOn,
       } = req.body || {};
 
       if (!description || typeof description !== "string" || !description.trim()) {
@@ -2157,9 +2193,12 @@ router.post(
         });
       }
       assertValidLineType(lineType);
+      assertValidDimension(dimension);
       const qty = parsePositiveInt(quantity, "quantity", 1);
       const unit = parsePositiveDecimal(unitPrice, "unitPrice");
       const amount = qty * unit;
+      const taxPct = parsePercent(taxPercent, "taxPercent");
+      const discPct = parsePercent(discountPercent, "discountPercent");
 
       let supplierIdInt = null;
       if (supplierId != null && supplierId !== "") {
@@ -2186,6 +2225,12 @@ router.post(
           sortOrder: Number.isFinite(parseInt(sortOrder, 10))
             ? parseInt(sortOrder, 10) : 0,
           notes: notes ? String(notes) : null,
+          // G020 additive nullable fields
+          hsnSac: hsnSac == null || hsnSac === "" ? null : String(hsnSac).trim(),
+          taxPercent: taxPct,
+          discountPercent: discPct,
+          dimension: dimension == null || dimension === "" ? null : dimension,
+          isAddOn: typeof isAddOn === "boolean" ? isAddOn : false,
         },
       });
 
@@ -2240,11 +2285,17 @@ router.put(
       const {
         lineType, description, quantity, unitPrice,
         currency, supplierId, sortOrder, notes,
+        // G020 — new optional fields
+        hsnSac, taxPercent, discountPercent, dimension, isAddOn,
       } = req.body || {};
 
       if (lineType !== undefined) {
         assertValidLineType(lineType);
         data.lineType = lineType;
+      }
+      if (dimension !== undefined) {
+        assertValidDimension(dimension);
+        data.dimension = dimension === null || dimension === "" ? null : dimension;
       }
       if (description !== undefined) {
         if (typeof description !== "string" || !description.trim()) {
@@ -2293,6 +2344,20 @@ router.put(
         data.sortOrder = so;
       }
       if (notes !== undefined) data.notes = notes === null ? null : String(notes);
+
+      // G020 — additive nullable line extension fields.
+      if (hsnSac !== undefined) {
+        data.hsnSac = hsnSac == null || hsnSac === "" ? null : String(hsnSac).trim();
+      }
+      if (taxPercent !== undefined) {
+        data.taxPercent = parsePercent(taxPercent, "taxPercent");
+      }
+      if (discountPercent !== undefined) {
+        data.discountPercent = parsePercent(discountPercent, "discountPercent");
+      }
+      if (isAddOn !== undefined) {
+        data.isAddOn = typeof isAddOn === "boolean" ? isAddOn : false;
+      }
 
       if (Object.keys(data).length === 0) {
         return res.status(400).json({ error: "no updatable fields provided", code: "EMPTY_BODY" });
@@ -2422,15 +2487,50 @@ router.post(
         targetContactId = ci;
       }
 
+      // G017 (PRD §3.3 FR-3.6) — sub-agent clone-with-margin.
+      // Accept marginPercent from EITHER the query string (so a sub-agent
+      // can simply call ?marginPercent=10) or the body (POST friendlier).
+      // Body wins when both are supplied. parsePercent normalises null/""
+      // → null which keeps the legacy raw-clone behaviour.
+      const rawMargin = (req.body && req.body.marginPercent != null
+        ? req.body.marginPercent
+        : req.query && req.query.marginPercent);
+      const marginPercent = parsePercent(rawMargin, "marginPercent");
+      const markupFactor = marginPercent == null ? 1 : 1 + marginPercent / 100;
+
+      // Recompute the parent total from the source lines + markup so the
+      // header totalAmount stays consistent with the cloned line amounts.
+      // When marginPercent is null we MUST pass source.totalAmount through
+      // verbatim (the pre-G017 contract pins the exact value — see
+      // backend/test/routes/travel-quotes-duplicate-pdf.test.js).
+      const sourceLines = await prisma.travelQuoteLine.findMany({
+        where: { quoteId: source.id, tenantId: req.travelTenant.id },
+        orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
+      });
+
+      let clonedTotal = source.totalAmount; // identity-clone default
+      if (marginPercent != null) {
+        if (source.totalAmount != null) {
+          clonedTotal = Number(source.totalAmount) * markupFactor;
+        } else if (sourceLines.length > 0) {
+          clonedTotal = sourceLines.reduce(
+            (acc, l) => acc + Number(l.amount || 0) * markupFactor,
+            0,
+          );
+        }
+      }
+
       const created = await prisma.travelQuote.create({
         data: {
           tenantId: req.travelTenant.id,
           subBrand: targetSubBrand,
           contactId: targetContactId,
           status: "Draft",
-          totalAmount: source.totalAmount,
+          totalAmount: clonedTotal,
           currency: source.currency,
           validUntil: source.validUntil,
+          clonedFromQuoteId: source.id,
+          appliedMarkupPercent: marginPercent,
         },
       });
 
@@ -2438,25 +2538,30 @@ router.post(
       // quotes (with line items) are duplicated as a complete unit —
       // operators copying a TMC trip package across to RFU expect the
       // hotel/flight/visa breakdown to come with it.
-      const sourceLines = await prisma.travelQuoteLine.findMany({
-        where: { quoteId: source.id, tenantId: req.travelTenant.id },
-        orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
-      });
       if (sourceLines.length > 0) {
         await prisma.travelQuoteLine.createMany({
-          data: sourceLines.map((l) => ({
-            tenantId: req.travelTenant.id,
-            quoteId: created.id,
-            lineType: l.lineType,
-            description: l.description,
-            quantity: l.quantity,
-            unitPrice: l.unitPrice,
-            amount: l.amount,
-            currency: l.currency,
-            supplierId: l.supplierId,
-            sortOrder: l.sortOrder,
-            notes: l.notes,
-          })),
+          data: sourceLines.map((l) => {
+            const unit = Number(l.unitPrice || 0) * markupFactor;
+            const amount = Number(l.amount || 0) * markupFactor;
+            return {
+              tenantId: req.travelTenant.id,
+              quoteId: created.id,
+              lineType: l.lineType,
+              description: l.description,
+              quantity: l.quantity,
+              unitPrice: unit,
+              amount,
+              currency: l.currency,
+              supplierId: l.supplierId,
+              sortOrder: l.sortOrder,
+              notes: l.notes,
+              hsnSac: l.hsnSac,
+              taxPercent: l.taxPercent,
+              discountPercent: l.discountPercent,
+              dimension: l.dimension,
+              isAddOn: l.isAddOn,
+            };
+          }),
         });
       }
 
@@ -2472,6 +2577,7 @@ router.post(
           subBrand: created.subBrand,
           contactId: created.contactId,
           linesCloned: sourceLines.length,
+          marginPercent: marginPercent == null ? null : marginPercent,
         },
       );
 

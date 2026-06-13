@@ -3228,6 +3228,21 @@ async function renderTmcReadinessReport({
   });
   const accent = tmcBranding.headerColor || INVOICE_BRAND_KIT_FALLBACKS.tmc.headerColor;
 
+  // G105 — booking URL resolver. Precedence:
+  //   1. Explicit `bookingUrl` arg from caller (e.g. env override).
+  //   2. tenant.subBrandConfigJson.tmc.bookingLinkUrl (admin-curated).
+  //   3. Empty string → renderer surfaces the "executive will reach out" fallback.
+  let resolvedBookingUrl = String(bookingUrl || "").trim();
+  if (!resolvedBookingUrl && tenant && typeof tenant.subBrandConfigJson === "string") {
+    try {
+      const parsedCfg = JSON.parse(tenant.subBrandConfigJson);
+      const tmcCfg = parsedCfg && typeof parsedCfg === "object" ? parsedCfg.tmc : null;
+      if (tmcCfg && typeof tmcCfg.bookingLinkUrl === "string" && tmcCfg.bookingLinkUrl) {
+        resolvedBookingUrl = tmcCfg.bookingLinkUrl;
+      }
+    } catch (_e) { /* malformed cfg — keep empty */ }
+  }
+
   // S65 — fetch the TMC sub-brand logo (if any) BEFORE drawing the cover.
   // pdfkit's doc.image() needs the buffer synchronously; resolve up front.
   const tmcLogoBuffer = tmcBranding.thumbnailUrl
@@ -3400,9 +3415,9 @@ async function renderTmcReadinessReport({
       ctaY + 36,
       { width: contentW - 28 },
     );
-  if (bookingUrl) {
+  if (resolvedBookingUrl) {
     doc.font("Helvetica-Bold").fontSize(10).fillColor(accent)
-      .text(`Book your slot: ${bookingUrl}`, pageMargin + 14, ctaY + 84, { width: contentW - 28 });
+      .text(`Book your slot: ${resolvedBookingUrl}`, pageMargin + 14, ctaY + 84, { width: contentW - 28 });
   } else {
     doc.font("Helvetica").fontSize(9).fillColor(BRAND.textMuted)
       .text(
@@ -3603,6 +3618,21 @@ async function renderTravelQuotePdf(quote, opts = {}) {
   doc.font("Helvetica").fontSize(10).fillColor("#222");
   let computedSubtotal = 0;
   const normalisedLines = [];
+  // G020 (PRD §3.2 FR-3.2.3) — render the quantity column with a dimension
+  // suffix when the line carries dimension metadata. e.g. "4 pax" instead
+  // of bare "4" when dimension="perPax". Falls through to bare qty when
+  // dimension is null/unknown (back-compat with pre-G020 lines).
+  function fmtQty(qty, dimension) {
+    if (qty === 0) return "—";
+    const n = String(qty);
+    switch (dimension) {
+      case "perPax": return `${n} pax`;
+      case "perRoomPerNight": return `${n} rm-night`;
+      case "perTrip": return `${n} trip`;
+      case "flatRate": return n;
+      default: return n;
+    }
+  }
   if (items.length === 0) {
     doc.fillColor("#777").text("(No line items on this quote yet.)", colX.desc, rowY, { width: 480 });
     rowY += 18;
@@ -3649,13 +3679,13 @@ async function renderTravelQuotePdf(quote, opts = {}) {
         doc.fontSize(8);
         doc.text(gstCell, colX.gst, rowY, { width: 60, align: "right" });
         doc.fontSize(10);
-        doc.text(qty === 0 ? "—" : String(qty), colX.qty, rowY, { width: 30, align: "right" });
+        doc.text(fmtQty(qty, it.dimension), colX.qty, rowY, { width: 30, align: "right" });
         doc.text(unit === 0 ? "—" : fmt(unit), colX.unit, rowY, { width: 55, align: "right" });
         doc.text(fmt(total), colX.total, rowY, { width: 70, align: "right" });
       } else {
         doc.fillColor("#222");
         doc.text(String(it.description || "—"), colX.desc, rowY, { width: 280 });
-        doc.text(qty === 0 ? "—" : String(qty), colX.qty, rowY, { width: 50, align: "right" });
+        doc.text(fmtQty(qty, it.dimension), colX.qty, rowY, { width: 50, align: "right" });
         doc.text(unit === 0 ? "—" : fmt(unit), colX.unit, rowY, { width: 60, align: "right" });
         doc.text(fmt(total), colX.total, rowY, { width: 75, align: "right" });
       }

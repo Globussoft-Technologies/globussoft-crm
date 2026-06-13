@@ -60,8 +60,25 @@ prisma.contact.create = vi.fn();
 // so legacy tests stay on the "created" branch unmodified.
 prisma.contact.findMany = vi.fn();
 prisma.contact.findUnique = vi.fn();
+// G002 idempotency-key fast-path + G003 marketplace short-circuit +
+// G011 cooldown probe all use findFirst. Default returns null (no
+// match → fall-through to create branch).
+prisma.contact.findFirst = vi.fn();
 // Slice 10 rollup surface — GET /inbound/leads/by-channel uses groupBy.
 prisma.contact.groupBy = vi.fn();
+// G001 Touchpoint write — best-effort append after create / merge. Default
+// returns a synthetic row so happy-path tests pick up touchpointId.
+prisma.touchpoint = prisma.touchpoint || {};
+prisma.touchpoint.create = vi.fn();
+// G011 — cooldown loader hits TenantSetting (key/value JSON store).
+// Default returns null (no cooldown configured), so legacy tests stay
+// on the fast path.
+prisma.tenantSetting = prisma.tenantSetting || {};
+prisma.tenantSetting.findUnique = vi.fn();
+// G003 — merge-prompt notification on cross-channel dedupe. Best-effort
+// fan-out; default returns a synthetic row.
+prisma.notification = prisma.notification || {};
+prisma.notification.create = vi.fn();
 
 import express from 'express';
 import request from 'supertest';
@@ -94,8 +111,17 @@ beforeEach(() => {
   // branch is the default behavior for legacy tests.
   prisma.contact.findMany.mockReset().mockResolvedValue([]);
   prisma.contact.findUnique.mockReset().mockResolvedValue(null);
+  // G002 + G003 + G011 defaults: no idempotency hit, no marketplace
+  // dedupe, no cooldown prior — legacy tests stay on the create branch.
+  prisma.contact.findFirst.mockReset().mockResolvedValue(null);
   // Slice 10 rollup default: empty groupBy result.
   prisma.contact.groupBy.mockReset().mockResolvedValue([]);
+  // G001 touchpoint default: synthetic row id surfaced in envelope.
+  prisma.touchpoint.create.mockReset().mockResolvedValue({ id: 5001 });
+  // G011 cooldown default: no setting row (null) → cooldown disabled.
+  prisma.tenantSetting.findUnique.mockReset().mockResolvedValue(null);
+  // G003 merge-prompt default: synthetic notification row.
+  prisma.notification.create.mockReset().mockResolvedValue({ id: 9001 });
 });
 
 // ─── Channel-enum gate ────────────────────────────────────────────────
@@ -1395,5 +1421,508 @@ describe('POST /api/travel/inbound/leads/metaads — slice 12 Meta payload norma
     expect(callArg.data.name).toBe('Single Value');
     expect(typeof callArg.data.email).toBe('string');
     expect(callArg.data.email).toBe('sv@example.com');
+  });
+});
+
+// ─── G001 — Touchpoint write per inbound lead (FR-3.5.1) ────────────────
+
+describe('POST /inbound/leads/:channel — G001 Touchpoint write', () => {
+  test('happy path → Touchpoint.create called once, touchpointId surfaced in envelope', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/inbound/leads/voyagr')
+      .send({
+        tenantSlug: 'travel-stall',
+        name: 'Touchpoint Probe',
+        email: 'tp@example.com',
+        sourceUrl: 'https://tmc.voyagr.in/landing',
+      });
+
+    expect(res.status).toBe(201);
+    expect(prisma.touchpoint.create).toHaveBeenCalledTimes(1);
+    expect(res.body.touchpointId).toBe(5001);
+  });
+
+  test('touchpoint write failure does NOT block intake response (best-effort)', async () => {
+    prisma.touchpoint.create.mockRejectedValueOnce(new Error('FK constraint'));
+
+    const res = await request(makeApp())
+      .post('/api/travel/inbound/leads/voyagr')
+      .send({
+        tenantSlug: 'travel-stall',
+        email: 'still@works.com',
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.touchpointId).toBeNull();
+    expect(prisma.contact.create).toHaveBeenCalledTimes(1);
+  });
+
+  test('Touchpoint carries channel + source + tenantId from intake context', async () => {
+    await request(makeApp())
+      .post('/api/travel/inbound/leads/whatsapp')
+      .send({
+        tenantSlug: 'travel-stall',
+        phone: '+919876543210',
+      });
+
+    const tpCall = prisma.touchpoint.create.mock.calls[0][0];
+    expect(tpCall.data).toMatchObject({
+      tenantId: 42,
+      channel: 'whatsapp',
+      source: 'inbound:whatsapp',
+    });
+  });
+
+  test('G005 — UTM + producer attribution fields pass through to Touchpoint', async () => {
+    await request(makeApp())
+      .post('/api/travel/inbound/leads/voyagr')
+      .send({
+        tenantSlug: 'travel-stall',
+        email: 'utm@example.com',
+        utmCampaign: 'spring-tmc',
+        utmTerm: 'school-trip',
+        utmContent: 'banner-A',
+        siteSlug: 'tmc',
+        advertiserId: 'fb_advertiser_123',
+        formId: 'voyagr_form_99',
+        landingPage: 'https://tmc.voyagr.in/landing?ref=spring',
+      });
+
+    const tpCall = prisma.touchpoint.create.mock.calls[0][0];
+    expect(tpCall.data).toMatchObject({
+      utmCampaign: 'spring-tmc',
+      utmTerm: 'school-trip',
+      utmContent: 'banner-A',
+      siteSlug: 'tmc',
+      advertiserId: 'fb_advertiser_123',
+      formId: 'voyagr_form_99',
+      landingPage: 'https://tmc.voyagr.in/landing?ref=spring',
+    });
+    expect(tpCall.data.firstTouchAt).toBeInstanceOf(Date);
+  });
+});
+
+// ─── G002 — idempotencyKey + (tenantId, source, idempotencyKey) UNIQUE ──
+
+describe('POST /inbound/leads/:channel — G002 idempotency', () => {
+  test('idempotencyKey persisted on Contact.create', async () => {
+    await request(makeApp())
+      .post('/api/travel/inbound/leads/voyagr')
+      .send({
+        tenantSlug: 'travel-stall',
+        email: 'idem@example.com',
+        idempotencyKey: 'voyagr_lead_abc123',
+      });
+
+    const call = prisma.contact.create.mock.calls[0][0];
+    expect(call.data.idempotencyKey).toBe('voyagr_lead_abc123');
+  });
+
+  test('replay with same idempotencyKey → 200 + action=duplicate_suppressed (no Contact.create)', async () => {
+    // First call's idemHit probe returns the existing Contact.
+    prisma.contact.findFirst.mockResolvedValueOnce({ id: 7777 });
+
+    const res = await request(makeApp())
+      .post('/api/travel/inbound/leads/voyagr')
+      .send({
+        tenantSlug: 'travel-stall',
+        email: 'idem@example.com',
+        idempotencyKey: 'voyagr_lead_abc123',
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      id: 7777,
+      action: 'duplicate_suppressed',
+      matchedRoutingRuleId: null,
+      touchpointId: null,
+    });
+    expect(prisma.contact.create).not.toHaveBeenCalled();
+  });
+
+  test('P2002 race fallback → look up winner + return duplicate_suppressed', async () => {
+    // Contact.create throws P2002; the catch block re-probes for the winner.
+    const p2002 = new Error('Unique constraint failed');
+    // @ts-ignore — synthesise the Prisma error shape
+    p2002.code = 'P2002';
+    prisma.contact.create.mockRejectedValueOnce(p2002);
+    // The race-recovery findFirst (separate mock-call sequence) returns the winner.
+    prisma.contact.findFirst
+      .mockResolvedValueOnce(null) // initial idemHit probe — no hit pre-create
+      .mockResolvedValueOnce({ id: 8888 }); // race-recovery lookup
+
+    const res = await request(makeApp())
+      .post('/api/travel/inbound/leads/voyagr')
+      .send({
+        tenantSlug: 'travel-stall',
+        email: 'race@example.com',
+        idempotencyKey: 'race_key',
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.action).toBe('duplicate_suppressed');
+    expect(res.body.id).toBe(8888);
+  });
+
+  test('intake without idempotencyKey skips the fast-path probe', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/inbound/leads/voyagr')
+      .send({
+        tenantSlug: 'travel-stall',
+        email: 'noidem@example.com',
+      });
+
+    expect(res.status).toBe(201);
+    const call = prisma.contact.create.mock.calls[0][0];
+    expect(call.data.idempotencyKey).toBeNull();
+  });
+});
+
+// ─── G006 — Intake response envelope (action / matchedRoutingRuleId /
+//            touchpointId / subStatus) ─────────────────────────────────
+
+describe('POST /inbound/leads/:channel — G006 envelope', () => {
+  test('created branch envelope shape', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/inbound/leads/voyagr')
+      .send({
+        tenantSlug: 'travel-stall',
+        email: 'envelope@example.com',
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body).toHaveProperty('action', 'created');
+    expect(res.body).toHaveProperty('matchedRoutingRuleId', null);
+    expect(res.body).toHaveProperty('touchpointId');
+  });
+
+  test('merged branch envelope shape (cross-channel) — action=merged', async () => {
+    // Email-only dedup (no phone), prior contact in webform channel
+    prisma.contact.findUnique.mockResolvedValueOnce({
+      id: 333,
+      phone: null,
+      email: 'merged@example.com',
+      name: 'Merged Lead',
+      source: 'inbound:webform',
+      assignedToId: 55,
+    });
+
+    const res = await request(makeApp())
+      .post('/api/travel/inbound/leads/whatsapp') // cross-channel
+      .send({
+        tenantSlug: 'travel-stall',
+        email: 'merged@example.com',
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.action).toBe('merged');
+    expect(res.body.touchpointId).toBe(5001);
+  });
+
+  test('merged branch same-channel → action=touchpoint_appended', async () => {
+    prisma.contact.findUnique.mockResolvedValueOnce({
+      id: 333,
+      phone: null,
+      email: 'same@example.com',
+      name: 'Same Channel',
+      source: 'inbound:voyagr',
+      assignedToId: null,
+    });
+
+    const res = await request(makeApp())
+      .post('/api/travel/inbound/leads/voyagr')
+      .send({
+        tenantSlug: 'travel-stall',
+        email: 'same@example.com',
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.action).toBe('touchpoint_appended');
+  });
+});
+
+// ─── G011 — Per-channel cooldowns ────────────────────────────────────
+
+describe('POST /inbound/leads/:channel — G011 cooldowns', () => {
+  test('no cooldown configured → request passes through unchanged', async () => {
+    prisma.tenantSetting.findUnique.mockResolvedValueOnce(null);
+
+    const res = await request(makeApp())
+      .post('/api/travel/inbound/leads/voyagr')
+      .send({
+        tenantSlug: 'travel-stall',
+        email: 'nocool@example.com',
+      });
+
+    expect(res.status).toBe(201);
+  });
+
+  test('cooldown active for this channel + identifier → 429 COOLDOWN_ACTIVE', async () => {
+    // tenant.findUnique is called twice during intake — initial tenant
+    // lookup AND the cooldown loader. The second call needs to return
+    // the leadCaptureCooldownsJson value (G009 column shape).
+    prisma.tenant.findUnique
+      .mockResolvedValueOnce(TRAVEL_TENANT)
+      .mockResolvedValueOnce({
+        leadCaptureCooldownsJson: '{"voyagr":1800}',
+      });
+    // Cooldown probe is the FIRST findFirst call (idempotency + marketplace
+    // short-circuit are skipped because we didn't send idempotencyKey or
+    // externalLeadId). Returns a recent prior Contact for the same identifier.
+    const twoMinAgo = new Date(Date.now() - 2 * 60 * 1000);
+    prisma.contact.findFirst.mockResolvedValueOnce({
+      id: 999,
+      createdAt: twoMinAgo,
+    });
+
+    const res = await request(makeApp())
+      .post('/api/travel/inbound/leads/voyagr')
+      .send({
+        tenantSlug: 'travel-stall',
+        email: 'cooldown@example.com',
+      });
+
+    expect(res.status).toBe(429);
+    expect(res.body).toMatchObject({
+      code: 'COOLDOWN_ACTIVE',
+      action: 'cooldown_active',
+      channel: 'voyagr',
+    });
+    expect(res.body.retryAfter).toBeGreaterThan(0);
+    expect(res.body.lastLeadAt).toBeTruthy();
+    expect(prisma.contact.create).not.toHaveBeenCalled();
+  });
+
+  test('cooldown for a DIFFERENT channel → does NOT block this intake', async () => {
+    prisma.tenant.findUnique
+      .mockResolvedValueOnce(TRAVEL_TENANT)
+      .mockResolvedValueOnce({
+        leadCaptureCooldownsJson: '{"voice":1800}',
+      });
+
+    const res = await request(makeApp())
+      .post('/api/travel/inbound/leads/voyagr')
+      .send({
+        tenantSlug: 'travel-stall',
+        email: 'other@example.com',
+      });
+
+    expect(res.status).toBe(201);
+  });
+});
+
+// ─── G012 — Referral channel + referrerContactId ─────────────────────
+
+describe('POST /inbound/leads/:channel — G012 referral', () => {
+  test('referral channel without referrerContactId → 400 INVALID_PAYLOAD', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/inbound/leads/referral')
+      .send({
+        tenantSlug: 'travel-stall',
+        email: 'ref@example.com',
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_PAYLOAD');
+    expect(res.body.fieldErrors).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ field: 'referrerContactId' }),
+      ]),
+    );
+  });
+
+  test('referral happy path persists referrerContactId on Contact', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/inbound/leads/referral')
+      .send({
+        tenantSlug: 'travel-stall',
+        email: 'referee@example.com',
+        referrerContactId: 1234,
+      });
+
+    expect(res.status).toBe(201);
+    const call = prisma.contact.create.mock.calls[0][0];
+    expect(call.data.referrerContactId).toBe(1234);
+  });
+});
+
+// ─── G013 — Voice channel + subStatus=callback_pending ───────────────
+
+describe('POST /inbound/leads/:channel — G013 voice', () => {
+  test('voice channel happy → 201 + subStatus=callback_pending', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/inbound/leads/voice')
+      .send({
+        tenantSlug: 'travel-stall',
+        callId: 'call_42',
+        direction: 'inbound',
+        phone: '+919876543210',
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.subStatus).toBe('callback_pending');
+  });
+
+  test('voice channel without callId → 400 INVALID_PAYLOAD', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/inbound/leads/voice')
+      .send({
+        tenantSlug: 'travel-stall',
+        direction: 'inbound',
+        phone: '+919876543210',
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_PAYLOAD');
+  });
+
+  test('non-voice channel → subStatus is null', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/inbound/leads/voyagr')
+      .send({
+        tenantSlug: 'travel-stall',
+        email: 'nonvoice@example.com',
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.subStatus).toBeNull();
+  });
+});
+
+// ─── G004 — Channel-enum expansion + alias map ──────────────────────
+
+describe('POST /inbound/leads/:channel — G004 channel expansion', () => {
+  test('new G004 channel sms → 201 (validator passes with from + body)', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/inbound/leads/sms')
+      .send({
+        tenantSlug: 'travel-stall',
+        from: '+919876543210',
+        body: 'I want to book a Mecca trip',
+        phone: '+919876543210',
+      });
+
+    expect(res.status).toBe(201);
+  });
+
+  test('new G004 channel email → 201 with subject + email', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/inbound/leads/email')
+      .send({
+        tenantSlug: 'travel-stall',
+        email: 'inbound@example.com',
+        subject: 'Quote for school trip',
+      });
+
+    expect(res.status).toBe(201);
+  });
+
+  test('new G004 channel chat → 201 (universal validator only)', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/inbound/leads/chat')
+      .send({
+        tenantSlug: 'travel-stall',
+        email: 'chat@example.com',
+      });
+
+    expect(res.status).toBe(201);
+  });
+
+  test('canonical web_form alias accepted (back-compat with new producers)', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/inbound/leads/web_form')
+      .send({
+        tenantSlug: 'travel-stall',
+        email: 'web@example.com',
+      });
+
+    expect(res.status).toBe(201);
+  });
+
+  test('canonical meta_ad alias accepted', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/inbound/leads/meta_ad')
+      .send({
+        tenantSlug: 'travel-stall',
+        email: 'meta@example.com',
+      });
+
+    expect(res.status).toBe(201);
+  });
+
+  test('truly bogus channel → 400 INVALID_CHANNEL', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/inbound/leads/quantum_fax')
+      .send({
+        tenantSlug: 'travel-stall',
+        email: 'x@y.com',
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_CHANNEL');
+  });
+});
+
+// ─── G015 — Canonical /api/leads/intake alias ──────────────────────
+
+describe('POST /api/leads/intake — G015 canonical alias', () => {
+  function makeAliasApp() {
+    const app = express();
+    app.use(express.json());
+    const aliasRouter = requireCJS('../../routes/leads_intake');
+    app.use('/api/leads', aliasRouter);
+    return app;
+  }
+
+  test('body-channel mode forwards to the canonical handler → 201', async () => {
+    const res = await request(makeAliasApp())
+      .post('/api/leads/intake')
+      .send({
+        channel: 'voyagr',
+        tenantSlug: 'travel-stall',
+        email: 'alias@example.com',
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.channel).toBe('voyagr');
+  });
+
+  test('missing body.channel → 400 MISSING_CHANNEL', async () => {
+    const res = await request(makeAliasApp())
+      .post('/api/leads/intake')
+      .send({
+        tenantSlug: 'travel-stall',
+        email: 'no-channel@example.com',
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('MISSING_CHANNEL');
+  });
+
+  test('canonical channel name (voice) works through the alias', async () => {
+    const res = await request(makeAliasApp())
+      .post('/api/leads/intake')
+      .send({
+        channel: 'voice',
+        tenantSlug: 'travel-stall',
+        callId: 'call_99',
+        direction: 'inbound',
+        phone: '+919876543210',
+      });
+
+    expect(res.status).toBe(201);
+  });
+
+  test('empty channel string → 400', async () => {
+    const res = await request(makeAliasApp())
+      .post('/api/leads/intake')
+      .send({
+        channel: '   ',
+        tenantSlug: 'travel-stall',
+        email: 'x@y.com',
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('MISSING_CHANNEL');
   });
 });

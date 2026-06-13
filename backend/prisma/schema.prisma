@@ -744,6 +744,24 @@ model Contact {
   // by the @@unique([tenantId, externalId]) constraint below.
   externalId String?
 
+  // PRD_TRAVEL_MULTICHANNEL_LEADS G002 (FR-3.1.7, FR-3.2.6) — Caller-supplied
+  // dedupe key for multi-channel intake. When a producer (Voyagr microsite,
+  // Meta lead-ads webhook, Wati WhatsApp, voice/IVR, CRM walk-in) retries the
+  // same POST, the second call trips the @@unique([tenantId, source,
+  // idempotencyKey]) constraint and the route returns
+  // `action: duplicate_suppressed` + the existing contactId (idempotent
+  // semantics). NULL != NULL in MySQL — Contacts without an idempotencyKey
+  // (every legacy Contact + every intake without one) never collide.
+  idempotencyKey String?
+
+  // PRD_TRAVEL_MULTICHANNEL_LEADS G012 (FR-3.4.5) — referrer chain. When the
+  // intake `channel=referral`, this column links to the Contact who referred
+  // them so attribution reporting can roll up "leads from referrals" + reward
+  // the referrer downstream. Loose Int reference (no FK) to dodge cascade-
+  // delete coupling — a deleted referrer leaves stale references but doesn't
+  // tombstone the referred Contact's analytics row.
+  referrerContactId Int?
+
   createdAt DateTime  @default(now())
   // #167: soft-delete column. Routes filter `deletedAt: null` on list/detail.
   // DELETE flips this column instead of hard-deleting; restore endpoint clears it.
@@ -793,6 +811,13 @@ model Contact {
   /// MySQL unique indexes, so the many contacts with no externalId never collide;
   /// only partner-linked rows (e.g. GlobusPhone lead ULID) are deduplicated.
   @@unique([tenantId, externalId])
+  /// PRD_TRAVEL_MULTICHANNEL_LEADS G002 — (tenantId, source, idempotencyKey)
+  /// composite unique gates the multi-channel intake's idempotency-key check.
+  /// `source` carries the channel (e.g. "inbound:voyagr") so the constraint
+  /// is scoped per-channel per-tenant (same idempotencyKey from voyagr vs
+  /// webform don't collide). NULL != NULL in MySQL — every Contact without
+  /// an idempotencyKey is unaffected, so legacy + non-intake rows are free.
+  @@unique([tenantId, source, idempotencyKey], name: "tenant_source_idempkey")
   @@index([tenantId, status])
   @@index([tenantId, createdAt])
   @@index([tenantId, assignedToId])
@@ -2611,20 +2636,38 @@ model AbTest {
 // ── Marketing Attribution ────────────────────────────────────────
 
 model Touchpoint {
-  id         Int      @id @default(autoincrement())
-  contactId  Int
-  channel    String // "email", "social", "search", "direct", etc.
-  campaignId Int?
-  source     String?
-  medium     String?
-  url        String?
-  timestamp  DateTime @default(now())
-  tenantId   Int      @default(1)
-  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id           Int       @id @default(autoincrement())
+  contactId    Int
+  channel      String // "email", "social", "search", "direct", etc.
+  campaignId   Int?
+  source       String?
+  medium       String?
+  url          String?
+  timestamp    DateTime  @default(now())
+  // PRD_TRAVEL_MULTICHANNEL_LEADS G005 (FR-3.1.3) — UTM + producer attribution
+  // fields. All nullable + additive — pre-existing Touchpoint rows ignore them;
+  // intake parsers populate per-channel. utm_* mirror the standard Google
+  // Analytics UTM taxonomy (campaign / term / content); source + medium
+  // already exist above and carry utm_source + utm_medium respectively.
+  utmCampaign  String?
+  utmTerm      String?
+  utmContent   String?
+  // Voyagr microsite slug ("tmc.voyagr.in" → "tmc"), advertiser id (ads/meta_ad
+  // platforms), web-form id (which form on the landing page), full landing-page
+  // URL (Text — can be long with query params). firstTouchAt pins the
+  // first-touch timestamp distinct from `timestamp` (which is touchpoint write
+  // time) so multi-touch attribution can compute time-to-conversion.
+  siteSlug     String?
+  advertiserId String?
+  formId       String?
+  landingPage  String?   @db.Text
+  firstTouchAt DateTime?
+  tenantId     Int       @default(1)
+  tenant       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   // #571 follow-up: lead scoring engine includes contact.touchpoints in
   // its scoring fan-out; the back-relation must be declared explicitly or
   // Prisma rejects the `include: { touchpoints: ... }` validator.
-  contact    Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  contact      Contact   @relation(fields: [contactId], references: [id], onDelete: Cascade)
 
   @@index([tenantId, contactId])
 }

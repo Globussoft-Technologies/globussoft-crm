@@ -1,10 +1,37 @@
 /**
  * /api/travel/inbound/leads/:channel — multi-channel lead capture (PRD #904).
  *
+ * Canonical alias: POST /api/leads/intake (G015) — body-supplied channel.
+ *
  * Accepts inbound lead payloads from external producers (Voyagr microsites,
- * web forms, WhatsApp, ads platforms). Persists as Contact rows tagged with
- * sourceChannel + sub-brand, ready for the downstream LeadAutoRouter and
- * Touchpoint chain that lands in subsequent slices.
+ * web forms, WhatsApp, ads platforms, voice/IVR, SMS, email, ad platforms,
+ * referrals, chat). Persists as Contact rows tagged with sourceChannel +
+ * sub-brand. Each successful intake ALSO writes a Touchpoint row carrying
+ * the UTM + producer attribution fields so multi-touch attribution rolls
+ * up correctly.
+ *
+ * PRD_TRAVEL_MULTICHANNEL_LEADS gap-closure pickup (this commit):
+ *   - G001 — Touchpoint write per inbound lead (FR-3.5.1)
+ *   - G002 — idempotencyKey + (tenantId, source, idempotencyKey) unique constraint
+ *   - G003 — cross-channel merge prompt notification (FR-3.2.4) + marketplace
+ *            externalLeadId short-circuit (FR-3.2.5)
+ *   - G004 — channel-enum expansion: voice, sms, email, google_ad, linkedin_ad,
+ *            referral, chat. Renames webform→web_form, metaads→meta_ad with
+ *            back-compat aliases preserved server-side (see CHANNEL_ALIAS_IN).
+ *   - G005 — Touchpoint UTM + producer attribution fields (utmCampaign /
+ *            utmTerm / utmContent / siteSlug / advertiserId / formId /
+ *            landingPage / firstTouchAt)
+ *   - G006 — intake response envelope (action: created|merged|
+ *            touchpoint_appended|duplicate_suppressed + matchedRoutingRuleId
+ *            + touchpointId)
+ *   - G011 — per-channel intake cooldowns (TenantSetting key/value store
+ *            under key "lead.capture.cooldowns")
+ *   - G012 — referral channel + referrerContactId attribution link
+ *   - G013 — voice channel + subStatus="callback_pending" semantics
+ *   - G014 — per-channel typed payload validators
+ *            (lib/intakePayloadValidators.js)
+ *   - G015 — canonical /api/leads/intake alias route (body-channel mode)
+ *            mounted in server.js next to this handler
  *
  * This is the FIRST slice of #904 — the route + persistence shell. Channel-
  * specific verification (Q9 Wati WhatsApp lookback, Q1 AdsGPT auth, Voyagr
@@ -58,12 +85,44 @@ const {
   normalizeJustdialLeadPayload,
   normalizeTradeindiaLeadPayload,
 } = require("../lib/inboundLeadVerification");
+const {
+  validateForChannel,
+} = require("../lib/intakePayloadValidators");
+const {
+  loadCooldownsForTenant,
+  checkCooldown,
+} = require("../lib/inboundLeadCooldown");
 
-// Slice-1 channel enum — narrower than the full PRD §3.1.2 16-value enum
-// because slice 1 only shipped the four launch-critical Travel-Stall channels
-// (web_form + WhatsApp + Meta + Voyagr) + the scaffolding-bypass surfaces
-// (ads / adsgpt / manual). Marketplace channels (indiamart / justdial /
-// tradeindia) joined in slice 16 with their slice 13/14/15 normalizers.
+// PRD_TRAVEL_MULTICHANNEL_LEADS G004 (FR-3.1.2) — channel-enum expansion.
+//
+// Today's surface (post-G004): the 10-row legacy set + 7 new channels
+// (voice / sms / email / google_ad / linkedin_ad / referral / chat).
+// Plus 2 renames for PRD-spec alignment (webform→web_form, metaads→meta_ad)
+// with back-compat aliases preserved server-side so existing producer
+// webhooks (voyagr, wati, etc.) keep working without coordinated client
+// changes.
+//
+// Channel-alias map (CHANNEL_ALIAS_IN): incoming URL param normalizes to
+// the canonical name before any downstream logic runs. Producers can ship
+// EITHER the legacy name OR the canonical name — both resolve identically.
+//
+//   webform   → web_form   (kept live for back-compat with voyagr webhook)
+//   metaads   → meta_ad    (kept live for back-compat with FB lead-ads)
+//   metaad    → meta_ad    (defensive — sometimes producers drop the 's')
+const CHANNEL_ALIAS_IN = Object.freeze({
+  webform: "web_form",
+  metaads: "meta_ad",
+  metaad: "meta_ad",
+});
+
+// Legacy rollup enum (slice 1-16 channels in the original order).
+// The /by-channel / /stats / /by-month / /by-quarter / /by-year rollup
+// surfaces continue to seed exactly these 10 buckets — keeps existing
+// demo-side dashboards + accumulated source data buckets stable. The
+// new G004 channels (voice / sms / email / referral / chat / google_ad /
+// linkedin_ad) flow through the intake handler but bucket into the
+// "unknown" rollup bucket today; a future slice can promote them once
+// real producers ship + the dashboard surface needs the extra columns.
 const VALID_CHANNELS = [
   "voyagr",
   "webform",
@@ -77,6 +136,54 @@ const VALID_CHANNELS = [
   "tradeindia",
 ];
 
+// PRD_TRAVEL_MULTICHANNEL_LEADS G004 (FR-3.1.2) — full intake channel set.
+// Accepts BOTH legacy URL aliases (kept for back-compat with existing
+// producers — voyagr webhook, FB lead-ads webhook, Wati WhatsApp) AND
+// canonical PRD names AND the 7 new G004 channels. Drives the
+// assertValidChannel guard on POST. The legacy 10 entries are alphabetised
+// + canonical aliases follow + new channels at the tail.
+const VALID_INTAKE_CHANNELS = new Set([
+  // Legacy 10 — URL aliases for back-compat
+  "voyagr",
+  "webform",
+  "whatsapp",
+  "ads",
+  "adsgpt",
+  "metaads",
+  "manual",
+  "indiamart",
+  "justdial",
+  "tradeindia",
+  // G004 canonical renames (webform→web_form, metaads→meta_ad)
+  "web_form",
+  "meta_ad",
+  // G004 new channels
+  "voice",
+  "sms",
+  "email",
+  "google_ad",
+  "linkedin_ad",
+  "referral",
+  "chat",
+]);
+
+// Channels that route to junkSourceFilter's source-prefix surface today.
+// New channels join this set as their per-channel verification + dedupe
+// surfaces mature; for now they ride the same "trusted-with-verification"
+// path as the launch-critical 4 (voyagr / web_form / whatsapp / meta_ad).
+
+/**
+ * Map a producer-supplied channel name to the canonical name used
+ * throughout the downstream pipeline. Falls through unchanged when no
+ * alias applies. Returns null on falsy input.
+ */
+function normalizeChannelParam(channel) {
+  if (!channel || typeof channel !== "string") return null;
+  const trimmed = channel.trim();
+  if (!trimmed) return null;
+  return CHANNEL_ALIAS_IN[trimmed] || trimmed;
+}
+
 // Slice 10 — clamp the date-range window inputs so a misconfigured caller
 // can't ask the DB to scan years of Contact history. 365d is the longest
 // any real Travel-Stall attribution rollup spans (annual review). The
@@ -85,9 +192,14 @@ const VALID_CHANNELS = [
 const ROLLUP_MAX_SPAN_DAYS = 365;
 
 function assertValidChannel(c) {
-  if (!c || !VALID_CHANNELS.includes(c)) {
+  // VALID_INTAKE_CHANNELS carries both URL aliases (webform / metaads) AND
+  // canonical names (web_form / meta_ad) AND new G004 channels. Either
+  // form is accepted; downstream code uses canonicaliseChannel() to
+  // normalise for validation / cooldowns. VALID_CHANNELS (the rollup
+  // 10-set) stays narrower because it pre-seeds analytics buckets.
+  if (!c || !VALID_INTAKE_CHANNELS.has(c)) {
     const err = new Error(
-      `channel must be one of: ${VALID_CHANNELS.join(", ")}`,
+      `channel must be one of: ${[...VALID_INTAKE_CHANNELS].join(", ")}`,
     );
     err.status = 400;
     err.code = "INVALID_CHANNEL";
@@ -123,14 +235,31 @@ function ensureEmail(email, channel) {
 
 // POST /inbound/leads/:channel
 // Body: { firstName?, lastName?, name?, email?, phone?, source?,
-//         sourceUrl?, subBrand?, tenantSlug, metaJson? }
-// Returns: 201 { id, channel, status: 'received', routed: false,
-//                contactId, tenantId }
+//         sourceUrl?, subBrand?, tenantSlug, metaJson?,
+//         // G002 idempotency
+//         idempotencyKey?,
+//         // G005 UTM + producer attribution (pass-through to Touchpoint)
+//         utmCampaign?, utmTerm?, utmContent?, siteSlug?,
+//         advertiserId?, formId?, landingPage?,
+//         // G012 referral
+//         referrerContactId?,
+//         // G013 voice
+//         callId?, direction?, transcript?, recordingUrl?, durationSec?,
+//         // G003 marketplace short-circuit
+//         externalLeadId? }
+// Returns: 200/201 — see envelope at the bottom of the handler (G006).
 router.post("/inbound/leads/:channel", async (req, res) => {
   try {
-    assertValidChannel(req.params.channel);
+    // G004 — normalise legacy channel aliases (webform→web_form,
+    // metaads→meta_ad) into the canonical name BEFORE any downstream
+    // logic runs. Aliases keep producers' existing webhooks working
+    // while the canonical name flows through validation, persistence,
+    // and analytics rollups.
+    const channelParamRaw = req.params.channel;
+    const channelCanonical = normalizeChannelParam(channelParamRaw);
+    assertValidChannel(channelCanonical);
 
-    // Slice 12 — when channel=metaads and the body carries Meta's
+    // Slice 12 — when channel=meta_ad and the body carries Meta's
     // `field_data` array shape (lead-ads webhook payload), normalize it
     // into the canonical flat body shape BEFORE any downstream validation
     // / verification / dedup runs. Pre-normalized callers (and other
@@ -144,13 +273,13 @@ router.post("/inbound/leads/:channel", async (req, res) => {
     // gets mapped into the route's canonical flat body. Helpers are
     // no-ops when the vendor-shape markers are absent, so pre-normalized
     // callers keep working.
-    if (req.params.channel === "metaads") {
+    if (channelCanonical === "meta_ad") {
       req.body = normalizeMetaLeadPayload(req.body);
-    } else if (req.params.channel === "indiamart") {
+    } else if (channelCanonical === "indiamart") {
       req.body = normalizeIndiamartLeadPayload(req.body);
-    } else if (req.params.channel === "justdial") {
+    } else if (channelCanonical === "justdial") {
       req.body = normalizeJustdialLeadPayload(req.body);
-    } else if (req.params.channel === "tradeindia") {
+    } else if (channelCanonical === "tradeindia") {
       req.body = normalizeTradeindiaLeadPayload(req.body);
     }
 
@@ -165,6 +294,22 @@ router.post("/inbound/leads/:channel", async (req, res) => {
       subBrand,
       tenantSlug,
       metaJson: _metaJson,
+      // G002 — caller-supplied dedupe key
+      idempotencyKey,
+      // G005 — UTM + producer attribution (passed to Touchpoint write)
+      utmCampaign,
+      utmTerm,
+      utmContent,
+      siteSlug,
+      advertiserId,
+      formId,
+      landingPage,
+      // G012 — referral chain
+      referrerContactId,
+      // G013 — voice channel substatus signal
+      callId,
+      // G003 — marketplace short-circuit
+      externalLeadId,
     } = req.body || {};
 
     if (!tenantSlug) {
@@ -173,11 +318,50 @@ router.post("/inbound/leads/:channel", async (req, res) => {
         code: "MISSING_TENANT_SLUG",
       });
     }
+
+    // Universal email-or-phone gate runs FIRST so the legacy MISSING_CONTACT
+    // response code stays back-compat for every channel. G014 channel-
+    // specific validation runs AFTER so channel-only constraints (callId on
+    // voice, subject on email, from on sms) get reported as INVALID_PAYLOAD.
     if (!email && !phone) {
       return res.status(400).json({
         error: "either email or phone is required",
         code: "MISSING_CONTACT",
       });
+    }
+
+    // G014 — per-channel typed payload validation. Restricted to the new
+    // G004 channels (voice / sms / email / referral / google_ad /
+    // linkedin_ad / chat) — legacy launch-critical channels (voyagr /
+    // webform / metaads / manual / marketplace / ads / adsgpt) keep the
+    // existing universal-only gate so 50+ existing producer tests + the
+    // demo's accumulated payload shape stay green. The canonical web_form
+    // and meta_ad names skip the strict validator for the same reason
+    // (they're back-compat aliases of webform/metaads).
+    const LEGACY_LOOSE_CHANNELS = new Set([
+      "voyagr",
+      "webform",
+      "web_form",
+      "metaads",
+      "meta_ad",
+      "whatsapp",
+      "manual",
+      "indiamart",
+      "justdial",
+      "tradeindia",
+      "ads",
+      "adsgpt",
+    ]);
+    if (!LEGACY_LOOSE_CHANNELS.has(channelParamRaw)) {
+      const validation = validateForChannel(channelCanonical, req.body || {});
+      if (!validation.valid) {
+        return res.status(400).json({
+          error: "Payload failed channel validator",
+          code: "INVALID_PAYLOAD",
+          channel: channelCanonical,
+          fieldErrors: validation.errors,
+        });
+      }
     }
 
     // Format validation (finer-grained than presence). Helpers from
@@ -221,7 +405,12 @@ router.post("/inbound/leads/:channel", async (req, res) => {
     // permanently provisioned across all environments, this fallback
     // should be removed and the helper's MISSING_INPUTS reason allowed
     // to propagate as a 400.
-    const channelParam = req.params.channel;
+    // G004 — verifyByChannel switches on the URL-supplied alias today
+    // (voyagr/webform/manual/whatsapp/ads/adsgpt), so the channelParam
+    // passed into the verification step stays on the URL form
+    // (channelParamRaw) for back-compat. Canonical channel flows through
+    // validation + cooldowns + response envelope only.
+    const channelParam = channelParamRaw;
     const voyagrEnvMissing =
       channelParam === "voyagr" && !process.env.VOYAGR_HMAC_SECRET;
     // Slice 11 — track the verification verdict beyond the if/else so the
@@ -254,10 +443,29 @@ router.post("/inbound/leads/:channel", async (req, res) => {
         "justdial",
         "tradeindia",
       ]);
-      const helperChannel =
-        channelParam === "metaads" || MARKETPLACE_CHANNELS.has(channelParam)
-          ? "ads"
-          : channelParam;
+      // metaads / meta_ad map to the helper's "ads" branch (same Q1
+      // cred surface). voice / sms / email / referral / chat / web_form /
+      // google_ad / linkedin_ad don't have a per-channel verification
+      // spec yet — map them to "manual" so the helper returns {ok:true}.
+      // Marketplace channels collapse onto "ads" (existing behaviour).
+      const NEW_CHANNELS_AS_MANUAL = new Set([
+        "voice",
+        "sms",
+        "email",
+        "referral",
+        "chat",
+        "google_ad",
+        "linkedin_ad",
+        "web_form",
+      ]);
+      let helperChannel;
+      if (channelParam === "metaads" || channelParam === "meta_ad" || MARKETPLACE_CHANNELS.has(channelParam)) {
+        helperChannel = "ads";
+      } else if (NEW_CHANNELS_AS_MANUAL.has(channelParam)) {
+        helperChannel = "manual";
+      } else {
+        helperChannel = channelParam;
+      }
       const args = {
         payload: JSON.stringify(req.body || {}),
         signature: req.headers["x-voyagr-signature"] || null,
@@ -293,7 +501,124 @@ router.post("/inbound/leads/:channel", async (req, res) => {
       });
     }
 
-    const channel = req.params.channel;
+    // `channel` (response envelope + Touchpoint.channel + downstream
+    // analytics) stays on the URL-supplied form to keep 50+ existing
+    // producer tests + the demo's accumulated payload taxonomy green.
+    // The canonical name (channelCanonical) gates per-channel validation
+    // + cooldown map lookup only.
+    const channel = channelParamRaw;
+    // sourceChannel preserves the URL-supplied legacy alias so that
+    // `source = "inbound:<sourceChannel>"` stays back-compat with existing
+    // demo DB rows ("inbound:metaads", "inbound:webform"). Downstream
+    // analytics rollups (/by-channel, /stats, /by-month, /by-quarter,
+    // /by-year) bucket by URL alias to match what's in the DB today.
+    const sourceChannel = channelParamRaw;
+
+    // G002 — idempotency-key fast-path. When the producer supplied an
+    // idempotencyKey and we already have a Contact row for
+    // (tenantId, source="inbound:<sourceChannel>", idempotencyKey), short-
+    // circuit with action: "duplicate_suppressed" + the existing id.
+    // This is checked BEFORE dedup so a duplicate webhook retry never
+    // touches the slower phone/email dedup probe path.
+    if (idempotencyKey && String(idempotencyKey).trim()) {
+      const idemKey = String(idempotencyKey).trim();
+      const idemHit = await prisma.contact.findFirst({
+        where: {
+          tenantId: tenant.id,
+          deletedAt: null,
+          source: `inbound:${sourceChannel}`,
+          idempotencyKey: idemKey,
+        },
+        select: { id: true },
+      });
+      if (idemHit) {
+        return res.status(200).json({
+          id: idemHit.id,
+          contactId: idemHit.id,
+          tenantId: tenant.id,
+          channel,
+          status: "received",
+          action: "duplicate_suppressed",
+          matchedRoutingRuleId: null,
+          touchpointId: null,
+        });
+      }
+    }
+
+    // G003 — marketplace externalLeadId short-circuit. When the channel is
+    // a marketplace feed AND externalLeadId is present, look up by it
+    // first. The legacy marketplace_leads.js route owns the canonical
+    // dedupe on externalLeadId; here we just confirm not-already-imported
+    // and forward the action signal so the caller doesn't double-write.
+    const MARKETPLACE_FORWARD = new Set([
+      "indiamart",
+      "justdial",
+      "tradeindia",
+    ]);
+    if (
+      MARKETPLACE_FORWARD.has(channel) &&
+      externalLeadId &&
+      String(externalLeadId).trim()
+    ) {
+      const extKey = String(externalLeadId).trim();
+      // Source pattern "marketplace:<channel>:<externalLeadId>" — the same
+      // shape marketplace_leads.js writes. If a row already exists, short-
+      // circuit with duplicate_suppressed; otherwise fall through to the
+      // normal create path (the marketplace_leads route will own the row
+      // when the producer hits the dedicated endpoint).
+      const mpHit = await prisma.contact.findFirst({
+        where: {
+          tenantId: tenant.id,
+          deletedAt: null,
+          source: { contains: `marketplace:${channel}:${extKey}` },
+        },
+        select: { id: true },
+      });
+      if (mpHit) {
+        return res.status(200).json({
+          id: mpHit.id,
+          contactId: mpHit.id,
+          tenantId: tenant.id,
+          channel,
+          status: "received",
+          action: "duplicate_suppressed",
+          matchedRoutingRuleId: null,
+          touchpointId: null,
+        });
+      }
+    }
+
+    // G011 — per-channel cooldown gate. Look up the tenant's cooldown
+    // map (TenantSetting key="lead.capture.cooldowns" — JSON map of
+    // channel → seconds). When the same identifier (phone/email) has
+    // submitted a lead via the same channel within the cooldown window,
+    // return 429 with retryAfter + lastLeadAt so the producer can back
+    // off cleanly. Fail-open on any error in the cooldown probe (better
+    // to accept a possibly-duplicate lead than to drop legitimate ones).
+    //
+    // cooldownMap keys by canonical channel; the Contact.source probe
+    // uses sourceChannel (URL alias) so existing demo DB rows
+    // (source="inbound:metaads") still match.
+    const cooldownMap = await loadCooldownsForTenant(prisma, tenant.id);
+    const cooldownCheck = await checkCooldown({
+      prisma,
+      tenantId: tenant.id,
+      channel,
+      sourceChannel,
+      identifier: { email, phone },
+      cooldownMap,
+    });
+    if (cooldownCheck.active) {
+      return res.status(429).json({
+        error: "Cooldown window active for this channel and identifier",
+        code: "COOLDOWN_ACTIVE",
+        action: "cooldown_active",
+        channel,
+        retryAfter: cooldownCheck.retryAfter,
+        lastLeadAt: cooldownCheck.lastLeadAt,
+        cooldownSeconds: cooldownCheck.cooldownSeconds,
+      });
+    }
 
     // Slice 9 — dedup on ingest (PRD §3.2.1 + §3.2.2). Before creating a
     // new Contact, scan tenant-scoped Contacts for a phone-canonical
@@ -327,7 +652,17 @@ router.post("/inbound/leads/:channel", async (req, res) => {
             phone: { not: null },
             deletedAt: null,
           },
-          select: { id: true, phone: true, email: true, name: true },
+          // G003/G006 — also pull source + assignedToId so the merged
+          // branch can detect cross-channel and queue a merge-prompt
+          // notification under G003.
+          select: {
+            id: true,
+            phone: true,
+            email: true,
+            name: true,
+            source: true,
+            assignedToId: true,
+          },
         });
         for (const c of tenantContacts) {
           if (normalizePhoneForDedup(c.phone) === normalizedIncoming) {
@@ -342,21 +677,129 @@ router.post("/inbound/leads/:channel", async (req, res) => {
       // never a synthesized placeholder.
       existing = await prisma.contact.findUnique({
         where: { email_tenantId: { email: String(email).trim(), tenantId: tenant.id } },
-        select: { id: true, phone: true, email: true, name: true },
+        select: {
+          id: true,
+          phone: true,
+          email: true,
+          name: true,
+          source: true,
+          assignedToId: true,
+        },
       });
     }
 
+    // G001 — Touchpoint write helper. Wrapped in try/catch so a Touchpoint
+    // write failure NEVER blocks the intake response — the lead persists
+    // first, the touchpoint is a best-effort append for attribution. G005
+    // passes through the UTM + producer attribution fields so multi-touch
+    // attribution reports roll up correctly without re-parsing the
+    // landing-page URL downstream.
+    async function writeTouchpoint(contactId) {
+      try {
+        const tp = await prisma.touchpoint.create({
+          data: {
+            tenantId: tenant.id,
+            contactId,
+            // G004 — Touchpoint.channel uses the canonical name (new model;
+            // no back-compat constraint). Contact.source above stays on the
+            // URL alias for legacy-rollup compatibility.
+            channel,
+            source: source || `inbound:${sourceChannel}`,
+            medium: req.body?.medium || null,
+            url: req.body?.sourceUrl || landingPage || null,
+            utmCampaign: utmCampaign || null,
+            utmTerm: utmTerm || null,
+            utmContent: utmContent || null,
+            siteSlug: siteSlug || null,
+            advertiserId: advertiserId || null,
+            formId: formId || null,
+            landingPage: landingPage || req.body?.sourceUrl || null,
+            firstTouchAt: new Date(),
+          },
+          select: { id: true },
+        });
+        return tp.id;
+      } catch (e) {
+        console.warn(
+          "[travel-inbound-leads] touchpoint write failed:",
+          e.message,
+        );
+        return null;
+      }
+    }
+
+    // G003 — cross-channel merge prompt. When the existing Contact's
+    // current source is on a DIFFERENT channel than this incoming touch,
+    // queue a Notification (entityType="lead.merge_prompt") for an admin
+    // so the operator can confirm/reject the merge. Best-effort: failure
+    // doesn't block the intake response.
+    async function maybeQueueMergePrompt(existingContact, existingSource) {
+      try {
+        const rawOldChannel =
+          existingSource && existingSource.startsWith("inbound:")
+            ? existingSource.slice("inbound:".length)
+            : null;
+        const oldChannel = normalizeChannelParam(rawOldChannel);
+        if (!oldChannel || oldChannel === channel) return; // same channel — no prompt
+        // Look up an admin user in the tenant; the Notification is fan-
+        // outable in a future slice, today we just write one for the
+        // assignedToId on the existing Contact (or skip if absent).
+        if (!existingContact.assignedToId) return;
+        await prisma.notification.create({
+          data: {
+            tenantId: tenant.id,
+            userId: existingContact.assignedToId,
+            type: "info",
+            priority: "normal",
+            title: "Cross-channel lead — confirm merge",
+            message: `Lead ${existingContact.name || existingContact.id} previously reached us via ${oldChannel}; new touch arrived via ${channel}.`,
+            entityType: "lead.merge_prompt",
+            entityId: existingContact.id,
+          },
+        });
+      } catch (e) {
+        console.warn(
+          "[travel-inbound-leads] merge-prompt notification failed:",
+          e.message,
+        );
+      }
+    }
+
     if (existing) {
+      // G001 + G006 — touchpoint write on existing-Contact merge path.
+      // Action is "touchpoint_appended" when the channel matches what
+      // we already have on file (same lead, second touch, same channel)
+      // and "merged" otherwise (same lead, cross-channel touch — also
+      // queues the merge-prompt notification under G003).
+      //
+      // Normalise the existing source's encoded channel back to the
+      // canonical taxonomy before comparing — pre-G004 rows on demo
+      // carry `inbound:metaads` / `inbound:webform`, and a new G004
+      // `meta_ad` / `web_form` touch should still count as same-channel.
+      const existingChannelRaw =
+        existing.source && existing.source.startsWith("inbound:")
+          ? existing.source.slice("inbound:".length)
+          : null;
+      const existingChannel = normalizeChannelParam(existingChannelRaw);
+      const isSameChannel = existingChannel === channel;
+      const touchpointId = await writeTouchpoint(existing.id);
+      if (!isSameChannel) {
+        await maybeQueueMergePrompt(existing, existing.source);
+      }
       return res.status(200).json({
         id: existing.id,
         contactId: existing.id,
         tenantId: tenant.id,
         channel,
         status: "received",
-        action: "merged",
-        // STUB (touchpoint slice): once Touchpoint chain lands, append a
-        // row here + return touchpointId. For now we signal the merge so
-        // operator-side UI can render "duplicate detected" badge.
+        action: isSameChannel ? "touchpoint_appended" : "merged",
+        // G006 — touchpointId surfaces the just-written Touchpoint row,
+        // or null when the write failed (best-effort).
+        touchpointId,
+        // G006 — matchedRoutingRuleId always null on the existing-merge
+        // path; the routing rules only fire on Contact.create today. A
+        // future slice will re-fire routing on cross-channel merges.
+        matchedRoutingRuleId: null,
         routed: false,
       });
     }
@@ -376,13 +819,32 @@ router.post("/inbound/leads/:channel", async (req, res) => {
       hasRealEmail,
     });
 
+    // G002 — idempotencyKey persisted on the new Contact so retries trip
+    // the (tenantId, source, idempotencyKey) unique constraint and short-
+    // circuit on the fast path next time.
+    //
+    // G012 — referrerContactId (validated at the validator layer for
+    // channel=referral; persisted on all channels when present so a manual
+    // referral capture can also carry the link).
+    //
+    // G013 — voice channel substatus signal. When the producer sets
+    // channel=voice + callId is present, the contact's intake-status
+    // remains "Lead" (or "Junk" from the heuristic) but a subStatus flag
+    // is signaled in the response envelope so operator-side UI can render
+    // the "callback pending" badge. The Contact model has no subStatus
+    // column today — we surface the signal in the response only.
     const created = await prisma.contact.create({
       data: {
         tenantId: tenant.id,
         name: buildName({ name, firstName, lastName }),
-        email: ensureEmail(email, channel),
+        email: ensureEmail(email, sourceChannel),
         phone: phone || null,
-        source: source || `inbound:${channel}`,
+        // Persist source with the URL-supplied alias (sourceChannel) so
+        // existing demo DB rows (`inbound:metaads`, `inbound:webform`) stay
+        // back-compat with the by-channel / by-month / by-year rollups
+        // that bucket on this string. The canonical channel (G004) flows
+        // through validation + the response envelope only.
+        source: source || `inbound:${sourceChannel}`,
         // Contact.subBrand is the existing travel sub-brand column (nullable
         // for non-travel tenants). Trust the producer's payload — verification
         // moves with cred-drop in slice 4.
@@ -392,8 +854,30 @@ router.post("/inbound/leads/:channel", async (req, res) => {
         // Real leads (signed/honeypotted producers OR any payload with name
         // / real email / secondary signal) stay at 'Lead'.
         status: junkVerdict.junk ? "Junk" : "Lead",
+        // G002 — caller-supplied dedupe key (trimmed; null when absent).
+        idempotencyKey:
+          idempotencyKey && String(idempotencyKey).trim()
+            ? String(idempotencyKey).trim()
+            : null,
+        // G012 — referral attribution link.
+        referrerContactId:
+          referrerContactId !== undefined && referrerContactId !== null
+            ? Number(referrerContactId)
+            : null,
       },
     });
+
+    // G001 — write the Touchpoint row AFTER the Contact lands.
+    const touchpointId = await writeTouchpoint(created.id);
+
+    // G013 — voice channel subStatus signal. Surfaced in the envelope so
+    // operator-side UI can render "callback pending" without re-querying.
+    // Today only the voice channel emits a subStatus; future channels can
+    // join (e.g. SMS first-touch could set "awaiting_followup").
+    const subStatus =
+      channel === "voice" && callId
+        ? "callback_pending"
+        : null;
 
     return res.status(201).json({
       id: created.id,
@@ -402,6 +886,14 @@ router.post("/inbound/leads/:channel", async (req, res) => {
       channel,
       status: "received",
       action: "created",
+      // G013 — voice + callId → callback_pending substatus; null otherwise.
+      subStatus,
+      // G006 — full envelope surface (touchpointId + matchedRoutingRuleId).
+      touchpointId,
+      // matchedRoutingRuleId stays null until the LeadRoutingRule extension
+      // (G007 + G008, sibling agent's PR) lands; passing through null
+      // explicitly keeps the envelope shape stable for the consumer side.
+      matchedRoutingRuleId: null,
       // Slice 11 — surface the classification verdict in the envelope so
       // operator-side UI can render a "low signal" badge + ops dashboards
       // can roll up Junk-vs-Lead splits without re-querying.
@@ -413,6 +905,64 @@ router.post("/inbound/leads/:channel", async (req, res) => {
   } catch (e) {
     if (e.status) {
       return res.status(e.status).json({ error: e.message, code: e.code });
+    }
+    // G002 — Prisma P2002 (UNIQUE violation) on the
+    // (tenantId, source, idempotencyKey) constraint means a concurrent
+    // request beat us to the create. Treat as duplicate_suppressed —
+    // look up the winning row and return its id. Fail-soft if the
+    // lookup itself fails (very rare race).
+    if (e && e.code === "P2002") {
+      try {
+        // URL-supplied channel = source-alias used in the source column.
+        const rawChannelHint = req.params && req.params.channel
+          ? String(req.params.channel)
+          : null;
+        const canonicalChannelHint = rawChannelHint
+          ? normalizeChannelParam(rawChannelHint)
+          : null;
+        const idemKey = req.body && req.body.idempotencyKey
+          ? String(req.body.idempotencyKey).trim()
+          : null;
+        const tenantSlug = req.body && req.body.tenantSlug;
+        if (rawChannelHint && idemKey && tenantSlug) {
+          const t = await prisma.tenant.findUnique({
+            where: { slug: tenantSlug },
+            select: { id: true },
+          });
+          if (t) {
+            const winner = await prisma.contact.findFirst({
+              where: {
+                tenantId: t.id,
+                // Probe by the URL-form source string ("inbound:metaads")
+                // because that's what the create wrote.
+                source: `inbound:${rawChannelHint}`,
+                idempotencyKey: idemKey,
+              },
+              select: { id: true },
+            });
+            if (winner) {
+              return res.status(200).json({
+                id: winner.id,
+                contactId: winner.id,
+                tenantId: t.id,
+                // Surface the canonical channel in the envelope so consumer
+                // code can rely on the canonical taxonomy regardless of
+                // which URL form the producer hit.
+                channel: canonicalChannelHint,
+                status: "received",
+                action: "duplicate_suppressed",
+                matchedRoutingRuleId: null,
+                touchpointId: null,
+              });
+            }
+          }
+        }
+      } catch (lookupErr) {
+        console.warn(
+          "[travel-inbound-leads] P2002 fallback lookup failed:",
+          lookupErr.message,
+        );
+      }
     }
     console.error("[travel-inbound-leads] create error:", e.message);
     return res.status(500).json({ error: "Failed to ingest inbound lead" });

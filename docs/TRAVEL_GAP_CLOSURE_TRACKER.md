@@ -164,8 +164,8 @@ Highest-impact gap. PO/dispute/KYC/reconciliation entirely absent.
 | G051 | `ItineraryItem.draftedByAi: boolean` provenance (FR-3.4.h) | schema + suggest endpoint + UI badge | 0.5d | ✅ DONE 2026-06-13 — da5cc682 |
 | G052 | Bulk-day-add "extend by N days" (FR-3.3.g) | UI + route | 1d | ⬜ |
 | G053 | Conflict warnings (overlapping times, closed POIs) (FR-3.3.h) | UI + warnings lib | 1.5d | ⬜ |
-| G054 | Cost Master sightseeing 6th category — OR document decision that `TravelSightseeing` is the canonical path (FR-3.2.a) | schema decision + doc update | 0.5d | ⬜ |
-| G055 | POI deduplication ±50m on add (FR-3.2.f) | `lib/poiDedup.js` (NEW) + route | 0.5d | ⬜ |
+| G054 | Cost Master sightseeing 6th category — OR document decision that `TravelSightseeing` is the canonical path (FR-3.2.a) | schema decision + doc update | 0.5d | ✅ DONE 2026-06-13 — a065e2fa |
+| G055 | POI deduplication ±50m on add (FR-3.2.f) | `lib/poiDedup.js` (NEW) + route | 0.5d | ✅ DONE 2026-06-13 — a065e2fa |
 | G056 | Hotel + activity inline-add (FR-3.7.b) | UI + route | 1.5d | ⬜ |
 | G057 | Per-day accept/edit/reject + re-prompt-same-draft preservation (FR-3.4.e, FR-3.4.f) | route stateful suggest + UI | 2d | ⬜ |
 | G058 | Template analytics CSV export (FR-3.5.c) | route | 0.5d | ⬜ |

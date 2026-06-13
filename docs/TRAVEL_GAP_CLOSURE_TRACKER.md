@@ -124,10 +124,10 @@ PRD §10 is stale (claims 11/18; actual is 16/18). Update PRD §10 in same commi
 |---|---|---|---|---|
 | G028 | Persist invoice-level `cgstAmount/sgstAmount/igstAmount/placeOfSupply` columns on `TravelInvoice` (FR-3.2.1) | schema (additive) + tax-preview → tax-persist on save | 1d | ✅ DONE 2026-06-13 — `15613ada` |
 | G029 | Per-line GST shape (FR-3.2.2) — combined with G021 supplierId/per-line cols | shared with G021 | combined | ✅ DONE 2026-06-13 — `15613ada` |
-| G030 | Customer-ledger endpoint `GET /api/travel/invoices/customer-ledger?gstin=&fy=` (FR-3.4.4) | `routes/travel_invoices.js` + analytics lib | 1.5d | ⬜ |
-| G031 | TDS register endpoint `GET /api/travel/invoices/tds-register` (FR-3.4.6) | route + analytics | 1d | ⬜ |
-| G032 | Commission-ledger endpoint `GET /api/travel/invoices/commission-ledger` (FR-3.4.7) | route + analytics (IATA inward, distinct from B2B sub-agent ledger) | 1d | ⬜ |
-| G033 | `ServiceCategory.defaultSacCode` mapping (FR-3.1.4) | schema + seed | 0.5d | ⬜ |
+| G030 | Customer-ledger endpoint `GET /api/travel/invoices/customer-ledger?gstin=&fy=` (FR-3.4.4) | `routes/travel_invoices.js` + analytics lib | 1.5d | ✅ DONE 2026-06-13 — `dd4d2472` |
+| G031 | TDS register endpoint `GET /api/travel/invoices/tds-register` (FR-3.4.6) | route + analytics | 1d | ✅ DONE 2026-06-13 — `dd4d2472` |
+| G032 | Commission-ledger endpoint `GET /api/travel/invoices/commission-ledger` (FR-3.4.7) | route + analytics (IATA inward, distinct from B2B sub-agent ledger) | 1d | ✅ DONE 2026-06-13 — `dd4d2472` |
+| G033 | `ServiceCategory.defaultSacCode` mapping (FR-3.1.4) | schema + seed | 0.5d | ✅ DONE 2026-06-13 — `dd4d2472` |
 | G034 | `Contact.billingStateCode` column distinct from residence (FR-3.5.2) | schema (additive nullable) + buyer-state-derivation | 0.5d | ✅ DONE 2026-06-13 — `15613ada` |
 
 **§3.5 net effort: ~5.5 eng-days** (plus DD-5.2 for TaxRateMaster, Q-GST-2/3/4 for GSTIN reverse + per-sub-brand GSTINs + LUT)

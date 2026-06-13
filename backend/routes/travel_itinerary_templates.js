@@ -13,6 +13,7 @@
  *   GET    /            list, paginated (limit clamped to [1, 200]),
  *                       tenant-scoped + sub-brand narrowing + filter by
  *                       ?destinationName / ?category / ?subBrand / ?isActive
+ *                       / ?budgetTier=budget|mid|premium|luxury (G061)
  *   POST   /            create (ADMIN+MANAGER) — name + destinationName +
  *                       durationDays required; durationDays must be a
  *                       positive integer; currency validated as 3-letter
@@ -272,6 +273,37 @@ function validateDurationDays(durationDays) {
   return n;
 }
 
+// G061 — Budget-tier facet (PRD FR-3.1.c). Four buckets, each mapped to a
+// closed-open `basePriceMinor` range in INR minor units (paise). The brackets
+// target Indian travel-market reality: sub ₹50K is single-couple weekend
+// trips (Goa, nearby hill stations); ₹50K-₹1L covers most family domestic +
+// short international; ₹1L-₹2L is the standard international + Umrah
+// Standard zone; >₹2L is Umrah Premium / Maldives / Europe / luxury.
+//
+// We filter on `basePriceMinor` directly rather than `defaultPrice` (the PRD
+// names a conceptual field) because that's the column the schema actually
+// carries. The brackets ignore `currency` — the assumption is the operator
+// browsing the library is shopping INR-priced templates; mixed-currency
+// libraries can layer on a ?currency=INR filter (existing behaviour) if
+// they want stricter scoping.
+//
+// `basePriceMinor` NULL rows are silently excluded when a budget-tier filter
+// is active — they're "price-on-request" templates and don't belong to any
+// numeric bucket.
+const BUDGET_TIER_RANGES = {
+  budget:  { gte:   0,         lt:  5000000  }, // <₹50,000   (50K)
+  mid:     { gte:   5000000,   lt:  10000000 }, // ₹50K-₹1L
+  premium: { gte:   10000000,  lt:  20000000 }, // ₹1L-₹2L
+  luxury:  { gte:   20000000              }, // >₹2L
+};
+
+function budgetTierWhereClause(budgetTier) {
+  if (!budgetTier) return null;
+  const range = BUDGET_TIER_RANGES[String(budgetTier).toLowerCase()];
+  if (!range) return null;
+  return { basePriceMinor: range };
+}
+
 // GET /api/travel/itinerary-templates — list
 //
 // G048 — Default list filters to `isLatest=true AND archivedAt IS NULL` so
@@ -293,6 +325,16 @@ router.get("/", verifyToken, requireTravelTenant, async (req, res) => {
     }
     if (req.query.isActive !== undefined) {
       where.isActive = String(req.query.isActive) === "true";
+    }
+
+    // G061 — Budget-tier facet (PRD FR-3.1.c). When ?budgetTier=budget|mid|
+    // premium|luxury is supplied, narrow basePriceMinor to the bucket's
+    // range. Unknown values are silently ignored so a typo doesn't 500 the
+    // library page. NULL basePriceMinor rows are excluded when the filter
+    // is active (Prisma range comparators don't match NULL).
+    const budgetTierClause = budgetTierWhereClause(req.query.budgetTier);
+    if (budgetTierClause) {
+      Object.assign(where, budgetTierClause);
     }
 
     // G048 — version + archive filtering. String comparison against "true"

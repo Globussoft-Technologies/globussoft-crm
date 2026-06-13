@@ -218,6 +218,85 @@ describe('GET /api/travel/itinerary-templates — list', () => {
     expect(call.where.category).toBe('City Break');
     expect(call.where.isActive).toBe(true);
   });
+
+  // ─── G061 — budget-tier facet (PRD FR-3.1.c). Four buckets mapped to
+  // closed-open basePriceMinor ranges in INR minor units (paise):
+  //   budget   <₹50K    [0, 5_000_000)
+  //   mid      ₹50K-1L  [5_000_000, 10_000_000)
+  //   premium  ₹1L-2L   [10_000_000, 20_000_000)
+  //   luxury   >₹2L     [20_000_000, ∞)
+  // Unknown values silently no-op (no 400 → typo doesn't red the library).
+  test('G061 — ?budgetTier=budget narrows basePriceMinor to <₹50K range', async () => {
+    const res = await request(makeApp())
+      .get('/api/travel/itinerary-templates?budgetTier=budget')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(200);
+    const where = prisma.itineraryTemplate.findMany.mock.calls[0][0].where;
+    expect(where.basePriceMinor).toEqual({ gte: 0, lt: 5000000 });
+  });
+
+  test('G061 — ?budgetTier=mid narrows basePriceMinor to ₹50K-₹1L range', async () => {
+    const res = await request(makeApp())
+      .get('/api/travel/itinerary-templates?budgetTier=mid')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(200);
+    const where = prisma.itineraryTemplate.findMany.mock.calls[0][0].where;
+    expect(where.basePriceMinor).toEqual({ gte: 5000000, lt: 10000000 });
+  });
+
+  test('G061 — ?budgetTier=premium narrows basePriceMinor to ₹1L-₹2L range', async () => {
+    const res = await request(makeApp())
+      .get('/api/travel/itinerary-templates?budgetTier=premium')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(200);
+    const where = prisma.itineraryTemplate.findMany.mock.calls[0][0].where;
+    expect(where.basePriceMinor).toEqual({ gte: 10000000, lt: 20000000 });
+  });
+
+  test('G061 — ?budgetTier=luxury narrows basePriceMinor to >₹2L (no upper bound)', async () => {
+    const res = await request(makeApp())
+      .get('/api/travel/itinerary-templates?budgetTier=luxury')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(200);
+    const where = prisma.itineraryTemplate.findMany.mock.calls[0][0].where;
+    expect(where.basePriceMinor).toEqual({ gte: 20000000 });
+  });
+
+  test('G061 — case-insensitive bucket lookup (?budgetTier=PREMIUM works)', async () => {
+    const res = await request(makeApp())
+      .get('/api/travel/itinerary-templates?budgetTier=PREMIUM')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(200);
+    const where = prisma.itineraryTemplate.findMany.mock.calls[0][0].where;
+    expect(where.basePriceMinor).toEqual({ gte: 10000000, lt: 20000000 });
+  });
+
+  test('G061 — unknown ?budgetTier silently no-ops (no 400, no basePriceMinor clause)', async () => {
+    const res = await request(makeApp())
+      .get('/api/travel/itinerary-templates?budgetTier=mega-luxury')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(200);
+    const where = prisma.itineraryTemplate.findMany.mock.calls[0][0].where;
+    expect(where.basePriceMinor).toBeUndefined();
+  });
+
+  test('G061 — ?budgetTier combines with ?category and ?subBrand into a single where', async () => {
+    const res = await request(makeApp())
+      .get('/api/travel/itinerary-templates?budgetTier=premium&category=religious&subBrand=rfu')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(200);
+    const where = prisma.itineraryTemplate.findMany.mock.calls[0][0].where;
+    expect(where.basePriceMinor).toEqual({ gte: 10000000, lt: 20000000 });
+    expect(where.category).toBe('religious');
+    expect(where.subBrand).toBe('rfu');
+  });
 });
 
 describe('POST /api/travel/itinerary-templates — create', () => {

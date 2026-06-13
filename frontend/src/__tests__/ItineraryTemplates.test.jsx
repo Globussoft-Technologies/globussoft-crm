@@ -53,6 +53,28 @@ vi.mock('../utils/api', () => ({
   getAuthToken: () => 'test-token',
 }));
 
+// G061 — Mock MapPreview to avoid pulling in leaflet (heavy + jsdom-hostile).
+// Pattern mirrors ItineraryDetail.test.jsx's vi.mock('../components/MapPreview')
+// — the SUT's wire-in contract is what we assert (items prop pass-through +
+// presence of the map section), not the leaflet render itself which is
+// exercised by MapPreview.test.jsx.
+const mapPreviewMock = vi.fn();
+vi.mock('../components/MapPreview', () => ({
+  __esModule: true,
+  default: (props) => {
+    mapPreviewMock(props);
+    return (
+      <div
+        data-testid="map-preview-mock"
+        data-pin-count={(props.items || []).length}
+        data-height={props.height ?? ''}
+      >
+        MapPreview stub — {(props.items || []).length} items
+      </div>
+    );
+  },
+}));
+
 const notifyError = vi.fn();
 const notifySuccess = vi.fn();
 const notifyInfo = vi.fn();
@@ -179,6 +201,7 @@ beforeEach(() => {
   notifyInfo.mockReset();
   notifyConfirm.mockReset();
   notifyConfirm.mockResolvedValue(true);
+  mapPreviewMock.mockReset();
   installFetchMock();
 });
 
@@ -1064,5 +1087,361 @@ describe('<ItineraryTemplates /> — G048/G058 new UI', () => {
     });
     const cell = screen.getByTestId('tpl-version-1001');
     expect(cell.textContent).toContain('v2');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// G061 — Budget-tier filter facet + preview-before-clone modal
+// (PRD FR-3.1.c, FR-3.1.d).
+//
+// Filter facet:
+//   - 4 buckets (budget / mid / premium / luxury) selectable via dropdown
+//   - selecting a bucket threads ?budgetTier=… to the list endpoint
+//   - default (no selection) doesn't add the param
+//
+// Preview modal:
+//   - Eye icon per row opens a modal (data-testid=template-preview-modal)
+//   - Modal renders name + duration + base price + description + day-by-day
+//     summary + MapPreview (mocked)
+//   - "Clone this template" CTA POSTs /api/travel/itineraries with
+//     clonedFromTemplateId set and notify.success surfaces
+//   - "Close" / backdrop click / X dismisses the modal
+// ---------------------------------------------------------------------------
+describe('<ItineraryTemplates /> — G061 budget-tier filter facet', () => {
+  it('renders the budget tier dropdown with 4 bracket options + default "All budgets"', async () => {
+    renderPage();
+    await screen.findByText('Makkah-Madinah 10-day Umrah');
+    const select = screen.getByLabelText(/Budget tier filter/i);
+    expect(select).toBeInTheDocument();
+    // 5 options total (All + 4 brackets)
+    const options = within(select).getAllByRole('option');
+    expect(options.length).toBe(5);
+    const labels = options.map((o) => o.textContent);
+    expect(labels[0]).toMatch(/All budgets/i);
+    expect(labels[1]).toMatch(/Budget.*<.*50K/i);
+    expect(labels[2]).toMatch(/Mid.*50K.*1L/i);
+    expect(labels[3]).toMatch(/Premium.*1L.*2L/i);
+    expect(labels[4]).toMatch(/Luxury.*>.*2L/i);
+  });
+
+  it('selecting "Premium" re-fetches with ?budgetTier=premium in the URL', async () => {
+    renderPage();
+    await screen.findByText('Makkah-Madinah 10-day Umrah');
+    fetchApiMock.mockClear();
+    installFetchMock({
+      list: { items: [ITEMS_DEFAULT[0]], total: 1, limit: 20, offset: 0 },
+    });
+
+    fireEvent.change(screen.getByLabelText(/Budget tier filter/i), {
+      target: { value: 'premium' },
+    });
+
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(
+        ([u, o]) =>
+          typeof u === 'string'
+          && u.includes('budgetTier=premium')
+          && (!o?.method || o.method === 'GET'),
+      );
+      expect(call).toBeTruthy();
+    });
+  });
+
+  it('default (no selection) does NOT add ?budgetTier=… to the URL', async () => {
+    renderPage();
+    await screen.findByText('Makkah-Madinah 10-day Umrah');
+    const initialCall = fetchApiMock.mock.calls.find(
+      ([u, o]) =>
+        typeof u === 'string'
+        && u.startsWith('/api/travel/itinerary-templates?')
+        && (!o?.method || o.method === 'GET'),
+    );
+    expect(initialCall).toBeTruthy();
+    expect(initialCall[0]).not.toMatch(/budgetTier=/);
+  });
+
+  it('selecting "Budget" then resetting to "All budgets" drops the param', async () => {
+    renderPage();
+    await screen.findByText('Makkah-Madinah 10-day Umrah');
+
+    fireEvent.change(screen.getByLabelText(/Budget tier filter/i), {
+      target: { value: 'budget' },
+    });
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(
+        ([u]) => typeof u === 'string' && u.includes('budgetTier=budget'),
+      );
+      expect(call).toBeTruthy();
+    });
+
+    fetchApiMock.mockClear();
+    installFetchMock();
+
+    fireEvent.change(screen.getByLabelText(/Budget tier filter/i), {
+      target: { value: '' },
+    });
+
+    await waitFor(() => {
+      const after = fetchApiMock.mock.calls.find(
+        ([u, o]) =>
+          typeof u === 'string'
+          && u.startsWith('/api/travel/itinerary-templates?')
+          && (!o?.method || o.method === 'GET'),
+      );
+      expect(after).toBeTruthy();
+      expect(after[0]).not.toMatch(/budgetTier=/);
+    });
+  });
+});
+
+describe('<ItineraryTemplates /> — G061 preview-before-clone modal', () => {
+  // Helper: stub a template with templateJson day-by-day items so the modal
+  // can render a non-empty day-by-day plan + a non-zero pin count.
+  function makePreviewableTemplate(overrides = {}) {
+    return makeItem({
+      id: 5001,
+      name: 'Goa Beach 4-day',
+      destinationName: 'Goa',
+      durationDays: 4,
+      description: 'Beach + nightlife + heritage walk.',
+      templateJson: JSON.stringify({
+        items: [
+          {
+            dayNumber: 1,
+            position: 0,
+            itemType: 'sightseeing',
+            description: 'Calangute beach',
+            latitude: 15.5435,
+            longitude: 73.7548,
+          },
+          {
+            dayNumber: 1,
+            position: 1,
+            itemType: 'activity',
+            description: 'Sunset cruise',
+            latitude: 15.4989,
+            longitude: 73.8278,
+          },
+          {
+            dayNumber: 2,
+            position: 0,
+            itemType: 'sightseeing',
+            description: 'Old Goa church walk',
+            latitude: 15.5043,
+            longitude: 73.9117,
+          },
+        ],
+      }),
+      ...overrides,
+    });
+  }
+
+  it('renders a Preview eye-icon button per row (data-testid=preview-tpl-<id>)', async () => {
+    installFetchMock({
+      list: { items: [makePreviewableTemplate()], total: 1, limit: 20, offset: 0 },
+    });
+    renderPage();
+    await screen.findByText('Goa Beach 4-day');
+    expect(screen.getByTestId('preview-tpl-5001')).toBeInTheDocument();
+  });
+
+  it('clicking Preview opens the detail modal with name + map + day-by-day summary', async () => {
+    installFetchMock({
+      list: { items: [makePreviewableTemplate()], total: 1, limit: 20, offset: 0 },
+    });
+    renderPage();
+    await screen.findByText('Goa Beach 4-day');
+
+    fireEvent.click(screen.getByTestId('preview-tpl-5001'));
+
+    // Modal renders
+    const modal = await screen.findByTestId('template-preview-modal');
+    expect(modal).toBeInTheDocument();
+    // Header carries name + base price + duration
+    expect(within(modal).getByTestId('preview-name').textContent).toContain(
+      'Goa Beach 4-day',
+    );
+    expect(within(modal).getByText('Goa')).toBeInTheDocument();
+    expect(within(modal).getByText(/4 days/i)).toBeInTheDocument();
+    // Description visible
+    expect(
+      within(modal).getByText(/Beach \+ nightlife \+ heritage walk\./i),
+    ).toBeInTheDocument();
+    // Day-by-day groups: Day 1 and Day 2 both rendered
+    expect(within(modal).getByTestId('preview-day-1')).toBeInTheDocument();
+    expect(within(modal).getByTestId('preview-day-2')).toBeInTheDocument();
+    // Item descriptions are rendered
+    expect(within(modal).getByText(/Calangute beach/i)).toBeInTheDocument();
+    expect(within(modal).getByText(/Sunset cruise/i)).toBeInTheDocument();
+    expect(within(modal).getByText(/Old Goa church walk/i)).toBeInTheDocument();
+    // MapPreview mock receives the items prop
+    expect(mapPreviewMock).toHaveBeenCalled();
+    const props = mapPreviewMock.mock.calls[mapPreviewMock.mock.calls.length - 1][0];
+    expect(Array.isArray(props.items)).toBe(true);
+    expect(props.items.length).toBe(3);
+    // Pin count badge ("3 pins")
+    expect(within(modal).getByTestId('preview-pin-count').textContent).toMatch(
+      /3 pins/i,
+    );
+  });
+
+  it('clicking "Close" inside the modal dismisses it', async () => {
+    installFetchMock({
+      list: { items: [makePreviewableTemplate()], total: 1, limit: 20, offset: 0 },
+    });
+    renderPage();
+    await screen.findByText('Goa Beach 4-day');
+    fireEvent.click(screen.getByTestId('preview-tpl-5001'));
+    const modal = await screen.findByTestId('template-preview-modal');
+    expect(modal).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('preview-close-footer-btn'));
+    await waitFor(() => {
+      expect(screen.queryByTestId('template-preview-modal')).toBeNull();
+    });
+  });
+
+  it('clicking the X icon dismisses the modal', async () => {
+    installFetchMock({
+      list: { items: [makePreviewableTemplate()], total: 1, limit: 20, offset: 0 },
+    });
+    renderPage();
+    await screen.findByText('Goa Beach 4-day');
+    fireEvent.click(screen.getByTestId('preview-tpl-5001'));
+    await screen.findByTestId('template-preview-modal');
+    fireEvent.click(screen.getByTestId('preview-close-btn'));
+    await waitFor(() => {
+      expect(screen.queryByTestId('template-preview-modal')).toBeNull();
+    });
+  });
+
+  it('templates without lat/lng render "No mapped points of interest" placeholder, NOT MapPreview', async () => {
+    const noGeoTpl = makeItem({
+      id: 6001,
+      name: 'No-Geo Template',
+      templateJson: JSON.stringify({
+        items: [
+          { dayNumber: 1, itemType: 'activity', description: 'TBD activity' },
+        ],
+      }),
+    });
+    installFetchMock({
+      list: { items: [noGeoTpl], total: 1, limit: 20, offset: 0 },
+    });
+    renderPage();
+    await screen.findByText('No-Geo Template');
+    fireEvent.click(screen.getByTestId('preview-tpl-6001'));
+    const modal = await screen.findByTestId('template-preview-modal');
+    expect(within(modal).getByTestId('preview-no-pins')).toBeInTheDocument();
+    expect(within(modal).queryByTestId('map-preview-mock')).toBeNull();
+    // Day-by-day summary still renders the item
+    expect(within(modal).getByText(/TBD activity/i)).toBeInTheDocument();
+  });
+
+  it('templates with empty / null templateJson render "No day-by-day items" placeholder', async () => {
+    const emptyTpl = makeItem({
+      id: 7001,
+      name: 'Empty Template',
+      templateJson: null,
+    });
+    installFetchMock({
+      list: { items: [emptyTpl], total: 1, limit: 20, offset: 0 },
+    });
+    renderPage();
+    await screen.findByText('Empty Template');
+    fireEvent.click(screen.getByTestId('preview-tpl-7001'));
+    const modal = await screen.findByTestId('template-preview-modal');
+    expect(within(modal).getByTestId('preview-no-items')).toBeInTheDocument();
+    expect(within(modal).getByTestId('preview-no-pins')).toBeInTheDocument();
+  });
+
+  it('malformed templateJson silently falls back to empty (no crash, "No day-by-day items" placeholder)', async () => {
+    const badTpl = makeItem({
+      id: 7002,
+      name: 'Malformed Template',
+      templateJson: 'this is not JSON {{{',
+    });
+    installFetchMock({
+      list: { items: [badTpl], total: 1, limit: 20, offset: 0 },
+    });
+    renderPage();
+    await screen.findByText('Malformed Template');
+    fireEvent.click(screen.getByTestId('preview-tpl-7002'));
+    const modal = await screen.findByTestId('template-preview-modal');
+    expect(within(modal).getByTestId('preview-no-items')).toBeInTheDocument();
+  });
+
+  it('clicking "Clone this template" POSTs /api/travel/itineraries with clonedFromTemplateId', async () => {
+    const previewable = makePreviewableTemplate();
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = opts?.method || 'GET';
+      if (url.startsWith('/api/travel/itinerary-templates?') && method === 'GET') {
+        return Promise.resolve({
+          items: [previewable],
+          total: 1,
+          limit: 20,
+          offset: 0,
+        });
+      }
+      if (url === '/api/travel/itineraries' && method === 'POST') {
+        return Promise.resolve({ id: 9999, title: previewable.name });
+      }
+      return Promise.resolve(null);
+    });
+    renderPage();
+    await screen.findByText('Goa Beach 4-day');
+    fireEvent.click(screen.getByTestId('preview-tpl-5001'));
+    await screen.findByTestId('template-preview-modal');
+
+    fireEvent.click(screen.getByTestId('preview-clone-btn'));
+
+    await waitFor(() => {
+      const post = fetchApiMock.mock.calls.find(
+        ([u, o]) => u === '/api/travel/itineraries' && o?.method === 'POST',
+      );
+      expect(post).toBeTruthy();
+      const body = JSON.parse(post[1].body);
+      expect(body.clonedFromTemplateId).toBe(5001);
+      expect(body.title).toBe('Goa Beach 4-day');
+      expect(body.destinationName).toBe('Goa');
+      expect(body.durationDays).toBe(4);
+    });
+    await waitFor(() => {
+      expect(notifySuccess).toHaveBeenCalledWith(
+        expect.stringMatching(/Cloned "Goa Beach 4-day"/i),
+      );
+    });
+  });
+
+  it('clone failure surfaces notify.error and leaves modal open', async () => {
+    const previewable = makePreviewableTemplate();
+    const cloneErr = new Error('Cannot clone');
+    cloneErr.body = { error: 'Sub-brand forbidden' };
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = opts?.method || 'GET';
+      if (url.startsWith('/api/travel/itinerary-templates?') && method === 'GET') {
+        return Promise.resolve({
+          items: [previewable],
+          total: 1,
+          limit: 20,
+          offset: 0,
+        });
+      }
+      if (url === '/api/travel/itineraries' && method === 'POST') {
+        return Promise.reject(cloneErr);
+      }
+      return Promise.resolve(null);
+    });
+    renderPage();
+    await screen.findByText('Goa Beach 4-day');
+    fireEvent.click(screen.getByTestId('preview-tpl-5001'));
+    await screen.findByTestId('template-preview-modal');
+
+    fireEvent.click(screen.getByTestId('preview-clone-btn'));
+
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalledWith('Sub-brand forbidden');
+    });
+    // Modal stays open so operator can retry / read the error
+    expect(screen.getByTestId('template-preview-modal')).toBeInTheDocument();
   });
 });

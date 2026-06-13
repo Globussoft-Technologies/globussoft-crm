@@ -244,3 +244,137 @@ test.describe("Travel invoice exports — happy paths", () => {
     expect((await csv.text())).toContain("Invoice Number,Invoice Date");
   });
 });
+
+// ─── Tax persist endpoint (G028 + G029) ─────────────────────────────
+//
+// POST /api/travel/invoices/:id/tax-persist — writes the on-the-fly
+// tax-preview output to TravelInvoice (cgst/sgst/igst/placeOfSupply/
+// totalTaxAmount/gstComputedAt) + per-line columns on TravelInvoiceLine.
+// RBAC: ADMIN/MANAGER only. Idempotent (re-run overwrites + bumps
+// gstComputedAt).
+//
+// Demo-state-aware: we pick the first invoice the admin can read +
+// persist against it. If no invoices exist (fresh demo), skip the
+// happy-path round-trip — the RBAC + 404 cases still run.
+test.describe("Travel invoice tax-persist — G028 + G029", () => {
+  test("USER role on tax-persist → 403", async ({ request }) => {
+    const userToken = await getTravelUser(request);
+    if (!userToken) {
+      test.skip(true, "telecaller@travelstall.demo not seeded");
+      return;
+    }
+    const adminToken = await getTravelAdmin(request);
+    if (!adminToken) {
+      test.skip(true, "travel admin login unavailable");
+      return;
+    }
+    // Discover an invoice id (read-only — admin scope).
+    const listRes = await retryOn5xx(() =>
+      request.get(`${BASE_URL}/api/travel/invoices?limit=1`, {
+        headers: headers(adminToken),
+        timeout: REQUEST_TIMEOUT,
+      }),
+    );
+    if (listRes.status() !== 200) {
+      test.skip(true, "could not list invoices for discovery");
+      return;
+    }
+    const body = await listRes.json();
+    const invoices = Array.isArray(body) ? body : (body.invoices || body.rows || []);
+    if (!invoices.length) {
+      test.skip(true, "no invoices to probe tax-persist 403 against");
+      return;
+    }
+    const invoiceId = invoices[0].id;
+
+    // USER token attempt → must be denied (write-side guard).
+    const persistRes = await retryOn5xx(() =>
+      request.post(`${BASE_URL}/api/travel/invoices/${invoiceId}/tax-persist`, {
+        headers: headers(userToken),
+        data: {},
+        timeout: REQUEST_TIMEOUT,
+      }),
+    );
+    expect(persistRes.status()).toBe(403);
+  });
+
+  test("ADMIN tax-persist round-trip → 200 + persisted=true + gstComputedAt present", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) {
+      test.skip(true, "travel admin login unavailable");
+      return;
+    }
+    // Discover an invoice to persist against.
+    const listRes = await retryOn5xx(() =>
+      request.get(`${BASE_URL}/api/travel/invoices?limit=1`, {
+        headers: headers(token),
+        timeout: REQUEST_TIMEOUT,
+      }),
+    );
+    if (listRes.status() !== 200) {
+      test.skip(true, "could not list invoices");
+      return;
+    }
+    const body = await listRes.json();
+    const invoices = Array.isArray(body) ? body : (body.invoices || body.rows || []);
+    if (!invoices.length) {
+      test.skip(true, "no invoices in demo to round-trip");
+      return;
+    }
+    const invoiceId = invoices[0].id;
+
+    // First: read the tax-preview surface so we have a reference shape.
+    const previewRes = await retryOn5xx(() =>
+      request.get(`${BASE_URL}/api/travel/invoices/${invoiceId}/tax-preview`, {
+        headers: headers(token),
+        timeout: REQUEST_TIMEOUT,
+      }),
+    );
+    expect(previewRes.status()).toBe(200);
+    const preview = await previewRes.json();
+
+    // Then: persist. Re-running is the canonical idempotent path so
+    // we don't need to worry about prior state.
+    const persistRes = await retryOn5xx(() =>
+      request.post(`${BASE_URL}/api/travel/invoices/${invoiceId}/tax-persist`, {
+        headers: headers(token),
+        data: {},
+        timeout: REQUEST_TIMEOUT,
+      }),
+    );
+    expect(persistRes.status()).toBe(200);
+    const persist = await persistRes.json();
+
+    // Envelope contract.
+    expect(persist.persisted).toBe(true);
+    expect(typeof persist.gstComputedAt).toBe("string");
+    expect(persist.invoiceId).toBe(invoiceId);
+    expect(typeof persist.linesPersistedCount).toBe("number");
+    expect(typeof persist.isInterstate).toBe("boolean");
+    expect(typeof persist.placeOfSupply).toBe("string");
+
+    // The persisted totals must match the preview totals (single source
+    // of truth: lib/gstCalculation.js).
+    expect(persist.totalCgst).toBeCloseTo(preview.totalCgst, 2);
+    expect(persist.totalSgst).toBeCloseTo(preview.totalSgst, 2);
+    expect(persist.totalIgst).toBeCloseTo(preview.totalIgst, 2);
+    expect(persist.totalTax).toBeCloseTo(preview.totalTax, 2);
+  });
+
+  test("tax-persist on unknown id → 404 INVOICE_NOT_FOUND", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) {
+      test.skip(true, "travel admin login unavailable");
+      return;
+    }
+    const res = await retryOn5xx(() =>
+      request.post(`${BASE_URL}/api/travel/invoices/9999999/tax-persist`, {
+        headers: headers(token),
+        data: {},
+        timeout: REQUEST_TIMEOUT,
+      }),
+    );
+    expect(res.status()).toBe(404);
+    expect((await res.json()).code).toBe("INVOICE_NOT_FOUND");
+  });
+});

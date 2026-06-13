@@ -709,6 +709,15 @@ model Contact {
   // mirrors Tenant.gstStateCode (intra-state default) when null.
   stateCode String?
 
+  // PRD_TRAVEL_GST_COMPLIANCE FR-3.5.2 (G034) — billing-address state code
+  // distinct from residence-state. A traveller may live in Karnataka
+  // (stateCode='IN-KA') but bill to a corporate AP desk in Maharashtra
+  // ('IN-MH'); GST place-of-supply rules tax based on billing-address,
+  // not residence. The resolver (lib/gstStateCodeResolver.js) prefers
+  // billingStateCode when populated and falls back to stateCode when
+  // NULL — back-compat with pre-G034 rows.
+  billingStateCode String?
+
   // PRD_TRAVEL_B2B_AGENT_PORTAL #905 slice 6 — TravelCommissionProfile
   // assignment for B2B agent contacts. Nullable so generic + wellness +
   // travel-direct-consumer Contacts ignore it entirely. Set via
@@ -6480,6 +6489,38 @@ model TravelInvoice {
   tcsRate              Decimal?                        @db.Decimal(5, 2)
   tcsExceedingAmount   Decimal?                        @db.Decimal(15, 2)
   tcsAppliedAt         DateTime?
+  // PRD_TRAVEL_GST_COMPLIANCE FR-3.2.1 (G028 + G029) — invoice-level
+  // CGST/SGST/IGST persistence + place-of-supply. Persisted by the
+  // POST /:id/tax-persist endpoint; populated by computing the
+  // existing tax-preview pipeline once and writing the result. NULL
+  // means "not yet persisted" — the route falls back to the on-the-fly
+  // tax-preview compute for backwards-compat with pre-G028 rows.
+  //
+  //   placeOfSupply  — 2-char (or ISO-3166-2-style "IN-MH") state code
+  //                    matching the gstStateCode/Contact.stateCode shape.
+  //                    Persisted at compute-time so issued PDFs/exports
+  //                    stay pinned to the historical place-of-supply
+  //                    even if Contact.stateCode changes later.
+  //   cgst/sgst/igst Percent/Amount — invoice-level totals (aggregated
+  //                    across all lines). Decimal(15,2) for amounts;
+  //                    Decimal(5,2) for percent rates (max 100.00).
+  //                    For intra-state supplies cgstAmount + sgstAmount
+  //                    are populated and igstAmount=0; for inter-state
+  //                    igstAmount is populated and cgst/sgst=0.
+  //   totalTaxAmount — sum of cgst + sgst + igst (denorm for fast
+  //                    "what was the total tax?" reads in reports).
+  //   gstComputedAt  — sentinel timestamp; NULL means uncomputed;
+  //                    non-NULL means the tax-persist endpoint has run
+  //                    at least once. Idempotency: re-running overwrites.
+  placeOfSupply        String?
+  cgstAmount           Decimal?                        @db.Decimal(15, 2)
+  sgstAmount           Decimal?                        @db.Decimal(15, 2)
+  igstAmount           Decimal?                        @db.Decimal(15, 2)
+  cgstPercent          Decimal?                        @db.Decimal(5, 2)
+  sgstPercent          Decimal?                        @db.Decimal(5, 2)
+  igstPercent          Decimal?                        @db.Decimal(5, 2)
+  totalTaxAmount       Decimal?                        @db.Decimal(15, 2)
+  gstComputedAt        DateTime?
   // Arc 2 #901 slice 11 — Doc-type taxonomy (PRD_TRAVEL_BILLING FR-3.x).
   // Nullable with default "TaxInvoice"; new rows get the default, existing
   // rows remain NULL (route layer treats NULL as "TaxInvoice"). Enum values:
@@ -6617,17 +6658,17 @@ model CancellationPolicy {
 // (TravelInvoice.delete is a hard-delete for Draft invoices per route
 // comment at the DELETE handler), the line rows go with it.
 model TravelInvoiceLine {
-  id               Int           @id @default(autoincrement())
-  tenantId         Int           @default(1)
+  id               Int             @id @default(autoincrement())
+  tenantId         Int             @default(1)
   invoiceId        Int
-  lineType         String        @default("other") // per_pax | per_room | per_night | per_trip | tax | fee | addon | tcs | tds | other
+  lineType         String          @default("other") // per_pax | per_room | per_night | per_trip | tax | fee | addon | tcs | tds | other
   description      String
-  quantity         Int           @default(1)
-  unitPrice        Decimal       @db.Decimal(15, 2)
-  amount           Decimal       @db.Decimal(15, 2)
-  currency         String        @default("INR")
-  sortOrder        Int           @default(0)
-  notes            String?       @db.Text
+  quantity         Int             @default(1)
+  unitPrice        Decimal         @db.Decimal(15, 2)
+  amount           Decimal         @db.Decimal(15, 2)
+  currency         String          @default("INR")
+  sortOrder        Int             @default(0)
+  notes            String?         @db.Text
   // FR-3.1.b — per-line PNR / supplier booking-reference (free-form).
   // pnr: 6-char airline/GDS PNR typically; cap at 20 to allow supplier
   //   suffix variants (e.g. "ABC123-LEG2"). bookingRef is the alternative
@@ -6650,15 +6691,57 @@ model TravelInvoiceLine {
   // 6dp precision on the rate accommodates inverse-quote pairs like
   // USD→INR=0.012048 (1 / 83.00); 2dp on baseAmount matches the existing
   // Decimal(15,2) convention used across TravelInvoice + TravelQuote.
-  fxRateToBase     Decimal?      @db.Decimal(15, 6)
-  baseAmount       Decimal?      @db.Decimal(15, 2)
-  invoice          TravelInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
-  tenant           Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  createdAt        DateTime      @default(now())
-  updatedAt        DateTime      @updatedAt
+  fxRateToBase     Decimal?        @db.Decimal(15, 6)
+  baseAmount       Decimal?        @db.Decimal(15, 2)
+  // PRD_TRAVEL_BILLING FR-3.1.c, e, f, g + PRD_TRAVEL_GST_COMPLIANCE FR-3.2.2
+  // (G021 + G029). Per-line supplier + cost/sell margin + HSN/SAC + per-line
+  // GST split persistence. All ADDITIVE NULLABLE — pre-G021 rows leave the
+  // columns NULL; the route layer treats NULL as "uncomputed" and falls
+  // back to the on-the-fly tax-preview path. Existing on-the-fly tax-preview
+  // continues to work unchanged for legacy rows.
+  //
+  //   supplierId  — FK to TravelSupplier. NULL = customer-direct line (no
+  //                 supplier involved, e.g. service-fee). onDelete:
+  //                 SetNull so deleting a supplier mid-flight doesn't
+  //                 cascade through historical lines (matches the
+  //                 supplier-aware policies elsewhere in the schema).
+  //   isAddon     — true for upsell add-ons (excursions, lounge access,
+  //                 travel insurance riders). Drives margin reporting +
+  //                 commission gating per FR-3.1.g. Default false so
+  //                 unmarked lines stay base-package by default.
+  //   lineCost    — what WE pay the supplier. Persisted for COGS reporting.
+  //   lineSell    — what the customer pays for THIS line (typically equals
+  //                 `amount` but kept separate for promo/discount surfaces
+  //                 where sell != amount-charged-to-invoice).
+  //   hsnSac      — HSN (goods) or SAC (services) code resolved at
+  //                 issue-time. Persisted so the GSTR-1 export pins the
+  //                 historical SAC even if hsnSacMapper.js's mapping
+  //                 changes in a future release.
+  //   cgst/sgst/igst Percent/Amount — per-line GST split. populated by the
+  //                 POST /:id/tax-persist endpoint. Same Decimal(15,2)
+  //                 convention as totalAmount; rates use Decimal(5,2)
+  //                 (max 100.00).
+  supplierId       Int?
+  isAddon          Boolean         @default(false)
+  lineCost         Decimal?        @db.Decimal(15, 2)
+  lineSell         Decimal?        @db.Decimal(15, 2)
+  hsnSac           String?
+  cgstPercent      Decimal?        @db.Decimal(5, 2)
+  cgstAmount       Decimal?        @db.Decimal(15, 2)
+  sgstPercent      Decimal?        @db.Decimal(5, 2)
+  sgstAmount       Decimal?        @db.Decimal(15, 2)
+  igstPercent      Decimal?        @db.Decimal(5, 2)
+  igstAmount       Decimal?        @db.Decimal(15, 2)
+  invoice          TravelInvoice   @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  tenant           Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  supplier         TravelSupplier? @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
 
   @@index([tenantId, invoiceId])
   @@index([invoiceId, sortOrder])
+  @@index([tenantId, supplierId])
+  @@index([tenantId, hsnSac])
 }
 
 // PRD_TRAVEL_BILLING FR-3.2.a — payment-schedule milestones.
@@ -6772,6 +6855,12 @@ model TravelSupplier {
   createdAt             DateTime                            @default(now())
   updatedAt             DateTime                            @updatedAt
   travelPurchaseOrders  TravelPurchaseOrder[]
+  // PRD_TRAVEL_BILLING FR-3.1.c (G021) — back-relation for per-line
+  // supplier attribution on customer invoice lines. Each TravelInvoiceLine
+  // may optionally pin which supplier the line was sourced from for
+  // COGS / margin reporting; onDelete: SetNull at the child side keeps
+  // historical lines intact when a supplier row is removed.
+  invoiceLines          TravelInvoiceLine[]
 
   @@index([tenantId, subBrand])
   @@index([tenantId, subBrand, supplierCategory])

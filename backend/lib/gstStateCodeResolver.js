@@ -15,8 +15,12 @@
 //      (the route may pass `req.query.operatorStateCode || null`
 //      without coercing empties; keep the helper forgiving).
 //   2. DB column lookup — Tenant.gstStateCode for operator,
-//      Contact.stateCode for customer. Both columns are nullable
-//      (slice 3 adds them as additive-nullable, existing rows = NULL).
+//      Contact.billingStateCode (G034 — PRD_TRAVEL_GST_COMPLIANCE FR-3.5.2)
+//      then Contact.stateCode for customer. billingStateCode wins
+//      when present — a traveller may live in Karnataka but bill to
+//      a corporate AP desk in Maharashtra; GST is taxed by billing
+//      address. stateCode is the fallback when billingStateCode is
+//      NULL so pre-G034 rows keep working. All columns are nullable.
 //   3. Hard-coded "IN-MH" — preserves the slice-2 query-param default
 //      so behaviour stays back-compat for callers that don't pass
 //      tenantId/contactId AND don't pass overrides.
@@ -88,14 +92,21 @@ async function resolveStateCodes({
   }
   operatorCode = operatorCode || DEFAULT_OPERATOR_STATE;
 
-  // 2. Customer side
+  // 2. Customer side — billingStateCode (G034) wins over stateCode
+  //    when present. Pre-G034 rows have billingStateCode=NULL and the
+  //    fallback to stateCode keeps them on the same branch they were
+  //    on before. The select pulls BOTH columns in one round-trip so
+  //    the resolver doesn't fire two queries for a Contact lookup.
   let customerCode = customerOverride || null;
   if (!customerCode && contactId) {
     const contact = await prisma.contact.findUnique({
       where: { id: contactId },
-      select: { stateCode: true },
+      select: { stateCode: true, billingStateCode: true },
     });
-    customerCode = (contact && contact.stateCode) || null;
+    customerCode =
+      (contact && contact.billingStateCode) ||
+      (contact && contact.stateCode) ||
+      null;
   }
   // Mirror operator when customer is unknown — intra-state default keeps
   // the customer on the CGST/SGST branch until data lands.

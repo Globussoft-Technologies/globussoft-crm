@@ -545,19 +545,21 @@ describe('GET /api/travel/quotes/:id/tax-preview — slice 4 resolver wiring', (
     });
   });
 
-  test('no customer override → prisma.contact.findUnique called with select: { stateCode: true } and where.id = quote.contactId', async () => {
+  test('no customer override → prisma.contact.findUnique called with select: { stateCode: true, billingStateCode: true } and where.id = quote.contactId', async () => {
     prisma.travelQuote.findFirst.mockResolvedValue(parentQuote({ contactId: 999 }));
     prisma.travelQuoteLine.findMany.mockResolvedValue([]);
     stubTenantWithGstCode('IN-MH');
-    prisma.contact.findUnique.mockResolvedValue({ stateCode: 'IN-KA' });
+    prisma.contact.findUnique.mockResolvedValue({ stateCode: 'IN-KA', billingStateCode: null });
 
     await request(makeApp())
       .get('/api/travel/quotes/100/tax-preview')
       .set('Authorization', `Bearer ${tokenFor('USER')}`);
 
+    // G034 (FR-3.5.2) extended the select shape with billingStateCode
+    // so the resolver can prefer billing-address state over residence.
     expect(prisma.contact.findUnique).toHaveBeenCalledWith({
       where: { id: 999 },
-      select: { stateCode: true },
+      select: { stateCode: true, billingStateCode: true },
     });
   });
 

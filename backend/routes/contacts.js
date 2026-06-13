@@ -69,6 +69,18 @@ function validateContactInput(body, { isUpdate = false } = {}) {
     const gstErr = ensureGst(body.gst);
     if (gstErr) return gstErr;
   }
+  // PRD_TRAVEL_GST_COMPLIANCE FR-3.5.2 (G034) + slice-3 stateCode shape —
+  // ISO-3166-2-style state codes, max 10 chars. Both columns share the
+  // same format pattern (e.g. "IN-MH"). We don't enforce the IN- prefix
+  // here (format-agnostic per gstStateCodeResolver.js docs) — the
+  // resolver returns whatever the DB stores. Length-cap is the only
+  // gate against Prisma column-overflow.
+  for (const sc of ["stateCode", "billingStateCode"]) {
+    if (body[sc] !== undefined && body[sc] !== null && body[sc] !== "") {
+      const scErr = ensureStringLength(body[sc], { max: 10, field: sc });
+      if (scErr) return scErr;
+    }
+  }
   // PRD Gap §1.1a / §1.1d — anniversary + birthDate. Both optional, both
   // validated as bounded dates (≥1900, ≤+1y from now). The +1y upper
   // bound on anniversary catches "anniversary in 2099" data-entry typos

@@ -203,11 +203,14 @@ describe('gstStateCodeResolver — prisma call shape', () => {
   });
 
   test('prisma.contact.findUnique called with correct where + select shape', async () => {
+    // G034 (FR-3.5.2) — resolver selects BOTH stateCode AND
+    // billingStateCode in one round-trip so it can prefer the
+    // billing-address state code when present.
     const prisma = makePrismaStub({ contactRow: { stateCode: 'IN-KA' } });
     await resolveStateCodes({ prisma, contactId: 77 });
     expect(prisma.contact.findUnique).toHaveBeenCalledWith({
       where: { id: 77 },
-      select: { stateCode: true },
+      select: { stateCode: true, billingStateCode: true },
     });
   });
 });
@@ -311,5 +314,71 @@ describe('gstStateCodeResolver — edge / async-error', () => {
     });
     expect(result.operatorStateCode).toBe('IN-TN');
     expect(prisma.tenant.findUnique).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ============================================================================
+// G034 (PRD_TRAVEL_GST_COMPLIANCE FR-3.5.2) — billingStateCode preference
+//
+// Pins the new resolution chain on the customer side:
+//   1. customerOverride          (highest — caller-supplied wins)
+//   2. Contact.billingStateCode  (NEW — billing-address state for GST)
+//   3. Contact.stateCode         (legacy residence state — fallback)
+//   4. operator-mirror           (intra-state default when both NULL)
+//
+// All 4 cases are additive — pre-G034 Contact rows have
+// billingStateCode=NULL so resolution falls through to stateCode and
+// behaviour stays identical.
+// ============================================================================
+describe('gstStateCodeResolver — G034 billingStateCode preference', () => {
+  test('billingStateCode populated → wins over stateCode', async () => {
+    // Customer LIVES in IN-KA (residence) but BILLS to a corporate AP
+    // desk in IN-MH. GST place-of-supply rules tax based on billing
+    // address — so the resolver MUST return IN-MH (billing) not IN-KA.
+    const prisma = makePrismaStub({
+      tenantRow: { gstStateCode: 'IN-GJ' },
+      contactRow: { stateCode: 'IN-KA', billingStateCode: 'IN-MH' },
+    });
+    const result = await resolveStateCodes({ prisma, tenantId: 1, contactId: 5 });
+    expect(result.operatorStateCode).toBe('IN-GJ');
+    expect(result.customerStateCode).toBe('IN-MH');
+  });
+
+  test('billingStateCode NULL + stateCode populated → falls back to stateCode (pre-G034 rows)', async () => {
+    // Pre-G034 Contact rows leave billingStateCode=NULL. Resolver must
+    // continue using stateCode so back-compat with the slice-3 contract
+    // is preserved.
+    const prisma = makePrismaStub({
+      tenantRow: { gstStateCode: 'IN-GJ' },
+      contactRow: { stateCode: 'IN-KA', billingStateCode: null },
+    });
+    const result = await resolveStateCodes({ prisma, tenantId: 1, contactId: 5 });
+    expect(result.customerStateCode).toBe('IN-KA');
+  });
+
+  test('billingStateCode + stateCode BOTH NULL → mirrors operator (intra-state default)', async () => {
+    const prisma = makePrismaStub({
+      tenantRow: { gstStateCode: 'IN-GJ' },
+      contactRow: { stateCode: null, billingStateCode: null },
+    });
+    const result = await resolveStateCodes({ prisma, tenantId: 1, contactId: 5 });
+    expect(result.customerStateCode).toBe('IN-GJ');
+  });
+
+  test('customerOverride wins over billingStateCode + stateCode both present', async () => {
+    // override at the top of the chain — neither DB column matters.
+    const prisma = makePrismaStub({
+      tenantRow: { gstStateCode: 'IN-GJ' },
+      contactRow: { stateCode: 'IN-KA', billingStateCode: 'IN-MH' },
+    });
+    const result = await resolveStateCodes({
+      prisma,
+      tenantId: 1,
+      contactId: 5,
+      customerOverride: 'IN-TN',
+    });
+    expect(result.customerStateCode).toBe('IN-TN');
+    // DB lookup is skipped entirely when override wins.
+    expect(prisma.contact.findUnique).not.toHaveBeenCalled();
   });
 });

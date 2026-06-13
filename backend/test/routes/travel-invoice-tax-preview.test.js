@@ -401,10 +401,14 @@ describe('GET /api/travel/invoices/:id/tax-preview — happy paths', () => {
     expect(res.body.isInterstate).toBe(true);
     // Inter-state per_room ₹1000 @ 18% → igst=180, cgst=sgst=0
     expect(res.body.lines[0]).toMatchObject({ cgst: 0, sgst: 0, igst: 180 });
-    // Verify resolver actually consulted Contact.findUnique with stateCode select
+    // Verify resolver actually consulted Contact.findUnique with the
+    // billingStateCode + stateCode select. G034 (FR-3.5.2) added
+    // billingStateCode to the select so the resolver can prefer the
+    // billing-address state over residence state — the shape is now
+    // a two-column select.
     expect(prisma.contact.findUnique).toHaveBeenCalledWith({
       where: { id: 999 },
-      select: { stateCode: true },
+      select: { stateCode: true, billingStateCode: true },
     });
   });
 

@@ -7181,6 +7181,266 @@ router.get(
 );
 
 // ============================================================================
+// POST /api/travel/invoices/:id/tax-persist — G028 + G029 + G021/G034 wire-up.
+//
+// PRD_TRAVEL_GST_COMPLIANCE FR-3.2.1 (G028 — invoice-level cgst/sgst/igst/
+// placeOfSupply persistence) + FR-3.2.2 (G029 — per-line GST split persistence
+// on TravelInvoiceLine.cgst/sgst/igstPercent/Amount columns). Pairs with G021
+// (line-extension columns including HSN/SAC) + G034 (Contact.billingStateCode
+// preferred over residence stateCode via the resolver).
+//
+// RBAC: ADMIN / MANAGER only — writes are mutations to the persisted tax
+// record; USER role can preview via /tax-preview but cannot persist.
+//
+// Idempotency: re-running OVERWRITES the existing tax columns + bumps
+// gstComputedAt to now. No 409 — the operator workflow is "I corrected
+// a line, rerun the persist." If a future slice needs an immutability
+// lock at issue-time, gate it via status (Draft-only persist) — for now
+// any non-Voided invoice may re-persist.
+//
+// Body shape:
+//   { operatorStateCode?: string, customerStateCode?: string }
+// Both optional. When provided, they override the resolver's default
+// chain (same semantics as /tax-preview's query-string overrides).
+// Empty-string is rejected with 400 INVALID_STATE_CODE (defense-in-depth).
+//
+// Response envelope: matches /tax-preview's envelope + adds
+//   { gstComputedAt, persisted: true, linesPersistedCount }
+// so the operator UI can confirm both the WRITE happened AND the values
+// match the preview surface. Per-line totals come from the SAME compute
+// path as /tax-preview — drift between the two endpoints is intentional-
+// ly impossible (single source of truth: lib/gstCalculation.js).
+//
+// Write strategy:
+//   1. Resolve state codes (same chain as tax-preview).
+//   2. Load lines, compute per-line GST split (mirrors tax-preview math).
+//   3. Compute bucket-level totals via computeGstForLines (spec-aligned).
+//   4. Open a $transaction:
+//      a. Update each TravelInvoiceLine with its computed
+//         cgstPercent/cgstAmount/sgstPercent/sgstAmount/igstPercent/igstAmount.
+//      b. Update the parent TravelInvoice with the rolled-up totals +
+//         placeOfSupply (customerStateCode) + gstComputedAt = now().
+//   5. Re-read + return the persisted envelope.
+//
+// Cross-cutting note: existing invoices without `gstComputedAt` continue
+// to use the on-the-fly /tax-preview compute. Frontend consumers that
+// read cgstAmount etc. directly off the invoice should fall back to
+// computing via /tax-preview if those columns are NULL.
+//
+// Auto-call from status flip (deferred): when an invoice transitions
+// Draft → Issued, the PUT /:id handler MAY auto-fire this endpoint if
+// gstComputedAt is null. NOT wired in this slice — the explicit
+// operator-driven persist keeps the surface debuggable. Future slice
+// can wire it as a side-effect after the persist contract beds in.
+// ============================================================================
+router.post(
+  "/invoices/:id/tax-persist",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const invoiceId = parseInt(req.params.id, 10);
+      const invoice = await loadParentInvoice(req, res, invoiceId);
+      if (!invoice) return;
+
+      // Empty-string validation (mirrors tax-preview) — defensive against
+      // callers sending {"operatorStateCode": ""} expecting "no override"
+      // semantics; we reject explicitly instead of falling through to the
+      // resolver's empty-string-as-no-override coercion.
+      const rawOp = req.body && req.body.operatorStateCode;
+      const rawCu = req.body && req.body.customerStateCode;
+      if (rawOp != null && String(rawOp).trim() === "") {
+        return res.status(400).json({
+          error: "operatorStateCode must not be empty",
+          code: "INVALID_STATE_CODE",
+        });
+      }
+      if (rawCu != null && String(rawCu).trim() === "") {
+        return res.status(400).json({
+          error: "customerStateCode must not be empty",
+          code: "INVALID_STATE_CODE",
+        });
+      }
+
+      const { operatorStateCode, customerStateCode } = await resolveStateCodes({
+        prisma,
+        tenantId: req.travelTenant.id,
+        contactId: invoice.contactId,
+        operatorOverride: rawOp != null ? String(rawOp).trim() : null,
+        customerOverride: rawCu != null ? String(rawCu).trim() : null,
+      });
+
+      let isInterstate;
+      try {
+        isInterstate = isInterstateSupply(operatorStateCode, customerStateCode);
+      } catch (e) {
+        return res.status(400).json({
+          error: e.message,
+          code: "INVALID_STATE_CODE",
+        });
+      }
+
+      const lines = await prisma.travelInvoiceLine.findMany({
+        where: { invoiceId, tenantId: req.travelTenant.id },
+        orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
+      });
+
+      const round2 = (n) => Math.round(n * 100) / 100;
+
+      // Per-line compute — same math as tax-preview.
+      const lineUpdates = [];
+      const normalizedForBuckets = [];
+      for (const l of lines) {
+        const amt = Number(l.amount || 0);
+        const gstPercent = gstRateForCategory(l.lineType);
+        const totalTax = round2((amt * gstPercent) / 100);
+        let cgst = 0;
+        let sgst = 0;
+        let igst = 0;
+        let cgstP = 0;
+        let sgstP = 0;
+        let igstP = 0;
+        if (isInterstate) {
+          igst = totalTax;
+          igstP = gstPercent;
+        } else {
+          const halfRate = gstPercent / 2;
+          cgst = round2((amt * halfRate) / 100);
+          sgst = round2((amt * halfRate) / 100);
+          cgstP = halfRate;
+          sgstP = halfRate;
+        }
+        const sacCode = sacForLineType(l.lineType);
+        lineUpdates.push({
+          id: l.id,
+          // G021 — persist HSN/SAC at compute-time so historical exports
+          // stay pinned to the mapper's value at issue-time. Preserve any
+          // pre-existing hsnSac (operator override) — fall back to the
+          // mapper only when the column is currently NULL.
+          hsnSac: l.hsnSac != null ? l.hsnSac : sacCode,
+          cgstPercent: cgstP,
+          cgstAmount: cgst,
+          sgstPercent: sgstP,
+          sgstAmount: sgst,
+          igstPercent: igstP,
+          igstAmount: igst,
+        });
+        normalizedForBuckets.push({ taxableAmount: amt, gstPercent });
+      }
+
+      // Bucket-level totals — spec-aligned per FR-3.4.3 (matches
+      // /tax-preview's envelope).
+      const bucketSummary = computeGstForLines(
+        normalizedForBuckets,
+        isInterstate,
+      );
+
+      // Aggregate the dominant per-line GST percent for the invoice
+      // header columns. When all lines share a rate the percent is
+      // exact; on mixed-rate invoices we pin the BUCKET-MAX rate as a
+      // representative label (operators viewing the header still see
+      // the "highest GST band" — the lines[] array carries the per-line
+      // truth + the buckets[] array carries the rate-grouped truth).
+      let headerCgstP = 0;
+      let headerSgstP = 0;
+      let headerIgstP = 0;
+      for (const b of bucketSummary.buckets) {
+        if (isInterstate) {
+          if (b.gstPercent > headerIgstP) headerIgstP = b.gstPercent;
+        } else {
+          const half = b.gstPercent / 2;
+          if (half > headerCgstP) headerCgstP = half;
+          if (half > headerSgstP) headerSgstP = half;
+        }
+      }
+
+      const computedAt = new Date();
+
+      // $transaction — line writes + invoice write atomic. Sequencing the
+      // line updates inside a transaction makes the "all lines correct or
+      // no change" guarantee. updateMany on a per-line basis isn't
+      // available (different values per line) so we issue N updates
+      // inside one transaction.
+      await prisma.$transaction([
+        ...lineUpdates.map((u) =>
+          prisma.travelInvoiceLine.update({
+            where: { id: u.id },
+            data: {
+              hsnSac: u.hsnSac,
+              cgstPercent: u.cgstPercent,
+              cgstAmount: u.cgstAmount,
+              sgstPercent: u.sgstPercent,
+              sgstAmount: u.sgstAmount,
+              igstPercent: u.igstPercent,
+              igstAmount: u.igstAmount,
+            },
+          }),
+        ),
+        prisma.travelInvoice.update({
+          where: { id: invoice.id },
+          data: {
+            placeOfSupply: customerStateCode,
+            cgstAmount: bucketSummary.totalCgst,
+            sgstAmount: bucketSummary.totalSgst,
+            igstAmount: bucketSummary.totalIgst,
+            cgstPercent: headerCgstP,
+            sgstPercent: headerSgstP,
+            igstPercent: headerIgstP,
+            totalTaxAmount: bucketSummary.totalTax,
+            gstComputedAt: computedAt,
+          },
+        }),
+      ]);
+
+      // Audit row — operator-driven mutation; pin the totals + state
+      // codes so a future audit query can see what was persisted.
+      try {
+        await writeAudit(
+          "TravelInvoice",
+          "GST_PERSIST",
+          invoice.id,
+          req.user.userId,
+          req.travelTenant.id,
+          {
+            placeOfSupply: customerStateCode,
+            isInterstate,
+            totalTax: bucketSummary.totalTax,
+            lineCount: lineUpdates.length,
+          },
+        );
+      } catch (_e) {
+        // Audit failures are non-fatal — the persist already landed.
+      }
+
+      res.json({
+        invoiceId: invoice.id,
+        persisted: true,
+        gstComputedAt: computedAt.toISOString(),
+        linesPersistedCount: lineUpdates.length,
+        operatorStateCode,
+        customerStateCode,
+        placeOfSupply: customerStateCode,
+        isInterstate,
+        subtotal: bucketSummary.subtotal,
+        totalCgst: bucketSummary.totalCgst,
+        totalSgst: bucketSummary.totalSgst,
+        totalIgst: bucketSummary.totalIgst,
+        totalTax: bucketSummary.totalTax,
+        grandTotal: bucketSummary.grandTotal,
+        buckets: bucketSummary.buckets,
+      });
+    } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-invoices] tax-persist error:", e.message);
+      res.status(500).json({ error: "Failed to persist tax breakdown" });
+    }
+  },
+);
+
+// ============================================================================
 // POST /api/travel/invoices/:id/clone-as-recurring — Arc 2 #901 slice 16.
 //
 // PRD_TRAVEL_BILLING §3.4 (recurring billing). Operator-action "Clone for

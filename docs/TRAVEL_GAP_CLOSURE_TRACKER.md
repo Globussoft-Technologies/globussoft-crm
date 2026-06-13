@@ -108,7 +108,7 @@ PRD §10 is stale (claims 11/18; actual is 16/18). Update PRD §10 in same commi
 
 | ID | Slice | Files | Effort | Status |
 |---|---|---|---|---|
-| G021 | `TravelInvoiceLine` extension: `supplierId`, `isAddon`, `lineCost`, `lineSell`, per-line `cgstAmount/sgstAmount/igstAmount` (FR-3.1.c, e, f, g) | schema (additive) + route + UI | 2d | ⬜ |
+| G021 | `TravelInvoiceLine` extension: `supplierId`, `isAddon`, `lineCost`, `lineSell`, per-line `cgstAmount/sgstAmount/igstAmount` (FR-3.1.c, e, f, g) | schema (additive) + route + UI | 2d | ✅ DONE 2026-06-13 — `15613ada` |
 | G022 | Supplier-payable batch run (FR-3.5.e) + invoice-line origin FK (`TravelSupplierPayable.invoiceLineId`) | schema + route | 2d | ⬜ |
 | G023 | Supplier-payable dispute workflow (FR-3.5.f) | schema (`TravelSupplierPayableDispute`) + route + UI | 2d | ⬜ |
 | G024 | Settlement-timeline Gantt view (FR-3.6.c) | `frontend/.../SettlementGantt.jsx` (NEW) | 2d | ⬜ |
@@ -122,13 +122,13 @@ PRD §10 is stale (claims 11/18; actual is 16/18). Update PRD §10 in same commi
 
 | ID | Slice | Files | Effort | Status |
 |---|---|---|---|---|
-| G028 | Persist invoice-level `cgstAmount/sgstAmount/igstAmount/placeOfSupply` columns on `TravelInvoice` (FR-3.2.1) | schema (additive) + tax-preview → tax-persist on save | 1d | ⬜ |
-| G029 | Per-line GST shape (FR-3.2.2) — combined with G021 supplierId/per-line cols | shared with G021 | combined | ⬜ |
+| G028 | Persist invoice-level `cgstAmount/sgstAmount/igstAmount/placeOfSupply` columns on `TravelInvoice` (FR-3.2.1) | schema (additive) + tax-preview → tax-persist on save | 1d | ✅ DONE 2026-06-13 — `15613ada` |
+| G029 | Per-line GST shape (FR-3.2.2) — combined with G021 supplierId/per-line cols | shared with G021 | combined | ✅ DONE 2026-06-13 — `15613ada` |
 | G030 | Customer-ledger endpoint `GET /api/travel/invoices/customer-ledger?gstin=&fy=` (FR-3.4.4) | `routes/travel_invoices.js` + analytics lib | 1.5d | ⬜ |
 | G031 | TDS register endpoint `GET /api/travel/invoices/tds-register` (FR-3.4.6) | route + analytics | 1d | ⬜ |
 | G032 | Commission-ledger endpoint `GET /api/travel/invoices/commission-ledger` (FR-3.4.7) | route + analytics (IATA inward, distinct from B2B sub-agent ledger) | 1d | ⬜ |
 | G033 | `ServiceCategory.defaultSacCode` mapping (FR-3.1.4) | schema + seed | 0.5d | ⬜ |
-| G034 | `Contact.billingStateCode` column distinct from residence (FR-3.5.2) | schema (additive nullable) + buyer-state-derivation | 0.5d | ⬜ |
+| G034 | `Contact.billingStateCode` column distinct from residence (FR-3.5.2) | schema (additive nullable) + buyer-state-derivation | 0.5d | ✅ DONE 2026-06-13 — `15613ada` |
 
 **§3.5 net effort: ~5.5 eng-days** (plus DD-5.2 for TaxRateMaster, Q-GST-2/3/4 for GSTIN reverse + per-sub-brand GSTINs + LUT)
 

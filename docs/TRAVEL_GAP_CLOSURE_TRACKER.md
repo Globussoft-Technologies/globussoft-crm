@@ -162,17 +162,17 @@ Highest-impact gap. PO/dispute/KYC/reconciliation entirely absent.
 | G049 | Template metrics: `acceptedCount`, `avgFinalPrice`, `lastUsedAt` (FR-3.1.h) | schema + on-quote-accept hook | 1d | ✅ DONE 2026-06-13 — da5cc682 |
 | G050 | "Save current itinerary as template" action (FR-3.1.f) | route + UI button | 1d | ✅ DONE 2026-06-13 — fea965a5 |
 | G051 | `ItineraryItem.draftedByAi: boolean` provenance (FR-3.4.h) | schema + suggest endpoint + UI badge | 0.5d | ✅ DONE 2026-06-13 — da5cc682 |
-| G052 | Bulk-day-add "extend by N days" (FR-3.3.g) | UI + route | 1d | ⬜ |
-| G053 | Conflict warnings (overlapping times, closed POIs) (FR-3.3.h) | UI + warnings lib | 1.5d | ⬜ |
+| G052 | Bulk-day-add "extend by N days" (FR-3.3.g) | UI + route | 1d | ✅ DONE 2026-06-13 — `02e01665` |
+| G053 | Conflict warnings (overlapping times, closed POIs) (FR-3.3.h) | UI + warnings lib | 1.5d | ✅ DONE 2026-06-13 — `02e01665` |
 | G054 | Cost Master sightseeing 6th category — OR document decision that `TravelSightseeing` is the canonical path (FR-3.2.a) | schema decision + doc update | 0.5d | ✅ DONE 2026-06-13 — a065e2fa |
 | G055 | POI deduplication ±50m on add (FR-3.2.f) | `lib/poiDedup.js` (NEW) + route | 0.5d | ✅ DONE 2026-06-13 — a065e2fa |
-| G056 | Hotel + activity inline-add (FR-3.7.b) | UI + route | 1.5d | ⬜ |
-| G057 | Per-day accept/edit/reject + re-prompt-same-draft preservation (FR-3.4.e, FR-3.4.f) | route stateful suggest + UI | 2d | ⬜ |
+| G056 | Hotel + activity inline-add (FR-3.7.b) | UI + route | 1.5d | ✅ DONE 2026-06-13 — `02e01665` |
+| G057 | Per-day accept/edit/reject + re-prompt-same-draft preservation (FR-3.4.e, FR-3.4.f) | route stateful suggest + UI | 2d | ✅ DONE 2026-06-13 — `02e01665` |
 | G058 | Template analytics CSV export (FR-3.5.c) | route | 0.5d | ✅ DONE 2026-06-13 — fea965a5 |
 | G059 | Initial ~50-template seed across sub-brands (FR-3.1.g) | `prisma/seed-travel.js` extension | 1d (content-light) | ✅ DONE 2026-06-13 — `f38ee887` |
-| G060 | Live re-pricing inside ItineraryEditor (FR-3.3.f) — verify hook | UI integration verification | 0.5d | ⬜ |
+| G060 | Live re-pricing inside ItineraryEditor (FR-3.3.f) — verify hook | UI integration verification | 0.5d | ✅ DONE 2026-06-13 — `02e01665` |
 | G061 | Filter facets: budget-tier + map preview before clone (FR-3.1.c, FR-3.1.d) | UI | 1d | ✅ DONE 2026-06-13 — `8243b9e7` |
-| G062 | Keyboard shortcuts on editor (FR-3.6) | UI | 0.5d | ⬜ |
+| G062 | Keyboard shortcuts on editor (FR-3.6) | UI | 0.5d | ✅ DONE 2026-06-13 — `02e01665` |
 
 **§3.7 net effort: ~14 eng-days**
 

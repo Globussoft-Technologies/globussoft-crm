@@ -169,7 +169,7 @@ Highest-impact gap. PO/dispute/KYC/reconciliation entirely absent.
 | G056 | Hotel + activity inline-add (FR-3.7.b) | UI + route | 1.5d | ⬜ |
 | G057 | Per-day accept/edit/reject + re-prompt-same-draft preservation (FR-3.4.e, FR-3.4.f) | route stateful suggest + UI | 2d | ⬜ |
 | G058 | Template analytics CSV export (FR-3.5.c) | route | 0.5d | ⬜ |
-| G059 | Initial ~50-template seed across sub-brands (FR-3.1.g) | `prisma/seed-travel.js` extension | 1d (content-light) | ⬜ |
+| G059 | Initial ~50-template seed across sub-brands (FR-3.1.g) | `prisma/seed-travel.js` extension | 1d (content-light) | ✅ DONE 2026-06-13 — `f38ee887` |
 | G060 | Live re-pricing inside ItineraryEditor (FR-3.3.f) — verify hook | UI integration verification | 0.5d | ⬜ |
 | G061 | Filter facets: budget-tier + map preview before clone (FR-3.1.c, FR-3.1.d) | UI | 1d | ⬜ |
 | G062 | Keyboard shortcuts on editor (FR-3.6) | UI | 0.5d | ⬜ |

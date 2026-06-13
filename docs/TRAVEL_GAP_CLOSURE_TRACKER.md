@@ -171,7 +171,7 @@ Highest-impact gap. PO/dispute/KYC/reconciliation entirely absent.
 | G058 | Template analytics CSV export (FR-3.5.c) | route | 0.5d | ✅ DONE 2026-06-13 — fea965a5 |
 | G059 | Initial ~50-template seed across sub-brands (FR-3.1.g) | `prisma/seed-travel.js` extension | 1d (content-light) | ✅ DONE 2026-06-13 — `f38ee887` |
 | G060 | Live re-pricing inside ItineraryEditor (FR-3.3.f) — verify hook | UI integration verification | 0.5d | ⬜ |
-| G061 | Filter facets: budget-tier + map preview before clone (FR-3.1.c, FR-3.1.d) | UI | 1d | ⬜ |
+| G061 | Filter facets: budget-tier + map preview before clone (FR-3.1.c, FR-3.1.d) | UI | 1d | ✅ DONE 2026-06-13 — `8243b9e7` |
 | G062 | Keyboard shortcuts on editor (FR-3.6) | UI | 0.5d | ⬜ |
 
 **§3.7 net effort: ~14 eng-days**

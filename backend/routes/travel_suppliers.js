@@ -3060,6 +3060,9 @@ router.post(
         // Slice 1 (#903) — payment terms + credit-tracking + metadata.
         paymentTermsDays, creditLimit, creditCurrency, taxRegimeCode,
         primaryContactRole, notes,
+        // G045 — supplier-side default commission rate (used as fallback
+        // by the commission ledger when an accrual omits commissionPercent).
+        commissionPercent,
       } = req.body || {};
 
       if (!name || !String(name).trim()) {
@@ -3073,6 +3076,15 @@ router.post(
       assertValidPaymentTerms(paymentTermsDays);
       assertValidCreditLimit(creditLimit);
       if (subBrand) assertValidSubBrand(subBrand);
+      if (commissionPercent != null) {
+        const cp = Number(commissionPercent);
+        if (!Number.isFinite(cp) || cp < 0 || cp > 100) {
+          return res.status(400).json({
+            error: "commissionPercent must be 0-100",
+            code: "INVALID_COMMISSION_PERCENT",
+          });
+        }
+      }
 
       // Sub-brand isolation: reject create that targets a sub-brand the
       // caller can't access. Same pattern as travel_itineraries POST.
@@ -3100,6 +3112,7 @@ router.post(
           taxRegimeCode: taxRegimeCode ? String(taxRegimeCode) : null,
           primaryContactRole: primaryContactRole ? String(primaryContactRole) : null,
           notes: notes ? String(notes) : null,
+          commissionPercent: commissionPercent != null ? String(commissionPercent) : null,
         },
       });
 
@@ -3152,6 +3165,8 @@ router.put(
         // Slice 1 (#903) — payment terms + credit-tracking + metadata.
         paymentTermsDays, creditLimit, creditCurrency, taxRegimeCode,
         primaryContactRole, notes,
+        // G045 — supplier-side default commission rate.
+        commissionPercent,
       } = req.body || {};
 
       if (name !== undefined) {
@@ -3202,6 +3217,20 @@ router.put(
       }
       if (notes !== undefined) {
         data.notes = notes ? String(notes) : null;
+      }
+      if (commissionPercent !== undefined) {
+        if (commissionPercent != null) {
+          const cp = Number(commissionPercent);
+          if (!Number.isFinite(cp) || cp < 0 || cp > 100) {
+            return res.status(400).json({
+              error: "commissionPercent must be 0-100",
+              code: "INVALID_COMMISSION_PERCENT",
+            });
+          }
+          data.commissionPercent = String(commissionPercent);
+        } else {
+          data.commissionPercent = null;
+        }
       }
 
       if (Object.keys(data).length === 0) {

@@ -478,6 +478,10 @@ const marketingRoutes = require("./routes/marketing");
 const reportsRoutes = require("./routes/reports");
 const developerRoutes = require("./routes/developer");
 const settingsRoutes = require("./routes/settings");
+// G009 (PRD_TRAVEL_MULTICHANNEL_LEADS FR-3.7) — admin surface for per-channel
+// toggles + cooldowns + Meta form-ID → sub-brand routing mappings. Distinct
+// from the generic settings route above (which owns webhook signing creds).
+const leadCaptureSettingsRoutes = require("./routes/lead_capture_settings");
 const billingRoutes = require("./routes/billing");
 const v1InvoicesRoutes = require("./routes/v1_invoices");
 const searchRoutes = require("./routes/search");
@@ -814,6 +818,10 @@ app.use("/api/deals_documents", dealsDocumentsRoutes);
 app.use("/api/marketing", marketingRoutes);
 app.use("/api/reports", reportsRoutes);
 app.use("/api/developer", developerRoutes);
+// G009 — mount BEFORE generic /api/settings so the more-specific prefix wins
+// even though settings.js has no catch-all today; defensive against future
+// surface additions on the generic settings router.
+app.use("/api/settings/lead-capture", leadCaptureSettingsRoutes);
 app.use("/api/settings", settingsRoutes);
 app.use("/api/billing", billingRoutes);
 // PRD Gap §2 items 7a-d — `/api/v1/invoices` stable public-API alias for the
@@ -1009,6 +1017,11 @@ app.use("/api/travel", travelTripBillingRoutes);
 app.use("/api/travel", travelWebcheckinRoutes);
 app.use("/api/travel", travelTravelStallRoutes);
 app.use("/api/travel", require("./routes/travel_inbound_leads"));
+// PRD_TRAVEL_MULTICHANNEL_LEADS G015 — canonical body-channel alias.
+// Routes to /api/leads/intake; the alias router forwards to the legacy
+// /api/travel/inbound/leads/:channel handler so both surfaces share one
+// envelope, idempotency contract, Touchpoint write, and cooldown gate.
+app.use("/api/leads", require("./routes/leads_intake"));
 app.use("/api/travel/itinerary-templates", require("./routes/travel_itinerary_templates"));
 app.use("/api/travel/sightseeing", require("./routes/travel_sightseeing"));
 app.use("/api/travel/pois", require("./routes/travel_pois"));

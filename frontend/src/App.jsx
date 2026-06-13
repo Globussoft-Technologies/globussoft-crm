@@ -43,6 +43,10 @@ const Marketing = lazy(() => import("./pages/Marketing"));
 const Reports = lazy(() => import("./pages/Reports"));
 const AgentReports = lazy(() => import("./pages/AgentReports"));
 const Settings = lazy(() => import("./pages/Settings"));
+// G009 (PRD_TRAVEL_MULTICHANNEL_LEADS FR-3.7) — admin page for per-channel
+// enable/disable toggles + cooldowns + Meta form-ID routing mappings.
+// ADMIN-only via RoleGuard at the route declaration below.
+const LeadCapture = lazy(() => import("./pages/settings/LeadCapture"));
 const UserSettings = lazy(() => import("./pages/UserSettings"));
 const Developer = lazy(() => import("./pages/Developer"));
 const Portal = lazy(() => import("./pages/Portal"));
@@ -1161,6 +1165,15 @@ export default function App() {
                         roles.read so non-ADMIN admins with the RBAC grant can
                         still reach it. */}
                     <Route path="settings/roles" element={<RolesAdmin />} />
+                    {/* G009 — Multi-channel Lead Capture admin (FR-3.7). */}
+                    <Route
+                      path="settings/lead-capture"
+                      element={
+                        <RoleGuard allow={["ADMIN"]} message="Lead Capture settings require admin access.">
+                          <LeadCapture />
+                        </RoleGuard>
+                      }
+                    />
                     <Route path="notification-settings" element={<UserSettings />} />
                     {/* #589: Audit Log is ADMIN-only (mirrors Sidebar's
                         adminOnly visibility + the "System Admin Required"

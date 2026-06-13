@@ -13,11 +13,20 @@
 // Future: spin up a travel-specific Deal detail page if the generic
 // page misses Travel-specific drilldown (diagnosticId link, sub-brand
 // pipeline stage labels). Phase 1 reuses the generic page.
+//
+// G010 (PRD_TRAVEL_MULTICHANNEL_LEADS FR-3.6.2, FR-3.6.3) — adds:
+//   - ?view=inbox query param that flips to an inbox-timeline layout
+//     grouped by recent-touch.
+//   - Channel chip filter row above the lead list. Chips read enabled
+//     channels from /api/settings/lead-capture (falls back to ALL
+//     channels on 403 — non-ADMIN users still see chips but no auth-
+//     surface for the underlying settings).
+//   - URL persistence for `?channel=` so chip selection survives shares.
 
-import { useContext, useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { useContext, useEffect, useMemo, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import {
-  AlertCircle, Filter, Plus, RefreshCw, Tag, UserPlus, UserCircle, X,
+  AlertCircle, Filter, Inbox, LayoutGrid, Plus, RefreshCw, Tag, UserPlus, UserCircle, X,
 } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
@@ -28,6 +37,21 @@ import {
   defaultSubBrandFor,
   subBrandShortLabel,
 } from "../../utils/travelSubBrand";
+
+// G010 — canonical 17-channel allowlist, mirrors backend allowlist. Used as
+// a fallback when /api/settings/lead-capture is not reachable (USER role).
+const FALLBACK_CHANNELS = [
+  "voyagr", "web_form", "whatsapp", "ads", "adsgpt", "meta_ad", "manual",
+  "indiamart", "justdial", "tradeindia", "voice", "sms", "email",
+  "google_ad", "linkedin_ad", "referral", "chat",
+];
+const CHANNEL_SHORT_LABELS = {
+  voyagr: "Voyagr", web_form: "Web", whatsapp: "WhatsApp",
+  ads: "Ads", adsgpt: "AdsGPT", meta_ad: "Meta", manual: "Manual",
+  indiamart: "IndiaMART", justdial: "JustDial", tradeindia: "TradeIndia",
+  voice: "Voice", sms: "SMS", email: "Email",
+  google_ad: "Google", linkedin_ad: "LinkedIn", referral: "Referral", chat: "Chat",
+};
 
 const SUB_BRANDS = [
   { value: "", label: "All sub-brands" },
@@ -63,6 +87,38 @@ export default function TravelLeads() {
   const [form, setForm] = useState(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
   const [contacts, setContacts] = useState([]);
+  // G010 — URL-driven view + channel state. Default grid view (back-compat).
+  const [searchParams, setSearchParams] = useSearchParams();
+  const view = searchParams.get("view") === "inbox" ? "inbox" : "grid";
+  const channelFilter = searchParams.get("channel") || "";
+  // Channel allowlist + enabled flags loaded from /api/settings/lead-capture.
+  // ADMIN-gated endpoint; non-ADMIN sees a 403 and falls back to FALLBACK.
+  const [channelsEnabled, setChannelsEnabled] = useState({});
+  const [allowedChannels, setAllowedChannels] = useState(FALLBACK_CHANNELS);
+
+  useEffect(() => {
+    fetchApi("/api/settings/lead-capture")
+      .then((res) => {
+        if (Array.isArray(res?.allowedChannels) && res.allowedChannels.length) {
+          setAllowedChannels(res.allowedChannels);
+        }
+        setChannelsEnabled(res?.channels || {});
+      })
+      .catch(() => {
+        // 403 (non-ADMIN) or 500 — show all channels with no enabled-state
+        // information. Backend filter still applies if a chip is selected.
+        setChannelsEnabled({});
+      });
+  }, []);
+
+  const setUrlParam = (key, value) => {
+    const next = new URLSearchParams(searchParams);
+    if (value) next.set(key, value);
+    else next.delete(key);
+    setSearchParams(next, { replace: true });
+  };
+  const setView = (v) => setUrlParam("view", v === "inbox" ? "inbox" : "");
+  const setChannelFilter = (c) => setUrlParam("channel", c);
 
   // Sub-brands this user may create a lead under. A user restricted to a
   // single brand has it auto-selected (no dropdown); admins + multi-brand
@@ -110,6 +166,7 @@ export default function TravelLeads() {
     const qs = new URLSearchParams();
     if (subBrand) qs.set("subBrand", subBrand);
     if (stage) qs.set("stage", stage);
+    if (channelFilter) qs.set("channel", channelFilter);
     qs.set("limit", "200");
     fetchApi(`/api/deals?${qs.toString()}`)
       .then((res) => setDeals(Array.isArray(res) ? res : []))
@@ -119,7 +176,30 @@ export default function TravelLeads() {
       })
       .finally(() => setLoading(false));
   };
-  useEffect(load, [subBrand, stage]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(load, [subBrand, stage, channelFilter]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // G010 — per-channel counts from the currently-loaded deals window.
+  // Server-side count would be more accurate cross-paginated; the chip
+  // counts here reflect the loaded window (limit=200), which is fine for
+  // a directional ops UX. NB: deal.channel may be null for legacy rows.
+  const channelCounts = useMemo(() => {
+    const out = {};
+    for (const d of deals) {
+      const c = d?.channel || "manual";
+      out[c] = (out[c] || 0) + 1;
+    }
+    return out;
+  }, [deals]);
+
+  // G010 — chips visible to the operator: prefer the explicitly-enabled
+  // set if the settings GET succeeded, else show the full allowlist.
+  const visibleChannels = useMemo(() => {
+    const hasEnabledMap = channelsEnabled && Object.keys(channelsEnabled).length > 0;
+    if (hasEnabledMap) {
+      return allowedChannels.filter((c) => channelsEnabled[c]);
+    }
+    return allowedChannels;
+  }, [allowedChannels, channelsEnabled]);
 
   return (
     <div style={{ padding: 24, maxWidth: 1200, margin: "0 auto" }}>
@@ -132,7 +212,30 @@ export default function TravelLeads() {
             Unified deal pipeline across all sub-brands. Server-scoped to the caller&apos;s sub-brand access.
           </p>
         </div>
-        <div style={{ display: "flex", gap: 8 }}>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          {/* G010 — view toggle (Grid / Inbox) — URL-persisted */}
+          <div role="tablist" aria-label="View mode" style={viewToggleStyle}>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={view === "grid"}
+              onClick={() => setView("grid")}
+              style={view === "grid" ? viewToggleActive : viewToggleBtn}
+              aria-label="Grid view"
+            >
+              <LayoutGrid size={14} aria-hidden /> Grid
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={view === "inbox"}
+              onClick={() => setView("inbox")}
+              style={view === "inbox" ? viewToggleActive : viewToggleBtn}
+              aria-label="Inbox view"
+            >
+              <Inbox size={14} aria-hidden /> Inbox
+            </button>
+          </div>
           <button type="button" onClick={openCreate} style={primaryBtn} aria-label="Create a new travel lead">
             <Plus size={14} /> New Travel Lead
           </button>
@@ -141,6 +244,32 @@ export default function TravelLeads() {
           </button>
         </div>
       </header>
+
+      {/* G010 — channel chip filter (FR-3.6.2). Clicking a chip narrows
+          to that channel + persists ?channel= in the URL. "All" clears. */}
+      <div style={chipRow} role="toolbar" aria-label="Filter by channel">
+        <button
+          type="button"
+          onClick={() => setChannelFilter("")}
+          style={!channelFilter ? chipActive : chipStyle}
+          aria-pressed={!channelFilter}
+        >
+          All <span style={chipCount}>{deals.length}</span>
+        </button>
+        {visibleChannels.map((c) => (
+          <button
+            key={c}
+            type="button"
+            onClick={() => setChannelFilter(c)}
+            style={channelFilter === c ? chipActive : chipStyle}
+            aria-pressed={channelFilter === c}
+            aria-label={`Filter by ${c}`}
+          >
+            {CHANNEL_SHORT_LABELS[c] || c}
+            <span style={chipCount}>{channelCounts[c] || 0}</span>
+          </button>
+        ))}
+      </div>
 
       <div style={filterRow}>
         <Filter size={14} aria-hidden style={{ color: "var(--text-secondary)" }} />
@@ -163,6 +292,62 @@ export default function TravelLeads() {
             <AlertCircle size={18} aria-hidden style={{ color: "var(--warning-color)", marginRight: 8, verticalAlign: -3 }} />
             No deals match the current filters.
           </div>
+        ) : view === "inbox" ? (
+          // G010 — inbox-style timeline grouped by recent-touch. Each row
+          // shows the lead title, channel badge, sub-brand chip, last
+          // touchpoint timestamp + action badge (if shape carries one).
+          <ul style={inboxList} aria-label="Lead inbox">
+            {deals
+              .slice()
+              .sort((a, b) => {
+                const at = new Date(a.updatedAt || a.createdAt || 0).getTime();
+                const bt = new Date(b.updatedAt || b.createdAt || 0).getTime();
+                return bt - at;
+              })
+              .map((d) => (
+                <li key={d.id} style={inboxRow}>
+                  <div style={inboxRowMain}>
+                    <Link to={`/deals/${d.id}`} style={inboxTitle}>
+                      {d.title || `Deal #${d.id}`}
+                    </Link>
+                    {d.channel && (
+                      <span style={channelBadge} aria-label={`Channel ${d.channel}`}>
+                        {CHANNEL_SHORT_LABELS[d.channel] || d.channel}
+                      </span>
+                    )}
+                    {d.action && (
+                      <span style={actionBadge(d.action)} aria-label={`Action ${d.action}`}>
+                        {d.action}
+                      </span>
+                    )}
+                    {d.subBrand && <span style={brandBadge}>{d.subBrand}</span>}
+                    <span style={stageBadge(d.stage)}>{d.stage}</span>
+                  </div>
+                  <div style={inboxRowMeta}>
+                    {d.contactId ? (
+                      <Link to={`/travel/leads/${d.contactId}`} style={{ ...dealLink, fontWeight: 500 }}>
+                        <UserCircle size={14} aria-hidden />
+                        {d.contact?.name || d.contact?.email || `Contact #${d.contactId}`}
+                      </Link>
+                    ) : (
+                      <span style={{ color: "var(--text-secondary)" }}>
+                        {d.contact?.name || d.contact?.email || "no contact"}
+                      </span>
+                    )}
+                    <span style={{ color: "var(--text-secondary)", fontSize: 12 }}>
+                      {d.amount != null
+                        ? `${d.currency || "USD"} ${Number(d.amount).toLocaleString()}`
+                        : ""}
+                    </span>
+                    <span style={{ color: "var(--text-secondary)", fontSize: 12, marginLeft: "auto" }}>
+                      {d.updatedAt || d.createdAt
+                        ? new Date(d.updatedAt || d.createdAt).toLocaleString()
+                        : ""}
+                    </span>
+                  </div>
+                </li>
+              ))}
+          </ul>
         ) : (
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
@@ -427,3 +612,85 @@ const brandBadge = {
   background: "var(--subtle-bg-3)", color: "var(--primary-color)",
   textTransform: "uppercase", letterSpacing: 0.5,
 };
+// G010 — chip filter + view toggle + inbox view styles
+const chipRow = {
+  display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 10,
+  padding: 8, borderRadius: 8,
+  background: "var(--subtle-bg)",
+  border: "1px solid var(--border-color)",
+};
+const chipStyle = {
+  display: "inline-flex", alignItems: "center", gap: 4,
+  padding: "4px 10px", borderRadius: 999, fontSize: 12, fontWeight: 500,
+  background: "var(--surface-color)", color: "var(--text-secondary)",
+  border: "1px solid var(--border-color)", cursor: "pointer",
+};
+const chipActive = {
+  ...chipStyle,
+  background: "var(--primary-color, var(--accent-color))",
+  color: "var(--accent-text, #fff)",
+  border: "1px solid var(--primary-color, var(--accent-color))",
+};
+const chipCount = {
+  fontSize: 11, fontWeight: 600, opacity: 0.8,
+  marginLeft: 4,
+};
+const viewToggleStyle = {
+  display: "inline-flex",
+  border: "1px solid var(--border-color)", borderRadius: 6, overflow: "hidden",
+  background: "var(--surface-color)",
+};
+const viewToggleBtn = {
+  display: "inline-flex", alignItems: "center", gap: 4,
+  padding: "6px 10px", fontSize: 12, fontWeight: 500,
+  background: "transparent", color: "var(--text-secondary)",
+  border: "none", cursor: "pointer",
+};
+const viewToggleActive = {
+  ...viewToggleBtn,
+  background: "var(--primary-color, var(--accent-color))",
+  color: "var(--accent-text, #fff)",
+};
+const inboxList = {
+  listStyle: "none", margin: 0, padding: 0,
+};
+const inboxRow = {
+  padding: "10px 14px",
+  borderBottom: "1px solid var(--border-light)",
+  display: "flex", flexDirection: "column", gap: 4,
+};
+const inboxRowMain = {
+  display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8,
+};
+const inboxRowMeta = {
+  display: "flex", flexWrap: "wrap", alignItems: "center", gap: 12,
+  color: "var(--text-secondary)", fontSize: 13,
+};
+const inboxTitle = {
+  color: "var(--primary-color)", textDecoration: "none", fontWeight: 600,
+  fontSize: 14,
+};
+const channelBadge = {
+  padding: "2px 8px", borderRadius: 999, fontSize: 11, fontWeight: 600,
+  background: "var(--subtle-bg)", color: "var(--text-primary)",
+  border: "1px solid var(--border-color)",
+};
+function actionBadge(action) {
+  const base = {
+    padding: "2px 8px", borderRadius: 4, fontSize: 11, fontWeight: 600,
+    textTransform: "uppercase", letterSpacing: 0.5,
+  };
+  switch (action) {
+    case "created":
+      return { ...base, background: "var(--subtle-bg-2)", color: "var(--success-color)" };
+    case "merged":
+    case "touchpoint_appended":
+    case "appended":
+      return { ...base, background: "var(--subtle-bg-3)", color: "var(--primary-color)" };
+    case "duplicate":
+    case "duplicate_suppressed":
+      return { ...base, background: "var(--subtle-bg)", color: "var(--text-secondary)" };
+    default:
+      return { ...base, background: "var(--subtle-bg)", color: "var(--text-secondary)" };
+  }
+}

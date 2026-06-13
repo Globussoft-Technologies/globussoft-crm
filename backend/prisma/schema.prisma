@@ -245,6 +245,20 @@ model Tenant {
   /// Shape: { "tmc": "light", "rfu": "dark", "travelstall": "system", "visasure": "light" }
   subBrandThemes                      String?                             @db.Text
 
+  // PRD_TRAVEL_MULTICHANNEL_LEADS G009 (FR-3.7.1) — per-channel enable/disable
+  // toggles surfaced on /settings/lead-capture. JSON-string column per
+  // CLAUDE.md convention. Shape: { "voyagr": true, "web_form": true, ... }.
+  // Null = default-enabled for all known channels (ingress is opt-in via
+  // platform-wide allowlist, not per-tenant). Consumed by the lead-capture
+  // settings route + downstream intake handler.
+  leadCaptureChannelsJson  String?              @db.Text
+  /// PRD_TRAVEL_MULTICHANNEL_LEADS G009 (FR-3.7.2) — per-channel cooldown
+  /// window in seconds. JSON-string column. Shape:
+  /// { "voyagr": 3600, "whatsapp": 0, ... }. Null/missing-key = 0 (cooldown
+  /// disabled for that channel). Range guard 0-86400 enforced in the route.
+  leadCaptureCooldownsJson String?              @db.Text
+  formRoutingMappings      FormRoutingMapping[]
+
   // Subscriptions
   subscriptions Subscription[]
 
@@ -7581,4 +7595,28 @@ model TravelSupplierInvoiceUpload {
 
   @@index([tenantId, supplierId, matchStatus])
   @@index([tenantId, payableId])
+}
+
+// PRD_TRAVEL_MULTICHANNEL_LEADS G009 (FR-3.7.3, FR-3.3.6) — Meta lead-ad
+// form-ID → sub-brand → assignment-team mapping. Surfaced via the
+// /settings/lead-capture admin UI; consumed by the inbound intake route to
+// resolve sub-brand + initial assignee from a webhook's externalFormId.
+// Brand-new model with zero existing rows — the (tenantId, channel,
+// externalFormId) UNIQUE is vacuously safe but the [allow-unique] bless
+// marker is in the commit body per migration-check gate convention.
+model FormRoutingMapping {
+  id             Int      @id @default(autoincrement())
+  tenantId       Int
+  channel        String // typically 'meta_ad'; also 'google_ad', 'web_form'
+  externalFormId String
+  subBrand       String?
+  assignedTeamId Int?
+  isActive       Boolean  @default(true)
+  notes          String?  @db.Text
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, channel, externalFormId])
+  @@index([tenantId, channel])
 }

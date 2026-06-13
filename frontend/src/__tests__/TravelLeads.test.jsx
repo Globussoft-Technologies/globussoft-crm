@@ -599,3 +599,143 @@ describe('<TravelLeads /> — new-lead drawer + create POST', () => {
     );
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────
+// G010 — channel chip filter + ?view=inbox layout switch
+// (PRD_TRAVEL_MULTICHANNEL_LEADS FR-3.6.2, FR-3.6.3)
+// ─────────────────────────────────────────────────────────────────────
+
+// Extends the fetch mock to handle the new /api/settings/lead-capture
+// GET that the page now fires on mount. Falls back to the existing
+// /api/deals + /api/contacts handlers.
+function installFetchMockWithSettings({
+  list = DEALS_DEFAULT,
+  contacts = CONTACTS_DEFAULT,
+  settings = null,
+} = {}) {
+  fetchApiMock.mockImplementation((url, opts) => {
+    const method = opts?.method || 'GET';
+    if (url === '/api/settings/lead-capture' && method === 'GET') {
+      if (settings instanceof Error) return Promise.reject(settings);
+      return Promise.resolve(
+        settings || {
+          channels: { web_form: true, whatsapp: true, meta_ad: true },
+          cooldowns: {},
+          formRoutingMappings: [],
+          allowedChannels: ['web_form', 'whatsapp', 'meta_ad', 'voyagr', 'manual'],
+          cooldownRange: { min: 0, max: 86400 },
+        },
+      );
+    }
+    if (url.startsWith('/api/deals') && method === 'GET') {
+      if (list instanceof Error) return Promise.reject(list);
+      return Promise.resolve(list);
+    }
+    if (url.startsWith('/api/contacts') && method === 'GET') {
+      return Promise.resolve(contacts);
+    }
+    return Promise.resolve(null);
+  });
+}
+
+describe('<TravelLeads /> — G010 channel chip filter', () => {
+  beforeEach(() => {
+    fetchApiMock.mockReset();
+    notifyError.mockReset();
+    notifySuccess.mockReset();
+    installFetchMockWithSettings();
+  });
+
+  it('renders chip row with All + enabled channels + counts', async () => {
+    renderPage();
+    // Wait for settings GET to land
+    await waitFor(() => {
+      const seen = fetchApiMock.mock.calls.some(
+        ([url]) => url === '/api/settings/lead-capture',
+      );
+      expect(seen).toBe(true);
+    });
+    // "All" chip always present
+    const all = await screen.findByRole('button', { name: /^All/ });
+    expect(all).toBeInTheDocument();
+    // Enabled channels render (web_form / whatsapp / meta_ad).
+    // The chip text is the short label "Web" / "WhatsApp" / "Meta".
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Filter by web_form' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Filter by whatsapp' })).toBeInTheDocument();
+    });
+  });
+
+  it('clicking a chip writes ?channel= to the URL', async () => {
+    renderPage();
+    const whatsappChip = await screen.findByRole('button', { name: 'Filter by whatsapp' });
+    fireEvent.click(whatsappChip);
+    // load() should re-fire with ?channel=whatsapp
+    await waitFor(() => {
+      const calls = fetchApiMock.mock.calls.filter(
+        ([u]) => typeof u === 'string' && u.startsWith('/api/deals'),
+      );
+      const last = calls[calls.length - 1];
+      expect(last[0]).toMatch(/channel=whatsapp/);
+    });
+  });
+
+  it('falls back to ALL channels on /api/settings/lead-capture 403', async () => {
+    installFetchMockWithSettings({ settings: new Error('forbidden') });
+    renderPage();
+    // Page should still render and show the chip row with at least one chip
+    // (the FALLBACK_CHANNELS list).
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /^All/ })).toBeInTheDocument();
+      // At least one of the FALLBACK_CHANNELS chips is visible (e.g. web_form).
+      expect(screen.getByRole('button', { name: 'Filter by web_form' })).toBeInTheDocument();
+    });
+  });
+});
+
+describe('<TravelLeads /> — G010 ?view=inbox layout switch', () => {
+  beforeEach(() => {
+    fetchApiMock.mockReset();
+    notifyError.mockReset();
+    notifySuccess.mockReset();
+    installFetchMockWithSettings();
+  });
+
+  it('grid view by default — table renders deal rows', async () => {
+    renderPage();
+    await waitFor(() => {
+      // The table layout has a <thead> with "Title" column header.
+      expect(screen.getByRole('columnheader', { name: 'Title' })).toBeInTheDocument();
+    });
+  });
+
+  it('clicking Inbox view toggle flips ?view=inbox and renders the inbox layout', async () => {
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: /Grid view/i })).toBeInTheDocument();
+    });
+    const inboxTab = screen.getByRole('tab', { name: /Inbox view/i });
+    fireEvent.click(inboxTab);
+    // Inbox view renders a <ul aria-label="Lead inbox"> not a <table>.
+    await waitFor(() => {
+      expect(screen.getByRole('list', { name: /Lead inbox/i })).toBeInTheDocument();
+    });
+    // And the table chrome is gone.
+    expect(screen.queryByRole('columnheader', { name: 'Title' })).toBeNull();
+    // The deals still render — titles come through as link text in <li>s.
+    const inboxList = screen.getByRole('list', { name: /Lead inbox/i });
+    expect(within(inboxList).getAllByRole('listitem').length).toBeGreaterThan(0);
+  });
+
+  it('clicking Grid view toggle restores the table layout', async () => {
+    renderPage();
+    const inboxTab = await screen.findByRole('tab', { name: /Inbox view/i });
+    fireEvent.click(inboxTab);
+    await waitFor(() => expect(screen.getByRole('list', { name: /Lead inbox/i })).toBeInTheDocument());
+    const gridTab = screen.getByRole('tab', { name: /Grid view/i });
+    fireEvent.click(gridTab);
+    await waitFor(() => {
+      expect(screen.getByRole('columnheader', { name: 'Title' })).toBeInTheDocument();
+    });
+  });
+});

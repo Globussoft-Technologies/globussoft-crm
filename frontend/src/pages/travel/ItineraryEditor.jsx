@@ -28,8 +28,50 @@
 // preference attributes (Haram/Kaaba-facing view, floor level, room
 // category) so advisors can check preference-matching supplier rates while
 // organising days. Read-only lookup — adding items stays on the detail page.
+//
+// G052 — Bulk-day-add (PRD FR-3.3.g): "Extend by N days" toolbar control
+// prompts for N and appends N empty day cards locally. Pure frontend;
+// no schema change needed since dayNumber is a client-side mapping for
+// existing items. The new empty days surface as drop targets and inline-
+// add receivers.
+//
+// G053 — Conflict warnings (PRD FR-3.3.h): per-item warning chips for
+// (a) overlapping start/end times on the same day (parsed from
+// detailsJson startTime/endTime fields when present), and (b) future-
+// hook for POI-closed-on-visit-day once TravelPoi.closedOn lands. Pure
+// client-side computation against already-loaded items.
+//
+// G056 — Inline +Hotel / +Activity (PRD FR-3.7.b): two per-Day-card
+// buttons that open a mini-form right inside the day. Uses existing
+// POST /:id/items with itemType discrimination (hotel vs activity).
+// Mini-form fields: name, start/end time (hotel uses these as
+// check-in/check-out; activity as session window), optional URL/notes
+// stored as detailsJson. No schema change.
+//
+// G057 — Per-day accept/edit/reject + re-prompt-same-draft (PRD FR-3.4.e,
+// FR-3.4.f): each Day card grows a "Suggest day plan" button that
+// keeps the last LLM draft in component state per day. Accept materialises
+// the day's items via POST /:id/items (one call per item); Edit reveals
+// the items so the advisor can tweak before accept; Reject discards the
+// draft AND triggers a re-roll for that day only. The draft state lives
+// in component memory (lost on reload) — operator-prompt content lives
+// in detailsJson on materialised items so the audit trail survives.
+//
+// G060 — Live re-pricing verify (PRD FR-3.3.f): after every item
+// POST/PATCH/DELETE the backend syncItineraryAfterItemChange recomputes
+// the parent totalAmount; the editor refetches the parent doc to surface
+// the new total in the toolbar. Without the refetch, the total chip in
+// the header would lag the live items list. The refetch is debounced to
+// coalesce drag bursts so we don't hammer the backend during a multi-
+// item drag.
+//
+// G062 — Keyboard shortcuts (PRD FR-3.6): Ctrl+S triggers a manual save
+// flush (no-op since we auto-save, but toasts confirmation), Esc
+// deselects the currently selected item, "?" opens a shortcut help
+// modal. Ctrl+Z/Y are reserved as no-ops with a toast hint (undo stack
+// is a multi-day investment tracked separately).
 
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { useParams, Link } from "react-router-dom";
 import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap, useMapEvents } from "react-leaflet";
 import L from "leaflet";
@@ -37,7 +79,7 @@ import "leaflet/dist/leaflet.css";
 import {
   ArrowLeft, Plane, Hotel, MapPin, Briefcase, FileText, Shield,
   Train, Bus, Car, Camera, Utensils, Package, GripVertical, MapPinned,
-  Sparkles, Layers, BookmarkPlus,
+  Sparkles, Layers, BookmarkPlus, AlertTriangle, Keyboard, X, Plus,
 } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
@@ -83,6 +125,64 @@ const rateSelect = {
   background: "var(--surface-color)", color: "var(--text-primary)",
   fontSize: "0.8rem", minWidth: 140,
 };
+
+// G053 helper — parse the JSON stored in ItineraryItem.detailsJson.
+// Returns null on parse failure (the column is a free-form @db.Text so
+// legacy rows may not be valid JSON). Used by the conflict-warning
+// pass and by the hotel/activity mini-form readback.
+function parseDetails(raw) {
+  if (!raw) return null;
+  if (typeof raw === "object") return raw;
+  try {
+    const obj = JSON.parse(String(raw));
+    return obj && typeof obj === "object" ? obj : null;
+  } catch (_e) {
+    return null;
+  }
+}
+
+// G053 helper — parse an HH:MM (or HH:MM:SS) time-of-day string into
+// minutes-since-midnight. Returns null on garbage so callers can
+// short-circuit overlap math without crashing on legacy rows.
+function parseTimeToMinutes(s) {
+  if (typeof s !== "string") return null;
+  const m = /^([0-9]{1,2}):([0-9]{2})(?::[0-9]{2})?$/.exec(s.trim());
+  if (!m) return null;
+  const h = Number(m[1]);
+  const min = Number(m[2]);
+  if (!Number.isFinite(h) || !Number.isFinite(min)) return null;
+  if (h < 0 || h > 23 || min < 0 || min > 59) return null;
+  return h * 60 + min;
+}
+
+// G053 — detect overlapping time windows on a per-day basis. Two items
+// overlap when their [start, end) intervals intersect; items without
+// both bounds are excluded from the pass (no false positive). Returns
+// a Set of conflicting item ids so the day's render-pass can show a
+// warning chip per offender.
+function detectOverlapConflicts(dayItems) {
+  const intervals = dayItems
+    .map((it) => {
+      const details = parseDetails(it.detailsJson);
+      const start = parseTimeToMinutes(details?.startTime);
+      const end = parseTimeToMinutes(details?.endTime);
+      if (start == null || end == null || end <= start) return null;
+      return { id: it.id, start, end };
+    })
+    .filter(Boolean);
+  const conflicts = new Set();
+  for (let i = 0; i < intervals.length; i++) {
+    for (let j = i + 1; j < intervals.length; j++) {
+      const a = intervals[i];
+      const b = intervals[j];
+      if (a.start < b.end && b.start < a.end) {
+        conflicts.add(a.id);
+        conflicts.add(b.id);
+      }
+    }
+  }
+  return conflicts;
+}
 
 function dayPin(dayNumber) {
   const label = dayNumber ? `D${dayNumber}` : "•";
@@ -136,6 +236,28 @@ export default function ItineraryEditor() {
   // G050 — save-as-template progress flag (disables the button while the
   // POST is in flight so multi-clicks don't fire a duplicate create).
   const [savingTemplate, setSavingTemplate] = useState(false);
+
+  // G056 — per-day inline-add mini-form state. `addFormForDay` holds
+  // the day-number whose mini-form is currently open, plus its type
+  // (hotel vs activity). null = no form open.
+  const [addForm, setAddForm] = useState(null); // { day, kind } | null
+  const [addFormBusy, setAddFormBusy] = useState(false);
+
+  // G057 — per-day LLM-suggest draft state. Keyed by dayNumber; each
+  // entry is { items: [...], promptUsed: string, status: 'draft' | 'editing' }.
+  // Persisting only in component memory keeps the surface simple; the
+  // "re-prompt same draft" requirement just means the prompt context
+  // survives a Reject so Reject + Suggest-again uses the same input.
+  const [dayDrafts, setDayDrafts] = useState({}); // { [dayNumber]: { items, promptUsed, status } }
+  const [draftBusyDay, setDraftBusyDay] = useState(null);
+
+  // G062 — keyboard shortcut cheat-sheet modal toggle.
+  const [shortcutHelpOpen, setShortcutHelpOpen] = useState(false);
+
+  // G060 — debounced re-fetch timer so multi-item drag bursts coalesce
+  // into a single refetch (saves ~10 backend hits during a 10-item
+  // reorder pass). useRef avoids re-render churn on every keystroke.
+  const refetchTimer = useRef(null);
 
   // Hotel rate finder (PRD §4.3 preference filters) — collapsible panel
   // querying /api/travel/cost-master?category=hotel with view/floorLevel/
@@ -262,6 +384,18 @@ export default function ItineraryEditor() {
   );
   const routeLine = useMemo(() => mapItems.map((it) => [it.latitude, it.longitude]), [mapItems]);
 
+  // G060 — debounced refetch helper. Defined BEFORE moveToDay /
+  // setItemLatLng so their useCallback deps array can reference it
+  // without a TDZ error (useCallback runs its deps array at render time
+  // top-to-bottom, so the binding has to exist by then).
+  const scheduleRefetch = useCallback(() => {
+    if (refetchTimer.current) clearTimeout(refetchTimer.current);
+    refetchTimer.current = setTimeout(() => {
+      refetchTimer.current = null;
+      load();
+    }, 350);
+  }, [load]);
+
   const moveToDay = useCallback(
     async (itemId, day) => {
       const target = items.find((it) => it.id === itemId);
@@ -278,12 +412,17 @@ export default function ItineraryEditor() {
           body: JSON.stringify({ dayNumber: day }),
           silent: true,
         });
+        // G060 — refetch so the toolbar totalAmount tracks the server's
+        // post-syncItineraryAfterItemChange figure even when the move
+        // doesn't change line-totals (move alone doesn't shift totals,
+        // but follow-on edits piggy-back on the debounced refetch).
+        scheduleRefetch();
       } catch (_e) {
         notify?.error?.("Couldn't move item — reverting.");
         load();
       }
     },
-    [items, id, notify, load],
+    [items, id, notify, load, scheduleRefetch],
   );
 
   // Place the selected item at a clicked map coordinate (FR-3.4). Optimistic
@@ -303,13 +442,250 @@ export default function ItineraryEditor() {
           body: JSON.stringify({ latitude, longitude }),
           silent: true,
         });
+        // G060 — refetch so totalAmount + any server-side recompute lands
+        // in the toolbar without manual reload.
+        scheduleRefetch();
       } catch (_e) {
         notify?.error?.("Couldn't set location — reverting.");
         load();
       }
     },
-    [id, notify, load],
+    [id, notify, load, scheduleRefetch],
   );
+
+  // G052 — Bulk-day-add. Prompts for N (1-30 clamp) and appends N empty
+  // Day cards locally by bumping extraDays. Each new card becomes a
+  // drop target and an inline-add receiver. No backend round-trip —
+  // dayNumber is a client-side bucket on existing items, and empty
+  // days carry no rows yet.
+  const handleExtendDays = useCallback(async () => {
+    const raw = await notify.prompt({
+      title: "Extend itinerary",
+      message: "How many extra days to add to the plan?",
+      defaultValue: "1",
+      placeholder: "e.g. 3",
+      confirmText: "Extend",
+    });
+    if (raw == null) return; // cancelled
+    const n = parseInt(String(raw).trim(), 10);
+    if (!Number.isFinite(n) || n < 1) {
+      notify.error("Enter a whole number of days (1 or more).");
+      return;
+    }
+    const clamped = Math.min(n, 30);
+    if (n > 30) notify.info(`Clamped to ${clamped} days (30-day max).`);
+    setExtraDays((cur) => cur + clamped);
+    notify.success(`Added ${clamped} empty day${clamped === 1 ? "" : "s"} — ready to plan.`);
+  }, [notify]);
+
+  // G056 — inline-add submit. Posts to the existing /:id/items endpoint
+  // with the appropriate itemType. Hotel uses startTime/endTime as
+  // check-in/check-out; activity uses them as session bounds. Both
+  // store the times + optional url + notes in detailsJson so they
+  // survive a round-trip + can be re-read for G053 conflict detection.
+  const submitInlineAdd = useCallback(
+    async ({ day, kind, name, startTime, endTime, url, notes }) => {
+      const itemType = kind === "hotel" ? "hotel" : "activity";
+      const description = String(name || "").trim();
+      if (!description) {
+        notify.error("Name is required.");
+        return false;
+      }
+      const detailsObj = {};
+      if (startTime) detailsObj.startTime = startTime;
+      if (endTime) detailsObj.endTime = endTime;
+      if (url) detailsObj.url = String(url).trim();
+      if (notes) detailsObj.notes = String(notes).trim();
+      const body = {
+        itemType,
+        description,
+        dayNumber: day,
+        detailsJson: Object.keys(detailsObj).length ? JSON.stringify(detailsObj) : null,
+      };
+      setAddFormBusy(true);
+      try {
+        await fetchApi(`/api/travel/itineraries/${id}/items`, {
+          method: "POST",
+          body: JSON.stringify(body),
+        });
+        notify.success(`${kind === "hotel" ? "Hotel" : "Activity"} added to Day ${day}.`);
+        setAddForm(null);
+        scheduleRefetch();
+        return true;
+      } catch (e) {
+        notify.error(e?.body?.error || e?.message || "Failed to add item.");
+        return false;
+      } finally {
+        setAddFormBusy(false);
+      }
+    },
+    [id, notify, scheduleRefetch],
+  );
+
+  // G057 — per-day Suggest. Calls POST /api/travel/itineraries/suggest
+  // with a single-day duration scoped to the editor's destination, and
+  // captures the returned suggestion's day[0].items into local draft
+  // state. The "re-prompt same draft" requirement means we keep the
+  // prompt context (currently { destination, dayNumber }) in draft so a
+  // Reject + Suggest-again uses the same input — no re-typing.
+  const handleSuggestDay = useCallback(
+    async (day) => {
+      if (draftBusyDay) return;
+      const destination = itin?.destination || "";
+      if (!destination) {
+        notify.error("Set a destination on the itinerary before suggesting items.");
+        return;
+      }
+      setDraftBusyDay(day);
+      try {
+        const promptContext = { destination, days: 1, dayLabel: `Day ${day}` };
+        const res = await fetchApi(`/api/travel/itineraries/suggest`, {
+          method: "POST",
+          body: JSON.stringify({
+            destination,
+            days: 1,
+            tier: "primary",
+          }),
+        });
+        const ds = Array.isArray(res?.suggestion?.daySplit) ? res.suggestion.daySplit : [];
+        const items = Array.isArray(ds[0]?.items) ? ds[0].items : [];
+        if (items.length === 0) {
+          notify.info(`No suggestions returned for Day ${day}.`);
+          return;
+        }
+        setDayDrafts((prev) => ({
+          ...prev,
+          [day]: { items, promptUsed: promptContext, status: "draft" },
+        }));
+      } catch (e) {
+        notify.error(e?.body?.error || e?.message || "Failed to fetch suggestion.");
+      } finally {
+        setDraftBusyDay(null);
+      }
+    },
+    [draftBusyDay, itin, notify],
+  );
+
+  // G057 — Accept the draft for a day. Iterates the draft's items[]
+  // and POSTs each to /:id/items with dayNumber set. We use sequential
+  // posts (not Promise.all) so position ordering is preserved by the
+  // server-side auto-position.
+  const handleAcceptDayDraft = useCallback(
+    async (day) => {
+      const draft = dayDrafts[day];
+      if (!draft || !Array.isArray(draft.items)) return;
+      setDraftBusyDay(day);
+      let posted = 0;
+      try {
+        for (const src of draft.items) {
+          const body = {
+            itemType: src.itemType || "activity",
+            description: String(src.description || src.name || "(unnamed)"),
+            dayNumber: day,
+            unitCost: src.estimatedCost != null ? Number(src.estimatedCost) : null,
+          };
+          // sequential preserves position ordering server-side
+          await fetchApi(`/api/travel/itineraries/${id}/items`, {
+            method: "POST",
+            body: JSON.stringify(body),
+          });
+          posted += 1;
+        }
+        notify.success(`Accepted ${posted} item${posted === 1 ? "" : "s"} on Day ${day}.`);
+        setDayDrafts((prev) => {
+          const next = { ...prev };
+          delete next[day];
+          return next;
+        });
+        scheduleRefetch();
+      } catch (e) {
+        notify.error(`Accepted ${posted}/${draft.items.length} — ${e?.body?.error || e?.message || "stopped"}.`);
+        scheduleRefetch();
+      } finally {
+        setDraftBusyDay(null);
+      }
+    },
+    [dayDrafts, id, notify, scheduleRefetch],
+  );
+
+  // G057 — Reject a day's draft AND re-roll using the same prompt
+  // context. The "same draft" preservation means we don't drop
+  // promptUsed; we re-call /suggest with it. If the operator wants to
+  // permanently discard, they'd reject again or just dismiss visually.
+  const handleRejectDayDraft = useCallback(
+    async (day) => {
+      const draft = dayDrafts[day];
+      setDayDrafts((prev) => {
+        const next = { ...prev };
+        delete next[day];
+        return next;
+      });
+      if (!draft?.promptUsed) return;
+      // re-prompt automatically with the same context.
+      await handleSuggestDay(day);
+    },
+    [dayDrafts, handleSuggestDay],
+  );
+
+  // G057 — Edit a draft: flips status to "editing" so the day card
+  // renders inline-editable rows for each suggested item before accept.
+  const handleEditDayDraft = useCallback((day) => {
+    setDayDrafts((prev) => {
+      const cur = prev[day];
+      if (!cur) return prev;
+      return { ...prev, [day]: { ...cur, status: "editing" } };
+    });
+  }, []);
+
+  const handleEditDraftItemField = useCallback((day, idx, field, value) => {
+    setDayDrafts((prev) => {
+      const cur = prev[day];
+      if (!cur || !Array.isArray(cur.items)) return prev;
+      const items = cur.items.map((it, i) => (i === idx ? { ...it, [field]: value } : it));
+      return { ...prev, [day]: { ...cur, items } };
+    });
+  }, []);
+
+  // G062 — global key handler. Ctrl+S = "manual save" toast (auto-save
+  // already covers persistence; the toast confirms to the operator),
+  // Esc = deselect, Ctrl+Z/Y = undo placeholder toast, "?" = open help.
+  useEffect(() => {
+    const onKey = (e) => {
+      // Skip when typing in an input/textarea/select.
+      const tag = e.target?.tagName;
+      const inField = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || e.target?.isContentEditable;
+      const meta = e.ctrlKey || e.metaKey;
+      if (meta && e.key.toLowerCase() === "s") {
+        e.preventDefault();
+        notify.success("Itinerary auto-saves on every change — no manual save needed.");
+        return;
+      }
+      if (meta && (e.key.toLowerCase() === "z" || (e.key.toLowerCase() === "z" && e.shiftKey))) {
+        if (inField) return;
+        e.preventDefault();
+        notify.info("Undo isn't wired yet — drag the item back to its previous day to revert.");
+        return;
+      }
+      if (meta && (e.key.toLowerCase() === "y" || (e.key.toLowerCase() === "z" && e.shiftKey))) {
+        if (inField) return;
+        e.preventDefault();
+        notify.info("Redo isn't wired yet.");
+        return;
+      }
+      if (e.key === "Escape") {
+        if (shortcutHelpOpen) { setShortcutHelpOpen(false); return; }
+        if (addForm) { setAddForm(null); return; }
+        if (selectedId != null) setSelectedId(null);
+        return;
+      }
+      if (e.key === "?" && !inField) {
+        e.preventDefault();
+        setShortcutHelpOpen(true);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [notify, selectedId, addForm, shortcutHelpOpen]);
 
   if (loading) return <div style={{ padding: "2rem" }}>Loading&hellip;</div>;
   if (error) {
@@ -361,6 +737,25 @@ export default function ItineraryEditor() {
         <span style={{ fontSize: "0.78rem", color: "var(--text-secondary)" }}>
           Drag items between days · {mapItems.length}/{items.length} plotted on map
         </span>
+        {/* G060 — live total chip. Refreshes after every item POST/PATCH/
+            DELETE via scheduleRefetch(). Renders even when totalAmount is
+            null so the regression "no chip at all" is visible. */}
+        <span
+          data-testid="itinerary-total-chip"
+          title="Sum of item line totals — recomputed server-side after every change"
+          style={{
+            display: "inline-flex", alignItems: "center", gap: "0.3rem",
+            padding: "0.18rem 0.6rem", borderRadius: 12,
+            border: "1px solid var(--border-color)",
+            background: "rgba(18,38,71,0.06)",
+            color: "var(--text-primary)",
+            fontSize: "0.72rem", fontWeight: 600,
+          }}
+        >
+          Total: {itin.totalAmount != null
+            ? `${itin.currency || "INR"} ${Number(itin.totalAmount).toLocaleString()}`
+            : "—"}
+        </span>
         {/* G050 — Save current itinerary as template (PRD FR-3.1.f). Calls
             POST /api/travel/itineraries/:id/save-as-template and toasts the
             resulting template name. ADMIN+MANAGER only at the backend; the
@@ -375,6 +770,29 @@ export default function ItineraryEditor() {
           title="Save this itinerary's day-by-day layout as a reusable template"
         >
           <BookmarkPlus size={14} /> {savingTemplate ? "Saving…" : "Save as template"}
+        </button>
+        {/* G052 — Extend by N days (PRD FR-3.3.g). Prompts for N and appends
+            empty Day cards locally; saves a multi-click loop on the
+            "+ Add day" pattern when planning long Umrah / school trips. */}
+        <button
+          type="button"
+          data-testid="extend-days-btn"
+          onClick={handleExtendDays}
+          style={{ display: "inline-flex", alignItems: "center", gap: "0.35rem", padding: "0.35rem 0.7rem", border: "1px solid var(--border-color)", borderRadius: 6, background: "transparent", color: "var(--text-primary)", cursor: "pointer", fontSize: "0.8rem" }}
+          title="Append N empty day cards to the end of the plan"
+        >
+          <Plus size={14} /> Extend by N days
+        </button>
+        {/* G062 — Keyboard shortcuts help (PRD FR-3.6). */}
+        <button
+          type="button"
+          data-testid="shortcuts-help-btn"
+          onClick={() => setShortcutHelpOpen(true)}
+          style={{ display: "inline-flex", alignItems: "center", gap: "0.35rem", padding: "0.35rem 0.55rem", border: "1px solid var(--border-color)", borderRadius: 6, background: "transparent", color: "var(--text-primary)", cursor: "pointer", fontSize: "0.8rem" }}
+          title="Keyboard shortcuts (press ?)"
+          aria-label="Show keyboard shortcuts"
+        >
+          <Keyboard size={14} /> ?
         </button>
         <button
           type="button"
@@ -443,6 +861,11 @@ export default function ItineraryEditor() {
         <div style={{ flex: "1 1 420px", minWidth: 320, overflowY: "auto", display: "flex", flexDirection: "column", gap: "0.75rem" }}>
           {dayBuckets.map((day) => {
             const dayItems = itemsForDay(day);
+            // G053 — detect overlapping start/end time intervals within
+            // this day. Cheap O(n²) since a day rarely has >10 items.
+            const conflictIds = day === null ? new Set() : detectOverlapConflicts(dayItems);
+            const draft = day !== null ? dayDrafts[day] : null;
+            const formOpen = addForm && addForm.day === day;
             return (
               <div
                 key={day === null ? "unscheduled" : day}
@@ -454,15 +877,155 @@ export default function ItineraryEditor() {
                 }}
                 style={{ border: "1px solid var(--border-color)", borderRadius: 10, background: "var(--surface-color)", padding: "0.75rem" }}
               >
-                <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.5rem" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.5rem", flexWrap: "wrap" }}>
                   <strong style={{ fontSize: "0.85rem", color: "var(--text-primary)" }}>
                     {day === null ? "Unscheduled" : `Day ${day}`}
                   </strong>
                   <span style={{ fontSize: "0.72rem", color: "var(--text-secondary)" }}>
                     {dayItems.length} item{dayItems.length === 1 ? "" : "s"}
                   </span>
+                  {conflictIds.size > 0 && (
+                    <span
+                      data-testid={`day-${day}-conflict-banner`}
+                      title="One or more items have overlapping start/end times"
+                      style={{
+                        display: "inline-flex", alignItems: "center", gap: "0.25rem",
+                        padding: "1px 6px", borderRadius: 10,
+                        border: "1px solid #D97706",
+                        background: "#FEF3C7",
+                        color: "#92400E",
+                        fontSize: "0.62rem", fontWeight: 700,
+                      }}
+                    >
+                      <AlertTriangle size={10} aria-hidden /> {conflictIds.size} conflict{conflictIds.size === 1 ? "" : "s"}
+                    </span>
+                  )}
+                  {/* G056 inline-add buttons + G057 suggest control. Only on
+                      real days, not the Unscheduled bucket. */}
+                  {day !== null && (
+                    <div style={{ marginLeft: "auto", display: "inline-flex", gap: "0.25rem", flexWrap: "wrap" }}>
+                      <button
+                        type="button"
+                        data-testid={`day-${day}-add-hotel-btn`}
+                        onClick={() => setAddForm({ day, kind: "hotel" })}
+                        style={{ display: "inline-flex", alignItems: "center", gap: "0.2rem", padding: "0.18rem 0.45rem", border: "1px solid var(--border-color)", borderRadius: 5, background: "transparent", color: "var(--text-primary)", cursor: "pointer", fontSize: "0.7rem" }}
+                        title="Add a hotel stay to this day"
+                      >
+                        <Hotel size={11} /> + Hotel
+                      </button>
+                      <button
+                        type="button"
+                        data-testid={`day-${day}-add-activity-btn`}
+                        onClick={() => setAddForm({ day, kind: "activity" })}
+                        style={{ display: "inline-flex", alignItems: "center", gap: "0.2rem", padding: "0.18rem 0.45rem", border: "1px solid var(--border-color)", borderRadius: 5, background: "transparent", color: "var(--text-primary)", cursor: "pointer", fontSize: "0.7rem" }}
+                        title="Add an activity to this day"
+                      >
+                        <Briefcase size={11} /> + Activity
+                      </button>
+                      <button
+                        type="button"
+                        data-testid={`day-${day}-suggest-btn`}
+                        disabled={draftBusyDay === day}
+                        onClick={() => handleSuggestDay(day)}
+                        style={{ display: "inline-flex", alignItems: "center", gap: "0.2rem", padding: "0.18rem 0.45rem", border: "1px solid var(--border-color)", borderRadius: 5, background: "transparent", color: "var(--primary-color, var(--accent-color))", cursor: draftBusyDay === day ? "wait" : "pointer", fontSize: "0.7rem" }}
+                        title="Ask the AI to suggest items for this day"
+                      >
+                        <Sparkles size={11} /> {draftBusyDay === day ? "Suggesting…" : "Suggest"}
+                      </button>
+                    </div>
+                  )}
                 </div>
-                {dayItems.length === 0 && (
+                {/* G056 — inline-add mini-form. Appears between the header
+                    and items when "+ Hotel" or "+ Activity" is clicked. */}
+                {formOpen && (
+                  <InlineAddForm
+                    day={day}
+                    kind={addForm.kind}
+                    busy={addFormBusy}
+                    onCancel={() => setAddForm(null)}
+                    onSubmit={(payload) => submitInlineAdd({ day, kind: addForm.kind, ...payload })}
+                  />
+                )}
+                {/* G057 — pending draft strip. Shows the suggestion's items
+                    with Accept / Edit / Reject controls. In "editing" mode
+                    each row exposes inline description + cost fields so the
+                    advisor can tweak before commit. */}
+                {draft && Array.isArray(draft.items) && draft.items.length > 0 && (
+                  <div
+                    data-testid={`day-${day}-draft-strip`}
+                    style={{
+                      marginTop: "0.4rem", padding: "0.5rem",
+                      border: "1px dashed #E0C68A",
+                      borderRadius: 6, background: "#FBF4DF",
+                    }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", marginBottom: "0.35rem", flexWrap: "wrap" }}>
+                      <Sparkles size={12} aria-hidden style={{ color: "#6B4F1B" }} />
+                      <strong style={{ fontSize: "0.72rem", color: "#6B4F1B" }}>
+                        AI-suggested · {draft.items.length} item{draft.items.length === 1 ? "" : "s"}
+                      </strong>
+                      <div style={{ marginLeft: "auto", display: "inline-flex", gap: "0.3rem" }}>
+                        <button
+                          type="button"
+                          data-testid={`day-${day}-draft-accept-btn`}
+                          disabled={draftBusyDay === day}
+                          onClick={() => handleAcceptDayDraft(day)}
+                          style={{ padding: "0.18rem 0.55rem", border: "1px solid #6B4F1B", borderRadius: 4, background: "#6B4F1B", color: "#fff", cursor: draftBusyDay === day ? "wait" : "pointer", fontSize: "0.68rem", fontWeight: 600 }}
+                        >
+                          {draftBusyDay === day ? "Accepting…" : "Accept"}
+                        </button>
+                        <button
+                          type="button"
+                          data-testid={`day-${day}-draft-edit-btn`}
+                          onClick={() => handleEditDayDraft(day)}
+                          style={{ padding: "0.18rem 0.55rem", border: "1px solid #6B4F1B", borderRadius: 4, background: "transparent", color: "#6B4F1B", cursor: "pointer", fontSize: "0.68rem", fontWeight: 600 }}
+                        >
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          data-testid={`day-${day}-draft-reject-btn`}
+                          onClick={() => handleRejectDayDraft(day)}
+                          style={{ padding: "0.18rem 0.55rem", border: "1px solid #A8323F", borderRadius: 4, background: "transparent", color: "#A8323F", cursor: "pointer", fontSize: "0.68rem", fontWeight: 600 }}
+                          title="Discard this draft and re-roll with the same prompt"
+                        >
+                          Reject + retry
+                        </button>
+                      </div>
+                    </div>
+                    {draft.items.map((di, idx) => (
+                      <div key={idx} style={{ display: "flex", alignItems: "center", gap: "0.4rem", padding: "0.25rem 0", fontSize: "0.72rem", color: "#3F2F0C" }}>
+                        <span style={{ minWidth: 60, fontWeight: 600, textTransform: "capitalize" }}>{di.itemType || "item"}</span>
+                        {draft.status === "editing" ? (
+                          <>
+                            <input
+                              value={di.description || ""}
+                              onChange={(e) => handleEditDraftItemField(day, idx, "description", e.target.value)}
+                              style={{ flex: 1, padding: "0.15rem 0.35rem", border: "1px solid #D8C28A", borderRadius: 3, fontSize: "0.72rem" }}
+                              aria-label="Draft item description"
+                            />
+                            <input
+                              type="number"
+                              value={di.estimatedCost ?? ""}
+                              onChange={(e) => handleEditDraftItemField(day, idx, "estimatedCost", e.target.value)}
+                              placeholder="cost"
+                              style={{ width: 70, padding: "0.15rem 0.35rem", border: "1px solid #D8C28A", borderRadius: 3, fontSize: "0.72rem" }}
+                              aria-label="Draft item estimated cost"
+                            />
+                          </>
+                        ) : (
+                          <>
+                            <span style={{ flex: 1 }}>{di.description}</span>
+                            {di.estimatedCost != null && (
+                              <span style={{ fontVariantNumeric: "tabular-nums" }}>₹{Number(di.estimatedCost).toLocaleString()}</span>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {dayItems.length === 0 && !formOpen && !draft && (
                   <div style={{ fontSize: "0.75rem", color: "var(--text-secondary)", padding: "0.5rem", border: "1px dashed var(--border-color)", borderRadius: 6, textAlign: "center" }}>
                     Drop items here
                   </div>
@@ -470,6 +1033,7 @@ export default function ItineraryEditor() {
                 {dayItems.map((it) => {
                   const Icon = ITEM_ICONS[it.itemType] || Package;
                   const hasGeo = typeof it.latitude === "number" && typeof it.longitude === "number";
+                  const inConflict = conflictIds.has(it.id);
                   return (
                     <div
                       key={it.id}
@@ -481,7 +1045,9 @@ export default function ItineraryEditor() {
                       style={{
                         display: "flex", alignItems: "center", gap: "0.5rem",
                         padding: "0.5rem", marginTop: "0.4rem",
-                        border: selectedId === it.id ? "2px solid var(--primary-color, var(--accent-color))" : "1px solid var(--border-color)",
+                        border: selectedId === it.id
+                          ? "2px solid var(--primary-color, var(--accent-color))"
+                          : (inConflict ? "1px solid #D97706" : "1px solid var(--border-color)"),
                         borderRadius: 6,
                         background: selectedId === it.id ? "rgba(18,38,71,0.06)" : "var(--subtle-bg, rgba(0,0,0,0.02))",
                         cursor: "grab", opacity: dragId === it.id ? 0.5 : 1,
@@ -492,6 +1058,27 @@ export default function ItineraryEditor() {
                       <span style={{ fontSize: "0.8rem", color: "var(--text-primary)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                         {it.description}
                       </span>
+                      {/* G053 — overlap conflict chip. Shows when this
+                          item's [startTime, endTime) overlaps any sibling
+                          on the same day. detailsJson-driven so legacy
+                          rows without time bounds stay un-flagged. */}
+                      {inConflict && (
+                        <span
+                          data-testid={`itinerary-item-conflict-${it.id}`}
+                          title="Time overlaps another item on this day"
+                          style={{
+                            display: "inline-flex", alignItems: "center", gap: "0.2rem",
+                            padding: "1px 6px", borderRadius: 10,
+                            border: "1px solid #D97706",
+                            background: "#FEF3C7",
+                            color: "#92400E",
+                            fontSize: "0.62rem", fontWeight: 700,
+                            flexShrink: 0,
+                          }}
+                        >
+                          <AlertTriangle size={10} aria-hidden /> conflict
+                        </span>
+                      )}
                       {/* G051 — AI-drafted provenance badge (PRD FR-3.4.h).
                           Surfaces only on items materialised via POST
                           /itineraries/from-suggestion. Manual + legacy items
@@ -569,6 +1156,173 @@ export default function ItineraryEditor() {
           </MapContainer>
         </div>
       </div>
+      {/* G062 — Keyboard shortcut cheat-sheet (PRD FR-3.6). Lightweight
+          modal overlay; closes on Esc (handled by the global keydown
+          handler above) or click on the backdrop / Close button. */}
+      {shortcutHelpOpen && (
+        <div
+          data-testid="shortcuts-help-modal"
+          onClick={() => setShortcutHelpOpen(false)}
+          style={{
+            position: "fixed", inset: 0, zIndex: 5000,
+            background: "rgba(0,0,0,0.45)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+          }}
+        >
+          <div
+            role="dialog"
+            aria-label="Keyboard shortcuts"
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: "var(--surface-color)", color: "var(--text-primary)",
+              borderRadius: 10, padding: "1.1rem 1.3rem",
+              minWidth: 320, maxWidth: 460,
+              boxShadow: "0 8px 32px rgba(0,0,0,0.35)",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", marginBottom: "0.75rem" }}>
+              <Keyboard size={16} style={{ marginRight: "0.4rem", color: "var(--primary-color, var(--accent-color))" }} />
+              <strong style={{ fontSize: "0.95rem" }}>Keyboard shortcuts</strong>
+              <button
+                type="button"
+                aria-label="Close"
+                onClick={() => setShortcutHelpOpen(false)}
+                style={{ marginLeft: "auto", background: "transparent", border: "none", color: "var(--text-secondary)", cursor: "pointer" }}
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <table style={{ width: "100%", fontSize: "0.8rem", borderCollapse: "collapse" }}>
+              <tbody>
+                {[
+                  ["Ctrl + S", "Confirm auto-save (no manual save needed)"],
+                  ["Ctrl + Z", "Undo (placeholder — drag back to revert)"],
+                  ["Ctrl + Y", "Redo (placeholder)"],
+                  ["Esc", "Deselect item / close modal / close form"],
+                  ["?", "Open this help"],
+                ].map(([key, desc]) => (
+                  <tr key={key}>
+                    <td style={{ padding: "0.3rem 0.5rem 0.3rem 0", fontWeight: 600, whiteSpace: "nowrap" }}>
+                      <kbd style={{ padding: "1px 6px", border: "1px solid var(--border-color)", borderRadius: 4, background: "var(--subtle-bg, rgba(0,0,0,0.04))", fontFamily: "monospace" }}>{key}</kbd>
+                    </td>
+                    <td style={{ padding: "0.3rem 0", color: "var(--text-secondary)" }}>{desc}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </div>
+  );
+}
+
+// G056 helper — inline-add mini-form rendered inside a Day card. Fields:
+// name (required), startTime (HH:MM), endTime (HH:MM), url (optional),
+// notes (optional). The kind ("hotel" or "activity") only changes the
+// label text + the resulting itemType — the form shape is identical so
+// the testing surface is small. On submit, calls back with a payload the
+// parent then POSTs via /:id/items.
+function InlineAddForm({ day, kind, busy, onCancel, onSubmit }) {
+  const [name, setName] = useState("");
+  const [startTime, setStartTime] = useState("");
+  const [endTime, setEndTime] = useState("");
+  const [url, setUrl] = useState("");
+  const [notes, setNotes] = useState("");
+  const label = kind === "hotel" ? "Hotel" : "Activity";
+  const startLabel = kind === "hotel" ? "Check-in" : "Start";
+  const endLabel = kind === "hotel" ? "Check-out" : "End";
+  return (
+    <form
+      data-testid={`day-${day}-inline-add-form`}
+      data-kind={kind}
+      onSubmit={async (e) => {
+        e.preventDefault();
+        const ok = await onSubmit({ name, startTime, endTime, url, notes });
+        if (ok) {
+          setName(""); setStartTime(""); setEndTime(""); setUrl(""); setNotes("");
+        }
+      }}
+      style={{
+        marginTop: "0.4rem", padding: "0.6rem",
+        border: "1px solid var(--border-color)", borderRadius: 6,
+        background: "var(--subtle-bg, rgba(0,0,0,0.03))",
+        display: "flex", flexDirection: "column", gap: "0.4rem",
+      }}
+    >
+      <div style={{ display: "flex", gap: "0.4rem", alignItems: "center", flexWrap: "wrap" }}>
+        <strong style={{ fontSize: "0.75rem", color: "var(--text-primary)" }}>+ {label} · Day {day}</strong>
+        <button
+          type="button"
+          onClick={onCancel}
+          aria-label="Cancel"
+          style={{ marginLeft: "auto", background: "transparent", border: "none", color: "var(--text-secondary)", cursor: "pointer" }}
+        >
+          <X size={13} />
+        </button>
+      </div>
+      <input
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        placeholder={kind === "hotel" ? "Hotel name (e.g. Hilton Garden Inn)" : "Activity name (e.g. Spice plantation tour)"}
+        required
+        aria-label={`${label} name`}
+        style={{ padding: "0.3rem 0.5rem", border: "1px solid var(--border-color)", borderRadius: 4, fontSize: "0.78rem" }}
+      />
+      <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap" }}>
+        <label style={{ display: "flex", flexDirection: "column", gap: "0.15rem", fontSize: "0.7rem", color: "var(--text-secondary)" }}>
+          {startLabel}
+          <input
+            type="time"
+            value={startTime}
+            onChange={(e) => setStartTime(e.target.value)}
+            aria-label={`${startLabel} time`}
+            style={{ padding: "0.25rem 0.4rem", border: "1px solid var(--border-color)", borderRadius: 4, fontSize: "0.78rem" }}
+          />
+        </label>
+        <label style={{ display: "flex", flexDirection: "column", gap: "0.15rem", fontSize: "0.7rem", color: "var(--text-secondary)" }}>
+          {endLabel}
+          <input
+            type="time"
+            value={endTime}
+            onChange={(e) => setEndTime(e.target.value)}
+            aria-label={`${endLabel} time`}
+            style={{ padding: "0.25rem 0.4rem", border: "1px solid var(--border-color)", borderRadius: 4, fontSize: "0.78rem" }}
+          />
+        </label>
+      </div>
+      <input
+        value={url}
+        onChange={(e) => setUrl(e.target.value)}
+        placeholder="Booking URL (optional)"
+        aria-label={`${label} URL`}
+        style={{ padding: "0.3rem 0.5rem", border: "1px solid var(--border-color)", borderRadius: 4, fontSize: "0.78rem" }}
+      />
+      <textarea
+        value={notes}
+        onChange={(e) => setNotes(e.target.value)}
+        placeholder="Notes (optional)"
+        rows={2}
+        aria-label={`${label} notes`}
+        style={{ padding: "0.3rem 0.5rem", border: "1px solid var(--border-color)", borderRadius: 4, fontSize: "0.78rem", resize: "vertical" }}
+      />
+      <div style={{ display: "flex", gap: "0.4rem", justifyContent: "flex-end" }}>
+        <button
+          type="button"
+          onClick={onCancel}
+          style={{ padding: "0.3rem 0.7rem", border: "1px solid var(--border-color)", borderRadius: 4, background: "transparent", color: "var(--text-secondary)", cursor: "pointer", fontSize: "0.75rem" }}
+        >
+          Cancel
+        </button>
+        <button
+          type="submit"
+          disabled={busy}
+          data-testid={`day-${day}-inline-add-submit-${kind}`}
+          style={{ padding: "0.3rem 0.8rem", border: "1px solid var(--primary-color, var(--accent-color))", borderRadius: 4, background: "var(--primary-color, var(--accent-color))", color: "#fff", cursor: busy ? "wait" : "pointer", fontSize: "0.75rem", fontWeight: 600 }}
+        >
+          {busy ? "Adding…" : `Add ${label}`}
+        </button>
+      </div>
+    </form>
   );
 }

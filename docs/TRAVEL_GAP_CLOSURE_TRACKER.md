@@ -245,9 +245,9 @@ Most content (logos / palettes / fonts) blocked on Q22; surface wiring is builda
 
 | ID | Slice | Files | Effort | Status |
 |---|---|---|---|---|
-| G103 | Admin surface for §3.5.5 assurance/trust standing-facts (verify EngineWeights covers + UI exposes all fields) | TmcCatalogueAdmin or EngineWeights admin | 0.5d | ⬜ |
-| G104 | DD-5.7 blind-collapsed UX shape on DiagnosticDetail.jsx | `frontend/.../DiagnosticDetail.jsx` | 1d | ⬜ |
-| G105 | §3.9 Calendar booking-link integration (deep-link to Calendar+Meet) | `routes/travel_diagnostics.js` extension | 1d | ⬜ |
+| G103 | Admin surface for §3.5.5 assurance/trust standing-facts (verify EngineWeights covers + UI exposes all fields) | TmcCatalogueAdmin or EngineWeights admin | 0.5d | ✅ DONE 2026-06-13 — `1d641369` |
+| G104 | DD-5.7 blind-collapsed UX shape on DiagnosticDetail.jsx | `frontend/.../DiagnosticDetail.jsx` | 1d | ✅ DONE 2026-06-13 — `1d641369` |
+| G105 | §3.9 Calendar booking-link integration (deep-link to Calendar+Meet) | `routes/travel_diagnostics.js` extension | 1d | ✅ DONE 2026-06-13 — `1d641369` |
 
 **§3.11 net effort: ~2.5 eng-days**
 
@@ -263,7 +263,7 @@ PC-1 / Q13 (TMC academic-team data drop) is product-blocked, not engineering.
 
 | ID | Slice | Files | Effort | Status |
 |---|---|---|---|---|
-| G107 | `RejectionRecoveryProgram` model + endpoint + UI (`VisaApplication.recoveryProgramId` already exists as forward-ref Int) (FR-7) | schema + route + `visa/RecoveryProgram.jsx` (NEW) | 2d | ⬜ |
+| G107 | `RejectionRecoveryProgram` model + endpoint + UI (`VisaApplication.recoveryProgramId` already exists as forward-ref Int) (FR-7) | schema + route + `visa/RecoveryProgram.jsx` (NEW) | 2d | ✅ DONE 2026-06-13 — `1d641369` (schema `f03ea3e8`) |
 
 Brand variants (G108-G110) Q22-blocked; visa-summary LLM Q11-blocked; WA advisor alert Q9-blocked → §4.
 

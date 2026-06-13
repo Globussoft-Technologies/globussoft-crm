@@ -538,3 +538,129 @@ test.describe('Lead-routing API — subBrand condition (PRD §4.1 gap A8)', () =
     expect(body.matchedRule.id).toBe(rule.id);
   });
 });
+
+// ── PRD_TRAVEL_MULTICHANNEL_LEADS G007 — first-class channel + subBrand ──
+//
+// `LeadRoutingRule` carries new TOP-LEVEL columns `channel`, `subBrand`,
+// `rrCursor`, `fallbackUserId` (FR-3.3.1). The CRUD surface validates
+// channel against the canonical 16-value enum from PRD §3.1.2; subBrand
+// reuses the same vocabulary as the JSON-conditions sub-brand
+// (lib/subBrandConfig.VALID_SUB_BRANDS); fallbackUserId is a free Int.
+// This suite locks the wire contract — the resolver itself (most-
+// specific-rule, RR cursor, isAvailable fallback) is covered by the
+// vitest under `backend/test/lib/leadAutoRouter.test.js` against
+// mocked Prisma; the deploy gate's per-push spec already exercises
+// rule CRUD here without a long-running route+DB round-trip per case.
+test.describe('Lead-routing API — G007 channel/subBrand/fallbackUserId columns', () => {
+  test('POST 201 with channel="whatsapp" + subBrand="rfu" persists lowercased', async ({ request }) => {
+    test.skip(!token, 'auth unavailable');
+    const r = await authPost(request, '/api/lead-routing', {
+      name: `${RUN_TAG} g007-whatsapp-rfu`,
+      conditions: { status: 'Lead' },
+      channel: 'WhatsApp',
+      subBrand: 'RFU',
+    });
+    expect(r.status(), await r.text()).toBe(201);
+    const rule = await r.json();
+    created.push(rule.id);
+    expect(rule.channel).toBe('whatsapp');
+    expect(rule.subBrand).toBe('rfu');
+  });
+
+  test('POST 400 rejects unknown channel', async ({ request }) => {
+    test.skip(!token, 'auth unavailable');
+    const r = await authPost(request, '/api/lead-routing', {
+      name: `${RUN_TAG} g007-bad-channel`,
+      conditions: { status: 'Lead' },
+      channel: 'pigeon',
+    });
+    expect(r.status()).toBe(400);
+    const body = await r.json();
+    expect(body.error).toMatch(/invalid channel/i);
+  });
+
+  test('PUT 200 clears channel + subBrand to null (wildcard)', async ({ request }) => {
+    test.skip(!token, 'auth unavailable');
+    const created1 = await createValidRule(request, {
+      name: `${RUN_TAG} g007-clear`,
+      channel: 'voice',
+      subBrand: 'tmc',
+    });
+    expect(created1.channel).toBe('voice');
+    const r = await authPut(request, `/api/lead-routing/${created1.id}`, {
+      channel: null,
+      subBrand: null,
+    });
+    expect(r.status()).toBe(200);
+    const updated = await r.json();
+    expect(updated.channel).toBeNull();
+    expect(updated.subBrand).toBeNull();
+  });
+
+  test('POST 201 accepts fallbackUserId (Int coerce)', async ({ request }) => {
+    test.skip(!token, 'auth unavailable');
+    const r = await authPost(request, '/api/lead-routing', {
+      name: `${RUN_TAG} g007-fallback`,
+      conditions: { status: 'Lead' },
+      fallbackUserId: '7',
+    });
+    expect(r.status()).toBe(201);
+    const rule = await r.json();
+    created.push(rule.id);
+    expect(rule.fallbackUserId).toBe(7);
+  });
+});
+
+// ── PRD_TRAVEL_MULTICHANNEL_LEADS G008 — User.isAvailable + endpoints ───
+//
+// PUT /api/users/me/availability — any role can flip their own flag.
+// PUT /api/users/:userId/availability — ADMIN/MANAGER can flip another
+// user's flag in the same tenant. Cross-tenant + USER-toggling-other
+// are gated to 403/401. The actual fallback wiring (round-robin skip
+// unavailable user, fall through to fallbackUserId) is covered by the
+// router's vitest because exercising it end-to-end requires routing a
+// real intake; this suite locks the endpoint contract.
+test.describe('User availability — G008 endpoints (FR-3.3.5)', () => {
+  test('PUT /me/availability flips the caller`s own isAvailable', async ({ request }) => {
+    test.skip(!token, 'auth unavailable');
+    // Set false, then back to true so the test is idempotent across reruns.
+    const offRes = await authPut(request, '/api/users/me/availability', { isAvailable: false });
+    expect(offRes.status(), await offRes.text()).toBe(200);
+    const off = await offRes.json();
+    expect(off.isAvailable).toBe(false);
+
+    const onRes = await authPut(request, '/api/users/me/availability', { isAvailable: true });
+    expect(onRes.status()).toBe(200);
+    const on = await onRes.json();
+    expect(on.isAvailable).toBe(true);
+  });
+
+  test('PUT /me/availability 400 when body.isAvailable missing', async ({ request }) => {
+    test.skip(!token, 'auth unavailable');
+    const r = await authPut(request, '/api/users/me/availability', {});
+    expect(r.status()).toBe(400);
+    const body = await r.json();
+    expect(body.error).toMatch(/boolean/i);
+  });
+
+  test('PUT /me/availability without auth -> 401/403', async ({ request }) => {
+    const r = await request.put(`${API}/users/me/availability`, {
+      data: { isAvailable: false },
+      headers: { 'Content-Type': 'application/json' },
+    });
+    expect([401, 403]).toContain(r.status());
+  });
+
+  test('PUT /:userId/availability 400 on negative id', async ({ request }) => {
+    test.skip(!token, 'auth unavailable');
+    const r = await authPut(request, '/api/users/-3/availability', { isAvailable: false });
+    // Express route param '-3' is captured but our parseInt+isFinite gate rejects.
+    expect([400, 404]).toContain(r.status());
+  });
+
+  test('PUT /:userId/availability 404 on missing user (large id)', async ({ request }) => {
+    test.skip(!token, 'auth unavailable');
+    const r = await authPut(request, '/api/users/99999999/availability', { isAvailable: false });
+    expect(r.status()).toBe(404);
+  });
+});

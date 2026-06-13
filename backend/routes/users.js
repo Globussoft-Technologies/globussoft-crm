@@ -20,11 +20,12 @@
 const express = require('express');
 const router = express.Router();
 const prisma = require('../lib/prisma');
-const { verifyToken } = require('../middleware/auth');
+const { verifyToken, verifyRole } = require('../middleware/auth');
 const {
   requirePermission,
   getUserPermissions,
 } = require('../middleware/requirePermission');
+const { writeAudit } = require('../lib/audit');
 
 router.get(
   '/:userId/permissions',
@@ -123,6 +124,118 @@ router.post(
     // re-derived by the inner router from the rewritten URL.
     req.url = `/users/${encodeURIComponent(req.params.userId)}/roles`;
     return require('./roles')(req, res, next);
+  },
+);
+
+// ─── Availability (PRD_TRAVEL_MULTICHANNEL_LEADS G008 — FR-3.3.5) ─────
+//
+// PUT /api/users/me/availability       — any authenticated user toggles
+//                                        their OWN isAvailable flag.
+// PUT /api/users/:userId/availability  — ADMIN/MANAGER toggles another
+//                                        user's flag (same-tenant only).
+//
+// Body shape: { isAvailable: boolean }. Returns the post-update slice
+// { id, name, email, isAvailable }. Both endpoints audit-log the flip
+// so an ops review can reconstruct who was unavailable when an inbound
+// lead bounced to the rule's fallbackUserId.
+//
+// Why two endpoints and not one with role-based behaviour: PRD §3.3.5
+// distinguishes "I'm stepping away" (self-service, no privilege check)
+// from "manage staff availability" (privileged, audited). Mirroring
+// them lets the auth gate be a single verifyRole(['ADMIN','MANAGER'])
+// on the latter without leaking a hole into the former.
+
+function coerceBool(v) {
+  if (typeof v === 'boolean') return v;
+  if (v === 'true' || v === 1) return true;
+  if (v === 'false' || v === 0) return false;
+  return null;
+}
+
+router.put('/me/availability', verifyToken, async (req, res) => {
+  try {
+    const isAvailable = coerceBool(req.body?.isAvailable);
+    if (isAvailable === null) {
+      return res.status(400).json({ error: 'isAvailable must be a boolean' });
+    }
+    const meId = req.user.userId;
+    const updated = await prisma.user.update({
+      where: { id: meId },
+      data: { isAvailable },
+      select: { id: true, name: true, email: true, isAvailable: true },
+    });
+    // Best-effort audit — never fails the request.
+    try {
+      await writeAudit(
+        'User',
+        'AVAILABILITY_SELF',
+        meId,
+        meId,
+        req.user.tenantId,
+        { isAvailable },
+      );
+    } catch (_e) { /* swallow */ }
+    return res.json(updated);
+  } catch (err) {
+    console.error('[users/me/availability] error:', err);
+    return res.status(500).json({ error: 'Failed to update availability' });
+  }
+});
+
+router.put(
+  '/:userId/availability',
+  verifyToken,
+  verifyRole(['ADMIN', 'MANAGER']),
+  async (req, res) => {
+    try {
+      // body-stripped: id/userId/tenantId/createdAt/updatedAt deleted by
+      // stripDangerous; the path param carries the target. Re-deriving
+      // from req.params keeps the standing ESLint rule happy too.
+      const targetUserId = parseInt(req.params.userId, 10);
+      if (!Number.isFinite(targetUserId) || targetUserId <= 0) {
+        return res.status(400).json({ error: 'Invalid userId' });
+      }
+      const isAvailable = coerceBool(req.body?.isAvailable);
+      if (isAvailable === null) {
+        return res.status(400).json({ error: 'isAvailable must be a boolean' });
+      }
+
+      // Same-tenant guard — admin / manager in tenant A cannot flip a
+      // user's availability in tenant B.
+      const target = await prisma.user.findUnique({
+        where: { id: targetUserId },
+        select: { id: true, tenantId: true },
+      });
+      if (!target) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+      if (target.tenantId !== req.user.tenantId) {
+        return res.status(403).json({
+          error: 'Cross-tenant access denied',
+          code: 'CROSS_TENANT_DENIED',
+        });
+      }
+
+      const updated = await prisma.user.update({
+        where: { id: targetUserId },
+        data: { isAvailable },
+        select: { id: true, name: true, email: true, isAvailable: true },
+      });
+      try {
+        await writeAudit(
+          'User',
+          'AVAILABILITY_ADMIN',
+          targetUserId,
+          req.user.userId,
+          req.user.tenantId,
+          { isAvailable, targetUserId },
+        );
+      } catch (_e) { /* swallow */ }
+      return res.json(updated);
+    } catch (err) {
+      console.error('[users/:userId/availability] error:', err);
+      return res.status(500).json({ error: 'Failed to update availability' });
+    }
   },
 );
 

@@ -212,11 +212,40 @@ router.get("/", async (req, res) => {
   }
 });
 
+// PRD_TRAVEL_MULTICHANNEL_LEADS §3.3 — first-class channel + subBrand
+// columns promoted out of the JSON `conditions` blob (G007 — FR-3.3.1).
+// Validation reuses the same canonical sub-brand list as the legacy
+// `conditions.subBrand` gate (gap A8) so the two surfaces share one
+// truth.
+const VALID_CHANNELS = [
+  "whatsapp", "voice", "sms", "email", "voyagr", "meta_ad",
+  "google_ad", "linkedin_ad", "indiamart", "justdial", "tradeindia",
+  "referral", "chat", "walk_in", "manual", "web_form",
+];
+function validateChannel(v) {
+  if (v == null || v === "") return null;
+  if (!VALID_CHANNELS.includes(String(v).toLowerCase())) {
+    return `Invalid channel "${v}". Allowed: ${VALID_CHANNELS.join(", ")}`;
+  }
+  return null;
+}
+function validateSubBrandCode(v) {
+  if (v == null || v === "") return null;
+  if (!VALID_SUB_BRANDS.includes(String(v).toLowerCase())) {
+    return `Invalid subBrand "${v}". Allowed: ${VALID_SUB_BRANDS.join(", ")}`;
+  }
+  return null;
+}
+
 // POST / — create rule
 router.post("/", async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
-    const { name, conditions, assignType, assignTo, priority, isActive } = req.body || {};
+    const {
+      name, conditions, assignType, assignTo, priority, isActive,
+      // G007 additive top-level columns (FR-3.3.1, 3.3.2, 3.3.4)
+      channel, subBrand, fallbackUserId,
+    } = req.body || {};
     if (!name) return res.status(400).json({ error: "Name is required" });
 
     // #302: reject rules with zero conditions; #299: reject unknown statuses.
@@ -231,6 +260,13 @@ router.post("/", async (req, res) => {
       return res.status(400).json({ error: "Priority must be an integer between 1 and 999" });
     }
 
+    // G007: validate the first-class channel + subBrand columns against
+    // the canonical enums. Null/empty = wildcard, kept as null.
+    const channelErr = validateChannel(channel);
+    if (channelErr) return res.status(400).json({ error: channelErr });
+    const subBrandErr = validateSubBrandCode(subBrand);
+    if (subBrandErr) return res.status(400).json({ error: subBrandErr });
+
     const rule = await prisma.leadRoutingRule.create({
       data: {
         // v3.4.11: HTML-strip name + sanitize conditions JSON for the admin UI
@@ -244,6 +280,11 @@ router.post("/", async (req, res) => {
         priority: priorityNum,
         isActive: isActive !== false,
         tenantId,
+        // G007 top-level columns — lowercased on write for case-insensitive
+        // matching in the resolver; null when not supplied (wildcard).
+        channel: channel ? String(channel).toLowerCase() : null,
+        subBrand: subBrand ? String(subBrand).toLowerCase() : null,
+        fallbackUserId: fallbackUserId ? Number(fallbackUserId) : null,
       },
     });
     res.status(201).json({ ...rule, conditions: safeJson(rule.conditions, {}) });
@@ -263,7 +304,11 @@ router.put("/:id", async (req, res) => {
     const existing = await prisma.leadRoutingRule.findFirst({ where: { id, tenantId } });
     if (!existing) return res.status(404).json({ error: "Rule not found" });
 
-    const { name, conditions, assignType, assignTo, priority, isActive } = req.body || {};
+    const {
+      name, conditions, assignType, assignTo, priority, isActive,
+      // G007 additive top-level columns.
+      channel, subBrand, fallbackUserId,
+    } = req.body || {};
 
     // #302 / #299: only validate conditions when they're being changed; partial
     // updates such as the active toggle (sends only { isActive }) must still pass.
@@ -280,6 +325,16 @@ router.put("/:id", async (req, res) => {
         return res.status(400).json({ error: "Priority must be an integer between 1 and 999" });
       }
     }
+    // G007 partial-validation: only check when present in the payload so
+    // a clear-to-null update (channel: null) is allowed.
+    if (channel !== undefined && channel !== null && channel !== "") {
+      const channelErr = validateChannel(channel);
+      if (channelErr) return res.status(400).json({ error: channelErr });
+    }
+    if (subBrand !== undefined && subBrand !== null && subBrand !== "") {
+      const subBrandErr = validateSubBrandCode(subBrand);
+      if (subBrandErr) return res.status(400).json({ error: subBrandErr });
+    }
 
     const updated = await prisma.leadRoutingRule.update({
       where: { id },
@@ -292,6 +347,16 @@ router.put("/:id", async (req, res) => {
         ...(assignTo !== undefined && { assignTo: assignTo === null ? null : Number(assignTo) }),
         ...(priority !== undefined && { priority: priorityNum }),
         ...(isActive !== undefined && { isActive: !!isActive }),
+        // G007 — lowercase on write; null cleared explicitly.
+        ...(channel !== undefined && {
+          channel: channel ? String(channel).toLowerCase() : null,
+        }),
+        ...(subBrand !== undefined && {
+          subBrand: subBrand ? String(subBrand).toLowerCase() : null,
+        }),
+        ...(fallbackUserId !== undefined && {
+          fallbackUserId: fallbackUserId === null ? null : Number(fallbackUserId),
+        }),
       },
     });
     res.json({ ...updated, conditions: safeJson(updated.conditions, {}) });

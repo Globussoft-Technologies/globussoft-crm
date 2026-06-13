@@ -506,6 +506,16 @@ model User {
   // alternative to DELETE so the row stays in the directory + audit trail.
   deactivatedAt DateTime?
 
+  // PRD_TRAVEL_MULTICHANNEL_LEADS G008 (FR-3.3.5) — soft "step away" flag
+  // that the lead-router consults before assigning an inbound lead. Defaults
+  // to true so every legacy User keeps receiving assignments unchanged. The
+  // user toggles their OWN availability via PUT /api/users/me/availability;
+  // a manager/admin can toggle another user's via PUT /api/users/:userId/
+  // availability. Distinct from deactivatedAt (HR-driven; permanent until
+  // reactivated by an admin) — isAvailable is the staff member's own
+  // moment-to-moment switch ("on lunch, don't route new leads to me").
+  isAvailable Boolean @default(true)
+
   // Subscription trial + billing
   trialStartDate     DateTime?
   trialEndsAt        DateTime?
@@ -2499,17 +2509,39 @@ model Quota {
 // ── Lead Routing ─────────────────────────────────────────────────
 
 model LeadRoutingRule {
-  id         Int      @id @default(autoincrement())
+  id         Int     @id @default(autoincrement())
   name       String
-  conditions String   @db.Text // JSON
-  assignType String   @default("round_robin") // round_robin, specific_user, territory
+  conditions String  @db.Text // JSON
+  assignType String  @default("round_robin") // round_robin, specific_user, territory
   assignTo   Int? // userId if specific_user
-  priority   Int      @default(100)
-  isActive   Boolean  @default(true)
-  tenantId   Int      @default(1)
-  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  priority   Int     @default(100)
+  isActive   Boolean @default(true)
+
+  // PRD_TRAVEL_MULTICHANNEL_LEADS §3.3 (G007 — FR-3.3.1, 3.3.2, 3.3.4).
+  // First-class routing dimensions promoted out of the generic JSON
+  // `conditions` blob so the resolver can compute specificity scores
+  // cheaply WITHOUT JSON.parse on every rule per intake.
+  //  - channel   exact match against intake / Lead.channel ("whatsapp",
+  //              "voice", "voyagr", "meta_ad", ...); NULL = wildcard
+  //              (back-compat with every pre-travel rule)
+  //  - subBrand  exact match against Contact.subBrand (canonical codes
+  //              tmc | rfu | travelstall | visasure per PRD §4.1 gap
+  //              A8); NULL = wildcard
+  //  - rrCursor  per-rule round-robin cursor for FR-3.3.4. Atomic
+  //              increment via Prisma `{ rrCursor: { increment: 1 } }`
+  //              keeps the cursor race-safe across concurrent intake.
+  //  - fallbackUserId  per FR-3.3.5: when every round-robin candidate
+  //              is unavailable, fall back to this user. NULL = leave
+  //              unassigned with routingFailureReason.
+  channel        String?
+  subBrand       String?
+  rrCursor       Int     @default(0)
+  fallbackUserId Int?
+
+  tenantId  Int      @default(1)
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 // ── Territory Management ─────────────────────────────────────────

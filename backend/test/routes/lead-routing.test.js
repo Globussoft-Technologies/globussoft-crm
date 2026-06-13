@@ -81,6 +81,9 @@ prisma.leadRoutingRule.findFirst = vi.fn();
 prisma.leadRoutingRule.create = vi.fn();
 prisma.leadRoutingRule.update = vi.fn();
 prisma.leadRoutingRule.delete = vi.fn();
+// Patch (no-op) — keeps tests that don't touch the new G007 columns
+// passing while the channel/subBrand/rrCursor coverage below mocks
+// individual cases explicitly.
 
 prisma.contact = prisma.contact || {};
 prisma.contact.findFirst = vi.fn();
@@ -780,5 +783,113 @@ describe('subBrand condition (TRAVEL_CRM_PRD §4.1 gap A8)', () => {
       assignedUserId: 88,
       matchedRule: { id: 71, name: 'Pre-travel legacy rule' },
     });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// G007 — first-class channel + subBrand + fallbackUserId columns
+//
+// PRD_TRAVEL_MULTICHANNEL_LEADS §3.3 (FR-3.3.1, 3.3.2, 3.3.4). These
+// columns are nullable + additive — pre-existing rules pass through with
+// channel=null/subBrand=null (wildcard). New rules can pin a routing
+// dimension; the resolver lives in lib/leadAutoRouter.js (covered in its
+// own unit test file). This file pins the CRUD-shape contract:
+//
+//   - POST accepts/rejects channel/subBrand based on canonical enums
+//   - POST persists lowercased values (case-insensitive matching)
+//   - PUT allows null-clearing
+//   - PUT validates channel/subBrand the same way
+//   - fallbackUserId is coerced to Number (or cleared to null)
+// ─────────────────────────────────────────────────────────────────────────
+
+describe('G007 — first-class channel + subBrand + fallbackUserId columns', () => {
+  test('POST 400 when channel is not a canonical value', async () => {
+    const res = await request(makeApp())
+      .post('/api/lead-routing')
+      .send({
+        name: 'Bogus channel',
+        conditions: { status: 'Lead' },
+        channel: 'pigeon',
+      });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/invalid channel "pigeon"/i);
+    expect(prisma.leadRoutingRule.create).not.toHaveBeenCalled();
+  });
+
+  test('POST 400 when subBrand top-level column is not a canonical sub-brand', async () => {
+    const res = await request(makeApp())
+      .post('/api/lead-routing')
+      .send({
+        name: 'Bogus brand col',
+        conditions: { status: 'Lead' },
+        subBrand: 'acme',
+      });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/invalid subBrand "acme"/i);
+    expect(prisma.leadRoutingRule.create).not.toHaveBeenCalled();
+  });
+
+  test('POST 201: channel + subBrand + fallbackUserId persisted lowercased + coerced', async () => {
+    prisma.leadRoutingRule.create.mockImplementation(({ data }) =>
+      Promise.resolve({ id: 500, ...data })
+    );
+    const res = await request(makeApp({ tenantId: 1 }))
+      .post('/api/lead-routing')
+      .send({
+        name: 'whatsapp-rfu route',
+        conditions: { status: 'Lead' },
+        channel: 'WhatsApp',
+        subBrand: 'RFU',
+        fallbackUserId: '99',
+      });
+    expect(res.status).toBe(201);
+    const args = prisma.leadRoutingRule.create.mock.calls[0][0];
+    // Lowercased on write — resolver compares case-insensitively but
+    // canonicalising on write keeps the storage shape consistent.
+    expect(args.data.channel).toBe('whatsapp');
+    expect(args.data.subBrand).toBe('rfu');
+    expect(args.data.fallbackUserId).toBe(99);
+  });
+
+  test('POST 201: omitting channel + subBrand stores null (wildcard rule, back-compat)', async () => {
+    prisma.leadRoutingRule.create.mockImplementation(({ data }) =>
+      Promise.resolve({ id: 501, ...data })
+    );
+    const res = await request(makeApp({ tenantId: 1 }))
+      .post('/api/lead-routing')
+      .send({ name: 'wildcard', conditions: { status: 'Lead' } });
+    expect(res.status).toBe(201);
+    const args = prisma.leadRoutingRule.create.mock.calls[0][0];
+    expect(args.data.channel).toBeNull();
+    expect(args.data.subBrand).toBeNull();
+    expect(args.data.fallbackUserId).toBeNull();
+  });
+
+  test('PUT 400 when updating to an invalid channel value', async () => {
+    prisma.leadRoutingRule.findFirst.mockResolvedValue({
+      id: 60, tenantId: 1, name: 'Existing', conditions: '{}',
+    });
+    const res = await request(makeApp({ tenantId: 1 }))
+      .put('/api/lead-routing/60')
+      .send({ channel: 'carrier_pigeon' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/invalid channel/i);
+    expect(prisma.leadRoutingRule.update).not.toHaveBeenCalled();
+  });
+
+  test('PUT 200: clear channel + subBrand to null (wildcard)', async () => {
+    prisma.leadRoutingRule.findFirst.mockResolvedValue({
+      id: 60, tenantId: 1, name: 'Existing', conditions: '{}', channel: 'voice', subBrand: 'tmc',
+    });
+    prisma.leadRoutingRule.update.mockImplementation(({ data }) =>
+      Promise.resolve({ id: 60, ...data, conditions: '{}' })
+    );
+    const res = await request(makeApp({ tenantId: 1 }))
+      .put('/api/lead-routing/60')
+      .send({ channel: null, subBrand: null });
+    expect(res.status).toBe(200);
+    const args = prisma.leadRoutingRule.update.mock.calls[0][0];
+    expect(args.data.channel).toBeNull();
+    expect(args.data.subBrand).toBeNull();
   });
 });

@@ -6339,6 +6339,14 @@ model TravelQuote {
   fxRateTargetCurrency String?
   fxRateLockedAt       DateTime?
   fxRateExpiresAt      DateTime?
+  // G017 (PRD §3.3 FR-3.6) — clone-with-margin lineage. When a sub-agent
+  // operator duplicates a quote via POST /quotes/:id/duplicate?marginPercent=X,
+  // we record both the source quote id (clonedFromQuoteId) and the markup
+  // percent applied (appliedMarkupPercent). Lets a sub-agent revenue
+  // report later sum margin across their cloned quotes. Both nullable —
+  // unmarked clones (or non-clone source quotes) leave them null.
+  clonedFromQuoteId    Int?
+  appliedMarkupPercent Decimal?              @db.Decimal(5, 2)
   lines                TravelQuoteLine[]
   invoices             TravelInvoice[]
   snapshots            TravelQuoteSnapshot[]
@@ -6409,22 +6417,41 @@ model TravelQuoteSnapshot {
 // (TravelQuote.delete is a hard-delete per route comment at the
 // DELETE handler), the line rows go with it.
 model TravelQuoteLine {
-  id          Int         @id @default(autoincrement())
-  tenantId    Int         @default(1)
-  quoteId     Int
-  lineType    String      @default("other") // hotel | flight | transport | visa | service | other
-  description String
-  quantity    Int         @default(1)
-  unitPrice   Decimal     @db.Decimal(15, 2)
-  amount      Decimal     @db.Decimal(15, 2)
-  currency    String      @default("INR")
-  supplierId  Int?
-  sortOrder   Int         @default(0)
-  notes       String?     @db.Text
-  quote       TravelQuote @relation(fields: [quoteId], references: [id], onDelete: Cascade)
-  tenant      Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  createdAt   DateTime    @default(now())
-  updatedAt   DateTime    @updatedAt
+  id              Int         @id @default(autoincrement())
+  tenantId        Int         @default(1)
+  quoteId         Int
+  lineType        String      @default("other") // hotel | flight | transport | visa | service | other
+  description     String
+  quantity        Int         @default(1)
+  unitPrice       Decimal     @db.Decimal(15, 2)
+  amount          Decimal     @db.Decimal(15, 2)
+  currency        String      @default("INR")
+  supplierId      Int?
+  sortOrder       Int         @default(0)
+  notes           String?     @db.Text
+  // G020 (PRD §3.2 FR-3.2.1-3) — line extension columns for GST + dimension
+  // rendering + add-on flagging. All additive nullable / safe default.
+  //   hsnSac:          per-line tax classification when operator overrides
+  //                    the lineType-derived default (lib/hsnSacMapper).
+  //   taxPercent:      per-line tax rate. Null → fallback to the lineType
+  //                    GST default in routes/travel_quotes.js pricing.
+  //   discountPercent: per-line discount on top of unitPrice.
+  //   dimension:       quote-PDF rendering pivot for the qty column.
+  //                    Enum string: perPax | perRoomPerNight | perTrip |
+  //                    flatRate. Validated in route. Null → "flatRate".
+  //   isAddOn:         flags this line as an optional add-on (operator can
+  //                    let the customer toggle it on the customer-facing
+  //                    share page in a future slice). Defaults to false so
+  //                    pre-G020 rows render unchanged.
+  hsnSac          String?
+  taxPercent      Decimal?    @db.Decimal(5, 2)
+  discountPercent Decimal?    @db.Decimal(5, 2)
+  dimension       String? // perPax | perRoomPerNight | perTrip | flatRate
+  isAddOn         Boolean     @default(false)
+  quote           TravelQuote @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  tenant          Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
 
   @@index([tenantId, quoteId])
   @@index([quoteId, sortOrder])
@@ -7858,4 +7885,34 @@ model FormRoutingMapping {
 
   @@unique([tenantId, channel, externalFormId])
   @@index([tenantId, channel])
+}
+
+// PRD_TRAVEL_QUOTE_BUILDER G018 (DD-5.4) — FX-rate cache for per-line FX
+// conversion in the operator quote builder.
+//
+// fxRateEngine.js polls a free open-data FX source (frankfurter.dev) hourly
+// and upserts one row per (baseCurrency, quoteCurrency) pair. The
+// /api/fx/latest endpoint returns the freshest row; /api/fx/history returns
+// a date-range slice for charting / trend display in the QuoteBuilder
+// FX panel.
+//
+// Brand-new model — zero existing rows; the @@unique on
+// (baseCurrency, quoteCurrency, fetchedAt) is vacuously safe but the
+// [allow-unique] bless marker is in the commit body per migration-check.
+//
+// rate is stored as a Decimal(15, 8) — eight fractional digits handles
+// currencies with very small unit values (e.g. USD→IDR ~15500) plus the
+// inverse pair (IDR→USD ~0.000064) without precision loss. Source defaults
+// to "frankfurter" but the column is intentionally open so a future
+// provider swap (yahoo / fxapi / manual override) doesn't need a migration.
+model FxRate {
+  id            Int      @id @default(autoincrement())
+  baseCurrency  String // 3-char ISO 4217, e.g. "INR"
+  quoteCurrency String // 3-char ISO 4217, e.g. "USD"
+  rate          Decimal  @db.Decimal(15, 8)
+  fetchedAt     DateTime @default(now())
+  source        String   @default("frankfurter")
+
+  @@unique([baseCurrency, quoteCurrency, fetchedAt])
+  @@index([baseCurrency, quoteCurrency])
 }

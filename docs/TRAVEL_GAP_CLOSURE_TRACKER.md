@@ -67,21 +67,21 @@ Each row is a coherent PR scope. Effort estimates assume one senior engineer.
 
 | ID | Slice | Files | Effort | Status |
 |---|---|---|---|---|
-| G001 | Touchpoint write per inbound lead (FR-3.5.1) | `backend/routes/travel_inbound_leads.js`, `schema.prisma:Touchpoint` | 1d | ⬜ |
-| G002 | `idempotencyKey` + `(tenantId, channel, idempotencyKey)` unique constraint + hard-block duplicates (FR-3.1.7, FR-3.2.6) | same + schema migration `[allow-unique]` | 1d | ⬜ |
-| G003 | Cross-channel `MergePromptNotification` (FR-3.2.4) + marketplace `externalLeadId` short-circuit in envelope (FR-3.2.5) | route + schema | 1.5d | ⬜ |
-| G004 | Channel enum expansion (`voice`, `sms`, `email`, `google_ad`, `linkedin_ad`, `referral`, `chat`) + rename `webform`→`web_form`, `metaads`→`meta_ad` (FR-3.1.2) | route + schema (string col, additive) | 0.5d | ⬜ |
-| G005 | Touchpoint UTM fields: `utm_campaign/term/content`, `siteSlug`, `advertiserId`, `formId`, `landingPage`, `firstTouchAt` (FR-3.1.3) | schema + intake parser | 1d | ⬜ |
-| G006 | Intake response envelope: `action: created\|merged\|touchpoint_appended\|duplicate_suppressed`, `matchedRoutingRuleId`, `touchpointId` (FR-3.1.8) | route | 0.5d | ⬜ |
+| G001 | Touchpoint write per inbound lead (FR-3.5.1) | `backend/routes/travel_inbound_leads.js`, `schema.prisma:Touchpoint` | 1d | ✅ DONE 2026-06-13 — `45e026e2` |
+| G002 | `idempotencyKey` + `(tenantId, channel, idempotencyKey)` unique constraint + hard-block duplicates (FR-3.1.7, FR-3.2.6) | same + schema migration `[allow-unique]` | 1d | ✅ DONE 2026-06-13 — `45e026e2` |
+| G003 | Cross-channel `MergePromptNotification` (FR-3.2.4) + marketplace `externalLeadId` short-circuit in envelope (FR-3.2.5) | route + schema | 1.5d | ✅ DONE 2026-06-13 — `45e026e2` |
+| G004 | Channel enum expansion (`voice`, `sms`, `email`, `google_ad`, `linkedin_ad`, `referral`, `chat`) + rename `webform`→`web_form`, `metaads`→`meta_ad` (FR-3.1.2) | route + schema (string col, additive) | 0.5d | ✅ DONE 2026-06-13 — `45e026e2` |
+| G005 | Touchpoint UTM fields: `utm_campaign/term/content`, `siteSlug`, `advertiserId`, `formId`, `landingPage`, `firstTouchAt` (FR-3.1.3) | schema + intake parser | 1d | ✅ DONE 2026-06-13 — `45e026e2` |
+| G006 | Intake response envelope: `action: created\|merged\|touchpoint_appended\|duplicate_suppressed`, `matchedRoutingRuleId`, `touchpointId` (FR-3.1.8) | route | 0.5d | ✅ DONE 2026-06-13 — `45e026e2` |
 | G007 | `LeadRoutingRule.channel`, `.subBrand`, `.rrCursor`, `.priority` columns + most-specific-rule resolver (FR-3.3.1, 3.3.2, 3.3.4) | schema (additive) + `lib/leadAutoRouter.js` | 1.5d | ✅ DONE 2026-06-13 — `c2c33d6a` |
 | G008 | `User.isAvailable` + unavailability fallback in router (FR-3.3.5) | schema + router | 0.5d | ✅ DONE 2026-06-13 — `c2c33d6a` |
 | G009 | `/settings/lead-capture` admin page (toggles + cooldown UI + FormRoutingMapping UI) (FR-3.7) | `frontend/src/pages/settings/LeadCapture.jsx` (NEW) + 2 routes | 2d | ✅ DONE 2026-06-13 — `e3d59b7b` |
 | G010 | `/leads?view=inbox` cross-channel filter inbox + chip filter on Leads.jsx (FR-3.6.2, 3.6.3) | `frontend/src/pages/travel/Leads.jsx` | 1.5d | ✅ DONE 2026-06-13 — `e3d59b7b` |
-| G011 | `TenantSettings.leadCaptureCooldowns` + cooldown enforcement (FR-3.2.3) | schema + intake | 1d | ⬜ |
-| G012 | Referral channel + `referrerContactId` link (FR-3.4.5) | schema + intake + route | 0.5d | ⬜ |
-| G013 | Voice channel `subStatus='callback_pending'` (FR-3.4.1) | schema + intake | 0.5d | ⬜ |
-| G014 | Per-channel typed payload validators (FR-3.1.4) | `lib/intakePayloadValidators.js` (NEW) | 1d | ⬜ |
-| G015 | Canonical `POST /api/leads/intake` alias with body-channel mode (FR-3.1.1) — alias only, keep current path live | route alias | 0.5d | ⬜ |
+| G011 | `TenantSettings.leadCaptureCooldowns` + cooldown enforcement (FR-3.2.3) | schema + intake | 1d | ✅ DONE 2026-06-13 — `45e026e2` |
+| G012 | Referral channel + `referrerContactId` link (FR-3.4.5) | schema + intake + route | 0.5d | ✅ DONE 2026-06-13 — `45e026e2` |
+| G013 | Voice channel `subStatus='callback_pending'` (FR-3.4.1) | schema + intake | 0.5d | ✅ DONE 2026-06-13 — `45e026e2` |
+| G014 | Per-channel typed payload validators (FR-3.1.4) | `lib/intakePayloadValidators.js` (NEW) | 1d | ✅ DONE 2026-06-13 — `45e026e2` |
+| G015 | Canonical `POST /api/leads/intake` alias with body-channel mode (FR-3.1.1) — alias only, keep current path live | route alias | 0.5d | ✅ DONE 2026-06-13 — `45e026e2` |
 
 **§3.1 net effort: ~12 eng-days**
 

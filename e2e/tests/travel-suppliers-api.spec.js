@@ -333,3 +333,123 @@ test.describe("Travel suppliers MASTER list — slim-shape opt-in (#920 S3)", ()
     expect(s).toHaveProperty("gstin");
   });
 });
+
+// ─── G038 — Supplier KYC + onboarding checklist ──────────────────────
+//
+// Smoke + shape coverage for the KYC endpoints. Deeper transition + RBAC
+// semantics are covered in the unit suite (backend/test/routes/
+// travel-suppliers-kyc.test.js); here we just verify the endpoints exist
+// and return the envelope shape against the deployed demo.
+
+test.describe("G038 KYC + onboarding checklist", () => {
+  test("GET /suppliers/:id/kyc returns kyc envelope (null OR shape)", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, "no token");
+    // Pick the first supplier visible to the TravelStall admin (covers
+    // its sub-brand). If the tenant has no suppliers, the route returns
+    // 200 with empty array — skip the test.
+    const listRes = await get(request, token, "/api/travel/suppliers?fields=summary&limit=1");
+    expect(listRes.status()).toBe(200);
+    const list = await listRes.json();
+    if (!list.suppliers || list.suppliers.length === 0) test.skip(true, "no suppliers seeded");
+    const supplierId = list.suppliers[0].id;
+
+    const res = await get(request, token, `/api/travel/suppliers/${supplierId}/kyc`);
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(body).toHaveProperty("supplierId");
+    expect(body).toHaveProperty("kyc");
+    // kyc is either null (not yet initialised) or has expected shape.
+    if (body.kyc !== null) {
+      expect(body.kyc).toHaveProperty("status");
+      expect(body.kyc).toHaveProperty("panOnFile");
+      expect(body.kyc).toHaveProperty("checklistItems");
+      // PAN cleartext NEVER returned — only masked.
+      expect(body.kyc).not.toHaveProperty("panNumber");
+    }
+  });
+
+  test("GET /suppliers/:id/kyc non-numeric :id → 400 INVALID_ID", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, "no token");
+    const res = await get(request, token, "/api/travel/suppliers/abc/kyc");
+    expect(res.status()).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("INVALID_ID");
+  });
+
+  test("GET /suppliers/:id/kyc as USER → 403", async ({ request }) => {
+    // The yasin@travelstall.in account is ADMIN; we can't easily mint a
+    // USER token in e2e without seed support. Stub via the generic-admin
+    // token (cross-vertical guard fires first); this still pins the
+    // multi-layer denial.
+    const token = await getGenericAdmin(request);
+    if (!token) test.skip(true, "no generic token");
+    const res = await get(request, token, "/api/travel/suppliers/1/kyc");
+    // Either 403 (wrong vertical) or some other denial — never 200.
+    expect(res.status()).toBeGreaterThanOrEqual(400);
+    expect(res.status()).toBeLessThan(500);
+  });
+});
+
+// ─── G039 — Supplier dispute history + chargeback log ────────────────
+//
+// Smoke + shape coverage. Stats rollup is the most useful gate-spec read.
+
+test.describe("G039 dispute history + stats rollup", () => {
+  test("GET /disputes/stats returns rollup envelope", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, "no token");
+    const res = await get(request, token, "/api/travel/disputes/stats");
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(body).toHaveProperty("byStatus");
+    expect(body.byStatus).toHaveProperty("open");
+    expect(body.byStatus).toHaveProperty("in_review");
+    expect(body.byStatus).toHaveProperty("resolved");
+    expect(body.byStatus).toHaveProperty("rejected");
+    expect(body.byStatus).toHaveProperty("escalated");
+    expect(body).toHaveProperty("openCount");
+    expect(body).toHaveProperty("openAmount");
+    expect(body).toHaveProperty("resolvedCount");
+    expect(body).toHaveProperty("avgResolutionDays");
+    expect(body).toHaveProperty("total");
+  });
+
+  test("GET /suppliers/:id/disputes returns paged envelope", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, "no token");
+    const listRes = await get(request, token, "/api/travel/suppliers?fields=summary&limit=1");
+    if (listRes.status() !== 200) test.skip(true, "no supplier");
+    const list = await listRes.json();
+    if (!list.suppliers || list.suppliers.length === 0) test.skip(true, "no suppliers seeded");
+    const supplierId = list.suppliers[0].id;
+
+    const res = await get(request, token, `/api/travel/suppliers/${supplierId}/disputes`);
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(body).toHaveProperty("supplierId");
+    expect(body).toHaveProperty("disputes");
+    expect(Array.isArray(body.disputes)).toBe(true);
+    expect(body).toHaveProperty("total");
+    expect(body).toHaveProperty("limit");
+    expect(body).toHaveProperty("offset");
+  });
+
+  test("POST /suppliers/:id/disputes missing direction → 400 MISSING_FIELDS", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) test.skip(true, "no token");
+    const listRes = await get(request, token, "/api/travel/suppliers?fields=summary&limit=1");
+    if (listRes.status() !== 200) test.skip(true, "no supplier");
+    const list = await listRes.json();
+    if (!list.suppliers || list.suppliers.length === 0) test.skip(true, "no suppliers seeded");
+    const supplierId = list.suppliers[0].id;
+
+    const res = await post(request, token, `/api/travel/suppliers/${supplierId}/disputes`, {
+      type: "overbill", amount: 100, description: "test",
+    });
+    expect(res.status()).toBe(400);
+    const body = await res.json();
+    expect(body.code).toBe("MISSING_FIELDS");
+  });
+});

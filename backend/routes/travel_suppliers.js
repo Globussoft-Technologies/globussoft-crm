@@ -4626,4 +4626,1018 @@ router.get(
   },
 );
 
+// ─── PRD_TRAVEL_SUPPLIER_MASTER G038 — KYC + onboarding checklist ─────
+//
+// Per FR-3.1.h, every TravelSupplier gets a 1-to-1 KYC record + a default
+// onboarding checklist (pan_card / gstin_cert / bank_proof / iata_cert
+// (flight suppliers only) / contract / insurance).
+//
+// PAN encryption: stored via backend/lib/fieldEncryption.js (AES-256-GCM,
+// no-op when WELLNESS_FIELD_KEY isn't set). The list/detail endpoints
+// return the masked form (last-4 visible).
+//
+// State flow on the KYC top-level status:
+//   pending   → submitted (POST /:id/kyc/submit, ADMIN/MANAGER)
+//   submitted → verified  (POST /:id/kyc/verify, ADMIN only)
+//   submitted → rejected  (POST /:id/kyc/reject, ADMIN only, with reason)
+//   rejected  → submitted (re-submit via /submit)
+
+const PAN_REGEX = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
+
+function assertValidPan(p) {
+  if (p == null || p === "") return;
+  if (typeof p !== "string" || !PAN_REGEX.test(p.toUpperCase())) {
+    const err = new Error("panNumber must match Indian PAN format: AAAAA9999A");
+    err.status = 400;
+    err.code = "INVALID_PAN";
+    throw err;
+  }
+}
+
+function maskPan(plain) {
+  if (!plain || typeof plain !== "string" || plain.length < 4) return null;
+  const tail = plain.slice(-4);
+  return `XXXXX${tail.padStart(5, "X")}`.slice(0, 10);
+}
+
+function defaultChecklistSeed(supplierCategory) {
+  const items = [
+    { itemKey: "pan_card",   itemLabel: "PAN card",          required: true, sortOrder: 0 },
+    { itemKey: "gstin_cert", itemLabel: "GSTIN certificate", required: true, sortOrder: 1 },
+    { itemKey: "bank_proof", itemLabel: "Bank account proof", required: true, sortOrder: 2 },
+  ];
+  if (supplierCategory === "flight") {
+    items.push({ itemKey: "iata_cert", itemLabel: "IATA certificate", required: true, sortOrder: 3 });
+  }
+  items.push({ itemKey: "contract",  itemLabel: "Signed contract",         required: true,  sortOrder: 4 });
+  items.push({ itemKey: "insurance", itemLabel: "Insurance certificate",   required: false, sortOrder: 5 });
+  return items;
+}
+
+async function loadSupplierForKyc(req) {
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isFinite(id)) {
+    const err = new Error("id must be a number");
+    err.status = 400;
+    err.code = "INVALID_ID";
+    throw err;
+  }
+  const supplier = await prisma.travelSupplier.findFirst({
+    where: { id, tenantId: req.travelTenant.id },
+  });
+  if (!supplier) {
+    const err = new Error("Supplier not found");
+    err.status = 404;
+    err.code = "NOT_FOUND";
+    throw err;
+  }
+  const allowed = await getSubBrandAccessSet(req.user.userId);
+  if (!canAccessSubBrand(allowed, supplier.subBrand)) {
+    const err = new Error("Sub-brand access denied");
+    err.status = 403;
+    err.code = "SUB_BRAND_DENIED";
+    throw err;
+  }
+  return supplier;
+}
+
+function projectKyc(kyc, checklistItems) {
+  if (!kyc) return null;
+  return {
+    id: kyc.id,
+    supplierId: kyc.supplierId,
+    status: kyc.status,
+    panNumberMasked: kyc.panNumber ? maskPan(decrypt(kyc.panNumber)) : null,
+    panOnFile: Boolean(kyc.panNumber),
+    gstinVerified: kyc.gstinVerified,
+    bankAccountVerified: kyc.bankAccountVerified,
+    iataNumber: kyc.iataNumber,
+    iataExpiry: kyc.iataExpiry,
+    tafiNumber: kyc.tafiNumber,
+    contractSigned: kyc.contractSigned,
+    contractSignedAt: kyc.contractSignedAt,
+    contractDocumentUrl: kyc.contractDocumentUrl,
+    submittedAt: kyc.submittedAt,
+    verifiedAt: kyc.verifiedAt,
+    verifiedBy: kyc.verifiedBy,
+    rejectedAt: kyc.rejectedAt,
+    rejectionReason: kyc.rejectionReason,
+    notes: kyc.notes,
+    createdAt: kyc.createdAt,
+    updatedAt: kyc.updatedAt,
+    checklistItems: (checklistItems || []).map((i) => ({
+      id: i.id,
+      itemKey: i.itemKey,
+      itemLabel: i.itemLabel,
+      required: i.required,
+      status: i.status,
+      documentUrl: i.documentUrl,
+      notes: i.notes,
+      submittedAt: i.submittedAt,
+      verifiedAt: i.verifiedAt,
+      verifiedBy: i.verifiedBy,
+      sortOrder: i.sortOrder,
+    })),
+  };
+}
+
+// GET /api/travel/suppliers/:id/kyc — read KYC + checklist.
+router.get(
+  "/suppliers/:id/kyc",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const supplier = await loadSupplierForKyc(req);
+      const kyc = await prisma.travelSupplierKyc.findUnique({
+        where: { supplierId: supplier.id },
+      });
+      if (!kyc) {
+        return res.json({ supplierId: supplier.id, kyc: null });
+      }
+      const checklistItems = await prisma.travelSupplierKycChecklistItem.findMany({
+        where: { kycId: kyc.id, tenantId: req.travelTenant.id },
+        orderBy: { sortOrder: "asc" },
+      });
+      res.json({ supplierId: supplier.id, kyc: projectKyc(kyc, checklistItems) });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-sup] kyc get error:", e.message);
+      res.status(500).json({ error: "Failed to load KYC record" });
+    }
+  },
+);
+
+// POST /api/travel/suppliers/:id/kyc — initialize KYC record + seed default
+// checklist. Idempotent.
+router.post(
+  "/suppliers/:id/kyc",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const supplier = await loadSupplierForKyc(req);
+      const existing = await prisma.travelSupplierKyc.findUnique({
+        where: { supplierId: supplier.id },
+      });
+      if (existing) {
+        const checklistItems = await prisma.travelSupplierKycChecklistItem.findMany({
+          where: { kycId: existing.id, tenantId: req.travelTenant.id },
+          orderBy: { sortOrder: "asc" },
+        });
+        return res.json({
+          supplierId: supplier.id,
+          kyc: projectKyc(existing, checklistItems),
+          alreadyInitialised: true,
+        });
+      }
+      const created = await prisma.travelSupplierKyc.create({
+        data: {
+          tenantId: req.travelTenant.id,
+          supplierId: supplier.id,
+          status: "pending",
+        },
+      });
+      const seed = defaultChecklistSeed(supplier.supplierCategory);
+      const checklistItems = [];
+      for (const item of seed) {
+        const row = await prisma.travelSupplierKycChecklistItem.create({
+          data: {
+            tenantId: req.travelTenant.id,
+            kycId: created.id,
+            itemKey: item.itemKey,
+            itemLabel: item.itemLabel,
+            required: item.required,
+            sortOrder: item.sortOrder,
+          },
+        });
+        checklistItems.push(row);
+      }
+      await writeAudit(
+        "TravelSupplierKyc",
+        "CREATE",
+        created.id,
+        req.user.userId,
+        req.travelTenant.id,
+        { supplierId: supplier.id, seededItems: checklistItems.length },
+      );
+      res.status(201).json({ supplierId: supplier.id, kyc: projectKyc(created, checklistItems) });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-sup] kyc init error:", e.message);
+      res.status(500).json({ error: "Failed to initialize KYC" });
+    }
+  },
+);
+
+// PUT /api/travel/suppliers/:id/kyc — update editable KYC fields.
+router.put(
+  "/suppliers/:id/kyc",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const supplier = await loadSupplierForKyc(req);
+      const kyc = await prisma.travelSupplierKyc.findUnique({
+        where: { supplierId: supplier.id },
+      });
+      if (!kyc) {
+        return res.status(404).json({ error: "KYC not initialised; POST first", code: "KYC_NOT_INITIALISED" });
+      }
+      const {
+        panNumber, gstinVerified, bankAccountVerified,
+        iataNumber, iataExpiry, tafiNumber,
+        contractSigned, contractSignedAt, contractDocumentUrl,
+        notes,
+      } = req.body || {};
+
+      const data = {};
+      if (panNumber !== undefined) {
+        if (panNumber == null || panNumber === "") {
+          data.panNumber = null;
+        } else {
+          assertValidPan(panNumber);
+          data.panNumber = encrypt(String(panNumber).toUpperCase());
+        }
+      }
+      if (gstinVerified !== undefined) data.gstinVerified = Boolean(gstinVerified);
+      if (bankAccountVerified !== undefined) data.bankAccountVerified = Boolean(bankAccountVerified);
+      if (iataNumber !== undefined) data.iataNumber = iataNumber ? String(iataNumber) : null;
+      if (iataExpiry !== undefined) data.iataExpiry = iataExpiry ? new Date(iataExpiry) : null;
+      if (tafiNumber !== undefined) data.tafiNumber = tafiNumber ? String(tafiNumber) : null;
+      if (contractSigned !== undefined) data.contractSigned = Boolean(contractSigned);
+      if (contractSignedAt !== undefined) data.contractSignedAt = contractSignedAt ? new Date(contractSignedAt) : null;
+      if (contractDocumentUrl !== undefined) data.contractDocumentUrl = contractDocumentUrl ? String(contractDocumentUrl) : null;
+      if (notes !== undefined) data.notes = notes ? String(notes) : null;
+
+      if (Object.keys(data).length === 0) {
+        return res.status(400).json({ error: "no updatable fields provided", code: "EMPTY_BODY" });
+      }
+
+      const updated = await prisma.travelSupplierKyc.update({
+        where: { id: kyc.id },
+        data,
+      });
+      const checklistItems = await prisma.travelSupplierKycChecklistItem.findMany({
+        where: { kycId: updated.id, tenantId: req.travelTenant.id },
+        orderBy: { sortOrder: "asc" },
+      });
+      await writeAudit(
+        "TravelSupplierKyc",
+        "UPDATE",
+        updated.id,
+        req.user.userId,
+        req.travelTenant.id,
+        { fields: Object.keys(data), panChanged: data.panNumber !== undefined },
+      );
+      res.json({ supplierId: supplier.id, kyc: projectKyc(updated, checklistItems) });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-sup] kyc update error:", e.message);
+      res.status(500).json({ error: "Failed to update KYC" });
+    }
+  },
+);
+
+// POST /api/travel/suppliers/:id/kyc/submit
+router.post(
+  "/suppliers/:id/kyc/submit",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const supplier = await loadSupplierForKyc(req);
+      const kyc = await prisma.travelSupplierKyc.findUnique({
+        where: { supplierId: supplier.id },
+      });
+      if (!kyc) {
+        return res.status(404).json({ error: "KYC not initialised", code: "KYC_NOT_INITIALISED" });
+      }
+      if (kyc.status === "submitted" || kyc.status === "verified") {
+        return res.status(409).json({
+          error: `Cannot submit from status=${kyc.status}`,
+          code: "INVALID_STATE_TRANSITION",
+        });
+      }
+      const updated = await prisma.travelSupplierKyc.update({
+        where: { id: kyc.id },
+        data: {
+          status: "submitted",
+          submittedAt: new Date(),
+          rejectedAt: null,
+          rejectionReason: null,
+        },
+      });
+      await writeAudit(
+        "TravelSupplierKyc",
+        "SUBMIT",
+        updated.id,
+        req.user.userId,
+        req.travelTenant.id,
+        { previousStatus: kyc.status },
+      );
+      res.json({
+        supplierId: supplier.id,
+        status: updated.status,
+        submittedAt: updated.submittedAt,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-sup] kyc submit error:", e.message);
+      res.status(500).json({ error: "Failed to submit KYC" });
+    }
+  },
+);
+
+// POST /api/travel/suppliers/:id/kyc/verify
+router.post(
+  "/suppliers/:id/kyc/verify",
+  verifyToken,
+  verifyRole(["ADMIN"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const supplier = await loadSupplierForKyc(req);
+      const kyc = await prisma.travelSupplierKyc.findUnique({
+        where: { supplierId: supplier.id },
+      });
+      if (!kyc) {
+        return res.status(404).json({ error: "KYC not initialised", code: "KYC_NOT_INITIALISED" });
+      }
+      if (kyc.status !== "submitted") {
+        return res.status(409).json({
+          error: `Can only verify from status=submitted (was ${kyc.status})`,
+          code: "INVALID_STATE_TRANSITION",
+        });
+      }
+      const updated = await prisma.travelSupplierKyc.update({
+        where: { id: kyc.id },
+        data: {
+          status: "verified",
+          verifiedAt: new Date(),
+          verifiedBy: req.user.userId,
+        },
+      });
+      await writeAudit(
+        "TravelSupplierKyc",
+        "VERIFY",
+        updated.id,
+        req.user.userId,
+        req.travelTenant.id,
+        { verifiedBy: req.user.userId },
+      );
+      res.json({
+        supplierId: supplier.id,
+        status: updated.status,
+        verifiedAt: updated.verifiedAt,
+        verifiedBy: updated.verifiedBy,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-sup] kyc verify error:", e.message);
+      res.status(500).json({ error: "Failed to verify KYC" });
+    }
+  },
+);
+
+// POST /api/travel/suppliers/:id/kyc/reject
+router.post(
+  "/suppliers/:id/kyc/reject",
+  verifyToken,
+  verifyRole(["ADMIN"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const supplier = await loadSupplierForKyc(req);
+      const { rejectionReason } = req.body || {};
+      if (!rejectionReason || !String(rejectionReason).trim()) {
+        return res.status(400).json({ error: "rejectionReason required", code: "MISSING_FIELDS" });
+      }
+      const kyc = await prisma.travelSupplierKyc.findUnique({
+        where: { supplierId: supplier.id },
+      });
+      if (!kyc) {
+        return res.status(404).json({ error: "KYC not initialised", code: "KYC_NOT_INITIALISED" });
+      }
+      if (kyc.status !== "submitted") {
+        return res.status(409).json({
+          error: `Can only reject from status=submitted (was ${kyc.status})`,
+          code: "INVALID_STATE_TRANSITION",
+        });
+      }
+      const updated = await prisma.travelSupplierKyc.update({
+        where: { id: kyc.id },
+        data: {
+          status: "rejected",
+          rejectedAt: new Date(),
+          rejectionReason: String(rejectionReason).trim(),
+        },
+      });
+      await writeAudit(
+        "TravelSupplierKyc",
+        "REJECT",
+        updated.id,
+        req.user.userId,
+        req.travelTenant.id,
+        { rejectionReason: updated.rejectionReason },
+      );
+      res.json({
+        supplierId: supplier.id,
+        status: updated.status,
+        rejectedAt: updated.rejectedAt,
+        rejectionReason: updated.rejectionReason,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-sup] kyc reject error:", e.message);
+      res.status(500).json({ error: "Failed to reject KYC" });
+    }
+  },
+);
+
+// PUT /api/travel/suppliers/:id/kyc/checklist/:itemId
+router.put(
+  "/suppliers/:id/kyc/checklist/:itemId",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const supplier = await loadSupplierForKyc(req);
+      const itemId = parseInt(req.params.itemId, 10);
+      if (!Number.isFinite(itemId)) {
+        return res.status(400).json({ error: "itemId must be a number", code: "INVALID_ID" });
+      }
+      const kyc = await prisma.travelSupplierKyc.findUnique({
+        where: { supplierId: supplier.id },
+      });
+      if (!kyc) {
+        return res.status(404).json({ error: "KYC not initialised", code: "KYC_NOT_INITIALISED" });
+      }
+      const item = await prisma.travelSupplierKycChecklistItem.findFirst({
+        where: { id: itemId, kycId: kyc.id, tenantId: req.travelTenant.id },
+      });
+      if (!item) {
+        return res.status(404).json({ error: "Checklist item not found", code: "NOT_FOUND" });
+      }
+
+      const { status, documentUrl, notes } = req.body || {};
+      const VALID_ITEM_STATUS = ["pending", "submitted", "verified", "rejected"];
+      const data = {};
+      if (status !== undefined) {
+        if (!VALID_ITEM_STATUS.includes(status)) {
+          return res.status(400).json({
+            error: `status must be one of: ${VALID_ITEM_STATUS.join(", ")}`,
+            code: "INVALID_STATUS",
+          });
+        }
+        if (status === "verified" && req.user.role !== "ADMIN") {
+          return res.status(403).json({
+            error: "Only ADMIN can mark items verified",
+            code: "ADMIN_REQUIRED",
+          });
+        }
+        data.status = status;
+        if (status === "submitted") data.submittedAt = new Date();
+        if (status === "verified") {
+          data.verifiedAt = new Date();
+          data.verifiedBy = req.user.userId;
+        }
+      }
+      if (documentUrl !== undefined) data.documentUrl = documentUrl ? String(documentUrl) : null;
+      if (notes !== undefined) data.notes = notes ? String(notes) : null;
+
+      if (Object.keys(data).length === 0) {
+        return res.status(400).json({ error: "no updatable fields provided", code: "EMPTY_BODY" });
+      }
+
+      const updated = await prisma.travelSupplierKycChecklistItem.update({
+        where: { id: item.id },
+        data,
+      });
+      await writeAudit(
+        "TravelSupplierKycChecklistItem",
+        "UPDATE",
+        updated.id,
+        req.user.userId,
+        req.travelTenant.id,
+        { itemKey: item.itemKey, fields: Object.keys(data) },
+      );
+      res.json({
+        supplierId: supplier.id,
+        item: {
+          id: updated.id,
+          itemKey: updated.itemKey,
+          itemLabel: updated.itemLabel,
+          required: updated.required,
+          status: updated.status,
+          documentUrl: updated.documentUrl,
+          notes: updated.notes,
+          submittedAt: updated.submittedAt,
+          verifiedAt: updated.verifiedAt,
+          verifiedBy: updated.verifiedBy,
+          sortOrder: updated.sortOrder,
+        },
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-sup] kyc checklist update error:", e.message);
+      res.status(500).json({ error: "Failed to update checklist item" });
+    }
+  },
+);
+
+// ─── PRD_TRAVEL_SUPPLIER_MASTER G039 — Dispute history + chargeback log ──
+//
+// Polymorphic ledger for disputes between operator and supplier.
+//   - direction: outbound = operator → supplier; inbound = supplier → operator
+//   - Optional payableId / invoiceId tie a dispute to a specific A/P entry
+//     or customer invoice (customer-side chargeback).
+//
+// Status flow: open → in_review → resolved (or → rejected → escalated)
+
+const VALID_DISPUTE_DIRECTION = ["outbound", "inbound"];
+const VALID_DISPUTE_TYPE = [
+  "service_failure", "overbill", "duplicate",
+  "no_show", "refund_chargeback", "other",
+];
+const VALID_DISPUTE_STATUS = ["open", "in_review", "resolved", "rejected", "escalated"];
+
+function assertValidDirection(d) {
+  if (!VALID_DISPUTE_DIRECTION.includes(d)) {
+    const err = new Error(`direction must be one of: ${VALID_DISPUTE_DIRECTION.join(", ")}`);
+    err.status = 400;
+    err.code = "INVALID_DIRECTION";
+    throw err;
+  }
+}
+
+function assertValidType(t) {
+  if (!VALID_DISPUTE_TYPE.includes(t)) {
+    const err = new Error(`type must be one of: ${VALID_DISPUTE_TYPE.join(", ")}`);
+    err.status = 400;
+    err.code = "INVALID_TYPE";
+    throw err;
+  }
+}
+
+function assertValidDisputeAmount(a) {
+  const v = typeof a === "number" ? a : Number(a);
+  if (!Number.isFinite(v) || v < 0) {
+    const err = new Error("amount must be a non-negative number");
+    err.status = 400;
+    err.code = "INVALID_AMOUNT";
+    throw err;
+  }
+}
+
+function projectDispute(d) {
+  return {
+    id: d.id,
+    supplierId: d.supplierId,
+    payableId: d.payableId,
+    invoiceId: d.invoiceId,
+    direction: d.direction,
+    type: d.type,
+    status: d.status,
+    amount: d.amount,
+    currency: d.currency,
+    description: d.description,
+    evidenceUrls: d.evidenceUrls,
+    raisedBy: d.raisedBy,
+    raisedAt: d.raisedAt,
+    resolvedAt: d.resolvedAt,
+    resolvedBy: d.resolvedBy,
+    resolution: d.resolution,
+    refundedAmount: d.refundedAmount,
+    createdAt: d.createdAt,
+    updatedAt: d.updatedAt,
+  };
+}
+
+// POST /api/travel/suppliers/:id/disputes
+router.post(
+  "/suppliers/:id/disputes",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const supplier = await loadSupplierForKyc(req);
+      const {
+        payableId, invoiceId,
+        direction, type, amount, currency,
+        description, evidenceUrls,
+      } = req.body || {};
+
+      if (!direction) {
+        return res.status(400).json({ error: "direction required", code: "MISSING_FIELDS" });
+      }
+      assertValidDirection(direction);
+      if (!type) {
+        return res.status(400).json({ error: "type required", code: "MISSING_FIELDS" });
+      }
+      assertValidType(type);
+      if (amount == null) {
+        return res.status(400).json({ error: "amount required", code: "MISSING_FIELDS" });
+      }
+      assertValidDisputeAmount(amount);
+      if (!description || !String(description).trim()) {
+        return res.status(400).json({ error: "description required", code: "MISSING_FIELDS" });
+      }
+
+      if (payableId != null) {
+        const pid = parseInt(payableId, 10);
+        if (!Number.isFinite(pid)) {
+          return res.status(400).json({ error: "payableId must be a number", code: "INVALID_ID" });
+        }
+        const payable = await prisma.travelSupplierPayable.findFirst({
+          where: { id: pid, tenantId: req.travelTenant.id, supplierId: supplier.id },
+          select: { id: true },
+        });
+        if (!payable) {
+          return res.status(400).json({ error: "payableId not found for this supplier", code: "PAYABLE_NOT_FOUND" });
+        }
+      }
+      if (invoiceId != null) {
+        const iid = parseInt(invoiceId, 10);
+        if (!Number.isFinite(iid)) {
+          return res.status(400).json({ error: "invoiceId must be a number", code: "INVALID_ID" });
+        }
+        const invoice = await prisma.travelInvoice.findFirst({
+          where: { id: iid, tenantId: req.travelTenant.id },
+          select: { id: true },
+        });
+        if (!invoice) {
+          return res.status(400).json({ error: "invoiceId not found", code: "INVOICE_NOT_FOUND" });
+        }
+      }
+
+      let evidenceBlob = null;
+      if (evidenceUrls !== undefined && evidenceUrls !== null) {
+        if (!Array.isArray(evidenceUrls)) {
+          return res.status(400).json({ error: "evidenceUrls must be an array of strings", code: "INVALID_EVIDENCE" });
+        }
+        if (evidenceUrls.some((u) => typeof u !== "string")) {
+          return res.status(400).json({ error: "evidenceUrls must be an array of strings", code: "INVALID_EVIDENCE" });
+        }
+        evidenceBlob = JSON.stringify(evidenceUrls);
+      }
+
+      const created = await prisma.travelSupplierDispute.create({
+        data: {
+          tenantId: req.travelTenant.id,
+          supplierId: supplier.id,
+          payableId: payableId != null ? parseInt(payableId, 10) : null,
+          invoiceId: invoiceId != null ? parseInt(invoiceId, 10) : null,
+          direction,
+          type,
+          status: "open",
+          amount: String(amount),
+          currency: currency ? String(currency) : "INR",
+          description: String(description).trim(),
+          evidenceUrls: evidenceBlob,
+          raisedBy: req.user.userId,
+        },
+      });
+      await writeAudit(
+        "TravelSupplierDispute",
+        "CREATE",
+        created.id,
+        req.user.userId,
+        req.travelTenant.id,
+        { supplierId: supplier.id, direction, type, amount: String(amount) },
+      );
+      res.status(201).json(projectDispute(created));
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-sup] dispute create error:", e.message);
+      res.status(500).json({ error: "Failed to create dispute" });
+    }
+  },
+);
+
+// GET /api/travel/suppliers/:id/disputes
+router.get(
+  "/suppliers/:id/disputes",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER", "USER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const supplier = await loadSupplierForKyc(req);
+      const limit = Math.min(parseInt(req.query.limit, 10) || 50, 200);
+      const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+      const where = { tenantId: req.travelTenant.id, supplierId: supplier.id };
+      if (req.query.status) {
+        if (!VALID_DISPUTE_STATUS.includes(String(req.query.status))) {
+          return res.status(400).json({ error: "invalid status filter", code: "INVALID_STATUS" });
+        }
+        where.status = String(req.query.status);
+      }
+      if (req.query.direction) {
+        if (!VALID_DISPUTE_DIRECTION.includes(String(req.query.direction))) {
+          return res.status(400).json({ error: "invalid direction filter", code: "INVALID_DIRECTION" });
+        }
+        where.direction = String(req.query.direction);
+      }
+      if (req.query.type) {
+        if (!VALID_DISPUTE_TYPE.includes(String(req.query.type))) {
+          return res.status(400).json({ error: "invalid type filter", code: "INVALID_TYPE" });
+        }
+        where.type = String(req.query.type);
+      }
+      const [total, rows] = await Promise.all([
+        prisma.travelSupplierDispute.count({ where }),
+        prisma.travelSupplierDispute.findMany({
+          where,
+          orderBy: [{ raisedAt: "desc" }],
+          take: limit,
+          skip: offset,
+        }),
+      ]);
+      res.json({
+        supplierId: supplier.id,
+        disputes: rows.map(projectDispute),
+        total,
+        limit,
+        offset,
+      });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-sup] dispute list error:", e.message);
+      res.status(500).json({ error: "Failed to list disputes" });
+    }
+  },
+);
+
+// GET /api/travel/suppliers/:id/disputes/:disputeId
+router.get(
+  "/suppliers/:id/disputes/:disputeId",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER", "USER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const supplier = await loadSupplierForKyc(req);
+      const disputeId = parseInt(req.params.disputeId, 10);
+      if (!Number.isFinite(disputeId)) {
+        return res.status(400).json({ error: "disputeId must be a number", code: "INVALID_ID" });
+      }
+      const dispute = await prisma.travelSupplierDispute.findFirst({
+        where: { id: disputeId, tenantId: req.travelTenant.id, supplierId: supplier.id },
+      });
+      if (!dispute) {
+        return res.status(404).json({ error: "Dispute not found", code: "NOT_FOUND" });
+      }
+      res.json(projectDispute(dispute));
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-sup] dispute get error:", e.message);
+      res.status(500).json({ error: "Failed to get dispute" });
+    }
+  },
+);
+
+// PUT /api/travel/suppliers/:id/disputes/:disputeId
+router.put(
+  "/suppliers/:id/disputes/:disputeId",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const supplier = await loadSupplierForKyc(req);
+      const disputeId = parseInt(req.params.disputeId, 10);
+      if (!Number.isFinite(disputeId)) {
+        return res.status(400).json({ error: "disputeId must be a number", code: "INVALID_ID" });
+      }
+      const dispute = await prisma.travelSupplierDispute.findFirst({
+        where: { id: disputeId, tenantId: req.travelTenant.id, supplierId: supplier.id },
+      });
+      if (!dispute) {
+        return res.status(404).json({ error: "Dispute not found", code: "NOT_FOUND" });
+      }
+      if (dispute.status === "resolved" || dispute.status === "rejected") {
+        return res.status(409).json({
+          error: `Cannot edit a ${dispute.status} dispute`,
+          code: "DISPUTE_CLOSED",
+        });
+      }
+      const { status, type, description, evidenceUrls, amount } = req.body || {};
+      const data = {};
+      if (status !== undefined) {
+        if (!["open", "in_review"].includes(status)) {
+          return res.status(400).json({
+            error: "status here may only flip between open and in_review",
+            code: "INVALID_STATUS_TRANSITION",
+          });
+        }
+        data.status = status;
+      }
+      if (type !== undefined) {
+        assertValidType(type);
+        data.type = type;
+      }
+      if (description !== undefined) {
+        if (!String(description).trim()) {
+          return res.status(400).json({ error: "description must be non-empty", code: "INVALID_DESCRIPTION" });
+        }
+        data.description = String(description).trim();
+      }
+      if (amount !== undefined) {
+        assertValidDisputeAmount(amount);
+        data.amount = String(amount);
+      }
+      if (evidenceUrls !== undefined) {
+        if (evidenceUrls === null) {
+          data.evidenceUrls = null;
+        } else {
+          if (!Array.isArray(evidenceUrls) || evidenceUrls.some((u) => typeof u !== "string")) {
+            return res.status(400).json({ error: "evidenceUrls must be an array of strings", code: "INVALID_EVIDENCE" });
+          }
+          data.evidenceUrls = JSON.stringify(evidenceUrls);
+        }
+      }
+      if (Object.keys(data).length === 0) {
+        return res.status(400).json({ error: "no updatable fields provided", code: "EMPTY_BODY" });
+      }
+      const updated = await prisma.travelSupplierDispute.update({
+        where: { id: dispute.id },
+        data,
+      });
+      await writeAudit(
+        "TravelSupplierDispute",
+        "UPDATE",
+        updated.id,
+        req.user.userId,
+        req.travelTenant.id,
+        { fields: Object.keys(data) },
+      );
+      res.json(projectDispute(updated));
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-sup] dispute update error:", e.message);
+      res.status(500).json({ error: "Failed to update dispute" });
+    }
+  },
+);
+
+// POST /api/travel/suppliers/:id/disputes/:disputeId/resolve
+router.post(
+  "/suppliers/:id/disputes/:disputeId/resolve",
+  verifyToken,
+  verifyRole(["ADMIN"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const supplier = await loadSupplierForKyc(req);
+      const disputeId = parseInt(req.params.disputeId, 10);
+      if (!Number.isFinite(disputeId)) {
+        return res.status(400).json({ error: "disputeId must be a number", code: "INVALID_ID" });
+      }
+      const dispute = await prisma.travelSupplierDispute.findFirst({
+        where: { id: disputeId, tenantId: req.travelTenant.id, supplierId: supplier.id },
+      });
+      if (!dispute) {
+        return res.status(404).json({ error: "Dispute not found", code: "NOT_FOUND" });
+      }
+      if (["resolved", "rejected"].includes(dispute.status)) {
+        return res.status(409).json({
+          error: `Cannot resolve a ${dispute.status} dispute`,
+          code: "DISPUTE_CLOSED",
+        });
+      }
+      const { resolution, refundedAmount, rejected } = req.body || {};
+      if (!resolution || !String(resolution).trim()) {
+        return res.status(400).json({ error: "resolution required", code: "MISSING_FIELDS" });
+      }
+      if (refundedAmount != null) {
+        assertValidDisputeAmount(refundedAmount);
+      }
+      const newStatus = rejected ? "rejected" : "resolved";
+      const updated = await prisma.travelSupplierDispute.update({
+        where: { id: dispute.id },
+        data: {
+          status: newStatus,
+          resolvedAt: new Date(),
+          resolvedBy: req.user.userId,
+          resolution: String(resolution).trim(),
+          refundedAmount: refundedAmount != null ? String(refundedAmount) : null,
+        },
+      });
+      await writeAudit(
+        "TravelSupplierDispute",
+        newStatus === "rejected" ? "REJECT" : "RESOLVE",
+        updated.id,
+        req.user.userId,
+        req.travelTenant.id,
+        { resolvedBy: req.user.userId, refundedAmount: refundedAmount != null ? String(refundedAmount) : null },
+      );
+      res.json(projectDispute(updated));
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-sup] dispute resolve error:", e.message);
+      res.status(500).json({ error: "Failed to resolve dispute" });
+    }
+  },
+);
+
+// POST /api/travel/suppliers/:id/disputes/:disputeId/escalate
+router.post(
+  "/suppliers/:id/disputes/:disputeId/escalate",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const supplier = await loadSupplierForKyc(req);
+      const disputeId = parseInt(req.params.disputeId, 10);
+      if (!Number.isFinite(disputeId)) {
+        return res.status(400).json({ error: "disputeId must be a number", code: "INVALID_ID" });
+      }
+      const dispute = await prisma.travelSupplierDispute.findFirst({
+        where: { id: disputeId, tenantId: req.travelTenant.id, supplierId: supplier.id },
+      });
+      if (!dispute) {
+        return res.status(404).json({ error: "Dispute not found", code: "NOT_FOUND" });
+      }
+      if (["resolved", "rejected", "escalated"].includes(dispute.status)) {
+        return res.status(409).json({
+          error: `Cannot escalate from status=${dispute.status}`,
+          code: "INVALID_STATE_TRANSITION",
+        });
+      }
+      const updated = await prisma.travelSupplierDispute.update({
+        where: { id: dispute.id },
+        data: { status: "escalated" },
+      });
+      await writeAudit(
+        "TravelSupplierDispute",
+        "ESCALATE",
+        updated.id,
+        req.user.userId,
+        req.travelTenant.id,
+        { previousStatus: dispute.status },
+      );
+      res.json(projectDispute(updated));
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-sup] dispute escalate error:", e.message);
+      res.status(500).json({ error: "Failed to escalate dispute" });
+    }
+  },
+);
+
+// GET /api/travel/disputes/stats — tenant-wide rollup.
+router.get(
+  "/disputes/stats",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const all = await prisma.travelSupplierDispute.findMany({
+        where: { tenantId: req.travelTenant.id },
+        select: { status: true, amount: true, raisedAt: true, resolvedAt: true },
+      });
+      const byStatus = { open: 0, in_review: 0, resolved: 0, rejected: 0, escalated: 0 };
+      let openAmount = 0;
+      let openCount = 0;
+      let resolvedDays = 0;
+      let resolvedCount = 0;
+      for (const d of all) {
+        if (byStatus[d.status] !== undefined) byStatus[d.status] += 1;
+        if (d.status === "open" || d.status === "in_review" || d.status === "escalated") {
+          openCount += 1;
+          openAmount = Math.round((openAmount + Number(d.amount) + Number.EPSILON) * 100) / 100;
+        }
+        if (d.resolvedAt && (d.status === "resolved" || d.status === "rejected")) {
+          const ms = new Date(d.resolvedAt).getTime() - new Date(d.raisedAt).getTime();
+          resolvedDays += ms / 86_400_000;
+          resolvedCount += 1;
+        }
+      }
+      const avgResolutionDays = resolvedCount > 0
+        ? Math.round((resolvedDays / resolvedCount) * 100) / 100
+        : null;
+      res.json({
+        byStatus,
+        openCount,
+        openAmount,
+        resolvedCount,
+        avgResolutionDays,
+        total: all.length,
+      });
+    } catch (e) {
+      console.error("[travel-sup] dispute stats error:", e.message);
+      res.status(500).json({ error: "Failed to compute dispute stats" });
+    }
+  },
+);
+
 module.exports = router;

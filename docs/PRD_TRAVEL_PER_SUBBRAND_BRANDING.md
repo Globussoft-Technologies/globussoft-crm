@@ -6,6 +6,24 @@
 
 ---
 
+## Implementation Status (audited 2026-06-13 against HEAD `043b9ab3`)
+
+| Metric | Value |
+|---|---|
+| Total FRs | 36 |
+| ✅ Shipped | 3 (8%) |
+| 🟡 Partial | 9 |
+| 🔌 Stub | 1 |
+| ❌ Missing | 23 |
+| **Net gap** | **33 items** — ~17.5 eng-days of consumer-surface wiring + content blocked on Q22 |
+| Primary blocker | **Q22 Yasin brand pack** (logos/palettes/fonts/PDF covers per sub-brand) unblocks ~33 items + 4 PRDs concurrently — the single highest-blast-radius cred. Consumer wiring (PDF/email/portal/embed/microsites) is buildable NOW with stub content |
+
+Shipped: BrandKit model + schema versioning, admin route scaffold (`/settings/brand-kits`), invoice-PDF brand-kit consumer partial.
+
+**Single source of truth for all gap items + Wave 4 execution plan:** [TRAVEL_GAP_CLOSURE_TRACKER.md §3.10 + §4 (Q22) + §7 Wave 4](TRAVEL_GAP_CLOSURE_TRACKER.md).
+
+---
+
 ## §1 Background + source attribution
 
 The Travel CRM hosts 4 sub-brands under one tenant per Q25 (TMC school trips / RFU Umrah / Travel Stall family holidays / Visa Sure). Each sub-brand has distinct visual identity — TMC ships navy + gold to schools, RFU ships green + Makkah-skyline to Umrah pilgrims, Travel Stall ships warm family-holiday palette, Visa Sure ships customs-cleared / success-rate stamps. Today's `Settings → Branding` page sets ONE logo + ONE brand colour for the whole tenant; PDFs, microsites, emails, and the customer portal all render with that single identity regardless of which sub-brand owns the document. The result: a Travel Stall family-trip invoice prints with TMC navy or vice-versa; pilgrims receive Umrah receipts wearing school-trip imagery.

@@ -1,5 +1,12 @@
 # Travel PRD ↔ Codebase Gap Analysis — 2026-06-12
 
+> **⚠️ SUPERSEDED 2026-06-13** — Replaced by [TRAVEL_GAP_CLOSURE_TRACKER.md](TRAVEL_GAP_CLOSURE_TRACKER.md), which extends the audit to all 15 travel sub-PRDs (433 FRs total, not just the master PRD), classifies 249 gap items, and includes an execution-wave plan.
+>
+> Section 5.A's 9 code gaps (A1–A9) are now 8 fully closed + 1 partial (A3), shipped by PRs #1150 (`5b2317ed`) and #1151 (`043b9ab3`) on 2026-06-13. The tracker carries forward the A3 residual as G124.
+>
+> This file is retained for historical/audit-trail purposes. Do NOT update from here; update the tracker instead.
+
+
 > **Source PRD:** [TRAVEL_CRM_PRD.md](TRAVEL_CRM_PRD.md) (master travel PRD, §4 functional requirements + §5–§9 build plan)
 > **As-of:** repo state on 2026-06-12 (latest version v3.9.4, 2026-06-08)
 > **Method:** fresh code-verification sweep (5 parallel exploration passes over `backend/routes/`, `backend/cron/`, `backend/lib/`, `backend/services/`, `backend/prisma/schema.prisma`, `frontend/src/pages/travel/`, seed files) cross-checked against [TRAVEL_CRM_GAP_AUDIT_2026-05-22.md](TRAVEL_CRM_GAP_AUDIT_2026-05-22.md), [TODOS.md](../TODOS.md), [CREDS_TRACKER.md](CREDS_TRACKER.md), [DECISIONS_TRACKER.md](DECISIONS_TRACKER.md), [MANUAL_CODING_BACKLOG.md](MANUAL_CODING_BACKLOG.md), [TRAVEL_BIG_SCOPE_BACKLOG.md](TRAVEL_BIG_SCOPE_BACKLOG.md).

@@ -15,6 +15,23 @@
 
 ---
 
+## Implementation Status (audited 2026-06-13 against HEAD `043b9ab3`)
+
+| Metric | Value |
+|---|---|
+| Total FRs | 28 |
+| ✅ Shipped | 25 (89%) |
+| 🟡 Partial | 3 |
+| ❌ Missing | 0 |
+| **Net gap** | **3 items** (~2.5 eng-days — minor polish) |
+| Primary blocker | Essentially complete. Residual: §3.5.5 assurance/trust standing-facts admin surface; DD-5.7 blind-collapsed UX on DiagnosticDetail; §3.9 calendar-deep booking-link integration |
+
+Most complete PRD in the travel suite. Engine, guardrail, weights config, catalogue, public flow, lead-quality classifier, sales brief, LLM jobs A+B all landed (`lib/tmcDiagnosticEngine.js`, `lib/tmcLeadQuality.js`, `lib/tmcReportGuard.js`, `services/tmcDiagnosticPrompts.js`, `routes/travel_engine_weights.js`).
+
+**Single source of truth for residual gap items + Wave 6 plan:** [TRAVEL_GAP_CLOSURE_TRACKER.md §3.11 + §7 Wave 6](TRAVEL_GAP_CLOSURE_TRACKER.md).
+
+---
+
 ## §1 Background + source attribution
 
 TMC (The Modern Classroom, `TMC Nexus Pvt Ltd`) sells B2B educational school trips to Indian schools. The buyer is a school owner, principal, or academic coordinator spending parents' money on minors. Decision drivers in order: safety, cost parents will accept, curriculum alignment with measurable outcomes, and an approvable plan for the management committee. TMC's positioning is **diagnostic-first, never destination-first** — the school answers a structured questionnaire and gets back a profile of their students against seven learning skills; the specific trip is presented in a follow-on sales call, never in the report.

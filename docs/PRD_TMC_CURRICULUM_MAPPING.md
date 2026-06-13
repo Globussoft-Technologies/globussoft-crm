@@ -24,6 +24,23 @@ existing TMC diagnostic-engine maintainers.
 
 ---
 
+## Implementation Status (audited 2026-06-13 against HEAD `043b9ab3`)
+
+| Metric | Value |
+|---|---|
+| Total FRs | 10 |
+| ✅ Shipped | 9 (90%) |
+| 🟡 Partial | 1 (FR-10 E2E spec wiring) |
+| ❌ Missing | 0 |
+| **Net gap** | **1 item** (~0.5 eng-days verify) |
+| Primary blocker | Engine + admin UI ready. Q13 data drop from TMC academic coordinator is product-blocked, not engineering |
+
+Shipped: `TravelCurriculumMapping` model (renamed from PRD's `CurriculumMapping`), CSV bulk-import atomic, full CRUD + export.csv variants, diagnostic engine integration (`travel_diagnostics.js:351-487` writes `curriculumFitJson`), PDF "Why this destination fits" section, `CurriculumAdmin.jsx`.
+
+**Single source of truth for residual gap items + Wave 6 plan:** [TRAVEL_GAP_CLOSURE_TRACKER.md §3.12 + §7 Wave 6](TRAVEL_GAP_CLOSURE_TRACKER.md).
+
+---
+
 ## 1. Background
 
 TMC's brand positioning is **"diagnostic-first, not destination-first."**

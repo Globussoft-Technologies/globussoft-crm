@@ -28,6 +28,24 @@ is the closest match for the per-portal adapter maintenance pattern.
 
 ---
 
+## Implementation Status (audited 2026-06-13 against HEAD `043b9ab3`)
+
+| Metric | Value |
+|---|---|
+| Total FRs | 24 |
+| ✅ Shipped | 0 (0%) |
+| 🔌 Stub | 16 (Zikr Cabs 8 + Haramain HSR 8 — inert clients with budget-cap gates) |
+| ❌ Missing | 8 (entire 5-portal Saudi hotel-scraper — no code) |
+| ⏭️ Deferred NFRs | 5 |
+| **Net gap** | **24 items, all cred/vendor-blocked** |
+| Primary blocker | 7 vendor onboardings: Q-RFU-1 Zikr Cabs, Q-RFU-2..6 Almosafer/Tajawal/MyHoliday2/PilgrimsChoice/ReservationHouse hotel scrapers, Q-RFU-7 HHR Haramain. Plus RateHawk Q19 |
+
+`backend/services/zikrCabsClient.js` + `haramainRailClient.js` exist as inert stubs with budget-cap + integration gates wired. `saudiHotelOrchestrator.js` and `hotelAdapters/` directory do NOT exist — full Saudi hotel-scraper build (~8-10d) starts when first 2 vendor creds drop.
+
+**Single source of truth for all gap items + Wave 11 execution plan:** [TRAVEL_GAP_CLOSURE_TRACKER.md §4 (Q-RFU-*) + §6.RFU + §7 Wave 11](TRAVEL_GAP_CLOSURE_TRACKER.md).
+
+---
+
 ## 1. Background
 
 The 2026-05-23 portal feature matrix audit ([docs/TRAVEL_CRM_PORTAL_FEATURE_MATRIX.md](TRAVEL_CRM_PORTAL_FEATURE_MATRIX.md))

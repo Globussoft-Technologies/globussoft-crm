@@ -19,6 +19,24 @@ who will service Visa Sure leads as advisors).
 
 ---
 
+## Implementation Status (audited 2026-06-13 against HEAD `043b9ab3`)
+
+| Metric | Value |
+|---|---|
+| Total FRs | 26 |
+| ✅ Shipped | 18 (69%) |
+| 🟡 Partial | 6 |
+| 🔌 Stub | 1 (visa-summary LLM, Q11) |
+| ❌ Missing | 1 (`RejectionRecoveryProgram` model) |
+| **Net gap** | **8 items** (~2 eng-days actionable + Q22 brand-pack + Q11 LLM + Q9 WA creds) |
+| Primary blocker | Q22 Yasin brand variants for PDFs (FR-1.3/2/5.3/8.3); Q11 visa-summary LLM real mode; Q9 WA advisor priority alert dispatch; `RejectionRecoveryProgram` model + endpoint (forward-ref `VisaApplication.recoveryProgramId` already exists) |
+
+Shipped: `VisaApplication` + state machine, `EmbassyRule`, `VisaDocumentChecklistItem`, `familySize` column (post-PC-8 resolve), `cron/visaRiskFlagEngine.js` with 13 active rules (R1–R13), advisor dashboard, analytics route, public diagnostic shared with travel-wide engine.
+
+**Single source of truth for residual gap items + Wave 6 plan:** [TRAVEL_GAP_CLOSURE_TRACKER.md §3.13 + §4 (Q22, Q11, Q9) + §7 Wave 6](TRAVEL_GAP_CLOSURE_TRACKER.md).
+
+---
+
 ## 1. Background
 
 Visa Sure is the fourth sub-brand on the Travel CRM tenant (after TMC, RFU,

@@ -897,3 +897,220 @@ describe('POST /api/travel/itineraries/:id/items lat/lng whitelist (S118)', () =
     expect(itineraryItemCreateMock).not.toHaveBeenCalled();
   });
 });
+
+// ---------------------------------------------------------------------------
+// G050 — POST /api/travel/itineraries/:id/save-as-template
+// Per PRD_TRAVEL_ITINERARY_UPGRADES FR-3.1.f.
+// Pins:
+//   - ADMIN happy path: creates ItineraryTemplate with derived
+//     name/destination/duration/basePriceMinor + serialized items
+//   - MANAGER happy path
+//   - USER → 403 (verifyRole gate)
+//   - tenant + sub-brand gates fire via loadItineraryWithGuard
+//   - body.name override is honored
+//   - duration derived from max(date-range span, max(dayNumber), 1)
+//   - basePriceMinor derived from totalAmount * 100
+// ---------------------------------------------------------------------------
+describe('G050 — POST /api/travel/itineraries/:id/save-as-template', () => {
+  beforeEach(() => {
+    prisma.itinerary.findFirst.mockReset();
+    prisma.itineraryItem.findMany.mockReset();
+    prisma.itineraryTemplate.create = vi.fn();
+    prisma.itineraryTemplate.create.mockReset();
+  });
+
+  test('ADMIN happy path → 201 + new template id + derived fields', async () => {
+    // loadItineraryWithGuard hits findFirst with select { id, subBrand }
+    prisma.itinerary.findFirst
+      .mockResolvedValueOnce({ id: 42, subBrand: 'travelstall' })
+      .mockResolvedValueOnce({
+        id: 42,
+        subBrand: 'travelstall',
+        destination: 'Goa Beach Holiday',
+        startDate: new Date('2026-07-01T00:00:00Z'),
+        endDate: new Date('2026-07-05T00:00:00Z'),
+        totalAmount: '85000.00',
+        currency: 'INR',
+      });
+    prisma.itineraryItem.findMany.mockResolvedValue([
+      { itemType: 'activity', position: 0, description: 'Beach walk', dayNumber: 1 },
+      { itemType: 'meal',     position: 1, description: 'Seafood lunch', dayNumber: 2 },
+    ]);
+    prisma.itineraryTemplate.create.mockImplementation(({ data }) => ({
+      id: 7001,
+      ...data,
+    }));
+
+    const app = makeApp();
+    const token = tokenFor('ADMIN');
+    const res = await request(app)
+      .post('/api/travel/itineraries/42/save-as-template')
+      .set('Authorization', `Bearer ${token}`)
+      .send({});
+
+    expect(res.status).toBe(201);
+    expect(res.body.id).toBe(7001);
+    const data = prisma.itineraryTemplate.create.mock.calls[0][0].data;
+    expect(data.tenantId).toBe(1);
+    expect(data.name).toBe('Goa Beach Holiday template');
+    expect(data.destinationName).toBe('Goa Beach Holiday');
+    expect(data.subBrand).toBe('travelstall');
+    expect(data.durationDays).toBe(5); // 4-day span + 1 (inclusive)
+    expect(data.basePriceMinor).toBe(8500000); // 85000 * 100
+    expect(data.currency).toBe('INR');
+    expect(typeof data.templateJson).toBe('string');
+    const tj = JSON.parse(data.templateJson);
+    expect(Array.isArray(tj.items)).toBe(true);
+    expect(tj.items.length).toBe(2);
+    expect(tj.items[0].dayNumber).toBe(1);
+    expect(tj.items[1].dayNumber).toBe(2);
+    expect(data.isActive).toBe(true);
+  });
+
+  test('MANAGER allowed', async () => {
+    prisma.itinerary.findFirst
+      .mockResolvedValueOnce({ id: 42, subBrand: 'travelstall' })
+      .mockResolvedValueOnce({
+        id: 42,
+        subBrand: 'travelstall',
+        destination: 'Paris',
+        startDate: null,
+        endDate: null,
+        totalAmount: null,
+        currency: 'INR',
+      });
+    prisma.itineraryItem.findMany.mockResolvedValue([]);
+    prisma.itineraryTemplate.create.mockResolvedValue({ id: 7002 });
+
+    const app = makeApp();
+    const token = tokenFor('MANAGER');
+    const res = await request(app)
+      .post('/api/travel/itineraries/42/save-as-template')
+      .set('Authorization', `Bearer ${token}`)
+      .send({});
+
+    expect(res.status).toBe(201);
+    expect(prisma.itineraryTemplate.create).toHaveBeenCalled();
+  });
+
+  test('USER → 403 (verifyRole gate; create never called)', async () => {
+    const app = makeApp();
+    const token = tokenFor('USER');
+    const res = await request(app)
+      .post('/api/travel/itineraries/42/save-as-template')
+      .set('Authorization', `Bearer ${token}`)
+      .send({});
+
+    expect(res.status).toBe(403);
+    expect(prisma.itineraryTemplate.create).not.toHaveBeenCalled();
+  });
+
+  test('body.name override is honored over derived default', async () => {
+    prisma.itinerary.findFirst
+      .mockResolvedValueOnce({ id: 42, subBrand: 'travelstall' })
+      .mockResolvedValueOnce({
+        id: 42,
+        subBrand: 'travelstall',
+        destination: 'Goa',
+        startDate: null,
+        endDate: null,
+        totalAmount: null,
+        currency: 'INR',
+      });
+    prisma.itineraryItem.findMany.mockResolvedValue([
+      { itemType: 'activity', position: 0, description: 'Day 1', dayNumber: 1 },
+      { itemType: 'activity', position: 1, description: 'Day 3', dayNumber: 3 },
+    ]);
+    prisma.itineraryTemplate.create.mockImplementation(({ data }) => ({
+      id: 7003,
+      ...data,
+    }));
+
+    const app = makeApp();
+    const token = tokenFor('ADMIN');
+    const res = await request(app)
+      .post('/api/travel/itineraries/42/save-as-template')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        name: 'My Custom Goa Adventure',
+        category: 'Beach',
+        description: 'Operator-curated.',
+      });
+
+    expect(res.status).toBe(201);
+    const data = prisma.itineraryTemplate.create.mock.calls[0][0].data;
+    expect(data.name).toBe('My Custom Goa Adventure');
+    expect(data.category).toBe('Beach');
+    expect(data.description).toBe('Operator-curated.');
+    // No date range → duration = max(dayNumber) = 3
+    expect(data.durationDays).toBe(3);
+  });
+
+  test('itinerary not found → 404 NOT_FOUND', async () => {
+    prisma.itinerary.findFirst.mockResolvedValueOnce(null);
+
+    const app = makeApp();
+    const token = tokenFor('ADMIN');
+    const res = await request(app)
+      .post('/api/travel/itineraries/999999/save-as-template')
+      .set('Authorization', `Bearer ${token}`)
+      .send({});
+
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('NOT_FOUND');
+    expect(prisma.itineraryTemplate.create).not.toHaveBeenCalled();
+  });
+
+  test('sub-brand denied → 403 SUB_BRAND_DENIED (loadItineraryWithGuard)', async () => {
+    prisma.user.findUnique.mockResolvedValue({
+      role: 'MANAGER',
+      subBrandAccess: JSON.stringify(['tmc']),
+    });
+    prisma.itinerary.findFirst.mockResolvedValueOnce({
+      id: 42,
+      subBrand: 'rfu', // caller (tmc-only) can't access rfu
+    });
+
+    const app = makeApp();
+    const token = tokenFor('MANAGER');
+    const res = await request(app)
+      .post('/api/travel/itineraries/42/save-as-template')
+      .set('Authorization', `Bearer ${token}`)
+      .send({});
+
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe('SUB_BRAND_DENIED');
+    expect(prisma.itineraryTemplate.create).not.toHaveBeenCalled();
+  });
+
+  test('totalAmount null → basePriceMinor null (no NaN)', async () => {
+    prisma.itinerary.findFirst
+      .mockResolvedValueOnce({ id: 42, subBrand: 'travelstall' })
+      .mockResolvedValueOnce({
+        id: 42,
+        subBrand: 'travelstall',
+        destination: 'Paris',
+        startDate: null,
+        endDate: null,
+        totalAmount: null,
+        currency: 'INR',
+      });
+    prisma.itineraryItem.findMany.mockResolvedValue([]);
+    prisma.itineraryTemplate.create.mockImplementation(({ data }) => ({
+      id: 7004,
+      ...data,
+    }));
+
+    const app = makeApp();
+    const token = tokenFor('ADMIN');
+    const res = await request(app)
+      .post('/api/travel/itineraries/42/save-as-template')
+      .set('Authorization', `Bearer ${token}`)
+      .send({});
+
+    expect(res.status).toBe(201);
+    const data = prisma.itineraryTemplate.create.mock.calls[0][0].data;
+    expect(data.basePriceMinor).toBeNull();
+    expect(data.durationDays).toBe(1); // no dates + no items → minimum 1
+  });
+});

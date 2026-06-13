@@ -37,7 +37,7 @@ import "leaflet/dist/leaflet.css";
 import {
   ArrowLeft, Plane, Hotel, MapPin, Briefcase, FileText, Shield,
   Train, Bus, Car, Camera, Utensils, Package, GripVertical, MapPinned,
-  Sparkles, Layers,
+  Sparkles, Layers, BookmarkPlus,
 } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
@@ -133,6 +133,9 @@ export default function ItineraryEditor() {
   // <name>". 404s degrade silently (template might have been soft-deleted)
   // — chip just renders "Cloned from template #<id>" instead.
   const [lineageName, setLineageName] = useState(null);
+  // G050 — save-as-template progress flag (disables the button while the
+  // POST is in flight so multi-clicks don't fire a duplicate create).
+  const [savingTemplate, setSavingTemplate] = useState(false);
 
   // Hotel rate finder (PRD §4.3 preference filters) — collapsible panel
   // querying /api/travel/cost-master?category=hotel with view/floorLevel/
@@ -174,6 +177,40 @@ export default function ItineraryEditor() {
   }, [id]);
 
   useEffect(() => { load(); }, [load]);
+
+  // G050 — POST /api/travel/itineraries/:id/save-as-template. The route
+  // derives name/destination/duration/basePriceMinor from the itinerary;
+  // we let the operator override the name with a window.prompt() so
+  // they can label the template ("Goa Beach 5D — Q3 pricing") without
+  // navigating away. Empty/cancelled prompt → fall back to backend default.
+  const handleSaveAsTemplate = useCallback(async () => {
+    if (savingTemplate) return;
+    let nameOverride = null;
+    try {
+      // window.prompt is sync; degrade gracefully if the browser blocks it.
+      const proposed = window.prompt(
+        "Template name (leave blank to use the itinerary's destination):",
+        itin?.destination ? `${itin.destination} template` : "",
+      );
+      if (proposed === null) return; // user cancelled
+      nameOverride = proposed.trim() || null;
+    } catch (_e) {
+      nameOverride = null;
+    }
+    setSavingTemplate(true);
+    try {
+      const body = nameOverride ? { name: nameOverride } : {};
+      const tpl = await fetchApi(
+        `/api/travel/itineraries/${id}/save-as-template`,
+        { method: "POST", body: JSON.stringify(body) },
+      );
+      notify.success(`Saved as template: "${tpl?.name || "(unnamed)"}"`);
+    } catch (e) {
+      notify.error(e?.body?.error || e?.message || "Failed to save as template");
+    } finally {
+      setSavingTemplate(false);
+    }
+  }, [id, itin, notify, savingTemplate]);
 
   // G047 — resolve parent template name for the lineage chip. Only fires
   // when an itinerary has lineage set; the fetch is silent (no error toast)
@@ -324,10 +361,25 @@ export default function ItineraryEditor() {
         <span style={{ fontSize: "0.78rem", color: "var(--text-secondary)" }}>
           Drag items between days · {mapItems.length}/{items.length} plotted on map
         </span>
+        {/* G050 — Save current itinerary as template (PRD FR-3.1.f). Calls
+            POST /api/travel/itineraries/:id/save-as-template and toasts the
+            resulting template name. ADMIN+MANAGER only at the backend; the
+            button still renders for USER so they get the 403 toast (clearer
+            UX than a missing button). */}
+        <button
+          type="button"
+          data-testid="save-as-template-btn"
+          disabled={savingTemplate}
+          onClick={handleSaveAsTemplate}
+          style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: "0.35rem", padding: "0.35rem 0.7rem", border: "1px solid var(--border-color)", borderRadius: 6, background: "transparent", color: "var(--text-primary)", cursor: savingTemplate ? "wait" : "pointer", fontSize: "0.8rem", opacity: savingTemplate ? 0.6 : 1 }}
+          title="Save this itinerary's day-by-day layout as a reusable template"
+        >
+          <BookmarkPlus size={14} /> {savingTemplate ? "Saving…" : "Save as template"}
+        </button>
         <button
           type="button"
           onClick={() => setShowRates((s) => !s)}
-          style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: "0.35rem", padding: "0.35rem 0.7rem", border: "1px solid var(--border-color)", borderRadius: 6, background: showRates ? "var(--subtle-bg, rgba(0,0,0,0.04))" : "transparent", color: "var(--text-primary)", cursor: "pointer", fontSize: "0.8rem" }}
+          style={{ display: "inline-flex", alignItems: "center", gap: "0.35rem", padding: "0.35rem 0.7rem", border: "1px solid var(--border-color)", borderRadius: 6, background: showRates ? "var(--subtle-bg, rgba(0,0,0,0.04))" : "transparent", color: "var(--text-primary)", cursor: "pointer", fontSize: "0.8rem" }}
         >
           <Hotel size={14} /> Hotel rates {showRates ? "▾" : "▸"}
         </button>

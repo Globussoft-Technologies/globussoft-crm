@@ -5606,6 +5606,41 @@ model ItineraryTemplate {
   acceptedCount        Int       @default(0)
   avgFinalPrice        Decimal?  @db.Decimal(15, 2)
   lastUsedAt           DateTime?
+  // G048 — Template versioning (PRD_TRAVEL_ITINERARY_UPGRADES FR-3.5.a +
+  // FR-3.5.b). Operators iterate templates over time (refining destinations,
+  // adjusting day plans, fixing typos). The library should:
+  //   - keep a HISTORY of every version a template ever had (so older
+  //     itineraries that cloned from version N retain a working FK even
+  //     after the operator has rolled the template forward to N+1),
+  //   - filter the library grid to JUST the latest version by default
+  //     (operator picks from "the current recommended set", not a long
+  //     history of stale rows),
+  //   - allow archiving + restoring rows (soft-stash) so the operator can
+  //     hide a stale template without losing its history.
+  //
+  // Semantics:
+  //   version       1-indexed. First create lands @ version=1. PATCH inserts
+  //                 a NEW row with version=N+1 and flips the prior row's
+  //                 isLatest=false. The id of the new row is fresh — the
+  //                 old row keeps its id so existing Itinerary.clonedFromTemplateId
+  //                 FKs stay valid (a previously-cloned itinerary still points
+  //                 at the version it was cloned from, not the latest).
+  //   isLatest      Library list filters to `isLatest=true AND
+  //                 archivedAt IS NULL` by default. Adminish callers can
+  //                 set ?includeArchived=true or ?includeAllVersions=true
+  //                 to see the full history. Prior rows in the version
+  //                 chain stay queryable by id (the GET /:id surface
+  //                 returns them regardless of isLatest) so the lineage
+  //                 chip's template-name lookup keeps working.
+  //   archivedAt    Nullable timestamp. Set by POST /:id/archive (zaps
+  //                 from the default list). Cleared by POST /:id/restore.
+  //
+  // All three additive-with-default-or-nullable; no bless marker required.
+  // The `isLatest` Boolean defaults to `true` so existing rows (every row
+  // pre-G048) implicitly become "the latest version" with no backfill.
+  version              Int       @default(1)
+  isLatest             Boolean   @default(true)
+  archivedAt           DateTime?
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 
@@ -5616,6 +5651,13 @@ model ItineraryTemplate {
   @@index([tenantId, category])
   @@index([tenantId, subBrand])
   @@index([tenantId, isActive])
+  // G048 — composite index for the "isLatest + archivedAt IS NULL" library
+  // filter. The default library grid runs `WHERE tenantId = X AND
+  // isLatest = true AND archivedAt IS NULL ORDER BY createdAt DESC` —
+  // this index covers the predicate scan without falling back to
+  // tenantId-only + filter. Additive index, no bless marker required per
+  // CLAUDE.md migration-safety rule.
+  @@index([tenantId, isLatest, archivedAt])
 }
 
 model TravelSeasonCalendar {

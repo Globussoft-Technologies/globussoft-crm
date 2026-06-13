@@ -3152,6 +3152,179 @@ router.post("/itineraries/:id/reject", verifyToken, requireTravelTenant, async (
   }
 });
 
+// POST /api/travel/itineraries/:id/save-as-template (ADMIN + MANAGER)
+//
+// G050 — Save current itinerary as template (PRD_TRAVEL_ITINERARY_UPGRADES
+// FR-3.1.f). Operator built an itinerary the customer loved; the operator
+// wants to lock this layout in as a reusable template. We:
+//   1. Load the itinerary (via loadItineraryWithGuard for tenant + sub-brand
+//      scope).
+//   2. Load the itinerary's items so we can serialize the day-by-day plan
+//      into templateJson.items[].
+//   3. Create a new ItineraryTemplate row scoped to the same tenant +
+//      sub-brand, with name + destinationName + durationDays + basePriceMinor
+//      derived from the itinerary. Caller can override `name` via body
+//      (operator-supplied template label).
+//   4. Return the created template (id + name + …).
+//
+// Body shape (all optional):
+//   { name?: string,          // override template name (default: itinerary.destination + " template")
+//     category?: string,       // free-form category tag
+//     description?: string     // 1-2 paragraph blurb
+//   }
+//
+// RBAC: ADMIN + MANAGER only. USER → 403 (matches the templates POST gate).
+//
+// Note: this endpoint creates a NEW ItineraryTemplate row at version=1
+// (it's a brand-new lineage, not a version of an existing template). The
+// itinerary itself is unchanged — we don't bump its clonedFromTemplateId
+// or other fields. Operators who want to lineage forward from the new
+// template can do so on the next clone.
+router.post(
+  "/itineraries/:id/save-as-template",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const itin = await loadItineraryWithGuard(req);
+      const full = await prisma.itinerary.findFirst({
+        where: { id: itin.id, tenantId: req.travelTenant.id },
+        select: {
+          id: true,
+          subBrand: true,
+          destination: true,
+          startDate: true,
+          endDate: true,
+          totalAmount: true,
+          currency: true,
+        },
+      });
+      if (!full) {
+        return res.status(404).json({
+          error: "Itinerary not found",
+          code: "NOT_FOUND",
+        });
+      }
+
+      const items = await prisma.itineraryItem.findMany({
+        where: { itineraryId: full.id },
+        orderBy: [{ dayNumber: "asc" }, { position: "asc" }],
+        select: {
+          itemType: true,
+          position: true,
+          description: true,
+          detailsJson: true,
+          unitCost: true,
+          markup: true,
+          gstAmount: true,
+          totalPrice: true,
+          unit: true,
+          quantity: true,
+          direction: true,
+          dayNumber: true,
+          latitude: true,
+          longitude: true,
+        },
+      });
+
+      // Derive duration from date range OR max(dayNumber) — same heuristic
+      // the editor uses to render day buckets. Floor at 1 so a 0-day
+      // template never lands.
+      let durationDays = 1;
+      if (full.startDate && full.endDate) {
+        const ms = new Date(full.endDate) - new Date(full.startDate);
+        if (Number.isFinite(ms) && ms >= 0) {
+          durationDays = Math.max(1, Math.floor(ms / 86400000) + 1);
+        }
+      }
+      for (const it of items) {
+        if (it.dayNumber && it.dayNumber > durationDays) {
+          durationDays = it.dayNumber;
+        }
+      }
+
+      // basePriceMinor derived from totalAmount (Decimal rupees → integer
+      // paise/minor units). null when itinerary has no totalAmount yet.
+      let basePriceMinor = null;
+      if (full.totalAmount != null) {
+        const major = Number(full.totalAmount);
+        if (Number.isFinite(major)) {
+          basePriceMinor = Math.round(major * 100);
+        }
+      }
+
+      const body = req.body || {};
+      const defaultName = `${full.destination || "Itinerary"} template`;
+      const name =
+        typeof body.name === "string" && body.name.trim() !== ""
+          ? body.name.trim()
+          : defaultName;
+      const category =
+        typeof body.category === "string" && body.category.trim() !== ""
+          ? body.category.trim()
+          : null;
+      const description =
+        typeof body.description === "string" && body.description.trim() !== ""
+          ? body.description.trim()
+          : null;
+
+      // Serialize the day-by-day plan into templateJson.items[]. We strip
+      // PII (descriptions are operator-facing; supplier ids etc. stay) and
+      // preserve dayNumber + position so the clone path can reconstruct
+      // the bucket layout exactly. Decimal columns serialize via String()
+      // → Prisma re-parses on next create.
+      const templateItems = items.map((it) => ({
+        itemType: it.itemType,
+        position: it.position,
+        description: it.description,
+        detailsJson: it.detailsJson,
+        unit: it.unit,
+        quantity: it.quantity != null ? String(it.quantity) : null,
+        unitCost: it.unitCost != null ? String(it.unitCost) : null,
+        markup: it.markup != null ? String(it.markup) : null,
+        gstAmount: it.gstAmount != null ? String(it.gstAmount) : null,
+        totalPrice: it.totalPrice != null ? String(it.totalPrice) : null,
+        direction: it.direction,
+        dayNumber: it.dayNumber,
+        latitude: it.latitude,
+        longitude: it.longitude,
+      }));
+
+      const templateJson = JSON.stringify({ items: templateItems });
+
+      const created = await prisma.itineraryTemplate.create({
+        data: {
+          tenantId: req.travelTenant.id,
+          name,
+          destinationName: full.destination || "Unknown",
+          durationDays,
+          description,
+          category,
+          subBrand: full.subBrand || null,
+          basePriceMinor,
+          currency: full.currency || null,
+          templateJson,
+          isActive: true,
+          // version + isLatest + archivedAt take their defaults (1, true, null).
+          // Metric columns also default (0, null, null).
+        },
+      });
+
+      res.status(201).json(created);
+    } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-itin] save-as-template error:", e.message);
+      res.status(500).json({
+        error: "Failed to save itinerary as template",
+        code: "SAVE_AS_TEMPLATE_FAILED",
+      });
+    }
+  },
+);
+
 // PUT /api/travel/itineraries/:id
 //
 // Per PRD §6.1: "PUT creates new version, links via parentItineraryId."

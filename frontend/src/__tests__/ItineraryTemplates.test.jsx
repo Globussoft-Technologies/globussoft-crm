@@ -907,3 +907,162 @@ describe('<ItineraryTemplates /> — error surfacing', () => {
     ).toBeInTheDocument();
   });
 });
+
+// ---------------------------------------------------------------------------
+// G048 + G058 — Archive/Restore toggle + Export CSV + Include archived
+// filter. The new UI surface from this slice's PRD §3.5 round-trip.
+// ---------------------------------------------------------------------------
+describe('<ItineraryTemplates /> — G048/G058 new UI', () => {
+  it('renders "Export CSV" CTA in the page header', async () => {
+    renderPage();
+    expect(
+      screen.getByRole('button', { name: /Export CSV/i }),
+    ).toBeInTheDocument();
+  });
+
+  it('renders "Include archived" filter checkbox', async () => {
+    renderPage();
+    expect(
+      screen.getByLabelText(/Include archived/i),
+    ).toBeInTheDocument();
+  });
+
+  it('toggling "Include archived" re-fires GET with ?includeArchived=true', async () => {
+    renderPage();
+    await waitFor(() => {
+      expect(
+        fetchApiMock.mock.calls.some(
+          ([u, o]) =>
+            u.startsWith('/api/travel/itinerary-templates?') &&
+            (!o || !o.method),
+        ),
+      ).toBe(true);
+    });
+    fetchApiMock.mockClear();
+    installFetchMock();
+    fireEvent.click(screen.getByLabelText(/Include archived/i));
+    await waitFor(() => {
+      const refetch = fetchApiMock.mock.calls.find(
+        ([u]) =>
+          u.startsWith('/api/travel/itinerary-templates?') &&
+          u.includes('includeArchived=true'),
+      );
+      expect(refetch).toBeTruthy();
+    });
+  });
+
+  it('archived row shows Restore icon button (data-testid=restore-tpl-<id>)', async () => {
+    const archivedItem = makeItem({
+      id: 777,
+      archivedAt: '2026-06-01T10:00:00.000Z',
+      name: 'Old Template',
+    });
+    installFetchMock({
+      list: { items: [archivedItem], total: 1, limit: 20, offset: 0 },
+    });
+    renderPage();
+    await waitFor(() => {
+      expect(screen.queryByText('Old Template')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('restore-tpl-777')).toBeInTheDocument();
+    // Archive button should NOT be rendered for an archived row
+    expect(screen.queryByTestId('archive-tpl-777')).toBeNull();
+  });
+
+  it('non-archived row shows Archive icon button (data-testid=archive-tpl-<id>)', async () => {
+    const liveItem = makeItem({ id: 888, name: 'Live Template' });
+    installFetchMock({
+      list: { items: [liveItem], total: 1, limit: 20, offset: 0 },
+    });
+    renderPage();
+    await waitFor(() => {
+      expect(screen.queryByText('Live Template')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('archive-tpl-888')).toBeInTheDocument();
+    expect(screen.queryByTestId('restore-tpl-888')).toBeNull();
+  });
+
+  it('clicking Archive on a live row fires POST /:id/archive after confirm', async () => {
+    notifyConfirm.mockResolvedValue(true);
+    const liveItem = makeItem({ id: 555, name: 'About to archive' });
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = opts?.method || 'GET';
+      if (url.startsWith('/api/travel/itinerary-templates?') && method === 'GET') {
+        return Promise.resolve({
+          items: [liveItem],
+          total: 1,
+          limit: 20,
+          offset: 0,
+        });
+      }
+      if (
+        url === '/api/travel/itinerary-templates/555/archive' &&
+        method === 'POST'
+      ) {
+        return Promise.resolve({ ...liveItem, archivedAt: new Date().toISOString() });
+      }
+      return Promise.resolve(null);
+    });
+    renderPage();
+    const btn = await screen.findByTestId('archive-tpl-555');
+    fireEvent.click(btn);
+    await waitFor(() => {
+      const archiveCall = fetchApiMock.mock.calls.find(
+        ([u, o]) =>
+          u === '/api/travel/itinerary-templates/555/archive' && o?.method === 'POST',
+      );
+      expect(archiveCall).toBeTruthy();
+    });
+    expect(notifySuccess).toHaveBeenCalled();
+  });
+
+  it('clicking Restore on an archived row fires POST /:id/restore (no confirm)', async () => {
+    const archivedItem = makeItem({
+      id: 666,
+      archivedAt: '2026-06-01T10:00:00.000Z',
+      name: 'Bring me back',
+    });
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = opts?.method || 'GET';
+      if (url.startsWith('/api/travel/itinerary-templates?') && method === 'GET') {
+        return Promise.resolve({
+          items: [archivedItem],
+          total: 1,
+          limit: 20,
+          offset: 0,
+        });
+      }
+      if (
+        url === '/api/travel/itinerary-templates/666/restore' &&
+        method === 'POST'
+      ) {
+        return Promise.resolve({ ...archivedItem, archivedAt: null });
+      }
+      return Promise.resolve(null);
+    });
+    renderPage();
+    const btn = await screen.findByTestId('restore-tpl-666');
+    fireEvent.click(btn);
+    await waitFor(() => {
+      const restoreCall = fetchApiMock.mock.calls.find(
+        ([u, o]) =>
+          u === '/api/travel/itinerary-templates/666/restore' && o?.method === 'POST',
+      );
+      expect(restoreCall).toBeTruthy();
+    });
+    expect(notifySuccess).toHaveBeenCalled();
+  });
+
+  it('version column surfaces v{N} per row (data-testid=tpl-version-<id>)', async () => {
+    const v2 = makeItem({ id: 1001, version: 2, name: 'Versioned template' });
+    installFetchMock({
+      list: { items: [v2], total: 1, limit: 20, offset: 0 },
+    });
+    renderPage();
+    await waitFor(() => {
+      expect(screen.queryByText('Versioned template')).toBeInTheDocument();
+    });
+    const cell = screen.getByTestId('tpl-version-1001');
+    expect(cell.textContent).toContain('v2');
+  });
+});

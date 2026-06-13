@@ -26,7 +26,7 @@
 
 import React, { useState, useEffect, useCallback, useContext } from 'react';
 import { Link } from 'react-router-dom';
-import { ChevronLeft, ChevronRight, Edit2, Filter, FileText, Plus, Trash2, X } from 'lucide-react';
+import { Archive, ArchiveRestore, ChevronLeft, ChevronRight, Download, Edit2, Filter, FileText, Plus, Trash2, X } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { AuthContext } from '../../App';
@@ -95,6 +95,10 @@ export default function ItineraryTemplates() {
   const [categoryFilter, setCategoryFilter] = useState('');
   const [subBrandFilter, setSubBrandFilter] = useState('');
   const [activeOnly, setActiveOnly] = useState(true);
+  // G048 — show archived rows. When true, the list endpoint receives
+  // ?includeArchived=true and surfaces archived rows alongside live ones.
+  // Operator can then click Restore to bring a row back.
+  const [includeArchived, setIncludeArchived] = useState(false);
 
   // Form state
   const [showForm, setShowForm] = useState(false);
@@ -109,6 +113,7 @@ export default function ItineraryTemplates() {
     if (subBrandFilter) qs.set('subBrand', subBrandFilter);
     if (activeOnly) qs.set('isActive', 'true');
     else qs.set('isActive', 'false');
+    if (includeArchived) qs.set('includeArchived', 'true');
     qs.set('limit', String(PAGE_SIZE));
     qs.set('offset', String(offset));
     fetchApi(`/api/travel/itinerary-templates?${qs.toString()}`)
@@ -122,7 +127,7 @@ export default function ItineraryTemplates() {
         setTotal(0);
       })
       .finally(() => setLoading(false));
-  }, [destinationFilter, categoryFilter, subBrandFilter, activeOnly, offset, notify]);
+  }, [destinationFilter, categoryFilter, subBrandFilter, activeOnly, includeArchived, offset, notify]);
 
   useEffect(() => {
     fetchItems();
@@ -230,6 +235,79 @@ export default function ItineraryTemplates() {
     }
   };
 
+  // G048 — archive a row (stash it from the default library list). Confirms
+  // first since this is a visible-state change.
+  const handleArchive = async (item) => {
+    const ok = await notify.confirm(
+      `Archive "${item.name}"? It will be hidden from the default library list (toggle "Include archived" to find it again).`,
+    );
+    if (!ok) return;
+    try {
+      await fetchApi(`/api/travel/itinerary-templates/${item.id}/archive`, {
+        method: 'POST',
+      });
+      notify.success(`Archived "${item.name}"`);
+      fetchItems();
+    } catch (err) {
+      notify.error(err?.body?.error || 'Failed to archive template');
+    }
+  };
+
+  // G048 — restore an archived row.
+  const handleRestore = async (item) => {
+    try {
+      await fetchApi(`/api/travel/itinerary-templates/${item.id}/restore`, {
+        method: 'POST',
+      });
+      notify.success(`Restored "${item.name}"`);
+      fetchItems();
+    } catch (err) {
+      notify.error(err?.body?.error || 'Failed to restore template');
+    }
+  };
+
+  // G058 — download analytics CSV. Uses fetch() directly (not fetchApi)
+  // because the response is a text/csv blob, not JSON, and we want the
+  // browser to trigger a save dialog. The Authorization header still
+  // travels via the same localStorage('token') the fetchApi helper reads.
+  const handleExportCsv = async () => {
+    try {
+      const token =
+        typeof localStorage !== 'undefined' ? localStorage.getItem('token') : null;
+      const qs = new URLSearchParams();
+      if (includeArchived) qs.set('includeArchived', 'true');
+      const url =
+        `/api/travel/itinerary-templates/analytics.csv` +
+        (qs.toString() ? `?${qs.toString()}` : '');
+      const res = await fetch(url, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) {
+        const txt = await res.text();
+        let msg = `Failed to export CSV (${res.status})`;
+        try {
+          const body = JSON.parse(txt);
+          if (body?.error) msg = body.error;
+        } catch (_e) {
+          /* leave default msg */
+        }
+        throw new Error(msg);
+      }
+      const blob = await res.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = objectUrl;
+      a.download = 'itinerary-template-analytics.csv';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(objectUrl);
+      notify.success('Analytics CSV downloaded');
+    } catch (err) {
+      notify.error(err?.message || 'Failed to export CSV');
+    }
+  };
+
   const formatPrice = (item) => {
     if (item.basePriceMinor == null) return '—';
     const major = Number(item.basePriceMinor) / 100;
@@ -310,6 +388,16 @@ export default function ItineraryTemplates() {
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          {/* G058 — Export analytics CSV */}
+          <button
+            type="button"
+            onClick={handleExportCsv}
+            style={secondaryBtn}
+            data-testid="export-csv-btn"
+            title="Download a CSV with id, name, sub-brand, usage, accepted, avg sale, last used, version"
+          >
+            <Download size={14} /> Export CSV
+          </button>
           {!showForm && (
             <button type="button" onClick={openCreateForm} style={primaryBtn}>
               <Plus size={14} /> Add template
@@ -390,6 +478,23 @@ export default function ItineraryTemplates() {
             aria-label="Active only"
           />
           Active only
+        </label>
+        {/* G048 — Include archived rows in the list. Off by default; when
+            on, archived rows surface and the operator can click the
+            Restore icon to bring them back. */}
+        <label
+          style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}
+        >
+          <input
+            type="checkbox"
+            checked={includeArchived}
+            onChange={(e) => {
+              setOffset(0);
+              setIncludeArchived(e.target.checked);
+            }}
+            aria-label="Include archived"
+          />
+          Include archived
         </label>
       </div>
 
@@ -632,6 +737,11 @@ export default function ItineraryTemplates() {
                 <th style={th}>Avg sale</th>
                 <th style={th}>Last used</th>
                 <th style={th}>Active</th>
+                {/* G048 — version column. Editing a template bumps the
+                    visible version while preserving the previous row's id
+                    so existing Itinerary.clonedFromTemplateId FKs stay
+                    valid. */}
+                <th style={th}>Ver</th>
                 <th style={th}>Actions</th>
               </tr>
             </thead>
@@ -685,6 +795,21 @@ export default function ItineraryTemplates() {
                     {formatLastUsedAt(item.lastUsedAt)}
                   </td>
                   <td style={td}>{item.isActive ? 'Yes' : 'No'}</td>
+                  <td style={td} data-testid={`tpl-version-${item.id}`}>
+                    v{item.version != null ? item.version : 1}
+                    {item.archivedAt && (
+                      <span
+                        style={{
+                          fontSize: 11,
+                          marginLeft: 4,
+                          color: 'var(--text-secondary)',
+                        }}
+                        title={`Archived ${new Date(item.archivedAt).toLocaleString()}`}
+                      >
+                        archived
+                      </span>
+                    )}
+                  </td>
                   <td style={td}>
                     <div style={{ display: 'flex', gap: 6 }}>
                       <button
@@ -695,6 +820,32 @@ export default function ItineraryTemplates() {
                       >
                         <Edit2 size={16} />
                       </button>
+                      {/* G048 — Archive / Restore button. When the row is
+                          archived (item.archivedAt set), show Restore
+                          instead so the operator can bring it back. */}
+                      {item.archivedAt ? (
+                        <button
+                          type="button"
+                          onClick={() => handleRestore(item)}
+                          style={iconBtn}
+                          aria-label={`Restore ${item.name}`}
+                          data-testid={`restore-tpl-${item.id}`}
+                          title="Restore from archive"
+                        >
+                          <ArchiveRestore size={16} />
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => handleArchive(item)}
+                          style={iconBtn}
+                          aria-label={`Archive ${item.name}`}
+                          data-testid={`archive-tpl-${item.id}`}
+                          title="Archive (hide from default list)"
+                        >
+                          <Archive size={16} />
+                        </button>
+                      )}
                       <button
                         type="button"
                         onClick={() => handleDelete(item)}

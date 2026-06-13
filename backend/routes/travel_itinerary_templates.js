@@ -50,6 +50,13 @@ const {
 // template + on /accept), NEVER caller-controlled. They flow through GET
 // responses automatically (no `select` clause on the list/detail handlers)
 // so the ItineraryTemplates.jsx library grid can display them.
+//
+// G048 — `version`, `isLatest`, `archivedAt` are also engine-managed
+// (version-on-edit flow flips isLatest + bumps version; /:id/archive +
+// /:id/restore toggle archivedAt). Callers MUST NOT set them directly via
+// PATCH; the version-on-edit handler computes them. They're intentionally
+// absent from MUTABLE_FIELDS so a malicious PATCH can't roll back isLatest
+// or pre-archive a row.
 const MUTABLE_FIELDS = [
   "name",
   "destinationName",
@@ -266,6 +273,14 @@ function validateDurationDays(durationDays) {
 }
 
 // GET /api/travel/itinerary-templates — list
+//
+// G048 — Default list filters to `isLatest=true AND archivedAt IS NULL` so
+// the library grid shows the operator's curated current set (not the full
+// version history). Two opt-in query params relax this:
+//   ?includeArchived=true     surfaces archived rows alongside live ones
+//   ?includeAllVersions=true  surfaces prior versions (isLatest=false) too
+// These are independent flags — `?includeArchived=true&includeAllVersions=true`
+// gives the full unfiltered library (admin-history audit view).
 router.get("/", verifyToken, requireTravelTenant, async (req, res) => {
   try {
     const where = { tenantId: req.travelTenant.id };
@@ -278,6 +293,20 @@ router.get("/", verifyToken, requireTravelTenant, async (req, res) => {
     }
     if (req.query.isActive !== undefined) {
       where.isActive = String(req.query.isActive) === "true";
+    }
+
+    // G048 — version + archive filtering. String comparison against "true"
+    // so undefined / any non-"true" value behaves as "filter on". The
+    // default-filtered query passes BOTH predicates; ?includeArchived=true
+    // drops only the archivedAt predicate; ?includeAllVersions=true drops
+    // only the isLatest predicate.
+    const includeArchived = String(req.query.includeArchived) === "true";
+    const includeAllVersions = String(req.query.includeAllVersions) === "true";
+    if (!includeAllVersions) {
+      where.isLatest = true;
+    }
+    if (!includeArchived) {
+      where.archivedAt = null;
     }
 
     // Clamp pagination: limit ∈ [1, 200]; offset ≥ 0.
@@ -1256,6 +1285,149 @@ router.get("/by-quarter", verifyToken, requireTravelTenant, async (req, res) => 
   }
 });
 
+// GET /api/travel/itinerary-templates/analytics.csv (ADMIN + MANAGER)
+//
+// G058 — Template analytics export (PRD_TRAVEL_ITINERARY_UPGRADES FR-3.5.c).
+// CSV download with one row per template + the metric columns the library
+// grid surfaces (usage / accepted / avgFinalPrice / lastUsedAt / version /
+// isLatest). Operators want to slice this in Excel / Google Sheets to find
+// stale-but-popular templates, low-conversion templates, etc.
+//
+// MUST be declared BEFORE GET /:id so Express doesn't parse "analytics.csv"
+// as a numeric :id and 400.
+//
+// Default scope: all live templates (matching the library grid's default
+// filter). ?includeArchived=true + ?includeAllVersions=true mirror the
+// list endpoint so admin-history exports work too.
+//
+// Sub-brand narrowing: same posture as /stats — empty allow-set yields
+// empty CSV (header row only), NOT 403.
+//
+// Output: text/csv with a Content-Disposition attachment filename so the
+// browser triggers a save dialog rather than rendering inline. Fields are
+// the canonical set the gap card called out:
+//   id, name, subBrand, usageCount, acceptedCount, avgFinalPrice,
+//   lastUsedAt, createdAt, version, isLatest
+// Field order is stable — operators paste these into Sheets and bind by
+// position; reshuffling later would break their formulas.
+router.get(
+  "/analytics.csv",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const where = { tenantId: req.travelTenant.id };
+
+      const includeArchived = String(req.query.includeArchived) === "true";
+      const includeAllVersions = String(req.query.includeAllVersions) === "true";
+      if (!includeAllVersions) {
+        where.isLatest = true;
+      }
+      if (!includeArchived) {
+        where.archivedAt = null;
+      }
+
+      // Sub-brand narrowing — empty access set → empty CSV (header only).
+      // Matches /stats #976 posture (no 403).
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      let writeEmpty = false;
+      if (allowed instanceof Set && allowed.size === 0) {
+        writeEmpty = true;
+      } else if (allowed instanceof Set) {
+        where.OR = [
+          { subBrand: null },
+          { subBrand: { in: [...allowed] } },
+        ];
+      }
+
+      const HEADER = [
+        "id",
+        "name",
+        "subBrand",
+        "usageCount",
+        "acceptedCount",
+        "avgFinalPrice",
+        "lastUsedAt",
+        "createdAt",
+        "version",
+        "isLatest",
+      ];
+
+      // CSV cell quoting: RFC 4180 — wrap in double quotes, escape inner
+      // double-quotes by doubling them. Null/undefined → empty cell. Numbers
+      // and dates serialize via String() / .toISOString().
+      function cell(v) {
+        if (v === null || v === undefined) return "";
+        let s;
+        if (v instanceof Date) s = v.toISOString();
+        else s = String(v);
+        // Always quote — defensive against names containing commas/quotes/
+        // newlines. Excel handles unconditional quoting cleanly.
+        return '"' + s.replace(/"/g, '""') + '"';
+      }
+
+      const lines = [HEADER.join(",")];
+
+      if (!writeEmpty) {
+        const rows = await prisma.itineraryTemplate.findMany({
+          where,
+          orderBy: { createdAt: "desc" },
+          select: {
+            id: true,
+            name: true,
+            subBrand: true,
+            usageCount: true,
+            acceptedCount: true,
+            avgFinalPrice: true,
+            lastUsedAt: true,
+            createdAt: true,
+            version: true,
+            isLatest: true,
+          },
+        });
+
+        for (const r of rows) {
+          lines.push(
+            [
+              cell(r.id),
+              cell(r.name),
+              cell(r.subBrand),
+              cell(r.usageCount),
+              cell(r.acceptedCount),
+              // avgFinalPrice is Decimal(15,2) — Prisma returns a string when
+              // installed driver supports it, or a Decimal object. Both
+              // String()-stringify cleanly to "85000.50" shape.
+              cell(r.avgFinalPrice),
+              cell(r.lastUsedAt),
+              cell(r.createdAt),
+              cell(r.version),
+              cell(r.isLatest),
+            ].join(","),
+          );
+        }
+      }
+
+      const body = lines.join("\n") + "\n";
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="itinerary-template-analytics.csv"`,
+      );
+      res.send(body);
+    } catch (err) {
+      console.error(
+        "[travel/itinerary-templates] analytics.csv error:",
+        err.message,
+      );
+      res.status(500).json({
+        error: "Failed to export itinerary template analytics",
+        code: "ITINERARY_TEMPLATE_ANALYTICS_CSV_FAILED",
+      });
+    }
+  },
+);
+
 // GET /api/travel/itinerary-templates/:id
 router.get("/:id", verifyToken, requireTravelTenant, async (req, res) => {
   try {
@@ -1292,6 +1464,32 @@ router.get("/:id", verifyToken, requireTravelTenant, async (req, res) => {
 });
 
 // PATCH /api/travel/itinerary-templates/:id (ADMIN + MANAGER)
+//
+// G048 — Version-on-edit semantics (PRD FR-3.5.a/b). PATCH does NOT mutate
+// the targeted row in place. Instead it:
+//   1. Flips the old row's `isLatest=false` (preserves history; existing
+//      Itinerary.clonedFromTemplateId FKs that pointed at the old version
+//      keep working since the row stays in the DB).
+//   2. Inserts a NEW row with version=N+1, isLatest=true, mirroring all
+//      non-mutated columns from the existing row + the caller-supplied
+//      patch fields applied on top.
+//   3. Returns the NEW row (status 200 — semantically a "this is now the
+//      current version" — not 201, since the operator's mental model is
+//      "I edited the template", not "I created a new one"). The fresh id
+//      is in the response; callers that want the new id read it from
+//      response.id.
+//
+// Engine-managed columns (version, isLatest, archivedAt) are computed by
+// this handler — never pulled from the body — so even a malicious PATCH
+// can't roll back isLatest or pre-archive a row.
+//
+// Caller-supplied mutable fields are validated AND coerced BEFORE the
+// transaction so a bad field rejects without leaving a half-flipped state.
+//
+// The flip + create runs inside prisma.$transaction so a mid-flight failure
+// leaves both rows untouched. Both ops are required; a partial flip would
+// leave TWO isLatest=true rows for the same lineage (or zero), corrupting
+// the library list semantics.
 router.patch(
   "/:id",
   verifyToken,
@@ -1361,11 +1559,63 @@ router.patch(
         data.basePriceMinor = Number(data.basePriceMinor);
       }
 
-      const updated = await prisma.itineraryTemplate.update({
-        where: { id },
-        data,
-      });
-      res.json(updated);
+      // G048 — version-on-edit. Build the NEW row's data from the existing
+      // row + the caller's patch fields. Engine-managed fields (version /
+      // isLatest / archivedAt / usageCount / acceptedCount / avgFinalPrice /
+      // lastUsedAt / id / createdAt / updatedAt) are computed below — they
+      // do NOT inherit from `existing` blindly.
+      const inheritedFields = [
+        "tenantId",
+        "name",
+        "destinationName",
+        "durationDays",
+        "description",
+        "thumbnailUrl",
+        "category",
+        "subBrand",
+        "defaultMarkupPercent",
+        "basePriceMinor",
+        "currency",
+        "templateJson",
+        "llmGeneratedBy",
+        "isActive",
+      ];
+      const inherited = {};
+      for (const f of inheritedFields) {
+        inherited[f] = existing[f];
+      }
+      const newRowData = {
+        ...inherited,
+        ...data, // caller's patch fields override inherited
+        // Engine-managed version/lineage:
+        version: (Number(existing.version) || 1) + 1,
+        isLatest: true,
+        archivedAt: null, // the new version is unarchived even if the prior
+                          // row was archived (operator is editing the live
+                          // contract; restore semantics fire on the new row)
+        // Metrics RESET on a new version — the old version's accepted /
+        // avgFinalPrice / lastUsedAt count toward the old row's history,
+        // not the new contract. Operators looking at the new row's "Avg
+        // sale" want to see the new version's track record, not the prior
+        // version's noise.
+        usageCount: 0,
+        acceptedCount: 0,
+        avgFinalPrice: null,
+        lastUsedAt: null,
+      };
+
+      // Run as a transaction so flip + create commit atomically. If either
+      // op fails, prisma rolls back both — we never leave the lineage in a
+      // state with two isLatest=true rows OR zero.
+      const [, created] = await prisma.$transaction([
+        prisma.itineraryTemplate.update({
+          where: { id },
+          data: { isLatest: false },
+        }),
+        prisma.itineraryTemplate.create({ data: newRowData }),
+      ]);
+
+      res.json(created);
     } catch (err) {
       if (err.status) {
         return res.status(err.status).json({ error: err.message, code: err.code });
@@ -1374,6 +1624,131 @@ router.patch(
       res.status(500).json({
         error: "Failed to update itinerary template",
         code: "ITINERARY_TEMPLATE_PATCH_FAILED",
+      });
+    }
+  },
+);
+
+// POST /api/travel/itinerary-templates/:id/archive (ADMIN + MANAGER)
+//
+// G048 — Soft-stash a template from the default library list. Sets
+// archivedAt=now() on the targeted row. Idempotent: re-archiving an
+// already-archived row is a no-op (returns the row as-is with status
+// 200). The /:id GET surface still returns archived rows (the lineage
+// chip's name lookup must keep working); only the default list filters
+// them out.
+//
+// Sub-paths registered BEFORE GET /:id so Express doesn't parse
+// "archive" as a numeric :id and 400. The archive/restore handlers live
+// here (after PATCH) because PATCH already registers the per-id surface
+// and adding the sub-paths AFTER PATCH/GET /:id is the canonical place.
+router.post(
+  "/:id/archive",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isInteger(id) || id < 1) {
+        return res.status(400).json({ error: "Invalid id", code: "INVALID_ID" });
+      }
+
+      const existing = await prisma.itineraryTemplate.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+      });
+      if (!existing) {
+        return res.status(404).json({
+          error: "Itinerary template not found",
+          code: "ITINERARY_TEMPLATE_NOT_FOUND",
+        });
+      }
+
+      // Sub-brand gate against the EXISTING row's subBrand.
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (existing.subBrand && !canAccessSubBrand(allowed, existing.subBrand)) {
+        return res.status(403).json({
+          error: "Forbidden sub-brand",
+          code: "FORBIDDEN_SUB_BRAND",
+        });
+      }
+
+      // Idempotent: don't overwrite an existing archivedAt timestamp
+      // (preserves the original archive moment).
+      if (existing.archivedAt) {
+        return res.json(existing);
+      }
+
+      const updated = await prisma.itineraryTemplate.update({
+        where: { id },
+        data: { archivedAt: new Date() },
+      });
+      res.json(updated);
+    } catch (err) {
+      if (err.status) {
+        return res.status(err.status).json({ error: err.message, code: err.code });
+      }
+      console.error("[travel/itinerary-templates] Archive error:", err.message);
+      res.status(500).json({
+        error: "Failed to archive itinerary template",
+        code: "ITINERARY_TEMPLATE_ARCHIVE_FAILED",
+      });
+    }
+  },
+);
+
+// POST /api/travel/itinerary-templates/:id/restore (ADMIN + MANAGER)
+//
+// G048 — Unsets archivedAt on the targeted row. Idempotent: restoring an
+// already-live row is a no-op (returns the row as-is).
+router.post(
+  "/:id/restore",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isInteger(id) || id < 1) {
+        return res.status(400).json({ error: "Invalid id", code: "INVALID_ID" });
+      }
+
+      const existing = await prisma.itineraryTemplate.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+      });
+      if (!existing) {
+        return res.status(404).json({
+          error: "Itinerary template not found",
+          code: "ITINERARY_TEMPLATE_NOT_FOUND",
+        });
+      }
+
+      // Sub-brand gate.
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (existing.subBrand && !canAccessSubBrand(allowed, existing.subBrand)) {
+        return res.status(403).json({
+          error: "Forbidden sub-brand",
+          code: "FORBIDDEN_SUB_BRAND",
+        });
+      }
+
+      if (!existing.archivedAt) {
+        return res.json(existing);
+      }
+
+      const updated = await prisma.itineraryTemplate.update({
+        where: { id },
+        data: { archivedAt: null },
+      });
+      res.json(updated);
+    } catch (err) {
+      if (err.status) {
+        return res.status(err.status).json({ error: err.message, code: err.code });
+      }
+      console.error("[travel/itinerary-templates] Restore error:", err.message);
+      res.status(500).json({
+        error: "Failed to restore itinerary template",
+        code: "ITINERARY_TEMPLATE_RESTORE_FAILED",
       });
     }
   },

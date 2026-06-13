@@ -583,12 +583,47 @@ describe('GET /api/travel/itinerary-templates/:id', () => {
 });
 
 describe('PATCH /api/travel/itinerary-templates/:id', () => {
-  test('ADMIN happy path → 200 + updated', async () => {
-    prisma.itineraryTemplate.findFirst.mockResolvedValue(sampleRows[0]);
+  // G048 — PATCH now does version-on-edit: flips existing row's
+  // isLatest=false then creates NEW row at version=N+1. Both ops run inside
+  // prisma.$transaction. Tests below mock $transaction to drain the op
+  // promises so the route can read back the create's return value.
+  function mockPatchTransaction(newRow) {
+    prisma.$transaction = vi.fn(async (ops) => {
+      // ops is an array of prepared prisma promises; we resolve them in
+      // order so the route receives `[updateResult, createResult]`.
+      if (Array.isArray(ops)) {
+        const results = [];
+        for (const op of ops) results.push(await op);
+        return results;
+      }
+      return ops;
+    });
+  }
+
+  test('ADMIN happy path → 200 + NEW row at version=N+1 (G048 version-on-edit)', async () => {
+    prisma.itineraryTemplate.findFirst.mockResolvedValue({
+      ...sampleRows[0],
+      version: 1,
+      isLatest: true,
+      archivedAt: null,
+    });
     prisma.itineraryTemplate.update.mockResolvedValue({
       ...sampleRows[0],
-      durationDays: 6,
+      isLatest: false,
     });
+    const newRow = {
+      ...sampleRows[0],
+      id: 9001,
+      version: 2,
+      isLatest: true,
+      durationDays: 6,
+      usageCount: 0,
+      acceptedCount: 0,
+      avgFinalPrice: null,
+      lastUsedAt: null,
+    };
+    prisma.itineraryTemplate.create.mockResolvedValue(newRow);
+    mockPatchTransaction(newRow);
 
     const res = await request(makeApp())
       .patch('/api/travel/itinerary-templates/201')
@@ -596,10 +631,61 @@ describe('PATCH /api/travel/itinerary-templates/:id', () => {
       .send({ durationDays: 6 });
 
     expect(res.status).toBe(200);
+    expect(res.body.id).toBe(9001); // fresh id, not 201
+    expect(res.body.version).toBe(2);
+    expect(res.body.isLatest).toBe(true);
     expect(res.body.durationDays).toBe(6);
+    // The old row was flipped to isLatest=false
     const updateCall = prisma.itineraryTemplate.update.mock.calls[0][0];
     expect(updateCall.where.id).toBe(201);
-    expect(updateCall.data.durationDays).toBe(6);
+    expect(updateCall.data.isLatest).toBe(false);
+    // The new row was created with version=2 and metric reset
+    const createCall = prisma.itineraryTemplate.create.mock.calls[0][0];
+    expect(createCall.data.version).toBe(2);
+    expect(createCall.data.isLatest).toBe(true);
+    expect(createCall.data.archivedAt).toBeNull();
+    expect(createCall.data.usageCount).toBe(0);
+    expect(createCall.data.acceptedCount).toBe(0);
+    expect(createCall.data.avgFinalPrice).toBeNull();
+    expect(createCall.data.lastUsedAt).toBeNull();
+    expect(createCall.data.durationDays).toBe(6);
+    // Caller's patch field overrode the inherited durationDays (=5)
+    // Inherited fields from existing flow through
+    expect(createCall.data.name).toBe('5-day Paris City Break');
+    expect(createCall.data.tenantId).toBe(1);
+  });
+
+  test('G048 — previous version stays in DB (history preserved), only isLatest flips', async () => {
+    prisma.itineraryTemplate.findFirst.mockResolvedValue({
+      ...sampleRows[0],
+      version: 3,
+      isLatest: true,
+    });
+    prisma.itineraryTemplate.update.mockResolvedValue({
+      ...sampleRows[0],
+      isLatest: false,
+    });
+    prisma.itineraryTemplate.create.mockResolvedValue({
+      ...sampleRows[0],
+      id: 9999,
+      version: 4,
+      isLatest: true,
+    });
+    mockPatchTransaction();
+
+    const res = await request(makeApp())
+      .patch('/api/travel/itinerary-templates/201')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ name: 'Renamed' });
+
+    expect(res.status).toBe(200);
+    // The update call ONLY flips isLatest (not a destructive delete) so the
+    // old version stays queryable for existing FK lookups.
+    const updateCall = prisma.itineraryTemplate.update.mock.calls[0][0];
+    expect(updateCall.data).toEqual({ isLatest: false });
+    // The create call sets version=prev+1
+    const createCall = prisma.itineraryTemplate.create.mock.calls[0][0];
+    expect(createCall.data.version).toBe(4);
   });
 
   test('empty body → 400 EMPTY_BODY', async () => {
@@ -700,10 +786,29 @@ describe('G049 — library metric columns flow through GET; rejected on PATCH', 
   });
 
   test('PATCH with acceptedCount / avgFinalPrice / lastUsedAt — silently dropped (engine-only)', async () => {
-    prisma.itineraryTemplate.findFirst.mockResolvedValue(sampleRows[0]);
+    prisma.itineraryTemplate.findFirst.mockResolvedValue({
+      ...sampleRows[0],
+      version: 1,
+      isLatest: true,
+    });
     prisma.itineraryTemplate.update.mockResolvedValue({
       ...sampleRows[0],
+      isLatest: false,
+    });
+    prisma.itineraryTemplate.create.mockResolvedValue({
+      ...sampleRows[0],
+      id: 7777,
+      version: 2,
+      isLatest: true,
       durationDays: 8,
+    });
+    prisma.$transaction = vi.fn(async (ops) => {
+      if (Array.isArray(ops)) {
+        const r = [];
+        for (const op of ops) r.push(await op);
+        return r;
+      }
+      return ops;
     });
 
     const res = await request(makeApp())
@@ -716,15 +821,26 @@ describe('G049 — library metric columns flow through GET; rejected on PATCH', 
         acceptedCount: 9999,
         avgFinalPrice: 99999999,
         lastUsedAt: new Date('2099-01-01').toISOString(),
+        version: 99,
+        isLatest: false,
+        archivedAt: new Date('2099-01-01').toISOString(),
       });
 
     expect(res.status).toBe(200);
-    const dataArg = prisma.itineraryTemplate.update.mock.calls[0][0].data;
-    // durationDays passes through (mutable); engine-only fields are absent.
-    expect(dataArg.durationDays).toBe(8);
-    expect(dataArg.acceptedCount).toBeUndefined();
-    expect(dataArg.avgFinalPrice).toBeUndefined();
-    expect(dataArg.lastUsedAt).toBeUndefined();
+    // The flip op only flips isLatest, never carries metric / version
+    // fields. The create op's data is computed from existing + caller's
+    // patch — engine columns are forced to their reset values, NOT the
+    // attacker-supplied values.
+    const createData = prisma.itineraryTemplate.create.mock.calls[0][0].data;
+    expect(createData.durationDays).toBe(8);
+    // Engine-managed columns force-set by handler — caller's body values
+    // are silently dropped.
+    expect(createData.acceptedCount).toBe(0);
+    expect(createData.avgFinalPrice).toBeNull();
+    expect(createData.lastUsedAt).toBeNull();
+    expect(createData.version).toBe(2); // existing.version + 1, not caller's 99
+    expect(createData.isLatest).toBe(true); // not caller's false
+    expect(createData.archivedAt).toBeNull(); // not caller's date
   });
 });
 
@@ -766,5 +882,331 @@ describe('DELETE /api/travel/itinerary-templates/:id — soft delete', () => {
     expect(res.status).toBe(404);
     expect(res.body.code).toBe('ITINERARY_TEMPLATE_NOT_FOUND');
     expect(prisma.itineraryTemplate.update).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// G048 — Template versioning + archive/restore lifecycle.
+// Pins per PRD_TRAVEL_ITINERARY_UPGRADES FR-3.5.a + FR-3.5.b:
+//   - default list filters to isLatest=true AND archivedAt IS NULL
+//   - ?includeArchived=true drops the archivedAt filter
+//   - ?includeAllVersions=true drops the isLatest filter
+//   - POST /:id/archive sets archivedAt (idempotent)
+//   - POST /:id/restore unsets archivedAt (idempotent)
+//   - Sub-brand + RBAC gates fire on archive/restore
+// ---------------------------------------------------------------------------
+describe('G048 — list filtering (isLatest + archivedAt)', () => {
+  test('default list adds isLatest=true AND archivedAt=null to where', async () => {
+    const res = await request(makeApp())
+      .get('/api/travel/itinerary-templates')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(200);
+    const where = prisma.itineraryTemplate.findMany.mock.calls[0][0].where;
+    expect(where.isLatest).toBe(true);
+    expect(where.archivedAt).toBeNull();
+  });
+
+  test('?includeArchived=true drops archivedAt filter', async () => {
+    const res = await request(makeApp())
+      .get('/api/travel/itinerary-templates?includeArchived=true')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(200);
+    const where = prisma.itineraryTemplate.findMany.mock.calls[0][0].where;
+    expect(where.isLatest).toBe(true);
+    expect(where.archivedAt).toBeUndefined();
+  });
+
+  test('?includeAllVersions=true drops isLatest filter', async () => {
+    const res = await request(makeApp())
+      .get('/api/travel/itinerary-templates?includeAllVersions=true')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(200);
+    const where = prisma.itineraryTemplate.findMany.mock.calls[0][0].where;
+    expect(where.isLatest).toBeUndefined();
+    expect(where.archivedAt).toBeNull();
+  });
+
+  test('?includeAllVersions=true&includeArchived=true drops BOTH filters', async () => {
+    const res = await request(makeApp())
+      .get('/api/travel/itinerary-templates?includeAllVersions=true&includeArchived=true')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(200);
+    const where = prisma.itineraryTemplate.findMany.mock.calls[0][0].where;
+    expect(where.isLatest).toBeUndefined();
+    expect(where.archivedAt).toBeUndefined();
+  });
+});
+
+describe('G048 — POST /api/travel/itinerary-templates/:id/archive', () => {
+  test('ADMIN happy path → 200 + archivedAt set', async () => {
+    prisma.itineraryTemplate.findFirst.mockResolvedValue({
+      ...sampleRows[0],
+      archivedAt: null,
+    });
+    prisma.itineraryTemplate.update.mockImplementation(({ data }) => ({
+      ...sampleRows[0],
+      ...data,
+    }));
+
+    const res = await request(makeApp())
+      .post('/api/travel/itinerary-templates/201/archive')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.archivedAt).toBeTruthy();
+    const updateCall = prisma.itineraryTemplate.update.mock.calls[0][0];
+    expect(updateCall.where.id).toBe(201);
+    expect(updateCall.data.archivedAt).toBeInstanceOf(Date);
+  });
+
+  test('idempotent — already-archived row returns as-is (no second write)', async () => {
+    const archivedTs = new Date('2026-05-01T10:00:00Z');
+    prisma.itineraryTemplate.findFirst.mockResolvedValue({
+      ...sampleRows[0],
+      archivedAt: archivedTs,
+    });
+
+    const res = await request(makeApp())
+      .post('/api/travel/itinerary-templates/201/archive')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.archivedAt).toBe(archivedTs.toISOString());
+    expect(prisma.itineraryTemplate.update).not.toHaveBeenCalled();
+  });
+
+  test('USER role → 403 (verifyRole gate)', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/itinerary-templates/201/archive')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(403);
+    expect(prisma.itineraryTemplate.update).not.toHaveBeenCalled();
+  });
+
+  test('not found → 404 ITINERARY_TEMPLATE_NOT_FOUND', async () => {
+    prisma.itineraryTemplate.findFirst.mockResolvedValue(null);
+
+    const res = await request(makeApp())
+      .post('/api/travel/itinerary-templates/9999/archive')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('ITINERARY_TEMPLATE_NOT_FOUND');
+  });
+
+  test('cross-tenant sub-brand → 403 FORBIDDEN_SUB_BRAND', async () => {
+    prisma.user.findUnique.mockResolvedValue({
+      role: 'MANAGER',
+      subBrandAccess: JSON.stringify(['tmc']),
+    });
+    prisma.itineraryTemplate.findFirst.mockResolvedValue({
+      ...sampleRows[0],
+      subBrand: 'rfu', // caller can't access rfu
+    });
+
+    const res = await request(makeApp())
+      .post('/api/travel/itinerary-templates/201/archive')
+      .set('Authorization', `Bearer ${tokenFor('MANAGER')}`);
+
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe('FORBIDDEN_SUB_BRAND');
+    expect(prisma.itineraryTemplate.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('G048 — POST /api/travel/itinerary-templates/:id/restore', () => {
+  test('ADMIN happy path → 200 + archivedAt cleared', async () => {
+    prisma.itineraryTemplate.findFirst.mockResolvedValue({
+      ...sampleRows[0],
+      archivedAt: new Date('2026-05-01T10:00:00Z'),
+    });
+    prisma.itineraryTemplate.update.mockImplementation(({ data }) => ({
+      ...sampleRows[0],
+      ...data,
+    }));
+
+    const res = await request(makeApp())
+      .post('/api/travel/itinerary-templates/201/restore')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.archivedAt).toBeNull();
+    const updateCall = prisma.itineraryTemplate.update.mock.calls[0][0];
+    expect(updateCall.where.id).toBe(201);
+    expect(updateCall.data.archivedAt).toBeNull();
+  });
+
+  test('idempotent — already-live row returns as-is (no write)', async () => {
+    prisma.itineraryTemplate.findFirst.mockResolvedValue({
+      ...sampleRows[0],
+      archivedAt: null,
+    });
+
+    const res = await request(makeApp())
+      .post('/api/travel/itinerary-templates/201/restore')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.archivedAt).toBeNull();
+    expect(prisma.itineraryTemplate.update).not.toHaveBeenCalled();
+  });
+
+  test('USER role → 403', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/itinerary-templates/201/restore')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(403);
+    expect(prisma.itineraryTemplate.update).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// G058 — Template analytics CSV export.
+// Pins per PRD_TRAVEL_ITINERARY_UPGRADES FR-3.5.c.
+//   - text/csv content-type + attachment Content-Disposition
+//   - canonical column order (id, name, subBrand, usageCount, acceptedCount,
+//     avgFinalPrice, lastUsedAt, createdAt, version, isLatest)
+//   - default filters mirror list (isLatest=true AND archivedAt IS NULL)
+//   - RBAC: ADMIN+MANAGER only; USER → 403
+//   - empty result still emits header row
+// ---------------------------------------------------------------------------
+describe('G058 — GET /api/travel/itinerary-templates/analytics.csv', () => {
+  test('ADMIN happy path → text/csv with header + row', async () => {
+    prisma.itineraryTemplate.findMany.mockResolvedValue([
+      {
+        id: 201,
+        name: 'Paris City Break',
+        subBrand: 'travelstall',
+        usageCount: 12,
+        acceptedCount: 7,
+        avgFinalPrice: '85000.50',
+        lastUsedAt: new Date('2026-06-01T12:00:00Z'),
+        createdAt: new Date('2026-05-10T09:00:00Z'),
+        version: 2,
+        isLatest: true,
+      },
+    ]);
+
+    const res = await request(makeApp())
+      .get('/api/travel/itinerary-templates/analytics.csv')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toMatch(/text\/csv/);
+    expect(res.headers['content-disposition']).toMatch(
+      /attachment; filename="itinerary-template-analytics\.csv"/,
+    );
+    const lines = res.text.trim().split('\n');
+    expect(lines[0]).toBe(
+      'id,name,subBrand,usageCount,acceptedCount,avgFinalPrice,lastUsedAt,createdAt,version,isLatest',
+    );
+    expect(lines.length).toBe(2);
+    expect(lines[1]).toContain('"201"');
+    expect(lines[1]).toContain('"Paris City Break"');
+    expect(lines[1]).toContain('"travelstall"');
+    expect(lines[1]).toContain('"85000.50"');
+    expect(lines[1]).toContain('"2"');
+    expect(lines[1]).toContain('"true"');
+  });
+
+  test('USER → 403 (ADMIN+MANAGER only)', async () => {
+    const res = await request(makeApp())
+      .get('/api/travel/itinerary-templates/analytics.csv')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(403);
+    expect(prisma.itineraryTemplate.findMany).not.toHaveBeenCalled();
+  });
+
+  test('MANAGER allowed (not just ADMIN)', async () => {
+    prisma.itineraryTemplate.findMany.mockResolvedValue([]);
+
+    const res = await request(makeApp())
+      .get('/api/travel/itinerary-templates/analytics.csv')
+      .set('Authorization', `Bearer ${tokenFor('MANAGER')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toMatch(/text\/csv/);
+  });
+
+  test('default filters: isLatest=true AND archivedAt=null', async () => {
+    prisma.itineraryTemplate.findMany.mockResolvedValue([]);
+    await request(makeApp())
+      .get('/api/travel/itinerary-templates/analytics.csv')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    const where = prisma.itineraryTemplate.findMany.mock.calls[0][0].where;
+    expect(where.isLatest).toBe(true);
+    expect(where.archivedAt).toBeNull();
+  });
+
+  test('empty result → header row only (no body lines)', async () => {
+    prisma.itineraryTemplate.findMany.mockResolvedValue([]);
+    const res = await request(makeApp())
+      .get('/api/travel/itinerary-templates/analytics.csv')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    const lines = res.text.trim().split('\n');
+    expect(lines.length).toBe(1);
+    expect(lines[0]).toMatch(/^id,name,subBrand/);
+  });
+
+  test('CSV cell quoting: commas / quotes in name are RFC-4180 escaped', async () => {
+    prisma.itineraryTemplate.findMany.mockResolvedValue([
+      {
+        id: 1,
+        name: 'Paris, France "city" trip',
+        subBrand: null,
+        usageCount: 0,
+        acceptedCount: 0,
+        avgFinalPrice: null,
+        lastUsedAt: null,
+        createdAt: new Date('2026-01-01T00:00:00Z'),
+        version: 1,
+        isLatest: true,
+      },
+    ]);
+    const res = await request(makeApp())
+      .get('/api/travel/itinerary-templates/analytics.csv')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    // RFC 4180: inner double quotes are doubled. Commas inside cell are
+    // safe because we always wrap in double quotes.
+    expect(res.text).toContain('"Paris, France ""city"" trip"');
+  });
+
+  test('?includeArchived=true drops archivedAt filter', async () => {
+    prisma.itineraryTemplate.findMany.mockResolvedValue([]);
+    await request(makeApp())
+      .get('/api/travel/itinerary-templates/analytics.csv?includeArchived=true')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    const where = prisma.itineraryTemplate.findMany.mock.calls[0][0].where;
+    expect(where.isLatest).toBe(true);
+    expect(where.archivedAt).toBeUndefined();
+  });
+
+  test('MANAGER subBrandAccess=[] → empty CSV (header only, no 403)', async () => {
+    prisma.user.findUnique.mockResolvedValue({
+      role: 'MANAGER',
+      subBrandAccess: JSON.stringify([]),
+    });
+
+    const res = await request(makeApp())
+      .get('/api/travel/itinerary-templates/analytics.csv')
+      .set('Authorization', `Bearer ${tokenFor('MANAGER')}`);
+
+    expect(res.status).toBe(200);
+    const lines = res.text.trim().split('\n');
+    expect(lines.length).toBe(1);
+    expect(prisma.itineraryTemplate.findMany).not.toHaveBeenCalled();
   });
 });

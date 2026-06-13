@@ -69,6 +69,24 @@ const REMINDER_WINDOWS_DAYS = [7, 3, 1];
 // backstop against same-day re-runs within a single window.
 const MAX_REMINDERS_PER_SCHEDULE = 3;
 
+// PRD_TRAVEL_BILLING G026 (FR-3.2.g) — overdue escalation chain.
+//
+// When a schedule's status ∈ {pending, partial} and dueDate < now, the
+// engine fires escalation messages at T+3 / T+7 / T+14 days past dueDate.
+// Each tier bumps the schedule's `escalationLevel` so the next tier can
+// fire without re-firing the previous one. Level 0 = no escalation fired;
+// 1 = T+3; 2 = T+7; 3 = T+14 (final).
+//
+// Each tier has its own audience copy stored as a metadata tuple. The
+// notify callback receives the tier (level, label, audience hint) so the
+// downstream notifier can route SMS/email/CC to the right recipients.
+const ESCALATION_TIERS = [
+  { level: 1, daysOverdue: 3, label: "T+3", audience: "customer+ops" },
+  { level: 2, daysOverdue: 7, label: "T+7", audience: "customer+manager" },
+  { level: 3, daysOverdue: 14, label: "T+14", audience: "credit-control+accountant" },
+];
+const MAX_ESCALATION_LEVEL = 3;
+
 /**
  * Default STUB notifier — logs the intent + returns. Replaced by the
  * wire-in slice (Q9 cred-drop) with real Wati/SMS/email dispatchers.
@@ -82,6 +100,21 @@ async function defaultStubNotifier(schedule, invoice, windowDays) {
   console.log(
     `[payment-schedule-reminder STUB] invoice=${invoice.invoiceNum} milestone=${schedule.milestoneOrder} ` +
       `window=T-${windowDays}d amount=${schedule.expectedAmount} ${schedule.expectedCurrency} ` +
+      `[sms:stub, email:stub, wa:Q9-blocked]`,
+  );
+}
+
+/**
+ * Default STUB escalation notifier — logs the intent + returns. Replaced
+ * by the wire-in slice with real dispatch (SMS to customer + email to ops,
+ * stronger copy at T+7 with manager CC, credit-control + accountant route
+ * at T+14). Exposed via module.exports for the test seam.
+ */
+async function defaultStubEscalationNotifier(schedule, invoice, tier) {
+  console.log(
+    `[payment-schedule-escalation STUB] invoice=${invoice.invoiceNum} milestone=${schedule.milestoneOrder} ` +
+      `tier=${tier.label} audience=${tier.audience} ` +
+      `daysOverdue=${tier.daysOverdue} amount=${schedule.expectedAmount} ${schedule.expectedCurrency} ` +
       `[sms:stub, email:stub, wa:Q9-blocked]`,
   );
 }
@@ -227,24 +260,170 @@ async function processReminders({ notify, now = new Date(), prisma: prismaOverri
 }
 
 /**
+ * PRD_TRAVEL_BILLING G026 (FR-3.2.g) — overdue escalation chain.
+ *
+ * Companion sweep that runs alongside processReminders(). For each
+ * pending/partial schedule whose dueDate < now and whose
+ * `escalationLevel` < `MAX_ESCALATION_LEVEL`, walks the ESCALATION_TIERS
+ * ladder and fires every tier the schedule is overdue past but hasn't
+ * yet fired.
+ *
+ * Idempotency: each tier bumps `escalationLevel` to its `level`. A schedule
+ * at level=2 (T+7 already fired) and 16 days overdue will fire only T+14
+ * this tick, not T+3/T+7 again. The persistence happens BEFORE the audit
+ * write so a same-tick re-run is gated on the same level.
+ *
+ * Tier-firing order in a single tick: ascending — if a schedule is 20 days
+ * overdue and at level=0, this method fires level=1 → level=2 → level=3 in
+ * one pass. The downstream notifier may want to coalesce these into a
+ * single "we sent you 3 reminders" payload; for now each tier issues its
+ * own callback invocation.
+ *
+ * @param {object} [options]
+ * @param {Function} [options.notify] async (schedule, invoice, tier) => void
+ *   Tier shape: { level, daysOverdue, label, audience }. Receives the
+ *   schedule + invoice + the tier being fired. STUB used when omitted.
+ * @param {Date} [options.now]
+ * @param {object} [options.prisma]
+ * @returns {Promise<{
+ *   tenantsProcessed: number,
+ *   schedulesEvaluated: number,
+ *   escalationsSent: number,
+ *   byTier: Record<number, number>,
+ *   errors: Array<{ scheduleId: number, error: string }>
+ * }>}
+ */
+async function processEscalations({ notify, now = new Date(), prisma: prismaOverride } = {}) {
+  const db = prismaOverride || prisma;
+  const isStub = !notify;
+  const send = notify || module.exports.defaultStubEscalationNotifier;
+
+  const byTier = { 1: 0, 2: 0, 3: 0 };
+  const errors = [];
+  const tenantsSeen = new Set();
+  let schedulesEvaluated = 0;
+  let escalationsSent = 0;
+
+  // Find every pending/partial schedule whose dueDate is before now AND
+  // hasn't yet hit the max escalation level. The cron herds per-tenant
+  // via the (tenantId, status, escalationLevel) compound index.
+  const schedules = await db.travelPaymentSchedule.findMany({
+    where: {
+      status: { in: ["pending", "partial"] },
+      dueDate: { lt: now },
+      escalationLevel: { lt: MAX_ESCALATION_LEVEL },
+    },
+    include: {
+      invoice: {
+        select: {
+          id: true,
+          invoiceNum: true,
+          subBrand: true,
+          contactId: true,
+          tenantId: true,
+          currency: true,
+          totalAmount: true,
+        },
+      },
+    },
+  });
+
+  for (const s of schedules) {
+    schedulesEvaluated += 1;
+    tenantsSeen.add(s.tenantId);
+
+    const dueMs = s.dueDate ? new Date(s.dueDate).getTime() : null;
+    if (dueMs == null) continue;
+    const daysOverdue = Math.floor((now.getTime() - dueMs) / (1000 * 60 * 60 * 24));
+    let currentLevel = Number(s.escalationLevel || 0);
+
+    try {
+      for (const tier of ESCALATION_TIERS) {
+        // Skip tiers already fired (idempotency) and tiers the schedule
+        // isn't yet overdue past.
+        if (tier.level <= currentLevel) continue;
+        if (daysOverdue < tier.daysOverdue) break; // tiers are ascending — once we're below, stop.
+
+        await send(s, s.invoice, tier);
+        // Persist BEFORE audit so a same-tick re-run is correctly gated
+        // even if the audit write is still in flight.
+        await db.travelPaymentSchedule.update({
+          where: { id: s.id },
+          data: {
+            escalationLevel: tier.level,
+            lastEscalationAt: now,
+          },
+        });
+        await module.exports.writeAuditSafe(
+          "TravelPaymentSchedule",
+          "PAYMENT_SCHEDULE_ESCALATION_FIRED",
+          s.id,
+          null,
+          s.tenantId,
+          {
+            invoiceId: s.invoiceId,
+            invoiceNum: s.invoice ? s.invoice.invoiceNum : null,
+            milestoneOrder: s.milestoneOrder,
+            tierLabel: tier.label,
+            tierLevel: tier.level,
+            daysOverdue,
+            audience: tier.audience,
+            expectedAmount: String(s.expectedAmount),
+            expectedCurrency: s.expectedCurrency,
+            channels: { sms: !isStub, email: !isStub, wa: false /* Q9-blocked */ },
+            stub: isStub,
+          },
+        );
+        currentLevel = tier.level;
+        byTier[tier.level] += 1;
+        escalationsSent += 1;
+      }
+    } catch (e) {
+      console.error(
+        `[payment-schedule-escalation] failed for schedule=${s.id}: ${e.message}`,
+      );
+      errors.push({ scheduleId: s.id, error: e.message });
+    }
+  }
+
+  return {
+    tenantsProcessed: tenantsSeen.size,
+    schedulesEvaluated,
+    escalationsSent,
+    byTier,
+    errors,
+  };
+}
+
+/**
  * Register the cron schedule. Wired into backend/server.js cron init block.
  */
 function initCron() {
   // Daily 09:13 IST (off-minute per the standing-rule herd-spread).
+  // One tick runs BOTH the T-7/T-3/T-1 pre-due reminders AND the T+3/T+7/T+14
+  // post-due escalation chain. Each guarded by its own try/catch so a failure
+  // on one side doesn't stop the other.
   cron.schedule("13 9 * * *", () => {
     processReminders().catch((err) => {
       console.error("[payment-schedule-reminder] unhandled tick error:", err);
     });
+    processEscalations().catch((err) => {
+      console.error("[payment-schedule-escalation] unhandled tick error:", err);
+    });
   });
-  console.log("[payment-schedule-reminder] cron initialized (daily 09:13 IST)");
+  console.log("[payment-schedule-reminder] cron initialized (daily 09:13 IST, reminders + escalation)");
 }
 
 module.exports = {
   processReminders,
+  processEscalations,
   initCron,
   computeWindow,
   defaultStubNotifier,
+  defaultStubEscalationNotifier,
   writeAuditSafe,
   REMINDER_WINDOWS_DAYS,
   MAX_REMINDERS_PER_SCHEDULE,
+  ESCALATION_TIERS,
+  MAX_ESCALATION_LEVEL,
 };

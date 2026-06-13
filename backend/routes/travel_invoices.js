@@ -40,6 +40,12 @@ const {
   DEFAULT_ANNUAL_RATE_PERCENT,
   DEFAULT_FLAT_FEE_PERCENT,
 } = require("../lib/latePenaltyCalculation");
+// PRD_TRAVEL_BILLING G025 (FR-3.2.e) — anchor-relative due-date resolver.
+const {
+  computeDueDate: computeAnchorDueDate,
+  isValidAnchorType,
+  VALID_ANCHOR_TYPES,
+} = require("../lib/scheduleAnchorResolver");
 // Arc 2 #902 slice 7 — GST tax-preview pipeline (CGST/SGST/IGST math +
 // state-code resolver + SAC codes + GSTR-1 HSN-summary grouping). The
 // invoice tax-preview endpoint mirrors backend/routes/travel_quotes.js
@@ -5629,6 +5635,9 @@ router.post(
         notes,
         status,
         paidAt,
+        // G025 — anchor-relative due-date metadata.
+        anchorType,
+        anchorOffset,
       } = req.body || {};
 
       const order = assertValidMilestoneOrder(milestoneOrder);
@@ -5636,6 +5645,76 @@ router.post(
       assertValidScheduleStatus(status);
       const parsedDueDate = parseMilestoneDueDate(dueDate);
       const parsedPaidAt = parsePaidAt(paidAt);
+
+      // G025 — anchor validation + resolution. anchorType/anchorOffset must
+      // come together. Anchor metadata is persisted regardless of whether
+      // the explicit dueDate is also supplied — the dueDate-vs-anchor diff
+      // is what powers G027 deviation detection.
+      let resolvedAnchorType = null;
+      let resolvedAnchorOffset = null;
+      let anchorComputedDueDate = null;
+      if (anchorType !== undefined || anchorOffset !== undefined) {
+        if (anchorType === null || anchorOffset === null) {
+          // Explicit clear of both.
+          resolvedAnchorType = null;
+          resolvedAnchorOffset = null;
+        } else {
+          if (!isValidAnchorType(anchorType)) {
+            return res.status(400).json({
+              error: `anchorType must be one of: ${VALID_ANCHOR_TYPES.join(", ")}`,
+              code: "INVALID_ANCHOR_TYPE",
+            });
+          }
+          const offset = Number(anchorOffset);
+          if (!Number.isFinite(offset) || !Number.isInteger(offset)) {
+            return res.status(400).json({
+              error: "anchorOffset must be an integer",
+              code: "INVALID_ANCHOR_OFFSET",
+            });
+          }
+          resolvedAnchorType = String(anchorType);
+          resolvedAnchorOffset = offset;
+          anchorComputedDueDate = computeAnchorDueDate({
+            anchorType: resolvedAnchorType,
+            anchorOffset: resolvedAnchorOffset,
+            invoice,
+            trip: null,
+          });
+        }
+      }
+
+      // Final dueDate resolution order:
+      //   1. operator-supplied dueDate (req.body.dueDate) → source of truth
+      //   2. anchor-computed dueDate (from anchor metadata)
+      //   3. null (no due date)
+      // When (1) is supplied AND differs from (2), G027 deviation tag fires.
+      let finalDueDate;
+      if (parsedDueDate !== undefined) {
+        finalDueDate = parsedDueDate;
+      } else if (anchorComputedDueDate) {
+        finalDueDate = anchorComputedDueDate;
+      } else {
+        finalDueDate = null;
+      }
+
+      // G027 — schedule-override deviation tag. When the operator's explicit
+      // dueDate differs from the anchor-computed one (or no anchor exists
+      // but a manual due date was supplied that diverges from the template
+      // default — left as a future hook), tag the audit row.
+      let deviation = false;
+      let deviationDelta = null;
+      if (
+        parsedDueDate !== undefined &&
+        parsedDueDate !== null &&
+        anchorComputedDueDate
+      ) {
+        const explicitMs = parsedDueDate.getTime();
+        const computedMs = anchorComputedDueDate.getTime();
+        if (explicitMs !== computedMs) {
+          deviation = true;
+          deviationDelta = Math.round((explicitMs - computedMs) / (1000 * 60 * 60 * 24));
+        }
+      }
 
       // receivedAmount is optional on POST. Validate when supplied.
       let received = undefined;
@@ -5659,7 +5738,9 @@ router.post(
           expectedCurrency: expectedCurrency
             ? String(expectedCurrency)
             : invoice.currency,
-          dueDate: parsedDueDate === undefined ? null : parsedDueDate,
+          dueDate: finalDueDate,
+          anchorType: resolvedAnchorType,
+          anchorOffset: resolvedAnchorOffset,
           ...(received !== undefined ? { receivedAmount: String(received) } : {}),
           notes: notes ? String(notes) : null,
           status: status || undefined,
@@ -5678,6 +5759,18 @@ router.post(
           milestoneOrder: created.milestoneOrder,
           expectedAmount: String(created.expectedAmount),
           status: created.status,
+          ...(resolvedAnchorType
+            ? {
+                anchorType: resolvedAnchorType,
+                anchorOffset: resolvedAnchorOffset,
+                anchorComputedDueDate: anchorComputedDueDate
+                  ? anchorComputedDueDate.toISOString()
+                  : null,
+              }
+            : {}),
+          // G027 — deviation tag. Surfaces in audit reports as a "manual
+          // override of template default" indicator.
+          ...(deviation ? { deviation: true, deviationDeltaDays: deviationDelta } : {}),
         },
       );
 
@@ -5736,6 +5829,9 @@ router.put(
         notes,
         status,
         paidAt,
+        // G025 — anchor-relative due-date metadata.
+        anchorType,
+        anchorOffset,
       } = req.body || {};
 
       if (milestoneOrder !== undefined) {
@@ -5753,8 +5849,85 @@ router.put(
         }
         data.expectedCurrency = String(expectedCurrency);
       }
+
+      // G025 — anchor metadata update + recompute.
+      let resolvedAnchorType = existing.anchorType;
+      let resolvedAnchorOffset = existing.anchorOffset;
+      if (anchorType !== undefined) {
+        if (anchorType === null) {
+          resolvedAnchorType = null;
+          data.anchorType = null;
+        } else {
+          if (!isValidAnchorType(anchorType)) {
+            return res.status(400).json({
+              error: `anchorType must be one of: ${VALID_ANCHOR_TYPES.join(", ")}`,
+              code: "INVALID_ANCHOR_TYPE",
+            });
+          }
+          resolvedAnchorType = String(anchorType);
+          data.anchorType = resolvedAnchorType;
+        }
+      }
+      if (anchorOffset !== undefined) {
+        if (anchorOffset === null) {
+          resolvedAnchorOffset = null;
+          data.anchorOffset = null;
+        } else {
+          const offset = Number(anchorOffset);
+          if (!Number.isFinite(offset) || !Number.isInteger(offset)) {
+            return res.status(400).json({
+              error: "anchorOffset must be an integer",
+              code: "INVALID_ANCHOR_OFFSET",
+            });
+          }
+          resolvedAnchorOffset = offset;
+          data.anchorOffset = offset;
+        }
+      }
+
+      // Recompute anchor-derived dueDate when the anchor changed AND no
+      // explicit dueDate is also supplied in this request.
+      let anchorComputedDueDate = null;
+      if (resolvedAnchorType != null && resolvedAnchorOffset != null) {
+        anchorComputedDueDate = computeAnchorDueDate({
+          anchorType: resolvedAnchorType,
+          anchorOffset: resolvedAnchorOffset,
+          invoice,
+          trip: null,
+        });
+        // If the anchor metadata changed AND the operator didn't pass an
+        // explicit dueDate, materialise the anchor-derived dueDate.
+        if (
+          dueDate === undefined &&
+          anchorComputedDueDate &&
+          (anchorType !== undefined || anchorOffset !== undefined)
+        ) {
+          data.dueDate = anchorComputedDueDate;
+        }
+      }
+
       if (dueDate !== undefined) {
         data.dueDate = parseMilestoneDueDate(dueDate);
+      }
+
+      // G027 — deviation detection on UPDATE. Same shape as POST: explicit
+      // dueDate vs anchor-computed dueDate. The deviation tag fires only
+      // when the explicit dueDate is supplied in THIS request AND it
+      // diverges from the anchor-computed date.
+      let deviation = false;
+      let deviationDelta = null;
+      if (
+        dueDate !== undefined &&
+        data.dueDate !== null &&
+        data.dueDate !== undefined &&
+        anchorComputedDueDate
+      ) {
+        const explicitMs = new Date(data.dueDate).getTime();
+        const computedMs = anchorComputedDueDate.getTime();
+        if (explicitMs !== computedMs) {
+          deviation = true;
+          deviationDelta = Math.round((explicitMs - computedMs) / (1000 * 60 * 60 * 24));
+        }
       }
       if (receivedAmount !== undefined) {
         if (receivedAmount === null) {
@@ -5803,7 +5976,22 @@ router.put(
         updated.id,
         req.user.userId,
         req.travelTenant.id,
-        { invoiceId, fields: Object.keys(data) },
+        {
+          invoiceId,
+          fields: Object.keys(data),
+          // G025 — anchor metadata snapshot.
+          ...(resolvedAnchorType
+            ? {
+                anchorType: resolvedAnchorType,
+                anchorOffset: resolvedAnchorOffset,
+                anchorComputedDueDate: anchorComputedDueDate
+                  ? anchorComputedDueDate.toISOString()
+                  : null,
+              }
+            : {}),
+          // G027 — deviation tag for "manual override" detection.
+          ...(deviation ? { deviation: true, deviationDeltaDays: deviationDelta } : {}),
+        },
       );
 
       res.json(updated);

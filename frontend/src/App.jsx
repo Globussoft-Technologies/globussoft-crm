@@ -262,6 +262,15 @@ const TravelMilestoneTracker = lazy(() => import("./pages/travel/MilestoneTracke
 // will swap to GET /api/travel/payables once slice 6 ships the consolidating
 // endpoint (shipped page commit 2a0b00ab).
 const TravelPayables = lazy(() => import("./pages/travel/Payables"));
+// PRD_TRAVEL_BILLING G022 (FR-3.5.e) — supplier-payable batch ops surface.
+// CRUD + state-machine ops for bundling N payables into one bank-transfer
+// run with a CSV export. Consumes /api/travel/payable-batches (backend route
+// travel_payable_batches.js).
+const TravelPayableBatches = lazy(() => import("./pages/travel/PayableBatches"));
+// PRD_TRAVEL_BILLING G024 (FR-3.6.c) — settlement-timeline Gantt view.
+// Inflow (payment schedules) + outflow (supplier payables) on a single
+// horizontal axis. Consumes /api/travel/settlements/timeline.
+const TravelSettlementGantt = lazy(() => import("./pages/travel/SettlementGantt"));
 // Q9 — travel WhatsApp dispatch log (Wati transport). Read-only list of the
 // WhatsAppMessage rows backend/services/watiClient.js persists (OTPs,
 // reminders, itinerary shares, boarding-pass deliveries). Consumes the
@@ -1468,6 +1477,13 @@ export default function App() {
                   server-side markup, branded PDF + WhatsApp share. */}
               <Route path="travel/flights/quote" element={<TravelOnly><TravelFlightQuoteAgent /></TravelOnly>} />
               <Route path="travel/invoices-admin" element={<TravelOnly><TravelInvoicesAdmin /></TravelOnly>} />
+              {/* PRD_TRAVEL_BILLING G022 (FR-3.5.e) — supplier-payable batch
+                  ops surface. Lists / approves / sends / settles batches +
+                  bank-friendly CSV export. */}
+              <Route path="travel/payable-batches" element={<TravelOnly><TravelPayableBatches /></TravelOnly>} />
+              {/* PRD_TRAVEL_BILLING G024 (FR-3.6.c) — settlement-timeline
+                  Gantt view (inflow + outflow on one date axis). */}
+              <Route path="travel/settlements/gantt" element={<TravelOnly><TravelSettlementGantt /></TravelOnly>} />
               {/* Arc 2 #901 slice 7 — cross-invoice milestone dashboard.
                   Operator-facing aggregate of upcoming/overdue payment
                   milestones across all travel invoices. */}

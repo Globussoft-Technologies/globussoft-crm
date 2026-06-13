@@ -196,6 +196,8 @@ model Tenant {
   travelPaymentSchedules              TravelPaymentSchedule[]
   travelSuppliers                     TravelSupplier[]
   travelSupplierPayables              TravelSupplierPayable[]
+  // PRD_TRAVEL_BILLING G022 (FR-3.5.e) — supplier-payable batch runs.
+  travelSupplierPayableBatches        TravelSupplierPayableBatch[]
   // PRD_TRAVEL_SUPPLIER_MASTER G045 — supplier-side commission ledger per FY
   // (FR-3.5.a, FR-3.5.b).
   travelSupplierCommissionEntries     TravelSupplierCommissionEntry[]
@@ -6673,17 +6675,17 @@ model CancellationPolicy {
 // (TravelInvoice.delete is a hard-delete for Draft invoices per route
 // comment at the DELETE handler), the line rows go with it.
 model TravelInvoiceLine {
-  id               Int             @id @default(autoincrement())
-  tenantId         Int             @default(1)
+  id               Int                     @id @default(autoincrement())
+  tenantId         Int                     @default(1)
   invoiceId        Int
-  lineType         String          @default("other") // per_pax | per_room | per_night | per_trip | tax | fee | addon | tcs | tds | other
+  lineType         String                  @default("other") // per_pax | per_room | per_night | per_trip | tax | fee | addon | tcs | tds | other
   description      String
-  quantity         Int             @default(1)
-  unitPrice        Decimal         @db.Decimal(15, 2)
-  amount           Decimal         @db.Decimal(15, 2)
-  currency         String          @default("INR")
-  sortOrder        Int             @default(0)
-  notes            String?         @db.Text
+  quantity         Int                     @default(1)
+  unitPrice        Decimal                 @db.Decimal(15, 2)
+  amount           Decimal                 @db.Decimal(15, 2)
+  currency         String                  @default("INR")
+  sortOrder        Int                     @default(0)
+  notes            String?                 @db.Text
   // FR-3.1.b — per-line PNR / supplier booking-reference (free-form).
   // pnr: 6-char airline/GDS PNR typically; cap at 20 to allow supplier
   //   suffix variants (e.g. "ABC123-LEG2"). bookingRef is the alternative
@@ -6706,8 +6708,8 @@ model TravelInvoiceLine {
   // 6dp precision on the rate accommodates inverse-quote pairs like
   // USD→INR=0.012048 (1 / 83.00); 2dp on baseAmount matches the existing
   // Decimal(15,2) convention used across TravelInvoice + TravelQuote.
-  fxRateToBase     Decimal?        @db.Decimal(15, 6)
-  baseAmount       Decimal?        @db.Decimal(15, 2)
+  fxRateToBase     Decimal?                @db.Decimal(15, 6)
+  baseAmount       Decimal?                @db.Decimal(15, 2)
   // PRD_TRAVEL_BILLING FR-3.1.c, e, f, g + PRD_TRAVEL_GST_COMPLIANCE FR-3.2.2
   // (G021 + G029). Per-line supplier + cost/sell margin + HSN/SAC + per-line
   // GST split persistence. All ADDITIVE NULLABLE — pre-G021 rows leave the
@@ -6737,21 +6739,25 @@ model TravelInvoiceLine {
   //                 convention as totalAmount; rates use Decimal(5,2)
   //                 (max 100.00).
   supplierId       Int?
-  isAddon          Boolean         @default(false)
-  lineCost         Decimal?        @db.Decimal(15, 2)
-  lineSell         Decimal?        @db.Decimal(15, 2)
+  isAddon          Boolean                 @default(false)
+  lineCost         Decimal?                @db.Decimal(15, 2)
+  lineSell         Decimal?                @db.Decimal(15, 2)
   hsnSac           String?
-  cgstPercent      Decimal?        @db.Decimal(5, 2)
-  cgstAmount       Decimal?        @db.Decimal(15, 2)
-  sgstPercent      Decimal?        @db.Decimal(5, 2)
-  sgstAmount       Decimal?        @db.Decimal(15, 2)
-  igstPercent      Decimal?        @db.Decimal(5, 2)
-  igstAmount       Decimal?        @db.Decimal(15, 2)
-  invoice          TravelInvoice   @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
-  tenant           Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  supplier         TravelSupplier? @relation(fields: [supplierId], references: [id], onDelete: SetNull)
-  createdAt        DateTime        @default(now())
-  updatedAt        DateTime        @updatedAt
+  cgstPercent      Decimal?                @db.Decimal(5, 2)
+  cgstAmount       Decimal?                @db.Decimal(15, 2)
+  sgstPercent      Decimal?                @db.Decimal(5, 2)
+  sgstAmount       Decimal?                @db.Decimal(15, 2)
+  igstPercent      Decimal?                @db.Decimal(5, 2)
+  igstAmount       Decimal?                @db.Decimal(15, 2)
+  invoice          TravelInvoice           @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  tenant           Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  supplier         TravelSupplier?         @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  // PRD_TRAVEL_BILLING G022 (FR-3.3.a) — supplier payables that settle this
+  // customer-facing invoice line. Many-to-zero/one — one line can be settled
+  // across multiple supplier payables (split fares, fee-only sub-charges).
+  payables         TravelSupplierPayable[]
+  createdAt        DateTime                @default(now())
+  updatedAt        DateTime                @updatedAt
 
   @@index([tenantId, invoiceId])
   @@index([invoiceId, sortOrder])
@@ -6797,6 +6803,22 @@ model TravelPaymentSchedule {
   // surface in the future Aged Receivable drill-down.
   remindersSentCount Int?          @default(0)
   lastReminderSentAt DateTime?
+  // PRD_TRAVEL_BILLING G025 (FR-3.2.e) — anchor-relative due date.
+  // When set, the route layer computes `dueDate = anchor_date + anchorOffset days`
+  // from the linked invoice / trip. anchorType ∈ {booking_date, departure_date,
+  // return_date, issue_date}. anchorOffset is signed (negative = before anchor,
+  // positive = after). Both NULLABLE so legacy / operator-set schedules with a
+  // direct dueDate keep working unchanged. Operator override stores both:
+  // anchor metadata stays for audit + an explicit dueDate stays the source of
+  // truth (see scheduleAnchorResolver.js for the resolution shape).
+  anchorType         String? // booking_date | departure_date | return_date | issue_date
+  anchorOffset       Int? // signed days offset from the anchor
+  // PRD_TRAVEL_BILLING G026 (FR-3.2.g) — overdue escalation level.
+  // 0 = no escalation fired; 1 = T+3 fired; 2 = T+7 fired; 3 = T+14 fired.
+  // Engine bumps this monotonically — once at level N, never re-fires N or
+  // anything below. Reset only via operator-action route (out of scope).
+  escalationLevel    Int           @default(0)
+  lastEscalationAt   DateTime?
   invoice            TravelInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
   tenant             Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt          DateTime      @default(now())
@@ -6805,6 +6827,8 @@ model TravelPaymentSchedule {
   @@index([tenantId, invoiceId])
   @@index([tenantId, invoiceId, milestoneOrder])
   @@index([tenantId, status, dueDate])
+  // PRD_TRAVEL_BILLING G026 — escalation cron scans by (status, escalationLevel).
+  @@index([tenantId, status, escalationLevel])
 }
 
 model TravelSupplier {
@@ -6907,9 +6931,24 @@ model TravelSupplierPayable {
   // PRD_TRAVEL_SUPPLIER_MASTER FR-3.3.a (G037) — optional PO→Payable linkage.
   // Set on auto-creation when a TravelPurchaseOrder transitions to `fulfilled`.
   purchaseOrderId     Int?
+  // PRD_TRAVEL_BILLING G022 (FR-3.3.a) — optional InvoiceLine→Payable linkage.
+  // The customer-facing invoice line that this payable settles against.
+  // Populated by the route layer when a payable is created in the context of
+  // an existing invoice line (e.g. operator manually links a hotel payable
+  // to the "Hotel block 25-28 May" line on the customer invoice). NULL = no
+  // direct invoice-line attribution (most legacy + PO-auto-created payables
+  // leave this NULL since the PO→Payable path doesn't surface line-level
+  // attribution today). onDelete: SetNull so deleting an invoice line
+  // doesn't cascade through historical payable rows.
+  invoiceLineId       Int?
+  // PRD_TRAVEL_BILLING G022 (FR-3.5.e) — optional Payable→Batch linkage.
+  // Set on POST /payable-batches/:id/add-payable. NULL = not in a batch.
+  payableBatchId      Int?
   supplier            TravelSupplier                     @relation(fields: [supplierId], references: [id], onDelete: Cascade)
   tenant              Tenant                             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   purchaseOrder       TravelPurchaseOrder?               @relation(fields: [purchaseOrderId], references: [id])
+  invoiceLine         TravelInvoiceLine?                 @relation(fields: [invoiceLineId], references: [id], onDelete: SetNull)
+  payableBatch        TravelSupplierPayableBatch?        @relation(fields: [payableBatchId], references: [id], onDelete: SetNull)
   // PRD_TRAVEL_SUPPLIER_MASTER G039 — disputes tied to a specific payable.
   disputes            TravelSupplierDispute[]
   // PRD_TRAVEL_SUPPLIER_MASTER G044 (FR-3.4.a) — reconciliation lines that
@@ -6926,6 +6965,59 @@ model TravelSupplierPayable {
   @@index([tenantId, supplierId, status])
   @@index([tenantId, dueDate])
   @@index([tenantId, purchaseOrderId])
+  // PRD_TRAVEL_BILLING G022 — invoice-line attribution + batch lookup.
+  @@index([tenantId, invoiceLineId])
+  @@index([tenantId, payableBatchId])
+}
+
+// PRD_TRAVEL_BILLING G022 (FR-3.5.e) — supplier-payable batch runs.
+//
+// Groups N TravelSupplierPayable rows into a single "payment run" that an
+// operator approves + sends to the bank as a CSV/transfer file. State
+// machine:
+//
+//   draft → approved → sent_to_bank → settled
+//                                       └──→ cancelled (terminal)
+//   draft / approved / sent_to_bank ─────→ cancelled
+//
+// Batch numbering: TPB-YYYY-NNNN per-tenant per-year, race-safe via
+// $transaction. Same numbering pattern as TravelPurchaseOrder (TPO-…).
+//
+// On `settled`, every child payable's status flips pending/scheduled → paid
+// in a single transaction with the batch flip. Cancelling the batch frees
+// the children back to pending (FK SetNull on payableBatchId).
+//
+// CSV export: GET /:id/payment-csv returns bank-friendly CSV columns
+// (supplierName / accountNumber / ifsc / amount / currency / reference).
+// Bank account details come from supplier.bankAccountMasked (already on
+// TravelSupplier) — masked for display, never exported with full digits in
+// CSV (operator pulls the unmasked version from the supplier-vault separately).
+model TravelSupplierPayableBatch {
+  id            Int                     @id @default(autoincrement())
+  tenantId      Int                     @default(1)
+  batchNumber   String // TPB-YYYY-NNNN per-tenant per-year
+  status        String                  @default("draft") // draft | approved | sent_to_bank | settled | cancelled
+  paymentMethod String? // bank_transfer | upi | cheque | rtgs | neft | wire
+  bankAccount   String? // masked display string (e.g. "HDFC ****1234")
+  totalAmount   Decimal                 @default(0) @db.Decimal(15, 2)
+  payableCount  Int                     @default(0)
+  scheduledFor  DateTime?
+  approvedBy    Int?
+  approvedAt    DateTime?
+  sentAt        DateTime?
+  settledAt     DateTime?
+  cancelledAt   DateTime?
+  cancelReason  String?                 @db.Text
+  notes         String?                 @db.Text
+  createdBy     Int?
+  createdAt     DateTime                @default(now())
+  updatedAt     DateTime                @updatedAt
+  tenant        Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  payables      TravelSupplierPayable[]
+
+  @@unique([tenantId, batchNumber])
+  @@index([tenantId, status, scheduledFor])
+  @@index([tenantId, createdAt])
 }
 
 // PRD_TRAVEL_SUPPLIER_MASTER FR-3.2 (G035/G036/G037) — supplier purchase orders.

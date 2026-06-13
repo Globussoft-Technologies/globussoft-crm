@@ -68,6 +68,8 @@ beforeEach(() => {
   prisma.travelPaymentSchedule.update.mockReset().mockResolvedValue({ id: 0 });
   engine.writeAuditSafe = vi.fn().mockResolvedValue(undefined);
   engine.defaultStubNotifier = vi.fn().mockResolvedValue(undefined);
+  // G026 — escalation chain stub seam (mirror pattern, separate seam).
+  engine.defaultStubEscalationNotifier = vi.fn().mockResolvedValue(undefined);
 });
 
 function schedule({
@@ -477,5 +479,258 @@ describe('cron/paymentScheduleReminderEngine — exports', () => {
     expect(typeof engine.writeAuditSafe).toBe('function');
     expect(Array.isArray(engine.REMINDER_WINDOWS_DAYS)).toBe(true);
     expect(typeof engine.MAX_REMINDERS_PER_SCHEDULE).toBe('number');
+  });
+
+  // PRD_TRAVEL_BILLING G026 — escalation chain surface.
+  test('ESCALATION_TIERS pins to T+3/T+7/T+14 (FR-3.2.g)', () => {
+    expect(engine.ESCALATION_TIERS).toEqual([
+      { level: 1, daysOverdue: 3, label: 'T+3', audience: 'customer+ops' },
+      { level: 2, daysOverdue: 7, label: 'T+7', audience: 'customer+manager' },
+      { level: 3, daysOverdue: 14, label: 'T+14', audience: 'credit-control+accountant' },
+    ]);
+  });
+
+  test('MAX_ESCALATION_LEVEL is 3 (final tier)', () => {
+    expect(engine.MAX_ESCALATION_LEVEL).toBe(3);
+  });
+
+  test('processEscalations + defaultStubEscalationNotifier are exported', () => {
+    expect(typeof engine.processEscalations).toBe('function');
+    expect(typeof engine.defaultStubEscalationNotifier).toBe('function');
+  });
+});
+
+// ─── G026 — overdue escalation chain ─────────────────────────────────────────
+
+describe('cron/paymentScheduleReminderEngine — G026 escalation chain', () => {
+  function overdue({
+    id = 1,
+    tenantId = 1,
+    invoiceId = 99,
+    milestoneOrder = 1,
+    status = 'pending',
+    expectedAmount = '50000.00',
+    expectedCurrency = 'INR',
+    dueDate = new Date('2026-05-22T00:00:00.000Z'),
+    escalationLevel = 0,
+  } = {}) {
+    return {
+      id,
+      tenantId,
+      invoiceId,
+      milestoneOrder,
+      status,
+      expectedAmount,
+      expectedCurrency,
+      dueDate,
+      escalationLevel,
+      lastEscalationAt: null,
+      invoice: {
+        id: invoiceId,
+        invoiceNum: 'TINV-2026-0099',
+        subBrand: 'tmc',
+        contactId: 555,
+        tenantId,
+        currency: 'INR',
+        totalAmount: '200000.00',
+      },
+    };
+  }
+
+  test('case 1 — no overdue rows → 0 escalations', async () => {
+    prisma.travelPaymentSchedule.findMany.mockResolvedValue([]);
+    const res = await engine.processEscalations({
+      now: new Date('2026-05-25T12:00:00.000Z'),
+    });
+    expect(res.escalationsSent).toBe(0);
+    expect(res.schedulesEvaluated).toBe(0);
+    expect(res.tenantsProcessed).toBe(0);
+    expect(res.errors).toEqual([]);
+    expect(engine.writeAuditSafe).not.toHaveBeenCalled();
+  });
+
+  test('case 2 — schedule 3 days overdue at level 0 → fires only T+3 (level 1)', async () => {
+    const s = overdue({
+      id: 11,
+      dueDate: new Date('2026-05-22T00:00:00.000Z'),
+      escalationLevel: 0,
+    });
+    prisma.travelPaymentSchedule.findMany.mockResolvedValue([s]);
+    const notify = vi.fn().mockResolvedValue(undefined);
+    const res = await engine.processEscalations({
+      notify,
+      now: new Date('2026-05-25T12:00:00.000Z'),
+    });
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify.mock.calls[0][2]).toMatchObject({ level: 1, label: 'T+3' });
+    expect(res.byTier).toEqual({ 1: 1, 2: 0, 3: 0 });
+    expect(prisma.travelPaymentSchedule.update).toHaveBeenCalledWith({
+      where: { id: 11 },
+      data: expect.objectContaining({ escalationLevel: 1 }),
+    });
+  });
+
+  test('case 3 — 7 days overdue at level 0 → fires T+3 then T+7 in one tick', async () => {
+    const s = overdue({
+      id: 22,
+      dueDate: new Date('2026-05-18T00:00:00.000Z'),
+      escalationLevel: 0,
+    });
+    prisma.travelPaymentSchedule.findMany.mockResolvedValue([s]);
+    const notify = vi.fn().mockResolvedValue(undefined);
+    const res = await engine.processEscalations({
+      notify,
+      now: new Date('2026-05-25T12:00:00.000Z'),
+    });
+    expect(notify).toHaveBeenCalledTimes(2);
+    expect(notify.mock.calls[0][2].label).toBe('T+3');
+    expect(notify.mock.calls[1][2].label).toBe('T+7');
+    expect(res.byTier).toEqual({ 1: 1, 2: 1, 3: 0 });
+  });
+
+  test('case 4 — 16 days overdue at level 0 → fires T+3 + T+7 + T+14 in one tick', async () => {
+    const s = overdue({
+      id: 33,
+      dueDate: new Date('2026-05-09T00:00:00.000Z'),
+      escalationLevel: 0,
+    });
+    prisma.travelPaymentSchedule.findMany.mockResolvedValue([s]);
+    const notify = vi.fn().mockResolvedValue(undefined);
+    const res = await engine.processEscalations({
+      notify,
+      now: new Date('2026-05-25T12:00:00.000Z'),
+    });
+    expect(notify).toHaveBeenCalledTimes(3);
+    expect(res.byTier).toEqual({ 1: 1, 2: 1, 3: 1 });
+    expect(res.escalationsSent).toBe(3);
+  });
+
+  test('case 5 — idempotency: schedule already at level=2, 14 days overdue → fires only T+14 (level 3)', async () => {
+    const s = overdue({
+      id: 44,
+      dueDate: new Date('2026-05-11T00:00:00.000Z'),
+      escalationLevel: 2,
+    });
+    prisma.travelPaymentSchedule.findMany.mockResolvedValue([s]);
+    const notify = vi.fn().mockResolvedValue(undefined);
+    const res = await engine.processEscalations({
+      notify,
+      now: new Date('2026-05-25T12:00:00.000Z'),
+    });
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify.mock.calls[0][2].label).toBe('T+14');
+    expect(res.byTier).toEqual({ 1: 0, 2: 0, 3: 1 });
+  });
+
+  test('case 6 — schedule at max level (3) skipped by query filter (escalationLevel < 3)', async () => {
+    // Engine query filters out level >= MAX. Simulate by having findMany
+    // return an empty list (mimicking the filter behaviour). Assert the
+    // query was issued with `escalationLevel: { lt: 3 }`.
+    prisma.travelPaymentSchedule.findMany.mockResolvedValue([]);
+    await engine.processEscalations({
+      now: new Date('2026-05-25T12:00:00.000Z'),
+    });
+    expect(prisma.travelPaymentSchedule.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          escalationLevel: { lt: 3 },
+          status: { in: ['pending', 'partial'] },
+        }),
+      }),
+    );
+  });
+
+  test('case 7 — paid status excluded by where clause (escalation does not chase settled milestones)', async () => {
+    prisma.travelPaymentSchedule.findMany.mockResolvedValue([]);
+    await engine.processEscalations({
+      now: new Date('2026-05-25T12:00:00.000Z'),
+    });
+    // findMany was called with status: { in: ['pending', 'partial'] }.
+    expect(prisma.travelPaymentSchedule.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          status: { in: ['pending', 'partial'] },
+        }),
+      }),
+    );
+  });
+
+  test('case 8 — only 1 day overdue at level 0 → fires nothing (below T+3 threshold)', async () => {
+    const s = overdue({
+      id: 55,
+      dueDate: new Date('2026-05-24T00:00:00.000Z'),
+      escalationLevel: 0,
+    });
+    prisma.travelPaymentSchedule.findMany.mockResolvedValue([s]);
+    const notify = vi.fn().mockResolvedValue(undefined);
+    const res = await engine.processEscalations({
+      notify,
+      now: new Date('2026-05-25T12:00:00.000Z'),
+    });
+    expect(notify).not.toHaveBeenCalled();
+    expect(res.escalationsSent).toBe(0);
+    expect(res.schedulesEvaluated).toBe(1);
+  });
+
+  test('case 9 — audit row carries tier + daysOverdue + deviation-free payload', async () => {
+    const s = overdue({
+      id: 66,
+      dueDate: new Date('2026-05-18T00:00:00.000Z'),
+      escalationLevel: 0,
+    });
+    prisma.travelPaymentSchedule.findMany.mockResolvedValue([s]);
+    const notify = vi.fn().mockResolvedValue(undefined);
+    await engine.processEscalations({
+      notify,
+      now: new Date('2026-05-25T12:00:00.000Z'),
+    });
+    // 7 days overdue → two audit writes.
+    expect(engine.writeAuditSafe).toHaveBeenCalledTimes(2);
+    const firstCall = engine.writeAuditSafe.mock.calls[0];
+    expect(firstCall[0]).toBe('TravelPaymentSchedule');
+    expect(firstCall[1]).toBe('PAYMENT_SCHEDULE_ESCALATION_FIRED');
+    expect(firstCall[5]).toMatchObject({
+      invoiceId: 99,
+      tierLevel: 1,
+      tierLabel: 'T+3',
+      audience: 'customer+ops',
+    });
+    expect(firstCall[5].daysOverdue).toBeGreaterThanOrEqual(3);
+  });
+
+  test('case 10 — per-row failure isolation: throwing notify on row 1 does not stop row 2', async () => {
+    const s1 = overdue({ id: 77, dueDate: new Date('2026-05-22T00:00:00.000Z') });
+    const s2 = overdue({ id: 78, dueDate: new Date('2026-05-22T00:00:00.000Z') });
+    prisma.travelPaymentSchedule.findMany.mockResolvedValue([s1, s2]);
+    const notify = vi.fn()
+      .mockRejectedValueOnce(new Error('SMS failed'))
+      .mockResolvedValue(undefined);
+    const res = await engine.processEscalations({
+      notify,
+      now: new Date('2026-05-25T12:00:00.000Z'),
+    });
+    expect(res.errors).toHaveLength(1);
+    expect(res.errors[0]).toMatchObject({ scheduleId: 77 });
+    // row 2 still fires successfully → byTier counts row 2's T+3 fire only.
+    expect(res.byTier[1]).toBe(1);
+  });
+
+  test('case 11 — STUB notifier used when no custom notify supplied; channels carry stub:true', async () => {
+    const s = overdue({
+      id: 88,
+      dueDate: new Date('2026-05-22T00:00:00.000Z'),
+    });
+    prisma.travelPaymentSchedule.findMany.mockResolvedValue([s]);
+    engine.defaultStubEscalationNotifier = vi.fn().mockResolvedValue(undefined);
+    await engine.processEscalations({
+      now: new Date('2026-05-25T12:00:00.000Z'),
+    });
+    expect(engine.defaultStubEscalationNotifier).toHaveBeenCalledTimes(1);
+    expect(engine.writeAuditSafe.mock.calls[0][5].stub).toBe(true);
+    expect(engine.writeAuditSafe.mock.calls[0][5].channels).toEqual({
+      sms: false,
+      email: false,
+      wa: false,
+    });
   });
 });

@@ -998,6 +998,14 @@ app.use("/api/travel", require("./routes/travel_invoice_ledgers"));
 // G040-G043 (status/payment-terms enums) which is concurrently editing
 // the parent suppliers router.
 app.use("/api/travel", require("./routes/travel_supplier_reconciliation"));
+// PRD_TRAVEL_BILLING G022 (FR-3.5.e) — supplier-payable batch runs.
+// Groups N payables into a single bank-transfer run + CSV export. State
+// machine: draft → approved → sent_to_bank → settled (or cancelled).
+app.use("/api/travel", require("./routes/travel_payable_batches"));
+// PRD_TRAVEL_BILLING G024 (FR-3.6.c) — settlement-timeline aggregator that
+// drives the SettlementGantt.jsx Gantt-chart view (inflow + outflow on
+// one date axis).
+app.use("/api/travel", require("./routes/travel_settlement_timeline"));
 // WS-1 — sub-brand session scope (POST /session/switch-brand + GET
 // /session/active-brand). Authoritative server-side validation behind the
 // sidebar sub-brand switcher; reuses middleware/travelGuards.js plumbing.

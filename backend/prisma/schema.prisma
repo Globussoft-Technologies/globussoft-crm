@@ -181,6 +181,8 @@ model Tenant {
   webCheckins                         WebCheckin[]
   supplierCredentials                 SupplierCredential[]
   visaApplications                    VisaApplication[]
+  // G107 — RejectionRecoveryProgram back-relation (PRD_VISA_SURE_PHASE_3 §FR-7).
+  rejectionRecoveryPrograms           RejectionRecoveryProgram[]
   embassyRules                        EmbassyRule[]
   rfuLeadProfiles                     RfuLeadProfile[]
   religiousGuidancePackets            ReligiousGuidancePacket[]
@@ -6131,7 +6133,8 @@ model VisaApplication {
   decidedAt            DateTime?
   outcome              String? // null | approved | rejected
   outcomeReason        String?                     @db.Text
-  recoveryProgramId    Int? // FK to a future RejectionRecoveryProgram model
+  recoveryProgramId    Int? // FK to RejectionRecoveryProgram model (G107 — PRD_VISA_SURE_PHASE_3 §FR-7)
+  recoveryProgram      RejectionRecoveryProgram?   @relation(fields: [recoveryProgramId], references: [id], onDelete: SetNull)
   /// Self-FK to a prior rejected application — used by visaRiskFlagEngine R13 cooldown rule (PC-4 RESOLVED 2026-05-24). Pure FK; full rejection-recovery diagnostic linkage is Phase 2 (PC-2 deferred until VisaDiagnostic model materializes).
   priorApplicationId   Int?
   priorApplication     VisaApplication?            @relation("PriorRejection", fields: [priorApplicationId], references: [id], onDelete: SetNull)
@@ -6144,6 +6147,34 @@ model VisaApplication {
   @@index([tenantId, status, advisorRiskFlag])
   @@index([tenantId, contactId])
   @@index([priorApplicationId])
+  @@index([recoveryProgramId])
+}
+
+/// G107 — RejectionRecoveryProgram (PRD_VISA_SURE_PHASE_3 §FR-7).
+/// Advisor-curated second-attempt programs for previously-rejected applicants.
+/// VisaApplication.recoveryProgramId references this; enrolment happens via
+/// POST /api/travel/visa/applications/:id/enrol-recovery.
+model RejectionRecoveryProgram {
+  id                    Int               @id @default(autoincrement())
+  tenantId              Int
+  name                  String // e.g. "USA B1/B2 second-attempt program"
+  destinationCountry    String
+  visaType              String? // tourist | business | student | work | umrah | hajj | null = any
+  description           String?           @db.Text
+  durationDays          Int? // typical program length
+  successRate           Decimal?          @db.Decimal(5, 2) // historical %
+  feeAmount             Decimal?          @db.Decimal(15, 2)
+  feeCurrency           String?
+  enrolmentCriteriaJson String?           @db.Text // who qualifies (JSON-stringified per sanitizeJson convention)
+  programSteps          String?           @db.Text // markdown checklist
+  isActive              Boolean           @default(true)
+  createdBy             Int?
+  createdAt             DateTime          @default(now())
+  updatedAt             DateTime          @updatedAt
+  tenant                Tenant            @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  applications          VisaApplication[]
+
+  @@index([tenantId, destinationCountry, isActive])
 }
 
 model VisaDocumentChecklistItem {
@@ -7423,6 +7454,14 @@ model EngineWeights {
   weightGradeBandCenter Int      @default(10)
   weightTierValueLean   Int      @default(8) // applied only when geo_preference=open
   scoresWellThreshold   Int      @default(70) // §3.3.5 "scores well" floor
+  // G103 — PRD_TMC_DIAGNOSTIC_SALES_ROUTING_ENGINE §3.5.5 standing-facts overrides.
+  // Per-tenant override for the renderer-injected assurance + trust blocks.
+  // JSON-stringified per sanitizeJson convention. Empty / null → renderer falls
+  // back to DEFAULT_STANDING_FACTS in routes/travel_diagnostics.js.
+  // Shape mirrors DEFAULT_STANDING_FACTS.{assurance,trust} (supervision_ratio,
+  // tour_directors, governance_pack[], schools_served_since_2015, etc.).
+  assuranceFactsJson    String?  @db.Text
+  trustFactsJson        String?  @db.Text
   tenant                Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt

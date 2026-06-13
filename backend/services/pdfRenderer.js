@@ -4204,6 +4204,206 @@ async function renderTravelInvoicePdf(opts) {
 
 const generateTravelInvoicePdf = renderTravelInvoicePdf;
 
+// ─── G036 — Supplier PO PDF renderer ─────────────────────────────────
+//
+// Renders a TravelPurchaseOrder for printing / supplier dispatch. Mirrors
+// the structure of renderTravelInvoicePdf: brand-coloured header band,
+// supplier "Ship To" block, line items table, totals panel, payment terms
+// footer.
+//
+// Inputs:
+//   purchaseOrder: { id, poNumber, status, currency, subtotal, taxAmount,
+//                    totalAmount, notes, sentAt, acknowledgedAt,
+//                    fulfilledAt, createdAt, bookingId, supplier? }
+//   supplier:      { id, name, subBrand, supplierCategory, contactPerson,
+//                    phone, email, gstin, addressLine, paymentTermsDays }
+//   lines:         [{ lineType, description, quantity, unitPrice,
+//                     lineTotal, pnr, bookingRef, sortOrder }]
+//   tenant:        { id, name, subBrandConfigJson } (subBrandConfig drives
+//                    header colour via the existing brand-kit selector)
+//   tenantSubBrand: explicit sub-brand override (passed by route — equals
+//                    supplier.subBrand). Falls back to "_generic".
+//
+// Returns: Promise<Buffer> of the rendered PDF.
+async function renderSupplierPo(opts) {
+  const o = opts || {};
+  const po = o.purchaseOrder || {};
+  const supplier = o.supplier || {};
+  const lines = Array.isArray(o.lines) ? o.lines : [];
+  const tenant = o.tenant || null;
+  const sub = o.tenantSubBrand || supplier.subBrand || null;
+
+  // Re-use the same brand-kit selector the invoice renderer uses. Falls
+  // back to INVOICE_BRAND_KIT_FALLBACKS._generic when no sub-brand match.
+  const cfg = parseInvoiceSubBrandConfig(tenant && tenant.subBrandConfigJson);
+  const { fields: brandKit } = resolveInvoiceBrandKit(cfg, sub);
+  const accent = brandKit.headerColor || INVOICE_BRAND_KIT_FALLBACKS._generic.headerColor;
+  const primaryColor = brandKit.primaryColor || INVOICE_BRAND_KIT_FALLBACKS._generic.primaryColor;
+  const brandLabel = SUB_BRAND_LABEL[sub] || (tenant && tenant.name) || "Travel CRM";
+
+  const currency = po.currency || "INR";
+  function fmt(n) {
+    const v = Number(n) || 0;
+    if (currency === "INR") return `₹${v.toFixed(2)}`;
+    if (currency === "USD") return `$${v.toFixed(2)}`;
+    if (currency === "GBP") return `£${v.toFixed(2)}`;
+    return `${currency} ${v.toFixed(2)}`;
+  }
+
+  const doc = new PDFDocument({
+    size: "A4",
+    margin: 50,
+    info: { Producer: "Globussoft CRM (supplier-po)" },
+  });
+  const bufPromise = streamToBuffer(doc);
+
+  // ── Header band ──
+  doc.rect(0, 0, doc.page.width, 60).fill(accent);
+  doc.font("Helvetica-Bold").fontSize(18).fillColor("#fff")
+    .text(brandLabel, 50, 22, { align: "left" });
+  doc.fillColor("#fff").fontSize(10).text("Purchase Order", 50, 42, { align: "left" });
+
+  // ── Meta block (top-right) ──
+  const metaTop = 80;
+  doc.font("Helvetica-Bold").fontSize(18).fillColor("#111")
+    .text("Purchase Order", 380, metaTop, { width: 165, align: "right" });
+  doc.font("Helvetica").fontSize(10).fillColor("#333");
+  doc.text(`PO #: ${po.poNumber || po.id || "—"}`, 380, metaTop + 26, { width: 165, align: "right" });
+  doc.text(
+    `Issued: ${formatDate(po.createdAt || new Date())}`,
+    380, metaTop + 40, { width: 165, align: "right" },
+  );
+  doc.text(`Status: ${po.status || "draft"}`, 380, metaTop + 54, { width: 165, align: "right" });
+  if (po.sentAt) {
+    doc.text(`Sent: ${formatDate(po.sentAt)}`, 380, metaTop + 68, { width: 165, align: "right" });
+  }
+
+  // ── "Ship To" supplier block (top-left) ──
+  doc.font("Helvetica-Bold").fontSize(11).fillColor("#111").text("Supplier", 50, metaTop);
+  doc.font("Helvetica").fontSize(10).fillColor("#222");
+  doc.text(supplier.name || "—", 50, metaTop + 18);
+  if (supplier.contactPerson) doc.text(supplier.contactPerson, 50, doc.y);
+  if (supplier.email) doc.text(supplier.email, 50, doc.y);
+  if (supplier.phone) doc.text(supplier.phone, 50, doc.y);
+  if (supplier.addressLine) doc.text(supplier.addressLine, 50, doc.y, { width: 320 });
+  if (supplier.gstin) doc.text(`GSTIN: ${supplier.gstin}`, 50, doc.y);
+
+  doc.y = Math.max(doc.y, metaTop + 110);
+  doc.moveDown(0.6);
+  const divY = doc.y;
+  doc.moveTo(50, divY).lineTo(545, divY).lineWidth(0.7).strokeColor(accent).stroke();
+  doc.moveDown(0.8);
+
+  // ── Line items table ──
+  const tableTop = doc.y;
+  const colX = { desc: 50, type: 280, qty: 360, unit: 410, total: 475 };
+  doc.font("Helvetica-Bold").fontSize(10).fillColor("#333");
+  doc.text("Description", colX.desc, tableTop, { width: 225 });
+  doc.text("Type", colX.type, tableTop, { width: 75, align: "left" });
+  doc.text("Qty", colX.qty, tableTop, { width: 40, align: "right" });
+  doc.text("Unit", colX.unit, tableTop, { width: 60, align: "right" });
+  doc.text("Amount", colX.total, tableTop, { width: 70, align: "right" });
+  doc.moveTo(50, tableTop + 14).lineTo(545, tableTop + 14).lineWidth(0.5).strokeColor("#bbb").stroke();
+
+  let rowY = tableTop + 22;
+  doc.font("Helvetica").fontSize(10).fillColor("#222");
+  let computedSubtotal = 0;
+  let computedTax = 0;
+  let computedTotal = 0;
+  if (lines.length === 0) {
+    doc.fillColor("#777").text("(No lines on this PO yet.)", colX.desc, rowY, { width: 480 });
+    rowY += 18;
+  } else {
+    for (const line of lines) {
+      if (rowY > 700) { doc.addPage(); rowY = 60; }
+      const qty = Number(line.quantity) || 0;
+      const unit = Number(line.unitPrice) || 0;
+      const total = line.lineTotal != null ? Number(line.lineTotal) : qty * unit;
+      computedTotal += total;
+      if (line.lineType === "service") computedSubtotal += total;
+      if (line.lineType === "tax") computedTax += total;
+      doc.fillColor("#222");
+      const descMain = String(line.description || "—");
+      doc.text(descMain, colX.desc, rowY, { width: 225 });
+      // Render PNR/bookingRef as a secondary line under the description
+      // when present (supplier-reconciliation cue).
+      const reconParts = [];
+      if (line.pnr) reconParts.push(`PNR ${line.pnr}`);
+      if (line.bookingRef) reconParts.push(`Ref ${line.bookingRef}`);
+      if (reconParts.length > 0) {
+        doc.fillColor("#666").fontSize(8);
+        doc.text(reconParts.join(" • "), colX.desc, doc.y, { width: 225 });
+        doc.fontSize(10).fillColor("#222");
+      }
+      doc.text(String(line.lineType || "service"), colX.type, rowY, { width: 75 });
+      doc.text(qty === 0 ? "—" : String(qty), colX.qty, rowY, { width: 40, align: "right" });
+      doc.text(unit === 0 ? "—" : fmt(unit), colX.unit, rowY, { width: 60, align: "right" });
+      doc.text(fmt(total), colX.total, rowY, { width: 70, align: "right" });
+      rowY = Math.max(rowY + 20, doc.y + 4);
+    }
+  }
+  doc.y = rowY + 4;
+
+  // ── Totals panel (bottom-right) ──
+  const subtotalShown = po.subtotal != null ? Number(po.subtotal) : computedSubtotal;
+  const taxShown = po.taxAmount != null ? Number(po.taxAmount) : computedTax;
+  const totalShown = po.totalAmount != null ? Number(po.totalAmount) : computedTotal;
+
+  doc.moveDown(0.5);
+  const totalsY = doc.y;
+  doc.moveTo(350, totalsY).lineTo(545, totalsY).lineWidth(0.5).strokeColor("#bbb").stroke();
+  let ty = totalsY + 8;
+  doc.font("Helvetica").fontSize(10).fillColor("#333");
+  doc.text("Subtotal", 350, ty, { width: 95, align: "right" });
+  doc.text(fmt(subtotalShown), 450, ty, { width: 95, align: "right" });
+  ty += 16;
+  if (taxShown !== 0) {
+    doc.text("Tax", 350, ty, { width: 95, align: "right" });
+    doc.text(fmt(taxShown), 450, ty, { width: 95, align: "right" });
+    ty += 16;
+  }
+  doc.moveTo(350, ty).lineTo(545, ty).lineWidth(0.5).strokeColor("#bbb").stroke();
+  ty += 6;
+  doc.font("Helvetica-Bold").fontSize(11).fillColor(primaryColor);
+  doc.text("PO Total", 350, ty, { width: 95, align: "right" });
+  doc.fillColor("#111");
+  doc.text(fmt(totalShown), 450, ty, { width: 95, align: "right" });
+  ty += 18;
+  doc.y = ty + 8;
+
+  // ── Payment terms footer ──
+  doc.moveDown(1);
+  const termsY = doc.y;
+  doc.font("Helvetica-Bold").fontSize(10).fillColor("#333").text("Payment Terms", 50, termsY);
+  const termsText = supplier.paymentTermsDays
+    ? `Net ${supplier.paymentTermsDays} days from PO issue date.`
+    : "As agreed with supplier.";
+  doc.font("Helvetica").fontSize(9).fillColor("#555").text(termsText, 50, termsY + 14, { width: 495 });
+
+  if (po.notes) {
+    doc.moveDown(1);
+    doc.font("Helvetica-Bold").fontSize(10).fillColor("#333").text("Notes", 50, doc.y);
+    doc.font("Helvetica").fontSize(9).fillColor("#555").text(String(po.notes), 50, doc.y, { width: 495 });
+  }
+
+  doc.moveDown(1);
+  doc.font("Helvetica-Oblique").fontSize(9).fillColor("#444").text(
+    "This purchase order is issued pursuant to the supplier agreement. Please acknowledge by quoting the PO number on any correspondence.",
+    50, doc.y, { width: 495 },
+  );
+
+  const footerY = doc.page.height - doc.page.margins.bottom - 24;
+  doc.moveTo(50, footerY).lineTo(doc.page.width - 50, footerY).lineWidth(0.4).strokeColor("#bbb").stroke();
+  const tenantLine = tenant && tenant.name ? `${tenant.name} — ` : "";
+  doc.font("Helvetica").fontSize(8).fillColor("#777").text(
+    `${tenantLine}${brandLabel} — Purchase Order #${po.poNumber || po.id || "?"}.`,
+    50, footerY + 6, { width: doc.page.width - 100, align: "center" },
+  );
+
+  doc.end();
+  return bufPromise;
+}
+
 module.exports = {
   renderPrescriptionPdf,
   renderConsentPdf,
@@ -4230,6 +4430,8 @@ module.exports = {
   generateTravelQuotePdf,
   renderTravelInvoicePdf,
   generateTravelInvoicePdf,
+  // PRD_TRAVEL_SUPPLIER_MASTER G036 — supplier PO PDF.
+  renderSupplierPo,
   voucherSubtypeForLine,
   formatVoucherServiceRange,
   extractTravellerListFromInvoice,

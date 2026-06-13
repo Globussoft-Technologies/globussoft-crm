@@ -1153,6 +1153,46 @@ router.patch("/trips/:id", verifyToken, requireTravelTenant, requireTmcAccess, a
     }
 
     const updated = await prisma.tmcTrip.update({ where: { id }, data });
+
+    // PRD_TRAVEL_SUPPLIER_MASTER FR-3.2.a (G037) — auto-create draft PO on
+    // booking-confirm. TmcTrip does NOT carry a supplierId column today;
+    // the booking-confirm flow accepts an OPTIONAL `supplierId` body field
+    // that, when present AND the trip flips to confirmed, fires the auto-PO.
+    // Best-effort: any failure (missing supplier, sub-brand mismatch, PO
+    // sequence collision) logs but does NOT block the PATCH — the trip's
+    // status flip is the load-bearing op. Without supplierId, trip-confirm
+    // just doesn't spawn a PO (operator can still manually create one via
+    // POST /api/travel/purchase-orders).
+    const { supplierId: autoPoSupplierId } = req.body || {};
+    if (flippingToConfirmed && autoPoSupplierId) {
+      const sid = parseInt(autoPoSupplierId, 10);
+      if (Number.isFinite(sid)) {
+        try {
+          const supplier = await prisma.travelSupplier.findFirst({
+            where: { id: sid, tenantId: req.travelTenant.id },
+            select: { id: true },
+          });
+          if (supplier) {
+            const poRoute = require("./travel_purchase_orders");
+            const poNumber = await poRoute.nextPoNumber(req.travelTenant.id);
+            await prisma.travelPurchaseOrder.create({
+              data: {
+                tenantId: req.travelTenant.id,
+                supplierId: sid,
+                poNumber,
+                status: "draft",
+                currency: "INR",
+                createdBy: req.user.userId,
+                notes: `Auto-generated for trip ${existing.tripCode} on confirmation`,
+              },
+            });
+          }
+        } catch (poErr) {
+          console.warn(`[travel-trips] auto-PO failed for tripCode=${existing.tripCode}: ${poErr.message}`);
+        }
+      }
+    }
+
     res.json(updated);
   } catch (e) {
     if (e.code === "P2002") {

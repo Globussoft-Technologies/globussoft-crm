@@ -89,7 +89,7 @@ Each row is a coherent PR scope. Effort estimates assume one senior engineer.
 
 | ID | Slice | Files | Effort | Status |
 |---|---|---|---|---|
-| G016 | FR-3.14 column totals re-compute from filtered set — verify with visual QA + add assertion in `frontend/src/__tests__/Pipeline.test.jsx` | spec only | 0.5d | ⬜ |
+| G016 | FR-3.14 column totals re-compute from filtered set — verify with visual QA + add assertion in `frontend/src/__tests__/Pipeline.test.jsx` | spec only | 0.5d | ✅ DONE 2026-06-13 — `8e7a7b16` |
 
 PRD §10 is stale (claims 11/18; actual is 16/18). Update PRD §10 in same commit.
 
@@ -255,7 +255,7 @@ Most content (logos / palettes / fonts) blocked on Q22; surface wiring is builda
 
 | ID | Slice | Files | Effort | Status |
 |---|---|---|---|---|
-| G106 | E2E gate spec verification (FR-10) — confirm `travel-curriculum-api.spec.js` present + wired into deploy.yml | spec audit + add if missing | 0.5d | ⬜ |
+| G106 | E2E gate spec verification (FR-10) — confirm `travel-curriculum-api.spec.js` present + wired into deploy.yml | spec audit + add if missing | 0.5d | ✅ DONE 2026-06-13 — `8e7a7b16` |
 
 PC-1 / Q13 (TMC academic-team data drop) is product-blocked, not engineering.
 
@@ -347,7 +347,7 @@ Brand variants (G108-G110) Q22-blocked; visa-summary LLM Q11-blocked; WA advisor
 
 | ID | Item | Phase | Effort | Trigger |
 |---|---|---|---|---|
-| G124 | A3 residual — per-document view/download/share audit-log rows | P1 W3 | ~1d | Engineering-actionable; pick anytime |
+| G124 | A3 residual — per-document view/download/share audit-log rows | P1 W3 | ~1d | ✅ DONE 2026-06-13 — `8e7a7b16` (lib/documentAccessAudit.js + 4 wire-in sites across itineraries/invoices/quotes-public) |
 | G125 | Chrome flight-quote plugin (Manifest V3, signed CRX, auto-update, separate repo) | P1 W3 commitment | 10-15d | DC-1 (decision to start) |
 | G126 | Airline web check-in automation P1B (top-4: IndiGo/AI/Vistara/Emirates) | P1 W4 commitment | 5-7d | DC-1..5 (architecture call) |
 | G127 | Booking.com / Expedia direct APIs | P1.5 | 7-10d per provider | Commercial agreement |

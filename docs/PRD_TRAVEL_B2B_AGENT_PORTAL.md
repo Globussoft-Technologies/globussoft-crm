@@ -6,6 +6,25 @@
 
 ---
 
+
+## Implementation Status (audited 2026-06-13 against HEAD `043b9ab3`)
+
+| Metric | Value |
+|---|---|
+| Total FRs | 34 |
+| ✅ Shipped | **0 (0%)** |
+| 🟡 Partial | 0 |
+| 🔌 Stub | 0 |
+| ❌ Missing | 34 |
+| **Net gap** | **34 items (entire PRD)** |
+| Primary blocker | **Phase 0** — 7 DD-5.* decisions unresolved (cookie shape, commission ledger schema, markup policy UX, corporate policy editor, approval-chain shape, theming strategy, SUB_AGENT/CORPORATE_USER actor types in audit log) |
+
+No `SubAgent` model, no `CorporateAccount` model, no `/api/portal/b2b/*` route prefix, no `frontend/src/pages/b2b/` topology. Entire portal substrate absent by design — gated on a consolidated 7-DD design session per PRD §5.
+
+**Single source of truth for all gap items + Wave 7 execution plan (post-DD resolution):** [TRAVEL_GAP_CLOSURE_TRACKER.md §5.B2B + §7 Wave 7](TRAVEL_GAP_CLOSURE_TRACKER.md).
+
+---
+
 ## §1 Background + source attribution
 
 ### Current state (shipped)

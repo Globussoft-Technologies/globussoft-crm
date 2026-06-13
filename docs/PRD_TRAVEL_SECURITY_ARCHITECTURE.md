@@ -6,6 +6,26 @@
 
 ---
 
+
+## Implementation Status (audited 2026-06-13 against HEAD `043b9ab3`)
+
+| Metric | Value |
+|---|---|
+| Total FRs | 34 |
+| ✅ Shipped | 11 (32%) |
+| 🟡 Partial | 8 |
+| 🔌 Stub | 2 |
+| ❌ Missing | 12 |
+| ⏭️ Deferred | 1 (FR-3.2.e blocked on FR-3.2.a/b enforce) |
+| **Net gap** | **23 items** — ~12 engineering-actionable (CSP enforce cluster, ACL, PII audit, embed widget, SRI), ~11 decision-blocked (JWT-cookie flip on DD-5.1, publicId migration on DD-5.2, iframe-isolate sub-domain split) |
+| Primary blocker | DD-5.1 cookie shape; DD-5.2 id-migration shape; both gate the highest-stakes work |
+
+Foundation shipped: `lib/cspNonce.js`, `lib/listProjection.js` (51 slice adopters), `middleware/crossTenantInterceptor.js`, `SecurityIncident` model, ESLint tenant-scope rule (`backend/eslint.config.js:266`), `routes/csp.js` report ingestion, `lib/authCookies.js` (additive httpOnly set), RevokedToken jti denylist on logout, `e2e/tests/cross-tenant-coverage-audit.spec.js`.
+
+**Single source of truth for all gap items + Wave 5 execution plan:** [TRAVEL_GAP_CLOSURE_TRACKER.md §3.9 + §5.SEC + §7 Wave 5](TRAVEL_GAP_CLOSURE_TRACKER.md).
+
+---
+
 ## §1 Background + source attribution
 
 ### Current state (shipped)

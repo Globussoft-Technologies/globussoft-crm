@@ -6,6 +6,24 @@
 
 ---
 
+
+## Implementation Status (audited 2026-06-13 against HEAD `043b9ab3`)
+
+| Metric | Value |
+|---|---|
+| Total FRs | 39 |
+| ✅ Shipped | 19 (49%) |
+| 🟡 Partial | 9 |
+| ❌ Missing | 11 |
+| **Net gap** | **20 items** (~14 eng-days) |
+| Primary blocker | `clonedFromTemplateId` lineage; `draftedByAi` provenance; template versioning + analytics metrics; conflict warnings; bulk-day-add; live re-pricing integration verify |
+
+Shipped: 3-pane editor + Leaflet map preview + drag-drop across days + suggest endpoint with stub-fallback + POI catalogue + pending-approval queue.
+
+**Single source of truth for all gap items + Wave 3 execution plan:** [TRAVEL_GAP_CLOSURE_TRACKER.md §3.7 + §7 Wave 3](TRAVEL_GAP_CLOSURE_TRACKER.md).
+
+---
+
 ## §1 Background + source attribution
 
 ### Current state (itinerary builder is text-list + draftSummary regen)

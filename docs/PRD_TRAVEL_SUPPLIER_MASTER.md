@@ -8,6 +8,24 @@
 
 ---
 
+
+## Implementation Status (audited 2026-06-13 against HEAD `043b9ab3`)
+
+| Metric | Value |
+|---|---|
+| Total FRs | 30 |
+| ✅ Shipped | 5 (17%) |
+| 🟡 Partial | 6 |
+| 🔌 Stub | 2 |
+| ❌ Missing | 16 |
+| ⏭️ Deferred | 1 (FR-3.5.c TDS auto-deduct, DD-5.5) |
+| **Net gap** | **25 items** (~20 eng-days; the highest-impact engineering-actionable cluster) |
+| Primary blocker | PO workflow (FR-3.2 entire), dispute history + chargeback log (FR-3.6), KYC + onboarding checklist (FR-3.1.h), reconciliation (FR-3.4 entire) all absent. Vault (FR-3.x credentials) and basic supplier CRUD shipped. |
+
+**Single source of truth for all gap items + Wave 2 execution plan:** [TRAVEL_GAP_CLOSURE_TRACKER.md §3.6 + §7 Wave 2](TRAVEL_GAP_CLOSURE_TRACKER.md).
+
+---
+
 ## §1 Background + source attribution
 
 A travel agency's day-to-day operations span multiple suppliers per single customer transaction. A single Umrah package booking might involve a visa fee collector, an outbound airline, two hotels (Makkah + Madinah), a ground-transport vendor (e.g. Zikr Cabs), and the Haramain HSR (high-speed rail). Each of these is a distinct supplier with its own payment terms, billing cycle, dispute-resolution process, GST status, and commission/markup model. School-trip and family-holiday packages stack similarly — flights, hotels, ground transport, activities, insurance.

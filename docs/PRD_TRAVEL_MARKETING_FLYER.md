@@ -6,6 +6,25 @@
 
 ---
 
+
+## Implementation Status (audited 2026-06-13 against HEAD `043b9ab3`)
+
+| Metric | Value |
+|---|---|
+| Total FRs | 37 |
+| ✅ Shipped | 12 (32%) |
+| 🟡 Partial | 9 |
+| ❌ Missing | 15 |
+| ⏭️ Deferred | 1 (FR-3.6.4 performance hint, Phase 2) |
+| **Net gap** | **25 items** (~13 eng-days + Q-MF-1 storage + Q-MF-2 image + Q9 WA share creds) |
+| Primary blocker | Asset model (Q-MF-1); extended block-type registry; brand-kit consumer (FR-3.3); WA/email share (Q9); concurrent-edit lock; AI image real mode (Q-MF-2) |
+
+Shipped: in-house drag-drop Studio (PR #1142), public share URL + embed code, AI copy stub, PDF/PNG render via Puppeteer.
+
+**Single source of truth for all gap items + Wave 3 execution plan:** [TRAVEL_GAP_CLOSURE_TRACKER.md §3.8 + §4 (Q-MF-1/2, Q9) + §7 Wave 3](TRAVEL_GAP_CLOSURE_TRACKER.md).
+
+---
+
 ## §1 Background + source attribution
 
 ### Current state (zero flyer authoring surface)

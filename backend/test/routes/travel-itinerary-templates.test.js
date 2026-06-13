@@ -652,6 +652,82 @@ describe('PATCH /api/travel/itinerary-templates/:id', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// G049 — library metric columns (acceptedCount, avgFinalPrice, lastUsedAt).
+// Pins per PRD_TRAVEL_ITINERARY_UPGRADES FR-3.1.h. The columns are engine-
+// bumped by routes/travel_itineraries.js (clone path → usageCount +
+// lastUsedAt; accept path → acceptedCount + avgFinalPrice), NEVER set by
+// the templates route itself. Tests here only verify:
+//   (a) the columns flow through GET responses (no select clause hides them)
+//   (b) the columns are NOT in MUTABLE_FIELDS — PATCH ignores them silently
+// ---------------------------------------------------------------------------
+describe('G049 — library metric columns flow through GET; rejected on PATCH', () => {
+  test('GET / returns acceptedCount + avgFinalPrice + lastUsedAt fields', async () => {
+    const ts = new Date('2026-06-01T12:00:00Z');
+    prisma.itineraryTemplate.findMany.mockResolvedValue([
+      {
+        ...sampleRows[0],
+        acceptedCount: 7,
+        avgFinalPrice: '85000.50',
+        lastUsedAt: ts,
+      },
+    ]);
+    prisma.itineraryTemplate.count.mockResolvedValue(1);
+
+    const res = await request(makeApp())
+      .get('/api/travel/itinerary-templates')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.items[0].acceptedCount).toBe(7);
+    expect(res.body.items[0].avgFinalPrice).toBe('85000.50');
+    expect(res.body.items[0].lastUsedAt).toBe(ts.toISOString());
+  });
+
+  test('GET /:id returns metric columns', async () => {
+    prisma.itineraryTemplate.findFirst.mockResolvedValue({
+      ...sampleRows[0],
+      acceptedCount: 3,
+      avgFinalPrice: '42000.00',
+      lastUsedAt: new Date('2026-05-30T08:00:00Z'),
+    });
+    const res = await request(makeApp())
+      .get('/api/travel/itinerary-templates/201')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+    expect(res.status).toBe(200);
+    expect(res.body.acceptedCount).toBe(3);
+    expect(res.body.avgFinalPrice).toBe('42000.00');
+  });
+
+  test('PATCH with acceptedCount / avgFinalPrice / lastUsedAt — silently dropped (engine-only)', async () => {
+    prisma.itineraryTemplate.findFirst.mockResolvedValue(sampleRows[0]);
+    prisma.itineraryTemplate.update.mockResolvedValue({
+      ...sampleRows[0],
+      durationDays: 8,
+    });
+
+    const res = await request(makeApp())
+      .patch('/api/travel/itinerary-templates/201')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({
+        durationDays: 8,
+        // Attempt to set engine-only fields — should be filtered out by
+        // pickMutable's MUTABLE_FIELDS whitelist.
+        acceptedCount: 9999,
+        avgFinalPrice: 99999999,
+        lastUsedAt: new Date('2099-01-01').toISOString(),
+      });
+
+    expect(res.status).toBe(200);
+    const dataArg = prisma.itineraryTemplate.update.mock.calls[0][0].data;
+    // durationDays passes through (mutable); engine-only fields are absent.
+    expect(dataArg.durationDays).toBe(8);
+    expect(dataArg.acceptedCount).toBeUndefined();
+    expect(dataArg.avgFinalPrice).toBeUndefined();
+    expect(dataArg.lastUsedAt).toBeUndefined();
+  });
+});
+
 describe('DELETE /api/travel/itinerary-templates/:id — soft delete', () => {
   test('ADMIN sets isActive=false (does NOT actually destroy)', async () => {
     prisma.itineraryTemplate.findFirst.mockResolvedValue(sampleRows[0]);

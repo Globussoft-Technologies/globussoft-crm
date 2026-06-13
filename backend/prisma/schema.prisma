@@ -5391,37 +5391,37 @@ model TravelDiagnosticQuestionBank {
 
 // ── Itinerary (multi-product trips: RFU + Travel Stall) ──────────────
 model Itinerary {
-  id                Int             @id @default(autoincrement())
-  tenantId          Int             @default(1)
-  subBrand          String
-  contactId         Int
-  leadId            Int?
+  id                   Int             @id @default(autoincrement())
+  tenantId             Int             @default(1)
+  subBrand             String
+  contactId            Int
+  leadId               Int?
   // status enum extended for Phase 2 50%-advance booking:
   //   draft | sent | revised | accepted | rejected | advance_paid | fully_paid
   // advance_paid means the 50% deposit has been recorded; fully_paid means
   // the balance has cleared. Existing draft/sent/etc. semantics unchanged.
-  status            String          @default("draft")
-  version           Int             @default(1)
-  parentItineraryId Int? // version-history chain
+  status               String          @default("draft")
+  version              Int             @default(1)
+  parentItineraryId    Int? // version-history chain
   // Phase 2 PRD §6.4 — recommended product tier captured at itinerary
   // creation, defaulted from the contact's latest diagnostic
   // (entry | primary | premium). Nullable — TMC + Visa Sure don't carry a
   // tier today. Captured-at-creation so tier-vs-actual analytics stay
   // stable if the diagnostic is re-taken later.
-  productTier       String?
-  destination       String
-  startDate         DateTime?
-  endDate           DateTime?
-  pricingJson       String?         @db.Text // breakdown
-  totalAmount       Decimal?        @db.Decimal(15, 2)
-  currency          String          @default("INR")
+  productTier          String?
+  destination          String
+  startDate            DateTime?
+  endDate              DateTime?
+  pricingJson          String?         @db.Text // breakdown
+  totalAmount          Decimal?        @db.Decimal(15, 2)
+  currency             String          @default("INR")
   // Number of travelers. totalAmount stores the GROUP total (sum of item line
   // totals); the per-person budget is derived as totalAmount / pax. Default 1.
-  pax               Int             @default(1)
-  pdfUrl            String?
-  shareToken        String?         @unique // WhatsApp/email share link
-  shareExpiresAt    DateTime?
-  shareRevokedAt    DateTime?
+  pax                  Int             @default(1)
+  pdfUrl               String?
+  shareToken           String?         @unique // WhatsApp/email share link
+  shareExpiresAt       DateTime?
+  shareRevokedAt       DateTime?
   // Phase 2 — 50% advance booking pattern (PRD §4.7 Travel Stall). All
   // three fields nullable + additive so existing Itinerary rows backfill
   // implicitly. advancePaidAmount is the rupee amount the customer has
@@ -5431,26 +5431,36 @@ model Itinerary {
   // Wati/payment-gateway integration arrives once Q9 / payment creds land;
   // until then the route's demo-mode endpoint accepts the reference
   // directly so the booking flow can be operated/tested end-to-end.
-  advancePaidAmount Decimal?        @db.Decimal(15, 2)
-  advancePaidAt     DateTime?
-  paymentReference  String?
+  advancePaidAmount    Decimal?        @db.Decimal(15, 2)
+  advancePaidAt        DateTime?
+  paymentReference     String?
   // Customer's reason/feedback when they DECLINE an offer (PRD §6.1). Free
   // text the customer enters in the portal so the advisor knows what to
   // improve. Nullable; only set on a customer decline.
-  declineReason     String?         @db.Text
+  declineReason        String?         @db.Text
   // LLM-generated draft summary block. Persisted so re-renders don't burn
   // tokens. Operator triggers regeneration via POST /draft/regen. Stays
   // null until the first regen call lands; the customer-facing PDF + share
   // page render conditionally on it. Bulk-text task per PRD §9.1 (Gemini
   // Flash when Q11 keys arrive; stub-mode placeholder text until then).
-  draftSummary      String?         @db.Text
-  items             ItineraryItem[]
-  tenant            Tenant          @relation(fields: [tenantId], references: [id], onDelete: Restrict)
-  createdAt         DateTime        @default(now())
-  updatedAt         DateTime        @updatedAt
+  draftSummary         String?         @db.Text
+  // G047 — Itinerary lineage (PRD_TRAVEL_ITINERARY_UPGRADES FR-3.1.e
+  // "Cloned from template"). Nullable Int FK to ItineraryTemplate; set on the
+  // clone-from-template path (POST /api/travel/itineraries with
+  // clonedFromTemplateId in the body). When set, the editor surfaces a
+  // "Cloned from <template name>" chip in the header. Additive-nullable,
+  // no bless marker. We intentionally skip the back-relation here because
+  // ItineraryTemplate doesn't need a `itineraries` collection at the ORM
+  // layer — analytics queries read by templateId index instead.
+  clonedFromTemplateId Int?
+  items                ItineraryItem[]
+  tenant               Tenant          @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  createdAt            DateTime        @default(now())
+  updatedAt            DateTime        @updatedAt
 
   @@index([tenantId, subBrand, contactId, status])
   @@index([tenantId, status])
+  @@index([tenantId, clonedFromTemplateId])
 }
 
 model ItineraryItem {
@@ -5481,6 +5491,13 @@ model ItineraryItem {
   dayNumber   Int?
   latitude    Float?
   longitude   Float?
+  // G051 — AI provenance (PRD_TRAVEL_ITINERARY_UPGRADES FR-3.4.h). Set to
+  // true on items materialised from POST /itineraries/from-suggestion
+  // (the LLM-drafted day skeleton) so the editor can surface a small
+  // "AI-drafted" badge on each such row. Defaults to false so all
+  // pre-existing items + manual additions stay un-badged. Additive-with-
+  // default; no bless marker required.
+  draftedByAi Boolean   @default(false)
   itinerary   Itinerary @relation(fields: [itineraryId], references: [id], onDelete: Cascade)
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
@@ -5549,24 +5566,48 @@ model TravelSightseeing {
 }
 
 model ItineraryTemplate {
-  id                   Int      @id @default(autoincrement())
+  id                   Int       @id @default(autoincrement())
   tenantId             Int // each tenant has its own template library
   name                 String // "5-day Paris" / "Goa Beach Holiday" etc.
   destinationName      String // primary destination tag
   durationDays         Int // typical day count
-  description          String?  @db.Text // 1-2 paragraph blurb shown to operator
-  thumbnailUrl         String?  @db.Text // hero image for the catalog grid
+  description          String?   @db.Text // 1-2 paragraph blurb shown to operator
+  thumbnailUrl         String?   @db.Text // hero image for the catalog grid
   category             String? // free-form tag: "Adventure" | "Religious" | "Family" | ...
   subBrand             String? // sub-brand affinity; null = visible to all
   defaultMarkupPercent Float? // suggested markup; operator can override
   basePriceMinor       Int? // indicative price in INR minor units
-  currency             String?  @db.VarChar(3) // ISO 4217; nullable, tenant default at call site
-  templateJson         String?  @db.LongText // serialized day-by-day item template (items[] structure)
+  currency             String?   @db.VarChar(3) // ISO 4217; nullable, tenant default at call site
+  templateJson         String?   @db.LongText // serialized day-by-day item template (items[] structure)
   llmGeneratedBy       String? // "anthropic|google|openai|null=manual"
-  isActive             Boolean  @default(true)
-  usageCount           Int      @default(0) // incremented each time an Itinerary is created from this template
-  createdAt            DateTime @default(now())
-  updatedAt            DateTime @updatedAt
+  isActive             Boolean   @default(true)
+  usageCount           Int       @default(0) // incremented each time an Itinerary is created from this template
+  // G049 — template library metrics (PRD_TRAVEL_ITINERARY_UPGRADES FR-3.1.h).
+  // The library grid surfaces which templates actually convert: how many
+  // cloned itineraries reached `accepted` status, the rolling-average final
+  // sale price across those accepted clones, and when the template was last
+  // used. All three are engine-bumped (clone path bumps usageCount +
+  // lastUsedAt; accept path bumps acceptedCount + recomputes avgFinalPrice)
+  // — never caller-controlled (intentionally absent from MUTABLE_FIELDS in
+  // routes/travel_itinerary_templates.js).
+  //
+  //   acceptedCount   how many `accepted` itineraries lineaged back to this
+  //                   template (incremented on /itineraries/:id/accept when
+  //                   the itinerary has clonedFromTemplateId set)
+  //   avgFinalPrice   rolling average of accepted-itinerary.totalAmount,
+  //                   recomputed as ((avg * (n-1)) + newPrice) / n on each
+  //                   accept. Decimal(15,2) matches Itinerary.totalAmount.
+  //                   Null until the first accepted clone lands.
+  //   lastUsedAt      bumped to `now()` on every clone-from-template event.
+  //                   Null until the first clone lands. Used for "Stale
+  //                   templates" library filtering.
+  //
+  // All additive-nullable / additive-with-default; no bless marker required.
+  acceptedCount        Int       @default(0)
+  avgFinalPrice        Decimal?  @db.Decimal(15, 2)
+  lastUsedAt           DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
 
   tenant Tenant @relation(fields: [tenantId], references: [id])
 

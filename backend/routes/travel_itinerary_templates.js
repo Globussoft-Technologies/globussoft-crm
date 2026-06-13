@@ -45,7 +45,11 @@ const {
 // Whitelist of fields a caller may set on POST / PATCH. tenantId / id /
 // createdAt / updatedAt / usageCount are intentionally absent (usageCount is
 // engine-bumped when an itinerary is created from a template, never
-// caller-controlled).
+// caller-controlled). G049 — `acceptedCount`, `avgFinalPrice`, `lastUsedAt`
+// are also engine-bumped (by routes/travel_itineraries.js on clone-from-
+// template + on /accept), NEVER caller-controlled. They flow through GET
+// responses automatically (no `select` clause on the list/detail handlers)
+// so the ItineraryTemplates.jsx library grid can display them.
 const MUTABLE_FIELDS = [
   "name",
   "destinationName",

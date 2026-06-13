@@ -35,6 +35,21 @@
 // Money fields use Decimal(15,2) per Q24.
 //
 // See docs/TRAVEL_CRM_PRD.md §4.3 + §5.1 for the spec.
+//
+// G047/G049/G051 — itinerary lineage + template metrics + AI provenance
+// (PRD_TRAVEL_ITINERARY_UPGRADES FR-3.1.e / FR-3.1.h / FR-3.4.h):
+//   - POST /itineraries accepts `clonedFromTemplateId` and persists it on
+//     the new Itinerary row. On clone, the parent template's `usageCount`
+//     is incremented + `lastUsedAt` is bumped to `now()`.
+//   - POST /itineraries/:id/accept reads back `clonedFromTemplateId` +
+//     `totalAmount`, increments the parent template's `acceptedCount` and
+//     recomputes `avgFinalPrice` as a rolling average across all accepted
+//     clones. Both metric writes are wrapped in non-fatal try/catch so a
+//     write failure never rolls back the operator's primary action.
+//   - POST /itineraries/from-suggestion sets `ItineraryItem.draftedByAi=
+//     true` on every materialised item; manual POST /:id/items + the
+//     legacy POST /itineraries inline items leave it at the schema default
+//     (false). Editor surfaces an "AI-drafted" badge on draftedByAi rows.
 
 const express = require("express");
 const crypto = require("crypto");
@@ -190,7 +205,34 @@ router.post("/itineraries", verifyToken, requireTravelTenant, async (req, res) =
       leadId, status, startDate, endDate,
       pricingJson, totalAmount, currency, shareToken, pax,
       items, productTier: bodyProductTier,
+      // G047 — Itinerary lineage (PRD FR-3.1.e). Operator clones from an
+      // ItineraryTemplate; we persist the parent FK so the editor can
+      // render a "Cloned from <template name>" chip in the header. Optional
+      // — manually-built itineraries leave it null. Validated below.
+      clonedFromTemplateId: bodyClonedFromTemplateId,
     } = req.body;
+
+    // G047 — resolve + validate clonedFromTemplateId. Cross-tenant template
+    // refs are rejected so an attacker can't lineage their itinerary to an
+    // unrelated tenant's template id. We tolerate "" / 0 / non-numeric →
+    // null (lineage is opt-in; bad inputs degrade silently to "no lineage").
+    let clonedFromTemplateId = null;
+    if (bodyClonedFromTemplateId != null && bodyClonedFromTemplateId !== "") {
+      const tid = parseInt(bodyClonedFromTemplateId, 10);
+      if (Number.isFinite(tid) && tid > 0) {
+        const tpl = await prisma.itineraryTemplate.findFirst({
+          where: { id: tid, tenantId: req.travelTenant.id },
+          select: { id: true },
+        });
+        if (!tpl) {
+          return res.status(404).json({
+            error: "Cloned template not found",
+            code: "TEMPLATE_NOT_FOUND",
+          });
+        }
+        clonedFromTemplateId = tid;
+      }
+    }
 
     // PRD §6.4 — capture the recommended tier from the contact's latest
     // diagnostic so tier-vs-actual analytics stay stable. Body can override;
@@ -254,10 +296,36 @@ router.post("/itineraries", verifyToken, requireTravelTenant, async (req, res) =
         currency: currency || "INR",
         pax: (() => { const p = parseInt(pax, 10); return Number.isFinite(p) && p >= 1 ? p : 1; })(),
         shareToken: shareToken || null,
+        // G047 lineage persisted; null when not cloned (manual create).
+        clonedFromTemplateId,
         items: itemRows.length > 0 ? { create: itemRows } : undefined,
       },
       include: { items: { orderBy: { position: "asc" } } },
     });
+
+    // G049 — bump template usage metrics on clone-from-template event.
+    // Non-fatal: a metric-bump failure must NOT roll back the itinerary
+    // create (the operator's primary action wins). The lastUsedAt bump
+    // lets the library grid surface "Stale templates" and the usageCount
+    // increment was already engine-bumped here historically; the new bit
+    // is `lastUsedAt`.
+    if (clonedFromTemplateId) {
+      try {
+        await prisma.itineraryTemplate.update({
+          where: { id: clonedFromTemplateId },
+          data: {
+            usageCount: { increment: 1 },
+            lastUsedAt: new Date(),
+          },
+        });
+      } catch (metricErr) {
+        console.error(
+          "[travel-itin] template metrics bump (clone) failed:",
+          metricErr.message,
+        );
+      }
+    }
+
     res.status(201).json(itinerary);
   } catch (e) {
     if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
@@ -2511,7 +2579,11 @@ router.post("/itineraries/:id/accept", verifyToken, requireTravelTenant, async (
     const itin = await loadItineraryWithGuard(req);
     const full = await prisma.itinerary.findFirst({
       where: { id: itin.id, tenantId: req.travelTenant.id },
-      select: { id: true, status: true },
+      // G049 — pull clonedFromTemplateId + totalAmount so we can bump the
+      // template's acceptedCount + recompute avgFinalPrice after the accept
+      // lands. The legacy select kept only id+status; the two extra columns
+      // are cheap to pull and avoid a second findFirst on the metrics path.
+      select: { id: true, status: true, clonedFromTemplateId: true, totalAmount: true },
     });
     if (full.status === "accepted") {
       return res.status(409).json({ error: "Itinerary already accepted", code: "ALREADY_ACCEPTED" });
@@ -2526,6 +2598,56 @@ router.post("/itineraries/:id/accept", verifyToken, requireTravelTenant, async (
       where: { id: itin.id },
       data: { status: "accepted" },
     });
+
+    // G049 — bump template acceptedCount + recompute avgFinalPrice on the
+    // accept hook (PRD FR-3.1.h). Rolling average formula:
+    //   newAvg = ((oldAvg * (oldCount - 1)) + newPrice) / oldCount    [oldCount > 0]
+    //   newAvg = newPrice                                              [oldCount == 0]
+    // We read the template's current acceptedCount + avgFinalPrice in one
+    // findUnique, increment acceptedCount, then write the recomputed
+    // avgFinalPrice. Race-safe at low contention (single-operator-per-
+    // template steady state); the +/- 1 jitter at high contention is
+    // acceptable for a library-grid display metric. A SQL-side
+    // recompute would need a one-step UPDATE that re-reads the previous
+    // value, which Prisma's update API can't express atomically.
+    //
+    // Non-fatal: the accept-fan-out (web-check-in + webhook) MUST still fire
+    // even if this metric write fails; we log + move on.
+    if (full.clonedFromTemplateId && full.totalAmount != null) {
+      try {
+        const tpl = await prisma.itineraryTemplate.findUnique({
+          where: { id: full.clonedFromTemplateId },
+          select: { acceptedCount: true, avgFinalPrice: true },
+        });
+        if (tpl) {
+          const oldCount = Number(tpl.acceptedCount || 0);
+          const newCount = oldCount + 1;
+          const newPrice = Number(full.totalAmount);
+          let newAvg;
+          if (oldCount === 0 || tpl.avgFinalPrice == null) {
+            newAvg = newPrice;
+          } else {
+            const oldAvg = Number(tpl.avgFinalPrice);
+            newAvg = ((oldAvg * oldCount) + newPrice) / newCount;
+          }
+          // Round to 2dp to match Decimal(15,2). Number.EPSILON guard
+          // dodges (0.1+0.2)-style binary-floating drift on the last cent.
+          const rounded = Math.round((newAvg + Number.EPSILON) * 100) / 100;
+          await prisma.itineraryTemplate.update({
+            where: { id: full.clonedFromTemplateId },
+            data: {
+              acceptedCount: { increment: 1 },
+              avgFinalPrice: rounded,
+            },
+          });
+        }
+      } catch (metricErr) {
+        console.error(
+          "[travel-itin] template metrics bump (accept) failed:",
+          metricErr.message,
+        );
+      }
+    }
 
     // PRD §4.6 WebCheckin fan-out. Originally fire-and-forget (commit
     // 9898e87) — switched to AWAIT after the deploy gate caught a CI race:
@@ -4908,6 +5030,12 @@ router.post(
             dayNumber,
             latitude: Number.isFinite(latitude) ? latitude : null,
             longitude: Number.isFinite(longitude) ? longitude : null,
+            // G051 — items materialised on this path are LLM-drafted by
+            // contract. PRD FR-3.4.h asks for a provenance flag on each item
+            // so the editor can render an "AI-drafted" badge. Items created
+            // via POST /itineraries or POST /:id/items default to false; only
+            // this materialise path sets true.
+            draftedByAi: true,
             totalPrice: computeItemLineTotal({
               unitCost,
               quantity: 1,

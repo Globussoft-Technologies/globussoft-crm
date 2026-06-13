@@ -37,6 +37,7 @@ import "leaflet/dist/leaflet.css";
 import {
   ArrowLeft, Plane, Hotel, MapPin, Briefcase, FileText, Shield,
   Train, Bus, Car, Camera, Utensils, Package, GripVertical, MapPinned,
+  Sparkles, Layers,
 } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
@@ -127,6 +128,11 @@ export default function ItineraryEditor() {
   const [extraDays, setExtraDays] = useState(0); // local "+ Add day" beyond derived count
   const [dragId, setDragId] = useState(null);
   const [selectedId, setSelectedId] = useState(null); // item selected for "click map to place"
+  // G047 lineage chip — when itin.clonedFromTemplateId is present, fetch
+  // the parent template's name so the header chip can render "Cloned from
+  // <name>". 404s degrade silently (template might have been soft-deleted)
+  // — chip just renders "Cloned from template #<id>" instead.
+  const [lineageName, setLineageName] = useState(null);
 
   // Hotel rate finder (PRD §4.3 preference filters) — collapsible panel
   // querying /api/travel/cost-master?category=hotel with view/floorLevel/
@@ -168,6 +174,19 @@ export default function ItineraryEditor() {
   }, [id]);
 
   useEffect(() => { load(); }, [load]);
+
+  // G047 — resolve parent template name for the lineage chip. Only fires
+  // when an itinerary has lineage set; the fetch is silent (no error toast)
+  // so a missing/soft-deleted template falls through to the numeric chip.
+  useEffect(() => {
+    const tplId = itin?.clonedFromTemplateId;
+    if (!tplId) { setLineageName(null); return undefined; }
+    let cancelled = false;
+    fetchApi(`/api/travel/itinerary-templates/${tplId}`, { silent: true })
+      .then((res) => { if (!cancelled) setLineageName(res?.name || null); })
+      .catch(() => { if (!cancelled) setLineageName(null); });
+    return () => { cancelled = true; };
+  }, [itin?.clonedFromTemplateId]);
 
   const items = useMemo(() => (itin?.items ? [...itin.items] : []), [itin]);
 
@@ -282,6 +301,26 @@ export default function ItineraryEditor() {
         <h1 style={{ margin: 0, fontSize: "1.15rem", color: "var(--text-primary)" }}>
           {itin.destination || "Itinerary"} — day planner
         </h1>
+        {/* G047 — lineage chip (PRD FR-3.1.e). Renders when clonedFromTemplateId
+            is set. Falls back to the numeric id if the parent template fetch
+            returned no name (soft-deleted / cross-tenant safety). */}
+        {itin.clonedFromTemplateId && (
+          <span
+            data-testid="itinerary-lineage-chip"
+            title={`Cloned from itinerary template #${itin.clonedFromTemplateId}`}
+            style={{
+              display: "inline-flex", alignItems: "center", gap: "0.3rem",
+              padding: "0.18rem 0.5rem", borderRadius: 12,
+              border: "1px solid var(--border-color)",
+              background: "rgba(18,38,71,0.08)",
+              color: "var(--primary-color, var(--accent-color))",
+              fontSize: "0.72rem", fontWeight: 600,
+            }}
+          >
+            <Layers size={12} aria-hidden />
+            Cloned from {lineageName ? `“${lineageName}”` : `template #${itin.clonedFromTemplateId}`}
+          </span>
+        )}
         <span style={{ fontSize: "0.78rem", color: "var(--text-secondary)" }}>
           Drag items between days · {mapItems.length}/{items.length} plotted on map
         </span>
@@ -401,6 +440,27 @@ export default function ItineraryEditor() {
                       <span style={{ fontSize: "0.8rem", color: "var(--text-primary)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                         {it.description}
                       </span>
+                      {/* G051 — AI-drafted provenance badge (PRD FR-3.4.h).
+                          Surfaces only on items materialised via POST
+                          /itineraries/from-suggestion. Manual + legacy items
+                          default to draftedByAi=false and stay un-badged. */}
+                      {it.draftedByAi && (
+                        <span
+                          data-testid={`itinerary-item-ai-badge-${it.id}`}
+                          title="Drafted by AI (review before sending to customer)"
+                          style={{
+                            display: "inline-flex", alignItems: "center", gap: "0.2rem",
+                            padding: "1px 6px", borderRadius: 10,
+                            border: "1px solid #E0C68A",
+                            background: "#FBF4DF",
+                            color: "#6B4F1B",
+                            fontSize: "0.62rem", fontWeight: 700,
+                            letterSpacing: 0.2, flexShrink: 0,
+                          }}
+                        >
+                          <Sparkles size={10} aria-hidden /> AI-drafted
+                        </span>
+                      )}
                       {hasGeo ? (
                         <MapPinned size={13} style={{ color: "#2F7A4D", flexShrink: 0 }} aria-label="On map" />
                       ) : (

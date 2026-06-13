@@ -1501,4 +1501,137 @@ test.describe("Travel itineraries API — POST /from-suggestion (PRD FR-3.6 step
     });
     expect([401, 403]).toContain(res.status());
   });
+
+  test("G051 — materialised items have draftedByAi=true on every item", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || !testContactId) test.skip(true, "deps missing");
+    const suggestionJson = {
+      summary: `${RUN_TAG} AI provenance Goa`,
+      daySplit: [
+        { dayNumber: 1, items: [
+          { itemType: "activity", description: "Day 1 sightseeing" },
+          { itemType: "meals", description: "Day 1 dinner" },
+        ] },
+      ],
+    };
+    const res = await post(request, token, "/api/travel/itineraries/from-suggestion", {
+      suggestionJson, contactId: testContactId, subBrand: "rfu",
+    });
+    expect(res.status(), `materialise: ${await res.text()}`).toBe(201);
+    const body = await res.json();
+    expect(body.itinerary.items.length).toBeGreaterThan(0);
+    for (const it of body.itinerary.items) {
+      expect(it.draftedByAi).toBe(true);
+    }
+    created.itineraryIds.push(body.itinerary.id);
+  });
+});
+
+// ─── G047 + G049 lineage round-trip (PRD FR-3.1.e + FR-3.1.h) ────────
+//
+// End-to-end: create an ItineraryTemplate → POST /itineraries with
+// clonedFromTemplateId → GET the parent template back and confirm
+// usageCount was bumped + lastUsedAt is fresh → POST /:id/accept on
+// the cloned itinerary → GET the template again and confirm
+// acceptedCount was bumped + avgFinalPrice was recomputed.
+//
+// Demo-safe: every artifact is RUN_TAG-prefixed and cleaned up in
+// afterAll. The accept-fan-out (web-checkin auto-create + webhook
+// emission) is non-fatal and out of scope here.
+
+test.describe("Travel itineraries API — G047/G049 lineage round-trip", () => {
+  let templateId = null;
+  let lineageItineraryId = null;
+
+  test.afterAll(async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) return;
+    if (lineageItineraryId) {
+      await del(request, token, `/api/travel/itineraries/${lineageItineraryId}`).catch(() => {});
+    }
+    if (templateId) {
+      await del(request, token, `/api/travel/itinerary-templates/${templateId}`).catch(() => {});
+    }
+  });
+
+  test("create template → clone-from → template usageCount + lastUsedAt bumped", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || !testContactId) test.skip(true, "deps missing");
+
+    // 1. Seed a fresh ItineraryTemplate scoped to this tenant + rfu.
+    const tplRes = await post(request, token, "/api/travel/itinerary-templates", {
+      name: `${RUN_TAG} Lineage Template`,
+      destinationName: `${RUN_TAG} Mecca`,
+      durationDays: 7,
+      category: "religious",
+      subBrand: "rfu",
+      basePriceMinor: 12000000,
+      currency: "INR",
+    });
+    expect(tplRes.status(), `tpl create: ${await tplRes.text()}`).toBe(201);
+    const tplBody = await tplRes.json();
+    templateId = tplBody.id;
+    // Fresh template has usageCount=0 + acceptedCount=0 + lastUsedAt=null.
+    expect(tplBody.usageCount).toBe(0);
+    expect(tplBody.acceptedCount).toBe(0);
+    expect(tplBody.lastUsedAt == null).toBe(true);
+
+    // 2. Create an Itinerary clonedFromTemplateId → the new lineage column.
+    const t0 = Date.now();
+    const itRes = await post(request, token, "/api/travel/itineraries", {
+      subBrand: "rfu",
+      contactId: testContactId,
+      destination: `${RUN_TAG} Cloned Umrah`,
+      totalAmount: 175000,
+      currency: "INR",
+      clonedFromTemplateId: templateId,
+    });
+    expect(itRes.status(), `clone create: ${await itRes.text()}`).toBe(201);
+    const itBody = await itRes.json();
+    lineageItineraryId = itBody.id;
+    expect(itBody.clonedFromTemplateId).toBe(templateId);
+
+    // 3. Refetch the template + assert metrics bumped.
+    const tpl2 = await get(request, token, `/api/travel/itinerary-templates/${templateId}`);
+    expect(tpl2.status()).toBe(200);
+    const tpl2Body = await tpl2.json();
+    expect(tpl2Body.usageCount).toBe(1);
+    expect(tpl2Body.lastUsedAt).toBeTruthy();
+    const lastUsedMs = new Date(tpl2Body.lastUsedAt).getTime();
+    expect(lastUsedMs).toBeGreaterThanOrEqual(t0 - 5000);
+    expect(lastUsedMs).toBeLessThanOrEqual(Date.now() + 5000);
+    // acceptedCount still 0 until we hit /accept.
+    expect(tpl2Body.acceptedCount).toBe(0);
+  });
+
+  test("accept cloned itinerary → template.acceptedCount++ + avgFinalPrice recomputed", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || !lineageItineraryId || !templateId) test.skip(true, "deps missing");
+
+    const accRes = await post(request, token, `/api/travel/itineraries/${lineageItineraryId}/accept`);
+    expect([200, 409], `accept: ${await accRes.text()}`).toContain(accRes.status());
+
+    // Refetch template + verify rolling-avg formula on the first accept.
+    const tpl = await get(request, token, `/api/travel/itinerary-templates/${templateId}`);
+    expect(tpl.status()).toBe(200);
+    const body = await tpl.json();
+    if (accRes.status() === 200) {
+      expect(body.acceptedCount).toBe(1);
+      expect(Number(body.avgFinalPrice)).toBe(175000);
+    }
+  });
+
+  test("cross-tenant clonedFromTemplateId → 404 TEMPLATE_NOT_FOUND", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || !testContactId) test.skip(true, "deps missing");
+    const res = await post(request, token, "/api/travel/itineraries", {
+      subBrand: "rfu",
+      contactId: testContactId,
+      destination: `${RUN_TAG} Cross-tenant clone attempt`,
+      // 999999999 is guaranteed not to exist in any reasonable seed.
+      clonedFromTemplateId: 999999999,
+    });
+    expect(res.status()).toBe(404);
+    expect((await res.json()).code).toBe("TEMPLATE_NOT_FOUND");
+  });
 });

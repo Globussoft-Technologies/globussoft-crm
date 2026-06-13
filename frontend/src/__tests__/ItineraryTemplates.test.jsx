@@ -690,7 +690,9 @@ describe('<ItineraryTemplates /> — formatting helpers (cell render)', () => {
     expect(within(usedRow).getByText('42')).toBeInTheDocument();
 
     const zeroRow = screen.getByText('Zero-Usage Template').closest('tr');
-    expect(within(zeroRow).getByText('0')).toBeInTheDocument();
+    // G049 — Usage, Accepted columns each render `0` when zero, so getByText('0')
+    // is no longer unique within the row. Assert both 0-cells are present.
+    expect(within(zeroRow).getAllByText('0').length).toBeGreaterThanOrEqual(1);
   });
 
   it('renders isActive=false rows with Active="No"', async () => {

@@ -249,6 +249,33 @@ export default function ItineraryTemplates() {
     return `${Number(pct).toFixed(1)}%`;
   };
 
+  // G049 — library metrics formatters (PRD FR-3.1.h). `avgFinalPrice` is
+  // returned as a Decimal-string from Prisma; `lastUsedAt` is an ISO
+  // datetime. Empty / null → em-dash so the column stays visually quiet
+  // until the first clone+accept event lands.
+  const formatAvgFinalPrice = (item) => {
+    if (item.avgFinalPrice == null) return '—';
+    const n = Number(item.avgFinalPrice);
+    if (!Number.isFinite(n)) return '—';
+    const cur = item.currency || 'INR';
+    const symbol = cur === 'INR' ? '₹' : cur === 'USD' ? '$' : cur === 'EUR' ? '€' : `${cur} `;
+    return `${symbol}${n.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+  };
+
+  const formatLastUsedAt = (iso) => {
+    if (!iso) return '—';
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return '—';
+    // Days-ago bucket: <1d → "today", <30d → "Nd ago", else short date.
+    const ms = Date.now() - d.getTime();
+    if (ms < 0) return d.toLocaleDateString();
+    const days = Math.floor(ms / 86400000);
+    if (days === 0) return 'today';
+    if (days === 1) return 'yesterday';
+    if (days < 30) return `${days}d ago`;
+    return d.toLocaleDateString();
+  };
+
   const canPrev = offset > 0;
   const canNext = offset + PAGE_SIZE < total;
   const fromIdx = total === 0 ? 0 : offset + 1;
@@ -598,6 +625,12 @@ export default function ItineraryTemplates() {
                 <th style={th}>Markup</th>
                 <th style={th}>Base price</th>
                 <th style={th}>Usage</th>
+                {/* G049 — library metrics (PRD FR-3.1.h). Engine-bumped by
+                    routes/travel_itineraries.js on clone + accept; the
+                    /:id response includes these fields by default. */}
+                <th style={th}>Accepted</th>
+                <th style={th}>Avg sale</th>
+                <th style={th}>Last used</th>
                 <th style={th}>Active</th>
                 <th style={th}>Actions</th>
               </tr>
@@ -642,6 +675,15 @@ export default function ItineraryTemplates() {
                   <td style={td}>{formatMarkup(item.defaultMarkupPercent)}</td>
                   <td style={td}>{formatPrice(item)}</td>
                   <td style={td}>{item.usageCount != null ? item.usageCount : 0}</td>
+                  <td style={td} data-testid={`tpl-acceptedCount-${item.id}`}>
+                    {item.acceptedCount != null ? item.acceptedCount : 0}
+                  </td>
+                  <td style={td} data-testid={`tpl-avgFinalPrice-${item.id}`}>
+                    {formatAvgFinalPrice(item)}
+                  </td>
+                  <td style={td} data-testid={`tpl-lastUsedAt-${item.id}`}>
+                    {formatLastUsedAt(item.lastUsedAt)}
+                  </td>
                   <td style={td}>{item.isActive ? 'Yes' : 'No'}</td>
                   <td style={td}>
                     <div style={{ display: 'flex', gap: 6 }}>

@@ -65,6 +65,12 @@ const router = express.Router();
 const prisma = require('../lib/prisma');
 const { verifyShareToken } = require('../lib/quoteShareToken');
 const { writeAudit } = require('../lib/audit');
+// G124 (Master PRD A3 residual) — per-document view audit for the
+// customer-facing share-token landing. The existing customer-action audits
+// (accept / reject / counter) only fire on transitions; a customer who just
+// reads the quote without acting leaves no trail today. recordDocumentAccess
+// closes that gap with a uniform DOCUMENT_VIEW row.
+const { recordDocumentAccess } = require('../lib/documentAccessAudit');
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -411,6 +417,23 @@ router.get('/quote/:shareToken', async (req, res) => {
     } catch (e) {
       // Non-fatal — render without customer name
     }
+
+    // G124 — DOCUMENT_VIEW audit row for the customer-facing share-token
+    // landing. Anonymous viewer (no JWT) → userId=null + actorType=customer.
+    // Captures the contact email (if resolvable) + IP + UA + truncated share
+    // token so a leaked link can be traced. Fail-soft.
+    recordDocumentAccess({
+      tenantId: quote.tenantId,
+      userId: null,
+      documentType: 'TravelQuote',
+      documentId: quote.id,
+      event: 'view',
+      viewerEmail: contact && contact.email,
+      shareTokenId: shareToken,
+      ipAddress: req.ip,
+      userAgent: req.headers && req.headers['user-agent'],
+      extra: { subBrand: quote.subBrand, status: quote.status },
+    });
 
     return res.json(customerEnvelope(quote, contact));
   } catch (e) {

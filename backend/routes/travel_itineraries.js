@@ -73,6 +73,12 @@ const llmRouter = require("../lib/llmRouter");
 const { computeDayCosts } = require("../lib/itineraryDayCostCalculator");
 const listProjection = require("../lib/listProjection");
 const { writeAudit } = require("../lib/audit");
+// G124 (Master PRD A3 residual) — per-document view/download/share audit
+// helper. Drops a discrete DOCUMENT_VIEW / DOCUMENT_DOWNLOAD / DOCUMENT_SHARE
+// row alongside the entity-shaped writeAudit rows so the audit-viewer can
+// show a "Document Access" sub-tab without re-classifying every per-route
+// verb. Unit-tested at backend/test/lib/documentAccessAudit.test.js.
+const { recordDocumentAccess } = require("../lib/documentAccessAudit");
 // PRD §4.7 (gap A3) — share-link expiry/revocation policy. Pure helpers
 // (clamp 1..30 days, default 7; revoked > expired > active precedence)
 // unit-tested in test/lib/shareLinkPolicy.test.js.
@@ -3515,6 +3521,27 @@ router.post("/itineraries/:id/share", verifyToken, requireTravelTenant, async (r
         whatsappStatus = sendResult.status;
       }
     }
+    // G124 — per-document share audit row. Captures who minted the link
+    // (req.user.userId), the truncated share-token (so audit-viewer can
+    // correlate without leaking the bearer secret), and the sub-brand /
+    // expiry context. Best-effort; never blocks the response.
+    recordDocumentAccess({
+      tenantId: req.travelTenant.id,
+      userId: req.user.userId,
+      documentType: "Itinerary",
+      documentId: full.id,
+      event: "share",
+      shareTokenId: token,
+      ipAddress: req.ip,
+      userAgent: req.headers && req.headers["user-agent"],
+      extra: {
+        subBrand: itin.subBrand,
+        shareExpiresAt: shareExpiresAt && shareExpiresAt.toISOString
+          ? shareExpiresAt.toISOString()
+          : null,
+        whatsappStatus,
+      },
+    });
     res.json({ shareToken: token, shareUrl, shareExpiresAt, whatsapp: whatsappStatus });
   } catch (e) {
     if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
@@ -3650,6 +3677,21 @@ router.get("/itineraries/:id/pdf", verifyToken, requireTravelTenant, async (req,
       req.travelTenant.id,
       { subBrand: full.subBrand, version: full.version || 1 },
     ).catch(() => {});
+    // G124 — uniform DOCUMENT_DOWNLOAD row for the audit-viewer's Document
+    // Access sub-tab. Captures the viewer's email (resolved above as
+    // viewerEmail for the diagonal watermark) so an operator who pulled a
+    // sensitive PDF is identifiable in the audit trail.
+    recordDocumentAccess({
+      tenantId: req.travelTenant.id,
+      userId: req.user.userId,
+      documentType: "Itinerary",
+      documentId: full.id,
+      event: "download",
+      viewerEmail,
+      ipAddress: req.ip,
+      userAgent: req.headers && req.headers["user-agent"],
+      extra: { subBrand: full.subBrand, version: full.version || 1 },
+    });
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader(
       "Content-Disposition",
@@ -3743,6 +3785,21 @@ router.get("/itineraries/public/:shareToken", async (req, res) => {
       itin.tenantId,
       { subBrand: itin.subBrand, shareToken: itin.shareToken },
     ).catch(() => {});
+    // G124 — additional uniform DOCUMENT_VIEW row so the audit-viewer's
+    // Document Access sub-tab surfaces this alongside invoice/quote views.
+    // Captures the anonymous viewer's IP + UA + truncated share token for
+    // forensic correlation without leaking the bearer secret.
+    recordDocumentAccess({
+      tenantId: itin.tenantId,
+      userId: null,
+      documentType: "Itinerary",
+      documentId: itin.id,
+      event: "view",
+      shareTokenId: itin.shareToken,
+      ipAddress: req.ip,
+      userAgent: req.headers && req.headers["user-agent"],
+      extra: { subBrand: itin.subBrand },
+    });
     const total = itin.totalAmount ? Number(itin.totalAmount) : 0;
     const advanceRatio = await getTravelAdvanceRatio(prisma, itin.tenantId, itin.subBrand);
     const advanceDue = total > 0 ? Math.round(total * advanceRatio * 100) / 100 : 0;

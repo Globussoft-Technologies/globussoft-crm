@@ -21,7 +21,7 @@
 | **Net gap** | **1 item** (FR-3.14 visual QA + assertion) |
 | Primary blocker | PRD §10 stale (claims 11/18 shipped; actual is 16/18) |
 
-PRD §10 needs updating — the 3 originally-deferred hardening items (FR-3.16 mobile touch, FR-3.17 keyboard a11y, FR-3.18 virtualization) all shipped after PRD's last edit. Code citations: `frontend/src/pages/Pipeline.jsx:11-19, 76-82, 299-319`.
+PRD §10 reconciled 2026-06-13 (G016) — the 3 originally-deferred hardening items (FR-3.16 mobile touch, FR-3.17 keyboard a11y, FR-3.18 virtualization) all shipped after PRD's last edit. Code citations: `frontend/src/pages/Pipeline.jsx:11-19, 76-82, 299-319`. Pipeline.test.jsx extended with FR-3.14 column-total filter-reactivity assertion in the same commit.
 
 **Single source of truth for gap items:** [TRAVEL_GAP_CLOSURE_TRACKER.md §3.2](TRAVEL_GAP_CLOSURE_TRACKER.md).
 
@@ -241,10 +241,11 @@ For travel-tenant users with `subBrandAccess === ['tmc', 'rfu']`:
 - **2026-05-23 (cron tick #49 `458b6a8`):** ✅ FR-5 sub-brand filter SHIPPED. +51/-5 in Pipeline.jsx — TRAVEL_SUB_BRANDS constant (5 options: All/TMC/RFU/TravelStall/VisaSure) + conditional `<select>` in header (Travel-vertical-only via `user?.tenant?.vertical === 'travel'`) + stageDeals filter extension. Deal.subBrand column already existed (additive nullable). Theme-token-driven; ARIA labeled.
 - **2026-05-23 (cron tick #50 `3c7a3e0`):** ✅ Pipeline.test.jsx extended with no-leak-across-verticals assertion. 4 → 5 cases pass. Pins that the filter does NOT render for non-Travel tenants.
 - **Pre-existing:** `Pipeline.jsx` Kanban shipped `d1a30c7` (April 2026) + 8 follow-up fixes through `e098b61` (May 2026).
-- **Status: 11 of 18 FRs SHIPPED + 5 of 9 ACs SHIPPED** (was 10 SHIPPED pre-tick #49; FR-5 + AC-5 add).
-- **Remaining FRs (3 hardening items, non-blocking):** FR-6 keyboard a11y, FR-7 mobile touch, FR-8 virtualization. Each ~1 day. Pick by user value: mobile touch first (advisors are mobile-first per Yasin's intake), then a11y, then virtualization (only matters at ≥100 deals/column).
+- **2026-06-13 (G016 close-out):** ✅ FR-3.16 mobile touch drag, FR-3.17 keyboard a11y, and FR-3.18 virtualization confirmed SHIPPED via code audit. Citations: `frontend/src/pages/Pipeline.jsx:11-19` (VIRTUALIZATION_THRESHOLD const + CARD_ROW_HEIGHT), `:76-77` (keyboardMoveDealId + announcement state), `:79-82` (per-column scrollPositions for windowed slice), `:299-319` (handleCardTouchStart / handleCardTouchEnd synthesising HTML5-drop semantics for touch devices), `:342-350` (`filterStageDeals` memoised callback feeding both render + totals). PRD §10's "11 of 18" claim is stale; the count is now reconciled below. Also adds the FR-3.14 column-total filter-reactivity assertion to `frontend/src/__tests__/Pipeline.test.jsx`.
+- **Status: 16 of 18 FRs SHIPPED + 1 PARTIAL (FR-3.14 column-total filter visual QA verify) + 5 of 9 ACs SHIPPED.** FR-3.14 is implementation-complete (`filterStageDeals` is the single source for both rendered cards AND the `totalValue` reduce at Pipeline.jsx:557-558), and the new test pins that the column header re-computes the dollar total when the sub-brand filter narrows the deal set. Hardening items FR-3.16/17/18 are now ✅ SHIPPED per the audit above.
+- **Remaining:** the lone PARTIAL is FR-3.14's manual visual QA on a high-density Travel Stall pipeline (advisor-eyes pass that "the dollar amount on each column updates when I flip the filter" — the underlying math is correct; need someone to look at it in production).
 - **Phase:** P0 — Quick activations & wiring (per Travel CRM gap-audit Tier).
-- **Closes:** #897 + #887 both closeable now (FR-5 + route-guard fix shipped). AC verification required before flipping the GH issues. Hardening items can be follow-up.
+- **Closes:** #897 + #887 + the §10-stale tracker item (G016).
 
 ---
 

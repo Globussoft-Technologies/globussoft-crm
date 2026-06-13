@@ -968,6 +968,86 @@ describe('Pipeline virtualization (C4 / FR-3.18)', () => {
   });
 });
 
+/**
+ * G016 (PRD_TRAVEL_PIPELINE_KANBAN FR-3.14) — column totals re-compute from
+ * the FILTERED deal set, not the unfiltered population. When the Travel
+ * sub-brand filter narrows the visible cards, the per-column count badge AND
+ * the dollar-total line below the stage header must both reflect only the
+ * filtered set. Pipeline.jsx:557-558 single-sources both: `stageDeals`
+ * (filtered via `filterStageDeals`) feeds both `.length` (badge) and
+ * `.reduce(...)` (totalValue). This test pins that contract — a regression
+ * that splits the two sources (e.g. counts from `deals` directly while totals
+ * use `stageDeals`) would silently mis-aggregate KPIs for Travel advisors.
+ *
+ * The assertion uses the Travel-AuthContext renderer + a `subBrand`-bearing
+ * deal set so the filter dropdown actually appears + has something to narrow.
+ */
+describe('Pipeline column totals reflect filtered set (G016 / FR-3.14)', () => {
+  it('count badge AND totalValue re-compute when sub-brand filter narrows the column', async () => {
+    // Three deals in the same 'lead' stage — two TMC, one RFU. With "All
+    // sub-brands" the column shows count=3 + total=600. Switching to TMC
+    // narrows to count=2 + total=500; switching to RFU yields count=1 +
+    // total=100. Both the badge and the dollar string track in lockstep.
+    fetchApi.mockImplementation((url) => {
+      if (url.startsWith('/api/deals')) {
+        return Promise.resolve([
+          { id: 2001, title: 'TMC Lead A', amount: 200, probability: 25, stage: 'lead', subBrand: 'tmc' },
+          { id: 2002, title: 'TMC Lead B', amount: 300, probability: 30, stage: 'lead', subBrand: 'tmc' },
+          { id: 2003, title: 'RFU Lead C', amount: 100, probability: 25, stage: 'lead', subBrand: 'rfu' },
+        ]);
+      }
+      if (url.startsWith('/api/contacts')) return Promise.resolve([]);
+      if (url.startsWith('/api/pipeline_stages')) {
+        return Promise.resolve([
+          { id: 1, name: 'New Lead', color: '#3b82f6', position: 0 },
+        ]);
+      }
+      return Promise.resolve([]);
+    });
+
+    renderTravelPipelineAt('/pipeline');
+
+    await waitFor(() => {
+      expect(screen.queryByText('Loading deals...')).not.toBeInTheDocument();
+    });
+
+    // "All sub-brands" (no filter) — badge=3, total contains "$600".
+    const badge = screen.getByTestId('stage-count-lead');
+    expect(badge.textContent).toBe('3');
+    const allBrandTotals = screen.getAllByText(/\$/).map((n) => n.textContent).join(' | ');
+    expect(allBrandTotals).toMatch(/600/);
+
+    // Filter to TMC → badge=2, total contains "$500" (200+300).
+    const select = screen.getByLabelText('Filter by sub-brand');
+    fireEvent.change(select, { target: { value: 'tmc' } });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('stage-count-lead').textContent).toBe('2');
+    });
+    const tmcTotals = screen.getAllByText(/\$/).map((n) => n.textContent).join(' | ');
+    expect(tmcTotals).toMatch(/500/);
+    // RFU lead's dollar amount should NOT be summed in.
+    expect(tmcTotals).not.toMatch(/\$\s?600/);
+
+    // Switch to RFU → badge=1, total contains "$100".
+    fireEvent.change(select, { target: { value: 'rfu' } });
+    await waitFor(() => {
+      expect(screen.getByTestId('stage-count-lead').textContent).toBe('1');
+    });
+    const rfuTotals = screen.getAllByText(/\$/).map((n) => n.textContent).join(' | ');
+    expect(rfuTotals).toMatch(/100/);
+    expect(rfuTotals).not.toMatch(/500/);
+
+    // Switch back to "All sub-brands" → totals re-expand to 600.
+    fireEvent.change(select, { target: { value: '' } });
+    await waitFor(() => {
+      expect(screen.getByTestId('stage-count-lead').textContent).toBe('3');
+    });
+    const restoredTotals = screen.getAllByText(/\$/).map((n) => n.textContent).join(' | ');
+    expect(restoredTotals).toMatch(/600/);
+  });
+});
+
 describe('Pipeline reduced-motion (C4)', () => {
   it('drops CSS transitions when prefers-reduced-motion: reduce is set', async () => {
     // Stub matchMedia to report reduced motion.

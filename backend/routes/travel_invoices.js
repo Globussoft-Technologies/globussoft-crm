@@ -28,6 +28,11 @@ const {
   assertValidSubBrand,
 } = require("../middleware/travelGuards");
 const { writeAudit } = require("../lib/audit");
+// G124 (Master PRD A3 residual) — per-document download audit alongside the
+// existing TRAVEL_INVOICE_PDF_DOWNLOADED entity row so the audit-viewer's
+// Document Access sub-tab surfaces invoice PDF pulls uniformly. Unit-tested
+// at backend/test/lib/documentAccessAudit.test.js.
+const { recordDocumentAccess } = require("../lib/documentAccessAudit");
 const pdfRenderer = require("../services/pdfRenderer");
 const { invoicePrefixFor, fiscalYearStart } = require("../lib/travelFiscalYear");
 const { computeTcs, isOverseasDestination } = require("../lib/tcsCalculation");
@@ -5454,6 +5459,18 @@ router.get(
           lineCount: lines.length,
         },
       );
+      // G124 — uniform DOCUMENT_DOWNLOAD row for the Document Access sub-tab.
+      // Best-effort (helper swallows errors); never blocks the PDF response.
+      recordDocumentAccess({
+        tenantId: req.travelTenant.id,
+        userId: req.user.userId,
+        documentType: "TravelInvoice",
+        documentId: invoice.id,
+        event: "download",
+        ipAddress: req.ip,
+        userAgent: req.headers && req.headers["user-agent"],
+        extra: { subBrand: invoice.subBrand, lineCount: lines.length },
+      });
 
       res.setHeader("Content-Type", "application/pdf");
       res.setHeader(

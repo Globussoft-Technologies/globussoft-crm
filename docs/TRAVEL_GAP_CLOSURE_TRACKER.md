@@ -97,10 +97,10 @@ PRD §10 is stale (claims 11/18; actual is 16/18). Update PRD §10 in same commi
 
 | ID | Slice | Files | Effort | Status |
 |---|---|---|---|---|
-| G017 | Sub-agent Clone-with-margin on `/quotes/:id/duplicate` (apply markup %) | `backend/routes/travel_quotes.js`, `frontend/.../QuoteBuilder.jsx` | 2d | ⬜ |
-| G018 | FX-rate cron + `/api/fx` endpoint + per-line FX conversion panel (DD-5.4) | `backend/cron/fxRateEngine.js` (NEW), `lib/fxRates.js` (NEW), QuoteBuilder UI | 1.5d | ⬜ |
-| G019 | Counter-offer side-by-side review UI for operator (FR-3.7.6) | `frontend/.../QuoteCounterReview.jsx` (NEW) | 1d | ⬜ |
-| G020 | `TravelQuoteLine` columns: `hsnSac`, `taxPercent`, `discountPercent`, `dimension` enum (perPax/perRoomPerNight/perTrip/flatRate), `isAddOn` (FR-3.2.1-3) | schema (additive) + UI | 1.5d | ⬜ |
+| G017 | Sub-agent Clone-with-margin on `/quotes/:id/duplicate` (apply markup %) | `backend/routes/travel_quotes.js`, `frontend/.../QuoteBuilder.jsx` | 2d | ✅ DONE 2026-06-13 — `cf2bc799` |
+| G018 | FX-rate cron + `/api/fx` endpoint + per-line FX conversion panel (DD-5.4) | `backend/cron/fxRateEngine.js` (NEW), `lib/fxRates.js` (NEW), QuoteBuilder UI | 1.5d | ✅ DONE 2026-06-13 — `cf2bc799` |
+| G019 | Counter-offer side-by-side review UI for operator (FR-3.7.6) | `frontend/.../QuoteCounterReview.jsx` (NEW) | 1d | ✅ DONE 2026-06-13 — `cf2bc799` |
+| G020 | `TravelQuoteLine` columns: `hsnSac`, `taxPercent`, `discountPercent`, `dimension` enum (perPax/perRoomPerNight/perTrip/flatRate), `isAddOn` (FR-3.2.1-3) | schema (additive) + UI | 1.5d | ✅ DONE 2026-06-13 — `cf2bc799` |
 
 **§3.3 net effort: ~6 eng-days** (plus Q9 Wati for FR-3.7.1 send)
 

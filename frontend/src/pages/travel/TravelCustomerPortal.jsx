@@ -38,6 +38,7 @@ import {
   ShieldCheck, ShieldAlert, LogOut, Plane, User as UserIcon,
   CheckCircle2, AlertCircle, Loader2, ClipboardCheck, Award, LayoutDashboard,
   ChevronRight, ChevronLeft, Hotel, Ticket, FileUp, Upload, UserPlus,
+  Mail, Phone,
 } from "lucide-react";
 
 const PORTAL_TOKEN_KEY = "portalToken";
@@ -261,6 +262,14 @@ const inputStyle = {
 function Dashboard({ token, contact, onUpdateContact, onLogout }) {
   const [kyc, setKyc] = useState(null);
   const [itineraries, setItineraries] = useState([]);
+  const [profile, setProfile] = useState(null);
+  // G092 (PRD_TRAVEL_PER_SUBBRAND_BRANDING FR-3.3.f) — per-sub-brand
+  // brand kit applied as CSS vars at the document root. Resolved from
+  // the customer's Contact.subBrand (set by sales when the contact was
+  // created against a specific brand) via the public /api/brand-kits/
+  // by-subbrand/:subBrand endpoint. Null on 404 / fetch error → portal
+  // falls back to the default Travel Stall navy/gold palette.
+  const [brandKit, setBrandKit] = useState(null);
   const [loading, setLoading] = useState(true);
   const [verifyMsg, setVerifyMsg] = useState(null);
   const [verifyLoading, setVerifyLoading] = useState(false);
@@ -276,12 +285,17 @@ function Dashboard({ token, contact, onUpdateContact, onLogout }) {
   const loadAll = useCallback(async () => {
     setLoading(true);
     try {
-      const [kycRes, itinRes] = await Promise.all([
+      const [kycRes, itinRes, profileRes] = await Promise.all([
         portalFetch("/kyc/status", { token }),
         portalFetch("/travel/itineraries", { token }).catch(() => []),
+        // G092 — fetch the customer's full profile (incl. subBrand) so
+        // we can resolve the brand kit. Best-effort: any error leaves
+        // `profile` null and the brand kit fetch short-circuits.
+        portalFetch("/travel/profile", { token }).catch(() => null),
       ]);
       setKyc(kycRes);
       setItineraries(Array.isArray(itinRes) ? itinRes : []);
+      setProfile(profileRes || null);
     } catch (err) {
       if (err.status === 401) onLogout();
     } finally {
@@ -290,6 +304,60 @@ function Dashboard({ token, contact, onUpdateContact, onLogout }) {
   }, [token, onLogout]);
 
   useEffect(() => { loadAll(); }, [loadAll]);
+
+  // G092 — fetch the brand kit for the customer's sub-brand. Public
+  // endpoint (no auth header). Triggered when subBrand is first known
+  // (via the /travel/profile load above).
+  useEffect(() => {
+    const sb = profile?.subBrand;
+    if (!sb) {
+      setBrandKit(null);
+      return undefined;
+    }
+    let alive = true;
+    (async () => {
+      try {
+        const res = await fetch(`/api/brand-kits/by-subbrand/${encodeURIComponent(sb)}`);
+        if (!res.ok) {
+          if (alive) setBrandKit(null);
+          return;
+        }
+        const data = await res.json();
+        if (alive) setBrandKit(data?.brandKit || null);
+      } catch (_e) {
+        if (alive) setBrandKit(null);
+      }
+    })();
+    return () => { alive = false; };
+  }, [profile?.subBrand]);
+
+  // G092 — apply palette as CSS vars at the document root so existing
+  // `var(--primary-color, …)` references throughout the portal page
+  // pick up the brand color without a render-tree rewrite. Cleared on
+  // unmount so navigating away (or logging out) doesn't leak palette
+  // into other surfaces.
+  useEffect(() => {
+    const root = document.documentElement;
+    if (!brandKit) return undefined;
+    const prev = {
+      primary: root.style.getPropertyValue("--primary-color"),
+      accent: root.style.getPropertyValue("--accent-color"),
+      bg: root.style.getPropertyValue("--bg-color"),
+      text: root.style.getPropertyValue("--text-primary"),
+    };
+    if (brandKit.primaryColor) root.style.setProperty("--primary-color", brandKit.primaryColor);
+    if (brandKit.accentColor) root.style.setProperty("--accent-color", brandKit.accentColor);
+    if (brandKit.bgColor) root.style.setProperty("--bg-color", brandKit.bgColor);
+    if (brandKit.textColor) root.style.setProperty("--text-primary", brandKit.textColor);
+    return () => {
+      // Restore previous values (empty string clears the inline override
+      // so the cascaded default reasserts).
+      root.style.setProperty("--primary-color", prev.primary);
+      root.style.setProperty("--accent-color", prev.accent);
+      root.style.setProperty("--bg-color", prev.bg);
+      root.style.setProperty("--text-primary", prev.text);
+    };
+  }, [brandKit]);
 
   const handleVerify = async () => {
     setVerifyMsg(null);
@@ -348,13 +416,23 @@ function Dashboard({ token, contact, onUpdateContact, onLogout }) {
           gap: 16,
           flexWrap: "wrap",
         }}>
-          <strong style={{ fontSize: 16 }}>
-            {view === "overview" && "Dashboard"}
-            {view === "bookings" && "My Bookings"}
-            {view === "documents" && "Travel Documents"}
-            {view === "diagnostic" && "Travel Diagnostic"}
-            {view === "profile" && "My Profile"}
-          </strong>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            {brandKit?.logoUrl && (
+              <img
+                src={brandKit.logoUrl}
+                alt={brandKit.tagline || "Brand logo"}
+                data-testid="portal-brand-logo"
+                style={{ height: 28, width: "auto", maxWidth: 120, objectFit: "contain" }}
+              />
+            )}
+            <strong style={{ fontSize: 16 }}>
+              {view === "overview" && "Dashboard"}
+              {view === "bookings" && "My Bookings"}
+              {view === "documents" && "Travel Documents"}
+              {view === "diagnostic" && "Travel Diagnostic"}
+              {view === "profile" && "My Profile"}
+            </strong>
+          </div>
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
             <DigiLockerButton verified={verified} loading={verifyLoading} onClick={handleVerify} />
             {/* Clickable name + avatar → opens the Profile view. */}
@@ -431,6 +509,51 @@ function Dashboard({ token, contact, onUpdateContact, onLogout }) {
             />
           )}
         </main>
+
+        {brandKit && (brandKit.missionStatement || brandKit.supportEmail || brandKit.supportPhone || brandKit.footerText) && (
+          <footer
+            data-testid="portal-brand-footer"
+            style={{
+              padding: "20px 24px",
+              borderTop: "1px solid var(--border-color, rgba(18, 38, 71, 0.12))",
+              background: "var(--surface-color, #FFFFFF)",
+              maxWidth: 1000,
+              width: "100%",
+              margin: "0 auto",
+            }}
+          >
+            {brandKit.missionStatement && (
+              <p style={{ margin: "0 0 10px", fontSize: 13, color: "var(--text-secondary)" }}>
+                {brandKit.missionStatement}
+              </p>
+            )}
+            {(brandKit.supportEmail || brandKit.supportPhone) && (
+              <div style={{ display: "flex", gap: 16, flexWrap: "wrap", fontSize: 13 }}>
+                {brandKit.supportEmail && (
+                  <a
+                    href={`mailto:${brandKit.supportEmail}`}
+                    style={{ display: "inline-flex", alignItems: "center", gap: 6, color: "var(--primary-color, #122647)", textDecoration: "none" }}
+                  >
+                    <Mail size={14} aria-hidden /> {brandKit.supportEmail}
+                  </a>
+                )}
+                {brandKit.supportPhone && (
+                  <a
+                    href={`tel:${brandKit.supportPhone}`}
+                    style={{ display: "inline-flex", alignItems: "center", gap: 6, color: "var(--primary-color, #122647)", textDecoration: "none" }}
+                  >
+                    <Phone size={14} aria-hidden /> {brandKit.supportPhone}
+                  </a>
+                )}
+              </div>
+            )}
+            {brandKit.footerText && (
+              <p style={{ margin: "10px 0 0", fontSize: 11, color: "var(--text-secondary)" }}>
+                {brandKit.footerText}
+              </p>
+            )}
+          </footer>
+        )}
       </div>
     </div>
   );

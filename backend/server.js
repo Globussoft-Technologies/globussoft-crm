@@ -778,6 +778,16 @@ app.use("/api", (req, res, next) => {
   // GET = read-only envelope; POST = accept|reject|counter customer actions.
   if (req.method === 'GET' && /^\/travel\/quotes\/public\/quote\/[^/]+$/.test(req.path)) return next();
   if (req.method === 'POST' && /^\/travel\/quotes\/public\/quote\/[^/]+\/(accept|reject|counter)$/.test(req.path)) return next();
+  // G092 (PRD_TRAVEL_PER_SUBBRAND_BRANDING FR-3.3.f) — Customer-portal
+  // brand-kit consumer. The portal (TravelCustomerPortal.jsx) is auth-
+  // gated by a separate PORTAL JWT but reads /api/brand-kits/by-subbrand/:sub
+  // BEFORE the customer logs in (so the login screen itself can carry
+  // the sub-brand chrome). We expose ONLY the public-safe fields (no
+  // version history, no createdBy / audit metadata) — handler implements
+  // the field filter. Sub-path is also reachable by the public microsite
+  // and embed-widget consumers (G093 / G095) for the same reason. GET
+  // only; mutations stay role-gated below.
+  if (req.method === 'GET' && /^\/brand-kits\/by-subbrand\/[^/]+$/.test(req.path)) return next();
   verifyToken(req, res, (err) => {
     if (err) return next(err);
     checkSubscription(req, res, next);

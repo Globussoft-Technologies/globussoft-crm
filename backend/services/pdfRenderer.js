@@ -1058,12 +1058,85 @@ async function renderPrescriptionPdf(prescription, patient, clinic, doctor, opts
 }
 
 // ── 2. Consent PDF ─────────────────────────────────────────────────
-
-async function renderConsentPdf(consent, patient, service, clinic, signatureDataUrl) {
+//
+// G091 (PRD_TRAVEL_PER_SUBBRAND_BRANDING FR-3.3.c) — Travel-vertical
+// consent forms (PRD_TRAVEL_BILLING liability waivers, PRD_TRAVEL_VISA
+// data-consent forms, PRD_TRAVEL_TMC parent consents) need the same
+// brand-kit treatment the itinerary / quote / invoice PDFs already get.
+//
+// The 6th positional `opts` is additive and backward-compatible. Existing
+// wellness callers pass 5 args — `opts` defaults to `{}` and the renderer
+// behaves exactly as it did pre-G091 (clinic-header band, no sub-brand
+// band, no logo, no brand-kit footer text). Travel callers (or future
+// wellness multi-tenant consent flows) pass `opts.subBrand` (+ optionally
+// `opts.tenant` for `subBrandConfigJson` cascade, `opts.branding` for
+// per-render overrides) to opt into the brand-kit header band.
+//
+// Brand-kit shape consumed (mirrors the S52 sibling renderers):
+//   - branding.headerColor  → top-of-page accent band (replaces the
+//                             clinic-header pre-render when set).
+//   - branding.thumbnailUrl → logo embedded into the band's top-right
+//                             via fetchLogoBuffer (same self-mocking
+//                             seam the itinerary renderer uses).
+//   - opts.branding.footerText → optional small-print line ABOVE the
+//                                signature block. Lets each sub-brand
+//                                carry its own legal disclaimer / contact
+//                                line into the rendered consent form.
+async function renderConsentPdf(consent, patient, service, clinic, signatureDataUrl, opts = {}) {
   const doc = new PDFDocument({ size: "A4", margin: 50 });
   const bufPromise = streamToBuffer(doc);
 
-  drawClinicHeader(doc, clinic);
+  // Travel-vertical consent: opt into the brand-kit header band when
+  // opts.subBrand is supplied. Wellness path (no subBrand) is unchanged.
+  const subBrand = opts && typeof opts.subBrand === "string" && opts.subBrand
+    ? opts.subBrand
+    : null;
+  let branding = null;
+  let brandSource = null;
+  if (subBrand) {
+    const resolved = resolveTravelHeaderBrandKit(subBrand, opts);
+    branding = resolved.branding;
+    brandSource = resolved.source;
+
+    // Resolve the per-sub-brand logo BEFORE drawing (pdfkit needs the
+    // buffer synchronously). Goes through module.exports.fetchLogoBuffer
+    // so unit tests can vi.spyOn(...) the seam without reaching into
+    // axios. Fail-soft: null buffer → render the band without a logo
+    // (back-compat with pre-G091 output shape).
+    const logoBuffer = branding && branding.thumbnailUrl
+      ? await module.exports.fetchLogoBuffer(branding.thumbnailUrl)
+      : null;
+
+    // Brand header band — mirrors the S52 sibling renderers'
+    // 60px-high top band shape so a parent flipping between a TMC
+    // itinerary and a TMC consent form sees one consistent header.
+    const bandColor = branding.headerColor || INVOICE_BRAND_KIT_FALLBACKS._generic.headerColor;
+    doc.rect(0, 0, doc.page.width, 60).fill(bandColor);
+    const subLabel = SUB_BRAND_LABEL[subBrand] || (clinic && clinic.name) || "Consent Form";
+    doc.font("Helvetica-Bold").fontSize(18).fillColor("#fff")
+      .text(subLabel, 50, 22, { align: "left" });
+
+    // Brand logo into the header band's top-right when uploaded.
+    if (logoBuffer) {
+      try {
+        const LOGO_W = 80;
+        const LOGO_H = 40;
+        const LOGO_X = doc.page.width - LOGO_W - 50;
+        const LOGO_Y = 10;
+        doc.image(logoBuffer, LOGO_X, LOGO_Y, { fit: [LOGO_W, LOGO_H] });
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[pdfRenderer/G091] doc.image() rejected logo buffer (consent): ${err && err.message ? err.message : err}`,
+        );
+      }
+    }
+    doc.fillColor("#111");
+    doc.x = doc.page.margins.left;
+    doc.y = 90;
+  } else {
+    drawClinicHeader(doc, clinic);
+  }
 
   const tplName = consent?.templateName || "general";
   const title = `Consent Form — ${tplName.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())}`;
@@ -1114,6 +1187,35 @@ async function renderConsentPdf(consent, patient, service, clinic, signatureData
   doc.font("Helvetica").fontSize(10).fillColor("#333").text("Patient Signature", 50, labelY);
   doc.text(`Name: ${patient?.name || "—"}`, 50, labelY + 14);
   doc.text(`Signed: ${formatDate(consent?.signedAt || new Date())}`, 50, labelY + 28);
+
+  // G091 — brand-kit footer text. Sourced from opts.branding.footerText
+  // (per-render override, precedence layer 1). When set AND a sub-brand
+  // is active, render a small disclaimer line at the bottom margin so
+  // each sub-brand can carry its own legal note (e.g. "© 2026 Travel
+  // Stall Holidays — All consents acknowledged under IT Act 2000 §43A.").
+  // Wellness path (no subBrand) skips this — clinic-level footers aren't
+  // managed by the brand-kit resolver.
+  if (subBrand && opts && opts.branding && typeof opts.branding.footerText === "string" && opts.branding.footerText.trim()) {
+    const footerY = doc.page.height - doc.page.margins.bottom - 24;
+    doc.font("Helvetica").fontSize(8).fillColor("#777")
+      .text(
+        opts.branding.footerText.trim(),
+        50,
+        footerY,
+        { width: doc.page.width - 100, align: "center" },
+      );
+  }
+
+  // G091 — observability hint: stamp the brand-kit resolution source into
+  // PDF Producer metadata so on-demand inspections can tell whether the
+  // PDF picked up subBrandConfigJson or fell back to the hard-coded
+  // INVOICE_BRAND_KIT_FALLBACKS palette. Same pattern S34 introduced for
+  // the invoice renderer.
+  if (subBrand && brandSource) {
+    try {
+      doc.info.Producer = `pdfkit/consent brandKit=${brandSource}`;
+    } catch (_e) { /* metadata write is best-effort */ }
+  }
 
   doc.end();
   return bufPromise;
@@ -2765,6 +2867,12 @@ async function renderTravelItineraryPdf(itinerary, contact, opts = {}) {
   }
 
   // Footer
+  // G091 — when the caller passes `opts.branding.footerText` (per-render
+  // override, precedence layer 1), append it on a second line BELOW the
+  // standard "Itinerary #N — Pricing subject to availability …" line so
+  // each sub-brand can carry its own legal disclaimer / hotline note
+  // without rewriting the itinerary's chrome. Empty / null `footerText`
+  // leaves the byte-shape pre-G091 (single-line footer preserved).
   const footerY = doc.page.height - doc.page.margins.bottom - 32;
   doc.moveTo(50, footerY).lineTo(doc.page.width - 50, footerY).lineWidth(0.5).strokeColor("#bbb").stroke();
   doc.font("Helvetica").fontSize(8).fillColor("#777")
@@ -2773,6 +2881,13 @@ async function renderTravelItineraryPdf(itinerary, contact, opts = {}) {
         `Pricing subject to availability at the time of booking.`,
       50, footerY + 8, { width: doc.page.width - 100, align: "center" },
     );
+  const brandFooterText = (opts && opts.branding && typeof opts.branding.footerText === "string")
+    ? opts.branding.footerText.trim()
+    : "";
+  if (brandFooterText) {
+    doc.font("Helvetica").fontSize(8).fillColor("#999")
+      .text(brandFooterText, 50, footerY + 20, { width: doc.page.width - 100, align: "center" });
+  }
 
   doc.end();
   return bufPromise;

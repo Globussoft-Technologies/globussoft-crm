@@ -82,6 +82,9 @@ beforeEach(() => {
     body: {
       trip: { destination: 'Goa Ed Tour', departDate: '2026-09-01', returnDate: '2026-09-10' },
       itineraryHtml: '<p>Itinerary details</p>',
+      // G095 — public response carries an additive `brandKit` block.
+      // Default null = portal falls back to the legacy navy/gold chrome.
+      brandKit: null,
     },
   };
   sessionStorage.clear();
@@ -122,6 +125,65 @@ describe('<PublicTripMicrosite /> — participant affordances', () => {
     expect(screen.getByText(/Verified ••••4321/)).toBeInTheDocument();
     // Aarav is unverified → exactly one Verify Aadhaar button.
     expect(screen.getAllByRole('button', { name: /Verify Aadhaar/i })).toHaveLength(1);
+  });
+});
+
+describe('<PublicTripMicrosite /> — G095 brand-kit consumer', () => {
+  it('renders brand logo + tagline in the header when brandKit is populated', async () => {
+    infoResponse = {
+      status: 200,
+      body: {
+        trip: { destination: 'Bali Trip', departDate: '2026-09-01', returnDate: '2026-09-10' },
+        itineraryHtml: '<p>Itinerary</p>',
+        brandKit: {
+          logoUrl: 'https://cdn.example/tmc-logo.png',
+          primaryColor: '#1F4E79',
+          tagline: 'Travel that teaches',
+        },
+      },
+    };
+    renderPage();
+    // Brand logo image renders with the tagline embedded into alt.
+    const logo = await screen.findByAltText(/Travel that teaches/i);
+    expect(logo).toBeInTheDocument();
+    expect(logo.tagName).toBe('IMG');
+    // Tagline copy ALSO shows in the header.
+    expect(screen.getByText('Travel that teaches')).toBeInTheDocument();
+  });
+
+  it('renders the brand footer with mission + support contacts when populated', async () => {
+    infoResponse = {
+      status: 200,
+      body: {
+        trip: { destination: 'Bali Trip', departDate: '2026-09-01', returnDate: '2026-09-10' },
+        itineraryHtml: '<p>Itinerary</p>',
+        brandKit: {
+          primaryColor: '#1F4E79',
+          missionStatement: 'Designing educational tours since 2015.',
+          supportEmail: 'hello@example.com',
+          supportPhone: '+91-22-1234-5678',
+          footerText: '© 2026 Test Brand',
+        },
+      },
+    };
+    renderPage();
+    expect(await screen.findByTestId('microsite-brand-footer')).toBeInTheDocument();
+    expect(screen.getByText(/Designing educational tours since 2015/i)).toBeInTheDocument();
+    expect(screen.getByText('hello@example.com')).toBeInTheDocument();
+    expect(screen.getByText('+91-22-1234-5678')).toBeInTheDocument();
+    expect(screen.getByText('© 2026 Test Brand')).toBeInTheDocument();
+    // mailto + tel: hrefs.
+    expect(screen.getByText('hello@example.com').closest('a')?.getAttribute('href')).toBe('mailto:hello@example.com');
+    expect(screen.getByText('+91-22-1234-5678').closest('a')?.getAttribute('href')).toBe('tel:+91-22-1234-5678');
+  });
+
+  it('falls back to default Plane icon + no brand-footer when brandKit is null', async () => {
+    // Default fixture already has brandKit:null — assert the fallback.
+    renderPage();
+    await screen.findByText('Goa Ed Tour');
+    // No brand-logo IMG and no brand-footer in fallback mode.
+    expect(screen.queryByAltText(/Brand logo/i)).not.toBeInTheDocument();
+    expect(screen.queryByTestId('microsite-brand-footer')).not.toBeInTheDocument();
   });
 });
 

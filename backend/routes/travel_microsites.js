@@ -171,6 +171,12 @@ const PUBLIC_SELECT = {
   faqJson: true,
   publishedAt: true,
   expiresAt: true,
+  // G095 (PRD_TRAVEL_PER_SUBBRAND_BRANDING FR-3.3.i) — tenantId is needed
+  // to resolve the active per-sub-brand BrandKit row that gets attached
+  // as `brandKit` in the public response. NOT echoed back to the client
+  // — the post-find handler deletes it before res.json() so the wire
+  // shape stays clean (no enumeration vector).
+  tenantId: true,
   trip: {
     select: {
       destination: true,
@@ -179,6 +185,35 @@ const PUBLIC_SELECT = {
       tripCode: true,
     },
   },
+};
+
+// G095 — public-safe BrandKit fields attached to the microsite GET
+// response. Mirrors PUBLIC_BRAND_KIT_SELECT in routes/brand_kits.js so
+// both the dedicated endpoint and the embedded microsite block expose
+// the same shape (palette + chrome + portal-copy fields; no audit /
+// version metadata, no signatureTemplate).
+const MICROSITE_BRAND_KIT_SELECT = {
+  logoUrl: true,
+  logoDarkUrl: true,
+  faviconUrl: true,
+  wordmarkUrl: true,
+  heroUrl: true,
+  headerImageUrl: true,
+  primaryColor: true,
+  secondaryColor: true,
+  accentColor: true,
+  bgColor: true,
+  textColor: true,
+  fontFamily: true,
+  fontUrl: true,
+  headingFontFamily: true,
+  bodyFontFamily: true,
+  tagline: true,
+  footerText: true,
+  missionStatement: true,
+  supportEmail: true,
+  supportPhone: true,
+  socialLinksJson: true,
 };
 
 async function loadTrip(req) {
@@ -1050,7 +1085,33 @@ router.get("/microsites/public/:publicUuid", async (req, res) => {
     if (ms.expiresAt && new Date(ms.expiresAt) < new Date()) {
       return res.status(410).json({ error: "This trip microsite has expired", code: "GONE" });
     }
-    res.json(ms);
+
+    // G095 (PRD_TRAVEL_PER_SUBBRAND_BRANDING FR-3.3.i / AC-6.9) — attach
+    // the active brand kit for the microsite's sub-brand so the public
+    // page can theme its chrome (palette + logo + tagline + mission +
+    // support contacts) without a second round-trip. TripMicrosite is
+    // TMC-only per Q21 so the sub-brand is statically `tmc`; future
+    // schema extensions that allow non-TMC microsites should derive the
+    // sub-brand from the row itself.
+    let brandKit = null;
+    try {
+      brandKit = await prisma.brandKit.findFirst({
+        where: { tenantId: ms.tenantId, subBrand: "tmc", isActive: true },
+        select: MICROSITE_BRAND_KIT_SELECT,
+      });
+    } catch (bkErr) {
+      // Brand-kit lookup is best-effort — a DB hiccup or schema-drift
+      // shouldn't 500 the whole microsite. Log + fall through to a
+      // null brandKit, the frontend already falls back to the default
+      // palette in that case.
+      console.warn("[travel-microsite] brand-kit lookup failed (non-fatal):", bkErr.message);
+    }
+
+    // Strip the internal tenantId before responding — it was selected
+    // ONLY to resolve the brand kit above. Public response shape stays
+    // identical to pre-G095 except for the additive `brandKit` field.
+    const { tenantId: _tid, ...publicShape } = ms;
+    res.json({ ...publicShape, brandKit });
   } catch (e) {
     console.error("[travel-microsite] public-get error:", e.message);
     res.status(500).json({ error: "Failed to load microsite" });

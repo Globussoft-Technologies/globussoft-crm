@@ -778,3 +778,98 @@ describe('TravelCustomerPortal — Travel Documents (travellers + passports)', (
     expect(localStorage.getItem('portalToken')).toBeNull();
   });
 });
+
+describe('TravelCustomerPortal — G092 brand-kit consumer', () => {
+  test('fetches brand kit from /api/brand-kits/by-subbrand/:sub when profile carries subBrand', async () => {
+    setupLoggedIn();
+    globalThis.fetch = vi.fn((url) => {
+      if (url.includes('/portal/kyc/status')) {
+        return mockJsonResponse({ kycStatus: 'unverified', mode: 'stub', aadhaarLast4: null });
+      }
+      if (url.includes('/portal/travel/itineraries')) return mockJsonResponse([]);
+      if (url.includes('/portal/travel/profile')) {
+        return mockJsonResponse({ id: 3140, name: 'Ahmed Khan', email: 'ahmed.pilgrim@demo.test', subBrand: 'rfu' });
+      }
+      if (url.includes('/api/brand-kits/by-subbrand/rfu')) {
+        return mockJsonResponse({
+          subBrand: 'rfu',
+          brandKit: {
+            primaryColor: '#0B5345',
+            accentColor: '#D4AC0D',
+            logoUrl: 'https://cdn.example/rfu.png',
+            tagline: 'Umrah journeys with care',
+            supportEmail: 'umrah@example.com',
+            supportPhone: '+91-22-9999-0000',
+            missionStatement: 'Trusted Umrah & Hajj operator since 2010.',
+          },
+        });
+      }
+      return mockJsonResponse({});
+    });
+    renderPortal();
+    // Brand logo appears in the header via data-testid.
+    const logo = await screen.findByTestId('portal-brand-logo');
+    expect(logo.getAttribute('src')).toBe('https://cdn.example/rfu.png');
+    // Brand footer surfaces mission + support contacts.
+    expect(await screen.findByTestId('portal-brand-footer')).toBeInTheDocument();
+    expect(screen.getByText(/Trusted Umrah & Hajj operator since 2010/i)).toBeInTheDocument();
+    expect(screen.getByText('umrah@example.com')).toBeInTheDocument();
+    expect(screen.getByText('+91-22-9999-0000')).toBeInTheDocument();
+    // CSS vars applied at root.
+    await waitFor(() => {
+      const root = document.documentElement;
+      expect(root.style.getPropertyValue('--primary-color')).toBe('#0B5345');
+      expect(root.style.getPropertyValue('--accent-color')).toBe('#D4AC0D');
+    });
+  });
+
+  test('skips brand-kit fetch when profile carries no subBrand', async () => {
+    setupLoggedIn();
+    let calledBrandKit = false;
+    globalThis.fetch = vi.fn((url) => {
+      if (url.includes('/portal/kyc/status')) {
+        return mockJsonResponse({ kycStatus: 'unverified', mode: 'stub', aadhaarLast4: null });
+      }
+      if (url.includes('/portal/travel/itineraries')) return mockJsonResponse([]);
+      if (url.includes('/portal/travel/profile')) {
+        // Profile loads but Contact.subBrand is null.
+        return mockJsonResponse({ id: 3140, name: 'Ahmed Khan', email: 'ahmed.pilgrim@demo.test', subBrand: null });
+      }
+      if (url.includes('/api/brand-kits/by-subbrand/')) {
+        calledBrandKit = true;
+        return mockJsonResponse({}, { status: 404 });
+      }
+      return mockJsonResponse({});
+    });
+    renderPortal();
+    // Wait for the dashboard chrome to settle before assertions.
+    await screen.findByRole('navigation', { name: /portal sections/i });
+    // The brand-kit endpoint should NEVER be called without a sub-brand.
+    expect(calledBrandKit).toBe(false);
+    // No brand-logo, no brand-footer.
+    expect(screen.queryByTestId('portal-brand-logo')).toBeNull();
+    expect(screen.queryByTestId('portal-brand-footer')).toBeNull();
+  });
+
+  test('falls back gracefully when /api/brand-kits/by-subbrand returns 404', async () => {
+    setupLoggedIn();
+    globalThis.fetch = vi.fn((url) => {
+      if (url.includes('/portal/kyc/status')) {
+        return mockJsonResponse({ kycStatus: 'unverified', mode: 'stub', aadhaarLast4: null });
+      }
+      if (url.includes('/portal/travel/itineraries')) return mockJsonResponse([]);
+      if (url.includes('/portal/travel/profile')) {
+        return mockJsonResponse({ id: 3140, name: 'Ahmed Khan', email: 'ahmed.pilgrim@demo.test', subBrand: 'visasure' });
+      }
+      if (url.includes('/api/brand-kits/by-subbrand/visasure')) {
+        return mockJsonResponse({ error: 'No active brand kit', code: 'BRAND_KIT_NOT_FOUND' }, { status: 404 });
+      }
+      return mockJsonResponse({});
+    });
+    renderPortal();
+    await screen.findByRole('navigation', { name: /portal sections/i });
+    // No logo / footer render even when subBrand is set if the fetch 404s.
+    expect(screen.queryByTestId('portal-brand-logo')).toBeNull();
+    expect(screen.queryByTestId('portal-brand-footer')).toBeNull();
+  });
+});

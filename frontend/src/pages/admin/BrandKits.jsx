@@ -28,9 +28,21 @@
  * and 375px without media queries.
  */
 
-import { useEffect, useMemo, useState } from "react";
-import { Palette, Plus, Pencil, Trash2, Check, AlertCircle } from "lucide-react";
-import { fetchApi } from "../../utils/api";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  Palette,
+  Plus,
+  Pencil,
+  Trash2,
+  Check,
+  AlertCircle,
+  Upload,
+  History,
+  Copy as CopyIcon,
+  ChevronDown,
+  ChevronRight,
+} from "lucide-react";
+import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import {
   SUB_BRAND_BG,
@@ -67,7 +79,59 @@ const EMPTY_FORM = {
   fontUrl: "",
   tagline: "",
   isActive: false,
+  // W4.A G089 — extended branding fields (FR-3.1.a-g)
+  wordmarkUrl: "",
+  heroUrl: "",
+  successBadge: "",
+  warningBadge: "",
+  headingFontFamily: "",
+  headingFontUrl: "",
+  bodyFontFamily: "",
+  bodyFontUrl: "",
+  codeFontFamily: "",
+  codeFontUrl: "",
+  cmykPrimary: "",
+  cmykSecondary: "",
+  cmykAccent: "",
+  signatureTemplate: "",
+  headerImageUrl: "",
+  footerText: "",
+  invoiceStampUrl: "",
+  missionStatement: "",
+  supportEmail: "",
+  supportPhone: "",
+  socialLinksJson: "",
 };
+
+// ── W4.A G099 — WCAG contrast checker ──────────────────────────────────
+// Compute relative-luminance ratio between two hex colours per WCAG 2.1
+// SC 1.4.3 (AA = 4.5:1 for normal text, 3:1 for large/UI components).
+// Returns null when either hex string is invalid (so the UI can render
+// "n/a" rather than misleading 1.0). Used both inline in the SUT and
+// exported via the standalone wcagContrastRatio() callable from tests.
+function _hexToRgb(hex) {
+  if (!hex || typeof hex !== "string") return null;
+  let h = hex.trim().replace(/^#/, "");
+  if (h.length === 3) h = h.split("").map((c) => c + c).join("");
+  if (!/^[0-9a-f]{6}$/i.test(h)) return null;
+  return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
+}
+function _relativeLuminance(rgb) {
+  const [r, g, b] = rgb.map((c) => {
+    const cs = c / 255;
+    return cs <= 0.03928 ? cs / 12.92 : Math.pow((cs + 0.055) / 1.055, 2.4);
+  });
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+export function wcagContrastRatio(hex1, hex2) {
+  const a = _hexToRgb(hex1);
+  const b = _hexToRgb(hex2);
+  if (!a || !b) return null;
+  const l1 = _relativeLuminance(a);
+  const l2 = _relativeLuminance(b);
+  const [hi, lo] = l1 > l2 ? [l1, l2] : [l2, l1];
+  return (hi + 0.05) / (lo + 0.05);
+}
 
 // Empty-string → null normalisation for the asset fields, mirroring the
 // SuppliersAdmin payload pattern. Backend accepts both null + string but
@@ -168,6 +232,28 @@ export default function BrandKits() {
       fontUrl: kit.fontUrl || "",
       tagline: kit.tagline || "",
       isActive: Boolean(kit.isActive),
+      // W4.A G089 — extended fields
+      wordmarkUrl: kit.wordmarkUrl || "",
+      heroUrl: kit.heroUrl || "",
+      successBadge: kit.successBadge || "",
+      warningBadge: kit.warningBadge || "",
+      headingFontFamily: kit.headingFontFamily || "",
+      headingFontUrl: kit.headingFontUrl || "",
+      bodyFontFamily: kit.bodyFontFamily || "",
+      bodyFontUrl: kit.bodyFontUrl || "",
+      codeFontFamily: kit.codeFontFamily || "",
+      codeFontUrl: kit.codeFontUrl || "",
+      cmykPrimary: kit.cmykPrimary || "",
+      cmykSecondary: kit.cmykSecondary || "",
+      cmykAccent: kit.cmykAccent || "",
+      signatureTemplate: kit.signatureTemplate || "",
+      headerImageUrl: kit.headerImageUrl || "",
+      footerText: kit.footerText || "",
+      invoiceStampUrl: kit.invoiceStampUrl || "",
+      missionStatement: kit.missionStatement || "",
+      supportEmail: kit.supportEmail || "",
+      supportPhone: kit.supportPhone || "",
+      socialLinksJson: kit.socialLinksJson || "",
     });
     setShowModal(true);
   };
@@ -200,6 +286,28 @@ export default function BrandKits() {
         fontUrl: emptyToNull(form.fontUrl),
         tagline: emptyToNull(form.tagline),
         isActive: Boolean(form.isActive),
+        // W4.A G089 — extended branding fields
+        wordmarkUrl: emptyToNull(form.wordmarkUrl),
+        heroUrl: emptyToNull(form.heroUrl),
+        successBadge: emptyToNull(form.successBadge),
+        warningBadge: emptyToNull(form.warningBadge),
+        headingFontFamily: emptyToNull(form.headingFontFamily),
+        headingFontUrl: emptyToNull(form.headingFontUrl),
+        bodyFontFamily: emptyToNull(form.bodyFontFamily),
+        bodyFontUrl: emptyToNull(form.bodyFontUrl),
+        codeFontFamily: emptyToNull(form.codeFontFamily),
+        codeFontUrl: emptyToNull(form.codeFontUrl),
+        cmykPrimary: emptyToNull(form.cmykPrimary),
+        cmykSecondary: emptyToNull(form.cmykSecondary),
+        cmykAccent: emptyToNull(form.cmykAccent),
+        signatureTemplate: emptyToNull(form.signatureTemplate),
+        headerImageUrl: emptyToNull(form.headerImageUrl),
+        footerText: emptyToNull(form.footerText),
+        invoiceStampUrl: emptyToNull(form.invoiceStampUrl),
+        missionStatement: emptyToNull(form.missionStatement),
+        supportEmail: emptyToNull(form.supportEmail),
+        supportPhone: emptyToNull(form.supportPhone),
+        socialLinksJson: emptyToNull(form.socialLinksJson),
       };
       if (editingKit) {
         await fetchApi(`/api/brand-kits/${editingKit.id}`, {
@@ -267,6 +375,108 @@ export default function BrandKits() {
       notify.error(err?.body?.error || err?.message || "Delete failed");
     }
   };
+
+  // ── W4.A G099 — extended controls (versions / revert / copy-from / upload) ──
+
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [versionsKit, setVersionsKit] = useState(null);
+  const [versionsList, setVersionsList] = useState([]);
+  const [copyFromOpen, setCopyFromOpen] = useState(false);
+  const [copyFromAnchor, setCopyFromAnchor] = useState(null);
+  const [copyFromSourceId, setCopyFromSourceId] = useState("");
+  const fileInputs = useRef({});
+
+  const openVersions = async (kit) => {
+    try {
+      const res = await fetchApi(`/api/brand-kits/${kit.id}/versions`);
+      setVersionsKit(kit);
+      setVersionsList(Array.isArray(res?.versions) ? res.versions : []);
+    } catch (err) {
+      notify.error(err?.body?.error || err?.message || "Failed to load versions");
+    }
+  };
+
+  const closeVersions = () => {
+    setVersionsKit(null);
+    setVersionsList([]);
+  };
+
+  const handleRevert = async (version) => {
+    if (!versionsKit) return;
+    const ok = await notify.confirm(
+      `Revert to v${version.version}? A new active version will be created copying these assets. The current active version will be demoted.`,
+    );
+    if (!ok) return;
+    try {
+      await fetchApi(`/api/brand-kits/${versionsKit.id}/revert/${version.version}`, {
+        method: "POST",
+      });
+      notify.success(`Reverted — new active version copies v${version.version}`);
+      closeVersions();
+      load();
+    } catch (err) {
+      notify.error(err?.body?.error || err?.message || "Revert failed");
+    }
+  };
+
+  const openCopyFrom = (kit) => {
+    setCopyFromAnchor(kit);
+    setCopyFromSourceId("");
+    setCopyFromOpen(true);
+  };
+
+  const handleCopyFromSubmit = async () => {
+    if (!copyFromAnchor || !copyFromSourceId) return;
+    try {
+      await fetchApi(
+        `/api/brand-kits/${copyFromAnchor.id}/copy-from/${copyFromSourceId}`,
+        { method: "POST" },
+      );
+      notify.success(`Assets copied. A new draft version was created — activate it when ready.`);
+      setCopyFromOpen(false);
+      setCopyFromAnchor(null);
+      setCopyFromSourceId("");
+      load();
+    } catch (err) {
+      notify.error(err?.body?.error || err?.message || "Copy-from failed");
+    }
+  };
+
+  // Direct upload to /api/brand-kits/upload. Returns the resolved URL or
+  // null on failure. Used by the per-field "Upload" buttons next to logo /
+  // wordmark / favicon / hero / header / stamp URL inputs.
+  const handleUpload = async (fieldKey, assetType, file) => {
+    if (!file) return;
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      fd.append("assetType", assetType);
+      if (form.subBrand && form.subBrand !== "__none__") {
+        fd.append("subBrand", form.subBrand);
+      }
+      const token = getAuthToken && getAuthToken();
+      const headers = {};
+      if (token) headers.Authorization = `Bearer ${token}`;
+      const res = await fetch("/api/brand-kits/upload", {
+        method: "POST",
+        body: fd,
+        headers,
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body?.error || `Upload failed (${res.status})`);
+      }
+      const body = await res.json();
+      setForm((f) => ({ ...f, [fieldKey]: body.url }));
+      notify.success(`${assetType} uploaded`);
+    } catch (err) {
+      notify.error(err?.message || "Upload failed");
+    }
+  };
+
+  // WCAG contrast: text vs background; primary vs background (chip text).
+  const wcagTextBg = wcagContrastRatio(form.textColor, form.bgColor);
+  const wcagPrimaryBg = wcagContrastRatio(form.primaryColor, form.bgColor);
 
   return (
     <div style={{ padding: "2rem", height: "100%", overflowY: "auto", animation: "fadeIn 0.4s ease-out" }}>
@@ -415,6 +625,8 @@ export default function BrandKits() {
                     onActivate={handleActivate}
                     onEdit={openEdit}
                     onDelete={handleDelete}
+                    onVersions={openVersions}
+                    onCopyFrom={openCopyFrom}
                   />
                 ))}
               </div>
@@ -469,29 +681,27 @@ export default function BrandKits() {
                 )}
               </div>
 
-              {/* Asset URLs */}
-              <div style={fieldRow}>
-                <label htmlFor="bk-logo" style={labelStyle}>Logo URL</label>
-                <input
-                  id="bk-logo"
-                  type="url"
-                  placeholder="https://cdn.example.com/logo.png"
-                  value={form.logoUrl}
-                  onChange={(e) => setForm({ ...form, logoUrl: e.target.value })}
-                  style={inputStyle}
-                />
-              </div>
-              <div style={fieldRow}>
-                <label htmlFor="bk-logo-dark" style={labelStyle}>Dark-mode logo URL</label>
-                <input
-                  id="bk-logo-dark"
-                  type="url"
-                  placeholder="https://cdn.example.com/logo-dark.png"
-                  value={form.logoDarkUrl}
-                  onChange={(e) => setForm({ ...form, logoDarkUrl: e.target.value })}
-                  style={inputStyle}
-                />
-              </div>
+              {/* Asset URLs — each pair (URL input + Upload widget) */}
+              <UploadableUrlField
+                id="bk-logo"
+                label="Logo URL"
+                placeholder="https://cdn.example.com/logo.png"
+                value={form.logoUrl}
+                onChange={(v) => setForm({ ...form, logoUrl: v })}
+                assetType="logo"
+                onUpload={(file) => handleUpload("logoUrl", "logo", file)}
+                fileInputRef={fileInputs}
+              />
+              <UploadableUrlField
+                id="bk-logo-dark"
+                label="Dark-mode logo URL"
+                placeholder="https://cdn.example.com/logo-dark.png"
+                value={form.logoDarkUrl}
+                onChange={(v) => setForm({ ...form, logoDarkUrl: v })}
+                assetType="logo"
+                onUpload={(file) => handleUpload("logoDarkUrl", "logo", file)}
+                fileInputRef={fileInputs}
+              />
               <div style={fieldRow}>
                 <label htmlFor="bk-favicon" style={labelStyle}>Favicon URL</label>
                 <input
@@ -570,6 +780,170 @@ export default function BrandKits() {
                 />
               </div>
 
+              {/* WCAG contrast checker — W4.A G099 (FR-3.5.e) */}
+              <div
+                className="card"
+                data-testid="brand-kits-wcag-checker"
+                style={{
+                  padding: 10,
+                  background: "rgba(255,255,255,0.04)",
+                  border: "1px solid var(--border-color)",
+                }}
+              >
+                <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 6 }}>WCAG contrast</div>
+                <WcagRow label="Text vs Background" ratio={wcagTextBg} />
+                <WcagRow label="Primary vs Background" ratio={wcagPrimaryBg} />
+              </div>
+
+              {/* Live preview pane — W4.A G099 (FR-3.2.f) */}
+              <LivePreview form={form} />
+
+              {/* Advanced fields — W4.A G089 (FR-3.1.a-g) */}
+              <div>
+                <button
+                  type="button"
+                  onClick={() => setShowAdvanced((v) => !v)}
+                  data-testid="brand-kits-advanced-toggle"
+                  style={{
+                    ...secondaryBtn,
+                    padding: "6px 8px",
+                    fontSize: 12,
+                    width: "100%",
+                    justifyContent: "flex-start",
+                  }}
+                >
+                  {showAdvanced ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                  Advanced branding fields (wordmark / hero / typography slots / CMYK / signature / footer / mission / social)
+                </button>
+                {showAdvanced && (
+                  <div
+                    style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 10 }}
+                    data-testid="brand-kits-advanced-section"
+                  >
+                    <UploadableUrlField
+                      id="bk-wordmark"
+                      label="Wordmark URL"
+                      placeholder="https://cdn.example.com/wordmark.svg"
+                      value={form.wordmarkUrl}
+                      onChange={(v) => setForm({ ...form, wordmarkUrl: v })}
+                      assetType="wordmark"
+                      onUpload={(file) => handleUpload("wordmarkUrl", "wordmark", file)}
+                      fileInputRef={fileInputs}
+                    />
+                    <UploadableUrlField
+                      id="bk-hero"
+                      label="Hero image URL (1:1 to 3:1 aspect)"
+                      placeholder="https://cdn.example.com/hero.jpg"
+                      value={form.heroUrl}
+                      onChange={(v) => setForm({ ...form, heroUrl: v })}
+                      assetType="hero"
+                      onUpload={(file) => handleUpload("heroUrl", "hero", file)}
+                      fileInputRef={fileInputs}
+                    />
+                    <UploadableUrlField
+                      id="bk-header-image"
+                      label="Invoice header image URL"
+                      placeholder="https://cdn.example.com/header.png"
+                      value={form.headerImageUrl}
+                      onChange={(v) => setForm({ ...form, headerImageUrl: v })}
+                      assetType="headerImage"
+                      onUpload={(file) => handleUpload("headerImageUrl", "headerImage", file)}
+                      fileInputRef={fileInputs}
+                    />
+                    <UploadableUrlField
+                      id="bk-stamp"
+                      label="Invoice stamp URL"
+                      placeholder="https://cdn.example.com/stamp.png"
+                      value={form.invoiceStampUrl}
+                      onChange={(v) => setForm({ ...form, invoiceStampUrl: v })}
+                      assetType="stamp"
+                      onUpload={(file) => handleUpload("invoiceStampUrl", "stamp", file)}
+                      fileInputRef={fileInputs}
+                    />
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                      <div style={fieldRow}>
+                        <label htmlFor="bk-success-badge" style={labelStyle}>Success badge (hex)</label>
+                        <input id="bk-success-badge" type="text" placeholder="#22c55e" value={form.successBadge} onChange={(e) => setForm({ ...form, successBadge: e.target.value })} style={inputStyle} maxLength={9} />
+                      </div>
+                      <div style={fieldRow}>
+                        <label htmlFor="bk-warning-badge" style={labelStyle}>Warning badge (hex)</label>
+                        <input id="bk-warning-badge" type="text" placeholder="#f59e0b" value={form.warningBadge} onChange={(e) => setForm({ ...form, warningBadge: e.target.value })} style={inputStyle} maxLength={9} />
+                      </div>
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                      <div style={fieldRow}>
+                        <label htmlFor="bk-heading-font" style={labelStyle}>Heading font family</label>
+                        <input id="bk-heading-font" type="text" placeholder="Cardo, serif" value={form.headingFontFamily} onChange={(e) => setForm({ ...form, headingFontFamily: e.target.value })} style={inputStyle} />
+                      </div>
+                      <div style={fieldRow}>
+                        <label htmlFor="bk-heading-font-url" style={labelStyle}>Heading font URL</label>
+                        <input id="bk-heading-font-url" type="url" placeholder="https://fonts.googleapis.com/..." value={form.headingFontUrl} onChange={(e) => setForm({ ...form, headingFontUrl: e.target.value })} style={inputStyle} />
+                      </div>
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                      <div style={fieldRow}>
+                        <label htmlFor="bk-body-font" style={labelStyle}>Body font family</label>
+                        <input id="bk-body-font" type="text" placeholder="Inter, sans-serif" value={form.bodyFontFamily} onChange={(e) => setForm({ ...form, bodyFontFamily: e.target.value })} style={inputStyle} />
+                      </div>
+                      <div style={fieldRow}>
+                        <label htmlFor="bk-body-font-url" style={labelStyle}>Body font URL</label>
+                        <input id="bk-body-font-url" type="url" placeholder="https://fonts.googleapis.com/..." value={form.bodyFontUrl} onChange={(e) => setForm({ ...form, bodyFontUrl: e.target.value })} style={inputStyle} />
+                      </div>
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                      <div style={fieldRow}>
+                        <label htmlFor="bk-code-font" style={labelStyle}>Code font family</label>
+                        <input id="bk-code-font" type="text" placeholder="JetBrains Mono" value={form.codeFontFamily} onChange={(e) => setForm({ ...form, codeFontFamily: e.target.value })} style={inputStyle} />
+                      </div>
+                      <div style={fieldRow}>
+                        <label htmlFor="bk-code-font-url" style={labelStyle}>Code font URL</label>
+                        <input id="bk-code-font-url" type="url" placeholder="https://fonts.googleapis.com/..." value={form.codeFontUrl} onChange={(e) => setForm({ ...form, codeFontUrl: e.target.value })} style={inputStyle} />
+                      </div>
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+                      <div style={fieldRow}>
+                        <label htmlFor="bk-cmyk-primary" style={labelStyle}>CMYK primary</label>
+                        <input id="bk-cmyk-primary" type="text" placeholder="C,M,Y,K" value={form.cmykPrimary} onChange={(e) => setForm({ ...form, cmykPrimary: e.target.value })} style={inputStyle} />
+                      </div>
+                      <div style={fieldRow}>
+                        <label htmlFor="bk-cmyk-secondary" style={labelStyle}>CMYK secondary</label>
+                        <input id="bk-cmyk-secondary" type="text" placeholder="C,M,Y,K" value={form.cmykSecondary} onChange={(e) => setForm({ ...form, cmykSecondary: e.target.value })} style={inputStyle} />
+                      </div>
+                      <div style={fieldRow}>
+                        <label htmlFor="bk-cmyk-accent" style={labelStyle}>CMYK accent</label>
+                        <input id="bk-cmyk-accent" type="text" placeholder="C,M,Y,K" value={form.cmykAccent} onChange={(e) => setForm({ ...form, cmykAccent: e.target.value })} style={inputStyle} />
+                      </div>
+                    </div>
+                    <div style={fieldRow}>
+                      <label htmlFor="bk-signature-template" style={labelStyle}>Email signature template (HTML)</label>
+                      <textarea id="bk-signature-template" rows={3} placeholder="<p>--<br/>{{name}}<br/>{{email}}</p>" value={form.signatureTemplate} onChange={(e) => setForm({ ...form, signatureTemplate: e.target.value })} style={{ ...inputStyle, resize: "vertical", minHeight: 70, fontFamily: "monospace" }} />
+                    </div>
+                    <div style={fieldRow}>
+                      <label htmlFor="bk-footer-text" style={labelStyle}>Invoice / PDF footer text</label>
+                      <textarea id="bk-footer-text" rows={2} placeholder="GST 27ABCDE1234F1Z5 · CIN U63040..." value={form.footerText} onChange={(e) => setForm({ ...form, footerText: e.target.value })} style={{ ...inputStyle, resize: "vertical", minHeight: 50 }} />
+                    </div>
+                    <div style={fieldRow}>
+                      <label htmlFor="bk-mission" style={labelStyle}>Mission statement (portal/microsite)</label>
+                      <textarea id="bk-mission" rows={2} placeholder="Empower curriculum-aligned learning journeys" value={form.missionStatement} onChange={(e) => setForm({ ...form, missionStatement: e.target.value })} style={{ ...inputStyle, resize: "vertical", minHeight: 50 }} />
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                      <div style={fieldRow}>
+                        <label htmlFor="bk-support-email" style={labelStyle}>Support email</label>
+                        <input id="bk-support-email" type="email" placeholder="support@example.com" value={form.supportEmail} onChange={(e) => setForm({ ...form, supportEmail: e.target.value })} style={inputStyle} />
+                      </div>
+                      <div style={fieldRow}>
+                        <label htmlFor="bk-support-phone" style={labelStyle}>Support phone</label>
+                        <input id="bk-support-phone" type="tel" placeholder="+91-9999999999" value={form.supportPhone} onChange={(e) => setForm({ ...form, supportPhone: e.target.value })} style={inputStyle} />
+                      </div>
+                    </div>
+                    <div style={fieldRow}>
+                      <label htmlFor="bk-social-links" style={labelStyle}>Social links JSON</label>
+                      <textarea id="bk-social-links" rows={2} placeholder='[{"network":"instagram","url":"https://ig/..."}]' value={form.socialLinksJson} onChange={(e) => setForm({ ...form, socialLinksJson: e.target.value })} style={{ ...inputStyle, resize: "vertical", minHeight: 50, fontFamily: "monospace" }} />
+                    </div>
+                  </div>
+                )}
+              </div>
+
               {/* Active toggle */}
               <label style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: "pointer", padding: "8px 0" }}>
                 <input
@@ -601,6 +975,279 @@ export default function BrandKits() {
           </div>
         </div>
       )}
+
+      {/* W4.A G099 — Version history modal */}
+      {versionsKit && (
+        <div style={modalOverlay} onClick={closeVersions} data-testid="brand-kits-versions-modal">
+          <div
+            style={modalBody}
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Brand kit version history"
+          >
+            <header style={{ marginBottom: 12 }}>
+              <h2 style={{ margin: 0, fontSize: "1.25rem", fontWeight: 600 }}>
+                Version history — {subBrandLabel(versionsKit.subBrand)}
+              </h2>
+              <p style={{ margin: "4px 0 0", fontSize: "0.85rem", color: "var(--text-secondary)" }}>
+                Revert creates a new active version copying the chosen historical shape (non-destructive).
+              </p>
+            </header>
+            {versionsList.length === 0 ? (
+              <p style={{ color: "var(--text-secondary)", fontSize: 13 }}>No versions found.</p>
+            ) : (
+              <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: 8 }}>
+                {versionsList.map((v) => (
+                  <li
+                    key={v.id}
+                    style={{
+                      padding: 10,
+                      border: "1px solid var(--border-color)",
+                      borderRadius: 6,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      gap: 8,
+                    }}
+                    data-testid={`brand-kits-version-row-${v.version}`}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      <strong style={{ fontSize: 14 }}>v{v.version}</strong>
+                      {v.isActive ? (
+                        <span style={activeBadge}>
+                          <Check size={11} /> Active
+                        </span>
+                      ) : (
+                        <span style={inactiveBadge}>Inactive</span>
+                      )}
+                      <small style={{ color: "var(--text-secondary)", fontSize: 11 }}>
+                        {v.updatedAt ? new Date(v.updatedAt).toLocaleString() : ""}
+                      </small>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleRevert(v)}
+                      style={{ ...primaryBtn, padding: "4px 8px", fontSize: 11 }}
+                      data-testid={`brand-kits-revert-${v.version}`}
+                      disabled={v.isActive}
+                      title={v.isActive ? "This is the active version" : `Revert to v${v.version}`}
+                    >
+                      Revert
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 12 }}>
+              <button type="button" onClick={closeVersions} style={secondaryBtn}>
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* W4.A G099 — Copy-from-sub-brand modal */}
+      {copyFromOpen && copyFromAnchor && (
+        <div
+          style={modalOverlay}
+          onClick={() => setCopyFromOpen(false)}
+          data-testid="brand-kits-copy-from-modal"
+        >
+          <div
+            style={modalBody}
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Copy assets from another brand kit"
+          >
+            <header style={{ marginBottom: 12 }}>
+              <h2 style={{ margin: 0, fontSize: "1.25rem", fontWeight: 600 }}>
+                Copy assets — {subBrandLabel(copyFromAnchor.subBrand)}
+              </h2>
+              <p style={{ margin: "4px 0 0", fontSize: "0.85rem", color: "var(--text-secondary)" }}>
+                Pick a source brand kit. A new draft version will be created copying its asset fields.
+                You can preview and activate it from the card grid.
+              </p>
+            </header>
+            <div style={fieldRow}>
+              <label htmlFor="bk-copy-source" style={labelStyle}>Source brand kit</label>
+              <select
+                id="bk-copy-source"
+                value={copyFromSourceId}
+                onChange={(e) => setCopyFromSourceId(e.target.value)}
+                style={inputStyle}
+                data-testid="brand-kits-copy-from-source"
+              >
+                <option value="">— Select a source —</option>
+                {kits
+                  .filter((k) => k.id !== copyFromAnchor.id)
+                  .map((k) => (
+                    <option key={k.id} value={k.id}>
+                      {subBrandLabel(k.subBrand)} v{k.version}{k.isActive ? " (active)" : ""}
+                    </option>
+                  ))}
+              </select>
+            </div>
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 12 }}>
+              <button type="button" onClick={() => setCopyFromOpen(false)} style={secondaryBtn}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleCopyFromSubmit}
+                style={primaryBtn}
+                disabled={!copyFromSourceId}
+                data-testid="brand-kits-copy-from-submit"
+              >
+                Copy assets
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── W4.A G099 — UI helper subcomponents ────────────────────────────────
+
+function UploadableUrlField({ id, label, placeholder, value, onChange, onUpload, fileInputRef }) {
+  const inputId = `${id}-file`;
+  return (
+    <div style={fieldRow}>
+      <label htmlFor={id} style={labelStyle}>{label}</label>
+      <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+        <input
+          id={id}
+          type="url"
+          placeholder={placeholder}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          style={{ ...inputStyle, flex: 1 }}
+        />
+        <input
+          ref={(el) => {
+            if (fileInputRef && fileInputRef.current) fileInputRef.current[id] = el;
+          }}
+          id={inputId}
+          type="file"
+          accept="image/png,image/jpeg,image/webp,image/svg+xml,image/x-icon"
+          style={{ display: "none" }}
+          onChange={(e) => onUpload(e.target.files && e.target.files[0])}
+          data-testid={`brand-kits-upload-input-${id}`}
+        />
+        <button
+          type="button"
+          onClick={() => {
+            const el = fileInputRef && fileInputRef.current && fileInputRef.current[id];
+            if (el) el.click();
+          }}
+          style={{ ...secondaryBtn, padding: "6px 10px", fontSize: 12 }}
+          data-testid={`brand-kits-upload-btn-${id}`}
+          title={`Upload ${label}`}
+        >
+          <Upload size={12} /> Upload
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function WcagRow({ label, ratio }) {
+  const display = ratio == null ? "n/a" : ratio.toFixed(2) + ":1";
+  let status = "n/a";
+  let color = "var(--text-secondary)";
+  if (ratio != null) {
+    if (ratio >= 7) {
+      status = "AAA";
+      color = "#22c55e";
+    } else if (ratio >= 4.5) {
+      status = "AA";
+      color = "#22c55e";
+    } else if (ratio >= 3) {
+      status = "AA large only";
+      color = "#f59e0b";
+    } else {
+      status = "Fail";
+      color = "#f43f5e";
+    }
+  }
+  return (
+    <div
+      style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 12, gap: 8 }}
+      data-testid={`brand-kits-wcag-${label.replace(/\s+/g, "-").toLowerCase()}`}
+    >
+      <span style={{ color: "var(--text-secondary)" }}>{label}</span>
+      <span>
+        <span style={{ marginRight: 8 }}>{display}</span>
+        <span style={{ color, fontWeight: 600 }}>{status}</span>
+      </span>
+    </div>
+  );
+}
+
+function LivePreview({ form }) {
+  const fontStack = form.fontFamily || form.bodyFontFamily || "system-ui, sans-serif";
+  const headingStack = form.headingFontFamily || fontStack;
+  return (
+    <div
+      data-testid="brand-kits-live-preview"
+      style={{
+        border: "1px solid var(--border-color)",
+        borderRadius: 8,
+        padding: 0,
+        overflow: "hidden",
+        background: form.bgColor || "#fff",
+        color: form.textColor || "#1a1a1a",
+        fontFamily: fontStack,
+      }}
+    >
+      <div
+        style={{
+          padding: "10px 14px",
+          background: form.primaryColor || "#265855",
+          color: "#fff",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+        }}
+      >
+        <strong style={{ fontFamily: headingStack, fontSize: 13 }}>
+          {form.tagline || "Brand preview"}
+        </strong>
+        {form.supportEmail && (
+          <span style={{ fontSize: 11, opacity: 0.85 }}>{form.supportEmail}</span>
+        )}
+      </div>
+      <div style={{ padding: 12, fontSize: 13 }}>
+        <p style={{ margin: "0 0 8px", fontFamily: headingStack, fontSize: 14, fontWeight: 600 }}>
+          Sample heading
+        </p>
+        <p style={{ margin: "0 0 10px" }}>
+          The quick brown fox jumps over the lazy dog.
+        </p>
+        <button
+          type="button"
+          style={{
+            background: form.primaryColor || "#265855",
+            color: "#fff",
+            border: "none",
+            padding: "6px 12px",
+            borderRadius: 4,
+            fontSize: 12,
+            cursor: "default",
+          }}
+        >
+          Call to action
+        </button>
+        {form.footerText && (
+          <p style={{ margin: "10px 0 0", fontSize: 11, color: form.textColor || "var(--text-secondary)" }}>
+            {form.footerText}
+          </p>
+        )}
+      </div>
     </div>
   );
 }
@@ -608,7 +1255,7 @@ export default function BrandKits() {
 /* ────────────────────────────────────────────────────────────────────────
  * Card subcomponent — the visual summary of one BrandKit row.
  * ──────────────────────────────────────────────────────────────────────── */
-function BrandKitCard({ kit, onActivate, onEdit, onDelete }) {
+function BrandKitCard({ kit, onActivate, onEdit, onDelete, onVersions, onCopyFrom }) {
   const swatches = [
     ["primary", kit.primaryColor],
     ["secondary", kit.secondaryColor],
@@ -751,6 +1398,24 @@ function BrandKitCard({ kit, onActivate, onEdit, onDelete }) {
           data-testid={`brand-kit-delete-${kit.id}`}
         >
           <Trash2 size={12} /> Delete
+        </button>
+        <button
+          type="button"
+          onClick={() => onVersions(kit)}
+          style={{ ...secondaryBtn, padding: "6px 10px", fontSize: 12 }}
+          data-testid={`brand-kit-versions-${kit.id}`}
+          title={`View version history for ${subBrandLabel(kit.subBrand)}`}
+        >
+          <History size={12} /> Versions
+        </button>
+        <button
+          type="button"
+          onClick={() => onCopyFrom(kit)}
+          style={{ ...secondaryBtn, padding: "6px 10px", fontSize: 12 }}
+          data-testid={`brand-kit-copy-from-${kit.id}`}
+          title="Copy assets from another sub-brand's kit"
+        >
+          <CopyIcon size={12} /> Copy from
         </button>
       </div>
     </div>

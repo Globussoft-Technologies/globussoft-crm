@@ -556,3 +556,296 @@ describe('GET /api/brand-kits?fields=summary — slim-shape opt-in', () => {
     expect(arg.select).toBeUndefined();
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────
+// W4.A G099 — Admin extension endpoints (versions / revert / copy-from / upload)
+// ─────────────────────────────────────────────────────────────────────────
+//
+// upload is multipart/form-data with multer disk-write side-effects — we
+// don't exercise the disk path in unit tests (covered by the dedicated
+// brandAssetValidation.test.js + the e2e spec); here we pin:
+//   - GET /:id/versions returns descending version list for same
+//     (tenantId, subBrand) tuple
+//   - POST /:id/revert/:version creates a NEW version copying source
+//     asset fields + auto-activates with demotion
+//   - POST /:id/copy-from/:sourceId creates a draft (isActive=false)
+//     version copying source asset fields
+//   - 404 on missing source version / source kit
+//   - non-ADMIN 403 on revert + copy-from
+describe('GET /api/brand-kits/:id/versions', () => {
+  test('returns descending version list for same (tenantId, subBrand) tuple', async () => {
+    prisma.brandKit.findFirst.mockResolvedValueOnce({ id: 50, subBrand: 'tmc' }); // anchor
+    prisma.brandKit.findMany.mockResolvedValueOnce([
+      { id: 52, tenantId: 1, subBrand: 'tmc', version: 3, isActive: true },
+      { id: 51, tenantId: 1, subBrand: 'tmc', version: 2, isActive: false },
+      { id: 50, tenantId: 1, subBrand: 'tmc', version: 1, isActive: false },
+    ]);
+
+    const res = await request(makeApp())
+      .get('/api/brand-kits/50/versions')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(3);
+    expect(res.body.versions.map((v) => v.version)).toEqual([3, 2, 1]);
+    expect(prisma.brandKit.findMany).toHaveBeenCalledWith({
+      where: { tenantId: 1, subBrand: 'tmc' },
+      orderBy: { version: 'desc' },
+    });
+  });
+
+  test('cross-tenant anchor returns 404', async () => {
+    prisma.brandKit.findFirst.mockResolvedValueOnce(null);
+    const res = await request(makeApp())
+      .get('/api/brand-kits/9999/versions')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(404);
+    expect(res.body).toMatchObject({ code: 'NOT_FOUND' });
+  });
+
+  test('non-numeric id returns 400 INVALID_ID', async () => {
+    const res = await request(makeApp())
+      .get('/api/brand-kits/abc/versions')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_ID' });
+  });
+});
+
+describe('POST /api/brand-kits/:id/revert/:version', () => {
+  test('creates new version copying source asset fields + auto-activates with demotion', async () => {
+    // anchor lookup → returns subBrand context
+    prisma.brandKit.findFirst.mockResolvedValueOnce({ id: 60, subBrand: 'tmc' });
+    // source version lookup → v2 with one set of asset values
+    prisma.brandKit.findFirst.mockResolvedValueOnce({
+      id: 60,
+      tenantId: 1,
+      subBrand: 'tmc',
+      version: 2,
+      primaryColor: '#265855',
+      logoUrl: 'https://cdn.example/old-logo.png',
+      tagline: 'Old tagline',
+      // Extended G089 fields populated to confirm carry-through
+      wordmarkUrl: 'https://cdn.example/wordmark.svg',
+      supportEmail: 'support@old.example',
+    });
+    // latest-version lookup inside tx → v5 (next slot = 6)
+    prisma.brandKit.findFirst.mockResolvedValueOnce({ version: 5 });
+    prisma.brandKit.updateMany.mockResolvedValue({ count: 1 });
+    prisma.brandKit.create.mockImplementation(async (args) => ({
+      id: 99,
+      tenantId: 1,
+      subBrand: 'tmc',
+      version: args.data.version,
+      isActive: args.data.isActive,
+      ...args.data,
+    }));
+
+    const res = await request(makeApp())
+      .post('/api/brand-kits/60/revert/2')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({
+      id: 99,
+      version: 6,
+      isActive: true,
+      primaryColor: '#265855',
+      logoUrl: 'https://cdn.example/old-logo.png',
+      tagline: 'Old tagline',
+      wordmarkUrl: 'https://cdn.example/wordmark.svg',
+      supportEmail: 'support@old.example',
+    });
+    // Demotion of any existing active row fired for the same scope.
+    expect(prisma.brandKit.updateMany).toHaveBeenCalledWith({
+      where: { tenantId: 1, subBrand: 'tmc', isActive: true },
+      data: { isActive: false },
+    });
+    expect(prisma.$transaction).toHaveBeenCalled();
+  });
+
+  test('returns 404 SOURCE_VERSION_NOT_FOUND when revert target version missing', async () => {
+    prisma.brandKit.findFirst
+      .mockResolvedValueOnce({ id: 60, subBrand: 'tmc' }) // anchor
+      .mockResolvedValueOnce(null); // no source version
+
+    const res = await request(makeApp())
+      .post('/api/brand-kits/60/revert/99')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(404);
+    expect(res.body).toMatchObject({ code: 'SOURCE_VERSION_NOT_FOUND' });
+    expect(prisma.brandKit.create).not.toHaveBeenCalled();
+  });
+
+  test('non-ADMIN returns 403', async () => {
+    const res = await request(makeApp())
+      .post('/api/brand-kits/60/revert/2')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+    expect(res.status).toBe(403);
+    expect(prisma.brandKit.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/brand-kits/:id/copy-from/:sourceId', () => {
+  test('creates draft (isActive=false) version copying source asset fields', async () => {
+    // anchor lookup
+    prisma.brandKit.findFirst.mockResolvedValueOnce({ id: 70, subBrand: 'travelstall' });
+    // source kit lookup
+    prisma.brandKit.findFirst.mockResolvedValueOnce({
+      id: 50,
+      tenantId: 1,
+      subBrand: 'tmc',
+      version: 3,
+      primaryColor: '#265855',
+      logoUrl: 'https://cdn.example/tmc-logo.png',
+      missionStatement: 'Empower learners',
+      socialLinksJson: '[{"network":"instagram","url":"https://ig/tmc"}]',
+    });
+    // latest version for destination tuple
+    prisma.brandKit.findFirst.mockResolvedValueOnce({ version: 1 });
+    prisma.brandKit.create.mockImplementation(async (args) => ({
+      id: 200,
+      tenantId: 1,
+      subBrand: 'travelstall',
+      version: args.data.version,
+      isActive: args.data.isActive,
+      ...args.data,
+    }));
+
+    const res = await request(makeApp())
+      .post('/api/brand-kits/70/copy-from/50')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({
+      id: 200,
+      subBrand: 'travelstall',
+      version: 2,
+      isActive: false, // draft — NOT auto-activated
+      primaryColor: '#265855',
+      logoUrl: 'https://cdn.example/tmc-logo.png',
+      missionStatement: 'Empower learners',
+      socialLinksJson: '[{"network":"instagram","url":"https://ig/tmc"}]',
+    });
+    // copy-from does NOT auto-demote — the draft is created in non-active state.
+    expect(prisma.brandKit.updateMany).not.toHaveBeenCalled();
+  });
+
+  test('returns 404 SOURCE_NOT_FOUND when source kit missing', async () => {
+    prisma.brandKit.findFirst
+      .mockResolvedValueOnce({ id: 70, subBrand: 'travelstall' }) // anchor
+      .mockResolvedValueOnce(null); // no source kit
+
+    const res = await request(makeApp())
+      .post('/api/brand-kits/70/copy-from/9999')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(404);
+    expect(res.body).toMatchObject({ code: 'SOURCE_NOT_FOUND' });
+    expect(prisma.brandKit.create).not.toHaveBeenCalled();
+  });
+
+  test('non-ADMIN returns 403', async () => {
+    const res = await request(makeApp())
+      .post('/api/brand-kits/70/copy-from/50')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+    expect(res.status).toBe(403);
+    expect(prisma.brandKit.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/brand-kits/upload — multer-gated', () => {
+  test('rejects without assetType', async () => {
+    // Multer's memoryStorage path doesn't exercise without a real
+    // multipart body; supertest .attach() drives the multer parse.
+    const res = await request(makeApp())
+      .post('/api/brand-kits/upload')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .attach('file', Buffer.from([0x89, 0x50, 0x4e, 0x47]), {
+        filename: 'tiny.png',
+        contentType: 'image/png',
+      });
+
+    // No assetType in form → 400 INVALID_ASSET_TYPE.
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_ASSET_TYPE' });
+  });
+
+  test('non-ADMIN returns 403', async () => {
+    const res = await request(makeApp())
+      .post('/api/brand-kits/upload')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`)
+      .field('assetType', 'logo');
+    expect(res.status).toBe(403);
+  });
+});
+
+describe('G089 — extended branding fields round-trip on POST /api/brand-kits', () => {
+  test('all FR-3.1.a-g fields flow through to prisma.create.data', async () => {
+    prisma.brandKit.findFirst.mockResolvedValue(null);
+    prisma.brandKit.create.mockImplementation(async (args) => ({
+      id: 300,
+      tenantId: 1,
+      ...args.data,
+    }));
+
+    const payload = {
+      subBrand: 'tmc',
+      // FR-3.1.a — wordmark + hero
+      wordmarkUrl: 'https://cdn.example/wordmark.svg',
+      heroUrl: 'https://cdn.example/hero.jpg',
+      // FR-3.1.b — status badges
+      successBadge: '#22c55e',
+      warningBadge: '#f59e0b',
+      // FR-3.1.c — typography slots
+      headingFontFamily: 'Cardo, serif',
+      headingFontUrl: 'https://fonts.googleapis.com/css2?family=Cardo',
+      bodyFontFamily: 'Inter, sans-serif',
+      bodyFontUrl: 'https://fonts.googleapis.com/css2?family=Inter',
+      codeFontFamily: 'JetBrains Mono',
+      codeFontUrl: 'https://fonts.googleapis.com/css2?family=JetBrains+Mono',
+      // FR-3.1.d — CMYK
+      cmykPrimary: '90,40,50,40',
+      cmykSecondary: '0,50,60,10',
+      cmykAccent: '20,30,80,5',
+      // FR-3.1.e — invoice / email
+      signatureTemplate: '<p>--<br/>{{name}}<br/>{{email}}</p>',
+      headerImageUrl: 'https://cdn.example/invoice-header.png',
+      footerText: 'GST 27ABCDE1234F1Z5 · CIN U63040MH2018PTC305555',
+      invoiceStampUrl: 'https://cdn.example/stamp.png',
+      // FR-3.1.f — portal / microsite copy
+      missionStatement: 'Plan curriculum-aligned school trips',
+      // FR-3.1.g — contact
+      supportEmail: 'help@tmc.example',
+      supportPhone: '+91-9999999999',
+      socialLinksJson: '[{"network":"instagram","url":"https://ig/tmc"}]',
+    };
+
+    const res = await request(makeApp())
+      .post('/api/brand-kits')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send(payload);
+
+    expect(res.status).toBe(201);
+    const createArg = prisma.brandKit.create.mock.calls[0][0].data;
+    expect(createArg.wordmarkUrl).toBe('https://cdn.example/wordmark.svg');
+    expect(createArg.heroUrl).toBe('https://cdn.example/hero.jpg');
+    expect(createArg.successBadge).toBe('#22c55e');
+    expect(createArg.warningBadge).toBe('#f59e0b');
+    expect(createArg.headingFontFamily).toBe('Cardo, serif');
+    expect(createArg.bodyFontFamily).toBe('Inter, sans-serif');
+    expect(createArg.codeFontFamily).toBe('JetBrains Mono');
+    expect(createArg.cmykPrimary).toBe('90,40,50,40');
+    expect(createArg.cmykSecondary).toBe('0,50,60,10');
+    expect(createArg.cmykAccent).toBe('20,30,80,5');
+    expect(createArg.signatureTemplate).toContain('{{name}}');
+    expect(createArg.headerImageUrl).toBe('https://cdn.example/invoice-header.png');
+    expect(createArg.footerText).toContain('GST 27ABCDE1234F1Z5');
+    expect(createArg.invoiceStampUrl).toBe('https://cdn.example/stamp.png');
+    expect(createArg.missionStatement).toBe('Plan curriculum-aligned school trips');
+    expect(createArg.supportEmail).toBe('help@tmc.example');
+    expect(createArg.supportPhone).toBe('+91-9999999999');
+    expect(createArg.socialLinksJson).toContain('instagram');
+  });
+});

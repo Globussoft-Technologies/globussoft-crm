@@ -624,4 +624,235 @@ describe('<BrandKits /> — page surface', () => {
       expect(call).toBeTruthy();
     });
   });
+
+  // ────────────────────────────────────────────────────────────────────────
+  // W4.A G099 — extended admin surface: WCAG checker + live preview +
+  // advanced fields + version history + revert + copy-from.
+  // ────────────────────────────────────────────────────────────────────────
+
+  it('w4a: WCAG checker renders text-vs-background AND primary-vs-background rows in the modal', async () => {
+    render(<BrandKits />);
+    await waitFor(() => expect(screen.getByTestId('brand-kit-card-10')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('brand-kits-new-btn'));
+    expect(screen.getByTestId('brand-kits-wcag-checker')).toBeInTheDocument();
+    // Both contrast rows render with the WCAG-row test-ids.
+    expect(screen.getByTestId('brand-kits-wcag-text-vs-background')).toBeInTheDocument();
+    expect(screen.getByTestId('brand-kits-wcag-primary-vs-background')).toBeInTheDocument();
+  });
+
+  it('w4a: live preview pane renders inside the modal', async () => {
+    render(<BrandKits />);
+    await waitFor(() => expect(screen.getByTestId('brand-kit-card-10')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('brand-kits-new-btn'));
+    expect(screen.getByTestId('brand-kits-live-preview')).toBeInTheDocument();
+  });
+
+  it('w4a: advanced section collapses by default; toggle reveals G089 extended fields', async () => {
+    render(<BrandKits />);
+    await waitFor(() => expect(screen.getByTestId('brand-kit-card-10')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('brand-kits-new-btn'));
+    // Hidden by default.
+    expect(screen.queryByTestId('brand-kits-advanced-section')).toBeNull();
+    // Toggle reveals the section with the new fields.
+    fireEvent.click(screen.getByTestId('brand-kits-advanced-toggle'));
+    expect(screen.getByTestId('brand-kits-advanced-section')).toBeInTheDocument();
+    expect(screen.getByLabelText(/Wordmark URL/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Hero image URL/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Heading font family/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Body font family/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Code font family/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/CMYK primary/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Email signature template/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Invoice \/ PDF footer text/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Mission statement/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Support email/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Support phone/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Social links JSON/i)).toBeInTheDocument();
+  });
+
+  it('w4a: filling extended fields flows them through to the POST body', async () => {
+    render(<BrandKits />);
+    await waitFor(() => expect(screen.getByTestId('brand-kit-card-10')).toBeInTheDocument());
+    fetchApiMock.mockClear();
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/brand-kits' && opts?.method === 'POST') {
+        return Promise.resolve({ id: 300 });
+      }
+      return defaultFetchMock(url, opts);
+    });
+
+    fireEvent.click(screen.getByTestId('brand-kits-new-btn'));
+    fireEvent.click(screen.getByTestId('brand-kits-advanced-toggle'));
+
+    fireEvent.change(screen.getByLabelText(/Wordmark URL/i), {
+      target: { value: 'https://cdn.example/wordmark.svg' },
+    });
+    fireEvent.change(screen.getByLabelText(/Mission statement/i), {
+      target: { value: 'Plan curriculum-aligned trips' },
+    });
+    fireEvent.change(screen.getByLabelText(/Support email/i), {
+      target: { value: 'help@example.test' },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /Create Brand Kit/i }));
+
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(
+        ([url, opts]) => url === '/api/brand-kits' && opts?.method === 'POST'
+      );
+      expect(call).toBeTruthy();
+      const body = JSON.parse(call[1].body);
+      expect(body.wordmarkUrl).toBe('https://cdn.example/wordmark.svg');
+      expect(body.missionStatement).toBe('Plan curriculum-aligned trips');
+      expect(body.supportEmail).toBe('help@example.test');
+    });
+  });
+
+  it('w4a: Versions button on a card opens the version history modal + lists rows', async () => {
+    render(<BrandKits />);
+    await waitFor(() => expect(screen.getByTestId('brand-kit-card-10')).toBeInTheDocument());
+
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/brand-kits/10/versions') {
+        return Promise.resolve({
+          versions: [
+            { id: 10, subBrand: 'tmc', version: 2, isActive: true, updatedAt: '2026-01-10T00:00:00Z' },
+            { id: 11, subBrand: 'tmc', version: 1, isActive: false, updatedAt: '2026-01-05T00:00:00Z' },
+          ],
+          total: 2,
+        });
+      }
+      return defaultFetchMock(url);
+    });
+
+    fireEvent.click(screen.getByTestId('brand-kit-versions-10'));
+
+    await waitFor(() => expect(screen.getByTestId('brand-kits-versions-modal')).toBeInTheDocument());
+    expect(screen.getByTestId('brand-kits-version-row-2')).toBeInTheDocument();
+    expect(screen.getByTestId('brand-kits-version-row-1')).toBeInTheDocument();
+  });
+
+  it('w4a: clicking Revert in versions modal confirms then POSTs /:id/revert/:version', async () => {
+    render(<BrandKits />);
+    await waitFor(() => expect(screen.getByTestId('brand-kit-card-10')).toBeInTheDocument());
+
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/brand-kits/10/versions' && (!opts || !opts.method || opts.method === 'GET')) {
+        return Promise.resolve({
+          versions: [
+            { id: 10, subBrand: 'tmc', version: 2, isActive: true, updatedAt: '2026-01-10T00:00:00Z' },
+            { id: 11, subBrand: 'tmc', version: 1, isActive: false, updatedAt: '2026-01-05T00:00:00Z' },
+          ],
+          total: 2,
+        });
+      }
+      if (url === '/api/brand-kits/10/revert/1' && opts?.method === 'POST') {
+        return Promise.resolve({ id: 20, subBrand: 'tmc', version: 3, isActive: true });
+      }
+      return defaultFetchMock(url, opts);
+    });
+
+    fireEvent.click(screen.getByTestId('brand-kit-versions-10'));
+    await waitFor(() => expect(screen.getByTestId('brand-kits-version-row-1')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId('brand-kits-revert-1'));
+
+    await waitFor(() => expect(notifyConfirm).toHaveBeenCalled());
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(
+        ([url, opts]) => url === '/api/brand-kits/10/revert/1' && opts?.method === 'POST'
+      );
+      expect(call).toBeTruthy();
+    });
+  });
+
+  it('w4a: Revert button on the ACTIVE version row is disabled', async () => {
+    render(<BrandKits />);
+    await waitFor(() => expect(screen.getByTestId('brand-kit-card-10')).toBeInTheDocument());
+
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/brand-kits/10/versions') {
+        return Promise.resolve({
+          versions: [
+            { id: 10, subBrand: 'tmc', version: 2, isActive: true, updatedAt: '2026-01-10T00:00:00Z' },
+          ],
+          total: 1,
+        });
+      }
+      return defaultFetchMock(url);
+    });
+
+    fireEvent.click(screen.getByTestId('brand-kit-versions-10'));
+    await waitFor(() => expect(screen.getByTestId('brand-kits-version-row-2')).toBeInTheDocument());
+
+    const revertBtn = screen.getByTestId('brand-kits-revert-2');
+    expect(revertBtn).toBeDisabled();
+  });
+
+  it('w4a: Copy-from button opens modal; selecting a source then submitting POSTs /:id/copy-from/:sourceId', async () => {
+    render(<BrandKits />);
+    await waitFor(() => expect(screen.getByTestId('brand-kit-card-10')).toBeInTheDocument());
+
+    fetchApiMock.mockClear();
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/brand-kits/10/copy-from/20' && opts?.method === 'POST') {
+        return Promise.resolve({ id: 30, subBrand: 'tmc', version: 3, isActive: false });
+      }
+      return defaultFetchMock(url, opts);
+    });
+
+    fireEvent.click(screen.getByTestId('brand-kit-copy-from-10'));
+    expect(screen.getByTestId('brand-kits-copy-from-modal')).toBeInTheDocument();
+
+    // Select a source — id=20 is rfu kit.
+    const select = screen.getByTestId('brand-kits-copy-from-source');
+    fireEvent.change(select, { target: { value: '20' } });
+
+    fireEvent.click(screen.getByTestId('brand-kits-copy-from-submit'));
+
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(
+        ([url, opts]) => url === '/api/brand-kits/10/copy-from/20' && opts?.method === 'POST'
+      );
+      expect(call).toBeTruthy();
+    });
+  });
+
+  it('w4a: Logo URL field renders an Upload button alongside the URL input', async () => {
+    render(<BrandKits />);
+    await waitFor(() => expect(screen.getByTestId('brand-kit-card-10')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('brand-kits-new-btn'));
+
+    // Logo URL pair — input + Upload button.
+    expect(screen.getByLabelText(/^Logo URL$/i)).toBeInTheDocument();
+    expect(screen.getByTestId('brand-kits-upload-btn-bk-logo')).toBeInTheDocument();
+    // Hidden file input is wired underneath.
+    expect(screen.getByTestId('brand-kits-upload-input-bk-logo')).toBeInTheDocument();
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────
+// Standalone unit: wcagContrastRatio() — exported helper.
+// ────────────────────────────────────────────────────────────────────────
+import { wcagContrastRatio } from '../pages/admin/BrandKits';
+
+describe('wcagContrastRatio', () => {
+  it('returns 21:1 for pure black on pure white', () => {
+    const r = wcagContrastRatio('#000000', '#FFFFFF');
+    expect(r).toBeCloseTo(21, 1);
+  });
+  it('returns 1.0 for identical colors', () => {
+    expect(wcagContrastRatio('#265855', '#265855')).toBeCloseTo(1, 5);
+  });
+  it('returns null for invalid hex', () => {
+    expect(wcagContrastRatio('not-a-hex', '#fff')).toBeNull();
+    expect(wcagContrastRatio('#fff', null)).toBeNull();
+  });
+  it('treats 3-char shorthand as expanded form', () => {
+    expect(wcagContrastRatio('#fff', '#000')).toBeCloseTo(21, 1);
+  });
+  it('passes AA for white text on a teal brand background (4.5+)', () => {
+    const r = wcagContrastRatio('#FFFFFF', '#265855');
+    expect(r).toBeGreaterThan(4.5);
+  });
 });

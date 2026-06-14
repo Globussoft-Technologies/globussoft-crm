@@ -28,6 +28,9 @@
  */
 
 const express = require("express");
+const path = require("path");
+const fs = require("fs");
+const multer = require("multer");
 const router = express.Router();
 const { verifyToken, verifyRole } = require("../middleware/auth");
 const prisma = require("../lib/prisma");
@@ -37,6 +40,56 @@ const {
   assertValidSubBrand,
 } = require("../middleware/travelGuards");
 const { writeAudit } = require("../lib/audit");
+const {
+  validateAssetUpload,
+  ASSET_CLASSES,
+} = require("../lib/brandAssetValidation");
+
+// ── W4.A G099 — Multer upload pipeline ─────────────────────────────
+// Disk-storage pattern mirrored from booking_pages.js — files land under
+// `backend/uploads/brand-kits/` and are served via the SPA's /uploads
+// static route. The directory is created on demand so a fresh checkout
+// boots without bootstrap. Buffer is kept in memory via memoryStorage()
+// so the brandAssetValidation pipeline can inspect headers BEFORE the
+// bytes hit disk (SVG XSS payload rejection + dim probing).
+const UPLOAD_DIR = path.join(__dirname, "..", "uploads", "brand-kits");
+try {
+  fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+} catch {
+  /* best-effort */
+}
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 }, // hard 5 MB ceiling (per-class tighter via validator)
+  fileFilter: (_req, file, cb) => {
+    if (/^image\/(png|jpe?g|webp|svg\+xml|x-icon|vnd\.microsoft\.icon)$/i.test(file.mimetype || "")) {
+      return cb(null, true);
+    }
+    return cb(new Error("Unsupported MIME — png/jpeg/svg/webp/ico only"));
+  },
+}).single("file");
+
+// Multer surfaces LIMIT_FILE_SIZE etc. as Error objects — translate to
+// a structured envelope so the front-end can show a useful message.
+function wrappedUpload(req, res, next) {
+  upload(req, res, (err) => {
+    if (!err) return next();
+    if (err && err.code === "LIMIT_FILE_SIZE") {
+      return res.status(400).json({
+        error: "Upload exceeds 5 MB hard cap",
+        code: "FILE_TOO_LARGE_HARD_CAP",
+      });
+    }
+    if (err && err.message) {
+      return res.status(400).json({
+        error: err.message,
+        code: "UPLOAD_REJECTED",
+      });
+    }
+    return res.status(400).json({ error: "Upload failed", code: "UPLOAD_REJECTED" });
+  });
+}
 
 // Normalises a sub-brand value coming from query/body. Treats null,
 // undefined, and empty string as "tenant-wide" (returns null). Any other
@@ -64,6 +117,28 @@ const ASSET_FIELDS = [
   "fontFamily",
   "fontUrl",
   "tagline",
+  // W4.A G089 — extended branding fields (FR-3.1.a-g)
+  "wordmarkUrl",
+  "heroUrl",
+  "successBadge",
+  "warningBadge",
+  "headingFontFamily",
+  "headingFontUrl",
+  "bodyFontFamily",
+  "bodyFontUrl",
+  "codeFontFamily",
+  "codeFontUrl",
+  "cmykPrimary",
+  "cmykSecondary",
+  "cmykAccent",
+  "signatureTemplate",
+  "headerImageUrl",
+  "footerText",
+  "invoiceStampUrl",
+  "missionStatement",
+  "supportEmail",
+  "supportPhone",
+  "socialLinksJson",
 ];
 
 function pickAssetFields(body) {
@@ -85,6 +160,129 @@ function pickAssetFields(body) {
   }
   return out;
 }
+
+// ─── Public endpoint ────────────────────────────────────────────────
+//
+// GET /api/brand-kits/by-subbrand/:subBrand  (no auth)
+//
+// G092 (PRD_TRAVEL_PER_SUBBRAND_BRANDING FR-3.3.f / FR-3.3.i / FR-3.3.g)
+// — Public consumer surface for the customer portal, the public trip
+// microsite, the embed widget, and the public landing page. Each of
+// those surfaces needs the active brand kit BEFORE the customer logs
+// in (the login screen / landing page itself must carry sub-brand
+// chrome).
+//
+// Sub-path is allowlisted in server.js's global auth guard with a
+// regex bypass scoped to /brand-kits/by-subbrand/:sub (GET only). The
+// handler returns ONLY public-safe fields:
+//
+//   - logoUrl, logoDarkUrl, faviconUrl, wordmarkUrl, heroUrl,
+//     headerImageUrl, invoiceStampUrl
+//   - primaryColor, secondaryColor, accentColor, bgColor, textColor
+//   - fontFamily, fontUrl, headingFontFamily, bodyFontFamily
+//   - tagline, footerText, missionStatement, supportEmail, supportPhone,
+//     socialLinksJson
+//
+// Explicitly NOT returned: id, tenantId, version, createdBy, isActive,
+// createdAt, updatedAt, signatureTemplate (no audit / version enumeration
+// via the public path; signatureTemplate is internal-only email body
+// content not meant for the public chrome).
+//
+// Tenant resolution: ?tenantId=N when supplied — otherwise the single
+// travel-vertical tenant (Travel Stall tenant per Q25 — multi-travel-
+// tenant deployments must pass ?tenantId explicitly to disambiguate).
+// 404 when no active brand kit exists for (tenantId, subBrand) — the
+// frontend consumer falls back to the default palette.
+const PUBLIC_BRAND_KIT_SELECT = {
+  logoUrl: true,
+  logoDarkUrl: true,
+  faviconUrl: true,
+  wordmarkUrl: true,
+  heroUrl: true,
+  headerImageUrl: true,
+  invoiceStampUrl: true,
+  primaryColor: true,
+  secondaryColor: true,
+  accentColor: true,
+  bgColor: true,
+  textColor: true,
+  fontFamily: true,
+  fontUrl: true,
+  headingFontFamily: true,
+  headingFontUrl: true,
+  bodyFontFamily: true,
+  bodyFontUrl: true,
+  tagline: true,
+  footerText: true,
+  missionStatement: true,
+  supportEmail: true,
+  supportPhone: true,
+  socialLinksJson: true,
+};
+
+router.get("/by-subbrand/:subBrand", async (req, res) => {
+  try {
+    const subBrand = String(req.params.subBrand || "");
+    // Reject "_" / "null" / empty — the public endpoint only resolves
+    // NAMED sub-brands (tenant-wide null kits aren't exposed publicly).
+    if (!subBrand || subBrand === "_" || subBrand === "null") {
+      return res.status(400).json({
+        error: "subBrand path segment required (one of tmc, rfu, travelstall, visasure)",
+        code: "MISSING_SUB_BRAND",
+      });
+    }
+    try {
+      assertValidSubBrand(subBrand);
+    } catch (e) {
+      return res.status(400).json({
+        error: e.message || "Invalid sub-brand",
+        code: e.code || "INVALID_SUB_BRAND",
+      });
+    }
+
+    // Tenant resolution: explicit ?tenantId wins; else fall back to the
+    // single travel-vertical tenant. Multi-travel-tenant deployments
+    // (uncommon) MUST pass ?tenantId — otherwise the resolver returns
+    // the first travel tenant by id (deterministic, but ambiguous).
+    let tenantId = null;
+    if (req.query && req.query.tenantId !== undefined) {
+      const n = parseInt(String(req.query.tenantId), 10);
+      if (!Number.isFinite(n)) {
+        return res.status(400).json({ error: "tenantId must be a number", code: "INVALID_TENANT_ID" });
+      }
+      tenantId = n;
+    } else {
+      const travel = await prisma.tenant.findFirst({
+        where: { vertical: "travel" },
+        select: { id: true },
+        orderBy: { id: "asc" },
+      });
+      if (!travel) {
+        return res.status(404).json({
+          error: "No travel tenant configured; pass ?tenantId explicitly",
+          code: "NO_TRAVEL_TENANT",
+        });
+      }
+      tenantId = travel.id;
+    }
+
+    const brandKit = await prisma.brandKit.findFirst({
+      where: { tenantId, subBrand, isActive: true },
+      select: PUBLIC_BRAND_KIT_SELECT,
+    });
+    if (!brandKit) {
+      return res.status(404).json({
+        error: "No active brand kit for that sub-brand",
+        code: "BRAND_KIT_NOT_FOUND",
+      });
+    }
+    res.json({ subBrand, brandKit });
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error("[brand-kits] by-subbrand error:", e.message);
+    res.status(500).json({ error: "Failed to resolve public brand kit" });
+  }
+});
 
 // GET /api/brand-kits
 // Honors ?subBrand=tmc (filter — empty string / "null" means tenant-wide),
@@ -444,6 +642,354 @@ router.delete(
       if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
       console.error("[brand-kits] delete error:", e.message);
       res.status(500).json({ error: "Failed to delete brand kit" });
+    }
+  },
+);
+
+// ─────────────────────────────────────────────────────────────────────────
+// W4.A G099 — Admin extension endpoints
+// ─────────────────────────────────────────────────────────────────────────
+//
+//   POST   /api/brand-kits/upload                — Multer upload + validation
+//   GET    /api/brand-kits/:id/versions          — version history
+//   POST   /api/brand-kits/:id/revert/:version   — revert to prior version
+//   POST   /api/brand-kits/:id/copy-from/:sourceId — copy assets from another kit
+//
+// All four are ADMIN-gated. The upload endpoint is multipart/form-data —
+// every other surface stays JSON for symmetry with the v1 endpoints.
+
+/**
+ * POST /api/brand-kits/upload — ADMIN only.
+ *
+ * multipart/form-data:
+ *   - file        — the binary upload (Multer field name "file")
+ *   - assetType   — string key from ASSET_CLASSES (logo / wordmark / favicon /
+ *                   hero / headerImage / stamp); validates per-class caps.
+ *   - subBrand    — optional sub-brand scope for the destination path; if
+ *                   absent, the asset lands in the tenant-wide bucket.
+ *
+ * Response: { url, mime, ext, width, height, sizeBytes, assetType }.
+ *
+ * On success the file is written to:
+ *   backend/uploads/brand-kits/<tenantId>/<subBrand|_>/<assetType>-<stamp>.<ext>
+ * and the returned `url` is the public path the operator pastes into the
+ * BrandKit form (or that the front-end auto-populates).
+ */
+router.post(
+  "/upload",
+  verifyToken,
+  verifyRole(["ADMIN"]),
+  wrappedUpload,
+  async (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ error: "No file provided", code: "NO_FILE" });
+      }
+      const assetType = String(req.body?.assetType || "").trim();
+      if (!assetType || !ASSET_CLASSES[assetType]) {
+        return res.status(400).json({
+          error: `assetType must be one of ${Object.keys(ASSET_CLASSES).join(", ")}`,
+          code: "INVALID_ASSET_TYPE",
+        });
+      }
+
+      const subBrand = normalizeSubBrand(req.body?.subBrand);
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (subBrand !== null && !canAccessSubBrand(allowed, subBrand)) {
+        return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+      }
+
+      const result = validateAssetUpload({ file: req.file, expectedType: assetType });
+      if (!result.valid) {
+        return res.status(400).json({
+          error: result.messages?.[0] || "Validation failed",
+          code: result.errors?.[0] || "VALIDATION_FAILED",
+          errors: result.errors,
+          messages: result.messages,
+        });
+      }
+
+      // Disk write — segmented by tenant + sub-brand so cross-tenant access
+      // via path-traversal stays impossible at the filesystem level.
+      const sbSegment = subBrand || "_default";
+      const targetDir = path.join(UPLOAD_DIR, String(req.user.tenantId), sbSegment);
+      try {
+        fs.mkdirSync(targetDir, { recursive: true });
+      } catch (e) {
+        console.error("[brand-kits] upload mkdir failed:", e.message);
+      }
+      const stamp = Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
+      const filename = `${assetType}-${stamp}${result.ext}`;
+      const fullPath = path.join(targetDir, filename);
+
+      // Write the SANITIZED buffer — SVG payloads have been re-encoded
+      // by sanitize-html so any silently-tolerated tag is dropped before
+      // disk write. Raster buffers pass through unchanged.
+      fs.writeFileSync(fullPath, result.sanitizedBuffer);
+
+      const url = `/uploads/brand-kits/${req.user.tenantId}/${sbSegment}/${filename}`;
+
+      await writeAudit(
+        "BrandKit",
+        "UPLOAD",
+        0, // no row id yet — operator wires the URL into a form
+        req.user.userId,
+        req.user.tenantId,
+        { assetType, subBrand, url, mime: result.mime, sizeBytes: req.file.buffer.length },
+      );
+
+      return res.status(201).json({
+        url,
+        mime: result.mime,
+        ext: result.ext,
+        width: result.width,
+        height: result.height,
+        sizeBytes: req.file.buffer.length,
+        assetType,
+      });
+    } catch (e) {
+      console.error("[brand-kits] upload error:", e.message);
+      res.status(500).json({ error: "Upload failed", code: "UPLOAD_FAILED" });
+    }
+  },
+);
+
+/**
+ * GET /api/brand-kits/:id/versions
+ *
+ * Returns every BrandKit row for the same (tenantId, subBrand) tuple as
+ * the row addressed by :id — ordered newest version first. This is the
+ * data the version-history table in the admin UI surfaces; the active
+ * row is identified via row.isActive===true (one such row at most).
+ */
+router.get("/:id/versions", verifyToken, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) {
+      return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+    }
+    const anchor = await prisma.brandKit.findFirst({
+      where: { id, tenantId: req.user.tenantId },
+      select: { id: true, subBrand: true },
+    });
+    if (!anchor) {
+      return res.status(404).json({ error: "Brand kit not found", code: "NOT_FOUND" });
+    }
+
+    const allowed = await getSubBrandAccessSet(req.user.userId);
+    if (anchor.subBrand !== null && !canAccessSubBrand(allowed, anchor.subBrand)) {
+      return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+    }
+
+    const versions = await prisma.brandKit.findMany({
+      where: { tenantId: req.user.tenantId, subBrand: anchor.subBrand },
+      orderBy: { version: "desc" },
+    });
+    res.json({ versions, total: versions.length });
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error("[brand-kits] versions error:", e.message);
+    res.status(500).json({ error: "Failed to list versions" });
+  }
+});
+
+/**
+ * POST /api/brand-kits/:id/revert/:version — ADMIN only.
+ *
+ * Reverts the (tenantId, subBrand) chain to the asset shape of the named
+ * `:version` by CREATING A NEW VERSION at the next slot that copies the
+ * source version's asset fields. The revert is non-destructive — older
+ * versions stay in place; the new top version simply mirrors the chosen
+ * historical shape.
+ *
+ * Activation policy: the new revert version is auto-activated, which
+ * atomically demotes any currently-active row for the same tuple.
+ */
+router.post(
+  "/:id/revert/:version",
+  verifyToken,
+  verifyRole(["ADMIN"]),
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      const sourceVersion = parseInt(req.params.version, 10);
+      if (!Number.isFinite(id) || !Number.isFinite(sourceVersion)) {
+        return res.status(400).json({ error: "id and version must be numbers", code: "INVALID_ID" });
+      }
+
+      const anchor = await prisma.brandKit.findFirst({
+        where: { id, tenantId: req.user.tenantId },
+        select: { id: true, subBrand: true },
+      });
+      if (!anchor) {
+        return res.status(404).json({ error: "Brand kit not found", code: "NOT_FOUND" });
+      }
+
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (anchor.subBrand !== null && !canAccessSubBrand(allowed, anchor.subBrand)) {
+        return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+      }
+
+      const sourceKit = await prisma.brandKit.findFirst({
+        where: {
+          tenantId: req.user.tenantId,
+          subBrand: anchor.subBrand,
+          version: sourceVersion,
+        },
+      });
+      if (!sourceKit) {
+        return res.status(404).json({
+          error: `Source version v${sourceVersion} not found`,
+          code: "SOURCE_VERSION_NOT_FOUND",
+        });
+      }
+
+      const assetCopy = {};
+      for (const f of ASSET_FIELDS) {
+        assetCopy[f] = sourceKit[f] ?? null;
+      }
+
+      const created = await prisma.$transaction(async (tx) => {
+        const latest = await tx.brandKit.findFirst({
+          where: { tenantId: req.user.tenantId, subBrand: anchor.subBrand },
+          orderBy: { version: "desc" },
+          select: { version: true },
+        });
+        const nextVersion = (latest?.version || 0) + 1;
+
+        // Auto-activate the revert version — operator intent is "make
+        // historical shape current".
+        await tx.brandKit.updateMany({
+          where: { tenantId: req.user.tenantId, subBrand: anchor.subBrand, isActive: true },
+          data: { isActive: false },
+        });
+
+        return tx.brandKit.create({
+          data: {
+            tenantId: req.user.tenantId,
+            subBrand: anchor.subBrand,
+            version: nextVersion,
+            isActive: true,
+            createdBy: req.user.userId,
+            ...assetCopy,
+          },
+        });
+      });
+
+      await writeAudit(
+        "BrandKit",
+        "REVERT",
+        created.id,
+        req.user.userId,
+        req.user.tenantId,
+        {
+          subBrand: anchor.subBrand,
+          newVersion: created.version,
+          revertedFromVersion: sourceVersion,
+        },
+      );
+
+      res.status(201).json(created);
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[brand-kits] revert error:", e.message);
+      res.status(500).json({ error: "Revert failed" });
+    }
+  },
+);
+
+/**
+ * POST /api/brand-kits/:id/copy-from/:sourceId — ADMIN only.
+ *
+ * Copies asset fields from one BrandKit row (`:sourceId`) into a new
+ * version for the (tenantId, subBrand) tuple of `:id`. Used when an
+ * operator wants to seed a new sub-brand's kit from an existing one
+ * (e.g. "Travel Stall brand mirrors TMC for now").
+ *
+ * Active flag NOT set automatically — the copied version is a draft
+ * the operator can preview before activating via the standard PUT.
+ */
+router.post(
+  "/:id/copy-from/:sourceId",
+  verifyToken,
+  verifyRole(["ADMIN"]),
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      const sourceId = parseInt(req.params.sourceId, 10);
+      if (!Number.isFinite(id) || !Number.isFinite(sourceId)) {
+        return res.status(400).json({ error: "id and sourceId must be numbers", code: "INVALID_ID" });
+      }
+
+      const anchor = await prisma.brandKit.findFirst({
+        where: { id, tenantId: req.user.tenantId },
+        select: { id: true, subBrand: true },
+      });
+      if (!anchor) {
+        return res.status(404).json({ error: "Destination brand kit not found", code: "NOT_FOUND" });
+      }
+      const sourceKit = await prisma.brandKit.findFirst({
+        where: { id: sourceId, tenantId: req.user.tenantId },
+      });
+      if (!sourceKit) {
+        return res.status(404).json({ error: "Source brand kit not found", code: "SOURCE_NOT_FOUND" });
+      }
+
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (anchor.subBrand !== null && !canAccessSubBrand(allowed, anchor.subBrand)) {
+        return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+      }
+      if (sourceKit.subBrand !== null && !canAccessSubBrand(allowed, sourceKit.subBrand)) {
+        return res.status(403).json({
+          error: "Source sub-brand access denied",
+          code: "SOURCE_SUB_BRAND_DENIED",
+        });
+      }
+
+      const assetCopy = {};
+      for (const f of ASSET_FIELDS) {
+        assetCopy[f] = sourceKit[f] ?? null;
+      }
+
+      const created = await prisma.$transaction(async (tx) => {
+        const latest = await tx.brandKit.findFirst({
+          where: { tenantId: req.user.tenantId, subBrand: anchor.subBrand },
+          orderBy: { version: "desc" },
+          select: { version: true },
+        });
+        const nextVersion = (latest?.version || 0) + 1;
+        return tx.brandKit.create({
+          data: {
+            tenantId: req.user.tenantId,
+            subBrand: anchor.subBrand,
+            version: nextVersion,
+            isActive: false,
+            createdBy: req.user.userId,
+            ...assetCopy,
+          },
+        });
+      });
+
+      await writeAudit(
+        "BrandKit",
+        "COPY_FROM",
+        created.id,
+        req.user.userId,
+        req.user.tenantId,
+        {
+          subBrand: anchor.subBrand,
+          newVersion: created.version,
+          copiedFromKitId: sourceId,
+          copiedFromSubBrand: sourceKit.subBrand,
+          copiedFromVersion: sourceKit.version,
+        },
+      );
+
+      res.status(201).json(created);
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[brand-kits] copy-from error:", e.message);
+      res.status(500).json({ error: "Copy-from failed" });
     }
   },
 );

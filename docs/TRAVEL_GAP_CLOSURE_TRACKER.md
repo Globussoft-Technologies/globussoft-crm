@@ -224,7 +224,7 @@ Most content (logos / palettes / fonts) blocked on Q22; surface wiring is builda
 
 | ID | Slice | Files | Effort | Status |
 |---|---|---|---|---|
-| G089 | BrandKit schema extension: wordmark, hero, successBadge, warningBadge, heading/body/code font slots, CMYK colours, signatureTemplate, headerImage, footerText, invoiceStampUrl, missionStatement, supportEmail, supportPhone, socialLinks (FR-3.1.a-g) | schema (additive) + admin UI | 2d | ⬜ |
+| G089 | BrandKit schema extension: wordmark, hero, successBadge, warningBadge, heading/body/code font slots, CMYK colours, signatureTemplate, headerImage, footerText, invoiceStampUrl, missionStatement, supportEmail, supportPhone, socialLinks (FR-3.1.a-g) | schema (additive) + admin UI | 2d | ✅ DONE 2026-06-14 — `04de02d4` |
 | G090 | Email template brand-kit consumer (FR-3.1.d, FR-3.3.d) | `lib/emailRender.js` extension | 1.5d | ⬜ |
 | G091 | PDF voucher / itinerary / consent brand-kit consumers (invoice already partial) (FR-3.3.c) | `services/pdfRenderer.js` extensions | 2d | ⬜ |
 | G092 | Customer portal brand-kit consumer (FR-3.3.f) | `pages/travel/TravelCustomerPortal.jsx` | 1d | ⬜ |
@@ -233,9 +233,9 @@ Most content (logos / palettes / fonts) blocked on Q22; surface wiring is builda
 | G095 | Microsite brand-kit consumer (FR-3.3.i) | `routes/travel_microsites.js` + `PublicTripMicrosite.jsx` | 1d | ⬜ |
 | G096 | Sidebar pinned-logo render (FR-3.3.a) | `components/Sidebar.jsx` | 0.5d | ⬜ |
 | G097 | Email send-time sub-brand resolve (FR-3.4.d) | email service | 1d | ⬜ |
-| G098 | `Tenant.defaultSubBrand` fallback column (FR-3.4.f) | schema (additive nullable) | 0.5d | ⬜ |
-| G099 | BrandKit admin: Multer upload + WCAG checker + live preview + copy-from-sub-brand + version revert UI (FR-3.2.c, d, f, g, h) | `routes/brand_kits.js` + admin/BrandKits.jsx | 3d | ⬜ |
-| G100 | Upload validation pipeline (size/dims/MIME/server-side scan) (FR-3.5.a-f) | Multer + validation lib | 1.5d | ⬜ |
+| G098 | `Tenant.defaultSubBrand` fallback column (FR-3.4.f) | schema (additive nullable) | 0.5d | ✅ DONE 2026-06-14 — `04de02d4` |
+| G099 | BrandKit admin: Multer upload + WCAG checker + live preview + copy-from-sub-brand + version revert UI (FR-3.2.c, d, f, g, h) | `routes/brand_kits.js` + admin/BrandKits.jsx | 3d | ✅ DONE 2026-06-14 — `04de02d4` |
+| G100 | Upload validation pipeline (size/dims/MIME/server-side scan) (FR-3.5.a-f) | Multer + validation lib | 1.5d | ✅ DONE 2026-06-14 — `04de02d4` |
 | G101 | SMS/WhatsApp display-name interpolation per sub-brand (FR-3.3.e) | `lib/subBrandConfig.js` + SMS/WA services | 1d | ⬜ |
 | G102 | CRM operator pages accent: swap consumer code from `travelSubBrand.js` color map → BrandKit (FR-3.3.b) | grep + sweep | 1.5d | ⬜ |
 

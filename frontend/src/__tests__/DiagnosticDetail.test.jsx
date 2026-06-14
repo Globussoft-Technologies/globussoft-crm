@@ -218,7 +218,7 @@ describe('DiagnosticDetail — advisor brief UI (PRD §4.1 + §4.2)', () => {
     fetchApiMock.mockImplementation(makeFetchImpl(DIAGNOSTIC_WITH_BRIEF));
     renderPage();
     await screen.findByRole('heading', { name: /Diagnostic #42/i });
-    const brief = await screen.findByTestId('talking-points-text');
+    const brief = await screen.findByTestId('brief-body-advisor_brief');
     expect(brief.textContent).toMatch(/high interest in Umrah/i);
     expect(screen.getByText(/claude-3-opus-20240229/i)).toBeTruthy();
     // Regenerate (not Generate) is the CTA when a brief already exists.
@@ -229,7 +229,7 @@ describe('DiagnosticDetail — advisor brief UI (PRD §4.1 + §4.2)', () => {
     fetchApiMock.mockImplementation(makeFetchImpl(DIAGNOSTIC_WITH_STUB_BRIEF));
     renderPage();
     await screen.findByRole('heading', { name: /Diagnostic #42/i });
-    await screen.findByTestId('talking-points-text');
+    await screen.findByTestId('brief-body-advisor_brief');
     const pills = screen.getAllByText('STUB');
     expect(pills.length).toBeGreaterThanOrEqual(1);
   });
@@ -434,7 +434,7 @@ describe('DiagnosticDetail — advisor brief UI (PRD §4.1 + §4.2)', () => {
     fetchApiMock.mockImplementation(makeFetchImpl(DIAGNOSTIC_WITH_BRIEF));
     renderPage();
     await screen.findByRole('heading', { name: /Diagnostic #42/i });
-    await screen.findByTestId('talking-points-text');
+    await screen.findByTestId('brief-body-advisor_brief');
 
     // Meta line surfaces "stub: no" when the persisted envelope is real.
     expect(screen.getByText(/stub:\s*no/i)).toBeTruthy();
@@ -657,7 +657,7 @@ describe('DiagnosticDetail — advisor brief UI (PRD §4.1 + §4.2)', () => {
     fetchApiMock.mockImplementation(makeFetchImpl(diagWithObjectEnvelope));
     renderPage();
     await screen.findByRole('heading', { name: /Diagnostic #42/i });
-    const brief = await screen.findByTestId('talking-points-text');
+    const brief = await screen.findByTestId('brief-body-advisor_brief');
     expect(brief.textContent).toMatch(/high interest in Umrah/i);
     expect(screen.getByText(/claude-3-opus-20240229/i)).toBeTruthy();
   });
@@ -763,7 +763,10 @@ describe('DiagnosticDetail — advisor brief UI (PRD §4.1 + §4.2)', () => {
     expect(screen.getByText(/\(empty\)/)).toBeTruthy();
   });
 
-  it('envelope.text=null falls back to "(no text returned)" placeholder', async () => {
+  it('envelope.text="" falls back to "(no brief content returned)" empty state', async () => {
+    // G104 — when envelope.text is empty the parseBriefSections helper returns
+    // [], so the SUT renders the empty-state status box rather than an
+    // empty <details> body. Match the new copy.
     const emptyTextEnvelope = { ...TALKING_POINTS_ENVELOPE, text: '' };
     const diagWithEmpty = {
       ...DIAGNOSTIC_NO_BRIEF,
@@ -772,8 +775,7 @@ describe('DiagnosticDetail — advisor brief UI (PRD §4.1 + §4.2)', () => {
     fetchApiMock.mockImplementation(makeFetchImpl(diagWithEmpty));
     renderPage();
     await screen.findByRole('heading', { name: /Diagnostic #42/i });
-    const brief = await screen.findByTestId('talking-points-text');
-    expect(brief.textContent).toMatch(/\(no text returned\)/i);
+    expect(await screen.findByText(/\(no brief content returned\)/i)).toBeTruthy();
   });
 
   it('regen in-flight button copy flips to "Working…" while POST is pending', async () => {
@@ -796,7 +798,7 @@ describe('DiagnosticDetail — advisor brief UI (PRD §4.1 + §4.2)', () => {
     });
     // Release the pending promise so React doesn't carry a leaked state into the next test.
     resolveRegen({ diagnostic: DIAGNOSTIC_WITH_BRIEF, talkingPoints: TALKING_POINTS_ENVELOPE });
-    await screen.findByTestId('talking-points-text');
+    await screen.findByTestId('brief-body-advisor_brief');
   });
 
   it('compare in-flight button copy flips to "Comparing…" while the POST is pending', async () => {
@@ -883,7 +885,7 @@ describe('DiagnosticDetail — advisor brief UI (PRD §4.1 + §4.2)', () => {
       // load() re-fires the GET — expect a SECOND /api/travel/diagnostics/42 call.
       expect(getCalls).toBe(2);
     });
-    await screen.findByTestId('talking-points-text');
+    await screen.findByTestId('brief-body-advisor_brief');
   });
 
   // ─── T11 — human_pick recorder (DD-5.7) + collapsible engine output ─

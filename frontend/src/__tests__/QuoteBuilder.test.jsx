@@ -663,7 +663,12 @@ describe('<QuoteBuilder /> — Duplicate (cascade-tolerant)', () => {
     });
     renderPage();
     await screen.findByText(/#42/);
+    // G017 — Duplicate now opens a modal first (clone-with-margin UX).
+    // The toolbar button opens the modal; the "Clone" button inside fires
+    // the POST. Leaving the markup input blank keeps the raw-clone path
+    // (no marginPercent in body), which is what this 404 cascade test pins.
     fireEvent.click(screen.getByRole('button', { name: /Duplicate/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /Confirm duplicate/i }));
     await waitFor(() => {
       const dup = fetchApiMock.mock.calls.find(
         ([u, o]) => u === '/api/travel/quotes/42/duplicate' && o?.method === 'POST',

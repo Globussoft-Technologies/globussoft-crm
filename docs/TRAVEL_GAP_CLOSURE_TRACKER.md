@@ -226,11 +226,11 @@ Most content (logos / palettes / fonts) blocked on Q22; surface wiring is builda
 |---|---|---|---|---|
 | G089 | BrandKit schema extension: wordmark, hero, successBadge, warningBadge, heading/body/code font slots, CMYK colours, signatureTemplate, headerImage, footerText, invoiceStampUrl, missionStatement, supportEmail, supportPhone, socialLinks (FR-3.1.a-g) | schema (additive) + admin UI | 2d | ✅ DONE 2026-06-14 — `04de02d4` |
 | G090 | Email template brand-kit consumer (FR-3.1.d, FR-3.3.d) | `lib/emailRender.js` extension | 1.5d | ⬜ |
-| G091 | PDF voucher / itinerary / consent brand-kit consumers (invoice already partial) (FR-3.3.c) | `services/pdfRenderer.js` extensions | 2d | ⬜ |
-| G092 | Customer portal brand-kit consumer (FR-3.3.f) | `pages/travel/TravelCustomerPortal.jsx` | 1d | ⬜ |
+| G091 | PDF voucher / itinerary / consent brand-kit consumers (invoice already partial) (FR-3.3.c) | `services/pdfRenderer.js` extensions | 2d | ✅ DONE 2026-06-14 — `4ad1e0c5` |
+| G092 | Customer portal brand-kit consumer (FR-3.3.f) | `pages/travel/TravelCustomerPortal.jsx` | 1d | ✅ DONE 2026-06-14 — `4ad1e0c5` |
 | G093 | Embed widget brand-kit consumer + `data-sub-brand` attr (FR-3.3.g, FR-3.4.c) | `frontend/public/embed/widget.js` | 1d | ⬜ |
 | G094 | Public landing page brand-kit consumer (FR-3.3.h) | LandingPage renderer | 1d | ⬜ |
-| G095 | Microsite brand-kit consumer (FR-3.3.i) | `routes/travel_microsites.js` + `PublicTripMicrosite.jsx` | 1d | ⬜ |
+| G095 | Microsite brand-kit consumer (FR-3.3.i) | `routes/travel_microsites.js` + `PublicTripMicrosite.jsx` | 1d | ✅ DONE 2026-06-14 — `4ad1e0c5` |
 | G096 | Sidebar pinned-logo render (FR-3.3.a) | `components/Sidebar.jsx` | 0.5d | ⬜ |
 | G097 | Email send-time sub-brand resolve (FR-3.4.d) | email service | 1d | ⬜ |
 | G098 | `Tenant.defaultSubBrand` fallback column (FR-3.4.f) | schema (additive nullable) | 0.5d | ✅ DONE 2026-06-14 — `04de02d4` |

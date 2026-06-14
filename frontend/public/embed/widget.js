@@ -5,12 +5,24 @@
  *   <div data-gbs-form
  *        data-key="glbs_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
  *        data-slug="enhanced-wellness"
+ *        data-sub-brand="tmc"
  *        data-title="Get a free hair-loss consultation"
  *        data-color="#7c3aed"></div>
  *   <script async src="https://crm.globusdemos.com/embed/widget.js"></script>
  *
  * Either `data-key` (writes to /api/v1/external/leads using a partner API key)
  * or `data-slug` (writes to public booking endpoint) is required.
+ *
+ * Branding Wave 4 G093 (FR-3.3.g + FR-3.4.c): when `data-sub-brand` is
+ * declared on the target div OR fallback-discovered from the <script>
+ * tag itself, the widget forwards it to lead-form.html as a `sub_brand`
+ * query param. lead-form.html (or its host) fetches
+ *   GET /api/brand-kits/by-subbrand/<sub_brand>
+ * (public read-only endpoint shipped by sibling agent A in this wave)
+ * and re-themes its palette + logo + tagline from the resolved BrandKit
+ * row. When the attribute is absent, behaviour is unchanged — the form
+ * renders with the legacy `data-color` / `data-title` chrome the page
+ * declared explicitly.
  *
  * The script auto-discovers all elements with the `data-gbs-form` attribute
  * and renders an iframe pointing at /embed/lead-form.html, passing the
@@ -43,10 +55,25 @@
     var color = target.getAttribute('data-color') || '';
     var services = target.getAttribute('data-services') || '';
     var height = parseInt(target.getAttribute('data-height') || '0', 10);
+    // G093 (FR-3.4.c): sub-brand declared on the target div first, then
+    // fallback to the script tag itself. Validated against the canonical
+    // 4-id allowlist so a typo (or a hostile page-author injection) never
+    // reaches the public BrandKit endpoint as the URL path segment.
+    var subBrand = target.getAttribute('data-sub-brand') || '';
+    if (!subBrand && thisScript && typeof thisScript.getAttribute === 'function') {
+      subBrand = thisScript.getAttribute('data-sub-brand') || '';
+    }
+    var VALID_SUB_BRANDS = ['tmc', 'rfu', 'travelstall', 'visasure'];
+    if (subBrand && VALID_SUB_BRANDS.indexOf(subBrand) === -1) {
+      // Unknown sub-brand → drop silently so lead-form.html renders with
+      // the page's legacy data-color chrome instead of breaking outright.
+      subBrand = '';
+    }
 
     var qs = new URLSearchParams();
     if (key) qs.set('key', key);
     if (slug) qs.set('slug', slug);
+    if (subBrand) qs.set('sub_brand', subBrand);
     if (title) qs.set('title', title);
     if (subtitle) qs.set('sub', subtitle);
     if (color) qs.set('color', color);

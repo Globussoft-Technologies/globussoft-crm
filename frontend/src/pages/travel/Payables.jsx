@@ -51,6 +51,9 @@ import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { SUB_BRAND_BG } from "../../utils/travelSubBrand";
 import { formatMoney } from "../../utils/money";
+import { useActiveSubBrand } from "../../utils/subBrand";
+// Branding Wave 4 G102: per-sub-brand brand-kit lookup for active-chip tint.
+import { useBrandKit, brandPrimaryColor } from "../../hooks/useBrandKit";
 
 const STATUS_CHIPS = [
   { value: "", label: "All" },
@@ -120,6 +123,11 @@ function daysCellText(days) {
 
 export default function Payables() {
   const notify = useNotify();
+  // G102: branded primary accent from the active sub-brand's BrandKit (or
+  // the CSS-var fallback when no kit configured).
+  const { activeSubBrand } = useActiveSubBrand();
+  const { brandKit } = useBrandKit(activeSubBrand);
+  const primaryTint = brandPrimaryColor(brandKit);
   const [payables, setPayables] = useState([]);
   const [total, setTotal] = useState(0);
   const [summary, setSummary] = useState({
@@ -277,9 +285,9 @@ export default function Payables() {
                 aria-label={`Filter by status: ${c.label}`}
                 style={{
                   ...chipStyle,
-                  background: active ? "var(--primary-color, var(--accent-color))" : "var(--surface-color)",
+                  background: active ? primaryTint : "var(--surface-color)",
                   color: active ? "#fff" : "var(--text-primary)",
-                  borderColor: active ? "var(--primary-color, var(--accent-color))" : "var(--border-color)",
+                  borderColor: active ? primaryTint : "var(--border-color)",
                 }}
               >
                 {c.label}

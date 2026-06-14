@@ -2,6 +2,8 @@ const cron = require("node-cron");
 const crypto = require("crypto");
 const prisma = require("../lib/prisma");
 const { getSetting, KEYS } = require("../lib/tenantSettings");
+// Branding Wave 4 G090 + G097: per-sub-brand brand-kit token interpolation.
+const { renderEmailWithBrand } = require("../lib/emailRender");
 
 const DEFAULT_FROM_EMAIL = process.env.SENDGRID_FROM_EMAIL || "noreply@crm.globusdemos.com";
 
@@ -58,11 +60,24 @@ async function processScheduledEmails() {
         // Per-tenant from address (fallback to global default)
         const fromEmail = await getSetting(item.tenantId, KEYS.EMAIL_FROM_ADDRESS, { fallback: DEFAULT_FROM_EMAIL });
 
+        // G097: resolve anchor sub-brand from Contact.subBrand →
+        // Tenant.defaultSubBrand → null. Drives BrandKit token rendering.
+        const subBrand = await module.exports.resolveSendSubBrand(item);
+        const rendered = await renderEmailWithBrand({
+          prisma,
+          tenantId: item.tenantId,
+          subBrand,
+          body: item.body,
+          subject: item.subject,
+        });
+        const renderedSubject = rendered.renderedSubject || item.subject;
+        const renderedBody = rendered.renderedBody;
+
         // Persist as EmailMessage for inbox visibility
         const emailRecord = await prisma.emailMessage.create({
           data: {
-            subject: item.subject,
-            body: item.body,
+            subject: renderedSubject,
+            body: renderedBody,
             from: fromEmail,
             to: item.to,
             direction: "OUTBOUND",
@@ -85,9 +100,9 @@ async function processScheduledEmails() {
         });
 
         const baseUrl = process.env.BASE_URL || "https://crm.globusdemos.com";
-        const trackedBody = `${item.body}\n\n<img src="${baseUrl}/api/communications/track/${trackingId}/open.gif" width="1" height="1" style="display:none" />`;
+        const trackedBody = `${renderedBody}\n\n<img src="${baseUrl}/api/communications/track/${trackingId}/open.gif" width="1" height="1" style="display:none" />`;
 
-        const result = await sendViaSendGrid(item.to, item.subject, trackedBody, fromEmail);
+        const result = await sendViaSendGrid(item.to, renderedSubject, trackedBody, fromEmail);
 
         if (result.sent) {
           await prisma.scheduledEmail.update({
@@ -130,7 +145,34 @@ function initScheduledEmailCron() {
   console.log("Scheduled Email Engine initialized (cron: * * * * *)");
 }
 
+// G097 sub-brand anchor resolution. Reads Contact.subBrand → Tenant.defaultSubBrand
+// → null. Exported on module.exports so vitest can spy on it (CJS self-mocking
+// seam pattern); engine call site uses module.exports.resolveSendSubBrand(...)
+// so the spy intercepts inter-function calls.
+async function resolveSendSubBrand(item) {
+  try {
+    if (item.contactId) {
+      const c = await prisma.contact.findUnique({
+        where: { id: item.contactId },
+        select: { subBrand: true },
+      });
+      if (c && c.subBrand) return c.subBrand;
+    }
+    if (item.tenantId) {
+      const t = await prisma.tenant.findUnique({
+        where: { id: item.tenantId },
+        select: { defaultSubBrand: true },
+      });
+      if (t && t.defaultSubBrand) return t.defaultSubBrand;
+    }
+  } catch (_err) {
+    // Defensive: sub-brand resolve failure → null (renders tenant-wide kit).
+  }
+  return null;
+}
+
 module.exports = {
   initScheduledEmailCron,
   processScheduledEmails, // exported for manual debug
+  resolveSendSubBrand,
 };

@@ -141,6 +141,9 @@ import { launchCallifiedSSO } from "../utils/callified";
 import { useNotify } from "../utils/notify";
 import { useActiveSubBrand } from "../utils/subBrand";
 import { usePermissions } from "../hooks/usePermissions";
+// Branding Wave 4 G096: per-sub-brand BrandKit lookup for the pinned logo
+// shown at the top of the travel sidebar (FR-3.3.a).
+import { useBrandKit, brandLogoUrl } from "../hooks/useBrandKit";
 
 // T2.1: focus trap selector. Limited to actually-focusable elements inside the
 // drawer (anchors, buttons, [tabindex]). Used by the focus-trap effect below
@@ -157,6 +160,11 @@ const Sidebar = ({
   const { user, tenant } = useContext(AuthContext);
   const notify = useNotify();
   const { activeSubBrand, setActiveSubBrand } = useActiveSubBrand();
+  // G096: BrandKit for the active sub-brand. Module-level cache keeps this
+  // cheap on every sidebar re-render; null subBrand resolves to the
+  // tenant-wide (subBrand=null) kit which is also fine for the pinned-logo
+  // slot — it shows the tenant default until a sub-brand is selected.
+  const { brandKit: activeBrandKit } = useBrandKit(activeSubBrand);
   const role = user?.role || "USER";
   const isAdmin = role === "ADMIN";
   const isManager = role === "ADMIN" || role === "MANAGER";
@@ -847,6 +855,10 @@ const Sidebar = ({
             subBrandAccess,
             activeSubBrand,
             setActiveSubBrand,
+            // G096: BrandKit-driven pinned logo for the active sub-brand.
+            // Resolved here at the parent (hooks must run unconditionally;
+            // safe because the hook short-circuits when subBrand is null).
+            brandKit: activeBrandKit,
           })}
 
         <nav
@@ -1294,6 +1306,7 @@ function renderTravelSubBrandHeader({
   subBrandAccess = null,
   activeSubBrand = null,
   setActiveSubBrand = () => {},
+  brandKit = null,
 }) {
   const labelStyle = sectionLabelStyle || sectionLabel;
   const ALL_SUB_BRANDS = [
@@ -1307,6 +1320,12 @@ function renderTravelSubBrandHeader({
       ? ALL_SUB_BRANDS
       : ALL_SUB_BRANDS.filter((s) => subBrandAccess.includes(s.value));
   const showSwitcher = visibleSubBrands.length >= 2;
+  // G096: pinned logo URL for the active sub-brand (FR-3.3.a). Renders only
+  // when the active BrandKit row carries a logoUrl — falls back silently to
+  // no logo when missing (the global brand image at the top of the sidebar
+  // is already shown adjacent to this section).
+  const pinnedLogoUrl = brandLogoUrl(brandKit);
+  const pinnedAccent = brandKit?.primaryColor || null;
   // Single-brand scoped user (e.g. a TMC-only manager): there's nothing to
   // switch between, so we don't render the dropdown — but we DO surface a
   // static read-only chip so they can see which sub-brand they're scoped to
@@ -1318,6 +1337,37 @@ function renderTravelSubBrandHeader({
       : null;
   return (
     <div style={{ flexShrink: 0 }}>
+      {/* G096 (FR-3.3.a): pinned sub-brand logo at the top of the travel
+          sidebar section. Shows only when the active BrandKit carries a
+          logoUrl. The accent border underneath is driven by the kit's
+          primaryColor when present — a subtle visual cue that "this is
+          the brand you're operating under" without disrupting the
+          existing label + switcher chrome below. */}
+      {pinnedLogoUrl && (
+        <div
+          data-testid="travel-sidebar-pinned-logo"
+          style={{
+            padding: "8px 12px 6px",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "flex-start",
+            borderBottom: pinnedAccent
+              ? `2px solid ${pinnedAccent}`
+              : "1px solid var(--border-color)",
+            marginBottom: 4,
+          }}
+        >
+          <img
+            src={pinnedLogoUrl}
+            alt={`${activeSubBrand || "Brand"} logo`}
+            style={{
+              maxHeight: 32,
+              maxWidth: 160,
+              objectFit: "contain",
+            }}
+          />
+        </div>
+      )}
       <div style={labelStyle}>Travel</div>
       {soleBrand && (
         <div

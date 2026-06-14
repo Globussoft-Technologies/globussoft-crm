@@ -326,10 +326,45 @@ async function resolveProviderConfig(prisma, tenantId) {
   return null;
 }
 
+/**
+ * G101 (Branding Wave 4 FR-3.3.e) — per-sub-brand outbound display name.
+ *
+ * Resolves Tenant.subBrandConfigJson[subBrand].displayName at dispatch time,
+ * falling back to the placeholder defaults in lib/subBrandConfig.js. Callers
+ * who want per-sub-brand sender chrome wire this in BEFORE calling sendSms:
+ *
+ *   const cfg = await resolveProviderConfig(prisma, tenantId);
+ *   const subBrandSender = await resolveSenderDisplayName(prisma, tenantId, subBrand);
+ *   await sendSms({ ...cfg, senderId: subBrandSender || cfg.senderId, to, body });
+ *
+ * Best-effort: DB read failure → null so the caller drops back to the
+ * provider's default sender (FAST2SMS sender truncates to 6 chars internally;
+ * Twilio + MSG91 use the raw config-provided sender).
+ *
+ * @param {Object} prisma - Prisma client
+ * @param {number} tenantId
+ * @param {string|null|undefined} subBrand
+ * @returns {Promise<string|null>}
+ */
+async function resolveSenderDisplayName(prisma, tenantId, subBrand) {
+  if (!subBrand || !tenantId) return null;
+  try {
+    const { resolveDisplayName } = require("../lib/subBrandConfig");
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { subBrandConfigJson: true },
+    });
+    return resolveDisplayName(tenant, subBrand);
+  } catch (_e) {
+    return null;
+  }
+}
+
 module.exports = {
   normalizePhone,
   substituteVars,
   sendSms,
   sendViaFast2SMS,
   resolveProviderConfig,
+  resolveSenderDisplayName,
 };

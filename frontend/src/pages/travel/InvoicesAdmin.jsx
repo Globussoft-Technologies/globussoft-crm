@@ -51,6 +51,8 @@ import {
   subBrandShortLabel,
 } from "../../utils/travelSubBrand";
 import { useActiveSubBrand } from "../../utils/subBrand";
+// Branding Wave 4 G102: per-sub-brand brand-kit lookup for primary CTA tint.
+import { useBrandKit, brandPrimaryColor } from "../../hooks/useBrandKit";
 import { AuthContext } from "../../App";
 
 const SUB_BRANDS = [
@@ -167,6 +169,10 @@ export default function InvoicesAdmin() {
   const notify = useNotify();
   const { user } = useContext(AuthContext) || {};
   const { activeSubBrand } = useActiveSubBrand();
+  // G102: BrandKit lookup for primary-CTA tint. Module-level cache keeps
+  // this cheap on re-mount.
+  const { brandKit } = useBrandKit(activeSubBrand);
+  const primaryBtnBranded = { ...primaryBtn, background: brandPrimaryColor(brandKit) };
   const canWrite = user?.role === "ADMIN" || user?.role === "MANAGER";
 
   // Sub-brand access gating for the create/edit form. ADMIN / no-restriction
@@ -632,7 +638,7 @@ export default function InvoicesAdmin() {
           </p>
         </div>
         {canWrite && (
-          <button type="button" onClick={openCreate} style={primaryBtn}>
+          <button type="button" onClick={openCreate} style={primaryBtnBranded}>
             <Plus size={14} /> New Invoice
           </button>
         )}

@@ -29,6 +29,8 @@ import {
   subBrandShortLabel,
 } from "../../utils/travelSubBrand";
 import { useActiveSubBrand } from "../../utils/subBrand";
+// Branding Wave 4 G102: per-sub-brand brand-kit lookup for primary CTA tint.
+import { useBrandKit, brandPrimaryColor } from "../../hooks/useBrandKit";
 import { AuthContext } from "../../App";
 
 const SUB_BRANDS = [
@@ -192,6 +194,9 @@ export default function SuppliersAdmin() {
   // users get the full 4-brand dropdown; users restricted to exactly one brand
   // get a read-only locked field; 2-3-brand users get a dropdown of just theirs.
   const { activeSubBrand } = useActiveSubBrand();
+  // G102: BrandKit lookup for primary-CTA tint.
+  const { brandKit } = useBrandKit(activeSubBrand);
+  const primaryBtnBranded = { ...primaryBtn, background: brandPrimaryColor(brandKit) };
   const myBrands = accessibleSubBrands(user);
   const lockedBrand = myBrands.length === 1 ? myBrands[0] : null;
 
@@ -586,7 +591,7 @@ export default function SuppliersAdmin() {
           </p>
         </div>
         {canWrite && (
-          <button type="button" onClick={openCreate} style={primaryBtn}>
+          <button type="button" onClick={openCreate} style={primaryBtnBranded}>
             <Plus size={14} /> New Supplier
           </button>
         )}

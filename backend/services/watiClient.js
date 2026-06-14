@@ -45,7 +45,7 @@
  * go through module.exports.fn(...) so vitest vi.spyOn interception works.
  */
 
-const { resolveForSubBrand } = require("../lib/subBrandConfig");
+const { resolveForSubBrand, resolveDisplayName } = require("../lib/subBrandConfig");
 
 const REQUEST_TIMEOUT_MS = 10_000;
 
@@ -108,6 +108,27 @@ async function resolveChannelNumber(tenantId, subBrand) {
   } catch (e) {
     console.error(`[watiClient] channel resolve failed (falling back to env): ${e.message}`);
     return channelNumber;
+  }
+}
+
+// G101 (Branding Wave 4 FR-3.3.e) — resolve outbound display name (broadcast
+// chrome / WhatsApp business profile name) for a sub-brand. Reads
+// Tenant.subBrandConfigJson[brand].displayName via lib/subBrandConfig
+// resolveDisplayName helper, falling back to placeholder defaults. Best-effort:
+// returns null on any error so the dispatch path can use the default Wati
+// broadcast label.
+async function resolveSenderDisplayName(tenantId, subBrand) {
+  if (!tenantId || !subBrand) return null;
+  try {
+    const prisma = require("../lib/prisma");
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { subBrandConfigJson: true },
+    });
+    return resolveDisplayName(tenant, subBrand);
+  } catch (e) {
+    console.warn(`[watiClient] display-name resolve failed: ${e.message}`);
+    return null;
   }
 }
 
@@ -202,6 +223,11 @@ async function sendTemplateMessage({ tenantId, subBrand, toPhone, templateName, 
   const to = normalizePhone(toPhone);
   if (!to) throw new Error("toPhone could not be normalised");
   const channel = await module.exports.resolveChannelNumber(tenantId, subBrand);
+  // G101: resolve per-sub-brand display-name chrome for broadcast labels.
+  // When the caller doesn't pass an explicit broadcastName, we synthesise
+  // `<displayName>-<templateName>` so analytics buckets keep the brand
+  // identity visible.
+  const displayName = await module.exports.resolveSenderDisplayName(tenantId, subBrand);
   // `persistTo` lets the chat surface store the thread-keyed E.164 form
   // while the Wati API itself receives bare digits. Defaults to the
   // normalised digits (cron callers' historical behaviour).
@@ -225,7 +251,11 @@ async function sendTemplateMessage({ tenantId, subBrand, toPhone, templateName, 
       query: { whatsappNumber: to, ...(channel ? { channel_number: channel } : {}) },
       body: {
         template_name: templateName,
-        broadcast_name: broadcastName || `travel-crm-${templateName}`,
+        // G101: chrome the broadcast label with the resolved sub-brand
+        // display name when the caller didn't pass an explicit override.
+        // `${displayName}-${templateName}` keeps the analytics bucket
+        // grouping intact while making the sub-brand visible.
+        broadcast_name: broadcastName || (displayName ? `${displayName}-${templateName}` : `travel-crm-${templateName}`),
         parameters: Array.isArray(parameters) ? parameters : [],
       },
     });
@@ -429,6 +459,7 @@ module.exports = {
   getConfig,
   normalizePhone,
   resolveChannelNumber,
+  resolveSenderDisplayName,
   persistMessageRow,
   watiFetch,
   sendTemplateMessage,

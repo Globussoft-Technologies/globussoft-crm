@@ -1,8 +1,14 @@
 import React, { useState, useEffect, useReducer, useRef, useCallback } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, useSearchParams, Link } from 'react-router-dom';
 import { ArrowLeft, Save, Eye, Monitor, Smartphone, Plus, Trash2, ChevronUp, ChevronDown, Type, AlignLeft, Image, MousePointerClick, FileInput, Minus, Space, Video, Upload, Undo2, Redo2, Columns } from 'lucide-react';
 import { fetchApi, getAuthToken } from '../utils/api';
 import { useNotify } from '../utils/notify';
+// Branding Wave 4 G094 (FR-3.3.h): per-sub-brand BrandKit lookup for the
+// preview canvas. Admin picks a sub-brand via the `?sub_brand=tmc` URL
+// param (or future picker UI); the resolved kit's logoUrl + primaryColor
+// + tagline propagate into the preview canvas chrome so the admin sees
+// what the public render will look like.
+import { useBrandKit, brandLogoUrl, brandPrimaryColor } from '../hooks/useBrandKit';
 
 // =====================================================================
 // LandingPageBuilder
@@ -96,6 +102,15 @@ function historyReducer(state, action) {
 export default function LandingPageBuilder() {
   const notify = useNotify();
   const { id } = useParams();
+  // G094: sub-brand preview context. Admin lands at
+  //   /landing-pages/<id>/builder?sub_brand=tmc
+  // to preview the page chrome under the TMC brand kit; absent param
+  // resolves to the tenant-wide kit (FR-3.3 fallback chain).
+  const [searchParams] = useSearchParams();
+  const previewSubBrand = searchParams.get('sub_brand') || null;
+  const { brandKit: previewBrandKit } = useBrandKit(previewSubBrand);
+  const previewLogo = brandLogoUrl(previewBrandKit);
+  const previewAccent = brandPrimaryColor(previewBrandKit);
   const [page, setPage] = useState(null);
   const [history, dispatch] = useReducer(historyReducer, { past: [], present: [], future: [] });
   const components = history.present;
@@ -380,7 +395,47 @@ export default function LandingPageBuilder() {
         </div>
 
         {/* Center: Preview Canvas */}
-        <div style={{ flex: 1, overflowY: 'auto', background: 'var(--subtle-bg)', padding: '2rem', display: 'flex', justifyContent: 'center' }}>
+        <div style={{ flex: 1, overflowY: 'auto', background: 'var(--subtle-bg)', padding: '2rem', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.5rem' }}>
+          {/* G094: BrandKit preview ribbon. Renders a small chrome strip
+              above the canvas showing the resolved logo + tagline + accent
+              so the admin sees the sub-brand context the public render
+              will inherit. Absent when there's no sub-brand context AND no
+              tenant-wide kit. */}
+          {(previewLogo || previewBrandKit?.tagline) && (
+            <div
+              data-testid="landing-builder-brand-kit-ribbon"
+              style={{
+                width: previewMode === 'mobile' ? '375px' : '100%',
+                maxWidth: '800px',
+                background: 'var(--surface-color)',
+                borderRadius: '8px',
+                boxShadow: 'var(--glass-shadow)',
+                padding: '0.5rem 1rem',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.75rem',
+                borderLeft: `4px solid ${previewAccent}`,
+              }}
+            >
+              {previewLogo && (
+                <img
+                  src={previewLogo}
+                  alt="Brand logo preview"
+                  style={{ maxHeight: 28, maxWidth: 120, objectFit: 'contain' }}
+                />
+              )}
+              {previewBrandKit?.tagline && (
+                <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                  {previewBrandKit.tagline}
+                </span>
+              )}
+              {previewSubBrand && (
+                <span style={{ marginLeft: 'auto', fontSize: '0.75rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                  Preview: {previewSubBrand}
+                </span>
+              )}
+            </div>
+          )}
           <div style={{ width: previewMode === 'mobile' ? '375px' : '100%', maxWidth: '800px', background: 'var(--surface-color)', borderRadius: '8px', boxShadow: 'var(--glass-shadow)', padding: '2rem', minHeight: '400px' }}>
             {components.length === 0 && (
               <div style={{ textAlign: 'center', padding: '4rem 2rem', color: '#94a3b8' }}>

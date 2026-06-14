@@ -32,6 +32,10 @@ import {
   subBrandShortLabel,
 } from "../../utils/travelSubBrand";
 import { useActiveSubBrand } from "../../utils/subBrand";
+// Branding Wave 4 G102: per-sub-brand brand-kit lookup. Drives the primary
+// CTA tint from BrandKit.primaryColor when a kit is active, falling back to
+// the standing-rule `var(--primary-color, var(--accent-color))` CSS var.
+import { useBrandKit, brandPrimaryColor } from "../../hooks/useBrandKit";
 import { AuthContext } from "../../App";
 
 const SUB_BRANDS = [
@@ -97,6 +101,10 @@ export default function QuotesAdmin() {
   const notify = useNotify();
   const { user } = useContext(AuthContext) || {};
   const { activeSubBrand } = useActiveSubBrand();
+  // G102: BrandKit lookup. Module-level cache means re-mounts of QuotesAdmin
+  // never re-fetch; safe to call unconditionally here.
+  const { brandKit } = useBrandKit(activeSubBrand);
+  const primaryBtnBranded = { ...primaryBtn, background: brandPrimaryColor(brandKit) };
   const canWrite = user?.role === "ADMIN" || user?.role === "MANAGER";
 
   // Sub-brand the create/edit form may assign. Single-brand users are locked
@@ -258,7 +266,7 @@ export default function QuotesAdmin() {
           </p>
         </div>
         {canWrite && (
-          <button type="button" onClick={openCreate} style={primaryBtn}>
+          <button type="button" onClick={openCreate} style={primaryBtnBranded}>
             <Plus size={14} /> New Quote
           </button>
         )}

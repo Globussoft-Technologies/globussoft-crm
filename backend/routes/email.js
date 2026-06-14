@@ -2,6 +2,11 @@ const express = require('express');
 const crypto = require('crypto');
 const { verifyToken, verifyRole } = require('../middleware/auth');
 const prisma = require('../lib/prisma');
+// Branding Wave 4 G090 + G097: per-sub-brand brand-kit token interpolation.
+// Resolves Contact.subBrand → Tenant.defaultSubBrand → null at send-time,
+// interpolates {{brand_logo_url}} / {{brand_primary_color}} / {{brand_tagline}}
+// / {{brand_signature_template}} / {{brand_footer_text}} into body + subject.
+const { renderEmailWithBrand } = require('../lib/emailRender');
 
 const router = express.Router();
 
@@ -135,6 +140,32 @@ router.get('/scheduled', verifyToken, async (req, res) => {
 //   - sent      = count moved to status='SENT'
 //   - failed    = count moved to status='FAILED'
 //   - errors    = per-row error details (mirror of engine's try/catch)
+// G097 sub-brand anchor resolution. Reads Contact.subBrand first (when the
+// scheduled email is anchored to a contact), then Tenant.defaultSubBrand as
+// the tenant-level fallback (FR-3.4.f). Returns null when neither resolves,
+// which routes the kit lookup to the tenant-wide (subBrand=null) BrandKit.
+async function resolveSendSubBrand(item) {
+  try {
+    if (item.contactId) {
+      const c = await prisma.contact.findUnique({
+        where: { id: item.contactId },
+        select: { subBrand: true },
+      });
+      if (c && c.subBrand) return c.subBrand;
+    }
+    if (item.tenantId) {
+      const t = await prisma.tenant.findUnique({
+        where: { id: item.tenantId },
+        select: { defaultSubBrand: true },
+      });
+      if (t && t.defaultSubBrand) return t.defaultSubBrand;
+    }
+  } catch (_err) {
+    // Defensive: never let sub-brand resolution block the send.
+  }
+  return null;
+}
+
 router.post('/scheduled/run', verifyToken, verifyRole(['ADMIN']), async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
@@ -153,11 +184,25 @@ router.post('/scheduled/run', verifyToken, verifyRole(['ADMIN']), async (req, re
     const errors = [];
     for (const item of due) {
       try {
+        // G097: resolve anchor sub-brand BEFORE persistence so the body
+        // we store in EmailMessage already carries the rendered brand
+        // tokens (inbox-visible copy mirrors what the recipient receives).
+        const subBrand = await resolveSendSubBrand(item);
+        const rendered = await renderEmailWithBrand({
+          prisma,
+          tenantId: item.tenantId,
+          subBrand,
+          body: item.body,
+          subject: item.subject,
+        });
+        const renderedSubject = rendered.renderedSubject || item.subject;
+        const renderedBody = rendered.renderedBody;
+
         // Persist as EmailMessage for inbox visibility (mirrors engine).
         const emailRecord = await prisma.emailMessage.create({
           data: {
-            subject: item.subject,
-            body: item.body,
+            subject: renderedSubject,
+            body: renderedBody,
             from: FROM_EMAIL,
             to: item.to,
             direction: 'OUTBOUND',
@@ -179,12 +224,12 @@ router.post('/scheduled/run', verifyToken, verifyRole(['ADMIN']), async (req, re
         });
 
         const baseUrl = process.env.BASE_URL || 'https://crm.globusdemos.com';
-        const trackedBody = `${item.body}\n\n<img src="${baseUrl}/api/communications/track/${trackingId}/open.gif" width="1" height="1" style="display:none" />`;
+        const trackedBody = `${renderedBody}\n\n<img src="${baseUrl}/api/communications/track/${trackingId}/open.gif" width="1" height="1" style="display:none" />`;
 
         // When SENDGRID_API_KEY is unset (CI default), sendSendGrid returns
         // { sent:false, reason:'no_api_key' } → row flips to FAILED.
         // That's the exact path the spec verifies under "failed transitions".
-        const result = await sendSendGrid(item.to, item.subject, trackedBody);
+        const result = await sendSendGrid(item.to, renderedSubject, trackedBody);
 
         if (result.sent) {
           await prisma.scheduledEmail.update({

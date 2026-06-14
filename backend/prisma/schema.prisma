@@ -88,6 +88,13 @@ model Tenant {
   // splice frame-ancestors via allowIframeEmbedding(). Null = no per-tenant
   // override (fall back to wildcard or route-level allowList).
   embedAllowlistJson String?  @db.Text
+  // W4.C G098 — Tenant-wide default sub-brand fallback (FR-3.4.f). When a
+  // travel-vertical tenant has multiple sub-brands but a consumer surface
+  // (PDF / email / portal / microsite) lands without a sub-brand context,
+  // resolvers fall back here BEFORE the tenant-wide (subBrand=null) BrandKit.
+  // Null = no fallback configured; resolver behaviour unchanged (subBrand=null
+  // bucket wins). Validated against VALID_SUB_BRANDS at write time.
+  defaultSubBrand    String?  @db.VarChar(50)
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 
@@ -7159,36 +7166,65 @@ model TravelPurchaseOrderLine {
 // wellness mini-site editor (ZYLU MINI-001), marketing flyer studio
 // (MARKETING_FLYER), travel invoice PDF templates, customer portal headers.
 model BrandKit {
-  id             Int      @id @default(autoincrement())
-  tenantId       Int
-  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id                Int      @id @default(autoincrement())
+  tenantId          Int
+  tenant            Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   // Sub-brand scope (Q25 — required for travel-vertical). For non-travel
   // tenants (generic / wellness), subBrand stays null = tenant-wide default.
-  subBrand       String?  @db.VarChar(50)
+  subBrand          String?  @db.VarChar(50)
   // Version number — increments on every save. Latest version per
   // (tenantId, subBrand) is the active one. Older versions kept for revert
   // (DD-5.6 retention policy: last 10 versions; future cron purges).
-  version        Int      @default(1)
-  isActive       Boolean  @default(false)
+  version           Int      @default(1)
+  isActive          Boolean  @default(false)
   // Brand assets
-  logoUrl        String?  @db.VarChar(500) // light-mode logo
-  logoDarkUrl    String?  @db.VarChar(500) // dark-mode logo (DD-5.5 — required when light inverts poorly)
-  faviconUrl     String?  @db.VarChar(500)
+  logoUrl           String?  @db.VarChar(500) // light-mode logo
+  logoDarkUrl       String?  @db.VarChar(500) // dark-mode logo (DD-5.5 — required when light inverts poorly)
+  faviconUrl        String?  @db.VarChar(500)
   // Brand colors (hex; WCAG checked at save time per DD-5.5e)
-  primaryColor   String?  @db.VarChar(20)
-  secondaryColor String?  @db.VarChar(20)
-  accentColor    String?  @db.VarChar(20)
-  bgColor        String?  @db.VarChar(20)
-  textColor      String?  @db.VarChar(20)
+  primaryColor      String?  @db.VarChar(20)
+  secondaryColor    String?  @db.VarChar(20)
+  accentColor       String?  @db.VarChar(20)
+  bgColor           String?  @db.VarChar(20)
+  textColor         String?  @db.VarChar(20)
   // Typography (DD-5.1: Google Fonts only for v1)
-  fontFamily     String?  @db.VarChar(100) // e.g. "Inter, sans-serif"
-  fontUrl        String?  @db.VarChar(500) // Google Fonts URL when used
+  fontFamily        String?  @db.VarChar(100) // e.g. "Inter, sans-serif"
+  fontUrl           String?  @db.VarChar(500) // Google Fonts URL when used
   // Copy
-  tagline        String?  @db.VarChar(200)
+  tagline           String?  @db.VarChar(200)
+  // ── W4.A G089 — BrandKit schema extension (FR-3.1.a-g) ────────────────────
+  // Additive nullable columns enabling the broader branding surface beyond
+  // logo+colors+font: wordmark/hero imagery, status-state badges, separate
+  // heading/body/code typography slots, CMYK color anchors for print, an
+  // email-signature template + invoice header/footer + invoice stamp, plus
+  // mission/social/support copy for portals + microsites. All optional —
+  // existing kits continue to load and render via the v1 columns; new
+  // surfaces opt in per-field as they're populated.
+  wordmarkUrl       String?  @db.VarChar(500) // text-only logotype variant (no glyph)
+  heroUrl           String?  @db.VarChar(500) // landing-page hero image (3:1 to 1:1 aspect)
+  successBadge      String?  @db.VarChar(20) // hex; success-state accent (badges, toasts)
+  warningBadge      String?  @db.VarChar(20) // hex; warning-state accent
+  headingFontFamily String?  @db.VarChar(100)
+  headingFontUrl    String?  @db.VarChar(500)
+  bodyFontFamily    String?  @db.VarChar(100)
+  bodyFontUrl       String?  @db.VarChar(500)
+  codeFontFamily    String?  @db.VarChar(100)
+  codeFontUrl       String?  @db.VarChar(500)
+  cmykPrimary       String?  @db.VarChar(40) // "C,M,Y,K" tuple for print pipelines
+  cmykSecondary     String?  @db.VarChar(40)
+  cmykAccent        String?  @db.VarChar(40)
+  signatureTemplate String?  @db.Text // HTML email-signature template
+  headerImageUrl    String?  @db.VarChar(500) // invoice / PDF header art
+  footerText        String?  @db.Text // invoice / PDF footer copy
+  invoiceStampUrl   String?  @db.VarChar(500) // notarised stamp / chop image
+  missionStatement  String?  @db.Text // portal/microsite "about" copy
+  supportEmail      String?  @db.VarChar(254)
+  supportPhone      String?  @db.VarChar(40)
+  socialLinksJson   String?  @db.Text // JSON array of {network, url} entries
   // Audit
-  createdBy      Int? // userId who saved this version (FK omitted — User model has too many relations already; SetNull semantics via app)
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  createdBy         Int? // userId who saved this version (FK omitted — User model has too many relations already; SetNull semantics via app)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 
   @@unique([tenantId, subBrand, version])
   @@index([tenantId, subBrand, isActive])

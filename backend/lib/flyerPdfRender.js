@@ -161,6 +161,37 @@ function streamToBuffer(doc) {
 }
 
 /**
+ * Pick the pdfkit base font for a text block from its family + bold/italic
+ * flags. pdfkit ships the standard-14 fonts (no embedding needed): the
+ * Helvetica / Times / Courier families each have plain/bold/italic/bolditalic
+ * variants. cta blocks render bold by default for emphasis. This mirrors the
+ * CSS font-family + weight/style used by services/flyerRenderEngine.js so the
+ * PNG and PDF exports match.
+ */
+function pdfFontFor(b) {
+  const bold = !!(b && b.bold) || (b && b.type === "cta");
+  const italic = !!(b && b.italic);
+  const fam = b && b.font;
+  if (fam === "serif") {
+    if (bold && italic) return "Times-BoldItalic";
+    if (bold) return "Times-Bold";
+    if (italic) return "Times-Italic";
+    return "Times-Roman";
+  }
+  if (fam === "mono") {
+    if (bold && italic) return "Courier-BoldOblique";
+    if (bold) return "Courier-Bold";
+    if (italic) return "Courier-Oblique";
+    return "Courier";
+  }
+  // sans (default)
+  if (bold && italic) return "Helvetica-BoldOblique";
+  if (bold) return "Helvetica-Bold";
+  if (italic) return "Helvetica-Oblique";
+  return "Helvetica";
+}
+
+/**
  * Coerce a hex string to a pdfkit-safe colour. Returns the default if
  * input is missing / malformed (so a corrupted palette still renders a
  * readable PDF).
@@ -273,14 +304,21 @@ async function renderFlyerPdf(template, opts = {}) {
           ? b.color
           : textHex;
     const fontSize = Math.max(6, Math.round(((Number(b.fontSize) || 18)) * scaleX));
-    doc.fillColor(color).fontSize(fontSize);
+    const align = ["left", "center", "right"].includes(b.align) ? b.align : "left";
+    doc.font(pdfFontFor(b)).fillColor(color).fontSize(fontSize);
     doc.text(content, x, y, {
       width: w,
       height: h,
       ellipsis: true,
       lineBreak: true,
+      align,
+      underline: !!b.underline,
     });
   }
+
+  // Reset to the base font so the provenance footer below isn't rendered in
+  // whatever family/weight the last text block left active.
+  doc.font("Helvetica");
 
   // Footer: provenance line so the recipient can verify the rendered
   // PDF against a known template hash (FR-3.4.5 cache audit). We render

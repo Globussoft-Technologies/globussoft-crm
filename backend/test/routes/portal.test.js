@@ -86,6 +86,10 @@ prisma.contact = {
   findFirst: vi.fn(),
   findUnique: vi.fn(),
   update: vi.fn().mockResolvedValue({}),
+  create: vi.fn(),
+};
+prisma.tenant = {
+  findUnique: vi.fn(),
 };
 prisma.ticket = {
   findMany: vi.fn().mockResolvedValue([]),
@@ -141,6 +145,8 @@ beforeEach(() => {
   prisma.contact.findFirst.mockReset();
   prisma.contact.findUnique.mockReset();
   prisma.contact.update.mockReset().mockResolvedValue({});
+  prisma.contact.create.mockReset();
+  prisma.tenant.findUnique.mockReset();
   prisma.ticket.findMany.mockReset().mockResolvedValue([]);
   prisma.ticket.create.mockReset();
   prisma.invoice.findMany.mockReset().mockResolvedValue([]);
@@ -489,5 +495,78 @@ describe('GET /invoices ?fields=summary — slim-shape opt-in', () => {
       .get('/api/portal/invoices?fields=summary');
     expect(res.status).toBe(401);
     expect(prisma.invoice.findMany).not.toHaveBeenCalled();
+  });
+});
+
+// ── POST /api/portal/register ──────────────────────────────────────────
+describe('POST /register — travel customer self-service sign-up', () => {
+  test('missing email or password → 400', async () => {
+    const res = await request(makeApp())
+      .post('/api/portal/register')
+      .send({ password: 'Pass1234' });
+    expect(res.status).toBe(400);
+    expect(prisma.tenant.findUnique).not.toHaveBeenCalled();
+  });
+
+  test('weak password (no number) → 400', async () => {
+    const res = await request(makeApp())
+      .post('/api/portal/register')
+      .send({ email: 'new@x.com', password: 'onlyletters', registrationTenantId: 3 });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/at least 8 characters/i);
+  });
+
+  test('non-travel tenant → 400 (portal sign-up is travel-only)', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ id: 1, vertical: 'wellness' });
+    const res = await request(makeApp())
+      .post('/api/portal/register')
+      .send({ email: 'new@x.com', password: 'Pass1234', registrationTenantId: 1 });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/travel/i);
+    expect(prisma.contact.create).not.toHaveBeenCalled();
+  });
+
+  test('new travel customer → 201 + PORTAL JWT + creates Contact with portalPasswordHash', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ id: 3, vertical: 'travel' });
+    prisma.contact.findFirst.mockResolvedValue(null);
+    prisma.contact.create.mockResolvedValue({ id: 501, tenantId: 3, name: 'New Cust', email: 'new@x.com' });
+    const res = await request(makeApp())
+      .post('/api/portal/register')
+      .send({ email: 'New@X.com', password: 'Pass1234', name: 'New Cust', registrationTenantId: 3 });
+    expect(res.status).toBe(201);
+    expect(res.body.token).toBeDefined();
+    const decoded = jwt.verify(res.body.token, JWT_SECRET);
+    expect(decoded.type).toBe('PORTAL');
+    expect(decoded.contactId).toBe(501);
+    // Contact created with a bcrypt portalPasswordHash + LOWERCASED email.
+    const createArg = prisma.contact.create.mock.calls[0][0].data;
+    expect(createArg.email).toBe('new@x.com');
+    expect(createArg.tenantId).toBe(3);
+    expect(typeof createArg.portalPasswordHash).toBe('string');
+    expect(await bcrypt.compare('Pass1234', createArg.portalPasswordHash)).toBe(true);
+  });
+
+  test('email already has a portal account → 409 (no duplicate create)', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ id: 3, vertical: 'travel' });
+    prisma.contact.findFirst.mockResolvedValue({ id: 77, portalPasswordHash: 'existing-hash', name: 'X' });
+    const res = await request(makeApp())
+      .post('/api/portal/register')
+      .send({ email: 'dup@x.com', password: 'Pass1234', registrationTenantId: 3 });
+    expect(res.status).toBe(409);
+    expect(prisma.contact.create).not.toHaveBeenCalled();
+  });
+
+  test('existing lead without portal password → 201 + links hash via update (no new contact)', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ id: 3, vertical: 'travel' });
+    prisma.contact.findFirst.mockResolvedValue({ id: 88, portalPasswordHash: null, name: 'Lead Larry' });
+    prisma.contact.update.mockResolvedValue({ id: 88, tenantId: 3, name: 'Lead Larry', email: 'lead@x.com' });
+    const res = await request(makeApp())
+      .post('/api/portal/register')
+      .send({ email: 'lead@x.com', password: 'Pass1234', registrationTenantId: 3 });
+    expect(res.status).toBe(201);
+    expect(prisma.contact.create).not.toHaveBeenCalled();
+    const updArg = prisma.contact.update.mock.calls[0][0];
+    expect(updArg.where).toEqual({ id: 88 });
+    expect(typeof updArg.data.portalPasswordHash).toBe('string');
   });
 });

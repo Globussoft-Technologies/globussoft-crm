@@ -124,13 +124,32 @@ function slugify(text) {
 }
 
 /**
- * Resolve the share URL host. Prefers `PUBLIC_HOST` env (production); falls
- * back to `crm.globusdemos.com` (the canonical demo box). Frontend dev hits
- * `localhost:5173` but that's a dev-server detail — the share URL is for
- * end-customers, who only ever see the prod host.
+ * Resolve the public share base URL (protocol + host) from the request
+ * itself, so a link minted from localhost points to localhost and one
+ * minted from the demo points to the demo — no env config needed. The
+ * operator's browser is the source of truth: the Origin header carries the
+ * exact frontend base they're on (the Vite dev proxy forwards it as
+ * `http://localhost:5173` in dev, `https://crm.globusdemos.com` in prod).
+ *
+ * Falls back to PUBLIC_BASE_URL / PUBLIC_HOST env, then the canonical demo
+ * host, for server-to-server callers (cron, scripts) that send no Origin.
  */
-function getPublicHost() {
-  return process.env.PUBLIC_HOST || 'crm.globusdemos.com';
+function getPublicShareBase(req) {
+  const candidate =
+    req && typeof req.get === 'function'
+      ? req.get('origin') || req.get('referer')
+      : null;
+  if (candidate && /^https?:\/\//i.test(candidate)) {
+    try {
+      const u = new URL(candidate);
+      return `${u.protocol}//${u.host}`;
+    } catch (_e) {
+      // malformed header — fall through to env / default
+    }
+  }
+  if (process.env.PUBLIC_BASE_URL) return process.env.PUBLIC_BASE_URL.replace(/\/+$/, '');
+  if (process.env.PUBLIC_HOST) return `https://${process.env.PUBLIC_HOST}`;
+  return 'https://crm.globusdemos.com';
 }
 
 const ALLOWED_FORMATS = Object.freeze([
@@ -258,12 +277,12 @@ router.post(
       const jti = decoded.jti || null;
 
       const slug = slugify(template.name);
-      const host = getPublicHost();
-      const shareUrl = `https://${host}/p/flyer/${slug}?t=${encodeURIComponent(token)}`;
+      const base = getPublicShareBase(req);
+      const shareUrl = `${base}/p/flyer/${slug}?t=${encodeURIComponent(token)}`;
       // Embed code — iframe pointing at the same surface with embed=1
       // appended so the page can render in a "minimal chrome" mode
       // (no operator-only banners, no "Download PDF" link).
-      const embedUrl = `https://${host}/p/flyer/${slug}?t=${encodeURIComponent(token)}&embed=1`;
+      const embedUrl = `${base}/p/flyer/${slug}?t=${encodeURIComponent(token)}&embed=1`;
       const embedCode = `<iframe src="${embedUrl}" width="1200" height="1200" frameborder="0" allowfullscreen></iframe>`;
 
       const expiresAt = new Date(Date.now() + expiresInSec * 1000).toISOString();

@@ -226,9 +226,27 @@ export default function FlyerShareAdmin() {
         notify.error("Mint succeeded but server returned no shareUrl");
         return;
       }
+      // The backend builds the URL from the request it sees, but behind a
+      // dev tunnel / Vite proxy the host it receives gets rewritten to
+      // localhost. window.location.origin is the ONLY reliable source for
+      // the host the operator is actually on, so rebase the share + embed
+      // URLs onto it (works for localhost, dev tunnels, and production).
+      const rebaseOrigin = (url) => {
+        if (typeof url !== "string" || !url) return url;
+        try {
+          const u = new URL(url, window.location.origin);
+          return `${window.location.origin}${u.pathname}${u.search}${u.hash}`;
+        } catch {
+          return url;
+        }
+      };
+      const rebaseEmbed = (code) =>
+        typeof code === "string"
+          ? code.replace(/src="([^"]+)"/, (_m, src) => `src="${rebaseOrigin(src)}"`)
+          : code;
       setMintResult({
-        shareUrl: result.shareUrl,
-        embedCode: result.embedCode,
+        shareUrl: rebaseOrigin(result.shareUrl),
+        embedCode: rebaseEmbed(result.embedCode),
         expiresAt: result.expiresAt,
         slug: result.slug,
       });

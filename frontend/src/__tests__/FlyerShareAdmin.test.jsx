@@ -106,6 +106,13 @@ const MINT_RESULT = {
   flyerId: 501,
 };
 
+// The component rebases the minted URL onto window.location.origin (so a link
+// minted behind a dev tunnel / Vite proxy still points at the host the
+// operator is on, not the backend-seen localhost). The displayed + copied
+// values are these rebased forms.
+const REBASED_SHARE_URL = `${window.location.origin}/p/flyer/tmc-summer-europe-flyer?t=abc.def.ghi`;
+const REBASED_EMBED_CODE = `<iframe src="${window.location.origin}/p/flyer/tmc-summer-europe-flyer?t=abc.def.ghi&embed=1" width="1200" height="1200" frameborder="0" allowfullscreen></iframe>`;
+
 const HISTORY_LOGS_DEFAULT = {
   entity: 'TravelFlyerTemplate',
   entityId: 501,
@@ -260,7 +267,7 @@ describe('<FlyerShareAdmin /> — mint workflow', () => {
     });
     // Modal shows the URL + embed + expires.
     await screen.findByTestId('flyer-share-mint-modal');
-    expect(screen.getByTestId('flyer-share-result-url')).toHaveTextContent(MINT_RESULT.shareUrl);
+    expect(screen.getByTestId('flyer-share-result-url')).toHaveTextContent(REBASED_SHARE_URL);
     expect(screen.getByTestId('flyer-share-result-embed')).toHaveTextContent(/iframe/);
     expect(screen.getByTestId('flyer-share-result-expires')).toBeInTheDocument();
     expect(notifySuccess).toHaveBeenCalled();
@@ -294,7 +301,7 @@ describe('<FlyerShareAdmin /> — mint workflow', () => {
     await screen.findByTestId('flyer-share-mint-modal');
     fireEvent.click(screen.getByTestId('flyer-share-copy-url-btn'));
     await waitFor(() => {
-      expect(writeText).toHaveBeenCalledWith(MINT_RESULT.shareUrl);
+      expect(writeText).toHaveBeenCalledWith(REBASED_SHARE_URL);
     });
     expect(notifySuccess).toHaveBeenCalledWith(expect.stringMatching(/Share URL copied/i));
   });
@@ -311,7 +318,7 @@ describe('<FlyerShareAdmin /> — mint workflow', () => {
     await screen.findByTestId('flyer-share-mint-modal');
     fireEvent.click(screen.getByTestId('flyer-share-copy-embed-btn'));
     await waitFor(() => {
-      expect(writeText).toHaveBeenCalledWith(MINT_RESULT.embedCode);
+      expect(writeText).toHaveBeenCalledWith(REBASED_EMBED_CODE);
     });
     expect(notifySuccess).toHaveBeenCalledWith(expect.stringMatching(/Embed code copied/i));
   });

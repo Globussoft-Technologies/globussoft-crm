@@ -515,6 +515,43 @@ select {
   color-scheme: light;
 }
 
+/* Date/time inputs: same color-scheme inheritance so the browser's native
+ * calendar / clock picker indicator (the little icon that opens the picker)
+ * renders in a palette that's VISIBLE on themed input backgrounds. In dark
+ * mode the indicator is light, in light mode it's dark — without this it can
+ * vanish (e.g. a white dark-scheme icon on a light-forced input). Mirrors
+ * the <select> rules above. */
+input[type="date"],
+input[type="datetime-local"],
+input[type="time"],
+input[type="month"],
+input[type="week"] {
+  color-scheme: inherit;
+}
+[data-theme="dark"] input[type="date"],
+[data-theme="dark"] input[type="datetime-local"],
+[data-theme="dark"] input[type="time"],
+[data-theme="dark"] input[type="month"],
+[data-theme="dark"] input[type="week"] {
+  color-scheme: dark;
+}
+[data-theme="light"] input[type="date"],
+[data-theme="light"] input[type="datetime-local"],
+[data-theme="light"] input[type="time"],
+[data-theme="light"] input[type="month"],
+[data-theme="light"] input[type="week"] {
+  color-scheme: light;
+}
+/* Keep the picker indicator comfortably clickable + visible. */
+input[type="date"]::-webkit-calendar-picker-indicator,
+input[type="datetime-local"]::-webkit-calendar-picker-indicator,
+input[type="time"]::-webkit-calendar-picker-indicator,
+input[type="month"]::-webkit-calendar-picker-indicator,
+input[type="week"]::-webkit-calendar-picker-indicator {
+  opacity: 0.85;
+  cursor: pointer;
+}
+
 /* Per-tag !important wins over inline `color: inherit` on the parent <select>
  * (CustomReports.jsx applies that via inputStyle). --surface-color is the
  * theme-aware tint used by cards / popovers; it tracks light vs dark

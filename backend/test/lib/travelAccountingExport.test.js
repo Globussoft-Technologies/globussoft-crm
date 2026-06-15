@@ -30,12 +30,24 @@ import { describe, test, expect } from "vitest";
 const {
   buildTallyXml,
   buildCaCsv,
+  buildAccountingXlsx,
   escapeXml,
   fmtTallyDate,
   money2,
+  round2,
   csvEscape,
   CA_CSV_HEADER,
+  ACCOUNTING_XLSX_HEADER,
 } = await import("../../lib/travelAccountingExport.js");
+
+const XLSX = (await import("xlsx")).default;
+
+// Parse an XLSX buffer back to an array-of-arrays for assertions.
+function xlsxToAoa(buf) {
+  const wb = XLSX.read(buf, { type: "buffer" });
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  return { sheetNames: wb.SheetNames, aoa: XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" }) };
+}
 
 // Fixture factory — a fully-populated normalized invoice row (the shape
 // the route layer hands to both exporters).
@@ -371,5 +383,84 @@ describe("buildCaCsv", () => {
     const withoutQuoted = csv.replace(/"[^"]*"/g, "");
     expect(withoutQuoted.includes("\n")).toBe(true);
     expect(/[^\r]\n/.test(withoutQuoted)).toBe(false);
+  });
+});
+
+describe("round2", () => {
+  test("rounds to 2dp as a NUMBER (not a string)", () => {
+    expect(round2(1.005)).toBe(1.0); // float-repr: 1.005 → 1.00 (binary), documented
+    expect(round2(90.126)).toBe(90.13);
+    expect(round2(1000)).toBe(1000);
+    expect(typeof round2(5)).toBe("number");
+  });
+  test("non-finite / null / undefined → 0", () => {
+    expect(round2(null)).toBe(0);
+    expect(round2(undefined)).toBe(0);
+    expect(round2(NaN)).toBe(0);
+    expect(round2("abc")).toBe(0);
+  });
+});
+
+describe("buildAccountingXlsx", () => {
+  test("empty list → header row + zeroed TOTAL row, single 'Invoices' sheet", () => {
+    const { sheetNames, aoa } = xlsxToAoa(buildAccountingXlsx([]));
+    expect(sheetNames).toEqual(["Invoices"]);
+    expect(aoa[0]).toEqual(ACCOUNTING_XLSX_HEADER);
+    const totalRow = aoa[aoa.length - 1];
+    expect(totalRow[0]).toBe("TOTAL");
+    // money columns (7..12) all zero
+    [7, 8, 9, 10, 11, 12].forEach((c) => expect(Number(totalRow[c])).toBe(0));
+  });
+
+  test("one row per invoice with identity + numeric money cells", () => {
+    const { aoa } = xlsxToAoa(buildAccountingXlsx([makeInvoice()]));
+    expect(aoa[0]).toEqual(ACCOUNTING_XLSX_HEADER);
+    const r = aoa[1];
+    expect(r[0]).toBe("TINV-2026-0001");
+    expect(r[1]).toBe("2026-06-10");
+    expect(r[2]).toBe("Ravi Kumar");
+    expect(r[3]).toBe("29ABCDE1234F1Z5");
+    expect(r[4]).toBe("tmc");
+    expect(r[5]).toBe("GLOB-TMC-PL");
+    expect(r[6]).toBe("Issued");
+    // money cells are REAL numbers, so SUM works in Excel
+    expect(r[7]).toBe(1000); // taxable
+    expect(r[8]).toBe(90); // cgst
+    expect(r[9]).toBe(90); // sgst
+    expect(r[10]).toBe(0); // igst
+    expect(r[11]).toBe(0); // tcs
+    expect(r[12]).toBe(1180); // total
+    expect(typeof r[7]).toBe("number");
+  });
+
+  test("TOTAL row sums every money column across invoices", () => {
+    const a = makeInvoice({ invoiceNum: "A", taxableAmount: 1000, cgstAmount: 90, sgstAmount: 90, igstAmount: 0, tcsAmount: 0, totalAmount: 1180 });
+    const b = makeInvoice({ invoiceNum: "B", taxableAmount: 500, cgstAmount: 0, sgstAmount: 0, igstAmount: 90, tcsAmount: 25, totalAmount: 615 });
+    const { aoa } = xlsxToAoa(buildAccountingXlsx([a, b]));
+    const totalRow = aoa[aoa.length - 1];
+    expect(totalRow[0]).toBe("TOTAL");
+    expect(Number(totalRow[7])).toBe(1500); // taxable
+    expect(Number(totalRow[8])).toBe(90); // cgst
+    expect(Number(totalRow[9])).toBe(90); // sgst
+    expect(Number(totalRow[10])).toBe(90); // igst
+    expect(Number(totalRow[11])).toBe(25); // tcs
+    expect(Number(totalRow[12])).toBe(1795); // grand total
+  });
+
+  test("total falls back to taxable+gst+tcs when totalAmount missing/zero", () => {
+    const inv = makeInvoice({ totalAmount: 0, taxableAmount: 1000, cgstAmount: 90, sgstAmount: 90, igstAmount: 0, tcsAmount: 0 });
+    const { aoa } = xlsxToAoa(buildAccountingXlsx([inv]));
+    expect(aoa[1][12]).toBe(1180);
+  });
+
+  test("missing GSTIN / legalEntity render as empty cells, never 'null'", () => {
+    const { aoa } = xlsxToAoa(buildAccountingXlsx([makeInvoice({ customerGstin: null, legalEntityCode: null })]));
+    expect(aoa[1][3]).toBe("");
+    expect(aoa[1][5]).toBe("");
+  });
+
+  test("custom sheetName honoured and clamped to 31 chars", () => {
+    const { sheetNames } = xlsxToAoa(buildAccountingXlsx([], { sheetName: "x".repeat(40) }));
+    expect(sheetNames[0].length).toBe(31);
   });
 });

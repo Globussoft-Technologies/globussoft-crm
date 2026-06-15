@@ -1,116 +1,59 @@
 /**
- * VisaDashboard.test.jsx — vitest + RTL coverage for the Phase 3 Visa Sure
- * landing surface (frontend/src/pages/travel/visa/Dashboard.jsx,
- * cluster B3 SHELL scaffolding from the visa-sure landing route batch).
+ * VisaDashboard.test.jsx — vitest + RTL coverage for the Visa Sure landing
+ * dashboard (frontend/src/pages/travel/visa/Dashboard.jsx).
  *
- * Scope — drift PINNED to reality, NOT to the dispatch prompt:
+ * The page graduated from a Phase-3 SHELL to a real, data-backed overview
+ * that reads two existing tenant-scoped + visasure-scoped endpoints:
+ *   GET /api/travel/visa/applications/stats
+ *   GET /api/travel/visa/applications?limit=5
  *
- *   The dispatch prompt anticipated either a fully-built KPI dashboard (with
- *   fetch-on-mount, KPI tiles after data resolves, empty-state branches) OR
- *   a pure SHELL with sub-copy interpolation off AuthContext. The reality is
- *   the latter, MINUS the AuthContext interpolation — the Visa Sure landing
- *   page is even simpler than the Travel Stall dashboard (TS21 tick #115).
- *   The SUT renders a static glass card with: a Stamp icon, the "Visa Sure"
- *   <h1>, a "Phase 3 — Visa Sure scaffolding" status pill, two paragraphs
- *   of explanatory copy referencing docs/PRD_VISA_SURE_PHASE_3.md, and
- *   exactly TWO nav links (Applications + Checklists). It is a smaller,
- *   simpler shell than its sub-page Checklists or sibling TravelStallDashboard.
+ * Coverage:
+ *   - fetches both endpoints on mount
+ *   - renders KPI tiles (total / approved / rejected / approval rate)
+ *   - renders the by-status breakdown + recent applications (linked to detail)
+ *   - quick links resolve to the built sibling pages
+ *   - empty state when the tenant has zero visa applications
  *
- *   Test surface is therefore the static-shell + nav-link invariants:
- *     1. Page chrome — heading "Visa Sure" renders as <h1>.
- *     2. Phase 3 status pill — "Phase 3 — Visa Sure scaffolding" text
- *        renders verbatim (signals to operators this is a scaffold).
- *     3. Explanatory copy — the "visa-type pickers, document checklists,
- *        OCR-backed PDF consumer..." sentence renders so any future copy
- *        drift surfaces here.
- *     4. PRD pointer — the `docs/PRD_VISA_SURE_PHASE_3.md` reference
- *        renders inside a <code> element (load-bearing for future authors
- *        searching by PRD filename for follow-up work).
- *     5. Stamp icon — lucide-react renders a lucide-stamp SVG; pin its
- *        presence so a future icon swap is intentional.
- *     6. Applications nav link — <Link to="/travel/visa/applications">
- *        with the "Applications" label renders as an anchor with the right
- *        href and primary-CTA styling.
- *     7. Checklists nav link — <Link to="/travel/visa/checklists"> with
- *        the "Checklists" label renders as an anchor with the right href.
- *     8. Link count invariant — exactly 2 anchors on the page (matches
- *        the Applications + Checklists nav pair; no extra links sneaking
- *        in without test coverage).
- *     9. No mutation surface — zero <button> elements. The SUT is read-only
- *        until Phase 3 builds out. A future implementer adding action
- *        controls without test coverage trips this guard.
- *    10. No fetch on mount — the SUT does not import or call fetchApi.
- *        We mock the module defensively and assert ZERO calls. Locks the
- *        SHELL contract — a future move from shell → wired-up GET must
- *        update this spec deliberately.
- *    11. No AuthContext required to render — the SUT does not consume
- *        AuthContext (no useContext, no sub-copy interpolation, no role
- *        gating). Mounting without a Provider must NOT throw. Matches
- *        the VisaChecklists + VisaAdvisorDashboard visa-page sibling
- *        pattern (tick #117 + #121).
- *
- * Drift pinned (prompt vs. actual SUT — per tick #109-#121 prompt-drift
- * discipline):
- *   - Prompt mentioned "fetch endpoints (if any), KPI tiles, sub-brand
- *     context (likely visasure-hardcoded)". The SUT has NO fetch, NO KPI
- *     tiles, NO sub-brand context consumption — sub-brand isolation is
- *     implicit (this page IS the Visa Sure landing, all linked routes are
- *     visasure-scoped server-side). Tests omit fetch / KPI / palette
- *     assertions.
- *   - Prompt mentioned "AuthContext sub-copy interpolation IF SUT consumes
- *     user/tenant context". The SUT does NOT consume AuthContext at all
- *     (unlike TravelStallDashboard which DOES interpolate tenant.name +
- *     user.name). Tests OMIT AuthContext interpolation cases — case 11
- *     instead pins the no-provider-required invariant.
- *   - Prompt mentioned "nav cards to deeper visa pages (Applications,
- *     AdvisorDashboard, Checklists, Reports)". The SUT has only TWO nav
- *     links: Applications + Checklists. No AdvisorDashboard link (that
- *     page is reached from a row in Applications), no Reports link (no
- *     visa-reports page exists yet — PRD §5 / §9 covers it for Phase 3).
- *     Tests pin the actual 2-link count.
- *   - Prompt mentioned "Phase 3 status pill / advisory blurb (per
- *     TravelStallDashboard pattern)". TravelStallDashboard says "Phase 2
- *     — TS21 scaffold"; this SUT says "Phase 3 — Visa Sure scaffolding".
- *     Test asserts the actual text.
- *   - Prompt mentioned "visasure indigo rgba(99, 102, 241, ...) per tick
- *     #115". The SUT does NOT import travelSubBrand — its CTAs use the
- *     generic var(--primary-color, var(--accent-color)) primary token
- *     instead of the sub-brand-specific indigo. Tests OMIT palette
- *     assertions; that's a future enhancement opportunity, not a current
- *     invariant.
- *
- * Mocking discipline (per CLAUDE.md RTL standing rules + tick #109-#121
- * cron-learnings):
- *   - fetchApi (`../utils/api`) is mocked but the SUT never calls it; the
- *     mock exists so we can ASSERT zero calls (SHELL-contract guard).
- *   - useNotify is NOT mocked — SUT doesn't consume it. Skipping the mock
- *     keeps the placeholder bound: if someone wires notify, this surfaces.
- *   - travelSubBrand is NOT mocked / NOT imported — SUT doesn't use it.
- *   - AuthContext is NOT wrapped — SUT doesn't consume it, pinned in
- *     case 11.
- *   - MemoryRouter wraps the SUT so <Link> resolves (the only thing
- *     RouterContext provides for this page).
- *
- * If the SUT graduates beyond placeholder (real visa landing with KPI
- * tiles per PRD §5), this entire spec should be rewritten — the current
- * cases are intentional "scaffold stays scaffold" guards, not aspirational
- * coverage of the Phase 3 product.
- *
- * Path: flat __tests__/VisaDashboard.test.jsx — distinct from generic
- * Dashboard.test.jsx (sales dashboard), OwnerDashboard.test.jsx (wellness),
- * and TravelStallDashboard.test.jsx (Travel Stall vertical). Sibling Agent B
- * owns VisaReports.test.jsx in the same dir — no collision.
+ * Mocking discipline (CLAUDE.md RTL standing rules): useNotify returns ONE
+ * stable object reference for the whole run (no per-call re-creation).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
-vi.mock('../utils/api', () => ({
-  fetchApi: vi.fn(),
-}));
+vi.mock('../utils/api', () => ({ fetchApi: vi.fn() }));
+
+const notifyObj = { error: vi.fn(), success: vi.fn(), info: vi.fn(), confirm: vi.fn() };
+vi.mock('../utils/notify', () => ({ useNotify: () => notifyObj }));
 
 import { fetchApi } from '../utils/api';
 import VisaDashboard from '../pages/travel/visa/Dashboard.jsx';
+
+const STATS = {
+  total: 12,
+  byStatus: {
+    intake: { count: 2 }, 'docs-pending': { count: 3 }, filed: { count: 2 },
+    approved: { count: 4 }, rejected: { count: 1 }, appeal: { count: 0 },
+  },
+  byApplicationType: { tourist: { count: 5 }, work: { count: 4 }, umrah: { count: 3 } },
+  byDestinationCountry: { 'United States': { count: 4 }, 'Saudi Arabia': { count: 3 } },
+  complexCount: 2,
+  flaggedCount: 1,
+  lastActivityAt: '2026-06-14T10:00:00.000Z',
+};
+
+const RECENT = [
+  { id: 101, status: 'approved', applicationType: 'tourist', destinationCountry: 'United States', contact: { name: 'Ali Khan' }, updatedAt: '2026-06-14T10:00:00.000Z' },
+  { id: 102, status: 'docs-pending', applicationType: 'umrah', destinationCountry: 'Saudi Arabia', contactId: 55, updatedAt: '2026-06-13T10:00:00.000Z' },
+];
+
+function mockApi({ stats = STATS, recent = RECENT } = {}) {
+  fetchApi.mockImplementation((url) => {
+    if (typeof url === 'string' && url.includes('/applications/stats')) return Promise.resolve(stats);
+    if (typeof url === 'string' && url.includes('/applications?')) return Promise.resolve(recent);
+    return Promise.resolve(null);
+  });
+}
 
 const renderPage = () =>
   render(
@@ -119,92 +62,70 @@ const renderPage = () =>
     </MemoryRouter>,
   );
 
-describe('VisaDashboard (Phase 3 Visa Sure landing SHELL)', () => {
+describe('VisaDashboard (data-backed Visa Sure landing)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it('renders the "Visa Sure" heading as an <h1>', () => {
+  it('renders the "Visa Sure" heading as an <h1>', async () => {
+    mockApi();
     renderPage();
-    const heading = screen.getByRole('heading', {
-      level: 1,
-      name: /Visa Sure/i,
+    expect(screen.getByRole('heading', { level: 1, name: /Visa Sure/i })).toBeInTheDocument();
+  });
+
+  it('fetches the stats + recent-applications endpoints on mount', async () => {
+    mockApi();
+    renderPage();
+    await waitFor(() => {
+      const urls = fetchApi.mock.calls.map((c) => c[0]);
+      expect(urls.some((u) => u.includes('/api/travel/visa/applications/stats'))).toBe(true);
+      expect(urls.some((u) => u.includes('/api/travel/visa/applications?limit=5'))).toBe(true);
     });
-    expect(heading).toBeInTheDocument();
   });
 
-  it('renders the "Phase 3 — Visa Sure scaffolding" status pill verbatim', () => {
+  it('renders KPI tiles with the computed values (total, approved, approval rate)', async () => {
+    mockApi();
     renderPage();
-    expect(
-      screen.getByText(/Phase 3 — Visa Sure scaffolding/),
-    ).toBeInTheDocument();
+    expect(await screen.findByText('Total applications')).toBeInTheDocument();
+    expect(screen.getByText('12')).toBeInTheDocument(); // total
+    expect(screen.getByText('Approval rate')).toBeInTheDocument();
+    // approved 4 / (4+1 decided) = 80%
+    expect(screen.getByText('80%')).toBeInTheDocument();
   });
 
-  it('renders the explanatory copy listing the Phase 3 module pieces', () => {
+  it('renders the by-status breakdown section', async () => {
+    mockApi();
     renderPage();
-    expect(
-      screen.getByText(
-        /visa-type pickers, document checklists,\s*OCR-backed PDF consumer, status timeline, embassy-appointment\s*scheduling/i,
-      ),
-    ).toBeInTheDocument();
-    expect(screen.getByText(/under active design/i)).toBeInTheDocument();
+    expect(await screen.findByText('By status')).toBeInTheDocument();
+    // Labels unique to the breakdown: KPI tiles reuse "Approved"/"Rejected"
+    // and the recent-app badges reuse "Docs pending"; "Intake"/"Filed" appear
+    // only in the status breakdown given these fixtures.
+    expect(screen.getByText('Intake')).toBeInTheDocument();
+    expect(screen.getByText('Filed')).toBeInTheDocument();
   });
 
-  it('points at the PRD doc filename inside a <code> element', () => {
-    const { container } = renderPage();
-    const code = container.querySelector('code');
-    expect(code).not.toBeNull();
-    expect(code.textContent).toMatch(/docs\/PRD_VISA_SURE_PHASE_3\.md/);
-  });
-
-  it('renders the Stamp lucide icon', () => {
-    const { container } = renderPage();
-    const icon = container.querySelector('svg.lucide-stamp');
-    expect(icon).not.toBeNull();
-  });
-
-  it('renders the Applications nav link pointing to /travel/visa/applications', () => {
+  it('renders recent applications linking to their detail page', async () => {
+    mockApi();
     renderPage();
-    const link = screen.getByRole('link', { name: /Applications/i });
-    expect(link).toBeInTheDocument();
-    expect(link).toHaveAttribute('href', '/travel/visa/applications');
+    const row = await screen.findByText(/#101 · Ali Khan/);
+    expect(row).toBeInTheDocument();
+    const detailLink = screen.getAllByRole('link').find((l) => l.getAttribute('href') === '/travel/visa/applications/101');
+    expect(detailLink).toBeTruthy();
   });
 
-  it('renders the Checklists nav link pointing to /travel/visa/checklists', () => {
+  it('renders quick links to the built sibling pages', async () => {
+    mockApi();
     renderPage();
-    const link = screen.getByRole('link', { name: /Checklists/i });
-    expect(link).toBeInTheDocument();
-    expect(link).toHaveAttribute('href', '/travel/visa/checklists');
+    await screen.findByText('Total applications');
+    const hrefs = screen.getAllByRole('link').map((l) => l.getAttribute('href'));
+    expect(hrefs).toContain('/travel/visa/applications');
+    expect(hrefs).toContain('/travel/visa/reports');
+    expect(hrefs).toContain('/travel/visa/embassy-rules');
   });
 
-  it('renders exactly 2 anchor links (Applications + Checklists nav pair)', () => {
+  it('shows an empty state when the tenant has no visa applications', async () => {
+    mockApi({ stats: { ...STATS, total: 0, byStatus: {} }, recent: [] });
     renderPage();
-    // Pinning the link count surfaces any future link-additions to the same
-    // shell that slip in without test coverage.
-    expect(screen.getAllByRole('link')).toHaveLength(2);
-  });
-
-  it('contains no action CTAs beyond the nav links (no buttons)', () => {
-    renderPage();
-    // No <button> elements should exist on the SHELL. The only interactive
-    // elements are the two <Link> anchors. This guards against a future
-    // implementer silently wiring mutation controls without test coverage.
-    expect(screen.queryAllByRole('button')).toHaveLength(0);
-  });
-
-  it('does not call fetchApi — pure SHELL contract', () => {
-    renderPage();
-    expect(fetchApi).not.toHaveBeenCalled();
-  });
-
-  it('renders without an AuthContext Provider (SUT does not consume auth)', () => {
-    // VisaChecklists + VisaAdvisorDashboard sibling pattern (ticks #117/#121).
-    // Visa landing/placeholder pages are independent of AuthContext.
-    // Mounting without a Provider must NOT throw; if a future revision adds
-    // useAuth() / useContext(AuthContext), this test surfaces it.
-    expect(() => renderPage()).not.toThrow();
-    expect(
-      screen.getByRole('heading', { level: 1, name: /Visa Sure/i }),
-    ).toBeInTheDocument();
+    expect(await screen.findByText(/No visa applications yet/i)).toBeInTheDocument();
   });
 });

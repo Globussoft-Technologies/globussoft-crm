@@ -362,9 +362,50 @@ describe('buildHtmlShellForPng — the future Puppeteer-real-render document', (
     expect(html).toContain('1,29,000');
   });
 
-  test('uses primary palette colour for the strip + CTA backgrounds', () => {
+  test('uses primary palette colour for the CTA text', () => {
     const html = buildHtmlShellForPng(fullTemplate, 1200, 1200);
     expect(html).toContain('#122647');
+  });
+
+  test('renders image / logo blocks as <img> with their src (the blank-flyer fix)', () => {
+    const tpl = {
+      palette: validPalette,
+      layout: [
+        { type: 'image', x: 0, y: 120, width: 250, height: 320, src: 'https://s3.example/photo.jpg' },
+      ],
+    };
+    const html = buildHtmlShellForPng(tpl, 1200, 1200);
+    expect(html).toContain('<img');
+    expect(html).toContain('https://s3.example/photo.jpg');
+    expect(html).toContain('object-fit:contain');
+  });
+
+  test('positions blocks absolutely, scaled from the 540x720 editor canvas', () => {
+    const tpl = {
+      palette: validPalette,
+      layout: [{ type: 'text', x: 270, y: 360, width: 270, height: 100, content: 'Centered' }],
+    };
+    // 1080 wide → scaleX = 2 (x:270→540px); 720 tall → scaleY = 1 (y:360→360px).
+    const html = buildHtmlShellForPng(tpl, 1080, 720);
+    expect(html).toContain('position:absolute');
+    expect(html).toContain('left:540px');
+    expect(html).toContain('top:360px');
+  });
+
+  test('applies per-block typography (font family / bold / italic / underline / align)', () => {
+    const tpl = {
+      palette: validPalette,
+      layout: [{
+        type: 'text', x: 10, y: 10, width: 300, height: 60, content: 'Styled',
+        font: 'serif', bold: true, italic: true, underline: true, align: 'center',
+      }],
+    };
+    const html = buildHtmlShellForPng(tpl, 1200, 1200);
+    expect(html).toMatch(/font-family:Georgia/i);
+    expect(html).toContain('font-weight:700');
+    expect(html).toContain('font-style:italic');
+    expect(html).toContain('text-decoration:underline');
+    expect(html).toContain('text-align:center');
   });
 
   test('escapes HTML special characters in text content', () => {
@@ -384,12 +425,14 @@ describe('buildHtmlShellForPng — the future Puppeteer-real-render document', (
     expect(html).toContain('&quot;');
   });
 
-  test('renders a readable shell when palette / layout / assets are missing', () => {
+  test('renders a valid empty canvas when palette / layout / assets are missing', () => {
     const html = buildHtmlShellForPng({}, 1200, 1200);
     expect(html.startsWith('<!DOCTYPE html>')).toBe(true);
-    expect(html).toContain('Untitled Flyer');
-    expect(html).toContain('Price on request');
-    expect(html).toContain('Book Now');
+    expect(html).toContain('width: 1200px');
+    // No layout blocks → no injected placeholder text; just a valid bg canvas
+    // (faithful to the design: an empty template renders empty, not fake copy).
+    expect(html).toContain('</body></html>');
+    expect(html).toContain('#FFFFFF');
   });
 });
 

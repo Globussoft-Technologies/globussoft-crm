@@ -249,7 +249,9 @@ export default function FlyerTemplates() {
   };
 
   const handleUseAsStartingPoint = (t) => {
-    navigate(`/travel/marketing-flyer-studio?template=${t.id}`);
+    // Route is /travel/marketing/flyer-studio (App.jsx + Sidebar) — the
+    // hyphenated /travel/marketing-flyer-studio 404s.
+    navigate(`/travel/marketing/flyer-studio?template=${t.id}`);
   };
 
   // Download dispatcher consumes POST /api/travel/flyer-templates/:id/render

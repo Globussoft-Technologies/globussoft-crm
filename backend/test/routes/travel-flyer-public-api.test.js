@@ -196,6 +196,23 @@ describe('POST /api/v1/flyers/:id/share — share-mint', () => {
     expect(res.body.flyerId).toBe(42);
   });
 
+  test('share + embed URLs derive their base from the request Origin (local share → local URL)', async () => {
+    prisma.travelFlyerTemplate.findFirst.mockResolvedValue(makeTemplate());
+    const adminToken = tokenFor('ADMIN');
+    const res = await request(makeApp())
+      .post('/api/v1/flyers/42/share')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .set('Origin', 'http://localhost:5173')
+      .send({});
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.body.shareUrl).toMatch(
+      /^http:\/\/localhost:5173\/p\/flyer\/summer-umrah-2026\?t=/,
+    );
+    expect(res.body.embedCode).toContain(
+      'http://localhost:5173/p/flyer/summer-umrah-2026?t=',
+    );
+  });
+
   test('custom expiresInSec is clamped + honored', async () => {
     prisma.travelFlyerTemplate.findFirst.mockResolvedValue(makeTemplate());
     const adminToken = tokenFor('ADMIN');

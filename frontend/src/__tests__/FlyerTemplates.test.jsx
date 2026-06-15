@@ -26,7 +26,7 @@
  *      /api/travel/flyer-templates/:id.
  *  11. "Delete" fires notify.confirm → DELETE on confirm-yes, NO DELETE
  *      on confirm-no.
- *  12. "Use as starting point" navigates to /travel/marketing-flyer-studio
+ *  12. "Use as starting point" navigates to /travel/marketing/flyer-studio
  *      with ?template=<id> query param.
  *  13. (slice 7) "Duplicate" button: ADMIN/MANAGER sees the button; USER
  *      does not. Click POSTs /api/travel/flyer-templates/:id/duplicate
@@ -433,13 +433,13 @@ describe('<FlyerTemplates /> — create / edit / delete', () => {
 });
 
 describe('<FlyerTemplates /> — "Use as starting point" navigation', () => {
-  it('navigates to /travel/marketing-flyer-studio?template=<id> on click', async () => {
+  it('navigates to /travel/marketing/flyer-studio?template=<id> on click', async () => {
     renderPage();
     await screen.findByText('TMC Summer Europe Flyer');
     fireEvent.click(
       screen.getByRole('button', { name: /Use TMC Summer Europe Flyer as starting point/i }),
     );
-    expect(mockNavigate).toHaveBeenCalledWith('/travel/marketing-flyer-studio?template=501');
+    expect(mockNavigate).toHaveBeenCalledWith('/travel/marketing/flyer-studio?template=501');
   });
 });
 

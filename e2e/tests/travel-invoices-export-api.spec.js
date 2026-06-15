@@ -107,11 +107,12 @@ function get(request, token, path) {
 
 const TALLY_PATH = "/api/travel/invoices/export/tally.xml";
 const CSV_PATH = "/api/travel/invoices/export/ca.csv";
+const XLSX_PATH = "/api/travel/invoices/export/accounting.xlsx";
 
 // ─── Guards ─────────────────────────────────────────────────────────
 
 test.describe("Travel invoice exports — guards", () => {
-  for (const path of [TALLY_PATH, CSV_PATH]) {
+  for (const path of [TALLY_PATH, CSV_PATH, XLSX_PATH]) {
     test(`GET ${path} without token → 401/403`, async ({ request }) => {
       const r = await get(request, null, path);
       expect([401, 403]).toContain(r.status());
@@ -175,6 +176,17 @@ test.describe("Travel invoice exports — validation", () => {
     expect(r.status()).toBe(400);
     expect((await r.json()).code).toBe("INVALID_SUB_BRAND");
   });
+
+  test("garbage ?from → 400 INVALID_DATE_RANGE (accounting.xlsx)", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) {
+      test.skip(true, "travel admin login unavailable");
+      return;
+    }
+    const r = await get(request, token, `${XLSX_PATH}?from=not-a-date`);
+    expect(r.status()).toBe(400);
+    expect((await r.json()).code).toBe("INVALID_DATE_RANGE");
+  });
 });
 
 // ─── Happy paths ────────────────────────────────────────────────────
@@ -228,7 +240,31 @@ test.describe("Travel invoice exports — happy paths", () => {
     );
   });
 
-  test("explicit FY window + subBrand filter → 200 on both endpoints", async ({ request }) => {
+  test("accounting.xlsx → 200 spreadsheet attachment with xlsx (PK zip) body", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) {
+      test.skip(true, "travel admin login unavailable");
+      return;
+    }
+    const r = await get(request, token, XLSX_PATH);
+    expect(r.status()).toBe(200);
+    expect(r.headers()["content-type"]).toContain(
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    );
+    const disposition = r.headers()["content-disposition"] || "";
+    expect(disposition).toContain("attachment");
+    expect(disposition).toContain(".xlsx");
+
+    // XLSX is a ZIP container — first two bytes are the local-file-header
+    // magic "PK" (0x50 0x4B). Cheap, format-correct body sniff that doesn't
+    // need a parser or depend on seed row counts.
+    const buf = await r.body();
+    expect(buf.length).toBeGreaterThan(0);
+    expect(buf[0]).toBe(0x50);
+    expect(buf[1]).toBe(0x4b);
+  });
+
+  test("explicit FY window + subBrand filter → 200 on all three endpoints", async ({ request }) => {
     const token = await getTravelAdmin(request);
     if (!token) {
       test.skip(true, "travel admin login unavailable");
@@ -242,6 +278,10 @@ test.describe("Travel invoice exports — happy paths", () => {
     const csv = await get(request, token, `${CSV_PATH}${qs}`);
     expect(csv.status()).toBe(200);
     expect((await csv.text())).toContain("Invoice Number,Invoice Date");
+
+    const xlsx = await get(request, token, `${XLSX_PATH}${qs}`);
+    expect(xlsx.status()).toBe(200);
+    expect(xlsx.headers()["content-type"]).toContain("spreadsheetml.sheet");
   });
 });
 

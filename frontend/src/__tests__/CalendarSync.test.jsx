@@ -561,8 +561,10 @@ describe('<CalendarSync /> — provider cards, OAuth-trigger, sync, event CRUD',
     const syncBtn = await screen.findByRole('button', { name: /Sync Now/i });
     fireEvent.click(syncBtn);
 
+    // The toast now shows the server message directly (no "Sync failed:"
+    // prefix) — backend messages are friendly + self-explanatory.
     expect(
-      await screen.findByText(/Sync failed: rate-limited by upstream/i),
+      await screen.findByText(/rate-limited by upstream/i),
     ).toBeInTheDocument();
   });
 

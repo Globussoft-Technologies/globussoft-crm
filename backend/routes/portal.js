@@ -102,6 +102,95 @@ router.post("/login", async (req, res) => {
   }
 });
 
+// POST /api/portal/register — self-service Customer Portal sign-up.
+// { email, password, name?, registrationTenantId }
+//
+// This is the "travel customer" registration path: the customer-register page
+// routes here when the chosen Organization is a TRAVEL tenant, so a customer
+// becomes a portal-capable Contact (Contact.portalPasswordHash) and lands in
+// the Travel Customer Portal — NOT a staff CRM User. Returns the same
+// { token, contact } shape as /login so the page can sign them straight in.
+router.post("/register", async (req, res) => {
+  try {
+    const { email, password, name, registrationTenantId } = req.body || {};
+    if (!email || typeof email !== "string" || !password || typeof password !== "string") {
+      return res.status(400).json({ error: "email and password are required" });
+    }
+    // tenantId is stripped from bodies by stripDangerous middleware, so the
+    // page sends the chosen org under `registrationTenantId` (mirrors
+    // /api/auth/customer/register).
+    const tenantId = Number(registrationTenantId);
+    if (!Number.isInteger(tenantId) || tenantId <= 0) {
+      return res.status(400).json({ error: "registrationTenantId must be a valid number" });
+    }
+    if (password.length < 8 || !/[A-Za-z]/.test(password) || !/[0-9]/.test(password)) {
+      return res.status(400).json({
+        error: "Password must be at least 8 characters and include a letter and a number",
+      });
+    }
+
+    // The portal is a travel-vertical surface — only allow sign-up against a
+    // travel tenant so we don't create stray portal contacts elsewhere.
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { id: true, vertical: true },
+    });
+    if (!tenant) return res.status(400).json({ error: "Invalid organization" });
+    if (tenant.vertical !== "travel") {
+      return res.status(400).json({ error: "Portal sign-up is only available for travel organizations" });
+    }
+
+    const em = email.trim().toLowerCase();
+    const nm = (typeof name === "string" && name.trim()) ? name.trim() : em.split("@")[0];
+    const hash = await bcrypt.hash(password, 10);
+
+    // Link onto an existing Contact (e.g. an advisor-created lead) if one
+    // exists for this email+tenant; otherwise create a fresh portal Contact.
+    const existing = await prisma.contact.findFirst({
+      where: { email: em, tenantId },
+      select: { id: true, portalPasswordHash: true, name: true },
+    });
+    if (existing && existing.portalPasswordHash) {
+      return res.status(409).json({ error: "This email is already registered. Please sign in." });
+    }
+
+    const contact = existing
+      ? await prisma.contact.update({
+          where: { id: existing.id },
+          data: { portalPasswordHash: hash, name: existing.name || nm },
+        })
+      : await prisma.contact.create({
+          data: {
+            name: nm,
+            email: em,
+            subBrand: "travelstall",
+            status: "Lead",
+            tenantId,
+            portalPasswordHash: hash,
+          },
+        });
+
+    const token = jwt.sign(
+      { contactId: contact.id, tenantId: contact.tenantId, type: "PORTAL" },
+      JWT_SECRET,
+      { expiresIn: PORTAL_TOKEN_TTL }
+    );
+    return res.status(201).json({
+      token,
+      contact: {
+        id: contact.id,
+        name: contact.name,
+        email: contact.email,
+        company: contact.company || null,
+        avatarUrl: contact.avatarUrl || null,
+      },
+    });
+  } catch (err) {
+    console.error("[Portal][register]", err);
+    res.status(500).json({ error: "Registration failed" });
+  }
+});
+
 // POST /api/portal/set-password — { email, currentPassword?, newPassword }
 router.post("/set-password", async (req, res) => {
   try {

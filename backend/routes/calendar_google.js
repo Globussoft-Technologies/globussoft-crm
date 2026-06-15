@@ -239,7 +239,25 @@ router.post("/sync", verifyToken, async (req, res) => {
     return res.json({ success: true, synced });
   } catch (err) {
     console.error("[calendar_google] /sync error:", err);
-    return res.status(err.status || 500).json({ error: err.message || "Sync failed" });
+    // A revoked / expired Google refresh token surfaces as invalid_grant
+    // (or "Token has been expired or revoked") from googleapis. That's a
+    // re-auth condition — show a friendly reconnect prompt, never the raw
+    // OAuth/Graph error to the user.
+    const raw = `${(err && err.message) || ""} ${err && err.response && err.response.data ? JSON.stringify(err.response.data) : ""}`;
+    const reauth = /invalid_grant|expired or revoked|Token has been expired/i.test(raw);
+    if (reauth) {
+      return res.status(401).json({
+        error: "Your Google Calendar connection has expired. Please disconnect and reconnect to resume syncing.",
+        code: "RECONNECT_REQUIRED",
+      });
+    }
+    // Deliberate errors carry a status + clear message (e.g. 404 not-connected)
+    // — keep them. Only mask truly-unexpected errors (no status) so a raw
+    // googleapis/OAuth dump never reaches the user.
+    if (err.status) {
+      return res.status(err.status).json({ error: err.message || "Sync failed" });
+    }
+    return res.status(500).json({ error: "Couldn't sync your Google Calendar right now. Please try again." });
   }
 });
 

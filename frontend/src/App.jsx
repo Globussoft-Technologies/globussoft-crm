@@ -62,6 +62,8 @@ const TmcReadiness = lazy(() => import("./pages/public/TmcReadiness"));
 const TmcReadinessReport = lazy(() => import("./pages/public/TmcReadinessReport"));
 // PRD_TRAVEL_QUOTE_BUILDER §3.7 / slice C9 — public quote-accept landing.
 const QuoteAcceptLanding = lazy(() => import("./pages/public/QuoteAcceptLanding"));
+// Public flyer share/embed viewer — /p/flyer/:slug?t=<jwt>[&embed=1].
+const FlyerView = lazy(() => import("./pages/public/FlyerView"));
 // Cross-vertical staff attendance dashboard — visible to wellness + travel
 // tenants. Backend (/api/attendance/list + /summary) is role-gated to
 // ADMIN/MANAGER; per-row edit/delete is ADMIN-only.
@@ -982,6 +984,8 @@ export default function App() {
                   <Route path="/p/tmc/report/:slug" element={<TmcReadinessReport />} />
                   {/* PRD_TRAVEL_QUOTE_BUILDER §3.7 / slice C9 — customer-accept landing. */}
                   <Route path="/p/quote/:shareToken" element={<QuoteAcceptLanding />} />
+                  {/* Public flyer share + iframe-embed viewer (no auth; JWT in ?t=). */}
+                  <Route path="/p/flyer/:slug" element={<FlyerView />} />
                   <Route path="/travel/kyc/callback" element={<TravelKycCallback flow="microsite" />} />
                   <Route path="/travel/portal/kyc/callback" element={<TravelKycCallback flow="portal" />} />
                   <Route

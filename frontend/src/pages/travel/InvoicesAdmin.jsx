@@ -189,6 +189,11 @@ export default function InvoicesAdmin() {
   // the contact relation, so we batch-fetch unique IDs after the invoices land.
   // Resolved-but-unknown IDs are cached with name=null so we don't re-request.
   const [contactsById, setContactsById] = useState({});
+  // Customer dropdown for the create/edit form — replaces the raw Contact-ID
+  // input so operators pick a contact by name instead of memorising IDs.
+  // Slim summary shape (id/name/email) + 500-row cap covers the tenant book;
+  // the form is ADMIN/MANAGER-only (canWrite), who see the full tenant.
+  const [customers, setCustomers] = useState([]);
   // #829 — distinguish 403 from genuine empty so the empty-state copy
   // honestly says "Access restricted" instead of "No invoices match."
   const [permissionDenied, setPermissionDenied] = useState(false);
@@ -274,6 +279,17 @@ export default function InvoicesAdmin() {
   };
 
   useEffect(load, [subBrand, status, contactIdFilter, quoteIdFilter]);
+
+  // Load the tenant's contacts once for the customer dropdown.
+  useEffect(() => {
+    fetchApi("/api/contacts?fields=summary&limit=500")
+      .then((data) => {
+        const list = Array.isArray(data) ? data : data?.contacts || data?.rows || [];
+        list.sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
+        setCustomers(list);
+      })
+      .catch(() => setCustomers([]));
+  }, []);
 
   // #1051 — fetch contact display names for the IDs we haven't seen yet so the
   // CONTACT column can render names instead of raw IDs. /api/contacts has no
@@ -393,7 +409,7 @@ export default function InvoicesAdmin() {
     inFlightSubmit.current = true;
     const contactIdInt = parseInt(form.contactId, 10);
     if (!Number.isFinite(contactIdInt)) {
-      notify.error("Contact ID is required (must be a number)");
+      notify.error("Please select a customer");
       inFlightSubmit.current = false;
       return;
     }
@@ -617,6 +633,47 @@ export default function InvoicesAdmin() {
     }
   };
 
+  // Accounting exports (ADMIN/MANAGER) — Tally XML / CA CSV / plain XLSX.
+  // The XLSX is the "hand to your CA / import into Excel Software for Travel"
+  // file (PRD §4.4 Excel Software bridge — built internally, no vendor API).
+  // Same raw-fetch + Bearer + blob pattern as downloadPdf (fetchApi would
+  // JSON-parse the binary body). Respects the current sub-brand filter; the
+  // server defaults the date window to the current fiscal year.
+  const EXPORT_FORMATS = {
+    xlsx: { path: "accounting.xlsx", ext: "xlsx", label: "accounting workbook" },
+    csv: { path: "ca.csv", ext: "csv", label: "CA CSV" },
+    tally: { path: "tally.xml", ext: "xml", label: "Tally XML" },
+  };
+  const [exporting, setExporting] = useState(null); // format key while in-flight
+
+  const downloadExport = async (formatKey) => {
+    const fmt = EXPORT_FORMATS[formatKey];
+    if (!fmt) return;
+    setExporting(formatKey);
+    try {
+      const token = getAuthToken();
+      const qs = subBrand ? `?subBrand=${encodeURIComponent(subBrand)}` : "";
+      const resp = await fetch(`/api/travel/invoices/export/${fmt.path}${qs}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!resp.ok) {
+        notify.error(`Failed to export ${fmt.label}`);
+        return;
+      }
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `travel-accounting-${subBrand || "all"}.${fmt.ext}`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      notify.error(err?.message || `Failed to export ${fmt.label}`);
+    } finally {
+      setExporting(null);
+    }
+  };
+
   return (
     <div style={{ padding: 24, maxWidth: 1200, margin: "0 auto", animation: "fadeIn 0.4s ease-out" }}>
       <header
@@ -638,9 +695,38 @@ export default function InvoicesAdmin() {
           </p>
         </div>
         {canWrite && (
-          <button type="button" onClick={openCreate} style={primaryBtnBranded}>
-            <Plus size={14} /> New Invoice
-          </button>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <button
+              type="button"
+              onClick={() => downloadExport("xlsx")}
+              disabled={exporting !== null}
+              style={{ ...secondaryBtn, opacity: exporting ? 0.6 : 1, cursor: exporting ? "wait" : "pointer" }}
+              title="Download an Excel workbook of invoices (for your CA / Excel Software for Travel)"
+            >
+              <FileDown size={14} /> {exporting === "xlsx" ? "Exporting…" : "Excel"}
+            </button>
+            <button
+              type="button"
+              onClick={() => downloadExport("csv")}
+              disabled={exporting !== null}
+              style={{ ...secondaryBtn, opacity: exporting ? 0.6 : 1, cursor: exporting ? "wait" : "pointer" }}
+              title="Download CA CSV (per-line, GST-split)"
+            >
+              <FileDown size={14} /> {exporting === "csv" ? "Exporting…" : "CSV"}
+            </button>
+            <button
+              type="button"
+              onClick={() => downloadExport("tally")}
+              disabled={exporting !== null}
+              style={{ ...secondaryBtn, opacity: exporting ? 0.6 : 1, cursor: exporting ? "wait" : "pointer" }}
+              title="Download Tally-importable XML vouchers"
+            >
+              <FileDown size={14} /> {exporting === "tally" ? "Exporting…" : "Tally"}
+            </button>
+            <button type="button" onClick={openCreate} style={primaryBtnBranded}>
+              <Plus size={14} /> New Invoice
+            </button>
+          </div>
         )}
       </header>
 
@@ -729,15 +815,28 @@ export default function InvoicesAdmin() {
             alignItems: "end",
           }}
         >
-          <input
-            placeholder="Contact ID *"
+          <select
             required
-            type="number"
             value={form.contactId}
             onChange={(e) => setForm({ ...form, contactId: e.target.value })}
             style={inputStyle}
-            aria-label="Contact ID"
-          />
+            aria-label="Customer"
+          >
+            <option value="">Select customer *</option>
+            {/* Editing an invoice whose contact isn't in the loaded page (or
+                a >500-row tenant) keeps the existing selection visible. */}
+            {form.contactId &&
+              !customers.some((c) => String(c.id) === String(form.contactId)) && (
+                <option value={form.contactId}>
+                  {contactsById[form.contactId]?.name || `Contact #${form.contactId}`}
+                </option>
+              )}
+            {customers.map((c) => (
+              <option key={c.id} value={String(c.id)}>
+                {(c.name || `Contact #${c.id}`) + (c.email ? ` — ${c.email}` : "")}
+              </option>
+            ))}
+          </select>
           <input
             placeholder="Total amount *"
             required

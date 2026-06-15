@@ -873,3 +873,62 @@ describe('TravelCustomerPortal — G092 brand-kit consumer', () => {
     expect(screen.queryByTestId('portal-brand-footer')).toBeNull();
   });
 });
+
+// ─── Light / dark theme toggle ──────────────────────────────────────────
+//
+// The portal is a public Contact-token surface, so the app-global
+// data-vertical (driven by tenant.vertical) is "generic" here. The portal
+// pins data-vertical="travel" + its own data-theme so it resolves the
+// cohesive Travel palette (theme/travel.css) instead of inheriting the
+// generic dark :root tokens (which caused the "mixed" cream-page/dark-card
+// look). A header toggle flips light↔dark and persists to localStorage.
+describe('TravelCustomerPortal — light/dark theme toggle', () => {
+  function mockBase() {
+    globalThis.fetch = vi.fn((url) => {
+      if (url.includes('/portal/kyc/status')) return mockJsonResponse({ kycStatus: 'unverified', mode: 'stub' });
+      if (url.includes('/portal/travel/itineraries')) return mockJsonResponse([]);
+      return mockJsonResponse({});
+    });
+  }
+
+  test('pins the travel vertical and defaults to light mode', async () => {
+    setupLoggedIn();
+    mockBase();
+    renderPortal();
+    await screen.findByRole('navigation', { name: /portal sections/i });
+    expect(document.documentElement.getAttribute('data-vertical')).toBe('travel');
+    expect(document.documentElement.getAttribute('data-theme')).toBe('light');
+  });
+
+  test('toggle flips to dark mode, persists the choice, and updates data-theme', async () => {
+    setupLoggedIn();
+    mockBase();
+    renderPortal();
+    await screen.findByRole('navigation', { name: /portal sections/i });
+    fireEvent.click(screen.getByRole('button', { name: /switch to dark mode/i }));
+    await waitFor(() => {
+      expect(document.documentElement.getAttribute('data-theme')).toBe('dark');
+    });
+    expect(localStorage.getItem('portalTheme')).toBe('dark');
+    // The button now offers the reverse action.
+    expect(screen.getByRole('button', { name: /switch to light mode/i })).toBeInTheDocument();
+  });
+
+  test('restores a previously saved dark preference on mount', async () => {
+    setupLoggedIn();
+    localStorage.setItem('portalTheme', 'dark');
+    mockBase();
+    renderPortal();
+    await screen.findByRole('navigation', { name: /portal sections/i });
+    expect(document.documentElement.getAttribute('data-theme')).toBe('dark');
+    // Header toggle reflects the dark state (offers switch-to-light).
+    expect(screen.getByRole('button', { name: /switch to light mode/i })).toBeInTheDocument();
+  });
+
+  test('login screen also exposes the theme toggle', () => {
+    // No token seeded → LoginScreen renders.
+    renderPortal();
+    expect(screen.getByRole('heading', { name: /customer portal/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /switch to dark mode/i })).toBeInTheDocument();
+  });
+});

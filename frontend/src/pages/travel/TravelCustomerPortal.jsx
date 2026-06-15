@@ -38,11 +38,15 @@ import {
   ShieldCheck, ShieldAlert, LogOut, Plane, User as UserIcon,
   CheckCircle2, AlertCircle, Loader2, ClipboardCheck, Award, LayoutDashboard,
   ChevronRight, ChevronLeft, Hotel, Ticket, FileUp, Upload, UserPlus,
-  Mail, Phone,
+  Mail, Phone, Sun, Moon,
 } from "lucide-react";
 
 const PORTAL_TOKEN_KEY = "portalToken";
 const PORTAL_CONTACT_KEY = "portalContact";
+// Light/dark preference for the customer portal. Stored separately from the
+// staff app's `theme` key — the portal is a public Contact-token surface that
+// manages its own theme (see the theme effect in TravelCustomerPortal).
+const PORTAL_THEME_KEY = "portalTheme";
 
 function readStoredAuth() {
   try {
@@ -104,6 +108,47 @@ export default function TravelCustomerPortal() {
   const [loginError, setLoginError] = useState(null);
   const [loginLoading, setLoginLoading] = useState(false);
 
+  // Portal-owned light/dark theme. The customer portal is NOT a CRM-user
+  // surface, so the app-global `data-vertical` (driven by tenant.vertical in
+  // App.jsx) resolves to "generic" here — which means the page would inherit
+  // index.css's generic, DARK-by-default :root tokens (dark cards on a cream
+  // page = the "mixed theme"). We pin `data-vertical="travel"` + our own
+  // `data-theme` so the WHOLE portal resolves the cohesive Travel palette
+  // (theme/travel.css), then let the customer flip light/dark. Saved/restored
+  // on unmount so it never leaks into the rest of the app (mirrors the
+  // brand-kit effect's save/restore discipline below).
+  const [portalTheme, setPortalTheme] = useState(() => {
+    try {
+      return localStorage.getItem(PORTAL_THEME_KEY) === "dark" ? "dark" : "light";
+    } catch (_e) {
+      return "light";
+    }
+  });
+
+  // Pin the Travel vertical on mount; restore the prior attributes on unmount.
+  useEffect(() => {
+    const root = document.documentElement;
+    const prevVertical = root.getAttribute("data-vertical");
+    const prevTheme = root.getAttribute("data-theme");
+    root.setAttribute("data-vertical", "travel");
+    return () => {
+      if (prevVertical === null) root.removeAttribute("data-vertical");
+      else root.setAttribute("data-vertical", prevVertical);
+      if (prevTheme === null) root.removeAttribute("data-theme");
+      else root.setAttribute("data-theme", prevTheme);
+    };
+  }, []);
+
+  // Apply + persist the portal theme whenever it changes.
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", portalTheme);
+    try { localStorage.setItem(PORTAL_THEME_KEY, portalTheme); } catch (_e) { /* ignore */ }
+  }, [portalTheme]);
+
+  const toggleTheme = useCallback(() => {
+    setPortalTheme((t) => (t === "dark" ? "light" : "dark"));
+  }, []);
+
   const handleLogin = async (e) => {
     e.preventDefault();
     setLoginError(null);
@@ -139,6 +184,8 @@ export default function TravelCustomerPortal() {
         onSubmit={handleLogin}
         error={loginError}
         loading={loginLoading}
+        theme={portalTheme}
+        onToggleTheme={toggleTheme}
       />
     );
   }
@@ -154,20 +201,51 @@ export default function TravelCustomerPortal() {
   };
 
   return (
-    <Dashboard token={token} contact={contact} onUpdateContact={updateContact} onLogout={handleLogout} />
+    <Dashboard
+      token={token}
+      contact={contact}
+      onUpdateContact={updateContact}
+      onLogout={handleLogout}
+      theme={portalTheme}
+      onToggleTheme={toggleTheme}
+    />
   );
 }
 
-function LoginScreen({ form, setForm, onSubmit, error, loading }) {
+// Sun/moon light-dark toggle used in the portal header (and login screen).
+// Shows the icon for the mode you'll SWITCH TO so the affordance reads as an
+// action, not a status.
+function ThemeToggleButton({ theme, onToggle }) {
+  const goingDark = theme !== "dark";
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      style={iconBtnStyle}
+      title={goingDark ? "Switch to dark mode" : "Switch to light mode"}
+      aria-label={goingDark ? "Switch to dark mode" : "Switch to light mode"}
+      aria-pressed={theme === "dark"}
+    >
+      {goingDark ? <Moon size={16} aria-hidden /> : <Sun size={16} aria-hidden />}
+    </button>
+  );
+}
+
+function LoginScreen({ form, setForm, onSubmit, error, loading, theme, onToggleTheme }) {
   return (
     <div style={{
+      position: "relative",
       minHeight: "100vh",
       display: "flex",
       alignItems: "center",
       justifyContent: "center",
       padding: 24,
       background: "var(--bg-color, #FAF6EE)",
+      color: "var(--text-primary, #1F1B14)",
     }}>
+      <div style={{ position: "absolute", top: 20, right: 20 }}>
+        <ThemeToggleButton theme={theme} onToggle={onToggleTheme} />
+      </div>
       <form
         onSubmit={onSubmit}
         style={{
@@ -259,7 +337,7 @@ const inputStyle = {
   boxSizing: "border-box",
 };
 
-function Dashboard({ token, contact, onUpdateContact, onLogout }) {
+function Dashboard({ token, contact, onUpdateContact, onLogout, theme, onToggleTheme }) {
   const [kyc, setKyc] = useState(null);
   const [itineraries, setItineraries] = useState([]);
   const [profile, setProfile] = useState(null);
@@ -336,6 +414,12 @@ function Dashboard({ token, contact, onUpdateContact, onLogout }) {
   // pick up the brand color without a render-tree rewrite. Cleared on
   // unmount so navigating away (or logging out) doesn't leak palette
   // into other surfaces.
+  //
+  // The brand's primary/accent are identity colours and apply in both light
+  // and dark mode. Its bg/text, however, are LIGHT-mode values — applying
+  // them in dark mode would override travel.css's dark tokens and re-create
+  // the light-page / dark-card mismatch. So we only set bg/text in light mode
+  // (and re-run on theme change so toggling restores them).
   useEffect(() => {
     const root = document.documentElement;
     if (!brandKit) return undefined;
@@ -347,8 +431,10 @@ function Dashboard({ token, contact, onUpdateContact, onLogout }) {
     };
     if (brandKit.primaryColor) root.style.setProperty("--primary-color", brandKit.primaryColor);
     if (brandKit.accentColor) root.style.setProperty("--accent-color", brandKit.accentColor);
-    if (brandKit.bgColor) root.style.setProperty("--bg-color", brandKit.bgColor);
-    if (brandKit.textColor) root.style.setProperty("--text-primary", brandKit.textColor);
+    if (theme === "light") {
+      if (brandKit.bgColor) root.style.setProperty("--bg-color", brandKit.bgColor);
+      if (brandKit.textColor) root.style.setProperty("--text-primary", brandKit.textColor);
+    }
     return () => {
       // Restore previous values (empty string clears the inline override
       // so the cascaded default reasserts).
@@ -357,7 +443,7 @@ function Dashboard({ token, contact, onUpdateContact, onLogout }) {
       root.style.setProperty("--bg-color", prev.bg);
       root.style.setProperty("--text-primary", prev.text);
     };
-  }, [brandKit]);
+  }, [brandKit, theme]);
 
   const handleVerify = async () => {
     setVerifyMsg(null);
@@ -434,6 +520,7 @@ function Dashboard({ token, contact, onUpdateContact, onLogout }) {
             </strong>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <ThemeToggleButton theme={theme} onToggle={onToggleTheme} />
             <DigiLockerButton verified={verified} loading={verifyLoading} onClick={handleVerify} />
             {/* Clickable name + avatar → opens the Profile view. */}
             <button
@@ -937,7 +1024,9 @@ function travellerPassportState(t) {
   if (t.passportVerifiedAt) return { label: "Verified", bg: "rgba(47, 122, 77, 0.12)", color: "#2F7A4D", canUpload: false };
   if (t.passportRejectedAt) return { label: "Rejected — please re-upload", bg: "rgba(168, 50, 63, 0.12)", color: "#A8323F", canUpload: true };
   if (t.passportExtractedAt) return { label: "Under review", bg: "rgba(200, 154, 78, 0.16)", color: "#9A6F2E", canUpload: true };
-  return { label: "Passport needed", bg: "rgba(18, 38, 71, 0.08)", color: "var(--text-secondary)", canUpload: true };
+  // Neutral pill uses the theme-aware --subtle-bg-3 token (identical navy tint
+  // in travel light; gold tint in travel dark) so it stays visible in both.
+  return { label: "Passport needed", bg: "var(--subtle-bg-3, rgba(18, 38, 71, 0.08))", color: "var(--text-secondary)", canUpload: true };
 }
 
 const RELATIONSHIP_OPTIONS = [

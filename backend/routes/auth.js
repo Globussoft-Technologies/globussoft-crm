@@ -112,7 +112,9 @@ router.get("/public/tenants", async (req, res) => {
       // `slug` is included so the customer-register + login pages can map a
       // `?tenantSlug=` handoff param (e.g. from the Dr. Haror's marketing
       // site) to a tenant id and pre-select the dropdown.
-      select: { id: true, name: true, slug: true },
+      // `vertical` lets the customer-register page route a travel-org signup
+      // to the Travel Customer Portal API instead of the staff User registration.
+      select: { id: true, name: true, slug: true, vertical: true },
       orderBy: { name: 'asc' },
     });
     res.json(tenants);
@@ -493,6 +495,33 @@ router.post("/customer/register", async (req, res) => {
       name: user.name,
       tenantId: tenantId
     });
+
+    // Bridge travel customers into the Customer Portal identity store. The
+    // portal (POST /api/portal/login) authenticates against
+    // Contact.portalPasswordHash — NOT the User table — so without this a
+    // self-registered travel customer could never sign into /travel/portal
+    // (they'd get "Invalid credentials", while seeded contacts like
+    // ahmed.pilgrim@demo.test work). We reuse the SAME bcrypt hash so one
+    // password works in both stores. Travel-only + best-effort: any failure
+    // here must never break the User registration above.
+    if ((user.tenant?.vertical || tenant.vertical) === "travel") {
+      try {
+        await prisma.contact.upsert({
+          where: { email_tenantId: { email, tenantId } },
+          update: { portalPasswordHash: hashedPassword },
+          create: {
+            name: name || email.split("@")[0],
+            email,
+            subBrand: "travelstall",
+            status: "Lead",
+            tenantId,
+            portalPasswordHash: hashedPassword,
+          },
+        });
+      } catch (e) {
+        console.error(`[auth] customer/register portal-contact bridge failed (non-fatal): ${e.message}`);
+      }
+    }
 
     // Issue JWT
     const jwtPayload = {

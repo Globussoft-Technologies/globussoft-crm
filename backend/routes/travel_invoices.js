@@ -76,6 +76,7 @@ const listProjection = require("../lib/listProjection");
 const {
   buildTallyXml: buildTravelTallyXml,
   buildCaCsv: buildTravelCaCsv,
+  buildAccountingXlsx: buildTravelAccountingXlsx,
 } = require("../lib/travelAccountingExport");
 // Sub-brand → legal-entity / GSTIN resolution (Q21 config blob on Tenant).
 const { resolveForSubBrand } = require("../lib/subBrandConfig");
@@ -1098,6 +1099,33 @@ async function collectAccountingExportRows(req) {
       });
     }
     const tcs = Number(inv.tcsAmount == null ? 0 : inv.tcsAmount);
+    const hadLines = exportLines.length > 0;
+
+    // Persisted invoice-level GST (POST /:id/tax-persist) takes precedence
+    // over the line-derived figures. Most invoices created via the quick
+    // "New Invoice" form are HEADER-ONLY (no TravelInvoiceLine rows), so the
+    // line loop above yields zeros — we must source the money from the
+    // invoice's own columns or the export shows 0.00 everywhere.
+    const useCgst = inv.cgstAmount != null ? Number(inv.cgstAmount) : cgst;
+    const useSgst = inv.sgstAmount != null ? Number(inv.sgstAmount) : sgst;
+    const useIgst = inv.igstAmount != null ? Number(inv.igstAmount) : igst;
+    const taxes = round2(useCgst + useSgst + useIgst + tcs);
+
+    // Invoice total: the header `totalAmount` column is authoritative (it's
+    // the figure the operator entered and the list/PDF show). Fall back to
+    // the computed sum only when the column is null (legacy rows).
+    const headerTotal = Number(inv.totalAmount);
+    const total = Number.isFinite(headerTotal) ? round2(headerTotal) : round2(taxable + taxes);
+
+    // Taxable: line-derived when the invoice has lines; otherwise back it
+    // out of the header total (total − taxes) so a header-only invoice still
+    // reconciles (taxable + taxes = total) instead of exporting as 0.00.
+    let useTaxable = taxable;
+    if (!hadLines) {
+      const derived = round2(total - taxes);
+      useTaxable = derived >= 0 ? derived : round2(total);
+    }
+
     const brandConfig = resolveForSubBrand(tenantRow, inv.subBrand);
     rows.push({
       invoiceNum: inv.invoiceNum,
@@ -1107,12 +1135,12 @@ async function collectAccountingExportRows(req) {
       subBrand: inv.subBrand,
       legalEntityCode: brandConfig.legalEntityCode || null,
       status: inv.status,
-      taxableAmount: taxable,
-      cgstAmount: cgst,
-      sgstAmount: sgst,
-      igstAmount: igst,
+      taxableAmount: useTaxable,
+      cgstAmount: useCgst,
+      sgstAmount: useSgst,
+      igstAmount: useIgst,
       tcsAmount: tcs,
-      totalAmount: round2(taxable + cgst + sgst + igst + tcs),
+      totalAmount: total,
       lines: exportLines,
     });
   }
@@ -1178,6 +1206,42 @@ router.get(
       }
       console.error("[travel-invoices] export/ca.csv error:", e.message);
       res.status(500).json({ error: "Failed to generate CA CSV export" });
+    }
+  },
+);
+
+// GET /api/travel/invoices/export/accounting.xlsx — plain spreadsheet
+// (one row per invoice + TOTAL row) the client can hand to their CA or
+// import into Excel Software for Travel. PRD §4.4 "Excel Software bridge —
+// P1: file import": the file-import leg, built internally so no vendor API
+// is needed (the P1.5 live API stays out of scope). Same scope filters
+// (?from/?to default to current FY, ?subBrand) + auth/role/vertical gates
+// as the Tally/CA exporters; reuses collectAccountingExportRows().
+router.get(
+  "/invoices/export/accounting.xlsx",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const { rows, fromIso, toIso, subBrandFilter } =
+        await collectAccountingExportRows(req);
+
+      const buf = buildTravelAccountingXlsx(rows);
+
+      const filename = `travel-accounting-${fromIso}-${toIso}-${subBrandFilter || "all"}.xlsx`;
+      res.setHeader(
+        "Content-Type",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      );
+      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+      return res.status(200).send(buf);
+    } catch (e) {
+      if (e.status) {
+        return res.status(e.status).json({ error: e.message, code: e.code });
+      }
+      console.error("[travel-invoices] export/accounting.xlsx error:", e.message);
+      res.status(500).json({ error: "Failed to generate accounting XLSX export" });
     }
   },
 );
@@ -5415,6 +5479,22 @@ router.get(
         orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
       });
 
+      // Load the bill-to contact so the PDF "Bill To" block isn't blank.
+      // TravelInvoice stores only contactId; the renderer reads contactName/
+      // contactEmail/contactPhone off the invoice object, so we resolve them
+      // here. Non-fatal — a missing contact just falls back to "—".
+      let contact = null;
+      if (invoice.contactId != null) {
+        try {
+          contact = await prisma.contact.findFirst({
+            where: { id: invoice.contactId, tenantId: req.travelTenant.id },
+            select: { name: true, email: true, phone: true },
+          });
+        } catch (_) {
+          // ignore — Bill To falls back to "—"
+        }
+      }
+
       // Tenant is optional input to the helper — load it for the footer
       // line. Failure to load (e.g. soft-deleted tenant) is non-fatal;
       // the helper handles a null tenant cleanly.
@@ -5430,7 +5510,12 @@ router.get(
       let pdfBuffer;
       try {
         pdfBuffer = await pdfRenderer.generateTravelInvoicePdf({
-          invoice,
+          invoice: {
+            ...invoice,
+            contactName: contact?.name || null,
+            contactEmail: contact?.email || null,
+            contactPhone: contact?.phone || null,
+          },
           lines,
           tenant,
         });

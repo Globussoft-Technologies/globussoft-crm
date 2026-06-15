@@ -26,7 +26,10 @@ async function refreshTokenIfNeeded(integration) {
     return integration;
   }
   if (!integration.refreshToken) {
-    throw new Error("No refresh token on integration; user must reconnect.");
+    const e = new Error("Your Microsoft Outlook connection needs to be reconnected. Please disconnect and connect again to resume syncing.");
+    e.code = "RECONNECT_REQUIRED";
+    e.statusCode = 401;
+    throw e;
   }
 
   const params = new URLSearchParams();
@@ -45,7 +48,21 @@ async function refreshTokenIfNeeded(integration) {
 
   if (!resp.ok) {
     const errText = await resp.text();
-    throw new Error(`Token refresh failed: ${resp.status} ${errText}`);
+    // Log the raw Microsoft OAuth response server-side for debugging, but
+    // never surface it to the user. invalid_grant / interaction_required /
+    // AADSTS700xx all mean the saved refresh token is no longer usable
+    // (expired, revoked, or the user changed their password) — a re-auth
+    // condition, not a server fault. Map it to a friendly reconnect prompt.
+    console.error(`[outlook] token refresh failed: ${resp.status} ${errText}`);
+    const reauth = /invalid_grant|interaction_required|consent_required|AADSTS700/i.test(errText);
+    const e = new Error(
+      reauth
+        ? "Your Microsoft Outlook connection has expired. Please disconnect and reconnect to resume syncing."
+        : "Couldn't refresh your Microsoft Outlook connection. Please try again, or reconnect if this keeps happening.",
+    );
+    e.code = reauth ? "RECONNECT_REQUIRED" : "TOKEN_REFRESH_FAILED";
+    e.statusCode = reauth ? 401 : 502;
+    throw e;
   }
 
   const data = await resp.json();
@@ -253,7 +270,13 @@ router.post("/sync", verifyToken, async (req, res) => {
     return res.json({ synced });
   } catch (err) {
     console.error("[outlook/sync] error:", err);
-    return res.status(500).json({ error: err.message });
+    // Surface the already-friendly reconnect/refresh errors with their code;
+    // otherwise a generic friendly message (never the raw err.message, which
+    // can be a Graph/OAuth dump).
+    if (err.code === "RECONNECT_REQUIRED" || err.code === "TOKEN_REFRESH_FAILED") {
+      return res.status(err.statusCode || 401).json({ error: err.message, code: err.code });
+    }
+    return res.status(500).json({ error: "Couldn't sync your Microsoft Outlook calendar right now. Please try again." });
   }
 });
 

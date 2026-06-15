@@ -20,7 +20,7 @@
  */
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { FileImage, Save, Loader, Sparkles, Image as ImageIcon } from 'lucide-react';
+import { FileImage, Save, Loader, Sparkles, Image as ImageIcon, Undo2, Redo2, Grid3x3 } from 'lucide-react';
 import { useActiveSubBrand } from '../../utils/subBrand';
 import { useNotify } from '../../utils/notify';
 import { fetchApi, getAuthToken } from '../../utils/api';
@@ -85,10 +85,58 @@ const DEFAULT_ASSETS = {};
 
 // Slice-1 editor: the 5 palette colours editable via the toolbar swatches.
 const PALETTE_KEYS = ['primaryHex', 'secondaryHex', 'accentHex', 'textHex', 'bgHex'];
+
+// What each palette colour actually drives in the rendered/exported flyer
+// (lib/flyerPdfRender.js + services/flyerRenderEngine.js). Most aren't
+// visible on a near-empty canvas, so we surface a short label + a tooltip
+// explaining the effect — otherwise only "Background" looks like it works.
+const PALETTE_META = {
+  primaryHex: { label: 'Primary', hint: 'CTA button text colour' },
+  secondaryHex: { label: 'Secondary', hint: 'Price block text colour' },
+  accentHex: { label: 'Accent', hint: 'Placeholder fill for empty image / logo blocks' },
+  textHex: { label: 'Text', hint: 'Default colour for new text blocks' },
+  bgHex: { label: 'Background', hint: 'Flyer / canvas background colour' },
+};
 // Editor canvas dimensions (portrait flyer). Blocks are positioned in this
 // coordinate space; export-to-PNG/PDF lands in a later slice.
 const CANVAS_W = 540;
 const CANVAS_H = 720;
+
+// Snap-to-grid step (canvas px) — drag/resize round to this when snap is on.
+const GRID = 10;
+
+// Block-type starting shapes. The render engine (lib/flyerPdfRender.js +
+// services/flyerRenderEngine.js) supports text / price / cta / image / logo:
+// price→secondaryHex, cta→primaryHex (colour applied at render); image+logo
+// carry a `src`. Editor mirrors those so the canvas is WYSIWYG.
+const BLOCK_DEFAULTS = {
+  text: { type: 'text', width: 240, height: 48, content: 'New text', fontSize: 18 },
+  price: { type: 'price', width: 200, height: 48, content: '₹ 49,999', fontSize: 24 },
+  cta: { type: 'cta', width: 200, height: 50, content: 'Book Now', fontSize: 18 },
+  image: { type: 'image', width: 180, height: 120, src: '' },
+  logo: { type: 'logo', width: 140, height: 60, src: '' },
+};
+const SRC_TYPES = new Set(['image', 'logo']);
+const TEXT_TYPES = new Set(['text', 'price', 'cta']);
+
+// Font families offered for text/price/cta blocks. Limited to the three the
+// PDF export can render natively (pdfkit standard-14: Helvetica / Times /
+// Courier) so the editor canvas, PNG export, and PDF export all match.
+const FONT_CSS = {
+  sans: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif",
+  serif: "Georgia, 'Times New Roman', Times, serif",
+  mono: "'Courier New', Courier, monospace",
+};
+const FONT_OPTIONS = [
+  { value: 'sans', label: 'Sans-serif' },
+  { value: 'serif', label: 'Serif' },
+  { value: 'mono', label: 'Monospace' },
+];
+const ALIGN_OPTIONS = [
+  { value: 'left', label: 'L', aria: 'Align left' },
+  { value: 'center', label: 'C', aria: 'Align center' },
+  { value: 'right', label: 'R', aria: 'Align right' },
+];
 
 export default function MarketingFlyerStudio() {
   const { activeSubBrand } = useActiveSubBrand() || { activeSubBrand: null };
@@ -112,8 +160,61 @@ export default function MarketingFlyerStudio() {
   // ── Slice-1 editor state + handlers ─────────────────────────────────
   const [selectedIdx, setSelectedIdx] = useState(null);
   const dragRef = useRef(null);
+  const resizeRef = useRef(null);
   const fileInputRef = useRef(null);
   const [uploading, setUploading] = useState(false);
+
+  // ── Undo/redo + snap-to-grid ────────────────────────────────────────
+  const [undoStack, setUndoStack] = useState([]);
+  const [redoStack, setRedoStack] = useState([]);
+  const [snapToGrid, setSnapToGrid] = useState(true);
+  // Mirror the live state into a ref so commit() always snapshots the
+  // CURRENT (pre-mutation) state without stale-closure bugs from the
+  // various useCallback handlers that push history.
+  const stateRef = useRef({ layout, palette, assets });
+  useEffect(() => { stateRef.current = { layout, palette, assets }; }, [layout, palette, assets]);
+  const pushHistory = useCallback((snap) => {
+    setUndoStack((s) => [...s.slice(-49), snap]); // cap at 50 entries
+    setRedoStack([]);
+  }, []);
+  // Call BEFORE a mutation to record the state to revert to.
+  const commit = useCallback(() => { pushHistory(stateRef.current); }, [pushHistory]);
+  const undo = useCallback(() => {
+    if (!undoStack.length) return;
+    const prev = undoStack[undoStack.length - 1];
+    setRedoStack((r) => [...r, stateRef.current]);
+    setUndoStack((s) => s.slice(0, -1));
+    setLayout(Array.isArray(prev.layout) ? prev.layout : []);
+    if (prev.palette) setPalette(prev.palette);
+    if (prev.assets) setAssets(prev.assets);
+    setSelectedIdx(null);
+  }, [undoStack]);
+  const redo = useCallback(() => {
+    if (!redoStack.length) return;
+    const next = redoStack[redoStack.length - 1];
+    setUndoStack((s) => [...s, stateRef.current]);
+    setRedoStack((r) => r.slice(0, -1));
+    setLayout(Array.isArray(next.layout) ? next.layout : []);
+    if (next.palette) setPalette(next.palette);
+    if (next.assets) setAssets(next.assets);
+    setSelectedIdx(null);
+  }, [redoStack]);
+  const snap = useCallback((v) => (snapToGrid ? Math.round(v / GRID) * GRID : Math.round(v)), [snapToGrid]);
+
+  // Ctrl/Cmd+Z = undo, Ctrl/Cmd+Shift+Z or Ctrl+Y = redo. Ignored while
+  // typing in an input/textarea so it doesn't fight native text undo.
+  useEffect(() => {
+    const onKey = (e) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      const tag = (e.target && e.target.tagName) || '';
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+      const k = (e.key || '').toLowerCase();
+      if (k === 'z' && !e.shiftKey) { e.preventDefault(); undo(); }
+      else if ((k === 'z' && e.shiftKey) || k === 'y') { e.preventDefault(); redo(); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [undo, redo]);
 
   // S71 / S72 — AI copy + image generation modal state.
   const [showCopyModal, setShowCopyModal] = useState(false);
@@ -124,23 +225,45 @@ export default function MarketingFlyerStudio() {
   const [aiBusy, setAiBusy] = useState(false);
 
   const addBlock = useCallback((type) => {
+    commit();
     setLayout((prev) => {
       const offset = prev.length * 12;
-      const block = type === 'image'
-        ? { type: 'image', x: 24, y: 24 + offset, width: 180, height: 120, src: '' }
-        : { type: 'text', x: 24, y: 24 + offset, width: 240, height: 48, content: 'New text', color: palette.textHex || '#222222', fontSize: 18 };
+      const base = BLOCK_DEFAULTS[type] || BLOCK_DEFAULTS.text;
+      const block = { ...base, x: 24, y: 24 + offset };
+      // Only plain text carries an editable colour; price/cta colours are
+      // applied by the render engine (secondary/primary) for brand consistency.
+      if (type === 'text') block.color = palette.textHex || '#222222';
       return [...prev, block];
     });
-  }, [palette]);
+  }, [palette, commit]);
 
   const updateBlock = useCallback((idx, patch) => {
     setLayout((prev) => prev.map((b, i) => (i === idx ? { ...b, ...patch } : b)));
   }, []);
 
   const removeBlock = useCallback((idx) => {
+    commit();
     setLayout((prev) => prev.filter((_, i) => i !== idx));
     setSelectedIdx(null);
-  }, []);
+  }, [commit]);
+
+  // Change a palette colour AND re-theme every block currently using the OLD
+  // value, so the swatch visibly updates existing content (not just the
+  // canvas bg). Without this, a block's baked-in `color` (set when it was
+  // created) ignores later palette edits — which is why "only the last
+  // swatch worked". Manual one-off colours that don't match a palette value
+  // are left untouched. bgHex isn't a text colour, so it only sets the bg.
+  const setPaletteKey = useCallback((k, newVal) => {
+    const oldVal = palette[k] || '';
+    setPalette((p) => ({ ...p, [k]: newVal }));
+    if (k !== 'bgHex' && oldVal && oldVal.toLowerCase() !== String(newVal).toLowerCase()) {
+      setLayout((prev) => prev.map((b) =>
+        (b.color && String(b.color).toLowerCase() === oldVal.toLowerCase())
+          ? { ...b, color: newVal }
+          : b,
+      ));
+    }
+  }, [palette]);
 
   // S71 — POST destination + audience to /suggest-copy. On success insert
   // three new text blocks (headline / body / cta) into the canvas. Smart
@@ -173,6 +296,7 @@ export default function MarketingFlyerStudio() {
         setShowCopyModal(false);
         return;
       }
+      commit();
       setLayout((prev) => {
         const isFresh =
           prev.length === 1 &&
@@ -228,7 +352,7 @@ export default function MarketingFlyerStudio() {
     } finally {
       setAiBusy(false);
     }
-  }, [aiDestination, aiAudience, activeSubBrand, palette, notify]);
+  }, [aiDestination, aiAudience, activeSubBrand, palette, notify, commit]);
 
   // S72 — POST destination + aspectRatio to /suggest-image. On success
   // EITHER replace the selected image block's src OR add a new image block
@@ -301,16 +425,39 @@ export default function MarketingFlyerStudio() {
     e.preventDefault();
     setSelectedIdx(idx);
     const b = layout[idx] || {};
-    dragRef.current = { idx, startX: e.clientX, startY: e.clientY, origX: b.x || 0, origY: b.y || 0 };
+    // Stash the pre-drag snapshot; only push to history on actual movement
+    // (so a plain click-to-select doesn't spam empty undo entries).
+    dragRef.current = { idx, startX: e.clientX, startY: e.clientY, origX: b.x || 0, origY: b.y || 0, snapshot: stateRef.current, moved: false };
+  }, [layout]);
+  const onResizeMouseDown = useCallback((e, idx) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setSelectedIdx(idx);
+    const b = layout[idx] || {};
+    resizeRef.current = { idx, startX: e.clientX, startY: e.clientY, origW: b.width || GRID, origH: b.height || GRID, snapshot: stateRef.current, moved: false };
   }, [layout]);
   const onCanvasMouseMove = useCallback((e) => {
+    const r = resizeRef.current;
+    if (r) {
+      const nw = Math.max(GRID, snap(r.origW + (e.clientX - r.startX)));
+      const nh = Math.max(GRID, snap(r.origH + (e.clientY - r.startY)));
+      r.moved = true;
+      setLayout((prev) => prev.map((b, i) => (i === r.idx ? { ...b, width: nw, height: nh } : b)));
+      return;
+    }
     const d = dragRef.current;
     if (!d) return;
-    const nx = Math.max(0, Math.round(d.origX + (e.clientX - d.startX)));
-    const ny = Math.max(0, Math.round(d.origY + (e.clientY - d.startY)));
+    const nx = Math.max(0, snap(d.origX + (e.clientX - d.startX)));
+    const ny = Math.max(0, snap(d.origY + (e.clientY - d.startY)));
+    d.moved = true;
     setLayout((prev) => prev.map((b, i) => (i === d.idx ? { ...b, x: nx, y: ny } : b)));
-  }, []);
-  const onCanvasMouseUp = useCallback(() => { dragRef.current = null; }, []);
+  }, [snap]);
+  const onCanvasMouseUp = useCallback(() => {
+    if (dragRef.current && dragRef.current.moved) pushHistory(dragRef.current.snapshot);
+    if (resizeRef.current && resizeRef.current.moved) pushHistory(resizeRef.current.snapshot);
+    dragRef.current = null;
+    resizeRef.current = null;
+  }, [pushHistory]);
 
   // FR-3.2.2 — upload an image for the selected image block. Raw fetch + FormData
   // (fetchApi forces JSON content-type, so we bypass it — same as the landing-page
@@ -332,13 +479,14 @@ export default function MarketingFlyerStudio() {
         notify?.error?.(data?.error || 'Image upload failed');
         return;
       }
+      commit();
       updateBlock(idx, { src: data.url });
     } catch (e) {
       notify?.error?.(e?.message || 'Image upload failed');
     } finally {
       setUploading(false);
     }
-  }, [notify, updateBlock]);
+  }, [notify, updateBlock, commit]);
 
   // Parse @db.Text JSON columns — tolerates JSON string OR already-parsed object.
   const parseJsonField = useCallback((field, fallback) => {
@@ -499,6 +647,15 @@ export default function MarketingFlyerStudio() {
           <button type="button" onClick={() => addBlock('image')} style={toolBtn} data-testid="flyer-add-image">
             + Image
           </button>
+          <button type="button" onClick={() => addBlock('price')} style={toolBtn} data-testid="flyer-add-price">
+            + Price
+          </button>
+          <button type="button" onClick={() => addBlock('cta')} style={toolBtn} data-testid="flyer-add-cta">
+            + CTA
+          </button>
+          <button type="button" onClick={() => addBlock('logo')} style={toolBtn} data-testid="flyer-add-logo">
+            + Logo
+          </button>
           <button
             type="button"
             onClick={() => { setAiDestination(''); setAiAudience(''); setShowCopyModal(true); }}
@@ -517,20 +674,58 @@ export default function MarketingFlyerStudio() {
           >
             <ImageIcon size={14} aria-hidden /> AI Image
           </button>
-          <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 8, alignItems: 'center' }}>
-            <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>Palette</span>
-            {PALETTE_KEYS.map((k) => (
-              <input
-                key={k}
-                type="color"
-                aria-label={k}
-                title={k}
-                data-testid={`palette-${k}`}
-                value={palette[k] || '#000000'}
-                onChange={(e) => setPalette({ ...palette, [k]: e.target.value })}
-                style={swatchStyle}
-              />
-            ))}
+          <button
+            type="button"
+            onClick={undo}
+            disabled={!undoStack.length}
+            style={{ ...toolBtn, opacity: undoStack.length ? 1 : 0.45 }}
+            data-testid="flyer-undo"
+            aria-label="Undo"
+            title="Undo (Ctrl+Z)"
+          >
+            <Undo2 size={14} aria-hidden /> Undo
+          </button>
+          <button
+            type="button"
+            onClick={redo}
+            disabled={!redoStack.length}
+            style={{ ...toolBtn, opacity: redoStack.length ? 1 : 0.45 }}
+            data-testid="flyer-redo"
+            aria-label="Redo"
+            title="Redo (Ctrl+Shift+Z)"
+          >
+            <Redo2 size={14} aria-hidden /> Redo
+          </button>
+          <button
+            type="button"
+            onClick={() => setSnapToGrid((s) => !s)}
+            style={{ ...toolBtn, background: snapToGrid ? 'var(--primary-color, var(--accent-color))' : undefined, color: snapToGrid ? '#fff' : undefined }}
+            data-testid="flyer-snap-toggle"
+            aria-pressed={snapToGrid}
+            title={`Snap to ${GRID}px grid`}
+          >
+            <Grid3x3 size={14} aria-hidden /> Snap {snapToGrid ? 'on' : 'off'}
+          </button>
+          <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 10, alignItems: 'flex-end' }}>
+            <span style={{ fontSize: 11, color: 'var(--text-secondary)', alignSelf: 'center' }}>Palette</span>
+            {PALETTE_KEYS.map((k) => {
+              const meta = PALETTE_META[k] || { label: k, hint: k };
+              return (
+                <span key={k} style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
+                  <input
+                    type="color"
+                    aria-label={`${meta.label} colour — ${meta.hint}`}
+                    title={`${meta.label}: ${meta.hint}`}
+                    data-testid={`palette-${k}`}
+                    value={palette[k] || '#000000'}
+                    onFocus={commit}
+                    onChange={(e) => setPaletteKey(k, e.target.value)}
+                    style={swatchStyle}
+                  />
+                  <span style={{ fontSize: 9, color: 'var(--text-secondary)', lineHeight: 1 }}>{meta.label}</span>
+                </span>
+              );
+            })}
           </span>
         </div>
 
@@ -542,38 +737,78 @@ export default function MarketingFlyerStudio() {
             onMouseUp={onCanvasMouseUp}
             onMouseLeave={onCanvasMouseUp}
             onClick={(e) => { if (e.target === e.currentTarget) setSelectedIdx(null); }}
-            style={{ ...canvasStyle, background: palette.bgHex || '#FFFFFF' }}
+            style={{
+              ...canvasStyle,
+              background: palette.bgHex || '#FFFFFF',
+              // Faint grid overlay while snap is on — a visual cue for the
+              // GRID step blocks snap to (pure CSS; not part of the export).
+              backgroundImage: snapToGrid
+                ? `linear-gradient(to right, rgba(0,0,0,0.06) 1px, transparent 1px), linear-gradient(to bottom, rgba(0,0,0,0.06) 1px, transparent 1px)`
+                : undefined,
+              backgroundSize: snapToGrid ? `${GRID}px ${GRID}px` : undefined,
+            }}
           >
-            {layout.map((b, idx) => (
-              <div
-                key={idx}
-                data-testid={`flyer-block-${idx}`}
-                onMouseDown={(e) => onBlockMouseDown(e, idx)}
-                onClick={(e) => { e.stopPropagation(); setSelectedIdx(idx); }}
-                style={{
-                  position: 'absolute',
-                  left: b.x || 0,
-                  top: b.y || 0,
-                  width: b.width || 100,
-                  height: b.height || 40,
-                  boxSizing: 'border-box',
-                  padding: 4,
-                  overflow: 'hidden',
-                  cursor: 'move',
-                  border: selectedIdx === idx
-                    ? '2px solid var(--primary-color, var(--accent-color))'
-                    : '1px dashed rgba(0,0,0,0.25)',
-                  color: b.color || palette.textHex || '#222222',
-                  fontSize: b.fontSize || 16,
-                }}
-              >
-                {b.type === 'image'
-                  ? (b.src
-                    ? <img src={b.src} alt="" style={{ maxWidth: '100%', maxHeight: '100%' }} />
-                    : <span style={{ fontSize: 11, opacity: 0.5 }}>Image — set URL →</span>)
-                  : (b.content || '')}
-              </div>
-            ))}
+            {layout.map((b, idx) => {
+              const blockColor = b.type === 'price'
+                ? (palette.secondaryHex || '#C89A4E')
+                : b.type === 'cta'
+                  ? (palette.primaryHex || '#122647')
+                  : (b.color || palette.textHex || '#222222');
+              return (
+                <div
+                  key={idx}
+                  data-testid={`flyer-block-${idx}`}
+                  onMouseDown={(e) => onBlockMouseDown(e, idx)}
+                  onClick={(e) => { e.stopPropagation(); setSelectedIdx(idx); }}
+                  style={{
+                    position: 'absolute',
+                    left: b.x || 0,
+                    top: b.y || 0,
+                    width: b.width || 100,
+                    height: b.height || 40,
+                    boxSizing: 'border-box',
+                    padding: 4,
+                    overflow: 'hidden',
+                    cursor: 'move',
+                    border: selectedIdx === idx
+                      ? '2px solid var(--primary-color, var(--accent-color))'
+                      : '1px dashed rgba(0,0,0,0.25)',
+                    color: blockColor,
+                    fontSize: b.fontSize || 16,
+                    fontFamily: FONT_CSS[b.font] || undefined,
+                    fontWeight: (b.bold || b.type === 'cta') ? 700 : undefined,
+                    fontStyle: b.italic ? 'italic' : undefined,
+                    textDecoration: b.underline ? 'underline' : undefined,
+                    textAlign: b.align || undefined,
+                  }}
+                >
+                  {SRC_TYPES.has(b.type)
+                    ? (b.src
+                      ? <img src={b.src} alt="" style={{ maxWidth: '100%', maxHeight: '100%' }} />
+                      : <span style={{ fontSize: 11, opacity: 0.5 }}>{b.type === 'logo' ? 'Logo' : 'Image'} — set URL →</span>)
+                    : (b.content || '')}
+                  {selectedIdx === idx && (
+                    <span
+                      data-testid={`flyer-resize-${idx}`}
+                      onMouseDown={(e) => onResizeMouseDown(e, idx)}
+                      role="button"
+                      aria-label="Resize block"
+                      style={{
+                        position: 'absolute',
+                        right: 0,
+                        bottom: 0,
+                        width: 12,
+                        height: 12,
+                        background: 'var(--primary-color, var(--accent-color))',
+                        border: '1px solid #fff',
+                        borderRadius: 2,
+                        cursor: 'nwse-resize',
+                      }}
+                    />
+                  )}
+                </div>
+              );
+            })}
           </div>
 
           {/* Properties */}
@@ -584,17 +819,18 @@ export default function MarketingFlyerStudio() {
               </p>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                <strong style={{ fontSize: 12 }}>
-                  {selected.type === 'image' ? 'Image block' : 'Text block'}
+                <strong style={{ fontSize: 12, textTransform: 'capitalize' }}>
+                  {selected.type} block
                 </strong>
-                {selected.type === 'image' ? (
+                {SRC_TYPES.has(selected.type) ? (
                   <>
                     <label style={propLabel}>
-                      Image URL
+                      {selected.type === 'logo' ? 'Logo URL' : 'Image URL'}
                       <input
                         type="text"
                         aria-label="Image URL"
                         value={selected.src || ''}
+                        onFocus={commit}
                         onChange={(e) => updateBlock(selectedIdx, { src: e.target.value })}
                         style={propInput}
                         placeholder="https://… or /uploads/…"
@@ -625,31 +861,102 @@ export default function MarketingFlyerStudio() {
                       <textarea
                         aria-label="Block text"
                         value={selected.content || ''}
+                        onFocus={commit}
                         onChange={(e) => updateBlock(selectedIdx, { content: e.target.value })}
                         rows={3}
                         style={propInput}
                       />
                     </label>
-                    <label style={propLabel}>
-                      Colour
-                      <input
-                        type="color"
-                        aria-label="Text colour"
-                        value={selected.color || '#222222'}
-                        onChange={(e) => updateBlock(selectedIdx, { color: e.target.value })}
-                        style={{ ...propInput, padding: 2, height: 30 }}
-                      />
-                    </label>
+                    {selected.type === 'text' ? (
+                      <label style={propLabel}>
+                        Colour
+                        <input
+                          type="color"
+                          aria-label="Text colour"
+                          value={selected.color || '#222222'}
+                          onFocus={commit}
+                          onChange={(e) => updateBlock(selectedIdx, { color: e.target.value })}
+                          style={{ ...propInput, padding: 2, height: 30 }}
+                        />
+                      </label>
+                    ) : (
+                      <p style={{ fontSize: 11, color: 'var(--text-secondary)', margin: 0 }}>
+                        Colour is applied automatically from the brand palette
+                        ({selected.type === 'price' ? 'secondary' : 'primary'}).
+                      </p>
+                    )}
                     <label style={propLabel}>
                       Font size
                       <input
                         type="number"
                         aria-label="Font size"
                         value={selected.fontSize || 16}
+                        onFocus={commit}
                         onChange={(e) => updateBlock(selectedIdx, { fontSize: Number(e.target.value) || 16 })}
                         style={propInput}
                       />
                     </label>
+                    <label style={propLabel}>
+                      Font family
+                      <select
+                        aria-label="Font family"
+                        data-testid="flyer-font-family"
+                        value={selected.font || 'sans'}
+                        onFocus={commit}
+                        onChange={(e) => updateBlock(selectedIdx, { font: e.target.value })}
+                        style={propInput}
+                      >
+                        {FONT_OPTIONS.map((o) => (
+                          <option key={o.value} value={o.value}>{o.label}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <button
+                        type="button"
+                        data-testid="flyer-bold"
+                        aria-label="Bold"
+                        aria-pressed={!!selected.bold}
+                        onClick={() => { commit(); updateBlock(selectedIdx, { bold: !selected.bold }); }}
+                        style={{ ...styleToggleBtn, fontWeight: 700, ...(selected.bold ? styleToggleActive : {}) }}
+                      >
+                        B
+                      </button>
+                      <button
+                        type="button"
+                        data-testid="flyer-italic"
+                        aria-label="Italic"
+                        aria-pressed={!!selected.italic}
+                        onClick={() => { commit(); updateBlock(selectedIdx, { italic: !selected.italic }); }}
+                        style={{ ...styleToggleBtn, fontStyle: 'italic', ...(selected.italic ? styleToggleActive : {}) }}
+                      >
+                        I
+                      </button>
+                      <button
+                        type="button"
+                        data-testid="flyer-underline"
+                        aria-label="Underline"
+                        aria-pressed={!!selected.underline}
+                        onClick={() => { commit(); updateBlock(selectedIdx, { underline: !selected.underline }); }}
+                        style={{ ...styleToggleBtn, textDecoration: 'underline', ...(selected.underline ? styleToggleActive : {}) }}
+                      >
+                        U
+                      </button>
+                      <span style={{ width: 1, background: 'var(--border-color)', margin: '0 2px' }} />
+                      {ALIGN_OPTIONS.map((a) => (
+                        <button
+                          key={a.value}
+                          type="button"
+                          data-testid={`flyer-align-${a.value}`}
+                          aria-label={a.aria}
+                          aria-pressed={(selected.align || 'left') === a.value}
+                          onClick={() => { commit(); updateBlock(selectedIdx, { align: a.value }); }}
+                          style={{ ...styleToggleBtn, ...((selected.align || 'left') === a.value ? styleToggleActive : {}) }}
+                        >
+                          {a.label}
+                        </button>
+                      ))}
+                    </div>
                   </>
                 )}
                 <div style={{ display: 'flex', gap: 8 }}>
@@ -660,6 +967,7 @@ export default function MarketingFlyerStudio() {
                         type="number"
                         aria-label={dim}
                         value={selected[dim] || 0}
+                        onFocus={commit}
                         onChange={(e) => updateBlock(selectedIdx, { [dim]: Math.max(0, Number(e.target.value) || 0) })}
                         style={propInput}
                       />
@@ -889,6 +1197,8 @@ const editorWrap = { display: 'flex', flexDirection: 'column', gap: 12 };
 const toolbarStyle = { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', padding: '8px 10px', borderRadius: 8, background: 'var(--surface-color)', border: '1px solid var(--border-color)' };
 const toolBtn = { display: 'inline-flex', alignItems: 'center', gap: 4, padding: '6px 12px', borderRadius: 6, fontSize: 13, fontWeight: 600, background: 'var(--primary-color, var(--accent-color))', color: 'var(--accent-text, #fff)', border: 'none', cursor: 'pointer' };
 const swatchStyle = { width: 26, height: 26, padding: 0, border: '1px solid var(--border-color)', borderRadius: 4, cursor: 'pointer', background: 'transparent' };
+const styleToggleBtn = { minWidth: 30, height: 28, padding: '0 6px', borderRadius: 6, border: '1px solid var(--border-color)', background: 'var(--input-bg)', color: 'var(--text-primary)', cursor: 'pointer', fontSize: 13, lineHeight: 1 };
+const styleToggleActive = { background: 'var(--primary-color, var(--accent-color))', color: '#fff', borderColor: 'transparent' };
 // Canvas reads as a "sheet of paper" floating on the page. Stronger
 // shadow + a neutral semi-transparent border so the boundary stays
 // visible in BOTH themes — in light mode the cream palette.bgHex

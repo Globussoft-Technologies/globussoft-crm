@@ -323,13 +323,117 @@ function buildCaCsv(invoices) {
   return rows.join(CRLF) + CRLF;
 }
 
+// Round to 2dp as a NUMBER (not a string). Non-finite → 0. Used by the
+// XLSX builder, which writes numeric cells so a bookkeeper's SUM()/pivot
+// works natively (unlike the CSV/Tally renderers, which emit 2dp strings).
+function round2(n) {
+  const num = Number(n);
+  if (!Number.isFinite(num)) return 0;
+  return Math.round(num * 100) / 100;
+}
+
+// Pinned XLSX header — ONE row per invoice (not per line, unlike the CA
+// CSV). This is the "hand to your accountant / import into Excel Software
+// for Travel" file (PRD §4.4 — Excel Software bridge "P1: file import"),
+// where a bookkeeper expects one summary row per invoice + a TOTAL row.
+const ACCOUNTING_XLSX_HEADER = [
+  "Invoice Number",
+  "Invoice Date",
+  "Customer",
+  "Customer GSTIN",
+  "Sub-Brand",
+  "Legal Entity",
+  "Status",
+  "Taxable Value",
+  "CGST",
+  "SGST",
+  "IGST",
+  "TCS",
+  "Invoice Total",
+];
+
+/**
+ * Build an XLSX workbook buffer: one "Invoices" sheet with one row per
+ * invoice (summary level) + a trailing TOTAL row. Money columns are real
+ * numeric cells so SUM/pivot work without re-parsing. Empty list → a sheet
+ * with just the header + a zeroed TOTAL row (still a valid, importable file).
+ *
+ * Pure apart from requiring the `xlsx` lib (no Prisma, no filesystem, no
+ * network) — required lazily to match lib/csvIO.js + the rooming export.
+ *
+ * @param {TravelExportInvoice[]} invoices
+ * @param {Object} [opts]
+ * @param {string} [opts.sheetName="Invoices"] - worksheet tab name (≤31 chars)
+ * @returns {Buffer} XLSX file bytes
+ */
+function buildAccountingXlsx(invoices, { sheetName = "Invoices" } = {}) {
+  const XLSX = require("xlsx");
+  const list = Array.isArray(invoices) ? invoices : [];
+
+  const aoa = [ACCOUNTING_XLSX_HEADER.slice()];
+
+  let tTaxable = 0;
+  let tCgst = 0;
+  let tSgst = 0;
+  let tIgst = 0;
+  let tTcs = 0;
+  let tTotal = 0;
+
+  for (const inv of list) {
+    const taxable = round2(inv.taxableAmount);
+    const cgst = round2(inv.cgstAmount);
+    const sgst = round2(inv.sgstAmount);
+    const igst = round2(inv.igstAmount);
+    const tcs = round2(inv.tcsAmount);
+    const providedTotal = Number(inv.totalAmount);
+    const total =
+      Number.isFinite(providedTotal) && providedTotal !== 0
+        ? round2(providedTotal)
+        : round2(taxable + cgst + sgst + igst + tcs);
+
+    tTaxable = round2(tTaxable + taxable);
+    tCgst = round2(tCgst + cgst);
+    tSgst = round2(tSgst + sgst);
+    tIgst = round2(tIgst + igst);
+    tTcs = round2(tTcs + tcs);
+    tTotal = round2(tTotal + total);
+
+    aoa.push([
+      inv.invoiceNum || "",
+      csvDate(inv.date),
+      inv.customerName || "",
+      inv.customerGstin || "",
+      inv.subBrand || "",
+      inv.legalEntityCode || "",
+      inv.status || "",
+      taxable,
+      cgst,
+      sgst,
+      igst,
+      tcs,
+      total,
+    ]);
+  }
+
+  // Trailing TOTAL row so the file reconciles at a glance on import.
+  aoa.push(["TOTAL", "", "", "", "", "", "", tTaxable, tCgst, tSgst, tIgst, tTcs, tTotal]);
+
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, String(sheetName || "Invoices").slice(0, 31));
+  return XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+}
+
 module.exports = {
   buildTallyXml,
   buildCaCsv,
+  buildAccountingXlsx,
   escapeXml,
   fmtTallyDate,
   money2,
+  round2,
   csvEscape,
   csvDate,
   CA_CSV_HEADER,
+  ACCOUNTING_XLSX_HEADER,
 };

@@ -751,3 +751,81 @@ describe('MarketingFlyerStudio — extended composer affordances', () => {
     expect(screen.getByTestId('marketing-flyer-studio')).toBeTruthy();
   });
 });
+
+describe('<MarketingFlyerStudio /> — advanced editor features', () => {
+  it('"+ Price" / "+ CTA" / "+ Logo" append the new block types', () => {
+    renderStudio();
+    fireEvent.click(screen.getByTestId('flyer-add-price'));
+    fireEvent.click(screen.getByTestId('flyer-add-cta'));
+    fireEvent.click(screen.getByTestId('flyer-add-logo'));
+    // Default seed = block-0; three appends → blocks 1, 2, 3.
+    expect(screen.getByTestId('flyer-block-1')).toBeTruthy();
+    expect(screen.getByTestId('flyer-block-2')).toBeTruthy();
+    expect((screen.getByTestId('flyer-block-3').textContent || '')).toMatch(/logo/i);
+  });
+
+  it('Undo reverts the last add; Redo re-applies it', () => {
+    renderStudio();
+    // No history yet → both disabled.
+    expect(screen.getByTestId('flyer-undo').disabled).toBe(true);
+    expect(screen.getByTestId('flyer-redo').disabled).toBe(true);
+    fireEvent.click(screen.getByTestId('flyer-add-text'));
+    expect(screen.getByTestId('flyer-block-1')).toBeTruthy();
+    expect(screen.getByTestId('flyer-undo').disabled).toBe(false);
+    fireEvent.click(screen.getByTestId('flyer-undo'));
+    expect(screen.queryByTestId('flyer-block-1')).toBeNull();
+    fireEvent.click(screen.getByTestId('flyer-redo'));
+    expect(screen.getByTestId('flyer-block-1')).toBeTruthy();
+  });
+
+  it('Snap-to-grid toggle flips on/off', () => {
+    renderStudio();
+    const toggle = screen.getByTestId('flyer-snap-toggle');
+    expect((toggle.textContent || '')).toMatch(/snap on/i);
+    fireEvent.click(toggle);
+    expect((toggle.textContent || '')).toMatch(/snap off/i);
+  });
+
+  it('selecting a block reveals a resize handle', () => {
+    renderStudio();
+    expect(screen.queryByTestId('flyer-resize-0')).toBeNull();
+    fireEvent.click(screen.getByTestId('flyer-block-0'));
+    expect(screen.getByTestId('flyer-resize-0')).toBeTruthy();
+  });
+
+  it('price block colour is palette-driven (no manual colour picker, shows a note)', () => {
+    renderStudio();
+    fireEvent.click(screen.getByTestId('flyer-add-price'));
+    fireEvent.click(screen.getByTestId('flyer-block-1'));
+    expect(screen.queryByLabelText('Text colour')).toBeNull();
+    expect(screen.getByText(/applied automatically from the brand palette/i)).toBeTruthy();
+  });
+
+  it('changing a palette colour re-themes blocks that use that colour', () => {
+    renderStudio();
+    // A new text block picks up the current textHex (#222222) as its colour.
+    fireEvent.click(screen.getByTestId('flyer-add-text'));
+    const before = screen.getByTestId('flyer-block-1').style.color;
+    // Change the Text palette swatch → blocks coloured with the OLD value recolour.
+    fireEvent.change(screen.getByTestId('palette-textHex'), { target: { value: '#ff0000' } });
+    const after = screen.getByTestId('flyer-block-1').style.color;
+    expect(after).not.toBe(before);
+    expect(after.replace(/\s+/g, '').toLowerCase()).toMatch(/#ff0000|rgb\(255,0,0\)/);
+  });
+
+  it('typography controls (font / bold / italic / underline / align) restyle the selected block', () => {
+    renderStudio();
+    fireEvent.click(screen.getByTestId('flyer-block-0')); // select the seed text block
+    fireEvent.change(screen.getByTestId('flyer-font-family'), { target: { value: 'serif' } });
+    fireEvent.click(screen.getByTestId('flyer-bold'));
+    fireEvent.click(screen.getByTestId('flyer-italic'));
+    fireEvent.click(screen.getByTestId('flyer-underline'));
+    fireEvent.click(screen.getByTestId('flyer-align-center'));
+    const block = screen.getByTestId('flyer-block-0');
+    expect(block.style.fontWeight).toBe('700');
+    expect(block.style.fontStyle).toBe('italic');
+    expect(block.style.textDecoration).toMatch(/underline/);
+    expect(block.style.textAlign).toBe('center');
+    expect(block.style.fontFamily.toLowerCase()).toMatch(/georgia|times|serif/);
+  });
+});

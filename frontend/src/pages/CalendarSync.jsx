@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Calendar, RefreshCw, ExternalLink, Check, Plug, Trash2, Users, Video, Plus } from 'lucide-react';
+import { Calendar, RefreshCw, ExternalLink, Check, Plug, Trash2, Users, Video, Plus, AlertTriangle } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 
@@ -21,20 +21,28 @@ const PROVIDERS = [
 ];
 
 function Toast({ msg, onClose }) {
+  // Infer success vs error from the message so failures show red (with an
+  // alert icon) instead of a misleading green checkmark. Error toasts also
+  // linger longer so the user can actually read a "please reconnect" prompt.
+  const isError = /\b(fail|error|expired|reconnect|couldn|could not|denied|invalid|unable|not connected|no sync)\b/i.test(msg || '');
   useEffect(() => {
-    const t = setTimeout(onClose, 3500);
+    const t = setTimeout(onClose, isError ? 7000 : 3500);
     return () => clearTimeout(t);
-  }, [onClose]);
+  }, [onClose, isError]);
   return (
     <div style={{
       position: 'fixed', top: '1.5rem', right: '1.5rem', zIndex: 9999,
-      background: 'rgba(34,197,94,0.95)', color: '#fff',
+      background: isError ? 'rgba(239,68,68,0.96)' : 'rgba(34,197,94,0.95)', color: '#fff',
       padding: '0.75rem 1.25rem', borderRadius: '10px',
       boxShadow: '0 8px 24px rgba(0,0,0,0.18)',
-      display: 'flex', alignItems: 'center', gap: '0.5rem',
+      display: 'flex', alignItems: 'flex-start', gap: '0.5rem',
       backdropFilter: 'blur(8px)',
+      maxWidth: '380px', lineHeight: 1.4, fontSize: '0.875rem',
     }}>
-      <Check size={18} /> {msg}
+      {isError
+        ? <AlertTriangle size={18} style={{ flexShrink: 0, marginTop: 1 }} />
+        : <Check size={18} style={{ flexShrink: 0, marginTop: 1 }} />}
+      <span>{msg}</span>
     </div>
   );
 }
@@ -154,11 +162,16 @@ export default function CalendarSync() {
   const handleSync = async (provider) => {
     setBusy((b) => ({ ...b, [provider]: true }));
     try {
-      const res = await fetchApi(`/api/calendar/${provider}/sync`, { method: 'POST' });
+      // silent: true → suppress fetchApi's global auto-toast so we don't show
+      // two notifications; this page renders its own (error-styled) toast.
+      const res = await fetchApi(`/api/calendar/${provider}/sync`, { method: 'POST', silent: true });
       setToast(`Synced ${res.synced ?? 0} ${provider} events`);
       await loadAll();
     } catch (e) {
-      setToast(`Sync failed: ${e.message || provider}`);
+      // The backend now returns a friendly, self-explanatory message (e.g.
+      // "Your Microsoft Outlook connection has expired. Please reconnect…"),
+      // so show it directly rather than prefixing/dumping a raw OAuth error.
+      setToast(e.message || `Couldn't sync ${provider === 'google' ? 'Google' : 'Outlook'}. Please try again.`);
     } finally {
       setBusy((b) => ({ ...b, [provider]: false }));
     }
@@ -621,8 +634,8 @@ export default function CalendarSync() {
         }}>
           <div
             style={{
-              background: '#fff',
-              border: '1px solid #e5e7eb',
+              background: 'var(--bg-color)',
+              border: '1px solid var(--border-color)',
               borderRadius: '12px',
               boxShadow: '0 10px 40px rgba(0,0,0,0.15)',
               padding: '2rem',
@@ -638,7 +651,7 @@ export default function CalendarSync() {
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
                   <h3 style={{
                     margin: 0, fontSize: '1.3rem', fontWeight: 700,
-                    color: '#1f2937'
+                    color: 'var(--text-primary)'
                   }}>
                     {selectedEvent.title}
                   </h3>
@@ -646,11 +659,11 @@ export default function CalendarSync() {
                     onClick={() => setShowEventDetail(false)}
                     style={{
                       background: 'none', border: 'none', fontSize: '1.5rem',
-                      color: '#6b7280', cursor: 'pointer', padding: '0',
+                      color: 'var(--text-secondary)', cursor: 'pointer', padding: '0',
                       transition: 'color 0.2s ease',
                     }}
-                    onMouseEnter={(e) => e.currentTarget.style.color = '#1f2937'}
-                    onMouseLeave={(e) => e.currentTarget.style.color = '#6b7280'}
+                    onMouseEnter={(e) => e.currentTarget.style.color = 'var(--text-primary)'}
+                    onMouseLeave={(e) => e.currentTarget.style.color = 'var(--text-secondary)'}
                   >
                     ✕
                   </button>
@@ -659,10 +672,10 @@ export default function CalendarSync() {
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
                   {/* Date & Time */}
                   <div style={{ borderLeft: '3px solid #6366f1', paddingLeft: '1rem' }}>
-                    <div style={{ fontSize: '0.8rem', color: '#6b7280', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '0.5rem' }}>
+                    <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '0.5rem' }}>
                       Date & Time
                     </div>
-                    <div style={{ fontSize: '0.95rem', color: '#1f2937', fontWeight: 500 }}>
+                    <div style={{ fontSize: '0.95rem', color: 'var(--text-primary)', fontWeight: 500 }}>
                       {formatDateTime(selectedEvent.startTime)} - {new Date(selectedEvent.endTime).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}
                     </div>
                   </div>
@@ -670,10 +683,10 @@ export default function CalendarSync() {
                   {/* Location */}
                   {selectedEvent.location && (
                     <div style={{ borderLeft: '3px solid #10b981', paddingLeft: '1rem' }}>
-                      <div style={{ fontSize: '0.8rem', color: '#6b7280', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '0.5rem' }}>
+                      <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '0.5rem' }}>
                         Location
                       </div>
-                      <div style={{ fontSize: '0.95rem', color: '#1f2937', fontWeight: 500 }}>
+                      <div style={{ fontSize: '0.95rem', color: 'var(--text-primary)', fontWeight: 500 }}>
                         {selectedEvent.location}
                       </div>
                     </div>
@@ -682,10 +695,10 @@ export default function CalendarSync() {
                   {/* Attendees */}
                   {attendeeCount(selectedEvent.attendees) > 0 && (
                     <div style={{ borderLeft: '3px solid #f59e0b', paddingLeft: '1rem' }}>
-                      <div style={{ fontSize: '0.8rem', color: '#6b7280', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '0.5rem' }}>
+                      <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '0.5rem' }}>
                         Attendees
                       </div>
-                      <div style={{ fontSize: '0.9rem', color: '#1f2937' }}>
+                      <div style={{ fontSize: '0.9rem', color: 'var(--text-primary)' }}>
                         {(() => {
                           try {
                             const att = typeof selectedEvent.attendees === 'string' ? JSON.parse(selectedEvent.attendees) : selectedEvent.attendees;
@@ -701,10 +714,10 @@ export default function CalendarSync() {
                   {/* Description */}
                   {selectedEvent.description && (
                     <div style={{ borderLeft: '3px solid #8b5cf6', paddingLeft: '1rem' }}>
-                      <div style={{ fontSize: '0.8rem', color: '#6b7280', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '0.5rem' }}>
+                      <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '0.5rem' }}>
                         Description
                       </div>
-                      <div style={{ fontSize: '0.9rem', color: '#1f2937', lineHeight: '1.5' }}>
+                      <div style={{ fontSize: '0.9rem', color: 'var(--text-primary)', lineHeight: '1.5' }}>
                         {selectedEvent.description}
                       </div>
                     </div>
@@ -737,18 +750,18 @@ export default function CalendarSync() {
                     onClick={() => setShowEventDetail(false)}
                     style={{
                       padding: '0.65rem 1.5rem', borderRadius: '8px',
-                      border: '1px solid #e5e7eb',
-                      background: '#fff', color: '#374151',
+                      border: '1px solid var(--border-color)',
+                      background: 'var(--bg-color)', color: 'var(--text-primary)',
                       cursor: 'pointer', fontWeight: 600, fontSize: '0.9rem',
                       transition: 'all 0.2s ease',
                     }}
                     onMouseEnter={(e) => {
-                      e.currentTarget.style.background = '#f9fafb';
-                      e.currentTarget.style.borderColor = '#d1d5db';
+                      e.currentTarget.style.background = 'var(--input-bg)';
+                      e.currentTarget.style.borderColor = 'var(--border-color)';
                     }}
                     onMouseLeave={(e) => {
-                      e.currentTarget.style.background = '#fff';
-                      e.currentTarget.style.borderColor = '#e5e7eb';
+                      e.currentTarget.style.background = 'var(--input-bg-focus)';
+                      e.currentTarget.style.borderColor = 'var(--border-color)';
                     }}
                   >
                     Close
@@ -758,15 +771,15 @@ export default function CalendarSync() {
                     style={{
                       padding: '0.65rem 1.5rem', borderRadius: '8px',
                       border: 'none',
-                      background: '#6366f1', color: '#fff',
+                      background: 'var(--accent-color, #6366f1)', color: '#fff',
                       cursor: 'pointer', fontWeight: 600, fontSize: '0.9rem',
                       transition: 'all 0.2s ease',
                     }}
                     onMouseEnter={(e) => {
-                      e.currentTarget.style.background = '#4f46e5';
+                      e.currentTarget.style.background = 'var(--accent-hover, #4f46e5)';
                     }}
                     onMouseLeave={(e) => {
-                      e.currentTarget.style.background = '#6366f1';
+                      e.currentTarget.style.background = 'var(--accent-color, #6366f1)';
                     }}
                   >
                     ✎ Edit
@@ -776,8 +789,8 @@ export default function CalendarSync() {
                     disabled={busy.delete}
                     style={{
                       padding: '0.65rem 1.5rem', borderRadius: '8px',
-                      border: '1px solid #fee2e2',
-                      background: '#fef2f2', color: '#dc2626',
+                      border: '1px solid rgba(239,68,68,0.3)',
+                      background: 'rgba(239,68,68,0.12)', color: '#dc2626',
                       cursor: busy.delete ? 'not-allowed' : 'pointer',
                       fontWeight: 600, fontSize: '0.9rem',
                       opacity: busy.delete ? 0.6 : 1,
@@ -785,13 +798,13 @@ export default function CalendarSync() {
                     }}
                     onMouseEnter={(e) => {
                       if (!busy.delete) {
-                        e.currentTarget.style.background = '#fee2e2';
-                        e.currentTarget.style.borderColor = '#fecaca';
+                        e.currentTarget.style.background = 'rgba(239,68,68,0.18)';
+                        e.currentTarget.style.borderColor = 'rgba(239,68,68,0.4)';
                       }
                     }}
                     onMouseLeave={(e) => {
-                      e.currentTarget.style.background = '#fef2f2';
-                      e.currentTarget.style.borderColor = '#fee2e2';
+                      e.currentTarget.style.background = 'rgba(239,68,68,0.12)';
+                      e.currentTarget.style.borderColor = 'rgba(239,68,68,0.3)';
                     }}
                   >
                     {busy.delete ? '🗑️ Deleting...' : '🗑️ Delete'}
@@ -804,7 +817,7 @@ export default function CalendarSync() {
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
                   <h3 style={{
                     margin: 0, fontSize: '1.3rem', fontWeight: 700,
-                    color: '#1f2937'
+                    color: 'var(--text-primary)'
                   }}>
                     Edit Event
                   </h3>
@@ -812,11 +825,11 @@ export default function CalendarSync() {
                     onClick={() => setShowEventDetail(false)}
                     style={{
                       background: 'none', border: 'none', fontSize: '1.5rem',
-                      color: '#6b7280', cursor: 'pointer', padding: '0',
+                      color: 'var(--text-secondary)', cursor: 'pointer', padding: '0',
                       transition: 'color 0.2s ease',
                     }}
-                    onMouseEnter={(e) => e.currentTarget.style.color = '#1f2937'}
-                    onMouseLeave={(e) => e.currentTarget.style.color = '#6b7280'}
+                    onMouseEnter={(e) => e.currentTarget.style.color = 'var(--text-primary)'}
+                    onMouseLeave={(e) => e.currentTarget.style.color = 'var(--text-secondary)'}
                   >
                     ✕
                   </button>
@@ -825,7 +838,7 @@ export default function CalendarSync() {
                 <form onSubmit={handleEditEvent} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
                   {/* Title */}
                   <div>
-                    <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 700, marginBottom: '0.6rem', color: '#1f2937', letterSpacing: '0.3px' }}>
+                    <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 700, marginBottom: '0.6rem', color: 'var(--text-primary)', letterSpacing: '0.3px' }}>
                       Event Title <span style={{ color: '#ef4444' }}>*</span>
                     </label>
                     <input
@@ -834,21 +847,21 @@ export default function CalendarSync() {
                       onChange={(e) => setEditFormData({ ...editFormData, title: e.target.value })}
                       style={{
                         width: '100%', padding: '0.85rem', fontSize: '0.95rem',
-                        border: '1px solid #e5e7eb',
+                        border: '1px solid var(--border-color)',
                         borderRadius: '8px',
-                        background: '#f9fafb',
-                        color: '#1f2937',
+                        background: 'var(--input-bg)',
+                        color: 'var(--text-primary)',
                         boxSizing: 'border-box',
                         transition: 'all 0.2s ease',
                       }}
                       onFocus={(e) => {
-                        e.target.style.borderColor = '#6366f1';
-                        e.target.style.background = '#fff';
+                        e.target.style.borderColor = 'var(--accent-color, #6366f1)';
+                        e.target.style.background = 'var(--input-bg-focus)';
                         e.target.style.boxShadow = '0 0 0 3px rgba(99,102,241,0.1)';
                       }}
                       onBlur={(e) => {
-                        e.target.style.borderColor = '#e5e7eb';
-                        e.target.style.background = '#f9fafb';
+                        e.target.style.borderColor = 'var(--border-color)';
+                        e.target.style.background = 'var(--input-bg)';
                         e.target.style.boxShadow = 'none';
                       }}
                     />
@@ -857,7 +870,7 @@ export default function CalendarSync() {
                   {/* Start and End Time */}
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
                     <div>
-                      <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 700, marginBottom: '0.6rem', color: '#1f2937', letterSpacing: '0.3px' }}>
+                      <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 700, marginBottom: '0.6rem', color: 'var(--text-primary)', letterSpacing: '0.3px' }}>
                         Start Time <span style={{ color: '#ef4444' }}>*</span>
                       </label>
                       <input
@@ -866,28 +879,28 @@ export default function CalendarSync() {
                         onChange={(e) => setEditFormData({ ...editFormData, startTime: e.target.value })}
                         style={{
                           width: '100%', padding: '0.85rem', fontSize: '0.92rem',
-                          border: '1px solid #e5e7eb',
+                          border: '1px solid var(--border-color)',
                           borderRadius: '8px',
-                          background: '#f9fafb',
-                          color: '#1f2937',
+                          background: 'var(--input-bg)',
+                          color: 'var(--text-primary)',
                           boxSizing: 'border-box',
                           transition: 'all 0.2s ease',
                         }}
                         onFocus={(e) => {
-                          e.target.style.borderColor = '#6366f1';
-                          e.target.style.background = '#fff';
+                          e.target.style.borderColor = 'var(--accent-color, #6366f1)';
+                          e.target.style.background = 'var(--input-bg-focus)';
                           e.target.style.boxShadow = '0 0 0 3px rgba(99,102,241,0.1)';
                         }}
                         onBlur={(e) => {
-                          e.target.style.borderColor = '#e5e7eb';
-                          e.target.style.background = '#f9fafb';
+                          e.target.style.borderColor = 'var(--border-color)';
+                          e.target.style.background = 'var(--input-bg)';
                           e.target.style.boxShadow = 'none';
                         }}
                       />
                     </div>
 
                     <div>
-                      <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 700, marginBottom: '0.6rem', color: '#1f2937', letterSpacing: '0.3px' }}>
+                      <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 700, marginBottom: '0.6rem', color: 'var(--text-primary)', letterSpacing: '0.3px' }}>
                         End Time <span style={{ color: '#ef4444' }}>*</span>
                       </label>
                       <input
@@ -896,21 +909,21 @@ export default function CalendarSync() {
                         onChange={(e) => setEditFormData({ ...editFormData, endTime: e.target.value })}
                         style={{
                           width: '100%', padding: '0.85rem', fontSize: '0.92rem',
-                          border: '1px solid #e5e7eb',
+                          border: '1px solid var(--border-color)',
                           borderRadius: '8px',
-                          background: '#f9fafb',
-                          color: '#1f2937',
+                          background: 'var(--input-bg)',
+                          color: 'var(--text-primary)',
                           boxSizing: 'border-box',
                           transition: 'all 0.2s ease',
                         }}
                         onFocus={(e) => {
-                          e.target.style.borderColor = '#6366f1';
-                          e.target.style.background = '#fff';
+                          e.target.style.borderColor = 'var(--accent-color, #6366f1)';
+                          e.target.style.background = 'var(--input-bg-focus)';
                           e.target.style.boxShadow = '0 0 0 3px rgba(99,102,241,0.1)';
                         }}
                         onBlur={(e) => {
-                          e.target.style.borderColor = '#e5e7eb';
-                          e.target.style.background = '#f9fafb';
+                          e.target.style.borderColor = 'var(--border-color)';
+                          e.target.style.background = 'var(--input-bg)';
                           e.target.style.boxShadow = 'none';
                         }}
                       />
@@ -919,7 +932,7 @@ export default function CalendarSync() {
 
                   {/* Location */}
                   <div>
-                    <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 700, marginBottom: '0.6rem', color: '#1f2937', letterSpacing: '0.3px' }}>
+                    <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 700, marginBottom: '0.6rem', color: 'var(--text-primary)', letterSpacing: '0.3px' }}>
                       Location
                     </label>
                     <input
@@ -928,21 +941,21 @@ export default function CalendarSync() {
                       onChange={(e) => setEditFormData({ ...editFormData, location: e.target.value })}
                       style={{
                         width: '100%', padding: '0.85rem', fontSize: '0.95rem',
-                        border: '1px solid #e5e7eb',
+                        border: '1px solid var(--border-color)',
                         borderRadius: '8px',
-                        background: '#f9fafb',
-                        color: '#1f2937',
+                        background: 'var(--input-bg)',
+                        color: 'var(--text-primary)',
                         boxSizing: 'border-box',
                         transition: 'all 0.2s ease',
                       }}
                       onFocus={(e) => {
-                        e.target.style.borderColor = '#6366f1';
-                        e.target.style.background = '#fff';
+                        e.target.style.borderColor = 'var(--accent-color, #6366f1)';
+                        e.target.style.background = 'var(--input-bg-focus)';
                         e.target.style.boxShadow = '0 0 0 3px rgba(99,102,241,0.1)';
                       }}
                       onBlur={(e) => {
-                        e.target.style.borderColor = '#e5e7eb';
-                        e.target.style.background = '#f9fafb';
+                        e.target.style.borderColor = 'var(--border-color)';
+                        e.target.style.background = 'var(--input-bg)';
                         e.target.style.boxShadow = 'none';
                       }}
                     />
@@ -950,7 +963,7 @@ export default function CalendarSync() {
 
                   {/* Attendees */}
                   <div>
-                    <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 700, marginBottom: '0.6rem', color: '#1f2937', letterSpacing: '0.3px' }}>
+                    <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 700, marginBottom: '0.6rem', color: 'var(--text-primary)', letterSpacing: '0.3px' }}>
                       Attendees
                     </label>
                     <input
@@ -960,21 +973,21 @@ export default function CalendarSync() {
                       placeholder="email@example.com, another@example.com"
                       style={{
                         width: '100%', padding: '0.85rem', fontSize: '0.95rem',
-                        border: '1px solid #e5e7eb',
+                        border: '1px solid var(--border-color)',
                         borderRadius: '8px',
-                        background: '#f9fafb',
-                        color: '#1f2937',
+                        background: 'var(--input-bg)',
+                        color: 'var(--text-primary)',
                         boxSizing: 'border-box',
                         transition: 'all 0.2s ease',
                       }}
                       onFocus={(e) => {
-                        e.target.style.borderColor = '#6366f1';
-                        e.target.style.background = '#fff';
+                        e.target.style.borderColor = 'var(--accent-color, #6366f1)';
+                        e.target.style.background = 'var(--input-bg-focus)';
                         e.target.style.boxShadow = '0 0 0 3px rgba(99,102,241,0.1)';
                       }}
                       onBlur={(e) => {
-                        e.target.style.borderColor = '#e5e7eb';
-                        e.target.style.background = '#f9fafb';
+                        e.target.style.borderColor = 'var(--border-color)';
+                        e.target.style.background = 'var(--input-bg)';
                         e.target.style.boxShadow = 'none';
                       }}
                     />
@@ -982,7 +995,7 @@ export default function CalendarSync() {
 
                   {/* Description */}
                   <div>
-                    <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 700, marginBottom: '0.6rem', color: '#1f2937', letterSpacing: '0.3px' }}>
+                    <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 700, marginBottom: '0.6rem', color: 'var(--text-primary)', letterSpacing: '0.3px' }}>
                       Description
                     </label>
                     <textarea
@@ -991,10 +1004,10 @@ export default function CalendarSync() {
                       placeholder="Add any notes about this event..."
                       style={{
                         width: '100%', padding: '0.85rem', fontSize: '0.95rem',
-                        border: '1px solid #e5e7eb',
+                        border: '1px solid var(--border-color)',
                         borderRadius: '8px',
-                        background: '#f9fafb',
-                        color: '#1f2937',
+                        background: 'var(--input-bg)',
+                        color: 'var(--text-primary)',
                         boxSizing: 'border-box',
                         minHeight: '90px',
                         resize: 'vertical',
@@ -1002,13 +1015,13 @@ export default function CalendarSync() {
                         transition: 'all 0.2s ease',
                       }}
                       onFocus={(e) => {
-                        e.target.style.borderColor = '#6366f1';
-                        e.target.style.background = '#fff';
+                        e.target.style.borderColor = 'var(--accent-color, #6366f1)';
+                        e.target.style.background = 'var(--input-bg-focus)';
                         e.target.style.boxShadow = '0 0 0 3px rgba(99,102,241,0.1)';
                       }}
                       onBlur={(e) => {
-                        e.target.style.borderColor = '#e5e7eb';
-                        e.target.style.background = '#f9fafb';
+                        e.target.style.borderColor = 'var(--border-color)';
+                        e.target.style.background = 'var(--input-bg)';
                         e.target.style.boxShadow = 'none';
                       }}
                     />
@@ -1021,18 +1034,18 @@ export default function CalendarSync() {
                       onClick={() => setIsEditingEvent(false)}
                       style={{
                         padding: '0.65rem 1.5rem', borderRadius: '8px',
-                        border: '1px solid #e5e7eb',
-                        background: '#fff', color: '#374151',
+                        border: '1px solid var(--border-color)',
+                        background: 'var(--bg-color)', color: 'var(--text-primary)',
                         cursor: 'pointer', fontWeight: 600, fontSize: '0.9rem',
                         transition: 'all 0.2s ease',
                       }}
                       onMouseEnter={(e) => {
-                        e.currentTarget.style.background = '#f9fafb';
-                        e.currentTarget.style.borderColor = '#d1d5db';
+                        e.currentTarget.style.background = 'var(--input-bg)';
+                        e.currentTarget.style.borderColor = 'var(--border-color)';
                       }}
                       onMouseLeave={(e) => {
-                        e.currentTarget.style.background = '#fff';
-                        e.currentTarget.style.borderColor = '#e5e7eb';
+                        e.currentTarget.style.background = 'var(--input-bg-focus)';
+                        e.currentTarget.style.borderColor = 'var(--border-color)';
                       }}
                     >
                       Cancel
@@ -1053,12 +1066,12 @@ export default function CalendarSync() {
                       }}
                       onMouseEnter={(e) => {
                         if (!(!editFormData.title || !editFormData.startTime || !editFormData.endTime || busy.edit)) {
-                          e.currentTarget.style.background = '#4f46e5';
+                          e.currentTarget.style.background = 'var(--accent-hover, #4f46e5)';
                         }
                       }}
                       onMouseLeave={(e) => {
                         if (!(!editFormData.title || !editFormData.startTime || !editFormData.endTime || busy.edit)) {
-                          e.currentTarget.style.background = '#6366f1';
+                          e.currentTarget.style.background = 'var(--accent-color, #6366f1)';
                         }
                       }}
                     >
@@ -1083,8 +1096,8 @@ export default function CalendarSync() {
         }}>
           <div
             style={{
-              background: '#fff',
-              border: '1px solid #e5e7eb',
+              background: 'var(--bg-color)',
+              border: '1px solid var(--border-color)',
               borderRadius: '12px',
               boxShadow: '0 10px 40px rgba(0,0,0,0.15)',
               padding: '2rem',
@@ -1097,7 +1110,7 @@ export default function CalendarSync() {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
               <h3 style={{
                 margin: 0, fontSize: '1.3rem', fontWeight: 700,
-                color: '#1f2937'
+                color: 'var(--text-primary)'
               }}>
                 Create Event in {createProvider === 'google' ? 'Google' : 'Outlook'}
               </h3>
@@ -1108,11 +1121,11 @@ export default function CalendarSync() {
                 }}
                 style={{
                   background: 'none', border: 'none', fontSize: '1.5rem',
-                  color: '#6b7280', cursor: 'pointer', padding: '0',
+                  color: 'var(--text-secondary)', cursor: 'pointer', padding: '0',
                   transition: 'color 0.2s ease',
                 }}
-                onMouseEnter={(e) => e.currentTarget.style.color = '#1f2937'}
-                onMouseLeave={(e) => e.currentTarget.style.color = '#6b7280'}
+                onMouseEnter={(e) => e.currentTarget.style.color = 'var(--text-primary)'}
+                onMouseLeave={(e) => e.currentTarget.style.color = 'var(--text-secondary)'}
               >
                 ✕
               </button>
@@ -1121,7 +1134,7 @@ export default function CalendarSync() {
             <form onSubmit={handleCreateEvent} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
               {/* Title */}
               <div>
-                <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 700, marginBottom: '0.6rem', color: '#1f2937', letterSpacing: '0.3px' }}>
+                <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 700, marginBottom: '0.6rem', color: 'var(--text-primary)', letterSpacing: '0.3px' }}>
                   Event Title <span style={{ color: '#ef4444' }}>*</span>
                 </label>
                 <input
@@ -1131,21 +1144,21 @@ export default function CalendarSync() {
                   onChange={(e) => setFormData({ ...formData, title: e.target.value })}
                   style={{
                     width: '100%', padding: '0.85rem', fontSize: '0.95rem',
-                    border: '1px solid #e5e7eb',
+                    border: '1px solid var(--border-color)',
                     borderRadius: '8px',
-                    background: '#f9fafb',
-                    color: '#1f2937',
+                    background: 'var(--input-bg)',
+                    color: 'var(--text-primary)',
                     boxSizing: 'border-box',
                     transition: 'all 0.2s ease',
                   }}
                   onFocus={(e) => {
-                    e.target.style.borderColor = '#6366f1';
-                    e.target.style.background = '#fff';
+                    e.target.style.borderColor = 'var(--accent-color, #6366f1)';
+                    e.target.style.background = 'var(--input-bg-focus)';
                     e.target.style.boxShadow = '0 0 0 3px rgba(99,102,241,0.1)';
                   }}
                   onBlur={(e) => {
-                    e.target.style.borderColor = '#e5e7eb';
-                    e.target.style.background = '#f9fafb';
+                    e.target.style.borderColor = 'var(--border-color)';
+                    e.target.style.background = 'var(--input-bg)';
                     e.target.style.boxShadow = 'none';
                   }}
                 />
@@ -1154,7 +1167,7 @@ export default function CalendarSync() {
               {/* Start and End Time (side by side) */}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
                 <div>
-                  <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 700, marginBottom: '0.6rem', color: '#1f2937', letterSpacing: '0.3px' }}>
+                  <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 700, marginBottom: '0.6rem', color: 'var(--text-primary)', letterSpacing: '0.3px' }}>
                     Start Time <span style={{ color: '#ef4444' }}>*</span>
                   </label>
                   <input
@@ -1163,28 +1176,28 @@ export default function CalendarSync() {
                     onChange={(e) => setFormData({ ...formData, startTime: e.target.value })}
                     style={{
                       width: '100%', padding: '0.85rem', fontSize: '0.92rem',
-                      border: '1px solid #e5e7eb',
+                      border: '1px solid var(--border-color)',
                       borderRadius: '8px',
-                      background: '#f9fafb',
-                      color: '#1f2937',
+                      background: 'var(--input-bg)',
+                      color: 'var(--text-primary)',
                       boxSizing: 'border-box',
                       transition: 'all 0.2s ease',
                     }}
                     onFocus={(e) => {
-                      e.target.style.borderColor = '#6366f1';
-                      e.target.style.background = '#fff';
+                      e.target.style.borderColor = 'var(--accent-color, #6366f1)';
+                      e.target.style.background = 'var(--input-bg-focus)';
                       e.target.style.boxShadow = '0 0 0 3px rgba(99,102,241,0.1)';
                     }}
                     onBlur={(e) => {
-                      e.target.style.borderColor = '#e5e7eb';
-                      e.target.style.background = '#f9fafb';
+                      e.target.style.borderColor = 'var(--border-color)';
+                      e.target.style.background = 'var(--input-bg)';
                       e.target.style.boxShadow = 'none';
                     }}
                   />
                 </div>
 
                 <div>
-                  <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 700, marginBottom: '0.6rem', color: '#1f2937', letterSpacing: '0.3px' }}>
+                  <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 700, marginBottom: '0.6rem', color: 'var(--text-primary)', letterSpacing: '0.3px' }}>
                     End Time <span style={{ color: '#ef4444' }}>*</span>
                   </label>
                   <input
@@ -1193,21 +1206,21 @@ export default function CalendarSync() {
                     onChange={(e) => setFormData({ ...formData, endTime: e.target.value })}
                     style={{
                       width: '100%', padding: '0.85rem', fontSize: '0.92rem',
-                      border: '1px solid #e5e7eb',
+                      border: '1px solid var(--border-color)',
                       borderRadius: '8px',
-                      background: '#f9fafb',
-                      color: '#1f2937',
+                      background: 'var(--input-bg)',
+                      color: 'var(--text-primary)',
                       boxSizing: 'border-box',
                       transition: 'all 0.2s ease',
                     }}
                     onFocus={(e) => {
-                      e.target.style.borderColor = '#6366f1';
-                      e.target.style.background = '#fff';
+                      e.target.style.borderColor = 'var(--accent-color, #6366f1)';
+                      e.target.style.background = 'var(--input-bg-focus)';
                       e.target.style.boxShadow = '0 0 0 3px rgba(99,102,241,0.1)';
                     }}
                     onBlur={(e) => {
-                      e.target.style.borderColor = '#e5e7eb';
-                      e.target.style.background = '#f9fafb';
+                      e.target.style.borderColor = 'var(--border-color)';
+                      e.target.style.background = 'var(--input-bg)';
                       e.target.style.boxShadow = 'none';
                     }}
                   />
@@ -1216,7 +1229,7 @@ export default function CalendarSync() {
 
               {/* Location */}
               <div>
-                <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 700, marginBottom: '0.6rem', color: '#1f2937', letterSpacing: '0.3px' }}>
+                <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 700, marginBottom: '0.6rem', color: 'var(--text-primary)', letterSpacing: '0.3px' }}>
                   Location
                 </label>
                 <input
@@ -1226,21 +1239,21 @@ export default function CalendarSync() {
                   onChange={(e) => setFormData({ ...formData, location: e.target.value })}
                   style={{
                     width: '100%', padding: '0.85rem', fontSize: '0.95rem',
-                    border: '1px solid #e5e7eb',
+                    border: '1px solid var(--border-color)',
                     borderRadius: '8px',
-                    background: '#f9fafb',
-                    color: '#1f2937',
+                    background: 'var(--input-bg)',
+                    color: 'var(--text-primary)',
                     boxSizing: 'border-box',
                     transition: 'all 0.2s ease',
                   }}
                   onFocus={(e) => {
-                    e.target.style.borderColor = '#6366f1';
-                    e.target.style.background = '#fff';
+                    e.target.style.borderColor = 'var(--accent-color, #6366f1)';
+                    e.target.style.background = 'var(--input-bg-focus)';
                     e.target.style.boxShadow = '0 0 0 3px rgba(99,102,241,0.1)';
                   }}
                   onBlur={(e) => {
-                    e.target.style.borderColor = '#e5e7eb';
-                    e.target.style.background = '#f9fafb';
+                    e.target.style.borderColor = 'var(--border-color)';
+                    e.target.style.background = 'var(--input-bg)';
                     e.target.style.boxShadow = 'none';
                   }}
                 />
@@ -1248,7 +1261,7 @@ export default function CalendarSync() {
 
               {/* Attendees */}
               <div>
-                <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 700, marginBottom: '0.6rem', color: '#1f2937', letterSpacing: '0.3px' }}>
+                <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 700, marginBottom: '0.6rem', color: 'var(--text-primary)', letterSpacing: '0.3px' }}>
                   Attendees
                 </label>
                 {contactOptions.length > 0 && (
@@ -1257,7 +1270,7 @@ export default function CalendarSync() {
                     onChange={(e) => { addAttendeeEmail(e.target.value); e.target.value = ''; }}
                     style={{
                       width: '100%', padding: '0.7rem', fontSize: '0.9rem', marginBottom: '0.5rem',
-                      border: '1px solid #e5e7eb', borderRadius: '8px', background: '#fff', color: '#1f2937',
+                      border: '1px solid var(--border-color)', borderRadius: '8px', background: 'var(--bg-color)', color: 'var(--text-primary)',
                       boxSizing: 'border-box', cursor: 'pointer',
                     }}
                   >
@@ -1274,21 +1287,21 @@ export default function CalendarSync() {
                   onChange={(e) => setFormData({ ...formData, attendees: e.target.value })}
                   style={{
                     width: '100%', padding: '0.85rem', fontSize: '0.95rem',
-                    border: '1px solid #e5e7eb',
+                    border: '1px solid var(--border-color)',
                     borderRadius: '8px',
-                    background: '#f9fafb',
-                    color: '#1f2937',
+                    background: 'var(--input-bg)',
+                    color: 'var(--text-primary)',
                     boxSizing: 'border-box',
                     transition: 'all 0.2s ease',
                   }}
                   onFocus={(e) => {
-                    e.target.style.borderColor = '#6366f1';
-                    e.target.style.background = '#fff';
+                    e.target.style.borderColor = 'var(--accent-color, #6366f1)';
+                    e.target.style.background = 'var(--input-bg-focus)';
                     e.target.style.boxShadow = '0 0 0 3px rgba(99,102,241,0.1)';
                   }}
                   onBlur={(e) => {
-                    e.target.style.borderColor = '#e5e7eb';
-                    e.target.style.background = '#f9fafb';
+                    e.target.style.borderColor = 'var(--border-color)';
+                    e.target.style.background = 'var(--input-bg)';
                     e.target.style.boxShadow = 'none';
                   }}
                 />
@@ -1296,7 +1309,7 @@ export default function CalendarSync() {
 
               {/* Description */}
               <div>
-                <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 700, marginBottom: '0.6rem', color: '#1f2937', letterSpacing: '0.3px' }}>
+                <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 700, marginBottom: '0.6rem', color: 'var(--text-primary)', letterSpacing: '0.3px' }}>
                   Description
                 </label>
                 <textarea
@@ -1305,10 +1318,10 @@ export default function CalendarSync() {
                   onChange={(e) => setFormData({ ...formData, description: e.target.value })}
                   style={{
                     width: '100%', padding: '0.85rem', fontSize: '0.95rem',
-                    border: '1px solid #e5e7eb',
+                    border: '1px solid var(--border-color)',
                     borderRadius: '8px',
-                    background: '#f9fafb',
-                    color: '#1f2937',
+                    background: 'var(--input-bg)',
+                    color: 'var(--text-primary)',
                     boxSizing: 'border-box',
                     minHeight: '90px',
                     resize: 'vertical',
@@ -1316,13 +1329,13 @@ export default function CalendarSync() {
                     transition: 'all 0.2s ease',
                   }}
                   onFocus={(e) => {
-                    e.target.style.borderColor = '#6366f1';
-                    e.target.style.background = '#fff';
+                    e.target.style.borderColor = 'var(--accent-color, #6366f1)';
+                    e.target.style.background = 'var(--input-bg-focus)';
                     e.target.style.boxShadow = '0 0 0 3px rgba(99,102,241,0.1)';
                   }}
                   onBlur={(e) => {
-                    e.target.style.borderColor = '#e5e7eb';
-                    e.target.style.background = '#f9fafb';
+                    e.target.style.borderColor = 'var(--border-color)';
+                    e.target.style.background = 'var(--input-bg)';
                     e.target.style.boxShadow = 'none';
                   }}
                 />
@@ -1330,14 +1343,14 @@ export default function CalendarSync() {
 
               {/* Slot-picker + online meeting (Google Meet / Teams) — T18 */}
               {(createProvider === 'google' || createProvider === 'outlook') && (
-                <div style={{ border: '1px dashed #d1d5db', borderRadius: '8px', padding: '1rem', background: '#f9fafb', display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
-                  <div style={{ fontSize: '0.85rem', fontWeight: 700, color: '#1f2937', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                <div style={{ border: '1px dashed #d1d5db', borderRadius: '8px', padding: '1rem', background: 'var(--input-bg)', display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+                  <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
                     <Video size={15} style={{ color: '#4285F4' }} /> Booking helper
                   </div>
 
                   {/* Find available slots */}
                   <div>
-                    <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, marginBottom: '0.4rem', color: '#374151' }}>
+                    <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 600, marginBottom: '0.4rem', color: 'var(--text-primary)' }}>
                       Find available slots
                     </label>
                     <div style={{ display: 'flex', gap: '0.5rem' }}>
@@ -1345,7 +1358,7 @@ export default function CalendarSync() {
                         type="date"
                         value={slotPicker.date}
                         onChange={(e) => setSlotPicker((s) => ({ ...s, date: e.target.value, error: '' }))}
-                        style={{ flex: 1, padding: '0.6rem', fontSize: '0.9rem', border: '1px solid #e5e7eb', borderRadius: '8px', background: '#fff', color: '#1f2937', boxSizing: 'border-box' }}
+                        style={{ flex: 1, padding: '0.6rem', fontSize: '0.9rem', border: '1px solid var(--border-color)', borderRadius: '8px', background: 'var(--bg-color)', color: 'var(--text-primary)', boxSizing: 'border-box' }}
                       />
                       <button
                         type="button"
@@ -1390,7 +1403,7 @@ export default function CalendarSync() {
                   </div>
 
                   {/* Add Google Meet link */}
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem', fontWeight: 600, color: '#374151', cursor: 'pointer' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-primary)', cursor: 'pointer' }}>
                     <input
                       type="checkbox"
                       checked={formData.createMeet}
@@ -1412,18 +1425,18 @@ export default function CalendarSync() {
                   }}
                   style={{
                     padding: '0.65rem 1.5rem', borderRadius: '8px',
-                    border: '1px solid #e5e7eb',
-                    background: '#fff', color: '#374151',
+                    border: '1px solid var(--border-color)',
+                    background: 'var(--bg-color)', color: 'var(--text-primary)',
                     cursor: 'pointer', fontWeight: 600, fontSize: '0.9rem',
                     transition: 'all 0.2s ease',
                   }}
                   onMouseEnter={(e) => {
-                    e.target.style.background = '#f9fafb';
-                    e.target.style.borderColor = '#d1d5db';
+                    e.target.style.background = 'var(--input-bg)';
+                    e.target.style.borderColor = 'var(--border-color)';
                   }}
                   onMouseLeave={(e) => {
-                    e.target.style.background = '#fff';
-                    e.target.style.borderColor = '#e5e7eb';
+                    e.target.style.background = 'var(--input-bg-focus)';
+                    e.target.style.borderColor = 'var(--border-color)';
                   }}
                 >
                   Cancel
@@ -1444,12 +1457,12 @@ export default function CalendarSync() {
                   }}
                   onMouseEnter={(e) => {
                     if (!(!formData.title || !formData.startTime || !formData.endTime || busy[createProvider])) {
-                      e.target.style.background = '#4f46e5';
+                      e.target.style.background = 'var(--accent-hover, #4f46e5)';
                     }
                   }}
                   onMouseLeave={(e) => {
                     if (!(!formData.title || !formData.startTime || !formData.endTime || busy[createProvider])) {
-                      e.target.style.background = '#6366f1';
+                      e.target.style.background = 'var(--accent-color, #6366f1)';
                     }
                   }}
                 >

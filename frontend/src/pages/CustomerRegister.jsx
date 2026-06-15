@@ -21,6 +21,7 @@ import PasswordInput from "../components/PasswordInput";
 
 function tenantLabel(t) {
   if (t.vertical === "wellness") return `${t.name} (Wellness Clinic)`;
+  if (t.vertical === "travel") return `${t.name} (Travel Agency)`;
   if (t.vertical === "generic") return `${t.name} (Generic CRM)`;
   return t.name;
 }
@@ -134,6 +135,43 @@ export default function CustomerRegister() {
     if (!validate()) return;
     setIsLoading(true);
     try {
+      // Travel orgs use the Customer Portal registration API (Contact-based),
+      // NOT the staff User registration. A travel customer belongs in the
+      // Travel Customer Portal (/travel/portal) — the same surface as the
+      // seeded ahmed.pilgrim@demo.test demo customer — so we register them as
+      // a portal Contact and sign them straight in there.
+      const selectedTenant = tenants.find((t) => String(t.id) === String(form.tenantId));
+      if (selectedTenant?.vertical === "travel") {
+        const pres = await fetch("/api/portal/register", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            email: form.email.trim().toLowerCase(),
+            password: form.password,
+            name: form.name.trim(),
+            registrationTenantId: parseInt(form.tenantId, 10),
+          }),
+        });
+        const pdata = await pres.json().catch(() => ({}));
+        if (!pres.ok) {
+          const msg = String(pdata?.error || "");
+          if (pres.status === 409 || /already/i.test(msg)) {
+            setErrors((prev) => ({ ...prev, email: "This email is already registered" }));
+          } else if (pres.status === 400) {
+            setSubmitError(msg || "Please check your inputs and try again.");
+          } else {
+            setSubmitError(msg || `Registration failed (${pres.status})`);
+          }
+          return;
+        }
+        // Store the portal session (same keys the portal page reads) and land
+        // the new customer directly in the Travel Customer Portal.
+        if (pdata?.token) localStorage.setItem("portalToken", pdata.token);
+        if (pdata?.contact) localStorage.setItem("portalContact", JSON.stringify(pdata.contact));
+        window.location.assign("/travel/portal");
+        return;
+      }
+
       const res = await fetch("/api/auth/customer/register", {
         method: "POST",
         headers: { "Content-Type": "application/json" },

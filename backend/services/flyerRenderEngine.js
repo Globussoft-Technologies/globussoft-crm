@@ -323,52 +323,102 @@ async function renderPdfBranch({ template, formatMeta }) {
  * Pure — no Puppeteer dep + no fs. Unit-testable end-to-end via string
  * snapshot.
  */
+// Font-family CSS for the three families the editor offers. Mirrors the
+// pdfkit base-font mapping in lib/flyerPdfRender.js (sans→Helvetica,
+// serif→Times, mono→Courier) so PNG and PDF exports look the same.
+const FONT_CSS = {
+  sans: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif",
+  serif: "Georgia, 'Times New Roman', Times, serif",
+  mono: "'Courier New', Courier, monospace",
+};
+
 function buildHtmlShellForPng(template, widthPx, heightPx) {
   const palette = (template && template.palette) || {};
   const layout = (template && Array.isArray(template.layout)) ? template.layout : [];
-  const assets = (template && template.assets) || {};
 
-  const safePrimary = typeof palette.primaryHex === "string" && /^#[0-9A-Fa-f]{3,8}$/.test(palette.primaryHex)
-    ? palette.primaryHex
-    : "#122647";
-  const safeBg = typeof palette.bgHex === "string" && /^#[0-9A-Fa-f]{3,8}$/.test(palette.bgHex)
-    ? palette.bgHex
-    : "#FFFFFF";
+  // Palette with the SAME fallbacks as lib/flyerPdfRender.js so PNG ≡ PDF.
+  const safeHex = (v, fb) =>
+    typeof v === "string" && /^#[0-9A-Fa-f]{3,8}$/.test(v) ? v : fb;
+  const primaryHex = safeHex(palette.primaryHex, "#122647");
+  const secondaryHex = safeHex(palette.secondaryHex, "#C89A4E");
+  const accentHex = safeHex(palette.accentHex, "#F5E6CC");
+  const textHex = safeHex(palette.textHex, "#1A1A1A");
+  const bgHex = safeHex(palette.bgHex, "#FFFFFF");
 
-  const titleBlock = layout.find((b) => b && b.type === "text");
-  const priceBlock = layout.find((b) => b && b.type === "price");
-  const ctaBlock = layout.find((b) => b && b.type === "cta");
+  // The editor (MarketingFlyerStudio) positions every block absolutely
+  // inside a fixed 540×720 canvas; both renderers scale each block from
+  // that space to the deliverable's pixel size. The OLD shell ignored the
+  // layout entirely (fixed strip/hero/title/price/cta flow) — so image
+  // blocks AND positioned text were dropped, leaving a blank hero band.
+  // This now mirrors lib/flyerPdfRender.js block-for-block.
+  const CANVAS_W = 540;
+  const CANVAS_H = 720;
+  const scaleX = widthPx / CANVAS_W;
+  const scaleY = heightPx / CANVAS_H;
 
-  const titleText = (titleBlock && typeof titleBlock.content === "string") ? titleBlock.content : "Untitled Flyer";
-  const priceText = (priceBlock && typeof priceBlock.content === "string") ? priceBlock.content : "Price on request";
-  const ctaText = (ctaBlock && typeof ctaBlock.content === "string") ? ctaBlock.content : "Book Now";
-  const heroUrl = typeof assets.hero === "string" ? assets.hero : "";
-
-  // Minimal, safe-escaped (no rich HTML in content — just text nodes).
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => (
     c === "&" ? "&amp;" : c === "<" ? "&lt;" : c === ">" ? "&gt;" : c === '"' ? "&quot;" : "&#39;"
   ));
+
+  const blocks = [];
+  for (const b of layout) {
+    if (!b || typeof b !== "object") continue;
+    const x = Math.round((Number(b.x) || 0) * scaleX);
+    const y = Math.round((Number(b.y) || 0) * scaleY);
+    const w = Math.round((Number(b.width) || 0) * scaleX);
+    const h = Math.round((Number(b.height) || 0) * scaleY);
+    const pos = `position:absolute;left:${x}px;top:${y}px;width:${w}px;height:${h}px;`;
+
+    // Image / logo blocks — the piece the old shell dropped. object-fit
+    // contain mirrors pdfkit's `fit` (whole image, no crop). A block with a
+    // src pads with the page bg; a src-less image block falls back to an
+    // accent rectangle, exactly like flyerPdfRender's placeholder.
+    if (b.type === "image" || b.type === "logo") {
+      const src = typeof b.src === "string" ? b.src : "";
+      if (src) {
+        blocks.push(
+          `<div style="${pos}background:${bgHex};overflow:hidden;">` +
+          `<img src="${esc(src)}" style="width:100%;height:100%;object-fit:contain;display:block;" />` +
+          `</div>`,
+        );
+      } else {
+        blocks.push(`<div style="${pos}background:${accentHex};"></div>`);
+      }
+      continue;
+    }
+
+    // text / price / cta blocks — positioned + scaled, same colour rules
+    // as the PDF (price→secondary, cta→primary, text→block.color||text).
+    const content = typeof b.content === "string" ? b.content : "";
+    if (!content) continue;
+    const color = b.type === "price" ? secondaryHex
+      : b.type === "cta" ? primaryHex
+        : safeHex(b.color, textHex);
+    const fontSize = Math.max(6, Math.round((Number(b.fontSize) || 18) * scaleX));
+    // Per-block typography (mirrors flyerPdfRender.js + the editor): font
+    // family, bold/italic/underline, and horizontal alignment. cta is bold
+    // by default for emphasis; everything else defaults to weight 600.
+    const fam = FONT_CSS[b.font] || FONT_CSS.sans;
+    const weight = (b.bold || b.type === "cta") ? 700 : 600;
+    const align = ["left", "center", "right"].includes(b.align) ? b.align : "left";
+    const fontStyle = b.italic ? "italic" : "normal";
+    const deco = b.underline ? "underline" : "none";
+    blocks.push(
+      `<div style="${pos}color:${color};font-size:${fontSize}px;font-weight:${weight};font-family:${fam};font-style:${fontStyle};text-align:${align};text-decoration:${deco};line-height:1.2;overflow:hidden;">${esc(content)}</div>`,
+    );
+  }
 
   return [
     "<!DOCTYPE html>",
     "<html><head>",
     '<meta charset="UTF-8">',
-    `<title>${esc(titleText)}</title>`,
     "<style>",
     "* { box-sizing: border-box; margin: 0; padding: 0; }",
-    `body { width: ${widthPx}px; height: ${heightPx}px; background: ${safeBg}; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }`,
-    `.strip { background: ${safePrimary}; color: white; padding: 24px; }`,
-    ".hero { width: 100%; height: 45%; background-size: cover; background-position: center; }",
-    ".title { padding: 32px 24px 0; font-size: 36px; font-weight: 700; }",
-    ".price { padding: 16px 24px; font-size: 28px; }",
-    `.cta { display: inline-block; margin: 16px 24px; padding: 12px 24px; background: ${safePrimary}; color: white; border-radius: 6px; font-size: 18px; }`,
+    `html,body { width: ${widthPx}px; height: ${heightPx}px; }`,
+    `body { position: relative; overflow: hidden; background: ${bgHex}; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }`,
     "</style>",
     "</head><body>",
-    `<div class="strip">Flyer</div>`,
-    `<div class="hero" style="background-image:url('${esc(heroUrl)}');"></div>`,
-    `<div class="title">${esc(titleText)}</div>`,
-    `<div class="price">${esc(priceText)}</div>`,
-    `<div class="cta">${esc(ctaText)}</div>`,
+    blocks.join("\n"),
     "</body></html>",
   ].join("\n");
 }

@@ -11,7 +11,7 @@
  *
  * Auth gates:
  *   - 401 without bearer token
- *   - 403 USER role (verifyRole(['ADMIN','MANAGER']))
+ *   - 403 USER role (requirePermission('visa','read'))
  *   - 403 wrong-vertical tenant (requireTravelTenant)
  *
  * Empty-state path:

@@ -30,7 +30,7 @@
  * Test pattern mirrors backend/test/routes/travel_quotes.test.js +
  * travel-dashboard.test.js — patch the prisma singleton with vi.fn()
  * shapes BEFORE requiring the router, drive supertest with real HS256
- * JWTs signed with the dev-fallback secret. verifyToken + verifyRole +
+ * JWTs signed with the dev-fallback secret. verifyToken + requirePermission +
  * requireTravelTenant all stay in the chain (no bypass) so guards are
  * exercised end-to-end.
  */

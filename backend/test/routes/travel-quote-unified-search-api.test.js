@@ -7,7 +7,7 @@
  *
  * What's pinned
  * -------------
- *   - auth: verifyToken + verifyRole(['ADMIN', 'MANAGER']) → USER 403.
+ *   - auth: verifyToken + requirePermission('quotes', 'write') → USER 403.
  *   - missing required fields → 400 with structured code.
  *   - both providers ok → ranked envelope, providers.{name}.status='ok'.
  *   - ratehawk stub throws RATEHAWK_NOT_YET_ENABLED → ratehawk marked

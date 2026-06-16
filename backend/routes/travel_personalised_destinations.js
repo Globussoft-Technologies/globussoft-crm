@@ -41,6 +41,7 @@
 const express = require("express");
 const router = express.Router();
 const { verifyToken, verifyRole } = require("../middleware/auth");
+const { requirePermission } = require("../middleware/requirePermission");
 const { requireTravelTenant } = require("../middleware/travelGuards");
 const prisma = require("../lib/prisma");
 const llmRouter = require("../lib/llmRouter");
@@ -177,7 +178,7 @@ function validateBody(raw) {
 router.post(
   "/recommend",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("itineraries", "read"),
   async (req, res) => {
     const v = validateBody(req.body);
     if (!v.ok) {

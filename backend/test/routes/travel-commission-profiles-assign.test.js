@@ -23,7 +23,7 @@
  *
  * Test pattern mirrors travel-commission-profiles.test.js — patch prisma
  * singleton with vi.fn() shapes BEFORE requiring the router, drive supertest
- * with HS256 JWTs signed against the fallback secret. verifyToken + verifyRole
+ * with HS256 JWTs signed against the fallback secret. verifyToken + requirePermission
  * stay in the chain so auth + RBAC + sub-brand gates all run.
  */
 

@@ -35,15 +35,15 @@
  *                                                            language.
  *
  * Pinned auth chain (all routes):
- *   verifyToken → verifyRole(["ADMIN","MANAGER"]) → handler  (5 of 6 endpoints)
- *   verifyToken → verifyRole(["ADMIN"])           → handler  (promote-to-active only)
+ *   verifyToken → requirePermission('tmc_catalogue', read/write/update/delete) → handler  (5 of 6 endpoints)
+ *   verifyToken → requirePermission('tmc_catalogue', 'manage')                  → handler  (promote-to-active only)
  *
  * Failure-path codes pinned by the route source as of this commit:
  *   400 INVALID_ID / INVALID_STATUS / MISSING_FIELDS / INVALID_DURATION /
  *       INVALID_GROUP_SIZE / INVALID_PRICE / INVALID_JSON_FIELD / EMPTY_BODY /
  *       STATUS_NOT_PATCHABLE
  *   401 — verifyToken (missing/invalid Authorization)
- *   403 RBAC_DENIED — verifyRole gate
+ *   403 RBAC_DENIED — RBAC gate
  *   404 CATALOGUE_NOT_FOUND — id absent or cross-tenant
  *   409 CATALOGUE_DUPLICATE — @@unique([tenantId, tripId]) violation
  *
@@ -52,7 +52,7 @@
  * prisma singleton with vi.fn() shapes BEFORE requiring the router so the
  * router's CJS require binds to the spies; mint JWTs with the same dev
  * fallback secret the middleware uses; full guard chain (verifyToken +
- * verifyRole) runs end-to-end — no middleware bypass.
+ * requirePermission) runs end-to-end — no middleware bypass.
  */
 
 import { describe, test, expect, beforeEach, vi } from 'vitest';

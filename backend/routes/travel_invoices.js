@@ -20,6 +20,7 @@
 const express = require("express");
 const router = express.Router();
 const { verifyToken, verifyRole } = require("../middleware/auth");
+const { requirePermission } = require("../middleware/requirePermission");
 const prisma = require("../lib/prisma");
 const {
   requireTravelTenant,
@@ -595,7 +596,7 @@ function parseFilingMonth(raw) {
 router.get(
   "/invoices/gstr1-export",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("invoices", "export"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -1157,7 +1158,7 @@ async function collectAccountingExportRows(req) {
 router.get(
   "/invoices/export/tally.xml",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("invoices", "export"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -1185,7 +1186,7 @@ router.get(
 router.get(
   "/invoices/export/ca.csv",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("invoices", "export"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -1334,7 +1335,7 @@ function roundHalfUp2(n) {
 router.get(
   "/invoices/aged-receivable",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("invoices", "read"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -1556,7 +1557,7 @@ function parseAsOfDate(input) {
 router.get(
   "/invoices/aged-receivable-report",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("invoices", "read"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -1672,7 +1673,7 @@ router.get(
 router.get(
   "/invoices/aged-payable-report",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("invoices", "read"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -1906,7 +1907,7 @@ function panFromGst(gstin) {
 router.get(
   "/invoices/tcs/27eq",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("invoices", "read"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -3000,7 +3001,7 @@ const HSN_SUMMARY_DEFAULT_DOC_TYPES = ["TaxInvoice", "CreditNote", "DebitNote"];
 router.get(
   "/invoices/hsn-summary",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("invoices", "read"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -3307,7 +3308,7 @@ const GSTR3B_DOC_TYPES = ["TaxInvoice", "CreditNote", "DebitNote"];
 router.get(
   "/invoices/gstr-3b",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("invoices", "read"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -3731,7 +3732,7 @@ function parseTaxSummaryDateRange(rawFrom, rawTo) {
 router.get(
   "/invoices/tax-summary",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("invoices", "read"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -4420,7 +4421,7 @@ router.get(
 router.post(
   "/invoices",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("invoices", "write"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -4611,7 +4612,7 @@ router.post(
 router.put(
   "/invoices/:id",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("invoices", "update"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -4766,7 +4767,7 @@ router.put(
 router.delete(
   "/invoices/:id",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("invoices", "delete"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -4856,7 +4857,7 @@ router.delete(
 router.post(
   "/invoices/:id/issue",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("invoices", "update"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -5126,7 +5127,7 @@ router.get(
 router.post(
   "/invoices/:id/lines",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("invoices", "write"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -5222,7 +5223,7 @@ router.post(
 router.put(
   "/invoices/:id/lines/:lineId",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("invoices", "update"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -5380,7 +5381,7 @@ router.put(
 router.delete(
   "/invoices/:id/lines/:lineId",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("invoices", "delete"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -5447,7 +5448,7 @@ router.delete(
 router.get(
   "/invoices/:id/pdf",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("invoices", "export"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -5720,7 +5721,7 @@ router.get(
 router.post(
   "/invoices/:id/schedule",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("invoices", "write"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -5892,7 +5893,7 @@ router.post(
 router.put(
   "/invoices/:id/schedule/:milestoneId",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("invoices", "update"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -6113,7 +6114,7 @@ router.put(
 router.delete(
   "/invoices/:id/schedule/:milestoneId",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("invoices", "delete"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -6210,7 +6211,7 @@ router.delete(
 router.post(
   "/invoices/:id/schedule/:milestoneId/mark-paid",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("invoices", "update"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -6828,7 +6829,7 @@ router.get(
 router.post(
   "/invoices/:id/apply-tcs",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("invoices", "update"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -6997,7 +6998,7 @@ const CREDITABLE_PARENT_STATUSES = ["Issued", "Partial", "Paid"];
 router.post(
   "/invoices/:id/credit-note",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("invoices", "write"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -7152,7 +7153,7 @@ router.post(
 router.post(
   "/invoices/:id/debit-note",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("invoices", "write"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -7526,7 +7527,7 @@ router.get(
 router.post(
   "/invoices/:id/tax-persist",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("invoices", "update"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -7825,7 +7826,7 @@ const CLONEABLE_SOURCE_STATUSES = ["Issued", "Paid"];
 router.post(
   "/invoices/:id/clone-as-recurring",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("invoices", "write"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -8142,7 +8143,7 @@ router.get(
 router.post(
   "/invoices/:id/apply-penalty",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("invoices", "update"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -8401,7 +8402,7 @@ router.post(
 router.post(
   "/invoices/:id/convert-to-tax-invoice",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("invoices", "update"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -8497,7 +8498,7 @@ router.post(
 router.post(
   "/invoices/:id/void",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("invoices", "update"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -8675,7 +8676,7 @@ router.post(
 router.get(
   "/invoices/:id/cancel-preview",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("invoices", "read"),
   requireTravelTenant,
   async (req, res) => {
     try {

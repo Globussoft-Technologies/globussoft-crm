@@ -138,6 +138,39 @@ const MODULE_DESCRIPTIONS = {
   audit:          'Audit log read access and tamper-evidence verification.',
   integrations:   'Third-party integration setup (calendars, SSO, SCIM, webhooks).',
   developer:      'Developer tools, API keys, and platform diagnostics.',
+  // Travel — Sales
+  inbound_leads:        'Operator queue of webhook-ingested raw leads before conversion.',
+  diagnostics:          'TMC readiness diagnostic forms, scoring engine, and public reports.',
+  pois:                 'Point-of-interest master list and rep-suggested approval queue.',
+  // Travel — Itineraries & Trips
+  itineraries:          'Customer itinerary records, day-by-day plans, and accept flow.',
+  itinerary_templates:  'Pre-loaded itinerary template library, versioning, and archive.',
+  quote_templates:      'Reusable itinerary quote templates for fast turnaround.',
+  trips:                'TMC sub-brand trip instances spawned from catalogue templates.',
+  tmc_catalogue:        'TMC school-trip catalogue with human-verify gate.',
+  // Travel — Pricing
+  cost_master:          'Supplier cost catalogue (hotels, flights, transport, tours).',
+  pricing:              'Pricing rules, markups, seasonal calendars, and final-price math.',
+  flight_quotes:        'Flight quote requests, supplier responses, and selection.',
+  sightseeing:          'Sightseeing / tour catalogue master and per-itinerary picks.',
+  // Travel — Suppliers & Payables
+  suppliers:            'Supplier master records (hotels, DMCs, airlines, transport, visa).',
+  commission_profiles:  'Commission rate cards and tiered profiles per supplier.',
+  payables:             'Cross-supplier accounts payable review, batches, and settlement.',
+  cancellation_policies:'Cancellation policy templates and per-booking application.',
+  // Travel — Operations
+  web_checkins:         'Online check-in tracking for upcoming flights.',
+  passport:             'OCR-driven passport verification queue and approvals.',
+  visa:                 'Visa Sure sub-brand applications, checklists, and embassy rules.',
+  microsites:           'Per-sub-brand consumer landing pages and OTP-gated portals.',
+  // Travel — Sub-brand specific
+  curriculum:           'TMC school-trip curriculum modules and learning outcomes.',
+  school_terms:         'TMC school terms and academic calendar tagging.',
+  religious_packets:    'RFU Umrah pilgrimage packets and group bookings.',
+  rfu_profiles:         'RFU pilgrim profile records and travel preferences.',
+  // Travel — Marketing
+  flyer_studio:         'Marketing Flyer Studio — design and publish sub-brand flyers.',
+  flyer_templates:      'Reusable flyer templates and brand-kit defaults.',
 };
 
 // SPEC §6a (CRM Role Preset Specification) — client mirror of
@@ -2174,8 +2207,9 @@ function ModalShell({ title, subtitle, onClose, width = 480, children }) {
       style={{
         position: 'fixed',
         inset: 0,
-        background: 'rgba(0,0,0,0.55)',
-        backdropFilter: 'blur(2px)',
+        background: 'rgba(0,0,0,0.75)',
+        backdropFilter: 'blur(4px)',
+        WebkitBackdropFilter: 'blur(4px)',
         zIndex: 1000,
         display: 'flex',
         alignItems: 'center',
@@ -2185,17 +2219,23 @@ function ModalShell({ title, subtitle, onClose, width = 480, children }) {
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="glass"
         style={{
           width: '100%',
           maxWidth: width,
           maxHeight: '90vh',
           overflow: 'auto',
-          // --surface-color is the actual theme-aware translucent surface.
-          // The earlier `var(--surface, #fff)` was a bug: --surface doesn't
-          // exist anywhere, so it always fell back to solid white — and
-          // text-primary in dark mode is also white → white-on-white modal.
-          background: 'var(--surface-color)',
+          // Opaque `--bg-color` (light: #f0f2f5, dark: #0b0c10) so the
+          // panel reads as a solid slab against the dimmed page — mirrors
+          // the travel `Trips.jsx` New Trip modal pattern. The prior
+          // `--surface-color` (translucent rgba) + `.glass` class (16px
+          // backdrop-blur) washed the matrix out in light mode: form
+          // controls, dashed-border picker buttons and `--subtle-bg-*`
+          // widget cards all sat on a low-contrast translucent panel,
+          // making the per-row borders and section headers read flat.
+          // Opaque slab + dropped `.glass` blur gives every popup on
+          // this page (Create / Edit / Permissions matrix / Widgets /
+          // Users / Delete confirm) the same crisp shape as Trips.
+          background: 'var(--bg-color)',
           color: 'var(--text-primary)',
           borderRadius: 12,
           border: '1px solid var(--border-color)',

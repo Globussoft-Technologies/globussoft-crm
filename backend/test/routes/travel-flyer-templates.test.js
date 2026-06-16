@@ -55,7 +55,7 @@
  * patch the prisma singleton with vi.fn() shapes BEFORE requiring the
  * router, then drive supertest with real HS256 JWTs signed against the
  * same fallback secret the middleware uses in dev. verifyToken +
- * verifyRole + requireTravelTenant + sub-brand gates all run.
+ * requirePermission + requireTravelTenant + sub-brand gates all run.
  */
 
 import { describe, test, expect, beforeAll, beforeEach, vi } from 'vitest';
@@ -1603,7 +1603,7 @@ describe('POST /api/travel/flyer-templates/:id/archive (slice 14)', () => {
       .send({});
 
     expect(res.status).toBe(403);
-    // verifyRole emits a generic role-denied; the exact code may be
+    // the RBAC gate emits a generic role-denied; the exact code may be
     // RBAC_DENIED or similar — pin status + ensure prisma was not hit.
     expect(prisma.travelFlyerTemplate.findFirst).not.toHaveBeenCalled();
     expect(prisma.travelFlyerTemplate.update).not.toHaveBeenCalled();

@@ -30,6 +30,7 @@ const crypto = require("crypto");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const { verifyToken, verifyRole } = require("../middleware/auth");
+const { requirePermission } = require("../middleware/requirePermission");
 const { JWT_SECRET } = require("../config/secrets");
 const prisma = require("../lib/prisma");
 const { requireTravelTenant, getSubBrandAccessSet } = require("../middleware/travelGuards");
@@ -237,7 +238,7 @@ async function loadTrip(req) {
 router.post(
   "/trips/:tripId/microsite",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("microsites", "write"),
   requireTravelTenant,
   requireTmcAccess,
   async (req, res) => {
@@ -289,7 +290,7 @@ router.post(
 router.get(
   "/trips/:tripId/microsite",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("microsites", "read"),
   requireTravelTenant,
   requireTmcAccess,
   async (req, res) => {
@@ -312,7 +313,7 @@ router.get(
 router.patch(
   "/trips/:tripId/microsite",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("microsites", "update"),
   requireTravelTenant,
   requireTmcAccess,
   async (req, res) => {
@@ -359,7 +360,7 @@ router.patch(
 router.post(
   "/trips/:tripId/microsite/upload",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("microsites", "update"),
   requireTravelTenant,
   requireTmcAccess,
   uploadImageOrReject,
@@ -389,7 +390,7 @@ router.post(
 router.delete(
   "/trips/:tripId/microsite",
   verifyToken,
-  verifyRole(["ADMIN"]),
+  requirePermission("microsites", "delete"),
   requireTravelTenant,
   requireTmcAccess,
   async (req, res) => {

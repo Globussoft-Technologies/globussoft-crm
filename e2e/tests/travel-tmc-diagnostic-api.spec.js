@@ -617,7 +617,7 @@ test.describe('TMC diagnostic — tenant + vertical isolation', () => {
     const token = await getGenericAdmin(request);
     if (!token) test.skip(true, 'admin@globussoft.com not seeded — skipping cross-vertical probe');
     const res = await get(request, token, '/api/travel-tmc-catalogue?status=active');
-    // The catalogue route is staff-only with verifyRole — but the meaningful
+    // The catalogue route is staff-only with the RBAC gate — but the meaningful
     // assertion is the response NEVER leaks another tenant's catalogue rows.
     // Either WRONG_VERTICAL (403) or empty list scoped to the generic tenant.
     if (res.status() === 200) {

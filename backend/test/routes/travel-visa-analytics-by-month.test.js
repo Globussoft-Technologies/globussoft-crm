@@ -36,7 +36,7 @@
  * Test pattern mirrors backend/test/routes/travel-visa-analytics.test.js —
  * patch the prisma singleton with vi.fn() shapes BEFORE requiring the
  * router, drive supertest with HS256 JWTs signed with the dev-fallback
- * secret, exercise verifyToken + verifyRole + requireTravelTenant fully.
+ * secret, exercise verifyToken + requirePermission + requireTravelTenant fully.
  */
 
 import { describe, test, expect, beforeEach, vi } from 'vitest';

@@ -279,6 +279,42 @@ test.describe("Travel trips API — participants", () => {
     expect((await res.json()).code).toBe("INVALID_AADHAAR_LAST4");
   });
 
+  test("POST participant with non-numeric parentPhone → 400 INVALID_PHONE", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || created.tripIds.length === 0) test.skip(true, "no trips");
+    const res = await post(request, token, `/api/travel/trips/${created.tripIds[0]}/participants`, {
+      fullName: `${RUN_TAG} Phone Probe`,
+      parentPhone: "abcde-not-a-phone",
+    });
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe("INVALID_PHONE");
+  });
+
+  test("PATCH participant with non-numeric parentPhone → 400 INVALID_PHONE", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || created.participantIds.length === 0) test.skip(true, "no participants");
+    const tripId = created.tripIds[0];
+    const pid = created.participantIds[0];
+    const res = await patch(request, token, `/api/travel/trips/${tripId}/participants/${pid}`, {
+      parentPhone: "abcde-not-a-phone",
+    });
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe("INVALID_PHONE");
+  });
+
+  test("POST participant with bare 10-digit Indian mobile auto-prepends +91", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token || created.tripIds.length === 0) test.skip(true, "no trips");
+    const res = await post(request, token, `/api/travel/trips/${created.tripIds[0]}/participants`, {
+      fullName: `${RUN_TAG} Bare Phone Probe`,
+      parentPhone: "9876543210",
+    });
+    expect(res.status()).toBe(201);
+    const body = await res.json();
+    expect(body.parentPhone).toBe("+919876543210");
+    created.participantIds.push(body.id);
+  });
+
   test("POST participant with valid 4-digit aadhaarLast4 succeeds", async ({ request }) => {
     const token = await getTravelAdmin(request);
     if (!token || created.tripIds.length === 0) test.skip(true, "no trips");

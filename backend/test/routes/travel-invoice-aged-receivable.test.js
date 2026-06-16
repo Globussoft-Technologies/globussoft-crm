@@ -27,7 +27,7 @@
  *   - Invalid ?asOf → 400 INVALID_AS_OF.
  *   - Invalid ?subBrand → 400 INVALID_SUB_BRAND.
  *   - Invalid ?contactId → 400 INVALID_CONTACT_ID.
- *   - USER role → 403 (verifyRole gate blocks before findMany).
+ *   - USER role → 403 (RBAC gate blocks before findMany).
  *   - Sub-brand-restricted MANAGER (subBrandAccess=["tmc"]) gets the
  *     where.subBrand={in:["tmc"]} narrowing applied.
  *   - currencyBreakdown groups by invoice.currency.
@@ -366,7 +366,7 @@ describe('GET /api/travel/invoices/aged-receivable', () => {
       .set('Authorization', `Bearer ${tokenFor('USER')}`);
 
     expect(res.status).toBe(403);
-    // findMany never invoked because verifyRole rejected upstream.
+    // findMany never invoked because the RBAC gate rejected upstream.
     expect(prisma.travelInvoice.findMany).not.toHaveBeenCalled();
   });
 

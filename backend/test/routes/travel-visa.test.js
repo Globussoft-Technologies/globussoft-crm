@@ -11,7 +11,7 @@
  * What's pinned
  * -------------
  *   - Auth gate: missing/garbage Bearer → 401 (verifyToken).
- *   - Role gate: USER role → 403 (verifyRole(['ADMIN','MANAGER'])).
+ *   - Role gate: USER role → 403 (requirePermission('visa', read/write/update)).
  *   - Vertical gate (via requireTravelTenant): generic-vertical tenant →
  *     403 WRONG_VERTICAL; tenant row missing → 404 TENANT_NOT_FOUND.
  *   - GET /applications happy path: decorates each row with its Contact
@@ -37,7 +37,7 @@
  * Test pattern mirrors backend/test/routes/travel-visa-analytics.test.js —
  * patch the prisma singleton with vi.fn() shapes BEFORE requiring the
  * router, then drive supertest with real HS256 JWTs signed with the
- * dev-fallback secret. verifyToken + verifyRole + requireTravelTenant
+ * dev-fallback secret. verifyToken + requirePermission + requireTravelTenant
  * stay in the chain (no bypass) so the guards are exercised end-to-end.
  *
  * The eventBus.safeEmitEvent helper is vi.mock()'d at the module level so
@@ -166,7 +166,7 @@ describe('travel-visa — auth gate', () => {
       .get('/api/travel/visa/applications')
       .set('Authorization', `Bearer ${tokenFor('USER')}`);
     expect(res.status).toBe(403);
-    // verifyRole trips BEFORE requireTravelTenant fires the tenant lookup.
+    // the RBAC gate trips BEFORE requireTravelTenant fires the tenant lookup.
     expect(prisma.contact.findMany).not.toHaveBeenCalled();
   });
 

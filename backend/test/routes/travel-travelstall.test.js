@@ -6,7 +6,7 @@
  *
  * Pins backend/routes/travel_travelstall.js — currently a single endpoint:
  *   POST /api/travel/travelstall/personalised-pdf/regen
- *     - Auth: verifyToken + verifyRole(['ADMIN','MANAGER'])
+ *     - Auth: verifyToken + requirePermission('reports','export')
  *     - Vertical guard: requireTravelTenant (tenant.vertical === 'travel')
  *     - Loads contact (tenant-scoped) + optional latest TravelDiagnostic
  *       (subBrand='travelstall')

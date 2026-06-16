@@ -43,6 +43,7 @@
 const express = require("express");
 const router = express.Router();
 const { verifyToken, verifyRole } = require("../middleware/auth");
+const { requirePermission } = require("../middleware/requirePermission");
 const prisma = require("../lib/prisma");
 const {
   requireTravelTenant,
@@ -180,7 +181,7 @@ router.get(
 router.post(
   "/payable-batches",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("payables", "write"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -308,7 +309,7 @@ router.get(
 router.put(
   "/payable-batches/:id",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("payables", "update"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -358,7 +359,7 @@ router.put(
 router.post(
   "/payable-batches/:id/add-payable",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("payables", "update"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -424,7 +425,7 @@ router.post(
 router.post(
   "/payable-batches/:id/remove-payable",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("payables", "update"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -502,7 +503,7 @@ function buildTransitionHandler(toStatus, timestampField, extras = {}) {
 router.post(
   "/payable-batches/:id/approve",
   verifyToken,
-  verifyRole(["ADMIN"]),
+  requirePermission("payables", "update"),
   requireTravelTenant,
   buildTransitionHandler("approved", "approvedAt", { approverField: "approvedBy" }),
 );
@@ -510,7 +511,7 @@ router.post(
 router.post(
   "/payable-batches/:id/send-to-bank",
   verifyToken,
-  verifyRole(["ADMIN"]),
+  requirePermission("payables", "update"),
   requireTravelTenant,
   buildTransitionHandler("sent_to_bank", "sentAt"),
 );
@@ -520,7 +521,7 @@ router.post(
 router.post(
   "/payable-batches/:id/settle",
   verifyToken,
-  verifyRole(["ADMIN"]),
+  requirePermission("payables", "update"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -558,7 +559,7 @@ router.post(
 router.post(
   "/payable-batches/:id/cancel",
   verifyToken,
-  verifyRole(["ADMIN"]),
+  requirePermission("payables", "update"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -623,7 +624,7 @@ function csvCell(v) {
 router.get(
   "/payable-batches/:id/payment-csv",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("payables", "export"),
   requireTravelTenant,
   async (req, res) => {
     try {

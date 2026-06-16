@@ -108,12 +108,24 @@ test.describe('GET /api/widgets/catalog', () => {
     expect(res.status(), await res.text()).toBe(200);
     const body = await res.json();
     expect(Array.isArray(body.catalog)).toBe(true);
-    expect(body.catalog.length).toBeGreaterThan(5);
+    // Vertical-aware (2026-06-15): /api/widgets/catalog now returns
+    // only the requesting tenant's vertical-relevant widgets.
+    // admin@globussoft.com is on the generic tenant, which only gets
+    // COMMON_WIDGETS (`quick-links`). Wellness / travel tenants would
+    // get their vertical-specific widgets plus the common core.
+    expect(body.catalog.length).toBeGreaterThanOrEqual(1);
     expect(Array.isArray(body.categories)).toBe(true);
+    const keys = body.catalog.map((/** @type {{key:string}} */ w) => w.key);
+    expect(keys).toContain('quick-links');
+    // Wellness/travel-only widget keys are hidden from the generic tenant.
+    expect(keys).not.toContain('today-appointments');
+    expect(keys).not.toContain('travel-todays-departures');
     const sample = body.catalog[0];
     expect(typeof sample.key).toBe('string');
     expect(typeof sample.title).toBe('string');
     expect(Array.isArray(sample.requiredPermissions)).toBe(true);
+    // The vertical field is echoed for client-side observability.
+    expect(body.vertical === null || typeof body.vertical === 'string').toBe(true);
   });
 
   test('401 without a token', async ({ request }) => {

@@ -36,6 +36,7 @@ const multer = require("multer");
 const prisma = require("../lib/prisma");
 const { writeAudit } = require("../lib/audit");
 const { verifyToken, verifyRole } = require("../middleware/auth");
+const { requirePermission } = require("../middleware/requirePermission");
 const {
   requireTravelTenant,
   getSubBrandAccessSet,
@@ -146,7 +147,7 @@ router.get("/cost-master/export.csv", verifyToken, requireTravelTenant, async (r
 router.post(
   "/cost-master/import.csv",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("cost_master", "write"),
   requireTravelTenant,
   upload.single("file"),
   async (req, res) => {
@@ -310,7 +311,7 @@ router.get("/diagnostic-banks/export.csv", verifyToken, requireTravelTenant, asy
 router.post(
   "/diagnostic-banks/import.csv",
   verifyToken,
-  verifyRole(["ADMIN"]),
+  requirePermission("diagnostics", "write"),
   requireTravelTenant,
   upload.single("file"),
   async (req, res) => {
@@ -478,7 +479,7 @@ router.get("/seasons/export.csv", verifyToken, requireTravelTenant, async (req, 
 router.post(
   "/seasons/import.csv",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("pricing", "write"),
   requireTravelTenant,
   upload.single("file"),
   async (req, res) => {
@@ -637,7 +638,7 @@ router.get("/markup-rules/export.csv", verifyToken, requireTravelTenant, async (
 router.post(
   "/markup-rules/import.csv",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("pricing", "write"),
   requireTravelTenant,
   upload.single("file"),
   async (req, res) => {

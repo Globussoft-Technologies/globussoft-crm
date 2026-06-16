@@ -24,6 +24,7 @@ import { useEffect, useState, useContext } from "react";
 import { Receipt, Plus, Pencil, Trash2 } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
+import { usePermissions } from "../../hooks/usePermissions";
 import { formatMoney } from "../../utils/money";
 import {
   SUB_BRAND_BG,
@@ -105,7 +106,19 @@ export default function QuotesAdmin() {
   // never re-fetch; safe to call unconditionally here.
   const { brandKit } = useBrandKit(activeSubBrand);
   const primaryBtnBranded = { ...primaryBtn, background: brandPrimaryColor(brandKit) };
-  const canWrite = user?.role === "ADMIN" || user?.role === "MANAGER";
+  // Permission-driven action visibility. Backend routes already gate
+  // each action with requirePermission(quotes, <action>); the UI checks
+  // mirror those gates so buttons hide entirely when the role lacks the
+  // grant. The legacy `canWrite = user.role === 'ADMIN' || …` check
+  // was replaced 2026-06-15 — role-name gates can't reflect custom
+  // roles configured via Roles & Permissions.
+  const { hasPermission } = usePermissions();
+  const canCreate = hasPermission("quotes", "write");
+  const canEdit = hasPermission("quotes", "update");
+  const canDelete = hasPermission("quotes", "delete");
+  // Combined for table-column rendering — show the Actions column if
+  // ANY mutation is permitted.
+  const canWrite = canCreate || canEdit || canDelete;
 
   // Sub-brand the create/edit form may assign. Single-brand users are locked
   // to their one brand (field rendered read-only); multi-brand users get a
@@ -265,7 +278,7 @@ export default function QuotesAdmin() {
             Customer quotes — Draft / Sent / Accepted / Rejected. {total.toLocaleString()} quote{total === 1 ? "" : "s"}.
           </p>
         </div>
-        {canWrite && (
+        {canCreate && (
           <button type="button" onClick={openCreate} style={primaryBtnBranded}>
             <Plus size={14} /> New Quote
           </button>
@@ -441,24 +454,32 @@ export default function QuotesAdmin() {
                   <td style={td}>{formatDate(q.createdAt)}</td>
                   {canWrite && (
                     <td style={{ ...td, textAlign: "center", whiteSpace: "nowrap" }}>
-                      <button
-                        type="button"
-                        onClick={() => openEdit(q)}
-                        title={`Edit quote #${q.id}`}
-                        aria-label={`Edit quote #${q.id}`}
-                        style={iconBtn}
-                      >
-                        <Pencil size={16} />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleDelete(q)}
-                        title={`Delete quote #${q.id}`}
-                        aria-label={`Delete quote #${q.id}`}
-                        style={{ ...iconBtn, color: "var(--danger-color, #f43f5e)" }}
-                      >
-                        <Trash2 size={16} />
-                      </button>
+                      {/* Per-action gating — Edit and Delete have
+                          independent catalog actions (quotes.update vs
+                          quotes.delete), so a role with update-only
+                          shouldn't see Delete and vice-versa. */}
+                      {canEdit && (
+                        <button
+                          type="button"
+                          onClick={() => openEdit(q)}
+                          title={`Edit quote #${q.id}`}
+                          aria-label={`Edit quote #${q.id}`}
+                          style={iconBtn}
+                        >
+                          <Pencil size={16} />
+                        </button>
+                      )}
+                      {canDelete && (
+                        <button
+                          type="button"
+                          onClick={() => handleDelete(q)}
+                          title={`Delete quote #${q.id}`}
+                          aria-label={`Delete quote #${q.id}`}
+                          style={{ ...iconBtn, color: "var(--danger-color, #f43f5e)" }}
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      )}
                     </td>
                   )}
                 </tr>

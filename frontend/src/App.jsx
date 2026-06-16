@@ -1266,7 +1266,11 @@ export default function App() {
                       path="admin/ratehawk-search"
                       element={
                         <TravelOnly>
-                          <RoleGuard allow={["ADMIN", "MANAGER"]} message="RateHawk Search requires admin or manager access.">
+                          <RoleGuard
+                            requiredPermission={{ module: "suppliers", action: "read" }}
+                            feature="RateHawk Search"
+                            message="RateHawk Search requires the 'suppliers.read' permission."
+                          >
                             <RateHawkSearch />
                           </RoleGuard>
                         </TravelOnly>
@@ -1288,7 +1292,11 @@ export default function App() {
                       path="admin/booking-expedia-search"
                       element={
                         <TravelOnly>
-                          <RoleGuard allow={["ADMIN", "MANAGER"]} message="Booking/Expedia Search requires admin or manager access.">
+                          <RoleGuard
+                            requiredPermission={{ module: "suppliers", action: "read" }}
+                            feature="Booking / Expedia Search"
+                            message="Booking / Expedia Search requires the 'suppliers.read' permission."
+                          >
                             <BookingExpediaSearch />
                           </RoleGuard>
                         </TravelOnly>
@@ -1296,7 +1304,7 @@ export default function App() {
                     />
                     <Route path="admin/csp-violations" element={<CSPViolations />} />
                     {/* Slice C1 — Voyagr per-site API key admin. ADMIN-only. */}
-                    <Route path="admin/voyagr-api-keys" element={<RoleGuard allow={["ADMIN"]} message="Voyagr API Keys requires admin access."><VoyagrApiKeys /></RoleGuard>} />
+                    <Route path="admin/voyagr-api-keys" element={<RoleGuard requiredPermission={{ module: "integrations", action: "manage" }} feature="Voyagr API Keys" message="Voyagr API Keys requires the 'integrations.manage' permission."><VoyagrApiKeys /></RoleGuard>} />
                     {/* S128 — Embed allowlist admin (sets Tenant.embedAllowlistJson). ADMIN-only. */}
                     <Route path="admin/embed-allowlist" element={<RoleGuard allow={["ADMIN"]} message="Embed Allowlist requires admin access."><EmbedAllowlist /></RoleGuard>} />
                     {/* PRD Gap §1.5 / §1.6 */}
@@ -1414,7 +1422,11 @@ export default function App() {
                   503 / 403 on the queue fetch. */}
               <Route path="travel/passport-verification" element={
                 <TravelOnly>
-                  <RoleGuard allow={["ADMIN", "MANAGER"]} message="Passport verification requires admin or manager access.">
+                  <RoleGuard
+                    requiredPermission={{ module: "passport", action: "manage" }}
+                    feature="Passport Verification"
+                    message="Passport Verification requires the 'passport.manage' permission."
+                  >
                     <TravelPassportVerificationQueue />
                   </RoleGuard>
                 </TravelOnly>
@@ -1436,7 +1448,11 @@ export default function App() {
                   shipped S12; backend mount S98 (commit 37d9ce40). */}
               <Route path="travel/pois/pending" element={
                 <TravelOnly>
-                  <RoleGuard allow={["ADMIN"]} message="POI approval queue requires admin access.">
+                  <RoleGuard
+                    requiredPermission={{ module: "pois", action: "manage" }}
+                    feature="POI Approvals"
+                    message="POI approval queue requires the 'pois.manage' permission."
+                  >
                     <TravelPoiPendingApprovalQueue />
                   </RoleGuard>
                 </TravelOnly>
@@ -1478,11 +1494,11 @@ export default function App() {
               {/* Arc 2 #900 slice 2 — Quote Builder (line-items composition).
                   Optional :id param (`/builder` = new; `/builder/:id` = edit).
                   RoleGuard allow=[ADMIN,MANAGER] mirrors backend write RBAC. */}
-              <Route path="travel/quotes/builder" element={<TravelOnly><RoleGuard allow={["ADMIN", "MANAGER"]} feature="Quote Builder" roles="manager or admin"><TravelQuoteBuilder /></RoleGuard></TravelOnly>} />
-              <Route path="travel/quotes/builder/:id" element={<TravelOnly><RoleGuard allow={["ADMIN", "MANAGER"]} feature="Quote Builder" roles="manager or admin"><TravelQuoteBuilder /></RoleGuard></TravelOnly>} />
+              <Route path="travel/quotes/builder" element={<TravelOnly><RoleGuard requiredPermission={{ module: "quotes", action: "write" }} feature="Quote Builder" message="Quote Builder requires the 'quotes.write' permission."><TravelQuoteBuilder /></RoleGuard></TravelOnly>} />
+              <Route path="travel/quotes/builder/:id" element={<TravelOnly><RoleGuard requiredPermission={{ module: "quotes", action: "write" }} feature="Quote Builder" message="Quote Builder requires the 'quotes.write' permission."><TravelQuoteBuilder /></RoleGuard></TravelOnly>} />
               {/* G019 — operator-facing counter-offer review (side-by-side
                   ours vs customer counter). Accept / Reject / Counter back. */}
-              <Route path="travel/quotes/:id/counter-review" element={<TravelOnly><RoleGuard allow={["ADMIN", "MANAGER"]} feature="Counter Review" roles="manager or admin"><TravelQuoteCounterReview /></RoleGuard></TravelOnly>} />
+              <Route path="travel/quotes/:id/counter-review" element={<TravelOnly><RoleGuard requiredPermission={{ module: "quotes", action: "write" }} feature="Counter Review" message="Counter Review requires the 'quotes.write' permission."><TravelQuoteCounterReview /></RoleGuard></TravelOnly>} />
               {/* PRD §7 — Flight quick-quote (FlightQuoteAgent). Manual
                   fallback for the Chrome flight plugin: up to 4 options,
                   server-side markup, branded PDF + WhatsApp share. */}
@@ -1529,7 +1545,12 @@ export default function App() {
                 path="travel/flyer-share-admin"
                 element={
                   <TravelOnly>
-                    <RoleGuard allow={["ADMIN"]} feature="Flyer Share Admin" roles="admin" lockedInPlace>
+                    <RoleGuard
+                      requiredPermission={{ module: "flyer_studio", action: "manage" }}
+                      feature="Flyer Share Admin"
+                      message="Flyer Share Admin requires the 'flyer_studio.manage' permission."
+                      lockedInPlace
+                    >
                       <TravelFlyerShareAdmin />
                     </RoleGuard>
                   </TravelOnly>
@@ -1569,7 +1590,11 @@ export default function App() {
                   ADMIN-only per backend POST/PUT/DELETE gates. */}
               <Route path="travel/visa/embassy-rules" element={
                 <TravelOnly>
-                  <RoleGuard allow={["ADMIN"]} message="Embassy Rules admin requires admin access.">
+                  <RoleGuard
+                    requiredPermission={{ module: "visa", action: "manage" }}
+                    feature="Embassy Rules"
+                    message="Embassy Rules admin requires the 'visa.manage' permission."
+                  >
                     <TravelVisaEmbassyRulesAdmin />
                   </RoleGuard>
                 </TravelOnly>
@@ -1587,7 +1612,11 @@ export default function App() {
                   (school-trip pitch deck), NOT under Visa Sure. */}
               <Route path="travel/curriculum-mappings" element={
                 <TravelOnly>
-                  <RoleGuard allow={["ADMIN"]} message="Curriculum Mappings admin requires admin access.">
+                  <RoleGuard
+                    requiredPermission={{ module: "curriculum", action: "delete" }}
+                    feature="Curriculum Mappings"
+                    message="Curriculum Mappings admin requires the 'curriculum.delete' permission."
+                  >
                     <TravelCurriculumAdmin />
                   </RoleGuard>
                 </TravelOnly>
@@ -1595,7 +1624,11 @@ export default function App() {
               {/* TMC school term calendar admin — ADMIN-only per backend gates. */}
               <Route path="travel/school-terms" element={
                 <TravelOnly>
-                  <RoleGuard allow={["ADMIN"]} message="School Term Calendar requires admin access.">
+                  <RoleGuard
+                    requiredPermission={{ module: "school_terms", action: "delete" }}
+                    feature="School Term Calendar"
+                    message="School Term Calendar requires the 'school_terms.delete' permission."
+                  >
                     <TravelSchoolTermCalendar />
                   </RoleGuard>
                 </TravelOnly>
@@ -1608,7 +1641,11 @@ export default function App() {
                   marketing surface. */}
               <Route path="travel/marketing/flyer-studio" element={
                 <TravelOnly>
-                  <RoleGuard allow={["ADMIN", "MANAGER"]} feature="Marketing Flyer Studio">
+                  <RoleGuard
+                    requiredPermission={{ module: "flyer_studio", action: "read" }}
+                    feature="Marketing Flyer Studio"
+                    message="Marketing Flyer Studio requires the 'flyer_studio.read' permission."
+                  >
                     <TravelMarketingFlyerStudio />
                   </RoleGuard>
                 </TravelOnly>

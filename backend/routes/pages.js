@@ -14,14 +14,36 @@
 
 const express = require('express');
 const router = express.Router();
+const prisma = require('../lib/prisma');
 const { verifyToken } = require('../middleware/auth');
-const { getCatalog, getAccessiblePages } = require('../lib/pageCatalog');
+const { getCatalog, getCatalogForVertical, getAccessiblePages } = require('../lib/pageCatalog');
 const { getUserPermissions } = require('../middleware/requirePermission');
 
-router.get('/catalog', verifyToken, (req, res) => {
-  const catalog = getCatalog();
+// GET /api/pages/catalog — page catalog metadata.
+//
+// Vertical-aware (Phase 1, 2026-06-15): a travel tenant only sees travel
+// + cross-vertical pages; a wellness tenant only sees wellness + cross-
+// vertical. The Create-role landingPath dropdown in RolesAdmin.jsx
+// fetches this BEFORE a new role has any saved permissions, so the
+// usual perm-based filter (/api/roles/:id/accessible-pages) can't yet
+// help — this is the pre-save fallback that needs to stay
+// vertical-relevant. DB blip → fall back to the full union catalog
+// (better-than-empty UX; worst case the dropdown shows a cross-vertical
+// page that the post-save perm-based view will drop).
+router.get('/catalog', verifyToken, async (req, res) => {
+  let vertical = null;
+  try {
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: req.user.tenantId },
+      select: { vertical: true },
+    });
+    vertical = tenant?.vertical || null;
+  } catch (err) {
+    console.error('[pages.catalog] tenant vertical lookup failed:', err && err.message);
+  }
+  const catalog = vertical ? getCatalogForVertical(vertical) : getCatalog();
   const categories = Array.from(new Set(catalog.map((p) => p.category)));
-  res.json({ catalog, categories });
+  res.json({ catalog, categories, vertical });
 });
 
 router.get('/me', verifyToken, async (req, res) => {

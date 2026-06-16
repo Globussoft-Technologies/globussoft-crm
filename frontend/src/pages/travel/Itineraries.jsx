@@ -21,6 +21,7 @@ import {
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { AuthContext } from "../../App";
+import PermissionGate from "../../components/PermissionGate";
 import { useActiveSubBrand } from "../../utils/subBrand";
 import {
   accessibleSubBrands,
@@ -489,22 +490,32 @@ export default function Itineraries() {
           </p>
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <button
-            type="button"
-            onClick={openSuggest}
-            style={secondaryBtn}
-            aria-label="Suggest itinerary using AI"
-          >
-            <Sparkles size={14} /> Suggest itinerary
-          </button>
-          <button
-            type="button"
-            onClick={openCreate}
-            style={primaryBtn}
-            aria-label="Create a new itinerary"
-          >
-            <Plus size={14} /> Create Itinerary
-          </button>
+          {/* Both header CTAs lead to itinerary creation — gate on
+              `itineraries.write`. PermissionGate hides the buttons
+              entirely when the role lacks the grant. Backend POST
+              endpoints already enforce the same gate (requirePermission
+              middleware on routes/travel_itineraries.js); the UI gate
+              prevents users from seeing actions they can't perform. */}
+          <PermissionGate module="itineraries" action="write">
+            <button
+              type="button"
+              onClick={openSuggest}
+              style={secondaryBtn}
+              aria-label="Suggest itinerary using AI"
+            >
+              <Sparkles size={14} /> Suggest itinerary
+            </button>
+          </PermissionGate>
+          <PermissionGate module="itineraries" action="write">
+            <button
+              type="button"
+              onClick={openCreate}
+              style={primaryBtn}
+              aria-label="Create a new itinerary"
+            >
+              <Plus size={14} /> Create Itinerary
+            </button>
+          </PermissionGate>
         </div>
       </header>
 

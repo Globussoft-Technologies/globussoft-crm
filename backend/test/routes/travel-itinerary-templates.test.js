@@ -24,14 +24,14 @@
  *   - POST missing destinationName → 400 MISSING_DESTINATION
  *   - POST missing durationDays → 400 MISSING_DURATION
  *   - POST durationDays=0 (non-positive) → 400 INVALID_DURATION
- *   - POST USER role → 403 (verifyRole gate)
+ *   - POST USER role → 403 (RBAC gate)
  *   - GET /:id found / invalid id / not-found shapes
  *   - PATCH /:id happy path + empty body + not found
  *   - DELETE /:id sets isActive=false (no destructive delete); MANAGER → 403
  *
  * Pattern mirrors travel-sightseeing.test.js — patch prisma BEFORE
  * requiring the router, drive with real HS256 JWTs against the dev
- * fallback secret. verifyToken + verifyRole + requireTravelTenant +
+ * fallback secret. verifyToken + requirePermission + requireTravelTenant +
  * getSubBrandAccessSet all run for real.
  */
 

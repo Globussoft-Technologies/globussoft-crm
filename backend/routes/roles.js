@@ -15,6 +15,8 @@ const {
   isValidPermission,
   getCatalog,
   getGroupedCatalog,
+  getCatalogForVertical,
+  getGroupedCatalogForVertical,
 } = require("../lib/permissionCatalog");
 const { writeAudit } = require("../lib/audit");
 const { validateLandingPath, normalizeLandingPath } = require("../lib/landingPath");
@@ -54,19 +56,58 @@ async function permissionSetForRole(roleId) {
   return new Set(rows.map((r) => `${r.module}.${r.action}`));
 }
 
-// GET /api/roles — list all roles (tenant-scoped; OWNER sees all)
+// GET /api/roles — list roles for the active tenant.
+//
+// Tenant scoping (2026-06-15):
+//   • STAFF — always scoped to req.user.tenantId (JWT-bound). The
+//     X-Active-Tenant header is a no-op for STAFF (the existing auth
+//     middleware drops any cross-tenant value before this handler
+//     fires — see middleware/auth.js#L106).
+//   • OWNER — scoped to the requesting client's "active tenant"
+//     context: the X-Active-Tenant request header takes precedence,
+//     then the ?tenantId query parameter, finally a fallback to the
+//     JWT's tenantId. This stops the Roles & Permissions page from
+//     surfacing every tenant's roles in one ungrouped list when an
+//     OWNER user opens it (the canonical "I switched to Travel Stall
+//     in the tenant picker but the page still shows wellness clinical
+//     roles" UX bug). OWNER can still administer any tenant's roles —
+//     they just need to switch the SPA tenant picker first.
+//
+// Validation: when OWNER supplies an unknown tenantId, fall back to
+// the JWT's tenantId rather than 404. Stale localStorage from a prior
+// session shouldn't break the page; the page just shows the OWNER's
+// home tenant instead.
+//
+// Response now echoes `tenantId` so the client (or tests) can confirm
+// which tenant's roles are being shown — useful for verifying the
+// scope landed correctly when debugging cross-tenant view bugs.
 router.get(
   "/",
   verifyToken,
   requirePermission("roles", "read"),
   async (req, res) => {
     try {
-      const where = req.user.isOwner
-        ? {} // OWNER sees all roles across all tenants
-        : { tenantId: req.user.tenantId }; // STAFF sees tenant-scoped roles only
+      let tenantId = req.user.tenantId;
+
+      if (req.user.isOwner) {
+        const headerVal = req.headers["x-active-tenant"];
+        const queryVal = req.query.tenantId;
+        const candidate = parseInt(headerVal || queryVal, 10);
+        if (Number.isInteger(candidate) && candidate > 0) {
+          // Confirm the tenant exists before scoping to it. Avoids
+          // returning an empty list (and the resulting "no roles
+          // found" empty state) when a stale localStorage value or a
+          // typo in the query param points at a deleted tenant.
+          const tenant = await prisma.tenant.findUnique({
+            where: { id: candidate },
+            select: { id: true },
+          });
+          if (tenant) tenantId = candidate;
+        }
+      }
 
       const roles = await prisma.role.findMany({
-        where,
+        where: { tenantId },
         include: {
           permissions: true,
           _count: { select: { userRoles: true } }
@@ -79,7 +120,8 @@ router.get(
           ...role,
           userCount: role._count.userRoles,
           _count: undefined
-        }))
+        })),
+        tenantId,
       });
     } catch (err) {
       console.error("[roles] list error:", err);
@@ -94,18 +136,41 @@ router.get(
 // Wellness Inventory / etc.) so the Permissions modal can render section
 // headers instead of a flat grid — keep an existing client compatible by
 // also returning the plain `modules` array.
+//
+// Vertical-aware (Phase 1, 2026-06-15): the catalog returned here is
+// filtered by the requesting tenant's `Tenant.vertical` so wellness
+// tenants don't see travel-only modules (itineraries / suppliers / etc.)
+// and travel tenants don't see wellness-only modules (patients /
+// prescriptions / inventory / etc.). Existing RolePermission rows are
+// NOT pruned — see permissionCatalog.js for the soft-hide rationale.
+// `vertical` is echoed in the response for client-side observability /
+// debugging; absence falls through to the generic catalog.
 router.get(
   "/catalog",
   verifyToken,
   requirePermission("roles", "read"),
-  (req, res) => {
-    const catalog = getCatalog();
+  async (req, res) => {
+    let vertical = null;
+    try {
+      const tenant = await prisma.tenant.findUnique({
+        where: { id: req.user.tenantId },
+        select: { vertical: true },
+      });
+      vertical = tenant?.vertical || null;
+    } catch (err) {
+      // DB blip — fall through to the generic catalog rather than 500.
+      // Worst case the matrix shows fewer modules until the next request.
+      console.error("[roles.catalog] tenant vertical lookup failed:", err && err.message);
+    }
+    const catalog = vertical ? getCatalogForVertical(vertical) : getCatalog();
     const modules = Object.entries(catalog).map(([module, actions]) => ({
       module,
       actions,
     }));
-    const domains = getGroupedCatalog();
-    res.json({ catalog, modules, domains });
+    const domains = vertical
+      ? getGroupedCatalogForVertical(vertical)
+      : getGroupedCatalog();
+    res.json({ catalog, modules, domains, vertical });
   }
 );
 

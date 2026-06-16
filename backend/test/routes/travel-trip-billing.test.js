@@ -32,7 +32,7 @@
  *       DELETE /trips/:tripId/instalments/:id            ADMIN only
  *
  * Pinned guards (all routes go through these in order):
- *   verifyToken → [verifyRole?] → requireTravelTenant → requireTmcAccess → handler
+ *   verifyToken → [requirePermission?] → requireTravelTenant → requireTmcAccess → handler
  *
  * Failure-path codes pinned by the route source as of this commit:
  *   400 INVALID_ID / INVALID_ROOM_ID / MISSING_FIELDS / INVALID_ROOM_TYPE /
@@ -47,7 +47,7 @@
  * 5ddb82d1) — patch the prisma singleton with vi.fn() shapes BEFORE requiring
  * the router, then drive supertest with real HS256 JWTs signed with the same
  * fallback secret the middleware uses in dev. The full guard chain
- * (verifyToken + verifyRole + requireTravelTenant + requireTmcAccess) is
+ * (verifyToken + requirePermission + requireTravelTenant + requireTmcAccess) is
  * exercised end-to-end; we don't bypass middleware.
  *
  * Note: requireTmcAccess calls getSubBrandAccessSet(req.user.userId) which

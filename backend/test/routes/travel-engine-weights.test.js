@@ -38,7 +38,7 @@
  *         handler never reads body.tenantId regardless)
  *
  * Pinned auth chain (all routes):
- *   verifyToken -> verifyRole(["ADMIN","MANAGER"]) -> handler
+ *   verifyToken -> requirePermission("diagnostics", "read"|"update") -> handler
  *
  * Failure-path codes pinned by the route source:
  *   400 MISSING_FIELDS    — any of 6 weights or threshold absent
@@ -46,13 +46,13 @@
  *   400 INVALID_THRESHOLD — scoresWellThreshold not an integer in [0, 100]
  *   400 INVALID_VERSION   — version provided but not a non-empty string
  *   401                   — verifyToken (missing Authorization)
- *   403 RBAC_DENIED       — verifyRole gate
+ *   403 RBAC_DENIED       — requirePermission gate
  *
  * Test pattern mirrors backend/test/routes/travel-tmc-catalogue.test.js (T5)
  * + backend/test/routes/travel_curriculum.test.js — patch the prisma
  * singleton with vi.fn() shapes BEFORE requiring the router so the router's
  * CJS require binds to the spies; mint JWTs with the same dev fallback
- * secret the middleware uses; full guard chain (verifyToken + verifyRole)
+ * secret the middleware uses; full guard chain (verifyToken + requirePermission)
  * runs end-to-end — no middleware bypass.
  */
 

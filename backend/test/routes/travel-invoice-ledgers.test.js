@@ -20,7 +20,7 @@
  *
  * Pattern mirrors travel-cancellation-policies.test.js — patch the prisma
  * singleton BEFORE requiring the router; sign real HS256 JWTs against the
- * dev-fallback secret so verifyToken + verifyRole + requireTravelTenant
+ * dev-fallback secret so verifyToken + requirePermission + requireTravelTenant
  * stay in the chain.
  */
 

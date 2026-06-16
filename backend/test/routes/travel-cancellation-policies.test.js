@@ -26,7 +26,7 @@
  * (cost-master CRUD template) — patch the prisma singleton with vi.fn()
  * shapes BEFORE requiring the router, then drive supertest with real HS256
  * JWTs signed with the same fallback secret the middleware uses in dev.
- * verifyToken + verifyRole + requireTravelTenant stay in the chain so the
+ * verifyToken + requirePermission + requireTravelTenant stay in the chain so the
  * full guard stack is exercised end-to-end.
  *
  * Also pins the assertValidTiers re-export contract so cron / cancel-handler

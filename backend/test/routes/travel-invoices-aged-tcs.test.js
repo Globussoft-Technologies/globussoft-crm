@@ -26,7 +26,7 @@
  *   - Cross-tenant isolation: req.travelTenant.id is enforced at the prisma
  *     where clause; a regression dropping the filter would leak rows across
  *     tenants.
- *   - USER role gate: verifyRole(['ADMIN', 'MANAGER']) — USER must get 403
+ *   - USER role gate: requirePermission('invoices', 'read') — USER must get 403
  *     before any DB read (finance reports are not surfaced to USER).
  *
  * Mock seam: prisma singleton monkey-patched before requiring the router;

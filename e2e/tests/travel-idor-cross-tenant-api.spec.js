@@ -1228,7 +1228,7 @@ test.describe("IDOR #919 slice 5 — enumeration-shape parity (no side-channel l
 //   • GET    /api/wellness/patients/:id/visits — phiReadGate (PHI fan-out)
 //   • PUT    /api/wellness/services/:id        — verifyWellnessRole(admin/manager)
 //   • PUT    /api/wellness/patients/:id        — phiWriteGate (PHI write)
-//   • DELETE /api/wellness/patients/:id        — verifyRole(ADMIN) + tenant scope
+//   • DELETE /api/wellness/patients/:id        — RBAC gate (ADMIN) + tenant scope
 //
 // Each route is probed with BOTH a generic admin AND a travel admin attacker
 // token. The generic-admin probe is the classic cross-vertical attacker; the
@@ -1320,7 +1320,7 @@ test.describe("IDOR #919 slice 6 — /api/wellness/* cross-vertical (403 WELLNES
   }
 
   for (const { method, path, body, label } of WELLNESS_MUTATION_PROBES) {
-    // DELETE patients/:id uses verifyRole(ADMIN) + tenant scope (no
+    // DELETE patients/:id uses the RBAC gate (ADMIN) + tenant scope (no
     // verifyWellnessRole gate), so a generic/travel admin attempting it
     // hits the tenant-scoped handler and gets 404 "Patient not found"
     // — equally non-leaky from IDOR standpoint (no row-existence leak).
@@ -2807,7 +2807,7 @@ test.describe("IDOR #919 slice 12 — rollup/stats endpoint cross-tenant probes"
   }) => {
     // Phase 3 Visa Sure aggregate. Verified mount in server.js:728
     // (travelVisaRoutes at /api/travel/visa, inner /applications/stats).
-    // The route gates verifyRole(["ADMIN","MANAGER","USER"]) +
+    // The route gates requirePermission('visa','read') +
     // requireTravelTenant — cross-vertical wellness admin hits 403
     // WRONG_VERTICAL via the guard.
     const token = await getWellnessAdmin(request);

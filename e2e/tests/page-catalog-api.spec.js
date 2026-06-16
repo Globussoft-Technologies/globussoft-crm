@@ -86,13 +86,23 @@ test.describe('GET /api/pages/catalog', () => {
     const token = await loginAdmin(request);
     const res = await get(request, token, '/api/pages/catalog');
     expect(res.status(), await res.text()).toBe(200);
-    /** @type {{ catalog: Array<{ path: string, label: string, requiredPermissions: Array<{module: string, action: string}> }>, categories: string[] }} */
+    /** @type {{ catalog: Array<{ path: string, label: string, requiredPermissions: Array<{module: string, action: string}> }>, categories: string[], vertical: string | null }} */
     const body = await res.json();
     expect(Array.isArray(body.catalog)).toBe(true);
     expect(body.catalog.length).toBeGreaterThan(10);
     const paths = body.catalog.map((p) => p.path);
     expect(paths).toContain('/home');
-    expect(paths).toContain('/wellness/patients');
+    // Vertical-aware (2026-06-15): /api/pages/catalog now returns only
+    // the requesting tenant's vertical-relevant pages. admin@globussoft.com
+    // is on the generic tenant, so wellness pages (`/wellness/*`) and
+    // travel pages (`/travel/*`) are both hidden — pin cross-vertical
+    // pages (/contacts, /tasks) which appear on every vertical instead.
+    expect(paths).toContain('/contacts');
+    expect(paths).toContain('/tasks');
+    expect(paths).not.toContain('/wellness/patients');
+    expect(paths).not.toContain('/travel/itineraries');
+    // The vertical field is echoed for client-side observability.
+    expect(body.vertical === null || typeof body.vertical === 'string').toBe(true);
   });
 
   test('401 without a token', async ({ request }) => {

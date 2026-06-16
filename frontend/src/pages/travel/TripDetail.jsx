@@ -194,6 +194,20 @@ function ParticipantsTab({ trip, onChange, notify }) {
       notify.error("Full name required");
       return;
     }
+    // Mirror backend `toE164` — accept bare 10-digit Indian mobile (6-9 prefix),
+    // 12-digit `91XXXXXXXXXX`, or already-`+`-prefixed E.164 (10-15 digits).
+    // Backend auto-prepends +91 on save, so parents can type "9876543210".
+    if (form.parentPhone.trim()) {
+      const raw = form.parentPhone.trim();
+      const digits = raw.replace(/\D/g, "");
+      const ok = (raw.startsWith("+") && digits.length >= 10 && digits.length <= 15)
+        || (digits.length === 10 && /^[6-9]/.test(digits))
+        || (digits.length === 12 && digits.startsWith("91") && /^[6-9]/.test(digits.slice(2)));
+      if (!ok) {
+        notify.error("Parent phone must be a 10-digit Indian mobile (e.g. 9876543210) or an international number with country code");
+        return;
+      }
+    }
     try {
       await fetchApi(`/api/travel/trips/${trip.id}/participants`, {
         method: "POST",
@@ -209,7 +223,13 @@ function ParticipantsTab({ trip, onChange, notify }) {
   };
 
   const remove = async (pid) => {
-    if (!confirm("Remove this participant?")) return;
+    const ok = await notify.confirm({
+      title: "Remove participant",
+      message: "Remove this participant? This cannot be undone.",
+      confirmText: "Remove",
+      destructive: true,
+    });
+    if (!ok) return;
     try {
       await fetchApi(`/api/travel/trips/${trip.id}/participants/${pid}`, { method: "DELETE" });
       notify.success("Removed");
@@ -237,7 +257,7 @@ function ParticipantsTab({ trip, onChange, notify }) {
           <div style={{ display: "grid", gap: 8, gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 180px), 1fr))" }}>
             <input placeholder="Full name *" value={form.fullName} onChange={(e) => setForm({ ...form, fullName: e.target.value })} style={input} />
             <input placeholder="Parent name" value={form.parentName} onChange={(e) => setForm({ ...form, parentName: e.target.value })} style={input} />
-            <input placeholder="Parent phone" value={form.parentPhone} onChange={(e) => setForm({ ...form, parentPhone: e.target.value })} style={input} />
+            <input placeholder="Parent phone (e.g. 9876543210)" value={form.parentPhone} onChange={(e) => setForm({ ...form, parentPhone: e.target.value })} style={input} />
           </div>
           <div style={{ marginTop: 8, display: "flex", gap: 8 }}>
             <button type="button" onClick={add} style={primaryBtn}>Add</button>
@@ -252,12 +272,20 @@ function ParticipantsTab({ trip, onChange, notify }) {
         ) : (
           trip.participants.map((p) => (
             <div key={p.id} style={row}>
-              <div>
-                <strong>{p.fullName}</strong>
-                {p.parentName && <span style={{ color: "var(--text-secondary)", marginLeft: 8, fontSize: 13 }}>· parent: {p.parentName}</span>}
-                {p.parentPhone && <span style={{ color: "var(--text-secondary)", marginLeft: 8, fontSize: 13 }}>{p.parentPhone}</span>}
+              <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0, flex: 1 }}>
+                <strong style={{ fontSize: 14, color: "var(--text-primary)" }}>{p.fullName}</strong>
+                {(p.parentName || p.parentPhone) && (
+                  <div style={{ fontSize: 12, color: "var(--text-secondary)", display: "flex", flexWrap: "wrap", alignItems: "center", columnGap: 8, rowGap: 2 }}>
+                    {p.parentName && (
+                      <span>
+                        <span style={{ opacity: 0.7 }}>Parent</span> · {p.parentName}
+                      </span>
+                    )}
+                    {p.parentPhone && <span style={{ fontVariantNumeric: "tabular-nums" }}>{p.parentPhone}</span>}
+                  </div>
+                )}
               </div>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", flexShrink: 0 }}>
                 <PassportCell participant={p} notify={notify} onChange={onChange} />
                 <button type="button" onClick={() => remove(p.id)} style={iconBtn} aria-label={`Remove ${p.fullName}`}>
                   <Trash2 size={14} />

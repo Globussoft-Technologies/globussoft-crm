@@ -57,6 +57,7 @@
 const express = require("express");
 const router = express.Router();
 const { verifyToken, verifyRole } = require("../middleware/auth");
+const { requirePermission } = require("../middleware/requirePermission");
 const prisma = require("../lib/prisma");
 const {
   requireTravelTenant,
@@ -1367,7 +1368,7 @@ router.get(
 router.post(
   "/commission-profiles",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("commission_profiles", "write"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -1446,7 +1447,7 @@ router.post(
 router.put(
   "/commission-profiles/:id",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("commission_profiles", "update"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -1549,7 +1550,7 @@ router.put(
 router.delete(
   "/commission-profiles/:id",
   verifyToken,
-  verifyRole(["ADMIN"]),
+  requirePermission("commission_profiles", "delete"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -1621,7 +1622,7 @@ router.delete(
 router.post(
   "/commission-profiles/:id/assign",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("commission_profiles", "update"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -2209,7 +2210,7 @@ router.get(
 router.post(
   "/commission-profiles/:id/duplicate",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("commission_profiles", "write"),
   requireTravelTenant,
   async (req, res) => {
     try {

@@ -660,7 +660,7 @@ export default function AuditLog() {
   }, [logs, search]);
 
   const inputStyle = {
-    background: 'rgba(15,23,42,0.6)',
+    background: 'var(--input-bg)',
     color: 'var(--text-primary)',
     border: '1px solid var(--border-color)',
     borderRadius: 8,

@@ -16,6 +16,7 @@
 const express = require("express");
 const router = express.Router();
 const { verifyToken, verifyRole } = require("../middleware/auth");
+const { requirePermission } = require("../middleware/requirePermission");
 const prisma = require("../lib/prisma");
 const { sanitizeJsonForStringColumn } = require("../lib/sanitizeJson");
 const {
@@ -208,7 +209,7 @@ router.get("/cost-master", verifyToken, requireTravelTenant, async (req, res) =>
 router.post(
   "/cost-master",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("cost_master", "write"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -581,7 +582,7 @@ router.get("/cost-master/:id", verifyToken, requireTravelTenant, async (req, res
 router.patch(
   "/cost-master/:id",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("cost_master", "update"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -644,7 +645,7 @@ router.patch(
 router.delete(
   "/cost-master/:id",
   verifyToken,
-  verifyRole(["ADMIN"]),
+  requirePermission("cost_master", "delete"),
   requireTravelTenant,
   async (req, res) => {
     try {

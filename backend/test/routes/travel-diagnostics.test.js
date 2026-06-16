@@ -31,7 +31,7 @@
  *       POST   /diagnostics/public/submit           dedup-aware contact create,
  *                                                   raw score NOT in response
  *
- * Pinned guards: verifyToken → [verifyRole?] → requireTravelTenant → handler.
+ * Pinned guards: verifyToken → [requirePermission?] → requireTravelTenant → handler.
  * Public routes bypass auth (allowlisted in server.js openPaths).
  *
  * Failure-path codes pinned by the route source as of this commit:
@@ -47,7 +47,7 @@
  * (commit 84593764) — patch the prisma singleton + mock the LLM router +
  * mock the PDF renderer BEFORE requiring the route, then drive supertest
  * with real HS256 JWTs signed with the dev-fallback secret. verifyToken +
- * verifyRole + requireTravelTenant all stay in the chain.
+ * requirePermission + requireTravelTenant all stay in the chain.
  *
  * Scope note: this file is large (884 LOC, 9 endpoints). We pin the
  * high-value contracts — auth/vertical/role gates, the bank-create JSON
@@ -258,7 +258,7 @@ describe('travel-diagnostics — auth + vertical gates', () => {
       .set('Authorization', `Bearer ${tokenFor('USER')}`)
       .send({ subBrand: 'tmc', questionsJson: QUESTIONS_JSON, scoringRulesJson: SCORING_JSON });
     expect(res.status).toBe(403);
-    // verifyRole rejects before the route handler — no DB write attempted.
+    // the RBAC gate rejects before the route handler — no DB write attempted.
     expect(prisma.travelDiagnosticQuestionBank.create).not.toHaveBeenCalled();
   });
 });
@@ -740,7 +740,7 @@ describe('POST /diagnostics/:id/form-vs-call/compare', () => {
 // Phase-1 scoring is view-only — the endpoint routes a change request to
 // GS as a tenant-scoped Ticket (status Open, priority Medium) and writes
 // a best-effort DIAGNOSTIC_BANK_CHANGE_REQUESTED audit row. Any travel
-// role may request (no verifyRole gate); sub-brand access still enforced.
+// role may request (no RBAC gate); sub-brand access still enforced.
 
 describe('POST /diagnostics/banks/:id/request-change', () => {
   test('missing Bearer → 401, no Ticket written', async () => {
@@ -792,7 +792,7 @@ describe('POST /diagnostics/banks/:id/request-change', () => {
   });
 
   test('happy: USER role files a ticket — 201 {ticket:{id,subject,status}} + audit row', async () => {
-    // Any travel role may request — USER is enough (no verifyRole gate).
+    // Any travel role may request — USER is enough (no RBAC gate).
     prisma.user.findUnique.mockResolvedValue({ role: 'USER', subBrandAccess: null });
     prisma.travelDiagnosticQuestionBank.findFirst.mockResolvedValue(bankRow());
     const res = await request(makeApp())

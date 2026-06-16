@@ -48,6 +48,7 @@ const express = require("express");
 const router = express.Router();
 const prisma = require("../lib/prisma");
 const { verifyToken, verifyRole } = require("../middleware/auth");
+const { requirePermission } = require("../middleware/requirePermission");
 const {
   requireTravelTenant,
   getSubBrandAccessSet,
@@ -226,7 +227,7 @@ router.get("/", verifyToken, requireTravelTenant, async (req, res) => {
 router.post(
   "/",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("quote_templates", "write"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -324,7 +325,7 @@ router.get("/:id", verifyToken, requireTravelTenant, async (req, res) => {
 router.patch(
   "/:id",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("quote_templates", "update"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -405,7 +406,7 @@ router.patch(
 router.delete(
   "/:id",
   verifyToken,
-  verifyRole(["ADMIN"]),
+  requirePermission("quote_templates", "delete"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -467,7 +468,7 @@ router.delete(
 router.post(
   "/:id/apply",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("quotes", "write"),
   requireTravelTenant,
   async (req, res) => {
     try {

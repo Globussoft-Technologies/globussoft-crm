@@ -14,7 +14,11 @@
 import { describe, it, expect } from 'vitest';
 import {
   WIDGET_CATALOG,
+  COMMON_WIDGETS,
+  WELLNESS_WIDGETS,
+  TRAVEL_WIDGETS,
   getCatalog,
+  getCatalogForVertical,
   isValidWidgetKey,
   getWidget,
   getDefaultWidgetsForRoleKey,
@@ -98,6 +102,87 @@ describe('getWidget', () => {
   it('returns null for an unknown key', () => {
     expect(getWidget('not-a-thing')).toBeNull();
     expect(getWidget(null)).toBeNull();
+  });
+});
+
+describe('getCatalogForVertical (vertical-aware filtering)', () => {
+  // Pins the contract that /api/widgets/catalog returns only the
+  // requesting tenant's vertical-relevant widgets. Wellness clinical
+  // widgets stay hidden on a travel tenant, travel operational widgets
+  // stay hidden on a wellness tenant, and generic tenants only see the
+  // cross-vertical core (`quick-links`).
+
+  it('wellness vertical returns wellness widgets + common (no travel keys)', () => {
+    const list = getCatalogForVertical('wellness');
+    const keys = list.map((w) => w.key);
+    // Sanity: list contains both the wellness clinical widgets + the
+    // shared launcher widget.
+    expect(keys).toContain('today-appointments');
+    expect(keys).toContain('pending-prescriptions');
+    expect(keys).toContain('quick-links');
+    // Travel widgets are hidden.
+    for (const w of TRAVEL_WIDGETS) {
+      expect(keys, `wellness should not include ${w.key}`).not.toContain(w.key);
+    }
+    // Length matches WELLNESS_WIDGETS + COMMON_WIDGETS.
+    expect(list.length).toBe(WELLNESS_WIDGETS.length + COMMON_WIDGETS.length);
+  });
+
+  it('travel vertical returns travel widgets + common (no wellness keys)', () => {
+    const list = getCatalogForVertical('travel');
+    const keys = list.map((w) => w.key);
+    expect(keys).toContain('travel-todays-departures');
+    expect(keys).toContain('travel-pending-quotes');
+    expect(keys).toContain('quick-links');
+    // Wellness widgets are hidden.
+    for (const w of WELLNESS_WIDGETS) {
+      expect(keys, `travel should not include ${w.key}`).not.toContain(w.key);
+    }
+    expect(list.length).toBe(TRAVEL_WIDGETS.length + COMMON_WIDGETS.length);
+  });
+
+  it('generic vertical returns only the common widgets', () => {
+    const list = getCatalogForVertical('generic');
+    const keys = list.map((w) => w.key);
+    expect(keys).toContain('quick-links');
+    // Neither wellness nor travel widgets surface for generic tenants.
+    for (const w of WELLNESS_WIDGETS) {
+      expect(keys).not.toContain(w.key);
+    }
+    for (const w of TRAVEL_WIDGETS) {
+      expect(keys).not.toContain(w.key);
+    }
+    expect(list.length).toBe(COMMON_WIDGETS.length);
+  });
+
+  it('unknown / null vertical falls back to common widgets only', () => {
+    const unknown = getCatalogForVertical('made-up-vertical').map((w) => w.key);
+    const nullV = getCatalogForVertical(null).map((w) => w.key);
+    expect(unknown).toEqual(COMMON_WIDGETS.map((w) => w.key));
+    expect(nullV).toEqual(COMMON_WIDGETS.map((w) => w.key));
+  });
+
+  it('returns a deep clone (mutations do not affect the union catalog)', () => {
+    const list = getCatalogForVertical('travel');
+    expect(list.length).toBeGreaterThan(0);
+    list[0].title = 'TAMPERED';
+    list[0].requiredPermissions.push({ module: 'evil', action: 'all' });
+    list[0].defaultRoleKeys.push('EVIL');
+    const source = WIDGET_CATALOG.find((w) => w.key === list[0].key);
+    expect(source.title).not.toBe('TAMPERED');
+    expect(source.requiredPermissions.some((p) => p.module === 'evil')).toBe(false);
+    expect(source.defaultRoleKeys).not.toContain('EVIL');
+  });
+
+  it('union catalog contains every wellness + travel + common key (back-compat)', () => {
+    // The union (WIDGET_CATALOG) is the validation surface used by
+    // isValidWidgetKey on the role-widget-layout PUT endpoint. It must
+    // accept any key from any vertical so a stale RoleWidget row
+    // (e.g. cross-vertical perm grant artefact) doesn't trip validation.
+    const unionKeys = new Set(WIDGET_CATALOG.map((w) => w.key));
+    for (const w of WELLNESS_WIDGETS) expect(unionKeys.has(w.key)).toBe(true);
+    for (const w of TRAVEL_WIDGETS) expect(unionKeys.has(w.key)).toBe(true);
+    for (const w of COMMON_WIDGETS) expect(unionKeys.has(w.key)).toBe(true);
   });
 });
 

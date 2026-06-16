@@ -20,7 +20,7 @@
  *      (no nested credit-of-credit).
  *   4. parent.status=='Draft' -> 400 INVALID_PARENT_STATE.
  *   5. parent.status=='Voided' -> 400 INVALID_PARENT_STATE.
- *   6. USER role -> 403 (verifyRole short-circuits before findFirst).
+ *   6. USER role -> 403 (RBAC gate short-circuits before findFirst).
  *   7. Missing amount -> 400 MISSING_FIELDS.
  *   8. Zero / negative amount -> 400 INVALID_AMOUNT.
  *   9. Cross-tenant parent -> 404 INVOICE_NOT_FOUND.

@@ -87,6 +87,7 @@
 const express = require("express");
 const router = express.Router();
 const { verifyToken, verifyRole } = require("../middleware/auth");
+const { requirePermission } = require("../middleware/requirePermission");
 const prisma = require("../lib/prisma");
 const { sanitizeText } = require("../lib/sanitizeJson");
 
@@ -156,7 +157,7 @@ function coerceOptionalString(v) {
 router.get(
   "/",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("tmc_catalogue", "read"),
   async (req, res) => {
     try {
       const statusFilter = req.query.status ? String(req.query.status) : STATUS_ACTIVE;
@@ -199,7 +200,7 @@ router.get(
 router.get(
   "/:id",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("tmc_catalogue", "read"),
   async (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);
@@ -237,7 +238,7 @@ router.get(
 router.post(
   "/",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("tmc_catalogue", "write"),
   async (req, res) => {
     try {
       const {
@@ -360,7 +361,7 @@ router.post(
 router.patch(
   "/:id",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("tmc_catalogue", "update"),
   async (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);
@@ -496,7 +497,7 @@ router.patch(
 router.delete(
   "/:id",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("tmc_catalogue", "delete"),
   async (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);
@@ -537,7 +538,7 @@ router.delete(
 router.post(
   "/:id/promote-to-active",
   verifyToken,
-  verifyRole(["ADMIN"]),
+  requirePermission("tmc_catalogue", "manage"),
   async (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);

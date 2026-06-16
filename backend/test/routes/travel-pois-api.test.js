@@ -48,9 +48,9 @@
  *
  * Pinned auth chain:
  *   POST /                          verifyToken
- *   GET  /pending                   verifyToken -> verifyRole(['ADMIN','MANAGER'])
- *   POST /:id/approve               verifyToken -> verifyRole(['ADMIN'])
- *   POST /:id/reject                verifyToken -> verifyRole(['ADMIN'])
+ *   GET  /pending                   verifyToken -> requirePermission('pois','read')
+ *   POST /:id/approve               verifyToken -> requirePermission('pois','manage')
+ *   POST /:id/reject                verifyToken -> requirePermission('pois','manage')
  *
  * Pattern mirrors backend/test/routes/travel-engine-weights.test.js (T15):
  * patch the prisma singleton with vi.fn() shapes BEFORE requiring the

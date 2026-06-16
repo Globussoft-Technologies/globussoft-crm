@@ -34,6 +34,7 @@
 const express = require("express");
 const router = express.Router();
 const { verifyToken, verifyRole } = require("../middleware/auth");
+const { requirePermission } = require("../middleware/requirePermission");
 const prisma = require("../lib/prisma");
 const { renderTravelStallPersonalisedPdf } = require("../services/pdfRenderer");
 const { requireTravelTenant } = require("../middleware/travelGuards");
@@ -65,7 +66,7 @@ const llmRouter = require("../lib/llmRouter");
 router.post(
   "/travelstall/personalised-pdf/regen",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("reports", "export"),
   requireTravelTenant,
   async (req, res) => {
     try {

@@ -94,6 +94,7 @@
 const express = require("express");
 const router = express.Router();
 const { verifyToken, verifyRole } = require("../middleware/auth");
+const { requirePermission } = require("../middleware/requirePermission");
 const prisma = require("../lib/prisma");
 const {
   requireTravelTenant,
@@ -242,7 +243,7 @@ function withTemplateHash(row) {
 router.post(
   "/flyer-templates/upload",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("flyer_templates", "write"),
   requireTravelTenant,
   (req, res) => {
     flyerImageUpload.single("image")(req, res, async (err) => {
@@ -290,7 +291,7 @@ router.post(
 router.post(
   "/flyer-templates/suggest-copy",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("flyer_templates", "read"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -357,7 +358,7 @@ router.post(
 router.post(
   "/flyer-templates/suggest-image",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("flyer_templates", "read"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -806,7 +807,7 @@ router.get(
 router.post(
   "/flyer-templates/bulk-archive",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("flyer_templates", "update"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -962,7 +963,7 @@ router.post(
 router.post(
   "/flyer-templates/bulk-unarchive",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("flyer_templates", "update"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -1700,7 +1701,7 @@ router.get(
 router.post(
   "/flyer-templates",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("flyer_templates", "write"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -1791,7 +1792,7 @@ router.post(
 router.put(
   "/flyer-templates/:id",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("flyer_templates", "update"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -1974,7 +1975,7 @@ router.put(
 router.post(
   "/flyer-templates/:id/duplicate",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("flyer_templates", "write"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -2092,7 +2093,7 @@ router.post(
 router.post(
   "/flyer-templates/:id/archive",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("flyer_templates", "update"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -2167,7 +2168,7 @@ router.post(
 router.post(
   "/flyer-templates/:id/unarchive",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("flyer_templates", "update"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -2260,7 +2261,7 @@ router.post(
 router.post(
   "/flyer-templates/:id/export",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("flyer_templates", "read"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -2827,7 +2828,7 @@ router.get(
 router.delete(
   "/flyer-templates/:id",
   verifyToken,
-  verifyRole(["ADMIN"]),
+  requirePermission("flyer_templates", "delete"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -3132,7 +3133,7 @@ router.get(
 router.post(
   "/flyer-templates/:id/render",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("flyer_templates", "read"),
   requireTravelTenant,
   async (req, res) => {
     try {

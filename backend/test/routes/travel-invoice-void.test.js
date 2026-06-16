@@ -23,7 +23,7 @@
  *   4. Missing reason (no body) -> 400 INVALID_VOID_REASON.
  *   5. Too-short reason (<5 chars) -> 400 INVALID_VOID_REASON.
  *   6. Too-long reason (>500 chars) -> 400 INVALID_VOID_REASON.
- *   7. USER role -> 403 (verifyRole short-circuits before findFirst).
+ *   7. USER role -> 403 (RBAC gate short-circuits before findFirst).
  *   8. Cross-tenant invoice -> 404 INVOICE_NOT_FOUND.
  *   9. Sub-brand denied (MANAGER without access) -> 403 SUB_BRAND_DENIED.
  *
@@ -601,7 +601,7 @@ describe('POST /invoices/:id/void — S33 cancellation-policy auto-CR-NOTE issua
 //   (d) no policy resolved → 200 with refundAmount: null + reason: NO_POLICY_RESOLVED
 //   (e) idempotency — preview never writes (no update/create/auditLog.create
 //       called). Re-calling returns the same shape with invoice status unchanged.
-//   (f) USER role 403 (verifyRole short-circuits before findFirst)
+//   (f) USER role 403 (RBAC gate short-circuits before findFirst)
 // ===========================================================================
 describe('S58 — GET /:id/cancel-preview', () => {
   test('(a) happy path: policy + serviceStart present -> 200 with full preview envelope', async () => {

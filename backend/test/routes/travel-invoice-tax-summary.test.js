@@ -22,7 +22,7 @@
  *   - to < from → 400 INVALID_DATE_RANGE.
  *   - Invalid currency → 400 INVALID_CURRENCY.
  *   - Invalid subBrand → 400 INVALID_SUB_BRAND.
- *   - USER role → 403 (verifyRole gate blocks before findMany).
+ *   - USER role → 403 (RBAC gate blocks before findMany).
  *   - subBrand filter narrows the prisma where filter.
  *   - Empty range (no invoices) → 200 with empty perSubBrand + zero grandTotal.
  *   - Non-SAC-bearing line types (tax/fee/tcs/tds) are excluded from totals.

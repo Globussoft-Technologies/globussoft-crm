@@ -44,6 +44,7 @@ const fs = require("fs");
 const multer = require("multer");
 const router = express.Router();
 const { verifyToken, verifyRole } = require("../middleware/auth");
+const { requirePermission } = require("../middleware/requirePermission");
 const prisma = require("../lib/prisma");
 const {
   requireTravelTenant,
@@ -1075,7 +1076,7 @@ router.get("/webcheckins/:id", verifyToken, requireTravelTenant, async (req, res
 router.post(
   "/webcheckins",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("web_checkins", "write"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -1148,7 +1149,7 @@ router.post(
 router.patch(
   "/webcheckins/:id",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("web_checkins", "update"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -1215,7 +1216,7 @@ router.patch(
 router.post(
   "/webcheckins/:id/upload-boarding-pass",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("web_checkins", "update"),
   requireTravelTenant,
   uploadBoardingPassOrReject,
   async (req, res) => {
@@ -1258,7 +1259,7 @@ router.post(
 router.post(
   "/webcheckins/:id/deliver",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("web_checkins", "update"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -1349,7 +1350,7 @@ router.post(
 router.delete(
   "/webcheckins/:id",
   verifyToken,
-  verifyRole(["ADMIN"]),
+  requirePermission("web_checkins", "delete"),
   requireTravelTenant,
   async (req, res) => {
     try {

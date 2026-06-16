@@ -39,6 +39,7 @@
 const express = require("express");
 const router = express.Router();
 const { verifyToken, verifyRole } = require("../middleware/auth");
+const { requirePermission } = require("../middleware/requirePermission");
 const prisma = require("../lib/prisma");
 const {
   requireTravelTenant,
@@ -1681,7 +1682,7 @@ router.get("/quotes/stats", verifyToken, requireTravelTenant, async (req, res) =
 router.post(
   "/quotes/bulk-decline-expired",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("quotes", "update"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -1852,7 +1853,7 @@ router.get("/quotes/:id", verifyToken, requireTravelTenant, async (req, res) => 
 router.post(
   "/quotes",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("quotes", "write"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -1974,7 +1975,7 @@ router.post(
 router.put(
   "/quotes/:id",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("quotes", "update"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -2058,7 +2059,7 @@ router.put(
 router.delete(
   "/quotes/:id",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("quotes", "delete"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -2171,7 +2172,7 @@ router.get(
 router.post(
   "/quotes/:id/lines",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("quotes", "write"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -2262,7 +2263,7 @@ router.post(
 router.put(
   "/quotes/:id/lines/:lineId",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("quotes", "update"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -2392,7 +2393,7 @@ router.put(
 router.delete(
   "/quotes/:id/lines/:lineId",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("quotes", "delete"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -2447,7 +2448,7 @@ router.delete(
 router.post(
   "/quotes/:id/duplicate",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("quotes", "write"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -2603,7 +2604,7 @@ router.post(
 router.get(
   "/quotes/:id/pdf",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("quotes", "export"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -2701,7 +2702,7 @@ router.get(
 router.post(
   "/quotes/:id/convert-to-invoice",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("quotes", "update"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -2875,7 +2876,7 @@ router.post(
 router.post(
   "/quotes/:id/accept",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("quotes", "update"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -2959,7 +2960,7 @@ router.post(
 router.post(
   "/quotes/:id/decline",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("quotes", "update"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -3408,7 +3409,7 @@ router.get(
 router.post(
   "/quotes/:id/extend",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("quotes", "update"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -3755,7 +3756,7 @@ const PROVIDER_CALLERS = {
 router.post(
   "/quote/unified-search",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("quotes", "read"),
   requireTravelTenant,
   async (req, res) => {
     try {

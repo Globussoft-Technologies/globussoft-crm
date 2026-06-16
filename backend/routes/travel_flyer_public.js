@@ -93,6 +93,7 @@ const router = express.Router();
 const jwt = require('jsonwebtoken');
 const prisma = require('../lib/prisma');
 const { verifyToken, verifyRole } = require('../middleware/auth');
+const { requirePermission } = require('../middleware/requirePermission');
 const {
   requireTravelTenant,
   getSubBrandAccessSet,
@@ -221,7 +222,7 @@ function tokenErrorEnvelope(e) {
 router.post(
   '/:id/share',
   verifyToken,
-  verifyRole(['ADMIN', 'MANAGER']),
+  requirePermission("flyer_studio", "write"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -352,7 +353,7 @@ router.post(
 router.post(
   '/:id/revoke-share',
   verifyToken,
-  verifyRole(['ADMIN', 'MANAGER']),
+  requirePermission("flyer_studio", "write"),
   requireTravelTenant,
   async (req, res) => {
     try {

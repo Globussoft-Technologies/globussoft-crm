@@ -27,12 +27,12 @@
  *   - Quote: POST 400 MISSING_FIELDS; POST 404 COST_NOT_FOUND; POST 200 happy
  *     path with realistic cost+season+rule fixture returning QuoteResult +
  *     echo'd `cost: { id, currency }`.
- *   - Auth gate: USER role hits 403 on POST /seasons (verifyRole guard).
+ *   - Auth gate: USER role hits 403 on POST /seasons (requirePermission guard).
  *
  * Pattern mirrors backend/test/routes/travel_suppliers.test.js + travel_quotes.test.js
  * — patch the prisma singleton with vi.fn() shapes BEFORE requiring the
  * router, then drive supertest with real HS256 JWTs signed against the same
- * dev-fallback secret the middleware uses. verifyToken + verifyRole +
+ * dev-fallback secret the middleware uses. verifyToken + requirePermission +
  * requireTravelTenant all stay in the chain (no bypass) so auth + vertical +
  * sub-brand-access gates are exercised end-to-end.
  *
@@ -345,7 +345,7 @@ describe('POST /api/travel/markup-rules', () => {
   });
 
   test('non-admin without subBrandAccess for target returns 403 SUB_BRAND_DENIED', async () => {
-    // MANAGER role passes the verifyRole gate but the user's subBrandAccess
+    // MANAGER role passes the RBAC gate but the user's subBrandAccess
     // JSON only includes 'tmc' — the target 'rfu' triggers the deny.
     prisma.user.findUnique.mockResolvedValue({
       role: 'MANAGER',

@@ -14,7 +14,7 @@
  *   - Happy path: 200 + Content-Type=application/pdf + body Buffer starts
  *     with %PDF magic + body length > 2KB.
  *   - Content-Disposition is `attachment; filename="invoice-<id>.pdf"`.
- *   - USER role → 403 (verifyRole gate blocks before findFirst).
+ *   - USER role → 403 (RBAC gate blocks before findFirst).
  *   - Cross-tenant invoice → 404 INVOICE_NOT_FOUND.
  *   - Sub-brand mismatch → 403 SUB_BRAND_DENIED.
  *   - Non-numeric :id → 400 INVALID_ID.

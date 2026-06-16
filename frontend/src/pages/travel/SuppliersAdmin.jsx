@@ -22,6 +22,7 @@ import { useEffect, useState, useContext, Fragment } from "react";
 import { Building2, Plus, Pencil, Trash2, ChevronDown, ChevronRight, CheckCircle2, XCircle, Wallet, BarChart3, AlertTriangle } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
+import { usePermissions } from "../../hooks/usePermissions";
 import {
   SUB_BRAND_BG,
   accessibleSubBrands,
@@ -188,7 +189,23 @@ const EMPTY_FORM = {
 export default function SuppliersAdmin() {
   const notify = useNotify();
   const { user } = useContext(AuthContext) || {};
-  const canWrite = user?.role === "ADMIN" || user?.role === "MANAGER";
+  // Permission-driven action visibility. Each mutation gates on the
+  // specific catalog action (suppliers.write / .update / .delete /
+  // .manage) — matching the backend requirePermission gates on
+  // routes/travel_suppliers.js. `canWrite` is kept as a derived
+  // composite for the existing "show Actions column if any mutation
+  // is permitted" UX; per-button gates inside the column refine to
+  // the precise action. Pre-2026-06-15 this was `user.role === 'ADMIN'
+  // || user.role === 'MANAGER'` — that role-name gate couldn't
+  // reflect custom roles configured via Roles & Permissions.
+  const { hasPermission } = usePermissions();
+  const canCreate = hasPermission("suppliers", "write");
+  const canUpdate = hasPermission("suppliers", "update");
+  const canDelete = hasPermission("suppliers", "delete");
+  // suppliers.manage gates credential-vault ops (create / rotate /
+  // reveal / delete supplier credentials).
+  const canManageCredentials = hasPermission("suppliers", "manage");
+  const canWrite = canCreate || canUpdate || canDelete || canManageCredentials;
 
   // Sub-brand access resolution (Q25 sub-brand isolation). ADMIN / unrestricted
   // users get the full 4-brand dropdown; users restricted to exactly one brand
@@ -590,7 +607,7 @@ export default function SuppliersAdmin() {
             Master list — Hotel / Flight / Transport / Visa Consul / Other. {total.toLocaleString()} supplier{total === 1 ? "" : "s"}.
           </p>
         </div>
-        {canWrite && (
+        {canCreate && (
           <button type="button" onClick={openCreate} style={primaryBtnBranded}>
             <Plus size={14} /> New Supplier
           </button>
@@ -1250,16 +1267,22 @@ export default function SuppliersAdmin() {
                   </td>
                   {canWrite && (
                     <td style={{ ...td, textAlign: "center", whiteSpace: "nowrap" }}>
-                      <button
-                        type="button"
-                        onClick={() => openEdit(s)}
-                        title={`Edit ${s.name}`}
-                        aria-label={`Edit ${s.name}`}
-                        style={iconBtn}
-                      >
-                        <Pencil size={16} />
-                      </button>
-                      {s.isActive && (
+                      {/* Per-action gating — Edit (update) and
+                          Deactivate (delete) gate on independent
+                          catalog actions so a role granted update-only
+                          doesn't see the destructive button. */}
+                      {canUpdate && (
+                        <button
+                          type="button"
+                          onClick={() => openEdit(s)}
+                          title={`Edit ${s.name}`}
+                          aria-label={`Edit ${s.name}`}
+                          style={iconBtn}
+                        >
+                          <Pencil size={16} />
+                        </button>
+                      )}
+                      {s.isActive && canDelete && (
                         <button
                           type="button"
                           onClick={() => handleDelete(s)}

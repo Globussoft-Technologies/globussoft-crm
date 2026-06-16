@@ -28,6 +28,7 @@
 const express = require("express");
 const router = express.Router();
 const { verifyToken, verifyRole } = require("../middleware/auth");
+const { requirePermission } = require("../middleware/requirePermission");
 const prisma = require("../lib/prisma");
 const {
   requireTravelTenant,
@@ -158,7 +159,7 @@ function sumDecimals(rows, key) {
 router.post(
   "/suppliers/:id/commission-entries",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("commission_profiles", "write"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -355,7 +356,7 @@ router.get(
 router.post(
   "/suppliers/:id/commission-entries/:entryId/settle",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("commission_profiles", "update"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -405,7 +406,7 @@ router.post(
 router.post(
   "/suppliers/:id/commission-entries/:entryId/reverse",
   verifyToken,
-  verifyRole(["ADMIN"]),
+  requirePermission("commission_profiles", "update"),
   requireTravelTenant,
   async (req, res) => {
     try {

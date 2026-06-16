@@ -45,6 +45,7 @@ const fs = require("fs");
 const crypto = require("crypto");
 
 const { verifyToken, verifyRole } = require("../middleware/auth");
+const { requirePermission } = require("../middleware/requirePermission");
 const prisma = require("../lib/prisma");
 const {
   requireTravelTenant,
@@ -236,7 +237,7 @@ function mapError(res, e, fallbackMsg) {
 router.post(
   "/suppliers/:id/reconciliation-batches",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("suppliers", "write"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -366,7 +367,7 @@ router.get(
 router.post(
   "/suppliers/:id/reconciliation-batches/:batchId/lines/bulk",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("suppliers", "update"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -460,7 +461,7 @@ router.post(
 router.post(
   "/suppliers/:id/reconciliation-batches/:batchId/auto-match",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("suppliers", "update"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -595,7 +596,7 @@ router.post(
 router.post(
   "/suppliers/:id/reconciliation-batches/:batchId/lines/:lineId/manual-match",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("suppliers", "update"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -747,7 +748,7 @@ function makeTransitionHandler({ from, to, action }) {
 router.post(
   "/suppliers/:id/reconciliation-batches/:batchId/review",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("suppliers", "update"),
   requireTravelTenant,
   makeTransitionHandler({
     from: ["draft"],
@@ -759,7 +760,7 @@ router.post(
 router.post(
   "/suppliers/:id/reconciliation-batches/:batchId/reconcile",
   verifyToken,
-  verifyRole(["ADMIN"]),
+  requirePermission("suppliers", "update"),
   requireTravelTenant,
   makeTransitionHandler({
     from: ["reviewed"],
@@ -771,7 +772,7 @@ router.post(
 router.post(
   "/suppliers/:id/reconciliation-batches/:batchId/dispute",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("suppliers", "update"),
   requireTravelTenant,
   makeTransitionHandler({
     from: ["draft", "reviewed"],
@@ -791,7 +792,7 @@ router.post(
 router.post(
   "/suppliers/:id/invoice-uploads",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("suppliers", "write"),
   requireTravelTenant,
   uploadHandler,
   async (req, res) => {
@@ -916,7 +917,7 @@ router.get(
 router.post(
   "/suppliers/:id/invoice-uploads/:uploadId/match",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("suppliers", "update"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -990,7 +991,7 @@ router.post(
 router.delete(
   "/suppliers/:id/invoice-uploads/:uploadId",
   verifyToken,
-  verifyRole(["ADMIN"]),
+  requirePermission("suppliers", "delete"),
   requireTravelTenant,
   async (req, res) => {
     try {

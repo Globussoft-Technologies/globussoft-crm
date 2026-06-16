@@ -71,6 +71,7 @@
 const express = require("express");
 const prisma = require("../lib/prisma");
 const { verifyToken, verifyRole } = require("../middleware/auth");
+const { requirePermission } = require("../middleware/requirePermission");
 const { requireTravelTenant } = require("../middleware/travelGuards");
 const { writeAudit } = require("../lib/audit");
 const { findLatestDiagnostic } = require("../lib/travelLatestDiagnostic");
@@ -176,7 +177,7 @@ const STATUS_FIELD = {
 //      without a join. Default shape stays full row + contact decoration.
 router.get(
   "/applications",
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("visa", "read"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -345,7 +346,7 @@ router.get(
 // ============================================================================
 router.get(
   "/applications/stats",
-  verifyRole(["ADMIN", "MANAGER", "USER"]),
+  requirePermission("visa", "read"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -589,7 +590,7 @@ router.get(
 // ============================================================================
 router.get(
   "/applications/by-month",
-  verifyRole(["ADMIN", "MANAGER", "USER"]),
+  requirePermission("visa", "read"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -853,7 +854,7 @@ router.get(
 // ============================================================================
 router.get(
   "/applications/by-quarter",
-  verifyRole(["ADMIN", "MANAGER", "USER"]),
+  requirePermission("visa", "read"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -1121,7 +1122,7 @@ router.get(
 // ============================================================================
 router.get(
   "/applications/by-year",
-  verifyRole(["ADMIN", "MANAGER", "USER"]),
+  requirePermission("visa", "read"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -1340,7 +1341,7 @@ router.get(
 //                             subBrand != "visasure" (sub-brand isolation)
 router.get(
   "/applications/:id",
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("visa", "read"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -1505,7 +1506,7 @@ router.get(
 //   500 INTERNAL_ERROR              — Prisma error or unexpected
 router.post(
   "/applications",
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("visa", "write"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -1670,7 +1671,7 @@ router.post(
 //   500 INTERNAL_ERROR            — Prisma error or unexpected
 router.patch(
   "/applications/:id",
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("visa", "update"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -1912,7 +1913,7 @@ router.patch(
 // / 17 / 18 — meta reads don't audit-back themselves).
 router.get(
   "/applications/:id/status-history",
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("visa", "read"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -2270,7 +2271,7 @@ function coerceRecoveryProgramData(body) {
 // POST /api/travel/visa/recovery-programs — create program.
 router.post(
   "/recovery-programs",
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("visa", "write"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -2322,7 +2323,7 @@ router.post(
 // GET /api/travel/visa/recovery-programs — list with filters.
 router.get(
   "/recovery-programs",
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("visa", "read"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -2361,7 +2362,7 @@ router.get(
 // GET /api/travel/visa/recovery-programs/:id — detail + enrolled count.
 router.get(
   "/recovery-programs/:id",
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("visa", "read"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -2402,7 +2403,7 @@ router.get(
 // PUT /api/travel/visa/recovery-programs/:id — update program.
 router.put(
   "/recovery-programs/:id",
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("visa", "update"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -2462,7 +2463,7 @@ router.put(
 // Tenant-scoped + sub-brand-scoped (Contact.subBrand === 'visasure').
 router.post(
   "/applications/:id/enrol-recovery",
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("visa", "update"),
   requireTravelTenant,
   async (req, res) => {
     try {

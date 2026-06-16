@@ -473,6 +473,12 @@ function RoomingTab({ trip, notify }) {
 
   const load = useCallback(() => {
     setLoading(true);
+    // Filter stored participantIds against the current trip's participants so
+    // orphaned references (participants deleted after the room was saved) don't
+    // inflate the room-tile "X / capacity" count nor the header "unassigned"
+    // count. Without this, removed-but-still-referenced IDs disagreed with the
+    // visible checkbox state (only real participants render checkboxes).
+    const validIds = new Set((trip.participants || []).map((p) => p.id));
     fetchApi(`/api/travel/trips/${trip.id}/rooming`)
       .then((r) => {
         const rs = r?.rooming || [];
@@ -484,7 +490,9 @@ function RoomingTab({ trip, notify }) {
           buf[room.id] = {
             roomNumber: room.roomNumber || "",
             roomType: room.roomType || "twin",
-            participantIds: Array.isArray(pids) ? pids.map(Number).filter(Number.isFinite) : [],
+            participantIds: Array.isArray(pids)
+              ? pids.map(Number).filter(Number.isFinite).filter((id) => validIds.has(id))
+              : [],
           };
         }
         setBuffers(buf);
@@ -494,7 +502,7 @@ function RoomingTab({ trip, notify }) {
         setBuffers({});
       })
       .finally(() => setLoading(false));
-  }, [trip.id]);
+  }, [trip.id, trip.participants]);
 
   useEffect(load, [load]);
 

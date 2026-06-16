@@ -27,6 +27,8 @@ import {
   PERMISSION_CATALOG_WELLNESS,
   PERMISSION_CATALOG_TRAVEL,
   isValidPermission,
+  isValidPermissionForVertical,
+  validatePermissionForVertical,
   getModules,
   getActions,
   getCatalog,
@@ -254,5 +256,57 @@ describe('getGroupedCatalogForVertical (vertical-aware grouping)', () => {
         }
       }
     }
+  });
+});
+
+// Bug 4 — per-vertical strict validation. The route layer wires this
+// in behind RBAC_STRICT_VERTICAL_VALIDATION; once enabled, foreign
+// perms are rejected at write time. These tests pin the exact error
+// shape so frontend toasts + e2e assertions can rely on it.
+
+describe('validatePermissionForVertical (Bug 4)', () => {
+  it('accepts common modules on every vertical', () => {
+    for (const v of ['generic', 'wellness', 'travel']) {
+      expect(validatePermissionForVertical('contacts', 'read', v).ok).toBe(true);
+      expect(validatePermissionForVertical('deals', 'write', v).ok).toBe(true);
+    }
+  });
+
+  it('accepts wellness modules only on wellness vertical', () => {
+    expect(validatePermissionForVertical('patients', 'read', 'wellness').ok).toBe(true);
+    expect(validatePermissionForVertical('patients', 'read', 'travel').ok).toBe(false);
+    expect(validatePermissionForVertical('patients', 'read', 'generic').ok).toBe(false);
+  });
+
+  it('accepts travel modules only on travel vertical', () => {
+    expect(validatePermissionForVertical('itineraries', 'read', 'travel').ok).toBe(true);
+    expect(validatePermissionForVertical('itineraries', 'read', 'wellness').ok).toBe(false);
+    expect(validatePermissionForVertical('itineraries', 'read', 'generic').ok).toBe(false);
+  });
+
+  it('returns INVALID_MODULE with the spec-pinned error string', () => {
+    const r = validatePermissionForVertical('patients', 'read', 'travel');
+    expect(r.ok).toBe(false);
+    expect(r.code).toBe('INVALID_MODULE');
+    expect(r.error).toBe("Module 'patients' is not valid for this tenant");
+  });
+
+  it('returns INVALID_ACTION when module ok but action not in catalog', () => {
+    const r = validatePermissionForVertical('contacts', 'evil', 'generic');
+    expect(r.ok).toBe(false);
+    expect(r.code).toBe('INVALID_ACTION');
+    expect(r.error).toBe("Action 'evil' is not valid for module 'contacts'");
+  });
+
+  it('isValidPermissionForVertical short-circuits to boolean', () => {
+    expect(isValidPermissionForVertical('contacts', 'read', 'travel')).toBe(true);
+    expect(isValidPermissionForVertical('patients', 'read', 'travel')).toBe(false);
+  });
+
+  it('unknown vertical falls through to generic catalog', () => {
+    // contacts is in COMMON → valid under generic
+    expect(isValidPermissionForVertical('contacts', 'read', 'mars')).toBe(true);
+    // patients is wellness-only → invalid under generic
+    expect(isValidPermissionForVertical('patients', 'read', 'mars')).toBe(false);
   });
 });

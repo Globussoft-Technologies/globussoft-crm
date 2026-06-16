@@ -457,6 +457,46 @@ describe('<TripDetail /> — Rooming tab', () => {
     );
     expect(xlsxLink.getAttribute('href')).toContain('_t=test-token');
   });
+
+  it('filters orphaned participantIds from loaded rooms so the room-tile count + unassigned counter agree with the visible checkboxes', async () => {
+    // Regression: room.participantIds JSON had [901, 999] where 999 was a
+    // since-deleted participant. Pre-fix the orphan inflated both the
+    // room-tile "X / capacity" readout (showed 2/2) AND the header
+    // "unassigned" count (used Set membership so 901 looked covered, but
+    // the only rendered checkbox was Anaya, so the visible state showed
+    // 1 box checked) — header read "1 room · 0 of 1 participant unassigned"
+    // while the tile said "2 / 2 assigned" with 1 visible check. Post-fix
+    // the orphan is dropped on load: tile shows 1/2 + header shows 0 of 1
+    // unassigned (still 0 because the surviving participant IS assigned),
+    // and the visible 1 checked box now agrees with both counts.
+    const tripFixture = makeTrip({
+      participants: [
+        { id: 901, fullName: 'Anaya Sharma' },
+      ],
+    });
+    const roomingWithOrphan = {
+      rooming: [
+        {
+          id: 7001,
+          tripId: 101,
+          roomNumber: '101',
+          roomType: 'twin',
+          participantIds: JSON.stringify([901, 999]),
+        },
+      ],
+    };
+    installFetchMock({ trip: tripFixture, rooming: roomingWithOrphan });
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('tab', { name: /Rooming/i }));
+    // Room tile capacity readout must reflect the SURVIVING participant
+    // only — not the orphaned 999. Pre-fix this rendered "2 / 2 assigned".
+    expect(await screen.findByText(/1 \/ 2 assigned/)).toBeInTheDocument();
+    expect(screen.queryByText(/2 \/ 2 assigned/)).toBeNull();
+    // Header counter agrees with the tile: 1 valid participant who IS
+    // assigned → 0 unassigned of 1 total.
+    expect(screen.getByText(/0 of 1 participant unassigned/)).toBeInTheDocument();
+  });
 });
 
 describe('<TripDetail /> — Microsite tab', () => {

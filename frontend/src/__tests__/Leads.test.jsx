@@ -549,6 +549,29 @@ describe('Leads — table, search, bulk operations, row actions, drawer dismiss'
     });
   });
 
+  it('header counter reflects the active search filter — "X of Y leads match" while typing, plain pipeline count when cleared', async () => {
+    // Regression: pre-fix the header used leads.length (unfiltered) so it
+    // still read "3 leads in pipeline" while the table was narrowed to 1
+    // result. Post-fix it switches to "X of Y leads match \"<term>\"" while
+    // a search is active and reverts to the original phrasing when cleared.
+    renderLeads();
+    await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
+    // No search → original phrasing.
+    expect(screen.getByText(/3 leads in pipeline/)).toBeInTheDocument();
+    const searchInput = screen.getByPlaceholderText('Search leads...');
+    fireEvent.change(searchInput, { target: { value: 'globex' } });
+    await waitFor(() => {
+      // Counter reflects the filtered count + retains the total for context.
+      expect(screen.getByText(/1 of 3 leads match "globex"/)).toBeInTheDocument();
+      // Stale phrasing must not still be on the page.
+      expect(screen.queryByText(/3 leads in pipeline/)).toBeNull();
+    });
+    fireEvent.change(searchInput, { target: { value: '' } });
+    await waitFor(() => {
+      expect(screen.getByText(/3 leads in pipeline/)).toBeInTheDocument();
+    });
+  });
+
   it('Convert button PUTs /api/contacts/:id with status="Prospect" (#283)', async () => {
     renderLeads();
     await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());

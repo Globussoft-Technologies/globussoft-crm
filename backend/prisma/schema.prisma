@@ -549,7 +549,11 @@ model User {
   subscriptionStatus String    @default("TRIAL") // TRIAL | ACTIVE | EXPIRED | CANCELLED
 
   // RBAC — multi-role via UserRole junction table
-  userRoles UserRole[]
+  userRoles             UserRole[]
+  // RBAC Hardening Phase 4 — back-reference for permission-history
+  // attribution. SetNull on delete preserves the version row even if
+  // the changer's account is later removed (audit trail integrity).
+  rolePermissionChanges RolePermissionVersion[]
 
   tenantId Int    @default(1)
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -5292,12 +5296,58 @@ model Role {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  permissions RolePermission[]
-  userRoles   UserRole[]
-  widgets     RoleWidget[]
+  permissions        RolePermission[]
+  userRoles          UserRole[]
+  widgets            RoleWidget[]
+  permissionVersions RolePermissionVersion[]
 
   @@unique([tenantId, key])
   @@index([tenantId, isActive])
+}
+
+// RBAC Hardening Phase 4 — Immutable snapshot of a role's permission
+// set after every BULK_UPDATE_PERMISSIONS (PUT /api/roles/:id/permissions).
+// Drives the "Role History" UI (Phase 5) and is the primary recovery
+// mechanism when an admin saves a broken permission state and needs to
+// roll back.
+//
+// Append-only: existing rows are NEVER updated or deleted (the index
+// rejects writes that would collide with an existing versionNumber for
+// the same role). Restore creates a NEW version with `changeType: 'RESTORE'`
+// pointing at the source version; it does NOT delete or rewrite history.
+//
+// permissionsJson stores the canonical sorted JSON-stringified array of
+// {module, action} objects. The string format is intentional — Prisma's
+// MySQL JSON support has compatibility quirks, and the array is always
+// hydrated/sorted at read time anyway. Bounded by RolePermission unique
+// composite so the max length is ~200 modules × 6 actions ≈ 1200 entries
+// per role ≈ 50KB serialized — well under the @db.Text 64KB MySQL cap.
+model RolePermissionVersion {
+  id                    Int      @id @default(autoincrement())
+  roleId                Int
+  role                  Role     @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  // Monotonic per-role version number, starting at 1. Versions are
+  // never reused — a restore appends a fresh max+1 row pointing back
+  // at the source version's permissionsJson.
+  versionNumber         Int
+  permissionsJson       String   @db.Text
+  permissionCount       Int
+  // 'UPDATE' (admin save), 'RESTORE' (admin clicked Restore on an
+  // older version), 'INITIAL' (the bootstrap snapshot written on
+  // first save after deploy of this feature).
+  changeType            String   @default("UPDATE")
+  // Source version id when changeType=RESTORE so the UI can show
+  // "Restored from v7" provenance.
+  restoredFromVersionId Int?
+  changedById           Int?
+  changedBy             User?    @relation(fields: [changedById], references: [id], onDelete: SetNull)
+  changedAt             DateTime @default(now())
+  // Optional context (e.g. "Lockout-prevented retry"). Free-form,
+  // bounded at 500 chars by the route layer.
+  note                  String?  @db.VarChar(500)
+
+  @@unique([roleId, versionNumber])
+  @@index([roleId, changedAt])
 }
 
 // Single-role-per-user enforced at the application layer (the assign

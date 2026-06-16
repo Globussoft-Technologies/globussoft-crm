@@ -350,7 +350,9 @@ const Leads = () => {
           <div>
             <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold' }}>Leads</h2>
             <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
-              {leads.length} lead{leads.length !== 1 ? 's' : ''} in pipeline
+              {searchTerm
+                ? `${filteredLeads.length} of ${leads.length} lead${leads.length !== 1 ? 's' : ''} match "${searchTerm}"`
+                : `${leads.length} lead${leads.length !== 1 ? 's' : ''} in pipeline`}
             </p>
           </div>
         </div>

@@ -1480,16 +1480,22 @@ function renderTravelSubBrandHeader({
 
 function renderTravelNav({
   Link,
+  isAdmin = false,
+  isManager = false,
   sectionLabelStyle,
   counts = {},
   subBrandAccess = null,
   activeSubBrand = null,
 }) {
-  // isAdmin / isManager are deliberately NOT destructured — this nav is
-  // fully permission-driven. Every link below uses requiredPermission;
-  // role-string gates would defeat the "permissions are source of
-  // truth" contract. The caller (the main Sidebar component) still
-  // passes them but they're ignored here.
+  // isAdmin / isManager drive ONE display-only decision below: the
+  // personal "You → Notification Settings" entry, which is a
+  // self-service surface for end users and is intentionally hidden
+  // from admin / manager / owner tenants (OWNER carries role==='ADMIN'
+  // so isAdmin already covers it). This mirrors the generic sidebar's
+  // `!isAdmin && !isManager` gate around the same Link. Every other
+  // entry in this function stays permission-driven via
+  // requiredPermission — role-string gates would defeat the
+  // "permissions are source of truth" contract for nav visibility.
   const labelStyle = sectionLabelStyle || sectionLabel;
   // Brand-scoped nav (travel-only). Two layers gate a brand-tagged entry:
   //   1. ACCESS — the user must be entitled to that sub-brand. Full-access
@@ -1644,12 +1650,19 @@ function renderTravelNav({
       <Link to="/privacy" icon={Shield} label="Privacy" requiredPermission={{ module: "settings", action: "manage" }} />
       <Link to="/admin/brand-kits" icon={Palette} label="Brand Kits" requiredPermission={{ module: "settings", action: "manage" }} />
 
-      {/* Notification Settings has empty requiredPermissions in the page
-          catalog — every authenticated user can manage their own. No
-          requiredPermission prop so it always renders for the signed-in
-          user regardless of grant configuration. */}
-      <div style={labelStyle}>You</div>
-      <Link to="/notification-settings" icon={Settings} label="Notification Settings" />
+      {/* Notification Settings is a personal end-user surface — hidden
+          from ADMIN / MANAGER (and therefore OWNER, which carries
+          role==='ADMIN'). End users manage their own preferences here;
+          admins / managers manage tenant-wide notification policy via
+          Settings, not via a personal-account sidebar entry. Mirrors
+          the generic sidebar's `!isAdmin && !isManager` gate around
+          the same Link. */}
+      {!isAdmin && !isManager && (
+        <>
+          <div style={labelStyle}>User</div>
+          <Link to="/notification-settings" icon={Settings} label="Notification Settings" />
+        </>
+      )}
 
     </>
   );

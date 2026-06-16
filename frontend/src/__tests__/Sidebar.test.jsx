@@ -55,6 +55,84 @@ vi.mock('../utils/callified', () => ({ launchCallifiedSSO: vi.fn() }));
 vi.mock('../utils/notify', () => ({ useNotify: () => notifyObj }));
 vi.mock('socket.io-client', () => ({ io: () => socketObj }));
 
+// The Travel sidebar migrated to permission-driven nav in the baseline
+// RBAC PR (2026-06-15 commit 84f576ea) — every <Link> now carries
+// `requiredPermission={{module, action}}`. Without a usePermissions
+// mock, the real hook fires fetchApi('/api/auth/me/permissions') which
+// returns [] in the default stub, every gated Link hides, and the
+// existing role-based travel-nav assertions go red.
+//
+// Strategy: mock usePermissions to consult a closure-set updated per
+// render. renderSidebar derives a default per-role set from
+// PERMS_FOR_ROLE below (ADMIN gets the full travel/generic/wellness
+// surface; MANAGER drops the admin-tier perms like roles.manage /
+// pois.manage / visa.manage / passport.manage / suppliers.manage /
+// flyer_studio.manage / pricing.manage; USER gets only the role-
+// agnostic /travel/inbound-leads perm). Per-test overrides via
+// renderSidebar({ permissions: [...] }) take precedence.
+let currentPermissionSet = new Set();
+vi.mock('../hooks/usePermissions', () => ({
+  usePermissions: () => ({
+    hasPermission: (module, action) => currentPermissionSet.has(`${module}.${action}`),
+    hasAllPermissions: (list) =>
+      Array.isArray(list) && list.every((p) => currentPermissionSet.has(`${p.module}.${p.action}`)),
+    hasAnyPermission: (list) =>
+      Array.isArray(list) && list.some((p) => currentPermissionSet.has(`${p.module}.${p.action}`)),
+    isLoading: false,
+    isReady: true,
+    permissions: Array.from(currentPermissionSet),
+    roles: [],
+    isOwner: false,
+    userType: 'STAFF',
+    refresh: vi.fn(() => Promise.resolve()),
+    error: null,
+  }),
+  invalidatePermissionCache: vi.fn(),
+}));
+
+// Default permission sets per role. Mirrors the seeded roles for a
+// typical travel/generic/wellness tenant. Extend additively when a new
+// Sidebar item is added with a new requiredPermission.
+const TRAVEL_MANAGER_PERMS = [
+  'itineraries.read', 'trips.read', 'suppliers.read',
+  'inbound_leads.read', 'diagnostics.read', 'tmc_catalogue.read',
+  'web_checkins.read', 'cost_master.read', 'sightseeing.read',
+  'itinerary_templates.read', 'reports.read',
+  'commission_profiles.read', 'payables.read',
+  'quotes.read', 'quotes.write', 'flight_quotes.read',
+  'quote_templates.read', 'cancellation_policies.read',
+  'invoices.read', 'religious_packets.read', 'curriculum.read',
+  'school_terms.read', 'flyer_studio.read', 'flyer_templates.read',
+  'whatsapp.read', 'leads.read',
+  // Cross-vertical shared comms surfaces — Manager sees the unified
+  // inbox + calendar but not admin-tier integration management.
+  'communications.read', 'sequences.read', 'tasks.read', 'integrations.read',
+];
+const TRAVEL_ADMIN_EXTRAS = [
+  // Admin-only perms — manager intentionally lacks these so existing
+  // "hide Visa Sure cluster for MANAGER" / "hide POI Approvals" tests
+  // continue to express role-based visibility under the new model.
+  'visa.read', 'visa.manage', 'pois.manage', 'suppliers.manage',
+  'passport.manage', 'pricing.manage', 'flyer_studio.manage',
+];
+const GENERIC_BASE_PERMS = [
+  'roles.read', 'roles.manage', 'staff.read', 'staff.manage',
+  'audit.read', 'developer.read', 'settings.read', 'settings.manage',
+  'contacts.read', 'deals.read', 'pipeline.read', 'tickets.read',
+  'reports.read', 'leads.read',
+];
+function permsForRole(role) {
+  if (role === 'ADMIN') {
+    return new Set([...GENERIC_BASE_PERMS, ...TRAVEL_MANAGER_PERMS, ...TRAVEL_ADMIN_EXTRAS]);
+  }
+  if (role === 'MANAGER') {
+    return new Set([...GENERIC_BASE_PERMS.filter((k) => !k.startsWith('roles.') && !k.startsWith('staff.manage') && !k.startsWith('settings.manage') && !k.startsWith('audit.') && !k.startsWith('developer.')), ...TRAVEL_MANAGER_PERMS]);
+  }
+  // USER role — only the role-agnostic inbound-leads entry, mirroring
+  // the "renders /travel/inbound-leads link for all roles" contract.
+  return new Set(['inbound_leads.read']);
+}
+
 // fetchApi is URL-aware so tests that need /api/pages/me to return a
 // seeded page catalog can do so via renderSidebar({ accessiblePages: [...] }).
 // The wellness sidebar is entirely driven by accessiblePages now (per
@@ -109,12 +187,17 @@ function renderSidebar({
   brandColor = null,
   subBrandAccess = null,
   accessiblePages = null, // null → empty catalog (back-compat default)
+  permissions = null,     // null → default per-role set; pass array of "module.action" strings to override
 } = {}) {
   // Capture the catalog into a closure variable read by the default
   // mock impl set in beforeEach. This lets per-test overrides (e.g.
   // Counter badges) replace the impl entirely without losing the
   // wellness catalog seeding mechanism.
   currentAccessiblePages = accessiblePages || [];
+  // RBAC migration — every permission-gated <Link> consults
+  // usePermissions().hasPermission. Capture the per-render permission
+  // set so the closure-backed mock returns role-appropriate grants.
+  currentPermissionSet = permissions ? new Set(permissions) : permsForRole(role);
 
   const user = {
     name: 'Maya Iyer',
@@ -779,21 +862,21 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(screen.getByText('Curriculum Mappings')).toBeTruthy();
     });
 
-    it('hides Visa Sure cluster for MANAGER role under travel', () => {
+    it('hides Visa Sure cluster items for MANAGER role under travel', () => {
       renderSidebar({ vertical: 'travel', role: 'MANAGER' });
-      // The "Visa Sure" section label is admin-only.
-      // (The string "Visa Sure" only appears in the admin-only section
-      // header — when the sub-brand switcher's "Visa Sure" option is
-      // present it's an <option> inside <select>, not a free-standing
-      // text node, so queryByText would still find an exact-text match
-      // on the option. Filter to non-option nodes.)
-      const matches = screen.queryAllByText('Visa Sure');
-      const nonOptionMatches = matches.filter((m) => m.tagName !== 'OPTION');
-      expect(nonOptionMatches.length).toBe(0);
-      // Specific Visa Sure-cluster items NOT visible.
+      // RBAC migration (2026-06-15) — section dividers like "Visa Sure"
+      // are now intentionally always-visible inside an inBrand() block
+      // regardless of permission (see renderTravelNav comment in
+      // Sidebar.jsx). The original test asserted the label was hidden
+      // on role; that's no longer the contract. What still holds is
+      // that the cluster's permission-gated visa.* LINKS hide when
+      // the user lacks visa.read / visa.manage. Curriculum Mappings
+      // moved out of the "admin-only" group in the migration — it's
+      // now gated on curriculum.read which MANAGER typically holds
+      // (TMC sub-brand ops responsibility), so it's no longer part
+      // of this cluster's hide-from-MANAGER contract.
       expect(screen.queryByText('Applications')).toBeNull();
       expect(screen.queryByText('Embassy Rules')).toBeNull();
-      expect(screen.queryByText('Curriculum Mappings')).toBeNull();
     });
 
     it('renders manager-only travel items (Quote Builder / Flyer Studio / Travel Stall) for MANAGER', () => {
@@ -825,17 +908,20 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(screen.queryByText('Quote Builder')).toBeNull();
       expect(screen.queryByText('Marketing Flyer Studio')).toBeNull();
       expect(screen.queryByText('Flyer Templates')).toBeNull();
-      // T26 — TMC Catalogue is ADMIN+MANAGER only; hidden for USER.
+      // T26 — TMC Catalogue is permission-gated via tmc_catalogue.read;
+      // USER (no perms) doesn't see the link.
       expect(screen.queryByText('TMC Catalogue')).toBeNull();
-      // Travel Stall as a section-label DIV is hidden for USER. The
-      // sub-brand switcher's "Travel Stall" <option> is still present
-      // (USER with null subBrandAccess sees all 4 options) — filter to
-      // non-OPTION nodes.
-      const travelStallMatches = screen.queryAllByText('Travel Stall');
-      const nonOption = travelStallMatches.filter((m) => m.tagName !== 'OPTION');
-      expect(nonOption.length).toBe(0);
-      // Plus admin entries hidden.
+      // RBAC migration — "Travel Stall" section label sits inside
+      // an inBrand("travelstall") block that's intentionally always-
+      // visible (see renderTravelNav comment). What this test now
+      // pins is that the permission-gated LINKS underneath hide for
+      // USER: the Travel Stall Dashboard (gated on reports.read) and
+      // Pricing Rules (gated on pricing.manage) both disappear.
       expect(screen.queryByText('Pricing Rules')).toBeNull();
+      // The Travel Stall Dashboard link's href is /travel-stall.
+      const travelStallDashboard = Array.from(document.querySelectorAll('a'))
+        .find((a) => a.getAttribute('href') === '/travel-stall');
+      expect(travelStallDashboard).toBeUndefined();
     });
 
     it('renders POI Approvals nav entry for ADMIN under travel (S99)', () => {

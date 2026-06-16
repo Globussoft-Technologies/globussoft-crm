@@ -57,15 +57,35 @@ const card = {
   padding: '1.25rem',
 };
 
-function KpiTile({ icon, label, value, accent }) {
-  return (
-    <div style={{ ...card, display: 'flex', flexDirection: 'column', gap: 8 }}>
+function KpiTile({ icon, label, value, accent, to }) {
+  const inner = (
+    <>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: accent || 'var(--text-secondary)' }}>
         {icon}
         <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', fontWeight: 600 }}>{label}</span>
       </div>
       <span style={{ fontSize: '1.9rem', fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1 }}>{value}</span>
-    </div>
+    </>
+  );
+  const baseStyle = { ...card, display: 'flex', flexDirection: 'column', gap: 8 };
+  const testId = `kpi-${label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+  // Non-clickable tile (no detailed view to drill into).
+  if (!to) {
+    return <div data-testid={testId} style={baseStyle}>{inner}</div>;
+  }
+  // Clickable tile → drills into the matching detailed view (filtered
+  // applications list, or the reports page).
+  return (
+    <Link
+      to={to}
+      data-testid={testId}
+      title="View details"
+      style={{ ...baseStyle, textDecoration: 'none', cursor: 'pointer', transition: 'border-color 0.15s ease' }}
+      onMouseEnter={(e) => { e.currentTarget.style.borderColor = 'var(--primary-color, var(--accent-color))'; }}
+      onMouseLeave={(e) => { e.currentTarget.style.borderColor = 'var(--border-color)'; }}
+    >
+      {inner}
+    </Link>
   );
 }
 
@@ -173,12 +193,12 @@ export default function VisaDashboard() {
         <>
           {/* KPI tiles */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 180px), 1fr))', gap: 12, marginBottom: 16 }}>
-            <KpiTile icon={<FileText size={16} />} label="Total applications" value={total} />
-            <KpiTile icon={<CheckCircle2 size={16} />} label="Approved" value={approved} accent="#34C79A" />
-            <KpiTile icon={<XCircle size={16} />} label="Rejected" value={rejected} accent="#E0586A" />
-            <KpiTile icon={<Clock size={16} />} label="In progress" value={inProgress} accent="#C89A4E" />
-            <KpiTile icon={<BarChart3 size={16} />} label="Approval rate" value={approvalRate === null ? '—' : `${approvalRate}%`} accent="var(--primary-color, var(--accent-color))" />
-            <KpiTile icon={<ShieldAlert size={16} />} label="Risk-flagged" value={flagged} accent="#E0586A" />
+            <KpiTile icon={<FileText size={16} />} label="Total applications" value={total} to="/travel/visa/applications" />
+            <KpiTile icon={<CheckCircle2 size={16} />} label="Approved" value={approved} accent="#34C79A" to="/travel/visa/applications?status=approved" />
+            <KpiTile icon={<XCircle size={16} />} label="Rejected" value={rejected} accent="#E0586A" to="/travel/visa/applications?status=rejected" />
+            <KpiTile icon={<Clock size={16} />} label="In progress" value={inProgress} accent="#C89A4E" to="/travel/visa/applications" />
+            <KpiTile icon={<BarChart3 size={16} />} label="Approval rate" value={approvalRate === null ? '—' : `${approvalRate}%`} accent="var(--primary-color, var(--accent-color))" to="/travel/visa/reports" />
+            <KpiTile icon={<ShieldAlert size={16} />} label="Risk-flagged" value={flagged} accent="#E0586A" to="/travel/visa/applications" />
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 320px), 1fr))', gap: 16, marginBottom: 16 }}>

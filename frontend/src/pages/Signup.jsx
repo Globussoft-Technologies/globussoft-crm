@@ -2,11 +2,13 @@ import React, { useState, useContext } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { AuthContext } from '../App';
 import PasswordInput from '../components/PasswordInput';
+import EmailOtpField from '../components/EmailOtpField';
 
 const Signup = () => {
   const [name, setName] = useState('');
   const [organizationName, setOrganizationName] = useState('');
   const [email, setEmail] = useState('');
+  const [emailVerificationToken, setEmailVerificationToken] = useState(null);
   const [password, setPassword] = useState('');
   const [vertical, setVertical] = useState('generic');
   const [error, setError] = useState('');
@@ -24,7 +26,7 @@ const Signup = () => {
       const response = await fetch('/api/auth/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, email, password, organizationName, vertical })
+        body: JSON.stringify({ name, email, password, organizationName, vertical, verificationToken: emailVerificationToken })
       });
 
       const data = await response.json();
@@ -119,14 +121,14 @@ const Signup = () => {
             />
           </div>
           <div style={{ marginBottom: '1rem' }}>
-            <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.875rem', color: 'var(--text-secondary)' }}>Email Address</label>
-            <input
-              type="email"
-              className="input-field"
-              placeholder="name@company.com"
+            <EmailOtpField
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              required
+              purpose="signup"
+              onVerifiedChange={setEmailVerificationToken}
+              label="Email Address"
+              placeholder="name@company.com"
+              inputClassName="input-field"
             />
           </div>
           <div style={{ marginBottom: '1.5rem' }}>
@@ -140,8 +142,8 @@ const Signup = () => {
               autoComplete="new-password"
             />
           </div>
-          <button type="submit" className="btn-primary" style={{ width: '100%' }} disabled={loading}>
-            {loading ? 'Creating organization...' : 'Create Organization'}
+          <button type="submit" className="btn-primary" style={{ width: '100%', opacity: !emailVerificationToken ? 0.6 : 1 }} disabled={loading || !emailVerificationToken}>
+            {loading ? 'Creating organization...' : !emailVerificationToken ? 'Verify your email to continue' : 'Create Organization'}
           </button>
         </form>
 

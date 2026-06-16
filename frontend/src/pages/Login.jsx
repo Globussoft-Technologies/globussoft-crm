@@ -318,6 +318,31 @@ const Login = () => {
     }
   };
 
+  // Travel customer-portal fallback. Staff (User table) and travel customers
+  // (Contact.portalPasswordHash) are two separate auth systems on two
+  // endpoints — but they share this one login page. When staff auth fails we
+  // try the portal with the same credentials; a customer is then handed off to
+  // /travel/portal (which reads the PORTAL token from localStorage). Returns
+  // true if the portal login succeeded (and navigation was triggered).
+  const tryPortalLogin = async (loginEmail, loginPassword) => {
+    try {
+      const res = await fetch("/api/portal/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: loginEmail, password: loginPassword }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.token) return false;
+      // Persist under the keys TravelCustomerPortal reads, then hand off.
+      localStorage.setItem("portalToken", data.token);
+      localStorage.setItem("portalContact", JSON.stringify(data.contact || {}));
+      navigate("/travel/portal");
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
   const performLogin = async (loginEmail, loginPassword, tenantId) => {
     setError("");
     if (!loginEmail || !loginPassword) {
@@ -347,7 +372,10 @@ const Login = () => {
         }
         finalizeLogin(data);
       } else {
-        setError(data.error || "Login failed");
+        // Not a staff account — maybe a travel customer. Try the portal with
+        // the same credentials before surfacing an error.
+        const wentToPortal = await tryPortalLogin(loginEmail, loginPassword);
+        if (!wentToPortal) setError(data.error || "Login failed");
       }
     } catch (err) {
       setError("Server error. Ensure backend is running.");
@@ -880,23 +908,25 @@ const Login = () => {
               ]}
               onLogin={quickLogin}
               extraCell={
-                /* Travel Customer Portal — end-user (Contact) login lives on
-                   a separate route + uses /api/portal/login (PORTAL JWT),
-                   distinct from staff /api/auth/login. Rendered as a Link
-                   styled to match the staff quick-login buttons so it slots
-                   neatly into the otherwise-empty 6th grid cell on row 2
-                   (3-column layout, 5 staff buttons + 1 portal link). */
-                <Link
-                  to="/travel/portal"
-                  title="Open Travel Customer Portal — ahmed.pilgrim@demo.test / password123"
+                /* Travel Customer Portal quick-login. The end-user (Contact)
+                   auth uses /api/portal/login, but it shares THIS page now —
+                   quickLogin() tries staff auth, falls back to the portal, and
+                   hands the customer off to /travel/portal. Styled to match the
+                   staff quick-login buttons (6th cell of the 3-column grid). */
+                <button
+                  type="button"
+                  onClick={() => quickLogin("ahmed.pilgrim@demo.test", "password123")}
+                  title="Sign in to the Travel Customer Portal — ahmed.pilgrim@demo.test / password123"
                   style={{
                     padding: "0.55rem 0.45rem",
                     borderRadius: "8px",
                     border: "1px solid rgba(200, 154, 78, 0.45)",
                     background: "rgba(200, 154, 78, 0.10)",
-                    textDecoration: "none",
+                    cursor: "pointer",
                     transition: "all 0.15s",
                     minWidth: 0,
+                    width: "100%",
+                    textAlign: "left",
                     display: "block",
                   }}
                   onMouseEnter={(e) => {
@@ -932,7 +962,7 @@ const Login = () => {
                   >
                     ahmed.pilgrim@demo.test
                   </div>
-                </Link>
+                </button>
               }
             />
               </>

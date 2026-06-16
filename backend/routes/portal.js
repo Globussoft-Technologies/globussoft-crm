@@ -11,6 +11,7 @@ const passportOcrClient = require("../services/passportOcrClient");
 const { scoreDiagnostic, parseBank } = require("../lib/travelDiagnosticScoring");
 const { notifyMany } = require("../lib/notificationService");
 const { writeAudit } = require("../lib/audit");
+const visaDocStore = require("../lib/visaDocStore");
 
 // Memory-storage multer for the travel customer's profile avatar — 5 MB cap,
 // image-only (s3Service.uploadImage re-gates the mimetype). Mirrors the staff
@@ -112,7 +113,7 @@ router.post("/login", async (req, res) => {
 // { token, contact } shape as /login so the page can sign them straight in.
 router.post("/register", async (req, res) => {
   try {
-    const { email, password, name, registrationTenantId } = req.body || {};
+    const { email, password, name, registrationTenantId, verificationToken } = req.body || {};
     if (!email || typeof email !== "string" || !password || typeof password !== "string") {
       return res.status(400).json({ error: "email and password are required" });
     }
@@ -122,6 +123,18 @@ router.post("/register", async (req, res) => {
     const tenantId = Number(registrationTenantId);
     if (!Number.isInteger(tenantId) || tenantId <= 0) {
       return res.status(400).json({ error: "registrationTenantId must be a valid number" });
+    }
+
+    // Email OTP gate (purpose "customer-register"). Tampered/wrong-purpose
+    // token → 403; valid token → stamp Contact.emailVerifiedAt; absent →
+    // backward-compatible (the UI hard-gates the button).
+    const emailOtp = require("../lib/emailOtp");
+    let emailVerifiedAt = null;
+    if (verificationToken !== undefined && verificationToken !== null && verificationToken !== "") {
+      if (!emailOtp.checkVerificationToken(verificationToken, email, "customer-register")) {
+        return res.status(403).json({ error: "Email verification failed — please verify your email again", code: "EMAIL_NOT_VERIFIED" });
+      }
+      emailVerifiedAt = new Date();
     }
     if (password.length < 8 || !/[A-Za-z]/.test(password) || !/[0-9]/.test(password)) {
       return res.status(400).json({
@@ -157,7 +170,7 @@ router.post("/register", async (req, res) => {
     const contact = existing
       ? await prisma.contact.update({
           where: { id: existing.id },
-          data: { portalPasswordHash: hash, name: existing.name || nm },
+          data: { portalPasswordHash: hash, name: existing.name || nm, emailVerifiedAt },
         })
       : await prisma.contact.create({
           data: {
@@ -167,6 +180,7 @@ router.post("/register", async (req, res) => {
             status: "Lead",
             tenantId,
             portalPasswordHash: hash,
+            emailVerifiedAt,
           },
         });
 
@@ -1134,6 +1148,318 @@ router.post("/travel/diagnostics", verifyPortalToken, requireTravelPortalTenant,
     if (err && err.status) return res.status(err.status).json({ error: err.message, code: err.code });
     console.error("[Portal][travel/diagnostics POST]", err);
     res.status(500).json({ error: "Failed to submit diagnostic" });
+  }
+});
+
+// ─── Visa Sure self-serve: start application + upload documents (FR-6.2) ──
+//
+// After the Visa Sure diagnostic the customer sees their recommended document
+// list (checklist-preview), clicks "Start my application" (creates the
+// VisaApplication + seeds the checklist from the template), then uploads each
+// required document. The advisor (AdvisorDashboard) then verifies/rejects each
+// upload; verifying the last required doc auto-advances the application to
+// Filed. Everything here is scoped to the logged-in Contact (req.portal).
+const VISA_SUB_BRAND_PORTAL = "visasure";
+const VISA_APP_TYPES = ["tourist", "business", "student", "work", "umrah", "hajj"];
+
+// multipart handler — JPG / PNG / PDF only (passport scans, photos, supporting
+// docs), 10 MB cap. memoryStorage: nothing persists until storeDoc() runs after
+// the ownership checks, so a rejected request leaves no orphaned file.
+const portalVisaDocUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (visaDocStore.VISA_DOC_MIME_EXT[(file.mimetype || "").toLowerCase()]) {
+      return cb(null, true);
+    }
+    cb(new Error("UNSUPPORTED_MIME"));
+  },
+});
+const portalVisaDocUploadHandler = (req, res, next) => {
+  portalVisaDocUpload.single("file")(req, res, (err) => {
+    if (err instanceof multer.MulterError) {
+      if (err.code === "LIMIT_FILE_SIZE") {
+        return res.status(400).json({ error: "File too large (max 10 MB)", code: "FILE_TOO_LARGE" });
+      }
+      return res.status(400).json({ error: "Upload error", code: "UPLOAD_ERROR" });
+    }
+    if (err) {
+      return res.status(400).json({ error: "Only JPG, PNG, or PDF files are allowed", code: "UNSUPPORTED_MIME" });
+    }
+    next();
+  });
+};
+
+// Project a checklist item for the customer — their own file URL + status +
+// any advisor note (e.g. a rejection reason) are surfaced; internal ids aren't.
+function projectPortalChecklistItem(i) {
+  return {
+    id: i.id,
+    docType: i.docType,
+    required: i.required,
+    status: i.status,
+    attachmentUrl: i.attachmentUrl || null,
+    attachmentName: i.attachmentName || null,
+    uploadedAt: i.uploadedAt || null,
+    notes: i.notes || null,
+  };
+}
+function projectPortalVisaApp(app) {
+  return {
+    id: app.id,
+    applicationType: app.applicationType,
+    destinationCountry: app.destinationCountry,
+    status: app.status,
+    createdAt: app.createdAt,
+    documentChecklist: (app.documentChecklist || []).map(projectPortalChecklistItem),
+  };
+}
+
+// GET /api/portal/travel/visa/checklist-preview?applicationType=&destinationCountry=
+// Read-only — the canonical document list for a combo, shown BEFORE the
+// customer starts (so they know what they'll need). No application required.
+router.get("/travel/visa/checklist-preview", verifyPortalToken, requireTravelPortalTenant, async (req, res) => {
+  try {
+    const applicationType = String(req.query.applicationType || "").trim();
+    const destinationCountry = String(req.query.destinationCountry || "").trim();
+    if (!applicationType || !destinationCountry) {
+      return res.status(400).json({ error: "applicationType and destinationCountry are required", code: "MISSING_FIELDS" });
+    }
+    const items = await prisma.visaChecklistTemplate.findMany({
+      where: { tenantId: req.portal.tenantId, applicationType, destinationCountry },
+      orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
+      select: { docType: true, required: true, notes: true },
+    });
+    res.json({ applicationType, destinationCountry, items });
+  } catch (err) {
+    console.error("[Portal][travel/visa/checklist-preview]", err);
+    res.status(500).json({ error: "Failed to load checklist preview" });
+  }
+});
+
+// GET /api/portal/travel/visa/applications — all of the customer's visa
+// applications (one per visa — e.g. a transit visa + a destination visa for
+// the same trip), each with its own checklist. Empty array if none started.
+router.get("/travel/visa/applications", verifyPortalToken, requireTravelPortalTenant, async (req, res) => {
+  try {
+    const rows = await prisma.visaApplication.findMany({
+      where: { tenantId: req.portal.tenantId, contactId: req.portal.contactId },
+      orderBy: { createdAt: "desc" },
+      include: { documentChecklist: { orderBy: { createdAt: "asc" } } },
+    });
+    res.json({ applications: rows.map(projectPortalVisaApp) });
+  } catch (err) {
+    console.error("[Portal][travel/visa/applications GET]", err);
+    res.status(500).json({ error: "Failed to load your visa applications" });
+  }
+});
+
+// POST /api/portal/travel/visa/applications { applicationType, destinationCountry }
+// "Start my application" — creates a NEW application (status docs-pending) and
+// seeds its checklist from the template. A customer may hold several (one per
+// visa); each call creates a fresh application.
+router.post("/travel/visa/applications", verifyPortalToken, requireTravelPortalTenant, async (req, res) => {
+  try {
+    const tenantId = req.portal.tenantId;
+    const contactId = req.portal.contactId;
+    const body = req.body || {};
+    const applicationType = typeof body.applicationType === "string" ? body.applicationType.trim() : "";
+    const destinationCountry = typeof body.destinationCountry === "string" ? body.destinationCountry.trim() : "";
+    if (!VISA_APP_TYPES.includes(applicationType)) {
+      return res.status(400).json({ error: `applicationType must be one of: ${VISA_APP_TYPES.join(", ")}`, code: "INVALID_APPLICATION_TYPE" });
+    }
+    if (!destinationCountry || destinationCountry.length > 200) {
+      return res.status(400).json({ error: "destinationCountry is required (1..200 chars)", code: "INVALID_DESTINATION" });
+    }
+
+    // The Visa Sure pipeline is sub-brand-scoped: the advisor surface only
+    // shows applications whose Contact.subBrand === "visasure". A customer who
+    // starts a visa application IS a visa customer, so we promote the contact
+    // to visasure here (capturing any prior brand in the audit row) — else
+    // their application would be invisible to visa advisors + unactionable.
+    // Runs BEFORE the idempotency check so a repeat "start" also repairs an
+    // application created before the contact was promoted.
+    const contact = await prisma.contact.findFirst({
+      where: { id: contactId, tenantId },
+      select: { id: true, subBrand: true },
+    });
+    const priorSubBrand = contact ? contact.subBrand : null;
+    if (contact && contact.subBrand !== VISA_SUB_BRAND_PORTAL) {
+      await prisma.contact.update({ where: { id: contactId }, data: { subBrand: VISA_SUB_BRAND_PORTAL } });
+    }
+
+    // Always create a fresh application — the customer can hold one per visa.
+    const created = await prisma.visaApplication.create({
+      data: { tenantId, contactId, applicationType, destinationCountry, status: "docs-pending" },
+    });
+
+    // Seed the checklist from the (applicationType × destinationCountry)
+    // template — mirrors seedChecklistFromTemplates in routes/travel_visa.js.
+    const templates = await prisma.visaChecklistTemplate.findMany({
+      where: { tenantId, applicationType, destinationCountry },
+      orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
+      select: { docType: true, required: true, notes: true },
+    });
+    if (templates.length) {
+      await prisma.visaDocumentChecklistItem.createMany({
+        data: templates.map((t) => ({
+          applicationId: created.id,
+          docType: t.docType,
+          required: t.required,
+          status: "pending",
+          notes: t.notes || null,
+        })),
+      });
+    }
+
+    writeAudit(
+      "VisaApplication",
+      "CREATE",
+      created.id,
+      null,
+      tenantId,
+      { subBrand: VISA_SUB_BRAND_PORTAL, contactId, applicationType, destinationCountry, via: "portal", seeded: templates.length, priorSubBrand: priorSubBrand || null },
+      { actorType: "portal" },
+    ).catch(() => {});
+
+    const withChecklist = await prisma.visaApplication.findFirst({
+      where: { id: created.id },
+      include: { documentChecklist: { orderBy: { createdAt: "asc" } } },
+    });
+    res.status(201).json({ application: projectPortalVisaApp(withChecklist), created: true });
+  } catch (err) {
+    console.error("[Portal][travel/visa/application POST]", err);
+    res.status(500).json({ error: "Failed to start your visa application" });
+  }
+});
+
+// POST /api/portal/travel/visa/documents/:itemId/upload — multipart "file".
+// Uploads (or replaces) the document for one checklist item the customer owns;
+// sets status → uploaded for advisor review. A verified item is locked (the
+// advisor must reset it before re-upload).
+router.post(
+  "/travel/visa/documents/:itemId/upload",
+  verifyPortalToken,
+  requireTravelPortalTenant,
+  portalVisaDocUploadHandler,
+  async (req, res) => {
+    try {
+      const itemId = parseInt(req.params.itemId, 10);
+      if (!Number.isFinite(itemId)) {
+        return res.status(400).json({ error: "itemId must be a number", code: "INVALID_ID" });
+      }
+      // Ownership: the item's application must belong to this customer.
+      const item = await prisma.visaDocumentChecklistItem.findFirst({
+        where: {
+          id: itemId,
+          application: { contactId: req.portal.contactId, tenantId: req.portal.tenantId },
+        },
+        select: { id: true, status: true, attachmentStorage: true, attachmentKey: true },
+      });
+      if (!item) {
+        return res.status(404).json({ error: "Document not found", code: "NOT_FOUND" });
+      }
+      if (item.status === "verified") {
+        return res.status(409).json({ error: "This document is already verified — contact your advisor to replace it", code: "ALREADY_VERIFIED" });
+      }
+      if (!req.file || !req.file.buffer) {
+        return res.status(400).json({ error: "no file uploaded (field name: 'file')", code: "NO_FILE" });
+      }
+
+      let stored;
+      try {
+        stored = await visaDocStore.storeDoc(req.file.buffer, req.file.mimetype);
+      } catch (e) {
+        console.error("[Portal][travel/visa/documents:upload] storage error:", e.message);
+        return res.status(502).json({ error: "Couldn't store the uploaded file — please try again", code: "STORAGE_FAILED" });
+      }
+
+      const updated = await prisma.visaDocumentChecklistItem.update({
+        where: { id: item.id },
+        data: {
+          attachmentUrl: stored.url,
+          attachmentName: (req.file.originalname || "").slice(0, 255) || null,
+          attachmentStorage: stored.storage,
+          attachmentKey: stored.key,
+          uploadedAt: new Date(),
+          status: "uploaded",
+          // Clear any prior rejection reason so the advisor reviews afresh.
+          notes: null,
+        },
+      });
+
+      // Supersede the previous file (re-upload) so we don't orphan it.
+      if (item.attachmentKey && item.attachmentKey !== stored.key) {
+        await visaDocStore.removeDoc({ storage: item.attachmentStorage, key: item.attachmentKey });
+      }
+
+      writeAudit(
+        "VisaDocumentChecklistItem",
+        "document.uploaded",
+        item.id,
+        null,
+        req.portal.tenantId,
+        { storage: stored.storage, portalContactId: req.portal.contactId },
+        { actorType: "portal" },
+      ).catch(() => {});
+
+      res.status(201).json({ item: projectPortalChecklistItem(updated) });
+    } catch (err) {
+      console.error("[Portal][travel/visa/documents:upload]", err);
+      res.status(500).json({ error: "Failed to upload document" });
+    }
+  },
+);
+
+// DELETE /api/portal/travel/visa/applications/:id — let the customer cancel
+// one of their own applications while it's still early. Allowed only in
+// intake / docs-pending; once the advisor files or decides it, it's out of
+// the customer's hands (409). Cascade removes the checklist items; we best-
+// effort delete any uploaded files first so none orphan.
+router.delete("/travel/visa/applications/:id", verifyPortalToken, requireTravelPortalTenant, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) {
+      return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+    }
+    const app = await prisma.visaApplication.findFirst({
+      where: { id, tenantId: req.portal.tenantId, contactId: req.portal.contactId },
+      select: { id: true, status: true },
+    });
+    if (!app) {
+      return res.status(404).json({ error: "Application not found", code: "NOT_FOUND" });
+    }
+    if (!["intake", "docs-pending"].includes(app.status)) {
+      return res.status(409).json({
+        error: "This application is already being processed — contact your advisor to make changes",
+        code: "NOT_CANCELLABLE",
+      });
+    }
+    const filed = await prisma.visaDocumentChecklistItem.findMany({
+      // Tenant-safe: `app` was just resolved with { id, tenantId, contactId }
+      // above; VisaDocumentChecklistItem has no tenantId of its own (scoped
+      // through its application).
+      // eslint-disable-next-line gbscrm/tenant-scope-finder-heuristic
+      where: { applicationId: id, attachmentKey: { not: null } },
+      select: { attachmentStorage: true, attachmentKey: true },
+    });
+    for (const it of filed) {
+      await visaDocStore.removeDoc({ storage: it.attachmentStorage, key: it.attachmentKey });
+    }
+    await prisma.visaApplication.delete({ where: { id } }); // cascade → checklist items
+    writeAudit(
+      "VisaApplication",
+      "DELETE",
+      id,
+      null,
+      req.portal.tenantId,
+      { via: "portal", portalContactId: req.portal.contactId, status: app.status },
+      { actorType: "portal" },
+    ).catch(() => {});
+    return res.json({ success: true, id });
+  } catch (err) {
+    console.error("[Portal][travel/visa/application DELETE]", err);
+    return res.status(500).json({ error: "Failed to cancel your application" });
   }
 });
 

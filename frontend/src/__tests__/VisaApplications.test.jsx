@@ -1022,3 +1022,47 @@ describe('<VisaApplications /> — filter+pagination interaction (extension)', (
     });
   });
 });
+
+describe('<VisaApplications /> — ?status= deep-link (dashboard KPI drill-down)', () => {
+  it('pre-filters the list from a ?status=approved URL', async () => {
+    const value = { user: ADMIN_USER, token: 'tk', tenant: { id: 1, defaultCurrency: 'INR' }, loading: false };
+    render(
+      <MemoryRouter initialEntries={['/travel/visa/applications?status=approved']}>
+        <AuthContext.Provider value={value}>
+          <VisaApplications />
+        </AuthContext.Provider>
+      </MemoryRouter>,
+    );
+    await waitFor(() => {
+      const getCall = fetchApiMock.mock.calls.find(
+        ([u, o]) =>
+          typeof u === 'string' &&
+          u.startsWith('/api/travel/visa/applications') &&
+          (!o || (o.method || 'GET') === 'GET') &&
+          u.includes('status=approved'),
+      );
+      expect(getCall).toBeTruthy();
+    });
+  });
+
+  it('ignores an unknown ?status= value (loads all, no status filter)', async () => {
+    const value = { user: ADMIN_USER, token: 'tk', tenant: { id: 1, defaultCurrency: 'INR' }, loading: false };
+    render(
+      <MemoryRouter initialEntries={['/travel/visa/applications?status=bogus']}>
+        <AuthContext.Provider value={value}>
+          <VisaApplications />
+        </AuthContext.Provider>
+      </MemoryRouter>,
+    );
+    await waitFor(() => {
+      const getCall = fetchApiMock.mock.calls.find(
+        ([u, o]) =>
+          typeof u === 'string' &&
+          u.startsWith('/api/travel/visa/applications') &&
+          (!o || (o.method || 'GET') === 'GET'),
+      );
+      expect(getCall).toBeTruthy();
+      expect(getCall[0]).not.toContain('status=');
+    });
+  });
+});

@@ -231,3 +231,100 @@ test.describe('#238 — wellness portal verify-otp rejects wrong codes', () => {
     }
   });
 });
+
+// ─── Visa Sure self-serve portal (FR-5/FR-6) ─────────────────────────
+//
+// Customer-facing half of the visa checklist: after the diagnostic the
+// applicant previews the documents they'll need, starts an application
+// (seeds the checklist), and uploads each document. Pins the deterministic
+// HTTP contracts (auth gate, template preview, response shape, validation,
+// multipart 404). The full stateful start → seed → upload → verify flow is
+// covered by the backend live smoke + the TravelCustomerPortal RTL suite.
+// Auth deps: yasin@travelstall.in (travel ADMIN) + ahmed.pilgrim@demo.test
+// (seeded travel portal customer). Gracefully skips if the travel seed is
+// absent on the target stack.
+test.describe('Portal API — Visa Sure self-serve (FR-5/FR-6)', () => {
+  const RUN_TAG = `E2E_PORTAL_VISA_${Date.now()}`;
+  const DEST = `Portalia ${RUN_TAG}`;
+
+  async function staffToken(request) {
+    const r = await request.post(`${API}/auth/login`, {
+      data: { email: 'yasin@travelstall.in', password: 'password123' },
+    });
+    return r.ok() ? (await r.json()).token : null;
+  }
+  async function portalToken(request) {
+    const r = await request.post(`${API}/portal/login`, {
+      data: { email: 'ahmed.pilgrim@demo.test', password: 'password123' },
+    });
+    return r.ok() ? (await r.json()).token : null;
+  }
+
+  test('GET /portal/travel/visa/applications without token → 401 (or 403)', async ({ request }) => {
+    const r = await request.get(`${API}/portal/travel/visa/applications`);
+    expect([401, 403]).toContain(r.status());
+  });
+
+  test('preview + shape + validation + multipart-404 contracts', async ({ request }) => {
+    const sToken = await staffToken(request);
+    const pToken = await portalToken(request);
+    if (!sToken || !pToken) {
+      test.skip(true, 'travel seed / portal customer not present on this stack');
+      return;
+    }
+
+    // Staff seeds a 2-doc template for tourist × DEST (RUN_TAG-unique).
+    const templateIds = [];
+    for (const t of [{ docType: 'Passport', required: true }, { docType: 'Photo', required: false }]) {
+      const c = await request.post(`${API}/travel/visa/checklists`, {
+        headers: { Authorization: `Bearer ${sToken}`, 'Content-Type': 'application/json' },
+        data: { applicationType: 'tourist', destinationCountry: DEST, ...t },
+      });
+      if (c.status() === 201) templateIds.push((await c.json()).id);
+    }
+
+    // Customer previews the same combo → sees exactly the 2 docs.
+    const pv = await request.get(
+      `${API}/portal/travel/visa/checklist-preview?applicationType=tourist&destinationCountry=${encodeURIComponent(DEST)}`,
+      { headers: { Authorization: `Bearer ${pToken}` } },
+    );
+    expect(pv.status()).toBe(200);
+    expect((await pv.json()).items.length).toBe(2);
+
+    // GET applications → 200 with the `applications` array.
+    const ga = await request.get(`${API}/portal/travel/visa/applications`, {
+      headers: { Authorization: `Bearer ${pToken}` },
+    });
+    expect(ga.status()).toBe(200);
+    expect(Array.isArray((await ga.json()).applications)).toBe(true);
+
+    // Validation: bad applicationType → 400 (before any state change).
+    const bad = await request.post(`${API}/portal/travel/visa/applications`, {
+      headers: { Authorization: `Bearer ${pToken}`, 'Content-Type': 'application/json' },
+      data: { applicationType: 'family', destinationCountry: DEST },
+    });
+    expect(bad.status()).toBe(400);
+
+    // Upload to a non-existent checklist item → 404 (ownership check fires
+    // before storage, so no orphan file).
+    const up404 = await request.post(`${API}/portal/travel/visa/documents/999999999/upload`, {
+      headers: { Authorization: `Bearer ${pToken}` },
+      multipart: { file: { name: 'x.png', mimeType: 'image/png', buffer: Buffer.from([0x89, 0x50, 0x4e, 0x47]) } },
+    });
+    expect(up404.status()).toBe(404);
+
+    // Cancel a non-existent application → 404 (ownership-scoped).
+    const cancel404 = await request.delete(`${API}/portal/travel/visa/applications/999999999`, {
+      headers: { Authorization: `Bearer ${pToken}` },
+    });
+    expect(cancel404.status()).toBe(404);
+
+    // Cleanup the templates (any application created by a prior run is durable
+    // demo state, RUN_TAG-tagged for demo-hygiene).
+    for (const id of templateIds) {
+      await request.delete(`${API}/travel/visa/checklists/${id}`, {
+        headers: { Authorization: `Bearer ${sToken}` },
+      });
+    }
+  });
+});

@@ -8,8 +8,11 @@
  * It renders four sections off the joined detail payload: (1) diagnostic
  * answers, (2) AI summary notes placeholder, (3) risk indicators (3 pills:
  * complex case / rejection history / advisor risk flag), and (4) document
- * checklist progress. There are NO action CTAs (no mark-filed / mark-approved
- * controls live on this page yet), so the test pins read-only invariants.
+ * checklist progress. The diagnostic / AI-summary / risk sections are read-
+ * only; the document checklist (FR-6.3) now carries a per-document status
+ * <select> (pending → uploaded → verified | rejected) that PATCHes the
+ * backend — verifying the last required document auto-advances the
+ * application to "Filed" (handled server-side).
  *
  * Cases pinned:
  *   1. Page chrome: heading "Visa application #<id>" + back-link to the
@@ -61,12 +64,12 @@
  *     | 403               — handled by fetchApi-global path (out of scope)
  *
  * Drift pinned (prompt vs. actual SUT code):
- *   - Dispatch prompt said "action CTAs (mark filed, mark approved, etc.)
- *     verify PATCH endpoint". The SUT has NO action CTAs and fires NO
- *     PATCH — it is strictly a read-only view as documented in the SUT
- *     header ("Read-only per-application advisor view"). Scaled tests to
- *     read-only invariants per the dispatch prompt's "If SUT is read-only
- *     (no action CTAs yet), scale down" instruction.
+ *   - The diagnostic / AI-summary / risk-pill sections remain read-only
+ *     (no mark-filed / mark-approved CTAs at the application level). The
+ *     ONLY interactive surface is the document checklist's per-document
+ *     status <select> (FR-6.3), which PATCHes
+ *     /applications/:id/checklist/:itemId and refreshes. Tests pin both the
+ *     read-only invariants AND the checklist PATCH + auto-advance toast.
  *   - Dispatch prompt said "Status badge: renders correct label (intake/
  *     docs-pending/filed/approved/rejected/appeal)". The SUT does NOT
  *     render a StatusBadge component — status is shown as a plain
@@ -108,7 +111,7 @@
  * touches a different test file; no path collision.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 
 const fetchApiMock = vi.fn();
@@ -314,19 +317,77 @@ describe('<VisaAdvisorDashboard /> — successful render with diagnostic + check
     ).toBeInTheDocument();
   });
 
-  it('renders empty-checklist copy when documentChecklist has no required items', async () => {
+  it('lists an optional-only checklist (item + status control, no progress bar)', async () => {
+    // FR-6.3 — the section now lists EVERY document, not just required ones.
+    // An optional-only checklist renders the item + its status <select>, has
+    // no required-progress bar, and is NOT the "no items recorded" empty state.
     installFetchMock(
       makeDetail({
         documentChecklist: [
-          // Only optional items — filtered out by requiredItems gate.
           { id: 1, docType: 'cover-letter', required: false, status: 'pending' },
         ],
       }),
     );
     renderPage();
+    expect(await screen.findByTestId('doc-item-1')).toBeInTheDocument();
+    expect(screen.getByTestId('doc-status-1')).toBeInTheDocument();
+    expect(
+      screen.queryByText(/No document checklist items recorded/i),
+    ).toBeNull();
+    expect(screen.queryByRole('progressbar')).toBeNull();
+  });
+
+  it('renders the empty-checklist copy when documentChecklist is empty', async () => {
+    installFetchMock(makeDetail({ documentChecklist: [] }));
+    renderPage();
     expect(
       await screen.findByText(/No document checklist items recorded/i),
     ).toBeInTheDocument();
+  });
+});
+
+describe('<VisaAdvisorDashboard /> — document checklist status controls (FR-6.3)', () => {
+  it('changing a document status PATCHes /checklist/:itemId with the new status', async () => {
+    // makeDetail() → item id=2 ("photo") is required + currently pending.
+    let patchCall = null;
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (typeof url === 'string' && url.includes('/checklist/')) {
+        patchCall = { url, opts };
+        return Promise.resolve({ item: { id: 2, status: 'verified' } });
+      }
+      if (typeof url === 'string' && url.startsWith('/api/travel/visa/applications/')) {
+        return Promise.resolve(makeDetail());
+      }
+      return Promise.resolve(null);
+    });
+    renderPage();
+    const select = await screen.findByTestId('doc-status-2');
+    fireEvent.change(select, { target: { value: 'verified' } });
+    await waitFor(() => expect(patchCall).toBeTruthy());
+    expect(patchCall.url).toBe('/api/travel/visa/applications/301/checklist/2');
+    expect(patchCall.opts.method).toBe('PATCH');
+    expect(JSON.parse(patchCall.opts.body).status).toBe('verified');
+  });
+
+  it('toasts success when the PATCH response reports the application auto-advanced', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (typeof url === 'string' && url.includes('/checklist/')) {
+        // Backend signals the application moved docs-pending → filed.
+        return Promise.resolve({ item: { id: 2, status: 'verified' }, applicationStatus: 'filed' });
+      }
+      if (typeof url === 'string' && url.startsWith('/api/travel/visa/applications/')) {
+        return Promise.resolve(makeDetail());
+      }
+      return Promise.resolve(null);
+    });
+    renderPage();
+    const select = await screen.findByTestId('doc-status-2');
+    fireEvent.change(select, { target: { value: 'verified' } });
+    await waitFor(() =>
+      expect(notifySuccess).toHaveBeenCalledWith(
+        expect.stringMatching(/advanced to Filed/i),
+      ),
+    );
   });
 });
 
@@ -427,5 +488,64 @@ describe('<VisaAdvisorDashboard /> — error handling', () => {
     expect(
       screen.queryByText(/not found, or you do not have access/i),
     ).toBeNull();
+  });
+});
+
+describe('<VisaAdvisorDashboard /> — application status control', () => {
+  it('changing the status PATCHes /applications/:id with the new status', async () => {
+    let patchCall = null;
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (
+        typeof url === 'string' &&
+        /\/applications\/\d+$/.test(url) &&
+        opts &&
+        opts.method === 'PATCH'
+      ) {
+        patchCall = { url, opts };
+        return Promise.resolve({ id: 301, status: 'docs-pending' });
+      }
+      if (typeof url === 'string' && url.startsWith('/api/travel/visa/applications/')) {
+        return Promise.resolve(makeDetail({ status: 'intake' }));
+      }
+      return Promise.resolve(null);
+    });
+    renderPage();
+    const sel = await screen.findByTestId('application-status');
+    fireEvent.change(sel, { target: { value: 'docs-pending' } });
+    await waitFor(() => expect(patchCall).toBeTruthy());
+    expect(patchCall.url).toBe('/api/travel/visa/applications/301');
+    expect(patchCall.opts.method).toBe('PATCH');
+    expect(JSON.parse(patchCall.opts.body).status).toBe('docs-pending');
+  });
+});
+
+describe('<VisaAdvisorDashboard /> — add ad-hoc checklist document', () => {
+  it('adding a document POSTs /applications/:id/checklist then refreshes', async () => {
+    let postCall = null;
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (
+        typeof url === 'string' &&
+        /\/applications\/\d+\/checklist$/.test(url) &&
+        opts &&
+        opts.method === 'POST'
+      ) {
+        postCall = { url, opts };
+        return Promise.resolve({ item: { id: 99, docType: 'Bank statement', required: true, status: 'pending' } });
+      }
+      if (typeof url === 'string' && url.startsWith('/api/travel/visa/applications/')) {
+        return Promise.resolve(makeDetail());
+      }
+      return Promise.resolve(null);
+    });
+    renderPage();
+    const input = await screen.findByTestId('add-doc-type');
+    fireEvent.change(input, { target: { value: 'Bank statement' } });
+    fireEvent.click(screen.getByTestId('add-doc-submit'));
+    await waitFor(() => expect(postCall).toBeTruthy());
+    expect(postCall.url).toBe('/api/travel/visa/applications/301/checklist');
+    expect(postCall.opts.method).toBe('POST');
+    const body = JSON.parse(postCall.opts.body);
+    expect(body.docType).toBe('Bank statement');
+    expect(body.required).toBe(true);
   });
 });

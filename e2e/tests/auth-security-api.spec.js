@@ -297,3 +297,45 @@ test.describe('Auth/Security — OTP SMS not in staff feeds (#254, #269)', () =>
     ).toEqual([]);
   });
 });
+
+// ─── Email OTP for self-service registration (org signup + customer reg) ──
+//
+// Pins: /email-otp/request validation; the request→verify happy path returns
+// a verificationToken; and a tampered token is rejected at register (403) so
+// NO org/user is created without a real verified-email token. The full verify
+// leg runs only when SendGrid is unconfigured (CI/dev surface the devCode);
+// it gracefully skips when a real key is configured.
+test.describe('Email OTP for self-service registration', () => {
+  const RUN = `otp.e2e.${Date.now()}@example.com`;
+
+  test('request validates email + purpose (400 on bad input)', async ({ request }) => {
+    const badEmail = await request.post(`${API}/auth/email-otp/request`, { data: { email: 'nope', purpose: 'signup' } });
+    expect(badEmail.status()).toBe(400);
+    const badPurpose = await request.post(`${API}/auth/email-otp/request`, { data: { email: RUN, purpose: 'bogus' } });
+    expect(badPurpose.status()).toBe(400);
+  });
+
+  test('request → verify returns a verificationToken (wrong code 400)', async ({ request }) => {
+    const reqRes = await request.post(`${API}/auth/email-otp/request`, { data: { email: RUN, purpose: 'signup' } });
+    expect(reqRes.status()).toBe(201);
+    const body = await reqRes.json();
+    if (!body.devCode) {
+      test.skip(true, 'SendGrid configured — code not surfaced; verify leg not exercised here');
+      return;
+    }
+    const wrong = await request.post(`${API}/auth/email-otp/verify`, { data: { email: RUN, purpose: 'signup', code: '000000' } });
+    expect(wrong.status()).toBe(400);
+    const ok = await request.post(`${API}/auth/email-otp/verify`, { data: { email: RUN, purpose: 'signup', code: body.devCode } });
+    expect(ok.status()).toBe(200);
+    const vbody = await ok.json();
+    expect(vbody.verified).toBe(true);
+    expect(typeof vbody.verificationToken).toBe('string');
+  });
+
+  test('register with a tampered verificationToken → 403 (no org created)', async ({ request }) => {
+    const r = await request.post(`${API}/auth/register`, {
+      data: { email: RUN, password: 'Password123', name: 'X', organizationName: `OTP E2E ${Date.now()}`, vertical: 'generic', verificationToken: 'tampered.not.a.jwt' },
+    });
+    expect(r.status()).toBe(403);
+  });
+});

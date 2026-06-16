@@ -46,7 +46,7 @@
  * Travel list page) for consistency with the rest of the vertical.
  */
 import { useContext, useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { FileText, Filter, AlertTriangle, ShieldAlert, Layers, Plus, X } from 'lucide-react';
 import { fetchApi } from '../../../utils/api';
 import { useNotify } from '../../../utils/notify';
@@ -201,7 +201,13 @@ export default function VisaApplications() {
   const [applications, setApplications] = useState([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [status, setStatus] = useState('');
+  // Honor a ?status= deep-link (e.g. from the dashboard KPI tiles); ignore
+  // unknown values so a bad URL just shows all.
+  const [searchParams] = useSearchParams();
+  const initialStatus = STATUSES.some((s) => s.value && s.value === searchParams.get('status'))
+    ? searchParams.get('status')
+    : '';
+  const [status, setStatus] = useState(initialStatus);
   const [offset, setOffset] = useState(0);
 
   // Create-drawer state.

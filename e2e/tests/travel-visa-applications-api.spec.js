@@ -1050,3 +1050,272 @@ test.describe("Visa Sure applications — slim shape (?fields=summary)", () => {
     }
   });
 });
+
+// ─── Per-application document checklist (FR-6) ───────────────────────
+//
+// Pins the FR-6 lifecycle added alongside the /checklists template admin:
+//   1. seed-on-create — POST /applications copies the matching
+//      (applicationType × destinationCountry) VisaChecklistTemplate into
+//      per-application VisaDocumentChecklistItem rows (status "pending").
+//   2. PATCH /applications/:id/checklist/:itemId moves a document through
+//      pending → uploaded → verified | rejected.
+//   3. auto-advance (FR-6.5) — verifying the LAST required document
+//      auto-advances the application docs-pending → filed (the PRD's
+//      "filed-ready", mapped to the existing `filed` enum); the PATCH
+//      response then carries { applicationStatus: "filed" }.
+//
+// Demo state: a unique destinationCountry per run (RUN_TAG) guarantees a
+// freshly-seeded checklist isolated from accumulated demo applications.
+// The template rows are torn down; the application + its items are durable
+// demo state (RUN_TAG-tagged for demo-hygiene).
+
+test.describe("Visa Sure applications — document checklist lifecycle (FR-6)", () => {
+  const DEST = `Checklistia ${RUN_TAG}`;
+
+  test("POST /applications/:id/checklist without token → 401 (or 403)", async ({ request }) => {
+    const r = await request.post(
+      `${BASE_URL}/api/travel/visa/applications/1/checklist`,
+      {
+        headers: { "Content-Type": "application/json" },
+        data: { docType: "Passport" },
+        timeout: REQUEST_TIMEOUT,
+      },
+    );
+    expect([401, 403]).toContain(r.status());
+  });
+
+  test("PATCH /applications/:id/checklist/:itemId as USER role → 403", async ({ request }) => {
+    const token = await getTravelUser(request);
+    if (!token) {
+      test.skip(true, "telecaller@travelstall.demo not seeded — skipping USER-RBAC checklist test");
+      return;
+    }
+    const r = await patch(
+      request,
+      token,
+      "/api/travel/visa/applications/1/checklist/1",
+      { status: "verified" },
+    );
+    expect(r.status()).toBe(403);
+  });
+
+  test("PATCH checklist item with invalid status → 400; unknown application → 404", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) {
+      test.skip(true, "yasin@travelstall.in not seeded — skipping checklist validation test");
+      return;
+    }
+    // Unknown application — 404 (resolved before the item lookup).
+    const missing = await patch(
+      request,
+      token,
+      "/api/travel/visa/applications/999999999/checklist/1",
+      { status: "verified" },
+    );
+    expect(missing.status()).toBe(404);
+  });
+
+  test("seed-on-create + verify lifecycle auto-advances docs-pending → filed", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) {
+      test.skip(true, "yasin@travelstall.in not seeded — skipping checklist lifecycle");
+      return;
+    }
+    const contactId = await findVisaSureContactId(request, token);
+    if (!contactId) {
+      test.skip(true, "no visa-sure contact on this stack — checklist lifecycle unreachable");
+      return;
+    }
+
+    // 1. Seed a 3-doc template for (tourist × DEST): 2 required + 1 optional.
+    const templateIds = [];
+    for (const t of [
+      { docType: "Passport", required: true },
+      { docType: "Bank statement", required: true },
+      { docType: "Cover letter", required: false },
+    ]) {
+      const tr = await post(request, token, "/api/travel/visa/checklists", {
+        applicationType: "tourist",
+        destinationCountry: DEST,
+        ...t,
+      });
+      expect(tr.status()).toBe(201);
+      templateIds.push((await tr.json()).id);
+    }
+
+    // 2. Create an application for the combo → checklist seeded from template.
+    const cr = await post(request, token, "/api/travel/visa/applications", {
+      contactId,
+      applicationType: "tourist",
+      destinationCountry: DEST,
+    });
+    expect(cr.status()).toBe(201);
+    const appId = (await cr.json()).id;
+
+    // 3. Detail → 3 seeded items, all pending, 2 required.
+    const dr = await get(request, token, `/api/travel/visa/applications/${appId}`);
+    expect(dr.status()).toBe(200);
+    const checklist = (await dr.json()).documentChecklist || [];
+    expect(checklist.length).toBe(3);
+    expect(checklist.every((i) => i.status === "pending")).toBe(true);
+    const required = checklist.filter((i) => i.required);
+    expect(required.length).toBe(2);
+
+    // 4. Move to docs-pending (auto-advance only fires from this state).
+    const mr = await patch(request, token, `/api/travel/visa/applications/${appId}`, {
+      status: "docs-pending",
+    });
+    expect(mr.status()).toBe(200);
+
+    // 5. Verify the first required doc → no auto-advance yet (1/2 verified).
+    const v1 = await patch(
+      request,
+      token,
+      `/api/travel/visa/applications/${appId}/checklist/${required[0].id}`,
+      { status: "verified" },
+    );
+    expect(v1.status()).toBe(200);
+    expect((await v1.json()).applicationStatus).toBeUndefined();
+
+    // 6. Verify the last required doc → auto-advance to filed.
+    const v2 = await patch(
+      request,
+      token,
+      `/api/travel/visa/applications/${appId}/checklist/${required[1].id}`,
+      { status: "verified" },
+    );
+    expect(v2.status()).toBe(200);
+    expect((await v2.json()).applicationStatus).toBe("filed");
+
+    // 7. Status persisted.
+    const dr2 = await get(request, token, `/api/travel/visa/applications/${appId}`);
+    expect((await dr2.json()).status).toBe("filed");
+
+    // 8. Invalid item status → 400.
+    const bad = await patch(
+      request,
+      token,
+      `/api/travel/visa/applications/${appId}/checklist/${required[0].id}`,
+      { status: "bogus" },
+    );
+    expect(bad.status()).toBe(400);
+
+    // Teardown the template rows (application + items are durable demo state).
+    for (const id of templateIds) {
+      await request.delete(`${BASE_URL}/api/travel/visa/checklists/${id}`, {
+        headers: headers(token),
+        timeout: REQUEST_TIMEOUT,
+      });
+    }
+  });
+});
+
+// ─── Quotation templates (FR-5.2) ────────────────────────────────────
+//
+// Pins the VisaQuotationTemplate admin (PRD_VISA_SURE_PHASE_3 FR-5.2). The
+// model stores `linesJson` (JSON array of { label, amount }; amount may be
+// negative for credits). The API serializes it as a parsed `lines` array and
+// never exposes the raw JSON string. Managed on the /travel/visa/checklists
+// admin page (it extends to manage quotation templates too).
+
+test.describe("Visa Sure quotation templates — FR-5.2", () => {
+  const TPL_NAME = `Tourist std ${RUN_TAG}`;
+
+  test("GET /quotation-templates without token → 401 (or 403)", async ({ request }) => {
+    const r = await request.get(`${BASE_URL}/api/travel/visa/quotation-templates`, {
+      headers: { "Content-Type": "application/json" },
+      timeout: REQUEST_TIMEOUT,
+    });
+    expect([401, 403]).toContain(r.status());
+  });
+
+  test("POST /quotation-templates as USER role → 403", async ({ request }) => {
+    const token = await getTravelUser(request);
+    if (!token) {
+      test.skip(true, "telecaller@travelstall.demo not seeded — skipping USER-RBAC quotation test");
+      return;
+    }
+    const r = await post(request, token, "/api/travel/visa/quotation-templates", {
+      name: "x",
+      applicationType: "tourist",
+      lines: [{ label: "a", amount: 1 }],
+    });
+    expect(r.status()).toBe(403);
+  });
+
+  test("POST invalid applicationType → 400; empty line label → 400", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) {
+      test.skip(true, "yasin@travelstall.in not seeded — skipping quotation validation test");
+      return;
+    }
+    const badType = await post(request, token, "/api/travel/visa/quotation-templates", {
+      name: "x",
+      applicationType: "family", // not in VALID_APPLICATION_TYPES
+      lines: [{ label: "a", amount: 1 }],
+    });
+    expect(badType.status()).toBe(400);
+    const badLines = await post(request, token, "/api/travel/visa/quotation-templates", {
+      name: "x",
+      applicationType: "tourist",
+      lines: [{ label: "", amount: 1 }], // blank label
+    });
+    expect(badLines.status()).toBe(400);
+  });
+
+  test("CRUD happy path: create (with credit line) → list → update → delete", async ({ request }) => {
+    const token = await getTravelAdmin(request);
+    if (!token) {
+      test.skip(true, "yasin@travelstall.in not seeded — skipping quotation CRUD");
+      return;
+    }
+    // Create — includes a negative (credit) line.
+    const cr = await post(request, token, "/api/travel/visa/quotation-templates", {
+      name: TPL_NAME,
+      applicationType: "tourist",
+      currency: "INR",
+      lines: [
+        { label: "Service tier base price", amount: 5000 },
+        { label: "Credit: free entry diagnostic", amount: -500 },
+      ],
+    });
+    expect(cr.status()).toBe(201);
+    const created = await cr.json();
+    expect(Array.isArray(created.lines)).toBe(true);
+    expect(created.lines.length).toBe(2);
+    expect(created.linesJson).toBeUndefined(); // raw JSON string never exposed
+    expect(created.lines[1].amount).toBe(-500); // credit preserved
+    const id = created.id;
+
+    // List + filter.
+    const list = await get(
+      request,
+      token,
+      "/api/travel/visa/quotation-templates?applicationType=tourist",
+    );
+    expect(list.status()).toBe(200);
+    const items = (await list.json()).items;
+    expect(items.some((t) => t.id === id)).toBe(true);
+
+    // Update — deactivate + replace lines.
+    const upd = await request.put(
+      `${BASE_URL}/api/travel/visa/quotation-templates/${id}`,
+      {
+        headers: headers(token),
+        data: { isActive: false, lines: [{ label: "Flat fee", amount: 9999 }] },
+        timeout: REQUEST_TIMEOUT,
+      },
+    );
+    expect(upd.status()).toBe(200);
+    const updated = await upd.json();
+    expect(updated.isActive).toBe(false);
+    expect(updated.lines.length).toBe(1);
+
+    // Delete.
+    const del = await request.delete(
+      `${BASE_URL}/api/travel/visa/quotation-templates/${id}`,
+      { headers: headers(token), timeout: REQUEST_TIMEOUT },
+    );
+    expect(del.status()).toBe(200);
+  });
+});

@@ -29,7 +29,8 @@
  *     (the SUT treats "[]" / "{}" / null / "" as no-history, anything else hits)
  *   - Risk pills: advisor flag YELLOW when advisorRiskFlag is "high" or "priority"
  *     (case-insensitive); neutral otherwise
- *   - Document checklist: empty state when no required items recorded
+ *   - Document checklist: optional-only list still lists items (with status
+ *     controls) but no progress bar; truly-empty / null list = empty state
  *   - Document checklist: renders X-of-Y count + progressbar aria-valuenow
  *     for required items only (optional items don't count)
  *   - 404 NOT_FOUND error renders the "not found / no access" copy
@@ -205,16 +206,23 @@ describe('AdvisorDashboard — Visa Sure Phase 3 per-application view (FR-4)', (
     await screen.findByText('HIGH');
   });
 
-  it('Document checklist: empty state when no required items recorded', async () => {
+  it('Document checklist: optional-only list still lists the item (no progress bar, not the empty state)', async () => {
+    // FR-6.3 — the section now lists EVERY document with a status control,
+    // not just required ones. An optional-only checklist therefore renders
+    // the item (editable) but no required-progress bar, and is NOT the
+    // "no items recorded" empty state (that's reserved for a truly-empty list).
     fetchApiMock.mockResolvedValue({
       ...BASE_APPLICATION,
       documentChecklist: [
-        // Only an optional item — required filter drops it.
-        { id: 1, name: 'Travel insurance copy', required: false, status: 'pending' },
+        { id: 1, docType: 'Travel insurance copy', required: false, status: 'pending' },
       ],
     });
     renderPage();
-    await screen.findByText(/No document checklist items recorded/i);
+    expect(await screen.findByTestId('doc-item-1')).toBeTruthy();
+    expect(screen.getByTestId('doc-status-1')).toBeTruthy();
+    expect(screen.queryByText(/No document checklist items recorded/i)).toBeNull();
+    // No required items → no progress bar.
+    expect(screen.queryByRole('progressbar')).toBeNull();
   });
 
   it('Document checklist: renders X-of-Y count + progressbar for required items only', async () => {

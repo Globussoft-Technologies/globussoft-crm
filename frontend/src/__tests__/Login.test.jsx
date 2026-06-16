@@ -299,6 +299,49 @@ describe('<Login /> — page surface', () => {
     expect(navigateMock).not.toHaveBeenCalled();
   });
 
+  it('falls back to the customer portal when staff login 401s but the portal login succeeds', async () => {
+    localStorage.clear();
+    global.fetch.mockImplementation((url) => {
+      if (url === '/api/auth/login') return fetchResponse({ error: 'Invalid credentials' }, 401);
+      if (url === '/api/portal/login') {
+        return fetchResponse({ token: 'portal-jwt', contact: { id: 65, name: 'Ahmed Khan', email: 'ahmed.pilgrim@demo.test' } });
+      }
+      return fetchResponse({}, 404);
+    });
+    renderLogin();
+
+    fillCredentials('ahmed.pilgrim@demo.test');
+    fireEvent.click(screen.getByRole('button', { name: /Sign In$/i }));
+
+    // Hands off to the travel portal page.
+    await waitFor(() => expect(navigateMock).toHaveBeenCalledWith('/travel/portal'));
+    // Portal token persisted under the keys TravelCustomerPortal reads.
+    expect(localStorage.getItem('portalToken')).toBe('portal-jwt');
+    expect(JSON.parse(localStorage.getItem('portalContact')).email).toBe('ahmed.pilgrim@demo.test');
+    // Staff auth context is NOT seeded — portal is a separate system.
+    expect(setUserMock).not.toHaveBeenCalled();
+    expect(setTokenMock).not.toHaveBeenCalled();
+    // Both endpoints were attempted, staff first.
+    expect(global.fetch.mock.calls.some(([u]) => u === '/api/portal/login')).toBe(true);
+  });
+
+  it('shows the error when BOTH staff and portal login fail', async () => {
+    localStorage.clear();
+    global.fetch.mockImplementation((url) => {
+      if (url === '/api/auth/login') return fetchResponse({ error: 'Invalid credentials' }, 401);
+      if (url === '/api/portal/login') return fetchResponse({ error: 'Invalid credentials' }, 401);
+      return fetchResponse({}, 404);
+    });
+    renderLogin();
+
+    fillCredentials('nobody@example.com');
+    fireEvent.click(screen.getByRole('button', { name: /Sign In$/i }));
+
+    expect(await screen.findByText(/Invalid credentials/i)).toBeInTheDocument();
+    expect(navigateMock).not.toHaveBeenCalled();
+    expect(localStorage.getItem('portalToken')).toBeNull();
+  });
+
   it('network rejection surfaces the "Server error" copy', async () => {
     global.fetch.mockImplementation(() => Promise.reject(new Error('ECONNREFUSED')));
     renderLogin();

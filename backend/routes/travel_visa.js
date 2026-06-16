@@ -122,6 +122,16 @@ const VALID_APPLICATION_TYPES = [
 // string (normalized to null before write).
 const VALID_RISK_FLAGS = ["low", "medium", "high", "priority"];
 
+// Per-application document-checklist item lifecycle (FR-6.3). Pinned to
+// `model VisaDocumentChecklistItem.status` schema comment: `pending |
+// uploaded | verified | rejected`.
+const VALID_CHECKLIST_ITEM_STATUSES = [
+  "pending",
+  "uploaded",
+  "verified",
+  "rejected",
+];
+
 // Map status enum value → per-month rollup field name. Used by the
 // /applications/by-month endpoint to split monthly counts by status
 // across all 6 enum values. Mirrors STATUS_FIELD in
@@ -135,6 +145,161 @@ const STATUS_FIELD = {
   rejected: "rejectedCount",
   appeal: "appealCount",
 };
+
+// ─── FR-6 document-checklist lifecycle helpers ──────────────────────
+//
+// These tie the canonical /checklists TEMPLATE admin (VisaChecklistTemplate)
+// to a created application's live per-document checklist
+// (VisaDocumentChecklistItem):
+//   1. seedChecklistFromTemplates() copies the matching template into
+//      per-application rows at create time (FR-6.2).
+//   2. resolveVisaApplication() is the shared tenant + sub-brand guard
+//      reused by the per-application checklist routes.
+//   3. maybeAdvanceOnChecklist() auto-advances the application status when
+//      every REQUIRED document reaches "verified" (FR-6.5).
+
+// Copy the canonical checklist template for (applicationType ×
+// destinationCountry) into per-application VisaDocumentChecklistItem rows
+// (status defaults to "pending"). Returns the number of rows seeded;
+// no-ops cleanly (returns 0) when no template exists for the combo.
+async function seedChecklistFromTemplates({
+  applicationId,
+  tenantId,
+  applicationType,
+  destinationCountry,
+}) {
+  const templates = await prisma.visaChecklistTemplate.findMany({
+    where: { tenantId, applicationType, destinationCountry },
+    orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
+    select: { docType: true, required: true, notes: true },
+  });
+  if (templates.length === 0) return 0;
+  await prisma.visaDocumentChecklistItem.createMany({
+    data: templates.map((t) => ({
+      applicationId,
+      docType: t.docType,
+      required: t.required,
+      status: "pending",
+      notes: t.notes || null,
+    })),
+  });
+  return templates.length;
+}
+
+// Resolve a Visa Sure application with tenant + sub-brand isolation.
+// Returns { app } on success or { error: { status, body } } for the caller
+// to relay. Mirrors the inline guard used by GET/PATCH /applications/:id.
+async function resolveVisaApplication(id, tenantId) {
+  const app = await prisma.visaApplication.findFirst({
+    where: { id, tenantId },
+    select: {
+      id: true,
+      contactId: true,
+      status: true,
+      applicationType: true,
+      destinationCountry: true,
+    },
+  });
+  if (!app) {
+    return {
+      error: {
+        status: 404,
+        body: { error: "Visa application not found", code: "NOT_FOUND" },
+      },
+    };
+  }
+  const contact = await prisma.contact.findFirst({
+    where: { id: app.contactId, tenantId },
+    select: { id: true, subBrand: true },
+  });
+  if (!contact || contact.subBrand !== VISA_SUB_BRAND) {
+    return {
+      error: {
+        status: 404,
+        body: { error: "Visa application not found", code: "NOT_VISA_SURE" },
+      },
+    };
+  }
+  return { app };
+}
+
+// FR-6.5 — when every REQUIRED document on an application reaches
+// "verified", auto-advance the application from docs-pending → filed.
+// NOTE: the PRD names this target state "filed-ready"; VisaApplication.status
+// has no such enum value, so we land on the closest existing state, `filed`
+// (advisors can move it back via PATCH /applications/:id). Fires ONLY from
+// docs-pending, only when there is ≥1 required item, and never downgrades.
+// Best-effort audit + status-changed event + tenant notification (all
+// non-blocking). Returns { advanced, newStatus? }.
+async function maybeAdvanceOnChecklist({ applicationId, tenantId, actorUserId }) {
+  const app = await prisma.visaApplication.findFirst({
+    where: { id: applicationId, tenantId },
+    select: { id: true, status: true, contactId: true },
+  });
+  if (!app || app.status !== "docs-pending") return { advanced: false };
+
+  // Tenant-safe: the parent application was just re-loaded tenant-scoped
+  // above (where: { id, tenantId }) and every caller resolves it via
+  // resolveVisaApplication(id, tenantId) first; VisaDocumentChecklistItem
+  // has no tenantId column of its own (scoped through its application).
+  const required = await prisma.visaDocumentChecklistItem.findMany({
+    // eslint-disable-next-line gbscrm/tenant-scope-finder-heuristic
+    where: { applicationId, required: true },
+    select: { status: true },
+  });
+  if (required.length === 0) return { advanced: false };
+  if (!required.every((r) => r.status === "verified")) return { advanced: false };
+
+  await prisma.visaApplication.update({
+    where: { id: applicationId },
+    data: { status: "filed" },
+  });
+
+  writeAudit("VisaApplication", "UPDATE", applicationId, actorUserId, tenantId, {
+    subBrand: VISA_SUB_BRAND,
+    changedFields: ["status"],
+    autoAdvanced: true,
+    reason: "all-required-documents-verified",
+    fromStatus: "docs-pending",
+    toStatus: "filed",
+  }).catch(() => {});
+
+  try {
+    const { safeEmitEvent } = require("../lib/eventBus");
+    safeEmitEvent(
+      "visa.status_changed",
+      {
+        id: applicationId,
+        contactId: app.contactId,
+        subBrand: VISA_SUB_BRAND,
+        oldStatus: "docs-pending",
+        newStatus: "filed",
+        tenantId,
+        auto: true,
+        changedAt: new Date().toISOString(),
+      },
+      tenantId,
+      "travel-visa/checklist-auto-advance",
+    );
+  } catch {
+    /* best-effort — event emission must never fail the request */
+  }
+
+  try {
+    const { notifyTenant } = require("../lib/notificationService");
+    notifyTenant({
+      tenantId,
+      title: "Visa application ready to file",
+      message: `Application #${applicationId}: all required documents verified — advanced to Filed.`,
+      type: "info",
+      link: `/travel/visa/applications/${applicationId}`,
+    }).catch(() => {});
+  } catch {
+    /* best-effort — notification must never fail the request */
+  }
+
+  return { advanced: true, newStatus: "filed" };
+}
 
 // ─── GET /api/travel/visa/applications ──────────────────────────────
 //
@@ -1593,6 +1758,24 @@ router.post(
         },
       });
 
+      // FR-6.2 — seed this application's live document checklist from the
+      // canonical (applicationType × destinationCountry) template. Best-
+      // effort: a seeding failure must never fail the create (the advisor
+      // can still add documents by hand on the detail page).
+      try {
+        await seedChecklistFromTemplates({
+          applicationId: created.id,
+          tenantId,
+          applicationType,
+          destinationCountry,
+        });
+      } catch (seedErr) {
+        console.error(
+          "[travel-visa/create] checklist seed failed:",
+          seedErr.message,
+        );
+      }
+
       // Best-effort audit — never blocks the response.
       writeAudit(
         "VisaApplication",
@@ -2569,6 +2752,567 @@ router.post(
         error: "Failed to enrol application in recovery program",
         code: "INTERNAL_ERROR",
       });
+    }
+  },
+);
+
+// ============================================================================
+// Document-checklist TEMPLATE admin (PRD_VISA_SURE_PHASE_3 FR-6.1).
+// Manage the canonical per-applicationType × destinationCountry document lists
+// surfaced at /travel/visa/checklists. NOTE: the literal /checklists/template
+// route is declared BEFORE any /checklists/:id route so Express's
+// order-of-definition matching never treats "template" as an :id.
+// ============================================================================
+
+// GET /checklists — list all checklist-template rows for the tenant. Optional
+// ?applicationType + ?destinationCountry filters. ADMIN/MANAGER/USER (read).
+router.get(
+  "/checklists",
+  verifyRole(["ADMIN", "MANAGER", "USER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const where = { tenantId: req.travelTenant.id };
+      if (req.query.applicationType) where.applicationType = String(req.query.applicationType);
+      if (req.query.destinationCountry) where.destinationCountry = String(req.query.destinationCountry);
+      const items = await prisma.visaChecklistTemplate.findMany({
+        where,
+        orderBy: [
+          { applicationType: "asc" },
+          { destinationCountry: "asc" },
+          { sortOrder: "asc" },
+          { id: "asc" },
+        ],
+      });
+      return res.json({ items });
+    } catch (e) {
+      console.error("[travel-visa] checklists list error:", e.message);
+      return res.status(500).json({ error: "Failed to load checklist templates" });
+    }
+  },
+);
+
+// GET /checklists/template?applicationType=&destinationCountry= — canonical
+// checklist for one combo (FR-6.1 consumer). Both params required.
+router.get(
+  "/checklists/template",
+  verifyRole(["ADMIN", "MANAGER", "USER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const applicationType = String(req.query.applicationType || "").trim();
+      const destinationCountry = String(req.query.destinationCountry || "").trim();
+      if (!applicationType || !destinationCountry) {
+        return res.status(400).json({
+          error: "applicationType and destinationCountry are required",
+          code: "MISSING_FIELDS",
+        });
+      }
+      const items = await prisma.visaChecklistTemplate.findMany({
+        where: { tenantId: req.travelTenant.id, applicationType, destinationCountry },
+        orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
+      });
+      return res.json({ applicationType, destinationCountry, items });
+    } catch (e) {
+      console.error("[travel-visa] checklist template error:", e.message);
+      return res.status(500).json({ error: "Failed to load checklist template" });
+    }
+  },
+);
+
+// POST /checklists — create a template item. ADMIN/MANAGER.
+router.post(
+  "/checklists",
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const body = req.body || {};
+      const applicationType = typeof body.applicationType === "string" ? body.applicationType.trim() : "";
+      const destinationCountry = typeof body.destinationCountry === "string" ? body.destinationCountry.trim() : "";
+      const docType = typeof body.docType === "string" ? body.docType.trim() : "";
+      if (!VALID_APPLICATION_TYPES.includes(applicationType)) {
+        return res.status(400).json({
+          error: `applicationType must be one of: ${VALID_APPLICATION_TYPES.join(", ")}`,
+          code: "INVALID_APPLICATION_TYPE",
+        });
+      }
+      if (!destinationCountry || destinationCountry.length > 200) {
+        return res.status(400).json({ error: "destinationCountry is required (1..200 chars)", code: "INVALID_DESTINATION" });
+      }
+      if (!docType || docType.length > 200) {
+        return res.status(400).json({ error: "docType is required (1..200 chars)", code: "MISSING_FIELDS" });
+      }
+      const created = await prisma.visaChecklistTemplate.create({
+        data: {
+          tenantId: req.travelTenant.id,
+          applicationType,
+          destinationCountry,
+          docType,
+          required: body.required === undefined ? true : !!body.required,
+          sortOrder: Number.isFinite(Number(body.sortOrder)) ? Number(body.sortOrder) : 0,
+          notes: typeof body.notes === "string" ? body.notes : null,
+        },
+      });
+      return res.status(201).json(created);
+    } catch (e) {
+      console.error("[travel-visa] checklist create error:", e.message);
+      return res.status(500).json({ error: "Failed to create checklist item" });
+    }
+  },
+);
+
+// PUT /checklists/:id — update a template item (tenant-scoped). ADMIN/MANAGER.
+router.put(
+  "/checklists/:id",
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+      const existing = await prisma.visaChecklistTemplate.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+        select: { id: true },
+      });
+      if (!existing) return res.status(404).json({ error: "Checklist item not found", code: "NOT_FOUND" });
+
+      const body = req.body || {};
+      const data = {};
+      if (body.applicationType !== undefined) {
+        if (!VALID_APPLICATION_TYPES.includes(String(body.applicationType))) {
+          return res.status(400).json({ error: `applicationType must be one of: ${VALID_APPLICATION_TYPES.join(", ")}`, code: "INVALID_APPLICATION_TYPE" });
+        }
+        data.applicationType = String(body.applicationType);
+      }
+      if (body.destinationCountry !== undefined) {
+        const d = String(body.destinationCountry).trim();
+        if (!d || d.length > 200) return res.status(400).json({ error: "destinationCountry must be 1..200 chars", code: "INVALID_DESTINATION" });
+        data.destinationCountry = d;
+      }
+      if (body.docType !== undefined) {
+        const d = String(body.docType).trim();
+        if (!d || d.length > 200) return res.status(400).json({ error: "docType must be 1..200 chars", code: "MISSING_FIELDS" });
+        data.docType = d;
+      }
+      if (body.required !== undefined) data.required = !!body.required;
+      if (body.sortOrder !== undefined && Number.isFinite(Number(body.sortOrder))) data.sortOrder = Number(body.sortOrder);
+      if (body.notes !== undefined) data.notes = typeof body.notes === "string" ? body.notes : null;
+
+      const updated = await prisma.visaChecklistTemplate.update({ where: { id }, data });
+      return res.json(updated);
+    } catch (e) {
+      console.error("[travel-visa] checklist update error:", e.message);
+      return res.status(500).json({ error: "Failed to update checklist item" });
+    }
+  },
+);
+
+// DELETE /checklists/:id — remove a template item (tenant-scoped). ADMIN/MANAGER.
+router.delete(
+  "/checklists/:id",
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+      const existing = await prisma.visaChecklistTemplate.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+        select: { id: true },
+      });
+      if (!existing) return res.status(404).json({ error: "Checklist item not found", code: "NOT_FOUND" });
+      await prisma.visaChecklistTemplate.delete({ where: { id } });
+      return res.json({ success: true, id });
+    } catch (e) {
+      console.error("[travel-visa] checklist delete error:", e.message);
+      return res.status(500).json({ error: "Failed to delete checklist item" });
+    }
+  },
+);
+
+// ============================================================================
+// Per-application document checklist (FR-6.3 / FR-6.5).
+// These manage the LIVE per-application checklist (VisaDocumentChecklistItem),
+// distinct from the /checklists TEMPLATE admin above (VisaChecklistTemplate).
+// Items are seeded from the template at create time; advisors then move each
+// document through pending → uploaded → verified | rejected. Verifying the
+// last required document auto-advances the application docs-pending → filed.
+// Reads of the list ride GET /applications/:id (documentChecklist include).
+// ============================================================================
+
+// POST /applications/:id/checklist — add an ad-hoc document to an
+// application's checklist (a one-off the template didn't cover). ADMIN/MANAGER.
+router.post(
+  "/applications/:id/checklist",
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const tenantId = req.travelTenant.id;
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+      }
+      const { app, error } = await resolveVisaApplication(id, tenantId);
+      if (error) return res.status(error.status).json(error.body);
+
+      const body = req.body || {};
+      const docType = typeof body.docType === "string" ? body.docType.trim() : "";
+      if (!docType || docType.length > 200) {
+        return res.status(400).json({ error: "docType is required (1..200 chars)", code: "MISSING_FIELDS" });
+      }
+      let status = "pending";
+      if (body.status !== undefined) {
+        if (!VALID_CHECKLIST_ITEM_STATUSES.includes(String(body.status))) {
+          return res.status(400).json({
+            error: `status must be one of: ${VALID_CHECKLIST_ITEM_STATUSES.join(", ")}`,
+            code: "INVALID_STATUS",
+          });
+        }
+        status = String(body.status);
+      }
+      const created = await prisma.visaDocumentChecklistItem.create({
+        data: {
+          applicationId: app.id,
+          docType,
+          required: body.required === undefined ? true : !!body.required,
+          status,
+          notes: typeof body.notes === "string" ? body.notes : null,
+        },
+      });
+      const advance = await maybeAdvanceOnChecklist({
+        applicationId: app.id,
+        tenantId,
+        actorUserId: req.user.userId,
+      });
+      return res.status(201).json({
+        item: created,
+        ...(advance.advanced ? { applicationStatus: advance.newStatus } : {}),
+      });
+    } catch (e) {
+      console.error("[travel-visa] checklist item create error:", e.message);
+      return res.status(500).json({ error: "Failed to add checklist item" });
+    }
+  },
+);
+
+// PATCH /applications/:id/checklist/:itemId — update a document's status
+// (pending|uploaded|verified|rejected) and/or required/notes. Verifying the
+// last required document auto-advances docs-pending → filed. ADMIN/MANAGER.
+router.patch(
+  "/applications/:id/checklist/:itemId",
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const tenantId = req.travelTenant.id;
+      const id = parseInt(req.params.id, 10);
+      const itemId = parseInt(req.params.itemId, 10);
+      if (!Number.isFinite(id) || !Number.isFinite(itemId)) {
+        return res.status(400).json({ error: "id and itemId must be numbers", code: "INVALID_ID" });
+      }
+      const { app, error } = await resolveVisaApplication(id, tenantId);
+      if (error) return res.status(error.status).json(error.body);
+
+      const item = await prisma.visaDocumentChecklistItem.findFirst({
+        where: { id: itemId, applicationId: app.id },
+        select: { id: true },
+      });
+      if (!item) {
+        return res.status(404).json({ error: "Checklist item not found", code: "NOT_FOUND" });
+      }
+
+      const body = req.body || {};
+      const data = {};
+      if (body.status !== undefined) {
+        if (!VALID_CHECKLIST_ITEM_STATUSES.includes(String(body.status))) {
+          return res.status(400).json({
+            error: `status must be one of: ${VALID_CHECKLIST_ITEM_STATUSES.join(", ")}`,
+            code: "INVALID_STATUS",
+          });
+        }
+        data.status = String(body.status);
+      }
+      if (body.required !== undefined) data.required = !!body.required;
+      if (body.notes !== undefined) data.notes = typeof body.notes === "string" ? body.notes : null;
+      if (Object.keys(data).length === 0) {
+        return res.status(400).json({ error: "no updatable fields provided", code: "EMPTY_BODY" });
+      }
+
+      const updated = await prisma.visaDocumentChecklistItem.update({
+        where: { id: itemId },
+        data,
+      });
+      const advance = await maybeAdvanceOnChecklist({
+        applicationId: app.id,
+        tenantId,
+        actorUserId: req.user.userId,
+      });
+      return res.json({
+        item: updated,
+        ...(advance.advanced ? { applicationStatus: advance.newStatus } : {}),
+      });
+    } catch (e) {
+      console.error("[travel-visa] checklist item update error:", e.message);
+      return res.status(500).json({ error: "Failed to update checklist item" });
+    }
+  },
+);
+
+// DELETE /applications/:id/checklist/:itemId — remove a document from an
+// application's checklist (tenant + sub-brand scoped). ADMIN/MANAGER.
+router.delete(
+  "/applications/:id/checklist/:itemId",
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const tenantId = req.travelTenant.id;
+      const id = parseInt(req.params.id, 10);
+      const itemId = parseInt(req.params.itemId, 10);
+      if (!Number.isFinite(id) || !Number.isFinite(itemId)) {
+        return res.status(400).json({ error: "id and itemId must be numbers", code: "INVALID_ID" });
+      }
+      const { app, error } = await resolveVisaApplication(id, tenantId);
+      if (error) return res.status(error.status).json(error.body);
+
+      const item = await prisma.visaDocumentChecklistItem.findFirst({
+        where: { id: itemId, applicationId: app.id },
+        select: { id: true },
+      });
+      if (!item) {
+        return res.status(404).json({ error: "Checklist item not found", code: "NOT_FOUND" });
+      }
+      await prisma.visaDocumentChecklistItem.delete({ where: { id: itemId } });
+      return res.json({ success: true, id: itemId });
+    } catch (e) {
+      console.error("[travel-visa] checklist item delete error:", e.message);
+      return res.status(500).json({ error: "Failed to delete checklist item" });
+    }
+  },
+);
+
+// ============================================================================
+// Quotation TEMPLATE admin (PRD_VISA_SURE_PHASE_3 FR-5.2).
+// Curated per-applicationType quotation templates. For standard cases the
+// advisor picks a template and the system auto-populates the quote's line
+// items. Managed on the same /travel/visa/checklists admin page (it extends
+// to manage quotation templates too). `linesJson` is a JSON-stringified array
+// of { label, amount } items — amount may be negative for credits /
+// adjustments (e.g. crediting the free entry-diagnostic fee).
+// ============================================================================
+
+// Validate + normalize the quotation line items. Accepts an array of
+// { label, amount }; amount may be any finite number (negative = credit).
+// Returns the normalized array; throws an Error (.httpStatus/.code) on bad
+// input so the caller can relay a 400.
+function normalizeQuotationLines(lines) {
+  if (!Array.isArray(lines)) {
+    const e = new Error("lines must be an array of { label, amount }");
+    e.httpStatus = 400;
+    e.code = "INVALID_LINES";
+    throw e;
+  }
+  return lines.map((ln, i) => {
+    const label = ln && typeof ln.label === "string" ? ln.label.trim() : "";
+    const amount = ln ? Number(ln.amount) : NaN;
+    if (!label || label.length > 200) {
+      const e = new Error(`lines[${i}].label is required (1..200 chars)`);
+      e.httpStatus = 400;
+      e.code = "INVALID_LINES";
+      throw e;
+    }
+    if (!Number.isFinite(amount)) {
+      const e = new Error(`lines[${i}].amount must be a number`);
+      e.httpStatus = 400;
+      e.code = "INVALID_LINES";
+      throw e;
+    }
+    return { label, amount: Math.round(amount * 100) / 100 };
+  });
+}
+
+// Shape a stored row for the API: parse linesJson into a `lines` array and
+// drop the raw JSON string. Tolerant of a corrupt/empty column (→ []).
+function serializeQuotationTemplate(row) {
+  let lines = [];
+  try {
+    const parsed = JSON.parse(row.linesJson || "[]");
+    if (Array.isArray(parsed)) lines = parsed;
+  } catch {
+    lines = [];
+  }
+  // eslint-disable-next-line no-unused-vars
+  const { linesJson, ...rest } = row;
+  return { ...rest, lines };
+}
+
+// GET /quotation-templates — list quotation templates for the tenant.
+// Optional ?applicationType filter. ADMIN/MANAGER/USER (read).
+router.get(
+  "/quotation-templates",
+  verifyRole(["ADMIN", "MANAGER", "USER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const where = { tenantId: req.travelTenant.id };
+      if (req.query.applicationType) {
+        where.applicationType = String(req.query.applicationType);
+      }
+      const rows = await prisma.visaQuotationTemplate.findMany({
+        where,
+        orderBy: [
+          { applicationType: "asc" },
+          { sortOrder: "asc" },
+          { id: "asc" },
+        ],
+      });
+      return res.json({ items: rows.map(serializeQuotationTemplate) });
+    } catch (e) {
+      console.error("[travel-visa] quotation templates list error:", e.message);
+      return res.status(500).json({ error: "Failed to load quotation templates" });
+    }
+  },
+);
+
+// POST /quotation-templates — create a quotation template. ADMIN/MANAGER.
+router.post(
+  "/quotation-templates",
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const body = req.body || {};
+      const name = typeof body.name === "string" ? body.name.trim() : "";
+      const applicationType =
+        typeof body.applicationType === "string"
+          ? body.applicationType.trim()
+          : "";
+      if (!name || name.length > 200) {
+        return res.status(400).json({ error: "name is required (1..200 chars)", code: "MISSING_FIELDS" });
+      }
+      if (!VALID_APPLICATION_TYPES.includes(applicationType)) {
+        return res.status(400).json({
+          error: `applicationType must be one of: ${VALID_APPLICATION_TYPES.join(", ")}`,
+          code: "INVALID_APPLICATION_TYPE",
+        });
+      }
+      let linesJson;
+      try {
+        linesJson = JSON.stringify(normalizeQuotationLines(body.lines));
+      } catch (le) {
+        return res.status(le.httpStatus || 400).json({ error: le.message, code: le.code || "INVALID_LINES" });
+      }
+      const currency =
+        typeof body.currency === "string" && body.currency.trim()
+          ? body.currency.trim().slice(0, 8)
+          : "INR";
+      const created = await prisma.visaQuotationTemplate.create({
+        data: {
+          tenantId: req.travelTenant.id,
+          name,
+          applicationType,
+          currency,
+          linesJson,
+          notes: typeof body.notes === "string" ? body.notes : null,
+          isActive: body.isActive === undefined ? true : !!body.isActive,
+          sortOrder: Number.isFinite(Number(body.sortOrder)) ? Number(body.sortOrder) : 0,
+        },
+      });
+      return res.status(201).json(serializeQuotationTemplate(created));
+    } catch (e) {
+      console.error("[travel-visa] quotation template create error:", e.message);
+      return res.status(500).json({ error: "Failed to create quotation template" });
+    }
+  },
+);
+
+// PUT /quotation-templates/:id — update a quotation template. ADMIN/MANAGER.
+router.put(
+  "/quotation-templates/:id",
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+      }
+      const existing = await prisma.visaQuotationTemplate.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+        select: { id: true },
+      });
+      if (!existing) {
+        return res.status(404).json({ error: "Quotation template not found", code: "NOT_FOUND" });
+      }
+      const body = req.body || {};
+      const data = {};
+      if (body.name !== undefined) {
+        const n = String(body.name).trim();
+        if (!n || n.length > 200) return res.status(400).json({ error: "name must be 1..200 chars", code: "MISSING_FIELDS" });
+        data.name = n;
+      }
+      if (body.applicationType !== undefined) {
+        if (!VALID_APPLICATION_TYPES.includes(String(body.applicationType))) {
+          return res.status(400).json({
+            error: `applicationType must be one of: ${VALID_APPLICATION_TYPES.join(", ")}`,
+            code: "INVALID_APPLICATION_TYPE",
+          });
+        }
+        data.applicationType = String(body.applicationType);
+      }
+      if (body.currency !== undefined) {
+        data.currency =
+          typeof body.currency === "string" && body.currency.trim()
+            ? body.currency.trim().slice(0, 8)
+            : "INR";
+      }
+      if (body.lines !== undefined) {
+        try {
+          data.linesJson = JSON.stringify(normalizeQuotationLines(body.lines));
+        } catch (le) {
+          return res.status(le.httpStatus || 400).json({ error: le.message, code: le.code || "INVALID_LINES" });
+        }
+      }
+      if (body.notes !== undefined) data.notes = typeof body.notes === "string" ? body.notes : null;
+      if (body.isActive !== undefined) data.isActive = !!body.isActive;
+      if (body.sortOrder !== undefined && Number.isFinite(Number(body.sortOrder))) data.sortOrder = Number(body.sortOrder);
+      if (Object.keys(data).length === 0) {
+        return res.status(400).json({ error: "no updatable fields provided", code: "EMPTY_BODY" });
+      }
+      const updated = await prisma.visaQuotationTemplate.update({ where: { id }, data });
+      return res.json(serializeQuotationTemplate(updated));
+    } catch (e) {
+      console.error("[travel-visa] quotation template update error:", e.message);
+      return res.status(500).json({ error: "Failed to update quotation template" });
+    }
+  },
+);
+
+// DELETE /quotation-templates/:id — remove a quotation template. ADMIN/MANAGER.
+router.delete(
+  "/quotation-templates/:id",
+  verifyRole(["ADMIN", "MANAGER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+      }
+      const existing = await prisma.visaQuotationTemplate.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+        select: { id: true },
+      });
+      if (!existing) {
+        return res.status(404).json({ error: "Quotation template not found", code: "NOT_FOUND" });
+      }
+      await prisma.visaQuotationTemplate.delete({ where: { id } });
+      return res.json({ success: true, id });
+    } catch (e) {
+      console.error("[travel-visa] quotation template delete error:", e.message);
+      return res.status(500).json({ error: "Failed to delete quotation template" });
     }
   },
 );

@@ -44,6 +44,7 @@ import {
   CheckCircle2,
   ArrowRight,
   HeartHandshake,
+  Plus,
 } from 'lucide-react';
 import { fetchApi } from '../../../utils/api';
 import { useNotify } from '../../../utils/notify';
@@ -144,6 +145,30 @@ const isAdvisorRiskActive = (flag) => {
   return f === 'high' || f === 'priority';
 };
 
+// FR-6.3 — per-document lifecycle states. The advisor moves each document
+// through these via the inline <select> in the Document checklist section;
+// the backend auto-advances the application docs-pending → filed once every
+// REQUIRED document reaches "verified".
+const DOC_STATUSES = [
+  { value: 'pending', label: 'Pending' },
+  { value: 'uploaded', label: 'Uploaded' },
+  { value: 'verified', label: 'Verified' },
+  { value: 'rejected', label: 'Rejected' },
+];
+
+// Application lifecycle states (mirrors VALID_STATUSES in
+// backend/routes/travel_visa.js). The advisor moves the application through
+// these; setting "Docs pending" arms the FR-6.5 auto-advance (verifying the
+// last required document then flips it to "Filed").
+const APP_STATUSES = [
+  { value: 'intake', label: 'Intake' },
+  { value: 'docs-pending', label: 'Docs pending' },
+  { value: 'filed', label: 'Filed' },
+  { value: 'approved', label: 'Approved' },
+  { value: 'rejected', label: 'Rejected' },
+  { value: 'appeal', label: 'Appeal' },
+];
+
 const VisaAdvisorDashboard = () => {
   const { applicationId } = useParams();
   const notify = useNotify();
@@ -163,6 +188,18 @@ const VisaAdvisorDashboard = () => {
   const [programsLoading, setProgramsLoading] = useState(false);
   const [enrolBusy, setEnrolBusy] = useState(false);
   const [selectedProgramId, setSelectedProgramId] = useState('');
+
+  // FR-6.3 — per-application document checklist editing. `checklistBusy`
+  // holds the id of the item currently being saved so its <select> can
+  // disable while the PATCH is in flight.
+  const [checklistBusy, setChecklistBusy] = useState(null);
+  // Application-status change (intake → docs-pending → filed → …).
+  const [statusBusy, setStatusBusy] = useState(false);
+  // Ad-hoc "Add document" to this application's checklist (e.g. when no
+  // template seeded it, or an extra document is needed).
+  const [newDocType, setNewDocType] = useState('');
+  const [newDocRequired, setNewDocRequired] = useState(true);
+  const [addingDoc, setAddingDoc] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -192,6 +229,99 @@ const VisaAdvisorDashboard = () => {
       cancelled = true;
     };
   }, [applicationId]);
+
+  // Re-fetch the application after a checklist mutation so the progress bar,
+  // each item's status, and any auto-advanced application status all reflect
+  // the latest server state. Silent — a transient refresh failure keeps the
+  // last-good render rather than blanking the page.
+  const refreshApplication = async () => {
+    try {
+      const res = await fetchApi(
+        `/api/travel/visa/applications/${applicationId}`,
+        { silent: true },
+      );
+      setApplication(res || null);
+    } catch {
+      /* keep last-good state */
+    }
+  };
+
+  // PATCH a single document's status, then refresh. When the backend reports
+  // the application auto-advanced (all required documents verified), surface a
+  // success toast so the advisor knows it moved to "Filed".
+  const updateChecklistItem = async (itemId, status) => {
+    setChecklistBusy(itemId);
+    try {
+      const res = await fetchApi(
+        `/api/travel/visa/applications/${applicationId}/checklist/${itemId}`,
+        { method: 'PATCH', body: JSON.stringify({ status }) },
+      );
+      await refreshApplication();
+      if (res && res.applicationStatus) {
+        notify.success(
+          'All required documents verified — application advanced to Filed.',
+        );
+      }
+    } catch (err) {
+      notify.error(
+        (err && (err.message || (err.body && err.body.error))) ||
+          'Failed to update document',
+      );
+    } finally {
+      setChecklistBusy(null);
+    }
+  };
+
+  // PATCH the application's lifecycle status, then refresh. Setting
+  // "docs-pending" arms the auto-advance; the rest are manual transitions.
+  const updateStatus = async (status) => {
+    setStatusBusy(true);
+    try {
+      await fetchApi(`/api/travel/visa/applications/${applicationId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status }),
+      });
+      await refreshApplication();
+      notify.success(`Status updated to ${status}.`);
+    } catch (err) {
+      notify.error(
+        (err && (err.message || (err.body && err.body.error))) ||
+          'Failed to update status',
+      );
+    } finally {
+      setStatusBusy(false);
+    }
+  };
+
+  // Add an ad-hoc document to this application's checklist, then refresh.
+  // Used when no template seeded the checklist (e.g. a self-serve applicant
+  // whose destination had no template) or an extra document is needed.
+  const addChecklistItem = async (e) => {
+    e.preventDefault();
+    const docType = newDocType.trim();
+    if (!docType) {
+      notify.error('Enter a document name');
+      return;
+    }
+    setAddingDoc(true);
+    try {
+      await fetchApi(`/api/travel/visa/applications/${applicationId}/checklist`, {
+        method: 'POST',
+        body: JSON.stringify({ docType, required: newDocRequired }),
+      });
+      setNewDocType('');
+      setNewDocRequired(true);
+      await refreshApplication();
+      notify.success('Document added to the checklist.');
+    } catch (err) {
+      notify.error(
+        (err && (err.message || (err.body && err.body.error))) ||
+          'Failed to add document',
+      );
+    } finally {
+      setAddingDoc(false);
+    }
+  };
 
   // Document checklist progress (bonus). Required items only — optional
   // items don't gate the application moving forward, per FR-5 docs flow.
@@ -296,6 +426,42 @@ const VisaAdvisorDashboard = () => {
 
       {!loading && !error && application && (
         <>
+          {/* Application status control — advisors move the lifecycle
+              intake → docs-pending → filed → approved/rejected/appeal.
+              Setting "Docs pending" arms the FR-6.5 auto-advance. */}
+          <section style={SECTION}>
+            <h2 style={SECTION_HEADER}>
+              <Stamp size={16} aria-hidden /> Application status
+            </h2>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <select
+                data-testid="application-status"
+                value={application.status || 'intake'}
+                disabled={!canEnrol || statusBusy}
+                onChange={(e) => updateStatus(e.target.value)}
+                style={{
+                  padding: '0.4rem 0.6rem',
+                  borderRadius: 6,
+                  border: '1px solid var(--border-color, rgba(255,255,255,0.15))',
+                  background: 'var(--input-bg, rgba(255,255,255,0.05))',
+                  color: 'var(--text-primary, #fff)',
+                  fontSize: '0.85rem',
+                  cursor: !canEnrol || statusBusy ? 'not-allowed' : 'pointer',
+                  opacity: statusBusy ? 0.6 : 1,
+                }}
+              >
+                {APP_STATUSES.map((s) => (
+                  <option key={s.value} value={s.value}>{s.label}</option>
+                ))}
+              </select>
+              <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                Set <strong>Docs pending</strong>, then verify every required
+                document below — the application auto-advances to{' '}
+                <strong>Filed</strong>.
+              </span>
+            </div>
+          </section>
+
           {/* Section 1 — Diagnostic answers (V8 / PRD §3 FR-4) */}
           <section style={SECTION}>
             <h2 style={SECTION_HEADER}>
@@ -627,52 +793,228 @@ const VisaAdvisorDashboard = () => {
             <h2 style={SECTION_HEADER}>
               <CheckCircle2 size={16} aria-hidden /> Document checklist
             </h2>
-            {requiredItems.length === 0 ? (
+            {checklist.length === 0 ? (
               <div style={EMPTY_LINE}>
                 No document checklist items recorded for this application
                 yet.
               </div>
             ) : (
               <>
+                {requiredItems.length > 0 && (
+                  <>
+                    <div
+                      style={{
+                        fontSize: '0.9rem',
+                        color: 'var(--text-primary, #fff)',
+                        marginBottom: 8,
+                      }}
+                    >
+                      <strong>{verifiedRequired.length}</strong> of{' '}
+                      <strong>{requiredItems.length}</strong> required
+                      documents verified
+                    </div>
+                    <div
+                      style={{
+                        height: 6,
+                        width: '100%',
+                        borderRadius: 999,
+                        background: 'rgba(255, 255, 255, 0.06)',
+                        overflow: 'hidden',
+                      }}
+                      role="progressbar"
+                      aria-valuemin={0}
+                      aria-valuemax={requiredItems.length}
+                      aria-valuenow={verifiedRequired.length}
+                      aria-label="Required documents verified"
+                    >
+                      <div
+                        style={{
+                          height: '100%',
+                          width: `${
+                            (verifiedRequired.length / requiredItems.length) *
+                            100
+                          }%`,
+                          background:
+                            'var(--primary-color, var(--accent-color))',
+                          transition: 'width 200ms ease',
+                        }}
+                      />
+                    </div>
+                  </>
+                )}
+
+                {/* Per-document status controls (FR-6.3). Advisors move each
+                    document through pending → uploaded → verified | rejected;
+                    verifying the last required document auto-advances the
+                    application to "Filed" (handled server-side). */}
                 <div
                   style={{
-                    fontSize: '0.9rem',
-                    color: 'var(--text-primary, #fff)',
-                    marginBottom: 8,
+                    marginTop: requiredItems.length > 0 ? 14 : 0,
+                    display: 'flex',
+                    flexDirection: 'column',
                   }}
                 >
-                  <strong>{verifiedRequired.length}</strong> of{' '}
-                  <strong>{requiredItems.length}</strong> required
-                  documents verified
-                </div>
-                <div
-                  style={{
-                    height: 6,
-                    width: '100%',
-                    borderRadius: 999,
-                    background: 'rgba(255, 255, 255, 0.06)',
-                    overflow: 'hidden',
-                  }}
-                  role="progressbar"
-                  aria-valuemin={0}
-                  aria-valuemax={requiredItems.length}
-                  aria-valuenow={verifiedRequired.length}
-                  aria-label="Required documents verified"
-                >
-                  <div
-                    style={{
-                      height: '100%',
-                      width: `${
-                        (verifiedRequired.length / requiredItems.length) *
-                        100
-                      }%`,
-                      background:
-                        'var(--primary-color, var(--accent-color))',
-                      transition: 'width 200ms ease',
-                    }}
-                  />
+                  {checklist.map((item) => (
+                    <div
+                      key={item.id}
+                      data-testid={`doc-item-${item.id}`}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 10,
+                        padding: '0.5rem 0',
+                        borderTop:
+                          '1px solid var(--border-color, rgba(255,255,255,0.08))',
+                      }}
+                    >
+                      <span
+                        style={{
+                          flex: 1,
+                          minWidth: 0,
+                          color: 'var(--text-primary, #fff)',
+                          fontSize: '0.9rem',
+                        }}
+                      >
+                        {item.docType}
+                        {item.required && (
+                          <span
+                            style={{
+                              marginLeft: 6,
+                              fontSize: '0.72rem',
+                              color: 'var(--text-secondary, #94a3b8)',
+                            }}
+                          >
+                            (required)
+                          </span>
+                        )}
+                      </span>
+                      {item.attachmentUrl && (
+                        <a
+                          href={item.attachmentUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          data-testid={`doc-view-${item.id}`}
+                          title={item.attachmentName || 'View uploaded document'}
+                          style={{
+                            fontSize: '0.78rem',
+                            color: 'var(--primary-color, var(--accent-color))',
+                            textDecoration: 'underline',
+                            whiteSpace: 'nowrap',
+                          }}
+                        >
+                          View file
+                        </a>
+                      )}
+                      <select
+                        data-testid={`doc-status-${item.id}`}
+                        aria-label={`Status for ${item.docType || 'document'}`}
+                        value={item.status || 'pending'}
+                        disabled={!canEnrol || checklistBusy === item.id}
+                        onChange={(e) =>
+                          updateChecklistItem(item.id, e.target.value)
+                        }
+                        style={{
+                          padding: '0.3rem 0.5rem',
+                          borderRadius: 6,
+                          border:
+                            '1px solid var(--border-color, rgba(255,255,255,0.15))',
+                          background:
+                            'var(--input-bg, rgba(255,255,255,0.05))',
+                          color: 'var(--text-primary, #fff)',
+                          fontSize: '0.82rem',
+                          cursor:
+                            !canEnrol || checklistBusy === item.id
+                              ? 'not-allowed'
+                              : 'pointer',
+                          opacity: checklistBusy === item.id ? 0.6 : 1,
+                        }}
+                      >
+                        {DOC_STATUSES.map((s) => (
+                          <option key={s.value} value={s.value}>
+                            {s.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  ))}
                 </div>
               </>
+            )}
+
+            {/* Add an ad-hoc document — works whether the checklist is empty
+                (e.g. a self-serve applicant whose destination had no template)
+                or already populated. The applicant then uploads against it. */}
+            {canEnrol && (
+              <form
+                onSubmit={addChecklistItem}
+                style={{
+                  display: 'flex',
+                  gap: 8,
+                  alignItems: 'center',
+                  flexWrap: 'wrap',
+                  marginTop: 14,
+                  paddingTop: 14,
+                  borderTop:
+                    '1px solid var(--border-color, rgba(255,255,255,0.08))',
+                }}
+              >
+                <input
+                  data-testid="add-doc-type"
+                  type="text"
+                  value={newDocType}
+                  onChange={(e) => setNewDocType(e.target.value)}
+                  placeholder="Add a document (e.g. Bank statement)"
+                  style={{
+                    flex: 1,
+                    minWidth: 180,
+                    padding: '0.4rem 0.6rem',
+                    borderRadius: 6,
+                    border:
+                      '1px solid var(--border-color, rgba(255,255,255,0.15))',
+                    background: 'var(--input-bg, rgba(255,255,255,0.05))',
+                    color: 'var(--text-primary, #fff)',
+                    fontSize: '0.85rem',
+                  }}
+                />
+                <label
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    fontSize: '0.8rem',
+                    color: 'var(--text-secondary, #94a3b8)',
+                  }}
+                >
+                  <input
+                    data-testid="add-doc-required"
+                    type="checkbox"
+                    checked={newDocRequired}
+                    onChange={(e) => setNewDocRequired(e.target.checked)}
+                  />
+                  Required
+                </label>
+                <button
+                  type="submit"
+                  data-testid="add-doc-submit"
+                  disabled={addingDoc}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 5,
+                    padding: '0.4rem 0.8rem',
+                    borderRadius: 6,
+                    border: 'none',
+                    background: 'var(--primary-color, var(--accent-color))',
+                    color: '#fff',
+                    fontWeight: 600,
+                    fontSize: '0.82rem',
+                    cursor: addingDoc ? 'wait' : 'pointer',
+                    opacity: addingDoc ? 0.6 : 1,
+                  }}
+                >
+                  <Plus size={14} /> {addingDoc ? 'Adding…' : 'Add document'}
+                </button>
+              </form>
             )}
           </section>
         </>

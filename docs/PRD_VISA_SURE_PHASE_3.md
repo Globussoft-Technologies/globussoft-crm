@@ -515,8 +515,13 @@ product-call / cred-blocked items owed by Yasin + counsel + advisor team._
   Checklists / Embassy rules); App.jsx lazy-loads the page set.
 - **`visa-summary` LLM task class** ⬜ TODO — currently reuses the generic
   `talking-points` class. Needs a dedicated task class + prompt template.
-- **`VisaQuotationTemplate` model + admin** ⬜ TODO — PC-3-shaped; awaiting
-  product-call decision before schema lands.
+- **`VisaQuotationTemplate` model + admin** ✅ SHIPPED — model
+  (`linesJson` = JSON `{label, amount}[]`, amount may be negative for
+  credits) + tenant-scoped CRUD at `/api/travel/visa/quotation-templates`
+  (GET/POST/PUT/DELETE) + admin UI on the `/travel/visa/checklists` page
+  behind a "Quotation templates" tab. FR-5.2 *consumer* (advisor picks a
+  template in QuoteBuilder → auto-populates line items) remains, bundled
+  with the FR-5.1/5.3/5.4 visa quote surface (Itinerary persistence + PDF).
 - **Retention-policy rows for `VisaApplication` + `VisaDocumentChecklistItem`**
   ⬜ TODO — GDPR retention engine doesn't yet have rules for these models.
 - **Document upload passport OCR integration** ⬜ TODO — optional

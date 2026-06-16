@@ -35,7 +35,7 @@
  *   9. PUT with docType="" or null → data.docType cleared to null (so the
  *      schema default applies on next read).
  *  10. PUT with docType="Invalid" → 400 INVALID_DOC_TYPE.
- *  11. USER role POST → 403 (verifyRole short-circuit).
+ *  11. USER role POST → 403 (RBAC gate short-circuit).
  *  12. Cross-tenant PUT → 404 NOT_FOUND.
  *
  * Test pattern: patch the prisma singleton with vi.fn() stubs BEFORE the

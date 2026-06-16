@@ -57,9 +57,13 @@ function profilePictureUploadHandler(req, res, next) {
 // the canonical "I created my account and the sidebar is almost empty"
 // symptom. Idempotent; safe to call even if a prior call partially
 // succeeded.
-async function provisionRbacForFreshTenant(tenantId, isWellness, adminUserId) {
+async function provisionRbacForFreshTenant(tenantId, vertical, adminUserId) {
   try {
-    await provisionTenantRbac(tenantId, { isWellness });
+    // `vertical` is one of 'wellness' | 'travel' | 'generic' (or null,
+    // treated as 'generic'). Was previously a boolean `isWellness` —
+    // changed to a string so travel signups don't collapse into the
+    // generic bucket and miss their TRAVEL_MODULES catalog snapshot.
+    await provisionTenantRbac(tenantId, { vertical });
     // Assign the new admin user to the tenant's ADMIN role row. The
     // provisioner's user-iteration loop ALSO does this when it sees a
     // User.role='ADMIN' row for the tenant, but the loop is best-effort
@@ -307,7 +311,7 @@ router.post("/register", async (req, res) => {
     // admin has no RolePermission grants and the catalog-driven sidebar
     // sections collapse on first login (the "sidebar is almost empty"
     // signup bug). Awaited so the user lands on a fully-RBAC'd session.
-    await provisionRbacForFreshTenant(tenant.id, selectedVertical === 'wellness', user.id);
+    await provisionRbacForFreshTenant(tenant.id, selectedVertical || 'generic', user.id);
 
     // #325: include vertical on the JWT so verifyWellnessRole can check
     // tenant vertical without an extra DB lookup per request.
@@ -374,7 +378,7 @@ router.post("/signup", async (req, res) => {
     // Provision the canonical RBAC role set for the fresh tenant + assign
     // the new admin user to the ADMIN role row. See /register for the
     // longer comment — same bug, same fix.
-    await provisionRbacForFreshTenant(tenant.id, selectedVertical === 'wellness', user.id);
+    await provisionRbacForFreshTenant(tenant.id, selectedVertical || 'generic', user.id);
 
     // #325: include vertical on the JWT so verifyWellnessRole can check
     // tenant vertical without an extra DB lookup per request.
@@ -605,8 +609,8 @@ router.post("/login", async (req, res) => {
         const isLegacyAdmin = String(user.role || '').toUpperCase() === 'ADMIN';
         const userRoleCount = await prisma.userRole.count({ where: { userId: user.id } });
         if (isLegacyAdmin && userRoleCount === 0) {
-          const isWellness = user.tenant?.vertical === 'wellness';
-          await provisionRbacForFreshTenant(user.tenantId, isWellness, user.id);
+          const vertical = user.tenant?.vertical || 'generic';
+          await provisionRbacForFreshTenant(user.tenantId, vertical, user.id);
         }
       } catch (healErr) {
         console.warn(

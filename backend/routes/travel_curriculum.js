@@ -60,6 +60,7 @@ const express = require("express");
 const multer = require("multer");
 const router = express.Router();
 const { verifyToken, verifyRole } = require("../middleware/auth");
+const { requirePermission } = require("../middleware/requirePermission");
 const prisma = require("../lib/prisma");
 const { sanitizeText } = require("../lib/sanitizeJson");
 const {
@@ -711,7 +712,7 @@ router.get("/by-quarter", verifyToken, async (req, res) => {
 router.post(
   "/import.csv",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("curriculum", "write"),
   curriculumUpload.single("file"),
   async (req, res) => {
     try {
@@ -836,7 +837,7 @@ router.post(
 router.get(
   "/export.csv",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("curriculum", "read"),
   async (req, res) => {
     try {
       const where = { tenantId: req.user.tenantId };
@@ -914,7 +915,7 @@ router.get(
 router.get(
   "/coverage",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("curriculum", "read"),
   async (req, res) => {
     try {
       const tenantId = req.user.tenantId;
@@ -1057,7 +1058,7 @@ router.get("/:id", verifyToken, async (req, res) => {
 router.post(
   "/",
   verifyToken,
-  verifyRole(["ADMIN"]),
+  requirePermission("curriculum", "write"),
   async (req, res) => {
     try {
       const {
@@ -1125,7 +1126,7 @@ router.post(
 router.put(
   "/:id",
   verifyToken,
-  verifyRole(["ADMIN"]),
+  requirePermission("curriculum", "update"),
   async (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);
@@ -1223,7 +1224,7 @@ router.put(
 router.delete(
   "/:id",
   verifyToken,
-  verifyRole(["ADMIN"]),
+  requirePermission("curriculum", "delete"),
   async (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);

@@ -1480,13 +1480,16 @@ function renderTravelSubBrandHeader({
 
 function renderTravelNav({
   Link,
-  isAdmin,
-  isManager,
   sectionLabelStyle,
   counts = {},
   subBrandAccess = null,
   activeSubBrand = null,
 }) {
+  // isAdmin / isManager are deliberately NOT destructured — this nav is
+  // fully permission-driven. Every link below uses requiredPermission;
+  // role-string gates would defeat the "permissions are source of
+  // truth" contract. The caller (the main Sidebar component) still
+  // passes them but they're ignored here.
   const labelStyle = sectionLabelStyle || sectionLabel;
   // Brand-scoped nav (travel-only). Two layers gate a brand-tagged entry:
   //   1. ACCESS — the user must be entitled to that sub-brand. Full-access
@@ -1511,349 +1514,143 @@ function renderTravelNav({
   const inBrand = (brand) =>
     canAccessBrand(brand) &&
     (activeSubBrand === null || activeSubBrand === brand);
+  // Travel sidebar — fully permission-driven. Every link below carries a
+  // `requiredPermission={{module, action}}` prop; the Link component hides
+  // the entry when the signed-in user lacks that grant. There are NO
+  // role-name (isAdmin / isManager) gates inside this function anymore.
+  //
+  // Why the rewrite (2026-06-15): per the "permissions are source of
+  // truth, roles are containers" contract, sidebar visibility must
+  // dynamically reflect the grants admin assigns to each role. The
+  // previous `{isAdmin && <Link ...>}` wraps blocked custom roles from
+  // ever seeing an entry even when admin had explicitly granted them
+  // the underlying perm. After this refactor, granting `pois.manage`
+  // to ANY role makes the POI Approvals link appear for that role —
+  // no JSX edit required.
+  //
+  // Sub-brand `inBrand()` checks are preserved: they're tenant feature
+  // toggles (does this tenant subscribe to the RFU / TMC / Visa Sure
+  // sub-brand?), not access-control gates. A user with `religious_packets.read`
+  // still won't see the Religious Packets link on a tenant whose
+  // `subBrandAccess` doesn't include "rfu".
+  //
+  // Section dividers (`<div style={labelStyle}>...</div>`) are
+  // intentionally always-visible. A user with no grants in a section
+  // sees an empty label — small UX cost vs. the much larger code
+  // simplification of not having to compute section-aggregate
+  // visibility.
   return (
     <>
-      <Link to="/travel" icon={Compass} label="Dashboard" />
-      <Link to="/travel/leads" icon={UserPlus} label="Leads" />
-      {/* Arc 2 #904 slice — InboundLeads admin (operator surface for inbound
-          webhook-ingested leads). Sits directly under Leads since this is
-          the upstream ingestion view — operator drills from "what just
-          arrived via webhook?" → "convert to Lead" handoff into the main
-          Leads page. InboxIcon (alias for Inbox) is already imported in
-          the lucide-react block; matches the page's own icon choice. */}
-      <Link to="/travel/inbound-leads" icon={InboxIcon} label="Inbound Leads" />
-      <Link
-        to="/travel/diagnostics"
-        icon={ClipboardCheck}
-        label="Diagnostics"
-      />
-      <Link to="/travel/itineraries" icon={MapIcon} label="Itineraries" />
-      {/* S99 (TRAVEL_BIG_SCOPE_BACKLOG) — POI rep-suggested pending-approval
-          queue. ADMIN-only — reps suggest POIs inline on itineraries
-          (FR-3.7); ADMIN reviews here. Sits directly under Itineraries
-          because the queue is the upstream review surface for inline POI
-          suggestions made on itineraries. CheckSquare icon mirrors the
-          approval/review semantic; already imported via the icon block. */}
-      {isAdmin && (
-        <Link
-          to="/travel/pois/pending"
-          icon={CheckSquare}
-          label="POI Approvals"
-        />
+      <Link to="/travel" icon={Compass} label="Dashboard" requiredPermission={{ module: "reports", action: "read" }} />
+      <Link to="/travel/leads" icon={UserPlus} label="Leads" requiredPermission={{ module: "leads", action: "read" }} />
+      <Link to="/travel/inbound-leads" icon={InboxIcon} label="Inbound Leads" requiredPermission={{ module: "inbound_leads", action: "read" }} />
+      <Link to="/travel/diagnostics" icon={ClipboardCheck} label="Diagnostics" requiredPermission={{ module: "diagnostics", action: "read" }} />
+      <Link to="/travel/itineraries" icon={MapIcon} label="Itineraries" requiredPermission={{ module: "itineraries", action: "read" }} />
+      <Link to="/travel/pois/pending" icon={CheckSquare} label="POI Approvals" requiredPermission={{ module: "pois", action: "manage" }} />
+      {inBrand("tmc") && (
+        <Link to="/travel/trips" icon={Luggage} label="TMC Trips" requiredPermission={{ module: "trips", action: "read" }} />
       )}
       {inBrand("tmc") && (
-        <Link to="/travel/trips" icon={Luggage} label="TMC Trips" />
+        <Link to="/travel/tmc/catalogue" icon={Package} label="TMC Catalogue" requiredPermission={{ module: "tmc_catalogue", action: "read" }} />
       )}
-      {/* T26 (PRD_TMC_DIAGNOSTIC_SALES_ROUTING_ENGINE §10) — TMC Trip
-          Catalogue admin (T16 shipped 6a034ebb). ADMIN+MANAGER visibility
-          mirrors the page's CRUD auth posture (verifyRole inside the route
-          handler); USER role sees no entry. Sits adjacent to "TMC Trips"
-          since both surfaces are TMC sub-brand operator tools — the
-          Catalogue is the upstream "library of bookable trip templates"
-          that "TMC Trips" instances are spawned from. Restored after the
-          #1139 merge dropped the link while wrapping TMC Trips in
-          inBrand("tmc"). */}
-      {isManager && inBrand("tmc") && (
-        <Link
-          to="/travel/tmc/catalogue"
-          icon={Package}
-          label="TMC Catalogue"
-        />
+      <Link to="/travel/web-checkins" icon={Ticket} label="Web Check-ins" requiredPermission={{ module: "web_checkins", action: "read" }} />
+      <Link to="/travel/passport-verification" icon={BadgeCheck} label="Passport Verification" requiredPermission={{ module: "passport", action: "manage" }} />
+      <Link to="/travel/cost-master" icon={IndianRupee} label="Cost Master" requiredPermission={{ module: "cost_master", action: "read" }} />
+      <Link to="/travel/sightseeing" icon={Camera} label="Sightseeing Master" requiredPermission={{ module: "sightseeing", action: "read" }} />
+      <Link to="/travel/itinerary-templates" icon={LayoutTemplate} label="Itinerary Templates" requiredPermission={{ module: "itinerary_templates", action: "read" }} />
+      <Link to="/travel/pricing-rules" icon={BadgePercent} label="Pricing Rules" requiredPermission={{ module: "pricing", action: "manage" }} />
+      <Link to="/travel/reports" icon={BarChart3} label="Reports" requiredPermission={{ module: "reports", action: "read" }} />
+      <Link to="/travel/suppliers-admin" icon={Building2} label="Suppliers" requiredPermission={{ module: "suppliers", action: "read" }} />
+      <Link to="/admin/ratehawk-search" icon={Hotel} label="RateHawk Search" requiredPermission={{ module: "suppliers", action: "read" }} />
+      <Link to="/admin/booking-expedia-search" icon={BedDouble} label="Booking / Expedia" requiredPermission={{ module: "suppliers", action: "read" }} />
+      <Link to="/admin/voyagr-api-keys" icon={Key} label="Voyagr API Keys" requiredPermission={{ module: "integrations", action: "manage" }} />
+      <Link to="/travel/payables" icon={CreditCard} label="Payables" requiredPermission={{ module: "payables", action: "read" }} />
+      <Link to="/travel/commission-profiles" icon={Award} label="Commission Profiles" requiredPermission={{ module: "commission_profiles", action: "read" }} />
+      <Link to="/travel/quotes-admin" icon={FileText} label="Quotes" requiredPermission={{ module: "quotes", action: "read" }} />
+      <Link to="/travel/flights/quote" icon={Plane} label="Flight quick-quote" requiredPermission={{ module: "flight_quotes", action: "read" }} />
+      <Link to="/travel/quotes/builder" icon={Calculator} label="Quote Builder" requiredPermission={{ module: "quotes", action: "write" }} />
+      <Link to="/travel/quote-templates" icon={FileStack} label="Quote Templates" requiredPermission={{ module: "quote_templates", action: "read" }} />
+      <Link to="/travel/invoices-admin" icon={Receipt} label="Invoices" requiredPermission={{ module: "invoices", action: "read" }} />
+      <Link to="/travel/milestones" icon={Clock} label="Milestones" requiredPermission={{ module: "invoices", action: "read" }} />
+      <Link to="/travel/cancellation-policies" icon={Ban} label="Cancellation Policies" requiredPermission={{ module: "cancellation_policies", action: "read" }} />
+      <Link to="/travel/suppliers" icon={Key} label="Supplier credentials" requiredPermission={{ module: "suppliers", action: "manage" }} />
+      {inBrand("rfu") && (
+        <Link to="/travel/religious-packets" icon={BookOpen} label="Religious Packets" requiredPermission={{ module: "religious_packets", action: "read" }} />
       )}
-      <Link to="/travel/web-checkins" icon={Ticket} label="Web Check-ins" />
-      {/* Slice C2 — Passport OCR verification queue (ADMIN+MANAGER only).
-          PRD_PASSPORT_OCR §5.4 stub-mode drop. */}
-      {isManager && (
-        <Link to="/travel/passport-verification" icon={BadgeCheck} label="Passport Verification" />
+      {inBrand("tmc") && (
+        <Link to="/travel/curriculum-mappings" icon={GraduationCap} label="Curriculum Mappings" requiredPermission={{ module: "curriculum", action: "read" }} />
       )}
-      <Link to="/travel/cost-master" icon={IndianRupee} label="Cost Master" />
-      {/* Arc 2 Travel Gap #907 slice 5/N — SightseeingMaster admin entry.
-          Adjacent to Cost Master because #907 frames Sightseeing as "the
-          6th category in Cost Master". */}
-      <Link to="/travel/sightseeing" icon={Camera} label="Sightseeing Master" />
-      {/* Arc 2 Travel Gap #907 slice 8/N — ItineraryTemplates admin entry.
-          Adjacent to Sightseeing Master because both are #907 admin pages. */}
-      <Link
-        to="/travel/itinerary-templates"
-        icon={LayoutTemplate}
-        label="Itinerary Templates"
-      />
-      {isAdmin && (
-        <Link
-          to="/travel/pricing-rules"
-          icon={BadgePercent}
-          label="Pricing Rules"
-        />
+      {inBrand("tmc") && (
+        <Link to="/travel/school-terms" icon={Calendar} label="School Term Calendar" requiredPermission={{ module: "school_terms", action: "read" }} />
       )}
-      <Link to="/travel/reports" icon={BarChart3} label="Reports" />
-      <Link to="/travel/suppliers-admin" icon={Building2} label="Suppliers" />
-      {/* Hotel inventory search surfaces — moved from the wellness sidebar
-          (they were misplaced there). RateHawk = aggregator (Q19 cred);
-          Booking/Expedia = direct-API (Q11 cred). Both are travel-only by
-          design; routes are wrapped in <TravelOnly> in App.jsx so a direct
-          URL hit from a non-travel tenant bounces to landingFor. */}
-      {isManager && (
-        <Link
-          to="/admin/ratehawk-search"
-          icon={Hotel}
-          label="RateHawk Search"
-        />
-      )}
-      {isManager && (
-        <Link
-          to="/admin/booking-expedia-search"
-          icon={BedDouble}
-          label="Booking / Expedia"
-        />
-      )}
-      {/* Slice C1 — Voyagr per-site API key admin (ADMIN-only). */}
-      {isAdmin && (<Link to="/admin/voyagr-api-keys" icon={Key} label="Voyagr API Keys" />)}
-      {/* Arc 2 #903 — cross-supplier Payables (A/P) review. Operator surface
-          aggregating every TravelSupplierPayable across every supplier into
-          one table; complements the per-supplier expand on SuppliersAdmin.
-          Sits directly under Suppliers since payables are supplier-adjacent. */}
-      <Link to="/travel/payables" icon={CreditCard} label="Payables" />
-      {/* #905 slice 3 — TravelCommissionProfile CRUD admin. Sits with the
-          supplier-financial cluster (Suppliers / Payables) because commission
-          profiles drive supplier-payable calculation. GET is verifyToken-only
-          so the link is visible to every role; canWrite + Delete gates live
-          inside the page. Award icon picked over BadgePercent (taken by
-          Pricing Rules) and TicketPercent (taken by wellness Coupons). */}
-      <Link
-        to="/travel/commission-profiles"
-        icon={Award}
-        label="Commission Profiles"
-      />
-      <Link to="/travel/quotes-admin" icon={FileText} label="Quotes" />
-      {/* PRD §7 — Flight quick-quote (FlightQuoteAgent): in-CRM fallback for
-          the Chrome flight plugin. Advisor keys in up to 4 flight options,
-          markup applies server-side, branded PDF + WhatsApp share. Sits in
-          the Quotes cluster because the output artifact IS a quote (a draft
-          itinerary of flight items). Visible to every travel operator —
-          backend gates on tenant vertical + sub-brand access. */}
-      <Link
-        to="/travel/flights/quote"
-        icon={Plane}
-        label="Flight quick-quote"
-      />
-      {/* Arc 2 #900 slice 2 — operator-facing Quote Builder (line items +
-          totals + action cluster). Distinct from the CRUD list above.
-          MANAGER+ per RoleGuard on the route element. */}
-      {isManager && (
-        <Link
-          to="/travel/quotes/builder"
-          icon={Calculator}
-          label="Quote Builder"
-        />
-      )}
-      {/* S49 (TRAVEL_BIG_SCOPE_BACKLOG) — QuoteTemplates admin nav entry.
-          Sits in the Quotes cluster (under Quote Builder) because it's a
-          pre-filled-line-set library that operators apply to new quotes.
-          ADMIN+MANAGER visible; the page enforces its own canWrite/Delete
-          gates server-side. SUT page commit 8fb23237 (S31). FileStack icon
-          picked for the "stack of reusable templates" motif (FileText taken
-          by Quotes; LayoutTemplate taken by Itinerary Templates). */}
-      {isManager && (
-        <Link
-          to="/travel/quote-templates"
-          icon={FileStack}
-          label="Quote Templates"
-        />
-      )}
-      <Link to="/travel/invoices-admin" icon={Receipt} label="Invoices" />
-      {/* Arc 2 #901 slice 7 — cross-invoice payment-milestone dashboard
-          (consumes /api/travel/payment-schedules/upcoming). Billing-adjacent
-          slot under Invoices is the right home: operator surface for
-          upcoming/overdue milestones across all travel invoices. */}
-      <Link to="/travel/milestones" icon={Clock} label="Milestones" />
-      {/* S55 (TRAVEL_BIG_SCOPE_BACKLOG) — CancellationPolicies admin nav
-          entry. Sits in the Invoices/Milestones billing cluster because
-          cancellation policies drive auto-issuance of credit notes when an
-          invoice is voided (S33 wire-in). ADMIN+MANAGER visible; the page
-          surfaces a Trash icon ADMIN-only mirroring the backend DELETE
-          verifyRole(["ADMIN"]) gate. SUT page commit 4823b160 (S54). Ban
-          icon picked for the cancellation/refund motif. */}
-      {isManager && (
-        <Link
-          to="/travel/cancellation-policies"
-          icon={Ban}
-          label="Cancellation Policies"
-        />
-      )}
-      {isAdmin && (
-        <Link to="/travel/suppliers" icon={Key} label="Supplier credentials" />
-      )}
-      {isAdmin && inBrand("rfu") && (
-        <Link
-          to="/travel/religious-packets"
-          icon={BookOpen}
-          label="Religious Packets"
-        />
-      )}
-      {/* tick #181 — curriculum-mappings CRUD admin (consumes
-          /api/travel-curriculum). TMC vertical school-trip pitch deck.
-          ADMIN-only per backend RBAC + RoleGuard on the route element. */}
-      {isAdmin && inBrand("tmc") && (
-        <Link
-          to="/travel/curriculum-mappings"
-          icon={GraduationCap}
-          label="Curriculum Mappings"
-        />
-      )}
-      {/* TMC school term calendar — term/holiday/exam windows for trip scheduling. */}
-      {isAdmin && inBrand("tmc") && (
-        <Link
-          to="/travel/school-terms"
-          icon={Calendar}
-          label="School Term Calendar"
-        />
-      )}
-      {/* T26 (PRD_TMC_DIAGNOSTIC_SALES_ROUTING_ENGINE §10) — TMC trip-catalogue
-          admin (route /travel/tmc/catalogue → TmcCatalogueAdmin). ADMIN+MANAGER
-          visible, mirroring the page's verifyRole posture; TMC-brand scoped. */}
-      {isManager && inBrand("tmc") && (
-        <Link
-          to="/travel/tmc/catalogue"
-          icon={BookOpen}
-          label="TMC Catalogue"
-        />
-      )}
-      {/* tick #186 — Marketing Flyer Studio Phase 2 SHELL (#908).
-          MANAGER+ operator-facing surface; real impl per PRD §8 build
-          order in docs/PRD_TRAVEL_MARKETING_FLYER.md. */}
-      {isManager && (
-        <Link
-          to="/travel/marketing/flyer-studio"
-          icon={FileImage}
-          label="Marketing Flyer Studio"
-        />
-      )}
-      {/* #908 slice 2 — FlyerTemplates library list (companion to the live
-          composer above). Operator-saved templates with palette-swatch
-          preview; "Use as starting point" handoff into the Studio. Same
-          isManager gate as the Studio — the two are paired surfaces.
-          Palette icon picked for the page's 5-hex palette swatch preview
-          and to read as a "template library" (not the FileImage active
-          composer). */}
-      {isManager && (
-        <Link
-          to="/travel/flyer-templates"
-          icon={Palette}
-          label="Flyer Templates"
-        />
-      )}
-      {/* S79 (TRAVEL_BIG_SCOPE_BACKLOG) — operator UI for flyer share-link
-          admin (mint + history + revoke). Companion to FlyerTemplates above,
-          gated ADMIN-only since share-link lifecycle (including revocation)
-          is a higher-privilege surface than design-time CRUD. Share2 icon
-          mirrors the page header. */}
-      {isAdmin && (
-        <Link
-          to="/travel/flyer-share-admin"
-          icon={Share2}
-          label="Flyer Share Admin"
-        />
-      )}
+      <Link to="/travel/marketing/flyer-studio" icon={FileImage} label="Marketing Flyer Studio" requiredPermission={{ module: "flyer_studio", action: "read" }} />
+      <Link to="/travel/flyer-templates" icon={Palette} label="Flyer Templates" requiredPermission={{ module: "flyer_templates", action: "read" }} />
+      <Link to="/travel/flyer-share-admin" icon={Share2} label="Flyer Share Admin" requiredPermission={{ module: "flyer_studio", action: "manage" }} />
 
-      {/* Phase 3 Visa Sure scaffolding (cluster B3) — placeholder shells, admin-only.
-          Real implementation gated on product calls in docs/PRD_VISA_SURE_PHASE_3.md §5 + §9. */}
-      {isAdmin && inBrand("visasure") && (
+      {/* Visa Sure sub-brand cluster — inBrand() is a tenant feature
+          toggle, not an access gate. Per-link requiredPermission still
+          decides whether the user inside a Visa Sure tenant can see
+          each entry. */}
+      {inBrand("visasure") && (
         <>
           <div style={labelStyle}>Visa Sure</div>
-          <Link to="/travel/visa" icon={Stamp} label="Dashboard" />
-          <Link
-            to="/travel/visa/applications"
-            icon={BadgeCheck}
-            label="Applications"
-          />
-          <Link
-            to="/travel/visa/checklists"
-            icon={ClipboardList}
-            label="Checklists"
-          />
-          {/* tick #178 — embassy-rules CRUD admin (consumes /api/embassy-rules).
-              ADMIN-only per backend RBAC + RoleGuard on the route element. */}
-          <Link
-            to="/travel/visa/embassy-rules"
-            icon={Shield}
-            label="Embassy Rules"
-          />
+          <Link to="/travel/visa" icon={Stamp} label="Dashboard" requiredPermission={{ module: "visa", action: "read" }} />
+          <Link to="/travel/visa/applications" icon={BadgeCheck} label="Applications" requiredPermission={{ module: "visa", action: "read" }} />
+          <Link to="/travel/visa/checklists" icon={ClipboardList} label="Checklists" requiredPermission={{ module: "visa", action: "read" }} />
+          <Link to="/travel/visa/embassy-rules" icon={Shield} label="Embassy Rules" requiredPermission={{ module: "visa", action: "manage" }} />
         </>
       )}
 
-      {/* Phase 2 Travel Stall operator landing (TS21) — scaffold shell.
-          Operator-facing surface, visible to admin + manager. */}
-      {isManager && inBrand("travelstall") && (
+      {inBrand("travelstall") && (
         <>
           <div style={labelStyle}>Travel Stall</div>
-          <Link to="/travel-stall" icon={Sparkles} label="Dashboard" />
+          <Link to="/travel-stall" icon={Sparkles} label="Dashboard" requiredPermission={{ module: "reports", action: "read" }} />
         </>
       )}
 
       <div style={labelStyle}>Sales pipeline</div>
-      <Link to="/leads" icon={UserPlus} label="Leads" />
-      <Link to="/contacts" icon={Users} label="Contacts" />
-      <Link to="/pipeline" icon={Briefcase} label="Pipeline" />
+      <Link to="/leads" icon={UserPlus} label="Leads" requiredPermission={{ module: "leads", action: "read" }} />
+      <Link to="/contacts" icon={Users} label="Contacts" requiredPermission={{ module: "contacts", action: "read" }} />
+      <Link to="/pipeline" icon={Briefcase} label="Pipeline" requiredPermission={{ module: "pipeline", action: "read" }} />
 
       <div style={labelStyle}>Customer comms</div>
-      <Link to="/inbox" icon={InboxIcon} label="Inbox" badge={counts.inbox} />
-      {/* Q9 — Wati WhatsApp dispatch log (travel-only transport). Sits
-          directly under Inbox since both are customer-comms surfaces; the
-          page is the per-message log (OTPs, reminders, itinerary shares,
-          boarding passes) the watiClient persists. MessageSquare is already
-          imported in the lucide block. Wellness/generic navs untouched —
-          this entry lives only in renderTravelNav. */}
-      <Link to="/travel/whatsapp" icon={MessageSquare} label="WhatsApp" />
-      <Link to="/sequences" icon={Send} label="Sequences" />
-      <Link to="/tasks" icon={CheckSquare} label="Tasks" badge={counts.tasks} />
-      {/* T18 — consultation-call booking (Google Meet slot-picker). Reuses the
-          generic /calendar-sync surface; travel had no calendar entry before. */}
-      <Link to="/calendar-sync" icon={Calendar} label="Calendar" />
+      <Link to="/inbox" icon={InboxIcon} label="Inbox" count={counts.inbox} requiredPermission={{ module: "communications", action: "read" }} />
+      <Link to="/travel/whatsapp" icon={MessageSquare} label="WhatsApp" requiredPermission={{ module: "whatsapp", action: "read" }} />
+      <Link to="/sequences" icon={Send} label="Sequences" requiredPermission={{ module: "sequences", action: "read" }} />
+      <Link to="/tasks" icon={CheckSquare} label="Tasks" count={counts.tasks} requiredPermission={{ module: "tasks", action: "read" }} />
+      <Link to="/calendar-sync" icon={Calendar} label="Calendar" requiredPermission={{ module: "integrations", action: "read" }} />
 
       <div style={labelStyle}>Financial</div>
-      <Link to="/invoices" icon={Receipt} label="Invoices" />
-      <Link to="/payments" icon={IndianRupee} label="Payments" />
-      {/* /quotes route is not wired (page returns 404). Hide the entry until
-          the Quotes module ships under cluster B2 of MANUAL_CODING_BACKLOG.md.
-          The admin /travel/quotes-admin link at line ~1574 is a separate
-          (working) page and stays. */}
-      {/* <Link to="/quotes" icon={FileText} label="Quotes" /> */}
+      <Link to="/invoices" icon={Receipt} label="Invoices" requiredPermission={{ module: "invoices", action: "read" }} />
+      <Link to="/payments" icon={IndianRupee} label="Payments" requiredPermission={{ module: "payments", action: "read" }} />
 
       <div style={labelStyle}>Reports</div>
-      <Link to="/reports" icon={BarChart3} label="Reports" />
+      <Link to="/reports" icon={BarChart3} label="Reports" requiredPermission={{ module: "reports", action: "read" }} />
 
-      {isManager && (
-        <>
-          <div style={labelStyle}>Admin</div>
-          <Link to="/staff" icon={UsersRound} label="Staff" />
-          <Link to="/settings" icon={Settings} label="Settings" />
-          <Link to="/audit-log" icon={ScrollText} label="Audit Log" />
-        </>
-      )}
+      {/* Admin + Platform — both blocks unwrapped from the legacy
+          `{isManager && ...}` / `{isAdmin && ...}` outer guards. Each
+          link now gates on its own permission. A user with NO admin /
+          platform grants sees just the two section headers with nothing
+          beneath — acceptable visual cost in exchange for the contract
+          that visibility tracks the role's granted permissions. */}
+      <div style={labelStyle}>Admin</div>
+      <Link to="/staff" icon={UsersRound} label="Staff" requiredPermission={{ module: "staff", action: "read" }} />
+      <Link to="/settings" icon={Settings} label="Settings" requiredPermission={{ module: "settings", action: "read" }} />
+      <Link to="/settings/roles" icon={ShieldCheck} label="Roles" requiredPermission={{ module: "roles", action: "read" }} />
+      <Link to="/audit-log" icon={ScrollText} label="Audit Log" requiredPermission={{ module: "audit", action: "read" }} />
 
-      {isAdmin && (
-        <>
-          <div style={labelStyle}>Platform</div>
-          <Link to="/developer" icon={Code} label="Developer" />
-          <Link to="/privacy" icon={Shield} label="Privacy" />
-          {/* Per-sub-brand BrandKit admin — moved from the wellness sidebar
-              (the sub-brand model is travel-only: TMC / RFU / Travel Stall
-              / Visa Sure per Q25). Route is wrapped in <TravelOnly> in
-              App.jsx so direct-URL hits from non-travel tenants bounce. */}
-          <Link to="/admin/brand-kits" icon={Palette} label="Brand Kits" />
-        </>
-      )}
+      <div style={labelStyle}>Platform</div>
+      <Link to="/developer" icon={Code} label="Developer" requiredPermission={{ module: "developer", action: "read" }} />
+      <Link to="/privacy" icon={Shield} label="Privacy" requiredPermission={{ module: "settings", action: "manage" }} />
+      <Link to="/admin/brand-kits" icon={Palette} label="Brand Kits" requiredPermission={{ module: "settings", action: "manage" }} />
 
-      {!isAdmin && !isManager && (
-        <>
-          <div style={labelStyle}>User</div>
-          <Link
-            to="/notification-settings"
-            icon={Settings}
-            label="Notification Settings"
-          />
-        </>
-      )}
+      {/* Notification Settings has empty requiredPermissions in the page
+          catalog — every authenticated user can manage their own. No
+          requiredPermission prop so it always renders for the signed-in
+          user regardless of grant configuration. */}
+      <div style={labelStyle}>You</div>
+      <Link to="/notification-settings" icon={Settings} label="Notification Settings" />
+
     </>
   );
 }

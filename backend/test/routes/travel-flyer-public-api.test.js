@@ -12,7 +12,7 @@
  *       Sub-brand-locked template, MANAGER without access → 403 SUB_BRAND_DENIED.
  *       Non-numeric :id → 400 INVALID_ID.
  *       No JWT → 401 (verifyToken).
- *       USER role → 403 (verifyRole).
+ *       USER role → 403 (requirePermission gate).
  *       Audit row TRAVEL_FLYER_PUBLIC_SHARE_MINTED emitted on success.
  *
  *   - GET /public/:slug (PUBLIC, no auth, JWT in ?t=)

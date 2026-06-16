@@ -14,7 +14,7 @@
  *
  * Contracts asserted:
  *   1. 401 when no token.
- *   2. USER role → 403 (verifyRole short-circuits).
+ *   2. USER role → 403 (RBAC gate short-circuits).
  *   3. 400 INVALID_ID when :id is not numeric.
  *   4. 404 INVOICE_NOT_FOUND when missing or cross-tenant.
  *   5. 409 INVOICE_NOT_PAYABLE when status is Draft/Paid/Voided.

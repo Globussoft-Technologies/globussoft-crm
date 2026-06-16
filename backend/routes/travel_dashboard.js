@@ -30,6 +30,7 @@
 const express = require("express");
 const router = express.Router();
 const { verifyToken, verifyRole } = require("../middleware/auth");
+const { requirePermission } = require("../middleware/requirePermission");
 const prisma = require("../lib/prisma");
 const {
   requireTravelTenant,
@@ -254,7 +255,7 @@ router.get("/dashboard", verifyToken, requireTravelTenant, async (req, res) => {
 router.get(
   "/dashboard/workload",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("reports", "read"),
   requireTravelTenant,
   async (req, res) => {
     try {

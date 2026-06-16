@@ -2,7 +2,7 @@
 // Unit tests for backend/routes/travel_school_terms.js — TMC school
 // term/holiday/exam-blackout calendar CRUD + the /check date helper.
 //
-// Pattern: patch authMw.verifyToken + verifyRole to pass-through BEFORE
+// Pattern: patch authMw.verifyToken + the RBAC gate to pass-through BEFORE
 // requiring the route (so the role gate doesn't block handler tests), inject
 // req.user via app middleware, and replace the prisma singleton's
 // travelSchoolTerm delegate with bare vi.fn() surfaces.

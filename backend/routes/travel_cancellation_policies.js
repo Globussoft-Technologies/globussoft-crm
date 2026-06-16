@@ -42,6 +42,7 @@
 const express = require("express");
 const router = express.Router();
 const { verifyToken, verifyRole } = require("../middleware/auth");
+const { requirePermission } = require("../middleware/requirePermission");
 const prisma = require("../lib/prisma");
 const {
   requireTravelTenant,
@@ -198,7 +199,7 @@ router.get(
 router.post(
   "/cancellation-policies",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("cancellation_policies", "write"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -282,7 +283,7 @@ router.post(
 router.patch(
   "/cancellation-policies/:id",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("cancellation_policies", "update"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -380,7 +381,7 @@ router.patch(
 router.delete(
   "/cancellation-policies/:id",
   verifyToken,
-  verifyRole(["ADMIN"]),
+  requirePermission("cancellation_policies", "delete"),
   requireTravelTenant,
   async (req, res) => {
     try {

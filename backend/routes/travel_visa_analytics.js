@@ -66,6 +66,7 @@
 const express = require("express");
 const prisma = require("../lib/prisma");
 const { verifyToken, verifyRole } = require("../middleware/auth");
+const { requirePermission } = require("../middleware/requirePermission");
 const { requireTravelTenant } = require("../middleware/travelGuards");
 const { writeAudit } = require("../lib/audit");
 
@@ -105,7 +106,7 @@ const STATUS_FIELD = {
 // ─── V16 — rejection-recovery success rate ───────────────────────────
 router.get(
   "/rejection-recovery",
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("visa", "read"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -203,7 +204,7 @@ router.get(
 // ─── V17 — conversion by diagnostic readiness level ───────────────────
 router.get(
   "/conversion-by-readiness",
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("visa", "read"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -308,7 +309,7 @@ router.get(
 // ─── V18 — lead source → application conversion rate ─────────────────
 router.get(
   "/lead-source-rate",
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("visa", "read"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -468,7 +469,7 @@ router.get(
 // dashboard tile renders gracefully.
 router.get(
   "/by-month",
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("visa", "read"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -736,7 +737,7 @@ router.get(
 // dashboard tile renders gracefully.
 router.get(
   "/by-quarter",
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("visa", "read"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -1004,7 +1005,7 @@ router.get(
 // dashboard tile renders gracefully.
 router.get(
   "/by-year",
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("visa", "read"),
   requireTravelTenant,
   async (req, res) => {
     try {

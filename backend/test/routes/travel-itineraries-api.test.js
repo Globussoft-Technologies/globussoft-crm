@@ -905,7 +905,7 @@ describe('POST /api/travel/itineraries/:id/items lat/lng whitelist (S118)', () =
 //   - ADMIN happy path: creates ItineraryTemplate with derived
 //     name/destination/duration/basePriceMinor + serialized items
 //   - MANAGER happy path
-//   - USER → 403 (verifyRole gate)
+//   - USER → 403 (RBAC gate)
 //   - tenant + sub-brand gates fire via loadItineraryWithGuard
 //   - body.name override is honored
 //   - duration derived from max(date-range span, max(dayNumber), 1)

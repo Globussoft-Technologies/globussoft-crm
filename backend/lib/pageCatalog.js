@@ -307,7 +307,10 @@ const PAGE_CATALOG = [
   {
     path: '/converted-leads',
     label: 'Converted Leads',
-    description: 'Leads that converted to patients / customers',
+    // Cross-vertical — description was wellness-flavored ("converted to
+    // patients / customers"). Travel converts leads to bookings; generic
+    // CRM converts to deals. Use neutral wording.
+    description: 'Leads that converted to customers',
     category: 'Leads & Revenue',
     requiredPermissions: [{ module: 'leads', action: 'read' }],
   },
@@ -370,14 +373,21 @@ const PAGE_CATALOG = [
   {
     path: '/invoices',
     label: 'Invoices',
-    description: 'Patient + customer invoices',
+    // Cross-vertical generic invoice surface (wellness + travel + generic
+    // all link here). Description stays vertical-agnostic — wellness has
+    // its own patient-flavored detail surfaces; travel has
+    // /travel/invoices-admin alongside this one.
+    description: 'Customer invoice ledger',
     category: 'Finance',
     requiredPermissions: [{ module: 'invoices', action: 'read' }],
   },
   {
     path: '/estimates',
     label: 'Estimates',
-    description: 'Quotes + pre-treatment estimates',
+    // Cross-vertical — description was wellness-flavored ("pre-treatment").
+    // Travel uses estimates for trip quotes pre-confirmation; generic CRM
+    // for proposals. Drop the wellness-only "pre-treatment" qualifier.
+    description: 'Quotes + estimates sent to customers',
     category: 'Finance',
     requiredPermissions: [{ module: 'estimates', action: 'read' }],
   },
@@ -391,7 +401,10 @@ const PAGE_CATALOG = [
   {
     path: '/payments',
     label: 'Payments',
-    description: 'Patient payment history + gateway transactions',
+    // Cross-vertical generic payment surface. Vertical-agnostic copy —
+    // wellness flavours its own surfaces via the patient-wallet / POS
+    // sub-pages; travel flavours via /travel/milestones + payable batches.
+    description: 'Payment history + gateway transactions',
     category: 'Finance',
     requiredPermissions: [{ module: 'payments', action: 'read' }],
   },
@@ -499,7 +512,10 @@ const PAGE_CATALOG = [
   },
   {
     path: '/surveys',
-    label: 'Patient Surveys',
+    // Cross-vertical surveys surface (CSAT / NPS / post-trip / post-visit).
+    // Was labelled "Patient Surveys" which read wrong on travel tenants
+    // where the same surface drives post-trip + visa-completion surveys.
+    label: 'Surveys',
     description: 'Survey campaigns + responses',
     category: 'Reports',
     requiredPermissions: [{ module: 'surveys', action: 'read' }],
@@ -541,11 +557,15 @@ const PAGE_CATALOG = [
   },
 
   // ── Patient portal (CUSTOMER role — not in wellness sidebar) ─────
+  // Wellness-only surface served at a cross-vertical path. The path-prefix
+  // filter in getCatalogForVertical can't infer wellness from `/portal`,
+  // so it carries an explicit `vertical: 'wellness'` tag instead.
   {
     path: '/portal',
     label: 'Patient portal',
     description: 'Patient self-service home',
     category: 'Patient',
+    vertical: 'wellness',
     requiredPermissions: [{ module: 'appointments', action: 'read' }],
   },
   {
@@ -604,10 +624,15 @@ const PAGE_CATALOG = [
     requiredPermissions: [{ module: 'staff', action: 'manage' }],
   },
   {
+    // Wellness-only surface served at a cross-vertical path (revenue goals
+    // page wires per-practitioner targets). Travel uses per-sub-brand /
+    // per-supplier revenue tracking through travel_reports.js, not this
+    // page. Tagged so the filter hides it on travel tenants.
     path: '/revenue-goals',
     label: 'Revenue Goals',
     description: 'Org + per-practitioner revenue targets',
     category: 'Admin',
+    vertical: 'wellness',
     requiredPermissions: [{ module: 'reports', action: 'write' }],
   },
   {
@@ -719,6 +744,233 @@ const PAGE_CATALOG = [
     requiredPermissions: [{ module: 'inventory', action: 'read' }],
   },
 
+  // ── Travel vertical ───────────────────────────────────────────────
+  // Travel-vertical landing-page candidates. Mirrors renderTravelNav in
+  // Sidebar.jsx and the travel permission catalogue in
+  // backend/lib/permissionCatalog.js TRAVEL_MODULES. Path-prefix `/travel`
+  // is what getCatalogForVertical filters on — a wellness tenant never
+  // sees these in its dropdown, a travel tenant never sees `/wellness/*`.
+  // Phase 1: pages list lets a travel admin pick the role's landingPath;
+  // backend routes don't yet decorate with requirePermission, so the
+  // listed perms are advisory until the Phase 2 sweep.
+  {
+    path: '/travel',
+    label: 'Travel Dashboard',
+    description: 'Travel CRM operational overview',
+    category: 'Travel',
+    requiredPermissions: [{ module: 'reports', action: 'read' }],
+  },
+  {
+    path: '/travel/leads',
+    label: 'Travel Leads',
+    description: 'Lead pipeline across all travel sub-brands',
+    category: 'Travel Sales',
+    requiredPermissions: [{ module: 'leads', action: 'read' }],
+  },
+  {
+    path: '/travel/inbound-leads',
+    label: 'Inbound Leads',
+    description: 'Webhook-ingested raw leads pre-conversion',
+    category: 'Travel Sales',
+    requiredPermissions: [{ module: 'inbound_leads', action: 'read' }],
+  },
+  {
+    path: '/travel/diagnostics',
+    label: 'Diagnostics',
+    description: 'TMC readiness diagnostic public-form results',
+    category: 'Travel Sales',
+    requiredPermissions: [{ module: 'diagnostics', action: 'read' }],
+  },
+  {
+    path: '/travel/itineraries',
+    label: 'Itineraries',
+    description: 'Day-by-day itinerary builder + library',
+    category: 'Travel Operations',
+    requiredPermissions: [{ module: 'itineraries', action: 'read' }],
+  },
+  {
+    path: '/travel/itinerary-templates',
+    label: 'Itinerary Templates',
+    description: 'Reusable itinerary starting points',
+    category: 'Travel Operations',
+    requiredPermissions: [{ module: 'itinerary_templates', action: 'read' }],
+  },
+  {
+    path: '/travel/trips',
+    label: 'TMC Trips',
+    description: 'School educational trip instances (TMC sub-brand)',
+    category: 'Travel Operations',
+    requiredPermissions: [{ module: 'trips', action: 'read' }],
+  },
+  {
+    path: '/travel/tmc/catalogue',
+    label: 'TMC Catalogue',
+    description: 'Bookable TMC trip template library',
+    category: 'Travel Operations',
+    requiredPermissions: [{ module: 'tmc_catalogue', action: 'read' }],
+  },
+  {
+    path: '/travel/web-checkins',
+    label: 'Web Check-ins',
+    description: 'Airline web check-in tracking',
+    category: 'Travel Operations',
+    requiredPermissions: [{ module: 'web_checkins', action: 'read' }],
+  },
+  {
+    path: '/travel/passport-verification',
+    label: 'Passport Verification',
+    description: 'OCR queue for passport scans',
+    category: 'Travel Operations',
+    requiredPermissions: [{ module: 'passport', action: 'read' }],
+  },
+  {
+    path: '/travel/cost-master',
+    label: 'Cost Master',
+    description: 'Per-supplier cost rate cards across categories',
+    category: 'Travel Pricing',
+    requiredPermissions: [{ module: 'cost_master', action: 'read' }],
+  },
+  {
+    path: '/travel/sightseeing',
+    label: 'Sightseeing Master',
+    description: 'POI + sightseeing inventory catalogue',
+    category: 'Travel Pricing',
+    requiredPermissions: [{ module: 'sightseeing', action: 'read' }],
+  },
+  {
+    path: '/travel/pricing-rules',
+    label: 'Pricing Rules',
+    description: 'Season-based markup + auto-pricing rules',
+    category: 'Travel Pricing',
+    requiredPermissions: [{ module: 'pricing', action: 'read' }],
+  },
+  {
+    path: '/travel/flights/quote',
+    label: 'Flight Quick-quote',
+    description: 'Manual flight-options quote builder',
+    category: 'Travel Pricing',
+    requiredPermissions: [{ module: 'flight_quotes', action: 'read' }],
+  },
+  {
+    path: '/travel/reports',
+    label: 'Travel Reports',
+    description: 'Travel sales + operational reports',
+    category: 'Travel Analytics',
+    requiredPermissions: [{ module: 'reports', action: 'read' }],
+  },
+  {
+    path: '/travel/suppliers-admin',
+    label: 'Suppliers',
+    description: 'Supplier directory + KYC + reconciliation',
+    category: 'Travel Suppliers',
+    requiredPermissions: [{ module: 'suppliers', action: 'read' }],
+  },
+  {
+    path: '/travel/payables',
+    label: 'Payables',
+    description: 'Cross-supplier A/P review queue',
+    category: 'Travel Suppliers',
+    requiredPermissions: [{ module: 'payables', action: 'read' }],
+  },
+  {
+    path: '/travel/commission-profiles',
+    label: 'Commission Profiles',
+    description: 'Supplier commission policy CRUD',
+    category: 'Travel Suppliers',
+    requiredPermissions: [{ module: 'commission_profiles', action: 'read' }],
+  },
+  {
+    path: '/travel/cancellation-policies',
+    label: 'Cancellation Policies',
+    description: 'Refund + credit-note auto-issuance policies',
+    category: 'Travel Suppliers',
+    requiredPermissions: [{ module: 'cancellation_policies', action: 'read' }],
+  },
+  {
+    path: '/travel/quotes-admin',
+    label: 'Quotes',
+    description: 'Customer-facing quote list (travel)',
+    category: 'Travel Quotes & Invoicing',
+    requiredPermissions: [{ module: 'quotes', action: 'read' }],
+  },
+  {
+    path: '/travel/quotes/builder',
+    label: 'Quote Builder',
+    description: 'Line-item + totals quote composer',
+    category: 'Travel Quotes & Invoicing',
+    requiredPermissions: [{ module: 'quotes', action: 'write' }],
+  },
+  {
+    path: '/travel/quote-templates',
+    label: 'Quote Templates',
+    description: 'Pre-filled line-set library for quotes',
+    category: 'Travel Quotes & Invoicing',
+    requiredPermissions: [{ module: 'quote_templates', action: 'read' }],
+  },
+  {
+    path: '/travel/invoices-admin',
+    label: 'Travel Invoices',
+    description: 'Customer-facing invoice ledger',
+    category: 'Travel Quotes & Invoicing',
+    requiredPermissions: [{ module: 'invoices', action: 'read' }],
+  },
+  {
+    path: '/travel/milestones',
+    label: 'Payment Milestones',
+    description: 'Cross-invoice payment-milestone dashboard',
+    category: 'Travel Quotes & Invoicing',
+    requiredPermissions: [{ module: 'invoices', action: 'read' }],
+  },
+  {
+    path: '/travel/visa',
+    label: 'Visa Dashboard',
+    description: 'Visa Sure sub-brand overview',
+    category: 'Travel Sub-brand',
+    requiredPermissions: [{ module: 'visa', action: 'read' }],
+  },
+  {
+    path: '/travel/visa/applications',
+    label: 'Visa Applications',
+    description: 'Applicant tracker for Visa Sure',
+    category: 'Travel Sub-brand',
+    requiredPermissions: [{ module: 'visa', action: 'read' }],
+  },
+  {
+    path: '/travel/religious-packets',
+    label: 'Religious Packets',
+    description: 'RFU Umrah pilgrim packet builder',
+    category: 'Travel Sub-brand',
+    requiredPermissions: [{ module: 'religious_packets', action: 'read' }],
+  },
+  {
+    path: '/travel/curriculum-mappings',
+    label: 'Curriculum Mappings',
+    description: 'TMC school-trip curriculum alignment',
+    category: 'Travel Sub-brand',
+    requiredPermissions: [{ module: 'curriculum', action: 'read' }],
+  },
+  {
+    path: '/travel/school-terms',
+    label: 'School Term Calendar',
+    description: 'TMC school term + holiday windows',
+    category: 'Travel Sub-brand',
+    requiredPermissions: [{ module: 'school_terms', action: 'read' }],
+  },
+  {
+    path: '/travel/marketing/flyer-studio',
+    label: 'Flyer Studio',
+    description: 'Marketing flyer composer',
+    category: 'Travel Marketing',
+    requiredPermissions: [{ module: 'flyer_studio', action: 'read' }],
+  },
+  {
+    path: '/travel/flyer-templates',
+    label: 'Flyer Templates',
+    description: 'Reusable flyer designs library',
+    category: 'Travel Marketing',
+    requiredPermissions: [{ module: 'flyer_templates', action: 'read' }],
+  },
+
   // ── User self-service (notification preferences) ──────────────────
   // Empty requiredPermissions — every logged-in user (including CUSTOMER)
   // can manage their own notification preferences.
@@ -735,6 +987,49 @@ const PAGES_BY_PATH = new Map(PAGE_CATALOG.map((p) => [p.path, p]));
 
 function getCatalog() {
   return PAGE_CATALOG.map((p) => ({
+    ...p,
+    requiredPermissions: p.requiredPermissions.map((perm) => ({ ...perm })),
+  }));
+}
+
+/**
+ * Returns the catalog filtered to entries relevant for the given
+ * tenant vertical. Used by GET /api/pages/catalog so the Create-role
+ * landingPath dropdown on a travel tenant doesn't show wellness routes
+ * (and vice-versa) before the role's permissions are saved.
+ *
+ * Two-layer filtering — path-prefix inference for the bulk of entries,
+ * explicit `vertical:` override for the exceptions where a wellness-
+ * or travel-only surface lives at a cross-vertical path:
+ *
+ *   1. Explicit `vertical:` field on the entry (highest priority).
+ *      Catches wellness-only surfaces at cross-vertical paths like
+ *      `/portal` (Patient portal) or `/revenue-goals` (per-practitioner
+ *      revenue targets) — neither path matches `/wellness/*` but both
+ *      pages are semantically wellness.
+ *
+ *   2. Path-prefix inference (fallback):
+ *      • `/wellness` + `/wellness/*` → wellness-only
+ *      • `/travel`   + `/travel/*`   → travel-only
+ *      • everything else → cross-vertical, always included
+ *
+ * Path-prefix beats blanket per-row tagging because the wellness
+ * catalog predates the vertical split with 50+ entries — a blanket
+ * inference avoids touching every row. New travel entries land under
+ * `/travel/*` so the inference catches them automatically.
+ *
+ * Unknown vertical (null / "generic" / unrecognised) returns only the
+ * cross-vertical core — neither wellness nor travel pages leak.
+ */
+function getCatalogForVertical(vertical) {
+  return PAGE_CATALOG.filter((p) => {
+    if (p.vertical) return p.vertical === vertical;
+    const isWellness = p.path === '/wellness' || p.path.startsWith('/wellness/');
+    if (isWellness) return vertical === 'wellness';
+    const isTravel = p.path === '/travel' || p.path.startsWith('/travel/');
+    if (isTravel) return vertical === 'travel';
+    return true;
+  }).map((p) => ({
     ...p,
     requiredPermissions: p.requiredPermissions.map((perm) => ({ ...perm })),
   }));
@@ -793,6 +1088,7 @@ function canAccessPath(path, permissionSet, opts = {}) {
 module.exports = {
   PAGE_CATALOG,
   getCatalog,
+  getCatalogForVertical,
   getPage,
   isKnownPage,
   getAccessiblePages,

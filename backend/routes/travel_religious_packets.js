@@ -22,6 +22,7 @@
 const express = require("express");
 const router = express.Router();
 const { verifyToken, verifyRole } = require("../middleware/auth");
+const { requirePermission } = require("../middleware/requirePermission");
 const prisma = require("../lib/prisma");
 const {
   requireTravelTenant,
@@ -126,7 +127,7 @@ router.get(
 router.post(
   "/religious-packets",
   verifyToken,
-  verifyRole(["ADMIN"]),
+  requirePermission("religious_packets", "write"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -758,7 +759,7 @@ router.get(
 router.patch(
   "/religious-packets/:id",
   verifyToken,
-  verifyRole(["ADMIN"]),
+  requirePermission("religious_packets", "update"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -859,7 +860,7 @@ router.patch(
 router.delete(
   "/religious-packets/:id",
   verifyToken,
-  verifyRole(["ADMIN"]),
+  requirePermission("religious_packets", "delete"),
   requireTravelTenant,
   async (req, res) => {
     try {

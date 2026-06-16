@@ -15,6 +15,7 @@ import { describe, it, expect } from 'vitest';
 import {
   PAGE_CATALOG,
   getCatalog,
+  getCatalogForVertical,
   getPage,
   isKnownPage,
   getAccessiblePages,
@@ -221,6 +222,102 @@ describe('canAccessPath', () => {
     // Pages that need permissions Nurse simply doesn't have stay barred.
     expect(canAccessPath('/invoices', nursePerms)).toBe(false); // invoices.read
     expect(canAccessPath('/wellness/pos', nursePerms)).toBe(false); // pos.read
+  });
+});
+
+describe('getCatalogForVertical (vertical-aware filtering)', () => {
+  // Pins the contract that /api/pages/catalog returns only the requesting
+  // tenant's vertical-relevant pages so the Create-role landingPath
+  // dropdown on a travel tenant doesn't show wellness routes (and vice-
+  // versa). Two-layer filter: explicit `vertical:` field wins, otherwise
+  // path-prefix inference (`/wellness/*` → wellness, `/travel/*` → travel).
+
+  it('travel vertical excludes every /wellness/* path', () => {
+    const pages = getCatalogForVertical('travel');
+    const wellnessPaths = pages.filter(
+      (p) => p.path === '/wellness' || p.path.startsWith('/wellness/'),
+    );
+    expect(wellnessPaths).toEqual([]);
+  });
+
+  it('travel vertical includes /travel/* pages', () => {
+    const pages = getCatalogForVertical('travel');
+    const paths = pages.map((p) => p.path);
+    expect(paths).toContain('/travel');
+    expect(paths).toContain('/travel/itineraries');
+    expect(paths).toContain('/travel/suppliers-admin');
+  });
+
+  it('wellness vertical excludes every /travel/* path', () => {
+    const pages = getCatalogForVertical('wellness');
+    const travelPaths = pages.filter(
+      (p) => p.path === '/travel' || p.path.startsWith('/travel/'),
+    );
+    expect(travelPaths).toEqual([]);
+  });
+
+  it('wellness vertical includes /wellness/* pages', () => {
+    const pages = getCatalogForVertical('wellness');
+    const paths = pages.map((p) => p.path);
+    expect(paths).toContain('/wellness/patients');
+    expect(paths).toContain('/wellness/calendar');
+  });
+
+  it('generic vertical excludes both /wellness/* and /travel/* paths', () => {
+    const pages = getCatalogForVertical('generic');
+    const paths = pages.map((p) => p.path);
+    for (const p of paths) {
+      expect(p.startsWith('/wellness')).toBe(false);
+      expect(p.startsWith('/travel')).toBe(false);
+    }
+  });
+
+  it('every vertical includes the cross-vertical core (/home, /contacts, /tasks, /notification-settings)', () => {
+    for (const v of ['wellness', 'travel', 'generic']) {
+      const pages = getCatalogForVertical(v);
+      const paths = pages.map((p) => p.path);
+      expect(paths, `${v}: /home should be in the catalog`).toContain('/home');
+      expect(paths, `${v}: /contacts should be in the catalog`).toContain('/contacts');
+      expect(paths, `${v}: /tasks should be in the catalog`).toContain('/tasks');
+      expect(paths, `${v}: /notification-settings should be in the catalog`).toContain('/notification-settings');
+    }
+  });
+
+  it('explicit `vertical:` field overrides path-prefix inference', () => {
+    // /portal + /revenue-goals are tagged `vertical: 'wellness'` because
+    // the page is semantically wellness-only despite the cross-vertical
+    // path. They must be hidden on travel + generic, visible on wellness.
+    const wellness = getCatalogForVertical('wellness').map((p) => p.path);
+    const travel = getCatalogForVertical('travel').map((p) => p.path);
+    const generic = getCatalogForVertical('generic').map((p) => p.path);
+
+    expect(wellness).toContain('/portal');
+    expect(wellness).toContain('/revenue-goals');
+    expect(travel).not.toContain('/portal');
+    expect(travel).not.toContain('/revenue-goals');
+    expect(generic).not.toContain('/portal');
+    expect(generic).not.toContain('/revenue-goals');
+  });
+
+  it('unknown / null vertical falls back to the cross-vertical core only', () => {
+    const unknown = getCatalogForVertical('made-up-vertical').map((p) => p.path);
+    const nullV = getCatalogForVertical(null).map((p) => p.path);
+    expect(unknown).toContain('/home');
+    expect(nullV).toContain('/home');
+    expect(unknown).not.toContain('/wellness/patients');
+    expect(unknown).not.toContain('/travel/itineraries');
+    expect(nullV).not.toContain('/wellness/patients');
+    expect(nullV).not.toContain('/travel/itineraries');
+  });
+
+  it('returns a deep clone (mutations do not affect source)', () => {
+    const pages = getCatalogForVertical('travel');
+    expect(pages.length).toBeGreaterThan(0);
+    pages[0].label = 'TAMPERED';
+    pages[0].requiredPermissions.push({ module: 'evil', action: 'all' });
+    const source = PAGE_CATALOG.find((p) => p.path === pages[0].path);
+    expect(source.label).not.toBe('TAMPERED');
+    expect(source.requiredPermissions.some((p) => p.module === 'evil')).toBe(false);
   });
 });
 

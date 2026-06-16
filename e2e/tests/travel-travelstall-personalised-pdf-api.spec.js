@@ -7,7 +7,7 @@
  * draft/regen). Phase 2 row TS18 from TRAVEL_CRM_PORTAL_FEATURE_MATRIX.md.
  *
  * Endpoint shape:
- *   - Auth: verifyToken + verifyRole(["ADMIN", "MANAGER"]) + requireTravelTenant
+ *   - Auth: verifyToken + the RBAC gate + requireTravelTenant
  *   - Body: { contactId, destinations?, budget?, durationDays? }
  *   - Returns { pdfUrl, generatedAt, model, stub } envelope
  *   - PDF returned as base64-encoded data: URL (Phase 2 — transient,

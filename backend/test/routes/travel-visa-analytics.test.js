@@ -11,7 +11,7 @@
  * -------------
  *   - Auth gate: missing/garbage Bearer → 401 (verifyToken). Aggregates
  *     never fire when the gate trips.
- *   - Role gate: USER role → 403 (verifyRole(['ADMIN','MANAGER'])).
+ *   - Role gate: USER role → 403 (requirePermission('visa','read')).
  *   - Vertical gate: non-travel tenant → 403 WRONG_VERTICAL; tenant row
  *     missing → 404 TENANT_NOT_FOUND.
  *   - Empty-state contract: when zero visasure contacts exist for the
@@ -35,7 +35,7 @@
  * Test pattern mirrors backend/test/routes/travel-dashboard.test.js — patch
  * the prisma singleton with vi.fn() shapes BEFORE requiring the router,
  * then drive supertest with real HS256 JWTs signed with the dev-fallback
- * secret. verifyToken + verifyRole + requireTravelTenant all stay in the
+ * secret. verifyToken + requirePermission + requireTravelTenant all stay in the
  * chain (no bypass) so the guards are exercised end-to-end.
  */
 
@@ -132,7 +132,7 @@ describe('travel-visa-analytics — auth gate', () => {
       .get('/api/travel/visa/analytics/lead-source-rate')
       .set('Authorization', `Bearer ${tokenFor('USER')}`);
     expect(res.status).toBe(403);
-    // verifyRole rejects BEFORE the vertical/Contact lookups fire.
+    // the RBAC gate rejects BEFORE the vertical/Contact lookups fire.
     expect(prisma.contact.groupBy).not.toHaveBeenCalled();
   });
 });

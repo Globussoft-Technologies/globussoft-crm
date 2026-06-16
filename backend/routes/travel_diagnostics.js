@@ -28,6 +28,7 @@ const fs = require("fs");
 const crypto = require("crypto");
 const router = express.Router();
 const { verifyToken, verifyRole } = require("../middleware/auth");
+const { requirePermission } = require("../middleware/requirePermission");
 const prisma = require("../lib/prisma");
 const { scoreDiagnostic, parseBank } = require("../lib/travelDiagnosticScoring");
 const pdfRenderer = require("../services/pdfRenderer");
@@ -171,7 +172,7 @@ router.get("/diagnostic-banks/:id", verifyToken, requireTravelTenant, async (req
 router.post(
   "/diagnostic-banks",
   verifyToken,
-  verifyRole(["ADMIN"]),
+  requirePermission("diagnostics", "write"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -1467,7 +1468,7 @@ router.get("/diagnostics/:id", verifyToken, requireTravelTenant, async (req, res
 router.post(
   "/diagnostics/:id/talking-points/regen",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("diagnostics", "update"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -1593,7 +1594,7 @@ router.post(
 router.post(
   "/diagnostics/:id/form-vs-call/compare",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("diagnostics", "read"),
   requireTravelTenant,
   async (req, res) => {
     try {

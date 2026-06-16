@@ -43,6 +43,7 @@
 const express = require("express");
 const router = express.Router();
 const { verifyToken, verifyRole } = require("../middleware/auth");
+const { requirePermission } = require("../middleware/requirePermission");
 const prisma = require("../lib/prisma");
 const {
   requireTravelTenant,
@@ -255,7 +256,7 @@ router.get(
 router.post(
   "/purchase-orders",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("suppliers", "write"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -339,7 +340,7 @@ router.get(
 router.put(
   "/purchase-orders/:id",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("suppliers", "update"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -389,7 +390,7 @@ router.put(
 router.post(
   "/purchase-orders/:id/lines",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("suppliers", "write"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -448,7 +449,7 @@ router.post(
 router.put(
   "/purchase-orders/:id/lines/:lineId",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("suppliers", "update"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -527,7 +528,7 @@ router.put(
 router.delete(
   "/purchase-orders/:id/lines/:lineId",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("suppliers", "delete"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -602,7 +603,7 @@ function buildTransitionHandler(toStatus, timestampField) {
 router.post(
   "/purchase-orders/:id/send",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("suppliers", "update"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -662,7 +663,7 @@ router.post(
 router.post(
   "/purchase-orders/:id/acknowledge",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("suppliers", "update"),
   requireTravelTenant,
   buildTransitionHandler("acknowledged", "acknowledgedAt"),
 );
@@ -674,7 +675,7 @@ router.post(
 router.post(
   "/purchase-orders/:id/fulfill",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("suppliers", "update"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -732,6 +733,9 @@ router.post(
 router.post(
   "/purchase-orders/:id/cancel",
   verifyToken,
+  // Privileged status transition — admin-only per directive (not yet
+  // converted to permission-based; awaiting explicit approval to map
+  // to suppliers.manage or a dedicated action).
   verifyRole(["ADMIN"]),
   requireTravelTenant,
   async (req, res) => {
@@ -772,7 +776,7 @@ router.post(
 router.get(
   "/purchase-orders/:id/pdf",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("suppliers", "read"),
   requireTravelTenant,
   async (req, res) => {
     try {

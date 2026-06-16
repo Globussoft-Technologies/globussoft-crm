@@ -21,14 +21,14 @@
  *   - POST ADMIN happy path → 201 + record
  *   - POST missing destinationName → 400 MISSING_DESTINATION
  *   - POST invalid currency "usd" (lowercase) → 400 INVALID_CURRENCY
- *   - POST USER role → 403 (verifyRole gate)
+ *   - POST USER role → 403 (requirePermission('sightseeing','write') gate)
  *   - GET /:id found / invalid id / not-found shapes
  *   - PATCH /:id happy path
  *   - DELETE /:id sets isActive=false (no destructive delete)
  *
  * Pattern mirrors travel-suppliers-by-month.test.js — patch prisma BEFORE
  * requiring the router, drive with real HS256 JWTs against the dev
- * fallback secret. verifyToken + verifyRole + requireTravelTenant +
+ * fallback secret. verifyToken + requirePermission + requireTravelTenant +
  * getSubBrandAccessSet all run for real.
  */
 

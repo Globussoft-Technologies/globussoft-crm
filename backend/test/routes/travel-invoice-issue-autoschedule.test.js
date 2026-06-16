@@ -284,7 +284,7 @@ describe('POST /api/travel/invoices/:id/issue — auto-create 25/50/25 schedule'
   });
 
   test('USER role -> 403 (no createMany, no invoice update)', async () => {
-    // No findFirst stub needed — verifyRole short-circuits.
+    // No findFirst stub needed — the RBAC gate short-circuits.
     const res = await request(makeApp())
       .post('/api/travel/invoices/200/issue')
       .set('Authorization', `Bearer ${tokenFor('USER')}`);

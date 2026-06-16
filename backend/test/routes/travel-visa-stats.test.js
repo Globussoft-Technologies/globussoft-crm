@@ -32,7 +32,7 @@
  *
  * Mocking pattern mirrors travel-visa-status-history.test.js — monkey-patch
  * the prisma singleton BEFORE requiring the router so verifyToken +
- * verifyRole + requireTravelTenant stay in the chain (no bypass).
+ * requirePermission + requireTravelTenant stay in the chain (no bypass).
  *
  * Why this matters
  * ----------------

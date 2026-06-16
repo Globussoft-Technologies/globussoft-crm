@@ -104,8 +104,10 @@ async function maybeSelfHealAdminPermissions(tenantId, userId) {
       where: { id: tenantId },
       select: { vertical: true },
     });
+    // Pass vertical string directly so travel tenants get TRAVEL_MODULES
+    // in ADMIN's catalog snapshot, not the wellness/generic binary collapse.
     await provisionTenantRbac(tenantId, {
-      isWellness: tenantRow?.vertical === 'wellness',
+      vertical: tenantRow?.vertical || 'generic',
     });
 
     // Explicit ADMIN assignment in case the provisioner's user-iteration

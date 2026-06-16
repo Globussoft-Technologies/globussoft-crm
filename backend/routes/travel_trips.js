@@ -43,11 +43,13 @@
 const express = require("express");
 const router = express.Router();
 const { verifyToken, verifyRole } = require("../middleware/auth");
+const { requirePermission } = require("../middleware/requirePermission");
 const prisma = require("../lib/prisma");
 const { requireTravelTenant, getSubBrandAccessSet } = require("../middleware/travelGuards");
 const digilockerClient = require("../services/digilockerClient");
 const googleDriveClient = require("../services/googleDriveClient");
 const listProjection = require("../lib/listProjection");
+const { toE164 } = require("../utils/deduplication");
 
 const VALID_TRIP_STATUSES = ["confirmed", "in-trip", "completed", "cancelled"];
 
@@ -876,7 +878,7 @@ router.get("/trips/:id", verifyToken, requireTravelTenant, requireTmcAccess, asy
 router.get(
   "/trips/:id/ops-dashboard",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("trips", "read"),
   requireTravelTenant,
   requireTmcAccess,
   async (req, res) => {
@@ -1246,7 +1248,7 @@ router.patch("/trips/:id", verifyToken, requireTravelTenant, requireTmcAccess, a
 router.delete(
   "/trips/:id",
   verifyToken,
-  verifyRole(["ADMIN"]),
+  requirePermission("trips", "delete"),
   requireTravelTenant,
   requireTmcAccess,
   async (req, res) => {
@@ -1338,6 +1340,19 @@ router.post("/trips/:id/participants", verifyToken, requireTravelTenant, require
         code: "INVALID_AADHAAR_LAST4",
       });
     }
+    // Bare 10-digit Indian mobiles get +91 auto-prepended (Travel Stall is
+    // Indian-only). E.164 (`+919876543210`) and 12-digit `91XXXXXXXXXX` are
+    // also accepted. Returns null on garbage like `abcde` → 400.
+    let normalizedPhone = null;
+    if (parentPhone) {
+      normalizedPhone = toE164(parentPhone);
+      if (!normalizedPhone) {
+        return res.status(400).json({
+          error: "parentPhone must be a 10-digit Indian mobile (6-9 prefix) or E.164 international number",
+          code: "INVALID_PHONE",
+        });
+      }
+    }
 
     const created = await prisma.tripParticipant.create({
       data: {
@@ -1349,7 +1364,7 @@ router.post("/trips/:id/participants", verifyToken, requireTravelTenant, require
         aadhaarLast4: aadhaarLast4 || null,
         aadhaarTokenId: aadhaarTokenId || null,
         parentName: parentName || null,
-        parentPhone: parentPhone || null,
+        parentPhone: normalizedPhone,
         parentEmail: parentEmail || null,
         medicalNotes: medicalNotes || null,
         consentCapturedAt: consentCapturedAt ? new Date(consentCapturedAt) : null,
@@ -1394,6 +1409,19 @@ router.patch("/trips/:id/participants/:pid", verifyToken, requireTravelTenant, r
           data[k] = v ? new Date(v) : null;
         } else if (k === "passportDocId") {
           data[k] = v ? parseInt(v, 10) : null;
+        } else if (k === "parentPhone") {
+          if (!v) {
+            data[k] = null;
+          } else {
+            const normalized = toE164(v);
+            if (!normalized) {
+              return res.status(400).json({
+                error: "parentPhone must be a 10-digit Indian mobile (6-9 prefix) or E.164 international number",
+                code: "INVALID_PHONE",
+              });
+            }
+            data[k] = normalized;
+          }
         } else {
           data[k] = v ?? null;
         }

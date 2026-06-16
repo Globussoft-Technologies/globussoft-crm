@@ -55,6 +55,7 @@ const express = require("express");
 const crypto = require("crypto");
 const router = express.Router();
 const { verifyToken, verifyRole } = require("../middleware/auth");
+const { requirePermission } = require("../middleware/requirePermission");
 const prisma = require("../lib/prisma");
 const { renderTravelItineraryPdf } = require("../services/pdfRenderer");
 const {
@@ -1492,7 +1493,7 @@ router.patch("/itineraries/:id", verifyToken, requireTravelTenant, async (req, r
 router.delete(
   "/itineraries/:id",
   verifyToken,
-  verifyRole(["ADMIN"]),
+  requirePermission("itineraries", "delete"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -3042,7 +3043,7 @@ router.post(
 router.post(
   "/itineraries/:id/draft/regen",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("itineraries", "update"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -3189,7 +3190,7 @@ router.post("/itineraries/:id/reject", verifyToken, requireTravelTenant, async (
 router.post(
   "/itineraries/:id/save-as-template",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("itinerary_templates", "write"),
   requireTravelTenant,
   async (req, res) => {
     try {

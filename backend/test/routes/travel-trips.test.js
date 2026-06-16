@@ -25,10 +25,10 @@
  *                                                           when both (a) existing.driveFolderId
  *                                                           is null AND (b) body did not
  *                                                           supply driveFolderId
- *       DELETE /trips/:id                                   ADMIN only — verifyRole gate
+ *       DELETE /trips/:id                                   ADMIN only — requirePermission('trips','delete')
  *
  *   - Ops-dashboard rollup (1 route, PRD §4.9):
- *       GET    /trips/:id/ops-dashboard                     ADMIN+MANAGER only — verifyRole gate
+ *       GET    /trips/:id/ops-dashboard                     ADMIN+MANAGER only — requirePermission('trips','read')
  *                                                           score=null when participantsCount=0
  *                                                           OR expectedTotalRupees=0; over-roomed
  *                                                           participantsRoomed is clamped to
@@ -64,7 +64,7 @@
  *       DELETE /trips/:id/documents/:docId                  DOC_NOT_FOUND on cross-trip
  *
  * Pinned guards (all routes go through these in order):
- *   verifyToken → [verifyRole?] → requireTravelTenant → requireTmcAccess → handler
+ *   verifyToken → [requirePermission?] → requireTravelTenant → requireTmcAccess → handler
  *
  * Failure-path codes pinned by the route source as of this commit:
  *   400 INVALID_ID / INVALID_CONTACT_ID / INVALID_STATUS / INVALID_DATE /
@@ -80,7 +80,7 @@
  * 1160dc3a) — patch the prisma singleton with vi.fn() shapes BEFORE requiring
  * the router, then drive supertest with real HS256 JWTs signed with the same
  * fallback secret the middleware uses in dev. The full guard chain
- * (verifyToken + verifyRole + requireTravelTenant + requireTmcAccess) is
+ * (verifyToken + requirePermission + requireTravelTenant + requireTmcAccess) is
  * exercised end-to-end; we don't bypass middleware.
  *
  * The googleDriveClient + digilockerClient services are stub-mode (Q1 + Q3
@@ -802,14 +802,42 @@ describe('Participants', () => {
   test('PATCH participant happy partial-update returns 200', async () => {
     prisma.tripParticipant.findFirst.mockResolvedValue({ id: 50, tripId: 100 });
     prisma.tripParticipant.update.mockResolvedValue({
-      id: 50, tripId: 100, parentPhone: '+91999',
+      id: 50, tripId: 100, parentPhone: '+919876543210',
     });
     const res = await request(makeApp())
       .patch('/api/travel/trips/100/participants/50')
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
-      .send({ parentPhone: '+91999' });
+      .send({ parentPhone: '+919876543210' });
     expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ id: 50, parentPhone: '+91999' });
+    expect(res.body).toMatchObject({ id: 50, parentPhone: '+919876543210' });
+  });
+
+  test('PATCH participant with bare 10-digit Indian mobile auto-prepends +91', async () => {
+    prisma.tripParticipant.findFirst.mockResolvedValue({ id: 50, tripId: 100 });
+    prisma.tripParticipant.update.mockResolvedValue({
+      id: 50, tripId: 100, parentPhone: '+919876543210',
+    });
+    const res = await request(makeApp())
+      .patch('/api/travel/trips/100/participants/50')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ parentPhone: '9876543210' });
+    expect(res.status).toBe(200);
+    expect(prisma.tripParticipant.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ parentPhone: '+919876543210' }),
+      }),
+    );
+  });
+
+  test('PATCH participant with non-numeric parentPhone returns 400 INVALID_PHONE', async () => {
+    prisma.tripParticipant.findFirst.mockResolvedValue({ id: 50, tripId: 100 });
+    const res = await request(makeApp())
+      .patch('/api/travel/trips/100/participants/50')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ parentPhone: 'abcde-not-a-phone' });
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_PHONE' });
+    expect(prisma.tripParticipant.update).not.toHaveBeenCalled();
   });
 
   test('PATCH participant with empty body returns 400 EMPTY_BODY', async () => {
@@ -828,7 +856,7 @@ describe('Participants', () => {
     const res = await request(makeApp())
       .patch('/api/travel/trips/100/participants/9999')
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
-      .send({ parentPhone: '+91999' });
+      .send({ parentPhone: '+919876543210' });
     expect(res.status).toBe(404);
     expect(res.body).toMatchObject({ code: 'PARTICIPANT_NOT_FOUND' });
     expect(prisma.tripParticipant.update).not.toHaveBeenCalled();

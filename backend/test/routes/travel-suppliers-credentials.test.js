@@ -431,7 +431,7 @@ describe('GET /api/travel/suppliers/:id/credentials', () => {
 // What's pinned
 // -------------
 //   - Happy path:        200 + { credentialId, rotatedAt, supplierId }.
-//   - ADMIN-only:        MANAGER + USER → 403 (verifyRole gate, mirrors the
+//   - ADMIN-only:        MANAGER + USER → 403 (requirePermission('suppliers','manage') gate, mirrors the
 //                        existing PATCH /supplier-credentials/:id rotation
 //                        surface even though no secret material moves here).
 //   - Sub-brand:         ADMIN scoped to ['tmc'] rotating an RFU supplier's
@@ -497,7 +497,7 @@ describe('POST /api/travel/suppliers/:id/credentials/:credId/rotate', () => {
     expect(prisma.supplierCredentialAccessLog.create).not.toHaveBeenCalled();
   });
 
-  // Note: sub-brand denial is structurally tested by the verifyRole gate above
+  // Note: sub-brand denial is structurally tested by the RBAC gate above
   // for MANAGER/USER → 403. The endpoint is ADMIN-only, and ADMIN role
   // short-circuits getSubBrandAccessSet() to `null` (full access) in
   // backend/middleware/travelGuards.js — so an ADMIN can never fail

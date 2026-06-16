@@ -30,7 +30,7 @@
  *   4. Parent already CreditNote -> 400 CANNOT_DEBIT_CREDIT_NOTE.
  *   5. Parent already DebitNote -> 400 CANNOT_DEBIT_CREDIT_NOTE.
  *   6. Parent in Draft state -> 400 INVALID_PARENT_STATE.
- *   7. USER role -> 403 (verifyRole short-circuits before findFirst).
+ *   7. USER role -> 403 (RBAC gate short-circuits before findFirst).
  *   8. Cross-tenant parent -> 404 INVOICE_NOT_FOUND.
  *   9. Sub-brand denied (MANAGER without access) -> 403 SUB_BRAND_DENIED.
  *  10. Audit row written with action=TRAVEL_INVOICE_DEBIT_NOTE_ISSUED.

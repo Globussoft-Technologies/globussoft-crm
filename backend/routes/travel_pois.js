@@ -114,6 +114,7 @@ const router = express.Router();
 const crypto = require("crypto");
 
 const { verifyToken, verifyRole } = require("../middleware/auth");
+const { requirePermission } = require("../middleware/requirePermission");
 const prisma = require("../lib/prisma");
 const { writeAudit } = require("../lib/audit");
 const { findNearbyPoi } = require("../lib/poiDedup");
@@ -313,7 +314,7 @@ router.post("/", verifyToken, async (req, res) => {
 router.get(
   "/pending",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("pois", "read"),
   async (req, res) => {
     try {
       const rawLimit = parseInt(req.query.limit, 10);
@@ -350,7 +351,7 @@ router.get(
 router.post(
   "/:id/approve",
   verifyToken,
-  verifyRole(["ADMIN"]),
+  requirePermission("pois", "manage"),
   async (req, res) => {
     try {
       const id = parseIdParam(req.params.id);
@@ -395,7 +396,7 @@ router.post(
 router.post(
   "/:id/reject",
   verifyToken,
-  verifyRole(["ADMIN"]),
+  requirePermission("pois", "manage"),
   async (req, res) => {
     try {
       const id = parseIdParam(req.params.id);

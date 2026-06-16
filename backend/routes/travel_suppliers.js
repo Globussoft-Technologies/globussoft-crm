@@ -28,6 +28,7 @@
 const express = require("express");
 const router = express.Router();
 const { verifyToken, verifyRole } = require("../middleware/auth");
+const { requirePermission } = require("../middleware/requirePermission");
 const prisma = require("../lib/prisma");
 const { encrypt, decrypt } = require("../lib/fieldEncryption");
 const { requireTravelTenant } = require("../middleware/travelGuards");
@@ -65,7 +66,7 @@ const METADATA_SELECT = {
 router.get(
   "/supplier-credentials",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("suppliers", "read"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -92,7 +93,7 @@ router.get(
 router.post(
   "/supplier-credentials",
   verifyToken,
-  verifyRole(["ADMIN"]),
+  requirePermission("suppliers", "manage"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -136,7 +137,7 @@ router.post(
 router.get(
   "/supplier-credentials/:id",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("suppliers", "read"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -162,7 +163,7 @@ router.get(
 router.post(
   "/supplier-credentials/:id/reveal",
   verifyToken,
-  verifyRole(["ADMIN"]),
+  requirePermission("suppliers", "manage"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -215,7 +216,7 @@ router.post(
 router.patch(
   "/supplier-credentials/:id",
   verifyToken,
-  verifyRole(["ADMIN"]),
+  requirePermission("suppliers", "manage"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -280,7 +281,7 @@ router.patch(
 router.delete(
   "/supplier-credentials/:id",
   verifyToken,
-  verifyRole(["ADMIN"]),
+  requirePermission("suppliers", "manage"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -319,7 +320,7 @@ router.delete(
 router.get(
   "/supplier-credentials/:id/access-log",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("suppliers", "read"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -1846,7 +1847,7 @@ router.get(
 router.get(
   "/suppliers/:id/credentials",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("suppliers", "read"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -2015,7 +2016,7 @@ router.get(
 router.post(
   "/suppliers/:id/credentials/:credId/rotate",
   verifyToken,
-  verifyRole(["ADMIN"]),
+  requirePermission("suppliers", "manage"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -2178,7 +2179,7 @@ function parseAccessTrailOffset(input) {
 router.get(
   "/suppliers/:id/access-trail",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("suppliers", "read"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -3092,7 +3093,7 @@ router.get("/suppliers/:id", verifyToken, requireTravelTenant, async (req, res) 
 router.post(
   "/suppliers",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("suppliers", "write"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -3199,7 +3200,7 @@ router.post(
 router.put(
   "/suppliers/:id",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("suppliers", "update"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -3348,7 +3349,7 @@ router.put(
 router.delete(
   "/suppliers/:id",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("suppliers", "delete"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -3478,7 +3479,7 @@ function buildStateTransitionHandler({ toStatus, requireReason }) {
 router.post(
   "/suppliers/:id/pause",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("suppliers", "update"),
   requireTravelTenant,
   buildStateTransitionHandler({ toStatus: "paused", requireReason: false }),
 );
@@ -3486,7 +3487,7 @@ router.post(
 router.post(
   "/suppliers/:id/block",
   verifyToken,
-  verifyRole(["ADMIN"]),
+  requirePermission("suppliers", "update"),
   requireTravelTenant,
   buildStateTransitionHandler({ toStatus: "blocked_disputed", requireReason: true }),
 );
@@ -3494,7 +3495,7 @@ router.post(
 router.post(
   "/suppliers/:id/archive",
   verifyToken,
-  verifyRole(["ADMIN"]),
+  requirePermission("suppliers", "update"),
   requireTravelTenant,
   buildStateTransitionHandler({ toStatus: "archived", requireReason: false }),
 );
@@ -3502,7 +3503,7 @@ router.post(
 router.post(
   "/suppliers/:id/reactivate",
   verifyToken,
-  verifyRole(["ADMIN"]),
+  requirePermission("suppliers", "update"),
   requireTravelTenant,
   buildStateTransitionHandler({ toStatus: "active", requireReason: false }),
 );
@@ -4071,7 +4072,7 @@ router.get(
 router.post(
   "/suppliers/:id/payables",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("suppliers", "write"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -4129,7 +4130,7 @@ router.post(
 router.put(
   "/suppliers/:id/payables/:payableId",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("suppliers", "update"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -4222,7 +4223,7 @@ router.put(
 router.delete(
   "/suppliers/:id/payables/:payableId",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("suppliers", "delete"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -5039,7 +5040,7 @@ function projectKyc(kyc, checklistItems) {
 router.get(
   "/suppliers/:id/kyc",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("suppliers", "read"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -5068,7 +5069,7 @@ router.get(
 router.post(
   "/suppliers/:id/kyc",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("suppliers", "write"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -5130,7 +5131,7 @@ router.post(
 router.put(
   "/suppliers/:id/kyc",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("suppliers", "update"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -5200,7 +5201,7 @@ router.put(
 router.post(
   "/suppliers/:id/kyc/submit",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("suppliers", "update"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -5251,7 +5252,7 @@ router.post(
 router.post(
   "/suppliers/:id/kyc/verify",
   verifyToken,
-  verifyRole(["ADMIN"]),
+  requirePermission("suppliers", "update"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -5302,7 +5303,7 @@ router.post(
 router.post(
   "/suppliers/:id/kyc/reject",
   verifyToken,
-  verifyRole(["ADMIN"]),
+  requirePermission("suppliers", "update"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -5357,7 +5358,7 @@ router.post(
 router.put(
   "/suppliers/:id/kyc/checklist/:itemId",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("suppliers", "update"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -5517,7 +5518,7 @@ function projectDispute(d) {
 router.post(
   "/suppliers/:id/disputes",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("suppliers", "write"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -5619,7 +5620,7 @@ router.post(
 router.get(
   "/suppliers/:id/disputes",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER", "USER"]),
+  requirePermission("suppliers", "read"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -5673,7 +5674,7 @@ router.get(
 router.get(
   "/suppliers/:id/disputes/:disputeId",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER", "USER"]),
+  requirePermission("suppliers", "read"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -5701,7 +5702,7 @@ router.get(
 router.put(
   "/suppliers/:id/disputes/:disputeId",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("suppliers", "update"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -5785,7 +5786,7 @@ router.put(
 router.post(
   "/suppliers/:id/disputes/:disputeId/resolve",
   verifyToken,
-  verifyRole(["ADMIN"]),
+  requirePermission("suppliers", "update"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -5845,7 +5846,7 @@ router.post(
 router.post(
   "/suppliers/:id/disputes/:disputeId/escalate",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("suppliers", "update"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -5891,7 +5892,7 @@ router.post(
 router.get(
   "/disputes/stats",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("suppliers", "read"),
   requireTravelTenant,
   async (req, res) => {
     try {

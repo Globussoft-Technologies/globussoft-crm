@@ -24,16 +24,39 @@ const express = require('express');
 const router = express.Router();
 const prisma = require('../lib/prisma');
 const { verifyToken } = require('../middleware/auth');
-const { getCatalog, getWidget } = require('../lib/widgetCatalog');
+const { getCatalog, getCatalogForVertical, getWidget } = require('../lib/widgetCatalog');
 const { getUserPermissions } = require('../middleware/requirePermission');
+
+// Resolve the requesting tenant's vertical (wellness | travel | generic).
+// Used by /catalog + /me to filter out cross-vertical widgets so a
+// travel-tenant admin's configurator doesn't show wellness clinical
+// widgets and vice-versa. DB blip → null (callers fall back to the
+// union catalog, better-than-empty UX).
+async function resolveTenantVertical(req) {
+  try {
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: req.user.tenantId },
+      select: { vertical: true },
+    });
+    return tenant?.vertical || null;
+  } catch (err) {
+    console.error('[widgets] tenant vertical lookup failed:', err && err.message);
+    return null;
+  }
+}
 
 // Public-ish: any logged-in user can read the catalogue (it's UI metadata,
 // nothing tenant-sensitive). This matches /api/roles/catalog which is also
 // readable by anyone with roles.read.
-router.get('/catalog', verifyToken, (req, res) => {
-  const catalog = getCatalog();
+//
+// Vertical-aware (Phase 1, 2026-06-15): a travel tenant only sees travel
+// + cross-vertical widgets; a wellness tenant only sees wellness + cross-
+// vertical. Drives the Roles → Widgets configurator modal in RolesAdmin.
+router.get('/catalog', verifyToken, async (req, res) => {
+  const vertical = await resolveTenantVertical(req);
+  const catalog = vertical ? getCatalogForVertical(vertical) : getCatalog();
   const categories = Array.from(new Set(catalog.map((w) => w.category)));
-  res.json({ catalog, categories });
+  res.json({ catalog, categories, vertical });
 });
 
 // GET /api/widgets/me — what should this user see on /home?
@@ -41,8 +64,15 @@ router.get('/me', verifyToken, async (req, res) => {
   try {
     // OWNER bypasses permission checks elsewhere; surface every enabled
     // widget in catalogue order so they can preview the full dashboard.
+    // Vertical-aware (Phase 1): OWNER on a travel tenant previews travel
+    // widgets, on wellness previews wellness — mirrors what real role-
+    // scoped users will see in their configurator.
     if (req.user.isOwner) {
-      const all = getCatalog().map((w, idx) => ({
+      const ownerVertical = await resolveTenantVertical(req);
+      const list = ownerVertical
+        ? getCatalogForVertical(ownerVertical)
+        : getCatalog();
+      const all = list.map((w, idx) => ({
         widgetKey: w.key,
         position: idx * 10,
         isEnabled: true,

@@ -26,7 +26,7 @@
  * Test pattern mirrors travel-commission-profiles-preview.test.js — patch the
  * prisma singleton with vi.fn() shapes BEFORE requiring the router, drive
  * supertest with HS256 JWTs signed against the fallback secret. verifyToken +
- * verifyRole stay in the chain so auth + RBAC + sub-brand gates all run.
+ * requirePermission stay in the chain so auth + RBAC + sub-brand gates all run.
  */
 
 import { describe, test, expect, beforeEach, vi } from 'vitest';

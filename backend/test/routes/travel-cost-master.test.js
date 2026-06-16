@@ -37,7 +37,7 @@
  * Test pattern mirrors backend/test/routes/travel_suppliers.test.js — patch
  * the prisma singleton with vi.fn() shapes BEFORE requiring the router, then
  * drive supertest with real HS256 JWTs signed with the same fallback secret
- * the middleware uses in dev. verifyToken + verifyRole + requireTravelTenant
+ * the middleware uses in dev. verifyToken + requirePermission + requireTravelTenant
  * stay in the chain (we don't bypass them) so the full guard stack is
  * exercised end-to-end.
  *

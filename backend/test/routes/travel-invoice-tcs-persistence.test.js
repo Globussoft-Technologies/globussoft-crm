@@ -24,7 +24,7 @@
  *   6. Already-applied (tcsAppliedAt non-null) → 409 TCS_ALREADY_APPLIED,
  *      NO update, NO audit row.
  *   7. Cross-tenant → 404 INVOICE_NOT_FOUND (loadParentInvoice tenant scope).
- *   8. USER role → 403 (verifyRole short-circuits).
+ *   8. USER role → 403 (RBAC gate short-circuits).
  *   9. Non-numeric :id → 400 INVALID_ID.
  *  10. Audit details payload carries tcsAmount + tcsRate + exceedingAmount +
  *      applies on the happy path.

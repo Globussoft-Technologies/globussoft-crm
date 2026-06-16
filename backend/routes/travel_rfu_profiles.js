@@ -24,6 +24,7 @@
 const express = require("express");
 const router = express.Router();
 const { verifyToken, verifyRole } = require("../middleware/auth");
+const { requirePermission } = require("../middleware/requirePermission");
 const prisma = require("../lib/prisma");
 const { requireTravelTenant, getSubBrandAccessSet } = require("../middleware/travelGuards");
 const { findDuplicateContactFull } = require("../utils/deduplication");
@@ -1051,7 +1052,7 @@ router.patch("/rfu-profiles/:id", verifyToken, requireTravelTenant, requireRfuAc
 router.delete(
   "/rfu-profiles/:id",
   verifyToken,
-  verifyRole(["ADMIN"]),
+  requirePermission("rfu_profiles", "delete"),
   requireTravelTenant,
   requireRfuAccess,
   async (req, res) => {

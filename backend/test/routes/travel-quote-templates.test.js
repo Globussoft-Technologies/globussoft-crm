@@ -30,7 +30,7 @@
  *   - POST line item missing description → 400 INVALID_LINES_JSON
  *   - POST line item with bad lineType → 400 INVALID_LINES_JSON
  *   - POST lowercase currency "inr" → 400 INVALID_CURRENCY
- *   - POST USER role → 403 (verifyRole gate)
+ *   - POST USER role → 403 (RBAC gate)
  *   - GET /:id found / invalid id / not-found shapes
  *   - PATCH /:id happy path + empty body + not found
  *   - DELETE /:id sets isActive=false (no destructive delete); MANAGER → 403
@@ -41,11 +41,11 @@
  *   - POST /:id/apply template not found → 404 QUOTE_TEMPLATE_NOT_FOUND
  *   - POST /:id/apply target quote not found → 404 QUOTE_NOT_FOUND
  *   - POST /:id/apply template inactive → 400 TEMPLATE_INACTIVE
- *   - POST /:id/apply USER role → 403 (verifyRole gate)
+ *   - POST /:id/apply USER role → 403 (RBAC gate)
  *
  * Pattern mirrors travel-itinerary-templates.test.js — patch prisma BEFORE
  * requiring the router, drive with real HS256 JWTs against the dev
- * fallback secret. verifyToken + verifyRole + requireTravelTenant +
+ * fallback secret. verifyToken + requirePermission + requireTravelTenant +
  * getSubBrandAccessSet all run for real.
  */
 

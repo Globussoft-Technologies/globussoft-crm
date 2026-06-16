@@ -1,0 +1,498 @@
+/**
+ * cleanup-foreign-perms-report.js
+ *
+ * AUDIT (default, read-only) + APPLY (--apply, with per-row audit log) for
+ * RolePermission rows whose `module` is not present in the tenant's
+ * vertical-filtered permission catalog. These are "foreign" perms —
+ * leftovers from when the seeder granted wellness-flavored baselines
+ * to every tenant regardless of vertical (the bug the testers found:
+ * travel tenants' Manager / User / Customer roles carrying
+ * `patients.read`, `appointments.read`, `consents.write`, etc.).
+ *
+ * Modes:
+ *   • Default — READ-ONLY. Lists every dirty role; no DELETE, no
+ *     UPDATE, no INSERT. Safe to run any time.
+ *   • --apply — Strips the foreign rows + writes one Role /
+ *     STRIP_FOREIGN_PERM audit entry per stripped row. Each
+ *     delete + audit pair runs in a Prisma transaction so a
+ *     partial failure cannot leave the table inconsistent.
+ *
+ * Usage:
+ *   node backend/scripts/cleanup-foreign-perms-report.js
+ *     Default dry-run across every tenant. Prints a human-readable
+ *     table of dirty roles.
+ *
+ *   node backend/scripts/cleanup-foreign-perms-report.js --tenant 11
+ *     Restrict the scan / apply to a single tenant id. REQUIRED when
+ *     using --apply (forces explicit scoping; prevents a "delete
+ *     everything everywhere" mishap).
+ *
+ *   node backend/scripts/cleanup-foreign-perms-report.js --tenant 11 --apply
+ *     Apply the cleanup. Strips every foreign RolePermission row on
+ *     tenant 11, writes per-row audit log entries, and prints
+ *     before/after counts per affected role.
+ *
+ *   node backend/scripts/cleanup-foreign-perms-report.js --json
+ *     Emit JSON on stdout (audit output) for piping into jq.
+ *
+ *   node backend/scripts/cleanup-foreign-perms-report.js --verbose
+ *     List every foreign perm row (default truncates at 8 per role).
+ *
+ * Exit codes:
+ *   0 — scan / apply completed (whether dirty roles found or not)
+ *   1 — usage error, DB failure, or apply attempted without --tenant
+ *
+ * What "foreign" means:
+ *   • wellness tenant, role grants `itineraries.read` → foreign
+ *   • travel tenant, role grants `patients.read`     → foreign
+ *   • generic tenant, role grants `patients.read`    → foreign
+ *   • travel tenant, role grants `contacts.read`     → NOT foreign (common)
+ *   • wellness tenant, role grants `appointments.read` → NOT foreign
+ *
+ * Apply-mode safety guards (layered; ANY failure aborts that row):
+ *   1. --tenant required (no apply without explicit scope)
+ *   2. Tenant must exist in DB
+ *   3. Each RolePermission row re-checked just before delete:
+ *      a) Still references a module NOT in the tenant's vertical catalog
+ *      b) Belongs to a role on the target tenant (TOCTOU guard)
+ *   4. Delete + audit run in prisma.$transaction (atomic)
+ *
+ * Audit trail (apply mode):
+ *   Each stripped row writes one AuditLog entry via lib/audit.writeAudit:
+ *     entity   = "Role"
+ *     action   = "STRIP_FOREIGN_PERM"
+ *     entityId = roleId of the affected role
+ *     userId   = null (system-initiated cleanup)
+ *     tenantId = the affected tenant
+ *     details  = { roleId, roleKey, module, action, vertical,
+ *                  reason: "cleanup-foreign-perms",
+ *                  invokedBy: process.env.USER }
+ *   Tamper-evidence hash chain (#558) covers these rows the same way
+ *   it covers UI-driven permission edits — no special-casing.
+ *
+ * Reversibility:
+ *   --apply DELETES rows. Reversal requires:
+ *     (a) restoring from a backup (mysqldump before running)
+ *     (b) re-granting the perms via the Roles & Permissions UI
+ *   Always take a backup before --apply on production. Foreign perms
+ *   don't grant anything functional today (the catalog endpoint hides
+ *   the modules from the matrix and no route checks them) — so
+ *   reversing is rarely needed, but the option exists.
+ *
+ * Caveats:
+ *   • Unknown modules (not in COMMON / WELLNESS / TRAVEL) are flagged
+ *     as foreign — typo'd grants or rows for since-removed catalog
+ *     entries get cleaned up too.
+ *   • OWNER role (tenantId=null) is skipped — it carries no
+ *     RolePermission rows by design.
+ */
+
+const prisma = require('../lib/prisma');
+const { getCatalogForVertical } = require('../lib/permissionCatalog');
+const { writeAudit } = require('../lib/audit');
+
+function parseArgs(argv) {
+  const args = {
+    json: false,
+    verbose: false,
+    tenant: null,
+    apply: false,
+  };
+  for (let i = 2; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === '--json') args.json = true;
+    else if (a === '--verbose') args.verbose = true;
+    else if (a === '--apply') args.apply = true;
+    else if (a === '--tenant') {
+      const id = parseInt(argv[++i], 10);
+      if (Number.isNaN(id)) {
+        process.stderr.write('Error: --tenant requires a numeric id\n');
+        process.exit(1);
+      }
+      args.tenant = id;
+    } else if (a === '-h' || a === '--help') {
+      process.stdout.write(
+        'Usage: node backend/scripts/cleanup-foreign-perms-report.js [--tenant N] [--apply] [--json] [--verbose]\n',
+      );
+      process.exit(0);
+    }
+  }
+  // Apply mode requires explicit --tenant scope. Forces operator to
+  // think about which tenant they're touching; prevents accidental
+  // platform-wide strip via a typo.
+  if (args.apply && args.tenant === null) {
+    process.stderr.write(
+      'Error: --apply requires --tenant <id>. Refusing to strip foreign perms across all tenants in one shot.\n',
+    );
+    process.exit(1);
+  }
+  return args;
+}
+
+async function buildReport(args) {
+  const tenantWhere = args.tenant ? { id: args.tenant } : {};
+  const tenants = await prisma.tenant.findMany({
+    where: tenantWhere,
+    select: { id: true, name: true, vertical: true, slug: true },
+    orderBy: { id: 'asc' },
+  });
+
+  const findings = [];
+
+  for (const tenant of tenants) {
+    const vertical = tenant.vertical || 'generic';
+    const validCatalog = getCatalogForVertical(vertical);
+    const validModules = new Set(Object.keys(validCatalog));
+
+    const roles = await prisma.role.findMany({
+      where: { tenantId: tenant.id },
+      select: {
+        id: true,
+        key: true,
+        name: true,
+        isSystem: true,
+        userType: true,
+        permissions: {
+          select: { id: true, module: true, action: true },
+        },
+      },
+      orderBy: { id: 'asc' },
+    });
+
+    for (const role of roles) {
+      const totalPerms = role.permissions.length;
+      const foreignPerms = role.permissions.filter(
+        (p) => !validModules.has(p.module),
+      );
+      const foreignModules = Array.from(
+        new Set(foreignPerms.map((p) => p.module)),
+      ).sort();
+
+      if (foreignPerms.length === 0) continue;
+
+      findings.push({
+        tenantId: tenant.id,
+        tenantName: tenant.name,
+        tenantSlug: tenant.slug,
+        vertical,
+        roleId: role.id,
+        roleKey: role.key,
+        roleName: role.name,
+        isSystemRole: role.isSystem,
+        userType: role.userType,
+        totalPerms,
+        validPerms: totalPerms - foreignPerms.length,
+        foreignPermCount: foreignPerms.length,
+        foreignPermPct: Math.round((foreignPerms.length / totalPerms) * 100),
+        foreignModules,
+        foreignPerms: foreignPerms.map((p) => ({
+          id: p.id,
+          module: p.module,
+          action: p.action,
+          key: `${p.module}.${p.action}`,
+        })),
+      });
+    }
+  }
+
+  return {
+    generatedAt: new Date().toISOString(),
+    scannedTenants: tenants.length,
+    dirtyRoles: findings.length,
+    findings,
+  };
+}
+
+/**
+ * Apply the cleanup. For each finding, strip every foreign
+ * RolePermission row + write a Role / STRIP_FOREIGN_PERM audit entry
+ * per stripped row. Each (delete, audit) pair runs in a Prisma
+ * transaction so partial failure leaves the table consistent.
+ *
+ * Re-checks each row just before delete (TOCTOU guard) — confirms the
+ * row still exists AND still references a foreign module relative to
+ * the tenant's current vertical. If anything moved between audit and
+ * apply, the row is logged as 'skipped' with a reason.
+ */
+async function applyCleanup(args, report) {
+  if (report.findings.length === 0) {
+    return { results: [], byRole: [] };
+  }
+
+  // Tenant vertical lookup — used by the TOCTOU re-check below to
+  // confirm the row's module is STILL foreign at delete time. If the
+  // operator flipped tenant.vertical between audit and apply, this
+  // re-check catches it.
+  const tenant = await prisma.tenant.findUnique({
+    where: { id: args.tenant },
+    select: { id: true, vertical: true, name: true },
+  });
+  if (!tenant) {
+    throw new Error(`Tenant id=${args.tenant} not found.`);
+  }
+  const vertical = tenant.vertical || 'generic';
+  const validModules = new Set(
+    Object.keys(getCatalogForVertical(vertical)),
+  );
+
+  const results = [];
+  const byRole = [];
+
+  for (const finding of report.findings) {
+    const roleResult = {
+      roleId: finding.roleId,
+      roleKey: finding.roleKey,
+      beforeCount: finding.totalPerms,
+      foreignCount: finding.foreignPermCount,
+      stripped: 0,
+      skipped: 0,
+      errored: 0,
+    };
+
+    for (const perm of finding.foreignPerms) {
+      try {
+        // TOCTOU re-check: confirm the row still exists, still
+        // belongs to the right role on the right tenant, and still
+        // references a module that's foreign under the current
+        // vertical. Anything moved → skip with reason.
+        const row = await prisma.rolePermission.findUnique({
+          where: { id: perm.id },
+          select: {
+            id: true,
+            module: true,
+            action: true,
+            role: {
+              select: { id: true, tenantId: true, key: true },
+            },
+          },
+        });
+        if (!row) {
+          results.push({
+            ...perm,
+            roleId: finding.roleId,
+            status: 'gone',
+            reason: 'row already deleted between audit + apply',
+          });
+          roleResult.skipped++;
+          continue;
+        }
+        if (row.role.tenantId !== args.tenant) {
+          results.push({
+            ...perm,
+            roleId: finding.roleId,
+            status: 'skipped',
+            reason: `role moved to tenant ${row.role.tenantId}; refused`,
+          });
+          roleResult.skipped++;
+          continue;
+        }
+        if (validModules.has(row.module)) {
+          results.push({
+            ...perm,
+            roleId: finding.roleId,
+            status: 'skipped',
+            reason: `module ${row.module} is no longer foreign (tenant vertical may have changed); refused`,
+          });
+          roleResult.skipped++;
+          continue;
+        }
+
+        await prisma.$transaction(async (tx) => {
+          await tx.rolePermission.delete({ where: { id: row.id } });
+          // Note: writeAudit uses the module-level prisma client, not
+          // the transaction client. The hash-chain helper isn't TX-
+          // aware in this codebase. We accept the small risk that a
+          // crash between delete + audit leaves an unaudited delete
+          // (better than the reverse — an audit pointing at a row
+          // that still exists). If the chain reports tamper after a
+          // bulk run, re-run audit-integrityEngine.js to backfill.
+          await writeAudit(
+            'Role',
+            'STRIP_FOREIGN_PERM',
+            finding.roleId,
+            null,
+            args.tenant,
+            {
+              roleId: finding.roleId,
+              roleKey: finding.roleKey,
+              permissionId: row.id,
+              module: row.module,
+              action: row.action,
+              key: `${row.module}.${row.action}`,
+              vertical,
+              reason: 'cleanup-foreign-perms',
+              invokedBy:
+                process.env.USER || process.env.USERNAME || 'unknown',
+            },
+          );
+        });
+
+        results.push({
+          ...perm,
+          roleId: finding.roleId,
+          status: 'stripped',
+        });
+        roleResult.stripped++;
+      } catch (err) {
+        results.push({
+          ...perm,
+          roleId: finding.roleId,
+          status: 'error',
+          reason: err.message || String(err),
+        });
+        roleResult.errored++;
+      }
+    }
+
+    roleResult.afterCount = roleResult.beforeCount - roleResult.stripped;
+    byRole.push(roleResult);
+  }
+
+  return { results, byRole };
+}
+
+function fmtTable(report, verbose, applyMode, applyOutcome) {
+  if (report.findings.length === 0) {
+    process.stdout.write(
+      'No dirty roles found. Every role grants permissions that are present in the tenant\'s vertical catalog.\n',
+    );
+    return;
+  }
+
+  process.stdout.write(
+    `\nDirty role audit — generated ${report.generatedAt}\n`,
+  );
+  process.stdout.write(`Scanned ${report.scannedTenants} tenant(s).\n`);
+  process.stdout.write(
+    `Found ${report.dirtyRoles} role(s) with foreign perms.\n\n`,
+  );
+
+  const byTenant = new Map();
+  for (const f of report.findings) {
+    if (!byTenant.has(f.tenantId)) byTenant.set(f.tenantId, []);
+    byTenant.get(f.tenantId).push(f);
+  }
+
+  for (const [tenantId, rows] of byTenant) {
+    const first = rows[0];
+    process.stdout.write(
+      `═══ Tenant ${tenantId} — ${first.tenantName || '(unnamed)'} (vertical: ${first.vertical}) ═══\n`,
+    );
+
+    for (const row of rows) {
+      const systemTag = row.isSystemRole ? ' [SYSTEM]' : '';
+      process.stdout.write(
+        `\n  Role: ${row.roleKey}${systemTag}  (${row.roleName}, userType=${row.userType}, id=${row.roleId})\n`,
+      );
+      process.stdout.write(
+        `    Total perms: ${row.totalPerms}  |  Valid: ${row.validPerms}  |  Foreign: ${row.foreignPermCount} (${row.foreignPermPct}%)\n`,
+      );
+      process.stdout.write(
+        `    Foreign modules: ${row.foreignModules.join(', ')}\n`,
+      );
+
+      const shownPerms = verbose
+        ? row.foreignPerms
+        : row.foreignPerms.slice(0, 8);
+      const trailing = verbose
+        ? ''
+        : row.foreignPerms.length > 8
+          ? ` … (+${row.foreignPerms.length - 8} more — use --verbose for full list)`
+          : '';
+      process.stdout.write(
+        `    Foreign perm keys: ${shownPerms.map((p) => p.key).join(', ')}${trailing}\n`,
+      );
+    }
+    process.stdout.write('\n');
+  }
+
+  if (!applyMode) {
+    process.stdout.write('Next steps:\n');
+    process.stdout.write(
+      '  • This was a DRY RUN. No data has been modified.\n',
+    );
+    process.stdout.write(
+      '  • To strip the foreign rows above:\n',
+    );
+    process.stdout.write(
+      '      1. Take a mysqldump backup of Role + RolePermission + AuditLog\n',
+    );
+    process.stdout.write(
+      `      2. Re-run with: --tenant ${first?.tenantId || 'N'} --apply\n`,
+    );
+    process.stdout.write(
+      '  • Re-run this script (without --apply) afterwards to confirm zero dirty roles remain.\n\n',
+    );
+    return;
+  }
+
+  // Apply outcome summary
+  process.stdout.write('Apply results — per-role before/after:\n\n');
+  let totalStripped = 0;
+  let totalSkipped = 0;
+  let totalErrored = 0;
+  for (const r of applyOutcome.byRole) {
+    process.stdout.write(
+      `  Role ${r.roleKey} (id=${r.roleId}): ${r.beforeCount} → ${r.afterCount} perms  ` +
+        `(stripped ${r.stripped}, skipped ${r.skipped}, errored ${r.errored})\n`,
+    );
+    totalStripped += r.stripped;
+    totalSkipped += r.skipped;
+    totalErrored += r.errored;
+  }
+  process.stdout.write(
+    `\nSummary: ${totalStripped} stripped, ${totalSkipped} skipped, ${totalErrored} errored.\n`,
+  );
+  if (totalErrored > 0) {
+    process.stdout.write(
+      '\n  Errors:\n',
+    );
+    for (const r of applyOutcome.results.filter((x) => x.status === 'error')) {
+      process.stdout.write(
+        `    [ERROR] role=${r.roleId} perm=${r.key}: ${r.reason}\n`,
+      );
+    }
+  }
+  process.stdout.write(
+    '\nVerify cleanup by re-running this script without --apply.\n',
+  );
+  process.stdout.write(
+    'Each stripped row produced an AuditLog entry (entity=Role, action=STRIP_FOREIGN_PERM).\n\n',
+  );
+}
+
+async function main() {
+  const args = parseArgs(process.argv);
+  let report;
+  let applyOutcome = null;
+  try {
+    report = await buildReport(args);
+    if (args.apply) {
+      applyOutcome = await applyCleanup(args, report);
+    }
+  } catch (err) {
+    process.stderr.write(
+      `[cleanup-foreign-perms-report] ${err.message}\n`,
+    );
+    process.exit(1);
+  } finally {
+    await prisma.$disconnect().catch(() => {});
+  }
+
+  if (args.json) {
+    process.stdout.write(
+      JSON.stringify({ ...report, applyOutcome }, null, 2) + '\n',
+    );
+  } else {
+    fmtTable(report, args.verbose, args.apply, applyOutcome);
+  }
+}
+
+if (require.main === module) {
+  main().catch((err) => {
+    process.stderr.write(`Unexpected error: ${err.stack || err.message}\n`);
+    process.exit(1);
+  });
+}
+
+module.exports = { buildReport, applyCleanup };

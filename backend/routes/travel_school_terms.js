@@ -20,6 +20,7 @@
 const express = require("express");
 const router = express.Router();
 const { verifyToken, verifyRole } = require("../middleware/auth");
+const { requirePermission } = require("../middleware/requirePermission");
 const prisma = require("../lib/prisma");
 const { sanitizeText } = require("../lib/sanitizeJson");
 
@@ -93,7 +94,7 @@ router.get("/check", verifyToken, async (req, res) => {
 });
 
 // POST / — create a window (ADMIN-only).
-router.post("/", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
+router.post("/", verifyToken, requirePermission("school_terms", "write"), async (req, res) => {
   try {
     const { schoolName, board, kind, label, startDate, endDate, source } = req.body || {};
     if (!label || !startDate || !endDate) {
@@ -133,7 +134,7 @@ router.post("/", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
 });
 
 // PUT /:id — update (ADMIN-only).
-router.put("/:id", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
+router.put("/:id", verifyToken, requirePermission("school_terms", "update"), async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
     if (!Number.isFinite(id)) {
@@ -176,7 +177,7 @@ router.put("/:id", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
 });
 
 // DELETE /:id — soft-delete (ADMIN-only).
-router.delete("/:id", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
+router.delete("/:id", verifyToken, requirePermission("school_terms", "delete"), async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
     if (!Number.isFinite(id)) {

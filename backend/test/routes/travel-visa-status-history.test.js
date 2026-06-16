@@ -10,7 +10,7 @@
  *
  * What's pinned
  * -------------
- *   - Auth + role gate: USER role → 403 (verifyRole(['ADMIN','MANAGER'])).
+ *   - Auth + role gate: USER role → 403 (requirePermission('visa','read')).
  *   - INVALID_ID: non-numeric :id → 400.
  *   - APPLICATION_NOT_FOUND: no row in {id, tenantId} → 404 (tenant-scoped
  *     lookup catches cross-tenant ids).
@@ -29,7 +29,7 @@
  *
  * Mocking pattern mirrors backend/test/routes/travel-visa.test.js —
  * monkey-patch the prisma singleton BEFORE requiring the router. This
- * keeps verifyToken + verifyRole + requireTravelTenant in the chain
+ * keeps verifyToken + requirePermission + requireTravelTenant in the chain
  * (no bypass) so the guards are exercised end-to-end.
  */
 

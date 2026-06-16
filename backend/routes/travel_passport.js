@@ -48,6 +48,7 @@ const fs = require("fs");
 const crypto = require("crypto");
 
 const { verifyToken, verifyRole } = require("../middleware/auth");
+const { requirePermission } = require("../middleware/requirePermission");
 const prisma = require("../lib/prisma");
 const { requireTravelTenant, getSubBrandAccessSet } = require("../middleware/travelGuards");
 const passportOcrClient = require("../services/passportOcrClient");
@@ -282,7 +283,7 @@ router.post(
 router.get(
   "/verification-queue",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("passport", "read"),
   requireTravelTenant,
   requireTmcAccess,
   async (req, res) => {
@@ -382,7 +383,7 @@ router.get(
 router.post(
   "/participants/:id/passport-verify",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("passport", "update"),
   requireTravelTenant,
   requireTmcAccess,
   async (req, res) => {
@@ -505,7 +506,7 @@ router.post(
 router.delete(
   "/participants/:id/passport-extraction",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("passport", "update"),
   requireTravelTenant,
   requireTmcAccess,
   async (req, res) => {
@@ -566,7 +567,7 @@ async function loadCustomerTraveller(req) {
 router.post(
   "/customer-travellers/:id/passport-verify",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("passport", "update"),
   requireTravelTenant,
   requireTmcAccess,
   async (req, res) => {
@@ -652,7 +653,7 @@ router.post(
 router.delete(
   "/customer-travellers/:id/passport-extraction",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("passport", "update"),
   requireTravelTenant,
   requireTmcAccess,
   async (req, res) => {

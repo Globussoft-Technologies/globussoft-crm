@@ -23,7 +23,7 @@
  *   - PATCH  /api/travel/rfu-profiles/:id                      400 EMPTY_BODY; 400 INVALID_TIER;
  *                                                              409 DUPLICATE_PASSPORT on update;
  *                                                              200 happy path
- *   - DELETE /api/travel/rfu-profiles/:id                      ADMIN-only gate (verifyRole);
+ *   - DELETE /api/travel/rfu-profiles/:id                      ADMIN-only gate (requirePermission('rfu_profiles','delete'));
  *                                                              200 with { deleted: true, id }
  *   - Sub-brand gate                                           non-admin user with subBrandAccess
  *                                                              excluding "rfu" → 403 SUB_BRAND_DENIED

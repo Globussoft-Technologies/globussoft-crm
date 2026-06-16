@@ -20,7 +20,7 @@
  *   4. invoice.docType==null (back-compat) -> 400 NOT_A_PROFORMA.
  *   5. invoice.status=='Issued' Proforma -> 400 INVALID_INVOICE_STATE.
  *   6. invoice.status=='Voided' Proforma -> 400 INVALID_INVOICE_STATE.
- *   7. USER role -> 403 (verifyRole short-circuits before findFirst).
+ *   7. USER role -> 403 (RBAC gate short-circuits before findFirst).
  *   8. Cross-tenant invoice -> 404 INVOICE_NOT_FOUND.
  *   9. Sub-brand denied (MANAGER without access) -> 403 SUB_BRAND_DENIED.
  *  10. Audit row written with action=TRAVEL_INVOICE_CONVERTED_TO_TAX_INVOICE

@@ -64,6 +64,7 @@
 const express = require("express");
 const router = express.Router();
 const { verifyToken, verifyRole } = require("../middleware/auth");
+const { requirePermission } = require("../middleware/requirePermission");
 const prisma = require("../lib/prisma");
 
 // PRD §3.3.3 defaults — duplicated here so a GET on an empty tenant
@@ -191,7 +192,7 @@ function weightsNumericallyEqual(a, b) {
 router.get(
   "/",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("diagnostics", "read"),
   async (req, res) => {
     try {
       const row = await prisma.engineWeights.findFirst({
@@ -220,7 +221,7 @@ router.get(
 router.put(
   "/",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("diagnostics", "update"),
   async (req, res) => {
     try {
       const coerced = validateAndCoercePutBody(req.body);

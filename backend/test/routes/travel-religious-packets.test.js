@@ -88,7 +88,7 @@ beforeEach(() => {
 });
 
 // ───────────────────────────────────────────────────────────────────────
-// Auth gates (verifyToken / verifyRole / requireTravelTenant)
+// Auth gates (verifyToken / requirePermission / requireTravelTenant)
 // ───────────────────────────────────────────────────────────────────────
 
 describe('Auth + vertical gates', () => {
@@ -449,7 +449,7 @@ describe('POST /api/travel/religious-packets', () => {
   });
 
   test('non-admin (via direct route call) blocked by verifyRole BEFORE sub-brand check', async () => {
-    // USER role with tmc access trying to POST to ANY subBrand — verifyRole
+    // USER role with tmc access trying to POST to ANY subBrand — the RBAC gate
     // fires first and 403s; we never reach assertSubBrandAccess.
     prisma.user.findUnique.mockResolvedValue({ role: 'USER', subBrandAccess: JSON.stringify(['tmc']) });
     const res = await request(makeApp())
@@ -604,14 +604,14 @@ describe('PATCH /api/travel/religious-packets/:id', () => {
     // attempting to MIGRATE to "tmc" (which user does NOT have access to)
     // must 403 — admin can't sidestep their own access list.
     //
-    // Wrinkle: verifyRole requires ADMIN to even reach this handler, and
+    // Wrinkle: the RBAC gate requires ADMIN to even reach this handler, and
     // ADMIN gets full sub-brand access (per getSubBrandAccessSet which
     // short-circuits role==='ADMIN' to null). So to exercise this path
     // we have to construct an admin whose user-row lookup returns
     // a non-admin role (simulating role drift). Since the route's
     // getSubBrandAccessSet looks up by userId, we can return a
     // {role:'USER', subBrandAccess:['rfu']} row from prisma.user.findUnique
-    // even though the JWT claims ADMIN — verifyRole sees the JWT and lets
+    // even though the JWT claims ADMIN — the RBAC gate sees the JWT and lets
     // us in; the sub-brand guard sees the DB row and narrows.
     prisma.user.findUnique.mockResolvedValue({ role: 'USER', subBrandAccess: JSON.stringify(['rfu']) });
     prisma.religiousGuidancePacket.findFirst.mockResolvedValue({

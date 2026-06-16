@@ -28,7 +28,7 @@
  *   - DELETE /participants/:id/passport-extraction   ADMIN+MANAGER only — clears columns
  *
  * Pinned guards (in order):
- *   verifyToken → [verifyRole?] → requireTravelTenant → requireTmcAccess → handler
+ *   verifyToken → [requirePermission?] → requireTravelTenant → requireTmcAccess → handler
  *
  * Test pattern mirrors backend/test/routes/travel-trips.test.js — patch
  * the prisma singleton with vi.fn() shapes BEFORE requiring the router,

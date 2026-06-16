@@ -12,7 +12,7 @@
  * Mirrors backend/test/routes/travel-curriculum-stats.test.js (Prisma
  * singleton patched BEFORE the router is required; supertest + HS256 JWTs
  * signed against the dev-fallback secret). All 3 endpoints behave the same
- * way for auth: verifyToken first, then verifyRole(['ADMIN','MANAGER']) —
+ * way for auth: verifyToken first, then requirePermission('curriculum','write') —
  * USER role returns 403; missing token returns 401.
  *
  * What's pinned

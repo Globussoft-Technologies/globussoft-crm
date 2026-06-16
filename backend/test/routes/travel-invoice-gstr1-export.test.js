@@ -24,7 +24,7 @@
  *   - HSN_SUMMARY contains SAC codes for line types present in fixtures.
  *   - B2B_INVOICES has one row per source invoice with totals.
  *   - DOCUMENT_TOTALS rolls up by docType (TaxInvoice / CreditNote / DebitNote).
- *   - USER role → 403 (verifyRole gate blocks before findMany).
+ *   - USER role → 403 (RBAC gate blocks before findMany).
  *   - Cross-tenant data excluded (the where clause's tenantId filter
  *     means the prisma stub's findMany call is invoked with the caller's
  *     tenantId — we assert this directly on the mock).

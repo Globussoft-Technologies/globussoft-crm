@@ -21,6 +21,7 @@
 const express = require("express");
 const router = express.Router();
 const { verifyToken, verifyRole } = require("../middleware/auth");
+const { requirePermission } = require("../middleware/requirePermission");
 const prisma = require("../lib/prisma");
 const {
   requireTravelTenant,
@@ -66,7 +67,7 @@ router.get("/seasons", verifyToken, requireTravelTenant, async (req, res) => {
 router.post(
   "/seasons",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("pricing", "write"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -121,7 +122,7 @@ router.post(
 router.patch(
   "/seasons/:id",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("pricing", "update"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -175,7 +176,7 @@ router.patch(
 router.delete(
   "/seasons/:id",
   verifyToken,
-  verifyRole(["ADMIN"]),
+  requirePermission("pricing", "delete"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -226,7 +227,7 @@ router.get("/markup-rules", verifyToken, requireTravelTenant, async (req, res) =
 router.post(
   "/markup-rules",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("pricing", "write"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -289,7 +290,7 @@ router.post(
 router.patch(
   "/markup-rules/:id",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("pricing", "update"),
   requireTravelTenant,
   async (req, res) => {
     try {
@@ -339,7 +340,7 @@ router.patch(
 router.delete(
   "/markup-rules/:id",
   verifyToken,
-  verifyRole(["ADMIN"]),
+  requirePermission("pricing", "delete"),
   requireTravelTenant,
   async (req, res) => {
     try {

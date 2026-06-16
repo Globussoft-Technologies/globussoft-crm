@@ -23,7 +23,10 @@
  */
 
 const prisma = require('../lib/prisma');
-const { PERMISSION_CATALOG } = require('../lib/permissionCatalog');
+const {
+  PERMISSION_CATALOG,
+  getCatalogForVertical,
+} = require('../lib/permissionCatalog');
 
 const MANAGER_PERMISSIONS = [
   'contacts.read', 'contacts.write', 'contacts.update',
@@ -72,6 +75,36 @@ const MANAGER_PERMISSIONS = [
   // approve/reject leave requests).
   'attendance.read', 'attendance.write', 'attendance.manage',
   'leave.read', 'leave.write', 'leave.manage',
+  // Travel vertical — preserves the access contract MANAGER held under
+  // the prior verifyRole(['ADMIN','MANAGER']) gates before the RBAC
+  // migration to requirePermission(). Every entry below corresponds to a
+  // route previously reachable by MANAGER; delete-tier and manage-tier
+  // actions that were gated on verifyRole(['ADMIN']) stay admin-only
+  // (e.g. trips.delete, suppliers.manage, tmc_catalogue.manage,
+  // visa.delete, microsites.manage).
+  'trips.read', 'trips.write', 'trips.update', 'trips.export',
+  'tmc_catalogue.read', 'tmc_catalogue.write', 'tmc_catalogue.update', 'tmc_catalogue.delete',
+  'itineraries.read', 'itineraries.update',
+  'itinerary_templates.read', 'itinerary_templates.write', 'itinerary_templates.update',
+  'quote_templates.write', 'quote_templates.update',
+  'quotes.delete', 'quotes.export',
+  'invoices.write', 'invoices.update', 'invoices.delete', 'invoices.export',
+  'cost_master.write', 'cost_master.update',
+  'pricing.write', 'pricing.update',
+  'sightseeing.write', 'sightseeing.update',
+  'payables.write', 'payables.update', 'payables.export',
+  'cancellation_policies.write', 'cancellation_policies.update',
+  'suppliers.read', 'suppliers.write', 'suppliers.update', 'suppliers.delete',
+  'commission_profiles.write', 'commission_profiles.update',
+  'web_checkins.write', 'web_checkins.update',
+  'passport.read', 'passport.update',
+  'visa.read', 'visa.write', 'visa.update',
+  'microsites.read', 'microsites.write', 'microsites.update',
+  'diagnostics.read', 'diagnostics.update',
+  'pois.read',
+  'curriculum.read', 'curriculum.write',
+  'flyer_studio.write',
+  'flyer_templates.read', 'flyer_templates.write', 'flyer_templates.update',
 ];
 
 const CUSTOMER_PERMISSIONS = [
@@ -324,8 +357,32 @@ async function ensureUserRole(stats, userId, roleId) {
   stats.assignmentsCreated++;
 }
 
-async function grantAllPermissions(stats, roleId) {
-  for (const [module, actions] of Object.entries(PERMISSION_CATALOG)) {
+/**
+ * Grants every permission in a vertical-filtered catalog snapshot to the
+ * given role. Used at first-creation of the ADMIN role only — subsequent
+ * boots leave the existing grants alone so tenant admins can pare ADMIN
+ * back via the Roles & Permissions UI and our re-runs won't undo the
+ * customization.
+ *
+ * Vertical-aware (2026-06-15): previously iterated the UNION
+ * PERMISSION_CATALOG which seeded wellness modules onto travel tenants
+ * (patients, appointments, prescriptions, etc.) and travel modules onto
+ * wellness tenants (itineraries, suppliers, etc.). Now scoped to the
+ * tenant's vertical so a travel ADMIN gets COMMON + TRAVEL perms only
+ * and a wellness ADMIN gets COMMON + WELLNESS perms only.
+ *
+ * NEW permissions added to the catalog AFTER this snapshot are NOT
+ * auto-granted. New permissions must be explicitly assigned via the
+ * Roles & Permissions UI — per the "Admin is not magic" contract,
+ * Admin is a regular role whose grants are the rows in RolePermission.
+ *
+ * @param {object} stats — accumulator passed by caller
+ * @param {number} roleId
+ * @param {'wellness'|'travel'|'generic'|null|undefined} vertical
+ */
+async function grantAllPermissions(stats, roleId, vertical) {
+  const catalog = getCatalogForVertical(vertical);
+  for (const [module, actions] of Object.entries(catalog)) {
     for (const action of actions) {
       await ensureRolePermission(stats, roleId, module, action);
     }
@@ -377,26 +434,29 @@ async function ensureRbacOnBoot() {
   });
 
   // Per-tenant default landing paths. Only set for ADMIN + MANAGER because
-  // those map cleanly to a single page (owner dashboard or generic dash).
-  // CUSTOMER + USER stay null so the App.jsx fallback (wellnessLandingFor)
-  // can keep using legacy wellnessRole-based routing — a wellness telecaller
-  // is currently User.role='USER' + wellnessRole='telecaller' and routes to
-  // /wellness/telecaller; pinning USER.landingPath='/wellness/calendar'
-  // would silently break that. Once admins create per-function roles
-  // (DOCTOR / TELECALLER / RECEPTIONIST / NURSE) with their own landingPath
-  // and reassign users, this fallback drops out naturally.
-  const wellnessTenantIds = new Set(
+  // those map cleanly to a single page (owner dashboard, travel home, or
+  // generic dash). CUSTOMER + USER stay null so the App.jsx fallback can
+  // keep using legacy wellnessRole-based routing — a wellness telecaller
+  // is currently User.role='USER' + wellnessRole='telecaller' and routes
+  // to /wellness/telecaller; pinning USER.landingPath would silently
+  // break that. Once admins create per-function roles with their own
+  // landingPath and reassign users, this fallback drops out naturally.
+  //
+  // Vertical resolution — single round-trip pull every tenant's vertical
+  // so each provision call can pick the right catalog snapshot for ADMIN
+  // and the right landing path bucket. Previously only flagged wellness
+  // (boolean), generic + travel were lumped together at /dashboard.
+  const tenantVerticals = new Map(
     (
       await prisma.tenant.findMany({
-        where: { vertical: 'wellness' },
-        select: { id: true },
+        select: { id: true, vertical: true },
       })
-    ).map((t) => t.id),
+    ).map((t) => [t.id, t.vertical || 'generic']),
   );
 
   for (const t of tenants) {
-    const isWellness = wellnessTenantIds.has(t.id);
-    await provisionTenantRbacInternal(stats, t.id, isWellness);
+    const vertical = tenantVerticals.get(t.id) || 'generic';
+    await provisionTenantRbacInternal(stats, t.id, vertical);
   }
 
   return stats;
@@ -437,16 +497,24 @@ async function provisionTenantRbac(tenantId, opts = {}) {
     usersSkipped: 0,
   };
 
-  let isWellness = opts.isWellness;
-  if (typeof isWellness !== 'boolean') {
-    const t = await prisma.tenant.findUnique({
-      where: { id: tenantId },
-      select: { vertical: true },
-    });
-    isWellness = t?.vertical === 'wellness';
+  // Resolve vertical — caller may pass explicit `opts.vertical` (preferred)
+  // or legacy `opts.isWellness` (boolean, kept for back-compat). If neither
+  // is provided, look it up from Tenant.vertical. Default 'generic' when
+  // tenant has no vertical column set.
+  let vertical = opts.vertical;
+  if (typeof vertical !== 'string') {
+    if (typeof opts.isWellness === 'boolean') {
+      vertical = opts.isWellness ? 'wellness' : 'generic';
+    } else {
+      const t = await prisma.tenant.findUnique({
+        where: { id: tenantId },
+        select: { vertical: true },
+      });
+      vertical = t?.vertical || 'generic';
+    }
   }
 
-  await provisionTenantRbacInternal(stats, tenantId, isWellness);
+  await provisionTenantRbacInternal(stats, tenantId, vertical);
   return stats;
 }
 
@@ -455,10 +523,17 @@ async function provisionTenantRbac(tenantId, opts = {}) {
  * signup path. Mutates the passed-in `stats` accumulator so the boot
  * script can report aggregate counts.
  */
-async function provisionTenantRbacInternal(stats, tenantId, isWellness) {
+async function provisionTenantRbacInternal(stats, tenantId, vertical) {
   {
-    const adminLanding = isWellness ? '/wellness' : '/dashboard';
-    const managerLanding = isWellness ? '/wellness' : '/dashboard';
+    // Vertical-aware landing paths. Wellness tenants land admins on the
+    // Owner Dashboard (/wellness); travel tenants on the travel dashboard
+    // (/travel); generic tenants on /dashboard.
+    const adminLanding =
+      vertical === 'wellness' ? '/wellness'
+        : vertical === 'travel' ? '/travel'
+          : '/dashboard';
+    const managerLanding = adminLanding;
+    const isWellness = vertical === 'wellness';
 
     // Seed-on-creation only: permissions are granted to a system role
     // ONLY the FIRST time we provision it. On subsequent boots, we leave
@@ -470,6 +545,11 @@ async function provisionTenantRbacInternal(stats, tenantId, isWellness) {
     // The seed (`prisma/seed.js`) handles the first-time provisioning
     // for the demo seed; this script handles tenants that pre-date the
     // RBAC migration by creating the role then backfilling perms once.
+    //
+    // "Admin is not magic" (2026-06-15): ADMIN now gets the vertical-
+    // filtered catalog snapshot, not the union. New permissions added
+    // to the catalog after this first-creation moment must be granted
+    // explicitly via the Roles & Permissions UI — no auto-elevation.
     const { role: adminRole, wasCreated: adminCreated } = await ensureRole(stats, {
       tenantId,
       key: 'ADMIN',
@@ -479,7 +559,7 @@ async function provisionTenantRbacInternal(stats, tenantId, isWellness) {
       userType: 'STAFF',
       landingPath: adminLanding,
     });
-    if (adminCreated) await grantAllPermissions(stats, adminRole.id);
+    if (adminCreated) await grantAllPermissions(stats, adminRole.id, vertical);
 
     const { role: managerRole, wasCreated: managerCreated } = await ensureRole(stats, {
       tenantId,
@@ -490,7 +570,15 @@ async function provisionTenantRbacInternal(stats, tenantId, isWellness) {
       userType: 'STAFF',
       landingPath: managerLanding,
     });
-    if (managerCreated) await grantPermissionList(stats, managerRole.id, MANAGER_PERMISSIONS);
+    // Wellness MANAGER keeps its existing hardcoded baseline (status quo,
+    // preserves the seeded wellness clinical-manager surface). Travel +
+    // generic MANAGER are created as EMPTY containers — the tenant
+    // administrator decides which permissions belong here through the
+    // Roles & Permissions UI. No invented travel/generic bundles per the
+    // "permissions are the source of truth, roles are containers" rule.
+    if (managerCreated && isWellness) {
+      await grantPermissionList(stats, managerRole.id, MANAGER_PERMISSIONS);
+    }
 
     const { role: customerRole, wasCreated: customerCreated } = await ensureRole(stats, {
       tenantId,
@@ -501,7 +589,15 @@ async function provisionTenantRbacInternal(stats, tenantId, isWellness) {
       userType: 'CUSTOMER',
       landingPath: null, // fallback to vertical default (wellness: book-appointment, generic: dashboard)
     });
-    if (customerCreated) await grantPermissionList(stats, customerRole.id, CUSTOMER_PERMISSIONS);
+    // Same rationale as MANAGER — wellness CUSTOMER keeps its patient-
+    // portal baseline (clinical perms grounded in real wellness pages);
+    // travel + generic CUSTOMER are empty containers until the tenant
+    // admin configures them. Avoids leaking wellness PHI perms onto
+    // travel customers and prevents inventing travel bundles before
+    // the customer-portal surfaces exist.
+    if (customerCreated && isWellness) {
+      await grantPermissionList(stats, customerRole.id, CUSTOMER_PERMISSIONS);
+    }
 
     const { role: userRole, wasCreated: userCreated } = await ensureRole(stats, {
       tenantId,
@@ -512,7 +608,11 @@ async function provisionTenantRbacInternal(stats, tenantId, isWellness) {
       userType: 'STAFF',
       landingPath: null, // fallback honours legacy wellnessRole-based routing
     });
-    if (userCreated) await grantPermissionList(stats, userRole.id, USER_PERMISSIONS);
+    // Same: wellness USER baseline preserved; travel + generic USER are
+    // empty containers — the tenant admin assigns perms.
+    if (userCreated && isWellness) {
+      await grantPermissionList(stats, userRole.id, USER_PERMISSIONS);
+    }
 
     // Wellness-vertical custom roles. Auto-provisioned only for wellness
     // tenants so a generic CRM tenant doesn't end up with empty Doctor /

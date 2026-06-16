@@ -12,7 +12,7 @@
  *
  * Auth gates pinned:
  *   - 401 (or 403) without bearer token (global auth guard)
- *   - 403 USER role — verifyRole(['ADMIN','MANAGER'])
+ *   - 403 USER role — requirePermission('visa', read/write/update)
  *   - 403 WRONG_VERTICAL — generic-vertical ADMIN
  *
  * Happy path pinned:

@@ -37,7 +37,7 @@
  *   9. Override dueDate accepted (body.dueDate wins over default).
  *  10. clearTcs=true (default) → TCS fields null on clone.
  *  11. clearTcs=false → TCS fields inherited from source.
- *  12. USER role → 403 (verifyRole short-circuits).
+ *  12. USER role → 403 (RBAC gate short-circuits).
  *  13. Audit row written with sourceId + lineCount + clearTcs flag.
  *
  * Test pattern: patch the prisma singleton with vi.fn() stubs BEFORE the

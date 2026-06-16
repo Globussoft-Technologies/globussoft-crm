@@ -27,7 +27,7 @@
  *   - Missing month → 400 INVALID_MONTH.
  *   - Invalid format → 400 INVALID_FORMAT.
  *   - Invalid subBrand → 400 INVALID_SUB_BRAND.
- *   - USER role → 403 (verifyRole gate).
+ *   - USER role → 403 (RBAC gate).
  *   - Empty month: 200 + all sections zero.
  *
  * Test pattern mirrors backend/test/routes/travel-invoice-hsn-summary.test.js

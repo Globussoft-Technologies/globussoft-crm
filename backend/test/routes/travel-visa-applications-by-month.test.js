@@ -44,7 +44,7 @@
  * Test pattern mirrors backend/test/routes/travel-visa-status-history.test.js
  * — patch the prisma singleton with vi.fn() shapes BEFORE requiring the
  * router, drive supertest with HS256 JWTs signed with the dev-fallback
- * secret, exercise verifyToken + verifyRole + requireTravelTenant fully.
+ * secret, exercise verifyToken + requirePermission + requireTravelTenant fully.
  */
 
 import { describe, test, expect, beforeEach, vi } from 'vitest';
@@ -143,7 +143,7 @@ describe('GET /applications/by-month — auth gate', () => {
   });
 
   test('USER role ACCEPTED (anodyne aggregate posture, same as /stats)', async () => {
-    // The role gate is verifyRole(['ADMIN','MANAGER','USER']) — looser
+    // The role gate is requirePermission('visa','read') — looser
     // than the /applications list (ADMIN/MANAGER) because aggregate
     // counters are anodyne. Mirrors /applications/stats.
     prisma.user.findUnique.mockResolvedValue({ role: 'USER', subBrandAccess: null });

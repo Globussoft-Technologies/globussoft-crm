@@ -17,7 +17,7 @@
  *   4. Sequential issuing within same sub-brand: serial 0001 -> 0002.
  *   5. Issuing an already-Issued invoice -> 400 INVALID_STATE.
  *   6. Issuing a Paid invoice -> 400 INVALID_STATE.
- *   7. USER role -> 403 (verifyRole gate).
+ *   7. USER role -> 403 (RBAC gate).
  *   8. Cross-tenant invoice -> 404 INVOICE_NOT_FOUND.
  *   9. Sub-brand mismatch -> 403 SUB_BRAND_DENIED.
  *  10. Non-numeric :id -> 400 INVALID_ID.

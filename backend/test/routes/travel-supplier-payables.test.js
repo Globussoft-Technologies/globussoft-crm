@@ -258,7 +258,7 @@ describe('POST /api/travel/suppliers/:id/payables', () => {
   });
 
   test('USER role cannot create (403)', async () => {
-    // verifyRole short-circuits before the parent-supplier lookup.
+    // the RBAC gate short-circuits before the parent-supplier lookup.
     const res = await request(makeApp())
       .post('/api/travel/suppliers/100/payables')
       .set('Authorization', `Bearer ${tokenFor('USER')}`)

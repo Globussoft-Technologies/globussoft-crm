@@ -28,6 +28,7 @@
 const express = require("express");
 const router = express.Router();
 const { verifyToken, verifyRole } = require("../middleware/auth");
+const { requirePermission } = require("../middleware/requirePermission");
 const prisma = require("../lib/prisma");
 const { requireTravelTenant, getSubBrandAccessSet } = require("../middleware/travelGuards");
 
@@ -477,7 +478,7 @@ router.get("/trips/:tripId/rooming", verifyToken, requireTravelTenant, requireTm
 router.post(
   "/trips/:tripId/rooming",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("trips", "write"),
   requireTravelTenant,
   requireTmcAccess,
   async (req, res) => {
@@ -536,7 +537,7 @@ router.post(
 router.patch(
   "/trips/:tripId/rooming/:roomId",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("trips", "update"),
   requireTravelTenant,
   requireTmcAccess,
   async (req, res) => {
@@ -586,7 +587,7 @@ router.patch(
 router.delete(
   "/trips/:tripId/rooming/:roomId",
   verifyToken,
-  verifyRole(["ADMIN"]),
+  requirePermission("trips", "delete"),
   requireTravelTenant,
   requireTmcAccess,
   async (req, res) => {
@@ -628,7 +629,7 @@ router.delete(
 router.get(
   "/trips/:tripId/rooming/export.xlsx",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("trips", "export"),
   requireTravelTenant,
   requireTmcAccess,
   async (req, res) => {
@@ -729,7 +730,7 @@ router.get(
 router.put(
   "/trips/:tripId/payment-plan",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("trips", "update"),
   requireTravelTenant,
   requireTmcAccess,
   async (req, res) => {
@@ -774,7 +775,7 @@ router.put(
 router.delete(
   "/trips/:tripId/payment-plan",
   verifyToken,
-  verifyRole(["ADMIN"]),
+  requirePermission("trips", "delete"),
   requireTravelTenant,
   requireTmcAccess,
   async (req, res) => {
@@ -830,7 +831,7 @@ router.get(
 router.post(
   "/trips/:tripId/instalments",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("trips", "write"),
   requireTravelTenant,
   requireTmcAccess,
   async (req, res) => {
@@ -884,7 +885,7 @@ router.post(
 router.patch(
   "/trips/:tripId/instalments/:id",
   verifyToken,
-  verifyRole(["ADMIN", "MANAGER"]),
+  requirePermission("trips", "update"),
   requireTravelTenant,
   requireTmcAccess,
   async (req, res) => {
@@ -934,7 +935,7 @@ router.patch(
 router.delete(
   "/trips/:tripId/instalments/:id",
   verifyToken,
-  verifyRole(["ADMIN"]),
+  requirePermission("trips", "delete"),
   requireTravelTenant,
   requireTmcAccess,
   async (req, res) => {

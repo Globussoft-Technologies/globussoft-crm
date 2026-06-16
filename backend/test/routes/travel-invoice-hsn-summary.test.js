@@ -22,7 +22,7 @@
  *   - Invalid subBrand → 400 INVALID_SUB_BRAND.
  *   - Invalid docType → 400 INVALID_DOC_TYPE.
  *   - Invalid format → 400 INVALID_FORMAT.
- *   - USER role → 403 (verifyRole gate blocks before findMany).
+ *   - USER role → 403 (RBAC gate blocks before findMany).
  *   - subBrand filter narrows the prisma where filter.
  *   - docType filter narrows to a single doc-type cohort.
  *   - Empty-month case (no invoices) → 200 with empty rows + zero totals.

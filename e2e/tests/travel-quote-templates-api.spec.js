@@ -5,7 +5,7 @@
  * Pins the S31 / S50 contract at `backend/routes/travel_quote_templates.js`.
  * The route exposes six endpoints — all gated behind `verifyToken` +
  * `requireTravelTenant` (vertical guard); write paths additionally gated
- * behind `verifyRole(["ADMIN", "MANAGER"])`; DELETE is ADMIN-only:
+ * behind `requirePermission('quote_templates', 'write'|'update')`; DELETE is ADMIN-only:
  *
  *   GET    /api/travel/quote-templates                  — paginated list
  *   POST   /api/travel/quote-templates                  — create (ADMIN/MGR)
@@ -581,7 +581,7 @@ test.describe("Travel quote-templates API — delete + RBAC", () => {
       token,
       `/api/travel/quote-templates/${deletableId}`,
     );
-    // verifyRole returns 403 to non-permitted roles.
+    // the RBAC gate returns 403 to non-permitted roles.
     expect(res.status()).toBe(403);
   });
 

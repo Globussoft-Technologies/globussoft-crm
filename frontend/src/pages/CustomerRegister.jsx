@@ -6,6 +6,7 @@ import { setAuthToken } from "../utils/api";
 import { invalidatePermissionCache } from "../hooks/usePermissions";
 import { safeNext } from "../utils/safeNext";
 import PasswordInput from "../components/PasswordInput";
+import EmailOtpField from "../components/EmailOtpField";
 
 // Self-service customer registration page (public, no auth required).
 // Backend handler at POST /api/auth/customer/register creates a User row with
@@ -56,6 +57,8 @@ export default function CustomerRegister() {
 
   const [tenants, setTenants] = useState([]);
   const [tenantsLoading, setTenantsLoading] = useState(true);
+  // Email-OTP verification gate — null until the customer verifies their email.
+  const [emailVerificationToken, setEmailVerificationToken] = useState(null);
   const [form, setForm] = useState({
     email: initialEmail,
     name: initialName,
@@ -150,6 +153,7 @@ export default function CustomerRegister() {
             password: form.password,
             name: form.name.trim(),
             registrationTenantId: parseInt(form.tenantId, 10),
+            verificationToken: emailVerificationToken,
           }),
         });
         const pdata = await pres.json().catch(() => ({}));
@@ -183,6 +187,7 @@ export default function CustomerRegister() {
           // `tenantId` from every request body. The route accepts the chosen
           // org under `registrationTenantId`, a non-stripped name.
           registrationTenantId: parseInt(form.tenantId, 10),
+          verificationToken: emailVerificationToken,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -281,18 +286,21 @@ export default function CustomerRegister() {
         </p>
 
         <form onSubmit={handleSubmit} noValidate>
-          <Field label="Email" htmlFor="cr-email" error={errors.email}>
-            <input
-              id="cr-email"
-              type="email"
-              className="input-field"
-              autoComplete="email"
+          <div style={{ marginBottom: "1rem" }}>
+            <EmailOtpField
               value={form.email}
               onChange={update("email")}
+              purpose="customer-register"
+              onVerifiedChange={setEmailVerificationToken}
+              label="Email"
+              placeholder="you@example.com"
+              inputClassName="input-field"
               disabled={isLoading}
-              required
             />
-          </Field>
+            {errors.email && (
+              <div style={{ color: "var(--danger-color, #ef4444)", fontSize: "0.78rem", marginTop: 4 }}>{errors.email}</div>
+            )}
+          </div>
 
           <Field label="Full name" htmlFor="cr-name" error={errors.name}>
             <input
@@ -449,10 +457,10 @@ export default function CustomerRegister() {
           <button
             type="submit"
             className="btn-primary"
-            disabled={isLoading}
-            style={{ width: "100%" }}
+            disabled={isLoading || !emailVerificationToken}
+            style={{ width: "100%", opacity: !emailVerificationToken ? 0.6 : 1 }}
           >
-            {isLoading ? "Creating account…" : "Create account"}
+            {isLoading ? "Creating account…" : !emailVerificationToken ? "Verify your email to continue" : "Create account"}
           </button>
         </form>
 

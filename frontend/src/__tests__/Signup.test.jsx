@@ -102,22 +102,29 @@ function fetchResponse(body, status = 200) {
   });
 }
 
-// Fill all four required inputs with valid values + return the submit
-// button for the caller to click. Keeps every happy-path test compact.
-function fillValidForm() {
-  fireEvent.change(screen.getByPlaceholderText('Acme Inc.'), {
-    target: { value: 'Acme Inc.' },
+// Route the email-OTP endpoints to success and delegate /api/auth/register
+// to the caller's handler. The page now gates "Create Organization" behind
+// email verification, so every happy/failure path must verify first.
+function routeFetch(onRegister) {
+  global.fetch.mockImplementation((url, opts) => {
+    if (url === '/api/auth/email-otp/request') return fetchResponse({ sent: true });
+    if (url === '/api/auth/email-otp/verify') return fetchResponse({ verified: true, verificationToken: 'vtok-123' });
+    if (url === '/api/auth/register') return onRegister ? onRegister(url, opts) : fetchResponse({}, 404);
+    return fetchResponse({}, 404);
   });
-  fireEvent.change(screen.getByPlaceholderText('John Doe'), {
-    target: { value: 'Priya Sharma' },
-  });
-  fireEvent.change(screen.getByPlaceholderText('name@company.com'), {
-    target: { value: 'priya@acme.example' },
-  });
-  fireEvent.change(screen.getByPlaceholderText('••••••••'), {
-    target: { value: 'sup3rsecret' },
-  });
-  return screen.getByRole('button', { name: /Create Organization/i });
+}
+
+// Fill the form AND complete the email-OTP verification (Validate → code →
+// Verify), then return the now-enabled "Create Organization" submit button.
+async function fillAndVerify() {
+  fireEvent.change(screen.getByPlaceholderText('Acme Inc.'), { target: { value: 'Acme Inc.' } });
+  fireEvent.change(screen.getByPlaceholderText('John Doe'), { target: { value: 'Priya Sharma' } });
+  fireEvent.change(screen.getByPlaceholderText('name@company.com'), { target: { value: 'priya@acme.example' } });
+  fireEvent.change(screen.getByPlaceholderText('••••••••'), { target: { value: 'sup3rsecret' } });
+  fireEvent.click(screen.getByTestId('otp-validate'));
+  fireEvent.change(await screen.findByTestId('otp-code'), { target: { value: '123456' } });
+  fireEvent.click(screen.getByTestId('otp-verify'));
+  return screen.findByRole('button', { name: /Create Organization/i });
 }
 
 describe('<Signup /> — page surface', () => {
@@ -143,7 +150,11 @@ describe('<Signup /> — page surface', () => {
     expect(screen.getByPlaceholderText('John Doe')).toBeInTheDocument();
     expect(screen.getByPlaceholderText('name@company.com')).toBeInTheDocument();
     expect(screen.getByPlaceholderText('••••••••')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Create Organization/i })).toBeInTheDocument();
+    // The email field now has a Validate (OTP) button, and the submit button
+    // is gated until the email is verified.
+    expect(screen.getByTestId('otp-validate')).toBeInTheDocument();
+    const submit = screen.getByRole('button', { name: /Verify your email to continue/i });
+    expect(submit).toBeDisabled();
     // Sign-in link routes back to /login.
     const signInLink = screen.getByRole('link', { name: /Sign in/i });
     expect(signInLink).toBeInTheDocument();
@@ -164,20 +175,32 @@ describe('<Signup /> — page surface', () => {
     expect(passwordInput).toHaveAttribute('type', 'password');
   });
 
-  it('successful register POSTs /api/auth/register with { name, email, password, organizationName } and navigates to /dashboard', async () => {
-    global.fetch.mockImplementation((url) => {
-      if (url === '/api/auth/register') {
-        return fetchResponse({
-          token: 'jwt-new',
-          user: { userId: 99, email: 'priya@acme.example', role: 'ADMIN' },
-          tenant: { id: 99, name: 'Acme Inc.', vertical: 'generic' },
-        });
-      }
-      return fetchResponse({}, 404);
-    });
+  it('submit stays disabled until the email is verified (gating)', async () => {
+    routeFetch();
+    renderSignup();
+    // Fill everything EXCEPT verifying the email.
+    fireEvent.change(screen.getByPlaceholderText('Acme Inc.'), { target: { value: 'Acme Inc.' } });
+    fireEvent.change(screen.getByPlaceholderText('John Doe'), { target: { value: 'Priya Sharma' } });
+    fireEvent.change(screen.getByPlaceholderText('name@company.com'), { target: { value: 'priya@acme.example' } });
+    fireEvent.change(screen.getByPlaceholderText('••••••••'), { target: { value: 'sup3rsecret' } });
+    expect(screen.getByRole('button', { name: /Verify your email to continue/i })).toBeDisabled();
+    // Verify → the submit unlocks.
+    fireEvent.click(screen.getByTestId('otp-validate'));
+    fireEvent.change(await screen.findByTestId('otp-code'), { target: { value: '123456' } });
+    fireEvent.click(screen.getByTestId('otp-verify'));
+    const submit = await screen.findByRole('button', { name: /Create Organization/i });
+    expect(submit).not.toBeDisabled();
+  });
+
+  it('successful register POSTs /api/auth/register with { name, email, password, organizationName, verificationToken } and navigates to /dashboard', async () => {
+    routeFetch(() => fetchResponse({
+      token: 'jwt-new',
+      user: { userId: 99, email: 'priya@acme.example', role: 'ADMIN' },
+      tenant: { id: 99, name: 'Acme Inc.', vertical: 'generic' },
+    }));
     renderSignup();
 
-    const submit = fillValidForm();
+    const submit = await fillAndVerify();
     fireEvent.click(submit);
 
     await waitFor(() => {
@@ -202,23 +225,19 @@ describe('<Signup /> — page surface', () => {
       email: 'priya@acme.example',
       password: 'sup3rsecret',
       organizationName: 'Acme Inc.',
+      verificationToken: 'vtok-123',
     }));
   });
 
   it('successful register with no tenant in the payload still navigates but does NOT fire setTenant', async () => {
-    global.fetch.mockImplementation((url) => {
-      if (url === '/api/auth/register') {
-        return fetchResponse({
-          token: 'jwt-bare',
-          user: { userId: 100, email: 'priya@acme.example', role: 'ADMIN' },
-          // No `tenant` field — page must guard the setTenant call.
-        });
-      }
-      return fetchResponse({}, 404);
-    });
+    routeFetch(() => fetchResponse({
+      token: 'jwt-bare',
+      user: { userId: 100, email: 'priya@acme.example', role: 'ADMIN' },
+      // No `tenant` field — page must guard the setTenant call.
+    }));
     renderSignup();
 
-    fireEvent.click(fillValidForm());
+    fireEvent.click(await fillAndVerify());
 
     await waitFor(() => {
       expect(navigateMock).toHaveBeenCalledWith('/dashboard');
@@ -229,18 +248,10 @@ describe('<Signup /> — page surface', () => {
   });
 
   it('failed register surfaces the server `message` and does NOT seed the auth context', async () => {
-    global.fetch.mockImplementation((url) => {
-      if (url === '/api/auth/register') {
-        return fetchResponse(
-          { message: 'Email already in use' },
-          409
-        );
-      }
-      return fetchResponse({}, 404);
-    });
+    routeFetch(() => fetchResponse({ message: 'Email already in use' }, 409));
     renderSignup();
 
-    fireEvent.click(fillValidForm());
+    fireEvent.click(await fillAndVerify());
 
     expect(await screen.findByText(/Email already in use/i)).toBeInTheDocument();
     expect(setUserMock).not.toHaveBeenCalled();
@@ -249,18 +260,10 @@ describe('<Signup /> — page surface', () => {
   });
 
   it('failed register with `error` field instead of `message` falls back to that copy', async () => {
-    global.fetch.mockImplementation((url) => {
-      if (url === '/api/auth/register') {
-        return fetchResponse(
-          { error: 'organizationName must be at least 2 chars' },
-          400
-        );
-      }
-      return fetchResponse({}, 404);
-    });
+    routeFetch(() => fetchResponse({ error: 'organizationName must be at least 2 chars' }, 400));
     renderSignup();
 
-    fireEvent.click(fillValidForm());
+    fireEvent.click(await fillAndVerify());
 
     expect(
       await screen.findByText(/organizationName must be at least 2 chars/i)
@@ -269,15 +272,10 @@ describe('<Signup /> — page surface', () => {
   });
 
   it('failed register with neither message nor error surfaces the generic fallback copy', async () => {
-    global.fetch.mockImplementation((url) => {
-      if (url === '/api/auth/register') {
-        return fetchResponse({}, 500);
-      }
-      return fetchResponse({}, 404);
-    });
+    routeFetch(() => fetchResponse({}, 500));
     renderSignup();
 
-    fireEvent.click(fillValidForm());
+    fireEvent.click(await fillAndVerify());
 
     expect(
       await screen.findByText(/Registration failed securely\. Please verify fields\./i)
@@ -286,10 +284,10 @@ describe('<Signup /> — page surface', () => {
   });
 
   it('network rejection surfaces the "Network synchronization failed" copy and re-enables the submit button', async () => {
-    global.fetch.mockImplementation(() => Promise.reject(new Error('ECONNREFUSED')));
+    routeFetch(() => Promise.reject(new Error('ECONNREFUSED')));
     renderSignup();
 
-    fireEvent.click(fillValidForm());
+    fireEvent.click(await fillAndVerify());
 
     expect(
       await screen.findByText(/Network synchronization failed\. Please check your connection\./i)
@@ -302,9 +300,9 @@ describe('<Signup /> — page surface', () => {
   });
 
   it('while the register POST is in flight the submit button shows the loading copy and is disabled', async () => {
-    // Use a deferred Promise so we can inspect the in-flight UI state.
+    // Deferred register so we can inspect the in-flight UI state (OTP succeeds).
     let resolveFetch;
-    global.fetch.mockImplementation(() => new Promise((resolve) => {
+    routeFetch(() => new Promise((resolve) => {
       resolveFetch = () => resolve({
         ok: true,
         status: 200,
@@ -317,7 +315,7 @@ describe('<Signup /> — page surface', () => {
     }));
     renderSignup();
 
-    fireEvent.click(fillValidForm());
+    fireEvent.click(await fillAndVerify());
 
     // While the fetch is pending the button copy flips to the loading
     // string and the button is disabled.

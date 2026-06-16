@@ -93,6 +93,19 @@ describe('VisaDashboard (data-backed Visa Sure landing)', () => {
     expect(screen.getByText('80%')).toBeInTheDocument();
   });
 
+  it('KPI tiles are clickable and drill into the matching detailed view', async () => {
+    mockApi();
+    renderPage();
+    await screen.findByText('Total applications');
+    const href = (testid) => screen.getByTestId(testid).getAttribute('href');
+    expect(href('kpi-total-applications')).toBe('/travel/visa/applications');
+    expect(href('kpi-approved')).toBe('/travel/visa/applications?status=approved');
+    expect(href('kpi-rejected')).toBe('/travel/visa/applications?status=rejected');
+    expect(href('kpi-in-progress')).toBe('/travel/visa/applications');
+    expect(href('kpi-approval-rate')).toBe('/travel/visa/reports');
+    expect(href('kpi-risk-flagged')).toBe('/travel/visa/applications');
+  });
+
   it('renders the by-status breakdown section', async () => {
     mockApi();
     renderPage();

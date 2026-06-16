@@ -491,9 +491,6 @@ export default function VisaReports() {
                 stroke="var(--text-secondary)"
                 tick={{ fontSize: 11 }}
                 interval={0}
-                angle={-15}
-                textAnchor="end"
-                height={48}
               />
               <YAxis
                 stroke="var(--text-secondary)"

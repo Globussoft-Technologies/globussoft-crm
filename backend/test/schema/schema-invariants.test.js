@@ -169,6 +169,12 @@ const NON_TENANT_MODELS = new Set([
   'SupplierCredentialAccessLog',
   'VisaDocumentChecklistItem',
   'TripMicrositeOtp',
+  // EmailVerificationOtp — pre-registration email-OTP store (org signup +
+  // customer registration). Identity-by-email; at org-signup time NO tenant
+  // exists yet, so it is intentionally tenant-less. Transient (codes expire +
+  // are deleted/marked used). The permanent verified marker lands on
+  // Tenant/User/Contact.emailVerifiedAt.
+  'EmailVerificationOtp',
   // G018 FX rate cache (PRD_TRAVEL_QUOTE_BUILDER FR-3.4). Currency-pair
   // rates are GLOBAL by design — every tenant shares the same INR/USD rate
   // for a given (baseCurrency, quoteCurrency, fetchedAt) tuple. The

@@ -40,7 +40,7 @@
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { describe, test, expect, beforeEach, vi } from 'vitest';
 import React from 'react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Routes, Route } from 'react-router-dom';
 
 import TravelCustomerPortal from '../pages/travel/TravelCustomerPortal';
 
@@ -94,58 +94,22 @@ beforeEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('TravelCustomerPortal — pre-login (LoginScreen)', () => {
-  test('renders the login form when no portalToken in localStorage', () => {
-    renderPortal();
-    expect(screen.getByRole('heading', { name: /customer portal/i })).toBeInTheDocument();
-    expect(screen.getByPlaceholderText(/ahmed\.pilgrim@demo\.test/i)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /sign in/i })).toBeInTheDocument();
-    // Demo credentials hint visible for testers.
-    expect(screen.getByText(/ahmed\.pilgrim@demo\.test/)).toBeInTheDocument();
-  });
-
-  test('invalid credentials render inline error, no token stored', async () => {
-    globalThis.fetch = vi.fn(() => mockJsonResponse({ error: 'Invalid credentials' }, { status: 401 }));
-    renderPortal();
-    fireEvent.change(screen.getByPlaceholderText(/ahmed\.pilgrim/i), {
-      target: { value: 'wrong@example.com' },
-    });
-    fireEvent.change(screen.getByPlaceholderText('••••••••'), {
-      target: { value: 'badpass' },
-    });
-    fireEvent.click(screen.getByRole('button', { name: /sign in/i }));
-    await waitFor(() => {
-      expect(screen.getByRole('alert')).toHaveTextContent(/invalid credentials/i);
-    });
-    expect(localStorage.getItem(PORTAL_TOKEN_KEY)).toBeNull();
-  });
-
-  test('successful login persists token + contact and transitions to Dashboard', async () => {
-    globalThis.fetch = vi.fn((url) => {
-      if (url.includes('/portal/login')) {
-        return mockJsonResponse({ token: 'jwt-x', contact: seedContact });
-      }
-      if (url.includes('/portal/kyc/status')) {
-        return mockJsonResponse({ kycStatus: 'unverified', mode: 'stub', aadhaarLast4: null });
-      }
-      if (url.includes('/portal/travel/itineraries')) {
-        return mockJsonResponse([]);
-      }
-      return mockJsonResponse({});
-    });
-    renderPortal();
-    fireEvent.change(screen.getByPlaceholderText(/ahmed\.pilgrim/i), {
-      target: { value: 'ahmed.pilgrim@demo.test' },
-    });
-    fireEvent.change(screen.getByPlaceholderText('••••••••'), {
-      target: { value: 'password123' },
-    });
-    fireEvent.click(screen.getByRole('button', { name: /sign in/i }));
-    await waitFor(() => {
-      // Dashboard chrome: sidebar nav present after login.
-      expect(screen.getByRole('navigation', { name: /portal sections/i })).toBeInTheDocument();
-    });
-    expect(localStorage.getItem(PORTAL_TOKEN_KEY)).toBe('jwt-x');
+describe('TravelCustomerPortal — unauthenticated', () => {
+  // The standalone portal login screen was retired: customers sign in via the
+  // unified /login page (which auto-falls-back to portal auth). An
+  // unauthenticated visit to /travel/portal therefore redirects to /login.
+  test('redirects to /login when no portalToken (no separate portal login screen)', async () => {
+    render(
+      <MemoryRouter initialEntries={['/travel/portal']}>
+        <Routes>
+          <Route path="/travel/portal/*" element={<TravelCustomerPortal />} />
+          <Route path="/login" element={<div>UNIFIED LOGIN</div>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText('UNIFIED LOGIN')).toBeInTheDocument();
+    // The old "Customer Portal" standalone login is gone.
+    expect(screen.queryByRole('heading', { name: /customer portal/i })).toBeNull();
   });
 });
 
@@ -253,7 +217,7 @@ describe('TravelCustomerPortal — Dashboard (authenticated)', () => {
     expect(calls.some((u) => u.includes('/portal/kyc/callback'))).toBe(true);
   });
 
-  test('sign-out button clears localStorage and returns to LoginScreen', async () => {
+  test('sign-out clears localStorage and redirects to /login (no portal dashboard left)', async () => {
     setupLoggedIn();
     globalThis.fetch = vi.fn((url) => {
       if (url.includes('/portal/kyc/status')) {
@@ -264,13 +228,21 @@ describe('TravelCustomerPortal — Dashboard (authenticated)', () => {
       }
       return mockJsonResponse({});
     });
-    renderPortal();
+    render(
+      <MemoryRouter initialEntries={['/travel/portal']}>
+        <Routes>
+          <Route path="/travel/portal/*" element={<TravelCustomerPortal />} />
+          <Route path="/login" element={<div>UNIFIED LOGIN</div>} />
+        </Routes>
+      </MemoryRouter>,
+    );
     await waitFor(() => {
       expect(screen.getByRole('navigation', { name: /portal sections/i })).toBeInTheDocument();
     });
     fireEvent.click(screen.getByRole('button', { name: /sign out/i }));
-    // LoginScreen heading visible again
-    expect(screen.getByRole('heading', { name: /customer portal/i })).toBeInTheDocument();
+    // Tokens cleared + redirected to the unified login (no portal dashboard).
+    expect(await screen.findByText('UNIFIED LOGIN')).toBeInTheDocument();
+    expect(screen.queryByRole('navigation', { name: /portal sections/i })).toBeNull();
     expect(localStorage.getItem(PORTAL_TOKEN_KEY)).toBeNull();
     expect(localStorage.getItem(PORTAL_CONTACT_KEY)).toBeNull();
   });
@@ -758,7 +730,7 @@ describe('TravelCustomerPortal — Travel Documents (travellers + passports)', (
     expect(btn).toHaveTextContent(/upload passport/i);
   });
 
-  test('a 401 on the documents load boots the customer back to the login screen', async () => {
+  test('a 401 on the documents load boots the customer to the unified /login', async () => {
     setupLoggedIn();
     globalThis.fetch = vi.fn((url) => {
       if (url.includes('/portal/kyc/status')) return mockJsonResponse({ kycStatus: 'unverified', mode: 'stub' });
@@ -769,11 +741,18 @@ describe('TravelCustomerPortal — Travel Documents (travellers + passports)', (
       }
       return mockJsonResponse({});
     });
-    renderPortal();
+    render(
+      <MemoryRouter initialEntries={['/travel/portal']}>
+        <Routes>
+          <Route path="/travel/portal/*" element={<TravelCustomerPortal />} />
+          <Route path="/login" element={<div>UNIFIED LOGIN</div>} />
+        </Routes>
+      </MemoryRouter>,
+    );
     await gotoView(/travel documents/i);
-    // onLogout clears the token + returns to LoginScreen.
+    // onLogout clears the token + redirects to the unified /login.
     await waitFor(() => {
-      expect(screen.getByRole('heading', { name: /customer portal/i })).toBeInTheDocument();
+      expect(screen.getByText('UNIFIED LOGIN')).toBeInTheDocument();
     });
     expect(localStorage.getItem('portalToken')).toBeNull();
   });
@@ -924,11 +903,175 @@ describe('TravelCustomerPortal — light/dark theme toggle', () => {
     // Header toggle reflects the dark state (offers switch-to-light).
     expect(screen.getByRole('button', { name: /switch to light mode/i })).toBeInTheDocument();
   });
+});
 
-  test('login screen also exposes the theme toggle', () => {
-    // No token seeded → LoginScreen renders.
+describe('TravelCustomerPortal — My Visa (FR-5/FR-6 self-serve)', () => {
+  // Default replies for the dashboard's mount-time loads; the test supplies a
+  // visa router on top.
+  function withDashboardDefaults(visaRouter) {
+    return (url, opts) => {
+      if (url.includes('/portal/kyc/status')) return mockJsonResponse({ kycStatus: 'unverified', mode: 'stub' });
+      if (url.includes('/portal/travel/itineraries')) return mockJsonResponse([]);
+      if (url.includes('/portal/travel/profile')) return mockJsonResponse(null);
+      if (url.includes('/portal/travel/diagnostic-brands')) return mockJsonResponse({ brands: [] });
+      if (url.includes('/portal/travel/diagnostics')) return mockJsonResponse([]);
+      if (url.includes('/brand-kits/')) return mockJsonResponse({});
+      const visa = visaRouter(url, opts);
+      if (visa) return visa;
+      return mockJsonResponse({});
+    };
+  }
+
+  test('start flow: shows the doc preview, then starts the application + lists the checklist', async () => {
+    let started = false;
+    const theApp = {
+      id: 7, applicationType: 'tourist', destinationCountry: 'United States', status: 'docs-pending',
+      documentChecklist: [{ id: 1, docType: 'Passport', required: true, status: 'pending', attachmentUrl: null }],
+    };
+    globalThis.fetch = vi.fn(
+      withDashboardDefaults((url, opts) => {
+        if (url.includes('/portal/travel/visa/checklist-preview')) {
+          return mockJsonResponse({ items: [{ docType: 'Passport', required: true }, { docType: 'Photo', required: false }] });
+        }
+        if (url.includes('/portal/travel/visa/applications')) {
+          if (opts && opts.method === 'POST') {
+            started = true;
+            return mockJsonResponse({ created: true, application: theApp }, { status: 201 });
+          }
+          return mockJsonResponse({ applications: started ? [theApp] : [] });
+        }
+        return null;
+      }),
+    );
+    setupLoggedIn();
     renderPortal();
-    expect(screen.getByRole('heading', { name: /customer portal/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /switch to dark mode/i })).toBeInTheDocument();
+    await gotoView('My Visa');
+
+    expect(await screen.findByTestId('visa-start')).toBeInTheDocument();
+    fireEvent.change(screen.getByTestId('visa-start-destination'), { target: { value: 'United States' } });
+    // Live preview appears once a destination is entered.
+    expect(await screen.findByTestId('visa-preview')).toBeInTheDocument();
+    expect(screen.getByText('Passport')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('visa-start-submit'));
+    // POST went out with the right body.
+    await waitFor(() => {
+      const post = globalThis.fetch.mock.calls.find(
+        ([u, o]) => u.includes('/portal/travel/visa/applications') && o && o.method === 'POST',
+      );
+      expect(post).toBeTruthy();
+      expect(JSON.parse(post[1].body)).toMatchObject({ applicationType: 'tourist', destinationCountry: 'United States' });
+    });
+    // The new application card + its checklist render.
+    expect(await screen.findByTestId('visa-application-7')).toBeInTheDocument();
+    expect(screen.getByTestId('visa-doc-1')).toBeInTheDocument();
+  });
+
+  test('lists multiple applications at once (e.g. a transit visa + a destination visa)', async () => {
+    globalThis.fetch = vi.fn(
+      withDashboardDefaults((url) => {
+        if (url.includes('/portal/travel/visa/applications')) {
+          return mockJsonResponse({
+            applications: [
+              { id: 7, applicationType: 'tourist', destinationCountry: 'United Arab Emirates', status: 'docs-pending', documentChecklist: [] },
+              { id: 8, applicationType: 'tourist', destinationCountry: 'United States', status: 'docs-pending', documentChecklist: [] },
+            ],
+          });
+        }
+        return null;
+      }),
+    );
+    setupLoggedIn();
+    renderPortal();
+    await gotoView('My Visa');
+
+    expect(await screen.findByTestId('visa-application-7')).toBeInTheDocument();
+    expect(screen.getByTestId('visa-application-8')).toBeInTheDocument();
+    expect(screen.getByText(/United Arab Emirates/)).toBeInTheDocument();
+    expect(screen.getByText(/United States/)).toBeInTheDocument();
+    // "Start another" is offered (not the inline form, since apps exist).
+    expect(screen.getByTestId('visa-start-another')).toBeInTheDocument();
+  });
+
+  test('upload flow: uploading a pending document flips it to "In review"', async () => {
+    let uploaded = false;
+    globalThis.fetch = vi.fn(
+      withDashboardDefaults((url, opts) => {
+        if (url.includes('/portal/travel/visa/documents/') && url.includes('/upload')) {
+          uploaded = true;
+          return mockJsonResponse(
+            { item: { id: 1, docType: 'Passport', required: true, status: 'uploaded', attachmentUrl: 'https://x/visa-docs/a.png', attachmentName: 'p.png' } },
+            { status: 201 },
+          );
+        }
+        if (url.includes('/portal/travel/visa/applications')) {
+          return mockJsonResponse({
+            applications: [{
+              id: 7, applicationType: 'tourist', destinationCountry: 'US', status: 'docs-pending',
+              documentChecklist: [{ id: 1, docType: 'Passport', required: true, status: uploaded ? 'uploaded' : 'pending', attachmentUrl: uploaded ? 'https://x/visa-docs/a.png' : null }],
+            }],
+          });
+        }
+        return null;
+      }),
+    );
+    setupLoggedIn();
+    renderPortal();
+    await gotoView('My Visa');
+
+    expect(await screen.findByTestId('visa-application-7')).toBeInTheDocument();
+    const label = screen.getByTestId('visa-upload-1');
+    const input = label.querySelector('input[type="file"]');
+    const file = new File(['x'], 'p.png', { type: 'image/png' });
+    fireEvent.change(input, { target: { files: [file] } });
+
+    await waitFor(() => {
+      const up = globalThis.fetch.mock.calls.find(
+        ([u, o]) => u.includes('/portal/travel/visa/documents/1/upload') && o && o.method === 'POST',
+      );
+      expect(up).toBeTruthy();
+    });
+    await waitFor(() =>
+      expect(within(screen.getByTestId('visa-doc-1')).getByText(/In review/i)).toBeInTheDocument(),
+    );
+  });
+
+  test('cancel flow: cancelling a docs-pending application removes it (returns to the start form)', async () => {
+    let deleted = false;
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    globalThis.fetch = vi.fn(
+      withDashboardDefaults((url, opts) => {
+        if (url.includes('/portal/travel/visa/applications/') && opts && opts.method === 'DELETE') {
+          deleted = true;
+          return mockJsonResponse({ success: true, id: 7 });
+        }
+        if (url.includes('/portal/travel/visa/checklist-preview')) {
+          return mockJsonResponse({ items: [] });
+        }
+        if (url.includes('/portal/travel/visa/applications')) {
+          return mockJsonResponse({
+            applications: deleted
+              ? []
+              : [{ id: 7, applicationType: 'tourist', destinationCountry: 'Pakistan', status: 'docs-pending', documentChecklist: [] }],
+          });
+        }
+        return null;
+      }),
+    );
+    setupLoggedIn();
+    renderPortal();
+    await gotoView('My Visa');
+
+    expect(await screen.findByTestId('visa-application-7')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('visa-cancel-7'));
+
+    await waitFor(() => {
+      const del = globalThis.fetch.mock.calls.find(
+        ([u, o]) => u.includes('/portal/travel/visa/applications/7') && o && o.method === 'DELETE',
+      );
+      expect(del).toBeTruthy();
+    });
+    // No applications left → the start form is shown again.
+    expect(await screen.findByTestId('visa-start')).toBeInTheDocument();
   });
 });

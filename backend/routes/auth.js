@@ -9,6 +9,7 @@ const crypto = require("crypto");
 
 const router = express.Router();
 const prisma = require("../lib/prisma");
+const emailOtp = require("../lib/emailOtp");
 const { writeAudit } = require("../lib/audit");
 const { resolvePrimaryRole } = require("../lib/roleResolution");
 const { provisionTenantRbac } = require("../scripts/ensureRbacOnBoot");
@@ -261,12 +262,100 @@ function validatePasswordComplexity(password) {
 }
 
 // Register Epic — creates a new Tenant + first User (org owner)
+// ─── Email OTP for self-service registration (org signup + customer reg) ──
+//
+// Pre-registration email verification. The form sends { email, purpose };
+// /request stores a hashed 6-digit code (10-min expiry) + emails it via
+// SendGrid; /verify checks it + returns a short-lived "verificationToken"
+// the register/signup endpoints stamp emailVerifiedAt from. Both are OPEN
+// paths (no auth) — they run before any account exists.
+//   purpose ∈ { "signup" (create org), "customer-register" (create account) }
+
+// POST /api/auth/email-otp/request  { email, purpose }
+router.post("/email-otp/request", async (req, res) => {
+  try {
+    const email = String((req.body || {}).email || "").trim().toLowerCase();
+    const purpose = String((req.body || {}).purpose || "");
+    if (!emailOtp.isValidEmail(email)) {
+      return res.status(400).json({ error: "A valid email address is required", code: "INVALID_EMAIL" });
+    }
+    if (!emailOtp.VALID_PURPOSES.includes(purpose)) {
+      return res.status(400).json({ error: "Invalid verification purpose", code: "INVALID_PURPOSE" });
+    }
+    // Light rate-limit: at most one code per (email, purpose) per 60s.
+    const recent = await prisma.emailVerificationOtp.findFirst({
+      where: { email, purpose, createdAt: { gt: new Date(Date.now() - 60_000) } },
+    });
+    if (recent) {
+      return res.status(429).json({ error: "Please wait a moment before requesting another code", code: "OTP_RATE_LIMIT" });
+    }
+    const code = emailOtp.generateOtpCode();
+    const otpHash = await bcrypt.hash(code, 10);
+    await prisma.emailVerificationOtp.create({
+      data: { email, purpose, otpHash, expiresAt: new Date(Date.now() + emailOtp.OTP_TTL_MS) },
+    });
+    const result = await emailOtp.sendOtpEmail(email, code, purpose);
+    // When SendGrid isn't configured (dev/CI), surface the code so the flow is
+    // exercisable end-to-end without real email. NEVER in production.
+    const devCode =
+      !result.sent && process.env.NODE_ENV !== "production" ? code : undefined;
+    return res.status(201).json({ sent: !!result.sent, ...(devCode ? { devCode } : {}) });
+  } catch (error) {
+    console.error("[auth] email-otp/request error:", error.message);
+    return res.status(500).json({ error: "Failed to send verification code" });
+  }
+});
+
+// POST /api/auth/email-otp/verify  { email, purpose, code }
+router.post("/email-otp/verify", async (req, res) => {
+  try {
+    const email = String((req.body || {}).email || "").trim().toLowerCase();
+    const purpose = String((req.body || {}).purpose || "");
+    const code = String((req.body || {}).code || "").trim();
+    if (!email || !purpose || !code) {
+      return res.status(400).json({ error: "email, purpose and code are required", code: "MISSING_FIELDS" });
+    }
+    const otp = await prisma.emailVerificationOtp.findFirst({
+      where: { email, purpose, usedAt: null, expiresAt: { gt: new Date() } },
+      orderBy: { createdAt: "desc" },
+    });
+    if (!otp) {
+      return res.status(400).json({ error: "Code expired or not found — request a new one", code: "OTP_INVALID" });
+    }
+    if (otp.attempts >= 5) {
+      return res.status(429).json({ error: "Too many attempts — request a new code", code: "OTP_LOCKED" });
+    }
+    const match = await bcrypt.compare(code, otp.otpHash);
+    if (!match) {
+      await prisma.emailVerificationOtp.update({ where: { id: otp.id }, data: { attempts: { increment: 1 } } });
+      return res.status(400).json({ error: "Incorrect code", code: "OTP_INVALID" });
+    }
+    await prisma.emailVerificationOtp.update({ where: { id: otp.id }, data: { usedAt: new Date() } });
+    const verificationToken = emailOtp.issueVerificationToken(email, purpose);
+    return res.json({ verified: true, verificationToken });
+  } catch (error) {
+    console.error("[auth] email-otp/verify error:", error.message);
+    return res.status(500).json({ error: "Failed to verify code" });
+  }
+});
+
 router.post("/register", async (req, res) => {
   try {
-    const { email, password, name, organizationName, vertical, themePreference } = req.body;
+    const { email, password, name, organizationName, vertical, themePreference, verificationToken } = req.body;
 
     const pwErr = validatePasswordComplexity(password);
     if (pwErr) return res.status(400).json({ error: pwErr });
+
+    // Email OTP gate (FR). A tampered/wrong-purpose token is rejected; a valid
+    // token stamps emailVerifiedAt. Absent token stays backward-compatible
+    // (the UI hard-gates the button, so real users always send one).
+    let emailVerifiedAt = null;
+    if (verificationToken !== undefined && verificationToken !== null && verificationToken !== "") {
+      if (!emailOtp.checkVerificationToken(verificationToken, email, "signup")) {
+        return res.status(403).json({ error: "Email verification failed — please verify your email again", code: "EMAIL_NOT_VERIFIED" });
+      }
+      emailVerifiedAt = new Date();
+    }
 
     // Org creation makes a brand-new tenant, so (email, newTenantId) can never
     // collide — email is unique per-tenant now (see User schema). The same
@@ -285,7 +374,7 @@ router.post("/register", async (req, res) => {
     const slug = await generateUniqueSlug(orgName);
 
     const tenant = await prisma.tenant.create({
-      data: { name: orgName, slug, ownerEmail: email, plan: "TRIAL", vertical: selectedVertical }
+      data: { name: orgName, slug, ownerEmail: email, plan: "TRIAL", vertical: selectedVertical, emailVerifiedAt }
     });
 
     const trialDays = parseInt(process.env.FREE_TRIAL_DAYS || 15);
@@ -302,7 +391,8 @@ router.post("/register", async (req, res) => {
         trialStartDate: now,
         trialEndsAt: trialEnd,
         subscriptionStatus: "TRIAL",
-        themePreference: selectedTheme
+        themePreference: selectedTheme,
+        emailVerifiedAt
       }
     });
 
@@ -332,10 +422,19 @@ router.post("/register", async (req, res) => {
 // Signup alias (matches signup page) — same behavior as register
 router.post("/signup", async (req, res) => {
   try {
-    const { email, password, name, organizationName, vertical, themePreference } = req.body;
+    const { email, password, name, organizationName, vertical, themePreference, verificationToken } = req.body;
 
     const pwErr = validatePasswordComplexity(password);
     if (pwErr) return res.status(400).json({ error: pwErr });
+
+    // Email OTP gate (same posture as /register — this is its alias).
+    let emailVerifiedAt = null;
+    if (verificationToken !== undefined && verificationToken !== null && verificationToken !== "") {
+      if (!emailOtp.checkVerificationToken(verificationToken, email, "signup")) {
+        return res.status(403).json({ error: "Email verification failed — please verify your email again", code: "EMAIL_NOT_VERIFIED" });
+      }
+      emailVerifiedAt = new Date();
+    }
 
     // Org creation makes a brand-new tenant, so (email, newTenantId) can never
     // collide — email is unique per-tenant now (see User schema). The same
@@ -354,7 +453,7 @@ router.post("/signup", async (req, res) => {
     const slug = await generateUniqueSlug(orgName);
 
     const tenant = await prisma.tenant.create({
-      data: { name: orgName, slug, ownerEmail: email, plan: "TRIAL", vertical: selectedVertical }
+      data: { name: orgName, slug, ownerEmail: email, plan: "TRIAL", vertical: selectedVertical, emailVerifiedAt }
     });
 
     const trialDays = parseInt(process.env.FREE_TRIAL_DAYS || 15);
@@ -371,7 +470,8 @@ router.post("/signup", async (req, res) => {
         trialStartDate: now,
         trialEndsAt: trialEnd,
         subscriptionStatus: "TRIAL",
-        themePreference: selectedTheme
+        themePreference: selectedTheme,
+        emailVerifiedAt
       }
     });
 
@@ -427,11 +527,22 @@ router.post("/customer/register", async (req, res) => {
     // standing rules), so a `tenantId` field would always arrive undefined
     // and registration would 400. `registrationTenantId` is not on the strip
     // list, so it passes through intact.
-    const { email, password, name, registrationTenantId } = req.body || {};
+    const { email, password, name, registrationTenantId, verificationToken } = req.body || {};
 
     // Input validation
     if (!email || typeof email !== "string" || !password || typeof password !== "string") {
       return res.status(400).json({ error: "email, password, and registrationTenantId are required" });
+    }
+
+    // Email OTP gate (purpose "customer-register"). Tampered/wrong-purpose
+    // token → 403; valid token → stamp emailVerifiedAt; absent → backward-
+    // compatible (the UI hard-gates the button so real users always send one).
+    let emailVerifiedAt = null;
+    if (verificationToken !== undefined && verificationToken !== null && verificationToken !== "") {
+      if (!emailOtp.checkVerificationToken(verificationToken, email, "customer-register")) {
+        return res.status(403).json({ error: "Email verification failed — please verify your email again", code: "EMAIL_NOT_VERIFIED" });
+      }
+      emailVerifiedAt = new Date();
     }
 
     // Coerce to a number — JSON sends it numeric, but accept a numeric string
@@ -470,6 +581,7 @@ router.post("/customer/register", async (req, res) => {
         userType: 'CUSTOMER',
         role: 'CUSTOMER', // Legacy field for backward compat
         tenantId,
+        emailVerifiedAt,
       },
       include: { tenant: true }
     });

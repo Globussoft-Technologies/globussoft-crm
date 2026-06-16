@@ -34,11 +34,12 @@
  *   by holding a PORTAL JWT, not by a User row.
  */
 import { useState, useEffect, useCallback, useRef } from "react";
+import { Navigate } from "react-router-dom";
 import {
   ShieldCheck, ShieldAlert, LogOut, Plane, User as UserIcon,
   CheckCircle2, AlertCircle, Loader2, ClipboardCheck, Award, LayoutDashboard,
   ChevronRight, ChevronLeft, Hotel, Ticket, FileUp, Upload, UserPlus,
-  Mail, Phone, Sun, Moon,
+  Mail, Phone, Sun, Moon, Stamp,
 } from "lucide-react";
 
 const PORTAL_TOKEN_KEY = "portalToken";
@@ -104,9 +105,6 @@ export default function TravelCustomerPortal() {
   const initial = readStoredAuth();
   const [token, setToken] = useState(initial.token);
   const [contact, setContact] = useState(initial.contact);
-  const [loginForm, setLoginForm] = useState({ email: "", password: "" });
-  const [loginError, setLoginError] = useState(null);
-  const [loginLoading, setLoginLoading] = useState(false);
 
   // Portal-owned light/dark theme. The customer portal is NOT a CRM-user
   // surface, so the app-global `data-vertical` (driven by tenant.vertical in
@@ -149,45 +147,17 @@ export default function TravelCustomerPortal() {
     setPortalTheme((t) => (t === "dark" ? "light" : "dark"));
   }, []);
 
-  const handleLogin = async (e) => {
-    e.preventDefault();
-    setLoginError(null);
-    setLoginLoading(true);
-    try {
-      const data = await portalFetch("/login", {
-        method: "POST",
-        body: { email: loginForm.email.trim(), password: loginForm.password },
-      });
-      localStorage.setItem(PORTAL_TOKEN_KEY, data.token);
-      localStorage.setItem(PORTAL_CONTACT_KEY, JSON.stringify(data.contact));
-      setToken(data.token);
-      setContact(data.contact);
-    } catch (err) {
-      setLoginError(err.message || "Login failed");
-    } finally {
-      setLoginLoading(false);
-    }
-  };
-
   const handleLogout = () => {
     clearStoredAuth();
     setToken(null);
     setContact(null);
-    setLoginForm({ email: "", password: "" });
   };
 
+  // Customers sign in via the unified /login page (it auto-falls-back to the
+  // portal auth) — so an unauthenticated visit here (incl. after logout) sends
+  // them there rather than rendering a separate, redundant portal login.
   if (!token) {
-    return (
-      <LoginScreen
-        form={loginForm}
-        setForm={setLoginForm}
-        onSubmit={handleLogin}
-        error={loginError}
-        loading={loginLoading}
-        theme={portalTheme}
-        onToggleTheme={toggleTheme}
-      />
-    );
+    return <Navigate to="/login" replace />;
   }
 
   // Persist contact edits (e.g. avatar) to state + localStorage so the
@@ -228,99 +198,6 @@ function ThemeToggleButton({ theme, onToggle }) {
     >
       {goingDark ? <Moon size={16} aria-hidden /> : <Sun size={16} aria-hidden />}
     </button>
-  );
-}
-
-function LoginScreen({ form, setForm, onSubmit, error, loading, theme, onToggleTheme }) {
-  return (
-    <div style={{
-      position: "relative",
-      minHeight: "100vh",
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      padding: 24,
-      background: "var(--bg-color, #FAF6EE)",
-      color: "var(--text-primary, #1F1B14)",
-    }}>
-      <div style={{ position: "absolute", top: 20, right: 20 }}>
-        <ThemeToggleButton theme={theme} onToggle={onToggleTheme} />
-      </div>
-      <form
-        onSubmit={onSubmit}
-        style={{
-          width: "100%",
-          maxWidth: 420,
-          background: "var(--surface-color, #FFFFFF)",
-          padding: 32,
-          borderRadius: 16,
-          boxShadow: "0 4px 24px rgba(18, 38, 71, 0.08)",
-          border: "1px solid var(--border-color, rgba(18, 38, 71, 0.12))",
-        }}
-      >
-        <h1 style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 0 }}>
-          <Plane size={28} aria-hidden /> Customer Portal
-        </h1>
-        <p style={{ color: "var(--text-secondary)", marginTop: -4 }}>
-          Sign in to see your bookings and verify your identity.
-        </p>
-        <label style={{ display: "block", fontSize: 14, fontWeight: 600, marginTop: 16 }}>
-          Email
-          <input
-            type="email"
-            required
-            value={form.email}
-            onChange={(e) => setForm({ ...form, email: e.target.value })}
-            style={inputStyle}
-            placeholder="ahmed.pilgrim@demo.test"
-          />
-        </label>
-        <label style={{ display: "block", fontSize: 14, fontWeight: 600, marginTop: 12 }}>
-          Password
-          <input
-            type="password"
-            required
-            value={form.password}
-            onChange={(e) => setForm({ ...form, password: e.target.value })}
-            style={inputStyle}
-            placeholder="••••••••"
-          />
-        </label>
-        {error && (
-          <div role="alert" style={{
-            marginTop: 12, padding: "8px 12px",
-            background: "rgba(168, 50, 63, 0.08)",
-            color: "var(--danger-color, #A8323F)",
-            borderRadius: 8, fontSize: 14,
-            display: "flex", alignItems: "center", gap: 8,
-          }}>
-            <AlertCircle size={16} aria-hidden /> {error}
-          </div>
-        )}
-        <button
-          type="submit"
-          disabled={loading}
-          style={{
-            marginTop: 16,
-            width: "100%",
-            padding: "10px 16px",
-            background: "var(--primary-color, #122647)",
-            color: "white",
-            border: "none",
-            borderRadius: 8,
-            fontWeight: 600,
-            cursor: loading ? "wait" : "pointer",
-            display: "flex", justifyContent: "center", alignItems: "center", gap: 8,
-          }}
-        >
-          {loading ? <Loader2 size={16} className="spin" aria-hidden /> : null}
-          {loading ? "Signing in…" : "Sign in"}
-        </button>
-        <p style={{ marginTop: 16, fontSize: 13, color: "var(--text-secondary)" }}>
-          Demo: <code>ahmed.pilgrim@demo.test</code> / <code>password123</code>
-        </p>
-      </form>
-    </div>
   );
 }
 
@@ -514,6 +391,7 @@ function Dashboard({ token, contact, onUpdateContact, onLogout, theme, onToggleT
             <strong style={{ fontSize: 16 }}>
               {view === "overview" && "Dashboard"}
               {view === "bookings" && "My Bookings"}
+              {view === "visa" && "My Visa Applications"}
               {view === "documents" && "Travel Documents"}
               {view === "diagnostic" && "Travel Diagnostic"}
               {view === "profile" && "My Profile"}
@@ -579,6 +457,8 @@ function Dashboard({ token, contact, onUpdateContact, onLogout, theme, onToggleT
               <ItinerariesCard itineraries={itineraries} loading={loading} onSelect={setSelectedBookingId} />
             )
           )}
+
+          {view === "visa" && <VisaApplicationCard token={token} />}
 
           {view === "documents" && <TravellersCard token={token} onLogout={onLogout} />}
 
@@ -650,9 +530,362 @@ function Dashboard({ token, contact, onUpdateContact, onLogout, theme, onToggleT
 
 // Profile is intentionally NOT a sidebar item — it's opened by clicking the
 // name/avatar in the header (PortalHeader), per the customer-portal design.
+// ─── My Visa Application (FR-5/FR-6 customer self-serve) ──────────────
+// After the Visa Sure diagnostic the customer comes here to: see the docs
+// they'll need (checklist-preview), start their application, then upload each
+// document. The advisor verifies/rejects each upload on their side.
+const VISA_TYPES = [
+  { value: "tourist", label: "Tourist" },
+  { value: "business", label: "Business" },
+  { value: "student", label: "Student" },
+  { value: "work", label: "Work" },
+  { value: "umrah", label: "Umrah" },
+  { value: "hajj", label: "Hajj" },
+];
+const VISA_DOC_STATUS_META = {
+  pending: { label: "Awaiting upload", color: "var(--text-secondary, #6b7280)" },
+  uploaded: { label: "In review", color: "#9A6F2E" },
+  verified: { label: "Verified ✓", color: "#16a34a" },
+  rejected: { label: "Rejected — please re-upload", color: "#ef4444" },
+};
+
+function VisaApplicationCard({ token }) {
+  // A customer can hold several visa applications at once — one per visa
+  // (e.g. a UAE transit visa + a USA visa for the same trip). Each is
+  // independent: its own checklist, uploads, status, and cancel.
+  const [apps, setApps] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [msg, setMsg] = useState(null); // { type: 'error' | 'success', text }
+  const [form, setForm] = useState({ applicationType: "tourist", destinationCountry: "" });
+  const [preview, setPreview] = useState(null);
+  const [starting, setStarting] = useState(false);
+  const [uploadingId, setUploadingId] = useState(null);
+  const [showStart, setShowStart] = useState(false);
+
+  const reload = useCallback(async () => {
+    setLoading(true);
+    try {
+      const data = await portalFetch("/travel/visa/applications", { token });
+      setApps(Array.isArray(data.applications) ? data.applications : []);
+    } catch (e) {
+      setMsg({ type: "error", text: e.message || "Failed to load your visa applications" });
+    } finally {
+      setLoading(false);
+    }
+  }, [token]);
+
+  useEffect(() => { reload(); }, [reload]);
+
+  // The start form is open when the customer has no applications yet, or has
+  // explicitly clicked "Start another".
+  const startFormOpen = showStart || (!loading && apps.length === 0);
+
+  // Live "what you'll need" preview while filling the start form.
+  useEffect(() => {
+    if (!startFormOpen) { setPreview(null); return; }
+    const at = form.applicationType;
+    const dc = form.destinationCountry.trim();
+    if (!at || !dc) { setPreview(null); return; }
+    let cancelled = false;
+    portalFetch(
+      `/travel/visa/checklist-preview?applicationType=${encodeURIComponent(at)}&destinationCountry=${encodeURIComponent(dc)}`,
+      { token },
+    )
+      .then((d) => { if (!cancelled) setPreview(d.items || []); })
+      .catch(() => { if (!cancelled) setPreview(null); });
+    return () => { cancelled = true; };
+  }, [startFormOpen, form.applicationType, form.destinationCountry, token]);
+
+  const start = async () => {
+    if (!form.destinationCountry.trim()) {
+      setMsg({ type: "error", text: "Please enter your destination country" });
+      return;
+    }
+    setStarting(true);
+    setMsg(null);
+    try {
+      await portalFetch("/travel/visa/applications", {
+        token,
+        method: "POST",
+        body: { applicationType: form.applicationType, destinationCountry: form.destinationCountry.trim() },
+      });
+      setForm({ applicationType: "tourist", destinationCountry: "" });
+      setPreview(null);
+      setShowStart(false);
+      await reload();
+      setMsg({ type: "success", text: "Your application is started — upload your documents below." });
+    } catch (e) {
+      setMsg({ type: "error", text: e.message || "Couldn't start your application" });
+    } finally {
+      setStarting(false);
+    }
+  };
+
+  const upload = async (itemId, file) => {
+    if (!file) return;
+    setUploadingId(itemId);
+    setMsg(null);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      await portalUploadFetch(`/travel/visa/documents/${itemId}/upload`, { token, formData: fd });
+      await reload();
+      setMsg({ type: "success", text: "Document uploaded — your advisor will review it." });
+    } catch (e) {
+      setMsg({ type: "error", text: e.message || "Upload failed" });
+    } finally {
+      setUploadingId(null);
+    }
+  };
+
+  // Cancel one application (only while early) — e.g. it was started for the
+  // wrong destination, or no checklist was set up for it.
+  const cancelApplication = async (appId) => {
+    if (!window.confirm('Cancel this application? Any documents you have uploaded for it will be removed.')) {
+      return;
+    }
+    setStarting(true);
+    setMsg(null);
+    try {
+      await portalFetch(`/travel/visa/applications/${appId}`, { token, method: 'DELETE' });
+      await reload();
+      setMsg({ type: 'success', text: 'Application cancelled.' });
+    } catch (e) {
+      setMsg({ type: 'error', text: e.message || "Couldn't cancel the application" });
+    } finally {
+      setStarting(false);
+    }
+  };
+
+  if (loading) {
+    return <section style={cardStyle} data-testid="visa-loading">Loading…</section>;
+  }
+
+  const banner = msg ? (
+    <div
+      data-testid="visa-banner"
+      style={{
+        padding: "10px 12px", borderRadius: 8, marginBottom: 14, fontSize: 14,
+        background: msg.type === "error" ? "rgba(239,68,68,0.1)" : "rgba(22,163,74,0.1)",
+        color: msg.type === "error" ? "#ef4444" : "#16a34a",
+      }}
+    >
+      {msg.text}
+    </div>
+  ) : null;
+
+  // One application card — header + status + checklist + uploads + cancel.
+  const renderApplication = (app) => {
+    const items = app.documentChecklist || [];
+    const requiredItems = items.filter((i) => i.required);
+    const verifiedRequired = requiredItems.filter((i) => i.status === "verified");
+    const allVerified = requiredItems.length > 0 && verifiedRequired.length === requiredItems.length;
+    const cancellable = app.status === "intake" || app.status === "docs-pending";
+    return (
+      <section key={app.id} style={{ ...cardStyle, marginBottom: 14 }} data-testid={`visa-application-${app.id}`}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 6 }}>
+          <h2 style={{ margin: 0, fontSize: 18, color: "var(--text-primary)" }}>
+            {(VISA_TYPES.find((t) => t.value === app.applicationType) || {}).label || app.applicationType} visa — {app.destinationCountry}
+          </h2>
+          <span
+            data-testid={`visa-app-status-${app.id}`}
+            style={{
+              marginLeft: "auto", padding: "3px 10px", borderRadius: 999, fontSize: 12, fontWeight: 600,
+              background: app.status === "filed" || app.status === "approved" ? "rgba(22,163,74,0.12)" : "rgba(18,38,71,0.08)",
+              color: app.status === "filed" || app.status === "approved" ? "#16a34a" : "var(--text-secondary)",
+            }}
+          >
+            {app.status}
+          </span>
+        </div>
+        {requiredItems.length > 0 && (
+          <p style={{ color: "var(--text-secondary)", fontSize: 14, marginTop: 0 }}>
+            {verifiedRequired.length} of {requiredItems.length} required documents verified.
+            {allVerified ? " All set — your advisor has everything they need." : ""}
+          </p>
+        )}
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 12 }}>
+          {items.map((item) => {
+            const meta = VISA_DOC_STATUS_META[item.status] || VISA_DOC_STATUS_META.pending;
+            const canUpload = item.status !== "verified";
+            return (
+              <div
+                key={item.id}
+                data-testid={`visa-doc-${item.id}`}
+                style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 0", borderTop: "1px solid var(--border-color, rgba(18,38,71,0.1))" }}
+              >
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 15, color: "var(--text-primary)" }}>
+                    {item.docType}
+                    {item.required ? null : <span style={{ color: "var(--text-secondary)", fontSize: 12 }}> (optional)</span>}
+                  </div>
+                  <div style={{ fontSize: 12, color: meta.color, marginTop: 2 }}>{meta.label}</div>
+                  {item.status === "rejected" && item.notes && (
+                    <div style={{ fontSize: 12, color: "#ef4444", marginTop: 2 }}>Reason: {item.notes}</div>
+                  )}
+                </div>
+                {item.attachmentUrl && (
+                  <a
+                    href={item.attachmentUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    style={{ fontSize: 12, color: "var(--primary-color, #122647)", textDecoration: "underline" }}
+                  >
+                    View
+                  </a>
+                )}
+                {canUpload && (
+                  <label
+                    data-testid={`visa-upload-${item.id}`}
+                    style={{ ...portalPrimaryBtnStyle, cursor: uploadingId === item.id ? "wait" : "pointer", opacity: uploadingId === item.id ? 0.6 : 1, padding: "6px 12px", fontSize: 12 }}
+                  >
+                    <Upload size={13} />
+                    {uploadingId === item.id ? "Uploading…" : item.status === "pending" ? "Upload" : "Replace"}
+                    <input
+                      type="file"
+                      accept="image/jpeg,image/png,application/pdf"
+                      style={visuallyHiddenInputStyle}
+                      disabled={uploadingId === item.id}
+                      onChange={(e) => {
+                        const f = e.target.files && e.target.files[0];
+                        e.target.value = "";
+                        upload(item.id, f);
+                      }}
+                    />
+                  </label>
+                )}
+              </div>
+            );
+          })}
+          {items.length === 0 && (
+            <p style={{ color: "var(--text-secondary)", fontSize: 14 }}>
+              Your advisor will add the documents you need shortly.
+            </p>
+          )}
+        </div>
+
+        {cancellable && (
+          <div style={{ marginTop: 18, paddingTop: 14, borderTop: "1px solid var(--border-color, rgba(18,38,71,0.1))" }}>
+            <button
+              type="button"
+              data-testid={`visa-cancel-${app.id}`}
+              onClick={() => cancelApplication(app.id)}
+              disabled={starting}
+              style={{
+                display: "inline-flex", alignItems: "center", gap: 6,
+                padding: "7px 12px", borderRadius: 8, fontSize: 13, fontWeight: 600,
+                background: "transparent", color: "#ef4444",
+                border: "1px solid rgba(239,68,68,0.4)",
+                cursor: starting ? "wait" : "pointer", opacity: starting ? 0.6 : 1,
+              }}
+            >
+              Cancel this application
+            </button>
+          </div>
+        )}
+      </section>
+    );
+  };
+
+  const startForm = (
+    <section style={cardStyle} data-testid="visa-start">
+      <h2 style={{ marginTop: 0, fontSize: 18, color: "var(--text-primary)" }}>
+        {apps.length > 0 ? "Start another visa application" : "Start your visa application"}
+      </h2>
+      <p style={{ color: "var(--text-secondary)", fontSize: 14 }}>
+        Travelling through more than one country (e.g. a transit stop)? Start a separate application for each visa you
+        need. Tell us the visa type and destination to see the documents you&rsquo;ll need.
+      </p>
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+        <label style={{ flex: "1 1 160px", fontSize: 13, fontWeight: 600 }}>
+          Visa type
+          <select
+            data-testid="visa-start-type"
+            value={form.applicationType}
+            onChange={(e) => setForm({ ...form, applicationType: e.target.value })}
+            style={inputStyle}
+          >
+            {VISA_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
+          </select>
+        </label>
+        <label style={{ flex: "2 1 220px", fontSize: 13, fontWeight: 600 }}>
+          Destination country
+          <input
+            data-testid="visa-start-destination"
+            type="text"
+            placeholder="e.g. United States"
+            value={form.destinationCountry}
+            onChange={(e) => setForm({ ...form, destinationCountry: e.target.value })}
+            style={inputStyle}
+          />
+        </label>
+      </div>
+
+      {preview && preview.length > 0 && (
+        <div style={{ marginTop: 16 }} data-testid="visa-preview">
+          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>You&rsquo;ll need to provide:</div>
+          <ul style={{ margin: 0, paddingLeft: 18, color: "var(--text-secondary)", fontSize: 14 }}>
+            {preview.map((p, i) => (
+              <li key={i}>{p.docType}{p.required ? "" : " (optional)"}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {preview && preview.length === 0 && (
+        <p style={{ marginTop: 16, color: "var(--text-secondary)", fontSize: 14 }}>
+          No preset document list for this destination yet — your advisor will confirm what&rsquo;s needed once you start.
+        </p>
+      )}
+
+      <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 18 }}>
+        <button
+          type="button"
+          data-testid="visa-start-submit"
+          onClick={start}
+          disabled={starting}
+          style={{ ...portalPrimaryBtnStyle, opacity: starting ? 0.6 : 1 }}
+        >
+          <Stamp size={15} /> {starting ? "Starting…" : "Start my application"}
+        </button>
+        {apps.length > 0 && (
+          <button
+            type="button"
+            data-testid="visa-start-close"
+            onClick={() => { setShowStart(false); setPreview(null); }}
+            style={{ background: "transparent", border: "none", color: "var(--text-secondary)", fontSize: 13, cursor: "pointer" }}
+          >
+            Cancel
+          </button>
+        )}
+      </div>
+    </section>
+  );
+
+  return (
+    <div data-testid="visa-applications">
+      {banner}
+      {apps.map(renderApplication)}
+      {startFormOpen ? (
+        startForm
+      ) : (
+        <button
+          type="button"
+          data-testid="visa-start-another"
+          onClick={() => setShowStart(true)}
+          style={{ ...portalPrimaryBtnStyle, background: "transparent", color: "var(--primary-color, #122647)", border: "1px solid var(--primary-color, #122647)" }}
+        >
+          <Stamp size={15} /> Start another visa application
+        </button>
+      )}
+    </div>
+  );
+}
+
 const NAV_ITEMS = [
   { key: "overview", label: "Dashboard", icon: LayoutDashboard },
   { key: "bookings", label: "My Bookings", icon: Plane },
+  { key: "visa", label: "My Visa", icon: Stamp },
   { key: "documents", label: "Travel Documents", icon: FileUp },
   { key: "diagnostic", label: "Travel Diagnostic", icon: ClipboardCheck },
 ];

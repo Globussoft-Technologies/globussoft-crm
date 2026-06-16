@@ -61,6 +61,7 @@ model Tenant {
   slug               String   @unique
   plan               String   @default("starter") // starter, professional, enterprise
   vertical           String   @default("generic") // generic, wellness (more verticals later)
+  emailVerifiedAt    DateTime? // set when the org owner verified their email via OTP at signup (null for pre-feature tenants)
   // Geographic + monetary defaults — used to default currency on Deal/Payment
   // and to drive money formatting in the UI. ISO-3166-1-alpha-2 + ISO-4217.
   country            String   @default("US")
@@ -484,6 +485,7 @@ model User {
   // scoped by tenantId) rather than findUnique({ where: { email } }).
   email     String
   password  String
+  emailVerifiedAt DateTime? // set when a self-registered user verified their email via OTP (null for staff/invited/pre-feature users)
   role      String   @default("USER") // ADMIN, USER, MANAGER
   userType  String   @default("STAFF") // STAFF | OWNER | CUSTOMER
   name      String
@@ -635,6 +637,7 @@ model Contact {
   id                    Int       @id @default(autoincrement())
   name                  String
   email                 String
+  emailVerifiedAt       DateTime? // set when a self-registered portal customer verified their email via OTP
   phone                 String?
   company               String?
   title                 String?
@@ -6192,11 +6195,80 @@ model VisaDocumentChecklistItem {
   status        String          @default("pending") // pending | uploaded | verified | rejected
   attachmentId  Int?
   notes         String?         @db.Text
+  // FR-6.2 customer self-serve upload — the file the applicant uploaded
+  // against this checklist item. attachmentStorage/attachmentKey let the
+  // re-upload path supersede (delete) the prior file from its backend.
+  attachmentUrl     String?   @db.Text // served URL (/api/uploads/visa-docs/… or S3)
+  attachmentName    String? // original client filename (display only)
+  attachmentStorage String? // "s3" | "disk"
+  attachmentKey     String? // storage key/object name
+  uploadedAt        DateTime? // when the applicant uploaded the current file
   application   VisaApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
   createdAt     DateTime        @default(now())
   updatedAt     DateTime        @updatedAt
 
   @@index([applicationId, status])
+}
+
+/// Canonical document-checklist templates per applicationType × destinationCountry
+/// (PRD_VISA_SURE_PHASE_3 FR-6.1). Managed by ADMIN/MANAGER via
+/// /travel/visa/checklists; consumed by GET /checklists/template?applicationType=
+/// &destinationCountry= to seed a new application's VisaDocumentChecklistItem rows.
+/// Standalone reference data — no FK to applications.
+model VisaChecklistTemplate {
+  id                 Int      @id @default(autoincrement())
+  tenantId           Int
+  applicationType    String // tourist | business | student | work | umrah | hajj
+  destinationCountry String // free-text or ISO code (e.g. "US", "United States")
+  docType            String // e.g. "Passport", "Bank statement", "CAS letter"
+  required           Boolean  @default(true)
+  sortOrder          Int      @default(0)
+  notes              String?  @db.Text
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@index([tenantId, applicationType, destinationCountry])
+}
+
+/// Curated quotation templates for Visa Sure (PRD_VISA_SURE_PHASE_3 FR-5.2).
+/// For standard cases the advisor picks a template (e.g. "Tourist visa —
+/// standard") and the system auto-populates quote line items. Managed via the
+/// /travel/visa/checklists admin page (the checklist admin extends to manage
+/// quotation templates too). `linesJson` is a JSON-stringified array of
+/// { label, amount } line items (amount may be negative for credits/
+/// adjustments, e.g. crediting the free entry-diagnostic fee).
+model VisaQuotationTemplate {
+  id              Int      @id @default(autoincrement())
+  tenantId        Int
+  name            String // e.g. "Tourist visa — standard", "Student visa — UK"
+  applicationType String // tourist | business | student | work | umrah | hajj
+  currency        String   @default("INR")
+  linesJson       String   @db.Text // JSON array of { label, amount }
+  notes           String?  @db.Text
+  isActive        Boolean  @default(true)
+  sortOrder       Int      @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([tenantId, applicationType])
+}
+
+/// Transient email-OTP store for self-service registration (org signup +
+/// customer/portal registration). Pre-registration, identity-by-email — it is
+/// deliberately NOT tenant-scoped (at org-signup time no tenant exists yet).
+/// Codes are bcrypt-hashed, expire in ~10 min, and are deleted/marked used.
+/// The permanent "verified" marker lands on Tenant/User/Contact.emailVerifiedAt.
+model EmailVerificationOtp {
+  id        Int       @id @default(autoincrement())
+  email     String
+  purpose   String // signup | customer-register
+  otpHash   String
+  expiresAt DateTime
+  usedAt    DateTime?
+  attempts  Int       @default(0)
+  createdAt DateTime  @default(now())
+
+  @@index([email, purpose])
 }
 
 /// Per-destination embassy quirks for Visa Sure risk-flag engine. PRD §PC-3 resolved 2026-05-24: Phase 3 in-scope structured rules; advisor-head + admin UI maintainer (PC-7).

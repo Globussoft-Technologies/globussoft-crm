@@ -75,7 +75,7 @@ final class RequestDataExportUseCase {
 final class RequestAccountDeletionUseCase {
     private let repository: ProfileRepository
     init(repository: ProfileRepository) { self.repository = repository }
-    func callAsFunction(patientId: String) async -> Result<Void, AppError> {
-        await repository.requestAccountDeletion(patientId: patientId)
+    func callAsFunction(password: String?, code: String?) async -> Result<Void, AppError> {
+        await repository.deleteAccount(password: password, code: code)
     }
 }

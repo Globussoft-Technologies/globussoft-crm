@@ -21,9 +21,6 @@ struct GiftCardsView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: WellnessSpacing.xl) {
                         header
-                        if let error = viewModel.loadError {
-                            ErrorBanner(message: "Refresh failed: \(error)")
-                        }
                         LazyVGrid(columns: columns, spacing: WellnessSpacing.md) {
                             ForEach(viewModel.storefrontCards) { card in
                                 StorefrontGiftCardTile(card: card) {
@@ -82,7 +79,7 @@ struct GiftCardsView: View {
                 .accessibilityLabel("Purchase history")
             }
         }
-        .task { await viewModel.load() }
+        .task { if !viewModel.hasLoaded { await viewModel.load() } }
         .refreshable { await viewModel.load() }
         .sheet(item: $activeSheet) { sheet in
             switch sheet {
@@ -101,7 +98,7 @@ struct GiftCardsView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: WellnessSpacing.xs) {
-            Text("Dr. Haror's Wellness Gift Cards")
+            Text("Gift Cards")
                 .font(.wellnessHeadline)
                 .fontWeight(.bold)
                 .foregroundColor(.wellnessOnSurface)
@@ -407,12 +404,12 @@ final class GiftCardsViewModel: ObservableObject {
     func load() async {
         guard !isLoading else { return }
         isLoading = true
+        defer { isLoading = false }
         loadError = nil
         async let storefrontResult = getStorefrontUseCase()
         let patientId = keychain.getPatientIdString() ?? ""
         async let ownedResult = getGiftCardsUseCase(patientId: patientId)
         let (storefront, owned) = await (storefrontResult, ownedResult)
-        isLoading = false
         hasLoaded = true
         switch storefront {
         case .success(let cards): storefrontCards = cards

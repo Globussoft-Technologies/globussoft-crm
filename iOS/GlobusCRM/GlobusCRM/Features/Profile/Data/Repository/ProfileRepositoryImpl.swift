@@ -118,8 +118,9 @@ final class ProfileRepositoryImpl: ProfileRepository {
         return await apiClient.requestVoid(endpoint: .requestDataExport(patientId: patientId), body: EmptyBody())
     }
 
-    func requestAccountDeletion(patientId: String) async -> Result<Void, AppError> {
-        return await apiClient.requestVoid(endpoint: .requestAccountDeletion(patientId: patientId), body: EmptyBody())
+    func deleteAccount(password: String?, code: String?) async -> Result<Void, AppError> {
+        let body = DeleteAccountRequestDTO(confirmDestructive: true, password: password, code: code)
+        return await apiClient.requestVoid(endpoint: .requestAccountDeletion, body: body)
     }
 }
 

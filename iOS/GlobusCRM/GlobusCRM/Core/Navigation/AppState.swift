@@ -12,7 +12,7 @@ final class AppState: ObservableObject {
 
     private let userDefaultsManager: UserDefaultsManager
 
-    init(userDefaultsManager: UserDefaultsManager = UserDefaultsManager()) {
+    init(userDefaultsManager: UserDefaultsManager) {
         self.userDefaultsManager = userDefaultsManager
         self.isDarkTheme = userDefaultsManager.isDarkTheme
         self.clinicName = userDefaultsManager.clinicName

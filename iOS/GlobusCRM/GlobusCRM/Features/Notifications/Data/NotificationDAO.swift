@@ -1,7 +1,26 @@
 import Foundation
 
 final class NotificationDAO {
-    private let storageKey = "glbs_notifications_v1"
+    private let fileURL: URL
+
+    init(fileURL: URL? = nil) {
+        if let fileURL {
+            self.fileURL = fileURL
+            return
+        }
+
+        let applicationSupport = FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first ?? FileManager.default.temporaryDirectory
+        let directory = applicationSupport.appendingPathComponent("GlobusCRM", isDirectory: true)
+        try? FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true,
+            attributes: [.protectionKey: FileProtectionType.complete]
+        )
+        self.fileURL = directory.appendingPathComponent("notifications.json")
+    }
 
     func save(notification: AppNotification) {
         var all = getAll()
@@ -12,7 +31,7 @@ final class NotificationDAO {
     }
 
     func getAll() -> [AppNotification] {
-        guard let data = UserDefaults.standard.data(forKey: storageKey),
+        guard let data = try? Data(contentsOf: fileURL),
               let items = try? JSONDecoder().decode([StoredNotification].self, from: data) else {
             return []
         }
@@ -44,10 +63,19 @@ final class NotificationDAO {
         saveStored(loadStored().filter { $0.receivedAt > cutoff })
     }
 
+    func deleteAll() {
+        guard FileManager.default.fileExists(atPath: fileURL.path) else { return }
+        do {
+            try FileManager.default.removeItem(at: fileURL)
+        } catch {
+            WellnessLogger.error("Failed to clear notifications: \(error.localizedDescription)")
+        }
+    }
+
     // MARK: - Private
 
     private func loadStored() -> [StoredNotification] {
-        guard let data = UserDefaults.standard.data(forKey: storageKey),
+        guard let data = try? Data(contentsOf: fileURL),
               let items = try? JSONDecoder().decode([StoredNotification].self, from: data) else {
             return []
         }
@@ -59,8 +87,12 @@ final class NotificationDAO {
     }
 
     private func saveStored(_ items: [StoredNotification]) {
-        let data = try? JSONEncoder().encode(items)
-        UserDefaults.standard.set(data, forKey: storageKey)
+        guard let data = try? JSONEncoder().encode(items) else { return }
+        do {
+            try data.write(to: fileURL, options: [.atomic, .completeFileProtection])
+        } catch {
+            WellnessLogger.error("Failed to persist notifications: \(error.localizedDescription)")
+        }
     }
 }
 

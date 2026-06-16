@@ -29,7 +29,7 @@ final class AppContainer: ObservableObject {
     init() {
         self.sessionManager = SessionManager()
         self.appRouter = AppRouter()
-        self.appState = AppState()
+        self.appState = AppState(userDefaultsManager: userDefaultsManager)
         self.apiClient = WellnessAPIClient(keychainManager: keychainManager,
                                            sessionManager: sessionManager)
     }

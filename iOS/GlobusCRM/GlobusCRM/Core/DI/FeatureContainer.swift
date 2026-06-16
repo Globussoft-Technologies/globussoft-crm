@@ -232,6 +232,11 @@ final class ProfileFeatureContainer {
         changePasswordUseCase: ChangePasswordUseCase(repository: profileRepository),
         requestDataExportUseCase: RequestDataExportUseCase(repository: profileRepository),
         requestAccountDeletionUseCase: RequestAccountDeletionUseCase(repository: profileRepository),
+        logoutUseCase: LogoutUseCase(repository: c.authContainer.authRepository),
+        notificationDAO: c.notificationsContainer.notificationDAO,
+        appState: c.appState,
+        router: c.appRouter,
+        sessionManager: c.sessionManager,
         keychain: c.keychainManager
     )
 

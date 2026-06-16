@@ -89,7 +89,7 @@ export default function PermissionGate({
   if (checks.length === 0) {
     // Misconfigured — render children defensively rather than break
     // the page. A console warning helps surface the mistake.
-    if (process.env.NODE_ENV !== 'production') {
+    if (import.meta.env.DEV) {
       // eslint-disable-next-line no-console
       console.warn(
         'PermissionGate: no module+action or require[] supplied; rendering children unguarded.',

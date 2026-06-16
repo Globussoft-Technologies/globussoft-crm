@@ -6,6 +6,10 @@ import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { usePermissions, invalidatePermissionCache } from '../hooks/usePermissions';
 import AccessDenied from '../components/AccessDenied';
+// Bug 6 — single source of truth for the Role.key regex, helper text,
+// and validator. Mirrors backend/lib/roleKey.js so the helper text
+// shown to the admin can't drift from the regex the validator enforces.
+import { ROLE_KEY_DESCRIPTION, validateRoleKey } from '../utils/roleKey';
 
 // Admin UI for the RBAC role + permission system. Mirrors the endpoints
 // under /api/roles (see backend/routes/roles.js). Tenant scoping is enforced
@@ -173,6 +177,27 @@ const MODULE_DESCRIPTIONS = {
   flyer_templates:      'Reusable flyer templates and brand-kit defaults.',
 };
 
+// RBAC Hardening Phase 3 — client mirror of backend/lib/rbacLockoutGuard.js
+// CRITICAL_RBAC_PERMISSIONS. The frontend uses this set to surface a
+// "Critical permission removal" warning when the admin's save would
+// uncheck any of these. The backend's general lockout guard remains
+// the load-bearing security gate; this modal is a UX courtesy that
+// gives the admin a chance to reconsider before the 409 fires.
+const CRITICAL_RBAC_KEYS = new Set(['roles.read', 'roles.manage']);
+// Human-readable affected areas — drives the bullet list inside the
+// warning modal so the admin sees the consequence in product terms,
+// not catalog identifiers.
+const CRITICAL_PERMISSION_AREAS = {
+  'roles.read': {
+    name: 'Roles & Permissions (view)',
+    impact: 'Cannot see the Roles & Permissions page or any existing role',
+  },
+  'roles.manage': {
+    name: 'Roles & Permissions (edit)',
+    impact: 'Cannot create, edit, delete roles or assign permissions',
+  },
+};
+
 // SPEC §6a (CRM Role Preset Specification) — client mirror of
 // backend/lib/sensitivePermissions.js. Keep these two lists in lockstep:
 // any addition here must also land server-side (the backend audit is
@@ -238,6 +263,114 @@ const SENSITIVE_PERMISSION_REASONS = {
   'prescriptions.delete': 'Can permanently remove prescription records.',
   'consents.delete': 'Can permanently remove signed consent forms (compliance risk).',
 };
+
+// RBAC Hardening Phase 2 — derived severity classification for badge
+// rendering inside the permissions matrix. Single source of truth:
+//   • Critical = CRITICAL_RBAC_KEYS  (frontend mirror of backend
+//     lib/rbacLockoutGuard.js — the perms whose removal triggers the
+//     server's 409 LOCKOUT_PREVENTED guard).
+//   • Caution  = SENSITIVE_PERMISSIONS_CLIENT \ CRITICAL_RBAC_KEYS
+//     (frontend mirror of backend lib/sensitivePermissions.js — the
+//     perms that surface the SensitiveGrantsConfirmModal on add).
+//
+// We classify by precedence (critical wins when both apply, e.g.
+// roles.manage). The classifier is a pure function of the existing
+// constants — no new UI-only allow-list. Adding a new sensitive perm
+// upstream automatically lights up its caution badge here.
+function getPermissionSeverity(key) {
+  if (CRITICAL_RBAC_KEYS.has(key)) return 'critical';
+  if (SENSITIVE_PERMISSIONS_CLIENT.has(key)) return 'caution';
+  return null;
+}
+
+// Tooltip copy — spec-verbatim. Multi-line strings render with line
+// breaks under `title=` in every modern browser (Chrome, Firefox,
+// Safari, Edge). Kept short per the spec: three sentences max.
+const CRITICAL_BADGE_TOOLTIP =
+  'RBAC-critical permission.\n\n' +
+  'Removing this can prevent users from administering roles and permissions.\n\n' +
+  'The server will reject changes that would leave the tenant without RBAC administration access.';
+
+const CAUTION_BADGE_TOOLTIP =
+  'Operationally important permission.\n\n' +
+  'Removing this may affect user management, onboarding, reporting, or other administrative workflows.\n\n' +
+  'Review carefully before saving.';
+
+// Badge styles — both stay in the amber family per the spec. Critical
+// uses the filled treatment (stronger visual weight) and Caution the
+// outlined treatment. No red — danger styling is reserved for actual
+// destructive UX (delete buttons), not for relative-severity hints.
+const CRITICAL_BADGE_STYLE = {
+  marginLeft: 'auto',
+  fontSize: '0.62rem',
+  fontWeight: 700,
+  letterSpacing: '0.04em',
+  textTransform: 'uppercase',
+  padding: '0.12rem 0.42rem',
+  borderRadius: 4,
+  background: 'var(--warning-color, #f59e0b)',
+  color: '#fff',
+  whiteSpace: 'nowrap',
+  cursor: 'help',
+  // Stops the click from also toggling the parent <label>'s checkbox
+  // when an admin tries to hover-read the tooltip.
+  pointerEvents: 'auto',
+};
+
+const CAUTION_BADGE_STYLE = {
+  marginLeft: 'auto',
+  fontSize: '0.62rem',
+  fontWeight: 600,
+  letterSpacing: '0.04em',
+  textTransform: 'uppercase',
+  padding: '0.1rem 0.4rem',
+  borderRadius: 4,
+  background: 'transparent',
+  color: 'var(--warning-color, #f59e0b)',
+  border: '1px solid var(--warning-color, #f59e0b)',
+  whiteSpace: 'nowrap',
+  cursor: 'help',
+  pointerEvents: 'auto',
+};
+
+// Inline component — small enough that an extraction to a separate
+// file would just add indirection. Always renders a span so callers
+// can pass it through React.Children unchanged; returns null when the
+// permission carries no classification.
+function PermissionSeverityBadge({ severity, module, action, onClick }) {
+  if (!severity) return null;
+  const isCritical = severity === 'critical';
+  return (
+    <span
+      // Unique per-permission testid for direct lookups + a severity
+      // data-attribute for "is this perm critical/caution?" assertions.
+      // Tests assert badge presence via the specific testid; the
+      // severity data-attribute is the public contract for
+      // "what classification did this perm get?".
+      data-testid={`perm-badge-${module}-${action}`}
+      data-severity={severity}
+      data-perm={`${module}.${action}`}
+      title={isCritical ? CRITICAL_BADGE_TOOLTIP : CAUTION_BADGE_TOOLTIP}
+      style={isCritical ? CRITICAL_BADGE_STYLE : CAUTION_BADGE_STYLE}
+      // The label's flex parent gives the badge a cursor: pointer
+      // inherited from its parent. Override + stop the click from
+      // toggling the checkbox when the admin clicks the badge for a
+      // tooltip-like read (mobile: tap-to-show-title-via-iOS-popup).
+      onClick={(ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        if (onClick) onClick(ev);
+      }}
+      aria-label={
+        isCritical
+          ? `Critical RBAC permission: ${module}.${action}`
+          : `Caution: ${module}.${action} is an operationally important permission`
+      }
+    >
+      {isCritical ? '🛡 Critical' : '⚠ Caution'}
+    </span>
+  );
+}
 
 // One-line description per action verb, surfaced as the hover tooltip on
 // each checkbox. Generic across modules — "read on patients" and "read on
@@ -524,15 +657,44 @@ export default function RolesAdmin() {
                     </button>
                   </Td>
                   <Td>
-                    <button
-                      type="button"
-                      onClick={() => setPermRole(r)}
-                      style={linkBtn}
-                      aria-label={`View permissions for ${r.name}`}
-                    >
-                      <Shield size={14} />{' '}
-                      {Array.isArray(r.permissions) ? r.permissions.length : 0}
-                    </button>
+                    {/* Bug 5 — show the count the EDITOR will render
+                        (perms in the current vertical catalog) so the
+                        table badge and the modal badge agree. Backend
+                        echoes both numbers; we fall back to the raw
+                        length if a stale server omits visiblePermissionCount.
+                        Per the Step 6 UI follow-up: do NOT surface the
+                        "(+N hidden)" chip in the main table — once
+                        cleanup has run, hidden=0 for every role and the
+                        chip is permanent visual noise. We keep the
+                        hidden count in `title` only as a diagnostic
+                        hover; the role editor still surfaces the
+                        legacy-perm confirmation modal (Bug 1) if any
+                        ever leak in. hiddenPermissionCount is
+                        preserved in the API response for diagnostics
+                        / admin views — just not rendered here. */}
+                    {(() => {
+                      const raw = Array.isArray(r.permissions) ? r.permissions.length : 0;
+                      const visible = typeof r.visiblePermissionCount === 'number'
+                        ? r.visiblePermissionCount
+                        : raw;
+                      const hidden = typeof r.hiddenPermissionCount === 'number'
+                        ? r.hiddenPermissionCount
+                        : Math.max(0, raw - visible);
+                      const title = hidden > 0
+                        ? `${visible} effective permission${visible === 1 ? '' : 's'} (${hidden} hidden — open editor to review)`
+                        : `${visible} permission${visible === 1 ? '' : 's'}`;
+                      return (
+                        <button
+                          type="button"
+                          onClick={() => setPermRole(r)}
+                          style={linkBtn}
+                          aria-label={`View permissions for ${r.name}`}
+                          title={title}
+                        >
+                          <Shield size={14} /> {visible}
+                        </button>
+                      );
+                    })()}
                   </Td>
                   <Td>
                     {canManage ? (
@@ -562,11 +724,29 @@ export default function RolesAdmin() {
                         >
                           <LayoutGrid size={14} /> Widgets
                         </button>
+                        {/* Bug 2 — system role identity is immutable.
+                            Delete is disabled with an explanatory
+                            tooltip; backend returns 403 if a stale
+                            client tries anyway. Custom roles keep the
+                            normal Delete button. */}
                         <button
                           type="button"
                           onClick={() => handleDelete(r)}
                           className="btn-secondary"
-                          style={actionBtnStyle}
+                          style={{
+                            ...actionBtnStyle,
+                            ...(r.isSystem
+                              ? { opacity: 0.5, cursor: 'not-allowed' }
+                              : null),
+                          }}
+                          disabled={r.isSystem}
+                          aria-disabled={r.isSystem ? 'true' : undefined}
+                          title={
+                            r.isSystem
+                              ? `${r.key} is a system role — its identity (key, userType, existence) cannot be modified. Permissions, widgets, and landing page can still be edited.`
+                              : `Delete role ${r.name}`
+                          }
+                          data-testid={`role-delete-${r.key}`}
                         >
                           <Trash2 size={14} /> Delete
                         </button>
@@ -654,15 +834,27 @@ function CreateRoleModal({ onClose, onSuccess }) {
   const [errors, setErrors] = useState({});
   const notify = useNotify();
 
+  // Bug 6 — blur-time validation. The submit gate below still re-runs
+  // validateRoleKey so a programmatic submit can't bypass it, but the
+  // blur signal gives the admin instant feedback the moment the field
+  // loses focus instead of waiting for the Create click.
+  const handleKeyBlur = () => {
+    const trimmed = form.key.trim();
+    if (!trimmed) return; // empty handled by submit-time required guard
+    const err = validateRoleKey(trimmed);
+    setErrors((prev) => ({ ...prev, key: err || undefined }));
+  };
+
   const submit = async (ev) => {
     ev.preventDefault();
     setError('');
     const fieldErrors = {};
     if (!form.name.trim()) fieldErrors.name = 'Required';
-    if (!form.key.trim()) fieldErrors.key = 'Required';
-    else if (!/^[A-Z][A-Z0-9_]*$/.test(form.key.trim())) {
-      fieldErrors.key = 'Uppercase letters, digits, underscores; must start with a letter';
-    }
+    // Bug 6 — shared validator. Backend uses the identical function so
+    // helper text, blur error, submit error, and server response all
+    // read the same message.
+    const keyError = validateRoleKey(form.key);
+    if (keyError) fieldErrors.key = keyError;
     const landingPathErr = validateLandingPathClient(form.landingPath);
     if (landingPathErr) fieldErrors.landingPath = landingPathErr;
     setErrors(fieldErrors);
@@ -703,15 +895,21 @@ function CreateRoleModal({ onClose, onSuccess }) {
             required
           />
         </Field>
-        <Field label="Key" error={errors.key} help="Unique within this tenant. Uppercase + underscores only.">
+        <Field
+          label="Key"
+          error={errors.key}
+          help={`Unique within this tenant. ${ROLE_KEY_DESCRIPTION}`}
+        >
           <input
             type="text"
             className="input-field"
             value={form.key}
             onChange={(e) => setForm({ ...form, key: e.target.value.toUpperCase() })}
+            onBlur={handleKeyBlur}
             placeholder="e.g. RECEPTIONIST"
             disabled={isLoading}
             required
+            data-testid="create-role-key-input"
           />
         </Field>
         <Field label="Description (optional)">
@@ -1002,31 +1200,44 @@ function PermissionsModal({ role, modules, domains, readOnly, onClose, onSaved }
   }, [matrix]);
 
   // Hydrate from role.permissions (the list endpoint already includes
-  // them), filtered through the catalogue so legacy grants don't leak
-  // into the save payload. We keep a Set of "module.action" strings
-  // for O(1) lookup + toggle.
-  const initial = useMemo(() => {
-    const s = new Set();
-    let droppedLegacy = 0;
+  // them). Split into TWO sets:
+  //   • initial         — perms visible in the current catalog. These
+  //                       drive the matrix checkboxes.
+  //   • legacyPerms     — perms NOT in the catalog (cross-vertical
+  //                       leftovers, removed modules, typo'd grants).
+  //                       The matrix has no checkbox for these, so the
+  //                       admin cannot keep/uncheck them through the UI.
+  //
+  // Bug 1 fix: PRE-2026-06-16 a save silently destroyed legacy perms
+  // because persistSave only sends the `selected` Set. We now surface
+  // an explicit confirmation modal listing the legacy keys so the admin
+  // acknowledges removal. The save path is unchanged — same PUT, same
+  // full-replace semantics — but the admin gets a chance to Cancel.
+  const { initial, legacyPerms } = useMemo(() => {
+    const visible = new Set();
+    const legacy = [];
     (role.permissions || []).forEach((p) => {
       const m = p?.module;
       const a = p?.action;
       if (!m || !a) return;
       const key = `${m}.${a}`;
       if (catalogKeys.has(key)) {
-        s.add(key);
+        visible.add(key);
       } else {
-        droppedLegacy++;
+        legacy.push(key);
       }
     });
-    if (droppedLegacy > 0) {
+    if (legacy.length > 0) {
+      // Keep the dev-time log for the dashboards; the user-visible
+      // confirmation modal below is the load-bearing surface.
       console.warn(
-        `[RolesAdmin] role "${role.key || role.name}" had ${droppedLegacy} ` +
-          `legacy permission grant(s) for modules no longer in the catalog; ` +
-          `they'll be cleaned up on the next save.`,
+        `[RolesAdmin] role "${role.key || role.name}" has ${legacy.length} ` +
+          `permission grant(s) for modules no longer in the catalog. They ` +
+          `will be surfaced for explicit confirmation on save.`,
       );
     }
-    return s;
+    legacy.sort();
+    return { initial: visible, legacyPerms: legacy };
   }, [role, catalogKeys]);
 
   const [selected, setSelected] = useState(initial);
@@ -1043,6 +1254,22 @@ function PermissionsModal({ role, modules, domains, readOnly, onClose, onSaved }
   // modal. Save only fires when the admin clicks Confirm. Cancel returns
   // to the matrix with selection intact so they can pare back.
   const [pendingSensitiveGrants, setPendingSensitiveGrants] = useState(null);
+  // Bug 1 — legacy-perms confirmation. When the role carries grants for
+  // modules no longer in the catalog, persistSave would destroy them
+  // (PUT semantics are full-replace). We gate the save behind an
+  // explicit acknowledgement modal listing what will be lost. Cancel
+  // returns to the matrix unchanged so the admin can either fix the
+  // selection or abandon the save. true = modal is open.
+  const [legacyConfirmPending, setLegacyConfirmPending] = useState(false);
+  // RBAC Hardening Phase 3 — critical-perm removal warning. List of
+  // catalog keys (e.g. "roles.manage") the admin is about to uncheck.
+  // null = no warning pending.
+  const [pendingCriticalRemovals, setPendingCriticalRemovals] = useState(null);
+  // RBAC Hardening — server-side lockout rejection (409). Body of the
+  // 409 response with the spec-pinned criticalPermissions array.
+  const [lockoutError, setLockoutError] = useState(null);
+  // Phase 5 — history modal open state.
+  const [historyOpen, setHistoryOpen] = useState(false);
   // Page catalog so we can show admins which pages each permission
   // unlocks. Without this, admins look for a "calendar" module in the
   // picker, don't find it (calendar is gated by appointments.read), and
@@ -1134,31 +1361,49 @@ function PermissionsModal({ role, modules, domains, readOnly, onClose, onSaved }
   // bypassing the sensitive-grant gate (the admin has just confirmed).
   const persistSave = async () => {
     setError('');
+    setLockoutError(null);
     setIsLoading(true);
     try {
       const body = Array.from(selected).map((s) => {
         const [module, action] = s.split('.');
         return { module, action };
       });
-      await fetchApi(`/api/roles/${role.id}/permissions`, {
+      const res = await fetchApi(`/api/roles/${role.id}/permissions`, {
         method: 'PUT',
         body: JSON.stringify({ permissions: body }),
       });
+      // Version tracking is intentionally NOT surfaced in the
+      // success toast — version numbers are an internal recovery
+      // detail that lives in the History modal. The toast should
+      // read as a plain confirmation. The History UI is where the
+      // admin sees "Version 7" etc.
       notify.success?.(`Permissions updated for "${role.name}"`);
       setPendingSensitiveGrants(null);
       onSaved();
     } catch (err) {
-      setError(err.message || 'Could not save permissions');
+      // RBAC Hardening — the backend 409 LOCKOUT_PREVENTED arrives as
+      // an Error with status + body attached by fetchApi. Surface the
+      // structured error in a dedicated banner so the admin sees the
+      // recovery hint without it being mistaken for a generic toast.
+      if (err && (err.status === 409 || err.code === 'LOCKOUT_PREVENTED' || (err.body && err.body.code === 'LOCKOUT_PREVENTED'))) {
+        const body = err.body || err.payload || err;
+        setLockoutError({
+          message: body.error || err.message || 'Lockout prevented',
+          criticalPermissions: body.criticalPermissions || [],
+          qualifyingUserCount: body.qualifyingUserCount,
+        });
+        setPendingSensitiveGrants(null);
+        setPendingCriticalRemovals(null);
+      } else {
+        setError(err.message || 'Could not save permissions');
+      }
     } finally {
       setIsLoading(false);
     }
   };
 
-  // SPEC §6a — entry point from the Save button. Detect NET-NEW
-  // sensitive grants (in selected but not in initial) and surface a
-  // confirmation modal before persisting. If none, fall through to
-  // persistSave directly.
-  const requestSave = () => {
+  // After the sensitive-grant gate passes, fall through to the persist.
+  const requestSensitiveCheck = () => {
     const newlySensitive = [];
     for (const key of selected) {
       if (initial.has(key)) continue;
@@ -1169,6 +1414,55 @@ function PermissionsModal({ role, modules, domains, readOnly, onClose, onSaved }
       return;
     }
     persistSave();
+  };
+
+  // RBAC Hardening Phase 3 — chain after the legacy gate. Detect any
+  // critical permission the admin is removing (in initial but not in
+  // selected, AND in the CRITICAL_RBAC_KEYS set). If any → surface
+  // the critical-removal warning. Otherwise fall through to the
+  // sensitive-grant gate.
+  const requestCriticalRemovalCheck = () => {
+    const removingCritical = [];
+    for (const key of initial) {
+      if (selected.has(key)) continue; // still granted, no removal
+      if (CRITICAL_RBAC_KEYS.has(key)) removingCritical.push(key);
+    }
+    if (removingCritical.length > 0) {
+      setPendingCriticalRemovals(removingCritical);
+      return;
+    }
+    requestSensitiveCheck();
+  };
+
+  // Three-phase confirmation chain on Save:
+  //   1. Bug 1 — legacy-perm acknowledgement (destructive: removes
+  //      grants the admin can't see in the matrix).
+  //   2. RBAC Hardening Phase 3 — critical-perm warning (destructive:
+  //      removes admin-recovery surface from this role).
+  //   3. SPEC §6a — sensitive-grant confirmation (additive: grants
+  //      net-new powerful perms).
+  // Each gate's "Confirm" action chains into the next, so an admin
+  // making all three kinds of changes sees exactly three modals in
+  // sequence (rare in practice — usually 0 or 1).
+  const requestSave = () => {
+    if (legacyPerms.length > 0) {
+      setLegacyConfirmPending(true);
+      return;
+    }
+    requestCriticalRemovalCheck();
+  };
+
+  // Bug 1 — admin clicked "Remove and Save" in the legacy-perm modal.
+  const confirmLegacyRemoval = () => {
+    setLegacyConfirmPending(false);
+    requestCriticalRemovalCheck();
+  };
+
+  // RBAC Hardening Phase 3 — admin clicked Continue on the critical
+  // removal warning.
+  const confirmCriticalRemoval = () => {
+    setPendingCriticalRemovals(null);
+    requestSensitiveCheck();
   };
 
   const save = requestSave;
@@ -1448,6 +1742,13 @@ function PermissionsModal({ role, modules, domains, readOnly, onClose, onSaved }
                           const tooltip = actionDesc
                             ? `${module} · ${actionDesc}`
                             : `${module}.${a}`;
+                          // RBAC Hardening Phase 2 — severity badge.
+                          // Derived from CRITICAL_RBAC_KEYS +
+                          // SENSITIVE_PERMISSIONS_CLIENT; no new
+                          // UI-only allow-list. Renders nothing for
+                          // ordinary perms (the vast majority of the
+                          // catalogue).
+                          const severity = getPermissionSeverity(key);
                           return (
                             <label
                               key={a}
@@ -1472,6 +1773,17 @@ function PermissionsModal({ role, modules, domains, readOnly, onClose, onSaved }
                                 }}
                               />
                               {a}
+                              {/* Severity badge — sits at the right
+                                  edge via marginLeft:'auto' in its
+                                  inline style. Renders only when the
+                                  permission classifies as critical or
+                                  caution; ordinary perms render no
+                                  badge so the matrix stays uncluttered. */}
+                              <PermissionSeverityBadge
+                                severity={severity}
+                                module={module}
+                                action={a}
+                              />
                               <span
                                 id={`perm-desc-${module}-${a}`}
                                 style={{
@@ -1505,6 +1817,55 @@ function PermissionsModal({ role, modules, domains, readOnly, onClose, onSaved }
         <div role="alert" style={errBoxStyle}>{error}</div>
       )}
 
+      {/* RBAC Hardening — server-side lockout rejection banner.
+          Surfaces the 409 LOCKOUT_PREVENTED with a "View History"
+          escape hatch so the admin can roll back to a known-good
+          version without having to manually re-derive what they had. */}
+      {lockoutError && (
+        <div
+          role="alert"
+          data-testid="lockout-error-banner"
+          style={{
+            margin: '0.75rem 0',
+            padding: '0.8rem 1rem',
+            borderRadius: 8,
+            background: 'rgba(239, 68, 68, 0.08)',
+            border: '1px solid rgba(239, 68, 68, 0.4)',
+            color: 'var(--text-primary)',
+            fontSize: '0.88rem',
+          }}
+        >
+          <strong>Save rejected — would cause RBAC lockout.</strong>
+          <div style={{ marginTop: '0.4rem', color: 'var(--text-secondary)' }}>
+            {lockoutError.message} The change would leave{' '}
+            {lockoutError.qualifyingUserCount} active user(s) able to
+            administer roles. Restore an earlier version below or
+            adjust the selection.
+          </div>
+          <div style={{ marginTop: '0.5rem' }}>
+            <button
+              type="button"
+              className="btn-secondary"
+              style={{ fontSize: '0.78rem', padding: '0.25rem 0.6rem' }}
+              onClick={() => {
+                setLockoutError(null);
+                setHistoryOpen(true);
+              }}
+            >
+              View role history
+            </button>
+            <button
+              type="button"
+              className="btn-secondary"
+              style={{ marginLeft: '0.4rem', fontSize: '0.78rem', padding: '0.25rem 0.6rem' }}
+              onClick={() => setLockoutError(null)}
+            >
+              Dismiss
+            </button>
+          </div>
+        </div>
+      )}
+
       <ModalActions>
         <span style={{ flex: 1, fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
           {selected.size} permission{selected.size === 1 ? '' : 's'} selected
@@ -1514,6 +1875,18 @@ function PermissionsModal({ role, modules, domains, readOnly, onClose, onSaved }
             </span>
           )}
         </span>
+        {/* Phase 5 — History entry point. Always available (read-
+            gated by roles.read on the backend); the modal it opens
+            shows a Restore button only when canManage is true. */}
+        <button
+          type="button"
+          onClick={() => setHistoryOpen(true)}
+          className="btn-secondary"
+          disabled={isLoading}
+          data-testid="open-permissions-history"
+        >
+          History
+        </button>
         <button type="button" onClick={onClose} className="btn-secondary" disabled={isLoading}>
           {readOnly ? 'Close' : 'Cancel'}
         </button>
@@ -1523,6 +1896,38 @@ function PermissionsModal({ role, modules, domains, readOnly, onClose, onSaved }
           </button>
         )}
       </ModalActions>
+
+      {/* Bug 1 — legacy-perm acknowledgement. Listed first because the
+          legacy gate runs before the sensitive-grant gate (see
+          requestSave above). Cancel keeps the matrix open with
+          selection unchanged so the admin can adjust or abandon.
+          "Remove and Save" calls confirmLegacyRemoval which chains
+          into the next gate (sensitive grants) and then persistSave. */}
+      {legacyConfirmPending && (
+        <LegacyPermsConfirmModal
+          roleName={role.name}
+          legacyKeys={legacyPerms}
+          isLoading={isLoading}
+          onCancel={() => setLegacyConfirmPending(false)}
+          onConfirm={confirmLegacyRemoval}
+        />
+      )}
+
+      {/* RBAC Hardening Phase 3 — critical-permission removal warning.
+          Fires after the legacy gate, before the sensitive-grant gate.
+          Lists exactly which critical perms are being removed + the
+          affected product areas (Roles & Permissions admin). Continue
+          chains into the sensitive-grant gate; Cancel returns to the
+          matrix unchanged. */}
+      {pendingCriticalRemovals && pendingCriticalRemovals.length > 0 && (
+        <CriticalPermsConfirmModal
+          roleName={role.name}
+          removedKeys={pendingCriticalRemovals}
+          isLoading={isLoading}
+          onCancel={() => setPendingCriticalRemovals(null)}
+          onConfirm={confirmCriticalRemoval}
+        />
+      )}
 
       {/* SPEC §6a — sensitive-grant confirmation. Rendered on top of the
           permissions matrix so the admin's selection is preserved
@@ -1537,6 +1942,368 @@ function PermissionsModal({ role, modules, domains, readOnly, onClose, onSaved }
           onConfirm={persistSave}
         />
       )}
+
+      {/* Phase 5 — Role History modal. List + Restore + Diff. The
+          modal handles its own fetching + restore flow; we just pass
+          the role + a callback that re-fetches /api/roles when a
+          restore lands so the table count refreshes. */}
+      {historyOpen && (
+        <PermissionsHistoryModal
+          role={role}
+          canManage={!readOnly}
+          onClose={() => setHistoryOpen(false)}
+          onRestored={() => {
+            setHistoryOpen(false);
+            onSaved();
+          }}
+        />
+      )}
+    </ModalShell>
+  );
+}
+
+// Bug 1 — confirmation modal shown when the role being saved still
+// carries permissions for modules that are NOT in the current
+// vertical catalog (most commonly travel tenants carrying wellness-
+// flavored baselines from the v3.8.x seed: patients.*, appointments.*,
+// consents.*, etc.). The PUT /permissions endpoint is full-replace;
+// saving the visible-only selection would silently destroy these.
+// This modal forces an explicit acknowledgement.
+//
+// data-testid="legacy-perms-confirm-modal" pins the modal for the
+// vitest at frontend/src/__tests__/RolesAdmin-legacy-perms.test.jsx.
+function LegacyPermsConfirmModal({ roleName, legacyKeys, isLoading, onCancel, onConfirm }) {
+  return (
+    <ModalShell
+      title="Hidden permissions detected"
+      subtitle={`This role contains ${legacyKeys.length} permission${legacyKeys.length === 1 ? '' : 's'} that ${legacyKeys.length === 1 ? 'is' : 'are'} not visible in the current catalog.`}
+      onClose={onCancel}
+      width={560}
+    >
+      <div data-testid="legacy-perms-confirm-modal">
+      <div
+        style={{
+          marginBottom: '0.75rem',
+          padding: '0.65rem 0.8rem',
+          borderRadius: 8,
+          background: 'rgba(245, 158, 11, 0.08)',
+          border: '1px solid rgba(245, 158, 11, 0.4)',
+          fontSize: '0.85rem',
+          color: 'var(--text-primary)',
+        }}
+      >
+        <strong>Saving will remove these permissions from “{roleName}”.</strong>
+        <div style={{ marginTop: '0.4rem', color: 'var(--text-secondary)' }}>
+          They were granted under a previous catalog version (different
+          vertical, removed module, or typo) and have no checkbox in the
+          editor. Cancel to leave the role unchanged. Choose “Remove and
+          save” to apply your selection and drop these grants.
+        </div>
+      </div>
+      <ul
+        style={{
+          listStyle: 'none',
+          padding: 0,
+          margin: 0,
+          maxHeight: 240,
+          overflow: 'auto',
+          border: '1px solid var(--border-color)',
+          borderRadius: 6,
+        }}
+      >
+        {legacyKeys.map((key) => (
+          <li
+            key={key}
+            style={{
+              padding: '0.4rem 0.7rem',
+              fontFamily: 'monospace',
+              fontSize: '0.82rem',
+              color: 'var(--text-primary)',
+              borderTop: '1px solid var(--border-color)',
+            }}
+          >
+            {key}
+          </li>
+        ))}
+      </ul>
+      </div>
+      <ModalActions>
+        <button
+          type="button"
+          onClick={onCancel}
+          className="btn-secondary"
+          disabled={isLoading}
+          data-testid="legacy-perms-cancel"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          onClick={onConfirm}
+          className="btn-primary"
+          disabled={isLoading}
+          data-testid="legacy-perms-remove-and-save"
+          style={{ background: 'var(--danger-color, #ef4444)' }}
+        >
+          {isLoading ? 'Saving…' : `Remove ${legacyKeys.length} and save`}
+        </button>
+      </ModalActions>
+    </ModalShell>
+  );
+}
+
+// RBAC Hardening Phase 3 — critical permission removal warning.
+// Fires when an admin's save would uncheck `roles.read` or
+// `roles.manage` — the two permissions required to recover from any
+// other broken RBAC configuration. The modal lists the catalog keys
+// being removed AND the human-readable product areas the role's
+// holders will lose access to. Continue chains into the sensitive-
+// grant gate; Cancel returns to the matrix.
+//
+// Backend lockout guard still has the final say — if removing these
+// would zero out the tenant's RBAC-admin capacity, the PUT returns
+// 409 LOCKOUT_PREVENTED regardless of what the admin clicked here.
+function CriticalPermsConfirmModal({ roleName, removedKeys, isLoading, onCancel, onConfirm }) {
+  return (
+    <ModalShell
+      title="⚠ Critical permission change"
+      subtitle={`You are removing ${removedKeys.length} permission${removedKeys.length === 1 ? '' : 's'} required for role and staff administration on "${roleName}".`}
+      onClose={onCancel}
+      width={580}
+    >
+      <div
+        data-testid="critical-perms-confirm-modal"
+        style={{
+          marginBottom: '0.75rem',
+          padding: '0.7rem 0.9rem',
+          borderRadius: 8,
+          background: 'rgba(239, 68, 68, 0.08)',
+          border: '1px solid rgba(239, 68, 68, 0.4)',
+          fontSize: '0.85rem',
+          color: 'var(--text-primary)',
+        }}
+      >
+        <strong>Users assigned to this role may lose access to:</strong>
+        <ul style={{ margin: '0.45rem 0 0 1.1rem', padding: 0, color: 'var(--text-primary)' }}>
+          {removedKeys.map((key) => {
+            const area = CRITICAL_PERMISSION_AREAS[key] || { name: key, impact: 'Powerful administration permission' };
+            return (
+              <li key={key} style={{ marginBottom: '0.35rem', fontSize: '0.85rem' }}>
+                <strong>{area.name}</strong>
+                <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+                  {area.impact}
+                </div>
+                <code style={{ fontSize: '0.72rem', color: 'var(--text-secondary)' }}>{key}</code>
+              </li>
+            );
+          })}
+        </ul>
+      </div>
+      <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>
+        If no other active user retains RBAC administration access after this
+        change, the server will reject the save with a lockout-prevention
+        error.
+      </div>
+      {/* RBAC Hardening Phase 2 — recovery guidance. Pinned as a
+          standalone callout so it reads as a positive escape hatch
+          rather than as part of the rejection-warning paragraph. */}
+      <div
+        data-testid="critical-perms-recovery-hint"
+        style={{
+          fontSize: '0.78rem',
+          color: 'var(--text-secondary)',
+          marginBottom: '0.65rem',
+          padding: '0.45rem 0.6rem',
+          borderRadius: 6,
+          background: 'var(--subtle-bg-2)',
+          borderLeft: '3px solid var(--warning-color, #f59e0b)',
+        }}
+      >
+        You can restore a previous version from <strong>History</strong> if
+        you accidentally remove required permissions.
+      </div>
+      <ModalActions>
+        <button
+          type="button"
+          onClick={onCancel}
+          className="btn-secondary"
+          disabled={isLoading}
+          data-testid="critical-perms-cancel"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          onClick={onConfirm}
+          className="btn-primary"
+          disabled={isLoading}
+          data-testid="critical-perms-continue"
+          style={{ background: 'var(--danger-color, #ef4444)' }}
+        >
+          {isLoading ? 'Saving…' : 'Continue and save'}
+        </button>
+      </ModalActions>
+    </ModalShell>
+  );
+}
+
+// Phase 5 — Role permission version history modal. Fetches
+// /api/roles/:id/permissions/versions on mount, renders one row per
+// snapshot newest-first, and offers a Restore button (when the user
+// has roles.manage) on every non-current version. Restore POSTs the
+// version id to /api/roles/:id/permissions/restore which delegates to
+// the PUT handler; the same lockout guard fires on restore, so an
+// admin can't roll back to a broken state either.
+function PermissionsHistoryModal({ role, canManage, onClose, onRestored }) {
+  const [versions, setVersions] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [restoringId, setRestoringId] = useState(null);
+  const notify = useNotify();
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError('');
+    try {
+      const res = await fetchApi(`/api/roles/${role.id}/permissions/versions`);
+      setVersions(Array.isArray(res?.versions) ? res.versions : []);
+    } catch (err) {
+      setError(err.message || 'Could not load history');
+    } finally {
+      setLoading(false);
+    }
+  }, [role.id]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const onRestore = async (version) => {
+    const ok = await notify.confirm({
+      title: 'Restore role permissions',
+      message: `Restore "${role.name}" to v${version.versionNumber} (${version.permissionCount} permissions)? A new version row will be appended; history is not overwritten.`,
+      confirmText: 'Restore',
+    });
+    if (!ok) return;
+    setRestoringId(version.id);
+    try {
+      const res = await fetchApi(`/api/roles/${role.id}/permissions/restore`, {
+        method: 'POST',
+        body: JSON.stringify({ versionId: version.id }),
+      });
+      // Same principle as the regular save toast — version numbers
+      // are internal. The History modal already shows "Version N" in
+      // its own UI; the toast just confirms the action in plain
+      // language. Date adds context the admin actually cares about
+      // ("restored to the state from earlier today").
+      const sourceDate = version?.changedAt
+        ? new Date(version.changedAt).toLocaleString()
+        : null;
+      notify.success?.(
+        sourceDate
+          ? `Restored "${role.name}" to the version from ${sourceDate}.`
+          : `Restored "${role.name}" to a previous version.`,
+      );
+      onRestored && onRestored();
+    } catch (err) {
+      // Pass through 409 LOCKOUT_PREVENTED with the spec error so the
+      // admin knows the restored set itself would have caused lockout.
+      const body = err?.body || err?.payload || err;
+      if (body && body.code === 'LOCKOUT_PREVENTED') {
+        notify.error?.(
+          `Cannot restore — the resulting state would lock everyone out of RBAC. ${body.error || ''}`,
+        );
+      } else {
+        notify.error?.(err.message || 'Restore failed');
+      }
+    } finally {
+      setRestoringId(null);
+    }
+  };
+
+  return (
+    <ModalShell
+      title={`Role history: ${role.name}`}
+      subtitle="Every permission save appends a snapshot here. Restore creates a new version pointing at the source — history is never overwritten."
+      onClose={onClose}
+      width={640}
+    >
+      {loading && (
+        <div style={{ padding: '1rem 0', color: 'var(--text-secondary)' }}>Loading history…</div>
+      )}
+      {error && !loading && (
+        <div role="alert" style={errBoxStyle}>{error}</div>
+      )}
+      {!loading && !error && versions.length === 0 && (
+        <div style={{ padding: '1rem 0', color: 'var(--text-secondary)' }}>
+          No history yet. The next permission save on this role becomes v1.
+        </div>
+      )}
+      {!loading && versions.length > 0 && (
+        <ul
+          data-testid="permissions-history-list"
+          style={{ listStyle: 'none', padding: 0, margin: 0, maxHeight: 360, overflow: 'auto' }}
+        >
+          {versions.map((v) => (
+            <li
+              key={v.id}
+              data-testid={`history-version-${v.versionNumber}`}
+              style={{
+                padding: '0.6rem 0.8rem',
+                marginBottom: '0.4rem',
+                borderRadius: 6,
+                border: '1px solid var(--border-color)',
+                background: v.isCurrent ? 'var(--subtle-bg-3)' : 'var(--subtle-bg-1)',
+                display: 'flex',
+                alignItems: 'flex-start',
+                gap: '0.7rem',
+              }}
+            >
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: '0.9rem', fontWeight: 700 }}>
+                  Version {v.versionNumber}
+                  {v.isCurrent && (
+                    <span style={{ marginLeft: '0.4rem', fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
+                      (Current)
+                    </span>
+                  )}
+                  <span style={{ marginLeft: '0.5rem', fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
+                    {v.changeType}
+                    {v.restoredFromVersionId ? ' · restored from #' + v.restoredFromVersionId : ''}
+                  </span>
+                </div>
+                <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginTop: '0.15rem' }}>
+                  {new Date(v.changedAt).toLocaleString()} ·{' '}
+                  {v.changedBy ? v.changedBy.name || v.changedBy.email : 'system'} ·{' '}
+                  {v.permissionCount} permission{v.permissionCount === 1 ? '' : 's'}
+                </div>
+                {v.note && (
+                  <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginTop: '0.2rem', fontStyle: 'italic' }}>
+                    “{v.note}”
+                  </div>
+                )}
+              </div>
+              {canManage && !v.isCurrent && (
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  style={{ fontSize: '0.78rem', padding: '0.3rem 0.6rem' }}
+                  onClick={() => onRestore(v)}
+                  disabled={restoringId === v.id}
+                  data-testid={`restore-version-${v.versionNumber}`}
+                >
+                  {restoringId === v.id ? 'Restoring…' : 'Restore'}
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      <ModalActions>
+        <button type="button" onClick={onClose} className="btn-secondary">
+          Close
+        </button>
+      </ModalActions>
     </ModalShell>
   );
 }

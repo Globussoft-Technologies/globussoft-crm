@@ -493,6 +493,54 @@ function isValidPermission(module, action) {
   return actions.includes(action);
 }
 
+/**
+ * Validate a (module, action) pair against the per-vertical catalog
+ * (Bug 4 — Catalog Validation). Returns one of:
+ *
+ *   { ok: true }                               — module + action valid for vertical
+ *   { ok: false, code: 'INVALID_MODULE', error } — module not in vertical catalog
+ *   { ok: false, code: 'INVALID_ACTION', error } — module valid, action not
+ *
+ * Distinct from isValidPermission (union surface) so the role-write
+ * endpoints can enforce vertical isolation post-cleanup. Routes wire
+ * this in behind the RBAC_STRICT_VERTICAL_VALIDATION env flag — see
+ * backend/routes/roles.js. Don't enable in production until the
+ * cleanup-foreign-perms-report.js --apply pass has been verified for
+ * every dirty tenant.
+ *
+ * Error messages match the exact strings the QA spec requested so
+ * test assertions and frontend toast copy can pin them verbatim.
+ */
+function validatePermissionForVertical(module, action, vertical) {
+  const catalog = getCatalogForVertical(vertical);
+  const actions = catalog[module];
+  if (!actions) {
+    return {
+      ok: false,
+      code: 'INVALID_MODULE',
+      error: `Module '${module}' is not valid for this tenant`,
+    };
+  }
+  if (!actions.includes(action)) {
+    return {
+      ok: false,
+      code: 'INVALID_ACTION',
+      error: `Action '${action}' is not valid for module '${module}'`,
+    };
+  }
+  return { ok: true };
+}
+
+/**
+ * Convenience boolean form for call sites that don't need the error
+ * detail. Use validatePermissionForVertical when you need to return
+ * the user-facing message (which is most of the time inside route
+ * handlers — keep the rich form).
+ */
+function isValidPermissionForVertical(module, action, vertical) {
+  return validatePermissionForVertical(module, action, vertical).ok;
+}
+
 function getModules() {
   return Object.keys(PERMISSION_CATALOG);
 }
@@ -518,6 +566,8 @@ module.exports = {
   PERMISSION_DOMAINS_WELLNESS,
   PERMISSION_DOMAINS_TRAVEL,
   isValidPermission,
+  isValidPermissionForVertical,
+  validatePermissionForVertical,
   getModules,
   getActions,
   getCatalog,

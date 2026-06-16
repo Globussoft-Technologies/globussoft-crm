@@ -13,13 +13,65 @@ const { requirePermission, clearUserCache, clearTenantCache } = require("../midd
 const { clearCustomerRoleCache } = require("../lib/portalPermissions");
 const {
   isValidPermission,
+  validatePermissionForVertical,
   getCatalog,
   getGroupedCatalog,
   getCatalogForVertical,
   getGroupedCatalogForVertical,
 } = require("../lib/permissionCatalog");
+const { validateRoleKey } = require("../lib/roleKey");
 const { writeAudit } = require("../lib/audit");
 const { validateLandingPath, normalizeLandingPath } = require("../lib/landingPath");
+const {
+  checkLockout,
+  CRITICAL_RBAC_PERMISSIONS,
+  getCriticalPermissions,
+  intersectCritical,
+} = require("../lib/rbacLockoutGuard");
+const {
+  ensureInitialSnapshot,
+  snapshotRolePermissions,
+  listRolePermissionVersions,
+  getRolePermissionVersion,
+} = require("../lib/rolePermissionVersions");
+
+// Bug 4 — strict per-vertical permission validation. Off by default
+// (back-compat with pre-cleanup state where roles legitimately carry
+// foreign perms). Set RBAC_STRICT_VERTICAL_VALIDATION=1 in the env
+// AFTER running cleanup-foreign-perms-report.js --apply for every
+// dirty tenant; the route then rejects any POST/PUT that would write a
+// foreign permission. See backend/lib/permissionCatalog.js for the
+// validator.
+//
+// Read per-request, NOT captured at module load — operators flip the
+// flag after running the cleanup script and we don't want to require a
+// pm2 restart for it to take effect. The vitest in
+// test/routes/roles-system-protection.test.js also relies on per-request
+// reads to toggle the flag between tests.
+function strictVerticalValidationOn() {
+  return (
+    process.env.RBAC_STRICT_VERTICAL_VALIDATION === "1" ||
+    process.env.RBAC_STRICT_VERTICAL_VALIDATION === "true"
+  );
+}
+
+// Resolve the active tenant's vertical for vertical-aware validation.
+// Looked up per request (not cached) because tenant.vertical CAN change
+// during a migration. Falls through to 'generic' if the tenant has no
+// vertical set — the generic catalog is a strict subset of every
+// vertical catalog so this is safe.
+async function getTenantVertical(tenantId) {
+  if (!tenantId) return "generic";
+  try {
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { vertical: true },
+    });
+    return (tenant && tenant.vertical) || "generic";
+  } catch {
+    return "generic";
+  }
+}
 const { isValidWidgetKey } = require("../lib/widgetCatalog");
 const {
   getAccessiblePages,
@@ -115,12 +167,54 @@ router.get(
         orderBy: [{ isSystem: "desc" }, { name: "asc" }]
       });
 
+      // Bug 5 — count consistency. The Roles table badge previously
+      // rendered `role.permissions.length` (raw count including
+      // foreign perms left over from the v3.8.x wellness-flavored
+      // baseline), while the PermissionsModal editor's `initial` Set
+      // filtered through the per-vertical catalog. Result: table read
+      // 74 / editor read 58 for the same role — admins thought the
+      // editor had silently lost grants. We surface BOTH counts here:
+      //   • permissionCount         — raw DB row count
+      //   • visiblePermissionCount  — count after vertical-catalog filter
+      //                               (matches what the editor renders)
+      // The table renders visiblePermissionCount as the badge with a
+      // hover-title showing the raw count when the two differ, so the
+      // admin can see "16 hidden by current catalog" without the
+      // disorienting number-jump between the table and the editor.
+      // Post-cleanup, the two values are equal and the warning hover
+      // text disappears naturally.
+      let visibleCatalog = null;
+      try {
+        const tenant = await prisma.tenant.findUnique({
+          where: { id: tenantId },
+          select: { vertical: true },
+        });
+        const vertical = (tenant && tenant.vertical) || "generic";
+        visibleCatalog = getCatalogForVertical(vertical);
+      } catch {
+        // DB blip — fall through to union (no filter). Worst case the
+        // counts agree as before this change.
+      }
+      const isVisible = (module, action) => {
+        if (!visibleCatalog) return true;
+        const actions = visibleCatalog[module];
+        return !!(actions && actions.includes(action));
+      };
+
       res.json({
-        roles: roles.map(role => ({
-          ...role,
-          userCount: role._count.userRoles,
-          _count: undefined
-        })),
+        roles: roles.map(role => {
+          const visible = (role.permissions || []).filter((p) =>
+            isVisible(p.module, p.action),
+          );
+          return {
+            ...role,
+            userCount: role._count.userRoles,
+            permissionCount: role.permissions.length,
+            visiblePermissionCount: visible.length,
+            hiddenPermissionCount: role.permissions.length - visible.length,
+            _count: undefined,
+          };
+        }),
         tenantId,
       });
     } catch (err) {
@@ -224,13 +318,12 @@ router.post(
         return res.status(400).json({ error: "Role name is required" });
       }
 
-      if (!key || typeof key !== "string") {
-        return res.status(400).json({ error: "Role key is required" });
-      }
-
-      // Keys must be uppercase alphanumeric_underscore
-      if (!/^[A-Z][A-Z0-9_]*$/.test(key)) {
-        return res.status(400).json({ error: "Role key must start with letter and contain only A-Z, 0-9, _" });
+      // Bug 6 — shared validator. The regex + helper text live in
+      // backend/lib/roleKey.js and frontend/src/utils/roleKey.js so
+      // the form helper string can't drift from the validator regex.
+      const keyError = validateRoleKey(key);
+      if (keyError) {
+        return res.status(400).json({ error: keyError });
       }
 
       const landingPathErr = validateLandingPath(landingPath);
@@ -280,7 +373,10 @@ router.post(
 
 // PUT /api/roles/:id — update role (not key/isSystem). landingPath IS
 // editable on system roles so admins can re-point ADMIN / CUSTOMER landings
-// without recreating the row.
+// without recreating the row. Bug 2 — Key + userType on a system role
+// are explicitly rejected here even though the destructure ignores
+// them, so a future contributor who adds `key`/`userType` to the
+// update payload can't silently change system role identity.
 router.put(
   "/:id",
   verifyToken,
@@ -298,6 +394,25 @@ router.put(
       // Tenant-scoping check
       if (!req.user.isOwner && role.tenantId !== req.user.tenantId) {
         return res.status(403).json({ error: "Access denied" });
+      }
+
+      // Bug 2 — System role identity is immutable. Block any attempt
+      // to change `key` or `userType` on ADMIN / CUSTOMER / OWNER even
+      // if those fields are in the body. The destructure above
+      // already ignores them so today's API silently no-ops, but
+      // surfacing 403 makes the contract explicit + protects against
+      // a future contributor extending the destructure.
+      if (role.isSystem) {
+        const bodyKey = req.body && Object.prototype.hasOwnProperty.call(req.body, "key");
+        const bodyUserType = req.body && Object.prototype.hasOwnProperty.call(req.body, "userType");
+        if (bodyKey || bodyUserType) {
+          return res.status(403).json({
+            error: "System role identity cannot be modified",
+            code: "SYSTEM_ROLE_IDENTITY_LOCKED",
+            roleKey: role.key,
+            fields: [bodyKey && "key", bodyUserType && "userType"].filter(Boolean),
+          });
+        }
       }
 
       if (landingPath !== undefined) {
@@ -370,17 +485,20 @@ router.delete(
         return res.status(403).json({ error: "Access denied" });
       }
 
-      // SPEC §C3 + §F — system roles (ADMIN, CUSTOMER, OWNER) are
-      // immutable. Their key and is_system flag never change; they
-      // cannot be deleted. Admins can still tune their grants / widgets
-      // / landingPath via the OTHER endpoints — only the row itself is
-      // protected. Block 409 with a code the frontend can switch on to
-      // show "this role is built-in and cannot be removed."
+      // SPEC §C3 + §F + Bug 2 — system roles (ADMIN, CUSTOMER, OWNER)
+      // are immutable identity. Their key and is_system flag never
+      // change; they cannot be deleted. Admins can still tune their
+      // grants / widgets / landingPath via the OTHER endpoints — only
+      // the row identity is protected. Returns 403 with the exact
+      // error string the QA spec pins, plus the legacy
+      // SYSTEM_ROLE_PROTECTED code + roleKey so existing frontend
+      // switch-on-code branches keep working.
       if (role.isSystem) {
-        return res.status(409).json({
-          error: `Cannot delete the system role "${role.key}". System roles (ADMIN, CUSTOMER, OWNER) are immutable — their permissions can be tuned, but the role itself stays.`,
+        return res.status(403).json({
+          error: "System role identity cannot be modified",
           code: "SYSTEM_ROLE_PROTECTED",
           roleKey: role.key,
+          detail: `System role "${role.key}" cannot be deleted. Its permissions can be tuned, but the role itself stays.`,
         });
       }
 
@@ -466,6 +584,25 @@ router.post(
       // Tenant-scoping check
       if (!req.user.isOwner && role.tenantId !== req.user.tenantId) {
         return res.status(403).json({ error: "Access denied" });
+      }
+
+      // Bug 4 — Strict per-vertical validation (env-gated). Enable
+      // RBAC_STRICT_VERTICAL_VALIDATION=1 AFTER running the foreign-
+      // perms cleanup script for every dirty tenant. Once on, the
+      // route refuses cross-vertical grants (e.g. patients.read on a
+      // travel tenant) with the exact 400 shape the QA spec pins.
+      if (strictVerticalValidationOn()) {
+        const vertical = await getTenantVertical(role.tenantId);
+        const verticalCheck = validatePermissionForVertical(module, action, vertical);
+        if (!verticalCheck.ok) {
+          return res.status(400).json({
+            error: verticalCheck.error,
+            code: verticalCheck.code,
+            module,
+            action,
+            vertical,
+          });
+        }
       }
 
       // Check if permission already exists
@@ -614,25 +751,69 @@ router.put(
         return res.status(403).json({ error: "Access denied" });
       }
 
-      // SPEC §3 — Last-Admin protection. If we're modifying the ADMIN
-      // role itself, block any submission that would drop `roles.manage`
-      // — that's the bottom-of-the-stack permission required for any
-      // role-management work. Without this guard an admin can lock
-      // themselves (and every other admin) out of the role matrix in
-      // one click. Note this protects the role-level permission set;
-      // user-level last-admin protection lives on the assign endpoints.
-      if (role.key === "ADMIN") {
-        const hasRolesManage = normalized.some(
-          (p) => p.module === "roles" && p.action === "manage",
-        );
-        if (!hasRolesManage) {
-          return res.status(409).json({
-            error:
-              "Cannot remove roles.manage from the ADMIN role — at least one role must retain the ability to manage roles.",
-            code: "LAST_ADMIN_PROTECTION",
-            requiredPermission: "roles.manage",
-          });
+      // Bug 4 — Strict per-vertical validation (env-gated). Reject
+      // the whole submission with the first foreign entry so the
+      // admin sees ONE error to fix rather than a chain of 400s.
+      // Same env flag + same error shape as POST /:id/permissions.
+      // Once enabled, the catalog endpoint's vertical filter and the
+      // editor's catalog filter mean a well-behaved client never
+      // submits a foreign perm — this guard catches scripted clients
+      // and legacy round-trips.
+      if (strictVerticalValidationOn()) {
+        const vertical = await getTenantVertical(role.tenantId);
+        for (const p of normalized) {
+          const verticalCheck = validatePermissionForVertical(
+            p.module,
+            p.action,
+            vertical,
+          );
+          if (!verticalCheck.ok) {
+            return res.status(400).json({
+              error: verticalCheck.error,
+              code: verticalCheck.code,
+              module: p.module,
+              action: p.action,
+              vertical,
+            });
+          }
         }
+      }
+
+      // RBAC Hardening — General self-lockout prevention (replaces the
+      // pre-fix LAST_ADMIN_PROTECTION which was hardcoded to
+      // `role.key === "ADMIN"` + the single `roles.manage` permission).
+      // The general guard is role-name agnostic: it simulates the
+      // resulting permission state of every active user in the tenant
+      // and rejects if zero users would retain BOTH critical perms
+      // (roles.read + roles.manage). See lib/rbacLockoutGuard.js.
+      //
+      // This catches the tester scenario where `roles.read` was
+      // removed (hiding the page) while `roles.manage` survived —
+      // the old guard didn't even look at `roles.read`.
+      const lockout = await checkLockout({
+        tenantId: role.tenantId,
+        roleId,
+        proposedPermissions: normalized,
+      });
+      if (lockout) {
+        // RBAC Hardening Phase 6 — audit the prevention so the
+        // attempt is visible in the audit log even though the write
+        // didn't land.
+        await writeAudit(
+          "Role",
+          "LOCKOUT_PREVENTED",
+          req.user.userId,
+          req.user.userId,
+          req.user.tenantId,
+          {
+            roleId,
+            roleKey: role.key,
+            attemptedPermissionCount: normalized.length,
+            criticalPermissions: lockout.body.criticalPermissions,
+            qualifyingUserCount: lockout.body.qualifyingUserCount,
+          },
+        );
+        return res.status(lockout.status).json(lockout.body);
       }
 
       // SPEC §6a — detect newly-granted sensitive permissions so the
@@ -653,8 +834,33 @@ router.put(
       // landingPath pointing at /wellness/calendar, and the next user
       // who logs in is redirected to a page they immediately 403 on.
       // Same transaction so a failed clear rolls back the perms too.
-      const { newPermissions, landingPathCleared } = await prisma.$transaction(
+      //
+      // RBAC Hardening Phase 4 — within the same transaction we (a)
+      // backfill a v1 INITIAL snapshot for legacy roles that have no
+      // history yet (preserves the PRE-save state), then (b) write a
+      // new UPDATE snapshot of the resulting state. Restore (Phase 5)
+      // appends a RESTORE snapshot via the same helper. History is
+      // append-only — never updated, never deleted. The
+      // restoredFromVersionId field is optionally surfaced by the
+      // restore endpoint via _restoreContext on req (a lightweight
+      // hand-off that avoids re-deriving it inside the transaction).
+      const { restoredFromVersionId = null, restoreNote = null } =
+        req._restoreContext || {};
+      const changeType = req._restoreContext ? 'RESTORE' : 'UPDATE';
+      const noteForVersion = req._restoreContext
+        ? restoreNote
+        : req.body && typeof req.body.note === 'string'
+          ? req.body.note
+          : null;
+      const { newPermissions, landingPathCleared, newVersion } = await prisma.$transaction(
         async (tx) => {
+          // (a) Backfill INITIAL snapshot of pre-save state ONLY for
+          // legacy roles. Idempotent — no-op if a version already exists.
+          await ensureInitialSnapshot({
+            roleId,
+            changedById: req.user.userId,
+            tx,
+          });
           await tx.rolePermission.deleteMany({ where: { roleId } });
           if (normalized.length > 0) {
             await tx.rolePermission.createMany({
@@ -663,6 +869,20 @@ router.put(
             });
           }
           const newPerms = await tx.rolePermission.findMany({ where: { roleId } });
+
+          // (b) Snapshot the resulting state. Even if the post-save
+          // set is identical to the pre-save set, we still append a
+          // row — preserves the "who saved when, even no-op" audit
+          // semantics callers expect.
+          const versionRow = await snapshotRolePermissions({
+            roleId,
+            permissions: newPerms,
+            changeType,
+            changedById: req.user.userId,
+            restoredFromVersionId,
+            note: noteForVersion,
+            tx,
+          });
 
           // Auto-clear landingPath if it's no longer accessible. /home is
           // permission-free so it always survives.
@@ -677,7 +897,7 @@ router.put(
               cleared = true;
             }
           }
-          return { newPermissions: newPerms, landingPathCleared: cleared };
+          return { newPermissions: newPerms, landingPathCleared: cleared, newVersion: versionRow };
         },
       );
 
@@ -686,17 +906,31 @@ router.put(
       clearTenantCache(role.tenantId);
       if (role.key === "CUSTOMER") clearCustomerRoleCache(role.tenantId);
 
-      await writeAudit("Role", "BULK_UPDATE_PERMISSIONS", req.user.userId, req.user.userId, req.user.tenantId, {
-        roleId,
-        roleKey: role.key,
-        permissionCount: newPermissions.length,
-        landingPathCleared,
-        previousLandingPath: landingPathCleared ? role.landingPath : null,
-        // SPEC §6a — record the sensitive grants admin confirmed in this
-        // save so an auditor can trace WHO granted WHAT WHEN. Empty
-        // array if no new sensitive grants were added.
-        newlyGrantedSensitive: newlySensitive,
-      });
+      await writeAudit(
+        "Role",
+        changeType === 'RESTORE' ? "RESTORE_ROLE_PERMISSIONS" : "BULK_UPDATE_PERMISSIONS",
+        req.user.userId,
+        req.user.userId,
+        req.user.tenantId,
+        {
+          roleId,
+          roleKey: role.key,
+          permissionCount: newPermissions.length,
+          landingPathCleared,
+          previousLandingPath: landingPathCleared ? role.landingPath : null,
+          // SPEC §6a — record the sensitive grants admin confirmed in this
+          // save so an auditor can trace WHO granted WHAT WHEN. Empty
+          // array if no new sensitive grants were added.
+          newlyGrantedSensitive: newlySensitive,
+          // RBAC Hardening Phase 4/5 — version-history breadcrumb so
+          // the audit log carries the version number the snapshot
+          // landed at (handy for cross-referencing the "Role History"
+          // UI with the audit viewer). restoredFromVersionId surfaces
+          // the source version on restore actions.
+          newVersionNumber: newVersion ? newVersion.versionNumber : null,
+          restoredFromVersionId,
+        },
+      );
 
       res.json({
         roleId,
@@ -706,6 +940,11 @@ router.put(
         // many sensitive grants just landed — supplementary signal; the
         // pre-save confirmation modal is the load-bearing gate.
         newlyGrantedSensitive: newlySensitive,
+        // Phase 4 — let the frontend show the new version number in
+        // the success toast and refresh its history list cheaply.
+        newVersion: newVersion
+          ? { id: newVersion.id, versionNumber: newVersion.versionNumber, changeType }
+          : null,
       });
     } catch (err) {
       console.error("[roles] bulk update permissions error:", err);
@@ -1251,6 +1490,162 @@ router.get(
     } catch (err) {
       console.error("[roles] accessible-pages error:", err);
       res.status(500).json({ error: "Failed to compute accessible pages" });
+    }
+  },
+);
+
+// ─────────────────── RBAC Hardening Phase 4/5 ─────────────────────
+// Role permission version history + restore.
+
+// GET /api/roles/:id/permissions/versions — list snapshots, newest
+// first. Pagination via ?take=&skip=. Gated on roles.read so any
+// user who can see the matrix can inspect the history.
+router.get(
+  "/:id/permissions/versions",
+  verifyToken,
+  requirePermission("roles", "read"),
+  async (req, res) => {
+    try {
+      const roleId = parseInt(req.params.id);
+      const role = await prisma.role.findUnique({ where: { id: roleId } });
+      if (!role) return res.status(404).json({ error: "Role not found" });
+      if (!req.user.isOwner && role.tenantId !== req.user.tenantId) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const versions = await listRolePermissionVersions({
+        roleId,
+        take: req.query.take,
+        skip: req.query.skip,
+      });
+      // Mark the most-recent version as the current head so the UI
+      // can label it "Version N (Current)" without a separate fetch.
+      const latest = versions[0] ? versions[0].versionNumber : null;
+      res.json({
+        roleId,
+        versions: versions.map((v) => ({
+          ...v,
+          isCurrent: v.versionNumber === latest,
+        })),
+      });
+    } catch (err) {
+      console.error("[roles] list versions error:", err);
+      res.status(500).json({ error: "Failed to list permission versions" });
+    }
+  },
+);
+
+// GET /api/roles/:id/permissions/versions/:versionId — single version
+// (full permission set). Useful for the "Compare with current" widget
+// in the history UI.
+router.get(
+  "/:id/permissions/versions/:versionId",
+  verifyToken,
+  requirePermission("roles", "read"),
+  async (req, res) => {
+    try {
+      const roleId = parseInt(req.params.id);
+      const role = await prisma.role.findUnique({ where: { id: roleId } });
+      if (!role) return res.status(404).json({ error: "Role not found" });
+      if (!req.user.isOwner && role.tenantId !== req.user.tenantId) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const version = await getRolePermissionVersion({
+        versionId: req.params.versionId,
+        roleId,
+      });
+      if (!version) {
+        return res.status(404).json({ error: "Version not found for this role" });
+      }
+      res.json({ roleId, version });
+    } catch (err) {
+      console.error("[roles] get version error:", err);
+      res.status(500).json({ error: "Failed to fetch version" });
+    }
+  },
+);
+
+// POST /api/roles/:id/permissions/restore — apply a previous version
+// as the new current. Implemented as a delegated PUT call: we load
+// the version, hand off to the PUT handler via internal redispatch,
+// and the existing lockout guard + atomic transaction + snapshot
+// machinery handles the rest. The new snapshot has changeType=RESTORE
+// and restoredFromVersionId pointing at the source.
+//
+// Body: { versionId: number, note?: string }
+//
+// Why redispatch instead of a separate handler: the PUT path already
+// runs every guard (lockout, vertical-validation, landingPath
+// auto-clear, sensitive-grant audit) and appends a version row. A
+// separate restore handler would have to duplicate every one of those
+// guards. The req._restoreContext hand-off below tells the PUT
+// handler "this save is a restore" so it tags the snapshot correctly.
+router.post(
+  "/:id/permissions/restore",
+  verifyToken,
+  requirePermission("roles", "manage"),
+  async (req, res) => {
+    try {
+      const roleId = parseInt(req.params.id);
+      const { versionId, note } = req.body || {};
+      if (!Number.isFinite(parseInt(versionId, 10))) {
+        return res.status(400).json({ error: "versionId is required" });
+      }
+      const role = await prisma.role.findUnique({ where: { id: roleId } });
+      if (!role) return res.status(404).json({ error: "Role not found" });
+      if (!req.user.isOwner && role.tenantId !== req.user.tenantId) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const version = await getRolePermissionVersion({
+        versionId: parseInt(versionId, 10),
+        roleId,
+      });
+      if (!version) {
+        return res.status(404).json({ error: "Version not found for this role" });
+      }
+      // Hand-off context for the PUT handler so the snapshot it
+      // writes has changeType=RESTORE + restoredFromVersionId.
+      req._restoreContext = {
+        restoredFromVersionId: version.id,
+        restoreNote:
+          typeof note === 'string' && note.trim().length > 0
+            ? note.trim().slice(0, 500)
+            : `Restored from v${version.versionNumber}`,
+      };
+      // Repackage the body as a PUT permissions payload + invoke the
+      // PUT handler directly. The PUT handler reads req.body.permissions
+      // and req._restoreContext.
+      req.body = { permissions: version.permissions };
+      req.method = 'PUT';
+      // The PUT handler is mounted at PUT /:id/permissions. Express's
+      // router stack matches on method + path; the simplest reliable
+      // dispatch is to call the handler function directly. We grab it
+      // by walking the router stack.
+      const layer = router.stack.find(
+        (l) =>
+          l.route &&
+          l.route.path === '/:id/permissions' &&
+          l.route.methods && l.route.methods.put,
+      );
+      if (!layer) {
+        return res.status(500).json({ error: 'Restore dispatch failed: PUT handler not found' });
+      }
+      // Run the handler chain (verifyToken + requirePermission + body).
+      // We've already passed the same gates above, so call the final
+      // handler directly. Layer's route.stack carries the middleware
+      // sequence; the actual route handler is the last entry.
+      const handlers = layer.route.stack.map((l) => l.handle);
+      const finalHandler = handlers[handlers.length - 1];
+      return finalHandler(req, res, (err) => {
+        if (err) {
+          console.error("[roles] restore dispatch err:", err);
+          if (!res.headersSent) {
+            res.status(500).json({ error: "Failed to restore version" });
+          }
+        }
+      });
+    } catch (err) {
+      console.error("[roles] restore error:", err);
+      res.status(500).json({ error: "Failed to restore version" });
     }
   },
 );

@@ -1,0 +1,1948 @@
+{
+  "generatedAt": "2026-06-16T11:31:58.002Z",
+  "schemaVersion": 1,
+  "tenant": {
+    "id": 11,
+    "name": "Travel Stall",
+    "slug": "travel-stall",
+    "vertical": "travel"
+  },
+  "roleCount": 4,
+  "permissionRowCount": 368,
+  "userRoleRowCount": 5,
+  "widgetRowCount": 0,
+  "roles": [
+    {
+      "id": 193,
+      "key": "ADMIN",
+      "name": "Admin",
+      "description": "Full access to all features within the organization",
+      "isSystem": true,
+      "isActive": true,
+      "userType": "STAFF",
+      "landingPath": "/dashboard",
+      "createdAt": "2026-06-10T10:09:24.789Z",
+      "updatedAt": "2026-06-16T09:48:18.445Z",
+      "permissions": [
+        {
+          "id": 9350,
+          "module": "accounting",
+          "action": "export"
+        },
+        {
+          "id": 9351,
+          "module": "accounting",
+          "action": "read"
+        },
+        {
+          "id": 9352,
+          "module": "accounting",
+          "action": "write"
+        },
+        {
+          "id": 9353,
+          "module": "analytics",
+          "action": "export"
+        },
+        {
+          "id": 9354,
+          "module": "analytics",
+          "action": "read"
+        },
+        {
+          "id": 9355,
+          "module": "audit",
+          "action": "export"
+        },
+        {
+          "id": 9356,
+          "module": "audit",
+          "action": "read"
+        },
+        {
+          "id": 9558,
+          "module": "cancellation_policies",
+          "action": "delete"
+        },
+        {
+          "id": 9559,
+          "module": "cancellation_policies",
+          "action": "manage"
+        },
+        {
+          "id": 9555,
+          "module": "cancellation_policies",
+          "action": "read"
+        },
+        {
+          "id": 9557,
+          "module": "cancellation_policies",
+          "action": "update"
+        },
+        {
+          "id": 9556,
+          "module": "cancellation_policies",
+          "action": "write"
+        },
+        {
+          "id": 9357,
+          "module": "chatbots",
+          "action": "delete"
+        },
+        {
+          "id": 9358,
+          "module": "chatbots",
+          "action": "manage"
+        },
+        {
+          "id": 9359,
+          "module": "chatbots",
+          "action": "read"
+        },
+        {
+          "id": 9360,
+          "module": "chatbots",
+          "action": "write"
+        },
+        {
+          "id": 9563,
+          "module": "commission_profiles",
+          "action": "delete"
+        },
+        {
+          "id": 9564,
+          "module": "commission_profiles",
+          "action": "manage"
+        },
+        {
+          "id": 9560,
+          "module": "commission_profiles",
+          "action": "read"
+        },
+        {
+          "id": 9562,
+          "module": "commission_profiles",
+          "action": "update"
+        },
+        {
+          "id": 9561,
+          "module": "commission_profiles",
+          "action": "write"
+        },
+        {
+          "id": 9361,
+          "module": "communications",
+          "action": "delete"
+        },
+        {
+          "id": 9362,
+          "module": "communications",
+          "action": "export"
+        },
+        {
+          "id": 9363,
+          "module": "communications",
+          "action": "read"
+        },
+        {
+          "id": 9364,
+          "module": "communications",
+          "action": "write"
+        },
+        {
+          "id": 9365,
+          "module": "contacts",
+          "action": "delete"
+        },
+        {
+          "id": 9366,
+          "module": "contacts",
+          "action": "export"
+        },
+        {
+          "id": 9367,
+          "module": "contacts",
+          "action": "read"
+        },
+        {
+          "id": 9368,
+          "module": "contacts",
+          "action": "update"
+        },
+        {
+          "id": 9369,
+          "module": "contacts",
+          "action": "write"
+        },
+        {
+          "id": 9370,
+          "module": "contracts",
+          "action": "delete"
+        },
+        {
+          "id": 9371,
+          "module": "contracts",
+          "action": "read"
+        },
+        {
+          "id": 9372,
+          "module": "contracts",
+          "action": "update"
+        },
+        {
+          "id": 9373,
+          "module": "contracts",
+          "action": "write"
+        },
+        {
+          "id": 9534,
+          "module": "cost_master",
+          "action": "delete"
+        },
+        {
+          "id": 9535,
+          "module": "cost_master",
+          "action": "manage"
+        },
+        {
+          "id": 9531,
+          "module": "cost_master",
+          "action": "read"
+        },
+        {
+          "id": 9533,
+          "module": "cost_master",
+          "action": "update"
+        },
+        {
+          "id": 9532,
+          "module": "cost_master",
+          "action": "write"
+        },
+        {
+          "id": 9593,
+          "module": "curriculum",
+          "action": "delete"
+        },
+        {
+          "id": 9590,
+          "module": "curriculum",
+          "action": "read"
+        },
+        {
+          "id": 9592,
+          "module": "curriculum",
+          "action": "update"
+        },
+        {
+          "id": 9591,
+          "module": "curriculum",
+          "action": "write"
+        },
+        {
+          "id": 9374,
+          "module": "dashboards",
+          "action": "delete"
+        },
+        {
+          "id": 9375,
+          "module": "dashboards",
+          "action": "read"
+        },
+        {
+          "id": 9376,
+          "module": "dashboards",
+          "action": "write"
+        },
+        {
+          "id": 9377,
+          "module": "deals",
+          "action": "delete"
+        },
+        {
+          "id": 9378,
+          "module": "deals",
+          "action": "export"
+        },
+        {
+          "id": 9379,
+          "module": "deals",
+          "action": "manage"
+        },
+        {
+          "id": 9380,
+          "module": "deals",
+          "action": "read"
+        },
+        {
+          "id": 9381,
+          "module": "deals",
+          "action": "update"
+        },
+        {
+          "id": 9382,
+          "module": "deals",
+          "action": "write"
+        },
+        {
+          "id": 9383,
+          "module": "developer",
+          "action": "manage"
+        },
+        {
+          "id": 9384,
+          "module": "developer",
+          "action": "read"
+        },
+        {
+          "id": 9501,
+          "module": "diagnostics",
+          "action": "delete"
+        },
+        {
+          "id": 9502,
+          "module": "diagnostics",
+          "action": "export"
+        },
+        {
+          "id": 9498,
+          "module": "diagnostics",
+          "action": "read"
+        },
+        {
+          "id": 9500,
+          "module": "diagnostics",
+          "action": "update"
+        },
+        {
+          "id": 9499,
+          "module": "diagnostics",
+          "action": "write"
+        },
+        {
+          "id": 9385,
+          "module": "documents",
+          "action": "delete"
+        },
+        {
+          "id": 9386,
+          "module": "documents",
+          "action": "export"
+        },
+        {
+          "id": 9387,
+          "module": "documents",
+          "action": "read"
+        },
+        {
+          "id": 9388,
+          "module": "documents",
+          "action": "update"
+        },
+        {
+          "id": 9389,
+          "module": "documents",
+          "action": "write"
+        },
+        {
+          "id": 9390,
+          "module": "email",
+          "action": "delete"
+        },
+        {
+          "id": 9391,
+          "module": "email",
+          "action": "export"
+        },
+        {
+          "id": 9392,
+          "module": "email",
+          "action": "read"
+        },
+        {
+          "id": 9393,
+          "module": "email",
+          "action": "write"
+        },
+        {
+          "id": 9394,
+          "module": "estimates",
+          "action": "delete"
+        },
+        {
+          "id": 9395,
+          "module": "estimates",
+          "action": "export"
+        },
+        {
+          "id": 9396,
+          "module": "estimates",
+          "action": "read"
+        },
+        {
+          "id": 9397,
+          "module": "estimates",
+          "action": "update"
+        },
+        {
+          "id": 9398,
+          "module": "estimates",
+          "action": "write"
+        },
+        {
+          "id": 9399,
+          "module": "expenses",
+          "action": "delete"
+        },
+        {
+          "id": 9400,
+          "module": "expenses",
+          "action": "manage"
+        },
+        {
+          "id": 9401,
+          "module": "expenses",
+          "action": "read"
+        },
+        {
+          "id": 9402,
+          "module": "expenses",
+          "action": "update"
+        },
+        {
+          "id": 9403,
+          "module": "expenses",
+          "action": "write"
+        },
+        {
+          "id": 9548,
+          "module": "flight_quotes",
+          "action": "delete"
+        },
+        {
+          "id": 9549,
+          "module": "flight_quotes",
+          "action": "export"
+        },
+        {
+          "id": 9545,
+          "module": "flight_quotes",
+          "action": "read"
+        },
+        {
+          "id": 9547,
+          "module": "flight_quotes",
+          "action": "update"
+        },
+        {
+          "id": 9546,
+          "module": "flight_quotes",
+          "action": "write"
+        },
+        {
+          "id": 9604,
+          "module": "flyer_studio",
+          "action": "manage"
+        },
+        {
+          "id": 9602,
+          "module": "flyer_studio",
+          "action": "read"
+        },
+        {
+          "id": 9603,
+          "module": "flyer_studio",
+          "action": "write"
+        },
+        {
+          "id": 9608,
+          "module": "flyer_templates",
+          "action": "delete"
+        },
+        {
+          "id": 9605,
+          "module": "flyer_templates",
+          "action": "read"
+        },
+        {
+          "id": 9607,
+          "module": "flyer_templates",
+          "action": "update"
+        },
+        {
+          "id": 9606,
+          "module": "flyer_templates",
+          "action": "write"
+        },
+        {
+          "id": 9404,
+          "module": "forecasting",
+          "action": "export"
+        },
+        {
+          "id": 9405,
+          "module": "forecasting",
+          "action": "read"
+        },
+        {
+          "id": 9406,
+          "module": "forecasting",
+          "action": "write"
+        },
+        {
+          "id": 9497,
+          "module": "inbound_leads",
+          "action": "manage"
+        },
+        {
+          "id": 9495,
+          "module": "inbound_leads",
+          "action": "read"
+        },
+        {
+          "id": 9496,
+          "module": "inbound_leads",
+          "action": "write"
+        },
+        {
+          "id": 9407,
+          "module": "integrations",
+          "action": "delete"
+        },
+        {
+          "id": 9408,
+          "module": "integrations",
+          "action": "manage"
+        },
+        {
+          "id": 9409,
+          "module": "integrations",
+          "action": "read"
+        },
+        {
+          "id": 9410,
+          "module": "integrations",
+          "action": "update"
+        },
+        {
+          "id": 9411,
+          "module": "integrations",
+          "action": "write"
+        },
+        {
+          "id": 9412,
+          "module": "invoices",
+          "action": "delete"
+        },
+        {
+          "id": 9413,
+          "module": "invoices",
+          "action": "export"
+        },
+        {
+          "id": 9414,
+          "module": "invoices",
+          "action": "manage"
+        },
+        {
+          "id": 9415,
+          "module": "invoices",
+          "action": "read"
+        },
+        {
+          "id": 9416,
+          "module": "invoices",
+          "action": "update"
+        },
+        {
+          "id": 9417,
+          "module": "invoices",
+          "action": "write"
+        },
+        {
+          "id": 9511,
+          "module": "itineraries",
+          "action": "delete"
+        },
+        {
+          "id": 9512,
+          "module": "itineraries",
+          "action": "export"
+        },
+        {
+          "id": 9508,
+          "module": "itineraries",
+          "action": "read"
+        },
+        {
+          "id": 9510,
+          "module": "itineraries",
+          "action": "update"
+        },
+        {
+          "id": 9509,
+          "module": "itineraries",
+          "action": "write"
+        },
+        {
+          "id": 9516,
+          "module": "itinerary_templates",
+          "action": "delete"
+        },
+        {
+          "id": 9513,
+          "module": "itinerary_templates",
+          "action": "read"
+        },
+        {
+          "id": 9515,
+          "module": "itinerary_templates",
+          "action": "update"
+        },
+        {
+          "id": 9514,
+          "module": "itinerary_templates",
+          "action": "write"
+        },
+        {
+          "id": 9418,
+          "module": "knowledge_base",
+          "action": "delete"
+        },
+        {
+          "id": 9419,
+          "module": "knowledge_base",
+          "action": "read"
+        },
+        {
+          "id": 9420,
+          "module": "knowledge_base",
+          "action": "update"
+        },
+        {
+          "id": 9421,
+          "module": "knowledge_base",
+          "action": "write"
+        },
+        {
+          "id": 9422,
+          "module": "leads",
+          "action": "delete"
+        },
+        {
+          "id": 9423,
+          "module": "leads",
+          "action": "export"
+        },
+        {
+          "id": 9424,
+          "module": "leads",
+          "action": "read"
+        },
+        {
+          "id": 9425,
+          "module": "leads",
+          "action": "update"
+        },
+        {
+          "id": 9426,
+          "module": "leads",
+          "action": "write"
+        },
+        {
+          "id": 9427,
+          "module": "marketing",
+          "action": "delete"
+        },
+        {
+          "id": 9428,
+          "module": "marketing",
+          "action": "export"
+        },
+        {
+          "id": 9429,
+          "module": "marketing",
+          "action": "manage"
+        },
+        {
+          "id": 9430,
+          "module": "marketing",
+          "action": "read"
+        },
+        {
+          "id": 9431,
+          "module": "marketing",
+          "action": "update"
+        },
+        {
+          "id": 9432,
+          "module": "marketing",
+          "action": "write"
+        },
+        {
+          "id": 9584,
+          "module": "microsites",
+          "action": "delete"
+        },
+        {
+          "id": 9585,
+          "module": "microsites",
+          "action": "manage"
+        },
+        {
+          "id": 9581,
+          "module": "microsites",
+          "action": "read"
+        },
+        {
+          "id": 9583,
+          "module": "microsites",
+          "action": "update"
+        },
+        {
+          "id": 9582,
+          "module": "microsites",
+          "action": "write"
+        },
+        {
+          "id": 9575,
+          "module": "passport",
+          "action": "manage"
+        },
+        {
+          "id": 9572,
+          "module": "passport",
+          "action": "read"
+        },
+        {
+          "id": 9574,
+          "module": "passport",
+          "action": "update"
+        },
+        {
+          "id": 9573,
+          "module": "passport",
+          "action": "write"
+        },
+        {
+          "id": 9568,
+          "module": "payables",
+          "action": "export"
+        },
+        {
+          "id": 9565,
+          "module": "payables",
+          "action": "read"
+        },
+        {
+          "id": 9567,
+          "module": "payables",
+          "action": "update"
+        },
+        {
+          "id": 9566,
+          "module": "payables",
+          "action": "write"
+        },
+        {
+          "id": 9433,
+          "module": "payments",
+          "action": "export"
+        },
+        {
+          "id": 9434,
+          "module": "payments",
+          "action": "read"
+        },
+        {
+          "id": 9435,
+          "module": "pipeline",
+          "action": "delete"
+        },
+        {
+          "id": 9436,
+          "module": "pipeline",
+          "action": "manage"
+        },
+        {
+          "id": 9437,
+          "module": "pipeline",
+          "action": "read"
+        },
+        {
+          "id": 9438,
+          "module": "pipeline",
+          "action": "update"
+        },
+        {
+          "id": 9439,
+          "module": "pipeline",
+          "action": "write"
+        },
+        {
+          "id": 9506,
+          "module": "pois",
+          "action": "delete"
+        },
+        {
+          "id": 9507,
+          "module": "pois",
+          "action": "manage"
+        },
+        {
+          "id": 9503,
+          "module": "pois",
+          "action": "read"
+        },
+        {
+          "id": 9505,
+          "module": "pois",
+          "action": "update"
+        },
+        {
+          "id": 9504,
+          "module": "pois",
+          "action": "write"
+        },
+        {
+          "id": 9543,
+          "module": "pricing",
+          "action": "delete"
+        },
+        {
+          "id": 9544,
+          "module": "pricing",
+          "action": "manage"
+        },
+        {
+          "id": 9540,
+          "module": "pricing",
+          "action": "read"
+        },
+        {
+          "id": 9542,
+          "module": "pricing",
+          "action": "update"
+        },
+        {
+          "id": 9541,
+          "module": "pricing",
+          "action": "write"
+        },
+        {
+          "id": 9440,
+          "module": "projects",
+          "action": "delete"
+        },
+        {
+          "id": 9441,
+          "module": "projects",
+          "action": "read"
+        },
+        {
+          "id": 9442,
+          "module": "projects",
+          "action": "update"
+        },
+        {
+          "id": 9443,
+          "module": "projects",
+          "action": "write"
+        },
+        {
+          "id": 9444,
+          "module": "quotas",
+          "action": "delete"
+        },
+        {
+          "id": 9445,
+          "module": "quotas",
+          "action": "read"
+        },
+        {
+          "id": 9446,
+          "module": "quotas",
+          "action": "update"
+        },
+        {
+          "id": 9447,
+          "module": "quotas",
+          "action": "write"
+        },
+        {
+          "id": 9520,
+          "module": "quote_templates",
+          "action": "delete"
+        },
+        {
+          "id": 9517,
+          "module": "quote_templates",
+          "action": "read"
+        },
+        {
+          "id": 9519,
+          "module": "quote_templates",
+          "action": "update"
+        },
+        {
+          "id": 9518,
+          "module": "quote_templates",
+          "action": "write"
+        },
+        {
+          "id": 9448,
+          "module": "quotes",
+          "action": "delete"
+        },
+        {
+          "id": 9449,
+          "module": "quotes",
+          "action": "export"
+        },
+        {
+          "id": 9450,
+          "module": "quotes",
+          "action": "read"
+        },
+        {
+          "id": 9451,
+          "module": "quotes",
+          "action": "update"
+        },
+        {
+          "id": 9452,
+          "module": "quotes",
+          "action": "write"
+        },
+        {
+          "id": 9601,
+          "module": "religious_packets",
+          "action": "delete"
+        },
+        {
+          "id": 9598,
+          "module": "religious_packets",
+          "action": "read"
+        },
+        {
+          "id": 9600,
+          "module": "religious_packets",
+          "action": "update"
+        },
+        {
+          "id": 9599,
+          "module": "religious_packets",
+          "action": "write"
+        },
+        {
+          "id": 9453,
+          "module": "reports",
+          "action": "delete"
+        },
+        {
+          "id": 9454,
+          "module": "reports",
+          "action": "export"
+        },
+        {
+          "id": 9455,
+          "module": "reports",
+          "action": "read"
+        },
+        {
+          "id": 9456,
+          "module": "reports",
+          "action": "write"
+        },
+        {
+          "id": 9589,
+          "module": "rfu_profiles",
+          "action": "delete"
+        },
+        {
+          "id": 9586,
+          "module": "rfu_profiles",
+          "action": "read"
+        },
+        {
+          "id": 9588,
+          "module": "rfu_profiles",
+          "action": "update"
+        },
+        {
+          "id": 9587,
+          "module": "rfu_profiles",
+          "action": "write"
+        },
+        {
+          "id": 9457,
+          "module": "roles",
+          "action": "manage"
+        },
+        {
+          "id": 9458,
+          "module": "roles",
+          "action": "read"
+        },
+        {
+          "id": 9597,
+          "module": "school_terms",
+          "action": "delete"
+        },
+        {
+          "id": 9594,
+          "module": "school_terms",
+          "action": "read"
+        },
+        {
+          "id": 9596,
+          "module": "school_terms",
+          "action": "update"
+        },
+        {
+          "id": 9595,
+          "module": "school_terms",
+          "action": "write"
+        },
+        {
+          "id": 9459,
+          "module": "sequences",
+          "action": "delete"
+        },
+        {
+          "id": 9460,
+          "module": "sequences",
+          "action": "read"
+        },
+        {
+          "id": 9461,
+          "module": "sequences",
+          "action": "update"
+        },
+        {
+          "id": 9462,
+          "module": "sequences",
+          "action": "write"
+        },
+        {
+          "id": 9463,
+          "module": "settings",
+          "action": "manage"
+        },
+        {
+          "id": 9464,
+          "module": "settings",
+          "action": "read"
+        },
+        {
+          "id": 9539,
+          "module": "sightseeing",
+          "action": "delete"
+        },
+        {
+          "id": 9536,
+          "module": "sightseeing",
+          "action": "read"
+        },
+        {
+          "id": 9538,
+          "module": "sightseeing",
+          "action": "update"
+        },
+        {
+          "id": 9537,
+          "module": "sightseeing",
+          "action": "write"
+        },
+        {
+          "id": 9465,
+          "module": "signatures",
+          "action": "manage"
+        },
+        {
+          "id": 9466,
+          "module": "signatures",
+          "action": "read"
+        },
+        {
+          "id": 9467,
+          "module": "sms",
+          "action": "read"
+        },
+        {
+          "id": 9468,
+          "module": "sms",
+          "action": "write"
+        },
+        {
+          "id": 9469,
+          "module": "staff",
+          "action": "delete"
+        },
+        {
+          "id": 9470,
+          "module": "staff",
+          "action": "manage"
+        },
+        {
+          "id": 9471,
+          "module": "staff",
+          "action": "read"
+        },
+        {
+          "id": 9472,
+          "module": "staff",
+          "action": "update"
+        },
+        {
+          "id": 9473,
+          "module": "staff",
+          "action": "write"
+        },
+        {
+          "id": 9553,
+          "module": "suppliers",
+          "action": "delete"
+        },
+        {
+          "id": 9554,
+          "module": "suppliers",
+          "action": "manage"
+        },
+        {
+          "id": 9550,
+          "module": "suppliers",
+          "action": "read"
+        },
+        {
+          "id": 9552,
+          "module": "suppliers",
+          "action": "update"
+        },
+        {
+          "id": 9551,
+          "module": "suppliers",
+          "action": "write"
+        },
+        {
+          "id": 9474,
+          "module": "surveys",
+          "action": "delete"
+        },
+        {
+          "id": 9475,
+          "module": "surveys",
+          "action": "export"
+        },
+        {
+          "id": 9476,
+          "module": "surveys",
+          "action": "read"
+        },
+        {
+          "id": 9477,
+          "module": "surveys",
+          "action": "update"
+        },
+        {
+          "id": 9478,
+          "module": "surveys",
+          "action": "write"
+        },
+        {
+          "id": 9479,
+          "module": "tasks",
+          "action": "delete"
+        },
+        {
+          "id": 9480,
+          "module": "tasks",
+          "action": "read"
+        },
+        {
+          "id": 9481,
+          "module": "tasks",
+          "action": "update"
+        },
+        {
+          "id": 9482,
+          "module": "tasks",
+          "action": "write"
+        },
+        {
+          "id": 9483,
+          "module": "tickets",
+          "action": "delete"
+        },
+        {
+          "id": 9484,
+          "module": "tickets",
+          "action": "export"
+        },
+        {
+          "id": 9485,
+          "module": "tickets",
+          "action": "read"
+        },
+        {
+          "id": 9486,
+          "module": "tickets",
+          "action": "update"
+        },
+        {
+          "id": 9487,
+          "module": "tickets",
+          "action": "write"
+        },
+        {
+          "id": 9529,
+          "module": "tmc_catalogue",
+          "action": "delete"
+        },
+        {
+          "id": 9530,
+          "module": "tmc_catalogue",
+          "action": "manage"
+        },
+        {
+          "id": 9526,
+          "module": "tmc_catalogue",
+          "action": "read"
+        },
+        {
+          "id": 9528,
+          "module": "tmc_catalogue",
+          "action": "update"
+        },
+        {
+          "id": 9527,
+          "module": "tmc_catalogue",
+          "action": "write"
+        },
+        {
+          "id": 9524,
+          "module": "trips",
+          "action": "delete"
+        },
+        {
+          "id": 9525,
+          "module": "trips",
+          "action": "export"
+        },
+        {
+          "id": 9521,
+          "module": "trips",
+          "action": "read"
+        },
+        {
+          "id": 9523,
+          "module": "trips",
+          "action": "update"
+        },
+        {
+          "id": 9522,
+          "module": "trips",
+          "action": "write"
+        },
+        {
+          "id": 9579,
+          "module": "visa",
+          "action": "delete"
+        },
+        {
+          "id": 9580,
+          "module": "visa",
+          "action": "manage"
+        },
+        {
+          "id": 9576,
+          "module": "visa",
+          "action": "read"
+        },
+        {
+          "id": 9578,
+          "module": "visa",
+          "action": "update"
+        },
+        {
+          "id": 9577,
+          "module": "visa",
+          "action": "write"
+        },
+        {
+          "id": 9569,
+          "module": "web_checkins",
+          "action": "read"
+        },
+        {
+          "id": 9571,
+          "module": "web_checkins",
+          "action": "update"
+        },
+        {
+          "id": 9570,
+          "module": "web_checkins",
+          "action": "write"
+        },
+        {
+          "id": 9488,
+          "module": "whatsapp",
+          "action": "read"
+        },
+        {
+          "id": 9489,
+          "module": "whatsapp",
+          "action": "write"
+        },
+        {
+          "id": 9490,
+          "module": "workflows",
+          "action": "delete"
+        },
+        {
+          "id": 9491,
+          "module": "workflows",
+          "action": "manage"
+        },
+        {
+          "id": 9492,
+          "module": "workflows",
+          "action": "read"
+        },
+        {
+          "id": 9493,
+          "module": "workflows",
+          "action": "update"
+        },
+        {
+          "id": 9494,
+          "module": "workflows",
+          "action": "write"
+        }
+      ],
+      "userRoles": [
+        {
+          "userId": 92,
+          "assignedAt": "2026-06-10T10:09:26.062Z",
+          "assignedById": null
+        },
+        {
+          "userId": 93,
+          "assignedAt": "2026-06-10T10:09:26.066Z",
+          "assignedById": null
+        }
+      ],
+      "widgets": []
+    },
+    {
+      "id": 195,
+      "key": "CUSTOMER",
+      "name": "Customer",
+      "description": "Customer access to booking and appointments only",
+      "isSystem": true,
+      "isActive": true,
+      "userType": "CUSTOMER",
+      "landingPath": null,
+      "createdAt": "2026-06-10T10:09:25.922Z",
+      "updatedAt": "2026-06-10T10:09:25.922Z",
+      "permissions": [
+        {
+          "id": 9316,
+          "module": "appointments",
+          "action": "read"
+        },
+        {
+          "id": 9323,
+          "module": "consents",
+          "action": "read"
+        },
+        {
+          "id": 9324,
+          "module": "consents",
+          "action": "write"
+        },
+        {
+          "id": 9320,
+          "module": "documents",
+          "action": "read"
+        },
+        {
+          "id": 9318,
+          "module": "invoices",
+          "action": "read"
+        },
+        {
+          "id": 9315,
+          "module": "leads",
+          "action": "read"
+        },
+        {
+          "id": 9322,
+          "module": "my_bookings",
+          "action": "read"
+        },
+        {
+          "id": 9321,
+          "module": "my_prescriptions",
+          "action": "read"
+        },
+        {
+          "id": 9319,
+          "module": "payments",
+          "action": "read"
+        },
+        {
+          "id": 9317,
+          "module": "services",
+          "action": "read"
+        },
+        {
+          "id": 9325,
+          "module": "visits",
+          "action": "read"
+        }
+      ],
+      "userRoles": [],
+      "widgets": []
+    },
+    {
+      "id": 194,
+      "key": "MANAGER",
+      "name": "Manager",
+      "description": "Manager role with broad staff access",
+      "isSystem": false,
+      "isActive": true,
+      "userType": "STAFF",
+      "landingPath": "/dashboard",
+      "createdAt": "2026-06-10T10:09:25.637Z",
+      "updatedAt": "2026-06-10T10:09:25.637Z",
+      "permissions": [
+        {
+          "id": 9268,
+          "module": "analytics",
+          "action": "export"
+        },
+        {
+          "id": 9267,
+          "module": "analytics",
+          "action": "read"
+        },
+        {
+          "id": 9302,
+          "module": "appointments",
+          "action": "read"
+        },
+        {
+          "id": 9311,
+          "module": "attendance",
+          "action": "manage"
+        },
+        {
+          "id": 9309,
+          "module": "attendance",
+          "action": "read"
+        },
+        {
+          "id": 9310,
+          "module": "attendance",
+          "action": "write"
+        },
+        {
+          "id": 9274,
+          "module": "communications",
+          "action": "read"
+        },
+        {
+          "id": 9275,
+          "module": "communications",
+          "action": "write"
+        },
+        {
+          "id": 9241,
+          "module": "contacts",
+          "action": "read"
+        },
+        {
+          "id": 9243,
+          "module": "contacts",
+          "action": "update"
+        },
+        {
+          "id": 9242,
+          "module": "contacts",
+          "action": "write"
+        },
+        {
+          "id": 9294,
+          "module": "contracts",
+          "action": "read"
+        },
+        {
+          "id": 9296,
+          "module": "contracts",
+          "action": "update"
+        },
+        {
+          "id": 9295,
+          "module": "contracts",
+          "action": "write"
+        },
+        {
+          "id": 9266,
+          "module": "dashboards",
+          "action": "read"
+        },
+        {
+          "id": 9244,
+          "module": "deals",
+          "action": "read"
+        },
+        {
+          "id": 9246,
+          "module": "deals",
+          "action": "update"
+        },
+        {
+          "id": 9245,
+          "module": "deals",
+          "action": "write"
+        },
+        {
+          "id": 9291,
+          "module": "documents",
+          "action": "read"
+        },
+        {
+          "id": 9293,
+          "module": "documents",
+          "action": "update"
+        },
+        {
+          "id": 9292,
+          "module": "documents",
+          "action": "write"
+        },
+        {
+          "id": 9276,
+          "module": "email",
+          "action": "read"
+        },
+        {
+          "id": 9277,
+          "module": "email",
+          "action": "write"
+        },
+        {
+          "id": 9300,
+          "module": "estimates",
+          "action": "export"
+        },
+        {
+          "id": 9297,
+          "module": "estimates",
+          "action": "read"
+        },
+        {
+          "id": 9299,
+          "module": "estimates",
+          "action": "update"
+        },
+        {
+          "id": 9298,
+          "module": "estimates",
+          "action": "write"
+        },
+        {
+          "id": 9270,
+          "module": "gift_cards",
+          "action": "read"
+        },
+        {
+          "id": 9304,
+          "module": "inventory",
+          "action": "read"
+        },
+        {
+          "id": 9269,
+          "module": "invoices",
+          "action": "read"
+        },
+        {
+          "id": 9250,
+          "module": "leads",
+          "action": "delete"
+        },
+        {
+          "id": 9251,
+          "module": "leads",
+          "action": "export"
+        },
+        {
+          "id": 9247,
+          "module": "leads",
+          "action": "read"
+        },
+        {
+          "id": 9249,
+          "module": "leads",
+          "action": "update"
+        },
+        {
+          "id": 9248,
+          "module": "leads",
+          "action": "write"
+        },
+        {
+          "id": 9314,
+          "module": "leave",
+          "action": "manage"
+        },
+        {
+          "id": 9312,
+          "module": "leave",
+          "action": "read"
+        },
+        {
+          "id": 9313,
+          "module": "leave",
+          "action": "write"
+        },
+        {
+          "id": 9282,
+          "module": "marketing",
+          "action": "read"
+        },
+        {
+          "id": 9284,
+          "module": "marketing",
+          "action": "update"
+        },
+        {
+          "id": 9283,
+          "module": "marketing",
+          "action": "write"
+        },
+        {
+          "id": 9271,
+          "module": "patient_wallets",
+          "action": "read"
+        },
+        {
+          "id": 9301,
+          "module": "patients",
+          "action": "read"
+        },
+        {
+          "id": 9258,
+          "module": "pipeline",
+          "action": "read"
+        },
+        {
+          "id": 9260,
+          "module": "pipeline",
+          "action": "update"
+        },
+        {
+          "id": 9259,
+          "module": "pipeline",
+          "action": "write"
+        },
+        {
+          "id": 9305,
+          "module": "pos",
+          "action": "read"
+        },
+        {
+          "id": 9306,
+          "module": "products",
+          "action": "read"
+        },
+        {
+          "id": 9308,
+          "module": "products",
+          "action": "update"
+        },
+        {
+          "id": 9307,
+          "module": "products",
+          "action": "write"
+        },
+        {
+          "id": 9255,
+          "module": "projects",
+          "action": "read"
+        },
+        {
+          "id": 9257,
+          "module": "projects",
+          "action": "update"
+        },
+        {
+          "id": 9256,
+          "module": "projects",
+          "action": "write"
+        },
+        {
+          "id": 9261,
+          "module": "quotes",
+          "action": "read"
+        },
+        {
+          "id": 9263,
+          "module": "quotes",
+          "action": "update"
+        },
+        {
+          "id": 9262,
+          "module": "quotes",
+          "action": "write"
+        },
+        {
+          "id": 9265,
+          "module": "reports",
+          "action": "export"
+        },
+        {
+          "id": 9264,
+          "module": "reports",
+          "action": "read"
+        },
+        {
+          "id": 9273,
+          "module": "roles",
+          "action": "read"
+        },
+        {
+          "id": 9303,
+          "module": "services",
+          "action": "read"
+        },
+        {
+          "id": 9278,
+          "module": "sms",
+          "action": "read"
+        },
+        {
+          "id": 9279,
+          "module": "sms",
+          "action": "write"
+        },
+        {
+          "id": 9272,
+          "module": "staff",
+          "action": "read"
+        },
+        {
+          "id": 9288,
+          "module": "surveys",
+          "action": "read"
+        },
+        {
+          "id": 9290,
+          "module": "surveys",
+          "action": "update"
+        },
+        {
+          "id": 9289,
+          "module": "surveys",
+          "action": "write"
+        },
+        {
+          "id": 9252,
+          "module": "tasks",
+          "action": "read"
+        },
+        {
+          "id": 9254,
+          "module": "tasks",
+          "action": "update"
+        },
+        {
+          "id": 9253,
+          "module": "tasks",
+          "action": "write"
+        },
+        {
+          "id": 9285,
+          "module": "tickets",
+          "action": "read"
+        },
+        {
+          "id": 9287,
+          "module": "tickets",
+          "action": "update"
+        },
+        {
+          "id": 9286,
+          "module": "tickets",
+          "action": "write"
+        },
+        {
+          "id": 9280,
+          "module": "whatsapp",
+          "action": "read"
+        },
+        {
+          "id": 9281,
+          "module": "whatsapp",
+          "action": "write"
+        }
+      ],
+      "userRoles": [
+        {
+          "userId": 94,
+          "assignedAt": "2026-06-10T10:09:26.069Z",
+          "assignedById": null
+        },
+        {
+          "userId": 95,
+          "assignedAt": "2026-06-10T10:09:26.073Z",
+          "assignedById": null
+        }
+      ],
+      "widgets": []
+    },
+    {
+      "id": 196,
+      "key": "USER",
+      "name": "User",
+      "description": "Basic user role with limited CRM access",
+      "isSystem": false,
+      "isActive": true,
+      "userType": "STAFF",
+      "landingPath": null,
+      "createdAt": "2026-06-10T10:09:25.966Z",
+      "updatedAt": "2026-06-10T10:09:25.966Z",
+      "permissions": [
+        {
+          "id": 9335,
+          "module": "analytics",
+          "action": "read"
+        },
+        {
+          "id": 9344,
+          "module": "appointments",
+          "action": "read"
+        },
+        {
+          "id": 9345,
+          "module": "appointments",
+          "action": "write"
+        },
+        {
+          "id": 9346,
+          "module": "attendance",
+          "action": "read"
+        },
+        {
+          "id": 9347,
+          "module": "attendance",
+          "action": "write"
+        },
+        {
+          "id": 9336,
+          "module": "communications",
+          "action": "read"
+        },
+        {
+          "id": 9326,
+          "module": "contacts",
+          "action": "read"
+        },
+        {
+          "id": 9342,
+          "module": "contracts",
+          "action": "read"
+        },
+        {
+          "id": 9334,
+          "module": "dashboards",
+          "action": "read"
+        },
+        {
+          "id": 9327,
+          "module": "deals",
+          "action": "read"
+        },
+        {
+          "id": 9341,
+          "module": "documents",
+          "action": "read"
+        },
+        {
+          "id": 9337,
+          "module": "email",
+          "action": "read"
+        },
+        {
+          "id": 9343,
+          "module": "estimates",
+          "action": "read"
+        },
+        {
+          "id": 9328,
+          "module": "leads",
+          "action": "read"
+        },
+        {
+          "id": 9348,
+          "module": "leave",
+          "action": "read"
+        },
+        {
+          "id": 9349,
+          "module": "leave",
+          "action": "write"
+        },
+        {
+          "id": 9331,
+          "module": "pipeline",
+          "action": "read"
+        },
+        {
+          "id": 9330,
+          "module": "projects",
+          "action": "read"
+        },
+        {
+          "id": 9332,
+          "module": "quotes",
+          "action": "read"
+        },
+        {
+          "id": 9333,
+          "module": "reports",
+          "action": "read"
+        },
+        {
+          "id": 9338,
+          "module": "sms",
+          "action": "read"
+        },
+        {
+          "id": 9340,
+          "module": "surveys",
+          "action": "read"
+        },
+        {
+          "id": 9329,
+          "module": "tasks",
+          "action": "read"
+        },
+        {
+          "id": 9339,
+          "module": "tickets",
+          "action": "read"
+        }
+      ],
+      "userRoles": [
+        {
+          "userId": 96,
+          "assignedAt": "2026-06-10T10:09:26.077Z",
+          "assignedById": null
+        }
+      ],
+      "widgets": []
+    }
+  ]
+}

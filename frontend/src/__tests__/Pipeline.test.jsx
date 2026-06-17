@@ -1,30 +1,26 @@
 /**
- * Pipeline.test.jsx — vitest pin for the kanban stage-grouping fix (#575).
+ * Pipeline.test.jsx — vitest pins for the kanban stage-grouping behaviour.
  *
- * #575 (regression of #173): the demo's Default Org tenant had a pipeline_stages
- * configuration that included BOTH "Lead" and "New Lead" stage rows. Both names
- * normalize to the slug 'lead' via Pipeline.jsx's stageIdMap. Pre-fix, the
- * stages list rendered both rows with identical id='lead', and the per-column
- * grouping `deals.filter(d => d.stage === stage.id)` matched the same deal
- * set into both columns — testers saw "New Lead 99 / $90k" AND "Lead 99 / $90k"
- * with the first 8 cards bit-identical. Visual double-count of the pipeline,
- * inflated the perception of opportunity volume, fed downstream forecasting
- * confusion (#573).
+ * Originally written against the #575 dedupe-by-hardcoded-map fix. That map
+ * silently dropped any stage whose name wasn't in the generic-CRM lookup —
+ * so the travel tenant's 8-stage taxonomy (New, Diagnostic Complete,
+ * Qualifying, Quoted, Negotiating, Won, Lost, Dormant) rendered as just
+ * Won + Lost. The fix replaces the map with `slugifyStageName(name)` so
+ * every seeded stage surfaces as its own column regardless of vertical.
  *
- * The fix dedupes the rendered stage list by normalized id (first-stage-wins,
- * preserving DB position order since /api/pipeline_stages returns rows
- * sorted by position asc). Two stage rows that collapse to the same id render
- * exactly ONE column.
- *
- * Contracts pinned here:
- *   1. Two distinct stage rows that normalize to the same id render ONE
- *      column, not two.
- *   2. With duplicate-collapsing stages, every deal appears in EXACTLY ONE
- *      column (no card rendered twice across columns).
- *   3. Distinct stages that map to distinct ids render separately and split
+ * Contracts now pinned here:
+ *   1. Two distinct stage names that slugify to the SAME id (exact dupes —
+ *      e.g. two rows both named "Lead") still dedupe to one column
+ *      (first-position-wins; preserves the original #575 guard against a
+ *      tenant with literal duplicate rows).
+ *   2. Two distinct stage names that slugify to DIFFERENT ids (e.g. "Lead"
+ *      vs "New Lead") render as TWO columns. Deals with `stage='lead'`
+ *      appear ONLY in the matching column — no double-count, no silent
+ *      drop.
+ *   3. Distinct stages with distinct slugs render separately and split
  *      deals correctly.
- *   4. Negotiation + Proposal Sent (both → 'proposal') also collapse to one
- *      column — exercises the same dedupe path on a different colliding pair.
+ *   4. Travel-vertical 8-stage seed renders ALL eight columns (the original
+ *      bug — pre-fix the hardcoded map silently dropped 6 of them).
  */
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -87,16 +83,16 @@ function mockApi({ deals = [], contacts = [], stages = [] }) {
   });
 }
 
-describe('Pipeline kanban stage grouping (#575)', () => {
-  it('dedupes stages whose names collapse to the same id (Lead + New Lead → one column)', async () => {
-    // Demo-shape: tenant created BOTH "Lead" and "New Lead" stages, both
-    // normalize to slug 'lead'. Before the fix this rendered two columns
-    // showing identical deals.
+describe('Pipeline kanban stage grouping (#575 / slugify)', () => {
+  it('dedupes literal duplicate stage names (two rows both "Lead" → one column)', async () => {
+    // Two stage rows with identical names both slugify to 'lead'. The dedupe
+    // guard keeps the first-position row and drops the second, so the kanban
+    // renders one Lead column not two.
     mockApi({
       stages: [
         { id: 1, name: 'Lead', color: '#3b82f6', position: 0 },
-        { id: 2, name: 'New Lead', color: '#3b82f6', position: 1 },
-        { id: 3, name: 'Closed Won', color: '#10b981', position: 2 },
+        { id: 2, name: 'Lead', color: '#3b82f6', position: 1 },
+        { id: 3, name: 'Won', color: '#10b981', position: 2 },
       ],
       deals: [
         { id: 101, title: 'Acme Corp Renewal', amount: 50000, probability: 25, stage: 'lead' },
@@ -111,55 +107,67 @@ describe('Pipeline kanban stage grouping (#575)', () => {
       expect(screen.queryByText('Loading deals...')).not.toBeInTheDocument();
     });
 
-    // Only ONE of the two collapsing stages should render — first-position-wins,
-    // so we keep "Lead" (position 0) and drop "New Lead" (position 1).
-    // The stage title is a literal text node inside the <h3> alongside the
-    // count badge; matching by text avoids the accessible-name concatenation.
+    // Exactly one Lead column — the dupe is dropped.
     const leadTitles = screen.queryAllByText('Lead', { selector: 'h3' });
-    const newLeadTitles = screen.queryAllByText('New Lead', { selector: 'h3' });
-    expect(leadTitles.length + newLeadTitles.length).toBe(1);
+    expect(leadTitles).toHaveLength(1);
 
-    // "Closed Won" is unaffected.
-    expect(screen.getByText('Closed Won', { selector: 'h3' })).toBeInTheDocument();
-  });
+    // "Won" is unaffected.
+    expect(screen.getByText('Won', { selector: 'h3' })).toBeInTheDocument();
 
-  it('renders each deal in EXACTLY ONE column (no duplication across collapsing stages)', async () => {
-    mockApi({
-      stages: [
-        { id: 1, name: 'Lead', color: '#3b82f6', position: 0 },
-        { id: 2, name: 'New Lead', color: '#3b82f6', position: 1 },
-        { id: 3, name: 'Closed Won', color: '#10b981', position: 2 },
-      ],
-      deals: [
-        { id: 101, title: 'Acme Corp Renewal', amount: 50000, probability: 25, stage: 'lead' },
-        { id: 102, title: 'Globex Expansion', amount: 40000, probability: 30, stage: 'lead' },
-        { id: 103, title: 'Initech Annual', amount: 90000, probability: 100, stage: 'won' },
-      ],
-    });
-
-    renderPipeline();
-
-    await waitFor(() => {
-      expect(screen.queryByText('Loading deals...')).not.toBeInTheDocument();
-    });
-
-    // Every deal title appears exactly once across the whole kanban —
-    // pre-fix the two lead-stage cards would each appear in BOTH the
-    // Lead and New Lead columns.
+    // Each deal renders exactly once (the dupe column dropping is what
+    // guards against the original #575 double-count).
     expect(screen.getAllByText('Acme Corp Renewal')).toHaveLength(1);
     expect(screen.getAllByText('Globex Expansion')).toHaveLength(1);
     expect(screen.getAllByText('Initech Annual')).toHaveLength(1);
   });
 
-  it('keeps distinct stages with distinct ids as separate columns', async () => {
+  it('distinct stage names render distinct columns (Lead + New Lead → two columns, deals only in matching slug)', async () => {
+    // Pre-fix the hardcoded stageIdMap normalized both "Lead" and "New Lead"
+    // to 'lead' and the dedupe kept only one column. Post-fix they slugify
+    // to 'lead' and 'new-lead' — TWO distinct columns. Deals with
+    // `stage: 'lead'` appear only in the Lead column; the "New Lead"
+    // column is empty. No double-count, no silent drop.
+    mockApi({
+      stages: [
+        { id: 1, name: 'Lead', color: '#3b82f6', position: 0 },
+        { id: 2, name: 'New Lead', color: '#3b82f6', position: 1 },
+        { id: 3, name: 'Won', color: '#10b981', position: 2 },
+      ],
+      deals: [
+        { id: 101, title: 'Acme Corp Renewal', amount: 50000, probability: 25, stage: 'lead' },
+        { id: 102, title: 'Globex Expansion', amount: 40000, probability: 30, stage: 'lead' },
+        { id: 103, title: 'Initech Annual', amount: 90000, probability: 100, stage: 'won' },
+      ],
+    });
+
+    renderPipeline();
+
+    await waitFor(() => {
+      expect(screen.queryByText('Loading deals...')).not.toBeInTheDocument();
+    });
+
+    // Both columns render.
+    expect(screen.getByText('Lead', { selector: 'h3' })).toBeInTheDocument();
+    expect(screen.getByText('New Lead', { selector: 'h3' })).toBeInTheDocument();
+    expect(screen.getByText('Won', { selector: 'h3' })).toBeInTheDocument();
+
+    // Each deal renders exactly once total — `stage: 'lead'` matches the
+    // 'lead' column only, not 'new-lead'.
+    expect(screen.getAllByText('Acme Corp Renewal')).toHaveLength(1);
+    expect(screen.getAllByText('Globex Expansion')).toHaveLength(1);
+    expect(screen.getAllByText('Initech Annual')).toHaveLength(1);
+  });
+
+  it('keeps distinct stages with distinct slugs as separate columns', async () => {
     mockApi({
       stages: [
         { id: 1, name: 'New Lead', color: '#3b82f6', position: 0 },
         { id: 2, name: 'Contacted', color: '#f59e0b', position: 1 },
-        { id: 3, name: 'Closed Won', color: '#10b981', position: 2 },
+        { id: 3, name: 'Won', color: '#10b981', position: 2 },
       ],
       deals: [
-        { id: 101, title: 'Lead Card', amount: 1000, probability: 20, stage: 'lead' },
+        // Deal slugs match the stage slugs: 'new-lead', 'contacted', 'won'.
+        { id: 101, title: 'Lead Card', amount: 1000, probability: 20, stage: 'new-lead' },
         { id: 102, title: 'Contacted Card', amount: 2000, probability: 50, stage: 'contacted' },
         { id: 103, title: 'Won Card', amount: 3000, probability: 100, stage: 'won' },
       ],
@@ -173,7 +181,7 @@ describe('Pipeline kanban stage grouping (#575)', () => {
 
     expect(screen.getByText('New Lead', { selector: 'h3' })).toBeInTheDocument();
     expect(screen.getByText('Contacted', { selector: 'h3' })).toBeInTheDocument();
-    expect(screen.getByText('Closed Won', { selector: 'h3' })).toBeInTheDocument();
+    expect(screen.getByText('Won', { selector: 'h3' })).toBeInTheDocument();
 
     // Each card appears exactly once.
     expect(screen.getAllByText('Lead Card')).toHaveLength(1);
@@ -181,14 +189,26 @@ describe('Pipeline kanban stage grouping (#575)', () => {
     expect(screen.getAllByText('Won Card')).toHaveLength(1);
   });
 
-  it('also dedupes the Proposal Sent / Negotiation collision (both → proposal)', async () => {
+  it('travel-vertical 8-stage seed renders ALL eight columns (regression of the silent-drop bug)', async () => {
+    // Travel tenant seed: New, Diagnostic Complete, Qualifying, Quoted,
+    // Negotiating, Won, Lost, Dormant. Pre-fix the hardcoded stageIdMap
+    // matched only "Won" and "Lost" — the other 6 were silently dropped
+    // and the Travel kanban rendered as a 2-column board. Post-fix
+    // slugify(name) accepts every seeded stage.
     mockApi({
       stages: [
-        { id: 1, name: 'Proposal Sent', color: '#a855f7', position: 0 },
-        { id: 2, name: 'Negotiation', color: '#ec4899', position: 1 },
+        { id: 1, name: 'New', color: '#3b82f6', position: 0 },
+        { id: 2, name: 'Diagnostic Complete', color: '#06b6d4', position: 1 },
+        { id: 3, name: 'Qualifying', color: '#8b5cf6', position: 2 },
+        { id: 4, name: 'Quoted', color: '#f59e0b', position: 3 },
+        { id: 5, name: 'Negotiating', color: '#ec4899', position: 4 },
+        { id: 6, name: 'Won', color: '#10b981', position: 5 },
+        { id: 7, name: 'Lost', color: '#6b7280', position: 6 },
+        { id: 8, name: 'Dormant', color: '#9ca3af', position: 7 },
       ],
       deals: [
-        { id: 101, title: 'Mid-funnel Deal', amount: 5000, probability: 60, stage: 'proposal' },
+        { id: 201, title: 'Goa Family Trip', amount: 75000, probability: 60, stage: 'quoted' },
+        { id: 202, title: 'Umrah Group', amount: 200000, probability: 80, stage: 'negotiating' },
       ],
     });
 
@@ -198,12 +218,29 @@ describe('Pipeline kanban stage grouping (#575)', () => {
       expect(screen.queryByText('Loading deals...')).not.toBeInTheDocument();
     });
 
-    // Only the first colliding stage renders. "Negotiation" is dropped.
-    expect(screen.getByText('Proposal Sent', { selector: 'h3' })).toBeInTheDocument();
-    expect(screen.queryByText('Negotiation', { selector: 'h3' })).not.toBeInTheDocument();
+    // All 8 stage headers render (verified by name in the <h3>).
+    expect(screen.getByText('New', { selector: 'h3' })).toBeInTheDocument();
+    expect(screen.getByText('Diagnostic Complete', { selector: 'h3' })).toBeInTheDocument();
+    expect(screen.getByText('Qualifying', { selector: 'h3' })).toBeInTheDocument();
+    expect(screen.getByText('Quoted', { selector: 'h3' })).toBeInTheDocument();
+    expect(screen.getByText('Negotiating', { selector: 'h3' })).toBeInTheDocument();
+    expect(screen.getByText('Won', { selector: 'h3' })).toBeInTheDocument();
+    expect(screen.getByText('Lost', { selector: 'h3' })).toBeInTheDocument();
+    expect(screen.getByText('Dormant', { selector: 'h3' })).toBeInTheDocument();
 
-    // The single deal renders exactly once, not twice.
-    expect(screen.getAllByText('Mid-funnel Deal')).toHaveLength(1);
+    // Sub-brand data attrs for the 8 columns (kebab-case slugs).
+    expect(document.querySelector('[data-stage-id="new"]')).toBeTruthy();
+    expect(document.querySelector('[data-stage-id="diagnostic-complete"]')).toBeTruthy();
+    expect(document.querySelector('[data-stage-id="qualifying"]')).toBeTruthy();
+    expect(document.querySelector('[data-stage-id="quoted"]')).toBeTruthy();
+    expect(document.querySelector('[data-stage-id="negotiating"]')).toBeTruthy();
+    expect(document.querySelector('[data-stage-id="won"]')).toBeTruthy();
+    expect(document.querySelector('[data-stage-id="lost"]')).toBeTruthy();
+    expect(document.querySelector('[data-stage-id="dormant"]')).toBeTruthy();
+
+    // Travel-tenant deals land in their slug-matching columns.
+    expect(screen.getByText('Goa Family Trip')).toBeInTheDocument();
+    expect(screen.getByText('Umrah Group')).toBeInTheDocument();
   });
 });
 
@@ -218,7 +255,7 @@ describe('Pipeline sub-brand filter (#897)', () => {
   it('does NOT render sub-brand selector for non-Travel tenants (default test context)', async () => {
     mockApi({
       stages: [
-        { id: 1, name: 'New Lead', color: '#3b82f6', position: 0 },
+        { id: 1, name: 'Lead', color: '#3b82f6', position: 0 },
       ],
       deals: [
         { id: 101, title: 'Generic Deal', amount: 1000, probability: 30, stage: 'lead' },
@@ -257,8 +294,8 @@ describe('Pipeline column header — count badge + totalValue', () => {
   it('renders deal count badge AND formatted totalValue per stage', async () => {
     mockApi({
       stages: [
-        { id: 1, name: 'New Lead', color: '#3b82f6', position: 0 },
-        { id: 2, name: 'Closed Won', color: '#10b981', position: 1 },
+        { id: 1, name: 'Lead', color: '#3b82f6', position: 0 },
+        { id: 2, name: 'Won', color: '#10b981', position: 1 },
       ],
       deals: [
         { id: 201, title: 'Lead A', amount: 1000, probability: 25, stage: 'lead' },
@@ -274,10 +311,10 @@ describe('Pipeline column header — count badge + totalValue', () => {
     });
 
     // Stage count badges — scoped within the <h3> containing the stage name.
-    const newLeadHeader = screen.getByText('New Lead', { selector: 'h3' });
+    const newLeadHeader = screen.getByText('Lead', { selector: 'h3' });
     expect(within(newLeadHeader).getByText('2')).toBeInTheDocument();
 
-    const wonHeader = screen.getByText('Closed Won', { selector: 'h3' });
+    const wonHeader = screen.getByText('Won', { selector: 'h3' });
     expect(within(wonHeader).getByText('1')).toBeInTheDocument();
 
     // totalValue formatting via formatMoney(USD/en-US). $3,500 = 1000 + 2500.
@@ -294,7 +331,7 @@ describe('Pipeline empty-stage placeholder', () => {
   it('shows "Drag deals here" placeholder for a stage with zero matching deals', async () => {
     mockApi({
       stages: [
-        { id: 1, name: 'New Lead', color: '#3b82f6', position: 0 },
+        { id: 1, name: 'Lead', color: '#3b82f6', position: 0 },
         { id: 2, name: 'Contacted', color: '#f59e0b', position: 1 },
       ],
       deals: [
@@ -424,7 +461,7 @@ describe('Pipeline deal card details', () => {
   it('uses contactName as fallback when company is missing, and em-dash when both are missing', async () => {
     mockApi({
       stages: [
-        { id: 1, name: 'New Lead', color: '#3b82f6', position: 0 },
+        { id: 1, name: 'Lead', color: '#3b82f6', position: 0 },
       ],
       deals: [
         { id: 601, title: 'No Company', contactName: 'Asha Verma', amount: 100, probability: 10, stage: 'lead' },
@@ -605,7 +642,7 @@ describe('Pipeline AI score fetch — error path', () => {
       }
       if (url.startsWith('/api/contacts')) return Promise.resolve([]);
       if (url.startsWith('/api/pipeline_stages')) {
-        return Promise.resolve([{ id: 1, name: 'New Lead', color: '#3b82f6', position: 0 }]);
+        return Promise.resolve([{ id: 1, name: 'Lead', color: '#3b82f6', position: 0 }]);
       }
       if (url.startsWith('/api/ai_scoring/score/')) {
         return Promise.reject(new Error('AI predictor offline'));
@@ -696,8 +733,8 @@ describe('Pipeline mobile touch drag (C4 / FR-3.16)', () => {
       if (url.startsWith('/api/contacts')) return Promise.resolve([]);
       if (url.startsWith('/api/pipeline_stages')) {
         return Promise.resolve([
-          { id: 1, name: 'New Lead', color: '#3b82f6', position: 0 },
-          { id: 2, name: 'Closed Won', color: '#10b981', position: 1 },
+          { id: 1, name: 'Lead', color: '#3b82f6', position: 0 },
+          { id: 2, name: 'Won', color: '#10b981', position: 1 },
         ]);
       }
       return Promise.resolve([]);
@@ -735,7 +772,7 @@ describe('Pipeline keyboard a11y (C4 / FR-3.17)', () => {
   beforeEach(() => {
     mockApi({
       stages: [
-        { id: 1, name: 'New Lead', color: '#3b82f6', position: 0 },
+        { id: 1, name: 'Lead', color: '#3b82f6', position: 0 },
         { id: 2, name: 'Contacted', color: '#f59e0b', position: 1 },
         { id: 3, name: 'Closed Won', color: '#10b981', position: 2 },
       ],
@@ -757,7 +794,7 @@ describe('Pipeline keyboard a11y (C4 / FR-3.17)', () => {
     expect(card).toBeTruthy();
     expect(card.getAttribute('tabindex')).toBe('0');
     expect(card.getAttribute('aria-label')).toMatch(/Card One/);
-    expect(card.getAttribute('aria-label')).toMatch(/stage New Lead/);
+    expect(card.getAttribute('aria-label')).toMatch(/stage Lead/);
     expect(card.getAttribute('aria-label')).toMatch(/25%/);
   });
 
@@ -805,7 +842,7 @@ describe('Pipeline keyboard a11y (C4 / FR-3.17)', () => {
       if (url.startsWith('/api/contacts')) return Promise.resolve([]);
       if (url.startsWith('/api/pipeline_stages')) {
         return Promise.resolve([
-          { id: 1, name: 'New Lead', color: '#3b82f6', position: 0 },
+          { id: 1, name: 'Lead', color: '#3b82f6', position: 0 },
           { id: 2, name: 'Contacted', color: '#f59e0b', position: 1 },
         ]);
       }
@@ -897,7 +934,7 @@ describe('Pipeline virtualization (C4 / FR-3.18)', () => {
 
   it('column with >100 cards renders only a windowed slice in the DOM, not all 200', async () => {
     mockApi({
-      stages: [{ id: 1, name: 'New Lead', color: '#3b82f6', position: 0 }],
+      stages: [{ id: 1, name: 'Lead', color: '#3b82f6', position: 0 }],
       deals: buildBigDealList(),
     });
 
@@ -920,7 +957,7 @@ describe('Pipeline virtualization (C4 / FR-3.18)', () => {
 
   it('scrolling the column triggers a re-render of a different card window', async () => {
     mockApi({
-      stages: [{ id: 1, name: 'New Lead', color: '#3b82f6', position: 0 }],
+      stages: [{ id: 1, name: 'Lead', color: '#3b82f6', position: 0 }],
       deals: buildBigDealList(),
     });
 
@@ -950,7 +987,7 @@ describe('Pipeline virtualization (C4 / FR-3.18)', () => {
 
   it('count badge shows real total (200), not the rendered/windowed count', async () => {
     mockApi({
-      stages: [{ id: 1, name: 'New Lead', color: '#3b82f6', position: 0 }],
+      stages: [{ id: 1, name: 'Lead', color: '#3b82f6', position: 0 }],
       deals: buildBigDealList(),
     });
 
@@ -999,7 +1036,7 @@ describe('Pipeline column totals reflect filtered set (G016 / FR-3.14)', () => {
       if (url.startsWith('/api/contacts')) return Promise.resolve([]);
       if (url.startsWith('/api/pipeline_stages')) {
         return Promise.resolve([
-          { id: 1, name: 'New Lead', color: '#3b82f6', position: 0 },
+          { id: 1, name: 'Lead', color: '#3b82f6', position: 0 },
         ]);
       }
       return Promise.resolve([]);
@@ -1064,7 +1101,7 @@ describe('Pipeline reduced-motion (C4)', () => {
     }));
 
     mockApi({
-      stages: [{ id: 1, name: 'New Lead', color: '#3b82f6', position: 0 }],
+      stages: [{ id: 1, name: 'Lead', color: '#3b82f6', position: 0 }],
       deals: [
         { id: 1101, title: 'Reduced Motion Card', amount: 1000, probability: 25, stage: 'lead' },
       ],

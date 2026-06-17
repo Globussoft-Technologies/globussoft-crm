@@ -114,6 +114,13 @@ prisma.auditLog = {
 prisma.fieldPermission = {
   findMany: vi.fn().mockResolvedValue([]),
 };
+// validateDealInput queries this to derive the tenant's allowed stage slugs.
+// Empty list = only the LEGACY_DEAL_STAGES backstop applies, which preserves
+// the historical generic-CRM enum (lead/contacted/proposal/negotiation/won/lost)
+// for these unit tests.
+prisma.pipelineStage = {
+  findMany: vi.fn().mockResolvedValue([]),
+};
 
 import express from 'express';
 import request from 'supertest';
@@ -142,6 +149,8 @@ beforeEach(() => {
   prisma.auditLog.create.mockReset();
   prisma.fieldPermission.findMany.mockReset();
   prisma.fieldPermission.findMany.mockResolvedValue([]);
+  prisma.pipelineStage.findMany.mockReset();
+  prisma.pipelineStage.findMany.mockResolvedValue([]);
   // Sensible defaults — happy-path resolves.
   prisma.auditLog.findFirst.mockResolvedValue(null);
   prisma.auditLog.create.mockResolvedValue({ id: 1 });
@@ -264,6 +273,33 @@ describe('POST /api/deals — create (#162 #168 #173 validation)', () => {
     expect(res.status).toBe(400);
     expect(res.body.code).toBe('INVALID_STAGE');
     expect(prisma.deal.create).not.toHaveBeenCalled();
+  });
+
+  // Travel-vertical tenants seed an 8-stage taxonomy (New, Diagnostic
+  // Complete, Qualifying, Quoted, Negotiating, Won, Lost, Dormant). The
+  // validator must accept those slugs when the tenant's PipelineStage rows
+  // include them, even though they aren't part of LEGACY_DEAL_STAGES.
+  test('travel-tenant stage slug → accepted when tenant seeded it', async () => {
+    prisma.pipelineStage.findMany.mockResolvedValueOnce([
+      { name: 'New' },
+      { name: 'Diagnostic Complete' },
+      { name: 'Qualifying' },
+      { name: 'Quoted' },
+      { name: 'Negotiating' },
+      { name: 'Won' },
+      { name: 'Lost' },
+      { name: 'Dormant' },
+    ]);
+    prisma.deal.create.mockResolvedValue({
+      id: 42, title: 'Umrah package', stage: 'qualifying', amount: 0, currency: 'INR',
+    });
+    const app = makeApp();
+    const res = await request(app)
+      .post('/api/deals')
+      .send({ title: 'Umrah package', stage: 'qualifying' });
+    expect(res.status).toBe(201);
+    expect(prisma.deal.create).toHaveBeenCalledOnce();
+    expect(prisma.deal.create.mock.calls[0][0].data.stage).toBe('qualifying');
   });
 
   test('negative amount → 400 INVALID_AMOUNT (#162)', async () => {

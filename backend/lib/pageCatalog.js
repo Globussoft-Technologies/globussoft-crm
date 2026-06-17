@@ -169,6 +169,12 @@ const PAGE_CATALOG = [
     label: 'E-Signatures',
     description: 'Consent forms awaiting signature',
     category: 'Clinical',
+    // Path doesn't start with `/wellness/`, so the path-prefix
+    // filter in getCatalogForVertical would let this leak into the
+    // travel + generic catalogs. Explicit `vertical: 'wellness'`
+    // tag keeps it confined to wellness — the page renders a
+    // consent-signature queue tied to the wellness clinical flow.
+    vertical: 'wellness',
     requiredPermissions: [{ module: 'consents', action: 'read' }],
   },
   {
@@ -1052,13 +1058,40 @@ function isKnownPage(path) {
  * Multi-permission pages: an entry with multiple {module, action} items
  * requires the user to have ALL of them (AND semantics via .every()).
  *
+ * Vertical filtering (added 2026-06-17): when `opts.vertical` is
+ * supplied, the entries are first filtered through the same
+ * vertical-aware rules getCatalogForVertical uses (explicit
+ * `vertical:` tag → path-prefix → cross-vertical fallback). This
+ * prevents wellness pages from leaking into the Travel Edit-role
+ * landing-page dropdown when a role happens to hold a wellness
+ * permission (e.g. a legacy or migrated grant). When `opts.vertical`
+ * is omitted the behavior is unchanged — back-compat for callers
+ * that don't need vertical scoping.
+ *
  * @param {Set<string>} permissionSet
- * @param {{ isOwner?: boolean }} [opts]
+ * @param {{ isOwner?: boolean, vertical?: string|null }} [opts]
  */
 function getAccessiblePages(permissionSet, opts = {}) {
-  if (opts.isOwner) return getCatalog(); // OWNER sees everything
+  // Vertical-aware base pool. When no vertical is supplied, use the
+  // full catalog (back-compat).
+  const basePool = opts.vertical
+    ? PAGE_CATALOG.filter((p) => {
+        if (p.vertical) return p.vertical === opts.vertical;
+        const isWellness = p.path === '/wellness' || p.path.startsWith('/wellness/');
+        if (isWellness) return opts.vertical === 'wellness';
+        const isTravel = p.path === '/travel' || p.path.startsWith('/travel/');
+        if (isTravel) return opts.vertical === 'travel';
+        return true;
+      })
+    : PAGE_CATALOG;
+  if (opts.isOwner) {
+    return basePool.map((p) => ({
+      ...p,
+      requiredPermissions: p.requiredPermissions.map((perm) => ({ ...perm })),
+    }));
+  }
   if (!(permissionSet instanceof Set)) return [];
-  return PAGE_CATALOG.filter((p) => {
+  return basePool.filter((p) => {
     if (p.requiredPermissions.length === 0) return true;
     return p.requiredPermissions.every(
       ({ module, action }) => permissionSet.has(`${module}.${action}`),

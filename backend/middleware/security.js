@@ -1,5 +1,5 @@
-const helmet = require('helmet');
-const { attachNonce } = require('../lib/cspNonce');
+const helmet = require("helmet");
+const { attachNonce } = require("../lib/cspNonce");
 
 // 1. Helmet with CRM-appropriate config — closes #186 (missing security headers)
 // and #342 (regression: headers not firing in production) and #654 (CSP enabled,
@@ -57,27 +57,27 @@ const helmetMiddleware = helmet({
       // 'unsafe-inline' on script-src is a TRANSITIONAL allowance.
       // Follow-up issue: migrate legacy inline event handlers to attached
       // listeners + emit a nonce per request, then drop 'unsafe-inline'.
-      scriptSrc: ["'self'", "'unsafe-inline'", 'https://cdn.jsdelivr.net'],
+      scriptSrc: ["'self'", "'unsafe-inline'", "https://cdn.jsdelivr.net"],
       // 'unsafe-inline' on style-src is REQUIRED today because Vite/React
       // emit inline style attributes (style={{}}). Hash-based or nonce-based
       // tightening requires a build-step change.
-      styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
+      styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
       // data: + https: img sources — covers QR codes (data:image/png) +
       // any CDN-hosted asset. blob: needed for client-rendered PDF previews.
-      imgSrc: ["'self'", 'data:', 'blob:', 'https:'],
+      imgSrc: ["'self'", "data:", "blob:", "https:"],
       // connectSrc: the SPA hits its own /api + a small set of third-party
       // providers (SendGrid, Razorpay, Stripe checkout). wss: needed for the
       // Socket.io upgrade. *.sentry.io for Sentry browser SDK.
       connectSrc: [
         "'self'",
-        'https://api.sendgrid.com',
-        'https://api.razorpay.com',
-        'https://checkout.razorpay.com',
-        'https://api.stripe.com',
-        'https://*.sentry.io',
-        'wss:',
+        "https://api.sendgrid.com",
+        "https://api.razorpay.com",
+        "https://checkout.razorpay.com",
+        "https://api.stripe.com",
+        "https://*.sentry.io",
+        "wss:",
       ],
-      fontSrc: ["'self'", 'data:', 'https://fonts.gstatic.com'],
+      fontSrc: ["'self'", "data:", "https://fonts.gstatic.com"],
       // object-src 'none' kills <object> / <embed> / Flash. Strict.
       objectSrc: ["'none'"],
       // form-action: limit the destination of <form action=> POSTs to self —
@@ -103,7 +103,7 @@ const helmetMiddleware = helmet({
     },
   },
   crossOriginEmbedderPolicy: false,
-  crossOriginResourcePolicy: { policy: 'cross-origin' },
+  crossOriginResourcePolicy: { policy: "cross-origin" },
   // 1-year HSTS, conservative — no preload until we're sure every subdomain
   // is HTTPS-ready. includeSubDomains so *.globusdemos.com inherits.
   hsts: { maxAge: 31536000, includeSubDomains: true, preload: false },
@@ -115,10 +115,10 @@ const helmetMiddleware = helmet({
   // The embed widget at /embed/lead-form.html overrides this per-route
   // via the `allowIframeEmbedding()` middleware so it remains framable
   // by partner sites that legitimately host the lead-capture widget.
-  xFrameOptions: { action: 'deny' },
+  xFrameOptions: { action: "deny" },
   // Pinned explicitly so future helmet upgrades can't silently drop them.
   xContentTypeOptions: true,
-  referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
+  referrerPolicy: { policy: "strict-origin-when-cross-origin" },
 });
 
 // 1a-strict. #917 slice 1 — additive STRICT Content-Security-Policy in
@@ -176,8 +176,10 @@ const helmetMiddleware = helmet({
 // Helmet supports function directives of the shape `(req, res) => string`,
 // invoked per-request. We use that to splice the nonce off res.locals which
 // `attachNonce` populates upstream.
-const nonceScriptSrc = (req, res) => `'nonce-${res.locals && res.locals.cspNonce ? res.locals.cspNonce : ''}'`;
-const nonceStyleSrc = (req, res) => `'nonce-${res.locals && res.locals.cspNonce ? res.locals.cspNonce : ''}'`;
+const nonceScriptSrc = (req, res) =>
+  `'nonce-${res.locals && res.locals.cspNonce ? res.locals.cspNonce : ""}'`;
+const nonceStyleSrc = (req, res) =>
+  `'nonce-${res.locals && res.locals.cspNonce ? res.locals.cspNonce : ""}'`;
 
 // S117 — env-gated CSP enforce-mode flip. The directive map below is
 // identical across the two helmet factories (`reportOnly: true` vs
@@ -190,7 +192,7 @@ const nonceStyleSrc = (req, res) => `'nonce-${res.locals && res.locals.cspNonce 
 // Flip:    CSP_ENFORCE=1 / CSP_ENFORCE='true' → ships Content-Security-Policy.
 function isCspEnforceEnabled() {
   const v = process.env.CSP_ENFORCE;
-  return v === '1' || v === 'true';
+  return v === "1" || v === "true";
 }
 
 function buildStrictCspHelmet(reportOnly) {
@@ -207,19 +209,19 @@ function buildStrictCspHelmet(reportOnly) {
         // directive — the only inline scripts/styles the browser will allow
         // (when enforce-mode flips) are ones explicitly carrying the matching
         // nonce attribute set by the HTML template substitution layer.
-        scriptSrc: ["'self'", 'https://cdn.jsdelivr.net', nonceScriptSrc],
-        styleSrc: ["'self'", 'https://fonts.googleapis.com', nonceStyleSrc],
-        imgSrc: ["'self'", 'data:', 'blob:', 'https:'],
+        scriptSrc: ["'self'", "https://cdn.jsdelivr.net", nonceScriptSrc],
+        styleSrc: ["'self'", "https://fonts.googleapis.com", nonceStyleSrc],
+        imgSrc: ["'self'", "data:", "blob:", "https:"],
         connectSrc: [
           "'self'",
-          'https://api.sendgrid.com',
-          'https://api.razorpay.com',
-          'https://checkout.razorpay.com',
-          'https://api.stripe.com',
-          'https://*.sentry.io',
-          'wss:',
+          "https://api.sendgrid.com",
+          "https://api.razorpay.com",
+          "https://checkout.razorpay.com",
+          "https://api.stripe.com",
+          "https://*.sentry.io",
+          "wss:",
         ],
-        fontSrc: ["'self'", 'data:', 'https://fonts.gstatic.com'],
+        fontSrc: ["'self'", "data:", "https://fonts.gstatic.com"],
         objectSrc: ["'none'"],
         formAction: ["'self'"],
         // Strict 'none' here (vs 'self' in transitional) — clickjacking defense
@@ -269,7 +271,9 @@ const strictCspEnforceHelmet = buildStrictCspHelmet(false);
 // Vitest can toggle CSP_ENFORCE between cases via beforeEach/afterEach
 // and see the header name swap as expected.
 function helmetStrictReportOnlyMiddleware(req, res, next) {
-  const mw = isCspEnforceEnabled() ? strictCspEnforceHelmet : strictCspReportOnlyHelmet;
+  const mw = isCspEnforceEnabled()
+    ? strictCspEnforceHelmet
+    : strictCspReportOnlyHelmet;
   return mw(req, res, next);
 }
 
@@ -280,8 +284,8 @@ function helmetStrictReportOnlyMiddleware(req, res, next) {
 // want city auto-fill). interest-cohort=() opts out of FLoC/Topics tracking.
 function permissionsPolicyMiddleware(req, res, next) {
   res.setHeader(
-    'Permissions-Policy',
-    'camera=(), microphone=(), geolocation=(self), interest-cohort=()'
+    "Permissions-Policy",
+    "camera=(), microphone=(), geolocation=(self), interest-cohort=()",
   );
   next();
 }
@@ -299,14 +303,16 @@ function permissionsPolicyMiddleware(req, res, next) {
 // attributes (`onclick=`, `onerror=`, `onload=`, …) so a payload like
 // `<img onerror=alert(1)>` doesn't survive in any sink that ever uses
 // dangerouslySetInnerHTML (PDFs, SMS templates, email HTML, OG cards).
-const DANGEROUS_TAG_RE = /<\/?(script|iframe|object|embed|style|link|meta|form|svg|img|video|audio|source|applet|base|input|textarea)\b[^>]*>/gi;
+const DANGEROUS_TAG_RE =
+  /<\/?(script|iframe|object|embed|style|link|meta|form|svg|img|video|audio|source|applet|base|input|textarea)\b[^>]*>/gi;
 // `javascript:` URLs in href/src; `data:` URLs that carry HTML/JS too
-const DANGEROUS_URL_RE = /\b(href|src|action|formaction|xlink:href)\s*=\s*(["']?)\s*(javascript|data|vbscript):[^"'>\s]*\2/gi;
+const DANGEROUS_URL_RE =
+  /\b(href|src|action|formaction|xlink:href)\s*=\s*(["']?)\s*(javascript|data|vbscript):[^"'>\s]*\2/gi;
 // Inline event handlers: onclick=…, onerror=…, onload=…, onmouseover=…
 const EVENT_HANDLER_RE = /\son\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi;
 
 function sanitizeBody(req, res, next) {
-  if (req.body && typeof req.body === 'object') {
+  if (req.body && typeof req.body === "object") {
     sanitizeObject(req.body);
   }
   next();
@@ -314,15 +320,19 @@ function sanitizeBody(req, res, next) {
 
 function sanitizeObject(obj) {
   for (const key of Object.keys(obj)) {
-    if (typeof obj[key] === 'string') {
+    if (typeof obj[key] === "string") {
       // Strip dangerous tags + event handlers + javascript: URLs, but preserve
       // raw text (incl. ampersands and angle-bracket tokens like "<budget>")
       // verbatim.
       obj[key] = obj[key]
-        .replace(DANGEROUS_TAG_RE, '')
-        .replace(DANGEROUS_URL_RE, '')
-        .replace(EVENT_HANDLER_RE, '');
-    } else if (typeof obj[key] === 'object' && obj[key] !== null && !Array.isArray(obj[key])) {
+        .replace(DANGEROUS_TAG_RE, "")
+        .replace(DANGEROUS_URL_RE, "")
+        .replace(EVENT_HANDLER_RE, "");
+    } else if (
+      typeof obj[key] === "object" &&
+      obj[key] !== null &&
+      !Array.isArray(obj[key])
+    ) {
       sanitizeObject(obj[key]);
     }
   }
@@ -342,27 +352,38 @@ function stripTenantOverride(req, res, next) {
   req.strippedFields = req.strippedFields || {};
 
   // Skip stripping for public endpoints that need tenantId
-  const shouldSkip = req.path.includes('/customer/register');
+  const shouldSkip = req.path.includes("/customer/register");
 
   // Debug logging
-  if (req.path.includes('/customer/register')) {
-    console.log('[stripTenantOverride] Path:', req.path, 'shouldSkip:', shouldSkip, 'tenantId in body:', 'tenantId' in (req.body || {}), 'tenantId value:', req.body?.tenantId);
+  if (req.path.includes("/customer/register")) {
+    console.log(
+      "[stripTenantOverride] Path:",
+      req.path,
+      "shouldSkip:",
+      shouldSkip,
+      "tenantId in body:",
+      "tenantId" in (req.body || {}),
+      "tenantId value:",
+      req.body?.tenantId,
+    );
   }
 
-  if (req.body && typeof req.body === 'object') {
+  if (req.body && typeof req.body === "object") {
     if (!shouldSkip) {
-      if ('tenantId' in req.body) {
+      if ("tenantId" in req.body) {
         req.strippedFields.tenantId = req.body.tenantId;
         delete req.body.tenantId; // routes add tenantId from req.user.tenantId, never from input
       }
-      if ('userId' in req.body) {
+      if ("userId" in req.body) {
         req.strippedFields.userId = req.body.userId;
         delete req.body.userId; // same protection
       }
     } else {
       // Debug: show we're skipping
-      if (req.path.includes('/customer/register')) {
-        console.log('[stripTenantOverride] SKIPPING deletion for customer/register - tenantId should remain');
+      if (req.path.includes("/customer/register")) {
+        console.log(
+          "[stripTenantOverride] SKIPPING deletion for customer/register - tenantId should remain",
+        );
       }
     }
   }
@@ -405,34 +426,42 @@ function allowIframeEmbedding({ allowList } = {}) {
   return function iframeEmbedOverride(req, res, next) {
     // Drop the global DENY — its presence overrides any frame-ancestors
     // value in older browsers.
-    if (typeof res.removeHeader === 'function') {
-      res.removeHeader('X-Frame-Options');
+    if (typeof res.removeHeader === "function") {
+      res.removeHeader("X-Frame-Options");
     }
     // Build the frame-ancestors source list. Wildcard '*' is preserved
     // verbatim; explicit origins are joined space-separated per CSP spec.
-    const list = Array.isArray(allowList) && allowList.length ? allowList : ['*'];
-    const ancestorList = list.join(' ');
+    const list =
+      Array.isArray(allowList) && allowList.length ? allowList : ["*"];
+    const ancestorList = list.join(" ");
 
     // Splice frame-ancestors into the existing CSP header without
     // discarding the other directives (script-src, style-src, etc.
     // that the SPA bootstrap still needs). Helmet has already set the
     // Content-Security-Policy header by the time this runs.
-    const currentCsp = (typeof res.getHeader === 'function' && res.getHeader('Content-Security-Policy')) || '';
+    const currentCsp =
+      (typeof res.getHeader === "function" &&
+        res.getHeader("Content-Security-Policy")) ||
+      "";
     if (currentCsp) {
       const updated = String(currentCsp).replace(
         /frame-ancestors[^;]*/i,
-        `frame-ancestors ${ancestorList}`
+        `frame-ancestors ${ancestorList}`,
       );
       // If the directive wasn't present (shouldn't happen with current
       // helmetMiddleware config, but be defensive), append it.
-      const finalCsp = updated === String(currentCsp)
-        ? `${updated}; frame-ancestors ${ancestorList}`
-        : updated;
-      if (typeof res.setHeader === 'function') {
-        res.setHeader('Content-Security-Policy', finalCsp);
+      const finalCsp =
+        updated === String(currentCsp)
+          ? `${updated}; frame-ancestors ${ancestorList}`
+          : updated;
+      if (typeof res.setHeader === "function") {
+        res.setHeader("Content-Security-Policy", finalCsp);
       }
-    } else if (typeof res.setHeader === 'function') {
-      res.setHeader('Content-Security-Policy', `frame-ancestors ${ancestorList}`);
+    } else if (typeof res.setHeader === "function") {
+      res.setHeader(
+        "Content-Security-Policy",
+        `frame-ancestors ${ancestorList}`,
+      );
     }
     next();
   };
@@ -459,7 +488,7 @@ async function readTenantEmbedAllowlist(prisma, tenantId) {
     const parsed = JSON.parse(tenant.embedAllowlistJson);
     return Array.isArray(parsed) ? parsed : null;
   } catch (err) {
-    console.warn('[readTenantEmbedAllowlist] failed:', err.message);
+    console.warn("[readTenantEmbedAllowlist] failed:", err.message);
     return null;
   }
 }

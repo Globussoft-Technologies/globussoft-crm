@@ -49,6 +49,9 @@ authMw.verifyToken = (_req, _res, next) => next();
 // — that would force a fresh module load that wouldn't carry the patch.
 const permMw = requireCJS('../../middleware/requirePermission');
 permMw.requirePermission = () => (_req, _res, next) => next();
+// The OR-gate added for the Settings Role Recovery surface is wired
+// into 4 endpoints; bypass it in tests the same way as requirePermission.
+permMw.requireAnyPermission = () => (_req, _res, next) => next();
 permMw.clearUserCache = vi.fn();
 permMw.clearTenantCache = vi.fn();
 
@@ -88,6 +91,12 @@ prisma.userRole = {
   delete: vi.fn(),
   findUnique: vi.fn(),
   deleteMany: vi.fn(),
+};
+// Required by the DELETE per-perm lockout-parity tests added below —
+// the lockout guard pulls active users from this model.
+prisma.user = {
+  findMany: vi.fn(),
+  findUnique: vi.fn(),
 };
 prisma.$transaction = vi.fn(async (fn) => fn(prisma));
 
@@ -359,5 +368,263 @@ describe('Bug 4 — POST /api/roles/:id/permissions vertical validation', () => 
       .post('/api/roles/9/permissions')
       .send({ module: 'contacts', action: 'read' });
     expect(res.status).toBe(201);
+  });
+});
+
+// ─────────── Lockout-prevention parity on DELETE per-perm ───────────
+//
+// The pre-fix DELETE /api/roles/:id/permissions/:module/:action handler
+// deleted the RolePermission row directly with no checkLockout call —
+// a scripted client could fire
+//   DELETE /api/roles/<adminRoleId>/permissions/roles/read
+// and bypass the lockout guard entirely. This is the actual path the
+// tester reached on tenant 11. The fix wires the same invariant the
+// bulk PUT save runs (simulateAdminCount + checkLockout) into this
+// endpoint. These tests pin the contract.
+
+describe('Lockout parity — DELETE /api/roles/:id/permissions/:module/:action', () => {
+  // Reuse the prisma + lockout-guard mocks already set up at the top
+  // of this file. simulateAdminCount is invoked by the route through
+  // the lib, not stubbed here; we instead control the world by
+  // stubbing prisma.user.findMany (the guard's only data dependency).
+  // The behavior we're pinning is "endpoint calls the guard and
+  // respects its verdict", not "guard's internal math is right" —
+  // the guard's math has its own test file (test/lib/rbacLockoutGuard.test.js).
+
+  beforeEach(() => {
+    // Default user set: one active admin who holds critical perms ONLY
+    // through role 5 (so removing roles.read from role 5 wipes the
+    // last critical-perm holder).
+    prisma.user.findMany.mockResolvedValue([
+      {
+        id: 7,
+        deactivatedAt: null,
+        userRoles: [
+          {
+            roleId: 5,
+            role: {
+              id: 5,
+              isActive: true,
+              permissions: [
+                { module: 'roles', action: 'read' },
+                { module: 'roles', action: 'manage' },
+                { module: 'contacts', action: 'read' },
+              ],
+            },
+          },
+        ],
+      },
+    ]);
+  });
+
+  test('removing roles.read from the sole RBAC-admin role → 409 LOCKOUT_PREVENTED', async () => {
+    prisma.role.findUnique.mockResolvedValue({
+      id: 5,
+      key: 'ADMIN',
+      tenantId: 11,
+      isSystem: true,
+    });
+    prisma.rolePermission.findUnique.mockResolvedValue({
+      id: 999,
+      roleId: 5,
+      module: 'roles',
+      action: 'read',
+    });
+    // Simulate the role currently holding all 3 perms; the route
+    // computes "post-delete" as a filter over this list.
+    prisma.rolePermission.findMany.mockResolvedValue([
+      { module: 'roles', action: 'read' },
+      { module: 'roles', action: 'manage' },
+      { module: 'contacts', action: 'read' },
+    ]);
+
+    const res = await request(makeApp())
+      .delete('/api/roles/5/permissions/roles/read');
+
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe(
+      'This change would remove RBAC administration access from all active users.',
+    );
+    expect(res.body.code).toBe('LOCKOUT_PREVENTED');
+    expect(res.body.criticalPermissions).toEqual(['roles.read', 'roles.manage']);
+    expect(res.body.qualifyingUserCount).toBe(0);
+    // Critically: the row was NOT deleted.
+    expect(prisma.rolePermission.delete).not.toHaveBeenCalled();
+  });
+
+  test('removing a non-critical perm → succeeds (no false positive)', async () => {
+    prisma.role.findUnique.mockResolvedValue({
+      id: 5,
+      key: 'ADMIN',
+      tenantId: 11,
+      isSystem: true,
+    });
+    prisma.rolePermission.findUnique.mockResolvedValue({
+      id: 998,
+      roleId: 5,
+      module: 'contacts',
+      action: 'read',
+    });
+    prisma.rolePermission.findMany.mockResolvedValue([
+      { module: 'roles', action: 'read' },
+      { module: 'roles', action: 'manage' },
+      { module: 'contacts', action: 'read' },
+    ]);
+    prisma.rolePermission.delete.mockResolvedValue({ id: 998 });
+
+    const res = await request(makeApp())
+      .delete('/api/roles/5/permissions/contacts/read');
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(prisma.rolePermission.delete).toHaveBeenCalledTimes(1);
+  });
+
+  test('removing roles.read when a second user retains critical perms → allowed', async () => {
+    // Two users: one on the role being edited, one on a different
+    // role that already carries critical perms. Stripping role 5 of
+    // roles.read leaves user 8 still qualifying → guard passes.
+    prisma.user.findMany.mockResolvedValueOnce([
+      {
+        id: 7,
+        deactivatedAt: null,
+        userRoles: [
+          {
+            roleId: 5,
+            role: {
+              id: 5,
+              isActive: true,
+              permissions: [
+                { module: 'roles', action: 'read' },
+                { module: 'roles', action: 'manage' },
+              ],
+            },
+          },
+        ],
+      },
+      {
+        id: 8,
+        deactivatedAt: null,
+        userRoles: [
+          {
+            roleId: 6,
+            role: {
+              id: 6,
+              isActive: true,
+              permissions: [
+                { module: 'roles', action: 'read' },
+                { module: 'roles', action: 'manage' },
+              ],
+            },
+          },
+        ],
+      },
+    ]);
+    prisma.role.findUnique.mockResolvedValue({
+      id: 5,
+      key: 'ADMIN',
+      tenantId: 11,
+      isSystem: true,
+    });
+    prisma.rolePermission.findUnique.mockResolvedValue({
+      id: 997,
+      roleId: 5,
+      module: 'roles',
+      action: 'read',
+    });
+    prisma.rolePermission.findMany.mockResolvedValue([
+      { module: 'roles', action: 'read' },
+      { module: 'roles', action: 'manage' },
+    ]);
+    prisma.rolePermission.delete.mockResolvedValue({ id: 997 });
+
+    const res = await request(makeApp())
+      .delete('/api/roles/5/permissions/roles/read');
+
+    expect(res.status).toBe(200);
+    expect(prisma.rolePermission.delete).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ─────────── /accessible-pages vertical filter ────────────
+//
+// GET /api/roles/:id/accessible-pages drives the Edit-role
+// landing-page dropdown. Pre-fix it called
+// getAccessiblePages(perms, { isOwner: false }) — permission-only
+// filter, no vertical scoping. A role with consents.read on a travel
+// tenant would surface /signatures (the wellness E-Signatures queue)
+// in the dropdown.
+//
+// Post-fix the route looks up the role's tenant.vertical via
+// getTenantVertical() and passes it into getAccessiblePages so the
+// returned pages are filtered by vertical AND by permissions —
+// matching the vertical filter the Create-role dropdown gets via
+// GET /api/pages/catalog.
+
+describe('GET /api/roles/:id/accessible-pages — vertical filter', () => {
+  test('travel tenant: response excludes /signatures even when role holds consents.read', async () => {
+    prisma.role.findUnique.mockResolvedValue({
+      id: 9,
+      key: 'CUSTOM',
+      tenantId: 11,
+      isSystem: false,
+      isActive: true,
+    });
+    // Role grants consents.read — pre-fix this would have surfaced
+    // /signatures in the response. Post-fix the vertical filter strips it.
+    prisma.rolePermission.findMany.mockResolvedValue([
+      { module: 'consents', action: 'read' },
+      { module: 'itineraries', action: 'read' },
+      { module: 'contacts', action: 'read' },
+    ]);
+    prisma.tenant.findUnique.mockResolvedValue({ id: 11, vertical: 'travel' });
+
+    const res = await request(makeApp()).get('/api/roles/9/accessible-pages');
+    expect(res.status).toBe(200);
+    const paths = (res.body.pages || []).map((p) => p.path);
+    expect(paths).not.toContain('/signatures');
+    // Travel-specific page IS present because the role has its perm.
+    expect(paths).toContain('/travel/itineraries');
+  });
+
+  test('wellness tenant: /signatures appears (since vertical matches)', async () => {
+    prisma.role.findUnique.mockResolvedValue({
+      id: 9,
+      key: 'CUSTOM',
+      tenantId: 2,
+      isSystem: false,
+      isActive: true,
+    });
+    prisma.rolePermission.findMany.mockResolvedValue([
+      { module: 'consents', action: 'read' },
+    ]);
+    prisma.tenant.findUnique.mockResolvedValue({ id: 2, vertical: 'wellness' });
+
+    // makeApp's req.user.tenantId must match role.tenantId or the
+    // route's non-OWNER tenant scope check returns 403 before the
+    // handler body runs.
+    const res = await request(makeApp({ tenantId: 2 })).get('/api/roles/9/accessible-pages');
+    expect(res.status).toBe(200);
+    const paths = (res.body.pages || []).map((p) => p.path);
+    expect(paths).toContain('/signatures');
+  });
+
+  test('wellness tenant: travel pages excluded even when role holds the matching perm', async () => {
+    prisma.role.findUnique.mockResolvedValue({
+      id: 9,
+      key: 'CUSTOM',
+      tenantId: 2,
+      isSystem: false,
+      isActive: true,
+    });
+    prisma.rolePermission.findMany.mockResolvedValue([
+      { module: 'itineraries', action: 'read' },
+    ]);
+    prisma.tenant.findUnique.mockResolvedValue({ id: 2, vertical: 'wellness' });
+
+    const res = await request(makeApp({ tenantId: 2 })).get('/api/roles/9/accessible-pages');
+    expect(res.status).toBe(200);
+    const paths = (res.body.pages || []).map((p) => p.path);
+    expect(paths.some((p) => p === '/travel' || p.startsWith('/travel/'))).toBe(false);
   });
 });

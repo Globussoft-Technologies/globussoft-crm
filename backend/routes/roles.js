@@ -9,7 +9,33 @@ const express = require("express");
 const router = express.Router();
 const prisma = require("../lib/prisma");
 const { verifyToken } = require("../middleware/auth");
-const { requirePermission, clearUserCache, clearTenantCache } = require("../middleware/requirePermission");
+const { requirePermission, requireAnyPermission, clearUserCache, clearTenantCache } = require("../middleware/requirePermission");
+
+// Settings-side recovery surface: the /settings Role Recovery section
+// reuses these endpoints via the OR-gate below. Permission keys held
+// in one place so the four endpoints share a single source of truth.
+//
+// Read endpoints (GET /api/roles, version list, single version): any
+// admin who can administer tenant-wide settings OR who can read roles
+// can call them — needed so the recovery surface remains reachable
+// even if roles.read is lost.
+//
+// Restore endpoint (POST /restore): same OR, but with the write tier
+// on each side. The lockout guard inside the PUT handler runs
+// regardless, so widening the gate doesn't widen the destructive
+// surface.
+const ROLES_LIST_OR_RECOVERY = [
+  { module: "roles", action: "read" },
+  { module: "settings", action: "manage" },
+];
+const ROLES_VERSION_READ_OR_RECOVERY = [
+  { module: "roles", action: "read" },
+  { module: "settings", action: "manage" },
+];
+const ROLES_VERSION_RESTORE_OR_RECOVERY = [
+  { module: "roles", action: "manage" },
+  { module: "settings", action: "manage" },
+];
 const { clearCustomerRoleCache } = require("../lib/portalPermissions");
 const {
   isValidPermission,
@@ -136,7 +162,9 @@ async function permissionSetForRole(roleId) {
 router.get(
   "/",
   verifyToken,
-  requirePermission("roles", "read"),
+  // OR-gate so the /settings Role Recovery section can call this
+  // endpoint via settings.manage when roles.read has been lost.
+  requireAnyPermission(ROLES_LIST_OR_RECOVERY),
   async (req, res) => {
     try {
       let tenantId = req.user.tenantId;
@@ -667,6 +695,50 @@ router.delete(
 
       if (!permission) {
         return res.status(404).json({ error: "Permission not found on this role" });
+      }
+
+      // RBAC Hardening — lockout invariant on the per-perm DELETE path.
+      // Pre-fix this endpoint deleted the row directly without consulting
+      // checkLockout, so a scripted client could fire
+      //   DELETE /api/roles/<adminRoleId>/permissions/roles/read
+      // and bypass the bulk-PUT save's guard entirely (the actual
+      // tester-incident scenario on tenant 11 was reachable here).
+      // Same invariant as the PUT path: simulate the post-delete state
+      // and reject if zero active users retain critical perms. Reuses
+      // the existing simulateAdminCount/checkLockout via the same
+      // rolePermissionOverride-shape input — no new abstraction.
+      const currentRolePerms = await prisma.rolePermission.findMany({
+        where: { roleId },
+        select: { module: true, action: true },
+      });
+      const proposedPerms = currentRolePerms.filter(
+        (p) => !(p.module === module && p.action === action),
+      );
+      const lockout = await checkLockout({
+        tenantId: role.tenantId,
+        roleId,
+        proposedPermissions: proposedPerms,
+      });
+      if (lockout) {
+        // Same Phase 6 audit shape as the bulk-PUT lockout retort so the
+        // audit viewer can collate both reject paths under one query.
+        await writeAudit(
+          "Role",
+          "LOCKOUT_PREVENTED",
+          req.user.userId,
+          req.user.userId,
+          req.user.tenantId,
+          {
+            roleId,
+            roleKey: role.key,
+            attemptedPermissionCount: proposedPerms.length,
+            criticalPermissions: lockout.body.criticalPermissions,
+            qualifyingUserCount: lockout.body.qualifyingUserCount,
+            via: "per_perm_delete",
+            attemptedRemoval: `${module}.${action}`,
+          },
+        );
+        return res.status(lockout.status).json(lockout.body);
       }
 
       await prisma.rolePermission.delete({
@@ -1485,7 +1557,14 @@ router.get(
         return res.status(403).json({ error: "Access denied" });
       }
       const perms = await permissionSetForRole(roleId);
-      const pages = getAccessiblePages(perms, { isOwner: false });
+      // Pass the role's tenant vertical so wellness pages don't bleed
+      // into the Edit-role landing-page dropdown on a travel tenant
+      // (or vice-versa) when a role happens to hold a cross-vertical
+      // permission (legacy grants, migration artifacts). Matches the
+      // vertical filter used by GET /api/pages/catalog for the
+      // Create-role dropdown — both surfaces stay consistent.
+      const vertical = await getTenantVertical(role.tenantId);
+      const pages = getAccessiblePages(perms, { isOwner: false, vertical });
       res.json({ roleId, pages });
     } catch (err) {
       console.error("[roles] accessible-pages error:", err);
@@ -1503,7 +1582,9 @@ router.get(
 router.get(
   "/:id/permissions/versions",
   verifyToken,
-  requirePermission("roles", "read"),
+  // OR-gate so the /settings Role Recovery section can fetch history
+  // via settings.manage when roles.read has been lost.
+  requireAnyPermission(ROLES_VERSION_READ_OR_RECOVERY),
   async (req, res) => {
     try {
       const roleId = parseInt(req.params.id);
@@ -1540,7 +1621,8 @@ router.get(
 router.get(
   "/:id/permissions/versions/:versionId",
   verifyToken,
-  requirePermission("roles", "read"),
+  // OR-gate — same rationale as the versions list endpoint above.
+  requireAnyPermission(ROLES_VERSION_READ_OR_RECOVERY),
   async (req, res) => {
     try {
       const roleId = parseInt(req.params.id);
@@ -1582,7 +1664,11 @@ router.get(
 router.post(
   "/:id/permissions/restore",
   verifyToken,
-  requirePermission("roles", "manage"),
+  // OR-gate: roles.manage OR settings.manage. The destructive surface
+  // here is unchanged — the PUT handler this delegates to still runs
+  // checkLockout regardless, so widening the gate does not widen the
+  // attack surface.
+  requireAnyPermission(ROLES_VERSION_RESTORE_OR_RECOVERY),
   async (req, res) => {
     try {
       const roleId = parseInt(req.params.id);

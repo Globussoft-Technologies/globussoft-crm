@@ -503,3 +503,113 @@ describe('Phase 2 — CriticalPermsConfirmModal carries the restore guidance', (
     expect(hint.textContent).toMatch(/required permissions/i);
   });
 });
+
+// ─────────── Per-vertical MODULE_DESCRIPTIONS override ────────────
+//
+// The permissions matrix renders one module card per catalog entry
+// with a one-line description. Some descriptions used to leak
+// wellness-specific terminology into the travel CRM — e.g. the
+// shared `invoices` module's description read "Patient + customer
+// invoice records …" on every vertical. The fix routes every
+// description lookup through getModuleDescription(module, vertical)
+// which consults a per-vertical override map (only entries that
+// differ get overrides; everything else falls through to the base
+// description).
+//
+// These tests pin: (a) travel tenants see travel-flavoured wording,
+// (b) wellness keeps its existing wording, (c) generic falls through
+// to the neutral base.
+
+describe('Per-vertical MODULE_DESCRIPTIONS overrides', () => {
+  const INVOICES_CATALOG = {
+    catalog: {
+      invoices: ['read', 'write'],
+      contacts: ['read'],
+    },
+    modules: [
+      { module: 'invoices', actions: ['read', 'write'] },
+      { module: 'contacts', actions: ['read'] },
+    ],
+    domains: [
+      { domain: 'Financial', modules: [{ module: 'invoices', actions: ['read', 'write'] }] },
+      { domain: 'CRM Core',  modules: [{ module: 'contacts', actions: ['read'] }] },
+    ],
+    vertical: 'travel',
+  };
+  const ROLE_FIXTURE = {
+    id: 100,
+    key: 'CUSTOM',
+    name: 'Custom',
+    description: 'A role',
+    isSystem: false,
+    isActive: true,
+    userType: 'STAFF',
+    landingPath: null,
+    userCount: 0,
+    permissionCount: 0,
+    visiblePermissionCount: 0,
+    hiddenPermissionCount: 0,
+    permissions: [],
+  };
+
+  function renderWithVertical(vertical) {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/roles' && (!opts || !opts.method || opts.method === 'GET')) {
+        return Promise.resolve({ roles: [ROLE_FIXTURE], tenantId: 11 });
+      }
+      if (url === '/api/roles/catalog') {
+        return Promise.resolve({ ...INVOICES_CATALOG, vertical });
+      }
+      if (url === '/api/pages/catalog') return Promise.resolve({ catalog: [] });
+      return Promise.resolve({});
+    });
+    return render(
+      <AuthContext.Provider
+        value={{
+          user: { id: 1, role: 'ADMIN', userType: 'STAFF', email: 'admin@x' },
+          tenant: { vertical },
+          token: 'tok',
+          loading: false,
+        }}
+      >
+        <MemoryRouter>
+          <RolesAdmin />
+        </MemoryRouter>
+      </AuthContext.Provider>,
+    );
+  }
+
+  it('travel tenant shows travel-flavoured invoices description (no "Patient")', async () => {
+    renderWithVertical('travel');
+    fireEvent.click(await screen.findByRole('button', { name: /View permissions for Custom/i }));
+    await screen.findByText(/Permissions: Custom/i);
+    // The matrix renders the description as the text underneath the
+    // module name. Find it by partial match.
+    expect(
+      await screen.findByText(/Customer \+ traveler invoice records/i),
+    ).toBeTruthy();
+    expect(screen.queryByText(/Patient \+ customer/i)).toBeNull();
+  });
+
+  it('wellness tenant keeps its existing wellness-flavoured invoices description', async () => {
+    renderWithVertical('wellness');
+    fireEvent.click(await screen.findByRole('button', { name: /View permissions for Custom/i }));
+    await screen.findByText(/Permissions: Custom/i);
+    expect(
+      await screen.findByText(/Patient \+ customer invoice records/i),
+    ).toBeTruthy();
+    expect(screen.queryByText(/Customer \+ traveler/i)).toBeNull();
+  });
+
+  it('generic tenant falls through to the neutral base description', async () => {
+    renderWithVertical('generic');
+    fireEvent.click(await screen.findByRole('button', { name: /View permissions for Custom/i }));
+    await screen.findByText(/Permissions: Custom/i);
+    // Neutral base — no "Patient", no "traveler", just "Customer invoice records …"
+    expect(
+      await screen.findByText(/^Customer invoice records and the Invoices page\.$/i),
+    ).toBeTruthy();
+    expect(screen.queryByText(/Patient/i)).toBeNull();
+    expect(screen.queryByText(/traveler/i)).toBeNull();
+  });
+});

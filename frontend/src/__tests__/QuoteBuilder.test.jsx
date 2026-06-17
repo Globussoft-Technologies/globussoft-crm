@@ -28,7 +28,7 @@
  *
  * Scope — pins the page-surface invariants for the line-items builder:
  *
- *   1. Page chrome: heading "Quote Builder" + header fields (Contact ID,
+ *   1. Page chrome: heading "Quote Builder" + header fields (Customer,
  *      Currency, Sub-brand, Valid Until) + action cluster (Save Draft /
  *      Send / Duplicate / Download PDF).
  *   2. NEW mode (no :id route param): empty items array, "Save Draft" CTA
@@ -150,6 +150,19 @@ function defaultFetchHandler(url, opts) {
       id: 42, contactId: 5001, status: 'Draft', currency: 'INR', subBrand: 'tmc',
     });
   }
+  // R-15 contact picker — Quote Builder mirrors InvoicesAdmin's customer
+  // dropdown. Default: a small list covering the EDIT-mode + new-customer
+  // selection scenarios used across these tests.
+  if (url.startsWith('/api/contacts?fields=summary')) {
+    return Promise.resolve([
+      { id: 5050, name: 'Ahmed Khan', email: 'ahmed@example.com' },
+      { id: 5051, name: 'Bharat Pilgrim', email: 'bharat@example.com' },
+      { id: 5052, name: 'Cantonment School', email: 'school@example.com' },
+    ]);
+  }
+  if (url.match(/^\/api\/contacts\/\d+$/) && method === 'GET') {
+    return Promise.resolve({ id: 5050, name: 'Ahmed Khan', email: 'ahmed@example.com' });
+  }
   return Promise.resolve(null);
 }
 
@@ -174,7 +187,7 @@ describe('<QuoteBuilder /> — page chrome + NEW mode', () => {
     expect(
       await screen.findByRole('heading', { name: /Quote Builder/i }),
     ).toBeInTheDocument();
-    expect(screen.getByLabelText(/Contact ID/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Customer/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/^Currency$/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Sub-brand/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Valid until/i)).toBeInTheDocument();
@@ -211,6 +224,36 @@ describe('<QuoteBuilder /> — page chrome + NEW mode', () => {
       );
       expect(supplierFetch).toBeTruthy();
     });
+  });
+
+  // R-15 — Quote Builder must mirror InvoicesAdmin's customer dropdown so
+  // operators can't accidentally attach a quote to the wrong customer by
+  // typing a wrong numeric id. Pre-fix the field was a raw <input type
+  // ="number"> with placeholder "Contact ID *"; post-fix it's a <select>
+  // populated from GET /api/contacts?fields=summary&limit=500.
+  it('NEW mode: customer field is a <select> populated from /api/contacts', async () => {
+    renderPage();
+    await screen.findByRole('heading', { name: /Quote Builder/i });
+
+    // The contacts endpoint fires on mount.
+    await waitFor(() => {
+      const contactsFetch = fetchApiMock.mock.calls.find(
+        ([u]) => typeof u === 'string' && u.startsWith('/api/contacts?fields=summary'),
+      );
+      expect(contactsFetch).toBeTruthy();
+    });
+
+    const customerSelect = screen.getByLabelText(/Customer/i);
+    expect(customerSelect.tagName).toBe('SELECT');
+    // The default "Select customer *" placeholder + the 3 seeded contacts
+    // from defaultFetchHandler.
+    await waitFor(() => {
+      expect(customerSelect.querySelectorAll('option').length).toBeGreaterThanOrEqual(4);
+    });
+    // Contact names + emails are visible in the dropdown options.
+    expect(screen.getByRole('option', { name: /Ahmed Khan.*ahmed@example.com/i })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /Bharat Pilgrim/i })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /Select customer/i })).toBeInTheDocument();
   });
 });
 
@@ -253,7 +296,7 @@ describe('<QuoteBuilder /> — EDIT mode hydration', () => {
       );
       expect(get).toBeTruthy();
     });
-    const contactInput = await screen.findByLabelText(/Contact ID/i);
+    const contactInput = await screen.findByLabelText(/Customer/i);
     expect(contactInput.value).toBe('5050');
     expect(screen.getByLabelText(/^Currency$/i).value).toBe('USD');
     expect(screen.getByLabelText(/Sub-brand/i).value).toBe('rfu');
@@ -601,11 +644,26 @@ describe('<QuoteBuilder /> — Save Draft (quote header)', () => {
       if (url.startsWith('/api/travel/suppliers')) {
         return Promise.resolve({ suppliers: [], total: 0 });
       }
+      // R-15 customer picker — the dropdown must include id=5050 so the
+      // fireEvent.change below can actually select it.
+      if (url.startsWith('/api/contacts?fields=summary')) {
+        return Promise.resolve([
+          { id: 5050, name: 'Ahmed Khan', email: 'ahmed@example.com' },
+        ]);
+      }
       return Promise.resolve(null);
     });
     renderPage();
     await screen.findByRole('heading', { name: /Quote Builder/i });
-    fireEvent.change(screen.getByLabelText(/Contact ID/i), { target: { value: '5050' } });
+    // Wait for the contacts list to land before changing the select.
+    await waitFor(() => {
+      expect(
+        fetchApiMock.mock.calls.find(([u]) =>
+          typeof u === 'string' && u.startsWith('/api/contacts?fields=summary'),
+        ),
+      ).toBeTruthy();
+    });
+    fireEvent.change(screen.getByLabelText(/Customer/i), { target: { value: '5050' } });
     fireEvent.change(screen.getByLabelText(/^Currency$/i), { target: { value: 'usd' } });
     fireEvent.click(screen.getByRole('button', { name: /Save Draft/i }));
     await waitFor(() => {
@@ -630,7 +688,7 @@ describe('<QuoteBuilder /> — Save Draft (quote header)', () => {
     fireEvent.click(screen.getByRole('button', { name: /Save Draft/i }));
     await waitFor(() => {
       expect(notifyError).toHaveBeenCalledWith(
-        expect.stringMatching(/Contact ID is required/i),
+        expect.stringMatching(/select a customer/i),
       );
     });
     const posts = fetchApiMock.mock.calls.filter(
@@ -693,7 +751,7 @@ describe('<QuoteBuilder /> — RBAC USER role', () => {
     expect(screen.queryByRole('button', { name: /Download PDF/i })).toBeNull();
     expect(screen.queryByRole('button', { name: /Add line/i })).toBeNull();
     // Header fields still render (USER can READ).
-    expect(screen.getByLabelText(/Contact ID/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Customer/i)).toBeInTheDocument();
   });
 });
 

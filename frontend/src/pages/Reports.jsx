@@ -72,21 +72,20 @@ export default function Reports() {
     setLoading(true);
     fetchApi(`/api/reports/query?metric=${metric}&groupBy=${groupBy}${dateParams()}`)
       .then(res => {
-        if (Array.isArray(res) && res.length > 0) {
-          setData(res);
-        } else {
-          setData([
-            { name: 'Lead', value: 35000 },
-            { name: 'Contacted', value: 20000 },
-            { name: 'Proposal', value: 15000 },
-            { name: 'Won', value: 80000 }
-          ]);
-        }
+        // Pre-fix the empty-response branch injected a fake
+        // [Lead, Contacted, Proposal, Won] dataset so the chart looked
+        // alive on a new tenant. That fabricated stages the tenant doesn't
+        // have (e.g. a Travel tenant whose pipeline is New / Diagnostic
+        // Complete / Qualifying / Quoted / Negotiating / Won / Lost /
+        // Dormant) — the chart silently lied about its data model.
+        // Empty now stays empty; the empty-state placeholder below the
+        // chart explains the situation to the user.
+        setData(Array.isArray(res) ? res : []);
         setLoading(false);
       })
       .catch(err => {
         console.error(err);
-        setData([{ name: 'Error state', value: 1 }]);
+        setData([]);
         setLoading(false);
       });
   }, [metric, groupBy, startDate, endDate]);

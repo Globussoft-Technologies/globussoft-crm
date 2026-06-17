@@ -440,8 +440,94 @@ function clearAllCache() {
   PERMISSION_CACHE.clear();
 }
 
+/**
+ * OR-gate for endpoints reachable from two legitimate access paths.
+ *
+ * Currently used by the role-history read/restore endpoints so the
+ * /settings Role Recovery section can call them via `settings.manage`
+ * without requiring `roles.read` / `roles.manage` — which are the
+ * exact perms that can vanish in the lockout scenario the recovery
+ * surface exists to fix. No new permission introduced; we simply
+ * widen the existing endpoints to accept a second known perm.
+ *
+ * Each entry in `perms` is validated against the catalog at
+ * middleware-creation time (same fast-fail as requirePermission).
+ * OWNER and CUSTOMER semantics are identical to requirePermission.
+ *
+ *   router.get(
+ *     "/api/roles/:id/permissions/versions",
+ *     verifyToken,
+ *     requireAnyPermission([
+ *       { module: "roles", action: "read" },
+ *       { module: "settings", action: "manage" },
+ *     ]),
+ *     handler,
+ *   );
+ */
+function requireAnyPermission(perms, opts = {}) {
+  if (!Array.isArray(perms) || perms.length === 0) {
+    throw new Error('requireAnyPermission([]): perms list must be a non-empty array');
+  }
+  for (const p of perms) {
+    if (!p || !p.module || !p.action) {
+      throw new Error('requireAnyPermission: each entry needs {module, action}');
+    }
+    if (!isValidPermission(p.module, p.action)) {
+      throw new Error(
+        `Invalid permission in requireAnyPermission: '${p.module}.${p.action}'. ` +
+          `Check backend/lib/permissionCatalog.js`,
+      );
+    }
+  }
+  const requiredKeys = perms.map((p) => `${p.module}.${p.action}`);
+  // Allow CUSTOMER only when EVERY listed perm is customer-safe; if
+  // any one isn't, deny CUSTOMER (matches the per-perm contract).
+  const allowCustomer =
+    !!opts.allowCustomer ||
+    requiredKeys.every((k) => CUSTOMER_SAFE_PERMISSIONS.has(k));
+
+  return async (req, res, next) => {
+    try {
+      if (req.user?.isOwner) return next();
+      if (req.user?.userType === 'CUSTOMER' && !allowCustomer) {
+        return res.status(403).json({
+          error: 'Access denied',
+          code: 'CUSTOMER_ACCESS_DENIED',
+        });
+      }
+      if (!req.user || !req.user.userId || !req.user.tenantId) {
+        return res.status(401).json({ error: 'Unauthorized' });
+      }
+      let userPermissions;
+      try {
+        userPermissions = await getUserPermissions(req.user.tenantId, req.user.userId);
+      } catch (err) {
+        if (process.env.NODE_ENV === 'test' && err && err.name === 'PrismaClientInitializationError') {
+          return next();
+        }
+        throw err;
+      }
+      for (const key of requiredKeys) {
+        if (userPermissions.has(key)) return next();
+      }
+      return res.status(403).json({
+        error: `Access denied: requires one of ${requiredKeys.join(', ')}`,
+        code: 'RBAC_DENIED',
+        requiredAny: requiredKeys,
+      });
+    } catch (err) {
+      console.error('[requireAnyPermission] middleware error:', err);
+      return res.status(403).json({
+        error: 'Permission check failed',
+        code: 'PERMISSION_CHECK_FAILED',
+      });
+    }
+  };
+}
+
 module.exports = {
   requirePermission,
+  requireAnyPermission,
   userHasPermission,
   clearUserCache,
   clearTenantCache,

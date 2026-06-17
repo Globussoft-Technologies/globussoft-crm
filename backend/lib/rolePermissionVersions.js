@@ -32,7 +32,7 @@
  * append v3, v4, …
  */
 
-const prisma = require('./prisma');
+const prisma = require("./prisma");
 
 const PERMISSIONS_JSON_MAX_BYTES = 60_000; // safety below MySQL TEXT 64KB cap
 
@@ -47,7 +47,7 @@ function canonicalisePermissions(list) {
   const seen = new Set();
   const out = [];
   for (const p of list) {
-    if (!p || typeof p !== 'object') continue;
+    if (!p || typeof p !== "object") continue;
     const { module, action } = p;
     if (!module || !action) continue;
     const k = `${module}.${action}`;
@@ -84,7 +84,7 @@ function canonicalisePermissions(list) {
 async function snapshotRolePermissions({
   roleId,
   permissions,
-  changeType = 'UPDATE',
+  changeType = "UPDATE",
   changedById = null,
   restoredFromVersionId = null,
   note = null,
@@ -97,7 +97,7 @@ async function snapshotRolePermissions({
       `RolePermissionVersion payload too large (${permissionsJson.length} > ${PERMISSIONS_JSON_MAX_BYTES})`,
     );
   }
-  const noteTrimmed = typeof note === 'string' ? note.slice(0, 500) : null;
+  const noteTrimmed = typeof note === "string" ? note.slice(0, 500) : null;
 
   // Concurrency: two near-simultaneous saves on the same role would
   // both compute versionNumber=N+1 and one would race past the
@@ -109,10 +109,10 @@ async function snapshotRolePermissions({
   for (let attempt = 0; attempt < 3; attempt++) {
     const latest = await runner.rolePermissionVersion.findFirst({
       where: { roleId },
-      orderBy: { versionNumber: 'desc' },
+      orderBy: { versionNumber: "desc" },
       select: { versionNumber: true },
     });
-    const next = (latest && latest.versionNumber || 0) + 1;
+    const next = ((latest && latest.versionNumber) || 0) + 1;
     try {
       const row = await runner.rolePermissionVersion.create({
         data: {
@@ -131,7 +131,7 @@ async function snapshotRolePermissions({
     } catch (err) {
       // Prisma P2002 = unique constraint violation. Retry with a
       // fresh latest read.
-      if (err && err.code === 'P2002') continue;
+      if (err && err.code === "P2002") continue;
       throw err;
     }
   }
@@ -151,7 +151,11 @@ async function snapshotRolePermissions({
  * deleteMany/createMany so v1 captures the pre-save state, then
  * call snapshotRolePermissions with the new permissions producing v2.
  */
-async function ensureInitialSnapshot({ roleId, changedById = null, tx = null }) {
+async function ensureInitialSnapshot({
+  roleId,
+  changedById = null,
+  tx = null,
+}) {
   const runner = tx || prisma;
   const existing = await runner.rolePermissionVersion.findFirst({
     where: { roleId },
@@ -165,9 +169,9 @@ async function ensureInitialSnapshot({ roleId, changedById = null, tx = null }) 
   return snapshotRolePermissions({
     roleId,
     permissions: currentRows,
-    changeType: 'INITIAL',
+    changeType: "INITIAL",
     changedById,
-    note: 'Auto-snapshot of pre-history state',
+    note: "Auto-snapshot of pre-history state",
     tx: runner,
   });
 }
@@ -179,7 +183,7 @@ async function ensureInitialSnapshot({ roleId, changedById = null, tx = null }) 
 async function listRolePermissionVersions({ roleId, take = 50, skip = 0 }) {
   const rows = await prisma.rolePermissionVersion.findMany({
     where: { roleId },
-    orderBy: { versionNumber: 'desc' },
+    orderBy: { versionNumber: "desc" },
     take: Math.min(Math.max(parseInt(take, 10) || 50, 1), 200),
     skip: Math.max(parseInt(skip, 10) || 0, 0),
     include: {

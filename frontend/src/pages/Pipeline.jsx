@@ -35,6 +35,17 @@ const defaultStages = [
   { id: 'won', title: 'Closed Won', color: 'var(--success-color)' }
 ];
 
+// Slugify a PipelineStage.name into the column id used both as React key
+// and as the deal's `stage` slug in the backend. Mirrors the backend's
+// slugifyStageName in routes/deals.js so frontend column ids and backend
+// `Deal.stage` values stay in lockstep across verticals.
+export const slugifyStageName = (name) =>
+  String(name || '')
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, '-')
+    .replace(/[^a-z0-9-]/g, '');
+
 const Pipeline = () => {
   const notify = useNotify();
   const { user } = useContext(AuthContext) || {};
@@ -145,30 +156,21 @@ const Pipeline = () => {
       setDeals(Array.isArray(dealData) ? dealData : []);
       setContacts(Array.isArray(contactData) ? contactData : []);
       if (Array.isArray(stageData) && stageData.length > 0) {
-        // Map stage names to deal stage IDs used in the database. Note:
-        // multiple stage names normalize to the same id (e.g. both "Lead"
-        // and "New Lead" → 'lead', "Negotiation" and "Proposal Sent" →
-        // 'proposal'). Deals' `stage` column is a slug, not a foreign key,
-        // so this lossy normalization is required to hit the right cards.
-        const stageIdMap = {
-          'new lead': 'lead', 'lead': 'lead',
-          'contacted': 'contacted',
-          'proposal sent': 'proposal', 'proposal': 'proposal',
-          'negotiation': 'proposal',
-          'closed won': 'won', 'won': 'won',
-          'closed lost': 'lost', 'lost': 'lost',
-        };
-        // #575 (regression of #173): dedupe by normalized id to keep the
-        // kanban from rendering the same deal set in two columns whenever a
-        // tenant has both "Lead" and "New Lead" (or any pair that collapses
-        // to the same id). First stage wins — preserves DB position order
-        // since pipeline_stages.GET sorts by position asc. Without this, the
-        // page renders BOTH "New Lead" (99 / $90k) AND "Lead" (99 / $90k)
-        // showing identical cards, double-counting the pipeline visually.
+        // Derive the column id by slugifying the stage's own name. The
+        // previous hardcoded map only knew the generic-CRM names
+        // (lead/contacted/proposal/won/lost) and silently dropped every
+        // travel-vertical stage (New, Diagnostic Complete, Qualifying,
+        // Quoted, Negotiating, Dormant) because they weren't in the lookup,
+        // leaving the Travel pipeline rendering only Won/Lost.
+        //
+        // #575 dedupe contract preserved: stages whose names slugify to the
+        // same id collapse — first by position order (backend sorts asc)
+        // wins. Guards against historical duplicates like both "Lead" and
+        // "New Lead" double-rendering identical card sets.
         const seen = new Set();
         const dedupedStages = [];
         for (const s of stageData) {
-          const id = stageIdMap[s.name.toLowerCase()];
+          const id = slugifyStageName(s.name);
           if (!id || seen.has(id)) continue;
           seen.add(id);
           dedupedStages.push({ id, title: s.name, color: s.color, dbId: s.id });
@@ -206,6 +208,7 @@ const Pipeline = () => {
 
   const handleAddDeal = async (e) => {
     e.preventDefault();
+    const fallbackStage = stages[0]?.id || 'lead';
     try {
       const created = await fetchApi('/api/deals', {
         method: 'POST',
@@ -213,7 +216,7 @@ const Pipeline = () => {
           title: newDeal.title,
           amount: parseFloat(newDeal.amount) || 0,
           probability: parseInt(newDeal.probability) || 50,
-          stage: newDeal.stage || 'lead',
+          stage: newDeal.stage || fallbackStage,
         })
       });
       // Optimistically add to local state in case socket.io is slow
@@ -228,7 +231,7 @@ const Pipeline = () => {
       console.error('Failed to create deal:', err);
     }
     setShowModal(false);
-    setNewDeal({ title: '', company: '', contactName: '', amount: '', probability: '', stage: 'lead' });
+    setNewDeal({ title: '', company: '', contactName: '', amount: '', probability: '', stage: fallbackStage });
   };
 
   const handleDelete = async (e, id) => {
@@ -250,11 +253,26 @@ const Pipeline = () => {
   // enforces the same; mirrored here for instant UI). Intermediate stages get
   // the conventional CRM probabilities so the per-column weighted total +
   // the forecast widget update at drop time, not on next refresh.
+  //
+  // Both generic-CRM slugs (lead/contacted/proposal/negotiation) and
+  // travel-vertical slugs (new/diagnostic-complete/qualifying/quoted/
+  // negotiating/dormant) are covered; verticals that introduce a new stage
+  // slug without an entry here fall through to the server's stored
+  // probability on drop (no client-side optimistic update for the badge).
   const STAGE_PROBABILITY = {
+    // generic
     lead: 25,
     contacted: 40,
     proposal: 70,
     negotiation: 80,
+    // travel
+    new: 25,
+    'diagnostic-complete': 30,
+    qualifying: 40,
+    quoted: 60,
+    negotiating: 80,
+    dormant: 10,
+    // terminal (all verticals)
     won: 100,
     lost: 0,
   };
@@ -519,7 +537,14 @@ const Pipeline = () => {
               ))}
             </select>
           )}
-          <button onClick={() => setShowModal(true)} className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <button onClick={() => {
+            // Seed the modal's stage with the first column for the current
+            // tenant so travel-vertical users don't land on the literal
+            // 'lead' default (which won't match any column they can see).
+            const firstStage = stages[0]?.id || 'lead';
+            setNewDeal(prev => ({ ...prev, stage: firstStage }));
+            setShowModal(true);
+          }} className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <Plus size={18} /> Add Deal
           </button>
         </div>

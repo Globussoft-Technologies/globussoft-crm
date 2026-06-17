@@ -21,18 +21,18 @@ import { fetchApi } from '../utils/api';
 // ─────────────────────────────────────────────────────────────────
 
 const GLASS = {
-  background: 'rgba(255,255,255,0.05)',
-  border: '1px solid rgba(255,255,255,0.1)',
+  background: 'var(--surface-color)',
+  border: '1px solid var(--border-color)',
   backdropFilter: 'blur(12px)',
   borderRadius: '12px',
 };
 
 const inputStyle = {
   width: '100%',
-  padding: '0.55rem 0.7rem',
+  padding: '0.6rem 0.75rem',
   borderRadius: 8,
-  border: '1px solid rgba(255,255,255,0.15)',
-  background: 'rgba(0,0,0,0.25)',
+  border: '1px solid var(--border-color)',
+  background: 'var(--input-bg)',
   color: 'var(--text-primary)',
   fontSize: '0.85rem',
 };

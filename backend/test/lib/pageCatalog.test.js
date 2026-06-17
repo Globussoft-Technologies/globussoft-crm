@@ -394,3 +394,95 @@ describe('getAccessiblePages', () => {
     expect(getAccessiblePages('not-a-set')).toEqual([]);
   });
 });
+
+// ─────────── Vertical isolation in page catalog ────────────
+//
+// The Roles & Permissions admin UI surfaces a Landing-page dropdown
+// fed by two endpoints — GET /api/pages/catalog (Create-role) and
+// GET /api/roles/:id/accessible-pages (Edit-role). Both must filter
+// out cross-vertical pages so a travel tenant never sees wellness
+// landing options (and vice-versa).
+//
+// The `/signatures` page (E-Signatures consent queue) was specifically
+// leaking into travel: its path doesn't start with `/wellness/` so the
+// path-prefix inference let it through. It now carries an explicit
+// `vertical: 'wellness'` tag. These tests pin both vectors so the
+// regression can't return.
+
+describe('Vertical isolation — getCatalogForVertical', () => {
+  it('travel catalog excludes /signatures (was a wellness-leak before the fix)', () => {
+    const travel = getCatalogForVertical('travel');
+    expect(travel.find((p) => p.path === '/signatures')).toBeUndefined();
+  });
+
+  it('travel catalog excludes every /wellness/* page', () => {
+    const travel = getCatalogForVertical('travel');
+    const wellnessPages = travel.filter((p) => p.path.startsWith('/wellness/'));
+    expect(wellnessPages).toHaveLength(0);
+  });
+
+  it('travel catalog includes travel-specific pages', () => {
+    const travel = getCatalogForVertical('travel');
+    const travelPages = travel.filter(
+      (p) => p.path === '/travel' || p.path.startsWith('/travel/'),
+    );
+    expect(travelPages.length).toBeGreaterThan(0);
+  });
+
+  it('wellness catalog keeps /signatures (it is a wellness-only surface)', () => {
+    const wellness = getCatalogForVertical('wellness');
+    expect(wellness.find((p) => p.path === '/signatures')).toBeDefined();
+  });
+
+  it('wellness catalog excludes every /travel/* page', () => {
+    const wellness = getCatalogForVertical('wellness');
+    const travelPages = wellness.filter(
+      (p) => p.path === '/travel' || p.path.startsWith('/travel/'),
+    );
+    expect(travelPages).toHaveLength(0);
+  });
+
+  it('generic catalog excludes both wellness and travel pages', () => {
+    const generic = getCatalogForVertical('generic');
+    expect(
+      generic.find((p) => p.path.startsWith('/wellness/') || p.path === '/signatures'),
+    ).toBeUndefined();
+    expect(
+      generic.find((p) => p.path === '/travel' || p.path.startsWith('/travel/')),
+    ).toBeUndefined();
+  });
+});
+
+describe('Vertical isolation — getAccessiblePages with opts.vertical', () => {
+  it('travel: hides /signatures even when the role holds consents.read', () => {
+    const perms = new Set(['consents.read']);
+    const onTravel = getAccessiblePages(perms, { vertical: 'travel' });
+    expect(onTravel.find((p) => p.path === '/signatures')).toBeUndefined();
+  });
+
+  it('wellness: surfaces /signatures when the role holds consents.read', () => {
+    const perms = new Set(['consents.read']);
+    const onWellness = getAccessiblePages(perms, { vertical: 'wellness' });
+    expect(onWellness.find((p) => p.path === '/signatures')).toBeDefined();
+  });
+
+  it('travel: surfaces /travel/* pages when the role holds the matching perm', () => {
+    const perms = new Set(['itineraries.read']);
+    const onTravel = getAccessiblePages(perms, { vertical: 'travel' });
+    expect(onTravel.find((p) => p.path === '/travel/itineraries')).toBeDefined();
+  });
+
+  it('wellness: hides /travel/* pages even when the role holds the matching perm', () => {
+    const perms = new Set(['itineraries.read']);
+    const onWellness = getAccessiblePages(perms, { vertical: 'wellness' });
+    expect(onWellness.find((p) => p.path === '/travel/itineraries')).toBeUndefined();
+  });
+
+  it('back-compat: omitting opts.vertical preserves the pre-fix behavior (no vertical filter)', () => {
+    const perms = new Set(['consents.read', 'itineraries.read']);
+    const noFilter = getAccessiblePages(perms);
+    // Both wellness and travel pages appear since no vertical filter is applied.
+    expect(noFilter.find((p) => p.path === '/signatures')).toBeDefined();
+    expect(noFilter.find((p) => p.path === '/travel/itineraries')).toBeDefined();
+  });
+});

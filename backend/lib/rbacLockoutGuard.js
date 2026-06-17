@@ -42,14 +42,14 @@
  * write happens.
  */
 
-const prisma = require('./prisma');
+const prisma = require("./prisma");
 
 // Critical permissions. Frozen so callers can't accidentally mutate
 // the set. To extend (e.g. add staff.manage), update this list AND
 // the Phase 1 inventory in the PR description.
 const CRITICAL_RBAC_PERMISSIONS = Object.freeze([
-  { module: 'roles', action: 'read' },
-  { module: 'roles', action: 'manage' },
+  { module: "roles", action: "read" },
+  { module: "roles", action: "manage" },
 ]);
 
 const CRITICAL_KEY_SET = new Set(
@@ -179,8 +179,8 @@ async function checkLockout(args) {
     status: 409,
     body: {
       error:
-        'This change would remove RBAC administration access from all active users.',
-      code: 'LOCKOUT_PREVENTED',
+        "This change would remove RBAC administration access from all active users.",
+      code: "LOCKOUT_PREVENTED",
       criticalPermissions: CRITICAL_RBAC_PERMISSIONS.map(
         (p) => `${p.module}.${p.action}`,
       ),

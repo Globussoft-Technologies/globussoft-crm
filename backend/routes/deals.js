@@ -228,13 +228,36 @@ router.get("/:id", async (req, res) => {
   }
 });
 
-// #162 #173: stages used as a closed enum across pipeline analytics. Match the
-// values seeded in pipeline_stages + already used in code: lead, contacted,
-// proposal, negotiation, won, lost. Lowercase matches existing seed data.
-const ALLOWED_DEAL_STAGES = new Set(["lead", "contacted", "proposal", "negotiation", "won", "lost"]);
+// #162 #173: stages were originally a closed generic-CRM enum (lead, contacted,
+// proposal, negotiation, won, lost). The travel vertical seeds 8 stages with
+// different slugs (new, diagnostic-complete, qualifying, quoted, negotiating,
+// won, lost, dormant) so the static set silently 400'd valid stage drops. The
+// validator now resolves the allowed slug set from the tenant's own
+// PipelineStage rows; terminal "won" / "lost" are always honored as a
+// backstop for tenants whose stage list hasn't been seeded yet.
+const LEGACY_DEAL_STAGES = ["lead", "contacted", "proposal", "negotiation", "won", "lost"];
+const slugifyStageName = (name) =>
+  String(name || "")
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, "-")
+    .replace(/[^a-z0-9-]/g, "");
+
+async function getAllowedStagesForTenant(tenantId) {
+  const rows = await prisma.pipelineStage.findMany({
+    where: { tenantId },
+    select: { name: true },
+  });
+  const allowed = new Set(rows.map((r) => slugifyStageName(r.name)).filter(Boolean));
+  // Legacy generic slugs stay accepted so existing deals + tests don't break
+  // on tenants whose stage list got customized without renaming legacy rows.
+  for (const s of LEGACY_DEAL_STAGES) allowed.add(s);
+  return allowed;
+}
+
 const { ensureNumberInRange, ensureEnum, httpFromPrismaError } = require("../lib/validators");
 
-function validateDealInput(body, { isUpdate: _isUpdate = false } = {}) {
+async function validateDealInput(body, { tenantId, isUpdate: _isUpdate = false } = {}) {
   if (body.amount !== undefined && body.amount !== null && body.amount !== "") {
     const e = ensureNumberInRange(body.amount, { min: 0, max: 1e12, field: "amount", code: "INVALID_AMOUNT" });
     if (e) return e;
@@ -244,7 +267,8 @@ function validateDealInput(body, { isUpdate: _isUpdate = false } = {}) {
     if (e) return e;
   }
   if (body.stage !== undefined && body.stage !== null && body.stage !== "") {
-    const e = ensureEnum(body.stage, ALLOWED_DEAL_STAGES, { field: "stage", code: "INVALID_STAGE" });
+    const allowed = await getAllowedStagesForTenant(tenantId);
+    const e = ensureEnum(body.stage, allowed, { field: "stage", code: "INVALID_STAGE" });
     if (e) return e;
   }
   return null;
@@ -259,7 +283,7 @@ router.post("/", async (req, res) => {
     const { title, amount, probability, stage, contactId, pipelineId, expectedClose, currency, subBrand, lostReason, winLossReasonId } = req.body;
     if (!title) return res.status(400).json({ error: "Title is required" });
     // #162: validate amount, probability, stage so bad inputs return 400.
-    const inputErr = validateDealInput(req.body, { isUpdate: false });
+    const inputErr = await validateDealInput(req.body, { tenantId: req.user.tenantId, isUpdate: false });
     if (inputErr) return res.status(inputErr.status).json(inputErr);
 
     const data = {
@@ -332,7 +356,7 @@ router.put("/:id", async (req, res) => {
     const { title, amount, probability, stage, contactId, pipelineId, expectedClose, currency, lostReason, winLossReasonId } = req.body;
     // #168 #173: same validation as POST — PUT can no longer accept negative
     // amount / out-of-range probability / unknown stage.
-    const inputErr = validateDealInput(req.body, { isUpdate: true });
+    const inputErr = await validateDealInput(req.body, { tenantId: req.user.tenantId, isUpdate: true });
     if (inputErr) return res.status(inputErr.status).json(inputErr);
 
     // #173: terminal-stage state machine. Once a deal is `won` or

@@ -285,22 +285,24 @@ export default function Tasks() {
 
       </div>
 
-      {/* #893: Create Task drawer — opens from header CTA. Close on X, ESC, outside-click. */}
+      {/* #893: Create Task modal — opens from header CTA. Close on X, ESC, outside-click. */}
       {creating && (
         <div
           onClick={(e) => { if (e.target === e.currentTarget) closeCreate(); }}
           style={{
-            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
-            display: 'flex', alignItems: 'flex-start', justifyContent: 'flex-end',
-            zIndex: 1000,
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)',
+            backdropFilter: 'blur(4px)', WebkitBackdropFilter: 'blur(4px)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            zIndex: 1000, padding: '1rem',
           }}
         >
           <form
             onSubmit={createTask}
+            className="card"
             style={{
-              background: 'var(--surface-color)', color: 'var(--text-primary)',
-              width: '100%', maxWidth: 460, height: '100vh', overflowY: 'auto',
-              padding: 20, boxShadow: '-8px 0 24px rgba(0,0,0,0.2)',
+              background: 'var(--bg-color)', color: 'var(--text-primary)',
+              width: '100%', maxWidth: 480, maxHeight: '90vh', overflowY: 'auto',
+              padding: 24,
             }}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>

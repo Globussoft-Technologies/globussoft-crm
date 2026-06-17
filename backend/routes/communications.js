@@ -60,6 +60,20 @@ function escapeHtml(text) {
   return text.replace(/[&<>"']/g, m => map[m]);
 }
 
+// Make bare URLs clickable in the HTML part of an email. Runs on the
+// ALREADY-escaped body, so it's XSS-safe: escapeHtml has neutralised quotes +
+// angle brackets (no attribute break-out), and we only ever match http(s):// —
+// never javascript:/data: schemes. Trailing sentence punctuation is kept
+// OUTSIDE the link so "see https://x.com." doesn't include the period.
+function linkifyHtml(escaped) {
+  return escaped.replace(/(https?:\/\/[^\s<]+)/g, (m) => {
+    const trail = m.match(/[.,!?;:)\]]+$/);
+    const url = trail ? m.slice(0, -trail[0].length) : m;
+    const tail = trail ? trail[0] : "";
+    return `<a href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>${tail}`;
+  });
+}
+
 async function sendSendGrid(to, subject, body, opts = {}) {
   if (!SENDGRID_API_KEY) {
     console.log(`[Email] SendGrid not configured — email to ${to} logged but not sent`);
@@ -79,7 +93,7 @@ async function sendSendGrid(to, subject, body, opts = {}) {
   // markup). The tracking pixel is RAW trusted HTML we control, so it must be
   // appended AFTER escaping — otherwise the <img> tag itself gets escaped to
   // &lt;img&gt; and shows up as visible literal text in the email body.
-  let htmlBody = escapeHtml(body).replace(/\n/g, "<br>");
+  let htmlBody = linkifyHtml(escapeHtml(body).replace(/\n/g, "<br>"));
   if (typeof opts.trackingPixelHtml === "string" && opts.trackingPixelHtml) {
     htmlBody += opts.trackingPixelHtml;
   }
@@ -503,3 +517,5 @@ router.get("/tracking/:emailId", verifyRole(["ADMIN", "MANAGER"]), async (req, r
 module.exports = router;
 module.exports.parseRecipients = parseRecipients;
 module.exports.isValidEmail = isValidEmail;
+module.exports.escapeHtml = escapeHtml;
+module.exports.linkifyHtml = linkifyHtml;

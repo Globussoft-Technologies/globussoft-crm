@@ -188,6 +188,7 @@ model Tenant {
   tmcTrips                            TmcTrip[]
   webCheckins                         WebCheckin[]
   travelTripReviews                   TravelTripReview[]
+  travelPortalNotifications           TravelPortalNotification[]
   supplierCredentials                 SupplierCredential[]
   visaApplications                    VisaApplication[]
   // G107 — RejectionRecoveryProgram back-relation (PRD_VISA_SURE_PHASE_3 §FR-7).
@@ -832,6 +833,8 @@ model Contact {
   attachments         ContactAttachment[]
   // Travel customer-portal DigiLocker sessions (PRD §4.5 extended).
   digilockerSessions  DigilockerSession[]
+  // Travel customer-portal in-app notification inbox (2026-06-17).
+  travelPortalNotifications TravelPortalNotification[]
 
   /// One Contact per email-per-tenant; same email may exist in different tenants (each tenant maintains its own CRM). Allows a single person to legitimately appear as a contact in multiple customers' CRMs without collision.
   @@unique([email, tenantId])
@@ -6177,6 +6180,31 @@ model TravelTripReview {
 
   @@index([tenantId, status])
   @@index([tenantId, contactId])
+}
+
+/// Travel customer-portal in-app notification inbox (2026-06-17). Contact-scoped
+/// (the travel customer is a Contact with a portal login), SEPARATE from the
+/// staff `Notification` table (userId-scoped). Emitted when an advisor sends/
+/// revises an itinerary or when a payment is recorded; surfaced in the portal
+/// bell. Mirrors the wellness `PatientNotification` pattern.
+model TravelPortalNotification {
+  id        Int       @id @default(autoincrement())
+  title     String
+  message   String    @db.Text
+  type      String    @default("info") // info | itinerary | payment | system
+  link      String? // optional portal deep-link (e.g. "bookings")
+  isRead    Boolean   @default(false)
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  contactId Int
+  contact   Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  tenantId Int
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([contactId, isRead])
+  @@index([contactId, createdAt])
 }
 
 // ── Supplier credentials vault ───────────────────────────────────────

@@ -13,6 +13,7 @@ const { notifyMany } = require("../lib/notificationService");
 const { writeAudit } = require("../lib/audit");
 const visaDocStore = require("../lib/visaDocStore");
 const { buildForm: buildReviewForm, validateSubmission: validateReviewSubmission } = require("../lib/travelReviewQuestions");
+const travelPortalNotifications = require("../lib/travelPortalNotificationService");
 
 // Memory-storage multer for the travel customer's profile avatar — 5 MB cap,
 // image-only (s3Service.uploadImage re-gates the mimetype). Mirrors the staff
@@ -126,17 +127,12 @@ router.post("/register", async (req, res) => {
       return res.status(400).json({ error: "registrationTenantId must be a valid number" });
     }
 
-    // Email OTP gate (purpose "customer-register"). Tampered/wrong-purpose
-    // token → 403; valid token → stamp Contact.emailVerifiedAt; absent →
-    // backward-compatible (the UI hard-gates the button).
+    // Email OTP gate (purpose "customer-register"). Enforced at the route layer
+    // (production by default, overridable via REQUIRE_EMAIL_OTP).
     const emailOtp = require("../lib/emailOtp");
-    let emailVerifiedAt = null;
-    if (verificationToken !== undefined && verificationToken !== null && verificationToken !== "") {
-      if (!emailOtp.checkVerificationToken(verificationToken, email, "customer-register")) {
-        return res.status(403).json({ error: "Email verification failed — please verify your email again", code: "EMAIL_NOT_VERIFIED" });
-      }
-      emailVerifiedAt = new Date();
-    }
+    const otpGate = emailOtp.enforceRegistrationOtp(verificationToken, email, "customer-register");
+    if (!otpGate.ok) return res.status(otpGate.status).json({ error: otpGate.error, code: otpGate.code });
+    const emailVerifiedAt = otpGate.emailVerifiedAt;
     if (password.length < 8 || !/[A-Za-z]/.test(password) || !/[0-9]/.test(password)) {
       return res.status(400).json({
         error: "Password must be at least 8 characters and include a letter and a number",
@@ -754,6 +750,56 @@ router.post("/travel/itineraries/:id/review", verifyPortalToken, requireTravelPo
   } catch (err) {
     console.error("[Portal][travel/itin review submit]", err);
     res.status(500).json({ error: "Failed to submit review" });
+  }
+});
+
+// ─── Travel customer-portal notification inbox (2026-06-17) ──────────
+// Contact-scoped, separate from the staff Notification table. Emitted when an
+// advisor sends/revises an itinerary or a payment is recorded (see
+// routes/travel_itineraries.js notifyCustomerTrip).
+
+// GET /api/portal/travel/notifications — newest-first inbox + unread count.
+//   ?limit=N (default 50, capped 200)   ?unreadOnly=true
+router.get("/travel/notifications", verifyPortalToken, requireTravelPortalTenant, async (req, res) => {
+  try {
+    const unreadOnly = req.query.unreadOnly === "true" || req.query.unreadOnly === "1";
+    const { items, unreadCount } = await travelPortalNotifications.listTravelPortalNotifications(req.portal.contactId, {
+      limit: req.query.limit,
+      unreadOnly,
+    });
+    res.json({
+      notifications: items.map(travelPortalNotifications.toPublic),
+      unreadCount,
+      count: items.length,
+    });
+  } catch (e) {
+    console.error("[Portal][travel/notifications]", e.message);
+    res.status(500).json({ error: "Failed to load notifications" });
+  }
+});
+
+// PUT /api/portal/travel/notifications/:id/read — mark ONE read (own rows only).
+router.put("/travel/notifications/:id/read", verifyPortalToken, requireTravelPortalTenant, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isInteger(id)) return res.status(400).json({ error: "Invalid notification id", code: "INVALID_ID" });
+    const updated = await travelPortalNotifications.markTravelPortalNotificationRead(req.portal.contactId, id);
+    if (!updated) return res.status(404).json({ error: "Notification not found", code: "NOT_FOUND" });
+    res.json(travelPortalNotifications.toPublic(updated));
+  } catch (e) {
+    console.error("[Portal][travel/notifications read]", e.message);
+    res.status(500).json({ error: "Failed to update notification" });
+  }
+});
+
+// POST /api/portal/travel/notifications/mark-all-read — mark all unread read.
+router.post("/travel/notifications/mark-all-read", verifyPortalToken, requireTravelPortalTenant, async (req, res) => {
+  try {
+    const marked = await travelPortalNotifications.markAllTravelPortalNotificationsRead(req.portal.contactId);
+    res.json({ success: true, marked });
+  } catch (e) {
+    console.error("[Portal][travel/notifications mark-all-read]", e.message);
+    res.status(500).json({ error: "Failed to update notifications" });
   }
 });
 

@@ -276,7 +276,7 @@ function PaymentCTA({ itin, paying, onPayAdvance, onPayBalance }) {
           <CheckCircle2 size={20} aria-hidden style={{ color: "#2ecc71" }} />
           <span><strong>Advance received.</strong> Your trip is confirmed. Settle the balance any time before departure.</span>
         </div>
-        {itin.balanceDue > 0 && (
+        {itin.balanceDue > 0 && itin.onlinePaymentEnabled && (
           <button
             type="button"
             onClick={onPayBalance}
@@ -286,6 +286,9 @@ function PaymentCTA({ itin, paying, onPayAdvance, onPayBalance }) {
             <CreditCard size={16} aria-hidden />
             {paying ? "Processing…" : `Pay balance · ${fmtMoneyCompact(itin.balanceDue, itin.currency)}`}
           </button>
+        )}
+        {itin.balanceDue > 0 && !itin.onlinePaymentEnabled && (
+          <div style={infoBox} role="status">Your advisor will share payment details for the balance.</div>
         )}
       </>
     );
@@ -299,6 +302,16 @@ function PaymentCTA({ itin, paying, onPayAdvance, onPayBalance }) {
   }
   // sent / accepted / revised / draft (draft is filtered server-side
   // already, but the branch is harmless).
+  // Online pay is only offered when the agency has configured its own payment
+  // gateway (itin.onlinePaymentEnabled). Otherwise the advisor arranges payment
+  // offline — we never route customer money through the platform account.
+  if (!itin.onlinePaymentEnabled) {
+    return (
+      <div style={infoBox} role="status">
+        Your advisor will share payment details to confirm this trip.
+      </div>
+    );
+  }
   return (
     <button
       type="button"
@@ -439,6 +452,11 @@ const successBox = {
   background: "#e8f6ee", border: "1px solid #b7e4c7",
   color: "#1e6e3a", borderRadius: 10, fontSize: 14,
   display: "flex", alignItems: "center", gap: 10,
+};
+const infoBox = {
+  marginTop: 16, padding: "12px 16px",
+  background: "#eef2f8", border: "1px solid #cdd7e6",
+  color: "#3b4a63", borderRadius: 10, fontSize: 14,
 };
 const fineprint = {
   textAlign: "center", color: "#7a8294",

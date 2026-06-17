@@ -84,6 +84,10 @@ const { recordDocumentAccess } = require("../lib/documentAccessAudit");
 // (clamp 1..30 days, default 7; revoked > expired > active precedence)
 // unit-tested in test/lib/shareLinkPolicy.test.js.
 const { computeShareExpiresAt, shareLinkState } = require("../lib/shareLinkPolicy");
+// BYOK: customer payments settle into the TENANT's own Razorpay account (our
+// platform RAZORPAY_KEY_* env vars are ONLY for tenant→Globussoft subscription
+// billing). Mirrors the wellness customer-payment flow. See lib/tenantPaymentGateway.js.
+const { getTenantRazorpayClient, getTenantRazorpayCreds, NOT_CONFIGURED_MESSAGE } = require("../lib/tenantPaymentGateway");
 
 // Covers fly + non-fly (domestic) transport and general trip expenses. Keep
 // in sync with ITEM_TYPES in frontend/src/pages/travel/ItineraryDetail.jsx.
@@ -94,8 +98,14 @@ const VALID_ITEM_TYPES = [
 // Phase 2 (PRD §4.7) extends the enum with advance_paid / fully_paid for
 // the 50%-advance booking flow. Existing draft/sent/etc. semantics
 // unchanged — the two new values are only set by the public payment
-// endpoints. Routes that PATCH status accept all 7 values.
-const VALID_STATUSES = ["draft", "sent", "revised", "accepted", "rejected", "advance_paid", "fully_paid"];
+// endpoints. Routes that PATCH status accept all values.
+//
+// `expired` (2026-06-16): advisor-set terminal status for a booking
+// auto-flagged by cron/paymentDeadlineEngine.js as deposit-overdue. Kept
+// distinct from `rejected` (customer declined) so non-payment cancellations
+// are reportable separately. The engine never sets it — an advisor PATCHes
+// to "expired" after reviewing the overdue flag (no auto-cancel by design).
+const VALID_STATUSES = ["draft", "sent", "revised", "accepted", "rejected", "advance_paid", "fully_paid", "expired"];
 // Advance-deposit ratio is now per-tenant + per-sub-brand tunable via
 // the TenantSetting table — see lib/tenantSettings.js. The Phase 2
 // baseline (Travel Stall 50/50) is the helper's hard-coded fallback
@@ -3806,6 +3816,11 @@ router.get("/itineraries/public/:shareToken", async (req, res) => {
     const advanceDue = total > 0 ? Math.round(total * advanceRatio * 100) / 100 : 0;
     const advancePaid = itin.advancePaidAmount ? Number(itin.advancePaidAmount) : 0;
     const balanceDue = Math.max(0, total - advancePaid);
+    // Online pay button only shows when the TENANT has configured + activated
+    // its OWN Razorpay keys (BYOK). Otherwise the customer can't pay online here
+    // — the advisor arranges payment offline. (Our platform keys are never used
+    // for customer payments — they're subscription-billing only.)
+    const onlinePaymentEnabled = (await getTenantRazorpayCreds(itin.tenantId)) !== null;
     res.json({
       shareToken: itin.shareToken,
       tenantName: itin.tenant?.name || null,
@@ -3822,6 +3837,7 @@ router.get("/itineraries/public/:shareToken", async (req, res) => {
       advancePaid,
       advancePaidAt: itin.advancePaidAt,
       balanceDue,
+      onlinePaymentEnabled,
       items: itin.items.map(publicItemProjection),
       pdfUrl: itin.pdfUrl,
       // PRD §4.3 — operator-generated executive summary block (null
@@ -3905,6 +3921,10 @@ router.post("/itineraries/public/:shareToken/record-advance-payment", async (req
         advancePaidAmount: newAdvanceTotal,
         advancePaidAt: new Date(),
         paymentReference: String(paymentReference),
+        // Deposit landed → clear any pay-or-cancel at-risk flag set by
+        // cron/paymentDeadlineEngine.js (keeps the advisor at-risk badge honest
+        // if the customer pays late).
+        paymentOverdueAt: null,
       },
     });
 
@@ -3936,18 +3956,6 @@ router.post("/itineraries/public/:shareToken/record-advance-payment", async (req
 //
 // Both are allow-listed via the `/travel/itineraries/public` openPath prefix.
 
-let _platformRzp = null;
-function getPlatformRazorpay() {
-  const keyId = process.env.RAZORPAY_KEY_ID;
-  const keySecret = process.env.RAZORPAY_KEY_SECRET;
-  if (!keyId || !keySecret) return null;
-  if (!_platformRzp) {
-    const Razorpay = require("razorpay");
-    _platformRzp = new Razorpay({ key_id: keyId, key_secret: keySecret });
-  }
-  return { client: _platformRzp, keyId, keySecret };
-}
-
 // Amount (major units) due for a given payment kind on a shared itinerary.
 async function resolveDueAmount(itin, kind) {
   const total = itin.totalAmount ? Number(itin.totalAmount) : 0;
@@ -3965,15 +3973,17 @@ router.post("/itineraries/public/:shareToken/create-payment-order", async (req, 
     if (!token || token.length < 16) {
       return res.status(400).json({ error: "shareToken required", code: "MISSING_TOKEN" });
     }
-    const rp = getPlatformRazorpay();
-    if (!rp) {
-      return res.status(503).json({ error: "Online payment is not configured", code: "GATEWAY_NOT_CONFIGURED" });
-    }
     const itin = await prisma.itinerary.findUnique({ where: { shareToken: token } });
     if (!itin) return res.status(404).json({ error: "Itinerary not found", code: "NOT_FOUND" });
     if (itin.status === "draft") return res.status(409).json({ error: "Itinerary not yet shared", code: "NOT_SHARED" });
     if (itin.status === "rejected" || itin.status === "fully_paid") {
       return res.status(409).json({ error: `Cannot pay against an itinerary in '${itin.status}' status`, code: "INVALID_STATE" });
+    }
+    // Customer pays into the TENANT's own Razorpay account — never the platform's.
+    // No (or inactive) tenant keys → block the payment with a clear message.
+    const rp = await getTenantRazorpayClient(itin.tenantId);
+    if (!rp) {
+      return res.status(503).json({ error: NOT_CONFIGURED_MESSAGE, code: "GATEWAY_NOT_CONFIGURED" });
     }
     const kind = req.body && req.body.kind === "balance" ? "balance" : "advance";
     const due = await resolveDueAmount(itin, kind);
@@ -4015,13 +4025,18 @@ router.post("/itineraries/public/:shareToken/verify-payment", async (req, res) =
     if (!token || token.length < 16) {
       return res.status(400).json({ error: "shareToken required", code: "MISSING_TOKEN" });
     }
-    const rp = getPlatformRazorpay();
-    if (!rp) {
-      return res.status(503).json({ error: "Online payment is not configured", code: "GATEWAY_NOT_CONFIGURED" });
-    }
     const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body || {};
     if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
       return res.status(400).json({ error: "Missing payment fields", code: "MISSING_FIELDS" });
+    }
+    const itin = await prisma.itinerary.findUnique({ where: { shareToken: token } });
+    if (!itin) return res.status(404).json({ error: "Itinerary not found", code: "NOT_FOUND" });
+    if (itin.status === "draft") return res.status(409).json({ error: "Itinerary not yet shared", code: "NOT_SHARED" });
+    // Resolve the TENANT's own Razorpay keys (the order was created with them)
+    // and verify the checkout signature against the TENANT's key secret.
+    const rp = await getTenantRazorpayClient(itin.tenantId);
+    if (!rp) {
+      return res.status(503).json({ error: NOT_CONFIGURED_MESSAGE, code: "GATEWAY_NOT_CONFIGURED" });
     }
     // Verify checkout signature: HMAC-SHA256(order_id|payment_id, key_secret).
     const expected = crypto
@@ -4035,10 +4050,6 @@ router.post("/itineraries/public/:shareToken/verify-payment", async (req, res) =
     if (!ok) {
       return res.status(400).json({ error: "Payment verification failed", code: "BAD_SIGNATURE" });
     }
-
-    const itin = await prisma.itinerary.findUnique({ where: { shareToken: token } });
-    if (!itin) return res.status(404).json({ error: "Itinerary not found", code: "NOT_FOUND" });
-    if (itin.status === "draft") return res.status(409).json({ error: "Itinerary not yet shared", code: "NOT_SHARED" });
 
     const total = itin.totalAmount ? Number(itin.totalAmount) : 0;
 
@@ -4077,6 +4088,9 @@ router.post("/itineraries/public/:shareToken/verify-payment", async (req, res) =
         advancePaidAmount: newTotalPaid,
         advancePaidAt: new Date(),
         paymentReference: String(razorpay_payment_id),
+        // Deposit landed → clear any pay-or-cancel at-risk flag (see
+        // cron/paymentDeadlineEngine.js).
+        paymentOverdueAt: null,
       },
     });
     res.status(201).json({

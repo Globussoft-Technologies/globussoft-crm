@@ -12,6 +12,7 @@ const { scoreDiagnostic, parseBank } = require("../lib/travelDiagnosticScoring")
 const { notifyMany } = require("../lib/notificationService");
 const { writeAudit } = require("../lib/audit");
 const visaDocStore = require("../lib/visaDocStore");
+const { buildForm: buildReviewForm, validateSubmission: validateReviewSubmission } = require("../lib/travelReviewQuestions");
 
 // Memory-storage multer for the travel customer's profile avatar — 5 MB cap,
 // image-only (s3Service.uploadImage re-gates the mimetype). Mirrors the staff
@@ -463,7 +464,48 @@ router.get("/travel/itineraries", verifyPortalToken, requireTravelPortalTenant, 
         items: { orderBy: { position: "asc" } },
       },
     });
-    res.json(itineraries);
+    // Attach a web-check-in "due" flag per trip: any active WebCheckin row
+    // (pending/reminded) whose flight departs within the next 36h. Drives the
+    // portal's "Have you checked in? Yes/No" banner (2026-06-16). The Yes
+    // action flips those rows to "done" → flag clears + reminders stop.
+    const ids = itineraries.map((i) => i.id);
+    let dueByItin = {};
+    if (ids.length) {
+      const now = new Date();
+      const horizon = new Date(now.getTime() + 37 * 3600000);
+      const wcRows = await prisma.webCheckin.findMany({
+        where: {
+          tenantId: req.portal.tenantId,
+          itineraryId: { in: ids },
+          status: { in: ["pending", "reminded"] },
+          departureAt: { gte: now, lte: horizon },
+        },
+        select: { itineraryId: true },
+      });
+      dueByItin = Object.fromEntries(wcRows.map((w) => [w.itineraryId, true]));
+    }
+    // Post-trip review state per trip (2026-06-16): "submitted" | "available"
+    // (trip ended + paid + non-visasure, not yet reviewed) | "none". Drives the
+    // portal "Leave a review" surface on completed trips.
+    let reviewByItin = {};
+    if (ids.length) {
+      const rows = await prisma.travelTripReview.findMany({
+        where: { tenantId: req.portal.tenantId, itineraryId: { in: ids } },
+        select: { itineraryId: true, status: true },
+      });
+      reviewByItin = Object.fromEntries(rows.map((r) => [r.itineraryId, r.status]));
+    }
+    const nowMs = Date.now();
+    const reviewState = (i) => {
+      if (reviewByItin[i.id] === "submitted") return "submitted";
+      const ended = i.endDate && new Date(i.endDate).getTime() < nowMs;
+      // Any committed booking (accepted / paid) is reviewable once it's over —
+      // payment state doesn't gate a review. Matches cron/travelReviewEngine.js.
+      const committed = ["accepted", "advance_paid", "fully_paid"].includes(i.status);
+      if (ended && committed && i.subBrand !== "visasure") return "available";
+      return "none";
+    };
+    res.json(itineraries.map((i) => ({ ...i, webCheckinDue: Boolean(dueByItin[i.id]), reviewState: reviewState(i) })));
   } catch (err) {
     console.error("[Portal][travel/itineraries]", err);
     res.status(500).json({ error: "Failed to fetch itineraries" });
@@ -623,6 +665,95 @@ router.post("/travel/itineraries/:id/decline", verifyPortalToken, requireTravelP
   } catch (err) {
     console.error("[Portal][travel/itin decline]", err);
     res.status(500).json({ error: "Failed to decline this trip" });
+  }
+});
+
+// POST /api/portal/travel/itineraries/:id/webcheckin-confirm
+//
+// The customer's "Yes, I've checked in" action for a flight trip (2026-06-16).
+// Flips every still-active WebCheckin row for this trip → status "done" — the
+// SAME rows the existing webCheckinScheduler + the email engine read, so this
+// one confirm stops BOTH (no more reminder emails, no agent-fallback
+// escalation). Ownership verified by loadPortalOwnedItinerary. Idempotent: if
+// no active rows remain it's a no-op success (updated: 0).
+router.post("/travel/itineraries/:id/webcheckin-confirm", verifyPortalToken, requireTravelPortalTenant, async (req, res) => {
+  try {
+    const itin = await loadPortalOwnedItinerary(req, res);
+    if (!itin) return;
+    const result = await prisma.webCheckin.updateMany({
+      where: {
+        itineraryId: itin.id,
+        tenantId: req.portal.tenantId,
+        status: { in: ["pending", "reminded"] },
+      },
+      data: { status: "done" },
+    });
+    res.json({ id: itin.id, confirmed: true, updated: result.count });
+  } catch (err) {
+    console.error("[Portal][travel/itin webcheckin-confirm]", err);
+    res.status(500).json({ error: "Failed to confirm web check-in" });
+  }
+});
+
+// GET /api/portal/travel/itineraries/:id/review
+// Returns the (destination-interpolated) review form + the customer's current
+// review state for their OWN completed trip. (2026-06-16)
+router.get("/travel/itineraries/:id/review", verifyPortalToken, requireTravelPortalTenant, async (req, res) => {
+  try {
+    const itin = await loadPortalOwnedItinerary(req, res);
+    if (!itin) return;
+    const existing = await prisma.travelTripReview.findUnique({
+      where: { itineraryId: itin.id },
+      select: { status: true, overallRating: true },
+    });
+    const destination = itin.destination || "your trip";
+    res.json({
+      destination,
+      status: existing ? existing.status : "available",
+      alreadySubmitted: existing ? existing.status === "submitted" : false,
+      overallRating: existing ? existing.overallRating : null,
+      form: buildReviewForm(destination),
+    });
+  } catch (err) {
+    console.error("[Portal][travel/itin review get]", err);
+    res.status(500).json({ error: "Failed to load review" });
+  }
+});
+
+// POST /api/portal/travel/itineraries/:id/review
+// The logged-in customer submits a review for their OWN trip. Upserts the
+// TravelTripReview row (the cron may have already created one in "requested"
+// state; if not, we create it). Idempotent: a re-submit on an already-submitted
+// trip returns 409. (2026-06-16)
+router.post("/travel/itineraries/:id/review", verifyPortalToken, requireTravelPortalTenant, async (req, res) => {
+  try {
+    const itin = await loadPortalOwnedItinerary(req, res);
+    if (!itin) return;
+    const { ok, errors, overallRating, clean } = validateReviewSubmission(req.body && req.body.answers);
+    if (!ok) return res.status(400).json({ error: "Some answers need attention", code: "INVALID_ANSWERS", errors });
+
+    const existing = await prisma.travelTripReview.findUnique({ where: { itineraryId: itin.id }, select: { id: true, status: true } });
+    if (existing && existing.status === "submitted") {
+      return res.status(409).json({ error: "You've already reviewed this trip — thank you!", code: "ALREADY_SUBMITTED" });
+    }
+    const data = { status: "submitted", overallRating, answersJson: JSON.stringify(clean), submittedAt: new Date() };
+    if (existing) {
+      await prisma.travelTripReview.update({ where: { id: existing.id }, data });
+    } else {
+      await prisma.travelTripReview.create({
+        data: {
+          tenantId: req.portal.tenantId,
+          itineraryId: itin.id,
+          contactId: req.portal.contactId,
+          token: crypto.randomBytes(24).toString("base64url"),
+          ...data,
+        },
+      });
+    }
+    res.status(201).json({ ok: true, overallRating });
+  } catch (err) {
+    console.error("[Portal][travel/itin review submit]", err);
+    res.status(500).json({ error: "Failed to submit review" });
   }
 });
 

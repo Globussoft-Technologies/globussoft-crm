@@ -16,7 +16,7 @@ import { useContext, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Map, Filter, Plane, Hotel, MapPin, Briefcase, FileText, Shield, Plus, X,
-  Sparkles,
+  Sparkles, AlertTriangle,
 } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
@@ -53,6 +53,7 @@ const STATUSES = [
   { value: "revised", label: "Revised" },
   { value: "accepted", label: "Accepted" },
   { value: "rejected", label: "Rejected" },
+  { value: "expired", label: "Expired" },
 ];
 
 // #879 (Itineraries slice) — pre-refactor used inline `${bg}` + `${color}`
@@ -66,6 +67,9 @@ const STATUS_VARIANT = {
   revised: "revised",
   accepted: "accepted",
   rejected: "rejected",
+  // expired = advisor-cancelled for non-payment (cron/paymentDeadlineEngine
+  // flags it; advisor sets the status). Reuses the "rejected" red-ish pill.
+  expired: "rejected",
 };
 
 // PRD §6.4 — tier badge palette. productTier on each Itinerary is captured
@@ -656,6 +660,29 @@ export default function Itineraries() {
                       <span className={`travel-itin-status-pill travel-itin-status-pill--${statusVariant}`}>
                         {it.status}
                       </span>
+                      {/* Pay-or-cancel at-risk flag: an accepted booking whose
+                          50% deposit deadline passed unpaid (paymentOverdueAt
+                          set by cron/paymentDeadlineEngine). Prompts the advisor
+                          to follow up or set status → expired. */}
+                      {it.status === "accepted" && it.paymentOverdueAt && (
+                        <span
+                          title={`Deposit overdue since ${fmt(it.paymentOverdueAt)} — review for cancellation`}
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: 4,
+                            marginLeft: 6,
+                            padding: "1px 6px",
+                            borderRadius: 10,
+                            fontSize: 11,
+                            fontWeight: 600,
+                            background: "rgba(220,38,38,0.12)",
+                            color: "#b91c1c",
+                          }}
+                        >
+                          <AlertTriangle size={11} aria-hidden="true" /> Deposit overdue
+                        </span>
+                      )}
                     </td>
                     <td style={td}><TierBadge tier={it.productTier} /></td>
                     <td style={td}>{new Date(it.updatedAt).toLocaleDateString()}</td>

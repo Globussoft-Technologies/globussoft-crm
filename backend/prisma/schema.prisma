@@ -187,6 +187,7 @@ model Tenant {
   travelMarkupRules                   TravelMarkupRule[]
   tmcTrips                            TmcTrip[]
   webCheckins                         WebCheckin[]
+  travelTripReviews                   TravelTripReview[]
   supplierCredentials                 SupplierCredential[]
   visaApplications                    VisaApplication[]
   // G107 — RejectionRecoveryProgram back-relation (PRD_VISA_SURE_PHASE_3 §FR-7).
@@ -5627,6 +5628,13 @@ model Itinerary {
   advancePaidAmount    Decimal?        @db.Decimal(15, 2)
   advancePaidAt        DateTime?
   paymentReference     String?
+  // Pay-or-cancel deposit deadline (2026-06-16). Set by cron/paymentDeadlineEngine
+  // when an `accepted`-but-unpaid itinerary passes its T-7 deposit deadline
+  // (startDate - 7d) without the 50% advance — i.e. it's now overdue/at-risk.
+  // Drives the advisor at-risk badge + the "review for cancellation" flag.
+  // Nullable + additive; the engine never auto-changes status (advisor sets
+  // "expired" manually). Cleared back to null if a late payment lands.
+  paymentOverdueAt     DateTime?
   // Customer's reason/feedback when they DECLINE an offer (PRD §6.1). Free
   // text the customer enters in the portal so the advisor knows what to
   // improve. Nullable; only set on a customer decline.
@@ -6129,6 +6137,11 @@ model WebCheckin {
   mealPref        String?
   status          String    @default("pending") // pending | reminded | in-progress | done | fallback-agent | failed
   attemptsJson    String?   @db.Text // [{at, result, errorReason}]
+  // Customer-facing web check-in reminder EMAILS sent by cron/webCheckinEngine.js
+  // (2026-06-16) — distinct from the scheduler's WhatsApp/status lifecycle.
+  // JSON array of milestone tags already emailed: e.g. ["h36","h24"] (T-36/24/12h
+  // before departureAt). Idempotency guard so a re-tick doesn't double-send.
+  emailRemindersJson String? @db.Text
   boardingPassUrl String?
   deliveredAt     DateTime?
   assignedAgentId Int?
@@ -6137,6 +6150,32 @@ model WebCheckin {
   updatedAt       DateTime  @updatedAt
 
   @@index([tenantId, status, windowOpenAt])
+  @@index([tenantId, contactId])
+}
+
+/// Post-trip customer review (2026-06-16). One per completed itinerary. The
+/// cron/travelReviewEngine.js creates a row (status "requested" + a public
+/// token) ~after the trip's endDate passes and emails the customer a review
+/// link; the customer submits via the public page (/p/review/:token) OR the
+/// logged-in portal — both write the same row. Questions are a fixed set in
+/// lib/travelReviewQuestions.js ({destination}-interpolated); answersJson holds
+/// the structured submission and overallRating is the rounded average of the
+/// star ratings (headline metric for advisor reporting). All sub-brands except
+/// Visa Sure.
+model TravelTripReview {
+  id            Int       @id @default(autoincrement())
+  tenantId      Int       @default(1)
+  itineraryId   Int       @unique // one review per trip
+  contactId     Int
+  token         String    @unique // public review-link slug
+  status        String    @default("requested") // requested | submitted
+  overallRating Int? // rounded avg of the 1-5 star answers (set on submit)
+  answersJson   String?   @db.Text // { questionId: value } for the full submission
+  requestedAt   DateTime  @default(now())
+  submittedAt   DateTime?
+  tenant        Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, status])
   @@index([tenantId, contactId])
 }
 
@@ -6319,6 +6358,48 @@ model EmailVerificationOtp {
   createdAt DateTime  @default(now())
 
   @@index([email, purpose])
+}
+
+/// Idempotency + audit ledger for pre-trip "countdown" nudge emails fired by
+/// cron/tripCountdownEngine.js. One row per (itinerary, day-bucket) — the
+/// @@unique guarantees a given day's nudge is sent at most once even if the
+/// hourly cron ticks multiple times that day. Tenant-scoped (derived from the
+/// itinerary).
+model TripCountdownNudge {
+  id          Int      @id @default(autoincrement())
+  tenantId    Int
+  itineraryId Int
+  dayTag      String // "d30" | "d14" | "d7" … "d0"
+  channel     String   @default("email")
+  status      String   @default("sent") // sent | failed | logged (no email key)
+  subject     String?  @db.Text
+  llmSourced  Boolean  @default(false) // true when copy came from the LLM (not the template fallback)
+  sentAt      DateTime @default(now())
+
+  @@unique([itineraryId, dayTag])
+  @@index([tenantId, itineraryId])
+}
+
+/// Pay-or-cancel deposit-deadline nudges (2026-06-16). For an `accepted` (but
+/// not yet paid) itinerary that owes a 50% deposit, the paymentDeadlineEngine
+/// chases the customer T-10 → T-7 (deadline = startDate - 7d) then, if still
+/// unpaid at T-6, flags the advisor + warns the customer (no auto-cancel —
+/// an advisor manually sets status "expired" to cancel). One row per
+/// (itineraryId, dayTag); dayTag ∈ {d10,d9,d8,d7,overdue}. Kept distinct from
+/// TripCountdownNudge so a later packing-d7 row can't collide with a payment-d7.
+model PaymentDeadlineNudge {
+  id          Int      @id @default(autoincrement())
+  tenantId    Int
+  itineraryId Int
+  dayTag      String // "d10" | "d9" | "d8" | "d7" | "overdue"
+  channel     String   @default("email")
+  status      String   @default("sent") // sent | failed | logged (no email key) | flagged (overdue advisor notice)
+  subject     String?  @db.Text
+  llmSourced  Boolean  @default(false)
+  sentAt      DateTime @default(now())
+
+  @@unique([itineraryId, dayTag])
+  @@index([tenantId, itineraryId])
 }
 
 /// Per-destination embassy quirks for Visa Sure risk-flag engine. PRD §PC-3 resolved 2026-05-24: Phase 3 in-scope structured rules; advisor-head + admin UI maintainer (PC-7).

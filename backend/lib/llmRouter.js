@@ -78,6 +78,18 @@ const TASK_ROUTING = {
   // routing table for Travel Stall's bulk-shape Gemini calls. Real call
   // gated on Q-IT-2 / Q11 GEMINI_API_KEY (see CREDS_TRACKER).
   "itinerary-suggest": { primary: "gemini-flash", fallback: "claude-haiku" },
+  // Trip-countdown nudge (pre-trip daily reminder emails). Short, upbeat,
+  // destination-personalised copy (subject + body) keyed to days-to-go.
+  // ~0.5K in / 0.5K out — routed to gemini-flash for low-cost bulk-shape
+  // calls. Falls back to the deterministic template library in
+  // backend/lib/tripCountdownContent.js until Q11 GEMINI_API_KEY lands.
+  "trip-countdown": { primary: "gemini-flash", fallback: "claude-haiku" },
+  // Pay-or-cancel deposit-deadline reminder (2026-06-16). Short, courteous-but-
+  // urgent copy (subject + body) keyed to days-until-deadline, telling the
+  // customer to pay the 50% deposit before the cut-off. Same shape/cost profile
+  // as trip-countdown → gemini-flash; falls back to the deterministic template
+  // library in backend/lib/paymentDeadlineContent.js until Q11 keys land.
+  "payment-reminder": { primary: "gemini-flash", fallback: "claude-haiku" },
   // Marketing-flyer-copy (PRD_TRAVEL_MARKETING_FLYER FR-3.6.1 + AC-6.8).
   // 1K in / 1K out — short-form headline + body + CTA JSON. Routed to
   // gemini-flash for low-cost bulk-shape Gemini calls per PRD §9.1.
@@ -487,6 +499,8 @@ function buildPrompt(task, payload) {
     "talking-points": "You are a senior travel advisor. Given a lead's diagnostic profile, produce concise, actionable talking points for the advisor's next call. Plain text, 3-6 short bullets.",
     "form-vs-call": "You compare a customer's web-form answers against their phone-call answers, summarise the level of match, and flag any mismatches. Plain text.",
     "itinerary-suggest": "You are an expert travel planner pricing a trip for a per-person quote. Given a destination, number of days, budget tier, and traveller interests/pace, return a realistic day-by-day itinerary as STRICT JSON only — no markdown, no text outside the JSON. Shape: {\"summary\":string,\"days\":[{\"dayNumber\":number,\"items\":[{\"itemType\":string,\"description\":string,\"estimatedCost\":number}]}]}. itemType MUST be one of: flight, transfer, hotel, sightseeing, activity, meals, visa, insurance, other. estimatedCost is the typical PER-PERSON cost in INR (Indian Rupees) for that item, using your best knowledge of current average prices for that destination and budget tier — give a realistic positive number; use 0 only when the item is genuinely free. Each day should include a hotel plus at least one sightseeing, one activity, and one meals item; put an arrival flight on day 1 and a departure flight on the final day. Keep each description short and specific to the destination. Return ONLY the JSON object.",
+    "trip-countdown": "You write a short, warm, upbeat PRE-TRIP reminder email for a travel customer. Return STRICT JSON only — no markdown, no text outside the JSON. Shape: {\"subject\":string,\"body\":string}. Use AT MOST one emoji in the subject. Mention the destination and the days-to-go. Keep the body under 80 words, friendly and encouraging (e.g. packing/prep tips as the trip nears). You may use the placeholder {name} for the customer's name in the body. Return ONLY the JSON object.",
+    "payment-reminder": "You write a short, courteous but clearly URGENT deposit-reminder email for a travel customer whose booking is confirmed but whose 50% deposit is still due before a deadline. Return STRICT JSON only — no markdown, no text outside the JSON. Shape: {\"subject\":string,\"body\":string}. No emoji. State plainly that the deposit must be paid by the deadline to keep the booking, and that the booking is at risk of cancellation otherwise. Mention the destination and the days remaining. Keep the body under 90 words. You may use the placeholder {name} for the customer's name. Return ONLY the JSON object.",
     "bulk-text": "You write clear, customer-facing travel copy. Plain text.",
     "call-summary": "You summarise a sales/advisory call in a few sentences. Plain text.",
     "reasoning": "You are a careful reasoning assistant for a travel CRM. Plain text.",

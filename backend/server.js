@@ -623,6 +623,7 @@ const travelReligiousPacketsRoutes = require("./routes/travel_religious_packets"
 const travelPricingRoutes = require("./routes/travel_pricing");
 const travelTripBillingRoutes = require("./routes/travel_trip_billing");
 const travelWebcheckinRoutes = require("./routes/travel_webcheckin");
+const travelReviewsRoutes = require("./routes/travel_reviews");
 const travelCsvIoRoutes = require("./routes/travel_csv_io");
 const travelDashboardRoutes = require("./routes/travel_dashboard");
 const travelReportsRoutes = require("./routes/travel_reports");
@@ -745,7 +746,7 @@ app.use("/api", (req, res, next) => {
   // promotes a contact to a portal user. Removing the entry routes the
   // unauthenticated case through the global guard's 401 (RFC 7235), and
   // the authenticated case continues unaffected.
-  const openPaths = ["/auth/login", "/auth/signup", "/auth/register", "/auth/customer/register", "/auth/email-otp", "/auth/check-email", "/auth/public/tenants", "/auth/forgot-password", "/auth/reset-password", "/auth/2fa/verify", "/health", "/marketplace-leads/webhook", "/sms/webhook", "/whatsapp/webhook", "/telephony/webhook", "/push/subscribe/visitor", "/push/vapid-key", "/communications/track/", "/sso/google/callback", "/sso/microsoft/callback", "/sso/google/start", "/sso/microsoft/start", "/email/inbound", "/calendar/google/callback", "/calendar/outlook/callback", "/voice/webhook", "/portal/login", "/portal/register", "/portal/forgot", "/portal/reset", "/portal/me", "/portal/tickets", "/portal/invoices", "/portal/contracts", "/portal/travel", "/portal/kyc", "/signatures/sign", "/surveys/respond", "/surveys/public", "/chatbots/chat", "/web-visitors/track", "/payments/webhook", "/accounting/webhook", "/scim/v2", "/booking-pages/public", "/knowledge-base/public", "/live-chat/visitor", "/document-views/track", "/zapier/webhook", "/marketing/submit", "/v1/external", "/v1/voyagr", "/v1/flight-plugin", "/wellness/public", "/wellness/portal", "/attendance/biometric/webhook", "/travel/microsites/public", "/travel/diagnostics/public", "/travel/itineraries/public", "/travel/inbound/leads", "/travel/whatsapp/webhook", "/travel/whatsapp/media", "/v1/flyers/public", "/security/csp-report", "/privacy-policy", "/deleted-account-policy", "/terms-and-conditions", "/legal"];
+  const openPaths = ["/auth/login", "/auth/signup", "/auth/register", "/auth/customer/register", "/auth/email-otp", "/auth/check-email", "/auth/public/tenants", "/auth/forgot-password", "/auth/reset-password", "/auth/2fa/verify", "/health", "/marketplace-leads/webhook", "/sms/webhook", "/whatsapp/webhook", "/telephony/webhook", "/push/subscribe/visitor", "/push/vapid-key", "/communications/track/", "/sso/google/callback", "/sso/microsoft/callback", "/sso/google/start", "/sso/microsoft/start", "/email/inbound", "/calendar/google/callback", "/calendar/outlook/callback", "/voice/webhook", "/portal/login", "/portal/register", "/portal/forgot", "/portal/reset", "/portal/me", "/portal/tickets", "/portal/invoices", "/portal/contracts", "/portal/travel", "/portal/kyc", "/signatures/sign", "/surveys/respond", "/surveys/public", "/chatbots/chat", "/web-visitors/track", "/payments/webhook", "/accounting/webhook", "/scim/v2", "/booking-pages/public", "/knowledge-base/public", "/live-chat/visitor", "/document-views/track", "/zapier/webhook", "/marketing/submit", "/v1/external", "/v1/voyagr", "/v1/flight-plugin", "/wellness/public", "/wellness/portal", "/attendance/biometric/webhook", "/travel/microsites/public", "/travel/diagnostics/public", "/travel/itineraries/public", "/travel/reviews/public", "/travel/inbound/leads", "/travel/whatsapp/webhook", "/travel/whatsapp/media", "/v1/flyers/public", "/security/csp-report", "/privacy-policy", "/deleted-account-policy", "/terms-and-conditions", "/legal"];
   if (openPaths.some(p => req.path.startsWith(p))) return next();
   // Public marketing catalog — the /pricing page hits GET /subscriptions/plans
   // anonymously. Admin CRUD (POST/PUT/DELETE + GET /plans/admin) stays gated
@@ -964,6 +965,7 @@ app.use("/api/travel", travelReportsRoutes);
 app.use("/api/travel", travelDiagnosticsRoutes);
 app.use("/api/travel/visa/analytics", travelVisaAnalyticsRoutes);
 app.use("/api/travel/visa", travelVisaRoutes);
+app.use("/api/travel", travelReviewsRoutes); // literal /reviews paths — mount before parametric itinerary routes
 app.use("/api/travel", travelItinerariesRoutes);
 app.use("/api/travel", travelTripsRoutes);
 // Slice C2 — passport OCR upload + verification queue (stub-mode pending PC-1).
@@ -1552,6 +1554,41 @@ if (process.env.DISABLE_CRONS === '1') {
   // visible Phase 1 output.
   const { initTravelJourneyRemindersCron } = require('./cron/travelJourneyReminders');
   initTravelJourneyRemindersCron();
+
+  // Pre-trip "countdown" nudge engine (2026-06-16) — emails PAID travel
+  // customers (itinerary status ∈ {advance_paid, fully_paid}) a short creative
+  // reminder daily through the final week (T-30/T-14 then T-7…T-0).
+  // LLM-generated copy (task "trip-countdown") with a template fallback; real
+  // SendGrid email; idempotent per (itinerary, day-bucket). Accepted-but-unpaid
+  // bookings are owned by the payment-deadline engine below instead.
+  const { initTripCountdownCron } = require('./cron/tripCountdownEngine');
+  initTripCountdownCron();
+
+  // Pay-or-cancel deposit-deadline engine (2026-06-16) — chases an `accepted`
+  // (but unpaid) travel booking for its 50% deposit T-10…T-7 (deadline T-7),
+  // then at T-6 emails an at-risk notice + raises an advisor "review for
+  // cancellation" flag and stamps Itinerary.paymentOverdueAt. NO auto-cancel —
+  // an advisor sets status "expired". All sub-brands except Visa Sure.
+  const { initPaymentDeadlineCron } = require('./cron/paymentDeadlineEngine');
+  initPaymentDeadlineCron();
+
+  // Web check-in reminder EMAIL engine (2026-06-16) — the customer-facing
+  // email layer over the EXISTING WebCheckin rows (the webCheckinScheduler
+  // above owns their status lifecycle + WhatsApp + agent fallback). Emails the
+  // passenger at T-36h/T-24h/T-12h before the flight's departureAt when the
+  // parent itinerary is PAID + non-Visa-Sure; the portal "Yes, I've checked in"
+  // flips the rows to "done" so this engine AND the scheduler both stop.
+  // Travel-only (reads WebCheckin rows).
+  const { initWebCheckinCron } = require('./cron/webCheckinEngine');
+  initWebCheckinCron();
+
+  // Post-trip review engine (2026-06-16) — once a committed (accepted/paid),
+  // non-Visa-Sure trip's endDate passes, emails the customer a fixed-question review (destination
+  // woven into the wording) linking to a public review page (/p/review/:token);
+  // they can also submit from the portal. Daily 09:07; idempotent (one
+  // TravelTripReview row per trip). Travel-only (scans Itinerary).
+  const { initTravelReviewCron } = require('./cron/travelReviewEngine');
+  initTravelReviewCron();
 
   // Initialize Visa Sure risk-flagging engine (every 6 hours, SHELL).
   // PRD Phase 3 §3 FR-3 (rows V5-V7, cluster B3) — scans VisaApplication

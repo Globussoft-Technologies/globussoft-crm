@@ -62,6 +62,7 @@ const TmcReadiness = lazy(() => import("./pages/public/TmcReadiness"));
 const TmcReadinessReport = lazy(() => import("./pages/public/TmcReadinessReport"));
 // PRD_TRAVEL_QUOTE_BUILDER §3.7 / slice C9 — public quote-accept landing.
 const QuoteAcceptLanding = lazy(() => import("./pages/public/QuoteAcceptLanding"));
+const TravelReview = lazy(() => import("./pages/public/TravelReview"));
 // Public flyer share/embed viewer — /p/flyer/:slug?t=<jwt>[&embed=1].
 const FlyerView = lazy(() => import("./pages/public/FlyerView"));
 // Cross-vertical staff attendance dashboard — visible to wellness + travel
@@ -225,6 +226,7 @@ const TravelCancellationPolicies = lazy(() => import("./pages/travel/Cancellatio
 const TravelLeads = lazy(() => import("./pages/travel/Leads"));
 const TravelPricingRules = lazy(() => import("./pages/travel/PricingRules"));
 const TravelReports = lazy(() => import("./pages/travel/Reports"));
+const TravelReviews = lazy(() => import("./pages/travel/Reviews"));
 const TravelRfuCustomerProfile = lazy(() => import("./pages/travel/RfuCustomerProfile"));
 const TravelSuppliers = lazy(() => import("./pages/travel/Suppliers"));
 const TravelSuppliersAdmin = lazy(() => import("./pages/travel/SuppliersAdmin"));
@@ -984,6 +986,8 @@ export default function App() {
                   <Route path="/p/tmc/report/:slug" element={<TmcReadinessReport />} />
                   {/* PRD_TRAVEL_QUOTE_BUILDER §3.7 / slice C9 — customer-accept landing. */}
                   <Route path="/p/quote/:shareToken" element={<QuoteAcceptLanding />} />
+                  {/* Public post-trip review (no auth; token in path). */}
+                  <Route path="/p/review/:token" element={<TravelReview />} />
                   {/* Public flyer share + iframe-embed viewer (no auth; JWT in ?t=). */}
                   <Route path="/p/flyer/:slug" element={<FlyerView />} />
                   <Route path="/travel/kyc/callback" element={<TravelKycCallback flow="microsite" />} />
@@ -1481,6 +1485,7 @@ export default function App() {
               <Route path="travel/rfu/customers/:contactId" element={<TravelOnly><TravelRfuCustomerProfile /></TravelOnly>} />
               <Route path="travel/pricing-rules" element={<TravelOnly><TravelPricingRules /></TravelOnly>} />
               <Route path="travel/reports" element={<TravelOnly><TravelReports /></TravelOnly>} />
+              <Route path="travel/reviews" element={<TravelOnly><TravelReviews /></TravelOnly>} />
               <Route path="travel/suppliers" element={<TravelOnly><TravelSuppliers /></TravelOnly>} />
               <Route path="travel/suppliers-admin" element={<TravelOnly><TravelSuppliersAdmin /></TravelOnly>} />
               {/* PRD_TRAVEL_SUPPLIER_MASTER G035/G036 — Supplier PO ledger */}

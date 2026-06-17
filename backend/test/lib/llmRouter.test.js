@@ -166,6 +166,11 @@ describe('llmRouter — module shape', () => {
       "bulk-text": { primary: "gemini-flash", fallback: "claude-haiku" },
       "call-summary": { primary: "gemini-flash", fallback: null },
       "itinerary-suggest": { primary: "gemini-flash", fallback: "claude-haiku" },
+      // Trip-countdown (packing nudges) + payment-reminder (pay-or-cancel
+      // deposit chase) — 2026-06-16 travel notification engines. Both bulk-
+      // shape email copy → gemini-flash primary / claude-haiku fallback.
+      "trip-countdown": { primary: "gemini-flash", fallback: "claude-haiku" },
+      "payment-reminder": { primary: "gemini-flash", fallback: "claude-haiku" },
       "marketing-flyer-copy": { primary: "gemini-flash", fallback: "claude-haiku" },
       "marketing-flyer-image": { primary: "dall-e-3", fallback: "stability-xl" },
     });
@@ -178,8 +183,9 @@ describe('llmRouter — module shape', () => {
     );
     // Length cross-check — PRD §9.1's 7 task classes + FR-3.6's
     // 'itinerary-suggest' (S14) + FR-3.6.1's 'marketing-flyer-copy' (S15)
-    // + FR-3.6.3's 'marketing-flyer-image' (S16) extensions = 10.
-    expect(r.VALID_TASKS).toHaveLength(10);
+    // + FR-3.6.3's 'marketing-flyer-image' (S16) + the 2026-06-16 travel
+    // notification engines 'trip-countdown' + 'payment-reminder' = 12.
+    expect(r.VALID_TASKS).toHaveLength(12);
   });
 });
 

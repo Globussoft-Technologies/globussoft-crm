@@ -39,8 +39,9 @@ import {
   ShieldCheck, ShieldAlert, LogOut, Plane, User as UserIcon,
   CheckCircle2, AlertCircle, Loader2, ClipboardCheck, Award, LayoutDashboard,
   ChevronRight, ChevronLeft, Hotel, Ticket, FileUp, Upload, UserPlus,
-  Mail, Phone, Sun, Moon, Stamp,
+  Mail, Phone, Sun, Moon, Stamp, Star,
 } from "lucide-react";
+import TravelReviewForm from "../../components/TravelReviewForm";
 
 const PORTAL_TOKEN_KEY = "portalToken";
 const PORTAL_CONTACT_KEY = "portalContact";
@@ -1908,9 +1909,33 @@ function BookingDetail({ itinerary, token, onChanged, onBack }) {
   const [decideErr, setDecideErr] = useState(null);
   const [declining, setDeclining] = useState(false); // reason form open?
   const [reasonText, setReasonText] = useState("");
+  // Web check-in prompt (2026-06-16): customer confirms they've checked in for
+  // a flight trip → stops the T-36/24/12h reminder emails.
+  const [wcBusy, setWcBusy] = useState(false);
+  const [wcErr, setWcErr] = useState(null);
+  const [wcDismissed, setWcDismissed] = useState(false); // "Not yet" hides for this view
+  const [wcConfirmed, setWcConfirmed] = useState(false); // set after a successful "Yes"
+  // Post-trip review (2026-06-16) — only on completed trips (reviewState).
+  const [reviewForm, setReviewForm] = useState(null);
+  const [reviewSubmitting, setReviewSubmitting] = useState(false);
+  const [reviewError, setReviewError] = useState(null);
+  const [reviewDone, setReviewDone] = useState(false);
   // "What-if" headcount the customer types into the estimate calculator.
   // Empty string = use the advisor's quoted traveler count (pax).
   const [headcount, setHeadcount] = useState("");
+
+  // Post-trip review: fetch the destination-interpolated form once when the
+  // trip is review-able. Declared BEFORE the early return so the hook order
+  // stays stable (react-hooks/rules-of-hooks). Guards on itinerary internally.
+  useEffect(() => {
+    let alive = true;
+    if (itinerary && itinerary.reviewState === "available" && !reviewForm) {
+      portalFetch(`/travel/itineraries/${itinerary.id}/review`, { token })
+        .then((res) => { if (alive && res && res.form) setReviewForm(res.form); })
+        .catch(() => { /* non-fatal — section just won't render the form */ });
+    }
+    return () => { alive = false; };
+  }, [itinerary, token, reviewForm]);
 
   if (!itinerary) {
     return (
@@ -1938,6 +1963,42 @@ function BookingDetail({ itinerary, token, onChanged, onBack }) {
   const canDecide = DECIDABLE_BOOKING_STATUSES.includes(status);
   const isAccepted = ["accepted", "advance_paid", "fully_paid"].includes(status);
   const isDeclined = status === "rejected";
+  // Web check-in: the server attaches `webCheckinDue` (an active WebCheckin row
+  // for this trip whose flight departs within 36h). Clicking "Yes" flips those
+  // rows to "done" → the flag clears on refresh + the reminder emails stop.
+  const webCheckinDue = Boolean(itinerary.webCheckinDue) && !wcConfirmed;
+
+  const confirmWebCheckin = async () => {
+    setWcBusy(true);
+    setWcErr(null);
+    try {
+      await portalFetch(`/travel/itineraries/${itinerary.id}/webcheckin-confirm`, { token, method: "POST" });
+      setWcConfirmed(true); // show the confirmed line immediately
+      if (onChanged) await onChanged(); // refresh so webCheckinDue clears
+    } catch (e) {
+      setWcErr(e.message || "Couldn't save that. Please try again.");
+    } finally {
+      setWcBusy(false);
+    }
+  };
+
+  // Post-trip review state ("available" | "submitted" | "none"); the form
+  // fetch itself runs in the useEffect declared above the early return.
+  const reviewState = itinerary.reviewState;
+
+  const submitReview = async (answers) => {
+    setReviewSubmitting(true);
+    setReviewError(null);
+    try {
+      await portalFetch(`/travel/itineraries/${itinerary.id}/review`, { token, method: "POST", body: { answers } });
+      setReviewDone(true);
+      if (onChanged) await onChanged();
+    } catch (e) {
+      setReviewError(e.message || "Couldn't submit your review. Please try again.");
+    } finally {
+      setReviewSubmitting(false);
+    }
+  };
 
   const decide = async (action, reason) => {
     setBusy(action);
@@ -1981,6 +2042,76 @@ function BookingDetail({ itinerary, token, onChanged, onBack }) {
           {itinerary.endDate ? new Date(itinerary.endDate).toLocaleDateString() : "—"}
         </div>
       </section>
+
+      {/* Web check-in prompt — a PAID flight trip within 36h that the customer
+          hasn't confirmed yet. Clicking "Yes" stops the reminder emails. */}
+      {webCheckinDue && !wcDismissed && (
+        <section style={{ ...cardStyle, borderLeft: "4px solid var(--primary-color, var(--accent-color))" }} aria-labelledby="webcheckin-heading">
+          <h3 id="webcheckin-heading" style={{ margin: 0, fontSize: 16, display: "flex", alignItems: "center", gap: 8 }}>
+            <ClipboardCheck size={18} aria-hidden /> Web check-in for {itinerary.destination || "your trip"}
+          </h3>
+          <p style={{ color: "var(--text-secondary)", margin: "6px 0 12px", fontSize: 14 }}>
+            Your flight is coming up soon. Online web check-in usually opens 24 hours before departure — check in with the airline, then let us know so we can stop reminding you. <strong>Have you checked in?</strong>
+          </p>
+          {wcErr && (
+            <p role="alert" style={{ color: "#b91c1c", fontSize: 13, margin: "0 0 10px" }}>{wcErr}</p>
+          )}
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <button
+              type="button"
+              onClick={confirmWebCheckin}
+              disabled={wcBusy}
+              style={{
+                display: "inline-flex", alignItems: "center", gap: 6, padding: "8px 16px",
+                border: "none", borderRadius: 8, fontWeight: 600, fontSize: 14, cursor: wcBusy ? "default" : "pointer",
+                background: "var(--primary-color, var(--accent-color))", color: "#fff", opacity: wcBusy ? 0.7 : 1,
+              }}
+            >
+              {wcBusy ? <Loader2 size={15} className="spin" aria-hidden /> : <CheckCircle2 size={15} aria-hidden />}
+              Yes, I’ve checked in
+            </button>
+            <button
+              type="button"
+              onClick={() => setWcDismissed(true)}
+              disabled={wcBusy}
+              style={{
+                padding: "8px 16px", borderRadius: 8, fontWeight: 600, fontSize: 14, cursor: "pointer",
+                background: "transparent", border: "1px solid var(--border-light, #d1d5db)", color: "var(--text-secondary)",
+              }}
+            >
+              Not yet
+            </button>
+          </div>
+        </section>
+      )}
+      {wcConfirmed && (
+        <section style={{ ...cardStyle, display: "flex", alignItems: "center", gap: 8 }}>
+          <CheckCircle2 size={18} aria-hidden style={{ color: "#16a34a" }} />
+          <span style={{ fontSize: 14, color: "var(--text-secondary)" }}>You’ve confirmed web check-in for this trip — no more reminders.</span>
+        </section>
+      )}
+
+      {/* Post-trip review (completed trips). "submitted"/just-done → thanks;
+          "available" → the star/options/text form. */}
+      {(reviewState === "submitted" || reviewDone) && (
+        <section style={{ ...cardStyle, display: "flex", alignItems: "center", gap: 8 }}>
+          <Star size={18} aria-hidden fill="#F5B301" color="#F5B301" />
+          <span style={{ fontSize: 14, color: "var(--text-secondary)" }}>Thanks for reviewing your trip — we appreciate your feedback!</span>
+        </section>
+      )}
+      {reviewState === "available" && !reviewDone && (
+        <section style={cardStyle} aria-labelledby="trip-review-heading">
+          <h3 id="trip-review-heading" style={{ margin: "0 0 4px", fontSize: 16 }}>
+            How was your trip to {itinerary.destination || "your destination"}?
+          </h3>
+          <p style={{ color: "var(--text-secondary)", margin: "0 0 12px", fontSize: 14 }}>
+            Your trip has wrapped up — we’d love a quick review. It takes about a minute.
+          </p>
+          {reviewForm
+            ? <TravelReviewForm form={reviewForm} onSubmit={submitReview} submitting={reviewSubmitting} submitError={reviewError} />
+            : <p style={{ color: "var(--text-secondary)", fontSize: 13 }}>Loading the review form…</p>}
+        </section>
+      )}
 
       {/* Customer's decision on the offer — accepting/declining is the
           customer's right, not the advisor's. */}

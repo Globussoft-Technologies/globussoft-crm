@@ -322,7 +322,11 @@ async function routeRequest({ task, payload, tenantId } = {}) {
   // is real with ZERO further code changes (no "swap the stub later" landmine).
   // No key (dev / CI / demo-without-keys) OR NODE_ENV==='test' falls through to
   // the deterministic stub below, keeping unit + e2e runs offline + repeatable.
-  if (process.env.NODE_ENV !== "test" && llmEnabled(task)) {
+  // NOTE: llmEnabled is async — it MUST be awaited (an unawaited call returns a
+  // truthy Promise, which made routeRequest attempt the real provider even when
+  // the model's key was absent → talking-points/etc. 500'd instead of stubbing).
+  // Passing tenantId also lets the per-tenant SupplierCredential key resolve.
+  if (process.env.NODE_ENV !== "test" && (await llmEnabled(task, tenantId))) {
     try {
       return await realProviderCall({ task, model, payload, tenantId });
     } catch (e) {

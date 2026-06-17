@@ -55,3 +55,64 @@ describe("emailOtp.sendOtpEmail", () => {
     }
   });
 });
+
+// Route-layer enforcement (closes the "POST without a token skips OTP" bypass).
+// Opt-in only — default OFF everywhere (so it can't silently 403 GetStarted.jsx
+// signups / Settings team-invites that share /auth/register). REQUIRE_EMAIL_OTP
+// is the sole control; nothing else reads it, so mutating it here can't bleed.
+describe("emailOtp.isRegistrationOtpEnforced", () => {
+  const savedReq = process.env.REQUIRE_EMAIL_OTP;
+  afterEach(() => {
+    if (savedReq === undefined) delete process.env.REQUIRE_EMAIL_OTP; else process.env.REQUIRE_EMAIL_OTP = savedReq;
+  });
+
+  it("is OFF by default (opt-in); REQUIRE_EMAIL_OTP=1 turns it on, =0 keeps it off", () => {
+    delete process.env.REQUIRE_EMAIL_OTP;
+    expect(emailOtp.isRegistrationOtpEnforced()).toBe(false);
+    process.env.REQUIRE_EMAIL_OTP = "1";
+    expect(emailOtp.isRegistrationOtpEnforced()).toBe(true);
+    process.env.REQUIRE_EMAIL_OTP = "0";
+    expect(emailOtp.isRegistrationOtpEnforced()).toBe(false);
+  });
+});
+
+describe("emailOtp.enforceRegistrationOtp", () => {
+  const savedReq = process.env.REQUIRE_EMAIL_OTP;
+  afterEach(() => {
+    if (savedReq === undefined) delete process.env.REQUIRE_EMAIL_OTP; else process.env.REQUIRE_EMAIL_OTP = savedReq;
+  });
+
+  it("ENFORCED: absent token → 403 EMAIL_VERIFICATION_REQUIRED (the bypass, now closed)", () => {
+    process.env.REQUIRE_EMAIL_OTP = "1";
+    const r = emailOtp.enforceRegistrationOtp(undefined, "a@b.com", "signup");
+    expect(r.ok).toBe(false);
+    expect(r.status).toBe(403);
+    expect(r.code).toBe("EMAIL_VERIFICATION_REQUIRED");
+  });
+
+  it("ENFORCED: valid token → ok with emailVerifiedAt; invalid token → 403 EMAIL_NOT_VERIFIED", () => {
+    process.env.REQUIRE_EMAIL_OTP = "1";
+    const token = emailOtp.issueVerificationToken("a@b.com", "signup");
+    const ok = emailOtp.enforceRegistrationOtp(token, "a@b.com", "signup");
+    expect(ok.ok).toBe(true);
+    expect(ok.emailVerifiedAt instanceof Date).toBe(true);
+
+    const bad = emailOtp.enforceRegistrationOtp("garbage", "a@b.com", "signup");
+    expect(bad.ok).toBe(false);
+    expect(bad.code).toBe("EMAIL_NOT_VERIFIED");
+  });
+
+  it("RELAXED: absent token → ok with emailVerifiedAt null (backward-compatible)", () => {
+    process.env.REQUIRE_EMAIL_OTP = "0";
+    const r = emailOtp.enforceRegistrationOtp(undefined, "a@b.com", "signup");
+    expect(r.ok).toBe(true);
+    expect(r.emailVerifiedAt).toBe(null);
+  });
+
+  it("RELAXED: a provided token is STILL validated (invalid → 403 even when relaxed)", () => {
+    process.env.REQUIRE_EMAIL_OTP = "0";
+    const bad = emailOtp.enforceRegistrationOtp("garbage", "a@b.com", "signup");
+    expect(bad.ok).toBe(false);
+    expect(bad.code).toBe("EMAIL_NOT_VERIFIED");
+  });
+});

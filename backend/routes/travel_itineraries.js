@@ -88,6 +88,28 @@ const { computeShareExpiresAt, shareLinkState } = require("../lib/shareLinkPolic
 // platform RAZORPAY_KEY_* env vars are ONLY for tenant→Globussoft subscription
 // billing). Mirrors the wellness customer-payment flow. See lib/tenantPaymentGateway.js.
 const { getTenantRazorpayClient, getTenantRazorpayCreds, NOT_CONFIGURED_MESSAGE } = require("../lib/tenantPaymentGateway");
+// Customer-portal in-app notifications (2026-06-17) — advisor sends/revises an
+// itinerary or a payment lands → notify the customer (Contact) in their portal.
+const { safeNotifyTravelCustomer } = require("../lib/travelPortalNotificationService");
+
+// Build + emit the right customer-portal notification for a trip event.
+// Best-effort (the service swallows errors) — never blocks the request.
+// `itin` needs { contactId, tenantId, destination }.
+function notifyCustomerTrip(itin, kind) {
+  if (!itin || !itin.contactId) return;
+  const dest = itin.destination || "your trip";
+  const M = {
+    sent: { type: "itinerary", title: "Your trip plan is ready ✈️", message: `Your advisor has prepared a trip to ${dest} for you. Open it in your portal to review and confirm.` },
+    revised: { type: "itinerary", title: "Your trip plan was updated", message: `Your advisor revised your ${dest} trip plan. Please review the updated offer in your portal.` },
+    advance_paid: { type: "payment", title: "Payment received — booking confirmed 🎉", message: `Thanks for your payment! Your ${dest} booking is confirmed. We'll be in touch with the next steps.` },
+    fully_paid: { type: "payment", title: "Fully paid — you're all set! 🎉", message: `Thanks! We've received full payment for your ${dest} trip. Your booking is confirmed.` },
+  };
+  const m = M[kind];
+  if (!m) return;
+  // link "booking:<id>" → the portal opens THIS specific trip's detail (not the
+  // list). Fire-and-forget; safeNotifyTravelCustomer never throws.
+  safeNotifyTravelCustomer({ contactId: itin.contactId, tenantId: itin.tenantId, title: m.title, message: m.message, type: m.type, link: `booking:${itin.id}` });
+}
 
 // Covers fly + non-fly (domestic) transport and general trip expenses. Keep
 // in sync with ITEM_TYPES in frontend/src/pages/travel/ItineraryDetail.jsx.
@@ -342,6 +364,13 @@ router.post("/itineraries", verifyToken, requireTravelTenant, async (req, res) =
         );
       }
     }
+
+    // Notify the customer that their advisor prepared a trip. In this portal
+    // drafts are customer-visible + decidable, so "creating an itinerary for
+    // the user" IS the notify moment — fire for any offer state (draft/sent/
+    // revised), not just sent. (The →sent PATCH transition deliberately does
+    // NOT re-notify, so a later draft→sent edit can't double-send.)
+    if (["draft", "sent", "revised"].includes(itinerary.status)) notifyCustomerTrip(itinerary, "sent");
 
     res.status(201).json(itinerary);
   } catch (e) {
@@ -1488,6 +1517,19 @@ router.patch("/itineraries/:id", verifyToken, requireTravelTenant, async (req, r
       data,
       include: { items: { orderBy: { position: "asc" } } },
     });
+
+    // Notify the customer on a real status transition: REVISED (re-decidable
+    // offer) or an advisor manually recording payment (advance_paid /
+    // fully_paid). NOT on →sent: a new trip is already announced on create
+    // (drafts are customer-visible here), so a later draft→sent flip mustn't
+    // re-notify. Compared against the prior status so an idempotent re-PATCH of
+    // the same status doesn't re-notify. (Public payment endpoints emit from
+    // their own handlers — no double-send via PATCH.)
+    if (data.status && data.status !== existing.status &&
+        ["revised", "advance_paid", "fully_paid"].includes(data.status)) {
+      notifyCustomerTrip(updated, data.status);
+    }
+
     res.json(updated);
   } catch (e) {
     if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
@@ -3431,6 +3473,11 @@ router.put("/itineraries/:id", verifyToken, requireTravelTenant, async (req, res
       },
       include: { items: { orderBy: { position: "asc" } } },
     });
+
+    // This PUT is the "redesign" path — it mints a new REVISED version. Notify
+    // the customer their trip plan was updated (newItin carries contactId/dest).
+    notifyCustomerTrip(newItin, "revised");
+
     res.status(201).json(newItin);
   } catch (e) {
     if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
@@ -3928,6 +3975,10 @@ router.post("/itineraries/public/:shareToken/record-advance-payment", async (req
       },
     });
 
+    // Thank the customer + confirm the booking in their portal (itin carries
+    // contactId/destination/tenantId; updated.status is advance_paid|fully_paid).
+    notifyCustomerTrip(itin, updated.status);
+
     res.status(201).json({
       status: updated.status,
       advancePaidAmount: Number(updated.advancePaidAmount),
@@ -4093,6 +4144,10 @@ router.post("/itineraries/public/:shareToken/verify-payment", async (req, res) =
         paymentOverdueAt: null,
       },
     });
+
+    // Thank the customer + confirm the booking in their portal.
+    notifyCustomerTrip(itin, updated.status);
+
     res.status(201).json({
       status: updated.status,
       advancePaidAmount: Number(updated.advancePaidAmount),
@@ -5358,6 +5413,10 @@ router.post(
         console.error("[travel-itin] materialise audit failed:", auditErr.message);
       }
 
+      // Notify the customer — a materialised suggestion is a customer-visible
+      // draft offer, same as a hand-built create.
+      if (["draft", "sent", "revised"].includes(itinerary.status)) notifyCustomerTrip(itinerary, "sent");
+
       return res.status(201).json({
         itinerary,
         itemsCreated: itemRows.length,
@@ -5375,3 +5434,6 @@ router.post(
 );
 
 module.exports = router;
+// Exposed for tests/smokes — the customer-portal notification emitter used by
+// every itinerary-create + revise + payment path.
+module.exports.notifyCustomerTrip = notifyCustomerTrip;

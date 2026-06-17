@@ -101,7 +101,7 @@ const requireCJS = createRequire(import.meta.url);
 delete process.env.SENDGRID_API_KEY;
 
 const communicationsRouter = requireCJS('../../routes/communications');
-const { parseRecipients, isValidEmail } = communicationsRouter;
+const { parseRecipients, isValidEmail, escapeHtml, linkifyHtml } = communicationsRouter;
 
 function makeApp({ tenantId = 1, userId = 7, role = 'ADMIN' } = {}) {
   const app = express();
@@ -160,6 +160,39 @@ describe('parseRecipients — comma-split + dedupe', () => {
     expect(parseRecipients('')).toEqual([]);
     expect(parseRecipients('   ')).toEqual([]);
     expect(parseRecipients(', , ,')).toEqual([]);
+  });
+});
+
+// ─── linkifyHtml — clickable links in the HTML email body ───────────
+// The unified-inbox composer builds the HTML part as
+// linkifyHtml(escapeHtml(body).replace(/\n/g,'<br>')). These pin that a
+// pasted URL becomes a real <a> (clickable) while staying XSS-safe.
+describe('linkifyHtml — bare URLs become clickable anchors', () => {
+  const compose = (b) => linkifyHtml(escapeHtml(b).replace(/\n/g, '<br>'));
+
+  test('wraps an http(s) URL in an anchor with safe rel/target', () => {
+    const out = compose('See https://app.example.com/x here');
+    expect(out).toContain('<a href="https://app.example.com/x" target="_blank" rel="noopener noreferrer">https://app.example.com/x</a>');
+  });
+
+  test('keeps trailing sentence punctuation outside the link', () => {
+    expect(compose('Visit https://x.com.')).toContain('>https://x.com</a>.');
+  });
+
+  test('preserves query strings (escaped & stays valid in href)', () => {
+    expect(compose('Pay https://pay.me/?a=1&b=2')).toContain('href="https://pay.me/?a=1&amp;b=2"');
+  });
+
+  test('does NOT linkify javascript:/data: schemes (XSS-safe)', () => {
+    const out = compose('javascript:alert(1) data:text/html,x');
+    expect(out).not.toContain('<a href');
+  });
+
+  test('escapes injected HTML before linkifying (no tag break-out)', () => {
+    const out = compose('<script>alert(1)</script> https://ok.com');
+    expect(out).toContain('&lt;script&gt;');
+    expect(out).not.toContain('<script>');
+    expect(out).toContain('<a href="https://ok.com"');
   });
 });
 

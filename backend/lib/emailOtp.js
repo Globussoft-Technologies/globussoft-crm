@@ -92,6 +92,43 @@ function checkVerificationToken(token, email, purpose) {
   }
 }
 
+// Whether registration endpoints REQUIRE a verified-email token at the route
+// layer (closes the API-bypass where a direct POST simply omits the token).
+//
+// OPT-IN ONLY (default OFF, including in production). Why not auto-on in prod:
+// POST /api/auth/register is shared by THREE callers, only one of which does
+// OTP — Signup.jsx (has OTP) vs GetStarted.jsx (no OTP) vs Settings.jsx
+// "invite team member" (no OTP). Auto-enforcing would 403 the latter two. So
+// enforcement is a deliberate switch: set REQUIRE_EMAIL_OTP=1 ONLY after
+// GetStarted.jsx gains an OTP step and the Settings invite is moved off
+// /auth/register. The mechanism is in place; flipping it is intentional.
+function isRegistrationOtpEnforced() {
+  return process.env.REQUIRE_EMAIL_OTP === "1";
+}
+
+// Single route-layer gate shared by /auth/register, /auth/signup,
+// /auth/customer/register, /portal/register. Returns either
+//   { ok: true,  emailVerifiedAt: Date|null }
+//   { ok: false, status, error, code }   ← return verbatim to the client
+// Behaviour:
+//   token present + valid    → ok, emailVerifiedAt = now
+//   token present + invalid  → 403 EMAIL_NOT_VERIFIED  (tampered/expired/wrong-purpose)
+//   token absent + enforced  → 403 EMAIL_VERIFICATION_REQUIRED  (the bypass, now closed)
+//   token absent + relaxed   → ok, emailVerifiedAt = null  (backward-compatible)
+function enforceRegistrationOtp(verificationToken, email, purpose) {
+  const provided = verificationToken !== undefined && verificationToken !== null && verificationToken !== "";
+  if (provided) {
+    if (!checkVerificationToken(verificationToken, email, purpose)) {
+      return { ok: false, status: 403, error: "Email verification failed — please verify your email again", code: "EMAIL_NOT_VERIFIED" };
+    }
+    return { ok: true, emailVerifiedAt: new Date() };
+  }
+  if (isRegistrationOtpEnforced()) {
+    return { ok: false, status: 403, error: "Email verification is required — please verify your email to continue", code: "EMAIL_VERIFICATION_REQUIRED" };
+  }
+  return { ok: true, emailVerifiedAt: null };
+}
+
 module.exports = {
   OTP_TTL_MS,
   VERIFY_TOKEN_TTL,
@@ -101,4 +138,6 @@ module.exports = {
   sendOtpEmail,
   issueVerificationToken,
   checkVerificationToken,
+  isRegistrationOtpEnforced,
+  enforceRegistrationOtp,
 };

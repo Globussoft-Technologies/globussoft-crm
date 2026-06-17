@@ -39,7 +39,7 @@ import {
   ShieldCheck, ShieldAlert, LogOut, Plane, User as UserIcon,
   CheckCircle2, AlertCircle, Loader2, ClipboardCheck, Award, LayoutDashboard,
   ChevronRight, ChevronLeft, Hotel, Ticket, FileUp, Upload, UserPlus,
-  Mail, Phone, Sun, Moon, Stamp, Star,
+  Mail, Phone, Sun, Moon, Stamp, Star, Bell,
 } from "lucide-react";
 import TravelReviewForm from "../../components/TravelReviewForm";
 
@@ -202,6 +202,117 @@ function ThemeToggleButton({ theme, onToggle }) {
   );
 }
 
+// Customer-portal notification bell (2026-06-17). Fetches the contact-scoped
+// inbox (advisor sent/revised an itinerary, payment confirmed), shows an unread
+// badge, and a dropdown to read them. Light 45s poll so new ones appear.
+function NotificationBell({ token, onNavigate }) {
+  const [open, setOpen] = useState(false);
+  const [items, setItems] = useState([]);
+  const [unread, setUnread] = useState(0);
+
+  const load = useCallback(() => {
+    portalFetch("/travel/notifications?limit=30", { token })
+      .then((r) => { setItems(Array.isArray(r?.notifications) ? r.notifications : []); setUnread(r?.unreadCount || 0); })
+      .catch(() => { /* non-fatal — bell just shows nothing */ });
+  }, [token]);
+
+  useEffect(() => {
+    load();
+    const id = setInterval(load, 45000);
+    return () => clearInterval(id);
+  }, [load]);
+
+  const markRead = async (n) => {
+    if (n.isRead) return;
+    try {
+      await portalFetch(`/travel/notifications/${n.id}/read`, { token, method: "PUT" });
+      setItems((xs) => xs.map((x) => (x.id === n.id ? { ...x, isRead: true } : x)));
+      setUnread((u) => Math.max(0, u - 1));
+    } catch (_e) { /* ignore */ }
+  };
+  // Click a notification → mark it read AND deep-link to its target (the parent
+  // parses the link, e.g. "booking:123" → open that specific trip), then close.
+  const handleItemClick = (n) => {
+    markRead(n);
+    setOpen(false);
+    if (onNavigate) onNavigate(n.link);
+  };
+  const markAll = async () => {
+    try {
+      await portalFetch("/travel/notifications/mark-all-read", { token, method: "POST" });
+      setItems((xs) => xs.map((x) => ({ ...x, isRead: true })));
+      setUnread(0);
+    } catch (_e) { /* ignore */ }
+  };
+
+  const fmtWhen = (d) => { try { return new Date(d).toLocaleString(); } catch { return ""; } };
+
+  return (
+    <div style={{ position: "relative" }}>
+      <button
+        type="button"
+        onClick={() => { const next = !open; setOpen(next); if (next) load(); }}
+        style={iconBtnStyle}
+        title="Notifications"
+        aria-label={`Notifications${unread ? ` (${unread} unread)` : ""}`}
+        aria-expanded={open}
+      >
+        <Bell size={16} aria-hidden />
+        {unread > 0 && (
+          <span style={{
+            position: "absolute", top: -4, right: -4, minWidth: 16, height: 16, padding: "0 4px",
+            borderRadius: 8, background: "#dc2626", color: "#fff", fontSize: 10, fontWeight: 700,
+            display: "inline-flex", alignItems: "center", justifyContent: "center", lineHeight: 1,
+          }}>{unread > 9 ? "9+" : unread}</span>
+        )}
+      </button>
+      {open && (
+        <>
+          <div onClick={() => setOpen(false)} style={{ position: "fixed", inset: 0, zIndex: 40 }} aria-hidden />
+          <div role="dialog" aria-label="Notifications" style={{
+            position: "absolute", right: 0, top: "calc(100% + 8px)", width: 340, maxWidth: "90vw",
+            maxHeight: 420, overflowY: "auto", zIndex: 41,
+            background: "var(--surface-color, #fff)", color: "var(--text-primary)",
+            border: "1px solid var(--border-color, rgba(18,38,71,0.12))", borderRadius: 12,
+            boxShadow: "0 10px 40px rgba(18,38,71,0.18)",
+          }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 14px", borderBottom: "1px solid var(--border-color, rgba(18,38,71,0.10))" }}>
+              <strong style={{ fontSize: 14 }}>Notifications</strong>
+              {unread > 0 && (
+                <button type="button" onClick={markAll} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 12, color: "var(--primary-color, var(--accent-color))", fontWeight: 600 }}>
+                  Mark all read
+                </button>
+              )}
+            </div>
+            {items.length === 0 ? (
+              <div style={{ padding: 18, fontSize: 13, color: "var(--text-secondary)", textAlign: "center" }}>No notifications yet.</div>
+            ) : items.map((n) => (
+              <button
+                key={n.id}
+                type="button"
+                onClick={() => handleItemClick(n)}
+                title="Open this trip"
+                style={{
+                  display: "block", width: "100%", textAlign: "left", cursor: "pointer",
+                  padding: "10px 14px", border: "none", borderBottom: "1px solid var(--border-color, rgba(18,38,71,0.06))",
+                  background: n.isRead ? "transparent" : "rgba(18,38,71,0.05)", color: "var(--text-primary)",
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  {!n.isRead && <span style={{ width: 7, height: 7, borderRadius: 4, background: "#dc2626", flexShrink: 0 }} aria-hidden />}
+                  <span style={{ fontSize: 13, fontWeight: n.isRead ? 500 : 700 }}>{n.title}</span>
+                </div>
+                <div style={{ fontSize: 12.5, color: "var(--text-secondary)", marginTop: 3 }}>{n.message}</div>
+                <div style={{ fontSize: 11, color: "var(--text-secondary)", marginTop: 3, opacity: 0.8 }}>{fmtWhen(n.createdAt)}</div>
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 const inputStyle = {
   display: "block",
   width: "100%",
@@ -237,6 +348,19 @@ function Dashboard({ token, contact, onUpdateContact, onLogout, theme, onToggleT
   useEffect(() => {
     if (view !== "bookings") setSelectedBookingId(null);
   }, [view]);
+
+  // Notification deep-link → portal target. "booking:<id>" opens THAT specific
+  // trip's detail; a bare view name switches to it; anything else → bookings.
+  const PORTAL_VIEWS = ["overview", "bookings", "visa", "documents", "diagnostic", "profile"];
+  const openNotificationTarget = (link) => {
+    const m = /^booking:(\d+)$/.exec(link || "");
+    if (m) {
+      setView("bookings");
+      setSelectedBookingId(Number(m[1]));
+      return;
+    }
+    setView(PORTAL_VIEWS.includes(link) ? link : "bookings");
+  };
 
   const loadAll = useCallback(async () => {
     setLoading(true);
@@ -399,6 +523,7 @@ function Dashboard({ token, contact, onUpdateContact, onLogout, theme, onToggleT
             </strong>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <NotificationBell token={token} onNavigate={openNotificationTarget} />
             <ThemeToggleButton theme={theme} onToggle={onToggleTheme} />
             <DigiLockerButton verified={verified} loading={verifyLoading} onClick={handleVerify} />
             {/* Clickable name + avatar → opens the Profile view. */}

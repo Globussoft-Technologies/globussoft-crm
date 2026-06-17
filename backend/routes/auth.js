@@ -231,6 +231,22 @@ function signSessionToken(payload) {
   return jwt.sign({ ...payload, jti: newJti() }, JWT_SECRET, { expiresIn: "7d" });
 }
 
+// True when the request carries a valid session token — i.e. an authenticated
+// admin "managing their team" (Settings → invite team member), as opposed to
+// an anonymous public self-signup. /auth/register is an openPath so the global
+// guard never populates req.user; we verify the bearer here. Team invitation is
+// NOT email-OTP gated (product call 2026-06-17) — only anonymous signup is.
+function isAuthenticatedCaller(req) {
+  const h = req.headers && req.headers.authorization;
+  if (!h || !h.startsWith("Bearer ")) return false;
+  try {
+    jwt.verify(h.slice(7), JWT_SECRET);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // Helper: build a unique slug for a tenant
 async function generateUniqueSlug(base) {
   const root = (base || "org")
@@ -346,15 +362,14 @@ router.post("/register", async (req, res) => {
     const pwErr = validatePasswordComplexity(password);
     if (pwErr) return res.status(400).json({ error: pwErr });
 
-    // Email OTP gate (FR). A tampered/wrong-purpose token is rejected; a valid
-    // token stamps emailVerifiedAt. Absent token stays backward-compatible
-    // (the UI hard-gates the button, so real users always send one).
+    // Email OTP gate (opt-in via REQUIRE_EMAIL_OTP). Anonymous public self-signup
+    // is gated; an authenticated admin (Settings → invite team member) is exempt
+    // — they manage their own team. See lib/emailOtp.enforceRegistrationOtp.
     let emailVerifiedAt = null;
-    if (verificationToken !== undefined && verificationToken !== null && verificationToken !== "") {
-      if (!emailOtp.checkVerificationToken(verificationToken, email, "signup")) {
-        return res.status(403).json({ error: "Email verification failed — please verify your email again", code: "EMAIL_NOT_VERIFIED" });
-      }
-      emailVerifiedAt = new Date();
+    if (!isAuthenticatedCaller(req)) {
+      const otpGate = emailOtp.enforceRegistrationOtp(verificationToken, email, "signup");
+      if (!otpGate.ok) return res.status(otpGate.status).json({ error: otpGate.error, code: otpGate.code });
+      emailVerifiedAt = otpGate.emailVerifiedAt;
     }
 
     // Org creation makes a brand-new tenant, so (email, newTenantId) can never
@@ -427,13 +442,13 @@ router.post("/signup", async (req, res) => {
     const pwErr = validatePasswordComplexity(password);
     if (pwErr) return res.status(400).json({ error: pwErr });
 
-    // Email OTP gate (same posture as /register — this is its alias).
+    // Email OTP gate (same posture as /register — this is its alias). Auth'd
+    // admin (team invite) exempt; anonymous public signup gated.
     let emailVerifiedAt = null;
-    if (verificationToken !== undefined && verificationToken !== null && verificationToken !== "") {
-      if (!emailOtp.checkVerificationToken(verificationToken, email, "signup")) {
-        return res.status(403).json({ error: "Email verification failed — please verify your email again", code: "EMAIL_NOT_VERIFIED" });
-      }
-      emailVerifiedAt = new Date();
+    if (!isAuthenticatedCaller(req)) {
+      const otpGate = emailOtp.enforceRegistrationOtp(verificationToken, email, "signup");
+      if (!otpGate.ok) return res.status(otpGate.status).json({ error: otpGate.error, code: otpGate.code });
+      emailVerifiedAt = otpGate.emailVerifiedAt;
     }
 
     // Org creation makes a brand-new tenant, so (email, newTenantId) can never
@@ -534,16 +549,11 @@ router.post("/customer/register", async (req, res) => {
       return res.status(400).json({ error: "email, password, and registrationTenantId are required" });
     }
 
-    // Email OTP gate (purpose "customer-register"). Tampered/wrong-purpose
-    // token → 403; valid token → stamp emailVerifiedAt; absent → backward-
-    // compatible (the UI hard-gates the button so real users always send one).
-    let emailVerifiedAt = null;
-    if (verificationToken !== undefined && verificationToken !== null && verificationToken !== "") {
-      if (!emailOtp.checkVerificationToken(verificationToken, email, "customer-register")) {
-        return res.status(403).json({ error: "Email verification failed — please verify your email again", code: "EMAIL_NOT_VERIFIED" });
-      }
-      emailVerifiedAt = new Date();
-    }
+    // Email OTP gate (purpose "customer-register"). Enforced at the route layer
+    // (production by default, overridable via REQUIRE_EMAIL_OTP).
+    const otpGate = emailOtp.enforceRegistrationOtp(verificationToken, email, "customer-register");
+    if (!otpGate.ok) return res.status(otpGate.status).json({ error: otpGate.error, code: otpGate.code });
+    const emailVerifiedAt = otpGate.emailVerifiedAt;
 
     // Coerce to a number — JSON sends it numeric, but accept a numeric string
     // defensively. Reject anything that isn't a positive integer.

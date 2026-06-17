@@ -549,15 +549,19 @@ export default function EmbassyRulesAdmin() {
           style={{
             position: 'fixed',
             inset: 0,
-            background: 'rgba(0,0,0,0.5)',
+            background: 'rgba(0,0,0,0.75)',
+            backdropFilter: 'blur(4px)',
+            WebkitBackdropFilter: 'blur(4px)',
             display: 'flex',
-            alignItems: 'flex-start',
-            justifyContent: 'flex-end',
+            alignItems: 'center',
+            justifyContent: 'center',
             zIndex: 1000,
+            padding: '1rem',
           }}
         >
           <form
             onSubmit={submit}
+            className="card"
             style={drawerStyle}
             aria-labelledby="embassy-rule-modal-title"
           >
@@ -779,15 +783,18 @@ const iconBtn = {
   padding: 4,
 };
 
+// Centred modal — mirrors the travel/Leads.jsx New Travel Lead pattern.
+// `.card` (set on the form element) supplies border-radius, border, blur
+// and lifted shadow; we force opaque `--bg-color` here so the panel
+// doesn't read as glassmorphic over the page content behind it.
 const drawerStyle = {
-  background: 'var(--surface-color)',
+  background: 'var(--bg-color)',
   color: 'var(--text-primary)',
   width: '100%',
   maxWidth: 480,
-  height: '100vh',
+  maxHeight: '90vh',
   overflowY: 'auto',
-  padding: 20,
-  boxShadow: '-8px 0 24px rgba(0,0,0,0.2)',
+  padding: 24,
 };
 
 const fieldLabel = {

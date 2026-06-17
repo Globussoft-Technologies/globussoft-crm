@@ -26,7 +26,7 @@ const ROLE_KEY_REGEX = /^[A-Z][A-Z0-9_]*$/;
 // message. Keep this phrasing identical between backend + frontend so an
 // admin sees the same explanation everywhere.
 const ROLE_KEY_DESCRIPTION =
-  'Uppercase A-Z, digits 0-9, and underscores. Must start with a letter.';
+  "Uppercase A-Z, digits 0-9, and underscores. Must start with a letter.";
 
 const ROLE_KEY_MAX_LENGTH = 64;
 
@@ -43,15 +43,15 @@ const ROLE_KEY_MAX_LENGTH = 64;
  * but a stray null shouldn't 500 the route.
  */
 function validateRoleKey(value) {
-  if (typeof value !== 'string' || value.trim() === '') {
-    return 'Role key is required';
+  if (typeof value !== "string" || value.trim() === "") {
+    return "Role key is required";
   }
   const trimmed = value.trim();
   if (trimmed.length > ROLE_KEY_MAX_LENGTH) {
     return `Role key is too long (max ${ROLE_KEY_MAX_LENGTH} chars)`;
   }
   if (!ROLE_KEY_REGEX.test(trimmed)) {
-    return 'Role key must start with letter and contain only A-Z, 0-9, _';
+    return "Role key must start with letter and contain only A-Z, 0-9, _";
   }
   return null;
 }

@@ -33,6 +33,7 @@ import { usePermissions } from "../hooks/usePermissions";
 import { ThemeContext, AuthContext } from "../App";
 import PasswordInput from "../components/PasswordInput";
 import WebhookSigningCredential from "../components/WebhookSigningCredential";
+import RoleHistoryDialog from "../components/RoleHistoryDialog";
 
 // #391: single source of truth for the default brand color so the color
 // picker swatch, the placeholder hint, and the color actually applied
@@ -44,7 +45,45 @@ export default function Settings() {
   const notify = useNotify();
   const { theme, setTheme, toggleTheme } = useContext(ThemeContext);
   const { tenant: ctxTenant, setTenant } = useContext(AuthContext);
-  const { isOwner } = usePermissions();
+  const { isOwner, hasPermission } = usePermissions();
+
+  // ── Role Recovery section ────────────────────────────────────────
+  // Lockout-scenario recovery surface. Reuses the existing /api/roles
+  // listing + /api/roles/:id/permissions/versions + /restore endpoints.
+  // The OR-gate on those routes (roles.* OR settings.manage) means
+  // this section works even after `roles.read` is lost — admins who
+  // can administer settings can recover RBAC through here without
+  // needing to first restore `roles.read`. See routes/roles.js +
+  // backend/middleware/requirePermission.js requireAnyPermission().
+  const [recoveryRoles, setRecoveryRoles] = useState([]);
+  const [recoveryLoading, setRecoveryLoading] = useState(false);
+  const [recoveryError, setRecoveryError] = useState("");
+  const [recoveryDialogRole, setRecoveryDialogRole] = useState(null);
+  // Restore button visibility — gated on the same OR-pair the
+  // backend POST /restore endpoint enforces. settings.manage admins
+  // can restore even if they don't hold roles.manage (the recovery
+  // path). roles.manage admins keep the same restore power they had
+  // inside the Roles & Permissions page.
+  const canRecover =
+    hasPermission("roles", "manage") || hasPermission("settings", "manage");
+  const canSeeRecoverySection =
+    hasPermission("roles", "read") || hasPermission("settings", "manage");
+  const loadRecoveryRoles = async () => {
+    setRecoveryLoading(true);
+    setRecoveryError("");
+    try {
+      const res = await fetchApi("/api/roles");
+      setRecoveryRoles(Array.isArray(res?.roles) ? res.roles : []);
+    } catch (err) {
+      setRecoveryError(err.message || "Could not load roles");
+    } finally {
+      setRecoveryLoading(false);
+    }
+  };
+  useEffect(() => {
+    if (canSeeRecoverySection) loadRecoveryRoles();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canSeeRecoverySection]);
   const [newUser, setNewUser] = useState({
     name: "",
     email: "",
@@ -1796,6 +1835,155 @@ export default function Settings() {
               </p>
             )}
           </div>
+
+          {/* Role Recovery — secondary entry point for the version-history /
+              restore flow. Reuses the same backend endpoints the Roles &
+              Permissions page uses; lives here so it stays reachable when
+              `roles.read` has been lost on the user's role. Renders only
+              when the user holds either roles.read OR settings.manage — the
+              same OR-gate the backend endpoints enforce, so a render here
+              and a successful API call always agree. */}
+          {canSeeRecoverySection && (
+            <div
+              className="card"
+              data-testid="settings-role-recovery-card"
+              style={{ padding: "clamp(1.25rem, 3vw, 2rem)" }}
+            >
+              <h3
+                style={{
+                  fontSize: "1.25rem",
+                  fontWeight: "600",
+                  marginBottom: "0.5rem",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "0.5rem",
+                }}
+              >
+                <FileSignature size={18} /> Role Recovery
+              </h3>
+              <p
+                style={{
+                  color: "var(--text-secondary)",
+                  fontSize: "0.85rem",
+                  marginTop: 0,
+                  marginBottom: "1rem",
+                }}
+              >
+                Roll back a role's permissions to a previous saved version.
+                Useful when a role's critical permissions are accidentally
+                removed and the Roles &amp; Permissions page is no longer
+                reachable.
+                {!canRecover && (
+                  <>
+                    {" "}
+                    You can review history here, but restoring a version
+                    requires either <code>roles.manage</code> or{" "}
+                    <code>settings.manage</code>.
+                  </>
+                )}
+              </p>
+
+              {recoveryLoading && (
+                <p style={{ color: "var(--text-secondary)", fontSize: "0.85rem" }}>
+                  Loading roles…
+                </p>
+              )}
+              {recoveryError && !recoveryLoading && (
+                <p
+                  role="alert"
+                  style={{
+                    color: "#ef4444",
+                    fontSize: "0.85rem",
+                    background: "rgba(239,68,68,0.08)",
+                    border: "1px solid rgba(239,68,68,0.4)",
+                    borderRadius: 6,
+                    padding: "0.5rem 0.7rem",
+                  }}
+                >
+                  {recoveryError}
+                </p>
+              )}
+              {!recoveryLoading && !recoveryError && recoveryRoles.length === 0 && (
+                <p style={{ color: "var(--text-secondary)", fontSize: "0.85rem" }}>
+                  No roles found for this tenant.
+                </p>
+              )}
+              {!recoveryLoading && recoveryRoles.length > 0 && (
+                <ul
+                  data-testid="settings-role-recovery-list"
+                  style={{
+                    listStyle: "none",
+                    padding: 0,
+                    margin: 0,
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "0.4rem",
+                  }}
+                >
+                  {recoveryRoles.map((r) => (
+                    <li
+                      key={r.id}
+                      style={{
+                        padding: "0.55rem 0.7rem",
+                        border: "1px solid var(--border-color)",
+                        borderRadius: 8,
+                        background: "var(--subtle-bg-1)",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "0.75rem",
+                      }}
+                    >
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontWeight: 600, fontSize: "0.9rem" }}>
+                          {r.name}
+                          <code
+                            style={{
+                              marginLeft: "0.5rem",
+                              fontSize: "0.72rem",
+                              color: "var(--text-secondary)",
+                            }}
+                          >
+                            {r.key}
+                          </code>
+                        </div>
+                        {r.description && (
+                          <div
+                            style={{
+                              fontSize: "0.75rem",
+                              color: "var(--text-secondary)",
+                              marginTop: "0.15rem",
+                            }}
+                          >
+                            {r.description}
+                          </div>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        style={{ fontSize: "0.78rem", padding: "0.3rem 0.7rem" }}
+                        onClick={() => setRecoveryDialogRole(r)}
+                        data-testid={`settings-role-recovery-open-${r.key}`}
+                      >
+                        View history
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+
+              <RoleHistoryDialog
+                role={recoveryDialogRole}
+                canManage={canRecover}
+                open={!!recoveryDialogRole}
+                onClose={() => setRecoveryDialogRole(null)}
+                onRestored={() => {
+                  setRecoveryDialogRole(null);
+                  loadRecoveryRoles();
+                }}
+              />
+            </div>
+          )}
       </div>
     </div>
   );

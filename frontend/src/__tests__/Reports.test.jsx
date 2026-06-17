@@ -532,3 +532,70 @@ describe('<Reports /> — broad page surface', () => {
     });
   });
 });
+
+/**
+ * Empty-response contract — Reports.jsx used to fall back to a hardcoded
+ * [Lead, Contacted, Proposal, Won] dataset when /api/reports/query returned
+ * an empty array. That fake dataset was the source of the "Reports knows
+ * stages the Pipeline UI doesn't expose" bug: a Travel tenant with zero
+ * deals saw four generic-CRM stages in the chart that don't exist anywhere
+ * in their pipeline. Post-fix, empty responses render the existing "No
+ * data available for this query." placeholder instead of fabricating bars.
+ */
+describe('<Reports /> — empty /api/reports/query response', () => {
+  beforeEach(() => {
+    fetchApiMock.mockReset();
+    confirmMock.mockReset().mockResolvedValue(true);
+    notifyObj.error.mockReset();
+    notifyObj.info.mockReset();
+    notifyObj.success.mockReset();
+  });
+
+  it('renders the empty-state placeholder and does NOT fabricate stage bars', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url.startsWith('/api/reports/query')) return Promise.resolve([]);
+      if (url.startsWith('/api/reports/detailed/')) return Promise.resolve([]);
+      if (url === '/api/report-schedules') return Promise.resolve([]);
+      return Promise.resolve(null);
+    });
+
+    render(<Reports />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/No data available for this query/i)).toBeInTheDocument();
+    });
+
+    // The fabricated stages must not leak into the DOM as chart labels.
+    // These specific token strings were what the old mock fallback emitted.
+    expect(screen.queryByText('Lead', { selector: 'tspan' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Contacted', { selector: 'tspan' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Proposal', { selector: 'tspan' })).not.toBeInTheDocument();
+    // Aggregate Total drops to currency-formatted zero (₹0 / $0 / etc.).
+    // We can't pin the exact glyph (locale-dependent) but we can pin that
+    // it contains '0' — the pre-fix mock emitted 150,000.
+    const aggregateLine = screen.getByText(/Aggregate Total/i).parentElement;
+    expect(aggregateLine.textContent).toMatch(/\b0\b/);
+    expect(aggregateLine.textContent).not.toMatch(/150,000/);
+  });
+
+  it('treats /api/reports/query rejection the same as empty (no fake stages)', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url.startsWith('/api/reports/query')) {
+        return Promise.reject(new Error('backend down'));
+      }
+      if (url.startsWith('/api/reports/detailed/')) return Promise.resolve([]);
+      if (url === '/api/report-schedules') return Promise.resolve([]);
+      return Promise.resolve(null);
+    });
+
+    render(<Reports />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/No data available for this query/i)).toBeInTheDocument();
+    });
+
+    // Pre-fix the rejection path injected [{ name: 'Error state', value: 1 }]
+    // which rendered a single-bar chart. Post-fix the error path is empty.
+    expect(screen.queryByText('Error state')).not.toBeInTheDocument();
+  });
+});

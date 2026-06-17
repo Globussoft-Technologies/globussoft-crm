@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { useScrollLock } from '../hooks/useScrollLock';
 import { createPortal } from 'react-dom';
+import { AuthContext } from '../App';
 import { LayoutGrid, Pencil, Plus, Shield, Trash2, Users, X, UserMinus, UserPlus, GripVertical, ChevronUp, ChevronDown } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
@@ -10,6 +11,15 @@ import AccessDenied from '../components/AccessDenied';
 // and validator. Mirrors backend/lib/roleKey.js so the helper text
 // shown to the admin can't drift from the regex the validator enforces.
 import { ROLE_KEY_DESCRIPTION, validateRoleKey } from '../utils/roleKey';
+// Unified history popup. Same component the /settings → Role Recovery
+// section uses. Replaces a previous in-page PermissionsHistoryModal
+// that was built on the shared <Modal> primitive — that primitive has
+// a flex-sizing bug (missing min-height: 0 on the body) that hid the
+// close affordance once the version list grew tall (Admin role's
+// recurring "8+ versions, no Close button" symptom). Using
+// RoleHistoryDialog ensures every role's history UI — current and
+// future — renders identically here AND on the Settings page.
+import RoleHistoryDialog from '../components/RoleHistoryDialog';
 
 // Admin UI for the RBAC role + permission system. Mirrors the endpoints
 // under /api/roles (see backend/routes/roles.js). Tenant scoping is enforced
@@ -101,7 +111,14 @@ const MODULE_DESCRIPTIONS = {
   surveys:        'CSAT / NPS / custom surveys and responses.',
   chatbots:       'Live-chat bots, conversation flows, and handoff rules.',
   // Financial
-  invoices:         'Patient + customer invoice records and the Invoices page.',
+  // Common modules with descriptions that vary per vertical live in
+  // MODULE_DESCRIPTION_OVERRIDES below. The default copy here is
+  // vertical-neutral so generic tenants see clean language and
+  // wellness/travel tenants get their domain-specific phrasing via
+  // the override map. Wellness-only modules (gift_cards,
+  // patient_wallets) stay wellness-flavoured because they never
+  // render on travel/generic tenants — the catalog filters them out.
+  invoices:         'Customer invoice records and the Invoices page.',
   gift_cards:       'Gift card issuance ledger and the Gift Cards page.',
   patient_wallets:  'Patient pre-paid wallet balances, top-ups, and ledger.',
   accounting:     'Ledger sync and accounting integrations (Tally / QuickBooks / Xero).',
@@ -176,6 +193,41 @@ const MODULE_DESCRIPTIONS = {
   flyer_studio:         'Marketing Flyer Studio — design and publish sub-brand flyers.',
   flyer_templates:      'Reusable flyer templates and brand-kit defaults.',
 };
+
+// Per-vertical description overrides for COMMON modules where the
+// best one-line description varies by domain. Example: `invoices` is
+// a common module that exists on every tenant, but the audience
+// terminology differs — "Patient + customer" on wellness, "Customer +
+// traveler" on travel, plain "Customer" on generic. Wellness-only and
+// travel-only modules (patients / itineraries / etc.) stay in the
+// base MODULE_DESCRIPTIONS map because their vertical is implicit —
+// the catalog never surfaces them outside their own vertical.
+//
+// Lookup precedence: vertical override → base → empty. New entries
+// go here ONLY when the description's phrasing actually changes
+// based on the tenant's audience.
+const MODULE_DESCRIPTION_OVERRIDES = {
+  wellness: {
+    invoices: 'Patient + customer invoice records and the Invoices page.',
+  },
+  travel: {
+    invoices: 'Customer + traveler invoice records and the Invoices page.',
+  },
+};
+
+// Vertical-aware lookup. Used by every render path that previously
+// indexed MODULE_DESCRIPTIONS directly (tooltip, body description,
+// search-corpus). Falls through to the base map for any module
+// without a per-vertical override, and to `''` for unknown modules
+// (matches the prior `|| ''` semantics).
+function getModuleDescription(module, vertical) {
+  const overrides =
+    vertical && MODULE_DESCRIPTION_OVERRIDES[vertical]
+      ? MODULE_DESCRIPTION_OVERRIDES[vertical]
+      : null;
+  if (overrides && overrides[module]) return overrides[module];
+  return MODULE_DESCRIPTIONS[module] || '';
+}
 
 // RBAC Hardening Phase 3 — client mirror of backend/lib/rbacLockoutGuard.js
 // CRITICAL_RBAC_PERMISSIONS. The frontend uses this set to surface a
@@ -393,6 +445,15 @@ export default function RolesAdmin() {
   } = usePermissions();
   const canRead = hasPermission('roles', 'read');
   const canManage = hasPermission('roles', 'manage');
+
+  // Active tenant's vertical drives the per-vertical module
+  // description overrides (wellness/travel/generic). Passed into
+  // PermissionsModal so its tooltips, body descriptions, and search
+  // corpus all read the audience-appropriate phrasing — e.g. the
+  // invoices description on travel reads "Customer + traveler …"
+  // instead of leaking "Patient + customer …" from wellness.
+  const { tenant } = useContext(AuthContext) || {};
+  const tenantVertical = (tenant && tenant.vertical) || 'generic';
 
   const [roles, setRoles] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -783,6 +844,7 @@ export default function RolesAdmin() {
           modules={permissionModules}
           domains={permissionDomains}
           readOnly={!canManage}
+          vertical={tenantVertical}
           onClose={() => setPermRole(null)}
           onSaved={async () => {
             await refreshAll();
@@ -1172,7 +1234,7 @@ function validateLandingPathClient(value) {
 
 // ──────────────────────── Permissions matrix modal ───────────────────
 
-function PermissionsModal({ role, modules, domains, readOnly, onClose, onSaved }) {
+function PermissionsModal({ role, modules, domains, readOnly, vertical, onClose, onSaved }) {
   const matrix =
     Array.isArray(modules) && modules.length
       ? modules
@@ -1318,14 +1380,16 @@ function PermissionsModal({ role, modules, domains, readOnly, onClose, onSaved }
     for (const { module, actions } of matrix) {
       const parts = [
         module,
-        MODULE_DESCRIPTIONS[module] || '',
+        // Vertical-aware description — same source the tooltip + body
+        // text below read from, so search hits stay consistent.
+        getModuleDescription(module, vertical),
         Array.from(pagesByModule.get(module) || []).join(' '),
         (actions || []).join(' '),
       ];
       map.set(module, parts.join(' ').toLowerCase());
     }
     return map;
-  }, [matrix, pagesByModule]);
+  }, [matrix, pagesByModule, vertical]);
 
   const normalizedQuery = searchQuery.trim().toLowerCase();
   const matchesQuery = (module) => {
@@ -1656,7 +1720,7 @@ function PermissionsModal({ role, modules, domains, readOnly, onClose, onSaved }
                         }}
                       >
                         <span
-                          title={MODULE_DESCRIPTIONS[module] || module}
+                          title={getModuleDescription(module, vertical) || module}
                           style={{
                             fontSize: '0.75rem',
                             fontWeight: 700,
@@ -1693,7 +1757,7 @@ function PermissionsModal({ role, modules, domains, readOnly, onClose, onSaved }
                         // declares in requiredPermissions (deals, projects,
                         // quotes, forecasting, quotas, …) would otherwise
                         // render as bare checkbox grids.
-                        const description = MODULE_DESCRIPTIONS[module];
+                        const description = getModuleDescription(module, vertical);
                         const pages = pagesByModule.get(module);
                         const labels = pages && pages.size > 0
                           ? Array.from(pages).sort()
@@ -1947,17 +2011,24 @@ function PermissionsModal({ role, modules, domains, readOnly, onClose, onSaved }
           modal handles its own fetching + restore flow; we just pass
           the role + a callback that re-fetches /api/roles when a
           restore lands so the table count refreshes. */}
-      {historyOpen && (
-        <PermissionsHistoryModal
-          role={role}
-          canManage={!readOnly}
-          onClose={() => setHistoryOpen(false)}
-          onRestored={() => {
-            setHistoryOpen(false);
-            onSaved();
-          }}
-        />
-      )}
+      {/* Universal history popup — same component the Settings →
+          Role Recovery section uses. Identical UI for every role
+          (Admin / Customer / Manager / User / any custom role) and
+          every version-count. */}
+      <RoleHistoryDialog
+        role={role}
+        canManage={!readOnly}
+        open={historyOpen}
+        onClose={() => setHistoryOpen(false)}
+        onRestored={() => {
+          setHistoryOpen(false);
+          onSaved();
+        }}
+      />
+      {/* Legacy in-page modal kept for now as a no-op rendering path;
+          it's referenced by the function definition below but not
+          mounted. Safe to delete in a follow-up sweep once the
+          unified dialog has soaked. */}
     </ModalShell>
   );
 }

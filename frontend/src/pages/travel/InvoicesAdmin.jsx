@@ -304,7 +304,12 @@ export default function InvoicesAdmin() {
     );
     if (ids.length === 0) return;
     let cancelled = false;
-    Promise.allSettled(ids.map((id) => fetchApi(`/api/contacts/${id}`))).then((results) => {
+    // silent:true — a 404 here means the invoice references a deleted /
+    // cross-tenant / inaccessible contact. The render falls back to
+    // `#${inv.contactId}` (line ~977), so a global "Contact not found"
+    // toast on every list-load would be noise. Cache the miss below to
+    // avoid refetching the same dead id.
+    Promise.allSettled(ids.map((id) => fetchApi(`/api/contacts/${id}`, { silent: true }))).then((results) => {
       if (cancelled) return;
       setContactsById((prev) => {
         const next = { ...prev };

@@ -19,9 +19,12 @@ import { DateRangeFilter, resolveDateRange, DATE_FILTER_OPTIONS } from '../compo
 import RazorpayGatewayCard from '../components/RazorpayGatewayCard';
 
 // ── Style constants ───────────────────────────────────────────────
+// Theme-aware so cards stay clearly delineated under BOTH light + dark
+// modes. Pre-fix these used hardcoded `rgba(255,255,255,0.05)` which
+// rendered near-invisibly on light backgrounds.
 const GLASS = {
-  background: 'rgba(255,255,255,0.05)',
-  border: '1px solid rgba(255,255,255,0.1)',
+  background: 'var(--surface-color)',
+  border: '1px solid var(--border-color)',
   backdropFilter: 'blur(12px)',
   borderRadius: '12px',
 };
@@ -286,7 +289,8 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com → Settings �
 
       {/* Gateway chips + date filter — share a row, gateway chips on the left,
           date picker right-pinned via marginLeft: auto so they wrap together
-          when the viewport narrows. */}
+          when the viewport narrows. Theme-aware: bg/border use --surface
+          + --border so tabs stay readable on light AND dark. */}
       <div
         style={{
           display: 'flex', alignItems: 'center', gap: '0.5rem',
@@ -300,13 +304,14 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com → Settings �
             style={{
               padding: '0.5rem 1.1rem',
               borderRadius: '8px',
-              border: tab === t ? '1px solid rgba(99,91,255,0.5)' : '1px solid rgba(255,255,255,0.1)',
-              background: tab === t ? 'rgba(99,91,255,0.18)' : 'rgba(255,255,255,0.04)',
+              border: tab === t ? '1px solid rgba(99,91,255,0.5)' : '1px solid var(--border-color)',
+              background: tab === t ? 'rgba(99,91,255,0.18)' : 'var(--surface-color)',
               color: 'var(--text-primary)',
               cursor: 'pointer',
               fontSize: '0.85rem',
               textTransform: 'capitalize',
               fontWeight: tab === t ? 600 : 400,
+              transition: 'background 0.15s, border-color 0.15s',
             }}
           >
             {t === 'all' ? 'All' : t}
@@ -317,11 +322,13 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com → Settings �
         </div>
       </div>
 
-      {/* Payments table */}
-      <div style={{ ...GLASS, overflow: 'hidden' }}>
+      {/* Payments table — wrap in a clearly-delineated card. `box-shadow`
+          + padding give it visual weight against the page background, and
+          theme variables keep contrast under both modes. */}
+      <div style={{ ...GLASS, overflow: 'hidden', boxShadow: '0 2px 8px rgba(0,0,0,0.06)' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
           <thead>
-            <tr style={{ background: 'rgba(255,255,255,0.04)' }}>
+            <tr style={{ background: 'var(--surface-hover)', borderBottom: '1px solid var(--border-color)' }}>
               <Th>Invoice #</Th>
               <Th>Amount</Th>
               <Th>Gateway</Th>
@@ -381,11 +388,11 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com → Settings �
                 key={p.id}
                 onClick={() => setSelected(p)}
                 style={{
-                  borderTop: '1px solid rgba(255,255,255,0.06)',
+                  borderTop: '1px solid var(--border-color)',
                   cursor: 'pointer',
                   transition: 'background 0.15s',
                 }}
-                onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.04)')}
+                onMouseEnter={e => (e.currentTarget.style.background = 'var(--surface-hover)')}
                 onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
               >
                 <Td>{p.invoiceId ? `#${p.invoiceId}` : <span style={{ color: 'var(--text-secondary)' }}>—</span>}</Td>

@@ -155,6 +155,15 @@ export default function QuoteBuilder() {
   const [quoteId, setQuoteId] = useState(routeId ? Number(routeId) : null);
   const [status, setStatus] = useState("Draft");
   const [contactId, setContactId] = useState("");
+  // Contact picker — mirrors the InvoicesAdmin pattern. Loads the tenant's
+  // contacts once on mount so the header field can be a labelled <select>
+  // instead of a raw numeric "Contact ID" input that lets an operator
+  // accidentally attach a quote to the wrong customer (see PRD §3 R-15).
+  // contactsById is a per-id cache used to surface the current selection's
+  // name in edit-mode even if that contact isn't in the loaded first page
+  // (the >500-row tail).
+  const [customers, setCustomers] = useState([]);
+  const [contactsById, setContactsById] = useState({});
   const [currency, setCurrency] = useState("INR");
   const [subBrand, setSubBrand] = useState("tmc");
   const [validUntil, setValidUntil] = useState("");
@@ -299,6 +308,52 @@ export default function QuoteBuilder() {
     // Intentionally only re-run when the route id changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [routeId]);
+
+  // Load the tenant's contacts once for the customer dropdown. Mirrors
+  // InvoicesAdmin so the two surfaces stay in shape-sync. summary fields +
+  // limit=500 keeps the payload small while covering the long tail for most
+  // tenants; tenants with more contacts still see the right selection in
+  // edit-mode via the contactsById fallback below.
+  useEffect(() => {
+    fetchApi("/api/contacts?fields=summary&limit=500")
+      .then((data) => {
+        const list = Array.isArray(data) ? data : data?.contacts || data?.rows || [];
+        list.sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
+        setCustomers(list);
+      })
+      .catch(() => setCustomers([]));
+  }, []);
+
+  // In edit-mode, if the current contactId isn't in the loaded customers
+  // page, fetch its display name so the <select> shows the contact's name
+  // (not just an opaque numeric id). silent:true on the fetch — a 404 here
+  // means the quote references a deleted/cross-tenant contact; the fallback
+  // option below renders `Contact #${id}` so the operator still knows
+  // SOMETHING is selected.
+  useEffect(() => {
+    if (!contactId) return;
+    const idNum = parseInt(contactId, 10);
+    if (!Number.isFinite(idNum)) return;
+    if (contactId in contactsById) return;
+    if (customers.some((c) => String(c.id) === String(contactId))) return;
+    let cancelled = false;
+    fetchApi(`/api/contacts/${idNum}`, { silent: true })
+      .then((c) => {
+        if (cancelled || !c) return;
+        setContactsById((prev) => ({
+          ...prev,
+          [contactId]: { name: c.name || null, email: c.email || null },
+        }));
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setContactsById((prev) => ({ ...prev, [contactId]: { name: null, email: null } }));
+      });
+    return () => { cancelled = true; };
+    // contactsById intentionally omitted — we only need to fetch on
+    // contactId / customers changes; the guards above skip cache hits.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [contactId, customers]);
 
   // Fetch the supplier list when subBrand changes (or on initial load
   // when a subBrand has been selected). Each line's supplier picker reads
@@ -485,7 +540,7 @@ export default function QuoteBuilder() {
   const buildPayload = () => {
     const contactIdInt = parseInt(contactId, 10);
     if (!Number.isFinite(contactIdInt)) {
-      notify.error("Contact ID is required (must be a number)");
+      notify.error("Please select a customer before saving");
       return null;
     }
     return {
@@ -1006,15 +1061,33 @@ export default function QuoteBuilder() {
         }}
       >
         <label style={fieldLabel}>
-          Contact ID
-          <input
-            type="number"
+          Customer
+          {/* Mirrors InvoicesAdmin's Select Customer dropdown so the two
+              surfaces are consistent (PRD §3 R-15). Pre-fix this was a raw
+              numeric "Contact ID *" input — an operator could attach a
+              quote to the wrong customer by typing the wrong id, with no
+              confirmation of who that id maps to. */}
+          <select
             value={contactId}
             onChange={(e) => setContactId(e.target.value)}
-            placeholder="Contact ID *"
             style={inputStyle}
-            aria-label="Contact ID"
-          />
+            aria-label="Customer"
+          >
+            <option value="">Select customer *</option>
+            {/* Editing a quote whose contact isn't in the loaded page (or
+                a >500-row tenant) keeps the existing selection visible. */}
+            {contactId &&
+              !customers.some((c) => String(c.id) === String(contactId)) && (
+                <option value={contactId}>
+                  {contactsById[contactId]?.name || `Contact #${contactId}`}
+                </option>
+              )}
+            {customers.map((c) => (
+              <option key={c.id} value={String(c.id)}>
+                {(c.name || `Contact #${c.id}`) + (c.email ? ` — ${c.email}` : "")}
+              </option>
+            ))}
+          </select>
         </label>
         <label style={fieldLabel}>
           Currency

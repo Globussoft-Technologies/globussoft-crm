@@ -534,26 +534,29 @@ const Leads = () => {
             style={{
               position: 'fixed',
               inset: 0,
-              background: 'rgba(0,0,0,0.5)',
+              background: 'rgba(0,0,0,0.75)',
+              backdropFilter: 'blur(4px)',
+              WebkitBackdropFilter: 'blur(4px)',
               display: 'flex',
-              alignItems: 'flex-start',
-              justifyContent: 'flex-end',
+              alignItems: 'center',
+              justifyContent: 'center',
               zIndex: 1000,
+              padding: '1rem',
             }}
             role="dialog"
             aria-modal="true"
             aria-label="Create Lead"
           >
             <div
+              className="card"
               style={{
-                background: 'var(--surface-color)',
+                background: 'var(--bg-color)',
                 color: 'var(--text-primary)',
                 width: '100%',
-                maxWidth: 460,
-                height: '100vh',
+                maxWidth: 480,
+                maxHeight: '90vh',
                 overflowY: 'auto',
                 padding: '1.5rem',
-                boxShadow: '-8px 0 24px rgba(0,0,0,0.2)',
               }}
             >
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>

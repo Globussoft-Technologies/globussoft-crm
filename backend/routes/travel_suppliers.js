@@ -3488,7 +3488,7 @@ router.post(
   "/suppliers/:id/block",
   verifyToken,
   requireTravelTenant,
-  requirePermission("suppliers", "update"),
+  requirePermission("suppliers", "manage"),
   buildStateTransitionHandler({ toStatus: "blocked_disputed", requireReason: true }),
 );
 
@@ -3496,7 +3496,7 @@ router.post(
   "/suppliers/:id/archive",
   verifyToken,
   requireTravelTenant,
-  requirePermission("suppliers", "update"),
+  requirePermission("suppliers", "manage"),
   buildStateTransitionHandler({ toStatus: "archived", requireReason: false }),
 );
 
@@ -3504,7 +3504,7 @@ router.post(
   "/suppliers/:id/reactivate",
   verifyToken,
   requireTravelTenant,
-  requirePermission("suppliers", "update"),
+  requirePermission("suppliers", "manage"),
   buildStateTransitionHandler({ toStatus: "active", requireReason: false }),
 );
 
@@ -5253,7 +5253,7 @@ router.post(
   "/suppliers/:id/kyc/verify",
   verifyToken,
   requireTravelTenant,
-  requirePermission("suppliers", "update"),
+  requirePermission("suppliers", "manage"),
   async (req, res) => {
     try {
       const supplier = await loadSupplierForKyc(req);
@@ -5304,7 +5304,7 @@ router.post(
   "/suppliers/:id/kyc/reject",
   verifyToken,
   requireTravelTenant,
-  requirePermission("suppliers", "update"),
+  requirePermission("suppliers", "manage"),
   async (req, res) => {
     try {
       const supplier = await loadSupplierForKyc(req);
@@ -5617,11 +5617,11 @@ router.post(
 );
 
 // GET /api/travel/suppliers/:id/disputes
+// Read-side: any verified tenant user may list disputes.
 router.get(
   "/suppliers/:id/disputes",
   verifyToken,
   requireTravelTenant,
-  requirePermission("suppliers", "read"),
   async (req, res) => {
     try {
       const supplier = await loadSupplierForKyc(req);
@@ -5671,11 +5671,11 @@ router.get(
 );
 
 // GET /api/travel/suppliers/:id/disputes/:disputeId
+// Read-side: any verified tenant user may view a dispute.
 router.get(
   "/suppliers/:id/disputes/:disputeId",
   verifyToken,
   requireTravelTenant,
-  requirePermission("suppliers", "read"),
   async (req, res) => {
     try {
       const supplier = await loadSupplierForKyc(req);
@@ -5787,7 +5787,7 @@ router.post(
   "/suppliers/:id/disputes/:disputeId/resolve",
   verifyToken,
   requireTravelTenant,
-  requirePermission("suppliers", "update"),
+  requirePermission("suppliers", "manage"),
   async (req, res) => {
     try {
       const supplier = await loadSupplierForKyc(req);

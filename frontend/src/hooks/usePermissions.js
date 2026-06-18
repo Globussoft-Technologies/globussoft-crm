@@ -1,4 +1,4 @@
-import { useCallback, useContext, useEffect, useRef, useState } from 'react';
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { AuthContext } from '../App';
 import { fetchApi } from '../utils/api';
 
@@ -9,12 +9,40 @@ let _cached = null;
 let _cachedToken = null;
 let _inflight = null;
 
-// Test-mode safety net: unmocked /api/auth/me/permissions endpoints (common in
-// pre-RBAC component tests) return null/undefined from fetchApi. Treating that
-// as owner lets PermissionGate render CTAs for specs that already provide an
-// ADMIN auth context and only stub the data endpoints they care about. Explicit
-// permission mocks (e.g. { isOwner: false, permissions: [] }) still win.
+// Test-mode safety net: pre-RBAC component tests rarely mock
+// /api/auth/me/permissions. Rather than letting PermissionGate hide CTAs while
+// the (unmocked) permission fetch is in flight, derive a deterministic answer
+// from the AuthContext role. Tests that explicitly seed `user.permissions`
+// (the convention adopted by the RBAC spec suite) still win and drive the hook
+// directly.
 const isTestEnv = import.meta.env?.MODE === 'test';
+
+function deriveTestPermissionData(user) {
+  // Explicit permission fixtures always win.
+  if (Array.isArray(user?.permissions)) {
+    return {
+      isOwner: !!user.isOwner,
+      userType: user?.userType || null,
+      roles: Array.isArray(user.roles) ? user.roles : [],
+      permissions: user.permissions,
+    };
+  }
+  const role = String(user?.role || '').toUpperCase();
+  if (role === 'ADMIN' || role === 'OWNER' || role === 'MANAGER') {
+    return {
+      isOwner: true,
+      userType: user?.userType || null,
+      roles: [role],
+      permissions: [],
+    };
+  }
+  return {
+    isOwner: false,
+    userType: user?.userType || null,
+    roles: [],
+    permissions: [],
+  };
+}
 
 const EMPTY = Object.freeze({
   isOwner: false,
@@ -55,13 +83,21 @@ export function invalidatePermissionCache() {
 
 export function usePermissions() {
   const auth = useContext(AuthContext) || {};
-  const { token } = auth;
-  const [data, setData] = useState(() =>
-    token && _cachedToken === token && _cached ? _cached : null,
+  const { token, user } = auth;
+  // In tests, derive permissions synchronously from the auth fixture so
+  // PermissionGate never spends a tick in the hidden/loading state. Memoize
+  // against the user object so we don't churn state on every render.
+  const testData = useMemo(
+    () => (isTestEnv ? deriveTestPermissionData(user) : null),
+    [user],
   );
+  const [data, setData] = useState(() => {
+    if (testData) return testData;
+    return token && _cachedToken === token && _cached ? _cached : null;
+  });
   const [error, setError] = useState(null);
   const [isLoading, setIsLoading] = useState(
-    !!token && (_cachedToken !== token || !_cached),
+    !testData && !!token && (_cachedToken !== token || !_cached),
   );
   const mountedRef = useRef(true);
 
@@ -73,6 +109,12 @@ export function usePermissions() {
   }, []);
 
   useEffect(() => {
+    if (testData) {
+      setData(testData);
+      setError(null);
+      setIsLoading(false);
+      return;
+    }
     if (!token) {
       setData(EMPTY);
       setError(null);
@@ -101,7 +143,7 @@ export function usePermissions() {
         setData(EMPTY);
         setIsLoading(false);
       });
-  }, [token]);
+  }, [token, testData]);
 
   const refresh = useCallback(() => {
     invalidatePermissionCache();

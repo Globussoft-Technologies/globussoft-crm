@@ -130,6 +130,8 @@ describe('Marketing-site → CRM redirect handoff', () => {
     it('navigates to ?next= after a successful register (in-app path is preserved)', async () => {
       global.fetch = mockFetch([
         ['/api/auth/public/tenants', TENANTS],
+        ['/api/auth/email-otp/request', { devCode: '123456' }],
+        ['/api/auth/email-otp/verify', { verificationToken: 'email-verified-token' }],
         ['/api/auth/customer/register', { token: 'jwt-abc', user: { id: 99 }, tenant: WELLNESS_TENANT_RESPONSE }],
       ]);
       const nextPath = '/wellness/book-appointment?serviceId=434&date=2026-06-15&time=12:00';
@@ -142,8 +144,18 @@ describe('Marketing-site → CRM redirect handoff', () => {
         expect(sel.value).toBe('2');
       });
 
-      // Fill required fields + submit.
+      // Fill required fields + verify email before the submit CTA is enabled.
       fireEvent.change(screen.getByLabelText(/Email/i), { target: { value: 'jane@example.com' } });
+      fireEvent.click(screen.getByTestId('otp-validate'));
+      await waitFor(() => {
+        expect(screen.getByTestId('otp-box')).toBeInTheDocument();
+      });
+      fireEvent.change(screen.getByTestId('otp-code'), { target: { value: '123456' } });
+      fireEvent.click(screen.getByTestId('otp-verify'));
+      await waitFor(() => {
+        expect(screen.getByTestId('otp-verified')).toBeInTheDocument();
+      });
+
       fireEvent.change(screen.getByLabelText(/Full name/i), { target: { value: 'Jane Doe' } });
       fireEvent.change(screen.getByLabelText(/^Password$/i), { target: { value: 'Secret123' } });
       fireEvent.change(screen.getByLabelText(/Confirm password/i), { target: { value: 'Secret123' } });
@@ -167,15 +179,29 @@ describe('Marketing-site → CRM redirect handoff', () => {
     it('rejects hostile ?next=https://evil.com and falls back to /wellness', async () => {
       global.fetch = mockFetch([
         ['/api/auth/public/tenants', TENANTS],
+        ['/api/auth/email-otp/request', { devCode: '123456' }],
+        ['/api/auth/email-otp/verify', { verificationToken: 'email-verified-token' }],
         ['/api/auth/customer/register', { token: 'jwt-x', user: { id: 99 }, tenant: WELLNESS_TENANT_RESPONSE }],
       ]);
       renderAt(CustomerRegister, '/customer/register?tenantSlug=enhanced-wellness&next=https%3A%2F%2Fevil.com%2Fphish');
 
       await waitFor(() => {
-        expect(screen.getByLabelText(/Booking for/i)).toBeDisabled();
+        const sel = screen.getByLabelText(/Booking for/i);
+        expect(sel).toBeDisabled();
+        expect(sel.value).toBe('2');
       });
 
       fireEvent.change(screen.getByLabelText(/Email/i), { target: { value: 'jane@example.com' } });
+      fireEvent.click(screen.getByTestId('otp-validate'));
+      await waitFor(() => {
+        expect(screen.getByTestId('otp-box')).toBeInTheDocument();
+      });
+      fireEvent.change(screen.getByTestId('otp-code'), { target: { value: '123456' } });
+      fireEvent.click(screen.getByTestId('otp-verify'));
+      await waitFor(() => {
+        expect(screen.getByTestId('otp-verified')).toBeInTheDocument();
+      });
+
       fireEvent.change(screen.getByLabelText(/Full name/i), { target: { value: 'Jane Doe' } });
       fireEvent.change(screen.getByLabelText(/^Password$/i), { target: { value: 'Secret123' } });
       fireEvent.change(screen.getByLabelText(/Confirm password/i), { target: { value: 'Secret123' } });

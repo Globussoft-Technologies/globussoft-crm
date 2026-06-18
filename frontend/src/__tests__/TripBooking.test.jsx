@@ -34,6 +34,7 @@ const SENT_ITINERARY = {
   advancePaid: 0,
   advancePaidAt: null,
   balanceDue: 100000,
+  onlinePaymentEnabled: true,
   items: [
     { id: 1, itemType: 'hotel', position: 0, description: 'Bali Resort 7n', totalPrice: 70000 },
     { id: 2, itemType: 'flight', position: 1, description: 'BLR-DPS economy', totalPrice: 30000 },
@@ -47,6 +48,7 @@ const ADVANCE_PAID_ITINERARY = {
   advancePaid: 50000,
   advancePaidAt: '2026-05-21T10:00:00.000Z',
   balanceDue: 50000,
+  onlinePaymentEnabled: true,
 };
 
 const FULLY_PAID_ITINERARY = {
@@ -55,6 +57,7 @@ const FULLY_PAID_ITINERARY = {
   advancePaid: 100000,
   advancePaidAt: '2026-05-21T10:00:00.000Z',
   balanceDue: 0,
+  onlinePaymentEnabled: true,
 };
 
 let fetchSpy;

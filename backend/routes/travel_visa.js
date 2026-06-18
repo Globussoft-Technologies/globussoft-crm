@@ -512,8 +512,8 @@ router.get(
 // ============================================================================
 router.get(
   "/applications/stats",
+  verifyToken,
   requireTravelTenant,
-  requirePermission("visa", "read"),
   async (req, res) => {
     try {
       const tenantId = req.travelTenant.id;
@@ -756,8 +756,8 @@ router.get(
 // ============================================================================
 router.get(
   "/applications/by-month",
+  verifyToken,
   requireTravelTenant,
-  requirePermission("visa", "read"),
   async (req, res) => {
     try {
       const tenantId = req.travelTenant.id;
@@ -1020,8 +1020,8 @@ router.get(
 // ============================================================================
 router.get(
   "/applications/by-quarter",
+  verifyToken,
   requireTravelTenant,
-  requirePermission("visa", "read"),
   async (req, res) => {
     try {
       const tenantId = req.travelTenant.id;
@@ -1288,8 +1288,8 @@ router.get(
 // ============================================================================
 router.get(
   "/applications/by-year",
+  verifyToken,
   requireTravelTenant,
-  requirePermission("visa", "read"),
   async (req, res) => {
     try {
       const tenantId = req.travelTenant.id;

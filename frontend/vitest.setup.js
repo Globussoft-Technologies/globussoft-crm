@@ -13,10 +13,56 @@ if (typeof globalThis.__APP_GIT_SHA__ === 'undefined') {
   globalThis.__APP_GIT_SHA__ = '';
 }
 
+// Node 24/25 ships an experimental Web Storage API that leaves
+// `globalThis.localStorage` / `globalThis.sessionStorage` undefined unless
+// `--localstorage-file` is provided. Vitest's jsdom environment exposes them
+// on `window`, but tests written against the bare globals can see `undefined`
+// and crash. Capture the jsdom Storage instances once and keep the globals
+// pinned to them for the lifetime of the test process.
+const domLocalStorage = typeof window !== 'undefined' ? window.localStorage : undefined;
+const domSessionStorage = typeof window !== 'undefined' ? window.sessionStorage : undefined;
+
+function pinStorageGlobals() {
+  if (domLocalStorage) {
+    try {
+      globalThis.localStorage = domLocalStorage;
+    } catch {
+      Object.defineProperty(globalThis, 'localStorage', {
+        value: domLocalStorage,
+        writable: true,
+        configurable: true,
+      });
+    }
+  }
+  if (domSessionStorage) {
+    try {
+      globalThis.sessionStorage = domSessionStorage;
+    } catch {
+      Object.defineProperty(globalThis, 'sessionStorage', {
+        value: domSessionStorage,
+        writable: true,
+        configurable: true,
+      });
+    }
+  }
+}
+
+pinStorageGlobals();
+
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
   vi.restoreAllMocks();
+  // Some tests replace the storage globals intentionally; restore the jsdom
+  // instances afterwards so subsequent tests in the same worker still see a
+  // working Storage API. Then clear them to avoid cross-test data leakage.
+  pinStorageGlobals();
+  try {
+    globalThis.localStorage?.clear();
+  } catch {}
+  try {
+    globalThis.sessionStorage?.clear();
+  } catch {}
 });
 
 // Stub out browser-only APIs jsdom doesn't ship with

@@ -594,7 +594,7 @@ describe('<TripDetail /> — Participants remove flow', () => {
   });
 
   it('clicking Trash2 with confirm()=false short-circuits — no DELETE fires', async () => {
-    vi.stubGlobal('confirm', vi.fn(() => false));
+    notifyConfirm.mockResolvedValue(false);
     renderPage();
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
     fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
@@ -606,6 +606,7 @@ describe('<TripDetail /> — Participants remove flow', () => {
     await Promise.resolve();
     const dels = fetchApiMock.mock.calls.filter(([, o]) => o?.method === 'DELETE');
     expect(dels.length).toBe(0);
+    notifyConfirm.mockResolvedValue(true);
   });
 });
 

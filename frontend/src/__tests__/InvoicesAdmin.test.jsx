@@ -179,6 +179,11 @@ function installFetchMock({
     creditNote: null,
     policyApplied: null,
   },
+  // Default contact book for the customer <select> in the create/edit modal.
+  // Intentionally does NOT include id 42 so the list-row fallback test still
+  // sees the raw "#42" placeholder while create-modal tests can opt-in a
+  // matching contact when they need to submit the form.
+  contacts = [{ id: 7, name: 'Seven', email: 'seven@example.com' }],
 } = {}) {
   fetchApiMock.mockImplementation((url, opts) => {
     const method = opts?.method || 'GET';
@@ -198,6 +203,15 @@ function installFetchMock({
     if (/\/api\/travel\/invoices\/\d+\/void$/.test(url) && method === 'POST') {
       if (voidResp instanceof Error) return Promise.reject(voidResp);
       return Promise.resolve(voidResp);
+    }
+    // Customer dropdown + contact-name resolution (#1051).
+    if (url === '/api/contacts?fields=summary&limit=500' && method === 'GET') {
+      return Promise.resolve(contacts);
+    }
+    if (/^\/api\/contacts\/\d+$/.test(url) && method === 'GET') {
+      const id = Number(url.split('/').pop());
+      const contact = contacts.find((c) => c.id === id);
+      return Promise.resolve(contact || { id, name: null, email: null });
     }
     if (url.startsWith('/api/travel/invoices') && method === 'GET') {
       if (list instanceof Error) return Promise.reject(list);
@@ -502,7 +516,7 @@ describe('<InvoicesAdmin /> — new-invoice modal', () => {
     const contactInput = await screen.findByLabelText(/^Customer$/i);
     const totalInput = screen.getByLabelText(/^Total amount$/i);
     const dueInput = screen.getByLabelText(/^Due date$/i);
-    fireEvent.change(contactInput, { target: { value: '42' } });
+    fireEvent.change(contactInput, { target: { value: '7' } });
     fireEvent.change(totalInput, { target: { value: '12500.50' } });
     // Pin a fixed-string future dueDate per CLAUDE.md cron-learning
     // 2026-05-07 wave-9 (TZ-window flake-class avoidance).
@@ -517,7 +531,7 @@ describe('<InvoicesAdmin /> — new-invoice modal', () => {
       );
       expect(post).toBeTruthy();
       const body = JSON.parse(post[1].body);
-      expect(body.contactId).toBe(42);
+      expect(body.contactId).toBe(7);
       expect(body.totalAmount).toBe(12500.50);
       expect(body.currency).toBe('INR');
       expect(body.status).toBe('Draft');
@@ -528,7 +542,7 @@ describe('<InvoicesAdmin /> — new-invoice modal', () => {
     });
     // notify.success fired referencing the contact id.
     expect(notifySuccess).toHaveBeenCalled();
-    expect(notifySuccess.mock.calls[0][0]).toMatch(/contact 42/);
+    expect(notifySuccess.mock.calls[0][0]).toMatch(/contact 7/);
   });
 
   it('submitting with missing contactId triggers notify.error and does NOT POST', async () => {
@@ -573,6 +587,9 @@ describe('<InvoicesAdmin /> — new-invoice modal', () => {
     fetchApiMock.mockReset();
     fetchApiMock.mockImplementation((url, opts) => {
       const method = opts?.method || 'GET';
+      if (url === '/api/contacts?fields=summary&limit=500' && method === 'GET') {
+        return Promise.resolve([{ id: 888, name: 'Duplicate Contact', email: 'dupe@example.com' }]);
+      }
       if (url.startsWith('/api/travel/invoices') && method === 'GET') {
         return Promise.resolve({ invoices: [makeInvoice()], total: 1 });
       }
@@ -615,6 +632,9 @@ describe('<InvoicesAdmin /> — new-invoice modal', () => {
     fetchApiMock.mockReset();
     fetchApiMock.mockImplementation((url, opts) => {
       const method = opts?.method || 'GET';
+      if (url === '/api/contacts?fields=summary&limit=500' && method === 'GET') {
+        return Promise.resolve([{ id: 888, name: 'Double Contact', email: 'double@example.com' }]);
+      }
       if (url.startsWith('/api/travel/invoices') && method === 'GET') {
         return Promise.resolve({ invoices: [makeInvoice()], total: 1 });
       }

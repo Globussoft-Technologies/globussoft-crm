@@ -37,33 +37,42 @@ const WELLNESS_CLINICAL_KEYS = ['DOCTOR', 'NURSE', 'RECEPTIONIST', 'TELECALLER']
 // All find-* return null/empty so ensureRole / ensureRolePermission /
 // ensureUserRole are forced into the "create" branch — that's the
 // branch we want to observe.
-const mockPrisma = {
-  role: {
-    findFirst: vi.fn(),
-    findMany: vi.fn(),
-    findUnique: vi.fn(),
-    create: vi.fn(),
-  },
-  rolePermission: {
-    findFirst: vi.fn(),
-    create: vi.fn(),
-  },
-  userRole: {
-    findUnique: vi.fn(),
-    count: vi.fn(),
-    create: vi.fn(),
-  },
-  tenant: {
-    findUnique: vi.fn(),
-    findMany: vi.fn(),
-  },
-  user: {
-    findMany: vi.fn(),
-  },
-  roleWidget: {
-    create: vi.fn(),
-  },
-};
+//
+// vi.hoisted is required: vi.mock is hoisted above module-level const
+// declarations, so the factory must reference a variable that is itself
+// hoisted. Without vi.hoisted, mockPrisma is undefined when the factory
+// runs and real Prisma calls leak through (surface-guard failures on
+// role.findFirst / tenant.findUnique).
+const { mockPrisma } = vi.hoisted(() => {
+  const mockPrisma = {
+    role: {
+      findFirst: vi.fn(),
+      findMany: vi.fn(),
+      findUnique: vi.fn(),
+      create: vi.fn(),
+    },
+    rolePermission: {
+      findFirst: vi.fn(),
+      create: vi.fn(),
+    },
+    userRole: {
+      findUnique: vi.fn(),
+      count: vi.fn(),
+      create: vi.fn(),
+    },
+    tenant: {
+      findUnique: vi.fn(),
+      findMany: vi.fn(),
+    },
+    user: {
+      findMany: vi.fn(),
+    },
+    roleWidget: {
+      create: vi.fn(),
+    },
+  };
+  return { mockPrisma };
+});
 
 vi.mock('../../lib/prisma', () => ({ default: mockPrisma, ...mockPrisma }));
 

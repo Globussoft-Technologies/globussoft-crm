@@ -878,8 +878,8 @@ router.get("/trips/:id", verifyToken, requireTravelTenant, requireTmcAccess, asy
 router.get(
   "/trips/:id/ops-dashboard",
   verifyToken,
-  requirePermission("trips", "read"),
   requireTravelTenant,
+  requirePermission("trips", "read"),
   requireTmcAccess,
   async (req, res) => {
     try {
@@ -1248,8 +1248,8 @@ router.patch("/trips/:id", verifyToken, requireTravelTenant, requireTmcAccess, a
 router.delete(
   "/trips/:id",
   verifyToken,
-  requirePermission("trips", "delete"),
   requireTravelTenant,
+  requirePermission("trips", "delete"),
   requireTmcAccess,
   async (req, res) => {
     try {

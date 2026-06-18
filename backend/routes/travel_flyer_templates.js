@@ -243,8 +243,8 @@ function withTemplateHash(row) {
 router.post(
   "/flyer-templates/upload",
   verifyToken,
-  requirePermission("flyer_templates", "write"),
   requireTravelTenant,
+  requirePermission("flyer_templates", "write"),
   (req, res) => {
     flyerImageUpload.single("image")(req, res, async (err) => {
       if (err) {
@@ -291,8 +291,8 @@ router.post(
 router.post(
   "/flyer-templates/suggest-copy",
   verifyToken,
-  requirePermission("flyer_templates", "read"),
   requireTravelTenant,
+  requirePermission("flyer_templates", "read"),
   async (req, res) => {
     try {
       const { destination, subBrand, themeJson, targetAudience } = req.body || {};
@@ -358,8 +358,8 @@ router.post(
 router.post(
   "/flyer-templates/suggest-image",
   verifyToken,
-  requirePermission("flyer_templates", "read"),
   requireTravelTenant,
+  requirePermission("flyer_templates", "read"),
   async (req, res) => {
     try {
       const { destination, subBrand, themeJson, aspectRatio } = req.body || {};
@@ -807,8 +807,8 @@ router.get(
 router.post(
   "/flyer-templates/bulk-archive",
   verifyToken,
-  requirePermission("flyer_templates", "update"),
   requireTravelTenant,
+  requirePermission("flyer_templates", "update"),
   async (req, res) => {
     try {
       const { ids } = req.body || {};
@@ -963,8 +963,8 @@ router.post(
 router.post(
   "/flyer-templates/bulk-unarchive",
   verifyToken,
-  requirePermission("flyer_templates", "update"),
   requireTravelTenant,
+  requirePermission("flyer_templates", "update"),
   async (req, res) => {
     try {
       const { ids } = req.body || {};
@@ -1701,8 +1701,8 @@ router.get(
 router.post(
   "/flyer-templates",
   verifyToken,
-  requirePermission("flyer_templates", "write"),
   requireTravelTenant,
+  requirePermission("flyer_templates", "write"),
   async (req, res) => {
     try {
       const {
@@ -1792,8 +1792,8 @@ router.post(
 router.put(
   "/flyer-templates/:id",
   verifyToken,
-  requirePermission("flyer_templates", "update"),
   requireTravelTenant,
+  requirePermission("flyer_templates", "update"),
   async (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);
@@ -1975,8 +1975,8 @@ router.put(
 router.post(
   "/flyer-templates/:id/duplicate",
   verifyToken,
-  requirePermission("flyer_templates", "write"),
   requireTravelTenant,
+  requirePermission("flyer_templates", "write"),
   async (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);
@@ -2093,8 +2093,8 @@ router.post(
 router.post(
   "/flyer-templates/:id/archive",
   verifyToken,
-  requirePermission("flyer_templates", "update"),
   requireTravelTenant,
+  requirePermission("flyer_templates", "update"),
   async (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);
@@ -2168,8 +2168,8 @@ router.post(
 router.post(
   "/flyer-templates/:id/unarchive",
   verifyToken,
-  requirePermission("flyer_templates", "update"),
   requireTravelTenant,
+  requirePermission("flyer_templates", "update"),
   async (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);
@@ -2261,8 +2261,8 @@ router.post(
 router.post(
   "/flyer-templates/:id/export",
   verifyToken,
-  requirePermission("flyer_templates", "read"),
   requireTravelTenant,
+  requirePermission("flyer_templates", "read"),
   async (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);
@@ -2828,8 +2828,8 @@ router.get(
 router.delete(
   "/flyer-templates/:id",
   verifyToken,
-  requirePermission("flyer_templates", "delete"),
   requireTravelTenant,
+  requirePermission("flyer_templates", "delete"),
   async (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);
@@ -3133,8 +3133,8 @@ router.get(
 router.post(
   "/flyer-templates/:id/render",
   verifyToken,
-  requirePermission("flyer_templates", "read"),
   requireTravelTenant,
+  requirePermission("flyer_templates", "read"),
   async (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);

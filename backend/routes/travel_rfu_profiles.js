@@ -1052,8 +1052,8 @@ router.patch("/rfu-profiles/:id", verifyToken, requireTravelTenant, requireRfuAc
 router.delete(
   "/rfu-profiles/:id",
   verifyToken,
-  requirePermission("rfu_profiles", "delete"),
   requireTravelTenant,
+  requirePermission("rfu_profiles", "delete"),
   requireRfuAccess,
   async (req, res) => {
     try {

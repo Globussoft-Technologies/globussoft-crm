@@ -209,8 +209,8 @@ router.get("/cost-master", verifyToken, requireTravelTenant, async (req, res) =>
 router.post(
   "/cost-master",
   verifyToken,
-  requirePermission("cost_master", "write"),
   requireTravelTenant,
+  requirePermission("cost_master", "write"),
   async (req, res) => {
     try {
       const {
@@ -582,8 +582,8 @@ router.get("/cost-master/:id", verifyToken, requireTravelTenant, async (req, res
 router.patch(
   "/cost-master/:id",
   verifyToken,
-  requirePermission("cost_master", "update"),
   requireTravelTenant,
+  requirePermission("cost_master", "update"),
   async (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);
@@ -645,8 +645,8 @@ router.patch(
 router.delete(
   "/cost-master/:id",
   verifyToken,
-  requirePermission("cost_master", "delete"),
   requireTravelTenant,
+  requirePermission("cost_master", "delete"),
   async (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);

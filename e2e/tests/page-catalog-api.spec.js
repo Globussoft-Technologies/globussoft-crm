@@ -153,56 +153,55 @@ test.describe('Per-role accessible pages + landingPath lifecycle', () => {
     const initialBody = await initial.json();
     const initialPaths = initialBody.pages.map((p) => p.path);
     expect(initialPaths).toContain('/home');
-    expect(initialPaths).not.toContain('/wellness/patients');
+    expect(initialPaths).not.toContain('/contacts');
 
-    // 2. Trying to set landingPath to /wellness/patients NOW should 400
-    //    because the role doesn't have patients.read.
+    // 2. Trying to set landingPath to /contacts NOW should 400
+    //    because the role doesn't have contacts.read.
     const tooEarly = await put(request, token, `/api/roles/${role.id}`, {
-      landingPath: '/wellness/patients',
+      landingPath: '/contacts',
     });
     expect(tooEarly.status(), await tooEarly.text()).toBe(400);
     const tooEarlyBody = await tooEarly.json();
     expect(tooEarlyBody.code).toBe('LANDING_PATH_NOT_ACCESSIBLE');
 
-    // 3. Grant patients.read + appointments.read/write + calendar.read.
-    //    Calendar (/wellness/calendar) is gated on a DEDICATED `calendar`
-    //    module (pageCatalog.js) — deliberately separated from appointments
-    //    so admins can grant view-only Calendar access without exposing the
-    //    Appointments list. So calendar.read is required for /wellness/calendar
-    //    to appear in accessible-pages below.
+    // 3. Grant contacts.read + deals.read/write + tasks.read.
+    //    These are COMMON modules, valid on the generic tenant that
+    //    admin@globussoft.com belongs to. (Wellness-only modules would be
+    //    rejected by the vertical-aware permission validator on a generic
+    //    tenant, so this test intentionally uses cross-vertical common pages.)
     const grant = await put(request, token, `/api/roles/${role.id}/permissions`, {
       permissions: [
-        { module: 'patients', action: 'read' },
-        { module: 'appointments', action: 'read' },
-        { module: 'appointments', action: 'write' },
-        { module: 'calendar', action: 'read' },
+        { module: 'contacts', action: 'read' },
+        { module: 'deals', action: 'read' },
+        { module: 'deals', action: 'write' },
+        { module: 'tasks', action: 'read' },
       ],
     });
     expect(grant.status()).toBe(200);
 
-    // 4. accessible-pages now includes /wellness/patients + /wellness/calendar.
+    // 4. accessible-pages now includes /contacts + /tasks.
     const after = await get(request, token, `/api/roles/${role.id}/accessible-pages`);
     /** @type {{ pages: Array<{ path: string }> }} */
     const afterBody = await after.json();
     const afterPaths = afterBody.pages.map((p) => p.path);
-    expect(afterPaths).toContain('/wellness/patients');
-    expect(afterPaths).toContain('/wellness/calendar');
+    expect(afterPaths).toContain('/contacts');
+    expect(afterPaths).toContain('/tasks');
 
-    // 5. Setting landingPath to /wellness/patients should now succeed.
+    // 5. Setting landingPath to /contacts should now succeed.
     const setOK = await put(request, token, `/api/roles/${role.id}`, {
-      landingPath: '/wellness/patients',
+      landingPath: '/contacts',
     });
     expect(setOK.status(), await setOK.text()).toBe(200);
     const setOKBody = await setOK.json();
-    expect(setOKBody.landingPath).toBe('/wellness/patients');
+    expect(setOKBody.landingPath).toBe('/contacts');
 
-    // 6. THE AUTO-CLEAR: now revoke patients.read by replacing perms
-    //    with just appointments.read. The role's landingPath should be
-    //    cleared automatically because /wellness/patients is no longer
+    // 6. THE AUTO-CLEAR: now revoke contacts.read by replacing perms
+    //    with just deals.read. The role's landingPath should be
+    //    cleared automatically because /contacts is no longer
     //    accessible. Without this the user would get redirected to a
     //    page they 403 on every login.
     const revoke = await put(request, token, `/api/roles/${role.id}/permissions`, {
-      permissions: [{ module: 'appointments', action: 'read' }],
+      permissions: [{ module: 'deals', action: 'read' }],
     });
     expect(revoke.status()).toBe(200);
     const revokeBody = await revoke.json();
@@ -213,20 +212,19 @@ test.describe('Per-role accessible pages + landingPath lifecycle', () => {
     const finalBody = await finalRead.json();
     expect(finalBody.landingPath).toBeNull();
 
-    // 8. Granting calendar.read back makes /wellness/calendar accessible
-    //    again — pin it as the landingPath. (/wellness/calendar is gated on
-    //    the dedicated `calendar` module, separated from appointments.)
+    // 8. Granting tasks.read back makes /tasks accessible again — pin it
+    //    as the landingPath.
     await put(request, token, `/api/roles/${role.id}/permissions`, {
       permissions: [
-        { module: 'appointments', action: 'read' },
-        { module: 'appointments', action: 'write' },
-        { module: 'calendar', action: 'read' },
+        { module: 'deals', action: 'read' },
+        { module: 'deals', action: 'write' },
+        { module: 'tasks', action: 'read' },
       ],
     });
-    const pinToCalendar = await put(request, token, `/api/roles/${role.id}`, {
-      landingPath: '/wellness/calendar',
+    const pinToTasks = await put(request, token, `/api/roles/${role.id}`, {
+      landingPath: '/tasks',
     });
-    expect(pinToCalendar.status()).toBe(200);
+    expect(pinToTasks.status()).toBe(200);
     // Now revoke ALL perms — landingPath should clear again.
     const revokeAll = await put(request, token, `/api/roles/${role.id}/permissions`, {
       permissions: [],

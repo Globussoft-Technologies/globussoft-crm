@@ -343,8 +343,8 @@ async function maybeAdvanceOnChecklist({ applicationId, tenantId, actorUserId })
 //      without a join. Default shape stays full row + contact decoration.
 router.get(
   "/applications",
-  requirePermission("visa", "read"),
   requireTravelTenant,
+  requirePermission("visa", "read"),
   async (req, res) => {
     try {
       const tenantId = req.travelTenant.id;
@@ -512,8 +512,8 @@ router.get(
 // ============================================================================
 router.get(
   "/applications/stats",
-  requirePermission("visa", "read"),
   requireTravelTenant,
+  requirePermission("visa", "read"),
   async (req, res) => {
     try {
       const tenantId = req.travelTenant.id;
@@ -756,8 +756,8 @@ router.get(
 // ============================================================================
 router.get(
   "/applications/by-month",
-  requirePermission("visa", "read"),
   requireTravelTenant,
+  requirePermission("visa", "read"),
   async (req, res) => {
     try {
       const tenantId = req.travelTenant.id;
@@ -1020,8 +1020,8 @@ router.get(
 // ============================================================================
 router.get(
   "/applications/by-quarter",
-  requirePermission("visa", "read"),
   requireTravelTenant,
+  requirePermission("visa", "read"),
   async (req, res) => {
     try {
       const tenantId = req.travelTenant.id;
@@ -1288,8 +1288,8 @@ router.get(
 // ============================================================================
 router.get(
   "/applications/by-year",
-  requirePermission("visa", "read"),
   requireTravelTenant,
+  requirePermission("visa", "read"),
   async (req, res) => {
     try {
       const tenantId = req.travelTenant.id;
@@ -1507,8 +1507,8 @@ router.get(
 //                             subBrand != "visasure" (sub-brand isolation)
 router.get(
   "/applications/:id",
-  requirePermission("visa", "read"),
   requireTravelTenant,
+  requirePermission("visa", "read"),
   async (req, res) => {
     try {
       const tenantId = req.travelTenant.id;
@@ -1672,8 +1672,8 @@ router.get(
 //   500 INTERNAL_ERROR              — Prisma error or unexpected
 router.post(
   "/applications",
-  requirePermission("visa", "write"),
   requireTravelTenant,
+  requirePermission("visa", "write"),
   async (req, res) => {
     try {
       const tenantId = req.travelTenant.id;
@@ -1855,8 +1855,8 @@ router.post(
 //   500 INTERNAL_ERROR            — Prisma error or unexpected
 router.patch(
   "/applications/:id",
-  requirePermission("visa", "update"),
   requireTravelTenant,
+  requirePermission("visa", "update"),
   async (req, res) => {
     try {
       const tenantId = req.travelTenant.id;
@@ -2097,8 +2097,8 @@ router.patch(
 // / 17 / 18 — meta reads don't audit-back themselves).
 router.get(
   "/applications/:id/status-history",
-  requirePermission("visa", "read"),
   requireTravelTenant,
+  requirePermission("visa", "read"),
   async (req, res) => {
     try {
       const tenantId = req.travelTenant.id;
@@ -2455,8 +2455,8 @@ function coerceRecoveryProgramData(body) {
 // POST /api/travel/visa/recovery-programs — create program.
 router.post(
   "/recovery-programs",
-  requirePermission("visa", "write"),
   requireTravelTenant,
+  requirePermission("visa", "write"),
   async (req, res) => {
     try {
       const tenantId = req.travelTenant.id;
@@ -2507,8 +2507,8 @@ router.post(
 // GET /api/travel/visa/recovery-programs — list with filters.
 router.get(
   "/recovery-programs",
-  requirePermission("visa", "read"),
   requireTravelTenant,
+  requirePermission("visa", "read"),
   async (req, res) => {
     try {
       const tenantId = req.travelTenant.id;
@@ -2546,8 +2546,8 @@ router.get(
 // GET /api/travel/visa/recovery-programs/:id — detail + enrolled count.
 router.get(
   "/recovery-programs/:id",
-  requirePermission("visa", "read"),
   requireTravelTenant,
+  requirePermission("visa", "read"),
   async (req, res) => {
     try {
       const tenantId = req.travelTenant.id;
@@ -2587,8 +2587,8 @@ router.get(
 // PUT /api/travel/visa/recovery-programs/:id — update program.
 router.put(
   "/recovery-programs/:id",
-  requirePermission("visa", "update"),
   requireTravelTenant,
+  requirePermission("visa", "update"),
   async (req, res) => {
     try {
       const tenantId = req.travelTenant.id;
@@ -2647,8 +2647,8 @@ router.put(
 // Tenant-scoped + sub-brand-scoped (Contact.subBrand === 'visasure').
 router.post(
   "/applications/:id/enrol-recovery",
-  requirePermission("visa", "update"),
   requireTravelTenant,
+  requirePermission("visa", "update"),
   async (req, res) => {
     try {
       const tenantId = req.travelTenant.id;

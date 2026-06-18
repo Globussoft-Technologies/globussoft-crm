@@ -172,8 +172,8 @@ router.get("/diagnostic-banks/:id", verifyToken, requireTravelTenant, async (req
 router.post(
   "/diagnostic-banks",
   verifyToken,
-  requirePermission("diagnostics", "write"),
   requireTravelTenant,
+  requirePermission("diagnostics", "write"),
   async (req, res) => {
     try {
       const { subBrand, questionsJson, scoringRulesJson, isActive } = req.body || {};
@@ -1468,8 +1468,8 @@ router.get("/diagnostics/:id", verifyToken, requireTravelTenant, async (req, res
 router.post(
   "/diagnostics/:id/talking-points/regen",
   verifyToken,
-  requirePermission("diagnostics", "update"),
   requireTravelTenant,
+  requirePermission("diagnostics", "update"),
   async (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);
@@ -1594,8 +1594,8 @@ router.post(
 router.post(
   "/diagnostics/:id/form-vs-call/compare",
   verifyToken,
-  requirePermission("diagnostics", "read"),
   requireTravelTenant,
+  requirePermission("diagnostics", "read"),
   async (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);

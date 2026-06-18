@@ -499,7 +499,7 @@ describe('<InvoicesAdmin /> — new-invoice modal', () => {
     await screen.findByText('TINV-2026-0001');
     fireEvent.click(screen.getByRole('button', { name: /New Invoice/i }));
     // Form fields surface (modal opened).
-    const contactInput = await screen.findByLabelText(/^Contact ID$/i);
+    const contactInput = await screen.findByLabelText(/^Customer$/i);
     const totalInput = screen.getByLabelText(/^Total amount$/i);
     const dueInput = screen.getByLabelText(/^Due date$/i);
     fireEvent.change(contactInput, { target: { value: '42' } });
@@ -551,7 +551,7 @@ describe('<InvoicesAdmin /> — new-invoice modal', () => {
     await waitFor(() => {
       expect(notifyError).toHaveBeenCalled();
     });
-    expect(notifyError.mock.calls[0][0]).toMatch(/Contact ID/i);
+    expect(notifyError.mock.calls[0][0]).toMatch(/Please select a customer/i);
     // No POST fired.
     const posts = fetchApiMock.mock.calls.filter(
       ([url, opts]) => url === '/api/travel/invoices' && opts?.method === 'POST',
@@ -584,7 +584,7 @@ describe('<InvoicesAdmin /> — new-invoice modal', () => {
     renderPage();
     await screen.findByText('TINV-2026-0001');
     fireEvent.click(screen.getByRole('button', { name: /New Invoice/i }));
-    fireEvent.change(await screen.findByLabelText(/^Contact ID$/i), { target: { value: '888' } });
+    fireEvent.change(await screen.findByLabelText(/^Customer$/i), { target: { value: '888' } });
     fireEvent.change(screen.getByLabelText(/^Total amount$/i), { target: { value: '120000' } });
     fireEvent.change(screen.getByLabelText(/^Due date$/i), { target: { value: '2026-12-31' } });
     fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
@@ -626,7 +626,7 @@ describe('<InvoicesAdmin /> — new-invoice modal', () => {
     renderPage();
     await screen.findByText('TINV-2026-0001');
     fireEvent.click(screen.getByRole('button', { name: /New Invoice/i }));
-    fireEvent.change(await screen.findByLabelText(/^Contact ID$/i), { target: { value: '888' } });
+    fireEvent.change(await screen.findByLabelText(/^Customer$/i), { target: { value: '888' } });
     fireEvent.change(screen.getByLabelText(/^Total amount$/i), { target: { value: '120000' } });
     fireEvent.change(screen.getByLabelText(/^Due date$/i), { target: { value: '2026-12-31' } });
     const form = screen.getByLabelText(/^Total amount$/i).closest('form');
@@ -926,7 +926,7 @@ describe('<InvoicesAdmin /> — TDS withholding tiles (#901 slice 22)', () => {
     fireEvent.click(screen.getByRole('button', { name: /Edit invoice TINV-2026-0502/i }));
     // Wait for the form to appear (modal opened) so we know the lazy
     // detail fetch has had a chance to settle.
-    await screen.findByLabelText(/^Contact ID$/i);
+    await screen.findByLabelText(/^Customer$/i);
     // Give the microtask queue a tick to flush the detail GET resolution.
     await waitFor(() => {
       const detailCall = fetchApiMock.mock.calls.find(
@@ -953,7 +953,7 @@ describe('<InvoicesAdmin /> — TDS withholding tiles (#901 slice 22)', () => {
     fetchApiMock.mockClear();
     fireEvent.click(screen.getByRole('button', { name: /Edit invoice TINV-2026-0503/i }));
     // Modal opens for the Draft row.
-    await screen.findByLabelText(/^Contact ID$/i);
+    await screen.findByLabelText(/^Customer$/i);
     // No detail GET fired (Draft invoices skip the slice-22 fetch entirely).
     const detailCall = fetchApiMock.mock.calls.find(
       ([url]) => /\?include=lines/.test(url),

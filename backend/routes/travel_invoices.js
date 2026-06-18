@@ -596,8 +596,8 @@ function parseFilingMonth(raw) {
 router.get(
   "/invoices/gstr1-export",
   verifyToken,
-  requirePermission("invoices", "export"),
   requireTravelTenant,
+  requirePermission("invoices", "export"),
   async (req, res) => {
     try {
       const { year, month, start, end } = parseFilingMonth(req.query.month);
@@ -1158,8 +1158,8 @@ async function collectAccountingExportRows(req) {
 router.get(
   "/invoices/export/tally.xml",
   verifyToken,
-  requirePermission("invoices", "export"),
   requireTravelTenant,
+  requirePermission("invoices", "export"),
   async (req, res) => {
     try {
       const { rows, fromIso, toIso, subBrandFilter } =
@@ -1186,8 +1186,8 @@ router.get(
 router.get(
   "/invoices/export/ca.csv",
   verifyToken,
-  requirePermission("invoices", "export"),
   requireTravelTenant,
+  requirePermission("invoices", "export"),
   async (req, res) => {
     try {
       const { rows, fromIso, toIso, subBrandFilter } =
@@ -1335,8 +1335,8 @@ function roundHalfUp2(n) {
 router.get(
   "/invoices/aged-receivable",
   verifyToken,
-  requirePermission("invoices", "read"),
   requireTravelTenant,
+  requirePermission("invoices", "read"),
   async (req, res) => {
     try {
       const asOf = parseAsOf(req.query.asOf);
@@ -1557,8 +1557,8 @@ function parseAsOfDate(input) {
 router.get(
   "/invoices/aged-receivable-report",
   verifyToken,
-  requirePermission("invoices", "read"),
   requireTravelTenant,
+  requirePermission("invoices", "read"),
   async (req, res) => {
     try {
       const asOf = parseAsOfDate(req.query.asOfDate);
@@ -1673,8 +1673,8 @@ router.get(
 router.get(
   "/invoices/aged-payable-report",
   verifyToken,
-  requirePermission("invoices", "read"),
   requireTravelTenant,
+  requirePermission("invoices", "read"),
   async (req, res) => {
     try {
       const asOf = parseAsOfDate(req.query.asOfDate);
@@ -1907,8 +1907,8 @@ function panFromGst(gstin) {
 router.get(
   "/invoices/tcs/27eq",
   verifyToken,
-  requirePermission("invoices", "read"),
   requireTravelTenant,
+  requirePermission("invoices", "read"),
   async (req, res) => {
     try {
       const fy = parseFy(req.query.fy);
@@ -3001,8 +3001,8 @@ const HSN_SUMMARY_DEFAULT_DOC_TYPES = ["TaxInvoice", "CreditNote", "DebitNote"];
 router.get(
   "/invoices/hsn-summary",
   verifyToken,
-  requirePermission("invoices", "read"),
   requireTravelTenant,
+  requirePermission("invoices", "read"),
   async (req, res) => {
     try {
       const { year, month, start, end } = parseFilingMonth(req.query.month);
@@ -3308,8 +3308,8 @@ const GSTR3B_DOC_TYPES = ["TaxInvoice", "CreditNote", "DebitNote"];
 router.get(
   "/invoices/gstr-3b",
   verifyToken,
-  requirePermission("invoices", "read"),
   requireTravelTenant,
+  requirePermission("invoices", "read"),
   async (req, res) => {
     try {
       const { year, month, start, end } = parseFilingMonth(req.query.month);
@@ -3732,8 +3732,8 @@ function parseTaxSummaryDateRange(rawFrom, rawTo) {
 router.get(
   "/invoices/tax-summary",
   verifyToken,
-  requirePermission("invoices", "read"),
   requireTravelTenant,
+  requirePermission("invoices", "read"),
   async (req, res) => {
     try {
       const { start, end, fromStr, toStr } = parseTaxSummaryDateRange(
@@ -4421,8 +4421,8 @@ router.get(
 router.post(
   "/invoices",
   verifyToken,
-  requirePermission("invoices", "write"),
   requireTravelTenant,
+  requirePermission("invoices", "write"),
   async (req, res) => {
     try {
       const {
@@ -4612,8 +4612,8 @@ router.post(
 router.put(
   "/invoices/:id",
   verifyToken,
-  requirePermission("invoices", "update"),
   requireTravelTenant,
+  requirePermission("invoices", "update"),
   async (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);
@@ -4767,8 +4767,8 @@ router.put(
 router.delete(
   "/invoices/:id",
   verifyToken,
-  requirePermission("invoices", "delete"),
   requireTravelTenant,
+  requirePermission("invoices", "delete"),
   async (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);
@@ -4857,8 +4857,8 @@ router.delete(
 router.post(
   "/invoices/:id/issue",
   verifyToken,
-  requirePermission("invoices", "update"),
   requireTravelTenant,
+  requirePermission("invoices", "update"),
   async (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);
@@ -5127,8 +5127,8 @@ router.get(
 router.post(
   "/invoices/:id/lines",
   verifyToken,
-  requirePermission("invoices", "write"),
   requireTravelTenant,
+  requirePermission("invoices", "write"),
   async (req, res) => {
     try {
       const invoiceId = parseInt(req.params.id, 10);
@@ -5223,8 +5223,8 @@ router.post(
 router.put(
   "/invoices/:id/lines/:lineId",
   verifyToken,
-  requirePermission("invoices", "update"),
   requireTravelTenant,
+  requirePermission("invoices", "update"),
   async (req, res) => {
     try {
       const invoiceId = parseInt(req.params.id, 10);
@@ -5381,8 +5381,8 @@ router.put(
 router.delete(
   "/invoices/:id/lines/:lineId",
   verifyToken,
-  requirePermission("invoices", "delete"),
   requireTravelTenant,
+  requirePermission("invoices", "delete"),
   async (req, res) => {
     try {
       const invoiceId = parseInt(req.params.id, 10);
@@ -5448,8 +5448,8 @@ router.delete(
 router.get(
   "/invoices/:id/pdf",
   verifyToken,
-  requirePermission("invoices", "export"),
   requireTravelTenant,
+  requirePermission("invoices", "export"),
   async (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);
@@ -5721,8 +5721,8 @@ router.get(
 router.post(
   "/invoices/:id/schedule",
   verifyToken,
-  requirePermission("invoices", "write"),
   requireTravelTenant,
+  requirePermission("invoices", "write"),
   async (req, res) => {
     try {
       const invoiceId = parseInt(req.params.id, 10);
@@ -5893,8 +5893,8 @@ router.post(
 router.put(
   "/invoices/:id/schedule/:milestoneId",
   verifyToken,
-  requirePermission("invoices", "update"),
   requireTravelTenant,
+  requirePermission("invoices", "update"),
   async (req, res) => {
     try {
       const invoiceId = parseInt(req.params.id, 10);
@@ -6114,8 +6114,8 @@ router.put(
 router.delete(
   "/invoices/:id/schedule/:milestoneId",
   verifyToken,
-  requirePermission("invoices", "delete"),
   requireTravelTenant,
+  requirePermission("invoices", "delete"),
   async (req, res) => {
     try {
       const invoiceId = parseInt(req.params.id, 10);
@@ -6211,8 +6211,8 @@ router.delete(
 router.post(
   "/invoices/:id/schedule/:milestoneId/mark-paid",
   verifyToken,
-  requirePermission("invoices", "update"),
   requireTravelTenant,
+  requirePermission("invoices", "update"),
   async (req, res) => {
     try {
       const invoiceId = parseInt(req.params.id, 10);
@@ -6829,8 +6829,8 @@ router.get(
 router.post(
   "/invoices/:id/apply-tcs",
   verifyToken,
-  requirePermission("invoices", "update"),
   requireTravelTenant,
+  requirePermission("invoices", "update"),
   async (req, res) => {
     try {
       const invoiceId = parseInt(req.params.id, 10);
@@ -6998,8 +6998,8 @@ const CREDITABLE_PARENT_STATUSES = ["Issued", "Partial", "Paid"];
 router.post(
   "/invoices/:id/credit-note",
   verifyToken,
-  requirePermission("invoices", "write"),
   requireTravelTenant,
+  requirePermission("invoices", "write"),
   async (req, res) => {
     try {
       const invoiceId = parseInt(req.params.id, 10);
@@ -7153,8 +7153,8 @@ router.post(
 router.post(
   "/invoices/:id/debit-note",
   verifyToken,
-  requirePermission("invoices", "write"),
   requireTravelTenant,
+  requirePermission("invoices", "write"),
   async (req, res) => {
     try {
       const invoiceId = parseInt(req.params.id, 10);
@@ -7527,8 +7527,8 @@ router.get(
 router.post(
   "/invoices/:id/tax-persist",
   verifyToken,
-  requirePermission("invoices", "update"),
   requireTravelTenant,
+  requirePermission("invoices", "update"),
   async (req, res) => {
     try {
       const invoiceId = parseInt(req.params.id, 10);
@@ -7826,8 +7826,8 @@ const CLONEABLE_SOURCE_STATUSES = ["Issued", "Paid"];
 router.post(
   "/invoices/:id/clone-as-recurring",
   verifyToken,
-  requirePermission("invoices", "write"),
   requireTravelTenant,
+  requirePermission("invoices", "write"),
   async (req, res) => {
     try {
       const invoiceId = parseInt(req.params.id, 10);
@@ -8143,8 +8143,8 @@ router.get(
 router.post(
   "/invoices/:id/apply-penalty",
   verifyToken,
-  requirePermission("invoices", "update"),
   requireTravelTenant,
+  requirePermission("invoices", "update"),
   async (req, res) => {
     try {
       const invoiceId = parseInt(req.params.id, 10);
@@ -8402,8 +8402,8 @@ router.post(
 router.post(
   "/invoices/:id/convert-to-tax-invoice",
   verifyToken,
-  requirePermission("invoices", "update"),
   requireTravelTenant,
+  requirePermission("invoices", "update"),
   async (req, res) => {
     try {
       const invoiceId = parseInt(req.params.id, 10);
@@ -8498,8 +8498,8 @@ router.post(
 router.post(
   "/invoices/:id/void",
   verifyToken,
-  requirePermission("invoices", "update"),
   requireTravelTenant,
+  requirePermission("invoices", "update"),
   async (req, res) => {
     try {
       const invoiceId = parseInt(req.params.id, 10);
@@ -8676,8 +8676,8 @@ router.post(
 router.get(
   "/invoices/:id/cancel-preview",
   verifyToken,
-  requirePermission("invoices", "read"),
   requireTravelTenant,
+  requirePermission("invoices", "read"),
   async (req, res) => {
     try {
       const invoiceId = parseInt(req.params.id, 10);

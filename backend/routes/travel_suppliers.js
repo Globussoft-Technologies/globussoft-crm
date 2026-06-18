@@ -66,8 +66,8 @@ const METADATA_SELECT = {
 router.get(
   "/supplier-credentials",
   verifyToken,
-  requirePermission("suppliers", "read"),
   requireTravelTenant,
+  requirePermission("suppliers", "read"),
   async (req, res) => {
     try {
       const where = { tenantId: req.travelTenant.id };
@@ -93,8 +93,8 @@ router.get(
 router.post(
   "/supplier-credentials",
   verifyToken,
-  requirePermission("suppliers", "manage"),
   requireTravelTenant,
+  requirePermission("suppliers", "manage"),
   async (req, res) => {
     try {
       const { category, supplierName, loginId, password, metadata, ownerUserId } = req.body || {};
@@ -137,8 +137,8 @@ router.post(
 router.get(
   "/supplier-credentials/:id",
   verifyToken,
-  requirePermission("suppliers", "read"),
   requireTravelTenant,
+  requirePermission("suppliers", "read"),
   async (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);
@@ -163,8 +163,8 @@ router.get(
 router.post(
   "/supplier-credentials/:id/reveal",
   verifyToken,
-  requirePermission("suppliers", "manage"),
   requireTravelTenant,
+  requirePermission("suppliers", "manage"),
   async (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);
@@ -216,8 +216,8 @@ router.post(
 router.patch(
   "/supplier-credentials/:id",
   verifyToken,
-  requirePermission("suppliers", "manage"),
   requireTravelTenant,
+  requirePermission("suppliers", "manage"),
   async (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);
@@ -281,8 +281,8 @@ router.patch(
 router.delete(
   "/supplier-credentials/:id",
   verifyToken,
-  requirePermission("suppliers", "manage"),
   requireTravelTenant,
+  requirePermission("suppliers", "manage"),
   async (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);
@@ -320,8 +320,8 @@ router.delete(
 router.get(
   "/supplier-credentials/:id/access-log",
   verifyToken,
-  requirePermission("suppliers", "read"),
   requireTravelTenant,
+  requirePermission("suppliers", "read"),
   async (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);
@@ -1847,8 +1847,8 @@ router.get(
 router.get(
   "/suppliers/:id/credentials",
   verifyToken,
-  requirePermission("suppliers", "read"),
   requireTravelTenant,
+  requirePermission("suppliers", "read"),
   async (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);
@@ -2016,8 +2016,8 @@ router.get(
 router.post(
   "/suppliers/:id/credentials/:credId/rotate",
   verifyToken,
-  requirePermission("suppliers", "manage"),
   requireTravelTenant,
+  requirePermission("suppliers", "manage"),
   async (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);
@@ -2179,8 +2179,8 @@ function parseAccessTrailOffset(input) {
 router.get(
   "/suppliers/:id/access-trail",
   verifyToken,
-  requirePermission("suppliers", "read"),
   requireTravelTenant,
+  requirePermission("suppliers", "read"),
   async (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);
@@ -3093,8 +3093,8 @@ router.get("/suppliers/:id", verifyToken, requireTravelTenant, async (req, res) 
 router.post(
   "/suppliers",
   verifyToken,
-  requirePermission("suppliers", "write"),
   requireTravelTenant,
+  requirePermission("suppliers", "write"),
   async (req, res) => {
     try {
       const {
@@ -3200,8 +3200,8 @@ router.post(
 router.put(
   "/suppliers/:id",
   verifyToken,
-  requirePermission("suppliers", "update"),
   requireTravelTenant,
+  requirePermission("suppliers", "update"),
   async (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);
@@ -3349,8 +3349,8 @@ router.put(
 router.delete(
   "/suppliers/:id",
   verifyToken,
-  requirePermission("suppliers", "delete"),
   requireTravelTenant,
+  requirePermission("suppliers", "delete"),
   async (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);
@@ -3479,32 +3479,32 @@ function buildStateTransitionHandler({ toStatus, requireReason }) {
 router.post(
   "/suppliers/:id/pause",
   verifyToken,
-  requirePermission("suppliers", "update"),
   requireTravelTenant,
+  requirePermission("suppliers", "update"),
   buildStateTransitionHandler({ toStatus: "paused", requireReason: false }),
 );
 
 router.post(
   "/suppliers/:id/block",
   verifyToken,
-  requirePermission("suppliers", "update"),
   requireTravelTenant,
+  requirePermission("suppliers", "update"),
   buildStateTransitionHandler({ toStatus: "blocked_disputed", requireReason: true }),
 );
 
 router.post(
   "/suppliers/:id/archive",
   verifyToken,
-  requirePermission("suppliers", "update"),
   requireTravelTenant,
+  requirePermission("suppliers", "update"),
   buildStateTransitionHandler({ toStatus: "archived", requireReason: false }),
 );
 
 router.post(
   "/suppliers/:id/reactivate",
   verifyToken,
-  requirePermission("suppliers", "update"),
   requireTravelTenant,
+  requirePermission("suppliers", "update"),
   buildStateTransitionHandler({ toStatus: "active", requireReason: false }),
 );
 
@@ -4072,8 +4072,8 @@ router.get(
 router.post(
   "/suppliers/:id/payables",
   verifyToken,
-  requirePermission("suppliers", "write"),
   requireTravelTenant,
+  requirePermission("suppliers", "write"),
   async (req, res) => {
     try {
       const supplier = await loadParentSupplier(req, res);
@@ -4130,8 +4130,8 @@ router.post(
 router.put(
   "/suppliers/:id/payables/:payableId",
   verifyToken,
-  requirePermission("suppliers", "update"),
   requireTravelTenant,
+  requirePermission("suppliers", "update"),
   async (req, res) => {
     try {
       const supplier = await loadParentSupplier(req, res);
@@ -4223,8 +4223,8 @@ router.put(
 router.delete(
   "/suppliers/:id/payables/:payableId",
   verifyToken,
-  requirePermission("suppliers", "delete"),
   requireTravelTenant,
+  requirePermission("suppliers", "delete"),
   async (req, res) => {
     try {
       const supplier = await loadParentSupplier(req, res);
@@ -5040,8 +5040,8 @@ function projectKyc(kyc, checklistItems) {
 router.get(
   "/suppliers/:id/kyc",
   verifyToken,
-  requirePermission("suppliers", "read"),
   requireTravelTenant,
+  requirePermission("suppliers", "read"),
   async (req, res) => {
     try {
       const supplier = await loadSupplierForKyc(req);
@@ -5069,8 +5069,8 @@ router.get(
 router.post(
   "/suppliers/:id/kyc",
   verifyToken,
-  requirePermission("suppliers", "write"),
   requireTravelTenant,
+  requirePermission("suppliers", "write"),
   async (req, res) => {
     try {
       const supplier = await loadSupplierForKyc(req);
@@ -5131,8 +5131,8 @@ router.post(
 router.put(
   "/suppliers/:id/kyc",
   verifyToken,
-  requirePermission("suppliers", "update"),
   requireTravelTenant,
+  requirePermission("suppliers", "update"),
   async (req, res) => {
     try {
       const supplier = await loadSupplierForKyc(req);
@@ -5201,8 +5201,8 @@ router.put(
 router.post(
   "/suppliers/:id/kyc/submit",
   verifyToken,
-  requirePermission("suppliers", "update"),
   requireTravelTenant,
+  requirePermission("suppliers", "update"),
   async (req, res) => {
     try {
       const supplier = await loadSupplierForKyc(req);
@@ -5252,8 +5252,8 @@ router.post(
 router.post(
   "/suppliers/:id/kyc/verify",
   verifyToken,
-  requirePermission("suppliers", "update"),
   requireTravelTenant,
+  requirePermission("suppliers", "update"),
   async (req, res) => {
     try {
       const supplier = await loadSupplierForKyc(req);
@@ -5303,8 +5303,8 @@ router.post(
 router.post(
   "/suppliers/:id/kyc/reject",
   verifyToken,
-  requirePermission("suppliers", "update"),
   requireTravelTenant,
+  requirePermission("suppliers", "update"),
   async (req, res) => {
     try {
       const supplier = await loadSupplierForKyc(req);
@@ -5358,8 +5358,8 @@ router.post(
 router.put(
   "/suppliers/:id/kyc/checklist/:itemId",
   verifyToken,
-  requirePermission("suppliers", "update"),
   requireTravelTenant,
+  requirePermission("suppliers", "update"),
   async (req, res) => {
     try {
       const supplier = await loadSupplierForKyc(req);
@@ -5518,8 +5518,8 @@ function projectDispute(d) {
 router.post(
   "/suppliers/:id/disputes",
   verifyToken,
-  requirePermission("suppliers", "write"),
   requireTravelTenant,
+  requirePermission("suppliers", "write"),
   async (req, res) => {
     try {
       const supplier = await loadSupplierForKyc(req);
@@ -5620,8 +5620,8 @@ router.post(
 router.get(
   "/suppliers/:id/disputes",
   verifyToken,
-  requirePermission("suppliers", "read"),
   requireTravelTenant,
+  requirePermission("suppliers", "read"),
   async (req, res) => {
     try {
       const supplier = await loadSupplierForKyc(req);
@@ -5674,8 +5674,8 @@ router.get(
 router.get(
   "/suppliers/:id/disputes/:disputeId",
   verifyToken,
-  requirePermission("suppliers", "read"),
   requireTravelTenant,
+  requirePermission("suppliers", "read"),
   async (req, res) => {
     try {
       const supplier = await loadSupplierForKyc(req);
@@ -5702,8 +5702,8 @@ router.get(
 router.put(
   "/suppliers/:id/disputes/:disputeId",
   verifyToken,
-  requirePermission("suppliers", "update"),
   requireTravelTenant,
+  requirePermission("suppliers", "update"),
   async (req, res) => {
     try {
       const supplier = await loadSupplierForKyc(req);
@@ -5786,8 +5786,8 @@ router.put(
 router.post(
   "/suppliers/:id/disputes/:disputeId/resolve",
   verifyToken,
-  requirePermission("suppliers", "update"),
   requireTravelTenant,
+  requirePermission("suppliers", "update"),
   async (req, res) => {
     try {
       const supplier = await loadSupplierForKyc(req);
@@ -5846,8 +5846,8 @@ router.post(
 router.post(
   "/suppliers/:id/disputes/:disputeId/escalate",
   verifyToken,
-  requirePermission("suppliers", "update"),
   requireTravelTenant,
+  requirePermission("suppliers", "update"),
   async (req, res) => {
     try {
       const supplier = await loadSupplierForKyc(req);
@@ -5892,8 +5892,8 @@ router.post(
 router.get(
   "/disputes/stats",
   verifyToken,
-  requirePermission("suppliers", "read"),
   requireTravelTenant,
+  requirePermission("suppliers", "read"),
   async (req, res) => {
     try {
       const all = await prisma.travelSupplierDispute.findMany({

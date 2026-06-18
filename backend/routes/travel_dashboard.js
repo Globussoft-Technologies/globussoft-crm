@@ -255,8 +255,8 @@ router.get("/dashboard", verifyToken, requireTravelTenant, async (req, res) => {
 router.get(
   "/dashboard/workload",
   verifyToken,
-  requirePermission("reports", "read"),
   requireTravelTenant,
+  requirePermission("reports", "read"),
   async (req, res) => {
     try {
       const tenantId = req.travelTenant.id;

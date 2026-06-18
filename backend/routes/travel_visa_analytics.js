@@ -106,8 +106,8 @@ const STATUS_FIELD = {
 // ─── V16 — rejection-recovery success rate ───────────────────────────
 router.get(
   "/rejection-recovery",
-  requirePermission("visa", "read"),
   requireTravelTenant,
+  requirePermission("visa", "read"),
   async (req, res) => {
     try {
       const tenantId = req.travelTenant.id;
@@ -204,8 +204,8 @@ router.get(
 // ─── V17 — conversion by diagnostic readiness level ───────────────────
 router.get(
   "/conversion-by-readiness",
-  requirePermission("visa", "read"),
   requireTravelTenant,
+  requirePermission("visa", "read"),
   async (req, res) => {
     try {
       const tenantId = req.travelTenant.id;
@@ -309,8 +309,8 @@ router.get(
 // ─── V18 — lead source → application conversion rate ─────────────────
 router.get(
   "/lead-source-rate",
-  requirePermission("visa", "read"),
   requireTravelTenant,
+  requirePermission("visa", "read"),
   async (req, res) => {
     try {
       const tenantId = req.travelTenant.id;
@@ -469,8 +469,8 @@ router.get(
 // dashboard tile renders gracefully.
 router.get(
   "/by-month",
-  requirePermission("visa", "read"),
   requireTravelTenant,
+  requirePermission("visa", "read"),
   async (req, res) => {
     try {
       const tenantId = req.travelTenant.id;
@@ -737,8 +737,8 @@ router.get(
 // dashboard tile renders gracefully.
 router.get(
   "/by-quarter",
-  requirePermission("visa", "read"),
   requireTravelTenant,
+  requirePermission("visa", "read"),
   async (req, res) => {
     try {
       const tenantId = req.travelTenant.id;
@@ -1005,8 +1005,8 @@ router.get(
 // dashboard tile renders gracefully.
 router.get(
   "/by-year",
-  requirePermission("visa", "read"),
   requireTravelTenant,
+  requirePermission("visa", "read"),
   async (req, res) => {
     try {
       const tenantId = req.travelTenant.id;

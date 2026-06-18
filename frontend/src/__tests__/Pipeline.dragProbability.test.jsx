@@ -55,11 +55,11 @@ import { fetchApi } from '../utils/api';
 import Pipeline from '../pages/Pipeline';
 
 const STAGES = [
-  { id: 1, name: 'New Lead', color: '#3b82f6', position: 0 },
+  { id: 1, name: 'Lead', color: '#3b82f6', position: 0 },
   { id: 2, name: 'Contacted', color: '#f59e0b', position: 1 },
-  { id: 3, name: 'Proposal Sent', color: '#a855f7', position: 2 },
-  { id: 4, name: 'Closed Won', color: '#10b981', position: 3 },
-  { id: 5, name: 'Closed Lost', color: '#ef4444', position: 4 },
+  { id: 3, name: 'Proposal', color: '#a855f7', position: 2 },
+  { id: 4, name: 'Won', color: '#10b981', position: 3 },
+  { id: 5, name: 'Lost', color: '#ef4444', position: 4 },
 ];
 
 beforeEach(() => {
@@ -122,7 +122,7 @@ describe('Pipeline drag-and-drop probability sync (#605)', () => {
     // Pre-drop, the badge in the Lead column reads 25%.
     expect(screen.getByText('25%')).toBeInTheDocument();
 
-    await performDrop(101, 'Closed Won');
+    await performDrop(101, 'Won');
 
     // Probability snaps to 100% optimistically (before the network response).
     await waitFor(() => {
@@ -151,7 +151,7 @@ describe('Pipeline drag-and-drop probability sync (#605)', () => {
 
     expect(screen.getByText('70%')).toBeInTheDocument();
 
-    await performDrop(102, 'Closed Lost');
+    await performDrop(102, 'Lost');
 
     await waitFor(() => {
       expect(screen.getByText('0%')).toBeInTheDocument();
@@ -175,7 +175,7 @@ describe('Pipeline drag-and-drop probability sync (#605)', () => {
 
     expect(screen.getByText('25%')).toBeInTheDocument();
 
-    await performDrop(103, 'Proposal Sent');
+    await performDrop(103, 'Proposal');
 
     await waitFor(() => {
       expect(screen.getByText('70%')).toBeInTheDocument();

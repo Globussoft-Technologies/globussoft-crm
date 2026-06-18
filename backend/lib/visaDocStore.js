@@ -12,6 +12,14 @@ const path = require("path");
 const crypto = require("crypto");
 const s3Service = require("../services/s3Service");
 
+// Visa docs are private (passport / bank scans). They are NOT meant to be opened
+// straight off the public /uploads static mount — access goes through the authed
+// view-url endpoints (staff role/sub-brand OR the owning customer), which mint a
+// SHORT-LIVED link: a signed S3 URL for S3-backed docs, or a `?t=` HMAC token for
+// the disk dev-fallback (validated by the static-path gate in server.js).
+const DOC_URL_SECRET = process.env.JWT_SECRET || "enterprise_super_secret_key_2026";
+const DEFAULT_VIEW_TTL_SEC = 300; // 5-minute links
+
 // Extension is pinned to the validated mimetype (never the client filename) —
 // an attacker-controlled name on a public mount would otherwise be stored XSS.
 // So the stored object is only ever .jpg / .png / .pdf. Visa checklist docs are
@@ -58,9 +66,69 @@ async function removeDoc(descriptor) {
   }
 }
 
+// HMAC over "<name>.<exp>" — the shared primitive for signing/verifying a
+// disk-backed visa-doc link. base64url so it's URL-safe.
+function diskSig(name, exp) {
+  return crypto.createHmac("sha256", DOC_URL_SECRET).update(`${name}.${exp}`).digest("base64url");
+}
+
+// Build a short-lived, signed URL for a disk-backed visa doc. The returned path
+// is gated by the static-path middleware in server.js, which calls
+// verifyDiskToken before letting express.static serve the bytes.
+function signDiskUrl(name, ttlSec = DEFAULT_VIEW_TTL_SEC) {
+  const safe = path.basename(name || "");
+  if (!safe) return null;
+  const exp = Math.floor(Date.now() / 1000) + Math.max(30, ttlSec);
+  return `/api/uploads/visa-docs/${encodeURIComponent(safe)}?t=${exp}.${diskSig(safe, exp)}`;
+}
+
+// Validate a `?t=<exp>.<sig>` token for a disk-backed visa doc. Returns false on
+// a missing/malformed/expired/tampered token (timing-safe signature compare).
+function verifyDiskToken(name, token) {
+  const safe = path.basename(name || "");
+  if (!safe || !token || typeof token !== "string") return false;
+  const dot = token.indexOf(".");
+  if (dot < 1) return false;
+  const exp = parseInt(token.slice(0, dot), 10);
+  const sig = token.slice(dot + 1);
+  if (!Number.isFinite(exp) || exp < Math.floor(Date.now() / 1000)) return false;
+  const expected = diskSig(safe, exp);
+  if (sig.length !== expected.length) return false;
+  try {
+    return crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected));
+  } catch {
+    return false;
+  }
+}
+
+// "s3" | "disk" for a checklist-item row, tolerating legacy rows whose
+// attachmentStorage was never stamped (infer from the URL shape).
+function inferStorage(item) {
+  if (item && item.attachmentStorage) return item.attachmentStorage;
+  return /^https?:\/\//i.test((item && item.attachmentUrl) || "") ? "s3" : "disk";
+}
+
+// Resolve a checklist item to a short-lived, openable URL — a signed S3 URL for
+// S3-backed docs, or a token-signed disk path for the dev fallback. Returns null
+// when the item has no stored file. Call ONLY after authorizing the requester.
+async function resolveViewUrl(item, ttlSec = DEFAULT_VIEW_TTL_SEC) {
+  if (!item || !item.attachmentUrl) return null;
+  if (inferStorage(item) === "s3") {
+    const key = item.attachmentKey || s3Service.extractKeyFromUrl(item.attachmentUrl);
+    if (!key) return null;
+    return s3Service.getSignedUrl(key, ttlSec);
+  }
+  const name = path.basename(item.attachmentKey || item.attachmentUrl || "");
+  return name ? signDiskUrl(name, ttlSec) : null;
+}
+
 module.exports = {
   storeDoc,
   removeDoc,
   VISA_DOC_MIME_EXT,
   uploadDir,
+  signDiskUrl,
+  verifyDiskToken,
+  resolveViewUrl,
+  DEFAULT_VIEW_TTL_SEC,
 };

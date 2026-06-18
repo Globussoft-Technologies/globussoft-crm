@@ -5,6 +5,7 @@ import { AuthContext, ThemeContext } from '../App';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import PasswordInput from '../components/PasswordInput';
+import EmailOtpField from '../components/EmailOtpField';
 
 const C = {
   bg: '#f8fafc', bg2: '#ffffff', text: '#1e293b', text2: '#334155', text3: '#64748b', text4: '#94a3b8',
@@ -84,6 +85,10 @@ export default function GetStarted() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [emailChecked, setEmailChecked] = useState(persisted?.emailChecked || false);
+  // Short-lived token proving the email was OTP-verified. Required by the
+  // backend register gate when REQUIRE_EMAIL_OTP=1, and gates the email-step
+  // "Continue" button regardless (so the page is always OTP-safe).
+  const [emailVerificationToken, setEmailVerificationToken] = useState(persisted?.emailVerificationToken || null);
 
   // Load Razorpay SDK once
   useEffect(() => {
@@ -112,9 +117,9 @@ export default function GetStarted() {
   useEffect(() => {
     persistState({
       step, email, name, organizationName, vertical, themePreference,
-      selectedPlan, currency, annual, emailChecked,
+      selectedPlan, currency, annual, emailChecked, emailVerificationToken,
     });
-  }, [step, email, name, organizationName, vertical, themePreference, selectedPlan, currency, annual, emailChecked]);
+  }, [step, email, name, organizationName, vertical, themePreference, selectedPlan, currency, annual, emailChecked, emailVerificationToken]);
 
   const validatePassword = (pw) => {
     if (!pw || pw.length < 8) return 'Password must be at least 8 characters';
@@ -128,6 +133,10 @@ export default function GetStarted() {
     setError('');
     if (!email || !email.includes('@')) {
       setError('Please enter a valid email address');
+      return;
+    }
+    if (!emailVerificationToken) {
+      setError('Please verify your email to continue');
       return;
     }
     setLoading(true);
@@ -181,6 +190,7 @@ export default function GetStarted() {
           organizationName: organizationName.trim(),
           vertical,
           themePreference,
+          verificationToken: emailVerificationToken,
         }),
       });
       const data = await res.json();
@@ -200,6 +210,12 @@ export default function GetStarted() {
         document.body.setAttribute('data-vertical', v);
 
         setStep('plan');
+      } else if (data.code === 'EMAIL_NOT_VERIFIED' || data.code === 'EMAIL_VERIFICATION_REQUIRED') {
+        // Verification token expired between the email step and submit — bounce
+        // back to re-verify rather than leaving them stuck on a generic error.
+        setEmailVerificationToken(null);
+        setError('Your email verification expired — please verify your email again.');
+        setStep('email');
       } else {
         setError(data.error || 'Registration failed. Please try again.');
       }
@@ -370,32 +386,36 @@ export default function GetStarted() {
           {step === 'email' && (
             <>
               <h1 style={{ fontSize: '1.5rem', fontWeight: 700, marginBottom: 8 }}>Let's get started</h1>
-              <p style={{ color: C.text3, marginBottom: 28 }}>Enter your work email to check if you already have an account.</p>
+              <p style={{ color: C.text3, marginBottom: 28 }}>Enter your work email and verify it with the code we send you.</p>
               <form onSubmit={handleCheckEmail}>
-                <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 500, color: C.text2, marginBottom: 8 }}>Work email</label>
-                <input
-                  type="email"
-                  autoFocus
-                  required
-                  placeholder="you@company.com"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  style={{
-                    width: '100%', padding: '12px 14px', borderRadius: 10, border: `1px solid ${C.border}`,
-                    fontSize: '1rem', marginBottom: 20, outline: 'none', fontFamily: 'inherit',
-                  }}
-                />
+                <div style={{ marginBottom: 20 }}>
+                  <EmailOtpField
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    purpose="signup"
+                    onVerifiedChange={setEmailVerificationToken}
+                    label="Work email"
+                    placeholder="you@company.com"
+                    inputStyle={inputStyle}
+                    labelStyle={labelStyle}
+                  />
+                </div>
                 <button
                   type="submit"
-                  disabled={loading}
+                  disabled={loading || !emailVerificationToken}
                   style={{
                     width: '100%', padding: '12px', borderRadius: 10, border: 'none',
                     background: C.accent, color: '#fff', fontWeight: 600, fontSize: '0.95rem',
-                    cursor: loading ? 'not-allowed' : 'pointer', opacity: loading ? 0.7 : 1,
+                    cursor: (loading || !emailVerificationToken) ? 'not-allowed' : 'pointer',
+                    opacity: (loading || !emailVerificationToken) ? 0.6 : 1,
                     display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
                   }}
                 >
-                  {loading ? <Loader size={18} className="spin" /> : <>Continue <ArrowRight size={18} /></>}
+                  {loading
+                    ? <Loader size={18} className="spin" />
+                    : !emailVerificationToken
+                      ? 'Verify your email to continue'
+                      : <>Continue <ArrowRight size={18} /></>}
                 </button>
               </form>
             </>

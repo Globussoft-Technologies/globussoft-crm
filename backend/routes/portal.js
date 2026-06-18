@@ -1588,6 +1588,34 @@ router.post(
   },
 );
 
+// GET /api/portal/travel/visa/documents/:itemId/view-url — a short-lived link
+// to open ONE document the customer owns. Replaces handing out the raw file URL:
+// disk docs now require a signed token, S3 docs a signed URL, and both are
+// owner-scoped (the item's application must belong to this customer).
+router.get("/travel/visa/documents/:itemId/view-url", verifyPortalToken, requireTravelPortalTenant, async (req, res) => {
+  try {
+    const itemId = parseInt(req.params.itemId, 10);
+    if (!Number.isFinite(itemId)) {
+      return res.status(400).json({ error: "itemId must be a number", code: "INVALID_ID" });
+    }
+    const item = await prisma.visaDocumentChecklistItem.findFirst({
+      where: { id: itemId, application: { contactId: req.portal.contactId, tenantId: req.portal.tenantId } },
+      select: { id: true, attachmentUrl: true, attachmentStorage: true, attachmentKey: true },
+    });
+    if (!item || !item.attachmentUrl) {
+      return res.status(404).json({ error: "Document not found", code: "NOT_FOUND" });
+    }
+    const url = await visaDocStore.resolveViewUrl(item);
+    if (!url) {
+      return res.status(404).json({ error: "Document not found", code: "NOT_FOUND" });
+    }
+    res.json({ url, expiresIn: visaDocStore.DEFAULT_VIEW_TTL_SEC });
+  } catch (e) {
+    console.error("[Portal][travel/visa/documents view-url]", e.message);
+    res.status(500).json({ error: "Failed to open document" });
+  }
+});
+
 // DELETE /api/portal/travel/visa/applications/:id — let the customer cancel
 // one of their own applications while it's still early. Allowed only in
 // intake / docs-pending; once the advisor files or decides it, it's out of

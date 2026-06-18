@@ -72,8 +72,9 @@ const express = require("express");
 const prisma = require("../lib/prisma");
 const { verifyToken, verifyRole } = require("../middleware/auth");
 const { requirePermission } = require("../middleware/requirePermission");
-const { requireTravelTenant } = require("../middleware/travelGuards");
+const { requireTravelTenant, getSubBrandAccessSet, canAccessSubBrand } = require("../middleware/travelGuards");
 const { writeAudit } = require("../lib/audit");
+const visaDocStore = require("../lib/visaDocStore");
 const { findLatestDiagnostic } = require("../lib/travelLatestDiagnostic");
 // #920 slice S43: opt-in slim shape via `?fields=summary` for GET /applications.
 // SQL-drops PII columns (rejectionHistoryJson, outcomeReason, familySize,
@@ -3313,6 +3314,47 @@ router.delete(
     } catch (e) {
       console.error("[travel-visa] quotation template delete error:", e.message);
       return res.status(500).json({ error: "Failed to delete quotation template" });
+    }
+  },
+);
+
+// GET /api/travel/visa/documents/:itemId/view-url — mint a short-lived link to
+// open one applicant's uploaded visa document. Viewable by ADMIN, or by staff
+// (MANAGER / USER) whose sub-brand access includes Visa Sure — NOT by staff
+// scoped to other sub-brands. Disk docs → token-signed path; S3 docs → signed
+// URL. The raw file path is otherwise gated (see server.js visa-docs gate).
+router.get(
+  "/documents/:itemId/view-url",
+  verifyRole(["ADMIN", "MANAGER", "USER"]),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const itemId = parseInt(req.params.itemId, 10);
+      if (!Number.isFinite(itemId)) {
+        return res.status(400).json({ error: "itemId must be a number", code: "INVALID_ID" });
+      }
+      // ADMIN sees everything; everyone else must have Visa Sure in scope.
+      if (req.user.role !== "ADMIN") {
+        const allowed = await getSubBrandAccessSet(req.user.userId);
+        if (!canAccessSubBrand(allowed, VISA_SUB_BRAND)) {
+          return res.status(403).json({ error: "You don't have access to Visa Sure documents", code: "SUBBRAND_FORBIDDEN" });
+        }
+      }
+      const item = await prisma.visaDocumentChecklistItem.findFirst({
+        where: { id: itemId, application: { tenantId: req.user.tenantId } },
+        select: { id: true, attachmentUrl: true, attachmentStorage: true, attachmentKey: true },
+      });
+      if (!item || !item.attachmentUrl) {
+        return res.status(404).json({ error: "Document not found", code: "NOT_FOUND" });
+      }
+      const url = await visaDocStore.resolveViewUrl(item);
+      if (!url) {
+        return res.status(404).json({ error: "Document not found", code: "NOT_FOUND" });
+      }
+      return res.json({ url, expiresIn: visaDocStore.DEFAULT_VIEW_TTL_SEC });
+    } catch (e) {
+      console.error("[travel-visa] document view-url error:", e.message);
+      return res.status(500).json({ error: "Failed to open document" });
     }
   },
 );

@@ -27,6 +27,7 @@ beforeEach(() => {
   prisma.itinerary = { findMany: vi.fn() };
   prisma.contact = { findMany: vi.fn() };
   prisma.tripCountdownNudge = { create: vi.fn(), update: vi.fn() };
+  prisma.travelPortalNotification = { create: vi.fn().mockResolvedValue({ id: 1 }) };
   emailSender.sendEmail = vi.fn();
   content.buildNudge = vi.fn(async () => ({ subject: "S", text: "T", html: "T", llmSourced: false }));
 
@@ -50,6 +51,10 @@ describe("tripCountdownEngine.runTripCountdownTick", () => {
     expect(content.buildNudge).toHaveBeenCalledWith(expect.objectContaining({ daysToGo: 5, destination: "Hyderabad", customerName: "Mohit" }));
     expect(emailSender.sendEmail).toHaveBeenCalledWith(expect.objectContaining({ to: "mohit@example.com", subject: "S" }));
     expect(prisma.tripCountdownNudge.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: "sent" }) }));
+    // also mirrored to the customer's in-app portal bell (deep-linked to the trip)
+    expect(prisma.travelPortalNotification.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ contactId: 7, tenantId: 1, type: "itinerary", link: "booking:1" }) }),
+    );
     expect(s).toMatchObject({ fired: 1, sent: 1 });
   });
 

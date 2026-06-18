@@ -1290,6 +1290,19 @@ app.get("/embed/lead-form.html", async (req, res, next) => {
 // PHI gating remains the route-level concern (filenames are
 // pseudo-random, but the static mount itself is intentionally public so
 // `<img src>` works without an Authorization header).
+// EXCEPTION — visa docs (passport / bank scans) are private. Block direct
+// static access to /uploads/visa-docs/* unless the request carries a valid
+// short-lived signed `?t=` token, minted by the authed view-url endpoints
+// after a staff role/sub-brand OR owning-customer check. (S3-backed visa docs
+// never hit this path — their signed URL points straight at AWS.) Registered
+// BEFORE the static mounts so it intercepts first.
+const visaDocStore = require("./lib/visaDocStore");
+const gateVisaDocs = (req, res, next) => {
+  if (visaDocStore.verifyDiskToken(path.basename(req.path || ""), req.query.t)) return next();
+  return res.status(403).json({ error: "Forbidden — open this document from your portal or the advisor app." });
+};
+app.use("/uploads/visa-docs", gateVisaDocs);
+app.use("/api/uploads/visa-docs", gateVisaDocs);
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 app.use("/api/uploads", express.static(path.join(__dirname, "uploads")));
 // Health Check Endpoint

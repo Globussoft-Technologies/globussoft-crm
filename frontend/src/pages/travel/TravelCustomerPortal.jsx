@@ -39,7 +39,7 @@ import {
   ShieldCheck, ShieldAlert, LogOut, Plane, User as UserIcon,
   CheckCircle2, AlertCircle, Loader2, ClipboardCheck, Award, LayoutDashboard,
   ChevronRight, ChevronLeft, Hotel, Ticket, FileUp, Upload, UserPlus,
-  Mail, Phone, Sun, Moon, Stamp, Star, Bell,
+  Mail, Phone, Sun, Moon, Stamp, Star, Bell, Search, X,
 } from "lucide-react";
 import TravelReviewForm from "../../components/TravelReviewForm";
 
@@ -764,6 +764,19 @@ function VisaApplicationCard({ token }) {
     }
   };
 
+  // Open one of the customer's own documents via a short-lived signed link
+  // (the raw file URL is no longer public). Fetches the link with the portal
+  // token, then opens it in a new tab.
+  const openDoc = async (itemId) => {
+    try {
+      const { url } = await portalFetch(`/travel/visa/documents/${itemId}/view-url`, { token });
+      if (url) window.open(url, "_blank", "noopener,noreferrer");
+      else setMsg({ type: "error", text: "Couldn't open the document" });
+    } catch (e) {
+      setMsg({ type: "error", text: e.message || "Couldn't open the document" });
+    }
+  };
+
   // Cancel one application (only while early) — e.g. it was started for the
   // wrong destination, or no checklist was set up for it.
   const cancelApplication = async (appId) => {
@@ -852,14 +865,13 @@ function VisaApplicationCard({ token }) {
                   )}
                 </div>
                 {item.attachmentUrl && (
-                  <a
-                    href={item.attachmentUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    style={{ fontSize: 12, color: "var(--primary-color, #122647)", textDecoration: "underline" }}
+                  <button
+                    type="button"
+                    onClick={() => openDoc(item.id)}
+                    style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontSize: 12, color: "var(--primary-color, #122647)", textDecoration: "underline" }}
                   >
                     View
-                  </a>
+                  </button>
                 )}
                 {canUpload && (
                   <label
@@ -1950,7 +1962,63 @@ function DiagnosticsCard({ token }) {
   );
 }
 
+// Canonical order so the status filter chips read left→right along the trip
+// lifecycle rather than in arbitrary insertion order. Any status not listed
+// here (future additions) is appended alphabetically after these.
+const BOOKING_STATUS_ORDER = ["draft", "sent", "revised", "accepted", "advance_paid", "fully_paid", "rejected", "expired"];
+const prettyStatus = (s) => String(s || "").replace(/_/g, " ");
+
 function ItinerariesCard({ itineraries, loading, onSelect }) {
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [search, setSearch] = useState("");
+
+  // Search by location (destination) first — case-insensitive substring. The
+  // status chips + counts are then derived from this searched subset so they
+  // always reflect what's actually shown.
+  const term = search.trim().toLowerCase();
+  const searched = term
+    ? itineraries.filter((i) => (i.destination || "").toLowerCase().includes(term))
+    : itineraries;
+
+  // Count bookings per status — drives the filter chips so we only ever show a
+  // chip for a status that exists in the searched subset (with its count).
+  const counts = searched.reduce((acc, i) => {
+    const s = i.status || "unknown";
+    acc[s] = (acc[s] || 0) + 1;
+    return acc;
+  }, {});
+  const present = Object.keys(counts);
+  const orderedStatuses = [
+    ...BOOKING_STATUS_ORDER.filter((s) => present.includes(s)),
+    ...present.filter((s) => !BOOKING_STATUS_ORDER.includes(s)).sort(),
+  ];
+
+  // Guard: if the search (or a refresh) emptied the bookings behind the active
+  // filter, fall back to "all" so the customer is never stranded on a dead chip.
+  const activeFilter = statusFilter !== "all" && !counts[statusFilter] ? "all" : statusFilter;
+  const visible = activeFilter === "all"
+    ? searched
+    : searched.filter((i) => (i.status || "unknown") === activeFilter);
+
+  const renderChip = (key, label, count, isActive) => (
+    <button
+      key={key}
+      type="button"
+      onClick={() => setStatusFilter(key)}
+      aria-pressed={isActive}
+      style={{
+        fontSize: 12, padding: "4px 11px", borderRadius: 999, cursor: "pointer",
+        textTransform: "capitalize", whiteSpace: "nowrap",
+        border: isActive ? "1px solid var(--primary-color, #122647)" : "1px solid var(--border-color, rgba(18, 38, 71, 0.18))",
+        background: isActive ? "var(--primary-color, #122647)" : "transparent",
+        color: isActive ? "#FFFFFF" : "var(--text-secondary)",
+        fontWeight: isActive ? 600 : 500,
+      }}
+    >
+      {label} ({count})
+    </button>
+  );
+
   return (
     <section style={cardStyle} aria-labelledby="itin-heading">
       <h2 id="itin-heading" style={{ display: "flex", alignItems: "center", gap: 8, margin: 0 }}>
@@ -1963,8 +2031,62 @@ function ItinerariesCard({ itineraries, loading, onSelect }) {
           No bookings yet. Once an advisor confirms an itinerary you'll see it here.
         </p>
       ) : (
+        <>
+          {/* Search by location (destination). */}
+          <div style={{ position: "relative", margin: "14px 0 0" }}>
+            <Search
+              size={16}
+              aria-hidden
+              style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "var(--text-secondary)", pointerEvents: "none" }}
+            />
+            <input
+              type="search"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search by location…"
+              aria-label="Search bookings by location"
+              style={{
+                width: "100%", boxSizing: "border-box",
+                padding: "8px 32px 8px 32px", borderRadius: 10,
+                border: "1px solid var(--border-color, rgba(18, 38, 71, 0.18))",
+                background: "var(--surface-color, #FFFFFF)", color: "var(--text-primary)",
+                fontSize: 14,
+              }}
+            />
+            {search && (
+              <button
+                type="button"
+                onClick={() => setSearch("")}
+                aria-label="Clear search"
+                style={{
+                  position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)",
+                  display: "inline-flex", alignItems: "center", justifyContent: "center",
+                  border: "none", background: "transparent", cursor: "pointer",
+                  color: "var(--text-secondary)", padding: 2,
+                }}
+              >
+                <X size={16} aria-hidden />
+              </button>
+            )}
+          </div>
+          {/* Status filter — only renders when there's more than one status to choose between. */}
+          {orderedStatuses.length > 1 && (
+            <div
+              role="group"
+              aria-label="Filter bookings by status"
+              style={{ display: "flex", flexWrap: "wrap", gap: 8, margin: "14px 0 0" }}
+            >
+              {renderChip("all", "All", itineraries.length, activeFilter === "all")}
+              {orderedStatuses.map((s) => renderChip(s, prettyStatus(s), counts[s], activeFilter === s))}
+            </div>
+          )}
+          {visible.length === 0 ? (
+            <p style={{ color: "var(--text-secondary)", margin: "12px 0 0" }}>
+              {term ? `No bookings match "${search.trim()}".` : "No bookings with this status."}
+            </p>
+          ) : (
         <ul style={{ listStyle: "none", padding: 0, margin: "12px 0 0", display: "grid", gap: 10 }}>
-          {itineraries.map((itin) => (
+          {visible.map((itin) => (
             <li key={itin.id}>
               <button
                 type="button"
@@ -1985,7 +2107,7 @@ function ItinerariesCard({ itineraries, loading, onSelect }) {
                     fontSize: 12, padding: "2px 8px", borderRadius: 999,
                     background: "rgba(18, 38, 71, 0.08)", textTransform: "capitalize",
                   }}>
-                    {itin.status}
+                    {prettyStatus(itin.status)}
                   </span>
                 </div>
                 <div style={{ fontSize: 13, color: "var(--text-secondary)", marginTop: 4 }}>
@@ -2005,6 +2127,8 @@ function ItinerariesCard({ itineraries, loading, onSelect }) {
             </li>
           ))}
         </ul>
+          )}
+        </>
       )}
     </section>
   );

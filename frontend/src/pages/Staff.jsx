@@ -6,6 +6,72 @@ import { UsersRound, Trash2, Shield, ShieldCheck, Edit3, UserX, UserCheck, Key, 
 import { AuthContext } from '../App';
 import { usePermissions } from '../hooks/usePermissions';
 import { formatDate } from '../utils/date';
+import { SUB_BRAND_IDS, SUB_BRAND_LABEL } from '../utils/travelSubBrand';
+
+// Parse a stored User.subBrandAccess (JSON string / array / null) into a clean
+// array of known sub-brand ids for the picker. null/empty → [] (= all brands).
+function parseSubBrandAccess(raw) {
+  if (!raw) return [];
+  try {
+    const arr = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    return Array.isArray(arr) ? arr.filter((id) => SUB_BRAND_IDS.includes(id)) : [];
+  } catch {
+    return [];
+  }
+}
+
+// Travel-only sub-brand access picker for the Add/Edit Staff modals. Lets an
+// admin scope a manager/staff to one or more brands. ADMINs always have all
+// brands, so the picker is replaced with a note for them. An empty selection
+// means "all brands" (the backward-compatible default). Rendered ONLY for
+// travel-vertical tenants — generic/wellness never see it.
+function SubBrandAccessPicker({ value, onChange, accessTier }) {
+  if (accessTier === 'ADMIN') {
+    return (
+      <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginTop: '0.3rem' }}>
+        Admins can access all sub-brands.
+      </div>
+    );
+  }
+  const toggle = (id) =>
+    onChange(value.includes(id) ? value.filter((x) => x !== id) : [...value, id]);
+  return (
+    <div style={{ marginTop: '0.35rem' }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
+        {SUB_BRAND_IDS.map((id) => {
+          const on = value.includes(id);
+          return (
+            <button
+              key={id}
+              type="button"
+              onClick={() => toggle(id)}
+              aria-pressed={on}
+              data-testid={`subbrand-${id}`}
+              style={{
+                fontSize: '0.78rem',
+                padding: '0.3rem 0.7rem',
+                borderRadius: '999px',
+                cursor: 'pointer',
+                whiteSpace: 'nowrap',
+                border: `1px solid ${on ? 'var(--primary-color, var(--accent-color))' : 'var(--border-color)'}`,
+                background: on ? 'var(--primary-color, var(--accent-color))' : 'transparent',
+                color: on ? '#fff' : 'var(--text-secondary)',
+                fontWeight: on ? 600 : 500,
+              }}
+            >
+              {SUB_BRAND_LABEL[id]}
+            </button>
+          );
+        })}
+      </div>
+      <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginTop: '0.35rem' }}>
+        {value.length === 0
+          ? 'No brand selected → access to all sub-brands.'
+          : `Access limited to: ${value.map((id) => SUB_BRAND_LABEL[id]).join(', ')}.`}
+      </div>
+    </div>
+  );
+}
 
 const ROLE_CONFIG = {
   ADMIN:   { color: '#a855f7', bg: 'rgba(168,85,247,0.1)' },
@@ -255,6 +321,9 @@ export default function Staff() {
   const { user, tenant } = useContext(AuthContext) || {};
   const canManageStaff = user?.role === 'ADMIN';
   const isWellness = tenant?.vertical === 'wellness';
+  // Travel-only: the sub-brand access picker (Q25) appears only for travel
+  // tenants. Generic/wellness never render it and never send the field.
+  const isTravel = tenant?.vertical === 'travel';
   // #618 + RBAC: the Permissions button is gated on the granular roles.read
   // permission (not the legacy ADMIN role), so a custom non-ADMIN role with
   // roles.read granted can still view permission sheets. Falls through to
@@ -424,6 +493,8 @@ export default function Staff() {
       // primary RBAC role (surfaced by GET /api/staff). Empty string = unset
       // so admins must explicitly pick a role before saving.
       rbacRoleId: member.primaryRole?.id ? String(member.primaryRole.id) : '',
+      // Travel-only: pre-fill the sub-brand picker from the member's current scope.
+      subBrandAccess: parseSubBrandAccess(member.subBrandAccess),
     });
   };
 
@@ -448,6 +519,11 @@ export default function Staff() {
           // PRD Gap §1.5 — number or null. '' becomes null (clear assignment).
           commissionProfileId: editing.commissionProfileId === '' ? null : Number(editing.commissionProfileId),
           rbacRoleId: parseInt(editing.rbacRoleId, 10),
+          // Travel-only: scope to brands. Admin/empty → null (all brands). The
+          // backend ignores this entirely for generic/wellness tenants.
+          ...(isTravel
+            ? { subBrandAccess: accessTier === 'ADMIN' || !editing.subBrandAccess?.length ? null : editing.subBrandAccess }
+            : {}),
         }),
       });
       notify.success('Staff member updated.');
@@ -469,6 +545,8 @@ export default function Staff() {
       email: '',
       password: '',
       rbacRoleId: '',
+      // Travel-only: brands this staff member may access ([] = all brands).
+      subBrandAccess: [],
     });
   };
 
@@ -503,6 +581,11 @@ export default function Staff() {
           role: accessTier,
           wellnessRole: wellnessRole || null,
           rbacRoleId: parseInt(creating.rbacRoleId, 10),
+          // Travel-only: scope to brands. Admin/empty → null (all brands). The
+          // backend ignores this entirely for generic/wellness tenants.
+          ...(isTravel
+            ? { subBrandAccess: accessTier === 'ADMIN' || !creating.subBrandAccess?.length ? null : creating.subBrandAccess }
+            : {}),
         }),
       });
       notify.success(`${name} added to the team.`);
@@ -1206,6 +1289,16 @@ export default function Staff() {
                   testId="staff-create-role"
                 />
               </label>
+              {isTravel && (
+                <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                  Sub-brand access
+                  <SubBrandAccessPicker
+                    value={creating.subBrandAccess}
+                    onChange={(v) => setCreating({ ...creating, subBrandAccess: v })}
+                    accessTier={deriveAccessTier(availableRoles.find((r) => String(r.id) === String(creating.rbacRoleId)))}
+                  />
+                </label>
+              )}
             </div>
             <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', marginTop: '1.25rem' }}>
               <button
@@ -1297,6 +1390,16 @@ export default function Staff() {
                   testId="staff-edit-role"
                 />
               </label>
+              {isTravel && (
+                <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                  Sub-brand access
+                  <SubBrandAccessPicker
+                    value={editing.subBrandAccess || []}
+                    onChange={(v) => setEditing({ ...editing, subBrandAccess: v })}
+                    accessTier={deriveAccessTier(availableRoles.find((r) => String(r.id) === String(editing.rbacRoleId)))}
+                  />
+                </label>
+              )}
               {/* PRD Gap §1.5 — assign a commission profile. Hidden when
                   the tenant has zero profiles defined so admins aren't
                   prompted to fill an empty dropdown; once they create

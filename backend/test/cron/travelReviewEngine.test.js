@@ -18,6 +18,7 @@ beforeEach(() => {
   prisma.itinerary = { findMany: vi.fn() };
   prisma.travelTripReview = { findMany: vi.fn(), create: vi.fn() };
   prisma.contact = { findMany: vi.fn() };
+  prisma.travelPortalNotification = { create: vi.fn().mockResolvedValue({ id: 1 }) };
   emailSender.sendEmail = vi.fn();
   content.buildRequestEmail = vi.fn(() => ({ subject: "How was your trip?", text: "T", html: "T" }));
 
@@ -53,6 +54,10 @@ describe("travelReviewEngine — fire", () => {
     expect(createArg.data.token.length).toBeGreaterThan(10);
     expect(content.buildRequestEmail).toHaveBeenCalledWith(expect.objectContaining({ destination: "Bali" }));
     expect(emailSender.sendEmail).toHaveBeenCalledWith(expect.objectContaining({ to: "mohit@example.com" }));
+    // also mirrored to the customer's in-app portal bell (deep-linked to the trip)
+    expect(prisma.travelPortalNotification.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ contactId: 7, tenantId: 1, type: "info", link: "booking:1" }) }),
+    );
     expect(s).toMatchObject({ requested: 1, sent: 1 });
   });
 });

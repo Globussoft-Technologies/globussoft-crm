@@ -27,6 +27,7 @@ const cron = require("node-cron");
 const prisma = require("../lib/prisma");
 const emailSender = require("../lib/emailSender");
 const content = require("../lib/webCheckinContent");
+const { safeNotifyTravelCustomer } = require("../lib/travelPortalNotificationService");
 
 const { MILESTONES, milestoneTag, dueMilestone } = content;
 const PAID_STATUSES = ["advance_paid", "fully_paid"];
@@ -111,6 +112,14 @@ async function runWebCheckinTick(now = new Date()) {
     // and acceptable to drop — the next milestone still fires.
     const next = [...already, tag];
     await prisma.webCheckin.update({ where: { id: row.id }, data: { emailRemindersJson: JSON.stringify(next) } }).catch(() => {});
+    // Mirror to the customer's in-app portal bell (no SMS — no phone collected).
+    // Best-effort; safeNotify never throws.
+    await safeNotifyTravelCustomer({
+      contactId: row.contactId, tenantId: row.tenantId, type: "itinerary",
+      title: "Web check-in reminder ✈️",
+      message: `Check-in for ${row.airlineCode || ""}${row.flightNumber ? " " + row.flightNumber : " your flight"}${row.pnr ? ` (PNR ${row.pnr})` : ""} — open your portal to check in, then tap "I've checked in".`,
+      link: `booking:${row.itineraryId}`,
+    });
     const status = res.sent ? "sent" : res.reason === "no_api_key" ? "logged" : "failed";
     console.log(`[WebCheckinEmail] checkin=${row.id} ${row.airlineCode} ${row.flightNumber} ${tag} → ${status}`);
   }

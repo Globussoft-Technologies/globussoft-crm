@@ -293,6 +293,19 @@ const VisaAdvisorDashboard = () => {
     }
   };
 
+  // Open an applicant's uploaded document via a short-lived signed link (the
+  // raw file URL is no longer public). The backend authorizes the staff member
+  // by role + Visa Sure sub-brand access before minting the link.
+  const openDoc = async (itemId) => {
+    try {
+      const res = await fetchApi(`/api/travel/visa/documents/${itemId}/view-url`);
+      if (res && res.url) window.open(res.url, '_blank', 'noopener,noreferrer');
+      else notify.error("Couldn't open the document");
+    } catch (err) {
+      notify.error(err?.message || "Couldn't open the document");
+    }
+  };
+
   // Add an ad-hoc document to this application's checklist, then refresh.
   // Used when no template seeded the checklist (e.g. a self-serve applicant
   // whose destination had no template) or an extra document is needed.
@@ -889,13 +902,16 @@ const VisaAdvisorDashboard = () => {
                         )}
                       </span>
                       {item.attachmentUrl && (
-                        <a
-                          href={item.attachmentUrl}
-                          target="_blank"
-                          rel="noreferrer"
+                        <button
+                          type="button"
+                          onClick={() => openDoc(item.id)}
                           data-testid={`doc-view-${item.id}`}
                           title={item.attachmentName || 'View uploaded document'}
                           style={{
+                            background: 'none',
+                            border: 'none',
+                            padding: 0,
+                            cursor: 'pointer',
                             fontSize: '0.78rem',
                             color: 'var(--primary-color, var(--accent-color))',
                             textDecoration: 'underline',
@@ -903,7 +919,7 @@ const VisaAdvisorDashboard = () => {
                           }}
                         >
                           View file
-                        </a>
+                        </button>
                       )}
                       <select
                         data-testid={`doc-status-${item.id}`}

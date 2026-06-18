@@ -25,6 +25,7 @@ const crypto = require("crypto");
 const prisma = require("../lib/prisma");
 const emailSender = require("../lib/emailSender");
 const content = require("../lib/travelReviewContent");
+const { safeNotifyTravelCustomer } = require("../lib/travelPortalNotificationService");
 
 // "Agreement-secured" set — any booking the customer committed to is reviewable
 // once it's over (payment state doesn't gate a review).
@@ -90,6 +91,14 @@ async function runTravelReviewTick(now = new Date()) {
     });
     const res = await emailSender.sendEmail({ to: contact.email, subject: mail.subject, text: mail.text, html: mail.html });
     if (res.sent) summary.sent += 1;
+    // Mirror to the customer's in-app portal bell (no SMS — no phone collected).
+    // The booking detail in the portal hosts the review form. Best-effort.
+    await safeNotifyTravelCustomer({
+      contactId: contact.id, tenantId: itin.tenantId, type: "info",
+      title: `How was your trip to ${itin.destination || "your destination"}?`,
+      message: "We'd love your feedback — open your booking to leave a quick review.",
+      link: `booking:${itin.id}`,
+    });
     const status = res.sent ? "sent" : res.reason === "no_api_key" ? "logged" : "failed";
     console.log(`[TravelReview] itin=${itin.id} dest="${itin.destination}" review requested → email ${status}`);
   }

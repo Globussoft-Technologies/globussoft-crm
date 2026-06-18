@@ -1682,8 +1682,8 @@ router.get("/quotes/stats", verifyToken, requireTravelTenant, async (req, res) =
 router.post(
   "/quotes/bulk-decline-expired",
   verifyToken,
-  requirePermission("quotes", "update"),
   requireTravelTenant,
+  requirePermission("quotes", "update"),
   async (req, res) => {
     try {
       const body = req.body || {};
@@ -1853,8 +1853,8 @@ router.get("/quotes/:id", verifyToken, requireTravelTenant, async (req, res) => 
 router.post(
   "/quotes",
   verifyToken,
-  requirePermission("quotes", "write"),
   requireTravelTenant,
+  requirePermission("quotes", "write"),
   async (req, res) => {
     try {
       const {
@@ -1975,8 +1975,8 @@ router.post(
 router.put(
   "/quotes/:id",
   verifyToken,
-  requirePermission("quotes", "update"),
   requireTravelTenant,
+  requirePermission("quotes", "update"),
   async (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);
@@ -2059,8 +2059,8 @@ router.put(
 router.delete(
   "/quotes/:id",
   verifyToken,
-  requirePermission("quotes", "delete"),
   requireTravelTenant,
+  requirePermission("quotes", "delete"),
   async (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);
@@ -2172,8 +2172,8 @@ router.get(
 router.post(
   "/quotes/:id/lines",
   verifyToken,
-  requirePermission("quotes", "write"),
   requireTravelTenant,
+  requirePermission("quotes", "write"),
   async (req, res) => {
     try {
       const quoteId = parseInt(req.params.id, 10);
@@ -2263,8 +2263,8 @@ router.post(
 router.put(
   "/quotes/:id/lines/:lineId",
   verifyToken,
-  requirePermission("quotes", "update"),
   requireTravelTenant,
+  requirePermission("quotes", "update"),
   async (req, res) => {
     try {
       const quoteId = parseInt(req.params.id, 10);
@@ -2393,8 +2393,8 @@ router.put(
 router.delete(
   "/quotes/:id/lines/:lineId",
   verifyToken,
-  requirePermission("quotes", "delete"),
   requireTravelTenant,
+  requirePermission("quotes", "delete"),
   async (req, res) => {
     try {
       const quoteId = parseInt(req.params.id, 10);
@@ -2448,8 +2448,8 @@ router.delete(
 router.post(
   "/quotes/:id/duplicate",
   verifyToken,
-  requirePermission("quotes", "write"),
   requireTravelTenant,
+  requirePermission("quotes", "write"),
   async (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);
@@ -2604,8 +2604,8 @@ router.post(
 router.get(
   "/quotes/:id/pdf",
   verifyToken,
-  requirePermission("quotes", "export"),
   requireTravelTenant,
+  requirePermission("quotes", "export"),
   async (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);
@@ -2702,8 +2702,8 @@ router.get(
 router.post(
   "/quotes/:id/convert-to-invoice",
   verifyToken,
-  requirePermission("quotes", "update"),
   requireTravelTenant,
+  requirePermission("quotes", "update"),
   async (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);
@@ -2876,8 +2876,8 @@ router.post(
 router.post(
   "/quotes/:id/accept",
   verifyToken,
-  requirePermission("quotes", "update"),
   requireTravelTenant,
+  requirePermission("quotes", "update"),
   async (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);
@@ -2960,8 +2960,8 @@ router.post(
 router.post(
   "/quotes/:id/decline",
   verifyToken,
-  requirePermission("quotes", "update"),
   requireTravelTenant,
+  requirePermission("quotes", "update"),
   async (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);
@@ -3409,8 +3409,8 @@ router.get(
 router.post(
   "/quotes/:id/extend",
   verifyToken,
-  requirePermission("quotes", "update"),
   requireTravelTenant,
+  requirePermission("quotes", "update"),
   async (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);
@@ -3756,8 +3756,8 @@ const PROVIDER_CALLERS = {
 router.post(
   "/quote/unified-search",
   verifyToken,
-  requirePermission("quotes", "read"),
   requireTravelTenant,
+  requirePermission("quotes", "read"),
   async (req, res) => {
     try {
       const body = req.body || {};

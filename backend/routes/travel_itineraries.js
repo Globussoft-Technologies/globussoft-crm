@@ -1545,8 +1545,8 @@ router.patch("/itineraries/:id", verifyToken, requireTravelTenant, async (req, r
 router.delete(
   "/itineraries/:id",
   verifyToken,
-  requirePermission("itineraries", "delete"),
   requireTravelTenant,
+  requirePermission("itineraries", "delete"),
   async (req, res) => {
     try {
       const id = parseInt(req.params.id, 10);
@@ -3095,8 +3095,8 @@ router.post(
 router.post(
   "/itineraries/:id/draft/regen",
   verifyToken,
-  requirePermission("itineraries", "update"),
   requireTravelTenant,
+  requirePermission("itineraries", "update"),
   async (req, res) => {
     try {
       const itin = await loadItineraryWithGuard(req);
@@ -3242,8 +3242,8 @@ router.post("/itineraries/:id/reject", verifyToken, requireTravelTenant, async (
 router.post(
   "/itineraries/:id/save-as-template",
   verifyToken,
-  requirePermission("itinerary_templates", "write"),
   requireTravelTenant,
+  requirePermission("itinerary_templates", "write"),
   async (req, res) => {
     try {
       const itin = await loadItineraryWithGuard(req);

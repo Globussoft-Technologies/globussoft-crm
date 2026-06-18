@@ -197,6 +197,7 @@ vi.mock('../components/MapPreview', () => ({
 
 import { AuthContext } from '../App';
 import Itineraries from '../pages/travel/Itineraries';
+import { invalidatePermissionCache } from '../hooks/usePermissions';
 
 const ADMIN_USER = { userId: 1, name: 'Admin', email: 'a@x.com', role: 'ADMIN' };
 
@@ -308,6 +309,10 @@ function installFetchMock({
 } = {}) {
   fetchApiMock.mockImplementation((url, opts) => {
     const method = opts?.method || 'GET';
+    if (url === '/api/auth/me/permissions' && method === 'GET') {
+      // ADMIN test user — short-circuit PermissionGate so CTAs render.
+      return Promise.resolve({ isOwner: true, permissions: [] });
+    }
     if (url.startsWith('/api/travel/itineraries') && method === 'GET') {
       if (list instanceof Error) return Promise.reject(list);
       return Promise.resolve(list);
@@ -336,6 +341,7 @@ function renderPage(user = ADMIN_USER) {
 }
 
 beforeEach(() => {
+  invalidatePermissionCache();
   fetchApiMock.mockReset();
   notifyError.mockReset();
   notifySuccess.mockReset();

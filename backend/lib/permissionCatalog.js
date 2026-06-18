@@ -447,6 +447,12 @@ function getGroupedCatalog() {
   return buildGroupedCatalog(PERMISSION_CATALOG, PERMISSION_DOMAINS);
 }
 
+function deepCloneCatalog(source) {
+  return Object.fromEntries(
+    Object.entries(source).map(([module, actions]) => [module, [...actions]]),
+  );
+}
+
 /**
  * Returns the per-vertical catalog (module → [actions]) as a fresh
  * object so callers can mutate without poisoning the source.
@@ -456,11 +462,11 @@ function getGroupedCatalog() {
 function getCatalogForVertical(vertical) {
   switch (vertical) {
     case 'wellness':
-      return { ...PERMISSION_CATALOG_WELLNESS };
+      return deepCloneCatalog(PERMISSION_CATALOG_WELLNESS);
     case 'travel':
-      return { ...PERMISSION_CATALOG_TRAVEL };
+      return deepCloneCatalog(PERMISSION_CATALOG_TRAVEL);
     default:
-      return { ...PERMISSION_CATALOG_GENERIC };
+      return deepCloneCatalog(PERMISSION_CATALOG_GENERIC);
   }
 }
 
@@ -550,7 +556,7 @@ function getActions(module) {
 }
 
 function getCatalog() {
-  return { ...PERMISSION_CATALOG };
+  return deepCloneCatalog(PERMISSION_CATALOG);
 }
 
 module.exports = {

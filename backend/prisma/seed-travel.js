@@ -29,6 +29,13 @@ if (!process.env.DATABASE_URL) {
 }
 
 const prisma = new PrismaClient();
+// Share this script's Prisma client with the singleton used by
+// ensureRbacOnBoot so the RBAC provisioning step runs in the same
+// connection context and avoids a second PrismaClient. Must be set
+// BEFORE requiring ensureRbacOnBoot, because lib/prisma.js memoizes
+// on global.prisma at first require.
+global.prisma = prisma;
+const { provisionTenantRbac } = require("../scripts/ensureRbacOnBoot");
 
 const TENANT_SLUG = "travel-stall";
 
@@ -136,6 +143,21 @@ async function main() {
     });
   }
   console.log(`[seed-travel] users upserted: ${users.length}`);
+
+  // ── 2b. RBAC — provision canonical travel roles + link users ─────────
+  //
+  // After PR #1160 the permission resolver (requirePermission.js) only
+  // honours UserRole → Role → RolePermission rows; legacy User.role is no
+  // longer magic. Without this step, travel demo users would have ZERO
+  // permissions and every requirePermission-gated travel endpoint returns
+  // 403 RBAC_DENIED. provisionTenantRbac creates ADMIN/MANAGER/USER/CUSTOMER
+  // roles filtered to the travel vertical and backfills UserRole rows for
+  // existing users based on their legacy User.role string.
+  const rbacStats = await provisionTenantRbac(tenant.id, { vertical: "travel" });
+  console.log(
+    `[seed-travel] RBAC provisioned: rolesCreated=${rbacStats.rolesCreated}, ` +
+      `permsCreated=${rbacStats.permsCreated}, assignmentsCreated=${rbacStats.assignmentsCreated}`,
+  );
 
   // ── 3. Diagnostic Q-sets ─────────────────────────────────────────────
   //

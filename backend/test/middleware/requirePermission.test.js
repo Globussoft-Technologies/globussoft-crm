@@ -215,7 +215,7 @@ describe('loadUserPermissions — self-heal for legacy ADMIN with no UserRole ro
       // Provisioner must have been invoked exactly once
       expect(ensureRbacOnBootModule.provisionTenantRbac).toHaveBeenCalledTimes(1);
       expect(ensureRbacOnBootModule.provisionTenantRbac).toHaveBeenCalledWith(1, {
-        isWellness: true,
+        vertical: 'wellness',
       });
     } finally {
       ensureRbacOnBootModule.provisionTenantRbac = originalProvision;

@@ -137,6 +137,12 @@ const NON_TENANT_MODELS = new Set([
   // null for platform-level roles). A redundant RoleWidget.tenantId
   // would risk drift.
   'RoleWidget',
+  // RBAC permission-version audit trail. RolePermissionVersion is a child
+  // of Role; tenant isolation flows through Role.tenantId. Adding a
+  // redundant tenantId here would create a consistency hazard (drift
+  // between role.tenantId and version.tenantId) without strengthening
+  // isolation, because every query path joins through Role.
+  'RolePermissionVersion',
   // Globally-shared templates (real-estate, healthcare, education, legal,
   // saas) — seeded once, read by all tenants when they pick an industry.
   // Read-only from a tenant's perspective; no tenant data lives here.

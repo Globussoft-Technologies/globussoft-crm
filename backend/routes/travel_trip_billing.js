@@ -17,13 +17,15 @@
 //
 //   GET    /api/travel/trips/:tripId/instalments              — list per-participant
 //   POST   /api/travel/trips/:tripId/instalments              ADMIN+MGR — bulk-create for one participant
+//   POST   /api/travel/trips/:tripId/instalments/from-plan    ADMIN+MGR — materialise plan template × roster
 //   PATCH  /api/travel/trips/:tripId/instalments/:id          ADMIN+MGR — mark paid
 //   DELETE /api/travel/trips/:tripId/instalments/:id          ADMIN
 //
 // Plan has 1:1 relationship with trip (schema @unique([tripId])).
-// PUT semantics: create-or-replace (upsert). Phase 1.5 will add
-// /instalments/from-plan that materialises the plan's instalmentsJson
-// into actual TripInstalmentPayment rows per participant.
+// PUT semantics: create-or-replace (upsert). /instalments/from-plan
+// materialises the plan's instalmentsJson into TripInstalmentPayment
+// rows for every participant × instalment-index pair; idempotent — a
+// re-run after roster additions only inserts the missing rows.
 
 const express = require("express");
 const router = express.Router();
@@ -878,6 +880,119 @@ router.post(
       if (err.status) return res.status(err.status).json({ error: err.message, code: err.code });
       console.error("[travel-trip-billing] instalment create error:", err.message);
       res.status(500).json({ error: "Failed to create instalment" });
+    }
+  },
+);
+
+// POST /api/travel/trips/:tripId/instalments/from-plan
+//
+// Materialises TripPaymentPlan.instalmentsJson × the trip's TripParticipant
+// roster into TripInstalmentPayment rows. Idempotent on (tripId,
+// participantId, instalmentIndex) — re-running after adding a participant
+// only inserts the missing rows for that participant.
+//
+// 404 NO_PLAN if the trip has no payment plan; 400 EMPTY_ROSTER if the
+// trip has no participants; 400 INVALID_DATE / INVALID_AMOUNT if any plan
+// entry's dueDate or amount is unusable.
+router.post(
+  "/trips/:tripId/instalments/from-plan",
+  verifyToken,
+  requirePermission("trips", "write"),
+  requireTravelTenant,
+  requireTmcAccess,
+  async (req, res) => {
+    try {
+      const trip = await loadTrip(req);
+
+      const plan = await prisma.tripPaymentPlan.findUnique({ where: { tripId: trip.id } });
+      if (!plan) {
+        return res.status(404).json({ error: "Payment plan not found", code: "NO_PLAN" });
+      }
+
+      let template;
+      try {
+        template = JSON.parse(plan.instalmentsJson);
+      } catch (_e) {
+        return res.status(400).json({ error: "instalmentsJson is not valid JSON", code: "INVALID_JSON" });
+      }
+      if (!Array.isArray(template) || template.length === 0) {
+        return res.status(400).json({ error: "instalmentsJson must be a non-empty array", code: "EMPTY_INSTALMENTS" });
+      }
+
+      // Normalise + validate each plan entry up-front so we fail fast
+      // before doing the participant fan-out.
+      const normalised = [];
+      for (let i = 0; i < template.length; i++) {
+        const entry = template[i] || {};
+        const due = new Date(entry.dueDate);
+        if (!Number.isFinite(due.getTime())) {
+          return res.status(400).json({ error: `instalment[${i}].dueDate is invalid`, code: "INVALID_DATE" });
+        }
+        const amt = Number(entry.amount);
+        if (!Number.isFinite(amt) || amt < 0) {
+          return res.status(400).json({ error: `instalment[${i}].amount is invalid`, code: "INVALID_AMOUNT" });
+        }
+        normalised.push({ instalmentIndex: i, dueDate: due, amount: amt });
+      }
+
+      const participants = await prisma.tripParticipant.findMany({
+        where: { tripId: trip.id },
+        select: { id: true },
+      });
+      if (participants.length === 0) {
+        return res.status(400).json({
+          error: "Trip has no participants to materialise instalments for",
+          code: "EMPTY_ROSTER",
+        });
+      }
+
+      // Build a Set of "participantId:instalmentIndex" keys already present
+      // so we can skip the cartesian-product members that exist.
+      const existing = await prisma.tripInstalmentPayment.findMany({
+        where: { tripId: trip.id },
+        select: { participantId: true, instalmentIndex: true },
+      });
+      const existingKeys = new Set(
+        existing.map((r) => `${r.participantId}:${r.instalmentIndex}`),
+      );
+
+      const toCreate = [];
+      let skipped = 0;
+      for (const p of participants) {
+        for (const ins of normalised) {
+          if (existingKeys.has(`${p.id}:${ins.instalmentIndex}`)) {
+            skipped += 1;
+            continue;
+          }
+          toCreate.push({
+            tripId: trip.id,
+            participantId: p.id,
+            instalmentIndex: ins.instalmentIndex,
+            dueDate: ins.dueDate,
+            amount: ins.amount,
+            paidAmount: 0,
+            paidAt: null,
+            status: "pending",
+          });
+        }
+      }
+
+      let materialised = 0;
+      if (toCreate.length > 0) {
+        const result = await prisma.tripInstalmentPayment.createMany({ data: toCreate });
+        materialised = result.count;
+      }
+
+      return res.status(201).json({
+        materialised,
+        skipped,
+        participants: participants.length,
+        instalmentsPerParticipant: normalised.length,
+      });
+    } catch (err) {
+      if (err.status) return res.status(err.status).json({ error: err.message, code: err.code });
+      console.error("[travel-trip-billing] from-plan error:", err.message);
+      res.status(500).json({ error: "Failed to materialise instalments" });
     }
   },
 );

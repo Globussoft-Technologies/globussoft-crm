@@ -946,18 +946,37 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(screen.queryByText('POI Approvals')).toBeNull();
     });
 
-    it('renders Sales pipeline / Customer comms / Financial / Reports section headers under travel', () => {
+    it('hides Sales pipeline / Customer comms / Financial / Reports section headers when the user has no grants beneath them', () => {
+      // <Section> collapses the entire group (label + children) when
+      // every child Link is gated out. USER default perms only carry
+      // `inbound_leads.read`, so none of the four section headers
+      // should render — only the "User" footer (notification-settings
+      // has no requiredPermission and always renders) survives.
       renderSidebar({ vertical: 'travel', role: 'USER' });
-      // These are role-agnostic section labels in renderTravelNav.
-      expect(screen.getByText('Sales pipeline')).toBeTruthy();
-      expect(screen.getByText('Customer comms')).toBeTruthy();
-      expect(screen.getByText('Financial')).toBeTruthy();
-      // "Reports" exists as BOTH a nav-link label (<span>) AND a section
-      // header (<div>). Pin that at least one matches — use getAllByText.
-      const reportsMatches = screen.getAllByText('Reports');
-      expect(reportsMatches.length).toBeGreaterThanOrEqual(1);
+      expect(screen.queryByText('Sales pipeline')).toBeNull();
+      expect(screen.queryByText('Customer comms')).toBeNull();
+      expect(screen.queryByText('Financial')).toBeNull();
+      // "Reports" must not appear AT ALL — neither as the section
+      // header (gated by reports.read) nor as the nav-link inside.
+      expect(screen.queryByText('Reports')).toBeNull();
       // Travel-vertical "User" footer section for USER role.
       expect(screen.getByText('User')).toBeTruthy();
+    });
+
+    it('renders a travel section header only when at least one child link is grantable', () => {
+      // Granting `leads.read` alone makes the "Sales pipeline" header
+      // appear (Leads link visible); the other three section headers
+      // (Customer comms / Financial / Reports) stay hidden because
+      // their child links require different perms.
+      renderSidebar({
+        vertical: 'travel',
+        role: 'USER',
+        permissions: ['leads.read'],
+      });
+      expect(screen.getByText('Sales pipeline')).toBeTruthy();
+      expect(screen.queryByText('Customer comms')).toBeNull();
+      expect(screen.queryByText('Financial')).toBeNull();
+      expect(screen.queryByText('Reports')).toBeNull();
     });
   });
 

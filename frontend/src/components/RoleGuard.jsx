@@ -1,9 +1,9 @@
-import React, { useContext, useEffect, useMemo, useRef } from 'react';
-import { Navigate } from 'react-router-dom';
-import { Lock } from 'lucide-react';
-import { AuthContext } from '../App';
-import { useNotify } from '../utils/notify';
-import { usePermissions } from '../hooks/usePermissions';
+import React, { useContext, useEffect, useMemo, useRef } from "react";
+import { Navigate } from "react-router-dom";
+import { Lock } from "lucide-react";
+import { AuthContext } from "../App";
+import { useNotify } from "../utils/notify";
+import { usePermissions } from "../hooks/usePermissions";
 
 /**
  * RoleGuard — route-level RBAC gate.
@@ -59,21 +59,27 @@ import { usePermissions } from '../hooks/usePermissions';
  *   lockedInPlace        — bool (default false)          opt-in in-place panel.
  */
 const ROLE_LABELS = {
-  ADMIN: 'admin',
-  MANAGER: 'manager',
-  USER: 'staff',
+  ADMIN: "admin",
+  MANAGER: "manager",
+  USER: "staff",
 };
 
 function humaniseRoles(allow) {
   const arr = Array.isArray(allow) ? allow : [allow];
   const labels = arr.map((r) => ROLE_LABELS[r] || String(r).toLowerCase());
-  if (labels.length === 0) return '';
+  if (labels.length === 0) return "";
   if (labels.length === 1) return labels[0];
   if (labels.length === 2) return `${labels[0]} or ${labels[1]}`;
-  return `${labels.slice(0, -1).join(', ')}, or ${labels[labels.length - 1]}`;
+  return `${labels.slice(0, -1).join(", ")}, or ${labels[labels.length - 1]}`;
 }
 
-function buildDeniedMessage({ message, feature, roles, allow, permissionMode }) {
+function buildDeniedMessage({
+  message,
+  feature,
+  roles,
+  allow,
+  permissionMode,
+}) {
   if (message) return message;
   // Permission-mode denial deliberately omits the role list — we don't want
   // to surface internal RBAC role names to staff. "Contact your administrator"
@@ -99,7 +105,7 @@ export default function RoleGuard({
   requiredPermission,
   requiredPermissions,
   children,
-  redirectTo = '/dashboard',
+  redirectTo = "/dashboard",
   message,
   feature,
   roles,
@@ -108,10 +114,7 @@ export default function RoleGuard({
   const auth = useContext(AuthContext) || {};
   const { user, loading, token } = auth;
   const notify = useNotify();
-  const {
-    hasAllPermissions,
-    isReady: permissionsReady,
-  } = usePermissions();
+  const { hasAllPermissions, isReady: permissionsReady } = usePermissions();
   const role = user?.role;
   const toastedRef = useRef(false);
 
@@ -122,7 +125,11 @@ export default function RoleGuard({
     if (Array.isArray(requiredPermissions) && requiredPermissions.length > 0) {
       return requiredPermissions;
     }
-    if (requiredPermission && requiredPermission.module && requiredPermission.action) {
+    if (
+      requiredPermission &&
+      requiredPermission.module &&
+      requiredPermission.action
+    ) {
       return [requiredPermission];
     }
     return null;
@@ -136,7 +143,8 @@ export default function RoleGuard({
       : role === allow;
 
   const deniedMessage = useMemo(
-    () => buildDeniedMessage({ message, feature, roles, allow, permissionMode }),
+    () =>
+      buildDeniedMessage({ message, feature, roles, allow, permissionMode }),
     [message, feature, roles, allow, permissionMode],
   );
 
@@ -193,24 +201,26 @@ export default function RoleGuard({
  * names — only the human label + role requirement.
  */
 function LockedPanel({ feature, rolesText }) {
-  const heading = feature ? `${feature} is restricted` : 'This page is restricted';
+  const heading = feature
+    ? `${feature} is restricted`
+    : "This page is restricted";
   const body = rolesText
     ? `You need ${rolesText} access to view this page. Contact your administrator to request access.`
-    : 'Contact your administrator to request access.';
+    : "Contact your administrator to request access.";
   return (
     <div
       role="region"
       aria-label={heading}
       data-testid="role-guard-locked-panel"
       style={{
-        padding: '3rem 2rem',
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
-        textAlign: 'center',
-        minHeight: '60vh',
-        color: 'var(--text-primary)',
+        padding: "3rem 2rem",
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        textAlign: "center",
+        minHeight: "60vh",
+        color: "var(--text-primary)",
       }}
     >
       <div
@@ -218,18 +228,30 @@ function LockedPanel({ feature, rolesText }) {
         style={{
           width: 64,
           height: 64,
-          borderRadius: '50%',
-          background: 'var(--subtle-bg-3)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          marginBottom: '1rem',
+          borderRadius: "50%",
+          background: "var(--subtle-bg-3)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          marginBottom: "1rem",
         }}
       >
         <Lock size={28} aria-hidden="true" />
       </div>
-      <h2 style={{ fontSize: '1.25rem', fontWeight: 600, marginBottom: '0.5rem' }}>{heading}</h2>
-      <p style={{ color: 'var(--text-secondary)', maxWidth: 480, lineHeight: 1.5 }}>{body}</p>
+      <h2
+        style={{ fontSize: "1.25rem", fontWeight: 600, marginBottom: "0.5rem" }}
+      >
+        {heading}
+      </h2>
+      <p
+        style={{
+          color: "var(--text-secondary)",
+          maxWidth: 480,
+          lineHeight: 1.5,
+        }}
+      >
+        {body}
+      </p>
     </div>
   );
 }

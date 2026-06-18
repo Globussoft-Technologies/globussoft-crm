@@ -183,3 +183,8 @@ rbac-backup-tenant-*.json
 # its own server (enhancewellness.globusdemos.com). Kept on disk for the
 # CRM ↔ marketing-site handoff work but never pushed to this repo.
 drharors-wellness/
+
+# Voyagr — separate Next.js landing-site project living in its own
+# github.com/Globussoft-Technologies/voyagr repo. Cloned here for local
+# co-development convenience but never pushed to this repo.
+landing/

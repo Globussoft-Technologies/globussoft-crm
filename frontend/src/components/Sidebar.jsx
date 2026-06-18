@@ -1,5 +1,7 @@
 import {
+  Children,
   Fragment,
+  isValidElement,
   useContext,
   useState,
   useRef,
@@ -568,6 +570,65 @@ const Sidebar = ({
     [],
   );
 
+  // Section — wraps a group label + its child Links so the label only renders
+  // when at least one child would render. Mirrors the gating logic in
+  // linkImplRef so the predicate stays in sync. Without this, custom roles
+  // with all module reads revoked under "Admin" or "Platform" would still see
+  // the orphan section heading sitting above an empty list. Same useRef +
+  // useMemo identity-stability dance as Link so React doesn't unmount /
+  // remount the subtree on every re-render.
+  const wouldLinkRender = ({
+    adminOnly,
+    managerOnly,
+    wellnessRoles: linkWellnessRoles,
+    requiredPermission,
+  }) => {
+    if (adminOnly && !isAdmin) return false;
+    if (managerOnly && !isManager) return false;
+    if (
+      linkWellnessRoles &&
+      !isManager &&
+      !linkWellnessRoles.includes(wellnessRole)
+    )
+      return false;
+    if (
+      requiredPermission &&
+      permissionsReady &&
+      !hasPermission(requiredPermission.module, requiredPermission.action)
+    ) {
+      return false;
+    }
+    return true;
+  };
+  const sectionImplRef = useRef(null);
+  sectionImplRef.current = ({ label, children }) => {
+    const labelStyle = sectionLabelStyle || sectionLabel;
+    const hasVisibleChild = Children.toArray(children).some((child) => {
+      if (child === null || child === undefined || child === false) return false;
+      if (!isValidElement(child)) return Boolean(child);
+      // Link is the memoized identity created above; child.type === Link
+      // matches when the JSX site wrote `<Link ... />`. Anything else
+      // (raw <div>, nested fragments, custom components) is assumed
+      // visible — Section is a label gate, not a child filter.
+      if (child.type === Link) return wouldLinkRender(child.props);
+      return true;
+    });
+    if (!hasVisibleChild) return null;
+    return (
+      <>
+        <div style={labelStyle}>{label}</div>
+        {children}
+      </>
+    );
+  };
+  const Section = useMemo(
+    () =>
+      function Section(props) {
+        return sectionImplRef.current(props);
+      },
+    [],
+  );
+
   const extLinkImplRef = useRef(null);
   extLinkImplRef.current = ({ href, icon: Icon, label }) => (
     <a
@@ -892,9 +953,9 @@ const Sidebar = ({
             : isTravel
               ? renderTravelNav({
                   Link,
+                  Section,
                   isAdmin,
                   isManager,
-                  sectionLabelStyle,
                   counts,
                   subBrandAccess,
                   activeSubBrand,
@@ -1480,9 +1541,9 @@ function renderTravelSubBrandHeader({
 
 function renderTravelNav({
   Link,
+  Section,
   isAdmin = false,
   isManager = false,
-  sectionLabelStyle,
   counts = {},
   subBrandAccess = null,
   activeSubBrand = null,
@@ -1496,7 +1557,6 @@ function renderTravelNav({
   // entry in this function stays permission-driven via
   // requiredPermission — role-string gates would defeat the
   // "permissions are source of truth" contract for nav visibility.
-  const labelStyle = sectionLabelStyle || sectionLabel;
   // Brand-scoped nav (travel-only). Two layers gate a brand-tagged entry:
   //   1. ACCESS — the user must be entitled to that sub-brand. Full-access
   //      users (subBrandAccess === null, includes admins) see every brand; a
@@ -1540,11 +1600,11 @@ function renderTravelNav({
   // still won't see the Religious Packets link on a tenant whose
   // `subBrandAccess` doesn't include "rfu".
   //
-  // Section dividers (`<div style={labelStyle}>...</div>`) are
-  // intentionally always-visible. A user with no grants in a section
-  // sees an empty label — small UX cost vs. the much larger code
-  // simplification of not having to compute section-aggregate
-  // visibility.
+  // Section dividers are wrapped in <Section label="..."> — the
+  // component mirrors the Link gating logic against its children and
+  // collapses the entire group (label + children) when every child
+  // would be filtered out. A custom role with all module reads under
+  // "Admin" / "Platform" revoked no longer sees orphan headings.
   return (
     <>
       <Link to="/travel" icon={Compass} label="Dashboard" requiredPermission={{ module: "reports", action: "read" }} />
@@ -1599,57 +1659,61 @@ function renderTravelNav({
           decides whether the user inside a Visa Sure tenant can see
           each entry. */}
       {inBrand("visasure") && (
-        <>
-          <div style={labelStyle}>Visa Sure</div>
+        <Section label="Visa Sure">
           <Link to="/travel/visa" icon={Stamp} label="Dashboard" requiredPermission={{ module: "visa", action: "read" }} />
           <Link to="/travel/visa/applications" icon={BadgeCheck} label="Applications" requiredPermission={{ module: "visa", action: "read" }} />
           <Link to="/travel/visa/checklists" icon={ClipboardList} label="Checklists" requiredPermission={{ module: "visa", action: "read" }} />
           <Link to="/travel/visa/embassy-rules" icon={Shield} label="Embassy Rules" requiredPermission={{ module: "visa", action: "manage" }} />
-        </>
+        </Section>
       )}
 
       {inBrand("travelstall") && (
-        <>
-          <div style={labelStyle}>Travel Stall</div>
+        <Section label="Travel Stall">
           <Link to="/travel-stall" icon={Sparkles} label="Dashboard" requiredPermission={{ module: "reports", action: "read" }} />
-        </>
+        </Section>
       )}
 
-      <div style={labelStyle}>Sales pipeline</div>
-      <Link to="/leads" icon={UserPlus} label="Leads" requiredPermission={{ module: "leads", action: "read" }} />
-      <Link to="/contacts" icon={Users} label="Contacts" requiredPermission={{ module: "contacts", action: "read" }} />
-      <Link to="/pipeline" icon={Briefcase} label="Pipeline" requiredPermission={{ module: "pipeline", action: "read" }} />
+      <Section label="Sales pipeline">
+        <Link to="/leads" icon={UserPlus} label="Leads" requiredPermission={{ module: "leads", action: "read" }} />
+        <Link to="/contacts" icon={Users} label="Contacts" requiredPermission={{ module: "contacts", action: "read" }} />
+        <Link to="/pipeline" icon={Briefcase} label="Pipeline" requiredPermission={{ module: "pipeline", action: "read" }} />
+      </Section>
 
-      <div style={labelStyle}>Customer comms</div>
-      <Link to="/inbox" icon={InboxIcon} label="Inbox" count={counts.inbox} requiredPermission={{ module: "communications", action: "read" }} />
-      <Link to="/travel/whatsapp" icon={MessageSquare} label="WhatsApp" requiredPermission={{ module: "whatsapp", action: "read" }} />
-      <Link to="/sequences" icon={Send} label="Sequences" requiredPermission={{ module: "sequences", action: "read" }} />
-      <Link to="/tasks" icon={CheckSquare} label="Tasks" count={counts.tasks} requiredPermission={{ module: "tasks", action: "read" }} />
-      <Link to="/calendar-sync" icon={Calendar} label="Calendar" requiredPermission={{ module: "integrations", action: "read" }} />
+      <Section label="Customer comms">
+        <Link to="/inbox" icon={InboxIcon} label="Inbox" count={counts.inbox} requiredPermission={{ module: "communications", action: "read" }} />
+        <Link to="/travel/whatsapp" icon={MessageSquare} label="WhatsApp" requiredPermission={{ module: "whatsapp", action: "read" }} />
+        <Link to="/sequences" icon={Send} label="Sequences" requiredPermission={{ module: "sequences", action: "read" }} />
+        <Link to="/tasks" icon={CheckSquare} label="Tasks" count={counts.tasks} requiredPermission={{ module: "tasks", action: "read" }} />
+        <Link to="/calendar-sync" icon={Calendar} label="Calendar" requiredPermission={{ module: "integrations", action: "read" }} />
+      </Section>
 
-      <div style={labelStyle}>Financial</div>
-      <Link to="/invoices" icon={Receipt} label="Invoices" requiredPermission={{ module: "invoices", action: "read" }} />
-      <Link to="/payments" icon={IndianRupee} label="Payments" requiredPermission={{ module: "payments", action: "read" }} />
+      <Section label="Financial">
+        <Link to="/invoices" icon={Receipt} label="Invoices" requiredPermission={{ module: "invoices", action: "read" }} />
+        <Link to="/payments" icon={IndianRupee} label="Payments" requiredPermission={{ module: "payments", action: "read" }} />
+      </Section>
 
-      <div style={labelStyle}>Reports</div>
-      <Link to="/reports" icon={BarChart3} label="Reports" requiredPermission={{ module: "reports", action: "read" }} />
+      <Section label="Reports">
+        <Link to="/reports" icon={BarChart3} label="Reports" requiredPermission={{ module: "reports", action: "read" }} />
+      </Section>
 
       {/* Admin + Platform — both blocks unwrapped from the legacy
           `{isManager && ...}` / `{isAdmin && ...}` outer guards. Each
-          link now gates on its own permission. A user with NO admin /
-          platform grants sees just the two section headers with nothing
-          beneath — acceptable visual cost in exchange for the contract
-          that visibility tracks the role's granted permissions. */}
-      <div style={labelStyle}>Admin</div>
-      <Link to="/staff" icon={UsersRound} label="Staff" requiredPermission={{ module: "staff", action: "read" }} />
-      <Link to="/settings" icon={Settings} label="Settings" requiredPermission={{ module: "settings", action: "read" }} />
-      <Link to="/settings/roles" icon={ShieldCheck} label="Roles" requiredPermission={{ module: "roles", action: "read" }} />
-      <Link to="/audit-log" icon={ScrollText} label="Audit Log" requiredPermission={{ module: "audit", action: "read" }} />
+          link now gates on its own permission. <Section> hides the
+          group label when every child link is filtered out, so a
+          custom role with no admin / platform grants no longer sees
+          orphan section headings. */}
+      <Section label="Admin">
+        <Link to="/staff" icon={UsersRound} label="Staff" requiredPermission={{ module: "staff", action: "read" }} />
+        <Link to="/settings" icon={Settings} label="Settings" requiredPermission={{ module: "settings", action: "read" }} />
+        <Link to="/settings/roles" icon={ShieldCheck} label="Roles" requiredPermission={{ module: "roles", action: "read" }} />
+        <Link to="/audit-log" icon={ScrollText} label="Audit Log" requiredPermission={{ module: "audit", action: "read" }} />
+      </Section>
 
-      <div style={labelStyle}>Platform</div>
-      <Link to="/developer" icon={Code} label="Developer" requiredPermission={{ module: "developer", action: "read" }} />
-      <Link to="/privacy" icon={Shield} label="Privacy" requiredPermission={{ module: "settings", action: "manage" }} />
-      <Link to="/admin/brand-kits" icon={Palette} label="Brand Kits" requiredPermission={{ module: "settings", action: "manage" }} />
+      <Section label="Platform">
+        <Link to="/developer" icon={Code} label="Developer" requiredPermission={{ module: "developer", action: "read" }} />
+        <Link to="/privacy" icon={Shield} label="Privacy" requiredPermission={{ module: "settings", action: "manage" }} />
+        <Link to="/admin/brand-kits" icon={Palette} label="Brand Kits" requiredPermission={{ module: "settings", action: "manage" }} />
+      </Section>
 
       {/* Notification Settings is a personal end-user surface — hidden
           from ADMIN / MANAGER (and therefore OWNER, which carries
@@ -1659,10 +1723,9 @@ function renderTravelNav({
           the generic sidebar's `!isAdmin && !isManager` gate around
           the same Link. */}
       {!isAdmin && !isManager && (
-        <>
-          <div style={labelStyle}>User</div>
+        <Section label="User">
           <Link to="/notification-settings" icon={Settings} label="Notification Settings" />
-        </>
+        </Section>
       )}
 
     </>

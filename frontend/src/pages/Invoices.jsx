@@ -940,9 +940,7 @@ export default function Invoices() {
                   cell can no longer expand past its allotted space and bleed
                   on top of the sticky Actions column. The Contact cell itself
                   also truncates with ellipsis (see <td> below). */}
-              <table
-                className="stable-table"
-                style={{ borderCollapse: "collapse", fontSize: "0.875rem" }}
+              <table className="stable-table" style={{ borderCollapse: "collapse", fontSize: "0.875rem" }}
                 role="table"
                 aria-label="Invoices table"
               >

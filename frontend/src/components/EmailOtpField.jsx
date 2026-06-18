@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 
 /**
  * EmailOtpField — email input + "Validate" → OTP entry → "Verify" flow used to
@@ -31,6 +31,8 @@ export default function EmailOtpField({
   const [verified, setVerified] = useState(false);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null); // { type: 'error' | 'info' | 'success', text }
+  const emailInputId = useId();
+  const otpInputId = useId();
 
   const emailOk = /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test((value || "").trim());
 
@@ -125,6 +127,7 @@ export default function EmailOtpField({
     <div>
       {label && (
         <label
+          htmlFor={emailInputId}
           style={
             labelStyle || {
               display: "block",
@@ -139,6 +142,7 @@ export default function EmailOtpField({
       )}
       <div style={{ display: "flex", gap: 8, alignItems: "stretch" }}>
         <input
+          id={emailInputId}
           type="email"
           data-testid="otp-email"
           className={inputClassName}
@@ -182,6 +186,7 @@ export default function EmailOtpField({
       {requested && !verified && (
         <div data-testid="otp-box" style={{ display: "flex", gap: 8, marginTop: 8 }}>
           <input
+            id={otpInputId}
             type="text"
             inputMode="numeric"
             data-testid="otp-code"

@@ -58,6 +58,29 @@ async function getCallerVertical(req) {
   }
 }
 
+// Travel-only sub-brand access (Q25). The 4 canonical sub-brand ids — kept in
+// sync with middleware/travelGuards.VALID_SUB_BRANDS + the frontend
+// utils/travelSubBrand.SUB_BRAND_IDS. A travel admin scopes a manager/staff to
+// one or more brands; an empty/absent selection means "all brands" (null), the
+// backward-compatible default. NEVER applied to generic/wellness tenants.
+const TRAVEL_SUB_BRANDS = ["tmc", "rfu", "travelstall", "visasure"];
+
+// Normalize a request-body subBrandAccess into { set, value }:
+//   set=false  → field absent → leave the column untouched
+//   value=null → full access (all brands)
+//   value=JSON → explicit allow-list (deduped, filtered to known ids)
+function normalizeSubBrandAccess(raw) {
+  if (raw === undefined) return { set: false };
+  if (raw === null) return { set: true, value: null };
+  let arr = raw;
+  if (typeof raw === "string") {
+    try { arr = JSON.parse(raw); } catch { arr = null; }
+  }
+  if (!Array.isArray(arr)) return { set: true, value: null };
+  const filtered = [...new Set(arr.filter((s) => TRAVEL_SUB_BRANDS.includes(s)))];
+  return { set: true, value: filtered.length ? JSON.stringify(filtered) : null };
+}
+
 // Returns null when wellnessRole is valid (or absent), or an error
 // envelope when it isn't. Wellness tenants check the per-tenant catalog;
 // generic tenants check the legacy whitelist.
@@ -175,6 +198,10 @@ router.get("/", async (req, res) => {
       // dropdown was empty because this field wasn't returned and the
       // frontend filter `u.wellnessRole === 'doctor'` matched nothing.
       wellnessRole: true,
+      // Travel-only (Q25): which sub-brand(s) this staff member is scoped to.
+      // null = all brands. Frontend Staff modal reads this to pre-fill the
+      // sub-brand picker (travel tenants only); harmless null for others.
+      subBrandAccess: true,
       // PRD Gap §1.5 — assigned commission profile (FK, nullable). Frontend
       // dropdown reads this to show the current assignment.
       commissionProfileId: true,
@@ -298,7 +325,7 @@ router.get("/", async (req, res) => {
 // renders the correct landing view on their first login.
 router.post("/", verifyRole(["ADMIN"]), async (req, res) => {
   try {
-    const { name, email, password, role, wellnessRole, rbacRoleId } =
+    const { name, email, password, role, wellnessRole, rbacRoleId, subBrandAccess } =
       req.body || {};
 
     // Basic field presence + shape checks. Mirror auth.js/signup so the
@@ -372,6 +399,12 @@ router.post("/", verifyRole(["ADMIN"]), async (req, res) => {
 
     const passwordHash = await bcrypt.hash(password, 10);
 
+    // Travel-only: scope the new staff member to one or more sub-brands. Ignored
+    // entirely for generic/wellness tenants (they never send it, and we gate on
+    // vertical anyway), so this is additive and can't affect those verticals.
+    const vertical = await getCallerVertical(req);
+    const sba = vertical === "travel" ? normalizeSubBrandAccess(subBrandAccess) : { set: false };
+
     // Atomic: create user + the UserRole junction in one transaction. If
     // either fails, the entire create rolls back. Avoids "user created
     // but role assignment failed" half-state that requires manual cleanup.
@@ -384,6 +417,7 @@ router.post("/", verifyRole(["ADMIN"]), async (req, res) => {
           role,
           wellnessRole: wellnessRole || null,
           tenantId: req.user.tenantId,
+          ...(sba.set ? { subBrandAccess: sba.value } : {}),
         },
         select: {
           id: true,
@@ -391,6 +425,7 @@ router.post("/", verifyRole(["ADMIN"]), async (req, res) => {
           name: true,
           role: true,
           wellnessRole: true,
+          subBrandAccess: true,
           commissionProfileId: true,
           createdAt: true,
           deactivatedAt: true,
@@ -509,7 +544,7 @@ router.put("/:id", verifyRole(["ADMIN"]), async (req, res) => {
     });
     if (!target) return res.status(404).json({ error: "User not found." });
 
-    const { name, email, role, wellnessRole, commissionProfileId, rbacRoleId } =
+    const { name, email, role, wellnessRole, commissionProfileId, rbacRoleId, subBrandAccess } =
       req.body || {};
     const data = {};
     const changed = {};
@@ -636,6 +671,18 @@ router.put("/:id", verifyRole(["ADMIN"]), async (req, res) => {
           from: target.commissionProfileId,
           to: next,
         };
+      }
+    }
+    // Travel-only (Q25): re-scope this staff member's sub-brand access. Gated on
+    // the tenant vertical so a stray field can never alter generic/wellness rows.
+    if (subBrandAccess !== undefined) {
+      const vertical = await getCallerVertical(req);
+      if (vertical === "travel") {
+        const sba = normalizeSubBrandAccess(subBrandAccess);
+        if (sba.set && sba.value !== target.subBrandAccess) {
+          data.subBrandAccess = sba.value;
+          changed.subBrandAccess = { from: target.subBrandAccess, to: sba.value };
+        }
       }
     }
 

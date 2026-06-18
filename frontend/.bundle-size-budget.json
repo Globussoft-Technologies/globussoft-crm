@@ -45,8 +45,8 @@
   ],
 
   "totals": {
-    "all-js-maxKB": 4400,
+    "all-js-maxKB": 4700,
     "all-css-maxKB": 300,
-    "comment": "Whole frontend/dist/assets/ JS + CSS. Catches the case where a new chunk pops in without being budgeted explicitly. Bumped 4200→4400 on 2026-06-12: the v3.9.x OCR passport + travel accounting export + workload + share-links surfaces (commit 5b2317e) pushed total JS to 4218.6 KB; bumping by 200 KB gives ~180 KB headroom while per-route lazy-load for PatientDetail (77 KB) + Patients (50 KB) remains the next candidate. Prior bump 4096→4200 on 2026-06-11 absorbed S81/S82/S127 MapPreview + S93 PoiPicker + S128 EmbedAllowlist."
+    "comment": "Whole frontend/dist/assets/ JS + CSS. Catches the case where a new chunk pops in without being budgeted explicitly. Bumped 4400→4700 on 2026-06-17: the travel customer-portal feature wave (in-app notification bell + My-Bookings status filter & location search → TravelCustomerPortal 61→63.5 KB, visa-doc signed-view flow, staff sub-brand-access picker, Get Started email-OTP step) plus the RBAC-recovery merge pushed total JS to 4489.7 KB; bumping by 300 KB restores ~210 KB headroom (matches the prior bumps' convention). No accidental barrel import — vendor-icons is tree-shaken (107/120) and no single chunk is anomalous. Next lazy-load candidates remain leaflet (151 KB, map-only routes) + PatientDetail (78 KB). Bumped 4200→4400 on 2026-06-12: the v3.9.x OCR passport + travel accounting export + workload + share-links surfaces (commit 5b2317e) pushed total JS to 4218.6 KB. Prior bump 4096→4200 on 2026-06-11 absorbed S81/S82/S127 MapPreview + S93 PoiPicker + S128 EmbedAllowlist."
   }
 }

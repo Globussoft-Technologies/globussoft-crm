@@ -19,6 +19,7 @@ beforeEach(() => {
   prisma.webCheckin = { findMany: vi.fn(), update: vi.fn() };
   prisma.itinerary = { findMany: vi.fn() };
   prisma.contact = { findMany: vi.fn() };
+  prisma.travelPortalNotification = { create: vi.fn().mockResolvedValue({ id: 1 }) };
   emailSender.sendEmail = vi.fn();
   content.buildReminder = vi.fn(() => ({ subject: "WC", text: "T", html: "T" }));
 
@@ -57,6 +58,10 @@ describe("webCheckinEngine — fire", () => {
     expect(emailSender.sendEmail).toHaveBeenCalledWith(expect.objectContaining({ to: "mohit@example.com", subject: "WC" }));
     const upd = prisma.webCheckin.update.mock.calls[0][0];
     expect(JSON.parse(upd.data.emailRemindersJson)).toContain("h24");
+    // also mirrored to the customer's in-app portal bell (deep-linked to the trip)
+    expect(prisma.travelPortalNotification.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ contactId: 7, tenantId: 1, type: "itinerary", link: "booking:50" }) }),
+    );
     expect(s).toMatchObject({ fired: 1, sent: 1 });
   });
 

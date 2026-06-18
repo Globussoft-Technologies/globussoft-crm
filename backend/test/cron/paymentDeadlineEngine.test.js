@@ -22,6 +22,7 @@ beforeEach(() => {
   prisma.contact = { findMany: vi.fn() };
   prisma.user = { findMany: vi.fn() };
   prisma.paymentDeadlineNudge = { create: vi.fn(), update: vi.fn() };
+  prisma.travelPortalNotification = { create: vi.fn().mockResolvedValue({ id: 1 }) };
   emailSender.sendEmail = vi.fn();
   notificationService.notify = vi.fn();
   content.buildReminder = vi.fn(async () => ({ subject: "R", text: "T", html: "T", llmSourced: false }));
@@ -66,6 +67,10 @@ describe("paymentDeadlineEngine.runPaymentDeadlineTick — reminders", () => {
     );
     expect(content.buildReminder).toHaveBeenCalledWith(expect.objectContaining({ daysToGo: 9, depositAmount: 50000, destination: "Goa" }));
     expect(emailSender.sendEmail).toHaveBeenCalledWith(expect.objectContaining({ to: "mohit@example.com", subject: "R" }));
+    // also mirrored to the customer's in-app portal bell (deep-linked to the trip)
+    expect(prisma.travelPortalNotification.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ contactId: 7, tenantId: 1, type: "payment", link: "booking:1" }) }),
+    );
     expect(notificationService.notify).not.toHaveBeenCalled(); // no advisor flag during run-up
     expect(s).toMatchObject({ remindersSent: 1, flagged: 0, sent: 1 });
   });
@@ -113,6 +118,10 @@ describe("paymentDeadlineEngine.runPaymentDeadlineTick — overdue (T-6)", () =>
     // advisor notification raised
     expect(notificationService.notify).toHaveBeenCalledWith(
       expect.objectContaining({ userId: 10, entityType: "Itinerary", entityId: 1, type: "warning" }),
+    );
+    // customer also gets an in-app at-risk notice in their portal bell
+    expect(prisma.travelPortalNotification.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ contactId: 7, type: "payment", link: "booking:1" }) }),
     );
     expect(s).toMatchObject({ flagged: 1 });
   });

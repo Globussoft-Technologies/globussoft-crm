@@ -31,6 +31,7 @@ const cron = require("node-cron");
 const prisma = require("../lib/prisma");
 const emailSender = require("../lib/emailSender");
 const content = require("../lib/tripCountdownContent");
+const { safeNotifyTravelCustomer } = require("../lib/travelPortalNotificationService");
 // Pure helpers are safe to bind directly; sendEmail + buildNudge are called
 // through their module object (emailSender.* / content.*) so a singleton
 // monkeypatch in the unit tests can intercept them (vi.mock can't reach the
@@ -117,6 +118,14 @@ async function runTripCountdownTick(now = new Date()) {
     await prisma.tripCountdownNudge
       .update({ where: { id: claim.id }, data: { status, subject: nudge.subject, llmSourced: nudge.llmSourced } })
       .catch(() => {});
+    // Mirror to the customer's in-app portal bell (no SMS — no phone collected).
+    // Best-effort; safeNotify never throws.
+    await safeNotifyTravelCustomer({
+      contactId: itin.contactId, tenantId: itin.tenantId, type: "itinerary",
+      title: d <= 0 ? `Your ${itin.destination || "trip"} starts today! ✈️` : `${d} day${d === 1 ? "" : "s"} until ${itin.destination || "your trip"} ✈️`,
+      message: "Your trip is coming up — open your itinerary to review the plan and start packing.",
+      link: `booking:${itin.id}`,
+    });
     console.log(`[TripCountdown] itin=${itin.id} dest="${itin.destination}" ${tag} → ${status} (llm=${nudge.llmSourced})`);
   }
 

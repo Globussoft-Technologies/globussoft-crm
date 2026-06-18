@@ -29,6 +29,7 @@ const prisma = require("../lib/prisma");
 const emailSender = require("../lib/emailSender");
 const content = require("../lib/paymentDeadlineContent");
 const notificationService = require("../lib/notificationService");
+const { safeNotifyTravelCustomer } = require("../lib/travelPortalNotificationService");
 
 const { FIRE_DAYS, shouldRemind, dayTag } = content;
 const DEPOSIT_FRACTION = 0.5; // 50% deposit (PRD §4.7)
@@ -158,6 +159,14 @@ async function runPaymentDeadlineTick(now = new Date()) {
       await prisma.paymentDeadlineNudge
         .update({ where: { id: claim.id }, data: { status, subject: nudge.subject, llmSourced: nudge.llmSourced } })
         .catch(() => {});
+      // Mirror to the customer's in-app portal bell (no SMS — we don't collect a
+      // phone at registration). Best-effort; safeNotify never throws.
+      await safeNotifyTravelCustomer({
+        contactId: itin.contactId, tenantId: itin.tenantId, type: "payment",
+        title: "Deposit reminder",
+        message: `Please pay your ${content.formatMoney(deposit, itin.currency)} deposit for ${itin.destination || "your trip"} by ${common.deadlineLabel} to confirm your booking.`,
+        link: `booking:${itin.id}`,
+      });
       console.log(`[PaymentDeadline] reminder itin=${itin.id} ${tag} → ${status} (llm=${nudge.llmSourced})`);
       continue;
     }
@@ -193,6 +202,13 @@ async function runPaymentDeadlineTick(now = new Date()) {
     await prisma.paymentDeadlineNudge
       .update({ where: { id: claim.id }, data: { status: "flagged", subject: notice.subject } })
       .catch(() => {});
+    // In-app at-risk notice to the customer's portal bell (best-effort).
+    await safeNotifyTravelCustomer({
+      contactId: itin.contactId, tenantId: itin.tenantId, type: "payment",
+      title: "Deposit overdue — action needed",
+      message: `The deposit for your ${itin.destination || "trip"} is past due. Please pay now or contact your advisor to keep your booking.`,
+      link: `booking:${itin.id}`,
+    });
     console.log(`[PaymentDeadline] OVERDUE itin=${itin.id} dest="${itin.destination}" → ${advisors.length} advisor(s) flagged, customer email ${emailStatus}`);
   }
 

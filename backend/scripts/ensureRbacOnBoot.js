@@ -397,6 +397,20 @@ async function grantPermissionList(stats, roleId, perms) {
   }
 }
 
+// Separate a cross-vertical preset (e.g. MANAGER_PERMISSIONS, which spans
+// common + wellness + travel) into the slice valid for ONE vertical's catalog.
+// COMMON_MODULES survive for every vertical; wellness-only modules survive only
+// on wellness; travel-only modules only on travel. So a travel MANAGER gets
+// common + travel perms (incl. visa/trips/dashboard reads), a wellness MANAGER
+// common + wellness, a generic MANAGER common only — with no cross-vertical leak.
+function filterPermsToVertical(perms, vertical) {
+  const catalog = getCatalogForVertical(vertical);
+  return perms.filter((perm) => {
+    const [module, action] = perm.split('.');
+    return module && action && Array.isArray(catalog[module]) && catalog[module].includes(action);
+  });
+}
+
 async function ensureRbacOnBoot() {
   if (process.env.DISABLE_RBAC_BOOT_SYNC === '1') return null;
 
@@ -570,14 +584,17 @@ async function provisionTenantRbacInternal(stats, tenantId, vertical) {
       userType: 'STAFF',
       landingPath: managerLanding,
     });
-    // Wellness MANAGER keeps its existing hardcoded baseline (status quo,
-    // preserves the seeded wellness clinical-manager surface). Travel +
-    // generic MANAGER are created as EMPTY containers — the tenant
-    // administrator decides which permissions belong here through the
-    // Roles & Permissions UI. No invented travel/generic bundles per the
-    // "permissions are the source of truth, roles are containers" rule.
-    if (managerCreated && isWellness) {
-      await grantPermissionList(stats, managerRole.id, MANAGER_PERMISSIONS);
+    // MANAGER gets the vertical-appropriate slice of its preset: common perms
+    // for every vertical, wellness perms only on wellness, travel perms only on
+    // travel (incl. visa / trips / dashboard reads). This restores the access
+    // contract MANAGER held under the old verifyRole(['ADMIN','MANAGER']) gates
+    // now that those routes enforce requirePermission() — previously this grant
+    // was wellness-only, so a travel/generic MANAGER got ZERO permissions and
+    // hit 403 on every permission-gated route (e.g. GET /api/travel/visa/
+    // applications, /travel dashboard, visa analytics). Manage/delete-tier
+    // actions stay admin-only because they're absent from MANAGER_PERMISSIONS.
+    if (managerCreated) {
+      await grantPermissionList(stats, managerRole.id, filterPermsToVertical(MANAGER_PERMISSIONS, vertical));
     }
 
     const { role: customerRole, wasCreated: customerCreated } = await ensureRole(stats, {

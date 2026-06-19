@@ -66,6 +66,9 @@ const QuoteAcceptLanding = lazy(() => import("./pages/public/QuoteAcceptLanding"
 const TravelReview = lazy(() => import("./pages/public/TravelReview"));
 // Public flyer share/embed viewer — /p/flyer/:slug?t=<jwt>[&embed=1].
 const FlyerView = lazy(() => import("./pages/public/FlyerView"));
+// Public marketing landing page for the Japan 2026 educational immersion
+// trip — /trips. No auth, renders outside the AuthContext shell.
+const TripsLanding = lazy(() => import("./pages/public/TripsLanding"));
 // Cross-vertical staff attendance dashboard — visible to wellness + travel
 // tenants. Backend (/api/attendance/list + /summary) is role-gated to
 // ADMIN/MANAGER; per-row edit/delete is ADMIN-only.
@@ -993,6 +996,8 @@ export default function App() {
                   <Route path="/p/review/:token" element={<TravelReview />} />
                   {/* Public flyer share + iframe-embed viewer (no auth; JWT in ?t=). */}
                   <Route path="/p/flyer/:slug" element={<FlyerView />} />
+                  {/* Public marketing landing page — Japan 2026 immersion trip. */}
+                  <Route path="/trips" element={<TripsLanding />} />
                   <Route path="/travel/kyc/callback" element={<TravelKycCallback flow="microsite" />} />
                   <Route path="/travel/portal/kyc/callback" element={<TravelKycCallback flow="portal" />} />
                   <Route

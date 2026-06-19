@@ -10,6 +10,16 @@ const SOURCE_OPTIONS = ['Organic', 'Referral', 'LinkedIn', 'Cold Call', 'Website
 // #600 — wellness vertical replaces the generic CRM source taxonomy with one
 // that matches Patient-intake channels. WhatsApp is the dominant inbound
 // channel for clinics; LinkedIn / Cold Call don't apply.
+const TRAVEL_SOURCE_OPTIONS = [
+  { value: 'tmc_registration', label: 'TMC Registration' },
+  { value: 'brochure_request', label: 'Brochure Request' },
+  { value: 'whatsapp', label: 'WhatsApp' },
+  { value: 'referral', label: 'Referral' },
+  { value: 'website', label: 'Website' },
+  { value: 'phone', label: 'Phone Call' },
+  { value: 'event', label: 'Event / Expo' },
+  { value: 'other', label: 'Other' },
+];
 const WELLNESS_SOURCE_OPTIONS = [
   { value: 'walk-in', label: 'Walk-in' },
   { value: 'whatsapp', label: 'WhatsApp' },
@@ -65,6 +75,7 @@ const Leads = () => {
   // preferred location/practitioner); generic CRM keeps the original fields.
   const auth = useContext(AuthContext);
   const isWellness = auth?.tenant?.vertical === 'wellness';
+  const isTravel = auth?.tenant?.vertical === 'travel';
   const [leads, setLeads] = useState([]);
   const [staff, setStaff] = useState([]);
   const [services, setServices] = useState([]);
@@ -84,8 +95,8 @@ const Leads = () => {
     phone: '',
     company: '',
     title: '',
-    countryCode: isWellness ? '+91' : '+1',
-    source: isWellness ? 'walk-in' : 'Organic',
+    countryCode: isWellness || isTravel ? '+91' : '+1',
+    source: isWellness ? 'walk-in' : isTravel ? 'tmc_registration' : 'Organic',
     status: 'Lead',
     treatmentOfInterest: '',
     preferredLocationId: '',
@@ -348,7 +359,7 @@ const Leads = () => {
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
           <UserPlus size={24} style={{ color: 'var(--primary-color, var(--accent-color))' }} />
           <div>
-            <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold' }}>Leads</h2>
+            <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold' }}>{isTravel ? 'Travel Leads' : 'Leads'}</h2>
             <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
               {searchTerm
                 ? `${filteredLeads.length} of ${leads.length} lead${leads.length !== 1 ? 's' : ''} match "${searchTerm}"`
@@ -608,6 +619,10 @@ const Leads = () => {
                 >
                   {isWellness
                     ? WELLNESS_SOURCE_OPTIONS.map(opt => (
+                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                      ))
+                    : isTravel
+                    ? TRAVEL_SOURCE_OPTIONS.map(opt => (
                         <option key={opt.value} value={opt.value}>{opt.label}</option>
                       ))
                     : SOURCE_OPTIONS.map(src => (

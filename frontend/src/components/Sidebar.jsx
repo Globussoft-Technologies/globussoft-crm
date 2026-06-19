@@ -1680,7 +1680,7 @@ function renderTravelNav({
         <Link to="/pipeline" icon={Briefcase} label="Pipeline" requiredPermission={{ module: "pipeline", action: "read" }} />
       </Section>
 
-      <div style={labelStyle}>Customer comms</div>
+      <div style={sectionLabel}>Customer comms</div>
       <Link to="/inbox" icon={InboxIcon} label="Inbox" count={counts.inbox} requiredPermission={{ module: "communications", action: "read" }} />
       {/* Gmail — personal per-user mailbox connection (each staff member links
           their OWN Google account). Intentionally NO requiredPermission: it's a

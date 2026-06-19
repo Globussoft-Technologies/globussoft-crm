@@ -88,6 +88,7 @@ function init(io) {
 // the existing restore watchdog as an actionable "Reset & reconnect".
 async function restoreSessions() {
   if (!canLaunch()) return { restored: 0, reason: "disabled" };
+  const fs = require("fs"); // required locally — this module loads fs lazily per-function
   let entries = [];
   try {
     entries = fs.readdirSync(AUTH_DIR, { withFileTypes: true });

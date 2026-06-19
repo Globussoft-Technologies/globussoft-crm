@@ -181,6 +181,13 @@ const NON_TENANT_MODELS = new Set([
   // are deleted/marked used). The permanent verified marker lands on
   // Tenant/User/Contact.emailVerifiedAt.
   'EmailVerificationOtp',
+  // PasswordResetToken — short-lived, single-use token tied to a globally
+  // unique userId. Tenant isolation flows through User (User.tenantId); the
+  // token is consumed by the public /reset-password endpoint which resolves
+  // the user and therefore the tenant at consumption time. A redundant
+  // tenantId column would add no isolation and would require every reset flow
+  // to keep the user.tenantId and token.tenantId in sync.
+  'PasswordResetToken',
   // G018 FX rate cache (PRD_TRAVEL_QUOTE_BUILDER FR-3.4). Currency-pair
   // rates are GLOBAL by design — every tenant shares the same INR/USD rate
   // for a given (baseCurrency, quoteCurrency, fetchedAt) tuple. The

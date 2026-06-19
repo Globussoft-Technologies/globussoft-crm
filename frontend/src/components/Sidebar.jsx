@@ -1680,17 +1680,20 @@ function renderTravelNav({
         <Link to="/pipeline" icon={Briefcase} label="Pipeline" requiredPermission={{ module: "pipeline", action: "read" }} />
       </Section>
 
-      <div style={sectionLabel}>Customer comms</div>
-      <Link to="/inbox" icon={InboxIcon} label="Inbox" count={counts.inbox} requiredPermission={{ module: "communications", action: "read" }} />
+      <Section label="Customer comms">
+        <Link to="/inbox" icon={InboxIcon} label="Inbox" count={counts.inbox} requiredPermission={{ module: "communications", action: "read" }} />
+        <Link to="/travel/whatsapp" icon={MessageSquare} label="WhatsApp" requiredPermission={{ module: "whatsapp", action: "read" }} />
+        <Link to="/sequences" icon={Send} label="Sequences" requiredPermission={{ module: "sequences", action: "read" }} />
+        <Link to="/tasks" icon={CheckSquare} label="Tasks" count={counts.tasks} requiredPermission={{ module: "tasks", action: "read" }} />
+        <Link to="/calendar-sync" icon={Calendar} label="Calendar" requiredPermission={{ module: "integrations", action: "read" }} />
+      </Section>
       {/* Gmail — personal per-user mailbox connection (each staff member links
           their OWN Google account). Intentionally NO requiredPermission: it's a
           personal integration, not a permission-gated module, so every travel
-          staff user sees it regardless of role. */}
+          staff user sees it regardless of role. Placed OUTSIDE the Customer
+          comms <Section> so the section can still collapse when the user has
+          no comms grants. */}
       <Link to="/gmail" icon={Mail} label="Gmail" />
-      <Link to="/travel/whatsapp" icon={MessageSquare} label="WhatsApp" requiredPermission={{ module: "whatsapp", action: "read" }} />
-      <Link to="/sequences" icon={Send} label="Sequences" requiredPermission={{ module: "sequences", action: "read" }} />
-      <Link to="/tasks" icon={CheckSquare} label="Tasks" count={counts.tasks} requiredPermission={{ module: "tasks", action: "read" }} />
-      <Link to="/calendar-sync" icon={Calendar} label="Calendar" requiredPermission={{ module: "integrations", action: "read" }} />
 
       <Section label="Financial">
         <Link to="/invoices" icon={Receipt} label="Invoices" requiredPermission={{ module: "invoices", action: "read" }} />

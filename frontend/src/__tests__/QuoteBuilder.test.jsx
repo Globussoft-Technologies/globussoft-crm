@@ -1037,7 +1037,7 @@ describe('<QuoteBuilder /> — Calculate with markups (slice 8 pricing-preview)'
   it('5xx response fires notify.error and does NOT open the panel', async () => {
     const err = new Error('Internal Server Error');
     err.status = 500;
-    err.body = { error: 'Failed to compute pricing preview' };
+    err.data = { error: 'Failed to compute pricing preview' };
     setupQuoteWithLines(err);
     renderPage();
     await screen.findByDisplayValue('Hilton Mecca');
@@ -1432,7 +1432,7 @@ describe('<QuoteBuilder /> — slice 11 Accept / Decline workflow', () => {
       if (url === '/api/travel/quotes/42/accept' && method === 'POST') {
         const err = new Error('Cannot accept a quote in status "Rejected"');
         err.status = 409;
-        err.body = { error: 'Cannot accept a quote in status "Rejected"', code: 'INVALID_TRANSITION' };
+        err.data = { error: 'Cannot accept a quote in status "Rejected"', code: 'INVALID_TRANSITION' };
         return Promise.reject(err);
       }
       return Promise.resolve(null);

@@ -261,11 +261,11 @@ describe('<DocumentTracking /> — page surface', () => {
     expect(screen.getByText('Avg View Duration')).toBeInTheDocument();
 
     // Numeric values render straight from the stats payload.
-    expect(screen.getByText('5')).toBeInTheDocument();   // documentsTracked
-    expect(screen.getByText('12')).toBeInTheDocument();  // totalViews
-    expect(screen.getByText('7')).toBeInTheDocument();   // uniqueViewers
+    expect(await screen.findByText('5')).toBeInTheDocument();   // documentsTracked
+    expect(await screen.findByText('12')).toBeInTheDocument();  // totalViews
+    expect(await screen.findByText('7')).toBeInTheDocument();   // uniqueViewers
     // avgViewDuration=95s → formatDuration → "1m 35s".
-    expect(screen.getByText('1m 35s')).toBeInTheDocument();
+    expect(await screen.findByText('1m 35s')).toBeInTheDocument();
   });
 
   it('renders one row per (documentType, documentId) group with the "<Type> #<id>" cell + viewer email + views fraction', async () => {

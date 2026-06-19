@@ -269,6 +269,22 @@ router.get(
 // POST /whatsapp/import — re-pull the linked account's existing chats into the
 // CRM inbox (runs automatically on connect; this is the manual "refresh all"
 // button). Real 1:1 chats only — groups / channels / @lid are skipped.
+// When a connectivity guard fails, distinguish a TRANSIENT reconnect (boot
+// restore after a server restart — the session is INITIALIZING / resuming) from
+// a genuine needs-QR / disconnected state. Without this the UI told the operator
+// to "scan the QR" during the few seconds the saved session takes to resume on
+// boot — even though no QR was needed. Returns { status, body }.
+function notReadyResponse(tenantId) {
+  const st = watiClient.getState(tenantId) || {};
+  if (st.state === "INITIALIZING" || st.state === "AUTHENTICATED") {
+    return { status: 409, body: { error: "WhatsApp is reconnecting after a restart — please wait a few seconds and try again.", code: "WA_RECONNECTING" } };
+  }
+  if (st.state === "QR" || st.qr) {
+    return { status: 409, body: { error: "Scan the WhatsApp QR to connect.", code: "WA_NEEDS_QR" } };
+  }
+  return { status: 409, body: { error: "WhatsApp is not connected — open the WhatsApp panel and scan the QR.", code: "WA_NOT_CONNECTED" } };
+}
+
 router.post(
   "/whatsapp/import",
   verifyToken,
@@ -277,7 +293,8 @@ router.post(
   async (req, res) => {
     try {
       if (!watiClient.isEnabled(req.travelTenant.id)) {
-        return res.status(409).json({ error: "WhatsApp is not connected — scan the QR first.", code: "WA_NOT_CONNECTED" });
+        const nr = notReadyResponse(req.travelTenant.id);
+        return res.status(nr.status).json(nr.body);
       }
       const result = await watiClient.importAllChats(req.travelTenant.id);
       res.json(result);

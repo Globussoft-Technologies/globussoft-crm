@@ -90,6 +90,13 @@ const TASK_ROUTING = {
   // as trip-countdown → gemini-flash; falls back to the deterministic template
   // library in backend/lib/paymentDeadlineContent.js until Q11 keys land.
   "payment-reminder": { primary: "gemini-flash", fallback: "claude-haiku" },
+  // WhatsApp lead qualification (2026-06-19). Classifies an inbound WhatsApp
+  // conversation as a travel/business enquiry vs personal/spam and extracts
+  // {isEnquiry, confidence, destination, dates, pax, intent, suggestedSubBrand}
+  // so lib/travelWhatsappLeadCapture can auto-create a Travel lead. Small in/out
+  // → gemini-flash. Falls back to the deterministic keyword heuristic in
+  // lib/travelWhatsappLeadCapture.js whenever the call stubs (no Q11 key / test).
+  "whatsapp-lead-qualify": { primary: "gemini-flash", fallback: "claude-haiku" },
   // Marketing-flyer-copy (PRD_TRAVEL_MARKETING_FLYER FR-3.6.1 + AC-6.8).
   // 1K in / 1K out — short-form headline + body + CTA JSON. Routed to
   // gemini-flash for low-cost bulk-shape Gemini calls per PRD §9.1.

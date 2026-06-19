@@ -171,6 +171,8 @@ describe('llmRouter — module shape', () => {
       // shape email copy → gemini-flash primary / claude-haiku fallback.
       "trip-countdown": { primary: "gemini-flash", fallback: "claude-haiku" },
       "payment-reminder": { primary: "gemini-flash", fallback: "claude-haiku" },
+      // WhatsApp inbound → Travel auto-lead qualification (2026-06-19).
+      "whatsapp-lead-qualify": { primary: "gemini-flash", fallback: "claude-haiku" },
       "marketing-flyer-copy": { primary: "gemini-flash", fallback: "claude-haiku" },
       "marketing-flyer-image": { primary: "dall-e-3", fallback: "stability-xl" },
     });
@@ -184,8 +186,9 @@ describe('llmRouter — module shape', () => {
     // Length cross-check — PRD §9.1's 7 task classes + FR-3.6's
     // 'itinerary-suggest' (S14) + FR-3.6.1's 'marketing-flyer-copy' (S15)
     // + FR-3.6.3's 'marketing-flyer-image' (S16) + the 2026-06-16 travel
-    // notification engines 'trip-countdown' + 'payment-reminder' = 12.
-    expect(r.VALID_TASKS).toHaveLength(12);
+    // notification engines 'trip-countdown' + 'payment-reminder' + the
+    // 2026-06-19 'whatsapp-lead-qualify' WhatsApp auto-lead task = 13.
+    expect(r.VALID_TASKS).toHaveLength(13);
   });
 });
 

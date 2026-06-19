@@ -14582,13 +14582,14 @@ router.get("/doctors/availability", verifyToken, async (req, res) => {
   try {
     const { tenantId } = req.user;
     const dateParam = req.query.date || new Date().toISOString().split("T")[0];
+    console.log(`[availability] tenantId=${tenantId} date=${dateParam}`);
 
     // Strict whitelist: only users with wellnessRole = doctor or
     // professional are bookable. The looser RBAC/specialty/fallback
     // matches previously included generic staff who then 404'd on the
     // time-slots endpoint (which gates on the same whitelist below),
     // leaving the slot dropdown empty.
-    const doctors = await prisma.user.findMany({
+    let doctors = await prisma.user.findMany({
       where: {
         tenantId,
         deactivatedAt: null,
@@ -14597,6 +14598,30 @@ router.get("/doctors/availability", verifyToken, async (req, res) => {
       select: { id: true, name: true, specialty: true, wellnessRole: true },
       orderBy: { name: "asc" },
     });
+
+    // Fallback for tenants where staff exist but wellnessRole was never
+    // backfilled (e.g. created before the field existed or via bulk import).
+    // Use distinct doctorIds from Visit records as the bookable-doctor set.
+    if (doctors.length === 0) {
+      const refs = await prisma.visit.findMany({
+        where: { tenantId, doctorId: { not: null } },
+        select: { doctorId: true },
+        distinct: ["doctorId"],
+      });
+      const ids = refs.map((r) => r.doctorId).filter(Boolean);
+      if (ids.length) {
+        // No tenantId filter here — security is guaranteed by the Visit.tenantId
+        // scope above. Doctor users may belong to a shared/admin tenant while
+        // only serving visits for this tenant.
+        doctors = await prisma.user.findMany({
+          where: { id: { in: ids }, deactivatedAt: null },
+          select: { id: true, name: true, specialty: true, wellnessRole: true },
+          orderBy: { name: "asc" },
+        });
+        console.log(`[availability] fallback via visits found ${doctors.length} doctor(s) from ids`, ids);
+      }
+    }
+    console.log(`[availability] returning ${doctors.length} doctor(s)`);
 
     // Fetch approved leave requests for all doctors on the specified date
     const targetDate = new Date(dateParam + "T00:00:00Z");
@@ -14663,9 +14688,10 @@ router.get("/doctors/:doctorId/time-slots", verifyToken, async (req, res) => {
     const dateParam = req.query.date || new Date().toISOString().split("T")[0];
 
     // Validate doctor/professional exists and belongs to tenant.
-    // Must match the same whitelist as /doctors/availability or the
-    // time-slot dropdown stays empty for every professional picked.
-    const doctor = await prisma.user.findFirst({
+    // Primary: strict wellnessRole whitelist. Fallback: user has at least
+    // one visit record as doctorId in this tenant (covers tenants where
+    // wellnessRole was never backfilled but doctors exist via admin booking).
+    let doctor = await prisma.user.findFirst({
       where: {
         id: parseInt(doctorId),
         tenantId,
@@ -14674,6 +14700,19 @@ router.get("/doctors/:doctorId/time-slots", verifyToken, async (req, res) => {
       },
       select: { id: true },
     });
+
+    if (!doctor) {
+      const hasVisit = await prisma.visit.findFirst({
+        where: { tenantId, doctorId: parseInt(doctorId) },
+        select: { id: true },
+      });
+      if (hasVisit) {
+        doctor = await prisma.user.findFirst({
+          where: { id: parseInt(doctorId), deactivatedAt: null },
+          select: { id: true },
+        });
+      }
+    }
 
     if (!doctor) {
       return res.status(404).json({ error: "Doctor not found" });

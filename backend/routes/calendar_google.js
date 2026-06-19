@@ -10,6 +10,7 @@ const { verifyToken } = require("../middleware/auth");
 const router = express.Router();
 const prisma = require("../lib/prisma");
 const { parseSlotWindow, freeSlots } = require("../lib/calendarSlots");
+const zoomClient = require("../services/zoomClient");
 
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || process.env.GOOGLE_OAUTH_CLIENT_ID || "";
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || process.env.GOOGLE_OAUTH_CLIENT_SECRET || "";
@@ -294,7 +295,7 @@ router.get("/events", verifyToken, async (req, res) => {
 // POST /events — create event in Google Calendar + DB
 router.post("/events", verifyToken, async (req, res) => {
   try {
-    const { title, description, startTime, endTime, attendees, contactId, dealId, location, createMeet, conferencing } = req.body || {};
+    const { title, description, startTime, endTime, attendees, contactId, dealId, location, createMeet, createZoom, conferencing } = req.body || {};
     if (!title || !startTime || !endTime) {
       return res.status(400).json({ error: "title, startTime and endTime are required" });
     }
@@ -308,6 +309,13 @@ router.post("/events", verifyToken, async (req, res) => {
       createMeet === "true" ||
       conferencing === "google_meet" ||
       conferencing === "meet";
+
+    // Opt-in Zoom link generation. Independent of the calendar provider — a
+    // Zoom meeting is created via the Zoom API and its join link is woven into
+    // the event description (Zoom isn't a native Google conference solution).
+    // No-op when Zoom creds are absent (zoomClient.createMeeting returns null).
+    const wantsZoom =
+      createZoom === true || createZoom === "true" || conferencing === "zoom";
 
     // Validate and parse dates
     const start = new Date(startTime);
@@ -355,9 +363,29 @@ router.post("/events", verifyToken, async (req, res) => {
           .filter((a) => a && a.email)
       : [];
 
+    // Create the Zoom meeting up-front (if requested + configured) so its join
+    // link can ride into the calendar event's description + be persisted.
+    let zoomUrl = null;
+    if (wantsZoom) {
+      try {
+        const zoom = await zoomClient.createMeeting({
+          topic: title,
+          startTime,
+          durationMins: Math.round((end - start) / 60000),
+          agenda: description,
+        });
+        zoomUrl = zoom && zoom.joinUrl ? zoom.joinUrl : null;
+      } catch (e) {
+        console.error("[calendar_google] Zoom meeting creation failed:", e.message);
+      }
+    }
+    const eventDescription = zoomUrl
+      ? `${description ? description + "\n\n" : ""}Join Zoom Meeting:\n${zoomUrl}`
+      : description;
+
     const requestBody = {
       summary: title,
-      description: description || undefined,
+      description: eventDescription || undefined,
       location: location || undefined,
       start: { dateTime: new Date(startTime).toISOString() },
       end: { dateTime: new Date(endTime).toISOString() },
@@ -392,6 +420,7 @@ router.post("/events", verifyToken, async (req, res) => {
       (ev.conferenceData &&
         ev.conferenceData.entryPoints &&
         (ev.conferenceData.entryPoints.find((e) => e.entryPointType === "video") || {}).uri) ||
+      zoomUrl ||
       null;
 
     const saved = await prisma.calendarEvent.upsert({
@@ -400,7 +429,7 @@ router.post("/events", verifyToken, async (req, res) => {
         externalId: ev.id,
         provider: "google",
         title: ev.summary || title,
-        description: ev.description || description || null,
+        description: ev.description || eventDescription || null,
         startTime: new Date(startTime),
         endTime: new Date(endTime),
         location: location || null,
@@ -413,7 +442,7 @@ router.post("/events", verifyToken, async (req, res) => {
       },
       update: {
         title: ev.summary || title,
-        description: ev.description || description || null,
+        description: ev.description || eventDescription || null,
         startTime: new Date(startTime),
         endTime: new Date(endTime),
         location: location || null,
@@ -427,6 +456,13 @@ router.post("/events", verifyToken, async (req, res) => {
     return res.status(201).json(saved);
   } catch (err) {
     console.error("[calendar_google] POST /events error:", err);
+    const raw = `${(err && err.message) || ""} ${err && err.response && err.response.data ? JSON.stringify(err.response.data) : ""}`;
+    if (/invalid_grant|expired or revoked|Token has been expired/i.test(raw)) {
+      return res.status(401).json({
+        error: "Your Google Calendar connection has expired. Please disconnect and reconnect, then create the event again.",
+        code: "RECONNECT_REQUIRED",
+      });
+    }
     return res.status(err.status || 500).json({ error: err.message || "Failed to create event" });
   }
 });
@@ -498,6 +534,15 @@ router.get("/slots", verifyToken, async (req, res) => {
     });
   } catch (err) {
     console.error("[calendar_google] GET /slots error:", err);
+    // A revoked / expired Google refresh token surfaces as invalid_grant — a
+    // re-auth condition, not a server fault. Mirror the /sync reconnect prompt.
+    const raw = `${(err && err.message) || ""} ${err && err.response && err.response.data ? JSON.stringify(err.response.data) : ""}`;
+    if (/invalid_grant|expired or revoked|Token has been expired/i.test(raw)) {
+      return res.status(401).json({
+        error: "Your Google Calendar connection has expired. Please disconnect and reconnect to find available slots.",
+        code: "RECONNECT_REQUIRED",
+      });
+    }
     return res.status(err.status || 500).json({ error: err.message || "Failed to load slots" });
   }
 });

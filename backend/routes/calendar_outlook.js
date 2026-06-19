@@ -7,6 +7,7 @@ const { verifyToken } = require("../middleware/auth");
 
 const prisma = require("../lib/prisma");
 const { parseSlotWindow, freeSlots } = require("../lib/calendarSlots");
+const zoomClient = require("../services/zoomClient");
 
 const MS_CLIENT_ID = process.env.MS_CLIENT_ID;
 const MS_CLIENT_SECRET = process.env.MS_CLIENT_SECRET;
@@ -313,7 +314,7 @@ router.get("/events", verifyToken, async (req, res) => {
 // POST /events — create new event in Outlook + DB
 router.post("/events", verifyToken, async (req, res) => {
   try {
-    const { title, description, startTime, endTime, attendees, contactId, dealId, createMeet, conferencing } = req.body;
+    const { title, description, startTime, endTime, attendees, contactId, dealId, createMeet, createZoom, conferencing } = req.body;
     if (!title || !startTime || !endTime) {
       return res.status(400).json({ error: "title, startTime, endTime required" });
     }
@@ -327,6 +328,11 @@ router.post("/events", verifyToken, async (req, res) => {
       conferencing === "google_meet" ||
       conferencing === "meet" ||
       conferencing === "online";
+
+    // Opt-in Zoom link — independent of Teams. The Zoom meeting is created via
+    // the Zoom API and woven into the event body. No-op when Zoom creds absent.
+    const wantsZoom =
+      createZoom === true || createZoom === "true" || conferencing === "zoom";
 
     // Validate and parse dates
     const start = new Date(startTime);
@@ -374,10 +380,33 @@ router.post("/events", verifyToken, async (req, res) => {
 
     integration = await refreshTokenIfNeeded(integration);
 
+    // Create the Zoom meeting up-front (if requested + configured) so its join
+    // link can ride into the event body + be persisted as the meetingUrl.
+    let zoomUrl = null;
+    if (wantsZoom) {
+      try {
+        const zoom = await zoomClient.createMeeting({
+          topic: title,
+          startTime,
+          durationMins: Math.round((end - start) / 60000),
+          agenda: description,
+        });
+        zoomUrl = zoom && zoom.joinUrl ? zoom.joinUrl : null;
+      } catch (e) {
+        console.error("[outlook/events] Zoom meeting creation failed:", e.message);
+      }
+    }
+    const eventDescription = zoomUrl
+      ? `${description ? description + "\n\n" : ""}Join Zoom Meeting:\n${zoomUrl}`
+      : description;
+    const bodyHtml = zoomUrl
+      ? `${description ? description + "<br><br>" : ""}Join Zoom Meeting:<br><a href="${zoomUrl}">${zoomUrl}</a>`
+      : (description || "");
+
     const attendeeArray = Array.isArray(attendees) ? attendees : [];
     const graphBody = {
       subject: title,
-      body: { contentType: "HTML", content: description || "" },
+      body: { contentType: "HTML", content: bodyHtml },
       start: { dateTime: new Date(startTime).toISOString(), timeZone: "UTC" },
       end: { dateTime: new Date(endTime).toISOString(), timeZone: "UTC" },
       attendees: attendeeArray.map(a => {
@@ -419,11 +448,11 @@ router.post("/events", verifyToken, async (req, res) => {
       where: { tenantId_provider_externalId: { tenantId, provider: "microsoft", externalId: created.id } },
       update: {
         title: created.subject || title,
-        description: description || null,
+        description: eventDescription || null,
         startTime: startDt,
         endTime: endDt,
         attendees: attendeeArray.length ? JSON.stringify(attendeeArray) : null,
-        meetingUrl: created.onlineMeeting?.joinUrl || null,
+        meetingUrl: created.onlineMeeting?.joinUrl || zoomUrl || null,
         userId,
         contactId: contactId || null,
         dealId: dealId || null,
@@ -433,11 +462,11 @@ router.post("/events", verifyToken, async (req, res) => {
         externalId: created.id,
         provider: "microsoft",
         title: created.subject || title,
-        description: description || null,
+        description: eventDescription || null,
         startTime: startDt,
         endTime: endDt,
         attendees: attendeeArray.length ? JSON.stringify(attendeeArray) : null,
-        meetingUrl: created.onlineMeeting?.joinUrl || null,
+        meetingUrl: created.onlineMeeting?.joinUrl || zoomUrl || null,
         userId,
         contactId: contactId || null,
         dealId: dealId || null,

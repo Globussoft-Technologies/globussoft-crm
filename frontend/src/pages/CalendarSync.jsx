@@ -84,6 +84,7 @@ export default function CalendarSync() {
     attendees: '',
     location: '',
     createMeet: false,
+    createZoom: false,
   });
   const [showEventDetail, setShowEventDetail] = useState(false);
   const [selectedEvent, setSelectedEvent] = useState(null);
@@ -237,13 +238,19 @@ export default function CalendarSync() {
       if (formData.createMeet) {
         payload.createMeet = true;
       }
+      // Zoom is independent of the calendar provider — the backend creates the
+      // Zoom meeting and weaves its join link into the event (no-op if Zoom
+      // creds aren't configured server-side).
+      if (formData.createZoom) {
+        payload.createZoom = true;
+      }
       await fetchApi(`/api/calendar/${createProvider}/events`, {
         method: 'POST',
         body: JSON.stringify(payload)
       });
       setToast(`Event created in ${createProvider === 'google' ? 'Google' : 'Outlook'}`);
       setShowCreateModal(false);
-      setFormData({ title: '', description: '', startTime: '', endTime: '', attendees: '', location: '', createMeet: false }); setSlotPicker({ date: '', slots: [], loading: false, error: '' });
+      setFormData({ title: '', description: '', startTime: '', endTime: '', attendees: '', location: '', createMeet: false, createZoom: false }); setSlotPicker({ date: '', slots: [], loading: false, error: '' });
       await loadAll();
     } catch (e) {
       setToast(`Failed to create event: ${e.message}`);
@@ -1117,7 +1124,7 @@ export default function CalendarSync() {
               <button
                 onClick={() => {
                   setShowCreateModal(false);
-                  setFormData({ title: '', description: '', startTime: '', endTime: '', attendees: '', location: '', createMeet: false }); setSlotPicker({ date: '', slots: [], loading: false, error: '' });
+                  setFormData({ title: '', description: '', startTime: '', endTime: '', attendees: '', location: '', createMeet: false, createZoom: false }); setSlotPicker({ date: '', slots: [], loading: false, error: '' });
                 }}
                 style={{
                   background: 'none', border: 'none', fontSize: '1.5rem',
@@ -1412,6 +1419,17 @@ export default function CalendarSync() {
                     />
                     Add a {createProvider === 'google' ? 'Google Meet' : 'Teams'} meeting link to this event
                   </label>
+
+                  {/* Add Zoom link — works for either calendar provider */}
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-primary)', cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={formData.createZoom}
+                      onChange={(e) => setFormData({ ...formData, createZoom: e.target.checked })}
+                      style={{ width: '16px', height: '16px', cursor: 'pointer' }}
+                    />
+                    Add a Zoom meeting link to this event
+                  </label>
                 </div>
               )}
 
@@ -1421,7 +1439,7 @@ export default function CalendarSync() {
                   type="button"
                   onClick={() => {
                     setShowCreateModal(false);
-                    setFormData({ title: '', description: '', startTime: '', endTime: '', attendees: '', location: '', createMeet: false }); setSlotPicker({ date: '', slots: [], loading: false, error: '' });
+                    setFormData({ title: '', description: '', startTime: '', endTime: '', attendees: '', location: '', createMeet: false, createZoom: false }); setSlotPicker({ date: '', slots: [], loading: false, error: '' });
                   }}
                   style={{
                     padding: '0.65rem 1.5rem', borderRadius: '8px',

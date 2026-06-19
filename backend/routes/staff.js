@@ -116,6 +116,33 @@ async function validateWellnessRole(req, value) {
 const adminResetTokens = new Map(); // token -> { userId, expiresAt }
 const inviteTokens = new Map(); // token -> { userId, expiresAt }
 
+// CRITICAL: admin-issued reset/invite links land on /reset-password, which is
+// consumed by POST /api/auth/reset-password — and that endpoint reads from the
+// PasswordResetToken DB table (see routes/auth.js consumeResetToken), NOT these
+// module-local Maps. So a token must be written to the SHARED DB table or the
+// link is "invalid/expired" forever. We persist to the DB (raw SQL — no Prisma
+// regenerate needed) AND keep the Map write for the existing __testHooks.
+async function persistAdminToken(token, userId, expiresAt, memMap) {
+  if (memMap) memMap.set(token, { userId, expiresAt: expiresAt.getTime() });
+  try {
+    await prisma.$executeRawUnsafe(
+      "INSERT INTO `PasswordResetToken` (`token`, `userId`, `expiresAt`) VALUES (?, ?, ?)",
+      token, userId, expiresAt,
+    );
+  } catch (e) {
+    console.warn(`[staff] reset/invite token DB persist failed (memory fallback only): ${e.message}`);
+  }
+}
+
+// Reset/invite links MUST point at the FRONTEND SPA, never the auth-guarded
+// API — strip a trailing slash + a stray "/api" suffix from a misconfigured
+// FRONTEND_URL (same fix as routes/auth.js).
+function resolveFrontendBase(req) {
+  return (process.env.FRONTEND_URL || `https://${req.headers.host || "crm.globusdemos.com"}`)
+    .replace(/\/+$/, "")
+    .replace(/\/api$/i, "");
+}
+
 // SendGrid wrapper — fire-and-forget, never throws. Mirrors the contract in
 // routes/auth.js sendPasswordResetEmail (kept local instead of importing so
 // the two modules stay independently testable; promoting both into a shared
@@ -886,14 +913,11 @@ router.post("/:id/reset-password", verifyRole(["ADMIN"]), async (req, res) => {
     if (!target) return res.status(404).json({ error: "User not found." });
 
     const token = crypto.randomBytes(32).toString("hex");
-    adminResetTokens.set(token, {
-      userId: target.id,
-      expiresAt: Date.now() + 3600000,
-    });
+    // Persist to the SHARED DB store (consumed by /api/auth/reset-password) +
+    // keep the legacy Map for __testHooks.
+    await persistAdminToken(token, target.id, new Date(Date.now() + 3600000), adminResetTokens);
 
-    const frontendBase =
-      process.env.FRONTEND_URL ||
-      `https://${req.headers.host || "crm.globusdemos.com"}`;
+    const frontendBase = resolveFrontendBase(req);
     const resetUrl = `${frontendBase}/reset-password?token=${encodeURIComponent(token)}`;
 
     // Fire-and-forget — never block the admin's UI on SendGrid latency.
@@ -944,14 +968,9 @@ router.post("/:id/resend-invite", verifyRole(["ADMIN"]), async (req, res) => {
     if (!target) return res.status(404).json({ error: "User not found." });
 
     const token = crypto.randomBytes(32).toString("hex");
-    inviteTokens.set(token, {
-      userId: target.id,
-      expiresAt: Date.now() + 24 * 3600000,
-    });
+    await persistAdminToken(token, target.id, new Date(Date.now() + 24 * 3600000), inviteTokens);
 
-    const frontendBase =
-      process.env.FRONTEND_URL ||
-      `https://${req.headers.host || "crm.globusdemos.com"}`;
+    const frontendBase = resolveFrontendBase(req);
     const inviteUrl = `${frontendBase}/reset-password?token=${encodeURIComponent(token)}`;
 
     sendEmail(

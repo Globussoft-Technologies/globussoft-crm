@@ -539,6 +539,9 @@ router.get("/threads", verifyToken, async (req, res) => {
       if (term) {
         where.OR = [
           { contactPhone: { contains: term } },
+          // WhatsApp display name captured at import (the common case for the
+          // travel inbox, where threads aren't linked CRM contacts).
+          { contactName: { contains: term } },
           { contact: { name: { contains: term } } },
         ];
       }
@@ -570,6 +573,8 @@ router.get("/threads", verifyToken, async (req, res) => {
       ? threads.map((t) => ({
           ...t,
           contactPhone: maskPhone(t.contactPhone),
+          contactName: maskName(t.contactName),
+          contactAvatar: null,
           contact: t.contact
             ? {
                 ...t.contact,

@@ -18,7 +18,13 @@ import { io as socketIO } from 'socket.io-client';
 import { AuthContext } from '../../App';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
-import WhatsAppEmbeddedSignup from '../../components/WhatsAppEmbeddedSignup';
+// ── WhatsApp transport swap ──────────────────────────────────────────────
+// The Meta Cloud API EmbeddedSignup connection panel is COMMENTED OUT (kept on
+// disk, not removed) — wellness now uses the SAME WhatsApp Web (QR-scan)
+// connect/send engine as the travel vertical, via WhatsAppWebConnect +
+// /api/whatsapp-web/*. To revert to Meta, restore the import + the panel below.
+// import WhatsAppEmbeddedSignup from '../../components/WhatsAppEmbeddedSignup';
+import WhatsAppWebConnect from './whatsapp/WhatsAppWebConnect';
 import { WhatsAppThreadsContext } from './whatsapp/WhatsAppThreadsContext';
 import ThreadList from './whatsapp/ThreadList';
 import ThreadDetail from './whatsapp/ThreadDetail';
@@ -537,7 +543,7 @@ export default function WhatsAppThreads() {
         outBody = `${quote}\n${outBody}`;
       }
       try {
-        await fetchApi('/api/whatsapp/send', {
+        await fetchApi('/api/whatsapp-web/send', {
           method: 'POST',
           body: JSON.stringify({ to: detail.thread.contactPhone, body: outBody }),
         });
@@ -620,7 +626,7 @@ export default function WhatsAppThreads() {
 
     setNewSending(true);
     try {
-      const resp = await fetchApi('/api/whatsapp/send', {
+      const resp = await fetchApi('/api/whatsapp-web/send', {
         method: 'POST',
         body: JSON.stringify(payload),
       });
@@ -881,7 +887,7 @@ export default function WhatsAppThreads() {
       // need to use plain fetch here so the browser sets the multipart
       // boundary automatically.
       const token = localStorage.getItem('token');
-      const resp = await fetch('/api/whatsapp/send-media', {
+      const resp = await fetch('/api/whatsapp-web/send-media', {
         method: 'POST',
         headers: token ? { Authorization: `Bearer ${token}` } : {},
         body: form,
@@ -1071,14 +1077,19 @@ export default function WhatsAppThreads() {
         height: '100%', minHeight: 0,
         animation: 'fadeIn 0.4s ease-out',
       }}>
-        {/* P2: WhatsApp connection panel — embedded above the threads grid.
-            Compact mode = slim status bar when CONNECTED, auto-expand on
-            any issue. Admin-only actions (Connect / Reconnect / Disconnect)
-            are RBAC-gated server-side; the UI surfaces buttons for everyone
-            but the API rejects non-admins. */}
-        <div style={{ padding: '0.75rem 1rem 0' }}>
-          <WhatsAppEmbeddedSignup compact />
-        </div>
+        {/* WhatsApp Web (QR-scan) connection bar — replaces the Meta Cloud API
+            EmbeddedSignup panel (commented out above). Scan the QR from your
+            phone to link a number; sends/receives then flow over WhatsApp Web.
+            Legacy Meta panel preserved for reference:
+            <div style={{ padding: '0.75rem 1rem 0' }}>
+              <WhatsAppEmbeddedSignup compact />
+            </div> */}
+        <WhatsAppWebConnect
+          apiBase="/api/whatsapp-web"
+          tenantId={currentUser?.tenantId}
+          isAdmin={isAdmin}
+          onChanged={loadList}
+        />
 
         <div style={{ display: 'flex', flex: 1, gap: 0, minHeight: 0 }}>
           <ThreadList />

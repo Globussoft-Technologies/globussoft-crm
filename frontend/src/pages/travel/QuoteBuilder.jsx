@@ -95,7 +95,7 @@
 import { useEffect, useState, useContext, useCallback } from "react";
 import { useParams } from "react-router-dom";
 import { Calculator, Plus, Trash2, Save, Send, Copy, Download, Check, X, TrendingUp, FileText, ThumbsUp, ThumbsDown } from "lucide-react";
-import { fetchApi } from "../../utils/api";
+import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { AuthContext } from "../../App";
 
@@ -279,7 +279,7 @@ export default function QuoteBuilder() {
         })),
       );
     } catch (err) {
-      notify.error(err?.body?.error || err?.message || "Failed to load lines");
+      notify.error(err?.data?.error || err?.message || "Failed to load lines");
     }
     // notify is stable per RTL standing rule (single object ref).
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -302,7 +302,7 @@ export default function QuoteBuilder() {
         await refreshLines(q.id);
       })
       .catch((err) => {
-        notify.error(err?.body?.error || err?.message || "Failed to load quote");
+        notify.error(err?.data?.error || err?.message || "Failed to load quote");
       })
       .finally(() => setLoading(false));
     // Intentionally only re-run when the route id changes.
@@ -373,7 +373,7 @@ export default function QuoteBuilder() {
       })
       .catch((err) => {
         if (cancelled) return;
-        notify.error(err?.body?.error || err?.message || "Failed to load suppliers");
+        notify.error(err?.data?.error || err?.message || "Failed to load suppliers");
         setSuppliers([]);
       })
       .finally(() => {
@@ -489,7 +489,7 @@ export default function QuoteBuilder() {
       setDraftLines((prev) => prev.filter((d) => d.key !== draft.key));
       notify.success("Line added");
     } catch (err) {
-      notify.error(err?.body?.error || err?.message || "Failed to save line");
+      notify.error(err?.data?.error || err?.message || "Failed to save line");
     } finally {
       setBusyLineKey(null);
     }
@@ -508,7 +508,7 @@ export default function QuoteBuilder() {
       await refreshParentQuote(quoteId);
       notify.success(`Line #${row.id} updated`);
     } catch (err) {
-      notify.error(err?.body?.error || err?.message || "Failed to update line");
+      notify.error(err?.data?.error || err?.message || "Failed to update line");
     } finally {
       setBusyLineKey(null);
     }
@@ -530,7 +530,7 @@ export default function QuoteBuilder() {
       await refreshParentQuote(quoteId);
       notify.success(`Line #${row.id} deleted`);
     } catch (err) {
-      notify.error(err?.body?.error || err?.message || "Failed to delete line");
+      notify.error(err?.data?.error || err?.message || "Failed to delete line");
     } finally {
       setBusyLineKey(null);
       setDeleteTarget(null);
@@ -578,7 +578,7 @@ export default function QuoteBuilder() {
         notify.success(`Quote created (#${created?.id ?? "new"})`);
       }
     } catch (err) {
-      notify.error(err?.body?.error || err?.message || "Save failed");
+      notify.error(err?.data?.error || err?.message || "Save failed");
     } finally {
       setSaving(false);
     }
@@ -621,7 +621,7 @@ export default function QuoteBuilder() {
         "Send queued — will deliver via WhatsApp + email once Q9 credentials land.",
       );
     } catch (err) {
-      notify.error(err?.body?.error || err?.message || "Send failed");
+      notify.error(err?.data?.error || err?.message || "Send failed");
     } finally {
       setSending(false);
       setSendConfirmOpen(false);
@@ -673,7 +673,7 @@ export default function QuoteBuilder() {
         notify.info("Duplicate endpoint not yet available — try again after backend deploy");
         return;
       }
-      notify.error(err?.body?.error || err?.message || "Duplicate failed");
+      notify.error(err?.data?.error || err?.message || "Duplicate failed");
     } finally {
       setDuplicating(false);
     }
@@ -685,14 +685,27 @@ export default function QuoteBuilder() {
       return;
     }
     try {
-      await fetchApi(`/api/travel/quotes/${quoteId}/pdf`);
-      notify.success(`PDF download triggered for quote #${quoteId}`);
-    } catch (err) {
-      if (err?.status === 404) {
-        notify.info("PDF endpoint not yet available — try again after backend deploy");
+      const token = getAuthToken();
+      const response = await fetch(`/api/travel/quotes/${quoteId}/pdf`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        notify.error(errData.error || `PDF download failed (${response.status})`);
         return;
       }
-      notify.error(err?.body?.error || err?.message || "PDF download failed");
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `quote-${quoteId}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      notify.success(`PDF downloaded for quote #${quoteId}`);
+    } catch (err) {
+      notify.error(err?.message || "PDF download failed");
     }
   };
 
@@ -723,7 +736,7 @@ export default function QuoteBuilder() {
         });
       }
     } catch (err) {
-      notify.error(err?.body?.error || err?.message || "Pricing preview failed");
+      notify.error(err?.data?.error || err?.message || "Pricing preview failed");
     } finally {
       setPreviewLoading(false);
     }
@@ -758,12 +771,12 @@ export default function QuoteBuilder() {
     } catch (err) {
       if (err?.status === 409) {
         notify.error(
-          err?.body?.error ||
+          err?.data?.error ||
             "Cannot accept this quote — it is already in a terminal state",
         );
         return;
       }
-      notify.error(err?.body?.error || err?.message || "Accept failed");
+      notify.error(err?.data?.error || err?.message || "Accept failed");
     } finally {
       setAcceptInFlight(false);
     }
@@ -804,12 +817,12 @@ export default function QuoteBuilder() {
     } catch (err) {
       if (err?.status === 409) {
         notify.error(
-          err?.body?.error ||
+          err?.data?.error ||
             "Cannot decline this quote — it is already in a terminal state",
         );
         return;
       }
-      notify.error(err?.body?.error || err?.message || "Decline failed");
+      notify.error(err?.data?.error || err?.message || "Decline failed");
     } finally {
       setDeclineInFlight(false);
     }
@@ -852,7 +865,7 @@ export default function QuoteBuilder() {
         );
         return;
       }
-      notify.error(err?.body?.error || err?.message || "Convert to invoice failed");
+      notify.error(err?.data?.error || err?.message || "Convert to invoice failed");
     }
   };
 

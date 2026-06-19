@@ -310,6 +310,7 @@ model Tenant {
   // ScheduledEmail / Booking) plus sales config (WinLossReason / LeadRoutingRule
   // / Territory) plus support (KbCategory / KbArticle / SlaPolicy).
   calendarIntegrations CalendarIntegration[]
+  gmailIntegrations    GmailIntegration[]
   calendarEvents       CalendarEvent[]
   scheduledEmails      ScheduledEmail[]
   bookings             Booking[]
@@ -1945,6 +1946,17 @@ model WhatsAppMessage {
 model WhatsAppThread {
   id            Int       @id @default(autoincrement())
   contactPhone  String
+  // WhatsApp display name (saved contact name / pushname) captured at import
+  // or first inbound so the inbox shows names — not just numbers — like
+  // WhatsApp Web. Nullable; falls back to contactPhone when unknown.
+  contactName   String?
+  // WhatsApp profile picture (DP) URL captured at import. Nullable (privacy /
+  // no DP). Refreshed on re-import; UI falls back to initials when absent.
+  contactAvatar String?   @db.Text
+  // WhatsApp-Web-style per-chat flags (CRM-side, not synced to WhatsApp):
+  isPinned      Boolean   @default(false)
+  isArchived    Boolean   @default(false)
+  isMuted       Boolean   @default(false)
   status        String    @default("OPEN")
   lastMessageAt DateTime  @default(now())
   lastInboundAt DateTime?
@@ -2429,6 +2441,35 @@ model CalendarIntegration {
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   /// One calendar connection per (user, provider). A user connects their Google calendar once; reconnecting refreshes tokens in place. Note: scoped on userId (already globally unique across tenants), so tenantId is redundant in this key.
+  @@unique([userId, provider])
+}
+
+/// Per-user Gmail connection (OAuth2 via the Gmail API). Mirrors
+/// CalendarIntegration: each staff user connects their own mailbox once;
+/// reconnecting refreshes tokens in place. `emailAddress` is the connected
+/// Gmail address (resolved from the Gmail profile at callback) so the UI can
+/// show "Connected as x@y.com" and the sync can stamp the owning address.
+/// `lastHistoryId` supports incremental sync (Gmail users.history.list) and
+/// the future Pub/Sub push (users.watch) — full sync falls back to
+/// messages.list when it's null.
+model GmailIntegration {
+  id            Int       @id @default(autoincrement())
+  userId        Int
+  provider      String    @default("google") // "google" — kept for parity / future providers
+  emailAddress  String? // the connected mailbox address
+  accessToken   String    @db.Text
+  refreshToken  String?   @db.Text
+  expiresAt     DateTime?
+  syncEnabled   Boolean   @default(true)
+  lastHistoryId String? // Gmail historyId watermark for incremental sync
+  lastSyncAt    DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  tenantId Int    @default(1)
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  /// One Gmail connection per (user, provider) — same convention as CalendarIntegration.
   @@unique([userId, provider])
 }
 
@@ -6386,6 +6427,21 @@ model EmailVerificationOtp {
   createdAt DateTime  @default(now())
 
   @@index([email, purpose])
+}
+
+/// Password-reset tokens, persisted to the DB so they survive backend
+/// restarts / redeploys / multiple instances (the old in-memory Map lost every
+/// outstanding link on any restart → "Invalid or expired" immediately).
+/// One row per forgot-password request; consumed (usedAt set) on success.
+model PasswordResetToken {
+  id        Int       @id @default(autoincrement())
+  token     String    @unique
+  userId    Int
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
 }
 
 /// Idempotency + audit ledger for pre-trip "countdown" nudge emails fired by

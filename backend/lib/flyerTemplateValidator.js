@@ -23,11 +23,12 @@
 //     — 6-digit hex (#RRGGBB). accentHex is optional.
 //
 //   layout:  Array<{ type, x, y, width, height, content?, src?, href? }>
-//     — type ∈ { text, image, cta, divider, logo }
+//     — type ∈ { text, price, image, cta, divider, logo }
 //     — x/y/width/height: non-negative finite numbers (page units, not
 //       pixels — renderer maps to its target surface).
-//     — text needs content; image / logo need src; cta needs content + href;
-//       divider needs nothing extra.
+//     — text / price need content; image / logo need src; cta needs content
+//       (href is OPTIONAL — a flyer CTA renders as a styled label and the link
+//       is contextual); divider needs nothing extra.
 //
 //   assets:  { logo?, hero?, footer? } — optional, string URLs (or null).
 //
@@ -50,7 +51,12 @@
 "use strict";
 
 const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
-const VALID_BLOCK_TYPES = ["text", "image", "cta", "divider", "logo"];
+// `price` is a first-class block in the studio editor (BLOCK_DEFAULTS.price)
+// and the render engine (flyerRenderEngine / flyerPdfRender) — it renders like
+// text but takes its colour from the palette's secondaryHex at draw time. It
+// was missing from this list, which silently rejected (INVALID_TEMPLATE) any
+// flyer containing a Price block on save.
+const VALID_BLOCK_TYPES = ["text", "price", "image", "cta", "divider", "logo"];
 
 /**
  * Validate a hex color string (`#RRGGBB`).
@@ -116,10 +122,11 @@ function validateBlock(block, idx) {
       errors.push(`layout[${idx}].${dim} must be a non-negative number`);
     }
   }
-  // text blocks need non-empty content
-  if (block.type === "text") {
+  // text + price blocks need non-empty content (price renders like text,
+  // coloured from the palette's secondaryHex at draw time).
+  if (block.type === "text" || block.type === "price") {
     if (typeof block.content !== "string" || block.content.length === 0) {
-      errors.push(`layout[${idx}] (text) needs non-empty content`);
+      errors.push(`layout[${idx}] (${block.type}) needs non-empty content`);
     }
   }
   // image / logo blocks need non-empty src
@@ -128,13 +135,18 @@ function validateBlock(block, idx) {
       errors.push(`layout[${idx}] (${block.type}) needs non-empty src`);
     }
   }
-  // cta blocks need content + href
+  // cta blocks need content; href is OPTIONAL. The studio renders a CTA as a
+  // styled label coloured from the brand palette (primaryHex) and the editor
+  // doesn't always capture a link — requiring href here silently blocked
+  // saving any flyer with a CTA. Validate href only when one is supplied.
   if (block.type === "cta") {
     if (typeof block.content !== "string" || block.content.length === 0) {
       errors.push(`layout[${idx}] (cta) needs non-empty content`);
     }
-    if (typeof block.href !== "string" || block.href.length === 0) {
-      errors.push(`layout[${idx}] (cta) needs non-empty href`);
+    if (block.href !== undefined && block.href !== null && block.href !== "") {
+      if (typeof block.href !== "string") {
+        errors.push(`layout[${idx}] (cta) href must be a string if provided`);
+      }
     }
   }
   return errors;

@@ -147,9 +147,10 @@ const Layout = () => {
   // Wellness tenants use Callified.ai for voice — hide the built-in softphone
   const isWellness = tenant?.vertical === "wellness";
   // The softphone FAB is fixed at bottom-right (2rem/2rem) — on the WhatsApp
-  // chat page that is exactly where the composer's send button sits, so the
-  // FAB covers it. Hide the FAB there; every other page keeps it.
-  const isWhatsAppChat = location.pathname === "/travel/whatsapp";
+  // chat page and the Gmail compose page it overlaps the docked composer.
+  // Hide it on those two routes; every other page keeps it.
+  const isWhatsAppChat =
+    location.pathname === "/travel/whatsapp" || location.pathname === "/gmail";
   // T2.1 (extends #228): drawer state for the mobile sidebar (<900px). Desktop
   // (>=900px) ignores this — CSS keeps the sidebar statically positioned.
   const [sidebarOpen, setSidebarOpen] = useState(false);

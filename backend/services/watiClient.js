@@ -1,4 +1,15 @@
 /**
+ * ⚠️ DEPRECATED / DISABLED (Q9 transport swap) — kept on disk, NOT removed.
+ *
+ * The travel vertical no longer dispatches through Wati. It now uses WhatsApp
+ * Web (QR-scan) via services/whatsappWebClient.js, a drop-in that exposes the
+ * same method surface. Every `require("../services/watiClient")` at the call
+ * sites (the chat route + 7 travel crons) is COMMENTED OUT and repointed to
+ * whatsappWebClient. This file is preserved verbatim for reference / a future
+ * re-enable; its unit test (test/services/watiClient.test.js) still pins the
+ * contract. Do not wire it back into a cron/route without re-reviewing Q9.
+ *
+ * ───────────────────────────────────────────────────────────────────────────
  * Wati WhatsApp client — TRAVEL vertical transport (Q9).
  *
  * IMPORTANT — two SEPARATE WhatsApp tracks coexist in this codebase:

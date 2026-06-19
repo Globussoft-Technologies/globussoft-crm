@@ -429,6 +429,18 @@ const presenceColors = ['#ef4444', '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '
 const { setIO } = require('./lib/eventBus');
 setIO(io);
 
+// Travel WhatsApp Web (QR-scan) transport (Q9) — hand the socket server to the
+// session manager so QR codes + inbound messages + delivery receipts can be
+// pushed live to the tenant room. Sessions are lazy (an operator scans the QR
+// from the chat UI to link the number); LocalAuth resumes prior links on the
+// first connect after a restart. Wrapped defensively so a transport hiccup
+// never blocks server boot.
+try {
+  require('./services/whatsappWebClient').init(io);
+} catch (e) {
+  console.error('[server] whatsappWebClient init failed (non-fatal):', e.message);
+}
+
 // req.io is now attached at the top of the middleware chain (above the
 // webhook mount) so the WhatsApp webhook handler can use it. No need
 // to re-attach here — left as a comment marker only.
@@ -522,6 +534,7 @@ const auth2faRoutes = require("./routes/auth_2fa");
 const authStepupRoutes = require("./routes/auth_stepup");
 const ssoRoutes = require("./routes/sso");
 const calendarGoogleRoutes = require("./routes/calendar_google");
+const gmailRoutes = require("./routes/gmail");
 const calendarOutlookRoutes = require("./routes/calendar_outlook");
 const calendarEventsRoutes = require("./routes/calendar_events");
 const voiceRoutes = require("./routes/voice");
@@ -746,7 +759,7 @@ app.use("/api", (req, res, next) => {
   // promotes a contact to a portal user. Removing the entry routes the
   // unauthenticated case through the global guard's 401 (RFC 7235), and
   // the authenticated case continues unaffected.
-  const openPaths = ["/auth/login", "/auth/signup", "/auth/register", "/auth/customer/register", "/auth/email-otp", "/auth/check-email", "/auth/public/tenants", "/auth/forgot-password", "/auth/reset-password", "/auth/2fa/verify", "/health", "/marketplace-leads/webhook", "/sms/webhook", "/whatsapp/webhook", "/telephony/webhook", "/push/subscribe/visitor", "/push/vapid-key", "/communications/track/", "/sso/google/callback", "/sso/microsoft/callback", "/sso/google/start", "/sso/microsoft/start", "/email/inbound", "/calendar/google/callback", "/calendar/outlook/callback", "/voice/webhook", "/portal/login", "/portal/register", "/portal/forgot", "/portal/reset", "/portal/me", "/portal/tickets", "/portal/invoices", "/portal/contracts", "/portal/travel", "/portal/kyc", "/signatures/sign", "/surveys/respond", "/surveys/public", "/chatbots/chat", "/web-visitors/track", "/payments/webhook", "/accounting/webhook", "/scim/v2", "/booking-pages/public", "/knowledge-base/public", "/live-chat/visitor", "/document-views/track", "/zapier/webhook", "/marketing/submit", "/v1/external", "/v1/voyagr", "/v1/flight-plugin", "/wellness/public", "/wellness/portal", "/attendance/biometric/webhook", "/travel/microsites/public", "/travel/diagnostics/public", "/travel/itineraries/public", "/travel/reviews/public", "/travel/inbound/leads", "/travel/whatsapp/webhook", "/travel/whatsapp/media", "/v1/flyers/public", "/security/csp-report", "/privacy-policy", "/deleted-account-policy", "/terms-and-conditions", "/legal"];
+  const openPaths = ["/auth/login", "/auth/signup", "/auth/register", "/auth/customer/register", "/auth/email-otp", "/auth/check-email", "/auth/public/tenants", "/auth/forgot-password", "/auth/reset-password", "/auth/2fa/verify", "/health", "/marketplace-leads/webhook", "/sms/webhook", "/whatsapp/webhook", "/telephony/webhook", "/push/subscribe/visitor", "/push/vapid-key", "/communications/track/", "/sso/google/callback", "/sso/microsoft/callback", "/sso/google/start", "/sso/microsoft/start", "/email/inbound", "/calendar/google/callback", "/gmail/callback", "/calendar/outlook/callback", "/voice/webhook", "/portal/login", "/portal/register", "/portal/forgot", "/portal/reset", "/portal/me", "/portal/tickets", "/portal/invoices", "/portal/contracts", "/portal/travel", "/portal/kyc", "/signatures/sign", "/surveys/respond", "/surveys/public", "/chatbots/chat", "/web-visitors/track", "/payments/webhook", "/accounting/webhook", "/scim/v2", "/booking-pages/public", "/knowledge-base/public", "/live-chat/visitor", "/document-views/track", "/zapier/webhook", "/marketing/submit", "/v1/external", "/v1/voyagr", "/v1/flight-plugin", "/wellness/public", "/wellness/portal", "/attendance/biometric/webhook", "/travel/microsites/public", "/travel/diagnostics/public", "/travel/itineraries/public", "/travel/reviews/public", "/travel/inbound/leads", "/travel/whatsapp/webhook", "/travel/whatsapp/media", "/v1/flyers/public", "/security/csp-report", "/privacy-policy", "/deleted-account-policy", "/terms-and-conditions", "/legal"];
   if (openPaths.some(p => req.path.startsWith(p))) return next();
   // Public marketing catalog — the /pricing page hits GET /subscriptions/plans
   // anonymously. Admin CRUD (POST/PUT/DELETE + GET /plans/admin) stays gated
@@ -868,6 +881,11 @@ app.use("/api/audit", auditRoutes);
 app.use("/api/marketplace-leads", marketplaceLeadsRoutes);
 app.use("/api/sms", smsRoutes);
 app.use("/api/whatsapp", whatsappRoutes);
+// Vertical-agnostic WhatsApp Web (QR-scan) transport — same engine as travel,
+// scoped to req.user.tenantId, so the wellness inbox can use scan-and-connect
+// instead of the Meta Cloud API. Mounted AFTER /api/whatsapp so the shared
+// threads CRUD is unaffected.
+app.use("/api/whatsapp-web", require("./routes/whatsapp_web"));
 // P2: WhatsApp embedded-signup onboarding routes. Mounted as a separate
 // router under /api/whatsapp/onboard so the rate-limiter + auth guard
 // pipeline above applies, but the route handlers live in
@@ -889,6 +907,7 @@ app.use("/api/auth/2fa", auth2faRoutes);
 app.use("/api/auth/step-up", authStepupRoutes);
 app.use("/api/sso", ssoRoutes);
 app.use("/api/calendar/google", calendarGoogleRoutes);
+app.use("/api/gmail", gmailRoutes);
 app.use("/api/calendar/outlook", calendarOutlookRoutes);
 app.use("/api/calendar/events", calendarEventsRoutes);
 app.use("/api/voice", voiceRoutes);

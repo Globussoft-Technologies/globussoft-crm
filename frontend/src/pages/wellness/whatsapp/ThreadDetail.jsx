@@ -17,6 +17,7 @@ import { useWhatsAppThreads } from './WhatsAppThreadsContext';
 import StatusPill from './StatusPill';
 import DeliveryTicks from './DeliveryTicks';
 import MessageMedia from './MessageMedia';
+import { ThreadAvatar, prettyContactLine } from './ThreadList';
 
 export default function ThreadDetail() {
   const {
@@ -83,6 +84,12 @@ export default function ThreadDetail() {
           }}>
             {/* Row 1 — name (or phone) + Edit pencil + Status pill on the right */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+              <ThreadAvatar
+                url={detail.thread.contactAvatar}
+                label={detail.thread.contact?.name || detail.thread.contactName || detail.thread.patient?.name || detail.thread.contactPhone}
+                size={38}
+                clickable
+              />
               {renaming ? (
                 <>
                   <input
@@ -127,7 +134,7 @@ export default function ThreadDetail() {
                     fontSize: '1.05rem', fontWeight: 700, margin: 0,
                     overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0,
                   }}>
-                    {detail.thread.contact?.name || detail.thread.patient?.name || detail.thread.contactPhone}
+                    {detail.thread.contact?.name || detail.thread.contactName || detail.thread.patient?.name || detail.thread.contactPhone}
                   </h2>
                   {isAdmin && (
                     <button
@@ -150,7 +157,7 @@ export default function ThreadDetail() {
 
             {/* Row 2 — phone + assignment + snooze info */}
             <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', margin: 0 }}>
-              {detail.thread.contactPhone}
+              {prettyContactLine(detail.thread.contactPhone)}
               {detail.thread.assignedTo && (
                 <> · Assigned to {detail.thread.assignedTo.name || detail.thread.assignedTo.email}</>
               )}

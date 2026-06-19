@@ -66,10 +66,17 @@ const fs = require("fs");
 const crypto = require("crypto");
 const multer = require("multer");
 const router = express.Router();
-const { verifyToken } = require("../middleware/auth");
+const { verifyToken, verifyRole } = require("../middleware/auth");
 const { requireTravelTenant } = require("../middleware/travelGuards");
 const prisma = require("../lib/prisma");
-const watiClient = require("../services/watiClient");
+// ── WhatsApp transport swap (Q9) ───────────────────────────────────────────
+// The Wati REST transport is COMMENTED OUT (kept on disk, not removed) — the
+// travel vertical now sends/receives over WhatsApp Web (QR-scan) via
+// services/whatsappWebClient.js, a drop-in that exposes the same method
+// surface. The local name stays `watiClient` so the call sites below are
+// unchanged; only the module behind it changed.
+// const watiClient = require("../services/watiClient"); // legacy Wati REST (disabled)
+const watiClient = require("../services/whatsappWebClient");
 const { toE164 } = require("../utils/deduplication");
 
 // Outbound media upload (paperclip in the travel chat) — memory storage,
@@ -84,9 +91,13 @@ const mediaUpload = multer({
 // null on garbage — fall back to a digits-only best effort so a weird Wati
 // waId still produces a stable, consistent key.
 function threadPhone(raw) {
-  const e164 = toE164(String(raw || ""));
+  const s = String(raw || "");
+  // Group / chat ids (contain "@", e.g. "<id>@g.us") and our lid: keys are used
+  // verbatim — they're stable thread keys, not phone numbers to normalise.
+  if (s.includes("@") || s.startsWith("lid:")) return s;
+  const e164 = toE164(s);
   if (e164) return e164;
-  const digits = String(raw || "").replace(/\D/g, "");
+  const digits = s.replace(/\D/g, "");
   return digits ? `+${digits}` : null;
 }
 
@@ -177,23 +188,204 @@ router.get("/whatsapp/media", async (req, res) => {
 });
 
 // ───────────────────────────────────────────────────────────────────
-// GET /whatsapp/status — Wati config state for the chat status strip.
+// GET /whatsapp/status — WhatsApp Web connection state for the chat
+// status strip + QR connect panel.
+//
+//   { enabled, state, connected, phone(masked), qr(dataURL|null), channelNumber }
+//
+// `enabled`/`channelNumber` are retained for back-compat with the existing
+// chat header; the new fields (state/connected/phone/qr) drive the QR
+// connect flow. The legacy Wati-shaped status the old strip read is
+// preserved in spirit: connected ⇒ enabled:true with the masked number.
 // ───────────────────────────────────────────────────────────────────
+function maskNumber(num) {
+  const s = String(num || "");
+  return s.length >= 7 ? `${s.slice(0, 4)}•••${s.slice(-3)}` : s || null;
+}
+
 router.get(
   "/whatsapp/status",
   verifyToken,
   requireTravelTenant,
-  async (_req, res) => {
-    const cfg = watiClient.getConfig();
-    const channel = cfg.channelNumber;
+  async (req, res) => {
+    const st = watiClient.getState(req.travelTenant.id);
     res.json({
-      enabled: watiClient.isEnabled(),
-      // Mask the middle of the channel number — operators only need to
-      // recognise which number is connected.
-      channelNumber: channel
-        ? `${channel.slice(0, 4)}•••${channel.slice(-3)}`
-        : null,
+      enabled: st.connected,
+      state: st.state,
+      connected: st.connected,
+      phone: maskNumber(st.phone),
+      channelNumber: maskNumber(st.phone),
+      qr: st.qr || null,
+      lastError: st.lastError || null,
     });
+  },
+);
+
+// ───────────────────────────────────────────────────────────────────
+// QR connection lifecycle (ADMIN). The operator scans the QR from their
+// phone (WhatsApp → Linked devices) to link the number; thereafter the
+// CRM sends/receives on it. State + QR are pushed live over the
+// "whatsapp:qr" / "whatsapp:wa-state" socket events AND pollable here.
+// ───────────────────────────────────────────────────────────────────
+
+// POST /whatsapp/connect — start (or resume) the session; returns the
+// current state (QR arrives moments later via socket / GET /whatsapp/qr).
+router.post(
+  "/whatsapp/connect",
+  verifyToken,
+  requireTravelTenant,
+  verifyRole(["ADMIN"]),
+  async (req, res) => {
+    try {
+      // { reset:true } wipes any saved/stale session + kills a stuck Chromium
+      // before relaunching — the escape hatch for a wedged "Generating QR…".
+      const reset = Boolean(req.body && (req.body.reset === true || req.body.reset === "true"));
+      // A fresh user-initiated connect starts from a clean slate so the import
+      // is an exact mirror (and any residue from an earlier session is cleared)
+      // — "connect → fetch fresh". Skip when already connected (idempotent).
+      if (!watiClient.getState(req.travelTenant.id).connected) {
+        await watiClient.purgeChats(req.travelTenant.id);
+      }
+      const st = await watiClient.connect(req.travelTenant.id, { reset });
+      res.json({ ...st, phone: maskNumber(st.phone) });
+    } catch (e) {
+      console.error("[travel-whatsapp] connect error:", e.message);
+      res.status(500).json({ error: "Failed to start WhatsApp Web session", code: "WA_CONNECT_FAILED" });
+    }
+  },
+);
+
+// GET /whatsapp/qr — poll the current QR / connection state (socket fallback).
+router.get(
+  "/whatsapp/qr",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    const st = watiClient.getState(req.travelTenant.id);
+    res.json({ state: st.state, connected: st.connected, qr: st.qr || null, phone: maskNumber(st.phone), lastError: st.lastError || null });
+  },
+);
+
+// POST /whatsapp/import — re-pull the linked account's existing chats into the
+// CRM inbox (runs automatically on connect; this is the manual "refresh all"
+// button). Real 1:1 chats only — groups / channels / @lid are skipped.
+router.post(
+  "/whatsapp/import",
+  verifyToken,
+  requireTravelTenant,
+  verifyRole(["ADMIN"]),
+  async (req, res) => {
+    try {
+      if (!watiClient.isEnabled(req.travelTenant.id)) {
+        return res.status(409).json({ error: "WhatsApp is not connected — scan the QR first.", code: "WA_NOT_CONNECTED" });
+      }
+      const result = await watiClient.importAllChats(req.travelTenant.id);
+      res.json(result);
+    } catch (e) {
+      console.error("[travel-whatsapp] import error:", e.message);
+      res.status(500).json({ error: "Failed to import chats", code: "WA_IMPORT_FAILED" });
+    }
+  },
+);
+
+// POST /whatsapp/disconnect — tear down the session. body { logout:true }
+// also clears the saved link so the next connect needs a fresh scan.
+router.post(
+  "/whatsapp/disconnect",
+  verifyToken,
+  requireTravelTenant,
+  verifyRole(["ADMIN"]),
+  async (req, res) => {
+    try {
+      const logout = (req.body && (req.body.logout === true || req.body.logout === "true")) || false;
+      const st = await watiClient.disconnect(req.travelTenant.id, { logout });
+      // The linked account is a live mirror — disconnecting clears the imported
+      // chats so a fresh connect re-fetches from scratch (no stale threads).
+      const purged = await watiClient.purgeChats(req.travelTenant.id);
+      res.json({ ...st, purged });
+    } catch (e) {
+      console.error("[travel-whatsapp] disconnect error:", e.message);
+      res.status(500).json({ error: "Failed to disconnect WhatsApp Web session", code: "WA_DISCONNECT_FAILED" });
+    }
+  },
+);
+
+// ───────────────────────────────────────────────────────────────────
+// Own WhatsApp profile (the linked account) — view + edit (ADMIN).
+//   GET    /whatsapp/me            → { connected, phone, name, about, avatar }
+//   PUT    /whatsapp/me            → update display name / about
+//   POST   /whatsapp/me/avatar     → change own profile picture (multipart)
+//   DELETE /whatsapp/me/avatar     → remove own profile picture
+// ───────────────────────────────────────────────────────────────────
+router.get(
+  "/whatsapp/me",
+  verifyToken,
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const me = await watiClient.getOwnProfile(req.travelTenant.id);
+      res.json(me);
+    } catch (e) {
+      console.error("[travel-whatsapp] me error:", e.message);
+      res.status(500).json({ error: "Failed to load WhatsApp profile", code: "WA_ME_FAILED" });
+    }
+  },
+);
+
+router.put(
+  "/whatsapp/me",
+  verifyToken,
+  requireTravelTenant,
+  verifyRole(["ADMIN"]),
+  async (req, res) => {
+    try {
+      const name = typeof req.body?.name === "string" ? req.body.name : undefined;
+      const about = typeof req.body?.about === "string" ? req.body.about : undefined;
+      const out = await watiClient.setOwnProfile(req.travelTenant.id, { name, about });
+      res.json(out);
+    } catch (e) {
+      console.error("[travel-whatsapp] me update error:", e.message);
+      res.status(e.message === "WhatsApp not connected" ? 409 : 500)
+        .json({ error: e.message || "Failed to update WhatsApp profile", code: "WA_ME_UPDATE_FAILED" });
+    }
+  },
+);
+
+router.post(
+  "/whatsapp/me/avatar",
+  verifyToken,
+  requireTravelTenant,
+  verifyRole(["ADMIN"]),
+  mediaUpload.single("file"),
+  async (req, res) => {
+    try {
+      if (!req.file || !req.file.buffer || !req.file.buffer.length) {
+        return res.status(400).json({ error: "image file is required", code: "MISSING_FILE" });
+      }
+      const out = await watiClient.setOwnProfilePicture(req.travelTenant.id, req.file.buffer, req.file.mimetype);
+      res.json(out);
+    } catch (e) {
+      console.error("[travel-whatsapp] me avatar error:", e.message);
+      res.status(e.message === "WhatsApp not connected" ? 409 : 500)
+        .json({ error: e.message || "Failed to set profile picture", code: "WA_ME_AVATAR_FAILED" });
+    }
+  },
+);
+
+router.delete(
+  "/whatsapp/me/avatar",
+  verifyToken,
+  requireTravelTenant,
+  verifyRole(["ADMIN"]),
+  async (req, res) => {
+    try {
+      const out = await watiClient.deleteOwnProfilePicture(req.travelTenant.id);
+      res.json(out);
+    } catch (e) {
+      console.error("[travel-whatsapp] me avatar delete error:", e.message);
+      res.status(e.message === "WhatsApp not connected" ? 409 : 500)
+        .json({ error: e.message || "Failed to remove profile picture", code: "WA_ME_AVATAR_DEL_FAILED" });
+    }
   },
 );
 
@@ -582,19 +774,19 @@ router.post(
 // public deployment, real-time delivery comes from the webhook and this
 // sync is just the safety net — a high debounce costs nothing then.
 // ───────────────────────────────────────────────────────────────────
-const _lastSyncAt = new Map(); // tenantId → epoch ms
-const SYNC_DEBOUNCE_MS = (() => {
-  const v = parseInt(process.env.WATI_SYNC_DEBOUNCE_MS, 10);
-  return Number.isFinite(v) && v >= 5_000 ? v : 25_000;
-})();
-const SYNC_CONTACTS = 15;
-
+const _lastSyncAt = new Map(); // tenantId → epoch ms (legacy Wati pull state)
+// LEGACY Wati pull-sync config (used only by the disabled pull body below):
+// const SYNC_DEBOUNCE_MS = (() => {
+//   const v = parseInt(process.env.WATI_SYNC_DEBOUNCE_MS, 10);
+//   return Number.isFinite(v) && v >= 5_000 ? v : 25_000;
+// })();
+// const SYNC_CONTACTS = 15;
 // Wati statusString → our enum, rank-ordered so reconciliation only ever
 // ADVANCES a row (an older poll item saying DELIVERED must not downgrade a
 // READ row). FAILED and DELIVERED share a rank because neither can follow
 // the other: a failed message never delivered, a delivered one can't
 // retroactively fail.
-const OUTBOUND_STATUS_RANK = { QUEUED: 0, SENT: 1, FAILED: 2, DELIVERED: 2, READ: 3 };
+// const OUTBOUND_STATUS_RANK = { QUEUED: 0, SENT: 1, FAILED: 2, DELIVERED: 2, READ: 3 };
 
 router.post(
   "/whatsapp/sync",
@@ -602,9 +794,21 @@ router.post(
   requireTravelTenant,
   async (req, res) => {
     try {
-      if (!watiClient.isEnabled()) {
-        return res.json({ synced: false, reason: "stub-mode" });
+      // WhatsApp Web delivers inbound in REAL TIME via the puppeteer session's
+      // `message` event (no webhook/tunnel needed), so the old Wati pull-sync
+      // is redundant. When connected we report "realtime"; when not yet
+      // scanned we report "not-connected". The chat fires this fire-and-forget
+      // on every poll — both answers are harmless no-ops.
+      if (!watiClient.isEnabled(req.travelTenant.id)) {
+        return res.json({ synced: false, reason: "not-connected" });
       }
+      return res.json({ synced: false, reason: "realtime" });
+
+      /* ── LEGACY Wati pull-sync (DISABLED, kept for reference) ────────────
+         The block below is the old Wati REST pull (getContacts → getMessages
+         → reconcile + ingest). WhatsApp Web replaces it with the real-time
+         `message` event in services/whatsappWebClient.js, so this is no longer
+         reached. Preserved verbatim (nothing removed) per the transport swap.
       const tenantId = req.travelTenant.id;
       const now = Date.now();
       const last = _lastSyncAt.get(tenantId) || 0;
@@ -776,6 +980,7 @@ router.post(
       }
 
       res.json({ synced: true, contactsChecked: contacts.length, newMessages, threadsTouched, statusUpdates });
+      ── end legacy Wati pull-sync ──────────────────────────────────────── */
     } catch (e) {
       console.error("[travel-whatsapp] sync error:", e.message);
       res.json({ synced: false, error: e.message });

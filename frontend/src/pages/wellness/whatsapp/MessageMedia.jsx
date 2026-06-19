@@ -1,4 +1,5 @@
 
+import { openImage } from './ImageLightbox';
 
 // Render an inline preview for media messages. The backend (cron/
 // whatsappMediaEngine.js) downloads Meta media → uploads to S3 →
@@ -12,15 +13,16 @@ export default function MessageMedia({ message }) {
     return <em style={{ opacity: 0.6, fontSize: '0.8rem' }}>Loading media…</em>;
   }
   if (!url) return <em style={{ opacity: 0.6 }}>(media)</em>;
-  if (type.startsWith('image')) {
+  if (type.startsWith('image') || type === 'sticker') {
+    // Click to view full size in the in-app lightbox (WhatsApp-Web style).
     return (
-      <a href={url} target="_blank" rel="noreferrer">
-        <img
-          src={url}
-          alt="media"
-          style={{ maxWidth: '100%', maxHeight: 300, borderRadius: 8, display: 'block' }}
-        />
-      </a>
+      <img
+        src={url}
+        alt="media"
+        onClick={() => openImage(url)}
+        title="View image"
+        style={{ maxWidth: '100%', maxHeight: 300, borderRadius: 8, display: 'block', cursor: 'zoom-in' }}
+      />
     );
   }
   if (type.startsWith('video')) {

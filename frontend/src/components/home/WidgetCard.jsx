@@ -153,7 +153,6 @@ function BodyState({ children, tone, role }) {
 
 const cardStyle = {
   position: 'relative',
-  overflow: 'hidden',
   border: '1px solid var(--border-color)',
   borderRadius: 14,
   padding: '1rem 1.1rem 0.85rem 1.25rem',
@@ -161,7 +160,9 @@ const cardStyle = {
   display: 'flex',
   flexDirection: 'column',
   gap: '0.85rem',
-  minHeight: 200,
+  height: '100%',
+  boxSizing: 'border-box',
+  overflow: 'hidden',
   transition:
     'transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease',
 };
@@ -206,8 +207,10 @@ const bodyStyle = {
   flex: 1,
   display: 'flex',
   flexDirection: 'column',
-  justifyContent: 'center',
   gap: '0.5rem',
+  minHeight: 0,
+  overflowY: 'auto',
+  overflowX: 'hidden',
 };
 
 const footerStyle = {
@@ -296,7 +299,7 @@ const emptyHintStyle = {
   lineHeight: 1.4,
 };
 
-// Generic body-state (loading / error)
+// Generic body-state (loading / error) — self-centers inside the flex body
 const bodyStateStyle = {
   flex: 1,
   display: 'flex',
@@ -305,4 +308,5 @@ const bodyStateStyle = {
   gap: '0.5rem',
   fontSize: '0.85rem',
   textAlign: 'center',
+  margin: 'auto',
 };

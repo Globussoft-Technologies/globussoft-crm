@@ -760,7 +760,7 @@ router.post(
 router.post(
   "/suppliers/:id/reconciliation-batches/:batchId/reconcile",
   verifyToken,
-  requirePermission("suppliers", "update"),
+  requirePermission("suppliers", "manage"),
   requireTravelTenant,
   makeTransitionHandler({
     from: ["reviewed"],

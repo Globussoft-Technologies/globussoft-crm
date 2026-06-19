@@ -1,3 +1,4 @@
+/* global afterEach */
 /**
  * Test-harness guards against real-DB fall-through.
  *
@@ -278,5 +279,30 @@ function prismaSurfaceGuard() {
 }
 
 prismaSurfaceGuard();
+
+/**
+ * T40 — clear the RBAC permission cache between every test.
+ *
+ * The permission resolver caches effective grants per (tenantId, userId) for
+ * 30 seconds. Singleton-patch route tests reuse the same userId (typically 7)
+ * across many roles (ADMIN / MANAGER / USER) in the same file. Without a
+ * teardown, a USER test that runs after an ADMIN test reuses the cached ADMIN
+ * grants and gets allowed through routes it should be denied; conversely, a
+ * MANAGER test after a USER test reuses an empty cache and gets spurious 403s.
+ *
+ * Clearing the cache after each test keeps the legacy role-derived fallback
+ * deterministic and prevents cross-test pollution.
+ */
+if (process.env.VITEST === 'true') {
+  try {
+    const { clearAllCache } = require('../middleware/requirePermission');
+    if (typeof afterEach === 'function') {
+      afterEach(() => clearAllCache());
+    }
+  } catch {
+    // If the middleware can't be loaded in this context, leave cache handling
+    // to individual tests.
+  }
+}
 
 module.exports = { dbFallthroughGuard, prismaSurfaceGuard };

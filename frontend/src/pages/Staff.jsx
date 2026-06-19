@@ -920,7 +920,7 @@ export default function Staff() {
       )}
 
       {/* Staff Table */}
-      <div className="card" style={{ padding: '2rem', overflow: 'auto' }}>
+      <div className="card" style={{ padding: '2rem' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', marginBottom: '1.25rem', flexWrap: 'wrap' }}>
           <h3 style={{ fontSize: '1.15rem', fontWeight: '600', margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <UsersRound size={20} color="var(--accent-color)" /> Team Members

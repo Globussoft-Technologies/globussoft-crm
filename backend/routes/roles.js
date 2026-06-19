@@ -9,7 +9,12 @@ const express = require("express");
 const router = express.Router();
 const prisma = require("../lib/prisma");
 const { verifyToken } = require("../middleware/auth");
-const { requirePermission, requireAnyPermission, clearUserCache, clearTenantCache } = require("../middleware/requirePermission");
+const {
+  requirePermission,
+  requireAnyPermission,
+  clearUserCache,
+  clearTenantCache,
+} = require("../middleware/requirePermission");
 
 // Settings-side recovery surface: the /settings Role Recovery section
 // reuses these endpoints via the OR-gate below. Permission keys held
@@ -47,7 +52,10 @@ const {
 } = require("../lib/permissionCatalog");
 const { validateRoleKey } = require("../lib/roleKey");
 const { writeAudit } = require("../lib/audit");
-const { validateLandingPath, normalizeLandingPath } = require("../lib/landingPath");
+const {
+  validateLandingPath,
+  normalizeLandingPath,
+} = require("../lib/landingPath");
 const {
   checkLockout,
   CRITICAL_RBAC_PERMISSIONS,
@@ -99,13 +107,8 @@ async function getTenantVertical(tenantId) {
   }
 }
 const { isValidWidgetKey } = require("../lib/widgetCatalog");
-const {
-  getAccessiblePages,
-  canAccessPath,
-} = require("../lib/pageCatalog");
-const {
-  getNewlyGrantedSensitive,
-} = require("../lib/sensitivePermissions");
+const { getAccessiblePages, canAccessPath } = require("../lib/pageCatalog");
+const { getNewlyGrantedSensitive } = require("../lib/sensitivePermissions");
 
 // Count how many users currently hold the ADMIN role within a tenant.
 // Used by the last-admin guards on assign / unassign / permission-strip.
@@ -190,9 +193,9 @@ router.get(
         where: { tenantId },
         include: {
           permissions: true,
-          _count: { select: { userRoles: true } }
+          _count: { select: { userRoles: true } },
         },
-        orderBy: [{ isSystem: "desc" }, { name: "asc" }]
+        orderBy: [{ isSystem: "desc" }, { name: "asc" }],
       });
 
       // Bug 5 — count consistency. The Roles table badge previously
@@ -230,7 +233,7 @@ router.get(
       };
 
       res.json({
-        roles: roles.map(role => {
+        roles: roles.map((role) => {
           const visible = (role.permissions || []).filter((p) =>
             isVisible(p.module, p.action),
           );
@@ -249,7 +252,7 @@ router.get(
       console.error("[roles] list error:", err);
       res.status(500).json({ error: "Failed to list roles" });
     }
-  }
+  },
 );
 
 // GET /api/roles/catalog — the permission catalog (module → [actions]).
@@ -282,7 +285,10 @@ router.get(
     } catch (err) {
       // DB blip — fall through to the generic catalog rather than 500.
       // Worst case the matrix shows fewer modules until the next request.
-      console.error("[roles.catalog] tenant vertical lookup failed:", err && err.message);
+      console.error(
+        "[roles.catalog] tenant vertical lookup failed:",
+        err && err.message,
+      );
     }
     const catalog = vertical ? getCatalogForVertical(vertical) : getCatalog();
     const modules = Object.entries(catalog).map(([module, actions]) => ({
@@ -293,7 +299,7 @@ router.get(
       ? getGroupedCatalogForVertical(vertical)
       : getGroupedCatalog();
     res.json({ catalog, modules, domains, vertical });
-  }
+  },
 );
 
 // GET /api/roles/:id — single role with permissions and user count
@@ -308,8 +314,8 @@ router.get(
         where: { id: roleId },
         include: {
           permissions: true,
-          _count: { select: { userRoles: true } }
-        }
+          _count: { select: { userRoles: true } },
+        },
       });
 
       if (!role) {
@@ -324,13 +330,13 @@ router.get(
       res.json({
         ...role,
         userCount: role._count.userRoles,
-        _count: undefined
+        _count: undefined,
       });
     } catch (err) {
       console.error("[roles] get error:", err);
       res.status(500).json({ error: "Failed to fetch role" });
     }
-  }
+  },
 );
 
 // POST /api/roles — create a new role
@@ -363,12 +369,14 @@ router.post(
       const existingRole = await prisma.role.findFirst({
         where: {
           tenantId: req.user.tenantId,
-          key
-        }
+          key,
+        },
       });
 
       if (existingRole) {
-        return res.status(409).json({ error: "Role key already exists in this tenant" });
+        return res
+          .status(409)
+          .json({ error: "Role key already exists in this tenant" });
       }
 
       const role = await prisma.role.create({
@@ -382,21 +390,28 @@ router.post(
           isActive: true,
           landingPath: normalizeLandingPath(landingPath),
         },
-        include: { permissions: true }
+        include: { permissions: true },
       });
 
-      await writeAudit("Role", "CREATE_ROLE", req.user.userId, req.user.userId, req.user.tenantId, {
-        roleId: role.id,
-        key: role.key,
-        name: role.name
-      });
+      await writeAudit(
+        "Role",
+        "CREATE_ROLE",
+        req.user.userId,
+        req.user.userId,
+        req.user.tenantId,
+        {
+          roleId: role.id,
+          key: role.key,
+          name: role.name,
+        },
+      );
 
       res.status(201).json(role);
     } catch (err) {
       console.error("[roles] create error:", err);
       res.status(500).json({ error: "Failed to create role" });
     }
-  }
+  },
 );
 
 // PUT /api/roles/:id — update role (not key/isSystem). landingPath IS
@@ -431,14 +446,19 @@ router.put(
       // surfacing 403 makes the contract explicit + protects against
       // a future contributor extending the destructure.
       if (role.isSystem) {
-        const bodyKey = req.body && Object.prototype.hasOwnProperty.call(req.body, "key");
-        const bodyUserType = req.body && Object.prototype.hasOwnProperty.call(req.body, "userType");
+        const bodyKey =
+          req.body && Object.prototype.hasOwnProperty.call(req.body, "key");
+        const bodyUserType =
+          req.body &&
+          Object.prototype.hasOwnProperty.call(req.body, "userType");
         if (bodyKey || bodyUserType) {
           return res.status(403).json({
             error: "System role identity cannot be modified",
             code: "SYSTEM_ROLE_IDENTITY_LOCKED",
             roleKey: role.key,
-            fields: [bodyKey && "key", bodyUserType && "userType"].filter(Boolean),
+            fields: [bodyKey && "key", bodyUserType && "userType"].filter(
+              Boolean,
+            ),
           });
         }
       }
@@ -470,24 +490,35 @@ router.put(
         where: { id: roleId },
         data: {
           name: name !== undefined ? name : role.name,
-          description: description !== undefined ? description : role.description,
-          landingPath: landingPath !== undefined ? normalizeLandingPath(landingPath) : role.landingPath,
+          description:
+            description !== undefined ? description : role.description,
+          landingPath:
+            landingPath !== undefined
+              ? normalizeLandingPath(landingPath)
+              : role.landingPath,
         },
-        include: { permissions: true }
+        include: { permissions: true },
       });
 
-      await writeAudit("Role", "UPDATE_ROLE", req.user.userId, req.user.userId, req.user.tenantId, {
-        roleId: updated.id,
-        key: updated.key,
-        changes: { name, description, landingPath }
-      });
+      await writeAudit(
+        "Role",
+        "UPDATE_ROLE",
+        req.user.userId,
+        req.user.userId,
+        req.user.tenantId,
+        {
+          roleId: updated.id,
+          key: updated.key,
+          changes: { name, description, landingPath },
+        },
+      );
 
       res.json(updated);
     } catch (err) {
       console.error("[roles] update error:", err);
       res.status(500).json({ error: "Failed to update role" });
     }
-  }
+  },
 );
 
 // DELETE /api/roles/:id — delete role (409 if users assigned)
@@ -501,7 +532,7 @@ router.delete(
 
       const role = await prisma.role.findUnique({
         where: { id: roleId },
-        include: { _count: { select: { userRoles: true } } }
+        include: { _count: { select: { userRoles: true } } },
       });
 
       if (!role) {
@@ -535,24 +566,31 @@ router.delete(
         return res.status(409).json({
           error: `Cannot delete role with ${role._count.userRoles} assigned users`,
           code: "ROLE_IN_USE",
-          userCount: role._count.userRoles
+          userCount: role._count.userRoles,
         });
       }
 
       await prisma.role.delete({ where: { id: roleId } });
 
-      await writeAudit("Role", "DELETE_ROLE", req.user.userId, req.user.userId, req.user.tenantId, {
-        roleId,
-        key: role.key,
-        name: role.name
-      });
+      await writeAudit(
+        "Role",
+        "DELETE_ROLE",
+        req.user.userId,
+        req.user.userId,
+        req.user.tenantId,
+        {
+          roleId,
+          key: role.key,
+          name: role.name,
+        },
+      );
 
       res.json({ success: true });
     } catch (err) {
       console.error("[roles] delete error:", err);
       res.status(500).json({ error: "Failed to delete role" });
     }
-  }
+  },
 );
 
 // GET /api/roles/:id/permissions — list role's permissions
@@ -566,7 +604,7 @@ router.get(
 
       const role = await prisma.role.findUnique({
         where: { id: roleId },
-        include: { permissions: true }
+        include: { permissions: true },
       });
 
       if (!role) {
@@ -583,7 +621,7 @@ router.get(
       console.error("[roles] permissions list error:", err);
       res.status(500).json({ error: "Failed to fetch permissions" });
     }
-  }
+  },
 );
 
 // POST /api/roles/:id/permissions — grant one permission to role
@@ -597,11 +635,15 @@ router.post(
       const { module, action } = req.body;
 
       if (!module || !action) {
-        return res.status(400).json({ error: "module and action are required" });
+        return res
+          .status(400)
+          .json({ error: "module and action are required" });
       }
 
       if (!isValidPermission(module, action)) {
-        return res.status(400).json({ error: "Invalid module.action permission" });
+        return res
+          .status(400)
+          .json({ error: "Invalid module.action permission" });
       }
 
       const role = await prisma.role.findUnique({ where: { id: roleId } });
@@ -621,7 +663,11 @@ router.post(
       // travel tenant) with the exact 400 shape the QA spec pins.
       if (strictVerticalValidationOn()) {
         const vertical = await getTenantVertical(role.tenantId);
-        const verticalCheck = validatePermissionForVertical(module, action, vertical);
+        const verticalCheck = validatePermissionForVertical(
+          module,
+          action,
+          vertical,
+        );
         if (!verticalCheck.ok) {
           return res.status(400).json({
             error: verticalCheck.error,
@@ -636,16 +682,18 @@ router.post(
       // Check if permission already exists
       const existing = await prisma.rolePermission.findUnique({
         where: {
-          roleId_module_action: { roleId, module, action }
-        }
+          roleId_module_action: { roleId, module, action },
+        },
       });
 
       if (existing) {
-        return res.status(409).json({ error: "Permission already granted to this role" });
+        return res
+          .status(409)
+          .json({ error: "Permission already granted to this role" });
       }
 
       const permission = await prisma.rolePermission.create({
-        data: { roleId, module, action }
+        data: { roleId, module, action },
       });
 
       // Clear permission cache for all users with this role + the
@@ -653,18 +701,25 @@ router.post(
       clearTenantCache(role.tenantId);
       if (role.key === "CUSTOMER") clearCustomerRoleCache(role.tenantId);
 
-      await writeAudit("Role", "GRANT_PERMISSION", req.user.userId, req.user.userId, req.user.tenantId, {
-        roleId,
-        roleKey: role.key,
-        permission: `${module}.${action}`
-      });
+      await writeAudit(
+        "Role",
+        "GRANT_PERMISSION",
+        req.user.userId,
+        req.user.userId,
+        req.user.tenantId,
+        {
+          roleId,
+          roleKey: role.key,
+          permission: `${module}.${action}`,
+        },
+      );
 
       res.status(201).json(permission);
     } catch (err) {
       console.error("[roles] grant permission error:", err);
       res.status(500).json({ error: "Failed to grant permission" });
     }
-  }
+  },
 );
 
 // DELETE /api/roles/:id/permissions/:module/:action — revoke permission
@@ -689,12 +744,14 @@ router.delete(
 
       const permission = await prisma.rolePermission.findUnique({
         where: {
-          roleId_module_action: { roleId, module, action }
-        }
+          roleId_module_action: { roleId, module, action },
+        },
       });
 
       if (!permission) {
-        return res.status(404).json({ error: "Permission not found on this role" });
+        return res
+          .status(404)
+          .json({ error: "Permission not found on this role" });
       }
 
       // RBAC Hardening — lockout invariant on the per-perm DELETE path.
@@ -743,8 +800,8 @@ router.delete(
 
       await prisma.rolePermission.delete({
         where: {
-          roleId_module_action: { roleId, module, action }
-        }
+          roleId_module_action: { roleId, module, action },
+        },
       });
 
       // Clear permission cache for all users with this role + the
@@ -752,18 +809,25 @@ router.delete(
       clearTenantCache(role.tenantId);
       if (role.key === "CUSTOMER") clearCustomerRoleCache(role.tenantId);
 
-      await writeAudit("Role", "REVOKE_PERMISSION", req.user.userId, req.user.userId, req.user.tenantId, {
-        roleId,
-        roleKey: role.key,
-        permission: `${module}.${action}`
-      });
+      await writeAudit(
+        "Role",
+        "REVOKE_PERMISSION",
+        req.user.userId,
+        req.user.userId,
+        req.user.tenantId,
+        {
+          roleId,
+          roleKey: role.key,
+          permission: `${module}.${action}`,
+        },
+      );
 
       res.json({ success: true });
     } catch (err) {
       console.error("[roles] revoke permission error:", err);
       res.status(500).json({ error: "Failed to revoke permission" });
     }
-  }
+  },
 );
 
 // PUT /api/roles/:id/permissions — bulk-set permissions (replace all)
@@ -790,18 +854,18 @@ router.put(
       for (const perm of permissions) {
         if (!perm || typeof perm !== "object") {
           return res.status(400).json({
-            error: "Each permission must be an object {module, action}"
+            error: "Each permission must be an object {module, action}",
           });
         }
         const { module, action } = perm;
         if (!module || !action) {
           return res.status(400).json({
-            error: "Each permission requires both module and action"
+            error: "Each permission requires both module and action",
           });
         }
         if (!isValidPermission(module, action)) {
           return res.status(400).json({
-            error: `Invalid permission: ${module}.${action}`
+            error: `Invalid permission: ${module}.${action}`,
           });
         }
         const key = `${module}.${action}`;
@@ -893,7 +957,10 @@ router.put(
       // frontend PermissionsModal shows a confirmation modal listing
       // these BEFORE invoking save; the audit metadata captures what
       // they confirmed.
-      const newlySensitive = getNewlyGrantedSensitive(role.permissions, normalized);
+      const newlySensitive = getNewlyGrantedSensitive(
+        role.permissions,
+        normalized,
+      );
 
       // Atomic replace. If the bulk insert fails for any reason
       // (connection pool, unique-constraint race, transient lock),
@@ -918,14 +985,14 @@ router.put(
       // hand-off that avoids re-deriving it inside the transaction).
       const { restoredFromVersionId = null, restoreNote = null } =
         req._restoreContext || {};
-      const changeType = req._restoreContext ? 'RESTORE' : 'UPDATE';
+      const changeType = req._restoreContext ? "RESTORE" : "UPDATE";
       const noteForVersion = req._restoreContext
         ? restoreNote
-        : req.body && typeof req.body.note === 'string'
+        : req.body && typeof req.body.note === "string"
           ? req.body.note
           : null;
-      const { newPermissions, landingPathCleared, newVersion } = await prisma.$transaction(
-        async (tx) => {
+      const { newPermissions, landingPathCleared, newVersion } =
+        await prisma.$transaction(async (tx) => {
           // (a) Backfill INITIAL snapshot of pre-save state ONLY for
           // legacy roles. Idempotent — no-op if a version already exists.
           await ensureInitialSnapshot({
@@ -940,7 +1007,9 @@ router.put(
               skipDuplicates: true,
             });
           }
-          const newPerms = await tx.rolePermission.findMany({ where: { roleId } });
+          const newPerms = await tx.rolePermission.findMany({
+            where: { roleId },
+          });
 
           // (b) Snapshot the resulting state. Even if the post-save
           // set is identical to the pre-save set, we still append a
@@ -960,7 +1029,9 @@ router.put(
           // permission-free so it always survives.
           let cleared = false;
           if (role.landingPath) {
-            const permSet = new Set(newPerms.map((p) => `${p.module}.${p.action}`));
+            const permSet = new Set(
+              newPerms.map((p) => `${p.module}.${p.action}`),
+            );
             if (!canAccessPath(role.landingPath, permSet)) {
               await tx.role.update({
                 where: { id: roleId },
@@ -969,9 +1040,12 @@ router.put(
               cleared = true;
             }
           }
-          return { newPermissions: newPerms, landingPathCleared: cleared, newVersion: versionRow };
-        },
-      );
+          return {
+            newPermissions: newPerms,
+            landingPathCleared: cleared,
+            newVersion: versionRow,
+          };
+        });
 
       // Clear permission cache for all users with this role + the
       // patient-portal CUSTOMER-role cache (lib/portalPermissions.js).
@@ -980,7 +1054,9 @@ router.put(
 
       await writeAudit(
         "Role",
-        changeType === 'RESTORE' ? "RESTORE_ROLE_PERMISSIONS" : "BULK_UPDATE_PERMISSIONS",
+        changeType === "RESTORE"
+          ? "RESTORE_ROLE_PERMISSIONS"
+          : "BULK_UPDATE_PERMISSIONS",
         req.user.userId,
         req.user.userId,
         req.user.tenantId,
@@ -1015,14 +1091,18 @@ router.put(
         // Phase 4 — let the frontend show the new version number in
         // the success toast and refresh its history list cheaply.
         newVersion: newVersion
-          ? { id: newVersion.id, versionNumber: newVersion.versionNumber, changeType }
+          ? {
+              id: newVersion.id,
+              versionNumber: newVersion.versionNumber,
+              changeType,
+            }
           : null,
       });
     } catch (err) {
       console.error("[roles] bulk update permissions error:", err);
       res.status(500).json({ error: "Failed to update permissions" });
     }
-  }
+  },
 );
 
 // GET /api/roles/:id/users — list users assigned to this role
@@ -1045,12 +1125,12 @@ router.get(
                   email: true,
                   name: true,
                   userType: true,
-                  createdAt: true
-                }
-              }
-            }
-          }
-        }
+                  createdAt: true,
+                },
+              },
+            },
+          },
+        },
       });
 
       if (!role) {
@@ -1062,9 +1142,9 @@ router.get(
         return res.status(403).json({ error: "Access denied" });
       }
 
-      const users = role.userRoles.map(ur => ({
+      const users = role.userRoles.map((ur) => ({
         ...ur.user,
-        assignedAt: ur.assignedAt
+        assignedAt: ur.assignedAt,
       }));
 
       res.json({ roleId, users });
@@ -1072,7 +1152,7 @@ router.get(
       console.error("[roles] users list error:", err);
       res.status(500).json({ error: "Failed to fetch users" });
     }
-  }
+  },
 );
 
 // POST /api/roles/:id/assign/:userId — assign user to role
@@ -1096,7 +1176,7 @@ router.post(
       }
 
       const user = await prisma.user.findFirst({
-        where: { id: userId, tenantId: role.tenantId }
+        where: { id: userId, tenantId: role.tenantId },
       });
       if (!user) {
         return res.status(404).json({ error: "User not found in this tenant" });
@@ -1109,7 +1189,7 @@ router.post(
       // admin a clear escalation trail.
       const previousAssignments = await prisma.userRole.findMany({
         where: { userId },
-        orderBy: { assignedAt: 'desc' },
+        orderBy: { assignedAt: "desc" },
       });
 
       if (
@@ -1136,7 +1216,9 @@ router.post(
             (a) => a.roleId === adminRoleHere.id,
           );
           if (userHoldsAdmin) {
-            const adminUserCount = await countAdminUsersForTenant(role.tenantId);
+            const adminUserCount = await countAdminUsersForTenant(
+              role.tenantId,
+            );
             if (adminUserCount <= 1) {
               return res.status(409).json({
                 error:
@@ -1153,27 +1235,34 @@ router.post(
           await tx.userRole.deleteMany({ where: { userId } });
         }
         return tx.userRole.create({
-          data: { userId, roleId, assignedById: req.user.userId }
+          data: { userId, roleId, assignedById: req.user.userId },
         });
       });
 
       // Clear this user's permission cache
       clearUserCache(userId, role.tenantId);
 
-      await writeAudit("Role", "ASSIGN_ROLE_TO_USER", req.user.userId, req.user.userId, req.user.tenantId, {
-        roleId,
-        roleKey: role.key,
-        targetUserId: userId,
-        targetEmail: user.email,
-        previousRoleIds: previousAssignments.map((a) => a.roleId),
-      });
+      await writeAudit(
+        "Role",
+        "ASSIGN_ROLE_TO_USER",
+        req.user.userId,
+        req.user.userId,
+        req.user.tenantId,
+        {
+          roleId,
+          roleKey: role.key,
+          targetUserId: userId,
+          targetEmail: user.email,
+          previousRoleIds: previousAssignments.map((a) => a.roleId),
+        },
+      );
 
       res.status(201).json(userRole);
     } catch (err) {
       console.error("[roles] assign error:", err);
       res.status(500).json({ error: "Failed to assign role" });
     }
-  }
+  },
 );
 
 // DELETE /api/roles/:id/assign/:userId — remove user from role
@@ -1198,8 +1287,8 @@ router.delete(
 
       const userRole = await prisma.userRole.findUnique({
         where: {
-          userId_roleId: { userId, roleId }
-        }
+          userId_roleId: { userId, roleId },
+        },
       });
 
       if (!userRole) {
@@ -1208,7 +1297,7 @@ router.delete(
 
       const user = await prisma.user.findUnique({
         where: { id: userId },
-        select: { email: true }
+        select: { email: true },
       });
 
       // SPEC §3 — Last-Admin protection. Don't let an admin revoke the
@@ -1228,26 +1317,33 @@ router.delete(
 
       await prisma.userRole.delete({
         where: {
-          userId_roleId: { userId, roleId }
-        }
+          userId_roleId: { userId, roleId },
+        },
       });
 
       // Clear this user's permission cache
       clearUserCache(userId, role.tenantId);
 
-      await writeAudit("Role", "REVOKE_ROLE_FROM_USER", req.user.userId, req.user.userId, req.user.tenantId, {
-        roleId,
-        roleKey: role.key,
-        targetUserId: userId,
-        targetEmail: user?.email
-      });
+      await writeAudit(
+        "Role",
+        "REVOKE_ROLE_FROM_USER",
+        req.user.userId,
+        req.user.userId,
+        req.user.tenantId,
+        {
+          roleId,
+          roleKey: role.key,
+          targetUserId: userId,
+          targetEmail: user?.email,
+        },
+      );
 
       res.json({ success: true });
     } catch (err) {
       console.error("[roles] unassign error:", err);
       res.status(500).json({ error: "Failed to remove role from user" });
     }
-  }
+  },
 );
 
 // ─────────── User-centric multi-role assignment (SPEC §C3) ───────────
@@ -1286,7 +1382,9 @@ router.post(
       // De-dup + validate ID shape. We accept an empty array (unassign
       // all) — the last-admin guard below catches the dangerous edge.
       const targetRoleIds = Array.from(
-        new Set(roleIds.map((r) => parseInt(r, 10)).filter((n) => Number.isFinite(n))),
+        new Set(
+          roleIds.map((r) => parseInt(r, 10)).filter((n) => Number.isFinite(n)),
+        ),
       );
 
       const targetUser = await prisma.user.findUnique({
@@ -1311,7 +1409,9 @@ router.post(
           select: { id: true, key: true, tenantId: true, isActive: true },
         });
         if (targetRoles.length !== targetRoleIds.length) {
-          return res.status(400).json({ error: "One or more role IDs not found" });
+          return res
+            .status(400)
+            .json({ error: "One or more role IDs not found" });
         }
         for (const r of targetRoles) {
           if (!req.user.isOwner && r.tenantId !== req.user.tenantId) {
@@ -1321,7 +1421,8 @@ router.post(
           }
           if (r.tenantId === null && r.key === "OWNER") {
             return res.status(403).json({
-              error: "OWNER is a platform-level role and cannot be assigned via this endpoint",
+              error:
+                "OWNER is a platform-level role and cannot be assigned via this endpoint",
               code: "OWNER_ROLE_PROTECTED",
             });
           }
@@ -1336,13 +1437,18 @@ router.post(
         include: { role: { select: { id: true, key: true, tenantId: true } } },
       });
       const previousAdminRole = previous.find(
-        (a) => a.role && a.role.key === "ADMIN" && a.role.tenantId === targetUser.tenantId,
+        (a) =>
+          a.role &&
+          a.role.key === "ADMIN" &&
+          a.role.tenantId === targetUser.tenantId,
       );
       const newSetIncludesAdmin = targetRoles.some(
         (r) => r.key === "ADMIN" && r.tenantId === targetUser.tenantId,
       );
       if (previousAdminRole && !newSetIncludesAdmin && targetUser.tenantId) {
-        const adminUserCount = await countAdminUsersForTenant(targetUser.tenantId);
+        const adminUserCount = await countAdminUsersForTenant(
+          targetUser.tenantId,
+        );
         if (adminUserCount <= 1) {
           return res.status(409).json({
             error:
@@ -1371,7 +1477,9 @@ router.post(
         return tx.userRole.findMany({
           where: { userId },
           include: {
-            role: { select: { id: true, key: true, name: true, landingPath: true } },
+            role: {
+              select: { id: true, key: true, name: true, landingPath: true },
+            },
           },
         });
       });
@@ -1380,14 +1488,23 @@ router.post(
       // grant set immediately (avoids the 30s stale window).
       clearUserCache(userId, targetUser.tenantId);
 
-      await writeAudit("Role", "REPLACE_USER_ROLES", req.user.userId, req.user.userId, req.user.tenantId, {
-        targetUserId: userId,
-        targetEmail: targetUser.email,
-        previousRoleIds: previous.map((a) => a.roleId),
-        newRoleIds: targetRoleIds,
-        previousRoleKeys: previous.map((a) => a.role && a.role.key).filter(Boolean),
-        newRoleKeys: targetRoles.map((r) => r.key),
-      });
+      await writeAudit(
+        "Role",
+        "REPLACE_USER_ROLES",
+        req.user.userId,
+        req.user.userId,
+        req.user.tenantId,
+        {
+          targetUserId: userId,
+          targetEmail: targetUser.email,
+          previousRoleIds: previous.map((a) => a.roleId),
+          newRoleIds: targetRoleIds,
+          previousRoleKeys: previous
+            .map((a) => a.role && a.role.key)
+            .filter(Boolean),
+          newRoleKeys: targetRoles.map((r) => r.key),
+        },
+      );
 
       res.json({
         userId,
@@ -1403,7 +1520,7 @@ router.post(
       console.error("[roles] replace user roles error:", err);
       res.status(500).json({ error: "Failed to replace user roles" });
     }
-  }
+  },
 );
 
 // ─────────────────── Per-role widget layout ──────────────────────────
@@ -1486,7 +1603,9 @@ router.put(
             } catch {
               return res
                 .status(400)
-                .json({ error: `widget settings not serialisable: ${widgetKey}` });
+                .json({
+                  error: `widget settings not serialisable: ${widgetKey}`,
+                });
             }
           }
         }
@@ -1636,7 +1755,9 @@ router.get(
         roleId,
       });
       if (!version) {
-        return res.status(404).json({ error: "Version not found for this role" });
+        return res
+          .status(404)
+          .json({ error: "Version not found for this role" });
       }
       res.json({ roleId, version });
     } catch (err) {
@@ -1686,14 +1807,16 @@ router.post(
         roleId,
       });
       if (!version) {
-        return res.status(404).json({ error: "Version not found for this role" });
+        return res
+          .status(404)
+          .json({ error: "Version not found for this role" });
       }
       // Hand-off context for the PUT handler so the snapshot it
       // writes has changeType=RESTORE + restoredFromVersionId.
       req._restoreContext = {
         restoredFromVersionId: version.id,
         restoreNote:
-          typeof note === 'string' && note.trim().length > 0
+          typeof note === "string" && note.trim().length > 0
             ? note.trim().slice(0, 500)
             : `Restored from v${version.versionNumber}`,
       };
@@ -1701,7 +1824,7 @@ router.post(
       // PUT handler directly. The PUT handler reads req.body.permissions
       // and req._restoreContext.
       req.body = { permissions: version.permissions };
-      req.method = 'PUT';
+      req.method = "PUT";
       // The PUT handler is mounted at PUT /:id/permissions. Express's
       // router stack matches on method + path; the simplest reliable
       // dispatch is to call the handler function directly. We grab it
@@ -1709,11 +1832,14 @@ router.post(
       const layer = router.stack.find(
         (l) =>
           l.route &&
-          l.route.path === '/:id/permissions' &&
-          l.route.methods && l.route.methods.put,
+          l.route.path === "/:id/permissions" &&
+          l.route.methods &&
+          l.route.methods.put,
       );
       if (!layer) {
-        return res.status(500).json({ error: 'Restore dispatch failed: PUT handler not found' });
+        return res
+          .status(500)
+          .json({ error: "Restore dispatch failed: PUT handler not found" });
       }
       // Run the handler chain (verifyToken + requirePermission + body).
       // We've already passed the same gates above, so call the final

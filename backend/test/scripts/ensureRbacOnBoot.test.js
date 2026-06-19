@@ -28,59 +28,53 @@
  */
 
 import { describe, test, expect, vi, beforeEach } from 'vitest';
+import prisma from '../../lib/prisma.js';
+import { provisionTenantRbac } from '../../scripts/ensureRbacOnBoot.js';
 
 const WELLNESS_CLINICAL_KEYS = ['DOCTOR', 'NURSE', 'RECEPTIONIST', 'TELECALLER'];
 
-// Mock prisma. Each prisma collection is a fresh vi.fn so each test
-// gets independent call tracking.
-//
-// All find-* return null/empty so ensureRole / ensureRolePermission /
-// ensureUserRole are forced into the "create" branch — that's the
-// branch we want to observe.
-//
-// vi.hoisted is required: vi.mock is hoisted above module-level const
-// declarations, so the factory must reference a variable that is itself
-// hoisted. Without vi.hoisted, mockPrisma is undefined when the factory
-// runs and real Prisma calls leak through (surface-guard failures on
-// role.findFirst / tenant.findUnique).
-const { mockPrisma } = vi.hoisted(() => {
-  const mockPrisma = {
-    role: {
-      findFirst: vi.fn(),
-      findMany: vi.fn(),
-      findUnique: vi.fn(),
-      create: vi.fn(),
-    },
-    rolePermission: {
-      findFirst: vi.fn(),
-      create: vi.fn(),
-    },
-    userRole: {
-      findUnique: vi.fn(),
-      count: vi.fn(),
-      create: vi.fn(),
-    },
-    tenant: {
-      findUnique: vi.fn(),
-      findMany: vi.fn(),
-    },
-    user: {
-      findMany: vi.fn(),
-    },
-    roleWidget: {
-      create: vi.fn(),
-    },
-  };
-  return { mockPrisma };
-});
+// Singleton-patch the prisma models that ensureRbacOnBoot touches.
+// The SUT is a CJS module that requires the same singleton, so replacing
+// the model surfaces on the shared instance propagates to its calls.
+const mockPrisma = {
+  role: {
+    findFirst: vi.fn(),
+    findMany: vi.fn(),
+    findUnique: vi.fn(),
+    create: vi.fn(),
+  },
+  rolePermission: {
+    findFirst: vi.fn(),
+    create: vi.fn(),
+  },
+  userRole: {
+    findUnique: vi.fn(),
+    count: vi.fn(),
+    create: vi.fn(),
+  },
+  tenant: {
+    findUnique: vi.fn(),
+    findMany: vi.fn(),
+  },
+  user: {
+    findMany: vi.fn(),
+  },
+  roleWidget: {
+    create: vi.fn(),
+  },
+};
 
-vi.mock('../../lib/prisma', () => ({ default: mockPrisma, ...mockPrisma }));
+beforeEach(() => {
+  // Patch the shared singleton so the CJS SUT sees our mocks.
+  Object.assign(prisma, {
+    role: mockPrisma.role,
+    rolePermission: mockPrisma.rolePermission,
+    userRole: mockPrisma.userRole,
+    tenant: mockPrisma.tenant,
+    user: mockPrisma.user,
+    roleWidget: mockPrisma.roleWidget,
+  });
 
-// Re-import after the mock is in place. Using dynamic import so the
-// vi.mock above is honored.
-let provisionTenantRbac;
-
-beforeEach(async () => {
   // Reset call counts between tests.
   vi.clearAllMocks();
 
@@ -104,10 +98,6 @@ beforeEach(async () => {
   // roleWidget might be absent (RoleWidget table optional) — the seeder
   // wraps in try/catch so an error here doesn't crash; return a stub.
   mockPrisma.roleWidget.create.mockResolvedValue({});
-
-  // Now import after mocks are wired
-  const mod = await import('../../scripts/ensureRbacOnBoot.js');
-  provisionTenantRbac = mod.provisionTenantRbac;
 });
 
 function createdRoleKeys() {

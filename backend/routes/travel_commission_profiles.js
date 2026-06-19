@@ -1622,7 +1622,7 @@ router.delete(
 router.post(
   "/commission-profiles/:id/assign",
   verifyToken,
-  requirePermission("commission_profiles", "update"),
+  requirePermission("commission_profiles", "write"),
   requireTravelTenant,
   async (req, res) => {
     try {

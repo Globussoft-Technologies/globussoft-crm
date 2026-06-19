@@ -86,9 +86,29 @@ function legacyTestPermissionsForRole(role) {
         perms.delete(p);
       }
     }
+    // Invoice line deletion is an operations action that MANAGER historically
+    // shared with ADMIN. Add it back after the blanket delete removal above.
+    perms.add('invoices.delete');
+    // A handful of actions were intentionally ADMIN-only in the pre-RBAC
+    // verifyRole gates. Keep them denied so the singleton-patch specs that
+    // assert MANAGER rejection still hit RBAC_DENIED before the handler.
+    const managerDeniedPerms = new Set([
+      'diagnostics.write',          // diagnostic-banks CSV import
+      'pois.manage',                // POI approve/reject queue
+      'religious_packets.update',   // religious packet edits
+      'suppliers.manage',           // supplier credentials vault / admin-only transitions
+      'payables.update',            // payable-batch state transitions
+      'commission_profiles.update', // commission entry reversal
+      'tmc_catalogue.manage',       // promote-to-active human-verify gate
+    ]);
+    for (const p of managerDeniedPerms) perms.delete(p);
     return perms;
   }
 
+  // USER / CUSTOMER / other: empty set. Pre-RBAC verifyRole gates kept these
+  // roles out of write/delete/admin surfaces; read surfaces that are public
+  // to any verified tenant user either have no requirePermission() or are
+  // explicitly granted via real RolePermission rows in API tests.
   return new Set();
 }
 

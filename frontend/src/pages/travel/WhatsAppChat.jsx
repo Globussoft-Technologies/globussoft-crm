@@ -1,6 +1,13 @@
-// Travel WhatsApp Chat — 2-way agent inbox for the TRAVEL vertical (Q9,
-// Wati transport). CLONE of pages/wellness/WhatsAppThreads.jsx (which stays
-// untouched on the Meta Cloud track) with the travel-specific diffs:
+// Travel WhatsApp Chat — 2-way agent inbox for the TRAVEL vertical (Q9).
+//
+// TRANSPORT: WhatsApp Web (QR-scan) via backend/services/whatsappWebClient.js.
+// The Wati REST transport this page originally targeted is DISABLED (its
+// backend require()s are commented out, kept on disk). An admin links a number
+// by scanning the QR from the status strip's "Connect WhatsApp" button; sends
+// + inbound then flow over that live session in real time (no webhook needed).
+//
+// CLONE of pages/wellness/WhatsAppThreads.jsx (which stays untouched on the
+// Meta Cloud track) with the travel-specific diffs:
 //
 //   - SENDS go through POST /api/travel/whatsapp/send → watiClient (Wati),
 //     NOT the Meta-track /api/whatsapp/send.
@@ -28,6 +35,7 @@ import { AuthContext } from '../../App';
 import { fetchApi, getAuthToken } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { WhatsAppThreadsContext } from '../wellness/whatsapp/WhatsAppThreadsContext';
+import { ImageLightbox, openImage } from '../wellness/whatsapp/ImageLightbox';
 import ThreadList from '../wellness/whatsapp/ThreadList';
 import ThreadDetail from '../wellness/whatsapp/ThreadDetail';
 import MessageContextMenu from '../wellness/whatsapp/MessageContextMenu';
@@ -81,9 +89,24 @@ export default function TravelWhatsAppChat() {
   // button, so the operator can hand a thread off to any teammate.
   const [staff, setStaff] = useState([]);
 
-  // Wati connection state for the status strip (travel replaces the Meta
-  // EmbeddedSignup panel with this). null = still loading.
+  // WhatsApp Web connection state for the status strip + QR connect panel.
+  // Shape: { enabled, state, connected, phone, qr, lastError }. null = loading.
+  // (Variable name kept as `watiStatus` to minimise churn; it now reflects the
+  // WhatsApp Web session, not Wati.)
   const [watiStatus, setWatiStatus] = useState(null);
+  // QR connect modal — opened by the admin "Connect" button. `qrImage` is the
+  // data-URL pushed over the whatsapp:qr socket event / GET /qr poll.
+  const [showQrModal, setShowQrModal] = useState(false);
+  const [qrImage, setQrImage] = useState(null);
+  const [connecting, setConnecting] = useState(false);
+  // "My Profile" modal — view + edit the linked WhatsApp account's own DP /
+  // name / about (admin).
+  const [showProfile, setShowProfile] = useState(false);
+  const [myProfile, setMyProfile] = useState(null); // { phone, name, about, avatar }
+  const [profileName, setProfileName] = useState('');
+  const [profileAbout, setProfileAbout] = useState('');
+  const [profileSaving, setProfileSaving] = useState(false);
+  const profileFileRef = useRef(null);
 
   // Inline rename state — when the user clicks the pencil next to the contact
   // name, this flips on and a small input box appears. Save → POST to the
@@ -120,6 +143,11 @@ export default function TravelWhatsAppChat() {
   // Generation counters to discard stale async results (§5.5 race guard).
   const listGenRef = useRef(0);
   const detailGenRef = useRef(0);
+  // Latest WhatsApp connection state, read by loadList without stale closures.
+  // The inbox is a live mirror — when disconnected we show no chats (they
+  // re-fetch on the next Connect). Optimistic init so connected users never
+  // flash empty while the first status check resolves.
+  const waConnectedRef = useRef(true);
 
   // ─── Load thread list ──────────────────────────────────────
   const loadList = async () => {
@@ -154,6 +182,17 @@ export default function TravelWhatsAppChat() {
           unreadCount: 0,
           _blocked: o,
         })));
+        setLoadingList(false);
+        return;
+      }
+
+      // Live-mirror rule: when WhatsApp isn't connected, show no chats — the
+      // imported threads belong to the (now-gone) session and re-fetch on the
+      // next Connect. Keeps "disconnect → chats gone" honest even when the
+      // session dropped via a restart (not the purging Disconnect button).
+      if (!waConnectedRef.current) {
+        if (gen !== listGenRef.current) return;
+        setThreads([]);
         setLoadingList(false);
         return;
       }
@@ -281,17 +320,187 @@ export default function TravelWhatsAppChat() {
     })();
   }, []);
 
-  // ─── Wati connection status (once on mount) ─────────────────
-  useEffect(() => {
-    (async () => {
-      try {
-        const data = await fetchApi('/api/travel/whatsapp/status');
-        setWatiStatus(data || { enabled: false, channelNumber: null });
-      } catch {
-        setWatiStatus({ enabled: false, channelNumber: null });
+  // ─── WhatsApp Web connection status ─────────────────────────
+  // Pull the current session state. Reused on mount, after connect/disconnect,
+  // and on a short poll while the QR modal is open (socket-fallback).
+  const refreshWaStatus = async () => {
+    try {
+      const data = await fetchApi('/api/travel/whatsapp/status');
+      setWatiStatus(data || { enabled: false, connected: false, state: 'DISCONNECTED' });
+      waConnectedRef.current = !!data?.connected;
+      if (data?.qr) setQrImage(data.qr);
+      // If a background reconnect brought us online while the modal is open,
+      // close it and celebrate.
+      if (data?.connected) {
+        setShowQrModal(false);
+        setConnecting(false);
       }
-    })();
+      return data;
+    } catch {
+      setWatiStatus({ enabled: false, connected: false, state: 'DISCONNECTED' });
+      return null;
+    }
+  };
+  useEffect(() => {
+    refreshWaStatus();
   }, []);
+
+  // ─── QR connect lifecycle (admin) ───────────────────────────
+  // Start a session → open the modal → the QR arrives via the whatsapp:qr
+  // socket event (and the poll below as a fallback). Scanning it from the
+  // phone (WhatsApp → Linked devices) flips state to CONNECTED.
+  const startConnect = async (reset = false) => {
+    setQrImage(null);
+    setConnecting(true);
+    setShowQrModal(true);
+    try {
+      const data = await fetchApi('/api/travel/whatsapp/connect', {
+        method: 'POST',
+        body: JSON.stringify({ reset }),
+      });
+      if (data?.qr) setQrImage(data.qr);
+      setWatiStatus((prev) => ({ ...(prev || {}), ...data }));
+      if (data?.connected) {
+        setShowQrModal(false);
+        setConnecting(false);
+        notify.info('WhatsApp already connected.');
+      }
+      await refreshWaStatus();
+    } catch (err) {
+      notify.error(err.message || 'Failed to start WhatsApp connection.');
+      setShowQrModal(false);
+      setConnecting(false);
+    }
+  };
+
+  // ─── My WhatsApp profile (view + edit) ──────────────────────
+  const openMyProfile = async () => {
+    setShowProfile(true);
+    try {
+      const me = await fetchApi('/api/travel/whatsapp/me');
+      setMyProfile(me);
+      setProfileName(me?.name || '');
+      setProfileAbout(me?.about || '');
+    } catch (err) {
+      notify.error(err.message || 'Failed to load profile.');
+    }
+  };
+  const saveMyProfile = async () => {
+    setProfileSaving(true);
+    try {
+      await fetchApi('/api/travel/whatsapp/me', {
+        method: 'PUT',
+        body: JSON.stringify({ name: profileName, about: profileAbout }),
+      });
+      notify.info('Profile updated.');
+      const me = await fetchApi('/api/travel/whatsapp/me');
+      setMyProfile(me);
+    } catch (err) {
+      notify.error(err.message || 'Failed to update profile.');
+    }
+    setProfileSaving(false);
+  };
+  const changeMyAvatar = async (file) => {
+    if (!file) return;
+    if (file.size > 16 * 1024 * 1024) { notify.error('Image too large (max 16 MB).'); return; }
+    setProfileSaving(true);
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      const token = getAuthToken();
+      const resp = await fetch('/api/travel/whatsapp/me/avatar', {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: form,
+      });
+      if (!resp.ok) {
+        const e = await resp.json().catch(() => ({}));
+        throw new Error(e.error || `Upload failed (${resp.status})`);
+      }
+      notify.info('Profile picture updated.');
+      const me = await fetchApi('/api/travel/whatsapp/me');
+      setMyProfile(me);
+      refreshWaStatus();
+    } catch (err) {
+      notify.error(err.message || 'Failed to set profile picture.');
+    }
+    setProfileSaving(false);
+  };
+  const removeMyAvatar = async () => {
+    if (!(await notify.confirm('Remove your WhatsApp profile picture?'))) return;
+    setProfileSaving(true);
+    try {
+      await fetchApi('/api/travel/whatsapp/me/avatar', { method: 'DELETE' });
+      notify.info('Profile picture removed.');
+      const me = await fetchApi('/api/travel/whatsapp/me');
+      setMyProfile(me);
+    } catch (err) {
+      notify.error(err.message || 'Failed to remove picture.');
+    }
+    setProfileSaving(false);
+  };
+
+  // Manual "refresh chats" — re-pull the linked account's existing
+  // conversations into the inbox (also runs automatically right after a scan).
+  const [importing, setImporting] = useState(false);
+  const importChats = async () => {
+    setImporting(true);
+    try {
+      const data = await fetchApi('/api/travel/whatsapp/import', {
+        method: 'POST',
+        body: JSON.stringify({}),
+      });
+      notify.info(`Imported ${data?.threads || 0} chats (${data?.messages || 0} messages).`);
+      await loadList();
+    } catch (err) {
+      notify.error(err.message || 'Failed to import chats.');
+    }
+    setImporting(false);
+  };
+
+  const disconnectWa = async ({ logout = false } = {}) => {
+    if (!(await notify.confirm('Disconnect WhatsApp? This unlinks the number and clears all imported chats from the CRM. Reconnecting will re-fetch them fresh.'))) return;
+    try {
+      const data = await fetchApi('/api/travel/whatsapp/disconnect', {
+        method: 'POST',
+        body: JSON.stringify({ logout }),
+      });
+      const purged = data?.purged?.threads || 0;
+      notify.info(`WhatsApp disconnected — cleared ${purged} chats.`);
+      // Clear the open conversation + the now-empty list.
+      setSelectedId(null);
+      setDetail(null);
+      await refreshWaStatus();
+      await loadList();
+    } catch (err) {
+      notify.error(err.message || 'Failed to disconnect.');
+    }
+  };
+
+  // Poll the QR/state while the connect modal is open — the socket is primary,
+  // this is the bulletproof fallback (mirrors the chat's own poll philosophy).
+  useEffect(() => {
+    if (!showQrModal) return undefined;
+    const id = setInterval(async () => {
+      try {
+        const data = await fetchApi('/api/travel/whatsapp/qr');
+        if (data?.qr) setQrImage(data.qr);
+        setWatiStatus((prev) => ({ ...(prev || {}), ...data, enabled: !!data?.connected }));
+        waConnectedRef.current = !!data?.connected;
+        if (data?.connected) {
+          setShowQrModal(false);
+          setConnecting(false);
+          loadList();
+          notify.info('WhatsApp connected.');
+        } else if (data?.state === 'AUTH_FAILURE') {
+          // Stop the spinner so the modal shows the error + Reset button.
+          setConnecting(false);
+        }
+      } catch { /* next tick retries */ }
+    }, 2500);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showQrModal]);
 
   // ─── Load APPROVED templates for the picker ─────────────────
   // Travel diff: templates come from the WATI account (the travel
@@ -452,6 +661,38 @@ export default function TravelWhatsAppChat() {
       }
     });
 
+    // WhatsApp Web QR push — the backend emits this while waiting for a scan.
+    socket.on('whatsapp:qr', (payload) => {
+      if (!payload || payload.tenantId !== tenantId) return;
+      if (payload.qr) setQrImage(payload.qr);
+    });
+
+    // Existing-chat backfill finished (fires after a scan / manual import) —
+    // refresh the thread list so the imported conversations appear.
+    socket.on('whatsapp:imported', (payload) => {
+      if (!payload || payload.tenantId !== tenantId) return;
+      loadList();
+      try { notify.info(`Imported ${payload.threads || 0} WhatsApp chats.`); } catch { /* swallow */ }
+    });
+
+    // WhatsApp Web session-state transitions (QR → AUTHENTICATED → CONNECTED
+    // → DISCONNECTED). Drives the status strip live + auto-closes the QR modal
+    // once the link succeeds.
+    socket.on('whatsapp:wa-state', (payload) => {
+      if (!payload || payload.tenantId !== tenantId) return;
+      setWatiStatus((prev) => ({ ...(prev || {}), ...payload, enabled: payload.connected }));
+      waConnectedRef.current = !!payload.connected;
+      if (payload.qr) setQrImage(payload.qr);
+      if (payload.connected) {
+        setShowQrModal(false);
+        setConnecting(false);
+        try { notify.info('WhatsApp connected.'); } catch { /* swallow */ }
+      } else {
+        // Session dropped → clear the now-stale chat list immediately.
+        loadList();
+      }
+    });
+
     socket.on('connect_error', (err) => {
       // Visible enough to debug if the socket falls over, but quiet
       // enough not to clutter the console during normal disconnects.
@@ -462,6 +703,9 @@ export default function TravelWhatsAppChat() {
       socket.off('connect', joinRoom);
       socket.off('whatsapp:received');
       socket.off('whatsapp:status');
+      socket.off('whatsapp:qr');
+      socket.off('whatsapp:wa-state');
+      socket.off('whatsapp:imported');
       socket.disconnect();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1101,12 +1345,10 @@ export default function TravelWhatsAppChat() {
         height: '100%', minHeight: 0,
         animation: 'fadeIn 0.4s ease-out',
       }}>
-        {/* Travel diff: Wati connection status strip (replaces the Meta
-            EmbeddedSignup panel — that component manages Meta Cloud
-            onboarding, which the travel/Wati transport doesn't use).
-            Green = creds set, sends go out live. Amber = stub mode —
-            sends queue (QUEUED rows) until WATI_API_ENDPOINT +
-            WATI_ACCESS_TOKEN land in backend/.env. */}
+        {/* WhatsApp Web (QR-scan) connection strip — replaces the old Wati
+            status strip. Green = a phone is linked (sends go out live).
+            Amber = not connected — an admin clicks Connect to scan the QR.
+            (testid kept as `wati-status-strip` for existing references.) */}
         <div style={{ padding: '0.75rem 1rem 0' }} data-testid="wati-status-strip">
           <div
             style={{
@@ -1118,7 +1360,7 @@ export default function TravelWhatsAppChat() {
               borderRadius: 8,
               fontSize: 13,
               border: '1px solid var(--border-color)',
-              background: watiStatus?.enabled
+              background: watiStatus?.connected
                 ? 'rgba(34, 197, 94, 0.08)'
                 : 'rgba(245, 158, 11, 0.08)',
             }}
@@ -1130,29 +1372,105 @@ export default function TravelWhatsAppChat() {
                 height: 9,
                 borderRadius: '50%',
                 flexShrink: 0,
-                background: watiStatus?.enabled
+                background: watiStatus?.connected
                   ? 'var(--success-color, #22c55e)'
                   : 'var(--warning-color, #f59e0b)',
               }}
             />
             <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>
               {watiStatus === null
-                ? 'Checking Wati connection…'
-                : watiStatus.enabled
-                  ? `Wati connected${watiStatus.channelNumber ? ` · ${watiStatus.channelNumber}` : ''}`
-                  : 'Wati stub mode'}
+                ? 'Checking WhatsApp connection…'
+                : watiStatus.connected
+                  ? `WhatsApp connected${watiStatus.phone ? ` · ${watiStatus.phone}` : ''}`
+                  : watiStatus.state === 'QR' || watiStatus.state === 'AUTHENTICATED' || watiStatus.state === 'INITIALIZING'
+                    ? 'WhatsApp connecting…'
+                    : 'WhatsApp not connected'}
             </span>
-            {watiStatus !== null && !watiStatus.enabled && (
+            {watiStatus !== null && !watiStatus.connected && (
               <span style={{ color: 'var(--text-secondary)' }}>
-                — messages queue until the Wati credentials are set in the
-                backend .env (WATI_API_ENDPOINT + WATI_ACCESS_TOKEN) and the
-                server restarts.
+                — {isAdmin
+                  ? 'click Connect and scan the QR from your phone (WhatsApp → Linked devices). Until then, messages queue.'
+                  : 'an admin needs to scan the WhatsApp QR to link a number. Until then, messages queue.'}
               </span>
+            )}
+            {/* Admin connect / disconnect controls */}
+            {isAdmin && watiStatus !== null && !watiStatus.connected && (
+              <button
+                type="button"
+                onClick={() => startConnect(false)}
+                data-testid="wa-connect-btn"
+                style={{
+                  fontSize: 12,
+                  fontWeight: 600,
+                  padding: '4px 12px',
+                  borderRadius: 6,
+                  border: 'none',
+                  cursor: 'pointer',
+                  color: '#fff',
+                  background: 'var(--primary-color, #25D366)',
+                }}
+              >
+                Connect WhatsApp
+              </button>
+            )}
+            {isAdmin && watiStatus?.connected && (
+              <button
+                type="button"
+                onClick={openMyProfile}
+                data-testid="wa-profile-btn"
+                style={{
+                  fontSize: 12, fontWeight: 600, padding: '4px 12px', borderRadius: 6,
+                  border: '1px solid var(--border-color)', cursor: 'pointer',
+                  color: 'var(--text-primary)', background: 'transparent',
+                }}
+              >
+                My profile
+              </button>
+            )}
+            {isAdmin && watiStatus?.connected && (
+              <button
+                type="button"
+                onClick={importChats}
+                disabled={importing}
+                data-testid="wa-import-btn"
+                style={{
+                  fontSize: 12,
+                  fontWeight: 600,
+                  padding: '4px 12px',
+                  borderRadius: 6,
+                  border: 'none',
+                  cursor: importing ? 'default' : 'pointer',
+                  color: '#fff',
+                  opacity: importing ? 0.6 : 1,
+                  background: 'var(--primary-color, #25D366)',
+                }}
+              >
+                {importing ? 'Importing…' : 'Refresh chats'}
+              </button>
+            )}
+            {isAdmin && watiStatus?.connected && (
+              <button
+                type="button"
+                onClick={() => disconnectWa({ logout: true })}
+                data-testid="wa-disconnect-btn"
+                style={{
+                  fontSize: 12,
+                  fontWeight: 600,
+                  padding: '4px 12px',
+                  borderRadius: 6,
+                  border: '1px solid var(--border-color)',
+                  cursor: 'pointer',
+                  color: 'var(--text-secondary)',
+                  background: 'transparent',
+                }}
+              >
+                Disconnect
+              </button>
             )}
             <Link
               to="/travel/whatsapp/log"
               style={{
-                marginLeft: 'auto',
+                marginLeft: isAdmin ? 0 : 'auto',
                 fontSize: 12,
                 color: 'var(--primary-color, #25D366)',
                 whiteSpace: 'nowrap',
@@ -1163,6 +1481,92 @@ export default function TravelWhatsAppChat() {
           </div>
         </div>
 
+        {/* ─── QR connect modal ─────────────────────────────────────
+            Shows the linking QR. The operator opens WhatsApp on their phone
+            → Linked devices → Link a device → scans this. State flips to
+            CONNECTED via socket/poll and the modal auto-closes. */}
+        {showQrModal && (
+          <div
+            data-testid="wa-qr-modal"
+            onClick={() => { setShowQrModal(false); setConnecting(false); }}
+            style={{
+              position: 'fixed', inset: 0, zIndex: 1000,
+              background: 'rgba(0,0,0,0.5)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                background: 'var(--bg-secondary, #fff)',
+                borderRadius: 12,
+                padding: '1.5rem',
+                width: 'min(92vw, 380px)',
+                textAlign: 'center',
+                border: '1px solid var(--border-color)',
+              }}
+            >
+              <h3 style={{ margin: '0 0 0.25rem', color: 'var(--text-primary)' }}>
+                Link WhatsApp
+              </h3>
+              <p style={{ margin: '0 0 1rem', fontSize: 13, color: 'var(--text-secondary)' }}>
+                On your phone open <b>WhatsApp → Linked devices → Link a device</b>, then scan this code.
+              </p>
+              <div style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                flexDirection: 'column', gap: 10,
+                minHeight: 260,
+              }}>
+                {qrImage ? (
+                  <img
+                    src={qrImage}
+                    alt="WhatsApp linking QR code"
+                    width={260}
+                    height={260}
+                    style={{ borderRadius: 8 }}
+                  />
+                ) : watiStatus?.state === 'AUTH_FAILURE' ? (
+                  <span style={{ color: 'var(--error-color, #ef4444)', fontSize: 13, padding: '0 8px' }}>
+                    {watiStatus.lastError || 'Could not start WhatsApp. Try Reset & reconnect.'}
+                  </span>
+                ) : (
+                  <span style={{ color: 'var(--text-secondary)', fontSize: 13 }}>
+                    {connecting ? 'Starting WhatsApp… (first launch can take ~15–30s)' : 'Waiting for QR…'}
+                  </span>
+                )}
+              </div>
+              <div style={{ display: 'flex', gap: 8, justifyContent: 'center', marginTop: '1rem', flexWrap: 'wrap' }}>
+                {/* Reset & reconnect: wipes a stale/locked session and forces a
+                    fresh QR — the fix when it sticks on "Starting WhatsApp…". */}
+                <button
+                  type="button"
+                  data-testid="wa-reset-btn"
+                  onClick={() => startConnect(true)}
+                  style={{
+                    fontSize: 13, fontWeight: 600, padding: '6px 16px',
+                    borderRadius: 6, border: 'none', cursor: 'pointer',
+                    color: '#fff', background: 'var(--primary-color, #25D366)',
+                  }}
+                >
+                  Reset &amp; reconnect
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setShowQrModal(false); setConnecting(false); }}
+                  style={{
+                    fontSize: 13, padding: '6px 16px',
+                    borderRadius: 6, border: '1px solid var(--border-color)',
+                    cursor: 'pointer', background: 'transparent',
+                    color: 'var(--text-secondary)',
+                  }}
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         <div style={{ display: 'flex', flex: 1, gap: 0, minHeight: 0 }}>
           <ThreadList />
           <ThreadDetail />
@@ -1171,6 +1575,114 @@ export default function TravelWhatsAppChat() {
         <MessageContextMenu />
         <UnblockModal />
         <NewMessageModal />
+
+        {/* Full-image viewer — click any DP or chat image to open it here. */}
+        <ImageLightbox />
+
+        {/* ─── My WhatsApp profile (view + edit own DP / name / about) ─── */}
+        {showProfile && (
+          <div
+            data-testid="wa-profile-modal"
+            onClick={() => setShowProfile(false)}
+            style={{
+              position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(0,0,0,0.5)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                background: 'var(--bg-secondary, #fff)', borderRadius: 12, padding: '1.5rem',
+                width: 'min(94vw, 420px)', border: '1px solid var(--border-color)',
+              }}
+            >
+              <h3 style={{ margin: '0 0 1rem', color: 'var(--text-primary)' }}>My WhatsApp profile</h3>
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
+                {/* Own DP — click to enlarge */}
+                {myProfile?.avatar ? (
+                  <img
+                    src={myProfile.avatar}
+                    alt=""
+                    referrerPolicy="no-referrer"
+                    onClick={() => openImage(myProfile.avatar)}
+                    title="View photo"
+                    style={{ width: 110, height: 110, borderRadius: '50%', objectFit: 'cover', cursor: 'pointer', background: 'var(--border-color)' }}
+                  />
+                ) : (
+                  <div style={{
+                    width: 110, height: 110, borderRadius: '50%', background: 'var(--border-color)',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 34, color: 'var(--text-secondary)',
+                  }}>👤</div>
+                )}
+                <input
+                  ref={profileFileRef}
+                  type="file"
+                  accept="image/*"
+                  style={{ display: 'none' }}
+                  onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; changeMyAvatar(f); }}
+                />
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button
+                    type="button"
+                    disabled={profileSaving}
+                    onClick={() => profileFileRef.current?.click()}
+                    style={{ fontSize: 12, fontWeight: 600, padding: '5px 12px', borderRadius: 6, border: 'none', cursor: 'pointer', color: '#fff', background: 'var(--primary-color, #25D366)' }}
+                  >
+                    Change photo
+                  </button>
+                  {myProfile?.avatar && (
+                    <button
+                      type="button"
+                      disabled={profileSaving}
+                      onClick={removeMyAvatar}
+                      style={{ fontSize: 12, padding: '5px 12px', borderRadius: 6, border: '1px solid var(--border-color)', cursor: 'pointer', background: 'transparent', color: 'var(--text-secondary)' }}
+                    >
+                      Remove
+                    </button>
+                  )}
+                </div>
+                <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 4 }}>
+                  {myProfile?.phone ? `+${myProfile.phone}` : ''}
+                </div>
+              </div>
+
+              <label style={{ display: 'block', marginTop: 16, fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)' }}>Name</label>
+              <input
+                value={profileName}
+                onChange={(e) => setProfileName(e.target.value)}
+                className="input-field"
+                style={{ width: '100%', marginTop: 4, padding: '0.5rem 0.6rem' }}
+                placeholder="Display name"
+              />
+              <label style={{ display: 'block', marginTop: 12, fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)' }}>About</label>
+              <input
+                value={profileAbout}
+                onChange={(e) => setProfileAbout(e.target.value)}
+                className="input-field"
+                style={{ width: '100%', marginTop: 4, padding: '0.5rem 0.6rem' }}
+                placeholder="Hey there! I am using WhatsApp."
+              />
+
+              <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 18 }}>
+                <button
+                  type="button"
+                  onClick={() => setShowProfile(false)}
+                  style={{ fontSize: 13, padding: '6px 16px', borderRadius: 6, border: '1px solid var(--border-color)', cursor: 'pointer', background: 'transparent', color: 'var(--text-secondary)' }}
+                >
+                  Close
+                </button>
+                <button
+                  type="button"
+                  disabled={profileSaving}
+                  onClick={saveMyProfile}
+                  style={{ fontSize: 13, fontWeight: 600, padding: '6px 16px', borderRadius: 6, border: 'none', cursor: 'pointer', color: '#fff', background: 'var(--primary-color, #25D366)', opacity: profileSaving ? 0.6 : 1 }}
+                >
+                  {profileSaving ? 'Saving…' : 'Save'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </WhatsAppThreadsContext.Provider>
   );

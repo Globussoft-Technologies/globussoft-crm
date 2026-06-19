@@ -333,6 +333,7 @@ jobs:
             tests/lead-capture-settings-api.spec.js \
             tests/travel-payable-batches-api.spec.js \
             tests/travel-curriculum-api.spec.js \
+            tests/gmail-api.spec.js \
             tests/teardown-completeness.spec.js \
             tests/demo-hygiene-api.spec.js
 

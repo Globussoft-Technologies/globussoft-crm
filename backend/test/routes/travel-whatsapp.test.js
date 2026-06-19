@@ -46,6 +46,7 @@ prisma.whatsAppThread = {
   findUnique: vi.fn(),
   update: vi.fn(),
   create: vi.fn(),
+  deleteMany: vi.fn(),
 };
 prisma.whatsAppMessage = {
   ...(prisma.whatsAppMessage || {}),
@@ -53,6 +54,7 @@ prisma.whatsAppMessage = {
   updateMany: vi.fn(),
   findFirst: vi.fn(),
   update: vi.fn(),
+  deleteMany: vi.fn(),
 };
 prisma.contact = { ...(prisma.contact || {}), findFirst: vi.fn() };
 prisma.tenant = prisma.tenant || {};
@@ -72,8 +74,10 @@ const requireCJS = createRequire(import.meta.url);
 const JWT_SECRET = process.env.JWT_SECRET || 'enterprise_super_secret_key_2026';
 const router = requireCJS('../../routes/travel_whatsapp');
 // Same CJS module instance the router holds — spies on it intercept the
-// router's calls (watiClient's documented self-mocking seam).
-const watiClient = requireCJS('../../services/watiClient');
+// router's calls. The travel transport is now WhatsApp Web (QR-scan), so the
+// router imports whatsappWebClient (the Wati REST require is commented out).
+// Under NODE_ENV=test it never launches a browser and hard-stubs sends.
+const watiClient = requireCJS('../../services/whatsappWebClient');
 
 // Captured socket emits — the fake req.io mirror of server.js's injection.
 let emits = [];
@@ -111,6 +115,8 @@ beforeEach(() => {
   prisma.whatsAppMessage.updateMany.mockReset().mockResolvedValue({ count: 1 });
   prisma.whatsAppMessage.findFirst.mockReset().mockResolvedValue(null);
   prisma.whatsAppMessage.update.mockReset().mockResolvedValue({ id: 47 });
+  prisma.whatsAppMessage.deleteMany.mockReset().mockResolvedValue({ count: 6 });
+  prisma.whatsAppThread.deleteMany.mockReset().mockResolvedValue({ count: 2 });
   prisma.contact.findFirst.mockReset().mockResolvedValue(null);
   prisma.tenant.findUnique.mockReset().mockResolvedValue(TRAVEL_TENANT);
   prisma.tenant.findFirst.mockReset().mockResolvedValue(TRAVEL_TENANT);
@@ -249,124 +255,88 @@ describe('GET /api/travel/whatsapp/templates', () => {
 });
 
 describe('POST /api/travel/whatsapp/sync', () => {
-  test('19. stub mode short-circuits (no Wati pull attempted)', async () => {
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  // WhatsApp Web delivers inbound in REAL TIME via the session's `message`
+  // event, so the old Wati pull-sync is disabled (kept commented in the
+  // route). The endpoint is now a harmless no-op the chat fires on every poll.
+  test('19. not connected → { synced:false, reason:"not-connected" } (no pull)', async () => {
     const res = await request(makeApp())
       .post('/api/travel/whatsapp/sync')
       .set('Authorization', `Bearer ${tokenFor()}`);
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ synced: false, reason: 'stub-mode' });
+    expect(res.body).toEqual({ synced: false, reason: 'not-connected' });
     expect(prisma.whatsAppMessage.create).not.toHaveBeenCalled();
+  });
+
+  test('20. connected → { synced:false, reason:"realtime" } (events handle inbound)', async () => {
+    // Simulate a live WhatsApp Web session for this tenant.
+    vi.spyOn(watiClient, 'isEnabled').mockReturnValue(true);
+    const res = await request(makeApp())
+      .post('/api/travel/whatsapp/sync?force=1')
+      .set('Authorization', `Bearer ${tokenFor()}`);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ synced: false, reason: 'realtime' });
+    expect(prisma.whatsAppMessage.update).not.toHaveBeenCalled();
   });
 });
 
-// ─── Sync outbound delivery-state reconciliation ────────────────────
-// The send path stamps SENT when Wati's HTTP API accepts the call, but
-// Meta can reject asynchronously (live-confirmed 2026-06-12: "(#131037)
-// display name approval" failed every send while the UI showed a grey
-// SENT tick). The sync must adopt getMessages' statusString/failedDetail.
+// ─── QR connection lifecycle (connect / qr / disconnect) ────────────
+// The status endpoint reflects the WhatsApp Web session state; connect/
+// disconnect are ADMIN-gated. Under NODE_ENV=test no browser launches —
+// connect records a DISCONNECTED stub session (the route still 200s).
 
-describe('POST /api/travel/whatsapp/sync — outbound status reconciliation', () => {
-  const FAIL_DETAIL =
-    '(#131037) WhatsApp provided number needs display name approval before message can be sent.';
+describe('WhatsApp Web QR lifecycle', () => {
+  afterEach(() => { watiClient.disconnect(3).catch(() => {}); });
 
-  function outboundItem(overrides = {}) {
-    return {
-      id: '6a2bb9c00e16a58679f56ae4',
-      eventType: 'message',
-      type: 'text',
-      text: 'hello',
-      owner: true,
-      statusString: 'FAILED',
-      failedDetail: FAIL_DETAIL,
-      created: '2026-06-12T07:48:16.823Z',
-      ...overrides,
-    };
-  }
-
-  function primeWati(items) {
-    vi.spyOn(watiClient, 'isEnabled').mockReturnValue(true);
-    vi.spyOn(watiClient, 'getContacts').mockResolvedValue({
-      stub: false,
-      contacts: [{ wAid: '916200039874' }],
-    });
-    vi.spyOn(watiClient, 'getMessages').mockResolvedValue({ stub: false, items });
-  }
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  test('20. FAILED statusString flips a SENT row to FAILED + errorMessage + whatsapp:status emit', async () => {
-    primeWati([outboundItem()]);
-    prisma.whatsAppMessage.findFirst.mockResolvedValue({ id: 47, status: 'SENT', threadId: 11 });
-
+  test('24. status returns the WhatsApp Web connection shape', async () => {
     const res = await request(makeApp())
-      .post('/api/travel/whatsapp/sync?force=1')
+      .get('/api/travel/whatsapp/status')
       .set('Authorization', `Bearer ${tokenFor()}`);
     expect(res.status).toBe(200);
-    expect(res.body.synced).toBe(true);
-    expect(res.body.statusUpdates).toBe(1);
-
-    // Row matched by providerMsgId, scoped to OUTBOUND + tenant.
-    const findArg = prisma.whatsAppMessage.findFirst.mock.calls[0][0];
-    expect(findArg.where).toMatchObject({
-      tenantId: 3,
-      providerMsgId: '6a2bb9c00e16a58679f56ae4',
-      direction: 'OUTBOUND',
-    });
-
-    const upd = prisma.whatsAppMessage.update.mock.calls[0][0];
-    expect(upd.where).toEqual({ id: 47 });
-    expect(upd.data.status).toBe('FAILED');
-    expect(upd.data.errorMessage).toMatch(/131037/);
-
-    const statusEmit = emits.find((e) => e.ev === 'whatsapp:status');
-    expect(statusEmit.room).toBe('tenant:3');
-    expect(statusEmit.payload).toMatchObject({
-      tenantId: 3,
-      threadId: 11,
-      status: 'FAILED',
-      errorMessage: FAIL_DETAIL,
-    });
+    expect(res.body).toMatchObject({ connected: false });
+    expect(res.body).toHaveProperty('state');
   });
 
-  test('21. never downgrades — READ row ignores a DELIVERED statusString', async () => {
-    primeWati([outboundItem({ statusString: 'DELIVERED', failedDetail: null })]);
-    prisma.whatsAppMessage.findFirst.mockResolvedValue({ id: 47, status: 'READ', threadId: 11 });
-
+  test('25. POST /connect (admin) returns state; never launches under test', async () => {
     const res = await request(makeApp())
-      .post('/api/travel/whatsapp/sync?force=1')
-      .set('Authorization', `Bearer ${tokenFor()}`);
+      .post('/api/travel/whatsapp/connect')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({});
     expect(res.status).toBe(200);
-    expect(res.body.statusUpdates).toBe(0);
-    expect(prisma.whatsAppMessage.update).not.toHaveBeenCalled();
-    expect(emits.find((e) => e.ev === 'whatsapp:status')).toBeUndefined();
+    expect(res.body.connected).toBe(false);
+    expect(res.body).toHaveProperty('state');
   });
 
-  test('22. unknown providerMsgId is skipped without writes', async () => {
-    primeWati([outboundItem()]);
-    prisma.whatsAppMessage.findFirst.mockResolvedValue(null);
-
+  test('26. POST /connect is ADMIN-only (USER → 403)', async () => {
+    prisma.user.findUnique.mockResolvedValue({ role: 'USER', subBrandAccess: null });
     const res = await request(makeApp())
-      .post('/api/travel/whatsapp/sync?force=1')
-      .set('Authorization', `Bearer ${tokenFor()}`);
-    expect(res.status).toBe(200);
-    expect(res.body.statusUpdates).toBe(0);
-    expect(prisma.whatsAppMessage.update).not.toHaveBeenCalled();
+      .post('/api/travel/whatsapp/connect')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`)
+      .send({});
+    expect(res.status).toBe(403);
   });
 
-  test('23. DELIVERED statusString advances a SENT row (no errorMessage written)', async () => {
-    primeWati([outboundItem({ statusString: 'DELIVERED', failedDetail: null })]);
-    prisma.whatsAppMessage.findFirst.mockResolvedValue({ id: 47, status: 'SENT', threadId: 11 });
-
+  test('27. GET /qr returns the current QR/state envelope', async () => {
     const res = await request(makeApp())
-      .post('/api/travel/whatsapp/sync?force=1')
+      .get('/api/travel/whatsapp/qr')
       .set('Authorization', `Bearer ${tokenFor()}`);
     expect(res.status).toBe(200);
-    expect(res.body.statusUpdates).toBe(1);
-    const upd = prisma.whatsAppMessage.update.mock.calls[0][0];
-    expect(upd.data.status).toBe('DELIVERED');
-    expect(upd.data.errorMessage).toBeUndefined();
+    expect(res.body).toHaveProperty('state');
+    expect(res.body).toHaveProperty('qr');
+  });
+
+  test('28. POST /disconnect (admin) returns DISCONNECTED state + purges imported chats', async () => {
+    const res = await request(makeApp())
+      .post('/api/travel/whatsapp/disconnect')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ logout: false });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ connected: false, state: 'DISCONNECTED' });
+    // Disconnect clears the mirror — messages then threads deleted for tenant 3.
+    expect(prisma.whatsAppMessage.deleteMany).toHaveBeenCalledWith({ where: { tenantId: 3 } });
+    expect(prisma.whatsAppThread.deleteMany).toHaveBeenCalledWith({ where: { tenantId: 3 } });
+    expect(res.body.purged).toEqual({ threads: 2, messages: 6 });
   });
 });
 

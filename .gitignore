@@ -184,6 +184,14 @@ rbac-backup-tenant-*.json
 # CRM ↔ marketing-site handoff work but never pushed to this repo.
 drharors-wellness/
 
+# WhatsApp Web (QR-scan) transport session data — whatsapp-web.js LocalAuth +
+# puppeteer cache. Per-tenant linked-device credentials live here; NEVER commit.
+backend/.wwebjs_auth/
+backend/.wwebjs_cache/
+.wwebjs_auth/
+.wwebjs_cache/
+backend/uploads/wa-web/
+
 # Voyagr — separate Next.js landing-site project living in its own
 # github.com/Globussoft-Technologies/voyagr repo. Cloned here for local
 # co-development convenience but never pushed to this repo.

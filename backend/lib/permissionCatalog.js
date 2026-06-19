@@ -460,13 +460,16 @@ function deepCloneCatalog(source) {
  * default — no wellness/travel-only modules surface in the matrix).
  */
 function getCatalogForVertical(vertical) {
+  // Deep clone (not a shallow spread) so callers can mutate the returned
+  // catalog — including the per-module action arrays — without poisoning the
+  // shared PERMISSION_CATALOG_* sources.
   switch (vertical) {
     case 'wellness':
-      return deepCloneCatalog(PERMISSION_CATALOG_WELLNESS);
+      return structuredClone(PERMISSION_CATALOG_WELLNESS);
     case 'travel':
-      return deepCloneCatalog(PERMISSION_CATALOG_TRAVEL);
+      return structuredClone(PERMISSION_CATALOG_TRAVEL);
     default:
-      return deepCloneCatalog(PERMISSION_CATALOG_GENERIC);
+      return structuredClone(PERMISSION_CATALOG_GENERIC);
   }
 }
 
@@ -556,7 +559,10 @@ function getActions(module) {
 }
 
 function getCatalog() {
-  return deepCloneCatalog(PERMISSION_CATALOG);
+  // Deep clone — a shallow `{ ...PERMISSION_CATALOG }` shares the per-module
+  // action ARRAYS, so a caller doing `catalog.contacts.push(...)` would poison
+  // the source. structuredClone gives callers a fully-isolated copy.
+  return structuredClone(PERMISSION_CATALOG);
 }
 
 module.exports = {

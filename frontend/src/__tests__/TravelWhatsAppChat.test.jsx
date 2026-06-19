@@ -91,11 +91,29 @@ const DETAIL = {
 };
 
 // Default route table — individual tests override fetchApiMock as needed.
-function installDefaultRoutes({ watiEnabled = false, channelNumber = null } = {}) {
+// `connected`/`phone` drive the WhatsApp Web status strip (QR transport).
+// Default connected:true so the chat-flow tests load threads (the inbox is a
+// live mirror — it intentionally shows no chats while disconnected).
+function installDefaultRoutes({ connected = true, phone = null } = {}) {
   fetchApiMock.mockImplementation((url, opts) => {
     const method = opts?.method || 'GET';
     if (url === '/api/travel/whatsapp/status') {
-      return Promise.resolve({ enabled: watiEnabled, channelNumber });
+      return Promise.resolve({
+        enabled: connected,
+        connected,
+        state: connected ? 'CONNECTED' : 'DISCONNECTED',
+        phone,
+        qr: null,
+      });
+    }
+    if (url === '/api/travel/whatsapp/qr') {
+      return Promise.resolve({ state: connected ? 'CONNECTED' : 'DISCONNECTED', connected, qr: null, phone });
+    }
+    if (url === '/api/travel/whatsapp/connect' && method === 'POST') {
+      return Promise.resolve({ state: 'QR', connected: false, qr: null });
+    }
+    if (url === '/api/travel/whatsapp/disconnect' && method === 'POST') {
+      return Promise.resolve({ state: 'DISCONNECTED', connected: false, qr: null, phone: null });
     }
     if (url.startsWith('/api/whatsapp/threads/11/mark-read')) return Promise.resolve({});
     if (url.startsWith('/api/whatsapp/threads/11')) return Promise.resolve(DETAIL);
@@ -128,22 +146,36 @@ beforeEach(() => {
   for (const k of Object.keys(socketHandlers)) delete socketHandlers[k];
 });
 
-describe('<TravelWhatsAppChat /> — Wati status strip', () => {
-  it('1. stub mode: amber copy + dispatch-log link', async () => {
-    installDefaultRoutes({ watiEnabled: false });
+describe('<TravelWhatsAppChat /> — WhatsApp Web status strip', () => {
+  it('1. not connected: amber copy + Connect button + dispatch-log link', async () => {
+    installDefaultRoutes({ connected: false });
     renderPage();
     const strip = await screen.findByTestId('wati-status-strip');
-    await waitFor(() => expect(strip).toHaveTextContent(/Wati stub mode/i));
-    expect(strip).toHaveTextContent(/messages queue until the Wati credentials/i);
+    await waitFor(() => expect(strip).toHaveTextContent(/WhatsApp not connected/i));
+    expect(strip).toHaveTextContent(/messages queue/i);
+    // Admin sees the QR-connect CTA.
+    expect(screen.getByTestId('wa-connect-btn')).toBeInTheDocument();
     const logLink = screen.getByRole('link', { name: /Dispatch log/i });
     expect(logLink).toHaveAttribute('href', '/travel/whatsapp/log');
   });
 
-  it('2. connected: green copy with masked channel number', async () => {
-    installDefaultRoutes({ watiEnabled: true, channelNumber: '9198•••102' });
+  it('2. connected: green copy with masked number + no Connect button', async () => {
+    installDefaultRoutes({ connected: true, phone: '9198•••102' });
     renderPage();
     const strip = await screen.findByTestId('wati-status-strip');
-    await waitFor(() => expect(strip).toHaveTextContent(/Wati connected · 9198•••102/i));
+    await waitFor(() => expect(strip).toHaveTextContent(/WhatsApp connected · 9198•••102/i));
+    expect(screen.queryByTestId('wa-connect-btn')).not.toBeInTheDocument();
+  });
+
+  it('2b. clicking Connect opens the QR modal', async () => {
+    installDefaultRoutes({ connected: false });
+    renderPage();
+    fireEvent.click(await screen.findByTestId('wa-connect-btn'));
+    expect(await screen.findByTestId('wa-qr-modal')).toBeInTheDocument();
+    const connectCalls = fetchApiMock.mock.calls.filter(
+      ([u, o]) => u === '/api/travel/whatsapp/connect' && o?.method === 'POST',
+    );
+    expect(connectCalls.length).toBeGreaterThan(0);
   });
 });
 

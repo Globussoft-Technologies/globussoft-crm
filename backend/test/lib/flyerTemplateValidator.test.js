@@ -6,8 +6,8 @@
 //     and non-hex strings are rejected.
 //   - validatePalette requires primary/secondary/text/bg; accent optional.
 //   - validateBlock enforces type taxonomy + non-negative finite numeric
-//     dimensions + type-specific required fields (text→content,
-//     image/logo→src, cta→content+href, divider→nothing extra).
+//     dimensions + type-specific required fields (text/price→content,
+//     image/logo→src, cta→content [href optional], divider→nothing extra).
 //   - validateLayout demands an array and aggregates per-block errors.
 //   - validateTemplate aggregates palette + layout + optional-assets
 //     errors and rejects null / non-object input.
@@ -36,6 +36,7 @@ describe("flyerTemplateValidator — constants", () => {
   it("exports the block-type taxonomy", () => {
     expect(VALID_BLOCK_TYPES).toEqual([
       "text",
+      "price",
       "image",
       "cta",
       "divider",
@@ -159,9 +160,26 @@ describe("validateBlock", () => {
     content: "Book now",
     href: "https://travelstall.in/book",
   };
+  const okPrice = {
+    type: "price",
+    x: 0,
+    y: 300,
+    width: 200,
+    height: 48,
+    content: "₹ 49,999",
+  };
 
   it("accepts a valid text block", () => {
     expect(validateBlock(okText, 0)).toEqual([]);
+  });
+
+  it("accepts a valid price block", () => {
+    expect(validateBlock(okPrice, 0)).toEqual([]);
+  });
+
+  it("flags price block without content", () => {
+    const errors = validateBlock({ ...okPrice, content: "" }, 1);
+    expect(errors).toContain("layout[1] (price) needs non-empty content");
   });
 
   it("accepts a valid image block", () => {
@@ -195,9 +213,18 @@ describe("validateBlock", () => {
     expect(errors).toContain("layout[2] (logo) needs non-empty src");
   });
 
-  it("flags cta block without href", () => {
-    const errors = validateBlock({ ...okCta, href: "" }, 0);
-    expect(errors).toContain("layout[0] (cta) needs non-empty href");
+  it("accepts a cta block without href (href is optional)", () => {
+    const { href: _href, ...noHref } = okCta;
+    expect(validateBlock(noHref, 0)).toEqual([]);
+  });
+
+  it("accepts a cta block with an empty-string href (treated as no link)", () => {
+    expect(validateBlock({ ...okCta, href: "" }, 0)).toEqual([]);
+  });
+
+  it("flags a cta block whose href is a non-string", () => {
+    const errors = validateBlock({ ...okCta, href: 42 }, 0);
+    expect(errors).toContain("layout[0] (cta) href must be a string if provided");
   });
 
   it("flags invalid block type", () => {
@@ -296,7 +323,22 @@ describe("validateTemplate", () => {
     });
     expect(result.ok).toBe(false);
     expect(result.errors).toContain("layout[0] (cta) needs non-empty content");
-    expect(result.errors).toContain("layout[0] (cta) needs non-empty href");
+    // href is optional now — a content-less cta no longer ALSO fails on href.
+    expect(result.errors).not.toContain("layout[0] (cta) needs non-empty href");
+  });
+
+  it("accepts the studio's default flyer — headline + price + href-less cta", () => {
+    // Mirrors the exact INVALID_TEMPLATE case operators hit: a Price block plus
+    // a "Book Now" CTA with no href. Both used to be rejected.
+    const result = validateTemplate({
+      ...okTemplate,
+      layout: [
+        { type: "text", x: 24, y: 24, width: 480, height: 80, content: "Headline" },
+        { type: "price", x: 24, y: 120, width: 200, height: 48, content: "₹ 49,999" },
+        { type: "cta", x: 24, y: 200, width: 200, height: 50, content: "Book Now" },
+      ],
+    });
+    expect(result).toEqual({ ok: true, errors: [] });
   });
 
   it("flags assets when provided as a non-object", () => {

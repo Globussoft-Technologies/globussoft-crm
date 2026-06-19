@@ -485,6 +485,7 @@ const quickCardSub = {
 const widgetGrid = {
   display: 'grid',
   gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 320px), 1fr))',
+  gridAutoRows: '280px',
   gap: '1rem',
 };
 

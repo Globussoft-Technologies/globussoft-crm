@@ -105,8 +105,52 @@ const { JWT_SECRET } = require("../config/secrets");
 // change guard because zero behaviour changes downstream.
 const { setAuthCookie, clearAuthCookie } = require("../lib/authCookies");
 
-// In-memory store for password reset tokens (token -> { userId, expiresAt })
+// Password-reset token store. Primary: the PasswordResetToken DB table (so
+// links survive backend restarts / redeploys / multiple instances). Fallback:
+// this in-memory Map — used only when the Prisma client predates the table
+// (i.e. `prisma generate` hasn't run yet), so the flow never hard-breaks.
 const resetTokens = new Map();
+
+// Persist a freshly-issued reset token. Uses RAW SQL against the
+// PasswordResetToken table so it works even when the Prisma client hasn't been
+// regenerated yet (the table is created by `prisma db push`; raw queries don't
+// need the generated model). Memory fallback only if the table itself is
+// missing.
+async function storeResetToken(token, userId, expiresAt) {
+  try {
+    await prisma.$executeRawUnsafe(
+      "INSERT INTO `PasswordResetToken` (`token`, `userId`, `expiresAt`) VALUES (?, ?, ?)",
+      token, userId, expiresAt,
+    );
+  } catch (e) {
+    console.warn(`[auth] reset-token DB persist failed, using in-memory fallback: ${e.message}`);
+    resetTokens.set(token, { userId, expiresAt: expiresAt.getTime() });
+  }
+}
+
+// Consume a reset token: returns { userId } when valid, { error } when
+// expired/used, or null when unknown. Checks the DB (raw) first, then memory.
+async function consumeResetToken(token) {
+  let row = null;
+  try {
+    const rows = await prisma.$queryRawUnsafe(
+      "SELECT `userId` AS userId, `expiresAt` AS expiresAt, `usedAt` AS usedAt FROM `PasswordResetToken` WHERE `token` = ? LIMIT 1",
+      token,
+    );
+    row = Array.isArray(rows) && rows.length ? rows[0] : null;
+  } catch { row = null; }
+  if (row) {
+    if (row.usedAt) return { error: "Reset link has already been used" };
+    if (Date.now() > new Date(row.expiresAt).getTime()) return { error: "Reset token has expired" };
+    try { await prisma.$executeRawUnsafe("UPDATE `PasswordResetToken` SET `usedAt` = NOW(3) WHERE `token` = ?", token); } catch { /* best-effort */ }
+    return { userId: Number(row.userId) };
+  }
+  const entry = resetTokens.get(token);
+  if (!entry) return null;
+  if (Date.now() > entry.expiresAt) { resetTokens.delete(token); return { error: "Reset token has expired" }; }
+  resetTokens.delete(token);
+  return { userId: entry.userId };
+}
 
 // Public endpoint: Get list of tenants for customer registration
 router.get("/public/tenants", async (req, res) => {
@@ -897,11 +941,20 @@ router.post("/forgot-password", async (req, res) => {
 
     if (user) {
       const token = crypto.randomBytes(32).toString("hex");
-      resetTokens.set(token, { userId: user.id, expiresAt: Date.now() + 3600000 }); // 1 hour
+      // Persist (DB, memory-fallback) — fire-and-forget to preserve the
+      // anti-enumeration timing (response goes out before any round-trip).
+      storeResetToken(token, user.id, new Date(Date.now() + 3600000)).catch(() => {}); // 1 hour
       // Fire-and-forget. The .catch is just so an unhandled-rejection log
       // doesn't fire — sendPasswordResetEmail already swallows + logs all
       // errors internally.
-      const frontendBase = process.env.FRONTEND_URL || `https://${req.headers.host || "crm.globusdemos.com"}`;
+      // Reset links must target the FRONTEND SPA page (/reset-password), not
+      // the auth-guarded API. Strip a trailing slash AND a stray "/api"
+      // suffix so a deployment whose FRONTEND_URL is mistakenly set to the
+      // API base (e.g. https://host/api) still produces a working SPA link
+      // instead of https://host/api/reset-password → "Authentication required".
+      const frontendBase = (process.env.FRONTEND_URL || `https://${req.headers.host || "crm.globusdemos.com"}`)
+        .replace(/\/+$/, "")
+        .replace(/\/api$/i, "");
       sendPasswordResetEmail(user.email, token, frontendBase).catch(() => { });
     }
 
@@ -932,12 +985,9 @@ router.post("/reset-password", async (req, res) => {
       });
     }
 
-    const entry = resetTokens.get(token);
+    const entry = await consumeResetToken(token);
     if (!entry) return res.status(400).json({ error: "Invalid or expired reset token" });
-    if (Date.now() > entry.expiresAt) {
-      resetTokens.delete(token);
-      return res.status(400).json({ error: "Reset token has expired" });
-    }
+    if (entry.error) return res.status(400).json({ error: entry.error });
 
     const hashedPassword = await bcrypt.hash(newPassword, 10);
     const targetUser = await prisma.user.update({
@@ -945,7 +995,7 @@ router.post("/reset-password", async (req, res) => {
       data: { password: hashedPassword },
       select: { id: true, email: true, tenantId: true },
     });
-    resetTokens.delete(token);
+    // Token already consumed (marked used / removed) by consumeResetToken above.
 
     // #179: audit completed password reset. The reset-password endpoint is
     // unauthenticated (the token IS the auth), so userId on the audit row is

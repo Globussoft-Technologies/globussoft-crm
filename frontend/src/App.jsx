@@ -17,6 +17,7 @@ import {
 } from "react-router-dom";
 import Login from "./pages/Login";
 import Signup from "./pages/Signup";
+import ResetPassword from "./pages/ResetPassword";
 import Landing from "./pages/Landing";
 import Layout from "./components/Layout";
 import RouteErrorBoundary from "./components/RouteErrorBoundary";
@@ -100,6 +101,7 @@ const LegalPage = lazy(() => import("./pages/LegalPage"));
 const AuditLog = lazy(() => import("./pages/AuditLog"));
 const Privacy = lazy(() => import("./pages/Privacy"));
 const CalendarSync = lazy(() => import("./pages/CalendarSync"));
+const GmailInbox = lazy(() => import("./pages/GmailInbox"));
 const Profile2FA = lazy(() => import("./pages/Profile2FA"));
 const Pipelines = lazy(() => import("./pages/Pipelines"));
 const Forecasting = lazy(() => import("./pages/Forecasting"));
@@ -947,6 +949,7 @@ export default function App() {
                     }
                   />
                   <Route path="/sso/return" element={<SsoReturn />} />
+                  <Route path="/reset-password" element={<ResetPassword />} />
                   <Route path="/pricing" element={<Pricing />} />
                   <Route path="/payment-success" element={<PaymentSuccess />} />
                   <Route path="/payment-failed" element={<PaymentFailed />} />
@@ -1216,6 +1219,7 @@ export default function App() {
                     />
                     <Route path="privacy" element={<Privacy />} />
                     <Route path="calendar-sync" element={<CalendarSync />} />
+                    <Route path="gmail" element={<GmailInbox />} />
                     <Route
                       path="pipelines"
                       element={

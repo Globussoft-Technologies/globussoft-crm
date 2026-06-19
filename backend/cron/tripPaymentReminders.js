@@ -26,7 +26,10 @@
 const cron = require("node-cron");
 const prisma = require("../lib/prisma");
 const { resolveForSubBrand } = require("../lib/subBrandConfig");
-const watiClient = require("../services/watiClient");
+// WhatsApp transport swap (Q9): Wati REST is COMMENTED OUT (kept on disk, not removed);
+// travel now dispatches over WhatsApp Web (QR-scan) via a drop-in client.
+// const watiClient = require("../services/watiClient"); // legacy Wati REST (disabled)
+const watiClient = require("../services/whatsappWebClient");
 
 const DEFAULT_REMINDER_DAYS = 7;
 const OVERDUE_LOOKBACK_DAYS = 30;

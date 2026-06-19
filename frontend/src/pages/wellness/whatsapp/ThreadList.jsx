@@ -1,4 +1,5 @@
 
+import { useState } from 'react';
 import {
   MessageCircle,
   Search,
@@ -11,6 +12,59 @@ import { Link } from 'react-router-dom';
 import { useWhatsAppThreads } from './WhatsAppThreadsContext';
 import StatusPill from './StatusPill';
 import { timeAgo, STATUS_OPTIONS } from './utils';
+import { openImage } from './ImageLightbox';
+
+// Secondary line under the chat name: a real phone shows as-is; a group id
+// (@g.us) shows "Group"; a privacy-id key (lid:… / @lid) is hidden (the name
+// is already shown). Keeps raw ids out of the UI.
+// eslint-disable-next-line react-refresh/only-export-components
+export function prettyContactLine(phone) {
+  const s = String(phone || '');
+  if (s.includes('@g.us')) return 'Group';
+  if (s.startsWith('lid:') || s.includes('@lid')) return '';
+  return s;
+}
+
+// Contact avatar (DP) — shows the WhatsApp profile picture when available,
+// else coloured initials (deterministic colour from the label). Mirrors
+// WhatsApp Web's chat-list avatars. `size` in px.
+const AVATAR_COLORS = ['#ef4444', '#f59e0b', '#10b981', '#3b82f6', '#8b5cf6', '#ec4899', '#14b8a6', '#f97316'];
+export function ThreadAvatar({ url, label, size = 42, clickable = false }) {
+  const [imgError, setImgError] = useState(false);
+  const text = String(label || '?').trim();
+  const initials = text
+    .replace(/^\+?\d+$/, '#') // pure number → a neutral glyph
+    .split(/\s+/).slice(0, 2).map((w) => w[0]).join('').toUpperCase() || '#';
+  let hash = 0;
+  for (let i = 0; i < text.length; i += 1) hash = (hash * 31 + text.charCodeAt(i)) >>> 0;
+  const bg = AVATAR_COLORS[hash % AVATAR_COLORS.length];
+  const common = {
+    width: size, height: size, borderRadius: '50%', flexShrink: 0,
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    objectFit: 'cover',
+  };
+  // Clickable (header/profile) avatars with a real DP open the full image.
+  const canOpen = clickable && url && !imgError;
+  // Show the DP only if we have a URL and it loaded; otherwise coloured initials.
+  if (url && !imgError) {
+    return (
+      <img
+        src={url}
+        alt=""
+        referrerPolicy="no-referrer"
+        onClick={canOpen ? () => openImage(url) : undefined}
+        title={canOpen ? 'View photo' : undefined}
+        style={{ ...common, background: 'var(--border-color)', cursor: canOpen ? 'pointer' : 'default' }}
+        onError={() => setImgError(true)}
+      />
+    );
+  }
+  return (
+    <div style={{ ...common, background: bg, color: '#fff', fontWeight: 700, fontSize: size * 0.4 }}>
+      {initials}
+    </div>
+  );
+}
 
 export default function ThreadList() {
   const {
@@ -144,7 +198,7 @@ export default function ThreadList() {
         ) : (
           threads.map((t) => {
             const isSelected = t.id === selectedId;
-            const displayName = t.contact?.name || t.patient?.name || t.contactPhone;
+            const displayName = t.contact?.name || t.contactName || t.patient?.name || t.contactPhone;
             return (
               <div
                 key={t.id}
@@ -154,9 +208,11 @@ export default function ThreadList() {
                   borderBottom: '1px solid var(--border-color)',
                   cursor: 'pointer',
                   background: isSelected ? 'var(--card-bg-hover, rgba(59,130,246,0.08))' : 'transparent',
-                  display: 'flex', flexDirection: 'column', gap: 4,
+                  display: 'flex', alignItems: 'center', gap: 10,
                 }}
               >
+                <ThreadAvatar url={t.contactAvatar} label={displayName} size={42} />
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: 1, minWidth: 0 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6 }}>
                   <span style={{
                     fontWeight: t.unreadCount > 0 ? 700 : 500,
@@ -172,7 +228,7 @@ export default function ThreadList() {
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6 }}>
                   <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-                    {t.contactPhone}
+                    {prettyContactLine(t.contactPhone)}
                   </span>
                   <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
                     {timeAgo(t.lastMessageAt)}
@@ -189,6 +245,7 @@ export default function ThreadList() {
                       <UserCheck size={11} /> {t.assignedTo.name || t.assignedTo.email}
                     </span>
                   )}
+                </div>
                 </div>
               </div>
             );

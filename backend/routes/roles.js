@@ -42,6 +42,7 @@ const ROLES_VERSION_RESTORE_OR_RECOVERY = [
   { module: "settings", action: "manage" },
 ];
 const { clearCustomerRoleCache } = require("../lib/portalPermissions");
+const { syncWellnessRoleFromRbacRoles } = require("../lib/wellnessRoleSync");
 const {
   isValidPermission,
   validatePermissionForVertical,
@@ -1234,9 +1235,17 @@ router.post(
         if (previousAssignments.length > 0) {
           await tx.userRole.deleteMany({ where: { userId } });
         }
-        return tx.userRole.create({
+        const created = await tx.userRole.create({
           data: { userId, roleId, assignedById: req.user.userId },
         });
+        // Wellness-tenant sync: derive User.wellnessRole from the new
+        // RBAC role so /api/wellness/doctors/availability picks the
+        // user up. No-op for generic/travel tenants.
+        await syncWellnessRoleFromRbacRoles(tx, {
+          userId,
+          tenantId: role.tenantId,
+        });
+        return created;
       });
 
       // Clear this user's permission cache
@@ -1315,10 +1324,19 @@ router.delete(
         }
       }
 
-      await prisma.userRole.delete({
-        where: {
-          userId_roleId: { userId, roleId },
-        },
+      await prisma.$transaction(async (tx) => {
+        await tx.userRole.delete({
+          where: {
+            userId_roleId: { userId, roleId },
+          },
+        });
+        // Wellness-tenant sync: clear User.wellnessRole if the revoked
+        // role was the one driving it (Sankar's case in reverse —
+        // revoking DOCTOR should remove him from the bookable list).
+        await syncWellnessRoleFromRbacRoles(tx, {
+          userId,
+          tenantId: role.tenantId,
+        });
       });
 
       // Clear this user's permission cache
@@ -1463,7 +1481,15 @@ router.post(
       // prior role set.
       const newAssignments = await prisma.$transaction(async (tx) => {
         await tx.userRole.deleteMany({ where: { userId } });
-        if (targetRoleIds.length === 0) return [];
+        if (targetRoleIds.length === 0) {
+          // Empty set → sync helper will clear any stale catalog-derived
+          // wellnessRole. No-op for non-wellness tenants.
+          await syncWellnessRoleFromRbacRoles(tx, {
+            userId,
+            tenantId: targetUser.tenantId,
+          });
+          return [];
+        }
         await tx.userRole.createMany({
           data: targetRoleIds.map((roleId) => ({
             userId,
@@ -1473,6 +1499,10 @@ router.post(
           // Schema has @@unique([userId, roleId]) so a duplicated row
           // would fail; the dedup above already prevents that.
           skipDuplicates: true,
+        });
+        await syncWellnessRoleFromRbacRoles(tx, {
+          userId,
+          tenantId: targetUser.tenantId,
         });
         return tx.userRole.findMany({
           where: { userId },

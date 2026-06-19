@@ -1609,7 +1609,7 @@ function renderTravelNav({
   return (
     <>
       <Link to="/travel" icon={Compass} label="Dashboard" requiredPermission={{ module: "reports", action: "read" }} />
-      <Link to="/travel/leads" icon={UserPlus} label="Leads" requiredPermission={{ module: "leads", action: "read" }} />
+      <Link to="/leads" icon={UserPlus} label="Leads" requiredPermission={{ module: "leads", action: "read" }} />
       <Link to="/travel/inbound-leads" icon={InboxIcon} label="Inbound Leads" requiredPermission={{ module: "inbound_leads", action: "read" }} />
       <Link to="/travel/diagnostics" icon={ClipboardCheck} label="Diagnostics" requiredPermission={{ module: "diagnostics", action: "read" }} />
       <Link to="/travel/itineraries" icon={MapIcon} label="Itineraries" requiredPermission={{ module: "itineraries", action: "read" }} />

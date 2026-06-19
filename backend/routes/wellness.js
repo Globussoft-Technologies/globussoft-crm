@@ -4367,10 +4367,17 @@ router.all("/treatments/*", treatmentsGone);
 
 router.get("/services", async (req, res) => {
   try {
+    // Hard cap at 2000 so the BookAppointment / Catalog / Memberships /
+    // Calendar / TelecallerQueue / PointOfSale consumers all see the full
+    // tenant catalog. The previous 200 cap silently dropped services from
+    // every dropdown on tenants with >200 active rows (e.g. Dr. Haror's
+    // has 499 active), breaking the marketing-site ?serviceId= deep-link
+    // pre-fill on BookAppointment whenever the linked service sorted past
+    // position 200.
     const services = await prisma.service.findMany({
       where: tenantWhere(req, { NOT: { isActive: false } }),
       orderBy: [{ ticketTier: "desc" }, { name: "asc" }],
-      take: 200,
+      take: 2000,
     });
     res.json(services);
   } catch (e) {

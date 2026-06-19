@@ -25,6 +25,7 @@ const prisma = require("../lib/prisma");
 // practice but the historical contract returned 400 on unknown values,
 // which we preserve for back-compat.
 const { isCatalogedKey } = require("../lib/wellnessRoleTypes");
+const { syncWellnessRoleFromRbacRoles } = require("../lib/wellnessRoleSync");
 
 const VALID_ROLES = ["ADMIN", "MANAGER", "USER"];
 // Legacy whitelist — used only when the caller's tenant is non-wellness.
@@ -467,6 +468,17 @@ router.post("/", verifyRole(["ADMIN"]), async (req, res) => {
           },
         });
       }
+      // Fallback derivation: if the caller didn't supply an explicit
+      // wellnessRole (e.g. the Staff Add modal's wellnessRoleType catalog
+      // fetch hadn't returned yet, so deriveWellnessRole returned null),
+      // derive it from the just-assigned RBAC role. No-op for
+      // generic/travel tenants and no-op when wellnessRole already set.
+      const synced = await syncWellnessRoleFromRbacRoles(tx, {
+        userId: user.id,
+        tenantId: req.user.tenantId,
+        onlyIfEmpty: true,
+      });
+      if (synced && synced !== user.wellnessRole) user.wellnessRole = synced;
       return user;
     });
 
@@ -777,6 +789,30 @@ router.put("/:id", verifyRole(["ADMIN"]), async (req, res) => {
             });
           }
           changed.rbacRoleId = { from: currentRbacRoleId, to: nextRbacRoleId };
+        }
+
+        // Fallback derivation when the body didn't carry an explicit
+        // wellnessRole and the RBAC role just changed (e.g. the Staff
+        // Edit modal's catalog fetch raced the save, so the frontend
+        // posted wellnessRole=null). Pre-fix: the Doctor RBAC role was
+        // applied but wellnessRole stayed null → user was promoted in
+        // Roles & Permissions but never appeared in the bookable doctors
+        // dropdown. Restricted to onlyIfEmpty so an admin who explicitly
+        // set wellnessRole via the form keeps their choice.
+        if (rbacRoleChanged && wellnessRole == null) {
+          const synced = await syncWellnessRoleFromRbacRoles(tx, {
+            userId: target.id,
+            tenantId: req.user.tenantId,
+            onlyIfEmpty: true,
+          });
+          if (synced !== undefined && synced !== updated.wellnessRole) {
+            updated.wellnessRole = synced;
+            changed.wellnessRole = {
+              from: target.wellnessRole,
+              to: synced,
+              derived: true,
+            };
+          }
         }
 
         return updated;

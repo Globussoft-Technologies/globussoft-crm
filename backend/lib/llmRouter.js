@@ -119,6 +119,20 @@ const TASK_ROUTING = {
   // runaway image-gen burst doesn't silently exhaust the text-LLM
   // budget. Until then both share the 'llm' cap envelope.
   "marketing-flyer-image": { primary: "dall-e-3", fallback: "stability-xl" },
+  // TBO search fallback (PRD_TRAVEL — flight/hotel quote builder). When TBO
+  // creds aren't set yet, services/tboClient.js asks a WEB-GROUNDED model for
+  // current flight/hotel options as strict JSON. Perplexity Sonar primary (live
+  // web search); gemini-flash fallback. Real call gated on the provider key —
+  // until then routeRequest returns the deterministic stub (tboClient treats a
+  // stub envelope as "no live data" and falls through to its own sample data).
+  "flight-search": { primary: "perplexity-sonar", fallback: "gemini-flash" },
+  "hotel-search": { primary: "perplexity-sonar", fallback: "gemini-flash" },
+  "transfer-search": { primary: "perplexity-sonar", fallback: "gemini-flash" },
+  // Airport/city name → IATA code (2026-06-19). Lets flight search accept a
+  // free-text place ("Delhi", "Bengaluru") and resolve it server-side before
+  // the IATA-speaking TBO/LLM search. Tiny in/out → gemini-flash. Falls back to
+  // the static alias map in lib/airportResolver.js when the call stubs (no key).
+  "airport-iata": { primary: "gemini-flash", fallback: "claude-haiku" },
   // Catch-all for unrecognized tasks → reasoning model (Claude)
   // matches PRD's preference for a high-quality default.
 };
@@ -426,6 +440,14 @@ function buildStubText(task, _payload) {
       return `${tag} Cited search result: "Synthetic citation pending Q11 Perplexity key." (https://example.invalid/q11-stub)`;
     case "bulk-text":
       return `${tag} Bulk text output (synthetic). Real Gemini Flash lands when Q11 keys arrive.`;
+    case "flight-search":
+      // tboClient treats a stub envelope as "no live data" and falls through to
+      // its own canned sample flights, so this text is never parsed as results.
+      return `${tag} Flight search (synthetic). Real web-grounded results land when a TBO or Perplexity/Gemini key is set.`;
+    case "hotel-search":
+      return `${tag} Hotel search (synthetic). Real web-grounded results land when a TBO or Perplexity/Gemini key is set.`;
+    case "transfer-search":
+      return `${tag} Transfer search (synthetic). Real web-grounded results land when a TBO or Perplexity/Gemini key is set.`;
     case "itinerary-suggest":
       // Routed to gemini-flash per PRD §9.1 + FR-3.6 (S14). This stub-text
       // exists only so unrecognised-task callers of routeRequest get a
@@ -509,9 +531,13 @@ function buildPrompt(task, payload) {
   const SYS = {
     "talking-points": "You are a senior travel advisor. Given a lead's diagnostic profile, produce concise, actionable talking points for the advisor's next call. Plain text, 3-6 short bullets.",
     "form-vs-call": "You compare a customer's web-form answers against their phone-call answers, summarise the level of match, and flag any mismatches. Plain text.",
-    "itinerary-suggest": "You are an expert travel planner pricing a trip for a per-person quote. Given a destination, number of days, budget tier, and traveller interests/pace, return a realistic day-by-day itinerary as STRICT JSON only — no markdown, no text outside the JSON. Shape: {\"summary\":string,\"days\":[{\"dayNumber\":number,\"items\":[{\"itemType\":string,\"description\":string,\"estimatedCost\":number}]}]}. itemType MUST be one of: flight, transfer, hotel, sightseeing, activity, meals, visa, insurance, other. estimatedCost is the typical PER-PERSON cost in INR (Indian Rupees) for that item, using your best knowledge of current average prices for that destination and budget tier — give a realistic positive number; use 0 only when the item is genuinely free. Each day should include a hotel plus at least one sightseeing, one activity, and one meals item; put an arrival flight on day 1 and a departure flight on the final day. Keep each description short and specific to the destination. Return ONLY the JSON object.",
+    "itinerary-suggest": "You are an expert travel planner pricing a trip for a per-person quote. Given a destination, departure city, number of days, budget tier, and traveller interests/pace, return a realistic day-by-day itinerary as STRICT JSON only — no markdown, no text outside the JSON. Shape: {\"summary\":string,\"days\":[{\"dayNumber\":number,\"items\":[{\"itemType\":string,\"description\":string,\"estimatedCost\":number}]}]}. itemType MUST be one of: flight, transfer, hotel, sightseeing, activity, meals, visa, insurance, other. estimatedCost is the typical PER-PERSON cost in INR (Indian Rupees) — always give a REALISTIC POSITIVE number; use 0 only when genuinely free. CRITICAL FOR FLIGHTS: the context includes a departureCity field (e.g. \"Bangalore\") — use it to describe and price both the Day-1 outbound flight (e.g. \"Flight from Bangalore to Paris\") and the final-day return flight (e.g. \"Return flight Paris to Bangalore\") with a realistic one-way airfare in INR: economy ≈ ₹18,000–₹35,000, mid ≈ ₹35,000–₹65,000, luxury ≈ ₹65,000–₹1,50,000 for international routes; adjust down for short-haul. NEVER set a flight estimatedCost to 0. Each day should also include a hotel, at least one sightseeing, one activity, and one meals item. Keep descriptions short and destination-specific. Return ONLY the JSON object.",
     "trip-countdown": "You write a short, warm, upbeat PRE-TRIP reminder email for a travel customer. Return STRICT JSON only — no markdown, no text outside the JSON. Shape: {\"subject\":string,\"body\":string}. Use AT MOST one emoji in the subject. Mention the destination and the days-to-go. Keep the body under 80 words, friendly and encouraging (e.g. packing/prep tips as the trip nears). You may use the placeholder {name} for the customer's name in the body. Return ONLY the JSON object.",
     "payment-reminder": "You write a short, courteous but clearly URGENT deposit-reminder email for a travel customer whose booking is confirmed but whose 50% deposit is still due before a deadline. Return STRICT JSON only — no markdown, no text outside the JSON. Shape: {\"subject\":string,\"body\":string}. No emoji. State plainly that the deposit must be paid by the deadline to keep the booking, and that the booking is at risk of cancellation otherwise. Mention the destination and the days remaining. Keep the body under 90 words. You may use the placeholder {name} for the customer's name. Return ONLY the JSON object.",
+    "airport-iata": "You convert a city or airport name to its airport code. Given a place, reply with ONLY the single primary 3-letter IATA airport code in uppercase — nothing else. If the city has multiple airports, return its main international one. Examples: 'Delhi' → DEL, 'Bengaluru' → BLR, 'Jeddah' → JED, 'New York' → JFK.",
+    "flight-search": "You are a flight search assistant for a travel agency. Given an origin, destination, date(s), pax and cabin class, return CURRENT realistic flight options as STRICT JSON only — no markdown, no prose. Shape: {\"options\":[{\"airline\":\"AI\",\"airlineName\":\"Air India\",\"flightNumber\":\"AI-302\",\"from\":\"DEL\",\"to\":\"JED\",\"departAt\":\"2026-08-02T18:10:00\",\"arriveAt\":\"2026-08-02T23:10:00\",\"durationMinutes\":300,\"stops\":0,\"fare\":50000,\"fareClass\":\"Economy\",\"baggage\":\"30kg check-in + 7kg cabin\",\"refundable\":false}]}. `fare` is the per-person fare in the requested currency (a realistic positive number). `from`/`to` are IATA codes. Return 3-6 options across different airlines/times. Return ONLY the JSON object.",
+    "hotel-search": "You are a hotel search assistant for a travel agency. Given a city, check-in/check-out dates, rooms, guests and (optional) star rating, return CURRENT realistic hotel options as STRICT JSON only — no markdown, no prose. Shape: {\"hotels\":[{\"name\":\"Hotel Name\",\"starRating\":4,\"address\":\"...\",\"area\":\"City centre\",\"ratePerNight\":6500,\"totalRate\":13000,\"roomType\":\"Deluxe Room\",\"board\":\"Breakfast\",\"refundable\":true}]}. Rates are in the requested currency; totalRate = ratePerNight × nights × rooms. Return 4-8 real hotels for that city. Return ONLY the JSON object.",
+    "transfer-search": "You are a ground-transfer assistant for a travel agency. Given a pickup, drop-off, date and pax, return realistic road-transfer options (airport↔hotel or inter-city) as STRICT JSON only — no markdown, no prose. Shape: {\"transfers\":[{\"mode\":\"road\",\"vehicle\":\"Private Sedan\",\"from\":\"...\",\"to\":\"...\",\"durationMinutes\":75,\"price\":2200,\"pax\":2,\"note\":\"Up to 3 pax\"}]}. price is the TOTAL in the requested currency for the vehicle (or per-person for shared coach — say so in note). Return 2-4 options (private + shared). Return ONLY the JSON object.",
     "bulk-text": "You write clear, customer-facing travel copy. Plain text.",
     "call-summary": "You summarise a sales/advisory call in a few sentences. Plain text.",
     "reasoning": "You are a careful reasoning assistant for a travel CRM. Plain text.",

@@ -10,9 +10,10 @@
  * (/travel/flights/quote) drives it: up to 4 manually-entered flight options,
  * markup applied server-side via lib/travelPricing.pickMarkup (FR-6 single
  * source of truth), each option persisted as a flight ItineraryItem on a
- * draft Itinerary (created on the fly when no itineraryId is supplied —
- * gated by the PRD §4.1 diagnostic-first guard, exactly like
- * POST /api/travel/itineraries).
+ * draft Itinerary (created on the fly when no itineraryId is supplied).
+ * Unlike POST /api/travel/itineraries this path does NOT require a completed
+ * diagnostic — it's the manual fallback for a lead who already reached out
+ * directly (WhatsApp / email).
  *
  * The X-API-Key plugin endpoint's auth gate stays pinned in the sibling
  * tests/travel-flight-plugin-api.spec.js — this spec covers only the NEW
@@ -21,7 +22,7 @@
  *   - validation (MISSING_CONTACT / MISSING_OPTIONS / TOO_MANY_OPTIONS /
  *     MISSING_AIRLINE / INVALID_PRICE / MISSING_ROUTE / MISSING_SUB_BRAND /
  *     INVALID_SUB_BRAND / CONTACT_NOT_FOUND / MARKUP_RULE_NOT_FOUND)
- *   - PRD §4.1 diagnostic-first guard (403 DIAGNOSTIC_REQUIRED)
+ *   - no diagnostic-first guard (contact without a diagnostic → 201)
  *   - happy path: 201 envelope { itineraryId, items[], totalWithMarkup,
  *     currency, pdfUrl } + items visible on GET /itineraries/:id
  *   - attach-to-existing-itinerary path (itineraryId supplied, no subBrand)
@@ -323,10 +324,14 @@ test.describe("Flight agent-quotes API — validation", () => {
   });
 });
 
-// ── PRD §4.1 diagnostic-first guard ─────────────────────────────────
+// ── No diagnostic-first guard (manual-fallback flow) ────────────────
+// The Flight quick-quote answers a lead who already reached out directly
+// (WhatsApp / email), so — unlike POST /api/travel/itineraries — it does
+// NOT require a completed diagnostic. A contact with no diagnostic still
+// gets a quote.
 
-test.describe("Flight agent-quotes API — diagnostic-first guard", () => {
-  test("contact without a diagnostic → 403 DIAGNOSTIC_REQUIRED", async ({ request }) => {
+test.describe("Flight agent-quotes API — no diagnostic required", () => {
+  test("contact without a diagnostic → 201 (diagnostic NOT required here)", async ({ request }) => {
     const token = await getTravelAdmin(request);
     if (!token || !noDiagContactId) test.skip(true, "no-diagnostic fixture contact missing");
     const res = await post(request, token, AGENT_QUOTES, {
@@ -334,8 +339,10 @@ test.describe("Flight agent-quotes API — diagnostic-first guard", () => {
       subBrand: "rfu",
       options: [flightOption()],
     });
-    expect(res.status()).toBe(403);
-    expect((await res.json()).code).toBe("DIAGNOSTIC_REQUIRED");
+    expect(res.status()).toBe(201);
+    const body = await res.json();
+    expect(body.itineraryId).toBeTruthy();
+    expect(Array.isArray(body.items)).toBe(true);
   });
 });
 

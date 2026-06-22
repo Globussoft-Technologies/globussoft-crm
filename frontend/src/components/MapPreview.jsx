@@ -210,7 +210,7 @@ export default function MapPreview({
             >
               <Popup data-testid={`popup-${it.id}`}>
                 <div style={{ fontWeight: 600, color }}>
-                  {`Day ${day}: ${it.locationName || ''}`}
+                  {`Day ${day}: ${it.locationName || it.description || ''}`}
                 </div>
               </Popup>
             </Marker>

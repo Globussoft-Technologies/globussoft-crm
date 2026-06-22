@@ -52,7 +52,8 @@ const {
 } = require("../middleware/travelGuards");
 const { computeWindowOpenAt } = require("../lib/webCheckinWindow");
 const { resolveForSubBrand } = require("../lib/subBrandConfig");
-const watiClient = require("../services/watiClient");
+// const watiClient = require("../services/watiClient"); // legacy Wati REST (disabled)
+const watiClient = require("../services/whatsappWebClient"); // connected WhatsApp Web (drop-in)
 
 const VALID_STATUSES = Object.freeze([
   "pending",

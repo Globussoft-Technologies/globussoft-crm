@@ -28,6 +28,7 @@
  */
 
 const express = require("express");
+const multer = require("multer");
 const router = express.Router();
 const prisma = require("../lib/prisma");
 const { verifyToken, verifyRole } = require("../middleware/auth");
@@ -37,6 +38,17 @@ const {
   getSubBrandAccessSet,
   canAccessSubBrand,
 } = require("../middleware/travelGuards");
+const { uploadImage } = require("../services/s3Service");
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5 MB
+  fileFilter: (_req, file, cb) => {
+    const ok = ["image/jpeg", "image/png", "image/webp", "image/gif", "image/svg+xml"];
+    if (ok.includes(file.mimetype)) cb(null, true);
+    else cb(new Error("Only image files are allowed (JPEG/PNG/WebP/GIF/SVG)"));
+  },
+});
 
 // Whitelist of fields a caller may set on POST / PATCH. tenantId / id /
 // createdAt / updatedAt are intentionally absent (also stripped by the
@@ -73,6 +85,37 @@ function validateCurrency(currency) {
   }
   return currency;
 }
+
+// POST /api/travel/sightseeing/upload-image — S3 image upload for POI photos.
+// MUST be declared before /:id so Express matches the literal path first.
+// Returns { success, url, filename } identical to /api/wellness/upload/service-image.
+router.post(
+  "/upload-image",
+  verifyToken,
+  requireTravelTenant,
+  requirePermission("sightseeing", "write"),
+  upload.single("file"),
+  async (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ error: "file is required (multipart field 'file')" });
+      }
+      const url = await uploadImage(
+        req.file.buffer,
+        req.file.originalname,
+        req.file.mimetype,
+        "travel-sightseeing"
+      );
+      res.status(201).json({ success: true, url, filename: req.file.originalname });
+    } catch (err) {
+      console.error("[sightseeing] image upload error:", err.message);
+      if (/file too large|allowed/i.test(err.message)) {
+        return res.status(400).json({ error: err.message });
+      }
+      res.status(500).json({ error: "Failed to upload image" });
+    }
+  }
+);
 
 // GET /api/travel/sightseeing — list
 router.get("/", verifyToken, requireTravelTenant, async (req, res) => {

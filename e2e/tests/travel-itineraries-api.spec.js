@@ -700,6 +700,9 @@ test.describe("Travel itineraries API — version chain + status transitions", (
     const firstBody = await first.json();
     expect(firstBody.shareToken).toBeTruthy();
     expect(firstBody.shareUrl).toContain(firstBody.shareToken);
+    // Sharing a draft promotes it to "sent" so the public link is viewable
+    // (the public endpoint 404s drafts as NOT_SHARED).
+    expect(firstBody.status).toBe("sent");
 
     // Re-calling returns the SAME token (so existing WhatsApp links don't break).
     const second = await post(request, token, `/api/travel/itineraries/${id}/share`);

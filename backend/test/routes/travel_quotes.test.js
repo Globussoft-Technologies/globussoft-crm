@@ -164,8 +164,15 @@ describe('POST /api/travel/quotes', () => {
     expect(prisma.auditLog.create).toHaveBeenCalled();
   });
 
-  test('rejects 422 DIAGNOSTIC_REQUIRED when contact has no completed diagnostic (PRD §4.1 gap A6/A9)', async () => {
+  test('does NOT require a completed diagnostic — creates the quote (guard disabled)', async () => {
+    // Quotes no longer enforce the §4.1 diagnostic-first guard (operators build
+    // trip quotes directly). A contact with zero diagnostics still gets a quote.
     prisma.travelDiagnostic.count.mockResolvedValue(0);
+    prisma.travelQuote.create.mockResolvedValue({
+      id: 43, tenantId: 1, subBrand: 'tmc', contactId: 99,
+      status: 'Draft', totalAmount: '45000.00', currency: 'INR',
+      validUntil: tomorrow, createdAt: new Date(), updatedAt: new Date(),
+    });
     const res = await request(makeApp())
       .post('/api/travel/quotes')
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
@@ -176,12 +183,8 @@ describe('POST /api/travel/quotes', () => {
         subBrand: 'tmc',
         validUntil: tomorrowIso,
       });
-    expect(res.status).toBe(422);
-    expect(res.body).toMatchObject({ code: 'DIAGNOSTIC_REQUIRED' });
-    expect(prisma.travelDiagnostic.count).toHaveBeenCalledWith({
-      where: { tenantId: 1, contactId: 99, subBrand: 'tmc' },
-    });
-    expect(prisma.travelQuote.create).not.toHaveBeenCalled();
+    expect(res.status).toBe(201);
+    expect(prisma.travelQuote.create).toHaveBeenCalled();
   });
 
   test('rejects missing contactId with 400 MISSING_FIELDS', async () => {

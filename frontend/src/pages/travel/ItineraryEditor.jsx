@@ -83,6 +83,7 @@ import {
 } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
+import { geocode } from "../../lib/geocoder";
 
 const ITEM_ICONS = {
   flight: Plane, train: Train, bus: Bus, cab: Car, transfer: MapPin,
@@ -225,6 +226,7 @@ export default function ItineraryEditor() {
   const [itin, setItin] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [destCenter, setDestCenter] = useState(null); // [lat, lng] geocoded from destination
   const [extraDays, setExtraDays] = useState(0); // local "+ Add day" beyond derived count
   const [dragId, setDragId] = useState(null);
   const [selectedId, setSelectedId] = useState(null); // item selected for "click map to place"
@@ -299,6 +301,50 @@ export default function ItineraryEditor() {
   }, [id]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Geocode the trip destination so the map opens centred on it (e.g. Tokyo)
+  // instead of falling back to the India midpoint when no items are pinned yet.
+  useEffect(() => {
+    if (!itin?.destination) return;
+    let cancelled = false;
+    geocode(itin.destination).then((r) => {
+      if (!cancelled && r) setDestCenter([r.lat, r.lng]);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [itin?.destination]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Auto-geocode day-planner items that have a description but no saved
+  // coordinates. Runs once per itinerary (dep on itin.id). Each geocoded
+  // item calls setItemLatLng which optimistically updates local state AND
+  // PATCHes the backend — pins appear progressively and survive a reload.
+  //
+  // Nominatim can't geocode activity sentences ("Day 1 — morning sightseeing
+  // in Tokyo"). Extract the trailing capitalised place name after "in " so we
+  // query "Tokyo" instead of the full sentence. Falls back to the full
+  // description for specific named places ("Visit Shinjuku Gyoen Garden").
+  useEffect(() => {
+    if (!itin?.id || !Array.isArray(itin.items)) return;
+    const needsGeocode = itin.items.filter(
+      (it) =>
+        it.description &&
+        (typeof it.latitude !== "number" || typeof it.longitude !== "number"),
+    );
+    if (needsGeocode.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      for (const it of needsGeocode) {
+        if (cancelled) break;
+        // "Airport transfer to hotel in Tokyo" → "Tokyo"
+        // "Day 2 — sightseeing in Paris, France" → "Paris, France"
+        // "Visit Shinjuku Gyoen Garden" → "Visit Shinjuku Gyoen Garden" (no match)
+        const inMatch = it.description.match(/\bin\s+([A-Z][^,.]+(?:,\s*[A-Z][^,.]+)?)\s*$/);
+        const query = inMatch ? inMatch[1].trim() : it.description;
+        const r = await geocode(query).catch(() => null);
+        if (!cancelled && r) setItemLatLng(it.id, r.lat, r.lng);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [itin?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // G050 — POST /api/travel/itineraries/:id/save-as-template. The route
   // derives name/destination/duration/basePriceMinor from the itinerary;
@@ -700,7 +746,9 @@ export default function ItineraryEditor() {
   const dayBuckets = [null, ...Array.from({ length: dayCount }, (_, i) => i + 1)];
   // Default centre when nothing is placed yet = India (broad view); once any
   // pin exists, FitBounds zooms to the actual points.
-  const mapCenter = mapItems.length ? [mapItems[0].latitude, mapItems[0].longitude] : [22.5, 79];
+  const mapCenter = mapItems.length
+    ? [mapItems[0].latitude, mapItems[0].longitude]
+    : destCenter || [20, 0];
 
   return (
     <div data-vertical="travel" style={{ padding: "1.25rem", height: "100%", display: "flex", flexDirection: "column", gap: "1rem" }}>
@@ -1131,7 +1179,7 @@ export default function ItineraryEditor() {
           </div>
           <MapContainer
             center={mapCenter}
-            zoom={mapItems.length ? 6 : 4}
+            zoom={mapItems.length ? 6 : destCenter ? 10 : 4}
             style={{ height: "100%", width: "100%", minHeight: 360, cursor: selectedId ? "crosshair" : "grab" }}
             scrollWheelZoom
           >

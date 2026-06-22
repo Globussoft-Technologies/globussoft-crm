@@ -94,7 +94,7 @@
 
 import { useEffect, useState, useContext, useCallback } from "react";
 import { useParams } from "react-router-dom";
-import { Calculator, Plus, Trash2, Save, Send, Copy, Download, Check, X, TrendingUp, FileText, ThumbsUp, ThumbsDown } from "lucide-react";
+import { Calculator, Plus, Trash2, Save, Send, Copy, Download, Check, X, TrendingUp, FileText, ThumbsUp, ThumbsDown, Plane, Hotel, Search, Car } from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { AuthContext } from "../../App";
@@ -118,8 +118,29 @@ const SUB_BRANDS = [
   { value: "travelstall", label: "Travel Stall" },
   { value: "visasure", label: "Visa Sure" },
 ];
+const SUB_BRAND_LABELS = Object.fromEntries(SUB_BRANDS.map((s) => [s.value, s.label]));
 
 const LINE_TYPES = ["hotel", "flight", "transport", "visa", "service", "other"];
+
+// TBO search data-source badge (mirrors tboClient's `provider`): live TBO,
+// an AI web estimate, or offline sample data — so the operator verifies before
+// quoting.
+const PROVIDER_LABEL = { tbo: "TBO live", "llm-web": "AI web estimate", stub: "Sample data" };
+const PROVIDER_COLORS = {
+  tbo: { bg: "rgba(34,197,94,0.16)", fg: "#1e8449" },
+  "llm-web": { bg: "rgba(59,130,246,0.16)", fg: "#1e4d8c" },
+  stub: { bg: "rgba(148,163,184,0.18)", fg: "var(--text-secondary)" },
+};
+function providerBadge(p) {
+  const c = PROVIDER_COLORS[p] || PROVIDER_COLORS.stub;
+  return { display: "inline-block", padding: "1px 8px", borderRadius: 10, fontSize: 11, fontWeight: 700, marginRight: 6, background: c.bg, color: c.fg };
+}
+function fmtSearchTime(s) {
+  if (!s) return null;
+  const d = new Date(s);
+  if (!Number.isFinite(d.getTime())) return null;
+  return d.toLocaleString("en-IN", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+}
 
 const EMPTY_DRAFT = () => ({
   // Stable React key for the row. Drafts have no `.id`; persisted rows do.
@@ -187,9 +208,10 @@ export default function QuoteBuilder() {
   const [creditStatus, setCreditStatus] = useState({});
   // Delete-confirm modal target.
   const [deleteTarget, setDeleteTarget] = useState(null);
-  // Send-to-customer confirm modal flag (slice 6 — Q9 STUB).
+  // Send-to-customer confirm modal flag + the resulting share link/channel.
   const [sendConfirmOpen, setSendConfirmOpen] = useState(false);
   const [sending, setSending] = useState(false);
+  const [shareInfo, setShareInfo] = useState(null); // { shareUrl, channel, ... }
   // Slice 11: accept + decline workflow state.
   const [acceptInFlight, setAcceptInFlight] = useState(false);
   const [declineInFlight, setDeclineInFlight] = useState(false);
@@ -202,6 +224,36 @@ export default function QuoteBuilder() {
   // button label so consecutive clicks don't fire multiple GETs.
   const [pricingPreview, setPricingPreview] = useState(null);
   const [previewLoading, setPreviewLoading] = useState(false);
+
+  // ── TBO trip search (flights + hotels) ──────────────────────────
+  // Searches live options (TBO → AI web → sample via tboClient) and drops a
+  // chosen result into the quote as a draft line. City names OR IATA codes
+  // are accepted for flights (the backend resolves to IATA).
+  const [fSearch, setFSearch] = useState({ from: "", to: "", departDate: "", cabinClass: "Economy" });
+  const [fResults, setFResults] = useState([]);
+  const [fMeta, setFMeta] = useState(null);
+  const [fLoading, setFLoading] = useState(false);
+  const [hSearch, setHSearch] = useState({ city: "", checkIn: "", checkOut: "", rooms: 1, starRating: "" });
+  const [hResults, setHResults] = useState([]);
+  const [hMeta, setHMeta] = useState(null);
+  const [hLoading, setHLoading] = useState(false);
+  const [tSearch, setTSearch] = useState({ from: "", to: "", date: "" });
+  const [tResults, setTResults] = useState([]);
+  const [tMeta, setTMeta] = useState(null);
+  const [tLoading, setTLoading] = useState(false);
+
+  // ── Plan trip (destinations → 1-click AI auto-suggest) ──────────
+  // The nexus-style headline: enter cities + nights + basics, click Suggest,
+  // and we auto-fill round-trip flights + a hotel per city as draft lines
+  // (reusing the TBO→AI→sample search). The operator then edits via the
+  // search panels / line table before saving.
+  const [leavingFrom, setLeavingFrom] = useState("");
+  const [tripStart, setTripStart] = useState("");
+  const [adults, setAdults] = useState(2);
+  const [children, setChildren] = useState(0);
+  const [rooms, setRooms] = useState(1);
+  const [destinations, setDestinations] = useState([{ city: "", nights: 2, noStay: false }]);
+  const [suggesting, setSuggesting] = useState(false);
 
   // G017 — clone-with-margin modal state. The duplicate button opens this
   // modal so the operator can either (a) raw-duplicate (margin=0 or
@@ -355,6 +407,16 @@ export default function QuoteBuilder() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [contactId, customers]);
 
+  // Scope the customer dropdown to the active sub-brand (PRD §3.4): show
+  // contacts tagged with THIS sub-brand, plus untagged ones (available to
+  // any). A contact tagged to a DIFFERENT sub-brand is hidden so a, say, TMC
+  // quote can't accidentally attach an RFU customer. The currently-selected
+  // contact is always kept visible via the preserved <option> below, even if
+  // it belongs to another sub-brand (edit-mode safety). Re-derives whenever
+  // subBrand or the loaded contacts change.
+  const visibleCustomers = customers.filter((c) => !c.subBrand || c.subBrand === subBrand);
+  const selectedCustomer = customers.find((c) => String(c.id) === String(contactId));
+
   // Fetch the supplier list when subBrand changes (or on initial load
   // when a subBrand has been selected). Each line's supplier picker reads
   // from this single list — no per-row fetch.
@@ -437,6 +499,207 @@ export default function QuoteBuilder() {
   const grandTotal = taxable + taxAmount;
 
   const addLine = () => setDraftLines([...draftLines, EMPTY_DRAFT()]);
+
+  // ── TBO search → draft line ─────────────────────────────────────
+  const runFlightSearch = async () => {
+    if (!fSearch.from.trim() || !fSearch.to.trim()) { notify.error("Enter flight from and to (city or IATA)"); return; }
+    if (!fSearch.departDate) { notify.error("Pick a flight date"); return; }
+    setFLoading(true); setFResults([]); setFMeta(null);
+    try {
+      const res = await fetchApi("/api/travel/search/flights", {
+        method: "POST",
+        body: JSON.stringify({ from: fSearch.from.trim(), to: fSearch.to.trim(), departDate: fSearch.departDate, cabinClass: fSearch.cabinClass, currency: currency || "INR" }),
+      });
+      setFResults(Array.isArray(res?.options) ? res.options : []);
+      setFMeta({ provider: res?.provider || "stub", note: res?.note || null, resolved: res?.resolved || null });
+    } catch (err) {
+      notify.error(err?.data?.error || err?.body?.error || err?.message || "Flight search failed");
+    } finally { setFLoading(false); }
+  };
+  const runHotelSearch = async () => {
+    if (!hSearch.city.trim()) { notify.error("Enter a hotel city"); return; }
+    if (!hSearch.checkIn || !hSearch.checkOut) { notify.error("Pick hotel check-in and check-out"); return; }
+    setHLoading(true); setHResults([]); setHMeta(null);
+    try {
+      const res = await fetchApi("/api/travel/search/hotels", {
+        method: "POST",
+        body: JSON.stringify({
+          city: hSearch.city.trim(), checkIn: hSearch.checkIn, checkOut: hSearch.checkOut,
+          rooms: parseInt(hSearch.rooms, 10) || 1,
+          starRating: hSearch.starRating ? parseInt(hSearch.starRating, 10) : undefined,
+          currency: currency || "INR",
+        }),
+      });
+      setHResults(Array.isArray(res?.hotels) ? res.hotels : []);
+      setHMeta({ provider: res?.provider || "stub", note: res?.note || null });
+    } catch (err) {
+      notify.error(err?.data?.error || err?.body?.error || err?.message || "Hotel search failed");
+    } finally { setHLoading(false); }
+  };
+  // Pure builders so manual "Add" and the auto-suggest share one mapping.
+  // fromLabel/toLabel let the auto-suggest show FULL city names ("Bangalore →
+  // Paris") in the customer-facing description while the IATA codes go in notes —
+  // bare codes (BLR→CDG) confused customers.
+  const flightDraft = (o, fromLabel, toLabel, pax) => {
+    const fl = fromLabel || o.from;
+    const tl = toLabel || o.to;
+    // Fare is PER traveller → quantity = pax so the line multiplies by headcount
+    // (2 adults → qty 2). Customer description uses FULL names; IATA + times in notes.
+    const seats = Math.max(1, parseInt(pax, 10) || 1);
+    const desc = `${o.airlineName || o.airline || "Flight"}${o.flightNumber ? ` ${o.flightNumber}` : ""} ${fl} → ${tl}${o.fareClass ? ` (${o.fareClass})` : ""}`.trim();
+    const notes = [o.from && o.to && `${o.from}→${o.to}`, fmtSearchTime(o.departAt) && `Dep ${fmtSearchTime(o.departAt)}`, fmtSearchTime(o.arriveAt) && `Arr ${fmtSearchTime(o.arriveAt)}`, o.baggage && `Bag ${o.baggage}`].filter(Boolean).join(" · ");
+    return { ...EMPTY_DRAFT(), lineType: "flight", description: desc, quantity: seats, unitPrice: Number(o.fare) || 0, notes };
+  };
+  const hotelDraft = (h) => {
+    // Multiply the stay transparently: qty = nights, unit price = per-night rate
+    // (so 1 room × 2 nights shows "2 × ₹/night"). totalRate from search already
+    // factors nights × rooms, so per-night = totalRate / nights keeps it exact.
+    const nights = Number(h.nights) > 0 ? Math.round(Number(h.nights)) : 1;
+    const total = Number(h.totalRate != null ? h.totalRate : (Number(h.ratePerNight) || 0) * nights) || 0;
+    const perNight = nights > 0 ? Math.round((total / nights) * 100) / 100 : total;
+    const desc = `${h.name || "Hotel"}${h.city ? `, ${h.city}` : ""}${h.roomType ? ` — ${h.roomType}` : ""}`;
+    const notes = [h.starRating && `${h.starRating}★`, `${nights} night${nights === 1 ? "" : "s"}`, h.board, h.refundable === true && "Refundable"].filter(Boolean).join(" · ");
+    return { ...EMPTY_DRAFT(), lineType: "hotel", description: desc, quantity: nights, unitPrice: perNight, notes };
+  };
+  // Drop a search result into the quote as a draft line (operator saves it like
+  // any other line — Save the quote first if it's brand new).
+  const addFlightLine = (o) => {
+    const pax = (parseInt(adults, 10) || 1) + (parseInt(children, 10) || 0);
+    setDraftLines((p) => [...p, flightDraft(o, undefined, undefined, pax)]);
+    notify.success?.(`Added flight ${o.from}→${o.to} (${pax} traveller${pax === 1 ? "" : "s"})`);
+  };
+  const addHotelLine = (h) => {
+    // Derive nights from the hotel-search dates so the line multiplies correctly.
+    let nights = Number(h.nights) || 1;
+    if (hSearch.checkIn && hSearch.checkOut) {
+      const a = new Date(hSearch.checkIn); const b = new Date(hSearch.checkOut);
+      if (!Number.isNaN(a.getTime()) && !Number.isNaN(b.getTime())) {
+        nights = Math.max(1, Math.round((b - a) / (24 * 60 * 60 * 1000)));
+      }
+    }
+    setDraftLines((p) => [...p, hotelDraft({ ...h, nights })]);
+    notify.success?.(`Added hotel ${h.name || ""}`);
+  };
+  const transferDraft = (t) => {
+    const desc = `Transfer: ${t.from || ""} → ${t.to || ""}${t.vehicle ? ` (${t.vehicle})` : ""}`.trim();
+    const notes = [t.durationMinutes && `~${t.durationMinutes} min`, t.note].filter(Boolean).join(" · ");
+    return { ...EMPTY_DRAFT(), lineType: "transport", description: desc, quantity: 1, unitPrice: Number(t.price) || 0, notes };
+  };
+  const addTransferLine = (t) => {
+    setDraftLines((p) => [...p, transferDraft(t)]);
+    notify.success?.(`Added transfer ${t.from} → ${t.to}`);
+  };
+  const runTransferSearch = async () => {
+    if (!tSearch.from.trim() || !tSearch.to.trim()) { notify.error("Enter transfer from and to"); return; }
+    setTLoading(true); setTResults([]); setTMeta(null);
+    try {
+      const res = await fetchApi("/api/travel/search/transfers", {
+        method: "POST",
+        body: JSON.stringify({ from: tSearch.from.trim(), to: tSearch.to.trim(), date: tSearch.date || undefined, pax: parseInt(adults, 10) || 2, currency: currency || "INR" }),
+      });
+      setTResults(Array.isArray(res?.transfers) ? res.transfers : []);
+      setTMeta({ provider: res?.provider || "stub", note: res?.note || null });
+    } catch (err) {
+      notify.error(err?.data?.error || err?.body?.error || err?.message || "Transfer search failed");
+    } finally { setTLoading(false); }
+  };
+
+  // Plan-trip destination handlers.
+  const setDest = (i, patch) => setDestinations((p) => p.map((d, idx) => (idx === i ? { ...d, ...patch } : d)));
+  const addDest = () => setDestinations((p) => [...p, { city: "", nights: 1, noStay: false }]);
+  const removeDest = (i) => setDestinations((p) => (p.length <= 1 ? p : p.filter((_, idx) => idx !== i)));
+
+  // 1-click AI auto-suggest: round-trip flights (leaving-from → first city, last
+  // city → leaving-from) + a hotel per staying city, dates derived from nights.
+  // Each leg/city is best-effort — a leg that can't resolve is skipped, not
+  // fatal. Reuses the same /search endpoints (TBO → AI web → sample).
+  const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const suggestTrip = async () => {
+    const from = leavingFrom.trim();
+    const dests = destinations.filter((d) => d.city.trim());
+    if (!from) { notify.error("Enter where the trip leaves from"); return; }
+    if (!tripStart) { notify.error("Pick the trip start date"); return; }
+    if (dests.length === 0) { notify.error("Add at least one destination city"); return; }
+    const start = new Date(tripStart);
+    if (Number.isNaN(start.getTime())) { notify.error("Invalid start date"); return; }
+    setSuggesting(true);
+    const cur = currency || "INR";
+    const roomCount = parseInt(rooms, 10) || 1;
+    const headcount = (parseInt(adults, 10) || 1) + (parseInt(children, 10) || 0);
+    try {
+      // Per-city stay windows (running date pointer).
+      let cursor = new Date(start);
+      const stops = dests.map((d) => {
+        const checkIn = new Date(cursor);
+        const n = parseInt(d.nights, 10) || 0;
+        const checkOut = new Date(cursor.getTime() + n * 86400000);
+        cursor = new Date(checkOut);
+        return { city: d.city.trim(), nights: n, noStay: d.noStay, checkIn, checkOut };
+      });
+      const totalNights = stops.reduce((s, c) => s + c.nights, 0);
+      const endDate = new Date(start.getTime() + totalNights * 86400000);
+
+      const drafts = [];
+      let nFlights = 0; let nHotels = 0; let nTransfers = 0;
+      // FLIGHTS: outbound (leaving-from → first city) + return (last city →
+      // leaving-from). Inter-city hops are done as ground TRANSFERS below
+      // (e.g. Makkah → Madina by road) — the common real case; if a customer
+      // wants an inter-city flight (e.g. Paris → London) the advisor adds it
+      // from the flight search panel.
+      const flightLegs = [
+        { from, to: stops[0].city, date: ymd(start) },
+        { from: stops[stops.length - 1].city, to: from, date: ymd(endDate) },
+      ];
+      for (const leg of flightLegs) {
+        try {
+          const res = await fetchApi("/api/travel/search/flights", {
+            method: "POST",
+            body: JSON.stringify({ from: leg.from, to: leg.to, departDate: leg.date, cabinClass: "Economy", currency: cur }),
+          });
+          const opt = (res?.options || [])[0];
+          if (opt) { drafts.push(flightDraft(opt, leg.from, leg.to, headcount)); nFlights += 1; }
+        } catch { /* skip this leg */ }
+      }
+      // TRANSFERS: inter-city ground hops (city[i] → city[i+1]).
+      for (let i = 0; i < stops.length - 1; i += 1) {
+        try {
+          const res = await fetchApi("/api/travel/search/transfers", {
+            method: "POST",
+            body: JSON.stringify({ from: stops[i].city, to: stops[i + 1].city, date: ymd(stops[i].checkOut), pax: parseInt(adults, 10) || 2, currency: cur }),
+          });
+          const t = (res?.transfers || [])[0];
+          if (t) { drafts.push(transferDraft({ ...t, from: stops[i].city, to: stops[i + 1].city })); nTransfers += 1; }
+        } catch { /* skip this hop */ }
+      }
+      // A hotel per staying city.
+      for (const c of stops) {
+        if (c.noStay || c.nights <= 0) continue;
+        try {
+          const res = await fetchApi("/api/travel/search/hotels", {
+            method: "POST",
+            body: JSON.stringify({ city: c.city, checkIn: ymd(c.checkIn), checkOut: ymd(c.checkOut), rooms: roomCount, currency: cur }),
+          });
+          const h = (res?.hotels || [])[0];
+          if (h) { drafts.push(hotelDraft({ ...h, city: c.city, nights: c.nights })); nHotels += 1; }
+        } catch { /* skip this city */ }
+      }
+      if (drafts.length === 0) {
+        notify.error("Couldn't fetch any options — try adjusting the cities or dates");
+        return;
+      }
+      // Re-running Suggest REPLACES the previous auto-suggested set (so you
+      // don't get duplicate hotels/flights for the same city on a second click)
+      // while keeping any lines the operator added manually.
+      setDraftLines((p) => [...p.filter((d) => !d._suggested), ...drafts.map((d) => ({ ...d, _suggested: true }))]);
+      const parts = [`${nFlights} flight${nFlights === 1 ? "" : "s"}`, `${nHotels} hotel${nHotels === 1 ? "" : "s"}`];
+      if (nTransfers > 0) parts.push(`${nTransfers} transfer${nTransfers === 1 ? "" : "s"}`);
+      notify.success(`Suggested ${parts.join(" + ")} — review, edit, then save`);
+    } catch (e) {
+      notify.error(e?.message || "Suggest failed");
+    } finally {
+      setSuggesting(false);
+    }
+  };
 
   // Update a draft row in-place (no backend call).
   const updateDraft = (key, patch) =>
@@ -556,27 +819,52 @@ export default function QuoteBuilder() {
   const handleSaveDraft = async () => {
     const payload = buildPayload();
     if (!payload) return;
+    const wasNew = !quoteId;
     setSaving(true);
     try {
-      if (quoteId) {
-        await fetchApi(`/api/travel/quotes/${quoteId}`, {
-          method: "PUT",
-          body: JSON.stringify(payload),
-        });
-        notify.success(`Quote #${quoteId} saved`);
+      let id = quoteId;
+      if (id) {
+        await fetchApi(`/api/travel/quotes/${id}`, { method: "PUT", body: JSON.stringify(payload) });
       } else {
-        const created = await fetchApi("/api/travel/quotes", {
-          method: "POST",
-          body: JSON.stringify(payload),
-        });
-        if (created?.id) {
-          setQuoteId(created.id);
-          // After creating the quote, any draft lines the operator had
-          // composed pre-save can now be committed against the new id.
-          // We don't auto-commit them — operator clicks Save on each row.
-        }
-        notify.success(`Quote created (#${created?.id ?? "new"})`);
+        const created = await fetchApi("/api/travel/quotes", { method: "POST", body: JSON.stringify(payload) });
+        id = created?.id;
+        if (id) setQuoteId(id);
       }
+      if (!id) { notify.error("Save failed — no quote id returned"); return; }
+
+      // Auto-commit ALL draft (un-persisted) lines so Save Draft saves the
+      // WHOLE quote — header + lines. Previously drafts stayed local until each
+      // row's ✓ was clicked, so the PDF / public view (which read persisted
+      // lines) came out empty even though the total was set. Best-effort per
+      // line; the backend recomputes the quote total after the writes.
+      const pending = draftLines.filter((d) => d.description && d.description.trim());
+      let committed = 0;
+      for (const d of pending) {
+        const unit = Number(d.unitPrice);
+        if (!Number.isFinite(unit) || unit < 0) continue;
+        try {
+          const body = {
+            lineType: d.lineType || "other",
+            description: d.description.trim(),
+            quantity: Math.max(1, parseInt(d.quantity, 10) || 1),
+            unitPrice: unit,
+          };
+          if (d.supplierId !== "" && d.supplierId != null) body.supplierId = parseInt(d.supplierId, 10);
+          if (d.notes) body.notes = String(d.notes);
+          await fetchApi(`/api/travel/quotes/${id}/lines`, { method: "POST", body: JSON.stringify(body) });
+          committed += 1;
+        } catch { /* skip a bad line, keep going */ }
+      }
+      if (committed > 0) {
+        setDraftLines((prev) => prev.filter((d) => !pending.includes(d)));
+        await refreshLines(id);
+        await refreshParentQuote(id);
+      }
+      notify.success(
+        wasNew
+          ? `Quote created (#${id})${committed ? ` with ${committed} line${committed === 1 ? "" : "s"}` : ""}`
+          : `Quote #${id} saved${committed ? ` (+${committed} line${committed === 1 ? "" : "s"})` : ""}`,
+      );
     } catch (err) {
       notify.error(err?.data?.error || err?.message || "Save failed");
     } finally {
@@ -594,34 +882,33 @@ export default function QuoteBuilder() {
     setSendConfirmOpen(true);
   };
 
-  // STUB: WhatsApp/email delivery integration pending Q9 (Wati creds).
-  // For now, confirming the modal flips the quote status to "Sent" via
-  // the existing PUT endpoint and shows a notify.info "Send queued"
-  // message. Once Q9 lands, swap this for POST /api/travel/quotes/:id/send
-  // (route TBD) which will fan out to the Wati WhatsApp client + email
-  // provider and return delivery receipts.
+  // Real send: mint a customer-share link + deliver it via email (if the
+  // contact has one) + WhatsApp (the connected number). The link opens the
+  // public quote page (/p/quote/:token) where the customer can view + accept.
   const confirmSend = async () => {
     if (!quoteId) {
       setSendConfirmOpen(false);
       return;
     }
-    const payload = buildPayload();
-    if (!payload) {
-      setSendConfirmOpen(false);
-      return;
-    }
     setSending(true);
     try {
-      await fetchApi(`/api/travel/quotes/${quoteId}`, {
-        method: "PUT",
-        body: JSON.stringify({ ...payload, status: "Sent" }),
+      const res = await fetchApi(`/api/travel/quotes/${quoteId}/share`, {
+        method: "POST",
+        body: JSON.stringify({ channel: "auto" }),
       });
-      setStatus("Sent");
-      notify.info(
-        "Send queued — will deliver via WhatsApp + email once Q9 credentials land.",
-      );
+      if (res?.status) setStatus(res.status);
+      setShareInfo(res || null);
+      const ch = res?.channel || "none";
+      if (ch === "none") {
+        notify.success("Share link created — send it manually (the contact has no email/phone, or WhatsApp isn't connected)");
+      } else {
+        const parts = [];
+        if (ch.includes("email")) parts.push("email");
+        if (ch.includes("whatsapp")) parts.push("WhatsApp");
+        notify.success(`Quote sent to the customer via ${parts.join(" + ")}`);
+      }
     } catch (err) {
-      notify.error(err?.data?.error || err?.message || "Send failed");
+      notify.error(err?.data?.error || err?.body?.error || err?.message || "Send failed");
     } finally {
       setSending(false);
       setSendConfirmOpen(false);
@@ -939,27 +1226,19 @@ export default function QuoteBuilder() {
             >
               <Save size={14} /> {saving ? "Saving…" : "Save Draft"}
             </button>
+            {/* Everything beyond Save Draft acts on a SAVED quote (send, PDF,
+                convert, accept/decline) — hidden in new/create mode, shown once
+                the quote exists / when opened from the quotes history. */}
+            {quoteId && (
+              <>
             <button
               type="button"
               onClick={openSendConfirm}
-              disabled={
-                saving ||
-                sending ||
-                !quoteId ||
-                status === "Sent" ||
-                status === "Accepted" ||
-                status === "Rejected"
-              }
+              disabled={saving || sending || !quoteId}
               style={secondaryBtn}
-              title={
-                !quoteId
-                  ? "Save first"
-                  : status !== "Draft"
-                    ? `Cannot resend — quote is ${status}`
-                    : "Send to customer (WhatsApp + email)"
-              }
+              title="Send / re-send to customer (WhatsApp + email)"
             >
-              <Send size={14} /> Send to customer
+              <Send size={14} /> {status === "Sent" ? "Re-send" : "Send to customer"}
             </button>
             <button
               type="button"
@@ -1057,9 +1336,35 @@ export default function QuoteBuilder() {
             >
               <ThumbsDown size={14} /> Decline
             </button>
+              </>
+            )}
           </div>
         )}
       </header>
+
+      {shareInfo?.shareUrl && (
+        <section
+          className="glass"
+          aria-label="Customer share link"
+          style={{ padding: 12, marginBottom: 16, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}
+        >
+          <Send size={14} aria-hidden style={{ color: "var(--primary-color, var(--accent-color))" }} />
+          <span style={{ fontSize: 13, fontWeight: 600 }}>Customer link:</span>
+          <code style={{ fontSize: 12, wordBreak: "break-all", flex: 1, minWidth: 0 }}>{shareInfo.shareUrl}</code>
+          <button
+            type="button"
+            onClick={() => { navigator.clipboard?.writeText(shareInfo.shareUrl).then(() => notify.success("Link copied")).catch(() => notify.error("Copy failed — select the link")); }}
+            style={secondaryBtn}
+          >
+            <Copy size={14} /> Copy
+          </button>
+          <span style={{ fontSize: 11, color: "var(--text-secondary)" }}>
+            {shareInfo.channel && shareInfo.channel !== "none"
+              ? `Sent via ${shareInfo.channel.replace("+", " + ")}`
+              : "Not delivered — share the link manually"}
+          </span>
+        </section>
+      )}
 
       <section
         className="glass"
@@ -1087,20 +1392,29 @@ export default function QuoteBuilder() {
             aria-label="Customer"
           >
             <option value="">Select customer *</option>
-            {/* Editing a quote whose contact isn't in the loaded page (or
-                a >500-row tenant) keeps the existing selection visible. */}
+            {/* Keep the current selection visible even if it's filtered out by
+                the sub-brand scope (editing a quote, a cross-sub-brand contact,
+                or a >500-row tenant). */}
             {contactId &&
-              !customers.some((c) => String(c.id) === String(contactId)) && (
+              !visibleCustomers.some((c) => String(c.id) === String(contactId)) && (
                 <option value={contactId}>
-                  {contactsById[contactId]?.name || `Contact #${contactId}`}
+                  {(selectedCustomer?.name || contactsById[contactId]?.name || `Contact #${contactId}`)
+                    + (selectedCustomer?.subBrand && selectedCustomer.subBrand !== subBrand
+                      ? ` — ${SUB_BRAND_LABELS[selectedCustomer.subBrand] || selectedCustomer.subBrand}`
+                      : "")}
                 </option>
               )}
-            {customers.map((c) => (
+            {visibleCustomers.map((c) => (
               <option key={c.id} value={String(c.id)}>
-                {(c.name || `Contact #${c.id}`) + (c.email ? ` — ${c.email}` : "")}
+                {(c.name || `Contact #${c.id}`) + (c.email ? ` — ${c.email}` : "") + (!c.subBrand ? " · (unassigned)" : "")}
               </option>
             ))}
           </select>
+          <span style={{ fontSize: 11, color: "var(--text-secondary)", marginTop: 4, display: "block" }}>
+            {visibleCustomers.length === 0
+              ? `No ${SUB_BRAND_LABELS[subBrand] || subBrand} customers yet`
+              : `Showing ${SUB_BRAND_LABELS[subBrand] || subBrand} customers`}
+          </span>
         </label>
         <label style={fieldLabel}>
           Currency
@@ -1138,6 +1452,147 @@ export default function QuoteBuilder() {
             aria-label="Valid until"
           />
         </label>
+      </section>
+
+      {/* Plan trip — destinations + 1-click AI auto-suggest (nexus-style). */}
+      <section className="glass" aria-label="Plan trip" style={{ padding: 16, marginBottom: 16 }}>
+        <h2 style={{ margin: 0, fontSize: "1rem", fontWeight: 600, display: "flex", alignItems: "center", gap: 8 }}>
+          <Calculator size={16} aria-hidden /> Plan trip
+        </h2>
+        <p style={{ color: "var(--text-secondary)", fontSize: 12, margin: "4px 0 12px" }}>
+          Enter the cities + nights, then let AI suggest flights &amp; hotels — it fills the lines below, which you can edit via the search panels.
+        </p>
+        <div style={{ display: "grid", gap: 8, gridTemplateColumns: "repeat(auto-fit, minmax(min(100%,150px),1fr))", marginBottom: 10 }}>
+          <input placeholder="Leaving from (city)" value={leavingFrom} onChange={(e) => setLeavingFrom(e.target.value)} style={inputStyle} aria-label="Leaving from" />
+          <input type="date" value={tripStart} onChange={(e) => setTripStart(e.target.value)} style={inputStyle} aria-label="Trip start date" />
+          <input type="number" min="1" placeholder="Adults" value={adults} onChange={(e) => setAdults(e.target.value)} style={inputStyle} aria-label="Adults" />
+          <input type="number" min="0" placeholder="Children" value={children} onChange={(e) => setChildren(e.target.value)} style={inputStyle} aria-label="Children" />
+          <input type="number" min="1" placeholder="Rooms" value={rooms} onChange={(e) => setRooms(e.target.value)} style={inputStyle} aria-label="Rooms" />
+        </div>
+        <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 6 }}>Destinations (in order)</div>
+        {destinations.map((d, i) => (
+          <div key={i} style={{ display: "grid", gap: 8, gridTemplateColumns: "2fr 1fr auto auto", alignItems: "center", marginBottom: 6 }}>
+            <input placeholder={`City ${i + 1} (e.g. Makkah)`} value={d.city} onChange={(e) => setDest(i, { city: e.target.value })} style={inputStyle} aria-label={`Destination city ${i + 1}`} />
+            <input type="number" min="0" placeholder="Nights" value={d.nights} onChange={(e) => setDest(i, { nights: e.target.value })} style={inputStyle} aria-label={`Nights in city ${i + 1}`} disabled={d.noStay} />
+            <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12, color: "var(--text-secondary)", whiteSpace: "nowrap" }}>
+              <input type="checkbox" checked={d.noStay} onChange={(e) => setDest(i, { noStay: e.target.checked })} aria-label={`No stay in city ${i + 1}`} /> No stay
+            </label>
+            <button type="button" onClick={() => removeDest(i)} disabled={destinations.length <= 1} style={{ ...iconBtn, opacity: destinations.length <= 1 ? 0.4 : 1 }} aria-label={`Remove city ${i + 1}`}>
+              <Trash2 size={16} />
+            </button>
+          </div>
+        ))}
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+          <button type="button" onClick={addDest} style={secondaryBtn}><Plus size={14} /> Add city</button>
+          <button type="button" onClick={suggestTrip} disabled={suggesting} style={primaryBtn}>
+            <TrendingUp size={14} /> {suggesting ? "Suggesting…" : "Suggest flights & hotels"}
+          </button>
+        </div>
+      </section>
+
+      {/* TBO trip search — flights + hotels → draft lines (PRD trip builder).
+          Live options via tboClient (TBO → AI web → sample); "Add" drops a
+          result into the quote as a draft line the operator then saves. */}
+      <section className="glass" aria-label="Search flights and hotels" style={{ padding: 16, marginBottom: 16 }}>
+        <h2 style={{ margin: 0, fontSize: "1rem", fontWeight: 600, display: "flex", alignItems: "center", gap: 8 }}>
+          <Search size={16} aria-hidden /> Search flights &amp; hotels
+        </h2>
+        <p style={{ color: "var(--text-secondary)", fontSize: 12, margin: "4px 0 12px" }}>
+          Live options via TBO (falls back to an AI web estimate, then sample data). Add a result to drop it into the quote below as a line.
+        </p>
+
+        <div style={{ marginBottom: 8, fontWeight: 600, fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}><Plane size={14} aria-hidden /> Flights</div>
+        <div style={{ display: "grid", gap: 8, gridTemplateColumns: "repeat(auto-fit, minmax(min(100%,140px),1fr))" }}>
+          <input placeholder="From (city or IATA)" value={fSearch.from} onChange={(e) => setFSearch({ ...fSearch, from: e.target.value })} style={inputStyle} aria-label="Flight from" />
+          <input placeholder="To (city or IATA)" value={fSearch.to} onChange={(e) => setFSearch({ ...fSearch, to: e.target.value })} style={inputStyle} aria-label="Flight to" />
+          <input type="date" value={fSearch.departDate} onChange={(e) => setFSearch({ ...fSearch, departDate: e.target.value })} style={inputStyle} aria-label="Flight date" />
+          <select value={fSearch.cabinClass} onChange={(e) => setFSearch({ ...fSearch, cabinClass: e.target.value })} style={inputStyle} aria-label="Cabin class">
+            {["Economy", "Premium Economy", "Business", "First"].map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+          <button type="button" onClick={runFlightSearch} disabled={fLoading} style={primaryBtn}><Search size={14} /> {fLoading ? "Searching…" : "Search flights"}</button>
+        </div>
+        {fMeta && (
+          <p style={{ fontSize: 12, margin: "8px 0 0", color: "var(--text-secondary)" }}>
+            <span style={providerBadge(fMeta.provider)}>{PROVIDER_LABEL[fMeta.provider] || fMeta.provider}</span>
+            {fMeta.resolved ? `${fMeta.resolved.from.input} → ${fMeta.resolved.from.iata} · ${fMeta.resolved.to.input} → ${fMeta.resolved.to.iata}. ` : ""}
+            {fMeta.note || ""}
+          </p>
+        )}
+        {fResults.map((o, i) => (
+          <div key={`f-${i}`} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", borderRadius: 8, border: "1px solid var(--border-color)", marginTop: 6 }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <strong style={{ fontSize: 13 }}>{o.airlineName || o.airline}{o.flightNumber ? ` · ${o.flightNumber}` : ""} {o.from}→{o.to}</strong>
+              <div style={{ fontSize: 11, color: "var(--text-secondary)", marginTop: 2 }}>
+                {[fmtSearchTime(o.departAt) && `Dep ${fmtSearchTime(o.departAt)}`, fmtSearchTime(o.arriveAt) && `Arr ${fmtSearchTime(o.arriveAt)}`, o.stops != null && (o.stops === 0 ? "Non-stop" : `${o.stops} stop`), o.fareClass, o.baggage && `Bag ${o.baggage}`].filter(Boolean).join("  ·  ")}
+              </div>
+            </div>
+            <div style={{ fontWeight: 700, fontSize: 13, whiteSpace: "nowrap" }}>{currency} {fmt(o.fare)} <span style={{ fontWeight: 400, fontSize: 11, color: "var(--text-secondary)" }}>/pax</span></div>
+            <button type="button" onClick={() => addFlightLine(o)} style={secondaryBtn}><Plus size={12} /> Add</button>
+          </div>
+        ))}
+
+        <div style={{ margin: "16px 0 8px", fontWeight: 600, fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}><Hotel size={14} aria-hidden /> Hotels</div>
+        <div style={{ display: "grid", gap: 8, gridTemplateColumns: "repeat(auto-fit, minmax(min(100%,140px),1fr))" }}>
+          <input placeholder="City" value={hSearch.city} onChange={(e) => setHSearch({ ...hSearch, city: e.target.value })} style={inputStyle} aria-label="Hotel city" />
+          <input type="date" value={hSearch.checkIn} onChange={(e) => setHSearch({ ...hSearch, checkIn: e.target.value })} style={inputStyle} aria-label="Check-in" />
+          <input type="date" value={hSearch.checkOut} onChange={(e) => setHSearch({ ...hSearch, checkOut: e.target.value })} style={inputStyle} aria-label="Check-out" />
+          <input type="number" min="1" placeholder="Rooms" value={hSearch.rooms} onChange={(e) => setHSearch({ ...hSearch, rooms: e.target.value })} style={inputStyle} aria-label="Rooms" />
+          <select value={hSearch.starRating} onChange={(e) => setHSearch({ ...hSearch, starRating: e.target.value })} style={inputStyle} aria-label="Star rating">
+            <option value="">Any rating</option>{[3, 4, 5].map((s) => <option key={s} value={s}>{s} star</option>)}
+          </select>
+          <button type="button" onClick={runHotelSearch} disabled={hLoading} style={primaryBtn}><Search size={14} /> {hLoading ? "Searching…" : "Search hotels"}</button>
+        </div>
+        {hMeta && (
+          <p style={{ fontSize: 12, margin: "8px 0 0", color: "var(--text-secondary)" }}>
+            <span style={providerBadge(hMeta.provider)}>{PROVIDER_LABEL[hMeta.provider] || hMeta.provider}</span>{hMeta.note || ""}
+          </p>
+        )}
+        {hResults.map((h, i) => (
+          <div key={`h-${i}`} style={{ display: "flex", alignItems: "center", gap: 12, padding: "8px 10px", borderRadius: 8, border: "1px solid var(--border-color)", marginTop: 6 }}>
+            {/* Photo tile — real hotel image when the provider (TBO) supplies one,
+                else a tinted hotel-icon placeholder so the card still reads visually. */}
+            <div style={{ width: 64, height: 48, borderRadius: 6, overflow: "hidden", flexShrink: 0, background: "var(--subtle-bg, rgba(148,163,184,0.18))", display: "flex", alignItems: "center", justifyContent: "center" }}>
+              {h.thumbnail
+                ? <img src={h.thumbnail} alt={h.name || "Hotel"} loading="lazy" onError={(e) => { e.currentTarget.style.display = "none"; }} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                : <Hotel size={20} aria-hidden style={{ color: "var(--text-secondary)" }} />}
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <strong style={{ fontSize: 13 }}>{h.name}</strong>
+              {h.starRating ? <span style={{ marginLeft: 6, color: "#e0a800", fontSize: 12 }}>{"★".repeat(Math.max(0, Math.min(5, Math.round(h.starRating))))}</span> : null}
+              <div style={{ fontSize: 11, color: "var(--text-secondary)", marginTop: 2 }}>
+                {[h.area || h.address, h.roomType, h.board, h.refundable === true && "Refundable"].filter(Boolean).join("  ·  ")}
+              </div>
+            </div>
+            <div style={{ fontWeight: 700, fontSize: 13, whiteSpace: "nowrap" }}>{currency} {fmt(h.totalRate != null ? h.totalRate : h.ratePerNight)}</div>
+            <button type="button" onClick={() => addHotelLine(h)} style={secondaryBtn}><Plus size={12} /> Add</button>
+          </div>
+        ))}
+
+        <div style={{ margin: "16px 0 8px", fontWeight: 600, fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}><Car size={14} aria-hidden /> Transfers (taxi / road)</div>
+        <div style={{ display: "grid", gap: 8, gridTemplateColumns: "repeat(auto-fit, minmax(min(100%,140px),1fr))" }}>
+          <input placeholder="From (city / airport)" value={tSearch.from} onChange={(e) => setTSearch({ ...tSearch, from: e.target.value })} style={inputStyle} aria-label="Transfer from" />
+          <input placeholder="To (city / hotel)" value={tSearch.to} onChange={(e) => setTSearch({ ...tSearch, to: e.target.value })} style={inputStyle} aria-label="Transfer to" />
+          <input type="date" value={tSearch.date} onChange={(e) => setTSearch({ ...tSearch, date: e.target.value })} style={inputStyle} aria-label="Transfer date" />
+          <button type="button" onClick={runTransferSearch} disabled={tLoading} style={primaryBtn}><Search size={14} /> {tLoading ? "Searching…" : "Search transfers"}</button>
+        </div>
+        {tMeta && (
+          <p style={{ fontSize: 12, margin: "8px 0 0", color: "var(--text-secondary)" }}>
+            <span style={providerBadge(tMeta.provider)}>{PROVIDER_LABEL[tMeta.provider] || tMeta.provider}</span>{tMeta.note || ""}
+          </p>
+        )}
+        {tResults.map((t, i) => (
+          <div key={`t-${i}`} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", borderRadius: 8, border: "1px solid var(--border-color)", marginTop: 6 }}>
+            <Car size={16} aria-hidden style={{ color: "var(--text-secondary)", flexShrink: 0 }} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <strong style={{ fontSize: 13 }}>{t.vehicle || "Transfer"} · {t.from} → {t.to}</strong>
+              <div style={{ fontSize: 11, color: "var(--text-secondary)", marginTop: 2 }}>
+                {[t.durationMinutes && `~${t.durationMinutes} min`, t.note].filter(Boolean).join("  ·  ")}
+              </div>
+            </div>
+            <div style={{ fontWeight: 700, fontSize: 13, whiteSpace: "nowrap" }}>{currency} {fmt(t.price)}</div>
+            <button type="button" onClick={() => addTransferLine(t)} style={secondaryBtn}><Plus size={12} /> Add</button>
+          </div>
+        ))}
       </section>
 
       {/* PRD_TRAVEL_SUPPLIER_MASTER G043 — credit-utilization advisory chips.
@@ -1637,37 +2092,40 @@ export default function QuoteBuilder() {
           role="dialog"
           aria-modal="true"
           aria-label="Confirm send to customer"
+          onClick={(e) => { if (e.target === e.currentTarget && !sending) setSendConfirmOpen(false); }}
           style={{
             position: "fixed",
             inset: 0,
-            background: "rgba(0,0,0,0.5)",
+            background: "rgba(0,0,0,0.6)",
+            backdropFilter: "blur(4px)",
+            WebkitBackdropFilter: "blur(4px)",
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            zIndex: 1000,
+            zIndex: 1100,
+            padding: "1rem",
           }}
         >
           <div
-            className="glass"
             style={{
+              background: "var(--bg-color)",
+              color: "var(--text-primary)",
               padding: 24,
               minWidth: 320,
               maxWidth: 520,
-              borderRadius: 8,
+              borderRadius: 10,
+              border: "1px solid var(--border-color)",
+              boxShadow: "0 20px 60px rgba(0,0,0,0.45)",
             }}
           >
             <h3 style={{ margin: "0 0 12px", fontSize: "1.1rem" }}>
               Send quote #{quoteId} to customer?
             </h3>
             <p style={{ color: "var(--text-secondary)", fontSize: 14, marginBottom: 16 }}>
-              Send to customer (WhatsApp + email) — feature pending Q9 Wati
-              WhatsApp credentials. The quote will be ready to send once
-              integration is enabled.
-            </p>
-            <p style={{ color: "var(--text-secondary)", fontSize: 13, marginBottom: 16 }}>
-              Confirming will mark the quote as <strong>Sent</strong> and queue
-              it for delivery — actual WhatsApp + email dispatch will fire once
-              the Wati integration is live.
+              This creates a secure customer link (they can view + accept the
+              quote) and delivers it by <strong>email</strong> (if on file) and
+              <strong> WhatsApp</strong> via your connected number. You can
+              re-send any time.
             </p>
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
               <button
@@ -1830,23 +2288,32 @@ export default function QuoteBuilder() {
           role="dialog"
           aria-modal="true"
           aria-label="Confirm delete line"
+          onClick={(e) => { if (e.target === e.currentTarget) setDeleteTarget(null); }}
           style={{
             position: "fixed",
             inset: 0,
-            background: "rgba(0,0,0,0.5)",
+            background: "rgba(0,0,0,0.6)",
+            backdropFilter: "blur(4px)",
+            WebkitBackdropFilter: "blur(4px)",
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            zIndex: 1000,
+            zIndex: 1100,
+            padding: "1rem",
           }}
         >
+          {/* Solid surface — NOT .glass — so the dialog isn't see-through over
+              the page content behind it (that looked broken). */}
           <div
-            className="glass"
             style={{
+              background: "var(--bg-color)",
+              color: "var(--text-primary)",
               padding: 24,
               minWidth: 320,
               maxWidth: 480,
-              borderRadius: 8,
+              borderRadius: 10,
+              border: "1px solid var(--border-color)",
+              boxShadow: "0 20px 60px rgba(0,0,0,0.45)",
             }}
           >
             <h3 style={{ margin: "0 0 12px", fontSize: "1.1rem" }}>Remove line?</h3>

@@ -195,6 +195,11 @@ export default function ItineraryDetail() {
   // "Supplier ID" field). Fetched once; tolerant of failure (picker just
   // shows "— None —").
   const [suppliers, setSuppliers] = useState([]);
+  // Map state — client-side geocoded copy of itin.items (never saved to server
+  // from here; the editor handles persistence). Items without lat/lng get
+  // geocoded progressively so markers appear as they resolve.
+  const [mapItems, setMapItems] = useState([]);
+  const [destCenter, setDestCenter] = useState(null); // { lat, lng } for destination fallback
 
   const load = () => {
     setLoading(true);
@@ -214,6 +219,44 @@ export default function ItineraryDetail() {
       .then((res) => setSuppliers(Array.isArray(res) ? res : (res?.suppliers || [])))
       .catch(() => setSuppliers([]));
   }, []);
+
+  // Geocode missing coordinates for map display. Runs whenever the itinerary
+  // loads or changes. Uses the existing geocoder.js LRU + 1 req/sec rate limiter
+  // so we never hammer Nominatim. Updates mapItems progressively (one marker
+  // appears at a time) rather than waiting for all geocodes to complete.
+  useEffect(() => {
+    if (!itin) { setMapItems([]); setDestCenter(null); return; }
+
+    const items = Array.isArray(itin.items) ? itin.items : [];
+    // Seed immediately with existing data so already-geocoded items show at once.
+    // Normalise locationName from description so MapPreview popup has a label.
+    setMapItems(items.map((it) => ({ ...it, locationName: it.description || '' })));
+    setDestCenter(null);
+
+    let cancelled = false;
+    (async () => {
+      // 1. Geocode the trip destination (e.g. "Paris") for center fallback.
+      if (itin.destination) {
+        const r = await geocode(itin.destination).catch(() => null);
+        if (!cancelled && r) setDestCenter({ lat: r.lat, lng: r.lng });
+      }
+      // 2. Geocode each item that has a description but no coordinates yet.
+      for (const it of items) {
+        if (cancelled) break;
+        if (!it.description) continue;
+        if (it.latitude != null && it.longitude != null) continue;
+        const r = await geocode(it.description).catch(() => null);
+        if (!cancelled && r) {
+          setMapItems((prev) =>
+            prev.map((m) =>
+              m.id === it.id ? { ...m, latitude: r.lat, longitude: r.lng } : m
+            )
+          );
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [itin]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const accept = async () => {
     if (!confirm("Mark this itinerary as accepted? This also fans out WebCheckin rows for every flight item.")) return;
@@ -271,6 +314,9 @@ export default function ItineraryDetail() {
         : res?.shareUrl || null;
       setShareUrl(link);
       notify.success("Share link generated");
+      // Sharing promotes a draft to "sent" server-side so the public link
+      // works — refresh so the status badge reflects it without a reload.
+      if (res?.status && itin && res.status !== itin.status) load();
     } catch (e) {
       notify.error(e?.body?.error || "Failed to generate share link");
     }
@@ -699,14 +745,32 @@ export default function ItineraryDetail() {
               <MapIcon size={18} aria-hidden /> Trip map
             </h2>
             <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>
-              Items with coordinates appear as pins; rows without lat/lng are skipped.
+              {mapItems.some((it) => it.latitude != null && it.longitude != null)
+                ? "Pins show day-planner locations — colour-coded by day"
+                : destCenter
+                  ? `Centred on ${itin.destination} — geocoding places…`
+                  : "Geocoding locations…"}
             </span>
           </div>
           <div style={{
             background: "var(--surface-color)", borderRadius: 8,
             border: "1px solid var(--border-color)", overflow: "hidden",
           }}>
-            <MapPreview items={itin.items} height={320} />
+            {(() => {
+              const hasPins = mapItems.some(
+                (it) => it.latitude != null && it.longitude != null &&
+                         Number.isFinite(Number(it.latitude)) && Number.isFinite(Number(it.longitude))
+              );
+              return (
+                <MapPreview
+                  items={mapItems}
+                  height={320}
+                  centerLat={!hasPins && destCenter ? destCenter.lat : undefined}
+                  centerLng={!hasPins && destCenter ? destCenter.lng : undefined}
+                  zoom={!hasPins && destCenter ? 11 : undefined}
+                />
+              );
+            })()}
           </div>
         </section>
       )}

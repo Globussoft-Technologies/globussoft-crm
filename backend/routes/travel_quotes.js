@@ -50,6 +50,11 @@ const {
 } = require("../middleware/travelGuards");
 const { writeAudit } = require("../lib/audit");
 const { generateTravelQuotePdf } = require("../services/pdfRenderer");
+// Customer-share: mint a signed quote-share token + deliver it (email-first +
+// WhatsApp via the connected WhatsApp Web client). Mirrors the itinerary share.
+const { mintShareToken } = require("../lib/quoteShareToken");
+const waWebClient = require("../services/whatsappWebClient");
+const { sendEmail } = require("../lib/emailSender");
 const { pickMarkup, mapCategoryToScope } = require("../lib/travelPricing");
 const {
   computeGstForLines,
@@ -219,6 +224,8 @@ function parseValidUntil(input) {
 // the caller is authorised — a business precondition is unmet). Error code
 // stays the canonical DIAGNOSTIC_REQUIRED so dashboards/specs can match on
 // code regardless of surface.
+// eslint-disable-next-line no-unused-vars -- guard intentionally disabled for
+// quotes (see POST /quotes); kept for history + easy re-enable.
 async function assertQuoteDiagnosticFirst(tenantId, contactId, subBrand) {
   try {
     await assertCompletedDiagnostic(prisma, tenantId, contactId, subBrand);
@@ -1903,11 +1910,12 @@ router.post(
         return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
       }
 
-      // PRD §4.1 diagnostic-first guard (gap A9a): no completed
-      // diagnostic for (tenant, contact, subBrand) → 422
-      // DIAGNOSTIC_REQUIRED. Runs BEFORE the visa complexity gate — the
-      // diagnostic is the universal Phase-1 wall across all four brands.
-      await assertQuoteDiagnosticFirst(req.travelTenant.id, contactIdInt, targetSubBrand);
+      // NOTE: the §4.1 diagnostic-first guard is intentionally DISABLED for
+      // quotes — operators build trip quotes/proposals directly (TBO builder,
+      // direct WhatsApp/email enquiries) without forcing the contact through a
+      // diagnostic first. (Itinerary creation still enforces §4.1.) Kept
+      // commented for history rather than deleted.
+      // await assertQuoteDiagnosticFirst(req.travelTenant.id, contactIdInt, targetSubBrand);
 
       // PRD §4.4 Visa Sure complexity gate (gap A6): complex cases are
       // manual-only.
@@ -2623,6 +2631,14 @@ router.get(
       if (!canAccessSubBrand(allowed, quote.subBrand)) {
         return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
       }
+
+      // The PDF renderer reads line items off quote.lines — fetch + attach them
+      // (findFirst above does not include the relation, so without this the PDF
+      // renders "(No line items on this quote yet.)" even when lines exist).
+      quote.lines = await prisma.travelQuoteLine.findMany({
+        where: { quoteId: quote.id, tenantId: req.travelTenant.id },
+        orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
+      });
 
       let pdfBuffer;
       try {
@@ -3964,5 +3980,97 @@ router.post(
     }
   },
 );
+
+// POST /api/travel/quotes/:id/share
+//
+// Mint a signed customer-share token for the quote and DELIVER it: email (if the
+// contact has an email) + WhatsApp (via the connected WhatsApp Web number).
+// Returns the public link (/p/quote/<token>, served by the existing
+// travel_quotes_public view/accept/reject/counter flow) so the operator can
+// also paste it manually. Promotes a Draft quote to Sent. channel="auto".
+router.post("/quotes/:id/share", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) {
+      return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+    }
+    const quote = await prisma.travelQuote.findFirst({
+      where: { id, tenantId: req.travelTenant.id },
+      select: { id: true, subBrand: true, contactId: true, status: true, currency: true, totalAmount: true },
+    });
+    if (!quote) return res.status(404).json({ error: "Quote not found", code: "QUOTE_NOT_FOUND" });
+    const allowed = await getSubBrandAccessSet(req.user.userId);
+    if (!canAccessSubBrand(allowed, quote.subBrand)) {
+      return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+    }
+
+    const expiryDays = parseInt((req.body || {}).expiryDays, 10);
+    const token = mintShareToken({
+      quoteId: id,
+      tenantId: req.travelTenant.id,
+      expiresInDays: Number.isFinite(expiryDays) ? expiryDays : undefined,
+    });
+    const portalBase = String((req.headers && req.headers.origin) || "").replace(/\/+$/, "")
+      || process.env.PUBLIC_BASE_URL || "https://crm.globusdemos.com";
+    const shareUrl = `${portalBase}/p/quote/${token}`;
+
+    // Promote draft → sent so the public link isn't a "not yet ready" state.
+    const promote = quote.status === "Draft";
+    if (promote) {
+      await prisma.travelQuote.update({ where: { id }, data: { status: "Sent" } }).catch(() => {});
+    }
+
+    // Deliver to the contact: email if present, WhatsApp if a phone is on file.
+    let emailStatus = "SKIPPED";
+    let whatsappStatus = "SKIPPED";
+    const channelsUsed = [];
+    if (quote.contactId) {
+      const contact = await prisma.contact
+        .findFirst({ where: { id: quote.contactId, tenantId: req.travelTenant.id }, select: { id: true, name: true, email: true, phone: true } })
+        .catch(() => null);
+      if (contact) {
+        const cur = quote.currency || "INR";
+        const amt = quote.totalAmount != null ? `${cur} ${Number(quote.totalAmount).toLocaleString("en-IN")}` : "";
+        const name = contact.name || "there";
+        if (contact.email) {
+          const r = await sendEmail({
+            to: contact.email,
+            subject: `Your travel quote${amt ? ` — ${amt}` : ""}`,
+            text: `Hi ${name},\n\nYour travel quote is ready${amt ? ` (${amt})` : ""}. View it here:\n${shareUrl}\n\nYou can accept it right from that page.\n\nThank you.`,
+          }).catch(() => ({ sent: false }));
+          emailStatus = r && r.sent ? "SENT" : "SKIPPED";
+          if (r && r.sent) channelsUsed.push("email");
+        }
+        if (contact.phone) {
+          const r = await waWebClient.sendBestEffort({
+            tenantId: req.travelTenant.id,
+            subBrand: quote.subBrand,
+            toPhone: contact.phone,
+            contactId: contact.id,
+            fallbackText: `Hi ${name}! Your travel quote is ready${amt ? ` (${amt})` : ""}. View + accept here: ${shareUrl}`,
+          }).catch(() => ({ sent: false, status: "FAILED" }));
+          whatsappStatus = (r && r.status) || "FAILED";
+          if (r && r.sent === true) channelsUsed.push("whatsapp");
+        }
+      }
+    }
+
+    writeAudit("TravelQuote", "QUOTE_SHARE", id, req.user.userId, req.travelTenant.id, {
+      subBrand: quote.subBrand, channel: channelsUsed.join("+") || "none",
+    }).catch(() => {});
+
+    res.json({
+      shareToken: token,
+      shareUrl,
+      email: emailStatus,
+      whatsapp: whatsappStatus,
+      channel: channelsUsed.length ? channelsUsed.join("+") : "none",
+      status: promote ? "Sent" : quote.status,
+    });
+  } catch (e) {
+    console.error("[travel-quotes] share error:", e.message);
+    res.status(500).json({ error: "Failed to share quote", code: "SHARE_FAILED" });
+  }
+});
 
 module.exports = router;

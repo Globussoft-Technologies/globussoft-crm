@@ -26,6 +26,7 @@
 import { useEffect, useState, useCallback, useMemo } from "react";
 import { useParams } from "react-router-dom";
 import { ShieldCheck, CheckCircle2, AlertCircle, Loader2, Plane, Mail, Phone } from "lucide-react";
+import { DestinationBanner } from "../../components/DestinationVisuals";
 
 const KYC_MICROSITE_UUID_KEY = "kycMicrositeUuid";
 
@@ -176,6 +177,14 @@ export default function PublicTripMicrosite() {
             )}
           </div>
         </header>
+
+        {/* Destination photo banner — a real destination photo (Wikipedia,
+            keyless) under the brand header; falls back to a themed gradient. */}
+        {trip.destination && (
+          <section style={S.section}>
+            <DestinationBanner destination={trip.destination} />
+          </section>
+        )}
 
         {info?.itineraryHtml && (
           <section style={S.section}>

@@ -191,10 +191,12 @@ describe('<QuoteBuilder /> — page chrome + NEW mode', () => {
     expect(screen.getByLabelText(/^Currency$/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Sub-brand/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Valid until/i)).toBeInTheDocument();
+    // NEW mode shows ONLY Save Draft — the rest (Send/Duplicate/PDF/Convert/
+    // Accept/Decline) act on a saved quote and appear once it's saved.
     expect(screen.getByRole('button', { name: /Save Draft/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Send to customer/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Duplicate/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Download PDF/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Send to customer/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Duplicate/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Download PDF/i })).toBeNull();
   });
 
   it('NEW mode: no GET to quotes/:id fires on mount; Add-line disabled until save', async () => {
@@ -779,6 +781,12 @@ describe('<QuoteBuilder /> — Send to customer (slice 6, STUB pending Q9)', () 
       if (url === '/api/travel/quotes/42' && method === 'PUT') {
         return Promise.resolve({ ...quote, status: 'Sent' });
       }
+      if (url === '/api/travel/quotes/42/share' && method === 'POST') {
+        return Promise.resolve({
+          shareToken: 'tok-abc', shareUrl: 'http://localhost/p/quote/tok-abc',
+          email: 'SENT', whatsapp: 'SENT', channel: 'email+whatsapp', status: 'Sent',
+        });
+      }
       if (url.startsWith('/api/travel/suppliers')) {
         return Promise.resolve({ suppliers: [], total: 0 });
       }
@@ -795,32 +803,29 @@ describe('<QuoteBuilder /> — Send to customer (slice 6, STUB pending Q9)', () 
     expect(btn.disabled).toBe(false);
   });
 
-  it('Send button disabled in NEW mode (no saved quote id yet)', async () => {
+  it('Send button is hidden in NEW mode (no saved quote id yet)', async () => {
     renderPage();
     await screen.findByRole('heading', { name: /Quote Builder/i });
-    const btn = screen.getByRole('button', { name: /Send to customer/i });
-    expect(btn.disabled).toBe(true);
+    // In create mode only Save Draft shows — Send appears once the quote exists.
+    expect(screen.queryByRole('button', { name: /Send to customer/i })).toBeNull();
   });
 
-  it('Send button disabled when status is "Sent"', async () => {
+  it('Send stays enabled when status is "Sent" (re-send allowed)', async () => {
     setupQuote({ status: 'Sent' });
     renderPage();
     await screen.findByText(/#42/);
-    const btn = screen.getByRole('button', { name: /Send to customer/i });
-    expect(btn.disabled).toBe(true);
+    const btn = screen.getByRole('button', { name: /Re-send/i });
+    expect(btn.disabled).toBe(false);
   });
 
-  it('Confirm modal opens with Q9-mention copy on Send click', async () => {
+  it('Confirm modal explains the secure customer link + email/WhatsApp delivery', async () => {
     setupQuote();
     renderPage();
     await screen.findByText(/#42/);
     fireEvent.click(screen.getByRole('button', { name: /Send to customer/i }));
     const dialog = await screen.findByRole('dialog', { name: /Confirm send to customer/i });
     expect(dialog).toBeInTheDocument();
-    // Q9 dependency is mentioned in the modal body copy.
-    expect(
-      screen.getByText(/feature pending Q9 Wati WhatsApp credentials/i),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/secure customer link/i)).toBeInTheDocument();
   });
 
   it('Confirm-Cancel closes the modal and does NOT fire notify.info', async () => {
@@ -847,7 +852,7 @@ describe('<QuoteBuilder /> — Send to customer (slice 6, STUB pending Q9)', () 
     expect(puts.length).toBe(0);
   });
 
-  it('Confirm-Accept fires notify.info with the queued message', async () => {
+  it('Confirm-send POSTs /quotes/:id/share { channel: "auto" } and toasts the channel', async () => {
     setupQuote();
     renderPage();
     await screen.findByText(/#42/);
@@ -857,13 +862,16 @@ describe('<QuoteBuilder /> — Send to customer (slice 6, STUB pending Q9)', () 
       screen.getByRole('button', { name: /^Confirm send to customer$/i }),
     );
     await waitFor(() => {
-      expect(notifyInfo).toHaveBeenCalledWith(
-        expect.stringMatching(/Send queued.*WhatsApp.*email.*Q9/i),
+      const post = fetchApiMock.mock.calls.find(
+        ([u, o]) => u === '/api/travel/quotes/42/share' && o?.method === 'POST',
       );
+      expect(post).toBeTruthy();
+      expect(JSON.parse(post[1].body)).toEqual({ channel: 'auto' });
     });
+    expect(notifySuccess).toHaveBeenCalledWith('Quote sent to the customer via email + WhatsApp');
   });
 
-  it('Confirm-Accept fires PUT /api/travel/quotes/:id with { status: "Sent" }', async () => {
+  it('Confirm-send surfaces the customer share link', async () => {
     setupQuote();
     renderPage();
     await screen.findByText(/#42/);
@@ -872,14 +880,7 @@ describe('<QuoteBuilder /> — Send to customer (slice 6, STUB pending Q9)', () 
     fireEvent.click(
       screen.getByRole('button', { name: /^Confirm send to customer$/i }),
     );
-    await waitFor(() => {
-      const put = fetchApiMock.mock.calls.find(
-        ([u, o]) => u === '/api/travel/quotes/42' && o?.method === 'PUT',
-      );
-      expect(put).toBeTruthy();
-      const body = JSON.parse(put[1].body);
-      expect(body.status).toBe('Sent');
-    });
+    expect(await screen.findByText('http://localhost/p/quote/tok-abc')).toBeInTheDocument();
   });
 });
 
@@ -925,11 +926,11 @@ describe('<QuoteBuilder /> — Calculate with markups (slice 8 pricing-preview)'
     expect(btn).toBeInTheDocument();
   });
 
-  it('button is DISABLED in NEW mode (no saved id)', async () => {
+  it('button is HIDDEN in NEW mode (no saved id)', async () => {
     renderPage();
     await screen.findByRole('heading', { name: /Quote Builder/i });
-    const btn = screen.getByRole('button', { name: /Calculate with markups/i });
-    expect(btn.disabled).toBe(true);
+    // Create mode shows only Save Draft; Calculate appears on a saved quote.
+    expect(screen.queryByRole('button', { name: /Calculate with markups/i })).toBeNull();
   });
 
   it('button is DISABLED when the quote has zero visible lines', async () => {
@@ -1110,12 +1111,10 @@ describe('<QuoteBuilder /> — Calculate with markups (slice 8 pricing-preview)'
 // idempotency path (server returns alreadyConverted=true) fires
 // notify.info instead.
 describe('<QuoteBuilder /> — Convert to invoice (slice 10)', () => {
-  it('renders Convert-to-invoice button in action cluster; disabled in NEW mode', async () => {
+  it('Convert-to-invoice button is HIDDEN in NEW mode (appears on a saved quote)', async () => {
     renderPage();
-    const btn = await screen.findByRole('button', { name: /Convert to invoice/i });
-    expect(btn).toBeInTheDocument();
-    // NEW mode (no route id) → button disabled until save.
-    expect(btn.disabled).toBe(true);
+    await screen.findByRole('heading', { name: /Quote Builder/i });
+    expect(screen.queryByRole('button', { name: /Convert to invoice/i })).toBeNull();
   });
 
   it('EDIT mode happy path: POSTs convert-to-invoice + notifies success with new invoice id', async () => {
@@ -1228,20 +1227,20 @@ describe('<QuoteBuilder /> — Convert to invoice (slice 10)', () => {
 //   - 409 INVALID_TRANSITION surfaces as notify.error.
 //   - alreadyAccepted=true surfaces notify.info, NOT notify.success.
 describe('<QuoteBuilder /> — slice 11 Accept / Decline workflow', () => {
-  it('renders Accept + Decline buttons in the action cluster', async () => {
+  it('renders Accept + Decline buttons for a saved quote', async () => {
+    mockRouteId = '42';
     renderPage();
-    await screen.findByRole('heading', { name: /Quote Builder/i });
+    await screen.findByText(/#42/);
     expect(screen.getByRole('button', { name: /Accept quote/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Decline quote/i })).toBeInTheDocument();
   });
 
-  it('NEW mode: Accept + Decline both disabled (no quoteId yet)', async () => {
+  it('NEW mode: Accept + Decline are hidden (no quoteId yet)', async () => {
     renderPage();
     await screen.findByRole('heading', { name: /Quote Builder/i });
-    const acceptBtn = screen.getByRole('button', { name: /Accept quote/i });
-    const declineBtn = screen.getByRole('button', { name: /Decline quote/i });
-    expect(acceptBtn.disabled).toBe(true);
-    expect(declineBtn.disabled).toBe(true);
+    // Create mode shows only Save Draft; Accept/Decline act on a saved quote.
+    expect(screen.queryByRole('button', { name: /Accept quote/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Decline quote/i })).toBeNull();
   });
 
   it('EDIT mode with Accepted status: Accept disabled, Decline disabled', async () => {
@@ -1447,5 +1446,89 @@ describe('<QuoteBuilder /> — slice 11 Accept / Decline workflow', () => {
         expect.stringMatching(/Cannot accept a quote in status "Rejected"/),
       );
     });
+  });
+});
+
+describe('<QuoteBuilder /> — TBO flight/hotel search', () => {
+  it('searches flights (accepts city names) and adds a result as a draft line', async () => {
+    mockRouteId = undefined; // NEW quote
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/travel/search/flights' && opts?.method === 'POST') {
+        return Promise.resolve({
+          provider: 'stub', currency: 'INR', stub: true,
+          resolved: { from: { input: 'Delhi', iata: 'DEL' }, to: { input: 'Jeddah', iata: 'JED' } },
+          options: [{ airline: 'AI', airlineName: 'Air India', flightNumber: 'AI-302', from: 'DEL', to: 'JED', fare: 50000, fareClass: 'Economy', stops: 0, baggage: '30kg' }],
+        });
+      }
+      return defaultFetchHandler(url, opts);
+    });
+    renderPage();
+    fireEvent.change(screen.getByLabelText('Flight from'), { target: { value: 'Delhi' } });
+    fireEvent.change(screen.getByLabelText('Flight to'), { target: { value: 'Jeddah' } });
+    fireEvent.change(screen.getByLabelText('Flight date'), { target: { value: '2026-08-02' } });
+    fireEvent.click(screen.getByRole('button', { name: /Search flights/i }));
+
+    // Result row appears (with the resolved city→IATA echo).
+    await screen.findByText(/Air India · AI-302 DEL→JED/);
+    // Add → a draft flight line shows up in the line-items table.
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+    expect(screen.getByDisplayValue('Air India AI-302 DEL → JED (Economy)')).toBeInTheDocument();
+    // The fare lands as the line unit price.
+    expect(screen.getByDisplayValue('50000')).toBeInTheDocument();
+  });
+
+  it('searches hotels and adds a result as a draft line', async () => {
+    mockRouteId = undefined;
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/travel/search/hotels' && opts?.method === 'POST') {
+        return Promise.resolve({
+          provider: 'stub', currency: 'INR', stub: true,
+          hotels: [{ name: 'Jeddah Grand Hotel', city: 'Jeddah', starRating: 5, roomType: 'Deluxe Room', board: 'Breakfast', totalRate: 18000, ratePerNight: 9000, refundable: true }],
+        });
+      }
+      return defaultFetchHandler(url, opts);
+    });
+    renderPage();
+    fireEvent.change(screen.getByLabelText('Hotel city'), { target: { value: 'Jeddah' } });
+    fireEvent.change(screen.getByLabelText('Check-in'), { target: { value: '2026-08-02' } });
+    fireEvent.change(screen.getByLabelText('Check-out'), { target: { value: '2026-08-04' } });
+    fireEvent.click(screen.getByRole('button', { name: /Search hotels/i }));
+
+    await screen.findByText(/Jeddah Grand Hotel/);
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+    expect(screen.getByDisplayValue('Jeddah Grand Hotel, Jeddah — Deluxe Room')).toBeInTheDocument();
+    // 2-night stay (08-02 → 08-04) multiplies: unit = ₹9,000/night, qty = 2.
+    expect(screen.getByDisplayValue('9000')).toBeInTheDocument();
+  });
+
+  it('1-click Suggest auto-fills round-trip flights + a hotel per city as draft lines', async () => {
+    mockRouteId = undefined;
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/travel/search/flights' && opts?.method === 'POST') {
+        const b = JSON.parse(opts.body);
+        return Promise.resolve({
+          provider: 'stub', currency: 'INR', stub: true,
+          options: [{ airline: 'AI', airlineName: 'Air India', flightNumber: 'AI-1', from: b.from, to: b.to, fare: 40000, fareClass: 'Economy', stops: 0 }],
+        });
+      }
+      if (url === '/api/travel/search/hotels' && opts?.method === 'POST') {
+        const b = JSON.parse(opts.body);
+        return Promise.resolve({
+          provider: 'stub', currency: 'INR', stub: true,
+          hotels: [{ name: `${b.city} Hotel`, city: b.city, starRating: 4, roomType: 'Deluxe', board: 'Room Only', totalRate: 12000, ratePerNight: 6000 }],
+        });
+      }
+      return defaultFetchHandler(url, opts);
+    });
+    renderPage();
+    fireEvent.change(screen.getByLabelText('Leaving from'), { target: { value: 'Bangalore' } });
+    fireEvent.change(screen.getByLabelText('Trip start date'), { target: { value: '2026-08-02' } });
+    fireEvent.change(screen.getByLabelText('Destination city 1'), { target: { value: 'Makkah' } });
+    fireEvent.click(screen.getByRole('button', { name: /Suggest flights & hotels/i }));
+
+    // Outbound + return flights (full city names) and the Makkah hotel all land.
+    await screen.findByDisplayValue('Air India AI-1 Bangalore → Makkah (Economy)');
+    expect(screen.getByDisplayValue('Air India AI-1 Makkah → Bangalore (Economy)')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('Makkah Hotel, Makkah — Deluxe')).toBeInTheDocument();
   });
 });

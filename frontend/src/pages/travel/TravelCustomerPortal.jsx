@@ -687,6 +687,7 @@ function VisaApplicationCard({ token }) {
   const [starting, setStarting] = useState(false);
   const [uploadingId, setUploadingId] = useState(null);
   const [showStart, setShowStart] = useState(false);
+  const [cancelConfirmId, setCancelConfirmId] = useState(null); // appId awaiting confirm
 
   const reload = useCallback(async () => {
     setLoading(true);
@@ -777,12 +778,12 @@ function VisaApplicationCard({ token }) {
     }
   };
 
-  // Cancel one application (only while early) — e.g. it was started for the
-  // wrong destination, or no checklist was set up for it.
-  const cancelApplication = async (appId) => {
-    if (!window.confirm('Cancel this application? Any documents you have uploaded for it will be removed.')) {
-      return;
-    }
+  // Cancel one application — opens the inline confirm modal first.
+  const cancelApplication = (appId) => setCancelConfirmId(appId);
+
+  const confirmCancelApplication = async () => {
+    const appId = cancelConfirmId;
+    setCancelConfirmId(null);
     setStarting(true);
     setMsg(null);
     try {
@@ -1015,6 +1016,59 @@ function VisaApplicationCard({ token }) {
         >
           <Stamp size={15} /> Start another visa application
         </button>
+      )}
+
+      {/* Inline cancel-confirmation modal — replaces window.confirm() */}
+      {cancelConfirmId && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="cancel-confirm-title"
+          style={{
+            position: "fixed", inset: 0, zIndex: 1000,
+            display: "flex", alignItems: "center", justifyContent: "center",
+            background: "rgba(0,0,0,0.45)",
+          }}
+        >
+          <div style={{
+            background: "var(--surface-color, #fff)",
+            borderRadius: 14,
+            padding: "28px 28px 24px",
+            maxWidth: 420, width: "90%",
+            boxShadow: "0 8px 40px rgba(0,0,0,0.22)",
+          }}>
+            <h3 id="cancel-confirm-title" style={{ margin: "0 0 10px", fontSize: 17, color: "var(--text-primary)" }}>
+              Cancel this application?
+            </h3>
+            <p style={{ margin: "0 0 22px", fontSize: 14, color: "var(--text-secondary)", lineHeight: 1.5 }}>
+              Any documents you have uploaded for it will be removed. This cannot be undone.
+            </p>
+            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+              <button
+                type="button"
+                onClick={() => setCancelConfirmId(null)}
+                style={{
+                  padding: "8px 18px", borderRadius: 8, fontSize: 14, fontWeight: 600,
+                  background: "transparent", border: "1px solid var(--border-color, rgba(18,38,71,0.2))",
+                  color: "var(--text-secondary)", cursor: "pointer",
+                }}
+              >
+                Keep application
+              </button>
+              <button
+                type="button"
+                data-testid="visa-cancel-confirm-ok"
+                onClick={confirmCancelApplication}
+                style={{
+                  padding: "8px 18px", borderRadius: 8, fontSize: 14, fontWeight: 600,
+                  background: "#ef4444", border: "none", color: "#fff", cursor: "pointer",
+                }}
+              >
+                Yes, cancel it
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
@@ -2172,6 +2226,11 @@ function BookingDetail({ itinerary, token, onChanged, onBack }) {
   // "What-if" headcount the customer types into the estimate calculator.
   // Empty string = use the advisor's quoted traveler count (pax).
   const [headcount, setHeadcount] = useState("");
+  // Cancellation (committed bookings) — request cancel + refund (2026-06-19).
+  const [cancelOpen, setCancelOpen] = useState(false);
+  const [cancelReason, setCancelReason] = useState("");
+  const [cancelBusy, setCancelBusy] = useState(false);
+  const [cancelErr, setCancelErr] = useState(null);
 
   // Post-trip review: fetch the destination-interpolated form once when the
   // trip is review-able. Declared BEFORE the early return so the hook order
@@ -2264,6 +2323,23 @@ function BookingDetail({ itinerary, token, onChanged, onBack }) {
       setDecideErr(e.message || "Something went wrong. Please try again.");
     } finally {
       setBusy(null);
+    }
+  };
+
+  const cancellationStatus = itinerary.cancellationStatus || null;
+  const submitCancellation = async () => {
+    if (!cancelReason.trim()) return;
+    setCancelBusy(true);
+    setCancelErr(null);
+    try {
+      await portalFetch(`/travel/itineraries/${itinerary.id}/request-cancellation`, {
+        token, method: "POST", body: { reason: cancelReason.trim() },
+      });
+      if (onChanged) await onChanged();
+    } catch (e) {
+      setCancelErr(e.message || "Couldn't submit your request. Please try again.");
+    } finally {
+      setCancelBusy(false);
     }
   };
 
@@ -2361,6 +2437,77 @@ function BookingDetail({ itinerary, token, onChanged, onBack }) {
             : <p style={{ color: "var(--text-secondary)", fontSize: 13 }}>Loading the review form…</p>}
         </section>
       )}
+
+      {/* Cancellation — a committed booking can be cancelled; the advisor is
+          flagged + processes any refund per the cancellation policy. */}
+      {(cancellationStatus === "requested" || cancellationStatus === "cancelled") ? (
+        <section style={{ ...cardStyle, background: "rgba(168, 50, 63, 0.06)", border: "1px solid rgba(168, 50, 63, 0.22)" }} role="status">
+          <h3 style={{ margin: 0, fontSize: 16, display: "flex", alignItems: "center", gap: 8 }}>
+            <AlertCircle size={18} aria-hidden /> {cancellationStatus === "cancelled" ? "Booking cancelled" : "Cancellation requested"}
+          </h3>
+          <p style={{ color: "var(--text-secondary)", margin: "8px 0 0", fontSize: 14 }}>
+            {cancellationStatus === "cancelled"
+              ? "This booking has been cancelled. Your advisor will confirm any refund due per the cancellation policy."
+              : "We've received your cancellation request. Your advisor will review it and process any refund due per the cancellation policy."}
+          </p>
+          {itinerary.cancellationReason && (
+            <p style={{ color: "var(--text-secondary)", margin: "8px 0 0", fontSize: 13 }}>Your reason: &ldquo;{itinerary.cancellationReason}&rdquo;</p>
+          )}
+        </section>
+      ) : isAccepted ? (
+        <section style={cardStyle} aria-labelledby="booking-cancel-heading">
+          <h3 id="booking-cancel-heading" style={{ margin: 0, fontSize: 16 }}>Need to cancel?</h3>
+          <p style={{ color: "var(--text-secondary)", margin: "6px 0 12px", fontSize: 14 }}>
+            You can request to cancel this booking.{paid > 0 ? ` You've paid ${fmtMoney(paid, itinerary.currency)} so far —` : ""} your advisor will process any refund due per the cancellation policy.
+          </p>
+          {cancelErr && (
+            <div role="alert" style={{ marginBottom: 12, padding: "8px 12px", borderRadius: 8, fontSize: 14, background: "rgba(168, 50, 63, 0.08)", color: "var(--danger-color, #A8323F)", display: "flex", alignItems: "center", gap: 8 }}>
+              <AlertCircle size={16} aria-hidden /> {cancelErr}
+            </div>
+          )}
+          {!cancelOpen ? (
+            <button
+              type="button"
+              onClick={() => { setCancelOpen(true); setCancelErr(null); }}
+              style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "9px 18px", borderRadius: 8, fontWeight: 600, background: "transparent", color: "var(--danger-color, #A8323F)", border: "1px solid var(--danger-color, #A8323F)", cursor: "pointer" }}
+            >
+              <AlertCircle size={16} aria-hidden /> Request cancellation
+            </button>
+          ) : (
+            <div style={{ display: "grid", gap: 10 }}>
+              <label style={{ fontSize: 14, fontWeight: 600 }}>
+                Why are you cancelling? <span style={{ color: "var(--danger-color, #A8323F)" }}>*</span>
+                <textarea
+                  value={cancelReason}
+                  onChange={(e) => setCancelReason(e.target.value)}
+                  rows={3}
+                  placeholder="Tell us the reason for cancelling…"
+                  style={{ width: "100%", marginTop: 6, padding: "8px 10px", borderRadius: 8, border: "1px solid var(--border-color, rgba(18,38,71,0.18))", background: "var(--surface-color, #fff)", color: "var(--text-primary)", fontFamily: "inherit", fontSize: 14, resize: "vertical" }}
+                />
+              </label>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                <button
+                  type="button"
+                  onClick={submitCancellation}
+                  disabled={cancelBusy || !cancelReason.trim()}
+                  style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "9px 18px", borderRadius: 8, fontWeight: 600, border: "none", background: "var(--danger-color, #A8323F)", color: "#fff", cursor: (cancelBusy || !cancelReason.trim()) ? "not-allowed" : "pointer", opacity: (cancelBusy || !cancelReason.trim()) ? 0.6 : 1 }}
+                >
+                  {cancelBusy ? <Loader2 size={16} className="spin" aria-hidden /> : <AlertCircle size={16} aria-hidden />}
+                  {cancelBusy ? "Submitting…" : "Submit cancellation request"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setCancelOpen(false); setCancelReason(""); setCancelErr(null); }}
+                  disabled={cancelBusy}
+                  style={{ padding: "9px 18px", borderRadius: 8, fontWeight: 600, background: "transparent", color: "var(--text-secondary)", border: "1px solid var(--border-color)", cursor: "pointer" }}
+                >
+                  Keep my booking
+                </button>
+              </div>
+            </div>
+          )}
+        </section>
+      ) : null}
 
       {/* Customer's decision on the offer — accepting/declining is the
           customer's right, not the advisor's. */}

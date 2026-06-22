@@ -23,8 +23,9 @@ import { useCallback, useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import {
   AlertTriangle, Calendar, CheckCircle2, CreditCard, Globe, Hotel,
-  MapPin, Plane, RefreshCw, ShieldCheck, Ticket,
+  Plane, RefreshCw, ShieldCheck, Ticket,
 } from "lucide-react";
+import { DestinationHero, DestinationSideRails } from "../../components/DestinationVisuals";
 
 const ITEM_ICON = {
   flight: Plane,
@@ -34,6 +35,25 @@ const ITEM_ICON = {
   visa: ShieldCheck,
   insurance: ShieldCheck,
 };
+
+// A flight quote's destination is a route ("DEL→JED flights") that resolves to
+// no photo. Map the arrival airport to its city so the hero/side-rails still
+// get real destination visuals. Falls back to the raw string for anything else.
+const IATA_CITY = {
+  JED: "Jeddah", MED: "Medina", RUH: "Riyadh", DXB: "Dubai", AUH: "Abu Dhabi",
+  DOH: "Doha", DEL: "Delhi", BOM: "Mumbai", BLR: "Bangalore", HYD: "Hyderabad",
+  MAA: "Chennai", CCU: "Kolkata", COK: "Kochi", SIN: "Singapore", BKK: "Bangkok",
+  KUL: "Kuala Lumpur", IST: "Istanbul", LHR: "London", CDG: "Paris", JFK: "New York",
+  HND: "Tokyo", NRT: "Tokyo", CMB: "Colombo", KTM: "Kathmandu", MLE: "Maldives",
+};
+function photoDestinationFor(destination) {
+  const m = /[A-Z]{3}\s*(?:→|->|to)\s*([A-Z]{3})\s*flights?/i.exec(String(destination || ""));
+  if (m) {
+    const city = IATA_CITY[m[1].toUpperCase()];
+    if (city) return city;
+  }
+  return destination;
+}
 
 // Lazily inject the Razorpay checkout SDK once. Resolves true when
 // window.Razorpay is available, false if the script fails to load (offline /
@@ -64,6 +84,8 @@ export default function TripBooking() {
   const [loadError, setLoadError] = useState("");
   const [paying, setPaying] = useState(false);
   const [payError, setPayError] = useState("");
+  // "Choose one" flight quotes: which option the customer picked (item id).
+  const [selectedId, setSelectedId] = useState(null);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -83,6 +105,14 @@ export default function TripBooking() {
 
   useEffect(load, [load]);
 
+  // Auto-select when a flight quote has exactly one option (nothing to choose).
+  useEffect(() => {
+    if (itin?.optionsMode) {
+      const opts = (itin.items || []).filter((i) => i.itemType === "flight");
+      if (opts.length === 1) setSelectedId(opts[0].id);
+    }
+  }, [itin]);
+
   // PRD §4.7 — real Razorpay checkout (advance OR balance). Flow:
   //   1. POST create-payment-order → server mints a Razorpay order using the
   //      platform keys from env and returns { orderId, amount, currency, keyId }.
@@ -91,7 +121,7 @@ export default function TripBooking() {
   //      signature }; POST verify-payment → server validates the signature +
   //      refetches the captured amount + advances the itinerary state.
   //   4. Re-fetch to show the new paid state.
-  const startPayment = async (kind) => {
+  const startPayment = async (kind, itineraryItemId) => {
     if (!itin) return;
     setPaying(true);
     setPayError("");
@@ -106,7 +136,7 @@ export default function TripBooking() {
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ kind }),
+          body: JSON.stringify({ kind, ...(itineraryItemId ? { itineraryItemId } : {}) }),
         },
       );
       const order = await orderRes.json().catch(() => ({}));
@@ -133,6 +163,7 @@ export default function TripBooking() {
                     razorpay_order_id: resp.razorpay_order_id,
                     razorpay_payment_id: resp.razorpay_payment_id,
                     razorpay_signature: resp.razorpay_signature,
+                    ...(itineraryItemId ? { itineraryItemId } : {}),
                   }),
                 },
               );
@@ -163,7 +194,7 @@ export default function TripBooking() {
     }
   };
 
-  const payAdvance = () => startPayment("advance");
+  const payAdvance = () => startPayment("advance", itin?.optionsMode ? selectedId : undefined);
   const payBalance = () => startPayment("balance");
 
   if (loading) return <Shell><p style={{ color: "#5a6275" }}>Loading your trip…</p></Shell>;
@@ -182,50 +213,122 @@ export default function TripBooking() {
   }
   if (!itin) return null;
 
+  // "Choose one" flight quote derived state. The customer picks one of the
+  // alternative flight options; total + advance reflect that pick, and the
+  // advance payment is taken against it (create-payment-order sets the total).
+  const optionsMode = !!itin.optionsMode;
+  const flightOptions = optionsMode ? itin.items.filter((i) => i.itemType === "flight") : [];
+  const selected = flightOptions.find((o) => String(o.id) === String(selectedId)) || null;
+  const displayTotal = optionsMode ? (selected ? Number(selected.totalPrice) : null) : itin.totalAmount;
+  const displayAdvance = optionsMode
+    ? (selected ? Math.round(Number(selected.totalPrice) * (itin.advanceRatio || 0) * 100) / 100 : null)
+    : itin.advanceDue;
+  // Flight quotes' destination is a route ("DEL→JED flights") with no photo —
+  // resolve the arrival city so the hero/rails still show real visuals.
+  const photoDest = photoDestinationFor(itin.destination);
+  const hasDates = !!(itin.startDate || itin.endDate);
+
   return (
     <Shell tenantName={itin.tenantName}>
-      <header style={{ marginBottom: 20 }}>
-        <h1 style={{ margin: 0, display: "flex", alignItems: "center", gap: 10, fontSize: 26 }}>
-          <MapPin size={26} aria-hidden style={{ color: "#C89A4E" }} />
-          {itin.destination}
-        </h1>
-        <p style={{ color: "#5a6275", marginTop: 6, fontSize: 14 }}>
-          <Calendar size={14} aria-hidden style={{ verticalAlign: -2, marginRight: 4 }} />
-          {fmtDate(itin.startDate)} &mdash; {fmtDate(itin.endDate)}
-          {" · "}
-          <StatusBadge status={itin.status} />
-        </p>
-      </header>
+      {/* Culture photos filling the wide side gutters on desktop (Wikipedia,
+          keyless). Hidden on narrow screens; never overlaps the card. */}
+      <DestinationSideRails destination={itin.destination} photoDestination={photoDest} />
+      {/* Destination hero — themed gradient + cultural motif + real photo,
+          all auto-swapping with the destination. */}
+      <DestinationHero destination={itin.destination} photoDestination={photoDest}>
+        {hasDates && (
+          <>
+            <Calendar size={14} aria-hidden style={{ verticalAlign: -2, marginRight: 4 }} />
+            {fmtDate(itin.startDate)} &mdash; {fmtDate(itin.endDate)}
+            {" · "}
+          </>
+        )}
+        <StatusBadge status={itin.status} />
+      </DestinationHero>
 
-      <section aria-labelledby="items-heading">
-        <h2 id="items-heading" style={sectionHeading}>Your trip includes</h2>
-        <ul style={{ listStyle: "none", padding: 0, margin: "0 0 24px", display: "grid", gap: 10 }}>
-          {itin.items.map((item) => {
-            const Icon = ITEM_ICON[item.itemType] || Ticket;
-            return (
-              <li key={item.id} style={itemRow}>
-                <Icon size={18} aria-hidden style={{ color: "#122647", flexShrink: 0 }} />
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontWeight: 600 }}>{item.description}</div>
-                  <div style={{ fontSize: 12, color: "#7a8294", textTransform: "uppercase", letterSpacing: 0.5 }}>
-                    {item.itemType}
+      {optionsMode ? (
+        <section aria-labelledby="items-heading">
+          <h2 id="items-heading" style={sectionHeading}>Choose your flight</h2>
+          <p style={{ fontSize: 13, color: "#5a6275", margin: "0 0 12px" }}>
+            Select one option, then pay {Math.round((itin.advanceRatio || 0) * 100)}% to confirm.
+          </p>
+          <ul style={{ listStyle: "none", padding: 0, margin: "0 0 24px", display: "grid", gap: 10 }}>
+            {flightOptions.map((item) => {
+              const checked = String(selectedId) === String(item.id);
+              const details = flightDetails(item);
+              return (
+                <li key={item.id}>
+                  <label
+                    style={{
+                      ...itemRow, alignItems: "flex-start", cursor: "pointer",
+                      borderColor: checked ? "#122647" : "#e5e7ee",
+                      boxShadow: checked ? "0 0 0 2px rgba(18,38,71,0.18)" : "none",
+                    }}
+                  >
+                    <input
+                      type="radio"
+                      name="flight-option"
+                      checked={checked}
+                      onChange={() => setSelectedId(item.id)}
+                      aria-label={`Select ${item.description}`}
+                      style={{ marginTop: 3, accentColor: "#122647", flexShrink: 0 }}
+                    />
+                    <Plane size={18} aria-hidden style={{ color: "#122647", flexShrink: 0, marginTop: 1 }} />
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontWeight: 600 }}>{item.description}</div>
+                      {details.length > 0 && <div style={detailMeta}>{details.join("  ·  ")}</div>}
+                    </div>
+                    {item.totalPrice != null && (
+                      <div style={{ fontWeight: 700, color: "#122647", whiteSpace: "nowrap" }}>
+                        {fmtMoney(item.totalPrice, itin.currency)}
+                      </div>
+                    )}
+                  </label>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      ) : (
+        <section aria-labelledby="items-heading">
+          <h2 id="items-heading" style={sectionHeading}>Your trip includes</h2>
+          <ul style={{ listStyle: "none", padding: 0, margin: "0 0 24px", display: "grid", gap: 10 }}>
+            {itin.items.map((item) => {
+              const Icon = ITEM_ICON[item.itemType] || Ticket;
+              const details = flightDetails(item);
+              return (
+                <li key={item.id} style={{ ...itemRow, alignItems: "flex-start" }}>
+                  <Icon size={18} aria-hidden style={{ color: "#122647", flexShrink: 0, marginTop: 1 }} />
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: 600 }}>{item.description}</div>
+                    <div style={{ fontSize: 12, color: "#7a8294", textTransform: "uppercase", letterSpacing: 0.5 }}>
+                      {item.itemType}
+                    </div>
+                    {details.length > 0 && <div style={detailMeta}>{details.join("  ·  ")}</div>}
                   </div>
-                </div>
-                {item.totalPrice != null && (
-                  <div style={{ fontWeight: 600, color: "#122647" }}>
-                    {fmtMoney(item.totalPrice, itin.currency)}
-                  </div>
-                )}
-              </li>
-            );
-          })}
-        </ul>
-      </section>
+                  {item.totalPrice != null && (
+                    <div style={{ fontWeight: 600, color: "#122647" }}>
+                      {fmtMoney(item.totalPrice, itin.currency)}
+                    </div>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      )}
 
       <section style={costBox} aria-labelledby="cost-heading">
         <h2 id="cost-heading" style={{ ...sectionHeading, marginTop: 0 }}>Trip cost</h2>
-        <Line label="Total" value={fmtMoney(itin.totalAmount, itin.currency)} bold />
-        <Line label={`Advance (${Math.round(itin.advanceRatio * 100)}%)`} value={fmtMoney(itin.advanceDue, itin.currency)} />
+        <Line
+          label="Total"
+          value={displayTotal != null ? fmtMoney(displayTotal, itin.currency) : "Select an option above"}
+          bold
+        />
+        <Line
+          label={`Advance (${Math.round((itin.advanceRatio || 0) * 100)}%)`}
+          value={displayAdvance != null ? fmtMoney(displayAdvance, itin.currency) : "—"}
+        />
         {itin.advancePaid > 0 && (
           <Line label="Paid so far" value={fmtMoney(itin.advancePaid, itin.currency)} positive />
         )}
@@ -239,6 +342,9 @@ export default function TripBooking() {
       <PaymentCTA
         itin={itin}
         paying={paying}
+        optionsMode={optionsMode}
+        advanceAmount={displayAdvance}
+        payDisabled={optionsMode ? !selected : itin.advanceDue <= 0}
         onPayAdvance={payAdvance}
         onPayBalance={payBalance}
       />
@@ -247,6 +353,21 @@ export default function TripBooking() {
         <p style={{ marginTop: 18, textAlign: "center" }}>
           <a href={itin.pdfUrl} target="_blank" rel="noreferrer" style={{ color: "#122647", fontWeight: 600 }}>
             Download itinerary PDF
+          </a>
+        </p>
+      )}
+
+      {/* Once a payment is recorded, the customer can pull their receipt /
+          invoice (rendered on-demand from the current payment state). */}
+      {itin.advancePaid > 0 && (
+        <p style={{ marginTop: itin.pdfUrl ? 8 : 18, textAlign: "center" }}>
+          <a
+            href={`/api/travel/itineraries/public/${encodeURIComponent(shareToken)}/receipt`}
+            target="_blank"
+            rel="noreferrer"
+            style={{ color: "#122647", fontWeight: 600 }}
+          >
+            Download payment receipt
           </a>
         </p>
       )}
@@ -260,7 +381,7 @@ export default function TripBooking() {
 
 // ─── Payment CTA (state-machine) ─────────────────────────────────────
 
-function PaymentCTA({ itin, paying, onPayAdvance, onPayBalance }) {
+function PaymentCTA({ itin, paying, onPayAdvance, onPayBalance, optionsMode, advanceAmount, payDisabled }) {
   if (itin.status === "fully_paid") {
     return (
       <div style={successBox} role="status">
@@ -316,11 +437,19 @@ function PaymentCTA({ itin, paying, onPayAdvance, onPayBalance }) {
     <button
       type="button"
       onClick={onPayAdvance}
-      disabled={paying || itin.advanceDue <= 0}
-      style={{ ...primaryBtn, opacity: paying ? 0.6 : 1, cursor: paying ? "wait" : "pointer" }}
+      disabled={paying || payDisabled}
+      style={{
+        ...primaryBtn,
+        opacity: (paying || payDisabled) ? 0.6 : 1,
+        cursor: paying ? "wait" : (payDisabled ? "not-allowed" : "pointer"),
+      }}
     >
       <CreditCard size={16} aria-hidden />
-      {paying ? "Processing…" : `Pay ${Math.round(itin.advanceRatio * 100)}% to confirm · ${fmtMoneyCompact(itin.advanceDue, itin.currency)}`}
+      {paying
+        ? "Processing…"
+        : optionsMode && advanceAmount == null
+          ? "Select an option to continue"
+          : `Pay ${Math.round((itin.advanceRatio || 0) * 100)}% to confirm · ${fmtMoneyCompact(advanceAmount, itin.currency)}`}
     </button>
   );
 }
@@ -381,6 +510,35 @@ function fmtDate(d) {
   return dt.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
 }
 
+// Date + time for flight departure/arrival (e.g. "2 Aug, 6:10 PM").
+function fmtDateTime(d) {
+  if (!d) return null;
+  const dt = new Date(d);
+  if (!Number.isFinite(dt.getTime())) return null;
+  return dt.toLocaleString("en-IN", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+}
+
+// Pull the human-readable flight details (times / class / baggage) out of the
+// item's detailsJson so the customer sees timing + baggage, not just a code.
+// detailsJson is set by the flight quick-quote (airline/flightNumber/fareClass/
+// route/departAt/arriveAt/baggage) and is already on the public projection.
+function flightDetails(item) {
+  let d = {};
+  try {
+    d = item.detailsJson
+      ? (typeof item.detailsJson === "string" ? JSON.parse(item.detailsJson) : item.detailsJson)
+      : {};
+  } catch { d = {}; }
+  const parts = [];
+  const dep = fmtDateTime(d.departAt);
+  const arr = fmtDateTime(d.arriveAt);
+  if (dep) parts.push(`Departs ${dep}`);
+  if (arr) parts.push(`Arrives ${arr}`);
+  if (d.fareClass) parts.push(String(d.fareClass));
+  if (d.baggage) parts.push(`Baggage: ${d.baggage}`);
+  return parts;
+}
+
 function fmtMoney(n, currency = "INR") {
   if (n == null) return "—";
   try {
@@ -424,6 +582,9 @@ const itemRow = {
   display: "flex", alignItems: "center", gap: 12,
   padding: "12px 14px", border: "1px solid #e5e7ee",
   borderRadius: 10, background: "#fff",
+};
+const detailMeta = {
+  fontSize: 12, color: "#5a6275", marginTop: 4, lineHeight: 1.5,
 };
 const costBox = {
   marginTop: 4, padding: "16px 18px",

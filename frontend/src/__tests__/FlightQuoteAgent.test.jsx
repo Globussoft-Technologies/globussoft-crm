@@ -29,9 +29,9 @@
  *      { contactId(number), subBrand, currency, options:[{ airline UPPER,
  *      pricePerPax(number), route:{from,to} UPPER }] } and renders the
  *      result panel (Quote created + total + PDF link carrying ?_t= token).
- *   9. WhatsApp share: from the result panel, "Share on WhatsApp" POSTs
- *      /api/travel/itineraries/:id/share and surfaces the share URL +
- *      Copy-link button.
+ *   9. Send to customer: from the result panel, "Send to customer" POSTs
+ *      /api/travel/itineraries/:id/share with { channel:"auto" } (email-first,
+ *      WhatsApp fallback) and surfaces the share URL + Copy-link button.
  *
  * Backend contract pinned (per the SUT's wire calls):
  *   GET  /api/contacts?limit=200                      → [ ...contacts ] | { contacts }
@@ -39,7 +39,7 @@
  *   POST /api/v1/flight-plugin/agent-quotes           → 201 { itineraryId,
  *        items:[{itineraryItemId,totalWithMarkup,currency}], totalWithMarkup,
  *        currency, pdfUrl }
- *   POST /api/travel/itineraries/:id/share            → { shareToken, shareUrl, whatsapp }
+ *   POST /api/travel/itineraries/:id/share            → { shareToken, shareUrl, whatsapp, email, channel }
  *
  * Mocking discipline (per CLAUDE.md RTL standing rules):
  *   - fetchApi mocked at ../utils/api (the page's dep, NOT global fetch);
@@ -100,7 +100,27 @@ const QUOTE_RESULT = {
 const SHARE_RESULT = {
   shareToken: 'tok123',
   shareUrl: 'https://crm.globusdemos.com/p/itinerary/tok123',
-  whatsapp: 'QUEUED',
+  whatsapp: 'SENT',
+  email: 'SENT',
+  inApp: 'SKIPPED',
+  channel: 'email+whatsapp',
+};
+
+// Recent flight quotes (history panel). The list returns full item rows;
+// the page filters to destinations ending in "flights" — the Andaman row
+// must be filtered OUT.
+const RECENT_ITINS = {
+  itineraries: [
+    {
+      id: 77, destination: 'DEL→JED flights', contactId: 31, status: 'draft',
+      currency: 'INR', totalAmount: null, updatedAt: '2026-06-20T10:00:00.000Z',
+      items: [{ id: 1, itemType: 'flight', totalPrice: 1100 }],
+    },
+    {
+      id: 78, destination: 'Andaman Islands', contactId: 32, status: 'sent',
+      currency: 'INR', totalAmount: 50000, updatedAt: '2026-06-19T10:00:00.000Z', items: [],
+    },
+  ],
 };
 
 // fetchApi mock routed by URL + method. Tests override only what they need.
@@ -109,6 +129,7 @@ function installFetchMock({
   rules = { rules: RULES },
   quote = QUOTE_RESULT,
   share = SHARE_RESULT,
+  itins = RECENT_ITINS,
 } = {}) {
   fetchApiMock.mockImplementation((url, opts) => {
     const method = opts?.method || 'GET';
@@ -124,6 +145,9 @@ function installFetchMock({
     }
     if (/^\/api\/travel\/itineraries\/\d+\/share$/.test(url) && method === 'POST') {
       return Promise.resolve(share);
+    }
+    if (url.startsWith('/api/travel/itineraries?') && method === 'GET') {
+      return Promise.resolve(itins);
     }
     return Promise.resolve(null);
   });
@@ -311,8 +335,8 @@ describe('<FlightQuoteAgent /> — submit happy path', () => {
   });
 });
 
-describe('<FlightQuoteAgent /> — WhatsApp share', () => {
-  it('Share on WhatsApp POSTs /itineraries/:id/share and surfaces the share URL + copy button', async () => {
+describe('<FlightQuoteAgent /> — send to customer', () => {
+  it('Send to customer POSTs /itineraries/:id/share with channel:"auto" and surfaces the share URL + copy button', async () => {
     renderPage();
     const select = screen.getByLabelText('Contact');
     await waitFor(() => expect(within(select).getByText(/Asha Verma/)).toBeInTheDocument());
@@ -322,16 +346,49 @@ describe('<FlightQuoteAgent /> — WhatsApp share', () => {
 
     fetchApiMock.mockClear();
     installFetchMock();
-    fireEvent.click(screen.getByRole('button', { name: /Share on WhatsApp/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Send to customer/i }));
     await waitFor(() => {
       const post = fetchApiMock.mock.calls.find(
         ([u, o]) => u === '/api/travel/itineraries/12/share' && o?.method === 'POST',
       );
       expect(post).toBeTruthy();
+      // Email-first: the page asks the backend to auto-pick the channel.
+      expect(JSON.parse(post[1].body)).toEqual({ channel: 'auto' });
     });
     expect(
       await screen.findByText('https://crm.globusdemos.com/p/itinerary/tok123'),
     ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Copy share link/i })).toBeInTheDocument();
+    // channel:"email+whatsapp" → both-channels confirmation toast.
+    expect(notifySuccess).toHaveBeenCalledWith('Quote sent to the customer via email + WhatsApp');
+  });
+});
+
+describe('<FlightQuoteAgent /> — recent flight quotes history', () => {
+  it('lists flight-quote itineraries, filters out non-flight ones, and links to the detail page', async () => {
+    renderPage();
+    // The flight-quote draft shows; the non-flight itinerary is filtered out.
+    expect(await screen.findByText('DEL→JED flights')).toBeInTheDocument();
+    expect(screen.queryByText('Andaman Islands')).not.toBeInTheDocument();
+    // Row links to the itinerary detail page.
+    const link = screen.getByText('DEL→JED flights').closest('a');
+    expect(link).toHaveAttribute('href', '/travel/itineraries/77');
+    // Total falls back to summed item totalPrice when totalAmount is null.
+    expect(screen.getByText(/INR\s*1,100/)).toBeInTheDocument();
+  });
+
+  it('re-sends a recent quote from its row via the share endpoint (channel auto)', async () => {
+    renderPage();
+    await screen.findByText('DEL→JED flights');
+    fireEvent.click(screen.getByRole('button', { name: /Send quote DEL→JED flights/i }));
+    await waitFor(() => {
+      const post = fetchApiMock.mock.calls.find(
+        ([u, o]) => u === '/api/travel/itineraries/77/share' && o?.method === 'POST',
+      );
+      expect(post).toBeTruthy();
+      expect(JSON.parse(post[1].body)).toEqual({ channel: 'auto' });
+    });
+    // SHARE_RESULT channel = email+whatsapp → delivered toast.
+    expect(notifySuccess).toHaveBeenCalledWith('Sent to the customer via email + WhatsApp');
   });
 });

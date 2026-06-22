@@ -58,6 +58,10 @@ const { verifyToken, verifyRole } = require("../middleware/auth");
 const { requirePermission } = require("../middleware/requirePermission");
 const prisma = require("../lib/prisma");
 const { renderTravelItineraryPdf } = require("../services/pdfRenderer");
+// Full module handle too — generateTravelInvoicePdf powers the customer's
+// payment receipt (public on-demand render). Referenced via the module so the
+// CJS self-mock seam works in tests.
+const pdfRenderer = require("../services/pdfRenderer");
 const {
   requireTravelTenant,
   getSubBrandAccessSet,
@@ -68,8 +72,23 @@ const {
 const { findLatestDiagnostic } = require("../lib/travelLatestDiagnostic");
 const { getTravelAdvanceRatio } = require("../lib/tenantSettings");
 const { computeWindowOpenAt } = require("../lib/webCheckinWindow");
-const { resolveForSubBrand } = require("../lib/subBrandConfig");
-const watiClient = require("../services/watiClient");
+// const { resolveForSubBrand } = require("../lib/subBrandConfig"); // (was used for the legacy Q9 wabaId log; superseded by the connected WhatsApp Web client)
+// WhatsApp dispatch goes through the CONNECTED WhatsApp Web client (the
+// QR-linked number used by the /travel/whatsapp Threads page) — NOT the legacy
+// Wati REST client, which has no creds and silently stubs every send to QUEUED
+// (so "Send to customer" used to report success while nothing was delivered).
+// whatsappWebClient is a drop-in: same sendBestEffort/isConnected signatures.
+// const watiClient = require("../services/watiClient"); // legacy Wati REST (disabled)
+const waWebClient = require("../services/whatsappWebClient");
+// Email delivery for the "send to customer" channel — best-effort SendGrid
+// helper (returns { sent, reason }, never throws). Used by the share endpoint
+// when channel="auto" to deliver alongside WhatsApp (email works today; the
+// Wati WhatsApp path is stubbed until the Q9 creds land).
+const { sendEmail } = require("../lib/emailSender");
+// In-app notification fallback — when the contact has NEITHER email nor phone,
+// the advisor gets an in-app alert instead so the quote-send isn't a silent
+// no-op. Best-effort; never blocks the response.
+const { notify: notifyUser } = require("../lib/notificationService");
 const llmRouter = require("../lib/llmRouter");
 const { computeDayCosts } = require("../lib/itineraryDayCostCalculator");
 const listProjection = require("../lib/listProjection");
@@ -84,6 +103,7 @@ const { recordDocumentAccess } = require("../lib/documentAccessAudit");
 // (clamp 1..30 days, default 7; revoked > expired > active precedence)
 // unit-tested in test/lib/shareLinkPolicy.test.js.
 const { computeShareExpiresAt, shareLinkState } = require("../lib/shareLinkPolicy");
+const { fetchDestinationImageBuffer } = require("../lib/destinationImage");
 // BYOK: customer payments settle into the TENANT's own Razorpay account (our
 // platform RAZORPAY_KEY_* env vars are ONLY for tenant→Globussoft subscription
 // billing). Mirrors the wellness customer-payment flow. See lib/tenantPaymentGateway.js.
@@ -109,6 +129,232 @@ function notifyCustomerTrip(itin, kind) {
   // link "booking:<id>" → the portal opens THIS specific trip's detail (not the
   // list). Fire-and-forget; safeNotifyTravelCustomer never throws.
   safeNotifyTravelCustomer({ contactId: itin.contactId, tenantId: itin.tenantId, title: m.title, message: m.message, type: m.type, link: `booking:${itin.id}` });
+}
+
+// Notify the agency's staff when a customer pays on a shared itinerary —
+// "<customer> paid <amount> — option: <chosen flight>". The Itinerary has no
+// owner column, so we fan out to the tenant's ADMIN + MANAGER users. The
+// chosen option is the item whose price equals the (now-set) itinerary total
+// — for a flight quick-quote that's exactly the alternative the customer
+// picked at checkout. Best-effort + fire-and-forget; never throws.
+async function notifyTravelAdminsOfPayment(itin, paidMajor, io) {
+  try {
+    if (!itin || !itin.tenantId) return;
+    const total = Number(itin.totalAmount || 0);
+    const [contact, admins, items] = await Promise.all([
+      itin.contactId
+        ? prisma.contact.findUnique({ where: { id: itin.contactId }, select: { name: true } }).catch(() => null)
+        : null,
+      prisma.user
+        .findMany({ where: { tenantId: itin.tenantId, role: { in: ["ADMIN", "MANAGER"] } }, select: { id: true } })
+        .catch(() => []),
+      prisma.itineraryItem.findMany({ where: { itineraryId: itin.id } }).catch(() => []),
+    ]);
+    const chosen = total > 0 ? items.find((it) => Number(it.totalPrice || 0) === total) : null;
+    const who = (contact && contact.name) || "A customer";
+    const dest = itin.destination || "their trip";
+    const cur = itin.currency || "INR";
+    const amt = Number(paidMajor || 0).toLocaleString("en-IN");
+    const optionLine = chosen && chosen.description ? ` — option: ${chosen.description}` : "";
+    const message = `${who} paid ${cur} ${amt} on ${dest}${optionLine}.`;
+    for (const a of admins) {
+      // eslint-disable-next-line no-await-in-loop
+      await notifyUser({
+        userId: a.id,
+        tenantId: itin.tenantId,
+        title: "Customer paid — booking confirmed",
+        message,
+        type: "payment",
+        link: `/travel/itineraries/${itin.id}`,
+        io,
+      }).catch(() => {});
+    }
+  } catch (e) {
+    console.error("[travel-itin-public] admin payment notify failed (non-fatal):", e.message);
+  }
+}
+
+// Send the customer a payment confirmation (email + WhatsApp) after a deposit:
+// the amount paid, the balance still due, the 3-day deadline to fully confirm,
+// and a link to their receipt/invoice PDF. Best-effort; never throws.
+async function notifyCustomerPaymentConfirmation(itin, paidMajor, balanceDue, portalBase, io) {
+  try {
+    if (!itin || !itin.contactId) return;
+    const contact = await prisma.contact
+      .findUnique({ where: { id: itin.contactId }, select: { name: true, email: true, phone: true } })
+      .catch(() => null);
+    if (!contact || (!contact.email && !contact.phone)) return;
+    const dest = itin.destination && itin.destination.length <= 60 ? itin.destination : "your trip";
+    const cur = itin.currency || "INR";
+    const paid = Number(paidMajor || 0).toLocaleString("en-IN");
+    const bal = Number(balanceDue || 0).toLocaleString("en-IN");
+    const receiptUrl = `${portalBase}/api/travel/itineraries/public/${itin.shareToken}/receipt`;
+    const name = contact.name || "there";
+    const balLineEmail = balanceDue > 0
+      ? `To fully confirm your booking, please pay the remaining ${cur} ${bal} within 3 days.`
+      : "Your booking is now fully paid — you're all set!";
+    const text =
+      `Hi ${name},\n\n` +
+      `We've received your payment of ${cur} ${paid} for ${dest} — thank you! Your booking is confirmed.\n\n` +
+      `${balLineEmail}\n\n` +
+      `Your invoice / receipt: ${receiptUrl}\n\n` +
+      `— ${(itin.tenant && itin.tenant.name) || "Travel Stall"}`;
+    if (contact.email) {
+      await sendEmail({
+        to: contact.email,
+        subject: `Payment received — ${dest} booking confirmed`,
+        text,
+      }).catch(() => {});
+    }
+    if (contact.phone) {
+      const balLineWa = balanceDue > 0
+        ? `Pay the balance ${cur} ${bal} within 3 days to fully confirm. `
+        : "Fully paid — you're all set! ";
+      await waWebClient.sendBestEffort({
+        tenantId: itin.tenantId,
+        subBrand: itin.subBrand,
+        toPhone: contact.phone,
+        contactId: itin.contactId,
+        fallbackText:
+          `Hi ${name}! We've received ${cur} ${paid} for ${dest} — booking confirmed. ` +
+          `${balLineWa}Receipt: ${receiptUrl}`,
+        broadcastName: "travel-payment-confirmation",
+      }).catch(() => {});
+    }
+  } catch (e) {
+    console.error("[travel-itin-public] customer payment confirmation failed (non-fatal):", e.message);
+  }
+}
+
+// Per-tenant sequential invoice number — TINV-YYYY-NNNN. Mirrors
+// routes/travel_invoices.js nextInvoiceNum so the public-payment invoices share
+// the same series/format as operator-created ones (4-digit zero-pad keeps the
+// invoiceNum-desc ordering correct).
+async function nextTravelInvoiceNum(tenantId) {
+  const year = new Date().getFullYear();
+  const latest = await prisma.travelInvoice.findFirst({
+    where: { tenantId, invoiceNum: { startsWith: `TINV-${year}-` } },
+    orderBy: { invoiceNum: "desc" },
+    select: { invoiceNum: true },
+  });
+  const latestSerial = latest ? parseInt(String(latest.invoiceNum).split("-")[2], 10) || 0 : 0;
+  return `TINV-${year}-${String(latestSerial + 1).padStart(4, "0")}`;
+}
+
+// Create / refresh the Invoices-ledger record for an itinerary payment — ONE
+// evolving invoice per itinerary (found via the itineraryId link):
+//   - first payment → creates a TravelInvoice (status Partial when a balance
+//     remains, else Paid) + a line for the booked item + payment-schedule rows
+//     (advance = received/paid, balance = pending/due).
+//   - a later balance payment → flips the invoice to Paid and marks the balance
+//     milestone received. So "paid" + "due" are stored as history in the ledger.
+// Best-effort; never throws (the payment itself already succeeded).
+async function upsertPaymentInvoice(itin, paidMajor, balanceDue) {
+  try {
+    const total = Number(itin.totalAmount || 0);
+    if (!(total > 0) || !itin.contactId) return;
+    const cur = itin.currency || "INR";
+    const now = new Date();
+    const fullyPaid = balanceDue <= 0.01;
+
+    const existing = await prisma.travelInvoice.findFirst({
+      where: { tenantId: itin.tenantId, itineraryId: itin.id },
+    });
+    if (existing) {
+      await prisma.travelInvoice.update({
+        where: { id: existing.id },
+        data: {
+          status: fullyPaid ? "Paid" : "Partial",
+          totalAmount: total,
+          paidAt: fullyPaid ? now : existing.paidAt,
+        },
+      });
+      if (fullyPaid) {
+        // Balance cleared → mark the outstanding milestone(s) received.
+        await prisma.travelPaymentSchedule.updateMany({
+          where: { tenantId: itin.tenantId, invoiceId: existing.id, status: { not: "paid" } },
+          data: { receivedAmount: Number(paidMajor || 0), status: "paid", paidAt: now },
+        }).catch(() => {});
+      }
+      return;
+    }
+
+    // First payment → mint a new invoice. Retry on the (rare) invoiceNum race.
+    let invoice = null;
+    for (let attempt = 0; attempt < 4 && !invoice; attempt += 1) {
+      const invoiceNum = await nextTravelInvoiceNum(itin.tenantId);
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        invoice = await prisma.travelInvoice.create({
+          data: {
+            tenantId: itin.tenantId,
+            subBrand: itin.subBrand,
+            contactId: itin.contactId,
+            itineraryId: itin.id,
+            invoiceNum,
+            status: fullyPaid ? "Paid" : "Partial",
+            totalAmount: total,
+            currency: cur,
+            docType: "TaxInvoice",
+            dueDate: fullyPaid ? null : new Date(Date.now() + 3 * 24 * 60 * 60 * 1000),
+            paidAt: fullyPaid ? now : null,
+          },
+        });
+      } catch (e) {
+        if (e.code !== "P2002") throw e; // not a dup-invoiceNum race → bubble to outer catch
+      }
+    }
+    if (!invoice) return;
+
+    // One line describing what was booked (the chosen flight / trip).
+    const items = await prisma.itineraryItem.findMany({ where: { itineraryId: itin.id } }).catch(() => []);
+    const chosen = items.find((it) => Number(it.totalPrice || 0) === total);
+    await prisma.travelInvoiceLine.create({
+      data: {
+        tenantId: itin.tenantId,
+        invoiceId: invoice.id,
+        lineType: "per_trip",
+        description: (chosen && chosen.description) || itin.destination || "Travel booking",
+        quantity: 1,
+        unitPrice: total,
+        amount: total,
+        currency: cur,
+        sortOrder: 0,
+      },
+    }).catch(() => {});
+
+    // Payment schedule = the paid/due history. Advance milestone (received) +,
+    // when a balance remains, a pending milestone due in 3 days.
+    const advance = Number(paidMajor || 0);
+    await prisma.travelPaymentSchedule.create({
+      data: {
+        tenantId: itin.tenantId,
+        invoiceId: invoice.id,
+        milestoneOrder: 1,
+        dueDate: now,
+        expectedAmount: advance,
+        expectedCurrency: cur,
+        receivedAmount: advance,
+        status: "paid",
+        paidAt: now,
+      },
+    }).catch(() => {});
+    if (!fullyPaid) {
+      await prisma.travelPaymentSchedule.create({
+        data: {
+          tenantId: itin.tenantId,
+          invoiceId: invoice.id,
+          milestoneOrder: 2,
+          dueDate: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000),
+          expectedAmount: balanceDue,
+          expectedCurrency: cur,
+          status: "pending",
+        },
+      }).catch(() => {});
+    }
+  } catch (e) {
+    console.error("[travel-itin-public] payment invoice upsert failed (non-fatal):", e.message);
+  }
 }
 
 // Covers fly + non-fly (domestic) transport and general trip expenses. Keep
@@ -211,6 +457,141 @@ router.get("/itineraries", verifyToken, requireTravelTenant, async (req, res) =>
   }
 });
 
+// POST /api/travel/itineraries/build
+//
+// The TBO trip-builder: assemble a full multi-product trip (destinations +
+// nights + flights + hotels) into ONE draft Itinerary + items. Unlike POST
+// /itineraries this does NOT require a completed diagnostic — the builder is a
+// direct-booking surface (the advisor assembles a trip live with the customer),
+// same posture as the flight quick-quote. Flight/hotel options come from the TBO
+// search (services/tboClient) but the endpoint trusts the body (advisor may
+// tweak). The resulting itinerary flows straight into the existing share →
+// public-pay → invoice pipeline.
+//
+// body { contactId, subBrand, currency?, startDate?, pax?{adults,children,infants},
+//        destinations:[{city,nights}], flights:[...], hotels:[{city,...}] }
+//   → 201 { itineraryId, totalAmount, currency, itemCount, pdfUrl }
+router.post("/itineraries/build", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const b = req.body || {};
+    const subBrand = b.subBrand;
+    const cid = parseInt(b.contactId, 10);
+    if (!subBrand || !Number.isFinite(cid)) {
+      return res.status(400).json({ error: "contactId and subBrand are required", code: "MISSING_FIELDS" });
+    }
+    assertValidSubBrand(subBrand);
+    const allowed = await getSubBrandAccessSet(req.user.userId);
+    if (!canAccessSubBrand(allowed, subBrand)) {
+      return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+    }
+    const contact = await prisma.contact.findFirst({
+      where: { id: cid, tenantId: req.travelTenant.id },
+      select: { id: true },
+    });
+    if (!contact) return res.status(404).json({ error: "Contact not found", code: "CONTACT_NOT_FOUND" });
+
+    const currency = String(b.currency || "INR").toUpperCase();
+    const pax = b.pax || {};
+    const adults = Math.max(1, parseInt(pax.adults, 10) || 1);
+    const children = Math.max(0, parseInt(pax.children, 10) || 0);
+    const headcount = adults + children;
+
+    const destinations = Array.isArray(b.destinations) ? b.destinations.filter((d) => d && d.city) : [];
+    if (destinations.length === 0) {
+      return res.status(400).json({ error: "At least one destination is required", code: "MISSING_DESTINATIONS" });
+    }
+    const flights = Array.isArray(b.flights) ? b.flights : [];
+    const hotels = Array.isArray(b.hotels) ? b.hotels : [];
+
+    const totalNights = destinations.reduce((s, d) => s + (parseInt(d.nights, 10) || 0), 0);
+    let startDate = null; let endDate = null;
+    if (b.startDate) {
+      const sd = new Date(b.startDate);
+      if (!Number.isNaN(sd.getTime())) {
+        startDate = sd;
+        endDate = new Date(sd.getTime() + totalNights * 24 * 60 * 60 * 1000);
+      }
+    }
+    const destinationLabel = destinations.map((d) => d.city).join(" · ").slice(0, 180) || "Trip";
+
+    // Build item rows. Flights: fare is per-person → line total = fare × pax.
+    // Hotels: totalRate is the stay total (search already factored nights × rooms);
+    // fall back to ratePerNight when totalRate is absent.
+    const itemRows = [];
+    let position = 0;
+    let grandTotal = 0;
+    for (const f of flights) {
+      const fare = Number(f.fare);
+      if (!Number.isFinite(fare) || fare < 0) continue;
+      const lineTotal = Math.round(fare * headcount * 100) / 100;
+      grandTotal += lineTotal;
+      itemRows.push({
+        itemType: "flight",
+        position: position++,
+        description: `${String(f.airline || "").toUpperCase()}${f.flightNumber ? ` ${f.flightNumber}` : ""} ${String(f.from || "").toUpperCase()}→${String(f.to || "").toUpperCase()}${f.fareClass ? ` (${f.fareClass})` : ""}`.trim(),
+        detailsJson: JSON.stringify({
+          airline: f.airline, flightNumber: f.flightNumber, fareClass: f.fareClass,
+          route: { from: f.from, to: f.to }, departAt: f.departAt, arriveAt: f.arriveAt,
+          baggage: f.baggage, refundable: f.refundable, perPax: fare, pax: headcount,
+          currency, source: "tbo-builder",
+        }),
+        unitCost: fare, totalPrice: lineTotal, unit: "per_person", quantity: headcount,
+      });
+    }
+    for (const h of hotels) {
+      const rate = Number(h.totalRate != null ? h.totalRate : h.ratePerNight);
+      if (!Number.isFinite(rate) || rate < 0) continue;
+      const lineTotal = Math.round(rate * 100) / 100;
+      grandTotal += lineTotal;
+      const nights = parseInt(h.nights, 10) || null;
+      itemRows.push({
+        itemType: "hotel",
+        position: position++,
+        description: `${h.name || "Hotel"}${h.city ? `, ${h.city}` : ""}${h.roomType ? ` — ${h.roomType}` : ""}`,
+        detailsJson: JSON.stringify({
+          name: h.name, city: h.city, starRating: h.starRating, roomType: h.roomType,
+          board: h.board, nights, ratePerNight: h.ratePerNight, refundable: h.refundable,
+          currency, source: "tbo-builder",
+        }),
+        unitCost: h.ratePerNight != null ? Number(h.ratePerNight) : lineTotal,
+        totalPrice: lineTotal, unit: "per_stay", quantity: 1,
+      });
+    }
+    if (itemRows.length === 0) {
+      return res.status(400).json({ error: "Add at least one flight or hotel", code: "EMPTY_TRIP" });
+    }
+    grandTotal = Math.round(grandTotal * 100) / 100;
+
+    const itin = await prisma.itinerary.create({
+      data: {
+        tenantId: req.travelTenant.id,
+        subBrand,
+        contactId: cid,
+        status: "draft",
+        destination: destinationLabel,
+        startDate, endDate,
+        currency,
+        pax: adults,
+        totalAmount: grandTotal,
+        items: { create: itemRows },
+      },
+      select: { id: true },
+    });
+
+    res.status(201).json({
+      itineraryId: itin.id,
+      totalAmount: grandTotal,
+      currency,
+      itemCount: itemRows.length,
+      pdfUrl: `/api/travel/itineraries/${itin.id}/pdf`,
+    });
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error("[travel-itin] build error:", e.message);
+    res.status(500).json({ error: "Failed to build trip", code: "BUILD_FAILED" });
+  }
+});
+
 // POST /api/travel/itineraries
 // Required: subBrand, contactId, destination. Optional: leadId, status,
 // startDate, endDate, pricingJson, totalAmount, currency, items[].
@@ -256,12 +637,15 @@ router.post("/itineraries", verifyToken, requireTravelTenant, async (req, res) =
     // unrelated tenant's template id. We tolerate "" / 0 / non-numeric →
     // null (lineage is opt-in; bad inputs degrade silently to "no lineage").
     let clonedFromTemplateId = null;
+    let templateItemRows = [];
+    let templateBaseAmount = null;
+    let templateCurrency = null;
     if (bodyClonedFromTemplateId != null && bodyClonedFromTemplateId !== "") {
       const tid = parseInt(bodyClonedFromTemplateId, 10);
       if (Number.isFinite(tid) && tid > 0) {
         const tpl = await prisma.itineraryTemplate.findFirst({
           where: { id: tid, tenantId: req.travelTenant.id },
-          select: { id: true },
+          select: { id: true, templateJson: true, basePriceMinor: true, currency: true },
         });
         if (!tpl) {
           return res.status(404).json({
@@ -270,6 +654,38 @@ router.post("/itineraries", verifyToken, requireTravelTenant, async (req, res) =
           });
         }
         clonedFromTemplateId = tid;
+        // Carry over the template's base price as the itinerary's starting totalAmount.
+        if (tpl.basePriceMinor != null) {
+          templateBaseAmount = Number(tpl.basePriceMinor) / 100;
+        }
+        templateCurrency = tpl.currency || null;
+        // Parse templateJson.items → ItineraryItem rows so the cloned itinerary
+        // opens in the editor pre-populated with the day-by-day plan.
+        try {
+          const parsed = typeof tpl.templateJson === "string"
+            ? JSON.parse(tpl.templateJson)
+            : (tpl.templateJson || {});
+          const tplItems = Array.isArray(parsed.items) ? parsed.items : [];
+          tplItems.forEach((it, i) => {
+            if (!it || !it.itemType || !it.description) return;
+            const cost = it.estimatedCost != null ? Number(it.estimatedCost) : null;
+            templateItemRows.push({
+              itemType: String(it.itemType),
+              position: i,
+              description: String(it.description),
+              detailsJson: it.locationName ? JSON.stringify({ locationName: it.locationName }) : null,
+              unitCost: cost,
+              totalPrice: cost,
+              unit: "per_person",
+              quantity: 1,
+              dayNumber: it.dayNumber != null ? parseInt(it.dayNumber, 10) : null,
+              latitude: it.latitude != null ? Number(it.latitude) : null,
+              longitude: it.longitude != null ? Number(it.longitude) : null,
+            });
+          });
+        } catch (_) {
+          // malformed templateJson — clone without items, don't block create
+        }
       }
     }
 
@@ -319,6 +735,14 @@ router.post("/itineraries", verifyToken, requireTravelTenant, async (req, res) =
       }
     }
 
+    // When cloning from a template, the template's items win over any
+    // body-supplied items (body items would be empty from the clone CTA anyway).
+    const finalItemRows = templateItemRows.length > 0 ? templateItemRows : itemRows;
+    // totalAmount: explicit body wins; fall back to template's base price.
+    const finalAmount = totalAmount != null
+      ? Number(totalAmount)
+      : templateBaseAmount;
+
     const itinerary = await prisma.itinerary.create({
       data: {
         tenantId: req.travelTenant.id,
@@ -331,13 +755,13 @@ router.post("/itineraries", verifyToken, requireTravelTenant, async (req, res) =
         startDate: startDate ? new Date(startDate) : null,
         endDate: endDate ? new Date(endDate) : null,
         pricingJson: pricingJson ? String(pricingJson) : null,
-        totalAmount: totalAmount != null ? Number(totalAmount) : null,
-        currency: currency || "INR",
+        totalAmount: finalAmount != null ? finalAmount : null,
+        currency: currency || templateCurrency || "INR",
         pax: (() => { const p = parseInt(pax, 10); return Number.isFinite(p) && p >= 1 ? p : 1; })(),
         shareToken: shareToken || null,
         // G047 lineage persisted; null when not cloned (manual create).
         clonedFromTemplateId,
-        items: itemRows.length > 0 ? { create: itemRows } : undefined,
+        items: finalItemRows.length > 0 ? { create: finalItemRows } : undefined,
       },
       include: { items: { orderBy: { position: "asc" } } },
     });
@@ -2761,9 +3185,11 @@ router.post("/itineraries/:id/accept", verifyToken, requireTravelTenant, async (
 // estimates so the operator gets a priced draft they can adjust per item
 // before sending to the client — NOT authoritative rates. Tune freely.
 const SUGGEST_TIER_COSTS = {
-  economy: { hotel: 2500, transfer: 400, sightseeing: 600, activity: 800, meals: 500 },
-  mid: { hotel: 5000, transfer: 800, sightseeing: 1200, activity: 1500, meals: 1000 },
-  luxury: { hotel: 12000, transfer: 2000, sightseeing: 3000, activity: 4000, meals: 2500 },
+  // flight = indicative one-way per-person airfare (international routes from India).
+  // Stub-mode only — LLM prices this from departureCity when the key is live.
+  economy: { hotel: 2500, transfer: 400, sightseeing: 600, activity: 800, meals: 500, flight: 22000 },
+  mid:     { hotel: 5000, transfer: 800, sightseeing: 1200, activity: 1500, meals: 1000, flight: 40000 },
+  luxury:  { hotel: 12000, transfer: 2000, sightseeing: 3000, activity: 4000, meals: 2500, flight: 85000 },
 };
 function tierCost(kind, budgetTier) {
   const t = SUGGEST_TIER_COSTS[budgetTier];
@@ -2844,7 +3270,7 @@ function parseLlmSuggestion(rawText, { destination }) {
 // hotel cost is derived from it (budgetPerPax / days), preserving the FR-3.4
 // budget-split contract pinned by the spec. Otherwise the per-item estimate
 // comes from the budget-tier table above (null when no tier is supplied).
-function buildSuggestionSkeleton({ destination, days, budgetPerPax, budgetTier, summary }) {
+function buildSuggestionSkeleton({ destination, days, budgetPerPax, budgetTier, summary, departureCity }) {
   const perNightHotel =
     budgetPerPax != null && days > 0
       ? Math.round((budgetPerPax / days) * 100) / 100
@@ -2853,12 +3279,18 @@ function buildSuggestionSkeleton({ destination, days, budgetPerPax, budgetTier, 
   const sightseeingCost = tierCost("sightseeing", budgetTier);
   const activityCost = tierCost("activity", budgetTier);
   const mealsCost = tierCost("meals", budgetTier);
+  const flightCost = tierCost("flight", budgetTier);
+
+  const origin = departureCity && departureCity.trim() ? departureCity.trim() : null;
 
   const dayList = [];
   for (let d = 1; d <= days; d++) {
     const items = [];
     if (d === 1) {
-      items.push({ itemType: "flight", description: `Arrival in ${destination}`, suggestedSupplierName: null, estimatedCost: null, latitude: null, longitude: null });
+      const arrivalDesc = origin
+        ? `Flight from ${origin} to ${destination}`
+        : `Arrival flight to ${destination}`;
+      items.push({ itemType: "flight", description: arrivalDesc, suggestedSupplierName: null, estimatedCost: flightCost, latitude: null, longitude: null });
       items.push({ itemType: "transfer", description: `Airport transfer to hotel in ${destination}`, suggestedSupplierName: null, estimatedCost: transferCost, latitude: null, longitude: null });
     }
     items.push({ itemType: "hotel", description: `Night ${d} — stay in ${destination}`, suggestedSupplierName: null, estimatedCost: perNightHotel, latitude: null, longitude: null });
@@ -2866,7 +3298,10 @@ function buildSuggestionSkeleton({ destination, days, budgetPerPax, budgetTier, 
     items.push({ itemType: "activity", description: `Day ${d} — afternoon activity in ${destination}`, suggestedSupplierName: null, estimatedCost: activityCost, latitude: null, longitude: null });
     items.push({ itemType: "meals", description: `Day ${d} — dinner in ${destination}`, suggestedSupplierName: null, estimatedCost: mealsCost, latitude: null, longitude: null });
     if (d === days) {
-      items.push({ itemType: "flight", description: `Departure from ${destination}`, suggestedSupplierName: null, estimatedCost: null, latitude: null, longitude: null });
+      const returnDesc = origin
+        ? `Return flight from ${destination} to ${origin}`
+        : `Departure flight from ${destination}`;
+      items.push({ itemType: "flight", description: returnDesc, suggestedSupplierName: null, estimatedCost: flightCost, latitude: null, longitude: null });
     }
     dayList.push({ dayNumber: d, items });
   }
@@ -2946,7 +3381,7 @@ router.post(
   requireTravelTenant,
   async (req, res) => {
     try {
-      const { destination, days, budgetPerPax, travellerProfile, subBrand, interests, pace, budgetTier } = req.body || {};
+      const { destination, days, budgetPerPax, travellerProfile, subBrand, interests, pace, budgetTier, departureCity, transportPreference } = req.body || {};
       // Budget tier drives per-item cost estimates in the skeleton; ignore
       // unknown values (an explicit numeric budgetPerPax still wins for hotel).
       const tier = typeof budgetTier === "string" && SUGGEST_TIER_COSTS[budgetTier] ? budgetTier : null;
@@ -2981,7 +3416,15 @@ router.post(
       // plain-text interests + pace (the client no longer hand-authors JSON),
       // then fold it into the traveller-profile text the LLM / stub consumes.
       const theme = buildThemeFromInputs(interests, pace);
-      const profile = composeTravellerProfile(travellerProfile, theme);
+      // Fold departure city + transport preference into the traveller profile
+      // so the LLM includes appropriate transit items (outbound flight/train
+      // from departure city on Day 1, return on the last day).
+      const depCity = typeof departureCity === "string" ? departureCity.trim() : "";
+      const transport = typeof transportPreference === "string" ? transportPreference.trim() : "";
+      let extraProfile = travellerProfile || "";
+      if (depCity) extraProfile = (extraProfile ? extraProfile + " " : "") + `Departing from: ${depCity}.`;
+      if (transport && transport !== "none") extraProfile = (extraProfile ? extraProfile + " " : "") + `Travel to destination by: ${transport}.`;
+      const profile = composeTravellerProfile(extraProfile || null, theme);
 
       let result;
       try {
@@ -2989,6 +3432,8 @@ router.post(
           task: "itinerary-suggest",
           payload: {
             destination: dest,
+            departureCity: depCity || undefined,
+            transportPreference: transport || undefined,
             days: numDays,
             budgetPerPax: budgetNum,
             budgetTier: tier,
@@ -3045,6 +3490,7 @@ router.post(
           budgetPerPax: budgetNum,
           budgetTier: tier,
           summary: stubSummary,
+          departureCity: depCity || null,
         });
       }
 
@@ -3509,7 +3955,7 @@ router.post("/itineraries/:id/share", verifyToken, requireTravelTenant, async (r
       where: { id: itin.id, tenantId: req.travelTenant.id },
       select: {
         id: true, shareToken: true, shareRevokedAt: true,
-        contactId: true, destination: true,
+        contactId: true, destination: true, status: true,
       },
     });
     if (!full) {
@@ -3526,59 +3972,137 @@ router.post("/itineraries/:id/share", verifyToken, requireTravelTenant, async (r
       token = crypto.randomBytes(24).toString("base64url");
     }
     const shareExpiresAt = computeShareExpiresAt((req.body || {}).expiryDays);
+    // Sharing a link with the customer IS sending it: a draft is internal
+    // WIP and the public page 404s it (NOT_SHARED), so the link would look
+    // dead. Transition draft → sent on share so the link works immediately.
+    // Only "draft" is promoted; sent/revised/accepted/paid statuses are left
+    // untouched (re-sharing an accepted itinerary must not regress it).
+    const promoteToSent = full.status === "draft";
     await prisma.itinerary.update({
       where: { id: full.id },
-      data: { shareToken: token, shareExpiresAt, shareRevokedAt: null },
+      data: {
+        shareToken: token,
+        shareExpiresAt,
+        shareRevokedAt: null,
+        ...(promoteToSent ? { status: "sent" } : {}),
+      },
     });
 
-    const portalBase = process.env.PUBLIC_BASE_URL || "https://crm.globusdemos.com";
+    // Build the public share URL from the REQUEST's own origin so the link
+    // matches the environment the advisor is actually on (localhost in dev,
+    // the live domain in prod) — no hardcoded host. Falls back to
+    // PUBLIC_BASE_URL, then the demo domain, only when the browser sent no
+    // Origin header (server-to-server callers / tests).
+    const reqOrigin = String((req.headers && req.headers.origin) || "").replace(/\/+$/, "");
+    const portalBase = reqOrigin || process.env.PUBLIC_BASE_URL || "https://crm.globusdemos.com";
     const shareUrl = `${portalBase}/p/itinerary/${token}`;
-    // Q9 cut-over plumbing — resolve the per-sub-brand wabaId so when
-    // Wati creds land, swapping the stub log for a real WhatsApp blast
-    // is a 1-line change here. Today the dispatch is "advisor pastes
-    // the URL into a chat manually"; tomorrow the resolved wabaId
-    // routes the automated blast. requireTravelTenant doesn't include
-    // subBrandConfigJson in its select, so we fetch it separately.
-    const tenantCfgRow = await prisma.tenant.findUnique({
-      where: { id: req.travelTenant.id },
-      select: { subBrandConfigJson: true },
-    });
-    const cfg = resolveForSubBrand(tenantCfgRow, itin.subBrand);
+    // Legacy Q9 plumbing (kept for reference) — resolved the per-sub-brand
+    // wabaId for the old Wati REST blast. Superseded by the connected
+    // WhatsApp Web client, which needs no wabaId.
+    // const tenantCfgRow = await prisma.tenant.findUnique({
+    //   where: { id: req.travelTenant.id },
+    //   select: { subBrandConfigJson: true },
+    // });
+    // const cfg = resolveForSubBrand(tenantCfgRow, itin.subBrand);
+    const waConnected = waWebClient.isConnected(req.travelTenant.id);
     console.log(
       `[travel-itin] share token minted for itin ${full.id} (sub-brand=${itin.subBrand}) — ` +
-      `WhatsApp dispatch via watiClient (wabaId=${cfg.wabaId || "(no-config)"})`,
+      `WhatsApp via connected WhatsApp Web client (connected=${waConnected})`,
     );
-    // WhatsApp dispatch via watiClient (Q9) — sends the share URL to the
-    // itinerary's contact. Stub mode (no WATI creds) logs + writes a QUEUED
-    // row, keeping the historical "advisor pastes the URL manually" flow as
-    // the fallback. `whatsapp` in the response is additive — existing
-    // consumers that only read shareToken/shareUrl are unaffected.
+    // Channel selection. `channel` body param (additive, optional):
+    //   - omitted / "whatsapp" → historical WhatsApp-only dispatch (so
+    //     ItineraryDetail's existing "Share on WhatsApp" is byte-unchanged).
+    //   - "auto" → send to BOTH email (SendGrid) AND WhatsApp (the connected
+    //     WhatsApp Web number) when both are on file; when NEITHER channel
+    //     actually delivers, raise an in-app notification so the send is never
+    //     a silent no-op. This is what the Flight quick-quote "Send to
+    //     customer" button uses.
+    // `whatsapp` stays in the response for back-compat; `email` + `inApp` +
+    // `channel` are additive so consumers reading only shareToken/shareUrl/
+    // whatsapp are unaffected.
+    const channelMode = String((req.body || {}).channel || "whatsapp").toLowerCase();
+    const auto = channelMode === "auto";
     let whatsappStatus = "SKIPPED";
+    let emailStatus = "SKIPPED";
+    let inAppStatus = "SKIPPED";
+    // Channels that ACTUALLY delivered (for the response + toast) — a stub /
+    // not-connected send does NOT count, so we never claim "sent" when nothing
+    // left the building.
+    const channelsUsed = [];
     if (full.contactId) {
       const contact = await prisma.contact.findFirst({
         where: { id: full.contactId, tenantId: req.travelTenant.id },
-        select: { id: true, phone: true, name: true },
+        select: { id: true, phone: true, name: true, email: true },
       });
-      if (contact && contact.phone) {
+      if (contact) {
         // Legacy rows can carry a long prose summary in `destination`
         // (pre-S113 materialise bug) — fall back to "trip" past 60 chars
         // so the customer-facing message stays clean.
         const destLabel = full.destination && full.destination.length <= 60
           ? full.destination
           : "trip";
-        const sendResult = await watiClient.sendBestEffort({
-          tenantId: req.travelTenant.id,
-          subBrand: itin.subBrand,
-          toPhone: contact.phone,
-          contactId: contact.id,
-          fallbackText:
-            `Hi ${contact.name || "there"}! Your ${destLabel} itinerary is ready. ` +
-            `View it here: ${shareUrl}`,
-          broadcastName: "travel-itinerary-share",
-        });
-        whatsappStatus = sendResult.status;
+        // Email (auto mode only — classic "whatsapp" mode stays WhatsApp-only
+        // so ItineraryDetail's existing button is byte-unchanged).
+        if (auto && contact.email) {
+          const emailResult = await sendEmail({
+            to: contact.email,
+            subject: `Your ${destLabel} itinerary is ready`,
+            text:
+              `Hi ${contact.name || "there"},\n\n` +
+              `Your ${destLabel} itinerary is ready. View it here:\n${shareUrl}\n\n` +
+              `Thank you.`,
+          });
+          emailStatus = emailResult.sent ? "SENT" : "SKIPPED";
+          if (emailResult.sent) channelsUsed.push("email");
+        }
+        // WhatsApp — classic mode always; auto mode whenever a phone is on
+        // file (so the customer gets it on BOTH channels, not either/or).
+        // Routed through the connected WhatsApp Web number; only counts as a
+        // delivered channel when it ACTUALLY sent (sendResult.sent === true) —
+        // a not-connected tenant returns { stub:true, status:"QUEUED" } and
+        // must NOT be reported as sent.
+        if (contact.phone) {
+          const sendResult = await waWebClient.sendBestEffort({
+            tenantId: req.travelTenant.id,
+            subBrand: itin.subBrand,
+            toPhone: contact.phone,
+            contactId: contact.id,
+            fallbackText:
+              `Hi ${contact.name || "there"}! Your ${destLabel} itinerary is ready. ` +
+              `View it here: ${shareUrl}`,
+          });
+          whatsappStatus = sendResult.status;
+          if (sendResult.sent === true) {
+            channelsUsed.push("whatsapp");
+          }
+        }
+        // In-app fallback (auto mode) — fires whenever NOTHING actually
+        // delivered: the contact has no email/phone, OR the email wasn't
+        // configured AND WhatsApp wasn't connected (stub). Alerts the advisor
+        // who minted the link so they can deliver it manually. Best-effort.
+        if (auto && channelsUsed.length === 0) {
+          const reason = !contact.email && !contact.phone
+            ? `${contact.name || "This customer"} has no email or phone on file.`
+            : `Couldn't reach ${contact.name || "the customer"} (email not configured / WhatsApp not connected).`;
+          try {
+            await notifyUser({
+              userId: req.user.userId,
+              tenantId: req.travelTenant.id,
+              title: "Quote ready — not delivered",
+              message: `${reason} Send the ${destLabel} quote link manually: ${shareUrl}`,
+              type: "warning",
+              link: `/travel/itineraries/${full.id}`,
+              io: req.app && req.app.get && req.app.get("io"),
+            });
+            inAppStatus = "SENT";
+            channelsUsed.push("in-app");
+          } catch (notifyErr) {
+            console.warn("[travel-itin] in-app fallback notify failed:", notifyErr.message);
+          }
+        }
       }
     }
+    const deliveredVia = channelsUsed.length ? channelsUsed.join("+") : "none";
     // G124 — per-document share audit row. Captures who minted the link
     // (req.user.userId), the truncated share-token (so audit-viewer can
     // correlate without leaking the bearer secret), and the sub-brand /
@@ -3598,9 +4122,21 @@ router.post("/itineraries/:id/share", verifyToken, requireTravelTenant, async (r
           ? shareExpiresAt.toISOString()
           : null,
         whatsappStatus,
+        emailStatus,
+        inAppStatus,
+        deliveredVia,
       },
     });
-    res.json({ shareToken: token, shareUrl, shareExpiresAt, whatsapp: whatsappStatus });
+    res.json({
+      shareToken: token,
+      shareUrl,
+      shareExpiresAt,
+      whatsapp: whatsappStatus,
+      email: emailStatus,
+      inApp: inAppStatus,
+      channel: deliveredVia,
+      status: promoteToSent ? "sent" : full.status,
+    });
   } catch (e) {
     if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
     if (e.code === "P2002") {
@@ -3718,7 +4254,12 @@ router.get("/itineraries/:id/pdf", verifyToken, requireTravelTenant, async (req,
     } catch (viewerErr) {
       console.error("[travel-itin] pdf viewer lookup failed:", viewerErr.message);
     }
+    // Destination hero banner photo (keyless Wikipedia, banner-cropped) for
+    // the PDF top. Best-effort — null on an offline/restricted server, in
+    // which case the PDF renders without the banner. Never blocks the download.
+    const heroBuffer = await fetchDestinationImageBuffer(full.destination);
     const pdfBuf = await renderTravelItineraryPdf(full, contact, {
+      heroBuffer,
       viewerWatermark: {
         viewerName,
         viewerEmail,
@@ -3863,6 +4404,22 @@ router.get("/itineraries/public/:shareToken", async (req, res) => {
     const advanceDue = total > 0 ? Math.round(total * advanceRatio * 100) / 100 : 0;
     const advancePaid = itin.advancePaidAmount ? Number(itin.advancePaidAmount) : 0;
     const balanceDue = Math.max(0, total - advancePaid);
+    // "Choose one" mode for flight quick-quotes — items are ALTERNATIVE flight
+    // options the customer picks ONE of. Detected by the agent-quick-quote
+    // SOURCE stamp (set on every flight quick-quote item), NOT by total===0:
+    //   - precise — won't misfire on an advisor-built flights-only itinerary;
+    //   - stays ON even after a payment ORDER set a provisional total, so the
+    //     selector doesn't vanish mid-checkout. Only a COMPLETED payment
+    //     (advancePaidAmount) turns it off (then we show the paid option).
+    const isAgentQuoteItem = (it) => {
+      try { return !!(it.detailsJson && JSON.parse(it.detailsJson).source === "agent-quick-quote"); }
+      catch { return false; }
+    };
+    const flightItems = itin.items.filter((it) => it.itemType === "flight");
+    const optionsMode = itin.items.length > 0
+      && itin.items.every(isAgentQuoteItem)
+      && flightItems.length >= 1
+      && itin.advancePaidAmount == null;
     // Online pay button only shows when the TENANT has configured + activated
     // its OWN Razorpay keys (BYOK). Otherwise the customer can't pay online here
     // — the advisor arranges payment offline. (Our platform keys are never used
@@ -3885,6 +4442,7 @@ router.get("/itineraries/public/:shareToken", async (req, res) => {
       advancePaidAt: itin.advancePaidAt,
       balanceDue,
       onlinePaymentEnabled,
+      optionsMode,
       items: itin.items.map(publicItemProjection),
       pdfUrl: itin.pdfUrl,
       // PRD §4.3 — operator-generated executive summary block (null
@@ -4037,6 +4595,31 @@ router.post("/itineraries/public/:shareToken/create-payment-order", async (req, 
       return res.status(503).json({ error: NOT_CONFIGURED_MESSAGE, code: "GATEWAY_NOT_CONFIGURED" });
     }
     const kind = req.body && req.body.kind === "balance" ? "balance" : "advance";
+
+    // "Choose one" flight quote: the customer picked one of the alternative
+    // options. Validate it belongs to this itinerary, then persist its price as
+    // the itinerary total so the advance/balance math (resolveDueAmount, verify,
+    // balanceDue) all reflect the customer's pick. Only on the advance step —
+    // by the time a balance is due the total is already fixed.
+    const rawItemId = req.body && req.body.itineraryItemId;
+    if (rawItemId != null && kind === "advance") {
+      const itemId = parseInt(rawItemId, 10);
+      const chosen = Number.isFinite(itemId)
+        ? await prisma.itineraryItem.findFirst({ where: { id: itemId, itineraryId: itin.id } })
+        : null;
+      if (!chosen) {
+        return res.status(400).json({ error: "Invalid option selected", code: "INVALID_OPTION" });
+      }
+      if (chosen.totalPrice == null || Number(chosen.totalPrice) <= 0) {
+        return res.status(400).json({ error: "Selected option has no price", code: "OPTION_NO_PRICE" });
+      }
+      // Reflect the chosen option's price for the due-amount math IN MEMORY only.
+      // Persisting here would lock the quote to this option (hiding the selector)
+      // even if the customer abandons checkout — the total is committed only on a
+      // VERIFIED payment (verify-payment), keyed by the same itineraryItemId.
+      itin.totalAmount = chosen.totalPrice;
+    }
+
     const due = await resolveDueAmount(itin, kind);
     if (!(due > 0)) {
       return res.status(409).json({ error: "Nothing due for this itinerary", code: "NOTHING_DUE" });
@@ -4102,7 +4685,24 @@ router.post("/itineraries/public/:shareToken/verify-payment", async (req, res) =
       return res.status(400).json({ error: "Payment verification failed", code: "BAD_SIGNATURE" });
     }
 
-    const total = itin.totalAmount ? Number(itin.totalAmount) : 0;
+    // "Choose one" flight quote: the option the customer ACTUALLY PAYS FOR is
+    // authoritative. We resolve it from the itineraryItemId the page passes and
+    // commit it as the total in the update below — overwriting ANY stale
+    // provisional total (e.g. one left by an earlier abandoned checkout that
+    // picked a different option). Without the overwrite the invoice/balance
+    // would show the old option while the paid amount reflects the new one.
+    let chosenTotal = null;
+    const rawVerifyItemId = req.body && req.body.itineraryItemId;
+    if (rawVerifyItemId != null) {
+      const itemId = parseInt(rawVerifyItemId, 10);
+      const chosen = Number.isFinite(itemId)
+        ? await prisma.itineraryItem.findFirst({ where: { id: itemId, itineraryId: itin.id } })
+        : null;
+      if (chosen && chosen.totalPrice != null && Number(chosen.totalPrice) > 0) {
+        chosenTotal = Number(chosen.totalPrice);
+      }
+    }
+    const total = chosenTotal != null ? chosenTotal : (itin.totalAmount ? Number(itin.totalAmount) : 0);
 
     // Idempotency: this payment id already recorded → return current state.
     if (itin.paymentReference === String(razorpay_payment_id)) {
@@ -4139,14 +4739,34 @@ router.post("/itineraries/public/:shareToken/verify-payment", async (req, res) =
         advancePaidAmount: newTotalPaid,
         advancePaidAt: new Date(),
         paymentReference: String(razorpay_payment_id),
+        // Commit the chosen flight option's price as the total — only here, on a
+        // verified payment (kept null until now so the selector stayed usable).
+        ...(chosenTotal != null ? { totalAmount: chosenTotal } : {}),
         // Deposit landed → clear any pay-or-cancel at-risk flag (see
         // cron/paymentDeadlineEngine.js).
         paymentOverdueAt: null,
       },
     });
+    // Keep the in-memory copy consistent for the notify helpers below (they
+    // read itin.totalAmount to describe the chosen option + balance).
+    if (chosenTotal != null) itin.totalAmount = chosenTotal;
 
     // Thank the customer + confirm the booking in their portal.
     notifyCustomerTrip(itin, updated.status);
+    // Notify the agency's admins/managers which option was chosen + how much
+    // was paid (req.app io drives the live socket toast). Fire-and-forget.
+    notifyTravelAdminsOfPayment(itin, paidMajor, req.app && req.app.get ? req.app.get("io") : null);
+    // Email + WhatsApp the CUSTOMER: amount paid, balance due, the 3-day
+    // deadline to fully confirm, and a link to their receipt/invoice PDF.
+    {
+      const portalBase = String((req.headers && req.headers.origin) || "").replace(/\/+$/, "")
+        || process.env.PUBLIC_BASE_URL || "https://crm.globusdemos.com";
+      const balanceDue = Math.max(0, total - newTotalPaid);
+      notifyCustomerPaymentConfirmation(itin, paidMajor, balanceDue, portalBase);
+      // Record this payment in the Invoices ledger (one evolving invoice per
+      // booking: advance → Partial, balance → Paid). Fire-and-forget.
+      upsertPaymentInvoice(itin, paidMajor, balanceDue);
+    }
 
     res.status(201).json({
       status: updated.status,
@@ -4158,6 +4778,88 @@ router.post("/itineraries/public/:shareToken/verify-payment", async (req, res) =
   } catch (e) {
     console.error("[travel-itin-public] verify-payment error:", e.message);
     res.status(500).json({ error: "Failed to verify payment" });
+  }
+});
+
+// GET /api/travel/itineraries/public/:shareToken/receipt
+//
+// Customer-facing receipt / tax-invoice PDF, rendered on-demand from the
+// itinerary's CURRENT payment state (no DB invoice row, no auth — gated only by
+// the unguessable shareToken, same as the other public endpoints). Available
+// once a payment has been recorded. Linked from the post-payment confirmation
+// (email/WhatsApp) and the public booking page.
+router.get("/itineraries/public/:shareToken/receipt", async (req, res) => {
+  try {
+    const token = String(req.params.shareToken || "");
+    if (!token || token.length < 16) {
+      return res.status(400).json({ error: "shareToken required", code: "MISSING_TOKEN" });
+    }
+    const itin = await prisma.itinerary.findUnique({
+      where: { shareToken: token },
+      include: { items: { orderBy: { position: "asc" } }, tenant: true },
+    });
+    if (!itin) return res.status(404).json({ error: "Itinerary not found", code: "NOT_FOUND" });
+    if (itin.status === "draft") return res.status(404).json({ error: "Itinerary not yet shared", code: "NOT_SHARED" });
+    const paid = Number(itin.advancePaidAmount || 0);
+    if (!(paid > 0)) {
+      return res.status(409).json({ error: "No payment recorded yet", code: "NO_PAYMENT" });
+    }
+    const total = Number(itin.totalAmount || 0);
+    const balance = Math.max(0, total - paid);
+    const cur = itin.currency || "INR";
+
+    let contact = null;
+    if (itin.contactId != null) {
+      contact = await prisma.contact
+        .findFirst({ where: { id: itin.contactId, tenantId: itin.tenantId }, select: { name: true, email: true, phone: true } })
+        .catch(() => null);
+    }
+
+    // For a flight quote only the CHOSEN option (price == total) is billed; a
+    // normal itinerary bills all its line items.
+    const chosen = total > 0 ? itin.items.find((it) => Number(it.totalPrice || 0) === total) : null;
+    const billItems = chosen ? [chosen] : itin.items;
+    const lines = billItems.map((it, i) => ({
+      sortOrder: i,
+      lineType: it.itemType || "other",
+      description: it.description || it.itemType || "Item",
+      quantity: 1,
+      unitPrice: Number(it.totalPrice || 0),
+      amount: Number(it.totalPrice || 0),
+    }));
+
+    const dueDate = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000); // 3-day balance deadline
+    const invoiceObj = {
+      id: itin.id,
+      invoiceNum: `RCPT-${itin.id}`,
+      subBrand: itin.subBrand,
+      currency: cur,
+      docType: "TaxInvoice",
+      status: balance > 0
+        ? `Advance paid ${cur} ${paid.toLocaleString("en-IN")} — balance ${cur} ${balance.toLocaleString("en-IN")} due`
+        : "Paid in full",
+      issuedDate: new Date(),
+      dueDate: balance > 0 ? dueDate : null,
+      contactName: contact?.name || null,
+      contactEmail: contact?.email || null,
+      contactPhone: contact?.phone || null,
+      totalAmount: total,
+    };
+
+    let pdfBuffer;
+    try {
+      pdfBuffer = await pdfRenderer.generateTravelInvoicePdf({ invoice: invoiceObj, lines, tenant: itin.tenant });
+    } catch (renderErr) {
+      console.error("[travel-itin-public] receipt render error:", renderErr && renderErr.message);
+      return res.status(500).json({ error: "Failed to render receipt", code: "RECEIPT_FAILED" });
+    }
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename="receipt-${itin.id}.pdf"`);
+    res.setHeader("Content-Length", pdfBuffer.length);
+    res.send(pdfBuffer);
+  } catch (e) {
+    console.error("[travel-itin-public] receipt error:", e.message);
+    res.status(500).json({ error: "Failed to render receipt" });
   }
 });
 

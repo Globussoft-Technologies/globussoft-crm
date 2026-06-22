@@ -233,6 +233,15 @@ const QR_WATCHDOG_MS = (() => {
   return Number.isFinite(v) && v >= 15_000 ? v : 60_000;
 })();
 
+// Delay before auto-reconnecting after an UNEXPECTED drop (not a phone-side
+// logout / operator disconnect). whatsapp-web.js occasionally drops the
+// browser session while the phone keeps the device linked — without an
+// auto-reconnect the CRM shows "disconnected" until someone reopens the page.
+const RECONNECT_DELAY_MS = (() => {
+  const v = parseInt(process.env.WHATSAPP_WEB_RECONNECT_DELAY_MS, 10);
+  return Number.isFinite(v) && v >= 2_000 ? v : 6_000;
+})();
+
 // Resolve a Chromium executable: explicit override, else fall back to the
 // top-level puppeteer's downloaded Chromium (whatsapp-web.js's own nested
 // puppeteer may not have one). Best-effort — null lets wweb use its default.
@@ -260,12 +269,20 @@ function killBrowsersForDir(tenantId) {
   try {
     const { execSync } = require("child_process");
     if (process.platform === "win32") {
-      // PowerShell: match chrome.exe whose CommandLine references the session dir.
+      // PowerShell: kill chrome.exe whose CommandLine references the session dir.
+      // The command is passed via -EncodedCommand (base64 of UTF-16LE) so the
+      // single quotes inside ('chrome.exe', the marker glob) can't collide with
+      // cmd.exe's double-quote wrapping. The previous inline `-Command "...'..."`
+      // form broke because the inner double quotes around the -Filter value
+      // prematurely closed the outer quoted string → "Command failed", leaving
+      // the orphan Chromium alive and the session dir locked. marker is
+      // `session-travel-<digits>` so there's no quote-injection risk.
       const ps =
-        `Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" | ` +
-        `Where-Object { $_.CommandLine -like '*${marker}*' } | ` +
+        `Get-CimInstance Win32_Process | ` +
+        `Where-Object { $_.Name -eq 'chrome.exe' -and $_.CommandLine -like '*${marker}*' } | ` +
         `ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`;
-      execSync(`powershell -NoProfile -Command "${ps}"`, { stdio: "ignore", timeout: 15000 });
+      const encoded = Buffer.from(ps, "utf16le").toString("base64");
+      execSync(`powershell -NoProfile -NonInteractive -EncodedCommand ${encoded}`, { stdio: "ignore", timeout: 15000 });
     } else {
       // pkill -f matches the full command line; the marker is unique to wweb.
       execSync(`pkill -f "${marker}" || true`, { stdio: "ignore", timeout: 15000, shell: "/bin/sh" });
@@ -339,6 +356,15 @@ async function connect(tenantId, { reset = false } = {}) {
     // down first (keep the dir so a valid saved link can still resume).
     if (existing) await module.exports.clearSession(tenantId, { wipe: false });
   }
+
+  // Free any orphan Chromium still holding this tenant's session dir BEFORE we
+  // launch. After a server crash/restart the in-memory session is gone but the
+  // old Chromium may still be alive and holding the LocalAuth profile lock —
+  // launching on a locked dir fails with "Target closed", which previously
+  // cascaded into a session wipe (losing all imported threads). clearSession
+  // only kills orphans on the reset/dead-session paths; a clean first connect
+  // after restart skipped it, so do it unconditionally here. Best-effort no-op.
+  module.exports.killBrowsersForDir(tenantId);
 
   // Lazy-require the heavy deps only on the real path.
   const { Client, LocalAuth } = require("whatsapp-web.js");
@@ -414,9 +440,16 @@ async function connect(tenantId, { reset = false } = {}) {
  */
 async function disconnect(tenantId, { logout = false } = {}) {
   tenantId = Number(tenantId);
+  // Flag this as a deliberate close so the client's "disconnected" event
+  // doesn't kick off an auto-reconnect (which would fight the operator).
+  const s = getSession(tenantId);
+  if (s) s.manualClose = true;
   // logout → also wipe the saved link (fresh QR next time); otherwise keep the
   // LocalAuth dir so a reconnect resumes without re-scanning.
   await module.exports.clearSession(tenantId, { wipe: logout });
+  // Only a deliberate logout clears the imported chats (fresh number / clean
+  // slate). A plain disconnect keeps them so they're there on reconnect.
+  if (logout) await module.exports.purgeChats(tenantId).catch(() => {});
   module.exports.emitState(tenantId);
   return { state: STATE.DISCONNECTED, connected: false, phone: null, qr: null };
 }
@@ -497,16 +530,38 @@ function wireEvents(client, tenantId) {
   client.on("disconnected", (reason) => {
     const s = getSession(tenantId);
     console.warn(`[whatsappWeb] tenant ${tenantId} disconnected: ${reason}`);
+    const deliberate = !!(s && s.manualClose);
     if (s) {
       s.state = STATE.DISCONNECTED;
       s.lastError = String(reason || "disconnected");
       s.client = null;
     }
     module.exports.emitState(tenantId);
-    // The inbox is a live mirror — when the link drops (logged out from phone,
-    // network loss, etc.) clear the imported chats so the next connect starts
-    // clean. Fire-and-forget; deleteMany on an empty set is a harmless no-op.
-    module.exports.purgeChats(tenantId).catch(() => {});
+    // NOTE: we deliberately do NOT purge the imported chats on a transient
+    // drop anymore — that was wiping the operator's whole inbox on every
+    // network blip / server restart (the chats reappeared only after a slow
+    // re-import, and looked "lost" in between). Chats now persist across
+    // drops; a deliberate logout still clears them (see disconnect()), and a
+    // reconnect re-imports + upserts (keyed by providerMsgId, so no dupes).
+
+    // Auto-reconnect on an UNEXPECTED drop so the CRM doesn't sit
+    // "disconnected" while the phone still shows the device linked. Skipped
+    // when the operator deliberately disconnected, or when the phone unlinked
+    // the device (reason mentions "logout" → a fresh QR scan is required).
+    const isLogout = /logout/i.test(String(reason || ""));
+    if (!deliberate && !isLogout) {
+      setTimeout(() => {
+        const cur = getSession(tenantId);
+        // Only if still down and not deliberately closed in the meantime.
+        if (cur && cur.manualClose) return;
+        if (!cur || cur.state === STATE.DISCONNECTED) {
+          console.log(`[whatsappWeb] tenant ${tenantId} auto-reconnecting after drop (${reason})`);
+          module.exports
+            .connect(tenantId)
+            .catch((e) => console.error(`[whatsappWeb] tenant ${tenantId} auto-reconnect failed: ${e.message}`));
+        }
+      }, RECONNECT_DELAY_MS);
+    }
   });
 
   // Inbound customer message → persist + thread upsert + socket emit.
@@ -961,6 +1016,56 @@ async function updateThreadSafe(prisma, where, data) {
   return await prisma.whatsAppThread.update({ where, data: d });
 }
 
+// Ensure a WhatsAppThread exists for an OUTBOUND 1:1 send and return its id.
+// Without this, CRM-originated sends (e.g. a quote/share to a lead) persist a
+// WhatsAppMessage with threadId=null — so the message never shows in the
+// thread-based Threads inbox, and a brand-new contact (messaged first by us)
+// gets no thread at all. Inbound + import already upsert threads; this is the
+// outbound parity. Keyed by (tenantId, contactPhone) like ingestInbound.
+// Best-effort: any failure returns null (the message still persists, just
+// thread-less, exactly as before). NEVER throws.
+async function ensureOutboundThread(tenantId, phone, contactId) {
+  try {
+    const prisma = require("../lib/prisma");
+    if (!prisma.whatsAppThread || typeof prisma.whatsAppThread.findUnique !== "function") return null;
+    const now = new Date();
+    const existing = await prisma.whatsAppThread.findUnique({
+      where: { tenantId_contactPhone: { tenantId, contactPhone: phone } },
+    });
+    if (existing) {
+      // Only real WhatsAppThread columns here (no lastOutboundAt — that column
+      // doesn't exist; outbound recency is tracked via lastMessageAt).
+      const updates = { lastMessageAt: now, status: "OPEN", snoozedUntil: null };
+      if (!existing.contactId && contactId) updates.contactId = contactId;
+      const t = await updateThreadSafe(prisma, { id: existing.id }, updates);
+      return t ? t.id : existing.id;
+    }
+    // Messaging a contact we have no prior thread with (e.g. a quote to a lead).
+    // Seed the display name from the Contact row so the thread isn't a bare
+    // number. unreadCount 0 — an outbound send is not an unread inbound.
+    let contactName = null;
+    if (contactId && prisma.contact && typeof prisma.contact.findUnique === "function") {
+      const c = await prisma.contact
+        .findUnique({ where: { id: contactId }, select: { name: true } })
+        .catch(() => null);
+      contactName = c && c.name ? c.name : null;
+    }
+    const t = await createThreadSafe(prisma, {
+      tenantId,
+      contactPhone: phone,
+      contactName,
+      status: "OPEN",
+      lastMessageAt: now,
+      unreadCount: 0,
+      contactId: contactId || null,
+    });
+    return t ? t.id : null;
+  } catch (e) {
+    console.error(`[whatsappWeb] ensureOutboundThread failed (non-fatal): ${e.message}`);
+    return null;
+  }
+}
+
 // Fetch a chat's WhatsApp profile picture (DP) URL — best-effort + time-boxed
 // so a slow/privacy-locked lookup can't stall the import. Returns the CDN URL
 // (loads directly in an <img>; refreshed on each re-import) or null.
@@ -1194,12 +1299,21 @@ async function sendSessionMessage({ tenantId, subBrand, toPhone, text, contactId
   // Wati even though WhatsApp Web sends it as plain text.
   const tpl = templateName || null;
 
+  // Ensure a conversation thread so CRM-originated sends (quote/share to a
+  // lead, cron nudges, etc.) show up in the Threads inbox instead of being
+  // saved as an orphan message row. Only for 1:1 phone sends and only when the
+  // caller didn't already pin a threadId (the chat route passes its own).
+  let resolvedThreadId = threadId;
+  if (!resolvedThreadId && !String(to).includes("@")) {
+    resolvedThreadId = await module.exports.ensureOutboundThread(tenantId, to, contactId);
+  }
+
   if (!module.exports.isEnabled(tenantId)) {
     console.log(
       `[whatsappWeb STUB] sendText tenant=${tenantId} subBrand=${subBrand || "(none)"} to=${to} ` +
       `textLen=${String(text).length} — operator must scan the WhatsApp QR to go live`,
     );
-    const row = await module.exports.persistMessageRow({ tenantId, contactId, to: rowTo, body: text, templateName: tpl, status: "QUEUED", threadId, userId, from });
+    const row = await module.exports.persistMessageRow({ tenantId, contactId, to: rowTo, body: text, templateName: tpl, status: "QUEUED", threadId: resolvedThreadId, userId, from });
     return { stub: true, sent: false, status: "QUEUED", to, channel: from, messageRowId: row ? row.id : null };
   }
 
@@ -1208,11 +1322,11 @@ async function sendSessionMessage({ tenantId, subBrand, toPhone, text, contactId
     const sent = await session.client.sendMessage(chatId, text);
     const providerMsgId = sent && sent.id ? sent.id._serialized : null;
     console.log(`[whatsappWeb] text sent tenant=${tenantId} to=${to}`);
-    const row = await module.exports.persistMessageRow({ tenantId, contactId, to: rowTo, body: text, templateName: tpl, status: "SENT", providerMsgId, threadId, userId, from });
+    const row = await module.exports.persistMessageRow({ tenantId, contactId, to: rowTo, body: text, templateName: tpl, status: "SENT", providerMsgId, threadId: resolvedThreadId, userId, from });
     return { stub: false, sent: true, status: "SENT", to, channel: from, providerMsgId, messageRowId: row ? row.id : null };
   } catch (e) {
     console.error(`[whatsappWeb] text send FAILED tenant=${tenantId} to=${to}: ${e.message}`);
-    const row = await module.exports.persistMessageRow({ tenantId, contactId, to: rowTo, body: text, templateName: tpl, status: "FAILED", errorMessage: e.message, threadId, userId, from });
+    const row = await module.exports.persistMessageRow({ tenantId, contactId, to: rowTo, body: text, templateName: tpl, status: "FAILED", errorMessage: e.message, threadId: resolvedThreadId, userId, from });
     return { stub: false, sent: false, status: "FAILED", to, channel: from, error: e.message, messageRowId: row ? row.id : null };
   }
 }
@@ -1396,6 +1510,7 @@ module.exports = {
   toChatId,
   fromChatId,
   persistMessageRow,
+  ensureOutboundThread,
   // watiClient-compatible surface
   isEnabled,
   getConfig,

@@ -51,7 +51,6 @@ const {
   getSubBrandAccessSet,
   canAccessSubBrand,
   assertValidSubBrand,
-  assertCompletedDiagnostic,
 } = require("../middleware/travelGuards");
 
 // Hard cap on manually-entered options per quote (PRD §7 — "up to 4 flight
@@ -173,8 +172,11 @@ router.post("/quotes", externalAuth, requireFlightPluginKey, async (req, res) =>
 //   - each option persists a flight ItineraryItem (identical column shape to
 //     the plugin path; detailsJson.source = "agent-quick-quote");
 //   - when no itineraryId is supplied a draft Itinerary is created for the
-//     contact, gated by the PRD §4.1 diagnostic-first guard exactly like
-//     POST /api/travel/itineraries (skipping it here would be a guard bypass).
+//     contact. NOTE: unlike POST /api/travel/itineraries this path does NOT
+//     enforce the §4.1 diagnostic-first guard — the Flight quick-quote is the
+//     manual fallback for a lead who already reached out directly (WhatsApp /
+//     email), so the advisor sends a quote on the spot; requiring a completed
+//     diagnostic first would block that legitimate flow.
 //
 // Optional markupRuleId pins a specific tenant rule instead of the priority
 // auto-pick; the amount still flows through pickMarkup (single-element list)
@@ -291,9 +293,9 @@ router.post("/agent-quotes", verifyToken, requireTravelTenant, async (req, res) 
     }
 
     if (!itin) {
-      // PRD §4.1 diagnostic-first guard — identical posture to
-      // POST /api/travel/itineraries (throws 403 DIAGNOSTIC_REQUIRED).
-      await assertCompletedDiagnostic(prisma, tenantId, contactId, subBrand);
+      // No diagnostic-first guard here (see header note): the Flight
+      // quick-quote answers a lead who already reached out directly, so the
+      // advisor quotes on the spot without forcing a diagnostic first.
       const first = parsed[0];
       itin = await prisma.itinerary.create({
         data: {

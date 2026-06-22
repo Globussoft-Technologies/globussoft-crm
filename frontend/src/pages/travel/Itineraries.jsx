@@ -16,7 +16,7 @@ import { useContext, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Map, Filter, Plane, Hotel, MapPin, Briefcase, FileText, Shield, Plus, X,
-  Sparkles, AlertTriangle,
+  Sparkles, AlertTriangle, Trash2,
 } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
@@ -99,6 +99,28 @@ const EMPTY_FORM = {
 
 const CURRENCIES = ["INR", "USD", "EUR"];
 
+// Geocode cache: city name → { lat, lng } resolved via Nominatim (same OSM
+// data-source as our map tiles — no API key required, free to use).
+const geocodeCache = {};
+async function geocodeCity(cityName) {
+  const key = cityName.toLowerCase().trim();
+  if (geocodeCache[key]) return geocodeCache[key];
+  try {
+    const res = await fetch(
+      `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(key)}&format=json&limit=1`,
+      { headers: { 'Accept': 'application/json', 'User-Agent': 'GlobusSoftCRM/1.0' } },
+    );
+    const data = await res.json();
+    if (Array.isArray(data) && data.length > 0) {
+      const { lat, lon } = data[0];
+      const coords = { lat: parseFloat(lat), lng: parseFloat(lon) };
+      geocodeCache[key] = coords;
+      return coords;
+    }
+  } catch (_) { /* Nominatim unreachable — silently skip */ }
+  return null;
+}
+
 // Translate the verbose raw AI-provider error (Google dumps 500+ chars
 // of JSON + stack into the message) into a short plain-English sentence
 // the operator can act on. Mirrors the helper in MarketingFlyerStudio.jsx
@@ -150,8 +172,17 @@ const SUGGEST_PACE_OPTIONS = [
   { value: "packed", label: "Packed" },
 ];
 
+const SUGGEST_TRANSPORT_OPTIONS = [
+  { value: "flight", label: "Flight" },
+  { value: "train", label: "Train" },
+  { value: "car", label: "Car / Road" },
+  { value: "none", label: "Not applicable" },
+];
+
 const EMPTY_SUGGEST_FORM = {
   destination: "",
+  departureCity: "",
+  transportPreference: "flight",
   durationDays: 5,
   budgetTier: "mid",
   interests: "",
@@ -219,6 +250,8 @@ export default function Itineraries() {
   const [form, setForm] = useState(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
   const [contacts, setContacts] = useState([]);
+  const [deletingId, setDeletingId] = useState(null);
+  const [confirmDelete, setConfirmDelete] = useState(null); // { id, destination }
 
   // S81 — selected itinerary for the top-of-page MapPreview panel. Null →
   // no map shown (default). User picks a row's "Map" button to surface the
@@ -231,10 +264,45 @@ export default function Itineraries() {
       : null),
     [items, selectedItineraryId],
   );
-  // Items array passed to MapPreview. pinnableItems inside MapPreview
-  // silently drops rows without lat/lng, so partially-geocoded itineraries
-  // still surface their pinnable subset.
-  const mapItems = selectedItinerary?.items || [];
+  // Items array passed to MapPreview. When the itinerary has geocoded items
+  // those are used directly. When there are none we geocode the destination
+  // city names via Nominatim (same OSM data used for tiles) and show those
+  // as fallback destination-level pins.
+  const [mapItems, setMapItems] = useState([]);
+  useEffect(() => {
+    if (!selectedItinerary) { setMapItems([]); return; }
+    const raw = selectedItinerary.items || [];
+    const hasPins = raw.some(
+      (it) => it && it.latitude != null && it.longitude != null
+        && Number.isFinite(Number(it.latitude)) && Number.isFinite(Number(it.longitude)),
+    );
+    if (hasPins) { setMapItems(raw); return; }
+    if (!selectedItinerary.destination) { setMapItems(raw); return; }
+    // Parse destination into city words and geocode each via Nominatim.
+    const words = selectedItinerary.destination
+      .split(/[_\s/,;-]+/)
+      .map((w) => w.trim())
+      .filter(Boolean);
+    let cancelled = false;
+    (async () => {
+      const synth = [];
+      for (let i = 0; i < words.length; i++) {
+        const coords = await geocodeCity(words[i]);
+        if (cancelled) return;
+        if (coords) {
+          synth.push({
+            id: `dest-${i}`,
+            latitude: coords.lat,
+            longitude: coords.lng,
+            locationName: words[i],
+            dayNumber: null,
+          });
+        }
+      }
+      if (!cancelled) setMapItems(synth.length > 0 ? synth : raw);
+    })();
+    return () => { cancelled = true; };
+  }, [selectedItinerary]);
 
   // PRD FR-3.6 — "Suggest itinerary" modal state. Separate from the create
   // drawer above so the operator can iterate on suggestions independently
@@ -251,6 +319,28 @@ export default function Itineraries() {
     fetchApi("/api/contacts?limit=200")
       .then((res) => setContacts(Array.isArray(res) ? res : (res?.contacts || [])))
       .catch(() => setContacts([]));
+  };
+
+  const handleDelete = (e, itinerary) => {
+    e.stopPropagation();
+    setConfirmDelete({ id: itinerary.id, destination: itinerary.destination });
+  };
+
+  const confirmDoDelete = async () => {
+    if (!confirmDelete) return;
+    const { id, destination } = confirmDelete;
+    setConfirmDelete(null);
+    setDeletingId(id);
+    try {
+      await fetchApi(`/api/travel/itineraries/${id}`, { method: 'DELETE' });
+      notify.success(`Deleted "${destination}"`);
+      if (selectedItineraryId === id) setSelectedItineraryId(null);
+      load();
+    } catch (err) {
+      notify.error(err?.body?.error || 'Failed to delete itinerary');
+    } finally {
+      setDeletingId(null);
+    }
   };
 
   // PRD FR-3.6 step (a) — open the Suggest Itinerary modal.
@@ -292,6 +382,8 @@ export default function Itineraries() {
       // and let the server normalise + convert.
       const body = {
         destination: dest,
+        departureCity: (suggestForm.departureCity || "").trim(),
+        transportPreference: suggestForm.transportPreference || "flight",
         days: dd,
         budgetTier: suggestForm.budgetTier,
         interests: (suggestForm.interests || "").trim(),
@@ -686,7 +778,7 @@ export default function Itineraries() {
                     </td>
                     <td style={td}><TierBadge tier={it.productTier} /></td>
                     <td style={td}>{new Date(it.updatedAt).toLocaleDateString()}</td>
-                    <td style={td}>
+                    <td style={{ ...td, whiteSpace: 'nowrap' }}>
                       {/* S81 — per-row Map toggle. stopPropagation so the
                           row's navigate-on-click doesn't fire alongside. */}
                       <button
@@ -713,6 +805,27 @@ export default function Itineraries() {
                       >
                         <Map size={12} aria-hidden />
                         {selectedItineraryId === it.id ? "Hide" : "Map"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => handleDelete(e, it)}
+                        disabled={deletingId === it.id}
+                        aria-label={`Delete itinerary ${it.destination}`}
+                        style={{
+                          marginLeft: 6,
+                          padding: "4px 6px",
+                          fontSize: 12,
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 3,
+                          border: "1px solid rgba(220,38,38,0.4)",
+                          borderRadius: 4,
+                          background: "transparent",
+                          color: deletingId === it.id ? "var(--text-secondary)" : "#dc2626",
+                          cursor: deletingId === it.id ? "not-allowed" : "pointer",
+                        }}
+                      >
+                        <Trash2 size={12} aria-hidden />
                       </button>
                     </td>
                   </tr>
@@ -900,6 +1013,32 @@ export default function Itineraries() {
                   </span>
                 )}
               </label>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                <label style={fieldLabel}>
+                  Departure city (optional)
+                  <input
+                    type="text"
+                    value={suggestForm.departureCity}
+                    onChange={(e) => setSuggestForm({ ...suggestForm, departureCity: e.target.value })}
+                    style={inputStyle}
+                    placeholder='e.g. "Mumbai", "Delhi"'
+                    aria-label="Departure / pickup city"
+                  />
+                </label>
+                <label style={fieldLabel}>
+                  Travel to destination by
+                  <select
+                    value={suggestForm.transportPreference}
+                    onChange={(e) => setSuggestForm({ ...suggestForm, transportPreference: e.target.value })}
+                    style={inputStyle}
+                    aria-label="Transport to destination"
+                  >
+                    {SUGGEST_TRANSPORT_OPTIONS.map((t) => (
+                      <option key={t.value} value={t.value}>{t.label}</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
                 <label style={fieldLabel}>
                   Duration (days)
@@ -1163,6 +1302,82 @@ export default function Itineraries() {
               </div>
             )}
           </form>
+        </div>
+      )}
+
+      {/* Delete confirmation modal */}
+      {confirmDelete && (
+        <div
+          style={{
+            position: "fixed", inset: 0,
+            background: "rgba(0,0,0,0.6)",
+            backdropFilter: "blur(4px)",
+            WebkitBackdropFilter: "blur(4px)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            zIndex: 1100,
+          }}
+          onClick={(e) => { if (e.target === e.currentTarget) setConfirmDelete(null); }}
+        >
+          <div
+            className="card"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="delete-confirm-title"
+            style={{
+              background: "var(--bg-color)",
+              borderRadius: 10,
+              padding: 28,
+              width: "100%",
+              maxWidth: 420,
+              boxShadow: "0 20px 60px rgba(0,0,0,0.4)",
+              display: "flex",
+              flexDirection: "column",
+              gap: 16,
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              <div style={{
+                width: 40, height: 40, borderRadius: "50%",
+                background: "rgba(220,38,38,0.12)",
+                display: "flex", alignItems: "center", justifyContent: "center",
+                flexShrink: 0,
+              }}>
+                <Trash2 size={18} style={{ color: "#dc2626" }} />
+              </div>
+              <div>
+                <h3 id="delete-confirm-title" style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>
+                  Delete itinerary?
+                </h3>
+                <p style={{ margin: "4px 0 0", fontSize: 13, color: "var(--text-secondary)" }}>
+                  <strong>{confirmDelete.destination}</strong> will be permanently removed.
+                  This cannot be undone.
+                </p>
+              </div>
+            </div>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+              <button
+                type="button"
+                onClick={() => setConfirmDelete(null)}
+                style={{ ...refreshBtn, padding: "8px 16px" }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmDoDelete}
+                disabled={!!deletingId}
+                style={{
+                  padding: "8px 16px", borderRadius: 6, fontWeight: 600, fontSize: 13,
+                  background: "#dc2626", color: "#fff",
+                  border: "1px solid #dc2626", cursor: "pointer",
+                  display: "inline-flex", alignItems: "center", gap: 6,
+                  opacity: deletingId ? 0.6 : 1,
+                }}
+              >
+                <Trash2 size={14} /> {deletingId ? "Deleting…" : "Yes, delete"}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

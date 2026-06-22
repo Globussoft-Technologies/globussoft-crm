@@ -210,6 +210,46 @@ function isPdf(mimeType, fileName, filePath) {
   return n.endsWith(".pdf");
 }
 
+// Render the first page of a PDF buffer to a PNG image buffer so the existing
+// tesseract OCR pipeline can process it unchanged.
+// Uses pdfjs-dist (pure JS parser) + canvas (prebuilt Node bindings for rendering).
+// Returns null on any failure — caller falls back to manual envelope.
+async function pdfFirstPageToImageBuffer(pdfBuffer) {
+  try {
+    const { createCanvas } = require("canvas");
+    const pdfjsLib = require("pdfjs-dist/legacy/build/pdf.js");
+    // Disable the worker thread — not needed for server-side synchronous rendering.
+    pdfjsLib.GlobalWorkerOptions.workerSrc = false;
+
+    const loadingTask = pdfjsLib.getDocument({
+      data: new Uint8Array(pdfBuffer),
+      useWorkerFetch: false,
+      isEvalSupported: false,
+      useSystemFonts: true,
+    });
+    const pdf = await loadingTask.promise;
+    const page = await pdf.getPage(1);
+    // 2× scale gives tesseract larger glyphs → better MRZ recognition.
+    const viewport = page.getViewport({ scale: 2.0 });
+
+    const canvas = createCanvas(Math.ceil(viewport.width), Math.ceil(viewport.height));
+    const context = canvas.getContext("2d");
+
+    // NodeCanvasFactory is required by pdfjs for server-side rendering.
+    const canvasFactory = {
+      create(w, h) { const c = createCanvas(w, h); return { canvas: c, context: c.getContext("2d") }; },
+      reset(cc, w, h) { cc.canvas.width = w; cc.canvas.height = h; },
+      destroy(cc) { cc.canvas.width = 0; cc.canvas.height = 0; },
+    };
+
+    await page.render({ canvasContext: context, viewport, canvasFactory }).promise;
+    return canvas.toBuffer("image/png");
+  } catch (e) {
+    console.warn("[passportOcrClient] PDF→image failed:", e?.message || e);
+    return null;
+  }
+}
+
 function buildExtraction(parsed) {
   const f = parsed?.fields || {};
   return {
@@ -256,11 +296,19 @@ async function extractPassport({ tenantId, filePath, fileBuffer, fileName, mimeT
 
   const extractedAt = new Date().toISOString();
 
+  let buffer = resolveImageBuffer({ filePath, fileBuffer });
+
   if (isPdf(mimeType, fileName, filePath)) {
-    return manualEnvelope(extractedAt, "PDF uploads are not auto-extracted yet — please verify the fields manually.");
+    if (!buffer) {
+      return manualEnvelope(extractedAt, "PDF upload received but the file could not be read — please verify the fields manually.");
+    }
+    const imgBuffer = await pdfFirstPageToImageBuffer(buffer);
+    if (!imgBuffer) {
+      return manualEnvelope(extractedAt, "PDF upload received but page rendering failed — please verify the fields manually.");
+    }
+    buffer = imgBuffer;
   }
 
-  const buffer = resolveImageBuffer({ filePath, fileBuffer });
   if (!buffer) {
     return manualEnvelope(extractedAt, "No readable image was provided.");
   }

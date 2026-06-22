@@ -7,6 +7,33 @@ import {
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 
+// Make bare URLs in a plain-text email body clickable — React-safe (renders real
+// <a> nodes, never dangerouslySetInnerHTML, so injected markup stays inert).
+// Splits on http(s) URLs; trailing sentence punctuation is kept outside the link.
+const EMAIL_URL_RE = /(https?:\/\/[^\s<]+)/g;
+function linkifyText(text) {
+  if (!text) return text;
+  return String(text).split(EMAIL_URL_RE).map((part, i) => {
+    if (i % 2 === 0) return part; // plain-text segment
+    const trail = part.match(/[.,!?;:)\]}'"]+$/);
+    const url = trail ? part.slice(0, -trail[0].length) : part;
+    const tail = trail ? trail[0] : '';
+    return (
+      <span key={i}>
+        <a
+          href={url}
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{ color: 'var(--primary-color, var(--accent-color))', textDecoration: 'underline', wordBreak: 'break-all' }}
+        >
+          {url}
+        </a>
+        {tail}
+      </span>
+    );
+  });
+}
+
 // Gmail integration page (/gmail) — a Gmail-styled read/send surface over
 // routes/gmail.js:
 //   GET    /api/gmail/status            → { connected, emailAddress, lastSyncAt }
@@ -536,7 +563,7 @@ export default function GmailInbox() {
                 {/* Plain-text body (NOT raw HTML) — safe against injected markup. */}
                 <div style={{ padding: '1.25rem 1.5rem', borderTop: '1px solid var(--border-color)',
                   fontSize: '0.92rem', color: 'var(--text-primary)', whiteSpace: 'pre-wrap', lineHeight: 1.55 }}>
-                  {selected.text || selected.snippet || '(no preview available)'}
+                  {linkifyText(selected.text || selected.snippet || '(no preview available)')}
                 </div>
               </>
             )}

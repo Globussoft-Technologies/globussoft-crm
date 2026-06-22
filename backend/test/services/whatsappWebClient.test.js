@@ -139,6 +139,18 @@ describe('send surface (stub → QUEUED + persisted row)', () => {
     expect(data).toMatchObject({ direction: 'OUTBOUND', status: 'QUEUED', body: 'hi', tenantId: 3, threadId: 11, userId: 7 });
   });
 
+  test('sendSessionMessage WITHOUT a threadId ensures a thread and links the message', async () => {
+    // No caller-supplied threadId (the quote/share path) → the send must
+    // create/resolve a conversation thread so it shows in the Threads inbox.
+    prisma.whatsAppThread.findUnique.mockResolvedValue(null); // no prior thread
+    prisma.whatsAppThread.create.mockResolvedValue({ id: 55, unreadCount: 0 });
+    const out = await wa.sendSessionMessage({ tenantId: TENANT, toPhone: '9811111103', text: 'your quote' });
+    expect(out.status).toBe('QUEUED');
+    expect(prisma.whatsAppThread.create).toHaveBeenCalled();
+    const data = prisma.whatsAppMessage.create.mock.calls.at(-1)[0].data;
+    expect(data).toMatchObject({ direction: 'OUTBOUND', threadId: 55 });
+  });
+
   test('sendTemplateMessage carries templateName onto the row + renders bodyPreview', async () => {
     const out = await wa.sendTemplateMessage({
       tenantId: TENANT, toPhone: '9811111102', templateName: 'journey_reminder',

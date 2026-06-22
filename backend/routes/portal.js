@@ -529,7 +529,11 @@ async function loadPortalOwnedItinerary(req, res) {
   }
   const itin = await prisma.itinerary.findFirst({
     where: { id, tenantId: req.portal.tenantId, contactId: req.portal.contactId },
-    select: { id: true, status: true, subBrand: true, destination: true },
+    select: {
+      id: true, status: true, subBrand: true, destination: true,
+      // cancellation-flow fields (2026-06-19)
+      cancellationStatus: true, advancePaidAmount: true, currency: true,
+    },
   });
   if (!itin) {
     res.status(404).json({ error: "Booking not found", code: "NOT_FOUND" });
@@ -567,7 +571,7 @@ async function resolveItineraryStaffUserIds(tenantId, subBrand) {
 // Best-effort: notify the brand's manager(s) + admins that the customer
 // accepted/declined their itinerary. Never throws — a notification failure
 // must not fail the customer's action.
-async function notifyStaffOfItineraryDecision({ tenantId, subBrand, itineraryId, destination, contactId, action, reason }) {
+async function notifyStaffOfItineraryDecision({ tenantId, subBrand, itineraryId, destination, contactId, action, reason, amountPaid, currency }) {
   try {
     const userIds = await resolveItineraryStaffUserIds(tenantId, subBrand);
     if (!userIds.length) return;
@@ -576,9 +580,35 @@ async function notifyStaffOfItineraryDecision({ tenantId, subBrand, itineraryId,
       const c = await prisma.contact.findUnique({ where: { id: contactId }, select: { name: true, email: true } });
       who = (c && (c.name || c.email)) || who;
     } catch { /* fall back to "A customer" */ }
-    const verb = action === "accepted" ? "accepted" : "declined";
     const brand = (subBrand || "").toUpperCase();
-    let message = `${who} ${verb} the ${brand} itinerary "${destination || `#${itineraryId}`}".`;
+    const trip = destination || `#${itineraryId}`;
+
+    // 2026-06-19 — customer-initiated cancellation of a committed booking. This
+    // is the "flag the advisor to refund per policy" path: surface WHO, the
+    // reason, and how much they've already paid so the advisor can settle the
+    // refund against the cancellation policy.
+    if (action === "cancellation_requested") {
+      let message = `${who} requested to CANCEL the ${brand} booking "${trip}".`;
+      if (Number(amountPaid) > 0) {
+        const paidLabel = (currency || "INR") === "INR" ? `₹${Math.round(amountPaid).toLocaleString("en-IN")}` : `${currency} ${Math.round(amountPaid)}`;
+        message += ` They have paid ${paidLabel} so far — review the cancellation policy and process the refund.`;
+      } else {
+        message += " No payment recorded yet.";
+      }
+      if (reason) message += ` Reason: "${reason}"`;
+      await notifyMany({
+        userIds,
+        tenantId,
+        title: "Booking cancellation requested",
+        message,
+        type: "warning",
+        link: `/travel/itineraries/${itineraryId}`,
+      });
+      return;
+    }
+
+    const verb = action === "accepted" ? "accepted" : "declined";
+    let message = `${who} ${verb} the ${brand} itinerary "${trip}".`;
     if (action === "declined" && reason) {
       message += ` Reason: "${reason}"`;
     }
@@ -661,6 +691,63 @@ router.post("/travel/itineraries/:id/decline", verifyPortalToken, requireTravelP
   } catch (err) {
     console.error("[Portal][travel/itin decline]", err);
     res.status(500).json({ error: "Failed to decline this trip" });
+  }
+});
+
+// POST /api/portal/travel/itineraries/:id/request-cancellation
+//
+// Customer-initiated cancellation of a COMMITTED booking (accepted / paid),
+// 2026-06-19. The customer must give a reason; we record it + flip
+// cancellationStatus → "requested", flag the advisor (sub-brand scoped) with
+// the reason + amount-paid so they can refund per the cancellation policy, and
+// drop an acknowledgement into the customer's portal bell. We DON'T auto-cancel
+// the status or auto-refund — the advisor settles per policy. Offers that
+// haven't been accepted yet use /decline instead.
+router.post("/travel/itineraries/:id/request-cancellation", verifyPortalToken, requireTravelPortalTenant, async (req, res) => {
+  try {
+    const itin = await loadPortalOwnedItinerary(req, res);
+    if (!itin) return;
+    if (!["accepted", "advance_paid", "fully_paid"].includes(itin.status)) {
+      return res.status(409).json({ error: "Only a confirmed booking can be cancelled here. Decline the offer instead.", code: "INVALID_STATE" });
+    }
+    if (itin.cancellationStatus === "requested" || itin.cancellationStatus === "cancelled") {
+      return res.status(409).json({ error: "A cancellation is already in progress for this booking.", code: "ALREADY_REQUESTED" });
+    }
+    const rawReason = req.body && typeof req.body.reason === "string" ? req.body.reason.trim() : "";
+    if (!rawReason) {
+      return res.status(400).json({ error: "Please tell us why you're cancelling.", code: "REASON_REQUIRED" });
+    }
+    const reason = rawReason.slice(0, 2000);
+    const updated = await prisma.itinerary.update({
+      where: { id: itin.id },
+      data: { cancellationStatus: "requested", cancellationReason: reason, cancellationRequestedAt: new Date() },
+      select: { id: true, status: true, cancellationStatus: true, cancellationReason: true, cancellationRequestedAt: true },
+    });
+    // Flag the advisor (sub-brand scoped) with the reason + amount paid.
+    await notifyStaffOfItineraryDecision({
+      tenantId: req.portal.tenantId,
+      subBrand: itin.subBrand,
+      itineraryId: itin.id,
+      destination: itin.destination,
+      contactId: req.portal.contactId,
+      action: "cancellation_requested",
+      reason,
+      amountPaid: Number(itin.advancePaidAmount || 0),
+      currency: itin.currency,
+    });
+    // Acknowledge to the customer in their portal bell.
+    travelPortalNotifications.safeNotifyTravelCustomer({
+      contactId: req.portal.contactId,
+      tenantId: req.portal.tenantId,
+      type: "info",
+      title: "Cancellation request received",
+      message: `We've received your request to cancel your ${itin.destination || "trip"}. Your advisor will review it and process any refund due per the cancellation policy.`,
+      link: `booking:${itin.id}`,
+    });
+    res.json(updated);
+  } catch (err) {
+    console.error("[Portal][travel/itin request-cancellation]", err);
+    res.status(500).json({ error: "Failed to submit your cancellation request" });
   }
 });
 

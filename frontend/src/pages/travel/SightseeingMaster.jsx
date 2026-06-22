@@ -26,9 +26,9 @@
 //     offset+limit pair (Prev/Next, limit=20) keeps the page lean and
 //     mirrors the Phase-1 admin-table shape across travel/* siblings.
 
-import React, { useState, useEffect, useCallback, useContext } from 'react';
+import React, { useState, useEffect, useCallback, useContext, useRef } from 'react';
 import { Link } from 'react-router-dom';
-import { ChevronLeft, ChevronRight, Edit2, Filter, MapPin, Plus, Trash2, X } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Edit2, Filter, MapPin, Plus, Trash2, Upload, X } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { AuthContext } from '../../App';
@@ -91,6 +91,28 @@ export default function SightseeingMaster() {
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
   const [editingId, setEditingId] = useState(null);
+
+  // Image upload
+  const imgInputRef = useRef(null);
+  const [uploadingImg, setUploadingImg] = useState(false);
+
+  const pickImageFile = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setUploadingImg(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const data = await fetchApi('/api/travel/sightseeing/upload-image', { method: 'POST', body: fd });
+      setForm((prev) => ({ ...prev, imageUrl: data.url }));
+      notify.success('Image uploaded');
+    } catch (err) {
+      notify.error(err?.body?.error || 'Image upload failed');
+    } finally {
+      setUploadingImg(false);
+    }
+  };
 
   const fetchItems = useCallback(() => {
     setLoading(true);
@@ -459,14 +481,51 @@ export default function SightseeingMaster() {
                 style={inputStyle}
               />
             </Field>
-            <Field label="Image URL">
+            <Field label="Image">
               <input
-                value={form.imageUrl}
-                onChange={(e) => setForm({ ...form, imageUrl: e.target.value })}
-                placeholder="https://…"
-                aria-label="imageUrl"
-                style={inputStyle}
+                ref={imgInputRef}
+                type="file"
+                accept="image/*"
+                onChange={pickImageFile}
+                style={{ display: 'none' }}
+                aria-label="Upload POI image"
               />
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+                {form.imageUrl ? (
+                  <>
+                    <img
+                      src={form.imageUrl}
+                      alt="POI preview"
+                      style={{ width: 56, height: 56, borderRadius: 6, objectFit: 'cover', border: '1px solid var(--border-color)' }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => imgInputRef.current?.click()}
+                      disabled={uploadingImg}
+                      style={{ ...secondaryBtn, padding: '0.4rem 0.7rem', fontSize: '0.8rem' }}
+                    >
+                      <Upload size={13} /> {uploadingImg ? 'Uploading…' : 'Replace'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setForm((prev) => ({ ...prev, imageUrl: '' }))}
+                      title="Remove image"
+                      style={{ ...secondaryBtn, padding: '0.4rem 0.7rem', fontSize: '0.8rem', color: 'var(--danger-color, #ef4444)' }}
+                    >
+                      <X size={13} /> Remove
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => imgInputRef.current?.click()}
+                    disabled={uploadingImg}
+                    style={{ ...secondaryBtn, border: '1px dashed var(--border-color)', color: 'var(--text-secondary)' }}
+                  >
+                    <Upload size={14} /> {uploadingImg ? 'Uploading…' : 'Upload image'}
+                  </button>
+                )}
+              </div>
             </Field>
           </div>
 

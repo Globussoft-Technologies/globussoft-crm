@@ -540,12 +540,13 @@ describe('<TripDetail /> — Microsite tab', () => {
     // Action buttons.
     expect(screen.getByRole('button', { name: /Copy URL/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Preview/i })).toBeInTheDocument();
-    // Open link → /api/travel/microsites/public/<publicUuid> (origin
-    // included; assert via substring).
+    // Open link → the rendered public page /p/tripmicrosite/<publicUuid>
+    // (NOT the raw JSON API). The page fetches the API itself.
     const openLink = screen.getByRole('link', { name: /Open/i });
     expect(openLink.getAttribute('href')).toContain(
-      '/api/travel/microsites/public/abc-123-def-456',
+      '/p/tripmicrosite/abc-123-def-456',
     );
+    expect(openLink.getAttribute('href')).not.toContain('/api/travel/microsites/public/');
   });
 });
 

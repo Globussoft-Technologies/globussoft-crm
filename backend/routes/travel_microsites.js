@@ -36,7 +36,8 @@ const prisma = require("../lib/prisma");
 const { requireTravelTenant, getSubBrandAccessSet } = require("../middleware/travelGuards");
 const { resolveForSubBrand } = require("../lib/subBrandConfig");
 const digilockerClient = require("../services/digilockerClient");
-const watiClient = require("../services/watiClient");
+// const watiClient = require("../services/watiClient"); // legacy Wati REST (disabled)
+const watiClient = require("../services/whatsappWebClient"); // connected WhatsApp Web (drop-in)
 
 // Aadhaar/DigiLocker microsite-verification tuning. A session is only
 // valid to call back within SESSION_TTL_MS of /start (matches the

@@ -2813,6 +2813,24 @@ async function renderTravelItineraryPdf(itinerary, contact, opts = {}) {
   if (dateLine) doc.font("Helvetica").fontSize(10).fillColor("#555").text(dateLine);
   doc.fillColor("#111").moveDown(0.8);
 
+  // Destination hero banner — a real photo of the destination (resolved by the
+  // route via lib/destinationImage and passed in as opts.heroBuffer; null on a
+  // restricted/offline server, in which case we simply skip it). Banner-cropped
+  // upstream, so fit:[W,150] renders it full-width. doc.image throws on a bad
+  // buffer, so wrap it — a bad photo must never 500 the download.
+  if (opts.heroBuffer) {
+    try {
+      const BANNER_W = doc.page.width - 100;
+      const BANNER_H = 150;
+      const by = doc.y;
+      doc.image(opts.heroBuffer, 50, by, { fit: [BANNER_W, BANNER_H], align: "center", valign: "center" });
+      doc.y = by + BANNER_H + 12;
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn(`[pdfRenderer] hero image rejected (itinerary): ${err && err.message ? err.message : err}`);
+    }
+  }
+
   // Items table
   if (items.length === 0) {
     doc.font("Helvetica").fontSize(10).fillColor("#777").text("(No items on this itinerary yet — quote pending.)");

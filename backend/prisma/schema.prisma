@@ -5683,6 +5683,15 @@ model Itinerary {
   // text the customer enters in the portal so the advisor knows what to
   // improve. Nullable; only set on a customer decline.
   declineReason        String?         @db.Text
+  // Customer-initiated CANCELLATION of a committed booking (2026-06-19). When a
+  // customer cancels an accepted/paid trip from the portal, they give a reason
+  // and the advisor is flagged to process a refund per the cancellation policy.
+  // cancellationStatus: null | "requested" (customer asked) | "cancelled"
+  // (advisor confirmed) | "refunded" (refund done). The engine never
+  // auto-refunds — the advisor settles per policy. Additive + nullable.
+  cancellationStatus       String?
+  cancellationReason       String?     @db.Text
+  cancellationRequestedAt  DateTime?
   // LLM-generated draft summary block. Persisted so re-renders don't burn
   // tokens. Operator triggers regeneration via POST /draft/regen. Stays
   // null until the first regen call lands; the customer-facing PDF + share
@@ -6840,6 +6849,12 @@ model TravelInvoice {
   // Optional FK to TravelQuote — an invoice can be generated without a
   // prior quote (direct billing, supplier-passthrough scenarios).
   quoteId              Int?
+  // Link back to the source Itinerary when this invoice was auto-created from a
+  // public itinerary payment (flight quote / proposal). Nullable + additive —
+  // quote-sourced + manual invoices leave it null. Lets the public payment flow
+  // find + update the SAME invoice as the advance → balance clears (one
+  // evolving ledger record per booking).
+  itineraryId          Int?
   // Tenant-scoped human-readable identifier (e.g. "TINV-2026-0001"). The
   // route layer assigns sequentially per tenant + sub-brand at create time.
   invoiceNum           String
@@ -6935,6 +6950,7 @@ model TravelInvoice {
   @@index([tenantId, subBrand, status])
   @@index([tenantId, parentInvoiceId])
   @@index([tenantId, cancellationPolicyId])
+  @@index([tenantId, itineraryId])
   // Draft-invoice dedup guard (routes/travel_invoices.js POST /invoices).
   // The duplicate check filters on (tenantId, contactId, subBrand, status,
   // currency, totalAmount, dueDate); the first four cover selectivity, the

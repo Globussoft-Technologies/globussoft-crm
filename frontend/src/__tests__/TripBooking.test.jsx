@@ -60,6 +60,40 @@ const FULLY_PAID_ITINERARY = {
   onlinePaymentEnabled: true,
 };
 
+// Flight quick-quote: alternative options the customer picks ONE of, no fixed
+// total yet (optionsMode). Each flight carries timing/class/baggage in detailsJson.
+const OPTIONS_ITINERARY = {
+  shareToken: 'tok-opt-flight-1234567890',
+  tenantName: 'Travel Stall Demo',
+  subBrand: 'travelstall',
+  destination: 'DEL→JED flights',
+  startDate: null,
+  endDate: null,
+  status: 'sent',
+  totalAmount: 0,
+  currency: 'INR',
+  advanceRatio: 0.5,
+  advanceDue: 0,
+  advancePaid: 0,
+  advancePaidAt: null,
+  balanceDue: 0,
+  onlinePaymentEnabled: true,
+  optionsMode: true,
+  items: [
+    {
+      id: 11, itemType: 'flight', position: 0, totalPrice: 36750,
+      description: 'AIRINDIA AI-101 DEL→JED (Economy)',
+      detailsJson: JSON.stringify({ fareClass: 'Economy', departAt: '2026-08-02T18:10:00', arriveAt: '2026-08-02T23:10:00', baggage: '30kg' }),
+    },
+    {
+      id: 12, itemType: 'flight', position: 1, totalPrice: 52500,
+      description: 'AIRINDIA AI-202 DEL→JED (Premium Economy)',
+      detailsJson: JSON.stringify({ fareClass: 'Premium Economy', departAt: '2026-08-02T20:00:00', arriveAt: '2026-08-03T01:00:00', baggage: '40kg' }),
+    },
+  ],
+  pdfUrl: null,
+};
+
 let fetchSpy;
 beforeEach(() => {
   fetchSpy = vi.spyOn(globalThis, 'fetch');
@@ -210,6 +244,9 @@ describe('TripBooking — public booking page (PRD §4.7)', () => {
     await screen.findByText(/Advance received/i);
     const balBtn = screen.getByRole('button', { name: /Pay balance/i });
     expect(balBtn.textContent).toMatch(/50,000/);
+    // Receipt link appears once a payment is recorded.
+    const receipt = screen.getByRole('link', { name: /Download payment receipt/i });
+    expect(receipt.getAttribute('href')).toContain('/receipt');
   });
 
   it('renders a fully-paid success state with no Pay buttons', async () => {
@@ -241,6 +278,52 @@ describe('TripBooking — public booking page (PRD §4.7)', () => {
     expect(screen.queryByText(/Advance received/i)).toBeNull();
     // GET only called once (the initial load — no reload on pay-error).
     expect(getCalls).toBe(1);
+  });
+
+  it('flight quote: shows options + flight details, requires a selection, pays the chosen one', async () => {
+    installRazorpaySuccess();
+    let getCalls = 0;
+    fetchSpy.mockImplementation((url, opts) => {
+      if (url.startsWith('/api/travel/itineraries/public/') && !opts) {
+        getCalls += 1;
+        return ok(getCalls === 1
+          ? OPTIONS_ITINERARY
+          : { ...OPTIONS_ITINERARY, status: 'advance_paid', optionsMode: false, totalAmount: 36750, advancePaid: 18375, balanceDue: 18375 });
+      }
+      if (opts?.method === 'POST' && url.endsWith('/create-payment-order')) {
+        return ok({ orderId: 'order_o1', amount: 1837500, amountMajor: 18375, currency: 'INR', keyId: 'rzp_test_x', kind: 'advance' });
+      }
+      if (opts?.method === 'POST' && url.endsWith('/verify-payment')) {
+        return ok({ status: 'advance_paid', advancePaidAmount: 18375, advancePaidAt: '2026-06-22T10:00:00.000Z', paymentReference: 'pay_o1', balanceDue: 18375 });
+      }
+      return ok({});
+    });
+    renderTrip(OPTIONS_ITINERARY.shareToken);
+
+    await screen.findByText(/Choose your flight/i);
+    // Flight timing + baggage now render (was missing before).
+    expect(screen.getByText(/Baggage: 30kg/i)).toBeTruthy();
+    expect(screen.getByText(/Baggage: 40kg/i)).toBeTruthy();
+
+    // Pay is blocked until the customer picks an option.
+    const preBtn = screen.getByRole('button', { name: /Select an option to continue/i });
+    expect(preBtn).toBeDisabled();
+
+    // Pick the economy option → advance reflects 50% of THAT option.
+    fireEvent.click(screen.getByLabelText(/Select AIRINDIA AI-101/i));
+    const payBtn = await screen.findByRole('button', { name: /Pay 50% to confirm/i });
+    expect(payBtn.textContent).toMatch(/18,375/);
+
+    fireEvent.click(payBtn);
+    await screen.findByText(/Advance received/i);
+
+    // create-payment-order carried the chosen itineraryItemId.
+    const orderCall = fetchSpy.mock.calls.find(
+      (c) => c[1]?.method === 'POST' && c[0].endsWith('/create-payment-order'),
+    );
+    const body = JSON.parse(orderCall[1].body);
+    expect(body.kind).toBe('advance');
+    expect(body.itineraryItemId).toBe(11);
   });
 
   it('PDF download link renders when pdfUrl is set', async () => {

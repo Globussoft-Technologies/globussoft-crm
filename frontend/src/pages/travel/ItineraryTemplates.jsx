@@ -33,9 +33,9 @@
 // Mirrors SightseeingMaster.jsx (ca052d20) — same #907 arc, same admin-table
 // pattern, same notify hook (`../utils/notify`, not `../hooks/useNotify`).
 
-import React, { useState, useEffect, useCallback, useContext, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useContext, useMemo, useRef } from 'react';
 import { Link } from 'react-router-dom';
-import { Archive, ArchiveRestore, ChevronLeft, ChevronRight, Copy, Download, Edit2, Eye, Filter, FileText, Map as MapIcon, Plus, Trash2, X } from 'lucide-react';
+import { Archive, ArchiveRestore, ChevronLeft, ChevronRight, Copy, Download, Edit2, Eye, Filter, FileText, Map as MapIcon, Plus, Trash2, Upload, X } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
 import { AuthContext } from '../../App';
@@ -155,11 +155,36 @@ export default function ItineraryTemplates() {
   const [form, setForm] = useState(EMPTY_FORM);
   const [editingId, setEditingId] = useState(null);
 
+  // Thumbnail upload
+  const thumbInputRef = useRef(null);
+  const [uploadingThumb, setUploadingThumb] = useState(false);
+
+  const pickThumbFile = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setUploadingThumb(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const data = await fetchApi('/api/travel/itinerary-templates/upload-image', { method: 'POST', body: fd });
+      setForm((prev) => ({ ...prev, thumbnailUrl: data.url }));
+      notify.success('Thumbnail uploaded');
+    } catch (err) {
+      notify.error(err?.body?.error || 'Image upload failed');
+    } finally {
+      setUploadingThumb(false);
+    }
+  };
+
   // G061 — Detail / preview modal (PRD FR-3.1.d). Shows the template's
   // day-by-day item summary + a Leaflet map of all POIs with lat/lng before
   // the operator commits to cloning. State holds the template currently
   // being previewed; null when the modal is closed.
   const [previewTemplate, setPreviewTemplate] = useState(null);
+  // Contact list + selected contact for the clone-to-customer step.
+  const [contacts, setContacts] = useState([]);
+  const [cloneContactId, setCloneContactId] = useState('');
 
   const fetchItems = useCallback(() => {
     setLoading(true);
@@ -390,9 +415,17 @@ export default function ItineraryTemplates() {
   // when the operator clicks "Clone this template" inside the modal.
   const openPreview = (item) => {
     setPreviewTemplate(item);
+    setCloneContactId('');
+    // Lazy-load contacts for the clone contact-picker (same feed as Itineraries.jsx).
+    if (contacts.length === 0) {
+      fetchApi('/api/contacts?limit=200')
+        .then((res) => setContacts(Array.isArray(res) ? res : (res?.contacts || [])))
+        .catch(() => setContacts([]));
+    }
   };
   const closePreview = () => {
     setPreviewTemplate(null);
+    setCloneContactId('');
   };
 
   // G061 — Confirm-clone path. POSTs /api/travel/itineraries with the
@@ -403,6 +436,10 @@ export default function ItineraryTemplates() {
   const [cloning, setCloning] = useState(false);
   const handleClone = async () => {
     if (!previewTemplate) return;
+    if (!cloneContactId) {
+      notify.error('Pick a customer to assign this itinerary to');
+      return;
+    }
     setCloning(true);
     try {
       const tpl = previewTemplate;
@@ -410,9 +447,10 @@ export default function ItineraryTemplates() {
         method: 'POST',
         body: JSON.stringify({
           title: tpl.name,
-          destinationName: tpl.destinationName,
+          destination: tpl.destinationName,
           durationDays: tpl.durationDays,
-          subBrand: tpl.subBrand || null,
+          subBrand: tpl.subBrand || defaultSubBrandFor(user, activeSubBrand),
+          contactId: parseInt(cloneContactId, 10),
           clonedFromTemplateId: tpl.id,
         }),
       });
@@ -779,14 +817,51 @@ export default function ItineraryTemplates() {
                 style={inputStyle}
               />
             </Field>
-            <Field label="Thumbnail URL">
+            <Field label="Thumbnail">
               <input
-                value={form.thumbnailUrl}
-                onChange={(e) => setForm({ ...form, thumbnailUrl: e.target.value })}
-                placeholder="https://…"
-                aria-label="thumbnailUrl"
-                style={inputStyle}
+                ref={thumbInputRef}
+                type="file"
+                accept="image/*"
+                onChange={pickThumbFile}
+                style={{ display: 'none' }}
+                aria-label="Upload thumbnail image"
               />
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+                {form.thumbnailUrl ? (
+                  <>
+                    <img
+                      src={form.thumbnailUrl}
+                      alt="Template thumbnail"
+                      style={{ width: 56, height: 56, borderRadius: 6, objectFit: 'cover', border: '1px solid var(--border-color)' }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => thumbInputRef.current?.click()}
+                      disabled={uploadingThumb}
+                      style={{ ...secondaryBtn, padding: '0.4rem 0.7rem', fontSize: '0.8rem' }}
+                    >
+                      <Upload size={13} /> {uploadingThumb ? 'Uploading…' : 'Replace'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setForm((prev) => ({ ...prev, thumbnailUrl: '' }))}
+                      title="Remove thumbnail"
+                      style={{ ...secondaryBtn, padding: '0.4rem 0.7rem', fontSize: '0.8rem', color: 'var(--danger-color, #ef4444)' }}
+                    >
+                      <X size={13} /> Remove
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => thumbInputRef.current?.click()}
+                    disabled={uploadingThumb}
+                    style={{ ...secondaryBtn, border: '1px dashed var(--border-color)', color: 'var(--text-secondary)' }}
+                  >
+                    <Upload size={14} /> {uploadingThumb ? 'Uploading…' : 'Upload thumbnail'}
+                  </button>
+                )}
+              </div>
             </Field>
             <Field label="LLM source (if AI-drafted)">
               <input
@@ -1064,6 +1139,9 @@ export default function ItineraryTemplates() {
           onClose={closePreview}
           formatPrice={formatPrice}
           formatDuration={formatDuration}
+          contacts={contacts}
+          cloneContactId={cloneContactId}
+          onContactChange={setCloneContactId}
         />
       )}
     </div>
@@ -1085,6 +1163,9 @@ function TemplatePreviewModal({
   onClose,
   formatPrice,
   formatDuration,
+  contacts,
+  cloneContactId,
+  onContactChange,
 }) {
   // Group items by dayNumber for the summary list. Items without a numeric
   // dayNumber go into a synthetic "Unscheduled" bucket so they're still
@@ -1341,32 +1422,45 @@ function TemplatePreviewModal({
           )}
         </div>
 
-        {/* Footer CTAs */}
-        <div
-          style={{
-            padding: 16,
-            display: 'flex',
-            justifyContent: 'flex-end',
-            gap: 8,
-          }}
-        >
-          <button
-            type="button"
-            onClick={onClose}
-            style={secondaryBtn}
-            data-testid="preview-close-footer-btn"
-          >
-            Close
-          </button>
-          <button
-            type="button"
-            onClick={onClone}
-            disabled={cloning}
-            style={cloning ? disabledBtn : primaryBtn}
-            data-testid="preview-clone-btn"
-          >
-            <Copy size={14} /> {cloning ? 'Cloning…' : 'Clone this template'}
-          </button>
+        {/* Footer — contact picker + CTAs */}
+        <div style={{ padding: '12px 16px', borderTop: '1px solid var(--border-color)' }}>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13, marginBottom: 12 }}>
+            <span style={{ color: 'var(--text-secondary)', fontWeight: 500 }}>
+              Assign to customer <span style={{ color: 'var(--accent-color)' }}>*</span>
+            </span>
+            <select
+              value={cloneContactId}
+              onChange={(e) => onContactChange(e.target.value)}
+              style={selectStyle}
+              data-testid="clone-contact-select"
+            >
+              <option value="">— pick a customer —</option>
+              {(contacts || []).map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name || c.email || `Contact #${c.id}`}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+            <button
+              type="button"
+              onClick={onClose}
+              style={secondaryBtn}
+              data-testid="preview-close-footer-btn"
+            >
+              Close
+            </button>
+            <button
+              type="button"
+              onClick={onClone}
+              disabled={cloning || !cloneContactId}
+              style={cloning || !cloneContactId ? disabledBtn : primaryBtn}
+              data-testid="preview-clone-btn"
+            >
+              <Copy size={14} /> {cloning ? 'Cloning…' : 'Clone this template'}
+            </button>
+          </div>
         </div>
       </div>
     </div>

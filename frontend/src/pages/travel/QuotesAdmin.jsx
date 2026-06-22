@@ -21,7 +21,8 @@
 //   server-side via getSubBrandAccessSet.
 
 import { useEffect, useState, useContext } from "react";
-import { Receipt, Plus, Pencil, Trash2 } from "lucide-react";
+import { Link } from "react-router-dom";
+import { Receipt, Plus, Pencil, Trash2, Calculator } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { usePermissions } from "../../hooks/usePermissions";
@@ -458,12 +459,23 @@ export default function QuotesAdmin() {
                           independent catalog actions (quotes.update vs
                           quotes.delete), so a role with update-only
                           shouldn't see Delete and vice-versa. */}
+                      {/* Open the FULL builder (plan trip, flight/hotel/transfer
+                          search, line + room editing) for this quote — the inline
+                          pencil only edits the header fields. */}
+                      <Link
+                        to={`/travel/quotes/builder/${q.id}`}
+                        title={`Open quote #${q.id} in the builder`}
+                        aria-label={`Open quote #${q.id} in the builder`}
+                        style={{ ...iconBtn, display: "inline-flex", textDecoration: "none", color: "var(--primary-color, var(--accent-color))" }}
+                      >
+                        <Calculator size={16} />
+                      </Link>
                       {canEdit && (
                         <button
                           type="button"
                           onClick={() => openEdit(q)}
-                          title={`Edit quote #${q.id}`}
-                          aria-label={`Edit quote #${q.id}`}
+                          title={`Quick-edit quote #${q.id} header`}
+                          aria-label={`Quick-edit quote #${q.id} header`}
                           style={iconBtn}
                         >
                           <Pencil size={16} />

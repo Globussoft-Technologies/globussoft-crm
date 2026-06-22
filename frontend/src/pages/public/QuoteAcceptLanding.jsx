@@ -36,7 +36,32 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
-import { CheckCircle2, AlertCircle, XCircle, MessageSquare } from "lucide-react";
+import { CheckCircle2, AlertCircle, XCircle, MessageSquare, Plane, Hotel, Car, Calendar, Ticket } from "lucide-react";
+import { DestinationHero, DestinationSideRails } from "../../components/DestinationVisuals";
+
+// Per-line icon so the customer view reads like a trip, not a spreadsheet.
+const LINE_ICON = { flight: Plane, hotel: Hotel, transport: Car, transfer: Car, visa: Ticket, service: Ticket };
+
+// Derive a destination for the hero photo/title from the quote's lines:
+// prefer hotel cities (from "Hotel, City — Room"), else a flight arrival city.
+function deriveDestination(lines) {
+  const cities = [];
+  for (const l of lines || []) {
+    if (l.lineType === "hotel" && l.description) {
+      const m = /,\s*([^—-]+?)\s*(?:—|-|$)/.exec(l.description);
+      const city = m && m[1] ? m[1].trim() : null;
+      if (city && !cities.includes(city)) cities.push(city);
+    }
+  }
+  if (cities.length) return { title: cities.join(" · "), photo: cities[0] };
+  for (const l of lines || []) {
+    if (l.lineType === "flight" && l.description) {
+      const m = /(?:→|->)\s*([A-Za-z .]+?)\s*(?:\(|\[|$)/.exec(l.description);
+      if (m && m[1]) return { title: m[1].trim(), photo: m[1].trim() };
+    }
+  }
+  return { title: "Your trip", photo: null };
+}
 
 const ACTION = Object.freeze({
   NONE: null,
@@ -57,6 +82,16 @@ function formatMoney(amount, currency = "INR") {
   } catch {
     return `${currency} ${num.toFixed(2)}`;
   }
+}
+
+// Customer-friendly qty label per line type (nights for hotels, travellers for
+// flights) — bare "×2" was confusing.
+function qtyLabel(l) {
+  const q = Number(l.quantity) || 1;
+  if (l.lineType === "hotel") return `Hotel · ${q} night${q === 1 ? "" : "s"}`;
+  if (l.lineType === "flight") return `Flight · ${q} traveller${q === 1 ? "" : "s"}`;
+  if (l.lineType === "transport") return "Transfer";
+  return l.lineType;
 }
 
 function formatDate(iso) {
@@ -119,7 +154,7 @@ export default function QuoteAcceptLanding() {
         if (cancelled) return;
         setData(body);
         setLoading(false);
-      } catch (e) {
+      } catch {
         if (cancelled) return;
         setError({ message: "Could not load this quote. Please try again later.", code: "NETWORK_ERROR" });
         setLoading(false);
@@ -176,7 +211,7 @@ export default function QuoteAcceptLanding() {
       const respBody = await r.json();
       setDone({ kind: respBody.status, ...respBody });
       setSubmitting(false);
-    } catch (e) {
+    } catch {
       setError({ message: "Network error — please try again.", code: "NETWORK_ERROR" });
       setSubmitting(false);
     }
@@ -231,47 +266,49 @@ export default function QuoteAcceptLanding() {
   const totalDisplay = quote?.totalAmount != null
     ? formatMoney(quote.totalAmount, quote.currency)
     : formatMoney(linesTotal, quote?.currency);
+  const dest = deriveDestination(lines);
 
   return (
     <div style={pageStyle}>
-      <div style={{ ...cardStyle, textAlign: "left" }}>
-        <header style={{ marginBottom: 24 }}>
-          <h1 style={{ ...headingStyle, textAlign: "left" }}>Your quote</h1>
-          {customer?.name && (
-            <p style={{ color: "var(--text-muted, #6b7280)", marginTop: 6 }}>
-              For <strong>{customer.name}</strong>
-            </p>
-          )}
-          <p style={{ color: "var(--text-muted, #6b7280)", marginTop: 6 }}>
-            Quote #{quote.id} · Valid until {formatDate(quote.validUntil)}
-          </p>
-        </header>
+      {/* Culture photos in the wide desktop gutters (keyless Wikipedia). */}
+      <DestinationSideRails destination={dest.title} photoDestination={dest.photo} />
+      <div style={{ ...cardStyle, textAlign: "left", padding: 0, overflow: "hidden" }}>
+        {/* Destination hero — real photo + themed gradient, swaps with the trip. */}
+        <DestinationHero destination={dest.title} photoDestination={dest.photo}>
+          <Calendar size={14} aria-hidden style={{ verticalAlign: -2, marginRight: 4 }} />
+          Quote #{quote.id} · Valid until {formatDate(quote.validUntil)}
+          {customer?.name ? ` · For ${customer.name}` : ""}
+        </DestinationHero>
 
-        <section aria-label="Line items" style={{ marginBottom: 24 }}>
-          <div style={lineTableStyle}>
-            <div style={{ ...lineRowStyle, fontWeight: 600, borderBottom: "1px solid var(--border-color, #e5e7eb)" }}>
-              <span>Description</span>
-              <span style={{ textAlign: "right" }}>Quantity</span>
-              <span style={{ textAlign: "right" }}>Amount</span>
-            </div>
+        <div style={{ padding: "0 32px 32px" }}>
+          <section aria-label="What's included" style={{ marginBottom: 24 }}>
+            <h2 style={{ ...subHeadingStyle, marginTop: 8 }}>Your trip includes</h2>
             {lines.length === 0 ? (
-              <div style={{ ...lineRowStyle, color: "var(--text-muted, #6b7280)" }}>
-                No line items.
-              </div>
-            ) : lines.map((l) => (
-              <div key={l.id} style={lineRowStyle}>
-                <span>{l.description}</span>
-                <span style={{ textAlign: "right" }}>{l.quantity}</span>
-                <span style={{ textAlign: "right" }}>{formatMoney(l.amount, l.currency || quote.currency)}</span>
-              </div>
-            ))}
-            <div style={{ ...lineRowStyle, fontWeight: 700, borderTop: "1px solid var(--border-color, #e5e7eb)", marginTop: 8, paddingTop: 12 }}>
-              <span>Total</span>
-              <span />
-              <span style={{ textAlign: "right" }}>{totalDisplay}</span>
+              <p style={{ color: "var(--text-muted, #6b7280)" }}>No line items on this quote yet.</p>
+            ) : (
+              <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "grid", gap: 10 }}>
+                {lines.map((l) => {
+                  const Icon = LINE_ICON[l.lineType] || Ticket;
+                  return (
+                    <li key={l.id} style={itemRowStyle}>
+                      <Icon size={18} aria-hidden style={{ color: "var(--primary-color, #2563eb)", flexShrink: 0 }} />
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontWeight: 600, color: "#111827" }}>{l.description}</div>
+                        <div style={{ fontSize: 12, color: "var(--text-muted, #6b7280)" }}>
+                          {qtyLabel(l)}
+                        </div>
+                      </div>
+                      <div style={{ fontWeight: 700, whiteSpace: "nowrap", color: "#111827" }}>{formatMoney(l.amount, l.currency || quote.currency)}</div>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+            <div style={costBoxStyle}>
+              <span style={{ fontSize: 16, fontWeight: 700 }}>Total</span>
+              <span style={{ fontSize: 18, fontWeight: 800, color: "var(--primary-color, #2563eb)" }}>{totalDisplay}</span>
             </div>
-          </div>
-        </section>
+          </section>
 
         {error && (
           <div role="alert" style={errorBoxStyle}>
@@ -322,7 +359,7 @@ export default function QuoteAcceptLanding() {
               />
             </label>
             <label style={labelStyle}>
-              Anything you'd like to add? (optional)
+              Anything you&apos;d like to add? (optional)
               <textarea
                 value={customerNote}
                 onChange={(e) => setCustomerNote(e.target.value)}
@@ -399,6 +436,7 @@ export default function QuoteAcceptLanding() {
             </div>
           </section>
         )}
+        </div>
       </div>
     </div>
   );
@@ -434,18 +472,28 @@ const subHeadingStyle = {
   fontSize: 20,
   fontWeight: 600,
   margin: "0 0 16px 0",
+  color: "#111827",
 };
 
-const lineTableStyle = {
-  display: "grid",
-  gap: 4,
-};
-
-const lineRowStyle = {
-  display: "grid",
-  gridTemplateColumns: "1fr 120px 160px",
+const itemRowStyle = {
+  display: "flex",
+  alignItems: "center",
   gap: 12,
-  padding: "10px 0",
+  padding: "12px 14px",
+  border: "1px solid var(--border-color, #e5e7eb)",
+  borderRadius: 10,
+  background: "var(--card-bg, #fff)",
+};
+
+const costBoxStyle = {
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "center",
+  marginTop: 16,
+  padding: "14px 16px",
+  background: "var(--bg-color, #f7f3eb)",
+  borderRadius: 12,
+  border: "1px solid var(--border-color, #e5e7eb)",
 };
 
 const actionGridStyle = {

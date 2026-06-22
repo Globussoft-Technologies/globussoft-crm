@@ -1160,7 +1160,11 @@ function MicrositeEditor({ trip, ms, onChange, notify }) {
   const [unpublishing, setUnpublishing] = useState(false);
   const [previewing, setPreviewing] = useState(false);
 
-  const publicUrl = `${window.location.origin}/api/travel/microsites/public/${ms.publicUuid}`;
+  // Public-facing microsite is the rendered PAGE (PublicTripMicrosite, routed
+  // at /p/tripmicrosite/:publicUuid) — NOT the raw JSON API endpoint. The page
+  // fetches /api/travel/microsites/public/:uuid itself; linking parents at the
+  // API would show them raw JSON.
+  const publicUrl = `${window.location.origin}/p/tripmicrosite/${ms.publicUuid}`;
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(publicUrl);

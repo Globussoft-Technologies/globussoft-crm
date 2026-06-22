@@ -175,6 +175,11 @@ describe('llmRouter — module shape', () => {
       "whatsapp-lead-qualify": { primary: "gemini-flash", fallback: "claude-haiku" },
       "marketing-flyer-copy": { primary: "gemini-flash", fallback: "claude-haiku" },
       "marketing-flyer-image": { primary: "dall-e-3", fallback: "stability-xl" },
+      // TBO flight/hotel web-grounded search fallback.
+      "flight-search": { primary: "perplexity-sonar", fallback: "gemini-flash" },
+      "hotel-search": { primary: "perplexity-sonar", fallback: "gemini-flash" },
+      // Airport/city name → IATA resolver for the flight search box (2026-06-19).
+      "airport-iata": { primary: "gemini-flash", fallback: "claude-haiku" },
     });
   });
 
@@ -187,8 +192,9 @@ describe('llmRouter — module shape', () => {
     // 'itinerary-suggest' (S14) + FR-3.6.1's 'marketing-flyer-copy' (S15)
     // + FR-3.6.3's 'marketing-flyer-image' (S16) + the 2026-06-16 travel
     // notification engines 'trip-countdown' + 'payment-reminder' + the
-    // 2026-06-19 'whatsapp-lead-qualify' WhatsApp auto-lead task = 13.
-    expect(r.VALID_TASKS).toHaveLength(13);
+    // 2026-06-19 'whatsapp-lead-qualify' + TBO 'flight-search' / 'hotel-search'
+    // + the 'airport-iata' name→code resolver = 16.
+    expect(r.VALID_TASKS).toHaveLength(16);
   });
 });
 

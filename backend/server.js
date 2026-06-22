@@ -1076,6 +1076,8 @@ app.use("/api/travel", travelTripBillingRoutes);
 app.use("/api/travel", travelWebcheckinRoutes);
 app.use("/api/travel", travelTravelStallRoutes);
 app.use("/api/travel", require("./routes/travel_inbound_leads"));
+// TBO flight/hotel SEARCH (quote builder) — literal /search/* paths, data-only.
+app.use("/api/travel", require("./routes/travel_search"));
 // PRD_TRAVEL_MULTICHANNEL_LEADS G015 — canonical body-channel alias.
 // Routes to /api/leads/intake; the alias router forwards to the legacy
 // /api/travel/inbound/leads/:channel handler so both surfaces share one

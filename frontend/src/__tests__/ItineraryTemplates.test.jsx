@@ -1372,6 +1372,7 @@ describe('<ItineraryTemplates /> — G061 preview-before-clone modal', () => {
 
   it('clicking "Clone this template" POSTs /api/travel/itineraries with clonedFromTemplateId', async () => {
     const previewable = makePreviewableTemplate();
+    const cloneContacts = [{ id: 555, name: 'Test Customer', email: 'tc@example.com' }];
     fetchApiMock.mockImplementation((url, opts) => {
       const method = opts?.method || 'GET';
       if (url.startsWith('/api/travel/itinerary-templates?') && method === 'GET') {
@@ -1382,6 +1383,9 @@ describe('<ItineraryTemplates /> — G061 preview-before-clone modal', () => {
           offset: 0,
         });
       }
+      if (url === '/api/contacts?limit=200' && method === 'GET') {
+        return Promise.resolve(cloneContacts);
+      }
       if (url === '/api/travel/itineraries' && method === 'POST') {
         return Promise.resolve({ id: 9999, title: previewable.name });
       }
@@ -1390,8 +1394,15 @@ describe('<ItineraryTemplates /> — G061 preview-before-clone modal', () => {
     renderPage();
     await screen.findByText('Goa Beach 4-day');
     fireEvent.click(screen.getByTestId('preview-tpl-5001'));
-    await screen.findByTestId('template-preview-modal');
+    const modal = await screen.findByTestId('template-preview-modal');
 
+    // Pick a customer — the clone CTA is disabled until cloneContactId is set.
+    await waitFor(() => {
+      expect(within(modal).getByTestId('clone-contact-select').options.length).toBeGreaterThan(1);
+    });
+    fireEvent.change(within(modal).getByTestId('clone-contact-select'), {
+      target: { value: '555' },
+    });
     fireEvent.click(screen.getByTestId('preview-clone-btn'));
 
     await waitFor(() => {
@@ -1402,8 +1413,9 @@ describe('<ItineraryTemplates /> — G061 preview-before-clone modal', () => {
       const body = JSON.parse(post[1].body);
       expect(body.clonedFromTemplateId).toBe(5001);
       expect(body.title).toBe('Goa Beach 4-day');
-      expect(body.destinationName).toBe('Goa');
+      expect(body.destination).toBe('Goa');
       expect(body.durationDays).toBe(4);
+      expect(body.contactId).toBe(555);
     });
     await waitFor(() => {
       expect(notifySuccess).toHaveBeenCalledWith(
@@ -1414,6 +1426,7 @@ describe('<ItineraryTemplates /> — G061 preview-before-clone modal', () => {
 
   it('clone failure surfaces notify.error and leaves modal open', async () => {
     const previewable = makePreviewableTemplate();
+    const cloneContacts = [{ id: 555, name: 'Test Customer', email: 'tc@example.com' }];
     const cloneErr = new Error('Cannot clone');
     cloneErr.body = { error: 'Sub-brand forbidden' };
     fetchApiMock.mockImplementation((url, opts) => {
@@ -1426,6 +1439,9 @@ describe('<ItineraryTemplates /> — G061 preview-before-clone modal', () => {
           offset: 0,
         });
       }
+      if (url === '/api/contacts?limit=200' && method === 'GET') {
+        return Promise.resolve(cloneContacts);
+      }
       if (url === '/api/travel/itineraries' && method === 'POST') {
         return Promise.reject(cloneErr);
       }
@@ -1434,8 +1450,14 @@ describe('<ItineraryTemplates /> — G061 preview-before-clone modal', () => {
     renderPage();
     await screen.findByText('Goa Beach 4-day');
     fireEvent.click(screen.getByTestId('preview-tpl-5001'));
-    await screen.findByTestId('template-preview-modal');
+    const modal = await screen.findByTestId('template-preview-modal');
 
+    await waitFor(() => {
+      expect(within(modal).getByTestId('clone-contact-select').options.length).toBeGreaterThan(1);
+    });
+    fireEvent.change(within(modal).getByTestId('clone-contact-select'), {
+      target: { value: '555' },
+    });
     fireEvent.click(screen.getByTestId('preview-clone-btn'));
 
     await waitFor(() => {

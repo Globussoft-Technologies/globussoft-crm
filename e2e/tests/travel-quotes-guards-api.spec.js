@@ -6,12 +6,10 @@
  * Route: backend/routes/travel_quotes.js.
  *
  * 1. PRD §4.1 diagnostic-first guard on POST /api/travel/quotes:
- *    a contact with no completed TravelDiagnostic for (tenant, contact,
- *    subBrand) → 422 DIAGNOSTIC_REQUIRED. Mirrors the itinerary guard's
- *    semantics (row existence per subBrand counts; no bypass), but on the
- *    quote surface the status is 422 (well-formed + authorised request,
- *    unmet business precondition) — the itinerary surface keeps its
- *    historical 403.
+ *    HISTORICAL — the quote surface no longer enforces a completed
+ *    TravelDiagnostic before quote creation (nexus-DMC flow, 2026-06-22).
+ *    The itinerary surface still enforces the guard. The spec below pins
+ *    the new permissive contract so the change does not regress.
  *
  * 2. PRD §4.4 Visa Sure complexity gate:
  *    - body.quoteMode is request-level only ("manual"|"structured",
@@ -266,10 +264,10 @@ test.describe("Travel quotes guards — auth + vertical", () => {
   });
 });
 
-// ─── PRD §4.1 diagnostic-first guard (gap A9a) ──────────────────────
+// ─── PRD §4.1 diagnostic-first guard (historical / disabled for quotes) ─
 
-test.describe("Travel quotes guards — diagnostic-first (PRD §4.1)", () => {
-  test("contact without a diagnostic → 422 DIAGNOSTIC_REQUIRED", async ({ request }) => {
+test.describe("Travel quotes guards — diagnostic no longer required", () => {
+  test("contact without a diagnostic → 201 (guard removed for quote creation)", async ({ request }) => {
     const token = await getTravelAdmin(request);
     if (!token || !contactNoDiagId) test.skip(true, "travel admin / fixture contact unavailable");
     const r = await post(request, token, "/api/travel/quotes", {
@@ -278,24 +276,28 @@ test.describe("Travel quotes guards — diagnostic-first (PRD §4.1)", () => {
       currency: "INR",
       subBrand: "tmc",
     });
-    expect(r.status(), `expected 422, got ${r.status()}: ${await r.text()}`).toBe(422);
-    expect((await r.json()).code).toBe("DIAGNOSTIC_REQUIRED");
+    expect(r.status(), `expected 201, got ${r.status()}: ${await r.text()}`).toBe(201);
+    const body = await r.json();
+    expect(body.id).toBeTruthy();
+    createdQuoteIds.push(body.id);
   });
 
-  test("diagnostic exists for tmc but quote targets rfu → 422 (per-subBrand match)", async ({ request }) => {
+  test("diagnostic exists for tmc but quote targets rfu → 201 (per-subBrand match not enforced)", async ({ request }) => {
     const token = await getTravelAdmin(request);
     if (!token || !contactWithDiagId) test.skip(true, "travel admin / fixture contact unavailable");
     const r = await post(request, token, "/api/travel/quotes", {
       contactId: contactWithDiagId,
       totalAmount: 1000,
       currency: "INR",
-      subBrand: "rfu", // diagnostic was submitted for tmc — must NOT satisfy rfu
+      subBrand: "rfu", // diagnostic was submitted for tmc, but quotes no longer enforce the match
     });
-    expect(r.status()).toBe(422);
-    expect((await r.json()).code).toBe("DIAGNOSTIC_REQUIRED");
+    expect(r.status(), `expected 201, got ${r.status()}: ${await r.text()}`).toBe(201);
+    const body = await r.json();
+    expect(body.id).toBeTruthy();
+    createdQuoteIds.push(body.id);
   });
 
-  test("contact WITH a matching diagnostic → 201 (guard passes; non-visasure shape unchanged)", async ({ request }) => {
+  test("contact WITH a matching diagnostic → 201 (non-visasure shape unchanged)", async ({ request }) => {
     const token = await getTravelAdmin(request);
     if (!token || !contactWithDiagId) test.skip(true, "travel admin / fixture contact unavailable");
     const r = await post(request, token, "/api/travel/quotes", {

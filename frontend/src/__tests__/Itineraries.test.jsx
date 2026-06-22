@@ -351,9 +351,15 @@ beforeEach(() => {
   navigateMock.mockReset();
   mapPreviewMock.mockReset();
   installFetchMock();
+  // S81 — the page geocodes destination words via global fetch to Nominatim
+  // when an itinerary has no pinnable items. Stub it to an empty response so
+  // the effect falls back to the raw items without leaving network I/O hanging
+  // in jsdom (which would keep mapItems === [] until timeout).
+  vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({ ok: true, json: () => Promise.resolve([]) })));
 });
 
 afterEach(() => {
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 
@@ -796,7 +802,7 @@ describe('<Itineraries /> — S63 Suggest itinerary CTA + modal', () => {
     ).toBeInTheDocument();
     expect(screen.getByRole('dialog')).toHaveAttribute('aria-modal', 'true');
     // Form fields present.
-    expect(screen.getByLabelText(/Destination/i)).toBeInTheDocument();
+    expect(within(screen.getByRole('dialog')).getByLabelText('Destination')).toBeInTheDocument();
     expect(screen.getByLabelText(/Duration \(days\)/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Budget tier/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Interests/i)).toBeInTheDocument();
@@ -863,7 +869,7 @@ describe('<Itineraries /> — S63 Suggest itinerary CTA + modal', () => {
       screen.getByRole('button', { name: /Suggest itinerary using AI/i }),
     );
     await screen.findByRole('heading', { name: /Suggest itinerary/i });
-    fireEvent.change(screen.getByLabelText(/Destination/i), {
+    fireEvent.change(within(screen.getByRole('dialog')).getByLabelText('Destination'), {
       target: { value: 'Goa' },
     });
     fireEvent.change(screen.getByLabelText(/Duration \(days\)/i), {
@@ -890,7 +896,7 @@ describe('<Itineraries /> — S63 Suggest itinerary CTA + modal', () => {
       screen.getByRole('button', { name: /Suggest itinerary using AI/i }),
     );
     await screen.findByRole('heading', { name: /Suggest itinerary/i });
-    fireEvent.change(screen.getByLabelText(/Destination/i), {
+    fireEvent.change(within(screen.getByRole('dialog')).getByLabelText('Destination'), {
       target: { value: 'Goa' },
     });
     fireEvent.change(screen.getByLabelText(/Interests/i), {
@@ -922,7 +928,7 @@ describe('<Itineraries /> — S63 Suggest itinerary CTA + modal', () => {
       screen.getByRole('button', { name: /Suggest itinerary using AI/i }),
     );
     await screen.findByRole('heading', { name: /Suggest itinerary/i });
-    fireEvent.change(screen.getByLabelText(/Destination/i), {
+    fireEvent.change(within(screen.getByRole('dialog')).getByLabelText('Destination'), {
       target: { value: '  Goa  ' },
     });
     fireEvent.change(screen.getByLabelText(/Duration \(days\)/i), {
@@ -955,7 +961,7 @@ describe('<Itineraries /> — S63 Suggest itinerary CTA + modal', () => {
       screen.getByRole('button', { name: /Suggest itinerary using AI/i }),
     );
     await screen.findByRole('heading', { name: /Suggest itinerary/i });
-    fireEvent.change(screen.getByLabelText(/Destination/i), {
+    fireEvent.change(within(screen.getByRole('dialog')).getByLabelText('Destination'), {
       target: { value: 'Goa' },
     });
     fetchApiMock.mockClear();
@@ -982,7 +988,7 @@ describe('<Itineraries /> — S63 Suggest itinerary CTA + modal', () => {
       screen.getByRole('button', { name: /Suggest itinerary using AI/i }),
     );
     await screen.findByRole('heading', { name: /Suggest itinerary/i });
-    fireEvent.change(screen.getByLabelText(/Destination/i), {
+    fireEvent.change(within(screen.getByRole('dialog')).getByLabelText('Destination'), {
       target: { value: 'Goa' },
     });
     // Install a fetch that hangs so we can observe the loading state.
@@ -1019,7 +1025,7 @@ describe('<Itineraries /> — S63 Suggest itinerary CTA + modal', () => {
       screen.getByRole('button', { name: /Suggest itinerary using AI/i }),
     );
     await screen.findByRole('heading', { name: /Suggest itinerary/i });
-    fireEvent.change(screen.getByLabelText(/Destination/i), {
+    fireEvent.change(within(screen.getByRole('dialog')).getByLabelText('Destination'), {
       target: { value: 'Goa' },
     });
     installSuggestMock();
@@ -1056,7 +1062,7 @@ describe('<Itineraries /> — S63 Suggest itinerary CTA + modal', () => {
       screen.getByRole('button', { name: /Suggest itinerary using AI/i }),
     );
     await screen.findByRole('heading', { name: /Suggest itinerary/i });
-    fireEvent.change(screen.getByLabelText(/Destination/i), {
+    fireEvent.change(within(screen.getByRole('dialog')).getByLabelText('Destination'), {
       target: { value: 'Goa' },
     });
     installSuggestMock();
@@ -1145,7 +1151,7 @@ describe('<Itineraries /> — S90 materialise-from-suggestion', () => {
       screen.getByRole('button', { name: /Suggest itinerary using AI/i }),
     );
     await screen.findByRole('heading', { name: /Suggest itinerary/i });
-    fireEvent.change(screen.getByLabelText(/Destination/i), {
+    fireEvent.change(within(screen.getByRole('dialog')).getByLabelText('Destination'), {
       target: { value: 'Goa' },
     });
     fireEvent.click(screen.getByRole('button', { name: /^Suggest$/ }));
@@ -1364,7 +1370,7 @@ describe('<Itineraries /> — S90 materialise-from-suggestion', () => {
       screen.getByRole('button', { name: /Suggest itinerary using AI/i }),
     );
     await screen.findByRole('heading', { name: /Suggest itinerary/i });
-    fireEvent.change(screen.getByLabelText(/Destination/i), {
+    fireEvent.change(within(screen.getByRole('dialog')).getByLabelText('Destination'), {
       target: { value: 'Goa' },
     });
     installSuggestMock();
@@ -1387,7 +1393,7 @@ describe('<Itineraries /> — S90 materialise-from-suggestion', () => {
       screen.getByRole('button', { name: /Suggest itinerary using AI/i }),
     );
     await screen.findByRole('heading', { name: /Suggest itinerary/i });
-    fireEvent.change(screen.getByLabelText(/Destination/i), {
+    fireEvent.change(within(screen.getByRole('dialog')).getByLabelText('Destination'), {
       target: { value: 'Goa' },
     });
     const err = new Error('Suggest failed');
@@ -1419,7 +1425,7 @@ describe('<Itineraries /> — S90 materialise-from-suggestion', () => {
       screen.getByRole('button', { name: /Suggest itinerary using AI/i }),
     );
     await screen.findByRole('heading', { name: /Suggest itinerary/i });
-    fireEvent.change(screen.getByLabelText(/Destination/i), {
+    fireEvent.change(within(screen.getByRole('dialog')).getByLabelText('Destination'), {
       target: { value: 'Goa' },
     });
     // Custom shape: suggestion present but no days[] → fall through to the
@@ -1610,9 +1616,15 @@ describe('<Itineraries /> — S81 MapPreview wire-in (list page)', () => {
       screen.getByRole('button', { name: /Show map for Schengen visa/i }),
     );
     await screen.findByTestId('itineraries-selected-map');
-    const lastCall = mapPreviewMock.mock.calls[mapPreviewMock.mock.calls.length - 1];
-    const props = lastCall[0];
-    expect(props.items.length).toBe(1);
-    expect(props.items[0].id).toBe(9006);
+    // The SUT geocodes the destination words asynchronously when no item
+    // has coordinates. Wait for the fallback to settle back to the raw
+    // itinerary items (Nominatim is not mocked, so geocodeCity returns
+    // null and the effect falls back to `raw`).
+    await waitFor(() => {
+      const lastCall = mapPreviewMock.mock.calls[mapPreviewMock.mock.calls.length - 1];
+      const props = lastCall[0];
+      expect(props.items.length).toBe(1);
+      expect(props.items[0].id).toBe(9006);
+    });
   });
 });

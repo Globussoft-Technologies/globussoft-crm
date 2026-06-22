@@ -1038,7 +1038,6 @@ describe('TravelCustomerPortal — My Visa (FR-5/FR-6 self-serve)', () => {
 
   test('cancel flow: cancelling a docs-pending application removes it (returns to the start form)', async () => {
     let deleted = false;
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
     globalThis.fetch = vi.fn(
       withDashboardDefaults((url, opts) => {
         if (url.includes('/portal/travel/visa/applications/') && opts && opts.method === 'DELETE') {
@@ -1064,6 +1063,10 @@ describe('TravelCustomerPortal — My Visa (FR-5/FR-6 self-serve)', () => {
 
     expect(await screen.findByTestId('visa-application-7')).toBeInTheDocument();
     fireEvent.click(screen.getByTestId('visa-cancel-7'));
+
+    // The SUT now uses an inline confirmation modal instead of window.confirm().
+    expect(await screen.findByTestId('visa-cancel-confirm-ok')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('visa-cancel-confirm-ok'));
 
     await waitFor(() => {
       const del = globalThis.fetch.mock.calls.find(

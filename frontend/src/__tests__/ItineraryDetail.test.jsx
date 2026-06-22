@@ -1111,14 +1111,17 @@ describe("ItineraryDetail — regen stub label + form validation", () => {
 // the assertions read the body the SUT actually built.
 describe("ItineraryDetail — S82 geocode-on-create", () => {
   it("calls geocode(description) and posts the resolved lat/lng when no manual coords", async () => {
-    geocodeMock.mockResolvedValueOnce({
+    fetchApiMock.mockImplementation(makeFetchImpl(ITIN_WITH_ITEMS));
+    renderPage();
+    await screen.findByRole('heading', { name: /Goa school trip/ });
+    // The SUT geocodes the destination on mount; clear that call so the
+    // assertions below only see the item-description geocode.
+    geocodeMock.mockClear();
+    geocodeMock.mockResolvedValue({
       lat: 15.4909,
       lng: 73.8278,
       display_name: "Goa, India",
     });
-    fetchApiMock.mockImplementation(makeFetchImpl(ITIN_WITH_ITEMS));
-    renderPage();
-    await screen.findByText(/Goa school trip/);
 
     fireEvent.click(screen.getByRole("button", { name: /^Add item$/i }));
     fireEvent.change(screen.getByPlaceholderText(/IndiGo 6E-237/i), {
@@ -1144,7 +1147,8 @@ describe("ItineraryDetail — S82 geocode-on-create", () => {
   it("does NOT call geocode() when description is blank (early guard fires first)", async () => {
     fetchApiMock.mockImplementation(makeFetchImpl(ITIN_WITH_ITEMS));
     renderPage();
-    await screen.findByText(/Goa school trip/);
+    await screen.findByRole('heading', { name: /Goa school trip/ });
+    geocodeMock.mockClear();
 
     fireEvent.click(screen.getByRole("button", { name: /^Add item$/i }));
     // Type whitespace only → addItem's early validation rejects on
@@ -1169,7 +1173,8 @@ describe("ItineraryDetail — S82 geocode-on-create", () => {
   it("does NOT call geocode() when the user has never entered any description (initial blank)", async () => {
     fetchApiMock.mockImplementation(makeFetchImpl(ITIN_WITH_ITEMS));
     renderPage();
-    await screen.findByText(/Goa school trip/);
+    await screen.findByRole('heading', { name: /Goa school trip/ });
+    geocodeMock.mockClear();
 
     fireEvent.click(screen.getByRole("button", { name: /^Add item$/i }));
     // Click Save without touching description at all.
@@ -1184,10 +1189,11 @@ describe("ItineraryDetail — S82 geocode-on-create", () => {
   });
 
   it("posts WITHOUT lat/lng when geocode() returns null (no match)", async () => {
-    geocodeMock.mockResolvedValueOnce(null);
     fetchApiMock.mockImplementation(makeFetchImpl(ITIN_WITH_ITEMS));
     renderPage();
-    await screen.findByText(/Goa school trip/);
+    await screen.findByRole('heading', { name: /Goa school trip/ });
+    geocodeMock.mockClear();
+    geocodeMock.mockResolvedValue(null);
 
     fireEvent.click(screen.getByRole("button", { name: /^Add item$/i }));
     fireEvent.change(screen.getByPlaceholderText(/IndiGo 6E-237/i), {
@@ -1213,10 +1219,11 @@ describe("ItineraryDetail — S82 geocode-on-create", () => {
   });
 
   it("posts WITHOUT lat/lng when geocode() throws (network outage fail-soft)", async () => {
-    geocodeMock.mockRejectedValueOnce(new Error("network down"));
     fetchApiMock.mockImplementation(makeFetchImpl(ITIN_WITH_ITEMS));
     renderPage();
-    await screen.findByText(/Goa school trip/);
+    await screen.findByRole('heading', { name: /Goa school trip/ });
+    geocodeMock.mockClear();
+    geocodeMock.mockRejectedValue(new Error("network down"));
 
     fireEvent.click(screen.getByRole("button", { name: /^Add item$/i }));
     fireEvent.change(screen.getByPlaceholderText(/IndiGo 6E-237/i), {
@@ -1243,18 +1250,19 @@ describe("ItineraryDetail — S82 geocode-on-create", () => {
   });
 
   it("disables the Save button while geocode() is in flight (loading state)", async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl(ITIN_WITH_ITEMS));
+    renderPage();
+    await screen.findByRole('heading', { name: /Goa school trip/ });
+    geocodeMock.mockClear();
     // Hold the geocode promise open so we can assert the disabled state
     // mid-flight. Resolve it manually at the end so the test cleans up.
     let resolveGeocode;
-    geocodeMock.mockImplementationOnce(
+    geocodeMock.mockImplementation(
       () =>
         new Promise((resolve) => {
           resolveGeocode = resolve;
         }),
     );
-    fetchApiMock.mockImplementation(makeFetchImpl(ITIN_WITH_ITEMS));
-    renderPage();
-    await screen.findByText(/Goa school trip/);
 
     fireEvent.click(screen.getByRole("button", { name: /^Add item$/i }));
     fireEvent.change(screen.getByPlaceholderText(/IndiGo 6E-237/i), {

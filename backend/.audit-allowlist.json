@@ -65,6 +65,87 @@
       "reason": "Surfaced after PR #769 + #819 brought in new transitive deps that re-pinned the vulnerable sanitize-html 2.x line. The CVE allows a caller passing a crafted `disallowedTagsMode` option value to bypass tag stripping. Our two callsites (backend/middleware/security.js sanitizeBody + backend/lib/sanitizeJson.js) build their config object from literals under our own control — neither accepts user-supplied options. Both run AFTER express.json() parses the request body, so an attacker cannot inject an options object via the wire. No fix available in 2.x; upstream 3.x is a breaking API change. Long-term: upgrade to sanitize-html 3.x in a focused PR that re-validates every callsite.",
       "addedOn": "2026-05-19",
       "sunsetBy": "2026-08-19"
+    },
+    {
+      "ghsa": "GHSA-wgrm-67xf-hhpq",
+      "package": "pdfjs-dist",
+      "severity": "high",
+      "title": "PDF.js vulnerable to arbitrary JavaScript execution upon opening a malicious PDF",
+      "reason": "Server-side use in pdfRenderer, passportOcrClient, and marketing-flyer rendering. Input PDFs are either trusted admin-authored templates or authenticated customer-uploaded identity documents. Upgrading to pdfjs-dist 6.x is a breaking API change; tracked for focused follow-up.",
+      "addedOn": "2026-06-16",
+      "sunsetBy": "2026-09-16"
+    },
+    {
+      "ghsa": "GHSA-34x7-hfp2-rc4v",
+      "package": "tar",
+      "severity": "high",
+      "title": "node-tar arbitrary file creation/overwrite via hardlink path traversal",
+      "reason": "Transitive via @mapbox/node-pre-gyp, which only extracts prebuilt canvas binaries during `npm install`. The extraction surface is install-time only and the tarballs come from trusted upstream registries, so runtime exposure is zero.",
+      "addedOn": "2026-06-16",
+      "sunsetBy": "2026-09-16"
+    },
+    {
+      "ghsa": "GHSA-8qq5-rm4j-mr97",
+      "package": "tar",
+      "severity": "high",
+      "title": "node-tar arbitrary file overwrite and symlink poisoning via insufficient path sanitization",
+      "reason": "Transitive via @mapbox/node-pre-gyp at install-time only; same mitigation as GHSA-34x7-hfp2-rc4v.",
+      "addedOn": "2026-06-16",
+      "sunsetBy": "2026-09-16"
+    },
+    {
+      "ghsa": "GHSA-83g3-92jg-28cx",
+      "package": "tar",
+      "severity": "high",
+      "title": "node-tar arbitrary file read/write via hardlink target escape through symlink chain",
+      "reason": "Transitive via @mapbox/node-pre-gyp at install-time only; same mitigation as GHSA-34x7-hfp2-rc4v.",
+      "addedOn": "2026-06-16",
+      "sunsetBy": "2026-09-16"
+    },
+    {
+      "ghsa": "GHSA-qffp-2rhf-9h96",
+      "package": "tar",
+      "severity": "high",
+      "title": "node-tar hardlink path traversal via drive-relative linkpath",
+      "reason": "Transitive via @mapbox/node-pre-gyp at install-time only; same mitigation as GHSA-34x7-hfp2-rc4v.",
+      "addedOn": "2026-06-16",
+      "sunsetBy": "2026-09-16"
+    },
+    {
+      "ghsa": "GHSA-9ppj-qmqm-q256",
+      "package": "tar",
+      "severity": "high",
+      "title": "node-tar symlink path traversal via drive-relative linkpath",
+      "reason": "Transitive via @mapbox/node-pre-gyp at install-time only; same mitigation as GHSA-34x7-hfp2-rc4v.",
+      "addedOn": "2026-06-16",
+      "sunsetBy": "2026-09-16"
+    },
+    {
+      "ghsa": "GHSA-r6q2-hw4h-h46w",
+      "package": "tar",
+      "severity": "high",
+      "title": "node-tar path reservation race condition via Unicode ligature collisions on macOS APFS",
+      "reason": "Transitive via @mapbox/node-pre-gyp at install-time only; same mitigation as GHSA-34x7-hfp2-rc4v.",
+      "addedOn": "2026-06-16",
+      "sunsetBy": "2026-09-16"
+    },
+    {
+      "ghsa": "GHSA-vmf3-w455-68vh",
+      "package": "tar",
+      "severity": "high",
+      "title": "node-tar PAX size override causing file smuggling via GNU long-name/link headers",
+      "reason": "Transitive via @mapbox/node-pre-gyp at install-time only; same mitigation as GHSA-34x7-hfp2-rc4v.",
+      "addedOn": "2026-06-16",
+      "sunsetBy": "2026-09-16"
+    },
+    {
+      "ghsa": null,
+      "package": "@mapbox/node-pre-gyp",
+      "severity": "high",
+      "title": "Transitive: depends on vulnerable tar",
+      "reason": "Install-time dependency of canvas used to fetch prebuilt binaries. The underlying tar advisories are allowlisted above; runtime exposure is zero.",
+      "addedOn": "2026-06-16",
+      "sunsetBy": "2026-09-16"
     }
   ]
 }

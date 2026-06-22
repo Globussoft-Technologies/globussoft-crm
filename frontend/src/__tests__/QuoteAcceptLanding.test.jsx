@@ -23,6 +23,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
+
+// DestinationVisuals fire keyless Wikipedia fetches via global fetch. For the
+// C9 quote-action tests we only care about the quote envelope + action POSTs,
+// so stub the visual wrappers to keep the fetch call-count deterministic.
+vi.mock('../components/DestinationVisuals', () => ({
+  DestinationHero: ({ children }) => children,
+  DestinationSideRails: () => null,
+}));
+
 import QuoteAcceptLanding from '../pages/public/QuoteAcceptLanding';
 
 function makeEnvelope(over = {}) {

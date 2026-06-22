@@ -15,35 +15,84 @@ if (typeof globalThis.__APP_GIT_SHA__ === 'undefined') {
 
 // Node 24/25 ships an experimental Web Storage API that leaves
 // `globalThis.localStorage` / `globalThis.sessionStorage` undefined unless
-// `--localstorage-file` is provided. Vitest's jsdom environment exposes them
-// on `window`, but tests written against the bare globals can see `undefined`
-// and crash. Capture the jsdom Storage instances once and keep the globals
-// pinned to them for the lifetime of the test process.
-const domLocalStorage = typeof window !== 'undefined' ? window.localStorage : undefined;
-const domSessionStorage = typeof window !== 'undefined' ? window.sessionStorage : undefined;
+// `--localstorage-file` is provided. Vitest's jsdom environment sometimes
+// exposes them on `window`, but when Node's accessor wins we end up with
+// bare `undefined` and tests crash on localStorage.clear()/setItem().
+// Provide a minimal in-memory Storage polyfill and force it onto both
+// `globalThis` and `window` so every test file sees a working Web Storage API.
+//
+// The polyfill stores values as enumerable string properties so that
+// `Object.keys(localStorage)` and `for...in` iteration work the same way
+// jsdom's native Storage does (some tests assert localStorage key lists).
+function createStoragePolyfill() {
+  const store = {};
+  const defineMethod = (name, fn) => {
+    Object.defineProperty(store, name, {
+      value: fn,
+      writable: true,
+      configurable: true,
+      enumerable: false,
+    });
+  };
+  defineMethod('getItem', function (key) {
+    const k = String(key);
+    return Object.prototype.hasOwnProperty.call(this, k) ? String(this[k]) : null;
+  });
+  defineMethod('setItem', function (key, value) {
+    this[String(key)] = String(value);
+  });
+  defineMethod('removeItem', function (key) {
+    delete this[String(key)];
+  });
+  defineMethod('clear', function () {
+    Object.keys(this).forEach((k) => delete this[k]);
+  });
+  defineMethod('key', function (index) {
+    const keys = Object.keys(this);
+    return keys[index] ?? null;
+  });
+  Object.defineProperty(store, 'length', {
+    get() { return Object.keys(this).length; },
+    configurable: true,
+    enumerable: false,
+  });
+  return new Proxy(store, {
+    set(target, prop, value) {
+      if (typeof prop === 'symbol') return Reflect.set(target, prop, value);
+      target[prop] = String(value);
+      return true;
+    },
+    deleteProperty(target, prop) {
+      if (typeof prop === 'symbol') return Reflect.deleteProperty(target, prop);
+      delete target[prop];
+      return true;
+    },
+  });
+}
+
+function makeStorage(fallbackSource) {
+  if (fallbackSource && typeof fallbackSource.getItem === 'function') {
+    return fallbackSource;
+  }
+  return createStoragePolyfill();
+}
 
 function pinStorageGlobals() {
-  if (domLocalStorage) {
-    try {
-      globalThis.localStorage = domLocalStorage;
-    } catch {
-      Object.defineProperty(globalThis, 'localStorage', {
-        value: domLocalStorage,
-        writable: true,
-        configurable: true,
-      });
-    }
-  }
-  if (domSessionStorage) {
-    try {
-      globalThis.sessionStorage = domSessionStorage;
-    } catch {
-      Object.defineProperty(globalThis, 'sessionStorage', {
-        value: domSessionStorage,
-        writable: true,
-        configurable: true,
-      });
-    }
+  const ls = makeStorage(typeof window !== 'undefined' ? window.localStorage : undefined);
+  const ss = makeStorage(typeof window !== 'undefined' ? window.sessionStorage : undefined);
+  Object.defineProperty(globalThis, 'localStorage', {
+    value: ls,
+    writable: true,
+    configurable: true,
+  });
+  Object.defineProperty(globalThis, 'sessionStorage', {
+    value: ss,
+    writable: true,
+    configurable: true,
+  });
+  if (typeof window !== 'undefined') {
+    try { window.localStorage = ls; } catch {}
+    try { window.sessionStorage = ss; } catch {}
   }
 }
 

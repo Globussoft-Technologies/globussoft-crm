@@ -79,16 +79,24 @@ async function createPatient(request, suffix) {
   // Names use the E2E_PSD_ prefix so demo-monitor scrub picks them up,
   // and a phone with a per-test suffix (last-digit collision avoidance —
   // the (tenantId, normalizedPhone) unique constraint from #401 makes
-  // every test need its own number).
-  const phone = `+919${String(Date.now()).slice(-9)}${suffix}`.slice(0, 14);
-  const r = await adminPost(request, '/api/wellness/patients', {
-    name: `${RUN_TAG} ${suffix}`,
-    phone,
-    gender: 'M',
-  });
-  expect(r.status(), `create patient: ${await r.text()}`).toBe(201);
-  const body = await r.json();
-  return body;
+  // every test need its own number). Retry a few times on duplicate-phone
+  // collisions with stale demo data or parallel workers.
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const phone = `+919${String(Date.now()).slice(-5)}${String(Math.random()).slice(2, 6)}${suffix}`.slice(0, 14);
+    const r = await adminPost(request, '/api/wellness/patients', {
+      name: `${RUN_TAG} ${suffix}`,
+      phone,
+      gender: 'M',
+    });
+    if (r.status() === 201) {
+      return await r.json();
+    }
+    const text = await r.text();
+    if (attempt === 4 || !/phone already exists/i.test(text)) {
+      throw new Error(`create patient: ${text}`);
+    }
+  }
+  throw new Error('create patient failed after retries');
 }
 
 test.describe('Wellness — Patient soft-delete + restore (#628)', () => {

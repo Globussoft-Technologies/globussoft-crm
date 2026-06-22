@@ -69,7 +69,50 @@ const AUTH_DIR = path.join(__dirname, "..", ".wwebjs_auth");
 
 function init(io) {
   _io = io;
-  console.log("[whatsappWeb] init — socket handle attached; sessions are lazy (operator must scan to connect)");
+  console.log("[whatsappWeb] init — socket handle attached; restoring previously-linked sessions…");
+  // Auto-restore on boot: re-initialize every tenant that was linked before the
+  // restart. LocalAuth persisted their creds to .wwebjs_auth/session-travel-<id>,
+  // so connect() resumes WITHOUT a new QR. Fire-and-forget so server startup is
+  // never blocked on puppeteer. (Previously sessions were lazy → a restart
+  // silently dropped every live WhatsApp until an operator re-opened the page.)
+  module.exports
+    .restoreSessions()
+    .catch((e) => console.error("[whatsappWeb] restoreSessions failed (non-fatal):", e.message));
+}
+
+// Reconnect every previously-linked tenant from its saved LocalAuth session on
+// boot. Reads the .wwebjs_auth dir for `session-travel-<tenantId>` folders and
+// connect()s each (no reset → resumes from disk, no QR). Launches are staggered
+// so N tenants don't spawn N headless Chromes at once. No-op under the
+// test/kill-switch guard. Best-effort per tenant — a stale session surfaces via
+// the existing restore watchdog as an actionable "Reset & reconnect".
+async function restoreSessions() {
+  if (!canLaunch()) return { restored: 0, reason: "disabled" };
+  const fs = require("fs"); // required locally — this module loads fs lazily per-function
+  let entries = [];
+  try {
+    entries = fs.readdirSync(AUTH_DIR, { withFileTypes: true });
+  } catch {
+    return { restored: 0, reason: "no-auth-dir" }; // nothing linked yet
+  }
+  const tenantIds = [];
+  for (const e of entries) {
+    if (!e.isDirectory()) continue;
+    const m = /^session-travel-(\d+)$/.exec(e.name);
+    if (m) tenantIds.push(Number(m[1]));
+  }
+  if (!tenantIds.length) return { restored: 0 };
+  console.log(`[whatsappWeb] boot-restore: re-initializing ${tenantIds.length} saved session(s): ${tenantIds.join(", ")}`);
+  let i = 0;
+  for (const tenantId of tenantIds) {
+    if (i > 0) await new Promise((r) => setTimeout(r, 1500)); // stagger Chrome launches
+    i += 1;
+    module.exports
+      .connect(tenantId)
+      .then(() => console.log(`[whatsappWeb] boot-restore: tenant ${tenantId} resuming from saved session`))
+      .catch((err) => console.warn(`[whatsappWeb] boot-restore tenant ${tenantId} failed: ${err.message}`));
+  }
+  return { restored: tenantIds.length };
 }
 
 function getSession(tenantId) {
@@ -780,6 +823,17 @@ async function ingestInbound(tenantId, msg) {
       body: body || "(media)",
     });
   }
+
+  // Travel auto-lead capture (2026-06-19) — for travel tenants, once a 1:1 chat
+  // has a few messages, analyze it and auto-create a Travel lead if it reads as
+  // a business enquiry. Best-effort + fire-and-forget: it must never delay or
+  // break message ingestion (the message is already persisted + emitted above).
+  if (!isGroup) {
+    require("../lib/travelWhatsappLeadCapture")
+      .safeMaybeCaptureLead({ tenantId, phone, name: waName, threadId: thread.id, isGroup })
+      .catch(() => {});
+  }
+
   return { threadId: thread.id, messageId: message.id };
 }
 
@@ -1307,6 +1361,7 @@ async function getMediaResponse() {
 module.exports = {
   STATE,
   init,
+  restoreSessions,
   // lifecycle
   connect,
   disconnect,

@@ -643,7 +643,7 @@ model User {
 model Contact {
   id                    Int       @id @default(autoincrement())
   name                  String
-  email                 String
+  email                 String?   // nullable (2026-06-19): WhatsApp auto-leads land WITHOUT an email — it's asked for in the chat + filled later. All other creators still set it. @@unique([email, tenantId]) tolerates multiple NULLs in MySQL.
   emailVerifiedAt       DateTime? // set when a self-registered portal customer verified their email via OTP
   phone                 String?
   company               String?

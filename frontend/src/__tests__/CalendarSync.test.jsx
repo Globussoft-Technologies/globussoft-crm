@@ -498,7 +498,7 @@ describe('<CalendarSync /> — provider cards, OAuth-trigger, sync, event CRUD',
     const dts = container.querySelectorAll('input[type="datetime-local"]');
     fireEvent.change(dts[0], { target: { value: '2999-01-15T10:00' } });
     fireEvent.change(dts[1], { target: { value: '2999-01-15T11:00' } });
-    fireEvent.click(screen.getByLabelText(/meeting link to this event/i));
+    fireEvent.click(screen.getByLabelText(/Google Meet meeting link to this event/i));
     fireEvent.click(screen.getByRole('button', { name: /^Create Event$/i }));
 
     await waitFor(() => {
@@ -507,6 +507,31 @@ describe('<CalendarSync /> — provider cards, OAuth-trigger, sync, event CRUD',
       );
       expect(post).toBeTruthy();
       expect(JSON.parse(post[1].body).createMeet).toBe(true);
+    });
+  });
+
+  it('createZoom: checking "Add a Zoom link" sends createZoom:true in the POST', async () => {
+    fetchApiMock.mockImplementation(makeGoogleOnlineWithContacts());
+    const { container } = render(<CalendarSync />);
+    await screen.findByText(/^Connected$/i);
+    fireEvent.click(screen.getByTitle(/Create new calendar event/i));
+    await screen.findByRole('heading', { name: /Create Event in Google/i });
+
+    fireEvent.change(screen.getByPlaceholderText(/Team Meeting, Client Call/i), {
+      target: { value: 'Consult' },
+    });
+    const dts = container.querySelectorAll('input[type="datetime-local"]');
+    fireEvent.change(dts[0], { target: { value: '2999-01-15T10:00' } });
+    fireEvent.change(dts[1], { target: { value: '2999-01-15T11:00' } });
+    fireEvent.click(screen.getByLabelText(/Zoom meeting link to this event/i));
+    fireEvent.click(screen.getByRole('button', { name: /^Create Event$/i }));
+
+    await waitFor(() => {
+      const post = fetchApiMock.mock.calls.find(
+        ([u, o]) => u === '/api/calendar/google/events' && o?.method === 'POST',
+      );
+      expect(post).toBeTruthy();
+      expect(JSON.parse(post[1].body).createZoom).toBe(true);
     });
   });
 

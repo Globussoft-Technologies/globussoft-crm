@@ -1,4 +1,5 @@
 
+import { useState } from 'react';
 import {
   MessageCircle,
   CheckCheck,
@@ -11,15 +12,20 @@ import {
   AlertTriangle,
   X,
   Paperclip,
+  Smile,
   Send,
 } from 'lucide-react';
 import { useWhatsAppThreads } from './WhatsAppThreadsContext';
+
+// Common chat + travel emojis for the composer quick-picker (no extra dependency).
+const COMPOSER_EMOJIS = ['😀', '😁', '😂', '🤣', '😊', '😍', '😘', '👍', '🙏', '🎉', '✅', '❤️', '🔥', '✈️', '🏨', '🧳', '🗺️', '📅', '📞', '💬', '👏', '🙌', '🤝', '💯', '😎', '🤔', '😅', '🙂', '👌', '🚀', '⭐', '💰', '📌', '🕋', '🌴', '☀️'];
 import StatusPill from './StatusPill';
 import DeliveryTicks from './DeliveryTicks';
 import MessageMedia from './MessageMedia';
 import { ThreadAvatar, prettyContactLine } from './ThreadList';
 
 export default function ThreadDetail() {
+  const [emojiOpen, setEmojiOpen] = useState(false);
   const {
     selectedId,
     detail,
@@ -499,6 +505,58 @@ export default function ThreadDetail() {
                     >
                       <Paperclip size={18} />
                     </button>
+                    {/* Emoji quick-picker — appends to the composer (no extra dep). */}
+                    <div style={{ position: 'relative', flexShrink: 0 }}>
+                      <button
+                        type="button"
+                        onClick={() => setEmojiOpen((o) => !o)}
+                        disabled={uploadingMedia}
+                        title="Emoji"
+                        aria-label="Insert emoji"
+                        aria-expanded={emojiOpen}
+                        style={{
+                          width: 36, height: 36, background: 'transparent', border: 'none',
+                          borderRadius: '50%', color: emojiOpen ? 'var(--primary-color, #25D366)' : 'var(--text-secondary)',
+                          cursor: uploadingMedia ? 'not-allowed' : 'pointer',
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          opacity: uploadingMedia ? 0.5 : 1, transition: 'background 0.15s',
+                        }}
+                        onMouseEnter={(e) => { if (!uploadingMedia) e.currentTarget.style.background = 'var(--hover-bg)'; }}
+                        onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                      >
+                        <Smile size={18} />
+                      </button>
+                      {emojiOpen && (
+                        <div
+                          role="menu"
+                          aria-label="Emoji picker"
+                          style={{
+                            position: 'absolute', bottom: 44, left: 0, zIndex: 40,
+                            width: 248, maxHeight: 180, overflowY: 'auto',
+                            display: 'grid', gridTemplateColumns: 'repeat(8, 1fr)', gap: 2, padding: 8,
+                            background: 'var(--surface-color)', border: '1px solid var(--border-color)',
+                            borderRadius: 12, boxShadow: '0 8px 28px rgba(0,0,0,0.28)',
+                          }}
+                        >
+                          {COMPOSER_EMOJIS.map((emo) => (
+                            <button
+                              key={emo}
+                              type="button"
+                              onClick={() => setReply((prev) => (prev || '') + emo)}
+                              aria-label={`Insert ${emo}`}
+                              style={{
+                                fontSize: 18, lineHeight: 1, padding: 4, background: 'transparent',
+                                border: 'none', cursor: 'pointer', borderRadius: 6,
+                              }}
+                              onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--hover-bg)'; }}
+                              onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                            >
+                              {emo}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                     <textarea
                       value={reply}
                       onChange={(e) => setReply(e.target.value)}

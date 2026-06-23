@@ -73,8 +73,15 @@ prisma.landingPage = {
   findUnique: vi.fn(),
   create: vi.fn(),
   update: vi.fn(),
+  updateMany: vi.fn(),
   delete: vi.fn(),
 };
+// $transaction is used by the feature endpoint (atomic un-feature + feature).
+// The mock just runs each operation in order — the supplied operations are
+// already plain Prisma promises (vi.fn() resolves) so awaiting them in
+// sequence preserves the at-most-one-featured-per-scope contract from the
+// test's perspective.
+prisma.$transaction = vi.fn(async (ops) => Promise.all(Array.isArray(ops) ? ops : []));
 prisma.landingPageAnalytics = {
   findMany: vi.fn().mockResolvedValue([]),
   create: vi.fn().mockResolvedValue({ id: 1 }),
@@ -122,7 +129,9 @@ beforeEach(() => {
   prisma.landingPage.findUnique.mockReset();
   prisma.landingPage.create.mockReset();
   prisma.landingPage.update.mockReset();
+  prisma.landingPage.updateMany.mockReset().mockResolvedValue({ count: 0 });
   prisma.landingPage.delete.mockReset();
+  prisma.$transaction.mockClear();
   prisma.landingPageAnalytics.findMany.mockReset().mockResolvedValue([]);
   prisma.landingPageAnalytics.create.mockReset().mockResolvedValue({ id: 1 });
   prisma.contact.upsert.mockReset();
@@ -444,7 +453,20 @@ describe('DELETE /api/landing-pages/:id', () => {
 
 describe('POST /api/landing-pages/:id/publish | /unpublish | /duplicate', () => {
   test('publish: sets PUBLISHED + publishedAt', async () => {
-    prisma.landingPage.findFirst.mockResolvedValue({ id: 50, tenantId: 1, status: 'DRAFT' });
+    // PR-A added a publish gate: generic pages must have a valid title,
+    // slug, and at least one content block. Provide a minimally-complete
+    // page so the gate clears and the test asserts the publish semantics
+    // (status flip + publishedAt set), not the gate logic itself —
+    // that's covered in e2e/tests/landing-pages-travel-api.spec.js.
+    prisma.landingPage.findFirst.mockResolvedValue({
+      id: 50,
+      tenantId: 1,
+      status: 'DRAFT',
+      title: 'Spring Sale',
+      slug: 'spring-sale',
+      templateType: 'lead_capture',
+      content: JSON.stringify([{ type: 'heading', props: { text: 'Hi' } }]),
+    });
     prisma.landingPage.update.mockImplementation(async (args) => ({ id: 50, ...args.data }));
     const res = await request(makeApp())
       .post('/api/landing-pages/50/publish')
@@ -489,6 +511,166 @@ describe('POST /api/landing-pages/:id/publish | /unpublish | /duplicate', () => 
       .set('Authorization', `Bearer ${tokenFor({ tenantId: 2 })}`);
     expect(res.status).toBe(404);
     expect(prisma.landingPage.update).not.toHaveBeenCalled();
+  });
+
+  test('unpublish auto-clears the featured flag (invariant: featured ⇒ published)', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue({
+      id: 50, tenantId: 1, status: 'PUBLISHED', isFeatured: true,
+    });
+    prisma.landingPage.update.mockImplementation(async (args) => ({ id: 50, ...args.data }));
+    const res = await request(makeApp())
+      .post('/api/landing-pages/50/unpublish')
+      .set('Authorization', `Bearer ${tokenFor()}`);
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('DRAFT');
+    expect(res.body.isFeatured).toBe(false);
+    expect(res.body.featuredAt).toBeNull();
+  });
+});
+
+// ─── Feature / Unfeature + Public resolver ───────────────────────────
+//
+// Verifies the "at most one featured page per (tenantId, subBrand)"
+// invariant the feature endpoint enforces transactionally, the requires-
+// PUBLISHED gate (409 PAGE_NOT_PUBLISHED), idempotency, and the public
+// /public/featured resolver shape used by /trips.
+
+describe('POST /api/landing-pages/:id/feature | /unfeature', () => {
+  test('feature on DRAFT page → 409 PAGE_NOT_PUBLISHED (gate)', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue({
+      id: 50, tenantId: 1, status: 'DRAFT', isFeatured: false, subBrand: null,
+    });
+    const res = await request(makeApp())
+      .post('/api/landing-pages/50/feature')
+      .set('Authorization', `Bearer ${tokenFor()}`);
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('PAGE_NOT_PUBLISHED');
+    expect(res.body.currentStatus).toBe('DRAFT');
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  test('feature on PUBLISHED page → demotes siblings + sets isFeatured + returns the updated row', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue({
+      id: 50, tenantId: 1, status: 'PUBLISHED', isFeatured: false, subBrand: 'tmc',
+    });
+    prisma.landingPage.findUnique.mockResolvedValue({
+      id: 50, tenantId: 1, status: 'PUBLISHED', isFeatured: true, featuredAt: new Date(), subBrand: 'tmc',
+    });
+    const res = await request(makeApp())
+      .post('/api/landing-pages/50/feature')
+      .set('Authorization', `Bearer ${tokenFor()}`);
+    expect(res.status).toBe(200);
+    expect(res.body.isFeatured).toBe(true);
+    // Transaction is what enforces the invariant — must have been called.
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    // updateMany should target the same scope EXCLUDING the target row.
+    const updateManyArgs = prisma.landingPage.updateMany.mock.calls[0]?.[0];
+    expect(updateManyArgs?.where?.tenantId).toBe(1);
+    expect(updateManyArgs?.where?.subBrand).toBe('tmc');
+    expect(updateManyArgs?.where?.isFeatured).toBe(true);
+    expect(updateManyArgs?.where?.NOT?.id).toBe(50);
+  });
+
+  test('feature is idempotent — already-featured page is a no-op (no transaction)', async () => {
+    const existing = {
+      id: 50, tenantId: 1, status: 'PUBLISHED', isFeatured: true,
+      featuredAt: new Date('2026-06-01T00:00:00Z'), subBrand: 'tmc',
+    };
+    prisma.landingPage.findFirst.mockResolvedValue(existing);
+    const res = await request(makeApp())
+      .post('/api/landing-pages/50/feature')
+      .set('Authorization', `Bearer ${tokenFor()}`);
+    expect(res.status).toBe(200);
+    expect(res.body.isFeatured).toBe(true);
+    // No transaction fired, original featuredAt preserved.
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(prisma.landingPage.update).not.toHaveBeenCalled();
+  });
+
+  test('feature on cross-tenant page → 404', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue(null);
+    const res = await request(makeApp())
+      .post('/api/landing-pages/999/feature')
+      .set('Authorization', `Bearer ${tokenFor({ tenantId: 2 })}`);
+    expect(res.status).toBe(404);
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  test('unfeature clears the flag + featuredAt', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue({
+      id: 50, tenantId: 1, status: 'PUBLISHED', isFeatured: true,
+      featuredAt: new Date(), subBrand: 'tmc',
+    });
+    prisma.landingPage.update.mockImplementation(async (args) => ({ id: 50, ...args.data }));
+    const res = await request(makeApp())
+      .post('/api/landing-pages/50/unfeature')
+      .set('Authorization', `Bearer ${tokenFor()}`);
+    expect(res.status).toBe(200);
+    expect(res.body.isFeatured).toBe(false);
+    expect(res.body.featuredAt).toBeNull();
+  });
+
+  test('unfeature is idempotent on non-featured row — returns the row unchanged', async () => {
+    const existing = {
+      id: 50, tenantId: 1, status: 'PUBLISHED', isFeatured: false,
+      featuredAt: null, subBrand: 'tmc',
+    };
+    prisma.landingPage.findFirst.mockResolvedValue(existing);
+    const res = await request(makeApp())
+      .post('/api/landing-pages/50/unfeature')
+      .set('Authorization', `Bearer ${tokenFor()}`);
+    expect(res.status).toBe(200);
+    expect(res.body.isFeatured).toBe(false);
+    expect(prisma.landingPage.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /api/landing-pages/public/featured (no auth, /trips resolver)', () => {
+  test('200 returns featured PUBLISHED row when one exists', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue({
+      id: 50, slug: 'japan-2026', title: 'Japan 2026', destination: 'Japan',
+      subBrand: 'tmc', featuredAt: new Date('2026-06-22T10:00:00Z'),
+    });
+    // Public route — no Bearer header.
+    const res = await request(makeApp()).get('/api/landing-pages/public/featured');
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      id: 50, slug: 'japan-2026', title: 'Japan 2026',
+      destination: 'Japan', subBrand: 'tmc',
+    });
+    // Filter must include isFeatured: true AND status: PUBLISHED.
+    const findArgs = prisma.landingPage.findFirst.mock.calls[0][0];
+    expect(findArgs.where.isFeatured).toBe(true);
+    expect(findArgs.where.status).toBe('PUBLISHED');
+    // Recency-ordered.
+    expect(findArgs.orderBy).toEqual({ featuredAt: 'desc' });
+  });
+
+  test('404 NO_FEATURED_PAGE when no row matches', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue(null);
+    const res = await request(makeApp()).get('/api/landing-pages/public/featured');
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('NO_FEATURED_PAGE');
+  });
+
+  test('?subBrand=tmc narrows the lookup to that bucket', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue({
+      id: 50, slug: 'umrah-2026', title: 'Umrah', subBrand: 'tmc', featuredAt: new Date(),
+    });
+    const res = await request(makeApp()).get('/api/landing-pages/public/featured?subBrand=tmc');
+    expect(res.status).toBe(200);
+    const findArgs = prisma.landingPage.findFirst.mock.calls[0][0];
+    expect(findArgs.where.subBrand).toBe('tmc');
+  });
+
+  test('?subBrand=none filters to subBrand IS NULL', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue({
+      id: 50, slug: 'g', title: 'Generic', subBrand: null, featuredAt: new Date(),
+    });
+    const res = await request(makeApp()).get('/api/landing-pages/public/featured?subBrand=none');
+    expect(res.status).toBe(200);
+    const findArgs = prisma.landingPage.findFirst.mock.calls[0][0];
+    expect(findArgs.where.subBrand).toBeNull();
   });
 });
 
@@ -730,7 +912,11 @@ describe('GET /?fields=summary — slim-shape opt-in', () => {
     expect(res.status).toBe(200);
     expect(res.body[0]).toMatchObject({ visits: 42, submissions: 7, templateType: 'lead_capture' });
     const arg = prisma.landingPage.findMany.mock.calls[0][0];
-    // Default path: full analytics-bearing select.
+    // Default path: full analytics-bearing select. PR-A added 6 fields
+    // total — 4 travel metadata (destination / subBrand / generatedByAi /
+    // generatedAt) so the list grid can render sub-brand chips + "AI
+    // draft" badges, plus 2 featured fields (isFeatured / featuredAt) so
+    // it can render the "★ Featured" badge + Feature / Unfeature button.
     expect(arg.select).toEqual({
       id: true,
       title: true,
@@ -741,6 +927,12 @@ describe('GET /?fields=summary — slim-shape opt-in', () => {
       templateType: true,
       createdAt: true,
       updatedAt: true,
+      destination: true,
+      subBrand: true,
+      generatedByAi: true,
+      generatedAt: true,
+      isFeatured: true,
+      featuredAt: true,
     });
     expect(arg.where).toEqual({ tenantId: 1 });
     expect(arg.orderBy).toEqual({ createdAt: 'desc' });
@@ -825,5 +1017,410 @@ describe('GET /?fields=summary — slim-shape opt-in', () => {
     expect(arg.select.visits).toBe(true);
     expect(arg.select.submissions).toBe(true);
     expect(arg.select.templateType).toBe(true);
+  });
+});
+
+// ─── D1 follow-up: draft-preview workflow ─────────────────────────────
+
+describe('POST /api/landing-pages/:id/preview-token (mint short-lived token)', () => {
+  test('without Bearer → 401', async () => {
+    const res = await request(makeApp()).post('/api/landing-pages/77/preview-token');
+    expect(res.status).toBe(401);
+    expect(prisma.landingPage.findFirst).not.toHaveBeenCalled();
+  });
+
+  test('returns { token, pageId, slug } for an authenticated tenant-owned page', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue({ id: 77, slug: 'japan-2026', title: 'Japan' });
+    const res = await request(makeApp())
+      .post('/api/landing-pages/77/preview-token')
+      .set('Authorization', `Bearer ${tokenFor()}`);
+    expect(res.status).toBe(200);
+    expect(res.body.pageId).toBe(77);
+    expect(res.body.slug).toBe('japan-2026');
+    expect(typeof res.body.token).toBe('string');
+    // The minted token must be a valid JWT carrying the expected claims.
+    const decoded = jwt.verify(res.body.token, JWT_SECRET);
+    expect(decoded.previewOnly).toBe(true);
+    expect(decoded.previewLandingPageId).toBe(77);
+    expect(decoded.tenantId).toBe(1);
+    // 5-minute expiry (give a small buffer for clock drift).
+    expect(decoded.exp - decoded.iat).toBeGreaterThanOrEqual(295);
+    expect(decoded.exp - decoded.iat).toBeLessThanOrEqual(310);
+  });
+
+  test('404 when page belongs to a different tenant', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue(null);
+    const res = await request(makeApp())
+      .post('/api/landing-pages/77/preview-token')
+      .set('Authorization', `Bearer ${tokenFor({ tenantId: 99 })}`);
+    expect(res.status).toBe(404);
+    expect(prisma.landingPage.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ id: 77, tenantId: 99 }) })
+    );
+  });
+
+  test('400 on non-numeric page id', async () => {
+    const res = await request(makeApp())
+      .post('/api/landing-pages/abc/preview-token')
+      .set('Authorization', `Bearer ${tokenFor()}`);
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_ID');
+  });
+});
+
+describe('GET /api/landing-pages/:id/preview (render through production renderer)', () => {
+  function makePreviewToken({ landingPageId = 77, tenantId = 1, expiresIn = '5m', previewOnly = true } = {}) {
+    const payload = { previewOnly, tenantId };
+    if (landingPageId != null) payload.previewLandingPageId = landingPageId;
+    return jwt.sign(payload, JWT_SECRET, { expiresIn });
+  }
+
+  test('rejects request without any auth credential → 401 HTML', async () => {
+    const res = await request(makeApp()).get('/api/landing-pages/77/preview');
+    expect(res.status).toBe(401);
+    expect(res.text).toContain('Preview unavailable');
+    expect(prisma.landingPage.findFirst).not.toHaveBeenCalled();
+  });
+
+  test('valid preview token → renders the production HTML for the page', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue({
+      id: 77,
+      slug: 'japan-2026',
+      title: 'Japan 2026',
+      status: 'DRAFT',
+      tenantId: 1,
+      templateType: 'educational-trip-v1',
+      content: JSON.stringify({ hero: { headline: 'Where Exposure Becomes Perspective' } }),
+    });
+    const token = makePreviewToken();
+    const res = await request(makeApp()).get(`/api/landing-pages/77/preview?previewToken=${encodeURIComponent(token)}`);
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toMatch(/text\/html/);
+    expect(res.headers['x-robots-tag']).toBe('noindex, nofollow');
+    expect(res.headers['cache-control']).toMatch(/no-store/);
+    // The page renders through the production template.
+    expect(res.text).toContain('<div class="trips-page">');
+    expect(res.text).toContain('Where Exposure Becomes Perspective');
+  });
+
+  test('preview renders DRAFT pages (the /p/:slug route would 404)', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue({
+      id: 77, slug: 's', title: 'T', status: 'DRAFT', tenantId: 1, content: '[]',
+    });
+    const token = makePreviewToken();
+    const res = await request(makeApp()).get(`/api/landing-pages/77/preview?previewToken=${token}`);
+    expect(res.status).toBe(200);
+  });
+
+  test('preview suppresses the analytics tracking pixel', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue({
+      id: 77, slug: 's', title: 'T', status: 'PUBLISHED', tenantId: 1,
+      templateType: 'educational-trip-v1',
+      content: JSON.stringify({ hero: { headline: 'X' } }),
+    });
+    const token = makePreviewToken();
+    const res = await request(makeApp()).get(`/api/landing-pages/77/preview?previewToken=${token}`);
+    expect(res.status).toBe(200);
+    // The production render injects an analytics pixel; the preview path
+    // must NOT (so operator previews don't inflate visits).
+    expect(res.text).not.toContain('/api/pages/s/track?event=VISIT');
+  });
+
+  test('expired preview token → 401', async () => {
+    const token = makePreviewToken({ expiresIn: '-1s' });
+    const res = await request(makeApp()).get(`/api/landing-pages/77/preview?previewToken=${token}`);
+    expect(res.status).toBe(401);
+  });
+
+  test('preview token for a different page id → 401', async () => {
+    const token = makePreviewToken({ landingPageId: 999 });
+    const res = await request(makeApp()).get(`/api/landing-pages/77/preview?previewToken=${token}`);
+    expect(res.status).toBe(401);
+  });
+
+  test('non-preview JWT (operator auth token) → 401 when supplied as previewToken', async () => {
+    // A regular operator JWT lacks `previewOnly: true` — must not be
+    // accepted by the preview query-param path.
+    const adminToken = tokenFor();
+    const res = await request(makeApp()).get(`/api/landing-pages/77/preview?previewToken=${adminToken}`);
+    expect(res.status).toBe(401);
+  });
+
+  test('Authorization header path also works (programmatic callers)', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue({
+      id: 77, slug: 's', title: 'T', status: 'DRAFT', tenantId: 1, content: '[]',
+    });
+    const res = await request(makeApp())
+      .get('/api/landing-pages/77/preview')
+      .set('Authorization', `Bearer ${tokenFor()}`);
+    expect(res.status).toBe(200);
+    expect(res.headers['x-robots-tag']).toBe('noindex, nofollow');
+  });
+
+  test('cross-tenant preview token blocked by findFirst tenant filter', async () => {
+    // The preview-token carries tenantId=99; the page is in tenant 1.
+    // findFirst with where: { id: 77, tenantId: 99 } → null.
+    prisma.landingPage.findFirst.mockResolvedValue(null);
+    const token = makePreviewToken({ tenantId: 99 });
+    const res = await request(makeApp()).get(`/api/landing-pages/77/preview?previewToken=${token}`);
+    expect(res.status).toBe(404);
+  });
+});
+
+// ─── D1 template catalogue surface (LandingPages picker depends on this) ─
+
+describe('GET /api/landing-pages/template-catalogue (Phase D1 picker)', () => {
+  test('without Bearer → 401', async () => {
+    const res = await request(makeApp()).get('/api/landing-pages/template-catalogue');
+    expect(res.status).toBe(401);
+  });
+
+  test('returns the registered premium-template catalogue with defaultContent', async () => {
+    const res = await request(makeApp())
+      .get('/api/landing-pages/template-catalogue')
+      .set('Authorization', `Bearer ${tokenFor()}`);
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body.templates)).toBe(true);
+    const ids = res.body.templates.map((t) => t.id);
+    expect(ids).toContain('educational-trip-v1');
+    expect(ids).toContain('travel-premium-v1');
+    expect(ids).toContain('religious-tour-v1');
+    expect(ids).toContain('luxury-tour-v1');
+    // Each entry carries the fields the picker UI needs.
+    const edu = res.body.templates.find((t) => t.id === 'educational-trip-v1');
+    expect(edu.title).toBeTruthy();
+    expect(edu.description).toBeTruthy();
+    expect(edu.status).toBe('ready');
+    expect(edu.defaultContent).toBeTruthy();
+    expect(typeof edu.defaultContent).toBe('object');
+    // The defaultContent has the canonical D1 slot keys so the
+    // template editor mode loads cleanly.
+    expect(edu.defaultContent).toHaveProperty('brand');
+    expect(edu.defaultContent).toHaveProperty('hero');
+    expect(edu.defaultContent).toHaveProperty('faq');
+    // PR-E Phase 1 Option B promoted religious-tour-v1, family-trip-v1,
+    // and luxury-tour-v1 from "stub" to "ready" (real implementations
+    // sharing the universalComponents renderer + family-specific theme
+    // tokens). travel-premium-v1 stayed as a backwards-compat shell and
+    // is now flagged as "legacy" instead of "stub".
+    const religious = res.body.templates.find((t) => t.id === 'religious-tour-v1');
+    expect(religious.status).toBe('ready');
+    const legacy = res.body.templates.find((t) => t.id === 'travel-premium-v1');
+    expect(legacy.status).toBe('legacy');
+  });
+});
+
+// ─── publish-gate MISSING_FORM accepts all 3 lead-capture block types ─
+
+describe('GET /api/landing-pages/:id/publish-check — lead-capture surfaces', () => {
+  // Minimal travel page that satisfies every other gate check (hero with
+  // headline + poster, ≥3 highlights, itinerary with day, tier with
+  // amount, ≥4 FAQs, ≥3 inclusions, ≥3 cities with images). The lead-
+  // capture block is the only variable across these tests.
+  function travelPageScaffold(leadCaptureBlock) {
+    const blocks = [
+      { type: 'destinationHero', props: { headline: 'Trip', posterUrl: '/poster.jpg' } },
+      { type: 'highlightsGrid', props: { items: [
+        { icon: '◈', title: 'A', body: 'a' },
+        { icon: '◇', title: 'B', body: 'b' },
+        { icon: '◉', title: 'C', body: 'c' },
+      ] } },
+      { type: 'cityCards', props: { cards: [
+        { tag: 'X', title: 'X', img: '/x.jpg', body: 'x' },
+        { tag: 'Y', title: 'Y', img: '/y.jpg', body: 'y' },
+        { tag: 'Z', title: 'Z', img: '/z.jpg', body: 'z' },
+      ] } },
+      { type: 'inclusionsGrid', props: { items: ['Flight', 'Hotel', 'Visa'] } },
+      { type: 'itineraryTimeline', props: { days: [
+        { day: 1, title: 'Day 1', bullets: ['Arrive'] },
+      ] } },
+      { type: 'tierPricing', props: { tiers: [{ step: 1, label: 'Deposit', amount: '50,000' }] } },
+      { type: 'faqAccordion', props: { faqs: [
+        { cat: 'tour', q: 'Q1?', a: 'A1.' },
+        { cat: 'tour', q: 'Q2?', a: 'A2.' },
+        { cat: 'safety', q: 'Q3?', a: 'A3.' },
+        { cat: 'safety', q: 'Q4?', a: 'A4.' },
+      ] } },
+    ];
+    if (leadCaptureBlock) blocks.push(leadCaptureBlock);
+    return {
+      id: 88, tenantId: 1, status: 'DRAFT',
+      title: 'Bali 7-Day School Trip',
+      slug: 'bali-school-trip-7d',
+      templateType: 'travel_destination',
+      content: JSON.stringify(blocks),
+    };
+  }
+
+  test('travel page with ZERO lead-capture blocks → MISSING_FORM issue', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue(travelPageScaffold(null));
+    const res = await request(makeApp())
+      .get('/api/landing-pages/88/publish-check')
+      .set('Authorization', `Bearer ${tokenFor()}`);
+    expect(res.status).toBe(200);
+    const codes = res.body.issues.map((i) => i.code);
+    expect(codes).toContain('MISSING_FORM');
+  });
+
+  test('travel page with a generic `form` block → no MISSING_FORM (legacy contract)', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue(travelPageScaffold({
+      type: 'form',
+      props: { fields: [{ name: 'email', label: 'Email', type: 'email', required: true }] },
+    }));
+    const res = await request(makeApp())
+      .get('/api/landing-pages/88/publish-check')
+      .set('Authorization', `Bearer ${tokenFor()}`);
+    expect(res.status).toBe(200);
+    const codes = res.body.issues.map((i) => i.code);
+    expect(codes).not.toContain('MISSING_FORM');
+  });
+
+  test('travel page with a `registrationForm` block → no MISSING_FORM (PR-C addition)', async () => {
+    // This is the regression from the Bali school-trip UAT screenshot:
+    // the page had a registrationForm + brochureDownload but the gate
+    // only accepted `form`, so publish was wrongly blocked.
+    prisma.landingPage.findFirst.mockResolvedValue(travelPageScaffold({
+      type: 'registrationForm',
+      props: { audience: 'tmc-school', fields: [{ name: 'email', label: 'Email', type: 'email' }] },
+    }));
+    const res = await request(makeApp())
+      .get('/api/landing-pages/88/publish-check')
+      .set('Authorization', `Bearer ${tokenFor()}`);
+    expect(res.status).toBe(200);
+    const codes = res.body.issues.map((i) => i.code);
+    expect(codes).not.toContain('MISSING_FORM');
+    expect(res.body.ok).toBe(true);
+  });
+
+  test('travel page with a `brochureDownload` block in form mode (fileUrl empty) → no MISSING_FORM', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue(travelPageScaffold({
+      type: 'brochureDownload',
+      props: { fileUrl: null, formFields: [{ name: 'email', label: 'Email', type: 'email' }] },
+    }));
+    const res = await request(makeApp())
+      .get('/api/landing-pages/88/publish-check')
+      .set('Authorization', `Bearer ${tokenFor()}`);
+    expect(res.status).toBe(200);
+    const codes = res.body.issues.map((i) => i.code);
+    expect(codes).not.toContain('MISSING_FORM');
+    expect(res.body.ok).toBe(true);
+  });
+
+  test('travel page with brochureDownload in DIRECT-DOWNLOAD mode (fileUrl set) → STILL MISSING_FORM', async () => {
+    // A brochure block with a fileUrl is a direct PDF download — there's
+    // no lead capture. The gate must NOT accept it as a lead-capture
+    // surface (defence-in-depth so an operator doesn't accidentally
+    // publish a page with no lead intake).
+    prisma.landingPage.findFirst.mockResolvedValue(travelPageScaffold({
+      type: 'brochureDownload',
+      props: { fileUrl: '/uploads/brochures/bali.pdf' },
+    }));
+    const res = await request(makeApp())
+      .get('/api/landing-pages/88/publish-check')
+      .set('Authorization', `Bearer ${tokenFor()}`);
+    expect(res.status).toBe(200);
+    const codes = res.body.issues.map((i) => i.code);
+    expect(codes).toContain('MISSING_FORM');
+  });
+
+  test('non-travel pages don\'t trigger travel-only gates', async () => {
+    // The MISSING_FORM gate is travel-only — generic pages skip the
+    // travel block checks.
+    prisma.landingPage.findFirst.mockResolvedValue({
+      id: 90, tenantId: 1, status: 'DRAFT',
+      title: 'Lead Capture',
+      slug: 'lead-capture',
+      templateType: 'lead_capture',
+      content: JSON.stringify([{ type: 'heading', props: { text: 'Hi' } }]),
+    });
+    const res = await request(makeApp())
+      .get('/api/landing-pages/90/publish-check')
+      .set('Authorization', `Bearer ${tokenFor()}`);
+    expect(res.status).toBe(200);
+    const codes = res.body.issues.map((i) => i.code);
+    expect(codes).not.toContain('MISSING_FORM');
+  });
+});
+
+// ─── public submit: lead-routing also recognises brochureDownload ─────
+
+describe('POST /p/:slug/submit — recognises all lead-capture block types', () => {
+  test('brochureRequest body picks the brochureDownload block for routing', async () => {
+    // Page has both a registrationForm AND a brochureDownload. The
+    // submit body carries `brochureRequest: true`, so the routing
+    // logic should prefer the brochureDownload block (its own
+    // leadRoutingRuleId applies, not the registrationForm's).
+    prisma.landingPage.findFirst.mockResolvedValue({
+      id: 91, slug: 'bali', tenantId: 1, title: 'Bali',
+      content: JSON.stringify([
+        { type: 'registrationForm', props: { audience: 'tmc-school', leadRoutingRuleId: '101' } },
+        { type: 'brochureDownload', props: { fileUrl: null, leadRoutingRuleId: '202' } },
+      ]),
+    });
+    prisma.contact.upsert.mockResolvedValue({ id: 1001 });
+    prisma.contact.update.mockResolvedValue({});
+    // Routing rule 202 is the brochure one.
+    prisma.leadRoutingRule.findFirst.mockImplementation(async (args) => {
+      if (args.where.id === 202) return { id: 202, assignType: 'user', assignTo: '42', tenantId: 1, isActive: true };
+      return null;
+    });
+    const res = await request(makeApp())
+      .post('/p/bali/submit')
+      .set('Content-Type', 'application/json')
+      .send({ brochureRequest: true, name: 'Test Parent', email: 'parent@test.local', phone: '+919999999999' });
+    expect(res.status).toBe(200);
+    // The brochure rule's user (id 42) was assigned, not the reg form's.
+    expect(prisma.contact.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ assignedToId: 42 }) })
+    );
+  });
+
+  test('audience body picks the matching registrationForm block (not the brochure)', async () => {
+    prisma.landingPage.findFirst.mockResolvedValue({
+      id: 92, slug: 'umrah', tenantId: 1, title: 'Umrah',
+      content: JSON.stringify([
+        { type: 'registrationForm', props: { audience: 'tmc-school', leadRoutingRuleId: '101' } },
+        { type: 'brochureDownload', props: { fileUrl: null, leadRoutingRuleId: '202' } },
+      ]),
+    });
+    prisma.contact.upsert.mockResolvedValue({ id: 1002 });
+    prisma.contact.update.mockResolvedValue({});
+    prisma.leadRoutingRule.findFirst.mockImplementation(async (args) => {
+      if (args.where.id === 101) return { id: 101, assignType: 'user', assignTo: '7', tenantId: 1, isActive: true };
+      return null;
+    });
+    const res = await request(makeApp())
+      .post('/p/umrah/submit')
+      .set('Content-Type', 'application/json')
+      .send({ audience: 'tmc-school', name: 'Test', email: 't@test.local' });
+    expect(res.status).toBe(200);
+    expect(prisma.contact.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ assignedToId: 7 }) })
+    );
+  });
+
+  test('fallback path also accepts brochureDownload (no audience, no brochureRequest flag)', async () => {
+    // A page with ONLY a brochureDownload block (lead-capture mode)
+    // still routes via that block's leadRoutingRuleId.
+    prisma.landingPage.findFirst.mockResolvedValue({
+      id: 93, slug: 'goa', tenantId: 1, title: 'Goa',
+      content: JSON.stringify([
+        { type: 'brochureDownload', props: { fileUrl: null, leadRoutingRuleId: '303' } },
+      ]),
+    });
+    prisma.contact.upsert.mockResolvedValue({ id: 1003 });
+    prisma.contact.update.mockResolvedValue({});
+    prisma.leadRoutingRule.findFirst.mockImplementation(async (args) => {
+      if (args.where.id === 303) return { id: 303, assignType: 'user', assignTo: '9', tenantId: 1, isActive: true };
+      return null;
+    });
+    const res = await request(makeApp())
+      .post('/p/goa/submit')
+      .set('Content-Type', 'application/json')
+      .send({ name: 'Test', email: 't@test.local' });
+    expect(res.status).toBe(200);
+    expect(prisma.contact.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ assignedToId: 9 }) })
+    );
   });
 });

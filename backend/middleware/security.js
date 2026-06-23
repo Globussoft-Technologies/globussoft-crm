@@ -57,7 +57,13 @@ const helmetMiddleware = helmet({
       // 'unsafe-inline' on script-src is a TRANSITIONAL allowance.
       // Follow-up issue: migrate legacy inline event handlers to attached
       // listeners + emit a nonce per request, then drop 'unsafe-inline'.
-      scriptSrc: ["'self'", "'unsafe-inline'", "https://cdn.jsdelivr.net"],
+      // unpkg.com added 2026-06-23 — the Wanderlux landing-page renderer
+       // (backend/services/templates/wanderlux/support.js) loads React,
+       // ReactDOM, and Babel-standalone from unpkg at runtime to mount the
+       // client-rendered <x-dc> template. Without this entry the dc-runtime
+       // throws "window.React is not available yet" and the page renders as
+       // raw {{ tokens }}.
+      scriptSrc: ["'self'", "'unsafe-inline'", "https://cdn.jsdelivr.net", "https://unpkg.com"],
       // 'unsafe-inline' on style-src is REQUIRED today because Vite/React
       // emit inline style attributes (style={{}}). Hash-based or nonce-based
       // tightening requires a build-step change.

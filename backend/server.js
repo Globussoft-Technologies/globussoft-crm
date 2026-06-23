@@ -759,7 +759,7 @@ app.use("/api", (req, res, next) => {
   // promotes a contact to a portal user. Removing the entry routes the
   // unauthenticated case through the global guard's 401 (RFC 7235), and
   // the authenticated case continues unaffected.
-  const openPaths = ["/auth/login", "/auth/signup", "/auth/register", "/auth/customer/register", "/auth/email-otp", "/auth/check-email", "/auth/public/tenants", "/auth/forgot-password", "/auth/reset-password", "/auth/2fa/verify", "/health", "/marketplace-leads/webhook", "/sms/webhook", "/whatsapp/webhook", "/telephony/webhook", "/push/subscribe/visitor", "/push/vapid-key", "/communications/track/", "/sso/google/callback", "/sso/microsoft/callback", "/sso/google/start", "/sso/microsoft/start", "/email/inbound", "/calendar/google/callback", "/gmail/callback", "/calendar/outlook/callback", "/voice/webhook", "/portal/login", "/portal/register", "/portal/forgot", "/portal/reset", "/portal/me", "/portal/tickets", "/portal/invoices", "/portal/contracts", "/portal/travel", "/portal/kyc", "/signatures/sign", "/surveys/respond", "/surveys/public", "/chatbots/chat", "/web-visitors/track", "/payments/webhook", "/accounting/webhook", "/scim/v2", "/booking-pages/public", "/knowledge-base/public", "/live-chat/visitor", "/document-views/track", "/zapier/webhook", "/marketing/submit", "/v1/external", "/v1/voyagr", "/v1/flight-plugin", "/wellness/public", "/wellness/portal", "/attendance/biometric/webhook", "/travel/microsites/public", "/travel/diagnostics/public", "/travel/itineraries/public", "/travel/reviews/public", "/travel/inbound/leads", "/travel/whatsapp/webhook", "/travel/whatsapp/media", "/v1/flyers/public", "/security/csp-report", "/privacy-policy", "/deleted-account-policy", "/terms-and-conditions", "/legal"];
+  const openPaths = ["/auth/login", "/auth/signup", "/auth/register", "/auth/customer/register", "/auth/email-otp", "/auth/check-email", "/auth/public/tenants", "/auth/forgot-password", "/auth/reset-password", "/auth/2fa/verify", "/health", "/marketplace-leads/webhook", "/sms/webhook", "/whatsapp/webhook", "/telephony/webhook", "/push/subscribe/visitor", "/push/vapid-key", "/communications/track/", "/sso/google/callback", "/sso/microsoft/callback", "/sso/google/start", "/sso/microsoft/start", "/email/inbound", "/calendar/google/callback", "/gmail/callback", "/calendar/outlook/callback", "/voice/webhook", "/portal/login", "/portal/register", "/portal/forgot", "/portal/reset", "/portal/me", "/portal/tickets", "/portal/invoices", "/portal/contracts", "/portal/travel", "/portal/kyc", "/signatures/sign", "/surveys/respond", "/surveys/public", "/chatbots/chat", "/web-visitors/track", "/payments/webhook", "/accounting/webhook", "/scim/v2", "/booking-pages/public", "/knowledge-base/public", "/live-chat/visitor", "/document-views/track", "/zapier/webhook", "/marketing/submit", "/v1/external", "/v1/voyagr", "/v1/flight-plugin", "/wellness/public", "/wellness/portal", "/attendance/biometric/webhook", "/travel/microsites/public", "/travel/diagnostics/public", "/travel/itineraries/public", "/travel/reviews/public", "/travel/inbound/leads", "/travel/whatsapp/webhook", "/travel/whatsapp/media", "/v1/flyers/public", "/security/csp-report", "/privacy-policy", "/deleted-account-policy", "/terms-and-conditions", "/legal", "/landing-pages/public", "/landing-pages/wanderlux-static"];
   if (openPaths.some(p => req.path.startsWith(p))) return next();
   // Public marketing catalog — the /pricing page hits GET /subscriptions/plans
   // anonymously. Admin CRUD (POST/PUT/DELETE + GET /plans/admin) stays gated
@@ -787,6 +787,17 @@ app.use("/api", (req, res, next) => {
   // GET + the exact suffix so other /travel/diagnostics/:id sub-routes
   // stay auth-gated.
   if (req.method === 'GET' && /^\/travel\/diagnostics\/\d+\/readiness-report\.pdf$/.test(req.path)) return next();
+  // D1 — landing-page preview is opened in a NEW TAB via window.open()
+  // (no fetch → no Authorization header), authorised by a short-lived
+  // single-purpose `?previewToken=<jwt>` query param. The route handler
+  // itself enforces auth via the previewAuth helper (validates the
+  // previewToken JWT, falls back to Authorization header, then cookie).
+  // The global guard's standard verifyToken would reject the
+  // previewToken because it lacks userId, so we bypass and let the
+  // route do its own three-mode auth. Tightly scoped to GET + the
+  // exact route shape so other /landing-pages/:id/* sub-routes stay
+  // gated by the global guard.
+  if (req.method === 'GET' && /^\/landing-pages\/\d+\/preview$/.test(req.path)) return next();
   // Slice C9 — TravelQuote customer-share landing endpoints (PRD §3.7).
   // Public, JWT-gated by `:shareToken` segment (verified inside the route).
   // GET = read-only envelope; POST = accept|reject|counter customer actions.

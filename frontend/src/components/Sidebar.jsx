@@ -1653,6 +1653,13 @@ function renderTravelNav({
       <Link to="/travel/marketing/flyer-studio" icon={FileImage} label="Marketing Flyer Studio" requiredPermission={{ module: "flyer_studio", action: "read" }} />
       <Link to="/travel/flyer-templates" icon={Palette} label="Flyer Templates" requiredPermission={{ module: "flyer_templates", action: "read" }} />
       <Link to="/travel/flyer-share-admin" icon={Share2} label="Flyer Share Admin" requiredPermission={{ module: "flyer_studio", action: "manage" }} />
+      {/* Destination Landing Pages — backed by the existing LandingPage
+          platform (/api/landing-pages). Travel-flavoured sub-section is
+          driven by the LandingPage.subBrand column + the
+          "travel_destination" template preset. Same admin surface for
+          all 4 sub-brands; the LandingPages.jsx list filters by sub-brand
+          via the ?subBrand= query param. */}
+      <Link to="/landing-pages" icon={PanelTop} label="Landing Pages" requiredPermission={{ module: "marketing", action: "read" }} />
 
       {/* Visa Sure sub-brand cluster — inBrand() is a tenant feature
           toggle, not an access gate. Per-link requiredPermission still

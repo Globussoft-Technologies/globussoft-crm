@@ -1,0 +1,1243 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!--
+  ==========================================================================
+  Travel Stall CRM — Landing Page Generator : reusable page template
+  --------------------------------------------------------------------------
+  This is a Design Component (.dc.html) rendered by ./support.js (dc-runtime).
+  It renders a complete, premium tour landing page from a single `config`
+  object. The CRM generator passes that config as the component's prop; with
+  no prop it falls back to DEFAULT_CONFIG (the Japan 2026 reference) so the
+  file previews standalone.
+
+  Every section renders only when its data exists (see the `show*` booleans
+  in renderVals). Brand colours, fonts, logo and the shippo pattern are all
+  driven from config.theme via CSS custom properties, so the same template
+  restyles per sub-brand (TMC / RFU / Travel Stall / Visa Sure) and per tour.
+
+  See README.md for the full config schema and CRM integration points.
+  ==========================================================================
+-->
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+JP:wght@300;400;500;600;700&family=Noto+Sans+JP:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    *{box-sizing:border-box}
+    html{scroll-behavior:smooth}
+    body{margin:0;background:#FAF6EF;color:#211D18;-webkit-font-smoothing:antialiased}
+    @keyframes lpg-marquee{from{transform:translateX(0)}to{transform:translateX(-66.6666%)}}
+    @keyframes lpg-pulse{0%,100%{opacity:1}50%{opacity:0.55}}
+    .lpg-mq:hover .lpg-track{animation-play-state:paused}
+    ::selection{background:#D21F2B;color:#fff}
+    /* Highlight / flip-card grid.
+       Flex + justify-content:center makes the *last row* centre any leftover
+       cards under the row above — so 5 cards lay out as 3 on top + 2 centred
+       below, instead of grid's "4 on top + 1 stuck on the left" default.
+       max-width on each card caps the basis so 3 fit per row at typical
+       widths without one card stretching huge if it ends up alone. */
+    .lpg-flip-grid{display:flex;flex-wrap:wrap;justify-content:center;gap:22px}
+    .lpg-flip-grid > .lpg-flip-card{flex:1 1 280px;max-width:360px;perspective:1500px;outline:none}
+    .lpg-flip-inner{position:relative;width:100%;height:100%;transition:transform 0.7s cubic-bezier(0.4,0,0.2,1);transform-style:preserve-3d}
+    /* Hover for mouse, focus-within for keyboard + touch (tap focuses the
+       card, tap elsewhere blurs it — gives mobile users a way to see the
+       back face now that the explicit Tap-to-flip button is gone). */
+    .lpg-flip-grid > .lpg-flip-card:hover .lpg-flip-inner,
+    .lpg-flip-grid > .lpg-flip-card:focus-within .lpg-flip-inner{transform:rotateY(180deg)}
+    /* Visually-hidden — used for the spam honeypot and skip link */
+    .lpg-hide{position:absolute!important;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+    /* Responsive: inline styles can't carry @media, so the few breakpoint
+       rules live here. On phones the in-page nav links collapse (the floating
+       Register pill + section CTAs cover navigation) and section padding tightens. */
+    @media (max-width:768px){ .lpg-navlinks{display:none!important} }
+    @media (max-width:640px){ .lpg-root section{padding-top:64px!important;padding-bottom:64px!important} .lpg-root footer{padding-top:56px!important} }
+    /* shippo-style geometric pattern (light + dark variants) */
+    .lpg-pat-light{background-image:url("data:image/svg+xml,%3Csvg%20xmlns%3D'http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg'%20width%3D'80'%20height%3D'80'%20viewBox%3D'0%200%2080%2080'%3E%3Cg%20stroke%3D'%23c2a88f'%20stroke-width%3D'1'%20fill%3D'none'%3E%3Ccircle%20cx%3D'0'%20cy%3D'0'%20r%3D'40'%2F%3E%3Ccircle%20cx%3D'80'%20cy%3D'0'%20r%3D'40'%2F%3E%3Ccircle%20cx%3D'0'%20cy%3D'80'%20r%3D'40'%2F%3E%3Ccircle%20cx%3D'80'%20cy%3D'80'%20r%3D'40'%2F%3E%3Ccircle%20cx%3D'40'%20cy%3D'40'%20r%3D'40'%2F%3E%3Ccircle%20cx%3D'40'%20cy%3D'40'%20r%3D'28'%2F%3E%3Ccircle%20cx%3D'40'%20cy%3D'40'%20r%3D'16'%2F%3E%3C%2Fg%3E%3C%2Fsvg%3E");background-size:80px 80px;background-repeat:repeat}
+    .lpg-pat-dark{background-image:url("data:image/svg+xml,%3Csvg%20xmlns%3D'http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg'%20width%3D'80'%20height%3D'80'%20viewBox%3D'0%200%2080%2080'%3E%3Cg%20stroke%3D'%23ffffff'%20stroke-width%3D'1'%20fill%3D'none'%3E%3Ccircle%20cx%3D'0'%20cy%3D'0'%20r%3D'40'%2F%3E%3Ccircle%20cx%3D'80'%20cy%3D'0'%20r%3D'40'%2F%3E%3Ccircle%20cx%3D'0'%20cy%3D'80'%20r%3D'40'%2F%3E%3Ccircle%20cx%3D'80'%20cy%3D'80'%20r%3D'40'%2F%3E%3Ccircle%20cx%3D'40'%20cy%3D'40'%20r%3D'40'%2F%3E%3Ccircle%20cx%3D'40'%20cy%3D'40'%20r%3D'28'%2F%3E%3Ccircle%20cx%3D'40'%20cy%3D'40'%20r%3D'16'%2F%3E%3C%2Fg%3E%3C%2Fsvg%3E");background-size:80px 80px;background-repeat:repeat}
+  </style>
+</helmet>
+
+<!-- Theme root: config.theme is projected onto CSS custom properties here so
+     every descendant can use var(--c-*) in static styles AND in style-hover
+     (which the runtime does NOT interpolate). -->
+<div id="top" class="lpg-root" style="background:var(--c-light);color:var(--c-text);font-family:var(--c-sans);overflow-x:hidden;--c-brand:{{ brandColor }};--c-accent:{{ accentColor }};--c-dark:{{ darkColor }};--c-footer:{{ footerColor }};--c-light:{{ lightBg }};--c-panel:{{ panelBg }};--c-soft:{{ softBg }};--c-text:{{ textColor }};--c-text2:{{ textColor2 }};--c-border:{{ borderColor }};--c-serif:{{ serifFont }};--c-sans:{{ sansFont }}">
+
+  <a href="#register" class="lpg-hide">Skip to registration</a>
+
+  <!-- ===================== STICKY NAV ===================== -->
+  <header style="position:sticky;top:0;z-index:50;background:color-mix(in srgb, var(--c-light) 88%, transparent);backdrop-filter:blur(12px);border-bottom:1px solid var(--c-border)">
+    <div style="max-width:1240px;margin:0 auto;padding:0 28px;height:72px;display:flex;align-items:center;justify-content:space-between;gap:16px">
+      <a href="#top" aria-label="{{ nav.brandName }}" style="text-decoration:none;display:flex;align-items:center;gap:9px">
+        <sc-if value="{{ nav.brandLogo }}"><img src="{{ nav.brandLogo }}" alt="{{ nav.brandName }}" style="height:{{ nav.brandLogoH }};width:auto;max-width:280px;object-fit:contain"></sc-if>
+        <sc-if value="{{ nav.showBrandMark }}"><span style="font-family:var(--c-serif);font-weight:700;font-size:24px;color:var(--c-brand)">{{ nav.brandMark }}</span></sc-if>
+        <span style="font-family:var(--c-sans);font-weight:600;font-size:13px;letter-spacing:0.22em;color:var(--c-text)">{{ nav.brandName }}</span>
+      </a>
+      <nav aria-label="Primary" style="display:flex;align-items:center;gap:32px" class="lpg-navlinks">
+        <sc-for list="{{ nav.links }}" as="link">
+          <a href="{{ link.href }}" style="text-decoration:none;color:var(--c-text2);font-size:13px;letter-spacing:0.04em;font-weight:500" style-hover="color:var(--c-brand)">{{ link.label }}</a>
+        </sc-for>
+      </nav>
+      <a href="{{ nav.ctaHref }}" style="text-decoration:none;background:var(--c-brand);color:#fff;padding:12px 24px;border-radius:4px;font-size:13px;font-weight:600;white-space:nowrap" style-hover="background:var(--c-dark)">{{ nav.ctaLabel }}</a>
+    </div>
+  </header>
+
+  <!-- ===================== HERO ===================== -->
+  <sc-if value="{{ showHero }}">
+  <section aria-label="Hero" style="position:relative;overflow:hidden;background:var(--c-light);padding:64px 28px 72px">
+    <sc-if value="{{ showHeroBg }}">
+    <div aria-hidden="true" style="position:absolute;inset:0;background-image:{{ hero.bgImage }};background-size:cover;background-position:center;pointer-events:none"></div>
+    <div aria-hidden="true" style="position:absolute;inset:0;background:color-mix(in srgb,var(--c-light) 68%,transparent);pointer-events:none"></div>
+    </sc-if>
+    <div class="{{ patternLightClass }}" style="position:absolute;inset:0;opacity:0.16;pointer-events:none"></div>
+    <div style="position:absolute;top:-10%;left:-8%;width:42%;height:42%;background:radial-gradient(circle,color-mix(in srgb,var(--c-accent) 12%,transparent),transparent 70%);pointer-events:none"></div>
+    <div style="position:absolute;bottom:-12%;right:-8%;width:50%;height:50%;background:radial-gradient(circle,color-mix(in srgb,var(--c-brand) 10%,transparent),transparent 70%);pointer-events:none"></div>
+    <div style="max-width:1240px;margin:0 auto;position:relative;z-index:1;display:grid;grid-template-columns:repeat(auto-fit,minmax(400px,1fr));gap:48px 56px;align-items:center">
+
+      <!-- LEFT: copy + value cards -->
+      <div style="display:flex;flex-direction:column;align-items:center;text-align:center;gap:22px">
+        <sc-if value="{{ showLogos }}">
+        <div style="display:flex;align-items:center;justify-content:center;gap:30px;flex-wrap:wrap">
+          <sc-for list="{{ hero.logos }}" as="logo">
+            <img src="{{ logo.src }}" alt="{{ logo.alt }}" loading="lazy" style="height:54px;width:auto;object-fit:contain;mix-blend-mode:multiply">
+          </sc-for>
+        </div>
+        </sc-if>
+        <div style="display:flex;align-items:center;justify-content:center;gap:12px;flex-wrap:wrap">
+          <sc-if value="{{ hero.eyebrow }}"><span style="font-size:13px;letter-spacing:0.08em;text-transform:uppercase;color:var(--c-text2)">{{ hero.eyebrow }}</span></sc-if>
+          <sc-if value="{{ hero.badge }}"><span style="background:var(--c-brand);color:#fff;font-weight:600;font-size:12px;letter-spacing:0.04em;padding:5px 12px;border-radius:6px;animation:lpg-pulse 2.4s ease-in-out infinite">{{ hero.badge }}</span></sc-if>
+        </div>
+        <h1 style="font-family:var(--c-serif);margin:0;line-height:1.05;color:var(--c-text)">
+          <sc-if value="{{ hero.kicker }}"><span style="display:block;font-family:var(--c-sans);font-size:19px;font-weight:500;color:var(--c-accent);margin-bottom:6px">{{ hero.kicker }}</span></sc-if>
+          <span style="display:block;font-size:clamp(38px,5.4vw,60px);font-style:italic;font-weight:300">
+            <sc-for list="{{ hero.titleLines }}" as="line"><span style="display:block">{{ line }}</span></sc-for>
+          </span>
+        </h1>
+        <sc-if value="{{ hero.subhead }}"><p style="color:var(--c-text2);font-size:16px;line-height:1.65;max-width:520px;margin:0">{{ hero.subhead }}</p></sc-if>
+
+        <sc-if value="{{ showValueCards }}">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;width:100%;margin-top:6px">
+          <sc-for list="{{ hero.valueCards }}" as="card">
+            <div style="background:var(--c-panel);border:1px solid var(--c-border);border-radius:8px;padding:16px;text-align:left;display:flex;align-items:flex-start;justify-content:space-between;gap:12px" style-hover="border-color:var(--c-accent)">
+              <div style="flex:1">
+                <h3 style="font-size:13px;font-weight:600;margin:0 0 3px;color:var(--c-text);line-height:1.3">{{ card.title }}</h3>
+                <p style="font-size:11px;line-height:1.5;color:var(--c-text2);margin:0">{{ card.body }}</p>
+              </div>
+              <sc-if value="{{ card.kanji }}"><span style="font-family:var(--c-serif);font-size:18px;color:var(--c-accent);flex:none">{{ card.kanji }}</span></sc-if>
+            </div>
+          </sc-for>
+        </div>
+        </sc-if>
+
+        <a href="{{ nav.ctaHref }}" style="text-decoration:none;background:var(--c-brand);color:#fff;padding:15px 36px;border-radius:4px;font-size:13px;letter-spacing:0.1em;text-transform:uppercase;font-weight:600;margin-top:4px" style-hover="background:var(--c-dark)">{{ hero.ctaLabel }}</a>
+      </div>
+
+      <!-- RIGHT: framed hero image with caption -->
+      <sc-if value="{{ showHeroImage }}">
+      <div style="position:relative;border:2px solid var(--c-accent);border-radius:12px;overflow:hidden;background:var(--c-light);box-shadow:0 18px 50px rgba(0,0,0,0.14);aspect-ratio:4/3">
+        <img src="{{ hero.image.src }}" alt="{{ hero.image.alt }}" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover">
+        <sc-if value="{{ hero.imageTitle }}">
+        <div style="position:absolute;top:0;left:0;right:0;background:rgba(255,255,255,0.92);backdrop-filter:blur(4px);padding:16px 20px">
+          <h2 style="font-family:var(--c-serif);font-size:18px;font-weight:700;color:var(--c-brand);margin:0 0 4px;line-height:1.3">{{ hero.imageTitle }}</h2>
+          <sc-if value="{{ hero.imageSubtitle }}"><p style="font-size:13px;color:var(--c-text2);margin:0">{{ hero.imageSubtitle }}</p></sc-if>
+        </div>
+        </sc-if>
+      </div>
+      </sc-if>
+    </div>
+  </section>
+  </sc-if>
+
+  <!-- ===================== COUNTDOWN ===================== -->
+  <sc-if value="{{ showCountdown }}">
+  <section aria-label="Registration countdown" style="background:var(--c-light);padding:8px 28px 80px">
+    <div style="max-width:760px;margin:0 auto;text-align:center;border-top:1px solid var(--c-border);padding-top:56px">
+      <p style="font-size:12px;letter-spacing:0.22em;text-transform:uppercase;color:var(--c-brand);font-weight:600;margin:0 0 26px">{{ countdown.label }}</p>
+      <div style="display:flex;gap:8px;justify-content:center;align-items:flex-start" role="timer" aria-live="off">
+        <sc-for list="{{ countdownUnits }}" as="unit">
+          <div style="display:flex;align-items:flex-start;gap:8px">
+            <div style="text-align:center;min-width:70px">
+              <div style="font-family:var(--c-serif);font-weight:500;font-size:clamp(40px,7vw,64px);line-height:1;color:var(--c-text)">{{ unit.value }}</div>
+              <div style="font-size:11px;letter-spacing:0.22em;text-transform:uppercase;color:var(--c-text2);margin-top:8px;font-weight:600">{{ unit.label }}</div>
+            </div>
+            <sc-if value="{{ unit.showColon }}"><div style="font-family:var(--c-serif);font-size:clamp(30px,5vw,48px);color:var(--c-border);line-height:1.15">:</div></sc-if>
+          </div>
+        </sc-for>
+      </div>
+      <a href="{{ countdown.ctaHref }}" style="display:inline-block;margin-top:36px;text-decoration:none;background:var(--c-dark);color:#fff;padding:15px 38px;border-radius:4px;font-size:13px;letter-spacing:0.1em;text-transform:uppercase;font-weight:600" style-hover="background:var(--c-brand)">{{ countdown.ctaLabel }}</a>
+    </div>
+  </section>
+  </sc-if>
+
+  <!-- ===================== CITY MARQUEE ===================== -->
+  <sc-if value="{{ showCities }}">
+  <section aria-label="Destinations" style="padding:84px 0;background:var(--c-panel);border-top:1px solid var(--c-border);border-bottom:1px solid var(--c-border)">
+    <div class="lpg-mq" style="overflow:hidden">
+      <div class="lpg-track" style="display:flex;gap:22px;width:max-content;animation:lpg-marquee 44s linear infinite;padding:0 11px">
+        <sc-for list="{{ cityLoop }}" as="city">
+          <div style="position:relative;width:300px;height:420px;border-radius:8px;overflow:hidden;flex:none;background-image:{{ city.bg }};background-size:cover;background-position:center;background-color:var(--c-dark)">
+            <div style="position:absolute;inset:0;background:linear-gradient(180deg,rgba(20,18,15,0) 42%,rgba(20,18,15,0.82) 100%)"></div>
+            <div style="position:absolute;left:22px;bottom:22px">
+              <sc-if value="{{ city.tag }}"><div style="font-size:11px;letter-spacing:0.24em;text-transform:uppercase;color:var(--c-accent);font-weight:600;margin-bottom:7px">{{ city.tag }}</div></sc-if>
+              <div style="font-family:var(--c-serif);font-weight:500;font-size:26px;color:#fff">{{ city.name }}</div>
+            </div>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+  </section>
+  </sc-if>
+
+  <!-- ===================== VIDEO / PREVIEW ===================== -->
+  <sc-if value="{{ showVideo }}">
+  <section aria-label="Preview" style="background:var(--c-panel);border-bottom:1px solid var(--c-border);padding:96px 28px">
+    <div style="max-width:1000px;margin:0 auto;text-align:center">
+      <sc-if value="{{ video.eyebrow }}"><p style="font-size:12px;letter-spacing:0.24em;text-transform:uppercase;color:var(--c-accent);font-weight:600;margin:0 0 18px">{{ video.eyebrow }}</p></sc-if>
+      <h2 style="font-family:var(--c-serif);font-weight:400;font-size:clamp(28px,5vw,54px);line-height:1.1;margin:0 auto 22px;max-width:720px;color:var(--c-text)">{{ video.title }}</h2>
+      <sc-if value="{{ video.body }}"><p style="max-width:600px;margin:0 auto 40px;font-size:16px;line-height:1.7;color:var(--c-text2)">{{ video.body }}</p></sc-if>
+      <div style="position:relative;border-radius:10px;overflow:hidden;border:2px solid var(--c-accent);box-shadow:0 30px 60px -30px rgba(0,0,0,0.4);aspect-ratio:16/9;background:var(--c-dark)">
+        <!-- Every boolean attribute on <video> is written as `attr="{{ true }}"`
+             instead of bare `attr`. Reason: the dc-runtime hands parsed HTML
+             attributes to React as props, and React drops every known-boolean
+             prop (`controls`, `autoplay`, `loop`, `muted`, `playsinline`) when
+             its value is the empty string the HTML parser produces for a bare
+             attribute. {{ true }} flows a JS boolean through the interpolator
+             so React serialises `attr=""` to the DOM and the browser sees the
+             attribute as present. `muted` is required next to `autoplay`
+             because every major browser blocks autoplay with sound. -->
+        <sc-if value="{{ video.isFile }}"><video src="{{ video.src }}" poster="{{ video.posterUrl }}" controls="{{ true }}" autoplay="{{ true }}" loop="{{ true }}" muted="{{ true }}" playsinline="{{ true }}" style="position:absolute;inset:0;width:100%;height:100%;border:0;object-fit:cover"></video></sc-if>
+        <sc-if value="{{ video.isEmbed }}"><iframe src="{{ video.embedUrl }}" title="{{ video.title }}" allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowfullscreen style="position:absolute;inset:0;width:100%;height:100%;border:0"></iframe></sc-if>
+      </div>
+    </div>
+  </section>
+  </sc-if>
+
+  <!-- ===================== INTRO / WHY IT MATTERS ===================== -->
+  <sc-if value="{{ showIntro }}">
+  <section aria-label="Why it matters" style="background:var(--c-soft);padding:100px 28px;position:relative;overflow:hidden">
+    <div class="{{ patternLightClass }}" style="position:absolute;inset:0;opacity:0.18;pointer-events:none"></div>
+    <div style="max-width:1100px;margin:0 auto;position:relative;z-index:1">
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:48px 64px;align-items:start">
+        <h2 style="font-family:var(--c-serif);font-weight:400;font-size:clamp(28px,3.6vw,40px);line-height:1.18;margin:0;color:var(--c-text)">{{ intro.title }}</h2>
+        <div style="font-size:16px;line-height:1.8;color:var(--c-text2);display:flex;flex-direction:column;gap:18px">
+          <sc-for list="{{ intro.paragraphs }}" as="para"><p style="margin:0">{{ para }}</p></sc-for>
+        </div>
+      </div>
+      <sc-if value="{{ showGains }}">
+      <div style="margin-top:64px;background:var(--c-panel);border:1px solid var(--c-border);border-left:5px solid var(--c-brand);border-radius:8px;padding:48px;display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:40px 48px;align-items:center">
+        <div>
+          <h3 style="font-family:var(--c-serif);font-weight:500;font-size:24px;margin:0 0 14px;color:var(--c-text)">{{ intro.gainsTitle }}</h3>
+          <sc-if value="{{ intro.gainsQuote }}"><p style="font-family:var(--c-serif);font-style:italic;font-size:16px;line-height:1.7;color:var(--c-accent);margin:0 0 22px">{{ intro.gainsQuote }}</p></sc-if>
+          <a href="{{ nav.ctaHref }}" style="text-decoration:none;color:var(--c-brand);font-size:13px;letter-spacing:0.1em;text-transform:uppercase;font-weight:600;border-bottom:1px solid var(--c-brand);padding-bottom:3px" style-hover="color:var(--c-dark)">{{ intro.ctaLabel }}</a>
+        </div>
+        <div style="display:flex;flex-direction:column">
+          <sc-for list="{{ intro.gains }}" as="g">
+            <div style="display:flex;align-items:center;gap:14px;padding:15px 0;border-bottom:1px solid var(--c-border)">
+              <span style="width:7px;height:7px;background:var(--c-brand);flex:none;transform:rotate(45deg)"></span>
+              <span style="font-size:15px;color:var(--c-text)">{{ g }}</span>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+      </sc-if>
+    </div>
+  </section>
+  </sc-if>
+
+  <!-- ===================== CULTURAL HIGHLIGHTS / FLIP CARDS ===================== -->
+  <sc-if value="{{ showHighlights }}">
+  <section id="programme" aria-label="Programme highlights" style="background:var(--c-light);padding:100px 28px;position:relative;overflow:hidden">
+    <div class="{{ patternLightClass }}" style="position:absolute;inset:0;opacity:0.16;pointer-events:none"></div>
+    <div style="max-width:1240px;margin:0 auto;position:relative;z-index:1">
+      <div style="text-align:center;margin-bottom:54px">
+        <sc-if value="{{ highlights.eyebrow }}"><p style="font-size:12px;letter-spacing:0.24em;text-transform:uppercase;color:var(--c-accent);font-weight:600;margin:0 0 14px">{{ highlights.eyebrow }}</p></sc-if>
+        <h2 style="font-family:var(--c-serif);font-weight:400;font-size:clamp(30px,5vw,52px);margin:0 auto 14px;max-width:760px;color:var(--c-text)">{{ highlights.title }}</h2>
+        <sc-if value="{{ highlights.subtitle }}"><p style="font-size:16px;line-height:1.7;color:var(--c-text2);max-width:620px;margin:0 auto">{{ highlights.subtitle }}</p></sc-if>
+      </div>
+      <div class="lpg-flip-grid">
+        <sc-for list="{{ highlightCards }}" as="fc">
+          <div class="lpg-flip-card" tabindex="0" style="height:420px">
+            <div class="lpg-flip-inner">
+              <!-- FRONT -->
+              <div style="position:absolute;inset:0;backface-visibility:hidden;-webkit-backface-visibility:hidden;background:var(--c-panel);border:1px solid var(--c-border);border-radius:10px;padding:30px;display:flex;flex-direction:column;justify-content:space-between">
+                <div>
+                  <sc-if value="{{ fc.kanji }}"><div style="font-family:var(--c-serif);font-size:46px;color:var(--c-accent);line-height:1">{{ fc.kanji }}</div></sc-if>
+                  <sc-if value="{{ fc.eyebrow }}"><div style="font-size:11px;letter-spacing:0.22em;text-transform:uppercase;color:var(--c-brand);font-weight:600;margin-top:26px">{{ fc.eyebrow }}</div></sc-if>
+                  <h3 style="font-family:var(--c-serif);font-weight:500;font-size:30px;margin:6px 0 0;color:var(--c-text);letter-spacing:0.02em">{{ fc.name }}</h3>
+                  <sc-if value="{{ fc.frontBody }}"><p style="font-size:14.5px;line-height:1.6;color:var(--c-text2);margin:16px 0 0">{{ fc.frontBody }}</p></sc-if>
+                </div>
+              </div>
+              <!-- BACK -->
+              <div style="position:absolute;inset:0;backface-visibility:hidden;-webkit-backface-visibility:hidden;transform:rotateY(180deg);background:var(--c-dark);border-radius:10px;padding:30px;display:flex;flex-direction:column;justify-content:space-between;color:#fff">
+                <div>
+                  <h4 style="font-family:var(--c-serif);font-weight:600;font-size:24px;margin:0;color:#fff">{{ fc.name }}</h4>
+                  <div style="width:32px;height:2px;background:var(--c-accent);margin:14px 0 18px"></div>
+                  <sc-if value="{{ fc.backBody }}"><p style="font-size:14.5px;line-height:1.7;color:rgba(255,255,255,0.78);margin:0">{{ fc.backBody }}</p></sc-if>
+                </div>
+                <sc-if value="{{ fc.benefit }}">
+                <div>
+                  <div style="font-size:11px;letter-spacing:0.2em;text-transform:uppercase;color:var(--c-accent);font-weight:600;margin-bottom:8px">Derived Benefit</div>
+                  <p style="font-family:var(--c-serif);font-style:italic;font-weight:300;font-size:17px;line-height:1.5;color:#fff;margin:0">{{ fc.benefit }}</p>
+                </div>
+                </sc-if>
+              </div>
+            </div>
+          </div>
+        </sc-for>
+      </div>
+      <sc-if value="{{ highlights.bannerTitle }}">
+      <div style="margin-top:48px;background:var(--c-panel);border:1px solid var(--c-border);border-left:5px solid var(--c-brand);border-radius:8px;padding:40px 44px;display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:24px 40px;align-items:center">
+        <div>
+          <h3 style="font-family:var(--c-serif);font-weight:400;font-size:clamp(22px,2.8vw,30px);margin:0 0 12px;color:var(--c-text)">{{ highlights.bannerTitle }}</h3>
+          <sc-if value="{{ highlights.bannerBody }}"><p style="font-size:15.5px;line-height:1.65;color:var(--c-text2);margin:0">{{ highlights.bannerBody }}</p></sc-if>
+        </div>
+        <div style="text-align:right"><a href="{{ nav.ctaHref }}" style="text-decoration:none;background:var(--c-brand);color:#fff;padding:15px 32px;border-radius:4px;font-size:13px;letter-spacing:0.08em;text-transform:uppercase;font-weight:600;display:inline-block;white-space:nowrap" style-hover="background:var(--c-dark)">{{ highlights.bannerCtaLabel }}</a></div>
+      </div>
+      </sc-if>
+    </div>
+  </section>
+  </sc-if>
+
+  <!-- ===================== SAFETY (dark) ===================== -->
+  <sc-if value="{{ showSafety }}">
+  <section id="safety" aria-label="Safety framework" style="background:var(--c-dark);color:#fff;padding:100px 28px;position:relative;overflow:hidden">
+    <div class="lpg-pat-dark" style="position:absolute;inset:0;opacity:0.06;pointer-events:none"></div>
+    <div style="max-width:1240px;margin:0 auto;position:relative;z-index:1">
+      <div style="text-align:center;margin-bottom:54px">
+        <sc-if value="{{ safety.eyebrow }}"><p style="font-size:12px;letter-spacing:0.24em;text-transform:uppercase;color:var(--c-accent);font-weight:600;margin:0 0 14px">{{ safety.eyebrow }}</p></sc-if>
+        <h2 style="font-family:var(--c-serif);font-weight:400;font-size:clamp(30px,5vw,52px);margin:0 auto 16px;max-width:720px;color:#fff">{{ safety.title }}</h2>
+        <sc-if value="{{ safety.subtitle }}"><p style="max-width:560px;margin:0 auto;font-size:16px;line-height:1.7;color:rgba(255,255,255,0.72)">{{ safety.subtitle }}</p></sc-if>
+      </div>
+      <sc-if value="{{ showSafetyStats }}">
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:20px">
+        <sc-for list="{{ safetyStats }}" as="s">
+          <div style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.12);border-radius:10px;padding:32px 24px;text-align:center" style-hover="border-color:var(--c-brand)">
+            <div style="font-family:var(--c-serif);font-weight:700;font-size:26px;color:var(--c-brand)">{{ s.stat }}</div>
+            <h4 style="font-family:var(--c-serif);font-size:16px;font-weight:600;margin:12px 0 8px;color:#fff">{{ s.title }}</h4>
+            <p style="font-size:13.5px;line-height:1.55;color:rgba(255,255,255,0.62);margin:0">{{ s.body }}</p>
+          </div>
+        </sc-for>
+      </div>
+      </sc-if>
+      <sc-if value="{{ showIncluded }}">
+      <div style="margin-top:24px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);border-radius:12px;padding:48px;display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:40px 48px;align-items:center">
+        <div>
+          <h3 style="font-family:var(--c-serif);font-weight:600;font-size:18px;color:#fff;margin:0 0 18px">{{ safety.includedTitle }}</h3>
+          <sc-if value="{{ safety.includedQuote }}"><h4 style="font-family:var(--c-serif);font-weight:300;font-style:italic;font-size:24px;line-height:1.3;margin:0 0 18px;color:#fff">{{ safety.includedQuote }}</h4></sc-if>
+          <a href="{{ nav.ctaHref }}" style="text-decoration:none;background:var(--c-brand);color:#fff;padding:13px 30px;border-radius:4px;font-size:12.5px;letter-spacing:0.1em;text-transform:uppercase;font-weight:600;display:inline-block" style-hover="background:#fff;color:var(--c-dark)">{{ safety.ctaLabel }}</a>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:0 32px">
+          <sc-for list="{{ safetyIncluded }}" as="inc">
+            <div style="display:flex;gap:12px;padding:12px 0;border-bottom:1px solid rgba(255,255,255,0.1)">
+              <span style="color:var(--c-accent);flex:none;font-size:14px">✓</span>
+              <span style="font-size:13.5px;line-height:1.45;color:rgba(255,255,255,0.85)">{{ inc }}</span>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+      </sc-if>
+    </div>
+  </section>
+  </sc-if>
+
+  <!-- ===================== TESTIMONIALS ===================== -->
+  <sc-if value="{{ showTestimonials }}">
+  <section aria-label="Testimonials" style="background:var(--c-light);padding:100px 28px;position:relative;overflow:hidden">
+    <div class="{{ patternLightClass }}" style="position:absolute;inset:0;opacity:0.16;pointer-events:none"></div>
+    <div style="max-width:1240px;margin:0 auto;position:relative;z-index:1">
+      <div style="text-align:center;margin-bottom:54px">
+        <sc-if value="{{ testimonials.eyebrow }}"><p style="font-size:12px;letter-spacing:0.24em;text-transform:uppercase;color:var(--c-accent);font-weight:600;margin:0 0 14px">{{ testimonials.eyebrow }}</p></sc-if>
+        <h2 style="font-family:var(--c-serif);font-weight:400;font-size:clamp(30px,5vw,52px);margin:0 auto;max-width:700px;color:var(--c-text)">{{ testimonials.title }}</h2>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:24px">
+        <sc-for list="{{ testimonialItems }}" as="t">
+          <div style="background:var(--c-panel);border:1px solid var(--c-border);border-radius:10px;padding:36px;display:flex;flex-direction:column">
+            <div style="display:flex;gap:3px;margin-bottom:14px">
+              <sc-for list="{{ t.stars }}" as="star"><span style="color:#FBBC05;font-size:16px;line-height:1">★</span></sc-for>
+            </div>
+            <p style="font-size:15.5px;line-height:1.75;color:var(--c-text);font-style:italic;margin:0 0 28px;flex:1">“{{ t.quote }}”</p>
+            <div style="display:flex;align-items:center;gap:14px">
+              <div style="width:42px;height:42px;border-radius:50%;background:var(--c-accent);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:600;font-size:17px;font-family:var(--c-serif)">{{ t.initial }}</div>
+              <div>
+                <div style="font-size:14px;font-weight:600;color:var(--c-text)">{{ t.name }}</div>
+                <sc-if value="{{ t.source }}"><div style="font-size:12px;color:var(--c-text2)">{{ t.source }}</div></sc-if>
+              </div>
+            </div>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+  </section>
+  </sc-if>
+
+  <!-- ===================== INVESTMENT / PRICING ===================== -->
+  <sc-if value="{{ showInvestment }}">
+  <section id="investment" aria-label="Investment" style="background:var(--c-panel);border-top:1px solid var(--c-border);padding:100px 28px">
+    <div style="max-width:1240px;margin:0 auto">
+      <div style="text-align:center;margin-bottom:54px">
+        <sc-if value="{{ investment.eyebrow }}"><p style="font-size:12px;letter-spacing:0.24em;text-transform:uppercase;color:var(--c-accent);font-weight:600;margin:0 0 14px">{{ investment.eyebrow }}</p></sc-if>
+        <h2 style="font-family:var(--c-serif);font-weight:400;font-size:clamp(30px,5vw,52px);margin:0 auto 16px;max-width:720px;color:var(--c-text)">{{ investment.title }}</h2>
+        <sc-if value="{{ investment.subtitle }}"><p style="max-width:600px;margin:0 auto;font-size:16px;line-height:1.7;color:var(--c-text2)">{{ investment.subtitle }}</p></sc-if>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:24px">
+        <sc-for list="{{ installments }}" as="ins">
+          <div style="background:var(--c-light);border:1px solid {{ ins.borderColor }};border-radius:10px;padding:36px;position:relative;box-shadow:{{ ins.shadow }}">
+            <sc-if value="{{ ins.startTag }}"><div style="position:absolute;top:18px;right:20px;background:color-mix(in srgb,var(--c-brand) 12%,transparent);color:var(--c-brand);font-size:10px;font-weight:700;padding:4px 9px;border-radius:4px;text-transform:uppercase;letter-spacing:0.08em">{{ ins.startTag }}</div></sc-if>
+            <div style="font-size:11px;letter-spacing:0.2em;text-transform:uppercase;color:var(--c-accent);font-weight:600">{{ ins.tag }}</div>
+            <h4 style="font-family:var(--c-serif);font-weight:700;font-size:20px;margin:8px 0 4px;color:var(--c-text)">{{ ins.title }}</h4>
+            <sc-if value="{{ ins.sub }}"><p style="font-size:13px;color:var(--c-text2);margin:0 0 20px">{{ ins.sub }}</p></sc-if>
+            <div style="font-family:var(--c-serif);font-weight:700;font-size:36px;color:var(--c-brand);line-height:1">{{ ins.amount }}</div>
+            <div style="margin-top:22px;border-top:1px solid var(--c-border);padding-top:18px;display:flex;flex-direction:column;gap:8px">
+              <sc-if value="{{ ins.date }}"><div style="font-size:13px;color:var(--c-text2)">🗓 {{ ins.date }}</div></sc-if>
+              <sc-if value="{{ ins.entity }}"><div style="font-size:13px;color:var(--c-text2)">🏢 {{ ins.entity }}</div></sc-if>
+            </div>
+          </div>
+        </sc-for>
+      </div>
+      <sc-if value="{{ showInclusions }}">
+      <div style="margin-top:26px;background:var(--c-light);border:1px solid var(--c-border);border-radius:10px;padding:40px">
+        <h3 style="font-size:14px;letter-spacing:0.16em;text-transform:uppercase;color:var(--c-brand);font-weight:700;margin:0 0 22px">{{ investment.inclusionsTitle }}</h3>
+        <div style="display:flex;flex-wrap:wrap;gap:12px">
+          <sc-for list="{{ inclusions }}" as="x">
+            <span style="background:var(--c-panel);border:1px solid var(--c-border);border-radius:999px;padding:9px 18px;font-size:13.5px;color:var(--c-text)">{{ x }}</span>
+          </sc-for>
+        </div>
+        <sc-if value="{{ investment.note }}"><p style="font-size:13px;color:var(--c-text2);margin:24px 0 0;font-style:italic">{{ investment.note }}</p></sc-if>
+      </div>
+      </sc-if>
+    </div>
+  </section>
+  </sc-if>
+
+  <!-- ===================== REGISTRATION ===================== -->
+  <sc-if value="{{ showRegister }}">
+  <section id="register" aria-label="Registration" style="background:var(--c-soft);padding:100px 28px">
+    <div style="max-width:1140px;margin:0 auto">
+      <div style="text-align:center;margin-bottom:52px">
+        <sc-if value="{{ register.eyebrow }}"><p style="font-size:12px;letter-spacing:0.24em;text-transform:uppercase;color:var(--c-brand);font-weight:600;margin:0 0 14px">{{ register.eyebrow }}</p></sc-if>
+        <h2 style="font-family:var(--c-serif);font-weight:400;font-size:clamp(28px,4.6vw,48px);margin:0 auto;max-width:780px;color:var(--c-text)">{{ register.title }}</h2>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:48px;align-items:start">
+
+        <!-- FORM / THANK-YOU / CLOSED states -->
+        <div style="background:var(--c-panel);border:1px solid var(--c-border);border-bottom:3px solid var(--c-accent);border-radius:12px;padding:40px">
+
+          <!-- Thank-you -->
+          <sc-if value="{{ regSubmitted }}">
+          <div style="text-align:center;padding:20px 0">
+            <div style="width:64px;height:64px;border-radius:50%;background:color-mix(in srgb,var(--c-brand) 12%,transparent);color:var(--c-brand);display:flex;align-items:center;justify-content:center;font-size:30px;margin:0 auto 20px">✓</div>
+            <h3 style="font-family:var(--c-serif);font-weight:700;font-size:23px;margin:0 0 10px;color:var(--c-text)">{{ register.successTitle }}</h3>
+            <p style="font-size:15px;line-height:1.6;color:var(--c-text2);margin:0;max-width:380px;margin-left:auto;margin-right:auto">{{ register.successBody }}</p>
+          </div>
+          </sc-if>
+
+          <!-- Closed (full / past deadline) -->
+          <sc-if value="{{ regShowClosed }}">
+          <div style="text-align:center;padding:20px 0">
+            <div style="width:64px;height:64px;border-radius:50%;background:var(--c-light);color:var(--c-text2);display:flex;align-items:center;justify-content:center;font-size:28px;margin:0 auto 20px">⏳</div>
+            <h3 style="font-family:var(--c-serif);font-weight:700;font-size:22px;margin:0 0 10px;color:var(--c-text)">Registration Closed</h3>
+            <p style="font-size:15px;line-height:1.6;color:var(--c-text2);margin:0">{{ regClosedMessage }}</p>
+          </div>
+          </sc-if>
+
+          <!-- Active form -->
+          <sc-if value="{{ regShowForm }}">
+          <div>
+            <!-- progress -->
+            <sc-if value="{{ regMultiStep }}">
+            <div style="display:flex;gap:8px;margin-bottom:24px">
+              <sc-for list="{{ regProgress }}" as="bar"><div style="flex:1;height:6px;border-radius:999px;background:{{ bar.color }}"></div></sc-for>
+            </div>
+            </sc-if>
+            <h3 style="font-family:var(--c-serif);font-weight:700;font-size:23px;margin:0 0 6px;color:var(--c-text)">{{ regStepTitle }}</h3>
+            <sc-if value="{{ regSeatsLabel }}"><p style="font-size:12.5px;color:var(--c-text2);margin:0 0 20px">{{ regSeatsLabel }}</p></sc-if>
+
+            <div style="display:flex;flex-direction:column;gap:18px">
+              <sc-for list="{{ regFields }}" as="f">
+                <div>
+                  <label style="display:block;font-size:13px;font-weight:600;color:var(--c-text);margin-bottom:8px">{{ f.label }}{{ f.reqMark }}</label>
+                  <!-- select -->
+                  <sc-if value="{{ f.isSelect }}">
+                    <select onChange="{{ f.onInput }}" value="{{ f.value }}" required="{{ f.required }}" aria-label="{{ f.label }}" style="width:100%;padding:13px 14px;border:1px solid var(--c-border);border-radius:6px;font-size:15px;font-family:var(--c-sans);color:var(--c-text);background:var(--c-light)" style-focus="border-color:var(--c-brand);outline:none">
+                      <option value="">{{ f.placeholder }}</option>
+                      <sc-for list="{{ f.options }}" as="opt"><option value="{{ opt }}">{{ opt }}</option></sc-for>
+                    </select>
+                  </sc-if>
+                  <!-- text / email / tel / number -->
+                  <sc-if value="{{ f.isInput }}">
+                    <input type="{{ f.type }}" onChange="{{ f.onInput }}" value="{{ f.value }}" required="{{ f.required }}" placeholder="{{ f.placeholder }}" aria-label="{{ f.label }}" style="width:100%;padding:13px 14px;border:1px solid var(--c-border);border-radius:6px;font-size:15px;font-family:var(--c-sans);color:var(--c-text);background:var(--c-light)" style-focus="border-color:var(--c-brand);outline:none">
+                  </sc-if>
+                </div>
+              </sc-for>
+
+              <!-- Honeypot: hidden from humans, catches bots -->
+              <input type="text" tabindex="-1" autocomplete="off" onChange="{{ hpSetter }}" class="lpg-hide" aria-hidden="true">
+
+              <sc-if value="{{ regError }}"><p role="alert" style="font-size:13px;color:var(--c-brand);margin:0">{{ regError }}</p></sc-if>
+
+              <div style="display:flex;gap:12px;margin-top:8px">
+                <sc-if value="{{ regShowBack }}">
+                  <button type="button" onClick="{{ regPrev }}" style="flex:0 0 auto;background:transparent;color:var(--c-text2);border:1px solid var(--c-border);padding:15px 20px;border-radius:4px;font-size:13px;letter-spacing:0.08em;text-transform:uppercase;font-weight:600;font-family:var(--c-sans);cursor:pointer" style-hover="border-color:var(--c-text2)">Back</button>
+                </sc-if>
+                <button type="button" onClick="{{ regPrimary }}" style="flex:1;background:var(--c-brand);color:#fff;border:none;padding:15px;border-radius:4px;font-size:13px;letter-spacing:0.12em;text-transform:uppercase;font-weight:600;font-family:var(--c-sans);cursor:pointer" style-hover="background:var(--c-dark)">{{ regPrimaryLabel }}</button>
+              </div>
+              <p style="font-size:12px;color:var(--c-text2);text-align:center;margin:4px 0 0">🔒 Your data is secure. No card details are collected here.</p>
+            </div>
+          </div>
+          </sc-if>
+        </div>
+
+        <!-- What the orientation/registration covers -->
+        <div>
+          <sc-if value="{{ register.intro }}"><p style="font-size:16px;line-height:1.7;color:var(--c-text2);margin:0 0 28px">{{ register.intro }}</p></sc-if>
+          <sc-if value="{{ showCovers }}">
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:16px">
+            <sc-for list="{{ register.covers }}" as="o">
+              <div style="background:var(--c-panel);border:1px solid var(--c-border);border-left:4px solid var(--c-accent);border-radius:6px;padding:22px 24px" style-hover="border-left-color:var(--c-brand)">
+                <h4 style="font-family:var(--c-serif);font-size:15px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;margin:0 0 6px;color:var(--c-text)">{{ o.title }}</h4>
+                <p style="font-size:13.5px;line-height:1.55;color:var(--c-text2);margin:0">{{ o.body }}</p>
+              </div>
+            </sc-for>
+          </div>
+          </sc-if>
+        </div>
+      </div>
+    </div>
+  </section>
+  </sc-if>
+
+  <!-- ===================== BROCHURE ===================== -->
+  <sc-if value="{{ showBrochure }}">
+  <section id="brochure" aria-label="Brochure download" style="max-width:980px;margin:0 auto;padding:100px 28px;text-align:center">
+    <sc-if value="{{ brochure.eyebrow }}"><p style="font-size:12px;letter-spacing:0.24em;text-transform:uppercase;color:var(--c-accent);font-weight:600;margin:0 0 14px">{{ brochure.eyebrow }}</p></sc-if>
+    <h2 style="font-family:var(--c-serif);font-weight:400;font-size:clamp(28px,4.6vw,48px);margin:0 auto 18px;max-width:640px;color:var(--c-text)">{{ brochure.title }}</h2>
+    <sc-if value="{{ brochure.body }}"><p style="max-width:600px;margin:0 auto 36px;font-size:15.5px;line-height:1.7;color:var(--c-text2)">{{ brochure.body }}</p></sc-if>
+    <div style="background:var(--c-panel);border:1px solid var(--c-border);border-radius:12px;padding:40px;text-align:left;max-width:680px;margin:0 auto">
+
+      <sc-if value="{{ brSubmitted }}">
+      <div style="text-align:center;padding:8px 0">
+        <div style="width:56px;height:56px;border-radius:50%;background:color-mix(in srgb,var(--c-brand) 12%,transparent);color:var(--c-brand);display:flex;align-items:center;justify-content:center;font-size:26px;margin:0 auto 16px">✓</div>
+        <h3 style="font-family:var(--c-serif);font-weight:700;font-size:20px;margin:0 0 8px;color:var(--c-text)">{{ brochure.successTitle }}</h3>
+        <p style="font-size:14.5px;line-height:1.6;color:var(--c-text2);margin:0">{{ brochure.successBody }}</p>
+      </div>
+      </sc-if>
+
+      <sc-if value="{{ brShowForm }}">
+      <div>
+        <sc-if value="{{ brochure.note }}"><p style="font-size:13.5px;color:var(--c-text2);margin:0 0 24px;text-align:center">{{ brochure.note }}</p></sc-if>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:18px">
+          <sc-for list="{{ brFields }}" as="f">
+            <div>
+              <label style="display:block;font-size:13px;font-weight:600;color:var(--c-text);margin-bottom:8px">{{ f.label }}{{ f.reqMark }}</label>
+              <sc-if value="{{ f.isSelect }}">
+                <select onChange="{{ f.onInput }}" value="{{ f.value }}" required="{{ f.required }}" aria-label="{{ f.label }}" style="width:100%;padding:12px 14px;border:1px solid var(--c-border);border-radius:6px;font-size:14.5px;font-family:var(--c-sans);color:var(--c-text);background:var(--c-light)" style-focus="border-color:var(--c-brand);outline:none">
+                  <option value="">{{ f.placeholder }}</option>
+                  <sc-for list="{{ f.options }}" as="opt"><option value="{{ opt }}">{{ opt }}</option></sc-for>
+                </select>
+              </sc-if>
+              <sc-if value="{{ f.isInput }}">
+                <input type="{{ f.type }}" onChange="{{ f.onInput }}" value="{{ f.value }}" required="{{ f.required }}" placeholder="{{ f.placeholder }}" aria-label="{{ f.label }}" style="width:100%;padding:12px 14px;border:1px solid var(--c-border);border-radius:6px;font-size:14.5px;font-family:var(--c-sans);color:var(--c-text);background:var(--c-light)" style-focus="border-color:var(--c-brand);outline:none">
+              </sc-if>
+            </div>
+          </sc-for>
+        </div>
+        <input type="text" tabindex="-1" autocomplete="off" onChange="{{ brHpSetter }}" class="lpg-hide" aria-hidden="true">
+        <sc-if value="{{ brError }}"><p role="alert" style="font-size:13px;color:var(--c-brand);margin:16px 0 0">{{ brError }}</p></sc-if>
+        <button type="button" onClick="{{ brSubmit }}" style="width:100%;margin-top:24px;background:var(--c-dark);color:#fff;border:none;padding:15px;border-radius:4px;font-size:13px;letter-spacing:0.12em;text-transform:uppercase;font-weight:600;font-family:var(--c-sans);cursor:pointer" style-hover="background:var(--c-brand)">{{ brochure.submitLabel }}</button>
+        <p style="font-size:12px;color:var(--c-text2);text-align:center;margin:16px 0 0">No obligation. For informed decision-making.</p>
+      </div>
+      </sc-if>
+    </div>
+  </section>
+  </sc-if>
+
+  <!-- ===================== FAQ (light) =====================
+       Flipped from dark to soft-light so the bottom of the page alternates
+       (Brochure light → FAQ soft-light → Final CTA navy → Footer navy)
+       instead of stacking three adjacent dark sections. Text-heavy
+       question/answer content also reads more comfortably on a light bg. -->
+  <sc-if value="{{ showFaqs }}">
+  <section id="faqs" aria-label="Frequently asked questions" style="background:var(--c-soft);color:var(--c-text);padding:100px 28px;position:relative;overflow:hidden">
+    <div class="{{ patternLightClass }}" style="position:absolute;inset:0;opacity:0.16;pointer-events:none"></div>
+    <div style="max-width:920px;margin:0 auto;position:relative;z-index:1">
+      <div style="text-align:center;margin-bottom:44px">
+        <sc-if value="{{ faqs.eyebrow }}"><p style="font-size:12px;letter-spacing:0.24em;text-transform:uppercase;color:var(--c-brand);font-weight:600;margin:0 0 14px">{{ faqs.eyebrow }}</p></sc-if>
+        <h2 style="font-family:var(--c-serif);font-weight:400;font-size:clamp(30px,5.4vw,58px);margin:0 0 12px;color:var(--c-text)">{{ faqs.title }}</h2>
+        <sc-if value="{{ faqs.subtitle }}"><p style="font-size:15.5px;color:var(--c-text2);margin:0">{{ faqs.subtitle }}</p></sc-if>
+      </div>
+      <div style="max-width:680px;margin:0 auto 26px;position:relative">
+        <input type="text" value="{{ faqQuery }}" onChange="{{ onFaqSearch }}" placeholder="Search questions..." aria-label="Search FAQs" style="width:100%;padding:15px 18px;background:var(--c-panel);border:1px solid var(--c-border);border-radius:10px;color:var(--c-text);font-size:15px;font-family:var(--c-sans)" style-focus="border-color:var(--c-brand);outline:none">
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:12px;justify-content:center;margin-bottom:36px">
+        <sc-for list="{{ faqCats }}" as="c">
+          <button type="button" onClick="{{ c.onSelect }}" style="background:{{ c.bg }};color:{{ c.color }};border:1px solid {{ c.border }};border-radius:999px;padding:9px 18px;font-size:13px;font-weight:500;font-family:var(--c-sans);cursor:pointer;display:flex;align-items:center;gap:8px">
+            <sc-if value="{{ c.icon }}"><span>{{ c.icon }}</span></sc-if><span>{{ c.label }}</span>
+            <span style="background:{{ c.countBg }};color:{{ c.countColor }};border-radius:999px;padding:1px 8px;font-size:11px;font-weight:600">{{ c.count }}</span>
+          </button>
+        </sc-for>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:12px">
+        <sc-for list="{{ faqVisible }}" as="f">
+          <div style="background:var(--c-panel);border:1px solid var(--c-border);border-radius:12px;overflow:hidden">
+            <button type="button" onClick="{{ f.onToggle }}" aria-expanded="{{ f.expanded }}" style="width:100%;background:none;border:none;padding:22px 24px;display:flex;align-items:center;justify-content:space-between;gap:16px;cursor:pointer;text-align:left;font-family:var(--c-sans)">
+              <span style="font-family:var(--c-serif);font-size:17px;font-weight:500;color:var(--c-text)">{{ f.q }}</span>
+              <span style="flex:none;width:30px;height:30px;border-radius:50%;border:1px solid var(--c-border);display:flex;align-items:center;justify-content:center;color:var(--c-brand);transition:transform 0.3s;transform:{{ f.iconTransform }};font-size:13px;line-height:1">⌄</span>
+            </button>
+            <div style="overflow:hidden;transition:max-height 0.4s ease;max-height:{{ f.maxH }}">
+              <p style="font-size:15px;line-height:1.7;color:var(--c-text2);margin:0;padding:0 24px 22px;max-width:760px">{{ f.a }}</p>
+            </div>
+          </div>
+        </sc-for>
+        <sc-if value="{{ faqEmpty }}"><p style="text-align:center;color:var(--c-text2);font-size:15px;padding:20px 0">No questions match your search.</p></sc-if>
+      </div>
+    </div>
+  </section>
+  </sc-if>
+
+  <!-- ===================== FINAL CTA (brand) ===================== -->
+  <sc-if value="{{ showFinalCta }}">
+  <section aria-label="Get started" style="background:var(--c-brand);color:#fff;padding:104px 28px;position:relative;overflow:hidden">
+    <div style="max-width:900px;margin:0 auto;text-align:center;position:relative;z-index:1">
+      <sc-if value="{{ finalCta.eyebrow }}"><p style="font-size:12px;letter-spacing:0.3em;text-transform:uppercase;color:rgba(255,255,255,0.8);font-weight:600;margin:0 0 18px">{{ finalCta.eyebrow }}</p></sc-if>
+      <h2 style="font-family:var(--c-serif);font-weight:400;font-size:clamp(32px,6vw,58px);line-height:1.12;margin:0 auto 14px;max-width:740px;color:#fff">{{ finalCta.title }}</h2>
+      <sc-if value="{{ finalCta.subtitle }}"><p style="font-size:18px;color:rgba(255,255,255,0.9);margin:0 0 48px">{{ finalCta.subtitle }}</p></sc-if>
+      <sc-if value="{{ showFinalSteps }}">
+      <div style="display:flex;gap:18px;justify-content:center;flex-wrap:wrap;margin-bottom:48px">
+        <sc-for list="{{ finalSteps }}" as="st">
+          <div style="display:flex;align-items:center;gap:14px">
+            <span style="width:34px;height:34px;border-radius:50%;border:1px solid rgba(255,255,255,0.6);color:#fff;display:flex;align-items:center;justify-content:center;font-family:var(--c-serif);font-size:15px;flex:none">{{ st.n }}</span>
+            <span style="font-size:15px;color:#fff;font-weight:400">{{ st.label }}</span>
+          </div>
+        </sc-for>
+      </div>
+      </sc-if>
+      <a href="{{ nav.ctaHref }}" style="text-decoration:none;background:#fff;color:var(--c-brand);padding:17px 44px;border-radius:4px;font-size:13px;letter-spacing:0.12em;text-transform:uppercase;font-weight:700;display:inline-block" style-hover="background:var(--c-dark);color:#fff">{{ finalCta.ctaLabel }}</a>
+    </div>
+  </section>
+  </sc-if>
+
+  <!-- ===================== FOOTER ===================== -->
+  <sc-if value="{{ showFooter }}">
+  <footer style="background:var(--c-footer);color:#fff;padding:72px 28px 40px">
+    <div style="max-width:1240px;margin:0 auto;display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:40px 48px;padding-bottom:48px;border-bottom:1px solid rgba(255,255,255,0.1)">
+      <div>
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px">
+          <sc-if value="{{ footer.brandLogo }}"><img src="{{ footer.brandLogo }}" alt="{{ footer.brandName }}" style="height:{{ footer.brandLogoH }};width:auto;max-width:280px;object-fit:contain"></sc-if>
+          <sc-if value="{{ footer.showBrandMark }}"><span style="font-family:var(--c-serif);font-weight:700;font-size:24px;color:var(--c-brand)">{{ footer.brandMark }}</span></sc-if>
+          <span style="font-weight:600;font-size:15px;letter-spacing:0.2em">{{ footer.brandName }}</span>
+        </div>
+        <sc-if value="{{ footer.tagline }}"><p style="font-family:var(--c-serif);font-style:italic;font-weight:300;font-size:18px;color:var(--c-accent);margin:0">{{ footer.tagline }}</p></sc-if>
+      </div>
+      <sc-if value="{{ footer.email }}">
+      <div>
+        <h4 style="font-size:12px;letter-spacing:0.18em;text-transform:uppercase;color:rgba(255,255,255,0.55);font-weight:600;margin:0 0 18px">Email Inquiries</h4>
+        <a href="{{ footer.emailHref }}" style="text-decoration:none;color:rgba(255,255,255,0.85);font-size:15px" style-hover="color:var(--c-accent)">{{ footer.email }}</a>
+      </div>
+      </sc-if>
+      <sc-if value="{{ showPhones }}">
+      <div>
+        <h4 style="font-size:12px;letter-spacing:0.18em;text-transform:uppercase;color:rgba(255,255,255,0.55);font-weight:600;margin:0 0 18px">Direct Contact</h4>
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <sc-for list="{{ footer.phones }}" as="ph">
+            <a href="{{ ph.href }}" style="text-decoration:none;color:rgba(255,255,255,0.85);font-size:15px" style-hover="color:var(--c-accent)">{{ ph.label }}</a>
+          </sc-for>
+        </div>
+      </div>
+      </sc-if>
+    </div>
+    <div style="max-width:1240px;margin:0 auto;padding-top:28px;display:flex;flex-wrap:wrap;gap:8px 18px;align-items:center;font-size:12.5px;color:rgba(255,255,255,0.5)">
+      <sc-for list="{{ footer.legal }}" as="item"><span>{{ item }}</span></sc-for>
+    </div>
+  </footer>
+  </sc-if>
+
+  <!-- ===================== FLOATING REGISTER ===================== -->
+  <sc-if value="{{ showFloating }}">
+  <a href="{{ nav.ctaHref }}" aria-label="{{ nav.ctaLabel }}" style="position:fixed;right:24px;bottom:24px;z-index:60;display:flex;align-items:center;gap:10px;background:var(--c-brand);color:#fff;text-decoration:none;padding:14px 26px;border-radius:999px;font-size:13px;letter-spacing:0.12em;text-transform:uppercase;font-weight:700;box-shadow:0 10px 30px rgba(0,0,0,0.25)" style-hover="background:var(--c-dark)">
+    <span style="width:9px;height:9px;border-radius:50%;background:#fff;display:inline-block;animation:lpg-pulse 1.6s ease-in-out infinite"></span>
+    {{ nav.ctaLabel }}
+  </a>
+  </sc-if>
+
+</div>
+</x-dc>
+
+<script type="text/x-dc" data-dc-script>
+/* ==========================================================================
+   Landing Page Generator — logic class
+   --------------------------------------------------------------------------
+   The CRM passes the page record as this.props.config. DEFAULT_CONFIG (the
+   Japan 2026 reference) is deep-merged underneath so any missing keys fall
+   back to a sensible value and the file previews standalone with no props.
+
+   IMPORTANT: the {{ }} interpolation in the template cannot call functions or
+   do arithmetic — so every derived value (countdown digits, flip transforms,
+   filtered FAQs, field handlers, conditional `show*` booleans, themed colour
+   strings) is computed here and returned from renderVals().
+   ========================================================================== */
+
+function isObj(x){ return x && typeof x === 'object' && !Array.isArray(x); }
+function deepMerge(base, over){
+  if(over === undefined) return base;
+  if(!isObj(base) || !isObj(over)) return over;       // arrays & scalars: replace wholesale
+  const out = Object.assign({}, base);
+  for(const k of Object.keys(over)) out[k] = deepMerge(base[k], over[k]);
+  return out;
+}
+/* Block javascript:/data: URLs that could ride in from CRM free-text fields. */
+function safeHref(u){
+  if(typeof u !== 'string') return '#';
+  const t = u.trim();
+  if(/^(javascript|data|vbscript):/i.test(t)) return '#';
+  return t || '#';
+}
+function pad(n){ return String(n).padStart(2, '0'); }
+function validateField(f, val){
+  const v = (val == null ? '' : String(val)).trim();
+  if(f.required && !v) return f.label + ' is required';
+  if(v && f.type === 'email' && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v)) return 'Please enter a valid email address';
+  if(v && f.type === 'tel'   && !/^[+\d][\d\s\-()]{6,}$/.test(v))     return 'Please enter a valid phone number';
+  return '';
+}
+
+/* ----- DEFAULT CONFIG (Japan 2026 reference) ----- */
+var DEFAULT_CONFIG = {
+  theme: {
+    brandColor:'#D21F2B', accentColor:'#B89B5E', darkColor:'#20235A', footerColor:'#141228',
+    lightBg:'#FAF6EF', panelBg:'#FFFFFF', softBg:'#FBEFF1',
+    textColor:'#211D18', textColor2:'#6E6A62', borderColor:'#EAE3D7',
+    serifFont:"'Noto Serif JP', serif", sansFont:"'Noto Sans JP', sans-serif",
+    pattern:'shippo'
+  },
+  brand:{ subBrand:'TMC', mark:'日本', name:'JAPAN 2026' },
+  meta:{ slug:'japan-2026', tripId:null },
+  nav:{
+    links:[ {label:'Programme',href:'#programme'},{label:'Safety',href:'#safety'},{label:'Investment',href:'#investment'},{label:'FAQs',href:'#faqs'} ],
+    ctaLabel:'Register Now', ctaHref:'#register', floating:true
+  },
+  hero:{
+    logos:[
+      {src:'https://japan.themodernclassroom.in/images/dps_logo.png', alt:'Delhi Public School'},
+      {src:'https://japan.themodernclassroom.in/images/soi_logo.png', alt:'School of India'},
+      {src:'https://japan.themodernclassroom.in/images/tmc_logo.png', alt:'The Modern Classroom'}
+    ],
+    eyebrow:'Sept – Oct 2026  |  Grades 6–12',
+    badge:'Limited to 45 Students per Batch',
+    kicker:'09 Days. 04 Cities.',
+    titleLines:['Where Exposure','Becomes Perspective'],
+    subhead:'Observe how disciplined societies think, organize, and operate. This is not tourism, but structured, guided international immersion.',
+    valueCards:[
+      {kanji:'自信', title:'Global Confidence', body:'Composure and adaptability in unfamiliar environments.'},
+      {kanji:'視野', title:'Global Perspective', body:'Exposure to structured global systems and perspectives.'},
+      {kanji:'礼節', title:'Cultural Awareness', body:'Deep appreciation of Japanese tradition and etiquette.'},
+      {kanji:'自立', title:'Guided Independence', body:'Freedom to explore within a safe, structured framework.'}
+    ],
+    ctaLabel:'Register for Parent Orientation',
+    image:{ src:'https://japan.themodernclassroom.in/images/japan_hero.png', alt:'Japan 2026 Educational Immersion Program' },
+    imageTitle:'Japan 2026 Educational Immersion Program',
+    imageSubtitle:'A Structured Journey into Discipline, Culture, and Independent Thinking'
+  },
+  countdown:{ enabled:true, deadline:'2026-07-02T23:59:00', label:'Parent Orientation · Registration Closes In', ctaLabel:'Attend Parent Orientation', ctaHref:'#register' },
+  cities:[
+    {name:'Tokyo', tag:'Metropolis', image:'https://images.unsplash.com/photo-1503899036084-c55cdd92da26?w=600&h=800&fit=crop'},
+    {name:'Mount Fuji', tag:'Iconic', image:'https://images.unsplash.com/photo-1490806843957-31f4c9a91c65?w=600&h=800&fit=crop'},
+    {name:'Kyoto', tag:'Heritage', image:'https://images.unsplash.com/photo-1493976040374-85c8e12f0c0e?w=600&h=800&fit=crop'},
+    {name:'Osaka', tag:'Culinary', image:'https://japan.themodernclassroom.in/osaka.jpg'}
+  ],
+  video:{ enabled:true, eyebrow:'Interactive Preview', title:'See the Experience Before You Decide.', body:'Before reading further, take a moment to see what this journey feels like. Notice the precision. The structure. The quiet discipline. This is not tourism — it is structured exposure.', embedUrl:'https://fast.wistia.net/embed/iframe/zwq5w6rf4r?videoFoam=true&playerColor=D21F2B' },
+  intro:{
+    title:'Because Academics Alone Are No Longer Enough.',
+    paragraphs:[
+      'Your child lives in a world that rewards more than grades. It rewards adaptability, cultural awareness, and composure under uncertainty.',
+      'Yet most exposure today is filtered through screens. Real-world systems thinking is rarely observed firsthand.',
+      'Japan offers a rare opportunity to experience a society where heritage and innovation evolve together.'
+    ],
+    gainsTitle:'What Students Gain',
+    gainsQuote:'Students do not simply see Japan. They observe systems. They experience discipline. They learn through immersion.',
+    gains:['Confidence in unfamiliar environments','Exposure to structured global systems','Cultural awareness beyond textbooks','Guided independence within supervision'],
+    ctaLabel:'Attend the Orientation Session →'
+  },
+  highlights:{
+    eyebrow:'Cultural Highlights', title:'Cultural Highlights',
+    subtitle:'Each location is selected not for tourism, but for its specific educational and developmental outcome.',
+    cards:[
+      {kanji:'東京', eyebrow:'Urban Precision', name:'Tokyo', frontBody:'Your child navigates one of the world’s most complex cities with growing independence.', backBody:'From Asakusa Sensoji Temple to Shibuya Crossing, from school exchanges to TeamLab’s digital universe, Tokyo teaches adaptability in real time.', benefit:'“Exposure to structured complexity builds composure.”'},
+      {kanji:'富士', eyebrow:'Observing Power', name:'Mt. Fuji', frontBody:'Standing at Mt. Fuji’s 5th Station, students experience quiet strength.', backBody:'The Hakone Ropeway and Lake Ashi cruise teach something subtle — profound experiences come from observing, not rushing.', benefit:'“Depth over distraction.”'},
+      {kanji:'京都', eyebrow:'Cultural Continuity', name:'Kyoto', frontBody:'After boarding the Shinkansen at 320 km/h, students arrive in Japan’s ancient capital.', backBody:'Dressed in kimono, walking temple grounds, they witness how tradition evolves without erasing its roots.', benefit:'“Respect for legacy while embracing innovation.”'},
+      {kanji:'奈良', eyebrow:'Living Reverence', name:'Nara', frontBody:'At Todaiji Temple and among Nara’s sacred deer, students encounter harmony and discipline.', backBody:'Among the temples and free-roaming deer, students learn that respect can be a shared, institutionalized practice.', benefit:'“Understanding that respect can be institutionalized.”'},
+      {kanji:'大阪', eyebrow:'Structured Independence', name:'Osaka', frontBody:'From Umeda Sky Observatory to Universal Studios Japan, students explore freely within defined boundaries.', backBody:'With supervised budgeting systems in place, independence becomes tangible and accountable.', benefit:'“Confidence under guidance.”'}
+    ],
+    bannerTitle:'Every Location Has a Purpose.',
+    bannerBody:'See how this 9-day journey is academically structured, supervised, and outcome-driven.',
+    bannerCtaLabel:'Reserve Your Orientation Seat'
+  },
+  safety:{
+    eyebrow:'Safety Framework', title:'Engineered for Safety. Designed for Growth.',
+    subtitle:'Your child’s safety and well-being are non-negotiable. Every element has been designed with care.',
+    stats:[
+      {stat:'1:20', title:'Teacher Ratio', body:'Trained Tour Directors with structured oversight.'},
+      {stat:'4★', title:'4-Star Hotels', body:'Twin sharing rooms ensuring comfort and safety.'},
+      {stat:'100%', title:'All Meals Included', body:'Mix of Indian, Continental, and Japanese cuisine.'},
+      {stat:'✈', title:'International Flights', body:'Return airfare via Malaysia Airlines or equivalent full-service carriers.'}
+    ],
+    includedTitle:'What’s Included',
+    includedQuote:'Independence within structure. Freedom within supervision.',
+    included:[
+      'Return international airfare & Japan tourist visa processing','4-Star hotels with twin sharing rooms',
+      'All meals: Continental breakfast + Indian/Japanese cuisine','All entrance fees and guided tours',
+      'Bullet train experience (Tokyo to Kyoto)','Travel insurance & dedicated tour directors',
+      'Private coach with regulated driving hours','Luggage courier support (Tokyo to Osaka)'
+    ],
+    ctaLabel:'Register for Orientation →'
+  },
+  testimonials:{
+    eyebrow:'From Parents', title:'They Returned More Independent. More Composed.',
+    items:[
+      {initial:'P', name:'Priya S.', source:'Google Review', rating:5, quote:'Phenomenal work and meticulous planning by the entire team. They offer an incredible experiential learning approach that truly integrates outbound learning and life skills.'},
+      {initial:'R', name:'Rahul M.', source:'Google Review', rating:5, quote:'The personal involvement and genuineness of the staff gave us complete peace of mind. Safety was clearly their top priority, and the level of supervision was outstanding.'},
+      {initial:'A', name:'Anjali K.', source:'Google Review', rating:5, quote:'A truly unique educational experience. The real-world learning and exposure to structured global cultures they provided was completely exceptional.'}
+    ]
+  },
+  investment:{
+    eyebrow:'Programme Investment', title:'Transparent Programme Investment',
+    subtitle:'The complete cost structure, inclusions, and instalment details are explained during the parent orientation session.',
+    featuredIndex:0,
+    installments:[
+      {tag:'First Instalment', title:'Registration Fee', sub:'Non-refundable', amount:'₹34,980', date:'30th June 2026', entity:'TMC Nexus Pvt Ltd'},
+      {tag:'Second Instalment', title:'Mid-term Payment', sub:'Confirms your seat', amount:'₹1,00,000', date:'15th July 2026', entity:'Travelstall'},
+      {tag:'Third Instalment', title:'Final Payment', sub:'Pre-departure', amount:'₹1,75,000', date:'15th August 2026', entity:'TMC Nexus Pvt Ltd'}
+    ],
+    inclusionsTitle:'Indicative Inclusions',
+    inclusions:['International airfare','Accommodation','Visa processing','Internal transportation','Supervision framework','Cultural access'],
+    note:'All financial details will be shared transparently during orientation.'
+  },
+  register:{
+    eyebrow:'Reserve Your Seat',
+    title:'Register for the Parent Orientation — Japan 2026',
+    intro:'Submitting this form reserves your seat for the orientation session where we will cover:',
+    endpoint:null,                /* CRM sets this — POST target that creates the Lead + registration */
+    capacity:45, registered:null, /* CRM injects live count; when registered >= capacity the form closes */
+    deadline:'2026-07-02T23:59:00',
+    successTitle:'You’re Registered!',
+    successBody:'Thank you — your orientation seat is reserved. Our team will email you the session details shortly.',
+    submitLabel:'Submit Registration',
+    steps:[
+      { title:'Step 1: Student Information', fields:[
+        {name:'student_name', label:'Student Full Name', type:'text', required:true, placeholder:'Enter full name'},
+        {name:'grade', label:'Grade', type:'text', required:true, placeholder:'e.g. Grade 8'},
+        {name:'school', label:'School', type:'select', required:true, placeholder:'Select school',
+          options:['School of India · KR Pet','DPS North','DPS South','DPS East','DPS West','DPS E-City','DPS Mysore','School of India']}
+      ]},
+      { title:'Step 2: Parent / Guardian', fields:[
+        {name:'parent_name', label:'Parent / Guardian Name', type:'text', required:true, placeholder:'Enter full name'},
+        {name:'parent_email', label:'Email', type:'email', required:true, placeholder:'email@example.com'},
+        {name:'parent_phone', label:'Phone Number', type:'tel', required:true, placeholder:'Mobile number'}
+      ]},
+      { title:'Step 3: Confirm', fields:[
+        {name:'participants', label:'Number of Participants', type:'number', required:false, placeholder:'1'},
+        {name:'passport_status', label:'Passport Status', type:'select', required:true, placeholder:'Select status', options:['Valid passport','Applied / in process','Not yet applied']}
+      ]}
+    ],
+    covers:[
+      {title:'Complete Itinerary', body:'Review the detailed day-by-day schedule.'},
+      {title:'Safety Framework', body:'Understand our strict 1:20 supervision protocols.'},
+      {title:'Investment Structure', body:'See the full transparent financial breakdown.'},
+      {title:'Live Q&A', body:'Get all your specific questions answered directly.'}
+    ]
+  },
+  brochure:{
+    enabled:true, eyebrow:'Still Exploring?', title:'Download the Detailed Programme Overview.',
+    body:'If you would prefer to review the complete itinerary, inclusions, safety framework, and payment structure before attending the orientation, you may request the official brochure.',
+    note:'Select your school to receive the respective version of the itinerary',
+    endpoint:null, submitLabel:'Download Programme Brochure →',
+    successTitle:'Brochure On Its Way',
+    successBody:'Thank you — we’ve emailed the programme brochure to the address you provided.',
+    fields:[
+      {name:'parent_name', label:"Parent's Name", type:'text', required:true, placeholder:'Full name'},
+      {name:'phone', label:'Phone Number', type:'tel', required:true, placeholder:'Mobile number'},
+      {name:'school', label:'Select School', type:'select', required:true, placeholder:'Select your school', options:['DPS','School of India','Other']},
+      {name:'email', label:"Parent's Email", type:'email', required:true, placeholder:'email@example.com'}
+    ]
+  },
+  faqs:{
+    eyebrow:'Clarifications', title:'Frequently Asked Questions', subtitle:'Everything you need to know about the Japan 2026 tour',
+    allLabel:'All Questions',
+    categories:[
+      {id:'tour', label:'Tour Details', icon:'📍'},
+      {id:'pay', label:'Payments & Pricing', icon:'💳'},
+      {id:'safety', label:'Safety & Logistics', icon:'🛡️'},
+      {id:'reg', label:'Registration', icon:'📝'}
+    ],
+    items:[
+      {category:'tour', q:'How does this tour benefit students?', a:'It builds global confidence, cultural awareness, structured-systems thinking and guided independence through firsthand immersion rather than screen-based learning.'},
+      {category:'tour', q:'What cities are covered in this tour?', a:'Tokyo, Mt. Fuji & Hakone, Kyoto, Nara and Osaka — four base cities across a structured 9-day journey.'},
+      {category:'tour', q:'When are the tour dates?', a:'The programme runs in September–October 2026. Exact departure dates are confirmed during the Parent Orientation.'},
+      {category:'tour', q:'Which grade students will be grouped together?', a:'Students from Grades 6–12 are grouped into age-appropriate bands for supervision and activities.'},
+      {category:'tour', q:'What is the maximum group size?', a:'Each batch is limited to 45 students, maintaining a 1:20 student-to-teacher ratio throughout.'},
+      {category:'pay', q:'What is included in the tour cost?', a:'Return international airfare, visa processing, 4-star twin-sharing hotels, all meals, entrance fees, guided tours, the Shinkansen experience, insurance and tour directors.'},
+      {category:'pay', q:'What is NOT included in the cost?', a:'Personal expenses, optional shopping and anything not listed in the inclusions are not covered.'},
+      {category:'pay', q:'What is the payment structure?', a:'Three instalments: ₹34,980 registration (30 Jun), ₹1,00,000 (15 Jul) and ₹1,75,000 (15 Aug 2026).'},
+      {category:'pay', q:'What is the cancellation policy?', a:'The registration fee is non-refundable. The complete cancellation policy is explained transparently at orientation.'},
+      {category:'safety', q:'What are the safety protocols in place?', a:'1:20 supervision, trained tour directors, 4-star accommodation, comprehensive travel insurance and regulated coach driving hours.'},
+      {category:'safety', q:'What documents are required for visa processing?', a:'A valid passport, photographs and school documents. Full Japan tourist visa processing is handled by the team.'},
+      {category:'safety', q:'How will meals be managed?', a:'All meals are included — a mix of Continental breakfast and Indian/Japanese cuisine, with dietary needs accommodated.'},
+      {category:'safety', q:'Can parents contact their children during the trip?', a:'Yes — scheduled check-ins and tour-director contact keep parents updated daily.'},
+      {category:'reg', q:'How do I register my child for the tour?', a:'Complete the registration form to reserve an orientation seat, then confirm enrolment after attending the session.'},
+      {category:'reg', q:'What if my child doesn’t have a passport?', a:'Apply immediately — the team can guide you through passport and visa timelines.'},
+      {category:'reg', q:'Will there be a pre-departure orientation?', a:'Yes — both student and parent pre-departure orientations are held before travel.'},
+      {category:'reg', q:'Who can I contact for more information?', a:'Email mail@themodernclassroom.in or call 9900786677 / 9886753632.'}
+    ]
+  },
+  finalCta:{
+    eyebrow:'09 Days · 04 Cities', title:'The Details That Matter', subtitle:'One Transformational Educational Journey.',
+    steps:[ {label:'Join Parent Orientation'},{label:'Review the framework'},{label:'Decide with clarity'} ],
+    ctaLabel:'Register for the Parent Orientation'
+  },
+  footer:{
+    mark:'日本', name:'JAPAN 2026', tagline:'Where Precision Fuels Possibility',
+    email:'mail@themodernclassroom.in',
+    phones:[ {label:'9900786677 · 9886753632', tel:'+919900786677'}, {label:'080 4371 2595', tel:'+9108043712595'} ],
+    legal:['© 2026 The Modern Classroom','1:20 Supervision Framework','Japan 2026 Educational Immersion']
+  }
+};
+
+class Component extends DCLogic {
+  state = {
+    now: Date.now(), openFaq:0, faqCat:'all', faqQuery:'',
+    regStep:0, regValues:{}, regError:'', regSubmitted:false, regSending:false,
+    brValues:{}, brError:'', brSubmitted:false, brSending:false
+  };
+
+  componentDidMount(){
+    this._t = setInterval(() => this.setState({ now: Date.now() }), 1000);
+    /* Force-start any autoplay <video> on the page. React's `muted` prop is
+       set via the JS property (mustUseProperty) but the matching HTML
+       attribute may not be reflected at the moment the browser evaluates
+       its autoplay policy — Chrome / Safari then refuse to start playback
+       and the user sees a still poster. Re-asserting muted + calling
+       .play() after mount sidesteps the race; the rejected-promise catch
+       leaves controls in place so the visitor can still tap to play if
+       the browser is in a "block all autoplay" mode. */
+    this._startAutoplay();
+  }
+  componentWillUnmount(){ clearInterval(this._t); }
+
+  _startAutoplay(){
+    const tryPlay = () => {
+      const vids = document.querySelectorAll('video[autoplay]');
+      for(let i = 0; i < vids.length; i++){
+        const v = vids[i];
+        v.muted = true;          /* belt-and-braces; React's mustUseProperty sets this but a re-assert is cheap */
+        v.defaultMuted = true;   /* mirrors the HTML attribute semantics so a re-load doesn't unmute */
+        const p = v.play();
+        if(p && typeof p.catch === 'function') p.catch(() => {});
+      }
+    };
+    /* Run once immediately (covers fast-mounting videos) and again after a
+       tick (covers cases where the <video> element is inserted by a
+       sibling re-render right after this Logic mounts). */
+    tryPlay();
+    setTimeout(tryPlay, 0);
+  }
+
+  /* generic input/select setter for a given state bag + field name */
+  setField(bag, name){
+    return (e) => { const v = e && e.target ? e.target.value : ''; this.setState(st => { const next = Object.assign({}, st[bag]); next[name] = v; const patch = {}; patch[bag] = next; return patch; }); };
+  }
+
+  submitForm(opts){
+    /* opts: { bag, endpoint, type, cfg, doneKey, sendingKey } */
+    const vals = this.state[opts.bag] || {};
+    if(vals._hp){ const p = {}; p[opts.doneKey] = true; this.setState(p); return; }  // honeypot tripped → silently "succeed"
+    const payload = {
+      type: opts.type,
+      slug: opts.cfg.meta && opts.cfg.meta.slug,
+      tripId: opts.cfg.meta && opts.cfg.meta.tripId,
+      subBrand: opts.cfg.brand && opts.cfg.brand.subBrand,
+      fields: vals,
+      submittedAt: new Date().toISOString()
+    };
+    if(!opts.endpoint){ const p = {}; p[opts.doneKey] = true; this.setState(p); return; } // preview: simulate success
+    const s = {}; s[opts.sendingKey] = true; this.setState(s);
+    fetch(opts.endpoint, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) })
+      .then(r => { if(!r.ok) throw new Error('bad status'); return r.json().catch(() => ({})); })
+      .then(() => { const p = {}; p[opts.doneKey] = true; p[opts.sendingKey] = false; this.setState(p); })
+      .catch(() => { const p = { regError:'', brError:'' }; const key = opts.bag === 'regValues' ? 'regError' : 'brError'; p[key] = 'Something went wrong. Please try again.'; p[opts.sendingKey] = false; this.setState(p); });
+  }
+
+  renderVals(){
+    /* Config resolution order: component prop (set via __dcSetProps), then
+       window.__PAGE_CONFIG (server-injected per public page), then DEFAULT_CONFIG.
+       The CRM only has to emit a script tag that sets window.__PAGE_CONFIG. */
+    const injected = (this.props && this.props.config) || (typeof window !== 'undefined' && window.__PAGE_CONFIG) || {};
+    const cfg = deepMerge(DEFAULT_CONFIG, injected);
+    const t = cfg.theme || {};
+    const out = {};
+
+    /* ----- theme (projected onto CSS vars at the root) ----- */
+    out.brandColor=t.brandColor; out.accentColor=t.accentColor; out.darkColor=t.darkColor;
+    out.footerColor=t.footerColor; out.lightBg=t.lightBg; out.panelBg=t.panelBg; out.softBg=t.softBg;
+    out.textColor=t.textColor; out.textColor2=t.textColor2; out.borderColor=t.borderColor;
+    out.serifFont=t.serifFont; out.sansFont=t.sansFont;
+    out.patternLightClass = t.pattern === 'shippo' ? 'lpg-pat-light' : '';
+
+    /* ----- nav ----- */
+    const brandLogo = (cfg.brand && cfg.brand.logo) || '';
+    const brandLogoH = (Number(cfg.brand && cfg.brand.logoHeight) || 40) + 'px';
+    out.nav = {
+      brandMark: cfg.brand && cfg.brand.mark, brandName: (cfg.brand && cfg.brand.name) || '',
+      brandLogo: brandLogo, brandLogoH: brandLogoH, showBrandMark: !!(cfg.brand && cfg.brand.mark && !brandLogo),
+      links: ((cfg.nav && cfg.nav.links) || []).map(l => ({ label:l.label, href: safeHref(l.href) })),
+      ctaLabel: (cfg.nav && cfg.nav.ctaLabel) || 'Register', ctaHref: safeHref(cfg.nav && cfg.nav.ctaHref)
+    };
+    out.showFloating = !!(cfg.nav && cfg.nav.floating);
+
+    /* ----- hero ----- */
+    const hero = cfg.hero || {};
+    out.showHero = !!(hero.titleLines && hero.titleLines.length);
+    out.hero = {
+      logos: hero.logos || [], eyebrow:hero.eyebrow, badge:hero.badge, kicker:hero.kicker,
+      titleLines: hero.titleLines || [], subhead:hero.subhead, valueCards: hero.valueCards || [],
+      ctaLabel: hero.ctaLabel || out.nav.ctaLabel,
+      image: { src: (hero.image && hero.image.src) || '', alt: (hero.image && hero.image.alt) || '' },
+      imageTitle: hero.imageTitle, imageSubtitle: hero.imageSubtitle,
+      bgImage: hero.backgroundImage ? ("url('" + hero.backgroundImage + "')") : ''
+    };
+    out.showLogos = !!(hero.logos && hero.logos.length);
+    out.showValueCards = !!(hero.valueCards && hero.valueCards.length);
+    out.showHeroImage = !!out.hero.image.src;
+    out.showHeroBg = !!hero.backgroundImage;
+
+    /* ----- countdown ----- */
+    const cd = cfg.countdown || {};
+    const target = cd.deadline ? Date.parse(cd.deadline) : NaN;
+    out.showCountdown = !!(cd.enabled && !isNaN(target));
+    out.countdown = { label: cd.label || '', ctaLabel: cd.ctaLabel || out.nav.ctaLabel, ctaHref: safeHref(cd.ctaHref || (cfg.nav && cfg.nav.ctaHref)) };
+    if(out.showCountdown){
+      let diff = Math.max(0, target - this.state.now);
+      const d = Math.floor(diff/86400000); diff -= d*86400000;
+      const h = Math.floor(diff/3600000); diff -= h*3600000;
+      const m = Math.floor(diff/60000); diff -= m*60000;
+      const s = Math.floor(diff/1000);
+      const raw = [['Days',d],['Hours',h],['Minutes',m],['Seconds',s]];
+      out.countdownUnits = raw.map((u,i) => ({ label:u[0], value:pad(u[1]), showColon: i<3 }));
+    } else { out.countdownUnits = []; }
+
+    /* ----- cities (marquee, tripled for seamless loop) ----- */
+    const cities = (cfg.cities || []).map(c => ({ name:c.name, tag:c.tag, bg: c.image ? "url('"+c.image+"')" : '' }));
+    out.showCities = cities.length > 0;
+    out.cityLoop = cities.length ? cities.concat(cities, cities) : [];
+
+    /* ----- video (uploaded file OR provider embed URL OR direct video file URL) -----
+       Direct video file URLs (Pexels CDN .mp4, /uploads/landing-page-videos
+       server uploads, etc.) must render as <video>, not <iframe> — the CDN
+       serves raw video bytes, not an embeddable HTML doc, so an iframe gets
+       blocked with "This content is blocked. Contact the site owner". */
+    const v = cfg.video || {};
+    const isDirectVideoFile = function(u){
+      if(typeof u !== 'string') return false;
+      const t = u.trim();
+      if(!t) return false;
+      if(t.indexOf('/uploads/landing-page-videos/') === 0) return true;
+      return /\.(mp4|webm|mov|ogv|ogg|m4v)(\?|#|$)/i.test(t);
+    };
+    const embedHref = safeHref(v.embedUrl);
+    const embedIsFile = embedHref !== '#' && isDirectVideoFile(embedHref);
+    const posterHref = safeHref(v.posterUrl);
+    out.showVideo = !!(v.enabled && (v.embedUrl || v.fileSrc));
+    out.video = {
+      eyebrow:v.eyebrow, title:v.title, body:v.body,
+      embedUrl: embedHref,
+      src: v.fileSrc || (embedIsFile ? embedHref : ''),
+      posterUrl: posterHref === '#' ? undefined : posterHref,
+      isFile: !!v.fileSrc || embedIsFile,
+      isEmbed: !v.fileSrc && !embedIsFile && !!v.embedUrl
+    };
+
+    /* ----- intro ----- */
+    const intro = cfg.intro || {};
+    out.showIntro = !!(intro.title);
+    out.intro = { title:intro.title, paragraphs:intro.paragraphs||[], gainsTitle:intro.gainsTitle, gainsQuote:intro.gainsQuote, gains:intro.gains||[], ctaLabel:intro.ctaLabel||'' };
+    out.showGains = !!(intro.gains && intro.gains.length);
+
+    /* ----- highlights / flip cards ----- */
+    const hl = cfg.highlights || {};
+    out.showHighlights = !!(hl.cards && hl.cards.length);
+    out.highlights = { eyebrow:hl.eyebrow, title:hl.title, subtitle:hl.subtitle, bannerTitle:hl.bannerTitle, bannerBody:hl.bannerBody, bannerCtaLabel:hl.bannerCtaLabel||out.nav.ctaLabel };
+    /* Flip is driven by CSS :hover / :focus-within on .lpg-flip-card now
+       (see <style> block) — no per-card state or click handler needed. */
+    out.highlightCards = (hl.cards || []).map((c) => ({
+      kanji:c.kanji, eyebrow:c.eyebrow, name:c.name, frontBody:c.frontBody, backBody:c.backBody, benefit:c.benefit
+    }));
+
+    /* ----- safety ----- */
+    const sf = cfg.safety || {};
+    out.showSafety = !!(sf.title);
+    out.safety = { eyebrow:sf.eyebrow, title:sf.title, subtitle:sf.subtitle, includedTitle:sf.includedTitle, includedQuote:sf.includedQuote, ctaLabel:sf.ctaLabel||out.nav.ctaLabel };
+    out.safetyStats = sf.stats || [];
+    out.safetyIncluded = sf.included || [];
+    out.showSafetyStats = !!(sf.stats && sf.stats.length);
+    out.showIncluded = !!(sf.included && sf.included.length);
+
+    /* ----- testimonials ----- */
+    const ts = cfg.testimonials || {};
+    out.showTestimonials = !!(ts.items && ts.items.length);
+    out.testimonials = { eyebrow:ts.eyebrow, title:ts.title };
+    out.testimonialItems = (ts.items || []).map(it => {
+      const n = Math.max(0, Math.min(5, it.rating == null ? 5 : it.rating));
+      return { quote:it.quote, name:it.name, initial:it.initial || (it.name ? it.name.charAt(0) : '•'), source:it.source, stars: new Array(n).fill(0) };
+    });
+
+    /* ----- investment ----- */
+    const inv = cfg.investment || {};
+    out.showInvestment = !!(inv.installments && inv.installments.length);
+    out.investment = { eyebrow:inv.eyebrow, title:inv.title, subtitle:inv.subtitle, inclusionsTitle:inv.inclusionsTitle, note:inv.note };
+    const fi = typeof inv.featuredIndex === 'number' ? inv.featuredIndex : -1;
+    out.installments = (inv.installments || []).map((ins,i) => ({
+      tag:ins.tag, title:ins.title, sub:ins.sub, amount:ins.amount, date:ins.date, entity:ins.entity,
+      startTag: i === fi ? 'Start Here' : '',
+      borderColor: i === fi ? 'var(--c-brand)' : 'var(--c-border)',
+      shadow: i === fi ? '0 12px 30px -12px rgba(0,0,0,0.25)' : 'none'
+    }));
+    out.inclusions = inv.inclusions || [];
+    out.showInclusions = !!(inv.inclusions && inv.inclusions.length);
+
+    /* ----- registration ----- */
+    const reg = cfg.register || {};
+    out.showRegister = !!(reg.steps && reg.steps.length);
+    out.register = {
+      eyebrow:reg.eyebrow, title:reg.title, intro:reg.intro, covers:reg.covers || [],
+      successTitle: reg.successTitle || 'Thank you!', successBody: reg.successBody || 'Your registration has been received.'
+    };
+    out.showCovers = !!(reg.covers && reg.covers.length);
+
+    /* gating: explicit flag, past deadline, or capacity reached */
+    let regClosed = reg.closed === true;
+    let regClosedMessage = reg.closedMessage || 'Registration is now closed.';
+    const rdl = reg.deadline ? Date.parse(reg.deadline) : NaN;
+    if(!isNaN(rdl) && this.state.now > rdl){ regClosed = true; regClosedMessage = reg.deadlineMessage || 'Registration has closed for this programme.'; }
+    let seatsRemaining = null;
+    if(typeof reg.capacity === 'number' && typeof reg.registered === 'number'){
+      seatsRemaining = Math.max(0, reg.capacity - reg.registered);
+      if(seatsRemaining <= 0){ regClosed = true; regClosedMessage = reg.fullMessage || 'All seats are currently full.'; }
+    }
+    out.regSubmitted = this.state.regSubmitted;
+    out.regShowClosed = !this.state.regSubmitted && regClosed;
+    out.regShowForm = !this.state.regSubmitted && !regClosed;
+    out.regClosedMessage = regClosedMessage;
+    out.regSeatsLabel = (seatsRemaining != null && seatsRemaining > 0 && seatsRemaining <= 10) ? ('Only ' + seatsRemaining + ' seats remaining') : '';
+
+    const rsteps = reg.steps || [];
+    out.regMultiStep = rsteps.length > 1;
+    const stepIdx = Math.min(this.state.regStep, Math.max(0, rsteps.length - 1));
+    const curStep = rsteps[stepIdx] || { title:'', fields:[] };
+    out.regStepTitle = curStep.title || '';
+    out.regProgress = rsteps.map((s,i) => ({ color: i <= stepIdx ? 'var(--c-brand)' : 'var(--c-border)' }));
+    out.regFields = (curStep.fields || []).map(f => ({
+      name:f.name, label:f.label, type:f.type || 'text', required: !!f.required, placeholder: f.placeholder || '',
+      reqMark: f.required ? ' *' : '', isSelect: f.type === 'select', isInput: f.type !== 'select',
+      options: f.options || [], value: this.state.regValues[f.name] || '', onInput: this.setField('regValues', f.name)
+    }));
+    out.regShowBack = stepIdx > 0;
+    out.regIsLast = stepIdx >= rsteps.length - 1;
+    out.regPrimaryLabel = out.regIsLast ? (reg.submitLabel || 'Submit') : 'Next';
+    out.regError = this.state.regError;
+    out.hpSetter = this.setField('regValues', '_hp');
+    out.regPrev = () => this.setState(st => ({ regStep: Math.max(0, st.regStep - 1), regError:'' }));
+    out.regPrimary = (() => {
+      const steps = rsteps, idx = stepIdx, endpoint = reg.endpoint, c = cfg;
+      return () => {
+        if(this.state.regSending) return;
+        const fields = (steps[idx] && steps[idx].fields) || [];
+        for(const f of fields){ const err = validateField(f, this.state.regValues[f.name]); if(err){ this.setState({ regError: err }); return; } }
+        this.setState({ regError:'' });
+        if(idx < steps.length - 1){ this.setState(st => ({ regStep: st.regStep + 1 })); return; }
+        this.submitForm({ bag:'regValues', endpoint: endpoint, type:'registration', cfg:c, doneKey:'regSubmitted', sendingKey:'regSending' });
+      };
+    })();
+
+    /* ----- brochure ----- */
+    const br = cfg.brochure || {};
+    out.showBrochure = !!(br.enabled && br.fields && br.fields.length);
+    out.brochure = { eyebrow:br.eyebrow, title:br.title, body:br.body, note:br.note, submitLabel:br.submitLabel || 'Download',
+      successTitle: br.successTitle || 'Thank you!', successBody: br.successBody || 'Your brochure is on the way.' };
+    out.brSubmitted = this.state.brSubmitted;
+    out.brShowForm = !this.state.brSubmitted;
+    out.brFields = (br.fields || []).map(f => ({
+      name:f.name, label:f.label, type:f.type || 'text', required: !!f.required, placeholder: f.placeholder || '',
+      reqMark: f.required ? ' *' : '', isSelect: f.type === 'select', isInput: f.type !== 'select',
+      options: f.options || [], value: this.state.brValues[f.name] || '', onInput: this.setField('brValues', f.name)
+    }));
+    out.brError = this.state.brError;
+    out.brHpSetter = this.setField('brValues', '_hp');
+    out.brSubmit = (() => {
+      const fields = br.fields || [], endpoint = br.endpoint, c = cfg;
+      return () => {
+        if(this.state.brSending) return;
+        for(const f of fields){ const err = validateField(f, this.state.brValues[f.name]); if(err){ this.setState({ brError: err }); return; } }
+        this.setState({ brError:'' });
+        this.submitForm({ bag:'brValues', endpoint: endpoint, type:'brochure', cfg:c, doneKey:'brSubmitted', sendingKey:'brSending' });
+      };
+    })();
+
+    /* ----- faqs ----- */
+    const fq = cfg.faqs || {};
+    const allFaqs = fq.items || [];
+    out.showFaqs = allFaqs.length > 0;
+    out.faqs = { eyebrow:fq.eyebrow, title:fq.title, subtitle:fq.subtitle };
+    out.faqQuery = this.state.faqQuery;
+    out.onFaqSearch = (e) => this.setState({ faqQuery: e.target.value, openFaq: -1 });
+    const cats = [{ id:'all', label: fq.allLabel || 'All Questions', icon:'📄' }].concat(fq.categories || []);
+    out.faqCats = cats.map(c => {
+      const active = this.state.faqCat === c.id;
+      const count = c.id === 'all' ? allFaqs.length : allFaqs.filter(f => f.category === c.id).length;
+      /* FAQ chips render on the new light section bg — active stays the
+         brand colour for emphasis, inactive picks up the panel surface +
+         border tokens so the chip blends with the page palette. */
+      return { label:c.label, icon:c.icon, count: count, onSelect: (() => { const id=c.id; return () => this.setState({ faqCat:id, openFaq:-1 }); })(),
+        bg: active ? 'var(--c-brand)' : 'var(--c-panel)', color: active ? '#fff' : 'var(--c-text)',
+        border: active ? 'var(--c-brand)' : 'var(--c-border)',
+        countBg: active ? 'rgba(255,255,255,0.22)' : 'var(--c-soft)', countColor: active ? '#fff' : 'var(--c-text2)' };
+    });
+    const q = (this.state.faqQuery || '').trim().toLowerCase();
+    const filtered = allFaqs.filter(f => (this.state.faqCat === 'all' || f.category === this.state.faqCat) &&
+      (!q || (f.q && f.q.toLowerCase().indexOf(q) >= 0) || (f.a && f.a.toLowerCase().indexOf(q) >= 0)));
+    out.faqEmpty = out.showFaqs && filtered.length === 0;
+    out.faqVisible = filtered.map((f,i) => {
+      const open = this.state.openFaq === i;
+      return { q:f.q, a:f.a, expanded: open ? 'true' : 'false', maxH: open ? '400px' : '0px', iconTransform: open ? 'rotate(180deg)' : 'rotate(0deg)',
+        onToggle: (() => { const idx=i; return () => this.setState(st => ({ openFaq: st.openFaq === idx ? -1 : idx })); })() };
+    });
+
+    /* ----- final CTA ----- */
+    const fc = cfg.finalCta || {};
+    out.showFinalCta = !!(fc.title);
+    out.finalCta = { eyebrow:fc.eyebrow, title:fc.title, subtitle:fc.subtitle, ctaLabel: fc.ctaLabel || out.nav.ctaLabel };
+    out.finalSteps = (fc.steps || []).map((s,i) => ({ n: String(i+1), label: s.label }));
+    out.showFinalSteps = !!(fc.steps && fc.steps.length);
+
+    /* ----- footer ----- */
+    const ft = cfg.footer || {};
+    out.showFooter = !!(ft.name || ft.email);
+    const footerLogo = ft.logo || (cfg.brand && cfg.brand.logo) || '';
+    out.footer = {
+      brandMark:ft.mark, brandName:ft.name || '', tagline:ft.tagline,
+      brandLogo: footerLogo, brandLogoH: brandLogoH, showBrandMark: !!(ft.mark && !footerLogo),
+      email:ft.email, emailHref: ft.email ? ('mailto:' + ft.email) : '#',
+      phones: (ft.phones || []).map(p => ({ label:p.label, href: p.tel ? ('tel:' + p.tel) : '#' })),
+      legal: ft.legal || []
+    };
+    out.showPhones = !!(ft.phones && ft.phones.length);
+
+    return out;
+  }
+}
+</script>
+</body>
+</html>

@@ -56,17 +56,17 @@ datasource db {
 }
 
 model Tenant {
-  id                 Int      @id @default(autoincrement())
+  id                 Int       @id @default(autoincrement())
   name               String
-  slug               String   @unique
-  plan               String   @default("starter") // starter, professional, enterprise
-  vertical           String   @default("generic") // generic, wellness (more verticals later)
+  slug               String    @unique
+  plan               String    @default("starter") // starter, professional, enterprise
+  vertical           String    @default("generic") // generic, wellness (more verticals later)
   emailVerifiedAt    DateTime? // set when the org owner verified their email via OTP at signup (null for pre-feature tenants)
   // Geographic + monetary defaults — used to default currency on Deal/Payment
   // and to drive money formatting in the UI. ISO-3166-1-alpha-2 + ISO-4217.
-  country            String   @default("US")
-  defaultCurrency    String   @default("USD")
-  locale             String   @default("en-US") // BCP-47 for date/number formatting
+  country            String    @default("US")
+  defaultCurrency    String    @default("USD")
+  locale             String    @default("en-US") // BCP-47 for date/number formatting
   // #902 slice 3 — Operator's GST-registration state for place-of-supply
   // decisions in the travel-vertical GST module. ISO 3166-2 like "IN-MH".
   // Nullable; backend/lib/gstStateCodeResolver.js falls back to "IN-MH"
@@ -79,8 +79,8 @@ model Tenant {
   // (industry default — Sent folder, threading, audit trail). Admins
   // may opt out for storage / compliance reasons; existing tenants
   // pre-flag default to true at first read of the column.
-  emailRetention     Boolean  @default(true)
-  isActive           Boolean  @default(true)
+  emailRetention     Boolean   @default(true)
+  isActive           Boolean   @default(true)
   ownerEmail         String?
   adsgptLogin        String? // AdsGPT aMember username or email for SSO
   // #921 slice S39 — per-tenant iframe-embed allowlist (FR-3.6). JSON array of
@@ -88,16 +88,16 @@ model Tenant {
   // Consumed by readTenantEmbedAllowlist() in backend/middleware/security.js to
   // splice frame-ancestors via allowIframeEmbedding(). Null = no per-tenant
   // override (fall back to wildcard or route-level allowList).
-  embedAllowlistJson String?  @db.Text
+  embedAllowlistJson String?   @db.Text
   // W4.C G098 — Tenant-wide default sub-brand fallback (FR-3.4.f). When a
   // travel-vertical tenant has multiple sub-brands but a consumer surface
   // (PDF / email / portal / microsite) lands without a sub-brand context,
   // resolvers fall back here BEFORE the tenant-wide (subBrand=null) BrandKit.
   // Null = no fallback configured; resolver behaviour unchanged (subBrand=null
   // bucket wins). Validated against VALID_SUB_BRANDS at write time.
-  defaultSubBrand    String?  @db.VarChar(50)
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
+  defaultSubBrand    String?   @db.VarChar(50)
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
 
   users                 User[]
   contacts              Contact[]
@@ -149,6 +149,7 @@ model Tenant {
   pushTemplates         PushTemplate[]
   landingPages          LandingPage[]
   landingPageAnalytics  LandingPageAnalytics[]
+  landingPageVersions   LandingPageVersion[]
   contactAttachments    ContactAttachment[]
   emailTrackings        EmailTracking[]
 
@@ -479,20 +480,20 @@ model Tenant {
 }
 
 model User {
-  id        Int      @id @default(autoincrement())
+  id              Int       @id @default(autoincrement())
   // Email is unique PER TENANT, not globally — the same person can hold a
   // separate account in multiple organisations (e.g. a customer of both a
   // travel agency and a wellness clinic). Composite uniqueness lives in
   // @@unique([email, tenantId]) at the bottom of the model. Because email is
   // no longer a standalone unique key, all lookups use findFirst (often
   // scoped by tenantId) rather than findUnique({ where: { email } }).
-  email     String
-  password  String
+  email           String
+  password        String
   emailVerifiedAt DateTime? // set when a self-registered user verified their email via OTP (null for staff/invited/pre-feature users)
-  role      String   @default("USER") // ADMIN, USER, MANAGER
-  userType  String   @default("STAFF") // STAFF | OWNER | CUSTOMER
-  name      String
-  createdAt DateTime @default(now())
+  role            String    @default("USER") // ADMIN, USER, MANAGER
+  userType        String    @default("STAFF") // STAFF | OWNER | CUSTOMER
+  name            String
+  createdAt       DateTime  @default(now())
 
   // 2FA
   twoFactorEnabled Boolean @default(false)
@@ -814,26 +815,26 @@ model Contact {
   assignedToId Int?
   assignedTo   User? @relation("AssignedContacts", fields: [assignedToId], references: [id], onDelete: SetNull)
 
-  activities          Activity[]
-  deals               Deal[]
-  emails              EmailMessage[]
-  callLogs            CallLog[]
-  invoices            Invoice[]
-  sequenceEnrollments SequenceEnrollment[]
-  tasks               Task[]
-  expenses            Expense[]
-  contracts           Contract[]
-  estimates           Estimate[]
-  projects            Project[]
-  marketplaceLeads    MarketplaceLead[]
-  smsMessages         SmsMessage[]
-  whatsappMessages    WhatsAppMessage[]
-  whatsappThreads     WhatsAppThread[]
-  pushSubscriptions   PushSubscription[]
-  touchpoints         Touchpoint[]
-  attachments         ContactAttachment[]
+  activities                Activity[]
+  deals                     Deal[]
+  emails                    EmailMessage[]
+  callLogs                  CallLog[]
+  invoices                  Invoice[]
+  sequenceEnrollments       SequenceEnrollment[]
+  tasks                     Task[]
+  expenses                  Expense[]
+  contracts                 Contract[]
+  estimates                 Estimate[]
+  projects                  Project[]
+  marketplaceLeads          MarketplaceLead[]
+  smsMessages               SmsMessage[]
+  whatsappMessages          WhatsAppMessage[]
+  whatsappThreads           WhatsAppThread[]
+  pushSubscriptions         PushSubscription[]
+  touchpoints               Touchpoint[]
+  attachments               ContactAttachment[]
   // Travel customer-portal DigiLocker sessions (PRD §4.5 extended).
-  digilockerSessions  DigilockerSession[]
+  digilockerSessions        DigilockerSession[]
   // Travel customer-portal in-app notification inbox (2026-06-17).
   travelPortalNotifications TravelPortalNotification[]
 
@@ -2344,15 +2345,62 @@ model LandingPage {
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
+  // Travel-vertical metadata (nullable; backfilled only by travel pages
+  // generated via the Generate Destination Landing Page flow OR seeded
+  // from the Japan migration). Generic / non-travel pages leave these
+  // null. Index supports "list this sub-brand's travel pages" filter.
+  destination   String?
+  subBrand      String?
+  generatedByAi Boolean   @default(false)
+  generatedAt   DateTime?
+
+  // "Featured" pointer for the dynamic /trips public route. At most ONE
+  // PUBLISHED page per (tenantId, subBrand) should carry isFeatured=true;
+  // the feature/unfeature route handlers enforce that invariant
+  // transactionally. /trips resolves to the most recently featured row;
+  // direct /p/<slug> URLs continue to work in parallel.
+  isFeatured Boolean   @default(false)
+  featuredAt DateTime?
+
   tenantId Int    @default(1)
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   userId    Int?
   user      User?                  @relation(fields: [userId], references: [id], onDelete: SetNull)
   analytics LandingPageAnalytics[]
+  versions  LandingPageVersion[]
 
   @@unique([tenantId, slug])
   @@index([tenantId, status])
+  @@index([tenantId, subBrand, status])
+  @@index([tenantId, subBrand, isFeatured])
+}
+
+// Lightweight version-history snapshot of a LandingPage. Captured on
+// AI generation, manual save, publish, and restore so operators can
+// roll back to a known-good state during UAT / client demos / AI
+// experimentation. Restore writes a NEW version (source=RESTORE)
+// rather than overwriting history, so the chain is append-only.
+model LandingPageVersion {
+  id                    Int         @id @default(autoincrement())
+  landingPageId         Int
+  landingPage           LandingPage @relation(fields: [landingPageId], references: [id], onDelete: Cascade)
+  versionNumber         Int
+  title                 String
+  slug                  String
+  content               String      @db.LongText
+  // CREATE | MANUAL_SAVE | PUBLISH | AI_GENERATION | RESTORE
+  source                String
+  // When source=RESTORE, points to the version that was restored.
+  restoredFromVersionId Int?
+  createdAt             DateTime    @default(now())
+  createdById           Int?
+
+  tenantId Int    @default(1)
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([landingPageId, versionNumber])
+  @@index([tenantId, landingPageId, createdAt])
 }
 
 model LandingPageAnalytics {
@@ -6176,31 +6224,31 @@ model TripDocumentRequirement {
 // extension is available (or DOM-change broke the adapter) the row
 // transitions to "fallback-agent" with a Task for manual handling.
 model WebCheckin {
-  id              Int       @id @default(autoincrement())
-  tenantId        Int       @default(1)
-  contactId       Int
-  itineraryId     Int?
-  pnr             String
-  airlineCode     String
-  flightNumber    String
-  departureAt     DateTime
-  windowOpenAt    DateTime // T-48h or T-24h
-  passengerName   String
-  seatPref        String?
-  mealPref        String?
-  status          String    @default("pending") // pending | reminded | in-progress | done | fallback-agent | failed
-  attemptsJson    String?   @db.Text // [{at, result, errorReason}]
+  id                 Int       @id @default(autoincrement())
+  tenantId           Int       @default(1)
+  contactId          Int
+  itineraryId        Int?
+  pnr                String
+  airlineCode        String
+  flightNumber       String
+  departureAt        DateTime
+  windowOpenAt       DateTime // T-48h or T-24h
+  passengerName      String
+  seatPref           String?
+  mealPref           String?
+  status             String    @default("pending") // pending | reminded | in-progress | done | fallback-agent | failed
+  attemptsJson       String?   @db.Text // [{at, result, errorReason}]
   // Customer-facing web check-in reminder EMAILS sent by cron/webCheckinEngine.js
   // (2026-06-16) — distinct from the scheduler's WhatsApp/status lifecycle.
   // JSON array of milestone tags already emailed: e.g. ["h36","h24"] (T-36/24/12h
   // before departureAt). Idempotency guard so a re-tick doesn't double-send.
-  emailRemindersJson String? @db.Text
-  boardingPassUrl String?
-  deliveredAt     DateTime?
-  assignedAgentId Int?
-  tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  emailRemindersJson String?   @db.Text
+  boardingPassUrl    String?
+  deliveredAt        DateTime?
+  assignedAgentId    Int?
+  tenant             Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
 
   @@index([tenantId, status, windowOpenAt])
   @@index([tenantId, contactId])
@@ -6355,24 +6403,24 @@ model RejectionRecoveryProgram {
 }
 
 model VisaDocumentChecklistItem {
-  id            Int             @id @default(autoincrement())
-  applicationId Int
-  docType       String
-  required      Boolean         @default(true)
-  status        String          @default("pending") // pending | uploaded | verified | rejected
-  attachmentId  Int?
-  notes         String?         @db.Text
+  id                Int             @id @default(autoincrement())
+  applicationId     Int
+  docType           String
+  required          Boolean         @default(true)
+  status            String          @default("pending") // pending | uploaded | verified | rejected
+  attachmentId      Int?
+  notes             String?         @db.Text
   // FR-6.2 customer self-serve upload — the file the applicant uploaded
   // against this checklist item. attachmentStorage/attachmentKey let the
   // re-upload path supersede (delete) the prior file from its backend.
-  attachmentUrl     String?   @db.Text // served URL (/api/uploads/visa-docs/… or S3)
+  attachmentUrl     String?         @db.Text // served URL (/api/uploads/visa-docs/… or S3)
   attachmentName    String? // original client filename (display only)
   attachmentStorage String? // "s3" | "disk"
   attachmentKey     String? // storage key/object name
   uploadedAt        DateTime? // when the applicant uploaded the current file
-  application   VisaApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
-  createdAt     DateTime        @default(now())
-  updatedAt     DateTime        @updatedAt
+  application       VisaApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
 
   @@index([applicationId, status])
 }

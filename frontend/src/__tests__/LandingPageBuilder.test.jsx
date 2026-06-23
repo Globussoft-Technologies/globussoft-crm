@@ -345,22 +345,28 @@ describe('<LandingPageBuilder /> — page surface', () => {
     expect(slugInput.value).toBe('invalid-slug-');
   });
 
-  it('PUBLISHED page renders the Preview link to /p/<slug>; DRAFT does not', async () => {
-    // Render the DRAFT first — no Preview link.
+  it('PUBLISHED page renders the "Open live" link to /p/<slug>; DRAFT does not', async () => {
+    // The builder distinguishes two related surfaces (PR-E preview wiring):
+    //   - The "Preview" BUTTON (always visible) mints a 5-min preview
+    //     token and opens /api/landing-pages/:id/preview in a new tab.
+    //     Works for DRAFT + PUBLISHED — production renderer either way.
+    //   - The "Open live" LINK appears ONLY when status=PUBLISHED and
+    //     points at the public /p/<slug> URL.
+    // Render the DRAFT first — no "Open live" link.
     const { unmount } = renderBuilder('/landing-pages/42');
     await waitFor(() => expect(screen.getByLabelText('Page title')).toBeInTheDocument());
 
-    expect(screen.queryByRole('link', { name: /Preview/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /Open live/i })).not.toBeInTheDocument();
     unmount();
 
-    // Now render the PUBLISHED variant — Preview link present.
+    // Now render the PUBLISHED variant — "Open live" link present.
     renderBuilder('/landing-pages/43');
     await waitFor(() => expect(screen.getByLabelText('Page title')).toBeInTheDocument());
 
-    const preview = screen.getByRole('link', { name: /Preview/i });
-    expect(preview).toBeInTheDocument();
+    const openLive = screen.getByRole('link', { name: /Open live/i });
+    expect(openLive).toBeInTheDocument();
     // href contains the slug path component.
-    expect(preview.getAttribute('href')).toMatch(/\/p\/spring-launch$/);
+    expect(openLive.getAttribute('href')).toMatch(/\/p\/spring-launch$/);
   });
 
   it('renders both desktop + mobile preview-mode toggle buttons', async () => {

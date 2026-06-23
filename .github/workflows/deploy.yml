@@ -439,6 +439,9 @@ jobs:
             tests/page-catalog-api.spec.js \
             tests/knowledge-base-api.spec.js \
             tests/landing-pages-api.spec.js \
+            tests/landing-pages-travel-api.spec.js \
+            tests/landing-pages-registration-form-api.spec.js \
+            tests/landing-pages-versions-api.spec.js \
             tests/portal-api.spec.js \
             tests/portal-kyc-api.spec.js \
             tests/tenant-switch-disabled-api.spec.js \

@@ -1,0 +1,91 @@
+{
+  "generatedAt": "2026-06-23T11:31:12.960Z",
+  "totalDestinations": 6,
+  "allPassed": true,
+  "byDestination": [
+    {
+      "slug": "japan",
+      "family": "educational",
+      "themeId": "educational-academic",
+      "visualMood": "tokyo-temperate-structured-educational",
+      "classifierSource": "partial",
+      "guardVerdict": "clean",
+      "guardIssueCount": 0,
+      "bridgeOk": true,
+      "bridgeMissing": [],
+      "htmlBytes": 102448,
+      "checksFailed": []
+    },
+    {
+      "slug": "bali",
+      "family": "family",
+      "themeId": "family-tropical",
+      "visualMood": "bali-tropical-vibrant-family-holiday",
+      "classifierSource": "partial",
+      "guardVerdict": "clean",
+      "guardIssueCount": 0,
+      "bridgeOk": true,
+      "bridgeMissing": [],
+      "htmlBytes": 102208,
+      "checksFailed": []
+    },
+    {
+      "slug": "umrah",
+      "family": "religious",
+      "themeId": "religious-classical",
+      "visualMood": "umrah-desert-reverent-pilgrimage",
+      "classifierSource": "partial",
+      "guardVerdict": "clean",
+      "guardIssueCount": 0,
+      "bridgeOk": true,
+      "bridgeMissing": [],
+      "htmlBytes": 102996,
+      "checksFailed": []
+    },
+    {
+      "slug": "switzerland",
+      "family": "luxury",
+      "themeId": "luxury-alpine",
+      "visualMood": "switzerland-alpine-minimal-honeymoon",
+      "classifierSource": "partial",
+      "guardVerdict": "clean",
+      "guardIssueCount": 0,
+      "bridgeOk": true,
+      "bridgeMissing": [],
+      "htmlBytes": 100943,
+      "checksFailed": []
+    },
+    {
+      "slug": "iceland",
+      "family": "luxury",
+      "themeId": "luxury-alpine",
+      "visualMood": "iceland-alpine-minimal-honeymoon",
+      "classifierSource": "partial",
+      "guardVerdict": "clean",
+      "guardIssueCount": 0,
+      "bridgeOk": true,
+      "bridgeMissing": [],
+      "htmlBytes": 100901,
+      "checksFailed": []
+    },
+    {
+      "slug": "vietnam",
+      "family": "family",
+      "themeId": "family-tropical",
+      "visualMood": "vietnam-tropical-vibrant-family-holiday",
+      "classifierSource": "partial",
+      "guardVerdict": "clean",
+      "guardIssueCount": 0,
+      "bridgeOk": true,
+      "bridgeMissing": [],
+      "htmlBytes": 102280,
+      "checksFailed": []
+    }
+  ],
+  "architecturalChecks": {
+    "noDestinationCouplingInRenderer": "enforced by test/architecture/no-destination-coupling.test.js",
+    "teeIsOnlyClassifier": "enforced by sentinel test + Phase 1 audit",
+    "familyGenericThemes": "13 themes, none destination-named",
+    "unknownDestinationsViaAiFallback": "covered by classifyClimate/classifyRegion fallback"
+  }
+}

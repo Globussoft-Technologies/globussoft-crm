@@ -238,6 +238,69 @@ test.describe('POST /api/landing-pages/upload — validation', () => {
   });
 });
 
+// ── Video upload variant (POST /upload-video) ────────────────────────
+//
+// Mirror of the image-upload describes above. Tiny synthetic MP4 buffer
+// passes the MIME allowlist (`video/mp4`). 50 MB cap on the route.
+
+async function postVideoUpload(request, token, file) {
+  return request.post(`${BASE_URL}/api/landing-pages/upload-video`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    multipart: file ? { video: file } : {},
+    timeout: REQUEST_TIMEOUT,
+  });
+}
+
+const TINY_MP4 = Buffer.from([0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x70, 0x34, 0x32]);
+
+test.describe('POST /api/landing-pages/upload-video — happy path', () => {
+  test('201 MP4 returns { url, mimetype, size, filename } with tenant-scoped video path', async ({ request }) => {
+    expect(genericToken).toBeTruthy();
+    const res = await postVideoUpload(request, genericToken, {
+      name: 'reel.mp4',
+      mimeType: 'video/mp4',
+      buffer: TINY_MP4,
+    });
+    expect(res.status(), `upload-video: ${await res.text()}`).toBe(201);
+    const body = await res.json();
+    expect(body.url).toMatch(/^\/uploads\/landing-page-videos\/tenant-\d+\//);
+    expect(body.url).toContain(`tenant-${genericTenantId}/`);
+    expect(body.url).toMatch(/\.mp4$/);
+    expect(body.mimetype).toBe('video/mp4');
+    expect(typeof body.size).toBe('number');
+    expect(body.size).toBeGreaterThan(0);
+  });
+});
+
+test.describe('POST /api/landing-pages/upload-video — validation', () => {
+  test('400 when no file uploaded', async ({ request }) => {
+    const res = await postVideoUpload(request, genericToken, null);
+    expect(res.status()).toBe(400);
+    const body = await res.json();
+    expect(body.error).toMatch(/no video file/i);
+  });
+
+  test('400 rejects image MIME via the video allowlist', async ({ request }) => {
+    const res = await postVideoUpload(request, genericToken, {
+      name: 'cat.png',
+      mimeType: 'image/png',
+      buffer: TINY_PNG,
+    });
+    expect(res.status()).toBe(400);
+    const body = await res.json();
+    expect(body.error).toMatch(/video|allowed/i);
+  });
+
+  test('401 without Bearer token', async ({ request }) => {
+    const res = await postVideoUpload(request, null, {
+      name: 'reel.mp4',
+      mimeType: 'video/mp4',
+      buffer: TINY_MP4,
+    });
+    expect(res.status()).toBe(401);
+  });
+});
+
 // ── Auth gate ─────────────────────────────────────────────────────────
 
 test.describe('POST /api/landing-pages/upload — auth gate', () => {

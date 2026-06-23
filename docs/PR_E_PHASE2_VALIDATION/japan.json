@@ -1,0 +1,694 @@
+{
+  "slug": "japan",
+  "input": {
+    "destination": "Tokyo Kyoto Japan",
+    "durationDays": 9,
+    "audience": "Grade 8-12 students",
+    "travelMonth": "2026-10",
+    "tripType": "educational",
+    "subBrand": "tmc"
+  },
+  "expected": {
+    "family": "educational",
+    "themeId": "educational-academic"
+  },
+  "timestamps": {
+    "startedAt": "2026-06-23T11:31:12.874Z",
+    "completedAt": "2026-06-23T11:31:12.929Z"
+  },
+  "checks": {
+    "familyMatch": {
+      "ok": true,
+      "value": "educational"
+    },
+    "themeMatch": {
+      "ok": true,
+      "value": "educational-academic"
+    },
+    "visualMoodPopulated": {
+      "ok": true,
+      "value": "tokyo-temperate-structured-educational"
+    },
+    "imageStrategyEmitted": {
+      "ok": true,
+      "value": "hero + 4 marquee"
+    },
+    "guardAccepted": {
+      "ok": true,
+      "value": "clean"
+    },
+    "bridgeAccepted": {
+      "ok": true,
+      "value": "ok"
+    },
+    "teeMetadataStamped": {
+      "ok": true,
+      "value": "present"
+    },
+    "htmlNonEmpty": {
+      "ok": true,
+      "value": "102448 chars"
+    },
+    "htmlHasWrapper": {
+      "ok": true,
+      "value": "present"
+    },
+    "htmlHasThemeMeta": {
+      "ok": true,
+      "value": "present"
+    }
+  },
+  "notes": [],
+  "generated": {
+    "templateType": "educational-trip-v1",
+    "source": "stub",
+    "model": "tee-stub",
+    "imagesFetched": 0,
+    "validationOk": true,
+    "validationMissing": [],
+    "guard": {
+      "accepted": true,
+      "verdict": "clean",
+      "issues": []
+    }
+  },
+  "teeOutput": {
+    "family": "educational",
+    "themeId": "educational-academic",
+    "visualMood": "tokyo-temperate-structured-educational",
+    "composition": [
+      "nav",
+      "hero",
+      "marquee",
+      "preview",
+      "programme",
+      "cultural",
+      "safety",
+      "testimonials",
+      "investment",
+      "registration",
+      "brochure",
+      "faq",
+      "details",
+      "finalCta",
+      "contact",
+      "floatingCta"
+    ],
+    "traits": {
+      "climate": "temperate",
+      "regionFeel": "east-asian",
+      "tripStyle": "educational",
+      "audienceTier": "students",
+      "luxuryLevel": 0,
+      "mood": "structured",
+      "visualMood": "tokyo-temperate-structured-educational",
+      "confidence": 0.4,
+      "source": "partial",
+      "perDimension": {
+        "climate": {
+          "value": "temperate",
+          "confidence": 0.92,
+          "source": "static"
+        },
+        "regionFeel": {
+          "value": "east-asian",
+          "confidence": 0.92,
+          "source": "static"
+        },
+        "tripStyle": {
+          "value": "educational",
+          "confidence": 1,
+          "source": "static"
+        },
+        "audienceTier": {
+          "value": "students",
+          "confidence": 0.95,
+          "source": "static"
+        },
+        "luxuryLevel": {
+          "value": 0,
+          "confidence": 0.7,
+          "source": "default"
+        },
+        "mood": {
+          "value": "structured",
+          "confidence": 0.95,
+          "source": "derived"
+        },
+        "visualMood": {
+          "value": "tokyo-temperate-structured-educational",
+          "confidence": 0.4,
+          "source": "default"
+        }
+      }
+    },
+    "decisionLog": {
+      "family": {
+        "ruleId": "F2",
+        "rationale": "tripStyle=educational + audience=students/parents",
+        "value": "educational"
+      },
+      "themeId": {
+        "ruleId": "E1",
+        "rationale": "east-asian + structured",
+        "value": "educational-academic"
+      },
+      "composition": {
+        "ruleId": "C-educational-default",
+        "rationale": "family default for educational",
+        "value": [
+          "nav",
+          "hero",
+          "marquee",
+          "preview",
+          "programme",
+          "cultural",
+          "safety",
+          "testimonials",
+          "investment",
+          "registration",
+          "brochure",
+          "faq",
+          "details",
+          "finalCta",
+          "contact",
+          "floatingCta"
+        ]
+      },
+      "traits": {
+        "climate": {
+          "value": "temperate",
+          "source": "static",
+          "confidence": 0.92
+        },
+        "regionFeel": {
+          "value": "east-asian",
+          "source": "static",
+          "confidence": 0.92
+        },
+        "tripStyle": {
+          "value": "educational",
+          "source": "static",
+          "confidence": 1
+        },
+        "audienceTier": {
+          "value": "students",
+          "source": "static",
+          "confidence": 0.95
+        },
+        "luxuryLevel": {
+          "value": 0,
+          "source": "default",
+          "confidence": 0.7
+        },
+        "mood": {
+          "value": "structured",
+          "source": "derived",
+          "confidence": 0.95
+        },
+        "visualMood": {
+          "value": "tokyo-temperate-structured-educational",
+          "source": "default",
+          "confidence": 0.4
+        }
+      }
+    },
+    "imageStrategy": {
+      "hero": {
+        "query": "Tokyo Kyoto Japan tokyo temperate structured educational wide cinematic landscape",
+        "aspectRatio": "4:3",
+        "minWidth": 1200
+      },
+      "marquee": [
+        {
+          "slot": 0,
+          "query": "Tokyo Kyoto Japan tokyo temperate structured educational vertical portrait temperate"
+        },
+        {
+          "slot": 1,
+          "query": "Tokyo Kyoto Japan tokyo temperate structured educational vertical portrait temperate"
+        },
+        {
+          "slot": 2,
+          "query": "Tokyo Kyoto Japan tokyo temperate structured educational vertical portrait temperate"
+        },
+        {
+          "slot": 3,
+          "query": "Tokyo Kyoto Japan tokyo temperate structured educational vertical portrait temperate"
+        }
+      ],
+      "brochure": {
+        "query": "Tokyo Kyoto Japan tokyo temperate structured educational hero detail",
+        "aspectRatio": "4:5",
+        "minWidth": 800
+      },
+      "cultural": []
+    }
+  },
+  "content": {
+    "brand": {
+      "kanji": "",
+      "label": "[REVIEW] TOKYO KYOTO JAPAN 2026",
+      "programmeName": "[REVIEW] Tokyo Kyoto Japan",
+      "programmeTagline": "[REVIEW] A tokyo temperate structured educational journey.",
+      "logoUrl": "",
+      "partnerLogos": []
+    },
+    "nav": {
+      "links": [
+        {
+          "label": "Programme",
+          "href": "#programme"
+        },
+        {
+          "label": "Safety",
+          "href": "#safety"
+        },
+        {
+          "label": "Investment",
+          "href": "#investment"
+        },
+        {
+          "label": "FAQs",
+          "href": "#faqs"
+        }
+      ],
+      "ctaText": "Register Now",
+      "ctaHref": "#register",
+      "show": true
+    },
+    "hero": {
+      "kanjiWatermark": "",
+      "eyebrow": {
+        "date": "",
+        "audience": "",
+        "batchPill": ""
+      },
+      "kicker": "",
+      "headline": "[REVIEW] Tokyo Kyoto Japan — tokyo temperate structured educational",
+      "lede": "[REVIEW] Lede paragraph to write.",
+      "benefitCards": [
+        {
+          "icon": "◈",
+          "title": "[REVIEW] Benefit 1",
+          "desc": "[REVIEW]"
+        },
+        {
+          "icon": "⊕",
+          "title": "[REVIEW] Benefit 2",
+          "desc": "[REVIEW]"
+        },
+        {
+          "icon": "⌂",
+          "title": "[REVIEW] Benefit 3",
+          "desc": "[REVIEW]"
+        },
+        {
+          "icon": "❖",
+          "title": "[REVIEW] Benefit 4",
+          "desc": "[REVIEW]"
+        }
+      ],
+      "countdown": {
+        "label": "REGISTRATION CLOSES IN",
+        "deadlineIso": "",
+        "ctaText": "Reserve Your Spot",
+        "ctaHref": "#register"
+      },
+      "visualTitle": "[REVIEW] Tokyo Kyoto Japan",
+      "visualSub": "[REVIEW] tokyo temperate structured educational",
+      "posterUrl": "",
+      "posterAlt": "Programme hero",
+      "show": true
+    },
+    "marquee": {
+      "cities": [],
+      "show": true
+    },
+    "preview": {
+      "show": true,
+      "kanjiWatermark": "",
+      "tag": "INTERACTIVE PREVIEW",
+      "title": "See the Experience Before You Decide.",
+      "subtitle": "",
+      "quote": "",
+      "videoEmbedUrl": "",
+      "ctaText": "REGISTER NOW",
+      "ctaHref": "#register"
+    },
+    "programme": {
+      "show": true,
+      "kanjiWatermark": "",
+      "leftHeadline": "[REVIEW] Why this journey.",
+      "leftParagraphs": [
+        "[REVIEW] Operator to write."
+      ],
+      "rightHeadline": "[REVIEW] What you carry home",
+      "rightQuote": "",
+      "rightChecks": [
+        "[REVIEW]",
+        "[REVIEW]",
+        "[REVIEW]"
+      ],
+      "cta": {
+        "title": "",
+        "body": "",
+        "ctaText": "",
+        "ctaHref": "#register"
+      }
+    },
+    "cultural": {
+      "show": true,
+      "kanjiWatermark": "",
+      "tag": "CULTURAL HIGHLIGHTS",
+      "title": "[REVIEW] Highlights",
+      "subtitle": "",
+      "items": [
+        {
+          "name": "[REVIEW] Place 1",
+          "label": "[REVIEW]",
+          "body": [
+            "[REVIEW]"
+          ],
+          "benefit": "[REVIEW]"
+        },
+        {
+          "name": "[REVIEW] Place 2",
+          "label": "[REVIEW]",
+          "body": [
+            "[REVIEW]"
+          ],
+          "benefit": "[REVIEW]"
+        }
+      ],
+      "cta": {
+        "title": "",
+        "body": "",
+        "ctaText": "",
+        "ctaHref": "#register"
+      }
+    },
+    "safety": {
+      "show": true,
+      "title": "[REVIEW] Safety",
+      "subtitle": "",
+      "stats": [],
+      "features": [
+        {
+          "icon": "shield",
+          "title": "[REVIEW] 1",
+          "desc": "[REVIEW]"
+        },
+        {
+          "icon": "briefcase",
+          "title": "[REVIEW] 2",
+          "desc": "[REVIEW]"
+        }
+      ],
+      "included": {
+        "title": "What's Included",
+        "items": []
+      },
+      "banner": {
+        "title": "",
+        "body": "",
+        "ctaText": "Register for Orientation",
+        "ctaHref": "#register"
+      },
+      "quote": ""
+    },
+    "testimonials": {
+      "show": true,
+      "title": "What People Say",
+      "items": [],
+      "cta": {
+        "title": "",
+        "body": "",
+        "ctaText": "",
+        "ctaHref": "#register"
+      }
+    },
+    "investment": {
+      "show": true,
+      "tag": "TRANSPARENT PROGRAMME INVESTMENT",
+      "title": "[REVIEW] Investment",
+      "subtitle": "",
+      "currency": "₹",
+      "tiers": [
+        {
+          "step": 1,
+          "title": "[REVIEW] Reservation",
+          "subtitle": "[REVIEW]",
+          "amount": null,
+          "tag": null,
+          "date": null,
+          "vendor": null
+        },
+        {
+          "step": 2,
+          "title": "[REVIEW] Balance",
+          "subtitle": "[REVIEW]",
+          "amount": null,
+          "tag": null,
+          "date": null,
+          "vendor": null
+        }
+      ],
+      "inclusions": {
+        "label": "INDICATIVE INCLUSIONS",
+        "items": []
+      },
+      "foot": "",
+      "cta": {
+        "title": "",
+        "body": "",
+        "ctaText": "",
+        "ctaHref": "#register"
+      }
+    },
+    "registration": {
+      "show": true,
+      "tag": "REGISTRATION",
+      "title": "Register Now",
+      "subtitle": "",
+      "schoolOptions": [],
+      "successTitle": "Registration Submitted!",
+      "successBody": "Our team will contact you within 24 hours to confirm your slot and share next steps.",
+      "submitText": "Confirm Registration",
+      "coversTitle": "",
+      "coversIntro": "",
+      "covers": [],
+      "leadSource": "landing_page_registration",
+      "leadSubBrand": "tmc",
+      "tenantSlug": "travel-stall",
+      "personLabel": "Student Full Name",
+      "personPlaceholder": "Enter student's full name",
+      "showStudentFields": true,
+      "showSchoolField": true,
+      "guardianLabel": "Parent / Guardian Name",
+      "guardianPlaceholder": "Enter parent's full name",
+      "step1Title": "Step 1: Student Information",
+      "step2Title": "Step 2: Parent / Guardian Details"
+    },
+    "brochure": {
+      "show": true,
+      "infoCards": [],
+      "pillText": "STILL EXPLORING?",
+      "headTitle": "Download the Detailed Programme Overview.",
+      "infoBody": "",
+      "dividerText": "",
+      "schoolOptions": [],
+      "ctaText": "DOWNLOAD PROGRAMME BROCHURE",
+      "footNote": "No obligation. For informed decision-making.",
+      "leadSource": "brochure_request",
+      "leadSubBrand": "tmc",
+      "tenantSlug": "travel-stall"
+    },
+    "faq": {
+      "show": true,
+      "kanjiWatermark": "",
+      "tag": "CLARIFICATIONS",
+      "title": "Frequently Asked Questions",
+      "subtitle": "",
+      "categories": [
+        {
+          "id": "all",
+          "label": "All Questions",
+          "icon": "📋"
+        }
+      ],
+      "items": [
+        {
+          "cat": "all",
+          "q": "[REVIEW] Q1?",
+          "a": "[REVIEW]"
+        },
+        {
+          "cat": "all",
+          "q": "[REVIEW] Q2?",
+          "a": "[REVIEW]"
+        },
+        {
+          "cat": "all",
+          "q": "[REVIEW] Q3?",
+          "a": "[REVIEW]"
+        }
+      ]
+    },
+    "details": {
+      "show": true,
+      "title": "The Details That Matter",
+      "leftPill": "",
+      "taglineRight": "",
+      "steps": [],
+      "ctaText": "",
+      "ctaHref": "#register"
+    },
+    "contact": {
+      "show": true,
+      "kanji": "",
+      "label": "[REVIEW] Tokyo Kyoto Japan",
+      "tagline": "",
+      "logoUrl": "",
+      "sections": [],
+      "copyright": ""
+    },
+    "finalCta": {
+      "show": true,
+      "eyebrow": "",
+      "title": "",
+      "subtitle": "",
+      "steps": [],
+      "ctaLabel": "Register Now",
+      "ctaHref": "#register"
+    },
+    "floatingCta": {
+      "show": true,
+      "text": "REGISTER NOW",
+      "href": "#register"
+    },
+    "_sectionOrder": [
+      "nav",
+      "hero",
+      "marquee",
+      "preview",
+      "programme",
+      "cultural",
+      "safety",
+      "testimonials",
+      "investment",
+      "registration",
+      "brochure",
+      "faq",
+      "details",
+      "finalCta",
+      "contact",
+      "floatingCta"
+    ],
+    "_tee": {
+      "family": "educational",
+      "themeId": "educational-academic",
+      "visualMood": "tokyo-temperate-structured-educational",
+      "composition": [
+        "nav",
+        "hero",
+        "marquee",
+        "preview",
+        "programme",
+        "cultural",
+        "safety",
+        "testimonials",
+        "investment",
+        "registration",
+        "brochure",
+        "faq",
+        "details",
+        "finalCta",
+        "contact",
+        "floatingCta"
+      ],
+      "traits": {
+        "climate": "temperate",
+        "regionFeel": "east-asian",
+        "tripStyle": "educational",
+        "audienceTier": "students",
+        "luxuryLevel": 0,
+        "mood": "structured",
+        "visualMood": "tokyo-temperate-structured-educational"
+      },
+      "decisions": {
+        "family": {
+          "ruleId": "F2",
+          "rationale": "tripStyle=educational + audience=students/parents",
+          "value": "educational"
+        },
+        "themeId": {
+          "ruleId": "E1",
+          "rationale": "east-asian + structured",
+          "value": "educational-academic"
+        },
+        "composition": {
+          "ruleId": "C-educational-default",
+          "rationale": "family default for educational",
+          "value": [
+            "nav",
+            "hero",
+            "marquee",
+            "preview",
+            "programme",
+            "cultural",
+            "safety",
+            "testimonials",
+            "investment",
+            "registration",
+            "brochure",
+            "faq",
+            "details",
+            "finalCta",
+            "contact",
+            "floatingCta"
+          ]
+        },
+        "traits": {
+          "climate": {
+            "value": "temperate",
+            "source": "static",
+            "confidence": 0.92
+          },
+          "regionFeel": {
+            "value": "east-asian",
+            "source": "static",
+            "confidence": 0.92
+          },
+          "tripStyle": {
+            "value": "educational",
+            "source": "static",
+            "confidence": 1
+          },
+          "audienceTier": {
+            "value": "students",
+            "source": "static",
+            "confidence": 0.95
+          },
+          "luxuryLevel": {
+            "value": 0,
+            "source": "default",
+            "confidence": 0.7
+          },
+          "mood": {
+            "value": "structured",
+            "source": "derived",
+            "confidence": 0.95
+          },
+          "visualMood": {
+            "value": "tokyo-temperate-structured-educational",
+            "source": "default",
+            "confidence": 0.4
+          }
+        }
+      },
+      "generatedAt": "2026-06-23T11:31:12.920Z",
+      "images": null
+    }
+  }
+}

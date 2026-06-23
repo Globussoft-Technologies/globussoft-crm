@@ -13,6 +13,8 @@ import {
   Luggage, ChevronLeft, ChevronUp, ChevronDown, Users, BedDouble, Wallet, Globe,
   ExternalLink, Plus, Trash2, Edit3, Calendar as CalendarIcon, Copy, Save,
   Bold, Italic, Heading, Link2, List, Image as ImageIcon, Eye, Download, Upload,
+  MapPin, IndianRupee, FileText, CheckCircle2, AlertCircle, Clock, TrendingUp,
+  Sparkles, ArrowRight,
 } from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
@@ -125,7 +127,7 @@ export default function TripDetail() {
         })}
       </div>
 
-      {tab === "overview" && <OverviewTab trip={trip} />}
+      {tab === "overview" && <OverviewTab trip={trip} onJump={setTab} />}
       {tab === "participants" && <ParticipantsTab trip={trip} onChange={load} notify={notify} />}
       {tab === "rooming" && <RoomingTab trip={trip} notify={notify} />}
       {tab === "payment" && <PaymentTab trip={trip} notify={notify} />}
@@ -135,31 +137,346 @@ export default function TripDetail() {
 }
 
 // ─── Overview tab ────────────────────────────────────────────────────
+//
+// Wires up the /trips/:id/ops-dashboard endpoint (already exists, returns
+// departureReadiness score + component %s + payment buckets + rooming/doc
+// rollups) so the overview shows live trip health rather than 9 static
+// labels. Cards are clickable — clicking jumps to the relevant tab.
 
-function OverviewTab({ trip }) {
+function OverviewTab({ trip, onJump }) {
+  const [ops, setOps] = useState(null);
+
+  // silent:true — ops-dashboard is an enhancement, not a requirement.
+  // If it 404s on a not-yet-confirmed trip the page falls back to plain
+  // trip data instead of red-toasting.
+  useEffect(() => {
+    fetchApi(`/api/travel/trips/${trip.id}/ops-dashboard`, { silent: true })
+      .then(setOps)
+      .catch(() => setOps(null));
+  }, [trip.id]);
+
+  const participants = trip.participants || [];
+  const partCount = participants.length;
+  const docCount = (trip.documentRequirements || []).length;
+  const score = ops?.departureReadiness?.score;
+  const comp = ops?.departureReadiness?.components || {};
+  const pay = ops?.payments;
+  const room = ops?.rooming;
+
   return (
-    <div style={{ display: "grid", gap: 16, gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 260px), 1fr))" }}>
-      <Card label="Destination" value={trip.destination} />
-      <Card label="Depart" value={fmt(trip.departDate)} />
-      <Card label="Return" value={fmt(trip.returnDate)} />
-      <Card label="Legal entity" value={trip.legalEntity} />
-      <Card label="Price / student" value={trip.pricePerStudent != null ? `₹${Number(trip.pricePerStudent).toLocaleString()}` : "—"} />
-      <Card label="Participants" value={(trip.participants || []).length} />
-      <Card label="Required docs" value={(trip.documentRequirements || []).length} />
-      <Card label="Payment plan" value={trip.paymentPlan ? "configured" : "not set"} />
-      <Card label="Microsite" value={trip.microsite ? "published" : "not published"} />
+    <div style={{ display: "grid", gap: 16 }}>
+      {/* Hero band — destination + dates + readiness gauge */}
+      <div style={{
+        background: "var(--surface-color)", border: "1px solid var(--border-color)",
+        borderRadius: 12, padding: 20,
+        display: "grid", gap: 16,
+        gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 280px), 1fr))",
+        alignItems: "center",
+      }}>
+        <div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: "var(--text-secondary)", marginBottom: 6 }}>
+            <MapPin size={14} aria-hidden /> Destination
+          </div>
+          <div style={{ fontSize: 22, fontWeight: 700, marginBottom: 8 }}>{trip.destination || "—"}</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap", fontSize: 13, color: "var(--text-secondary)" }}>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+              <CalendarIcon size={13} aria-hidden /> {fmt(trip.departDate)} → {fmt(trip.returnDate)}
+            </span>
+            {trip.legalEntity && (
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                <FileText size={13} aria-hidden /> {trip.legalEntity}
+              </span>
+            )}
+            {trip.pricePerStudent != null && (
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontVariantNumeric: "tabular-nums" }}>
+                <IndianRupee size={13} aria-hidden /> {Number(trip.pricePerStudent).toLocaleString()} / student
+              </span>
+            )}
+          </div>
+        </div>
+        <ReadinessGauge score={score} components={comp} />
+      </div>
+
+      {/* KPI strip — participants / docs / status */}
+      <div style={{ display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 200px), 1fr))" }}>
+        <KpiCard
+          icon={Users}
+          label="Participants"
+          value={partCount}
+          hint={ops?.participants?.capturedConsent != null
+            ? `${ops.participants.capturedConsent} consent captured`
+            : (partCount === 0 ? "Add the first one" : null)}
+          onClick={() => onJump?.("participants")}
+        />
+        <KpiCard
+          icon={FileText}
+          label="Required docs"
+          value={docCount}
+          hint={docCount === 0 ? "None required yet" : `${ops?.documents?.submittedCount ?? 0} submitted`}
+        />
+        <KpiCard
+          icon={CheckCircle2}
+          label="Trip status"
+          value={(trip.status || "—").toUpperCase()}
+          hint={ops?.computedAt ? "Live rollup" : "—"}
+          tone={trip.status}
+        />
+      </div>
+
+      {/* Payment band — wider visualisation */}
+      <SummaryBand
+        icon={Wallet}
+        title="Payment plan"
+        onClick={() => onJump?.("payment")}
+        status={trip.paymentPlan ? "Configured" : "Not set yet"}
+        statusTone={trip.paymentPlan ? "good" : "warn"}
+      >
+        {pay && pay.expectedTotalRupees > 0 ? (
+          <PaymentBand pay={pay} />
+        ) : (
+          <div style={{ fontSize: 13, color: "var(--text-secondary)" }}>
+            {trip.paymentPlan
+              ? "Plan set — instalments will materialise once participants are linked."
+              : "No payment plan yet. Open Payment plan tab to create one."}
+          </div>
+        )}
+      </SummaryBand>
+
+      {/* Rooming band */}
+      <SummaryBand
+        icon={BedDouble}
+        title="Rooming"
+        onClick={() => onJump?.("rooming")}
+        status={room?.assignmentCount ? `${room.assignmentCount} room${room.assignmentCount === 1 ? "" : "s"}` : "No rooms yet"}
+        statusTone={room?.assignmentCount ? "good" : "muted"}
+      >
+        {room && partCount > 0 ? (
+          <RoomingBand room={room} totalParticipants={partCount} pct={comp.roomingPct} />
+        ) : (
+          <div style={{ fontSize: 13, color: "var(--text-secondary)" }}>
+            {partCount === 0 ? "Add participants first, then assign rooms." : "No rooming assignments yet."}
+          </div>
+        )}
+      </SummaryBand>
+
+      {/* Microsite band */}
+      <SummaryBand
+        icon={Globe}
+        title="Microsite"
+        onClick={() => onJump?.("microsite")}
+        status={trip.microsite ? "Published" : "Not published"}
+        statusTone={trip.microsite ? "good" : "muted"}
+      >
+        {trip.microsite ? (
+          <div style={{ fontSize: 13, color: "var(--text-secondary)", display: "flex", alignItems: "center", gap: 6 }}>
+            <Sparkles size={14} aria-hidden style={{ color: "var(--primary-color)" }} />
+            Public itinerary live at <code style={{ fontSize: 12, color: "var(--text-primary)" }}>{trip.microsite.subdomain || trip.microsite.publicUuid}</code>
+          </div>
+        ) : (
+          <div style={{ fontSize: 13, color: "var(--text-secondary)" }}>
+            Publish a public itinerary page for participants and parents.
+          </div>
+        )}
+      </SummaryBand>
     </div>
   );
 }
 
-function Card({ label, value }) {
+function ReadinessGauge({ score, components }) {
+  // score === null when insufficient data (no participants OR no expected
+  // payments). Show "Insufficient data" rather than a fabricated 0%.
+  const hasScore = typeof score === "number";
+  const color = !hasScore ? "var(--text-secondary)"
+    : score >= 80 ? "#2F7A4D"
+    : score >= 50 ? "#9A6F2E"
+    : "#A8323F";
+  const ringPct = hasScore ? score : 0;
+
   return (
-    <div style={{
-      background: "var(--surface-color)", border: "1px solid var(--border-color)",
-      borderRadius: 8, padding: 16,
+    <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+      <div style={{
+        position: "relative", width: 96, height: 96, flexShrink: 0,
+        borderRadius: "50%",
+        background: `conic-gradient(${color} ${ringPct * 3.6}deg, var(--subtle-bg) 0)`,
+      }}>
+        <div style={{
+          position: "absolute", inset: 6, borderRadius: "50%",
+          background: "var(--surface-color)",
+          display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+        }}>
+          <div style={{ fontSize: 22, fontWeight: 700, color, lineHeight: 1, fontVariantNumeric: "tabular-nums" }}>
+            {hasScore ? score : "—"}
+          </div>
+          {hasScore && <div style={{ fontSize: 10, color: "var(--text-secondary)" }}>%</div>}
+        </div>
+      </div>
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <div style={{ fontSize: 13, color: "var(--text-secondary)", display: "flex", alignItems: "center", gap: 4, marginBottom: 6 }}>
+          <TrendingUp size={13} aria-hidden /> Departure readiness
+        </div>
+        {hasScore ? (
+          <div style={{ display: "grid", gap: 4, fontSize: 11 }}>
+            <MiniBar label="Consent" pct={components.consentPct} />
+            <MiniBar label="Docs" pct={components.docsPct} />
+            <MiniBar label="Payment" pct={components.paymentPct} />
+            <MiniBar label="Rooming" pct={components.roomingPct} />
+          </div>
+        ) : (
+          <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+            Add participants and a payment plan to compute readiness.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function MiniBar({ label, pct }) {
+  const v = typeof pct === "number" ? pct : 0;
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "60px 1fr 32px", alignItems: "center", gap: 6 }}>
+      <span style={{ color: "var(--text-secondary)" }}>{label}</span>
+      <span style={{ background: "var(--subtle-bg)", borderRadius: 3, height: 6, overflow: "hidden" }}>
+        <span style={{ display: "block", width: `${v}%`, height: "100%", background: "var(--primary-color)" }} />
+      </span>
+      <span style={{ textAlign: "right", color: "var(--text-secondary)", fontVariantNumeric: "tabular-nums" }}>{v}%</span>
+    </div>
+  );
+}
+
+function KpiCard({ icon: Icon, label, value, hint, onClick, tone }) {
+  const interactive = typeof onClick === "function";
+  const toneColor =
+    tone === "completed" ? "#265855" :
+    tone === "confirmed" ? "#2F7A4D" :
+    tone === "in-trip" ? "#9A6F2E" :
+    tone === "cancelled" ? "#A8323F" :
+    "var(--text-primary)";
+  return (
+    <button
+      type="button"
+      onClick={interactive ? onClick : undefined}
+      disabled={!interactive}
+      style={{
+        textAlign: "left", width: "100%",
+        background: "var(--surface-color)", border: "1px solid var(--border-color)",
+        borderRadius: 10, padding: 14,
+        cursor: interactive ? "pointer" : "default",
+        transition: "border-color 120ms, transform 120ms",
+        color: "inherit",
+      }}
+      onMouseEnter={(e) => {
+        if (interactive) e.currentTarget.style.borderColor = "var(--primary-color)";
+      }}
+      onMouseLeave={(e) => {
+        if (interactive) e.currentTarget.style.borderColor = "var(--border-color)";
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", color: "var(--text-secondary)", fontSize: 11, textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 6 }}>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+          <Icon size={13} aria-hidden /> {label}
+        </span>
+        {interactive && <ArrowRight size={12} aria-hidden style={{ opacity: 0.5 }} />}
+      </div>
+      <div style={{ fontSize: 20, fontWeight: 700, color: toneColor, lineHeight: 1.1 }}>{value}</div>
+      {hint && <div style={{ fontSize: 11, color: "var(--text-secondary)", marginTop: 4 }}>{hint}</div>}
+    </button>
+  );
+}
+
+function SummaryBand({ icon: Icon, title, status, statusTone, children, onClick }) {
+  const interactive = typeof onClick === "function";
+  const bg =
+    statusTone === "good" ? "rgba(47,122,77,0.14)" :
+    statusTone === "warn" ? "rgba(200,154,78,0.18)" :
+    "var(--subtle-bg)";
+  const fg =
+    statusTone === "good" ? "#2F7A4D" :
+    statusTone === "warn" ? "#9A6F2E" :
+    "var(--text-secondary)";
+  return (
+    <div
+      onClick={interactive ? onClick : undefined}
+      role={interactive ? "button" : undefined}
+      tabIndex={interactive ? 0 : undefined}
+      onKeyDown={interactive ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); } } : undefined}
+      style={{
+        background: "var(--surface-color)", border: "1px solid var(--border-color)",
+        borderRadius: 10, padding: 14,
+        cursor: interactive ? "pointer" : "default",
+        transition: "border-color 120ms",
+      }}
+      onMouseEnter={(e) => { if (interactive) e.currentTarget.style.borderColor = "var(--primary-color)"; }}
+      onMouseLeave={(e) => { if (interactive) e.currentTarget.style.borderColor = "var(--border-color)"; }}
+    >
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10, gap: 8, flexWrap: "wrap" }}>
+        <div style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 14, fontWeight: 600 }}>
+          <Icon size={16} aria-hidden style={{ color: "var(--primary-color)" }} /> {title}
+        </div>
+        <span style={{ background: bg, color: fg, padding: "3px 10px", borderRadius: 12, fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.4 }}>
+          {status}
+        </span>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function PaymentBand({ pay }) {
+  const pct = pay.expectedTotalRupees > 0
+    ? Math.min(100, Math.round((pay.receivedRupees / pay.expectedTotalRupees) * 100))
+    : 0;
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 6, flexWrap: "wrap", gap: 8 }}>
+        <span style={{ color: "var(--text-secondary)" }}>
+          ₹{pay.receivedRupees.toLocaleString()} <span style={{ opacity: 0.7 }}>of</span> ₹{pay.expectedTotalRupees.toLocaleString()} received
+        </span>
+        <strong style={{ fontVariantNumeric: "tabular-nums" }}>{pct}%</strong>
+      </div>
+      <div style={{ background: "var(--subtle-bg)", borderRadius: 4, height: 8, overflow: "hidden", marginBottom: 10 }}>
+        <div style={{ width: `${pct}%`, height: "100%", background: "var(--primary-color)" }} />
+      </div>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", fontSize: 11 }}>
+        <PayChip icon={CheckCircle2} count={pay.paidCount} label="paid" color="#2F7A4D" />
+        <PayChip icon={Clock} count={pay.partialCount} label="partial" color="#9A6F2E" />
+        <PayChip icon={Clock} count={pay.pendingCount} label="pending" color="var(--text-secondary)" />
+        <PayChip icon={AlertCircle} count={pay.overdueCount} label="overdue" color="#A8323F" />
+      </div>
+    </div>
+  );
+}
+
+function PayChip({ icon: Icon, count, label, color }) {
+  if (!count) return null;
+  return (
+    <span style={{
+      display: "inline-flex", alignItems: "center", gap: 4,
+      padding: "3px 8px", borderRadius: 10, fontSize: 11, fontWeight: 600,
+      border: `1px solid ${color}`, color,
+      background: "var(--surface-color)",
     }}>
-      <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.5, color: "var(--text-secondary)" }}>{label}</div>
-      <div style={{ fontSize: 18, fontWeight: 600, marginTop: 4 }}>{value}</div>
+      <Icon size={11} aria-hidden /> {count} {label}
+    </span>
+  );
+}
+
+function RoomingBand({ room, totalParticipants, pct }) {
+  const roomed = room.participantsRoomed || 0;
+  const unroomed = room.participantsUnroomed || 0;
+  const ringPct = typeof pct === "number" ? pct : (totalParticipants > 0 ? Math.round((roomed / totalParticipants) * 100) : 0);
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 6, flexWrap: "wrap", gap: 8 }}>
+        <span style={{ color: "var(--text-secondary)" }}>
+          {roomed} <span style={{ opacity: 0.7 }}>of</span> {totalParticipants} participant{totalParticipants === 1 ? "" : "s"} assigned
+          {unroomed > 0 && <> · <strong style={{ color: "#9A6F2E" }}>{unroomed} unassigned</strong></>}
+        </span>
+        <strong style={{ fontVariantNumeric: "tabular-nums" }}>{ringPct}%</strong>
+      </div>
+      <div style={{ background: "var(--subtle-bg)", borderRadius: 4, height: 8, overflow: "hidden" }}>
+        <div style={{ width: `${ringPct}%`, height: "100%", background: "var(--primary-color)" }} />
+      </div>
     </div>
   );
 }
@@ -268,7 +585,13 @@ function ParticipantsTab({ trip, onChange, notify }) {
 
       <div style={listShell}>
         {(trip.participants || []).length === 0 ? (
-          <div style={empty}>No participants yet.</div>
+          <div style={{ ...empty, display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
+            <Users size={28} aria-hidden style={{ opacity: 0.4 }} />
+            <div>No participants yet</div>
+            <div style={{ fontSize: 12, opacity: 0.75 }}>
+              Click <em>Add participant</em> above to enrol the first student.
+            </div>
+          </div>
         ) : (
           trip.participants.map((p) => (
             <div key={p.id} style={row}>
@@ -665,7 +988,13 @@ function RoomingTab({ trip, notify }) {
 
       {rooms.length === 0 && !newRoom ? (
         <div style={listShell}>
-          <div style={empty}>No rooming assignments yet — click <em>Add room</em> to start.</div>
+          <div style={{ ...empty, display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
+            <BedDouble size={28} aria-hidden style={{ opacity: 0.4 }} />
+            <div>No rooming assignments yet</div>
+            <div style={{ fontSize: 12, opacity: 0.75 }}>
+              Click <em>Add room</em> to start grouping participants into single, twin, triple or quad rooms.
+            </div>
+          </div>
         </div>
       ) : (
         rooms.map((room) => {
@@ -812,9 +1141,12 @@ function PaymentTab({ trip, notify }) {
 
   const load = useCallback(() => {
     setLoading(true);
+    // silent:true on both — a fresh trip with no plan returns 404 on
+    // payment-plan; the dedicated catch handles it. Without silent, fetchApi
+    // would red-toast "Payment plan not found" before the catch runs.
     Promise.all([
-      fetchApi(`/api/travel/trips/${trip.id}/payment-plan`).catch(() => null),
-      fetchApi(`/api/travel/trips/${trip.id}/instalments`).then((r) => r?.instalments || []).catch(() => []),
+      fetchApi(`/api/travel/trips/${trip.id}/payment-plan`, { silent: true }).catch(() => null),
+      fetchApi(`/api/travel/trips/${trip.id}/instalments`, { silent: true }).then((r) => r?.instalments || []).catch(() => []),
     ])
       .then(([p, ins]) => {
         setPlan(p);
@@ -933,69 +1265,105 @@ function PaymentTab({ trip, notify }) {
 
         <div style={listShell}>
           {editInstalments.length === 0 ? (
-            <div style={empty}>No instalments — click <em>Add instalment</em> to start.</div>
-          ) : (
-            editInstalments.map((ins, idx) => (
-              <div key={idx} style={{ ...row, flexWrap: "wrap", gap: 8 }}>
-                <strong style={{ minWidth: 28 }}>#{idx + 1}</strong>
-                <input
-                  type="date"
-                  value={toDateInput(ins.dueDate)}
-                  onChange={(e) => updateInstalment(idx, { dueDate: e.target.value })}
-                  style={{ ...input, flex: "1 1 140px" }}
-                  aria-label={`Instalment ${idx + 1} due date`}
-                />
-                <input
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  placeholder="amount"
-                  value={ins.amount ?? ""}
-                  onChange={(e) => updateInstalment(idx, { amount: e.target.value === "" ? "" : Number(e.target.value) })}
-                  style={{ ...input, flex: "1 1 110px" }}
-                  aria-label={`Instalment ${idx + 1} amount`}
-                />
-                <input
-                  type="number"
-                  min="0"
-                  placeholder="reminder days"
-                  value={ins.reminderDays ?? ""}
-                  onChange={(e) => updateInstalment(idx, { reminderDays: e.target.value === "" ? null : Number(e.target.value) })}
-                  style={{ ...input, flex: "0 0 130px" }}
-                  aria-label={`Instalment ${idx + 1} reminder days before due`}
-                  title="Days before dueDate to fire reminder (blank = no reminder)"
-                />
-                <button
-                  type="button"
-                  onClick={() => moveInstalment(idx, -1)}
-                  disabled={idx === 0}
-                  style={{ ...iconBtn, opacity: idx === 0 ? 0.4 : 1 }}
-                  title="Move up"
-                  aria-label={`Move instalment ${idx + 1} up`}
-                >
-                  <ChevronUp size={14} aria-hidden />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => moveInstalment(idx, 1)}
-                  disabled={idx === editInstalments.length - 1}
-                  style={{ ...iconBtn, opacity: idx === editInstalments.length - 1 ? 0.4 : 1 }}
-                  title="Move down"
-                  aria-label={`Move instalment ${idx + 1} down`}
-                >
-                  <ChevronDown size={14} aria-hidden />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => removeInstalment(idx)}
-                  style={iconBtn}
-                  title="Remove instalment"
-                  aria-label={`Remove instalment ${idx + 1}`}
-                >
-                  <Trash2 size={14} aria-hidden />
-                </button>
+            <div style={{ ...empty, display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
+              <Wallet size={28} aria-hidden style={{ opacity: 0.4 }} />
+              <div>No instalments yet</div>
+              <div style={{ fontSize: 12, opacity: 0.75 }}>
+                Click <em>Add instalment</em> below to schedule the first payment.
               </div>
-            ))
+            </div>
+          ) : (
+            <>
+              {/* Column header row — only shown when instalments exist. */}
+              <div style={{
+                display: "grid",
+                gridTemplateColumns: "32px 1fr 1fr 130px 90px",
+                gap: 8,
+                padding: "8px 14px",
+                fontSize: 10,
+                textTransform: "uppercase",
+                letterSpacing: 0.5,
+                color: "var(--text-secondary)",
+                background: "var(--subtle-bg)",
+                borderBottom: "1px solid var(--border-color)",
+              }}>
+                <span>#</span>
+                <span>Due date</span>
+                <span>Amount (₹)</span>
+                <span>Reminder (days)</span>
+                <span style={{ textAlign: "right" }}>Actions</span>
+              </div>
+              {editInstalments.map((ins, idx) => (
+                <div key={idx} style={{
+                  display: "grid",
+                  gridTemplateColumns: "32px 1fr 1fr 130px 90px",
+                  gap: 8,
+                  padding: "10px 14px",
+                  alignItems: "center",
+                  borderTop: idx === 0 ? "none" : "1px solid var(--border-light)",
+                }}>
+                  <strong style={{ fontVariantNumeric: "tabular-nums", color: "var(--text-secondary)" }}>#{idx + 1}</strong>
+                  <input
+                    type="date"
+                    value={toDateInput(ins.dueDate)}
+                    onChange={(e) => updateInstalment(idx, { dueDate: e.target.value })}
+                    style={{ ...input, width: "100%", boxSizing: "border-box" }}
+                    aria-label={`Instalment ${idx + 1} due date`}
+                  />
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    placeholder="0"
+                    value={ins.amount ?? ""}
+                    onChange={(e) => updateInstalment(idx, { amount: e.target.value === "" ? "" : Number(e.target.value) })}
+                    style={{ ...input, width: "100%", boxSizing: "border-box", fontVariantNumeric: "tabular-nums" }}
+                    aria-label={`Instalment ${idx + 1} amount`}
+                  />
+                  <input
+                    type="number"
+                    min="0"
+                    placeholder="blank = off"
+                    value={ins.reminderDays ?? ""}
+                    onChange={(e) => updateInstalment(idx, { reminderDays: e.target.value === "" ? null : Number(e.target.value) })}
+                    style={{ ...input, width: "100%", boxSizing: "border-box" }}
+                    aria-label={`Instalment ${idx + 1} reminder days before due`}
+                    title="Days before dueDate to fire reminder (blank = no reminder)"
+                  />
+                  <div style={{ display: "flex", justifyContent: "flex-end", gap: 2 }}>
+                    <button
+                      type="button"
+                      onClick={() => moveInstalment(idx, -1)}
+                      disabled={idx === 0}
+                      style={{ ...iconBtn, opacity: idx === 0 ? 0.4 : 1 }}
+                      title="Move up"
+                      aria-label={`Move instalment ${idx + 1} up`}
+                    >
+                      <ChevronUp size={14} aria-hidden />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => moveInstalment(idx, 1)}
+                      disabled={idx === editInstalments.length - 1}
+                      style={{ ...iconBtn, opacity: idx === editInstalments.length - 1 ? 0.4 : 1 }}
+                      title="Move down"
+                      aria-label={`Move instalment ${idx + 1} down`}
+                    >
+                      <ChevronDown size={14} aria-hidden />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => removeInstalment(idx)}
+                      style={iconBtn}
+                      title="Remove instalment"
+                      aria-label={`Remove instalment ${idx + 1}`}
+                    >
+                      <Trash2 size={14} aria-hidden />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </>
           )}
         </div>
 
@@ -1007,10 +1375,19 @@ function PaymentTab({ trip, notify }) {
             <Plus size={14} aria-hidden /> Add instalment
           </button>
           <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-            <span style={{ fontSize: 13, color: "var(--text-secondary)" }}>
-              Total: <strong style={{ color: "var(--text-primary)" }}>
-                ₹{total.toLocaleString(undefined, { maximumFractionDigits: 2 })}
-              </strong>
+            <span style={{ fontSize: 13, color: "var(--text-secondary)", display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+              <span>
+                Per participant: <strong style={{ color: "var(--text-primary)", fontVariantNumeric: "tabular-nums" }}>
+                  ₹{total.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                </strong>
+              </span>
+              {(trip.participants || []).length > 0 && total > 0 && (
+                <span style={{ opacity: 0.7 }}>
+                  · × {trip.participants.length} = <strong style={{ color: "var(--text-primary)", fontVariantNumeric: "tabular-nums" }}>
+                    ₹{(total * trip.participants.length).toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                  </strong> gross
+                </span>
+              )}
             </span>
             {plan && (
               <button
@@ -1039,24 +1416,50 @@ function PaymentTab({ trip, notify }) {
       <h3 style={{ fontSize: 14, marginBottom: 8 }}>Per-participant instalments</h3>
       <div style={listShell}>
         {instalments.length === 0 ? (
-          <div style={empty}>No per-participant instalments yet.</div>
+          <div style={{ ...empty, display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
+            <Users size={24} aria-hidden style={{ opacity: 0.4 }} />
+            <div>No per-participant instalments yet</div>
+            <div style={{ fontSize: 12, opacity: 0.75 }}>
+              Once the plan is saved and participants are linked, individual instalments appear here.
+            </div>
+          </div>
         ) : (
-          instalments.map((i) => (
-            <div key={i.id} style={row}>
-              <div>
-                <strong>Participant #{i.participantId}</strong>
-                <span style={{ marginLeft: 8, color: "var(--text-secondary)" }}>
-                  #{i.instalmentIndex + 1} · due {fmt(i.dueDate)}
-                </span>
-              </div>
-              <div style={{ textAlign: "right" }}>
-                <div>₹{Number(i.amount).toLocaleString()}</div>
-                <div style={{ fontSize: 11, color: "var(--text-secondary)", textTransform: "uppercase" }}>
-                  {i.status}
+          instalments.map((i) => {
+            const participant = (trip.participants || []).find((p) => p.id === i.participantId);
+            const name = participant?.fullName || `Participant #${i.participantId}`;
+            const statusBg =
+              i.status === "paid" ? "rgba(47,122,77,0.14)" :
+              i.status === "partial" ? "rgba(200,154,78,0.18)" :
+              i.status === "overdue" ? "rgba(168,50,63,0.14)" :
+              "var(--subtle-bg)";
+            const statusColor =
+              i.status === "paid" ? "#2F7A4D" :
+              i.status === "partial" ? "#9A6F2E" :
+              i.status === "overdue" ? "#A8323F" :
+              "var(--text-secondary)";
+            return (
+              <div key={i.id} style={row}>
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <strong style={{ fontSize: 14 }}>{name}</strong>
+                  <div style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 2 }}>
+                    Instalment #{i.instalmentIndex + 1} · due {fmt(i.dueDate)}
+                  </div>
+                </div>
+                <div style={{ textAlign: "right", display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
+                  <div style={{ fontSize: 14, fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>
+                    ₹{Number(i.amount).toLocaleString()}
+                  </div>
+                  <span style={{
+                    background: statusBg, color: statusColor,
+                    padding: "2px 8px", borderRadius: 10,
+                    fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4,
+                  }}>
+                    {i.status}
+                  </span>
                 </div>
               </div>
-            </div>
-          ))
+            );
+          })
         )}
       </div>
     </div>
@@ -1117,8 +1520,24 @@ function MicrositeCreate({ trip, onChange, notify }) {
 
   return (
     <div>
-      <div style={{ background: "var(--subtle-bg)", border: "1px solid var(--border-color)", borderRadius: 8, padding: 12, marginBottom: 12, fontSize: 13, color: "var(--text-secondary)" }}>
-        No microsite published yet. Fill the editor and click <strong>Publish</strong> to create one.
+      <div style={{
+        background: "linear-gradient(135deg, rgba(38,88,85,0.10), rgba(38,88,85,0.02))",
+        border: "1px solid var(--border-color)", borderRadius: 10, padding: 14, marginBottom: 16,
+        display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap",
+      }}>
+        <div style={{
+          width: 36, height: 36, borderRadius: 8,
+          background: "var(--primary-color)", color: "#fff",
+          display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+        }}>
+          <Sparkles size={18} aria-hidden />
+        </div>
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 2 }}>Create a public itinerary page</div>
+          <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+            Pick a subdomain, fill the editor below, and hit Publish — participants and parents can read the trip plan from a shareable link.
+          </div>
+        </div>
       </div>
       <label style={{ display: "block", fontSize: 12, color: "var(--text-secondary)", marginBottom: 4 }}>
         Subdomain
@@ -1219,16 +1638,55 @@ function MicrositeEditor({ trip, ms, onChange, notify }) {
 
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
-        <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
-          <code style={{ fontSize: 11 }}>{ms.publicUuid}</code>
+      {/* Live-link hero: promotes the public URL so operators can copy/share at a glance. */}
+      <div style={{
+        background: "linear-gradient(135deg, rgba(38,88,85,0.12), rgba(38,88,85,0.04))",
+        border: "1px solid var(--border-color)", borderRadius: 12, padding: 14,
+        marginBottom: 16,
+        display: "flex", flexWrap: "wrap", alignItems: "center", gap: 12,
+      }}>
+        <div style={{
+          width: 40, height: 40, borderRadius: 10,
+          background: "var(--primary-color)", color: "#fff",
+          display: "flex", alignItems: "center", justifyContent: "center",
+          flexShrink: 0,
+        }}>
+          <Globe size={20} aria-hidden />
         </div>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <div style={{ flex: 1, minWidth: 200 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 2 }}>
+            <span style={{
+              display: "inline-flex", alignItems: "center", gap: 4,
+              background: "rgba(47,122,77,0.14)", color: "#2F7A4D",
+              padding: "2px 8px", borderRadius: 10, fontSize: 10, fontWeight: 700,
+              textTransform: "uppercase", letterSpacing: 0.5,
+            }}>
+              <Sparkles size={10} aria-hidden /> Live
+            </span>
+            {ms.publishedAt && (
+              <span style={{ fontSize: 11, color: "var(--text-secondary)" }}>
+                Published {fmt(ms.publishedAt)}
+              </span>
+            )}
+            {ms.expiresAt && (
+              <span style={{ fontSize: 11, color: "var(--text-secondary)" }}>
+                · expires {fmt(ms.expiresAt)}
+              </span>
+            )}
+          </div>
+          <div style={{
+            fontSize: 13, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+            color: "var(--text-primary)", wordBreak: "break-all",
+          }}>
+            {publicUrl}
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
           <button type="button" onClick={() => setPreviewing((p) => !p)} style={secondaryBtn}>
             {previewing ? <><Edit3 size={14} /> Edit</> : <><Eye size={14} /> Preview</>}
           </button>
           <button type="button" onClick={copy} style={secondaryBtn}>
-            <Copy size={14} /> Copy URL
+            <Copy size={14} /> Copy
           </button>
           <a href={publicUrl} target="_blank" rel="noopener noreferrer" style={{ ...primaryBtn, textDecoration: "none" }}>
             <ExternalLink size={14} /> Open

@@ -66,9 +66,12 @@ const QuoteAcceptLanding = lazy(() => import("./pages/public/QuoteAcceptLanding"
 const TravelReview = lazy(() => import("./pages/public/TravelReview"));
 // Public flyer share/embed viewer — /p/flyer/:slug?t=<jwt>[&embed=1].
 const FlyerView = lazy(() => import("./pages/public/FlyerView"));
-// Public marketing landing page for the Japan 2026 educational immersion
-// trip — /trips. No auth, renders outside the AuthContext shell.
-const TripsLanding = lazy(() => import("./pages/public/TripsLanding"));
+// Public marketing landing page entry point — /trips. Resolves the
+// admin-selected featured LandingPage via /api/landing-pages/public/
+// featured and forwards the browser to /p/<slug>. When no page is
+// featured yet, falls back to the hardcoded TripsLanding (Japan).
+// No auth — renders outside the AuthContext shell.
+const TripsResolver = lazy(() => import("./pages/public/TripsResolver"));
 // Cross-vertical staff attendance dashboard — visible to wellness + travel
 // tenants. Backend (/api/attendance/list + /summary) is role-gated to
 // ADMIN/MANAGER; per-row edit/delete is ADMIN-only.
@@ -996,8 +999,13 @@ export default function App() {
                   <Route path="/p/review/:token" element={<TravelReview />} />
                   {/* Public flyer share + iframe-embed viewer (no auth; JWT in ?t=). */}
                   <Route path="/p/flyer/:slug" element={<FlyerView />} />
-                  {/* Public marketing landing page — Japan 2026 immersion trip. */}
-                  <Route path="/trips" element={<TripsLanding />} />
+                  {/* Dynamic /trips entry point — resolves to the admin-
+                      selected featured LandingPage via the public
+                      /api/landing-pages/public/featured endpoint and
+                      forwards the browser to /p/<slug>. Falls back to the
+                      hardcoded Japan TripsLanding if no page is featured
+                      yet (lazy-imported by the resolver). */}
+                  <Route path="/trips" element={<TripsResolver />} />
                   <Route path="/travel/kyc/callback" element={<TravelKycCallback flow="microsite" />} />
                   <Route path="/travel/portal/kyc/callback" element={<TravelKycCallback flow="portal" />} />
                   <Route

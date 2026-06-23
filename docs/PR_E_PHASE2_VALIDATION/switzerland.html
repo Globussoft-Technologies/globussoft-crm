@@ -1,0 +1,3527 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>[REVIEW] SWITZERLAND ZERMATT INTERLAKEN 2026</title>
+  
+  <meta name="x-template-theme" content="luxury-alpine" />
+  <meta name="x-template-family" content="luxury" />
+  <meta name="x-template-variant" content="alpine" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    body { margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; }
+  </style>
+  <style>/* =============================================
+   JAPAN 2026 — EDUCATIONAL IMMERSION LANDING PAGE
+   The Modern Classroom
+   All styles scoped under .trips-page + .t- prefix
+   to avoid colliding with the CRM's global styles.
+   ============================================= */
+
+.trips-page {
+  --bg:        #f4efe6;
+  --ink:       #1f1a17;
+  --muted:     #6f655c;
+  --red:       #c0392b;
+  --red-deep:  #9c2b20;
+  --gold:      #b8893b;
+  --line:      #e3d9c8;
+  --card:      #fffdf8;
+  --serif:     Georgia, 'Times New Roman', serif;
+  --sans:      'Helvetica Neue', Arial, sans-serif;
+
+  /* Neutralise CRM dark-theme variables that leak into descendants
+     (header, .glass, .card etc. read these globally — see index.css). */
+  --bg-color:      #f4efe6;
+  --surface-color: #fffdf8;
+  --text-primary:  #1f1a17;
+  --border-color:  #e3d9c8;
+  --glass-bg:      #f4efe6;
+  --glass-border:  #e3d9c8;
+
+  color-scheme: light;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--sans);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  min-height: 100vh;
+}
+.trips-page *,
+.trips-page *::before,
+.trips-page *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+.trips-page a { text-decoration: none; color: inherit; }
+.trips-page ul { list-style: none; }
+
+.trips-page .t-wrap { max-width: 1180px; margin: 0 auto; padding: 0 28px; }
+.trips-page .t-wrap.t-narrow { max-width: 760px; }
+.trips-page .t-center { text-align: center; }
+
+.trips-page h1,
+.trips-page h2,
+.trips-page h3 {
+  font-family: var(--serif);
+  font-weight: 400;
+  line-height: 1.1;
+}
+.trips-page h2 { font-size: 2.4rem; margin: .2rem 0 1rem; }
+
+.trips-page .t-muted { color: var(--muted); }
+.trips-page .t-jp { color: var(--red); font-weight: 700; }
+.trips-page .t-tag {
+  letter-spacing: .22em;
+  font-size: .72rem;
+  color: var(--gold);
+  font-weight: 700;
+  margin-bottom: .6rem;
+  display: block;
+}
+
+.trips-page .t-section { padding: 84px 0; position: relative; overflow: hidden; }
+
+
+/* ──────────────────────────────────────────────
+   NAV
+   ────────────────────────────────────────────── */
+.trips-page header.t-nav {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  background: #f4efe6 !important;
+  background-color: #f4efe6 !important;
+  background-image: none !important;
+  border-bottom: 1px solid #e3d9c8;
+  box-shadow: 0 2px 0 rgba(0, 0, 0, .02);
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  color: #1f1a17;
+}
+.trips-page header.t-nav .t-brand,
+.trips-page header.t-nav .t-brand:visited,
+.trips-page header.t-nav .t-links a,
+.trips-page header.t-nav .t-links a:visited { color: #1f1a17; }
+.trips-page .t-nav-inner {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 14px 28px;
+  display: flex;
+  align-items: center;
+  gap: 28px;
+}
+.trips-page .t-brand {
+  font-family: var(--serif);
+  font-size: 1.35rem;
+  color: var(--ink);
+  font-weight: 600;
+}
+.trips-page .t-links {
+  margin-left: auto;
+  display: flex;
+  gap: 26px;
+}
+.trips-page .t-links a {
+  color: var(--ink);
+  font-size: .92rem;
+  opacity: .8;
+  transition: color .15s, opacity .15s;
+}
+.trips-page .t-links a:hover { color: var(--red); opacity: 1; }
+
+
+/* ──────────────────────────────────────────────
+   BUTTONS
+   ────────────────────────────────────────────── */
+.trips-page .t-btn {
+  display: inline-block;
+  border-radius: 8px;
+  padding: 12px 22px;
+  font-weight: 700;
+  font-size: .9rem;
+  cursor: pointer;
+  border: none;
+  transition: transform .2s, background .2s, box-shadow .2s;
+  font-family: var(--sans);
+}
+.trips-page .t-btn-primary {
+  background: var(--red);
+  color: #fff;
+  box-shadow: 0 6px 18px rgba(192, 57, 43, .28);
+}
+.trips-page .t-btn-primary:hover { background: var(--red-deep); transform: translateY(-1px); }
+.trips-page .t-btn-dark {
+  background: #1f2430;
+  color: #fff;
+  box-shadow: 0 6px 18px rgba(31, 36, 48, .3);
+}
+.trips-page .t-btn-dark:hover { background: #11151d; transform: translateY(-1px); }
+.trips-page .t-btn-teal {
+  background: #3d8580;
+  color: #fff;
+  box-shadow: 0 6px 18px rgba(61, 133, 128, .3);
+}
+.trips-page .t-btn-teal:hover { background: #2f6e6a; transform: translateY(-1px); }
+.trips-page .t-btn-outline {
+  background: transparent;
+  color: var(--ink);
+  border: 1.5px solid var(--ink);
+}
+.trips-page .t-btn-outline:hover { background: var(--ink); color: #fff; }
+.trips-page .t-btn.t-wide {
+  display: block;
+  text-align: center;
+  width: 100%;
+  margin-top: 18px;
+}
+.trips-page .t-btn[disabled] { opacity: .65; cursor: not-allowed; transform: none !important; }
+
+
+/* ──────────────────────────────────────────────
+   HERO
+   ────────────────────────────────────────────── */
+.trips-page .t-hero { padding: 56px 0 84px; position: relative; overflow: hidden; }
+.trips-page .t-hero-grid {
+  display: grid;
+  grid-template-columns: 1.05fr .95fr;
+  gap: 54px;
+  align-items: stretch;
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 0 28px;
+}
+.trips-page .t-hero-copy { text-align: center; }
+
+.trips-page .t-partners {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 36px;
+  margin-bottom: 28px;
+}
+.trips-page .t-partner-logo {
+  height: 62px;
+  width: auto;
+  object-fit: contain;
+}
+
+.trips-page .t-eyebrow {
+  letter-spacing: .16em;
+  font-size: .74rem;
+  color: var(--muted);
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.trips-page .t-eyebrow .t-sep { color: rgba(0, 0, 0, .2); }
+.trips-page .t-pill {
+  background: var(--red);
+  color: #fff;
+  padding: 5px 12px;
+  border-radius: 6px;
+  letter-spacing: .04em;
+}
+.trips-page .t-hero-kicker {
+  color: var(--gold);
+  font-weight: 700;
+  margin: 22px 0 6px;
+  letter-spacing: .04em;
+}
+.trips-page .t-hero h1 {
+  font-size: 3.6rem;
+  font-style: italic;
+  letter-spacing: -.01em;
+}
+.trips-page .t-lede {
+  color: var(--muted);
+  font-size: 1.05rem;
+  max-width: 52ch;
+  margin: 18px auto 0;
+}
+
+.trips-page .t-cards {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  margin: 30px 0;
+}
+.trips-page .t-card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 18px;
+  position: relative;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .03);
+  text-align: left;
+  cursor: default;
+  transition: transform .28s ease, box-shadow .28s ease, border-color .28s ease, background .28s ease;
+}
+.trips-page .t-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(192, 57, 43, .04) 0%, transparent 60%);
+  opacity: 0;
+  transition: opacity .28s ease;
+  pointer-events: none;
+}
+.trips-page .t-card:hover {
+  transform: translateY(-5px);
+  border-color: var(--red);
+  box-shadow: 0 16px 34px rgba(192, 57, 43, .15);
+}
+.trips-page .t-card:hover::before { opacity: 1; }
+.trips-page .t-card:hover .t-card-icon {
+  transform: scale(1.18) rotate(8deg);
+  color: var(--red-deep);
+}
+.trips-page .t-card:hover h3 { color: var(--red-deep); }
+.trips-page .t-card h3,
+.trips-page .t-card p { position: relative; z-index: 1; transition: color .25s ease; }
+.trips-page .t-card h3 { font-size: 1.05rem; margin-bottom: 4px; }
+.trips-page .t-card p { font-size: .82rem; color: var(--muted); }
+.trips-page .t-card-icon {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  color: var(--red);
+  font-size: 1.1rem;
+  z-index: 1;
+  transition: transform .28s ease, color .28s ease;
+}
+
+.trips-page .t-countdown {
+  margin-top: 36px;
+  padding-top: 32px;
+  border-top: 1px solid var(--line);
+}
+.trips-page .t-cd-cta {
+  display: inline-block;
+  margin-top: 22px;
+  padding: 14px 38px;
+}
+.trips-page .t-cd-label {
+  letter-spacing: .18em;
+  font-size: .7rem;
+  color: var(--muted);
+  text-align: center;
+  font-weight: 700;
+}
+.trips-page .t-cd-clock {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 14px;
+  margin-top: 10px;
+}
+.trips-page .t-cd-clock i {
+  font-family: var(--serif);
+  font-size: 2rem;
+  color: var(--gold);
+  font-style: normal;
+}
+.trips-page .t-cd-unit { text-align: center; }
+.trips-page .t-cd-unit span {
+  font-family: var(--serif);
+  font-size: 2.6rem;
+  display: block;
+  color: var(--ink);
+}
+.trips-page .t-cd-unit small {
+  letter-spacing: .14em;
+  font-size: .6rem;
+  color: var(--muted);
+}
+
+
+/* Hero visual / poster */
+.trips-page .t-hero-visual {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 24px;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, .08);
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  position: sticky;
+  top: 88px;
+}
+.trips-page .t-visual-title {
+  font-family: var(--serif);
+  color: var(--red);
+  text-align: center;
+  font-size: 1.25rem;
+}
+.trips-page .t-visual-sub {
+  text-align: center;
+  color: var(--muted);
+  font-size: .85rem;
+  margin: 6px 0 16px;
+}
+.trips-page .t-poster {
+  position: relative;
+  border-radius: 12px;
+  overflow: hidden;
+  flex: 1 1 auto;
+  min-height: 620px;
+  background: #faf6ee;
+}
+.trips-page .t-poster img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+}
+
+.trips-page .t-kanji-wm {
+  position: absolute;
+  font-family: var(--serif);
+  font-size: 9rem;
+  color: rgba(120, 90, 60, .07);
+  writing-mode: vertical-rl;
+  top: 40px;
+  z-index: 0;
+  pointer-events: none;
+  user-select: none;
+}
+.trips-page .t-kanji-left  { left: 10px; }
+.trips-page .t-kanji-right { right: 10px; }
+
+
+/* ──────────────────────────────────────────────
+   PHOTO STRIP (scrolling city cards)
+   ────────────────────────────────────────────── */
+.trips-page .t-photo-strip {
+  background: var(--bg);
+  padding: 60px 0;
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 6%, #000 94%, transparent 100%);
+          mask-image: linear-gradient(to right, transparent 0, #000 6%, #000 94%, transparent 100%);
+}
+.trips-page .t-photo-strip-track {
+  display: flex;
+  gap: 22px;
+  width: max-content;
+  animation: t-photo-slide 40s linear infinite;
+  will-change: transform;
+}
+.trips-page .t-photo-strip:hover .t-photo-strip-track {
+  animation-play-state: paused;
+}
+@keyframes t-photo-slide {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-50%); }
+}
+.trips-page .t-photo-strip-card {
+  position: relative;
+  flex-shrink: 0;
+  width: 280px;
+  height: 400px;
+  border-radius: 18px;
+  overflow: hidden;
+  background-size: cover;
+  background-position: center;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, .18);
+  transition: transform .3s ease;
+}
+.trips-page .t-photo-strip-card:hover { transform: translateY(-6px); }
+.trips-page .t-photo-strip-card .t-pcard-cap { left: 20px; right: 20px; bottom: 20px; }
+.trips-page .t-photo-strip-card .t-pcard-cap h3 { font-size: 1.5rem; }
+
+@media (max-width: 600px) {
+  .trips-page .t-photo-strip-card { width: 220px; height: 320px; }
+}
+
+
+/* ──────────────────────────────────────────────
+   INTERACTIVE PREVIEW (video)
+   ────────────────────────────────────────────── */
+.trips-page .t-preview {
+  background: #fff;
+  padding: 80px 0;
+  position: relative;
+  overflow: hidden;
+}
+.trips-page .t-preview .t-wrap { position: relative; z-index: 1; }
+.trips-page .t-preview .t-tag {
+  font-size: .78rem;
+  letter-spacing: .24em;
+  margin-bottom: .9rem;
+}
+.trips-page .t-tag-red { color: var(--red); }
+
+.trips-page .t-preview-title {
+  font-size: clamp(2rem, 3.6vw, 2.6rem);
+  line-height: 1.15;
+  margin: 0 0 .7rem;
+  color: #1f2430;
+}
+.trips-page .t-preview-sub {
+  font-size: .95rem;
+  max-width: 560px;
+  margin: 0 auto;
+  line-height: 1.6;
+}
+
+.trips-page .t-preview-quote {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 22px;
+  margin: 32px auto 40px;
+  max-width: 700px;
+}
+.trips-page .t-quote-line {
+  flex: 0 0 80px;
+  height: 1px;
+  background: var(--line);
+}
+.trips-page .t-preview-quote p {
+  font-family: var(--serif);
+  font-style: italic;
+  color: var(--gold);
+  font-size: .98rem;
+  line-height: 1.55;
+}
+
+.trips-page .t-video-frame {
+  max-width: 900px;
+  margin: 0 auto 36px;
+  padding: 12px;
+  border-radius: 4px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, .12);
+}
+.trips-page .t-video-wrap {
+  position: relative;
+  padding-bottom: 56.25%; /* 16:9 aspect ratio */
+  height: 0;
+  overflow: hidden;
+  background: #000;
+  border-radius: 2px;
+}
+.trips-page .t-video-iframe {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  display: block;
+}
+
+.trips-page .t-preview-cta {
+  padding: 16px 38px;
+  letter-spacing: .12em;
+  font-size: .82rem;
+}
+
+@media (max-width: 700px) {
+  .trips-page .t-preview { padding: 64px 0; }
+  .trips-page .t-preview-title { font-size: 2rem; }
+  .trips-page .t-quote-line { flex-basis: 30px; }
+  .trips-page .t-preview-quote { gap: 14px; margin: 32px auto 36px; }
+  .trips-page .t-preview-quote p { font-size: .95rem; }
+}
+
+/* ──────────────────────────────────────────────
+   WHY
+   ────────────────────────────────────────────── */
+.trips-page .t-why {
+  background: #f4e8e4;
+  background-image:
+    radial-gradient(circle at 1px 1px, rgba(192, 57, 43, .06) 1px, transparent 0);
+  background-size: 22px 22px;
+  padding: 96px 0;
+  position: relative;
+  overflow: hidden;
+}
+.trips-page .t-why .t-wrap { position: relative; z-index: 1; }
+
+.trips-page .t-why-grid {
+  display: grid;
+  grid-template-columns: 1.05fr 1fr;
+  gap: 60px;
+  align-items: start;
+}
+.trips-page .t-why-left h2 {
+  font-size: 2.4rem;
+  text-align: left;
+  margin: 0;
+  color: #1f2430;
+}
+.trips-page .t-why-divider {
+  width: 72px;
+  height: 2px;
+  background: var(--red);
+  margin: 20px 0 28px;
+}
+.trips-page .t-why-left p {
+  color: var(--muted);
+  font-size: 1rem;
+  line-height: 1.75;
+  margin-bottom: 18px;
+}
+
+.trips-page .t-why-card {
+  background: #fff;
+  border-left: 4px solid var(--gold);
+  border-radius: 4px;
+  padding: 38px 40px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, .07);
+}
+.trips-page .t-why-card h3 {
+  font-family: var(--serif);
+  font-size: 1.6rem;
+  color: #1f2430;
+  margin-bottom: 18px;
+}
+.trips-page .t-why-card-quote {
+  font-family: var(--serif);
+  font-style: italic;
+  color: var(--gold);
+  font-size: 1.05rem;
+  line-height: 1.55;
+  margin-bottom: 26px;
+}
+
+.trips-page .t-checks {
+  margin: 0;
+  text-align: left;
+}
+.trips-page .t-checks li {
+  padding: 12px 0 12px 26px;
+  position: relative;
+  color: #3a322c;
+  font-size: .95rem;
+}
+.trips-page .t-checks li::before {
+  content: "■";
+  color: var(--red);
+  position: absolute;
+  left: 0;
+  font-size: .72rem;
+  top: 15px;
+}
+
+.trips-page .t-why-cta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 36px;
+  background: #fff;
+  border-left: 5px solid var(--red);
+  border-radius: 4px;
+  padding: 36px 44px;
+  margin-top: 60px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, .07);
+}
+.trips-page .t-why-cta-content { flex: 1; }
+.trips-page .t-why-cta-content h3 {
+  font-family: var(--serif);
+  font-size: 1.5rem;
+  color: #1f2430;
+  margin-bottom: 8px;
+  line-height: 1.25;
+}
+.trips-page .t-why-cta-content p {
+  color: var(--muted);
+  font-size: .95rem;
+  line-height: 1.6;
+}
+.trips-page .t-why-cta .t-btn {
+  white-space: nowrap;
+  padding: 14px 30px;
+}
+
+
+/* ──────────────────────────────────────────────
+   PHOTO CARD CAPTION (shared by .t-photo-strip-card)
+   ────────────────────────────────────────────── */
+.trips-page .t-pcard-grad {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    to top,
+    rgba(8, 12, 22, .92) 0%,
+    rgba(8, 12, 22, .55) 32%,
+    rgba(8, 12, 22, .05) 60%,
+    transparent 100%
+  );
+}
+.trips-page .t-pcard-cap {
+  position: absolute;
+  left: 20px;
+  right: 20px;
+  bottom: 20px;
+  color: #fff;
+  z-index: 1;
+}
+.trips-page .t-pcat {
+  display: block;
+  letter-spacing: .18em;
+  font-size: .62rem;
+  font-weight: 700;
+  color: #d7c9a8;
+  margin-bottom: 6px;
+}
+.trips-page .t-pcard-cap h3 {
+  font-family: var(--serif);
+  color: #fff;
+  font-size: 1.5rem;
+  line-height: 1;
+}
+
+
+/* ──────────────────────────────────────────────
+   CULTURAL HIGHLIGHTS — hover-reveal cards
+   ────────────────────────────────────────────── */
+.trips-page .t-cultural {
+  background: #f4ebe2;
+  padding: 96px 0;
+  position: relative;
+  overflow: hidden;
+}
+.trips-page .t-cultural .t-wrap { position: relative; z-index: 1; }
+.trips-page .t-cultural-title {
+  font-size: clamp(2rem, 3.6vw, 2.6rem);
+  margin: .4rem 0 1rem;
+  color: #1f2430;
+}
+.trips-page .t-cultural-sub {
+  max-width: 560px;
+  margin: 0 auto;
+  font-size: .95rem;
+}
+
+.trips-page .t-ch-grid {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 22px;
+  margin-top: 54px;
+}
+
+.trips-page .t-ch-card {
+  position: relative;
+  width: 280px;
+  height: 380px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  cursor: pointer;
+  outline: none;
+  transition: border-color .35s ease, box-shadow .35s ease, transform .35s ease;
+}
+.trips-page .t-ch-card:hover,
+.trips-page .t-ch-card:focus,
+.trips-page .t-ch-card:focus-within {
+  border-color: var(--red);
+  box-shadow: 0 18px 44px rgba(192, 57, 43, .12);
+  transform: translateY(-3px);
+}
+
+/* Front + back states share absolute positioning so the swap is in-place */
+.trips-page .t-ch-front,
+.trips-page .t-ch-back {
+  position: absolute;
+  inset: 0;
+  padding: 32px 26px;
+  display: flex;
+  flex-direction: column;
+  transition: opacity .35s ease;
+}
+
+/* FRONT (default state) — icon + city name + underline, centered */
+.trips-page .t-ch-front {
+  align-items: center;
+  justify-content: center;
+  opacity: 1;
+}
+.trips-page .t-ch-icon {
+  color: var(--gold);
+  margin-bottom: 28px;
+}
+.trips-page .t-ch-icon svg {
+  display: block;
+  width: 54px;
+  height: 54px;
+}
+.trips-page .t-ch-front h3 {
+  font-family: var(--serif);
+  font-size: 1.35rem;
+  color: #1f2430;
+  margin: 0;
+}
+.trips-page .t-ch-underline {
+  width: 38px;
+  height: 1px;
+  background: var(--gold);
+  margin-top: 14px;
+}
+
+/* BACK (hover/focus state) — full content */
+.trips-page .t-ch-back {
+  opacity: 0;
+  pointer-events: none;
+  text-align: left;
+}
+.trips-page .t-ch-card:hover .t-ch-front,
+.trips-page .t-ch-card:focus .t-ch-front,
+.trips-page .t-ch-card:focus-within .t-ch-front { opacity: 0; }
+.trips-page .t-ch-card:hover .t-ch-back,
+.trips-page .t-ch-card:focus .t-ch-back,
+.trips-page .t-ch-card:focus-within .t-ch-back { opacity: 1; pointer-events: auto; }
+
+.trips-page .t-ch-back h3 {
+  font-family: var(--serif);
+  font-size: 1.45rem;
+  color: var(--red);
+  margin: 0 0 4px;
+}
+.trips-page .t-ch-label {
+  font-size: .68rem;
+  letter-spacing: .14em;
+  color: var(--muted);
+  font-weight: 700;
+  padding-bottom: 12px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+.trips-page .t-ch-body {
+  flex: 1;
+  overflow: hidden;
+}
+.trips-page .t-ch-body p {
+  font-size: .82rem;
+  color: #3a322c;
+  line-height: 1.55;
+  margin-bottom: 10px;
+  padding-left: 10px;
+  border-left: 2px solid var(--line);
+}
+.trips-page .t-ch-benefit {
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.trips-page .t-ch-benefit span {
+  display: block;
+  font-size: .62rem;
+  letter-spacing: .14em;
+  color: var(--muted);
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+.trips-page .t-ch-benefit em {
+  font-family: var(--serif);
+  font-style: italic;
+  color: var(--gold);
+  font-size: .85rem;
+  line-height: 1.4;
+}
+
+.trips-page .t-ch-cta {
+  margin-top: 64px;
+}
+
+@media (max-width: 700px) {
+  .trips-page .t-cultural { padding: 64px 0; }
+  .trips-page .t-ch-card { width: 100%; max-width: 320px; }
+  .trips-page .t-ch-cta { margin-top: 44px; }
+}
+
+/* ──────────────────────────────────────────────
+   SAFETY (dark)
+   ────────────────────────────────────────────── */
+.trips-page .t-safety {
+  background: #1a1f2e;
+  background-image: radial-gradient(circle at 1px 1px, rgba(255, 255, 255, .035) 1px, transparent 0);
+  background-size: 26px 26px;
+  color: #e8dfd4;
+  padding: 96px 0;
+}
+.trips-page .t-safety .t-light { color: #f4efe6; }
+.trips-page .t-safety .t-muted { color: #a99e92; }
+
+.trips-page .t-safety-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 20px;
+  margin-top: 48px;
+}
+.trips-page .t-sfeat {
+  background: rgba(255, 255, 255, .03);
+  border: 1px solid rgba(255, 255, 255, .07);
+  border-radius: 10px;
+  padding: 32px 22px;
+  text-align: center;
+  transition: transform .25s, border-color .25s;
+}
+.trips-page .t-sfeat:hover {
+  transform: translateY(-2px);
+  border-color: rgba(192, 57, 43, .35);
+}
+.trips-page .t-sfeat-icon {
+  color: var(--red);
+  margin-bottom: 16px;
+  display: flex;
+  justify-content: center;
+}
+.trips-page .t-sfeat-icon svg {
+  width: 28px;
+  height: 28px;
+}
+.trips-page .t-sfeat h4 {
+  font-family: var(--serif);
+  font-size: 1.1rem;
+  color: #fff;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+.trips-page .t-sfeat p {
+  color: #a0a8b4;
+  font-size: .82rem;
+  line-height: 1.5;
+}
+
+.trips-page .t-included {
+  background: rgba(255, 255, 255, .025);
+  border: 1px solid rgba(255, 255, 255, .07);
+  border-radius: 12px;
+  padding: 36px 40px;
+  margin-top: 36px;
+}
+.trips-page .t-included h3 {
+  font-family: var(--serif);
+  font-size: 1.4rem;
+  color: #fff;
+  font-weight: 600;
+  margin-bottom: 22px;
+}
+.trips-page .t-inc-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px 40px;
+}
+.trips-page .t-inc-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+.trips-page .t-inc-check {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: rgba(192, 57, 43, .15);
+  color: var(--red);
+  display: grid;
+  place-items: center;
+  margin-top: 1px;
+}
+.trips-page .t-inc-check svg {
+  width: 12px;
+  height: 12px;
+}
+.trips-page .t-inc-item > span:last-child {
+  font-size: .88rem;
+  color: #cbbfb4;
+  line-height: 1.5;
+}
+
+.trips-page .t-safety-banner {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  background: rgba(255, 255, 255, .035);
+  border: 1px solid rgba(255, 255, 255, .07);
+  border-left: 4px solid var(--red);
+  border-radius: 4px;
+  padding: 26px 32px;
+  margin-top: 32px;
+}
+.trips-page .t-sb-icon {
+  color: var(--red);
+  flex-shrink: 0;
+  display: flex;
+}
+.trips-page .t-sb-icon svg { width: 30px; height: 30px; }
+.trips-page .t-sb-content { flex: 1; }
+.trips-page .t-sb-content h3 {
+  font-family: var(--serif);
+  font-size: 1.25rem;
+  color: #fff;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.trips-page .t-sb-content p {
+  color: #a0a8b4;
+  font-size: .88rem;
+  line-height: 1.5;
+}
+.trips-page .t-safety-banner .t-btn {
+  white-space: nowrap;
+  padding: 12px 26px;
+}
+
+.trips-page .t-safety-quote {
+  text-align: center;
+  font-family: var(--serif);
+  font-style: italic;
+  color: #cbbfb4;
+  font-size: 1.05rem;
+  margin-top: 44px;
+}
+
+@media (max-width: 900px) {
+  .trips-page .t-safety { padding: 64px 0; }
+  .trips-page .t-safety-grid { grid-template-columns: repeat(2, 1fr); }
+  .trips-page .t-inc-grid { grid-template-columns: 1fr; }
+  .trips-page .t-safety-banner {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 16px;
+    padding: 24px;
+  }
+  .trips-page .t-included { padding: 26px; }
+}
+@media (max-width: 600px) {
+  .trips-page .t-safety-grid { grid-template-columns: 1fr; }
+}
+
+
+/* ──────────────────────────────────────────────
+   REVIEWS
+   ────────────────────────────────────────────── */
+.trips-page .t-reviews {
+  background: var(--bg);
+  padding: 84px 0;
+}
+.trips-page .t-review-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 24px;
+  margin-top: 40px;
+}
+.trips-page .t-review {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 30px;
+  position: relative;
+}
+.trips-page .t-stars { color: #f1b600; letter-spacing: 3px; font-size: 1.1rem; }
+.trips-page .t-quote-mark {
+  position: absolute;
+  top: 22px;
+  right: 24px;
+  font-family: var(--serif);
+  font-size: 3rem;
+  color: rgba(0, 0, 0, .08);
+  line-height: 1;
+}
+.trips-page .t-review p {
+  font-family: var(--serif);
+  font-style: italic;
+  color: #3a322c;
+  margin: 16px 0 22px;
+  font-size: 1.02rem;
+  line-height: 1.5;
+}
+.trips-page .t-reviewer {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border-top: 1px solid var(--line);
+  padding-top: 18px;
+}
+.trips-page .t-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: #cbb89a;
+  color: #fff;
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+  font-family: var(--serif);
+  flex-shrink: 0;
+}
+.trips-page .t-reviewer b { display: block; font-size: .82rem; letter-spacing: .06em; }
+.trips-page .t-reviewer small { color: var(--muted); font-size: .74rem; }
+
+.trips-page .t-cta-band {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 30px;
+  background: var(--card);
+  border-left: 6px solid var(--red);
+  border-radius: 6px;
+  padding: 40px 44px;
+  margin-top: 46px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .06);
+}
+.trips-page .t-cta-band h3 { font-size: 1.9rem; color: #1f2430; }
+.trips-page .t-cta-band .t-btn { white-space: nowrap; }
+
+
+/* ──────────────────────────────────────────────
+   INVESTMENT
+   ────────────────────────────────────────────── */
+.trips-page .t-invest {
+  background: var(--bg);
+  padding: 96px 0;
+  position: relative;
+  overflow: hidden;
+}
+.trips-page .t-invest .t-wrap { position: relative; z-index: 1; }
+
+.trips-page .t-invest-title {
+  font-size: clamp(2rem, 3.6vw, 2.6rem);
+  margin: .4rem 0 0;
+}
+.trips-page .t-invest-divider {
+  width: 56px;
+  height: 2px;
+  background: var(--line);
+  margin: 16px auto 18px;
+}
+.trips-page .t-invest-sub {
+  max-width: 580px;
+  margin: 0 auto;
+  font-size: .95rem;
+}
+
+.trips-page .t-tiers {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 22px;
+  margin-top: 48px;
+  align-items: stretch;
+}
+
+.trips-page .t-tier {
+  position: relative;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 28px 26px;
+  text-align: left;
+  transition: transform .25s, box-shadow .25s;
+  display: flex;
+  flex-direction: column;
+}
+.trips-page .t-tier:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, .08);
+}
+.trips-page .t-tier-start {
+  border-top: 4px solid var(--red);
+  padding-top: 25px;
+}
+.trips-page .t-tier-badge {
+  position: absolute;
+  top: 14px;
+  right: 16px;
+  background: rgba(192, 57, 43, .1);
+  color: var(--red);
+  font-size: .62rem;
+  font-weight: 700;
+  letter-spacing: .14em;
+  padding: 4px 10px;
+  border-radius: 4px;
+}
+
+.trips-page .t-tier-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 22px;
+}
+.trips-page .t-tier-num {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: rgba(192, 57, 43, .12);
+  color: var(--red);
+  display: grid;
+  place-items: center;
+  font-family: var(--serif);
+  font-weight: 700;
+  font-size: .95rem;
+  flex-shrink: 0;
+}
+.trips-page .t-tier-titles h4 {
+  font-family: var(--serif);
+  font-size: 1.1rem;
+  color: #1f2430;
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+.trips-page .t-tier-titles small {
+  font-size: .78rem;
+  color: var(--muted);
+}
+
+.trips-page .t-tier-amount {
+  font-family: var(--serif);
+  font-size: 2.2rem;
+  color: var(--red);
+  font-weight: 600;
+  line-height: 1.1;
+  margin-bottom: 4px;
+}
+.trips-page .t-tier-tag {
+  display: inline-block;
+  font-size: .76rem;
+  color: var(--muted);
+  margin-bottom: 22px;
+}
+
+.trips-page .t-tier-meta {
+  margin-top: auto;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+.trips-page .t-tier-meta p {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: .88rem;
+  color: var(--ink);
+  margin-bottom: 8px;
+}
+.trips-page .t-tier-meta p:last-child { margin-bottom: 0; }
+.trips-page .t-tier-ico {
+  color: #5a8aa8;
+  display: flex;
+  flex-shrink: 0;
+}
+.trips-page .t-tier-ico svg { width: 16px; height: 16px; }
+
+/* INDICATIVE INCLUSIONS panel */
+.trips-page .t-inclusions {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 30px 34px;
+  margin-top: 36px;
+}
+.trips-page .t-inclusions-label {
+  color: var(--red);
+  font-size: .72rem;
+  font-weight: 700;
+  letter-spacing: .14em;
+  margin-bottom: 18px;
+}
+.trips-page .t-inclusions-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 48px;
+}
+.trips-page .t-inc-bullet {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: .92rem;
+  color: var(--ink);
+}
+.trips-page .t-inc-bullet:nth-last-child(-n+2) { border-bottom: none; }
+.trips-page .t-inc-square {
+  width: 8px;
+  height: 8px;
+  background: var(--red);
+  flex-shrink: 0;
+}
+
+.trips-page .t-invest-foot {
+  text-align: center;
+  margin-top: 28px;
+  font-size: .9rem;
+  color: var(--muted);
+}
+
+.trips-page .t-invest-cta {
+  margin-top: 28px;
+}
+
+
+/* ──────────────────────────────────────────────
+   REGISTER
+   ────────────────────────────────────────────── */
+.trips-page .t-register {
+  background: #f4e8e4;
+  background-image:
+    radial-gradient(circle at 1px 1px, rgba(192, 57, 43, .06) 1px, transparent 0);
+  background-size: 22px 22px;
+  padding: 96px 0 84px;
+  position: relative;
+  overflow: hidden;
+}
+.trips-page .t-register .t-wrap { position: relative; z-index: 1; }
+
+.trips-page .t-register .t-form,
+.trips-page .t-brochure .t-form {
+  display: grid;
+  gap: 18px;
+  max-width: 600px;
+  margin: 34px auto 0;
+  text-align: left;
+  background: #fff;
+  border: 1px solid #d9c9a3;
+  border-radius: 8px;
+  padding: 36px 40px;
+  box-shadow: 0 18px 40px rgba(0, 0, 0, .04);
+}
+
+/* Progress bar (3 segments) */
+.trips-page .t-form-progress {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.trips-page .t-form-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: #e3e1e0;
+  transition: background .25s ease;
+}
+.trips-page .t-form-bar-active { background: var(--red); }
+
+/* Step heading */
+.trips-page .t-step-title {
+  font-family: var(--serif);
+  font-size: 1.5rem;
+  color: #1f2430;
+  font-weight: 600;
+  margin: 4px 0 18px;
+}
+
+/* Red asterisk on required-field labels */
+.trips-page .t-req {
+  color: var(--red);
+  font-weight: 700;
+  margin-left: 2px;
+}
+
+/* "Your data is secure" disclaimer */
+.trips-page .t-form-secure {
+  text-align: center;
+  font-size: .8rem;
+  color: var(--muted);
+  margin-top: 14px;
+}
+.trips-page .t-form {
+  display: grid;
+  gap: 16px;
+  max-width: 560px;
+  margin: 34px auto 0;
+  text-align: left;
+}
+.trips-page .t-form label {
+  font-size: .82rem;
+  font-weight: 700;
+  color: #3a322c;
+  display: grid;
+  gap: 6px;
+}
+.trips-page .t-form input,
+.trips-page .t-form select,
+.trips-page .t-form textarea {
+  padding: 14px 16px !important;
+  border: 1px solid #d9c9a3 !important;
+  border-radius: 6px !important;
+  background: #fff !important;
+  background-color: #fff !important;
+  background-image: none !important;
+  font-size: .95rem !important;
+  font-family: var(--sans) !important;
+  color: #1f1a17 !important;
+  transition: border-color .15s, box-shadow .15s !important;
+  width: 100% !important;
+  appearance: none !important;
+  -webkit-appearance: none !important;
+  -moz-appearance: none !important;
+  box-shadow: none !important;
+  cursor: text;
+}
+.trips-page .t-form select { cursor: pointer; }
+.trips-page .t-form select option {
+  background: #fff !important;
+  background-color: #fff !important;
+  color: #1f1a17 !important;
+}
+.trips-page .t-form input::placeholder,
+.trips-page .t-form textarea::placeholder {
+  color: #9c8f80 !important;
+  opacity: 1 !important;
+}
+.trips-page .t-form input:focus,
+.trips-page .t-form select:focus,
+.trips-page .t-form textarea:focus {
+  outline: none !important;
+  border-color: var(--red) !important;
+  box-shadow: 0 0 0 3px rgba(192, 57, 43, .1) !important;
+}
+
+/* Custom chevron for select since appearance is reset */
+.trips-page .t-form select {
+  background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8' fill='none' stroke='%236f655c' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3e%3cpath d='M1 1.5 L6 6.5 L11 1.5'/%3e%3c/svg%3e") !important;
+  background-repeat: no-repeat !important;
+  background-position: right 16px center !important;
+  background-size: 12px 8px !important;
+  padding-right: 42px !important;
+}
+.trips-page .t-form-row {
+  display: flex;
+  gap: 12px;
+  margin-top: 18px;
+}
+.trips-page .t-form-row .t-btn { flex: 1; }
+
+.trips-page .t-success {
+  text-align: center;
+  padding: 40px 24px;
+  margin-top: 34px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+.trips-page .t-success-icon {
+  width: 64px;
+  height: 64px;
+  background: var(--red);
+  color: #fff;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 1.8rem;
+  margin: 0 auto 1.5rem;
+}
+.trips-page .t-success h3 {
+  font-family: var(--serif);
+  font-size: 1.5rem;
+  margin-bottom: .5rem;
+}
+.trips-page .t-success p { color: var(--muted); font-size: .9rem; }
+
+
+/* ──────────────────────────────────────────────
+   BROCHURE + INFO CARDS
+   ────────────────────────────────────────────── */
+.trips-page .t-brochure {
+  background: #efe7d0;
+  background-image:
+    radial-gradient(circle at 1px 1px, rgba(184, 137, 59, .06) 1px, transparent 0);
+  background-size: 22px 22px;
+  padding: 84px 0;
+}
+.trips-page .t-info-cards {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 20px;
+  max-width: 820px;
+  margin: 0 auto 50px;
+}
+.trips-page .t-info-card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--gold);
+  border-radius: 8px;
+  padding: 22px 26px;
+}
+.trips-page .t-info-card b {
+  font-family: var(--serif);
+  font-size: 1.05rem;
+  letter-spacing: .04em;
+  color: #1f2430;
+  display: block;
+  margin-bottom: 6px;
+}
+.trips-page .t-info-card p { color: var(--muted); font-size: .88rem; }
+
+/* Title block — sits on the section background, NO card */
+.trips-page .t-brochure-head {
+  text-align: center;
+  margin-bottom: 30px;
+  background: transparent;
+}
+.trips-page .t-brochure-head h2 {
+  margin-bottom: 0;
+  color: #1f2430;
+}
+
+/* Red outlined "STILL EXPLORING?" pill */
+.trips-page .t-still-pill {
+  display: inline-block;
+  border: 1px solid var(--red);
+  color: var(--red);
+  font-size: .68rem;
+  font-weight: 700;
+  letter-spacing: .22em;
+  padding: 6px 18px;
+  border-radius: 999px;
+  margin-bottom: 22px;
+}
+
+/* Info card — white box with subtitle + divider, NO red border */
+.trips-page .t-brochure-info {
+  background: #fff;
+  border-radius: 8px;
+  max-width: 720px;
+  margin: 0 auto 36px;
+  padding: 36px 44px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, .06);
+}
+
+/* Form card — separate white card with RED LEFT BORDER */
+.trips-page .t-brochure-card {
+  background: #fff;
+  border-left: 6px solid var(--red);
+  border-radius: 8px;
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 36px 44px;
+  box-shadow: 0 16px 44px rgba(0, 0, 0, .08);
+}
+
+/* "SELECT YOUR SCHOOL TO RECEIVE..." divider row */
+.trips-page .t-school-divider {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  margin: 28px 0 0;
+}
+.trips-page .t-school-line {
+  flex: 1;
+  height: 1px;
+  background: var(--line);
+}
+.trips-page .t-school-text {
+  color: var(--red);
+  font-size: .7rem;
+  font-weight: 700;
+  letter-spacing: .14em;
+  text-align: center;
+  flex-shrink: 0;
+  max-width: 440px;
+  line-height: 1.4;
+}
+
+/* Brochure form: NOT a separate card — flows inside .t-brochure-card */
+.trips-page .t-brochure .t-brochure-form,
+.trips-page .t-brochure .t-form.t-brochure-form {
+  background: transparent !important;
+  background-color: transparent !important;
+  border: none !important;
+  border-radius: 0 !important;
+  padding: 0 !important;
+  box-shadow: none !important;
+  max-width: 100% !important;
+  margin: 0 auto !important;
+  display: grid;
+  gap: 18px;
+  text-align: left;
+}
+
+.trips-page .t-brochure-note {
+  text-align: center;
+  font-size: .8rem;
+  color: var(--muted);
+  margin-top: 8px;
+}
+
+
+/* ──────────────────────────────────────────────
+   FAQ
+   ────────────────────────────────────────────── */
+.trips-page .t-faqs {
+  background: #1a1f2e;
+  background-image: radial-gradient(circle at 1px 1px, rgba(255, 255, 255, .035) 1px, transparent 0);
+  background-size: 26px 26px;
+  padding: 96px 0;
+  position: relative;
+  overflow: hidden;
+  color: #e8dfd4;
+}
+.trips-page .t-faqs .t-wrap { position: relative; z-index: 1; }
+
+.trips-page .t-faq-title { color: #fff; }
+.trips-page .t-faq-divider {
+  width: 60px;
+  height: 2px;
+  background: var(--red);
+  margin: 16px auto 18px;
+}
+.trips-page .t-faq-sub {
+  color: #a0a8b4;
+  text-align: center;
+  margin: 0 auto 36px;
+  font-size: .95rem;
+  max-width: 520px;
+}
+
+.trips-page .t-faq-search {
+  position: relative;
+  max-width: 620px;
+  margin: 0 auto 32px;
+}
+.trips-page .t-faq-search svg {
+  position: absolute;
+  left: 18px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 18px;
+  height: 18px;
+  color: #6c7280;
+}
+.trips-page .t-faq-search input {
+  width: 100%;
+  background: rgba(255, 255, 255, .035) !important;
+  background-color: rgba(255, 255, 255, .035) !important;
+  border: 1px solid rgba(255, 255, 255, .08) !important;
+  border-radius: 10px !important;
+  padding: 14px 16px 14px 48px !important;
+  color: #fff !important;
+  font-family: var(--sans) !important;
+  font-size: .95rem !important;
+}
+.trips-page .t-faq-search input::placeholder { color: #6c7280 !important; }
+.trips-page .t-faq-search input:focus {
+  outline: none !important;
+  border-color: var(--red) !important;
+  box-shadow: 0 0 0 3px rgba(192, 57, 43, .15) !important;
+}
+
+.trips-page .t-faq-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+  margin-bottom: 36px;
+}
+.trips-page .t-faq-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(255, 255, 255, .04);
+  border: 1px solid rgba(255, 255, 255, .08);
+  color: #a0a8b4;
+  border-radius: 8px;
+  padding: 12px 16px;
+  font-size: .72rem;
+  font-weight: 700;
+  letter-spacing: .14em;
+  cursor: pointer;
+  transition: all .2s ease;
+  font-family: var(--sans);
+}
+.trips-page .t-faq-tab:hover {
+  background: rgba(255, 255, 255, .06);
+  color: #fff;
+}
+.trips-page .t-faq-tab-active {
+  background: var(--red);
+  border-color: var(--red);
+  color: #fff;
+}
+.trips-page .t-faq-tab-icon { font-size: 1rem; }
+.trips-page .t-faq-tab-count {
+  background: rgba(255, 255, 255, .15);
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: .68rem;
+  letter-spacing: 0;
+  font-weight: 700;
+}
+.trips-page .t-faq-tab-active .t-faq-tab-count { background: rgba(0, 0, 0, .2); }
+
+.trips-page .t-faq-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 820px;
+  margin: 0 auto;
+}
+.trips-page .t-faq-item {
+  background: rgba(255, 255, 255, .03);
+  border: 1px solid rgba(255, 255, 255, .08);
+  border-radius: 10px;
+  overflow: hidden;
+  transition: border-color .2s ease;
+}
+.trips-page .t-faq-item-open {
+  border-color: rgba(192, 57, 43, .35);
+}
+.trips-page .t-faq-q {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  background: transparent;
+  border: none;
+  color: #f4efe6;
+  font-family: var(--serif);
+  font-size: 1.05rem;
+  padding: 18px 22px;
+  cursor: pointer;
+  text-align: left;
+}
+.trips-page .t-faq-q > span:first-child { flex: 1; padding-right: 14px; }
+.trips-page .t-faq-chevron {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, .15);
+  display: grid;
+  place-items: center;
+  color: #a0a8b4;
+  flex-shrink: 0;
+  transition: transform .25s ease, color .25s ease, border-color .25s ease;
+}
+.trips-page .t-faq-chevron svg { width: 14px; height: 14px; }
+.trips-page .t-faq-item-open .t-faq-chevron {
+  transform: rotate(180deg);
+  border-color: var(--red);
+  color: var(--red);
+}
+.trips-page .t-faq-a {
+  padding: 0 22px 20px;
+  color: #a0a8b4;
+  font-size: .92rem;
+  line-height: 1.65;
+}
+.trips-page .t-faq-empty {
+  text-align: center;
+  color: #a0a8b4;
+  padding: 40px 0;
+}
+
+
+/* ──────────────────────────────────────────────
+   DETAILS THAT MATTER — red CTA strip
+   ────────────────────────────────────────────── */
+.trips-page .t-details {
+  background: linear-gradient(135deg, #c0392b 0%, #a02418 100%);
+  background-image:
+    radial-gradient(circle at 50% 50%, rgba(255, 255, 255, .04) 1px, transparent 1px),
+    linear-gradient(135deg, #c0392b 0%, #a02418 100%);
+  background-size: 40px 40px, 100% 100%;
+  color: #fff;
+  padding: 96px 0;
+  text-align: center;
+}
+.trips-page .t-details-title {
+  color: #fff;
+  font-size: clamp(2.2rem, 4vw, 3.2rem);
+  margin-bottom: 0;
+}
+.trips-page .t-details-divider {
+  width: 60px;
+  height: 2px;
+  background: rgba(255, 255, 255, .5);
+  margin: 16px auto 28px;
+}
+.trips-page .t-details-pill-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 22px;
+  margin-bottom: 44px;
+  flex-wrap: wrap;
+}
+.trips-page .t-details-pill {
+  display: inline-block;
+  border: 1px solid rgba(255, 255, 255, .4);
+  padding: 8px 22px;
+  border-radius: 999px;
+  font-size: .82rem;
+  font-weight: 700;
+  letter-spacing: .12em;
+  color: #fff;
+}
+.trips-page .t-details-pill-line {
+  display: inline-block;
+  width: 56px;
+  height: 1px;
+  background: rgba(255, 255, 255, .35);
+}
+.trips-page .t-details-tagline {
+  font-family: var(--serif);
+  font-style: italic;
+  color: rgba(255, 255, 255, .9);
+  font-size: 1.1rem;
+}
+.trips-page .t-details-steps {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 28px;
+  margin-bottom: 38px;
+  flex-wrap: wrap;
+}
+.trips-page .t-details-step {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+.trips-page .t-details-num {
+  font-family: var(--serif);
+  font-size: 2.2rem;
+  color: rgba(255, 255, 255, .45);
+  line-height: 1;
+}
+.trips-page .t-details-label {
+  font-size: .98rem;
+  font-weight: 600;
+  color: #fff;
+}
+.trips-page .t-details-arrow {
+  font-size: 1.6rem;
+  color: rgba(255, 255, 255, .5);
+}
+.trips-page .t-details-cta {
+  display: inline-block;
+  background: #fff;
+  color: var(--red);
+  font-weight: 700;
+  font-size: .88rem;
+  letter-spacing: .14em;
+  padding: 18px 36px;
+  border-radius: 6px;
+  transition: transform .2s, box-shadow .2s;
+}
+.trips-page .t-details-cta:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, .25);
+}
+
+@media (max-width: 700px) {
+  .trips-page .t-details { padding: 64px 0; }
+  .trips-page .t-details-steps { flex-direction: column; gap: 18px; }
+  .trips-page .t-details-arrow { transform: rotate(90deg); }
+}
+
+
+/* ──────────────────────────────────────────────
+   FOOTER
+   ────────────────────────────────────────────── */
+.trips-page .t-foot {
+  background: #14192a;
+  background-image: radial-gradient(circle at 1px 1px, rgba(255, 255, 255, .035) 1px, transparent 0);
+  background-size: 26px 26px;
+  color: #e8dfd4;
+  padding: 96px 0 32px;
+}
+.trips-page .t-foot-top {
+  max-width: 760px;
+  margin: 0 auto 80px;
+  padding: 0 28px;
+}
+.trips-page .t-foot-title {
+  font-family: var(--serif);
+  font-size: clamp(2rem, 4vw, 2.8rem);
+  font-weight: 400;
+  color: #fff;
+  margin-bottom: 14px;
+  letter-spacing: .02em;
+}
+.trips-page .t-foot-tagline {
+  font-family: var(--serif);
+  font-style: italic;
+  color: var(--gold);
+  font-size: 1.1rem;
+  margin-bottom: 48px;
+}
+.trips-page .t-foot-logo {
+  display: block;
+  width: 100px;
+  height: auto;
+  margin: 0 auto;
+  object-fit: contain;
+  filter: drop-shadow(0 6px 16px rgba(0, 0, 0, .4));
+}
+.trips-page .t-foot-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0;
+  max-width: 820px;
+  margin: 0 auto 64px;
+  text-align: center;
+}
+.trips-page .t-foot-grid > div {
+  padding: 8px 60px;
+  position: relative;
+}
+.trips-page .t-foot-grid > div:first-child::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 1px;
+  background: rgba(255, 255, 255, .12);
+}
+.trips-page .t-foot-h {
+  letter-spacing: .16em;
+  font-size: .68rem;
+  color: #a0a8b4;
+  margin-bottom: 12px;
+  font-weight: 700;
+}
+.trips-page .t-foot-grid p:not(.t-foot-h) {
+  color: #f4efe6;
+  font-size: 1rem;
+  font-weight: 500;
+  line-height: 1.6;
+}
+.trips-page .t-foot .t-muted { color: #a99e92; }
+.trips-page .t-copy {
+  text-align: center;
+  color: #a0a8b4;
+  font-size: .72rem;
+  letter-spacing: .12em;
+  margin: 0 auto;
+  max-width: 900px;
+  border-top: 1px solid rgba(255, 255, 255, .08);
+  padding: 22px 28px 0;
+  font-weight: 500;
+}
+
+
+/* ──────────────────────────────────────────────
+   FLOATING CTA
+   ────────────────────────────────────────────── */
+.trips-page .t-float-register {
+  position: fixed;
+  right: 26px;
+  bottom: 26px;
+  z-index: 200;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--red);
+  color: #fff;
+  font-size: .82rem;
+  font-weight: 700;
+  letter-spacing: .14em;
+  padding: 14px 26px;
+  border-radius: 999px;
+  box-shadow: 0 10px 28px rgba(192, 57, 43, .42);
+  transition: transform .2s, background .2s, box-shadow .2s;
+}
+.trips-page .t-float-register:hover {
+  background: var(--red-deep);
+  transform: translateY(-2px);
+  box-shadow: 0 14px 34px rgba(192, 57, 43, .5);
+}
+.trips-page .t-float-register .t-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 0 0 0 rgba(255, 255, 255, .7);
+  animation: t-pulse 1.8s infinite;
+}
+@keyframes t-pulse {
+  0%   { box-shadow: 0 0 0 0   rgba(255, 255, 255, .6); }
+  70%  { box-shadow: 0 0 0 8px rgba(255, 255, 255, 0);  }
+  100% { box-shadow: 0 0 0 0   rgba(255, 255, 255, 0);  }
+}
+
+
+/* ──────────────────────────────────────────────
+   RESPONSIVE
+   ────────────────────────────────────────────── */
+@media (max-width: 900px) {
+  .trips-page .t-hero-grid,
+  .trips-page .t-cards,
+  .trips-page .t-safety-grid,
+  .trips-page .t-tiers,
+  .trips-page .t-foot-grid { grid-template-columns: 1fr; }
+  .trips-page .t-review-grid,
+  .trips-page .t-inc-grid,
+  .trips-page .t-info-cards { grid-template-columns: 1fr; }
+  .trips-page .t-why-grid { grid-template-columns: 1fr; gap: 36px; }
+  .trips-page .t-why-left h2 { font-size: 1.9rem; }
+  .trips-page .t-why-cta {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 20px;
+    padding: 28px;
+  }
+  .trips-page .t-hero h1 { font-size: 2.6rem; }
+  .trips-page .t-links { display: none; }
+  .trips-page h2 { font-size: 1.9rem; }
+  .trips-page .t-cta-band { flex-direction: column; text-align: center; }
+  .trips-page .t-float-register {
+    right: 14px; bottom: 14px;
+    padding: 12px 20px;
+    font-size: .74rem;
+  }
+}
+@media (max-width: 600px) {
+  .trips-page .t-brochure-card { padding: 28px; }
+}
+
+
+/* ── PR-E Phase 1.5 polish layer ── */
+/* =============================================================
+   PR-E Phase 1.5 — Premium Polish Layer
+   --------------------------------------------------------------
+   Additive CSS loaded AFTER educationalTripV1.css (the base shell).
+   Lifts visual quality across every template family without touching
+   HTML class names, content schema, or test contracts. Every property
+   here reads from theme-driven CSS custom properties so the polish
+   layer stays destination-agnostic:
+
+     • clamp() fluid typography                  → --h1-size / --h2-size
+     • italic light serif h1                     → --h1-style / --h1-weight
+     • glass sticky nav with backdrop blur       → --bg + color-mix()
+     • radial-gradient atmospheric hero corners  → --accent + --red
+     • shippo / arabesque / wave pattern overlay → --ornament-pattern
+     • pulse animation on urgency badges         → @keyframes
+     • tall portrait marquee cards               → aspect-ratio
+     • alternating section backgrounds           → --bg / --bg-alt / --bg-band
+     • premium FAQ circular toggle               → --accent + transform
+     • stronger final-CTA section                → --red / --gold full-bleed
+     • stronger footer typography                → --serif + spacing
+   ============================================================= */
+
+/* ── KEYFRAMES ───────────────────────────────────────────────── */
+@keyframes t-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
+@keyframes t-fade-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
+/* ── GLOBAL SMOOTH SCROLL + OVERFLOW GUARD ──────────────────── */
+html { scroll-behavior: smooth; }
+.trips-page { overflow-x: hidden; }
+.trips-page ::selection { background: var(--red); color: #fff; }
+
+/* ── TYPOGRAPHY — fluid clamp() + premium serif h1 ──────────── */
+.trips-page h1 {
+  font-family: var(--serif);
+  font-size: var(--h1-size, clamp(2.4rem, 5.4vw, 4.2rem));
+  font-style: var(--h1-style, normal);
+  font-weight: var(--h1-weight, 400);
+  line-height: 1.08;
+  letter-spacing: var(--letter-spacing, normal);
+}
+.trips-page h2 {
+  font-family: var(--serif);
+  font-size: var(--h2-size, clamp(1.9rem, 3.6vw, 2.6rem));
+  font-weight: var(--h-weight, 400);
+  line-height: 1.12;
+}
+.trips-page h3 { font-family: var(--serif); }
+.trips-page .t-lede { font-size: clamp(1rem, 1.6vw, 1.18rem); line-height: 1.7; }
+.trips-page .t-tag { font-family: var(--sans); }
+
+/* ── GLASS STICKY NAV ───────────────────────────────────────── */
+.trips-page header.t-nav {
+  background: color-mix(in srgb, var(--bg) 88%, transparent) !important;
+  background-color: color-mix(in srgb, var(--bg) 88%, transparent) !important;
+  backdrop-filter: blur(14px) saturate(180%) !important;
+  -webkit-backdrop-filter: blur(14px) saturate(180%) !important;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+}
+.trips-page header.t-nav .t-brand {
+  font-family: var(--serif);
+  font-size: 1.05rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+.trips-page header.t-nav .t-brand .t-jp {
+  font-family: var(--serif);
+  font-size: 1.4rem;
+  letter-spacing: normal;
+  text-transform: none;
+  color: var(--red);
+  font-weight: 600;
+  margin-right: 6px;
+}
+.trips-page header.t-nav .t-links a {
+  letter-spacing: 0.05em;
+  font-size: 0.88rem;
+  transition: color 0.2s ease, opacity 0.2s ease;
+}
+.trips-page header.t-nav .t-btn-primary {
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-size: 0.82rem;
+}
+
+/* ── HERO — atmospheric depth + premium framing ─────────────── */
+.trips-page .t-hero {
+  position: relative;
+  padding: clamp(48px, 7vw, 96px) 28px clamp(56px, 8vw, 112px);
+  overflow: hidden;
+}
+.trips-page .t-hero::before,
+.trips-page .t-hero::after {
+  content: '';
+  position: absolute;
+  pointer-events: none;
+  z-index: 0;
+}
+.trips-page .t-hero::before {
+  top: -10%;
+  left: -8%;
+  width: 42%;
+  height: 42%;
+  background: radial-gradient(circle, color-mix(in srgb, var(--gold) 14%, transparent), transparent 70%);
+}
+.trips-page .t-hero::after {
+  bottom: -12%;
+  right: -8%;
+  width: 50%;
+  height: 50%;
+  background: radial-gradient(circle, color-mix(in srgb, var(--red) 12%, transparent), transparent 70%);
+}
+.trips-page .t-hero-grid { position: relative; z-index: 1; }
+.trips-page .t-hero h1 { margin: 0.5rem 0 1rem; }
+
+/* ── HERO POSTER — premium framed image + caption overlay ──── */
+.trips-page .t-poster {
+  position: relative;
+  border: 2px solid var(--gold);
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow: 0 22px 60px -20px rgba(0, 0, 0, 0.32);
+  aspect-ratio: 4/3;
+  background: var(--bg-alt);
+}
+.trips-page .t-poster img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.trips-page .t-visual-title {
+  position: relative;
+  z-index: 2;
+  font-family: var(--serif);
+  font-size: clamp(1rem, 1.4vw, 1.2rem);
+  font-weight: 700;
+  color: var(--red);
+  margin: 0 0 0.3rem;
+  line-height: 1.3;
+}
+.trips-page .t-visual-sub {
+  position: relative;
+  z-index: 2;
+  font-size: 0.82rem;
+  color: var(--muted);
+  margin: 0 0 14px;
+}
+.trips-page .t-hero-visual {
+  display: flex;
+  flex-direction: column;
+}
+.trips-page .t-hero-visual > .t-visual-title,
+.trips-page .t-hero-visual > .t-visual-sub {
+  text-align: left;
+  padding: 0 4px;
+}
+
+/* ── EYEBROW + PULSE PILL ───────────────────────────────────── */
+.trips-page .t-eyebrow {
+  font-family: var(--sans);
+  font-size: 0.74rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.trips-page .t-pill {
+  background: var(--red);
+  color: #fff;
+  font-weight: 600;
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  padding: 4px 12px;
+  border-radius: 999px;
+  animation: t-pulse 2.4s ease-in-out infinite;
+  text-transform: uppercase;
+}
+
+/* ── BENEFIT CARDS ─────────────────────────────────────────── */
+.trips-page .t-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr));
+  gap: 14px;
+}
+.trips-page .t-card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 18px 16px;
+  transition: border-color 0.2s ease, transform 0.2s ease;
+}
+.trips-page .t-card:hover {
+  border-color: var(--gold);
+  transform: translateY(-1px);
+}
+.trips-page .t-card-icon { color: var(--gold); font-size: 1.4rem; line-height: 1; }
+.trips-page .t-card h3 { font-size: 0.92rem; font-weight: 600; margin: 8px 0 4px; }
+.trips-page .t-card p { font-size: 0.8rem; line-height: 1.55; color: var(--muted); margin: 0; }
+
+/* ── COUNTDOWN — refined to match reference scale ──────────── */
+.trips-page .t-countdown {
+  text-align: center;
+  margin-top: 40px;
+  padding-top: 48px;
+  border-top: 1px solid var(--line);
+}
+.trips-page .t-cd-label {
+  font-family: var(--sans);
+  font-size: 0.82rem;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: var(--red);
+  font-weight: 700;
+  margin: 0 0 28px;
+}
+.trips-page .t-cd-clock {
+  display: flex;
+  gap: 14px;
+  justify-content: center;
+  align-items: flex-start;
+}
+.trips-page .t-cd-unit {
+  text-align: center;
+  min-width: 86px;
+}
+.trips-page .t-cd-clock .t-cd-unit span {
+  display: block;
+  font-family: var(--serif);
+  font-size: clamp(2.6rem, 7vw, 4.4rem);
+  font-weight: 500;
+  line-height: 1;
+  color: var(--ink);
+}
+.trips-page .t-cd-clock .t-cd-unit small {
+  display: block;
+  font-family: var(--sans);
+  font-size: 0.72rem;
+  letter-spacing: 0.24em;
+  color: var(--muted);
+  font-weight: 700;
+  margin-top: 12px;
+}
+.trips-page .t-cd-clock i {
+  font-family: var(--serif);
+  font-style: normal;
+  font-size: clamp(2.2rem, 5vw, 3.4rem);
+  color: var(--line);
+  line-height: 1.05;
+}
+.trips-page .t-cd-cta {
+  margin-top: 36px;
+  display: inline-block;
+}
+
+/* ── MARQUEE — tall portrait cards with bottom gradient ────── */
+.trips-page .t-photo-strip { padding: 80px 0; background: var(--bg-band); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.trips-page .t-photo-strip-card {
+  position: relative;
+  width: 300px !important;
+  height: 420px !important;
+  border-radius: 12px;
+  overflow: hidden;
+  flex: none;
+  background-size: cover !important;
+  background-position: center !important;
+}
+.trips-page .t-pcard-grad {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(20,18,15,0) 42%, rgba(20,18,15,0.84) 100%);
+}
+.trips-page .t-pcard-cap {
+  position: absolute;
+  left: 22px;
+  bottom: 22px;
+  z-index: 2;
+}
+.trips-page .t-pcat {
+  display: block;
+  font-size: 0.68rem;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: var(--gold);
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.trips-page .t-pcard-cap h3 {
+  font-family: var(--serif);
+  font-weight: 500;
+  font-size: 1.6rem;
+  color: #fff;
+  margin: 0;
+}
+
+/* ── SECTION RHYTHM — alternating backgrounds ──────────────── */
+.trips-page .t-hero { background: var(--bg); }
+.trips-page .t-preview { background: var(--bg-alt); padding: clamp(64px, 8vw, 104px) 28px; }
+.trips-page .t-why { background: var(--bg-band); padding: clamp(72px, 9vw, 112px) 28px; position: relative; overflow: hidden; }
+.trips-page .t-cultural { background: var(--bg); padding: clamp(72px, 9vw, 112px) 28px; position: relative; overflow: hidden; }
+.trips-page .t-safety { background: var(--dark); color: var(--dark-ink); padding: clamp(80px, 10vw, 120px) 28px; position: relative; overflow: hidden; }
+.trips-page .t-reviews { background: var(--bg-alt); padding: clamp(72px, 9vw, 112px) 28px; }
+.trips-page .t-invest { background: var(--card); padding: clamp(72px, 9vw, 112px) 28px; border-top: 1px solid var(--line); }
+.trips-page .t-register { background: var(--bg-band); padding: clamp(72px, 9vw, 112px) 28px; }
+.trips-page .t-brochure { background: var(--bg); padding: clamp(72px, 9vw, 112px) 28px; }
+.trips-page .t-faqs { background: var(--dark); color: var(--dark-ink); padding: clamp(72px, 9vw, 112px) 28px; }
+.trips-page .t-details { background: var(--red); color: #fff; padding: clamp(56px, 7vw, 80px) 28px; }
+.trips-page .t-final-cta { background: var(--red); color: #fff; padding: clamp(80px, 10vw, 120px) 28px; position: relative; overflow: hidden; }
+
+/* ── ORNAMENT PATTERN OVERLAYS ─────────────────────────────── */
+.trips-page .t-hero,
+.trips-page .t-why,
+.trips-page .t-cultural,
+.trips-page .t-reviews {
+  background-image: var(--ornament-pattern, none);
+  background-blend-mode: multiply;
+  background-size: auto;
+  background-repeat: repeat;
+}
+.trips-page .t-hero { background-color: var(--bg); }
+.trips-page .t-why { background-color: var(--bg-band); }
+.trips-page .t-cultural { background-color: var(--bg); }
+.trips-page .t-reviews { background-color: var(--bg-alt); }
+
+/* ── PROGRAMME / WHY — premium layout ──────────────────────── */
+.trips-page .t-why-card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-left: 5px solid var(--red);
+  border-radius: 10px;
+  padding: 36px;
+}
+.trips-page .t-why-card h3 { font-size: 1.4rem; font-weight: 500; margin: 0 0 14px; }
+.trips-page .t-why-card-quote {
+  font-family: var(--serif);
+  font-style: italic;
+  font-size: 1rem;
+  line-height: 1.7;
+  color: var(--gold);
+  margin: 0 0 20px;
+}
+.trips-page .t-checks li {
+  position: relative;
+  padding: 12px 0 12px 22px;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+  font-size: 0.95rem;
+}
+.trips-page .t-checks li::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 18px;
+  width: 7px;
+  height: 7px;
+  background: var(--red);
+  transform: rotate(45deg);
+}
+
+/* ── CULTURAL FLIP CARDS — premium feel ────────────────────── */
+.trips-page .t-ch-card {
+  perspective: 1500px;
+  height: 420px;
+  cursor: pointer;
+  outline: none;
+}
+.trips-page .t-ch-front, .trips-page .t-ch-back {
+  position: absolute;
+  inset: 0;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  border-radius: 12px;
+}
+.trips-page .t-ch-front {
+  background: var(--card);
+  border: 1px solid var(--line);
+  padding: 30px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+.trips-page .t-ch-back {
+  background: var(--dark);
+  color: var(--dark-ink);
+  padding: 30px;
+  transform: rotateY(180deg);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+.trips-page .t-ch-icon { color: var(--gold); }
+.trips-page .t-ch-icon svg { width: 56px; height: 56px; }
+.trips-page .t-ch-card h3 { font-size: 1.6rem; font-weight: 500; }
+.trips-page .t-ch-label {
+  font-size: 0.7rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--red);
+  font-weight: 600;
+}
+.trips-page .t-ch-benefit {
+  border-top: 1px solid color-mix(in srgb, var(--gold) 40%, transparent);
+  padding-top: 14px;
+  margin-top: 18px;
+}
+.trips-page .t-ch-benefit span {
+  font-size: 0.65rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--gold);
+  font-weight: 600;
+  display: block;
+  margin-bottom: 6px;
+}
+.trips-page .t-ch-benefit em {
+  font-family: var(--serif);
+  font-style: italic;
+  font-weight: 300;
+  font-size: 1.05rem;
+  line-height: 1.5;
+}
+
+/* ── SAFETY — premium dark + stat-leaning ──────────────────── */
+.trips-page .t-safety .t-light { color: var(--dark-ink); }
+.trips-page .t-safety .t-muted.t-light { color: var(--dark-muted); }
+.trips-page .t-sfeat {
+  background: color-mix(in srgb, #fff 6%, transparent);
+  border: 1px solid color-mix(in srgb, #fff 14%, transparent);
+  border-radius: 12px;
+  padding: 28px 22px;
+  text-align: center;
+  transition: border-color 0.2s ease, transform 0.2s ease;
+}
+.trips-page .t-sfeat:hover {
+  border-color: var(--gold);
+  transform: translateY(-2px);
+}
+.trips-page .t-sfeat-icon {
+  color: var(--gold);
+  display: flex;
+  justify-content: center;
+  margin-bottom: 12px;
+}
+.trips-page .t-sfeat-icon svg { width: 36px; height: 36px; }
+.trips-page .t-sfeat h4 { font-family: var(--serif); font-size: 1rem; font-weight: 600; margin: 6px 0 8px; color: #fff; }
+.trips-page .t-sfeat p { font-size: 0.85rem; line-height: 1.6; color: var(--dark-muted); margin: 0; }
+.trips-page .t-safety-banner {
+  background: color-mix(in srgb, #fff 6%, transparent);
+  border: 1px solid color-mix(in srgb, #fff 12%, transparent);
+  border-radius: 14px;
+  padding: 36px 40px;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 24px;
+}
+.trips-page .t-sb-icon { color: var(--gold); }
+.trips-page .t-sb-icon svg { width: 48px; height: 48px; }
+
+/* ── INVESTMENT — premium pricing tiles ────────────────────── */
+.trips-page .t-tier {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 32px;
+  position: relative;
+  transition: border-color 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
+}
+.trips-page .t-tier:hover {
+  border-color: var(--gold);
+  transform: translateY(-3px);
+  box-shadow: 0 12px 32px -16px color-mix(in srgb, var(--red) 32%, transparent);
+}
+/* Featured / recommended tier — strong visual highlight.
+   The reference uses a single dramatically-highlighted tier (the
+   "start here" / "recommended" pick) that draws the eye first.
+   .t-tier-start is the historical class name — kept for back-compat;
+   .t-tier-featured is the Phase 1.6 stronger treatment (scale lift +
+   accent top-bar + badge corner). Both render identically when both
+   classes are applied. */
+.trips-page .t-tier-start,
+.trips-page .t-tier-featured {
+  border-color: var(--red);
+  box-shadow: 0 14px 38px -18px color-mix(in srgb, var(--red) 45%, transparent);
+  transform: translateY(-4px) scale(1.03);
+  z-index: 2;
+}
+.trips-page .t-tier-start::before,
+.trips-page .t-tier-featured::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 5px;
+  background: var(--red);
+  border-radius: 12px 12px 0 0;
+}
+.trips-page .t-tier-badge {
+  position: absolute;
+  top: 14px;
+  right: 16px;
+  background: var(--red);
+  color: #fff;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  padding: 5px 12px;
+  border-radius: 4px;
+  text-transform: uppercase;
+  box-shadow: 0 6px 14px -6px color-mix(in srgb, var(--red) 60%, transparent);
+}
+.trips-page .t-tier-num {
+  font-family: var(--serif);
+  font-size: 1.6rem;
+  font-weight: 600;
+  color: var(--gold);
+  line-height: 1;
+}
+.trips-page .t-tier h4 { font-family: var(--serif); font-size: 1.2rem; font-weight: 700; }
+.trips-page .t-tier-amount {
+  font-family: var(--serif);
+  font-weight: 700;
+  font-size: clamp(2rem, 4vw, 2.6rem);
+  color: var(--red);
+  line-height: 1;
+  margin: 16px 0;
+}
+.trips-page .t-tier-tag {
+  font-size: 0.68rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--gold);
+  font-weight: 600;
+  display: inline-block;
+}
+.trips-page .t-tier-meta { border-top: 1px solid var(--line); padding-top: 16px; margin-top: 18px; }
+.trips-page .t-tier-meta p { font-size: 0.84rem; color: var(--muted); margin: 4px 0; }
+.trips-page .t-tier-ico svg { width: 14px; height: 14px; vertical-align: middle; opacity: 0.8; }
+.trips-page .t-inclusions {
+  margin-top: 26px;
+  background: var(--bg-alt);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 36px;
+}
+.trips-page .t-inclusions-label {
+  font-size: 0.78rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--red);
+  font-weight: 700;
+}
+.trips-page .t-inclusions-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 16px;
+}
+.trips-page .t-inc-bullet {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 8px 16px;
+  font-size: 0.84rem;
+}
+.trips-page .t-inc-square { display: none; }
+
+/* ── FAQS — premium dark with circular toggle ──────────────── */
+.trips-page .t-faqs .t-tag { color: var(--gold); }
+.trips-page .t-faqs h2 { color: #fff; }
+.trips-page .t-faqs .t-muted { color: var(--dark-muted); }
+.trips-page .t-faq-search {
+  background: color-mix(in srgb, #fff 5%, transparent);
+  border: 1px solid color-mix(in srgb, #fff 14%, transparent);
+  border-radius: 12px;
+  padding: 10px 14px;
+}
+.trips-page .t-faq-search input {
+  background: transparent;
+  border: 0;
+  color: #fff;
+  font-family: var(--sans);
+  font-size: 0.95rem;
+  width: 100%;
+  outline: none;
+}
+.trips-page .t-faq-search svg { color: var(--gold); width: 18px; height: 18px; }
+.trips-page .t-faq-tab {
+  background: color-mix(in srgb, #fff 5%, transparent);
+  border: 1px solid color-mix(in srgb, #fff 14%, transparent);
+  color: var(--dark-ink);
+  border-radius: 999px;
+  padding: 8px 16px;
+  font-size: 0.82rem;
+}
+.trips-page .t-faq-tab-active {
+  background: var(--gold);
+  color: var(--dark);
+  border-color: var(--gold);
+}
+.trips-page .t-faq-tab-count {
+  background: color-mix(in srgb, #fff 16%, transparent);
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-size: 0.68rem;
+  font-weight: 600;
+}
+.trips-page .t-faq-item {
+  background: color-mix(in srgb, #fff 4%, transparent);
+  border: 1px solid color-mix(in srgb, #fff 10%, transparent);
+  border-radius: 14px;
+  overflow: hidden;
+}
+.trips-page .t-faq-q {
+  background: none;
+  border: 0;
+  width: 100%;
+  padding: 22px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  cursor: pointer;
+  text-align: left;
+  font-family: var(--sans);
+  color: #fff;
+}
+.trips-page .t-faq-q > span:first-child {
+  font-family: var(--serif);
+  font-size: 1.05rem;
+  font-weight: 500;
+  color: #fff;
+}
+.trips-page .t-faq-chevron {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 1px solid color-mix(in srgb, #fff 28%, transparent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--gold);
+  transition: transform 0.3s ease, border-color 0.2s ease;
+}
+.trips-page .t-faq-chevron svg { width: 14px; height: 14px; }
+.trips-page .t-faq-item-open .t-faq-chevron { transform: rotate(180deg); border-color: var(--gold); }
+.trips-page .t-faq-a {
+  font-size: 0.95rem;
+  line-height: 1.7;
+  color: var(--dark-muted);
+  padding: 0 24px 22px;
+}
+
+/* ── REGISTRATION — premium card with accent base ──────────── */
+.trips-page .t-form {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-bottom: 3px solid var(--gold);
+  border-radius: 14px;
+  padding: 40px;
+}
+.trips-page .t-form input,
+.trips-page .t-form select,
+.trips-page .t-form textarea {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 13px 14px;
+  font-family: var(--sans);
+  font-size: 0.95rem;
+  background: var(--bg-alt);
+  width: 100%;
+  outline: none;
+  transition: border-color 0.2s ease;
+}
+.trips-page .t-form input:focus,
+.trips-page .t-form select:focus,
+.trips-page .t-form textarea:focus { border-color: var(--red); }
+.trips-page .t-label-text {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--ink);
+  margin-bottom: 6px;
+  display: inline-block;
+}
+
+/* ── FINAL CTA — brand-color full-bleed conversion close ───── */
+.trips-page .t-final-cta { text-align: center; }
+.trips-page .t-final-cta .t-tag { color: rgba(255,255,255,0.8); }
+.trips-page .t-final-cta h2 { color: #fff; margin: 0 auto 14px; max-width: 740px; }
+.trips-page .t-final-cta .t-final-sub { font-size: 1.1rem; color: rgba(255,255,255,0.9); margin: 0 auto 40px; max-width: 600px; }
+.trips-page .t-final-steps { display: flex; gap: 18px; justify-content: center; flex-wrap: wrap; margin-bottom: 40px; }
+.trips-page .t-final-step { display: flex; align-items: center; gap: 14px; }
+.trips-page .t-final-num {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1px solid rgba(255,255,255,0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--serif);
+  font-size: 0.95rem;
+  flex: none;
+}
+.trips-page .t-final-cta a.t-btn {
+  background: #fff;
+  color: var(--red);
+  padding: 17px 44px;
+  border-radius: 6px;
+  font-size: 0.82rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  font-weight: 700;
+}
+.trips-page .t-final-cta a.t-btn:hover { background: var(--btn-dark); color: #fff; }
+
+/* ── FOOTER — premium finish ───────────────────────────────── */
+.trips-page footer.t-foot {
+  background: var(--dark);
+  color: var(--dark-ink);
+  padding: clamp(64px, 8vw, 96px) 28px clamp(40px, 6vw, 64px);
+}
+.trips-page .t-foot-title {
+  font-family: var(--serif);
+  font-size: clamp(1.4rem, 3vw, 2rem);
+  font-weight: 500;
+  margin: 0 0 12px;
+  color: #fff;
+}
+.trips-page .t-foot-title .t-jp { color: var(--gold); font-weight: 600; margin-right: 6px; }
+.trips-page .t-foot-tagline {
+  font-family: var(--serif);
+  font-style: italic;
+  font-size: 1rem;
+  color: var(--dark-muted);
+  margin: 0 0 24px;
+}
+.trips-page .t-foot-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
+  gap: 36px;
+  margin-top: 40px;
+  padding-top: 36px;
+  border-top: 1px solid color-mix(in srgb, #fff 12%, transparent);
+}
+.trips-page .t-foot-h {
+  font-size: 0.72rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--gold);
+  font-weight: 700;
+  margin: 0 0 14px;
+}
+.trips-page .t-foot-grid p {
+  font-size: 0.92rem;
+  color: var(--dark-ink);
+  margin: 4px 0;
+}
+.trips-page .t-copy {
+  text-align: center;
+  font-size: 0.78rem;
+  color: var(--dark-muted);
+  margin: 40px 0 0;
+  padding-top: 24px;
+  border-top: 1px solid color-mix(in srgb, #fff 10%, transparent);
+}
+
+/* ── FLOATING CTA — premium pill ───────────────────────────── */
+.trips-page .t-float-register {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  background: var(--red);
+  color: #fff;
+  padding: 14px 22px;
+  border-radius: 999px;
+  font-size: 0.82rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  font-weight: 700;
+  box-shadow: 0 10px 28px -8px color-mix(in srgb, var(--red) 50%, transparent);
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.trips-page .t-float-register .t-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #fff;
+  animation: t-pulse 2.4s ease-in-out infinite;
+}
+
+/* ── RESPONSIVE GUARDS ─────────────────────────────────────── */
+@media (max-width: 768px) {
+  .trips-page .t-links { display: none !important; }
+  .trips-page .t-hero-grid {
+    grid-template-columns: 1fr !important;
+    gap: 32px !important;
+  }
+  .trips-page .t-photo-strip-card { width: 240px !important; height: 340px !important; }
+}
+@media (max-width: 640px) {
+  .trips-page section { padding-left: 18px !important; padding-right: 18px !important; }
+  .trips-page .t-form { padding: 28px 22px; }
+  .trips-page .t-safety-banner { grid-template-columns: 1fr; text-align: center; }
+}
+
+/* ── ACCESSIBILITY ─────────────────────────────────────────── */
+.trips-page :focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 2px;
+}
+
+/* =============================================================
+   PR-E Phase 1.6 — Refinement layer
+   --------------------------------------------------------------
+   1. Safety stat tiles  (.t-safety-stats + .t-sstat)
+   2. Hero caption overlay  (.t-hero-caption inside .t-poster)
+   3. Registration covers panel  (.t-register-grid + .t-cover-card)
+   4. Partner logo strip with mix-blend-mode  (.t-partner-logo)
+   Countdown + featured tier already updated above.
+   ============================================================= */
+
+/* ── 1. SAFETY STAT TILES ──────────────────────────────────── */
+/* When operator/AI populates safety.stats[], we render BIG number
+   tiles before the feature cards. This is the biggest trust-claim
+   treatment from the reference: "1:8" / "4★" / "24/7" in brand-color
+   serif at clamp(1.8rem, 4vw, 3rem) — draws the eye, anchors trust. */
+.trips-page .t-safety-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr));
+  gap: 20px;
+  margin-bottom: 26px;
+}
+.trips-page .t-sstat {
+  background: color-mix(in srgb, #fff 6%, transparent);
+  border: 1px solid color-mix(in srgb, #fff 14%, transparent);
+  border-radius: 14px;
+  padding: 28px 22px 26px;
+  text-align: center;
+  transition: border-color 0.2s ease, transform 0.2s ease;
+}
+.trips-page .t-sstat:hover {
+  border-color: var(--gold);
+  transform: translateY(-2px);
+}
+.trips-page .t-sstat-num {
+  font-family: var(--serif);
+  font-weight: 700;
+  font-size: clamp(2rem, 4.4vw, 3.2rem);
+  line-height: 1;
+  color: var(--gold);
+  letter-spacing: 0.01em;
+}
+.trips-page .t-sstat h4 {
+  font-family: var(--serif);
+  font-size: 1.02rem;
+  font-weight: 600;
+  margin: 14px 0 8px;
+  color: #fff;
+}
+.trips-page .t-sstat p {
+  font-size: 0.86rem;
+  line-height: 1.55;
+  color: var(--dark-muted);
+  margin: 0;
+}
+
+/* ── 2. HERO CAPTION OVERLAY ───────────────────────────────── */
+/* The translucent backdrop-blur header sitting INSIDE the poster
+   frame on top of the image — matches the Japan reference's
+   "imageTitle + imageSubtitle" treatment. Light-theme variant uses
+   white-on-frosted; luxury (dark family) gets dark-on-frosted (see
+   theme overlay overrides). */
+.trips-page .t-poster {
+  position: relative;
+}
+.trips-page .t-hero-caption {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 2;
+  background: color-mix(in srgb, #fff 92%, transparent);
+  backdrop-filter: blur(8px) saturate(160%);
+  -webkit-backdrop-filter: blur(8px) saturate(160%);
+  padding: 16px 22px;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 60%, transparent);
+}
+.trips-page .t-caption-title {
+  font-family: var(--serif);
+  font-size: clamp(0.98rem, 1.4vw, 1.18rem);
+  font-weight: 700;
+  color: var(--red);
+  margin: 0 0 4px;
+  line-height: 1.3;
+}
+.trips-page .t-caption-sub {
+  font-family: var(--sans);
+  font-size: 0.82rem;
+  color: var(--muted);
+  margin: 0;
+  line-height: 1.45;
+}
+/* Older visualTitle/visualSub markup hidden — caption now lives inside the frame. */
+.trips-page .t-hero-visual > .t-visual-title,
+.trips-page .t-hero-visual > .t-visual-sub { display: none; }
+
+/* ── 3. REGISTRATION COVERS PANEL ──────────────────────────── */
+/* "What this registration covers" — the 4-card grid the reference
+   shows next to the form (Full Itinerary / Safety Model / Costs /
+   Q&A). Premium 2-column section turns into 2-up grid on mobile. */
+.trips-page .t-register-grid {
+  max-width: 1180px;
+}
+.trips-page .t-register-grid-inner {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr));
+  gap: 48px;
+  align-items: start;
+  margin-top: 38px;
+}
+.trips-page .t-register-form-col { display: flex; flex-direction: column; }
+.trips-page .t-register-covers {
+  display: flex;
+  flex-direction: column;
+}
+.trips-page .t-covers-title {
+  font-family: var(--serif);
+  font-size: clamp(1.2rem, 2vw, 1.5rem);
+  font-weight: 500;
+  margin: 0 0 10px;
+  color: var(--ink);
+}
+.trips-page .t-covers-intro {
+  font-size: 0.95rem;
+  line-height: 1.65;
+  color: var(--muted);
+  margin: 0 0 26px;
+}
+.trips-page .t-covers-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr));
+  gap: 14px;
+}
+.trips-page .t-cover-card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--gold);
+  border-radius: 8px;
+  padding: 22px 22px 20px;
+  transition: border-left-color 0.2s ease, transform 0.15s ease;
+}
+.trips-page .t-cover-card:hover {
+  border-left-color: var(--red);
+  transform: translateX(2px);
+}
+.trips-page .t-cover-card h4 {
+  font-family: var(--serif);
+  font-size: 0.92rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin: 0 0 6px;
+  color: var(--ink);
+}
+.trips-page .t-cover-card p {
+  font-size: 0.86rem;
+  line-height: 1.55;
+  color: var(--muted);
+  margin: 0;
+}
+
+/* ── 4. PARTNER LOGOS STRIP ────────────────────────────────── */
+.trips-page .t-partners {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 36px;
+  margin-bottom: 24px;
+  flex-wrap: wrap;
+}
+.trips-page .t-partner-logo {
+  height: 54px;
+  width: auto;
+  object-fit: contain;
+  mix-blend-mode: multiply;
+  opacity: 0.85;
+  filter: grayscale(15%);
+  transition: opacity 0.2s ease, filter 0.2s ease;
+}
+.trips-page .t-partner-logo:hover {
+  opacity: 1;
+  filter: grayscale(0);
+}
+
+</style>
+  <style>.trips-page {
+  --bg:        #11161d;
+  --bg-alt:    #1a212a;
+  --bg-band:   #22293a;
+  --ink:       #f4ece0;
+  --ink-soft:  #cbc3b6;
+  --muted:     #92897d;
+  --red:       #c2a366;
+  --red-deep:  #8e7440;
+  --gold:      #4d7a99;
+  --gold-deep: #2f5470;
+  --line:      #2c333d;
+  --card:      #1c232c;
+  --dark:      #0c1018;
+  --dark-ink:  #ebe2cd;
+  --dark-muted:#928879;
+  --btn-dark:       #0c1018;
+  --btn-dark-hover: #05080d;
+  --btn-teal:       #4d7a99;
+  --btn-teal-hover: #2f5470;
+
+  --serif: 'Playfair Display', 'Didot', Georgia, 'Times New Roman', serif;
+  --sans:  'Inter', 'Helvetica Neue', Arial, sans-serif;
+  --h-weight: 400;
+  --body-weight: 300;
+  --letter-spacing: .02em;
+  --h1-size: clamp(2.6rem, 5.8vw, 4.6rem);
+  --h2-size: clamp(2.1rem, 4vw, 3rem);
+  --h1-style: italic;
+  --h1-weight: 300;
+
+  --ornament-pattern: none;
+  --ornament-opacity: 0;
+
+  --bg-color:      #11161d;
+  --surface-color: #1c232c;
+  --text-primary:  #f4ece0;
+  --border-color:  #2c333d;
+  --glass-bg:      #11161d;
+  --glass-border:  #2c333d;
+
+  background: #11161d;
+  color: #f4ece0;
+}
+.trips-page h2 { font-size: var(--h2-size); }
+.trips-page h1 {
+  font-size: var(--h1-size);
+  font-style: var(--h1-style);
+  font-weight: var(--h1-weight);
+}
+
+.trips-page .t-hero,
+.trips-page .t-cultural,
+.trips-page .t-reviews,
+.trips-page .t-invest,
+.trips-page .t-register,
+.trips-page .t-faqs,
+.trips-page .t-final-cta {
+  background: #11161d;
+  color: #f4ece0;
+}
+.trips-page .t-light,
+.trips-page .t-safety .t-light { color: #f4ece0; }
+.trips-page .t-tier { background: #1c232c; color: #f4ece0; border-color: #2c333d; }
+.trips-page .t-tier h4 { color: #f4ece0; }
+.trips-page .t-tier-amount { color: #c2a366; }
+.trips-page .t-tier-num { color: #c2a366; }
+.trips-page .t-card { background: #1c232c; border-color: #2c333d; color: #f4ece0; }
+.trips-page .t-card h3, .trips-page .t-card p { color: #f4ece0; }
+.trips-page header.t-nav { background: #11161d !important; background-color: #11161d !important; border-bottom-color: #2c333d; color: #f4ece0; }
+.trips-page header.t-nav .t-brand,
+.trips-page header.t-nav .t-links a,
+.trips-page header.t-nav .t-links a:visited { color: #f4ece0; }
+/* PR-E Phase 1.6 — dark variants of the caption overlay + covers panel + partner logos */
+.trips-page .t-hero-caption {
+  background: color-mix(in srgb, #11161d 88%, transparent);
+  border-bottom-color: color-mix(in srgb, #c2a366 40%, transparent);
+}
+.trips-page .t-caption-title { color: #c2a366; }
+.trips-page .t-caption-sub { color: #cbc3b6; }
+.trips-page .t-covers-title { color: #f4ece0; }
+.trips-page .t-covers-intro { color: #cbc3b6; }
+.trips-page .t-cover-card { background: #1c232c; border-color: #2c333d; border-left-color: #c2a366; }
+.trips-page .t-cover-card h4 { color: #f4ece0; }
+.trips-page .t-cover-card p { color: #cbc3b6; }
+.trips-page .t-partner-logo { mix-blend-mode: screen; filter: brightness(0.95) grayscale(20%); }
+.trips-page .t-cd-clock .t-cd-unit span { color: #f4ece0; }</style>
+  
+</head>
+<body>
+<div class="trips-page">
+<header class="t-nav">
+    <div class="t-nav-inner">
+      <a class="t-brand" href="#">
+         [REVIEW] SWITZERLAND ZERMATT INTERLAKEN 2026
+      </a>
+      <nav class="t-links">
+        <a href="#hero">Experience</a><a href="#cultural">Curation</a><a href="#investment">Investment</a><a href="#faqs">FAQs</a>
+      </nav>
+      <a class="t-btn t-btn-primary" href="#register">Enquire</a>
+    </div>
+  </header>
+<section class="t-hero">
+    
+    <div class="t-hero-grid">
+      <div class="t-hero-copy">
+        
+        
+        
+        <h1>[REVIEW] Switzerland Zermatt Interlaken — switzerland alpine minimal honeymoon</h1>
+        <p class="t-lede">[REVIEW] Lede paragraph to write.</p>
+        <div class="t-cards"><div class="t-card">
+          <div class="t-card-icon">◈</div>
+          <h3>[REVIEW] Benefit 1</h3>
+          <p>[REVIEW]</p>
+        </div><div class="t-card">
+          <div class="t-card-icon">⊕</div>
+          <h3>[REVIEW] Benefit 2</h3>
+          <p>[REVIEW]</p>
+        </div><div class="t-card">
+          <div class="t-card-icon">⌂</div>
+          <h3>[REVIEW] Benefit 3</h3>
+          <p>[REVIEW]</p>
+        </div><div class="t-card">
+          <div class="t-card-icon">❖</div>
+          <h3>[REVIEW] Benefit 4</h3>
+          <p>[REVIEW]</p>
+        </div></div>
+        
+      </div>
+      <aside class="t-hero-visual">
+    <div class="t-poster">
+      <div class="t-poster-empty" style="display:flex;align-items:center;justify-content:center;height:100%;color:#a99e92;font-style:italic;">Hero image not set</div>
+      <div class="t-hero-caption">
+        <h2 class="t-caption-title">[REVIEW] Switzerland Zermatt Interlaken</h2>
+        <p class="t-caption-sub">[REVIEW] switzerland alpine minimal honeymoon</p>
+      </div>
+    </div>
+  </aside>
+    </div>
+  </section>
+<section class="t-cultural" id="cultural">
+    
+    <div class="t-wrap">
+      <p class="t-tag t-tag-red t-center">CURATION</p>
+      <h2 class="t-center t-cultural-title">[REVIEW] Highlights</h2>
+      
+      <div class="t-ch-grid"><article class="t-ch-card" tabindex="0">
+        <div class="t-ch-front">
+          <div class="t-ch-icon" aria-hidden="true"><svg viewBox="0 0 50 50" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round"><circle cx="25" cy="25" r="18"/><path d="M14 30 L25 16 L36 30"/><circle cx="25" cy="33" r="2"/></svg></div>
+          <h3>[REVIEW] Place 1</h3>
+          <div class="t-ch-underline"></div>
+        </div>
+        <div class="t-ch-back">
+          <h3>[REVIEW] Place 1</h3>
+          <p class="t-ch-label">[REVIEW]</p>
+          <div class="t-ch-body"><p>[REVIEW]</p></div>
+          <div class="t-ch-benefit"><span>DERIVED BENEFIT</span><em>&ldquo;[REVIEW]&rdquo;</em></div>
+        </div>
+      </article><article class="t-ch-card" tabindex="0">
+        <div class="t-ch-front">
+          <div class="t-ch-icon" aria-hidden="true"><svg viewBox="0 0 50 50" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round"><circle cx="25" cy="25" r="18"/><path d="M14 30 L25 16 L36 30"/><circle cx="25" cy="33" r="2"/></svg></div>
+          <h3>[REVIEW] Place 2</h3>
+          <div class="t-ch-underline"></div>
+        </div>
+        <div class="t-ch-back">
+          <h3>[REVIEW] Place 2</h3>
+          <p class="t-ch-label">[REVIEW]</p>
+          <div class="t-ch-body"><p>[REVIEW]</p></div>
+          <div class="t-ch-benefit"><span>DERIVED BENEFIT</span><em>&ldquo;[REVIEW]&rdquo;</em></div>
+        </div>
+      </article></div>
+      
+    </div>
+  </section>
+<section class="t-preview">
+    
+    <div class="t-wrap t-center">
+      <p class="t-tag t-tag-red">TRAILER</p>
+      <h2 class="t-preview-title">A Moment In The Itinerary.</h2>
+      
+      
+      
+      <a class="t-btn t-btn-primary t-preview-cta" href="#register">APPLY</a>
+    </div>
+  </section>
+<section class="t-invest" id="investment">
+    <div class="t-wrap">
+      <p class="t-tag t-center">INVESTMENT</p>
+      <h2 class="t-center t-invest-title">[REVIEW] Investment</h2>
+      <div class="t-invest-divider"></div>
+      
+      <div class="t-tiers">
+        <div class="t-tier">
+          
+          <div class="t-tier-head">
+            <span class="t-tier-num">1</span>
+            <div class="t-tier-titles">
+              <h4>[REVIEW] Reservation</h4>
+              <small>[REVIEW]</small>
+            </div>
+          </div>
+          <p class="t-tier-amount"><em style="font-size:1rem;color:#a99e92;">Pricing TBD</em></p>
+          
+          <div class="t-tier-meta">
+            
+            
+          </div>
+        </div><div class="t-tier">
+          
+          <div class="t-tier-head">
+            <span class="t-tier-num">2</span>
+            <div class="t-tier-titles">
+              <h4>[REVIEW] Balance</h4>
+              <small>[REVIEW]</small>
+            </div>
+          </div>
+          <p class="t-tier-amount"><em style="font-size:1rem;color:#a99e92;">Pricing TBD</em></p>
+          
+          <div class="t-tier-meta">
+            
+            
+          </div>
+        </div>
+      </div>
+      
+      
+      
+    </div>
+  </section>
+<section class="t-register" id="register">
+    <div class="t-wrap t-narrow">
+      <p class="t-tag t-center">APPLY</p>
+      <h2 class="t-center">Apply To Travel</h2>
+      
+      
+      
+      <form class="t-form" id="t-reg-form"
+            data-tenant-slug="travel-stall"
+            data-sub-brand="travelstall"
+            data-lead-source="landing_page_luxury"
+            data-page-slug="switzerland">
+        <div class="t-form-progress" aria-label="Step 1 of 3">
+          <span class="t-form-bar t-form-bar-active" data-step="1"></span>
+          <span class="t-form-bar" data-step="2"></span>
+          <span class="t-form-bar" data-step="3"></span>
+        </div>
+        <div class="t-form-step" data-step="1">
+          <h3 class="t-step-title">Step 1: Guest Information</h3>
+          <label>
+    <span class="t-label-text">Your Name <span class="t-req">*</span></span>
+    <input type="text" name="studentName" placeholder="Enter your full name" required />
+  </label>
+          
+          
+          <button class="t-btn t-btn-dark t-wide" type="button" data-action="next">Next &rarr;</button>
+          <p class="t-form-secure">Your data is secure. You will be redirected to the confirmation page.</p>
+        </div>
+        <div class="t-form-step" data-step="2" style="display:none;">
+          <h3 class="t-step-title">Step 2: Contact Details</h3>
+          <label>
+            <span class="t-label-text">Travel Companion (optional) <span class="t-req">*</span></span>
+            <input type="text" name="parentName" placeholder="Name of partner / companion" required />
+          </label>
+          <label>
+            <span class="t-label-text">Mobile Number <span class="t-req">*</span></span>
+            <input type="tel" name="phone" placeholder="+91 98765 43210" required />
+          </label>
+          <label>
+            <span class="t-label-text">Email Address <span class="t-req">*</span></span>
+            <input type="email" name="email" placeholder="you@email.com" required />
+          </label>
+          <label>
+            <span class="t-label-text">City</span>
+            <input type="text" name="city" placeholder="e.g., Bangalore" />
+          </label>
+          <div class="t-form-row">
+            <button class="t-btn t-btn-outline" type="button" data-action="back">&larr; Back</button>
+            <button class="t-btn t-btn-dark" type="submit">Send Application &rarr;</button>
+          </div>
+          <p class="t-form-secure">Your data is secure. You will be redirected to the confirmation page.</p>
+        </div>
+      </form>
+      <div class="t-success" id="t-reg-success" style="display:none;">
+        <div class="t-success-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></div>
+        <h3>Application Received</h3>
+        <p>A senior travel concierge will reach you within 24 hours to begin the conversation.</p>
+      </div>
+      
+      
+      
+    </div>
+  </section>
+<section class="t-faqs" id="faqs">
+    
+    <div class="t-wrap">
+      <p class="t-tag t-tag-red t-center">QUESTIONS</p>
+      <h2 class="t-center t-faq-title">Frequently Asked</h2>
+      <div class="t-faq-divider"></div>
+      
+      <div class="t-faq-search">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input type="text" placeholder="Search questions..." id="t-faq-query" />
+      </div>
+      <div class="t-faq-tabs">
+        <button type="button" class="t-faq-tab t-faq-tab-active" data-cat="all">
+          <span class="t-faq-tab-icon" aria-hidden="true">◇</span>
+          <span class="t-faq-tab-label">All</span>
+          <span class="t-faq-tab-count">3</span>
+        </button><button type="button" class="t-faq-tab" data-cat="experience">
+          <span class="t-faq-tab-icon" aria-hidden="true">◈</span>
+          <span class="t-faq-tab-label">The Experience</span>
+          <span class="t-faq-tab-count">0</span>
+        </button><button type="button" class="t-faq-tab" data-cat="logistics">
+          <span class="t-faq-tab-icon" aria-hidden="true">✈</span>
+          <span class="t-faq-tab-label">Logistics</span>
+          <span class="t-faq-tab-count">0</span>
+        </button><button type="button" class="t-faq-tab" data-cat="investment">
+          <span class="t-faq-tab-icon" aria-hidden="true">€</span>
+          <span class="t-faq-tab-label">Investment</span>
+          <span class="t-faq-tab-count">0</span>
+        </button>
+      </div>
+      <div class="t-faq-list" id="t-faq-list">
+        <div class="t-faq-item" data-cat="all" data-text="[review] q1? [review]">
+          <button type="button" class="t-faq-q" data-faq-toggle="0">
+            <span>[REVIEW] Q1?</span>
+            <span class="t-faq-chevron" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></span>
+          </button>
+          <div class="t-faq-a" style="display:none;">[REVIEW]</div>
+        </div><div class="t-faq-item" data-cat="all" data-text="[review] q2? [review]">
+          <button type="button" class="t-faq-q" data-faq-toggle="1">
+            <span>[REVIEW] Q2?</span>
+            <span class="t-faq-chevron" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></span>
+          </button>
+          <div class="t-faq-a" style="display:none;">[REVIEW]</div>
+        </div><div class="t-faq-item" data-cat="all" data-text="[review] q3? [review]">
+          <button type="button" class="t-faq-q" data-faq-toggle="2">
+            <span>[REVIEW] Q3?</span>
+            <span class="t-faq-chevron" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></span>
+          </button>
+          <div class="t-faq-a" style="display:none;">[REVIEW]</div>
+        </div>
+      </div>
+      <p class="t-faq-empty" id="t-faq-empty" style="display:none;">No questions match your search.</p>
+    </div>
+  </section>
+<section class="t-final-cta" aria-label="Get started">
+    <div class="t-wrap t-center">
+      
+      
+      
+      
+      <a class="t-btn t-btn-primary" href="#register">Apply</a>
+    </div>
+  </section>
+<footer class="t-foot">
+    <div class="t-foot-top t-center">
+      <h3 class="t-foot-title">[REVIEW] Switzerland Zermatt Interlaken</h3>
+      
+      
+    </div>
+    
+    
+  </footer>
+<a class="t-float-register" href="#register">
+    <span class="t-dot"></span> APPLY
+  </a>
+<script>
+(function(){
+  function pad(n){return String(n).padStart(2,'0');}
+
+  // ── Countdown ─────────────────────────────
+  var cdRoot=document.getElementById('t-countdown');
+  if(cdRoot){
+    var target=new Date(cdRoot.dataset.target).getTime();
+    if(!isNaN(target)){
+      function tickCd(){
+        var diff=Math.max(0,target-Date.now());
+        var d=Math.floor(diff/86400000);
+        var h=Math.floor(diff/3600000)%24;
+        var m=Math.floor(diff/60000)%60;
+        var s=Math.floor(diff/1000)%60;
+        cdRoot.querySelectorAll('[data-unit]').forEach(function(el){
+          if(el.dataset.unit==='d')el.textContent=pad(d);
+          else if(el.dataset.unit==='h')el.textContent=pad(h);
+          else if(el.dataset.unit==='m')el.textContent=pad(m);
+          else if(el.dataset.unit==='s')el.textContent=pad(s);
+        });
+      }
+      tickCd();setInterval(tickCd,1000);
+    }
+  }
+
+  // ── FAQ search + category filter + accordion ─────────────────
+  var faqList=document.getElementById('t-faq-list');
+  var faqQuery=document.getElementById('t-faq-query');
+  var faqEmpty=document.getElementById('t-faq-empty');
+  var faqTabs=document.querySelectorAll('.t-faq-tab');
+  var activeCat=(faqTabs[0]&&faqTabs[0].dataset.cat)||'all';
+  function refreshFaqs(){
+    if(!faqList)return;
+    var query=(faqQuery&&faqQuery.value||'').trim().toLowerCase();
+    var anyVisible=false;
+    faqList.querySelectorAll('.t-faq-item').forEach(function(item){
+      var cat=item.dataset.cat||'';
+      var text=item.dataset.text||'';
+      var catMatch=(activeCat==='all'||cat===activeCat);
+      var qMatch=(query.length===0||text.indexOf(query)>=0);
+      if(catMatch&&qMatch){item.style.display='';anyVisible=true;}
+      else{item.style.display='none';}
+    });
+    if(faqEmpty)faqEmpty.style.display=anyVisible?'none':'block';
+  }
+  faqTabs.forEach(function(tab){
+    tab.addEventListener('click',function(){
+      faqTabs.forEach(function(t){t.classList.remove('t-faq-tab-active');});
+      tab.classList.add('t-faq-tab-active');
+      activeCat=tab.dataset.cat||'all';
+      refreshFaqs();
+    });
+  });
+  if(faqQuery)faqQuery.addEventListener('input',refreshFaqs);
+  if(faqList){
+    faqList.querySelectorAll('[data-faq-toggle]').forEach(function(btn){
+      btn.addEventListener('click',function(){
+        var item=btn.closest('.t-faq-item');
+        if(!item)return;
+        var ans=item.querySelector('.t-faq-a');
+        var isOpen=item.classList.toggle('t-faq-item-open');
+        if(ans)ans.style.display=isOpen?'block':'none';
+      });
+    });
+  }
+
+  // ── Registration funnel (2 steps + submit) ──────────────────
+  var regForm=document.getElementById('t-reg-form');
+  if(regForm){
+    var steps=regForm.querySelectorAll('.t-form-step');
+    var bars=regForm.querySelectorAll('.t-form-bar');
+    var success=document.getElementById('t-reg-success');
+    function showStep(n){
+      steps.forEach(function(el){el.style.display=(parseInt(el.dataset.step,10)===n)?'':'none';});
+      bars.forEach(function(b){
+        var s=parseInt(b.dataset.step,10);
+        if(s<=n)b.classList.add('t-form-bar-active');
+        else b.classList.remove('t-form-bar-active');
+      });
+    }
+    regForm.querySelectorAll('[data-action]').forEach(function(btn){
+      btn.addEventListener('click',function(){
+        var action=btn.dataset.action;
+        if(action==='next'){
+          var step1=regForm.querySelector('.t-form-step[data-step="1"]');
+          var required=step1.querySelectorAll('[required]');
+          for(var i=0;i<required.length;i++){
+            if(!required[i].value){required[i].reportValidity&&required[i].reportValidity();return;}
+          }
+          showStep(2);
+        }
+        else if(action==='back')showStep(1);
+      });
+    });
+    regForm.addEventListener('submit',function(e){
+      e.preventDefault();
+      var data={};
+      regForm.querySelectorAll('input, select, textarea').forEach(function(el){
+        if(el.name)data[el.name]=el.value;
+      });
+      var body={
+        tenantSlug:regForm.dataset.tenantSlug||'',
+        subBrand:regForm.dataset.subBrand||'',
+        name:data.parentName||data.studentName||'',
+        email:data.email||'',
+        phone:data.phone||'',
+        source:regForm.dataset.leadSource||'landing_page_registration',
+        landingPage:'/p/'+(regForm.dataset.pageSlug||''),
+        metaJson:JSON.stringify({
+          studentName:data.studentName,
+          grade:data.grade,
+          school:data.school,
+          city:data.city,
+        }),
+      };
+      var submitBtn=regForm.querySelector('button[type=submit]');
+      if(submitBtn){submitBtn.disabled=true;submitBtn.textContent='Submitting…';}
+      fetch('/api/travel/inbound/leads/web_form',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify(body),
+      }).catch(function(){
+        return fetch('/api/pages/'+(regForm.dataset.pageSlug||'')+'/submit',{
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify(data),
+        });
+      }).finally(function(){
+        regForm.style.display='none';
+        if(success)success.style.display='block';
+      });
+    });
+  }
+
+  // ── Brochure submit ────────────────────────────────────────
+  var brochForm=document.getElementById('t-broch-form');
+  if(brochForm){
+    brochForm.addEventListener('submit',function(e){
+      e.preventDefault();
+      var data={brochureRequest:true};
+      brochForm.querySelectorAll('input, select').forEach(function(el){
+        if(el.name)data[el.name]=el.value;
+      });
+      var body={
+        tenantSlug:brochForm.dataset.tenantSlug||'',
+        subBrand:brochForm.dataset.subBrand||'',
+        name:data.parentName||'',
+        email:data.email||'',
+        phone:data.phone||'',
+        source:brochForm.dataset.leadSource||'brochure_request',
+        landingPage:'/p/'+(brochForm.dataset.pageSlug||''),
+        metaJson:JSON.stringify({school:data.school}),
+      };
+      var btn=document.getElementById('t-broch-btn');
+      if(btn){btn.disabled=true;btn.textContent='Submitting…';}
+      fetch('/api/travel/inbound/leads/web_form',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify(body),
+      }).catch(function(){
+        return fetch('/api/pages/'+(brochForm.dataset.pageSlug||'')+'/submit',{
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify(data),
+        });
+      }).finally(function(){
+        if(btn){btn.textContent='✓ Brochure Request Sent!';}
+        setTimeout(function(){brochForm.reset();if(btn){btn.disabled=false;btn.textContent='DOWNLOAD PROGRAMME BROCHURE →';}},3000);
+      });
+    });
+  }
+})();
+</script>
+</div>
+
+</body>
+</html>

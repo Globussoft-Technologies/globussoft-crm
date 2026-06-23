@@ -64,9 +64,9 @@ const { getBudgetCap, evaluateCap } = require("./tenantSettings");
 // always returns the primary's model identifier so consumers can
 // pin the contract; fallback wiring lands with real-mode.
 const TASK_ROUTING = {
-  "search": { primary: "perplexity-sonar", fallback: null },
-  "citation": { primary: "perplexity-sonar", fallback: null },
-  "reasoning": { primary: "claude-opus-4-7", fallback: "gpt-4" },
+  search: { primary: "perplexity-sonar", fallback: null },
+  citation: { primary: "perplexity-sonar", fallback: null },
+  reasoning: { primary: "claude-opus-4-7", fallback: "gpt-4" },
   "talking-points": { primary: "claude-opus-4-7", fallback: "gpt-4" },
   "form-vs-call": { primary: "claude-opus-4-7", fallback: "gpt-4" },
   "bulk-text": { primary: "gemini-flash", fallback: "claude-haiku" },
@@ -96,7 +96,10 @@ const TASK_ROUTING = {
   // so lib/travelWhatsappLeadCapture can auto-create a Travel lead. Small in/out
   // → gemini-flash. Falls back to the deterministic keyword heuristic in
   // lib/travelWhatsappLeadCapture.js whenever the call stubs (no Q11 key / test).
-  "whatsapp-lead-qualify": { primary: "gemini-flash", fallback: "claude-haiku" },
+  "whatsapp-lead-qualify": {
+    primary: "gemini-flash",
+    fallback: "claude-haiku",
+  },
   // Marketing-flyer-copy (PRD_TRAVEL_MARKETING_FLYER FR-3.6.1 + AC-6.8).
   // 1K in / 1K out — short-form headline + body + CTA JSON. Routed to
   // gemini-flash for low-cost bulk-shape Gemini calls per PRD §9.1.
@@ -133,6 +136,21 @@ const TASK_ROUTING = {
   // the IATA-speaking TBO/LLM search. Tiny in/out → gemini-flash. Falls back to
   // the static alias map in lib/airportResolver.js when the call stubs (no key).
   "airport-iata": { primary: "gemini-flash", fallback: "claude-haiku" },
+  // Landing-page-generate (PR-B — docs/TRAVEL_LANDING_PAGE_PARITY_GAPS.md).
+  // Generates structured LandingPage block JSON for a destination given
+  // (destination, durationDays, audience, subBrand). Hard rules: NO
+  // pricing values, NO testimonials, NO image URLs, NO discounts, NO
+  // ratings. Structured-JSON path lives in
+  // backend/services/landingPageGeneratorLLM.js; this scaffold's
+  // stub-text path returns a tagged synthetic string for routeRequest
+  // text-envelope callers (the canonical consumer uses the service
+  // module directly). 2K in / 4K out — full block array lands in one
+  // response. Routed to gemini-flash for low-cost bulk-shape JSON
+  // generation; falls back to claude-haiku on quota / 404.
+  "landing-page-generate": {
+    primary: "gemini-flash",
+    fallback: "claude-haiku",
+  },
   // Catch-all for unrecognized tasks → reasoning model (Claude)
   // matches PRD's preference for a high-quality default.
 };
@@ -276,7 +294,10 @@ function pickModel(task) {
 async function computeMonthlySpendCents(tenantId) {
   try {
     const prisma = require("./prisma");
-    if (!prisma.llmCallLog || typeof prisma.llmCallLog.aggregate !== "function") {
+    if (
+      !prisma.llmCallLog ||
+      typeof prisma.llmCallLog.aggregate !== "function"
+    ) {
       return 0;
     }
     const monthStart = new Date();
@@ -292,7 +313,9 @@ async function computeMonthlySpendCents(tenantId) {
     const dollars = Number(agg?._sum?.costEstimate ?? 0) || 0;
     return Math.round(dollars * 100);
   } catch (e) {
-    console.error(`[llm-router] spend aggregate failed (non-fatal, treating as 0): ${e.message}`);
+    console.error(
+      `[llm-router] spend aggregate failed (non-fatal, treating as 0): ${e.message}`,
+    );
     return 0;
   }
 }
@@ -306,7 +329,9 @@ async function routeRequest({ task, payload, tenantId } = {}) {
     // task so config drift surfaces. STUB: real impl might error
     // to flag a config gap; the scaffold is forgiving so downstream
     // consumers can iterate without a routing-table update.
-    console.warn(`[llm-router] unknown task "${task}" — routing to reasoning fallback`);
+    console.warn(
+      `[llm-router] unknown task "${task}" — routing to reasoning fallback`,
+    );
   }
 
   // Per-tenant monthly budget cap pre-check (2026-05-24 product-call).
@@ -330,8 +355,8 @@ async function routeRequest({ task, payload, tenantId } = {}) {
     if (verdict.alertThreshold) {
       console.warn(
         `[llm-router] tenant=${tenantId} approaching LLM monthly cap: ` +
-        `spent=${verdict.spentCents}c cap=${verdict.capCents}c ` +
-        `percent=${(verdict.percent * 100).toFixed(1)}% (Slack alert pending wire-in)`,
+          `spent=${verdict.spentCents}c cap=${verdict.capCents}c ` +
+          `percent=${(verdict.percent * 100).toFixed(1)}% (Slack alert pending wire-in)`,
       );
     }
   }
@@ -351,7 +376,9 @@ async function routeRequest({ task, payload, tenantId } = {}) {
     try {
       return await realProviderCall({ task, model, payload, tenantId });
     } catch (e) {
-      console.error(`[llm-router] real provider call failed (task=${task} model=${model}): ${e.message}`);
+      console.error(
+        `[llm-router] real provider call failed (task=${task} model=${model}): ${e.message}`,
+      );
       const err = new Error(`LLM provider call failed: ${e.message}`);
       err.code = "LLM_PROVIDER_ERROR";
       throw err;
@@ -369,7 +396,7 @@ async function routeRequest({ task, payload, tenantId } = {}) {
   // Format pinned as the real-mode swap-point contract.
   console.log(
     `[llm-router] task=${task} model=${model} tenant=${tenantId || "?"} ` +
-    `tokens_in=${tokensIn} tokens_out=${tokensOut} cost_estimate=$0.0000 stub=true reason=${reason}`,
+      `tokens_in=${tokensIn} tokens_out=${tokensOut} cost_estimate=$0.0000 stub=true reason=${reason}`,
   );
 
   // PRD §9.1 + R7 — persist one LlmCallLog row per call for the admin
@@ -529,20 +556,33 @@ function buildPrompt(task, payload) {
     if (!String(k).startsWith("__")) content[k] = v;
   }
   const SYS = {
-    "talking-points": "You are a senior travel advisor. Given a lead's diagnostic profile, produce concise, actionable talking points for the advisor's next call. Plain text, 3-6 short bullets.",
-    "form-vs-call": "You compare a customer's web-form answers against their phone-call answers, summarise the level of match, and flag any mismatches. Plain text.",
-    "itinerary-suggest": "You are an expert travel planner pricing a trip for a per-person quote. Given a destination, departure city, number of days, budget tier, and traveller interests/pace, return a realistic day-by-day itinerary as STRICT JSON only — no markdown, no text outside the JSON. Shape: {\"summary\":string,\"days\":[{\"dayNumber\":number,\"items\":[{\"itemType\":string,\"description\":string,\"estimatedCost\":number}]}]}. itemType MUST be one of: flight, transfer, hotel, sightseeing, activity, meals, visa, insurance, other. estimatedCost is the typical PER-PERSON cost in INR (Indian Rupees) — always give a REALISTIC POSITIVE number; use 0 only when genuinely free. CRITICAL FOR FLIGHTS: the context includes a departureCity field (e.g. \"Bangalore\") — use it to describe and price both the Day-1 outbound flight (e.g. \"Flight from Bangalore to Paris\") and the final-day return flight (e.g. \"Return flight Paris to Bangalore\") with a realistic one-way airfare in INR: economy ≈ ₹18,000–₹35,000, mid ≈ ₹35,000–₹65,000, luxury ≈ ₹65,000–₹1,50,000 for international routes; adjust down for short-haul. NEVER set a flight estimatedCost to 0. Each day should also include a hotel, at least one sightseeing, one activity, and one meals item. Keep descriptions short and destination-specific. Return ONLY the JSON object.",
-    "trip-countdown": "You write a short, warm, upbeat PRE-TRIP reminder email for a travel customer. Return STRICT JSON only — no markdown, no text outside the JSON. Shape: {\"subject\":string,\"body\":string}. Use AT MOST one emoji in the subject. Mention the destination and the days-to-go. Keep the body under 80 words, friendly and encouraging (e.g. packing/prep tips as the trip nears). You may use the placeholder {name} for the customer's name in the body. Return ONLY the JSON object.",
-    "payment-reminder": "You write a short, courteous but clearly URGENT deposit-reminder email for a travel customer whose booking is confirmed but whose 50% deposit is still due before a deadline. Return STRICT JSON only — no markdown, no text outside the JSON. Shape: {\"subject\":string,\"body\":string}. No emoji. State plainly that the deposit must be paid by the deadline to keep the booking, and that the booking is at risk of cancellation otherwise. Mention the destination and the days remaining. Keep the body under 90 words. You may use the placeholder {name} for the customer's name. Return ONLY the JSON object.",
-    "airport-iata": "You convert a city or airport name to its airport code. Given a place, reply with ONLY the single primary 3-letter IATA airport code in uppercase — nothing else. If the city has multiple airports, return its main international one. Examples: 'Delhi' → DEL, 'Bengaluru' → BLR, 'Jeddah' → JED, 'New York' → JFK.",
-    "flight-search": "You are a flight search assistant for a travel agency. Given an origin, destination, date(s), pax and cabin class, return CURRENT realistic flight options as STRICT JSON only — no markdown, no prose. Shape: {\"options\":[{\"airline\":\"AI\",\"airlineName\":\"Air India\",\"flightNumber\":\"AI-302\",\"from\":\"DEL\",\"to\":\"JED\",\"departAt\":\"2026-08-02T18:10:00\",\"arriveAt\":\"2026-08-02T23:10:00\",\"durationMinutes\":300,\"stops\":0,\"fare\":50000,\"fareClass\":\"Economy\",\"baggage\":\"30kg check-in + 7kg cabin\",\"refundable\":false}]}. `fare` is the per-person fare in the requested currency (a realistic positive number). `from`/`to` are IATA codes. Return 3-6 options across different airlines/times. Return ONLY the JSON object.",
-    "hotel-search": "You are a hotel search assistant for a travel agency. Given a city, check-in/check-out dates, rooms, guests and (optional) star rating, return CURRENT realistic hotel options as STRICT JSON only — no markdown, no prose. Shape: {\"hotels\":[{\"name\":\"Hotel Name\",\"starRating\":4,\"address\":\"...\",\"area\":\"City centre\",\"ratePerNight\":6500,\"totalRate\":13000,\"roomType\":\"Deluxe Room\",\"board\":\"Breakfast\",\"refundable\":true}]}. Rates are in the requested currency; totalRate = ratePerNight × nights × rooms. Return 4-8 real hotels for that city. Return ONLY the JSON object.",
-    "transfer-search": "You are a ground-transfer assistant for a travel agency. Given a pickup, drop-off, date and pax, return realistic road-transfer options (airport↔hotel or inter-city) as STRICT JSON only — no markdown, no prose. Shape: {\"transfers\":[{\"mode\":\"road\",\"vehicle\":\"Private Sedan\",\"from\":\"...\",\"to\":\"...\",\"durationMinutes\":75,\"price\":2200,\"pax\":2,\"note\":\"Up to 3 pax\"}]}. price is the TOTAL in the requested currency for the vehicle (or per-person for shared coach — say so in note). Return 2-4 options (private + shared). Return ONLY the JSON object.",
+    "talking-points":
+      "You are a senior travel advisor. Given a lead's diagnostic profile, produce concise, actionable talking points for the advisor's next call. Plain text, 3-6 short bullets.",
+    "form-vs-call":
+      "You compare a customer's web-form answers against their phone-call answers, summarise the level of match, and flag any mismatches. Plain text.",
+    "itinerary-suggest":
+      'You are an expert travel planner pricing a trip for a per-person quote. Given a destination, departure city, number of days, budget tier, and traveller interests/pace, return a realistic day-by-day itinerary as STRICT JSON only — no markdown, no text outside the JSON. Shape: {"summary":string,"days":[{"dayNumber":number,"items":[{"itemType":string,"description":string,"estimatedCost":number}]}]}. itemType MUST be one of: flight, transfer, hotel, sightseeing, activity, meals, visa, insurance, other. estimatedCost is the typical PER-PERSON cost in INR (Indian Rupees) — always give a REALISTIC POSITIVE number; use 0 only when genuinely free. CRITICAL FOR FLIGHTS: the context includes a departureCity field (e.g. "Bangalore") — use it to describe and price both the Day-1 outbound flight (e.g. "Flight from Bangalore to Paris") and the final-day return flight (e.g. "Return flight Paris to Bangalore") with a realistic one-way airfare in INR: economy ≈ ₹18,000–₹35,000, mid ≈ ₹35,000–₹65,000, luxury ≈ ₹65,000–₹1,50,000 for international routes; adjust down for short-haul. NEVER set a flight estimatedCost to 0. Each day should also include a hotel, at least one sightseeing, one activity, and one meals item. Keep descriptions short and destination-specific. Return ONLY the JSON object.',
+    "trip-countdown":
+      'You write a short, warm, upbeat PRE-TRIP reminder email for a travel customer. Return STRICT JSON only — no markdown, no text outside the JSON. Shape: {"subject":string,"body":string}. Use AT MOST one emoji in the subject. Mention the destination and the days-to-go. Keep the body under 80 words, friendly and encouraging (e.g. packing/prep tips as the trip nears). You may use the placeholder {name} for the customer\'s name in the body. Return ONLY the JSON object.',
+    "payment-reminder":
+      'You write a short, courteous but clearly URGENT deposit-reminder email for a travel customer whose booking is confirmed but whose 50% deposit is still due before a deadline. Return STRICT JSON only — no markdown, no text outside the JSON. Shape: {"subject":string,"body":string}. No emoji. State plainly that the deposit must be paid by the deadline to keep the booking, and that the booking is at risk of cancellation otherwise. Mention the destination and the days remaining. Keep the body under 90 words. You may use the placeholder {name} for the customer\'s name. Return ONLY the JSON object.',
+    "airport-iata":
+      "You convert a city or airport name to its airport code. Given a place, reply with ONLY the single primary 3-letter IATA airport code in uppercase — nothing else. If the city has multiple airports, return its main international one. Examples: 'Delhi' → DEL, 'Bengaluru' → BLR, 'Jeddah' → JED, 'New York' → JFK.",
+    "flight-search":
+      'You are a flight search assistant for a travel agency. Given an origin, destination, date(s), pax and cabin class, return CURRENT realistic flight options as STRICT JSON only — no markdown, no prose. Shape: {"options":[{"airline":"AI","airlineName":"Air India","flightNumber":"AI-302","from":"DEL","to":"JED","departAt":"2026-08-02T18:10:00","arriveAt":"2026-08-02T23:10:00","durationMinutes":300,"stops":0,"fare":50000,"fareClass":"Economy","baggage":"30kg check-in + 7kg cabin","refundable":false}]}. `fare` is the per-person fare in the requested currency (a realistic positive number). `from`/`to` are IATA codes. Return 3-6 options across different airlines/times. Return ONLY the JSON object.',
+    "hotel-search":
+      'You are a hotel search assistant for a travel agency. Given a city, check-in/check-out dates, rooms, guests and (optional) star rating, return CURRENT realistic hotel options as STRICT JSON only — no markdown, no prose. Shape: {"hotels":[{"name":"Hotel Name","starRating":4,"address":"...","area":"City centre","ratePerNight":6500,"totalRate":13000,"roomType":"Deluxe Room","board":"Breakfast","refundable":true}]}. Rates are in the requested currency; totalRate = ratePerNight × nights × rooms. Return 4-8 real hotels for that city. Return ONLY the JSON object.',
+    "transfer-search":
+      'You are a ground-transfer assistant for a travel agency. Given a pickup, drop-off, date and pax, return realistic road-transfer options (airport↔hotel or inter-city) as STRICT JSON only — no markdown, no prose. Shape: {"transfers":[{"mode":"road","vehicle":"Private Sedan","from":"...","to":"...","durationMinutes":75,"price":2200,"pax":2,"note":"Up to 3 pax"}]}. price is the TOTAL in the requested currency for the vehicle (or per-person for shared coach — say so in note). Return 2-4 options (private + shared). Return ONLY the JSON object.',
     "bulk-text": "You write clear, customer-facing travel copy. Plain text.",
-    "call-summary": "You summarise a sales/advisory call in a few sentences. Plain text.",
-    "reasoning": "You are a careful reasoning assistant for a travel CRM. Plain text.",
-    "search": "You answer with concise, well-sourced information. Plain text.",
-    "citation": "You answer with concise, well-sourced information. Plain text.",
+    "call-summary":
+      "You summarise a sales/advisory call in a few sentences. Plain text.",
+    "landing-page-generate":
+      "You generate STRUCTURED travel-destination landing-page block JSON. The canonical consumer (landingPageGeneratorLLM.js) supplies the full prompt — this text-envelope entry is a safety net for routeRequest callers. Return a JSON object with keys suggestedTitle, suggestedSlug, seoMeta {metaTitle, metaDescription}, and blocks (array). NEVER include monetary values, testimonials, ratings, discounts, vendor names, partner names, or image URLs.",
+    reasoning:
+      "You are a careful reasoning assistant for a travel CRM. Plain text.",
+    search: "You answer with concise, well-sourced information. Plain text.",
+    citation: "You answer with concise, well-sourced information. Plain text.",
   };
   const system = SYS[task] || SYS.reasoning;
   const user = `Task: ${task}\nContext (JSON):\n${JSON.stringify(content)}`;
@@ -556,7 +596,10 @@ async function httpJson(url, opts, timeoutMs = 30000) {
     const res = await fetch(url, { ...opts, signal: ctrl.signal });
     const body = await res.json().catch(() => ({}));
     if (!res.ok) {
-      const msg = (body && (body.error?.message || body.error)) || res.statusText || `HTTP ${res.status}`;
+      const msg =
+        (body && (body.error?.message || body.error)) ||
+        res.statusText ||
+        `HTTP ${res.status}`;
       throw new Error(`${res.status} ${msg}`);
     }
     return body;
@@ -568,28 +611,67 @@ async function httpJson(url, opts, timeoutMs = 30000) {
 async function callAnthropic(modelId, system, user, apiKey, maxTokens) {
   const body = await httpJson("https://api.anthropic.com/v1/messages", {
     method: "POST",
-    headers: { "content-type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
-    body: JSON.stringify({ model: modelId, max_tokens: maxTokens, system, messages: [{ role: "user", content: user }] }),
-  });
-  const text = (body.content || []).map((c) => c.text || "").join("").trim();
-  const u = body.usage || {};
-  return { text, tokensIn: u.input_tokens || 0, tokensOut: u.output_tokens || 0 };
-}
-
-// OpenAI + Perplexity share the OpenAI chat-completions wire format.
-async function callOpenAICompatible(baseUrl, modelId, system, user, apiKey, maxTokens) {
-  const body = await httpJson(`${baseUrl}/chat/completions`, {
-    method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
+    headers: {
+      "content-type": "application/json",
+      "x-api-key": apiKey,
+      "anthropic-version": "2023-06-01",
+    },
     body: JSON.stringify({
       model: modelId,
       max_tokens: maxTokens,
-      messages: [{ role: "system", content: system }, { role: "user", content: user }],
+      system,
+      messages: [{ role: "user", content: user }],
     }),
   });
-  const text = (body.choices && body.choices[0] && body.choices[0].message && body.choices[0].message.content || "").trim();
+  const text = (body.content || [])
+    .map((c) => c.text || "")
+    .join("")
+    .trim();
   const u = body.usage || {};
-  return { text, tokensIn: u.prompt_tokens || 0, tokensOut: u.completion_tokens || 0 };
+  return {
+    text,
+    tokensIn: u.input_tokens || 0,
+    tokensOut: u.output_tokens || 0,
+  };
+}
+
+// OpenAI + Perplexity share the OpenAI chat-completions wire format.
+async function callOpenAICompatible(
+  baseUrl,
+  modelId,
+  system,
+  user,
+  apiKey,
+  maxTokens,
+) {
+  const body = await httpJson(`${baseUrl}/chat/completions`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: modelId,
+      max_tokens: maxTokens,
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ],
+    }),
+  });
+  const text = (
+    (body.choices &&
+      body.choices[0] &&
+      body.choices[0].message &&
+      body.choices[0].message.content) ||
+    ""
+  ).trim();
+  const u = body.usage || {};
+  return {
+    text,
+    tokensIn: u.prompt_tokens || 0,
+    tokensOut: u.completion_tokens || 0,
+  };
 }
 
 async function callGemini(modelId, system, user, apiKey, maxTokens) {
@@ -603,10 +685,22 @@ async function callGemini(modelId, system, user, apiKey, maxTokens) {
       generationConfig: { maxOutputTokens: maxTokens },
     }),
   });
-  const parts = (body.candidates && body.candidates[0] && body.candidates[0].content && body.candidates[0].content.parts) || [];
-  const text = parts.map((p) => p.text || "").join("").trim();
+  const parts =
+    (body.candidates &&
+      body.candidates[0] &&
+      body.candidates[0].content &&
+      body.candidates[0].content.parts) ||
+    [];
+  const text = parts
+    .map((p) => p.text || "")
+    .join("")
+    .trim();
   const m = body.usageMetadata || {};
-  return { text, tokensIn: m.promptTokenCount || 0, tokensOut: m.candidatesTokenCount || 0 };
+  return {
+    text,
+    tokensIn: m.promptTokenCount || 0,
+    tokensOut: m.candidatesTokenCount || 0,
+  };
 }
 
 async function realProviderCall({ task, model, payload, tenantId }) {
@@ -619,19 +713,38 @@ async function realProviderCall({ task, model, payload, tenantId }) {
   const maxTokens = 4096;
 
   let out;
-  if (provider === "anthropic") out = await callAnthropic(modelId, system, user, apiKey, maxTokens);
-  else if (provider === "openai") out = await callOpenAICompatible("https://api.openai.com/v1", modelId, system, user, apiKey, maxTokens);
-  else if (provider === "perplexity") out = await callOpenAICompatible("https://api.perplexity.ai", modelId, system, user, apiKey, maxTokens);
-  else if (provider === "gemini") out = await callGemini(modelId, system, user, apiKey, maxTokens);
+  if (provider === "anthropic")
+    out = await callAnthropic(modelId, system, user, apiKey, maxTokens);
+  else if (provider === "openai")
+    out = await callOpenAICompatible(
+      "https://api.openai.com/v1",
+      modelId,
+      system,
+      user,
+      apiKey,
+      maxTokens,
+    );
+  else if (provider === "perplexity")
+    out = await callOpenAICompatible(
+      "https://api.perplexity.ai",
+      modelId,
+      system,
+      user,
+      apiKey,
+      maxTokens,
+    );
+  else if (provider === "gemini")
+    out = await callGemini(modelId, system, user, apiKey, maxTokens);
   else throw new Error(`unknown provider for ${model}`);
 
-  const tokensIn = out.tokensIn || estimateTokens(JSON.stringify(payload || {}));
+  const tokensIn =
+    out.tokensIn || estimateTokens(JSON.stringify(payload || {}));
   const tokensOut = out.tokensOut || estimateTokens(out.text);
 
   // Token-only telemetry — NEVER log payload content (PII discipline).
   console.log(
     `[llm-router] task=${task} model=${model} (${modelId}) tenant=${tenantId || "?"} ` +
-    `tokens_in=${tokensIn} tokens_out=${tokensOut} cost_estimate=$0.0000 stub=false reason=real`,
+      `tokens_in=${tokensIn} tokens_out=${tokensOut} cost_estimate=$0.0000 stub=false reason=real`,
   );
 
   // Persist one LlmCallLog row (best-effort, fire-and-forget) — mirrors the
@@ -654,15 +767,25 @@ async function realProviderCall({ task, model, payload, tenantId }) {
           surface: (payload && payload.__surface) || null,
         },
       })
-      .catch((e) => console.error(`[llm-router] LlmCallLog persist failed (non-fatal): ${e.message}`));
+      .catch((e) =>
+        console.error(
+          `[llm-router] LlmCallLog persist failed (non-fatal): ${e.message}`,
+        ),
+      );
   } catch (e) {
-    console.error(`[llm-router] LlmCallLog require failed (non-fatal): ${e.message}`);
+    console.error(
+      `[llm-router] LlmCallLog require failed (non-fatal): ${e.message}`,
+    );
   }
 
   return {
     text: out.text || "",
     finishReason: "stop",
-    usage: { promptTokens: tokensIn, completionTokens: tokensOut, totalTokens: tokensIn + tokensOut },
+    usage: {
+      promptTokens: tokensIn,
+      completionTokens: tokensOut,
+      totalTokens: tokensIn + tokensOut,
+    },
     model,
     stub: false,
   };

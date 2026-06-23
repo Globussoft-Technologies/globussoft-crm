@@ -1,0 +1,201 @@
+{
+  "_comment": "Example page config for a DIFFERENT sub-brand/tour. Demonstrates (a) theming via config.theme, and (b) conditional sections — this page omits the video, countdown and brochure, so those sections simply do not render. Inject in production with:  <script>window.__PAGE_CONFIG = <this object> </script>",
+
+  "theme": {
+    "brandColor": "#0E7C7B",
+    "accentColor": "#E0A458",
+    "darkColor": "#0B3954",
+    "footerColor": "#072438",
+    "lightBg": "#F7FAF9",
+    "panelBg": "#FFFFFF",
+    "softBg": "#E8F3F1",
+    "textColor": "#15242B",
+    "textColor2": "#5B6B70",
+    "borderColor": "#DCE6E4",
+    "serifFont": "'Noto Serif JP', Georgia, serif",
+    "sansFont": "'Noto Sans JP', system-ui, sans-serif",
+    "pattern": "none"
+  },
+
+  "brand": { "subBrand": "TravelStall", "mark": "", "name": "BALI 2026" },
+  "meta": { "slug": "bali-immersion-2026", "tripId": 4821 },
+
+  "nav": {
+    "links": [
+      { "label": "Programme", "href": "#programme" },
+      { "label": "Safety", "href": "#safety" },
+      { "label": "Investment", "href": "#investment" },
+      { "label": "FAQs", "href": "#faqs" }
+    ],
+    "ctaLabel": "Reserve a Seat",
+    "ctaHref": "#register",
+    "floating": true
+  },
+
+  "hero": {
+    "logos": [],
+    "eyebrow": "July 2026  |  Ages 14–18",
+    "badge": "Only 30 Seats",
+    "kicker": "07 Days. 03 Regions.",
+    "titleLines": ["Where Curiosity", "Meets the Wild"],
+    "subhead": "A guided, structured immersion into Bali's ecology, craft and community — built for teenagers, designed for parents' peace of mind.",
+    "valueCards": [
+      { "title": "Ecological Literacy", "body": "Coral reefs, rice terraces and conservation up close." },
+      { "title": "Cultural Respect", "body": "Temples, craft villages and homestay etiquette." },
+      { "title": "Teamwork", "body": "Group challenges that build trust and initiative." },
+      { "title": "Guided Independence", "body": "Freedom to explore within a safe framework." }
+    ],
+    "ctaLabel": "Reserve a Seat",
+    "image": { "src": "https://images.unsplash.com/photo-1537996194471-e657df975ab4?w=1200&h=900&fit=crop", "alt": "Bali rice terraces" },
+    "imageTitle": "Bali 2026 Field Immersion",
+    "imageSubtitle": "Ecology, Culture and Community — A Structured Journey"
+  },
+
+  "countdown": { "enabled": false },
+  "video": { "enabled": false },
+
+  "cities": [
+    { "name": "Ubud", "tag": "Highlands", "image": "https://images.unsplash.com/photo-1518002171953-a080ee817e1f?w=600&h=800&fit=crop" },
+    { "name": "Sidemen", "tag": "Terraces", "image": "https://images.unsplash.com/photo-1604999333679-b86d54738315?w=600&h=800&fit=crop" },
+    { "name": "Amed", "tag": "Coastal", "image": "https://images.unsplash.com/photo-1573790387438-4da905039392?w=600&h=800&fit=crop" }
+  ],
+
+  "intro": {
+    "title": "Learning That Doesn't Fit in a Classroom.",
+    "paragraphs": [
+      "Some lessons can only be learned in the field — balancing on a reef survey line, or learning a craft from someone who has practised it for forty years.",
+      "Bali offers a compact, safe and astonishingly diverse setting for exactly that kind of growth."
+    ],
+    "gainsTitle": "What Students Gain",
+    "gainsQuote": "They don't just visit Bali. They observe ecosystems, practise crafts, and learn how communities sustain themselves.",
+    "gains": ["Field research skills", "Cross-cultural confidence", "Environmental awareness", "Resilience and teamwork"],
+    "ctaLabel": "Talk to Our Team →"
+  },
+
+  "highlights": {
+    "eyebrow": "Programme",
+    "title": "Field Highlights",
+    "subtitle": "Each region is chosen for a specific learning outcome.",
+    "cards": [
+      { "eyebrow": "Highlands", "name": "Ubud", "frontBody": "Craft villages, the Monkey Forest and a working art studio.", "backBody": "Students learn woodcarving and batik from master artisans, then reflect on craft as discipline.", "benefit": "Patience and attention to detail." },
+      { "eyebrow": "Terraces", "name": "Sidemen", "frontBody": "Subak rice-terrace irrigation — a 1,000-year-old cooperative water system.", "backBody": "A guided walk explains how an entire valley shares water fairly. A living lesson in systems and fairness.", "benefit": "Systems thinking in the real world." },
+      { "eyebrow": "Coastal", "name": "Amed", "frontBody": "Snorkel reef surveys with a marine biologist.", "backBody": "Students record species counts on dive slates and contribute to a local reef-health dataset.", "benefit": "Science is something you do, not just read." }
+    ],
+    "bannerTitle": "Every Region Has a Purpose.",
+    "bannerBody": "See the full day-by-day plan and supervision model.",
+    "bannerCtaLabel": "Reserve a Seat"
+  },
+
+  "safety": {
+    "eyebrow": "Safety Framework",
+    "title": "Safe by Design.",
+    "subtitle": "Every activity is risk-assessed; supervision is constant.",
+    "stats": [
+      { "stat": "1:8", "title": "Staff Ratio", "body": "Trained field leaders plus a registered nurse." },
+      { "stat": "4★", "title": "Vetted Stays", "body": "Inspected accommodation, twin sharing." },
+      { "stat": "24/7", "title": "On-Call Support", "body": "Round-the-clock contact line for parents." },
+      { "stat": "✈", "title": "Return Flights", "body": "Full-service carriers, group travel throughout." }
+    ],
+    "includedTitle": "What's Included",
+    "includedQuote": "Adventure within structure. Freedom within supervision.",
+    "included": [
+      "Return airfare and visa-on-arrival support",
+      "All accommodation (twin sharing)",
+      "All meals and bottled water",
+      "Reef survey and craft workshop fees",
+      "Registered nurse and travel insurance",
+      "Private transport with regulated hours"
+    ],
+    "ctaLabel": "Reserve a Seat →"
+  },
+
+  "testimonials": {
+    "eyebrow": "From Parents",
+    "title": "They Came Back Changed.",
+    "items": [
+      { "name": "Meera D.", "rating": 5, "source": "Parent, 2025 cohort", "quote": "The communication before and during the trip was outstanding. I never once worried." },
+      { "name": "Sanjay R.", "rating": 5, "source": "Parent, 2025 cohort", "quote": "My son came home talking about coral reefs and water-sharing systems for weeks." }
+    ]
+  },
+
+  "investment": {
+    "eyebrow": "Investment",
+    "title": "Transparent Pricing",
+    "subtitle": "A simple two-instalment plan. No hidden costs.",
+    "featuredIndex": 0,
+    "installments": [
+      { "tag": "First Instalment", "title": "Booking Fee", "sub": "Non-refundable", "amount": "₹25,000", "date": "20th April 2026", "entity": "Travel Stall Pvt Ltd" },
+      { "tag": "Final Instalment", "title": "Balance", "sub": "Pre-departure", "amount": "₹1,40,000", "date": "20th May 2026", "entity": "Travel Stall Pvt Ltd" }
+    ],
+    "inclusionsTitle": "Indicative Inclusions",
+    "inclusions": ["Airfare", "Accommodation", "All meals", "Activities", "Insurance", "Supervision"],
+    "note": "A detailed cost sheet is shared on enquiry."
+  },
+
+  "register": {
+    "eyebrow": "Reserve Your Seat",
+    "title": "Register Your Interest — Bali 2026",
+    "intro": "Tell us about the participant and we'll be in touch within one business day.",
+    "endpoint": "/travel/api/landing-pages/bali-immersion-2026/register",
+    "capacity": 30,
+    "registered": 22,
+    "deadline": "2026-05-01T23:59:00",
+    "successTitle": "Thanks — You're on the List!",
+    "successBody": "Our team will reach out within one business day with the full itinerary and next steps.",
+    "submitLabel": "Submit Registration",
+    "steps": [
+      { "title": "Participant", "fields": [
+        { "name": "participant_name", "label": "Participant Full Name", "type": "text", "required": true, "placeholder": "Enter full name" },
+        { "name": "age", "label": "Age", "type": "number", "required": true, "placeholder": "e.g. 15" }
+      ]},
+      { "title": "Guardian", "fields": [
+        { "name": "guardian_name", "label": "Parent / Guardian Name", "type": "text", "required": true, "placeholder": "Enter full name" },
+        { "name": "email", "label": "Email", "type": "email", "required": true, "placeholder": "email@example.com" },
+        { "name": "phone", "label": "Phone", "type": "tel", "required": true, "placeholder": "Mobile number" }
+      ]}
+    ],
+    "covers": [
+      { "title": "Full Itinerary", "body": "The complete day-by-day plan." },
+      { "title": "Safety Model", "body": "Our 1:8 supervision and medical cover." },
+      { "title": "Costs", "body": "The transparent two-instalment breakdown." },
+      { "title": "Q&A", "body": "A direct line to our programme team." }
+    ]
+  },
+
+  "brochure": { "enabled": false },
+
+  "faqs": {
+    "eyebrow": "Clarifications",
+    "title": "Frequently Asked Questions",
+    "subtitle": "Everything you need to know about Bali 2026",
+    "categories": [
+      { "id": "tour", "label": "Tour Details", "icon": "📍" },
+      { "id": "safety", "label": "Safety", "icon": "🛡️" },
+      { "id": "reg", "label": "Registration", "icon": "📝" }
+    ],
+    "items": [
+      { "category": "tour", "q": "How long is the programme?", "a": "Seven days across three regions of Bali — Ubud, Sidemen and Amed." },
+      { "category": "tour", "q": "What ages is it for?", "a": "Students aged 14 to 18, grouped by age band." },
+      { "category": "safety", "q": "What is the staff ratio?", "a": "One trained field leader for every eight students, plus a registered nurse on the trip." },
+      { "category": "safety", "q": "Is there medical cover?", "a": "Yes — comprehensive travel insurance and a 24/7 on-call line for parents." },
+      { "category": "reg", "q": "How do I secure a place?", "a": "Submit the registration form; a team member confirms availability and next steps within one business day." }
+    ]
+  },
+
+  "finalCta": {
+    "eyebrow": "07 Days · 03 Regions",
+    "title": "Give Them the Field.",
+    "subtitle": "One unforgettable, structured journey.",
+    "steps": [ { "label": "Register interest" }, { "label": "Review the plan" }, { "label": "Confirm the seat" } ],
+    "ctaLabel": "Reserve a Seat"
+  },
+
+  "footer": {
+    "mark": "",
+    "name": "BALI 2026",
+    "tagline": "Where Curiosity Meets the Wild",
+    "email": "hello@travelstall.example",
+    "phones": [ { "label": "+91 90000 12345", "tel": "+919000012345" } ],
+    "legal": ["© 2026 Travel Stall", "1:8 Supervision Framework", "Bali 2026 Field Immersion"]
+  }
+}

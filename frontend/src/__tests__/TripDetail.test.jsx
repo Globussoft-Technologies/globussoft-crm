@@ -99,7 +99,7 @@
  * commit via ls + git status; no other agent touches this path).
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 
 const fetchApiMock = vi.fn();
@@ -317,42 +317,25 @@ describe('<TripDetail /> — tab strip', () => {
 });
 
 describe('<TripDetail /> — Overview tab', () => {
-  it('renders the 9 metric cards including Destination, Depart, Return, Legal entity, Price/student, Participants, Required docs, Payment plan, Microsite', async () => {
+  it('renders hero band + KPI cards + summary bands wired to the ops-dashboard surface', async () => {
     renderPage();
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
-    // Card labels (uppercased via CSS; DOM text is title-case).
+    // Hero band shows Destination label + the value + legal entity inline.
     expect(screen.getByText('Destination')).toBeInTheDocument();
-    expect(screen.getByText('Depart')).toBeInTheDocument();
-    expect(screen.getByText('Return')).toBeInTheDocument();
-    expect(screen.getByText('Legal entity')).toBeInTheDocument();
-    expect(screen.getByText('Price / student')).toBeInTheDocument();
-    // 'Participants' + 'Microsite' + 'Payment plan' appear BOTH as tab
-    // labels AND as card labels; scope via getAllByText.
+    expect(screen.getByText('tmc_nexus')).toBeInTheDocument();
+    // KPI strip + summary bands keep these labels.
+    expect(screen.getByText('Required docs')).toBeInTheDocument();
+    expect(screen.getByText('Trip status')).toBeInTheDocument();
+    // 'Participants' / 'Microsite' / 'Payment plan' all appear as both tab
+    // chrome AND in the overview (KPI card / summary band title). Scope via
+    // getAllByText.
     expect(screen.getAllByText('Participants').length).toBeGreaterThanOrEqual(2);
     expect(screen.getAllByText('Payment plan').length).toBeGreaterThanOrEqual(2);
     expect(screen.getAllByText('Microsite').length).toBeGreaterThanOrEqual(2);
-    expect(screen.getByText('Required docs')).toBeInTheDocument();
-    // Card values for legal entity + payment-plan un-set + microsite un-
-    // published.
-    expect(screen.getByText('tmc_nexus')).toBeInTheDocument();
-    expect(screen.getByText('not set')).toBeInTheDocument(); // payment plan
-    expect(screen.getByText('not published')).toBeInTheDocument(); // microsite
-    // Participants count (1, derived from the single fixture participant) —
-    // scope via the Required-docs card NEIGHBOR pattern: find the card
-    // whose label is "Participants" (using getAllByText then filtering by
-    // closest card surface).
-    const participantsLabels = screen.getAllByText('Participants');
-    // The CARD label (vs the TAB label) is the one whose parent is the
-    // Card div (no role="tab" sibling). Pick the one with a sibling
-    // showing the count.
-    const participantsCard = participantsLabels.find(
-      (el) => el.parentElement && within(el.parentElement).queryByText('1'),
-    );
-    expect(participantsCard).toBeTruthy();
-    // Required docs count = 2 (from documentRequirements fixture).
-    const docsLabel = screen.getByText('Required docs');
-    const docsCard = docsLabel.parentElement;
-    expect(within(docsCard).getByText('2')).toBeInTheDocument();
+    // Summary-band status pills (rendered uppercase via CSS; literal mixed-
+    // case in DOM).
+    expect(screen.getByText('Not set yet')).toBeInTheDocument();
+    expect(screen.getByText('Not published')).toBeInTheDocument();
   });
 });
 
@@ -505,7 +488,7 @@ describe('<TripDetail /> — Microsite tab', () => {
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
     fireEvent.click(screen.getByRole('tab', { name: /Microsite/i }));
     expect(
-      await screen.findByText(/No microsite published yet/i),
+      await screen.findByText(/Create a public itinerary page/i),
     ).toBeInTheDocument();
     // Subdomain input pre-fills with "trip-{tripCode}".
     const subdomainInput = screen.getByLabelText(/Microsite subdomain/i);
@@ -535,10 +518,14 @@ describe('<TripDetail /> — Microsite tab', () => {
     const micrositeTab = tabs.find((t) => /Microsite/.test(t.textContent));
     expect(micrositeTab).toBeTruthy();
     fireEvent.click(micrositeTab);
-    // publicUuid renders verbatim in a <code> element.
-    expect(await screen.findByText('abc-123-def-456')).toBeInTheDocument();
-    // Action buttons.
-    expect(screen.getByRole('button', { name: /Copy URL/i })).toBeInTheDocument();
+    // The full public URL renders in the live-link hero card; the publicUuid
+    // appears as a substring of that URL.
+    expect(
+      await screen.findByText((c) => c.includes('abc-123-def-456')),
+    ).toBeInTheDocument();
+    // Action buttons — the Copy button is now labelled just "Copy" inside
+    // the live-link hero (the verbose "Copy URL" was tightened in v3.9.x).
+    expect(screen.getByRole('button', { name: /^Copy$/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Preview/i })).toBeInTheDocument();
     // Open link → the rendered public page /p/tripmicrosite/<publicUuid>
     // (NOT the raw JSON API). The page fetches the API itself.
@@ -662,15 +649,15 @@ describe('<TripDetail /> — Header date edge cases', () => {
     expect(screen.getAllByText((content) => content.includes('—')).length).toBeGreaterThanOrEqual(1);
   });
 
-  it('Overview "Price / student" card renders ₹ + locale-formatted value', async () => {
+  it('Overview hero band renders locale-formatted price / student inline', async () => {
     renderPage();
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
-    // Price-per-student card. Locale-formatted 125000 is "1,25,000" under
-    // en-IN or "125,000" under en-US; assert presence of the ₹ + trailing
-    // 5-digit core (locale-tolerant).
-    const priceLabel = screen.getByText('Price / student');
-    const priceCard = priceLabel.parentElement;
-    expect(within(priceCard).getByText((c) => /^₹[\d,]+$/.test(c))).toBeInTheDocument();
+    // Price now renders in the hero band as "<IndianRupee icon> {value} /
+    // student" — the ₹ glyph is an SVG icon, so assert the locale-formatted
+    // numeric value + "/ student" suffix appears (the matcher reads the
+    // text node, ignoring the sibling icon).
+    const hits = screen.getAllByText((c) => /[\d,]+\s*\/\s*student/.test(c));
+    expect(hits.length).toBeGreaterThanOrEqual(1);
   });
 });
 
@@ -722,9 +709,13 @@ describe('<TripDetail /> — Payment plan tab', () => {
       await screen.findByLabelText(/Instalment 1 due date/i),
     ).toBeInTheDocument();
     expect(screen.getByLabelText(/Instalment 1 amount/i)).toBeInTheDocument();
-    // Total readout — initial amount is 0.
-    expect(screen.getByText((c) => /Total:/.test(c))).toBeInTheDocument();
-    expect(screen.getByText((c) => /^₹0$/.test(c))).toBeInTheDocument();
+    // Total readout — initial amount is 0. Footer now shows "Per
+    // participant: ₹0" (and adds a "× N = ₹gross" trailer when participants
+    // are present + total > 0, which doesn't apply here since total === 0).
+    expect(screen.getByText((c) => /Per participant:/.test(c))).toBeInTheDocument();
+    expect(
+      screen.getAllByText((c) => /^₹0$/.test(c)).length,
+    ).toBeGreaterThanOrEqual(1);
   });
 
   it('Save with no dueDate surfaces notify.error + no PUT fires', async () => {
@@ -754,7 +745,7 @@ describe('<TripDetail /> — Microsite Create flow', () => {
     renderPage();
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
     fireEvent.click(screen.getByRole('tab', { name: /Microsite/i }));
-    await screen.findByText(/No microsite published yet/i);
+    await screen.findByText(/Create a public itinerary page/i);
     fetchApiMock.mockClear();
     installFetchMock();
     fireEvent.click(screen.getByRole('button', { name: /Publish microsite/i }));
@@ -815,7 +806,7 @@ describe('<TripDetail /> — Microsite Editor preview toggle', () => {
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
     const tabs = screen.getAllByRole('tab');
     fireEvent.click(tabs.find((t) => /Microsite/.test(t.textContent)));
-    await screen.findByText('abc-123-def-456');
+    await screen.findByText((c) => c.includes('abc-123-def-456'));
     // Click Preview button — label flips to Edit.
     fireEvent.click(screen.getByRole('button', { name: /Preview/i }));
     expect(
@@ -1024,9 +1015,13 @@ describe('<TripDetail /> — Payment plan with existing plan', () => {
     expect(screen.getByLabelText(/Instalment 2 due date/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Instalment 3 due date/i)).toBeInTheDocument();
     // Total = 30000 + 50000 + 45000 = 125000 → "₹125,000" (en-US) or "₹1,25,000" (en-IN).
+    // Footer now renders BOTH a "Per participant: ₹125,000" line and a
+    // "× N participants = ₹{gross}" trailer; with the single-participant
+    // fixture, gross === per-participant so the same string can appear in
+    // both places. Assert at-least-one match.
     expect(
-      screen.getByText((c) => /^₹(125,000|1,25,000)$/.test(c)),
-    ).toBeInTheDocument();
+      screen.getAllByText((c) => /^₹(125,000|1,25,000)$/.test(c)).length,
+    ).toBeGreaterThanOrEqual(1);
     // Delete-plan button visible (plan truthy).
     expect(
       screen.getByRole('button', { name: /Delete payment plan/i }),
@@ -1078,8 +1073,9 @@ describe('<TripDetail /> — Payment plan with existing plan', () => {
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
     fireEvent.click(screen.getByRole('tab', { name: /Payment plan/i }));
     await screen.findByRole('heading', { name: /Per-participant instalments/i });
-    // Each row shows "Participant #<id>".
-    expect(screen.getAllByText('Participant #901').length).toBe(2);
+    // Each row now shows the participant's actual fullName (looked up by
+    // id from trip.participants). Fixture participant 901 is "Anaya Sharma".
+    expect(screen.getAllByText('Anaya Sharma').length).toBeGreaterThanOrEqual(2);
     // Status labels.
     expect(screen.getByText('pending')).toBeInTheDocument();
     expect(screen.getByText('paid')).toBeInTheDocument();
@@ -1109,7 +1105,7 @@ describe('<TripDetail /> — Microsite Create POST error', () => {
     renderPage();
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
     fireEvent.click(screen.getByRole('tab', { name: /Microsite/i }));
-    await screen.findByText(/No microsite published yet/i);
+    await screen.findByText(/Create a public itinerary page/i);
     fireEvent.click(screen.getByRole('button', { name: /Publish microsite/i }));
     await waitFor(() => {
       expect(notifyError).toHaveBeenCalledWith('Subdomain already taken');
@@ -1141,7 +1137,7 @@ describe('<TripDetail /> — Microsite Editor save/unpublish/faq', () => {
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
     const tabs = screen.getAllByRole('tab');
     fireEvent.click(tabs.find((t) => /Microsite/.test(t.textContent)));
-    await screen.findByText('abc-123-def-456');
+    await screen.findByText((c) => c.includes('abc-123-def-456'));
     fetchApiMock.mockClear();
     // Re-install with PATCH support.
     installFetchMock({ trip: makeTrip({ microsite: ms }) });
@@ -1181,7 +1177,7 @@ describe('<TripDetail /> — Microsite Editor save/unpublish/faq', () => {
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
     const tabs = screen.getAllByRole('tab');
     fireEvent.click(tabs.find((t) => /Microsite/.test(t.textContent)));
-    await screen.findByText('abc-123-def-456');
+    await screen.findByText((c) => c.includes('abc-123-def-456'));
     fireEvent.click(screen.getByRole('button', { name: /^Unpublish$/i }));
     await waitFor(() => {
       const del = fetchApiMock.mock.calls.find(
@@ -1200,7 +1196,7 @@ describe('<TripDetail /> — Microsite Editor save/unpublish/faq', () => {
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
     const tabs = screen.getAllByRole('tab');
     fireEvent.click(tabs.find((t) => /Microsite/.test(t.textContent)));
-    await screen.findByText('abc-123-def-456');
+    await screen.findByText((c) => c.includes('abc-123-def-456'));
     // Type non-JSON into the FAQ textarea.
     const faqInput = screen.getByLabelText(/Microsite FAQ JSON/i);
     fireEvent.change(faqInput, { target: { value: '{ not json' } });

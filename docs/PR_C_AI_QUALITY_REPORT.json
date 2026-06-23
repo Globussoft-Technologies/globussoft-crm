@@ -1,0 +1,564 @@
+{
+  "tenantId": 1,
+  "generatedAt": "2026-06-22T12:33:45.372Z",
+  "model": "gemini-2.5-flash",
+  "scenarios": [
+    {
+      "scenario": {
+        "destination": "Umrah",
+        "durationDays": 10,
+        "audience": "Pilgrims from India",
+        "subBrand": "rfu"
+      },
+      "source": "gemini",
+      "verdict": "scrubbed",
+      "stub": false,
+      "guardrailIssues": [
+        "highlights.items[1].body:vendor",
+        "cities.cards[0].body:vendor",
+        "itinerary.days[1].bullets[1]:vendor",
+        "faq.faqs[0].a:vendor"
+      ],
+      "suggestedTitle": "Umrah Pilgrimage: 10 Days from India",
+      "suggestedSlug": "umrah-pilgrimage-10-days-india",
+      "seoMeta": {
+        "metaTitle": "Umrah Pilgrimage | 10-Day Journey from India",
+        "metaDescription": "Plan your 10-day Umrah pilgrimage from India. Experience the holy cities of Makkah and Madinah with structured itineraries and spiritual guidance."
+      },
+      "blockTypes": [
+        "destinationHero",
+        "highlightsGrid",
+        "cityCards",
+        "safetyFeatures",
+        "inclusionsGrid",
+        "itineraryTimeline",
+        "tierPricing",
+        "faqAccordion",
+        "contactFooter"
+      ],
+      "sampleHeroHeadline": "A 10-Day Spiritual Journey to Makkah and Madinah",
+      "passed": true,
+      "checks": [
+        {
+          "name": "no-fallback-markers",
+          "pass": true,
+          "detail": "no [REVIEW] markers"
+        },
+        {
+          "name": "block-present:destinationHero",
+          "pass": true,
+          "detail": "present"
+        },
+        {
+          "name": "block-present:highlightsGrid",
+          "pass": true,
+          "detail": "present"
+        },
+        {
+          "name": "block-present:cityCards",
+          "pass": true,
+          "detail": "present"
+        },
+        {
+          "name": "block-present:safetyFeatures",
+          "pass": true,
+          "detail": "present"
+        },
+        {
+          "name": "block-present:inclusionsGrid",
+          "pass": true,
+          "detail": "present"
+        },
+        {
+          "name": "block-present:itineraryTimeline",
+          "pass": true,
+          "detail": "present"
+        },
+        {
+          "name": "block-present:tierPricing",
+          "pass": true,
+          "detail": "present"
+        },
+        {
+          "name": "block-present:faqAccordion",
+          "pass": true,
+          "detail": "present"
+        },
+        {
+          "name": "block-present:contactFooter",
+          "pass": true,
+          "detail": "present"
+        },
+        {
+          "name": "itinerary-day-count",
+          "pass": true,
+          "detail": "expected 10, got 10"
+        },
+        {
+          "name": "pricing-shell-null",
+          "pass": true,
+          "detail": "3 tiers, all commercial fields null"
+        },
+        {
+          "name": "contact-shell-null",
+          "pass": true,
+          "detail": "all contact fields null"
+        },
+        {
+          "name": "safety-items-≥3",
+          "pass": true,
+          "detail": "4 items"
+        },
+        {
+          "name": "no-money-or-discount",
+          "pass": true,
+          "detail": "clean"
+        },
+        {
+          "name": "no-ratings",
+          "pass": true,
+          "detail": "clean"
+        },
+        {
+          "name": "no-satisfaction-claims",
+          "pass": true,
+          "detail": "clean"
+        },
+        {
+          "name": "no-vendor-names",
+          "pass": true,
+          "detail": "clean"
+        },
+        {
+          "name": "no-testimonials",
+          "pass": true,
+          "detail": "clean"
+        },
+        {
+          "name": "no-urls",
+          "pass": true,
+          "detail": "clean"
+        },
+        {
+          "name": "no-reviewCarousel",
+          "pass": true,
+          "detail": "absent"
+        }
+      ]
+    },
+    {
+      "scenario": {
+        "destination": "Bali",
+        "durationDays": 10,
+        "audience": "Families with kids 6-12",
+        "subBrand": "travelstall"
+      },
+      "source": "gemini",
+      "verdict": "passed",
+      "stub": false,
+      "guardrailIssues": [],
+      "suggestedTitle": "Bali Family Adventure - 10 Days",
+      "suggestedSlug": "bali-family-adventure-10-days",
+      "seoMeta": {
+        "metaTitle": "Bali Family Holiday: 10-Day Cultural Journey",
+        "metaDescription": "Explore Bali with your family on a 10-day trip designed for children aged 6-12. Discover temples, beaches, and local culture. Plan your next adventure."
+      },
+      "blockTypes": [
+        "destinationHero",
+        "highlightsGrid",
+        "cityCards",
+        "safetyFeatures",
+        "inclusionsGrid",
+        "itineraryTimeline",
+        "tierPricing",
+        "faqAccordion",
+        "contactFooter"
+      ],
+      "sampleHeroHeadline": "Bali Family Adventure",
+      "passed": true,
+      "checks": [
+        {
+          "name": "no-fallback-markers",
+          "pass": true,
+          "detail": "no [REVIEW] markers"
+        },
+        {
+          "name": "block-present:destinationHero",
+          "pass": true,
+          "detail": "present"
+        },
+        {
+          "name": "block-present:highlightsGrid",
+          "pass": true,
+          "detail": "present"
+        },
+        {
+          "name": "block-present:cityCards",
+          "pass": true,
+          "detail": "present"
+        },
+        {
+          "name": "block-present:safetyFeatures",
+          "pass": true,
+          "detail": "present"
+        },
+        {
+          "name": "block-present:inclusionsGrid",
+          "pass": true,
+          "detail": "present"
+        },
+        {
+          "name": "block-present:itineraryTimeline",
+          "pass": true,
+          "detail": "present"
+        },
+        {
+          "name": "block-present:tierPricing",
+          "pass": true,
+          "detail": "present"
+        },
+        {
+          "name": "block-present:faqAccordion",
+          "pass": true,
+          "detail": "present"
+        },
+        {
+          "name": "block-present:contactFooter",
+          "pass": true,
+          "detail": "present"
+        },
+        {
+          "name": "itinerary-day-count",
+          "pass": true,
+          "detail": "expected 10, got 10"
+        },
+        {
+          "name": "pricing-shell-null",
+          "pass": true,
+          "detail": "3 tiers, all commercial fields null"
+        },
+        {
+          "name": "contact-shell-null",
+          "pass": true,
+          "detail": "all contact fields null"
+        },
+        {
+          "name": "safety-items-≥3",
+          "pass": true,
+          "detail": "4 items"
+        },
+        {
+          "name": "no-money-or-discount",
+          "pass": true,
+          "detail": "clean"
+        },
+        {
+          "name": "no-ratings",
+          "pass": true,
+          "detail": "clean"
+        },
+        {
+          "name": "no-satisfaction-claims",
+          "pass": true,
+          "detail": "clean"
+        },
+        {
+          "name": "no-vendor-names",
+          "pass": true,
+          "detail": "clean"
+        },
+        {
+          "name": "no-testimonials",
+          "pass": true,
+          "detail": "clean"
+        },
+        {
+          "name": "no-urls",
+          "pass": true,
+          "detail": "clean"
+        },
+        {
+          "name": "no-reviewCarousel",
+          "pass": true,
+          "detail": "absent"
+        }
+      ]
+    },
+    {
+      "scenario": {
+        "destination": "Thailand",
+        "durationDays": 7,
+        "audience": "Couples on honeymoon",
+        "subBrand": "travelstall"
+      },
+      "source": "gemini",
+      "verdict": "passed",
+      "stub": false,
+      "guardrailIssues": [],
+      "suggestedTitle": "Thailand Honeymoon - 7 Days of Romance",
+      "suggestedSlug": "thailand-honeymoon-7d",
+      "seoMeta": {
+        "metaTitle": "7-Day Thailand Honeymoon Itinerary for Couples",
+        "metaDescription": "Discover a romantic 7-day honeymoon in Thailand. Explore pristine beaches, cultural sites, and intimate experiences designed for couples seeking a serene getawa"
+      },
+      "blockTypes": [
+        "destinationHero",
+        "highlightsGrid",
+        "cityCards",
+        "safetyFeatures",
+        "inclusionsGrid",
+        "itineraryTimeline",
+        "tierPricing",
+        "faqAccordion",
+        "contactFooter"
+      ],
+      "sampleHeroHeadline": "Romantic Thailand Retreat",
+      "passed": true,
+      "checks": [
+        {
+          "name": "no-fallback-markers",
+          "pass": true,
+          "detail": "no [REVIEW] markers"
+        },
+        {
+          "name": "block-present:destinationHero",
+          "pass": true,
+          "detail": "present"
+        },
+        {
+          "name": "block-present:highlightsGrid",
+          "pass": true,
+          "detail": "present"
+        },
+        {
+          "name": "block-present:cityCards",
+          "pass": true,
+          "detail": "present"
+        },
+        {
+          "name": "block-present:safetyFeatures",
+          "pass": true,
+          "detail": "present"
+        },
+        {
+          "name": "block-present:inclusionsGrid",
+          "pass": true,
+          "detail": "present"
+        },
+        {
+          "name": "block-present:itineraryTimeline",
+          "pass": true,
+          "detail": "present"
+        },
+        {
+          "name": "block-present:tierPricing",
+          "pass": true,
+          "detail": "present"
+        },
+        {
+          "name": "block-present:faqAccordion",
+          "pass": true,
+          "detail": "present"
+        },
+        {
+          "name": "block-present:contactFooter",
+          "pass": true,
+          "detail": "present"
+        },
+        {
+          "name": "itinerary-day-count",
+          "pass": true,
+          "detail": "expected 7, got 7"
+        },
+        {
+          "name": "pricing-shell-null",
+          "pass": true,
+          "detail": "3 tiers, all commercial fields null"
+        },
+        {
+          "name": "contact-shell-null",
+          "pass": true,
+          "detail": "all contact fields null"
+        },
+        {
+          "name": "safety-items-≥3",
+          "pass": true,
+          "detail": "5 items"
+        },
+        {
+          "name": "no-money-or-discount",
+          "pass": true,
+          "detail": "clean"
+        },
+        {
+          "name": "no-ratings",
+          "pass": true,
+          "detail": "clean"
+        },
+        {
+          "name": "no-satisfaction-claims",
+          "pass": true,
+          "detail": "clean"
+        },
+        {
+          "name": "no-vendor-names",
+          "pass": true,
+          "detail": "clean"
+        },
+        {
+          "name": "no-testimonials",
+          "pass": true,
+          "detail": "clean"
+        },
+        {
+          "name": "no-urls",
+          "pass": true,
+          "detail": "clean"
+        },
+        {
+          "name": "no-reviewCarousel",
+          "pass": true,
+          "detail": "absent"
+        }
+      ]
+    },
+    {
+      "scenario": {
+        "destination": "Japan",
+        "durationDays": 9,
+        "audience": "School groups Grades 6-12",
+        "subBrand": "tmc"
+      },
+      "source": "gemini",
+      "verdict": "passed",
+      "stub": false,
+      "guardrailIssues": [],
+      "suggestedTitle": "Japan School Trip for Grades 6-12: 9 Days",
+      "suggestedSlug": "japan-school-trip-grades-6-12-9-days",
+      "seoMeta": {
+        "metaTitle": "Japan Educational Journey for School Groups: 9 Days",
+        "metaDescription": "Explore Japan on a 9-day educational tour for school groups, focusing on culture, history, and innovation across major cities like Tokyo and Kyoto."
+      },
+      "blockTypes": [
+        "destinationHero",
+        "highlightsGrid",
+        "cityCards",
+        "safetyFeatures",
+        "inclusionsGrid",
+        "itineraryTimeline",
+        "tierPricing",
+        "faqAccordion",
+        "contactFooter"
+      ],
+      "sampleHeroHeadline": "Japan: An Educational Journey for School Groups",
+      "passed": true,
+      "checks": [
+        {
+          "name": "no-fallback-markers",
+          "pass": true,
+          "detail": "no [REVIEW] markers"
+        },
+        {
+          "name": "block-present:destinationHero",
+          "pass": true,
+          "detail": "present"
+        },
+        {
+          "name": "block-present:highlightsGrid",
+          "pass": true,
+          "detail": "present"
+        },
+        {
+          "name": "block-present:cityCards",
+          "pass": true,
+          "detail": "present"
+        },
+        {
+          "name": "block-present:safetyFeatures",
+          "pass": true,
+          "detail": "present"
+        },
+        {
+          "name": "block-present:inclusionsGrid",
+          "pass": true,
+          "detail": "present"
+        },
+        {
+          "name": "block-present:itineraryTimeline",
+          "pass": true,
+          "detail": "present"
+        },
+        {
+          "name": "block-present:tierPricing",
+          "pass": true,
+          "detail": "present"
+        },
+        {
+          "name": "block-present:faqAccordion",
+          "pass": true,
+          "detail": "present"
+        },
+        {
+          "name": "block-present:contactFooter",
+          "pass": true,
+          "detail": "present"
+        },
+        {
+          "name": "itinerary-day-count",
+          "pass": true,
+          "detail": "expected 9, got 9"
+        },
+        {
+          "name": "pricing-shell-null",
+          "pass": true,
+          "detail": "3 tiers, all commercial fields null"
+        },
+        {
+          "name": "contact-shell-null",
+          "pass": true,
+          "detail": "all contact fields null"
+        },
+        {
+          "name": "safety-items-≥3",
+          "pass": true,
+          "detail": "5 items"
+        },
+        {
+          "name": "no-money-or-discount",
+          "pass": true,
+          "detail": "clean"
+        },
+        {
+          "name": "no-ratings",
+          "pass": true,
+          "detail": "clean"
+        },
+        {
+          "name": "no-satisfaction-claims",
+          "pass": true,
+          "detail": "clean"
+        },
+        {
+          "name": "no-vendor-names",
+          "pass": true,
+          "detail": "clean"
+        },
+        {
+          "name": "no-testimonials",
+          "pass": true,
+          "detail": "clean"
+        },
+        {
+          "name": "no-urls",
+          "pass": true,
+          "detail": "clean"
+        },
+        {
+          "name": "no-reviewCarousel",
+          "pass": true,
+          "detail": "absent"
+        }
+      ]
+    }
+  ]
+}

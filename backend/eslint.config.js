@@ -325,6 +325,20 @@ module.exports = [
     },
   },
   {
+    // Browser-side assets shipped under backend/services/templates/. Files
+    // like wanderlux/support.js are generated from dc-runtime TypeScript and
+    // served as static JS to the browser — so window / document / DOMParser /
+    // customElements / HTMLElement / Node / location are all valid. The
+    // "GENERATED — do not edit" header means inline directives would be
+    // wiped on regen; the override has to live here.
+    files: ['services/templates/**/*.js'],
+    languageOptions: {
+      globals: {
+        ...globals.browser,
+      },
+    },
+  },
+  {
     ignores: [
       'node_modules/**',
       'coverage/**',

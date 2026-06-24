@@ -359,6 +359,10 @@ const TravelSchoolTermCalendar = lazy(() => import("./pages/travel/SchoolTermCal
 // real implementation lands per PRD §8 dependency build order. ADMIN +
 // MANAGER only per RoleGuard on the route element.
 const TravelMarketingFlyerStudio = lazy(() => import("./pages/travel/MarketingFlyerStudio"));
+// Brochure Engine — wraps the vendored agentic-orchcrm engine. Page
+// consumes /api/travel/brochures/* (POST runs, GET runs/:id, SSE stream,
+// list / archive). Gated by marketing.read in the sidebar + per-route.
+const TravelBrochureEngine = lazy(() => import("./pages/travel/BrochureEngine"));
 // Phase 2 Travel Stall operator landing (TS21) — scaffold shell.
 const TravelStallDashboard = lazy(() => import("./pages/travel/TravelStallDashboard"));
 // Wellness vertical
@@ -1689,6 +1693,20 @@ export default function App() {
                     message="Marketing Flyer Studio requires the 'flyer_studio.read' permission."
                   >
                     <TravelMarketingFlyerStudio />
+                  </RoleGuard>
+                </TravelOnly>
+              } />
+              {/* Brochure Engine — agentic-orchcrm integration. AI orchestration
+                  engine that turns a brief into a multi-page A4 travel brochure
+                  PDF. Marketing-read gated for parity with the sidebar entry. */}
+              <Route path="travel/brochures" element={
+                <TravelOnly>
+                  <RoleGuard
+                    requiredPermission={{ module: "marketing", action: "read" }}
+                    feature="Brochure Engine"
+                    message="Brochure Engine requires the 'marketing.read' permission."
+                  >
+                    <TravelBrochureEngine />
                   </RoleGuard>
                 </TravelOnly>
               } />

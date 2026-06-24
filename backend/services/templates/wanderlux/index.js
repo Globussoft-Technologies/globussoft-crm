@@ -39,6 +39,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const layoutComposer = require('./layoutComposer');
 
 const TEMPLATE_ID = 'wanderlux-v1';
 const TEMPLATE_DIR = __dirname;
@@ -50,6 +51,14 @@ function readTemplateHtml() {
   CACHED_HTML = fs.readFileSync(HTML_PATH, 'utf8');
   return CACHED_HTML;
 }
+
+// `composeLayout` ALWAYS runs (with effective layout = DEFAULT_SECTION_ORDER
+// when no operator customisation is present). The wrapper-div + bridge-
+// script overhead is tiny, and running unconditionally means the editor's
+// click-on-canvas → scroll-the-panel affordance works from the first
+// preview — operators don't have to make any layout change before they
+// can click around. Visual output for an un-customised page is identical
+// to the raw template (the wrappers are inert transparent divs).
 
 /**
  * Build the rendered HTML for one landing page.
@@ -73,7 +82,22 @@ function render(landingPage, options = {}) {
     config = landingPage.content;
   }
 
-  const html = readTemplateHtml();
+  let html = readTemplateHtml();
+
+  // Hybrid layout: always compose so the editor click-on-canvas bridge
+  // works from the first preview. When _layout is absent the composer
+  // emits the default section order — visually identical to the raw
+  // template aside from the inert data-wlx wrappers + bridge script.
+  try {
+    const slug = (landingPage && landingPage.slug) || '';
+    html = layoutComposer.composeLayout(html, config || {}, slug);
+  } catch (e) {
+    // Fall back to the un-rewritten template — better a layout-defaults
+    // render than a 500. The composer throws only when the template's
+    // section markers have drifted (template-shape regression caught
+    // by the wanderlux-layout vitest).
+    console.error('[wanderlux] layout composer failed, falling back:', e && e.message);
+  }
 
   // The reference template references `./support.js` (relative). When
   // served from `/api/landing-pages/:id/preview` (or the public /p/:slug)

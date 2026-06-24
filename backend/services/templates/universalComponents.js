@@ -367,7 +367,18 @@ function renderProgramme(content /*, theme */) {
   if (!p.show) return '';
   const leftParas = Array.isArray(p.leftParagraphs) ? p.leftParagraphs : [];
   const rightChecks = Array.isArray(p.rightChecks) ? p.rightChecks : [];
+  // rightItems is the structured form ({title, desc}[]) — when present
+  // the renderer surfaces cards with descriptions; rightChecks is the
+  // legacy string[] form rendered as a checked bullet list.
+  const rightItems = (Array.isArray(p.rightItems) ? p.rightItems : [])
+    .filter((it) => it && it.title);
   const cta = p.cta || {};
+  const rightListHtml = rightItems.length > 0
+    ? `<ul class="t-why-items">${rightItems.map((it) => `<li class="t-why-item">
+          <div class="t-why-item-title">${escapeHtml(it.title)}</div>
+          ${it.desc ? `<div class="t-why-item-desc">${escapeHtml(it.desc)}</div>` : ''}
+        </li>`).join('')}</ul>`
+    : `<ul class="t-checks">${rightChecks.map((c) => `<li>${escapeHtml(c)}</li>`).join('')}</ul>`;
   return `<section class="t-why" id="programme">
     ${p.kanjiWatermark ? `<span class="t-kanji-wm t-kanji-right">${escapeHtml(p.kanjiWatermark)}</span>` : ''}
     <div class="t-wrap">
@@ -380,7 +391,7 @@ function renderProgramme(content /*, theme */) {
         <aside class="t-why-card">
           ${p.rightHeadline ? `<h3>${escapeHtml(p.rightHeadline)}</h3>` : ''}
           ${p.rightQuote ? `<p class="t-why-card-quote">${escapeHtml(p.rightQuote)}</p>` : ''}
-          <ul class="t-checks">${rightChecks.map((c) => `<li>${escapeHtml(c)}</li>`).join('')}</ul>
+          ${rightListHtml}
         </aside>
       </div>
       ${cta.title || cta.body
@@ -425,6 +436,11 @@ function renderCultural(content, theme) {
             <h3>${escapeHtml(item.name || '')}</h3>
             <div class="t-ch-underline"></div>
           </div>`;
+      // Back face: NAME repeated on top so the focused card always
+      // shows what's being described (matches Tokyo / Mt.Fuji / Kyoto
+      // reference). Sequenced opacity flip in CSS (front fades out →
+      // back fades in, no overlap) means the title doesn't briefly
+      // appear twice during the transition.
       return `<article class="t-ch-card" tabindex="0">
         ${frontFace}
         <div class="t-ch-back">
@@ -580,7 +596,7 @@ function renderInvestment(content, theme) {
               <small>${escapeHtml(t.subtitle || '')}</small>
             </div>
           </div>
-          <p class="t-tier-amount">${t.amount ? currency + escapeHtml(String(t.amount)) : '<span class="t-tier-amount-pending" aria-hidden="true">—</span>'}</p>
+          ${t.amount ? `<p class="t-tier-amount">${currency}${escapeHtml(String(t.amount))}</p>` : `<div class="t-tier-amount t-tier-amount--empty" aria-label="Pricing to be configured">Pricing TBD</div>`}
           ${t.tag ? `<span class="t-tier-tag">${escapeHtml(t.tag)}</span>` : ''}
           <div class="t-tier-meta">
             ${t.date ? `<p><span class="t-tier-ico">${svg('calendar', theme)}</span> ${escapeHtml(t.date)}</p>` : ''}

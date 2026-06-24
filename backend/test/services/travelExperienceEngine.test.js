@@ -710,25 +710,38 @@ describe('chooseComposition — Q6 (4 family defaults only)', () => {
 // ─────────────────────────────────────────────────────────────────
 
 describe('chooseImageStrategy', () => {
-  test('emits hero + marquee + brochure queries containing destination + visualMood', () => {
+  test('emits hero + marquee + brochure queries focused on destination + concrete topic words', () => {
+    // Contract per 2026-06-24 image-quality fix: queries are kept SHORT
+    // and concrete-noun-driven (landmark / heritage / culture / nature)
+    // — visualMood / climate phrases are NOT mixed in because stock
+    // providers treat them as noise tokens that bias the top-N ranking
+    // toward portrait/headshot results instead of location photography.
     const s = tee.chooseImageStrategy(
       { visualMood: 'northern-aurora-mystical', climate: 'alpine' },
       { destination: 'Iceland' }
     );
     expect(s.hero.query).toContain('Iceland');
-    expect(s.hero.query).toContain('northern');
-    expect(s.hero.query).toContain('aurora');
+    expect(s.hero.query).toContain('landmark');
+    expect(s.hero.query).not.toContain('northern'); // visualMood tokens excluded
+    expect(s.hero.query).not.toContain('alpine');   // climate tokens excluded
     expect(s.hero.aspectRatio).toBe('4:3');
     expect(Array.isArray(s.marquee)).toBe(true);
     expect(s.marquee.length).toBeGreaterThanOrEqual(3);
     expect(s.brochure.query).toContain('Iceland');
+    // Marquee slots use distinct concrete-noun seeds.
+    const slotSeeds = s.marquee.map((m) => m.query.replace('Iceland', '').trim());
+    expect(new Set(slotSeeds).size).toBe(slotSeeds.length);
   });
 
-  test('marquee respects citiesCount option (clamped 3-6)', () => {
-    const s = tee.chooseImageStrategy({ visualMood: 'x', climate: 'tropical' }, { destination: 'X' }, { citiesCount: 10 });
-    expect(s.marquee.length).toBe(6);
+  test('marquee respects citiesCount option (clamped 3-10)', () => {
+    // Cap raised 2026-06-24 from 6 → 10 so a long marquee loop on
+    // wide viewports doesn't visibly wrap-and-restart on short loops.
+    const s = tee.chooseImageStrategy({ visualMood: 'x', climate: 'tropical' }, { destination: 'X' }, { citiesCount: 15 });
+    expect(s.marquee.length).toBe(10);
     const s2 = tee.chooseImageStrategy({ visualMood: 'x' }, { destination: 'X' }, { citiesCount: 1 });
     expect(s2.marquee.length).toBe(3);
+    const s3 = tee.chooseImageStrategy({ visualMood: 'x' }, { destination: 'X' }, { citiesCount: 8 });
+    expect(s3.marquee.length).toBe(8);
   });
 });
 

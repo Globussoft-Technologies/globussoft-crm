@@ -1654,6 +1654,12 @@ function renderTravelNav({
       <Link to="/travel/marketing/flyer-studio" icon={FileImage} label="Marketing Flyer Studio" requiredPermission={{ module: "flyer_studio", action: "read" }} />
       <Link to="/travel/flyer-templates" icon={Palette} label="Flyer Templates" requiredPermission={{ module: "flyer_templates", action: "read" }} />
       <Link to="/travel/flyer-share-admin" icon={Share2} label="Flyer Share Admin" requiredPermission={{ module: "flyer_studio", action: "manage" }} />
+      {/* Brochure Engine — agentic-orchcrm integration. AI orchestration
+          engine that turns a brief into an A4 travel brochure PDF
+          (cover, day-by-day itinerary, route map, inclusions, pricing).
+          Gated by marketing.read so it's visible alongside the other
+          marketing-output surfaces (Flyer Studio, Landing Pages). */}
+      <Link to="/travel/brochures" icon={Sparkles} label="Brochure Engine" requiredPermission={{ module: "marketing", action: "read" }} />
       {/* Destination Landing Pages — backed by the existing LandingPage
           platform (/api/landing-pages). Travel-flavoured sub-section is
           driven by the LandingPage.subBrand column + the

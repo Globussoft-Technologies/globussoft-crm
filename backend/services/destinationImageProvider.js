@@ -52,9 +52,17 @@ const aiImageFallbackProvider = require('./imageProviders/aiImageFallbackProvide
 
 // Fallback hierarchy — in priority order. Each provider implements:
 //   { id, isAvailable(), search(query, opts) → SearchResult[] }
+//
+// Pexels is the primary source: it's the only stock provider with a
+// configured PEXELS_API_KEY on this demo + only one whose terms cover the
+// travel-microsite use case end-to-end. Unsplash + Pixabay stay in the
+// chain as defensive fallbacks if those keys are ever added; they
+// self-skip via isAvailable() when their env vars are unset. The AI
+// fallback (Gemini Imagen → DALL-E → Pollinations) lands LAST so a query
+// always resolves to *some* image rather than an empty card.
 const PROVIDERS = Object.freeze([
-  unsplashProvider,
   pexelsProvider,
+  unsplashProvider,
   pixabayProvider,
   aiImageFallbackProvider,
 ]);
@@ -109,48 +117,50 @@ function cacheKey(providerId, query, opts = {}) {
  *   tenantId:    string                         — passed to AI fallback for budget gating
  *   excludeProviders: string[]                  — skip these providerIds (test / debugging)
  *   perPage:     int                            — how many results to request per provider
+ *   excludeUrls: Set<string>                    — URLs already used on this page (dedup);
+ *                                                 the picker skips any result whose URL is in
+ *                                                 this set. When every result from a provider
+ *                                                 is already used, the cascade falls through
+ *                                                 to the next provider rather than emitting a
+ *                                                 duplicate. AI fallback ALWAYS generates a
+ *                                                 fresh image (unique seed/prompt) so the
+ *                                                 cascade is guaranteed to land non-empty.
  */
 async function fetchOne(query, opts = {}) {
   const q = String(query || '').trim();
-  if (!q) {
-    console.log(`[image-provider] fetchOne: empty query — skipping`);
-    return null;
-  }
+  if (!q) return null;
   const shortQ = q.slice(0, 80);
   const excludeProviders = new Set(opts.excludeProviders || []);
+  const excludeUrls = opts.excludeUrls instanceof Set ? opts.excludeUrls : new Set();
+  const perPage = Number.isFinite(opts.perPage) ? opts.perPage : 5;
   for (const provider of PROVIDERS) {
-    if (excludeProviders.has(provider.id)) {
-      console.log(`[image-provider] "${shortQ}" — skipping ${provider.id} (excluded)`);
-      continue;
-    }
-    if (typeof provider.isAvailable === 'function' && !provider.isAvailable()) {
-      console.log(`[image-provider] "${shortQ}" — skipping ${provider.id} (no env key / not available)`);
-      continue;
-    }
+    if (excludeProviders.has(provider.id)) continue;
+    if (typeof provider.isAvailable === 'function' && !provider.isAvailable()) continue;
 
     const ck = cacheKey(provider.id, q, opts);
     const cached = IMAGE_CACHE.get(ck);
-    if (cached) {
-      console.log(`[image-provider] "${shortQ}" — ${provider.id} CACHE HIT`);
+    if (cached && cached.url && !excludeUrls.has(cached.url)) {
       return cached;
     }
+    // Cache hit but URL is already used on this page — bypass cache and
+    // re-search so we can pick a different candidate from this provider.
 
     let results = [];
     const t0 = Date.now();
     try {
-      results = await provider.search(q, opts);
+      results = await provider.search(q, { ...opts, perPage });
     } catch (e) {
-      console.log(`[image-provider] "${shortQ}" — ${provider.id} THREW in ${Date.now() - t0}ms: ${e.message || e}`);
+      console.warn(`[image-provider] "${shortQ}" — ${provider.id} THREW in ${Date.now() - t0}ms: ${e.message || e}`);
       results = [];
     }
-    if (results && results.length > 0) {
-      const pick = results[0];
-      console.log(`[image-provider] "${shortQ}" — ${provider.id} HIT in ${Date.now() - t0}ms (url=${String(pick.url || '').slice(0, 100)}…)`);
+    // Pick the FIRST result whose URL isn't already used. Defeats the
+    // "Pexels returns the same top image for two similar queries" duplicate.
+    const pick = (results || []).find((r) => r && r.url && !excludeUrls.has(r.url));
+    if (pick) {
       IMAGE_CACHE.set(ck, pick);
       return pick;
     }
-    console.log(`[image-provider] "${shortQ}" — ${provider.id} returned no results in ${Date.now() - t0}ms`);
-    // No results — try next provider.
+    // No usable results — try next provider.
   }
   console.warn(`[image-provider] "${shortQ}" — EVERY provider returned null`);
   return null;
@@ -172,29 +182,85 @@ async function fetchOne(query, opts = {}) {
  */
 async function fetchStrategy(strategy, opts = {}) {
   const s = strategy || {};
-  const heroOpts = { ...opts, aspectRatio: s.hero && s.hero.aspectRatio };
-  const broOpts = { ...opts, aspectRatio: s.brochure && s.brochure.aspectRatio };
+  const heroOpts = { ...opts, aspectRatio: (s.hero && s.hero.aspectRatio) || '4:3' };
+  const broOpts = { ...opts, aspectRatio: (s.brochure && s.brochure.aspectRatio) || '4:5' };
 
+  // ── Pass 1: parallel fetch (fast happy path) ──────────────────────
+  // Each slot independently cascades through the provider chain. A
+  // mid-batch quota / rate-limit on the primary provider does NOT halt
+  // the workflow — the slot's per-call cascade falls through to the
+  // next provider (Pexels → Unsplash → Pixabay → AI fallback), so every
+  // slot lands with SOME image. Same-page duplicates are handled in
+  // pass 2 below.
   const heroP = s.hero && s.hero.query ? fetchOne(s.hero.query, heroOpts) : Promise.resolve(null);
   const broP = s.brochure && s.brochure.query ? fetchOne(s.brochure.query, broOpts) : Promise.resolve(null);
 
   const marqueeArr = Array.isArray(s.marquee) ? s.marquee : [];
+  // Marquee photos request LANDSCAPE orientation even though the cards
+  // render tall (3:4). Reason: Pexels' portrait filter biases results
+  // toward people-portrait photography — when the cityName overlaps a
+  // common person name (Nandan / William / Rabindra / etc.) the top
+  // results are celebrity headshots, not landmarks. Landscape orientation
+  // returns a wider pool of architecture / street / scenic photos; the
+  // CSS background-image cover-crop handles the aspect mismatch.
   const marqueePs = marqueeArr.map((m) => (
     m && m.query
-      ? fetchOne(m.query, { ...opts, aspectRatio: '3:4' }).then((image) => ({ slot: m.slot, image }))
-      : Promise.resolve({ slot: m && m.slot, image: null })
+      ? fetchOne(m.query, { ...opts, aspectRatio: '4:3' }).then((image) => ({ slot: m.slot, query: m.query, image }))
+      : Promise.resolve({ slot: m && m.slot, query: m && m.query, image: null })
   ));
 
   const culturalArr = Array.isArray(s.cultural) ? s.cultural : [];
   const culturalPs = culturalArr.map((c) => (
     c && c.query
-      ? fetchOne(c.query, { ...opts, aspectRatio: '4:3' }).then((image) => ({ slot: c.slot, image }))
-      : Promise.resolve({ slot: c && c.slot, image: null })
+      ? fetchOne(c.query, { ...opts, aspectRatio: '4:3' }).then((image) => ({ slot: c.slot, query: c.query, image }))
+      : Promise.resolve({ slot: c && c.slot, query: c && c.query, image: null })
   ));
 
-  const [hero, brochure, marquee, cultural] = await Promise.all([
+  let [hero, brochure, marquee, cultural] = await Promise.all([
     heroP, broP, Promise.all(marqueePs), Promise.all(culturalPs),
   ]);
+
+  // ── Pass 2: per-page de-duplication ───────────────────────────────
+  // First occurrence wins; later dupes are re-fetched serially with the
+  // already-used URL set passed through. Priority: hero > marquee[0..N]
+  // > brochure > cultural[0..N]. AI fallback's Pollinations / Gemini /
+  // DALL-E paths emit a fresh image per call (random seed / sampling),
+  // so dedup is guaranteed to converge.
+  const usedUrls = new Set();
+  if (hero && hero.url) usedUrls.add(hero.url);
+
+  for (let i = 0; i < marquee.length; i++) {
+    const m = marquee[i];
+    if (m.image && m.image.url && !usedUrls.has(m.image.url)) {
+      usedUrls.add(m.image.url);
+      continue;
+    }
+    if (m.query) {
+      const replacement = await fetchOne(m.query, { ...opts, aspectRatio: '4:3', excludeUrls: usedUrls });
+      m.image = replacement;
+      if (replacement && replacement.url) usedUrls.add(replacement.url);
+    }
+  }
+
+  if (brochure && brochure.url && !usedUrls.has(brochure.url)) {
+    usedUrls.add(brochure.url);
+  } else if (brochure && brochure.url && s.brochure && s.brochure.query) {
+    brochure = await fetchOne(s.brochure.query, { ...broOpts, excludeUrls: usedUrls });
+    if (brochure && brochure.url) usedUrls.add(brochure.url);
+  }
+
+  for (let i = 0; i < cultural.length; i++) {
+    const c = cultural[i];
+    if (c.image && c.image.url && !usedUrls.has(c.image.url)) {
+      usedUrls.add(c.image.url);
+      continue;
+    }
+    if (c.query) {
+      const replacement = await fetchOne(c.query, { ...opts, aspectRatio: '4:3', excludeUrls: usedUrls });
+      c.image = replacement;
+      if (replacement && replacement.url) usedUrls.add(replacement.url);
+    }
+  }
 
   return { hero, brochure, marquee, cultural };
 }

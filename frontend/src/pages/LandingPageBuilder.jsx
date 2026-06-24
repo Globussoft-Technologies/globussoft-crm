@@ -5,7 +5,7 @@ import { fetchApi, getAuthToken } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { PRESETS as REG_FORM_PRESETS, listPresets as listRegFormPresets, defaultPropsFor as regFormDefaultPropsFor } from '../utils/travelRegistrationPresets';
 import LandingPageTemplateEditor from './LandingPageTemplateEditor';
-import LandingPageWanderluxEditor from './LandingPageWanderluxEditor';
+import LandingPageWanderluxEditor, { LayoutPanel as WanderluxLayoutPanel } from './LandingPageWanderluxEditor';
 import { TeeDecisionPanel } from '../components/TeeDecisionPanel';
 
 // Phase D1 — registered travel-page template ids. When a page's
@@ -699,7 +699,19 @@ export default function LandingPageBuilder() {
               />
             )}
           </div>
-          <aside style={{ width: '280px', borderLeft: '1px solid var(--border-color)', padding: '1rem', overflowY: 'auto', flexShrink: 0, fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+          <aside style={{ width: page && page.templateType === 'wanderlux-v1' ? '340px' : '280px', borderLeft: '1px solid var(--border-color)', padding: '1rem', overflowY: 'auto', flexShrink: 0, fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+            {/* Wanderlux-only: layout panel pinned at the top of the
+                aside so reorder / show-hide / add-custom-block is the
+                first thing operators see. Mirrors the manual builder's
+                left-rail Components palette, but on the right because
+                the main column is field-form-shaped (not canvas-shaped). */}
+            {page && page.templateType === 'wanderlux-v1' && (
+              <WanderluxLayoutPanel
+                cfg={templateContent || {}}
+                onChange={(next) => { setTemplateContent(next); setIsDirty(true); }}
+                isDirty={isDirty}
+              />
+            )}
             <h4 style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.5rem', borderBottom: '1px solid var(--border-color)', paddingBottom: '0.35rem' }}>Page</h4>
             <div style={{ lineHeight: 1.6 }}>
               <div><strong>Template:</strong> {page.templateType}</div>

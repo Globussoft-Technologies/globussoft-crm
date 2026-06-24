@@ -600,6 +600,54 @@
   top: 15px;
 }
 
+/* Programme "What You Gain" card list — title + short description per
+   item. Used when the bridge emits programme.rightItems (preserved
+   from the LLM's highlightsGrid.body). Falls back to .t-checks above
+   when only titles are available. */
+.trips-page .t-why-items {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 12px;
+}
+.trips-page .t-why-item {
+  background: #fbf9f4;
+  border: 1px solid #ece4d0;
+  border-radius: 6px;
+  padding: 14px 18px;
+  position: relative;
+  transition: box-shadow .18s ease, transform .18s ease, border-color .18s ease;
+}
+.trips-page .t-why-item::before {
+  content: "◆";
+  color: var(--red);
+  position: absolute;
+  left: -2px;
+  top: 50%;
+  transform: translate(-100%, -50%);
+  font-size: .68rem;
+  padding-right: 12px;
+}
+.trips-page .t-why-item:hover {
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .06);
+  transform: translateY(-1px);
+  border-color: #d9c89d;
+}
+.trips-page .t-why-item-title {
+  font-family: var(--serif);
+  font-weight: 600;
+  font-size: 1.02rem;
+  color: #1f2430;
+  letter-spacing: .01em;
+  margin-bottom: 4px;
+}
+.trips-page .t-why-item-desc {
+  font-size: .87rem;
+  line-height: 1.5;
+  color: #5a5246;
+}
+
 .trips-page .t-why-cta {
   display: flex;
   align-items: center;

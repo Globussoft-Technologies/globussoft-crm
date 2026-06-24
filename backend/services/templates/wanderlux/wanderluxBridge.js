@@ -118,6 +118,59 @@ function getBlock(blocks, type) {
 }
 
 /**
+ * Default hero value cards per sub-brand.
+ *
+ * These describe HOW THE COMPANY RUNS TRIPS — supervision ratio,
+ * cultural prep, structured independence — not the destination's
+ * landmarks. The destination-specific content lives in the Highlights
+ * (flip cards) section; this slot is for the company-level value-prop
+ * messaging.
+ *
+ * Previously the bridge seeded `hero.valueCards` from the LLM's
+ * `highlightsGrid.items[]` — meaning Assam pages showed "Kamakhya
+ * Temple / Kaziranga / Tea Gardens" as value cards, which read as
+ * "what we'll see" rather than "what you'll gain". Operators flagged
+ * this; the fix is to seed sensible per-sub-brand defaults and let
+ * the operator edit them via the Hero → Value cards editor.
+ *
+ * Keep these short (≤ 3 words title, ≤ 60 chars body) — the cards are
+ * narrow and overflow looks bad. Kanji / glyph is optional decoration.
+ */
+function defaultValueCardsFor(subBrand) {
+  switch ((subBrand || '').toLowerCase()) {
+    case 'tmc':
+      return [
+        { title: 'Global Confidence', body: 'Composure and adaptability in unfamiliar environments.' },
+        { title: 'Global Perspective', body: 'Exposure to structured global systems and ways of thinking.' },
+        { title: 'Cultural Awareness', body: 'Deep appreciation of host-country tradition and etiquette.' },
+        { title: 'Guided Independence', body: 'Freedom to explore within a safe, structured framework.' },
+      ];
+    case 'rfu':
+      return [
+        { title: 'Spiritual Focus', body: 'Every itinerary serves the ritual, not the sightseeing.' },
+        { title: 'Trained Mutawwifs', body: 'Scholarly guidance through each rite, in your language.' },
+        { title: 'Comfort, Always', body: 'Proximity stays, gentle pacing, accessible transport.' },
+        { title: 'No Hidden Costs', body: 'Single all-inclusive fee — visa, stays, transfers and ziyarah.' },
+      ];
+    case 'visasure':
+      return [
+        { title: 'Document Vetting', body: 'Every file checked against current consulate requirements.' },
+        { title: 'Appointment Slots', body: 'We hold and book your VFS slot the moment one opens.' },
+        { title: 'Status Tracking', body: 'WhatsApp updates from submission to passport delivery.' },
+        { title: 'Refusal Recovery', body: 'Re-application support if your first attempt is declined.' },
+      ];
+    case 'travelstall':
+    default:
+      return [
+        { title: 'Curated Stays', body: 'Hand-picked hotels and villas — never on price alone.' },
+        { title: 'Local Experts', body: 'Region-resident guides who go beyond the guidebook.' },
+        { title: 'Flexible Pacing', body: 'Time built in to wander, not rush from box to box.' },
+        { title: 'Always-on Support', body: 'A real human on call from departure to homecoming.' },
+      ];
+  }
+}
+
+/**
  * Main bridge entry point.
  *
  * @param {Array<Object>} blocks    — LLM block array
@@ -200,10 +253,12 @@ function mapBlocksToWanderluxConfig(blocks, input) {
         return acc;
       }, []),
       subhead: hero.subhead || metaDescription || '',
-      valueCards: highlightItems.slice(0, 4).map((it) => ({
-        title: it.title || '',
-        body: it.body || '',
-      })),
+      // Value cards seed from the per-sub-brand defaults (company
+      // approach — supervision, cultural prep, pacing — NOT the
+      // destination's landmarks). Destination-specific content lives
+      // in the Highlights flip-cards section further down. Operator
+      // edits these via the Hero → Value cards editor.
+      valueCards: defaultValueCardsFor(subBrand),
       ctaLabel: hero.ctaText || 'Reserve Your Spot',
       // imagePrompt drives the image-provider chain. Rich + specific.
       imagePrompt: vividPrompt(destination, 'iconic landmark and scenery', 'golden hour, dramatic sky'),

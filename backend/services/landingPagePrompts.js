@@ -169,7 +169,7 @@ function buildDestinationLandingPagePrompt(input) {
     '  { "type": "cityCards", "props": {',
     '      "title": <string, ≤60 chars>,',
     '      "subtitle": <string, ≤120 chars or empty>,',
-    '      "cards": [ { "tag": <string, ≤20 chars, uppercase>, "title": <≤40 chars>, "img": null, "body": <≤280 chars — 2-3 sentences describing what visitors experience>, "benefit": <≤140 chars — REQUIRED italic pull quote summarising the takeaway the traveller leaves with; must be a complete sentence, never empty> }, … ]  // 5 to 8 cards (more cards = smoother infinite-loop marquee on the wanderlux template; 3 cards made the loop wrap visibly on screen)',
+    '      "cards": [ { "tag": <string, ≤20 chars, uppercase>, "title": <≤40 chars>, "img": null, "body": <≤280 chars — 2-3 sentences describing what visitors experience>, "benefit": <≤140 chars — REQUIRED italic pull quote summarising the takeaway the traveller leaves with; must be a complete sentence, never empty> }, … ]  // 5 to 10 cards (more cards = smoother infinite-loop marquee; 8-10 is ideal for the educational + wanderlux templates)',
     '  }}',
     '',
     'safetyFeatures:',

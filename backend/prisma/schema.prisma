@@ -180,6 +180,8 @@ model Tenant {
   // #907 slice 4 — Itinerary template library (Pre-loaded ~50, expand over time).
   // Subsequent slices: CRUD route + admin library UI + "Create from template" hook.
   itineraryTemplates                  ItineraryTemplate[]
+  // Brochure Engine (agentic-orchcrm) — persisted deliverables per tenant.
+  travelBrochures                     TravelBrochure[]
   travelCostMasters                   TravelCostMaster[]
   // #907 slice 1 — Sightseeing master (destination → POIs). Future slices
   // wire CRUD route + admin UI page + Cost Master "6th category" surface.
@@ -644,7 +646,7 @@ model User {
 model Contact {
   id                    Int       @id @default(autoincrement())
   name                  String
-  email                 String?   // nullable (2026-06-19): WhatsApp auto-leads land WITHOUT an email — it's asked for in the chat + filled later. All other creators still set it. @@unique([email, tenantId]) tolerates multiple NULLs in MySQL.
+  email                 String? // nullable (2026-06-19): WhatsApp auto-leads land WITHOUT an email — it's asked for in the chat + filled later. All other creators still set it. @@unique([email, tenantId]) tolerates multiple NULLs in MySQL.
   emailVerifiedAt       DateTime? // set when a self-registered portal customer verified their email via OTP
   phone                 String?
   company               String?
@@ -5684,37 +5686,37 @@ model TravelDiagnosticQuestionBank {
 
 // ── Itinerary (multi-product trips: RFU + Travel Stall) ──────────────
 model Itinerary {
-  id                   Int             @id @default(autoincrement())
-  tenantId             Int             @default(1)
-  subBrand             String
-  contactId            Int
-  leadId               Int?
+  id                      Int             @id @default(autoincrement())
+  tenantId                Int             @default(1)
+  subBrand                String
+  contactId               Int
+  leadId                  Int?
   // status enum extended for Phase 2 50%-advance booking:
   //   draft | sent | revised | accepted | rejected | advance_paid | fully_paid
   // advance_paid means the 50% deposit has been recorded; fully_paid means
   // the balance has cleared. Existing draft/sent/etc. semantics unchanged.
-  status               String          @default("draft")
-  version              Int             @default(1)
-  parentItineraryId    Int? // version-history chain
+  status                  String          @default("draft")
+  version                 Int             @default(1)
+  parentItineraryId       Int? // version-history chain
   // Phase 2 PRD §6.4 — recommended product tier captured at itinerary
   // creation, defaulted from the contact's latest diagnostic
   // (entry | primary | premium). Nullable — TMC + Visa Sure don't carry a
   // tier today. Captured-at-creation so tier-vs-actual analytics stay
   // stable if the diagnostic is re-taken later.
-  productTier          String?
-  destination          String
-  startDate            DateTime?
-  endDate              DateTime?
-  pricingJson          String?         @db.Text // breakdown
-  totalAmount          Decimal?        @db.Decimal(15, 2)
-  currency             String          @default("INR")
+  productTier             String?
+  destination             String
+  startDate               DateTime?
+  endDate                 DateTime?
+  pricingJson             String?         @db.Text // breakdown
+  totalAmount             Decimal?        @db.Decimal(15, 2)
+  currency                String          @default("INR")
   // Number of travelers. totalAmount stores the GROUP total (sum of item line
   // totals); the per-person budget is derived as totalAmount / pax. Default 1.
-  pax                  Int             @default(1)
-  pdfUrl               String?
-  shareToken           String?         @unique // WhatsApp/email share link
-  shareExpiresAt       DateTime?
-  shareRevokedAt       DateTime?
+  pax                     Int             @default(1)
+  pdfUrl                  String?
+  shareToken              String?         @unique // WhatsApp/email share link
+  shareExpiresAt          DateTime?
+  shareRevokedAt          DateTime?
   // Phase 2 — 50% advance booking pattern (PRD §4.7 Travel Stall). All
   // three fields nullable + additive so existing Itinerary rows backfill
   // implicitly. advancePaidAmount is the rupee amount the customer has
@@ -5724,35 +5726,35 @@ model Itinerary {
   // Wati/payment-gateway integration arrives once Q9 / payment creds land;
   // until then the route's demo-mode endpoint accepts the reference
   // directly so the booking flow can be operated/tested end-to-end.
-  advancePaidAmount    Decimal?        @db.Decimal(15, 2)
-  advancePaidAt        DateTime?
-  paymentReference     String?
+  advancePaidAmount       Decimal?        @db.Decimal(15, 2)
+  advancePaidAt           DateTime?
+  paymentReference        String?
   // Pay-or-cancel deposit deadline (2026-06-16). Set by cron/paymentDeadlineEngine
   // when an `accepted`-but-unpaid itinerary passes its T-7 deposit deadline
   // (startDate - 7d) without the 50% advance — i.e. it's now overdue/at-risk.
   // Drives the advisor at-risk badge + the "review for cancellation" flag.
   // Nullable + additive; the engine never auto-changes status (advisor sets
   // "expired" manually). Cleared back to null if a late payment lands.
-  paymentOverdueAt     DateTime?
+  paymentOverdueAt        DateTime?
   // Customer's reason/feedback when they DECLINE an offer (PRD §6.1). Free
   // text the customer enters in the portal so the advisor knows what to
   // improve. Nullable; only set on a customer decline.
-  declineReason        String?         @db.Text
+  declineReason           String?         @db.Text
   // Customer-initiated CANCELLATION of a committed booking (2026-06-19). When a
   // customer cancels an accepted/paid trip from the portal, they give a reason
   // and the advisor is flagged to process a refund per the cancellation policy.
   // cancellationStatus: null | "requested" (customer asked) | "cancelled"
   // (advisor confirmed) | "refunded" (refund done). The engine never
   // auto-refunds — the advisor settles per policy. Additive + nullable.
-  cancellationStatus       String?
-  cancellationReason       String?     @db.Text
-  cancellationRequestedAt  DateTime?
+  cancellationStatus      String?
+  cancellationReason      String?         @db.Text
+  cancellationRequestedAt DateTime?
   // LLM-generated draft summary block. Persisted so re-renders don't burn
   // tokens. Operator triggers regeneration via POST /draft/regen. Stays
   // null until the first regen call lands; the customer-facing PDF + share
   // page render conditionally on it. Bulk-text task per PRD §9.1 (Gemini
   // Flash when Q11 keys arrive; stub-mode placeholder text until then).
-  draftSummary         String?         @db.Text
+  draftSummary            String?         @db.Text
   // G047 — Itinerary lineage (PRD_TRAVEL_ITINERARY_UPGRADES FR-3.1.e
   // "Cloned from template"). Nullable Int FK to ItineraryTemplate; set on the
   // clone-from-template path (POST /api/travel/itineraries with
@@ -5761,11 +5763,11 @@ model Itinerary {
   // no bless marker. We intentionally skip the back-relation here because
   // ItineraryTemplate doesn't need a `itineraries` collection at the ORM
   // layer — analytics queries read by templateId index instead.
-  clonedFromTemplateId Int?
-  items                ItineraryItem[]
-  tenant               Tenant          @relation(fields: [tenantId], references: [id], onDelete: Restrict)
-  createdAt            DateTime        @default(now())
-  updatedAt            DateTime        @updatedAt
+  clonedFromTemplateId    Int?
+  items                   ItineraryItem[]
+  tenant                  Tenant          @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  createdAt               DateTime        @default(now())
+  updatedAt               DateTime        @updatedAt
 
   @@index([tenantId, subBrand, contactId, status])
   @@index([tenantId, status])
@@ -5967,6 +5969,46 @@ model ItineraryTemplate {
   // tenantId-only + filter. Additive index, no bless marker required per
   // CLAUDE.md migration-safety rule.
   @@index([tenantId, isLatest, archivedAt])
+}
+
+// ─── Brochure Engine (agentic-orchcrm integration) ─────────────────────────
+// Persisted deliverable record for one orchestration run of the brochure
+// engine vendored under `agentic-orchcrm/`. The run itself is transient
+// (~30-60s, lives in the engine subprocess + in-memory RunStore per
+// INTEGRATION.md §5); this row is the durable handle so the operator can
+// list, filter, re-download, and attach the PDF to a Trip / Itinerary.
+//
+// `runId` is the engine-generated id (`br_<hex>`) — same value the SSE
+// stream + status endpoints key on. `pdfUrl` is the CRM-relative path under
+// /brochure-assets/ (a static mount in server.js pointing at the engine's
+// GENERATED_DIR). `billedUsd` is the cost reported by the engine's billing
+// layer (includes the BILLING_MARKUP multiplier from env).
+model TravelBrochure {
+  id           Int       @id @default(autoincrement())
+  tenantId     Int
+  userId       Int?
+  runId        String    @unique
+  sectorKey    String // "travel" | "report-writing" | ...
+  styleKey     String? // template/style key, sector-dependent
+  goal         String    @db.Text // the brief the operator submitted
+  status       String // "running" | "completed" | "failed"
+  pdfUrl       String?   @db.Text // /brochure-assets/<file>.pdf (when status=completed)
+  billedUsd    Decimal?  @db.Decimal(10, 6)
+  errorMessage String?   @db.Text // populated when status=failed
+  tripId       Int? // optional attach to a TMC trip
+  itineraryId  Int? // optional attach to an Itinerary
+  brandJson    String?   @db.LongText // serialized BrandKit snapshot for audit / replay
+  completedAt  DateTime?
+  archivedAt   DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, createdAt])
+  @@index([tenantId, status])
+  @@index([tenantId, tripId])
+  @@index([tenantId, itineraryId])
 }
 
 model TravelSeasonCalendar {

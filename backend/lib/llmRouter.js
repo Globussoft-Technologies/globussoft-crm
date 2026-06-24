@@ -698,7 +698,6 @@ async function callOpenAICompatible(
       model: modelId,
       max_tokens: maxTokens,
       messages: [{ role: "system", content: system }, { role: "user", content: user }],
-      ...extraBody,
     }),
   });
   const text = (
@@ -751,51 +750,6 @@ async function callGeminiOnce(modelId, system, user, apiKey, maxTokens) {
 // 429 quota spikes, 500/502/503 overloads. Permanent errors (400/401/403/404)
 // fall through and throw immediately so we don't waste attempts.
 const GEMINI_TRANSIENT_RE = /\b(429|500|502|503)\b|unavailable|overload|high demand|resource[_ ]exhausted|try again/i;
-
-// Resolve the primary model + a fallback chain. When the primary model is
-// overloaded (503) or quota-capped (429) — which Gemini Flash hits often under
-// load — we automatically try a lighter sibling so the operator still gets a
-// REAL AI itinerary instead of the deterministic skeleton. Env-overridable via
-// LLM_GEMINI_FALLBACK_MODELS (comma-separated).
-function geminiModelChain(primaryId) {
-  const raw = process.env.LLM_GEMINI_FALLBACK_MODELS;
-  const fallbacks = raw && raw.trim()
-    ? raw.split(",").map((s) => s.trim()).filter(Boolean)
-    : ["gemini-2.5-flash-lite", "gemini-2.0-flash"];
-  return [primaryId, ...fallbacks].filter((m, i, a) => m && a.indexOf(m) === i);
-}
-
-async function callGemini(modelId, system, user, apiKey, maxTokens) {
-  const chain = geminiModelChain(modelId);
-  const attemptsPerModel = 2;
-  let lastErr;
-  for (const m of chain) {
-    for (let attempt = 1; attempt <= attemptsPerModel; attempt += 1) {
-      try {
-        const out = await callGeminiOnce(m, system, user, apiKey, maxTokens);
-        if (m !== modelId) {
-          console.warn(`[llm-router] gemini: '${modelId}' unavailable, succeeded on fallback '${m}'`);
-        }
-        return out;
-      } catch (e) {
-        lastErr = e;
-        const msg = String(e && e.message);
-        // Permanent error (bad key, bad request, model not found) → stop now.
-        if (!GEMINI_TRANSIENT_RE.test(msg)) throw e;
-        // A 429 quota error won't clear in a few hundred ms (Google asks for a
-        // ~40s wait) — don't burn a same-model retry; jump to the next model,
-        // which may have its own quota. Only 5xx overloads get a same-model retry.
-        const isQuota = /\b429\b|quota|resource[_ ]exhausted/i.test(msg);
-        if (isQuota) break;
-        if (attempt < attemptsPerModel) {
-          await new Promise((r) => setTimeout(r, 600 * attempt));
-        }
-      }
-    }
-    console.warn(`[llm-router] gemini: '${m}' still failing after ${attemptsPerModel} attempts — trying next model`);
-  }
-  throw lastErr || new Error("gemini call failed");
-}
 
 // Resolve the primary model + a fallback chain. When the primary model is
 // overloaded (503) or quota-capped (429) — which Gemini Flash hits often under

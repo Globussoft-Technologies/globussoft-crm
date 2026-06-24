@@ -4,23 +4,33 @@ const path = require("path");
 // backend/.env. Load root first (no-op if absent), then backend/.env with
 // override so backend/.env wins on duplicates. Either file can be empty;
 // system env still wins over both if exported in the shell.
-require("dotenv").config({ path: path.resolve(__dirname, "../.env"), override: false });
-require("dotenv").config({ path: path.resolve(__dirname, ".env"), override: true });
+require("dotenv").config({
+  path: path.resolve(__dirname, "../.env"),
+  override: false,
+});
+require("dotenv").config({
+  path: path.resolve(__dirname, ".env"),
+  override: true,
+});
 // One-line startup probe so an operator can confirm AI keys actually
 // loaded without grepping logs for fail-soft messages later.
 console.log(
   `[env] AI keys: GEMINI=${process.env.GEMINI_API_KEY ? "set" : "MISSING"} ` +
-  `OPENAI=${process.env.OPENAI_API_KEY ? "set" : "MISSING"}`,
+    `OPENAI=${process.env.OPENAI_API_KEY ? "set" : "MISSING"}`,
 );
 
 // Fail fast in production if JWT secrets are missing — refuses to boot rather than
 // silently fall back to the dev secret baked into the source.
 if (process.env.NODE_ENV === "production") {
   if (!process.env.JWT_SECRET) {
-    throw new Error("FATAL: JWT_SECRET must be set in production. Refusing to start with the dev fallback secret.");
+    throw new Error(
+      "FATAL: JWT_SECRET must be set in production. Refusing to start with the dev fallback secret.",
+    );
   }
   if (!process.env.PORTAL_JWT_SECRET) {
-    console.warn("[startup] PORTAL_JWT_SECRET not set — patient portal tokens will reuse JWT_SECRET. Set a separate value for defense in depth.");
+    console.warn(
+      "[startup] PORTAL_JWT_SECRET not set — patient portal tokens will reuse JWT_SECRET. Set a separate value for defense in depth.",
+    );
   }
 }
 
@@ -67,7 +77,11 @@ const { validateNumericId } = require("./middleware/validateNumericId");
   // the param callback to every Router we construct from now on.
   express.Router = function patchedRouter(...args) {
     const r = _RouterFactory.apply(this, args);
-    try { r.param("id", validateNumericId); } catch (_) { /* defensive */ }
+    try {
+      r.param("id", validateNumericId);
+    } catch (_) {
+      /* defensive */
+    }
     return r;
   };
   // Preserve any static props the factory carries so `express.Router.someProp`
@@ -79,7 +93,7 @@ const { verifyToken } = require("./middleware/auth");
 const checkSubscription = require("./middleware/checkSubscription");
 
 const app = express();
-app.set('trust proxy', 1); // trust first proxy (Nginx)
+app.set("trust proxy", 1); // trust first proxy (Nginx)
 const server = http.createServer(app);
 
 // ── Express 4 Async Error Patch ─────────────────────────────────────
@@ -153,22 +167,27 @@ const ALLOWED_ORIGINS = [
   "http://127.0.0.1:8080",
   ...(process.env.FRONTEND_URL ? [process.env.FRONTEND_URL] : []),
   ...(process.env.CORS_ALLOWED_ORIGINS
-    ? process.env.CORS_ALLOWED_ORIGINS.split(",").map((s) => s.trim()).filter(Boolean)
+    ? process.env.CORS_ALLOWED_ORIGINS.split(",")
+        .map((s) => s.trim())
+        .filter(Boolean)
     : []),
 ];
-app.use(cors({
-  origin: (origin, callback) => {
-    // Allow requests with no origin (server-to-server, curl, Postman)
-    if (!origin || ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
-    // #657 — for unknown origins, do NOT error-out (which sends a 500
-    // and breaks the originCheck layer below). Just decline to set the
-    // Access-Control-Allow-Origin response header — the browser will
-    // refuse to read the response, AND the state-changing POSTs are
-    // rejected with a proper 403 by originCheck (next middleware).
-    callback(null, false);
-  },
-  credentials: true,
-}));
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      // Allow requests with no origin (server-to-server, curl, Postman)
+      if (!origin || ALLOWED_ORIGINS.includes(origin))
+        return callback(null, true);
+      // #657 — for unknown origins, do NOT error-out (which sends a 500
+      // and breaks the originCheck layer below). Just decline to set the
+      // Access-Control-Allow-Origin response header — the browser will
+      // refuse to read the response, AND the state-changing POSTs are
+      // rejected with a proper 403 by originCheck (next middleware).
+      callback(null, false);
+    },
+    credentials: true,
+  }),
+);
 // ─── WhatsApp webhook (P1 — must mount BEFORE express.json) ──────────────
 // Meta signs the raw request body with HMAC-SHA-256 using META_APP_SECRET.
 // Any JSON re-serialization would change the byte stream and break the
@@ -190,7 +209,10 @@ app.use(cors({
 // the webhook router → `req.io` was undefined inside handleMessagesEvent
 // → emit silently no-op'd → frontend never received the
 // `whatsapp:received` event → users had to refresh manually.
-app.use((req, _res, next) => { req.io = io; next(); });
+app.use((req, _res, next) => {
+  req.io = io;
+  next();
+});
 
 app.use("/api/whatsapp/webhook", require("./routes/whatsapp_webhook"));
 
@@ -202,15 +224,24 @@ app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
 // Security middleware
-const cookieParser = require('cookie-parser');
-const { attachNonce, helmetMiddleware, helmetStrictReportOnlyMiddleware, permissionsPolicyMiddleware, sanitizeBody, stripTenantOverride, allowIframeEmbedding, readTenantEmbedAllowlist } = require('./middleware/security');
-const { originCheck } = require('./middleware/originCheck');
+const cookieParser = require("cookie-parser");
+const {
+  attachNonce,
+  helmetMiddleware,
+  helmetStrictReportOnlyMiddleware,
+  permissionsPolicyMiddleware,
+  sanitizeBody,
+  stripTenantOverride,
+  allowIframeEmbedding,
+  readTenantEmbedAllowlist,
+} = require("./middleware/security");
+const { originCheck } = require("./middleware/originCheck");
 // #917 slice S35 (FR-3.X) — CSP-nonce static-file middleware. Substitutes
 // `__CSP_NONCE__` placeholders in frontend/index.html with the per-request
 // nonce minted by attachNonce so the strict Report-Only CSP header's
 // `'nonce-<base64>'` source-list value matches what the browser sees on the
 // served inline `<script>` / `<style>` / `<meta name="csp-nonce">` tags.
-const cspNonceStaticMiddleware = require('./middleware/cspNonceStaticMiddleware');
+const cspNonceStaticMiddleware = require("./middleware/cspNonceStaticMiddleware");
 // #917 slice S1 (FR-3.2) — mint a per-request CSP nonce BEFORE the strict
 // Report-Only CSP middleware runs. The CSP function-directives read
 // res.locals.cspNonce to advertise `'nonce-<base64>'` on script-src/style-src.
@@ -267,7 +298,9 @@ const loginIpLimiter = rateLimit({
   legacyHeaders: false,
   skipSuccessfulRequests: true,
   keyGenerator: (req, res) => ipKeyGenerator(req, res),
-  message: { error: "Too many login attempts from this IP, please try again later." },
+  message: {
+    error: "Too many login attempts from this IP, please try again later.",
+  },
   validate: { trustProxy: false, xForwardedForHeader: false },
 });
 const loginUsernameLimiter = rateLimit({
@@ -289,13 +322,20 @@ const loginUsernameLimiter = rateLimit({
     // collapse all anonymous traffic onto a single shared bucket.
     return email || `noemail:${ipKeyGenerator(req, res)}`;
   },
-  message: { error: "Too many login attempts for this account, please try again later." },
+  message: {
+    error: "Too many login attempts for this account, please try again later.",
+  },
   validate: { trustProxy: false, xForwardedForHeader: false },
 });
 // Order matters: per-IP first (cheap, blocks scrapers), per-username second
 // (catches distributed attacks against one account). Both must pass before
 // the route handler runs. Scoped to POST so OPTIONS preflight isn't counted.
-app.post("/api/auth/login", loginIpLimiter, loginUsernameLimiter, (req, res, next) => next());
+app.post(
+  "/api/auth/login",
+  loginIpLimiter,
+  loginUsernameLimiter,
+  (req, res, next) => next(),
+);
 
 // #531 (HI-02 mitigation): per-IP and per-email rate limiting on
 // /api/auth/forgot-password. Mirrors the login limiter pattern. Without
@@ -316,7 +356,10 @@ const forgotPasswordIpLimiter = rateLimit({
   standardHeaders: "draft-7",
   legacyHeaders: false,
   keyGenerator: (req, res) => ipKeyGenerator(req, res),
-  message: { error: "Too many password-reset requests from this IP, please try again later." },
+  message: {
+    error:
+      "Too many password-reset requests from this IP, please try again later.",
+  },
   validate: { trustProxy: false, xForwardedForHeader: false },
 });
 const forgotPasswordEmailLimiter = rateLimit({
@@ -328,10 +371,18 @@ const forgotPasswordEmailLimiter = rateLimit({
     const email = (req.body?.email || "").toLowerCase().trim();
     return email || `noemail:${ipKeyGenerator(req, res)}`;
   },
-  message: { error: "Too many password-reset requests for this email, please try again later." },
+  message: {
+    error:
+      "Too many password-reset requests for this email, please try again later.",
+  },
   validate: { trustProxy: false, xForwardedForHeader: false },
 });
-app.post("/api/auth/forgot-password", forgotPasswordIpLimiter, forgotPasswordEmailLimiter, (req, res, next) => next());
+app.post(
+  "/api/auth/forgot-password",
+  forgotPasswordIpLimiter,
+  forgotPasswordEmailLimiter,
+  (req, res, next) => next(),
+);
 
 // Email-existence pre-check used by the marketing /get-started wizard.
 // Moderate limits: this is a normal onboarding step, but we still cap
@@ -354,10 +405,17 @@ const checkEmailEmailLimiter = rateLimit({
     const email = (req.body?.email || "").toLowerCase().trim();
     return email || `noemail:${ipKeyGenerator(req, res)}`;
   },
-  message: { error: "Too many requests for this email, please try again later." },
+  message: {
+    error: "Too many requests for this email, please try again later.",
+  },
   validate: { trustProxy: false, xForwardedForHeader: false },
 });
-app.post("/api/auth/check-email", checkEmailIpLimiter, checkEmailEmailLimiter, (req, res, next) => next());
+app.post(
+  "/api/auth/check-email",
+  checkEmailIpLimiter,
+  checkEmailEmailLimiter,
+  (req, res, next) => next(),
+);
 
 app.use("/api", apiLimiter);
 
@@ -410,10 +468,18 @@ app.use("/api", (req, res, next) => {
   if (!["POST", "PUT", "PATCH"].includes(req.method)) return next();
   const lenHeader = req.headers["content-length"];
   if (!lenHeader || lenHeader === "0") return next();
-  const ct = (req.headers["content-type"] || "").split(";")[0].trim().toLowerCase();
+  const ct = (req.headers["content-type"] || "")
+    .split(";")[0]
+    .trim()
+    .toLowerCase();
   if (!ct) return next(); // missing → back-compat pass-through
   if (SUPPORTED_CONTENT_TYPES.includes(ct)) return next();
-  if (CONTENT_TYPE_GUARD_EXCLUDE_PREFIXES.some((p) => req.originalUrl.startsWith(p))) return next();
+  if (
+    CONTENT_TYPE_GUARD_EXCLUDE_PREFIXES.some((p) =>
+      req.originalUrl.startsWith(p),
+    )
+  )
+    return next();
   return res.status(415).json({
     error: "Unsupported Media Type",
     code: "UNSUPPORTED_MEDIA_TYPE",
@@ -423,10 +489,17 @@ app.use("/api", (req, res, next) => {
 });
 
 const io = new Server(server, { cors: { origin: "*" } });
-const presenceColors = ['#ef4444', '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899'];
+const presenceColors = [
+  "#ef4444",
+  "#3b82f6",
+  "#10b981",
+  "#f59e0b",
+  "#8b5cf6",
+  "#ec4899",
+];
 
 // Set global io reference for eventBus notifications
-const { setIO } = require('./lib/eventBus');
+const { setIO } = require("./lib/eventBus");
 setIO(io);
 
 // Travel WhatsApp Web (QR-scan) transport (Q9) — hand the socket server to the
@@ -436,9 +509,12 @@ setIO(io);
 // first connect after a restart. Wrapped defensively so a transport hiccup
 // never blocks server boot.
 try {
-  require('./services/whatsappWebClient').init(io);
+  require("./services/whatsappWebClient").init(io);
 } catch (e) {
-  console.error('[server] whatsappWebClient init failed (non-fatal):', e.message);
+  console.error(
+    "[server] whatsappWebClient init failed (non-fatal):",
+    e.message,
+  );
 }
 
 // req.io is now attached at the top of the middleware chain (above the
@@ -448,15 +524,22 @@ try {
 io.on("connection", (socket) => {
   console.log(`[Socket] Client connected: ${socket.id}`);
 
-  socket.on('join_presence', (data) => {
-    socket.userData = { id: socket.id, name: data.name, color: presenceColors[Math.floor(Math.random() * presenceColors.length)] };
+  socket.on("join_presence", (data) => {
+    socket.userData = {
+      id: socket.id,
+      name: data.name,
+      color: presenceColors[Math.floor(Math.random() * presenceColors.length)],
+    };
   });
 
-  socket.on('mouse_move', (data) => {
+  socket.on("mouse_move", (data) => {
     if (!socket.userData) return;
-    socket.broadcast.emit('cursor_update', {
-      id: socket.id, rx: data.rx, ry: data.ry,
-      name: socket.userData.name, color: socket.userData.color
+    socket.broadcast.emit("cursor_update", {
+      id: socket.id,
+      rx: data.rx,
+      ry: data.ry,
+      name: socket.userData.name,
+      color: socket.userData.color,
     });
   });
 
@@ -466,7 +549,7 @@ io.on("connection", (socket) => {
 
   socket.on("disconnect", () => {
     console.log(`[Socket] Client disconnected: ${socket.id}`);
-    io.emit('user_left', socket.id);
+    io.emit("user_left", socket.id);
   });
 });
 
@@ -522,7 +605,10 @@ const smsRoutes = require("./routes/sms");
 const whatsappRoutes = require("./routes/whatsapp");
 const telephonyRoutes = require("./routes/telephony");
 const pushRoutes = require("./routes/push");
-const { router: landingPagesRoutes, publicRouter: landingPagesPublic } = require("./routes/landing_pages");
+const {
+  router: landingPagesRoutes,
+  publicRouter: landingPagesPublic,
+} = require("./routes/landing_pages");
 const tenantsRoutes = require("./routes/tenants");
 const tenantSettingsRoutes = require("./routes/tenant_settings");
 // #870 — per-user preference surface (theme persistence for cross-device roaming).
@@ -631,6 +717,10 @@ const callifiedRoutes = require("./routes/callified");
 // wrapper in the cred-stub series (4/4 — adsgpt, ratehawk, callified, this).
 const bookingExpediaRoutes = require("./routes/booking_expedia");
 const travelMicrositesRoutes = require("./routes/travel_microsites");
+// Brochure Engine — wraps the vendored agentic-orchcrm engine behind the
+// CRM's JWT + tenant guard. Subprocess-based bridge (see
+// services/brochureEngineBridge.js) keeps the ESM/CJS boundary clean.
+const travelBrochuresRoutes = require("./routes/travel_brochures");
 const travelRfuProfilesRoutes = require("./routes/travel_rfu_profiles");
 const travelReligiousPacketsRoutes = require("./routes/travel_religious_packets");
 const travelPricingRoutes = require("./routes/travel_pricing");
@@ -721,14 +811,18 @@ const wellnessCsvRoutes = require("./routes/wellnessCsv");
 // whole point. The Nginx site config additionally proxies `/api-docs*`
 // to the backend (commit applied via scripts/apply-api-docs-nginx.py
 // closing #542).
-const swaggerDocument = YAML.load(path.join(__dirname, 'swagger.yaml'));
-app.get('/api-docs/swagger.json', (req, res) => {
+const swaggerDocument = YAML.load(path.join(__dirname, "swagger.yaml"));
+app.get("/api-docs/swagger.json", (req, res) => {
   res.json(swaggerDocument);
 });
-app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument, {
-  customCss: '.swagger-ui .topbar { display: none }',
-  customSiteTitle: "Globussoft CRM Docs"
-}));
+app.use(
+  "/api-docs",
+  swaggerUi.serve,
+  swaggerUi.setup(swaggerDocument, {
+    customCss: ".swagger-ui .topbar { display: none }",
+    customSiteTitle: "Globussoft CRM Docs",
+  }),
+);
 
 // #917 slice S119 (FR-3.X) — wire S35's cspNonceStaticMiddleware. Mounted
 // here (AFTER swagger-ui's `/api-docs` mount) because the middleware's
@@ -759,12 +853,88 @@ app.use("/api", (req, res, next) => {
   // promotes a contact to a portal user. Removing the entry routes the
   // unauthenticated case through the global guard's 401 (RFC 7235), and
   // the authenticated case continues unaffected.
-  const openPaths = ["/auth/login", "/auth/signup", "/auth/register", "/auth/customer/register", "/auth/email-otp", "/auth/check-email", "/auth/public/tenants", "/auth/forgot-password", "/auth/reset-password", "/auth/2fa/verify", "/health", "/marketplace-leads/webhook", "/sms/webhook", "/whatsapp/webhook", "/telephony/webhook", "/push/subscribe/visitor", "/push/vapid-key", "/communications/track/", "/sso/google/callback", "/sso/microsoft/callback", "/sso/google/start", "/sso/microsoft/start", "/email/inbound", "/calendar/google/callback", "/gmail/callback", "/calendar/outlook/callback", "/voice/webhook", "/portal/login", "/portal/register", "/portal/forgot", "/portal/reset", "/portal/me", "/portal/tickets", "/portal/invoices", "/portal/contracts", "/portal/travel", "/portal/kyc", "/signatures/sign", "/surveys/respond", "/surveys/public", "/chatbots/chat", "/web-visitors/track", "/payments/webhook", "/accounting/webhook", "/scim/v2", "/booking-pages/public", "/knowledge-base/public", "/live-chat/visitor", "/document-views/track", "/zapier/webhook", "/marketing/submit", "/v1/external", "/v1/voyagr", "/v1/flight-plugin", "/wellness/public", "/wellness/portal", "/attendance/biometric/webhook", "/travel/microsites/public", "/travel/diagnostics/public", "/travel/itineraries/public", "/travel/reviews/public", "/travel/inbound/leads", "/travel/whatsapp/webhook", "/travel/whatsapp/media", "/v1/flyers/public", "/billing/public", "/security/csp-report", "/privacy-policy", "/deleted-account-policy", "/terms-and-conditions", "/legal", "/landing-pages/public", "/landing-pages/wanderlux-static"];
-  if (openPaths.some(p => req.path.startsWith(p))) return next();
+  const openPaths = [
+    "/auth/login",
+    "/auth/signup",
+    "/auth/register",
+    "/auth/customer/register",
+    "/auth/email-otp",
+    "/auth/check-email",
+    "/auth/public/tenants",
+    "/auth/forgot-password",
+    "/auth/reset-password",
+    "/auth/2fa/verify",
+    "/health",
+    "/marketplace-leads/webhook",
+    "/sms/webhook",
+    "/whatsapp/webhook",
+    "/telephony/webhook",
+    "/push/subscribe/visitor",
+    "/push/vapid-key",
+    "/communications/track/",
+    "/sso/google/callback",
+    "/sso/microsoft/callback",
+    "/sso/google/start",
+    "/sso/microsoft/start",
+    "/email/inbound",
+    "/calendar/google/callback",
+    "/gmail/callback",
+    "/calendar/outlook/callback",
+    "/voice/webhook",
+    "/portal/login",
+    "/portal/register",
+    "/portal/forgot",
+    "/portal/reset",
+    "/portal/me",
+    "/portal/tickets",
+    "/portal/invoices",
+    "/portal/contracts",
+    "/portal/travel",
+    "/portal/kyc",
+    "/signatures/sign",
+    "/surveys/respond",
+    "/surveys/public",
+    "/chatbots/chat",
+    "/web-visitors/track",
+    "/payments/webhook",
+    "/accounting/webhook",
+    "/scim/v2",
+    "/booking-pages/public",
+    "/knowledge-base/public",
+    "/live-chat/visitor",
+    "/document-views/track",
+    "/zapier/webhook",
+    "/marketing/submit",
+    "/v1/external",
+    "/v1/voyagr",
+    "/v1/flight-plugin",
+    "/wellness/public",
+    "/wellness/portal",
+    "/attendance/biometric/webhook",
+    "/travel/microsites/public",
+    "/travel/diagnostics/public",
+    "/travel/itineraries/public",
+    "/travel/reviews/public",
+    "/travel/inbound/leads",
+    "/travel/whatsapp/webhook",
+    "/travel/whatsapp/media",
+    "/v1/flyers/public",
+    "/billing/public",
+    "/security/csp-report",
+    "/privacy-policy",
+    "/deleted-account-policy",
+    "/terms-and-conditions",
+    "/legal",
+    "/landing-pages/public",
+    "/landing-pages/wanderlux-static",
+    "/brochure-assets",
+  ];
+  if (openPaths.some((p) => req.path.startsWith(p))) return next();
   // Public marketing catalog — the /pricing page hits GET /subscriptions/plans
   // anonymously. Admin CRUD (POST/PUT/DELETE + GET /plans/admin) stays gated
   // by the route-level verifyToken+verifyRole middleware below.
-  if (req.method === 'GET' && req.path === '/subscriptions/plans') return next();
+  if (req.method === "GET" && req.path === "/subscriptions/plans")
+    return next();
   // The travel itinerary PDF is opened in a NEW TAB via a plain <a href>
   // (no fetch → no Authorization header), so the frontend passes the bearer
   // JWT as a ?_t= query param. Promote it to the Authorization header so
@@ -772,12 +942,29 @@ app.use("/api", (req, res, next) => {
   // this does NOT broaden token-in-URL acceptance for any other route, and
   // verifyToken still fully validates the token (no auth bypass).
   if (
-    req.method === 'GET' &&
+    req.method === "GET" &&
     !req.headers.authorization &&
-    req.query && req.query._t &&
+    req.query &&
+    req.query._t &&
     /^\/travel\/itineraries\/\d+\/pdf$/.test(req.path)
   ) {
     req.headers.authorization = `Bearer ${req.query._t}`;
+  }
+  // Brochure Engine SSE stream — EventSource (the browser SSE client)
+  // intentionally rejects custom request headers, so the frontend passes
+  // the JWT on the URL as ?token=<jwt> when subscribing to the live trace.
+  // Same pattern + same trust boundary as the itinerary PDF case above:
+  // promote the query param to the Authorization header so the normal
+  // verifyToken flow validates it. Tightly scoped to GET + the exact route
+  // shape so no other /travel/brochures sub-route accepts token-in-URL.
+  if (
+    req.method === "GET" &&
+    !req.headers.authorization &&
+    req.query &&
+    req.query.token &&
+    /^\/travel\/brochures\/runs\/[^/]+\/stream$/.test(req.path)
+  ) {
+    req.headers.authorization = `Bearer ${req.query.token}`;
   }
   // TMC public readiness PDF — `/travel/diagnostics/:id/readiness-report.pdf`
   // is designed public per PRD §5.1 DD-5.2 (the school clicks the report-
@@ -786,7 +973,11 @@ app.use("/api", (req, res, next) => {
   // on the route shape lets it through without auth.  Tightly scoped to
   // GET + the exact suffix so other /travel/diagnostics/:id sub-routes
   // stay auth-gated.
-  if (req.method === 'GET' && /^\/travel\/diagnostics\/\d+\/readiness-report\.pdf$/.test(req.path)) return next();
+  if (
+    req.method === "GET" &&
+    /^\/travel\/diagnostics\/\d+\/readiness-report\.pdf$/.test(req.path)
+  )
+    return next();
   // D1 — landing-page preview is opened in a NEW TAB via window.open()
   // (no fetch → no Authorization header), authorised by a short-lived
   // single-purpose `?previewToken=<jwt>` query param. The route handler
@@ -797,12 +988,23 @@ app.use("/api", (req, res, next) => {
   // route do its own three-mode auth. Tightly scoped to GET + the
   // exact route shape so other /landing-pages/:id/* sub-routes stay
   // gated by the global guard.
-  if (req.method === 'GET' && /^\/landing-pages\/\d+\/preview$/.test(req.path)) return next();
+  if (req.method === "GET" && /^\/landing-pages\/\d+\/preview$/.test(req.path))
+    return next();
   // Slice C9 — TravelQuote customer-share landing endpoints (PRD §3.7).
   // Public, JWT-gated by `:shareToken` segment (verified inside the route).
   // GET = read-only envelope; POST = accept|reject|counter customer actions.
-  if (req.method === 'GET' && /^\/travel\/quotes\/public\/quote\/[^/]+$/.test(req.path)) return next();
-  if (req.method === 'POST' && /^\/travel\/quotes\/public\/quote\/[^/]+\/(accept|reject|counter)$/.test(req.path)) return next();
+  if (
+    req.method === "GET" &&
+    /^\/travel\/quotes\/public\/quote\/[^/]+$/.test(req.path)
+  )
+    return next();
+  if (
+    req.method === "POST" &&
+    /^\/travel\/quotes\/public\/quote\/[^/]+\/(accept|reject|counter)$/.test(
+      req.path,
+    )
+  )
+    return next();
   // G092 (PRD_TRAVEL_PER_SUBBRAND_BRANDING FR-3.3.f) — Customer-portal
   // brand-kit consumer. The portal (TravelCustomerPortal.jsx) is auth-
   // gated by a separate PORTAL JWT but reads /api/brand-kits/by-subbrand/:sub
@@ -812,7 +1014,11 @@ app.use("/api", (req, res, next) => {
   // the field filter. Sub-path is also reachable by the public microsite
   // and embed-widget consumers (G093 / G095) for the same reason. GET
   // only; mutations stay role-gated below.
-  if (req.method === 'GET' && /^\/brand-kits\/by-subbrand\/[^/]+$/.test(req.path)) return next();
+  if (
+    req.method === "GET" &&
+    /^\/brand-kits\/by-subbrand\/[^/]+$/.test(req.path)
+  )
+    return next();
   verifyToken(req, res, (err) => {
     if (err) return next(err);
     checkSubscription(req, res, next);
@@ -820,14 +1026,14 @@ app.use("/api", (req, res, next) => {
 });
 
 // Strip dangerous fields (id, createdAt, updatedAt, tenantId, userId) from all request bodies
-const { stripDangerous } = require('./middleware/validateInput');
+const { stripDangerous } = require("./middleware/validateInput");
 app.use(stripDangerous);
 
 // #426: scrub credential-shaped fields (currently: portalPasswordHash) from
 // every API response payload — wraps res.json globally so direct queries AND
 // nested `include: { contact: true }` are both covered. See middleware
 // header for the full deny-list and extension protocol.
-const { scrubResponse } = require('./middleware/scrubResponse');
+const { scrubResponse } = require("./middleware/scrubResponse");
 app.use(scrubResponse);
 
 // Apply the #423 numeric-id validator to the app itself too — covers any
@@ -1009,7 +1215,10 @@ app.use("/api/travel", travelPurchaseOrdersRoutes);
 // `:id` capture on `/quotes/:id` which would otherwise match `/quotes/public/...`
 // at validateNumericId and 400 INVALID_ID before reaching the public router.
 app.use("/api/travel/quotes/public", require("./routes/travel_quotes_public"));
-app.use("/api/travel/quote-templates", require("./routes/travel_quote_templates"));
+app.use(
+  "/api/travel/quote-templates",
+  require("./routes/travel_quote_templates"),
+);
 // Mount at "/api/travel" (NOT "/api/travel/cancellation-policies"): the
 // router already carries the full "/cancellation-policies" path segment on
 // every route internally (matching its vitest mount `app.use('/api/travel',
@@ -1080,6 +1289,9 @@ app.use("/api/ratehawk", ratehawkRoutes);
 app.use("/api/callified", callifiedRoutes);
 app.use("/api/booking-expedia", bookingExpediaRoutes);
 app.use("/api/travel", travelMicrositesRoutes);
+// Brochure Engine — paths internally start with /brochures; route file owns
+// verifyToken + requireTravelTenant + requirePermission per endpoint.
+app.use("/api/travel", travelBrochuresRoutes);
 app.use("/api/travel", travelRfuProfilesRoutes);
 app.use("/api/travel", travelReligiousPacketsRoutes);
 app.use("/api/travel", travelPricingRoutes);
@@ -1094,15 +1306,24 @@ app.use("/api/travel", require("./routes/travel_search"));
 // /api/travel/inbound/leads/:channel handler so both surfaces share one
 // envelope, idempotency contract, Touchpoint write, and cooldown gate.
 app.use("/api/leads", require("./routes/leads_intake"));
-app.use("/api/travel/itinerary-templates", require("./routes/travel_itinerary_templates"));
+app.use(
+  "/api/travel/itinerary-templates",
+  require("./routes/travel_itinerary_templates"),
+);
 app.use("/api/travel/sightseeing", require("./routes/travel_sightseeing"));
 app.use("/api/travel/pois", require("./routes/travel_pois"));
 app.use("/api/embassy-rules", embassyRulesRoutes);
 app.use("/api/travel-curriculum", travelCurriculumRoutes);
 app.use("/api/travel-school-terms", travelSchoolTermRoutes);
-app.use("/api/travel-personalised-destinations", travelPersonalisedDestinationsRoutes);
+app.use(
+  "/api/travel-personalised-destinations",
+  travelPersonalisedDestinationsRoutes,
+);
 app.use("/api/travel-tmc-catalogue", require("./routes/travel_tmc_catalogue"));
-app.use("/api/travel/engine-weights", require("./routes/travel_engine_weights"));
+app.use(
+  "/api/travel/engine-weights",
+  require("./routes/travel_engine_weights"),
+);
 app.use("/api/tenant/sub-brand-themes", subBrandThemesRoutes);
 // Wellness vertical
 app.use("/api/wellness", wellnessRoutes);
@@ -1300,7 +1521,14 @@ app.get("/embed/lead-form.html", async (req, res, next) => {
     }
     // Pass through to the static-file fallback (Nginx in prod; for the
     // local stack the file lives at frontend/public/embed/lead-form.html).
-    const embedPath = path.join(__dirname, "..", "frontend", "public", "embed", "lead-form.html");
+    const embedPath = path.join(
+      __dirname,
+      "..",
+      "frontend",
+      "public",
+      "embed",
+      "lead-form.html",
+    );
     return res.sendFile(embedPath, (err) => {
       if (err) next();
     });
@@ -1330,13 +1558,31 @@ app.get("/embed/lead-form.html", async (req, res, next) => {
 // BEFORE the static mounts so it intercepts first.
 const visaDocStore = require("./lib/visaDocStore");
 const gateVisaDocs = (req, res, next) => {
-  if (visaDocStore.verifyDiskToken(path.basename(req.path || ""), req.query.t)) return next();
-  return res.status(403).json({ error: "Forbidden — open this document from your portal or the advisor app." });
+  if (visaDocStore.verifyDiskToken(path.basename(req.path || ""), req.query.t))
+    return next();
+  return res
+    .status(403)
+    .json({
+      error:
+        "Forbidden — open this document from your portal or the advisor app.",
+    });
 };
 app.use("/uploads/visa-docs", gateVisaDocs);
 app.use("/api/uploads/visa-docs", gateVisaDocs);
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 app.use("/api/uploads", express.static(path.join(__dirname, "uploads")));
+// Brochure Engine — serves PDFs generated by the agentic-orchcrm subprocess.
+// The engine writes into <repo>/agentic-orchcrm/apps/web/public/generated/
+// (or GENERATED_DIR env if set); this static mount exposes them at
+// /brochure-assets/<file>.pdf so the operator UI can preview / download.
+// Files are tenant-scoped only by virtue of being unguessable filenames
+// (engine-generated unique ids). A future hardening pass can move this
+// behind a per-tenant signed-URL gate similar to gateVisaDocs above.
+const {
+  GENERATED_DIR: BROCHURE_ASSETS_DIR,
+} = require("./services/brochureEngineBridge");
+app.use("/brochure-assets", express.static(BROCHURE_ASSETS_DIR));
+app.use("/api/brochure-assets", express.static(BROCHURE_ASSETS_DIR));
 // Health Check Endpoint
 const prisma = require("./lib/prisma");
 
@@ -1423,50 +1669,79 @@ app.use("/api", (req, res) => {
 // shapes are tracked under #549 — separate sweep, not blocking this fix.)
 app.use((err, req, res, next) => {
   if (res.headersSent) return next(err);
-  if (err && (err.type === "entity.parse.failed" || err instanceof SyntaxError)) {
-    return res.status(400).json({ error: "Invalid JSON body", code: "INVALID_JSON_BODY", detail: err.message });
+  if (
+    err &&
+    (err.type === "entity.parse.failed" || err instanceof SyntaxError)
+  ) {
+    return res
+      .status(400)
+      .json({
+        error: "Invalid JSON body",
+        code: "INVALID_JSON_BODY",
+        detail: err.message,
+      });
   }
   if (err && err.type === "entity.too.large") {
-    return res.status(413).json({ error: "Payload too large", code: "PAYLOAD_TOO_LARGE" });
+    return res
+      .status(413)
+      .json({ error: "Payload too large", code: "PAYLOAD_TOO_LARGE" });
   }
-  console.error("[server] unhandled error:", err && err.stack ? err.stack : err);
+  console.error(
+    "[server] unhandled error:",
+    err && err.stack ? err.stack : err,
+  );
   const status = err && err.status ? err.status : 500;
   res.status(status).json({
     error: (err && err.message) || "Internal server error",
-    code: status === 500 ? "INTERNAL_ERROR" : (err && err.code) || `HTTP_${status}`,
+    code:
+      status === 500 ? "INTERNAL_ERROR" : (err && err.code) || `HTTP_${status}`,
   });
 });
 
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
-  console.log(`[Backend] Enterprise Express Server running securely on port ${PORT}`);
+  console.log(
+    `[Backend] Enterprise Express Server running securely on port ${PORT}`,
+  );
 
   // Auto-heal RBAC state on boot so requiredPermission-gated UI (e.g. the
   // "Roles" sidebar entry) appears consistently across local / dev / prod
   // without manual seed-rbac-only.js runs. Fire-and-forget: a DB hiccup must
   // never crash the server. Set DISABLE_RBAC_BOOT_SYNC=1 to opt out.
-  const { ensureRbacOnBoot } = require('./scripts/ensureRbacOnBoot');
+  const { ensureRbacOnBoot } = require("./scripts/ensureRbacOnBoot");
   ensureRbacOnBoot()
     .then((stats) => {
       if (!stats) return;
-      const wrote = stats.rolesCreated + stats.permsCreated + stats.assignmentsCreated;
+      const wrote =
+        stats.rolesCreated + stats.permsCreated + stats.assignmentsCreated;
       if (wrote > 0) {
-        console.log(`[rbac-boot] backfilled — roles:${stats.rolesCreated} perms:${stats.permsCreated} assignments:${stats.assignmentsCreated} (skipped users:${stats.usersSkipped})`);
+        console.log(
+          `[rbac-boot] backfilled — roles:${stats.rolesCreated} perms:${stats.permsCreated} assignments:${stats.assignmentsCreated} (skipped users:${stats.usersSkipped})`,
+        );
       } else {
-        console.log('[rbac-boot] RBAC state already compatible — no changes.');
+        console.log("[rbac-boot] RBAC state already compatible — no changes.");
       }
     })
-    .catch((err) => console.error('[rbac-boot] non-fatal error:', err && err.message ? err.message : err));
+    .catch((err) =>
+      console.error(
+        "[rbac-boot] non-fatal error:",
+        err && err.message ? err.message : err,
+      ),
+    );
 
   // Self-heal the SubscriptionPlan catalog so a fresh install / wiped DB /
   // partial seed always has the 3 canonical plans on /pricing. Idempotent —
   // existing rows are left alone (Owner edits via Manage Plans persist
   // across restarts). Fire-and-forget; never crash boot on a DB hiccup.
   // Set DISABLE_PLANS_BOOT_SYNC=1 to opt out.
-  if (process.env.DISABLE_PLANS_BOOT_SYNC !== '1') {
-    const ensureSubscriptionPlans = require('./lib/ensureSubscriptionPlans');
-    ensureSubscriptionPlans()
-      .catch((err) => console.error('[plans-boot] non-fatal error:', err && err.message ? err.message : err));
+  if (process.env.DISABLE_PLANS_BOOT_SYNC !== "1") {
+    const ensureSubscriptionPlans = require("./lib/ensureSubscriptionPlans");
+    ensureSubscriptionPlans().catch((err) =>
+      console.error(
+        "[plans-boot] non-fatal error:",
+        err && err.message ? err.message : err,
+      ),
+    );
   }
 });
 
@@ -1485,21 +1760,23 @@ const _gracefulShutdown = (signal) => {
   // boot even though the phone still has the device linked. Best-effort + time-
   // boxed so a hung client can't block the rest of shutdown.
   Promise.resolve()
-    .then(() => require('./services/whatsappWebClient').shutdown())
-    .catch((e) => console.warn('[shutdown] whatsapp shutdown warn:', e && e.message))
+    .then(() => require("./services/whatsappWebClient").shutdown())
+    .catch((e) =>
+      console.warn("[shutdown] whatsapp shutdown warn:", e && e.message),
+    )
     .finally(() => {
       server.close(() => {
-        console.log('[shutdown] server closed cleanly');
+        console.log("[shutdown] server closed cleanly");
         process.exit(0);
       });
     });
   setTimeout(() => {
-    console.warn('[shutdown] timeout — forcing exit');
+    console.warn("[shutdown] timeout — forcing exit");
     process.exit(0);
   }, 12000).unref();
 };
-process.on('SIGTERM', () => _gracefulShutdown('SIGTERM'));
-process.on('SIGINT', () => _gracefulShutdown('SIGINT'));
+process.on("SIGTERM", () => _gracefulShutdown("SIGTERM"));
+process.on("SIGINT", () => _gracefulShutdown("SIGINT"));
 // nodemon restarts the dev server on every file save by sending SIGUSR2. Without
 // trapping it the WhatsApp Web puppeteer client is killed mid-write — corrupting
 // / locking its LocalAuth profile so the next boot can't resume the link and the
@@ -1509,96 +1786,118 @@ process.on('SIGINT', () => _gracefulShutdown('SIGINT'));
 // can't register SIGUSR2 (nodemon there hard-kills, which the next boot's
 // stale-lock cleanup recovers from instead).
 try {
-  process.once('SIGUSR2', () => {
-    console.log('[shutdown] SIGUSR2 (nodemon restart) — flushing WhatsApp sessions before restart');
+  process.once("SIGUSR2", () => {
+    console.log(
+      "[shutdown] SIGUSR2 (nodemon restart) — flushing WhatsApp sessions before restart",
+    );
     Promise.resolve()
-      .then(() => require('./services/whatsappWebClient').shutdown())
-      .catch((e) => console.warn('[shutdown] whatsapp SIGUSR2 shutdown warn:', e && e.message))
-      .finally(() => { try { process.kill(process.pid, 'SIGUSR2'); } catch { process.exit(0); } });
+      .then(() => require("./services/whatsappWebClient").shutdown())
+      .catch((e) =>
+        console.warn(
+          "[shutdown] whatsapp SIGUSR2 shutdown warn:",
+          e && e.message,
+        ),
+      )
+      .finally(() => {
+        try {
+          process.kill(process.pid, "SIGUSR2");
+        } catch {
+          process.exit(0);
+        }
+      });
   });
 } catch (e) {
-  console.warn('[shutdown] SIGUSR2 handler not registered (non-POSIX platform):', e && e.message);
+  console.warn(
+    "[shutdown] SIGUSR2 handler not registered (non-POSIX platform):",
+    e && e.message,
+  );
 }
 
 // DISABLE_CRONS=1 lets us boot a side-by-side instance (e.g. for c8 line-
 // coverage runs on a different port) without double-firing reminders, blasts,
 // orchestrator runs, etc. against the shared DB. Set ONLY on the secondary
 // instance — production PM2 should leave it unset.
-if (process.env.DISABLE_CRONS === '1') {
-  console.log('[crons] DISABLE_CRONS=1 — skipping all cron init (coverage / sandbox mode)');
+if (process.env.DISABLE_CRONS === "1") {
+  console.log(
+    "[crons] DISABLE_CRONS=1 — skipping all cron init (coverage / sandbox mode)",
+  );
 } else {
-
   // Scheduled Report Engine (checks hourly for due report schedules)
-  const { initReportCron } = require('./cron/reportEngine');
+  const { initReportCron } = require("./cron/reportEngine");
   initReportCron();
 
   // Initialize Sequence Engine
-  const { initSequenceCron } = require('./cron/sequenceEngine');
+  const { initSequenceCron } = require("./cron/sequenceEngine");
   initSequenceCron();
 
   // Initialize Lead Scoring Engine (runs every 10 min, immediate first tick)
-  const { initLeadScoringCron } = require('./cron/leadScoringEngine');
+  const { initLeadScoringCron } = require("./cron/leadScoringEngine");
   initLeadScoringCron(io);
 
   // Initialize Recurring Invoice Engine (runs daily at 6 AM)
-  const { initRecurringInvoiceCron } = require('./cron/recurringInvoiceEngine');
+  const { initRecurringInvoiceCron } = require("./cron/recurringInvoiceEngine");
   initRecurringInvoiceCron(io);
 
   // Initialize Marketplace Sync Engine (runs every 5 min)
-  const { initMarketplaceCron } = require('./cron/marketplaceEngine');
+  const { initMarketplaceCron } = require("./cron/marketplaceEngine");
   initMarketplaceCron(io);
 
   // Initialize GDPR Retention Engine (runs daily at 3 AM)
-  const { initRetentionCron } = require('./cron/retentionEngine');
+  const { initRetentionCron } = require("./cron/retentionEngine");
   initRetentionCron();
 
   // Initialize Scheduled Email Engine (runs every minute)
-  const { initScheduledEmailCron } = require('./cron/scheduledEmailEngine');
+  const { initScheduledEmailCron } = require("./cron/scheduledEmailEngine");
   initScheduledEmailCron();
 
   // Initialize Sentiment Analysis Engine (runs every 15 min)
-  const { initSentimentCron } = require('./cron/sentimentEngine');
+  const { initSentimentCron } = require("./cron/sentimentEngine");
   initSentimentCron();
 
   // Initialize AI Deal Insights Engine (runs every 6 hours)
-  const { initDealInsightsCron } = require('./cron/dealInsightsEngine');
+  const { initDealInsightsCron } = require("./cron/dealInsightsEngine");
   initDealInsightsCron(io);
 
   // Initialize Forecast Snapshot Engine (weekly Monday 1 AM)
-  const { initForecastSnapshotCron } = require('./cron/forecastSnapshotEngine');
+  const { initForecastSnapshotCron } = require("./cron/forecastSnapshotEngine");
   initForecastSnapshotCron();
 
   // Initialize Workflow Trigger Engine (event-driven, not polled)
-  const { initWorkflowEngine } = require('./cron/workflowEngine');
+  const { initWorkflowEngine } = require("./cron/workflowEngine");
   initWorkflowEngine(io);
 
   // Initialize Campaign Send Engine (processes scheduled campaigns every minute)
-  const { initCampaignCron } = require('./cron/campaignEngine');
+  const { initCampaignCron } = require("./cron/campaignEngine");
   initCampaignCron();
 
   // Initialize Automated Backup Engine (daily at 2 AM)
-  const { initBackupCron } = require('./cron/backupEngine');
+  const { initBackupCron } = require("./cron/backupEngine");
   initBackupCron();
 
   // Initialize Wellness Orchestrator (daily 07:00 IST)
-  const { initOrchestratorCron } = require('./cron/orchestratorEngine');
+  const { initOrchestratorCron } = require("./cron/orchestratorEngine");
   initOrchestratorCron();
 
   // Initialize Appointment Reminders Engine (every 15 min, wellness tenants)
-  const { initAppointmentRemindersCron, initNoShowRiskCron } = require('./cron/appointmentRemindersEngine');
+  const {
+    initAppointmentRemindersCron,
+    initNoShowRiskCron,
+  } = require("./cron/appointmentRemindersEngine");
   initAppointmentRemindersCron();
   // PRD Gap §12 #4e — daily 08:30 IST no-show risk Notification fan-out.
   initNoShowRiskCron();
 
   // Initialize Wellness Ops Engine (hourly: NPS surveys + junk-lead retention)
-  const { initWellnessOpsCron } = require('./cron/wellnessOpsEngine');
+  const { initWellnessOpsCron } = require("./cron/wellnessOpsEngine");
   initWellnessOpsCron();
 
   // Initialize Travel CRM post-trip feedback cron (daily 06:13 IST).
   // PRD §4.8 + §6.3 — creates a Survey row for TmcTrips whose returnDate
   // is 1-7 days ago. WhatsApp/email dispatch slots in once Wati BSP creds
   // (Q9) land; for now the survey link is just logged.
-  const { initTripPostTripFeedbackCron } = require('./cron/tripPostTripFeedback');
+  const {
+    initTripPostTripFeedbackCron,
+  } = require("./cron/tripPostTripFeedback");
   initTripPostTripFeedbackCron();
 
   // Initialize Travel CRM payment reminders cron (daily 07:13 IST).
@@ -1607,21 +1906,27 @@ if (process.env.DISABLE_CRONS === '1') {
   // TripPaymentPlan.instalmentsJson reminderDays per entry). Dedupes
   // via (entityType, entityId, type). WhatsApp/email dispatch lands
   // once Wati BSP creds (Q9) arrive.
-  const { initTripPaymentRemindersCron } = require('./cron/tripPaymentReminders');
+  const {
+    initTripPaymentRemindersCron,
+  } = require("./cron/tripPaymentReminders");
   initTripPaymentRemindersCron();
 
   // C8 (PRD_TRAVEL_BILLING UC-2.4) — daily 09:13 IST TravelPaymentSchedule
   // T-7 / T-3 / T-1 reminder sweep. Fires SMS + email customer reminders
   // (WA leg stub pending Q9 Wati creds) per milestone whose dueDate lands
   // in window; bumps remindersSentCount + lastReminderSentAt on the row.
-  const { initCron: initPaymentScheduleReminderCron } = require('./cron/paymentScheduleReminderEngine');
+  const {
+    initCron: initPaymentScheduleReminderCron,
+  } = require("./cron/paymentScheduleReminderEngine");
   initPaymentScheduleReminderCron();
 
   // Initialize Travel CRM diagnostic-to-advisor escalation (every 5 min).
   // PRD §6.3 row 6 — diagnostics stalled >30 min without advisor outreach
   // surface as high-priority Notification rows on the advisor dashboard.
   // Outreach detected via Activity / Task created after the diagnostic.
-  const { initTravelDiagnosticAlertsCron } = require('./cron/travelDiagnosticAdvisorAlerts');
+  const {
+    initTravelDiagnosticAlertsCron,
+  } = require("./cron/travelDiagnosticAdvisorAlerts");
   initTravelDiagnosticAlertsCron();
 
   // Initialize Travel CRM RFU journey reminders (every 30 min).
@@ -1629,7 +1934,9 @@ if (process.env.DISABLE_CRONS === '1') {
   // T-0 / T+2d / T+7d) for RFU accepted itineraries. WhatsApp/email
   // dispatch deferred to Wati BSP creds; Notification row is the
   // visible Phase 1 output.
-  const { initTravelJourneyRemindersCron } = require('./cron/travelJourneyReminders');
+  const {
+    initTravelJourneyRemindersCron,
+  } = require("./cron/travelJourneyReminders");
   initTravelJourneyRemindersCron();
 
   // Pre-trip "countdown" nudge engine (2026-06-16) — emails PAID travel
@@ -1638,7 +1945,7 @@ if (process.env.DISABLE_CRONS === '1') {
   // LLM-generated copy (task "trip-countdown") with a template fallback; real
   // SendGrid email; idempotent per (itinerary, day-bucket). Accepted-but-unpaid
   // bookings are owned by the payment-deadline engine below instead.
-  const { initTripCountdownCron } = require('./cron/tripCountdownEngine');
+  const { initTripCountdownCron } = require("./cron/tripCountdownEngine");
   initTripCountdownCron();
 
   // Pay-or-cancel deposit-deadline engine (2026-06-16) — chases an `accepted`
@@ -1646,7 +1953,7 @@ if (process.env.DISABLE_CRONS === '1') {
   // then at T-6 emails an at-risk notice + raises an advisor "review for
   // cancellation" flag and stamps Itinerary.paymentOverdueAt. NO auto-cancel —
   // an advisor sets status "expired". All sub-brands except Visa Sure.
-  const { initPaymentDeadlineCron } = require('./cron/paymentDeadlineEngine');
+  const { initPaymentDeadlineCron } = require("./cron/paymentDeadlineEngine");
   initPaymentDeadlineCron();
 
   // Web check-in reminder EMAIL engine (2026-06-16) — the customer-facing
@@ -1656,7 +1963,7 @@ if (process.env.DISABLE_CRONS === '1') {
   // parent itinerary is PAID + non-Visa-Sure; the portal "Yes, I've checked in"
   // flips the rows to "done" so this engine AND the scheduler both stop.
   // Travel-only (reads WebCheckin rows).
-  const { initWebCheckinCron } = require('./cron/webCheckinEngine');
+  const { initWebCheckinCron } = require("./cron/webCheckinEngine");
   initWebCheckinCron();
 
   // Post-trip review engine (2026-06-16) — once a committed (accepted/paid),
@@ -1664,7 +1971,7 @@ if (process.env.DISABLE_CRONS === '1') {
   // woven into the wording) linking to a public review page (/p/review/:token);
   // they can also submit from the portal. Daily 09:07; idempotent (one
   // TravelTripReview row per trip). Travel-only (scans Itinerary).
-  const { initTravelReviewCron } = require('./cron/travelReviewEngine');
+  const { initTravelReviewCron } = require("./cron/travelReviewEngine");
   initTravelReviewCron();
 
   // Initialize Visa Sure risk-flagging engine (every 6 hours, SHELL).
@@ -1673,7 +1980,7 @@ if (process.env.DISABLE_CRONS === '1') {
   // high-priority Notification rows for complex-case / rejection-history /
   // readinessLevel-4 / existing-flag signals. Real rule-set pending
   // PRD §5 PC-1..PC-5 product calls.
-  const { initVisaRiskFlagCron } = require('./cron/visaRiskFlagEngine');
+  const { initVisaRiskFlagCron } = require("./cron/visaRiskFlagEngine");
   initVisaRiskFlagCron();
   console.log("✓ Cron engine: visaRiskFlagEngine (every 6 hours)");
 
@@ -1682,14 +1989,14 @@ if (process.env.DISABLE_CRONS === '1') {
   // when windowOpenAt arrives, then reminded → fallback-agent if stalled
   // 30m+. Browser-automation half (P1B) deferred — this scheduler only
   // handles the tracking + reminder side.
-  const { initWebCheckinSchedulerCron } = require('./cron/webCheckinScheduler');
+  const { initWebCheckinSchedulerCron } = require("./cron/webCheckinScheduler");
   initWebCheckinSchedulerCron();
 
   // Initialize Travel CRM contact greetings (daily 08:13 IST) — Phase 2.
   // PRD §4.8 Phase 2 birthday/anniversary greetings. Year-agnostic
   // month+day match on Contact.birthDate + Contact.anniversary; one
   // Notification per occasion per year. Wati dispatch deferred to Q9.
-  const { initContactGreetingsCron } = require('./cron/contactGreetingsEngine');
+  const { initContactGreetingsCron } = require("./cron/contactGreetingsEngine");
   initContactGreetingsCron();
 
   // Initialize Travel CRM religious-guidance delivery (daily 09:13 IST) —
@@ -1697,20 +2004,24 @@ if (process.env.DISABLE_CRONS === '1') {
   // 14-day window; for each active ReligiousGuidancePacket whose
   // dayOffset === daysToDeparture, creates one Notification per
   // (packet, itinerary, year) dedup window. WA dispatch deferred to Q9.
-  const { initReligiousGuidanceCron } = require('./cron/religiousGuidanceEngine');
+  const {
+    initReligiousGuidanceCron,
+  } = require("./cron/religiousGuidanceEngine");
   initReligiousGuidanceCron();
 
   // Slice C9 — Travel CRM quote expiry sweep (daily 09:00 IST).
   // PRD_TRAVEL_QUOTE_BUILDER §3.7 — flips Draft/Sent quotes with validUntil<now
   // to status='Expired' + writes a TravelQuoteSnapshot history row per transition.
-  const { initCron: initQuoteExpirySweepCron } = require('./cron/quoteExpirySweep');
+  const {
+    initCron: initQuoteExpirySweepCron,
+  } = require("./cron/quoteExpirySweep");
   initQuoteExpirySweepCron();
 
   // G018 (PRD_TRAVEL_QUOTE_BUILDER DD-5.4) — hourly FX-rate cache refresh.
   // Polls frankfurter.dev for a fixed (base, quote) pair list and upserts
   // FxRate rows. The /api/fx/latest read endpoint then serves cached rates
   // in O(1). DISABLE_CRONS=1 guard inside the engine.
-  const { initCron: initFxRateCron } = require('./cron/fxRateEngine');
+  const { initCron: initFxRateCron } = require("./cron/fxRateEngine");
   initFxRateCron();
 
   // #902 GST slice 12 — daily GSTR filing reminder sweep (05:00 UTC = 10:30 IST).
@@ -1718,19 +2029,23 @@ if (process.env.DISABLE_CRONS === '1') {
   // for each one whose prior-month GSTR filing is approaching its deadline. Notify
   // half is a console-log stub today; real WhatsApp / email dispatch lands when
   // Q9 creds drop. Respects DISABLE_CRONS=1 via the outer guard.
-  const { runGstrFilingReminderEngine } = require('./cron/gstrFilingReminderEngine');
-  _cron.schedule('0 5 * * *', async () => {
+  const {
+    runGstrFilingReminderEngine,
+  } = require("./cron/gstrFilingReminderEngine");
+  _cron.schedule("0 5 * * *", async () => {
     try {
       const result = await runGstrFilingReminderEngine();
-      console.log('[gstr-filing-reminder]', result);
+      console.log("[gstr-filing-reminder]", result);
     } catch (e) {
-      console.error('[gstr-filing-reminder] cron failed:', e.message);
+      console.error("[gstr-filing-reminder] cron failed:", e.message);
     }
   });
-  console.log('[gstr-filing-reminder] cron initialized (daily 05:00 UTC / 10:30 IST)');
+  console.log(
+    "[gstr-filing-reminder] cron initialized (daily 05:00 UTC / 10:30 IST)",
+  );
 
   // Initialize Low-Stock Inventory Alerts (daily 09:00 IST, wellness tenants)
-  const { initLowStockCron } = require('./cron/lowStockEngine');
+  const { initLowStockCron } = require("./cron/lowStockEngine");
   initLowStockCron();
 
   // Wave 11 Agent HH — Auto-consumption listener. Subscribes to 'visit.completed'
@@ -1738,11 +2053,13 @@ if (process.env.DISABLE_CRONS === '1') {
   // service: writes ServiceConsumption rows + decrements Product.currentStock.
   // Idempotent boot; failures are logged and never propagate to the visit
   // response (clinical record stays intact).
-  const { start: startAutoConsumption } = require('./lib/autoConsumptionApplier');
+  const {
+    start: startAutoConsumption,
+  } = require("./lib/autoConsumptionApplier");
   startAutoConsumption();
 
   // Initialize SLA Breach Engine (every 5 min — flips Ticket.breached + emits 'sla.breached')
-  const { initSlaBreachCron } = require('./cron/slaBreachEngine');
+  const { initSlaBreachCron } = require("./cron/slaBreachEngine");
   initSlaBreachCron();
 
   // WhatsApp SaaS P3 — async outbound delivery (every 30s) + media download
@@ -1751,9 +2068,9 @@ if (process.env.DISABLE_CRONS === '1') {
   // even before any tenant has completed onboarding. The outbound engine
   // receives `io` to broadcast whatsapp:sent events back to the frontend
   // as queued messages complete delivery.
-  const { initWhatsappOutboundCron } = require('./cron/whatsappOutboundEngine');
+  const { initWhatsappOutboundCron } = require("./cron/whatsappOutboundEngine");
   initWhatsappOutboundCron(io);
-  const { initWhatsappMediaCron } = require('./cron/whatsappMediaEngine');
+  const { initWhatsappMediaCron } = require("./cron/whatsappMediaEngine");
   initWhatsappMediaCron();
 
   // WhatsApp SaaS P4 — daily token-refresh probe + template-sync safety net.
@@ -1761,39 +2078,45 @@ if (process.env.DISABLE_CRONS === '1') {
   // via fb_exchange_token; surfaces unrecoverable expiry via Notification +
   // soft-disconnect. Template sync pulls every approved template from Meta
   // nightly so the local table stays in sync even when webhook events drop.
-  const { initWhatsappTokenRefreshCron } = require('./cron/whatsappTokenRefreshEngine');
+  const {
+    initWhatsappTokenRefreshCron,
+  } = require("./cron/whatsappTokenRefreshEngine");
   initWhatsappTokenRefreshCron();
-  const { initWhatsappTemplateSyncCron } = require('./cron/whatsappTemplateSyncEngine');
+  const {
+    initWhatsappTemplateSyncCron,
+  } = require("./cron/whatsappTemplateSyncEngine");
   initWhatsappTemplateSyncCron();
 
   // #541 (OPS-1): Demo Hygiene — hourly purge of `_QA_PROBE_*` /
   // `E2E_FLOW_*` test residue from patient list + admin-config models.
   // Set DEMO_HYGIENE_DISABLED=1 in non-demo environments (CI / local) to
   // skip — see backend/cron/demoHygieneEngine.js.
-  const { initDemoHygieneCron } = require('./cron/demoHygieneEngine');
+  const { initDemoHygieneCron } = require("./cron/demoHygieneEngine");
   initDemoHygieneCron();
 
   // Initialize Lead-side SLA Breach Engine (every 2 min — flips Contact.slaBreached
   // + emits 'lead.sla_breached' for the PRD §6.4 lead first-response SLA)
-  const { initLeadSlaCron } = require('./cron/leadSlaEngine');
+  const { initLeadSlaCron } = require("./cron/leadSlaEngine");
   initLeadSlaCron();
 
   // #558 — AuditLog hash-chain integrity sweep (daily 04:00, after retention).
-  const { initAuditIntegrityCron } = require('./cron/auditIntegrityEngine');
+  const { initAuditIntegrityCron } = require("./cron/auditIntegrityEngine");
   initAuditIntegrityCron();
 
   // Wave 8b — POS receipt dispatcher subscribes to sale.completed events
   // and queues SMS (always) + WhatsApp (if Contact opted-in) receipt rows.
   // Event-driven, no cron tick. Fire-and-forget: a dispatch hiccup never
   // affects the sale itself.
-  const { start: startPosReceiptDispatcher } = require('./lib/posReceiptDispatcher');
+  const {
+    start: startPosReceiptDispatcher,
+  } = require("./lib/posReceiptDispatcher");
   startPosReceiptDispatcher();
 
   // Wave 8b — Leave Policy Engine (daily 02:30 IST). Detects fiscal
   // year-end per LeavePolicy and applies carry-forward + encashment
   // payouts where the policy specifies them. Idempotent on a
   // per-(tenant,policy,user,year) basis via LeaveBalance lookups.
-  const { initLeavePolicyCron } = require('./cron/leavePolicyEngine');
+  const { initLeavePolicyCron } = require("./cron/leavePolicyEngine");
   initLeavePolicyCron();
 
   // D16 Wallet Top-up — Arc 1 Slice 6 (PRD_WALLET_TOPUP §3.5 Phase 2).
@@ -1801,15 +2124,14 @@ if (process.env.DISABLE_CRONS === '1') {
   // expiresAt has passed to EXPIRED, debits Wallet.balance, writes a
   // signed-negative EXPIRY WalletTransaction row, audits WALLET_EXPIRY.
   // Idempotent (status filter is the set-once gate).
-  const { initWalletExpiryCron } = require('./cron/walletExpiryEngine');
+  const { initWalletExpiryCron } = require("./cron/walletExpiryEngine");
   initWalletExpiryCron();
 
   // Initialize Notification Rules Engine — event-driven notifications for
   // business events (SLA breaches, approvals, expenses, leave requests).
   // Subscribes to eventBus events and creates notifications via notificationService.
-  const notificationRules = require('./lib/notificationRulesEngine');
+  const notificationRules = require("./lib/notificationRulesEngine");
   notificationRules.init(io);
-
 } // end DISABLE_CRONS guard
 
 // nodemon restart trigger

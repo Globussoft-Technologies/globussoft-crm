@@ -128,6 +128,7 @@ const DEFAULT_CONTENT = {
     rightHeadline: 'What Participants Gain',
     rightQuote: '',
     rightChecks: ['[REVIEW] Outcome one', '[REVIEW] Outcome two', '[REVIEW] Outcome three'],
+    rightItems: [],
     cta: { title: '', body: '', ctaText: '', ctaHref: '#register' },
   },
   cultural: {
@@ -325,6 +326,23 @@ function pickTagline(heroSubhead, metaDescription) {
   return truncated;
 }
 
+// Truncate a string at a sentence boundary, with a hard char cap. Keeps
+// the FIRST 1-2 sentences (whichever fits) and falls back to a hard
+// word-boundary cut if no sentence punctuation lands inside the cap.
+// Used to keep flip-card body / benefit text from overflowing — the LLM
+// emits up to 280 chars per body which crowds the card.
+function truncateAtSentence(raw, maxChars) {
+  const text = String(raw || '').trim();
+  if (!text) return '';
+  if (text.length <= maxChars) return text;
+  // Try to break at the last sentence boundary within the cap.
+  const slice = text.slice(0, maxChars);
+  const lastPunct = Math.max(slice.lastIndexOf('. '), slice.lastIndexOf('! '), slice.lastIndexOf('? '));
+  if (lastPunct > maxChars * 0.5) return slice.slice(0, lastPunct + 1).trim();
+  // No good sentence break — cut at the last word boundary, ellipsis.
+  return slice.replace(/\s+\S*$/, '').trim() + '…';
+}
+
 function mapBlocksToContent(blocks, input) {
   const inp = (input && typeof input === 'object') ? input : {};
   const safeArray = Array.isArray(blocks) ? blocks : [];
@@ -458,6 +476,34 @@ function mapBlocksToContent(blocks, input) {
         .slice(0, 4)
         .map((it) => it.title || '')
         .filter(Boolean),
+      // rightItems — same data as rightChecks but with the LLM's
+      // per-highlight `body` description preserved, so the renderer can
+      // surface title + short description as a card (image 2 reference)
+      // instead of an icon-only bullet list. rightChecks stays for
+      // back-compat with any caller that still expects string[].
+      //
+      // When the LLM emits highlightsGrid items as landmark NAMES
+      // (Victoria Memorial, Howrah Bridge, etc. — observed for Kolkata
+      // city tours), the body is often empty because outcome-style
+      // descriptions don't fit landmark items. Fall back to the matching
+      // cityCards body in that case so each list item shows a real
+      // description instead of just the title.
+      rightItems: (() => {
+        const hi = Array.isArray(highlights.items) ? highlights.items : [];
+        const cityList = Array.isArray(cities.cards) ? cities.cards : [];
+        const findCityBody = (title) => {
+          const norm = String(title || '').trim().toLowerCase();
+          if (!norm) return '';
+          const match = cityList.find((c) => String(c && c.title || '').trim().toLowerCase() === norm);
+          return (match && match.body) || '';
+        };
+        return hi.slice(0, 4)
+          .map((it, idx) => ({
+            title: it.title || '',
+            desc: it.body || findCityBody(it.title) || (cityList[idx] && cityList[idx].body) || '',
+          }))
+          .filter((it) => it.title);
+      })(),
       // programme.cta banner — derived structural copy + LLM-emitted ctaText.
       // This populates the banner row below the programme grid (was empty
       // and the renderer skipped it). Destination-aware title + a generic
@@ -475,13 +521,19 @@ function mapBlocksToContent(blocks, input) {
       tag: 'CULTURAL HIGHLIGHTS',
       title: cities.title || 'Cultural Highlights',
       subtitle: cities.subtitle || '',
+      // Hard-cap body / benefit lengths so the flip-card back face never
+      // overflows the card height. The LLM prompt allows up to 280 chars
+      // for body and 140 for benefit; in practice that produces 4-5
+      // sentences which crowds the card. CSS line-clamp catches the
+      // worst overflow but truncating at the source keeps the visual
+      // contract honest. 160 chars ≈ 2 short sentences.
       items: (Array.isArray(cities.cards) ? cities.cards : []).map((c) => ({
         id: idify(c.title),
         icon: idify(c.title),
         name: c.title || '',
         label: c.tag || '',
-        body: c.body ? [c.body] : [],
-        benefit: c.benefit || '',
+        body: c.body ? [truncateAtSentence(String(c.body), 160)] : [],
+        benefit: c.benefit ? truncateAtSentence(String(c.benefit), 90) : '',
       })),
       cta: { title: '', body: '', ctaText: '', ctaHref: '#register' },
     },
@@ -651,13 +703,35 @@ function mapBlocksToContent(blocks, input) {
 // critical slots are missing; the caller decides fallback policy.
 function mapTeeOutputToContent({ rawLLMOutput, teeOutput, input, existingContent }) {
   const { mapTeeOutputToContent: bridge } = require('../teeContentBridge');
-  return bridge({
+  const result = bridge({
     rawLLMOutput,
     teeOutput,
     input,
     templateDefaults: DEFAULT_CONTENT,
     existingContent,
   });
+  // Derive programme.rightItems (title + short desc) from cultural.items
+  // when the LLM hasn't populated it explicitly. The TEE prompt asks for
+  // rightChecks as plain strings; cultural.items always carries body[]
+  // descriptions, so this gives the "What You Gain" section real
+  // descriptions per item instead of an empty title list. Existing
+  // operator overrides via existingContent are preserved by the bridge
+  // before this hook runs.
+  if (result && result.content) {
+    const c = result.content;
+    const culturalItems = (c.cultural && Array.isArray(c.cultural.items)) ? c.cultural.items : [];
+    const programmeRightItems = (c.programme && Array.isArray(c.programme.rightItems)) ? c.programme.rightItems : [];
+    const needsRightItems = programmeRightItems.length === 0
+      || programmeRightItems.every((it) => !it || !it.desc);
+    if (needsRightItems && culturalItems.length > 0) {
+      c.programme = c.programme || {};
+      c.programme.rightItems = culturalItems.slice(0, 4).map((it) => {
+        const body = Array.isArray(it.body) ? it.body.join(' ') : String(it.body || '');
+        return { title: it.name || '', desc: body.trim() };
+      }).filter((it) => it.title);
+    }
+  }
+  return result;
 }
 
 module.exports = {

@@ -834,18 +834,49 @@ function chooseComposition(family, traits, { override } = {}) {
 // visualMood label feeds the prompt so Iceland (northern-aurora-mystical)
 // and Switzerland (alpine-heritage-craft) get different queries even
 // though they share the luxury-alpine theme.
+// Per-slot landmark seeds — concrete photographic NOUNS that map to real
+// stock-photo categories. The set deliberately mixes FAMOUS-SPOT focus
+// (famous landmark / popular tourist attraction / iconic destination)
+// with CULTURAL focus (heritage / culture / cuisine) so a longer marquee
+// loop (up to 10 slots) doesn't repeat the same theme.
+//
+// Earlier iterations used phrases like 'skyline architecture' which
+// Pexels matched on the word 'architecture' generically and returned
+// rendered building drawings. The current seeds are the topic-words
+// travel photographers actually tag their work with — tested against
+// Pexels' top-5 results for "<dest> <seed>" returning location-relevant
+// imagery instead of generic portrait headshots.
+const MARQUEE_SLOT_SEEDS = [
+  'famous landmark',
+  'popular tourist attraction',
+  'cultural heritage',
+  'iconic destination view',
+  'traditional culture',
+  'nature landscape',
+  'local cuisine food',
+  'historic monument',
+  'architectural heritage',
+  'famous tourist spot',
+];
+
 function chooseImageStrategy(traits, input, { citiesCount = 4 } = {}) {
   const dest = input.destination || '';
-  const visualMood = traits.visualMood || 'leisure';
-  // The visualMood phrase is appended to each query as evocative spice;
-  // climate/region also nudge phrasing.
-  const moodPhrase = visualMood.replace(/-/g, ' ');
-  const climatePhrase = traits.climate || '';
-  const hero = `${dest} ${moodPhrase} wide cinematic landscape`.trim().replace(/\s+/g, ' ');
-  const brochure = `${dest} ${moodPhrase} hero detail`.trim().replace(/\s+/g, ' ');
-  const marquee = Array.from({ length: Math.max(3, Math.min(6, citiesCount)) }, (_, i) => ({
+  // We deliberately do NOT mix in the traits.visualMood phrase
+  // (e.g. 'tokyo-temperate-structured-educational' → 'tokyo temperate
+  // structured educational') — Pexels treats those as noise tokens and
+  // they pollute the top-N ranking. Same for traits.climate. The
+  // destination + a single concrete topic-word is what produces relevant
+  // tourism photos. The 'vertical portrait' suffix is also gone — the
+  // provider's `orientation` parameter handles aspect and the word
+  // 'portrait' in a query biases stock providers toward selfies.
+  const hero = `${dest} famous landmark scenic`.trim().replace(/\s+/g, ' ');
+  const brochure = `${dest} tourist destination`.trim().replace(/\s+/g, ' ');
+  // Cap raised from 6 → 10 (2026-06-24) so a longer marquee loop reads
+  // smoother on wide viewports. 3 is still the floor for visual variety.
+  const slotCount = Math.max(3, Math.min(10, citiesCount));
+  const marquee = Array.from({ length: slotCount }, (_, i) => ({
     slot: i,
-    query: `${dest} ${moodPhrase} vertical portrait ${climatePhrase}`.trim().replace(/\s+/g, ' '),
+    query: `${dest} ${MARQUEE_SLOT_SEEDS[i % MARQUEE_SLOT_SEEDS.length]}`.trim().replace(/\s+/g, ' '),
   }));
   return {
     hero: { query: hero, aspectRatio: '4:3', minWidth: 1200 },

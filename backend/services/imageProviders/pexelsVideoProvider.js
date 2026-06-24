@@ -88,17 +88,9 @@ function normalize(item) {
 }
 
 async function fetchOne(query, opts = {}) {
-  if (!isAvailable()) {
-    console.log(`[pexels-video] "${String(query).slice(0, 60)}" — no PEXELS_API_KEY, skipping`);
-    return null;
-  }
-  const t0 = Date.now();
+  if (!isAvailable()) return null;
   const results = await search(query, opts);
-  if (results.length === 0) {
-    console.log(`[pexels-video] "${String(query).slice(0, 60)}" — no results in ${Date.now() - t0}ms`);
-    return null;
-  }
-  console.log(`[pexels-video] "${String(query).slice(0, 60)}" — HIT in ${Date.now() - t0}ms (${results[0].url.slice(0, 100)}…)`);
+  if (results.length === 0) return null;
   return results[0];
 }
 

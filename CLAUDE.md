@@ -390,6 +390,10 @@ cd backend && node prisma/seed.js
 cd e2e && npm install && npx playwright test --project=chromium
 ```
 
+### Brochure Engine — vendored `agentic-orchcrm/` workspace
+
+The `/travel/brochure-engine` page is driven by [backend/services/brochureEngineBridge.js](backend/services/brochureEngineBridge.js), which spawns a sibling workspace at `<repo>/agentic-orchcrm/`. That folder is **`.gitignore`d** (~495MB with `node_modules` + bundled Chromium, plus its own provider-key `.env`), so every new machine — laptop OR demo box — needs a one-time manual vendor + `npm install` + `.env` seed. Full step-by-step in [docs/AGENTIC_ENGINE_SETUP.md](docs/AGENTIC_ENGINE_SETUP.md). If the page fails with `ENOENT` or `Cannot find module crm-bridge.ts`, the engine isn't installed on that machine.
+
 ## 🤖 Cron learnings (auto-logged — pending manual review)
 
 The 15-min recurring cron appends short observations here at the end of every wave: patterns, drift findings, non-obvious-things-learned that **aren't yet codified into a skill or standing rule**. The cron does NOT create skills itself — that's high-judgment work and belongs to a human-in-the-loop.

@@ -124,12 +124,9 @@
         <sc-if value="{{ showValueCards }}">
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;width:100%;margin-top:6px">
           <sc-for list="{{ hero.valueCards }}" as="card">
-            <div style="background:var(--c-panel);border:1px solid var(--c-border);border-radius:8px;padding:16px;text-align:left;display:flex;align-items:flex-start;justify-content:space-between;gap:12px" style-hover="border-color:var(--c-accent)">
-              <div style="flex:1">
-                <h3 style="font-size:13px;font-weight:600;margin:0 0 3px;color:var(--c-text);line-height:1.3">{{ card.title }}</h3>
-                <p style="font-size:11px;line-height:1.5;color:var(--c-text2);margin:0">{{ card.body }}</p>
-              </div>
-              <sc-if value="{{ card.kanji }}"><span style="font-family:var(--c-serif);font-size:18px;color:var(--c-accent);flex:none">{{ card.kanji }}</span></sc-if>
+            <div style="background:var(--c-panel);border:1px solid var(--c-border);border-radius:8px;padding:16px;text-align:left" style-hover="border-color:var(--c-accent)">
+              <h3 style="font-size:13px;font-weight:600;margin:0 0 3px;color:var(--c-text);line-height:1.3">{{ card.title }}</h3>
+              <p style="font-size:11px;line-height:1.5;color:var(--c-text2);margin:0">{{ card.body }}</p>
             </div>
           </sc-for>
         </div>
@@ -634,10 +631,14 @@
         </div>
         <sc-if value="{{ footer.tagline }}"><p style="font-family:var(--c-serif);font-style:italic;font-weight:300;font-size:18px;color:var(--c-accent);margin:0">{{ footer.tagline }}</p></sc-if>
       </div>
-      <sc-if value="{{ footer.email }}">
+      <sc-if value="{{ showEmails }}">
       <div>
         <h4 style="font-size:12px;letter-spacing:0.18em;text-transform:uppercase;color:rgba(255,255,255,0.55);font-weight:600;margin:0 0 18px">Email Inquiries</h4>
-        <a href="{{ footer.emailHref }}" style="text-decoration:none;color:rgba(255,255,255,0.85);font-size:15px" style-hover="color:var(--c-accent)">{{ footer.email }}</a>
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <sc-for list="{{ footer.emailsList }}" as="em">
+            <a href="{{ em.href }}" style="text-decoration:none;color:rgba(255,255,255,0.85);font-size:15px" style-hover="color:var(--c-accent)">{{ em.label }}</a>
+          </sc-for>
+        </div>
       </div>
       </sc-if>
       <sc-if value="{{ showPhones }}">
@@ -733,10 +734,10 @@ var DEFAULT_CONFIG = {
     titleLines:['Where Exposure','Becomes Perspective'],
     subhead:'Observe how disciplined societies think, organize, and operate. This is not tourism, but structured, guided international immersion.',
     valueCards:[
-      {kanji:'自信', title:'Global Confidence', body:'Composure and adaptability in unfamiliar environments.'},
-      {kanji:'視野', title:'Global Perspective', body:'Exposure to structured global systems and perspectives.'},
-      {kanji:'礼節', title:'Cultural Awareness', body:'Deep appreciation of Japanese tradition and etiquette.'},
-      {kanji:'自立', title:'Guided Independence', body:'Freedom to explore within a safe, structured framework.'}
+      {title:'Global Confidence', body:'Composure and adaptability in unfamiliar environments.'},
+      {title:'Global Perspective', body:'Exposure to structured global systems and perspectives.'},
+      {title:'Cultural Awareness', body:'Deep appreciation of Japanese tradition and etiquette.'},
+      {title:'Guided Independence', body:'Freedom to explore within a safe, structured framework.'}
     ],
     ctaLabel:'Register for Parent Orientation',
     image:{ src:'https://japan.themodernclassroom.in/images/japan_hero.png', alt:'Japan 2026 Educational Immersion Program' },
@@ -1224,15 +1225,35 @@ class Component extends DCLogic {
 
     /* ----- footer ----- */
     const ft = cfg.footer || {};
-    out.showFooter = !!(ft.name || ft.email);
-    const footerLogo = ft.logo || (cfg.brand && cfg.brand.logo) || '';
+    /* Build the email list. Operator-facing schema accepts either:
+       - `footer.emails: ['a@x.com', 'b@x.com', ...]`  (preferred — multiple supported)
+       - `footer.email: 'a@x.com'`                    (legacy single — kept for back-compat)
+       When `emails[]` is present + non-empty it wins; otherwise we fall
+       back to the single `email`. Empty strings inside `emails` are
+       dropped so a stray empty row in the editor doesn't render an
+       empty <a>. */
+    const rawEmails = Array.isArray(ft.emails) && ft.emails.length > 0
+      ? ft.emails
+      : (ft.email ? [ft.email] : []);
+    const emailsList = rawEmails
+      .map(function(e) { return typeof e === 'string' ? e.trim() : (e && e.label ? String(e.label).trim() : ''); })
+      .filter(function(e) { return !!e; })
+      .map(function(e) { return { label: e, href: 'mailto:' + e }; });
+    out.showFooter = !!(ft.name || emailsList.length > 0);
+    /* Footer logo source preference: explicit `footer.brandLogo` first
+       (the new editor field), then the legacy `footer.logo`, then
+       fallback to the brand-level `brand.logo` so a logo set once in
+       Brand bleeds through both nav + footer. */
+    const footerLogo = ft.brandLogo || ft.logo || (cfg.brand && cfg.brand.logo) || '';
     out.footer = {
       brandMark:ft.mark, brandName:ft.name || '', tagline:ft.tagline,
-      brandLogo: footerLogo, brandLogoH: brandLogoH, showBrandMark: !!(ft.mark && !footerLogo),
+      brandLogo: footerLogo, brandLogoH: ft.brandLogoH || brandLogoH, showBrandMark: !!(ft.mark && !footerLogo),
       email:ft.email, emailHref: ft.email ? ('mailto:' + ft.email) : '#',
+      emailsList: emailsList,
       phones: (ft.phones || []).map(p => ({ label:p.label, href: p.tel ? ('tel:' + p.tel) : '#' })),
       legal: ft.legal || []
     };
+    out.showEmails = emailsList.length > 0;
     out.showPhones = !!(ft.phones && ft.phones.length);
 
     return out;

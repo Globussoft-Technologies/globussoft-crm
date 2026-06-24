@@ -621,48 +621,21 @@ router.post("/generate-from-destination", verifyToken, async (req, res) => {
               query: c.imagePrompt || `${c.name || ''} ${destClean} landmark`,
             })),
           };
-          // ── Structured logging (2026-06-23) ─────────────────────────
-          // The operator reported "first preview renders 1 image, second
-          // preview renders some more — inconsistent". Log every step of
-          // the strategy + fetch so we can see exactly which slots got
-          // populated and which queries were sent to the provider chain.
-          console.log(
-            `[wanderlux-images] strategy built — hero=1 marquee=${strategy.marquee.length} cultural=${strategy.cultural.length}`,
-          );
-          console.log(`[wanderlux-images] hero.query: "${strategy.hero.query.slice(0, 120)}…"`);
-          strategy.marquee.forEach((m, i) => {
-            console.log(`[wanderlux-images] marquee[${i}].query: "${String(m.query).slice(0, 120)}…"`);
-          });
-          strategy.cultural.forEach((c, i) => {
-            console.log(`[wanderlux-images] cultural[${i}].query: "${String(c.query).slice(0, 120)}…"`);
-          });
-
-          const t0 = Date.now();
           const fetched = await imageProvider.fetchStrategy(strategy, {
             tenantId: req.user.tenantId,
             __userId: req.user.userId,
             __surface: "landing-pages-generate-wanderlux",
           });
-          const fetchMs = Date.now() - t0;
-          console.log(
-            `[wanderlux-images] fetchStrategy completed in ${fetchMs}ms — hero=${fetched.hero ? 'OK' : 'NULL'} marquee=${(fetched.marquee || []).filter((m) => m && m.image && m.image.url).length}/${strategy.marquee.length} cultural=${(fetched.cultural || []).filter((c) => c && c.image && c.image.url).length}/${strategy.cultural.length}`,
-          );
-          if (fetched.hero && fetched.hero.url) {
-            console.log(`[wanderlux-images] hero.url: ${fetched.hero.url.slice(0, 140)} (provider=${(fetched.hero.attribution || {}).providerId || '?'})`);
-          } else {
+          if (!(fetched.hero && fetched.hero.url)) {
             console.warn(`[wanderlux-images] hero slot UNFILLED — every provider in the chain returned null`);
           }
           (fetched.marquee || []).forEach((m, i) => {
-            if (m && m.image && m.image.url) {
-              console.log(`[wanderlux-images] marquee[${i}].url: ${m.image.url.slice(0, 140)} (provider=${(m.image.attribution || {}).providerId || '?'})`);
-            } else {
+            if (!(m && m.image && m.image.url)) {
               console.warn(`[wanderlux-images] marquee[${i}] UNFILLED — slot=${m && m.slot}`);
             }
           });
           (fetched.cultural || []).forEach((c, i) => {
-            if (c && c.image && c.image.url) {
-              console.log(`[wanderlux-images] cultural[${i}].url: ${c.image.url.slice(0, 140)} (provider=${(c.image.attribution || {}).providerId || '?'})`);
-            } else {
+            if (!(c && c.image && c.image.url)) {
               console.warn(`[wanderlux-images] cultural[${i}] UNFILLED — slot=${c && c.slot}`);
             }
           });
@@ -717,8 +690,6 @@ router.post("/generate-from-destination", verifyToken, async (req, res) => {
             if (c.image && /pollinations\.ai/.test(c.image)) toWarm.push({ slot: `highlights[${i}]`, url: c.image });
           });
           if (toWarm.length > 0) {
-            console.log(`[wanderlux-images] pre-warming ${toWarm.length} Pollinations URLs (parallel HEAD requests)`);
-            const warmStart = Date.now();
             await Promise.allSettled(toWarm.map(async ({ slot, url }) => {
               const slotStart = Date.now();
               try {
@@ -728,14 +699,12 @@ router.post("/generate-from-destination", verifyToken, async (req, res) => {
                 // image can't block the whole generate response.
                 const ctrl = new AbortController();
                 const timer = setTimeout(() => ctrl.abort(), 25000);
-                const res = await fetch(url, { method: 'GET', signal: ctrl.signal });
+                await fetch(url, { method: 'GET', signal: ctrl.signal });
                 clearTimeout(timer);
-                console.log(`[wanderlux-images] pre-warm ${slot}: HTTP ${res.status} in ${Date.now() - slotStart}ms`);
               } catch (e) {
                 console.warn(`[wanderlux-images] pre-warm ${slot} FAILED in ${Date.now() - slotStart}ms: ${e.message || e}`);
               }
             }));
-            console.log(`[wanderlux-images] pre-warm finished in ${Date.now() - warmStart}ms`);
           }
 
           // ── Pexels VIDEO fetch (2026-06-23) ─────────────────────────
@@ -749,7 +718,6 @@ router.post("/generate-from-destination", verifyToken, async (req, res) => {
             const pexelsVideo = require("../services/imageProviders/pexelsVideoProvider");
             if (pexelsVideo.isAvailable()) {
               const videoQuery = `${destClean} travel`;
-              console.log(`[wanderlux-video] Pexels video search query: "${videoQuery}"`);
               const video = await pexelsVideo.fetchOne(videoQuery);
               if (video && video.url) {
                 config.video = config.video || {};
@@ -759,10 +727,7 @@ router.post("/generate-from-destination", verifyToken, async (req, res) => {
                 config.video.eyebrow = config.video.eyebrow || 'Interactive Preview';
                 config.video.title = config.video.title || 'See the Experience Before You Decide.';
                 config.video.body = config.video.body || `Before reading further, take a moment to see what ${destClean} feels like.`;
-                console.log(`[wanderlux-video] attached video to config.video.embedUrl (${video.width}x${video.height}, ${video.duration}s)`);
               }
-            } else {
-              console.log(`[wanderlux-video] Pexels not available — skipping video auto-fetch`);
             }
           } catch (vErr) {
             console.warn(`[wanderlux-video] best-effort video fetch failed (non-fatal): ${vErr.message || vErr}`);

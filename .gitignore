@@ -196,3 +196,12 @@ backend/uploads/wa-web/
 # github.com/Globussoft-Technologies/voyagr repo. Cloned here for local
 # co-development convenience but never pushed to this repo.
 landing/
+
+# Agentic-OS brochure engine — vendored sibling workspace driven by
+# backend/services/brochureEngineBridge.js. Lives at the repo root for the
+# bridge's `path.resolve(__dirname, "..", "..", "agentic-orchcrm")` lookup.
+# Source is ~25MB but with node_modules + bundled Chromium it balloons to
+# ~495MB; secrets in agentic-orchcrm/.env should never be committed
+# regardless. Per-system setup instructions live in
+# docs/AGENTIC_ENGINE_SETUP.md.
+agentic-orchcrm/

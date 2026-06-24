@@ -438,10 +438,6 @@ async function generateLandingPageContent(args = {}) {
   const input = { destination, durationDays, audience, subBrand };
   const inputSize = JSON.stringify(input).length;
 
-  console.log(
-    `[landingPageGeneratorLLM] generateLandingPageContent: tenantId=${tenantId} destination=${destination} durationDays=${durationDays} subBrand=${subBrand || '(none)'}`,
-  );
-
   // Real-mode dispatch — cascade is Groq → Gemini → OpenAI → stub.
   // Groq (Llama-3.3-70B JSON-mode) is the new PRIMARY (2026-06-23):
   // faster, cheaper, and free of Gemini's transient 503/429 windows
@@ -466,9 +462,6 @@ async function generateLandingPageContent(args = {}) {
         userId: __userId,
         surface: __surface,
       });
-      console.log(
-        `[landingPageGeneratorLLM] Groq served the request (model=${modelUsed})`,
-      );
       return {
         ...guardResult.output,
         source: 'groq',
@@ -536,9 +529,6 @@ async function generateLandingPageContent(args = {}) {
         userId: __userId,
         surface: __surface,
       });
-      console.log(
-        `[landingPageGeneratorLLM] OpenAI fallback served the request (model=${modelUsed})${geminiError ? ' after Gemini failed' : ''}`,
-      );
       return {
         ...guardResult.output,
         source: 'openai',
@@ -695,7 +685,11 @@ async function generateLandingPageContentWithTee(input = {}, options = {}) {
   const { buildTeeContentPrompt } = require('./teePrompts');
   const { system, user } = buildTeeContentPrompt({ teeOutput, input });
 
-  // ── 3. LLM call (Gemini → OpenAI → stub) ─────────────────────────
+  // ── 3. LLM call (Gemini → OpenAI → Groq → stub) ─────────────────
+  // Each provider is tried in turn; the FIRST that returns parseable
+  // JSON wins. Mid-batch quota exhaustion on one provider does not halt
+  // the workflow — the next one picks up. Stub is the guaranteed-non-
+  // empty last resort so the operator always sees a renderable page.
   let rawJson = null;
   let modelUsed = null;
   let source = null;
@@ -717,6 +711,16 @@ async function generateLandingPageContentWithTee(input = {}, options = {}) {
           source = 'openai';
         } catch (openAiErr) {
           console.error(`[landingPageGeneratorLLM-TEE] OpenAI fallback failed: ${openAiErr && openAiErr.message}`);
+        }
+      }
+      if (!rawJson && module.exports.groqEnabled()) {
+        try {
+          const r = await module.exports.callGroq(input);
+          rawJson = r.rawJson;
+          modelUsed = r.modelUsed;
+          source = 'groq';
+        } catch (groqErr) {
+          console.error(`[landingPageGeneratorLLM-TEE] Groq fallback failed: ${groqErr && groqErr.message}`);
         }
       }
     }
@@ -785,7 +789,14 @@ async function generateLandingPageContentWithTee(input = {}, options = {}) {
   if (!options.skipImages) {
     try {
       const imageProvider = require('./destinationImageProvider');
-      const fetched = await imageProvider.fetchStrategy(teeOutput.imageStrategy, { tenantId });
+      // Enrich marquee queries with the bridged city titles/tags so each
+      // slot gets a city-specific search (Osaka/CULINARY → an Osaka photo,
+      // Kyoto/HERITAGE → a Kyoto photo). Without this, every slot shares
+      // the destination-level query and the provider cache returns the
+      // same image for every card. See chooseImageStrategy() default seeds
+      // for the no-cities fallback.
+      const enrichedStrategy = enrichMarqueeQueriesWithCities(teeOutput.imageStrategy, content, input.destination || '');
+      const fetched = await imageProvider.fetchStrategy(enrichedStrategy, { tenantId });
       content = imageProvider.applyImagesToContent(content, fetched);
       imagesFetched = (fetched.hero ? 1 : 0) +
         (fetched.brochure ? 1 : 0) +
@@ -904,6 +915,53 @@ function buildTeeStubContent(teeOutput, input) {
       label: `[REVIEW] ${dest}`,
     },
   };
+}
+
+// Mix the bridged city titles into the TEE imageStrategy.marquee queries
+// so each slot fetches a city-specific photo. Strips the literal " city"
+// suffix. Final query shape is:
+//
+//   "<cityName> <destination> <lowercased-tag>"
+//
+// The tag (FOOD / HISTORY / NATURE / etc.) is included lowercased as a
+// topic anchor — this is the strongest signal that biases stock
+// providers away from person-portrait results when the cityName
+// coincides with a common given name (Nandan / William / Rabindra all
+// match Pexels person photos otherwise). The earlier
+// "landmark famous tourism" boilerplate is GONE because "famous" /
+// "tourism" pulled tourist-pose people-photos to the top.
+// Operator-uploaded poster images are preserved by applyImagesToContent.
+function enrichMarqueeQueriesWithCities(imageStrategy, content, destination = '') {
+  const strategy = imageStrategy || {};
+  const cities = (content && content.marquee && Array.isArray(content.marquee.cities)) ? content.marquee.cities : [];
+  if (cities.length === 0) return strategy;
+  const cleanCityName = (raw) => String(raw || '')
+    .replace(/\s+city\b/i, '')   // strip "Jorhat City" → "Jorhat"
+    .replace(/\s+/g, ' ')
+    .trim();
+  // Pad the strategy marquee to match the LLM-emitted city count so an
+  // 8 or 10-card emission isn't silently truncated to the default 4
+  // slots. Pre-existing slot queries (with their per-slot landmark
+  // seeds) are preserved; padded slots reuse the last existing slot's
+  // query as their seed, with the city-specific suffix added below.
+  const baseMarquee = Array.isArray(strategy.marquee) ? strategy.marquee : [];
+  const padded = [...baseMarquee];
+  while (padded.length < cities.length) {
+    const seedTemplate = baseMarquee.length > 0
+      ? baseMarquee[padded.length % baseMarquee.length]
+      : { slot: padded.length, query: `${destination} famous landmark` };
+    padded.push({ ...seedTemplate, slot: padded.length });
+  }
+  const marquee = padded.map((slot, i) => {
+    const city = cities[i];
+    const cityName = cleanCityName(city && city.title);
+    if (!cityName) return slot;
+    const destPhrase = destination ? ` ${destination}` : '';
+    const tag = (city && typeof city.tag === 'string') ? city.tag.toLowerCase().trim() : '';
+    const tagPhrase = tag ? ` ${tag}` : '';
+    return { ...slot, query: `${cityName}${destPhrase}${tagPhrase}`.replace(/\s+/g, ' ').trim() };
+  });
+  return { ...strategy, marquee };
 }
 
 function pickTemplateModule(family) {

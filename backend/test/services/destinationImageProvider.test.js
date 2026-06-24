@@ -24,8 +24,11 @@ afterEach(() => {
 
 describe('provider hierarchy + fallback', () => {
   test('PROVIDERS is the 4 declared providers in priority order', () => {
+    // Pexels is primary per ops decision 2026-06-24 (the only stock
+    // provider with a configured key on demo). Unsplash + Pixabay stay
+    // in the chain as defensive fallbacks; ai-fallback lands last.
     expect(provider.PROVIDERS.map((p) => p.id)).toEqual([
-      'unsplash', 'pexels', 'pixabay', 'ai-fallback',
+      'pexels', 'unsplash', 'pixabay', 'ai-fallback',
     ]);
   });
 
@@ -151,28 +154,28 @@ describe('fetchOne — fallback hierarchy behaviour', () => {
     expect(result).toBeNull();
   });
 
-  test('Unsplash wins when available + has results', async () => {
+  test('Pexels wins when available + has results (primary provider)', async () => {
     process.env.UNSPLASH_ACCESS_KEY = 'test-key';
     process.env.PEXELS_API_KEY = 'test-key';
+    vi.spyOn(pexelsProvider, 'search').mockResolvedValue([
+      { url: 'https://pexels.example/photo.jpg', attribution: { providerId: 'pexels' } },
+    ]);
     vi.spyOn(unsplashProvider, 'search').mockResolvedValue([
       { url: 'https://unsplash.example/photo.jpg', attribution: { providerId: 'unsplash' } },
     ]);
-    vi.spyOn(pexelsProvider, 'search').mockResolvedValue([
-      { url: 'https://pexels.example/photo.jpg', attribution: { providerId: 'pexels' } },
-    ]);
     const result = await provider.fetchOne('Iceland');
-    expect(result.attribution.providerId).toBe('unsplash');
+    expect(result.attribution.providerId).toBe('pexels');
   });
 
-  test('Falls through Unsplash → Pexels when Unsplash empty', async () => {
+  test('Falls through Pexels → Unsplash when Pexels empty', async () => {
     process.env.UNSPLASH_ACCESS_KEY = 'test-key';
     process.env.PEXELS_API_KEY = 'test-key';
-    vi.spyOn(unsplashProvider, 'search').mockResolvedValue([]);
-    vi.spyOn(pexelsProvider, 'search').mockResolvedValue([
-      { url: 'https://pexels.example/photo.jpg', attribution: { providerId: 'pexels' } },
+    vi.spyOn(pexelsProvider, 'search').mockResolvedValue([]);
+    vi.spyOn(unsplashProvider, 'search').mockResolvedValue([
+      { url: 'https://unsplash.example/photo.jpg', attribution: { providerId: 'unsplash' } },
     ]);
     const result = await provider.fetchOne('Bali');
-    expect(result.attribution.providerId).toBe('pexels');
+    expect(result.attribution.providerId).toBe('unsplash');
   });
 
   test('excludeProviders option skips named providers', async () => {
@@ -217,9 +220,17 @@ describe('cache behaviour', () => {
 
 describe('fetchStrategy — full TeeOutput.imageStrategy', () => {
   test('fetches hero + marquee[] + brochure in parallel', async () => {
-    vi.spyOn(pixabayProvider, 'search').mockResolvedValue([
-      { url: 'https://pix.example/img.jpg', attribution: { providerId: 'pixabay' } },
-    ]);
+    // Pixabay returns DIFFERENT URLs per query so the dedup pass in
+    // fetchStrategy() doesn't trigger — this test exercises the happy
+    // path, not the dedup path (covered by the "dedup across slots"
+    // test below).
+    let counter = 0;
+    vi.spyOn(pixabayProvider, 'search').mockImplementation(() => {
+      counter += 1;
+      return Promise.resolve([
+        { url: `https://pix.example/img-${counter}.jpg`, attribution: { providerId: 'pixabay' } },
+      ]);
+    });
     const strategy = {
       hero: { query: 'Iceland aurora', aspectRatio: '4:3' },
       marquee: [
@@ -236,6 +247,33 @@ describe('fetchStrategy — full TeeOutput.imageStrategy', () => {
     expect(result.marquee.length).toBe(3);
     expect(result.marquee[0].image.url).toContain('pix.example');
     expect(result.brochure.url).toContain('pix.example');
+  });
+
+  test('dedup across slots — when a provider returns the same top image for two queries, the second slot picks the next candidate', async () => {
+    process.env.PEXELS_API_KEY = 'test-key';
+    // Pexels returns the same 2-result list for every query — the dedup
+    // pass should pick result[0] for slot 0 and result[1] for slot 1.
+    vi.spyOn(pexelsProvider, 'search').mockResolvedValue([
+      { url: 'https://pex.example/dup-a.jpg', attribution: { providerId: 'pexels' } },
+      { url: 'https://pex.example/dup-b.jpg', attribution: { providerId: 'pexels' } },
+    ]);
+    const result = await provider.fetchStrategy({
+      hero: { query: 'h', aspectRatio: '4:3' },
+      marquee: [
+        { slot: 0, query: 'm0' },
+        { slot: 1, query: 'm1' },
+      ],
+      brochure: { query: 'b', aspectRatio: '4:5' },
+      cultural: [],
+    });
+    const urls = [
+      result.hero?.url,
+      result.marquee[0].image?.url,
+      result.marquee[1].image?.url,
+      result.brochure?.url,
+    ].filter(Boolean);
+    // Every used URL is unique within the page.
+    expect(new Set(urls).size).toBe(urls.length);
   });
 
   test('empty marquee + empty cultural arrays handled gracefully', async () => {

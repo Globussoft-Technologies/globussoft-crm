@@ -1366,7 +1366,11 @@ export default function Invoices() {
               <h3 style={{ fontSize: "1.1rem", fontWeight: 600, margin: 0, display: "flex", alignItems: "center", gap: "0.5rem" }}>
                 <CreditCard size={18} /> Payment Link
               </h3>
-              <button onClick={() => setLinkModal(null)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-secondary)" }}>
+              <button
+                onClick={() => setLinkModal(null)}
+                aria-label="Close payment dialog"
+                style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-secondary)" }}
+              >
                 <X size={18} />
               </button>
             </div>

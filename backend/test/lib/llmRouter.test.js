@@ -166,6 +166,8 @@ describe('llmRouter — module shape', () => {
       "bulk-text": { primary: "gemini-flash", fallback: "claude-haiku" },
       "call-summary": { primary: "gemini-flash", fallback: null },
       "itinerary-suggest": { primary: "gemini-flash", fallback: "gpt-4" },
+      // AI quote-template line-item JSON generation (PR #1178).
+      "quote-template-generate": { primary: "gemini-flash", fallback: "gpt-4" },
       // AI travel-landing-page JSON generation (PR #1174).
       "landing-page-generate": { primary: "gemini-flash", fallback: "claude-haiku" },
       // Trip-countdown (packing nudges) + payment-reminder (pay-or-cancel
@@ -202,8 +204,8 @@ describe('llmRouter — module shape', () => {
     // notification engines 'trip-countdown' + 'payment-reminder' + the
     // 2026-06-19 'whatsapp-lead-qualify' + TBO 'flight-search' / 'hotel-search'
     // / 'transfer-search' + the 'airport-iata' name→code resolver +
-    // 'landing-page-generate' (PR #1174) = 18.
-    expect(r.VALID_TASKS).toHaveLength(18);
+    // 'landing-page-generate' (PR #1174) + 'quote-template-generate' (PR #1178) = 19.
+    expect(r.VALID_TASKS).toHaveLength(19);
   });
 });
 
@@ -446,12 +448,19 @@ describe('routeRequest', () => {
     logSpy.mockRestore();
   });
 
-  test('text always includes the [STUB-<TASK>] tag prefix', async () => {
+  test('text always includes the [STUB-<TASK>] tag prefix (or valid JSON for JSON-returning tasks)', async () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => { });
     const r = loadRouter();
     for (const task of r.VALID_TASKS) {
       const out = await r.routeRequest({ task, payload: {}, tenantId: 1 });
-      expect(out.text).toMatch(new RegExp(`^\\[STUB-${task.toUpperCase()}\\]`));
+      if (task === 'quote-template-generate') {
+        // Stub intentionally returns a parseable JSON array so the consumer
+        // can render line items without a live LLM key.
+        expect(() => JSON.parse(out.text)).not.toThrow();
+        expect(Array.isArray(JSON.parse(out.text))).toBe(true);
+      } else {
+        expect(out.text).toMatch(new RegExp(`^\\[STUB-${task.toUpperCase()}\\]`));
+      }
     }
     logSpy.mockRestore();
   });

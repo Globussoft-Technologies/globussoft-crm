@@ -353,15 +353,18 @@ describe('<QuoteTemplates /> — row rendering: lines count + sub-brand badge', 
   });
 });
 
-describe('<QuoteTemplates /> — new-template modal + create POST', () => {
+describe('<QuoteTemplates /> — new-template form + create POST', () => {
   it('clicking "New Template" reveals the create form', async () => {
     renderPage();
     await screen.findByText('Umrah 7-day Standard');
     expect(screen.queryByLabelText(/^Template name$/i)).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: /New Template/i }));
     expect(screen.getByLabelText(/^Template name$/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/^Lines JSON$/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^Category$/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/^Currency$/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^Sub-brand$/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^AI prompt for line-item generation$/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Add line/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Cancel/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^Save$/i })).toBeInTheDocument();
   });
@@ -371,11 +374,15 @@ describe('<QuoteTemplates /> — new-template modal + create POST', () => {
     await screen.findByText('Umrah 7-day Standard');
     fireEvent.click(screen.getByRole('button', { name: /New Template/i }));
     fireEvent.change(screen.getByLabelText(/^Template name$/i), { target: { value: 'Tokyo 6-day' } });
-    fireEvent.change(screen.getByLabelText(/^Lines JSON$/i), {
-      target: { value: '[{"lineType":"hotel","description":"Tokyo hotel","quantity":6,"unitPrice":8000}]' },
-    });
     // Currency defaults to INR; flip to USD to pin the upper-cased value.
     fireEvent.change(screen.getByLabelText(/^Currency$/i), { target: { value: 'usd' } });
+    // Add a line via the visual line-item editor.
+    fireEvent.click(screen.getByRole('button', { name: /Add line/i }));
+    fireEvent.change(screen.getByPlaceholderText(/^Description$/i), { target: { value: 'Tokyo hotel' } });
+    const spinners = screen.getAllByRole('spinbutton');
+    fireEvent.change(spinners[0], { target: { value: '6' } });
+    fireEvent.change(spinners[1], { target: { value: '8000' } });
+
     fireEvent.click(screen.getByRole('button', { name: /^Save$/i }));
     await waitFor(() => {
       const post = fetchApiMock.mock.calls.find(([u, o]) =>
@@ -387,7 +394,7 @@ describe('<QuoteTemplates /> — new-template modal + create POST', () => {
       expect(body.currency).toBe('USD');
       expect(typeof body.linesJson).toBe('string');
       expect(JSON.parse(body.linesJson)).toEqual([
-        { lineType: 'hotel', description: 'Tokyo hotel', quantity: 6, unitPrice: 8000 },
+        { lineType: 'service', description: 'Tokyo hotel', quantity: 6, unitPrice: 8000, currency: 'USD' },
       ]);
     });
   });
@@ -396,32 +403,28 @@ describe('<QuoteTemplates /> — new-template modal + create POST', () => {
     renderPage();
     await screen.findByText('Umrah 7-day Standard');
     fireEvent.click(screen.getByRole('button', { name: /New Template/i }));
-    // Leave name empty but supply a (valid-ish) linesJson — local check
-    // fires the name guard first.
-    fireEvent.change(screen.getByLabelText(/^Lines JSON$/i), { target: { value: '[]' } });
+    // Leave name empty but add a line so the local name guard fires first.
+    fireEvent.click(screen.getByRole('button', { name: /Add line/i }));
     fetchApiMock.mockClear();
     fireEvent.click(screen.getByRole('button', { name: /^Save$/i }));
-    // The form's required-name HTML5 attr blocks browser-side submit too;
-    // override that with manual call to surface our local-validate path.
-    // Tighter assertion: no POST was fired regardless of which guard caught.
     await waitFor(() => {
-      const post = fetchApiMock.mock.calls.find(([u, o]) =>
-        u === '/api/travel/quote-templates' && o?.method === 'POST',
-      );
-      expect(post).toBeUndefined();
+      expect(notifyError).toHaveBeenCalledWith('Name is required');
     });
+    const post = fetchApiMock.mock.calls.find(([u, o]) =>
+      u === '/api/travel/quote-templates' && o?.method === 'POST',
+    );
+    expect(post).toBeUndefined();
   });
 
-  it('validation: malformed linesJson surfaces notify.error + does NOT fire POST', async () => {
+  it('validation: zero line items surfaces notify.error + does NOT fire POST', async () => {
     renderPage();
     await screen.findByText('Umrah 7-day Standard');
     fireEvent.click(screen.getByRole('button', { name: /New Template/i }));
-    fireEvent.change(screen.getByLabelText(/^Template name$/i), { target: { value: 'Bad' } });
-    fireEvent.change(screen.getByLabelText(/^Lines JSON$/i), { target: { value: 'not-valid-json' } });
+    fireEvent.change(screen.getByLabelText(/^Template name$/i), { target: { value: 'No lines' } });
     fetchApiMock.mockClear();
     fireEvent.click(screen.getByRole('button', { name: /^Save$/i }));
     await waitFor(() => {
-      expect(notifyError).toHaveBeenCalled();
+      expect(notifyError).toHaveBeenCalledWith('Add at least one line item');
     });
     const post = fetchApiMock.mock.calls.find(([u, o]) =>
       u === '/api/travel/quote-templates' && o?.method === 'POST',

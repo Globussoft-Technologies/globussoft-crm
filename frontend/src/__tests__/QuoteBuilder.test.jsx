@@ -866,7 +866,9 @@ describe('<QuoteBuilder /> — Send to customer (slice 6, STUB pending Q9)', () 
         ([u, o]) => u === '/api/travel/quotes/42/share' && o?.method === 'POST',
       );
       expect(post).toBeTruthy();
-      expect(JSON.parse(post[1].body)).toEqual({ channel: 'auto' });
+      const body = JSON.parse(post[1].body);
+      expect(body.channel).toBe('auto');
+      expect(body.frontendBase).toBe('http://localhost:3000');
     });
     expect(notifySuccess).toHaveBeenCalledWith('Quote sent to the customer via email + WhatsApp');
   });

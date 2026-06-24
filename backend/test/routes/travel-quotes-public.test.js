@@ -174,6 +174,7 @@ beforeEach(() => {
   prisma.notification.create.mockResolvedValue({ id: 1 });
   prisma.paymentGatewayConfig.findFirst.mockResolvedValue(null);
   prisma.contact.findFirst.mockResolvedValue({
+    name: 'Aisha Khan',
     firstName: 'Aisha',
     lastName: 'Khan',
     email: 'aisha@example.com',

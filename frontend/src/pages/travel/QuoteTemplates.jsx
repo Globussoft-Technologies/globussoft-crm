@@ -350,7 +350,6 @@ export default function QuoteTemplates() {
         >
           <input
             placeholder="Template name *"
-            required
             type="text"
             value={form.name}
             onChange={(e) => setForm({ ...form, name: e.target.value })}

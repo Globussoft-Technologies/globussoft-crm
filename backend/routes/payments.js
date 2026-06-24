@@ -384,6 +384,22 @@ router.post(
         const plinkId = plinkEnt && plinkEnt.id;
         const paymentEnt = event.payload && event.payload.payment &&
           (event.payload.payment.entity || event.payload.payment);
+        const paymentId = paymentEnt && paymentEnt.id;
+        const notes = plinkEnt && plinkEnt.notes;
+
+        // Travel quote advance link: notes.kind = 'travel-quote-advance'
+        // Store the pay_XXXX id on the TravelQuote row for refund tracking.
+        if (notes && notes.kind === 'travel-quote-advance' && notes.quoteId && paymentId) {
+          try {
+            await prisma.travelQuote.updateMany({
+              where: { id: Number(notes.quoteId) },
+              data: { advancePaymentId: String(paymentId) },
+            });
+          } catch (e) {
+            console.error('[Payments] travel-quote advancePaymentId persist failed:', e.message);
+          }
+        }
+
         if (plinkId) {
           const payment = await prisma.payment.findFirst({
             where: { gateway: "razorpay", gatewayId: plinkId },
@@ -394,7 +410,7 @@ router.post(
               data: {
                 status: "SUCCESS",
                 paidAt: new Date(),
-                gatewayId: (paymentEnt && paymentEnt.id) || plinkId,
+                gatewayId: paymentId || plinkId,
               },
             });
             await markInvoicePaid(payment.invoiceId, payment.tenantId);

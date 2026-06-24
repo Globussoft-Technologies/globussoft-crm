@@ -165,7 +165,9 @@ describe('llmRouter — module shape', () => {
       "form-vs-call": { primary: "claude-opus-4-7", fallback: "gpt-4" },
       "bulk-text": { primary: "gemini-flash", fallback: "claude-haiku" },
       "call-summary": { primary: "gemini-flash", fallback: null },
-      "itinerary-suggest": { primary: "gemini-flash", fallback: "claude-haiku" },
+      "itinerary-suggest": { primary: "gemini-flash", fallback: "gpt-4" },
+      // AI quote-template line-item JSON generation (PR #1178).
+      "quote-template-generate": { primary: "gemini-flash", fallback: "gpt-4" },
       // AI travel-landing-page JSON generation (PR #1174).
       "landing-page-generate": { primary: "gemini-flash", fallback: "claude-haiku" },
       // Trip-countdown (packing nudges) + payment-reminder (pay-or-cancel
@@ -177,12 +179,17 @@ describe('llmRouter — module shape', () => {
       "whatsapp-lead-qualify": { primary: "gemini-flash", fallback: "claude-haiku" },
       "marketing-flyer-copy": { primary: "gemini-flash", fallback: "claude-haiku" },
       "marketing-flyer-image": { primary: "dall-e-3", fallback: "stability-xl" },
-      // TBO flight/hotel/transfer web-grounded search fallback.
-      "flight-search": { primary: "perplexity-sonar", fallback: "gemini-flash" },
-      "hotel-search": { primary: "perplexity-sonar", fallback: "gemini-flash" },
-      "transfer-search": { primary: "perplexity-sonar", fallback: "gemini-flash" },
-      // Airport/city name → IATA resolver for the flight search box (2026-06-19).
-      "airport-iata": { primary: "gemini-flash", fallback: "claude-haiku" },
+      // TBO flight/hotel/transfer AI-estimate search fallback. 2026-06-23:
+      // primary is gpt-4o-search (OpenAI's web-search-enabled model, same
+      // OPENAI_API_KEY) so estimates are grounded in live web data; plain gpt-4
+      // is the no-web-access fallback. TBO tier-1 still takes priority once
+      // TBO_* creds land.
+      "flight-search": { primary: "gpt-4o-search", fallback: "gpt-4" },
+      "hotel-search": { primary: "gpt-4o-search", fallback: "gpt-4" },
+      "transfer-search": { primary: "gpt-4o-search", fallback: "gpt-4" },
+      // Airport/city name → IATA resolver for the flight search box (2026-06-19;
+      // 2026-06-23 primary gemini-flash → gpt-4 to match the search provider).
+      "airport-iata": { primary: "gpt-4", fallback: "gemini-flash" },
     });
   });
 
@@ -197,8 +204,8 @@ describe('llmRouter — module shape', () => {
     // notification engines 'trip-countdown' + 'payment-reminder' + the
     // 2026-06-19 'whatsapp-lead-qualify' + TBO 'flight-search' / 'hotel-search'
     // / 'transfer-search' + the 'airport-iata' name→code resolver +
-    // 'landing-page-generate' (PR #1174) = 18.
-    expect(r.VALID_TASKS).toHaveLength(18);
+    // 'landing-page-generate' (PR #1174) + 'quote-template-generate' (PR #1178) = 19.
+    expect(r.VALID_TASKS).toHaveLength(19);
   });
 });
 
@@ -441,12 +448,19 @@ describe('routeRequest', () => {
     logSpy.mockRestore();
   });
 
-  test('text always includes the [STUB-<TASK>] tag prefix', async () => {
+  test('text always includes the [STUB-<TASK>] tag prefix (or valid JSON for JSON-returning tasks)', async () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => { });
     const r = loadRouter();
     for (const task of r.VALID_TASKS) {
       const out = await r.routeRequest({ task, payload: {}, tenantId: 1 });
-      expect(out.text).toMatch(new RegExp(`^\\[STUB-${task.toUpperCase()}\\]`));
+      if (task === 'quote-template-generate') {
+        // Stub intentionally returns a parseable JSON array so the consumer
+        // can render line items without a live LLM key.
+        expect(() => JSON.parse(out.text)).not.toThrow();
+        expect(Array.isArray(JSON.parse(out.text))).toBe(true);
+      } else {
+        expect(out.text).toMatch(new RegExp(`^\\[STUB-${task.toUpperCase()}\\]`));
+      }
     }
     logSpy.mockRestore();
   });

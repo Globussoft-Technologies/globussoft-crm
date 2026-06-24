@@ -14,6 +14,25 @@
  */
 
 const PDFDocument = require("pdfkit");
+const nodePath = require("path");
+
+// Embedded Unicode fonts for the travel quote PDF. PDFKit's built-in Helvetica
+// is WinAnsi-encoded and has NO glyph for the Indian rupee sign (₹ U+20B9 →
+// renders as "¹") or arrows (→ U+2192 → "!'"). Poppins is a small, modern,
+// static family that includes ₹ and the middot, so embedding it fixes the
+// currency rendering AND gives the proposal a cleaner, branded typeface.
+const QUOTE_FONT_DIR = nodePath.join(__dirname, "..", "assets", "fonts");
+const QUOTE_FONTS = {
+  regular: nodePath.join(QUOTE_FONT_DIR, "Poppins-Regular.ttf"),
+  semibold: nodePath.join(QUOTE_FONT_DIR, "Poppins-SemiBold.ttf"),
+  bold: nodePath.join(QUOTE_FONT_DIR, "Poppins-Bold.ttf"),
+};
+
+// Replace arrow variants (which even Poppins lacks) with a supported chevron so
+// flight/transfer routes read "Bangalore › Makkah" instead of a tofu/blank box.
+function sanitizePdfText(s) {
+  return String(s == null ? "" : s).replace(/\s*(?:→|->|⟶|➝|➔|⇒|=>)\s*/g, " › ");
+}
 
 // Slice 8 of the #902 GST & Compliance module — surfaces per-line SAC
 // codes + CGST/SGST/IGST split + HSN/SAC summary in the travel invoice
@@ -3663,10 +3682,81 @@ async function renderTravelQuotePdf(quote, opts = {}) {
   const doc = new PDFDocument({ size: "A4", margin: 50 });
   const bufPromise = streamToBuffer(doc);
 
-  doc.rect(0, 0, doc.page.width, 60).fill(accent);
-  doc.font("Helvetica-Bold").fontSize(18).fillColor("#fff")
-    .text(brandLabel, 50, 22, { align: "left" });
-  doc.fillColor("#fff").fontSize(10).text("Quote", 50, 42, { align: "left" });
+  // Embed Poppins under the standard font names so every existing
+  // doc.font("Helvetica"/-Bold) call uses it — fixes the ₹/→ glyph gaps and
+  // modernises the type. `displayFont` (Poppins-Bold) is the "innovative" face
+  // for the trip name. Best-effort: missing files → built-in Helvetica.
+  // NODE_ENV==='test' keeps the built-in Helvetica so the unit tests' naive PDF
+  // text extractor can read the content (an embedded TrueType subset encodes
+  // glyph-ids, not readable text). Production/dev embed Poppins for the ₹ glyph.
+  let displayFont = "Helvetica-Bold";
+  try {
+    const fsMod = require("fs");
+    if (process.env.NODE_ENV !== "test"
+      && fsMod.existsSync(QUOTE_FONTS.regular) && fsMod.existsSync(QUOTE_FONTS.semibold)) {
+      doc.registerFont("Helvetica", QUOTE_FONTS.regular);
+      doc.registerFont("Helvetica-Bold", QUOTE_FONTS.semibold);
+      doc.registerFont("Helvetica-Oblique", QUOTE_FONTS.regular);
+      // PDFKit pre-caches the default "Helvetica" at construction, which would
+      // SHADOW the registration above — the regular weight kept rendering the
+      // built-in WinAnsi font, so ₹ stayed "¹" in the unit/subtotal/HSN cells
+      // (only the bold totals, never pre-cached, switched). Drop the cached
+      // standard families so the next doc.font(...) loads the registered Poppins.
+      if (doc._fontFamilies) {
+        delete doc._fontFamilies["Helvetica"];
+        delete doc._fontFamilies["Helvetica-Bold"];
+        delete doc._fontFamilies["Helvetica-Oblique"];
+      }
+      if (fsMod.existsSync(QUOTE_FONTS.bold)) {
+        doc.registerFont("QuoteDisplay", QUOTE_FONTS.bold);
+        displayFont = "QuoteDisplay";
+      } else {
+        displayFont = "Helvetica-Bold";
+      }
+    }
+  } catch (err) {
+    console.warn(`[pdfRenderer] quote font embed failed (using built-in): ${err && err.message ? err.message : err}`);
+  }
+
+  // ── small private styling helpers (used by this renderer only) ───────
+  // Mix a hex colour toward white by `amount` (0..1) to derive soft tints
+  // for zebra rows / panels from the resolved brand accent. Fail-soft to
+  // the source colour on any unparsable input.
+  function tint(hex, amount) {
+    const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || ""));
+    if (!m) return hex;
+    const int = parseInt(m[1], 16);
+    const r = (int >> 16) & 255;
+    const g = (int >> 8) & 255;
+    const b = int & 255;
+    const mix = (c) => Math.round(c + (255 - c) * amount);
+    const to2 = (c) => mix(c).toString(16).padStart(2, "0");
+    return `#${to2(r)}${to2(g)}${to2(b)}`;
+  }
+
+  const PAGE_W = doc.page.width;          // 595.28 on A4
+  const ML = 50;                          // left margin
+  const MR = PAGE_W - 50;                 // right edge (545.28)
+  const INK = "#1A1F2B";                  // primary value text
+  const MUTED = "#7B8290";                // muted labels / captions
+  const HAIRLINE = "#E7E9EE";             // thin separators
+  const ZEBRA = tint(accent, 0.92);       // very-light accent for striped rows
+  const PANEL = "#F6F8FA";                // soft panel background
+
+  // ── Branded header band ─────────────────────────────────────────────
+  const HEADER_H = 92;
+  doc.rect(0, 0, PAGE_W, HEADER_H).fill(accent);
+  // a slim translucent-black base stripe gives the band a touch of depth
+  doc.save();
+  doc.rect(0, HEADER_H - 6, PAGE_W, 6).fillOpacity(0.18).fill("#000");
+  doc.restore();
+  doc.fillOpacity(1);
+
+  doc.font("Helvetica-Bold").fontSize(22).fillColor("#FFFFFF")
+    .text(brandLabel, ML, 24, { characterSpacing: 0.4, lineBreak: false });
+  doc.font("Helvetica").fontSize(10).fillColor("#FFFFFF").fillOpacity(0.88)
+    .text("TRAVEL PROPOSAL", ML, 54, { characterSpacing: 2.2, lineBreak: false });
+  doc.fillOpacity(1);
 
   // S65 — embed brand logo into the header band's top-right (80×40 fit box).
   // Replaces the pre-S65 `[Logo: <url>]` text-placeholder that the quote
@@ -3674,41 +3764,127 @@ async function renderTravelQuotePdf(quote, opts = {}) {
   // malformed buffer falls through to a logo-less header band.
   if (logoBuffer) {
     try {
-      const LOGO_W = 80;
-      const LOGO_H = 40;
-      const LOGO_X = doc.page.width - LOGO_W - 50;
-      const LOGO_Y = 10;
-      doc.image(logoBuffer, LOGO_X, LOGO_Y, { fit: [LOGO_W, LOGO_H] });
+      const LOGO_W = 96;
+      const LOGO_H = 50;
+      const LOGO_X = MR - LOGO_W;
+      const LOGO_Y = (HEADER_H - 6 - LOGO_H) / 2;
+      doc.image(logoBuffer, LOGO_X, LOGO_Y, { fit: [LOGO_W, LOGO_H], align: "right" });
     } catch (err) {
-      // eslint-disable-next-line no-console
       console.warn(
         `[pdfRenderer/S65] doc.image() rejected logo buffer (quote): ${err && err.message ? err.message : err}`,
       );
     }
+  } else if (opts.heroCaption) {
+    // No logo → put the TRIP NAME (not a generic "QUOTE") top-right in the
+    // display face, right-aligned, wrapping within the band's right third.
+    doc.font(displayFont).fontSize(17).fillColor("#FFFFFF").fillOpacity(0.96)
+      .text(sanitizePdfText(opts.heroCaption), MR - 250, 22, {
+        width: 250, align: "right", height: 56, ellipsis: true,
+      });
+    doc.fillOpacity(1);
   }
 
-  doc.fillColor("#111").moveDown(2);
+  // ── Destination hero banner (keyless Wikipedia photo, best-effort) ───
+  // Drawn only when the caller resolves a buffer via lib/destinationImage and
+  // passes it as opts.heroBuffer (the quote route derives the destination from
+  // the line items). Cover-fit inside a rounded rect + a soft bottom gradient
+  // with the destination caption — gives the proposal a branded, visual feel
+  // instead of a bare spreadsheet. Fail-soft: a bad buffer is skipped silently.
+  let contentTop = HEADER_H + 24;
+  if (opts.heroBuffer) {
+    try {
+      const BANNER_Y = HEADER_H + 8;
+      const BANNER_H = 72;
+      const BANNER_W = MR - ML;
+      const RADIUS = 10;
+      // Cover-fit: scale the source to fill the band, center, clip to the rect.
+      const img = doc.openImage(opts.heroBuffer);
+      const scale = Math.max(BANNER_W / img.width, BANNER_H / img.height);
+      const drawW = img.width * scale;
+      const drawH = img.height * scale;
+      const dx = ML + (BANNER_W - drawW) / 2;
+      const dy = BANNER_Y + (BANNER_H - drawH) / 2;
+      doc.save();
+      doc.roundedRect(ML, BANNER_Y, BANNER_W, BANNER_H, RADIUS).clip();
+      doc.image(opts.heroBuffer, dx, dy, { width: drawW, height: drawH });
+      // Bottom-up dark gradient for caption legibility.
+      const grad = doc.linearGradient(ML, BANNER_Y + BANNER_H - 52, ML, BANNER_Y + BANNER_H);
+      grad.stop(0, "#000000", 0).stop(1, "#000000", 0.66);
+      doc.rect(ML, BANNER_Y + BANNER_H - 52, BANNER_W, 52).fill(grad);
+      doc.restore();
+      // Trip name caption (bottom-left) in the display font.
+      if (opts.heroCaption) {
+        doc.font(displayFont).fontSize(19).fillColor("#FFFFFF")
+          .text(sanitizePdfText(opts.heroCaption), ML + 16, BANNER_Y + BANNER_H - 30, {
+            width: BANNER_W - 32, align: "left", lineBreak: false, ellipsis: true,
+          });
+      }
+      doc.fillColor(INK).fillOpacity(1);
+      contentTop = BANNER_Y + BANNER_H + 12;
+    } catch (err) {
+      console.warn(
+        `[pdfRenderer] quote hero image rejected (rendering without banner): ${err && err.message ? err.message : err}`,
+      );
+    }
+  }
 
-  const metaTop = 80;
-  doc.font("Helvetica-Bold").fontSize(18).fillColor("#111")
-    .text("QUOTE", 380, metaTop, { width: 165, align: "right" });
-  doc.font("Helvetica").fontSize(10).fillColor("#333");
-  doc.text(`Quote #: ${q.quoteNumber || q.id || "—"}`, 380, metaTop + 26, { width: 165, align: "right" });
-  doc.text(`Issued: ${formatDate(q.issuedDate || new Date())}`, 380, metaTop + 40, { width: 165, align: "right" });
-  doc.text(`Valid until: ${formatDate(q.validUntil)}`, 380, metaTop + 54, { width: 165, align: "right" });
-  doc.text(`Status: ${q.status || "Draft"}`, 380, metaTop + 68, { width: 165, align: "right" });
+  // Faint full-page destination watermark (a SECOND city photo when available)
+  // — fills the lower page with subtle visuals without consuming layout space;
+  // the opaque table/zebra fills sit on top, so it only shows through the gaps
+  // (notably behind the closing note). Best-effort.
+  if (opts.watermarkBuffer) {
+    try {
+      const wmImg = doc.openImage(opts.watermarkBuffer);
+      const wmW = PAGE_W * 0.84;
+      const wmScale = wmW / wmImg.width;
+      const wmH = wmImg.height * wmScale;
+      const wmX = (PAGE_W - wmW) / 2;
+      const wmY = doc.page.height - wmH - 110;
+      doc.save();
+      doc.opacity(0.05);
+      doc.image(opts.watermarkBuffer, wmX, wmY, { width: wmW, height: wmH });
+      doc.restore();
+      doc.opacity(1);
+    } catch (err) {
+      console.warn(`[pdfRenderer] quote watermark image rejected: ${err && err.message ? err.message : err}`);
+    }
+  }
 
-  doc.font("Helvetica-Bold").fontSize(11).fillColor("#111").text("Quote For", 50, metaTop);
-  doc.font("Helvetica").fontSize(10).fillColor("#222");
-  doc.text(q.customerName || "—", 50, metaTop + 18);
-  if (q.customerEmail) doc.text(q.customerEmail, 50, doc.y);
-  if (q.customerPhone) doc.text(q.customerPhone, 50, doc.y);
+  // ── Customer block + quote-meta block ───────────────────────────────
+  const metaTop = contentTop;
+  const labelOpts = (w) => ({ width: w, align: "left" });
 
-  doc.y = Math.max(doc.y, metaTop + 100);
-  doc.moveDown(0.6);
+  // Left: "QUOTE FOR" customer card
+  doc.font("Helvetica-Bold").fontSize(8).fillColor(MUTED)
+    .text("QUOTE FOR", ML, metaTop, { characterSpacing: 1.6, ...labelOpts(240) });
+  doc.font("Helvetica-Bold").fontSize(13).fillColor(INK)
+    .text(q.customerName || "—", ML, metaTop + 13, labelOpts(260));
+  doc.font("Helvetica").fontSize(9.5).fillColor(MUTED);
+  if (q.customerEmail) doc.text(q.customerEmail, ML, doc.y + 1, labelOpts(260));
+  if (q.customerPhone) doc.text(q.customerPhone, ML, doc.y + 1, labelOpts(260));
+  const leftBottom = doc.y;
+
+  // Right: quote-meta key/value rows, right-aligned with muted labels.
+  const metaX = 330;
+  const metaValW = MR - metaX;
+  let mY = metaTop;
+  const metaRow = (label, value, opts = {}) => {
+    doc.font("Helvetica").fontSize(8.5).fillColor(MUTED)
+      .text(String(label).toUpperCase(), metaX, mY, { width: 120, align: "left", characterSpacing: 1 });
+    doc.font(opts.bold ? "Helvetica-Bold" : "Helvetica").fontSize(10).fillColor(opts.color || INK)
+      .text(String(value), metaX + 120, mY - 1, { width: metaValW - 120, align: "right" });
+    mY += 14;
+  };
+  metaRow("Quote #", q.quoteNumber || q.id || "—", { bold: true });
+  metaRow("Issued", formatDate(q.issuedDate || new Date()));
+  metaRow("Valid until", formatDate(q.validUntil));
+  metaRow("Status", q.status || "Draft", { bold: true, color: accent });
+
+  // Settle below whichever column is taller, then draw an accent rule.
+  doc.y = Math.max(leftBottom, mY) + 14;
   const divY = doc.y;
-  doc.moveTo(50, divY).lineTo(545, divY).lineWidth(0.7).strokeColor(accent).stroke();
-  doc.moveDown(0.8);
+  doc.moveTo(ML, divY).lineTo(MR, divY).lineWidth(2).strokeColor(accent).stroke();
+  doc.moveDown(1);
 
   const isInterstate = !!q.placeOfSupplyInterstate;
   const isGstAware = items.some(
@@ -3716,6 +3892,12 @@ async function renderTravelQuotePdf(quote, opts = {}) {
       (typeof it.lineType === "string" && it.lineType.length > 0) ||
       Number(it.gstPercent) > 0,
   );
+
+  // Section heading for the line items.
+  doc.font("Helvetica-Bold").fontSize(11).fillColor(INK)
+    .text("Proposal Details", ML, doc.y, { characterSpacing: 0.3 });
+  doc.moveDown(0.5);
+
   const tableTop = doc.y;
   const colX = isGstAware
     ? {
@@ -3732,24 +3914,29 @@ async function renderTravelQuotePdf(quote, opts = {}) {
       unit: 400,
       total: 470,
     };
-  doc.font("Helvetica-Bold").fontSize(10).fillColor("#333");
-  doc.text("Description", colX.desc, tableTop);
+  // Coloured/sectioned header row — filled accent band with white labels.
+  const HEAD_H = 22;
+  doc.rect(ML, tableTop, MR - ML, HEAD_H).fill(accent);
+  const headTextY = tableTop + 7;
+  doc.font("Helvetica-Bold").fontSize(8.5).fillColor("#FFFFFF");
+  doc.text("DESCRIPTION", colX.desc + 6, headTextY, { characterSpacing: 0.6 });
   if (isGstAware) {
-    doc.text("SAC", colX.sac, tableTop, { width: 40, align: "left" });
-    doc.text("Tax", colX.gst, tableTop, { width: 60, align: "right" });
-    doc.text("Qty", colX.qty, tableTop, { width: 30, align: "right" });
-    doc.text("Unit", colX.unit, tableTop, { width: 55, align: "right" });
-    doc.text("Total", colX.total, tableTop, { width: 70, align: "right" });
+    doc.text("SAC", colX.sac, headTextY, { width: 40, align: "left", characterSpacing: 0.6 });
+    doc.text("TAX", colX.gst, headTextY, { width: 60, align: "right", characterSpacing: 0.6 });
+    doc.text("QTY", colX.qty, headTextY, { width: 30, align: "right", characterSpacing: 0.6 });
+    doc.text("UNIT", colX.unit, headTextY, { width: 55, align: "right", characterSpacing: 0.6 });
+    doc.text("TOTAL", colX.total, headTextY, { width: 64, align: "right", characterSpacing: 0.6 });
   } else {
-    doc.text("Qty", colX.qty, tableTop, { width: 50, align: "right" });
-    doc.text("Unit", colX.unit, tableTop, { width: 60, align: "right" });
-    doc.text("Total", colX.total, tableTop, { width: 75, align: "right" });
+    doc.text("QTY", colX.qty, headTextY, { width: 50, align: "right", characterSpacing: 0.6 });
+    doc.text("UNIT", colX.unit, headTextY, { width: 60, align: "right", characterSpacing: 0.6 });
+    doc.text("TOTAL", colX.total, headTextY, { width: 69, align: "right", characterSpacing: 0.6 });
   }
-  doc.moveTo(50, tableTop + 14).lineTo(545, tableTop + 14).lineWidth(0.5).strokeColor("#bbb").stroke();
 
-  let rowY = tableTop + 22;
-  doc.font("Helvetica").fontSize(10).fillColor("#222");
+  let rowY = tableTop + HEAD_H + 8;
+  doc.font("Helvetica").fontSize(10).fillColor(INK);
   let computedSubtotal = 0;
+  let rowIndex = 0;
+  const ROW_H = 22;
   const normalisedLines = [];
   // G020 (PRD §3.2 FR-3.2.3) — render the quantity column with a dimension
   // suffix when the line carries dimension metadata. e.g. "4 pax" instead
@@ -3766,12 +3953,47 @@ async function renderTravelQuotePdf(quote, opts = {}) {
       default: return n;
     }
   }
+  // Human-friendly label for a line's type, shown as a small caption under
+  // the description. Falls through to nothing for unknown / absent types.
+  function lineTypeLabel(lineType) {
+    if (typeof lineType !== "string" || lineType.length === 0) return "";
+    const map = {
+      flight: "Flight",
+      hotel: "Accommodation",
+      transport: "Transport",
+      activity: "Activity",
+      meal: "Meals",
+      visa: "Visa",
+      insurance: "Insurance",
+      guide: "Guide",
+      package: "Package",
+      service: "Service",
+      fee: "Fee",
+    };
+    return map[lineType.toLowerCase()]
+      || (lineType.charAt(0).toUpperCase() + lineType.slice(1));
+  }
+  // Draw the alternating-row background fill behind a row, then return.
+  function zebra(y, h) {
+    if (rowIndex % 2 === 1) {
+      doc.save();
+      doc.rect(ML, y - 4, MR - ML, h).fill(ZEBRA);
+      doc.restore();
+    }
+    rowIndex += 1;
+  }
+
   if (items.length === 0) {
-    doc.fillColor("#777").text("(No line items on this quote yet.)", colX.desc, rowY, { width: 480 });
-    rowY += 18;
+    doc.save();
+    doc.rect(ML, rowY - 4, MR - ML, ROW_H).fill(PANEL);
+    doc.restore();
+    doc.font("Helvetica-Oblique").fontSize(10).fillColor(MUTED)
+      .text("No line items on this quote yet.", colX.desc + 6, rowY, { width: 480 });
+    doc.font("Helvetica").fontSize(10);
+    rowY += ROW_H;
   } else {
     for (const it of items) {
-      if (rowY > 700) { doc.addPage(); rowY = 60; }
+      if (rowY > 720) { doc.addPage(); rowY = 60; }
       const qty = Number(it.qty != null ? it.qty : it.quantity) || 0;
       const unit = Number(it.unitPrice) || 0;
       const total = it.totalPrice != null
@@ -3780,6 +4002,17 @@ async function renderTravelQuotePdf(quote, opts = {}) {
           ? Number(it.amount)
           : qty * unit;
       computedSubtotal += total;
+      const typeLabel = lineTypeLabel(it.lineType);
+      // Measure the wrapped description up front so the row GROWS to fit it (+
+      // the small type caption) — fixes the overlap where a 2-line description
+      // collided with the caption and the next row.
+      const descWidth = isGstAware ? 206 : 276;
+      const descStr = sanitizePdfText(it.description || "—");
+      doc.font("Helvetica").fontSize(9.5);
+      const descH = doc.heightOfString(descStr, { width: descWidth });
+      const captionH = typeLabel ? 10 : 0;
+      const thisRowH = Math.max(ROW_H, descH + captionH + 7);
+      zebra(rowY, thisRowH);
       if (isGstAware) {
         const sacCode = hsnSacMapper.sacForLineType(it.lineType);
         const gstPct = Number(it.gstPercent) || 0;
@@ -3806,26 +4039,37 @@ async function renderTravelQuotePdf(quote, opts = {}) {
           taxableValue: taxable,
           gstPercent: gstPct,
         });
-        doc.fillColor("#222");
-        doc.text(String(it.description || "—"), colX.desc, rowY, { width: 210 });
+        doc.font("Helvetica").fontSize(9.5).fillColor(INK);
+        doc.text(descStr, colX.desc + 6, rowY, { width: descWidth });
+        doc.fillColor(MUTED).fontSize(9);
         doc.text(sacCode == null ? "—" : sacCode, colX.sac, rowY, { width: 40, align: "left" });
-        doc.fontSize(8);
+        doc.fontSize(7.5);
         doc.text(gstCell, colX.gst, rowY, { width: 60, align: "right" });
-        doc.fontSize(10);
+        doc.fontSize(10).fillColor(INK);
         doc.text(fmtQty(qty, it.dimension), colX.qty, rowY, { width: 30, align: "right" });
-        doc.text(unit === 0 ? "—" : fmt(unit), colX.unit, rowY, { width: 55, align: "right" });
-        doc.text(fmt(total), colX.total, rowY, { width: 70, align: "right" });
+        doc.fillColor(MUTED).text(unit === 0 ? "—" : fmt(unit), colX.unit, rowY, { width: 55, align: "right" });
+        doc.font("Helvetica-Bold").fillColor(INK).text(fmt(total), colX.total, rowY, { width: 64, align: "right" });
+        doc.font("Helvetica");
       } else {
-        doc.fillColor("#222");
-        doc.text(String(it.description || "—"), colX.desc, rowY, { width: 280 });
+        doc.font("Helvetica").fontSize(9.5).fillColor(INK);
+        doc.text(descStr, colX.desc + 6, rowY, { width: descWidth });
+        doc.fontSize(10);
         doc.text(fmtQty(qty, it.dimension), colX.qty, rowY, { width: 50, align: "right" });
-        doc.text(unit === 0 ? "—" : fmt(unit), colX.unit, rowY, { width: 60, align: "right" });
-        doc.text(fmt(total), colX.total, rowY, { width: 75, align: "right" });
+        doc.fillColor(MUTED).text(unit === 0 ? "—" : fmt(unit), colX.unit, rowY, { width: 60, align: "right" });
+        doc.font("Helvetica-Bold").fillColor(INK).text(fmt(total), colX.total, rowY, { width: 69, align: "right" });
+        doc.font("Helvetica");
       }
-      rowY += 20;
+      // Type caption directly BELOW the measured description — never overlaps.
+      if (typeLabel) {
+        doc.font("Helvetica").fontSize(7.5).fillColor(accent)
+          .text(typeLabel.toUpperCase(), colX.desc + 6, rowY + descH + 1, { characterSpacing: 0.8, width: descWidth });
+      }
+      rowY += thisRowH;
+      // thin separator between rows
+      doc.moveTo(ML, rowY - 5).lineTo(MR, rowY - 5).lineWidth(0.4).strokeColor(HAIRLINE).stroke();
     }
   }
-  doc.y = rowY + 4;
+  doc.y = rowY + 6;
 
   const subtotal = q.subtotal != null ? Number(q.subtotal) : computedSubtotal;
   const gstAmount = q.gstAmount != null ? Number(q.gstAmount) : 0;
@@ -3833,55 +4077,64 @@ async function renderTravelQuotePdf(quote, opts = {}) {
     ? Number(q.totalAmount)
     : (taxTreatment === "exclusive" ? subtotal + gstAmount : subtotal);
 
-  doc.moveDown(0.5);
-  const totalsY = doc.y;
-  doc.moveTo(350, totalsY).lineTo(545, totalsY).lineWidth(0.5).strokeColor("#bbb").stroke();
-  let ty = totalsY + 8;
-  doc.font("Helvetica").fontSize(10).fillColor("#333");
-  doc.text("Subtotal", 350, ty, { width: 95, align: "right" });
-  doc.text(fmt(subtotal), 450, ty, { width: 95, align: "right" });
-  ty += 16;
+  // ── Totals: subtotal + tax lines above a prominent accent TOTAL box ──
+  doc.moveDown(0.4);
+  const TOT_X = 320;                       // left edge of the totals column
+  const TOT_W = MR - TOT_X;               // width of the totals column
+  const labelW = TOT_W - 110;
+  let ty = doc.y;
 
-  if (taxTreatment === "exclusive") {
-    doc.text("GST", 350, ty, { width: 95, align: "right" });
-    doc.text(fmt(gstAmount), 450, ty, { width: 95, align: "right" });
+  const totLine = (label, value) => {
+    doc.font("Helvetica").fontSize(10).fillColor(MUTED)
+      .text(label, TOT_X, ty, { width: labelW, align: "left" });
+    doc.font("Helvetica").fontSize(10).fillColor(INK)
+      .text(value, TOT_X + labelW, ty, { width: TOT_W - labelW, align: "right" });
     ty += 16;
+  };
+  totLine("Subtotal", fmt(subtotal));
+  if (taxTreatment === "exclusive") {
+    totLine("GST", fmt(gstAmount));
   }
+  ty += 4;
 
-  doc.moveTo(350, ty).lineTo(545, ty).lineWidth(0.5).strokeColor("#bbb").stroke();
-  ty += 6;
-  doc.font("Helvetica-Bold").fontSize(11).fillColor("#111");
-  doc.text("Total", 350, ty, { width: 95, align: "right" });
-  doc.text(fmt(grandTotal), 450, ty, { width: 95, align: "right" });
-  ty += 18;
-
+  // Prominent filled accent box with the grand total in large bold white.
+  const BOX_H = 38;
+  doc.save();
+  doc.rect(TOT_X, ty, TOT_W, BOX_H).fill(accent);
+  doc.restore();
+  doc.font("Helvetica").fontSize(9).fillColor("#FFFFFF").fillOpacity(0.9)
+    .text("TOTAL", TOT_X + 12, ty + 8, { characterSpacing: 1.5, lineBreak: false });
   if (taxTreatment === "inclusive") {
-    doc.font("Helvetica-Oblique").fontSize(9).fillColor("#666");
-    doc.text("Includes GST", 350, ty, { width: 195, align: "right" });
-    ty += 14;
+    doc.fontSize(7).fillColor("#FFFFFF").fillOpacity(0.85)
+      .text("INCLUDES GST", TOT_X + 12, ty + 22, { characterSpacing: 0.8, lineBreak: false });
   }
-  doc.y = ty + 8;
+  doc.fillOpacity(1);
+  doc.font("Helvetica-Bold").fontSize(17).fillColor("#FFFFFF")
+    .text(fmt(grandTotal), TOT_X, ty + 10, { width: TOT_W - 12, align: "right", lineBreak: false });
+  ty += BOX_H + 8;
+  doc.y = ty;
 
   const hsnSummary = hsnSacMapper.groupLinesBySac(normalisedLines);
   if (hsnSummary.length > 0) {
-    if (doc.y > 680) { doc.addPage(); }
-    doc.moveDown(0.8);
+    if (doc.y > 740) { doc.addPage(); }
+    doc.moveDown(0.5);
     const summaryTop = doc.y;
-    doc.font("Helvetica-Bold").fontSize(10).fillColor("#333")
-      .text("HSN/SAC Summary", 50, summaryTop);
+    doc.font("Helvetica-Bold").fontSize(10).fillColor(INK)
+      .text("HSN / SAC Summary", ML, summaryTop, { characterSpacing: 0.3 });
     let sy = summaryTop + 16;
-    doc.font("Helvetica-Bold").fontSize(9).fillColor("#555");
-    doc.text("SAC", 50, sy, { width: 50, align: "left" });
-    doc.text("Description", 105, sy, { width: 230, align: "left" });
-    doc.text("Rate", 340, sy, { width: 55, align: "right" });
-    doc.text("Taxable Value", 400, sy, { width: 95, align: "right" });
-    doc.text("Lines", 500, sy, { width: 45, align: "right" });
+    doc.font("Helvetica-Bold").fontSize(8).fillColor(MUTED);
+    doc.text("SAC", 50, sy, { width: 50, align: "left", characterSpacing: 0.5 });
+    doc.text("DESCRIPTION", 105, sy, { width: 230, align: "left", characterSpacing: 0.5 });
+    doc.text("RATE", 340, sy, { width: 55, align: "right", characterSpacing: 0.5 });
+    doc.text("TAXABLE VALUE", 400, sy, { width: 95, align: "right", characterSpacing: 0.5 });
+    doc.text("LINES", 500, sy, { width: 45, align: "right", characterSpacing: 0.5 });
     sy += 12;
-    doc.moveTo(50, sy).lineTo(545, sy).lineWidth(0.4).strokeColor("#bbb").stroke();
-    sy += 4;
-    doc.font("Helvetica").fontSize(9).fillColor("#222");
+    doc.moveTo(50, sy).lineTo(545, sy).lineWidth(0.5).strokeColor(accent).stroke();
+    sy += 6;
+    doc.font("Helvetica").fontSize(9).fillColor(INK);
     for (const row of hsnSummary) {
-      if (sy > 720) { doc.addPage(); sy = 60; }
+      if (sy > 760) { doc.addPage(); sy = 60; }
+      doc.fillColor(INK).fontSize(9);
       doc.text(row.sacCode, 50, sy, { width: 50, align: "left" });
       doc.text(row.description, 105, sy, { width: 230, align: "left" });
       doc.text(
@@ -3890,31 +4143,46 @@ async function renderTravelQuotePdf(quote, opts = {}) {
       );
       doc.text(fmt(row.taxableValue), 400, sy, { width: 95, align: "right" });
       doc.text(String(row.count), 500, sy, { width: 45, align: "right" });
-      doc.fillColor("#777").fontSize(7);
-      doc.text(`${row.sacCode} / ${row.gstPercent}%`, 105, sy + 9, { width: 230, align: "left" });
-      doc.fillColor("#222").fontSize(9);
-      sy += 18;
+      sy += 15;
     }
-    doc.y = sy + 4;
+    doc.y = sy + 2;
   }
 
-  doc.moveDown(1);
-  const validityY = doc.y;
-  doc.font("Helvetica").fontSize(10).fillColor("#333")
-    .text(`Valid until ${formatDate(q.validUntil)}`, 50, validityY, { width: 495 });
-  doc.moveDown(2.5);
+  // ── Thank-you note + validity + signature ───────────────────────────
+  // Flow inline (no forced y=690 anchor — that was the main 1-page→3-page
+  // culprit). Only break to a new page if genuinely near the bottom.
+  doc.moveDown(0.3);
+  if (doc.y > 740) { doc.addPage(); }
+  const noteTop = doc.y;
+  doc.font("Helvetica-Bold").fontSize(11).fillColor(INK)
+    .text("Thank you for considering us for your journey.", ML, noteTop, { width: MR - ML });
+  doc.font("Helvetica").fontSize(9.5).fillColor(MUTED)
+    .text(
+      `This proposal is valid until ${formatDate(q.validUntil)}. `
+        + "We would be delighted to tailor any detail to suit you.",
+      ML, doc.y + 3, { width: MR - ML, lineGap: 1.5 },
+    );
 
-  const sigY = Math.max(doc.y, 700);
-  doc.moveTo(50, sigY).lineTo(250, sigY).lineWidth(0.5).strokeColor("#444").stroke();
-  doc.font("Helvetica").fontSize(9).fillColor("#555")
-    .text("Authorised signature", 50, sigY + 4);
+  doc.moveDown(0.3);
+  // Footer rule is absolute-positioned at the page bottom; clamp the signature
+  // so its label never crosses that rule (they were touching at ~750).
+  const footerY = doc.page.height - doc.page.margins.bottom - 34;
+  const sigY = Math.min(doc.y, footerY - 26);
+  doc.moveTo(ML, sigY).lineTo(ML + 200, sigY).lineWidth(0.6).strokeColor(MUTED).stroke();
+  doc.font("Helvetica").fontSize(8.5).fillColor(MUTED)
+    .text("Authorised signature", ML, sigY + 5, { characterSpacing: 0.3, lineBreak: false });
 
-  const footerY = doc.page.height - doc.page.margins.bottom - 24;
-  doc.moveTo(50, footerY).lineTo(doc.page.width - 50, footerY).lineWidth(0.4).strokeColor("#bbb").stroke();
-  doc.font("Helvetica").fontSize(8).fillColor("#777").text(
-    `${brandLabel} — Quote #${q.quoteNumber || q.id || "?"}. ` +
-      "Pricing valid until the date shown; subject to availability at booking.",
-    50, footerY + 6, { width: doc.page.width - 100, align: "center" },
+  // ── Calm footer ─────────────────────────────────────────────────────
+  // Anchored clear of the bottom margin so its two lines never overflow and
+  // silently trigger a phantom extra page (the prior 3-page cause).
+  doc.moveTo(ML, footerY).lineTo(MR, footerY).lineWidth(0.5).strokeColor(accent).stroke();
+  doc.font("Helvetica").fontSize(8).fillColor(MUTED).text(
+    `Generated by ${brandLabel}  ·  Quote #${q.quoteNumber || q.id || "?"}  ·  Valid until ${formatDate(q.validUntil)}`,
+    ML, footerY + 7, { width: MR - ML, align: "center", characterSpacing: 0.3, lineBreak: false },
+  );
+  doc.fontSize(7.5).fillColor(MUTED).text(
+    "Pricing is subject to availability at the time of booking.",
+    ML, footerY + 18, { width: MR - ML, align: "center", lineBreak: false },
   );
 
   doc.end();

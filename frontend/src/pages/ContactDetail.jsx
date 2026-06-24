@@ -3,7 +3,7 @@ import { formatMoney } from '../utils/money';
 import { formatDate, formatDateTime } from '../utils/date';
 import React, { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { ArrowLeft, Phone, Mail, Calendar, Paperclip, Upload, Trash2, FileText, Download, Target } from 'lucide-react';
+import { ArrowLeft, Phone, Mail, Calendar, Paperclip, Upload, Trash2, FileText, Download, Target, Pencil } from 'lucide-react';
 
 const ContactDetail = () => {
   const { id } = useParams();
@@ -11,6 +11,41 @@ const ContactDetail = () => {
   const [attachments, setAttachments] = useState([]);
   const [showUpload, setShowUpload] = useState(false);
   const [uploadForm, setUploadForm] = useState({ filename: '', fileUrl: '' });
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [editError, setEditError] = useState('');
+  const [editForm, setEditForm] = useState({ name: '', email: '', phone: '', company: '', title: '' });
+
+  const openEdit = () => {
+    setEditForm({
+      name: contact.name || '',
+      email: contact.email || '',
+      phone: contact.phone || '',
+      company: contact.company || '',
+      title: contact.title || '',
+    });
+    setEditError('');
+    setEditing(true);
+  };
+
+  const handleSaveEdit = async (e) => {
+    e.preventDefault();
+    setSaving(true);
+    setEditError('');
+    try {
+      await fetchApi(`/api/contacts/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(editForm),
+      });
+      setEditing(false);
+      loadContact();
+    } catch (err) {
+      setEditError(err?.message || 'Could not save changes.');
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const loadContact = () => {
     fetchApi(`/api/contacts/${id}`).then(data => setContact(data)).catch(() => {});
@@ -51,10 +86,40 @@ const ContactDetail = () => {
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(300px, 1fr) 2fr', gap: '1.5rem' }}>
         {/* Profile Card */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-          <div className="card glass" style={{ padding: '1.5rem' }}>
+          <div className="card glass" style={{ padding: '1.5rem', position: 'relative' }}>
+            {!editing && (
+              <button onClick={openEdit} title="Edit contact" style={{ position: 'absolute', top: '1rem', right: '1rem', background: 'none', border: '1px solid var(--border-color)', borderRadius: '6px', padding: '0.3rem 0.6rem', cursor: 'pointer', color: 'var(--accent-color)', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                <Pencil size={12} /> Edit
+              </button>
+            )}
             <div style={{ width: '80px', height: '80px', borderRadius: '50%', backgroundColor: 'var(--accent-color)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '2rem', fontWeight: 'bold', marginBottom: '1rem', color: '#fff' }}>
               {contact.name.charAt(0)}
             </div>
+            {editing ? (
+              <form onSubmit={handleSaveEdit} style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+                <label style={{ fontSize: '0.7rem', fontWeight: '600', color: 'var(--text-secondary)' }}>Name
+                  <input className="input-field" required value={editForm.name} onChange={e => setEditForm({ ...editForm, name: e.target.value })} style={{ padding: '0.45rem', fontSize: '0.85rem', marginTop: '0.2rem' }} />
+                </label>
+                <label style={{ fontSize: '0.7rem', fontWeight: '600', color: 'var(--text-secondary)' }}>Email
+                  <input className="input-field" type="email" value={editForm.email} onChange={e => setEditForm({ ...editForm, email: e.target.value })} style={{ padding: '0.45rem', fontSize: '0.85rem', marginTop: '0.2rem' }} />
+                </label>
+                <label style={{ fontSize: '0.7rem', fontWeight: '600', color: 'var(--text-secondary)' }}>Phone
+                  <input className="input-field" value={editForm.phone} onChange={e => setEditForm({ ...editForm, phone: e.target.value })} style={{ padding: '0.45rem', fontSize: '0.85rem', marginTop: '0.2rem' }} />
+                </label>
+                <label style={{ fontSize: '0.7rem', fontWeight: '600', color: 'var(--text-secondary)' }}>Company
+                  <input className="input-field" value={editForm.company} onChange={e => setEditForm({ ...editForm, company: e.target.value })} style={{ padding: '0.45rem', fontSize: '0.85rem', marginTop: '0.2rem' }} />
+                </label>
+                <label style={{ fontSize: '0.7rem', fontWeight: '600', color: 'var(--text-secondary)' }}>Title
+                  <input className="input-field" value={editForm.title} onChange={e => setEditForm({ ...editForm, title: e.target.value })} style={{ padding: '0.45rem', fontSize: '0.85rem', marginTop: '0.2rem' }} />
+                </label>
+                {editError && <p style={{ color: '#ef4444', fontSize: '0.75rem', margin: 0 }}>{editError}</p>}
+                <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.25rem' }}>
+                  <button type="submit" className="btn-primary" disabled={saving} style={{ padding: '0.4rem 0.9rem', fontSize: '0.8rem' }}>{saving ? 'Saving…' : 'Save'}</button>
+                  <button type="button" onClick={() => setEditing(false)} disabled={saving} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '0.8rem' }}>Cancel</button>
+                </div>
+              </form>
+            ) : (
+            <>
             <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold' }}>{contact.name}</h2>
             {/* #189B: skip the "at <company>" subtitle when company/title are empty
                 so we don't render an orphan preposition. */}
@@ -103,6 +168,8 @@ const ContactDetail = () => {
                   </div>
                 ))}
               </div>
+            )}
+            </>
             )}
           </div>
 

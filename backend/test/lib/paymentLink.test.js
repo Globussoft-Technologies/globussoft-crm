@@ -46,13 +46,17 @@ describe('paymentLink — no gateway configured (runs first, nothing cached)', (
     delete process.env.RAZORPAY_KEY_SECRET;
   });
 
-  test('resolveGateway returns null when nothing is configured', () => {
-    expect(resolveGateway('auto', 'INR')).toBe(null);
-    expect(resolveGateway('razorpay', 'INR')).toBe(null);
-    expect(resolveGateway('stripe', 'USD')).toBe(null);
+  test('resolveGateway defaults to razorpay for INR / explicit razorpay even when tenant BYOK is unconfigured', () => {
+    expect(resolveGateway('auto', 'INR')).toBe('razorpay');
+    expect(resolveGateway('razorpay', 'INR')).toBe('razorpay');
+    // No Stripe env key is set, so a non-INR explicit preference falls through
+    // to the final razorpay default rather than returning null.
+    expect(resolveGateway('stripe', 'USD')).toBe('razorpay');
   });
 
-  test('createInvoicePaymentLink short-circuits to NO_GATEWAY (no DB write, no API call)', async () => {
+  test('createInvoicePaymentLink short-circuits to NO_GATEWAY when tenant BYOK is missing (no DB write, no API call)', async () => {
+    prisma.paymentGatewayConfig = prisma.paymentGatewayConfig || {};
+    prisma.paymentGatewayConfig.findFirst = vi.fn().mockResolvedValue(null);
     const r = await createInvoicePaymentLink({
       tenantId: 1, invoice: { id: 5, invoiceNum: 'INV-1', amount: 100 }, currency: 'INR',
     });

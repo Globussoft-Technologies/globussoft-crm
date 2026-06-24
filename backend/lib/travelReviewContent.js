@@ -2,6 +2,8 @@
 // TEMPLATE-only. {destination} woven in so the ask reads naturally
 // ("How was your trip to Bali?"). Links to the public review page.
 
+const { textToHtml } = require("./emailHtml");
+
 function interp(str, vars) {
   return String(str)
     .replace(/\{destination\}/g, vars.destination || "your recent trip")
@@ -22,7 +24,7 @@ function buildRequestEmail({ destination, customerName, reviewUrl }) {
   const vars = { destination, customerName, reviewUrl };
   const subject = interp(TEMPLATE.subject, vars);
   const text = interp(TEMPLATE.body, vars);
-  return { subject, text, html: text.replace(/\n/g, "<br>") };
+  return { subject, text, html: textToHtml(text) };
 }
 
 module.exports = { buildRequestEmail, TEMPLATE };

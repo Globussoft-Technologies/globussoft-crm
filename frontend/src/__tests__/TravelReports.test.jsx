@@ -197,9 +197,9 @@ const RFU_EMPTY = {
 
 const CROSS_BRAND_POPULATED = {
   subBrands: {
-    TMC: { won: 8, lost: 2, wonRevenue: 1234567, conversionPct: 80, diagnostics: 9 },
-    RFU: { won: 5, lost: 3, wonRevenue: 540000, conversionPct: 62, diagnostics: 8 },
-    TRAVEL_STALL: { won: 3, lost: 4, wonRevenue: 210000, conversionPct: 43, diagnostics: 5 },
+    TMC: { won: 8, lost: 2, wonRevenue: 1234567, conversionPct: 80, diagnostics: 9, quotesTotal: 10, quotesAccepted: 8, quoteRevenue: 1234567, quoteConversionPct: 80 },
+    RFU: { won: 5, lost: 3, wonRevenue: 540000, conversionPct: 62, diagnostics: 8, quotesTotal: 8, quotesAccepted: 5, quoteRevenue: 540000, quoteConversionPct: 62 },
+    TRAVEL_STALL: { won: 3, lost: 4, wonRevenue: 210000, conversionPct: 43, diagnostics: 5, quotesTotal: 7, quotesAccepted: 3, quoteRevenue: 210000, quoteConversionPct: 43 },
   },
 };
 

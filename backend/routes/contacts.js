@@ -379,11 +379,28 @@ router.put('/bulk-assign', async (req, res) => {
     if (!Array.isArray(contactIds) || contactIds.length === 0) {
       return res.status(400).json({ error: 'No contact IDs provided' });
     }
+    const ids = contactIds.map(id => parseInt(id));
+    let assignableIds = ids;
+    let skipped = 0;
+    // Travel security guard — when assigning to a person, drop any brand-tagged
+    // lead the assignee can't access (rather than failing the whole batch).
+    // Generic/wellness leads have subBrand null → always assignable → unchanged.
+    if (assignedToId) {
+      const rows = await prisma.contact.findMany({
+        where: { id: { in: ids }, tenantId: req.user.tenantId },
+        select: { id: true, subBrand: true },
+      });
+      const { getSubBrandAccessSet, canAccessSubBrand } = require('../middleware/travelGuards');
+      const allowed = await getSubBrandAccessSet(parseInt(assignedToId));
+      const ok = rows.filter(r => !r.subBrand || canAccessSubBrand(allowed, r.subBrand)).map(r => r.id);
+      skipped = ids.length - ok.length;
+      assignableIds = ok;
+    }
     await prisma.contact.updateMany({
-      where: { id: { in: contactIds.map(id => parseInt(id)) }, tenantId: req.user.tenantId },
+      where: { id: { in: assignableIds }, tenantId: req.user.tenantId },
       data: { assignedToId: assignedToId ? parseInt(assignedToId) : null }
     });
-    res.json({ updated: contactIds.length, assignedToId: assignedToId || null });
+    res.json({ updated: assignableIds.length, skipped, assignedToId: assignedToId || null });
   } catch (_err) {
     res.status(500).json({ error: 'Failed to bulk assign agent' });
   }
@@ -675,6 +692,16 @@ router.put('/:id/assign', async (req, res) => {
     const { assignedToId } = req.body;
     const existing = await prisma.contact.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
     if (!existing) return res.status(404).json({ error: 'Contact not found' });
+    // Travel security guard — a brand-tagged lead can only be assigned to staff
+    // who have access to that sub-brand. Contacts with no subBrand (generic /
+    // wellness) skip this entirely, so their behaviour is unchanged.
+    if (existing.subBrand && assignedToId) {
+      const { getSubBrandAccessSet, canAccessSubBrand } = require('../middleware/travelGuards');
+      const allowed = await getSubBrandAccessSet(parseInt(assignedToId));
+      if (!canAccessSubBrand(allowed, existing.subBrand)) {
+        return res.status(403).json({ error: "That staff member doesn't have access to this lead's sub-brand", code: 'SUB_BRAND_ASSIGN_DENIED' });
+      }
+    }
     const contact = await prisma.contact.update({
       where: { id: existing.id },
       data: { assignedToId: assignedToId ? parseInt(assignedToId) : null },

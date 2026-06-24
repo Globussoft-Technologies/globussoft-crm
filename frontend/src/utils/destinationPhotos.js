@@ -154,6 +154,43 @@ export function useDestinationPhoto(destination) {
 }
 
 /**
+ * Hook: gallery photos spanning MULTIPLE destinations (for a multi-city trip's
+ * side rails). Fetches each city's gallery (capped) and INTERLEAVES the results
+ * so the rails alternate cities (Makkah, Paris, Madinah, France, …) instead of
+ * showing only the first city. Empty until fetched / on miss; ignores stale
+ * responses. Pass [] / a single-element array to effectively no-op.
+ */
+export function useMultiDestinationGallery(destinations) {
+  const [urls, setUrls] = useState([]);
+  // Stable dependency key — the array identity changes every render otherwise.
+  const key = (destinations || []).filter(Boolean).join("|");
+  useEffect(() => {
+    let alive = true;
+    setUrls([]);
+    const list = (destinations || []).filter(Boolean).slice(0, 6);
+    if (!list.length) return undefined;
+    Promise.all(
+      list.map((d) =>
+        fetchDestinationGallery(d, { limit: 4 })
+          .then((g) => g.map((x) => ({ ...x, city: d })))
+          .catch(() => []),
+      ),
+    ).then((perCity) => {
+      if (!alive) return;
+      const out = [];
+      const max = Math.max(0, ...perCity.map((p) => p.length));
+      for (let i = 0; i < max; i += 1) {
+        for (const p of perCity) if (p[i]) out.push(p[i]);
+      }
+      setUrls(out);
+    });
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
+  return urls;
+}
+
+/**
  * Hook: returns an array of destination photo URLs (for the side rails).
  * Empty until fetched / on miss. Ignores stale responses.
  */

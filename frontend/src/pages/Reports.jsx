@@ -294,7 +294,7 @@ export default function Reports() {
                           all metrics here (revenue/count/win-rate/expenses) are
                           non-negative; pinning domain=[0,'auto'] silences the
                           Recharts negative-domain warning on all-zero data. */}
-                      <YAxis stroke="var(--text-secondary)" tickLine={false} axisLine={false} domain={[0, 'auto']} tickFormatter={val => metric === 'revenue' ? formatMoney(val, { maximumFractionDigits: 0 }) : val} />
+                      <YAxis stroke="var(--text-secondary)" tickLine={false} axisLine={false} width={92} domain={[0, 'auto']} tickFormatter={val => metric === 'revenue' ? formatMoney(val, { maximumFractionDigits: 0 }) : val} />
                       <Tooltip wrapperStyle={{ zIndex: 9999 }} contentStyle={{ background: 'var(--tooltip-bg)', border: '1px solid var(--border-color)', borderRadius: '8px' }} itemStyle={{ color: 'var(--text-primary)' }} />
                       <Bar dataKey="value" radius={[4, 4, 0, 0]}>
                         {data.map((entry, index) => (
@@ -325,7 +325,7 @@ export default function Reports() {
                           all metrics here (revenue/count/win-rate/expenses) are
                           non-negative; pinning domain=[0,'auto'] silences the
                           Recharts negative-domain warning on all-zero data. */}
-                      <YAxis stroke="var(--text-secondary)" tickLine={false} axisLine={false} domain={[0, 'auto']} tickFormatter={val => metric === 'revenue' ? formatMoney(val, { maximumFractionDigits: 0 }) : val} />
+                      <YAxis stroke="var(--text-secondary)" tickLine={false} axisLine={false} width={92} domain={[0, 'auto']} tickFormatter={val => metric === 'revenue' ? formatMoney(val, { maximumFractionDigits: 0 }) : val} />
                       <Tooltip wrapperStyle={{ zIndex: 9999 }} contentStyle={{ background: 'var(--tooltip-bg)', border: '1px solid var(--border-color)', borderRadius: '8px' }} />
                       <Area type="monotone" dataKey="value" stroke="#10b981" fillOpacity={1} fill="url(#colorVal)" />
                     </AreaChart>

@@ -71,10 +71,206 @@ const { writeAudit } = require('../lib/audit');
 // reads the quote without acting leaves no trail today. recordDocumentAccess
 // closes that gap with a uniform DOCUMENT_VIEW row.
 const { recordDocumentAccess } = require('../lib/documentAccessAudit');
+// Staff in-app notifications on every customer decision (accept/reject/counter).
+const { notifyMany } = require('../lib/notificationService');
+// Customer-money payment link — uses the TENANT's OWN Razorpay keys from the
+// Payment Gateway config (BYOK), NEVER the platform env keys. Returns null when
+// the tenant hasn't configured + activated its keys (link is then skipped).
+const { getTenantRazorpayClient } = require('../lib/tenantPaymentGateway');
+// Best-effort customer delivery of the advance-payment link (email + WhatsApp).
+const { sendEmail } = require('../lib/emailSender');
+const waWebClient = require('../services/whatsappWebClient');
+
+// Advance share we ask the customer to pay on accept to confirm the booking.
+const ADVANCE_PCT = 0.5; // 50%
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Resolve the staff to notify about a customer decision on a sub-brand's quote:
+ * ALL admins (full visibility) + the MANAGERs who can act on that sub-brand
+ * (subBrandAccess includes it, or is unset/empty = full access). Mirrors the
+ * itinerary-decision resolver in routes/portal.js. Best-effort; returns [].
+ */
+async function resolveQuoteStaffUserIds(tenantId, subBrand) {
+  try {
+    const staff = await prisma.user.findMany({
+      where: { tenantId, role: { in: ['ADMIN', 'MANAGER'] } },
+      select: { id: true, role: true, subBrandAccess: true },
+    });
+    const ids = [];
+    for (const u of staff) {
+      if (u.role === 'ADMIN') { ids.push(u.id); continue; }
+      let access = null;
+      if (u.subBrandAccess) {
+        try { const arr = JSON.parse(u.subBrandAccess); if (Array.isArray(arr)) access = arr; } catch { /* malformed → full */ }
+      }
+      if (access === null || access.length === 0 || access.includes(subBrand)) ids.push(u.id);
+    }
+    return ids;
+  } catch (e) {
+    console.warn('[travel-quotes-public] staff resolve failed (non-fatal):', e.message);
+    return [];
+  }
+}
+
+/** Friendly contact display name from the various name columns. */
+function contactDisplayName(contact) {
+  if (!contact) return null;
+  return contact.name
+    || contact.email
+    || null;
+}
+
+/**
+ * Notify the brand's admins + manager(s) that the customer accepted / rejected /
+ * countered the quote. Never throws — a notification failure must not fail the
+ * customer's action. `advance` (accept only) annotates whether a pay link went.
+ */
+async function notifyStaffOfQuoteDecision({ tenantId, subBrand, quoteId, action, displayName, reason, proposedTotal, currency, advance }) {
+  try {
+    const userIds = await resolveQuoteStaffUserIds(tenantId, subBrand);
+    if (!userIds.length) return;
+    const who = displayName || 'A customer';
+    const brand = (subBrand || '').toUpperCase();
+    const cur = currency || 'INR';
+    let title; let message; let type;
+    if (action === 'accepted') {
+      title = 'Quote accepted by customer';
+      type = 'success';
+      message = `${who} ACCEPTED the ${brand} quote #${quoteId}.`;
+      if (advance && advance.ok) {
+        message += ` A ${Math.round(ADVANCE_PCT * 100)}% advance link (${advance.currency} ${Number(advance.amountMajor).toLocaleString('en-IN')}) was sent to the customer to confirm the booking.`;
+      } else {
+        message += ' Set up this organisation\'s Razorpay keys (Settings → Payment Gateway) to collect the advance automatically.';
+      }
+    } else if (action === 'rejected') {
+      title = 'Quote rejected by customer';
+      type = 'warning';
+      message = `${who} REJECTED the ${brand} quote #${quoteId}.`;
+      if (reason) message += ` Reason: "${reason}"`;
+    } else { // countered
+      title = 'Counter-offer received';
+      type = 'warning';
+      message = `${who} sent a COUNTER-OFFER on the ${brand} quote #${quoteId}`;
+      if (proposedTotal != null) message += ` — proposed ${cur} ${Number(proposedTotal).toLocaleString('en-IN')}`;
+      message += '.';
+      if (reason) message += ` Comments: "${reason}"`;
+    }
+    // Deep-link to a REAL route: a counter-offer opens the counter-review screen;
+    // accept/reject open the quote in the builder. (The old `/travel/quotes/:id`
+    // had no route → the notification 404'd.)
+    const link = action === 'countered'
+      ? `/travel/quotes/${quoteId}/counter-review`
+      : `/travel/quotes/builder/${quoteId}`;
+    await notifyMany({ userIds, tenantId, title, message, type, link });
+  } catch (e) {
+    console.warn('[travel-quotes-public] staff decision notification failed (non-fatal):', e.message);
+  }
+}
+
+/**
+ * Create a Razorpay payment link for the advance (ADVANCE_PCT of the quote
+ * total), billed to the TENANT's OWN Razorpay account (BYOK). Returns
+ * { ok:true, url, id, amountMajor, currency } on success, else { ok:false,
+ * reason }. Never throws — when the tenant has no active gateway the accept
+ * still succeeds; the link is simply skipped.
+ */
+async function createAdvancePaymentLink({ quote, contact, displayName }) {
+  try {
+    const total = Number(quote.totalAmount) || 0;
+    if (total <= 0) return { ok: false, reason: 'no_total' };
+    const gw = await getTenantRazorpayClient(quote.tenantId);
+    if (!gw) return { ok: false, reason: 'no_gateway' };
+    const currency = (quote.currency || 'INR').toUpperCase();
+    const minAmountMajor = Math.round(total * ADVANCE_PCT); // 50% — minimum the customer must pay
+    if (minAmountMajor <= 0) return { ok: false, reason: 'no_total' };
+
+    // Expiry: use the quote's validUntil if set and in the future, otherwise 1 year from now.
+    // The link stays live so the customer can pay the remaining balance any time before the trip.
+    const defaultExpiry = Math.floor(Date.now() / 1000) + 365 * 24 * 60 * 60;
+    let expireBy = defaultExpiry;
+    if (quote.validUntil) {
+      const validTs = Math.floor(new Date(quote.validUntil).getTime() / 1000);
+      if (validTs > Math.floor(Date.now() / 1000)) expireBy = validTs;
+    }
+
+    const link = await gw.client.paymentLink.create({
+      amount: Math.round(total * 100),          // full trip cost in smallest unit (paise)
+      currency,
+      accept_partial: true,                      // customer can pay 50%, 70%, 80%, or 100%
+      first_min_partial_amount: Math.round(minAmountMajor * 100), // minimum = 50%
+      expire_by: expireBy,
+      description: `Booking confirmation — quote #${quote.id} (min. ${Math.round(ADVANCE_PCT * 100)}% advance)`,
+      customer: {
+        name: displayName || undefined,
+        email: (contact && contact.email) || undefined,
+        contact: (contact && contact.phone) || undefined,
+      },
+      // We deliver the link ourselves (email + WhatsApp) — don't double-send.
+      notify: { sms: false, email: false },
+      reminder_enable: true,
+      notes: { quoteId: String(quote.id), tenantId: String(quote.tenantId), kind: 'travel-quote-advance' },
+    });
+    // Persist the Razorpay payment-link id (plink_XXXX) on the quote for refund
+    // tracking. Best-effort — a DB write failure must not fail the accept flow.
+    try {
+      await prisma.travelQuote.update({
+        where: { id: quote.id },
+        data: { advancePlinkId: link.id },
+      });
+    } catch (e) {
+      console.error('[travel-quotes-public] advancePlinkId persist failed (non-fatal):', e.message);
+    }
+    return { ok: true, url: link.short_url, id: link.id, amountMajor: minAmountMajor, totalAmount: total, currency };
+  } catch (e) {
+    console.error('[travel-quotes-public] advance payment-link create failed (non-fatal):', e && (e.message || JSON.stringify(e)));
+    return { ok: false, reason: 'error', error: e && (e.message || JSON.stringify(e)) };
+  }
+}
+
+/**
+ * Deliver the advance-payment link to the customer over email + WhatsApp
+ * (best-effort, both channels). Returns the list of channels that accepted the
+ * message (for the response + staff note). Never throws.
+ */
+async function sendAdvanceLinkToCustomer({ quote, contact, displayName, payUrl, amountMajor, totalAmount, currency, tenantName }) {
+  const channels = [];
+  if (!contact) return channels;
+  const cur = currency || quote.currency || 'INR';
+  const minAmt = Number(amountMajor || 0).toLocaleString('en-IN');
+  const fullAmt = Number(totalAmount || amountMajor || 0).toLocaleString('en-IN');
+  const name = displayName || 'there';
+  const brand = tenantName || 'our team';
+  const text =
+    `Hi ${name},\n\n` +
+    `Thank you for accepting your quote! To confirm your booking, please use this secure payment link:\n` +
+    `${payUrl}\n\n` +
+    `You can pay a minimum of ${cur} ${minAmt} (${Math.round(ADVANCE_PCT * 100)}% advance) to lock in your booking, ` +
+    `or pay the full amount of ${cur} ${fullAmt} — any amount in between works too.\n\n` +
+    `This link stays active until your trip, so you can pay the remaining balance any time.\n\n— ${brand}`;
+  if (contact.email) {
+    try {
+      await sendEmail({ to: contact.email, subject: `Confirm your booking — pay from ${cur} ${minAmt}`, text });
+      channels.push('email');
+    } catch (e) { console.error('[travel-quotes-public] advance email failed (non-fatal):', e.message); }
+  }
+  if (contact.phone) {
+    try {
+      const r = await waWebClient.sendBestEffort({
+        tenantId: quote.tenantId,
+        subBrand: quote.subBrand,
+        toPhone: contact.phone,
+        contactId: quote.contactId,
+        fallbackText: `Hi ${name}! 🎉 Thanks for accepting your quote. Pay min. ${cur} ${minAmt} (${Math.round(ADVANCE_PCT * 100)}% advance) to confirm your booking — or pay more, up to the full ${cur} ${fullAmt}. Link stays active until your trip: ${payUrl}`,
+      });
+      if (r && r.sent) channels.push('whatsapp');
+    } catch (e) { console.error('[travel-quotes-public] advance WhatsApp failed (non-fatal):', e.message); }
+  }
+  return channels;
+}
 
 /**
  * Verify share token and load the quote (with lines).
@@ -140,7 +336,7 @@ function customerEnvelope(quote, contact) {
     },
     lines,
     customer: contact
-      ? { name: contact.firstName ? `${contact.firstName} ${contact.lastName || ''}`.trim() : (contact.email || '') }
+      ? { name: contact.name || contact.email || '' }
       : null,
   };
 }
@@ -412,9 +608,9 @@ router.get('/quote/:shareToken', async (req, res) => {
     try {
       contact = await prisma.contact.findFirst({
         where: { id: quote.contactId, tenantId: quote.tenantId },
-        select: { firstName: true, lastName: true, email: true },
+        select: { name: true, email: true },
       });
-    } catch (e) {
+    } catch (_e) {
       // Non-fatal — render without customer name
     }
 
@@ -518,12 +714,43 @@ router.post('/quote/:shareToken/accept', async (req, res) => {
       quoteUpdateExtras,
     });
 
+    // Notify staff + send the customer a 50% advance payment link (billed to the
+    // TENANT's own Razorpay account — BYOK). All best-effort — these never block
+    // or fail the accept acknowledgement.
+    let advancePayment = null;
+    try {
+      let contact = null;
+      try {
+        contact = await prisma.contact.findFirst({
+          where: { id: quote.contactId, tenantId: quote.tenantId },
+          select: { name: true, email: true, phone: true },
+        });
+      } catch { /* proceed without contact */ }
+      const displayName = contactDisplayName(contact) || customerName || null;
+      let tenantName = null;
+      try {
+        const t = await prisma.tenant.findUnique({ where: { id: quote.tenantId }, select: { name: true } });
+        tenantName = t && t.name;
+      } catch { /* fall back to generic */ }
+      const advance = await createAdvancePaymentLink({ quote, contact, displayName });
+      if (advance.ok) {
+        const channelsSent = await sendAdvanceLinkToCustomer({
+          quote, contact, displayName, payUrl: advance.url, amountMajor: advance.amountMajor, totalAmount: advance.totalAmount, currency: advance.currency, tenantName,
+        });
+        advancePayment = { link: advance.url, amount: advance.amountMajor, currency: advance.currency, percent: Math.round(ADVANCE_PCT * 100), channelsSent };
+      }
+      await notifyStaffOfQuoteDecision({ tenantId: quote.tenantId, subBrand: quote.subBrand, quoteId: quote.id, action: 'accepted', displayName, advance });
+    } catch (e) {
+      console.error('[travel-quotes-public] post-accept side effects failed (non-fatal):', e.message);
+    }
+
     return res.status(200).json({
       status: 'accepted',
       quoteId: updated.id,
       previousStatus: statusBefore,
       acceptedAt: updated.updatedAt,
       fxLock,
+      advancePayment,
     });
   } catch (e) {
     console.error('[travel-quotes-public] accept error:', e.message);
@@ -576,6 +803,21 @@ router.post('/quote/:shareToken/reject', async (req, res) => {
       changedBy: 'customer',
       changeReason: rejectionReason,
     });
+
+    // Notify staff (best-effort).
+    try {
+      let displayName = null;
+      try {
+        const c = await prisma.contact.findFirst({
+          where: { id: quote.contactId, tenantId: quote.tenantId },
+          select: { name: true, email: true },
+        });
+        displayName = contactDisplayName(c);
+      } catch { /* ignore */ }
+      await notifyStaffOfQuoteDecision({ tenantId: quote.tenantId, subBrand: quote.subBrand, quoteId: quote.id, action: 'rejected', displayName, reason: rejectionReason });
+    } catch (e) {
+      console.error('[travel-quotes-public] reject notify failed (non-fatal):', e.message);
+    }
 
     return res.status(200).json({
       status: 'rejected',
@@ -644,6 +886,21 @@ router.post('/quote/:shareToken/counter', async (req, res) => {
       changedBy: 'customer',
       changeReason: counterOfferJson,
     });
+
+    // Notify staff (best-effort).
+    try {
+      let displayName = null;
+      try {
+        const c = await prisma.contact.findFirst({
+          where: { id: quote.contactId, tenantId: quote.tenantId },
+          select: { name: true, email: true },
+        });
+        displayName = contactDisplayName(c);
+      } catch { /* ignore */ }
+      await notifyStaffOfQuoteDecision({ tenantId: quote.tenantId, subBrand: quote.subBrand, quoteId: quote.id, action: 'countered', displayName, reason: comments, proposedTotal: Number(proposedTotal), currency: quote.currency });
+    } catch (e) {
+      console.error('[travel-quotes-public] counter notify failed (non-fatal):', e.message);
+    }
 
     return res.status(200).json({
       status: 'countered',

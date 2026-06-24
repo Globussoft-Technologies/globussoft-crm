@@ -73,6 +73,7 @@ const VALID_LINE_TYPES = [
   "hotel",
   "flight",
   "transport",
+  "transfer",
   "visa",
   "service",
   "other",
@@ -636,6 +637,89 @@ router.post(
         error: "Failed to apply quote template",
         code: "QUOTE_TEMPLATE_APPLY_FAILED",
       });
+    }
+  },
+);
+
+// POST /api/travel/quote-templates/generate
+// AI-powered line-item generator. Takes a natural-language prompt and
+// returns a ready-to-save linesJson array. Uses the llmRouter so it
+// inherits per-tenant key resolution, cost logging, and budget caps.
+router.post(
+  "/generate",
+  verifyToken,
+  verifyRole(["ADMIN", "MANAGER"]),
+  async (req, res) => {
+    const llmRouter = require("../lib/llmRouter");
+    try {
+      const { prompt, category, currency = "INR" } = req.body || {};
+      if (!prompt || !String(prompt).trim()) {
+        return res.status(400).json({ error: "prompt is required", code: "MISSING_PROMPT" });
+      }
+
+      const systemPrompt = `You are a travel quote builder. Given a natural-language description of a travel package, generate a JSON array of line items for a travel quote template.
+
+Each line item must be a JSON object with these fields:
+- lineType (required): one of "flight", "hotel", "transport", "transfer", "visa", "service", "other"
+- description (required): a clear, customer-facing label (e.g. "Gulf Air BHY 283 Mumbai → Jeddah (Economy)")
+- quantity (number): default 1
+- unitPrice (number): realistic price in ${currency}
+- currency (string): "${currency}"
+- notes (string, optional): any relevant detail
+
+Rules:
+- Return ONLY a valid JSON array — no markdown, no explanation, no code fences.
+- Include realistic line items for the package described (flights, hotels, transfers, visas as applicable).
+- Use per-unit pricing (e.g. per night for hotels, per passenger for flights).
+- Keep descriptions concise and professional.
+${category ? `- This is a "${category}" package — tailor line items accordingly.` : ""}
+
+Example output:
+[{"lineType":"flight","description":"Air India DEL→DXB (Economy)","quantity":2,"unitPrice":18500,"currency":"INR"},{"lineType":"hotel","description":"Marriott Dubai, 3 nights","quantity":3,"unitPrice":8200,"currency":"INR"}]`;
+
+      const result = await llmRouter.routeRequest({
+        task: "quote-template-generate",
+        payload: { prompt: String(prompt).trim(), category, currency },
+        tenantId: req.travelTenant?.id || req.user?.tenantId,
+      });
+
+      // Parse the LLM response — strip markdown fences and find the JSON array
+      let raw = (result.text || "").trim();
+      // Strip ```json ... ``` or ``` ... ``` wrappers
+      raw = raw.replace(/^```[a-z]*\s*/i, "").replace(/```\s*$/, "").trim();
+      // If there's still prose before the array, extract the first [...] block
+      const arrayMatch = raw.match(/(\[[\s\S]*\])/);
+      if (arrayMatch) raw = arrayMatch[1];
+      let lines;
+      try {
+        lines = JSON.parse(raw);
+        if (!Array.isArray(lines)) throw new Error("not an array");
+      } catch (_e) {
+        return res.status(502).json({
+          error: "AI returned invalid JSON. Try rephrasing your prompt.",
+          code: "INVALID_LLM_JSON",
+          raw: raw.slice(0, 500),
+        });
+      }
+
+      // Sanitise: keep only known fields, ensure required ones exist
+      const VALID_TYPES = ["flight", "hotel", "transport", "transfer", "visa", "service", "other"];
+      const sanitised = lines.map((item, i) => ({
+        lineType: VALID_TYPES.includes(item.lineType) ? item.lineType : "service",
+        description: String(item.description || `Line ${i + 1}`).slice(0, 500),
+        quantity: Number.isFinite(Number(item.quantity)) ? Number(item.quantity) : 1,
+        unitPrice: Number.isFinite(Number(item.unitPrice)) ? Number(item.unitPrice) : 0,
+        currency: String(item.currency || currency).slice(0, 3).toUpperCase(),
+        ...(item.notes ? { notes: String(item.notes).slice(0, 1000) } : {}),
+      }));
+
+      res.json({ linesJson: JSON.stringify(sanitised, null, 2), stub: !!result.stub });
+    } catch (err) {
+      if (err.code === "LLM_BUDGET_EXCEEDED") {
+        return res.status(402).json({ error: "Monthly AI budget cap reached.", code: err.code });
+      }
+      console.error("[travel/quote-templates] generate error:", err.message);
+      res.status(500).json({ error: "Failed to generate template lines", code: "GENERATE_FAILED" });
     }
   },
 );

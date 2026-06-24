@@ -14,6 +14,7 @@
 // no contact emails); they're shaped for charts / tables.
 
 const express = require("express");
+const PDFDocument = require("pdfkit");
 const router = express.Router();
 const { verifyToken } = require("../middleware/auth");
 const prisma = require("../lib/prisma");
@@ -23,22 +24,65 @@ const {
   canAccessSubBrand,
 } = require("../middleware/travelGuards");
 
-function scoped(req, allowed, extra = {}) {
-  const where = { tenantId: req.travelTenant.id, ...extra };
-  if (allowed !== null) {
-    // When the caller has a narrow access set, intersect on subBrand.
-    if (where.subBrand !== undefined) {
-      // Caller-pinned subBrand wins; if denied, the route handler will
-      // 403 separately. This branch is only hit when the route function
-      // pre-set subBrand (e.g. TMC report fixes subBrand="tmc").
-      if (!canAccessSubBrand(allowed, where.subBrand)) {
-        where.subBrand = "__none__";
-      }
-    } else {
-      where.subBrand = { in: [...allowed] };
-    }
+const SUB_BRAND_LABEL = { tmc: "TMC (Schools)", rfu: "RFU (Umrah)", travelstall: "Travel Stall", visasure: "Visa Sure" };
+const inr = (n) => `₹${Number(n || 0).toLocaleString("en-IN")}`;
+
+// The travel SALES funnel lives in TravelQuote (Draft/Sent/Accepted/Rejected/
+// Expired), NOT the generic Deal table — travel never creates Deal rows, which
+// is why the "Deal funnel" was always empty. This surfaces the real quote
+// pipeline (count + ₹ by status) for a sub-brand. Fail-soft: returns an empty
+// funnel if the model/query is unavailable (keeps existing tests that don't
+// mock travelQuote green).
+async function quoteFunnel(tenantId, subBrand) {
+  try {
+    const [byStatus, amtByStatus] = await Promise.all([
+      prisma.travelQuote.groupBy({ by: ["status"], where: { tenantId, subBrand }, _count: { _all: true } }),
+      prisma.travelQuote.groupBy({ by: ["status"], where: { tenantId, subBrand }, _sum: { totalAmount: true } }),
+    ]);
+    return {
+      byStatus: flattenGroupCount(byStatus, "status"),
+      amountByStatus: flattenGroupSum(amtByStatus, "status", "totalAmount"),
+    };
+  } catch (_e) {
+    return { byStatus: {}, amountByStatus: {} };
   }
-  return where;
+}
+
+// Render a bordered, columnar table into a pdfkit doc (shared by the travel
+// report PDF export). columns: [{ header, width, align? }]; rows: cell-string
+// arrays. Header fill + per-cell ellipsis clipping + zebra + page-break.
+function drawTravelTable(doc, columns, rows, opts = {}) {
+  const x = opts.x || 50;
+  const ROW_H = 18;
+  const PAD = 4;
+  const totalW = columns.reduce((s, c) => s + c.width, 0);
+  let y = opts.startY != null ? opts.startY : doc.y;
+  const header = () => {
+    doc.save();
+    doc.rect(x, y, totalW, ROW_H).fill("#1f3a5f");
+    doc.restore();
+    doc.fillColor("#ffffff").font("Helvetica-Bold").fontSize(9);
+    let cx = x;
+    for (const c of columns) { doc.text(String(c.header), cx + PAD, y + 5, { width: c.width - PAD * 2, align: c.align || "left", lineBreak: false, ellipsis: true }); cx += c.width; }
+    y += ROW_H;
+  };
+  header();
+  doc.font("Helvetica").fontSize(8);
+  if (rows.length === 0) {
+    doc.fillColor("#888").text("No records.", x + PAD, y + 5, { width: totalW - PAD * 2, lineBreak: false });
+    doc.y = y + ROW_H; return doc.y;
+  }
+  rows.forEach((row, i) => {
+    if (y + ROW_H > 790) { doc.addPage(); y = 50; header(); doc.font("Helvetica").fontSize(8); }
+    if (i % 2 === 1) { doc.save(); doc.rect(x, y, totalW, ROW_H).fill("#f4f6f9"); doc.restore(); }
+    doc.fillColor("#222");
+    let cx = x;
+    for (let ci = 0; ci < columns.length; ci += 1) { const c = columns[ci]; doc.text(row[ci] == null ? "" : String(row[ci]), cx + PAD, y + 5, { width: c.width - PAD * 2, align: c.align || "left", lineBreak: false, ellipsis: true }); cx += c.width; }
+    doc.save(); doc.moveTo(x, y + ROW_H).lineTo(x + totalW, y + ROW_H).lineWidth(0.3).strokeColor("#ddd").stroke(); doc.restore();
+    y += ROW_H;
+  });
+  doc.y = y;
+  return y;
 }
 
 function flattenGroupCount(rows, key, field = "_count") {
@@ -66,16 +110,7 @@ function flattenGroupSum(rows, key, sumField) {
 // originating diagnostic, which TmcTrip doesn't link directly — we approximate
 // by Deal.subBrand='tmc' joined to Deal.diagnosticId.
 
-router.get("/reports/tmc", verifyToken, requireTravelTenant, async (req, res) => {
-  try {
-    const allowed = await getSubBrandAccessSet(req.user.userId);
-    // Hard-block TMC reports for users with no TMC access.
-    if (!canAccessSubBrand(allowed, "tmc")) {
-      return res.status(403).json({ error: "TMC sub-brand access required", code: "SUB_BRAND_DENIED" });
-    }
-
-    const tenantId = req.travelTenant.id;
-
+async function buildTmcReport(tenantId) {
     // All trips, separated by status: active = confirmed | in-trip | completed.
     // cancelled trips are excluded from revenue totals.
     const ACTIVE_STATUSES = ["confirmed", "in-trip", "completed"];
@@ -151,8 +186,10 @@ router.get("/reports/tmc", verifyToken, requireTravelTenant, async (req, res) =>
 
     const schools = Object.keys(schoolTripCount).length;
     const repeatSchools = Object.values(schoolTripCount).filter((c) => c >= 2).length;
+    const quotes = await quoteFunnel(tenantId, "tmc");
 
-    res.json({
+    return {
+      quotes,
       trips: {
         total: tripsByStatus.reduce((s, r) => s + (r._count?._all ?? 0), 0),
         byStatus: flattenGroupCount(tripsByStatus, "status"),
@@ -175,7 +212,16 @@ router.get("/reports/tmc", verifyToken, requireTravelTenant, async (req, res) =>
       diagnostics: {
         byClassification: flattenGroupCount(tmcDiagnosticsByClassification, "classification"),
       },
-    });
+    };
+}
+
+router.get("/reports/tmc", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const allowed = await getSubBrandAccessSet(req.user.userId);
+    if (!canAccessSubBrand(allowed, "tmc")) {
+      return res.status(403).json({ error: "TMC sub-brand access required", code: "SUB_BRAND_DENIED" });
+    }
+    res.json(await buildTmcReport(req.travelTenant.id));
   } catch (e) {
     if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
     console.error("[travel-reports] TMC error:", e.message);
@@ -190,14 +236,7 @@ router.get("/reports/tmc", verifyToken, requireTravelTenant, async (req, res) =>
 // link revenue to tier we'd need diagnostic→contact→itinerary joins; for
 // the first ship we group separately and let the frontend correlate.
 
-router.get("/reports/rfu", verifyToken, requireTravelTenant, async (req, res) => {
-  try {
-    const allowed = await getSubBrandAccessSet(req.user.userId);
-    if (!canAccessSubBrand(allowed, "rfu")) {
-      return res.status(403).json({ error: "RFU sub-brand access required", code: "SUB_BRAND_DENIED" });
-    }
-    const tenantId = req.travelTenant.id;
-
+async function buildRfuReport(tenantId) {
     const [
       itinByStatus,
       itinAmountByStatus,
@@ -246,8 +285,10 @@ router.get("/reports/rfu", verifyToken, requireTravelTenant, async (req, res) =>
 
     const customers = itinByContact.length;
     const repeatCustomers = itinByContact.filter((r) => (r._count?._all ?? 0) >= 2).length;
+    const quotes = await quoteFunnel(tenantId, "rfu");
 
-    res.json({
+    return {
+      quotes,
       itineraries: {
         total: itinByStatus.reduce((s, r) => s + (r._count?._all ?? 0), 0),
         byStatus: flattenGroupCount(itinByStatus, "status"),
@@ -267,7 +308,16 @@ router.get("/reports/rfu", verifyToken, requireTravelTenant, async (req, res) =>
         repeatRatePct: customers > 0 ? Number(((repeatCustomers / customers) * 100).toFixed(2)) : 0,
       },
       currency: "INR",
-    });
+    };
+}
+
+router.get("/reports/rfu", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const allowed = await getSubBrandAccessSet(req.user.userId);
+    if (!canAccessSubBrand(allowed, "rfu")) {
+      return res.status(403).json({ error: "RFU sub-brand access required", code: "SUB_BRAND_DENIED" });
+    }
+    res.json(await buildRfuReport(req.travelTenant.id));
   } catch (e) {
     if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
     console.error("[travel-reports] RFU error:", e.message);
@@ -281,14 +331,12 @@ router.get("/reports/rfu", verifyToken, requireTravelTenant, async (req, res) =>
 // only for revenue totals. Conversion = won / (won + lost) for stages
 // reached terminal state.
 
-router.get("/reports/cross-brand", verifyToken, requireTravelTenant, async (req, res) => {
-  try {
-    const allowed = await getSubBrandAccessSet(req.user.userId);
-    const tenantId = req.travelTenant.id;
-
+async function buildCrossBrandReport(tenantId, allowed) {
     // Build the subBrand filter only when caller has restricted access.
     const dealWhere = { tenantId, deletedAt: null, subBrand: { not: null } };
     if (allowed !== null) dealWhere.subBrand = { in: [...allowed] };
+    const diagWhere = { tenantId };
+    if (allowed !== null) diagWhere.subBrand = { in: [...allowed] };
 
     const [dealsBySubBrandStage, dealAmountBySubBrandStage, diagBySubBrand] = await Promise.all([
       prisma.deal.groupBy({
@@ -303,7 +351,7 @@ router.get("/reports/cross-brand", verifyToken, requireTravelTenant, async (req,
       }),
       prisma.travelDiagnostic.groupBy({
         by: ["subBrand"],
-        where: scoped(req, allowed),
+        where: diagWhere,
         _count: { _all: true },
       }),
     ]);
@@ -331,7 +379,7 @@ router.get("/reports/cross-brand", verifyToken, requireTravelTenant, async (req,
       ensure(r.subBrand).diagnostics = r._count?._all ?? 0;
     }
 
-    // Compute won + conversion per sub-brand.
+    // Compute won + conversion per sub-brand (Deal-based — legacy/back-compat).
     for (const b of Object.keys(subBrands)) {
       const stages = subBrands[b].dealsByStage;
       const won = stages.won || 0;
@@ -344,11 +392,172 @@ router.get("/reports/cross-brand", verifyToken, requireTravelTenant, async (req,
         : 0;
     }
 
-    res.json({ subBrands, currency: "INR" });
+    // TRAVEL-NATIVE revenue + conversion from TravelQuote (the actual sales
+    // artifact — Deals are always empty for travel). Adds quotesTotal /
+    // quotesAccepted / quoteRevenue (₹ of Accepted quotes) / quoteConversionPct
+    // per sub-brand. Fail-soft so existing tests (no travelQuote mock) still pass.
+    try {
+      const qWhere = { tenantId };
+      if (allowed !== null) qWhere.subBrand = { in: [...allowed] };
+      const [qCountRows, qAmtRows] = await Promise.all([
+        prisma.travelQuote.groupBy({ by: ["subBrand", "status"], where: qWhere, _count: { _all: true } }),
+        prisma.travelQuote.groupBy({ by: ["subBrand", "status"], where: qWhere, _sum: { totalAmount: true } }),
+      ]);
+      const qCount = {}; const qRev = {};
+      for (const r of qCountRows) { ensure(r.subBrand); (qCount[r.subBrand] ||= {})[r.status] = r._count?._all ?? 0; }
+      for (const r of qAmtRows) { ensure(r.subBrand); (qRev[r.subBrand] ||= {})[r.status] = r._sum?.totalAmount != null ? Number(r._sum.totalAmount) : 0; }
+      for (const b of Object.keys(subBrands)) {
+        const c = qCount[b] || {}; const rv = qRev[b] || {};
+        const total = Object.values(c).reduce((a, n) => a + n, 0);
+        const accepted = c.Accepted || 0; const rejected = c.Rejected || 0;
+        subBrands[b].quotesTotal = total;
+        subBrands[b].quotesAccepted = accepted;
+        subBrands[b].quoteRevenue = rv.Accepted || 0;
+        subBrands[b].quoteConversionPct = (accepted + rejected) > 0
+          ? Number(((accepted / (accepted + rejected)) * 100).toFixed(2)) : 0;
+      }
+    } catch (_e) { /* travelQuote unavailable → quote fields omitted */ }
+
+    return { subBrands, currency: "INR" };
+}
+
+router.get("/reports/cross-brand", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const allowed = await getSubBrandAccessSet(req.user.userId);
+    res.json(await buildCrossBrandReport(req.travelTenant.id, allowed));
   } catch (e) {
     if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
     console.error("[travel-reports] cross-brand error:", e.message);
     res.status(500).json({ error: "Failed to compute cross-brand report" });
+  }
+});
+
+// ── PDF export ─────────────────────────────────────────────────────
+// GET /api/travel/reports/export-pdf?tab=tmc|rfu|cross-brand
+// Renders the chosen report tab as a branded, tabular PDF — the travel-side
+// equivalent of the (now generic-only) /api/reports/export-pdf. Sub-brand
+// access is enforced exactly like the JSON endpoints.
+router.get("/reports/export-pdf", verifyToken, requireTravelTenant, async (req, res) => {
+  try {
+    const tab = ["tmc", "rfu", "cross-brand"].includes(String(req.query.tab)) ? String(req.query.tab) : "tmc";
+    const allowed = await getSubBrandAccessSet(req.user.userId);
+    const tenantId = req.travelTenant.id;
+    if (tab === "tmc" && !canAccessSubBrand(allowed, "tmc")) {
+      return res.status(403).json({ error: "TMC sub-brand access required", code: "SUB_BRAND_DENIED" });
+    }
+    if (tab === "rfu" && !canAccessSubBrand(allowed, "rfu")) {
+      return res.status(403).json({ error: "RFU sub-brand access required", code: "SUB_BRAND_DENIED" });
+    }
+
+    const doc = new PDFDocument({ margin: 50, size: "A4" });
+    // Embed Poppins (has the ₹ glyph) so currency renders — built-in Helvetica
+    // prints "¹". Skipped under test for text-extraction simplicity; mirrors the
+    // quote-PDF approach. Cache-bust the pre-cached default so the swap takes.
+    if (process.env.NODE_ENV !== "test") {
+      try {
+        const fsMod = require("fs");
+        const pathMod = require("path");
+        const fdir = pathMod.join(__dirname, "..", "assets", "fonts");
+        const reg = pathMod.join(fdir, "Poppins-Regular.ttf");
+        const sb = pathMod.join(fdir, "Poppins-SemiBold.ttf");
+        if (fsMod.existsSync(reg) && fsMod.existsSync(sb)) {
+          doc.registerFont("Helvetica", reg);
+          doc.registerFont("Helvetica-Bold", sb);
+          if (doc._fontFamilies) { delete doc._fontFamilies.Helvetica; delete doc._fontFamilies["Helvetica-Bold"]; }
+        }
+      } catch (_err) { /* fall back to built-in Helvetica */ }
+    }
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename=travel-${tab}-report.pdf`);
+    doc.pipe(res);
+
+    const TITLES = { tmc: "TMC — School Trips", rfu: "RFU — Umrah", "cross-brand": "Cross-brand" };
+    doc.font("Helvetica-Bold").fontSize(20).fillColor("#1f3a5f").text("Travel Reports", { align: "center" });
+    doc.font("Helvetica").fontSize(12).fillColor("#666").text(TITLES[tab], { align: "center" });
+    doc.fontSize(9).fillColor("#888").text(`Generated: ${new Date().toLocaleString()}`, { align: "center" });
+    doc.moveDown(1.0);
+    doc.fillColor("#000");
+
+    const section = (label) => { doc.moveDown(0.6); doc.font("Helvetica-Bold").fontSize(13).fillColor("#1f3a5f").text(label); doc.moveDown(0.3); doc.fillColor("#000"); };
+    // KPI summary as a 2-col Metric | Value table.
+    const kpiTable = (pairs) => { section("Summary"); drawTravelTable(doc, [{ header: "Metric", width: 320 }, { header: "Value", width: 175, align: "right" }], pairs, { startY: doc.y }); };
+    // Simple Key | Count table from a { key: count } object.
+    const countTable = (label, obj, keyHdr) => {
+      section(label);
+      drawTravelTable(doc, [{ header: keyHdr, width: 350 }, { header: "Count", width: 145, align: "right" }],
+        Object.entries(obj || {}).map(([k, v]) => [k, String(v)]), { startY: doc.y });
+    };
+    // Stage/Status table: Count + Amount + a TOTAL footer row.
+    const amountTable = (label, keyHdr, byCount, byAmount) => {
+      section(label);
+      const entries = Object.entries(byCount || {});
+      const totC = entries.reduce((s, [, c]) => s + Number(c || 0), 0);
+      const totA = entries.reduce((s, [k]) => s + Number((byAmount || {})[k] || 0), 0);
+      const rows = entries.map(([k, c]) => [k, String(c), inr((byAmount || {})[k])]);
+      if (entries.length) rows.push(["TOTAL", String(totC), inr(totA)]);
+      drawTravelTable(doc, [{ header: keyHdr, width: 200 }, { header: "Count", width: 100, align: "right" }, { header: "Amount", width: 195, align: "right" }], rows, { startY: doc.y });
+    };
+
+    if (tab === "tmc") {
+      const d = await buildTmcReport(tenantId);
+      kpiTable([
+        ["Total revenue (active trips)", inr(d.revenue.total)],
+        ["Active trips", String(d.trips.active)],
+        ["All-time trips", String(d.trips.total)],
+        ["Schools", String(d.schools.unique)],
+        ["Repeat schools", `${d.schools.repeat} (${d.schools.repeatRatePct}%)`],
+      ]);
+      amountTable("Quote pipeline (by status)", "Status", d.quotes.byStatus, d.quotes.amountByStatus);
+      countTable("Trip status", d.trips.byStatus, "Status");
+      amountTable("Deal funnel", "Stage", d.deals.byStage, d.deals.amountByStage);
+      countTable("Diagnostics by classification", d.diagnostics.byClassification, "Classification");
+      section("Top destinations by revenue");
+      drawTravelTable(doc, [{ header: "Destination", width: 350 }, { header: "Revenue", width: 145, align: "right" }],
+        d.revenue.topDestinations.map((r) => [r.destination, inr(r.revenue)]), { startY: doc.y });
+    } else if (tab === "rfu") {
+      const d = await buildRfuReport(tenantId);
+      kpiTable([
+        ["Itineraries", String(d.itineraries.total)],
+        ["Customers", String(d.customers.unique)],
+        ["Repeat customers", `${d.customers.repeat} (${d.customers.repeatRatePct}%)`],
+      ]);
+      amountTable("Quote pipeline (by status)", "Status", d.quotes.byStatus, d.quotes.amountByStatus);
+      amountTable("Itinerary revenue by status", "Status", d.itineraries.byStatus, d.itineraries.amountByStatus);
+      amountTable("Deal funnel", "Stage", d.deals.byStage, d.deals.amountByStage);
+      countTable("Diagnostics by tier", d.diagnostics.byTier, "Tier");
+      countTable("Diagnostics by classification", d.diagnostics.byClassification, "Classification");
+    } else {
+      const d = await buildCrossBrandReport(tenantId, allowed);
+      section("Won-revenue + conversion by sub-brand");
+      const cbRows = Object.entries(d.subBrands).map(([b, m]) => [SUB_BRAND_LABEL[b] || b, String(m.won), String(m.lost), inr(m.wonRevenue), `${m.conversionPct}%`, String(m.diagnostics)]);
+      const tot = Object.values(d.subBrands).reduce((a, m) => ({ won: a.won + m.won, lost: a.lost + m.lost, rev: a.rev + Number(m.wonRevenue || 0), diag: a.diag + (m.diagnostics || 0) }), { won: 0, lost: 0, rev: 0, diag: 0 });
+      if (cbRows.length) cbRows.push(["TOTAL", String(tot.won), String(tot.lost), inr(tot.rev), (tot.won + tot.lost) > 0 ? `${Math.round((tot.won / (tot.won + tot.lost)) * 100)}%` : "0%", String(tot.diag)]);
+      drawTravelTable(doc, [
+        { header: "Sub-brand", width: 130 }, { header: "Won", width: 55, align: "right" }, { header: "Lost", width: 55, align: "right" },
+        { header: "Won revenue", width: 120, align: "right" }, { header: "Conv %", width: 60, align: "right" }, { header: "Diag.", width: 55, align: "right" },
+      ], cbRows, { startY: doc.y });
+
+      // Travel-native sales (quotes) per sub-brand — real revenue (Deals are
+      // empty for travel, so the won-revenue table above reads 0).
+      section("Sales (quotes) by sub-brand");
+      drawTravelTable(doc, [
+        { header: "Sub-brand", width: 150 }, { header: "Quotes", width: 80, align: "right" }, { header: "Accepted", width: 90, align: "right" },
+        { header: "Quote revenue", width: 120, align: "right" }, { header: "Conv %", width: 55, align: "right" },
+      ], Object.entries(d.subBrands).map(([b, m]) => [SUB_BRAND_LABEL[b] || b, String(m.quotesTotal || 0), String(m.quotesAccepted || 0), inr(m.quoteRevenue), `${m.quoteConversionPct || 0}%`]), { startY: doc.y });
+
+      // Per-sub-brand deal-stage breakdown — more granular detail.
+      for (const [b, m] of Object.entries(d.subBrands)) {
+        const stages = m.dealsByStage || {};
+        if (Object.keys(stages).length === 0) continue;
+        amountTable(`${SUB_BRAND_LABEL[b] || b} — deals by stage`, "Stage", stages, m.dealAmountByStage);
+      }
+    }
+
+    doc.end();
+  } catch (e) {
+    console.error("[travel-reports] export-pdf error:", e.message);
+    res.status(500).json({ error: "Failed to generate report PDF" });
   }
 });
 

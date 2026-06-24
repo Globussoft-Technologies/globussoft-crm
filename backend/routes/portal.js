@@ -751,6 +751,59 @@ router.post("/travel/itineraries/:id/request-cancellation", verifyPortalToken, r
   }
 });
 
+// POST /api/portal/travel/itineraries/:id/preferred-dates
+//
+// Customer sets / edits their preferred travel dates from the portal (collect-
+// at-accept). Allowed while the offer is still live (not rejected / expired /
+// cancelled). Persists startDate (+ optional endDate) and flags the advisor
+// (sub-brand scoped) to confirm fares/availability for the chosen dates.
+router.post("/travel/itineraries/:id/preferred-dates", verifyPortalToken, requireTravelPortalTenant, async (req, res) => {
+  try {
+    const itin = await loadPortalOwnedItinerary(req, res);
+    if (!itin) return;
+    if (["rejected", "expired"].includes(itin.status) || itin.cancellationStatus === "cancelled") {
+      return res.status(409).json({ error: "This booking is no longer editable.", code: "INVALID_STATE" });
+    }
+    const b = req.body || {};
+    const start = b.startDate ? new Date(b.startDate) : null;
+    if (!start || Number.isNaN(start.getTime())) {
+      return res.status(400).json({ error: "Please pick a valid start date.", code: "INVALID_START_DATE" });
+    }
+    let end = b.endDate ? new Date(b.endDate) : null;
+    if (end && Number.isNaN(end.getTime())) end = null;
+    if (end && end < start) {
+      return res.status(400).json({ error: "End date can't be before the start date.", code: "INVALID_DATE_RANGE" });
+    }
+    const updated = await prisma.itinerary.update({
+      where: { id: itin.id },
+      data: { startDate: start, ...(end ? { endDate: end } : {}) },
+      select: { id: true, startDate: true, endDate: true },
+    });
+    // Flag the advisor (sub-brand scoped) to confirm fares for the new dates.
+    try {
+      const userIds = await resolveItineraryStaffUserIds(req.portal.tenantId, itin.subBrand);
+      if (userIds.length) {
+        const fmtD = (d) => (d ? new Date(d).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" }) : "");
+        const range = updated.endDate ? `${fmtD(updated.startDate)} → ${fmtD(updated.endDate)}` : `from ${fmtD(updated.startDate)}`;
+        await notifyMany({
+          userIds,
+          tenantId: req.portal.tenantId,
+          title: "Customer set travel dates",
+          message: `The customer set preferred travel dates (${range}) for "${itin.destination || `#${itin.id}`}". Confirm fares/availability for these dates.`,
+          type: "info",
+          link: `/travel/itineraries/${itin.id}`,
+        });
+      }
+    } catch (e) {
+      console.warn("[Portal][travel/itin preferred-dates] notify failed (non-fatal):", e.message);
+    }
+    res.json(updated);
+  } catch (err) {
+    console.error("[Portal][travel/itin preferred-dates]", err);
+    res.status(500).json({ error: "Failed to save your travel dates" });
+  }
+});
+
 // POST /api/portal/travel/itineraries/:id/webcheckin-confirm
 //
 // The customer's "Yes, I've checked in" action for a flight trip (2026-06-16).

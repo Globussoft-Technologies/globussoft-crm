@@ -39,12 +39,37 @@ const ITEM_ICON = {
 // A flight quote's destination is a route ("DEL→JED flights") that resolves to
 // no photo. Map the arrival airport to its city so the hero/side-rails still
 // get real destination visuals. Falls back to the raw string for anything else.
+//
+// Kept broad on purpose: the backend airport resolver (lib/airportResolver.js +
+// the airport-iata LLM task) can turn ANY free-text place into an IATA code, so
+// the arrival airport here can be far beyond the headline metros. This list
+// mirrors that reach — all Indian airports the resolver knows plus the common
+// Gulf/international ones — so the hero photo shows for real routes instead of
+// degrading to the bare gradient. Anything still unmapped falls through to the
+// themed gradient (graceful, never broken). Keep IATA codes UPPERCASE.
 const IATA_CITY = {
-  JED: "Jeddah", MED: "Medina", RUH: "Riyadh", DXB: "Dubai", AUH: "Abu Dhabi",
-  DOH: "Doha", DEL: "Delhi", BOM: "Mumbai", BLR: "Bangalore", HYD: "Hyderabad",
-  MAA: "Chennai", CCU: "Kolkata", COK: "Kochi", SIN: "Singapore", BKK: "Bangkok",
-  KUL: "Kuala Lumpur", IST: "Istanbul", LHR: "London", CDG: "Paris", JFK: "New York",
-  HND: "Tokyo", NRT: "Tokyo", CMB: "Colombo", KTM: "Kathmandu", MLE: "Maldives",
+  // ── India: metros + tier-2/3 (incl. Deoghar DGH, the case that regressed) ──
+  DEL: "Delhi", BOM: "Mumbai", BLR: "Bangalore", MAA: "Chennai", HYD: "Hyderabad",
+  CCU: "Kolkata", COK: "Kochi", GOI: "Goa", AMD: "Ahmedabad", PNQ: "Pune",
+  JAI: "Jaipur", LKO: "Lucknow", CCJ: "Kozhikode", TRV: "Thiruvananthapuram",
+  IXE: "Mangalore", NAG: "Nagpur", ATQ: "Amritsar", GAU: "Guwahati",
+  VNS: "Varanasi", SXR: "Srinagar", DGH: "Deoghar", PAT: "Patna",
+  BBI: "Bhubaneswar", IXR: "Ranchi", IXB: "Siliguri", IXC: "Chandigarh",
+  IXJ: "Jammu", IXZ: "Port Blair", VTZ: "Visakhapatnam", RPR: "Raipur",
+  IDR: "Indore", BHO: "Bhopal", UDR: "Udaipur", JDH: "Jodhpur", STV: "Surat",
+  BDQ: "Vadodara", VGA: "Vijayawada", TIR: "Tirupati", HBX: "Hubli",
+  IXM: "Madurai", CJB: "Coimbatore", TRZ: "Tiruchirappalli", IXA: "Agartala",
+  GAY: "Gaya", DED: "Dehradun", IXL: "Leh", DIB: "Dibrugarh", IMF: "Imphal",
+  // ── Gulf / Middle East (RFU Umrah + leisure) ──
+  JED: "Jeddah", MED: "Medina", RUH: "Riyadh", DMM: "Dammam", DXB: "Dubai",
+  AUH: "Abu Dhabi", SHJ: "Sharjah", DOH: "Doha", MCT: "Muscat", KWI: "Kuwait City",
+  BAH: "Manama", AMM: "Amman", CAI: "Cairo",
+  // ── Common international ──
+  SIN: "Singapore", BKK: "Bangkok", KUL: "Kuala Lumpur", LHR: "London",
+  CDG: "Paris", JFK: "New York", HND: "Tokyo", NRT: "Tokyo", CMB: "Colombo",
+  KTM: "Kathmandu", MLE: "Maldives", DPS: "Bali", HKG: "Hong Kong",
+  IST: "Istanbul", AYT: "Antalya", ZRH: "Zurich", FCO: "Rome", BCN: "Barcelona",
+  AMS: "Amsterdam", FRA: "Frankfurt", SYD: "Sydney", MEL: "Melbourne",
 };
 function photoDestinationFor(destination) {
   const m = /[A-Z]{3}\s*(?:→|->|to)\s*([A-Z]{3})\s*flights?/i.exec(String(destination || ""));
@@ -86,6 +111,13 @@ export default function TripBooking() {
   const [payError, setPayError] = useState("");
   // "Choose one" flight quotes: which option the customer picked (item id).
   const [selectedId, setSelectedId] = useState(null);
+  // Collect-at-accept travel dates: the customer states/confirms preferred
+  // dates before paying (quick-quote itineraries often have none).
+  const [startInput, setStartInput] = useState("");
+  const [endInput, setEndInput] = useState("");
+  const [savingDates, setSavingDates] = useState(false);
+  const [datesSaved, setDatesSaved] = useState(false);
+  const [datesError, setDatesError] = useState("");
 
   const load = useCallback(() => {
     setLoading(true);
@@ -112,6 +144,42 @@ export default function TripBooking() {
       if (opts.length === 1) setSelectedId(opts[0].id);
     }
   }, [itin]);
+
+  // Prefill the travel-date inputs from the itinerary (if the advisor set any).
+  useEffect(() => {
+    if (!itin) return;
+    if (itin.startDate) setStartInput(String(itin.startDate).slice(0, 10));
+    if (itin.endDate) setEndInput(String(itin.endDate).slice(0, 10));
+  }, [itin]);
+
+  // Collect-at-accept: save the customer's preferred travel dates + notify the
+  // advisor. Best-effort; surfaces an inline error on failure.
+  const saveDates = async () => {
+    if (!startInput) { setDatesError("Please pick your preferred start date."); return; }
+    if (endInput && endInput < startInput) { setDatesError("End date can't be before the start date."); return; }
+    setSavingDates(true);
+    setDatesError("");
+    try {
+      const r = await fetch(
+        `/api/travel/itineraries/public/${encodeURIComponent(shareToken)}/preferred-dates`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ startDate: startInput, endDate: endInput || undefined }),
+        },
+      );
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}));
+        throw new Error(body.error || "Could not save your dates. Please try again.");
+      }
+      setDatesSaved(true);
+      setItin((prev) => (prev ? { ...prev, startDate: startInput, endDate: endInput || prev.endDate } : prev));
+    } catch (e) {
+      setDatesError(e.message);
+    } finally {
+      setSavingDates(false);
+    }
+  };
 
   // PRD §4.7 — real Razorpay checkout (advance OR balance). Flow:
   //   1. POST create-payment-order → server mints a Razorpay order using the
@@ -245,6 +313,34 @@ export default function TripBooking() {
         )}
         <StatusBadge status={itin.status} />
       </DestinationHero>
+
+      {/* Collect-at-accept travel dates — the customer confirms when they want
+          to travel before paying; their advisor is notified to lock fares. */}
+      <section aria-labelledby="dates-heading" style={datesCard}>
+        <h2 id="dates-heading" style={{ ...sectionHeading, marginTop: 0 }}>
+          <Calendar size={16} aria-hidden style={{ verticalAlign: -3, marginRight: 6 }} />
+          {hasDates ? "Confirm your travel dates" : "When would you like to travel?"}
+        </h2>
+        <p style={{ fontSize: 13, color: "#5a6275", margin: "0 0 12px" }}>
+          {datesSaved
+            ? "Thanks! Your advisor has your preferred dates and will confirm availability."
+            : "Tell us your preferred dates so we can lock the right fares before you pay."}
+        </p>
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end" }}>
+          <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: "#5a6275" }}>
+            Start date
+            <input type="date" value={startInput} onChange={(e) => { setStartInput(e.target.value); setDatesSaved(false); }} style={dateInput} aria-label="Preferred start date" />
+          </label>
+          <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: "#5a6275" }}>
+            End date (optional)
+            <input type="date" value={endInput} min={startInput || undefined} onChange={(e) => { setEndInput(e.target.value); setDatesSaved(false); }} style={dateInput} aria-label="Preferred end date" />
+          </label>
+          <button type="button" onClick={saveDates} disabled={savingDates || datesSaved} style={{ ...secondaryBtn, opacity: savingDates || datesSaved ? 0.6 : 1 }}>
+            {datesSaved ? "Dates saved ✓" : savingDates ? "Saving…" : "Save dates"}
+          </button>
+        </div>
+        {datesError && <p style={{ fontSize: 12, color: "#b3261e", margin: "8px 0 0" }}>{datesError}</p>}
+      </section>
 
       {optionsMode ? (
         <section aria-labelledby="items-heading">
@@ -578,6 +674,14 @@ const brand = {
   borderBottom: "1px solid #ece6da", paddingBottom: 14,
 };
 const sectionHeading = { fontSize: 17, margin: "18px 0 12px" };
+const datesCard = {
+  background: "#f7f3eb", border: "1px solid #ece6da", borderRadius: 12,
+  padding: "16px 18px", margin: "0 0 22px",
+};
+const dateInput = {
+  padding: "8px 10px", borderRadius: 8, border: "1px solid #d8d2c4",
+  background: "#fff", color: "#122647", fontSize: 14,
+};
 const itemRow = {
   display: "flex", alignItems: "center", gap: 12,
   padding: "12px 14px", border: "1px solid #e5e7ee",

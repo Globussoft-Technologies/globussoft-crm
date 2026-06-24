@@ -94,7 +94,8 @@
 
 import { useEffect, useState, useContext, useCallback } from "react";
 import { useParams } from "react-router-dom";
-import { Calculator, Plus, Trash2, Save, Send, Copy, Download, Check, X, TrendingUp, FileText, ThumbsUp, ThumbsDown, Plane, Hotel, Search, Car } from "lucide-react";
+import { Calculator, Plus, Trash2, Save, Send, Copy, Download, Check, X, TrendingUp, FileText, ThumbsUp, ThumbsDown, Plane, Hotel, Search, Car, LayoutTemplate } from "lucide-react";
+import { FlightResultsBoard, HotelResultsGrid, TransferResultsList, SuggestedItinerary } from "../../components/TravelSearchResults";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { AuthContext } from "../../App";
@@ -125,8 +126,10 @@ const LINE_TYPES = ["hotel", "flight", "transport", "visa", "service", "other"];
 // TBO search data-source badge (mirrors tboClient's `provider`): live TBO,
 // an AI web estimate, or offline sample data — so the operator verifies before
 // quoting.
-const PROVIDER_LABEL = { tbo: "TBO live", "llm-web": "AI web estimate", stub: "Sample data" };
+const PROVIDER_LABEL = { serpapi: "Google live", "osm-road": "Live road distance", tbo: "TBO live", "llm-web": "AI web estimate", stub: "Sample data" };
 const PROVIDER_COLORS = {
+  serpapi: { bg: "rgba(34,197,94,0.16)", fg: "#1e8449" },
+  "osm-road": { bg: "rgba(14,124,134,0.16)", fg: "#0e7c86" },
   tbo: { bg: "rgba(34,197,94,0.16)", fg: "#1e8449" },
   "llm-web": { bg: "rgba(59,130,246,0.16)", fg: "#1e4d8c" },
   stub: { bg: "rgba(148,163,184,0.18)", fg: "var(--text-secondary)" },
@@ -176,6 +179,7 @@ export default function QuoteBuilder() {
   const [quoteId, setQuoteId] = useState(routeId ? Number(routeId) : null);
   const [status, setStatus] = useState("Draft");
   const [contactId, setContactId] = useState("");
+  const [customerSearch, setCustomerSearch] = useState("");
   // Contact picker — mirrors the InvoicesAdmin pattern. Loads the tenant's
   // contacts once on mount so the header field can be a labelled <select>
   // instead of a raw numeric "Contact ID" input that lets an operator
@@ -212,6 +216,12 @@ export default function QuoteBuilder() {
   const [sendConfirmOpen, setSendConfirmOpen] = useState(false);
   const [sending, setSending] = useState(false);
   const [shareInfo, setShareInfo] = useState(null); // { shareUrl, channel, ... }
+  // Save-as-template modal state — snapshots the current line set into the
+  // Quote Template library (POST /api/travel/quote-templates) for reuse.
+  const [templateModalOpen, setTemplateModalOpen] = useState(false);
+  const [templateName, setTemplateName] = useState("");
+  const [templateCategory, setTemplateCategory] = useState("");
+  const [savingTemplate, setSavingTemplate] = useState(false);
   // Slice 11: accept + decline workflow state.
   const [acceptInFlight, setAcceptInFlight] = useState(false);
   const [declineInFlight, setDeclineInFlight] = useState(false);
@@ -254,6 +264,13 @@ export default function QuoteBuilder() {
   const [rooms, setRooms] = useState(1);
   const [destinations, setDestinations] = useState([{ city: "", nights: 2, noStay: false }]);
   const [suggesting, setSuggesting] = useState(false);
+  // Structured AI suggestion (full option sets per leg/city) powering the
+  // visual "Suggested itinerary" panel + Change flight/hotel. Selections sync
+  // into draftLines (tagged _suggested) so the Line Items stay the save target.
+  const [suggestion, setSuggestion] = useState(null);
+  // Sub-brand markup rules — auto-applied to AI-suggested prices (the Suggest
+  // flow has no manual markup field, so suggested lines must carry margin).
+  const [markupRules, setMarkupRules] = useState([]);
 
   // G017 — clone-with-margin modal state. The duplicate button opens this
   // modal so the operator can either (a) raw-duplicate (margin=0 or
@@ -416,6 +433,16 @@ export default function QuoteBuilder() {
   // subBrand or the loaded contacts change.
   const visibleCustomers = customers.filter((c) => !c.subBrand || c.subBrand === subBrand);
   const selectedCustomer = customers.find((c) => String(c.id) === String(contactId));
+
+  // Filtered list for the customer search input.
+  const customerSearchLower = customerSearch.toLowerCase();
+  const filteredCustomers = customerSearchLower
+    ? visibleCustomers.filter((c) =>
+        (c.name || "").toLowerCase().includes(customerSearchLower) ||
+        (c.email || "").toLowerCase().includes(customerSearchLower) ||
+        (c.phone || "").toLowerCase().includes(customerSearchLower),
+      )
+    : visibleCustomers;
 
   // Fetch the supplier list when subBrand changes (or on initial load
   // when a subBrand has been selected). Each line's supplier picker reads
@@ -614,6 +641,67 @@ export default function QuoteBuilder() {
   // Each leg/city is best-effort — a leg that can't resolve is skipped, not
   // fatal. Reuses the same /search endpoints (TBO → AI web → sample).
   const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
+  // Rebuild the _suggested draft lines from the current selection set (called on
+  // first suggest + every Change flight/hotel). Keeps manually-added lines.
+  // Client mirror of lib/travelPricing.pickMarkup: highest-priority active rule
+  // for a scope (owner-scoped rules apply to that user; null = everyone).
+  const pickClientMarkup = (rules, scope, uid) => {
+    const eligible = (rules || [])
+      .filter((r) => r.isActive !== false && r.scope === scope)
+      .filter((r) => r.ownerUserId == null || r.ownerUserId === uid)
+      .sort((a, b) => (a.priority ?? 1000) - (b.priority ?? 1000));
+    return eligible[0] || null;
+  };
+  // Apply the matched markup rule to a pre-markup line TOTAL (% or flat).
+  const applyMarkupToTotal = (rules, scope, baseTotal, uid) => {
+    const r = pickClientMarkup(rules, scope, uid);
+    if (!r) return baseTotal;
+    let out = baseTotal;
+    if (r.markupPct != null) out = baseTotal * (1 + Number(r.markupPct) / 100);
+    else if (r.markupFlat != null) out = baseTotal + Number(r.markupFlat);
+    return Math.round(out * 100) / 100;
+  };
+
+  const rebuildSuggestedLines = (sug, rules = markupRules) => {
+    if (!sug) return;
+    const pax = Math.max(1, sug.pax || 1);
+    const uid = user?.userId ?? null;
+    const drafts = [];
+    for (const leg of sug.flights || []) {
+      const o = leg.options[leg.selectedIdx];
+      if (!o) continue;
+      // Auto-apply the sub-brand flight markup rule (no manual markup field in
+      // the suggest flow) → the quote carries margin, not raw supplier cost.
+      const baseFare = Number(o.fare) || 0;
+      const markedFare = pax > 0 ? applyMarkupToTotal(rules, "flight", baseFare * pax, uid) / pax : baseFare;
+      drafts.push(flightDraft({ ...o, fare: markedFare }, leg.fromLabel, leg.toLabel, pax));
+    }
+    for (const tr of sug.transfers || []) {
+      const t = tr.options[tr.selectedIdx];
+      if (!t) continue;
+      const markedPrice = applyMarkupToTotal(rules, "transport", Number(t.price) || 0, uid);
+      drafts.push(transferDraft({ ...t, price: markedPrice, from: tr.fromLabel, to: tr.toLabel }));
+    }
+    for (const st of sug.stays || []) {
+      const h = st.options[st.selectedIdx];
+      if (!h) continue;
+      const baseTotal = Number(h.totalRate != null ? h.totalRate : (Number(h.ratePerNight) || 0) * (st.nights || 1)) || 0;
+      const markedTotal = applyMarkupToTotal(rules, "hotel", baseTotal, uid);
+      drafts.push(hotelDraft({ ...h, totalRate: markedTotal, city: st.city, nights: st.nights }));
+    }
+    setDraftLines((p) => [...p.filter((d) => !d._suggested), ...drafts.map((d) => ({ ...d, _suggested: true }))]);
+  };
+  // Swap the chosen flight/hotel in the visual panel + re-sync the line items.
+  const changeSuggestion = (kind, idx, optIdx) => {
+    setSuggestion((prev) => {
+      if (!prev) return prev;
+      const next = { ...prev, [kind]: prev[kind].map((g, i) => (i === idx ? { ...g, selectedIdx: optIdx } : g)) };
+      rebuildSuggestedLines(next);
+      return next;
+    });
+  };
+
   const suggestTrip = async () => {
     const from = leavingFrom.trim();
     const dests = destinations.filter((d) => d.city.trim());
@@ -639,8 +727,9 @@ export default function QuoteBuilder() {
       const totalNights = stops.reduce((s, c) => s + c.nights, 0);
       const endDate = new Date(start.getTime() + totalNights * 86400000);
 
-      const drafts = [];
-      let nFlights = 0; let nHotels = 0; let nTransfers = 0;
+      // Capture the FULL option set per leg/city (not just the first) so the
+      // visual panel can offer "Change flight / Change hotel" alternatives.
+      const sFlights = []; const sTransfers = []; const sStays = [];
       // FLIGHTS: outbound (leaving-from → first city) + return (last city →
       // leaving-from). Inter-city hops are done as ground TRANSFERS below
       // (e.g. Makkah → Madina by road) — the common real case; if a customer
@@ -656,8 +745,8 @@ export default function QuoteBuilder() {
             method: "POST",
             body: JSON.stringify({ from: leg.from, to: leg.to, departDate: leg.date, cabinClass: "Economy", currency: cur }),
           });
-          const opt = (res?.options || [])[0];
-          if (opt) { drafts.push(flightDraft(opt, leg.from, leg.to, headcount)); nFlights += 1; }
+          const options = Array.isArray(res?.options) ? res.options : [];
+          if (options.length) sFlights.push({ fromLabel: leg.from, toLabel: leg.to, date: leg.date, options, selectedIdx: 0 });
         } catch { /* skip this leg */ }
       }
       // TRANSFERS: inter-city ground hops (city[i] → city[i+1]).
@@ -667,11 +756,11 @@ export default function QuoteBuilder() {
             method: "POST",
             body: JSON.stringify({ from: stops[i].city, to: stops[i + 1].city, date: ymd(stops[i].checkOut), pax: parseInt(adults, 10) || 2, currency: cur }),
           });
-          const t = (res?.transfers || [])[0];
-          if (t) { drafts.push(transferDraft({ ...t, from: stops[i].city, to: stops[i + 1].city })); nTransfers += 1; }
+          const options = Array.isArray(res?.transfers) ? res.transfers : [];
+          if (options.length) sTransfers.push({ fromLabel: stops[i].city, toLabel: stops[i + 1].city, options, selectedIdx: 0 });
         } catch { /* skip this hop */ }
       }
-      // A hotel per staying city.
+      // A hotel per staying city (with the full alternatives list).
       for (const c of stops) {
         if (c.noStay || c.nights <= 0) continue;
         try {
@@ -679,21 +768,34 @@ export default function QuoteBuilder() {
             method: "POST",
             body: JSON.stringify({ city: c.city, checkIn: ymd(c.checkIn), checkOut: ymd(c.checkOut), rooms: roomCount, currency: cur }),
           });
-          const h = (res?.hotels || [])[0];
-          if (h) { drafts.push(hotelDraft({ ...h, city: c.city, nights: c.nights })); nHotels += 1; }
+          const options = (Array.isArray(res?.hotels) ? res.hotels : []).map((h) => ({ ...h, city: c.city, nights: c.nights }));
+          if (options.length) sStays.push({ city: c.city, nights: c.nights, options, selectedIdx: 0 });
         } catch { /* skip this city */ }
       }
-      if (drafts.length === 0) {
+      const nFlights = sFlights.length; const nHotels = sStays.length; const nTransfers = sTransfers.length;
+      if (nFlights + nHotels + nTransfers === 0) {
         notify.error("Couldn't fetch any options — try adjusting the cities or dates");
         return;
       }
-      // Re-running Suggest REPLACES the previous auto-suggested set (so you
-      // don't get duplicate hotels/flights for the same city on a second click)
+      // Fetch the sub-brand's active markup rules so suggested prices carry
+      // margin automatically (the suggest flow has no manual markup field).
+      let rulesFetched = [];
+      try {
+        const rr = await fetchApi(`/api/travel/markup-rules?subBrand=${encodeURIComponent(subBrand)}&active=true`);
+        rulesFetched = Array.isArray(rr?.rules) ? rr.rules : [];
+      } catch { rulesFetched = []; }
+      setMarkupRules(rulesFetched);
+
+      // Build the structured suggestion → render the visual panel + (re)build the
+      // _suggested draft lines. Re-running Suggest REPLACES the previous set
       // while keeping any lines the operator added manually.
-      setDraftLines((p) => [...p.filter((d) => !d._suggested), ...drafts.map((d) => ({ ...d, _suggested: true }))]);
+      const sug = { flights: sFlights, transfers: sTransfers, stays: sStays, currency: cur, pax: headcount, adults: parseInt(adults, 10) || 1 };
+      setSuggestion(sug);
+      rebuildSuggestedLines(sug, rulesFetched);
       const parts = [`${nFlights} flight${nFlights === 1 ? "" : "s"}`, `${nHotels} hotel${nHotels === 1 ? "" : "s"}`];
       if (nTransfers > 0) parts.push(`${nTransfers} transfer${nTransfers === 1 ? "" : "s"}`);
-      notify.success(`Suggested ${parts.join(" + ")} — review, edit, then save`);
+      const markupNote = rulesFetched.length ? " — prices include your markup rules" : " — no markup rules set for this sub-brand";
+      notify.success(`Suggested ${parts.join(" + ")}${markupNote}`);
     } catch (e) {
       notify.error(e?.message || "Suggest failed");
     } finally {
@@ -894,7 +996,7 @@ export default function QuoteBuilder() {
     try {
       const res = await fetchApi(`/api/travel/quotes/${quoteId}/share`, {
         method: "POST",
-        body: JSON.stringify({ channel: "auto" }),
+        body: JSON.stringify({ channel: "auto", frontendBase: window.location.origin }),
       });
       if (res?.status) setStatus(res.status);
       setShareInfo(res || null);
@@ -1156,6 +1258,75 @@ export default function QuoteBuilder() {
     }
   };
 
+  // ── Save as template ────────────────────────────────────────────────
+  // Snapshot the current line set (persisted + draft) into the reusable Quote
+  // Template library. Works from a saved OR a brand-new quote — the template
+  // endpoint only needs the lines, not a quoteId. Lines are stored as the
+  // linesJson shape the apply-to-quote endpoint expects.
+  const buildTemplateLines = () =>
+    visibleLines
+      .filter((l) => l.description && String(l.description).trim())
+      .map((l, idx) => {
+        const item = {
+          description: String(l.description).trim(),
+          lineType: l.lineType || "other",
+          quantity: Math.max(1, parseInt(l.quantity, 10) || 1),
+          unitPrice: Math.max(0, Number(l.unitPrice) || 0),
+          currency: l.currency || currency || "INR",
+          sortOrder: idx,
+        };
+        if (l.notes) item.notes = String(l.notes);
+        return item;
+      });
+
+  const openTemplateModal = () => {
+    if (buildTemplateLines().length === 0) {
+      notify.error("Add at least one line before saving as a template");
+      return;
+    }
+    // Seed a sensible default name from the contact / sub-brand.
+    const cName = (contactsById[contactId] && contactsById[contactId].name) || "";
+    setTemplateName(cName ? `${cName} — ${(subBrand || "Quote").toUpperCase()}` : "");
+    setTemplateCategory("");
+    setTemplateModalOpen(true);
+  };
+
+  const saveAsTemplate = async () => {
+    const lines = buildTemplateLines();
+    if (lines.length === 0) {
+      notify.error("Add at least one line before saving as a template");
+      return;
+    }
+    if (!templateName.trim()) {
+      notify.error("Template name is required");
+      return;
+    }
+    setSavingTemplate(true);
+    try {
+      const body = {
+        name: templateName.trim(),
+        currency: currency || "INR",
+        linesJson: JSON.stringify(lines),
+      };
+      if (subBrand) body.subBrand = subBrand;
+      if (templateCategory.trim()) body.category = templateCategory.trim();
+      const created = await fetchApi("/api/travel/quote-templates", {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+      notify.success(
+        `Saved as template "${created?.name || templateName.trim()}" (${lines.length} line${lines.length === 1 ? "" : "s"}) — find it under Quote Templates`,
+      );
+      setTemplateModalOpen(false);
+      setTemplateName("");
+      setTemplateCategory("");
+    } catch (err) {
+      notify.error(err?.data?.error || err?.message || "Failed to save template");
+    } finally {
+      setSavingTemplate(false);
+    }
+  };
+
   if (loading) {
     return (
       <div style={{ padding: 24, maxWidth: 1200, margin: "0 auto" }}>
@@ -1225,6 +1396,19 @@ export default function QuoteBuilder() {
               style={primaryBtn}
             >
               <Save size={14} /> {saving ? "Saving…" : "Save Draft"}
+            </button>
+            {/* Save the current line set into the reusable Quote Template
+                library — works even before the quote is saved (it only needs
+                the lines). Hidden until at least one line exists. */}
+            <button
+              type="button"
+              onClick={openTemplateModal}
+              disabled={savingTemplate || visibleLines.length === 0}
+              style={secondaryBtn}
+              title={visibleLines.length === 0 ? "Add a line first" : "Save these lines as a reusable template"}
+              aria-label="Save as template"
+            >
+              <LayoutTemplate size={14} /> Save as template
             </button>
             {/* Everything beyond Save Draft acts on a SAVED quote (send, PDF,
                 convert, accept/decline) — hidden in new/create mode, shown once
@@ -1380,31 +1564,30 @@ export default function QuoteBuilder() {
       >
         <label style={fieldLabel}>
           Customer
-          {/* Mirrors InvoicesAdmin's Select Customer dropdown so the two
-              surfaces are consistent (PRD §3 R-15). Pre-fix this was a raw
-              numeric "Contact ID *" input — an operator could attach a
-              quote to the wrong customer by typing the wrong id, with no
-              confirmation of who that id maps to. */}
+          {/* Search input filters the native select options below. */}
+          <input
+            type="text"
+            value={customerSearch}
+            onChange={(e) => setCustomerSearch(e.target.value)}
+            placeholder="Search customers…"
+            style={{ ...inputStyle, marginBottom: 4 }}
+          />
           <select
             value={contactId}
-            onChange={(e) => setContactId(e.target.value)}
+            onChange={(e) => { setContactId(e.target.value); setCustomerSearch(""); }}
             style={inputStyle}
             aria-label="Customer"
           >
             <option value="">Select customer *</option>
-            {/* Keep the current selection visible even if it's filtered out by
-                the sub-brand scope (editing a quote, a cross-sub-brand contact,
-                or a >500-row tenant). */}
-            {contactId &&
-              !visibleCustomers.some((c) => String(c.id) === String(contactId)) && (
-                <option value={contactId}>
-                  {(selectedCustomer?.name || contactsById[contactId]?.name || `Contact #${contactId}`)
-                    + (selectedCustomer?.subBrand && selectedCustomer.subBrand !== subBrand
-                      ? ` — ${SUB_BRAND_LABELS[selectedCustomer.subBrand] || selectedCustomer.subBrand}`
-                      : "")}
-                </option>
-              )}
-            {visibleCustomers.map((c) => (
+            {contactId && !filteredCustomers.some((c) => String(c.id) === String(contactId)) && (
+              <option value={contactId}>
+                {(selectedCustomer?.name || contactsById[contactId]?.name || `Contact #${contactId}`)
+                  + (selectedCustomer?.subBrand && selectedCustomer.subBrand !== subBrand
+                    ? ` — ${SUB_BRAND_LABELS[selectedCustomer.subBrand] || selectedCustomer.subBrand}`
+                    : "")}
+              </option>
+            )}
+            {filteredCustomers.map((c) => (
               <option key={c.id} value={String(c.id)}>
                 {(c.name || `Contact #${c.id}`) + (c.email ? ` — ${c.email}` : "") + (!c.subBrand ? " · (unassigned)" : "")}
               </option>
@@ -1490,6 +1673,14 @@ export default function QuoteBuilder() {
         </div>
       </section>
 
+      {/* Visual review of the 1-click Suggest output — hotel cards with imagery,
+          a price summary, and Change flight/hotel (re-syncs the Line Items). */}
+      <SuggestedItinerary
+        suggestion={suggestion}
+        onChangeFlight={(idx, optIdx) => changeSuggestion("flights", idx, optIdx)}
+        onChangeStay={(idx, optIdx) => changeSuggestion("stays", idx, optIdx)}
+      />
+
       {/* TBO trip search — flights + hotels → draft lines (PRD trip builder).
           Live options via tboClient (TBO → AI web → sample); "Add" drops a
           result into the quote as a draft line the operator then saves. */}
@@ -1518,18 +1709,7 @@ export default function QuoteBuilder() {
             {fMeta.note || ""}
           </p>
         )}
-        {fResults.map((o, i) => (
-          <div key={`f-${i}`} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", borderRadius: 8, border: "1px solid var(--border-color)", marginTop: 6 }}>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <strong style={{ fontSize: 13 }}>{o.airlineName || o.airline}{o.flightNumber ? ` · ${o.flightNumber}` : ""} {o.from}→{o.to}</strong>
-              <div style={{ fontSize: 11, color: "var(--text-secondary)", marginTop: 2 }}>
-                {[fmtSearchTime(o.departAt) && `Dep ${fmtSearchTime(o.departAt)}`, fmtSearchTime(o.arriveAt) && `Arr ${fmtSearchTime(o.arriveAt)}`, o.stops != null && (o.stops === 0 ? "Non-stop" : `${o.stops} stop`), o.fareClass, o.baggage && `Bag ${o.baggage}`].filter(Boolean).join("  ·  ")}
-              </div>
-            </div>
-            <div style={{ fontWeight: 700, fontSize: 13, whiteSpace: "nowrap" }}>{currency} {fmt(o.fare)} <span style={{ fontWeight: 400, fontSize: 11, color: "var(--text-secondary)" }}>/pax</span></div>
-            <button type="button" onClick={() => addFlightLine(o)} style={secondaryBtn}><Plus size={12} /> Add</button>
-          </div>
-        ))}
+        <FlightResultsBoard results={fResults} currency={currency} onAdd={addFlightLine} addLabel="Add" />
 
         <div style={{ margin: "16px 0 8px", fontWeight: 600, fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}><Hotel size={14} aria-hidden /> Hotels</div>
         <div style={{ display: "grid", gap: 8, gridTemplateColumns: "repeat(auto-fit, minmax(min(100%,140px),1fr))" }}>
@@ -1547,26 +1727,7 @@ export default function QuoteBuilder() {
             <span style={providerBadge(hMeta.provider)}>{PROVIDER_LABEL[hMeta.provider] || hMeta.provider}</span>{hMeta.note || ""}
           </p>
         )}
-        {hResults.map((h, i) => (
-          <div key={`h-${i}`} style={{ display: "flex", alignItems: "center", gap: 12, padding: "8px 10px", borderRadius: 8, border: "1px solid var(--border-color)", marginTop: 6 }}>
-            {/* Photo tile — real hotel image when the provider (TBO) supplies one,
-                else a tinted hotel-icon placeholder so the card still reads visually. */}
-            <div style={{ width: 64, height: 48, borderRadius: 6, overflow: "hidden", flexShrink: 0, background: "var(--subtle-bg, rgba(148,163,184,0.18))", display: "flex", alignItems: "center", justifyContent: "center" }}>
-              {h.thumbnail
-                ? <img src={h.thumbnail} alt={h.name || "Hotel"} loading="lazy" onError={(e) => { e.currentTarget.style.display = "none"; }} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-                : <Hotel size={20} aria-hidden style={{ color: "var(--text-secondary)" }} />}
-            </div>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <strong style={{ fontSize: 13 }}>{h.name}</strong>
-              {h.starRating ? <span style={{ marginLeft: 6, color: "#e0a800", fontSize: 12 }}>{"★".repeat(Math.max(0, Math.min(5, Math.round(h.starRating))))}</span> : null}
-              <div style={{ fontSize: 11, color: "var(--text-secondary)", marginTop: 2 }}>
-                {[h.area || h.address, h.roomType, h.board, h.refundable === true && "Refundable"].filter(Boolean).join("  ·  ")}
-              </div>
-            </div>
-            <div style={{ fontWeight: 700, fontSize: 13, whiteSpace: "nowrap" }}>{currency} {fmt(h.totalRate != null ? h.totalRate : h.ratePerNight)}</div>
-            <button type="button" onClick={() => addHotelLine(h)} style={secondaryBtn}><Plus size={12} /> Add</button>
-          </div>
-        ))}
+        <HotelResultsGrid results={hResults} currency={currency} city={hSearch.city} onAdd={addHotelLine} addLabel="Add to quote" />
 
         <div style={{ margin: "16px 0 8px", fontWeight: 600, fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}><Car size={14} aria-hidden /> Transfers (taxi / road)</div>
         <div style={{ display: "grid", gap: 8, gridTemplateColumns: "repeat(auto-fit, minmax(min(100%,140px),1fr))" }}>
@@ -1580,19 +1741,7 @@ export default function QuoteBuilder() {
             <span style={providerBadge(tMeta.provider)}>{PROVIDER_LABEL[tMeta.provider] || tMeta.provider}</span>{tMeta.note || ""}
           </p>
         )}
-        {tResults.map((t, i) => (
-          <div key={`t-${i}`} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", borderRadius: 8, border: "1px solid var(--border-color)", marginTop: 6 }}>
-            <Car size={16} aria-hidden style={{ color: "var(--text-secondary)", flexShrink: 0 }} />
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <strong style={{ fontSize: 13 }}>{t.vehicle || "Transfer"} · {t.from} → {t.to}</strong>
-              <div style={{ fontSize: 11, color: "var(--text-secondary)", marginTop: 2 }}>
-                {[t.durationMinutes && `~${t.durationMinutes} min`, t.note].filter(Boolean).join("  ·  ")}
-              </div>
-            </div>
-            <div style={{ fontWeight: 700, fontSize: 13, whiteSpace: "nowrap" }}>{currency} {fmt(t.price)}</div>
-            <button type="button" onClick={() => addTransferLine(t)} style={secondaryBtn}><Plus size={12} /> Add</button>
-          </div>
-        ))}
+        <TransferResultsList results={tResults} currency={currency} onAdd={addTransferLine} addLabel="Add" />
       </section>
 
       {/* PRD_TRAVEL_SUPPLIER_MASTER G043 — credit-utilization advisory chips.
@@ -2085,6 +2234,94 @@ export default function QuoteBuilder() {
             </div>
           </div>
         </section>
+      )}
+
+      {templateModalOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Save quote as template"
+          onClick={(e) => { if (e.target === e.currentTarget && !savingTemplate) setTemplateModalOpen(false); }}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.6)",
+            backdropFilter: "blur(4px)",
+            WebkitBackdropFilter: "blur(4px)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1100,
+            padding: "1rem",
+          }}
+        >
+          <div
+            style={{
+              background: "var(--bg-color)",
+              color: "var(--text-primary)",
+              padding: 24,
+              minWidth: 320,
+              maxWidth: 520,
+              width: "100%",
+              borderRadius: 10,
+              border: "1px solid var(--border-color)",
+              boxShadow: "0 20px 60px rgba(0,0,0,0.45)",
+            }}
+          >
+            <h3 style={{ margin: "0 0 6px", fontSize: "1.1rem", display: "flex", alignItems: "center", gap: 8 }}>
+              <LayoutTemplate size={18} /> Save as template
+            </h3>
+            <p style={{ color: "var(--text-secondary)", fontSize: 14, marginBottom: 16 }}>
+              Saves the current{" "}
+              <strong>{buildTemplateLines().length} line{buildTemplateLines().length === 1 ? "" : "s"}</strong>{" "}
+              into the Quote Template library so you can reuse them on a future quote in one click.
+            </p>
+            <label style={fieldLabel}>
+              Template name
+              <input
+                type="text"
+                value={templateName}
+                onChange={(e) => setTemplateName(e.target.value)}
+                placeholder="e.g. Umrah 7-day · Premium"
+                style={{ ...inputStyle, width: "100%" }}
+                aria-label="Template name"
+                maxLength={255}
+                autoFocus
+              />
+            </label>
+            <label style={{ ...fieldLabel, marginTop: 12 }}>
+              Category <span style={{ color: "var(--text-secondary)", fontWeight: 400 }}>(optional)</span>
+              <input
+                type="text"
+                value={templateCategory}
+                onChange={(e) => setTemplateCategory(e.target.value)}
+                placeholder="e.g. Umrah · India-tour · Europe"
+                style={{ ...inputStyle, width: "100%" }}
+                aria-label="Template category"
+                maxLength={120}
+              />
+            </label>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 18 }}>
+              <button
+                type="button"
+                onClick={() => setTemplateModalOpen(false)}
+                style={secondaryBtn}
+                disabled={savingTemplate}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={saveAsTemplate}
+                style={primaryBtn}
+                aria-label="Confirm save as template"
+                disabled={savingTemplate || !templateName.trim()}
+              >
+                <LayoutTemplate size={14} /> {savingTemplate ? "Saving…" : "Save template"}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {sendConfirmOpen && (

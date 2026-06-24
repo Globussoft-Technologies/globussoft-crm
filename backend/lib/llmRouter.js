@@ -77,7 +77,11 @@ const TASK_ROUTING = {
   // in one response. Routed to gemini-flash to match PRD §9.1's locked
   // routing table for Travel Stall's bulk-shape Gemini calls. Real call
   // gated on Q-IT-2 / Q11 GEMINI_API_KEY (see CREDS_TRACKER).
-  "itinerary-suggest": { primary: "gemini-flash", fallback: "claude-haiku" },
+  // Cross-provider fallback: Gemini Flash primary, OpenAI (gpt-4 → gpt-4o)
+  // fallback. Gemini Flash hits 503 overloads + 429 free-tier quota caps under
+  // load; when it errors, routeRequest retries the OpenAI fallback so the
+  // operator still gets a REAL AI itinerary instead of the deterministic stub.
+  "itinerary-suggest": { primary: "gemini-flash", fallback: "gpt-4" },
   // Trip-countdown nudge (pre-trip daily reminder emails). Short, upbeat,
   // destination-personalised copy (subject + body) keyed to days-to-go.
   // ~0.5K in / 0.5K out — routed to gemini-flash for low-cost bulk-shape
@@ -123,19 +127,30 @@ const TASK_ROUTING = {
   // budget. Until then both share the 'llm' cap envelope.
   "marketing-flyer-image": { primary: "dall-e-3", fallback: "stability-xl" },
   // TBO search fallback (PRD_TRAVEL — flight/hotel quote builder). When TBO
-  // creds aren't set yet, services/tboClient.js asks a WEB-GROUNDED model for
-  // current flight/hotel options as strict JSON. Perplexity Sonar primary (live
-  // web search); gemini-flash fallback. Real call gated on the provider key —
-  // until then routeRequest returns the deterministic stub (tboClient treats a
-  // stub envelope as "no live data" and falls through to its own sample data).
-  "flight-search": { primary: "perplexity-sonar", fallback: "gemini-flash" },
-  "hotel-search": { primary: "perplexity-sonar", fallback: "gemini-flash" },
-  "transfer-search": { primary: "perplexity-sonar", fallback: "gemini-flash" },
+  // creds aren't set yet, services/tboClient.js asks a model for current
+  // flight/hotel options as strict JSON. 2026-06-23: switched primary to
+  // gpt-4o-search (OpenAI's WEB-SEARCH-enabled model — gpt-4o-search-preview)
+  // so results are grounded in live web data (real fares/flight numbers/times)
+  // instead of the model's stale training memory. This uses the SAME OpenAI key
+  // already configured (OPENAI_API_KEY). Plain gpt-4 stays as the fallback (no
+  // web access — degraded estimate). The moment TBO_* creds land, tboClient's
+  // tier-1 takes priority over this regardless of routing, so no code change is
+  // needed for the TBO cutover.
+  "flight-search": { primary: "gpt-4o-search", fallback: "gpt-4" },
+  "hotel-search": { primary: "gpt-4o-search", fallback: "gpt-4" },
+  "transfer-search": { primary: "gpt-4o-search", fallback: "gpt-4" },
   // Airport/city name → IATA code (2026-06-19). Lets flight search accept a
   // free-text place ("Delhi", "Bengaluru") and resolve it server-side before
-  // the IATA-speaking TBO/LLM search. Tiny in/out → gemini-flash. Falls back to
-  // the static alias map in lib/airportResolver.js when the call stubs (no key).
-  "airport-iata": { primary: "gemini-flash", fallback: "claude-haiku" },
+  // the IATA-speaking TBO/LLM search. 2026-06-23: switched to gpt-4 primary to
+  // match the flight-search provider (one configured key powers the whole flow);
+  // gemini-flash fallback. The static alias map in lib/airportResolver.js still
+  // resolves common cities first, so this only fires for places not in the map.
+  "airport-iata": { primary: "gpt-4", fallback: "gemini-flash" },
+  // Quote-template line-item generation. Takes a natural-language prompt
+  // ("5-night Umrah package from Mumbai, 2 pax") and returns a JSON array
+  // of TravelQuoteLine-shaped objects. gemini-flash primary (low-cost,
+  // fast); gpt-4 fallback for quota/503 situations.
+  "quote-template-generate": { primary: "gemini-flash", fallback: "gpt-4" },
   // Landing-page-generate (PR-B — docs/TRAVEL_LANDING_PAGE_PARITY_GAPS.md).
   // Generates structured LandingPage block JSON for a destination given
   // (destination, durationDays, audience, subBrand). Hard rules: NO
@@ -165,6 +180,10 @@ const ENV_FOR_MODEL = {
   "perplexity-sonar": "PERPLEXITY_API_KEY",
   "claude-opus-4-7": "ANTHROPIC_API_KEY",
   "gpt-4": "OPENAI_API_KEY",
+  // OpenAI's web-search-enabled chat model — same OPENAI_API_KEY, but the
+  // model itself browses the live web (gpt-4o-search-preview). Used by the
+  // flight/hotel/transfer search tasks so estimates are web-grounded.
+  "gpt-4o-search": "OPENAI_API_KEY",
   "gemini-flash": "GEMINI_API_KEY",
   "claude-haiku": "ANTHROPIC_API_KEY",
   // S16 — image-gen providers for marketing-flyer-image task class
@@ -355,8 +374,8 @@ async function routeRequest({ task, payload, tenantId } = {}) {
     if (verdict.alertThreshold) {
       console.warn(
         `[llm-router] tenant=${tenantId} approaching LLM monthly cap: ` +
-          `spent=${verdict.spentCents}c cap=${verdict.capCents}c ` +
-          `percent=${(verdict.percent * 100).toFixed(1)}% (Slack alert pending wire-in)`,
+        `spent=${verdict.spentCents}c cap=${verdict.capCents}c ` +
+        `percent=${(verdict.percent * 100).toFixed(1)}% (Slack alert pending wire-in)`,
       );
     }
   }
@@ -372,14 +391,35 @@ async function routeRequest({ task, payload, tenantId } = {}) {
   // truthy Promise, which made routeRequest attempt the real provider even when
   // the model's key was absent → talking-points/etc. 500'd instead of stubbing).
   // Passing tenantId also lets the per-tenant SupplierCredential key resolve.
-  if (process.env.NODE_ENV !== "test" && (await llmEnabled(task, tenantId))) {
-    try {
-      return await realProviderCall({ task, model, payload, tenantId });
-    } catch (e) {
-      console.error(
-        `[llm-router] real provider call failed (task=${task} model=${model}): ${e.message}`,
-      );
-      const err = new Error(`LLM provider call failed: ${e.message}`);
+  if (process.env.NODE_ENV !== "test") {
+    // Build the ordered model chain: the task's primary, then its configured
+    // fallback (typically a DIFFERENT provider, e.g. Gemini → OpenAI). Keep only
+    // candidates whose API key is actually available (per-tenant or env). When
+    // the primary errors (Gemini 503 overload / 429 quota), we transparently try
+    // the fallback so the operator still gets a real AI result rather than the
+    // deterministic stub. Empty chain (no keys) falls through to the stub below.
+    const route = TASK_ROUTING[task] || {};
+    const chain = [];
+    for (const cand of [model, route.fallback]) {
+      if (!cand || chain.includes(cand)) continue;
+      const k = await module.exports.getLlmKey(tenantId, cand);
+      if (k) chain.push(cand);
+    }
+    if (chain.length) {
+      let lastErr;
+      for (let i = 0; i < chain.length; i += 1) {
+        const m = chain[i];
+        try {
+          return await realProviderCall({ task, model: m, payload, tenantId });
+        } catch (e) {
+          lastErr = e;
+          console.error(`[llm-router] provider failed (task=${task} model=${m}): ${e.message}`);
+          if (i < chain.length - 1) {
+            console.warn(`[llm-router] task=${task}: falling back from ${m} to ${chain[i + 1]}`);
+          }
+        }
+      }
+      const err = new Error(`LLM provider call failed: ${lastErr ? lastErr.message : "all providers failed"}`);
       err.code = "LLM_PROVIDER_ERROR";
       throw err;
     }
@@ -396,7 +436,7 @@ async function routeRequest({ task, payload, tenantId } = {}) {
   // Format pinned as the real-mode swap-point contract.
   console.log(
     `[llm-router] task=${task} model=${model} tenant=${tenantId || "?"} ` +
-      `tokens_in=${tokensIn} tokens_out=${tokensOut} cost_estimate=$0.0000 stub=true reason=${reason}`,
+    `tokens_in=${tokensIn} tokens_out=${tokensOut} cost_estimate=$0.0000 stub=true reason=${reason}`,
   );
 
   // PRD §9.1 + R7 — persist one LlmCallLog row per call for the admin
@@ -499,6 +539,16 @@ function buildStubText(task, _payload) {
       // routeRequest get a sensible string. The structured-image path uses
       // the service module directly, not routeRequest's text envelope.
       return `${tag} Marketing flyer image (synthetic placeholder URL). Real DALL-E 3 / Stability XL image lands when Q-MF-2 keys arrive — see backend/services/marketingFlyerImageLLM.js for the structured-image path.`;
+    case "quote-template-generate":
+      // Stub returns a valid JSON array so the generate endpoint can parse it.
+      // Real Gemini Flash / GPT-4 generation lands when GEMINI_API_KEY is set.
+      return JSON.stringify([
+        { lineType: "flight", description: "Return flights (Economy)", quantity: 2, unitPrice: 18500, currency: "INR" },
+        { lineType: "hotel", description: "Hotel accommodation (3★), 7 nights", quantity: 7, unitPrice: 4500, currency: "INR" },
+        { lineType: "transport", description: "Airport transfers (return)", quantity: 1, unitPrice: 3500, currency: "INR" },
+        { lineType: "visa", description: "Visa fees per person", quantity: 2, unitPrice: 6000, currency: "INR" },
+        { lineType: "service", description: "Travel insurance per person", quantity: 2, unitPrice: 1200, currency: "INR" },
+      ]);
     case "reasoning":
       return `${tag} Reasoning output (synthetic). Real Claude/GPT lands when Q11 keys arrive.`;
     default:
@@ -528,6 +578,8 @@ const MODEL_ID_ENV = {
   "claude-opus-4-7": ["LLM_MODEL_CLAUDE_OPUS", "claude-opus-4-8"],
   "claude-haiku": ["LLM_MODEL_CLAUDE_HAIKU", "claude-haiku-4-5-20251001"],
   "gpt-4": ["LLM_MODEL_GPT", "gpt-4o"],
+  // Web-search-enabled OpenAI model (browses the live web at query time).
+  "gpt-4o-search": ["LLM_MODEL_GPT_SEARCH", "gpt-4o-search-preview"],
   "gemini-flash": ["LLM_MODEL_GEMINI", "gemini-2.5-flash"],
   "perplexity-sonar": ["LLM_MODEL_PERPLEXITY", "sonar"],
 };
@@ -556,24 +608,16 @@ function buildPrompt(task, payload) {
     if (!String(k).startsWith("__")) content[k] = v;
   }
   const SYS = {
-    "talking-points":
-      "You are a senior travel advisor. Given a lead's diagnostic profile, produce concise, actionable talking points for the advisor's next call. Plain text, 3-6 short bullets.",
-    "form-vs-call":
-      "You compare a customer's web-form answers against their phone-call answers, summarise the level of match, and flag any mismatches. Plain text.",
-    "itinerary-suggest":
-      'You are an expert travel planner pricing a trip for a per-person quote. Given a destination, departure city, number of days, budget tier, and traveller interests/pace, return a realistic day-by-day itinerary as STRICT JSON only — no markdown, no text outside the JSON. Shape: {"summary":string,"days":[{"dayNumber":number,"items":[{"itemType":string,"description":string,"estimatedCost":number}]}]}. itemType MUST be one of: flight, transfer, hotel, sightseeing, activity, meals, visa, insurance, other. estimatedCost is the typical PER-PERSON cost in INR (Indian Rupees) — always give a REALISTIC POSITIVE number; use 0 only when genuinely free. CRITICAL FOR FLIGHTS: the context includes a departureCity field (e.g. "Bangalore") — use it to describe and price both the Day-1 outbound flight (e.g. "Flight from Bangalore to Paris") and the final-day return flight (e.g. "Return flight Paris to Bangalore") with a realistic one-way airfare in INR: economy ≈ ₹18,000–₹35,000, mid ≈ ₹35,000–₹65,000, luxury ≈ ₹65,000–₹1,50,000 for international routes; adjust down for short-haul. NEVER set a flight estimatedCost to 0. Each day should also include a hotel, at least one sightseeing, one activity, and one meals item. Keep descriptions short and destination-specific. Return ONLY the JSON object.',
-    "trip-countdown":
-      'You write a short, warm, upbeat PRE-TRIP reminder email for a travel customer. Return STRICT JSON only — no markdown, no text outside the JSON. Shape: {"subject":string,"body":string}. Use AT MOST one emoji in the subject. Mention the destination and the days-to-go. Keep the body under 80 words, friendly and encouraging (e.g. packing/prep tips as the trip nears). You may use the placeholder {name} for the customer\'s name in the body. Return ONLY the JSON object.',
-    "payment-reminder":
-      'You write a short, courteous but clearly URGENT deposit-reminder email for a travel customer whose booking is confirmed but whose 50% deposit is still due before a deadline. Return STRICT JSON only — no markdown, no text outside the JSON. Shape: {"subject":string,"body":string}. No emoji. State plainly that the deposit must be paid by the deadline to keep the booking, and that the booking is at risk of cancellation otherwise. Mention the destination and the days remaining. Keep the body under 90 words. You may use the placeholder {name} for the customer\'s name. Return ONLY the JSON object.',
-    "airport-iata":
-      "You convert a city or airport name to its airport code. Given a place, reply with ONLY the single primary 3-letter IATA airport code in uppercase — nothing else. If the city has multiple airports, return its main international one. Examples: 'Delhi' → DEL, 'Bengaluru' → BLR, 'Jeddah' → JED, 'New York' → JFK.",
-    "flight-search":
-      'You are a flight search assistant for a travel agency. Given an origin, destination, date(s), pax and cabin class, return CURRENT realistic flight options as STRICT JSON only — no markdown, no prose. Shape: {"options":[{"airline":"AI","airlineName":"Air India","flightNumber":"AI-302","from":"DEL","to":"JED","departAt":"2026-08-02T18:10:00","arriveAt":"2026-08-02T23:10:00","durationMinutes":300,"stops":0,"fare":50000,"fareClass":"Economy","baggage":"30kg check-in + 7kg cabin","refundable":false}]}. `fare` is the per-person fare in the requested currency (a realistic positive number). `from`/`to` are IATA codes. Return 3-6 options across different airlines/times. Return ONLY the JSON object.',
-    "hotel-search":
-      'You are a hotel search assistant for a travel agency. Given a city, check-in/check-out dates, rooms, guests and (optional) star rating, return CURRENT realistic hotel options as STRICT JSON only — no markdown, no prose. Shape: {"hotels":[{"name":"Hotel Name","starRating":4,"address":"...","area":"City centre","ratePerNight":6500,"totalRate":13000,"roomType":"Deluxe Room","board":"Breakfast","refundable":true}]}. Rates are in the requested currency; totalRate = ratePerNight × nights × rooms. Return 4-8 real hotels for that city. Return ONLY the JSON object.',
-    "transfer-search":
-      'You are a ground-transfer assistant for a travel agency. Given a pickup, drop-off, date and pax, return realistic road-transfer options (airport↔hotel or inter-city) as STRICT JSON only — no markdown, no prose. Shape: {"transfers":[{"mode":"road","vehicle":"Private Sedan","from":"...","to":"...","durationMinutes":75,"price":2200,"pax":2,"note":"Up to 3 pax"}]}. price is the TOTAL in the requested currency for the vehicle (or per-person for shared coach — say so in note). Return 2-4 options (private + shared). Return ONLY the JSON object.',
+    "talking-points": "You are a senior travel advisor. Given a lead's diagnostic profile, produce concise, actionable talking points for the advisor's next call. Plain text, 3-6 short bullets.",
+    "form-vs-call": "You compare a customer's web-form answers against their phone-call answers, summarise the level of match, and flag any mismatches. Plain text.",
+    "itinerary-suggest": "You are an expert travel planner pricing a trip for a per-person quote. Given a destination, departure city, number of days, budget tier, and traveller interests/pace, return a realistic day-by-day itinerary as STRICT JSON only — no markdown, no text outside the JSON. Shape: {\"summary\":string,\"days\":[{\"dayNumber\":number,\"items\":[{\"itemType\":string,\"description\":string,\"estimatedCost\":number}]}]}. itemType MUST be one of: flight, transfer, hotel, sightseeing, activity, meals, visa, insurance, other. estimatedCost is the typical PER-PERSON cost in INR (Indian Rupees) — always give a REALISTIC POSITIVE number; use 0 only when genuinely free. CRITICAL FOR FLIGHTS: the context includes a departureCity field (e.g. \"Bangalore\") — use it to describe and price both the Day-1 outbound flight (e.g. \"Flight from Bangalore to Paris\") and the final-day return flight (e.g. \"Return flight Paris to Bangalore\") with a realistic one-way airfare in INR: economy ≈ ₹18,000–₹35,000, mid ≈ ₹35,000–₹65,000, luxury ≈ ₹65,000–₹1,50,000 for international routes; adjust down for short-haul. NEVER set a flight estimatedCost to 0. Each day should also include a hotel, at least one sightseeing, one activity, and one meals item. Keep descriptions short and destination-specific. Return ONLY the JSON object.",
+    "trip-countdown": "You write a short, warm, upbeat PRE-TRIP reminder email for a travel customer. Return STRICT JSON only — no markdown, no text outside the JSON. Shape: {\"subject\":string,\"body\":string}. Use AT MOST one emoji in the subject. Mention the destination and the days-to-go. Keep the body under 80 words, friendly and encouraging (e.g. packing/prep tips as the trip nears). You may use the placeholder {name} for the customer's name in the body. Return ONLY the JSON object.",
+    "payment-reminder": "You write a short, courteous but clearly URGENT deposit-reminder email for a travel customer whose booking is confirmed but whose 50% deposit is still due before a deadline. Return STRICT JSON only — no markdown, no text outside the JSON. Shape: {\"subject\":string,\"body\":string}. No emoji. State plainly that the deposit must be paid by the deadline to keep the booking, and that the booking is at risk of cancellation otherwise. Mention the destination and the days remaining. Keep the body under 90 words. You may use the placeholder {name} for the customer's name. Return ONLY the JSON object.",
+    "airport-iata": "You convert a city or airport name to its airport code. Given a place, reply with ONLY the single primary 3-letter IATA airport code in uppercase — nothing else. If the city has multiple airports, return its main international one. Examples: 'Delhi' → DEL, 'Bengaluru' → BLR, 'Jeddah' → JED, 'New York' → JFK.",
+    "flight-search": "You are a flight search assistant for a travel agency. Given an origin, destination, date(s), pax and cabin class, return CURRENT realistic flight options as STRICT JSON only — no markdown, no prose. Shape: {\"options\":[{\"airline\":\"AI\",\"airlineName\":\"Air India\",\"flightNumber\":\"AI-302\",\"from\":\"DEL\",\"to\":\"JED\",\"departAt\":\"2026-08-02T18:10:00\",\"arriveAt\":\"2026-08-02T23:10:00\",\"durationMinutes\":300,\"stops\":0,\"fare\":50000,\"fareClass\":\"Economy\",\"baggage\":\"30kg check-in + 7kg cabin\",\"refundable\":false}]}. `fare` is the per-person fare in the requested currency (a realistic positive number). `from`/`to` are IATA codes. Return 3-6 options across different airlines/times. Return ONLY the JSON object.",
+    "hotel-search": "You are a hotel search assistant for a travel agency. Given a city, check-in/check-out dates, rooms, guests and (optional) star rating, return CURRENT realistic hotel options as STRICT JSON only — no markdown, no prose. Shape: {\"hotels\":[{\"name\":\"Hotel Name\",\"starRating\":4,\"address\":\"...\",\"area\":\"City centre\",\"ratePerNight\":6500,\"totalRate\":13000,\"roomType\":\"Deluxe Room\",\"board\":\"Breakfast\",\"refundable\":true}]}. Rates are in the requested currency; totalRate = ratePerNight × nights × rooms. Return 4-8 real hotels for that city. Return ONLY the JSON object.",
+    "transfer-search": "You are a ground-transfer assistant for a travel agency. Given a pickup, drop-off, date and pax, return realistic road-transfer options (airport↔hotel or inter-city) as STRICT JSON only — no markdown, no prose. Shape: {\"transfers\":[{\"mode\":\"road\",\"vehicle\":\"Private Sedan\",\"from\":\"...\",\"to\":\"...\",\"durationMinutes\":75,\"price\":2200,\"pax\":2,\"note\":\"Up to 3 pax\"}]}. price is the TOTAL in the requested currency for the vehicle (or per-person for shared coach — say so in note). Return 2-4 options (private + shared). Return ONLY the JSON object.",
+    "quote-template-generate": "You are a travel quote builder. Given a natural-language description of a travel package, generate a JSON array of line items. Each item must be a JSON object with: lineType (one of: flight, hotel, transport, transfer, visa, service, other), description (string), quantity (number), unitPrice (number, in the provided currency), currency (3-letter ISO code). Return ONLY a valid JSON array — no markdown, no code fences, no explanation, no text outside the JSON. Example: [{\"lineType\":\"flight\",\"description\":\"Air India DEL-JED (Economy)\",\"quantity\":2,\"unitPrice\":18500,\"currency\":\"INR\"}]",
     "bulk-text": "You write clear, customer-facing travel copy. Plain text.",
     "call-summary":
       "You summarise a sales/advisory call in a few sentences. Plain text.",
@@ -653,10 +697,7 @@ async function callOpenAICompatible(
     body: JSON.stringify({
       model: modelId,
       max_tokens: maxTokens,
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: user },
-      ],
+      messages: [{ role: "system", content: system }, { role: "user", content: user }],
     }),
   });
   const text = (
@@ -674,7 +715,9 @@ async function callOpenAICompatible(
   };
 }
 
-async function callGemini(modelId, system, user, apiKey, maxTokens) {
+// A single generateContent call against one Gemini model. Throws on non-2xx
+// (httpJson surfaces "<status> <message>").
+async function callGeminiOnce(modelId, system, user, apiKey, maxTokens) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${encodeURIComponent(apiKey)}`;
   const body = await httpJson(url, {
     method: "POST",
@@ -703,6 +746,56 @@ async function callGemini(modelId, system, user, apiKey, maxTokens) {
   };
 }
 
+// Transient Gemini errors worth retrying / failing over to a lighter model:
+// 429 quota spikes, 500/502/503 overloads. Permanent errors (400/401/403/404)
+// fall through and throw immediately so we don't waste attempts.
+const GEMINI_TRANSIENT_RE = /\b(429|500|502|503)\b|unavailable|overload|high demand|resource[_ ]exhausted|try again/i;
+
+// Resolve the primary model + a fallback chain. When the primary model is
+// overloaded (503) or quota-capped (429) — which Gemini Flash hits often under
+// load — we automatically try a lighter sibling so the operator still gets a
+// REAL AI itinerary instead of the deterministic skeleton. Env-overridable via
+// LLM_GEMINI_FALLBACK_MODELS (comma-separated).
+function geminiModelChain(primaryId) {
+  const raw = process.env.LLM_GEMINI_FALLBACK_MODELS;
+  const fallbacks = raw && raw.trim()
+    ? raw.split(",").map((s) => s.trim()).filter(Boolean)
+    : ["gemini-2.5-flash-lite", "gemini-2.0-flash"];
+  return [primaryId, ...fallbacks].filter((m, i, a) => m && a.indexOf(m) === i);
+}
+
+async function callGemini(modelId, system, user, apiKey, maxTokens) {
+  const chain = geminiModelChain(modelId);
+  const attemptsPerModel = 2;
+  let lastErr;
+  for (const m of chain) {
+    for (let attempt = 1; attempt <= attemptsPerModel; attempt += 1) {
+      try {
+        const out = await callGeminiOnce(m, system, user, apiKey, maxTokens);
+        if (m !== modelId) {
+          console.warn(`[llm-router] gemini: '${modelId}' unavailable, succeeded on fallback '${m}'`);
+        }
+        return out;
+      } catch (e) {
+        lastErr = e;
+        const msg = String(e && e.message);
+        // Permanent error (bad key, bad request, model not found) → stop now.
+        if (!GEMINI_TRANSIENT_RE.test(msg)) throw e;
+        // A 429 quota error won't clear in a few hundred ms (Google asks for a
+        // ~40s wait) — don't burn a same-model retry; jump to the next model,
+        // which may have its own quota. Only 5xx overloads get a same-model retry.
+        const isQuota = /\b429\b|quota|resource[_ ]exhausted/i.test(msg);
+        if (isQuota) break;
+        if (attempt < attemptsPerModel) {
+          await new Promise((r) => setTimeout(r, 600 * attempt));
+        }
+      }
+    }
+    console.warn(`[llm-router] gemini: '${m}' still failing after ${attemptsPerModel} attempts — trying next model`);
+  }
+  throw lastErr || new Error("gemini call failed");
+}
+
 async function realProviderCall({ task, model, payload, tenantId }) {
   const provider = providerForModel(model);
   const envVar = ENV_FOR_MODEL[model];
@@ -713,28 +806,15 @@ async function realProviderCall({ task, model, payload, tenantId }) {
   const maxTokens = 4096;
 
   let out;
-  if (provider === "anthropic")
-    out = await callAnthropic(modelId, system, user, apiKey, maxTokens);
-  else if (provider === "openai")
-    out = await callOpenAICompatible(
-      "https://api.openai.com/v1",
-      modelId,
-      system,
-      user,
-      apiKey,
-      maxTokens,
-    );
-  else if (provider === "perplexity")
-    out = await callOpenAICompatible(
-      "https://api.perplexity.ai",
-      modelId,
-      system,
-      user,
-      apiKey,
-      maxTokens,
-    );
-  else if (provider === "gemini")
-    out = await callGemini(modelId, system, user, apiKey, maxTokens);
+  if (provider === "anthropic") out = await callAnthropic(modelId, system, user, apiKey, maxTokens);
+  else if (provider === "openai") {
+    // gpt-4o-search-preview browses the live web when web_search_options is set;
+    // regular gpt-4o has no web access, so only enable it for the search model.
+    const extra = /search/.test(modelId) ? { web_search_options: {} } : {};
+    out = await callOpenAICompatible("https://api.openai.com/v1", modelId, system, user, apiKey, maxTokens, extra);
+  }
+  else if (provider === "perplexity") out = await callOpenAICompatible("https://api.perplexity.ai", modelId, system, user, apiKey, maxTokens);
+  else if (provider === "gemini") out = await callGemini(modelId, system, user, apiKey, maxTokens);
   else throw new Error(`unknown provider for ${model}`);
 
   const tokensIn =
@@ -744,7 +824,7 @@ async function realProviderCall({ task, model, payload, tenantId }) {
   // Token-only telemetry — NEVER log payload content (PII discipline).
   console.log(
     `[llm-router] task=${task} model=${model} (${modelId}) tenant=${tenantId || "?"} ` +
-      `tokens_in=${tokensIn} tokens_out=${tokensOut} cost_estimate=$0.0000 stub=false reason=real`,
+    `tokens_in=${tokensIn} tokens_out=${tokensOut} cost_estimate=$0.0000 stub=false reason=real`,
   );
 
   // Persist one LlmCallLog row (best-effort, fire-and-forget) — mirrors the

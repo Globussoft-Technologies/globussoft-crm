@@ -298,6 +298,32 @@ export default function ItineraryDetail() {
     }
   };
 
+  // Admin resolution of a customer-initiated cancellation request.
+  // decision ∈ "approve" | "decline" | "refunded".
+  const resolveCancellation = async (decision) => {
+    const confirms = {
+      approve: "Approve this cancellation? The booking will be marked cancelled and the customer notified — then process any refund per the cancellation policy.",
+      decline: "Decline this cancellation request? The booking continues and the customer is notified.",
+      refunded: "Mark the refund as processed? The customer will be notified.",
+    };
+    if (!confirm(confirms[decision])) return;
+    const note = prompt("Add a short note for the customer (optional):", "");
+    if (note === null) return; // operator cancelled the prompt
+    try {
+      await fetchApi(`/api/travel/itineraries/${id}/cancellation`, {
+        method: "PATCH",
+        body: JSON.stringify({ decision, note: note || undefined }),
+      });
+      notify.success(
+        decision === "approve" ? "Cancellation approved" :
+          decision === "decline" ? "Cancellation request declined" : "Refund recorded",
+      );
+      load();
+    } catch (e) {
+      notify.error(e?.body?.error || "Failed to update the cancellation");
+    }
+  };
+
   const generateShare = async () => {
     try {
       const res = await fetchApi(`/api/travel/itineraries/${id}/share`, {
@@ -604,6 +630,94 @@ export default function ItineraryDetail() {
           </div>
         )}
       </header>
+
+      {/* Customer-initiated cancellation — admin resolution surface. The portal
+          sets cancellationStatus; here the advisor approves/declines/refunds. */}
+      {itin.cancellationStatus && (
+        <section
+          aria-label="Cancellation request"
+          style={{
+            marginBottom: 20,
+            padding: 16,
+            borderRadius: 10,
+            border: "1px solid",
+            borderColor:
+              itin.cancellationStatus === "refunded" ? "rgba(22,163,74,0.5)"
+                : itin.cancellationStatus === "cancelled" ? "rgba(168,50,63,0.5)"
+                  : "rgba(217,119,6,0.5)",
+            background:
+              itin.cancellationStatus === "refunded" ? "rgba(22,163,74,0.10)"
+                : itin.cancellationStatus === "cancelled" ? "rgba(168,50,63,0.10)"
+                  : "rgba(217,119,6,0.10)",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+            <XCircle size={16} />
+            <strong style={{ fontSize: 14 }}>
+              {itin.cancellationStatus === "requested" && "Cancellation requested by customer"}
+              {itin.cancellationStatus === "cancelled" && "Booking cancelled — refund pending"}
+              {itin.cancellationStatus === "refunded" && "Booking cancelled & refunded"}
+            </strong>
+          </div>
+          {itin.cancellationReason && (
+            <p style={{ margin: "0 0 6px", fontSize: 13, color: "var(--text-secondary)" }}>
+              Reason: &ldquo;{itin.cancellationReason}&rdquo;
+            </p>
+          )}
+          <p style={{ margin: "0 0 8px", fontSize: 12.5, color: "var(--text-secondary)" }}>
+            {Number(itin.advancePaidAmount) > 0
+              ? `Paid so far: ${(itin.currency || "INR") === "INR" ? "₹" : `${itin.currency} `}${Number(itin.advancePaidAmount).toLocaleString("en-IN")}`
+              : "No payment recorded yet."}
+            {itin.cancellationRequestedAt && ` · Requested ${new Date(itin.cancellationRequestedAt).toLocaleDateString()}`}
+          </p>
+          {/* Policy-driven refund the approval will apply (computed server-side). */}
+          {(() => {
+            const r = itin.cancellationRefund;
+            if (!r) return null;
+            const cur = (r.currency || "INR") === "INR" ? "₹" : `${r.currency} `;
+            const box = {
+              margin: "0 0 12px", padding: "8px 10px", borderRadius: 8,
+              background: "rgba(255,255,255,0.04)", border: "1px solid var(--border-color)",
+              fontSize: 12.5,
+            };
+            if (r.computable && r.refundAmount != null) {
+              return (
+                <div style={box}>
+                  <strong>Refund per policy{r.policyName ? ` · ${r.policyName}` : ""}:</strong>{" "}
+                  {cur}{Number(r.refundAmount).toLocaleString("en-IN")} ({r.refundPercent}% of {cur}{Number(r.paidAmount).toLocaleString("en-IN")} paid)
+                  {r.daysRemaining != null && (
+                    <span style={{ color: "var(--text-secondary)" }}> · {r.daysRemaining} day{r.daysRemaining === 1 ? "" : "s"} to departure</span>
+                  )}
+                </div>
+              );
+            }
+            return (
+              <div style={{ ...box, color: "var(--text-secondary)" }}>
+                Refund can&apos;t be auto-calculated — {r.policyName ? "set a travel start date" : "assign a cancellation policy"} on this booking, then approve. Settle the refund manually per policy.
+              </div>
+            );
+          })()}
+          {canEdit && (
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              {itin.cancellationStatus === "requested" && (
+                <>
+                  <button type="button" onClick={() => resolveCancellation("approve")} style={dangerBtn} aria-label="Approve cancellation">
+                    <Check size={14} /> Approve cancellation
+                  </button>
+                  <button type="button" onClick={() => resolveCancellation("decline")} style={secondaryBtn} aria-label="Decline cancellation request">
+                    <X size={14} /> Decline request
+                  </button>
+                </>
+              )}
+              {itin.cancellationStatus === "cancelled" && (
+                <button type="button" onClick={() => resolveCancellation("refunded")} style={primaryBtn} aria-label="Mark refund processed">
+                  <Check size={14} /> Mark refunded
+                </button>
+              )}
+            </div>
+          )}
+        </section>
+      )}
 
       <section style={{ marginBottom: 20 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>

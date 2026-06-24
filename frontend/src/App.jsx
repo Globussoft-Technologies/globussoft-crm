@@ -14,6 +14,7 @@ import {
   Route,
   Navigate,
   Outlet,
+  useParams,
 } from "react-router-dom";
 import Login from "./pages/Login";
 import Signup from "./pages/Signup";
@@ -64,6 +65,7 @@ const TmcReadinessReport = lazy(() => import("./pages/public/TmcReadinessReport"
 // PRD_TRAVEL_QUOTE_BUILDER §3.7 / slice C9 — public quote-accept landing.
 const QuoteAcceptLanding = lazy(() => import("./pages/public/QuoteAcceptLanding"));
 const TravelReview = lazy(() => import("./pages/public/TravelReview"));
+const InvoicePaymentSuccess = lazy(() => import("./pages/public/InvoicePaymentSuccess"));
 // Public flyer share/embed viewer — /p/flyer/:slug?t=<jwt>[&embed=1].
 const FlyerView = lazy(() => import("./pages/public/FlyerView"));
 // Public marketing landing page entry point — /trips. Resolves the
@@ -602,6 +604,14 @@ function TravelOnly({ children }) {
   return children;
 }
 
+// Back-compat redirect: older notifications linked to /travel/quotes/:id (which
+// never had a route → 404). Send those to the Quote Builder for that quote so
+// already-sent notifications resolve correctly without a DB backfill.
+function QuoteIdRedirect() {
+  const { id } = useParams();
+  return <Navigate to={`/travel/quotes/builder/${id}`} replace />;
+}
+
 // /home is the role-aware widget dashboard for non-admin users. Admins
 // already have their tenant's primary dashboard (Owner Dashboard at
 // /wellness on wellness tenants, Enterprise Overview at /dashboard on
@@ -997,6 +1007,8 @@ export default function App() {
                   <Route path="/p/quote/:shareToken" element={<QuoteAcceptLanding />} />
                   {/* Public post-trip review (no auth; token in path). */}
                   <Route path="/p/review/:token" element={<TravelReview />} />
+                  {/* Razorpay payment-link callback — shown after customer pays. */}
+                  <Route path="/p/payment/success" element={<InvoicePaymentSuccess />} />
                   {/* Public flyer share + iframe-embed viewer (no auth; JWT in ?t=). */}
                   <Route path="/p/flyer/:slug" element={<FlyerView />} />
                   {/* Dynamic /trips entry point — resolves to the admin-
@@ -1102,8 +1114,12 @@ export default function App() {
                         </RoleGuard>
                       }
                     />
-                    <Route path="reports" element={<Reports />} />
-                    <Route path="agent-reports" element={<AgentReports />} />
+                    {/* Generic CRM reports — vertical-gated so travel/wellness
+                        tenants use their own /travel/reports | /wellness/reports
+                        (the generic deal-stage chart + "Globussoft CRM" PDF don't
+                        fit those verticals). */}
+                    <Route path="reports" element={<GenericOnly><Reports /></GenericOnly>} />
+                    <Route path="agent-reports" element={<GenericOnly><AgentReports /></GenericOnly>} />
                     <Route path="workflows" element={<Workflows />} />
                     <Route path="developer" element={<Developer />} />
                     <Route
@@ -1521,6 +1537,10 @@ export default function App() {
               {/* G019 — operator-facing counter-offer review (side-by-side
                   ours vs customer counter). Accept / Reject / Counter back. */}
               <Route path="travel/quotes/:id/counter-review" element={<TravelOnly><RoleGuard requiredPermission={{ module: "quotes", action: "write" }} feature="Counter Review" message="Counter Review requires the 'quotes.write' permission."><TravelQuoteCounterReview /></RoleGuard></TravelOnly>} />
+              {/* Back-compat: old notifications linked /travel/quotes/:id (no route
+                  → 404). Redirect to the Quote Builder. More-specific routes above
+                  (/builder, /:id/counter-review) still win via route ranking. */}
+              <Route path="travel/quotes/:id" element={<TravelOnly><QuoteIdRedirect /></TravelOnly>} />
               {/* PRD §7 — Flight quick-quote (FlightQuoteAgent). Manual
                   fallback for the Chrome flight plugin: up to 4 options,
                   server-side markup, branded PDF + WhatsApp share. */}

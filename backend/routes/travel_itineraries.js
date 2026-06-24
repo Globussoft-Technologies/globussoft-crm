@@ -111,6 +111,7 @@ const { getTenantRazorpayClient, getTenantRazorpayCreds, NOT_CONFIGURED_MESSAGE 
 // Customer-portal in-app notifications (2026-06-17) — advisor sends/revises an
 // itinerary or a payment lands → notify the customer (Contact) in their portal.
 const { safeNotifyTravelCustomer } = require("../lib/travelPortalNotificationService");
+const cancellationRefund = require("../lib/cancellationRefund");
 
 // Build + emit the right customer-portal notification for a trip event.
 // Best-effort (the service swallows errors) — never blocks the request.
@@ -1835,6 +1836,56 @@ router.get("/itineraries/stats", verifyToken, requireTravelTenant, async (req, r
 // ─── Get + amend ──────────────────────────────────────────────────────
 
 // GET /api/travel/itineraries/:id
+// Resolve the policy-driven refund context for a booking: which cancellation
+// policy applies (the one pinned to its TravelInvoice, else the active policy
+// for the sub-brand, else the tenant-wide default), how many days until the trip
+// starts, and the resulting refund % + amount of what's been paid. Best-effort;
+// returns computable:false when no policy/date so the advisor decides manually.
+async function resolveCancellationRefund(itin) {
+  const base = {
+    policyId: null,
+    policyName: null,
+    currency: itin.currency || "INR",
+    paidAmount: Number(itin.advancePaidAmount || 0),
+    daysRemaining: cancellationRefund.daysUntil(itin.startDate),
+    refundPercent: null,
+    retentionPercent: null,
+    refundAmount: null,
+    computable: false,
+  };
+  try {
+    const tenantId = itin.tenantId;
+    let policy = null;
+    // 1. Policy the operator pinned to this booking's invoice.
+    const inv = await prisma.travelInvoice.findFirst({
+      where: { tenantId, itineraryId: itin.id, cancellationPolicyId: { not: null } },
+      select: { cancellationPolicyId: true },
+      orderBy: { id: "desc" },
+    }).catch(() => null);
+    if (inv && inv.cancellationPolicyId) {
+      policy = await prisma.cancellationPolicy.findFirst({
+        where: { id: inv.cancellationPolicyId, tenantId },
+      }).catch(() => null);
+    }
+    // 2. Else the active policy for the sub-brand (sub-brand-specific wins over
+    //    the tenant-wide null default).
+    if (!policy) {
+      const policies = await prisma.cancellationPolicy.findMany({
+        where: { tenantId, isActive: true, OR: [{ subBrand: itin.subBrand }, { subBrand: null }] },
+      }).catch(() => []);
+      policy = policies.find((p) => p.subBrand === itin.subBrand) || policies.find((p) => p.subBrand == null) || null;
+    }
+    if (!policy) return base;
+    let tiers = [];
+    try { tiers = JSON.parse(policy.tiersJson || "[]"); } catch { tiers = []; }
+    const calc = cancellationRefund.computeRefund({ tiers, daysRemaining: base.daysRemaining, paidAmount: base.paidAmount });
+    return { ...base, policyId: policy.id, policyName: policy.name, ...calc };
+  } catch (e) {
+    console.error("[travel-itin] refund resolve failed (non-fatal):", e.message);
+    return base;
+  }
+}
+
 router.get("/itineraries/:id", verifyToken, requireTravelTenant, async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
@@ -1851,12 +1902,132 @@ router.get("/itineraries/:id", verifyToken, requireTravelTenant, async (req, res
     if (!canAccessSubBrand(allowed, itin.subBrand)) {
       return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
     }
+    // When a cancellation is in play, attach the policy-driven refund preview so
+    // the advisor sees the exact refund due before approving.
+    if (itin.cancellationStatus) {
+      itin.cancellationRefund = await resolveCancellationRefund(itin);
+    }
     res.json(itin);
   } catch (e) {
     console.error("[travel-itin] get error:", e.message);
     res.status(500).json({ error: "Failed to get itinerary" });
   }
 });
+
+// PATCH /api/travel/itineraries/:id/cancellation — ADMIN/MANAGER resolution of a
+// CUSTOMER-initiated cancellation request (the portal sets cancellationStatus =
+// "requested"; until now the advisor had no way to act on it). Advances the
+// cancellation lifecycle the schema defines — requested → cancelled → refunded —
+// and notifies the customer of the outcome. The advisor settles the refund per
+// the cancellation policy; we never auto-refund.
+//
+// Body: { decision: "approve" | "decline" | "refunded", note? }
+//   approve  (from "requested")  → cancellationStatus = "cancelled"
+//   decline  (from "requested")  → cancellationStatus = null  (booking continues)
+//   refunded (from "cancelled")  → cancellationStatus = "refunded"
+const VALID_CANCEL_DECISIONS = ["approve", "decline", "refunded"];
+router.patch(
+  "/itineraries/:id/cancellation",
+  verifyToken,
+  requirePermission("itineraries", "update"),
+  requireTravelTenant,
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+      }
+      const decision = String((req.body && req.body.decision) || "").toLowerCase();
+      if (!VALID_CANCEL_DECISIONS.includes(decision)) {
+        return res.status(400).json({ error: "decision must be one of: approve, decline, refunded", code: "INVALID_DECISION" });
+      }
+      const note = typeof (req.body && req.body.note) === "string" ? req.body.note.trim().slice(0, 1000) : "";
+
+      const itin = await prisma.itinerary.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+        select: { id: true, tenantId: true, subBrand: true, contactId: true, destination: true, currency: true, cancellationStatus: true, advancePaidAmount: true, startDate: true },
+      });
+      if (!itin) return res.status(404).json({ error: "Itinerary not found", code: "NOT_FOUND" });
+
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (!canAccessSubBrand(allowed, itin.subBrand)) {
+        return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+      }
+
+      // Lifecycle guards.
+      if ((decision === "approve" || decision === "decline") && itin.cancellationStatus !== "requested") {
+        return res.status(409).json({ error: "There's no pending cancellation request to act on", code: "NO_PENDING_REQUEST" });
+      }
+      if (decision === "refunded" && itin.cancellationStatus !== "cancelled") {
+        return res.status(409).json({ error: "Mark the cancellation confirmed before recording a refund", code: "NOT_CANCELLED" });
+      }
+
+      const trip = itin.destination || "trip";
+      const cur = (itin.currency || "INR") === "INR" ? "₹" : `${itin.currency} `;
+      let data;
+      let custTitle;
+      let custMessage;
+      let custType;
+      let refund = null;
+      if (decision === "approve") {
+        // Apply the cancellation policy: compute the refund due for what's been
+        // paid, given days-to-departure, and tell the customer the exact figure.
+        refund = await resolveCancellationRefund(itin);
+        data = { cancellationStatus: "cancelled" };
+        custTitle = "Booking cancelled";
+        const refundLine = refund.computable && refund.refundAmount != null
+          ? ` Per our cancellation policy${refund.policyName ? ` (${refund.policyName})` : ""}, a refund of ${cur}${Number(refund.refundAmount).toLocaleString("en-IN")} (${refund.refundPercent}% of ${cur}${Number(refund.paidAmount).toLocaleString("en-IN")} paid) will be processed.`
+          : " Any refund due will be processed per the cancellation policy.";
+        custMessage = `Your ${trip} booking has been cancelled.${note ? ` ${note}` : ""}${refundLine}`;
+        custType = "warning";
+      } else if (decision === "decline") {
+        data = { cancellationStatus: null };
+        custTitle = "Cancellation request declined";
+        custMessage = `After review, your ${trip} booking will continue as planned.${note ? ` ${note}` : ""} Please reach out to your advisor with any questions.`;
+        custType = "info";
+      } else {
+        data = { cancellationStatus: "refunded" };
+        custTitle = "Refund processed";
+        custMessage = `The refund for your cancelled ${trip} booking has been processed.${note ? ` ${note}` : ""}`;
+        custType = "success";
+      }
+
+      const updated = await prisma.itinerary.update({
+        where: { id: itin.id },
+        data,
+        select: { id: true, status: true, cancellationStatus: true, cancellationReason: true, cancellationRequestedAt: true },
+      });
+
+      writeAudit(
+        "Itinerary",
+        `CANCELLATION_${decision.toUpperCase()}`,
+        itin.id,
+        req.user.userId,
+        req.travelTenant.id,
+        {
+          subBrand: itin.subBrand,
+          note: note || null,
+          ...(refund ? { refundPolicy: refund.policyName, refundPercent: refund.refundPercent, refundAmount: refund.refundAmount } : {}),
+        },
+      ).catch(() => {});
+
+      // Tell the customer the outcome in their portal bell (fire-and-forget).
+      safeNotifyTravelCustomer({
+        contactId: itin.contactId,
+        tenantId: itin.tenantId,
+        title: custTitle,
+        message: custMessage,
+        type: custType,
+        link: `booking:${itin.id}`,
+      });
+
+      res.json({ ...updated, refund });
+    } catch (e) {
+      console.error("[travel-itin] cancellation resolve error:", e.message);
+      res.status(500).json({ error: "Failed to update the cancellation" });
+    }
+  },
+);
 
 // PATCH /api/travel/itineraries/:id
 // Amend top-level fields only (not items — those have their own endpoints).
@@ -3187,9 +3358,9 @@ router.post("/itineraries/:id/accept", verifyToken, requireTravelTenant, async (
 const SUGGEST_TIER_COSTS = {
   // flight = indicative one-way per-person airfare (international routes from India).
   // Stub-mode only — LLM prices this from departureCity when the key is live.
-  economy: { hotel: 2500, transfer: 400, sightseeing: 600, activity: 800, meals: 500, flight: 22000 },
-  mid:     { hotel: 5000, transfer: 800, sightseeing: 1200, activity: 1500, meals: 1000, flight: 40000 },
-  luxury:  { hotel: 12000, transfer: 2000, sightseeing: 3000, activity: 4000, meals: 2500, flight: 85000 },
+  economy: { hotel: 2500, transfer: 400, sightseeing: 600, activity: 800, meals: 500, flight: 22000, transport: 1500 },
+  mid:     { hotel: 5000, transfer: 800, sightseeing: 1200, activity: 1500, meals: 1000, flight: 40000, transport: 3000 },
+  luxury:  { hotel: 12000, transfer: 2000, sightseeing: 3000, activity: 4000, meals: 2500, flight: 85000, transport: 6000 },
 };
 function tierCost(kind, budgetTier) {
   const t = SUGGEST_TIER_COSTS[budgetTier];
@@ -3270,7 +3441,22 @@ function parseLlmSuggestion(rawText, { destination }) {
 // hotel cost is derived from it (budgetPerPax / days), preserving the FR-3.4
 // budget-split contract pinned by the spec. Otherwise the per-item estimate
 // comes from the budget-tier table above (null when no tier is supplied).
-function buildSuggestionSkeleton({ destination, days, budgetPerPax, budgetTier, summary, departureCity }) {
+// How the operator gets TO the destination, honoured in the deterministic
+// skeleton so "Travel by: Train" doesn't produce a flight (the prior bug). Maps
+// the modal's transportPreference value → the line item type, a human label,
+// and whether an airport→hotel transfer makes sense (only for flights).
+// itemType values MUST be in VALID_ITEM_TYPES (flight/train/bus/cab/…) so the
+// suggestion materialises cleanly — "transport" is NOT a valid type and would
+// be clamped to "activity".
+const TRANSIT_MODES = {
+  flight: { itemType: "flight", outVerb: "Flight", retVerb: "Return flight", arriveTransfer: true },
+  train: { itemType: "train", outVerb: "Train", retVerb: "Return train", arriveTransfer: false },
+  car: { itemType: "cab", outVerb: "Road journey", retVerb: "Return road journey", arriveTransfer: false },
+  road: { itemType: "cab", outVerb: "Road journey", retVerb: "Return road journey", arriveTransfer: false },
+  bus: { itemType: "bus", outVerb: "Bus", retVerb: "Return bus", arriveTransfer: false },
+};
+
+function buildSuggestionSkeleton({ destination, days, budgetPerPax, budgetTier, summary, departureCity, transportPreference }) {
   const perNightHotel =
     budgetPerPax != null && days > 0
       ? Math.round((budgetPerPax / days) * 100) / 100
@@ -3280,28 +3466,40 @@ function buildSuggestionSkeleton({ destination, days, budgetPerPax, budgetTier, 
   const activityCost = tierCost("activity", budgetTier);
   const mealsCost = tierCost("meals", budgetTier);
   const flightCost = tierCost("flight", budgetTier);
+  const transportCost = tierCost("transport", budgetTier);
 
   const origin = departureCity && departureCity.trim() ? departureCity.trim() : null;
+  // Resolve the chosen travel mode. "none" → no inbound/outbound transit item
+  // at all (operator is already at the destination / arranges it separately).
+  const modeKey = String(transportPreference || "flight").trim().toLowerCase();
+  const noTransit = modeKey === "none";
+  const mode = TRANSIT_MODES[modeKey] || TRANSIT_MODES.flight;
+  const transitCost = mode.itemType === "flight" ? flightCost : transportCost;
 
   const dayList = [];
   for (let d = 1; d <= days; d++) {
     const items = [];
-    if (d === 1) {
+    if (d === 1 && !noTransit) {
       const arrivalDesc = origin
-        ? `Flight from ${origin} to ${destination}`
-        : `Arrival flight to ${destination}`;
-      items.push({ itemType: "flight", description: arrivalDesc, suggestedSupplierName: null, estimatedCost: flightCost, latitude: null, longitude: null });
-      items.push({ itemType: "transfer", description: `Airport transfer to hotel in ${destination}`, suggestedSupplierName: null, estimatedCost: transferCost, latitude: null, longitude: null });
+        ? `${mode.outVerb} from ${origin} to ${destination}`
+        : `${mode.outVerb} to ${destination}`;
+      items.push({ itemType: mode.itemType, description: arrivalDesc, suggestedSupplierName: null, estimatedCost: transitCost, latitude: null, longitude: null });
+      // An airport transfer only makes sense when arriving by air; for train/road
+      // a generic transfer to the hotel still helps, so keep it but reword.
+      const transferDesc = mode.arriveTransfer
+        ? `Airport transfer to hotel in ${destination}`
+        : `Transfer to hotel in ${destination}`;
+      items.push({ itemType: "transfer", description: transferDesc, suggestedSupplierName: null, estimatedCost: transferCost, latitude: null, longitude: null });
     }
     items.push({ itemType: "hotel", description: `Night ${d} — stay in ${destination}`, suggestedSupplierName: null, estimatedCost: perNightHotel, latitude: null, longitude: null });
     items.push({ itemType: "sightseeing", description: `Day ${d} — morning sightseeing in ${destination}`, suggestedSupplierName: null, estimatedCost: sightseeingCost, latitude: null, longitude: null });
     items.push({ itemType: "activity", description: `Day ${d} — afternoon activity in ${destination}`, suggestedSupplierName: null, estimatedCost: activityCost, latitude: null, longitude: null });
     items.push({ itemType: "meals", description: `Day ${d} — dinner in ${destination}`, suggestedSupplierName: null, estimatedCost: mealsCost, latitude: null, longitude: null });
-    if (d === days) {
+    if (d === days && !noTransit) {
       const returnDesc = origin
-        ? `Return flight from ${destination} to ${origin}`
-        : `Departure flight from ${destination}`;
-      items.push({ itemType: "flight", description: returnDesc, suggestedSupplierName: null, estimatedCost: flightCost, latitude: null, longitude: null });
+        ? `${mode.retVerb} from ${destination} to ${origin}`
+        : `${mode.retVerb} from ${destination}`;
+      items.push({ itemType: mode.itemType, description: returnDesc, suggestedSupplierName: null, estimatedCost: transitCost, latitude: null, longitude: null });
     }
     dayList.push({ dayNumber: d, items });
   }
@@ -3491,6 +3689,7 @@ router.post(
           budgetTier: tier,
           summary: stubSummary,
           departureCity: depCity || null,
+          transportPreference: transport || "flight",
         });
       }
 
@@ -4453,6 +4652,79 @@ router.get("/itineraries/public/:shareToken", async (req, res) => {
   } catch (e) {
     console.error("[travel-itin-public] get error:", e.message);
     res.status(500).json({ error: "Failed to load itinerary" });
+  }
+});
+
+// POST /api/travel/itineraries/public/:shareToken/preferred-dates
+//
+// Customer-side "confirm your travel dates" at acceptance time (collect-at-
+// accept). The shared itinerary often has no dates yet (flight quick-quotes /
+// AI-suggested trips don't set them); this lets the customer state their
+// preferred travel start (+ optional end) before paying. We persist the dates
+// onto the itinerary and notify the brand's advisors so they can lock fares.
+// Public (share-token authorized); best-effort notify never blocks the save.
+router.post("/itineraries/public/:shareToken/preferred-dates", async (req, res) => {
+  try {
+    const token = String(req.params.shareToken || "");
+    if (!token || token.length < 16) {
+      return res.status(400).json({ error: "shareToken required", code: "MISSING_TOKEN" });
+    }
+    const itin = await prisma.itinerary.findUnique({ where: { shareToken: token } });
+    if (!itin || itin.status === "draft") {
+      return res.status(404).json({ error: "Itinerary not found", code: "NOT_FOUND" });
+    }
+    const linkState = shareLinkState(itin);
+    if (linkState.code) {
+      return res.status(410).json({ error: "This share link is no longer active", code: linkState.code });
+    }
+
+    const b = req.body || {};
+    const start = b.startDate ? new Date(b.startDate) : null;
+    if (!start || Number.isNaN(start.getTime())) {
+      return res.status(400).json({ error: "A valid startDate is required", code: "INVALID_START_DATE" });
+    }
+    let end = b.endDate ? new Date(b.endDate) : null;
+    if (end && Number.isNaN(end.getTime())) end = null;
+    if (end && end < start) {
+      return res.status(400).json({ error: "endDate cannot be before startDate", code: "INVALID_DATE_RANGE" });
+    }
+    const note = typeof b.note === "string" ? b.note.trim().slice(0, 500) : null;
+
+    const updated = await prisma.itinerary.update({
+      where: { id: itin.id },
+      data: { startDate: start, ...(end ? { endDate: end } : {}) },
+    });
+
+    // Best-effort: notify the brand's advisors (admins + sub-brand managers).
+    try {
+      const staff = await prisma.user.findMany({
+        where: { tenantId: itin.tenantId, role: { in: ["ADMIN", "MANAGER"] } },
+        select: { id: true, role: true, subBrandAccess: true },
+      });
+      const fmtD = (d) => (d ? new Date(d).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" }) : "");
+      const range = end ? `${fmtD(start)} → ${fmtD(end)}` : `from ${fmtD(start)}`;
+      const trip = itin.destination && itin.destination.length <= 60 ? itin.destination : `#${itin.id}`;
+      let msg = `The customer set preferred travel dates (${range}) for "${trip}". Confirm fares/availability for these dates.`;
+      if (note) msg += ` Note: "${note}"`;
+      for (const u of staff) {
+        let access = null;
+        if (u.subBrandAccess) { try { const a = JSON.parse(u.subBrandAccess); if (Array.isArray(a)) access = a; } catch { /* full */ } }
+        const canSee = u.role === "ADMIN" || access === null || access.length === 0 || access.includes(itin.subBrand);
+        if (!canSee) continue;
+        await notifyUser({
+          userId: u.id, tenantId: itin.tenantId,
+          title: "Customer confirmed travel dates",
+          message: msg, type: "info", link: `/travel/itineraries/${itin.id}`,
+        }).catch(() => {});
+      }
+    } catch (e) {
+      console.warn("[travel-itin-public] preferred-dates notify failed (non-fatal):", e.message);
+    }
+
+    return res.json({ ok: true, startDate: updated.startDate, endDate: updated.endDate });
+  } catch (e) {
+    console.error("[travel-itin-public] preferred-dates error:", e.message);
+    return res.status(500).json({ error: "Failed to save travel dates", code: "INTERNAL_ERROR" });
   }
 });
 
@@ -5841,7 +6113,7 @@ router.post(
   requireTravelTenant,
   async (req, res) => {
     try {
-      const { suggestionJson, contactId, subBrand, destination } = req.body || {};
+      const { suggestionJson, contactId, subBrand, destination, startDate: startDateInput } = req.body || {};
 
       // 1. suggestionJson validation
       if (
@@ -5865,6 +6137,17 @@ router.post(
           error: "suggestionJson.daySplit (or .days) must be a non-empty array",
           code: "INVALID_SUGGESTION_JSON",
         });
+      }
+
+      // Optional travel dates — the AI suggest flow can now pass a startDate;
+      // endDate is derived from the day count (N days → start + (N-1) days).
+      let startDate = null; let endDate = null;
+      if (startDateInput) {
+        const sd = new Date(startDateInput);
+        if (!Number.isNaN(sd.getTime())) {
+          startDate = sd;
+          endDate = new Date(sd.getTime() + Math.max(0, days.length - 1) * 24 * 60 * 60 * 1000);
+        }
       }
 
       // 2. contactId validation — REQUIRED at the route layer (schema gap;
@@ -6082,6 +6365,7 @@ router.post(
           status: "draft",
           productTier,
           destination: effectiveDestination,
+          startDate, endDate,
           currency: "INR",
           totalAmount: itemRows.reduce(
             (s, it) => s + (Number.isFinite(it.totalPrice) ? Number(it.totalPrice) : 0),

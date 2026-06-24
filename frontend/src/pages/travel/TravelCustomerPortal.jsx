@@ -39,7 +39,7 @@ import {
   ShieldCheck, ShieldAlert, LogOut, Plane, User as UserIcon,
   CheckCircle2, AlertCircle, Loader2, ClipboardCheck, Award, LayoutDashboard,
   ChevronRight, ChevronLeft, Hotel, Ticket, FileUp, Upload, UserPlus,
-  Mail, Phone, Sun, Moon, Stamp, Star, Bell, Search, X,
+  Mail, Phone, Sun, Moon, Stamp, Star, Bell, Search, X, Calendar,
 } from "lucide-react";
 import TravelReviewForm from "../../components/TravelReviewForm";
 
@@ -2231,6 +2231,13 @@ function BookingDetail({ itinerary, token, onChanged, onBack }) {
   const [cancelReason, setCancelReason] = useState("");
   const [cancelBusy, setCancelBusy] = useState(false);
   const [cancelErr, setCancelErr] = useState(null);
+  // Customer-editable travel dates (collect-at-accept). Prefilled from the
+  // itinerary; the customer can set/adjust them and the advisor is notified.
+  const [dStart, setDStart] = useState(itinerary?.startDate ? String(itinerary.startDate).slice(0, 10) : "");
+  const [dEnd, setDEnd] = useState(itinerary?.endDate ? String(itinerary.endDate).slice(0, 10) : "");
+  const [dBusy, setDBusy] = useState(false);
+  const [dErr, setDErr] = useState(null);
+  const [dSaved, setDSaved] = useState(false);
 
   // Post-trip review: fetch the destination-interpolated form once when the
   // trip is review-able. Declared BEFORE the early return so the hook order
@@ -2327,6 +2334,23 @@ function BookingDetail({ itinerary, token, onChanged, onBack }) {
   };
 
   const cancellationStatus = itinerary.cancellationStatus || null;
+  const saveDates = async () => {
+    if (!dStart) { setDErr("Please pick a start date."); return; }
+    if (dEnd && dEnd < dStart) { setDErr("End date can't be before the start date."); return; }
+    setDBusy(true);
+    setDErr(null);
+    try {
+      await portalFetch(`/travel/itineraries/${itinerary.id}/preferred-dates`, {
+        token, method: "POST", body: { startDate: dStart, endDate: dEnd || undefined },
+      });
+      setDSaved(true);
+      if (onChanged) await onChanged();
+    } catch (e) {
+      setDErr(e.message || "Couldn't save your dates. Please try again.");
+    } finally {
+      setDBusy(false);
+    }
+  };
   const submitCancellation = async () => {
     if (!cancelReason.trim()) return;
     setCancelBusy(true);
@@ -2367,6 +2391,39 @@ function BookingDetail({ itinerary, token, onChanged, onBack }) {
           {itinerary.endDate ? new Date(itinerary.endDate).toLocaleDateString() : "—"}
         </div>
       </section>
+
+      {/* Customer-editable travel dates (collect-at-accept). Shown while the
+          offer is live so the customer can set/adjust dates; saving notifies
+          the advisor to confirm fares/availability. */}
+      {!isDeclined && status !== "expired" && cancellationStatus !== "cancelled" && (
+        <section style={cardStyle} aria-labelledby="dates-edit-heading">
+          <h3 id="dates-edit-heading" style={{ margin: 0, fontSize: 16, display: "flex", alignItems: "center", gap: 8 }}>
+            <Calendar size={18} aria-hidden /> Your travel dates
+          </h3>
+          <p style={{ color: "var(--text-secondary)", margin: "6px 0 12px", fontSize: 14 }}>
+            {dSaved
+              ? "Saved — your advisor will confirm availability for these dates."
+              : "Pick or adjust your preferred travel dates. Your advisor will confirm fares and availability."}
+          </p>
+          {dErr && <p role="alert" style={{ color: "#b91c1c", fontSize: 13, margin: "0 0 10px" }}>{dErr}</p>}
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end" }}>
+            <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: "var(--text-secondary)" }}>
+              Start date
+              <input type="date" value={dStart} onChange={(e) => { setDStart(e.target.value); setDSaved(false); }}
+                style={{ padding: "8px 10px", borderRadius: 8, border: "1px solid var(--border-color, #d8d2c4)", background: "var(--surface-color, #fff)", color: "var(--text-primary)", fontSize: 14 }} aria-label="Preferred start date" />
+            </label>
+            <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: "var(--text-secondary)" }}>
+              End date (optional)
+              <input type="date" value={dEnd} min={dStart || undefined} onChange={(e) => { setDEnd(e.target.value); setDSaved(false); }}
+                style={{ padding: "8px 10px", borderRadius: 8, border: "1px solid var(--border-color, #d8d2c4)", background: "var(--surface-color, #fff)", color: "var(--text-primary)", fontSize: 14 }} aria-label="Preferred end date" />
+            </label>
+            <button type="button" onClick={saveDates} disabled={dBusy || dSaved}
+              style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "9px 16px", border: "none", borderRadius: 8, fontWeight: 600, fontSize: 14, cursor: dBusy || dSaved ? "default" : "pointer", background: "var(--primary-color, var(--accent-color))", color: "#fff", opacity: dBusy || dSaved ? 0.7 : 1 }}>
+              {dSaved ? "Saved ✓" : dBusy ? "Saving…" : "Save dates"}
+            </button>
+          </div>
+        </section>
+      )}
 
       {/* Web check-in prompt — a PAID flight trip within 36h that the customer
           hasn't confirmed yet. Clicking "Yes" stops the reminder emails. */}

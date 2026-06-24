@@ -93,6 +93,17 @@ prisma.tenant = {
 prisma.currency = {
   findFirst: vi.fn(),
 };
+// Customer-decision side effects (staff notify + advance payment link). Mocked
+// so the best-effort calls stay offline + deterministic in unit tests.
+prisma.user = {
+  findMany: vi.fn(),
+};
+prisma.notification = {
+  create: vi.fn(),
+};
+prisma.paymentGatewayConfig = {
+  findFirst: vi.fn(),
+};
 
 import express from 'express';
 import request from 'supertest';
@@ -151,11 +162,19 @@ beforeEach(() => {
   prisma.contact.findFirst.mockReset();
   prisma.tenant.findUnique.mockReset();
   prisma.currency.findFirst.mockReset();
+  prisma.user.findMany.mockReset();
+  prisma.notification.create.mockReset();
+  prisma.paymentGatewayConfig.findFirst.mockReset();
 
   // Sensible defaults
   prisma.travelQuoteSnapshot.findFirst.mockResolvedValue(null);
   prisma.travelQuoteSnapshot.create.mockResolvedValue({ id: 1 });
+  // Decision side effects: no staff, no gateway by default (best-effort no-ops).
+  prisma.user.findMany.mockResolvedValue([]);
+  prisma.notification.create.mockResolvedValue({ id: 1 });
+  prisma.paymentGatewayConfig.findFirst.mockResolvedValue(null);
   prisma.contact.findFirst.mockResolvedValue({
+    name: 'Aisha Khan',
     firstName: 'Aisha',
     lastName: 'Khan',
     email: 'aisha@example.com',

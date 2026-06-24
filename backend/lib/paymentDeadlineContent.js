@@ -12,6 +12,7 @@
 // path auto-engages once keys land (routeRequest returns stub=false).
 
 const llmRouter = require("./llmRouter");
+const { textToHtml } = require("./emailHtml");
 
 // Which days-to-go fire a deposit reminder. Deadline is T-7, so this is the
 // 4-day run-up T-10 → T-7 inclusive. The T-6 "overdue" notice is handled
@@ -34,24 +35,24 @@ function formatMoney(amount, currency) {
   return (currency || "INR") === "INR" ? `₹${rounded}` : `${currency} ${rounded}`;
 }
 
-// Per-day escalating templates. {dest} {name} {amount} {deadline} {daysToDeadline}
+// Per-day escalating templates. {dest} {name} {amount} {deadline} {daysToDeadline} {portalUrl}
 // are interpolated. daysToDeadline = daysToGo - 7 (3 → 0 across the window).
 const TEMPLATES = {
   10: {
     subject: "Action needed: secure your {dest} trip with a 50% deposit",
-    body: "Hi {name},\n\nThank you for confirming your trip to {dest}! To lock it in, we need your 50% deposit of {amount} by {deadline} ({daysToDeadline} days away). Paying on time guarantees your booking. Let us know if you have any questions.\n\nTeam Travel Stall",
+    body: "Hi {name},\n\nThank you for confirming your trip to {dest}! To lock it in, we need your 50% deposit of {amount} by {deadline} ({daysToDeadline} days away). Paying on time guarantees your booking.\n\nPay your deposit here:\n{portalUrl}\n\nTeam Travel Stall",
   },
   9: {
     subject: "Reminder: {dest} deposit due by {deadline}",
-    body: "Hi {name},\n\nJust a friendly reminder — your 50% deposit of {amount} for {dest} is due by {deadline}. Once it's in, your booking is fully secured. Reply here if you'd like a payment link.\n\nTeam Travel Stall",
+    body: "Hi {name},\n\nJust a friendly reminder — your 50% deposit of {amount} for {dest} is due by {deadline}. Once it's in, your booking is fully secured.\n\nPay your deposit here:\n{portalUrl}\n\nTeam Travel Stall",
   },
   8: {
     subject: "2 days left to pay your {dest} deposit",
-    body: "Hi {name},\n\nYour deposit of {amount} for {dest} is due by {deadline} — just 2 days from now. To avoid losing your booking, please complete the payment soon. We're here to help if anything's unclear.\n\nTeam Travel Stall",
+    body: "Hi {name},\n\nYour deposit of {amount} for {dest} is due by {deadline} — just 2 days from now. To avoid losing your booking, please complete the payment as soon as possible.\n\nPay your deposit here:\n{portalUrl}\n\nWe're here to help if anything's unclear.\n\nTeam Travel Stall",
   },
   7: {
     subject: "Final reminder: {dest} deposit due TODAY",
-    body: "Hi {name},\n\nToday is the deadline to pay your 50% deposit of {amount} for {dest}. If we don't receive it today, your booking is at risk of cancellation. Please pay now to keep your trip confirmed — contact us immediately if you need assistance.\n\nTeam Travel Stall",
+    body: "Hi {name},\n\nToday is the deadline to pay your 50% deposit of {amount} for {dest}. If we don't receive it today, your booking is at risk of cancellation. Please pay now to keep your trip confirmed:\n{portalUrl}\n\nContact us immediately if you need assistance.\n\nTeam Travel Stall",
   },
 };
 
@@ -61,7 +62,7 @@ const TEMPLATES = {
 // (no auto-cancel; an advisor decides).
 const OVERDUE_TEMPLATE = {
   subject: "Your {dest} booking is at risk — deposit overdue",
-  body: "Hi {name},\n\nWe haven't yet received the 50% deposit of {amount} for your {dest} trip, and the deadline has now passed. Your booking is at risk of cancellation. Please pay as soon as possible, or contact us right away so we can help keep your trip on track.\n\nTeam Travel Stall",
+  body: "Hi {name},\n\nWe haven't yet received the 50% deposit of {amount} for your {dest} trip, and the deadline has now passed. Your booking is at risk of cancellation.\n\nPlease pay as soon as possible:\n{portalUrl}\n\nOr contact us right away so we can help keep your trip on track.\n\nTeam Travel Stall",
 };
 
 function interpolate(str, vars) {
@@ -70,16 +71,18 @@ function interpolate(str, vars) {
     .replace(/\{name\}/g, vars.customerName || "traveller")
     .replace(/\{amount\}/g, vars.amountLabel || "the deposit")
     .replace(/\{deadline\}/g, vars.deadlineLabel || "the deadline")
-    .replace(/\{daysToDeadline\}/g, String(vars.daysToDeadline != null ? vars.daysToDeadline : ""));
+    .replace(/\{daysToDeadline\}/g, String(vars.daysToDeadline != null ? vars.daysToDeadline : ""))
+    .replace(/\{portalUrl\}/g, vars.portalUrl || "your customer portal");
 }
 
-function varsFrom({ destination, customerName, depositAmount, currency, deadlineLabel, daysToGo }) {
+function varsFrom({ destination, customerName, depositAmount, currency, deadlineLabel, daysToGo, portalUrl }) {
   return {
     destination,
     customerName,
     amountLabel: formatMoney(depositAmount, currency),
     deadlineLabel: deadlineLabel || "the deadline",
     daysToDeadline: daysToGo != null ? daysToGo - 7 : null,
+    portalUrl: portalUrl || null,
   };
 }
 
@@ -90,7 +93,7 @@ function buildFallbackReminder(opts) {
   const vars = varsFrom(opts);
   const subject = interpolate(tpl.subject, vars);
   const text = interpolate(tpl.body, vars);
-  return { subject, text, html: text.replace(/\n/g, "<br>"), llmSourced: false };
+  return { subject, text, html: textToHtml(text), llmSourced: false };
 }
 
 // Deterministic OVERDUE customer notice. No LLM path — at-risk wording stays
@@ -99,7 +102,7 @@ function buildOverdueNotice(opts) {
   const vars = varsFrom({ ...opts, daysToGo: null });
   const subject = interpolate(OVERDUE_TEMPLATE.subject, vars);
   const text = interpolate(OVERDUE_TEMPLATE.body, vars);
-  return { subject, text, html: text.replace(/\n/g, "<br>"), llmSourced: false };
+  return { subject, text, html: textToHtml(text), llmSourced: false };
 }
 
 // Advisor flag content for the T-6 "review for cancellation" notification.
@@ -133,8 +136,12 @@ async function buildReminder(opts) {
       const parsed = JSON.parse(result.text);
       if (parsed && parsed.subject && parsed.body) {
         const subject = interpolate(parsed.subject, vars);
-        const text = interpolate(parsed.body, vars);
-        return { subject, text, html: text.replace(/\n/g, "<br>"), llmSourced: true };
+        let text = interpolate(parsed.body, vars);
+        // Append portal link if the LLM body doesn't already include it.
+        if (vars.portalUrl && !text.includes(vars.portalUrl)) {
+          text += `\n\nPay your deposit here: ${vars.portalUrl}`;
+        }
+        return { subject, text, html: textToHtml(text), llmSourced: true };
       }
     }
   } catch {

@@ -759,7 +759,7 @@ app.use("/api", (req, res, next) => {
   // promotes a contact to a portal user. Removing the entry routes the
   // unauthenticated case through the global guard's 401 (RFC 7235), and
   // the authenticated case continues unaffected.
-  const openPaths = ["/auth/login", "/auth/signup", "/auth/register", "/auth/customer/register", "/auth/email-otp", "/auth/check-email", "/auth/public/tenants", "/auth/forgot-password", "/auth/reset-password", "/auth/2fa/verify", "/health", "/marketplace-leads/webhook", "/sms/webhook", "/whatsapp/webhook", "/telephony/webhook", "/push/subscribe/visitor", "/push/vapid-key", "/communications/track/", "/sso/google/callback", "/sso/microsoft/callback", "/sso/google/start", "/sso/microsoft/start", "/email/inbound", "/calendar/google/callback", "/gmail/callback", "/calendar/outlook/callback", "/voice/webhook", "/portal/login", "/portal/register", "/portal/forgot", "/portal/reset", "/portal/me", "/portal/tickets", "/portal/invoices", "/portal/contracts", "/portal/travel", "/portal/kyc", "/signatures/sign", "/surveys/respond", "/surveys/public", "/chatbots/chat", "/web-visitors/track", "/payments/webhook", "/accounting/webhook", "/scim/v2", "/booking-pages/public", "/knowledge-base/public", "/live-chat/visitor", "/document-views/track", "/zapier/webhook", "/marketing/submit", "/v1/external", "/v1/voyagr", "/v1/flight-plugin", "/wellness/public", "/wellness/portal", "/attendance/biometric/webhook", "/travel/microsites/public", "/travel/diagnostics/public", "/travel/itineraries/public", "/travel/reviews/public", "/travel/inbound/leads", "/travel/whatsapp/webhook", "/travel/whatsapp/media", "/v1/flyers/public", "/security/csp-report", "/privacy-policy", "/deleted-account-policy", "/terms-and-conditions", "/legal", "/landing-pages/public", "/landing-pages/wanderlux-static"];
+  const openPaths = ["/auth/login", "/auth/signup", "/auth/register", "/auth/customer/register", "/auth/email-otp", "/auth/check-email", "/auth/public/tenants", "/auth/forgot-password", "/auth/reset-password", "/auth/2fa/verify", "/health", "/marketplace-leads/webhook", "/sms/webhook", "/whatsapp/webhook", "/telephony/webhook", "/push/subscribe/visitor", "/push/vapid-key", "/communications/track/", "/sso/google/callback", "/sso/microsoft/callback", "/sso/google/start", "/sso/microsoft/start", "/email/inbound", "/calendar/google/callback", "/gmail/callback", "/calendar/outlook/callback", "/voice/webhook", "/portal/login", "/portal/register", "/portal/forgot", "/portal/reset", "/portal/me", "/portal/tickets", "/portal/invoices", "/portal/contracts", "/portal/travel", "/portal/kyc", "/signatures/sign", "/surveys/respond", "/surveys/public", "/chatbots/chat", "/web-visitors/track", "/payments/webhook", "/accounting/webhook", "/scim/v2", "/booking-pages/public", "/knowledge-base/public", "/live-chat/visitor", "/document-views/track", "/zapier/webhook", "/marketing/submit", "/v1/external", "/v1/voyagr", "/v1/flight-plugin", "/wellness/public", "/wellness/portal", "/attendance/biometric/webhook", "/travel/microsites/public", "/travel/diagnostics/public", "/travel/itineraries/public", "/travel/reviews/public", "/travel/inbound/leads", "/travel/whatsapp/webhook", "/travel/whatsapp/media", "/v1/flyers/public", "/billing/public", "/security/csp-report", "/privacy-policy", "/deleted-account-policy", "/terms-and-conditions", "/legal", "/landing-pages/public", "/landing-pages/wanderlux-static"];
   if (openPaths.some(p => req.path.startsWith(p))) return next();
   // Public marketing catalog — the /pricing page hits GET /subscriptions/plans
   // anonymously. Admin CRUD (POST/PUT/DELETE + GET /plans/admin) stays gated
@@ -1474,19 +1474,51 @@ server.listen(PORT, () => {
 // files (V8 only dumps coverage on clean process exit; SIGTERM-without-handler
 // kills before it can flush). Also benefits production: no half-served
 // requests on `pm2 restart`.
+let _shuttingDown = false;
 const _gracefulShutdown = (signal) => {
+  if (_shuttingDown) return; // SIGINT after SIGTERM (pm2) must not double-run
+  _shuttingDown = true;
   console.log(`[shutdown] ${signal} received — closing server`);
-  server.close(() => {
-    console.log('[shutdown] server closed cleanly');
-    process.exit(0);
-  });
+  // Destroy the WhatsApp Web puppeteer clients FIRST so Chromium flushes its
+  // LocalAuth credential store cleanly. Without this, a pm2 restart kills
+  // Chromium mid-write → corrupt session → the CRM shows a fresh QR on the next
+  // boot even though the phone still has the device linked. Best-effort + time-
+  // boxed so a hung client can't block the rest of shutdown.
+  Promise.resolve()
+    .then(() => require('./services/whatsappWebClient').shutdown())
+    .catch((e) => console.warn('[shutdown] whatsapp shutdown warn:', e && e.message))
+    .finally(() => {
+      server.close(() => {
+        console.log('[shutdown] server closed cleanly');
+        process.exit(0);
+      });
+    });
   setTimeout(() => {
     console.warn('[shutdown] timeout — forcing exit');
     process.exit(0);
-  }, 10000).unref();
+  }, 12000).unref();
 };
 process.on('SIGTERM', () => _gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => _gracefulShutdown('SIGINT'));
+// nodemon restarts the dev server on every file save by sending SIGUSR2. Without
+// trapping it the WhatsApp Web puppeteer client is killed mid-write — corrupting
+// / locking its LocalAuth profile so the next boot can't resume the link and the
+// CRM shows a fresh QR ("won't reconnect after restart"). Destroy the clients
+// cleanly first, then re-raise SIGUSR2 (with no listener left) so nodemon's own
+// handler performs the actual restart. POSIX-only — wrapped because Windows Node
+// can't register SIGUSR2 (nodemon there hard-kills, which the next boot's
+// stale-lock cleanup recovers from instead).
+try {
+  process.once('SIGUSR2', () => {
+    console.log('[shutdown] SIGUSR2 (nodemon restart) — flushing WhatsApp sessions before restart');
+    Promise.resolve()
+      .then(() => require('./services/whatsappWebClient').shutdown())
+      .catch((e) => console.warn('[shutdown] whatsapp SIGUSR2 shutdown warn:', e && e.message))
+      .finally(() => { try { process.kill(process.pid, 'SIGUSR2'); } catch { process.exit(0); } });
+  });
+} catch (e) {
+  console.warn('[shutdown] SIGUSR2 handler not registered (non-POSIX platform):', e && e.message);
+}
 
 // DISABLE_CRONS=1 lets us boot a side-by-side instance (e.g. for c8 line-
 // coverage runs on a different port) without double-firing reminders, blasts,

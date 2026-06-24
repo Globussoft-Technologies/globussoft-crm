@@ -23,6 +23,13 @@
 
 const axios = require("axios");
 const llmRouter = require("../lib/llmRouter");
+const serpApiClient = require("./serpApiClient");
+// TripGo is UNWIRED — verified it doesn't cover India or Saudi Arabia for
+// routing ("Origin lies outside covered area"), which are the core markets, and
+// its geocoder can't resolve Indian city names. Kept on disk in case coverage
+// expands. Replaced by osmTransfersClient (Nominatim + OSRM, worldwide, key-free).
+// const tripGoClient = require("./tripGoClient");
+const osmTransfers = require("./osmTransfersClient");
 
 const TBO_FLIGHT_URL = () => process.env.TBO_FLIGHT_SEARCH_URL || "";
 const TBO_HOTEL_URL = () => process.env.TBO_HOTEL_SEARCH_URL || "";
@@ -92,6 +99,9 @@ function normalizeFlightOption(o = {}) {
     fareClass: o.fareClass || "Economy",
     baggage: o.baggage || null,
     refundable: typeof o.refundable === "boolean" ? o.refundable : null,
+    // Seats still bookable at this fare (airlines/GDS rarely expose >9). null
+    // when the source doesn't report it — the UI shows "—" rather than guessing.
+    seatsAvailable: num(o.seatsAvailable),
   };
 }
 function normalizeHotel(h = {}) {
@@ -106,6 +116,11 @@ function normalizeHotel(h = {}) {
     board: h.board || null, // Room Only / Breakfast / Half Board …
     refundable: typeof h.refundable === "boolean" ? h.refundable : null,
     thumbnail: h.thumbnail || null,
+    // Optional extras carried by some providers (SerpApi/Google Hotels): a
+    // guest review score + the public booking link the offline-booking agent
+    // follows. Null for providers that don't expose them (TBO/stub).
+    rating: num(h.rating),
+    bookingLink: h.bookingLink || null,
   };
 }
 // A ground/road transfer option (airport↔hotel or inter-city).
@@ -163,6 +178,9 @@ async function _tboFlightSearch(q, ax = axios) {
       fare: fare.PublishedFare ?? fare.OfferedFare,
       fareClass: q.cabinClass,
       baggage: seg.Baggage,
+      // TBO exposes remaining seats on the segment (NoOfSeatAvailable) or at the
+      // result level (AvailableSeats); map whichever is present.
+      seatsAvailable: seg.NoOfSeatAvailable ?? r.AvailableSeats ?? r.NoOfSeatAvailable,
     });
   }).filter((o) => o.fare != null);
 }
@@ -292,6 +310,8 @@ function _stubFlights(q) {
       fareClass: q.cabinClass,
       baggage: stops ? "25kg check-in + 7kg cabin" : "30kg check-in + 7kg cabin",
       refundable: k !== 1,
+      // Deterministic 1-9 so the sample looks like real GDS seat availability.
+      seatsAvailable: 1 + ((seed + k * 13) % 9),
     });
   });
 }
@@ -324,6 +344,16 @@ function _stubHotels(q) {
 // ── public API ───────────────────────────────────────────────────────
 async function searchFlights(params = {}) {
   const q = normalizeFlightQuery(params);
+  // Tier 0 — SerpApi (Google Flights). The temporary real-data source while the
+  // TBO supplier contract is pending. Maps SerpApi rows through the same
+  // normalizer so the route/frontend contract is identical to TBO/stub.
+  if (serpApiClient.isConfigured()) {
+    try {
+      const raw = await serpApiClient.searchFlights(q);
+      const opts = (raw || []).map(module.exports.normalizeFlightOption).filter((o) => o.fare != null);
+      if (opts.length) return { provider: "serpapi", currency: q.currency, options: opts, stub: false, note: "Live Google Flights via SerpApi — confirm fare/timing before ticketing." };
+    } catch (e) { console.error(`[tboClient] SerpApi flight search failed (falling back): ${e.message}`); }
+  }
   if (TBO_FLIGHT_URL() && TBO_USERNAME() && TBO_PASSWORD()) {
     try {
       const opts = await module.exports._tboFlightSearch(q);
@@ -341,6 +371,16 @@ async function searchFlights(params = {}) {
 
 async function searchHotels(params = {}) {
   const q = normalizeHotelQuery(params);
+  // Tier 0 — SerpApi (Google Hotels). `nights` is passed so SerpApi's mapper can
+  // derive a total rate when only a nightly rate is returned.
+  if (serpApiClient.isConfigured()) {
+    try {
+      const nights = _nightsBetween(q.checkIn, q.checkOut);
+      const raw = await serpApiClient.searchHotels({ ...q, nights });
+      const hotels = (raw || []).map(module.exports.normalizeHotel).filter((h) => h.totalRate != null || h.ratePerNight != null);
+      if (hotels.length) return { provider: "serpapi", currency: q.currency, hotels, stub: false, note: "Live Google Hotels via SerpApi — confirm rate/availability before booking." };
+    } catch (e) { console.error(`[tboClient] SerpApi hotel search failed (falling back): ${e.message}`); }
+  }
   if (TBO_HOTEL_URL() && TBO_USERNAME() && TBO_PASSWORD()) {
     try {
       const hotels = await module.exports._tboHotelSearch(q);
@@ -422,6 +462,21 @@ function _stubTransfers(q) {
 }
 async function searchTransfers(params = {}) {
   const q = normalizeTransferQuery(params);
+  // Tier 0 — OSM road transfers (Nominatim geocode + OSRM driving route). The
+  // real-data source for ground transfers worldwide (covers India + Saudi, which
+  // TripGo did not). Real distance/time; fare is a per-km estimate IN q.currency
+  // (no foreign-currency mismatch). If it can't answer we fall through to TBO →
+  // LLM → stub.
+  if (osmTransfers.isConfigured()) {
+    try {
+      const raw = await osmTransfers.searchTransfers(q);
+      const transfers = (raw || []).map(module.exports.normalizeTransfer).filter((t) => t.price != null);
+      console.log(`[tboClient] OSM road-transfer tier produced ${transfers.length} option(s)`);
+      if (transfers.length) return { provider: "osm-road", currency: q.currency, transfers, stub: false, note: "Real road distance/time (OpenStreetMap) with a per-km fare estimate — confirm the rate with your supplier." };
+    } catch (e) {
+      console.error(`[tboClient] OSM transfer search failed (falling back to LLM): ${e.message}`);
+    }
+  }
   if (TBO_TRANSFER_URL() && TBO_USERNAME() && TBO_PASSWORD()) {
     try {
       const t = await module.exports._tboTransferSearch(q);

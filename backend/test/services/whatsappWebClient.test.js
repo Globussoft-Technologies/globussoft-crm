@@ -19,7 +19,7 @@
  *   - applyAck: rank-guarded status advance + whatsapp:status emit
  */
 
-import { describe, test, expect, beforeEach, vi } from 'vitest';
+import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
 import prisma from '../../lib/prisma.js';
 import { createRequire } from 'node:module';
 
@@ -240,6 +240,115 @@ describe('contactName fallback (stale Prisma client)', () => {
     expect(prisma.whatsAppThread.create).toHaveBeenCalledTimes(2);
     expect('contactName' in prisma.whatsAppThread.create.mock.calls[0][0].data).toBe(true);
     expect('contactName' in prisma.whatsAppThread.create.mock.calls[1][0].data).toBe(false);
+  });
+});
+
+describe('shutdown (graceful teardown so the auth store flushes — prevents "logged out on restart")', () => {
+  test('destroys every live client, suppresses auto-reconnect, and does NOT wipe the dir', async () => {
+    // connect() under test records a DISCONNECTED stub session; promote it to a
+    // fake "live" session with a destroyable client to exercise shutdown.
+    await wa.connect(TENANT);
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const s = wa.getSession(TENANT);
+    s.client = { destroy };
+    s.state = 'CONNECTED';
+
+    const out = await wa.shutdown();
+
+    expect(destroy).toHaveBeenCalledTimes(1);
+    expect(s.manualClose).toBe(true); // disconnect event must NOT auto-reconnect
+    expect(out.closed).toBe(1);
+  });
+
+  test('a hung client.destroy is time-boxed, never blocking shutdown', async () => {
+    await wa.connect(TENANT);
+    const s = wa.getSession(TENANT);
+    s.client = { destroy: () => new Promise(() => {}) }; // never resolves
+    s.state = 'CONNECTED';
+    // perClientTimeoutMs short so the test is fast; shutdown still resolves.
+    await expect(wa.shutdown({ perClientTimeoutMs: 20 })).resolves.toEqual({ closed: 1 });
+    // Drop the never-resolving client so it can't stall later teardown paths.
+    s.client = null;
+  });
+
+  test('shutdown is safe with no destroyable clients (returns a count)', async () => {
+    // Stub sessions (client:null) are skipped — shutdown stays fast + resolves.
+    const out = await wa.shutdown();
+    expect(out).toHaveProperty('closed');
+  });
+});
+
+describe('isPuppeteerTeardownError (crash guard only swallows benign puppeteer teardown noise)', () => {
+  test('classifies the real "detached Frame" crash as a teardown error', () => {
+    const err = new Error("Attempted to use detached Frame '2352BF3D'.");
+    err.stack = `${err.message}\n    at Client.inject (.../whatsapp-web.js/src/Client.js:126:38)`;
+    expect(wa.isPuppeteerTeardownError(err)).toBe(true);
+  });
+
+  test('classifies "Target closed" / "Session closed" as teardown errors', () => {
+    expect(wa.isPuppeteerTeardownError(new Error('Protocol error: Target closed'))).toBe(true);
+    expect(wa.isPuppeteerTeardownError(new Error('Session closed. Most likely the page has been closed.'))).toBe(true);
+  });
+
+  test('does NOT swallow a genuine application error (must still crash)', () => {
+    expect(wa.isPuppeteerTeardownError(new Error('Cannot read properties of undefined (reading id)'))).toBe(false);
+    expect(wa.isPuppeteerTeardownError(new Error('ECONNREFUSED 127.0.0.1:3306'))).toBe(false);
+    expect(wa.isPuppeteerTeardownError(null)).toBe(false);
+  });
+});
+
+describe('clearStaleLocks (recover a session locked by an unclean restart)', () => {
+  const fs = requireCJS('fs');
+  const pathMod = requireCJS('path');
+  const AUTH_DIR = pathMod.join(__dirname, '..', '..', '.wwebjs_auth');
+  const LOCK_TENANT = 9421; // unlikely to collide with a real linked session
+  const dir = pathMod.join(AUTH_DIR, `session-travel-${LOCK_TENANT}`);
+
+  afterEach(() => {
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* noop */ }
+  });
+
+  test('removes stale Chromium singleton locks but KEEPS the session data', () => {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(pathMod.join(dir, 'SingletonLock'), 'x');
+    fs.writeFileSync(pathMod.join(dir, 'SingletonCookie'), 'x');
+    fs.writeFileSync(pathMod.join(dir, 'DevToolsActivePort'), '1234');
+    // Real session payload that MUST survive the cleanup.
+    fs.mkdirSync(pathMod.join(dir, 'Default'), { recursive: true });
+    fs.writeFileSync(pathMod.join(dir, 'Default', 'session.json'), '{"creds":1}');
+
+    wa.clearStaleLocks(LOCK_TENANT);
+
+    expect(fs.existsSync(pathMod.join(dir, 'SingletonLock'))).toBe(false);
+    expect(fs.existsSync(pathMod.join(dir, 'SingletonCookie'))).toBe(false);
+    expect(fs.existsSync(pathMod.join(dir, 'DevToolsActivePort'))).toBe(false);
+    // The actual saved session is untouched → next connect resumes, no QR.
+    expect(fs.existsSync(pathMod.join(dir, 'Default', 'session.json'))).toBe(true);
+  });
+
+  test('is a safe no-op when the session dir does not exist', () => {
+    expect(() => wa.clearStaleLocks(999999)).not.toThrow();
+  });
+});
+
+describe('thread create race (P2002 recovery)', () => {
+  test('a concurrent create that loses the race recovers by updating the winner', async () => {
+    // findUnique sees no thread (we lost the TOCTOU race); create then trips the
+    // compound-unique P2002; the helper must fall back to update, not throw.
+    prisma.whatsAppThread.findUnique.mockResolvedValue(null);
+    const p2002 = Object.assign(new Error('Unique constraint failed'), { code: 'P2002' });
+    prisma.whatsAppThread.create.mockReset().mockRejectedValue(p2002);
+    prisma.whatsAppThread.update.mockReset().mockResolvedValue({ id: 77 });
+
+    const out = await wa.ingestInbound(TENANT, {
+      fromMe: false, from: '919811111102@c.us', body: 'hi', id: { _serialized: 'wamid-race' },
+      type: 'chat', hasMedia: false, _data: { notifyName: 'Ahmed' },
+    });
+
+    expect(out).toMatchObject({ threadId: 77 }); // recovered, not thrown
+    expect(prisma.whatsAppThread.update).toHaveBeenCalled();
+    const where = prisma.whatsAppThread.update.mock.calls.at(-1)[0].where;
+    expect(where).toEqual({ tenantId_contactPhone: { tenantId: 3, contactPhone: '+919811111102' } });
   });
 });
 

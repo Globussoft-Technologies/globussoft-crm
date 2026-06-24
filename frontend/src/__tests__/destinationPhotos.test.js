@@ -66,7 +66,8 @@ describe('fetchDestinationGallery', () => {
       } },
     }));
     const items = await fetchDestinationGallery('Paris', { fetchImpl, limit: 2 });
-    // flag + map dropped, capped at 2, each carries a place-name caption.
+    // flag + map dropped, capped at 2, each carries a place-name caption +
+    // a description (null here — the mock supplies no ImageDescription metadata).
     expect(items).toEqual([
       { url: 'https://up/paris-view.jpg', caption: 'Paris view', description: null },
       { url: 'https://up/eiffel.jpeg', caption: 'Eiffel Tower', description: null },

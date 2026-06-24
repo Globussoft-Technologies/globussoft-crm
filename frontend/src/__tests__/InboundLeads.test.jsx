@@ -279,11 +279,11 @@ describe('<InboundLeads /> — row content', () => {
   });
 });
 
-describe('<InboundLeads /> — Convert to Lead navigation', () => {
-  it('clicking "Convert to Lead" routes to /leads/:id with the contact id', async () => {
+describe('<InboundLeads /> — Convert to Lead', () => {
+  it('creates a pipeline Deal linked to the contact, then opens the pipeline', async () => {
     installFetchMock({
       contacts: [
-        makeContact({ id: 4242, name: 'Convert Target', source: 'inbound:voyagr' }),
+        makeContact({ id: 4242, name: 'Convert Target', source: 'inbound:voyagr', subBrand: 'tmc' }),
       ],
     });
     renderPage();
@@ -291,7 +291,18 @@ describe('<InboundLeads /> — Convert to Lead navigation', () => {
     fireEvent.click(
       screen.getByRole('button', { name: /Convert Convert Target to Lead/i }),
     );
-    expect(navigateMock).toHaveBeenCalledWith('/leads/4242');
+    // PRD: convert creates a Deal (the pipeline "Lead") linked to the Contact.
+    await waitFor(() => {
+      const dealCall = fetchApiMock.mock.calls.find(
+        ([url, opts]) => url === '/api/deals' && opts && opts.method === 'POST',
+      );
+      expect(dealCall).toBeTruthy();
+      const body = JSON.parse(dealCall[1].body);
+      expect(body.contactId).toBe(4242);
+      expect(body.subBrand).toBe('tmc');
+    });
+    // Then routes the operator to the pipeline (not the legacy /leads/:id).
+    await waitFor(() => expect(navigateMock).toHaveBeenCalledWith('/travel/leads'));
   });
 });
 

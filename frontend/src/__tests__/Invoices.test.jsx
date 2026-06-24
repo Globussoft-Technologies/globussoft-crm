@@ -475,33 +475,42 @@ describe('<Invoices /> — page surface', () => {
     expect(screen.getAllByText('Overdue').length).toBeGreaterThanOrEqual(2);
   });
 
-  it('clicking "Pay Now" opens the payment modal scoped to that invoice', async () => {
+  it('clicking "Generate Payment Link" opens the payment-link modal scoped to that invoice', async () => {
     renderInvoices();
     await waitFor(() => expect(screen.getByText('INV-001')).toBeInTheDocument());
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/billing/1/payment-link' && opts?.method === 'POST') {
+        return Promise.resolve({ url: 'http://test.example/pay/inv-001' });
+      }
+      return defaultFetchMock(url, opts);
+    });
 
-    const payNow = screen.getByRole('button', { name: /Pay invoice INV-001/i });
-    fireEvent.click(payNow);
+    const generateBtn = screen.getByRole('button', { name: /Generate payment link for invoice INV-001/i });
+    fireEvent.click(generateBtn);
 
-    expect(screen.getByText(/Pay Invoice/i)).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText(/Payment Link/i)).toBeInTheDocument());
+    expect(screen.getByText('http://test.example/pay/inv-001')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Close payment dialog/i })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /Close payment dialog/i }));
     expect(screen.queryByRole('button', { name: /Close payment dialog/i })).toBeNull();
   });
 
-  it('payment modal disables both gateway buttons when neither is configured', async () => {
+  it('payment modal displays the generated link and a Copy button', async () => {
     renderInvoices();
     await waitFor(() => expect(screen.getByText('INV-001')).toBeInTheDocument());
-    fireEvent.click(screen.getByRole('button', { name: /Pay invoice INV-001/i }));
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/billing/1/payment-link' && opts?.method === 'POST') {
+        return Promise.resolve({ url: 'http://test.example/pay/inv-001' });
+      }
+      return defaultFetchMock(url, opts);
+    });
 
-    // Gateway buttons match by text content ("💳 Stripe (Coming)" / "💰 Razorpay (Setup)").
-    const buttons = screen.getAllByRole('button');
-    const stripeBtn = buttons.find(b => /Stripe/.test(b.textContent || ''));
-    const razorpayBtn = buttons.find(b => /Razorpay/.test(b.textContent || ''));
-    expect(stripeBtn).toBeTruthy();
-    expect(razorpayBtn).toBeTruthy();
-    expect(stripeBtn).toBeDisabled();
-    expect(razorpayBtn).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: /Generate payment link for invoice INV-001/i }));
+    await waitFor(() => expect(screen.getByText(/Payment Link/i)).toBeInTheDocument());
+
+    expect(screen.getByText('http://test.example/pay/inv-001')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Copy$/i })).toBeInTheDocument();
   });
 
   it('clicking "Recur" opens the recur modal with frequency options', async () => {
@@ -623,7 +632,7 @@ describe('<Invoices /> — page surface', () => {
     expect(invInput.value).toBe('INV-001');
   });
 
-  it('OVERDUE rows still expose Mark Paid + Pay Now + Void (status branches as not-paid not-voided)', async () => {
+  it('OVERDUE rows still expose Mark Paid + Generate Payment Link + Void (status branches as not-paid not-voided)', async () => {
     const overdue = [
       { ...sampleInvoices[0], id: 80, invoiceNum: 'INV-080', status: 'OVERDUE' },
     ];
@@ -637,17 +646,17 @@ describe('<Invoices /> — page surface', () => {
     renderInvoices();
     await waitFor(() => expect(screen.getByText('INV-080')).toBeInTheDocument());
 
-    expect(screen.getByRole('button', { name: /Pay invoice INV-080/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Generate payment link for invoice INV-080/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Mark invoice INV-080 as paid/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Void invoice INV-080/i })).toBeInTheDocument();
   });
 
-  it('Pay Now is hidden on PAID rows AND on VOIDED rows', async () => {
+  it('Generate Payment Link is hidden on PAID rows AND on VOIDED rows', async () => {
     renderInvoices();
     await waitFor(() => expect(screen.getByText('INV-001')).toBeInTheDocument());
-    expect(screen.queryByRole('button', { name: /Pay invoice INV-002/i })).toBeNull();
-    expect(screen.queryByRole('button', { name: /Pay invoice INV-003/i })).toBeNull();
-    expect(screen.getByRole('button', { name: /Pay invoice INV-001/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Generate payment link for invoice INV-002/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Generate payment link for invoice INV-003/i })).toBeNull();
+    expect(screen.getByRole('button', { name: /Generate payment link for invoice INV-001/i })).toBeInTheDocument();
   });
 
   it('clicking PDF on a row fires fetch against /api/billing/<id>/pdf with Bearer token', async () => {
@@ -716,45 +725,47 @@ describe('<Invoices /> — page surface', () => {
     expect(recurCall).toBeFalsy();
   });
 
-  it('payment modal: Stripe button is enabled when stripe.configured=true', async () => {
-    fetchApiMock.mockImplementation((url) => {
-      if (url === '/api/billing') return Promise.resolve(sampleInvoices);
-      if (url === '/api/contacts') return Promise.resolve(sampleContacts);
-      if (url === '/api/deals') return Promise.resolve(sampleDeals);
-      if (url === '/api/payments/config') {
-        return Promise.resolve({
-          stripe: { configured: true, keyId: 'pk_test_stripe' },
-          razorpay: { configured: false },
-        });
-      }
-      return Promise.resolve(null);
-    });
+  it('payment modal summary names the invoice contact and amount', async () => {
     renderInvoices();
     await waitFor(() => expect(screen.getByText('INV-001')).toBeInTheDocument());
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/billing/1/payment-link' && opts?.method === 'POST') {
+        return Promise.resolve({ url: 'http://test.example/pay/inv-001' });
+      }
+      return defaultFetchMock(url, opts);
+    });
 
-    fireEvent.click(screen.getByRole('button', { name: /Pay invoice INV-001/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Generate payment link for invoice INV-001/i }));
+    await waitFor(() => expect(screen.getByText(/Payment Link/i)).toBeInTheDocument());
 
-    const buttons = screen.getAllByRole('button');
-    const stripeBtn = buttons.find(b => /Stripe/.test(b.textContent || ''));
-    const razorpayBtn = buttons.find(b => /Razorpay/.test(b.textContent || ''));
-    expect(stripeBtn).not.toBeDisabled();
-    expect(razorpayBtn).toBeDisabled();
+    const summary = screen.getByText((content, element) =>
+      /Share this link with/.test(content) &&
+      element?.textContent?.includes('Acme Corp') &&
+      element?.textContent?.includes('INV-001')
+    );
+    expect(summary).toBeInTheDocument();
   });
 
   it('payment modal closes when the dark overlay is clicked (outside the dialog body)', async () => {
     renderInvoices();
     await waitFor(() => expect(screen.getByText('INV-001')).toBeInTheDocument());
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/billing/1/payment-link' && opts?.method === 'POST') {
+        return Promise.resolve({ url: 'http://test.example/pay/inv-001' });
+      }
+      return defaultFetchMock(url, opts);
+    });
 
-    fireEvent.click(screen.getByRole('button', { name: /Pay invoice INV-001/i }));
-    expect(screen.getByRole('button', { name: /Close payment dialog/i })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Generate payment link for invoice INV-001/i }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /Close payment dialog/i })).toBeInTheDocument());
 
     // Walk up to the overlay (first ancestor with position:fixed).
-    const heading = screen.getByText(/Pay Invoice/i);
+    const heading = screen.getByRole('heading', { name: /Payment Link/i });
     let node = heading;
     while (node && node.style?.position !== 'fixed') node = node.parentElement;
     expect(node).toBeTruthy();
     fireEvent.click(node);
 
-    expect(screen.queryByRole('button', { name: /Close payment dialog/i })).toBeNull();
+    await waitFor(() => expect(screen.queryByRole('button', { name: /Close payment dialog/i })).toBeNull());
   });
 });

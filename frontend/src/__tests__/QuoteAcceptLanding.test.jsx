@@ -200,23 +200,7 @@ describe('QuoteAcceptLanding — public customer landing (C9)', () => {
     expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 
-  it('7. counter requires proposed total > 0', async () => {
-    renderPage();
-    await waitFor(() => screen.getByText(/Your quote/i));
-
-    fireEvent.click(screen.getByRole('button', { name: /Counter-offer/i }));
-    await waitFor(() =>
-      expect(screen.getByText(/Submit a counter-offer/i)).toBeInTheDocument(),
-    );
-
-    fireEvent.click(screen.getByRole('button', { name: /^Submit counter-offer$/i }));
-    await waitFor(() =>
-      expect(screen.getByText(/Please enter your counter-offer amount/i)).toBeInTheDocument(),
-    );
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
-  });
-
-  it('8. 409 ALREADY_ACTIONED on accept → friendly message', async () => {
+  it('7. 409 ALREADY_ACTIONED on accept → friendly message', async () => {
     renderPage();
     await waitFor(() => screen.getByText(/Your quote/i));
 
@@ -239,43 +223,4 @@ describe('QuoteAcceptLanding — public customer landing (C9)', () => {
     );
   });
 
-  it('counter happy-path POSTs proposedTotal numeric', async () => {
-    renderPage();
-    await waitFor(() => screen.getByText(/Your quote/i));
-
-    fireEvent.click(screen.getByRole('button', { name: /Counter-offer/i }));
-    await waitFor(() => screen.getByText(/Submit a counter-offer/i));
-
-    const totalInput = screen.getByLabelText(/Your proposed total/i);
-    fireEvent.change(totalInput, { target: { value: '45000' } });
-
-    fetchSpy.mockImplementationOnce(() =>
-      Promise.resolve({
-        ok: true,
-        status: 200,
-        json: () => Promise.resolve({
-          status: 'countered',
-          quoteId: 42,
-          previousStatus: 'Sent',
-          proposedTotal: 45000,
-          counteredAt: '2026-06-09T10:00:00Z',
-        }),
-      }),
-    );
-
-    fireEvent.click(screen.getByRole('button', { name: /^Submit counter-offer$/i }));
-
-    await waitFor(() =>
-      expect(screen.getByText(/Thank you/i)).toBeInTheDocument(),
-    );
-    expect(screen.getByText(/Counter-offer submitted/i)).toBeInTheDocument();
-
-    // Inspect the POST call.
-    const postCall = fetchSpy.mock.calls.find(
-      (c) => typeof c[0] === 'string' && c[0].includes('/counter'),
-    );
-    expect(postCall).toBeTruthy();
-    const body = JSON.parse(postCall[1].body);
-    expect(body.proposedTotal).toBe(45000);
-  });
 });

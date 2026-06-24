@@ -13,8 +13,9 @@
 // is configured / the gateway rejects. Never throws for config issues.
 
 const prisma = require("./prisma");
+const { getTenantRazorpayClient } = require("./tenantPaymentGateway");
 
-// ── Lazy SDK loaders (mirror routes/payments.js) ────────────────────
+// ── Lazy Stripe loader (platform key — Stripe is not BYOK yet) ──────
 let _stripe = null;
 function getStripe() {
   if (!_stripe && process.env.STRIPE_SECRET_KEY) {
@@ -27,40 +28,21 @@ function getStripe() {
   return _stripe;
 }
 
-let _razorpay = null;
-function getRazorpay() {
-  if (!_razorpay && process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET) {
-    try {
-      const Razorpay = require("razorpay");
-      _razorpay = new Razorpay({
-        key_id: process.env.RAZORPAY_KEY_ID,
-        key_secret: process.env.RAZORPAY_KEY_SECRET,
-      });
-    } catch (err) {
-      console.error("[paymentLink] Razorpay SDK load failed:", err.message);
-    }
-  }
-  return _razorpay;
-}
+// Razorpay is BYOK — always loaded per-tenant from DB, not cached globally.
 
 function gatewayAvailability() {
-  return { stripe: !!getStripe(), razorpay: !!getRazorpay() };
+  return { stripe: !!getStripe(), razorpay: true }; // razorpay availability checked per-tenant at call time
 }
 
 // Resolve which gateway to use. `pref` ∈ {auto, razorpay, stripe}.
-//   auto → INR + Razorpay configured → razorpay; else Stripe; else Razorpay.
-// An explicit pref is honoured only if that gateway is actually configured;
-// otherwise we fall back to whatever IS configured so the link still works.
+//   auto → INR → razorpay (tenant BYOK); else Stripe.
 function resolveGateway(pref, currency) {
-  const avail = gatewayAvailability();
   const want = (pref || "auto").toLowerCase();
-  if (want === "razorpay" && avail.razorpay) return "razorpay";
-  if (want === "stripe" && avail.stripe) return "stripe";
-  // auto (or a pref whose gateway isn't configured): pick the best available.
-  if (String(currency).toUpperCase() === "INR" && avail.razorpay) return "razorpay";
-  if (avail.stripe) return "stripe";
-  if (avail.razorpay) return "razorpay";
-  return null;
+  if (want === "razorpay") return "razorpay";
+  if (want === "stripe" && getStripe()) return "stripe";
+  if (String(currency).toUpperCase() === "INR") return "razorpay";
+  if (getStripe()) return "stripe";
+  return "razorpay";
 }
 
 /**
@@ -71,9 +53,10 @@ function resolveGateway(pref, currency) {
  * @param {Object} [opts.contact]  - { name, email, phone }
  * @param {string} [opts.currency] - ISO 4217 (defaults USD)
  * @param {string} [opts.gatewayPref] - auto | razorpay | stripe
+ * @param {string} [opts.tenantName]  - org display name shown on the payment page
  * @returns {Promise<{url, gateway, paymentId}|{error, code}>}
  */
-async function createInvoicePaymentLink({ tenantId, invoice, contact, currency, gatewayPref }) {
+async function createInvoicePaymentLink({ tenantId, invoice, contact, currency, gatewayPref, tenantName }) {
   const amount = Number(invoice?.amount);
   if (!invoice?.id || !amount || isNaN(amount) || amount <= 0) {
     return { error: "Invoice with a positive amount is required", code: "BAD_INVOICE" };
@@ -85,11 +68,16 @@ async function createInvoicePaymentLink({ tenantId, invoice, contact, currency, 
   }
   const frontendBase = process.env.FRONTEND_URL || "http://localhost:5173";
   const amountMinor = Math.round(amount * 100);
-  const label = invoice.invoiceNum || `Invoice #${invoice.id}`;
+  const invoiceLabel = invoice.invoiceNum || `Invoice #${invoice.id}`;
+  const label = tenantName ? `${tenantName} — ${invoiceLabel}` : invoiceLabel;
 
   try {
     if (gateway === "razorpay") {
-      const razorpay = getRazorpay();
+      const tenantGateway = await getTenantRazorpayClient(tenantId);
+      if (!tenantGateway) {
+        return { error: "Razorpay is not configured for this account. Please add your keys in Settings → Payment.", code: "NO_GATEWAY" };
+      }
+      const razorpay = tenantGateway.client;
       const link = await razorpay.paymentLink.create({
         amount: amountMinor,
         currency: cur,
@@ -104,7 +92,7 @@ async function createInvoicePaymentLink({ tenantId, invoice, contact, currency, 
         notify: { sms: false, email: false },
         reminder_enable: false,
         notes: { tenantId: String(tenantId), invoiceId: String(invoice.id) },
-        callback_url: `${frontendBase}/invoices?razorpay=success`,
+        callback_url: `${frontendBase}/p/payment/success`,
         callback_method: "get",
       });
       const payment = await prisma.payment.create({

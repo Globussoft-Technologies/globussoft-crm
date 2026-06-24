@@ -278,6 +278,12 @@ export default function InvoicesAdmin() {
       .finally(() => setLoading(false));
   };
 
+  // Sync the global sub-brand selector into the local filter state so the
+  // list automatically re-scopes when the user switches brand in the sidebar.
+  useEffect(() => {
+    setSubBrand(activeSubBrand || "");
+  }, [activeSubBrand]);
+
   useEffect(load, [subBrand, status, contactIdFilter, quoteIdFilter]);
 
   // Load the tenant's contacts once for the customer dropdown.

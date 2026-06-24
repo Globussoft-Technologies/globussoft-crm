@@ -16,7 +16,7 @@ import { useContext, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Map, Filter, Plane, Hotel, MapPin, Briefcase, FileText, Shield, Plus, X,
-  Sparkles, AlertTriangle, Trash2,
+  Sparkles, AlertTriangle, Trash2, Train, Bus, Car, Camera, Utensils,
 } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
@@ -91,6 +91,32 @@ const ITEM_ICONS = {
   visa: FileText,
   insurance: Shield,
 };
+
+// Per-item-type icon + accent colour for the redesigned day cards in the
+// Suggest-itinerary preview. Falls back to a neutral briefcase + slate.
+const DAY_ITEM_VISUAL = {
+  flight: { Icon: Plane, color: "#2563eb" },
+  train: { Icon: Train, color: "#4f46e5" },
+  bus: { Icon: Bus, color: "#0e7c86" },
+  cab: { Icon: Car, color: "#0e7c86" },
+  transfer: { Icon: Car, color: "#0e7c86" },
+  hotel: { Icon: Hotel, color: "#7c3aed" },
+  sightseeing: { Icon: Camera, color: "#d97706" },
+  activity: { Icon: Briefcase, color: "#ea580c" },
+  meals: { Icon: Utensils, color: "#e11d48" },
+  visa: { Icon: FileText, color: "#475569" },
+  insurance: { Icon: Shield, color: "#16a34a" },
+};
+function dayItemVisual(itemType) {
+  return DAY_ITEM_VISUAL[String(itemType || "").toLowerCase()] || { Icon: Briefcase, color: "#64748b" };
+}
+// Hex → rgba tint for icon-chip backgrounds (so each type reads at a glance).
+function tintBg(hex, alpha = 0.14) {
+  const h = String(hex || "#64748b").replace("#", "");
+  const n = parseInt(h.length === 3 ? h.split("").map((c) => c + c).join("") : h, 16);
+  const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+  return `rgba(${r},${g},${b},${alpha})`;
+}
 
 const EMPTY_FORM = {
   contactId: "", subBrand: "tmc", destination: "",
@@ -184,6 +210,7 @@ const EMPTY_SUGGEST_FORM = {
   departureCity: "",
   transportPreference: "flight",
   durationDays: 5,
+  startDate: "",
   budgetTier: "mid",
   interests: "",
   pace: "relaxed",
@@ -454,6 +481,8 @@ export default function Itineraries() {
         // backend doesn't fall back to the (long) summary for the Itinerary's
         // destination column.
         destination: (suggestForm.destination || "").trim(),
+        // Travel start date (optional) — backend derives endDate from day count.
+        startDate: suggestForm.startDate || undefined,
       };
       const res = await fetchApi(
         "/api/travel/itineraries/from-suggestion",
@@ -968,11 +997,13 @@ export default function Itineraries() {
           className="travel-itin-suggest-backdrop"
           style={{
             position: "fixed", inset: 0,
-            background: "rgba(0,0,0,0.75)",
-            backdropFilter: "blur(4px)",
-            WebkitBackdropFilter: "blur(4px)",
+            background: "rgba(8,11,20,0.82)",
+            backdropFilter: "blur(6px)",
+            WebkitBackdropFilter: "blur(6px)",
             display: "flex", alignItems: "center", justifyContent: "center",
-            zIndex: 1000, padding: "1rem",
+            // High z-index so the dimmer sits ABOVE the app top-bar/sidebar
+            // (they sit above the prior z-index 1000, so the page bled through).
+            zIndex: 3000, padding: "1rem",
           }}
         >
           <form
@@ -983,18 +1014,29 @@ export default function Itineraries() {
             style={suggestModalStyle}
             className="card travel-itin-suggest-modal"
           >
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-              <h2 id="suggest-itin-title" style={{ margin: 0, fontSize: 18, fontWeight: 600, display: "flex", alignItems: "center", gap: 8 }}>
-                <Sparkles size={18} aria-hidden /> Suggest itinerary
-              </h2>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, marginBottom: 18 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                <span style={{
+                  display: "inline-flex", alignItems: "center", justifyContent: "center",
+                  width: 38, height: 38, borderRadius: 11, flexShrink: 0,
+                  background: "linear-gradient(135deg, var(--primary-color, var(--accent-color)) 0%, #6366f1 100%)",
+                  color: "#fff", boxShadow: "0 4px 12px rgba(79,70,229,0.35)",
+                }}>
+                  <Sparkles size={20} aria-hidden />
+                </span>
+                <div>
+                  <h2 id="suggest-itin-title" style={{ margin: 0, fontSize: 19, fontWeight: 700, letterSpacing: 0.2 }}>
+                    Suggest itinerary
+                  </h2>
+                  <p style={{ margin: "2px 0 0", fontSize: 12.5, color: "var(--text-secondary)" }}>
+                    AI builds a day-by-day outline — review it, then create the itinerary.
+                  </p>
+                </div>
+              </div>
               <button type="button" onClick={closeSuggest} aria-label="Close" style={iconBtn}>
-                <X size={16} />
+                <X size={18} />
               </button>
             </div>
-            <p style={{ margin: 0, marginBottom: 16, fontSize: 12, color: "var(--text-secondary)" }}>
-              AI-generated day-by-day outline. Review the suggestion below
-              before creating an itinerary. PRD FR-3.6.
-            </p>
             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
               <label style={fieldLabel}>
                 Destination
@@ -1026,12 +1068,12 @@ export default function Itineraries() {
                   />
                 </label>
                 <label style={fieldLabel}>
-                  Travel to destination by
+                  Travelling by
                   <select
                     value={suggestForm.transportPreference}
                     onChange={(e) => setSuggestForm({ ...suggestForm, transportPreference: e.target.value })}
-                    style={inputStyle}
-                    aria-label="Transport to destination"
+                    style={modalSelectStyle}
+                    aria-label="Travelling by"
                   >
                     {SUGGEST_TRANSPORT_OPTIONS.map((t) => (
                       <option key={t.value} value={t.value}>{t.label}</option>
@@ -1064,7 +1106,7 @@ export default function Itineraries() {
                   <select
                     value={suggestForm.budgetTier}
                     onChange={(e) => setSuggestForm({ ...suggestForm, budgetTier: e.target.value })}
-                    style={inputStyle}
+                    style={modalSelectStyle}
                   >
                     {SUGGEST_BUDGET_TIERS.map((t) => (
                       <option key={t.value} value={t.value}>{t.label}</option>
@@ -1072,6 +1114,18 @@ export default function Itineraries() {
                   </select>
                 </label>
               </div>
+              <label style={fieldLabel}>
+                Travel start date (optional)
+                <input
+                  type="date"
+                  value={suggestForm.startDate}
+                  onChange={(e) => setSuggestForm({ ...suggestForm, startDate: e.target.value })}
+                  style={inputStyle}
+                />
+                <span style={{ fontSize: 11, color: "var(--text-secondary)" }}>
+                  End date is set automatically from the trip length. The customer can adjust dates when they accept.
+                </span>
+              </label>
               <label style={fieldLabel}>
                 Interests (optional)
                 <input
@@ -1088,7 +1142,7 @@ export default function Itineraries() {
                 <select
                   value={suggestForm.pace}
                   onChange={(e) => setSuggestForm({ ...suggestForm, pace: e.target.value })}
-                  style={inputStyle}
+                  style={modalSelectStyle}
                   aria-label="Trip pace"
                 >
                   {SUGGEST_PACE_OPTIONS.map((p) => (
@@ -1155,58 +1209,66 @@ export default function Itineraries() {
                   </div>
                 )}
                 {Array.isArray(suggestResult.suggestion.days) && suggestResult.suggestion.days.length > 0 ? (
-                  <ol style={{ paddingLeft: 18, margin: 0, marginBottom: 8 }}>
-                    {suggestResult.suggestion.days.map((day, idx) => (
-                      <li
-                        key={day.dayNumber ?? idx}
-                        style={{ marginBottom: 8 }}
-                        data-testid={`suggest-day-${day.dayNumber ?? idx + 1}`}
-                      >
-                        <div style={{ fontWeight: 600, fontSize: 13 }}>
-                          Day {day.dayNumber ?? idx + 1}
-                          {day.theme ? ` — ${day.theme}` : ""}
-                        </div>
-                        {Array.isArray(day.items) && day.items.length > 0 && (
-                          <ul style={{ paddingLeft: 18, margin: 0 }}>
-                            {day.items.map((item, i) => (
-                              <li
-                                key={i}
-                                style={{
-                                  fontSize: 12,
-                                  color: "var(--text-primary)",
-                                  display: "flex",
-                                  justifyContent: "space-between",
-                                  gap: 8,
-                                }}
-                              >
-                                <span>
-                                  <strong>{item.itemType || "item"}</strong>
-                                  {item.description ? ` — ${item.description}` : ""}
-                                </span>
-                                {item.estimatedCost != null && (
-                                  <span style={{ whiteSpace: "nowrap", color: "var(--text-secondary)" }}>
-                                    {fmtMoney(item.estimatedCost, "INR")}
-                                  </span>
-                                )}
-                              </li>
-                            ))}
-                          </ul>
-                        )}
-                        {dayEstTotal(day) > 0 && (
-                          <div
-                            style={{
-                              fontSize: 11,
-                              color: "var(--text-secondary)",
-                              marginTop: 2,
-                              textAlign: "right",
-                            }}
-                          >
-                            Day subtotal: {fmtMoney(dayEstTotal(day), "INR")} / person
+                  <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 8 }}>
+                    {suggestResult.suggestion.days.map((day, idx) => {
+                      const dn = day.dayNumber ?? idx + 1;
+                      return (
+                        <div
+                          key={day.dayNumber ?? idx}
+                          style={dayCard}
+                          data-testid={`suggest-day-${dn}`}
+                        >
+                          <div style={dayCardHead}>
+                            <span style={dayBadge}>{dn}</span>
+                            <div style={{ minWidth: 0 }}>
+                              <div style={{ fontWeight: 700, fontSize: 13.5, color: "var(--text-primary)", lineHeight: 1.2 }}>
+                                Day {dn}
+                              </div>
+                              {day.theme ? (
+                                <div style={{ fontSize: 11.5, color: "var(--text-secondary)" }}>{day.theme}</div>
+                              ) : null}
+                            </div>
+                            {dayEstTotal(day) > 0 && (
+                              <span style={dayHeadTotal}>{fmtMoney(dayEstTotal(day), "INR")}</span>
+                            )}
                           </div>
-                        )}
-                      </li>
-                    ))}
-                  </ol>
+                          {Array.isArray(day.items) && day.items.length > 0 && (
+                            <div>
+                              {day.items.map((item, i) => {
+                                const { Icon, color } = dayItemVisual(item.itemType);
+                                const free = item.estimatedCost === 0;
+                                return (
+                                  <div key={i} style={dayItemRow}>
+                                    <span style={{ ...dayItemIcon, background: tintBg(color), color }}>
+                                      <Icon size={14} aria-hidden />
+                                    </span>
+                                    <div style={{ flex: 1, minWidth: 0 }}>
+                                      <span style={{ fontSize: 9.5, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4, color }}>
+                                        {item.itemType || "item"}
+                                      </span>
+                                      {item.description ? (
+                                        <span style={{ fontSize: 12, color: "var(--text-primary)" }}> {item.description}</span>
+                                      ) : null}
+                                    </div>
+                                    {item.estimatedCost != null && (
+                                      <span style={{ whiteSpace: "nowrap", fontSize: 12, fontWeight: 600, color: free ? "var(--text-secondary)" : "var(--text-primary)" }}>
+                                        {free ? "Free" : fmtMoney(item.estimatedCost, "INR")}
+                                      </span>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                          {dayEstTotal(day) > 0 && (
+                            <div style={dayCardFoot}>
+                              Day subtotal: <strong style={{ color: "var(--text-primary)" }}>{fmtMoney(dayEstTotal(day), "INR")}</strong> / person
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
                 ) : (
                   // Fallback: shape unfamiliar — render raw JSON so the
                   // operator can still see what came back.
@@ -1242,7 +1304,7 @@ export default function Itineraries() {
                     <select
                       value={materialiseContactId}
                       onChange={(e) => setMaterialiseContactId(e.target.value)}
-                      style={inputStyle}
+                      style={modalSelectStyle}
                       aria-label="Contact for materialised itinerary"
                     >
                       <option value="">— pick a contact —</option>
@@ -1258,7 +1320,7 @@ export default function Itineraries() {
                     <select
                       value={materialiseSubBrand}
                       onChange={(e) => setMaterialiseSubBrand(e.target.value)}
-                      style={inputStyle}
+                      style={modalSelectStyle}
                       aria-label="Sub-brand for materialised itinerary"
                       disabled={!!lockedBrand}
                     >
@@ -1455,15 +1517,69 @@ const iconBtn = {
 };
 
 const fieldLabel = {
-  display: "flex", flexDirection: "column", gap: 4,
-  fontSize: 12, color: "var(--text-secondary)", fontWeight: 500,
+  display: "flex", flexDirection: "column", gap: 6,
+  fontSize: 11, color: "var(--text-secondary)", fontWeight: 600,
+  letterSpacing: 0.3, textTransform: "uppercase",
 };
 
 const inputStyle = {
-  padding: "8px 10px", borderRadius: 6,
+  padding: "10px 12px", borderRadius: 9,
   border: "1px solid var(--border-color)",
   background: "var(--input-bg, var(--surface-color))", color: "var(--text-primary)",
-  fontSize: 14,
+  fontSize: 14, outline: "none", width: "100%", boxSizing: "border-box",
+};
+
+// Native <select> with a custom chevron (the default OS arrow looks dated). We
+// strip the browser appearance and paint a chevron via an inline SVG background.
+// Used by the Suggest-itinerary modal + create drawer selects.
+const modalSelectStyle = {
+  ...inputStyle,
+  appearance: "none",
+  WebkitAppearance: "none",
+  MozAppearance: "none",
+  cursor: "pointer",
+  paddingRight: 34,
+  backgroundImage:
+    "url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23889' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'/></svg>\")",
+  backgroundRepeat: "no-repeat",
+  backgroundPosition: "right 11px center",
+};
+
+// Redesigned day-card styling for the Suggest-itinerary preview (the operator
+// reviews these before materialising). Each day = a bordered card with a
+// gradient day-badge header, icon-tagged item rows, and a subtotal footer.
+const dayCard = {
+  border: "1px solid var(--border-color)", borderRadius: 12,
+  background: "var(--surface-color)", overflow: "hidden",
+  boxShadow: "0 1px 2px rgba(0,0,0,0.05), 0 6px 16px rgba(0,0,0,0.05)",
+};
+const dayCardHead = {
+  display: "flex", alignItems: "center", gap: 10, padding: "10px 12px",
+  background: "linear-gradient(135deg, rgba(37,99,235,0.12), rgba(99,102,241,0.05))",
+};
+const dayBadge = {
+  display: "inline-flex", alignItems: "center", justifyContent: "center",
+  width: 30, height: 30, borderRadius: 9, flexShrink: 0,
+  background: "linear-gradient(135deg, var(--primary-color, var(--accent-color)) 0%, #6366f1 100%)",
+  color: "#fff", fontWeight: 800, fontSize: 14,
+  boxShadow: "0 3px 8px rgba(79,70,229,0.30)",
+};
+const dayHeadTotal = {
+  marginLeft: "auto", fontSize: 12, fontWeight: 700, color: "var(--text-primary)",
+  background: "var(--bg-color)", padding: "3px 10px", borderRadius: 20, whiteSpace: "nowrap",
+};
+const dayItemRow = {
+  display: "flex", alignItems: "center", gap: 10,
+  padding: "9px 12px", borderTop: "1px solid var(--border-color)",
+};
+const dayItemIcon = {
+  display: "inline-flex", alignItems: "center", justifyContent: "center",
+  width: 26, height: 26, borderRadius: 7, flexShrink: 0,
+};
+const dayCardFoot = {
+  fontSize: 11.5, color: "var(--text-secondary)", textAlign: "right",
+  padding: "8px 12px", background: "var(--bg-color)",
+  borderTop: "1px solid var(--border-color)",
 };
 
 // PRD FR-3.6 — Suggest itinerary modal styling. Centred dialog (not the
@@ -1472,8 +1588,11 @@ const inputStyle = {
 const suggestModalStyle = {
   background: "var(--bg-color)",
   color: "var(--text-primary)",
-  width: "100%", maxWidth: 560, maxHeight: "90vh", overflowY: "auto",
+  width: "100%", maxWidth: 580, maxHeight: "90vh", overflowY: "auto",
   padding: "1.5rem",
+  borderRadius: 16,
+  border: "1px solid var(--border-color)",
+  boxShadow: "0 24px 64px rgba(0,0,0,0.45)",
 };
 
 const secondaryBtn = {

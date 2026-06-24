@@ -11,6 +11,8 @@
 // TEMPLATE-only (no LLM): web check-in is procedural; wording must be clear and
 // consistent. Counts down from the flight's real `departureAt`.
 
+const { textToHtml } = require("./emailHtml");
+
 // Hour milestones before `departureAt` that fire a reminder. Disjoint 12h
 // windows: 36 → (24,36], 24 → (12,24], 12 → (0,12].
 const MILESTONES = [36, 24, 12];
@@ -63,7 +65,7 @@ function buildReminder({ passengerName, airlineCode, flightNumber, pnr, mileston
   const vars = { passengerName, flight: flightLabel({ airlineCode, flightNumber }), pnr, portalUrl };
   const subject = interpolate(tpl.subject, vars);
   const text = interpolate(tpl.body, vars);
-  return { subject, text, html: text.replace(/\n/g, "<br>") };
+  return { subject, text, html: textToHtml(text) };
 }
 
 module.exports = { MILESTONES, milestoneTag, dueMilestone, flightLabel, buildReminder, TEMPLATES };

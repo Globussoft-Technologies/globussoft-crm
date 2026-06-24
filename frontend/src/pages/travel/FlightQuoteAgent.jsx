@@ -53,11 +53,13 @@ const FARE_CLASSES = ["Economy", "Premium Economy", "Business", "First"];
 // inventory, an AI web estimate, or offline sample data (so they verify before
 // quoting). Mirrors tboClient's `provider` field.
 const PROVIDER_LABEL = {
+  serpapi: "Google live",
   tbo: "TBO live",
   "llm-web": "AI web estimate",
   stub: "Sample data",
 };
 const PROVIDER_COLORS = {
+  serpapi: { bg: "#e8f6ee", fg: "#1e8449" },
   tbo: { bg: "#e8f6ee", fg: "#1e8449" },
   "llm-web": { bg: "#eaf2fb", fg: "#1e4d8c" },
   stub: { bg: "#f3f0e8", fg: "#8a6d2f" },
@@ -70,13 +72,66 @@ function providerBadge(provider) {
     background: c.bg, color: c.fg,
   };
 }
-// Compact "2 Aug, 6:10 PM" for search rows; null when unparseable/absent.
-function fmtSearchTime(s) {
-  if (!s) return null;
+// ── results-board helpers (GDS-style row: time → duration/stops → time) ──
+// Clock only ("11:25") — the date is shown once in the board header.
+function fmtClock(s) {
+  if (!s) return "—";
   const dt = new Date(s);
-  if (!Number.isFinite(dt.getTime())) return null;
-  return dt.toLocaleString("en-IN", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+  if (!Number.isFinite(dt.getTime())) return "—";
+  return dt.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: false });
 }
+// "+1" when the flight lands on a later calendar day (red-eye / long-haul).
+function dayOffset(dep, arr) {
+  if (!dep || !arr) return 0;
+  const a = new Date(dep); const b = new Date(arr);
+  if (!Number.isFinite(a.getTime()) || !Number.isFinite(b.getTime())) return 0;
+  const da = new Date(a.getFullYear(), a.getMonth(), a.getDate());
+  const db = new Date(b.getFullYear(), b.getMonth(), b.getDate());
+  return Math.max(0, Math.round((db - da) / 86400000));
+}
+function fmtDuration(min) {
+  if (min == null || !Number.isFinite(Number(min))) return null;
+  const m = Number(min);
+  const h = Math.floor(m / 60); const r = m % 60;
+  return `${h}h${r ? ` ${r}m` : ""}`;
+}
+function stopsLabel(stops) {
+  if (stops == null) return null;
+  return stops === 0 ? "Non-stop" : `${stops} stop${stops > 1 ? "s" : ""}`;
+}
+// Deterministic brand-ish colour per airline code, so the logo chip looks
+// intentional without bundling real airline logos.
+const AIRLINE_COLORS = ["#1e4d8c", "#1e8449", "#8a4b9c", "#b9550e", "#0e7c86", "#9c2b46", "#4b5d8c", "#5a6b1e"];
+function airlineColor(code) {
+  const s = String(code || "??");
+  let h = 0;
+  for (let i = 0; i < s.length; i += 1) h = (h * 31 + s.charCodeAt(i)) | 0;
+  return AIRLINE_COLORS[Math.abs(h) % AIRLINE_COLORS.length];
+}
+function airlineInitials(o) {
+  return String(o.airline || o.airlineName || "??").slice(0, 2).toUpperCase();
+}
+function airlineDotStyle(code) {
+  return {
+    display: "inline-flex", alignItems: "center", justifyContent: "center",
+    width: 22, height: 22, borderRadius: 6, flexShrink: 0,
+    background: airlineColor(code), color: "#fff", fontWeight: 700, fontSize: 10,
+  };
+}
+
+// Left-rail stops filter (mirrors the reference UI's radio group).
+const STOP_FILTERS = [
+  { key: "any", label: "Any number of stops" },
+  { key: "0", label: "Non-stop" },
+  { key: "1", label: "1 stop or fewer" },
+  { key: "2", label: "2 stops or fewer" },
+];
+const SORT_OPTIONS = [
+  { key: "recommended", label: "Recommended" },
+  { key: "cheapest", label: "Cheapest" },
+  { key: "fastest", label: "Fastest" },
+  { key: "earliest", label: "Earliest departure" },
+];
 
 function blankOption() {
   return {
@@ -131,6 +186,11 @@ export default function FlightQuoteAgent() {
   const [searching, setSearching] = useState(false);
   const [searchResults, setSearchResults] = useState([]);
   const [searchMeta, setSearchMeta] = useState(null); // { provider, note }
+  // Results-board filters/sort (GDS-style left rail + sort dropdown).
+  const [stopsFilter, setStopsFilter] = useState("any");
+  const [airlineSel, setAirlineSel] = useState(null); // Set of enabled codes; null = all
+  const [sortBy, setSortBy] = useState("recommended");
+  const [expandedIdx, setExpandedIdx] = useState(null); // which row's "Flight details" is open
 
   // ── result state ────────────────────────────────────────────────
   const [result, setResult] = useState(null); // { itineraryId, items, totalWithMarkup, currency, pdfUrl }
@@ -236,6 +296,10 @@ export default function FlightQuoteAgent() {
     setSearching(true);
     setSearchResults([]);
     setSearchMeta(null);
+    // Reset the board's filters/sort for the new result set.
+    setStopsFilter("any");
+    setSortBy("recommended");
+    setExpandedIdx(null);
     try {
       const res = await fetchApi("/api/travel/search/flights", {
         method: "POST",
@@ -245,7 +309,11 @@ export default function FlightQuoteAgent() {
           currency: currency.trim().toUpperCase() || "INR",
         }),
       });
-      setSearchResults(Array.isArray(res?.options) ? res.options : []);
+      const opts = Array.isArray(res?.options) ? res.options : [];
+      setSearchResults(opts);
+      // Start with every airline in the result set selected (matches the
+      // reference UI's "all checked" default).
+      setAirlineSel(new Set(opts.map((o) => o.airline).filter(Boolean)));
       setSearchMeta({ provider: res?.provider || "stub", note: res?.note || null, resolved: res?.resolved || null });
     } catch (e) {
       notify.error(e?.body?.error || e?.message || "Flight search failed");
@@ -277,6 +345,41 @@ export default function FlightQuoteAgent() {
     });
     notify.success?.(`Added ${o.airline || "flight"} ${o.from}→${o.to}`);
   };
+
+  // Distinct airlines in the current result set (for the left-rail checkboxes).
+  const availableAirlines = useMemo(() => {
+    const seen = new Map();
+    for (const o of searchResults) {
+      if (o.airline && !seen.has(o.airline)) seen.set(o.airline, o.airlineName || o.airline);
+    }
+    return Array.from(seen, ([code, name]) => ({ code, name }));
+  }, [searchResults]);
+
+  // Apply the stops + airline filters, then sort. "recommended" keeps the
+  // backend's order (which leads with the cheapest non-stop-ish picks).
+  const visibleResults = useMemo(() => {
+    const out = searchResults.filter((o) => {
+      if (airlineSel && o.airline && !airlineSel.has(o.airline)) return false;
+      if (stopsFilter === "any") return true;
+      const max = parseInt(stopsFilter, 10);
+      return (o.stops ?? 0) <= max;
+    });
+    const by = {
+      cheapest: (a, b) => (a.fare ?? Infinity) - (b.fare ?? Infinity),
+      fastest: (a, b) => (a.durationMinutes ?? Infinity) - (b.durationMinutes ?? Infinity),
+      earliest: (a, b) => new Date(a.departAt || 0) - new Date(b.departAt || 0),
+    };
+    return by[sortBy] ? [...out].sort(by[sortBy]) : out;
+  }, [searchResults, airlineSel, stopsFilter, sortBy]);
+
+  const toggleAirline = (code) =>
+    setAirlineSel((prev) => {
+      const next = new Set(prev || availableAirlines.map((a) => a.code));
+      if (next.has(code)) next.delete(code); else next.add(code);
+      return next;
+    });
+  const allAirlines = () => setAirlineSel(new Set(availableAirlines.map((a) => a.code)));
+  const clearAirlines = () => setAirlineSel(new Set());
 
   const setOpt = (i, patch) =>
     setOptions((prev) => prev.map((o, idx) => (idx === i ? { ...o, ...patch } : o)));
@@ -610,31 +713,177 @@ export default function FlightQuoteAgent() {
             )}
 
             {searchResults.length > 0 && (
-              <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 10 }}>
-                {searchResults.map((o, i) => (
-                  <div key={i} style={searchRow}>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <strong style={{ fontSize: 13 }}>
-                        {o.airlineName || o.airline}{o.flightNumber ? ` · ${o.flightNumber}` : ""} {o.from}→{o.to}
-                      </strong>
-                      <div style={{ fontSize: 11, color: "var(--text-secondary)", marginTop: 2 }}>
-                        {[
-                          fmtSearchTime(o.departAt) && `Dep ${fmtSearchTime(o.departAt)}`,
-                          fmtSearchTime(o.arriveAt) && `Arr ${fmtSearchTime(o.arriveAt)}`,
-                          o.stops != null && (o.stops === 0 ? "Non-stop" : `${o.stops} stop`),
-                          o.fareClass,
-                          o.baggage && `Bag ${o.baggage}`,
-                        ].filter(Boolean).join("  ·  ")}
-                      </div>
-                    </div>
-                    <div style={{ fontWeight: 700, fontSize: 13, whiteSpace: "nowrap" }}>
-                      {currency || "INR"} {o.fare != null ? Number(o.fare).toLocaleString() : "—"}
-                    </div>
-                    <button type="button" onClick={() => applySearchResult(o)} style={{ ...secondaryBtn, padding: "5px 10px" }}>
-                      <Plus size={12} /> Use
-                    </button>
+              <div style={board}>
+                {/* Header bar: route + date + sort (mirrors "Select onward flight"). */}
+                <div style={boardHeader}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                    <strong style={{ fontSize: 14 }}>Select onward flight</strong>
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 13, opacity: 0.92 }}>
+                      {searchMeta?.resolved?.from?.iata || searchForm.from || "—"}
+                      <Plane size={14} aria-hidden />
+                      {searchMeta?.resolved?.to?.iata || searchForm.to || "—"}
+                      {searchForm.departDate && (
+                        <span style={{ opacity: 0.8 }}>
+                          · {new Date(searchForm.departDate).toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long" })}
+                        </span>
+                      )}
+                    </span>
                   </div>
-                ))}
+                  <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12 }}>
+                    Sort
+                    <select
+                      value={sortBy}
+                      onChange={(e) => setSortBy(e.target.value)}
+                      aria-label="Sort flights"
+                      style={{ padding: "4px 8px", borderRadius: 6, fontSize: 12, color: "#fff", background: "transparent", border: "1px solid rgba(255,255,255,0.4)" }}
+                    >
+                      {SORT_OPTIONS.map((s) => (
+                        <option key={s.key} value={s.key} style={{ color: "#000" }}>{s.label}</option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+
+                <div style={boardBody}>
+                  {/* Left filter rail: stops + airlines. */}
+                  <aside style={filterRail}>
+                    <div style={filterGroupTitle}>Stops</div>
+                    {STOP_FILTERS.map((s) => (
+                      <label key={s.key} style={filterRow}>
+                        <input
+                          type="radio"
+                          name="stopsFilter"
+                          checked={stopsFilter === s.key}
+                          onChange={() => setStopsFilter(s.key)}
+                        />
+                        {s.label}
+                      </label>
+                    ))}
+                    {availableAirlines.length > 1 && (
+                      <>
+                        <div style={{ ...filterGroupTitle, marginTop: 14 }}>Airlines</div>
+                        <div style={{ display: "flex", gap: 6, fontSize: 11, marginBottom: 6 }}>
+                          <button type="button" onClick={allAirlines} style={linkBtn}>Select all</button>
+                          <span style={{ color: "var(--text-secondary)" }}>|</span>
+                          <button type="button" onClick={clearAirlines} style={linkBtn}>Clear all</button>
+                        </div>
+                        {availableAirlines.map((a) => (
+                          <label key={a.code} style={filterRow}>
+                            <input
+                              type="checkbox"
+                              checked={airlineSel ? airlineSel.has(a.code) : true}
+                              onChange={() => toggleAirline(a.code)}
+                            />
+                            <span style={airlineDotStyle(a.code)}>{a.code}</span>
+                            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.name}</span>
+                          </label>
+                        ))}
+                      </>
+                    )}
+                  </aside>
+
+                  {/* Results list. */}
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    {visibleResults.length === 0 ? (
+                      <p style={{ padding: 16, color: "var(--text-secondary)", fontSize: 13, margin: 0 }}>
+                        No flights match these filters.
+                      </p>
+                    ) : (
+                      visibleResults.map((o, i) => {
+                        const off = dayOffset(o.departAt, o.arriveAt);
+                        const seats = o.seatsAvailable;
+                        const nonStop = (o.stops ?? 0) === 0;
+                        return (
+                          <div key={i} style={{ ...resultCardWrap, borderTop: i === 0 ? "none" : "1px solid var(--border-color)" }}>
+                            <div style={resultRow}>
+                              {/* airline */}
+                              <div style={{ display: "flex", alignItems: "center", gap: 10, width: 148, minWidth: 0 }}>
+                                <span style={{ ...airlineDotStyle(o.airline), width: 30, height: 30, fontSize: 11 }}>{airlineInitials(o)}</span>
+                                <div style={{ minWidth: 0 }}>
+                                  <div style={{ fontWeight: 700, fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                    {o.airlineName || o.airline}
+                                  </div>
+                                  {o.flightNumber && <div style={{ fontSize: 11, color: "var(--text-secondary)" }}>{o.flightNumber}</div>}
+                                </div>
+                              </div>
+
+                              {/* timeline: depart → duration/stops → arrive */}
+                              <div style={{ display: "flex", alignItems: "center", gap: 10, flex: 1, minWidth: 0 }}>
+                                <div style={{ textAlign: "center" }}>
+                                  <div style={{ fontWeight: 700, fontSize: 15 }}>{fmtClock(o.departAt)}</div>
+                                  <div style={{ fontSize: 11, color: "var(--text-secondary)" }}>{o.from}</div>
+                                </div>
+                                <div style={{ flex: 1, minWidth: 48, textAlign: "center" }}>
+                                  {fmtDuration(o.durationMinutes) && (
+                                    <div style={{ fontSize: 11, color: "var(--text-secondary)" }}>{fmtDuration(o.durationMinutes)}</div>
+                                  )}
+                                  <div style={timelineBar}>{!nonStop && <span style={timelineStop} />}</div>
+                                  <div style={{ fontSize: 11, color: nonStop ? "#1e8449" : "var(--text-secondary)" }}>{stopsLabel(o.stops)}</div>
+                                </div>
+                                <div style={{ textAlign: "center" }}>
+                                  <div style={{ fontWeight: 700, fontSize: 15 }}>
+                                    {fmtClock(o.arriveAt)}
+                                    {off > 0 && <sup style={{ fontSize: 9, color: "var(--danger-color)", marginLeft: 1 }}>+{off}</sup>}
+                                  </div>
+                                  <div style={{ fontSize: 11, color: "var(--text-secondary)" }}>{o.to}</div>
+                                </div>
+                              </div>
+
+                              {/* class / baggage */}
+                              <div style={{ width: 84, textAlign: "center", fontSize: 11, color: "var(--text-secondary)" }}>
+                                {o.fareClass && <div>{o.fareClass}</div>}
+                                {o.baggage && <div>{o.baggage}</div>}
+                              </div>
+
+                              {/* price + seats */}
+                              <div style={{ width: 116, textAlign: "right" }}>
+                                <div style={{ fontWeight: 800, fontSize: 15 }}>
+                                  {currency || "INR"} {o.fare != null ? Number(o.fare).toLocaleString() : "—"}
+                                </div>
+                                <div style={{ fontSize: 10, color: "var(--text-secondary)" }}>total price</div>
+                                {seats != null && (
+                                  <div style={{ fontSize: 11, fontWeight: 600, marginTop: 2, color: seats <= 4 ? "#c0392b" : "#1e8449" }}>
+                                    {seats <= 0 ? "Sold out" : `${seats} seat${seats === 1 ? "" : "s"} left`}
+                                  </div>
+                                )}
+                              </div>
+
+                              {/* actions */}
+                              <div style={{ display: "flex", flexDirection: "column", gap: 4, width: 96 }}>
+                                <button type="button" onClick={() => applySearchResult(o)} style={selectBtn}>
+                                  Select
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setExpandedIdx(expandedIdx === i ? null : i)}
+                                  style={detailsLink}
+                                  aria-expanded={expandedIdx === i}
+                                >
+                                  Flight details
+                                </button>
+                              </div>
+                            </div>
+
+                            {expandedIdx === i && (
+                              <div style={detailsPanel}>
+                                <div><span style={detailLabel}>Flight</span>{o.airlineName || o.airline}{o.flightNumber ? ` · ${o.flightNumber}` : ""}</div>
+                                <div><span style={detailLabel}>Route</span>{o.from} → {o.to}</div>
+                                <div><span style={detailLabel}>Depart</span>{fmtClock(o.departAt)} {o.from}</div>
+                                <div><span style={detailLabel}>Arrive</span>{fmtClock(o.arriveAt)}{off > 0 ? ` (+${off}d)` : ""} {o.to}</div>
+                                {fmtDuration(o.durationMinutes) && <div><span style={detailLabel}>Duration</span>{fmtDuration(o.durationMinutes)}</div>}
+                                <div><span style={detailLabel}>Stops</span>{stopsLabel(o.stops) || "—"}</div>
+                                <div><span style={detailLabel}>Class</span>{o.fareClass || "—"}</div>
+                                {o.baggage && <div><span style={detailLabel}>Baggage</span>{o.baggage}</div>}
+                                {o.refundable != null && <div><span style={detailLabel}>Refundable</span>{o.refundable ? "Yes" : "No"}</div>}
+                                {seats != null && <div><span style={detailLabel}>Seats left</span>{seats <= 0 ? "Sold out" : seats}</div>}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
               </div>
             )}
           </section>
@@ -904,8 +1153,57 @@ const recentRow = {
   background: "var(--bg-color)", color: "var(--text-primary)",
   fontSize: 13,
 };
-const searchRow = {
-  display: "flex", alignItems: "center", gap: 10,
-  padding: "8px 10px", borderRadius: 6,
-  border: "1px solid var(--border-color)", background: "var(--bg-color)",
+// ── flight results board (GDS-style) ─────────────────────────────────
+const board = {
+  marginTop: 12, border: "1px solid var(--border-color)",
+  borderRadius: 10, overflow: "hidden",
+};
+const boardHeader = {
+  display: "flex", justifyContent: "space-between", alignItems: "center",
+  flexWrap: "wrap", gap: 8, padding: "10px 14px",
+  background: "#2f3a4a", color: "#fff",
+};
+const boardBody = { display: "flex", alignItems: "flex-start" };
+const filterRail = {
+  width: 190, flexShrink: 0, padding: 12, fontSize: 12,
+  borderRight: "1px solid var(--border-color)", background: "var(--bg-color)",
+  alignSelf: "stretch",
+};
+const filterGroupTitle = { fontWeight: 700, fontSize: 13, marginBottom: 8 };
+const filterRow = {
+  display: "flex", alignItems: "center", gap: 8,
+  padding: "3px 0", cursor: "pointer", color: "var(--text-primary)",
+};
+const linkBtn = {
+  background: "transparent", border: "none", padding: 0,
+  color: "var(--accent-color)", cursor: "pointer", fontSize: 11, fontWeight: 600,
+};
+const resultCardWrap = { background: "var(--surface-color)" };
+const resultRow = {
+  display: "flex", alignItems: "center", gap: 12, padding: "12px 14px",
+};
+const timelineBar = {
+  position: "relative", height: 2, borderRadius: 2,
+  background: "var(--border-color)", margin: "5px 6px",
+};
+const timelineStop = {
+  position: "absolute", left: "50%", top: -2, transform: "translateX(-50%)",
+  width: 6, height: 6, borderRadius: "50%", background: "var(--text-secondary)",
+};
+const selectBtn = {
+  background: "#1e8449", color: "#fff", border: "none", borderRadius: 5,
+  padding: "7px 10px", fontWeight: 700, fontSize: 12, cursor: "pointer",
+};
+const detailsLink = {
+  background: "transparent", border: "none", padding: 0,
+  color: "var(--accent-color)", cursor: "pointer", fontSize: 11,
+};
+const detailsPanel = {
+  padding: "10px 14px", background: "var(--bg-color)",
+  borderTop: "1px dashed var(--border-color)", fontSize: 12,
+  display: "grid", gap: 6, gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
+};
+const detailLabel = {
+  display: "inline-block", minWidth: 78,
+  color: "var(--text-secondary)", fontWeight: 600,
 };

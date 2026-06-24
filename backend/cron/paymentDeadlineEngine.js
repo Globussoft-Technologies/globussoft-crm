@@ -32,6 +32,10 @@ const notificationService = require("../lib/notificationService");
 const { safeNotifyTravelCustomer } = require("../lib/travelPortalNotificationService");
 
 const { FIRE_DAYS, shouldRemind, dayTag } = content;
+
+const PORTAL_BASE = process.env.PUBLIC_BASE_URL || "https://crm.globusdemos.com";
+const PORTAL_URL = `${PORTAL_BASE}/travel/portal`;
+
 const DEPOSIT_FRACTION = 0.5; // 50% deposit (PRD §4.7)
 const DEADLINE_LEAD_DAYS = 7; // deposit due 7 days before departure
 const OVERDUE_FROM_DAYS = 6; // T-6 onward (deadline missed) → flag + at-risk
@@ -141,6 +145,7 @@ async function runPaymentDeadlineTick(now = new Date()) {
       currency: itin.currency,
       daysToGo: d,
       deadlineLabel: formatDeadline(new Date(itin.startDate)),
+      portalUrl: PORTAL_URL,
     };
 
     if (isReminder) {

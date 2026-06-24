@@ -54,7 +54,10 @@ router.post("/draft", verifyToken, async (req, res) => {
 
     // Use Gemini if available
     if (model) {
-      const prompt = `You are a CRM email assistant for Globussoft Technologies. Write a professional business email body (no subject line, no "Subject:" prefix) based on the following context.
+      // Represent the TENANT's own organisation (e.g. "Travel Stall"), never the
+      // platform vendor that built the CRM.
+      const { orgName, bizDescriptor } = await resolveSenderOrg(req.user.tenantId);
+      const prompt = `You are an email assistant writing on behalf of ${orgName}${bizDescriptor ? `, ${bizDescriptor}` : ""}. Represent ONLY ${orgName} — never mention, describe, or sign off as any other company (in particular do NOT reference the software vendor that built this CRM). Write a professional business email body (no subject line, no "Subject:" prefix) based on the following context.
 
 Subject/Context: "${context}"
 ${toneInstruction}
@@ -62,11 +65,12 @@ ${contactContext}
 
 Requirements:
 - Write only the email body (greeting through sign-off)
+- The sender is ${orgName}; keep every claim consistent with ${orgName}'s business
 - Keep it concise (3-5 paragraphs max)
 - Be specific to the context, not generic
 - End with a clear call-to-action
 - Sign off as the sender (don't include a specific name, just "Best regards,")
-- Do not include subject line in the output`;
+- Do not include a subject line in the output`;
 
       const result = await model.generateContent(prompt);
       const draft = result.response.text();
@@ -91,7 +95,8 @@ router.post("/reply", verifyToken, async (req, res) => {
     if (!originalEmail) return res.status(400).json({ error: "Original email content required." });
 
     if (model) {
-      const prompt = `You are a CRM email assistant. Write a professional reply to the following email.
+      const { orgName, bizDescriptor } = await resolveSenderOrg(req.user.tenantId);
+      const prompt = `You are an email assistant writing on behalf of ${orgName}${bizDescriptor ? `, ${bizDescriptor}` : ""}. Represent ONLY ${orgName} — never reference any other company (including the CRM's software vendor). Write a professional reply to the following email.
 
 Original email:
 "${originalEmail.slice(0, 2000)}"
@@ -136,6 +141,28 @@ Context: "${context}"`;
     res.json({ subjects: [`Follow up: ${req.body.context}`, `RE: ${req.body.context}`] });
   }
 });
+
+// Resolve the SENDER's own organisation so AI-written emails represent the
+// tenant (e.g. "Travel Stall"), NOT the platform vendor that built the CRM.
+// Vertical adds a one-word business descriptor so the copy stays on-domain
+// (a travel agency writes about trips, not "software solutions"). Best-effort:
+// any lookup failure degrades to a neutral generic so drafting never 500s.
+async function resolveSenderOrg(tenantId) {
+  let orgName = "our company";
+  let bizDescriptor = "";
+  try {
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { name: true, vertical: true },
+    });
+    if (tenant && tenant.name) orgName = tenant.name;
+    if (tenant && tenant.vertical === "travel") bizDescriptor = "a travel agency";
+    else if (tenant && tenant.vertical === "wellness") bizDescriptor = "a wellness clinic";
+  } catch (e) {
+    console.warn("[AI] resolveSenderOrg failed (using generic):", e.message);
+  }
+  return { orgName, bizDescriptor };
+}
 
 function generateFallbackDraft(context, tone) {
   const greeting = tone === "casual" ? "Hey there," : tone === "formal" ? "Dear Sir/Madam," : "Hello,";

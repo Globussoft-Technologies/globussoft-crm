@@ -1609,6 +1609,7 @@ function renderTravelNav({
   return (
     <>
       <Link to="/travel" icon={Compass} label="Dashboard" requiredPermission={{ module: "reports", action: "read" }} />
+      <Link to="/travel/leads" icon={UserPlus} label="Leads" requiredPermission={{ module: "leads", action: "read" }} />
       <Link to="/travel/inbound-leads" icon={InboxIcon} label="Inbound Leads" requiredPermission={{ module: "inbound_leads", action: "read" }} />
       <Link to="/travel/diagnostics" icon={ClipboardCheck} label="Diagnostics" requiredPermission={{ module: "diagnostics", action: "read" }} />
       <Link to="/travel/itineraries" icon={MapIcon} label="Itineraries" requiredPermission={{ module: "itineraries", action: "read" }} />
@@ -1681,7 +1682,7 @@ function renderTravelNav({
       )}
 
       <Section label="Sales pipeline">
-        <Link to="/leads" icon={UserPlus} label="Leads" requiredPermission={{ module: "leads", action: "read" }} />
+        <Link to="/travel/leads" icon={UserPlus} label="Leads" requiredPermission={{ module: "leads", action: "read" }} />
         <Link to="/contacts" icon={Users} label="Contacts" requiredPermission={{ module: "contacts", action: "read" }} />
         <Link to="/pipeline" icon={Briefcase} label="Pipeline" requiredPermission={{ module: "pipeline", action: "read" }} />
       </Section>
@@ -1706,9 +1707,10 @@ function renderTravelNav({
         <Link to="/payments" icon={IndianRupee} label="Payments" requiredPermission={{ module: "payments", action: "read" }} />
       </Section>
 
-      <Section label="Reports">
-        <Link to="/reports" icon={BarChart3} label="Reports" requiredPermission={{ module: "reports", action: "read" }} />
-      </Section>
+      {/* The generic /reports link was removed here — travel uses its own
+          /travel/reports (linked above). The generic deal-stage chart +
+          "Globussoft CRM" PDF don't fit the travel verticals, and /reports is
+          now GenericOnly-gated anyway. */}
 
       {/* Admin + Platform — both blocks unwrapped from the legacy
           `{isManager && ...}` / `{isAdmin && ...}` outer guards. Each

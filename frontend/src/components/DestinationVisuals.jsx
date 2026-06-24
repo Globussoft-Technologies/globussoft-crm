@@ -10,7 +10,7 @@
 import { useEffect, useState } from "react";
 import { MapPin } from "lucide-react";
 import { destinationTheme } from "../utils/destinationTheme";
-import { useDestinationPhoto, useDestinationGallery } from "../utils/destinationPhotos";
+import { useDestinationPhoto, useDestinationGallery, useMultiDestinationGallery } from "../utils/destinationPhotos";
 
 // Full-bleed destination hero with the title + a caller-supplied subtitle row
 // (dates / status). For pages that DON'T have their own branded header.
@@ -68,11 +68,17 @@ export function DestinationHero({ destination, photoDestination, children }) {
 // Pointer-events off + aria-hidden — purely ambience; degrades to nothing when
 // there are no photos.
 const RAIL_MIN_VIEWPORT = 1100;
-const RAIL_TILES = 8;
+const RAIL_TILES = 10;
 
-export function DestinationSideRails({ destination, photoDestination }) {
+export function DestinationSideRails({ destination, photoDestination, photoDestinations }) {
   const galleryKey = photoDestination || destination;
-  const images = useDestinationGallery(galleryKey);
+  // Multi-city trips (e.g. "Makkah · Madinah · Paris · France") pass the full
+  // city list via photoDestinations so the rails span ALL cities, not just the
+  // first. Single-destination callers omit it and get the one-city gallery.
+  const multiList = Array.isArray(photoDestinations) ? photoDestinations.filter(Boolean) : [];
+  const single = useDestinationGallery(galleryKey);
+  const multi = useMultiDestinationGallery(multiList);
+  const images = multiList.length > 1 ? multi : single;
   const [wide, setWide] = useState(false);
   const [hoveredIdx, setHoveredIdx] = useState(null);
   useEffect(() => {
@@ -92,7 +98,7 @@ export function DestinationSideRails({ destination, photoDestination }) {
   const rightSet = images.filter((_, i) => i % 2 === 1);
   const fill = (set) => {
     const base = set.length ? set : images; // fallback if a side is empty
-    return Array.from({ length: Math.min(RAIL_TILES, Math.max(base.length, 1)) }, (_, i) => base[i % base.length]);
+    return Array.from({ length: RAIL_TILES }, (_, i) => base[i % base.length]);
   };
 
   // Fade the strip into the page at top + bottom so it doesn't hard-cut.

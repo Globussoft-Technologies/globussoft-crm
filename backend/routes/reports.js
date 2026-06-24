@@ -415,6 +415,57 @@ router.get("/export-csv", async (req, res) => {
   }
 });
 
+// Render a bordered, columnar table into a pdfkit doc so detail reports
+// (deals / contacts / tasks / agent-performance) export as REAL tables instead
+// of pipe-joined text. columns: [{ header, width, align? }]; rows: array of
+// cell-string arrays. Handles header fill, per-cell clipping (ellipsis), zebra
+// striping, and page breaks (re-drawing the header on each new page).
+function drawReportTable(doc, columns, rows, opts = {}) {
+  const x = opts.x || 50;
+  const ROW_H = opts.rowH || 20;
+  const PAD = 4;
+  const totalW = columns.reduce((s, c) => s + c.width, 0);
+  let y = opts.startY != null ? opts.startY : doc.y;
+
+  const header = () => {
+    doc.save();
+    doc.rect(x, y, totalW, ROW_H).fill(opts.headerColor || "#1f3a5f");
+    doc.restore();
+    doc.fillColor("#ffffff").font("Helvetica-Bold").fontSize(9);
+    let cx = x;
+    for (const c of columns) {
+      doc.text(String(c.header), cx + PAD, y + 6, { width: c.width - PAD * 2, align: c.align || "left", lineBreak: false, ellipsis: true });
+      cx += c.width;
+    }
+    y += ROW_H;
+  };
+
+  header();
+  doc.font("Helvetica").fontSize(8);
+  if (rows.length === 0) {
+    doc.fillColor("#888888").text("No records.", x + PAD, y + 6, { width: totalW - PAD * 2, lineBreak: false });
+    doc.y = y + ROW_H;
+    return doc.y;
+  }
+  rows.forEach((row, i) => {
+    if (y + ROW_H > 790) { doc.addPage(); y = 50; header(); doc.font("Helvetica").fontSize(8); }
+    if (i % 2 === 1) { doc.save(); doc.rect(x, y, totalW, ROW_H).fill("#f4f6f9"); doc.restore(); }
+    doc.fillColor("#222222");
+    let cx = x;
+    for (let ci = 0; ci < columns.length; ci += 1) {
+      const c = columns[ci];
+      doc.text(row[ci] == null ? "" : String(row[ci]), cx + PAD, y + 6, { width: c.width - PAD * 2, align: c.align || "left", lineBreak: false, ellipsis: true });
+      cx += c.width;
+    }
+    doc.save();
+    doc.moveTo(x, y + ROW_H).lineTo(x + totalW, y + ROW_H).lineWidth(0.3).strokeColor("#dddddd").stroke();
+    doc.restore();
+    y += ROW_H;
+  });
+  doc.y = y;
+  return y;
+}
+
 // ─── PDF Export ───
 router.get("/export-pdf", async (req, res) => {
   try {
@@ -448,40 +499,93 @@ router.get("/export-pdf", async (req, res) => {
       doc.fontSize(14).fillColor('#000').text('Agent Performance Summary', { underline: true });
       doc.moveDown(0.5);
 
+      const rows = [];
       for (const user of users) {
-        const [dw, rev, dt, tc, cm, es] = await Promise.all([
+        const [dw, rev, dt, tc, cm] = await Promise.all([
           prisma.deal.count({ where: { ...baseWhere, ownerId: user.id, stage: 'won' } }),
           prisma.deal.aggregate({ where: { ...baseWhere, ownerId: user.id, stage: 'won' }, _sum: { amount: true } }),
           prisma.deal.count({ where: { ...baseWhere, ownerId: user.id } }),
           prisma.task.count({ where: { ...baseWhere, userId: user.id, status: 'Completed' } }),
           prisma.callLog.count({ where: { ...baseWhere, userId: user.id } }),
-          prisma.emailMessage.count({ where: { ...baseWhere, userId: user.id, direction: 'OUTBOUND' } }),
         ]);
-
-        doc.fontSize(11).fillColor('#333').text(user.name || user.email, { continued: false });
-        doc.fontSize(9).fillColor('#666');
-        doc.text(`  Deals Won: ${dw}  |  Revenue: ${formatMoney(rev._sum.amount || 0, currency, locale)}  |  Total Deals: ${dt}  |  Win Rate: ${dt > 0 ? Math.round((dw / dt) * 100) : 0}%`);
-        doc.text(`  Tasks Completed: ${tc}  |  Calls: ${cm}  |  Emails Sent: ${es}`);
-        doc.moveDown(0.5);
+        rows.push([
+          user.name || user.email,
+          String(dw),
+          formatMoney(rev._sum.amount || 0, currency, locale),
+          String(dt),
+          `${dt > 0 ? Math.round((dw / dt) * 100) : 0}%`,
+          String(tc),
+          String(cm),
+        ]);
       }
+      drawReportTable(doc, [
+        { header: 'Agent', width: 120 },
+        { header: 'Won', width: 45, align: 'right' },
+        { header: 'Revenue', width: 95, align: 'right' },
+        { header: 'Deals', width: 50, align: 'right' },
+        { header: 'Win %', width: 50, align: 'right' },
+        { header: 'Tasks', width: 50, align: 'right' },
+        { header: 'Calls', width: 50, align: 'right' },
+      ], rows, { startY: doc.y });
     } else if (type === 'deals') {
       const deals = await prisma.deal.findMany({
-        where: baseWhere, orderBy: { createdAt: 'desc' }, take: 100,
+        where: baseWhere, orderBy: { createdAt: 'desc' }, take: 200,
         include: { contact: { select: { name: true } }, owner: { select: { name: true } } }
       });
-
       doc.fontSize(14).fillColor('#000').text(`Deals Report (${deals.length} records)`, { underline: true });
       doc.moveDown(0.5);
-
-      const cols = [50, 150, 220, 290, 370, 440];
-      doc.fontSize(9).fillColor('#333');
-      doc.text('Title', cols[0], doc.y, { width: 95 });
-
-      for (const deal of deals) {
-        if (doc.y > 720) { doc.addPage(); }
-        doc.fontSize(8).fillColor('#444');
-        doc.text(`${deal.title}  |  ${formatMoney(deal.amount, deal.currency || currency, locale)}  |  ${deal.stage}  |  ${deal.owner?.name || 'N/A'}  |  ${deal.contact?.name || 'N/A'}`, 50);
-      }
+      const rows = deals.map((d) => [
+        d.title || '—',
+        formatMoney(d.amount, d.currency || currency, locale),
+        d.stage || '—',
+        d.owner?.name || 'N/A',
+        d.contact?.name || 'N/A',
+      ]);
+      drawReportTable(doc, [
+        { header: 'Title', width: 165 },
+        { header: 'Amount', width: 80, align: 'right' },
+        { header: 'Stage', width: 70 },
+        { header: 'Owner', width: 90 },
+        { header: 'Contact', width: 90 },
+      ], rows, { startY: doc.y });
+    } else if (type === 'contacts') {
+      const contacts = await prisma.contact.findMany({
+        where: baseWhere, orderBy: { createdAt: 'desc' }, take: 200,
+        include: { assignedTo: { select: { name: true } } }
+      });
+      doc.fontSize(14).fillColor('#000').text(`Contacts Report (${contacts.length} records)`, { underline: true });
+      doc.moveDown(0.5);
+      const rows = contacts.map((c) => [
+        c.name || '—', c.email || '—', c.status || '—', c.source || '—', c.assignedTo?.name || '—',
+      ]);
+      drawReportTable(doc, [
+        { header: 'Name', width: 110 },
+        { header: 'Email', width: 150 },
+        { header: 'Status', width: 70 },
+        { header: 'Source', width: 70 },
+        { header: 'Assigned To', width: 95 },
+      ], rows, { startY: doc.y });
+    } else if (type === 'tasks') {
+      const tasks = await prisma.task.findMany({
+        where: baseWhere, orderBy: { createdAt: 'desc' }, take: 200,
+        include: { user: { select: { name: true } }, contact: { select: { name: true } } }
+      });
+      doc.fontSize(14).fillColor('#000').text(`Tasks Report (${tasks.length} records)`, { underline: true });
+      doc.moveDown(0.5);
+      const rows = tasks.map((t) => [
+        t.title || '—',
+        t.status || '—',
+        t.dueDate ? new Date(t.dueDate).toLocaleDateString(locale) : '—',
+        t.user?.name || '—',
+        t.contact?.name || '—',
+      ]);
+      drawReportTable(doc, [
+        { header: 'Title', width: 160 },
+        { header: 'Status', width: 75 },
+        { header: 'Due', width: 80 },
+        { header: 'Owner', width: 90 },
+        { header: 'Contact', width: 90 },
+      ], rows, { startY: doc.y });
     } else {
       const data = metric === "revenue"
         ? await prisma.deal.groupBy({ by: [groupBy], where: baseWhere, _sum: { amount: true } })
@@ -489,12 +593,14 @@ router.get("/export-pdf", async (req, res) => {
 
       doc.fontSize(14).fillColor('#000').text(`${metric === 'revenue' ? 'Revenue' : 'Deal Count'} by ${groupBy}`, { underline: true });
       doc.moveDown(0.5);
-
-      data.forEach(d => {
-        const name = String(d[groupBy] || 'Unknown').toUpperCase();
-        const val = metric === 'revenue' ? formatMoney(d._sum.amount || 0, currency, locale) : d._count.id;
-        doc.fontSize(10).fillColor('#333').text(`${name}: ${val}`);
-      });
+      const rows = data.map((d) => [
+        String(d[groupBy] || 'Unknown').toUpperCase(),
+        metric === 'revenue' ? formatMoney(d._sum.amount || 0, currency, locale) : String(d._count.id),
+      ]);
+      drawReportTable(doc, [
+        { header: String(groupBy).toUpperCase(), width: 300 },
+        { header: metric === 'revenue' ? 'Revenue' : 'Count', width: 195, align: 'right' },
+      ], rows, { startY: doc.y });
     }
 
     doc.end();

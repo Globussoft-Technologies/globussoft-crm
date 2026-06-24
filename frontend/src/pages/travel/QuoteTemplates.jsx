@@ -30,7 +30,7 @@
 // admin-curated library.
 
 import { useEffect, useState, useContext } from "react";
-import { FileText, Plus, Pencil, Trash2 } from "lucide-react";
+import { FileText, Plus, Pencil, Trash2, Sparkles, Loader2 } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import {
@@ -66,6 +66,28 @@ const ACTIVE_FILTER = [
   { value: "true", label: "Active only" },
   { value: "false", label: "Inactive only" },
 ];
+
+const LINE_TYPES = [
+  { value: "flight",    label: "Flight",    emoji: "✈" },
+  { value: "hotel",     label: "Hotel",     emoji: "🏨" },
+  { value: "transport", label: "Transport", emoji: "🚌" },
+  { value: "transfer",  label: "Transfer",  emoji: "🚕" },
+  { value: "visa",      label: "Visa",      emoji: "📋" },
+  { value: "service",   label: "Service",   emoji: "⭐" },
+  { value: "other",     label: "Other",     emoji: "📦" },
+];
+
+function parseLines(linesJson) {
+  try {
+    const arr = JSON.parse(linesJson || "[]");
+    return Array.isArray(arr) ? arr.map(l => ({
+      lineType: l.lineType || "service",
+      description: l.description || "",
+      quantity: Number(l.quantity) || 1,
+      unitPrice: Number(l.unitPrice) || 0,
+    })) : [];
+  } catch (_e) { return []; }
+}
 
 const EMPTY_FORM = {
   name: "",
@@ -121,6 +143,13 @@ export default function QuoteTemplates() {
   const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
+  const [aiPrompt, setAiPrompt] = useState("");
+  const [generating, setGenerating] = useState(false);
+  const [lines, setLines] = useState([]);
+
+  const addLine = () => setLines(prev => [...prev, { lineType: "service", description: "", quantity: 1, unitPrice: 0 }]);
+  const removeLine = (i) => setLines(prev => prev.filter((_, idx) => idx !== i));
+  const updateLine = (i, field, value) => setLines(prev => prev.map((l, idx) => idx === i ? { ...l, [field]: value } : l));
 
   const load = () => {
     setLoading(true);
@@ -149,6 +178,25 @@ export default function QuoteTemplates() {
   const resetForm = () => {
     setForm(EMPTY_FORM);
     setEditingId(null);
+    setAiPrompt("");
+    setLines([]);
+  };
+
+  const generateLines = async () => {
+    if (!aiPrompt.trim()) return;
+    setGenerating(true);
+    try {
+      const result = await fetchApi("/api/travel/quote-templates/generate", {
+        method: "POST",
+        body: JSON.stringify({ prompt: aiPrompt, category: form.category, currency: form.currency }),
+      });
+      setLines(parseLines(result.linesJson));
+      if (result.stub) notify.info("AI is in stub mode — these are sample lines. Add a GEMINI_API_KEY for real generation.");
+    } catch (err) {
+      notify.error(err?.message || "Failed to generate lines");
+    } finally {
+      setGenerating(false);
+    }
   };
 
   const openCreate = () => {
@@ -167,9 +215,9 @@ export default function QuoteTemplates() {
       category: t.category || "",
       currency: t.currency || "INR",
       subBrand: t.subBrand || "tmc",
-      linesJson: t.linesJson || "[]",
       isActive: t.isActive !== false,
     });
+    setLines(parseLines(t.linesJson));
     setEditingId(t.id);
     setShowForm(true);
   };
@@ -180,19 +228,17 @@ export default function QuoteTemplates() {
       notify.error("Name is required");
       return;
     }
-    // Validate JSON locally before posting — backend will also validate,
-    // but a local check yields a faster + clearer error for operators.
-    let parsedLines;
-    try {
-      parsedLines = JSON.parse(form.linesJson);
-    } catch (_e) {
-      notify.error("Lines JSON is not valid JSON");
+    if (lines.length === 0) {
+      notify.error("Add at least one line item");
       return;
     }
-    if (!Array.isArray(parsedLines)) {
-      notify.error("Lines JSON must encode an array");
-      return;
-    }
+    const linesJson = JSON.stringify(lines.map(l => ({
+      lineType: l.lineType || "service",
+      description: String(l.description || "").trim(),
+      quantity: Number(l.quantity) || 1,
+      unitPrice: Number(l.unitPrice) || 0,
+      currency: form.currency || "INR",
+    })));
     setSaving(true);
     try {
       const payload = {
@@ -201,7 +247,7 @@ export default function QuoteTemplates() {
         category: form.category || null,
         currency: form.currency || "INR",
         subBrand: form.subBrand || null,
-        linesJson: form.linesJson,
+        linesJson,
         isActive: !!form.isActive,
       };
       if (editingId) {
@@ -240,6 +286,7 @@ export default function QuoteTemplates() {
 
   return (
     <div style={{ padding: 24, maxWidth: 1200, margin: "0 auto", animation: "fadeIn 0.4s ease-out" }}>
+      <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
       <header
         style={{
           display: "flex",
@@ -367,14 +414,78 @@ export default function QuoteTemplates() {
             style={{ ...inputStyle, gridColumn: "1 / -1", minHeight: 60 }}
             aria-label="Description"
           />
-          <textarea
-            placeholder='Lines JSON * — e.g. [{"lineType":"hotel","description":"3 nights","quantity":3,"unitPrice":4500}]'
-            required
-            value={form.linesJson}
-            onChange={(e) => setForm({ ...form, linesJson: e.target.value })}
-            style={{ ...inputStyle, gridColumn: "1 / -1", minHeight: 140, fontFamily: "monospace" }}
-            aria-label="Lines JSON"
-          />
+          {/* AI line-item generator */}
+          <div style={{ gridColumn: "1 / -1", background: "rgba(139,92,246,0.07)", border: "1px solid rgba(139,92,246,0.22)", borderRadius: 10, padding: "12px 14px" }}>
+            <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 0.4, color: "#a78bfa", marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
+              <Sparkles size={13} /> Generate with AI
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <input
+                type="text"
+                value={aiPrompt}
+                onChange={(e) => setAiPrompt(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && !generating && generateLines()}
+                placeholder='e.g. "7-night Umrah package from Mumbai, 2 adults, economy flights"'
+                style={{ ...inputStyle, flex: 1, margin: 0, fontSize: 13 }}
+                disabled={generating}
+                aria-label="AI prompt for line-item generation"
+              />
+              <button
+                type="button"
+                onClick={generateLines}
+                disabled={generating || !aiPrompt.trim()}
+                style={{
+                  display: "flex", alignItems: "center", gap: 6,
+                  padding: "0 16px", borderRadius: 8, border: "none",
+                  background: generating || !aiPrompt.trim() ? "rgba(139,92,246,0.3)" : "#7c3aed",
+                  color: "#fff", fontWeight: 600, fontSize: 13, cursor: generating || !aiPrompt.trim() ? "not-allowed" : "pointer", whiteSpace: "nowrap",
+                }}
+              >
+                {generating ? <><Loader2 size={13} style={{ animation: "spin 1s linear infinite" }} /> Generating…</> : <><Sparkles size={13} /> Generate</>}
+              </button>
+            </div>
+            <div style={{ fontSize: 11, color: "rgba(255,255,255,0.4)", marginTop: 6 }}>
+              AI will fill the Lines JSON below — review and edit before saving.
+            </div>
+          </div>
+
+          {/* Visual line-item editor */}
+          <div style={{ gridColumn: "1 / -1" }}>
+            <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 8, textTransform: "uppercase", letterSpacing: 0.4 }}>
+              Line Items {lines.length > 0 && `(${lines.length})`}
+            </div>
+            {lines.length > 0 && (
+              <div style={{ border: "1px solid var(--border-color)", borderRadius: 8, overflow: "hidden", marginBottom: 8 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "120px 1fr 64px 130px 30px", background: "var(--subtle-bg, rgba(255,255,255,0.03))", padding: "6px 10px", fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: 0.4, borderBottom: "1px solid var(--border-color)" }}>
+                  <span>Type</span><span style={{ paddingLeft: 8 }}>Description</span><span style={{ paddingLeft: 8 }}>Qty</span><span style={{ paddingLeft: 8 }}>Unit Price</span><span />
+                </div>
+                {lines.map((line, i) => (
+                  <div key={i} style={{ display: "grid", gridTemplateColumns: "120px 1fr 64px 130px 30px", padding: "5px 10px", borderBottom: i < lines.length - 1 ? "1px solid rgba(255,255,255,0.04)" : "none", alignItems: "center", gap: 0 }}>
+                    <select value={line.lineType} onChange={(e) => updateLine(i, "lineType", e.target.value)} style={{ ...inputStyle, padding: "4px 6px", fontSize: 12 }}>
+                      {LINE_TYPES.map(t => <option key={t.value} value={t.value}>{t.emoji} {t.label}</option>)}
+                    </select>
+                    <input type="text" value={line.description} onChange={(e) => updateLine(i, "description", e.target.value)} placeholder="Description" style={{ ...inputStyle, padding: "4px 8px", fontSize: 12, marginLeft: 6, width: "calc(100% - 14px)" }} />
+                    <input type="number" value={line.quantity} onChange={(e) => updateLine(i, "quantity", e.target.value)} min={1} style={{ ...inputStyle, padding: "4px 6px", fontSize: 12, marginLeft: 6, width: "calc(100% - 14px)", textAlign: "center" }} />
+                    <div style={{ display: "flex", alignItems: "center", marginLeft: 6, gap: 3 }}>
+                      <span style={{ fontSize: 11, color: "var(--text-secondary)", flexShrink: 0 }}>{form.currency}</span>
+                      <input type="number" value={line.unitPrice} onChange={(e) => updateLine(i, "unitPrice", e.target.value)} min={0} style={{ ...inputStyle, padding: "4px 6px", fontSize: 12, flex: 1, minWidth: 0 }} />
+                    </div>
+                    <button type="button" onClick={() => removeLine(i)} style={{ ...iconBtn, color: "var(--danger-color, #f43f5e)", marginLeft: 4, padding: 4 }} title="Remove">
+                      <Trash2 size={12} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            {lines.length === 0 && (
+              <div style={{ padding: 14, border: "1px dashed var(--border-color)", borderRadius: 8, textAlign: "center", color: "var(--text-secondary)", fontSize: 13, marginBottom: 8 }}>
+                No line items yet — use Generate with AI above, or add manually
+              </div>
+            )}
+            <button type="button" onClick={addLine} style={{ ...secondaryBtn, fontSize: 12, padding: "5px 10px" }}>
+              <Plus size={12} /> Add line
+            </button>
+          </div>
           <div style={{ display: "flex", gap: 8, gridColumn: "1 / -1" }}>
             <button type="submit" disabled={saving} style={{ ...primaryBtn, background: "var(--success-color, var(--primary-color))" }}>
               {saving ? "Saving…" : editingId ? "Save Changes" : "Save"}

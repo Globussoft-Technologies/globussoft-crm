@@ -67,9 +67,45 @@ const STATE = Object.freeze({
 
 const AUTH_DIR = path.join(__dirname, "..", ".wwebjs_auth");
 
+// Puppeteer/whatsapp-web.js emit async errors from deep inside Chromium when a
+// session is torn down (phone unlinks → LOGOUT, browser closes mid-inject, a
+// frame detaches during navigation). These surface as unhandledRejection /
+// uncaughtException that Node fatally terminates on — i.e. one tenant's WhatsApp
+// blip would crash the ENTIRE backend (as seen: "Attempted to use detached
+// Frame" → process exit). This guard swallows ONLY those known-benign puppeteer
+// teardown errors (logging them) and re-throws everything else so genuine bugs
+// still crash loudly. Installed once, from init().
+const _PUPPETEER_TEARDOWN_RE = /detached Frame|Target closed|Session closed|Protocol error|Execution context was destroyed|page has been closed|Cannot read properties of (?:null|undefined).*(?:frame|page)/i;
+function isPuppeteerTeardownError(err) {
+  const m = String((err && err.stack) || (err && err.message) || err || "");
+  if (!_PUPPETEER_TEARDOWN_RE.test(m)) return false;
+  // Be conservative: only swallow when it actually came through wweb/puppeteer.
+  return /whatsapp-web\.js|puppeteer/i.test(m) || /detached Frame|Target closed|Session closed/i.test(m);
+}
+let _crashGuardInstalled = false;
+function installPuppeteerCrashGuard() {
+  if (_crashGuardInstalled) return;
+  _crashGuardInstalled = true;
+  process.on("unhandledRejection", (reason) => {
+    if (isPuppeteerTeardownError(reason)) {
+      console.warn(`[whatsappWeb] swallowed puppeteer teardown rejection (non-fatal): ${(reason && reason.message) || reason}`);
+      return;
+    }
+    throw reason; // preserve default crash-on-real-bug behavior
+  });
+  process.on("uncaughtException", (err) => {
+    if (isPuppeteerTeardownError(err)) {
+      console.warn(`[whatsappWeb] swallowed puppeteer teardown exception (non-fatal): ${(err && err.message) || err}`);
+      return;
+    }
+    throw err; // preserve default crash-on-real-bug behavior
+  });
+}
+
 function init(io) {
   _io = io;
   console.log("[whatsappWeb] init — socket handle attached; restoring previously-linked sessions…");
+  module.exports.installPuppeteerCrashGuard();
   // Auto-restore on boot: re-initialize every tenant that was linked before the
   // restart. LocalAuth persisted their creds to .wwebjs_auth/session-travel-<id>,
   // so connect() resumes WITHOUT a new QR. Fire-and-forget so server startup is
@@ -293,6 +329,42 @@ function killBrowsersForDir(tenantId) {
   }
 }
 
+// Remove the stale Chromium singleton-lock artifacts an UNCLEAN exit leaves in a
+// tenant's LocalAuth profile. When the server is killed without running
+// shutdown() (nodemon SIGUSR2 / `taskkill /F` on Windows / a crash / a hard
+// pm2 kill), Chromium never gets to release its profile lock — so the NEXT boot
+// launches against a profile that still looks "in use", the multi-device
+// session fails to resume, and whatsapp-web.js falls back to issuing a fresh QR
+// (the "won't reconnect after restart" symptom). Deleting just the lock files
+// (NEVER the session/IndexedDB data) lets a perfectly-valid saved session
+// resume with no re-scan. Best-effort + idempotent — missing files are fine.
+function clearStaleLocks(tenantId) {
+  tenantId = Number(tenantId);
+  try {
+    const fs = require("fs");
+    const dir = path.join(AUTH_DIR, `session-travel-${tenantId}`);
+    if (!fs.existsSync(dir)) return;
+    // Chromium user-data-dir singleton markers (root of the profile) + the
+    // DevTools port hint. These are the lock artifacts a clean shutdown clears
+    // itself; only an unclean kill leaves them behind. The actual session lives
+    // in IndexedDB/Local Storage subfolders and is deliberately left untouched.
+    const lockNames = ["SingletonLock", "SingletonCookie", "SingletonSocket", "DevToolsActivePort"];
+    let cleared = 0;
+    for (const name of lockNames) {
+      const p = path.join(dir, name);
+      try {
+        if (fs.existsSync(p) || fs.lstatSync(p)) {
+          fs.rmSync(p, { force: true, recursive: true });
+          cleared += 1;
+        }
+      } catch { /* not present / already gone */ }
+    }
+    if (cleared) console.log(`[whatsappWeb] tenant ${tenantId} cleared ${cleared} stale Chromium lock artifact(s) before launch`);
+  } catch (e) {
+    console.warn(`[whatsappWeb] tenant ${tenantId} stale-lock cleanup best-effort failed: ${e.message}`);
+  }
+}
+
 // Destroy a tenant's client + (optionally) wipe its on-disk LocalAuth so the
 // next connect gets a fresh QR. Used by reset + logout. Destroy is raced
 // against a timeout so a stuck client can't block the wipe; a leftover
@@ -335,6 +407,18 @@ async function clearSession(tenantId, { wipe = true } = {}) {
  * { reset:true } first wipes any saved session (escape hatch for a stale
  * LocalAuth that's stuck restoring) so a fresh QR is guaranteed.
  */
+// In-flight connect promises, keyed by tenantId. Boot-restore, the panel's
+// POST /connect, and an auto-reconnect can all call connect() within the same
+// startup window. The body has async gaps (clearSession / resolveChromePath
+// awaits) between the idempotency check and `sessions.set`, so concurrent
+// callers used to race past the guard and each launch a Chromium for the SAME
+// number. Two live linked-devices on one account → WhatsApp force-LOGOUTs the
+// device (wiping the session); and destroying one client while another is
+// mid-initialize throws puppeteer's "Attempted to use detached Frame", which
+// took down the entire backend process. Coalescing guarantees ONE connect per
+// tenant at a time — concurrent callers share the first call's promise.
+const _connecting = new Map();
+
 async function connect(tenantId, { reset = false } = {}) {
   tenantId = Number(tenantId);
   if (!canLaunch()) {
@@ -344,6 +428,18 @@ async function connect(tenantId, { reset = false } = {}) {
     sessions.set(tenantId, stub);
     return module.exports.getState(tenantId);
   }
+  if (_connecting.has(tenantId)) return _connecting.get(tenantId);
+  const p = _connectImpl(tenantId, { reset });
+  _connecting.set(tenantId, p);
+  try {
+    return await p;
+  } finally {
+    _connecting.delete(tenantId);
+  }
+}
+
+async function _connectImpl(tenantId, { reset = false } = {}) {
+  tenantId = Number(tenantId);
 
   if (reset) {
     await module.exports.clearSession(tenantId, { wipe: true });
@@ -365,6 +461,11 @@ async function connect(tenantId, { reset = false } = {}) {
   // only kills orphans on the reset/dead-session paths; a clean first connect
   // after restart skipped it, so do it unconditionally here. Best-effort no-op.
   module.exports.killBrowsersForDir(tenantId);
+  // …then clear the stale singleton-lock files that an unclean exit (nodemon
+  // restart / hard kill / crash) left in the profile, so a VALID saved session
+  // can actually resume instead of being rejected → fresh QR. Order matters:
+  // kill the orphan process first (releases OS handles), then remove the files.
+  module.exports.clearStaleLocks(tenantId);
 
   // Lazy-require the heavy deps only on the real path.
   const { Client, LocalAuth } = require("whatsapp-web.js");
@@ -452,6 +553,54 @@ async function disconnect(tenantId, { logout = false } = {}) {
   if (logout) await module.exports.purgeChats(tenantId).catch(() => {});
   module.exports.emitState(tenantId);
   return { state: STATE.DISCONNECTED, connected: false, phone: null, qr: null };
+}
+
+/**
+ * Gracefully tear down EVERY live session on process shutdown (pm2 restart,
+ * SIGTERM/SIGINT). This is the load-bearing fix for "logged out from the CRM on
+ * server restart while the phone still shows the device linked".
+ *
+ * WHY IT MATTERS — whatsapp-web.js persists its multi-device credentials to a
+ * Chromium LevelDB profile under .wwebjs_auth/session-travel-<id>. If the
+ * process exits WITHOUT calling client.destroy(), Chromium is killed mid-write
+ * and the credential store is left half-written / corrupt. On the next boot
+ * restoreSessions() launches against the corrupt profile, WhatsApp rejects the
+ * stale creds, and the client falls back to issuing a fresh QR — i.e. the CRM
+ * appears "logged out" even though the phone never unlinked the device (only an
+ * explicit logout() unlinks server-side; local corruption does not). destroy()
+ * closes the browser cleanly so LevelDB flushes and the session resumes next
+ * boot with NO re-scan.
+ *
+ * Each destroy is time-boxed (a hung client can't block the whole shutdown) and
+ * the on-disk session dir is NEVER wiped here — we want it intact to resume.
+ * manualClose is set first so the client's own "disconnected" event (fired by
+ * destroy) doesn't kick off a pointless auto-reconnect into a dying process.
+ */
+async function shutdown({ perClientTimeoutMs = 5000 } = {}) {
+  const ids = Array.from(sessions.keys());
+  if (!ids.length) return { closed: 0 };
+  console.log(`[whatsappWeb] graceful shutdown — destroying ${ids.length} live session(s) so their auth stores flush cleanly`);
+  let closed = 0;
+  await Promise.all(
+    ids.map(async (tenantId) => {
+      const s = sessions.get(tenantId);
+      if (!s) return;
+      s.manualClose = true; // suppress auto-reconnect during teardown
+      if (s.watchdog) { clearTimeout(s.watchdog); s.watchdog = null; }
+      if (!s.client) return;
+      try {
+        await Promise.race([
+          s.client.destroy(),
+          new Promise((r) => setTimeout(r, perClientTimeoutMs)),
+        ]);
+        closed += 1;
+      } catch (e) {
+        console.warn(`[whatsappWeb] tenant ${tenantId} shutdown destroy warn: ${e.message}`);
+      }
+    }),
+  );
+  console.log(`[whatsappWeb] graceful shutdown done — ${closed}/${ids.length} session(s) closed cleanly`);
+  return { closed };
 }
 
 /**
@@ -995,6 +1144,24 @@ async function createThreadSafe(prisma, data) {
     try {
       return await prisma.whatsAppThread.create({ data: d });
     } catch (e) {
+      // Lost the create RACE — another path (a concurrent importAllChats, or an
+      // inbound message arriving mid-import) already created the same
+      // (tenantId, contactPhone) between our findUnique and this create. The
+      // compound unique `WhatsAppThread_tenantId_contactPhone_key` then trips
+      // P2002. Recover by UPDATING the row that won the race instead of
+      // throwing, so thread creation is idempotent under concurrency. This was
+      // surfacing as a continuous "[travel-whatsapp] import error" stream during
+      // reconnect storms (each ready event re-fires the import).
+      if (e.code === "P2002" && d.tenantId != null && d.contactPhone != null) {
+        // eslint-disable-next-line no-unused-vars
+        const { tenantId, contactPhone, unreadCount, ...rest } = d;
+        // Don't clobber the winner's unreadCount on a create→update fallback.
+        return await updateThreadSafe(
+          prisma,
+          { tenantId_contactPhone: { tenantId, contactPhone } },
+          rest,
+        );
+      }
       const stripped = stripUnknownArg(d, e.message);
       if (!stripped) throw e;
       d = stripped;
@@ -1150,6 +1317,16 @@ async function importAllChats(tenantId, { perChatLimit = 25, maxChats = 300 } = 
   tenantId = Number(tenantId);
   if (!module.exports.isConnected(tenantId)) return { imported: false, reason: "not-connected" };
   const session = getSession(tenantId);
+  // In-flight guard — a reconnect storm fires `ready` repeatedly, each
+  // scheduling an import. Running two imports for the same tenant concurrently
+  // makes them race on the findUnique→create thread upsert (P2002). Skip if one
+  // is already running; the guard is cleared in the finally below.
+  if (session.importing) {
+    console.log(`[whatsappWeb] tenant ${tenantId} import already in progress — skipping duplicate run`);
+    return { imported: false, reason: "already-importing" };
+  }
+  session.importing = true;
+  try {
   const channelPhone = session && session.phone;
   const prisma = require("../lib/prisma");
 
@@ -1260,6 +1437,9 @@ async function importAllChats(tenantId, { perChatLimit = 25, maxChats = 300 } = 
     _io.to(`tenant:${tenantId}`).emit("whatsapp:imported", { tenantId, threads: threadsTouched, messages });
   }
   return { imported: true, threads: threadsTouched, messages };
+  } finally {
+    session.importing = false;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1279,6 +1459,58 @@ function isEnabled(tenantId) {
 // endpoint/token; channelNumber is the connected number when available.
 function getConfig() {
   return { endpoint: null, token: null, channelNumber: null };
+}
+
+/**
+ * Resolve the best WhatsApp chatId to use for an outbound send. Modern WhatsApp
+ * accounts appear as @lid threads (not @c.us), so if we always send to
+ * <number>@c.us we may land in a separate thread from the live @lid conversation
+ * — a "thread mismatch". This helper checks the stored thread for this contact
+ * first (by contactId, then by phone) and if it's a lid: key reconstructs the
+ * @lid chatId so the message lands in the same thread as existing history.
+ * Falls back to phone→@c.us when no thread is found. Never throws.
+ */
+async function resolveSendChatId(tenantId, normalizedPhone, contactId) {
+  try {
+    const prisma = require("../lib/prisma");
+    if (!prisma.whatsAppThread) return module.exports.toChatId(normalizedPhone);
+    let thread = null;
+    // Prefer lookup by contactId — works even if phone normalisation differs.
+    if (contactId) {
+      thread = await prisma.whatsAppThread.findFirst({
+        where: { tenantId: Number(tenantId), contactId: Number(contactId) },
+        select: { contactPhone: true },
+        orderBy: { lastMessageAt: "desc" },
+      });
+    }
+    // Fallback: look up by the normalised phone (both with/without +).
+    if (!thread && normalizedPhone) {
+      const bare = String(normalizedPhone).replace(/\D/g, "");
+      thread = await prisma.whatsAppThread.findFirst({
+        where: {
+          tenantId: Number(tenantId),
+          OR: [
+            { contactPhone: `+${bare}` },
+            { contactPhone: bare },
+            { contactPhone: normalizedPhone },
+          ],
+        },
+        select: { contactPhone: true },
+        orderBy: { lastMessageAt: "desc" },
+      });
+    }
+    if (thread && thread.contactPhone) {
+      const cp = thread.contactPhone;
+      if (cp.startsWith("lid:")) {
+        // Reconstruct the @lid chatId — keeps the message in the existing thread.
+        const lidDigits = cp.slice(4);
+        return `${lidDigits}@lid`;
+      }
+      // Thread is stored as +91XXXXXXXXXX or bare digits — still @c.us.
+      return module.exports.toChatId(cp);
+    }
+  } catch { /* fall through */ }
+  return module.exports.toChatId(normalizedPhone);
 }
 
 /**
@@ -1318,10 +1550,13 @@ async function sendSessionMessage({ tenantId, subBrand, toPhone, text, contactId
   }
 
   try {
-    const chatId = module.exports.toChatId(to);
+    // Use resolveSendChatId — prefers the @lid chatId when the contact's thread
+    // is a lid: key so the message lands in the right conversation, not a stale
+    // @c.us thread. Falls back to <number>@c.us when no thread is found.
+    const chatId = String(to).includes("@") ? to : await module.exports.resolveSendChatId(tenantId, to, contactId);
     const sent = await session.client.sendMessage(chatId, text);
     const providerMsgId = sent && sent.id ? sent.id._serialized : null;
-    console.log(`[whatsappWeb] text sent tenant=${tenantId} to=${to}`);
+    console.log(`[whatsappWeb] text sent tenant=${tenantId} to=${to} chatId=${chatId}`);
     const row = await module.exports.persistMessageRow({ tenantId, contactId, to: rowTo, body: text, templateName: tpl, status: "SENT", providerMsgId, threadId: resolvedThreadId, userId, from });
     return { stub: false, sent: true, status: "SENT", to, channel: from, providerMsgId, messageRowId: row ? row.id : null };
   } catch (e) {
@@ -1475,12 +1710,16 @@ async function getMediaResponse() {
 module.exports = {
   STATE,
   init,
+  installPuppeteerCrashGuard,
+  isPuppeteerTeardownError,
   restoreSessions,
   // lifecycle
   connect,
   disconnect,
+  shutdown,
   clearSession,
   killBrowsersForDir,
+  clearStaleLocks,
   resolveChromePath,
   getState,
   getSession,
@@ -1509,6 +1748,7 @@ module.exports = {
   normalizePhone,
   toChatId,
   fromChatId,
+  resolveSendChatId,
   persistMessageRow,
   ensureOutboundThread,
   // watiClient-compatible surface

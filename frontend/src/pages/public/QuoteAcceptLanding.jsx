@@ -53,14 +53,14 @@ function deriveDestination(lines) {
       if (city && !cities.includes(city)) cities.push(city);
     }
   }
-  if (cities.length) return { title: cities.join(" · "), photo: cities[0] };
+  if (cities.length) return { title: cities.join(" · "), photo: cities[0], cities };
   for (const l of lines || []) {
     if (l.lineType === "flight" && l.description) {
       const m = /(?:→|->)\s*([A-Za-z .]+?)\s*(?:\(|\[|$)/.exec(l.description);
-      if (m && m[1]) return { title: m[1].trim(), photo: m[1].trim() };
+      if (m && m[1]) return { title: m[1].trim(), photo: m[1].trim(), cities: [m[1].trim()] };
     }
   }
-  return { title: "Your trip", photo: null };
+  return { title: "Your trip", photo: null, cities: [] };
 }
 
 const ACTION = Object.freeze({
@@ -257,6 +257,24 @@ export default function QuoteAcceptLanding() {
           <p style={{ color: "var(--text-muted, #6b7280)", marginTop: 12 }}>
             Our team will be in touch shortly to finalise the next steps.
           </p>
+          {/* On accept, prompt the customer to pay the advance to confirm. The
+              same link is also sent to them via email + WhatsApp by the backend. */}
+          {done.kind === "accepted" && done.advancePayment && done.advancePayment.link && (
+            <div style={payNowBoxStyle}>
+              <p style={{ margin: 0, fontWeight: 600, color: "#111827" }}>
+                Confirm your booking — pay your {done.advancePayment.percent || 50}% advance
+              </p>
+              <p style={{ margin: "6px 0 12px", color: "var(--text-muted, #6b7280)", fontSize: 14 }}>
+                {formatMoney(done.advancePayment.amount, done.advancePayment.currency)} due now.
+                {Array.isArray(done.advancePayment.channelsSent) && done.advancePayment.channelsSent.length > 0
+                  ? ` We've also sent this link to you via ${done.advancePayment.channelsSent.map((c) => (c === "whatsapp" ? "WhatsApp" : "email")).join(" & ")}.`
+                  : ""}
+              </p>
+              <a href={done.advancePayment.link} target="_blank" rel="noopener noreferrer" style={primaryBtnStyle}>
+                Pay {formatMoney(done.advancePayment.amount, done.advancePayment.currency)} now
+              </a>
+            </div>
+          )}
         </div>
       </div>
     );
@@ -271,7 +289,7 @@ export default function QuoteAcceptLanding() {
   return (
     <div style={pageStyle}>
       {/* Culture photos in the wide desktop gutters (keyless Wikipedia). */}
-      <DestinationSideRails destination={dest.title} photoDestination={dest.photo} />
+      <DestinationSideRails destination={dest.title} photoDestination={dest.photo} photoDestinations={dest.cities} />
       <div style={{ ...cardStyle, textAlign: "left", padding: 0, overflow: "hidden" }}>
         {/* Destination hero — real photo + themed gradient, swaps with the trip. */}
         <DestinationHero destination={dest.title} photoDestination={dest.photo}>
@@ -293,20 +311,20 @@ export default function QuoteAcceptLanding() {
                     <li key={l.id} style={itemRowStyle}>
                       <Icon size={18} aria-hidden style={{ color: "var(--primary-color, #2563eb)", flexShrink: 0 }} />
                       <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontWeight: 600, color: "#111827" }}>{l.description}</div>
-                        <div style={{ fontSize: 12, color: "var(--text-muted, #6b7280)" }}>
+                        <div style={{ fontWeight: 600, fontSize: 15, color: "#111827", letterSpacing: 0.1 }}>{l.description}</div>
+                        <div style={{ fontSize: 12, color: "var(--text-muted, #6b7280)", marginTop: 2 }}>
                           {qtyLabel(l)}
                         </div>
                       </div>
-                      <div style={{ fontWeight: 700, whiteSpace: "nowrap", color: "#111827" }}>{formatMoney(l.amount, l.currency || quote.currency)}</div>
+                      <div style={{ fontWeight: 800, fontSize: 15, whiteSpace: "nowrap", color: "#111827" }}>{formatMoney(l.amount, l.currency || quote.currency)}</div>
                     </li>
                   );
                 })}
               </ul>
             )}
             <div style={costBoxStyle}>
-              <span style={{ fontSize: 16, fontWeight: 700 }}>Total</span>
-              <span style={{ fontSize: 18, fontWeight: 800, color: "var(--primary-color, #2563eb)" }}>{totalDisplay}</span>
+              <span style={{ fontSize: 13, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", color: "rgba(255,255,255,0.72)" }}>Total</span>
+              <span style={{ fontSize: 22, fontWeight: 800, color: "#fff", letterSpacing: 0.3 }}>{totalDisplay}</span>
             </div>
           </section>
 
@@ -326,14 +344,7 @@ export default function QuoteAcceptLanding() {
             >
               <CheckCircle2 size={18} /> Accept
             </button>
-            <button
-              type="button"
-              style={secondaryBtnStyle}
-              onClick={() => setAction(ACTION.COUNTER)}
-              aria-label="Submit a counter-offer"
-            >
-              <MessageSquare size={18} /> Counter-offer
-            </button>
+
             <button
               type="button"
               style={ghostBtnStyle}
@@ -444,8 +455,23 @@ export default function QuoteAcceptLanding() {
 
 // ─── styles ───────────────────────────────────────────────
 const pageStyle = {
+  // This is a PUBLIC, customer-facing page. Pin the theme CSS variables to light
+  // values on the wrapper so the whole subtree renders the same regardless of
+  // the operator's in-app dark-mode setting. Without this, var(--bg-color) /
+  // var(--text-color) etc. inherit the app's DARK theme (the fallbacks only
+  // apply when the var is undefined — in-app it's defined), which painted the
+  // counter-offer box dark-on-dark and made the labels unreadable. The values
+  // mirror each var()'s intended light fallback; siblings (TripBooking) achieve
+  // the same with hardcoded colours.
+  "--bg-color": "#f9fafb",
+  "--card-bg": "#ffffff",
+  "--text-color": "#111827",
+  "--text-muted": "#6b7280",
+  "--border-color": "#e5e7eb",
+  "--primary-color": "#2563eb",
+  "--accent-color": "#2563eb",
   minHeight: "100vh",
-  background: "var(--bg-color, #f9fafb)",
+  background: "#f9fafb",
   padding: "32px 16px",
   display: "flex",
   justifyContent: "center",
@@ -478,22 +504,24 @@ const subHeadingStyle = {
 const itemRowStyle = {
   display: "flex",
   alignItems: "center",
-  gap: 12,
-  padding: "12px 14px",
-  border: "1px solid var(--border-color, #e5e7eb)",
-  borderRadius: 10,
-  background: "var(--card-bg, #fff)",
+  gap: 14,
+  padding: "14px 16px",
+  border: "1px solid #eef1f5",
+  borderRadius: 12,
+  background: "#fff",
+  boxShadow: "0 1px 2px rgba(16,24,40,0.04), 0 4px 12px rgba(16,24,40,0.05)",
 };
 
 const costBoxStyle = {
   display: "flex",
   justifyContent: "space-between",
   alignItems: "center",
-  marginTop: 16,
-  padding: "14px 16px",
-  background: "var(--bg-color, #f7f3eb)",
-  borderRadius: 12,
-  border: "1px solid var(--border-color, #e5e7eb)",
+  marginTop: 18,
+  padding: "18px 20px",
+  background: "linear-gradient(135deg, #0f172a 0%, #1e293b 100%)",
+  borderRadius: 14,
+  border: "none",
+  boxShadow: "0 8px 24px rgba(15,23,42,0.18)",
 };
 
 const actionGridStyle = {
@@ -537,6 +565,15 @@ const confirmBoxStyle = {
   background: "var(--bg-color, #f9fafb)",
   borderRadius: 12,
   textAlign: "left",
+};
+
+const payNowBoxStyle = {
+  marginTop: 20,
+  padding: 18,
+  background: "#eef6ff",
+  border: "1px solid #cfe3ff",
+  borderRadius: 12,
+  textAlign: "center",
 };
 
 const labelStyle = {

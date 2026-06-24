@@ -171,6 +171,14 @@ export default function QuotesAdmin() {
       .finally(() => setLoading(false));
   };
 
+  // Sync the global sub-brand selector (sidebar) into the local filter so this
+  // list re-scopes when the user switches brand — consistent with InvoicesAdmin
+  // and the other travel modules. Without this the page ignored the global
+  // selector entirely (only the in-page dropdown filtered).
+  useEffect(() => {
+    setSubBrand(activeSubBrand || "");
+  }, [activeSubBrand]);
+
   useEffect(load, [subBrand, status, contactIdFilter]);
 
   const resetForm = () => {

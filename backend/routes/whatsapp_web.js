@@ -106,7 +106,13 @@ router.get("/status", verifyToken, async (req, res) => {
 router.post("/connect", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
   try {
     const reset = Boolean(req.body && (req.body.reset === true || req.body.reset === "true"));
-    if (!waClient.getState(req.user.tenantId).connected) {
+    // Only purge the mirror on an explicit RESET (fresh QR / new number). A plain
+    // connect must NEVER purge: during a boot-resume the session is briefly
+    // not-yet-CONNECTED (INITIALIZING/AUTHENTICATED), and the old `!connected`
+    // guard wiped the operator's entire imported history every time the panel was
+    // opened mid-resume. reset already wipes the session dir; pair the chat purge
+    // with it so the two stay consistent.
+    if (reset) {
       await waClient.purgeChats(req.user.tenantId);
     }
     const st = await waClient.connect(req.user.tenantId, { reset });

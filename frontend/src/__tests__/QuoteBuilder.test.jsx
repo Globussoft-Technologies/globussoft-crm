@@ -187,7 +187,7 @@ describe('<QuoteBuilder /> — page chrome + NEW mode', () => {
     expect(
       await screen.findByRole('heading', { name: /Quote Builder/i }),
     ).toBeInTheDocument();
-    expect(screen.getByLabelText(/Customer/i)).toBeInTheDocument();
+    expect(screen.getByLabelText('Customer')).toBeInTheDocument();
     expect(screen.getByLabelText(/^Currency$/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Sub-brand/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Valid until/i)).toBeInTheDocument();
@@ -245,7 +245,7 @@ describe('<QuoteBuilder /> — page chrome + NEW mode', () => {
       expect(contactsFetch).toBeTruthy();
     });
 
-    const customerSelect = screen.getByLabelText(/Customer/i);
+    const customerSelect = screen.getByLabelText('Customer');
     expect(customerSelect.tagName).toBe('SELECT');
     // The default "Select customer *" placeholder + the 3 seeded contacts
     // from defaultFetchHandler.
@@ -298,7 +298,7 @@ describe('<QuoteBuilder /> — EDIT mode hydration', () => {
       );
       expect(get).toBeTruthy();
     });
-    const contactInput = await screen.findByLabelText(/Customer/i);
+    const contactInput = await screen.findByLabelText('Customer');
     expect(contactInput.value).toBe('5050');
     expect(screen.getByLabelText(/^Currency$/i).value).toBe('USD');
     expect(screen.getByLabelText(/Sub-brand/i).value).toBe('rfu');
@@ -665,7 +665,7 @@ describe('<QuoteBuilder /> — Save Draft (quote header)', () => {
         ),
       ).toBeTruthy();
     });
-    fireEvent.change(screen.getByLabelText(/Customer/i), { target: { value: '5050' } });
+    fireEvent.change(screen.getByLabelText('Customer'), { target: { value: '5050' } });
     fireEvent.change(screen.getByLabelText(/^Currency$/i), { target: { value: 'usd' } });
     fireEvent.click(screen.getByRole('button', { name: /Save Draft/i }));
     await waitFor(() => {
@@ -753,7 +753,7 @@ describe('<QuoteBuilder /> — RBAC USER role', () => {
     expect(screen.queryByRole('button', { name: /Download PDF/i })).toBeNull();
     expect(screen.queryByRole('button', { name: /Add line/i })).toBeNull();
     // Header fields still render (USER can READ).
-    expect(screen.getByLabelText(/Customer/i)).toBeInTheDocument();
+    expect(screen.getByLabelText('Customer')).toBeInTheDocument();
   });
 });
 
@@ -1468,10 +1468,10 @@ describe('<QuoteBuilder /> — TBO flight/hotel search', () => {
     fireEvent.change(screen.getByLabelText('Flight date'), { target: { value: '2026-08-02' } });
     fireEvent.click(screen.getByRole('button', { name: /Search flights/i }));
 
-    // Result row appears (with the resolved city→IATA echo).
-    await screen.findByText(/Air India · AI-302 DEL→JED/);
+    // Result row appears (GDS-style board: airline + flight number rendered).
+    await screen.findByText('AI-302');
     // Add → a draft flight line shows up in the line-items table.
-    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Add$/ }));
     expect(screen.getByDisplayValue('Air India AI-302 DEL → JED (Economy)')).toBeInTheDocument();
     // The fare lands as the line unit price.
     expect(screen.getByDisplayValue('50000')).toBeInTheDocument();
@@ -1495,7 +1495,7 @@ describe('<QuoteBuilder /> — TBO flight/hotel search', () => {
     fireEvent.click(screen.getByRole('button', { name: /Search hotels/i }));
 
     await screen.findByText(/Jeddah Grand Hotel/);
-    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+    fireEvent.click(screen.getByRole('button', { name: /Add to quote/i }));
     expect(screen.getByDisplayValue('Jeddah Grand Hotel, Jeddah — Deluxe Room')).toBeInTheDocument();
     // 2-night stay (08-02 → 08-04) multiplies: unit = ₹9,000/night, qty = 2.
     expect(screen.getByDisplayValue('9000')).toBeInTheDocument();

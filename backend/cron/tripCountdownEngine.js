@@ -38,6 +38,9 @@ const { safeNotifyTravelCustomer } = require("../lib/travelPortalNotificationSer
 // SUT's CJS require chain under this vitest setup).
 const { FIRE_DAYS, shouldFire, dayTag } = content;
 
+const PORTAL_BASE = process.env.PUBLIC_BASE_URL || "https://crm.globusdemos.com";
+const PORTAL_URL = `${PORTAL_BASE}/travel/portal`;
+
 // Packing nudges go only to PAID trips — `accepted`-but-unpaid is the deposit-
 // chase phase (cron/paymentDeadlineEngine.js owns it). Kept as PAID_STATUSES;
 // the old name AGREEMENT_SECURED is exported as an alias for back-compat.
@@ -105,6 +108,7 @@ async function runTripCountdownTick(now = new Date()) {
         destination: itin.destination,
         daysToGo: d,
         customerName: contact.name,
+        portalUrl: PORTAL_URL,
       });
     } catch (e) {
       console.error(`[TripCountdown] content build failed for itin=${itin.id} ${tag}: ${e.message}`);

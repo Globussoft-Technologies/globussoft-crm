@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useContext } from "react";
 import {
   Receipt,
   Plus,
@@ -15,6 +15,9 @@ import {
 } from "lucide-react";
 import { fetchApi, getAuthToken } from "../utils/api";
 import { useNotify } from "../utils/notify";
+import { AuthContext } from "../App";
+import { useActiveSubBrand } from "../utils/subBrand";
+import { SUB_BRAND_IDS, subBrandShortLabel } from "../utils/travelSubBrand";
 
 const STATUS_CONFIG = {
   PAID: { color: "#10b981", bg: "rgba(16,185,129,0.15)", label: "Paid" },
@@ -49,13 +52,19 @@ const formatCurrency = (v) =>
 
 export default function Invoices() {
   const notify = useNotify();
+  // Travel vertical only — invoices get tagged + filtered by sub-brand. For
+  // generic/wellness tenants isTravel is false and none of this UI renders, so
+  // their Invoices page is unchanged.
+  // AuthContext exposes `tenant` at the top level (same source the Sidebar uses
+  // to switch to the travel nav); fall back to user.tenant for safety.
+  const { user, tenant } = useContext(AuthContext) || {};
+  const isTravel = (tenant?.vertical || user?.tenant?.vertical) === "travel";
+  const { activeSubBrand, setActiveSubBrand } = useActiveSubBrand() || {};
   const [invoices, setInvoices] = useState([]);
   const [contacts, setContacts] = useState([]);
   const [deals, setDeals] = useState([]);
-  const [paymentConfig, setPaymentConfig] = useState({
-    stripe: { configured: false },
-    razorpay: { configured: false },
-  });
+  const [linkModal, setLinkModal] = useState(null); // { inv, url } | null
+  const [linkCopied, setLinkCopied] = useState(false);
   const [newInvoice, setNewInvoice] = useState({
     invoiceNum: "",
     contactId: "",
@@ -63,90 +72,36 @@ export default function Invoices() {
     amount: "",
     dueDate: "",
     status: "UNPAID",
+    subBrand: "",
   });
   // #124: replace the old prompt() flow with a proper modal so the user can
   // pick frequency, see what they're about to activate, and stop recurring
   // explicitly instead of guessing the toggle.
   const [recurInvoice, setRecurInvoice] = useState(null);
   const [recurFreq, setRecurFreq] = useState("monthly");
-  const [paymentModal, setPaymentModal] = useState(null);
-  const [paymentGateway, setPaymentGateway] = useState("razorpay");
-  const [processingPayment, setProcessingPayment] = useState(false);
   const [statusFilter, setStatusFilter] = useState("ALL");
 
+  // Re-fetch when the travel sub-brand filter changes (no-op for other
+  // verticals — activeSubBrand stays undefined there).
   useEffect(() => {
     loadData();
-    loadPaymentConfig();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSubBrand]);
 
-  // Stripe Checkout return handler. Stripe redirects back to
-  // /invoices?stripe=success&session_id=… on payment success (or ?stripe=cancel
-  // if the user backed out). We finalize the Payment row server-side and
-  // refresh the invoice list, then strip the query string so a page refresh
-  // doesn't re-fire the confirmation.
+  // Default the create-form brand to the currently-active sub-brand (travel).
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const stripeOutcome = params.get("stripe");
-    const sessionId = params.get("session_id");
-    if (!stripeOutcome) return;
-
-    const cleanUrl = () => {
-      window.history.replaceState({}, "", window.location.pathname);
-    };
-
-    if (stripeOutcome === "cancel") {
-      notify.info("Stripe payment was canceled.");
-      cleanUrl();
-      return;
-    }
-
-    if (stripeOutcome === "success" && sessionId) {
-      (async () => {
-        try {
-          const result = await fetchApi(
-            "/api/payments/confirm-stripe-session",
-            {
-              method: "POST",
-              body: JSON.stringify({ sessionId }),
-            },
-          );
-          if (result?.paid) {
-            notify.success("Payment received via Stripe.");
-            loadData();
-          } else {
-            notify.info(
-              "Payment is processing. The invoice will update once Stripe confirms.",
-            );
-          }
-        } catch (err) {
-          console.error("[Payment] Stripe confirm error:", err);
-        } finally {
-          cleanUrl();
-        }
-      })();
+    if (isTravel && activeSubBrand) {
+      setNewInvoice((p) => (p.subBrand ? p : { ...p, subBrand: activeSubBrand }));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [isTravel, activeSubBrand]);
 
-  const loadPaymentConfig = async () => {
-    try {
-      const config = await fetchApi("/api/payments/config");
-      setPaymentConfig(config);
-      // Set default to available gateway
-      if (config.razorpay?.configured) {
-        setPaymentGateway("razorpay");
-      } else if (config.stripe?.configured) {
-        setPaymentGateway("stripe");
-      }
-    } catch (err) {
-      console.error("Failed to load payment config:", err);
-    }
-  };
 
   const loadData = async () => {
     try {
+      const qs = isTravel && activeSubBrand ? `?subBrand=${encodeURIComponent(activeSubBrand)}` : "";
       const [invs, c, d] = await Promise.all([
-        fetchApi("/api/billing"),
+        fetchApi(`/api/billing${qs}`),
         fetchApi("/api/contacts"),
         fetchApi("/api/deals"),
       ]);
@@ -207,6 +162,12 @@ export default function Invoices() {
 
   const createInvoice = async (e) => {
     e.preventDefault();
+    // Travel: sub-brand is required so every invoice is brand-attributed for
+    // analytics (the whole point of this feature).
+    if (isTravel && !newInvoice.subBrand) {
+      notify.error("Please pick a sub-brand for this invoice");
+      return;
+    }
     try {
       await fetchApi("/api/billing", {
         method: "POST",
@@ -215,6 +176,7 @@ export default function Invoices() {
           dueDate: newInvoice.dueDate,
           contactId: newInvoice.contactId,
           dealId: newInvoice.dealId || undefined,
+          subBrand: isTravel ? newInvoice.subBrand : undefined,
         }),
       });
       setNewInvoice({
@@ -224,6 +186,7 @@ export default function Invoices() {
         amount: "",
         dueDate: "",
         status: "UNPAID",
+        subBrand: isTravel ? activeSubBrand || "" : "",
       });
       loadData();
     } catch (err) {
@@ -297,190 +260,13 @@ export default function Invoices() {
     }
   };
 
-  const initiatePayment = (inv) => {
-    setPaymentModal(inv);
-  };
-
-  const openRazorpayCheckout = async (paymentData, invoice) => {
+  const generatePaymentLink = async (inv) => {
     try {
-      // Use key from order response first, then fallback to config
-      const razorpayKeyId = paymentData.key || paymentConfig.razorpay?.keyId;
-      console.log("[Payment] Razorpay Key ID:", razorpayKeyId);
-      console.log("[Payment] Order ID:", paymentData.orderId);
-      console.log("[Payment] Full payment data:", paymentData);
-
-      if (!razorpayKeyId) {
-        notify.error(
-          "⚠️ Razorpay public key not configured. Key: " +
-            JSON.stringify(paymentData),
-        );
-        setProcessingPayment(false);
-        return;
-      }
-
-      if (!paymentData.orderId) {
-        notify.error("⚠️ Payment order creation failed");
-        setProcessingPayment(false);
-        return;
-      }
-
-      const options = {
-        key: razorpayKeyId,
-        order_id: paymentData.orderId,
-        amount: Math.round(invoice.amount * 100),
-        currency: "INR",
-        name: "Invoice Payment",
-        description: `Invoice ${invoice.invoiceNum}`,
-        handler: async (response) => {
-          console.log("[Payment] Razorpay response received:", response);
-          try {
-            const verifyResponse = await fetchApi(
-              "/api/payments/confirm-razorpay",
-              {
-                method: "POST",
-                body: JSON.stringify({
-                  razorpay_order_id: response.razorpay_order_id,
-                  razorpay_payment_id: response.razorpay_payment_id,
-                  razorpay_signature: response.razorpay_signature,
-                  paymentId: paymentData.paymentId,
-                }),
-              },
-            );
-
-            console.log("[Payment] Verification response:", verifyResponse);
-            if (verifyResponse?.success) {
-              notify.success(
-                `✓ Payment successful! Invoice ${invoice.invoiceNum} marked as PAID.`,
-              );
-              setPaymentModal(null);
-              await loadData();
-            } else {
-              notify.error(
-                `Payment verification failed: ${verifyResponse?.error || "Unknown error"}`,
-              );
-            }
-          } catch (err) {
-            console.error("[Payment] Verification error:", err);
-            notify.error(`Verification failed: ${err.message}`);
-          } finally {
-            setProcessingPayment(false);
-          }
-        },
-        prefill: {
-          name: invoice.contact?.name || "Customer",
-          email: invoice.contact?.email || "customer@example.com",
-        },
-        theme: { color: "#6366f1" },
-        modal: {
-          ondismiss: () => {
-            console.log("[Payment] Razorpay modal dismissed");
-            setProcessingPayment(false);
-          },
-        },
-      };
-
-      console.log("[Payment] Opening Razorpay with options:", options);
-      const rzp = new window.Razorpay(options);
-      rzp.open();
+      const result = await fetchApi(`/api/billing/${inv.id}/payment-link`, { method: "POST" });
+      setLinkCopied(false);
+      setLinkModal({ inv, url: result.url });
     } catch (err) {
-      console.error("[Payment] Error opening checkout:", err);
-      notify.error(`Failed to open payment: ${err.message}`);
-      setProcessingPayment(false);
-    }
-  };
-
-  const processPayment = async () => {
-    if (!paymentModal) return;
-    setProcessingPayment(true);
-    console.log(
-      "[Payment] Starting payment for invoice:",
-      paymentModal.invoiceNum,
-      "Gateway:",
-      paymentGateway,
-    );
-
-    try {
-      if (paymentGateway === "razorpay") {
-        if (!paymentConfig.razorpay?.configured) {
-          notify.error(
-            "⚠️ Razorpay is not configured. Please add credentials to .env file.",
-          );
-          setProcessingPayment(false);
-          return;
-        }
-
-        console.log("[Payment] Creating Razorpay order...");
-        const response = await fetchApi("/api/payments/create-razorpay-order", {
-          method: "POST",
-          body: JSON.stringify({
-            invoiceId: paymentModal.id,
-            amount: paymentModal.amount,
-            currency: "INR",
-          }),
-        });
-
-        console.log("[Payment] Order response:", response);
-        if (!response?.orderId) {
-          throw new Error(
-            "Failed to create payment order: " + JSON.stringify(response),
-          );
-        }
-
-        if (!window.Razorpay) {
-          console.log("[Payment] Loading Razorpay SDK...");
-          const script = document.createElement("script");
-          script.src = "https://checkout.razorpay.com/v1/checkout.js";
-          script.async = true;
-          script.onload = () => {
-            console.log("[Payment] Razorpay SDK loaded");
-            openRazorpayCheckout(response, paymentModal);
-          };
-          script.onerror = () => {
-            console.error("[Payment] Failed to load Razorpay SDK");
-            notify.error("Failed to load Razorpay SDK");
-            setProcessingPayment(false);
-          };
-          document.body.appendChild(script);
-        } else {
-          console.log("[Payment] Razorpay SDK already loaded");
-          await openRazorpayCheckout(response, paymentModal);
-        }
-      } else if (paymentGateway === "stripe") {
-        if (!paymentConfig.stripe?.configured) {
-          notify.error(
-            "⚠️ Stripe is not configured yet. Please add credentials to .env file.",
-          );
-          setProcessingPayment(false);
-          return;
-        }
-
-        const response = await fetchApi(
-          "/api/payments/create-stripe-checkout-session",
-          {
-            method: "POST",
-            body: JSON.stringify({
-              invoiceId: paymentModal.id,
-              amount: paymentModal.amount,
-            }),
-          },
-        );
-
-        if (response?.url) {
-          // Hosted-Checkout flow: redirect to Stripe. On success Stripe sends
-          // the user back to /invoices?stripe=success&session_id=… which the
-          // mount-effect below detects and finalizes via /confirm-stripe-session.
-          window.location.href = response.url;
-        } else {
-          notify.error("Failed to start Stripe checkout");
-          setProcessingPayment(false);
-        }
-      }
-    } catch (err) {
-      // fetchApi has already surfaced the server's message in a toast; a
-      // second "Payment failed: …" toast on top is noise. Just log + clear
-      // the spinner so the modal can be retried.
-      console.error("[Payment] Error:", err);
-      setProcessingPayment(false);
+      notify.error(err?.message || "Failed to generate payment link");
     }
   };
 
@@ -584,9 +370,61 @@ export default function Invoices() {
           {invoices.length} total invoices
         </span>
 
+        {/* Travel vertical — Sub-brand filter for the ledger. Bound to the
+            shared active-sub-brand context (same source the sidebar selector
+            uses), so picking here filters the ledger AND keeps the whole travel
+            vertical in sync. Hidden for generic/wellness. */}
+        {isTravel && (
+          <div
+            style={{
+              marginLeft: "auto",
+              display: "flex",
+              alignItems: "center",
+              gap: "0.5rem",
+              padding: "0.25rem 0.75rem",
+              borderRadius: "999px",
+              background: "var(--subtle-bg-4)",
+              border: "1px solid var(--border-color)",
+            }}
+          >
+            <Filter size={14} color="var(--text-secondary)" />
+            <label
+              htmlFor="invoice-subbrand-filter"
+              style={{ fontSize: "0.8rem", color: "var(--text-secondary)", fontWeight: 600 }}
+            >
+              Sub-brand:
+            </label>
+            <select
+              id="invoice-subbrand-filter"
+              value={activeSubBrand || ""}
+              onChange={(e) => setActiveSubBrand && setActiveSubBrand(e.target.value || null)}
+              aria-label="Filter invoices by sub-brand"
+              style={{
+                background: "transparent",
+                border: "none",
+                color: "var(--text-primary)",
+                fontSize: "0.8rem",
+                fontWeight: 600,
+                cursor: "pointer",
+                outline: "none",
+                padding: "0.25rem 0.25rem",
+              }}
+            >
+              <option value="" style={{ background: "var(--bg-color, #0b0c10)", color: "var(--text-primary, #fff)" }}>
+                All sub-brands
+              </option>
+              {SUB_BRAND_IDS.map((id) => (
+                <option key={id} value={id} style={{ background: "var(--bg-color, #0b0c10)", color: "var(--text-primary, #fff)" }}>
+                  {subBrandShortLabel(id)}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
         <div
           style={{
-            marginLeft: "auto",
+            marginLeft: isTravel ? "0.5rem" : "auto",
             display: "flex",
             alignItems: "center",
             gap: "0.5rem",
@@ -766,6 +604,36 @@ export default function Invoices() {
                 ))}
               </select>
             </div>
+
+            {isTravel && (
+              <div>
+                <label
+                  style={{
+                    display: "block",
+                    fontSize: "0.875rem",
+                    marginBottom: "0.5rem",
+                    color: "var(--text-secondary)",
+                  }}
+                >
+                  Sub-brand
+                </label>
+                <select
+                  className="input-field"
+                  required
+                  value={newInvoice.subBrand}
+                  onChange={(e) => handleFieldChange("subBrand", e.target.value)}
+                  style={{ background: "var(--input-bg)" }}
+                  aria-label="Sub-brand"
+                >
+                  <option value="">-- Select Sub-brand --</option>
+                  {SUB_BRAND_IDS.map((id) => (
+                    <option key={id} value={id}>
+                      {subBrandShortLabel(id)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
 
             <div>
               <label
@@ -1126,6 +994,25 @@ export default function Invoices() {
                         title={inv.contact?.name || "Unknown"}
                       >
                         {inv.contact?.name || "Unknown"}
+                        {isTravel && (inv.subBrand || inv.contact?.subBrand) && (
+                          <span
+                            style={{
+                              display: "inline-block",
+                              marginLeft: 8,
+                              padding: "1px 7px",
+                              borderRadius: 999,
+                              fontSize: "0.65rem",
+                              fontWeight: 700,
+                              textTransform: "uppercase",
+                              letterSpacing: 0.3,
+                              background: "rgba(79,70,229,0.16)",
+                              color: "#818cf8",
+                              verticalAlign: "middle",
+                            }}
+                          >
+                            {subBrandShortLabel(inv.subBrand || inv.contact?.subBrand)}
+                          </span>
+                        )}
                       </td>
                       <td
                         style={{
@@ -1174,7 +1061,7 @@ export default function Invoices() {
                           {inv.status !== "PAID" && inv.status !== "VOIDED" && (
                             <>
                               <button
-                                onClick={() => initiatePayment(inv)}
+                                onClick={() => generatePaymentLink(inv)}
                                 className="btn-secondary"
                                 style={{
                                   display: "flex",
@@ -1188,9 +1075,9 @@ export default function Invoices() {
                                   borderRadius: "6px",
                                   cursor: "pointer",
                                 }}
-                                aria-label={`Pay invoice ${inv.invoiceNum}`}
+                                aria-label={`Generate payment link for invoice ${inv.invoiceNum}`}
                               >
-                                <CreditCard size={14} /> Pay Now
+                                <CreditCard size={14} /> Generate Payment Link
                               </button>
                               <button
                                 onClick={() => markPaid(inv.id)}
@@ -1447,10 +1334,10 @@ export default function Invoices() {
         </div>
       )}
 
-      {/* Payment Modal */}
-      {paymentModal && (
+      {/* Payment Link Modal */}
+      {linkModal && (
         <div
-          onClick={() => !processingPayment && setPaymentModal(null)}
+          onClick={() => setLinkModal(null)}
           style={{
             position: "fixed",
             inset: 0,
@@ -1470,253 +1357,51 @@ export default function Invoices() {
               padding: "2rem",
               borderRadius: "12px",
               minWidth: "420px",
-              maxWidth: "500px",
+              maxWidth: "520px",
               border: "1px solid var(--border-color)",
               backdropFilter: "blur(12px)",
             }}
           >
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                marginBottom: "1.5rem",
-              }}
-            >
-              <h3 style={{ fontSize: "1.2rem", fontWeight: 600, margin: 0 }}>
-                <CreditCard
-                  size={20}
-                  style={{ marginRight: "0.5rem", display: "inline" }}
-                />
-                Pay Invoice
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.25rem" }}>
+              <h3 style={{ fontSize: "1.1rem", fontWeight: 600, margin: 0, display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                <CreditCard size={18} /> Payment Link
               </h3>
-              <button
-                onClick={() => setPaymentModal(null)}
-                disabled={processingPayment}
-                aria-label="Close payment dialog"
-                title="Close"
-                style={{
-                  background: "none",
-                  border: "none",
-                  fontSize: "1.5rem",
-                  cursor: processingPayment ? "not-allowed" : "pointer",
-                  opacity: processingPayment ? 0.5 : 1,
-                }}
-              >
-                <X size={20} />
+              <button onClick={() => setLinkModal(null)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-secondary)" }}>
+                <X size={18} />
               </button>
             </div>
-
-            <div
-              style={{
-                background: "var(--subtle-bg-2)",
-                padding: "1rem",
-                borderRadius: "8px",
-                marginBottom: "1.5rem",
-              }}
-            >
-              <p style={{ margin: "0.5rem 0", fontSize: "0.9rem" }}>
-                <strong>Invoice:</strong> {paymentModal.invoiceNum}
-              </p>
-              <p style={{ margin: "0.5rem 0", fontSize: "0.9rem" }}>
-                <strong>Amount:</strong>{" "}
-                <span
-                  style={{ color: "var(--success-color)", fontWeight: 600 }}
-                >
-                  {formatCurrency(paymentModal.amount)}
-                </span>
-              </p>
-            </div>
-
-            <div style={{ marginBottom: "1.5rem" }}>
-              <label
-                style={{
-                  display: "block",
-                  fontSize: "0.85rem",
-                  fontWeight: 600,
-                  marginBottom: "0.75rem",
-                  textTransform: "uppercase",
-                  letterSpacing: "0.05em",
-                }}
-              >
-                Payment Method
-              </label>
-              <div style={{ display: "flex", gap: "1rem" }}>
-                <button
-                  onClick={() =>
-                    !processingPayment &&
-                    paymentConfig.stripe?.configured &&
-                    setPaymentGateway("stripe")
-                  }
-                  disabled={
-                    processingPayment || !paymentConfig.stripe?.configured
-                  }
-                  title={
-                    !paymentConfig.stripe?.configured
-                      ? "Stripe credentials not configured"
-                      : ""
-                  }
-                  style={{
-                    flex: 1,
-                    padding: "0.75rem",
-                    borderRadius: "8px",
-                    border: `2px solid ${paymentConfig.stripe?.configured ? (paymentGateway === "stripe" ? "var(--accent-color)" : "var(--border-color)") : "#d1d5db"}`,
-                    background:
-                      paymentGateway === "stripe" &&
-                      paymentConfig.stripe?.configured
-                        ? "rgba(99,102,241,0.1)"
-                        : !paymentConfig.stripe?.configured
-                          ? "rgba(0,0,0,0.05)"
-                          : "transparent",
-                    color: !paymentConfig.stripe?.configured
-                      ? "#9ca3af"
-                      : paymentGateway === "stripe"
-                        ? "var(--accent-color)"
-                        : "var(--text-secondary)",
-                    fontWeight: 600,
-                    cursor:
-                      processingPayment || !paymentConfig.stripe?.configured
-                        ? "not-allowed"
-                        : "pointer",
-                    opacity: !paymentConfig.stripe?.configured
-                      ? 0.6
-                      : processingPayment
-                        ? 0.5
-                        : 1,
-                  }}
-                >
-                  💳 Stripe{" "}
-                  {paymentConfig.stripe?.configured ? "✓" : "(Coming)"}
-                </button>
-                <button
-                  onClick={() =>
-                    !processingPayment &&
-                    paymentConfig.razorpay?.configured &&
-                    setPaymentGateway("razorpay")
-                  }
-                  disabled={
-                    processingPayment || !paymentConfig.razorpay?.configured
-                  }
-                  title={
-                    !paymentConfig.razorpay?.configured
-                      ? "Razorpay credentials not configured"
-                      : ""
-                  }
-                  style={{
-                    flex: 1,
-                    padding: "0.75rem",
-                    borderRadius: "8px",
-                    border: `2px solid ${paymentConfig.razorpay?.configured ? (paymentGateway === "razorpay" ? "#1f4788" : "var(--border-color)") : "#d1d5db"}`,
-                    background:
-                      paymentGateway === "razorpay" &&
-                      paymentConfig.razorpay?.configured
-                        ? "rgba(31,71,136,0.1)"
-                        : !paymentConfig.razorpay?.configured
-                          ? "rgba(0,0,0,0.05)"
-                          : "transparent",
-                    color: !paymentConfig.razorpay?.configured
-                      ? "#9ca3af"
-                      : paymentGateway === "razorpay"
-                        ? "#1f4788"
-                        : "var(--text-secondary)",
-                    fontWeight: 600,
-                    cursor:
-                      processingPayment || !paymentConfig.razorpay?.configured
-                        ? "not-allowed"
-                        : "pointer",
-                    opacity: !paymentConfig.razorpay?.configured
-                      ? 0.6
-                      : processingPayment
-                        ? 0.5
-                        : 1,
-                  }}
-                >
-                  💰 Razorpay{" "}
-                  {paymentConfig.razorpay?.configured ? "✓" : "(Setup)"}
-                </button>
-              </div>
-            </div>
-
-            {paymentGateway === "razorpay" &&
-              paymentConfig.razorpay?.configured && (
-                <div
-                  style={{
-                    background: "rgba(31,71,136,0.05)",
-                    padding: "0.75rem",
-                    borderRadius: "8px",
-                    marginBottom: "1.5rem",
-                    fontSize: "0.8rem",
-                    color: "#1f4788",
-                    borderLeft: "3px solid #1f4788",
-                  }}
-                >
-                  🧪 <strong>Razorpay Test Card:</strong>
-                  <br />
-                  4386 2894 0766 0153 | Any MM/YY | Any CVV
-                </div>
-              )}
-            {paymentGateway === "stripe" &&
-              paymentConfig.stripe?.configured && (
-                <div
-                  style={{
-                    background: "rgba(59,130,246,0.05)",
-                    padding: "0.75rem",
-                    borderRadius: "8px",
-                    marginBottom: "1.5rem",
-                    fontSize: "0.8rem",
-                    color: "var(--text-secondary)",
-                    borderLeft: "3px solid #3b82f6",
-                  }}
-                >
-                  🧪 <strong>Stripe Test Card:</strong>
-                  <br />
-                  4000 0027 6000 3184 | Any MM/YY | Any CVV (3DS required)
-                </div>
-              )}
-
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "flex-end",
-                gap: "0.75rem",
-              }}
-            >
+            <p style={{ fontSize: "0.85rem", color: "var(--text-secondary)", marginBottom: "1rem" }}>
+              Share this link with <strong>{linkModal.inv.contact?.name || "the customer"}</strong> to collect payment for invoice <strong>{linkModal.inv.invoiceNum}</strong> ({formatCurrency(linkModal.inv.amount)}).
+            </p>
+            <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", background: "var(--subtle-bg-2)", border: "1px solid var(--border-color)", borderRadius: "8px", padding: "0.6rem 0.75rem" }}>
+              <span style={{ flex: 1, fontSize: "0.82rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--text-primary)" }}>
+                {linkModal.url}
+              </span>
               <button
-                onClick={() => setPaymentModal(null)}
-                disabled={processingPayment}
-                style={{
-                  padding: "0.65rem 1.5rem",
-                  background: "transparent",
-                  border: "1px solid var(--border-color)",
-                  color: "var(--text-primary)",
-                  borderRadius: "6px",
-                  cursor: processingPayment ? "not-allowed" : "pointer",
-                  fontWeight: 500,
-                  opacity: processingPayment ? 0.5 : 1,
+                onClick={async () => {
+                  await navigator.clipboard.writeText(linkModal.url);
+                  setLinkCopied(true);
+                  setTimeout(() => setLinkCopied(false), 2500);
                 }}
-              >
-                Cancel
-              </button>
-              <button
-                onClick={processPayment}
-                disabled={processingPayment}
                 style={{
-                  padding: "0.65rem 1.5rem",
-                  background: "var(--primary-color, var(--accent-color))",
+                  flexShrink: 0,
+                  padding: "0.35rem 0.75rem",
+                  background: linkCopied ? "var(--success-color)" : "var(--accent-color)",
                   color: "#fff",
                   border: "none",
                   borderRadius: "6px",
-                  cursor: processingPayment ? "not-allowed" : "pointer",
+                  cursor: "pointer",
+                  fontSize: "0.78rem",
                   fontWeight: 600,
-                  opacity: processingPayment ? 0.7 : 1,
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "0.5rem",
+                  transition: "background 0.2s",
                 }}
               >
-                {processingPayment ? "⏳ Processing..." : "✓ Pay Now"}
+                {linkCopied ? "Copied!" : "Copy"}
               </button>
             </div>
+            <p style={{ fontSize: "0.75rem", color: "var(--text-secondary)", marginTop: "0.75rem", marginBottom: 0 }}>
+              Powered by Razorpay · Payment is processed via your configured gateway keys.
+            </p>
           </div>
         </div>
       )}

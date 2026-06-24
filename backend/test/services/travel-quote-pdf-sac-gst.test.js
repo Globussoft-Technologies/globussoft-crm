@@ -200,7 +200,9 @@ describe('renderTravelQuotePdf — slice 9: SAC + GST split + HSN summary', () =
       items: sacItemMix(),
     }));
     const text = extractPdfText(buf);
-    expect(text).toMatch(/HSN\/SAC Summary/);
+    // Heading renders as "HSN / SAC Summary" (spaced) after the quote-PDF
+    // restyle — tolerate optional spacing around the slash.
+    expect(text).toMatch(/HSN ?\/ ?SAC Summary/);
   });
 
   test('HSN/SAC summary shows rate buckets in "SAC / RATE%" form', async () => {
@@ -208,9 +210,13 @@ describe('renderTravelQuotePdf — slice 9: SAC + GST split + HSN summary', () =
       items: sacItemMix(),
     }));
     const text = extractPdfText(buf);
-    // Hotel = SAC 9963 @ 12%, Flight = SAC 9964 @ 5%.
-    expect(text).toMatch(/9963 \/ 12%/);
-    expect(text).toMatch(/9964 \/ 5%/);
+    // Hotel = SAC 9963 @ 12%, Flight = SAC 9964 @ 5%. SAC + RATE now render in
+    // their own summary columns (the combined "SAC / RATE%" sub-caption was
+    // dropped in the compact-to-one-page redesign).
+    expect(text).toMatch(/9963/);
+    expect(text).toMatch(/12%/);
+    expect(text).toMatch(/9964/);
+    expect(text).toMatch(/5%/);
   });
 
   test('tax / fee / TCS lines excluded from HSN/SAC summary (lib null-SAC filter)', async () => {
@@ -259,8 +265,8 @@ describe('renderTravelQuotePdf — slice 9: SAC + GST split + HSN summary', () =
     }));
     const text = extractPdfText(buf);
     expect(text).toMatch(/9985/);
-    // And the "SAC / RATE%" token in the summary block.
-    expect(text).toMatch(/9985 \/ 18%/);
+    // Rate renders in the summary's RATE column.
+    expect(text).toMatch(/18%/);
   });
 
   test('visa lineType maps to SAC 9982 (legal and accounting services)', async () => {
@@ -275,7 +281,7 @@ describe('renderTravelQuotePdf — slice 9: SAC + GST split + HSN summary', () =
     }));
     const text = extractPdfText(buf);
     expect(text).toMatch(/9982/);
-    expect(text).toMatch(/9982 \/ 18%/);
+    expect(text).toMatch(/18%/);
   });
 
   test('groupLinesBySac is invoked at least once per render', async () => {

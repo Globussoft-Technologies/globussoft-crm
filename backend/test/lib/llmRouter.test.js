@@ -165,7 +165,7 @@ describe('llmRouter — module shape', () => {
       "form-vs-call": { primary: "claude-opus-4-7", fallback: "gpt-4" },
       "bulk-text": { primary: "gemini-flash", fallback: "claude-haiku" },
       "call-summary": { primary: "gemini-flash", fallback: null },
-      "itinerary-suggest": { primary: "gemini-flash", fallback: "claude-haiku" },
+      "itinerary-suggest": { primary: "gemini-flash", fallback: "gpt-4" },
       // AI travel-landing-page JSON generation (PR #1174).
       "landing-page-generate": { primary: "gemini-flash", fallback: "claude-haiku" },
       // Trip-countdown (packing nudges) + payment-reminder (pay-or-cancel
@@ -177,12 +177,17 @@ describe('llmRouter — module shape', () => {
       "whatsapp-lead-qualify": { primary: "gemini-flash", fallback: "claude-haiku" },
       "marketing-flyer-copy": { primary: "gemini-flash", fallback: "claude-haiku" },
       "marketing-flyer-image": { primary: "dall-e-3", fallback: "stability-xl" },
-      // TBO flight/hotel/transfer web-grounded search fallback.
-      "flight-search": { primary: "perplexity-sonar", fallback: "gemini-flash" },
-      "hotel-search": { primary: "perplexity-sonar", fallback: "gemini-flash" },
-      "transfer-search": { primary: "perplexity-sonar", fallback: "gemini-flash" },
-      // Airport/city name → IATA resolver for the flight search box (2026-06-19).
-      "airport-iata": { primary: "gemini-flash", fallback: "claude-haiku" },
+      // TBO flight/hotel/transfer AI-estimate search fallback. 2026-06-23:
+      // primary is gpt-4o-search (OpenAI's web-search-enabled model, same
+      // OPENAI_API_KEY) so estimates are grounded in live web data; plain gpt-4
+      // is the no-web-access fallback. TBO tier-1 still takes priority once
+      // TBO_* creds land.
+      "flight-search": { primary: "gpt-4o-search", fallback: "gpt-4" },
+      "hotel-search": { primary: "gpt-4o-search", fallback: "gpt-4" },
+      "transfer-search": { primary: "gpt-4o-search", fallback: "gpt-4" },
+      // Airport/city name → IATA resolver for the flight search box (2026-06-19;
+      // 2026-06-23 primary gemini-flash → gpt-4 to match the search provider).
+      "airport-iata": { primary: "gpt-4", fallback: "gemini-flash" },
     });
   });
 

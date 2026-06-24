@@ -240,10 +240,13 @@ router.post(
       // { reset:true } wipes any saved/stale session + kills a stuck Chromium
       // before relaunching — the escape hatch for a wedged "Generating QR…".
       const reset = Boolean(req.body && (req.body.reset === true || req.body.reset === "true"));
-      // A fresh user-initiated connect starts from a clean slate so the import
-      // is an exact mirror (and any residue from an earlier session is cleared)
-      // — "connect → fetch fresh". Skip when already connected (idempotent).
-      if (!watiClient.getState(req.travelTenant.id).connected) {
+      // Only purge the mirror on an explicit RESET (fresh QR / new number). The
+      // old `!connected` guard wiped ALL imported threads whenever the panel was
+      // opened while the saved session was still resuming on boot (state is
+      // INITIALIZING/AUTHENTICATED → connected:false for a few seconds), so a
+      // routine page-open after a restart destroyed the operator's whole inbox.
+      // reset already wipes the session dir; pair the chat purge with it.
+      if (reset) {
         await watiClient.purgeChats(req.travelTenant.id);
       }
       const st = await watiClient.connect(req.travelTenant.id, { reset });

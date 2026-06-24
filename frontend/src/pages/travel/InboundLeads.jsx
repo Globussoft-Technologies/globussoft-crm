@@ -103,6 +103,34 @@ export default function InboundLeads() {
   const navigate = useNavigate();
   const [contacts, setContacts] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [convertingId, setConvertingId] = useState(null);
+
+  // PRD_TRAVEL_MULTICHANNEL_LEADS / TRAVEL_CRM_PRD §4.1 — "Convert to Lead"
+  // opens the pipeline lead for this inbound contact: it creates a Deal (the
+  // canonical pipeline "Lead") linked to the de-duped Contact, so the lead
+  // actually lands in the pipeline instead of staying a bare contact. Stage is
+  // left to the server default ("lead") so it's valid on every tenant's
+  // pipeline config. Travel page only — generic/wellness never reach here.
+  const convertToLead = async (c) => {
+    setConvertingId(c.id);
+    try {
+      const channelLabel = String(c.source || "").replace(/^inbound:/, "") || "inbound";
+      await fetchApi("/api/deals", {
+        method: "POST",
+        body: JSON.stringify({
+          title: `${c.name || "Inbound lead"} — ${channelLabel}`,
+          contactId: c.id,
+          subBrand: c.subBrand || undefined,
+        }),
+      });
+      notify.success(`${c.name || "Lead"} added to the pipeline`);
+      navigate("/travel/leads");
+    } catch (e) {
+      notify.error(e?.data?.error || e?.body?.error || e?.message || "Failed to convert to lead");
+    } finally {
+      setConvertingId(null);
+    }
+  };
 
   // Client-side filter state.
   const [channel, setChannel] = useState("");
@@ -352,11 +380,12 @@ export default function InboundLeads() {
                     <td style={td}>
                       <button
                         type="button"
-                        onClick={() => navigate(`/leads/${c.id}`)}
+                        onClick={() => convertToLead(c)}
+                        disabled={convertingId === c.id}
                         style={primaryBtn}
                         aria-label={`Convert ${c.name || "contact"} to Lead`}
                       >
-                        Convert to Lead
+                        {convertingId === c.id ? "Converting…" : "Convert to Lead"}
                       </button>
                     </td>
                   </tr>

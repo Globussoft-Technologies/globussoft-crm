@@ -239,6 +239,17 @@ router.get("/", verifyToken, async (req, res) => {
       where: { tenantId: req.user.tenantId },
       orderBy: [{ status: "desc" }, { dueDate: "asc" }],
     };
+    // Travel vertical — optional ?subBrand= filter for the per-brand ledger.
+    // Matches invoices explicitly tagged with the brand OR (back-compat with
+    // pre-subBrand rows) untagged invoices whose CONTACT is that brand. Other
+    // verticals never pass ?subBrand, so this is a no-op for them.
+    const sb = req.query.subBrand ? String(req.query.subBrand).slice(0, 32) : null;
+    if (sb) {
+      findManyArgs.where.OR = [
+        { subBrand: sb },
+        { subBrand: null, contact: { is: { subBrand: sb } } },
+      ];
+    }
     if (isSummary) {
       findManyArgs.select = {
         id: true,
@@ -253,7 +264,23 @@ router.get("/", verifyToken, async (req, res) => {
     } else {
       findManyArgs.include = { contact: true, deal: true };
     }
-    const invoices = await prisma.invoice.findMany(findManyArgs);
+    let invoices;
+    try {
+      invoices = await prisma.invoice.findMany(findManyArgs);
+    } catch (e) {
+      // Graceful degrade: if the Invoice.subBrand column hasn't been migrated
+      // yet (`npx prisma db push` pending), the OR clause referencing it throws.
+      // Fall back to filtering by the CONTACT's subBrand (a column that already
+      // exists) so the ledger + brand filter keep working; invoice-level tagging
+      // lights up once the migration runs. Any other error rethrows to the 500.
+      if (sb && /subBrand/i.test(String(e && e.message))) {
+        delete findManyArgs.where.OR;
+        findManyArgs.where.contact = { is: { subBrand: sb } };
+        invoices = await prisma.invoice.findMany(findManyArgs);
+      } else {
+        throw e;
+      }
+    }
     // #577: strip read-restricted fields per the caller's role.
     const filtered = await filterReadFields(invoices, req.user.role, "Invoice", req.user.tenantId);
     res.json(filtered);
@@ -438,17 +465,39 @@ router.post("/", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req, res)
     }
     const invNum = `INV-${crypto.randomBytes(3).toString("hex").toUpperCase()}`;
 
-    const invoice = await prisma.invoice.create({
-      data: {
-        invoiceNum: invNum,
-        amount: Math.round(amt * 100) / 100, // #198: store to-the-paise; reject was above
-        dueDate: due,
-        contactId: parseInt(contactId),
-        dealId: dealId ? parseInt(dealId) : null,
-        tenantId: req.user.tenantId,
-      },
-      include: { contact: true, deal: true }
-    });
+    // Travel vertical — optional sub-brand tag (tmc | rfu | travelstall |
+    // visasure). Validated against the known set; anything else → null. Other
+    // verticals don't send it, so it stays null and behaviour is unchanged.
+    const subBrandRaw = typeof req.body.subBrand === "string" ? req.body.subBrand.trim().toLowerCase() : "";
+    const subBrand = ["tmc", "rfu", "travelstall", "visasure"].includes(subBrandRaw) ? subBrandRaw : null;
+
+    const baseData = {
+      invoiceNum: invNum,
+      amount: Math.round(amt * 100) / 100, // #198: store to-the-paise; reject was above
+      dueDate: due,
+      contactId: parseInt(contactId),
+      dealId: dealId ? parseInt(dealId) : null,
+      tenantId: req.user.tenantId,
+    };
+    let invoice;
+    try {
+      invoice = await prisma.invoice.create({
+        data: { ...baseData, subBrand },
+        include: { contact: true, deal: true },
+      });
+    } catch (e) {
+      // Graceful degrade: if the Invoice.subBrand column isn't migrated yet,
+      // create the invoice WITHOUT the tag so the flow still works (the contact
+      // still carries the brand). Re-run `npx prisma db push` to persist the tag.
+      if (/subBrand/i.test(String(e && e.message))) {
+        invoice = await prisma.invoice.create({
+          data: baseData,
+          include: { contact: true, deal: true },
+        });
+      } else {
+        throw e;
+      }
+    }
     // #179: audit invoice creation.
     await writeAudit('Invoice', 'CREATE', invoice.id, req.user.userId, req.user.tenantId, {
       invoiceNum: invoice.invoiceNum,
@@ -806,6 +855,160 @@ router.put("/:id/pay", verifyToken, async (req, res) => {
 });
 
 // Generate Invoice PDF
+// Public payment confirmation — no auth. Called by the success page after
+// Razorpay redirects back. Verifies the Razorpay callback signature with the
+// tenant's own key secret, then marks the Payment + Invoice as PAID.
+// This is the localhost/no-webhook fallback; the webhook handler in
+// routes/payments.js is the primary reconciler in production.
+router.post("/public/confirm-payment", async (req, res) => {
+  const crypto = require("crypto");
+  const { getTenantRazorpayCreds } = require("../lib/tenantPaymentGateway");
+  try {
+    const {
+      razorpay_payment_link_id,
+      razorpay_payment_link_reference_id,
+      razorpay_payment_link_status,
+      razorpay_payment_id,
+      razorpay_signature,
+    } = req.body;
+
+    if (!razorpay_payment_link_id || razorpay_payment_link_status !== "paid") {
+      return res.status(400).json({ error: "Payment not completed" });
+    }
+
+    const payment = await prisma.payment.findFirst({
+      where: { gateway: "razorpay", gatewayId: razorpay_payment_link_id },
+    });
+    if (!payment) return res.status(404).json({ error: "Payment record not found" });
+
+    // Verify signature using tenant's own key secret
+    const creds = await getTenantRazorpayCreds(payment.tenantId);
+    if (creds && razorpay_signature) {
+      const body = `${razorpay_payment_link_id}|${razorpay_payment_link_reference_id}|${razorpay_payment_link_status}|${razorpay_payment_id}`;
+      const expected = crypto.createHmac("sha256", creds.keySecret).update(body).digest("hex");
+      if (expected !== razorpay_signature) {
+        return res.status(400).json({ error: "Signature verification failed" });
+      }
+    }
+
+    if (payment.status !== "SUCCESS") {
+      await prisma.payment.update({
+        where: { id: payment.id },
+        data: {
+          status: "SUCCESS",
+          paidAt: new Date(),
+          // Keep gatewayId as the plink_ ID so receipt lookup keeps working.
+          // Store the actual razorpay_payment_id in metadata for audit trail.
+          metadata: JSON.stringify({ mode: "payment_link", plinkId: razorpay_payment_link_id, razorpayPaymentId: razorpay_payment_id }),
+        },
+      });
+      // Mark invoice paid
+      if (payment.invoiceId) {
+        const inv = await prisma.invoice.findFirst({ where: { id: payment.invoiceId } });
+        if (inv && inv.status !== "PAID") {
+          await prisma.invoice.update({ where: { id: inv.id }, data: { status: "PAID" } });
+        }
+      }
+    }
+
+    res.json({ ok: true, plinkId: razorpay_payment_link_id });
+  } catch (err) {
+    console.error("[PublicConfirmPayment] error:", err.message);
+    res.status(500).json({ error: "Failed to confirm payment" });
+  }
+});
+
+// Public invoice PDF receipt — no auth. Accessed after a Razorpay payment-link
+// callback. The `plinkId` (plink_…) is Razorpay-generated and unguessable; we
+// require status=SUCCESS so partial/failed payments can't pull the PDF.
+router.get("/public/receipt", async (req, res) => {
+  try {
+    const { plinkId } = req.query;
+    if (!plinkId || !String(plinkId).startsWith("plink_")) {
+      return res.status(400).json({ error: "Invalid payment link ID" });
+    }
+    const payment = await prisma.payment.findFirst({
+      where: {
+        gateway: "razorpay",
+        status: "SUCCESS",
+        OR: [
+          { gatewayId: plinkId },
+          { metadata: { contains: plinkId } },
+        ],
+      },
+    });
+    if (!payment) return res.status(404).json({ error: "Paid payment not found for this link" });
+
+    const invoice = await prisma.invoice.findFirst({
+      where: { id: payment.invoiceId },
+      include: { contact: true },
+    });
+    if (!invoice) return res.status(404).json({ error: "Invoice not found" });
+
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: payment.tenantId },
+      select: { name: true, defaultCurrency: true, locale: true },
+    });
+    const currency = tenant?.defaultCurrency || "INR";
+    const locale = tenant?.locale || undefined;
+    const tenantName = tenant?.name || "Your Company";
+
+    const doc = new PDFDocument({ size: "A4", margin: 50 });
+    const filename = `${invoice.invoiceNum || "INV-" + invoice.id}-receipt.pdf`;
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    doc.on("error", (err) => {
+      console.error("[PublicReceipt] PDF stream error:", err);
+      try { res.end(); } catch (_) {}
+    });
+    doc.pipe(res);
+
+    // Header
+    doc.fontSize(24).font("Helvetica-Bold").text(tenantName, 50, 50);
+    doc.fontSize(10).font("Helvetica").fillColor("#666666").text("Payment Receipt", 50, 80);
+
+    // Invoice details
+    doc.fillColor("#000000").fontSize(14).font("Helvetica-Bold")
+      .text(`Invoice: ${invoice.invoiceNum || "N/A"}`, 50, 130);
+    doc.fontSize(10).font("Helvetica").fillColor("#333333");
+    doc.text(`Status: PAID`, 50, 155);
+    doc.text(`Issue Date: ${new Date(invoice.createdAt).toLocaleDateString()}`, 50, 172);
+    doc.text(`Paid On: ${new Date(payment.paidAt || Date.now()).toLocaleDateString()}`, 50, 189);
+
+    // Contact
+    doc.fontSize(12).font("Helvetica-Bold").fillColor("#000000").text("Bill To:", 50, 225);
+    doc.fontSize(10).font("Helvetica").fillColor("#333333")
+      .text(invoice.contact?.name || "Customer", 50, 245)
+      .text(invoice.contact?.email || "", 50, 260);
+
+    doc.moveTo(50, 300).lineTo(545, 300).strokeColor("#cccccc").stroke();
+
+    // Amount table
+    doc.fillColor("#ffffff").rect(50, 315, 495, 30).fill("#10b981");
+    doc.fillColor("#ffffff").fontSize(10).font("Helvetica-Bold")
+      .text("Description", 60, 323)
+      .text("Amount", 450, 323, { width: 85, align: "right" });
+
+    doc.fillColor("#333333").font("Helvetica").fontSize(10)
+      .text("Invoice Charge", 60, 360)
+      .text(formatMoney(invoice.amount, currency, locale), 450, 360, { width: 85, align: "right" });
+
+    doc.moveTo(50, 390).lineTo(545, 390).strokeColor("#cccccc").stroke();
+    doc.font("Helvetica-Bold").fontSize(12).fillColor("#000000")
+      .text("Total Paid:", 350, 405)
+      .text(formatMoney(invoice.amount, currency, locale), 450, 405, { width: 85, align: "right" });
+
+    doc.fontSize(8).font("Helvetica").fillColor("#999999")
+      .text("Thank you for your payment.", 50, 750, { align: "center" });
+
+    doc.end();
+  } catch (err) {
+    console.error("[PublicReceipt] error:", err);
+    if (res.headersSent) { try { res.end(); } catch (_) {} }
+    else res.status(500).json({ error: "Failed to generate receipt" });
+  }
+});
+
 router.get("/:id/pdf", verifyToken, async (req, res) => {
   try {
     const invoice = await prisma.invoice.findFirst({
@@ -970,6 +1173,40 @@ async function voidInvoiceHandler(req, res) {
 router.put("/:id/void", verifyToken, verifyRole(["ADMIN", "MANAGER"]), voidInvoiceHandler);
 // #193: POST alias so callers that follow REST conventions (POST for actions) work.
 router.post("/:id/void", verifyToken, verifyRole(["ADMIN", "MANAGER"]), voidInvoiceHandler);
+
+// Generate a hosted Razorpay Payment Link for an invoice using the tenant's
+// own BYOK keys. Returns { url, gateway } the admin can copy and share.
+router.post("/:id/payment-link", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
+  const { createInvoicePaymentLink } = require("../lib/paymentLink");
+  try {
+    const tenantId = req.user.tenantId;
+    const [invoice, tenant] = await Promise.all([
+      prisma.invoice.findFirst({
+        where: { id: parseInt(req.params.id), tenantId },
+        include: { contact: { select: { name: true, email: true, phone: true } } },
+      }),
+      prisma.tenant.findUnique({ where: { id: tenantId }, select: { name: true } }),
+    ]);
+    if (!invoice) return res.status(404).json({ error: "Invoice not found" });
+    if (invoice.status === "PAID") return res.status(400).json({ error: "Invoice is already paid" });
+    if (invoice.status === "VOIDED") return res.status(400).json({ error: "Cannot generate a link for a voided invoice" });
+
+    const result = await createInvoicePaymentLink({
+      tenantId,
+      invoice: { id: invoice.id, invoiceNum: invoice.invoiceNum, amount: invoice.amount },
+      contact: invoice.contact || undefined,
+      currency: invoice.currency || "INR",
+      gatewayPref: "razorpay",
+      tenantName: tenant?.name || undefined,
+    });
+
+    if (result.error) return res.status(502).json({ error: result.error, code: result.code });
+    res.json({ url: result.url, gateway: result.gateway });
+  } catch (err) {
+    console.error("[billing] payment-link error:", err.message);
+    res.status(500).json({ error: "Failed to generate payment link" });
+  }
+});
 
 // #193: refund a PAID invoice. Status flips to REFUNDED; original paidAt
 // preserved so we still know when money came in. Partial refunds are not

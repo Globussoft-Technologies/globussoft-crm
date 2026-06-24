@@ -1,9 +1,11 @@
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useContext } from 'react';
 import { Search, Plus, MoreVertical, Trash2, RefreshCw, TrendingUp, Upload, X, FileSpreadsheet, UserCheck, GitMerge, EyeOff } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import DuplicateContactModal from '../components/DuplicateContactModal';
+import { AuthContext } from '../App';
+import { accessibleSubBrands } from '../utils/travelSubBrand';
 
 const parseCSV = (text) => {
   const lines = text.split(/\r?\n/).filter(l => l.trim());
@@ -65,6 +67,17 @@ const Contacts = () => {
   const [importing, setImporting] = useState(false);
 
   const [staff, setStaff] = useState([]);
+  // Travel vertical only — the Assigned-To dropdown is brand-scoped so a lead
+  // can only be assigned to staff who have access to its sub-brand. Generic /
+  // wellness tenants (isTravel false) keep the full unfiltered list.
+  const { tenant } = useContext(AuthContext) || {};
+  const isTravel = tenant?.vertical === 'travel';
+  const assignableStaff = (contact) => {
+    if (!isTravel || !contact?.subBrand) return staff;
+    return staff.filter(
+      (s) => accessibleSubBrands(s).includes(contact.subBrand) || String(s.id) === String(contact.assignedToId),
+    );
+  };
   const [rescoring, setRescoring] = useState(false);
   const [showDupes, setShowDupes] = useState(false);
   const [dupes, setDupes] = useState([]);
@@ -454,7 +467,7 @@ const Contacts = () => {
                     style={{ padding: '0.375rem 0.5rem', fontSize: '0.8rem', minWidth: '130px', background: 'var(--input-bg)' }}
                   >
                     <option value="">Unassigned</option>
-                    {staff.map(s => (
+                    {assignableStaff(contact).map(s => (
                       <option key={s.id} value={s.id}>{s.name || s.email}</option>
                     ))}
                   </select>

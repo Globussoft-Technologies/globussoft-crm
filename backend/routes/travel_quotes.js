@@ -50,6 +50,9 @@ const {
 } = require("../middleware/travelGuards");
 const { writeAudit } = require("../lib/audit");
 const { generateTravelQuotePdf } = require("../services/pdfRenderer");
+// Keyless destination hero photo for the quote PDF banner (same Wikipedia
+// helper the itinerary PDF uses). Best-effort — null on any failure.
+const { fetchDestinationImageBuffer } = require("../lib/destinationImage");
 // Customer-share: mint a signed quote-share token + deliver it (email-first +
 // WhatsApp via the connected WhatsApp Web client). Mirrors the itinerary share.
 const { mintShareToken } = require("../lib/quoteShareToken");
@@ -2599,6 +2602,30 @@ router.post(
   },
 );
 
+// Derive the quote's destination(s) from its line items for the PDF hero photo:
+// prefer hotel/accommodation cities (parsed from "Name, City — Room"), else a
+// flight arrival city. Returns { photoCity, caption } or null. Mirrors the
+// frontend QuoteAcceptLanding deriveDestination so the PDF + share page agree.
+function deriveQuoteDestination(lines) {
+  const cities = [];
+  for (const l of lines || []) {
+    if ((l.lineType === "hotel" || l.lineType === "accommodation") && l.description) {
+      const m = /,\s*([^—-]+?)\s*(?:—|-|$)/.exec(l.description);
+      const c = m && m[1] ? m[1].trim() : null;
+      if (c && !cities.includes(c)) cities.push(c);
+    }
+  }
+  if (cities.length) return { photoCity: cities[0], caption: cities.join(" · "), cities };
+  for (const l of lines || []) {
+    if (l.lineType === "flight" && l.description) {
+      // Flight descriptions read "Airline FL Origin → Dest (Class)".
+      const m = /(?:→|->)\s*([A-Za-z .]+?)\s*(?:\(|\[|$)/.exec(l.description);
+      if (m && m[1]) { const c = m[1].trim(); return { photoCity: c, caption: c, cities: [c] }; }
+    }
+  }
+  return null;
+}
+
 // GET /api/travel/quotes/:id/pdf — ADMIN/MANAGER only.
 //
 // Looks up the TravelQuote tenant-scoped + sub-brand-scoped, then hands
@@ -2640,9 +2667,34 @@ router.get(
         orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
       });
 
+      // Destination photos (keyless Wikipedia, same as the itinerary PDF) — a
+      // hero banner (first city) + a faint full-page watermark (a SECOND city
+      // when the trip is multi-city, else the same). Best-effort: any failure →
+      // null buffer → PDF renders without that visual.
+      let heroBuffer = null;
+      let heroCaption = null;
+      let watermarkBuffer = null;
+      const heroDest = deriveQuoteDestination(quote.lines);
+      if (heroDest && heroDest.photoCity) {
+        heroCaption = heroDest.caption;
+        try {
+          heroBuffer = await fetchDestinationImageBuffer(heroDest.photoCity);
+        } catch (imgErr) {
+          console.warn("[travel-quotes] hero image fetch failed (non-fatal):", imgErr && imgErr.message);
+        }
+        const wmCity = (heroDest.cities && heroDest.cities[1]) || heroDest.photoCity;
+        try {
+          watermarkBuffer = wmCity === heroDest.photoCity
+            ? heroBuffer // reuse — avoids a second identical fetch
+            : await fetchDestinationImageBuffer(wmCity);
+        } catch (imgErr) {
+          console.warn("[travel-quotes] watermark image fetch failed (non-fatal):", imgErr && imgErr.message);
+        }
+      }
+
       let pdfBuffer;
       try {
-        pdfBuffer = await generateTravelQuotePdf(quote);
+        pdfBuffer = await generateTravelQuotePdf(quote, { heroBuffer, heroCaption, watermarkBuffer });
       } catch (renderErr) {
         console.error("[travel-quotes] PDF render error:", renderErr && renderErr.message);
         return res.status(500).json({
@@ -4010,8 +4062,12 @@ router.post("/quotes/:id/share", verifyToken, requireTravelTenant, async (req, r
       tenantId: req.travelTenant.id,
       expiresInDays: Number.isFinite(expiryDays) ? expiryDays : undefined,
     });
-    const portalBase = String((req.headers && req.headers.origin) || "").replace(/\/+$/, "")
-      || process.env.PUBLIC_BASE_URL || "https://crm.globusdemos.com";
+    const portalBase = (
+      String((req.body || {}).frontendBase || "").replace(/\/+$/, "") ||
+      String((req.headers && req.headers.origin) || "").replace(/\/+$/, "") ||
+      process.env.PUBLIC_BASE_URL ||
+      "https://crm.globusdemos.com"
+    );
     const shareUrl = `${portalBase}/p/quote/${token}`;
 
     // Promote draft → sent so the public link isn't a "not yet ready" state.

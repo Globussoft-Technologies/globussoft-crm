@@ -1183,6 +1183,12 @@ model Invoice {
   // non-travel invoices ignore. e.g. "tmc_nexus", "labbaik_travels",
   // "travel_stall_parent".
   legalEntityCode String?
+  // Travel vertical only — tags the invoice to one of the 4 sub-brands
+  // (tmc | rfu | travelstall | visasure) so the travel Invoices ledger + analytics
+  // can slice by brand. Nullable + additive: wellness/generic invoices leave it
+  // null and the route falls back to the contact's subBrand (pre-existing
+  // behaviour), so nothing changes for those verticals.
+  subBrand        String?
 
   // #413 — Restrict (not Cascade) on Tenant deletion. Invoices are financial
   // records of record; a misclick on tenant.delete() must NOT silently nuke
@@ -1206,6 +1212,7 @@ model Invoice {
   @@index([tenantId, isRecurring])
   @@index([tenantId, nextRecurDate])
   @@index([tenantId, parentInvoiceId])
+  @@index([tenantId, subBrand])
   @@index([visitId, status])
 }
 
@@ -6729,6 +6736,11 @@ model TravelQuote {
   // unmarked clones (or non-clone source quotes) leave them null.
   clonedFromQuoteId    Int?
   appliedMarkupPercent Decimal?              @db.Decimal(5, 2)
+  // Advance payment transaction references — stored for refund tracking.
+  //   advancePlinkId:   Razorpay payment-link ID (plink_XXXX) created on quote accept.
+  //   advancePaymentId: Razorpay payment ID (pay_XXXX) populated when the customer pays.
+  advancePlinkId       String?               @db.VarChar(64)
+  advancePaymentId     String?               @db.VarChar(64)
   lines                TravelQuoteLine[]
   invoices             TravelInvoice[]
   snapshots            TravelQuoteSnapshot[]

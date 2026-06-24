@@ -13,9 +13,9 @@
 
 import { useEffect, useState } from "react";
 import {
-  AlertCircle, BarChart3, Globe, MapPin, RefreshCw, School, Star, TrendingUp,
+  AlertCircle, BarChart3, Globe, MapPin, RefreshCw, School, Star, TrendingUp, Download,
 } from "lucide-react";
-import { fetchApi } from "../../utils/api";
+import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 
 const TABS = [
@@ -26,16 +26,51 @@ const TABS = [
 
 export default function TravelReports() {
   const [tab, setTab] = useState("tmc");
+  const notify = useNotify();
+  const [exporting, setExporting] = useState(false);
+
+  // Download the ACTIVE tab as a branded, tabular PDF. Raw fetch (not fetchApi)
+  // because we need the binary blob + auth header, mirroring Reports.jsx.
+  const downloadPdf = () => {
+    setExporting(true);
+    const token = getAuthToken();
+    fetch(`/api/travel/reports/export-pdf?tab=${encodeURIComponent(tab)}`, { headers: { Authorization: `Bearer ${token}` } })
+      .then((res) => { if (!res.ok) throw new Error("PDF export failed"); return res.blob(); })
+      .then((blob) => {
+        const link = document.createElement("a");
+        link.href = URL.createObjectURL(blob);
+        link.download = `travel-${tab}-report.pdf`;
+        link.click();
+        URL.revokeObjectURL(link.href);
+      })
+      .catch(() => notify.error("Failed to export PDF (you may not have access to this sub-brand)"))
+      .finally(() => setExporting(false));
+  };
 
   return (
     <div style={{ padding: 24, maxWidth: 1200, margin: "0 auto" }}>
-      <header style={{ marginBottom: 16 }}>
-        <h1 style={{ display: "flex", alignItems: "center", gap: 10, margin: 0 }}>
-          <BarChart3 size={28} aria-hidden /> Travel Reports
-        </h1>
-        <p style={{ color: "var(--text-secondary)", marginTop: 4, marginBottom: 0 }}>
-          Drill-down analytics per sub-brand. Sub-brand access enforced server-side.
-        </p>
+      <header style={{ marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12 }}>
+        <div>
+          <h1 style={{ display: "flex", alignItems: "center", gap: 10, margin: 0 }}>
+            <BarChart3 size={28} aria-hidden /> Travel Reports
+          </h1>
+          <p style={{ color: "var(--text-secondary)", marginTop: 4, marginBottom: 0 }}>
+            Drill-down analytics per sub-brand. Sub-brand access enforced server-side.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={downloadPdf}
+          disabled={exporting}
+          style={{
+            display: "inline-flex", alignItems: "center", gap: 6, padding: "8px 14px",
+            borderRadius: 6, fontWeight: 600, fontSize: 13, cursor: exporting ? "default" : "pointer",
+            background: "var(--primary-color, var(--accent-color))", color: "#fff", border: "none", opacity: exporting ? 0.7 : 1,
+          }}
+          aria-label="Download this report as PDF"
+        >
+          <Download size={14} /> {exporting ? "Preparing…" : "Download PDF"}
+        </button>
       </header>
 
       <div role="tablist" aria-label="Report tabs" style={tabStrip}>
@@ -142,6 +177,8 @@ function TmcTab() {
             <KeyValueList obj={data.trips.byStatus} formatter={(v) => String(v)} empty="No trips yet." />
           </Card>
 
+          <QuoteFunnelCard quotes={data.quotes} />
+
           <Card title="Deal funnel">
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
               <thead>
@@ -237,6 +274,8 @@ function RfuTab() {
             </table>
           </Card>
 
+          <QuoteFunnelCard quotes={data.quotes} />
+
           <Card title="Deal funnel">
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
               <thead>
@@ -282,10 +321,11 @@ function CrossBrandTab() {
               <thead>
                 <tr>
                   <th style={th}>Sub-brand</th>
-                  <th style={thRight}>Won</th>
-                  <th style={thRight}>Lost</th>
-                  <th style={thRight}>Won revenue</th>
-                  <th style={thRight}>Conversion %</th>
+                  <th style={thRight}>Quotes</th>
+                  <th style={thRight}>Accepted</th>
+                  <th style={thRight}>Quote revenue</th>
+                  <th style={thRight}>Quote conv. %</th>
+                  <th style={thRight}>Won (deals)</th>
                   <th style={thRight}>Diagnostics</th>
                 </tr>
               </thead>
@@ -293,10 +333,11 @@ function CrossBrandTab() {
                 {Object.entries(data.subBrands).map(([brand, m]) => (
                   <tr key={brand} style={trStyle}>
                     <td style={td}><span style={brandBadge}>{brand}</span></td>
+                    <td style={tdRight}>{m.quotesTotal ?? 0}</td>
+                    <td style={tdRight}>{m.quotesAccepted ?? 0}</td>
+                    <td style={tdRight}>₹{Number(m.quoteRevenue || 0).toLocaleString("en-IN")}</td>
+                    <td style={tdRight}>{m.quoteConversionPct ?? 0}%</td>
                     <td style={tdRight}>{m.won}</td>
-                    <td style={tdRight}>{m.lost}</td>
-                    <td style={tdRight}>₹{Number(m.wonRevenue).toLocaleString("en-IN")}</td>
-                    <td style={tdRight}>{m.conversionPct}%</td>
                     <td style={tdRight}>{m.diagnostics}</td>
                   </tr>
                 ))}
@@ -329,6 +370,36 @@ function Card({ title, children, wide }) {
       <h2 style={cardTitle}>{title}</h2>
       {children}
     </section>
+  );
+}
+
+// The real travel sales funnel — TravelQuote by status (count + ₹). Travel
+// never creates generic Deal rows, so the legacy "Deal funnel" was always
+// empty; this surfaces the actual quote pipeline that DOES have data.
+function QuoteFunnelCard({ quotes }) {
+  const byStatus = (quotes && quotes.byStatus) || {};
+  const amt = (quotes && quotes.amountByStatus) || {};
+  const entries = Object.entries(byStatus);
+  return (
+    <Card title="Quote pipeline">
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+        <thead>
+          <tr><th style={th}>Status</th><th style={thRight}>Count</th><th style={thRight}>Amount</th></tr>
+        </thead>
+        <tbody>
+          {entries.length === 0 && (
+            <tr><td colSpan="3" style={emptyCell}>No quotes yet.</td></tr>
+          )}
+          {entries.map(([status, count]) => (
+            <tr key={status} style={trStyle}>
+              <td style={td}>{status}</td>
+              <td style={tdRight}>{count}</td>
+              <td style={tdRight}>₹{Number(amt[status] || 0).toLocaleString("en-IN")}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </Card>
   );
 }
 

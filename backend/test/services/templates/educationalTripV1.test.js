@@ -291,7 +291,7 @@ describe('educational-trip-v1 — slot rendering', () => {
         tiers: [{ step: 1, title: 'Booking', amount: null }],
       },
     });
-    expect(html).toContain('Pricing TBD');
+    expect(html).toContain('t-tier-amount-pending');
   });
 
   test('faq slot — categories + items with searchable data attributes', () => {
@@ -986,6 +986,6 @@ describe('educationalTripV1.mapBlocksToContent — AI bridge', () => {
     expect(html).toContain('COUPLES');
     // Investment tier label survives, but no pricing leaks.
     expect(html).toContain('Booking');
-    expect(html).toContain('Pricing TBD');
+    expect(html).toContain('t-tier-amount-pending');
   });
 });

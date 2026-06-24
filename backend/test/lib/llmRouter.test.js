@@ -166,6 +166,8 @@ describe('llmRouter — module shape', () => {
       "bulk-text": { primary: "gemini-flash", fallback: "claude-haiku" },
       "call-summary": { primary: "gemini-flash", fallback: null },
       "itinerary-suggest": { primary: "gemini-flash", fallback: "claude-haiku" },
+      // AI travel-landing-page JSON generation (PR #1174).
+      "landing-page-generate": { primary: "gemini-flash", fallback: "claude-haiku" },
       // Trip-countdown (packing nudges) + payment-reminder (pay-or-cancel
       // deposit chase) — 2026-06-16 travel notification engines. Both bulk-
       // shape email copy → gemini-flash primary / claude-haiku fallback.
@@ -194,8 +196,9 @@ describe('llmRouter — module shape', () => {
     // + FR-3.6.3's 'marketing-flyer-image' (S16) + the 2026-06-16 travel
     // notification engines 'trip-countdown' + 'payment-reminder' + the
     // 2026-06-19 'whatsapp-lead-qualify' + TBO 'flight-search' / 'hotel-search'
-    // / 'transfer-search' + the 'airport-iata' name→code resolver = 17.
-    expect(r.VALID_TASKS).toHaveLength(17);
+    // / 'transfer-search' + the 'airport-iata' name→code resolver +
+    // 'landing-page-generate' (PR #1174) = 18.
+    expect(r.VALID_TASKS).toHaveLength(18);
   });
 });
 

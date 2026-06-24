@@ -1182,31 +1182,18 @@ describe('GET /api/landing-pages/template-catalogue (Phase D1 picker)', () => {
     expect(res.status).toBe(200);
     expect(Array.isArray(res.body.templates)).toBe(true);
     const ids = res.body.templates.map((t) => t.id);
-    expect(ids).toContain('educational-trip-v1');
-    expect(ids).toContain('travel-premium-v1');
-    expect(ids).toContain('religious-tour-v1');
-    expect(ids).toContain('luxury-tour-v1');
-    // Each entry carries the fields the picker UI needs.
-    const edu = res.body.templates.find((t) => t.id === 'educational-trip-v1');
-    expect(edu.title).toBeTruthy();
-    expect(edu.description).toBeTruthy();
-    expect(edu.status).toBe('ready');
-    expect(edu.defaultContent).toBeTruthy();
-    expect(typeof edu.defaultContent).toBe('object');
-    // The defaultContent has the canonical D1 slot keys so the
-    // template editor mode loads cleanly.
-    expect(edu.defaultContent).toHaveProperty('brand');
-    expect(edu.defaultContent).toHaveProperty('hero');
-    expect(edu.defaultContent).toHaveProperty('faq');
-    // PR-E Phase 1 Option B promoted religious-tour-v1, family-trip-v1,
-    // and luxury-tour-v1 from "stub" to "ready" (real implementations
-    // sharing the universalComponents renderer + family-specific theme
-    // tokens). travel-premium-v1 stayed as a backwards-compat shell and
-    // is now flagged as "legacy" instead of "stub".
-    const religious = res.body.templates.find((t) => t.id === 'religious-tour-v1');
-    expect(religious.status).toBe('ready');
-    const legacy = res.body.templates.find((t) => t.id === 'travel-premium-v1');
-    expect(legacy.status).toBe('legacy');
+    // Road A (2026-06-23): the operator-facing picker now exposes ONLY
+    // the Wanderlux dynamic generator. The four family templates remain
+    // registered for backwards-compat but are not picker-visible.
+    expect(ids).toEqual(['wanderlux-v1']);
+    const tmpl = res.body.templates.find((t) => t.id === 'wanderlux-v1');
+    expect(tmpl.title).toBeTruthy();
+    expect(tmpl.description).toBeTruthy();
+    expect(tmpl.status).toBe('ready');
+    expect(tmpl.defaultContent).toBeTruthy();
+    expect(typeof tmpl.defaultContent).toBe('object');
+    expect(tmpl.schema).toBeTruthy();
+    expect(Array.isArray(tmpl.schema.editorSlots)).toBe(true);
   });
 });
 

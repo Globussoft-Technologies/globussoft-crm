@@ -1442,6 +1442,72 @@ router.get("/diagnostics/:id", verifyToken, requireTravelTenant, async (req, res
   }
 });
 
+// PATCH /api/travel/diagnostics/:id
+//
+// Record the senior reviewer's blind hand-pick (PRD §3.3.7 / DD-5.7). The
+// reviewer picks a trip slug / "other" / "no_rec" BEFORE the engine output is
+// revealed; we persist it on TravelDiagnostic.humanPick so the later
+// engine-vs-human agreement analysis can run. Senior-role gated
+// (diagnostics:update) per the blind-pick protocol.
+//
+// Body: { humanPick: <non-empty string> }. Returns the updated diagnostic
+// (same shape as GET, with contact) so the UI can re-render + unlock the engine.
+router.patch(
+  "/diagnostics/:id",
+  verifyToken,
+  requireTravelTenant,
+  requirePermission("diagnostics", "update"),
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ error: "id must be a number", code: "INVALID_ID" });
+      }
+
+      const rawPick = req.body && typeof req.body.humanPick === "string" ? req.body.humanPick.trim() : "";
+      if (!rawPick) {
+        return res.status(400).json({ error: "humanPick is required (a trip slug, \"other\", or \"no_rec\").", code: "HUMAN_PICK_REQUIRED" });
+      }
+      const humanPick = rawPick.slice(0, 120);
+
+      const diag = await prisma.travelDiagnostic.findFirst({
+        where: { id, tenantId: req.travelTenant.id },
+      });
+      if (!diag) return res.status(404).json({ error: "Diagnostic not found", code: "NOT_FOUND" });
+
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (!canAccessSubBrand(allowed, diag.subBrand)) {
+        return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+      }
+
+      const updated = await prisma.travelDiagnostic.update({
+        where: { id: diag.id },
+        data: { humanPick },
+      });
+
+      writeAudit(
+        "TravelDiagnostic",
+        "DIAGNOSTIC_HUMAN_PICK",
+        diag.id,
+        req.user.userId,
+        req.travelTenant.id,
+        { subBrand: diag.subBrand, humanPick, previousPick: diag.humanPick || null },
+      ).catch(() => {});
+
+      const contact = updated.contactId
+        ? await prisma.contact.findFirst({
+            where: { id: updated.contactId, tenantId: req.travelTenant.id },
+            select: { id: true, name: true, email: true, phone: true },
+          })
+        : null;
+      res.json({ ...updated, contact });
+    } catch (e) {
+      console.error("[travel-diag] patch diagnostic error:", e.message);
+      res.status(500).json({ error: "Failed to update diagnostic" });
+    }
+  },
+);
+
 // POST /api/travel/diagnostics/:id/talking-points/regen
 //
 // PRD §4.2 + §6.1: generate an advisor talking-points brief for a

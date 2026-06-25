@@ -244,6 +244,9 @@ export default function SuppliersAdmin() {
   const [payablesLoadingBy, setPayablesLoadingBy] = useState({});   // { [supplierId]: bool }
   const [payableForm, setPayableForm] = useState({});               // { [supplierId]: form }
   const [payableSaving, setPayableSaving] = useState({});           // { [supplierId]: bool }
+  // Mark-as-paid confirmation dialog state.
+  const [pendingPay, setPendingPay] = useState(null); // { supplierId, payable } | null
+  const [payRefInput, setPayRefInput] = useState("");
 
   // Slice 9 (#903) — payables aging panel state. Loaded once on mount via
   // GET /api/travel/payables/aging. `aging` is null until first response;
@@ -545,13 +548,27 @@ export default function SuppliersAdmin() {
     }
   };
 
-  const handleMarkPayablePaid = async (supplierId, payable) => {
+  // Called from the panel's ✓ button — opens the confirmation dialog instead
+  // of immediately patching the server. The actual API call fires from confirmMarkPaid.
+  const openMarkPaidDialog = (supplierId, payable) => {
+    setPendingPay({ supplierId, payable });
+    setPayRefInput("");
+  };
+
+  const confirmMarkPaid = async () => {
+    if (!pendingPay) return;
+    const { supplierId, payable } = pendingPay;
     try {
       await fetchApi(`/api/travel/suppliers/${supplierId}/payables/${payable.id}`, {
         method: "PUT",
-        body: JSON.stringify({ status: "paid" }),
+        body: JSON.stringify({
+          status: "paid",
+          paymentReference: payRefInput.trim() || undefined,
+        }),
       });
-      notify.success("Payable marked paid");
+      notify.success("Payable marked paid — expense record created automatically");
+      setPendingPay(null);
+      setPayRefInput("");
       loadPayables(supplierId);
     } catch (err) {
       notify.error(err?.body?.error || err?.message || "Failed to mark paid");
@@ -1211,7 +1228,8 @@ export default function SuppliersAdmin() {
                 <Fragment key={s.id}>
                 <tr style={{ borderTop: "1px solid rgba(255,255,255,0.04)" }}>
                   <td style={td}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <strong>{s.name}</strong>
                       <button
                         type="button"
                         onClick={() => togglePayablesPanel(s.id)}
@@ -1219,15 +1237,25 @@ export default function SuppliersAdmin() {
                         aria-label={`Toggle payables for ${s.name}`}
                         aria-expanded={isExpanded}
                         style={{
-                          ...iconBtn,
-                          padding: 2,
-                          marginRight: 0,
-                          color: "var(--text-secondary)",
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 3,
+                          padding: "2px 7px",
+                          borderRadius: 10,
+                          border: "1px solid rgba(255,255,255,0.15)",
+                          background: isExpanded ? "rgba(200,154,78,0.18)" : "rgba(255,255,255,0.06)",
+                          color: isExpanded ? "var(--accent-color, #C89A4E)" : "var(--text-secondary)",
+                          fontSize: 11,
+                          fontWeight: 600,
+                          cursor: "pointer",
+                          letterSpacing: "0.02em",
+                          transition: "background 0.15s",
                         }}
                       >
-                        {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                        <Wallet size={11} aria-hidden />
+                        Payables
+                        {isExpanded ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
                       </button>
-                      <strong>{s.name}</strong>
                     </div>
                     {subLine && (
                       <div
@@ -1311,7 +1339,7 @@ export default function SuppliersAdmin() {
                         saving: !!payableSaving[s.id],
                         onFormChange: (patch) => updatePayableForm(s.id, patch),
                         onSubmit: (e) => handleAddPayable(e, s.id),
-                        onMarkPaid: (p) => handleMarkPayablePaid(s.id, p),
+                        onMarkPaid: (p) => openMarkPaidDialog(s.id, p),
                         onCancel: (p) => handleCancelPayable(s.id, p),
                         onDelete: (p) => handleDeletePayable(s.id, p),
                       })}
@@ -1353,6 +1381,63 @@ export default function SuppliersAdmin() {
           </table>
         )}
       </div>
+
+      {/* Mark-as-paid confirmation dialog */}
+      {pendingPay && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Confirm payment"
+          style={{
+            position: "fixed", inset: 0, zIndex: 9999,
+            background: "rgba(0,0,0,0.55)", backdropFilter: "blur(4px)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+          }}
+          onClick={(e) => { if (e.target === e.currentTarget) { setPendingPay(null); setPayRefInput(""); } }}
+        >
+          <div className="glass" style={{ padding: 28, borderRadius: 12, maxWidth: 420, width: "90%", display: "flex", flexDirection: "column", gap: 16 }}>
+            <div style={{ fontWeight: 700, fontSize: 16 }}>Confirm payment</div>
+            <div style={{ fontSize: 13, color: "var(--text-secondary)" }}>
+              Marking <strong style={{ color: "var(--text-primary)" }}>{pendingPay.payable.description}</strong> as paid
+              ({pendingPay.payable.currency || "INR"} {pendingPay.payable.amount}).
+              An expense record will be created automatically.
+            </div>
+            <div>
+              <label style={{ display: "block", fontSize: 12, color: "var(--text-secondary)", marginBottom: 4 }}>
+                Payment reference <span style={{ fontStyle: "italic" }}>(UPI ref, cheque #, bank ref — optional)</span>
+              </label>
+              <input
+                autoFocus
+                type="text"
+                value={payRefInput}
+                onChange={(e) => setPayRefInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") confirmMarkPaid();
+                  if (e.key === "Escape") { setPendingPay(null); setPayRefInput(""); }
+                }}
+                placeholder="e.g. UPI/2026/06/XXXXX or CHQ-1234"
+                style={{ width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid rgba(255,255,255,0.15)", background: "rgba(255,255,255,0.06)", color: "var(--text-primary)", fontSize: 13, boxSizing: "border-box" }}
+              />
+            </div>
+            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+              <button
+                type="button"
+                onClick={() => { setPendingPay(null); setPayRefInput(""); }}
+                style={{ padding: "7px 16px", borderRadius: 6, border: "1px solid rgba(255,255,255,0.15)", background: "transparent", color: "var(--text-secondary)", cursor: "pointer", fontSize: 13 }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmMarkPaid}
+                style={{ padding: "7px 18px", borderRadius: 6, border: "none", background: "var(--success-color, #22c55e)", color: "#fff", fontWeight: 600, cursor: "pointer", fontSize: 13 }}
+              >
+                Mark as paid
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1404,6 +1489,7 @@ function renderPayablesPanel({
               <th style={{ ...payableTh }}>Amount</th>
               <th style={{ ...payableTh }}>Due</th>
               <th style={{ ...payableTh }}>Status</th>
+              <th style={{ ...payableTh }}>Payment ref</th>
               <th style={{ ...payableTh }}>PO #</th>
               <th style={{ ...payableTh }}>Notes</th>
               {canWrite && <th style={{ ...payableTh, textAlign: "center" }}>Actions</th>}
@@ -1446,8 +1532,15 @@ function renderPayablesPanel({
                       {statusKey}
                     </span>
                   </td>
+                  <td style={{ ...payableTd, maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {p.paymentReference ? (
+                      <span style={{ fontFamily: "monospace", fontSize: 11, color: "var(--success-color, #22c55e)" }}>
+                        {p.paymentReference}
+                      </span>
+                    ) : "—"}
+                  </td>
                   <td style={payableTd}>{p.poNumber || "—"}</td>
-                  <td style={{ ...payableTd, maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  <td style={{ ...payableTd, maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                     {p.notes || "—"}
                   </td>
                   {canWrite && (

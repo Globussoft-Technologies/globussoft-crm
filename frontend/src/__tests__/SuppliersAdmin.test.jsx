@@ -1024,7 +1024,7 @@ describe('<SuppliersAdmin /> — slice 4 (#903) payables panel', () => {
     expect(within(screen.getByTestId('payable-row-403')).getByTestId('payable-status-403').textContent).toMatch(/cancelled/i);
   });
 
-  it('"Mark paid" button fires PUT with { status: "paid" } + re-fetches list', async () => {
+  it('"Mark paid" button opens a confirm dialog and fires PUT with { status: "paid" } + re-fetches list', async () => {
     installFetchMockWithPayables({
       payables: { payables: [makePayable({ id: 411, status: 'pending' })], total: 1 },
     });
@@ -1037,6 +1037,9 @@ describe('<SuppliersAdmin /> — slice 4 (#903) payables panel', () => {
       payables: { payables: [makePayable({ id: 411, status: 'paid', paidAt: '2026-05-25T09:00:00.000Z' })], total: 1 },
     });
     fireEvent.click(screen.getByRole('button', { name: /Mark paid payable 411/i }));
+    // Confirm dialog opens; confirm to fire the PUT.
+    expect(await screen.findByRole('dialog', { name: /Confirm payment/i })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Mark as paid/i }));
     await waitFor(() => {
       const put = fetchApiMock.mock.calls.find(([u, o]) =>
         u === '/api/travel/suppliers/201/payables/411' && o?.method === 'PUT',

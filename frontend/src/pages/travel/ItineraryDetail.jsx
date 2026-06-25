@@ -259,7 +259,11 @@ export default function ItineraryDetail() {
   }, [itin]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const accept = async () => {
-    if (!confirm("Mark this itinerary as accepted? This also fans out WebCheckin rows for every flight item.")) return;
+    if (!await notify.confirm({
+      title: "Accept Itinerary",
+      message: "Mark this itinerary as accepted? This also fans out WebCheckin rows for every flight item.",
+      confirmText: "Accept",
+    })) return;
     try {
       await fetchApi(`/api/travel/itineraries/${id}/accept`, { method: "POST", body: JSON.stringify({}) });
       notify.success("Itinerary accepted");
@@ -270,7 +274,11 @@ export default function ItineraryDetail() {
   };
 
   const reject = async () => {
-    const reason = prompt("Reason for rejection? (optional, logged for audit):", "");
+    const reason = await notify.prompt({
+      title: "Reject Itinerary",
+      message: "Reason for rejection? (optional, logged for audit)",
+      placeholder: "Enter reason…",
+    });
     if (reason === null) return; // user cancelled prompt
     try {
       await fetchApi(`/api/travel/itineraries/${id}/reject`, {
@@ -301,23 +309,44 @@ export default function ItineraryDetail() {
   // Admin resolution of a customer-initiated cancellation request.
   // decision ∈ "approve" | "decline" | "refunded".
   const resolveCancellation = async (decision) => {
+    const r = itin.cancellationRefund;
+    const cur = (itin.currency || "INR") === "INR" ? "₹" : `${itin.currency} `;
+    const refundAmt = r && r.computable && r.refundAmount != null ? Number(r.refundAmount) : null;
+    const refundedMsg = refundAmt
+      ? `Process the refund of ${cur}${refundAmt.toLocaleString("en-IN")} to the customer via Razorpay, per the cancellation policy${r.policyName ? ` (${r.policyName})` : ""}? This cannot be undone.`
+      : "Mark the refund as processed? No gateway charge was found for this booking, so record the refund in your books. The customer will be notified.";
     const confirms = {
-      approve: "Approve this cancellation? The booking will be marked cancelled and the customer notified — then process any refund per the cancellation policy.",
+      approve: "Approve this cancellation? The booking will be marked cancelled and the customer notified — then process the policy refund.",
       decline: "Decline this cancellation request? The booking continues and the customer is notified.",
-      refunded: "Mark the refund as processed? The customer will be notified.",
+      refunded: refundedMsg,
     };
-    if (!confirm(confirms[decision])) return;
-    const note = prompt("Add a short note for the customer (optional):", "");
+    if (!await notify.confirm({
+      title: "Confirm Action",
+      message: confirms[decision],
+      confirmText: decision === "refunded" ? "Process refund" : "Confirm",
+      destructive: decision !== "decline",
+    })) return;
+    const note = await notify.prompt({
+      title: "Customer Note",
+      message: "Add a short note for the customer (optional)",
+      placeholder: "Note…",
+    });
     if (note === null) return; // operator cancelled the prompt
     try {
-      await fetchApi(`/api/travel/itineraries/${id}/cancellation`, {
+      const res = await fetchApi(`/api/travel/itineraries/${id}/cancellation`, {
         method: "PATCH",
         body: JSON.stringify({ decision, note: note || undefined }),
       });
-      notify.success(
-        decision === "approve" ? "Cancellation approved" :
-          decision === "decline" ? "Cancellation request declined" : "Refund recorded",
-      );
+      if (decision === "refunded") {
+        const g = res?.refund?.gatewayRefund;
+        notify.success(
+          g?.id
+            ? `Refund of ${cur}${Number(g.amount).toLocaleString("en-IN")} processed (${g.id})`
+            : "Refund recorded",
+        );
+      } else {
+        notify.success(decision === "approve" ? "Cancellation approved" : "Cancellation request declined");
+      }
       load();
     } catch (e) {
       notify.error(e?.body?.error || "Failed to update the cancellation");
@@ -464,7 +493,7 @@ export default function ItineraryDetail() {
   };
 
   const deleteItem = async (item) => {
-    if (!confirm(`Delete "${item.description}"?`)) return;
+    if (!await notify.confirm({ title: "Delete Item", message: `Delete "${item.description}"?`, confirmText: "Delete", destructive: true })) return;
     try {
       await fetchApi(`/api/travel/itineraries/${id}/items/${item.id}`, { method: "DELETE" });
       notify.success("Item deleted");
@@ -508,7 +537,8 @@ export default function ItineraryDetail() {
   }
 
   const status = itin.status || "draft";
-  const isTerminal = status === "accepted" || status === "rejected";
+  const isTerminal = status === "accepted" || status === "rejected"
+    || status === "advance_paid" || status === "fully_paid";
   // totalAmount is the GROUP total (sum of item line totals); per-person is
   // derived as group / travelers.
   const pax = itin.pax && itin.pax > 0 ? itin.pax : 1;
@@ -710,8 +740,8 @@ export default function ItineraryDetail() {
                 </>
               )}
               {itin.cancellationStatus === "cancelled" && (
-                <button type="button" onClick={() => resolveCancellation("refunded")} style={primaryBtn} aria-label="Mark refund processed">
-                  <Check size={14} /> Mark refunded
+                <button type="button" onClick={() => resolveCancellation("refunded")} style={primaryBtn} aria-label="Process refund">
+                  <Check size={14} /> Process refund
                 </button>
               )}
             </div>

@@ -54,9 +54,15 @@ function resolveGateway(pref, currency) {
  * @param {string} [opts.currency] - ISO 4217 (defaults USD)
  * @param {string} [opts.gatewayPref] - auto | razorpay | stripe
  * @param {string} [opts.tenantName]  - org display name shown on the payment page
+ * @param {Object} [opts.travelContext] - { scheduleId, travelInvoiceId }. When
+ *   present this is a TRAVEL-vertical link: the Payment row is tagged
+ *   kind='travel-milestone' (in notes + metadata) and its invoiceId is left
+ *   NULL so the generic markInvoicePaid() can't mis-reconcile against a
+ *   same-numbered generic Invoice. The Razorpay webhook's travel-milestone
+ *   branch reconciles it back to the TravelPaymentSchedule + TravelInvoice.
  * @returns {Promise<{url, gateway, paymentId}|{error, code}>}
  */
-async function createInvoicePaymentLink({ tenantId, invoice, contact, currency, gatewayPref, tenantName }) {
+async function createInvoicePaymentLink({ tenantId, invoice, contact, currency, gatewayPref, tenantName, travelContext }) {
   const amount = Number(invoice?.amount);
   if (!invoice?.id || !amount || isNaN(amount) || amount <= 0) {
     return { error: "Invoice with a positive amount is required", code: "BAD_INVOICE" };
@@ -91,20 +97,43 @@ async function createInvoicePaymentLink({ tenantId, invoice, contact, currency, 
         // We send our own branded email; don't double-notify from Razorpay.
         notify: { sms: false, email: false },
         reminder_enable: false,
-        notes: { tenantId: String(tenantId), invoiceId: String(invoice.id) },
+        notes: travelContext
+          ? {
+              tenantId: String(tenantId),
+              kind: travelContext.kind || "travel-milestone",
+              ...(travelContext.scheduleId != null
+                ? { scheduleId: String(travelContext.scheduleId) }
+                : {}),
+              travelInvoiceId: String(travelContext.travelInvoiceId),
+            }
+          : { tenantId: String(tenantId), invoiceId: String(invoice.id) },
         callback_url: `${frontendBase}/p/payment/success`,
         callback_method: "get",
       });
       const payment = await prisma.payment.create({
         data: {
-          invoiceId: invoice.id,
+          // Travel links leave invoiceId NULL so the generic markInvoicePaid()
+          // can't grab a same-numbered generic Invoice; the webhook's
+          // travel-milestone branch reconciles via the metadata instead.
+          invoiceId: travelContext ? null : invoice.id,
           amount,
           currency: cur,
           gateway: "razorpay",
           gatewayId: link.id, // plink_… — matched by the payment_link.paid webhook
           status: "PENDING",
           tenantId,
-          metadata: JSON.stringify({ mode: "payment_link", url: link.short_url, plinkId: link.id }),
+          metadata: JSON.stringify(
+            travelContext
+              ? {
+                  mode: "payment_link",
+                  url: link.short_url,
+                  plinkId: link.id,
+                  kind: travelContext.kind || "travel-milestone",
+                  scheduleId: travelContext.scheduleId,
+                  travelInvoiceId: travelContext.travelInvoiceId,
+                }
+              : { mode: "payment_link", url: link.short_url, plinkId: link.id },
+          ),
         },
       });
       return { url: link.short_url, gateway: "razorpay", paymentId: payment.id };

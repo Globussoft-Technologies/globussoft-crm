@@ -533,6 +533,9 @@ async function loadPortalOwnedItinerary(req, res) {
       id: true, status: true, subBrand: true, destination: true,
       // cancellation-flow fields (2026-06-19)
       cancellationStatus: true, advancePaidAmount: true, currency: true,
+      // trip dates — used to block a cancellation request once the trip has
+      // already departed (you can't cancel a trip that's already underway/over).
+      startDate: true, endDate: true,
     },
   });
   if (!itin) {
@@ -712,6 +715,18 @@ router.post("/travel/itineraries/:id/request-cancellation", verifyPortalToken, r
     }
     if (itin.cancellationStatus === "requested" || itin.cancellationStatus === "cancelled") {
       return res.status(409).json({ error: "A cancellation is already in progress for this booking.", code: "ALREADY_REQUESTED" });
+    }
+    // A trip that has already departed (or ended) can't be cancelled online —
+    // there's nothing left to cancel and the cancellation policy keys off
+    // days-before-departure (which is now negative). The customer must contact
+    // their advisor for any post-departure exception. We block on the START
+    // date (departure); fall back to endDate if only that's set.
+    const departure = itin.startDate || itin.endDate;
+    if (departure && new Date(departure).getTime() <= Date.now()) {
+      return res.status(409).json({
+        error: "This trip has already started, so it can no longer be cancelled online. Please contact your advisor.",
+        code: "TRIP_ALREADY_STARTED",
+      });
     }
     const rawReason = req.body && typeof req.body.reason === "string" ? req.body.reason.trim() : "";
     if (!rawReason) {

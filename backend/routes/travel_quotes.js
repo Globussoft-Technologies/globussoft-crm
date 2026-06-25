@@ -4093,6 +4093,11 @@ router.post("/quotes/:id/share", verifyToken, requireTravelTenant, async (req, r
             to: contact.email,
             subject: `Your travel quote${amt ? ` — ${amt}` : ""}`,
             text: `Hi ${name},\n\nYour travel quote is ready${amt ? ` (${amt})` : ""}. View it here:\n${shareUrl}\n\nYou can accept it right from that page.\n\nThank you.`,
+            html:
+              `<p>Hi ${name},</p>` +
+              `<p>Your travel quote is ready${amt ? ` (${amt})` : ""}.</p>` +
+              `<p><a href="${shareUrl}" target="_blank" rel="noopener noreferrer">View and accept your quote</a></p>` +
+              `<p>Thank you.</p>`,
           }).catch(() => ({ sent: false }));
           emailStatus = r && r.sent ? "SENT" : "SKIPPED";
           if (r && r.sent) channelsUsed.push("email");

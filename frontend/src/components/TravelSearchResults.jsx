@@ -14,6 +14,7 @@
 import { useState } from "react";
 import { Plus, Star, Car, MapPin, Plane, Sparkles, Hotel as HotelIcon } from "lucide-react";
 import { useDestinationPhoto, useDestinationGallery } from "../utils/destinationPhotos";
+import { destinationTheme } from "../utils/destinationTheme";
 
 // ── shared formatters ────────────────────────────────────────────────
 function fmtClock(s) {
@@ -120,6 +121,27 @@ export function FlightResultsBoard({ results, currency = "INR", onAdd, addLabel 
   );
 }
 
+// ── Hotel photo with error-state fallback ────────────────────────────
+// Renders the hotel image if src loads; shows the gradient placeholder if
+// src is absent or fails. Using a component (vs. inline onError style hack)
+// because React state is the only reliable way to swap rendered output after
+// a network error fires — DOM-style display:none leaves the parent transparent.
+function HotelCardPhoto({ src, alt, fallbackBg, iconSize = 22 }) {
+  const [failed, setFailed] = useState(false);
+  if (!src || failed) {
+    return (
+      <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", background: fallbackBg }}>
+        <HotelIcon size={iconSize} aria-hidden style={{ color: "rgba(255,255,255,0.85)" }} />
+      </div>
+    );
+  }
+  return (
+    <img src={src} alt={alt} loading="lazy"
+      onError={() => setFailed(true)}
+      style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+  );
+}
+
 // ── Hotels ───────────────────────────────────────────────────────────
 export function HotelResultsGrid({ results, currency = "INR", city, onAdd, addLabel = "Add to quote" }) {
   // One Wikipedia gallery + lead photo per city (keyless). Distributed across
@@ -127,6 +149,7 @@ export function HotelResultsGrid({ results, currency = "INR", city, onAdd, addLa
   // gives no thumbnail — visual variety without bundling hotel imagery.
   const gallery = useDestinationGallery(city || "");
   const lead = useDestinationPhoto(city || "");
+  const theme = destinationTheme(city || "");
   if (!results || !results.length) return null;
   return (
     <div style={{ display: "grid", gap: 12, marginTop: 8, gridTemplateColumns: "repeat(auto-fill, minmax(min(100%, 270px), 1fr))" }}>
@@ -137,13 +160,7 @@ export function HotelResultsGrid({ results, currency = "INR", city, onAdd, addLa
         return (
           <div key={i} style={hotelCard}>
             <div style={hotelPhotoWrap}>
-              {photo ? (
-                <img src={photo} alt={h.name || "Hotel"} loading="lazy" onError={(e) => { e.currentTarget.style.display = "none"; }} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-              ) : (
-                <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", background: "linear-gradient(135deg, #2c3e50, #4b6584)" }}>
-                  <HotelIcon size={28} aria-hidden style={{ color: "rgba(255,255,255,0.85)" }} />
-                </div>
-              )}
+              <HotelCardPhoto src={photo} alt={h.name || "Hotel"} fallbackBg={theme.gradient} iconSize={28} />
               <div style={{ position: "absolute", inset: 0, background: "linear-gradient(to top, rgba(10,16,30,0.62), transparent 58%)" }} />
               {stars > 0 && (
                 <div style={hotelStarBadge}>
@@ -284,6 +301,7 @@ function SuggestedStay({ stay, currency, onSelect }) {
   const [open, setOpen] = useState(false);
   const gallery = useDestinationGallery(stay.city || "");
   const lead = useDestinationPhoto(stay.city || "");
+  const theme = destinationTheme(stay.city || "");
   const sel = stay.options[stay.selectedIdx] || stay.options[0];
   if (!sel) return null;
   const photoFor = (h, idx) => h.thumbnail || (gallery.length ? gallery[idx % gallery.length]?.url : null) || lead || null;
@@ -296,10 +314,8 @@ function SuggestedStay({ stay, currency, onSelect }) {
         )}
       </div>
       <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-        <div style={{ width: 138, height: 100, borderRadius: 10, overflow: "hidden", flexShrink: 0, position: "relative", background: "var(--subtle-bg, rgba(148,163,184,0.18))" }}>
-          {photoFor(sel, stay.selectedIdx)
-            ? <img src={photoFor(sel, stay.selectedIdx)} alt={sel.name || "Hotel"} loading="lazy" onError={(e) => { e.currentTarget.style.display = "none"; }} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-            : <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}><HotelIcon size={24} aria-hidden style={{ color: "var(--text-secondary)" }} /></div>}
+        <div style={{ width: 138, height: 100, borderRadius: 10, overflow: "hidden", flexShrink: 0, position: "relative" }}>
+          <HotelCardPhoto src={photoFor(sel, stay.selectedIdx)} alt={sel.name || "Hotel"} fallbackBg={theme.gradient} iconSize={24} />
         </div>
         <div style={{ flex: 1, minWidth: 170 }}>
           <div style={{ fontWeight: 700, fontSize: 13.5 }}>
@@ -315,10 +331,8 @@ function SuggestedStay({ stay, currency, onSelect }) {
         <div style={{ marginTop: 10, display: "grid", gap: 8, gridTemplateColumns: "repeat(auto-fill, minmax(min(100%, 210px), 1fr))" }}>
           {stay.options.map((h, i) => (i === stay.selectedIdx ? null : (
             <div key={i} style={hotelCard}>
-              <div style={{ position: "relative", height: 88, background: "var(--subtle-bg, rgba(148,163,184,0.18))" }}>
-                {photoFor(h, i)
-                  ? <img src={photoFor(h, i)} alt={h.name || "Hotel"} loading="lazy" onError={(e) => { e.currentTarget.style.display = "none"; }} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-                  : <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}><HotelIcon size={20} aria-hidden style={{ color: "var(--text-secondary)" }} /></div>}
+              <div style={{ position: "relative", height: 88 }}>
+                <HotelCardPhoto src={photoFor(h, i)} alt={h.name || "Hotel"} fallbackBg={theme.gradient} iconSize={20} />
               </div>
               <div style={{ padding: "8px 10px", display: "flex", flexDirection: "column", gap: 4, flex: 1 }}>
                 <strong style={{ fontSize: 12.5, lineHeight: 1.25 }}>{h.name}</strong>

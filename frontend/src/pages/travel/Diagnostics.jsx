@@ -80,13 +80,15 @@ export default function Diagnostics() {
               <Plus size={16} aria-hidden /> New bank
             </Link>
           )}
-          <Link
-            to="/travel/diagnostics/new"
-            style={ctaPrimary}
-            aria-label="Take a diagnostic"
-          >
-            <Compass size={16} aria-hidden /> Take diagnostic
-          </Link>
+          {!isAdmin && (
+            <Link
+              to="/travel/diagnostics/new"
+              style={ctaPrimary}
+              aria-label="Take a diagnostic"
+            >
+              <Compass size={16} aria-hidden /> Take diagnostic
+            </Link>
+          )}
         </div>
       </div>
       <p style={{ color: 'var(--text-secondary)', marginTop: 0 }}>
@@ -136,7 +138,9 @@ export default function Diagnostics() {
           <div style={empty}>Loading&hellip;</div>
         ) : diagnostics.length === 0 ? (
           <div style={empty}>
-            No diagnostics submitted yet. Click <strong>Take diagnostic</strong> to start.
+            {isAdmin
+              ? 'No diagnostics submitted yet.'
+              : <>No diagnostics submitted yet. Click <strong>Take diagnostic</strong> to start.</>}
           </div>
         ) : (
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>

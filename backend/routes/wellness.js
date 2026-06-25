@@ -28,6 +28,8 @@ const {
   renderConsentPdf,
   renderBrandedInvoicePdf,
   renderPatientSummaryPdf,
+  // ₹-glyph fix for the route-level landscape report PDF below.
+  applyRupeeCapableFonts,
 } = require("../services/pdfRenderer");
 const { writeAudit, diffFields } = require("../lib/audit");
 // #920 slice S42 — wellness PHI list-endpoint slim projections.
@@ -7704,6 +7706,7 @@ function sendCsv(res, baseName, window, csvText) {
 async function renderReportPdf(title, columns, rows, range, clinic) {
   const PDFDocument = require("pdfkit");
   const doc = new PDFDocument({ size: "A4", margin: 40, layout: "landscape" });
+  applyRupeeCapableFonts(doc); // ₹ glyph fix
   const chunks = [];
   const bufPromise = new Promise((resolve, reject) => {
     doc.on("data", (c) => chunks.push(c));

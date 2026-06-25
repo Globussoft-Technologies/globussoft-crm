@@ -196,7 +196,7 @@ afterEach(() => {
 });
 
 describe('<QuotesAdmin /> — page chrome + filter bar', () => {
-  it('renders heading + filter bar + "New Quote" CTA (ADMIN role)', async () => {
+  it('renders heading + filter bar; NO create button (quotes are created in the Quote Builder)', async () => {
     renderPage();
     expect(
       await screen.findByRole('heading', { name: /Travel Quotes/i }),
@@ -205,8 +205,9 @@ describe('<QuotesAdmin /> — page chrome + filter bar', () => {
     expect(screen.getByLabelText(/Filter by sub-brand/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Filter by status/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Filter by contact ID/i)).toBeInTheDocument();
-    // CTA
-    expect(screen.getByRole('button', { name: /New Quote/i })).toBeInTheDocument();
+    // The "New Quote" CTA was intentionally removed — creation lives in the
+    // Quote Builder, so even an ADMIN has no create button here.
+    expect(screen.queryByRole('button', { name: /New Quote/i })).toBeNull();
     // Wait for mount-time GET to settle
     await waitFor(() => {
       const calls = fetchApiMock.mock.calls.filter(([u]) => typeof u === 'string' && u.startsWith('/api/travel/quotes'));
@@ -336,74 +337,11 @@ describe('<QuotesAdmin /> — row rendering: money + sub-brand badge', () => {
   });
 });
 
-describe('<QuotesAdmin /> — new-quote modal + create POST', () => {
-  it('clicking "New Quote" reveals the create form (modal-like inline reveal)', async () => {
-    renderPage();
-    await screen.findByText('#5001');
-    // Form fields not present before clicking the CTA.
-    expect(screen.queryByLabelText(/^Contact ID$/i)).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: /New Quote/i }));
-    // After click, form fields surface.
-    expect(screen.getByLabelText(/^Contact ID$/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/^Total amount$/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/^Currency$/i)).toBeInTheDocument();
-    // Cancel button + Save button.
-    expect(screen.getByRole('button', { name: /Cancel/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /^Save$/i })).toBeInTheDocument();
-  });
-
-  it('happy path: filling the form + Save POSTs /api/travel/quotes with parsed payload', async () => {
-    renderPage();
-    await screen.findByText('#5001');
-    fireEvent.click(screen.getByRole('button', { name: /New Quote/i }));
-    fireEvent.change(screen.getByLabelText(/^Contact ID$/i), { target: { value: '5050' } });
-    fireEvent.change(screen.getByLabelText(/^Total amount$/i), { target: { value: '99999.50' } });
-    // Currency defaults to INR but bump to USD to pin the upper-cased value.
-    fireEvent.change(screen.getByLabelText(/^Currency$/i), { target: { value: 'usd' } });
-    fireEvent.click(screen.getByRole('button', { name: /^Save$/i }));
-    await waitFor(() => {
-      const post = fetchApiMock.mock.calls.find(([u, o]) =>
-        u === '/api/travel/quotes' && o?.method === 'POST',
-      );
-      expect(post).toBeTruthy();
-      const body = JSON.parse(post[1].body);
-      expect(body.contactId).toBe(5050);
-      expect(body.totalAmount).toBe(99999.5);
-      // Currency input handler upper-cases on change.
-      expect(body.currency).toBe('USD');
-      expect(body.status).toBe('Draft');
-      expect(body.subBrand).toBe('tmc');
-      // validUntil left blank → SUT sends null.
-      expect(body.validUntil).toBeNull();
-    });
-    expect(notifySuccess).toHaveBeenCalled();
-  });
-
-  it('validation: non-numeric contactId surfaces notify.error and does NOT fire POST', async () => {
-    renderPage();
-    await screen.findByText('#5001');
-    fireEvent.click(screen.getByRole('button', { name: /New Quote/i }));
-    // Per the SUT: number <input> rejects non-digit keystrokes. We bypass
-    // the input by simulating an empty contactId, which trips the same
-    // !Number.isFinite branch the SUT validates server-side parity for.
-    fireEvent.change(screen.getByLabelText(/^Total amount$/i), { target: { value: '500' } });
-    // Submit the form (Contact ID empty → parseInt → NaN).
-    const saveBtn = screen.getByRole('button', { name: /^Save$/i });
-    // Submit programmatically since the empty number input would normally
-    // block via the `required` attribute on a click submit.
-    const form = saveBtn.closest('form');
-    fireEvent.submit(form);
-    await waitFor(() => {
-      expect(notifyError).toHaveBeenCalledWith(
-        expect.stringMatching(/Contact ID is required/i),
-      );
-    });
-    const posts = fetchApiMock.mock.calls.filter(
-      ([u, o]) => u === '/api/travel/quotes' && o?.method === 'POST',
-    );
-    expect(posts.length).toBe(0);
-  });
-});
+// NOTE: the "new-quote modal + create POST" tests were removed — quote
+// creation now lives exclusively in the Quote Builder, so this admin page no
+// longer exposes a create button or form-via-create path. The create form
+// markup remains in the component for EDIT only (covered by the edit tests
+// below, which open it via the row Edit button).
 
 describe('<QuotesAdmin /> — edit + status-transition + delete', () => {
   it('clicking Edit on a row opens the form pre-filled + PUTs to /api/travel/quotes/:id', async () => {

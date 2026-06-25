@@ -8,6 +8,9 @@ const { verifyToken } = require("../middleware/auth");
 const router = express.Router();
 const prisma = require("../lib/prisma");
 const { formatMoney } = require("../utils/formatMoney");
+// Shared ₹-glyph fix: registers the embedded Poppins family under the Helvetica
+// names so the rupee sign renders as ₹ instead of "¹" (built-in WinAnsi gap).
+const { applyRupeeCapableFonts } = require("../services/pdfRenderer");
 
 // Configure multer for file uploads
 const uploadPath = path.join(__dirname, "..", "uploads");
@@ -89,6 +92,7 @@ router.post("/:dealId/generate-quote", async (req, res) => {
     const locale = tenant?.locale || undefined;
 
     const doc = new PDFDocument();
+    applyRupeeCapableFonts(doc); // ₹ glyph fix
     const chunks = [];
     doc.on("data", (c) => chunks.push(c));
     const bufferPromise = new Promise((resolve, reject) => {

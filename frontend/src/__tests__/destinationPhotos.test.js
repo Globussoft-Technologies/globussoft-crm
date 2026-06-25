@@ -42,6 +42,19 @@ describe('fetchDestinationPhoto', () => {
     expect(await fetchDestinationPhoto('Nowhere', { fetchImpl })).toBeNull();
   });
 
+  it('resolves to a city photo when the destination contains a curated city name', async () => {
+    // "Iskon Bangalore" — "Bangalore" is in the curated list so it appears as
+    // the first candidate and resolves immediately without trying the full phrase.
+    const fetchImpl = vi.fn((u) =>
+      /titles=Bangalore/.test(u)
+        ? okJson({ query: { pages: { 44: { title: 'Bengaluru', thumbnail: { source: 'https://up/blr.jpg' } } } } })
+        : okJson({ query: { pages: { '-1': { title: 'Iskon Bangalore', missing: '' } } } }),
+    );
+    expect(await fetchDestinationPhoto('Iskon Bangalore', { fetchImpl })).toBe('https://up/blr.jpg');
+    // At least one call must have resolved the Bangalore article.
+    expect(fetchImpl.mock.calls.some((args) => /titles=Bangalore/.test(args[0]))).toBe(true);
+  });
+
   it('returns null (never throws) on network/HTTP error', async () => {
     expect(await fetchDestinationPhoto('Tokyo', { fetchImpl: () => Promise.reject(new Error('offline')) })).toBeNull();
     expect(await fetchDestinationPhoto('Tokyo', { fetchImpl: () => Promise.resolve({ ok: false }) })).toBeNull();
@@ -55,23 +68,44 @@ describe('fetchDestinationPhoto', () => {
 });
 
 describe('fetchDestinationGallery', () => {
-  it('returns real photo URLs, filtering out flags/maps/SVGs, respecting the limit', async () => {
+  it('returns showInGallery photos from the REST media-list endpoint, respecting the limit', async () => {
     const fetchImpl = vi.fn(() => okJson({
-      query: { pages: {
-        1: { title: 'File:Paris view.jpg', imageinfo: [{ thumburl: 'https://up/paris-view.jpg' }] },
-        2: { title: 'File:Flag of France.svg', imageinfo: [{ thumburl: 'https://up/flag.svg' }] },
-        3: { title: 'File:Paris locator map.png', imageinfo: [{ thumburl: 'https://up/map.png' }] },
-        4: { title: 'File:Eiffel Tower.jpeg', imageinfo: [{ thumburl: 'https://up/eiffel.jpeg' }] },
-        5: { title: 'File:Louvre.jpg', imageinfo: [{ thumburl: 'https://up/louvre.jpg' }] },
-      } },
+      items: [
+        { type: 'image', showInGallery: true,  title: 'File:Paris_view.jpg',   thumbnail: { source: 'https://up/paris-view.jpg' },  caption: { text: 'Paris view' } },
+        { type: 'image', showInGallery: false, title: 'File:Flag_of_France.svg', thumbnail: { source: 'https://up/flag.svg' } },
+        { type: 'image', showInGallery: false, title: 'File:Paris_map.png',    thumbnail: { source: 'https://up/map.png' } },
+        { type: 'image', showInGallery: true,  title: 'File:Eiffel_Tower.jpeg', thumbnail: { source: 'https://up/eiffel.jpeg' } },
+        { type: 'image', showInGallery: true,  title: 'File:Louvre.jpg',       thumbnail: { source: 'https://up/louvre.jpg' } },
+      ],
     }));
     const items = await fetchDestinationGallery('Paris', { fetchImpl, limit: 2 });
-    // flag + map dropped, capped at 2, each carries a place-name caption +
-    // a description (null here — the mock supplies no ImageDescription metadata).
+    // showInGallery:false items dropped; capped at 2; description is null when
+    // caption.text is supplied by the REST API directly.
     expect(items).toEqual([
       { url: 'https://up/paris-view.jpg', caption: 'Paris view', description: null },
       { url: 'https://up/eiffel.jpeg', caption: 'Eiffel Tower', description: null },
     ]);
+    // Uses the REST media-list endpoint, not the action API.
+    const calledUrl = fetchImpl.mock.calls[0][0];
+    expect(calledUrl).toContain('en.wikipedia.org/api/rest_v1/page/media-list/');
+  });
+
+  it('normalises protocol-relative thumbnail URLs to https', async () => {
+    const fetchImpl = vi.fn(() => okJson({
+      items: [
+        { type: 'image', showInGallery: true, title: 'File:Tokyo.jpg', thumbnail: { source: '//upload.wikimedia.org/thumb/tokyo.jpg' } },
+      ],
+    }));
+    const items = await fetchDestinationGallery('Tokyo', { fetchImpl });
+    expect(items[0].url).toBe('https://upload.wikimedia.org/thumb/tokyo.jpg');
+  });
+
+  it('falls back to captionFromFileTitle when caption.text is absent', async () => {
+    const fetchImpl = vi.fn(() => okJson({
+      items: [{ type: 'image', showInGallery: true, title: 'File:Kolkata_Howrah_Bridge.jpg', thumbnail: { source: 'https://up/howrah.jpg' } }],
+    }));
+    const items = await fetchDestinationGallery('Kolkata', { fetchImpl });
+    expect(items[0].caption).toBe('Kolkata Howrah Bridge');
   });
 
   it('returns [] on error / empty / no destination', async () => {

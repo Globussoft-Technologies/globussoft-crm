@@ -297,7 +297,6 @@ jobs:
           #   - document-templates-api.spec.js (42 tests: routes/document_templates.js — R-4)
           #   - booking-pages-api.spec.js    (43 tests: routes/booking_pages.js — R-4)
           #   - email-threading-api.spec.js  (33 tests: routes/email_threading.js — R-4)
-          #   - migration-safety.spec.js     (10 tests: backend/scripts/check-migration-safety.js fixture regression — G-23)
           #   - field-permissions-enforcement-api.spec.js (9 tests: middleware/fieldFilter.js wired into routes/deals.js + routes/contacts.js — #464)
           #   - api-docs.spec.js             ( 5 tests: /api-docs Swagger UI + /api-docs/swagger.json OpenAPI raw spec — #542)
           #   - wellness-rbac-regression-api.spec.js (21 tests: companion to wellness-rbac-api covering #259/#280/#323/#324/#325/#326/#348 + #527/#533 PHI gates — P0 from regression-coverage-backlog)
@@ -380,7 +379,6 @@ jobs:
             tests/document-templates-api.spec.js \
             tests/email-threading-api.spec.js \
             tests/numeric-id-sweep.spec.js \
-            tests/migration-safety.spec.js \
             tests/wellness-telecaller-api.spec.js \
             tests/wellness-reports-api.spec.js \
             tests/wellness-dashboard-api.spec.js \

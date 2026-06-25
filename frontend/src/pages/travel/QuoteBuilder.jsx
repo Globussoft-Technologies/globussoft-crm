@@ -94,7 +94,7 @@
 
 import { useEffect, useState, useContext, useCallback } from "react";
 import { useParams } from "react-router-dom";
-import { Calculator, Plus, Trash2, Save, Send, Copy, Download, Check, X, TrendingUp, FileText, ThumbsUp, ThumbsDown, Plane, Hotel, Search, Car, LayoutTemplate } from "lucide-react";
+import { Calculator, Plus, Trash2, Save, Send, Copy, Download, Check, X, TrendingUp, FileText, ThumbsUp, ThumbsDown, Plane, Hotel, Search, Car, LayoutTemplate, CreditCard, CheckCircle } from "lucide-react";
 import { FlightResultsBoard, HotelResultsGrid, TransferResultsList, SuggestedItinerary } from "../../components/TravelSearchResults";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
@@ -225,6 +225,10 @@ export default function QuoteBuilder() {
   // Slice 11: accept + decline workflow state.
   const [acceptInFlight, setAcceptInFlight] = useState(false);
   const [declineInFlight, setDeclineInFlight] = useState(false);
+  // Customer acceptance details fetched from audit-trail when status=Accepted.
+  const [acceptanceDetails, setAcceptanceDetails] = useState(null);
+  // Advance payment details from the quote row (populated by Razorpay webhook).
+  const [paymentInfo, setPaymentInfo] = useState(null); // { amount, paidAt, reference, status }
   const [declineConfirmOpen, setDeclineConfirmOpen] = useState(false);
   const [declineReason, setDeclineReason] = useState("");
   // Slice 8: pricing preview state. `pricingPreview` is null until the
@@ -319,6 +323,14 @@ export default function QuoteBuilder() {
         if (q.contactId != null) setContactId(String(q.contactId));
         if (q.currency) setCurrency(q.currency);
         if (q.subBrand) setSubBrand(q.subBrand);
+        if (q.advancePaidAmount != null) {
+          setPaymentInfo({
+            amount: Number(q.advancePaidAmount),
+            paidAt: q.advancePaidAt || null,
+            reference: q.paymentReference || q.advancePaymentId || null,
+            status: q.status || null,
+          });
+        }
       }
     } catch {
       // Non-fatal — the line write itself already succeeded; we just
@@ -354,6 +366,29 @@ export default function QuoteBuilder() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Fetch customer acceptance details (name + note + timestamp) from audit-trail.
+  const loadAcceptanceDetails = useCallback(async (id) => {
+    if (!id) return;
+    try {
+      const trail = await fetchApi(`/api/travel/quotes/${id}/audit-trail`);
+      const rows = Array.isArray(trail?.entries) ? trail.entries : [];
+      const snap = rows.find(
+        (r) => r.action === "TRAVEL_QUOTE_CUSTOMER_ACCEPTED" || r.action === "TRAVEL_QUOTE_ACCEPTED",
+      );
+      if (snap) {
+        const details = snap.details || {};
+        setAcceptanceDetails({
+          customerName: details.customerName || null,
+          note: details.changeReason || null,
+          acceptedAt: snap.createdAt || null,
+        });
+      }
+    } catch {
+      // Non-fatal — acceptance details are supplementary.
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Edit-mode hydration from GET /api/travel/quotes/:id + lines.
   useEffect(() => {
     if (!isEdit) return;
@@ -367,8 +402,19 @@ export default function QuoteBuilder() {
         setCurrency(q.currency || "INR");
         setSubBrand(q.subBrand || "tmc");
         setValidUntil(q.validUntil ? String(q.validUntil).slice(0, 10) : "");
+        if (q.advancePaidAmount != null) {
+          setPaymentInfo({
+            amount: Number(q.advancePaidAmount),
+            paidAt: q.advancePaidAt || null,
+            reference: q.paymentReference || q.advancePaymentId || null,
+            status: q.status || null,
+          });
+        }
         // Slice 4 hydration: pull persisted lines from the dedicated endpoint.
         await refreshLines(q.id);
+        if ((q.status || "Draft") === "Accepted") {
+          await loadAcceptanceDetails(q.id);
+        }
       })
       .catch((err) => {
         notify.error(err?.data?.error || err?.message || "Failed to load quote");
@@ -1157,6 +1203,7 @@ export default function QuoteBuilder() {
         notify.success(`Quote #${quoteId} accepted`);
       }
       if (resp?.quote?.status) setStatus(resp.quote.status);
+      await loadAcceptanceDetails(quoteId);
     } catch (err) {
       if (err?.status === 409) {
         notify.error(
@@ -1473,53 +1520,6 @@ export default function QuoteBuilder() {
             >
               <FileText size={14} /> Convert to invoice
             </button>
-            <button
-              type="button"
-              onClick={handleAccept}
-              disabled={
-                !quoteId ||
-                acceptInFlight ||
-                status === "Accepted" ||
-                status === "Rejected"
-              }
-              style={primaryBtn}
-              aria-label="Accept quote"
-              title={
-                !quoteId
-                  ? "Save first"
-                  : status === "Accepted"
-                    ? "Quote already accepted"
-                    : status === "Rejected"
-                      ? "Cannot accept a rejected quote"
-                      : "Accept this quote"
-              }
-            >
-              <ThumbsUp size={14} />{" "}
-              {acceptInFlight ? "Accepting…" : "Accept"}
-            </button>
-            <button
-              type="button"
-              onClick={openDeclineConfirm}
-              disabled={
-                !quoteId ||
-                declineInFlight ||
-                status === "Accepted" ||
-                status === "Rejected"
-              }
-              style={secondaryBtn}
-              aria-label="Decline quote"
-              title={
-                !quoteId
-                  ? "Save first"
-                  : status === "Rejected"
-                    ? "Quote already declined"
-                    : status === "Accepted"
-                      ? "Cannot decline an accepted quote"
-                      : "Decline this quote"
-              }
-            >
-              <ThumbsDown size={14} /> Decline
-            </button>
               </>
             )}
           </div>
@@ -1547,6 +1547,96 @@ export default function QuoteBuilder() {
               ? `Sent via ${shareInfo.channel.replace("+", " + ")}`
               : "Not delivered — share the link manually"}
           </span>
+        </section>
+      )}
+
+      {status === "Accepted" && (
+        <section
+          className="glass"
+          aria-label="Customer acceptance details"
+          style={{
+            padding: 14,
+            marginBottom: 16,
+            borderLeft: "4px solid var(--success-color, #22c55e)",
+            background: "rgba(34, 197, 94, 0.07)",
+            display: "flex",
+            flexDirection: "column",
+            gap: 6,
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <ThumbsUp size={16} aria-hidden style={{ color: "var(--success-color, #22c55e)", flexShrink: 0 }} />
+            <span style={{ fontWeight: 700, fontSize: 14, color: "var(--success-color, #22c55e)" }}>
+              Quote accepted by customer
+            </span>
+            {acceptanceDetails?.acceptedAt && (
+              <span style={{ fontSize: 12, color: "var(--text-secondary)", marginLeft: "auto" }}>
+                {new Date(acceptanceDetails.acceptedAt).toLocaleString()}
+              </span>
+            )}
+          </div>
+          {acceptanceDetails ? (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "10px 24px", paddingLeft: 24, fontSize: 13 }}>
+              <span>
+                <span style={{ fontWeight: 600 }}>Name: </span>
+                {acceptanceDetails.customerName || <em style={{ color: "var(--text-secondary)" }}>not provided</em>}
+              </span>
+              <span style={{ flex: "1 1 100%" }}>
+                <span style={{ fontWeight: 600 }}>Note: </span>
+                {acceptanceDetails.note
+                  ? <span style={{ whiteSpace: "pre-wrap" }}>{acceptanceDetails.note}</span>
+                  : <em style={{ color: "var(--text-secondary)" }}>none</em>
+                }
+              </span>
+            </div>
+          ) : (
+            <span style={{ fontSize: 12, color: "var(--text-secondary)", paddingLeft: 24 }}>
+              Loading acceptance details…
+            </span>
+          )}
+        </section>
+      )}
+
+      {paymentInfo && (
+        <section
+          className="glass"
+          aria-label="Advance payment details"
+          style={{
+            padding: 14,
+            marginBottom: 16,
+            borderLeft: `4px solid ${paymentInfo.status === "fully_paid" ? "var(--primary-color, var(--accent-color))" : "#f59e0b"}`,
+            background: paymentInfo.status === "fully_paid" ? "rgba(34, 197, 94, 0.05)" : "rgba(245, 158, 11, 0.07)",
+            display: "flex",
+            flexDirection: "column",
+            gap: 6,
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            {paymentInfo.status === "fully_paid"
+              ? <CheckCircle size={16} aria-hidden style={{ color: "var(--primary-color, var(--accent-color))", flexShrink: 0 }} />
+              : <CreditCard size={16} aria-hidden style={{ color: "#f59e0b", flexShrink: 0 }} />
+            }
+            <span style={{ fontWeight: 700, fontSize: 14, color: paymentInfo.status === "fully_paid" ? "var(--primary-color, var(--accent-color))" : "#b45309" }}>
+              {paymentInfo.status === "fully_paid" ? "Fully paid" : "Advance payment received"}
+            </span>
+            {paymentInfo.paidAt && (
+              <span style={{ fontSize: 12, color: "var(--text-secondary)", marginLeft: "auto" }}>
+                {new Date(paymentInfo.paidAt).toLocaleString()}
+              </span>
+            )}
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "10px 24px", paddingLeft: 24, fontSize: 13 }}>
+            <span>
+              <span style={{ fontWeight: 600 }}>Amount paid: </span>
+              {currency} {Number(paymentInfo.amount).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            </span>
+            {paymentInfo.reference && (
+              <span>
+                <span style={{ fontWeight: 600 }}>Reference: </span>
+                <code style={{ fontSize: 12, background: "rgba(0,0,0,0.06)", padding: "1px 5px", borderRadius: 3 }}>{paymentInfo.reference}</code>
+              </span>
+            )}
+          </div>
         </section>
       )}
 

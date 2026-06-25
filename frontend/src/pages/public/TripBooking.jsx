@@ -314,32 +314,55 @@ export default function TripBooking() {
         <StatusBadge status={itin.status} />
       </DestinationHero>
 
-      {/* Collect-at-accept travel dates — the customer confirms when they want
-          to travel before paying; their advisor is notified to lock fares. */}
+      {/* Travel dates — editable before payment, locked (read-only) after. */}
       <section aria-labelledby="dates-heading" style={datesCard}>
         <h2 id="dates-heading" style={{ ...sectionHeading, marginTop: 0 }}>
           <Calendar size={16} aria-hidden style={{ verticalAlign: -3, marginRight: 6 }} />
-          {hasDates ? "Confirm your travel dates" : "When would you like to travel?"}
+          Your travel dates
         </h2>
-        <p style={{ fontSize: 13, color: "#5a6275", margin: "0 0 12px" }}>
-          {datesSaved
-            ? "Thanks! Your advisor has your preferred dates and will confirm availability."
-            : "Tell us your preferred dates so we can lock the right fares before you pay."}
-        </p>
-        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end" }}>
-          <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: "#5a6275" }}>
-            Start date
-            <input type="date" value={startInput} onChange={(e) => { setStartInput(e.target.value); setDatesSaved(false); }} style={dateInput} aria-label="Preferred start date" />
-          </label>
-          <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: "#5a6275" }}>
-            End date (optional)
-            <input type="date" value={endInput} min={startInput || undefined} onChange={(e) => { setEndInput(e.target.value); setDatesSaved(false); }} style={dateInput} aria-label="Preferred end date" />
-          </label>
-          <button type="button" onClick={saveDates} disabled={savingDates || datesSaved} style={{ ...secondaryBtn, opacity: savingDates || datesSaved ? 0.6 : 1 }}>
-            {datesSaved ? "Dates saved ✓" : savingDates ? "Saving…" : "Save dates"}
-          </button>
-        </div>
-        {datesError && <p style={{ fontSize: 12, color: "#b3261e", margin: "8px 0 0" }}>{datesError}</p>}
+        {(itin.status === "advance_paid" || itin.status === "fully_paid") ? (
+          /* Locked after payment — show confirmed dates, prompt advisor contact for changes */
+          <div>
+            <p style={{ fontSize: 13, color: "#1e8449", margin: "0 0 8px", fontWeight: 500 }}>
+              ✓ Dates confirmed and locked with your booking.
+            </p>
+            {hasDates ? (
+              <p style={{ fontSize: 14, color: "#1a1f2e", margin: 0 }}>
+                {fmtDate(itin.startDate)}{itin.endDate ? ` — ${fmtDate(itin.endDate)}` : ""}
+              </p>
+            ) : (
+              <p style={{ fontSize: 13, color: "#5a6275", margin: 0 }}>
+                No dates set — contact your advisor to confirm travel dates.
+              </p>
+            )}
+            <p style={{ fontSize: 12, color: "#5a6275", margin: "8px 0 0" }}>
+              Need to change your dates? Please contact your advisor directly.
+            </p>
+          </div>
+        ) : (
+          /* Editable before payment */
+          <>
+            <p style={{ fontSize: 13, color: "#5a6275", margin: "0 0 12px" }}>
+              {datesSaved
+                ? "Thanks! Your advisor has your preferred dates and will confirm availability."
+                : hasDates ? "Confirm your dates or update them before paying." : "Tell us your preferred dates so we can lock the right fares before you pay."}
+            </p>
+            <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end" }}>
+              <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: "#5a6275" }}>
+                Start date
+                <input type="date" value={startInput} onChange={(e) => { setStartInput(e.target.value); setDatesSaved(false); }} style={dateInput} aria-label="Preferred start date" />
+              </label>
+              <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: "#5a6275" }}>
+                End date (optional)
+                <input type="date" value={endInput} min={startInput || undefined} onChange={(e) => { setEndInput(e.target.value); setDatesSaved(false); }} style={dateInput} aria-label="Preferred end date" />
+              </label>
+              <button type="button" onClick={saveDates} disabled={savingDates || datesSaved} style={{ ...secondaryBtn, opacity: savingDates || datesSaved ? 0.6 : 1 }}>
+                {datesSaved ? "Dates saved ✓" : savingDates ? "Saving…" : "Save dates"}
+              </button>
+            </div>
+            {datesError && <p style={{ fontSize: 12, color: "#b3261e", margin: "8px 0 0" }}>{datesError}</p>}
+          </>
+        )}
       </section>
 
       {optionsMode ? (

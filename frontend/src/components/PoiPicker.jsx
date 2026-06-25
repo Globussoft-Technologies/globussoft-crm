@@ -80,6 +80,7 @@ export default function PoiPicker({
   disabled = false,
   placeholder = 'Search POIs by name…',
   maxResults = 50,
+  onAddNew = null,   // (currentQuery: string) => void — when provided, shows "+ Add new POI" in empty state
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -314,11 +315,34 @@ export default function PoiPicker({
           )}
 
           {!loading && !errored && items.length === 0 && (
-            <div
-              style={{ padding: '0.6rem 0.8rem', color: 'var(--text-secondary)' }}
-              data-testid="poi-picker-empty"
-            >
-              No POIs found for {destinationSlug}.
+            <div data-testid="poi-picker-empty">
+              <div style={{ padding: '0.6rem 0.8rem', color: 'var(--text-secondary)' }}>
+                No POIs found for {destinationSlug}.
+              </div>
+              {typeof onAddNew === 'function' && (
+                <button
+                  type="button"
+                  data-testid="poi-picker-add-new"
+                  onClick={() => onAddNew(query)}
+                  style={{
+                    width: '100%',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    padding: '0.5rem 0.8rem',
+                    background: 'transparent',
+                    border: 'none',
+                    borderTop: '1px solid var(--border-color, rgba(0,0,0,0.08))',
+                    cursor: 'pointer',
+                    color: 'var(--primary-color, var(--accent-color, #265855))',
+                    fontSize: '0.85rem',
+                    fontWeight: 600,
+                    textAlign: 'left',
+                  }}
+                >
+                  + Add new POI{query ? ` "${query}"` : ''}
+                </button>
+              )}
             </div>
           )}
 

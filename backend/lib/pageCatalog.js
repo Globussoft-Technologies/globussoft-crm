@@ -377,17 +377,6 @@ const PAGE_CATALOG = [
     requiredPermissions: [{ module: 'pos', action: 'read' }],
   },
   {
-    path: '/invoices',
-    label: 'Invoices',
-    // Cross-vertical generic invoice surface (wellness + travel + generic
-    // all link here). Description stays vertical-agnostic — wellness has
-    // its own patient-flavored detail surfaces; travel has
-    // /travel/invoices-admin alongside this one.
-    description: 'Customer invoice ledger',
-    category: 'Finance',
-    requiredPermissions: [{ module: 'invoices', action: 'read' }],
-  },
-  {
     path: '/estimates',
     label: 'Estimates',
     // Cross-vertical — description was wellness-flavored ("pre-treatment").
@@ -532,13 +521,6 @@ const PAGE_CATALOG = [
     description: 'Internal + customer-facing knowledge articles',
     category: 'Reports',
     requiredPermissions: [{ module: 'knowledge_base', action: 'read' }],
-  },
-  {
-    path: '/reports',
-    label: 'CRM Reports',
-    description: 'Sales + activity reports',
-    category: 'Reports',
-    requiredPermissions: [{ module: 'reports', action: 'read' }],
   },
   {
     path: '/dashboards',

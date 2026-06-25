@@ -154,7 +154,7 @@ describe('canAccessPath', () => {
   it('returns false when even one required perm is missing', () => {
     // /wellness/pos needs pos.read which docPerms lacks
     expect(canAccessPath('/wellness/pos', docPerms)).toBe(false);
-    expect(canAccessPath('/invoices', docPerms)).toBe(false);
+    expect(canAccessPath('/estimates', docPerms)).toBe(false); // needs estimates.read
   });
 
   it('returns false for unknown paths', () => {
@@ -162,7 +162,7 @@ describe('canAccessPath', () => {
   });
 
   it('OWNER short-circuit grants access to everything', () => {
-    expect(canAccessPath('/invoices', new Set(), { isOwner: true })).toBe(true);
+    expect(canAccessPath('/estimates', new Set(), { isOwner: true })).toBe(true);
     expect(canAccessPath('/wellness/pos', new Set(), { isOwner: true })).toBe(true);
   });
 
@@ -220,7 +220,7 @@ describe('canAccessPath', () => {
     expect(canAccessPath('/wellness/book-appointment', nursePerms)).toBe(false);
     expect(canAccessPath('/wellness/my-appointments', nursePerms)).toBe(false);
     // Pages that need permissions Nurse simply doesn't have stay barred.
-    expect(canAccessPath('/invoices', nursePerms)).toBe(false); // invoices.read
+    expect(canAccessPath('/estimates', nursePerms)).toBe(false); // estimates.read
     expect(canAccessPath('/wellness/pos', nursePerms)).toBe(false); // pos.read
   });
 });
@@ -339,7 +339,7 @@ describe('getAccessiblePages', () => {
     expect(paths).toContain('/wellness/patients');
     expect(paths).toContain('/wellness/calendar');
     expect(paths).toContain('/wellness/prescriptions');
-    expect(paths).not.toContain('/invoices'); // needs invoices.read
+    expect(paths).not.toContain('/estimates'); // needs estimates.read
     expect(paths).not.toContain('/wellness/pos'); // needs pos.read
   });
 

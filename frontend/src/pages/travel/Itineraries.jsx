@@ -6,17 +6,17 @@
 //
 // The header CTA "+ Create Itinerary" opens a drawer with contact picker
 // + sub-brand + destination + dates + currency + total amount. Posts to
-// /api/travel/itineraries; the backend enforces the diagnostic-first
-// guard (PRD §4.1) — if the contact hasn't completed a diagnostic for
-// the chosen sub-brand, the POST returns 403 and notify.error surfaces
-// the message. Itineraries can still be drafted from a Deal page once
-// the Day 7 Deal-extension CTA lands.
+// /api/travel/itineraries. The PRD §4.1 diagnostic-first guard is
+// DISABLED (2026-06-25) so WhatsApp / inbound leads can be sent an
+// itinerary without first completing the diagnostic. Itineraries can
+// still be drafted from a Deal page once the Day 7 Deal-extension CTA lands.
 
 import { useContext, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Map, Filter, Plane, Hotel, MapPin, Briefcase, FileText, Shield, Plus, X,
-  Sparkles, AlertTriangle, Trash2, Train, Bus, Car, Camera, Utensils,
+  Sparkles, AlertTriangle, Trash2, Train, Bus, Car, Camera, Utensils, Search,
+  ChevronDown, ChevronRight,
 } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
@@ -279,6 +279,12 @@ export default function Itineraries() {
   const [contacts, setContacts] = useState([]);
   const [deletingId, setDeletingId] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(null); // { id, destination }
+  const [searchQuery, setSearchQuery] = useState("");
+  const [templates, setTemplates] = useState([]);
+  const [templatesLoading, setTemplatesLoading] = useState(false);
+  const [templateSearch, setTemplateSearch] = useState("");
+  const [selectedTemplateId, setSelectedTemplateId] = useState(null);
+  const [showTemplates, setShowTemplates] = useState(false);
 
   // S81 — selected itinerary for the top-of-page MapPreview panel. Null →
   // no map shown (default). User picks a row's "Map" button to surface the
@@ -291,6 +297,18 @@ export default function Itineraries() {
       : null),
     [items, selectedItineraryId],
   );
+
+  const filteredItems = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return items;
+    return items.filter((it) => {
+      const dest = (it.destination || "").toLowerCase();
+      const contact = [
+        it.contact?.firstName, it.contact?.lastName, it.contact?.name,
+      ].filter(Boolean).join(" ").toLowerCase();
+      return dest.includes(q) || contact.includes(q);
+    });
+  }, [items, searchQuery]);
   // Items array passed to MapPreview. When the itinerary has geocoded items
   // those are used directly. When there are none we geocode the destination
   // city names via Nominatim (same OSM data used for tiles) and show those
@@ -342,10 +360,18 @@ export default function Itineraries() {
 
   const openCreate = () => {
     setForm({ ...EMPTY_FORM, subBrand: defaultSubBrandFor(user, activeSubBrand) });
+    setSelectedTemplateId(null);
+    setTemplateSearch("");
+    setShowTemplates(false);
     setCreating(true);
     fetchApi("/api/contacts?limit=200")
       .then((res) => setContacts(Array.isArray(res) ? res : (res?.contacts || [])))
       .catch(() => setContacts([]));
+    setTemplatesLoading(true);
+    fetchApi("/api/travel/itinerary-templates?limit=100&isActive=true")
+      .then((res) => setTemplates(Array.isArray(res?.items) ? res.items : []))
+      .catch(() => setTemplates([]))
+      .finally(() => setTemplatesLoading(false));
   };
 
   const handleDelete = (e, itinerary) => {
@@ -552,11 +578,12 @@ export default function Itineraries() {
       if (form.startDate) body.startDate = form.startDate;
       if (form.endDate) body.endDate = form.endDate;
       if (form.totalAmount) body.totalAmount = Number(form.totalAmount);
+      if (selectedTemplateId) body.clonedFromTemplateId = selectedTemplateId;
       await fetchApi("/api/travel/itineraries", {
         method: "POST",
         body: JSON.stringify(body),
       });
-      notify.success("Itinerary created");
+      notify.success(selectedTemplateId ? "Itinerary created from template" : "Itinerary created");
       setCreating(false);
       load();
     } catch (err) {
@@ -656,6 +683,36 @@ export default function Itineraries() {
         <select value={status} onChange={(e) => setStatus(e.target.value)} style={selectStyle} aria-label="Filter by status">
           {STATUSES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
         </select>
+        <div style={{ position: "relative", display: "flex", alignItems: "center", flex: "1 1 180px", minWidth: 160, maxWidth: 320 }}>
+          <Search size={14} aria-hidden style={{ position: "absolute", left: 8, color: "var(--text-secondary)", pointerEvents: "none" }} />
+          <input
+            type="search"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search destination or name…"
+            aria-label="Search itineraries by destination or contact name"
+            style={{
+              ...selectStyle,
+              paddingLeft: 28,
+              paddingRight: searchQuery ? 28 : 8,
+              width: "100%",
+              boxSizing: "border-box",
+            }}
+          />
+          {searchQuery && (
+            <button
+              type="button"
+              onClick={() => setSearchQuery("")}
+              aria-label="Clear search"
+              style={{
+                position: "absolute", right: 6, background: "none", border: "none",
+                cursor: "pointer", color: "var(--text-secondary)", display: "flex", alignItems: "center", padding: 2,
+              }}
+            >
+              <X size={12} />
+            </button>
+          )}
+        </div>
         <button type="button" onClick={load} style={refreshBtn} aria-label="Reload list">Refresh</button>
       </div>
 
@@ -721,6 +778,10 @@ export default function Itineraries() {
             No itineraries yet. Use the &quot;Create Itinerary&quot; button above, or
             build one from a linked Deal in the sales pipeline.
           </div>
+        ) : filteredItems.length === 0 ? (
+          <div style={empty}>
+            No itineraries match &ldquo;{searchQuery}&rdquo;.
+          </div>
         ) : (
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
@@ -738,7 +799,7 @@ export default function Itineraries() {
               </tr>
             </thead>
             <tbody>
-              {items.map((it) => {
+              {filteredItems.map((it) => {
                 const statusVariant = STATUS_VARIANT[it.status] || "other";
                 return (
                   <tr
@@ -886,6 +947,123 @@ export default function Itineraries() {
               </button>
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+
+              {/* ── Template picker ── */}
+              <div style={{ borderRadius: 8, border: "1px solid var(--border-color)", overflow: "hidden" }}>
+                <button
+                  type="button"
+                  onClick={() => setShowTemplates((v) => !v)}
+                  style={{
+                    width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between",
+                    padding: "9px 12px", background: showTemplates ? "rgba(200,154,78,0.1)" : "var(--surface-color)",
+                    border: "none", cursor: "pointer", fontSize: 13, fontWeight: 600,
+                    color: showTemplates ? "var(--accent-color, #C89A4E)" : "var(--text-primary)",
+                  }}
+                >
+                  <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <FileText size={14} aria-hidden />
+                    Start from a template
+                    {selectedTemplateId && (
+                      <span style={{ fontWeight: 400, fontSize: 11, color: "var(--success-color, #22c55e)" }}>
+                        ✓ selected
+                      </span>
+                    )}
+                  </span>
+                  {showTemplates ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                </button>
+
+                {showTemplates && (
+                  <div style={{ padding: "10px 12px", borderTop: "1px solid var(--border-color)", background: "rgba(0,0,0,0.15)" }}>
+                    {/* Search inside templates */}
+                    <div style={{ position: "relative", marginBottom: 10 }}>
+                      <Search size={13} style={{ position: "absolute", left: 8, top: "50%", transform: "translateY(-50%)", color: "var(--text-secondary)", pointerEvents: "none" }} />
+                      <input
+                        type="search"
+                        value={templateSearch}
+                        onChange={(e) => setTemplateSearch(e.target.value)}
+                        placeholder="Search templates…"
+                        style={{ ...inputStyle, paddingLeft: 28, width: "100%", boxSizing: "border-box", fontSize: 12 }}
+                      />
+                    </div>
+
+                    {templatesLoading ? (
+                      <div style={{ fontSize: 12, color: "var(--text-secondary)", padding: "6px 0" }}>Loading templates…</div>
+                    ) : templates.length === 0 ? (
+                      <div style={{ fontSize: 12, color: "var(--text-secondary)", padding: "6px 0" }}>No templates available yet.</div>
+                    ) : (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 220, overflowY: "auto" }}>
+                        {templates
+                          .filter((t) => {
+                            const q = templateSearch.trim().toLowerCase();
+                            if (!q) return true;
+                            return (
+                              (t.name || "").toLowerCase().includes(q) ||
+                              (t.destinationName || "").toLowerCase().includes(q) ||
+                              (t.category || "").toLowerCase().includes(q)
+                            );
+                          })
+                          .map((t) => {
+                            const isSelected = selectedTemplateId === t.id;
+                            const price = t.basePriceMinor ? `${t.currency || "INR"} ${(t.basePriceMinor / 100).toLocaleString()}` : null;
+                            return (
+                              <button
+                                key={t.id}
+                                type="button"
+                                onClick={() => {
+                                  if (isSelected) {
+                                    setSelectedTemplateId(null);
+                                  } else {
+                                    setSelectedTemplateId(t.id);
+                                    setForm((prev) => ({
+                                      ...prev,
+                                      destination: t.destinationName || prev.destination,
+                                      subBrand: t.subBrand || prev.subBrand,
+                                      currency: t.currency || prev.currency,
+                                      totalAmount: t.basePriceMinor ? String(t.basePriceMinor / 100) : prev.totalAmount,
+                                    }));
+                                  }
+                                }}
+                                style={{
+                                  display: "flex", alignItems: "flex-start", gap: 10, textAlign: "left",
+                                  padding: "8px 10px", borderRadius: 6, cursor: "pointer",
+                                  border: isSelected ? "1px solid var(--accent-color, #C89A4E)" : "1px solid var(--border-light, rgba(255,255,255,0.08))",
+                                  background: isSelected ? "rgba(200,154,78,0.12)" : "rgba(255,255,255,0.03)",
+                                  color: "var(--text-primary)",
+                                }}
+                              >
+                                <FileText size={14} style={{ marginTop: 1, flexShrink: 0, color: isSelected ? "var(--accent-color, #C89A4E)" : "var(--text-secondary)" }} aria-hidden />
+                                <div style={{ minWidth: 0, flex: 1 }}>
+                                  <div style={{ fontWeight: 600, fontSize: 12, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                                    {t.name || t.destinationName || `Template #${t.id}`}
+                                  </div>
+                                  <div style={{ fontSize: 11, color: "var(--text-secondary)", marginTop: 1, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                                    {t.destinationName && <span>{t.destinationName}</span>}
+                                    {t.durationDays && <span>{t.durationDays}d</span>}
+                                    {t.category && <span>{t.category}</span>}
+                                    {price && <span>{price}</span>}
+                                    {t.usageCount > 0 && <span>Used {t.usageCount}×</span>}
+                                  </div>
+                                </div>
+                                {isSelected && <span style={{ fontSize: 11, color: "var(--accent-color, #C89A4E)", fontWeight: 600, flexShrink: 0 }}>✓</span>}
+                              </button>
+                            );
+                          })}
+                      </div>
+                    )}
+
+                    {selectedTemplateId && (
+                      <button
+                        type="button"
+                        onClick={() => setSelectedTemplateId(null)}
+                        style={{ marginTop: 8, fontSize: 11, color: "var(--text-secondary)", background: "none", border: "none", cursor: "pointer", padding: 0 }}
+                      >
+                        × Clear template selection
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+
               <label style={fieldLabel}>
                 Contact
                 <select
@@ -976,9 +1154,10 @@ export default function Itineraries() {
                 </label>
               </div>
               <p style={{ margin: 0, fontSize: 11, color: "var(--text-secondary)", lineHeight: 1.4 }}>
-                The contact must have completed a diagnostic for this sub-brand
-                (PRD &sect;4.1). If not, the server will reject and you can route
-                them through the diagnostic first.
+                You can create and send an itinerary for any contact — including
+                WhatsApp / inbound leads who haven&apos;t taken the diagnostic yet.
+                Running the diagnostic first is still recommended for accurate
+                tier-based pricing.
               </p>
             </div>
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 20 }}>

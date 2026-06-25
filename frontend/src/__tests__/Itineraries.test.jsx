@@ -569,9 +569,10 @@ describe('<Itineraries /> — create drawer + submit', () => {
     expect(
       await screen.findByRole('heading', { name: /New Itinerary/i }),
     ).toBeInTheDocument();
-    // Diagnostic-first hint copy renders.
+    // Diagnostic-first hint copy renders (PRD §4.1 guard disabled; SUT
+    // shows a recommendation rather than a hard gate).
     expect(
-      screen.getByText(/diagnostic for this sub-brand/i),
+      screen.getByText(/Running the diagnostic first is still recommended/i),
     ).toBeInTheDocument();
     // /api/contacts?limit=200 fired to populate the picker.
     await waitFor(() => {

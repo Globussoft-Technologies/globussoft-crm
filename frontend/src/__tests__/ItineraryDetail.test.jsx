@@ -73,7 +73,7 @@ const notifyObj = {
   success: vi.fn(),
   info: vi.fn(),
   confirm: vi.fn(() => Promise.resolve(true)),
-  prompt: () => Promise.resolve(""),
+  prompt: vi.fn(() => Promise.resolve("")),
 };
 vi.mock("../utils/notify", () => ({
   useNotify: () => notifyObj,
@@ -242,8 +242,8 @@ beforeEach(() => {
   notifyObj.info.mockReset();
   notifyObj.confirm.mockReset();
   notifyObj.confirm.mockImplementation(() => Promise.resolve(true));
-  vi.spyOn(window, "confirm").mockImplementation(() => true);
-  vi.spyOn(window, "prompt").mockImplementation(() => "test reason");
+  notifyObj.prompt.mockReset();
+  notifyObj.prompt.mockImplementation(() => Promise.resolve(""));
 });
 
 function renderPage({ role = "ADMIN" } = {}) {
@@ -721,15 +721,15 @@ describe("ItineraryDetail — day costs panel (#907 slice 4)", () => {
 // ─── Status transitions + acceptance/rejection flows ──────────────
 //
 // Pins the Accept/Reject button surface (PRD §4.3 manager workflow).
-// Accept calls POST /:id/accept after a window.confirm(); Reject calls
-// POST /:id/reject after window.prompt() with the optional reason.
+// Accept calls POST /:id/accept after notify.confirm(); Reject calls
+// POST /:id/reject after notify.prompt() with the optional reason.
 // Terminal status (accepted/rejected) hides the Accept + Reject buttons.
 // Non-edit roles (USER) hide ALL canEdit-gated actions (Accept/Reject/
 // Regenerate draft/Add item/Edit/Delete icons).
 describe("ItineraryDetail — status transitions + acceptance/rejection", () => {
-  it("Accept button POSTs to /:id/accept after window.confirm()", async () => {
+  it("Accept button POSTs to /:id/accept after notify.confirm()", async () => {
     fetchApiMock.mockImplementation(makeFetchImpl(ITIN_WITH_ITEMS));
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    notifyObj.confirm.mockResolvedValue(true);
     renderPage();
     await screen.findByText(/Goa school trip/);
 
@@ -743,13 +743,13 @@ describe("ItineraryDetail — status transitions + acceptance/rejection", () => 
       );
       expect(acceptCall).toBeTruthy();
     });
-    expect(confirmSpy).toHaveBeenCalled();
+    expect(notifyObj.confirm).toHaveBeenCalled();
     expect(notifyObj.success).toHaveBeenCalledWith("Itinerary accepted");
   });
 
-  it("Accept aborts (no POST) when window.confirm() returns false", async () => {
+  it("Accept aborts (no POST) when notify.confirm() returns false", async () => {
     fetchApiMock.mockImplementation(makeFetchImpl(ITIN_WITH_ITEMS));
-    vi.spyOn(window, "confirm").mockReturnValue(false);
+    notifyObj.confirm.mockResolvedValue(false);
     renderPage();
     await screen.findByText(/Goa school trip/);
 
@@ -769,9 +769,9 @@ describe("ItineraryDetail — status transitions + acceptance/rejection", () => 
     expect(notifyObj.success).not.toHaveBeenCalledWith("Itinerary accepted");
   });
 
-  it("Reject POSTs to /:id/reject with the reason from window.prompt()", async () => {
+  it("Reject POSTs to /:id/reject with the reason from notify.prompt()", async () => {
     fetchApiMock.mockImplementation(makeFetchImpl(ITIN_WITH_ITEMS));
-    vi.spyOn(window, "prompt").mockReturnValue("Budget exceeded");
+    notifyObj.prompt.mockResolvedValue("Budget exceeded");
     renderPage();
     await screen.findByText(/Goa school trip/);
 
@@ -790,15 +790,15 @@ describe("ItineraryDetail — status transitions + acceptance/rejection", () => 
     expect(notifyObj.success).toHaveBeenCalledWith("Itinerary rejected");
   });
 
-  it("Reject aborts (no POST) when prompt is cancelled (returns null)", async () => {
+  it("Reject aborts (no POST) when notify.prompt() is cancelled (returns null)", async () => {
     fetchApiMock.mockImplementation(makeFetchImpl(ITIN_WITH_ITEMS));
-    vi.spyOn(window, "prompt").mockReturnValue(null);
+    notifyObj.prompt.mockResolvedValue(null);
     renderPage();
     await screen.findByText(/Goa school trip/);
 
     fireEvent.click(screen.getByRole("button", { name: /Reject itinerary/i }));
 
-    // Wait a tick — give the synchronous prompt + early-return path a chance.
+    // Wait a tick — give the prompt promise + early-return path a chance.
     await new Promise((r) => setTimeout(r, 0));
     const rejectCall = fetchApiMock.mock.calls.find(
       (c) => c[0] === "/api/travel/itineraries/42/reject",
@@ -808,7 +808,7 @@ describe("ItineraryDetail — status transitions + acceptance/rejection", () => 
 
   it("Reject with empty string sends an empty-body POST (no reason field)", async () => {
     fetchApiMock.mockImplementation(makeFetchImpl(ITIN_WITH_ITEMS));
-    vi.spyOn(window, "prompt").mockReturnValue("");
+    notifyObj.prompt.mockResolvedValue("");
     renderPage();
     await screen.findByText(/Goa school trip/);
 

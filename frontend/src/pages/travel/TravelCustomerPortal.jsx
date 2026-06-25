@@ -2334,6 +2334,10 @@ function BookingDetail({ itinerary, token, onChanged, onBack }) {
   };
 
   const cancellationStatus = itinerary.cancellationStatus || null;
+  // A trip that has already departed can't be cancelled online (the backend
+  // also enforces this) — we hide the cancel option once the start date passes.
+  const _tripStart = itinerary.startDate || itinerary.endDate;
+  const tripStarted = _tripStart ? new Date(_tripStart).getTime() <= Date.now() : false;
   const saveDates = async () => {
     if (!dStart) { setDErr("Please pick a start date."); return; }
     if (dEnd && dEnd < dStart) { setDErr("End date can't be before the start date."); return; }
@@ -2510,6 +2514,13 @@ function BookingDetail({ itinerary, token, onChanged, onBack }) {
           {itinerary.cancellationReason && (
             <p style={{ color: "var(--text-secondary)", margin: "8px 0 0", fontSize: 13 }}>Your reason: &ldquo;{itinerary.cancellationReason}&rdquo;</p>
           )}
+        </section>
+      ) : (isAccepted && tripStarted) ? (
+        <section style={cardStyle} role="note">
+          <h3 style={{ margin: 0, fontSize: 16 }}>Need to make a change?</h3>
+          <p style={{ color: "var(--text-secondary)", margin: "6px 0 0", fontSize: 14 }}>
+            This trip has already started, so it can no longer be cancelled online. Please contact your advisor to discuss any changes.
+          </p>
         </section>
       ) : isAccepted ? (
         <section style={cardStyle} aria-labelledby="booking-cancel-heading">

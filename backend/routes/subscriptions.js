@@ -4,6 +4,9 @@ const prisma = require('../lib/prisma');
 const { verifyToken, verifyRole } = require('../middleware/auth');
 const razorpayService = require('../services/razorpayService');
 const { formatMoney } = require('../utils/formatMoney');
+// Shared ₹-glyph fix: registers the embedded Poppins family under the Helvetica
+// names so the rupee sign renders as ₹ instead of "¹" (built-in WinAnsi gap).
+const { applyRupeeCapableFonts } = require('../services/pdfRenderer');
 
 const router = express.Router();
 
@@ -680,6 +683,7 @@ router.get('/:id/invoice.pdf', verifyToken, verifyRole(['ADMIN']), async (req, r
     })();
 
     const doc = new PDFDocument({ size: 'A4', margin: 50 });
+    applyRupeeCapableFonts(doc); // ₹ glyph fix
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename=${invoiceNum}.pdf`);
     doc.pipe(res);

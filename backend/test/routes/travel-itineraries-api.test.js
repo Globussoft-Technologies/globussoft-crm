@@ -18,8 +18,8 @@
  *   6.  Bad subBrand → 400 INVALID_SUB_BRAND via assertValidSubBrand.
  *   7.  contactId missing → 400 CONTACT_ID_REQUIRED (schema gap).
  *   8.  Cross-tenant contact → 404 CONTACT_NOT_FOUND.
- *   9.  Diagnostic-required guard fires when no diagnostic exists →
- *       403 DIAGNOSTIC_REQUIRED.
+ *   9.  Diagnostic-first guard DISABLED (2026-06-25): no diagnostic still
+ *       creates the itinerary (201), never 403 DIAGNOSTIC_REQUIRED.
  *  10.  Sub-brand access denied (operator subBrandAccess narrow) → 403
  *       SUB_BRAND_DENIED.
  *  11.  Item with lat/lng + suggestedSupplierName → ItineraryItem.latitude
@@ -330,7 +330,11 @@ describe('POST /api/travel/itineraries/from-suggestion (S90)', () => {
     expect(res.body.code).toBe('CONTACT_NOT_FOUND');
   });
 
-  test('9. no diagnostic for sub-brand → 403 DIAGNOSTIC_REQUIRED', async () => {
+  // PRD §4.1 diagnostic-first guard DISABLED (2026-06-25) per product owner so
+  // WhatsApp / inbound leads can be sent an itinerary without first completing
+  // the diagnostic. With no diagnostic (count=0) the create now SUCCEEDS instead
+  // of returning 403 DIAGNOSTIC_REQUIRED.
+  test('9. no diagnostic for sub-brand → still creates (guard disabled)', async () => {
     prisma.travelDiagnostic.count.mockResolvedValueOnce(0);
     const app = makeApp();
     const token = tokenFor('USER');
@@ -342,8 +346,8 @@ describe('POST /api/travel/itineraries/from-suggestion (S90)', () => {
         contactId: 501,
         subBrand: 'tmc',
       });
-    expect(res.status).toBe(403);
-    expect(res.body.code).toBe('DIAGNOSTIC_REQUIRED');
+    expect(res.status).toBe(201);
+    expect(res.body.code).not.toBe('DIAGNOSTIC_REQUIRED');
   });
 
   test('10. operator without sub-brand access → 403 SUB_BRAND_DENIED', async () => {

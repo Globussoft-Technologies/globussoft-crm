@@ -20,8 +20,35 @@ export function wikiTitleFor(destination, theme) {
   if (t && t.wikiTitle) return t.wikiTitle;
   const raw = String(destination || "").trim();
   if (!raw) return null;
-  const firstSegment = raw.split(/[,(–—-]/)[0].trim();
+  const firstSegment = raw.split(/[,(–—·-]/)[0].trim();
   return firstSegment || null;
+}
+
+// Ordered list of Wikipedia article titles to try for a destination, from most
+// to least specific. The first title that yields an image wins. This makes
+// landmark-style destinations ("Iskon Bangalore", "ISKCON Temple Mumbai")
+// resolve to a real photo: the full phrase has no Wikipedia article, but the
+// trailing city word ("Bangalore" → "Bengaluru") does. Single-word
+// destinations ("Tokyo", "Goa") produce exactly one candidate, so their
+// behaviour is unchanged.
+export function wikiTitleCandidates(destination) {
+  const out = [];
+  const push = (v) => {
+    const s = String(v || "").trim();
+    if (s && !out.includes(s)) out.push(s);
+  };
+  const t = destinationTheme(destination);
+  if (t && t.wikiTitle) push(t.wikiTitle);
+  const raw = String(destination || "").trim();
+  if (raw) {
+    const firstSegment = raw.split(/[,(–—·-]/)[0].trim();
+    push(firstSegment);
+    // Landmark + city phrase: the last word is usually the city, which
+    // Wikipedia resolves even when the full landmark name doesn't.
+    const words = firstSegment.split(/\s+/).filter(Boolean);
+    if (words.length > 1) push(words[words.length - 1]);
+  }
+  return out;
 }
 
 function endpoint(title) {
@@ -44,43 +71,25 @@ function endpoint(title) {
  */
 export async function fetchDestinationPhoto(destination, opts = {}) {
   const fetchImpl = opts.fetchImpl || (typeof fetch !== "undefined" ? fetch : null);
-  const title = wikiTitleFor(destination);
-  if (!title || !fetchImpl) return null;
-  try {
-    const res = await fetchImpl(endpoint(title));
-    if (!res || !res.ok) return null;
-    const data = await res.json();
-    const pages = data?.query?.pages;
-    if (!pages) return null;
-    for (const pageId of Object.keys(pages)) {
-      const src = pages[pageId]?.thumbnail?.source;
-      if (src) return src;
+  const titles = wikiTitleCandidates(destination);
+  if (!titles.length || !fetchImpl) return null;
+  // Try each candidate (specific → city) until one yields a lead image.
+  for (const title of titles) {
+    try {
+      const res = await fetchImpl(endpoint(title));
+      if (!res || !res.ok) continue;
+      const data = await res.json();
+      const pages = data?.query?.pages;
+      if (!pages) continue;
+      for (const pageId of Object.keys(pages)) {
+        const src = pages[pageId]?.thumbnail?.source;
+        if (src) return src;
+      }
+    } catch (_e) {
+      // try the next candidate
     }
-    return null;
-  } catch (_e) {
-    return null;
   }
-}
-
-// Image files on a Wikipedia article that aren't real photos (flags, maps,
-// icons, logos, SVGs) — skipped so the side rails only show actual imagery.
-const SKIP_IMAGE_RE = /\.svg$|flag|map\b|locator|coat[_ ]?of[_ ]?arms|icon|logo|symbol|seal|emblem|disambig|wikimedia|commons-/i;
-
-function galleryEndpoint(title, limit) {
-  const params = new URLSearchParams({
-    action: "query",
-    format: "json",
-    origin: "*",
-    redirects: "1",
-    titles: title,
-    generator: "images",
-    gimlimit: String(limit),
-    prop: "imageinfo",
-    iiprop: "url|extmetadata",
-    iiextmetadatafilter: "ImageDescription",
-    iiurlwidth: "240",
-  });
-  return `https://en.wikipedia.org/w/api.php?${params.toString()}`;
+  return null;
 }
 
 // Turn a Wikipedia file title ("File:Tokyo Tower at night.jpg") into a short
@@ -95,44 +104,44 @@ export function captionFromFileTitle(fileTitle) {
 }
 
 /**
- * Fetch a set of real destination photos (for the side rails) from the
- * Wikipedia article's images, filtered to actual raster photos. Returns an
- * array of { url, caption } (caption derived from the file name). Never throws;
- * returns [] on miss/error. `opts.limit` caps the result, `opts.fetchImpl`
- * injects a fetch stub for tests.
+ * Fetch a set of real destination photos via the Wikipedia REST API media-list
+ * endpoint. This correctly resolves Wikimedia Commons files (which the older
+ * action-API generator=images approach could not — Commons files appear as
+ * "missing" in en.wikipedia, so imageinfo returned nothing). The REST endpoint
+ * returns pre-computed thumbnail URLs and a showInGallery flag that
+ * Wikipedia editors set to distinguish real photos from maps/icons/flags.
+ *
+ * Returns an array of { url, caption } (up to `opts.limit`). Never throws;
+ * returns [] on miss/error. `opts.fetchImpl` injects a fetch stub for tests.
  */
 export async function fetchDestinationGallery(destination, opts = {}) {
   const fetchImpl = opts.fetchImpl || (typeof fetch !== "undefined" ? fetch : null);
   const limit = opts.limit || 16;
-  const title = wikiTitleFor(destination);
-  if (!title || !fetchImpl) return [];
-  try {
-    const res = await fetchImpl(galleryEndpoint(title, 50));
-    if (!res || !res.ok) return [];
-    const data = await res.json();
-    const pages = data?.query?.pages;
-    if (!pages) return [];
-    const out = [];
-    const seen = new Set();
-    for (const id of Object.keys(pages)) {
-      const p = pages[id];
-      const t = p?.title || "";
-      if (SKIP_IMAGE_RE.test(t)) continue;
-      if (!/\.(jpe?g|png)$/i.test(t)) continue;
-      const u = p?.imageinfo?.[0]?.thumburl;
-      if (u && !seen.has(u)) {
-        seen.add(u);
-        const rawDesc = p?.imageinfo?.[0]?.extmetadata?.ImageDescription?.value || "";
-        // Strip HTML tags and whitespace; cap at 180 chars for the hover tooltip.
-        const description = rawDesc.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 180) || null;
-        out.push({ url: u, caption: captionFromFileTitle(t), description });
+  const titles = wikiTitleCandidates(destination);
+  if (!titles.length || !fetchImpl) return [];
+  for (const title of titles) {
+    try {
+      const url = `https://en.wikipedia.org/api/rest_v1/page/media-list/${encodeURIComponent(title)}`;
+      const res = await fetchImpl(url);
+      if (!res || !res.ok) continue;
+      const data = await res.json();
+      const items = Array.isArray(data?.items) ? data.items : [];
+      const out = [];
+      for (const item of items) {
+        if (item.type !== "image" || !item.showInGallery) continue;
+        const src = item.thumbnail?.source;
+        if (!src) continue;
+        const photoUrl = src.startsWith("//") ? `https:${src}` : src;
+        const caption = item.caption?.text || captionFromFileTitle(item.title || "");
+        out.push({ url: photoUrl, caption, description: null });
+        if (out.length >= limit) break;
       }
-      if (out.length >= limit) break;
+      if (out.length) return out;
+    } catch (_e) {
+      // try the next candidate
     }
-    return out;
-  } catch (_e) {
-    return [];
   }
+  return [];
 }
 
 /**

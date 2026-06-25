@@ -786,6 +786,13 @@ jobs:
             echo "after  SHA: $(git rev-parse --short HEAD)"
             git log --oneline -3
 
+            # The brochure engine is vendored under agentic-orchcrm/ and the
+            # backend spawns tsx from its node_modules at runtime. Install its
+            # deps before starting the backend.
+            cd agentic-orchcrm
+            echo "=== agentic-orchcrm npm install ==="
+            npm install --no-audit --no-fund --loglevel=error 2>&1 | tail -5
+
             cd backend
             echo "=== npm install ==="
             npm install --no-audit --no-fund --loglevel=error 2>&1 | tail -5

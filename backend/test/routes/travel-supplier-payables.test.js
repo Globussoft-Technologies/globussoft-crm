@@ -58,6 +58,10 @@ prisma.travelSupplierPayable = {
   update: vi.fn(),
   delete: vi.fn(),
 };
+// The PUT payable route auto-creates an Expense when status flips to 'paid'.
+prisma.expense = {
+  create: vi.fn().mockResolvedValue({ id: 1 }),
+};
 prisma.tenant = prisma.tenant || {};
 prisma.tenant.findUnique = vi.fn().mockResolvedValue({
   id: 1,

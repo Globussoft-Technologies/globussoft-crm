@@ -211,7 +211,8 @@ afterEach(() => {
 
 describe('<Diagnostics /> — page chrome + filter bar', () => {
   it('renders heading + sub-brand filter + classification filter + Refresh + Take diagnostic CTA', async () => {
-    renderPage();
+    // "Take diagnostic" is shown to operators; admins see "New bank" instead.
+    renderPage(REGULAR_USER);
     expect(screen.getByRole('heading', { name: /Diagnostics/i })).toBeInTheDocument();
     expect(screen.getByLabelText(/Filter by sub-brand/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Filter by classification/i)).toBeInTheDocument();
@@ -227,7 +228,7 @@ describe('<Diagnostics /> — page chrome + filter bar', () => {
   });
 
   it('Take diagnostic CTA targets /travel/diagnostics/new (SUT line 84)', async () => {
-    renderPage();
+    renderPage(REGULAR_USER);
     const cta = screen.getByRole('link', { name: /Take a diagnostic/i });
     expect(cta.getAttribute('href')).toBe('/travel/diagnostics/new');
     await waitFor(() => {
@@ -291,7 +292,8 @@ describe('<Diagnostics /> — load + render lifecycle', () => {
 
   it('renders empty-state copy when diagnostics=[] (SUT lines 138-140)', async () => {
     installFetchMock({ list: { diagnostics: [] } });
-    renderPage();
+    // The "Click Take diagnostic" hint is only shown to non-admins.
+    renderPage(REGULAR_USER);
     expect(
       await screen.findByText(/No diagnostics submitted yet\./i),
     ).toBeInTheDocument();

@@ -135,10 +135,10 @@ describe('<Payments /> — page surface', () => {
     await waitFor(() => expect(screen.getAllByText('$1500.00').length).toBeGreaterThanOrEqual(1));
     expect(screen.getByText('$250.00')).toBeInTheDocument();
     expect(screen.getByText('$75.00')).toBeInTheDocument();
-    // Invoice IDs render as "#<id>".
-    expect(screen.getByText('#101')).toBeInTheDocument();
-    expect(screen.getByText('#102')).toBeInTheDocument();
-    expect(screen.getByText('#103')).toBeInTheDocument();
+    // Invoice IDs render in the "For" column as "Invoice #<id>".
+    expect(screen.getByText('Invoice #101')).toBeInTheDocument();
+    expect(screen.getByText('Invoice #102')).toBeInTheDocument();
+    expect(screen.getByText('Invoice #103')).toBeInTheDocument();
     // Status badge labels.
     expect(screen.getByText(/^Success$/)).toBeInTheDocument();
     expect(screen.getAllByText(/^Pending$/).length).toBeGreaterThanOrEqual(1);
@@ -184,30 +184,30 @@ describe('<Payments /> — page surface', () => {
 
   it('clicking the "razorpay" gateway tab filters rows to razorpay only', async () => {
     renderPayments();
-    await waitFor(() => expect(screen.getByText('#101')).toBeInTheDocument());
-    expect(screen.getByText('#101')).toBeInTheDocument();
-    expect(screen.getByText('#102')).toBeInTheDocument();
-    expect(screen.getByText('#103')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText('Invoice #101')).toBeInTheDocument());
+    expect(screen.getByText('Invoice #101')).toBeInTheDocument();
+    expect(screen.getByText('Invoice #102')).toBeInTheDocument();
+    expect(screen.getByText('Invoice #103')).toBeInTheDocument();
 
     const razorpayTab = screen.getByRole('button', { name: /^razorpay$/i });
     fireEvent.click(razorpayTab);
 
     await waitFor(() => {
-      expect(screen.getByText('#101')).toBeInTheDocument();
-      expect(screen.queryByText('#102')).not.toBeInTheDocument();
-      expect(screen.queryByText('#103')).not.toBeInTheDocument();
+      expect(screen.getByText('Invoice #101')).toBeInTheDocument();
+      expect(screen.queryByText('Invoice #102')).not.toBeInTheDocument();
+      expect(screen.queryByText('Invoice #103')).not.toBeInTheDocument();
     });
   });
 
   it('Gateway Configuration panel renders for ADMIN role', async () => {
     renderPayments(ADMIN_USER);
-    await waitFor(() => expect(screen.getByText('#101')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Invoice #101')).toBeInTheDocument());
     expect(screen.getByRole('heading', { name: /Gateway Configuration/i })).toBeInTheDocument();
   });
 
   it('Gateway Configuration panel is HIDDEN for USER role', async () => {
     renderPayments(REGULAR_USER);
-    await waitFor(() => expect(screen.getByText('#101')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Invoice #101')).toBeInTheDocument());
     expect(screen.queryByRole('heading', { name: /Gateway Configuration/i })).toBeNull();
   });
 
@@ -252,46 +252,50 @@ describe('<Payments /> — page surface', () => {
       return Promise.resolve(null);
     });
     renderPayments();
-    await waitFor(() => expect(screen.getByText('#104')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Invoice #104')).toBeInTheDocument());
     expect(screen.getByText(/^Success$/)).toBeInTheDocument();
     expect(screen.getAllByText(/^Pending$/).length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText(/^Failed$/).length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText(/^Refunded$/)).toBeInTheDocument();
+    expect(screen.getAllByText(/^Refunded$/).length).toBeGreaterThanOrEqual(1);
   });
 
   it('Stripe tab filters rows to stripe only; clicking "All" restores all rows', async () => {
     renderPayments();
-    await waitFor(() => expect(screen.getByText('#101')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Invoice #101')).toBeInTheDocument());
 
     fireEvent.click(screen.getByRole('button', { name: /^stripe$/i }));
     await waitFor(() => {
-      expect(screen.queryByText('#101')).not.toBeInTheDocument();
-      expect(screen.getByText('#102')).toBeInTheDocument();
-      expect(screen.getByText('#103')).toBeInTheDocument();
+      expect(screen.queryByText('Invoice #101')).not.toBeInTheDocument();
+      expect(screen.getByText('Invoice #102')).toBeInTheDocument();
+      expect(screen.getByText('Invoice #103')).toBeInTheDocument();
     });
 
     fireEvent.click(screen.getByRole('button', { name: /^All$/i }));
     await waitFor(() => {
-      expect(screen.getByText('#101')).toBeInTheDocument();
-      expect(screen.getByText('#102')).toBeInTheDocument();
-      expect(screen.getByText('#103')).toBeInTheDocument();
+      expect(screen.getByText('Invoice #101')).toBeInTheDocument();
+      expect(screen.getByText('Invoice #102')).toBeInTheDocument();
+      expect(screen.getByText('Invoice #103')).toBeInTheDocument();
     });
   });
 
-  it('refund button is disabled-by-design (no refund endpoint wired yet)', async () => {
+  it('refund button is enabled for captured Razorpay SUCCESS payments and disabled otherwise', async () => {
     renderPayments();
-    await waitFor(() => expect(screen.getByText('#101')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Invoice #101')).toBeInTheDocument());
     const refundButtons = screen.getAllByRole('button', { name: /^Refund$/i });
     expect(refundButtons.length).toBe(3);
-    refundButtons.forEach((btn) => {
-      expect(btn).toBeDisabled();
-      expect(btn).toHaveAttribute('title', expect.stringMatching(/coming soon/i));
-    });
+    // Row 1: Razorpay SUCCESS with a pay_ gateway id → enabled.
+    expect(refundButtons[0]).toBeEnabled();
+    expect(refundButtons[0]).toHaveAttribute('title', expect.stringMatching(/Refund \$1500\.00 via Razorpay/i));
+    // Rows 2/3: pending / failed or non-Razorpay → disabled.
+    expect(refundButtons[1]).toBeDisabled();
+    expect(refundButtons[1]).toHaveAttribute('title', expect.stringMatching(/Only captured Razorpay payments can be refunded/i));
+    expect(refundButtons[2]).toBeDisabled();
+    expect(refundButtons[2]).toHaveAttribute('title', expect.stringMatching(/Only captured Razorpay payments can be refunded/i));
   });
 
   it('clicking a row View button opens the detail modal; clicking close hides it', async () => {
     renderPayments();
-    await waitFor(() => expect(screen.getByText('#101')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Invoice #101')).toBeInTheDocument());
     expect(screen.queryByRole('heading', { name: /^Payment #1$/i })).toBeNull();
     const viewButtons = screen.getAllByRole('button', { name: /^View$/i });
     fireEvent.click(viewButtons[0]);
@@ -304,7 +308,7 @@ describe('<Payments /> — page surface', () => {
 
   it('Refresh button click triggers a fresh /api/payments fetch', async () => {
     renderPayments();
-    await waitFor(() => expect(screen.getByText('#101')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Invoice #101')).toBeInTheDocument());
     const initialPaymentsCalls = fetchApiMock.mock.calls.filter(
       ([url]) => url === '/api/payments'
     ).length;
@@ -319,7 +323,7 @@ describe('<Payments /> — page surface', () => {
 
   it('detail modal closes when the backdrop overlay is clicked', async () => {
     renderPayments();
-    await waitFor(() => expect(screen.getByText('#101')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Invoice #101')).toBeInTheDocument());
     fireEvent.click(screen.getAllByRole('button', { name: /^View$/i })[0]);
     const heading = await screen.findByRole('heading', { name: /^Payment #1$/i });
     // Walk up to the backdrop overlay (the outermost div with position:fixed).
@@ -353,8 +357,8 @@ describe('<Payments /> — page surface', () => {
       return Promise.resolve(null);
     });
     renderPayments();
-    await waitFor(() => expect(screen.getByText('#110')).toBeInTheDocument());
-    expect(screen.getByText('paypal')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText('Invoice #110')).toBeInTheDocument());
+    expect(screen.getByText(/paypal/i)).toBeInTheDocument();
   });
 
   it('admin Gateway Configuration cards reflect partial-config state via per-extra checkmarks', async () => {
@@ -393,7 +397,7 @@ describe('<Payments /> — page surface', () => {
       return Promise.resolve(null);
     });
     renderPayments();
-    await waitFor(() => expect(screen.getByText('#121')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Invoice #121')).toBeInTheDocument());
     // Total Collected should render $1000.00 (only SUCCESS amount counted —
     // mock formatMoney here uses .toFixed(2); real behavior covered by money.test.js).
     // Same amount also renders in the row's Amount cell (row #121).

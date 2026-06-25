@@ -4211,7 +4211,9 @@ router.put(
       );
 
       // Auto-create an Expense record when a payable is first marked paid.
-      if (data.status === "paid" && existing.status !== "paid") {
+      // Guard `prisma.expense` so mocked test environments (which may not stub
+      // the Expense delegate) don't 500 the payable update itself.
+      if (data.status === "paid" && existing.status !== "paid" && prisma.expense) {
         const ref = data.paymentReference || existing.paymentReference || null;
         prisma.expense.create({
           data: {

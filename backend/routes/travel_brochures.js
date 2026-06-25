@@ -34,6 +34,7 @@ const { requirePermission } = require("../middleware/requirePermission");
 const { requireTravelTenant } = require("../middleware/travelGuards");
 const prisma = require("../lib/prisma");
 const brochureEngine = require("../services/brochureEngineBridge");
+const { sanitizeBrandKit } = require("../lib/brochureBrandKit");
 
 // SSE note: EventSource (the browser SSE client) intentionally rejects
 // custom request headers, so the operator UI passes the JWT on the URL as
@@ -105,8 +106,22 @@ router.post(
         typeof req.body.styleKey === "string" && req.body.styleKey.trim()
           ? req.body.styleKey.trim()
           : undefined;
-      const brand =
-        req.body.brand && typeof req.body.brand === "object" ? req.body.brand : undefined;
+      // Trust boundary: the engine forwards `brand` verbatim into the render
+      // subprocess, so it MUST be sanitized here (raster-only logo, length caps,
+      // clamped placement). Invalid input is dropped → undefined, never rejected.
+      const brand = sanitizeBrandKit(req.body.brand);
+      // Switchable models: an optional per-tier model id map, OR a strategy
+      // preset ('recommended' | 'cheapest' | 'smartest'). The engine applies
+      // `models` first and falls back to `strategy`; both are validated there
+      // against the live catalog, so we only shape-check here.
+      const models =
+        req.body.models && typeof req.body.models === "object" && !Array.isArray(req.body.models)
+          ? req.body.models
+          : undefined;
+      const strategy =
+        typeof req.body.strategy === "string" && req.body.strategy.trim()
+          ? req.body.strategy.trim()
+          : undefined;
       const tripId =
         typeof req.body.tripId === "number" ? req.body.tripId : undefined;
       const itineraryId =
@@ -138,6 +153,10 @@ router.post(
           status: "running",
           tripId: tripId || null,
           itineraryId: itineraryId || null,
+          // Snapshot the SANITIZED brand for audit / replay (column already
+          // exists on the model). Stored post-sanitization so a replay can't
+          // resurrect un-hardened input.
+          brandJson: brand ? JSON.stringify(brand) : null,
         },
       });
 
@@ -162,6 +181,8 @@ router.post(
           goal,
           styleKey,
           brand,
+          models,
+          strategy,
           onEvent: (event) => pushEvent(runId, event),
         })
         .then(async ({ result, billedUsd, pdfUrl }) => {
@@ -355,6 +376,35 @@ router.get(
     } catch (e) {
       console.error("[brochures] list sectors error:", e);
       return res.status(500).json({ error: "Failed to list sectors" });
+    }
+  },
+);
+
+// ─── GET /brochures/models ────────────────────────────────────────────────
+// Model catalog for the operator UI's picker + pre-run cost estimate. Shells
+// into the engine's CATALOG mode (BROCHURE_MODE=catalog, no LLM call) and
+// returns { tiers, strategies, defaults, models:[…] }. `available` reflects
+// which providers the configured keys can actually reach. If the engine isn't
+// vendored / installed, this returns 503 with a hint rather than 500 so the UI
+// can degrade to the strategy presets without a hard error.
+router.get(
+  "/brochures/models",
+  verifyToken,
+  requireTravelTenant,
+  requirePermission("marketing", "read"),
+  async (req, res) => {
+    try {
+      const catalog = await brochureEngine.listModels();
+      return res.json(catalog);
+    } catch (e) {
+      console.error("[brochures] list models error:", e.message);
+      return res.status(503).json({
+        error: "Model catalog unavailable — the brochure engine may not be installed.",
+        code: "ENGINE_UNAVAILABLE",
+        models: [],
+        tiers: [],
+        strategies: [],
+      });
     }
   },
 );

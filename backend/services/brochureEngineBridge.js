@@ -63,12 +63,16 @@ const GENERATED_DIR = process.env.GENERATED_DIR
  * @param {string} args.goal          The brief.
  * @param {string} [args.styleKey]    Optional template key.
  * @param {object} [args.brand]       Sanitized brand kit.
+ * @param {object} [args.models]      Optional per-tier model id map (switchable
+ *                                    models), e.g. { reasoning, balanced, fast, writing }.
+ * @param {string} [args.strategy]    Optional preset ('recommended'|'cheapest'|'smartest'),
+ *                                    applied only when `models` is absent.
  * @param {(e: object) => void} [args.onEvent]  Called for each engine event.
  * @returns {Promise<{ runId: string, result: unknown, billedUsd: number, pdfUrl: string | null }>}
  */
-function startRun({ runId, sectorKey, goal, styleKey, brand, onEvent }) {
+function startRun({ runId, sectorKey, goal, styleKey, brand, models, strategy, onEvent }) {
   return new Promise((resolve, reject) => {
-    const brief = JSON.stringify({ runId, sectorKey, goal, styleKey, brand });
+    const brief = JSON.stringify({ runId, sectorKey, goal, styleKey, brand, models, strategy });
     const child = spawn(process.execPath, [TSX_CLI, BRIDGE_SCRIPT], {
       cwd: ENGINE_ROOT,
       env: { ...process.env, BROCHURE_BRIEF: brief },
@@ -165,6 +169,61 @@ function startRun({ runId, sectorKey, goal, styleKey, brand, onEvent }) {
 }
 
 /**
+ * List the engine's MODEL catalog (CATALOG mode). Spawns crm-bridge.ts exactly
+ * like startRun, but with env BROCHURE_MODE=catalog and NO BROCHURE_BRIEF — no
+ * LLM call, no event streaming. Reads the single final JSON object from the LAST
+ * non-empty stdout line and resolves it.
+ *
+ * @returns {Promise<{ tiers: string[], strategies: string[], defaults: object,
+ *                     models: Array<{ id, label, provider, available, intelligence,
+ *                     costEff, inputPer1M, outputPer1M, blurb }> }>}
+ */
+function listModels() {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [TSX_CLI, BRIDGE_SCRIPT], {
+      cwd: ENGINE_ROOT,
+      env: { ...process.env, BROCHURE_MODE: "catalog" },
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    });
+
+    let stdoutBuf = "";
+    let stderrBuf = "";
+    child.stdout.on("data", (chunk) => {
+      stdoutBuf += chunk.toString("utf8");
+    });
+    child.stderr.on("data", (chunk) => {
+      stderrBuf += chunk.toString("utf8");
+    });
+    child.on("error", (err) => {
+      reject(new Error(`Engine subprocess failed to start: ${err.message}`));
+    });
+    child.on("close", (code) => {
+      const finalLine = stdoutBuf.trim().split(/\r?\n/).filter(Boolean).pop() || "";
+      let parsed;
+      try {
+        parsed = JSON.parse(finalLine);
+      } catch {
+        return reject(
+          new Error(
+            `Engine catalog exited with code ${code} but no parseable JSON on stdout. ${stderrBuf.slice(-200)}`,
+          ),
+        );
+      }
+      if (!parsed.ok) {
+        return reject(new Error(parsed.error || `Engine catalog failed (exit ${code})`));
+      }
+      resolve({
+        tiers: Array.isArray(parsed.tiers) ? parsed.tiers : [],
+        strategies: Array.isArray(parsed.strategies) ? parsed.strategies : [],
+        defaults: parsed.defaults || {},
+        models: Array.isArray(parsed.models) ? parsed.models : [],
+      });
+    });
+  });
+}
+
+/**
  * Static sector catalog — mirrors the runtime allowlist in @agentic-os/sectors
  * (registry.ts) so the operator UI can render a picker without spinning up a
  * subprocess just to list options. Keep in sync with
@@ -209,6 +268,7 @@ function listSectors() {
 
 module.exports = {
   startRun,
+  listModels,
   listSectors,
   ENGINE_ROOT,
   GENERATED_DIR,

@@ -93,6 +93,11 @@ try:
     print(f"[state] new demo SHA: {after_sha}")
     run("cd ~/globussoft-crm && git log --oneline -3")
 
+    # Agentic brochure engine deps must be present before the backend starts,
+    # because backend/services/brochureEngineBridge.js spawns tsx from
+    # agentic-orchcrm/node_modules/.bin at runtime.
+    run("cd ~/globussoft-crm/agentic-orchcrm && npm install --no-audit --no-fund --loglevel=error 2>&1 | tail -10", timeout=300)
+
     run("cd ~/globussoft-crm/backend && npm install --no-audit --no-fund --loglevel=error 2>&1 | tail -10", timeout=300)
     run("cd ~/globussoft-crm/backend && npx prisma generate 2>&1 | tail -5", timeout=120)
 

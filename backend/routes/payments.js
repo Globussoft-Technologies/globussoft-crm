@@ -192,6 +192,91 @@ async function markInvoicePaid(invoiceId, tenantId) {
   }
 }
 
+// Reconcile a TRAVEL milestone payment-link back to its TravelPaymentSchedule
+// + parent TravelInvoice (the travel-vertical equivalent of markInvoicePaid).
+// Driven by the link's notes.kind='travel-milestone' tag. Marks the milestone
+// paid (idempotent on retries), then recomputes the invoice: all siblings
+// paid/waived → "Paid", otherwise "Partial". Best-effort — never throws.
+async function reconcileTravelMilestone(notes, paymentEnt) {
+  const scheduleId = Number(notes && notes.scheduleId);
+  if (!Number.isFinite(scheduleId)) return;
+  const paidPaise = paymentEnt && paymentEnt.amount;
+  const paidMajor = paidPaise != null ? paidPaise / 100 : null;
+  const capturedAt =
+    paymentEnt && paymentEnt.captured_at
+      ? new Date(paymentEnt.captured_at * 1000)
+      : new Date();
+
+  const schedule = await prisma.travelPaymentSchedule.findFirst({
+    where: { id: scheduleId },
+  });
+  if (!schedule) return;
+  if (schedule.status === "paid") return; // idempotent — webhook retries
+
+  await prisma.travelPaymentSchedule.update({
+    where: { id: schedule.id },
+    data: {
+      status: "paid",
+      paidAt: capturedAt,
+      receivedAmount:
+        paidMajor != null ? String(paidMajor) : schedule.expectedAmount,
+    },
+  });
+
+  // Recompute the parent TravelInvoice status from its sibling milestones.
+  const siblings = await prisma.travelPaymentSchedule.findMany({
+    where: { invoiceId: schedule.invoiceId, tenantId: schedule.tenantId },
+    select: { status: true },
+  });
+  const allSettled = siblings.every(
+    (s) => s.status === "paid" || s.status === "waived",
+  );
+  await prisma.travelInvoice
+    .update({
+      where: { id: schedule.invoiceId },
+      data: {
+        status: allSettled ? "Paid" : "Partial",
+        ...(allSettled ? { paidAt: capturedAt } : {}),
+      },
+    })
+    .catch((e) =>
+      console.error("[Payments] travel invoice status update failed:", e.message),
+    );
+}
+
+// Reconcile a full TRAVEL invoice payment-link (notes.kind='travel-invoice').
+// Marks the TravelInvoice Paid + flips every open milestone on it to paid so
+// the milestone tracker + invoice agree. Idempotent + best-effort.
+async function reconcileTravelInvoice(notes, paymentEnt) {
+  const travelInvoiceId = Number(notes && notes.travelInvoiceId);
+  if (!Number.isFinite(travelInvoiceId)) return;
+  const capturedAt =
+    paymentEnt && paymentEnt.captured_at
+      ? new Date(paymentEnt.captured_at * 1000)
+      : new Date();
+  const invoice = await prisma.travelInvoice.findFirst({
+    where: { id: travelInvoiceId },
+  });
+  if (!invoice || invoice.status === "Paid") return; // idempotent
+  await prisma.travelInvoice.update({
+    where: { id: invoice.id },
+    data: { status: "Paid", paidAt: capturedAt },
+  });
+  // Settle any still-open milestones so the tracker matches the invoice.
+  await prisma.travelPaymentSchedule
+    .updateMany({
+      where: {
+        invoiceId: invoice.id,
+        tenantId: invoice.tenantId,
+        status: { in: ["pending", "partial", "overdue"] },
+      },
+      data: { status: "paid", paidAt: capturedAt },
+    })
+    .catch((e) =>
+      console.error("[Payments] travel invoice milestone settle failed:", e.message),
+    );
+}
+
 // PRD Gap §13 wave-6a — emit payment.collected when a gateway success
 // webhook (Stripe/Razorpay) lands. Wrapped in try/catch so workflow rule
 // failures never break the webhook handler (which would cause the gateway
@@ -388,15 +473,95 @@ router.post(
         const notes = plinkEnt && plinkEnt.notes;
 
         // Travel quote advance link: notes.kind = 'travel-quote-advance'
-        // Store the pay_XXXX id on the TravelQuote row for refund tracking.
+        // Record paid amount, timestamp, and flip status to advance_paid / fully_paid.
         if (notes && notes.kind === 'travel-quote-advance' && notes.quoteId && paymentId) {
           try {
-            await prisma.travelQuote.updateMany({
-              where: { id: Number(notes.quoteId) },
-              data: { advancePaymentId: String(paymentId) },
+            const quoteId = Number(notes.quoteId);
+            // Razorpay amounts are in paise (smallest unit); convert to major.
+            const paidPaise = paymentEnt && paymentEnt.amount;
+            const paidMajor = paidPaise != null ? paidPaise / 100 : null;
+            const capturedAt = paymentEnt && paymentEnt.captured_at
+              ? new Date(paymentEnt.captured_at * 1000)
+              : new Date();
+
+            // Fetch quote for status check + contactId + description.
+            const quote = await prisma.travelQuote.findFirst({
+              where: { id: quoteId },
+              select: { totalAmount: true, status: true, contactId: true, subBrand: true },
             });
+
+            // Determine new status: fully_paid if customer paid ≥ total amount.
+            let newStatus = 'advance_paid';
+            if (paidMajor != null && quote && Number(quote.totalAmount) > 0 && paidMajor >= Number(quote.totalAmount)) {
+              newStatus = 'fully_paid';
+            }
+
+            const updateData = {
+              advancePaymentId: String(paymentId),
+              advancePaidAt: capturedAt,
+              paymentReference: String(paymentId),
+              status: newStatus,
+            };
+            if (paidMajor != null) updateData.advancePaidAmount = paidMajor;
+
+            await prisma.travelQuote.updateMany({
+              where: { id: quoteId },
+              data: updateData,
+            });
+
+            // Create a Payment row so this appears on the Payments page.
+            // Deduplicate on gatewayId (paymentId = pay_XXXX).
+            const tenantIdNum = Number(notes.tenantId);
+            if (Number.isFinite(tenantIdNum) && paymentId) {
+              const existing = await prisma.payment.findFirst({
+                where: { gateway: 'razorpay', gatewayId: String(paymentId) },
+              });
+              if (!existing) {
+                await prisma.payment.create({
+                  data: {
+                    tenantId: tenantIdNum,
+                    invoiceId: null,
+                    contactId: (quote && quote.contactId) || null,
+                    description: `Quote #${quoteId} advance — ${newStatus === 'fully_paid' ? 'fully paid' : 'advance deposit'}`,
+                    amount: paidMajor != null ? paidMajor : 0,
+                    currency: (paymentEnt && paymentEnt.currency ? String(paymentEnt.currency).toUpperCase() : 'INR'),
+                    gateway: 'razorpay',
+                    gatewayId: String(paymentId),
+                    status: 'SUCCESS',
+                    paidAt: capturedAt,
+                    metadata: JSON.stringify({
+                      type: 'travel-quote-advance',
+                      quoteId,
+                      subBrand: (quote && quote.subBrand) || null,
+                      plinkId: plinkId || null,
+                    }),
+                  },
+                });
+              }
+            }
           } catch (e) {
-            console.error('[Payments] travel-quote advancePaymentId persist failed:', e.message);
+            console.error('[Payments] travel-quote advance persist failed:', e.message);
+          }
+        }
+
+        // Travel milestone link: notes.kind = 'travel-milestone'. Marks the
+        // TravelPaymentSchedule paid + recomputes the parent TravelInvoice —
+        // this is what makes the Milestone Tracker "Notify" pay-link reconcile
+        // back to the TRAVEL invoice (not the generic Invoice) when the
+        // customer completes payment.
+        if (notes && notes.kind === 'travel-milestone' && notes.scheduleId) {
+          try {
+            await reconcileTravelMilestone(notes, paymentEnt);
+          } catch (e) {
+            console.error('[Payments] travel-milestone reconcile failed:', e.message);
+          }
+        } else if (notes && notes.kind === 'travel-invoice' && notes.travelInvoiceId) {
+          // Full-invoice travel pay-link (the "Generate payment link" action on
+          // the Travel invoice). Marks the whole TravelInvoice + its milestones paid.
+          try {
+            await reconcileTravelInvoice(notes, paymentEnt);
+          } catch (e) {
+            console.error('[Payments] travel-invoice reconcile failed:', e.message);
           }
         }
 
@@ -415,6 +580,27 @@ router.post(
             });
             await markInvoicePaid(payment.invoiceId, payment.tenantId);
             emitPaymentCollected(updated);
+          }
+        }
+      } else if (eventName === "refund.processed" || eventName === "refund.created") {
+        // Confirmation for refunds (incl. async/non-instant). The operator-
+        // initiated refund already flips the Payment to REFUNDED synchronously;
+        // this makes the webhook path idempotent + also covers refunds issued
+        // from the Razorpay dashboard. Match the Payment by the refunded id.
+        const refundEnt = event.payload && event.payload.refund && (event.payload.refund.entity || event.payload.refund);
+        const refundedPaymentId = refundEnt && refundEnt.payment_id;
+        if (refundedPaymentId) {
+          const payment = await prisma.payment.findFirst({
+            where: { gateway: "razorpay", gatewayId: String(refundedPaymentId) },
+          });
+          if (payment && payment.status !== "REFUNDED") {
+            await require("../lib/refundService").finalizeRefund(payment, {
+              refundId: refundEnt.id,
+              amount: refundEnt.amount != null ? refundEnt.amount / 100 : Number(payment.amount || 0),
+              reason: (refundEnt.notes && refundEnt.notes.reason) || null,
+              refundStatus: refundEnt.status || "processed",
+              userId: null,
+            });
           }
         }
       }
@@ -476,7 +662,22 @@ router.get("/", async (req, res) => {
       where,
       orderBy: { createdAt: "desc" },
     });
-    res.json(payments.map(serialize));
+
+    // Batch-fetch contact names for all contactIds in this result set.
+    const contactIds = [...new Set(payments.map((p) => p.contactId).filter(Boolean))];
+    const contactMap = {};
+    if (contactIds.length > 0) {
+      const contacts = await prisma.contact.findMany({
+        where: { id: { in: contactIds }, tenantId },
+        select: { id: true, name: true, email: true, phone: true },
+      });
+      contacts.forEach((c) => { contactMap[c.id] = c; });
+    }
+
+    res.json(payments.map((p) => ({
+      ...serialize(p),
+      contact: p.contactId ? (contactMap[p.contactId] || null) : null,
+    })));
   } catch (err) {
     console.error("[Payments] list error:", err);
     res.status(500).json({ error: err.message });
@@ -1034,6 +1235,60 @@ router.post("/confirm-stripe-session", async (req, res) => {
   } catch (err) {
     console.error("[Payments] confirm-stripe-session error:", err);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────
+// REFUND — real gateway refund via the tenant's own (BYOK) Razorpay keys.
+// Delegates to lib/refundService (shared with the itinerary cancellation flow).
+// Travel BOOKING payments (advance / milestone / full-invoice) normally refund
+// through the booking's CANCELLATION flow so the retention policy applies — the
+// Payments page only allows an ADMIN override on them, and a reason is required.
+// ─────────────────────────────────────────────────────────────────
+const { verifyRole } = require("../middleware/auth");
+const refundService = require("../lib/refundService");
+
+// POST /api/payments/:id/refund — { amount?, reason? }. Full refund by default.
+router.post("/:id/refund", verifyToken, verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) {
+      return res.status(400).json({ error: "Invalid payment id", code: "INVALID_ID" });
+    }
+    const tenantId = tenantOf(req);
+    const payment = await prisma.payment.findFirst({ where: { id, tenantId } });
+    if (!payment) {
+      return res.status(404).json({ error: "Payment not found", code: "PAYMENT_NOT_FOUND" });
+    }
+
+    const meta = safeJsonParse(payment.metadata, {});
+    const reason = req.body && req.body.reason ? String(req.body.reason).slice(0, 500) : null;
+
+    // Travel booking payments → cancellation-flow-first. ADMIN override only,
+    // and the override must carry a reason (it bypasses the retention policy).
+    if (refundService.isTravelBookingPayment(meta)) {
+      if (req.user.role !== "ADMIN") {
+        return res.status(403).json({
+          error: "Refund this booking through its cancellation flow (Itineraries → cancellation) so the policy applies. Admins can override here.",
+          code: "USE_CANCELLATION_FLOW",
+        });
+      }
+      if (!reason) {
+        return res.status(400).json({ error: "A reason is required to override the cancellation policy.", code: "REASON_REQUIRED" });
+      }
+    }
+
+    const r = await refundService.refundCapturedPayment({
+      payment,
+      amount: req.body && req.body.amount,
+      reason,
+      userId: req.user.userId,
+    });
+    if (!r.ok) return res.status(r.status).json({ error: r.error, code: r.code });
+    return res.json({ ...serialize(r.payment), refund: r.refund });
+  } catch (err) {
+    console.error("[Payments] refund error:", err.message);
+    res.status(500).json({ error: "Failed to process refund", code: "REFUND_FAILED" });
   }
 });
 

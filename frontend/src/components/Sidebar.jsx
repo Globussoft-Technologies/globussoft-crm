@@ -1632,14 +1632,11 @@ function renderTravelNav({
       <Link to="/admin/ratehawk-search" icon={Hotel} label="RateHawk Search" requiredPermission={{ module: "suppliers", action: "read" }} />
       <Link to="/admin/booking-expedia-search" icon={BedDouble} label="Booking / Expedia" requiredPermission={{ module: "suppliers", action: "read" }} />
       <Link to="/admin/voyagr-api-keys" icon={Key} label="Voyagr API Keys" requiredPermission={{ module: "integrations", action: "manage" }} />
-      <Link to="/travel/payables" icon={CreditCard} label="Payables" requiredPermission={{ module: "payables", action: "read" }} />
       <Link to="/travel/commission-profiles" icon={Award} label="Commission Profiles" requiredPermission={{ module: "commission_profiles", action: "read" }} />
       <Link to="/travel/quotes-admin" icon={FileText} label="Quotes" requiredPermission={{ module: "quotes", action: "read" }} />
       <Link to="/travel/flights/quote" icon={Plane} label="Flight quick-quote" requiredPermission={{ module: "flight_quotes", action: "read" }} />
       <Link to="/travel/quotes/builder" icon={Calculator} label="Quote Builder" requiredPermission={{ module: "quotes", action: "write" }} />
       <Link to="/travel/quote-templates" icon={FileStack} label="Quote Templates" requiredPermission={{ module: "quote_templates", action: "read" }} />
-      <Link to="/travel/invoices-admin" icon={Receipt} label="Invoices" requiredPermission={{ module: "invoices", action: "read" }} />
-      <Link to="/travel/milestones" icon={Clock} label="Milestones" requiredPermission={{ module: "invoices", action: "read" }} />
       <Link to="/travel/cancellation-policies" icon={Ban} label="Cancellation Policies" requiredPermission={{ module: "cancellation_policies", action: "read" }} />
       <Link to="/travel/suppliers" icon={Key} label="Supplier credentials" requiredPermission={{ module: "suppliers", action: "manage" }} />
       {inBrand("rfu") && (
@@ -1709,8 +1706,10 @@ function renderTravelNav({
       <Link to="/gmail" icon={Mail} label="Gmail" />
 
       <Section label="Financial">
-        <Link to="/invoices" icon={Receipt} label="Invoices" requiredPermission={{ module: "invoices", action: "read" }} />
-        <Link to="/payments" icon={IndianRupee} label="Payments" requiredPermission={{ module: "payments", action: "read" }} />
+        <Link to="/travel/invoices-admin" icon={Receipt} label="Invoices" requiredPermission={{ module: "invoices", action: "read" }} />
+        <Link to="/travel/milestones" icon={Clock} label="Milestones" requiredPermission={{ module: "invoices", action: "read" }} />
+        <Link to="/travel/payables" icon={CreditCard} label="Payables" requiredPermission={{ module: "payables", action: "read" }} />
+        <Link to="/payments" icon={IndianRupee} label="Payments received" requiredPermission={{ module: "payments", action: "read" }} />
       </Section>
 
       {/* The generic /reports link was removed here — travel uses its own

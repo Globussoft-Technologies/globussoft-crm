@@ -22,7 +22,7 @@
 
 import { useEffect, useState, useContext } from "react";
 import { Link } from "react-router-dom";
-import { Receipt, Plus, Pencil, Trash2, Calculator } from "lucide-react";
+import { Receipt, Pencil, Trash2, Calculator } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { usePermissions } from "../../hooks/usePermissions";
@@ -30,14 +30,9 @@ import { formatMoney } from "../../utils/money";
 import {
   SUB_BRAND_BG,
   accessibleSubBrands,
-  defaultSubBrandFor,
   subBrandShortLabel,
 } from "../../utils/travelSubBrand";
 import { useActiveSubBrand } from "../../utils/subBrand";
-// Branding Wave 4 G102: per-sub-brand brand-kit lookup. Drives the primary
-// CTA tint from BrandKit.primaryColor when a kit is active, falling back to
-// the standing-rule `var(--primary-color, var(--accent-color))` CSS var.
-import { useBrandKit, brandPrimaryColor } from "../../hooks/useBrandKit";
 import { AuthContext } from "../../App";
 
 const SUB_BRANDS = [
@@ -105,8 +100,6 @@ export default function QuotesAdmin() {
   const { activeSubBrand } = useActiveSubBrand();
   // G102: BrandKit lookup. Module-level cache means re-mounts of QuotesAdmin
   // never re-fetch; safe to call unconditionally here.
-  const { brandKit } = useBrandKit(activeSubBrand);
-  const primaryBtnBranded = { ...primaryBtn, background: brandPrimaryColor(brandKit) };
   // Permission-driven action visibility. Backend routes already gate
   // each action with requirePermission(quotes, <action>); the UI checks
   // mirror those gates so buttons hide entirely when the role lacks the
@@ -133,6 +126,8 @@ export default function QuotesAdmin() {
   // #829 — distinguish 403 from genuine empty so the empty-state copy
   // honestly says "Access restricted" instead of "No quotes match."
   const [permissionDenied, setPermissionDenied] = useState(false);
+  // Contact id → display name, so the list shows names instead of bare ids.
+  const [contactsById, setContactsById] = useState({});
 
   const [subBrand, setSubBrand] = useState("");
   const [status, setStatus] = useState("");
@@ -181,15 +176,23 @@ export default function QuotesAdmin() {
 
   useEffect(load, [subBrand, status, contactIdFilter]);
 
+  // Load a contactId → name map once so the Contact column renders names.
+  useEffect(() => {
+    fetchApi("/api/contacts?fields=summary&limit=500")
+      .then((d) => {
+        const rows = Array.isArray(d) ? d : Array.isArray(d?.contacts) ? d.contacts : [];
+        const map = {};
+        for (const c of rows) {
+          if (c && c.id != null) map[c.id] = c.name || c.email || `#${c.id}`;
+        }
+        setContactsById(map);
+      })
+      .catch(() => {});
+  }, []);
+
   const resetForm = () => {
     setForm(EMPTY_FORM);
     setEditingId(null);
-  };
-
-  const openCreate = () => {
-    setEditingId(null);
-    setForm({ ...EMPTY_FORM, subBrand: defaultSubBrandFor(user, activeSubBrand) });
-    setShowForm(true);
   };
 
   const openEdit = (q) => {
@@ -287,11 +290,9 @@ export default function QuotesAdmin() {
             Customer quotes — Draft / Sent / Accepted / Rejected. {total.toLocaleString()} quote{total === 1 ? "" : "s"}.
           </p>
         </div>
-        {canCreate && (
-          <button type="button" onClick={openCreate} style={primaryBtnBranded}>
-            <Plus size={14} /> New Quote
-          </button>
-        )}
+        {/* Quotes are created in the Quote Builder (/travel/quotes/builder),
+            not here — this page is the read/edit admin list. The "New Quote"
+            button was intentionally removed so there's one creation path. */}
       </header>
 
       <div
@@ -440,7 +441,9 @@ export default function QuotesAdmin() {
             <tbody>
               {quotes.map((q) => (
                 <tr key={q.id} style={{ borderTop: "1px solid rgba(255,255,255,0.04)" }}>
-                  <td style={td}><strong>#{q.contactId}</strong></td>
+                  <td style={td}>
+                    <strong>{contactsById[q.contactId] || `#${q.contactId}`}</strong>
+                  </td>
                   <td style={td}>
                     <span
                       style={{

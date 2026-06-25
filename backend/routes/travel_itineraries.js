@@ -67,7 +67,9 @@ const {
   getSubBrandAccessSet,
   canAccessSubBrand,
   assertValidSubBrand,
-  assertCompletedDiagnostic,
+  // assertCompletedDiagnostic — diagnostic-first guard DISABLED (2026-06-25),
+  // see commented-out call sites in POST /itineraries and the suggest flow.
+  // assertCompletedDiagnostic,
 } = require("../middleware/travelGuards");
 const { findLatestDiagnostic } = require("../lib/travelLatestDiagnostic");
 const { getTravelAdvanceRatio } = require("../lib/tenantSettings");
@@ -112,6 +114,7 @@ const { getTenantRazorpayClient, getTenantRazorpayCreds, NOT_CONFIGURED_MESSAGE 
 // itinerary or a payment lands → notify the customer (Contact) in their portal.
 const { safeNotifyTravelCustomer } = require("../lib/travelPortalNotificationService");
 const cancellationRefund = require("../lib/cancellationRefund");
+const refundService = require("../lib/refundService");
 
 // Build + emit the right customer-portal notification for a trip event.
 // Best-effort (the service swallows errors) — never blocks the request.
@@ -201,10 +204,20 @@ async function notifyCustomerPaymentConfirmation(itin, paidMajor, balanceDue, po
       `Your invoice / receipt: ${receiptUrl}\n\n` +
       `— ${(itin.tenant && itin.tenant.name) || "Travel Stall"}`;
     if (contact.email) {
+      const balLineHtml = balanceDue > 0
+        ? `To fully confirm your booking, please pay the remaining ${cur} ${bal} within 3 days.`
+        : "Your booking is now fully paid &mdash; you're all set!";
+      const html =
+        `<p>Hi ${name},</p>` +
+        `<p>We've received your payment of ${cur} ${paid} for ${dest} &mdash; thank you! Your booking is confirmed.</p>` +
+        `<p>${balLineHtml}</p>` +
+        `<p>Your invoice / receipt: <a href="${receiptUrl}" target="_blank" rel="noopener noreferrer">${receiptUrl}</a></p>` +
+        `<p>&mdash; ${(itin.tenant && itin.tenant.name) || "Travel Stall"}</p>`;
       await sendEmail({
         to: contact.email,
         subject: `Payment received — ${dest} booking confirmed`,
         text,
+        html,
       }).catch(() => {});
     }
     if (contact.phone) {
@@ -616,11 +629,12 @@ router.post("/itineraries", verifyToken, requireTravelTenant, async (req, res) =
       return res.status(403).json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
     }
 
-    // PRD §4.1 diagnostic-first guard. The Itinerary is the customer-facing
-    // quote artifact (PDF + share link); the PRD forbids creating one
-    // before the contact has completed a diagnostic for this sub-brand.
+    // PRD §4.1 diagnostic-first guard — DISABLED per product owner (2026-06-25):
+    // WhatsApp / inbound leads arrive without ever taking the diagnostic, and the
+    // operator must still be able to create + send them an itinerary. Commented
+    // out (not removed) so the guard can be re-enabled if the policy changes.
     // /pricing/quote stays unguarded — it's pure internal pricing math.
-    await assertCompletedDiagnostic(prisma, req.travelTenant.id, cid, subBrand);
+    // await assertCompletedDiagnostic(prisma, req.travelTenant.id, cid, subBrand);
 
     const {
       leadId, status, startDate, endDate,
@@ -1945,7 +1959,7 @@ router.patch(
 
       const itin = await prisma.itinerary.findFirst({
         where: { id, tenantId: req.travelTenant.id },
-        select: { id: true, tenantId: true, subBrand: true, contactId: true, destination: true, currency: true, cancellationStatus: true, advancePaidAmount: true, startDate: true },
+        select: { id: true, tenantId: true, subBrand: true, contactId: true, destination: true, currency: true, cancellationStatus: true, advancePaidAmount: true, startDate: true, paymentReference: true },
       });
       if (!itin) return res.status(404).json({ error: "Itinerary not found", code: "NOT_FOUND" });
 
@@ -1986,10 +2000,39 @@ router.patch(
         custMessage = `After review, your ${trip} booking will continue as planned.${note ? ` ${note}` : ""} Please reach out to your advisor with any questions.`;
         custType = "info";
       } else {
+        // decision === "refunded" — issue the REAL policy-computed refund
+        // against the booking's captured payment, then advance to refunded.
+        // Falls back to a manual mark when there's no gateway charge to reverse
+        // (cash / offline booking). A gateway failure does NOT advance the
+        // lifecycle, so the advisor can retry.
+        refund = await resolveCancellationRefund(itin);
+        const refundAmount =
+          refund.computable && refund.refundAmount != null ? Number(refund.refundAmount) : null;
+        let gatewayRefund = null;
+        if (itin.paymentReference && refundAmount && refundAmount > 0) {
+          const payment = await prisma.payment
+            .findFirst({ where: { tenantId: itin.tenantId, gateway: "razorpay", gatewayId: String(itin.paymentReference) } })
+            .catch(() => null);
+          if (payment) {
+            const r = await refundService.refundCapturedPayment({
+              payment,
+              amount: refundAmount,
+              reason: note || `Cancellation refund${refund.policyName ? ` (${refund.policyName})` : ""}`,
+              userId: req.user.userId,
+            });
+            if (!r.ok && r.code !== "ALREADY_REFUNDED") {
+              // Surface the gateway failure; keep status 'cancelled' for retry.
+              return res.status(r.status).json({ error: r.error, code: r.code });
+            }
+            gatewayRefund = r.ok ? r.refund : null;
+          }
+        }
         data = { cancellationStatus: "refunded" };
         custTitle = "Refund processed";
-        custMessage = `The refund for your cancelled ${trip} booking has been processed.${note ? ` ${note}` : ""}`;
+        const amtLine = refundAmount ? ` of ${cur}${refundAmount.toLocaleString("en-IN")}` : "";
+        custMessage = `The refund${amtLine} for your cancelled ${trip} booking has been processed.${note ? ` ${note}` : ""}`;
         custType = "success";
+        refund = { ...refund, gatewayRefund };
       }
 
       const updated = await prisma.itinerary.update({
@@ -3189,6 +3232,11 @@ async function autoCreateWebCheckinsForItinerary(itineraryId, tenantId) {
     }
     const windowOpenAt = computeWindowOpenAt(dep, airlineCode);
     try {
+      const existingRow = await prisma.webCheckin.findFirst({
+        where: { itineraryId, pnr: String(details.pnr), flightNumber: String(details.flightNumber) },
+        select: { id: true },
+      });
+      if (existingRow) { skipped++; continue; }
       await prisma.webCheckin.create({
         data: {
           tenantId: itinFull.tenantId,
@@ -3248,10 +3296,16 @@ router.post("/itineraries/:id/accept", verifyToken, requireTravelTenant, async (
         code: "ALREADY_REJECTED",
       });
     }
-    const updated = await prisma.itinerary.update({
-      where: { id: itin.id },
-      data: { status: "accepted" },
-    });
+    // Customer already paid — payment counts as implicit acceptance. Don't
+    // downgrade the status (advance_paid / fully_paid is more informative than
+    // accepted); just run the side-effects in case they haven't fired yet.
+    const alreadyPaid = full.status === "advance_paid" || full.status === "fully_paid";
+    const updated = alreadyPaid
+      ? full
+      : await prisma.itinerary.update({
+          where: { id: itin.id },
+          data: { status: "accepted" },
+        });
 
     // G049 — bump template acceptedCount + recompute avgFinalPrice on the
     // accept hook (PRD FR-3.1.h). Rolling average formula:
@@ -4250,6 +4304,11 @@ router.post("/itineraries/:id/share", verifyToken, requireTravelTenant, async (r
               `Hi ${contact.name || "there"},\n\n` +
               `Your ${destLabel} itinerary is ready. View it here:\n${shareUrl}\n\n` +
               `Thank you.`,
+            html:
+              `<p>Hi ${contact.name || "there"},</p>` +
+              `<p>Your ${destLabel} itinerary is ready.</p>` +
+              `<p><a href="${shareUrl}" target="_blank" rel="noopener noreferrer">View your itinerary</a></p>` +
+              `<p>Thank you.</p>`,
           });
           emailStatus = emailResult.sent ? "SENT" : "SKIPPED";
           if (emailResult.sent) channelsUsed.push("email");
@@ -4677,6 +4736,12 @@ router.post("/itineraries/public/:shareToken/preferred-dates", async (req, res) 
     if (linkState.code) {
       return res.status(410).json({ error: "This share link is no longer active", code: linkState.code });
     }
+    if (itin.status === "advance_paid" || itin.status === "fully_paid") {
+      return res.status(409).json({
+        error: "Travel dates are locked after payment. Contact your advisor to change dates.",
+        code: "DATES_LOCKED_AFTER_PAYMENT",
+      });
+    }
 
     const b = req.body || {};
     const start = b.startDate ? new Date(b.startDate) : null;
@@ -4808,6 +4873,22 @@ router.post("/itineraries/public/:shareToken/record-advance-payment", async (req
     // Thank the customer + confirm the booking in their portal (itin carries
     // contactId/destination/tenantId; updated.status is advance_paid|fully_paid).
     notifyCustomerTrip(itin, updated.status);
+
+    // Payment = implicit acceptance — fan out WebCheckin rows and emit the
+    // itinerary.accepted event so downstream workflows fire (same side-effects
+    // as POST /itineraries/:id/accept). autoCreateWebCheckinsForItinerary is
+    // idempotent (skips rows that already exist), so this is safe even if the
+    // advisor had already clicked Accept before the payment landed.
+    autoCreateWebCheckinsForItinerary(itin.id, itin.tenantId).catch((e) =>
+      console.error("[travel-itin-public] webcheckin auto-create on payment (non-fatal):", e.message),
+    );
+    const { safeEmitEvent } = require("../lib/eventBus");
+    safeEmitEvent(
+      "itinerary.accepted",
+      { id: itin.id, contactId: itin.contactId || null, tenantId: itin.tenantId, trigger: "payment" },
+      itin.tenantId,
+      "travel-itin/record-advance-payment",
+    );
 
     res.status(201).json({
       status: updated.status,
@@ -5023,6 +5104,39 @@ router.post("/itineraries/public/:shareToken/verify-payment", async (req, res) =
     // read itin.totalAmount to describe the chosen option + balance).
     if (chosenTotal != null) itin.totalAmount = chosenTotal;
 
+    // Record this payment in the Payment table so it appears on the Payments
+    // page. Deduplicates on gatewayId (razorpay_payment_id) — idempotent on
+    // retry. Fire-and-forget; a failure here must not block the customer ACK.
+    prisma.payment.findFirst({ where: { gateway: "razorpay", gatewayId: String(razorpay_payment_id) } })
+      .then((existing) => {
+        if (!existing) {
+          const payKind = req.body && req.body.kind === "balance" ? "balance" : "advance";
+          return prisma.payment.create({
+            data: {
+              tenantId: itin.tenantId,
+              invoiceId: null,
+              contactId: itin.contactId || null,
+              description: `Travel to ${itin.destination || "trip"} — ${payKind} payment`,
+              amount: paidMajor,
+              currency: (itin.currency || "INR").toUpperCase(),
+              gateway: "razorpay",
+              gatewayId: String(razorpay_payment_id),
+              status: "SUCCESS",
+              paidAt: new Date(),
+              metadata: JSON.stringify({
+                type: "travel-itinerary",
+                itineraryId: itin.id,
+                subBrand: itin.subBrand,
+                destination: itin.destination || null,
+                orderId: razorpay_order_id,
+                kind: payKind,
+              }),
+            },
+          });
+        }
+      })
+      .catch((e) => console.error("[travel-itin-public] payment row create failed (non-fatal):", e.message));
+
     // Thank the customer + confirm the booking in their portal.
     notifyCustomerTrip(itin, updated.status);
     // Notify the agency's admins/managers which option was chosen + how much
@@ -5039,6 +5153,22 @@ router.post("/itineraries/public/:shareToken/verify-payment", async (req, res) =
       // booking: advance → Partial, balance → Paid). Fire-and-forget.
       upsertPaymentInvoice(itin, paidMajor, balanceDue);
     }
+
+    // Payment = implicit acceptance — fan out WebCheckin rows and emit the
+    // itinerary.accepted event so downstream workflows fire (same side-effects
+    // as POST /itineraries/:id/accept). autoCreateWebCheckinsForItinerary is
+    // idempotent (skips rows that already exist), so safe even if the advisor
+    // had already clicked Accept before the payment landed.
+    autoCreateWebCheckinsForItinerary(itin.id, itin.tenantId).catch((e) =>
+      console.error("[travel-itin-public] webcheckin auto-create on payment (non-fatal):", e.message),
+    );
+    const { safeEmitEvent } = require("../lib/eventBus");
+    safeEmitEvent(
+      "itinerary.accepted",
+      { id: itin.id, contactId: itin.contactId || null, tenantId: itin.tenantId, trigger: "payment" },
+      itin.tenantId,
+      "travel-itin/verify-payment",
+    );
 
     res.status(201).json({
       status: updated.status,
@@ -6204,8 +6334,11 @@ router.post(
         });
       }
 
-      // 6. PRD §4.1 diagnostic-first guard (mirrors POST /itineraries).
-      await assertCompletedDiagnostic(prisma, req.travelTenant.id, cid, effectiveSubBrand);
+      // 6. PRD §4.1 diagnostic-first guard — DISABLED per product owner
+      //    (2026-06-25), mirrors the disabled guard in POST /itineraries so
+      //    WhatsApp / inbound leads can be sent an itinerary without a
+      //    completed diagnostic. Commented out (not removed).
+      // await assertCompletedDiagnostic(prisma, req.travelTenant.id, cid, effectiveSubBrand);
 
       // 7. Flatten days/items into ItineraryItem rows with up-front
       //    validation so any bad row rejects before the transaction opens.

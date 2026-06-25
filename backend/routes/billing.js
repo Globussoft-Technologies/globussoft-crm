@@ -2,6 +2,9 @@ const express = require("express");
 const { verifyToken, verifyRole } = require("../middleware/auth");
 const crypto = require("crypto");
 const PDFDocument = require("pdfkit");
+// Shared ₹-glyph fix: registers the embedded Poppins family under the Helvetica
+// names so the rupee sign renders as ₹ instead of "¹" (built-in WinAnsi gap).
+const { applyRupeeCapableFonts } = require("../services/pdfRenderer");
 
 const router = express.Router();
 const prisma = require("../lib/prisma");
@@ -954,6 +957,7 @@ router.get("/public/receipt", async (req, res) => {
     const tenantName = tenant?.name || "Your Company";
 
     const doc = new PDFDocument({ size: "A4", margin: 50 });
+    applyRupeeCapableFonts(doc); // ₹ glyph fix
     const filename = `${invoice.invoiceNum || "INV-" + invoice.id}-receipt.pdf`;
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
@@ -1027,6 +1031,7 @@ router.get("/:id/pdf", verifyToken, async (req, res) => {
     const locale = tenant?.locale || undefined;
 
     const doc = new PDFDocument({ size: "A4", margin: 50 });
+    applyRupeeCapableFonts(doc); // ₹ glyph fix
 
     const filename = `${invoice.invoiceNum || "INV-" + invoice.id}.pdf`;
     res.setHeader("Content-Type", "application/pdf");

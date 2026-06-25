@@ -40,7 +40,7 @@
 
 import { useEffect, useRef, useState, useContext } from "react";
 import { Link } from "react-router-dom";
-import { Receipt, Plus, Pencil, Trash2, FileDown, Ban } from "lucide-react";
+import { Receipt, Plus, Pencil, Trash2, FileDown, Ban, CreditCard, History } from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { formatMoney } from "../../utils/money";
@@ -220,6 +220,11 @@ export default function InvoicesAdmin() {
   // "Downloading…" and be disabled (defence against double-click producing
   // two browser-side downloads of the same blob).
   const [downloadingId, setDownloadingId] = useState(null);
+  const [linkingId, setLinkingId] = useState(null); // invoice id while a pay-link generates
+  // Transaction-history modal: the invoice being viewed + its fetched data.
+  const [historyInv, setHistoryInv] = useState(null);
+  const [historyData, setHistoryData] = useState(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
 
   // Slice 22 — TDS withholding tiles in the edit modal. When opening edit
   // on an Issued / Paid invoice we lazy-fetch GET /:id?include=lines and
@@ -644,6 +649,61 @@ export default function InvoicesAdmin() {
     }
   };
 
+  // Generate a hosted "click & pay" link for the invoice's outstanding balance
+  // (BYOK Razorpay/Stripe). The link reconciles back to THIS travel invoice +
+  // its milestones on payment. On success we copy the URL to the clipboard so
+  // the operator can paste it to the customer.
+  const generatePayLink = async (inv) => {
+    if (!inv?.id) return;
+    setLinkingId(inv.id);
+    try {
+      const res = await fetchApi(`/api/travel/invoices/${inv.id}/payment-link`, { method: "POST" });
+      if (res?.url) {
+        try {
+          await navigator.clipboard.writeText(res.url);
+          notify.success("Payment link generated and copied to clipboard.");
+        } catch {
+          notify.success(`Payment link generated: ${res.url}`);
+        }
+      } else {
+        notify.error(res?.error || "Could not generate a payment link.");
+      }
+    } catch (err) {
+      if (err?.status === 400 && /already.*paid/i.test(err?.message || "")) {
+        notify.info("This invoice is already fully paid.");
+      } else if (err?.data?.code === "NO_GATEWAY" || /gateway/i.test(err?.message || "")) {
+        notify.error("No payment gateway configured — add your Razorpay keys in Settings → Payment.");
+      } else {
+        notify.error(err?.message || "Could not generate a payment link.");
+      }
+    } finally {
+      setLinkingId(null);
+    }
+  };
+
+  // Transaction history — open a modal showing the invoice's milestones
+  // (expected vs received, status, paid date) + the underlying payments, so the
+  // operator can see when/how much was paid (esp. for Partial invoices).
+  const openHistory = async (inv) => {
+    if (!inv?.id) return;
+    setHistoryInv(inv);
+    setHistoryData(null);
+    setHistoryLoading(true);
+    try {
+      const data = await fetchApi(`/api/travel/invoices/${inv.id}/transactions`);
+      setHistoryData(data || null);
+    } catch (err) {
+      notify.error(err?.message || "Failed to load transaction history.");
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+  const closeHistory = () => {
+    setHistoryInv(null);
+    setHistoryData(null);
+    setHistoryLoading(false);
+  };
+
   // Accounting exports (ADMIN/MANAGER) — Tally XML / CA CSV / plain XLSX.
   // The XLSX is the "hand to your CA / import into Excel Software for Travel"
   // file (PRD §4.4 Excel Software bridge — built internally, no vendor API).
@@ -1047,6 +1107,43 @@ export default function InvoicesAdmin() {
                             <FileDown size={16} />
                           )}
                         </button>
+                        {/* Transaction history — when/how much has been paid.
+                            Useful for any issued/partial/paid invoice. */}
+                        {inv.status !== "Draft" && (
+                          <button
+                            type="button"
+                            onClick={() => openHistory(inv)}
+                            title={`Payment history for invoice ${inv.invoiceNum}`}
+                            aria-label={`Payment history for invoice ${inv.invoiceNum}`}
+                            style={iconBtn}
+                          >
+                            <History size={16} />
+                          </button>
+                        )}
+                        {/* Generate a hosted pay-link for the outstanding
+                            balance — only meaningful once issued + not yet
+                            fully paid / voided. Reconciles back to this invoice. */}
+                        {(inv.status === "Issued" || inv.status === "Partial") && (
+                          <button
+                            type="button"
+                            onClick={() => generatePayLink(inv)}
+                            disabled={linkingId === inv.id}
+                            title={`Generate payment link for invoice ${inv.invoiceNum}`}
+                            aria-label={`Generate payment link for invoice ${inv.invoiceNum}`}
+                            style={{
+                              ...iconBtn,
+                              color: "var(--success-color, #22c55e)",
+                              opacity: linkingId === inv.id ? 0.5 : 1,
+                              cursor: linkingId === inv.id ? "wait" : "pointer",
+                            }}
+                          >
+                            {linkingId === inv.id ? (
+                              <span style={{ fontSize: 11, fontWeight: 600 }}>Linking…</span>
+                            ) : (
+                              <CreditCard size={16} />
+                            )}
+                          </button>
+                        )}
                         {/* S56 — dedicated Void button (POST /:id/void with
                             audit-logged reason + cancel-preview surface).
                             Hidden once an invoice is Voided (terminal state).
@@ -1244,9 +1341,117 @@ export default function InvoicesAdmin() {
           </div>
         </div>
       )}
+
+      {/* Transaction-history modal — milestones + payments for one invoice. */}
+      {historyInv && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Payment history for invoice ${historyInv.invoiceNum}`}
+          style={modalOverlay}
+          onClick={(e) => { if (e.target === e.currentTarget) closeHistory(); }}
+        >
+          <div className="glass" style={{ ...modalCard, maxWidth: 720, width: "92%" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+              <h2 style={{ margin: 0, fontSize: "1.15rem", fontWeight: 600, display: "flex", alignItems: "center", gap: 8 }}>
+                <History size={18} /> Payment history — {historyInv.invoiceNum}
+              </h2>
+              <button type="button" onClick={closeHistory} aria-label="Close" style={{ ...iconBtn }}>✕</button>
+            </div>
+
+            {historyLoading ? (
+              <div style={empty}>Loading&hellip;</div>
+            ) : !historyData ? (
+              <div style={empty}>Could not load history.</div>
+            ) : (
+              <>
+                {/* Summary line */}
+                <div style={{ display: "flex", gap: 16, flexWrap: "wrap", margin: "12px 0 4px", fontSize: 14 }}>
+                  <span>Total: <strong>₹{Number(historyData.summary?.total || 0).toLocaleString("en-IN")}</strong></span>
+                  <span style={{ color: "var(--success-color, #22c55e)" }}>
+                    Paid: <strong>₹{Number(historyData.summary?.totalReceived || 0).toLocaleString("en-IN")}</strong>
+                  </span>
+                  <span style={{ color: "var(--warning-color, #f59e0b)" }}>
+                    Outstanding: <strong>₹{Number(historyData.summary?.outstanding || 0).toLocaleString("en-IN")}</strong>
+                  </span>
+                </div>
+
+                {/* Milestones */}
+                <h3 style={{ fontSize: 13, textTransform: "uppercase", letterSpacing: 0.5, color: "var(--text-secondary)", margin: "14px 0 6px" }}>Milestones</h3>
+                {(!historyData.milestones || historyData.milestones.length === 0) ? (
+                  <div style={{ color: "var(--text-secondary)", fontSize: 13 }}>No milestones on this invoice.</div>
+                ) : (
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                    <thead>
+                      <tr>
+                        <th style={miniTh}>#</th>
+                        <th style={miniTh}>Due</th>
+                        <th style={miniThRight}>Expected</th>
+                        <th style={miniThRight}>Received</th>
+                        <th style={miniTh}>Status</th>
+                        <th style={miniTh}>Paid on</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {historyData.milestones.map((m) => (
+                        <tr key={m.id} style={{ borderTop: "1px solid var(--border-color)" }}>
+                          <td style={miniTd}>{m.milestoneOrder ?? "—"}</td>
+                          <td style={miniTd}>{formatDate(m.dueDate)}</td>
+                          <td style={miniTdRight}>₹{Number(m.expectedAmount || 0).toLocaleString("en-IN")}</td>
+                          <td style={miniTdRight}>{m.receivedAmount != null ? `₹${Number(m.receivedAmount).toLocaleString("en-IN")}` : "—"}</td>
+                          <td style={miniTd}><span style={{ textTransform: "capitalize" }}>{m.status}</span></td>
+                          <td style={miniTd}>{m.paidAt ? formatDate(m.paidAt) : "—"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+
+                {/* Payments / transactions */}
+                <h3 style={{ fontSize: 13, textTransform: "uppercase", letterSpacing: 0.5, color: "var(--text-secondary)", margin: "16px 0 6px" }}>Transactions</h3>
+                {(!historyData.payments || historyData.payments.length === 0) ? (
+                  <div style={{ color: "var(--text-secondary)", fontSize: 13 }}>No payments recorded yet.</div>
+                ) : (
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                    <thead>
+                      <tr>
+                        <th style={miniTh}>Date</th>
+                        <th style={miniThRight}>Amount</th>
+                        <th style={miniTh}>Method</th>
+                        <th style={miniTh}>Reference</th>
+                        <th style={miniTh}>Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {historyData.payments.map((p) => (
+                        <tr key={p.id} style={{ borderTop: "1px solid var(--border-color)" }}>
+                          <td style={miniTd}>{formatDate(p.paidAt)}</td>
+                          <td style={miniTdRight}>₹{Number(p.amount || 0).toLocaleString("en-IN")}</td>
+                          <td style={miniTd}><span style={{ textTransform: "capitalize" }}>{p.method || "—"}</span></td>
+                          <td style={{ ...miniTd, fontFamily: "ui-monospace, monospace", fontSize: 12 }}>{p.reference || "—"}</td>
+                          <td style={miniTd}>{p.status || "—"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </>
+            )}
+
+            <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 16 }}>
+              <button type="button" onClick={closeHistory} style={secondaryBtn}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
+
+const miniTh = { textAlign: "left", padding: "6px 8px", fontSize: 11, textTransform: "uppercase", letterSpacing: 0.4, color: "var(--text-secondary)", fontWeight: 600 };
+const miniThRight = { ...miniTh, textAlign: "right" };
+const miniTd = { padding: "6px 8px", color: "var(--text-primary)" };
+const miniTdRight = { ...miniTd, textAlign: "right" };
 
 const th = {
   textAlign: "left",

@@ -3245,24 +3245,30 @@ model FieldPermission {
 // ── Payments (Stripe + Razorpay) ─────────────────────────────────
 
 model Payment {
-  id        Int       @id @default(autoincrement())
-  invoiceId Int?
-  amount    Float
-  currency  String    @default("USD")
-  gateway   String // stripe, razorpay
-  gatewayId String? // their charge/payment ID
-  status    String    @default("PENDING") // PENDING, SUCCESS, FAILED, REFUNDED
-  paidAt    DateTime?
-  metadata  String?   @db.Text
+  id          Int       @id @default(autoincrement())
+  invoiceId   Int?
+  // Nullable — identifies the customer who made this payment. No FK so it
+  // works across all verticals (Contact, Patient, etc.) without coupling.
+  contactId   Int?
+  // Human-readable summary of what was paid for (e.g. "Travel to Makkah Madina").
+  description String?   @db.VarChar(255)
+  amount      Float
+  currency    String    @default("USD")
+  gateway     String // stripe, razorpay
+  gatewayId   String? // their charge/payment ID
+  status      String    @default("PENDING") // PENDING, SUCCESS, FAILED, REFUNDED
+  paidAt      DateTime?
+  metadata    String?   @db.Text
   // #413 — Restrict (not Cascade) on Tenant deletion. Payments are
   // financial records-of-record (Stripe/Razorpay charges, refunds, gateway
   // IDs). A misclick on tenant.delete() must NOT silently nuke payment
   // history. Operator must explicitly drain Payment rows first.
-  tenantId  Int       @default(1)
-  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Restrict)
-  createdAt DateTime  @default(now())
+  tenantId    Int       @default(1)
+  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  createdAt   DateTime  @default(now())
 
   @@index([tenantId, status])
+  @@index([tenantId, contactId])
 }
 
 // ── Accounting Sync ──────────────────────────────────────────────
@@ -7397,6 +7403,7 @@ model TravelSupplierPayable {
   dueDate             DateTime?
   status              String                             @default("pending") // pending | scheduled | paid | cancelled
   paidAt              DateTime?
+  paymentReference    String?                            @db.VarChar(255) // UPI ref / cheque # / bank ref captured at mark-paid
   notes               String?                            @db.Text
   // PRD_TRAVEL_SUPPLIER_MASTER FR-3.3.a (G037) — optional PO→Payable linkage.
   // Set on auto-creation when a TravelPurchaseOrder transitions to `fulfilled`.

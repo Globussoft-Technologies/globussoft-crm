@@ -176,6 +176,14 @@ prisma.wallet.findFirst = vi.fn().mockResolvedValue(null);
 // tests don't hang trying to reach the real DB at 163.227.174.141:3306.
 prisma.webhook = prisma.webhook || {};
 prisma.webhook.findMany = vi.fn().mockResolvedValue([]);
+// Travel-only contact-timeline merge (attachTravelRelationshipTimeline):
+// gated on tenant.vertical === 'travel'; pulls Itineraries + TravelInvoices.
+prisma.tenant = prisma.tenant || {};
+prisma.tenant.findUnique = vi.fn().mockResolvedValue({ vertical: 'generic' });
+prisma.itinerary = prisma.itinerary || {};
+prisma.itinerary.findMany = vi.fn().mockResolvedValue([]);
+prisma.travelInvoice = prisma.travelInvoice || {};
+prisma.travelInvoice.findMany = vi.fn().mockResolvedValue([]);
 
 import express from 'express';
 import request from 'supertest';
@@ -227,6 +235,9 @@ beforeEach(() => {
   prisma.patient.findFirst.mockReset().mockResolvedValue(null);
   prisma.wallet.findFirst.mockReset().mockResolvedValue(null);
   prisma.webhook.findMany.mockReset().mockResolvedValue([]);
+  prisma.tenant.findUnique.mockReset().mockResolvedValue({ vertical: 'generic' });
+  prisma.itinerary.findMany.mockReset().mockResolvedValue([]);
+  prisma.travelInvoice.findMany.mockReset().mockResolvedValue([]);
   writeAuditMock.mockReset().mockResolvedValue(undefined);
   diffFieldsMock.mockReset().mockReturnValue({});
   emitEventMock.mockReset();
@@ -304,6 +315,71 @@ describe('GET /api/contacts/:id — read', () => {
     expect(res.status).toBe(400);
     expect(res.body).toEqual({ error: 'Invalid contact ID' });
     expect(prisma.contact.findFirst).not.toHaveBeenCalled();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────
+describe('GET /api/contacts/:id — travel contact-timeline merge', () => {
+  const TRAVEL_CONTACT = { ...SAMPLE_CONTACT, activities: [] };
+
+  test('travel tenant: itineraries + invoices merged into activities (sorted desc)', async () => {
+    prisma.contact.findFirst.mockResolvedValueOnce(TRAVEL_CONTACT);
+    prisma.tenant.findUnique.mockResolvedValueOnce({ vertical: 'travel' });
+    prisma.itinerary.findMany.mockResolvedValueOnce([
+      { id: 4, destination: 'Madinah', status: 'advance_paid', createdAt: new Date('2026-06-10T00:00:00Z') },
+    ]);
+    prisma.travelInvoice.findMany.mockResolvedValueOnce([
+      { id: 7, invoiceNum: 'TINV-2026-0005', totalAmount: '18832', currency: 'INR', status: 'Partial', createdAt: new Date('2026-06-12T00:00:00Z') },
+    ]);
+
+    const res = await request(makeApp()).get('/api/contacts/9001');
+
+    expect(res.status).toBe(200);
+    const acts = res.body.activities;
+    expect(Array.isArray(acts)).toBe(true);
+    const byId = Object.fromEntries(acts.map((a) => [a.id, a]));
+    expect(byId['itin-4']).toMatchObject({ type: 'Booking' });
+    expect(byId['itin-4'].description).toMatch(/Madinah/);
+    expect(byId['inv-7']).toMatchObject({ type: 'Invoice' });
+    expect(byId['inv-7'].description).toMatch(/TINV-2026-0005/);
+    // Sorted newest-first → the 06-12 invoice precedes the 06-10 booking.
+    expect(acts[0].id).toBe('inv-7');
+    expect(acts[1].id).toBe('itin-4');
+    // Scoped to this contact + tenant.
+    expect(prisma.itinerary.findMany.mock.calls[0][0].where).toMatchObject({ tenantId: TENANT_ID, contactId: 9001 });
+  });
+
+  test('NON-travel tenant: itineraries/invoices NOT queried, activities untouched', async () => {
+    prisma.contact.findFirst.mockResolvedValueOnce(TRAVEL_CONTACT);
+    prisma.tenant.findUnique.mockResolvedValueOnce({ vertical: 'generic' });
+
+    const res = await request(makeApp()).get('/api/contacts/9001');
+
+    expect(res.status).toBe(200);
+    expect(res.body.activities).toEqual([]);
+    expect(prisma.itinerary.findMany).not.toHaveBeenCalled();
+    expect(prisma.travelInvoice.findMany).not.toHaveBeenCalled();
+  });
+
+  test('travel tenant with no bookings/invoices → activities unchanged (no empty merge)', async () => {
+    prisma.contact.findFirst.mockResolvedValueOnce(TRAVEL_CONTACT);
+    prisma.tenant.findUnique.mockResolvedValueOnce({ vertical: 'travel' });
+    // both findMany default to [] via beforeEach
+
+    const res = await request(makeApp()).get('/api/contacts/9001');
+
+    expect(res.status).toBe(200);
+    expect(res.body.activities).toEqual([]);
+  });
+
+  test('merge failure is fail-soft → GET still 200 with original activities', async () => {
+    prisma.contact.findFirst.mockResolvedValueOnce(TRAVEL_CONTACT);
+    prisma.tenant.findUnique.mockRejectedValueOnce(new Error('boom'));
+
+    const res = await request(makeApp()).get('/api/contacts/9001');
+
+    expect(res.status).toBe(200);
+    expect(res.body.activities).toEqual([]);
   });
 });
 

@@ -4154,7 +4154,7 @@ router.put(
 
       const data = {};
       const {
-        description, amount, poNumber, currency, dueDate, notes, status, paidAt,
+        description, amount, poNumber, currency, dueDate, notes, status, paidAt, paymentReference,
       } = req.body || {};
 
       if (description !== undefined) {
@@ -4176,6 +4176,9 @@ router.put(
         data.dueDate = parseDueDateOrThrow(dueDate);
       }
       if (notes !== undefined) data.notes = notes ? String(notes) : null;
+      if (paymentReference !== undefined) {
+        data.paymentReference = paymentReference ? String(paymentReference).trim().slice(0, 255) : null;
+      }
       if (status !== undefined) {
         assertValidPayableStatus(status);
         data.status = status;
@@ -4206,6 +4209,27 @@ router.put(
         req.travelTenant.id,
         { supplierId: supplier.id, fields: Object.keys(data) },
       );
+
+      // Auto-create an Expense record when a payable is first marked paid.
+      if (data.status === "paid" && existing.status !== "paid") {
+        const ref = data.paymentReference || existing.paymentReference || null;
+        prisma.expense.create({
+          data: {
+            title: `Supplier payment: ${supplier.name}`,
+            description: existing.description,
+            amount: Number(existing.amount),
+            category: "Travel",
+            status: "Approved",
+            currency: existing.currency || "INR",
+            notes: ref ? `Payment reference: ${ref}` : undefined,
+            expenseDate: data.paidAt || new Date(),
+            tenantId: req.travelTenant.id,
+            userId: req.user.userId,
+          },
+        }).catch((err) => {
+          console.error("[travel-sup] expense auto-create failed:", err.message);
+        });
+      }
 
       res.json(updated);
     } catch (e) {

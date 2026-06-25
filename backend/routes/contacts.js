@@ -153,6 +153,78 @@ async function attachComputedWalletBalance(contact, tenantId) {
   }
 }
 
+// TRAVEL-ONLY contact-timeline enrichment.
+//
+// Per PRD_TRAVEL_QUOTE_BUILDER FR-3.7.1 the contact timeline is a UNIFIED
+// customer feed (it even attaches sent-quote PDFs), and FR-3.1.1 makes the
+// pipeline `Deal` FK OPTIONAL — so a travel customer whose relationship is
+// bookings + invoices but no Deal gets an EMPTY timeline when it's fed by Deal
+// activities alone (the reported bug). We merge synthetic timeline entries for
+// the contact's Itineraries (bookings) + TravelInvoices into `activities` at
+// READ time, so existing records surface immediately with no data backfill.
+// Deals stay (the PRD keeps them — FR-3.7.4 quote-accept → Deal "Booked"/"Won");
+// this only ADDS the travel entities. No-op for generic/wellness tenants.
+// Best-effort: any failure returns the contact unchanged — never breaks the GET.
+async function attachTravelRelationshipTimeline(contact, tenantId) {
+  if (!contact || typeof contact !== "object" || !contact.id) return contact;
+  try {
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { vertical: true },
+    });
+    if (!tenant || tenant.vertical !== "travel") return contact;
+
+    const [itineraries, invoices] = await Promise.all([
+      prisma.itinerary
+        .findMany({
+          where: { tenantId, contactId: contact.id },
+          select: { id: true, destination: true, status: true, createdAt: true },
+          orderBy: { createdAt: "desc" },
+          take: 100,
+        })
+        .catch(() => []),
+      prisma.travelInvoice
+        .findMany({
+          where: { tenantId, contactId: contact.id },
+          select: { id: true, invoiceNum: true, totalAmount: true, currency: true, status: true, createdAt: true },
+          orderBy: { createdAt: "desc" },
+          take: 100,
+        })
+        .catch(() => []),
+    ]);
+
+    const synthetic = [];
+    for (const it of itineraries) {
+      synthetic.push({
+        id: `itin-${it.id}`,
+        type: "Booking",
+        description: `Booking: ${it.destination || "trip"}${it.status ? ` — ${it.status}` : ""}`,
+        createdAt: it.createdAt,
+      });
+    }
+    for (const inv of invoices) {
+      const amt = inv.totalAmount != null
+        ? `${inv.currency || "INR"} ${Number(inv.totalAmount).toLocaleString("en-IN")}`
+        : null;
+      synthetic.push({
+        id: `inv-${inv.id}`,
+        type: "Invoice",
+        description: `Invoice ${inv.invoiceNum}${amt ? ` — ${amt}` : ""}${inv.status ? ` (${inv.status})` : ""}`,
+        createdAt: inv.createdAt,
+      });
+    }
+    if (synthetic.length === 0) return contact;
+
+    const existing = Array.isArray(contact.activities) ? contact.activities : [];
+    const merged = [...existing, ...synthetic].sort(
+      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+    );
+    return { ...contact, activities: merged };
+  } catch (_e) {
+    return contact; // best-effort — the timeline merge must never break the GET
+  }
+}
+
 
 // Protect all contact routes
 router.use(verifyToken);
@@ -250,7 +322,10 @@ router.get('/:id', async (req, res) => {
     // PRD Gap §1.1e — surface computed walletBalance from the linked Patient's
     // Wallet (if any). Best-effort; falls back to null on any error.
     const withWallet = await attachComputedWalletBalance(filtered, req.user.tenantId);
-    res.json(withWallet);
+    // Travel-only: merge the contact's bookings (Itineraries) + invoices into
+    // the activity timeline so booking-only customers aren't shown empty.
+    const withTimeline = await attachTravelRelationshipTimeline(withWallet, req.user.tenantId);
+    res.json(withTimeline);
   } catch (_err) {
     res.status(500).json({ error: 'Failed to fetch contact' });
   }

@@ -346,6 +346,116 @@ router.get(
 );
 
 // ───────────────────────────────────────────────────────────────────
+// GET /geocode — geocoding via Photon (photon.komoot.io). Photon is based
+// on the same OSM data as Nominatim but has no API key requirement and
+// far more lenient rate limits. The browser can't call it directly because
+// Photon responses lack the CORS headers needed for cross-origin fetch.
+// USER+ allowed. Query: q (required, forward) or reverse=1&lat=&lng=
+// (reverse). Returns { results: [{lat, lng, display_name}] }.
+// ───────────────────────────────────────────────────────────────────
+const https = require("https");
+
+// Geocoding via Photon (photon.komoot.io) — same OSM data as Nominatim
+// but no API key, no strict User-Agent requirement, and much more lenient
+// rate limits. Nominatim was banning the server IP on every page load
+// because the auto-geocode effect fires one request per itinerary item.
+//
+// Photon response shape (GeoJSON):
+//   { features: [{ geometry: { coordinates: [lng, lat] }, properties: { name, city, country } }] }
+// Note: GeoJSON coordinates are [longitude, latitude], not [lat, lng].
+
+function geocoderFetch(url) {
+  return new Promise((resolve, reject) => {
+    https
+      .get(
+        url,
+        {
+          headers: {
+            "User-Agent": "GlobussoftCRM/1.0 (https://crm.globusdemos.com)",
+            Accept: "application/json",
+          },
+        },
+        (resp) => {
+          let raw = "";
+          resp.on("data", (chunk) => { raw += chunk; });
+          resp.on("end", () => {
+            if (resp.statusCode !== 200) {
+              return reject(
+                Object.assign(new Error(`Geocoder HTTP ${resp.statusCode}`), {
+                  status: 502,
+                }),
+              );
+            }
+            try {
+              resolve(JSON.parse(raw));
+            } catch (e) {
+              reject(e);
+            }
+          });
+        },
+      )
+      .on("error", reject);
+  });
+}
+
+function parsePhotonResults(data, fallbackQuery) {
+  return (data?.features || [])
+    .map((f) => {
+      const [lng, lat] = f.geometry?.coordinates || [];
+      const p = f.properties || {};
+      const display_name = [p.name, p.city, p.country].filter(Boolean).join(", ")
+        || fallbackQuery;
+      return { lat: parseFloat(lat), lng: parseFloat(lng), display_name };
+    })
+    .filter((r) => Number.isFinite(r.lat) && Number.isFinite(r.lng));
+}
+
+router.get("/geocode", verifyToken, async (req, res) => {
+  // Reverse geocode: ?reverse=1&lat=...&lng=...
+  if (req.query.reverse === "1") {
+    const lat = parseFloat(req.query.lat);
+    const lng = parseFloat(req.query.lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      return res
+        .status(400)
+        .json({ error: "lat and lng required for reverse geocode", code: "MISSING_FIELDS" });
+    }
+    const url = `https://photon.komoot.io/reverse?lat=${lat}&lon=${lng}`;
+    try {
+      const data = await geocoderFetch(url);
+      const results = parsePhotonResults(data, `${lat},${lng}`);
+      return res.json({ lat, lng, display_name: results[0]?.display_name || null });
+    } catch (e) {
+      console.error("[travel-pois] reverse geocode error:", e.message);
+      return res
+        .status(502)
+        .json({ error: "Geocoding service unavailable", code: "GEOCODE_UPSTREAM_ERROR" });
+    }
+  }
+
+  // Forward geocode: ?q=...
+  const q = (req.query.q || "").trim();
+  if (!q) {
+    return res
+      .status(400)
+      .json({ error: "q required", code: "MISSING_FIELDS" });
+  }
+  const limit = Math.min(parseInt(req.query.limit, 10) || 1, 5);
+  const url = `https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=${limit}`;
+
+  try {
+    const data = await geocoderFetch(url);
+    const results = parsePhotonResults(data, q);
+    return res.json({ results });
+  } catch (e) {
+    console.error("[travel-pois] geocode proxy error:", e.message);
+    return res
+      .status(502)
+      .json({ error: "Geocoding service unavailable", code: "GEOCODE_UPSTREAM_ERROR" });
+  }
+});
+
+// ───────────────────────────────────────────────────────────────────
 // POST /:id/approve — ADMIN only; flips pendingApproval to false
 // ───────────────────────────────────────────────────────────────────
 router.post(

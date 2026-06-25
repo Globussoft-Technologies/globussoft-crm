@@ -84,6 +84,12 @@ import {
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { geocode } from "../../lib/geocoder";
+import PoiPicker from "../../components/PoiPicker";
+
+// Converts a free-text destination name to a URL-safe slug for PoiPicker.
+// e.g. "VIETNAM" → "vietnam", "Goa Beach" → "goa-beach"
+const toSlug = (s) =>
+  (s || '').toLowerCase().trim().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
 
 const ITEM_ICONS = {
   flight: Plane, train: Train, bus: Bus, cab: Car, transfer: MapPin,
@@ -331,15 +337,28 @@ export default function ItineraryEditor() {
     );
     if (needsGeocode.length === 0) return;
     let cancelled = false;
+    // Destination as a disambiguation hint passed to Nominatim so that
+    // short descriptions ("ISKCON Temple") resolve to the right city.
+    const destHint = (itin?.destination || "").toLowerCase().trim().replace(/\s+/g, " ");
     (async () => {
       for (const it of needsGeocode) {
         if (cancelled) break;
-        // "Airport transfer to hotel in Tokyo" → "Tokyo"
-        // "Day 2 — sightseeing in Paris, France" → "Paris, France"
-        // "Visit Shinjuku Gyoen Garden" → "Visit Shinjuku Gyoen Garden" (no match)
-        const inMatch = it.description.match(/\bin\s+([A-Z][^,.]+(?:,\s*[A-Z][^,.]+)?)\s*$/);
-        const query = inMatch ? inMatch[1].trim() : it.description;
-        const r = await geocode(query).catch(() => null);
+        // Priority order for query extraction:
+        // 1. "...in Tokyo" / "...in Paris, France"   → "Tokyo" / "Paris, France"
+        // 2. "...to ISKCON Temple, Rajajinagar."      → "ISKCON Temple, Rajajinagar"
+        // 3. Full description + destination hint      → "Sandhya aarti bangalore"
+        const inMatch  = it.description.match(/\bin\s+([A-Z][^,.]+(?:,\s*[A-Z][^,.]+)?)\s*[.,]?\s*$/);
+        const toMatch  = it.description.match(/\bto\s+([A-Z][^,.]+(?:,\s*[A-Z][^,.]+)?)\s*[.,]?\s*$/);
+        let query;
+        if (inMatch)     query = inMatch[1].trim();
+        else if (toMatch) query = toMatch[1].trim();
+        else              query = destHint ? `${it.description} ${destHint}` : it.description;
+
+        let r = await geocode(query).catch(() => null);
+        // If the hint-augmented query failed, retry with the bare description.
+        if (!r && !inMatch && !toMatch && destHint) {
+          r = await geocode(it.description).catch(() => null);
+        }
         if (!cancelled && r) setItemLatLng(it.id, r.lat, r.lng);
       }
     })();
@@ -530,7 +549,7 @@ export default function ItineraryEditor() {
   // store the times + optional url + notes in detailsJson so they
   // survive a round-trip + can be re-read for G053 conflict detection.
   const submitInlineAdd = useCallback(
-    async ({ day, kind, name, startTime, endTime, url, notes }) => {
+    async ({ day, kind, name, startTime, endTime, url, notes, latitude, longitude }) => {
       const itemType = kind === "hotel" ? "hotel" : "activity";
       const description = String(name || "").trim();
       if (!description) {
@@ -548,6 +567,9 @@ export default function ItineraryEditor() {
         dayNumber: day,
         detailsJson: Object.keys(detailsObj).length ? JSON.stringify(detailsObj) : null,
       };
+      // Carry POI coordinates so the map pin renders immediately (FR-3.3.e).
+      if (latitude != null) body.latitude = latitude;
+      if (longitude != null) body.longitude = longitude;
       setAddFormBusy(true);
       try {
         await fetchApi(`/api/travel/itineraries/${id}/items`, {
@@ -992,6 +1014,7 @@ export default function ItineraryEditor() {
                     busy={addFormBusy}
                     onCancel={() => setAddForm(null)}
                     onSubmit={(payload) => submitInlineAdd({ day, kind: addForm.kind, ...payload })}
+                    destinationSlug={toSlug(itin?.destination)}
                   />
                 )}
                 {/* G057 — pending draft strip. Shows the suggestion's items
@@ -1265,112 +1288,475 @@ export default function ItineraryEditor() {
   );
 }
 
-// G056 helper — inline-add mini-form rendered inside a Day card. Fields:
-// name (required), startTime (HH:MM), endTime (HH:MM), url (optional),
-// notes (optional). The kind ("hotel" or "activity") only changes the
-// label text + the resulting itemType — the form shape is identical so
-// the testing surface is small. On submit, calls back with a payload the
-// parent then POSTs via /:id/items.
-function InlineAddForm({ day, kind, busy, onCancel, onSubmit }) {
+// G056 helper — inline-add mini-form rendered inside a Day card.
+// For activities (kind="activity"), a PoiPicker sits above the name
+// field so reps can search the approved POI catalog (FR-3.6, FR-3.7).
+// Selecting a POI auto-fills the name and carries lat/lng into the
+// submit payload so the map pin renders immediately. When the catalog
+// has no match the PoiPicker shows "+ Add new POI" which opens the
+// AddPoiModal (FR-3.7a) — the modal POSTs to /api/travel/pois and the
+// suggested POI lands in pendingApproval=true state for admin review.
+// Hotels keep the plain-text name input (no POI catalog for hotels).
+function InlineAddForm({ day, kind, busy, onCancel, onSubmit, destinationSlug }) {
   const [name, setName] = useState("");
   const [startTime, setStartTime] = useState("");
   const [endTime, setEndTime] = useState("");
   const [url, setUrl] = useState("");
   const [notes, setNotes] = useState("");
+  const [selectedPoi, setSelectedPoi] = useState(null);
+  const [poiAddOpen, setPoiAddOpen] = useState(false);
+  const [poiAddInitialName, setPoiAddInitialName] = useState("");
+
   const label = kind === "hotel" ? "Hotel" : "Activity";
   const startLabel = kind === "hotel" ? "Check-in" : "Start";
   const endLabel = kind === "hotel" ? "Check-out" : "End";
+
+  const handlePoiChange = (poi) => {
+    setSelectedPoi(poi);
+    if (poi) setName(poi.name || "");
+  };
+
+  const handleAddNew = (query) => {
+    setPoiAddInitialName(query);
+    setPoiAddOpen(true);
+  };
+
+  const handlePoiCreated = (poiName) => {
+    setName(poiName);
+    setPoiAddOpen(false);
+  };
+
   return (
-    <form
-      data-testid={`day-${day}-inline-add-form`}
-      data-kind={kind}
-      onSubmit={async (e) => {
-        e.preventDefault();
-        const ok = await onSubmit({ name, startTime, endTime, url, notes });
-        if (ok) {
-          setName(""); setStartTime(""); setEndTime(""); setUrl(""); setNotes("");
-        }
-      }}
+    <>
+      <form
+        data-testid={`day-${day}-inline-add-form`}
+        data-kind={kind}
+        onSubmit={async (e) => {
+          e.preventDefault();
+          const ok = await onSubmit({
+            name, startTime, endTime, url, notes,
+            latitude: selectedPoi?.latitude ?? null,
+            longitude: selectedPoi?.longitude ?? null,
+          });
+          if (ok) {
+            setName(""); setStartTime(""); setEndTime(""); setUrl(""); setNotes("");
+            setSelectedPoi(null);
+          }
+        }}
+        style={{
+          marginTop: "0.4rem", padding: "0.6rem",
+          border: "1px solid var(--border-color)", borderRadius: 6,
+          background: "var(--subtle-bg, rgba(0,0,0,0.03))",
+          display: "flex", flexDirection: "column", gap: "0.4rem",
+        }}
+      >
+        <div style={{ display: "flex", gap: "0.4rem", alignItems: "center", flexWrap: "wrap" }}>
+          <strong style={{ fontSize: "0.75rem", color: "var(--text-primary)" }}>+ {label} · Day {day}</strong>
+          <button
+            type="button"
+            onClick={onCancel}
+            aria-label="Cancel"
+            style={{ marginLeft: "auto", background: "transparent", border: "none", color: "var(--text-secondary)", cursor: "pointer" }}
+          >
+            <X size={13} />
+          </button>
+        </div>
+
+        {/* FR-3.7 — POI catalog picker for activities. Hotel stays plain-text. */}
+        {kind === "activity" && (
+          <div style={{ display: "flex", flexDirection: "column", gap: "0.2rem" }}>
+            <span style={{ fontSize: "0.7rem", color: "var(--text-secondary)" }}>
+              Pick from POI catalog (optional)
+            </span>
+            <PoiPicker
+              value={selectedPoi}
+              onChange={handlePoiChange}
+              destinationSlug={destinationSlug}
+              onAddNew={handleAddNew}
+              placeholder="Search attractions, landmarks…"
+            />
+          </div>
+        )}
+
+        <input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder={kind === "hotel" ? "Hotel name (e.g. Hilton Garden Inn)" : "Activity name (e.g. Spice plantation tour)"}
+          required
+          aria-label={`${label} name`}
+          style={{ padding: "0.3rem 0.5rem", border: "1px solid var(--border-color)", borderRadius: 4, fontSize: "0.78rem" }}
+        />
+        <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap" }}>
+          <label style={{ display: "flex", flexDirection: "column", gap: "0.15rem", fontSize: "0.7rem", color: "var(--text-secondary)" }}>
+            {startLabel}
+            <input
+              type="time"
+              value={startTime}
+              onChange={(e) => setStartTime(e.target.value)}
+              aria-label={`${startLabel} time`}
+              style={{ padding: "0.25rem 0.4rem", border: "1px solid var(--border-color)", borderRadius: 4, fontSize: "0.78rem" }}
+            />
+          </label>
+          <label style={{ display: "flex", flexDirection: "column", gap: "0.15rem", fontSize: "0.7rem", color: "var(--text-secondary)" }}>
+            {endLabel}
+            <input
+              type="time"
+              value={endTime}
+              onChange={(e) => setEndTime(e.target.value)}
+              aria-label={`${endLabel} time`}
+              style={{ padding: "0.25rem 0.4rem", border: "1px solid var(--border-color)", borderRadius: 4, fontSize: "0.78rem" }}
+            />
+          </label>
+        </div>
+        <input
+          value={url}
+          onChange={(e) => setUrl(e.target.value)}
+          placeholder="Booking URL (optional)"
+          aria-label={`${label} URL`}
+          style={{ padding: "0.3rem 0.5rem", border: "1px solid var(--border-color)", borderRadius: 4, fontSize: "0.78rem" }}
+        />
+        <textarea
+          value={notes}
+          onChange={(e) => setNotes(e.target.value)}
+          placeholder="Notes (optional)"
+          rows={2}
+          aria-label={`${label} notes`}
+          style={{ padding: "0.3rem 0.5rem", border: "1px solid var(--border-color)", borderRadius: 4, fontSize: "0.78rem", resize: "vertical" }}
+        />
+        <div style={{ display: "flex", gap: "0.4rem", justifyContent: "flex-end" }}>
+          <button
+            type="button"
+            onClick={onCancel}
+            style={{ padding: "0.3rem 0.7rem", border: "1px solid var(--border-color)", borderRadius: 4, background: "transparent", color: "var(--text-secondary)", cursor: "pointer", fontSize: "0.75rem" }}
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            disabled={busy}
+            data-testid={`day-${day}-inline-add-submit-${kind}`}
+            style={{ padding: "0.3rem 0.8rem", border: "1px solid var(--primary-color, var(--accent-color))", borderRadius: 4, background: "var(--primary-color, var(--accent-color))", color: "#fff", cursor: busy ? "wait" : "pointer", fontSize: "0.75rem", fontWeight: 600 }}
+          >
+            {busy ? "Adding…" : `Add ${label}`}
+          </button>
+        </div>
+      </form>
+
+      {poiAddOpen && (
+        <AddPoiModal
+          destinationSlug={destinationSlug}
+          initialName={poiAddInitialName}
+          onClose={() => setPoiAddOpen(false)}
+          onCreated={handlePoiCreated}
+        />
+      )}
+    </>
+  );
+}
+
+// FR-3.7a — Inline "Add new POI" modal. Operator fills name, category,
+// lat/lng and optional fields; submit POSTs to POST /api/travel/pois
+// which creates the row with pendingApproval=true. ADMIN then reviews
+// it in the /travel/pois/pending queue. On success the activity name
+// is auto-filled with the new POI's name so the operator can continue
+// building the itinerary without leaving the editor.
+const POI_CATEGORIES = [
+  "cultural", "historical", "religious", "natural",
+  "beach", "mountain", "food", "shopping", "entertainment", "museum",
+];
+
+function AddPoiModal({ destinationSlug, initialName, onClose, onCreated }) {
+  const notify = useNotify();
+  const [name, setName] = useState(initialName || "");
+  const [locationSearch, setLocationSearch] = useState(initialName || "");
+  const [nameLocal, setNameLocal] = useState("");
+  const [category, setCategory] = useState("");
+  const [latitude, setLatitude] = useState("");
+  const [longitude, setLongitude] = useState("");
+  const [country, setCountry] = useState("");
+  const [imageUrl, setImageUrl] = useState("");
+  const [imageUploading, setImageUploading] = useState(false);
+  const [description, setDescription] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [locating, setLocating] = useState(false);
+
+  // Build a Google Maps search URL from the current locationSearch value so
+  // the rep can open Maps, right-click the pin → "What's here?" and copy coords.
+  const gmapsUrl = `https://maps.google.com/maps?q=${encodeURIComponent(
+    locationSearch.trim() || name.trim() || destinationSlug || ""
+  )}`;
+
+  const handleLocate = async () => {
+    const query = (locationSearch.trim() || name.trim());
+    if (!query) { notify.error("Enter a location to search first."); return; }
+    setLocating(true);
+    try {
+      // Try the query as typed first, then with destinationSlug appended
+      // as a disambiguation hint (e.g. "ISKCON Temple" → "ISKCON Temple bangalore").
+      let result = await geocode(query);
+      if (!result && destinationSlug) {
+        result = await geocode(`${query} ${destinationSlug.replace(/-/g, ' ')}`);
+      }
+      if (result) {
+        setLatitude(result.lat.toFixed(6));
+        setLongitude(result.lng.toFixed(6));
+        notify.success("Coordinates found — verify them on the map.");
+      } else {
+        notify.error("Couldn't auto-locate. Use the Google Maps link below to find coordinates manually.");
+      }
+    } finally {
+      setLocating(false);
+    }
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    const lat = parseFloat(latitude);
+    const lng = parseFloat(longitude);
+    if (!name.trim() || !category) {
+      notify.error("Name and category are required.");
+      return;
+    }
+    if (isNaN(lat) || lat < -90 || lat > 90) {
+      notify.error("Latitude must be between -90 and 90.");
+      return;
+    }
+    if (isNaN(lng) || lng < -180 || lng > 180) {
+      notify.error("Longitude must be between -180 and 180.");
+      return;
+    }
+    setBusy(true);
+    try {
+      await fetchApi("/api/travel/pois", {
+        method: "POST",
+        body: JSON.stringify({
+          name: name.trim(),
+          nameLocal: nameLocal.trim() || undefined,
+          category,
+          latitude: lat,
+          longitude: lng,
+          destinationSlug,
+          country: country.trim() || undefined,
+          imageUrl: imageUrl.trim() || undefined,
+          descriptionShort: description.trim() || undefined,
+        }),
+      });
+      notify.success(`"${name.trim()}" suggested — pending admin approval.`);
+      onCreated(name.trim());
+    } catch (err) {
+      if (err?.body?.code === "POI_DUPLICATE_NEARBY") {
+        notify.error(
+          `A POI already exists ${Math.round(err.body.distance)}m away. Use that one or adjust coordinates.`,
+        );
+      } else {
+        notify.error(err?.body?.error || "Failed to suggest POI.");
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Add new POI"
+      data-testid="add-poi-modal"
       style={{
-        marginTop: "0.4rem", padding: "0.6rem",
-        border: "1px solid var(--border-color)", borderRadius: 6,
-        background: "var(--subtle-bg, rgba(0,0,0,0.03))",
-        display: "flex", flexDirection: "column", gap: "0.4rem",
+        position: "fixed", inset: 0, zIndex: 1000,
+        display: "flex", alignItems: "center", justifyContent: "center",
+        background: "rgba(0,0,0,0.45)",
       }}
+      onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
-      <div style={{ display: "flex", gap: "0.4rem", alignItems: "center", flexWrap: "wrap" }}>
-        <strong style={{ fontSize: "0.75rem", color: "var(--text-primary)" }}>+ {label} · Day {day}</strong>
-        <button
-          type="button"
-          onClick={onCancel}
-          aria-label="Cancel"
-          style={{ marginLeft: "auto", background: "transparent", border: "none", color: "var(--text-secondary)", cursor: "pointer" }}
-        >
-          <X size={13} />
-        </button>
-      </div>
-      <input
-        value={name}
-        onChange={(e) => setName(e.target.value)}
-        placeholder={kind === "hotel" ? "Hotel name (e.g. Hilton Garden Inn)" : "Activity name (e.g. Spice plantation tour)"}
-        required
-        aria-label={`${label} name`}
-        style={{ padding: "0.3rem 0.5rem", border: "1px solid var(--border-color)", borderRadius: 4, fontSize: "0.78rem" }}
-      />
-      <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap" }}>
-        <label style={{ display: "flex", flexDirection: "column", gap: "0.15rem", fontSize: "0.7rem", color: "var(--text-secondary)" }}>
-          {startLabel}
+      <div style={{
+        background: "var(--surface-color, #fff)",
+        borderRadius: 10, padding: "1.2rem 1.4rem",
+        width: "100%", maxWidth: 440,
+        boxShadow: "0 8px 32px rgba(0,0,0,0.18)",
+        display: "flex", flexDirection: "column", gap: "0.7rem",
+      }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <strong style={{ fontSize: "0.95rem" }}>Add new POI to catalog</strong>
+          <button type="button" onClick={onClose} aria-label="Close"
+            style={{ background: "transparent", border: "none", cursor: "pointer", color: "var(--text-secondary)" }}>
+            <X size={16} />
+          </button>
+        </div>
+        <p style={{ fontSize: "0.78rem", color: "var(--text-secondary)", margin: 0 }}>
+          This POI will be submitted for admin approval before appearing in other reps' searches.
+        </p>
+        <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+          {/* POI name — what gets stored in the catalog */}
           <input
-            type="time"
-            value={startTime}
-            onChange={(e) => setStartTime(e.target.value)}
-            aria-label={`${startLabel} time`}
-            style={{ padding: "0.25rem 0.4rem", border: "1px solid var(--border-color)", borderRadius: 4, fontSize: "0.78rem" }}
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="POI name * (e.g. Sandhya Aarti at ISKCON)"
+            required
+            aria-label="POI name"
+            style={{ padding: "0.35rem 0.55rem", border: "1px solid var(--border-color)", borderRadius: 5, fontSize: "0.82rem" }}
           />
-        </label>
-        <label style={{ display: "flex", flexDirection: "column", gap: "0.15rem", fontSize: "0.7rem", color: "var(--text-secondary)" }}>
-          {endLabel}
           <input
-            type="time"
-            value={endTime}
-            onChange={(e) => setEndTime(e.target.value)}
-            aria-label={`${endLabel} time`}
-            style={{ padding: "0.25rem 0.4rem", border: "1px solid var(--border-color)", borderRadius: 4, fontSize: "0.78rem" }}
+            value={nameLocal}
+            onChange={(e) => setNameLocal(e.target.value)}
+            placeholder="Local name (e.g. संध्या आरती)"
+            aria-label="Local name"
+            style={{ padding: "0.35rem 0.55rem", border: "1px solid var(--border-color)", borderRadius: 5, fontSize: "0.82rem" }}
           />
-        </label>
+          <select
+            value={category}
+            onChange={(e) => setCategory(e.target.value)}
+            required
+            aria-label="Category"
+            style={{ padding: "0.35rem 0.55rem", border: "1px solid var(--border-color)", borderRadius: 5, fontSize: "0.82rem", background: "var(--surface-color, #fff)", color: "var(--text-primary)" }}
+          >
+            <option value="">Category *</option>
+            {POI_CATEGORIES.map((c) => (
+              <option key={c} value={c}>{c.charAt(0).toUpperCase() + c.slice(1)}</option>
+            ))}
+          </select>
+
+          {/* Coordinates section — separate search field so the POI name
+              doesn't need to be geocodable (e.g. "Sandhya Aarti" won't be
+              found but "ISKCON Temple Rajajinagar Bangalore" will). */}
+          <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem",
+            padding: "0.6rem", border: "1px solid var(--border-color)", borderRadius: 6,
+            background: "var(--subtle-bg, rgba(0,0,0,0.02))" }}>
+            <span style={{ fontSize: "0.72rem", fontWeight: 600, color: "var(--text-secondary)" }}>
+              Coordinates *
+            </span>
+            {/* Search location — can differ from POI name */}
+            <div style={{ display: "flex", gap: "0.4rem" }}>
+              <input
+                value={locationSearch}
+                onChange={(e) => setLocationSearch(e.target.value)}
+                placeholder="Search location (e.g. ISKCON Temple Rajajinagar Bangalore)"
+                aria-label="Search location"
+                style={{ flex: 1, padding: "0.32rem 0.5rem", border: "1px solid var(--border-color)", borderRadius: 5, fontSize: "0.78rem" }}
+              />
+              <button
+                type="button"
+                onClick={handleLocate}
+                disabled={locating}
+                style={{
+                  padding: "0.32rem 0.65rem", border: "1px solid var(--border-color)",
+                  borderRadius: 5, background: "var(--surface-muted, rgba(0,0,0,0.05))",
+                  color: "var(--text-secondary)", cursor: locating ? "wait" : "pointer",
+                  fontSize: "0.78rem", whiteSpace: "nowrap", fontWeight: 500,
+                }}
+              >
+                {locating ? "…" : "📍 Locate"}
+              </button>
+            </div>
+            {/* Coord fields — filled by Locate or pasted from Google Maps */}
+            <div style={{ display: "flex", gap: "0.4rem" }}>
+              <input
+                value={latitude}
+                onChange={(e) => setLatitude(e.target.value)}
+                placeholder="Latitude"
+                required
+                aria-label="Latitude"
+                type="number"
+                step="any"
+                style={{ flex: 1, padding: "0.32rem 0.5rem", border: "1px solid var(--border-color)", borderRadius: 5, fontSize: "0.78rem", background: latitude ? "var(--surface-color,#fff)" : "var(--surface-muted,rgba(0,0,0,0.03))" }}
+              />
+              <input
+                value={longitude}
+                onChange={(e) => setLongitude(e.target.value)}
+                placeholder="Longitude"
+                required
+                aria-label="Longitude"
+                type="number"
+                step="any"
+                style={{ flex: 1, padding: "0.32rem 0.5rem", border: "1px solid var(--border-color)", borderRadius: 5, fontSize: "0.78rem", background: longitude ? "var(--surface-color,#fff)" : "var(--surface-muted,rgba(0,0,0,0.03))" }}
+              />
+            </div>
+            {/* Google Maps fallback — always visible */}
+            <a
+              href={gmapsUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ fontSize: "0.72rem", color: "var(--primary-color, var(--accent-color, #265855))" }}
+            >
+              Can't locate? Open in Google Maps → right-click the pin → copy coordinates
+            </a>
+          </div>
+          <input
+            value={country}
+            onChange={(e) => setCountry(e.target.value)}
+            placeholder="Country code (e.g. IN)"
+            aria-label="Country"
+            maxLength={8}
+            style={{ padding: "0.35rem 0.55rem", border: "1px solid var(--border-color)", borderRadius: 5, fontSize: "0.82rem" }}
+          />
+          {/* Image upload — POSTs to /api/uploads/image (S3) */}
+          <div style={{ display: "flex", flexDirection: "column", gap: "0.3rem" }}>
+            <span style={{ fontSize: "0.72rem", fontWeight: 600, color: "var(--text-secondary)" }}>
+              Photo (optional)
+            </span>
+            {imageUrl ? (
+              <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                <img
+                  src={imageUrl}
+                  alt="POI preview"
+                  style={{ width: 64, height: 64, objectFit: "cover", borderRadius: 6, border: "1px solid var(--border-color)" }}
+                />
+                <button
+                  type="button"
+                  onClick={() => setImageUrl("")}
+                  style={{ fontSize: "0.75rem", color: "var(--danger-color, #b91c1c)", background: "transparent", border: "none", cursor: "pointer", padding: "0.2rem 0.4rem" }}
+                >
+                  Remove
+                </button>
+              </div>
+            ) : (
+              <label style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem", cursor: imageUploading ? "wait" : "pointer", fontSize: "0.8rem", color: "var(--primary-color, var(--accent-color, #265855))", fontWeight: 500 }}>
+                <input
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp,image/gif"
+                  style={{ display: "none" }}
+                  disabled={imageUploading}
+                  onChange={async (e) => {
+                    const file = e.target.files?.[0];
+                    if (!file) return;
+                    setImageUploading(true);
+                    try {
+                      const fd = new FormData();
+                      fd.append("image", file);
+                      const res = await fetchApi("/api/uploads/image", { method: "POST", body: fd });
+                      if (res?.url) setImageUrl(res.url);
+                      else notify.error("Upload succeeded but no URL returned.");
+                    } catch (err) {
+                      notify.error(err?.message || "Image upload failed.");
+                    } finally {
+                      setImageUploading(false);
+                    }
+                  }}
+                />
+                {imageUploading ? "Uploading…" : "📷 Upload photo"}
+              </label>
+            )}
+          </div>
+          <textarea
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            placeholder="Short description (optional)"
+            rows={2}
+            aria-label="Description"
+            style={{ padding: "0.35rem 0.55rem", border: "1px solid var(--border-color)", borderRadius: 5, fontSize: "0.82rem", resize: "vertical" }}
+          />
+          <div style={{ display: "flex", gap: "0.5rem", justifyContent: "flex-end" }}>
+            <button type="button" onClick={onClose}
+              style={{ padding: "0.35rem 0.8rem", border: "1px solid var(--border-color)", borderRadius: 5, background: "transparent", color: "var(--text-secondary)", cursor: "pointer", fontSize: "0.8rem" }}>
+              Cancel
+            </button>
+            <button type="submit" disabled={busy}
+              style={{ padding: "0.35rem 0.9rem", border: "none", borderRadius: 5, background: "var(--primary-color, var(--accent-color))", color: "#fff", cursor: busy ? "wait" : "pointer", fontSize: "0.8rem", fontWeight: 600 }}>
+              {busy ? "Submitting…" : "Suggest POI"}
+            </button>
+          </div>
+        </form>
       </div>
-      <input
-        value={url}
-        onChange={(e) => setUrl(e.target.value)}
-        placeholder="Booking URL (optional)"
-        aria-label={`${label} URL`}
-        style={{ padding: "0.3rem 0.5rem", border: "1px solid var(--border-color)", borderRadius: 4, fontSize: "0.78rem" }}
-      />
-      <textarea
-        value={notes}
-        onChange={(e) => setNotes(e.target.value)}
-        placeholder="Notes (optional)"
-        rows={2}
-        aria-label={`${label} notes`}
-        style={{ padding: "0.3rem 0.5rem", border: "1px solid var(--border-color)", borderRadius: 4, fontSize: "0.78rem", resize: "vertical" }}
-      />
-      <div style={{ display: "flex", gap: "0.4rem", justifyContent: "flex-end" }}>
-        <button
-          type="button"
-          onClick={onCancel}
-          style={{ padding: "0.3rem 0.7rem", border: "1px solid var(--border-color)", borderRadius: 4, background: "transparent", color: "var(--text-secondary)", cursor: "pointer", fontSize: "0.75rem" }}
-        >
-          Cancel
-        </button>
-        <button
-          type="submit"
-          disabled={busy}
-          data-testid={`day-${day}-inline-add-submit-${kind}`}
-          style={{ padding: "0.3rem 0.8rem", border: "1px solid var(--primary-color, var(--accent-color))", borderRadius: 4, background: "var(--primary-color, var(--accent-color))", color: "#fff", cursor: busy ? "wait" : "pointer", fontSize: "0.75rem", fontWeight: 600 }}
-        >
-          {busy ? "Adding…" : `Add ${label}`}
-        </button>
-      </div>
-    </form>
+    </div>
   );
 }

@@ -253,7 +253,15 @@ async function sendAdvanceLinkToCustomer({ quote, contact, displayName, payUrl, 
     `This link stays active until your trip, so you can pay the remaining balance any time.\n\n— ${brand}`;
   if (contact.email) {
     try {
-      await sendEmail({ to: contact.email, subject: `Confirm your booking — pay from ${cur} ${minAmt}`, text });
+      const html =
+        `<p>Hi ${name},</p>` +
+        `<p>Thank you for accepting your quote! To confirm your booking, please use this secure payment link:</p>` +
+        `<p><a href="${payUrl}" target="_blank" rel="noopener noreferrer">Pay and confirm booking</a></p>` +
+        `<p>You can pay a minimum of ${cur} ${minAmt} (${Math.round(ADVANCE_PCT * 100)}% advance) to lock in your booking, ` +
+        `or pay the full amount of ${cur} ${fullAmt} &mdash; any amount in between works too.</p>` +
+        `<p>This link stays active until your trip, so you can pay the remaining balance any time.</p>` +
+        `<p>&mdash; ${brand}</p>`;
+      await sendEmail({ to: contact.email, subject: `Confirm your booking — pay from ${cur} ${minAmt}`, text, html });
       channels.push('email');
     } catch (e) { console.error('[travel-quotes-public] advance email failed (non-fatal):', e.message); }
   }

@@ -35,6 +35,15 @@ const { writeAudit } = require("../lib/audit");
 // at backend/test/lib/documentAccessAudit.test.js.
 const { recordDocumentAccess } = require("../lib/documentAccessAudit");
 const pdfRenderer = require("../services/pdfRenderer");
+// Manual milestone reminder ("Notify" button on the Milestone Tracker) reuses
+// the same customer-reach transports as the public advance-link flow: email
+// (SendGrid) + WhatsApp Web. Both are best-effort and never throw fatally.
+const { sendEmail } = require("../lib/emailSender");
+const waWebClient = require("../services/whatsappWebClient");
+// Hosted pay-link for the reminder. BYOK — uses the tenant's own Razorpay keys
+// (or Stripe); returns { error } fail-soft when no gateway is configured, so the
+// reminder still sends without a link rather than erroring.
+const { createInvoicePaymentLink } = require("../lib/paymentLink");
 const { invoicePrefixFor, fiscalYearStart } = require("../lib/travelFiscalYear");
 const { computeTcs, isOverseasDestination } = require("../lib/tcsCalculation");
 // Arc 2 #901 slice 21 — TDS withholding sum from lines (lineType==='tds').
@@ -6626,8 +6635,42 @@ router.get(
           receivedAmount: r.receivedAmount,
           daysUntilDue,
           createdAt: r.createdAt,
+          // Contact fields populated below (batch lookup avoids N+1).
+          contactName: null,
+          contactPhone: null,
+          contactEmail: null,
         };
       });
+
+      // Attach the customer behind each milestone so the operator can SEE who
+      // owes (and the "Notify" action knows where to send). Batch-fetch the
+      // distinct contactIds in one query (tenant-scoped), then map onto rows —
+      // avoids an N+1 against Contact.
+      const contactIds = [
+        ...new Set(milestones.map((m) => m.contactId).filter((x) => x != null)),
+      ];
+      // Fail-soft: contact data is enrichment, not core. A lookup failure (or a
+      // Prisma client without the contact model in a stubbed env) must never
+      // break the milestone list — rows just keep null contact fields.
+      if (contactIds.length > 0 && prisma.contact && typeof prisma.contact.findMany === "function") {
+        try {
+          const contacts = await prisma.contact.findMany({
+            where: { id: { in: contactIds }, tenantId: req.travelTenant.id },
+            select: { id: true, name: true, phone: true, email: true },
+          });
+          const byId = new Map(contacts.map((c) => [c.id, c]));
+          for (const m of milestones) {
+            const c = m.contactId != null ? byId.get(m.contactId) : null;
+            if (c) {
+              m.contactName = c.name || null;
+              m.contactPhone = c.phone || null;
+              m.contactEmail = c.email || null;
+            }
+          }
+        } catch (e) {
+          console.error("[travel-invoices] milestone contact enrichment failed (non-fatal):", e.message);
+        }
+      }
 
       // Summary aggregates — computed over the returned page (see header note).
       const byStatus = {};
@@ -6663,6 +6706,477 @@ router.get(
       }
       console.error("[travel-invoices] schedule upcoming error:", e.message);
       res.status(500).json({ error: "Failed to list upcoming milestones" });
+    }
+  },
+);
+
+// ============================================================================
+// POST /api/travel/payment-schedules/:scheduleId/remind — manual customer
+// payment reminder (the Milestone Tracker "Notify" button).
+//
+// The paymentScheduleReminderEngine cron chases pending/partial milestones on a
+// fixed T-7/T-3/T-1 cadence; this is the operator's on-demand "nudge this
+// customer now" surface for any single milestone. Sends to the invoice's
+// contact over the SAME transports as the public advance-link flow — email
+// (SendGrid) + WhatsApp Web — both best-effort, then bumps the per-schedule
+// reminder counter + writes an audit row.
+//
+// Auth: verifyToken + requireTravelTenant + invoices:update (same gate as
+// mark-paid — a customer-facing send is an operator action, not USER-level).
+// Sub-brand access enforced via getSubBrandAccessSet.
+//
+// Returns 200 { ok, channels: ["email","whatsapp"], milestoneId, contactName,
+//   lastReminderSentAt }. ok=false (channels empty) means the recipient exists
+// but every channel send was skipped/failed (e.g. SendGrid unconfigured +
+// WhatsApp not linked) — the UI surfaces that distinctly from a hard error.
+//
+// Error codes: INVALID_ID, MILESTONE_NOT_FOUND, SUB_BRAND_DENIED,
+//   NOTHING_TO_REMIND (paid/waived), NO_CONTACT_CHANNEL (no email AND no phone).
+// ============================================================================
+router.post(
+  "/payment-schedules/:scheduleId/remind",
+  verifyToken,
+  requireTravelTenant,
+  requirePermission("invoices", "update"),
+  async (req, res) => {
+    try {
+      const scheduleId = parseInt(req.params.scheduleId, 10);
+      if (!Number.isFinite(scheduleId)) {
+        return res
+          .status(400)
+          .json({ error: "scheduleId must be a number", code: "INVALID_ID" });
+      }
+
+      const schedule = await prisma.travelPaymentSchedule.findFirst({
+        where: { id: scheduleId, tenantId: req.travelTenant.id },
+        include: {
+          invoice: {
+            select: {
+              id: true,
+              invoiceNum: true,
+              subBrand: true,
+              contactId: true,
+              currency: true,
+            },
+          },
+        },
+      });
+      if (!schedule || !schedule.invoice) {
+        return res
+          .status(404)
+          .json({ error: "Milestone not found", code: "MILESTONE_NOT_FOUND" });
+      }
+
+      const allowed = await getSubBrandAccessSet(req.user.userId);
+      if (!canAccessSubBrand(allowed, schedule.invoice.subBrand)) {
+        return res
+          .status(403)
+          .json({ error: "Sub-brand access denied", code: "SUB_BRAND_DENIED" });
+      }
+
+      if (schedule.status === "paid" || schedule.status === "waived") {
+        return res.status(400).json({
+          error: `Nothing to remind — this milestone is already ${schedule.status}.`,
+          code: "NOTHING_TO_REMIND",
+        });
+      }
+
+      const contact = await prisma.contact.findFirst({
+        where: { id: schedule.invoice.contactId, tenantId: req.travelTenant.id },
+        select: { id: true, name: true, email: true, phone: true },
+      });
+      if (!contact || (!contact.email && !contact.phone)) {
+        return res.status(422).json({
+          error: "This customer has no email or phone on file to notify.",
+          code: "NO_CONTACT_CHANNEL",
+        });
+      }
+
+      // Branding for the message body — best-effort tenant name.
+      let brand = "our team";
+      try {
+        const t = await prisma.tenant.findUnique({
+          where: { id: req.travelTenant.id },
+          select: { name: true },
+        });
+        if (t && t.name) brand = t.name;
+      } catch { /* keep generic brand */ }
+
+      const cur = schedule.expectedCurrency || schedule.invoice.currency || "INR";
+      const amt = Number(schedule.expectedAmount || 0).toLocaleString("en-IN");
+      const due = schedule.dueDate
+        ? new Date(schedule.dueDate).toISOString().slice(0, 10)
+        : null;
+      const isOverdue =
+        schedule.dueDate && new Date(schedule.dueDate).getTime() < Date.now();
+      const dueLine = due
+        ? isOverdue
+          ? `was due on ${due}`
+          : `is due on ${due}`
+        : "is now due";
+      const name = (contact.name && contact.name.trim()) || "there";
+
+      // Generate a hosted "click & pay" link for THIS milestone's amount via the
+      // tenant's own (BYOK) gateway. A PENDING Payment row is created so the
+      // existing webhook reconciles it to PAID on completion. Fail-soft: if no
+      // gateway is configured (or the gateway rejects) the reminder still sends,
+      // just without a link.
+      let payUrl = null;
+      try {
+        const linkRes = await createInvoicePaymentLink({
+          tenantId: req.travelTenant.id,
+          invoice: {
+            id: schedule.invoice.id,
+            invoiceNum: `${schedule.invoice.invoiceNum} — instalment ${schedule.milestoneOrder}`,
+            amount: Number(schedule.expectedAmount),
+          },
+          contact: { name: contact.name, email: contact.email, phone: contact.phone },
+          currency: cur,
+          tenantName: brand !== "our team" ? brand : undefined,
+          // Travel context → the Payment row is tagged kind='travel-milestone'
+          // so the webhook reconciles it back to THIS milestone + invoice,
+          // not the generic Invoice table.
+          travelContext: { scheduleId: schedule.id, travelInvoiceId: schedule.invoice.id },
+        });
+        if (linkRes && linkRes.url) {
+          payUrl = linkRes.url;
+        } else if (linkRes && linkRes.error) {
+          console.warn(
+            `[travel-invoices] reminder pay-link unavailable (${linkRes.code}): ${linkRes.error}`,
+          );
+        }
+      } catch (e) {
+        console.error("[travel-invoices] reminder pay-link failed (non-fatal):", e.message);
+      }
+
+      const text =
+        `Hi ${name},\n\n` +
+        `This is a friendly reminder that your payment of ${cur} ${amt} for booking ` +
+        `${schedule.invoice.invoiceNum} (instalment ${schedule.milestoneOrder}) ${dueLine}.\n\n` +
+        (payUrl ? `Pay securely here:\n${payUrl}\n\n` : "") +
+        `Please complete the payment at your earliest convenience. If you've already paid, ` +
+        `kindly ignore this message.\n\n— ${brand}`;
+
+      const html =
+        `<p>Hi ${name},</p>` +
+        `<p>This is a friendly reminder that your payment of ${cur} ${amt} for booking ` +
+        `${schedule.invoice.invoiceNum} (instalment ${schedule.milestoneOrder}) ${dueLine}.</p>` +
+        (payUrl
+          ? `<p>Pay securely: <a href="${payUrl}" target="_blank" rel="noopener noreferrer">Pay now</a></p>`
+          : "") +
+        `<p>Please complete the payment at your earliest convenience. ` +
+        `If you&rsquo;ve already paid, kindly ignore this message.</p>` +
+        `<p>&mdash; ${brand}</p>`;
+
+      const channels = [];
+      if (contact.email) {
+        try {
+          const r = await sendEmail({
+            to: contact.email,
+            subject: `Payment reminder — ${schedule.invoice.invoiceNum} (${cur} ${amt})`,
+            text,
+            html,
+          });
+          if (r && r.sent) channels.push("email");
+        } catch (e) {
+          console.error("[travel-invoices] reminder email failed (non-fatal):", e.message);
+        }
+      }
+      if (contact.phone) {
+        try {
+          const r = await waWebClient.sendBestEffort({
+            tenantId: req.travelTenant.id,
+            subBrand: schedule.invoice.subBrand,
+            toPhone: contact.phone,
+            contactId: contact.id,
+            fallbackText:
+              `Hi ${name}! Reminder: ${cur} ${amt} for booking ${schedule.invoice.invoiceNum} ` +
+              `(instalment ${schedule.milestoneOrder}) ${dueLine}.` +
+              (payUrl
+                ? ` Pay securely here: ${payUrl}`
+                : ` Please complete your payment when you can.`) +
+              ` — ${brand}`,
+          });
+          if (r && r.sent) channels.push("whatsapp");
+        } catch (e) {
+          console.error("[travel-invoices] reminder WhatsApp failed (non-fatal):", e.message);
+        }
+      }
+
+      // Bump the per-schedule reminder counter + timestamp (best-effort — a
+      // failed counter write must not fail the send that already happened).
+      const now = new Date();
+      try {
+        await prisma.travelPaymentSchedule.update({
+          where: { id: schedule.id },
+          data: {
+            remindersSentCount: Number(schedule.remindersSentCount || 0) + 1,
+            lastReminderSentAt: now,
+          },
+        });
+      } catch (e) {
+        console.error("[travel-invoices] reminder counter bump failed (non-fatal):", e.message);
+      }
+
+      await writeAudit(
+        "TravelPaymentSchedule",
+        "PAYMENT_SCHEDULE_REMINDER_SENT",
+        schedule.id,
+        req.user.userId,
+        req.travelTenant.id,
+        {
+          invoiceId: schedule.invoiceId,
+          invoiceNum: schedule.invoice.invoiceNum,
+          milestoneOrder: schedule.milestoneOrder,
+          manual: true,
+          channels: {
+            email: channels.includes("email"),
+            whatsapp: channels.includes("whatsapp"),
+          },
+          payLinkSent: Boolean(payUrl),
+          expectedAmount: String(schedule.expectedAmount),
+          expectedCurrency: cur,
+        },
+      ).catch((e) =>
+        console.warn("[travel-invoices] reminder audit failed (non-fatal):", e.message),
+      );
+
+      return res.json({
+        ok: channels.length > 0,
+        channels,
+        payUrl,
+        milestoneId: schedule.id,
+        contactName: contact.name || null,
+        lastReminderSentAt: now,
+      });
+    } catch (e) {
+      console.error("[travel-invoices] manual reminder error:", e.message);
+      res.status(500).json({ error: "Failed to send reminder", code: "REMINDER_FAILED" });
+    }
+  },
+);
+
+// ============================================================================
+// POST /api/travel/invoices/:id/payment-link — generate a hosted "click & pay"
+// link for the WHOLE travel invoice's outstanding balance. Parity with the
+// generic billing "Generate payment link" action, but BYOK (tenant Razorpay)
+// and tagged kind='travel-invoice' so the webhook reconciles it back to THIS
+// TravelInvoice + its milestones (not the generic Invoice table).
+//
+// Auth: invoices:update. Returns { url, gateway, amount, currency } or an error
+// code (NO_AMOUNT, ALREADY_PAID, NO_GATEWAY, LINK_FAILED).
+// ============================================================================
+router.post(
+  "/invoices/:id/payment-link",
+  verifyToken,
+  requireTravelTenant,
+  requirePermission("invoices", "update"),
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      const invoice = await loadParentInvoice(req, res, id);
+      if (!invoice) return;
+
+      const total = Number(invoice.totalAmount || 0);
+      if (!(total > 0)) {
+        return res
+          .status(400)
+          .json({ error: "Invoice has no payable amount.", code: "NO_AMOUNT" });
+      }
+
+      // Outstanding = total − already-received across milestones (fail-soft to total).
+      let outstanding = total;
+      try {
+        const schedules = await prisma.travelPaymentSchedule.findMany({
+          where: { invoiceId: invoice.id, tenantId: req.travelTenant.id },
+          select: { receivedAmount: true, status: true, expectedAmount: true },
+        });
+        if (schedules.length > 0) {
+          const received = schedules.reduce((sum, r) => {
+            const got = r.receivedAmount != null
+              ? Number(r.receivedAmount)
+              : r.status === "paid"
+                ? Number(r.expectedAmount || 0)
+                : 0;
+            return sum + got;
+          }, 0);
+          outstanding = Math.max(0, total - received);
+        }
+      } catch { /* fall back to full total */ }
+
+      if (!(outstanding > 0)) {
+        return res
+          .status(400)
+          .json({ error: "This invoice is already fully paid.", code: "ALREADY_PAID" });
+      }
+
+      const contact = await prisma.contact
+        .findFirst({
+          where: { id: invoice.contactId, tenantId: req.travelTenant.id },
+          select: { id: true, name: true, email: true, phone: true },
+        })
+        .catch(() => null);
+
+      let brand;
+      try {
+        const t = await prisma.tenant.findUnique({
+          where: { id: req.travelTenant.id },
+          select: { name: true },
+        });
+        brand = t && t.name ? t.name : undefined;
+      } catch { brand = undefined; }
+
+      const cur = invoice.currency || "INR";
+      const result = await createInvoicePaymentLink({
+        tenantId: req.travelTenant.id,
+        invoice: { id: invoice.id, invoiceNum: invoice.invoiceNum, amount: outstanding },
+        contact: contact
+          ? { name: contact.name, email: contact.email, phone: contact.phone }
+          : undefined,
+        currency: cur,
+        tenantName: brand,
+        travelContext: { kind: "travel-invoice", travelInvoiceId: invoice.id },
+      });
+
+      if (result && result.url) {
+        await writeAudit(
+          "TravelInvoice",
+          "TRAVEL_INVOICE_PAYMENT_LINK",
+          invoice.id,
+          req.user.userId,
+          req.travelTenant.id,
+          { amount: String(outstanding), currency: cur, gateway: result.gateway },
+        ).catch(() => {});
+        return res.json({ url: result.url, gateway: result.gateway, amount: outstanding, currency: cur });
+      }
+      return res.status(400).json({
+        error: result?.error || "Could not create payment link",
+        code: result?.code || "LINK_FAILED",
+      });
+    } catch (e) {
+      console.error("[travel-invoices] payment-link error:", e.message);
+      res.status(500).json({ error: "Failed to generate payment link", code: "LINK_FAILED" });
+    }
+  },
+);
+
+// ============================================================================
+// GET /api/travel/invoices/:id/transactions — settlement history for ONE
+// invoice. Returns its milestones (expected vs received, status, paid date) +
+// the underlying Payment rows (method / reference / gateway). Powers the
+// "History" modal so an operator can see — especially for a PARTIAL invoice —
+// exactly WHEN and HOW MUCH the customer has paid so far.
+//
+// Auth: invoices:read. Returns { invoice, milestones, payments, summary }.
+// ============================================================================
+router.get(
+  "/invoices/:id/transactions",
+  verifyToken,
+  requireTravelTenant,
+  requirePermission("invoices", "read"),
+  async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      const invoice = await loadParentInvoice(req, res, id);
+      if (!invoice) return;
+
+      const milestones = await prisma.travelPaymentSchedule.findMany({
+        where: { invoiceId: invoice.id, tenantId: req.travelTenant.id },
+        orderBy: [{ milestoneOrder: "asc" }, { id: "asc" }],
+        select: {
+          id: true,
+          milestoneOrder: true,
+          dueDate: true,
+          expectedAmount: true,
+          receivedAmount: true,
+          status: true,
+          paidAt: true,
+        },
+      });
+
+      // Payments for THIS travel invoice. Two shapes:
+      //   - mark-paid rows reuse Payment.invoiceId = travelInvoiceId + metadata
+      //     { type: 'travel-payment-schedule', scheduleId, milestoneOrder }.
+      //   - pay-link rows carry { kind: 'travel-*', travelInvoiceId } in metadata
+      //     (invoiceId is null).
+      // We over-fetch on either signal, then JS-filter to travel-tagged rows
+      // for THIS invoice so a same-numbered GENERIC invoice's payments never
+      // leak in. Fail-soft — payment history is best-effort enrichment.
+      let payments = [];
+      try {
+        const candidates = await prisma.payment.findMany({
+          where: {
+            tenantId: req.travelTenant.id,
+            OR: [
+              { invoiceId: invoice.id },
+              { metadata: { contains: `"travelInvoiceId":${invoice.id}` } },
+            ],
+          },
+          orderBy: { paidAt: "desc" },
+          select: {
+            id: true,
+            amount: true,
+            currency: true,
+            gateway: true,
+            gatewayId: true,
+            status: true,
+            paidAt: true,
+            createdAt: true,
+            metadata: true,
+          },
+        });
+        payments = candidates
+          .map((p) => {
+            let m = {};
+            try { m = JSON.parse(p.metadata || "{}"); } catch { m = {}; }
+            return { p, m };
+          })
+          .filter(
+            ({ p, m }) =>
+              (m.type === "travel-payment-schedule" && p.invoiceId === invoice.id) ||
+              ((m.kind === "travel-milestone" || m.kind === "travel-invoice") &&
+                Number(m.travelInvoiceId) === invoice.id),
+          )
+          .map(({ p, m }) => ({
+            id: p.id,
+            amount: p.amount,
+            currency: p.currency,
+            method: p.gateway, // cash / upi / neft / razorpay / stripe …
+            reference: p.gatewayId || null,
+            status: p.status,
+            paidAt: p.paidAt || p.createdAt,
+            milestoneOrder: m.milestoneOrder != null ? m.milestoneOrder : null,
+          }));
+      } catch (e) {
+        console.error("[travel-invoices] transactions payment lookup failed (non-fatal):", e.message);
+      }
+
+      const total = Number(invoice.totalAmount || 0);
+      const totalReceived = payments
+        .filter((p) => p.status === "SUCCESS")
+        .reduce((sum, p) => sum + Number(p.amount || 0), 0);
+      const outstanding = Math.max(0, total - totalReceived);
+
+      res.json({
+        invoice: {
+          id: invoice.id,
+          invoiceNum: invoice.invoiceNum,
+          status: invoice.status,
+          totalAmount: invoice.totalAmount,
+          currency: invoice.currency,
+        },
+        milestones,
+        payments,
+        summary: {
+          total: total.toFixed(2),
+          totalReceived: totalReceived.toFixed(2),
+          outstanding: outstanding.toFixed(2),
+          currency: invoice.currency || "INR",
+        },
+      });
+    } catch (e) {
+      console.error("[travel-invoices] transactions error:", e.message);
+      res.status(500).json({ error: "Failed to load transaction history", code: "TX_FAILED" });
     }
   },
 );

@@ -47,6 +47,20 @@ const CURATED = {
   istanbul: { label: "Istanbul", wikiTitle: "Istanbul", motif: "🕌", accent: "#9B59B6", gradient: "linear-gradient(135deg,#5e2f6e,#a866c0)", aliases: ["istanbul", "turkey", "turkiye"] },
   tokyo: { label: "Tokyo", wikiTitle: "Tokyo", motif: "🗾", accent: "#D14A6A", gradient: "linear-gradient(135deg,#5e2438,#c0405e)", aliases: ["tokyo", "japan", "kyoto", "osaka"] },
   newyork: { label: "New York", wikiTitle: "New York City", motif: "🗽", accent: "#34495E", gradient: "linear-gradient(135deg,#222f3d,#4a6078)", aliases: ["new york", "nyc", "manhattan"] },
+  kolkata: { label: "Kolkata", wikiTitle: "Kolkata", motif: "🌉", accent: "#1A6B8A", gradient: "linear-gradient(135deg,#0e4259,#1e7ea1)", aliases: ["kolkata", "calcutta"] },
+  bangalore: { label: "Bangalore", wikiTitle: "Bangalore", motif: "🌿", accent: "#2E7D32", gradient: "linear-gradient(135deg,#1b4d1e,#3a9e40)", aliases: ["bangalore", "bengaluru"] },
+  chennai: { label: "Chennai", wikiTitle: "Chennai", motif: "🏛️", accent: "#D4522A", gradient: "linear-gradient(135deg,#7a2f18,#d4522a)", aliases: ["chennai", "madras"] },
+  hyderabad: { label: "Hyderabad", wikiTitle: "Hyderabad", motif: "🕌", accent: "#7B5EA7", gradient: "linear-gradient(135deg,#4a3564,#9b7ec8)", aliases: ["hyderabad"] },
+  agra: { label: "Agra", wikiTitle: "Agra", motif: "🕌", accent: "#C49A2F", gradient: "linear-gradient(135deg,#7a5e1a,#c49a2f)", aliases: ["agra"] },
+  amritsar: { label: "Amritsar", wikiTitle: "Amritsar", motif: "🛕", accent: "#C4922D", gradient: "linear-gradient(135deg,#7a5418,#c4922d)", aliases: ["amritsar"] },
+  kerala: { label: "Kerala", wikiTitle: "Kerala", motif: "🌴", accent: "#1E8B4A", gradient: "linear-gradient(135deg,#0f5a2d,#28a35c)", aliases: ["kerala", "kochi", "cochin", "alleppey", "munnar", "trivandrum", "thiruvananthapuram"] },
+  manali: { label: "Manali", wikiTitle: "Manali, Himachal Pradesh", motif: "🏔️", accent: "#4A86C8", gradient: "linear-gradient(135deg,#2a5180,#5a9ed8)", aliases: ["manali"] },
+  shimla: { label: "Shimla", wikiTitle: "Shimla", motif: "🏔️", accent: "#5A7FAF", gradient: "linear-gradient(135deg,#334d6a,#6a90c8)", aliases: ["shimla"] },
+  bangkok: { label: "Bangkok", wikiTitle: "Bangkok", motif: "🛕", accent: "#D4A017", gradient: "linear-gradient(135deg,#7a5c0e,#c49020)", aliases: ["bangkok", "thailand", "phuket", "chiangmai", "pattaya"] },
+  mussoorie: { label: "Mussoorie", wikiTitle: "Mussoorie", motif: "🏔️", accent: "#5A7FAF", gradient: "linear-gradient(135deg,#334d6a,#6a90c8)", aliases: ["mussoorie", "masuri", "mussorie", "musooree"] },
+  darjeeling: { label: "Darjeeling", wikiTitle: "Darjeeling", motif: "🍵", accent: "#3D7A3D", gradient: "linear-gradient(135deg,#1e4d1e,#4a9e4a)", aliases: ["darjeeling"] },
+  nainital: { label: "Nainital", wikiTitle: "Nainital", motif: "🏔️", accent: "#1A7AA0", gradient: "linear-gradient(135deg,#0e4d66,#1e90bb)", aliases: ["nainital"] },
+  udaipur: { label: "Udaipur", wikiTitle: "Udaipur", motif: "🏰", accent: "#A0522D", gradient: "linear-gradient(135deg,#5e2f18,#a0522d)", aliases: ["udaipur"] },
 };
 
 function resolveKey(norm) {

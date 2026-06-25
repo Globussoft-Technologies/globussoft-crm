@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { fetchApi } from '../utils/api';
+import { useNotify } from '../utils/notify';
 import { AuthContext } from '../App';
 import { formatMoney } from '../utils/money';
 import { DateRangeFilter, resolveDateRange, DATE_FILTER_OPTIONS } from '../components/wellness/DateRangeFilter';
@@ -102,12 +103,15 @@ function formatDate(value) {
 export default function Payments() {
   const { user } = useContext(AuthContext) || {};
   const isAdmin = user?.role === 'ADMIN';
+  const notify = useNotify();
 
   const [payments, setPayments] = useState([]);
   const [config, setConfig] = useState(null);
   const [tab, setTab] = useState('all');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+  const [refundingId, setRefundingId] = useState(null);
   const [selected, setSelected] = useState(null);
   // Default to last30 to preserve the prior "Total Collected (30D)" semantics —
   // user can now switch to today / this week / this month / this year / custom
@@ -137,6 +141,89 @@ export default function Payments() {
       setError(err.message || 'Failed to load payments');
     } finally {
       setLoading(false);
+    }
+  }
+
+  // A travel BOOKING collection (advance / milestone / full-invoice link). These
+  // refund through the booking's CANCELLATION flow so the retention policy
+  // applies; the Payments page only lets an ADMIN override (with a reason).
+  const isBookingPayment = useCallback((p) => {
+    const m = p && p.metadata;
+    return Boolean(
+      m &&
+        (m.type === 'travel-quote-advance' ||
+          m.type === 'travel-payment-schedule' ||
+          m.kind === 'travel-milestone' ||
+          m.kind === 'travel-invoice'),
+    );
+  }, []);
+
+  // Resolve the Refund button state for a row: whether it's clickable, whether
+  // it's an admin OVERRIDE (booking payment), and the tooltip explaining why.
+  const refundState = useCallback((p) => {
+    if (!p) return { enabled: false };
+    if (p.status === 'REFUNDED') return { refunded: true };
+    const captured =
+      p.status === 'SUCCESS' &&
+      String(p.gateway || '').toLowerCase() === 'razorpay' &&
+      /^pay_/.test(String(p.gatewayId || ''));
+    const booking = isBookingPayment(p);
+    const canManage = isAdmin || user?.role === 'MANAGER';
+    if (!captured) {
+      return { enabled: false, title: 'Only captured Razorpay payments can be refunded (not pending / manual / failed)' };
+    }
+    if (booking && !isAdmin) {
+      return { enabled: false, title: "Refund this booking through its cancellation flow (Itineraries → cancellation)" };
+    }
+    if (!booking && !canManage) {
+      return { enabled: false, title: 'Only admins / managers can issue refunds' };
+    }
+    return {
+      enabled: true,
+      override: booking,
+      title: booking
+        ? 'Admin override — refund now (bypasses the cancellation policy)'
+        : `Refund ${formatCurrency(p.amount)} via Razorpay`,
+    };
+  }, [isBookingPayment, isAdmin, user]);
+
+  async function handleRefund(p) {
+    const st = refundState(p);
+    if (!st.enabled || refundingId) return;
+    let reason = null;
+    if (st.override) {
+      reason = await notify.prompt({
+        title: 'Refund override',
+        message: 'This refund bypasses the cancellation policy. Reason (required):',
+        placeholder: 'e.g. goodwill / billing error',
+        confirmText: 'Refund',
+      });
+      if (reason == null || String(reason).trim() === '') return; // cancelled / empty
+    } else {
+      const ok = await notify.confirm({
+        title: 'Refund payment?',
+        message: `Refund ${formatCurrency(p.amount)} back to the customer via Razorpay? This cannot be undone.`,
+        confirmText: 'Refund',
+        cancelText: 'Cancel',
+        destructive: true,
+      });
+      if (!ok) return;
+    }
+    setRefundingId(p.id);
+    setError('');
+    setNotice('');
+    try {
+      const res = await fetchApi(`/api/payments/${p.id}/refund`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(reason ? { reason: String(reason).trim() } : {}),
+      });
+      setNotice(`Refund of ${formatCurrency(p.amount)} issued${res?.refund?.id ? ` (${res.refund.id})` : ''}.`);
+      await loadAll();
+    } catch (err) {
+      setError(err?.message || 'Refund failed. Please try again.');
+    } finally {
+      setRefundingId(null);
     }
   }
 
@@ -210,6 +297,21 @@ export default function Payments() {
           gap: '0.5rem',
         }}>
           <AlertTriangle size={16} /> {error}
+        </div>
+      )}
+
+      {notice && (
+        <div style={{
+          ...GLASS,
+          padding: '0.8rem 1rem',
+          marginBottom: '1rem',
+          borderColor: 'rgba(16,185,129,0.3)',
+          color: '#10b981',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '0.5rem',
+        }}>
+          <CheckCircle size={16} /> {notice}
         </div>
       )}
 
@@ -329,12 +431,12 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com → Settings �
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
           <thead>
             <tr style={{ background: 'var(--surface-hover)', borderBottom: '1px solid var(--border-color)' }}>
-              <Th>Invoice #</Th>
+              <Th>Customer</Th>
+              <Th>For</Th>
               <Th>Amount</Th>
               <Th>Gateway</Th>
               <Th>Status</Th>
               <Th>Paid Date</Th>
-              <Th>Created</Th>
               <Th>Actions</Th>
             </tr>
           </thead>
@@ -346,7 +448,7 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com → Settings �
                 line under what looked like a blank box. */}
             {filtered.length === 0 && (
               <tr>
-                <td colSpan={7} style={{ padding: '3rem 2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
+                <td colSpan={8} style={{ padding: '3rem 2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
                   {loading ? (
                     'Loading payments...'
                   ) : (
@@ -395,12 +497,24 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com → Settings �
                 onMouseEnter={e => (e.currentTarget.style.background = 'var(--surface-hover)')}
                 onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
               >
-                <Td>{p.invoiceId ? `#${p.invoiceId}` : <span style={{ color: 'var(--text-secondary)' }}>—</span>}</Td>
+                <Td>
+                  {p.contact
+                    ? <span style={{ fontWeight: 600 }}>{p.contact.name || p.contact.email || `#${p.contactId}`}</span>
+                    : <span style={{ color: 'var(--text-secondary)' }}>—</span>
+                  }
+                </Td>
+                <Td style={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {p.description
+                    ? <span title={p.description}>{p.description}</span>
+                    : p.invoiceId
+                      ? `Invoice #${p.invoiceId}`
+                      : <span style={{ color: 'var(--text-secondary)' }}>—</span>
+                  }
+                </Td>
                 <Td><strong>{formatCurrency(p.amount)}</strong></Td>
                 <Td><GatewayBadge gateway={p.gateway} /></Td>
                 <Td><StatusBadge status={p.status} /></Td>
                 <Td>{formatDate(p.paidAt)}</Td>
-                <Td>{formatDate(p.createdAt)}</Td>
                 <Td onClick={e => e.stopPropagation()}>
                   <button
                     onClick={() => setSelected(p)}
@@ -417,21 +531,48 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com → Settings �
                   >
                     View
                   </button>
-                  <button
-                    disabled
-                    title="Refund (coming soon)"
-                    style={{
-                      padding: '0.3rem 0.7rem',
-                      background: 'rgba(156,163,175,0.1)',
-                      border: '1px solid rgba(156,163,175,0.2)',
-                      borderRadius: '6px',
-                      color: '#9ca3af',
-                      cursor: 'not-allowed',
-                      fontSize: '0.75rem',
-                    }}
-                  >
-                    Refund
-                  </button>
+                  {(() => {
+                    const st = refundState(p);
+                    if (st.refunded) {
+                      return (
+                        <button
+                          disabled
+                          title="Already refunded"
+                          style={{
+                            padding: '0.3rem 0.7rem',
+                            background: 'rgba(156,163,175,0.1)',
+                            border: '1px solid rgba(156,163,175,0.2)',
+                            borderRadius: '6px',
+                            color: '#9ca3af',
+                            cursor: 'not-allowed',
+                            fontSize: '0.75rem',
+                          }}
+                        >
+                          Refunded
+                        </button>
+                      );
+                    }
+                    const busy = refundingId === p.id;
+                    return (
+                      <button
+                        onClick={() => handleRefund(p)}
+                        disabled={!st.enabled || busy}
+                        title={st.title}
+                        style={{
+                          padding: '0.3rem 0.7rem',
+                          background: st.enabled ? 'rgba(239,68,68,0.15)' : 'rgba(156,163,175,0.1)',
+                          border: `1px solid ${st.enabled ? 'rgba(239,68,68,0.3)' : 'rgba(156,163,175,0.2)'}`,
+                          borderRadius: '6px',
+                          color: st.enabled ? '#f87171' : '#9ca3af',
+                          cursor: st.enabled && !busy ? 'pointer' : 'not-allowed',
+                          fontSize: '0.75rem',
+                          opacity: busy ? 0.6 : 1,
+                        }}
+                      >
+                        {busy ? 'Refunding…' : st.override ? 'Refund*' : 'Refund'}
+                      </button>
+                    );
+                  })()}
                 </Td>
               </tr>
             ))}
@@ -619,6 +760,7 @@ function ConfigCard({ name, configured, extras, hint, brandColor }) {
 
 function DetailModal({ payment, onClose }) {
   const meta = payment.metadata && typeof payment.metadata === 'object' ? payment.metadata : {};
+  const contact = payment.contact || null;
   return (
     <div
       onClick={onClose}
@@ -651,30 +793,38 @@ function DetailModal({ payment, onClose }) {
         </div>
 
         <DetailRow label="Status"><StatusBadge status={payment.status} /></DetailRow>
+        <DetailRow label="Amount"><strong>{formatCurrency(payment.amount)} {payment.currency}</strong></DetailRow>
         <DetailRow label="Gateway"><GatewayBadge gateway={payment.gateway} /></DetailRow>
-        <DetailRow label="Amount">{formatCurrency(payment.amount)}</DetailRow>
-        <DetailRow label="Currency">{payment.currency}</DetailRow>
-        <DetailRow label="Invoice">{payment.invoiceId ? `#${payment.invoiceId}` : '—'}</DetailRow>
-        <DetailRow label="Gateway ID"><code style={{ fontSize: '0.78rem' }}>{payment.gatewayId || '—'}</code></DetailRow>
-        <DetailRow label="Paid At">{formatDate(payment.paidAt)}</DetailRow>
+        <DetailRow label="Paid On">{formatDate(payment.paidAt) || '—'}</DetailRow>
         <DetailRow label="Created">{formatDate(payment.createdAt)}</DetailRow>
 
-        <div style={{ marginTop: '1rem' }}>
-          <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginBottom: '0.4rem', textTransform: 'uppercase' }}>
-            Metadata
+        {contact && (
+          <div style={{ marginTop: '1rem', padding: '0.75rem', background: 'var(--subtle-bg)', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+            <div style={{ fontSize: '0.73rem', color: 'var(--text-secondary)', marginBottom: '0.4rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Customer</div>
+            <div style={{ fontWeight: 600 }}>{contact.name || '—'}</div>
+            {contact.email && <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{contact.email}</div>}
+            {contact.phone && <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{contact.phone}</div>}
           </div>
-          <pre style={{
-            background: 'var(--subtle-bg)',
-            border: '1px solid var(--border-color)',
-            padding: '0.75rem',
-            borderRadius: '8px',
-            fontSize: '0.75rem',
-            overflowX: 'auto',
-            margin: 0,
-            color: 'var(--text-secondary)',
-          }}>
-{JSON.stringify(meta, null, 2)}
-          </pre>
+        )}
+
+        {payment.description && (
+          <div style={{ marginTop: '0.75rem', padding: '0.75rem', background: 'var(--subtle-bg)', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+            <div style={{ fontSize: '0.73rem', color: 'var(--text-secondary)', marginBottom: '0.3rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Payment for</div>
+            <div style={{ fontWeight: 500 }}>{payment.description}</div>
+          </div>
+        )}
+
+        <div style={{ marginTop: '0.75rem' }}>
+          <div style={{ fontSize: '0.73rem', color: 'var(--text-secondary)', marginBottom: '0.4rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Reference</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+            {payment.gatewayId && <div style={{ fontSize: '0.8rem' }}>Gateway ID: <code style={{ fontSize: '0.75rem', background: 'rgba(0,0,0,0.06)', padding: '0.15rem 0.4rem', borderRadius: 4 }}>{payment.gatewayId}</code></div>}
+            {payment.invoiceId && <div style={{ fontSize: '0.8rem' }}>Invoice: <strong>#{payment.invoiceId}</strong></div>}
+            {meta.itineraryId && <div style={{ fontSize: '0.8rem' }}>Itinerary: <strong>#{meta.itineraryId}</strong></div>}
+            {meta.quoteId && <div style={{ fontSize: '0.8rem' }}>Quote: <strong>#{meta.quoteId}</strong></div>}
+            {meta.subBrand && <div style={{ fontSize: '0.8rem' }}>Sub-brand: <strong style={{ textTransform: 'capitalize' }}>{meta.subBrand}</strong></div>}
+            {meta.destination && <div style={{ fontSize: '0.8rem' }}>Destination: <strong>{meta.destination}</strong></div>}
+            {meta.kind && <div style={{ fontSize: '0.8rem' }}>Type: <strong style={{ textTransform: 'capitalize' }}>{meta.kind}</strong></div>}
+          </div>
         </div>
       </div>
     </div>

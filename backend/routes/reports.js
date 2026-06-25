@@ -1,5 +1,8 @@
 const express = require("express");
 const PDFDocument = require("pdfkit");
+// Shared ₹-glyph fix: registers the embedded Poppins family under the Helvetica
+// names so the rupee sign renders as ₹ instead of "¹" (built-in WinAnsi gap).
+const { applyRupeeCapableFonts } = require("../services/pdfRenderer");
 
 const router = express.Router();
 const prisma = require("../lib/prisma");
@@ -482,6 +485,7 @@ router.get("/export-pdf", async (req, res) => {
     const locale = tenant?.locale || undefined;
 
     const doc = new PDFDocument({ margin: 50, size: 'A4' });
+    applyRupeeCapableFonts(doc); // ₹ glyph fix
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename=${type}-report.pdf`);
     doc.pipe(res);

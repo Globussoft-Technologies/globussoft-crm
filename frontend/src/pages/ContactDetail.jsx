@@ -224,7 +224,7 @@ const ContactDetail = () => {
           ) : (
             <div style={{ borderLeft: '2px solid var(--border-color)', paddingLeft: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
               {activities.map(act => {
-                const dotColor = act.type === 'Email' ? '#3b82f6' : act.type === 'Call' ? '#f59e0b' : act.type === 'Meeting' ? '#8b5cf6' : '#10b981';
+                const dotColor = act.type === 'Email' ? '#3b82f6' : act.type === 'Call' ? '#f59e0b' : act.type === 'Meeting' ? '#8b5cf6' : act.type === 'Booking' ? '#14b8a6' : act.type === 'Invoice' ? '#eab308' : '#10b981';
                 return (
                   <div key={act.id} style={{ position: 'relative' }}>
                     <div style={{ position: 'absolute', left: '-1.85rem', top: '0.25rem', width: '12px', height: '12px', borderRadius: '50%', backgroundColor: dotColor }} />

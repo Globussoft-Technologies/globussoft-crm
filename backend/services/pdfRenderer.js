@@ -34,6 +34,49 @@ function sanitizePdfText(s) {
   return String(s == null ? "" : s).replace(/\s*(?:→|->|⟶|➝|➔|⇒|=>)\s*/g, " › ");
 }
 
+// Re-register the embedded Poppins family UNDER the built-in Helvetica names so
+// EVERY doc.font("Helvetica" | "Helvetica-Bold" | "Helvetica-Oblique") call in a
+// renderer resolves to a font that HAS the ₹ (U+20B9) glyph. PDFKit's built-in
+// Helvetica is WinAnsi-encoded and renders ₹ as "¹", so any currency-bearing PDF
+// must call this immediately after `new PDFDocument(...)`. (This was originally
+// inlined only in renderTravelQuotePdf; promoted to a shared helper so the
+// itinerary / invoice / PO / patient / POS PDFs stop printing "¹" for rupees.)
+//
+// NODE_ENV==='test' keeps the built-in Helvetica so the unit tests' naive PDF
+// text extractor can still read the content (an embedded TrueType subset encodes
+// glyph-ids, not readable text). Best-effort: missing font files leave the
+// built-in Helvetica in place. Returns the heading display-font name
+// ("RupeeDisplay" when the bold weight embedded, else "Helvetica-Bold").
+function applyRupeeCapableFonts(doc) {
+  let displayFont = "Helvetica-Bold";
+  try {
+    const fsMod = require("fs");
+    if (process.env.NODE_ENV !== "test"
+      && fsMod.existsSync(QUOTE_FONTS.regular) && fsMod.existsSync(QUOTE_FONTS.semibold)) {
+      doc.registerFont("Helvetica", QUOTE_FONTS.regular);
+      doc.registerFont("Helvetica-Bold", QUOTE_FONTS.semibold);
+      doc.registerFont("Helvetica-Oblique", QUOTE_FONTS.regular);
+      // PDFKit pre-caches the default "Helvetica" at construction, which would
+      // SHADOW the registration above (the regular weight kept rendering the
+      // built-in WinAnsi font, so ₹ stayed "¹" in unit/subtotal cells — only the
+      // never-pre-cached bold totals switched). Drop the cached standard families
+      // so the next doc.font(...) loads the registered Poppins.
+      if (doc._fontFamilies) {
+        delete doc._fontFamilies["Helvetica"];
+        delete doc._fontFamilies["Helvetica-Bold"];
+        delete doc._fontFamilies["Helvetica-Oblique"];
+      }
+      if (fsMod.existsSync(QUOTE_FONTS.bold)) {
+        doc.registerFont("RupeeDisplay", QUOTE_FONTS.bold);
+        displayFont = "RupeeDisplay";
+      }
+    }
+  } catch (_e) {
+    // best-effort — fall back to the built-in Helvetica
+  }
+  return displayFont;
+}
+
 // Slice 8 of the #902 GST & Compliance module — surfaces per-line SAC
 // codes + CGST/SGST/IGST split + HSN/SAC summary in the travel invoice
 // PDF. We require the two helpers as `module.exports.<fn>` indirection
@@ -1244,6 +1287,7 @@ async function renderConsentPdf(consent, patient, service, clinic, signatureData
 
 async function renderBrandedInvoicePdf(invoice, contact, clinic) {
   const doc = new PDFDocument({ size: "A4", margin: 50 });
+  applyRupeeCapableFonts(doc); // ₹ glyph fix — built-in Helvetica renders ₹ as "¹"
   const bufPromise = streamToBuffer(doc);
 
   const c = safeClinic(clinic);
@@ -1370,6 +1414,7 @@ async function renderPatientSummaryPdf({
   photoBuffers,
 }) {
   const doc = new PDFDocument({ size: "A4", margin: 50, bufferPages: true });
+  applyRupeeCapableFonts(doc); // ₹ glyph fix — built-in Helvetica renders ₹ as "¹"
   const bufPromise = streamToBuffer(doc);
   const pageRight = doc.page.width - doc.page.margins.right;
   const leftX = 50;
@@ -2299,6 +2344,7 @@ function generatePosReceiptPdf(opts) {
   }
 
   const doc = new PDFDocument({ size: "A4", margin: 50 });
+  applyRupeeCapableFonts(doc); // ₹ glyph fix — built-in Helvetica renders ₹ as "¹"
   const bufPromise = streamToBuffer(doc);
 
   // ── Top header: tenant name + address + invoice meta ──────────────
@@ -2776,6 +2822,7 @@ async function renderTravelItineraryPdf(itinerary, contact, opts = {}) {
     : null;
 
   const doc = new PDFDocument({ size: "A4", margin: 50 });
+  applyRupeeCapableFonts(doc); // ₹ glyph fix — built-in Helvetica renders ₹ as "¹"
   const bufPromise = streamToBuffer(doc);
 
   // PRD §4.7 (gap A3) — per-viewer watermark, opt-in via
@@ -2972,6 +3019,7 @@ async function renderTravelStallPersonalisedPdf(payload) {
     : null;
 
   const doc = new PDFDocument({ size: "A4", margin: 50 });
+  applyRupeeCapableFonts(doc); // ₹ glyph fix — built-in Helvetica renders ₹ as "¹"
   const bufPromise = streamToBuffer(doc);
 
   // Brand header band — STUB: placeholder until Q22 brand assets land.
@@ -4350,6 +4398,7 @@ async function renderTravelInvoicePdf(opts) {
       Producer: `Globussoft CRM (brand-kit: ${brandSource})`,
     },
   });
+  applyRupeeCapableFonts(doc); // ₹ glyph fix — built-in Helvetica renders ₹ as "¹"
   const bufPromise = streamToBuffer(doc);
 
   doc.rect(0, 0, doc.page.width, 60).fill(accent);
@@ -4686,6 +4735,7 @@ async function renderSupplierPo(opts) {
     margin: 50,
     info: { Producer: "Globussoft CRM (supplier-po)" },
   });
+  applyRupeeCapableFonts(doc); // ₹ glyph fix — built-in Helvetica renders ₹ as "¹"
   const bufPromise = streamToBuffer(doc);
 
   // ── Header band ──
@@ -4841,6 +4891,10 @@ module.exports = {
   renderBrandedInvoicePdf,
   renderPatientSummaryPdf,
   generatePosReceiptPdf,
+  // Shared ₹-glyph fix — register the embedded Poppins family under the
+  // Helvetica names so route-level PDFs (billing / estimates / reports /
+  // wellness) that build their own PDFDocument can fix the "¹" rupee too.
+  applyRupeeCapableFonts,
   // Exported for vitest coverage of the customer-facing zylu mask.
   scrubZyluText,
   scrubZyluSource,

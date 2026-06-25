@@ -39,7 +39,7 @@
 //     1.5s if the user clicks twice fast).
 
 import { useEffect, useState } from "react";
-import { Bell, CalendarClock, AlertTriangle, CheckCircle2, Clock } from "lucide-react";
+import { Bell, CalendarClock, AlertTriangle, CheckCircle2, Clock, Send } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { formatMoney } from "../../utils/money";
@@ -133,6 +133,9 @@ export default function MilestoneTracker() {
   const [subBrand, setSubBrand] = useState("");
   const [overdueOnly, setOverdueOnly] = useState(false);
   const [offset, setOffset] = useState(0);
+  // Per-row "Notify" in-flight + just-sent markers, keyed by milestone id.
+  const [notifying, setNotifying] = useState({});
+  const [notified, setNotified] = useState({});
 
   const load = () => {
     setLoading(true);
@@ -183,6 +186,44 @@ export default function MilestoneTracker() {
   useEffect(() => {
     setOffset(0);
   }, [status, within, subBrand, overdueOnly]);
+
+  // Operator "Notify" — send an on-demand payment reminder to the customer
+  // behind this milestone (email + WhatsApp, best-effort, server-side). Only
+  // offered for not-yet-settled milestones (pending/partial/overdue).
+  const notifyCustomer = (m) => {
+    if (!m || notifying[m.id]) return;
+    setNotifying((prev) => ({ ...prev, [m.id]: true }));
+    fetchApi(`/api/travel/payment-schedules/${m.id}/remind`, { method: "POST" })
+      .then((res) => {
+        const channels = Array.isArray(res?.channels) ? res.channels : [];
+        const who = res?.contactName || m.contactName || "the customer";
+        if (res?.ok && channels.length > 0) {
+          const linkNote = res?.payUrl ? " with a pay link" : "";
+          notify.success(`Reminder${linkNote} sent to ${who} via ${channels.join(" + ")}.`);
+          setNotified((prev) => ({ ...prev, [m.id]: true }));
+        } else {
+          // Recipient exists but no channel actually delivered (e.g. email not
+          // configured + WhatsApp not linked).
+          notify.info(`No channel could reach ${who} — check email/WhatsApp setup.`);
+        }
+      })
+      .catch((err) => {
+        // fetchApi auto-toasts; add an explicit message for the common 422
+        // (no contact channel) so the operator knows WHY it didn't send.
+        if (err?.status === 422) {
+          notify.error("This customer has no email or phone on file to notify.");
+        } else if (err?.status >= 500) {
+          notify.error("Failed to send reminder — please try again.");
+        }
+      })
+      .finally(() => {
+        setNotifying((prev) => {
+          const next = { ...prev };
+          delete next[m.id];
+          return next;
+        });
+      });
+  };
 
   const handleNext = () => {
     if (offset + PAGE_SIZE >= total) return;
@@ -335,11 +376,13 @@ export default function MilestoneTracker() {
               <tr>
                 <th style={th}>Invoice #</th>
                 <th style={th}>Sub-brand</th>
+                <th style={th}>Customer</th>
                 <th style={th}>Milestone #</th>
                 <th style={th}>Due date</th>
                 <th style={th}>Expected amount</th>
                 <th style={th}>Status</th>
                 <th style={th}>Days until due</th>
+                <th style={th}>Action</th>
               </tr>
             </thead>
             <tbody>
@@ -349,6 +392,20 @@ export default function MilestoneTracker() {
                     {m.invoiceNum || `#${m.invoiceId}`}
                   </td>
                   <td style={td}>{m.subBrand || "—"}</td>
+                  <td style={td}>
+                    {m.contactName || m.contactPhone || m.contactEmail ? (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                        <span style={{ fontWeight: 600 }}>{m.contactName || "Unnamed"}</span>
+                        {(m.contactPhone || m.contactEmail) && (
+                          <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+                            {m.contactPhone || m.contactEmail}
+                          </span>
+                        )}
+                      </div>
+                    ) : (
+                      "—"
+                    )}
+                  </td>
                   <td style={td}>{m.milestoneOrder ?? "—"}</td>
                   <td style={td}>{formatDate(m.dueDate)}</td>
                   <td style={td}>
@@ -367,6 +424,27 @@ export default function MilestoneTracker() {
                   </td>
                   <td style={{ ...td, ...daysCellStyle(m.daysUntilDue) }}>
                     {daysCellText(m.daysUntilDue)}
+                  </td>
+                  <td style={td}>
+                    {m.status === "paid" || m.status === "waived" ? (
+                      <span style={{ color: "var(--text-secondary)" }}>—</span>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => notifyCustomer(m)}
+                        disabled={Boolean(notifying[m.id])}
+                        aria-label={`Notify customer for ${m.invoiceNum || `#${m.invoiceId}`} milestone ${m.milestoneOrder ?? ""}`}
+                        title="Send a payment reminder to the customer (email + WhatsApp)"
+                        style={{
+                          ...notifyBtn,
+                          opacity: notifying[m.id] ? 0.5 : 1,
+                          cursor: notifying[m.id] ? "not-allowed" : "pointer",
+                        }}
+                      >
+                        <Send size={13} />
+                        {notifying[m.id] ? "Sending…" : notified[m.id] ? "Sent ✓" : "Notify"}
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -531,4 +609,17 @@ const statusBadge = {
   fontSize: 11,
   fontWeight: 600,
   textTransform: "capitalize",
+};
+const notifyBtn = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 5,
+  padding: "5px 10px",
+  borderRadius: 6,
+  fontSize: 12,
+  fontWeight: 600,
+  background: "var(--primary-color, var(--accent-color))",
+  color: "#fff",
+  border: "none",
+  whiteSpace: "nowrap",
 };

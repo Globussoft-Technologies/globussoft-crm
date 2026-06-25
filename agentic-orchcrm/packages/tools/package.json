@@ -1,0 +1,14 @@
+{
+  "name": "@agentic-os/tools",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@agentic-os/shared": "*",
+    "@agentic-os/providers": "*",
+    "puppeteer": "^24.10.0"
+  }
+}

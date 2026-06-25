@@ -1,0 +1,15 @@
+{
+  "name": "@agentic-os/core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@agentic-os/shared": "*",
+    "@agentic-os/providers": "*",
+    "@agentic-os/tools": "*",
+    "@agentic-os/sectors": "*"
+  }
+}

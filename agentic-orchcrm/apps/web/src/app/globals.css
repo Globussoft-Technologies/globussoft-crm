@@ -1,0 +1,80 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body {
+  background: #070b14;
+  min-height: 100vh;
+}
+
+body {
+  background:
+    radial-gradient(900px 500px at 100% -5%, rgba(109, 139, 255, 0.08), transparent 60%),
+    radial-gradient(800px 500px at -10% 110%, rgba(176, 123, 255, 0.06), transparent 55%),
+    #070b14;
+}
+
+/* Thin scrollbars for panels. */
+.scroll-thin::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.scroll-thin::-webkit-scrollbar-thumb {
+  background: #1f2a40;
+  border-radius: 8px;
+}
+.scroll-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Subtle entrance for streamed/loaded content. */
+@keyframes fadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.fade-up {
+  animation: fadeUp 0.22s ease-out both;
+}
+
+/* Gentle drifting ambient glow behind everything. */
+@keyframes drift {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1);
+    opacity: 0.7;
+  }
+  50% {
+    transform: translate3d(2%, -3%, 0) scale(1.05);
+    opacity: 1;
+  }
+}
+body::before {
+  content: '';
+  position: fixed;
+  inset: -20% -10% auto auto;
+  width: 50vw;
+  height: 50vw;
+  pointer-events: none;
+  z-index: 0;
+  background: radial-gradient(circle, rgba(109, 139, 255, 0.1), transparent 60%);
+  animation: drift 18s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  body::before {
+    animation: none;
+  }
+  .fade-up {
+    animation: none;
+  }
+}

@@ -1,0 +1,38 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+.next/
+*.tsbuildinfo
+
+# Env / secrets
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Drizzle
+packages/db/drizzle/
+
+# Generated brochures / artifacts
+apps/web/public/generated/
+generated/
+
+# Scratch / local test artifacts
+temp/
+prompt_ref/
+# Stray generated brochures dropped in the repo root
+/brochure-run_*.pdf
+# Runtime per-tier model selection (UI-managed, machine-local)
+.model-routing.json

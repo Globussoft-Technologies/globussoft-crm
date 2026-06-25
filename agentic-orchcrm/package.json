@@ -1,0 +1,28 @@
+{
+  "name": "agentic-os",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Agentic OS — a provider-agnostic, sector-adaptable multi-agent orchestration platform. A human assigns one goal to the CEO agent; the CEO autonomously plans, delegates to specialists, and returns the result.",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "demo": "tsx apps/orchestrator/src/demo.ts",
+    "worker": "tsx apps/orchestrator/src/index.ts",
+    "web": "npm run dev --workspace apps/web",
+    "db:generate": "drizzle-kit generate --config packages/db/drizzle.config.ts",
+    "db:migrate": "tsx packages/db/src/migrate.ts",
+    "typecheck": "tsc --noEmit -p packages/core/tsconfig.json && tsc --noEmit -p packages/db/tsconfig.json"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.7",
+    "drizzle-kit": "^0.30.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

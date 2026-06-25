@@ -1,0 +1,15 @@
+{
+  "name": "@agentic-os/db",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@agentic-os/shared": "*",
+    "@agentic-os/core": "*",
+    "drizzle-orm": "^0.38.3",
+    "postgres": "^3.4.5"
+  }
+}

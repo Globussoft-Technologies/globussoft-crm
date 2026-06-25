@@ -197,11 +197,26 @@ backend/uploads/wa-web/
 # co-development convenience but never pushed to this repo.
 landing/
 
-# Agentic-OS brochure engine — vendored sibling workspace driven by
-# backend/services/brochureEngineBridge.js. Lives at the repo root for the
-# bridge's `path.resolve(__dirname, "..", "..", "agentic-orchcrm")` lookup.
-# Source is ~25MB but with node_modules + bundled Chromium it balloons to
-# ~495MB; secrets in agentic-orchcrm/.env should never be committed
-# regardless. Per-system setup instructions live in
-# docs/AGENTIC_ENGINE_SETUP.md.
-agentic-orchcrm/
+# ── Agentic-OS brochure engine (vendored INTO this repo) ───────────────────
+# The engine SOURCE (~0.9MB) is committed as part of the CRM, so a fresh clone
+# already has it — no separate engine clone needed. Driven by
+# backend/services/brochureEngineBridge.js; setup in docs/AGENTIC_ENGINE_SETUP.md.
+# We ignore ONLY its deps / secrets / generated artifacts. The engine's own
+# agentic-orchcrm/.gitignore also covers nested cases (belt-and-suspenders).
+# ⚠ NEVER commit agentic-orchcrm/.env — it holds provider API keys.
+agentic-orchcrm/**/node_modules/
+agentic-orchcrm/**/.env
+agentic-orchcrm/**/.env.local
+agentic-orchcrm/**/.env.*.local
+agentic-orchcrm/**/dist/
+agentic-orchcrm/**/.next/
+agentic-orchcrm/**/*.tsbuildinfo
+agentic-orchcrm/**/*.log
+agentic-orchcrm/**/generated/
+agentic-orchcrm/public/generated/
+agentic-orchcrm/apps/web/public/generated/
+agentic-orchcrm/**/temp/
+agentic-orchcrm/**/prompt_ref/
+agentic-orchcrm/packages/db/drizzle/
+agentic-orchcrm/**/.model-routing.json
+agentic-orchcrm/brochure-run_*.pdf

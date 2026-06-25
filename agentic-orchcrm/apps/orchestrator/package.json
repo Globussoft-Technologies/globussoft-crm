@@ -1,0 +1,15 @@
+{
+  "name": "@agentic-os/orchestrator-app",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "demo": "tsx src/demo.ts",
+    "start": "tsx src/index.ts"
+  },
+  "dependencies": {
+    "@agentic-os/shared": "*",
+    "@agentic-os/core": "*",
+    "@agentic-os/db": "*"
+  }
+}

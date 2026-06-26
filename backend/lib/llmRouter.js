@@ -69,7 +69,7 @@ const TASK_ROUTING = {
   reasoning: { primary: "claude-opus-4-7", fallback: "gpt-4" },
   "talking-points": { primary: "claude-opus-4-7", fallback: "gpt-4" },
   "form-vs-call": { primary: "claude-opus-4-7", fallback: "gpt-4" },
-  "bulk-text": { primary: "gemini-flash", fallback: "claude-haiku" },
+  "bulk-text": { primary: "gemini-flash", fallback: "groq-llama" },
   "call-summary": { primary: "gemini-flash", fallback: null },
   // Itinerary-suggest (PRD_TRAVEL_ITINERARY_UPGRADES FR-3.6 + AI_SURFACES §3
   // table). 2K in / 4K out — larger out than bulk-text because the full
@@ -87,13 +87,13 @@ const TASK_ROUTING = {
   // ~0.5K in / 0.5K out — routed to gemini-flash for low-cost bulk-shape
   // calls. Falls back to the deterministic template library in
   // backend/lib/tripCountdownContent.js until Q11 GEMINI_API_KEY lands.
-  "trip-countdown": { primary: "gemini-flash", fallback: "claude-haiku" },
+  "trip-countdown": { primary: "gemini-flash", fallback: "groq-llama" },
   // Pay-or-cancel deposit-deadline reminder (2026-06-16). Short, courteous-but-
   // urgent copy (subject + body) keyed to days-until-deadline, telling the
   // customer to pay the 50% deposit before the cut-off. Same shape/cost profile
   // as trip-countdown → gemini-flash; falls back to the deterministic template
   // library in backend/lib/paymentDeadlineContent.js until Q11 keys land.
-  "payment-reminder": { primary: "gemini-flash", fallback: "claude-haiku" },
+  "payment-reminder": { primary: "gemini-flash", fallback: "groq-llama" },
   // WhatsApp lead qualification (2026-06-19). Classifies an inbound WhatsApp
   // conversation as a travel/business enquiry vs personal/spam and extracts
   // {isEnquiry, confidence, destination, dates, pax, intent, suggestedSubBrand}
@@ -102,7 +102,7 @@ const TASK_ROUTING = {
   // lib/travelWhatsappLeadCapture.js whenever the call stubs (no Q11 key / test).
   "whatsapp-lead-qualify": {
     primary: "gemini-flash",
-    fallback: "claude-haiku",
+    fallback: "groq-llama",
   },
   // Marketing-flyer-copy (PRD_TRAVEL_MARKETING_FLYER FR-3.6.1 + AC-6.8).
   // 1K in / 1K out — short-form headline + body + CTA JSON. Routed to
@@ -111,7 +111,7 @@ const TASK_ROUTING = {
   // (S15 — same commit); this scaffold's stub-text path returns a tagged
   // synthetic string for routeRequest text-envelope callers. Real call
   // gated on Q-AI-3 / Q11 GEMINI_API_KEY.
-  "marketing-flyer-copy": { primary: "gemini-flash", fallback: "claude-haiku" },
+  "marketing-flyer-copy": { primary: "gemini-flash", fallback: "groq-llama" },
   // Marketing-flyer-image (PRD_TRAVEL_MARKETING_FLYER FR-3.6.3).
   // AI image-gen for flyer hero blocks. Primary: DALL-E 3 (OpenAI API).
   // Fallback: Stability AI XL. Structured-image path lives in
@@ -164,7 +164,7 @@ const TASK_ROUTING = {
   // generation; falls back to claude-haiku on quota / 404.
   "landing-page-generate": {
     primary: "gemini-flash",
-    fallback: "claude-haiku",
+    fallback: "groq-llama",
   },
   // Catch-all for unrecognized tasks → reasoning model (Claude)
   // matches PRD's preference for a high-quality default.
@@ -186,6 +186,7 @@ const ENV_FOR_MODEL = {
   "gpt-4o-search": "OPENAI_API_KEY",
   "gemini-flash": "GEMINI_API_KEY",
   "claude-haiku": "ANTHROPIC_API_KEY",
+  "groq-llama": "groq",
   // S16 — image-gen providers for marketing-flyer-image task class
   // (PRD_TRAVEL_MARKETING_FLYER FR-3.6.3). DALL-E 3 reuses the OpenAI
   // key (same env var as gpt-4); Stability XL needs its own dedicated key.
@@ -577,6 +578,8 @@ function estimateTokens(s) {
 const MODEL_ID_ENV = {
   "claude-opus-4-7": ["LLM_MODEL_CLAUDE_OPUS", "claude-opus-4-8"],
   "claude-haiku": ["LLM_MODEL_CLAUDE_HAIKU", "claude-haiku-4-5-20251001"],
+  // llama-3.3-70b-versatile: best Groq model for multilingual (incl. Indian regional languages)
+  "groq-llama": ["LLM_MODEL_GROQ", "llama-3.3-70b-versatile"],
   "gpt-4": ["LLM_MODEL_GPT", "gpt-4o"],
   // Web-search-enabled OpenAI model (browses the live web at query time).
   "gpt-4o-search": ["LLM_MODEL_GPT_SEARCH", "gpt-4o-search-preview"],
@@ -596,6 +599,7 @@ function providerForModel(label) {
   if (label.startsWith("gpt")) return "openai";
   if (label.startsWith("gemini")) return "gemini";
   if (label.startsWith("perplexity") || label === "sonar") return "perplexity";
+  if (label.startsWith("groq")) return "groq";
   return "anthropic";
 }
 
@@ -815,6 +819,7 @@ async function realProviderCall({ task, model, payload, tenantId }) {
   }
   else if (provider === "perplexity") out = await callOpenAICompatible("https://api.perplexity.ai", modelId, system, user, apiKey, maxTokens);
   else if (provider === "gemini") out = await callGemini(modelId, system, user, apiKey, maxTokens);
+  else if (provider === "groq") out = await callOpenAICompatible("https://api.groq.com/openai/v1", modelId, system, user, apiKey, maxTokens);
   else throw new Error(`unknown provider for ${model}`);
 
   const tokensIn =

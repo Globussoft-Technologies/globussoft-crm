@@ -12,6 +12,61 @@
 import { useEffect, useState } from "react";
 import { destinationTheme } from "./destinationTheme";
 
+// ── Server-side Pexels proxy (primary source) ──────────────────────────────
+//
+// The keyless Wikipedia path below stays as a fallback, but the PRIMARY source
+// is now our backend proxy GET /api/travel/destination-photos/public, which
+// calls Pexels with a server-held key and a shared 24h cache. That removes the
+// "images vanish again and again" flicker — Wikipedia rate-limits anonymous
+// API traffic and the client did no caching, so the hero (action API) and the
+// side rails (REST media-list API) would intermittently come back empty.
+//
+// We also add a small client-side cache so a destination isn't re-fetched on
+// every component remount within a session.
+const PROXY_ENDPOINT = "/api/travel/destination-photos/public";
+const _proxyCache = new Map(); // `${q}::${limit}` → Promise<Photo[]>
+
+/**
+ * Fetch destination photos from our backend Pexels proxy. Returns an array of
+ * { url, caption, description } (possibly empty). Never throws — resolves to []
+ * on any failure so callers fall back to Wikipedia. `opts.fetchImpl` injects a
+ * stub for tests; when omitted in a non-browser/test env it no-ops to [].
+ */
+export async function fetchProxyPhotos(destination, opts = {}) {
+  const fetchImpl = opts.fetchImpl || (typeof fetch !== "undefined" ? fetch : null);
+  const q = String(destination || "").trim();
+  const limit = opts.limit || 12;
+  if (!q || !fetchImpl) return [];
+  const key = `${q.toLowerCase()}::${limit}`;
+  if (_proxyCache.has(key)) return _proxyCache.get(key);
+  const p = (async () => {
+    try {
+      const res = await fetchImpl(
+        `${PROXY_ENDPOINT}?q=${encodeURIComponent(q)}&limit=${limit}`,
+      );
+      if (!res || !res.ok) return [];
+      const data = await res.json();
+      const photos = Array.isArray(data && data.photos) ? data.photos : [];
+      return photos
+        .map((x) => ({
+          url: x.url,
+          caption: x.caption || q,
+          description: x.description || null,
+        }))
+        .filter((x) => x.url);
+    } catch (_e) {
+      return [];
+    }
+  })();
+  // Cache the in-flight promise; evict on empty resolution so a transient miss
+  // doesn't pin "no photos" for the session (a later mount can retry).
+  _proxyCache.set(key, p);
+  p.then((arr) => {
+    if (!arr.length) _proxyCache.delete(key);
+  });
+  return p;
+}
+
 // Best Wikipedia article title for a destination: the curated wikiTitle when
 // known, else the destination cleaned to its first segment (drop ", France",
 // parentheticals, trailing descriptors) so the lookup has a fighting chance.
@@ -154,9 +209,16 @@ export function useDestinationPhoto(destination) {
     let alive = true;
     setPhotoUrl(null);
     if (!destination) return undefined;
-    fetchDestinationPhoto(destination).then((url) => {
-      if (alive) setPhotoUrl(url);
-    });
+    // Pexels proxy first (1 landscape shot for the hero); fall back to the
+    // keyless Wikipedia lead image if the proxy has no key / misses.
+    fetchProxyPhotos(destination, { limit: 1 })
+      .then((arr) => {
+        if (arr.length && arr[0].url) return arr[0].url;
+        return fetchDestinationPhoto(destination);
+      })
+      .then((url) => {
+        if (alive) setPhotoUrl(url || null);
+      });
     return () => { alive = false; };
   }, [destination]);
   return photoUrl;
@@ -180,7 +242,9 @@ export function useMultiDestinationGallery(destinations) {
     if (!list.length) return undefined;
     Promise.all(
       list.map((d) =>
-        fetchDestinationGallery(d, { limit: 4 })
+        // Pexels proxy first per city; Wikipedia REST fallback on a miss.
+        fetchProxyPhotos(d, { limit: 4 })
+          .then((g) => (g.length ? g : fetchDestinationGallery(d, { limit: 4 })))
           .then((g) => g.map((x) => ({ ...x, city: d })))
           .catch(() => []),
       ),
@@ -209,9 +273,13 @@ export function useDestinationGallery(destination) {
     let alive = true;
     setUrls([]);
     if (!destination) return undefined;
-    fetchDestinationGallery(destination).then((u) => {
-      if (alive) setUrls(u);
-    });
+    // Pexels proxy first (a set of landscape shots for the side rails); fall
+    // back to the keyless Wikipedia REST media-list if the proxy misses.
+    fetchProxyPhotos(destination, { limit: 16 })
+      .then((arr) => (arr.length ? arr : fetchDestinationGallery(destination)))
+      .then((u) => {
+        if (alive) setUrls(u);
+      });
     return () => { alive = false; };
   }, [destination]);
   return urls;

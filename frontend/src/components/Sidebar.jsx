@@ -520,6 +520,7 @@ const Sidebar = ({
     requiredPermission,
     count,
     matchPaths = [],
+    end = false,
   }) => {
     if (adminOnly && !isAdmin) return null;
     if (managerOnly && !isManager) return null;
@@ -544,11 +545,12 @@ const Sidebar = ({
     return (
       <NavLink
         to={to}
+        end={end}
         className={({ isActive }) => {
           const isPathMatch = matchPaths.some(
             (path) => location.pathname === path,
           );
-          const isSegmentMatch = segmentMatches(location.pathname, to);
+          const isSegmentMatch = end ? false : segmentMatches(location.pathname, to);
           const active = isActive || isPathMatch || isSegmentMatch;
           return `nav-link ${active ? "active" : ""}`;
         }}
@@ -1608,8 +1610,10 @@ function renderTravelNav({
   // "Admin" / "Platform" revoked no longer sees orphan headings.
   return (
     <>
-      <Link to="/travel" icon={Compass} label="Dashboard" requiredPermission={{ module: "reports", action: "read" }} />
-      <Link to="/travel/leads" icon={UserPlus} label="Leads" requiredPermission={{ module: "leads", action: "read" }} />
+      <Link to="/travel" end icon={Compass} label="Dashboard" requiredPermission={{ module: "reports", action: "read" }} />
+      {/* "Leads" lives in the Sales-pipeline section below (next to Contacts +
+          Pipeline). The duplicate top-level Leads link was removed — it pointed
+          to the same /travel/leads page. */}
       <Link to="/travel/inbound-leads" icon={InboxIcon} label="Inbound Leads" requiredPermission={{ module: "inbound_leads", action: "read" }} />
       <Link to="/travel/diagnostics" icon={ClipboardCheck} label="Diagnostics" requiredPermission={{ module: "diagnostics", action: "read" }} />
       <Link to="/travel/itineraries" icon={MapIcon} label="Itineraries" requiredPermission={{ module: "itineraries", action: "read" }} />
@@ -1671,7 +1675,7 @@ function renderTravelNav({
           each entry. */}
       {inBrand("visasure") && (
         <Section label="Visa Sure">
-          <Link to="/travel/visa" icon={Stamp} label="Dashboard" requiredPermission={{ module: "visa", action: "read" }} />
+          <Link to="/travel/visa" end icon={Stamp} label="Dashboard" requiredPermission={{ module: "visa", action: "read" }} />
           <Link to="/travel/visa/applications" icon={BadgeCheck} label="Applications" requiredPermission={{ module: "visa", action: "read" }} />
           <Link to="/travel/visa/checklists" icon={ClipboardList} label="Checklists" requiredPermission={{ module: "visa", action: "read" }} />
           <Link to="/travel/visa/embassy-rules" icon={Shield} label="Embassy Rules" requiredPermission={{ module: "visa", action: "manage" }} />
@@ -1680,7 +1684,7 @@ function renderTravelNav({
 
       {inBrand("travelstall") && (
         <Section label="Travel Stall">
-          <Link to="/travel-stall" icon={Sparkles} label="Dashboard" requiredPermission={{ module: "reports", action: "read" }} />
+          <Link to="/travel-stall" end icon={Sparkles} label="Dashboard" requiredPermission={{ module: "reports", action: "read" }} />
         </Section>
       )}
 
@@ -1710,6 +1714,7 @@ function renderTravelNav({
         <Link to="/travel/milestones" icon={Clock} label="Milestones" requiredPermission={{ module: "invoices", action: "read" }} />
         <Link to="/travel/payables" icon={CreditCard} label="Payables" requiredPermission={{ module: "payables", action: "read" }} />
         <Link to="/payments" icon={IndianRupee} label="Payments received" requiredPermission={{ module: "payments", action: "read" }} />
+        <Link to="/expenses" icon={WalletIcon} label="Expense Management" requiredPermission={{ module: "expenses", action: "read" }} />
       </Section>
 
       {/* The generic /reports link was removed here — travel uses its own
@@ -1778,8 +1783,8 @@ function renderGenericNav({
           the same ground, so the Home link is hidden for them to keep
           their nav focused. Mirrors the catalog-level hideForAdminTier
           flag used by the wellness sidebar. */}
-      {!isAdmin && <Link to="/home" icon={LayoutDashboard} label="Home" />}
-      <Link to="/dashboard" icon={LayoutDashboard} label="Dashboard" />
+      {!isAdmin && <Link to="/home" end icon={LayoutDashboard} label="Home" />}
+      <Link to="/dashboard" end icon={LayoutDashboard} label="Dashboard" />
       {/* AdsGPT + Callified are marketing / call-centre integrations
           intended for ADMIN + MANAGER only. Mirrors the same gate in the
           wellness sidebar; keep both branches in sync. */}

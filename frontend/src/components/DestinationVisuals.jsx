@@ -39,12 +39,10 @@ export function DestinationHero({ destination, photoDestination, children }) {
           style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }}
         />
       )}
-      <span
-        aria-hidden
-        style={{ position: "absolute", top: 8, right: 18, fontSize: 104, lineHeight: 1, opacity: 0.2, filter: "drop-shadow(0 2px 6px rgba(0,0,0,0.35))" }}
-      >
-        {theme.motif}
-      </span>
+      {/* The decorative motif-emoji watermark was removed 2026-06-26 — it read
+          as a washed-out glyph over the photo (especially the ✈️ default for
+          uncurated destinations) and looked like an artefact. theme.motif is
+          still used elsewhere; the hero now relies on the photo + gradient. */}
       <div style={{ position: "absolute", inset: 0, background: "linear-gradient(to top, rgba(10,16,30,0.78), rgba(10,16,30,0.10) 60%, rgba(10,16,30,0.20))" }} />
       <div style={{ position: "relative", padding: "24px 26px", color: "#fff", width: "100%" }}>
         <h1 style={{ margin: 0, display: "flex", alignItems: "center", gap: 10, fontSize: 30, textShadow: "0 1px 5px rgba(0,0,0,0.45)" }}>
@@ -214,11 +212,7 @@ export function DestinationBanner({ destination }) {
           style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }}
         />
       )}
-      <span
-        style={{ position: "absolute", bottom: 6, right: 16, fontSize: 88, lineHeight: 1, opacity: 0.22, filter: "drop-shadow(0 2px 6px rgba(0,0,0,0.3))" }}
-      >
-        {theme.motif}
-      </span>
+      {/* Motif-emoji watermark removed 2026-06-26 (see DestinationHero). */}
     </div>
   );
 }

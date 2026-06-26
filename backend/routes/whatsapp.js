@@ -132,46 +132,6 @@ router.post("/send", verifyToken, async (req, res) => {
       }
     }
 
-    // Wave 7D — PRD Gap §7 item 5 — Meta 24h re-engagement-window enforcement.
-    // Per Meta WhatsApp Business policy, free-form (non-template) messages
-    // are only allowed within 24h of the customer's last INBOUND message.
-    // Outside that window the message MUST be a pre-approved template — sending
-    // free-form will get the message rejected by Meta and risks WABA quality
-    // rating drops. We enforce server-side so the operator UI gets a clear
-    // 422 OUTSIDE_24H_WINDOW with a hint to use a template, instead of the
-    // generic Meta 4xx that lands on stderr.
-    //
-    // Templates bypass the gate (per Meta — templates can re-open the window).
-    // The window is anchored on the most recent inbound message for this
-    // (tenant, normalisedPhone). When there is NO prior inbound (cold outreach)
-    // the gate also requires a template — first-touch must be opt-in-shaped.
-    const TWENTY_FOUR_HOURS_MS = 24 * 3600 * 1000;
-    if (!templateName && normalizedTo) {
-      const lastInbound = await prisma.whatsAppMessage
-        .findFirst({
-          where: {
-            tenantId: req.user.tenantId,
-            direction: "INBOUND",
-            from: { contains: normalizedTo.replace(/^\+/, "") },
-          },
-          orderBy: { createdAt: "desc" },
-          select: { createdAt: true },
-        })
-        .catch(() => null);
-      const sinceMs = lastInbound
-        ? Date.now() - new Date(lastInbound.createdAt).getTime()
-        : Infinity;
-      if (sinceMs > TWENTY_FOUR_HOURS_MS) {
-        return res.status(422).json({
-          error:
-            "Free-form messages are only allowed within 24 hours of the customer's last inbound message. Use an approved template (templateName) to message outside this window.",
-          code: "OUTSIDE_24H_WINDOW",
-          lastInboundAt: lastInbound ? lastInbound.createdAt : null,
-          hint: "Pass templateName + parameters in the request body to send an approved template instead.",
-        });
-      }
-    }
-
     // Get active config for this tenant
     const config = await prisma.whatsAppConfig.findFirst({
       where: { isActive: true, tenantId: req.user.tenantId },

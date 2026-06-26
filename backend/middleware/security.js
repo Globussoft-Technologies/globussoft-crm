@@ -63,7 +63,16 @@ const helmetMiddleware = helmet({
        // client-rendered <x-dc> template. Without this entry the dc-runtime
        // throws "window.React is not available yet" and the page renders as
        // raw {{ tokens }}.
-      scriptSrc: ["'self'", "'unsafe-inline'", "https://cdn.jsdelivr.net", "https://unpkg.com"],
+      // checkout.razorpay.com added 2026-06-26 — the public trip-booking page
+      // (frontend/src/pages/public/TripBooking.jsx) loads the Razorpay checkout
+      // SDK via <script src="https://checkout.razorpay.com/v1/checkout.js">.
+      // checkout.razorpay.com was already in connect-src (for the SDK's XHRs)
+      // but a <script> tag is governed by script-src, NOT connect-src — without
+      // this entry the SDK is blocked and the page shows "Could not load the
+      // payment gateway." This only surfaced on the deployed box (Nginx/Express
+      // serve the SPA WITH this header); the Vite dev server ships no CSP, which
+      // is why local worked and demo didn't.
+      scriptSrc: ["'self'", "'unsafe-inline'", "https://cdn.jsdelivr.net", "https://unpkg.com", "https://checkout.razorpay.com"],
       // 'unsafe-inline' on style-src is REQUIRED today because Vite/React
       // emit inline style attributes (style={{}}). Hash-based or nonce-based
       // tightening requires a build-step change.
@@ -81,9 +90,27 @@ const helmetMiddleware = helmet({
         "https://checkout.razorpay.com",
         "https://api.stripe.com",
         "https://*.sentry.io",
+        // wikipedia/wikimedia added 2026-06-26 — the public quote/itinerary
+        // pages discover destination hero + side-rail photos via a client-side
+        // fetch() to the Wikipedia action + REST APIs
+        // (frontend/src/utils/destinationPhotos.js). fetch() is governed by
+        // connect-src, NOT img-src — without these the metadata call is blocked
+        // on the deployed box and every destination image renders blank (the
+        // thumbnails themselves load from upload.wikimedia.org, already covered
+        // by img-src https:). Only surfaced on demo; the Vite dev server ships
+        // no CSP, which is why local "worked" (modulo Wikipedia's own rate limits).
+        "https://en.wikipedia.org",
+        "https://*.wikimedia.org",
         "wss:",
       ],
       fontSrc: ["'self'", "data:", "https://fonts.gstatic.com"],
+      // frame-src added 2026-06-26 — the Razorpay checkout SDK opens its
+      // payment modal in an iframe served from api.razorpay.com /
+      // checkout.razorpay.com. Without an explicit frame-src the browser
+      // falls back to default-src 'self' and blocks that iframe, so the
+      // checkout modal never renders (the "stuck on processing" symptom on
+      // the public trip-booking page). Scoped to Razorpay's own origins.
+      frameSrc: ["'self'", "https://api.razorpay.com", "https://checkout.razorpay.com"],
       // object-src 'none' kills <object> / <embed> / Flash. Strict.
       objectSrc: ["'none'"],
       // form-action: limit the destination of <form action=> POSTs to self —
@@ -215,7 +242,9 @@ function buildStrictCspHelmet(reportOnly) {
         // directive — the only inline scripts/styles the browser will allow
         // (when enforce-mode flips) are ones explicitly carrying the matching
         // nonce attribute set by the HTML template substitution layer.
-        scriptSrc: ["'self'", "https://cdn.jsdelivr.net", nonceScriptSrc],
+        // checkout.razorpay.com mirrors the transitional CSP above so the
+        // Razorpay SDK <script> survives the eventual CSP_ENFORCE flip.
+        scriptSrc: ["'self'", "https://cdn.jsdelivr.net", "https://checkout.razorpay.com", nonceScriptSrc],
         styleSrc: ["'self'", "https://fonts.googleapis.com", nonceStyleSrc],
         imgSrc: ["'self'", "data:", "blob:", "https:"],
         connectSrc: [
@@ -225,9 +254,16 @@ function buildStrictCspHelmet(reportOnly) {
           "https://checkout.razorpay.com",
           "https://api.stripe.com",
           "https://*.sentry.io",
+          // wikipedia/wikimedia — mirrors the transitional CSP so destination
+          // photo fetches survive the eventual CSP_ENFORCE flip.
+          "https://en.wikipedia.org",
+          "https://*.wikimedia.org",
           "wss:",
         ],
         fontSrc: ["'self'", "data:", "https://fonts.gstatic.com"],
+        // frame-src for the Razorpay payment modal iframe — mirrors the
+        // transitional CSP so the enforce-flip keeps checkout working.
+        frameSrc: ["'self'", "https://api.razorpay.com", "https://checkout.razorpay.com"],
         objectSrc: ["'none'"],
         formAction: ["'self'"],
         // Strict 'none' here (vs 'self' in transitional) — clickjacking defense

@@ -66,7 +66,7 @@ export default function WhatsAppThreads() {
   // ─── "New message" composer state ──────────────────────────
   // Modal-driven outbound-first send. Hits POST /api/whatsapp/send
   // with { to, body }. If the recipient hasn't messaged in 24h the
-  // backend returns 422 OUTSIDE_24H_WINDOW — surfaced in `newError`
+  // Errors are surfaced in `newError`.
   // with hint about templates so the user knows the path forward.
   const [showNewModal, setShowNewModal] = useState(false);
   const [newPhone, setNewPhone] = useState('');
@@ -548,24 +548,6 @@ export default function WhatsAppThreads() {
           body: JSON.stringify({ to: detail.thread.contactPhone, body: outBody }),
         });
       } catch (sendErr) {
-        const msg = sendErr?.message || '';
-        // Meta 24h-window rejection — automatically open the template
-        // picker with this thread's phone pre-filled instead of just
-        // showing a toast. The operator can pick an approved template
-        // and send without leaving the chat.
-        if (msg.includes('OUTSIDE_24H_WINDOW')) {
-          notify.error(
-            'Last inbound from this contact was >24 hours ago. ' +
-            'WhatsApp policy requires you to send an approved template — picker opening now.'
-          );
-          setNewPhone(detail.thread.contactPhone);
-          setNewBody(outBody);
-          setUseTemplate(true);
-          setNewError(null);
-          setShowNewModal(true);
-          setSending(false);
-          return;
-        }
         throw sendErr;
       }
       setReply('');
@@ -641,12 +623,7 @@ export default function WhatsAppThreads() {
       if (resp?.thread?.id) setSelectedId(resp.thread.id);
     } catch (err) {
       const msg = err?.message || 'Failed to send.';
-      if (msg.includes('OUTSIDE_24H_WINDOW')) {
-        setNewError(
-          'This number has not messaged you in the last 24 hours. ' +
-          'Toggle "Use Template" above and pick an approved template instead.'
-        );
-      } else if (msg.includes('CONTACT_OPTED_OUT')) {
+      if (msg.includes('CONTACT_OPTED_OUT')) {
         setNewError('This contact has opted out of WhatsApp messages.');
       } else {
         setNewError(msg);

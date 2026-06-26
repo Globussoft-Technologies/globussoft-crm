@@ -9,7 +9,6 @@ import {
   Edit2,
   Save,
   Trash2,
-  AlertTriangle,
   X,
   Paperclip,
   Smile,
@@ -376,52 +375,8 @@ export default function ThreadDetail() {
               <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', textAlign: 'center', padding: '0.75rem' }}>
                 Reply box disabled — contact has opted out (DPDP/TRAI compliance).
               </p>
-            ) : (() => {
-              // ── 24-hour window check ────────────────────────────
-              // WhatsApp Business policy: free-form text can only be
-              // sent within 24h of the customer's last INBOUND msg.
-              // We compute the freshest inbound time from the loaded
-              // messages and show a yellow banner if it's stale, so
-              // operators don't waste keystrokes on a doomed send.
-              const inbounds = (detail.messages || []).filter((m) => m.direction === 'INBOUND' && (m.metaType || '').toLowerCase() !== 'reaction');
-              const newestInbound = inbounds.length > 0
-                ? Math.max(...inbounds.map((m) => new Date(m.createdAt).getTime()))
-                : 0;
-              const windowExpired = newestInbound === 0 || (Date.now() - newestInbound) > 24 * 3600 * 1000;
-              return (
+            ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  {windowExpired && (
-                    <div style={{
-                      background: 'rgba(245,158,11,0.12)',
-                      border: '1px solid rgba(245,158,11,0.35)',
-                      borderRadius: 8,
-                      padding: '0.55rem 0.8rem',
-                      fontSize: '0.78rem',
-                      display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'space-between',
-                      color: 'var(--text-primary)',
-                    }}>
-                      <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                        <AlertTriangle size={14} color="#d97706" />
-                        24-hour window expired — free-form messages will be rejected by Meta. Use an approved template.
-                      </span>
-                      <button
-                        onClick={() => {
-                          setNewPhone(detail.thread.contactPhone);
-                          setUseTemplate(true);
-                          setNewBody('');
-                          setNewError(null);
-                          setShowNewModal(true);
-                        }}
-                        style={{
-                          padding: '0.3rem 0.7rem', fontSize: '0.75rem', fontWeight: 600,
-                          background: '#d97706', color: '#fff', border: 'none',
-                          borderRadius: 6, cursor: 'pointer', whiteSpace: 'nowrap',
-                        }}
-                      >
-                        Send template →
-                      </button>
-                    </div>
-                  )}
                   {/* WhatsApp-style replying-to preview: shows the quoted
                       message in a green-bordered bar above the textarea
                       with an X to dismiss. Replaces the old text-quote
@@ -607,8 +562,7 @@ export default function ThreadDetail() {
                     </button>
                   </div>
                 </div>
-              );
-            })()}
+            )}
           </footer>
         </>
       )}

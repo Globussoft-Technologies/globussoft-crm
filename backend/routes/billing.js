@@ -5,6 +5,7 @@ const PDFDocument = require("pdfkit");
 // Shared ₹-glyph fix: registers the embedded Poppins family under the Helvetica
 // names so the rupee sign renders as ₹ instead of "¹" (built-in WinAnsi gap).
 const { applyRupeeCapableFonts } = require("../services/pdfRenderer");
+const pdfRenderer = require("../services/pdfRenderer");
 
 const router = express.Router();
 const prisma = require("../lib/prisma");
@@ -894,23 +895,125 @@ router.post("/public/confirm-payment", async (req, res) => {
       }
     }
 
+    // Parse metadata once; we need it both for the Payment update and for the
+    // travel-vertical reconciliation below.
+    let existingMeta = {};
+    try { existingMeta = JSON.parse(payment.metadata || "{}"); } catch (_) {}
+
     if (payment.status !== "SUCCESS") {
+      // MERGE into existing metadata so travelInvoiceId / scheduleId set by
+      // paymentLink.js are not lost when confirm-payment reconciles the record.
       await prisma.payment.update({
         where: { id: payment.id },
         data: {
           status: "SUCCESS",
           paidAt: new Date(),
-          // Keep gatewayId as the plink_ ID so receipt lookup keeps working.
-          // Store the actual razorpay_payment_id in metadata for audit trail.
-          metadata: JSON.stringify({ mode: "payment_link", plinkId: razorpay_payment_link_id, razorpayPaymentId: razorpay_payment_id }),
+          metadata: JSON.stringify({
+            ...existingMeta,
+            mode: "payment_link",
+            plinkId: razorpay_payment_link_id,
+            razorpayPaymentId: razorpay_payment_id,
+          }),
         },
       });
-      // Mark invoice paid
+      // Mark billing invoice paid (non-travel path)
       if (payment.invoiceId) {
         const inv = await prisma.invoice.findFirst({ where: { id: payment.invoiceId } });
         if (inv && inv.status !== "PAID") {
           await prisma.invoice.update({ where: { id: inv.id }, data: { status: "PAID" } });
         }
+      }
+    }
+
+    // Travel invoice reconciliation — the webhook (payments.js) is the primary
+    // reconciler in production, but on localhost the webhook never fires. We also
+    // run it when the payment is already SUCCESS (e.g. webhook beat the callback)
+    // so any missed TravelInvoice status update is corrected when the customer
+    // loads the success page.
+    const travelInvoiceId = Number(existingMeta.travelInvoiceId);
+    if (Number.isFinite(travelInvoiceId)) {
+      try {
+        const travelInv = await prisma.travelInvoice.findFirst({
+          where: { id: travelInvoiceId },
+          select: { id: true, tenantId: true, totalAmount: true, status: true },
+        });
+        if (travelInv && travelInv.status !== "Paid") {
+          // Sum all SUCCESS payments for this travel invoice (includes the one
+          // we just committed above — the update is committed before this read).
+          const paidRows = await prisma.payment.findMany({
+            where: {
+              tenantId: travelInv.tenantId,
+              status: "SUCCESS",
+              OR: [
+                { invoiceId: travelInvoiceId },
+                { metadata: { contains: `"travelInvoiceId":${travelInvoiceId}` } },
+              ],
+            },
+            select: { amount: true },
+          });
+          const totalPaid = paidRows.reduce((s, p) => s + Number(p.amount || 0), 0);
+          const totalDue = Number(travelInv.totalAmount || 0);
+          const newStatus = totalDue > 0 && totalPaid >= totalDue ? "Paid" : "Partial";
+
+          await prisma.travelInvoice.update({
+            where: { id: travelInv.id },
+            data: {
+              status: newStatus,
+              ...(newStatus === "Paid" ? { paidAt: new Date() } : {}),
+            },
+          });
+
+          if (newStatus === "Paid") {
+            // Settle all remaining open milestones
+            await prisma.travelPaymentSchedule.updateMany({
+              where: {
+                invoiceId: travelInv.id,
+                tenantId: travelInv.tenantId,
+                status: { in: ["pending", "partial", "overdue"] },
+              },
+              data: { status: "paid", paidAt: new Date() },
+            }).catch(() => {});
+          } else {
+            // Partial: mark the earliest pending milestone paid with this payment's amount
+            const earliest = await prisma.travelPaymentSchedule.findFirst({
+              where: {
+                invoiceId: travelInv.id,
+                tenantId: travelInv.tenantId,
+                status: { in: ["pending", "partial", "overdue"] },
+              },
+              orderBy: { milestoneOrder: "asc" },
+            });
+            if (earliest) {
+              await prisma.travelPaymentSchedule.update({
+                where: { id: earliest.id },
+                data: { status: "paid", paidAt: new Date(), receivedAmount: String(payment.amount) },
+              }).catch(() => {});
+            }
+          }
+
+          // Final check: if every milestone is now paid, upgrade the invoice to
+          // Paid regardless of SUCCESS-payment sum. This handles cases where a
+          // prior partial payment was processed outside the confirm-payment flow
+          // (e.g. old metadata-corrupted links) but the operator already marked
+          // that milestone paid separately.
+          if (newStatus !== "Paid") {
+            const remaining = await prisma.travelPaymentSchedule.count({
+              where: {
+                invoiceId: travelInv.id,
+                tenantId: travelInv.tenantId,
+                status: { notIn: ["paid"] },
+              },
+            }).catch(() => 1);
+            if (remaining === 0) {
+              await prisma.travelInvoice.update({
+                where: { id: travelInv.id },
+                data: { status: "Paid", paidAt: new Date() },
+              }).catch(() => {});
+            }
+          }
+        }
+      } catch (e) {
+        console.error("[PublicConfirmPayment] travel reconcile failed (non-fatal):", e.message);
       }
     }
 
@@ -942,11 +1045,110 @@ router.get("/public/receipt", async (req, res) => {
     });
     if (!payment) return res.status(404).json({ error: "Paid payment not found for this link" });
 
-    const invoice = await prisma.invoice.findFirst({
-      where: { id: payment.invoiceId },
-      include: { contact: true },
-    });
-    if (!invoice) return res.status(404).json({ error: "Invoice not found" });
+    // Travel payments are tagged by a travelInvoiceId in metadata and have a
+    // NULL Payment.invoiceId so the generic reconciler can't mis-fire. For those
+    // we render the real Travel Invoice PDF (the same renderer the operator uses)
+    // because a one-line receipt is not useful for a travel customer.
+    let meta = {};
+    try { meta = JSON.parse(payment.metadata || "{}"); } catch (_) {}
+    const travelInvoiceId = Number(meta.travelInvoiceId);
+
+    if (Number.isFinite(travelInvoiceId)) {
+      const travelInv = await prisma.travelInvoice.findFirst({
+        where: { id: travelInvoiceId },
+      });
+      if (!travelInv) {
+        return res.status(404).json({ error: "Invoice not found for this payment" });
+      }
+
+      const [lines, contact, tenant, paidAgg] = await Promise.all([
+        prisma.travelInvoiceLine.findMany({
+          where: { invoiceId: travelInv.id, tenantId: travelInv.tenantId },
+          orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
+        }),
+        travelInv.contactId
+          ? prisma.contact.findFirst({
+              where: { id: travelInv.contactId, tenantId: travelInv.tenantId },
+              select: { name: true, email: true, phone: true },
+            }).catch(() => null)
+          : null,
+        prisma.tenant.findUnique({ where: { id: travelInv.tenantId } }).catch(() => null),
+        prisma.payment.aggregate({
+          where: {
+            tenantId: travelInv.tenantId,
+            status: "SUCCESS",
+            OR: [
+              { invoiceId: travelInv.id },
+              { metadata: { contains: `"travelInvoiceId":${travelInv.id}` } },
+            ],
+          },
+          _sum: { amount: true },
+        }).catch(() => ({ _sum: { amount: 0 } })),
+      ]);
+
+      const totalPaid = Number(paidAgg._sum.amount || 0);
+      const totalDue = Number(travelInv.totalAmount || 0);
+      const isFullyPaid = totalDue > 0 && totalPaid >= totalDue;
+
+      // If the invoice has no line items (e.g. a manually-entered total), show
+      // the payable amount as a single line so the PDF doesn't look empty.
+      const pdfLines = lines.length
+        ? lines
+        : totalDue > 0
+          ? [{
+              id: 0,
+              invoiceId: travelInv.id,
+              tenantId: travelInv.tenantId,
+              lineType: "other",
+              description: "Invoice amount",
+              quantity: 1,
+              unitPrice: travelInv.totalAmount,
+              amount: travelInv.totalAmount,
+              currency: travelInv.currency || "INR",
+              sortOrder: 0,
+              gstPercent: 0,
+            }]
+          : lines;
+
+      const pdfBuffer = await pdfRenderer.generateTravelInvoicePdf({
+        invoice: {
+          ...travelInv,
+          status: isFullyPaid ? "Paid" : travelInv.status,
+          contactName: contact?.name || null,
+          contactEmail: contact?.email || null,
+          contactPhone: contact?.phone || null,
+        },
+        lines: pdfLines,
+        tenant,
+      });
+
+      const filename = `${travelInv.invoiceNum || "TINV-" + travelInv.id}.pdf`;
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+      return res.status(200).end(pdfBuffer);
+    }
+
+    // Generic CRM / wellness invoice receipt.
+    const invoice = payment.invoiceId
+      ? await prisma.invoice.findFirst({
+          where: { id: payment.invoiceId },
+          include: { contact: true },
+        })
+      : null;
+
+    // Last-resort fallback: build a minimal receipt from the payment record.
+    const receiptInvoice = invoice || {
+      id: payment.id,
+      invoiceNum: `PAY-${payment.id}`,
+      createdAt: payment.createdAt || payment.paidAt || new Date(),
+      amount: payment.amount,
+      contact: payment.contactId
+        ? await prisma.contact.findFirst({
+            where: { id: payment.contactId },
+            select: { name: true, email: true },
+          }).catch(() => null)
+        : null,
+    };
 
     const tenant = await prisma.tenant.findUnique({
       where: { id: payment.tenantId },
@@ -958,7 +1160,7 @@ router.get("/public/receipt", async (req, res) => {
 
     const doc = new PDFDocument({ size: "A4", margin: 50 });
     applyRupeeCapableFonts(doc); // ₹ glyph fix
-    const filename = `${invoice.invoiceNum || "INV-" + invoice.id}-receipt.pdf`;
+    const filename = `${receiptInvoice.invoiceNum || "INV-" + receiptInvoice.id}-receipt.pdf`;
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
     doc.on("error", (err) => {
@@ -973,17 +1175,17 @@ router.get("/public/receipt", async (req, res) => {
 
     // Invoice details
     doc.fillColor("#000000").fontSize(14).font("Helvetica-Bold")
-      .text(`Invoice: ${invoice.invoiceNum || "N/A"}`, 50, 130);
+      .text(`Invoice: ${receiptInvoice.invoiceNum || "N/A"}`, 50, 130);
     doc.fontSize(10).font("Helvetica").fillColor("#333333");
     doc.text(`Status: PAID`, 50, 155);
-    doc.text(`Issue Date: ${new Date(invoice.createdAt).toLocaleDateString()}`, 50, 172);
+    doc.text(`Issue Date: ${new Date(receiptInvoice.createdAt).toLocaleDateString()}`, 50, 172);
     doc.text(`Paid On: ${new Date(payment.paidAt || Date.now()).toLocaleDateString()}`, 50, 189);
 
     // Contact
     doc.fontSize(12).font("Helvetica-Bold").fillColor("#000000").text("Bill To:", 50, 225);
     doc.fontSize(10).font("Helvetica").fillColor("#333333")
-      .text(invoice.contact?.name || "Customer", 50, 245)
-      .text(invoice.contact?.email || "", 50, 260);
+      .text(receiptInvoice.contact?.name || "Customer", 50, 245)
+      .text(receiptInvoice.contact?.email || "", 50, 260);
 
     doc.moveTo(50, 300).lineTo(545, 300).strokeColor("#cccccc").stroke();
 
@@ -995,12 +1197,12 @@ router.get("/public/receipt", async (req, res) => {
 
     doc.fillColor("#333333").font("Helvetica").fontSize(10)
       .text("Invoice Charge", 60, 360)
-      .text(formatMoney(invoice.amount, currency, locale), 450, 360, { width: 85, align: "right" });
+      .text(formatMoney(receiptInvoice.amount, currency, locale), 450, 360, { width: 85, align: "right" });
 
     doc.moveTo(50, 390).lineTo(545, 390).strokeColor("#cccccc").stroke();
     doc.font("Helvetica-Bold").fontSize(12).fillColor("#000000")
       .text("Total Paid:", 350, 405)
-      .text(formatMoney(invoice.amount, currency, locale), 450, 405, { width: 85, align: "right" });
+      .text(formatMoney(receiptInvoice.amount, currency, locale), 450, 405, { width: 85, align: "right" });
 
     doc.fontSize(8).font("Helvetica").fillColor("#999999")
       .text("Thank you for your payment.", 50, 750, { align: "center" });

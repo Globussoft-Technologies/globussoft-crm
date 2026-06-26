@@ -387,3 +387,36 @@ describe('<InboundLeads /> — STUB marker present in source', () => {
     expect(src).toMatch(/STUB #904 slice/);
   });
 });
+
+describe('<InboundLeads /> — converted state (no double-conversion)', () => {
+  const INBOUND = {
+    id: 42, name: 'Harsha vardhan', email: 'h@x.com',
+    source: 'inbound:whatsapp', createdAt: '2026-06-19T00:00:00Z',
+  };
+
+  it('a contact that already has a Deal shows "Converted" and no Convert button', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (typeof url !== 'string') return Promise.resolve(null);
+      if (url.startsWith('/api/deals')) return Promise.resolve([{ id: 1, contactId: 42 }]);
+      if (url.startsWith('/api/contacts')) return Promise.resolve([INBOUND]);
+      return Promise.resolve(null);
+    });
+    renderPage();
+    expect(await screen.findByText('Harsha vardhan')).toBeInTheDocument();
+    expect(screen.getByText(/Converted/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Convert .* to Lead/i })).toBeNull();
+  });
+
+  it('a not-yet-converted inbound contact still shows the Convert button', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (typeof url !== 'string') return Promise.resolve(null);
+      if (url.startsWith('/api/deals')) return Promise.resolve([]);
+      if (url.startsWith('/api/contacts')) return Promise.resolve([INBOUND]);
+      return Promise.resolve(null);
+    });
+    renderPage();
+    expect(await screen.findByText('Harsha vardhan')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Convert .* to Lead/i })).toBeInTheDocument();
+    expect(screen.queryByText(/Converted/i)).toBeNull();
+  });
+});

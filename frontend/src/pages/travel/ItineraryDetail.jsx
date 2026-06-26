@@ -614,16 +614,6 @@ export default function ItineraryDetail() {
             </div>
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            {canEdit && !isTerminal && (
-              <>
-                <button type="button" onClick={accept} style={primaryBtn} aria-label="Accept itinerary">
-                  <Check size={14} /> Accept
-                </button>
-                <button type="button" onClick={reject} style={dangerBtn} aria-label="Reject itinerary">
-                  <XCircle size={14} /> Reject
-                </button>
-              </>
-            )}
             {canEdit && (
               <button type="button" onClick={regenDraft} style={secondaryBtn} aria-label="Regenerate draft summary">
                 <Sparkles size={14} /> Regenerate draft

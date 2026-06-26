@@ -6831,11 +6831,9 @@ router.post(
             amount: Number(schedule.expectedAmount),
           },
           contact: { name: contact.name, email: contact.email, phone: contact.phone },
+          contactId: contact.id,
           currency: cur,
           tenantName: brand !== "our team" ? brand : undefined,
-          // Travel context → the Payment row is tagged kind='travel-milestone'
-          // so the webhook reconciles it back to THIS milestone + invoice,
-          // not the generic Invoice table.
           travelContext: { scheduleId: schedule.id, travelInvoiceId: schedule.invoice.id },
         });
         if (linkRes && linkRes.url) {
@@ -7033,6 +7031,7 @@ router.post(
         contact: contact
           ? { name: contact.name, email: contact.email, phone: contact.phone }
           : undefined,
+        contactId: contact ? contact.id : undefined,
         currency: cur,
         tenantName: brand,
         travelContext: { kind: "travel-invoice", travelInvoiceId: invoice.id },

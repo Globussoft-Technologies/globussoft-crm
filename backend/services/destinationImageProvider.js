@@ -167,6 +167,72 @@ async function fetchOne(query, opts = {}) {
 }
 
 /**
+ * Fetch UP TO `limit` DISTINCT images for a query — the gallery counterpart
+ * to fetchOne(). Powers the public destination-photo proxy
+ * (routes/travel_destination_photos.js) that feeds the customer-facing
+ * quote / itinerary / microsite hero + side-rail images.
+ *
+ * Walks the SAME provider cascade as fetchOne (Pexels → Unsplash → Pixabay),
+ * collecting distinct URLs across providers until it has `limit` of them, and
+ * shares the SAME 7-day IMAGE_CACHE. By default the AI-generation fallback is
+ * EXCLUDED (stockOnly): a customer-facing photo rail should never burn the
+ * tenant's image-LLM budget or show a synthetic image — it degrades to the
+ * frontend's keyless Wikipedia fallback instead when stock providers miss.
+ *
+ * opts:
+ *   limit:      int (default 12, clamped 1..30) — max distinct images to return
+ *   aspectRatio: string (default '16:9')        — passed to each provider
+ *   stockOnly:  bool (default true)             — exclude the AI fallback
+ *
+ * Returns SearchResult[] (possibly empty). Never throws.
+ */
+const GALLERY_DEFAULT_LIMIT = 12;
+const GALLERY_MAX_LIMIT = 30;
+
+async function fetchMany(query, opts = {}) {
+  const q = String(query || '').trim();
+  if (!q) return [];
+  let limit = parseInt(opts.limit, 10);
+  if (!Number.isFinite(limit) || limit < 1) limit = GALLERY_DEFAULT_LIMIT;
+  if (limit > GALLERY_MAX_LIMIT) limit = GALLERY_MAX_LIMIT;
+  const stockOnly = opts.stockOnly !== false;
+  const aspectRatio = opts.aspectRatio || '16:9';
+
+  const normQuery = q.toLowerCase().replace(/\s+/g, ' ').trim();
+  const ck = `imgmany:${stockOnly ? 'stock' : 'all'}:${aspectRatio}:${limit}:${normQuery}`;
+  const cached = IMAGE_CACHE.get(ck);
+  if (cached) return cached;
+
+  const providers = stockOnly
+    ? PROVIDERS.filter((p) => p.id !== 'ai-fallback')
+    : PROVIDERS;
+
+  const seen = new Set();
+  const out = [];
+  for (const provider of providers) {
+    if (out.length >= limit) break;
+    if (typeof provider.isAvailable === 'function' && !provider.isAvailable()) continue;
+    let results = [];
+    try {
+      results = await provider.search(q, { ...opts, aspectRatio, perPage: limit });
+    } catch (e) {
+      console.warn(`[image-provider] gallery "${q.slice(0, 80)}" — ${provider.id} THREW: ${e.message || e}`);
+      results = [];
+    }
+    for (const r of results || []) {
+      if (!r || !r.url || seen.has(r.url)) continue;
+      seen.add(r.url);
+      out.push(r);
+      if (out.length >= limit) break;
+    }
+  }
+  // Only cache a non-empty result so a transient miss doesn't pin "no photos"
+  // for 7 days (a later request can retry).
+  if (out.length) IMAGE_CACHE.set(ck, out);
+  return out;
+}
+
+/**
  * Fetch all slots in a TeeOutput.imageStrategy.
  *
  * Returns:
@@ -330,6 +396,7 @@ function _resetForTests() {
 module.exports = {
   PROVIDERS,
   fetchOne,
+  fetchMany,
   fetchStrategy,
   applyImagesToContent,
   isOperatorOwned,

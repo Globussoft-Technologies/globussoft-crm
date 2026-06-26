@@ -914,12 +914,14 @@ app.use("/api", (req, res, next) => {
     "/travel/microsites/public",
     "/travel/diagnostics/public",
     "/travel/itineraries/public",
+    "/travel/destination-photos/public",
     "/travel/reviews/public",
     "/travel/inbound/leads",
     "/travel/whatsapp/webhook",
     "/travel/whatsapp/media",
     "/v1/flyers/public",
     "/billing/public",
+    "/csp/report",
     "/security/csp-report",
     "/privacy-policy",
     "/deleted-account-policy",
@@ -1215,6 +1217,10 @@ app.use("/api/travel", travelPurchaseOrdersRoutes);
 // `:id` capture on `/quotes/:id` which would otherwise match `/quotes/public/...`
 // at validateNumericId and 400 INVALID_ID before reaching the public router.
 app.use("/api/travel/quotes/public", require("./routes/travel_quotes_public"));
+// Public destination-photo proxy (Pexels server-side, Wikipedia fallback on the
+// client). Mounted at the dedicated prefix; the /public sub-path is auth-exempt
+// via openPaths. Consumed by the customer-facing quote/itinerary/microsite pages.
+app.use("/api/travel/destination-photos", require("./routes/travel_destination_photos"));
 app.use(
   "/api/travel/quote-templates",
   require("./routes/travel_quote_templates"),

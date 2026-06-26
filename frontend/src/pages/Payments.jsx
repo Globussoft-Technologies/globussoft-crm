@@ -1,4 +1,5 @@
 import React, { useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   CreditCard,
   IndianRupee,
@@ -504,12 +505,27 @@ RAZORPAY_WEBHOOK_SECRET=...         # from dashboard.razorpay.com → Settings �
                   }
                 </Td>
                 <Td style={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {p.description
-                    ? <span title={p.description}>{p.description}</span>
-                    : p.invoiceId
-                      ? `Invoice #${p.invoiceId}`
-                      : <span style={{ color: 'var(--text-secondary)' }}>—</span>
-                  }
+                  {(() => {
+                    const label = p.description
+                      ? p.description
+                      : p.invoiceId
+                        ? `Invoice #${p.invoiceId}`
+                        : p.travelInvoiceNum || null;
+                    if (!label) return <span style={{ color: 'var(--text-secondary)' }}>—</span>;
+                    if (p.itineraryId) {
+                      return (
+                        <Link
+                          to={`/travel/itineraries/${p.itineraryId}`}
+                          onClick={e => e.stopPropagation()}
+                          style={{ color: 'var(--accent-color)', textDecoration: 'none', fontWeight: 500 }}
+                          title="View itinerary"
+                        >
+                          {label}
+                        </Link>
+                      );
+                    }
+                    return <span title={String(label)}>{label}</span>;
+                  })()}
                 </Td>
                 <Td><strong>{formatCurrency(p.amount)}</strong></Td>
                 <Td><GatewayBadge gateway={p.gateway} /></Td>
@@ -761,7 +777,7 @@ function ConfigCard({ name, configured, extras, hint, brandColor }) {
 function DetailModal({ payment, onClose }) {
   const meta = payment.metadata && typeof payment.metadata === 'object' ? payment.metadata : {};
   const contact = payment.contact || null;
-  return (
+  return createPortal(
     <div
       onClick={onClose}
       style={{
@@ -819,7 +835,19 @@ function DetailModal({ payment, onClose }) {
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
             {payment.gatewayId && <div style={{ fontSize: '0.8rem' }}>Gateway ID: <code style={{ fontSize: '0.75rem', background: 'rgba(0,0,0,0.06)', padding: '0.15rem 0.4rem', borderRadius: 4 }}>{payment.gatewayId}</code></div>}
             {payment.invoiceId && <div style={{ fontSize: '0.8rem' }}>Invoice: <strong>#{payment.invoiceId}</strong></div>}
-            {meta.itineraryId && <div style={{ fontSize: '0.8rem' }}>Itinerary: <strong>#{meta.itineraryId}</strong></div>}
+            {!payment.invoiceId && payment.travelInvoiceNum && <div style={{ fontSize: '0.8rem' }}>Invoice: <strong>{payment.travelInvoiceNum}</strong></div>}
+            {(payment.itineraryId || meta.itineraryId) && (
+              <div style={{ fontSize: '0.8rem' }}>
+                Itinerary:{' '}
+                <Link
+                  to={`/travel/itineraries/${payment.itineraryId || meta.itineraryId}`}
+                  onClick={onClose}
+                  style={{ color: 'var(--accent-color)', fontWeight: 600, textDecoration: 'none' }}
+                >
+                  View itinerary →
+                </Link>
+              </div>
+            )}
             {meta.quoteId && <div style={{ fontSize: '0.8rem' }}>Quote: <strong>#{meta.quoteId}</strong></div>}
             {meta.subBrand && <div style={{ fontSize: '0.8rem' }}>Sub-brand: <strong style={{ textTransform: 'capitalize' }}>{meta.subBrand}</strong></div>}
             {meta.destination && <div style={{ fontSize: '0.8rem' }}>Destination: <strong>{meta.destination}</strong></div>}
@@ -827,7 +855,8 @@ function DetailModal({ payment, onClose }) {
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 

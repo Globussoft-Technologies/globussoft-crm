@@ -104,6 +104,10 @@ export default function InboundLeads() {
   const [contacts, setContacts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [convertingId, setConvertingId] = useState(null);
+  // Contact ids that already have a pipeline Deal → already converted. Drives
+  // the "Converted" badge + disables re-conversion (prevents the duplicate-deal
+  // bug where converting twice created two identical leads).
+  const [convertedIds, setConvertedIds] = useState(() => new Set());
 
   // PRD_TRAVEL_MULTICHANNEL_LEADS / TRAVEL_CRM_PRD §4.1 — "Convert to Lead"
   // opens the pipeline lead for this inbound contact: it creates a Deal (the
@@ -112,6 +116,12 @@ export default function InboundLeads() {
   // left to the server default ("lead") so it's valid on every tenant's
   // pipeline config. Travel page only — generic/wellness never reach here.
   const convertToLead = async (c) => {
+    // Guard: don't create a second pipeline lead for an already-converted
+    // contact (this is what produced the duplicate "— whatsapp" deals).
+    if (convertedIds.has(c.id)) {
+      notify.info("This lead is already converted to the pipeline.");
+      return;
+    }
     setConvertingId(c.id);
     try {
       const channelLabel = String(c.source || "").replace(/^inbound:/, "") || "inbound";
@@ -123,6 +133,9 @@ export default function InboundLeads() {
           subBrand: c.subBrand || undefined,
         }),
       });
+      // Mark converted immediately so the row flips even before navigation /
+      // if the user comes back to this page.
+      setConvertedIds((prev) => new Set(prev).add(c.id));
       notify.success(`${c.name || "Lead"} added to the pipeline`);
       navigate("/travel/leads");
     } catch (e) {
@@ -145,6 +158,14 @@ export default function InboundLeads() {
   // payload size vs visibility on a demo with mixed-source contacts.
   const load = () => {
     setLoading(true);
+    // Best-effort: which contacts already have a Deal (= already converted to a
+    // pipeline lead). Used to flag rows "Converted" + block a second convert.
+    fetchApi("/api/deals?limit=500")
+      .then((d) => {
+        const deals = Array.isArray(d) ? d : Array.isArray(d?.deals) ? d.deals : [];
+        setConvertedIds(new Set(deals.map((x) => x.contactId).filter((v) => v != null)));
+      })
+      .catch(() => setConvertedIds(new Set()));
     fetchApi("/api/contacts?limit=100")
       .then((d) => {
         const rows = Array.isArray(d) ? d : Array.isArray(d?.contacts) ? d.contacts : [];
@@ -378,15 +399,34 @@ export default function InboundLeads() {
                     </td>
                     <td style={td}>{formatDate(c.createdAt)}</td>
                     <td style={td}>
-                      <button
-                        type="button"
-                        onClick={() => convertToLead(c)}
-                        disabled={convertingId === c.id}
-                        style={primaryBtn}
-                        aria-label={`Convert ${c.name || "contact"} to Lead`}
-                      >
-                        {convertingId === c.id ? "Converting…" : "Convert to Lead"}
-                      </button>
+                      {convertedIds.has(c.id) ? (
+                        <span
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: 4,
+                            padding: "4px 10px",
+                            borderRadius: 999,
+                            fontSize: 12,
+                            fontWeight: 600,
+                            background: "rgba(34,197,94,0.15)",
+                            color: "var(--success-color, #22c55e)",
+                          }}
+                          aria-label={`${c.name || "Contact"} already converted to a lead`}
+                        >
+                          ✓ Converted
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => convertToLead(c)}
+                          disabled={convertingId === c.id}
+                          style={primaryBtn}
+                          aria-label={`Convert ${c.name || "contact"} to Lead`}
+                        >
+                          {convertingId === c.id ? "Converting…" : "Convert to Lead"}
+                        </button>
+                      )}
                     </td>
                   </tr>
                 );

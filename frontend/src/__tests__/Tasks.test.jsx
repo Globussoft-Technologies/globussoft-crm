@@ -61,6 +61,7 @@ vi.mock('../utils/notify', () => ({
 }));
 
 import Tasks from '../pages/Tasks';
+import { AuthContext } from '../App';
 
 const futureISO = new Date(Date.now() + 7 * 86_400_000).toISOString();
 const pastISO = new Date(Date.now() - 7 * 86_400_000).toISOString();
@@ -68,6 +69,12 @@ const pastISO = new Date(Date.now() - 7 * 86_400_000).toISOString();
 const sampleContacts = [
   { id: 11, name: 'Anita Sharma', email: 'anita@example.com' },
   { id: 12, name: 'Rohit Verma', email: 'rohit@example.com' },
+];
+
+// Travel staff roster for the "Assign to (staff)" dropdown (travel vertical).
+const sampleStaff = [
+  { id: 201, name: 'Asha Agent', email: 'asha@travelstall.in', role: 'USER', subBrandAccess: ['rfu'] },
+  { id: 202, name: 'Vikram Agent', email: 'vikram@travelstall.in', role: 'ADMIN' },
 ];
 
 const sampleTasks = [
@@ -116,6 +123,9 @@ function defaultFetchMock(url, opts) {
   if (url === '/api/contacts' && (!opts || !opts.method || opts.method === 'GET')) {
     return Promise.resolve(sampleContacts);
   }
+  if (url === '/api/staff' && (!opts || !opts.method || opts.method === 'GET')) {
+    return Promise.resolve(sampleStaff);
+  }
   if (url === '/api/tasks' && opts?.method === 'POST') {
     return Promise.resolve({ id: 99 });
   }
@@ -127,6 +137,16 @@ function defaultFetchMock(url, opts) {
 
 function renderTasks() {
   return render(<Tasks />);
+}
+
+// Travel-vertical render: wraps in the real AuthContext.Provider so
+// tenant.vertical === 'travel' lights up the "Assign to (staff)" dropdown.
+function renderTravelTasks() {
+  return render(
+    <AuthContext.Provider value={{ user: { id: 1, role: 'ADMIN' }, tenant: { id: 1, vertical: 'travel' } }}>
+      <Tasks />
+    </AuthContext.Provider>,
+  );
 }
 
 describe('<Tasks /> — page surface', () => {
@@ -405,5 +425,61 @@ describe('<Tasks /> — page surface', () => {
     // The normalized "Critical" badge text DOES render — there are also
     // chips/options carrying "Critical" so just assert at least one.
     expect(screen.getAllByText(/Critical/).length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe('<Tasks /> — travel "Assign to (staff)" dropdown', () => {
+  beforeEach(() => {
+    fetchApiMock.mockReset();
+    fetchApiMock.mockImplementation(defaultFetchMock);
+    notifyError.mockReset();
+    notifySuccess.mockReset();
+    notifyInfo.mockReset();
+  });
+
+  it('travel vertical: fetches /api/staff and renders a staff assignee dropdown (not contacts)', async () => {
+    renderTravelTasks();
+    await screen.findByRole('heading', { name: /Agent Task Queue/i });
+    // The travel-gated staff fetch fires.
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledWith('/api/staff');
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Create a new task/i }));
+    // The new staff dropdown renders with staff names — NOT contacts.
+    expect(await screen.findByText(/Assign to \(staff\)/i)).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /Asha Agent/ })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /Vikram Agent/ })).toBeInTheDocument();
+    // Contacts must NOT appear as staff options (Anita is a contact).
+    expect(screen.queryByRole('option', { name: /Anita Sharma/ })).not.toBeInTheDocument();
+  });
+
+  it('generic vertical: no staff dropdown, no /api/staff call', async () => {
+    renderTasks(); // no AuthContext → tenant undefined → isTravel false
+    await screen.findByRole('heading', { name: /Agent Task Queue/i });
+    fireEvent.click(screen.getByRole('button', { name: /Create a new task/i }));
+    expect(screen.queryByText(/Assign to \(staff\)/i)).not.toBeInTheDocument();
+    expect(fetchApiMock).not.toHaveBeenCalledWith('/api/staff');
+  });
+
+  it('travel: submitting with a chosen staff sends targetUserId (not contactId)', async () => {
+    renderTravelTasks();
+    await screen.findByRole('heading', { name: /Agent Task Queue/i });
+    fireEvent.click(screen.getByRole('button', { name: /Create a new task/i }));
+    const titleInput = document.getElementById('task-title-input');
+    fireEvent.change(titleInput, { target: { value: 'Call the school' } });
+    await screen.findByText(/Assign to \(staff\)/i);
+    // The staff <select> is the one whose options include the staff names.
+    const staffSelect = screen.getByRole('option', { name: /Asha Agent/ }).closest('select');
+    fireEvent.change(staffSelect, { target: { value: '201' } });
+    fireEvent.click(screen.getByRole('button', { name: /Assign Task/i }));
+    await waitFor(() => {
+      const post = fetchApiMock.mock.calls.find(
+        ([u, o]) => u === '/api/tasks' && o?.method === 'POST',
+      );
+      expect(post).toBeTruthy();
+      const body = JSON.parse(post[1].body);
+      expect(body.targetUserId).toBe('201');
+      expect(body.assignedToId).toBeUndefined();
+    });
   });
 });

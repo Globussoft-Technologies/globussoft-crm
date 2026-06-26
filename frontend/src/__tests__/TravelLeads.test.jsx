@@ -229,9 +229,14 @@ function installFetchMock({
   list = DEALS_DEFAULT,
   contacts = CONTACTS_DEFAULT,
   create = null,
+  itineraries = null,
 } = {}) {
   fetchApiMock.mockImplementation((url, opts) => {
     const method = opts?.method || 'GET';
+    if (url.startsWith('/api/travel/itineraries') && method === 'GET') {
+      if (itineraries instanceof Error) return Promise.reject(itineraries);
+      return Promise.resolve(itineraries == null ? null : { itineraries });
+    }
     if (url.startsWith('/api/deals') && method === 'GET') {
       if (list instanceof Error) return Promise.reject(list);
       return Promise.resolve(list);
@@ -405,13 +410,29 @@ describe('<TravelLeads /> — filter behavior', () => {
 });
 
 describe('<TravelLeads /> — row rendering: stage / sub-brand / contact / amount / diagnostic', () => {
-  it('deal-title cell renders a <Link> to /deals/:id (generic Deal detail page reuse)', async () => {
+  it('deal-title cell links to the lead detail (/travel/leads/:contactId), not the dead /deals/:id', async () => {
     renderPage();
     await screen.findByText('Mumbai School — Andaman 2026');
     const link = screen.getByRole('link', { name: /Mumbai School — Andaman 2026/i });
-    expect(link).toHaveAttribute('href', '/deals/301');
+    expect(link).toHaveAttribute('href', '/travel/leads/5001');
     const link2 = screen.getByRole('link', { name: /Family Umrah package — Singh family/i });
-    expect(link2).toHaveAttribute('href', '/deals/302');
+    expect(link2).toHaveAttribute('href', '/travel/leads/5002');
+  });
+
+  it('Delete button confirms, then DELETEs /api/deals/:id and reloads', async () => {
+    renderPage();
+    await screen.findByText('Family Umrah package — Singh family');
+    fetchApiMock.mockClear();
+    installFetchMock();
+    fireEvent.click(screen.getByRole('button', { name: /Delete Family Umrah package — Singh family/i }));
+    await waitFor(() => {
+      const del = fetchApiMock.mock.calls.find(
+        ([u, o]) => u === '/api/deals/302' && o?.method === 'DELETE',
+      );
+      expect(del).toBeTruthy();
+    });
+    expect(notifyConfirm).toHaveBeenCalled();
+    expect(notifySuccess).toHaveBeenCalledWith(expect.stringMatching(/Lead deleted/i));
   });
 
   it('contact cell renders a <Link> to /travel/leads/:contactId when contactId present', async () => {
@@ -464,6 +485,27 @@ describe('<TravelLeads /> — row rendering: stage / sub-brand / contact / amoun
     // Multiple em-dashes can appear (amount cell + diagnostic cell). Assert
     // via getAllByText length ≥ 1.
     expect(within(row4).getAllByText('—').length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('AMOUNT shows the customer booking value (sum of committed itineraries) over Deal.amount', async () => {
+    // Contact 5004 (Visa Sure lead, Deal.amount=null → normally "—") has two
+    // committed itineraries (38,092 + 18,832 = 56,924) plus a SENT quote that
+    // must NOT count. The AMOUNT cell should surface 56,924, not the em-dash.
+    installFetchMock({
+      itineraries: [
+        { id: 1, contactId: 5004, status: 'advance_paid', totalAmount: 38092, currency: 'INR' },
+        { id: 2, contactId: 5004, status: 'accepted', totalAmount: 18832, currency: 'INR' },
+        { id: 3, contactId: 5004, status: 'sent', totalAmount: 999999, currency: 'INR' },
+      ],
+    });
+    renderPage();
+    const row4 = (await screen.findByText('Visa Sure — Schengen application')).closest('tr');
+    expect(within(row4).getByText(/INR\s+56,924/)).toBeInTheDocument();
+    // The uncommitted SENT quote's 999,999 must be excluded.
+    expect(within(row4).queryByText(/999,999/)).toBeNull();
+    // A lead whose contact has no itineraries still falls back to Deal.amount.
+    const row2 = screen.getByText('Family Umrah package — Singh family').closest('tr');
+    expect(within(row2).getByText(/INR\s+[\d,]+/)).toBeInTheDocument();
   });
 
   it('renders diagnostic link to /travel/diagnostics when diagnosticId present', async () => {
@@ -567,9 +609,13 @@ describe('<TravelLeads /> — new-lead drawer + create POST', () => {
     // Estimated value (number input).
     const numberInput = document.querySelector('input[type="number"]');
     fireEvent.change(numberInput, { target: { value: '125000' } });
-    // Expected close (date input).
+    // Expected close (date input) — must be TODAY (validation rejects past/future).
+    const today = (() => {
+      const d = new Date();
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    })();
     const dateInput = document.querySelector('input[type="date"]');
-    fireEvent.change(dateInput, { target: { value: '2026-12-15' } });
+    fireEvent.change(dateInput, { target: { value: today } });
 
     fetchApiMock.mockClear();
     installFetchMock();
@@ -591,12 +637,38 @@ describe('<TravelLeads /> — new-lead drawer + create POST', () => {
       // amount coerced to Number.
       expect(body.amount).toBe(125000);
       expect(typeof body.amount).toBe('number');
-      // expectedClose is the raw date string.
-      expect(body.expectedClose).toBe('2026-12-15');
+      // expectedClose is the raw date string (today).
+      expect(body.expectedClose).toBe(today);
     });
     expect(notifySuccess).toHaveBeenCalledWith(
       expect.stringMatching(/Travel lead created/i),
     );
+  });
+
+  it('rejects a non-today (future/past) date with an error and does NOT POST', async () => {
+    renderPage();
+    await screen.findByText('Mumbai School — Andaman 2026');
+    fireEvent.click(screen.getByRole('button', { name: /Create a new travel lead/i }));
+    await screen.findByRole('heading', { name: /^New Travel Lead$/i });
+    const titleInput = screen.getByRole('textbox');
+    fireEvent.change(titleInput, { target: { value: 'Future-dated lead' } });
+    // A clearly-future date — must be rejected by the today-only validation.
+    const dateInput = document.querySelector('input[type="date"]');
+    fireEvent.change(dateInput, { target: { value: '2099-01-01' } });
+
+    fetchApiMock.mockClear();
+    installFetchMock();
+    fireEvent.click(screen.getByRole('button', { name: /Create Lead/i }));
+
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalledWith(
+        expect.stringMatching(/date must be today/i),
+      );
+    });
+    const posts = fetchApiMock.mock.calls.filter(
+      ([u, o]) => u === '/api/deals' && o?.method === 'POST',
+    );
+    expect(posts.length).toBe(0);
   });
 });
 

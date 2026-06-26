@@ -211,16 +211,73 @@ function ensureEmailList(list, { field = "recipients", min = 1, max = 50 } = {})
   return null;
 }
 
-// Wraps Prisma P2002 (unique constraint) into a clean 409 response.
+// Turn a raw column token into a human-facing field phrase.
+//   "email" → "email address", "phoneNumber" → "phone number".
+function humanizeUniqueField(token) {
+  const map = {
+    email: "email address",
+    phone: "phone number",
+    gstin: "GSTIN",
+    slug: "URL slug",
+    invoiceNum: "invoice number",
+    sku: "SKU",
+    name: "name",
+    code: "code",
+  };
+  if (map[token]) return map[token];
+  // camelCase → "camel case"; otherwise return as-is, lowercased.
+  return String(token).replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase();
+}
+
+// Parse Prisma's P2002 `meta.target` into a user-meaningful { entity, fields }.
+// `target` is EITHER an array of column names (Postgres/SQLite) OR a single DB
+// index-name string (MySQL — e.g. "Contact_email_tenantId_key"). Internal
+// scoping columns (tenantId / id) are dropped since they're not user-facing.
+function parseUniqueTarget(target) {
+  if (Array.isArray(target)) {
+    const fields = target
+      .filter((t) => t && !/^(tenantId|id)$/i.test(t))
+      .map(humanizeUniqueField);
+    return { entity: null, fields };
+  }
+  let tokens = String(target || "").replace(/_(key|unique|idx|index)$/i, "").split("_");
+  let entity = null;
+  // MySQL index names are "<Model>_<col>_<col>_key" — the leading Capitalized
+  // token is the model, which lets us say "Another contact…" instead of "record".
+  if (tokens.length > 1 && /^[A-Z]/.test(tokens[0])) {
+    entity = tokens.shift().replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase();
+  }
+  const fields = tokens
+    .filter((t) => t && !/^(tenantId|id)$/i.test(t))
+    .map(humanizeUniqueField);
+  return { entity, fields };
+}
+
+// Wraps Prisma P2002 (unique constraint) into a clean, USER-FRIENDLY 409.
+// Instead of leaking the raw DB index name ("Duplicate value for
+// Contact_email_tenantId_key") we surface "Another contact already uses this
+// email address." `field` keeps the raw target for programmatic callers.
 // Usage:  catch (e) { const c = conflictFromPrisma(e); if (c) return res.status(c.status).json(c); ... }
 function conflictFromPrisma(e) {
   if (e && e.code === "P2002") {
-    const target = Array.isArray(e.meta?.target) ? e.meta.target.join("+") : (e.meta?.target || "field");
+    const rawTarget = e.meta?.target;
+    const { entity, fields } = parseUniqueTarget(rawTarget);
+    const noun = entity || "record";
+    let error;
+    if (fields.length === 1) {
+      error = `Another ${noun} already uses this ${fields[0]}.`;
+    } else if (fields.length > 1) {
+      const list = `${fields.slice(0, -1).join(", ")} and ${fields[fields.length - 1]}`;
+      error = `Another ${noun} already uses this ${list}.`;
+    } else {
+      error = `Another ${noun} with the same details already exists.`;
+    }
+    const field = Array.isArray(rawTarget) ? rawTarget.join("+") : (rawTarget || "field");
     return {
       status: 409,
-      error: `Duplicate value for ${target}`,
+      error,
       code: "UNIQUE_CONSTRAINT",
-      field: target,
+      field,
     };
   }
   return null;

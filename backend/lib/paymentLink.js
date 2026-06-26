@@ -62,7 +62,7 @@ function resolveGateway(pref, currency) {
  *   branch reconciles it back to the TravelPaymentSchedule + TravelInvoice.
  * @returns {Promise<{url, gateway, paymentId}|{error, code}>}
  */
-async function createInvoicePaymentLink({ tenantId, invoice, contact, currency, gatewayPref, tenantName, travelContext }) {
+async function createInvoicePaymentLink({ tenantId, invoice, contact, contactId, currency, gatewayPref, tenantName, travelContext }) {
   const amount = Number(invoice?.amount);
   if (!invoice?.id || !amount || isNaN(amount) || amount <= 0) {
     return { error: "Invoice with a positive amount is required", code: "BAD_INVOICE" };
@@ -116,6 +116,7 @@ async function createInvoicePaymentLink({ tenantId, invoice, contact, currency, 
           // can't grab a same-numbered generic Invoice; the webhook's
           // travel-milestone branch reconciles via the metadata instead.
           invoiceId: travelContext ? null : invoice.id,
+          contactId: contactId ? Number(contactId) : null,
           amount,
           currency: cur,
           gateway: "razorpay",

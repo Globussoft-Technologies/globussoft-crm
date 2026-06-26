@@ -163,21 +163,21 @@ describe('llmRouter — module shape', () => {
       "reasoning": { primary: "claude-opus-4-7", fallback: "gpt-4" },
       "talking-points": { primary: "claude-opus-4-7", fallback: "gpt-4" },
       "form-vs-call": { primary: "claude-opus-4-7", fallback: "gpt-4" },
-      "bulk-text": { primary: "gemini-flash", fallback: "claude-haiku" },
+      "bulk-text": { primary: "gemini-flash", fallback: "groq-llama" },
       "call-summary": { primary: "gemini-flash", fallback: null },
       "itinerary-suggest": { primary: "gemini-flash", fallback: "gpt-4" },
       // AI quote-template line-item JSON generation (PR #1178).
       "quote-template-generate": { primary: "gemini-flash", fallback: "gpt-4" },
       // AI travel-landing-page JSON generation (PR #1174).
-      "landing-page-generate": { primary: "gemini-flash", fallback: "claude-haiku" },
+      "landing-page-generate": { primary: "gemini-flash", fallback: "groq-llama" },
       // Trip-countdown (packing nudges) + payment-reminder (pay-or-cancel
       // deposit chase) — 2026-06-16 travel notification engines. Both bulk-
       // shape email copy → gemini-flash primary / claude-haiku fallback.
-      "trip-countdown": { primary: "gemini-flash", fallback: "claude-haiku" },
-      "payment-reminder": { primary: "gemini-flash", fallback: "claude-haiku" },
+      "trip-countdown": { primary: "gemini-flash", fallback: "groq-llama" },
+      "payment-reminder": { primary: "gemini-flash", fallback: "groq-llama" },
       // WhatsApp inbound → Travel auto-lead qualification (2026-06-19).
-      "whatsapp-lead-qualify": { primary: "gemini-flash", fallback: "claude-haiku" },
-      "marketing-flyer-copy": { primary: "gemini-flash", fallback: "claude-haiku" },
+      "whatsapp-lead-qualify": { primary: "gemini-flash", fallback: "groq-llama" },
+      "marketing-flyer-copy": { primary: "gemini-flash", fallback: "groq-llama" },
       "marketing-flyer-image": { primary: "dall-e-3", fallback: "stability-xl" },
       // TBO flight/hotel/transfer AI-estimate search fallback. 2026-06-23:
       // primary is gpt-4o-search (OpenAI's web-search-enabled model, same

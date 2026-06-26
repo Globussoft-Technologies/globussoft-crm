@@ -557,7 +557,7 @@ describe('llmRouter registration', () => {
     const router = requireCjs('../../lib/llmRouter.js');
     expect(router.TASK_ROUTING['marketing-flyer-copy']).toBeDefined();
     expect(router.TASK_ROUTING['marketing-flyer-copy'].primary).toBe('gemini-flash');
-    expect(router.TASK_ROUTING['marketing-flyer-copy'].fallback).toBe('claude-haiku');
+    expect(router.TASK_ROUTING['marketing-flyer-copy'].fallback).toBe('groq-llama');
     expect(router.VALID_TASKS).toContain('marketing-flyer-copy');
   });
 

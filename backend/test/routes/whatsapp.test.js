@@ -14,8 +14,7 @@
  *        masked on read (#651 — `{configured, last4}` shape, never
  *        plaintext) via maskConfigRow().
  *     2. AUTHED send / list / threads / templates / opt-outs — tenant
- *        scoped via req.user.tenantId. Send enforces opt-out gate +
- *        24h re-engagement window (Wave-7D).
+ *        scoped via req.user.tenantId. Send enforces opt-out gate.
  *     3. PUBLIC webhook — GET /webhook (Meta verify challenge) + POST
  *        /webhook (Meta event ingress) have NO auth; tenant inferred from
  *        matched contact, defaults to 1.
@@ -27,9 +26,7 @@
  *   2. POST /send 400s when neither `body` nor `templateName` is given.
  *   3. POST /send 422 CONTACT_OPTED_OUT when the recipient has a
  *      WhatsAppOptOut row in the tenant (DPDP/TRAI compliance, Wave-2 KK).
- *   4. POST /send 422 OUTSIDE_24H_WINDOW when free-form (no templateName)
- *      and there's no prior INBOUND message in the 24h window (Wave-7D).
- *   5. POST /send 400 when no active WhatsAppConfig row exists for the
+ *   4. POST /send 400 when no active WhatsAppConfig row exists for the
  *      tenant (after opt-out + window gates pass).
  *
  *   THREAD MANAGEMENT (Wave-2 KK)
@@ -268,24 +265,6 @@ describe('POST /send — validation', () => {
     // Never reached the provider or message create.
     expect(providerMod.sendText).not.toHaveBeenCalled();
     expect(prisma.whatsAppMessage.create).not.toHaveBeenCalled();
-  });
-
-  test('422 OUTSIDE_24H_WINDOW for free-form msg when no recent inbound (Wave-7D)', async () => {
-    prisma.whatsAppOptOut.findUnique.mockResolvedValue(null);
-    // No prior inbound → sinceMs is Infinity → outside the 24h window.
-    prisma.whatsAppMessage.findFirst.mockResolvedValue(null);
-
-    const app = makeApp();
-    const res = await request(app)
-      .post('/api/whatsapp/send')
-      .send({ to: '+919876543210', body: 'hello' });
-
-    expect(res.status).toBe(422);
-    expect(res.body.code).toBe('OUTSIDE_24H_WINDOW');
-    expect(res.body.hint).toMatch(/templateName/);
-    // Never reached the config / provider / message-create.
-    expect(prisma.whatsAppConfig.findFirst).not.toHaveBeenCalled();
-    expect(providerMod.sendText).not.toHaveBeenCalled();
   });
 
   test('400 when no active WhatsAppConfig row exists for the tenant', async () => {

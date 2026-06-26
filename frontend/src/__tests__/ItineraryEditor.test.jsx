@@ -251,21 +251,12 @@ describe("ItineraryEditor — G053 Conflict warnings", () => {
   });
 });
 
-describe("ItineraryEditor — G056 Inline +Hotel / +Activity", () => {
-  it("renders both inline-add buttons on each real Day card", async () => {
+describe("ItineraryEditor — G056 Inline +Activity", () => {
+  it("renders the inline-add activity button on each real Day card", async () => {
     fetchApiMock.mockImplementation(makeFetch(ITIN_BASE));
     renderPage();
-    expect(await screen.findByTestId("day-1-add-hotel-btn")).toBeTruthy();
-    expect(screen.getByTestId("day-1-add-activity-btn")).toBeTruthy();
-    expect(screen.getByTestId("day-2-add-hotel-btn")).toBeTruthy();
-  });
-
-  it("opens the inline mini-form when +Hotel is clicked", async () => {
-    fetchApiMock.mockImplementation(makeFetch(ITIN_BASE));
-    renderPage();
-    fireEvent.click(await screen.findByTestId("day-1-add-hotel-btn"));
-    const form = await screen.findByTestId("day-1-inline-add-form");
-    expect(form.getAttribute("data-kind")).toBe("hotel");
+    expect(await screen.findByTestId("day-1-add-activity-btn")).toBeTruthy();
+    expect(screen.getByTestId("day-2-add-activity-btn")).toBeTruthy();
   });
 
   it("POSTs the right shape on submit + closes form + refetches total", async () => {
@@ -277,7 +268,7 @@ describe("ItineraryEditor — G056 Inline +Hotel / +Activity", () => {
         return Promise.resolve(getCallCount === 1 ? ITIN_BASE : ITIN_AFTER_POST);
       }
       if (url === "/api/travel/itineraries/42/items" && method === "POST") {
-        return Promise.resolve({ id: 999, itemType: "hotel" });
+        return Promise.resolve({ id: 999, itemType: "activity" });
       }
       if (url.startsWith("/api/travel/itinerary-templates/")) {
         return Promise.reject({ status: 404, message: "nf" });
@@ -318,10 +309,10 @@ describe("ItineraryEditor — G056 Inline +Hotel / +Activity", () => {
       return Promise.resolve({});
     });
     renderPage();
-    fireEvent.click(await screen.findByTestId("day-2-add-hotel-btn"));
+    fireEvent.click(await screen.findByTestId("day-2-add-activity-btn"));
     const form = await screen.findByTestId("day-2-inline-add-form");
-    fireEvent.change(within(form).getByLabelText("Hotel name"), { target: { value: "Beach Resort" } });
-    fireEvent.click(within(form).getByTestId("day-2-inline-add-submit-hotel"));
+    fireEvent.change(within(form).getByLabelText("Activity name"), { target: { value: "Beach yoga" } });
+    fireEvent.click(within(form).getByTestId("day-2-inline-add-submit-activity"));
     await waitFor(() => {
       const postCalls = fetchApiMock.mock.calls.filter(
         ([u, o]) => u === "/api/travel/itineraries/42/items" && (o?.method || "").toUpperCase() === "POST",

@@ -40,7 +40,7 @@
  */
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 
 const fetchApiMock = vi.fn();
 vi.mock('../utils/api', () => ({
@@ -447,10 +447,11 @@ describe('<Tasks /> — travel "Assign to (staff)" dropdown', () => {
     fireEvent.click(screen.getByRole('button', { name: /Create a new task/i }));
     // The new staff dropdown renders with staff names — NOT contacts.
     expect(await screen.findByText(/Assign to \(staff\)/i)).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: /Asha Agent/ })).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: /Vikram Agent/ })).toBeInTheDocument();
+    const staffSelect = screen.getByLabelText(/Assign to \(staff\)/i);
+    expect(within(staffSelect).getByRole('option', { name: /Asha Agent/ })).toBeInTheDocument();
+    expect(within(staffSelect).getByRole('option', { name: /Vikram Agent/ })).toBeInTheDocument();
     // Contacts must NOT appear as staff options (Anita is a contact).
-    expect(screen.queryByRole('option', { name: /Anita Sharma/ })).not.toBeInTheDocument();
+    expect(within(staffSelect).queryByRole('option', { name: /Anita Sharma/ })).not.toBeInTheDocument();
   });
 
   it('generic vertical: no staff dropdown, no /api/staff call', async () => {

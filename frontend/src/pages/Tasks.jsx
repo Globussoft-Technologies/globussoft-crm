@@ -384,8 +384,8 @@ export default function Tasks() {
 
               {isTravel && (
                 <div>
-                  <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Assign to (staff)</label>
-                  <select className="input-field" value={newTask.assignedToId}
+                  <label htmlFor="task-staff-assign" style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Assign to (staff)</label>
+                  <select id="task-staff-assign" className="input-field" value={newTask.assignedToId}
                     onChange={e => setNewTask({ ...newTask, assignedToId: e.target.value })}
                     style={{ background: 'var(--input-bg)' }}>
                     <option value="">-- Unassigned --</option>

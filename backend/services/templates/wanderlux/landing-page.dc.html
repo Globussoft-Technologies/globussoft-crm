@@ -38,13 +38,18 @@
     .lpg-mq:hover .lpg-track{animation-play-state:paused}
     ::selection{background:#D21F2B;color:#fff}
     /* Highlight / flip-card grid.
-       Flex + justify-content:center makes the *last row* centre any leftover
-       cards under the row above — so 5 cards lay out as 3 on top + 2 centred
-       below, instead of grid's "4 on top + 1 stuck on the left" default.
-       max-width on each card caps the basis so 3 fit per row at typical
-       widths without one card stretching huge if it ends up alone. */
-    .lpg-flip-grid{display:flex;flex-wrap:wrap;justify-content:center;gap:22px}
-    .lpg-flip-grid > .lpg-flip-card{flex:1 1 280px;max-width:360px;perspective:1500px;outline:none}
+       Goal: exactly 3 cards per row on the top row, with leftover cards
+       (e.g. 2 of 5) centred underneath.
+       flex-basis is calc((100% - 2*gap) / 3) so three cards exactly fill
+       a row regardless of container width; flex-grow:0 prevents the
+       leftover cards from stretching to fill the row. justify-content
+       :center centres the wrapped leftovers. min-width keeps cards
+       legible on narrower viewports (drops to 2-per-row then 1-per-row
+       via the media queries below). */
+    .lpg-flip-grid{display:flex;flex-wrap:wrap;justify-content:center;gap:22px;max-width:1140px;margin:0 auto}
+    .lpg-flip-grid > .lpg-flip-card{flex:0 1 calc(33.333% - 15px);min-width:280px;max-width:360px;perspective:1500px;outline:none}
+    @media (max-width:920px){ .lpg-flip-grid > .lpg-flip-card{flex:0 1 calc(50% - 11px);max-width:none} }
+    @media (max-width:600px){ .lpg-flip-grid > .lpg-flip-card{flex:0 1 100%;max-width:100%} }
     .lpg-flip-inner{position:relative;width:100%;height:100%;transition:transform 0.7s cubic-bezier(0.4,0,0.2,1);transform-style:preserve-3d}
     /* Hover for mouse, focus-within for keyboard + touch (tap focuses the
        card, tap elsewhere blurs it — gives mobile users a way to see the
@@ -58,6 +63,21 @@
        Register pill + section CTAs cover navigation) and section padding tightens. */
     @media (max-width:768px){ .lpg-navlinks{display:none!important} }
     @media (max-width:640px){ .lpg-root section{padding-top:64px!important;padding-bottom:64px!important} .lpg-root footer{padding-top:56px!important} }
+    /* Section-rhythm rule.
+       Sections are individually tagged with a bg-variant class
+       (lpg-bg-light / lpg-bg-soft / lpg-bg-panel). When two adjacent
+       sections share the same bg variant — which can happen if the
+       operator hides intervening blocks via the builder — they read
+       as one undifferentiated block. The adjacent-sibling selector
+       below draws a subtle border between any such pair, regardless
+       of which sections are visible. Theme-driven (var(--c-border))
+       so it adapts per sub-brand palette. Strong-contrast sections
+       (Hero, Safety dark, Final CTA brand) aren't tagged and never
+       trigger this rule because the colour shift already separates
+       them. */
+    .lpg-bg-light + .lpg-bg-light,
+    .lpg-bg-soft + .lpg-bg-soft,
+    .lpg-bg-panel + .lpg-bg-panel{border-top:1px solid var(--c-border)}
     /* shippo-style geometric pattern (light + dark variants) */
     .lpg-pat-light{background-image:url("data:image/svg+xml,%3Csvg%20xmlns%3D'http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg'%20width%3D'80'%20height%3D'80'%20viewBox%3D'0%200%2080%2080'%3E%3Cg%20stroke%3D'%23c2a88f'%20stroke-width%3D'1'%20fill%3D'none'%3E%3Ccircle%20cx%3D'0'%20cy%3D'0'%20r%3D'40'%2F%3E%3Ccircle%20cx%3D'80'%20cy%3D'0'%20r%3D'40'%2F%3E%3Ccircle%20cx%3D'0'%20cy%3D'80'%20r%3D'40'%2F%3E%3Ccircle%20cx%3D'80'%20cy%3D'80'%20r%3D'40'%2F%3E%3Ccircle%20cx%3D'40'%20cy%3D'40'%20r%3D'40'%2F%3E%3Ccircle%20cx%3D'40'%20cy%3D'40'%20r%3D'28'%2F%3E%3Ccircle%20cx%3D'40'%20cy%3D'40'%20r%3D'16'%2F%3E%3C%2Fg%3E%3C%2Fsvg%3E");background-size:80px 80px;background-repeat:repeat}
     .lpg-pat-dark{background-image:url("data:image/svg+xml,%3Csvg%20xmlns%3D'http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg'%20width%3D'80'%20height%3D'80'%20viewBox%3D'0%200%2080%2080'%3E%3Cg%20stroke%3D'%23ffffff'%20stroke-width%3D'1'%20fill%3D'none'%3E%3Ccircle%20cx%3D'0'%20cy%3D'0'%20r%3D'40'%2F%3E%3Ccircle%20cx%3D'80'%20cy%3D'0'%20r%3D'40'%2F%3E%3Ccircle%20cx%3D'0'%20cy%3D'80'%20r%3D'40'%2F%3E%3Ccircle%20cx%3D'80'%20cy%3D'80'%20r%3D'40'%2F%3E%3Ccircle%20cx%3D'40'%20cy%3D'40'%20r%3D'40'%2F%3E%3Ccircle%20cx%3D'40'%20cy%3D'40'%20r%3D'28'%2F%3E%3Ccircle%20cx%3D'40'%20cy%3D'40'%20r%3D'16'%2F%3E%3C%2Fg%3E%3C%2Fsvg%3E");background-size:80px 80px;background-repeat:repeat}
@@ -90,7 +110,7 @@
 
   <!-- ===================== HERO ===================== -->
   <sc-if value="{{ showHero }}">
-  <section aria-label="Hero" style="position:relative;overflow:hidden;background:var(--c-light);padding:64px 28px 72px">
+  <section aria-label="Hero" class="lpg-bg-light" style="position:relative;overflow:hidden;background:var(--c-light);padding:64px 28px 72px">
     <sc-if value="{{ showHeroBg }}">
     <div aria-hidden="true" style="position:absolute;inset:0;background-image:{{ hero.bgImage }};background-size:cover;background-position:center;pointer-events:none"></div>
     <div aria-hidden="true" style="position:absolute;inset:0;background:color-mix(in srgb,var(--c-light) 68%,transparent);pointer-events:none"></div>
@@ -153,7 +173,7 @@
 
   <!-- ===================== COUNTDOWN ===================== -->
   <sc-if value="{{ showCountdown }}">
-  <section aria-label="Registration countdown" style="background:var(--c-light);padding:8px 28px 80px">
+  <section aria-label="Registration countdown" class="lpg-bg-light" style="background:var(--c-light);padding:8px 28px 80px">
     <div style="max-width:760px;margin:0 auto;text-align:center;border-top:1px solid var(--c-border);padding-top:56px">
       <p style="font-size:12px;letter-spacing:0.22em;text-transform:uppercase;color:var(--c-brand);font-weight:600;margin:0 0 26px">{{ countdown.label }}</p>
       <div style="display:flex;gap:8px;justify-content:center;align-items:flex-start" role="timer" aria-live="off">
@@ -174,7 +194,7 @@
 
   <!-- ===================== CITY MARQUEE ===================== -->
   <sc-if value="{{ showCities }}">
-  <section aria-label="Destinations" style="padding:84px 0;background:var(--c-panel);border-top:1px solid var(--c-border);border-bottom:1px solid var(--c-border)">
+  <section aria-label="Destinations" class="lpg-bg-panel" style="padding:84px 0;background:var(--c-panel);border-top:1px solid var(--c-border);border-bottom:1px solid var(--c-border)">
     <div class="lpg-mq" style="overflow:hidden">
       <div class="lpg-track" style="display:flex;gap:22px;width:max-content;animation:lpg-marquee 44s linear infinite;padding:0 11px">
         <sc-for list="{{ cityLoop }}" as="city">
@@ -193,7 +213,7 @@
 
   <!-- ===================== VIDEO / PREVIEW ===================== -->
   <sc-if value="{{ showVideo }}">
-  <section aria-label="Preview" style="background:var(--c-panel);border-bottom:1px solid var(--c-border);padding:96px 28px">
+  <section aria-label="Preview" class="lpg-bg-panel" style="background:var(--c-panel);border-bottom:1px solid var(--c-border);padding:96px 28px">
     <div style="max-width:1000px;margin:0 auto;text-align:center">
       <sc-if value="{{ video.eyebrow }}"><p style="font-size:12px;letter-spacing:0.24em;text-transform:uppercase;color:var(--c-accent);font-weight:600;margin:0 0 18px">{{ video.eyebrow }}</p></sc-if>
       <h2 style="font-family:var(--c-serif);font-weight:400;font-size:clamp(28px,5vw,54px);line-height:1.1;margin:0 auto 22px;max-width:720px;color:var(--c-text)">{{ video.title }}</h2>
@@ -217,7 +237,7 @@
 
   <!-- ===================== INTRO / WHY IT MATTERS ===================== -->
   <sc-if value="{{ showIntro }}">
-  <section aria-label="Why it matters" style="background:var(--c-soft);padding:100px 28px;position:relative;overflow:hidden">
+  <section aria-label="Why it matters" class="lpg-bg-soft" style="background:var(--c-soft);padding:100px 28px;position:relative;overflow:hidden">
     <div class="{{ patternLightClass }}" style="position:absolute;inset:0;opacity:0.18;pointer-events:none"></div>
     <div style="max-width:1100px;margin:0 auto;position:relative;z-index:1">
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:48px 64px;align-items:start">
@@ -235,9 +255,12 @@
         </div>
         <div style="display:flex;flex-direction:column">
           <sc-for list="{{ intro.gains }}" as="g">
-            <div style="display:flex;align-items:center;gap:14px;padding:15px 0;border-bottom:1px solid var(--c-border)">
-              <span style="width:7px;height:7px;background:var(--c-brand);flex:none;transform:rotate(45deg)"></span>
-              <span style="font-size:15px;color:var(--c-text)">{{ g }}</span>
+            <div style="display:flex;align-items:flex-start;gap:14px;padding:16px 0;border-bottom:1px solid var(--c-border)">
+              <span style="width:7px;height:7px;background:var(--c-brand);flex:none;transform:rotate(45deg);margin-top:8px"></span>
+              <div style="display:flex;flex-direction:column;gap:4px;min-width:0;flex:1">
+                <span style="font-size:15px;font-weight:600;color:var(--c-text);line-height:1.4">{{ g.title }}</span>
+                <sc-if value="{{ g.description }}"><span style="font-size:13.5px;color:var(--c-text2);line-height:1.55">{{ g.description }}</span></sc-if>
+              </div>
             </div>
           </sc-for>
         </div>
@@ -249,7 +272,7 @@
 
   <!-- ===================== CULTURAL HIGHLIGHTS / FLIP CARDS ===================== -->
   <sc-if value="{{ showHighlights }}">
-  <section id="programme" aria-label="Programme highlights" style="background:var(--c-light);padding:100px 28px;position:relative;overflow:hidden">
+  <section id="programme" aria-label="Programme highlights" class="lpg-bg-light" style="background:var(--c-light);padding:100px 28px;position:relative;overflow:hidden">
     <div class="{{ patternLightClass }}" style="position:absolute;inset:0;opacity:0.16;pointer-events:none"></div>
     <div style="max-width:1240px;margin:0 auto;position:relative;z-index:1">
       <div style="text-align:center;margin-bottom:54px">
@@ -261,26 +284,28 @@
         <sc-for list="{{ highlightCards }}" as="fc">
           <div class="lpg-flip-card" tabindex="0" style="height:420px">
             <div class="lpg-flip-inner">
-              <!-- FRONT -->
-              <div style="position:absolute;inset:0;backface-visibility:hidden;-webkit-backface-visibility:hidden;background:var(--c-panel);border:1px solid var(--c-border);border-radius:10px;padding:30px;display:flex;flex-direction:column;justify-content:space-between">
-                <div>
-                  <sc-if value="{{ fc.kanji }}"><div style="font-family:var(--c-serif);font-size:46px;color:var(--c-accent);line-height:1">{{ fc.kanji }}</div></sc-if>
-                  <sc-if value="{{ fc.eyebrow }}"><div style="font-size:11px;letter-spacing:0.22em;text-transform:uppercase;color:var(--c-brand);font-weight:600;margin-top:26px">{{ fc.eyebrow }}</div></sc-if>
-                  <h3 style="font-family:var(--c-serif);font-weight:500;font-size:30px;margin:6px 0 0;color:var(--c-text);letter-spacing:0.02em">{{ fc.name }}</h3>
-                  <sc-if value="{{ fc.frontBody }}"><p style="font-size:14.5px;line-height:1.6;color:var(--c-text2);margin:16px 0 0">{{ fc.frontBody }}</p></sc-if>
-                </div>
+              <!-- FRONT — intentionally minimal: tag + name only, centred
+                   with generous whitespace. Body / benefit live on the
+                   back so the front reads at a glance and the hover
+                   reveal feels like a real reveal. -->
+              <div style="position:absolute;inset:0;backface-visibility:hidden;-webkit-backface-visibility:hidden;background:var(--c-panel);border:1px solid var(--c-border);border-radius:10px;padding:36px 28px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:14px">
+                <sc-if value="{{ fc.eyebrow }}"><div style="font-size:11px;letter-spacing:0.24em;text-transform:uppercase;color:var(--c-brand);font-weight:600">{{ fc.eyebrow }}</div></sc-if>
+                <h3 style="font-family:var(--c-serif);font-weight:500;font-size:30px;line-height:1.15;margin:0;color:var(--c-text);letter-spacing:0.02em">{{ fc.name }}</h3>
+                <div style="width:40px;height:1px;background:var(--c-border);margin-top:6px"></div>
               </div>
-              <!-- BACK -->
-              <div style="position:absolute;inset:0;backface-visibility:hidden;-webkit-backface-visibility:hidden;transform:rotateY(180deg);background:var(--c-dark);border-radius:10px;padding:30px;display:flex;flex-direction:column;justify-content:space-between;color:#fff">
-                <div>
-                  <h4 style="font-family:var(--c-serif);font-weight:600;font-size:24px;margin:0;color:#fff">{{ fc.name }}</h4>
-                  <div style="width:32px;height:2px;background:var(--c-accent);margin:14px 0 18px"></div>
-                  <sc-if value="{{ fc.backBody }}"><p style="font-size:14.5px;line-height:1.7;color:rgba(255,255,255,0.78);margin:0">{{ fc.backBody }}</p></sc-if>
+              <!-- BACK — flexbox column so body grows in the middle and
+                   benefit pins to the bottom; overflow-y:auto means even
+                   the rare 240-char body never blows out the card. -->
+              <div style="position:absolute;inset:0;backface-visibility:hidden;-webkit-backface-visibility:hidden;transform:rotateY(180deg);background:var(--c-dark);border-radius:10px;padding:28px;display:flex;flex-direction:column;color:#fff;overflow:hidden">
+                <div style="flex:1;min-height:0;overflow-y:auto;padding-right:4px">
+                  <sc-if value="{{ fc.eyebrow }}"><div style="font-size:10.5px;letter-spacing:0.24em;text-transform:uppercase;color:var(--c-accent);font-weight:600;margin-bottom:10px">{{ fc.eyebrow }}</div></sc-if>
+                  <h4 style="font-family:var(--c-serif);font-weight:600;font-size:22px;line-height:1.25;margin:0 0 12px;color:#fff">{{ fc.name }}</h4>
+                  <sc-if value="{{ fc.backBody }}"><p style="font-size:13.5px;line-height:1.65;color:rgba(255,255,255,0.82);margin:0">{{ fc.backBody }}</p></sc-if>
                 </div>
                 <sc-if value="{{ fc.benefit }}">
-                <div>
-                  <div style="font-size:11px;letter-spacing:0.2em;text-transform:uppercase;color:var(--c-accent);font-weight:600;margin-bottom:8px">Derived Benefit</div>
-                  <p style="font-family:var(--c-serif);font-style:italic;font-weight:300;font-size:17px;line-height:1.5;color:#fff;margin:0">{{ fc.benefit }}</p>
+                <div style="padding-top:16px;margin-top:14px;border-top:1px solid rgba(255,255,255,0.12)">
+                  <div style="font-size:10px;letter-spacing:0.22em;text-transform:uppercase;color:var(--c-accent);font-weight:600;margin-bottom:6px">Derived Benefit</div>
+                  <p style="font-family:var(--c-serif);font-style:italic;font-weight:300;font-size:14.5px;line-height:1.45;color:#fff;margin:0">{{ fc.benefit }}</p>
                 </div>
                 </sc-if>
               </div>
@@ -345,7 +370,7 @@
 
   <!-- ===================== TESTIMONIALS ===================== -->
   <sc-if value="{{ showTestimonials }}">
-  <section aria-label="Testimonials" style="background:var(--c-light);padding:100px 28px;position:relative;overflow:hidden">
+  <section aria-label="Testimonials" class="lpg-bg-light" style="background:var(--c-light);padding:100px 28px;position:relative;overflow:hidden">
     <div class="{{ patternLightClass }}" style="position:absolute;inset:0;opacity:0.16;pointer-events:none"></div>
     <div style="max-width:1240px;margin:0 auto;position:relative;z-index:1">
       <div style="text-align:center;margin-bottom:54px">
@@ -375,7 +400,7 @@
 
   <!-- ===================== INVESTMENT / PRICING ===================== -->
   <sc-if value="{{ showInvestment }}">
-  <section id="investment" aria-label="Investment" style="background:var(--c-panel);border-top:1px solid var(--c-border);padding:100px 28px">
+  <section id="investment" aria-label="Investment" class="lpg-bg-panel" style="background:var(--c-panel);border-top:1px solid var(--c-border);padding:100px 28px">
     <div style="max-width:1240px;margin:0 auto">
       <div style="text-align:center;margin-bottom:54px">
         <sc-if value="{{ investment.eyebrow }}"><p style="font-size:12px;letter-spacing:0.24em;text-transform:uppercase;color:var(--c-accent);font-weight:600;margin:0 0 14px">{{ investment.eyebrow }}</p></sc-if>
@@ -414,7 +439,7 @@
 
   <!-- ===================== REGISTRATION ===================== -->
   <sc-if value="{{ showRegister }}">
-  <section id="register" aria-label="Registration" style="background:var(--c-soft);padding:100px 28px">
+  <section id="register" aria-label="Registration" class="lpg-bg-soft" style="background:var(--c-soft);padding:100px 28px">
     <div style="max-width:1140px;margin:0 auto">
       <div style="text-align:center;margin-bottom:52px">
         <sc-if value="{{ register.eyebrow }}"><p style="font-size:12px;letter-spacing:0.24em;text-transform:uppercase;color:var(--c-brand);font-weight:600;margin:0 0 14px">{{ register.eyebrow }}</p></sc-if>
@@ -509,45 +534,66 @@
   </section>
   </sc-if>
 
-  <!-- ===================== BROCHURE ===================== -->
+  <!-- ===================== BROCHURE =====================
+       Two-card layout (matches the TMC reference): outer copy card holds
+       the body paragraph + a "note" rendered as a horizontal-rule pill;
+       inner form card has a red-brand left-border accent + the lead-
+       capture fields. When `brochure.fileUrl` is set, the success state
+       surfaces a Download CTA pointing at that URL in addition to the
+       email-it-to-you copy. -->
   <sc-if value="{{ showBrochure }}">
   <section id="brochure" aria-label="Brochure download" style="max-width:980px;margin:0 auto;padding:100px 28px;text-align:center">
-    <sc-if value="{{ brochure.eyebrow }}"><p style="font-size:12px;letter-spacing:0.24em;text-transform:uppercase;color:var(--c-accent);font-weight:600;margin:0 0 14px">{{ brochure.eyebrow }}</p></sc-if>
-    <h2 style="font-family:var(--c-serif);font-weight:400;font-size:clamp(28px,4.6vw,48px);margin:0 auto 18px;max-width:640px;color:var(--c-text)">{{ brochure.title }}</h2>
-    <sc-if value="{{ brochure.body }}"><p style="max-width:600px;margin:0 auto 36px;font-size:15.5px;line-height:1.7;color:var(--c-text2)">{{ brochure.body }}</p></sc-if>
-    <div style="background:var(--c-panel);border:1px solid var(--c-border);border-radius:12px;padding:40px;text-align:left;max-width:680px;margin:0 auto">
+    <sc-if value="{{ brochure.eyebrow }}"><p style="display:inline-block;font-size:11.5px;letter-spacing:0.22em;text-transform:uppercase;color:var(--c-brand);font-weight:700;margin:0 0 22px;border:1.5px solid var(--c-brand);border-radius:999px;padding:7px 18px;background:transparent">{{ brochure.eyebrow }}</p></sc-if>
+    <h2 style="font-family:var(--c-serif);font-weight:400;font-size:clamp(28px,4.6vw,48px);margin:0 auto 30px;max-width:720px;color:var(--c-text)">{{ brochure.title }}</h2>
+
+    <sc-if value="{{ brShowCopyCard }}">
+    <div style="background:#fff;border:1px solid var(--c-border);border-radius:12px;padding:36px 40px;max-width:760px;margin:0 auto 28px;text-align:center">
+      <sc-if value="{{ brochure.body }}"><p style="font-size:15.5px;line-height:1.75;color:var(--c-text2);margin:0 0 22px">{{ brochure.body }}</p></sc-if>
+      <sc-if value="{{ brochure.note }}">
+        <div style="display:flex;align-items:center;justify-content:center;gap:14px;margin:0">
+          <span style="flex:1;height:1px;background:var(--c-border);max-width:120px"></span>
+          <span style="font-size:11.5px;letter-spacing:0.16em;text-transform:uppercase;color:var(--c-brand);font-weight:700;text-align:center">{{ brochure.note }}</span>
+          <span style="flex:1;height:1px;background:var(--c-border);max-width:120px"></span>
+        </div>
+      </sc-if>
+    </div>
+    </sc-if>
+
+    <div style="background:#fff;border:1px solid var(--c-border);border-left:4px solid var(--c-brand);border-radius:8px;padding:36px 40px;text-align:left;max-width:520px;margin:0 auto;box-shadow:0 2px 14px rgba(0,0,0,0.04)">
 
       <sc-if value="{{ brSubmitted }}">
       <div style="text-align:center;padding:8px 0">
         <div style="width:56px;height:56px;border-radius:50%;background:color-mix(in srgb,var(--c-brand) 12%,transparent);color:var(--c-brand);display:flex;align-items:center;justify-content:center;font-size:26px;margin:0 auto 16px">✓</div>
         <h3 style="font-family:var(--c-serif);font-weight:700;font-size:20px;margin:0 0 8px;color:var(--c-text)">{{ brochure.successTitle }}</h3>
-        <p style="font-size:14.5px;line-height:1.6;color:var(--c-text2);margin:0">{{ brochure.successBody }}</p>
+        <p style="font-size:14.5px;line-height:1.6;color:var(--c-text2);margin:0 0 18px">{{ brochure.successBody }}</p>
+        <sc-if value="{{ brHasFile }}">
+          <a href="{{ brochure.fileUrl }}" target="_blank" rel="noopener" download="" style="display:inline-block;background:var(--c-brand);color:#fff;text-decoration:none;padding:13px 28px;border-radius:4px;font-size:12.5px;letter-spacing:0.12em;text-transform:uppercase;font-weight:700;font-family:var(--c-sans);margin-top:4px" style-hover="background:var(--c-dark)">Download the brochure now ↓</a>
+        </sc-if>
       </div>
       </sc-if>
 
       <sc-if value="{{ brShowForm }}">
       <div>
-        <sc-if value="{{ brochure.note }}"><p style="font-size:13.5px;color:var(--c-text2);margin:0 0 24px;text-align:center">{{ brochure.note }}</p></sc-if>
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:18px">
+        <div style="display:flex;flex-direction:column;gap:18px">
           <sc-for list="{{ brFields }}" as="f">
             <div>
-              <label style="display:block;font-size:13px;font-weight:600;color:var(--c-text);margin-bottom:8px">{{ f.label }}{{ f.reqMark }}</label>
+              <label style="display:block;font-size:11.5px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:var(--c-text);margin-bottom:8px">{{ f.label }}{{ f.reqMark }}</label>
               <sc-if value="{{ f.isSelect }}">
-                <select onChange="{{ f.onInput }}" value="{{ f.value }}" required="{{ f.required }}" aria-label="{{ f.label }}" style="width:100%;padding:12px 14px;border:1px solid var(--c-border);border-radius:6px;font-size:14.5px;font-family:var(--c-sans);color:var(--c-text);background:var(--c-light)" style-focus="border-color:var(--c-brand);outline:none">
+                <select onChange="{{ f.onInput }}" value="{{ f.value }}" required="{{ f.required }}" aria-label="{{ f.label }}" style="width:100%;padding:12px 14px;border:1px solid var(--c-border);border-radius:4px;font-size:14.5px;font-family:var(--c-sans);color:var(--c-text);background:#fff" style-focus="border-color:var(--c-brand);outline:none">
                   <option value="">{{ f.placeholder }}</option>
                   <sc-for list="{{ f.options }}" as="opt"><option value="{{ opt }}">{{ opt }}</option></sc-for>
                 </select>
               </sc-if>
               <sc-if value="{{ f.isInput }}">
-                <input type="{{ f.type }}" onChange="{{ f.onInput }}" value="{{ f.value }}" required="{{ f.required }}" placeholder="{{ f.placeholder }}" aria-label="{{ f.label }}" style="width:100%;padding:12px 14px;border:1px solid var(--c-border);border-radius:6px;font-size:14.5px;font-family:var(--c-sans);color:var(--c-text);background:var(--c-light)" style-focus="border-color:var(--c-brand);outline:none">
+                <input type="{{ f.type }}" onChange="{{ f.onInput }}" value="{{ f.value }}" required="{{ f.required }}" placeholder="{{ f.placeholder }}" aria-label="{{ f.label }}" style="width:100%;padding:12px 14px;border:1px solid var(--c-border);border-radius:4px;font-size:14.5px;font-family:var(--c-sans);color:var(--c-text);background:#fff" style-focus="border-color:var(--c-brand);outline:none">
               </sc-if>
             </div>
           </sc-for>
         </div>
         <input type="text" tabindex="-1" autocomplete="off" onChange="{{ brHpSetter }}" class="lpg-hide" aria-hidden="true">
         <sc-if value="{{ brError }}"><p role="alert" style="font-size:13px;color:var(--c-brand);margin:16px 0 0">{{ brError }}</p></sc-if>
-        <button type="button" onClick="{{ brSubmit }}" style="width:100%;margin-top:24px;background:var(--c-dark);color:#fff;border:none;padding:15px;border-radius:4px;font-size:13px;letter-spacing:0.12em;text-transform:uppercase;font-weight:600;font-family:var(--c-sans);cursor:pointer" style-hover="background:var(--c-brand)">{{ brochure.submitLabel }}</button>
-        <p style="font-size:12px;color:var(--c-text2);text-align:center;margin:16px 0 0">No obligation. For informed decision-making.</p>
+        <button type="button" onClick="{{ brSubmit }}" style="width:100%;margin-top:24px;background:var(--c-brand);color:#fff;border:none;padding:15px;border-radius:4px;font-size:12.5px;letter-spacing:0.12em;text-transform:uppercase;font-weight:700;font-family:var(--c-sans);cursor:pointer" style-hover="background:var(--c-dark)">{{ brochure.submitLabel }}</button>
+        <p style="font-size:12px;color:var(--c-brand);text-align:center;margin:16px 0 0;font-style:italic">No obligation. For informed decision-making.</p>
       </div>
       </sc-if>
     </div>
@@ -560,7 +606,7 @@
        instead of stacking three adjacent dark sections. Text-heavy
        question/answer content also reads more comfortably on a light bg. -->
   <sc-if value="{{ showFaqs }}">
-  <section id="faqs" aria-label="Frequently asked questions" style="background:var(--c-soft);color:var(--c-text);padding:100px 28px;position:relative;overflow:hidden">
+  <section id="faqs" aria-label="Frequently asked questions" class="lpg-bg-soft" style="background:var(--c-soft);color:var(--c-text);padding:100px 28px;position:relative;overflow:hidden">
     <div class="{{ patternLightClass }}" style="position:absolute;inset:0;opacity:0.16;pointer-events:none"></div>
     <div style="max-width:920px;margin:0 auto;position:relative;z-index:1">
       <div style="text-align:center;margin-bottom:44px">
@@ -664,6 +710,28 @@
     <span style="width:9px;height:9px;border-radius:50%;background:#fff;display:inline-block;animation:lpg-pulse 1.6s ease-in-out infinite"></span>
     {{ nav.ctaLabel }}
   </a>
+  </sc-if>
+
+  <!-- ===================== PREVIEW BANNER =====================
+       Renders only when the page is unpublished / served via the
+       operator preview route. Fixed top of viewport so the operator
+       always knows submissions made here will NOT land in Leads.
+       The renderer sets cfg.meta.isPreview / cfg.meta.isPublished. -->
+  <sc-if value="{{ showPreviewBanner }}">
+  <div role="status" aria-live="polite" style="position:fixed;top:0;left:0;right:0;z-index:90;background:#92400E;color:#fff;padding:10px 20px;text-align:center;font-size:13.5px;line-height:1.4;letter-spacing:0.02em;box-shadow:0 2px 8px rgba(0,0,0,0.2)">
+    <strong style="font-weight:700">Preview mode</strong> — registrations made on this page are <strong>not</strong> saved. Publish the page (and feature it at <code style="background:rgba(255,255,255,0.18);padding:2px 6px;border-radius:3px;font-size:12.5px">/trips</code>) so real submissions land in your Leads.
+  </div>
+  </sc-if>
+
+  <!-- ===================== TOAST =====================
+       Transient notification surfaced by showToast(). Pinned to the
+       bottom-right of the viewport; auto-dismisses after 5 s. Used for
+       preview-mode warnings, submission success / failure messages,
+       and any other one-shot operator feedback. -->
+  <sc-if value="{{ showToast }}">
+  <div role="status" aria-live="polite" style="position:fixed;right:24px;bottom:96px;z-index:100;max-width:380px;background:{{ toastBg }};color:#fff;padding:14px 18px;border-radius:8px;box-shadow:0 12px 32px rgba(0,0,0,0.28);font-size:13.5px;line-height:1.55;letter-spacing:0.01em">
+    {{ toastMessage }}
+  </div>
   </sc-if>
 
 </div>
@@ -832,8 +900,7 @@ var DEFAULT_CONFIG = {
       { title:'Step 1: Student Information', fields:[
         {name:'student_name', label:'Student Full Name', type:'text', required:true, placeholder:'Enter full name'},
         {name:'grade', label:'Grade', type:'text', required:true, placeholder:'e.g. Grade 8'},
-        {name:'school', label:'School', type:'select', required:true, placeholder:'Select school',
-          options:['School of India · KR Pet','DPS North','DPS South','DPS East','DPS West','DPS E-City','DPS Mysore','School of India']}
+        {name:'school', label:'School', type:'text', required:true, placeholder:'Enter school name'}
       ]},
       { title:'Step 2: Parent / Guardian', fields:[
         {name:'parent_name', label:'Parent / Guardian Name', type:'text', required:true, placeholder:'Enter full name'},
@@ -862,7 +929,7 @@ var DEFAULT_CONFIG = {
     fields:[
       {name:'parent_name', label:"Parent's Name", type:'text', required:true, placeholder:'Full name'},
       {name:'phone', label:'Phone Number', type:'tel', required:true, placeholder:'Mobile number'},
-      {name:'school', label:'Select School', type:'select', required:true, placeholder:'Select your school', options:['DPS','School of India','Other']},
+      {name:'school', label:'School', type:'text', required:true, placeholder:'Enter your school name'},
       {name:'email', label:"Parent's Email", type:'email', required:true, placeholder:'email@example.com'}
     ]
   },
@@ -912,7 +979,8 @@ class Component extends DCLogic {
   state = {
     now: Date.now(), openFaq:0, faqCat:'all', faqQuery:'',
     regStep:0, regValues:{}, regError:'', regSubmitted:false, regSending:false,
-    brValues:{}, brError:'', brSubmitted:false, brSending:false
+    brValues:{}, brError:'', brSubmitted:false, brSending:false,
+    toast: null
   };
 
   componentDidMount(){
@@ -952,24 +1020,57 @@ class Component extends DCLogic {
     return (e) => { const v = e && e.target ? e.target.value : ''; this.setState(st => { const next = Object.assign({}, st[bag]); next[name] = v; const patch = {}; patch[bag] = next; return patch; }); };
   }
 
+  showToast(message, tone){
+    /* tone: 'info' | 'success' | 'warning' | 'error' (default info). The
+       toast auto-dismisses after 5 s; the visitor can keep clicking
+       around in the meantime. */
+    if(!message) return;
+    const id = Math.random().toString(36).slice(2);
+    this.setState(st => ({ toast: { id, message, tone: tone || 'info' } }));
+    setTimeout(() => {
+      this.setState(st => (st.toast && st.toast.id === id ? { toast: null } : null));
+    }, 5000);
+  }
+
   submitForm(opts){
     /* opts: { bag, endpoint, type, cfg, doneKey, sendingKey } */
     const vals = this.state[opts.bag] || {};
     if(vals._hp){ const p = {}; p[opts.doneKey] = true; this.setState(p); return; }  // honeypot tripped → silently "succeed"
+    const meta = (opts.cfg && opts.cfg.meta) || {};
     const payload = {
       type: opts.type,
-      slug: opts.cfg.meta && opts.cfg.meta.slug,
-      tripId: opts.cfg.meta && opts.cfg.meta.tripId,
+      slug: meta.slug,
+      tripId: meta.tripId,
       subBrand: opts.cfg.brand && opts.cfg.brand.subBrand,
+      // Pass audience through so the server's pickFormFromContent can
+      // match the correct form block when a page hosts more than one.
+      audience: meta.audience || '',
       fields: vals,
       submittedAt: new Date().toISOString()
     };
-    if(!opts.endpoint){ const p = {}; p[opts.doneKey] = true; this.setState(p); return; } // preview: simulate success
+    if(!opts.endpoint){
+      /* Preview / draft mode — the renderer didn't wire an endpoint
+         because the page isn't published yet. Surface a toast so the
+         operator knows this isn't being saved and don't mislead them
+         with a "Thank you" success card. */
+      this.showToast('Preview mode — this submission is not saved. Publish the page (and feature it at /trips) so real registrations land in your Leads.', 'warning');
+      return;
+    }
     const s = {}; s[opts.sendingKey] = true; this.setState(s);
     fetch(opts.endpoint, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) })
       .then(r => { if(!r.ok) throw new Error('bad status'); return r.json().catch(() => ({})); })
-      .then(() => { const p = {}; p[opts.doneKey] = true; p[opts.sendingKey] = false; this.setState(p); })
-      .catch(() => { const p = { regError:'', brError:'' }; const key = opts.bag === 'regValues' ? 'regError' : 'brError'; p[key] = 'Something went wrong. Please try again.'; p[opts.sendingKey] = false; this.setState(p); });
+      .then(() => {
+        const p = {}; p[opts.doneKey] = true; p[opts.sendingKey] = false; this.setState(p);
+        this.showToast('Registration received — our team will reach out shortly.', 'success');
+      })
+      .catch(() => {
+        const p = { regError:'', brError:'' };
+        const key = opts.bag === 'regValues' ? 'regError' : 'brError';
+        p[key] = 'Something went wrong. Please try again.';
+        p[opts.sendingKey] = false;
+        this.setState(p);
+        this.showToast('Submission failed. Please check your details and try again.', 'error');
+      });
   }
 
   renderVals(){
@@ -1061,11 +1162,23 @@ class Component extends DCLogic {
       isEmbed: !v.fileSrc && !embedIsFile && !!v.embedUrl
     };
 
-    /* ----- intro ----- */
+    /* ----- intro -----
+       gains accepts two legacy shapes:
+         - string[]                    (pre-2026-06 saved pages)
+         - { title, description }[]    (current bridge output)
+       We normalise to { title, description } so the template can use a
+       single sc-for loop without branching. */
     const intro = cfg.intro || {};
+    const rawGains = Array.isArray(intro.gains) ? intro.gains : [];
+    const normGains = rawGains.map(g => {
+      if (g && typeof g === 'object') {
+        return { title: String(g.title||'').trim(), description: String(g.description||g.body||'').trim() };
+      }
+      return { title: String(g||'').trim(), description: '' };
+    }).filter(g => g.title);
     out.showIntro = !!(intro.title);
-    out.intro = { title:intro.title, paragraphs:intro.paragraphs||[], gainsTitle:intro.gainsTitle, gainsQuote:intro.gainsQuote, gains:intro.gains||[], ctaLabel:intro.ctaLabel||'' };
-    out.showGains = !!(intro.gains && intro.gains.length);
+    out.intro = { title:intro.title, paragraphs:intro.paragraphs||[], gainsTitle:intro.gainsTitle, gainsQuote:intro.gainsQuote, gains:normGains, ctaLabel:intro.ctaLabel||'' };
+    out.showGains = normGains.length > 0;
 
     /* ----- highlights / flip cards ----- */
     const hl = cfg.highlights || {};
@@ -1167,7 +1280,18 @@ class Component extends DCLogic {
     const br = cfg.brochure || {};
     out.showBrochure = !!(br.enabled && br.fields && br.fields.length);
     out.brochure = { eyebrow:br.eyebrow, title:br.title, body:br.body, note:br.note, submitLabel:br.submitLabel || 'Download',
-      successTitle: br.successTitle || 'Thank you!', successBody: br.successBody || 'Your brochure is on the way.' };
+      successTitle: br.successTitle || 'Thank you!', successBody: br.successBody || 'Your brochure is on the way.',
+      /* fileUrl — operator-uploaded PDF or pasted hosted link. Surfaces
+         a "Download the brochure now" CTA in the post-submit success
+         card so visitors can grab the file immediately in addition to
+         the email-it-to-you flow. Empty string = no direct link, success
+         card stays text-only. */
+      fileUrl: br.fileUrl || '' };
+    /* Only render the outer copy card when there's actually copy to put
+       in it — empty body + empty note collapses the card entirely so the
+       form alone sits on the page (avoids an empty white rectangle). */
+    out.brShowCopyCard = !!(br.body || br.note);
+    out.brHasFile = !!(br.fileUrl && String(br.fileUrl).trim());
     out.brSubmitted = this.state.brSubmitted;
     out.brShowForm = !this.state.brSubmitted;
     out.brFields = (br.fields || []).map(f => ({
@@ -1255,6 +1379,24 @@ class Component extends DCLogic {
     };
     out.showEmails = emailsList.length > 0;
     out.showPhones = !!(ft.phones && ft.phones.length);
+
+    /* ----- toast (transient banner shown after submit / on preview) -----
+       Persistent preview banner: when the renderer flags this as a
+       preview / unpublished render, show a always-visible banner at
+       the top of the page so the operator never confuses preview
+       with production. Goes away on published renders. */
+    const tst = this.state.toast || null;
+    out.showToast = !!tst;
+    out.toastMessage = tst ? tst.message : '';
+    out.toastTone = tst ? tst.tone : 'info';
+    out.toastBg = tst
+      ? (tst.tone === 'success' ? '#0E7C5B'
+        : tst.tone === 'error'   ? '#B91C1C'
+        : tst.tone === 'warning' ? '#92400E'
+        : '#1F2937')
+      : '';
+    const meta = cfg.meta || {};
+    out.showPreviewBanner = !!(meta.isPreview === true || meta.isPublished === false);
 
     return out;
   }

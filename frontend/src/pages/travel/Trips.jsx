@@ -14,6 +14,12 @@ import { Luggage, Filter, Plus, Users, Calendar as CalendarIcon, X } from "lucid
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 
+// School is captured as free-text so the operator doesn't have to pre-create
+// a Contact row for every new school. The backend POST /api/travel/trips
+// accepts `schoolName`, finds-or-creates a tenant Contact (subBrand="tmc")
+// with that name, and uses its id as schoolContactId. Existing callers that
+// still pass schoolContactId continue to work — both shapes are supported.
+
 const STATUSES = [
   { value: "", label: "All statuses" },
   { value: "confirmed", label: "Confirmed" },
@@ -43,7 +49,7 @@ function fmtMoney(amt, currency = "INR") {
 }
 
 const EMPTY_FORM = {
-  tripCode: "", destination: "", schoolContactId: "",
+  tripCode: "", destination: "", schoolName: "",
   departDate: "", returnDate: "", pricePerStudent: "", status: "confirmed",
 };
 
@@ -55,19 +61,15 @@ export default function Trips() {
   const [creating, setCreating] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
-  const [schools, setSchools] = useState([]);
 
   const openCreate = () => {
     setForm(EMPTY_FORM);
     setCreating(true);
-    fetchApi("/api/contacts?limit=200")
-      .then((res) => setSchools(Array.isArray(res) ? res : (res?.contacts || [])))
-      .catch(() => setSchools([]));
   };
 
   const submitCreate = async (e) => {
     e.preventDefault();
-    if (!form.tripCode.trim() || !form.destination.trim() || !form.schoolContactId
+    if (!form.tripCode.trim() || !form.destination.trim() || !form.schoolName.trim()
         || !form.departDate || !form.returnDate) {
       notify.error("Trip code, destination, school, depart + return dates required");
       return;
@@ -77,7 +79,7 @@ export default function Trips() {
       const body = {
         tripCode: form.tripCode.trim(),
         destination: form.destination.trim(),
-        schoolContactId: parseInt(form.schoolContactId, 10),
+        schoolName: form.schoolName.trim(),
         departDate: form.departDate,
         returnDate: form.returnDate,
         status: form.status,
@@ -244,18 +246,13 @@ export default function Trips() {
               </label>
               <label style={fieldLabel}>
                 School
-                <select
-                  required value={form.schoolContactId}
-                  onChange={(e) => setForm({ ...form, schoolContactId: e.target.value })}
+                <input
+                  required type="text" value={form.schoolName}
+                  onChange={(e) => setForm({ ...form, schoolName: e.target.value })}
                   style={inputStyle}
-                >
-                  <option value="">— pick a school contact —</option>
-                  {schools.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name || c.email || `Contact #${c.id}`}
-                    </option>
-                  ))}
-                </select>
+                  placeholder='e.g. "DPS North" or "Bharat Public School"'
+                  maxLength={200}
+                />
               </label>
               <div style={{ display: "flex", gap: 8 }}>
                 <label style={{ ...fieldLabel, flex: 1 }}>

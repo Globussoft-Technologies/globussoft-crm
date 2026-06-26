@@ -120,4 +120,206 @@ async function syncWellnessRoleFromRbacRoles(
   return next;
 }
 
-module.exports = { syncWellnessRoleFromRbacRoles };
+/**
+ * Boot-time reconciliation — walk every user in every wellness tenant
+ * and re-derive User.wellnessRole from their currently-assigned RBAC
+ * role(s). Idempotent: users already in sync are no-op reads.
+ *
+ * Why this exists despite the per-user sync at every assignment site:
+ * the routes/roles.js + routes/staff.js call sites only fire on WRITES.
+ * Any user whose RBAC role was attached via a path that bypassed the
+ * helper (legacy data created before the helper existed, direct SQL,
+ * future code paths that forget to call it, partial seeds, restored
+ * backups, etc.) drifts silently. The /doctors/availability picker
+ * relies on User.wellnessRole as its sole source of truth, so drift
+ * makes the affected user invisible to scheduling.
+ *
+ * Uses onlyIfEmpty=true so this is strictly an additive fill — it
+ * derives wellnessRole when null, never overwrites or clears an
+ * existing value. Critical for seeds like enhanced-wellness where
+ * clinical staff are set up with legacy role=USER + wellnessRole=
+ * 'doctor' deliberately (no matching RBAC role yet); we must not
+ * interpret that as "stale" and wipe their clinical tag.
+ *
+ * Wired into server.js's server.listen callback alongside
+ * ensureRbacOnBoot. Set DISABLE_WELLNESS_ROLE_BOOT_SYNC=1 to skip.
+ *
+ * @returns {Promise<{tenantsScanned:number,usersScanned:number,changed:number,set:number,cleared:number}>}
+ */
+async function backfillWellnessRolesOnBoot() {
+  const tenants = await prisma.tenant.findMany({
+    where: { vertical: "wellness" },
+    select: { id: true },
+    orderBy: { id: "asc" },
+  });
+
+  const stats = {
+    tenantsScanned: tenants.length,
+    usersScanned: 0,
+    changed: 0,
+    set: 0,
+    cleared: 0,
+  };
+
+  for (const t of tenants) {
+    const users = await prisma.user.findMany({
+      where: { tenantId: t.id },
+      select: { id: true, wellnessRole: true },
+    });
+    stats.usersScanned += users.length;
+    for (const u of users) {
+      const before = u.wellnessRole;
+      const after = await syncWellnessRoleFromRbacRoles(prisma, {
+        userId: u.id,
+        tenantId: t.id,
+        onlyIfEmpty: true,
+      });
+      if (after !== before) {
+        stats.changed++;
+        if (after && !before) stats.set++;
+        else if (!after && before) stats.cleared++;
+      }
+    }
+  }
+  return stats;
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Reverse direction: wellnessRole → RBAC role
+// ─────────────────────────────────────────────────────────────────────
+//
+// The forward sync above handles "admin promoted a user via Roles &
+// Permissions → clinical tag follows". The reverse handles "admin set
+// the clinical tag via the Staff form (or it was seeded that way) →
+// matching RBAC role gets attached so the user actually has the
+// clinical permission grants".
+//
+// Without this, users with role=USER + wellnessRole='doctor' (e.g. the
+// enhanced-wellness seed for Dr Harsh / Dr Meena / Dr Vikas) appear in
+// the Calendar's doctor picker but can't read the clinical surfaces
+// the DOCTOR permission unlocks (patients.*, visits.*, prescriptions.*,
+// my_appointments.read, etc.) — they're "doctors in name only".
+//
+// Two safety rails on this direction:
+//   1) Only auto-promote from USER / CUSTOMER / no-role. Never override
+//      ADMIN or MANAGER — those were explicit admin choices and a clinic
+//      manager who happens to also be tagged 'doctor' should stay
+//      MANAGER, not get silently demoted.
+//   2) Only fires when the tenant has the matching RBAC role provisioned
+//      (DOCTOR / NURSE / TELECALLER — ensureRbacOnBoot creates these on
+//      every wellness tenant). For catalog-only keys like 'professional'
+//      / 'stylist' / 'helper' there's no RBAC role to promote to, so the
+//      helper no-ops cleanly.
+
+const PROMOTABLE_FROM = new Set(["USER", "CUSTOMER"]);
+
+/**
+ * Promote a user's RBAC role to match their wellnessRole, if one exists
+ * and the user is currently on a promotable tier.
+ *
+ * @param {object} client    Prisma client OR $transaction tx.
+ * @param {object} params
+ * @param {number} params.userId
+ * @param {number} params.tenantId
+ * @returns {Promise<string|null>} the assigned RBAC role key, or null
+ *                  when nothing was changed (already on target, no
+ *                  matching role exists, user holds a privileged role
+ *                  we won't override, non-wellness tenant, etc.)
+ */
+async function syncRbacRoleFromWellnessRole(
+  client,
+  { userId, tenantId } = {},
+) {
+  if (!userId || !tenantId) return null;
+  const db = client || prisma;
+
+  const tenant = await db.tenant.findUnique({
+    where: { id: tenantId },
+    select: { vertical: true },
+  });
+  if (!tenant || tenant.vertical !== "wellness") return null;
+
+  const user = await db.user.findUnique({
+    where: { id: userId },
+    select: { wellnessRole: true, tenantId: true, userType: true },
+  });
+  if (!user || user.tenantId !== tenantId) return null;
+  if (user.userType !== "STAFF") return null;
+  if (!user.wellnessRole) return null;
+
+  const targetKey = String(user.wellnessRole).toUpperCase();
+  const targetRole = await db.role.findFirst({
+    where: { tenantId, key: targetKey, isActive: true },
+    select: { id: true, key: true },
+  });
+  if (!targetRole) return null;
+
+  const existing = await db.userRole.findFirst({
+    where: { userId },
+    include: { role: { select: { id: true, key: true } } },
+  });
+
+  if (existing && existing.roleId === targetRole.id) return targetRole.key;
+  if (existing && !PROMOTABLE_FROM.has(existing.role.key)) return null;
+
+  // Schema enforces @@unique([userId]) on UserRole, so replacement is
+  // delete-then-create within the same transaction. Boot caller has no
+  // human assigner, so assignedById stays null (the field is nullable).
+  if (existing) {
+    await db.userRole.delete({ where: { id: existing.id } });
+  }
+  await db.userRole.create({
+    data: { userId, roleId: targetRole.id, assignedById: null },
+  });
+  return targetRole.key;
+}
+
+/**
+ * Boot-time reverse reconciliation — walk every wellness-tenant user
+ * and ensure that anyone with wellnessRole='doctor' / 'nurse' /
+ * 'telecaller' AND a promotable current RBAC role gets the matching
+ * permission role attached. Idempotent.
+ *
+ * Pairs with backfillWellnessRolesOnBoot — together they make both
+ * directions self-heal on every deploy, so a tenant that was seeded
+ * before either sync existed converges to consistent state without any
+ * manual ops.
+ *
+ * @returns {Promise<{tenantsScanned:number,usersScanned:number,promoted:number}>}
+ */
+async function backfillRbacRolesFromWellnessRolesOnBoot() {
+  const tenants = await prisma.tenant.findMany({
+    where: { vertical: "wellness" },
+    select: { id: true },
+    orderBy: { id: "asc" },
+  });
+
+  const stats = {
+    tenantsScanned: tenants.length,
+    usersScanned: 0,
+    promoted: 0,
+  };
+
+  for (const t of tenants) {
+    const users = await prisma.user.findMany({
+      where: { tenantId: t.id, wellnessRole: { not: null } },
+      select: { id: true },
+    });
+    stats.usersScanned += users.length;
+    for (const u of users) {
+      const assigned = await syncRbacRoleFromWellnessRole(prisma, {
+        userId: u.id,
+        tenantId: t.id,
+      });
+      if (assigned) stats.promoted++;
+    }
+  }
+  return stats;
+}
+
+module.exports = {
+  syncWellnessRoleFromRbacRoles,
+  backfillWellnessRolesOnBoot,
+  syncRbacRoleFromWellnessRole,
+  backfillRbacRolesFromWellnessRolesOnBoot,
+};

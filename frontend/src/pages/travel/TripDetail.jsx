@@ -24,7 +24,10 @@ const TABS = [
   { key: "participants", label: "Participants", icon: Users },
   { key: "rooming", label: "Rooming", icon: BedDouble },
   { key: "payment", label: "Payment plan", icon: Wallet },
-  { key: "microsite", label: "Microsite", icon: Globe },
+  // Renamed from "Microsite" so it reads naturally to operators + clients —
+  // same underlying tab `key` (and same TripMicrosite table) so no route /
+  // public-URL change. The body of the tab is unchanged.
+  { key: "microsite", label: "Public page", icon: Globe },
 ];
 
 function fmt(d) {
@@ -203,9 +206,24 @@ function OverviewTab({ trip, onJump }) {
           icon={Users}
           label="Participants"
           value={partCount}
-          hint={ops?.participants?.capturedConsent != null
-            ? `${ops.participants.capturedConsent} consent captured`
-            : (partCount === 0 ? "Add the first one" : null)}
+          hint={(() => {
+            // Prefer the application-status breakdown when the ops-dashboard
+            // call has returned it (server-computed). Fall back to consent
+            // count for pre-ops-dashboard states, then to a friendly empty
+            // hint when no participants have registered yet.
+            const pr = ops?.participants;
+            if (pr && typeof pr.approved === "number") {
+              const bits = [];
+              if (pr.approved) bits.push(`${pr.approved} approved`);
+              if (pr.pendingReview) bits.push(`${pr.pendingReview} pending`);
+              if (pr.rejected) bits.push(`${pr.rejected} rejected`);
+              if (bits.length) return bits.join(" · ");
+            }
+            if (ops?.participants?.capturedConsent != null) {
+              return `${ops.participants.capturedConsent} consent captured`;
+            }
+            return partCount === 0 ? "Add the first one" : null;
+          })()}
           onClick={() => onJump?.("participants")}
         />
         <KpiCard
@@ -259,10 +277,10 @@ function OverviewTab({ trip, onJump }) {
         )}
       </SummaryBand>
 
-      {/* Microsite band */}
+      {/* Public page band (was: Microsite — renamed in-place; same data, same tab) */}
       <SummaryBand
         icon={Globe}
-        title="Microsite"
+        title="Public page"
         onClick={() => onJump?.("microsite")}
         status={trip.microsite ? "Published" : "Not published"}
         statusTone={trip.microsite ? "good" : "muted"}
@@ -274,7 +292,7 @@ function OverviewTab({ trip, onJump }) {
           </div>
         ) : (
           <div style={{ fontSize: 13, color: "var(--text-secondary)" }}>
-            Publish a public itinerary page for participants and parents.
+            Publish a public registration page that parents can use to sign their children up for this trip.
           </div>
         )}
       </SummaryBand>
@@ -502,9 +520,33 @@ function StatusBadge({ status }) {
 
 // ─── Participants tab ────────────────────────────────────────────────
 
+// Application-status pill colours mirror the Overview KPI hint colours so an
+// operator's eye can track a single visual language across both surfaces.
+const APP_STATUS_STYLES = {
+  pending:    { label: "PENDING REVIEW", bg: "rgba(200,154,78,0.18)", color: "#9A6F2E" },
+  approved:   { label: "APPROVED",       bg: "rgba(47,122,77,0.14)",  color: "#2F7A4D" },
+  rejected:   { label: "REJECTED",       bg: "rgba(168,50,63,0.14)",  color: "#A8323F" },
+  waitlisted: { label: "WAITLISTED",     bg: "rgba(38,88,85,0.16)",   color: "#265855" },
+};
+
+function StatusPill({ status }) {
+  const s = APP_STATUS_STYLES[status] || APP_STATUS_STYLES.pending;
+  return (
+    <span style={{
+      background: s.bg, color: s.color,
+      padding: "3px 10px", borderRadius: 12, fontSize: 11, fontWeight: 600,
+      letterSpacing: 0.4, whiteSpace: "nowrap",
+    }}>{s.label}</span>
+  );
+}
+
 function ParticipantsTab({ trip, onChange, notify }) {
   const [adding, setAdding] = useState(false);
   const [form, setForm] = useState({ fullName: "", parentName: "", parentPhone: "" });
+  // Tracks which participant row currently has an approve / reject call in
+  // flight so we can disable BOTH buttons on that row (avoid double-click
+  // races) without disabling everyone else's controls.
+  const [decidingId, setDecidingId] = useState(null);
 
   const add = async () => {
     if (!form.fullName.trim()) {
@@ -556,6 +598,33 @@ function ParticipantsTab({ trip, onChange, notify }) {
     }
   };
 
+  // Approve / reject a participant's registration. Uses dedicated POST
+  // endpoints (not PATCH) so the audit trail captures the decision cleanly
+  // and the workflow engine can hook off the verb later.
+  const decide = async (pid, action) => {
+    if (action === "reject") {
+      const ok = await notify.confirm({
+        title: "Reject application",
+        message: "Mark this participant as rejected? You can re-approve later if needed.",
+        confirmText: "Reject",
+        destructive: true,
+      });
+      if (!ok) return;
+    }
+    setDecidingId(pid);
+    try {
+      await fetchApi(`/api/travel/trips/${trip.id}/participants/${pid}/${action}`, {
+        method: "POST",
+      });
+      notify.success(action === "approve" ? "Application approved" : "Application rejected");
+      onChange();
+    } catch (e) {
+      notify.error(e?.body?.error || `Failed to ${action}`);
+    } finally {
+      setDecidingId(null);
+    }
+  };
+
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 12 }}>
@@ -593,29 +662,81 @@ function ParticipantsTab({ trip, onChange, notify }) {
             </div>
           </div>
         ) : (
-          trip.participants.map((p) => (
-            <div key={p.id} style={row}>
-              <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0, flex: 1 }}>
-                <strong style={{ fontSize: 14, color: "var(--text-primary)" }}>{p.fullName}</strong>
-                {(p.parentName || p.parentPhone) && (
-                  <div style={{ fontSize: 12, color: "var(--text-secondary)", display: "flex", flexWrap: "wrap", alignItems: "center", columnGap: 8, rowGap: 2 }}>
-                    {p.parentName && (
-                      <span>
-                        <span style={{ opacity: 0.7 }}>Parent</span> · {p.parentName}
-                      </span>
-                    )}
-                    {p.parentPhone && <span style={{ fontVariantNumeric: "tabular-nums" }}>{p.parentPhone}</span>}
+          trip.participants.map((p) => {
+            // Default to "pending" so legacy rows (pre-applicationStatus
+            // column) read as pending review rather than as an unknown
+            // status. The schema default already covers new rows.
+            const status = p.applicationStatus || "pending";
+            const isPending = status === "pending";
+            const isApproved = status === "approved";
+            const isRejected = status === "rejected";
+            const busy = decidingId === p.id;
+            return (
+              <div key={p.id} style={row}>
+                <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0, flex: 1 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                    <strong style={{ fontSize: 14, color: "var(--text-primary)" }}>{p.fullName}</strong>
+                    <StatusPill status={status} />
                   </div>
-                )}
+                  {(p.parentName || p.parentPhone) && (
+                    <div style={{ fontSize: 12, color: "var(--text-secondary)", display: "flex", flexWrap: "wrap", alignItems: "center", columnGap: 8, rowGap: 2 }}>
+                      {p.parentName && (
+                        <span>
+                          <span style={{ opacity: 0.7 }}>Parent</span> · {p.parentName}
+                        </span>
+                      )}
+                      {p.parentPhone && <span style={{ fontVariantNumeric: "tabular-nums" }}>{p.parentPhone}</span>}
+                    </div>
+                  )}
+                  {p.reviewNotes && (
+                    <div style={{ fontSize: 11, color: "var(--text-secondary)", fontStyle: "italic", marginTop: 2 }}>
+                      Note: {p.reviewNotes}
+                    </div>
+                  )}
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", flexShrink: 0 }}>
+                  {/* Approve/Reject CTAs — visible only when an action makes sense.
+                      Pending → both. Approved → "Reject" so a wrongly-approved
+                      row can be reversed. Rejected → "Approve" so a re-review
+                      is one click away. */}
+                  {(isPending || isRejected) && (
+                    <button
+                      type="button"
+                      onClick={() => decide(p.id, "approve")}
+                      disabled={busy}
+                      style={{
+                        ...secondaryBtn, padding: "5px 10px", fontSize: 12,
+                        color: "#2F7A4D", borderColor: "rgba(47,122,77,0.4)",
+                        opacity: busy ? 0.6 : 1, cursor: busy ? "wait" : "pointer",
+                      }}
+                      aria-label={`Approve ${p.fullName}`}
+                    >
+                      <CheckCircle2 size={13} aria-hidden /> Approve
+                    </button>
+                  )}
+                  {(isPending || isApproved) && (
+                    <button
+                      type="button"
+                      onClick={() => decide(p.id, "reject")}
+                      disabled={busy}
+                      style={{
+                        ...secondaryBtn, padding: "5px 10px", fontSize: 12,
+                        color: "#A8323F", borderColor: "rgba(168,50,63,0.4)",
+                        opacity: busy ? 0.6 : 1, cursor: busy ? "wait" : "pointer",
+                      }}
+                      aria-label={`Reject ${p.fullName}`}
+                    >
+                      <AlertCircle size={13} aria-hidden /> Reject
+                    </button>
+                  )}
+                  <PassportCell participant={p} notify={notify} onChange={onChange} />
+                  <button type="button" onClick={() => remove(p.id)} style={iconBtn} aria-label={`Remove ${p.fullName}`}>
+                    <Trash2 size={14} />
+                  </button>
+                </div>
               </div>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", flexShrink: 0 }}>
-                <PassportCell participant={p} notify={notify} onChange={onChange} />
-                <button type="button" onClick={() => remove(p.id)} style={iconBtn} aria-label={`Remove ${p.fullName}`}>
-                  <Trash2 size={14} />
-                </button>
-              </div>
-            </div>
-          ))
+            );
+          })
         )}
       </div>
     </div>
@@ -1533,9 +1654,9 @@ function MicrositeCreate({ trip, onChange, notify }) {
           <Sparkles size={18} aria-hidden />
         </div>
         <div style={{ minWidth: 0, flex: 1 }}>
-          <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 2 }}>Create a public itinerary page</div>
+          <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 2 }}>Create a public registration page</div>
           <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
-            Pick a subdomain, fill the editor below, and hit Publish — participants and parents can read the trip plan from a shareable link.
+            Pick a subdomain, fill the editor below, and hit Publish — parents and teachers get a shareable link where they can read the trip plan and register students.
           </div>
         </div>
       </div>
@@ -1561,7 +1682,7 @@ function MicrositeCreate({ trip, onChange, notify }) {
       />
       <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
         <button type="button" onClick={submit} disabled={saving} style={saving ? primaryBtnDisabled : primaryBtn}>
-          <Save size={14} /> {saving ? "Publishing…" : "Publish microsite"}
+          <Save size={14} /> {saving ? "Publishing…" : "Publish public page"}
         </button>
       </div>
     </div>

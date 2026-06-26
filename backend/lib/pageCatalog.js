@@ -958,6 +958,13 @@ const PAGE_CATALOG = [
     category: 'Travel Marketing',
     requiredPermissions: [{ module: 'flyer_templates', action: 'read' }],
   },
+  {
+    path: '/travel/brochures',
+    label: 'Brochure Engine',
+    description: 'AI brochure PDF composer (cover, itinerary, pricing)',
+    category: 'Travel Marketing',
+    requiredPermissions: [{ module: 'marketing', action: 'read' }],
+  },
 
   // ── User self-service (notification preferences) ──────────────────
   // Empty requiredPermissions — every logged-in user (including CUSTOMER)

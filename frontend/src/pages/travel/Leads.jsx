@@ -97,7 +97,14 @@ export default function TravelLeads() {
   const [allowedChannels, setAllowedChannels] = useState(FALLBACK_CHANNELS);
 
   useEffect(() => {
-    fetchApi("/api/settings/lead-capture")
+    // #1180 — skip the call entirely for non-ADMIN users. The endpoint is
+    // ADMIN-only; without this gate, every non-ADMIN page load fired a
+    // background 403 that surfaced as the spurious "You don't have
+    // permission" toast. `silent: true` is defense-in-depth — even on
+    // ADMIN, a transient 5xx or token-rotation race shouldn't toast a
+    // passive channel-enrichment fetch.
+    if (user?.role !== "ADMIN") return;
+    fetchApi("/api/settings/lead-capture", { silent: true })
       .then((res) => {
         if (Array.isArray(res?.allowedChannels) && res.allowedChannels.length) {
           setAllowedChannels(res.allowedChannels);
@@ -105,11 +112,11 @@ export default function TravelLeads() {
         setChannelsEnabled(res?.channels || {});
       })
       .catch(() => {
-        // 403 (non-ADMIN) or 500 — show all channels with no enabled-state
+        // Transient failure — show all channels with no enabled-state
         // information. Backend filter still applies if a chip is selected.
         setChannelsEnabled({});
       });
-  }, []);
+  }, [user?.role]);
 
   const setUrlParam = (key, value) => {
     const next = new URLSearchParams(searchParams);

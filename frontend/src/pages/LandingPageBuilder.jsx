@@ -1067,15 +1067,21 @@ function PublishReadinessModal({ verdict, page, publishing, onPublish, onClose, 
       role="dialog"
       aria-modal="true"
       aria-labelledby="publish-readiness-title"
-      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 2000 }}
+      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(8px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 2000 }}
     >
-      <div style={{ background: 'var(--card-bg, #fff)', borderRadius: 10, padding: '1.5rem', width: 'min(520px, 92vw)', maxHeight: '85vh', overflowY: 'auto', boxShadow: '0 12px 32px rgba(0,0,0,0.25)' }}>
+      {/* className="card" inherits the theme-aware surface + blur from
+          index.css (.card uses var(--surface-color) which adapts to
+          dark / light). Pre-fix this used `var(--card-bg, #fff)` —
+          --card-bg isn't defined anywhere, so the fallback white made
+          the modal render white-on-white in dark mode (text was
+          var(--text-primary) which is white in dark mode → invisible). */}
+      <div className="card" style={{ padding: '1.5rem', width: 'min(520px, 92vw)', maxHeight: '85vh', overflowY: 'auto', color: 'var(--text-primary)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}>
           {ok ? <CheckCircle2 size={20} style={{ color: '#10b981' }} /> : <AlertCircle size={20} style={{ color: '#f59e0b' }} />}
-          <h3 id="publish-readiness-title" style={{ margin: 0, fontSize: '1.1rem' }}>
+          <h3 id="publish-readiness-title" style={{ margin: 0, fontSize: '1.1rem', color: 'var(--text-primary)' }}>
             {ok ? 'Ready to publish' : `${issues.length} issue${issues.length === 1 ? '' : 's'} to fix`}
           </h3>
-          <button onClick={onClose} aria-label="Close" style={{ marginLeft: 'auto', background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)' }}>✕</button>
+          <button onClick={onClose} aria-label="Close" style={{ marginLeft: 'auto', background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)', fontSize: '1.1rem', lineHeight: 1 }}>✕</button>
         </div>
         {ok ? (
           <>
@@ -1083,7 +1089,7 @@ function PublishReadinessModal({ verdict, page, publishing, onPublish, onClose, 
               Page passes every readiness check. Click Publish to make <code>/p/{page?.slug}</code> public.
             </p>
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
-              <button onClick={onClose} style={{ padding: '0.5rem 1rem', border: '1px solid var(--border-color)', borderRadius: 6, background: 'transparent', cursor: 'pointer' }}>Cancel</button>
+              <button onClick={onClose} style={{ padding: '0.5rem 1rem', border: '1px solid var(--border-color)', borderRadius: 6, background: 'transparent', color: 'var(--text-primary)', cursor: 'pointer' }}>Cancel</button>
               <button
                 onClick={onPublish}
                 disabled={publishing}
@@ -1103,11 +1109,31 @@ function PublishReadinessModal({ verdict, page, publishing, onPublish, onClose, 
                 <li key={i}>
                   <button
                     onClick={() => onJumpToBlock(it.blockIndex)}
-                    style={{ width: '100%', textAlign: 'left', display: 'flex', gap: '0.5rem', alignItems: 'flex-start', padding: '0.6rem 0.75rem', border: '1px solid var(--border-color)', borderRadius: 6, background: 'rgba(245,158,11,0.06)', color: 'var(--text-primary)', cursor: typeof it.blockIndex === 'number' ? 'pointer' : 'default', fontSize: '0.85rem' }}
+                    /* Theme-aware issue card: subtle-bg adapts to dark
+                       (rgba white .05) and light (rgba black .04); the
+                       amber left-border gives the severity hint without
+                       relying on a faint amber tint that washed out
+                       text in either theme. */
+                    style={{
+                      width: '100%',
+                      textAlign: 'left',
+                      display: 'flex',
+                      gap: '0.6rem',
+                      alignItems: 'flex-start',
+                      padding: '0.7rem 0.85rem',
+                      border: '1px solid var(--border-color)',
+                      borderLeft: '3px solid #f59e0b',
+                      borderRadius: 6,
+                      background: 'var(--subtle-bg)',
+                      color: 'var(--text-primary)',
+                      cursor: typeof it.blockIndex === 'number' ? 'pointer' : 'default',
+                      fontSize: '0.85rem',
+                      lineHeight: 1.5,
+                    }}
                   >
-                    <AlertCircle size={14} style={{ color: '#f59e0b', flexShrink: 0, marginTop: 2 }} />
-                    <span style={{ flex: 1 }}>
-                      <span style={{ fontFamily: 'ui-monospace, monospace', fontSize: '0.7rem', color: 'var(--text-secondary)', marginRight: '0.4rem' }}>{it.code}</span>
+                    <AlertCircle size={14} style={{ color: '#f59e0b', flexShrink: 0, marginTop: 3 }} />
+                    <span style={{ flex: 1, color: 'var(--text-primary)' }}>
+                      <code style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: '0.7rem', color: 'var(--text-secondary)', background: 'var(--subtle-bg-3)', padding: '1px 6px', borderRadius: 3, marginRight: '0.5rem' }}>{it.code}</code>
                       {it.message}
                     </span>
                   </button>
@@ -1115,7 +1141,7 @@ function PublishReadinessModal({ verdict, page, publishing, onPublish, onClose, 
               ))}
             </ul>
             <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-              <button onClick={onClose} style={{ padding: '0.5rem 1rem', border: '1px solid var(--border-color)', borderRadius: 6, background: 'transparent', cursor: 'pointer' }}>Close</button>
+              <button onClick={onClose} style={{ padding: '0.5rem 1rem', border: '1px solid var(--border-color)', borderRadius: 6, background: 'transparent', color: 'var(--text-primary)', cursor: 'pointer' }}>Close</button>
             </div>
           </>
         )}

@@ -128,6 +128,17 @@ prisma.digilockerSession = {
   create: vi.fn(),
   update: vi.fn(),
 };
+prisma.landingPage = {
+  findUnique: vi.fn(),
+  create: vi.fn(),
+  update: vi.fn(),
+};
+// Phase 5 — pending-registration admin endpoints
+prisma.pendingTripRegistration = {
+  findFirst: vi.fn(),
+  findMany: vi.fn(),
+  update: vi.fn(),
+};
 prisma.tenant = prisma.tenant || {};
 prisma.tenant.findUnique = vi.fn().mockResolvedValue({
   id: 1,
@@ -206,6 +217,17 @@ beforeEach(() => {
   prisma.digilockerSession.findFirst.mockReset();
   prisma.digilockerSession.create.mockReset();
   prisma.digilockerSession.update.mockReset();
+  prisma.landingPage.findUnique.mockReset();
+  prisma.landingPage.create.mockReset();
+  prisma.landingPage.update.mockReset();
+  prisma.pendingTripRegistration.findFirst.mockReset();
+  prisma.pendingTripRegistration.findMany.mockReset();
+  prisma.pendingTripRegistration.update.mockReset();
+  // Don't reset $transaction's IMPLEMENTATION (the resolver is needed
+  // by every test that drives the route layer); just clear call
+  // history so per-test toHaveBeenCalledTimes assertions don't see
+  // cumulative counts from prior tests in the file.
+  prisma.$transaction.mockClear();
   prisma.tenant.findUnique.mockReset().mockResolvedValue({
     id: 1, vertical: 'travel', name: 'Test Travel', slug: 'test-travel',
   });
@@ -1066,5 +1088,491 @@ describe('auth + vertical guard', () => {
     expect(res.status).toBe(403);
     expect(res.body).toMatchObject({ code: 'WRONG_VERTICAL' });
     expect(prisma.tmcTrip.findMany).not.toHaveBeenCalled();
+  });
+});
+
+// -----------------------------------------------------------------------------
+// Trip-owned LandingPage lifecycle (Phase 2 hybrid architecture)
+//   GET    /trips/:id/landing-page  → 200 page | 404 NOT_LINKED
+//   POST   /trips/:id/landing-page  → 200 existing (idempotent) | 201 lazy-created
+//   DELETE /trips/:id/landing-page  → unlinks; row survives as generic page
+// -----------------------------------------------------------------------------
+
+describe('GET /api/travel/trips/:id/landing-page', () => {
+  test('returns linked landing page when one exists', async () => {
+    const existingPage = {
+      id: 55,
+      title: 'Bali Trip — bali2026',
+      slug: 'trip-bali2026',
+      status: 'DRAFT',
+      templateType: 'wanderlux-v1',
+      tripId: 100,
+      tenantId: 1,
+    };
+    prisma.tmcTrip.findFirst.mockResolvedValue({
+      id: 100,
+      tripCode: 'bali2026',
+      destination: 'Bali',
+      departDate: new Date('2026-09-15'),
+      returnDate: new Date('2026-09-22'),
+      legalEntity: 'tmc_nexus',
+      landingPage: existingPage,
+    });
+    const res = await request(makeApp())
+      .get('/api/travel/trips/100/landing-page')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ id: 55, slug: 'trip-bali2026', tripId: 100 });
+  });
+
+  test('returns 404 NOT_LINKED when no landing page is linked', async () => {
+    prisma.tmcTrip.findFirst.mockResolvedValue({
+      id: 100, tripCode: 'bali2026', destination: 'Bali',
+      departDate: new Date('2026-09-15'), returnDate: new Date('2026-09-22'),
+      legalEntity: 'tmc_nexus', landingPage: null,
+    });
+    const res = await request(makeApp())
+      .get('/api/travel/trips/100/landing-page')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(404);
+    expect(res.body).toMatchObject({ code: 'NOT_LINKED' });
+  });
+
+  test('cross-tenant trip returns 404 NOT_FOUND', async () => {
+    prisma.tmcTrip.findFirst.mockResolvedValue(null);
+    const res = await request(makeApp())
+      .get('/api/travel/trips/100/landing-page')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(404);
+    expect(res.body).toMatchObject({ code: 'NOT_FOUND' });
+  });
+
+  test('non-numeric id returns 400 INVALID_ID', async () => {
+    const res = await request(makeApp())
+      .get('/api/travel/trips/abc/landing-page')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_ID' });
+  });
+});
+
+describe('POST /api/travel/trips/:id/landing-page', () => {
+  test('lazy-creates a Wanderlux DRAFT page when none is linked, returns 201', async () => {
+    prisma.tmcTrip.findFirst.mockResolvedValue({
+      id: 100, tripCode: 'bali2026', destination: 'Bali, Indonesia',
+      departDate: new Date('2026-09-15'), returnDate: new Date('2026-09-22'),
+      legalEntity: 'tmc_nexus', landingPage: null,
+    });
+    prisma.landingPage.create.mockResolvedValue({
+      id: 77, slug: 'trip-bali2026', status: 'DRAFT', tripId: 100,
+      templateType: 'wanderlux-v1', tenantId: 1,
+    });
+    const res = await request(makeApp())
+      .post('/api/travel/trips/100/landing-page')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({});
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({ id: 77, slug: 'trip-bali2026', tripId: 100 });
+    expect(prisma.landingPage.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          templateType: 'wanderlux-v1',
+          status: 'DRAFT',
+          subBrand: 'tmc',
+          tripId: 100,
+          tenantId: 1,
+          userId: 7,
+          destination: 'Bali, Indonesia',
+          slug: 'trip-bali2026',
+        }),
+      }),
+    );
+    // Verify content has registration-draft default mode baked in
+    const createData = prisma.landingPage.create.mock.calls[0][0].data;
+    const config = JSON.parse(createData.content);
+    expect(config.register.mode).toBe('registration-draft');
+    expect(config.register.steps).toEqual([
+      expect.objectContaining({ id: 'student' }),
+      expect.objectContaining({ id: 'parent' }),
+      expect.objectContaining({ id: 'passport' }),
+    ]);
+  });
+
+  test('idempotent — returns existing page (200) when already linked, does not create', async () => {
+    const existingPage = {
+      id: 55, slug: 'trip-bali2026', tripId: 100, status: 'PUBLISHED',
+    };
+    prisma.tmcTrip.findFirst.mockResolvedValue({
+      id: 100, tripCode: 'bali2026', destination: 'Bali',
+      departDate: new Date('2026-09-15'), returnDate: new Date('2026-09-22'),
+      legalEntity: 'tmc_nexus', landingPage: existingPage,
+    });
+    const res = await request(makeApp())
+      .post('/api/travel/trips/100/landing-page')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({});
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ id: 55, status: 'PUBLISHED' });
+    expect(prisma.landingPage.create).not.toHaveBeenCalled();
+  });
+
+  test('slug-collision (P2002 on tenantId+slug) retries with a fresh suffix', async () => {
+    prisma.tmcTrip.findFirst.mockResolvedValue({
+      id: 100, tripCode: 'bali2026', destination: 'Bali',
+      departDate: new Date('2026-09-15'), returnDate: new Date('2026-09-22'),
+      legalEntity: 'tmc_nexus', landingPage: null,
+    });
+    const collision = Object.assign(new Error('Unique constraint failed'), {
+      code: 'P2002', meta: { target: ['tenantId', 'slug'] },
+    });
+    prisma.landingPage.create
+      .mockRejectedValueOnce(collision)
+      .mockResolvedValueOnce({ id: 78, slug: 'trip-bali2026-xy12', tripId: 100, status: 'DRAFT' });
+    const res = await request(makeApp())
+      .post('/api/travel/trips/100/landing-page')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({});
+    expect(res.status).toBe(201);
+    expect(prisma.landingPage.create).toHaveBeenCalledTimes(2);
+    expect(prisma.landingPage.create.mock.calls[1][0].data.slug).toMatch(/^trip-bali2026-[a-z0-9]{4}$/);
+  });
+
+  test('race on tripId @unique (P2002 with tripId target) returns the racing page', async () => {
+    prisma.tmcTrip.findFirst.mockResolvedValue({
+      id: 100, tripCode: 'bali2026', destination: 'Bali',
+      departDate: new Date('2026-09-15'), returnDate: new Date('2026-09-22'),
+      legalEntity: 'tmc_nexus', landingPage: null,
+    });
+    const tripIdRace = Object.assign(new Error('Unique constraint failed'), {
+      code: 'P2002', meta: { target: ['tripId'] },
+    });
+    prisma.landingPage.create.mockRejectedValueOnce(tripIdRace);
+    prisma.landingPage.findUnique.mockResolvedValueOnce({
+      id: 79, slug: 'trip-bali2026', tripId: 100, status: 'DRAFT',
+    });
+    const res = await request(makeApp())
+      .post('/api/travel/trips/100/landing-page')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({});
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ id: 79, tripId: 100 });
+    expect(prisma.landingPage.findUnique).toHaveBeenCalledWith({ where: { tripId: 100 } });
+  });
+
+  test('cross-tenant trip returns 404 NOT_FOUND', async () => {
+    prisma.tmcTrip.findFirst.mockResolvedValue(null);
+    const res = await request(makeApp())
+      .post('/api/travel/trips/100/landing-page')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({});
+    expect(res.status).toBe(404);
+    expect(res.body).toMatchObject({ code: 'NOT_FOUND' });
+    expect(prisma.landingPage.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('DELETE /api/travel/trips/:id/landing-page', () => {
+  test('unlinks the page (sets tripId=null), row survives', async () => {
+    prisma.tmcTrip.findFirst.mockResolvedValue({
+      id: 100, tripCode: 'bali2026', destination: 'Bali',
+      departDate: new Date('2026-09-15'), returnDate: new Date('2026-09-22'),
+      legalEntity: 'tmc_nexus', landingPage: { id: 55, slug: 'trip-bali2026', tripId: 100 },
+    });
+    prisma.landingPage.update.mockResolvedValue({ id: 55, slug: 'trip-bali2026', tripId: null });
+    const res = await request(makeApp())
+      .delete('/api/travel/trips/100/landing-page')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ unlinked: true, id: 55 });
+    expect(prisma.landingPage.update).toHaveBeenCalledWith({
+      where: { id: 55 },
+      data: { tripId: null },
+    });
+  });
+
+  test('returns 404 NOT_LINKED when no page is linked', async () => {
+    prisma.tmcTrip.findFirst.mockResolvedValue({
+      id: 100, tripCode: 'bali2026', destination: 'Bali',
+      departDate: new Date('2026-09-15'), returnDate: new Date('2026-09-22'),
+      legalEntity: 'tmc_nexus', landingPage: null,
+    });
+    const res = await request(makeApp())
+      .delete('/api/travel/trips/100/landing-page')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(404);
+    expect(res.body).toMatchObject({ code: 'NOT_LINKED' });
+    expect(prisma.landingPage.update).not.toHaveBeenCalled();
+  });
+
+  test('USER role lacking trips:update permission returns 403', async () => {
+    prisma.user.findUnique.mockResolvedValue({ role: 'USER', subBrandAccess: null });
+    const res = await request(makeApp())
+      .delete('/api/travel/trips/100/landing-page')
+      .set('Authorization', `Bearer ${tokenFor('USER')}`);
+    expect(res.status).toBe(403);
+    expect(prisma.landingPage.update).not.toHaveBeenCalled();
+  });
+
+  test('cross-tenant trip returns 404 NOT_FOUND', async () => {
+    prisma.tmcTrip.findFirst.mockResolvedValue(null);
+    const res = await request(makeApp())
+      .delete('/api/travel/trips/100/landing-page')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(404);
+    expect(res.body).toMatchObject({ code: 'NOT_FOUND' });
+  });
+});
+
+// -----------------------------------------------------------------------------
+// Pending registrations (Phase 5 hybrid architecture)
+//   GET  /trips/:id/registrations            — list (with ?status filter)
+//   POST /trips/:id/registrations/:rid/approve — transactional conversion
+//   POST /trips/:id/registrations/:rid/reject  — soft reject
+// -----------------------------------------------------------------------------
+
+describe('GET /api/travel/trips/:id/registrations', () => {
+  test('returns drafts scoped to (tripId, tenantId), most recent first', async () => {
+    prisma.tmcTrip.findFirst.mockResolvedValue({ id: 100 });
+    prisma.pendingTripRegistration.findMany.mockResolvedValue([
+      { id: 9001, status: 'OTP_VERIFIED', studentName: 'Aarav', createdAt: new Date('2026-05-10') },
+      { id: 9002, status: 'DRAFT', studentName: 'Priya', createdAt: new Date('2026-05-08') },
+    ]);
+    const res = await request(makeApp())
+      .get('/api/travel/trips/100/registrations')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(2);
+    expect(prisma.pendingTripRegistration.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { tripId: 100, tenantId: 1 },
+        orderBy: { createdAt: 'desc' },
+      }),
+    );
+    // draftToken + draftTokenExpiresAt MUST NOT be in the select shape
+    const args = prisma.pendingTripRegistration.findMany.mock.calls[0][0];
+    expect(args.select).toBeDefined();
+    expect(args.select.draftToken).toBeUndefined();
+    expect(args.select.draftTokenExpiresAt).toBeUndefined();
+  });
+
+  test('?status=OTP_VERIFIED filters down to single status', async () => {
+    prisma.tmcTrip.findFirst.mockResolvedValue({ id: 100 });
+    prisma.pendingTripRegistration.findMany.mockResolvedValue([]);
+    await request(makeApp())
+      .get('/api/travel/trips/100/registrations?status=OTP_VERIFIED')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    const calledWhere = prisma.pendingTripRegistration.findMany.mock.calls[0][0].where;
+    expect(calledWhere).toMatchObject({ tripId: 100, tenantId: 1, status: 'OTP_VERIFIED' });
+  });
+
+  test('?status=DRAFT,OTP_VERIFIED (comma-separated multi-select) becomes {in: [...]}', async () => {
+    prisma.tmcTrip.findFirst.mockResolvedValue({ id: 100 });
+    prisma.pendingTripRegistration.findMany.mockResolvedValue([]);
+    await request(makeApp())
+      .get('/api/travel/trips/100/registrations?status=DRAFT,OTP_VERIFIED')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    const calledWhere = prisma.pendingTripRegistration.findMany.mock.calls[0][0].where;
+    expect(calledWhere.status).toEqual({ in: ['DRAFT', 'OTP_VERIFIED'] });
+  });
+
+  test('?status=bogus returns 400 INVALID_STATUS', async () => {
+    prisma.tmcTrip.findFirst.mockResolvedValue({ id: 100 });
+    const res = await request(makeApp())
+      .get('/api/travel/trips/100/registrations?status=NOT_A_STATUS')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_STATUS' });
+    expect(prisma.pendingTripRegistration.findMany).not.toHaveBeenCalled();
+  });
+
+  test('cross-tenant trip returns 404 NOT_FOUND', async () => {
+    prisma.tmcTrip.findFirst.mockResolvedValue(null);
+    const res = await request(makeApp())
+      .get('/api/travel/trips/100/registrations')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(404);
+    expect(res.body).toMatchObject({ code: 'NOT_FOUND' });
+  });
+});
+
+describe('POST /api/travel/trips/:id/registrations/:rid/approve', () => {
+  test('OTP_VERIFIED draft converts: creates TripParticipant{applicationStatus="approved"} + draft → CONVERTED, transactionally', async () => {
+    prisma.tmcTrip.findFirst.mockResolvedValue({ id: 100 });
+    prisma.pendingTripRegistration.findFirst.mockResolvedValue({
+      id: 9001, tripId: 100, tenantId: 1, status: 'OTP_VERIFIED',
+      studentName: 'Aarav Iyer', parentName: 'Rohan Iyer',
+      parentEmail: 'rohan@example.com', parentPhone: '+919876543210',
+      passportNumber: 'M1234567', passportExpiry: new Date('2031-09-01'),
+      otpVerifiedAt: new Date(),
+    });
+    prisma.tripParticipant.create.mockResolvedValue({
+      id: 4242, tripId: 100, fullName: 'Aarav Iyer',
+      applicationStatus: 'approved',
+    });
+    prisma.pendingTripRegistration.update.mockResolvedValue({
+      id: 9001, status: 'CONVERTED', convertedToParticipantId: 4242,
+    });
+
+    const res = await request(makeApp())
+      .post('/api/travel/trips/100/registrations/9001/approve')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ reviewNotes: 'Looks good — approved.' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      approved: true,
+      participant: { id: 4242, applicationStatus: 'approved' },
+      registration: { id: 9001, status: 'CONVERTED', convertedToParticipantId: 4242 },
+    });
+
+    // Participant created with approved status + reviewer + draft data
+    expect(prisma.tripParticipant.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        tripId: 100,
+        fullName: 'Aarav Iyer',
+        parentName: 'Rohan Iyer',
+        parentEmail: 'rohan@example.com',
+        parentPhone: '+919876543210',
+        passportNumber: 'M1234567',
+        applicationStatus: 'approved',
+        reviewedById: 7,
+        reviewNotes: 'Looks good — approved.',
+        consentCapturedAt: expect.any(Date),
+      }),
+    });
+    // Draft updated to CONVERTED + pointer back to participant
+    expect(prisma.pendingTripRegistration.update).toHaveBeenCalledWith({
+      where: { id: 9001 },
+      data: expect.objectContaining({
+        status: 'CONVERTED',
+        convertedToParticipantId: 4242,
+        approvedById: 7,
+      }),
+    });
+    // Both writes went through $transaction (participant) +
+    // sequential update for the back-reference. The participant create
+    // happens inside $transaction; verify it was invoked.
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+  });
+
+  test('DRAFT (no OTP yet) cannot be approved → 409 INVALID_STATE', async () => {
+    prisma.tmcTrip.findFirst.mockResolvedValue({ id: 100 });
+    prisma.pendingTripRegistration.findFirst.mockResolvedValue({
+      id: 9001, tripId: 100, tenantId: 1, status: 'DRAFT',
+    });
+    const res = await request(makeApp())
+      .post('/api/travel/trips/100/registrations/9001/approve')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({});
+    expect(res.status).toBe(409);
+    expect(res.body).toMatchObject({
+      code: 'INVALID_STATE',
+      currentStatus: 'DRAFT',
+    });
+    expect(prisma.tripParticipant.create).not.toHaveBeenCalled();
+    expect(prisma.pendingTripRegistration.update).not.toHaveBeenCalled();
+  });
+
+  test('CONVERTED draft cannot be re-approved → 409 INVALID_STATE', async () => {
+    prisma.tmcTrip.findFirst.mockResolvedValue({ id: 100 });
+    prisma.pendingTripRegistration.findFirst.mockResolvedValue({
+      id: 9001, tripId: 100, tenantId: 1, status: 'CONVERTED',
+      convertedToParticipantId: 4242,
+    });
+    const res = await request(makeApp())
+      .post('/api/travel/trips/100/registrations/9001/approve')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({});
+    expect(res.status).toBe(409);
+    expect(res.body).toMatchObject({ code: 'INVALID_STATE', currentStatus: 'CONVERTED' });
+    expect(prisma.tripParticipant.create).not.toHaveBeenCalled();
+  });
+
+  test('cross-trip registration id returns 404 REGISTRATION_NOT_FOUND', async () => {
+    prisma.tmcTrip.findFirst.mockResolvedValue({ id: 100 });
+    prisma.pendingTripRegistration.findFirst.mockResolvedValue(null);
+    const res = await request(makeApp())
+      .post('/api/travel/trips/100/registrations/9999/approve')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({});
+    expect(res.status).toBe(404);
+    expect(res.body).toMatchObject({ code: 'REGISTRATION_NOT_FOUND' });
+  });
+
+  test('non-numeric rid returns 400 INVALID_REGISTRATION_ID', async () => {
+    prisma.tmcTrip.findFirst.mockResolvedValue({ id: 100 });
+    const res = await request(makeApp())
+      .post('/api/travel/trips/100/registrations/notanumber/approve')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({});
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_REGISTRATION_ID' });
+  });
+});
+
+describe('POST /api/travel/trips/:id/registrations/:rid/reject', () => {
+  test('marks draft as REJECTED with reviewer + notes; does NOT create participant', async () => {
+    prisma.tmcTrip.findFirst.mockResolvedValue({ id: 100 });
+    prisma.pendingTripRegistration.findFirst.mockResolvedValue({
+      id: 9001, tripId: 100, tenantId: 1, status: 'OTP_VERIFIED',
+    });
+    prisma.pendingTripRegistration.update.mockResolvedValue({
+      id: 9001, status: 'REJECTED',
+    });
+    const res = await request(makeApp())
+      .post('/api/travel/trips/100/registrations/9001/reject')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ reviewNotes: 'Trip is full' });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ rejected: true, registration: { id: 9001, status: 'REJECTED' } });
+    expect(prisma.pendingTripRegistration.update).toHaveBeenCalledWith({
+      where: { id: 9001 },
+      data: expect.objectContaining({
+        status: 'REJECTED',
+        rejectedById: 7,
+        reviewNotes: 'Trip is full',
+        rejectedAt: expect.any(Date),
+      }),
+    });
+    expect(prisma.tripParticipant.create).not.toHaveBeenCalled();
+  });
+
+  test('reject from DRAFT state is allowed (operator can dismiss un-verified spam)', async () => {
+    prisma.tmcTrip.findFirst.mockResolvedValue({ id: 100 });
+    prisma.pendingTripRegistration.findFirst.mockResolvedValue({
+      id: 9002, tripId: 100, tenantId: 1, status: 'DRAFT',
+    });
+    prisma.pendingTripRegistration.update.mockResolvedValue({ id: 9002, status: 'REJECTED' });
+    const res = await request(makeApp())
+      .post('/api/travel/trips/100/registrations/9002/reject')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({});
+    expect(res.status).toBe(200);
+    expect(res.body.rejected).toBe(true);
+  });
+
+  test('CONVERTED draft cannot be rejected → 409 INVALID_STATE', async () => {
+    prisma.tmcTrip.findFirst.mockResolvedValue({ id: 100 });
+    prisma.pendingTripRegistration.findFirst.mockResolvedValue({
+      id: 9003, tripId: 100, tenantId: 1, status: 'CONVERTED', convertedToParticipantId: 4242,
+    });
+    const res = await request(makeApp())
+      .post('/api/travel/trips/100/registrations/9003/reject')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({});
+    expect(res.status).toBe(409);
+    expect(res.body).toMatchObject({ code: 'INVALID_STATE', currentStatus: 'CONVERTED' });
+    expect(prisma.pendingTripRegistration.update).not.toHaveBeenCalled();
+  });
+
+  test('cross-trip registration id returns 404 REGISTRATION_NOT_FOUND', async () => {
+    prisma.tmcTrip.findFirst.mockResolvedValue({ id: 100 });
+    prisma.pendingTripRegistration.findFirst.mockResolvedValue(null);
+    const res = await request(makeApp())
+      .post('/api/travel/trips/100/registrations/9999/reject')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({});
+    expect(res.status).toBe(404);
+    expect(res.body).toMatchObject({ code: 'REGISTRATION_NOT_FOUND' });
   });
 });

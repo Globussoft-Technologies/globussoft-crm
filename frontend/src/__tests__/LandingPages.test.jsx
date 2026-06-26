@@ -23,8 +23,9 @@
  *      renders as "7.0%", not "7%" or "0%".
  *   6. Conversion rate falls back to "0.0%" (not "—" / "NaN%") when
  *      visits == 0 — pre-#639 the bare-integer fallback rendered "0%".
- *   7. PUBLISHED page renders a "View" link to /p/<slug> on the public
- *      preview surface; DRAFT page does NOT render the "View" link.
+ *   7. The "View" link was removed (the hardcoded :5173→:5000 port swap
+ *      only worked on default Vite dev port). Edit links remain — one
+ *      per row (PUBLISHED + DRAFT) — pointing at /landing-pages/builder/:id.
  *   8. The publish-toggle button reads "Publish" for a DRAFT page and
  *      "Unpublish" for a PUBLISHED page; clicking fires the matching
  *      POST /api/landing-pages/:id/{publish|unpublish}.
@@ -210,13 +211,13 @@ describe('<LandingPages /> — index page surface', () => {
     expect(screen.getByText('0.0%')).toBeInTheDocument();
   });
 
-  it('only renders the public "View" link for PUBLISHED pages (DRAFT has no View)', async () => {
+  it('does NOT render a "View" link any more (button was removed); each row has an Edit link to /landing-pages/builder/:id', async () => {
     renderPage();
     await waitFor(() => expect(screen.getByText('Spring Launch')).toBeInTheDocument());
-    // Exactly one View link — for the PUBLISHED page, pointing at /p/<slug>.
-    const viewLinks = screen.getAllByRole('link', { name: /View/i });
-    expect(viewLinks.length).toBe(1);
-    expect(viewLinks[0].getAttribute('href')).toMatch(/\/p\/spring-launch$/);
+    // No "View" link on either row — the SUT comment explains the hardcoded
+    // :5173→:5000 host swap was unreliable and the Preview action inside the
+    // builder covers the same need.
+    expect(screen.queryByRole('link', { name: /^View$/i })).toBeNull();
     // Edit links go to the builder, one per page = 2.
     const editLinks = screen.getAllByRole('link', { name: /Edit/i });
     expect(editLinks.length).toBe(2);
@@ -317,18 +318,20 @@ describe('<LandingPages /> — index page surface', () => {
     await waitFor(() => expect(screen.getByText('Spring Launch')).toBeInTheDocument());
     // Find the delete button for the PUBLISHED page. The Trash icon button
     // has no accessible name, so locate it by sibling-button position
-    // within the published card. The page renders Edit (link) + View
-    // (link) + Unpublish + duplicate + delete; the delete button is the
-    // only one styled with red color, but in the DOM the easiest unique
-    // pin is by walking from the Spring Launch <h3> up to its card
-    // ancestor and querying buttons inside.
+    // within the published card. Per the post-merge Publish-also-features
+    // collapse, the page renders Edit (link) + Unpublish + duplicate +
+    // delete; the delete button is the only one styled with red color,
+    // but in the DOM the easiest unique pin is by walking from the
+    // Spring Launch <h3> up to its card ancestor and querying buttons
+    // inside.
     const cardTitle = screen.getByText('Spring Launch');
     const card = cardTitle.closest('.card');
     expect(card).toBeTruthy();
     const buttons = card.querySelectorAll('button');
-    // The 4 buttons inside a published card: Unpublish (with text),
-    // duplicate (icon-only), delete (icon-only). For DRAFT card it'd be 3.
-    // Delete is the LAST button in the action row.
+    // The 3 buttons inside a published card: Unpublish (with text),
+    // duplicate (icon-only), delete (icon-only). DRAFT card is the
+    // same shape (Publish in place of Unpublish). Delete is the LAST
+    // button in the action row.
     const deleteBtn = buttons[buttons.length - 1];
 
     fetchApiMock.mockClear();

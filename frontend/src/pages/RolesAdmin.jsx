@@ -718,32 +718,17 @@ export default function RolesAdmin() {
                     </button>
                   </Td>
                   <Td>
-                    {/* Bug 5 — show the count the EDITOR will render
-                        (perms in the current vertical catalog) so the
-                        table badge and the modal badge agree. Backend
-                        echoes both numbers; we fall back to the raw
-                        length if a stale server omits visiblePermissionCount.
-                        Per the Step 6 UI follow-up: do NOT surface the
-                        "(+N hidden)" chip in the main table — once
-                        cleanup has run, hidden=0 for every role and the
-                        chip is permanent visual noise. We keep the
-                        hidden count in `title` only as a diagnostic
-                        hover; the role editor still surfaces the
-                        legacy-perm confirmation modal (Bug 1) if any
-                        ever leak in. hiddenPermissionCount is
-                        preserved in the API response for diagnostics
-                        / admin views — just not rendered here. */}
+                    {/* Show the effective permission count — the perms
+                        in the current vertical catalog that the editor
+                        actually renders. Backend echoes
+                        visiblePermissionCount; fall back to the raw
+                        length if a stale server omits it. */}
                     {(() => {
                       const raw = Array.isArray(r.permissions) ? r.permissions.length : 0;
                       const visible = typeof r.visiblePermissionCount === 'number'
                         ? r.visiblePermissionCount
                         : raw;
-                      const hidden = typeof r.hiddenPermissionCount === 'number'
-                        ? r.hiddenPermissionCount
-                        : Math.max(0, raw - visible);
-                      const title = hidden > 0
-                        ? `${visible} effective permission${visible === 1 ? '' : 's'} (${hidden} hidden — open editor to review)`
-                        : `${visible} permission${visible === 1 ? '' : 's'}`;
+                      const title = `${visible} permission${visible === 1 ? '' : 's'}`;
                       return (
                         <button
                           type="button"
@@ -1262,44 +1247,21 @@ function PermissionsModal({ role, modules, domains, readOnly, vertical, onClose,
   }, [matrix]);
 
   // Hydrate from role.permissions (the list endpoint already includes
-  // them). Split into TWO sets:
-  //   • initial         — perms visible in the current catalog. These
-  //                       drive the matrix checkboxes.
-  //   • legacyPerms     — perms NOT in the catalog (cross-vertical
-  //                       leftovers, removed modules, typo'd grants).
-  //                       The matrix has no checkbox for these, so the
-  //                       admin cannot keep/uncheck them through the UI.
-  //
-  // Bug 1 fix: PRE-2026-06-16 a save silently destroyed legacy perms
-  // because persistSave only sends the `selected` Set. We now surface
-  // an explicit confirmation modal listing the legacy keys so the admin
-  // acknowledges removal. The save path is unchanged — same PUT, same
-  // full-replace semantics — but the admin gets a chance to Cancel.
-  const { initial, legacyPerms } = useMemo(() => {
+  // them). Only matrix-catalog permissions drive the checkboxes; grants
+  // for modules outside the current vertical catalog are inert noise
+  // from pre-2026-06-15 seed pollution and get cleaned up on the next
+  // save (the PUT is full-replace). Backend is tenant-scoped at every
+  // write endpoint, so this can never affect another tenant.
+  const initial = useMemo(() => {
     const visible = new Set();
-    const legacy = [];
     (role.permissions || []).forEach((p) => {
       const m = p?.module;
       const a = p?.action;
       if (!m || !a) return;
       const key = `${m}.${a}`;
-      if (catalogKeys.has(key)) {
-        visible.add(key);
-      } else {
-        legacy.push(key);
-      }
+      if (catalogKeys.has(key)) visible.add(key);
     });
-    if (legacy.length > 0) {
-      // Keep the dev-time log for the dashboards; the user-visible
-      // confirmation modal below is the load-bearing surface.
-      console.warn(
-        `[RolesAdmin] role "${role.key || role.name}" has ${legacy.length} ` +
-          `permission grant(s) for modules no longer in the catalog. They ` +
-          `will be surfaced for explicit confirmation on save.`,
-      );
-    }
-    legacy.sort();
-    return { initial: visible, legacyPerms: legacy };
+    return visible;
   }, [role, catalogKeys]);
 
   const [selected, setSelected] = useState(initial);
@@ -1316,13 +1278,6 @@ function PermissionsModal({ role, modules, domains, readOnly, vertical, onClose,
   // modal. Save only fires when the admin clicks Confirm. Cancel returns
   // to the matrix with selection intact so they can pare back.
   const [pendingSensitiveGrants, setPendingSensitiveGrants] = useState(null);
-  // Bug 1 — legacy-perms confirmation. When the role carries grants for
-  // modules no longer in the catalog, persistSave would destroy them
-  // (PUT semantics are full-replace). We gate the save behind an
-  // explicit acknowledgement modal listing what will be lost. Cancel
-  // returns to the matrix unchanged so the admin can either fix the
-  // selection or abandon the save. true = modal is open.
-  const [legacyConfirmPending, setLegacyConfirmPending] = useState(false);
   // RBAC Hardening Phase 3 — critical-perm removal warning. List of
   // catalog keys (e.g. "roles.manage") the admin is about to uncheck.
   // null = no warning pending.
@@ -1498,27 +1453,13 @@ function PermissionsModal({ role, modules, domains, readOnly, vertical, onClose,
     requestSensitiveCheck();
   };
 
-  // Three-phase confirmation chain on Save:
-  //   1. Bug 1 — legacy-perm acknowledgement (destructive: removes
-  //      grants the admin can't see in the matrix).
-  //   2. RBAC Hardening Phase 3 — critical-perm warning (destructive:
+  // Two-phase confirmation chain on Save:
+  //   1. RBAC Hardening Phase 3 — critical-perm warning (destructive:
   //      removes admin-recovery surface from this role).
-  //   3. SPEC §6a — sensitive-grant confirmation (additive: grants
+  //   2. SPEC §6a — sensitive-grant confirmation (additive: grants
   //      net-new powerful perms).
-  // Each gate's "Confirm" action chains into the next, so an admin
-  // making all three kinds of changes sees exactly three modals in
-  // sequence (rare in practice — usually 0 or 1).
+  // Each gate's "Confirm" action chains into the next.
   const requestSave = () => {
-    if (legacyPerms.length > 0) {
-      setLegacyConfirmPending(true);
-      return;
-    }
-    requestCriticalRemovalCheck();
-  };
-
-  // Bug 1 — admin clicked "Remove and Save" in the legacy-perm modal.
-  const confirmLegacyRemoval = () => {
-    setLegacyConfirmPending(false);
     requestCriticalRemovalCheck();
   };
 
@@ -1961,24 +1902,8 @@ function PermissionsModal({ role, modules, domains, readOnly, vertical, onClose,
         )}
       </ModalActions>
 
-      {/* Bug 1 — legacy-perm acknowledgement. Listed first because the
-          legacy gate runs before the sensitive-grant gate (see
-          requestSave above). Cancel keeps the matrix open with
-          selection unchanged so the admin can adjust or abandon.
-          "Remove and Save" calls confirmLegacyRemoval which chains
-          into the next gate (sensitive grants) and then persistSave. */}
-      {legacyConfirmPending && (
-        <LegacyPermsConfirmModal
-          roleName={role.name}
-          legacyKeys={legacyPerms}
-          isLoading={isLoading}
-          onCancel={() => setLegacyConfirmPending(false)}
-          onConfirm={confirmLegacyRemoval}
-        />
-      )}
-
       {/* RBAC Hardening Phase 3 — critical-permission removal warning.
-          Fires after the legacy gate, before the sensitive-grant gate.
+          Fires before the sensitive-grant gate.
           Lists exactly which critical perms are being removed + the
           affected product areas (Roles & Permissions admin). Continue
           chains into the sensitive-grant gate; Cancel returns to the
@@ -2029,96 +1954,6 @@ function PermissionsModal({ role, modules, domains, readOnly, vertical, onClose,
           it's referenced by the function definition below but not
           mounted. Safe to delete in a follow-up sweep once the
           unified dialog has soaked. */}
-    </ModalShell>
-  );
-}
-
-// Bug 1 — confirmation modal shown when the role being saved still
-// carries permissions for modules that are NOT in the current
-// vertical catalog (most commonly travel tenants carrying wellness-
-// flavored baselines from the v3.8.x seed: patients.*, appointments.*,
-// consents.*, etc.). The PUT /permissions endpoint is full-replace;
-// saving the visible-only selection would silently destroy these.
-// This modal forces an explicit acknowledgement.
-//
-// data-testid="legacy-perms-confirm-modal" pins the modal for the
-// vitest at frontend/src/__tests__/RolesAdmin-legacy-perms.test.jsx.
-function LegacyPermsConfirmModal({ roleName, legacyKeys, isLoading, onCancel, onConfirm }) {
-  return (
-    <ModalShell
-      title="Hidden permissions detected"
-      subtitle={`This role contains ${legacyKeys.length} permission${legacyKeys.length === 1 ? '' : 's'} that ${legacyKeys.length === 1 ? 'is' : 'are'} not visible in the current catalog.`}
-      onClose={onCancel}
-      width={560}
-    >
-      <div data-testid="legacy-perms-confirm-modal">
-      <div
-        style={{
-          marginBottom: '0.75rem',
-          padding: '0.65rem 0.8rem',
-          borderRadius: 8,
-          background: 'rgba(245, 158, 11, 0.08)',
-          border: '1px solid rgba(245, 158, 11, 0.4)',
-          fontSize: '0.85rem',
-          color: 'var(--text-primary)',
-        }}
-      >
-        <strong>Saving will remove these permissions from “{roleName}”.</strong>
-        <div style={{ marginTop: '0.4rem', color: 'var(--text-secondary)' }}>
-          They were granted under a previous catalog version (different
-          vertical, removed module, or typo) and have no checkbox in the
-          editor. Cancel to leave the role unchanged. Choose “Remove and
-          save” to apply your selection and drop these grants.
-        </div>
-      </div>
-      <ul
-        style={{
-          listStyle: 'none',
-          padding: 0,
-          margin: 0,
-          maxHeight: 240,
-          overflow: 'auto',
-          border: '1px solid var(--border-color)',
-          borderRadius: 6,
-        }}
-      >
-        {legacyKeys.map((key) => (
-          <li
-            key={key}
-            style={{
-              padding: '0.4rem 0.7rem',
-              fontFamily: 'monospace',
-              fontSize: '0.82rem',
-              color: 'var(--text-primary)',
-              borderTop: '1px solid var(--border-color)',
-            }}
-          >
-            {key}
-          </li>
-        ))}
-      </ul>
-      </div>
-      <ModalActions>
-        <button
-          type="button"
-          onClick={onCancel}
-          className="btn-secondary"
-          disabled={isLoading}
-          data-testid="legacy-perms-cancel"
-        >
-          Cancel
-        </button>
-        <button
-          type="button"
-          onClick={onConfirm}
-          className="btn-primary"
-          disabled={isLoading}
-          data-testid="legacy-perms-remove-and-save"
-          style={{ background: 'var(--danger-color, #ef4444)' }}
-        >
-          {isLoading ? 'Saving…' : `Remove ${legacyKeys.length} and save`}
-        </button>
-      </ModalActions>
     </ModalShell>
   );
 }

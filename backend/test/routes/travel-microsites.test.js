@@ -99,6 +99,15 @@ prisma.user = prisma.user || {};
 prisma.user.findUnique = vi.fn().mockResolvedValue({ role: 'ADMIN', subBrandAccess: null });
 prisma.revokedToken = prisma.revokedToken || {};
 prisma.revokedToken.findUnique = vi.fn().mockResolvedValue(null);
+// Phase 4 — PendingTripRegistration mocks for the /verify-otp + /full
+// draft-binding extensions.
+prisma.pendingTripRegistration = {
+  findUnique: vi.fn(),
+  update: vi.fn(),
+};
+// $transaction is used by verify-otp to atomically mark OTP usedAt +
+// update the draft. Mock just resolves the supplied promise array.
+prisma.$transaction = vi.fn(async (ops) => Promise.all(Array.isArray(ops) ? ops : []));
 
 import express from 'express';
 import request from 'supertest';
@@ -146,6 +155,9 @@ beforeEach(() => {
     id: 1, vertical: 'travel', name: 'Test Travel', slug: 'test-travel',
   });
   prisma.user.findUnique.mockReset().mockResolvedValue({ role: 'ADMIN', subBrandAccess: null });
+  prisma.pendingTripRegistration.findUnique.mockReset();
+  prisma.pendingTripRegistration.update.mockReset();
+  prisma.$transaction.mockClear();
 });
 
 // ─── Operator CRUD endpoints ─────────────────────────────────────────
@@ -600,6 +612,295 @@ describe('POST /api/travel/microsites/public/:publicUuid/verify-otp', () => {
     expect(res.status).toBe(400);
     expect(res.body).toMatchObject({ code: 'OTP_INVALID' });
     expect(prisma.tripMicrositeOtp.update).not.toHaveBeenCalled();
+  });
+});
+
+// ─── Phase 4 — /verify-otp draftToken binding ────────────────────────
+
+describe('POST /api/travel/microsites/public/:publicUuid/verify-otp (draftToken binding)', () => {
+  // Common OTP + microsite setup helper — code "1234" hashed, microsite
+  // id=7 tripId=100, OTP record matches purpose=registration.
+  async function setupHappyOtp({ otpPurpose = 'registration', otpPhone = '+919876543210' } = {}) {
+    const bcrypt = requireCJS('bcryptjs');
+    const otpHash = await bcrypt.hash('1234', 10);
+    prisma.tripMicrosite.findUnique.mockResolvedValue({
+      id: 7, tripId: 100, expiresAt: null,
+    });
+    prisma.tripMicrositeOtp.findFirst.mockResolvedValue({
+      id: 50, micrositeId: 7, phone: otpPhone, purpose: otpPurpose,
+      otpHash, expiresAt: new Date(Date.now() + 60_000), usedAt: null,
+    });
+    prisma.tripMicrositeOtp.update.mockResolvedValue({ id: 50, usedAt: new Date() });
+  }
+
+  test('happy path: OTP verified + draft marked OTP_VERIFIED + response includes draftBound', async () => {
+    await setupHappyOtp();
+    prisma.pendingTripRegistration.findUnique.mockResolvedValue({
+      id: 7001, tripId: 100, status: 'DRAFT', otpVerified: false,
+      draftTokenExpiresAt: new Date(Date.now() + 60 * 60 * 1000),
+    });
+    prisma.pendingTripRegistration.update.mockResolvedValue({
+      id: 7001, status: 'OTP_VERIFIED', otpVerified: true,
+    });
+
+    const res = await request(makeApp())
+      .post(`/api/travel/microsites/public/${TEST_UUID}/verify-otp`)
+      .send({
+        phone: '+919876543210', purpose: 'registration', code: '1234',
+        draftToken: 'token-abc-123',
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      verified: true,
+      draftBound: { id: 7001, status: 'OTP_VERIFIED', alreadyVerified: false },
+    });
+    // Draft was updated transactionally
+    expect(prisma.pendingTripRegistration.update).toHaveBeenCalledWith({
+      where: { id: 7001 },
+      data: expect.objectContaining({
+        status: 'OTP_VERIFIED',
+        otpVerified: true,
+        otpVerifiedAt: expect.any(Date),
+        otpPhone: '+919876543210',
+      }),
+    });
+    // Both updates went through $transaction
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    const txArr = prisma.$transaction.mock.calls[0][0];
+    expect(Array.isArray(txArr)).toBe(true);
+    expect(txArr).toHaveLength(2);
+  });
+
+  test('already-verified draft → idempotent: draft NOT re-updated, response flags alreadyVerified', async () => {
+    await setupHappyOtp();
+    prisma.pendingTripRegistration.findUnique.mockResolvedValue({
+      id: 7001, tripId: 100, status: 'OTP_VERIFIED', otpVerified: true,
+      draftTokenExpiresAt: new Date(Date.now() + 60 * 60 * 1000),
+    });
+
+    const res = await request(makeApp())
+      .post(`/api/travel/microsites/public/${TEST_UUID}/verify-otp`)
+      .send({
+        phone: '+919876543210', purpose: 'registration', code: '1234',
+        draftToken: 'token-abc-123',
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.draftBound).toMatchObject({
+      id: 7001, status: 'OTP_VERIFIED', alreadyVerified: true,
+    });
+    // No second update — only the OTP usedAt was committed
+    expect(prisma.pendingTripRegistration.update).not.toHaveBeenCalled();
+    const txArr = prisma.$transaction.mock.calls[0][0];
+    expect(txArr).toHaveLength(1);
+  });
+
+  test('unknown draftToken returns 404 DRAFT_NOT_FOUND; OTP NOT marked used', async () => {
+    await setupHappyOtp();
+    prisma.pendingTripRegistration.findUnique.mockResolvedValue(null);
+
+    const res = await request(makeApp())
+      .post(`/api/travel/microsites/public/${TEST_UUID}/verify-otp`)
+      .send({
+        phone: '+919876543210', purpose: 'registration', code: '1234',
+        draftToken: 'no-such-token',
+      });
+
+    expect(res.status).toBe(404);
+    expect(res.body).toMatchObject({ code: 'DRAFT_NOT_FOUND' });
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(prisma.tripMicrositeOtp.update).not.toHaveBeenCalled();
+    expect(prisma.pendingTripRegistration.update).not.toHaveBeenCalled();
+  });
+
+  test('draftToken from a different trip returns 403 DRAFT_WRONG_TRIP', async () => {
+    await setupHappyOtp();
+    prisma.pendingTripRegistration.findUnique.mockResolvedValue({
+      id: 8002, tripId: 999, // microsite is tripId=100; draft is for tripId=999
+      status: 'DRAFT', otpVerified: false,
+      draftTokenExpiresAt: new Date(Date.now() + 60 * 60 * 1000),
+    });
+
+    const res = await request(makeApp())
+      .post(`/api/travel/microsites/public/${TEST_UUID}/verify-otp`)
+      .send({
+        phone: '+919876543210', purpose: 'registration', code: '1234',
+        draftToken: 'token-other-trip',
+      });
+
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ code: 'DRAFT_WRONG_TRIP' });
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(prisma.tripMicrositeOtp.update).not.toHaveBeenCalled();
+  });
+
+  test('expired draftToken returns 400 DRAFT_EXPIRED', async () => {
+    await setupHappyOtp();
+    prisma.pendingTripRegistration.findUnique.mockResolvedValue({
+      id: 7001, tripId: 100, status: 'DRAFT', otpVerified: false,
+      draftTokenExpiresAt: new Date(Date.now() - 60_000), // expired 1 min ago
+    });
+
+    const res = await request(makeApp())
+      .post(`/api/travel/microsites/public/${TEST_UUID}/verify-otp`)
+      .send({
+        phone: '+919876543210', purpose: 'registration', code: '1234',
+        draftToken: 'token-expired',
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'DRAFT_EXPIRED' });
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  test('purpose=payment-plan ignores draftToken (no binding attempted)', async () => {
+    await setupHappyOtp({ otpPurpose: 'payment-plan' });
+
+    const res = await request(makeApp())
+      .post(`/api/travel/microsites/public/${TEST_UUID}/verify-otp`)
+      .send({
+        phone: '+919876543210', purpose: 'payment-plan', code: '1234',
+        draftToken: 'token-ignored',
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.verified).toBe(true);
+    expect(res.body.draftBound).toBeUndefined();
+    expect(prisma.pendingTripRegistration.findUnique).not.toHaveBeenCalled();
+  });
+
+  test('verify-otp without draftToken still works (back-compat)', async () => {
+    await setupHappyOtp();
+    const res = await request(makeApp())
+      .post(`/api/travel/microsites/public/${TEST_UUID}/verify-otp`)
+      .send({ phone: '+919876543210', purpose: 'registration', code: '1234' });
+    expect(res.status).toBe(200);
+    expect(res.body.verified).toBe(true);
+    expect(res.body.draftBound).toBeUndefined();
+    expect(prisma.pendingTripRegistration.findUnique).not.toHaveBeenCalled();
+  });
+});
+
+// ─── Phase 4 — /full draft inclusion ─────────────────────────────────
+
+describe('GET /api/travel/microsites/public/:publicUuid/full (draft inclusion)', () => {
+  function micrositeToken(purpose = 'registration', micrositeId = 7) {
+    return jwt.sign(
+      { kind: 'microsite-otp', micrositeId, phone: '+919876543210', purpose },
+      JWT_SECRET,
+      { expiresIn: '30m' },
+    );
+  }
+
+  test('purpose=registration + valid draftToken returns reveal with draft details', async () => {
+    prisma.tripMicrosite.findUnique.mockResolvedValue({
+      id: 7, subdomain: 'trip-bali2026', tripId: 100, publicUuid: TEST_UUID,
+      itineraryHtml: '<p>Day 1</p>', faqJson: null,
+      publishedAt: new Date(), expiresAt: null,
+    });
+    prisma.tmcTrip.findUnique.mockResolvedValue({
+      id: 100, tripCode: 'bali2026', destination: 'Bali',
+      departDate: new Date('2026-09-15'), returnDate: new Date('2026-09-22'),
+      status: 'confirmed',
+    });
+    prisma.pendingTripRegistration.findUnique.mockResolvedValue({
+      id: 7001, tripId: 100, status: 'OTP_VERIFIED', otpVerified: true,
+      otpVerifiedAt: new Date(), draftTokenExpiresAt: new Date(Date.now() + 60 * 60 * 1000),
+      studentName: 'Aarav Iyer', studentSchool: 'DPS North', studentClass: '10A',
+      parentName: 'Rohan Iyer', parentEmail: 'rohan@example.com', parentPhone: '+919876543210',
+      passportNumber: 'M1234567', passportExpiry: new Date('2031-09-01'),
+      createdAt: new Date(),
+    });
+
+    const res = await request(makeApp())
+      .get(`/api/travel/microsites/public/${TEST_UUID}/full?token=${micrositeToken('registration')}&draftToken=token-abc-123`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.draft).toMatchObject({
+      id: 7001,
+      status: 'OTP_VERIFIED',
+      studentName: 'Aarav Iyer',
+      parentName: 'Rohan Iyer',
+      passportNumber: 'M1234567',
+    });
+  });
+
+  test('purpose=registration without draftToken returns reveal without draft (no error)', async () => {
+    prisma.tripMicrosite.findUnique.mockResolvedValue({
+      id: 7, subdomain: 'trip-bali2026', tripId: 100, publicUuid: TEST_UUID,
+      itineraryHtml: '<p>Day 1</p>', faqJson: null,
+      publishedAt: new Date(), expiresAt: null,
+    });
+    prisma.tmcTrip.findUnique.mockResolvedValue({ id: 100, tripCode: 'bali2026', destination: 'Bali', departDate: new Date(), returnDate: new Date(), status: 'confirmed' });
+
+    const res = await request(makeApp())
+      .get(`/api/travel/microsites/public/${TEST_UUID}/full?token=${micrositeToken('registration')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.draft).toBeUndefined();
+    expect(prisma.pendingTripRegistration.findUnique).not.toHaveBeenCalled();
+  });
+
+  test('purpose=registration with unknown draftToken returns 404 DRAFT_NOT_FOUND', async () => {
+    prisma.tripMicrosite.findUnique.mockResolvedValue({
+      id: 7, subdomain: 'trip-bali2026', tripId: 100, publicUuid: TEST_UUID,
+      itineraryHtml: '', faqJson: null, publishedAt: new Date(), expiresAt: null,
+    });
+    prisma.tmcTrip.findUnique.mockResolvedValue({ id: 100, tripCode: 'bali2026', destination: 'Bali', departDate: new Date(), returnDate: new Date(), status: 'confirmed' });
+    prisma.pendingTripRegistration.findUnique.mockResolvedValue(null);
+
+    const res = await request(makeApp())
+      .get(`/api/travel/microsites/public/${TEST_UUID}/full?token=${micrositeToken('registration')}&draftToken=ghost`);
+
+    expect(res.status).toBe(404);
+    expect(res.body).toMatchObject({ code: 'DRAFT_NOT_FOUND' });
+  });
+
+  test('draftToken from a different trip returns 403 DRAFT_WRONG_TRIP', async () => {
+    prisma.tripMicrosite.findUnique.mockResolvedValue({
+      id: 7, subdomain: 't', tripId: 100, publicUuid: TEST_UUID,
+      itineraryHtml: '', faqJson: null, publishedAt: new Date(), expiresAt: null,
+    });
+    prisma.tmcTrip.findUnique.mockResolvedValue({ id: 100, tripCode: 't', destination: 'D', departDate: new Date(), returnDate: new Date(), status: 'confirmed' });
+    prisma.pendingTripRegistration.findUnique.mockResolvedValue({
+      id: 9, tripId: 999, // wrong trip
+      status: 'OTP_VERIFIED', otpVerified: true,
+      draftTokenExpiresAt: new Date(Date.now() + 60_000),
+    });
+    const res = await request(makeApp())
+      .get(`/api/travel/microsites/public/${TEST_UUID}/full?token=${micrositeToken('registration')}&draftToken=t`);
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ code: 'DRAFT_WRONG_TRIP' });
+  });
+
+  test('expired draftToken returns 400 DRAFT_EXPIRED', async () => {
+    prisma.tripMicrosite.findUnique.mockResolvedValue({
+      id: 7, subdomain: 't', tripId: 100, publicUuid: TEST_UUID,
+      itineraryHtml: '', faqJson: null, publishedAt: new Date(), expiresAt: null,
+    });
+    prisma.tmcTrip.findUnique.mockResolvedValue({ id: 100, tripCode: 't', destination: 'D', departDate: new Date(), returnDate: new Date(), status: 'confirmed' });
+    prisma.pendingTripRegistration.findUnique.mockResolvedValue({
+      id: 9, tripId: 100, status: 'OTP_VERIFIED', otpVerified: true,
+      draftTokenExpiresAt: new Date(Date.now() - 60_000),
+    });
+    const res = await request(makeApp())
+      .get(`/api/travel/microsites/public/${TEST_UUID}/full?token=${micrositeToken('registration')}&draftToken=t`);
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'DRAFT_EXPIRED' });
+  });
+
+  test('non-registration purpose ignores draftToken query param', async () => {
+    prisma.tripMicrosite.findUnique.mockResolvedValue({
+      id: 7, subdomain: 't', tripId: 100, publicUuid: TEST_UUID,
+      itineraryHtml: '', faqJson: null, publishedAt: new Date(), expiresAt: null,
+    });
+    prisma.tmcTrip.findUnique.mockResolvedValue({ id: 100, tripCode: 't', destination: 'D', departDate: new Date(), returnDate: new Date(), status: 'confirmed' });
+    const res = await request(makeApp())
+      .get(`/api/travel/microsites/public/${TEST_UUID}/full?token=${micrositeToken('teacher-access')}&draftToken=should-be-ignored`);
+    expect(res.status).toBe(200);
+    expect(res.body.draft).toBeUndefined();
+    expect(prisma.pendingTripRegistration.findUnique).not.toHaveBeenCalled();
   });
 });
 

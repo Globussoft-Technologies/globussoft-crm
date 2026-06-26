@@ -395,7 +395,7 @@ describe('<Trips /> — row rendering: status / link / dates / participants / pr
 });
 
 describe('<Trips /> — new-trip drawer + create POST', () => {
-  it('clicking "New Trip" opens the drawer + fires /api/contacts?limit=200 for school picker', async () => {
+  it('clicking "New Trip" opens the drawer with the 5 required fields (school is free-text)', async () => {
     renderPage();
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
     fetchApiMock.mockClear();
@@ -414,16 +414,16 @@ describe('<Trips /> — new-trip drawer + create POST', () => {
     expect(within(drawerForm).getByText(/^School$/i)).toBeInTheDocument();
     expect(within(drawerForm).getByText(/Depart date/i)).toBeInTheDocument();
     expect(within(drawerForm).getByText(/Return date/i)).toBeInTheDocument();
-    // /api/contacts?limit=200 fired so the school picker can populate.
-    await waitFor(() => {
-      const contactsCall = fetchApiMock.mock.calls.find(([u, o]) =>
-        typeof u === 'string'
-        && u.startsWith('/api/contacts')
-        && u.includes('limit=200')
-        && (!o?.method || o.method === 'GET'),
-      );
-      expect(contactsCall).toBeTruthy();
-    });
+    // School is a free-text input (not a dropdown) — the operator types the
+    // school name and the backend find-or-creates a Contact for it.
+    const schoolInput = within(drawerForm).getByPlaceholderText(/DPS North|Bharat Public School/i);
+    expect(schoolInput.tagName).toBe('INPUT');
+    expect(schoolInput.getAttribute('type')).toBe('text');
+    // No /api/contacts?limit=200 prefetch fires any more (no school picker).
+    const contactsCall = fetchApiMock.mock.calls.find(([u]) =>
+      typeof u === 'string' && u.startsWith('/api/contacts'),
+    );
+    expect(contactsCall).toBeFalsy();
   });
 
   it('validation: missing required fields surfaces notify.error + does NOT fire POST', async () => {
@@ -452,22 +452,13 @@ describe('<Trips /> — new-trip drawer + create POST', () => {
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
     fireEvent.click(screen.getByRole('button', { name: /Create a new trip/i }));
     await screen.findByRole('heading', { name: /^New Trip$/i });
-    // Wait for school picker to populate so the <option value="5001"> exists.
-    await waitFor(() => {
-      expect(
-        screen.getByRole('option', { name: /Mumbai International School/i }),
-      ).toBeInTheDocument();
-    });
-    // Fill the form. Use textbox role for trip code + destination so the
-    // labels are pinned to the right inputs.
+    // Fill the form. School is now a free-text input — type the school name;
+    // the backend find-or-creates a Contact under the hood.
     const inputs = screen.getAllByRole('textbox');
-    // Trip code is the first textbox, destination is the second.
+    // Order matches the drawer markup: trip code → destination → school.
     fireEvent.change(inputs[0], { target: { value: 'TMC-KAS-2026-XYZ-G9' } });
     fireEvent.change(inputs[1], { target: { value: 'Kashmir' } });
-    // There are 3 comboboxes in the DOM: filter-bar Status (index 0),
-    // drawer School (index 1), drawer Status (index 2). Pick School by index.
-    const comboboxes = screen.getAllByRole('combobox');
-    fireEvent.change(comboboxes[1], { target: { value: '5001' } });
+    fireEvent.change(inputs[2], { target: { value: 'DPS North' } });
     // Depart date + return date inputs — find by type="date".
     const dateInputs = document.querySelectorAll('input[type="date"]');
     fireEvent.change(dateInputs[0], { target: { value: '2026-12-01' } });
@@ -488,9 +479,10 @@ describe('<Trips /> — new-trip drawer + create POST', () => {
       const body = JSON.parse(post[1].body);
       expect(body.tripCode).toBe('TMC-KAS-2026-XYZ-G9');
       expect(body.destination).toBe('Kashmir');
-      // schoolContactId coerced to Int.
-      expect(body.schoolContactId).toBe(5001);
-      expect(typeof body.schoolContactId).toBe('number');
+      // School is sent as free-text schoolName (not schoolContactId); the
+      // backend resolves it to a Contact via find-or-create.
+      expect(body.schoolName).toBe('DPS North');
+      expect(body.schoolContactId).toBeUndefined();
       expect(body.departDate).toBe('2026-12-01');
       expect(body.returnDate).toBe('2026-12-08');
       // pricePerStudent coerced to Number.

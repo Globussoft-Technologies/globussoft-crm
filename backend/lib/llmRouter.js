@@ -186,7 +186,7 @@ const ENV_FOR_MODEL = {
   "gpt-4o-search": "OPENAI_API_KEY",
   "gemini-flash": "GEMINI_API_KEY",
   "claude-haiku": "ANTHROPIC_API_KEY",
-  "groq-llama": "groq",
+  "groq-llama": "GROQ_API_KEY",
   // S16 — image-gen providers for marketing-flyer-image task class
   // (PRD_TRAVEL_MARKETING_FLYER FR-3.6.3). DALL-E 3 reuses the OpenAI
   // key (same env var as gpt-4); Stability XL needs its own dedicated key.

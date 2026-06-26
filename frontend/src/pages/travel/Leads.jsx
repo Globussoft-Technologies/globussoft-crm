@@ -8,11 +8,9 @@
 // bug" rule from CLAUDE.md — a 100-row window on a 5,000-deal tenant
 // would silently miss most leads.
 //
-// Click into a row → /deals/:id (the existing generic CRM deal page,
-// which knows nothing about sub-brand but renders the row correctly).
-// Future: spin up a travel-specific Deal detail page if the generic
-// page misses Travel-specific drilldown (diagnosticId link, sub-brand
-// pipeline stage labels). Phase 1 reuses the generic page.
+// Click into a row → /travel/leads/:contactId (the TravelLeadDetail "unified
+// lead view" with the customer's history). The old /deals/:id target 404'd —
+// no such route exists in this app.
 //
 // G010 (PRD_TRAVEL_MULTICHANNEL_LEADS FR-3.6.2, FR-3.6.3) — adds:
 //   - ?view=inbox query param that flips to an inbox-timeline layout
@@ -26,7 +24,7 @@
 import { useContext, useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import {
-  AlertCircle, Filter, Inbox, LayoutGrid, Plus, RefreshCw, Tag, UserPlus, UserCircle, X,
+  AlertCircle, Filter, Inbox, LayoutGrid, Plus, RefreshCw, Tag, Trash2, UserPlus, UserCircle, X,
 } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
@@ -75,11 +73,25 @@ const EMPTY_FORM = {
   amount: "", expectedClose: "",
 };
 
+// Today's date as a local YYYY-MM-DD string (matches the native <input type=date>
+// value format). Used to constrain the lead's date to today — not past, not
+// future. NOT toISOString() (that's UTC and would be off by a day in IST before
+// 05:30 / after 18:30).
+function localTodayStr() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 export default function TravelLeads() {
   const notify = useNotify();
   const { user } = useContext(AuthContext) || {};
   const { activeSubBrand } = useActiveSubBrand();
   const [deals, setDeals] = useState([]);
+  // G-amount — a lead's own Deal.amount is almost always 0 for travel (the
+  // pipeline value field is rarely set); the customer's REAL money lives in
+  // their committed itineraries. We aggregate that here, keyed by contactId,
+  // so the AMOUNT column reflects actual booking value instead of "INR 0".
+  const [bookingValueByContact, setBookingValueByContact] = useState({});
   const [loading, setLoading] = useState(true);
   const [subBrand, setSubBrand] = useState("");
   const [stage, setStage] = useState("");
@@ -147,6 +159,11 @@ export default function TravelLeads() {
       notify.error("Title is required");
       return;
     }
+    // The lead's date must be today — reject any past or future date.
+    if (form.expectedClose && form.expectedClose !== localTodayStr()) {
+      notify.error("The date must be today — it can't be in the past or the future.");
+      return;
+    }
     setSaving(true);
     try {
       const body = {
@@ -168,6 +185,26 @@ export default function TravelLeads() {
     }
   };
 
+  // Delete a lead (the underlying Deal) — used to clean up duplicates. Confirms
+  // first; hard delete (no undo). Optimistically drops the row, then reloads.
+  const handleDelete = async (d) => {
+    const ok = await notify.confirm({
+      title: "Delete lead?",
+      message: `Delete "${d.title || `Deal #${d.id}`}"? This permanently removes the lead. This can't be undone.`,
+      confirmText: "Delete",
+      cancelText: "Cancel",
+      destructive: true,
+    });
+    if (!ok) return;
+    try {
+      await fetchApi(`/api/deals/${d.id}`, { method: "DELETE" });
+      notify.success("Lead deleted");
+      load();
+    } catch (err) {
+      notify.error(err?.body?.error || err?.message || "Failed to delete lead");
+    }
+  };
+
   const load = () => {
     setLoading(true);
     const qs = new URLSearchParams();
@@ -182,8 +219,45 @@ export default function TravelLeads() {
         setDeals([]);
       })
       .finally(() => setLoading(false));
+
+    // Best-effort: sum each customer's COMMITTED itinerary totals so the
+    // AMOUNT column reflects their booking value (not the always-0 deal value).
+    // A miss here just falls back to Deal.amount — it never blocks the list.
+    const iq = new URLSearchParams();
+    if (subBrand) iq.set("subBrand", subBrand);
+    iq.set("limit", "200");
+    fetchApi(`/api/travel/itineraries?${iq.toString()}`)
+      .then((res) => {
+        const rows = Array.isArray(res?.itineraries) ? res.itineraries : Array.isArray(res) ? res : [];
+        const COMMITTED = new Set(["accepted", "advance_paid", "fully_paid"]);
+        const map = {};
+        for (const it of rows) {
+          if (it?.contactId == null || !COMMITTED.has(it.status)) continue;
+          const amt = Number(it.totalAmount);
+          if (!Number.isFinite(amt)) continue;
+          const cur = it.currency || "INR";
+          if (!map[it.contactId]) map[it.contactId] = { value: 0, currency: cur };
+          map[it.contactId].value += amt;
+        }
+        setBookingValueByContact(map);
+      })
+      .catch(() => setBookingValueByContact({}));
   };
   useEffect(load, [subBrand, stage, channelFilter]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // What the AMOUNT column shows: the customer's committed booking value when
+  // they have itineraries, otherwise the lead's own Deal.amount, otherwise "—".
+  // `booking` is true when the figure came from itineraries (drives the tooltip).
+  const amountFor = (d) => {
+    const bv = d.contactId != null ? bookingValueByContact[d.contactId] : null;
+    if (bv && bv.value > 0) {
+      return { text: `${bv.currency || "INR"} ${Number(bv.value).toLocaleString()}`, booking: true };
+    }
+    if (d.amount != null) {
+      return { text: `${d.currency || "USD"} ${Number(d.amount).toLocaleString()}`, booking: false };
+    }
+    return { text: "—", booking: false };
+  };
 
   // G010 — per-channel counts from the currently-loaded deals window.
   // Server-side count would be more accurate cross-paginated; the chip
@@ -314,9 +388,13 @@ export default function TravelLeads() {
               .map((d) => (
                 <li key={d.id} style={inboxRow}>
                   <div style={inboxRowMain}>
-                    <Link to={`/deals/${d.id}`} style={inboxTitle}>
-                      {d.title || `Deal #${d.id}`}
-                    </Link>
+                    {d.contactId ? (
+                      <Link to={`/travel/leads/${d.contactId}`} style={inboxTitle}>
+                        {d.title || `Deal #${d.id}`}
+                      </Link>
+                    ) : (
+                      <span style={inboxTitle}>{d.title || `Deal #${d.id}`}</span>
+                    )}
                     {d.channel && (
                       <span style={channelBadge} aria-label={`Channel ${d.channel}`}>
                         {CHANNEL_SHORT_LABELS[d.channel] || d.channel}
@@ -341,10 +419,14 @@ export default function TravelLeads() {
                         {d.contact?.name || d.contact?.email || "no contact"}
                       </span>
                     )}
-                    <span style={{ color: "var(--text-secondary)", fontSize: 12 }}>
-                      {d.amount != null
-                        ? `${d.currency || "USD"} ${Number(d.amount).toLocaleString()}`
-                        : ""}
+                    <span
+                      style={{ color: "var(--text-secondary)", fontSize: 12 }}
+                      title={amountFor(d).booking ? "Customer booking value — sum of committed itineraries" : undefined}
+                    >
+                      {(() => {
+                        const a = amountFor(d);
+                        return a.text === "—" ? "" : a.text;
+                      })()}
                     </span>
                     <span style={{ color: "var(--text-secondary)", fontSize: 12, marginLeft: "auto" }}>
                       {d.updatedAt || d.createdAt
@@ -365,13 +447,20 @@ export default function TravelLeads() {
                 <th style={th}>Stage</th>
                 <th style={thRight}>Amount</th>
                 <th style={th}>Diagnostic</th>
+                <th style={th}>Actions</th>
               </tr>
             </thead>
             <tbody>
               {deals.map((d) => (
                 <tr key={d.id} style={trStyle}>
                   <td style={td}>
-                    <Link to={`/deals/${d.id}`} style={dealLink}>{d.title || `Deal #${d.id}`}</Link>
+                    {d.contactId ? (
+                      <Link to={`/travel/leads/${d.contactId}`} style={dealLink} title="Open the lead's detail / history">
+                        {d.title || `Deal #${d.id}`}
+                      </Link>
+                    ) : (
+                      <span>{d.title || `Deal #${d.id}`}</span>
+                    )}
                   </td>
                   <td style={td}>
                     {d.contactId ? (
@@ -388,7 +477,14 @@ export default function TravelLeads() {
                   </td>
                   <td style={td}><span style={stageBadge(d.stage)}>{d.stage}</span></td>
                   <td style={tdRight}>
-                    {d.amount != null ? `${d.currency || "USD"} ${Number(d.amount).toLocaleString()}` : "—"}
+                    {(() => {
+                      const a = amountFor(d);
+                      return (
+                        <span title={a.booking ? "Customer booking value — sum of committed itineraries" : undefined}>
+                          {a.text}
+                        </span>
+                      );
+                    })()}
                   </td>
                   <td style={td}>
                     {d.diagnosticId ? (
@@ -407,6 +503,17 @@ export default function TravelLeads() {
                         RFU profile →
                       </Link>
                     )}
+                  </td>
+                  <td style={td}>
+                    <button
+                      type="button"
+                      onClick={() => handleDelete(d)}
+                      style={{ ...iconBtn, color: "var(--danger-color, #f43f5e)" }}
+                      title={`Delete ${d.title || `lead #${d.id}`}`}
+                      aria-label={`Delete ${d.title || `lead #${d.id}`}`}
+                    >
+                      <Trash2 size={16} />
+                    </button>
                   </td>
                 </tr>
               ))}
@@ -511,6 +618,7 @@ export default function TravelLeads() {
                   type="date" value={form.expectedClose}
                   onChange={(e) => setForm({ ...form, expectedClose: e.target.value })}
                   style={inputStyle}
+                  title="The date must be today — not a past or future date."
                 />
               </label>
             </div>

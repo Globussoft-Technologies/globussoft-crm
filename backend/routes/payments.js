@@ -92,6 +92,25 @@ async function resolveRazorpayWebhookSecret(event) {
         if (creds && creds.keySecret) return creds.keySecret;
       }
     }
+
+    // Fallback: resolve the tenant from `notes.tenantId` stamped on the entity
+    // at creation time. Payment-LINK flows (travel quote advance / milestone /
+    // invoice) create NO Payment row upfront, so the candidates lookup above
+    // finds nothing — without this, those events fall back to the PLATFORM
+    // secret and fail HMAC verification (the link was signed with the tenant's
+    // own BYOK keys), silently dropping the customer's payment instead of
+    // recording the revenue. The link-create call stamps notes.tenantId for
+    // exactly this reconciliation.
+    const notes =
+      (plinkEnt && plinkEnt.notes) ||
+      (paymentEnt && paymentEnt.notes) ||
+      (orderEnt && orderEnt.notes) ||
+      null;
+    const notesTenantId = notes && Number(notes.tenantId);
+    if (Number.isFinite(notesTenantId) && notesTenantId > 0) {
+      const creds = await getTenantRazorpayCreds(notesTenantId);
+      if (creds && creds.keySecret) return creds.keySecret;
+    }
   } catch (err) {
     console.error(
       "[Payments] webhook tenant-secret resolution failed, falling back to env:",
@@ -674,10 +693,57 @@ router.get("/", async (req, res) => {
       contacts.forEach((c) => { contactMap[c.id] = c; });
     }
 
-    res.json(payments.map((p) => ({
-      ...serialize(p),
-      contact: p.contactId ? (contactMap[p.contactId] || null) : null,
-    })));
+    // For travel payments (invoiceId=null, contactId=null), resolve customer +
+    // invoice label from the TravelInvoice referenced in payment metadata.
+    const parsedMetaMap = {};
+    const travelInvIdsToFetch = [];
+    for (const p of payments) {
+      if (!p.contactId && !p.invoiceId) {
+        let meta = {};
+        try { meta = JSON.parse(p.metadata || "{}"); } catch (_) {}
+        parsedMetaMap[p.id] = meta;
+        if (meta.travelInvoiceId) travelInvIdsToFetch.push(Number(meta.travelInvoiceId));
+      }
+    }
+    const travelInvMap = {};
+    if (travelInvIdsToFetch.length > 0) {
+      const uniqueTravelIds = [...new Set(travelInvIdsToFetch)];
+      const travelInvs = await prisma.travelInvoice.findMany({
+        where: { id: { in: uniqueTravelIds }, tenantId },
+        select: { id: true, invoiceNum: true, contactId: true, itineraryId: true },
+      });
+      travelInvs.forEach((ti) => { travelInvMap[ti.id] = ti; });
+      // Batch-fetch any contacts we don't already have from travel invoices
+      const extraCids = [...new Set(
+        travelInvs.map((ti) => ti.contactId).filter((cid) => cid && !contactMap[cid])
+      )];
+      if (extraCids.length > 0) {
+        const extraContacts = await prisma.contact.findMany({
+          where: { id: { in: extraCids }, tenantId },
+          select: { id: true, name: true, email: true, phone: true },
+        });
+        extraContacts.forEach((c) => { contactMap[c.id] = c; });
+      }
+    }
+
+    res.json(payments.map((p) => {
+      let contact = p.contactId ? (contactMap[p.contactId] || null) : null;
+      let travelInvoiceNum = null;
+      let itineraryId = null;
+      if (!contact && parsedMetaMap[p.id]) {
+        const ti = travelInvMap[Number(parsedMetaMap[p.id].travelInvoiceId)];
+        if (ti) {
+          travelInvoiceNum = ti.invoiceNum;
+          if (ti.contactId) contact = contactMap[ti.contactId] || null;
+          if (ti.itineraryId) itineraryId = ti.itineraryId;
+        }
+      }
+      // Also pick up itineraryId stored directly in payment metadata (advance/quote flows)
+      if (!itineraryId && parsedMetaMap[p.id] && parsedMetaMap[p.id].itineraryId) {
+        itineraryId = Number(parsedMetaMap[p.id].itineraryId) || null;
+      }
+      return { ...serialize(p), contact, travelInvoiceNum, itineraryId };
+    }));
   } catch (err) {
     console.error("[Payments] list error:", err);
     res.status(500).json({ error: err.message });

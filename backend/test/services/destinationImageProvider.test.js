@@ -191,6 +191,41 @@ describe('fetchOne — fallback hierarchy behaviour', () => {
   });
 });
 
+describe('fetchMany — gallery (public destination-photo proxy)', () => {
+  test('returns up to `limit` distinct images across the cascade', async () => {
+    process.env.PEXELS_API_KEY = 'test-key';
+    vi.spyOn(pexelsProvider, 'search').mockResolvedValue([
+      { url: 'https://pexels.example/a.jpg', thumbUrl: 'https://pexels.example/a-t.jpg', attribution: { providerId: 'pexels', photographer: 'A' } },
+      { url: 'https://pexels.example/b.jpg', attribution: { providerId: 'pexels', photographer: 'B' } },
+      { url: 'https://pexels.example/a.jpg', attribution: { providerId: 'pexels', photographer: 'A' } }, // dup URL — dropped
+    ]);
+    const out = await provider.fetchMany('Srinagar', { limit: 5 });
+    expect(out.map((r) => r.url)).toEqual([
+      'https://pexels.example/a.jpg',
+      'https://pexels.example/b.jpg',
+    ]);
+  });
+
+  test('EXCLUDES the AI fallback by default (stock-only for customer pages)', async () => {
+    // No stock keys → pexels/unsplash unavailable; pixabay anonymous returns [].
+    vi.spyOn(pixabayProvider, 'search').mockResolvedValue([]);
+    const aiSpy = vi.spyOn(aiImageFallbackProvider, 'search').mockResolvedValue([
+      { url: 'https://ai.example/generated.png', attribution: { providerId: 'ai-fallback' } },
+    ]);
+    const out = await provider.fetchMany('Nowhere-ville');
+    expect(out).toEqual([]);            // did NOT fall through to AI generation
+    expect(aiSpy).not.toHaveBeenCalled();
+  });
+
+  test('clamps limit to the 1..30 range and returns [] on empty query', async () => {
+    expect(await provider.fetchMany('')).toEqual([]);
+    process.env.PEXELS_API_KEY = 'test-key';
+    const spy = vi.spyOn(pexelsProvider, 'search').mockResolvedValue([]);
+    await provider.fetchMany('Goa', { limit: 999 });
+    expect(spy.mock.calls[0][1].perPage).toBe(30); // clamped to MAX
+  });
+});
+
 describe('cache behaviour', () => {
   test('cache hit returns the cached envelope without re-calling the provider', async () => {
     vi.spyOn(pixabayProvider, 'search').mockResolvedValue([

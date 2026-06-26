@@ -976,15 +976,6 @@ export default function ItineraryEditor() {
                     <div style={{ marginLeft: "auto", display: "inline-flex", gap: "0.25rem", flexWrap: "wrap" }}>
                       <button
                         type="button"
-                        data-testid={`day-${day}-add-hotel-btn`}
-                        onClick={() => setAddForm({ day, kind: "hotel" })}
-                        style={{ display: "inline-flex", alignItems: "center", gap: "0.2rem", padding: "0.18rem 0.45rem", border: "1px solid var(--border-color)", borderRadius: 5, background: "transparent", color: "var(--text-primary)", cursor: "pointer", fontSize: "0.7rem" }}
-                        title="Add a hotel stay to this day"
-                      >
-                        <Hotel size={11} /> + Hotel
-                      </button>
-                      <button
-                        type="button"
                         data-testid={`day-${day}-add-activity-btn`}
                         onClick={() => setAddForm({ day, kind: "activity" })}
                         style={{ display: "inline-flex", alignItems: "center", gap: "0.2rem", padding: "0.18rem 0.45rem", border: "1px solid var(--border-color)", borderRadius: 5, background: "transparent", color: "var(--text-primary)", cursor: "pointer", fontSize: "0.7rem" }}

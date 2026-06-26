@@ -167,6 +167,15 @@ function fmt(n) {
   return v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+function countTemplateLines(linesJson) {
+  try {
+    const arr = JSON.parse(linesJson || "[]");
+    return Array.isArray(arr) ? arr.length : 0;
+  } catch {
+    return 0;
+  }
+}
+
 export default function QuoteBuilder() {
   const { id: routeId } = useParams();
   const isEdit = !!routeId;
@@ -222,6 +231,13 @@ export default function QuoteBuilder() {
   const [templateName, setTemplateName] = useState("");
   const [templateCategory, setTemplateCategory] = useState("");
   const [savingTemplate, setSavingTemplate] = useState(false);
+  // Use-template modal state — load an existing template's lines into the
+  // current quote as draft rows.
+  const [useTemplateOpen, setUseTemplateOpen] = useState(false);
+  const [templateOptions, setTemplateOptions] = useState([]);
+  const [selectedTemplateId, setSelectedTemplateId] = useState("");
+  const [loadingTemplates, setLoadingTemplates] = useState(false);
+  const [applyingTemplate, setApplyingTemplate] = useState(false);
   // Slice 11: accept + decline workflow state.
   const [acceptInFlight, setAcceptInFlight] = useState(false);
   const [declineInFlight, setDeclineInFlight] = useState(false);
@@ -311,6 +327,30 @@ export default function QuoteBuilder() {
     loadFxRate();
     return () => { cancelled = true; };
   }, [currency]);
+
+  // Load available quote templates when the "Use template" modal is open.
+  // We intentionally do NOT filter by sub-brand here so tenant-wide templates
+  // (subBrand=null) are included alongside the current sub-brand's templates.
+  useEffect(() => {
+    if (!useTemplateOpen) return;
+    let cancelled = false;
+    setLoadingTemplates(true);
+    fetchApi(`/api/travel/quote-templates?isActive=true&limit=200`)
+      .then((d) => {
+        if (cancelled) return;
+        const rows = Array.isArray(d?.items) ? d.items : [];
+        setTemplateOptions(rows);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        notify.error(err?.data?.error || err?.message || "Failed to load templates");
+        setTemplateOptions([]);
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingTemplates(false);
+      });
+    return () => { cancelled = true; };
+  }, [useTemplateOpen]);
 
   // Re-fetch the parent quote (used after line writes — server recomputes
   // totalAmount and we don't want the UI to drift from what's persisted).
@@ -1374,6 +1414,47 @@ export default function QuoteBuilder() {
     }
   };
 
+  // ── Use template ────────────────────────────────────────────────────
+  // Load an existing Quote Template's lines into the builder as draft rows.
+  // For a brand-new quote we also adopt the template's currency + sub-brand so
+  // the header stays consistent; for an existing quote we only append lines.
+  const applySelectedTemplate = async () => {
+    if (!selectedTemplateId) return;
+    setApplyingTemplate(true);
+    try {
+      const t = await fetchApi(`/api/travel/quote-templates/${selectedTemplateId}`);
+      const arr = JSON.parse(t.linesJson || "[]");
+      if (!Array.isArray(arr) || arr.length === 0) {
+        notify.error("Selected template has no lines");
+        return;
+      }
+      if (!isEdit) {
+        if (t.currency) setCurrency(t.currency);
+        if (t.subBrand) setSubBrand(t.subBrand);
+      }
+      const newDrafts = arr.map((l, idx) => ({
+        key: `draft-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 6)}`,
+        lineType: l.lineType || "other",
+        description: String(l.description || ""),
+        quantity: Number(l.quantity) || 1,
+        unitPrice: Number(l.unitPrice) || 0,
+        supplierId: l.supplierId != null ? String(l.supplierId) : "",
+        notes: l.notes || "",
+        currency: l.currency || t.currency || currency || "INR",
+      }));
+      setDraftLines((prev) => [...prev, ...newDrafts]);
+      notify.success(
+        `Loaded ${newDrafts.length} line${newDrafts.length === 1 ? "" : "s"} from "${t.name}"`,
+      );
+      setUseTemplateOpen(false);
+      setSelectedTemplateId("");
+    } catch (err) {
+      notify.error(err?.data?.error || err?.message || "Failed to apply template");
+    } finally {
+      setApplyingTemplate(false);
+    }
+  };
+
   if (loading) {
     return (
       <div style={{ padding: 24, maxWidth: 1200, margin: "0 auto" }}>
@@ -1447,6 +1528,16 @@ export default function QuoteBuilder() {
             {/* Save the current line set into the reusable Quote Template
                 library — works even before the quote is saved (it only needs
                 the lines). Hidden until at least one line exists. */}
+            <button
+              type="button"
+              onClick={() => { setSelectedTemplateId(""); setUseTemplateOpen(true); }}
+              disabled={applyingTemplate || loadingTemplates}
+              style={secondaryBtn}
+              title="Load line items from an existing quote template"
+              aria-label="Use template"
+            >
+              <LayoutTemplate size={14} /> Use template
+            </button>
             <button
               type="button"
               onClick={openTemplateModal}
@@ -2408,6 +2499,92 @@ export default function QuoteBuilder() {
                 disabled={savingTemplate || !templateName.trim()}
               >
                 <LayoutTemplate size={14} /> {savingTemplate ? "Saving…" : "Save template"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {useTemplateOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Use quote template"
+          onClick={(e) => { if (e.target === e.currentTarget && !applyingTemplate) setUseTemplateOpen(false); }}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.6)",
+            backdropFilter: "blur(4px)",
+            WebkitBackdropFilter: "blur(4px)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1100,
+            padding: "1rem",
+          }}
+        >
+          <div
+            style={{
+              background: "var(--bg-color)",
+              color: "var(--text-primary)",
+              padding: 24,
+              minWidth: 320,
+              maxWidth: 520,
+              width: "100%",
+              borderRadius: 10,
+              border: "1px solid var(--border-color)",
+              boxShadow: "0 20px 60px rgba(0,0,0,0.45)",
+            }}
+          >
+            <h3 style={{ margin: "0 0 6px", fontSize: "1.1rem", display: "flex", alignItems: "center", gap: 8 }}>
+              <LayoutTemplate size={18} /> Use template
+            </h3>
+            <p style={{ color: "var(--text-secondary)", fontSize: 14, marginBottom: 16 }}>
+              Choose a reusable template to pre-fill line items. You can still edit everything before saving.
+            </p>
+            {loadingTemplates ? (
+              <div style={{ padding: 16, textAlign: "center", color: "var(--text-secondary)" }}>Loading templates…</div>
+            ) : templateOptions.length === 0 ? (
+              <div style={{ padding: 16, textAlign: "center", color: "var(--text-secondary)" }}>
+                No active templates found. Create one from the Quote Templates page.
+              </div>
+            ) : (
+              <label style={fieldLabel}>
+                Template
+                <select
+                  value={selectedTemplateId}
+                  onChange={(e) => setSelectedTemplateId(e.target.value)}
+                  style={{ ...inputStyle, width: "100%" }}
+                  aria-label="Select quote template"
+                >
+                  <option value="">Select a template…</option>
+                  {templateOptions.map((t) => (
+                    <option key={t.id} value={String(t.id)}>
+                      {t.name}
+                      {t.category ? ` · ${t.category}` : ""}
+                      {" "}({countTemplateLines(t.linesJson)} lines)
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 18 }}>
+              <button
+                type="button"
+                onClick={() => setUseTemplateOpen(false)}
+                style={secondaryBtn}
+                disabled={applyingTemplate}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={applySelectedTemplate}
+                style={primaryBtn}
+                disabled={applyingTemplate || !selectedTemplateId || loadingTemplates || templateOptions.length === 0}
+              >
+                <LayoutTemplate size={14} /> {applyingTemplate ? "Applying…" : "Apply template"}
               </button>
             </div>
           </div>

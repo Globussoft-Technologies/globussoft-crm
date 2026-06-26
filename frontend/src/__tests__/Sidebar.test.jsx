@@ -578,15 +578,9 @@ describe('Sidebar — load-bearing render surface', () => {
     });
 
     it('does NOT highlight Travel > Dashboard when on the Itineraries sub-route', () => {
-      // Travel Dashboard's `to` is "/travel" — segmentMatches must NOT
-      // light it up for "/travel/itineraries" (next char is "/", but
-      // the renderer's logic considers it a different nav target via
-      // segmentMatches → /travel/itineraries DOES startWith /travel +
-      // segment-boundary, so it WOULD match. The contract pin: this is
-      // an explicit known-behavior assertion — Travel Dashboard DOES
-      // highlight on any /travel/* path. Document that so a future
-      // "tighten this up" refactor is a deliberate decision, not a
-      // silent regression).
+      // Travel Dashboard's `to` is "/travel" and now uses `end`, so it
+      // should only highlight on the exact /travel path, not on nested
+      // routes like /travel/itineraries.
       renderSidebar({
         vertical: 'travel',
         role: 'ADMIN',
@@ -597,9 +591,7 @@ describe('Sidebar — load-bearing render surface', () => {
       const travelDashboardLink = Array.from(document.querySelectorAll('a'))
         .find((a) => a.getAttribute('href') === '/travel');
       expect(travelDashboardLink).toBeTruthy();
-      // segmentMatches WILL light Dashboard up here — pin the actual
-      // implementation rather than the prompt's wishful contract.
-      expect(travelDashboardLink.className).toMatch(/\bactive\b/);
+      expect(travelDashboardLink.className).not.toMatch(/\bactive\b/);
     });
   });
 

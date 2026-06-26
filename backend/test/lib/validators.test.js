@@ -373,22 +373,32 @@ describe('conflictFromPrisma', () => {
   test('returns null on non-P2002 error', () => {
     expect(conflictFromPrisma({ code: 'P2003' })).toBeNull();
   });
-  test('extracts target from array meta', () => {
+  test('array meta → friendly message, tenantId dropped, raw field kept', () => {
     const c = conflictFromPrisma({ code: 'P2002', meta: { target: ['email', 'tenantId'] } });
     expect(c).toEqual({
       status: 409,
-      error: 'Duplicate value for email+tenantId',
+      error: 'Another record already uses this email address.',
       code: 'UNIQUE_CONSTRAINT',
       field: 'email+tenantId',
     });
   });
-  test('extracts target from string meta', () => {
+  test('MySQL index-name string → model-aware friendly message', () => {
+    // The real bug scenario: editing a contact with a duplicate email surfaced
+    // "Duplicate value for Contact_email_tenantId_key" to the UI.
+    const c = conflictFromPrisma({ code: 'P2002', meta: { target: 'Contact_email_tenantId_key' } });
+    expect(c.error).toBe('Another contact already uses this email address.');
+    expect(c.code).toBe('UNIQUE_CONSTRAINT');
+    expect(c.field).toBe('Contact_email_tenantId_key');
+  });
+  test('bare string column meta → friendly message', () => {
     const c = conflictFromPrisma({ code: 'P2002', meta: { target: 'email' } });
     expect(c.field).toBe('email');
+    expect(c.error).toBe('Another record already uses this email address.');
   });
-  test('falls back to "field" when no meta', () => {
+  test('falls back to "field" + generic message when no meta', () => {
     const c = conflictFromPrisma({ code: 'P2002' });
     expect(c.field).toBe('field');
+    expect(c.error).toBe('Another record with the same details already exists.');
   });
 });
 

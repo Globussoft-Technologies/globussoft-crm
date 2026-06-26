@@ -1,6 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useContext } from 'react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
+import { AuthContext } from '../App';
+import { accessibleSubBrands, subBrandShortLabel } from '../utils/travelSubBrand';
+import { useActiveSubBrand } from '../utils/subBrand';
 import { CheckCircle2, Phone, Calendar, Search, Plus, AlertTriangle, Clock, Flame, X } from 'lucide-react';
 
 const PRIORITY_CONFIG = {
@@ -59,13 +62,27 @@ function isPastDate(localDateTimeStr) {
   return picked.getTime() < Date.now();
 }
 
-const EMPTY_FORM = { title: '', dueDate: '', contactId: '', notes: '', priority: 'Medium' };
+const EMPTY_FORM = { title: '', dueDate: '', contactId: '', notes: '', priority: 'Medium', assignedToId: '' };
 
 export default function Tasks() {
   const notify = useNotify();
   const [tasks, setTasks] = useState([]);
   const [contacts, setContacts] = useState([]);
+  const [staff, setStaff] = useState([]);
   const [newTask, setNewTask] = useState(EMPTY_FORM);
+
+  // Travel vertical only: the "Assign to" dropdown lists STAFF (agents), scoped
+  // to the active sub-brand so e.g. an RFU-only operator isn't offered TMC
+  // agents. Generic / wellness tenants don't render the staff dropdown at all,
+  // so their Tasks form is unchanged.
+  const { tenant } = useContext(AuthContext) || {};
+  const isTravel = tenant?.vertical === 'travel';
+  const { activeSubBrand } = useActiveSubBrand();
+  const assignableStaff = !isTravel
+    ? staff
+    : (activeSubBrand
+        ? staff.filter((s) => accessibleSubBrands(s).includes(activeSubBrand))
+        : staff);
   // #893: the Enqueue Activity form used to sit inline above the queue,
   // eating vertical real-estate and inviting accidental typing. Mirror the
   // c031ba0 pattern: header "+ Create Task" CTA opens this drawer; close on
@@ -73,6 +90,16 @@ export default function Tasks() {
   const [creating, setCreating] = useState(false);
 
   useEffect(() => { loadData(); }, []);
+
+  // Travel-only: load the staff roster for the "Assign to" dropdown. Fail-soft
+  // (own catch) so a staff-list permission error never blocks the task queue,
+  // and gated to travel so generic / wellness make no extra request.
+  useEffect(() => {
+    if (!isTravel) return;
+    fetchApi('/api/staff')
+      .then((d) => setStaff(Array.isArray(d) ? d : []))
+      .catch(() => {});
+  }, [isTravel]);
 
   // #893: ESC closes the drawer to match the c031ba0 Travel-page convention.
   useEffect(() => {
@@ -115,7 +142,11 @@ export default function Tasks() {
       const payload = {
         ...newTask,
         dueDate: newTask.dueDate ? new Date(newTask.dueDate).toISOString() : null,
+        // Backend reads `targetUserId` → Task.userId (stripDangerous deletes a
+        // raw `userId` from the body). Only send when an assignee was picked.
+        targetUserId: newTask.assignedToId || undefined,
       };
+      delete payload.assignedToId;
       await fetchApi('/api/tasks', { method: 'POST', body: JSON.stringify(payload) });
       setNewTask(EMPTY_FORM);
       setCreating(false);
@@ -350,6 +381,30 @@ export default function Tasks() {
                   {contacts.map(c => <option key={c.id} value={c.id}>{c.name} ({c.email})</option>)}
                 </select>
               </div>
+
+              {isTravel && (
+                <div>
+                  <label htmlFor="task-staff-assign" style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Assign to (staff)</label>
+                  <select id="task-staff-assign" className="input-field" value={newTask.assignedToId}
+                    onChange={e => setNewTask({ ...newTask, assignedToId: e.target.value })}
+                    style={{ background: 'var(--input-bg)' }}>
+                    <option value="">-- Unassigned --</option>
+                    {assignableStaff.map(s => {
+                      const brands = accessibleSubBrands(s);
+                      // Show the agent's brand scope as a hint (only when not all-4).
+                      const scope = brands.length && brands.length < 4
+                        ? ` · ${brands.map(subBrandShortLabel).join('/')}`
+                        : '';
+                      return <option key={s.id} value={s.id}>{s.name}{scope}</option>;
+                    })}
+                  </select>
+                  {assignableStaff.length === 0 && (
+                    <p style={{ marginTop: '0.4rem', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                      No staff available for this sub-brand.
+                    </p>
+                  )}
+                </div>
+              )}
 
               <div>
                 <label style={{ display: 'block', fontSize: '0.875rem', marginBottom: '0.5rem', color: 'var(--text-secondary)' }}>Execution Deadline</label>

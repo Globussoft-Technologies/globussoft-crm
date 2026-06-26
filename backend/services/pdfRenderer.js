@@ -4608,11 +4608,12 @@ async function renderTravelInvoicePdf(opts) {
 
   doc.moveTo(350, ty).lineTo(545, ty).lineWidth(0.5).strokeColor("#bbb").stroke();
   ty += 6;
-  // S34 — paint "Total Due" label in the sub-brand's primaryColor so the
+  // S34 — paint the total label in the sub-brand's primaryColor so the
   // page's most-load-bearing figure is brand-tinted. Numeric value stays
-  // #111 (high-contrast black) for readability.
+  // #111 (high-contrast black) for readability. Paid invoices read "Total Paid".
+  const totalLabel = invoice.status === "Paid" ? "Total Paid" : "Total Due";
   doc.font("Helvetica-Bold").fontSize(11).fillColor(primaryColor);
-  doc.text("Total Due", 350, ty, { width: 95, align: "right" });
+  doc.text(totalLabel, 350, ty, { width: 95, align: "right" });
   doc.fillColor("#111");
   doc.text(fmt(grandTotal), 450, ty, { width: 95, align: "right" });
   ty += 18;
@@ -4657,12 +4658,13 @@ async function renderTravelInvoicePdf(opts) {
   doc.moveDown(1);
   const termsY = doc.y;
   doc.font("Helvetica-Bold").fontSize(10).fillColor("#333").text("Payment Terms", 50, termsY);
-  doc.font("Helvetica").fontSize(9).fillColor("#555").text(
-    invoice.dueDate
-      ? `Payment is due by ${formatDate(invoice.dueDate)}. Please quote invoice number ${invoice.invoiceNum || invoice.id || ""} on any payment or correspondence.`
-      : "Please quote the invoice number on any payment or correspondence.",
-    50, termsY + 14, { width: 495 },
-  );
+  const termsText =
+    invoice.status === "Paid"
+      ? "Payment has been received in full. Thank you for your business."
+      : invoice.dueDate
+        ? `Payment is due by ${formatDate(invoice.dueDate)}. Please quote invoice number ${invoice.invoiceNum || invoice.id || ""} on any payment or correspondence.`
+        : "Please quote the invoice number on any payment or correspondence.";
+  doc.font("Helvetica").fontSize(9).fillColor("#555").text(termsText, 50, termsY + 14, { width: 495 });
 
   doc.moveDown(1);
   doc.font("Helvetica-Oblique").fontSize(9).fillColor("#444").text(

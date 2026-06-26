@@ -234,11 +234,40 @@ function computeScore(contact) {
     score += Math.min(channels.size * 2, 8); // multi-channel engagement
   }
 
+  // ── WhatsApp engagement ──────────────────────────────────────────
+  // Primary scoring signal for leads that arrive via WhatsApp — they have
+  // no email, no web activity, no deals yet, so without this block they
+  // score near-floor even if they're actively chatting with the team.
+  const waMsgs = contact.whatsappMessages || [];
+  if (waMsgs.length > 0) {
+    const waInbound = waMsgs.filter(m => m.direction === 'INBOUND');
+    const waOutbound = waMsgs.filter(m => m.direction === 'OUTBOUND');
+
+    // Inbound messages = customer initiated or replied — strong intent signal,
+    // weighted the same as email replies (3 pts each, capped at 15).
+    score += Math.min(waInbound.length * 3, 15);
+
+    // Recency decay on last inbound — same e^(-days/45) pattern as activities.
+    if (waInbound.length > 0) {
+      const lastInboundMs = Math.max(...waInbound.map(m => new Date(m.createdAt).getTime()));
+      const daysSinceLast = (now - lastInboundMs) / 86400000;
+      score += Math.round(Math.exp(-daysSinceLast / 45) * 8); // up to +8
+      // WhatsApp leads go cold faster than email — apply decay from 14d.
+      if (daysSinceLast > 30) score -= 5;
+      else if (daysSinceLast > 14) score -= 2;
+    }
+
+    // READ receipts on outbound = customer actually opened our messages.
+    const readOutbound = waOutbound.filter(m => m.status === 'READ').length;
+    score += Math.min(readOutbound * 2, 8);
+  }
+
   // ── Source quality ───────────────────────────────────────────────
   const src = String(contact.source || contact.firstTouchSource || '').toLowerCase();
   if (/referral|customer-referral|partner/.test(src)) score += 8;
   else if (/website-form|inbound|demo-request/.test(src)) score += 5;
   else if (/walk-in/.test(src)) score += 6;
+  else if (/whatsapp|whats.app/.test(src)) score += 6; // WhatsApp inbound = warm, opted-in lead
   else if (/paid|google-ads|fb-ads|linkedin-ads/.test(src)) score += 3;
   else if (/cold|purchased-list|scraped/.test(src)) score -= 5;
   // organic / unknown: 0
@@ -357,6 +386,9 @@ async function tickLeadScoringEngine(io) {
           // contributes to the cron-scoring path (was only loaded by the
           // /api/ai/score-now route via include, never by the 10-min cron).
           touchpoints: { select: { channel: true } },
+          // WhatsApp engagement — inbound messages are the primary signal
+          // for leads that arrive via WhatsApp (no email, no web activity).
+          whatsappMessages: { select: { direction: true, status: true, createdAt: true } },
         },
       });
 

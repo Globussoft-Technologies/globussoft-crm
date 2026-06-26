@@ -82,6 +82,32 @@ function render(landingPage, options = {}) {
     config = landingPage.content;
   }
 
+  // Fill the submission endpoints for PUBLISHED renders (the public
+  // /p/:slug surface). The bridge persists `register.endpoint` and
+  // `brochure.endpoint` as null because the slug isn't always stable at
+  // generation time; we wire them at render time so submissions hit the
+  // right /api/landing-pages/:slug/submit route. The dc-runtime's
+  // submitForm() treats a missing endpoint as "preview mode" and
+  // surfaces a toast instead of POSTing — that path is intentional for
+  // operator previews and for any draft / archived render.
+  if (config && landingPage && landingPage.slug && !options.preview && landingPage.status === 'PUBLISHED') {
+    const submitUrl = `/api/landing-pages/${encodeURIComponent(landingPage.slug)}/submit`;
+    if (config.register && typeof config.register === 'object') {
+      config.register.endpoint = submitUrl;
+    }
+    if (config.brochure && typeof config.brochure === 'object') {
+      config.brochure.endpoint = submitUrl;
+    }
+  }
+  // Pass the preview flag through to the runtime so the toast can tell
+  // the visitor "this is a preview — submissions aren't saved."
+  if (config && typeof config === 'object') {
+    config.meta = Object.assign({}, config.meta || {}, {
+      isPreview: !!options.preview,
+      isPublished: !!(landingPage && landingPage.status === 'PUBLISHED'),
+    });
+  }
+
   let html = readTemplateHtml();
 
   // Hybrid layout: always compose so the editor click-on-canvas bridge

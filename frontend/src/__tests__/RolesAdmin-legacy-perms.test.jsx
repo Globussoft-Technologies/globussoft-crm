@@ -1,28 +1,21 @@
 /**
- * RolesAdmin-legacy-perms.test.jsx — Bug 1 regression coverage.
+ * RolesAdmin-legacy-perms.test.jsx — RolesAdmin regression coverage.
  *
- * Pins: when the role being edited carries permissions that are NOT in
- * the current vertical-filtered catalog (the canonical case: travel
- * tenant role with wellness-flavored seed perms like patients.read,
- * appointments.read, consents.write), the PermissionsModal:
- *
- *   1. Does NOT silently strip them on Save.
- *   2. Surfaces an explicit confirmation modal listing each legacy
- *      key + a Cancel and "Remove and save" button pair.
- *   3. Cancel keeps the role's permissions untouched (no PUT).
- *   4. "Remove and save" fires the PUT with the visible-only selection
- *      (back-compat with the full-replace endpoint contract).
- *
- * Before this fix, the legacy perms were swallowed by the hydrate
- * filter, a console.warn was logged, and persistSave shipped the
- * filtered set — admins lost grants they had no UI control over.
+ * Originally pinned the "Hidden permissions detected" modal (Bug 1).
+ * That modal was removed when a tester misread it as cross-CRM data
+ * leakage — the backend is tenant-scoped at every role-permission
+ * write endpoint (verified in roles.js GET/POST/DELETE/PUT) and the
+ * "legacy" perms are inert cross-vertical noise from pre-2026-06-15
+ * seed pollution. The PUT is full-replace, so the next save silently
+ * cleans them up. Tests covering Bug 2 (system-role delete disabled)
+ * and Bug 5 (table badge count) remain.
  *
  * Stub strategy mirrors Approvals.test.jsx — mock fetchApi, useNotify,
  * usePermissions, render via MemoryRouter + AuthContext.
  */
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
 // Stable mock for fetchApi so call counts across renders are
@@ -170,78 +163,31 @@ beforeEach(() => {
   });
 });
 
-describe('Bug 1 — PermissionsModal legacy-perm acknowledgement', () => {
-  it('shows the legacy-perm confirmation modal when Save would drop hidden grants', async () => {
+describe('Legacy perms — silent cleanup on Save (modal removed)', () => {
+  it('does NOT surface any "Hidden permissions detected" modal on Save', async () => {
     renderPage();
 
-    // Wait for the role row to render, then click the permissions badge.
     const permBtn = await screen.findByRole('button', { name: /View permissions for Manager/i });
     fireEvent.click(permBtn);
-
-    // Wait for the matrix to render — there should be checkboxes for each
-    // catalog module's actions.
     await screen.findByText('Permissions: Manager');
 
-    // Click Save (no selection change → the in-catalog perms are pre-
-    // checked from hydration, legacy perms are NOT in `selected`).
     const saveBtn = await screen.findByRole('button', { name: /Save permissions/i });
     fireEvent.click(saveBtn);
 
-    // The legacy-perm confirm modal appears.
-    const legacyModal = await screen.findByTestId('legacy-perms-confirm-modal');
-    expect(legacyModal).toBeTruthy();
-
-    // It enumerates every legacy key.
-    const modalText = legacyModal.textContent || '';
-    expect(modalText).toMatch(/patients\.read/);
-    expect(modalText).toMatch(/appointments\.write/);
-    expect(modalText).toMatch(/consents\.delete/);
-
-    // No PUT fired — gated on admin confirmation.
-    const putCalls = fetchApiMock.mock.calls.filter(
-      ([url, opts]) =>
-        url === `/api/roles/${dirtyRoleFromList.id}/permissions` && opts?.method === 'PUT',
-    );
-    expect(putCalls).toHaveLength(0);
+    // No modal — the legacy-perm acknowledgement was removed to avoid
+    // tester confusion (perms are inert cross-vertical noise; backend
+    // is tenant-scoped so save cannot affect another tenant).
+    expect(screen.queryByTestId('legacy-perms-confirm-modal')).toBeNull();
+    expect(screen.queryByText(/Hidden permissions detected/i)).toBeNull();
   });
 
-  it('Cancel button leaves the role untouched (no PUT fired)', async () => {
+  it('Save fires the PUT with only the visible-catalog perms (legacy ones silently dropped)', async () => {
     renderPage();
     const permBtn = await screen.findByRole('button', { name: /View permissions for Manager/i });
     fireEvent.click(permBtn);
     await screen.findByText('Permissions: Manager');
     fireEvent.click(await screen.findByRole('button', { name: /Save permissions/i }));
 
-    const legacyModal = await screen.findByTestId('legacy-perms-confirm-modal');
-    const cancelBtn = within(legacyModal.parentElement).getByTestId('legacy-perms-cancel');
-    fireEvent.click(cancelBtn);
-
-    // After cancel, the modal closes — but the matrix stays open.
-    await waitFor(() =>
-      expect(screen.queryByTestId('legacy-perms-confirm-modal')).toBeNull(),
-    );
-    expect(screen.queryByText('Permissions: Manager')).toBeTruthy();
-
-    const putCalls = fetchApiMock.mock.calls.filter(
-      ([url, opts]) =>
-        url === `/api/roles/${dirtyRoleFromList.id}/permissions` && opts?.method === 'PUT',
-    );
-    expect(putCalls).toHaveLength(0);
-  });
-
-  it('"Remove and save" fires the PUT with only the visible selection', async () => {
-    renderPage();
-    const permBtn = await screen.findByRole('button', { name: /View permissions for Manager/i });
-    fireEvent.click(permBtn);
-    await screen.findByText('Permissions: Manager');
-    fireEvent.click(await screen.findByRole('button', { name: /Save permissions/i }));
-
-    const legacyModal = await screen.findByTestId('legacy-perms-confirm-modal');
-    const confirmBtn = within(legacyModal.parentElement).getByTestId('legacy-perms-remove-and-save');
-    fireEvent.click(confirmBtn);
-
-    // PUT lands with the visible-only set — the legacy perms are
-    // intentionally not in the payload (admin acknowledged the drop).
     await waitFor(() => {
       const putCalls = fetchApiMock.mock.calls.filter(
         ([url, opts]) =>
@@ -255,61 +201,16 @@ describe('Bug 1 — PermissionsModal legacy-perm acknowledgement', () => {
           url === `/api/roles/${dirtyRoleFromList.id}/permissions` && opts?.method === 'PUT',
       )[1].body,
     );
-    // The 3 visible perms are present.
     const sent = new Set(putBody.permissions.map((p) => `${p.module}.${p.action}`));
+    // The 3 visible perms are present.
     expect(sent.has('contacts.read')).toBe(true);
     expect(sent.has('itineraries.read')).toBe(true);
     expect(sent.has('suppliers.read')).toBe(true);
-    // None of the legacy perms made it into the payload.
+    // The 3 legacy / cross-vertical perms are NOT in the payload — the
+    // backend's full-replace semantics cleans them up.
     expect(sent.has('patients.read')).toBe(false);
     expect(sent.has('appointments.write')).toBe(false);
     expect(sent.has('consents.delete')).toBe(false);
-  });
-
-  it('does NOT show the legacy modal when the role has no foreign perms', async () => {
-    // Override the default mock so /api/roles returns a clean role.
-    const cleanRole = {
-      ...dirtyRoleFromList,
-      id: 10,
-      key: 'CLEAN',
-      name: 'Clean',
-      permissions: [
-        { module: 'contacts', action: 'read' },
-        { module: 'itineraries', action: 'read' },
-      ],
-      permissionCount: 2,
-      visiblePermissionCount: 2,
-      hiddenPermissionCount: 0,
-    };
-    fetchApiMock.mockImplementation((url, opts) => {
-      if (url === '/api/roles' && (!opts || opts.method == null)) {
-        return Promise.resolve({ roles: [cleanRole], tenantId: 11 });
-      }
-      if (url === '/api/roles/catalog') return Promise.resolve(TRAVEL_CATALOG);
-      if (url === '/api/pages/catalog') return Promise.resolve({ catalog: [] });
-      if (url === `/api/roles/${cleanRole.id}/permissions` && opts?.method === 'PUT') {
-        return Promise.resolve({ roleId: cleanRole.id, permissions: [] });
-      }
-      return Promise.resolve({});
-    });
-    renderPage();
-
-    fireEvent.click(
-      await screen.findByRole('button', { name: /View permissions for Clean/i }),
-    );
-    await screen.findByText('Permissions: Clean');
-    fireEvent.click(await screen.findByRole('button', { name: /Save permissions/i }));
-
-    // No legacy modal — straight to the PUT (no sensitive grants either
-    // because we didn't toggle any new boxes).
-    await waitFor(() => {
-      const putCalls = fetchApiMock.mock.calls.filter(
-        ([url, opts]) =>
-          url === `/api/roles/${cleanRole.id}/permissions` && opts?.method === 'PUT',
-      );
-      expect(putCalls.length).toBeGreaterThanOrEqual(1);
-    });
-    expect(screen.queryByTestId('legacy-perms-confirm-modal')).toBeNull();
   });
 });
 
@@ -383,14 +284,17 @@ describe('Bug 5 / Step-6 — Table badge count matches editor count', () => {
     expect(badge.textContent).not.toMatch(/\b6\b/);
   });
 
-  it('does NOT render an inline "(+N hidden)" indicator in the main table (Step 6 UI follow-up)', async () => {
+  it('does NOT render an inline "(+N hidden)" indicator or mention "hidden" in the tooltip', async () => {
     renderPage();
     const badge = await screen.findByRole('button', { name: /View permissions for Manager/i });
-    // The chip was removed per the post-cleanup UI follow-up; hidden
-    // count surfaces only in the title tooltip + the editor's legacy-
-    // perm confirmation modal.
+    // The chip was removed per the post-cleanup UI follow-up. The
+    // tooltip no longer mentions "hidden" either — that concept was
+    // dropped along with the legacy-perms modal (no surface for the
+    // admin to act on the hidden count, so naming it just confused
+    // testers into thinking it was cross-tenant leakage).
     expect(badge.textContent).not.toMatch(/hidden/i);
-    // Hover-title still carries the diagnostic for admins who care.
-    expect(badge.getAttribute('title')).toMatch(/3 hidden/i);
+    expect(badge.getAttribute('title')).not.toMatch(/hidden/i);
+    // Tooltip just shows the effective count.
+    expect(badge.getAttribute('title')).toMatch(/3 permissions/i);
   });
 });

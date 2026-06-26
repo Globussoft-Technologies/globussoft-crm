@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { PanelTop, Plus, Eye, Copy, Trash2, Globe, FileEdit, BarChart3, Star, Sparkles, AlertCircle } from 'lucide-react';
+import { PanelTop, Plus, Copy, Trash2, Globe, FileEdit, BarChart3, Star, Sparkles, AlertCircle } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { formatPercent } from '../utils/percent';
 import { useNotify } from '../utils/notify';
@@ -139,8 +139,27 @@ export default function LandingPages() {
   };
 
   const handlePublish = async (id, action) => {
+    // Single-page-live workflow (post-merge): publishing also features
+    // the page so /trips resolves to it. If another page in the same
+    // (tenant, subBrand) scope is currently featured, confirm with the
+    // operator first — that page will be silently demoted by the
+    // backend's transactional swap. Skip the confirm on unpublish.
+    if (action === 'publish') {
+      const target = pages.find((p) => p.id === id);
+      const currentLive = pages.find(
+        (p) => p.isFeatured && p.id !== id && (p.subBrand ?? null) === (target?.subBrand ?? null),
+      );
+      if (currentLive) {
+        const ok = await notify.confirm(
+          `"${currentLive.title}" is currently live at /trips. Publishing "${target?.title || 'this page'}" will replace it.\n\nProceed?`,
+        );
+        if (!ok) return;
+      }
+    }
     try {
       await fetchApi(`/api/landing-pages/${id}/${action}`, { method: 'POST' });
+      if (action === 'publish') notify.success('Published — page is live at /trips.');
+      else notify.success('Unpublished — page is no longer live.');
       loadPages();
     } catch (err) {
       // Publish gate (travel pages with missing content) returns 409 +
@@ -164,49 +183,11 @@ export default function LandingPages() {
     loadPages();
   };
 
-  // Feature ↔ /trips resolver. Featuring requires PUBLISHED status — the
-  // backend enforces this (409 PAGE_NOT_PUBLISHED) but we also disable
-  // the button client-side for DRAFT/ARCHIVED rows. If another page is
-  // already featured in the same (tenant, subBrand) scope, the operator
-  // is shown a confirm dialog naming what will be unfeatured.
-  const handleFeature = async (id) => {
-    const target = pages.find((p) => p.id === id);
-    if (!target) return;
-    if (target.status !== 'PUBLISHED') {
-      notify.error('Publish this page first — only published pages can be featured on /trips.');
-      return;
-    }
-    // Find the page that will be unfeatured by this action (same scope).
-    // subBrand=null and subBrand=null match correctly because === compares
-    // both to null. Pages from other sub-brands are independent and not
-    // affected by this swap.
-    const currentFeatured = pages.find(
-      (p) => p.isFeatured && p.id !== id && (p.subBrand ?? null) === (target.subBrand ?? null),
-    );
-    if (currentFeatured) {
-      const scopeLabel = target.subBrand ? ` (${target.subBrand})` : '';
-      const ok = await notify.confirm(
-        `Make "${target.title}" the page that /trips${scopeLabel} resolves to?\n\nThis will unfeature "${currentFeatured.title}".\n\nProceed?`,
-      );
-      if (!ok) return;
-    } else {
-      const ok = await notify.confirm(
-        `Make "${target.title}" the page that /trips resolves to?`,
-      );
-      if (!ok) return;
-    }
-    try {
-      await fetchApi(`/api/landing-pages/${id}/feature`, { method: 'POST' });
-      notify.success(`"${target.title}" is now featured on /trips.`);
-      loadPages();
-    } catch (err) {
-      if (err?.status === 409 && err?.code === 'PAGE_NOT_PUBLISHED') {
-        notify.error('Publish this page first — only published pages can be featured.');
-      } else {
-        notify.error(err?.message || 'Failed to feature page.');
-      }
-    }
-  };
+  // handleFeature / handleUnfeature removed. The /publish endpoint now
+  // also features the page (and the /unpublish endpoint already
+  // un-features), so the Feature/Unfeature buttons collapsed into the
+  // single Publish/Unpublish button. See handlePublish above for the
+  // sibling-swap confirm.
 
   // PR-B — AI Generate flow. Posts to /generate-from-destination with
   // autoCreate=true so the backend creates the DRAFT row + returns its
@@ -270,22 +251,6 @@ export default function LandingPages() {
       }
     } finally {
       setGenerating(false);
-    }
-  };
-
-  const handleUnfeature = async (id) => {
-    const target = pages.find((p) => p.id === id);
-    if (!target) return;
-    const ok = await notify.confirm(
-      `Unfeature "${target.title}"?\n\n/trips will fall back to the next-most-recent featured page (or to the Japan default if none is featured).`,
-    );
-    if (!ok) return;
-    try {
-      await fetchApi(`/api/landing-pages/${id}/unfeature`, { method: 'POST' });
-      notify.success(`"${target.title}" is no longer featured.`);
-      loadPages();
-    } catch (err) {
-      notify.error(err?.message || 'Failed to unfeature page.');
     }
   };
 
@@ -415,35 +380,28 @@ export default function LandingPages() {
                   <Link to={`/landing-pages/builder/${page.id}`} className="btn-primary" style={{ padding: '0.4rem 0.75rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.25rem', textDecoration: 'none' }}>
                     <FileEdit size={13} /> Edit
                   </Link>
-                  {page.status === 'PUBLISHED' && (
-                    <a href={`${window.location.origin.replace(':5173', ':5000')}/p/${page.slug}`} target="_blank" rel="noreferrer" style={{ padding: '0.4rem 0.75rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.25rem', border: '1px solid var(--border-color)', borderRadius: '6px', textDecoration: 'none', color: 'var(--text-primary)' }}>
-                      <Eye size={13} /> View
-                    </a>
-                  )}
-                  <button onClick={() => handlePublish(page.id, page.status === 'PUBLISHED' ? 'unpublish' : 'publish')} style={{ padding: '0.4rem 0.75rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.25rem', border: '1px solid var(--border-color)', borderRadius: '6px', background: 'none', color: page.status === 'PUBLISHED' ? '#f59e0b' : '#10b981', cursor: 'pointer' }}>
+                  {/* View button removed — the hardcoded :5173→:5000 host
+                      swap only worked on the default Vite dev port, so the
+                      button opened a blank SPA route in production and on
+                      any non-default dev port. The Preview action inside
+                      the Edit builder already serves the same need
+                      (renders the live page via /:id/preview without
+                      leaving the admin shell), and the public URL is
+                      always reachable directly at <host>/p/<slug>. */}
+                  {/* Single Publish/Unpublish button. The backend's
+                      /publish endpoint also features the page on /trips
+                      (auto-demoting any sibling currently featured in
+                      the same tenant + subBrand scope), so one button
+                      covers both make-it-live and put-it-on-/trips in
+                      lockstep — matching the operator's actual
+                      single-page-live workflow. */}
+                  <button
+                    onClick={() => handlePublish(page.id, page.status === 'PUBLISHED' ? 'unpublish' : 'publish')}
+                    title={page.status === 'PUBLISHED' ? 'Take this page down — /trips will no longer serve it' : 'Publish this page and make it live at /trips'}
+                    style={{ padding: '0.4rem 0.75rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.25rem', border: '1px solid var(--border-color)', borderRadius: '6px', background: 'none', color: page.status === 'PUBLISHED' ? '#f59e0b' : '#10b981', cursor: 'pointer' }}
+                  >
                     <Globe size={13} /> {page.status === 'PUBLISHED' ? 'Unpublish' : 'Publish'}
                   </button>
-                  {/* Feature ↔ /trips resolver. Disabled for non-PUBLISHED
-                      rows; the backend gate would 409 anyway, but disabling
-                      the button avoids the dead-click confusion. */}
-                  {page.isFeatured ? (
-                    <button
-                      onClick={() => handleUnfeature(page.id)}
-                      title="Stop showing this page on /trips"
-                      style={{ padding: '0.4rem 0.75rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.25rem', border: '1px solid #b8893b', borderRadius: '6px', background: 'rgba(184, 137, 59, 0.08)', color: '#b8893b', cursor: 'pointer', fontWeight: 600 }}
-                    >
-                      <Star size={13} fill="currentColor" /> Unfeature
-                    </button>
-                  ) : (
-                    <button
-                      onClick={() => handleFeature(page.id)}
-                      disabled={page.status !== 'PUBLISHED'}
-                      title={page.status === 'PUBLISHED' ? 'Show this page on /trips' : 'Publish first to feature this page on /trips'}
-                      style={{ padding: '0.4rem 0.75rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.25rem', border: '1px solid var(--border-color)', borderRadius: '6px', background: 'none', color: page.status === 'PUBLISHED' ? 'var(--text-primary)' : 'var(--text-secondary)', opacity: page.status === 'PUBLISHED' ? 1 : 0.5, cursor: page.status === 'PUBLISHED' ? 'pointer' : 'not-allowed' }}
-                    >
-                      <Star size={13} /> Feature
-                    </button>
-                  )}
                   <button onClick={() => handleDuplicate(page.id)} style={{ padding: '0.4rem 0.75rem', fontSize: '0.8rem', border: '1px solid var(--border-color)', borderRadius: '6px', background: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}>
                     <Copy size={13} />
                   </button>

@@ -477,8 +477,9 @@ model Tenant {
   // all land in SecurityIncident. tenantId on the child is nullable (CSP
   // reports often arrive before auth resolves), so the back-relation only
   // ties together rows where the tenant could be attributed.
-  securityIncidents    SecurityIncident[]
-  travelPurchaseOrders TravelPurchaseOrder[]
+  securityIncidents        SecurityIncident[]
+  travelPurchaseOrders     TravelPurchaseOrder[]
+  pendingTripRegistrations PendingTripRegistration[]
 }
 
 model User {
@@ -2378,6 +2379,18 @@ model LandingPage {
   user      User?                  @relation(fields: [userId], references: [id], onDelete: SetNull)
   analytics LandingPageAnalytics[]
   versions  LandingPageVersion[]
+
+  // 1:1 trip ownership. A TmcTrip owns at most one LandingPage; setting
+  // this field links the page to a trip for the hybrid registration flow
+  // (landing-page wizard → PendingTripRegistration → microsite OTP →
+  // operator approval → TripParticipant). Pages with tripId=null remain
+  // generic marketing pages and keep the existing /submit Contact+Deal
+  // behaviour. @unique enforces 1:1 at the DB level — a second page
+  // trying to claim an already-owned trip fails with P2002.
+  tripId Int?     @unique
+  trip   TmcTrip? @relation(fields: [tripId], references: [id], onDelete: SetNull)
+
+  pendingRegistrations PendingTripRegistration[]
 
   @@unique([tenantId, slug])
   @@index([tenantId, status])
@@ -6098,6 +6111,8 @@ model TmcTrip {
   paymentPlan          TripPaymentPlan?
   documentRequirements TripDocumentRequirement[]
   microsite            TripMicrosite?
+  landingPage          LandingPage?
+  pendingRegistrations PendingTripRegistration[]
   tenant               Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Restrict)
   createdAt            DateTime                  @default(now())
   updatedAt            DateTime                  @updatedAt
@@ -6108,7 +6123,7 @@ model TmcTrip {
 }
 
 model TripParticipant {
-  id                     Int                 @id @default(autoincrement())
+  id                     Int                      @id @default(autoincrement())
   tripId                 Int
   fullName               String
   passportNumber         String?
@@ -6123,7 +6138,7 @@ model TripParticipant {
   // verifiedAt IS NULL). passportVerifiedAt/ById close the loop; the
   // verifying user's id is captured for the audit trail. passportRejectedAt
   // is set on operator reject + clears with the next re-upload.
-  passportExtractionJson String?             @db.Text
+  passportExtractionJson String?                  @db.Text
   passportExtractedAt    DateTime?
   passportVerifiedAt     DateTime?
   passportVerifiedById   Int?
@@ -6133,14 +6148,142 @@ model TripParticipant {
   parentName             String?
   parentPhone            String?
   parentEmail            String?
-  medicalNotes           String?             @db.Text
+  medicalNotes           String?                  @db.Text
   consentCapturedAt      DateTime?
-  trip                   TmcTrip             @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  // Application review state — additive over passport verification. Drives the
+  // approve/reject CTA on the Participants tab and the
+  // pending/approved/rejected breakdown on the Overview KPI.
+  // pending     → freshly registered (default for new + legacy rows)
+  // approved    → operator-approved; ready for payment / rooming
+  // rejected    → operator-rejected; reason captured separately by note
+  // waitlisted  → reserved for a future capacity-cap flow (Q-tier work)
+  applicationStatus      String                   @default("pending")
+  reviewedAt             DateTime?
+  reviewedById           Int?
+  reviewNotes            String?                  @db.Text
+  trip                   TmcTrip                  @relation(fields: [tripId], references: [id], onDelete: Cascade)
   digilockerSessions     DigilockerSession[]
-  createdAt              DateTime            @default(now())
-  updatedAt              DateTime            @updatedAt
+  // Back-reference to the staging row that produced this participant
+  // (hybrid landing-page → microsite OTP → operator-approve flow).
+  // Nullable because admin-added participants (POST /trips/:id/participants
+  // with direct staff input) skip the draft path entirely. 1:1 — a draft
+  // produces at most one participant, enforced via @unique on the
+  // PendingTripRegistration side.
+  pendingRegistration    PendingTripRegistration? @relation("ParticipantFromPending")
+  createdAt              DateTime                 @default(now())
+  updatedAt              DateTime                 @updatedAt
 
   @@index([tripId])
+  @@index([tripId, applicationStatus])
+}
+
+// ── Hybrid landing-page → microsite registration staging ────────────────
+//
+// PendingTripRegistration is the staging entity between the landing-page
+// registration wizard (Student → Parent → Passport) and the operator-
+// approved TripParticipant. Lifecycle:
+//
+//   1. Landing-page wizard submits → /api/pages/:slug/submit with
+//      mode=registration-draft → row created with status=DRAFT,
+//      otpVerified=false, draftToken generated (72h TTL).
+//   2. User is redirected to the trip microsite with ?draftToken=<token>.
+//      Microsite's RegistrationConfirmPanel requests OTP for the parent
+//      phone, user enters code, /verify-otp succeeds AND links the draft
+//      → status=OTP_VERIFIED, otpVerified=true.
+//   3. CRM Participants tab surfaces OTP_VERIFIED rows alongside actual
+//      participants. Operator clicks Approve → in one transaction:
+//      TripParticipant{applicationStatus: "approved"} is created and the
+//      draft moves to status=CONVERTED with convertedToParticipantId set.
+//   4. Operator can Reject at any non-final state → status=REJECTED;
+//      no TripParticipant is created.
+//
+// Why a separate model (vs an applicationStatus="draft" on TripParticipant):
+//   - Drafts have no participant-rank fields (passportDocId, aadhaarLast4,
+//     reviewedById, etc.) and shouldn't appear in count/billing aggregates
+//     until approved. Keeping them in a sibling table keeps the participant
+//     surface clean.
+//   - Public-facing endpoints can read/write drafts without auth (via
+//     opaque token) while the participant table stays auth-gated.
+//   - Rejection doesn't leave orphaned half-participants polluting trip
+//     KPIs (capacity-check, rooming, payment plan).
+model PendingTripRegistration {
+  id            Int  @id @default(autoincrement())
+  tenantId      Int  @default(1)
+  tripId        Int // 1:1 trip-owned linkage; required
+  // Source landing page; nullable because we only require trip-linkage
+  // for the registration-draft branch to fire, but the page row itself
+  // may be deleted later without orphaning the registration history.
+  landingPageId Int?
+
+  // Student info (collected at step 1 of the wizard)
+  studentName   String
+  studentDob    DateTime?
+  studentSchool String?
+  studentClass  String?
+  studentGender String?
+
+  // Parent info (step 2)
+  parentName     String
+  parentEmail    String
+  parentPhone    String
+  parentRelation String?
+
+  // Passport info (step 3, all optional — operator may want passport
+  // capture later via microsite re-upload)
+  passportNumber       String?
+  passportExpiry       DateTime?
+  passportNationality  String?
+  passportPlaceOfIssue String?
+
+  // Audience-specific extra fields (medical notes, dietary preferences,
+  // sub-brand-specific questions). Free-form JSON; renderer decides how
+  // to surface.
+  extrasJson String? @db.Text
+
+  // Lifecycle
+  // DRAFT          → submitted from landing page, no OTP yet
+  // OTP_VERIFIED   → parent phone OTP confirmed on microsite
+  // APPROVED       → reserved (currently unused — approve goes
+  //                  straight to CONVERTED to avoid double approval)
+  // REJECTED       → operator rejected; no participant created
+  // CONVERTED      → operator approved + TripParticipant created
+  status        String    @default("DRAFT")
+  otpVerified   Boolean   @default(false)
+  otpVerifiedAt DateTime?
+  otpPhone      String?
+
+  // Opaque token used in microsite redirect URL. No PII in the URL —
+  // the microsite uses the token to identify the draft server-side.
+  // @unique enables direct findUnique lookup; 72h TTL on the column
+  // value (draftTokenExpiresAt) — enforced in the route layer.
+  draftToken          String   @unique
+  draftTokenExpiresAt DateTime
+
+  // Conversion + review trail
+  convertedToParticipantId Int?      @unique // 1:1 — a draft makes at most one participant
+  approvedAt               DateTime?
+  approvedById             Int?
+  rejectedAt               DateTime?
+  rejectedById             Int?
+  reviewNotes              String?   @db.Text
+
+  // Denormalised source metadata (kept for analytics + audit even if
+  // the source landing-page row is later deleted)
+  audience String? // tmc | rfu | travel-stall | visa-sure | inquiry
+  subBrand String?
+
+  tenant                 Tenant           @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  trip                   TmcTrip          @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  landingPage            LandingPage?     @relation(fields: [landingPageId], references: [id], onDelete: SetNull)
+  convertedToParticipant TripParticipant? @relation("ParticipantFromPending", fields: [convertedToParticipantId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId, status])
+  @@index([tripId, status])
+  @@index([draftToken])
+  @@index([landingPageId])
 }
 
 // Unified customer-portal passport store — PRD_PASSPORT_OCR, all 4 sub-brands

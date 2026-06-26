@@ -130,19 +130,62 @@ router.get("/trips", verifyToken, requireTravelTenant, requireTmcAccess, async (
 router.post("/trips", verifyToken, requireTravelTenant, requireTmcAccess, async (req, res) => {
   try {
     const {
-      tripCode, schoolContactId, destination, departDate, returnDate,
+      tripCode, schoolContactId, schoolName, destination, departDate, returnDate,
       legalEntity, pricePerStudent, status, micrositeUrl, driveFolderId,
     } = req.body || {};
 
-    if (!tripCode || !schoolContactId || !destination || !departDate || !returnDate) {
+    // Either schoolContactId (existing FK — back-compat for any caller that
+    // already resolved the contact) OR schoolName (free-text — what the
+    // operator types in the New Trip modal). When schoolName is supplied we
+    // find-or-create a Contact in this tenant tagged with subBrand="tmc" so
+    // it shows up correctly in TMC analytics + lead lists.
+    if (!tripCode || (!schoolContactId && !schoolName) || !destination || !departDate || !returnDate) {
       return res.status(400).json({
-        error: "tripCode, schoolContactId, destination, departDate, returnDate required",
+        error: "tripCode, school (schoolContactId or schoolName), destination, departDate, returnDate required",
         code: "MISSING_FIELDS",
       });
     }
-    const sid = parseInt(schoolContactId, 10);
-    if (!Number.isFinite(sid)) {
-      return res.status(400).json({ error: "schoolContactId must be a number", code: "INVALID_CONTACT_ID" });
+    let sid = null;
+    if (schoolContactId) {
+      const parsed = parseInt(schoolContactId, 10);
+      if (!Number.isFinite(parsed)) {
+        return res.status(400).json({ error: "schoolContactId must be a number", code: "INVALID_CONTACT_ID" });
+      }
+      sid = parsed;
+    } else {
+      // Free-text path: find an existing tenant Contact with this exact name
+      // (case-insensitive, trimmed) or create one. Case-insensitivity avoids
+      // "DPS North" + "dps north" + "DPS  North" producing 3 sibling Contacts
+      // for the same school.
+      const trimmedName = String(schoolName).trim();
+      if (!trimmedName) {
+        return res.status(400).json({ error: "schoolName must not be blank", code: "INVALID_SCHOOL_NAME" });
+      }
+      if (trimmedName.length > 200) {
+        return res.status(400).json({ error: "schoolName too long (max 200 chars)", code: "INVALID_SCHOOL_NAME" });
+      }
+      const existing = await prisma.contact.findFirst({
+        where: {
+          tenantId: req.travelTenant.id,
+          name: { equals: trimmedName },
+        },
+        select: { id: true },
+      });
+      if (existing) {
+        sid = existing.id;
+      } else {
+        const newContact = await prisma.contact.create({
+          data: {
+            tenantId: req.travelTenant.id,
+            name: trimmedName,
+            subBrand: "tmc",
+            source: "tmc-trip-create",
+            status: "Customer", // school is already booked into a confirmed trip
+          },
+          select: { id: true },
+        });
+        sid = newContact.id;
+      }
     }
     if (status && !VALID_TRIP_STATUSES.includes(status)) {
       return res.status(400).json({ error: "invalid status", code: "INVALID_STATUS" });
@@ -830,6 +873,11 @@ router.get("/trips/:id", verifyToken, requireTravelTenant, requireTmcAccess, asy
             passportExtractedAt: true,
             passportVerifiedAt: true,
             passportRejectedAt: true,
+            applicationStatus: true,
+            reviewedAt: true,
+            reviewedById: true,
+            reviewNotes: true,
+            consentCapturedAt: true,
           },
         },
         documentRequirements: { orderBy: { id: "asc" } },
@@ -911,7 +959,7 @@ router.get(
       const [participants, payments, docs, roomings] = await Promise.all([
         prisma.tripParticipant.findMany({
           where: { tripId: trip.id },
-          select: { id: true, consentCapturedAt: true },
+          select: { id: true, consentCapturedAt: true, applicationStatus: true },
         }),
         prisma.tripInstalmentPayment.findMany({
           where: { tripId: trip.id },
@@ -930,6 +978,23 @@ router.get(
       // Participants
       const participantsCount = participants.length;
       const capturedConsent = participants.filter((p) => p.consentCapturedAt != null).length;
+      // Application-status breakdown — additive over consentCapturedAt so
+      // Overview KPI can show "X registered · Y approved · Z pending".
+      // Legacy rows (pre-applicationStatus) default to "pending" via schema
+      // default, so the counts always sum to participantsCount.
+      let approvedCount = 0;
+      let rejectedCount = 0;
+      let waitlistedCount = 0;
+      let pendingReviewCount = 0;
+      for (const p of participants) {
+        switch (p.applicationStatus) {
+          case "approved": approvedCount++; break;
+          case "rejected": rejectedCount++; break;
+          case "waitlisted": waitlistedCount++; break;
+          case "pending":
+          default: pendingReviewCount++; break;
+        }
+      }
 
       // Payments — Decimal columns come back as Prisma.Decimal; coerce
       // with Number(). Demo amounts are well within Number-safe range.
@@ -1024,6 +1089,11 @@ router.get(
           count: participantsCount,
           target: null, // TmcTrip has no targetStudentCount column (deferred — see route header)
           capturedConsent,
+          // Application-status breakdown (additive). Sums to count.
+          pendingReview: pendingReviewCount,
+          approved: approvedCount,
+          rejected: rejectedCount,
+          waitlisted: waitlistedCount,
         },
         payments: {
           expectedTotalRupees,
@@ -1270,6 +1340,187 @@ router.delete(
   },
 );
 
+// ─── Trip-owned Landing Page lifecycle ────────────────────────────────
+//
+// Each TmcTrip owns AT MOST one LandingPage (LandingPage.tripId is
+// nullable + @unique). The Trip module is the single owner of the
+// public experience — operators edit/preview/publish from /trips/:id,
+// not from the generic /landing-pages list. Lifecycle:
+//
+//   GET    /trips/:id/landing-page → 200 page | 404 NOT_LINKED
+//   POST   /trips/:id/landing-page → 200 existing | 201 freshly lazy-created
+//   DELETE /trips/:id/landing-page → unlinks (sets tripId=null); the
+//          LandingPage row itself survives so existing analytics + slug
+//          stay intact, but it becomes a generic page again
+//
+// Auto-create defaults seed a Wanderlux template (the multi-step
+// Student/Parent/Passport wizard) in DRAFT status, with subBrand="tmc"
+// and destination/title derived from the trip. Operators can then edit
+// via the existing LandingPageBuilder + LandingPageWanderluxEditor.
+// We do NOT touch any other Builder behaviour — only the registration
+// submission flow changes (Phase 3).
+
+async function loadTripWithLandingPage(req) {
+  const id = parseInt(req.params.id, 10);
+  if (!Number.isFinite(id)) {
+    const err = new Error("id must be a number"); err.status = 400; err.code = "INVALID_ID"; throw err;
+  }
+  const trip = await prisma.tmcTrip.findFirst({
+    where: { id, tenantId: req.travelTenant.id },
+    select: {
+      id: true,
+      tripCode: true,
+      destination: true,
+      departDate: true,
+      returnDate: true,
+      legalEntity: true,
+      landingPage: true,
+    },
+  });
+  if (!trip) {
+    const err = new Error("Trip not found"); err.status = 404; err.code = "NOT_FOUND"; throw err;
+  }
+  return trip;
+}
+
+// Minimal Wanderlux templatePayload that renders cleanly through the
+// existing renderer without requiring AI generation. The operator's
+// first edit fills in real content; the seed just needs to be a valid
+// JSON envelope so /p/:slug returns 200 immediately.
+function defaultWanderluxConfig(trip) {
+  return {
+    theme: {
+      primary: "#265855",
+      accent: "#CD9481",
+    },
+    hero: {
+      title: `${trip.destination} Trip`,
+      subtitle: `${new Date(trip.departDate).toLocaleDateString()} — ${new Date(trip.returnDate).toLocaleDateString()}`,
+      backgroundImage: null,
+    },
+    sections: [],
+    // The registration block defaults to mode="registration-draft"
+    // (Phase 3) so the wizard creates a PendingTripRegistration and
+    // redirects to the trip's microsite instead of creating a
+    // Contact+Deal. Step shape mirrors the existing Wanderlux template.
+    register: {
+      title: "Register your child for this trip",
+      subtitle: "Three quick steps — Student, Parent, Passport.",
+      mode: "registration-draft",
+      submitText: "Submit registration",
+      thankYouMessage: "Thank you — we'll redirect you to verify your phone.",
+      steps: [
+        { id: "student", title: "Student Information" },
+        { id: "parent",  title: "Parent Information" },
+        { id: "passport", title: "Passport Information" },
+      ],
+    },
+  };
+}
+
+// GET /api/travel/trips/:id/landing-page
+router.get("/trips/:id/landing-page", verifyToken, requireTravelTenant, requireTmcAccess, async (req, res) => {
+  try {
+    const trip = await loadTripWithLandingPage(req);
+    if (!trip.landingPage) {
+      return res.status(404).json({ error: "No landing page linked to this trip", code: "NOT_LINKED" });
+    }
+    res.json(trip.landingPage);
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error("[travel-trips] get landing-page error:", e.message);
+    res.status(500).json({ error: "Failed to fetch trip landing page" });
+  }
+});
+
+// POST /api/travel/trips/:id/landing-page
+// Idempotent: if a page is already linked, returns it (200). Otherwise
+// lazy-creates a fresh DRAFT Wanderlux page (201). Honors slug
+// collisions with a 5-attempt retry, matching the AI-generate pattern
+// in routes/landing_pages.js.
+router.post("/trips/:id/landing-page", verifyToken, requireTravelTenant, requireTmcAccess, async (req, res) => {
+  try {
+    const trip = await loadTripWithLandingPage(req);
+    if (trip.landingPage) {
+      // Already linked — return existing. Idempotent.
+      return res.json(trip.landingPage);
+    }
+
+    const baseSlug = `trip-${trip.tripCode}`.toLowerCase().replace(/[^a-z0-9-]/g, "-").slice(0, 50);
+    const baseData = {
+      title: `${trip.destination} Trip — ${trip.tripCode}`,
+      templateType: "wanderlux-v1",
+      content: JSON.stringify(defaultWanderluxConfig(trip)),
+      status: "DRAFT",
+      destination: trip.destination,
+      subBrand: "tmc",
+      generatedByAi: false,
+      tenantId: req.travelTenant.id,
+      userId: req.user.userId,
+      tripId: trip.id,
+    };
+
+    let created = null;
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const trySlug = attempt === 0
+        ? baseSlug
+        : `${baseSlug.slice(0, 44)}-${Math.random().toString(36).slice(2, 6)}`;
+      try {
+        created = await prisma.landingPage.create({ data: { ...baseData, slug: trySlug } });
+        break;
+      } catch (e) {
+        // P2002 can fire on either @@unique([tenantId, slug]) OR on
+        // tripId @unique. The latter means a concurrent POST raced us
+        // to attach a page — re-read and return that page.
+        if (e.code !== "P2002") throw e;
+        if (Array.isArray(e.meta?.target) && e.meta.target.includes("tripId")) {
+          const racePage = await prisma.landingPage.findUnique({ where: { tripId: trip.id } });
+          if (racePage) return res.json(racePage);
+        }
+        // Otherwise slug collision — try again with a fresh suffix.
+      }
+    }
+    if (!created) {
+      return res.status(500).json({ error: "Failed to allocate a unique slug after 5 attempts" });
+    }
+    res.status(201).json(created);
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error("[travel-trips] create landing-page error:", e.message);
+    res.status(500).json({ error: "Failed to create trip landing page" });
+  }
+});
+
+// DELETE /api/travel/trips/:id/landing-page
+// Unlinks (sets tripId=null on the LandingPage). The page survives as
+// a generic marketing page; analytics + slug are preserved. Operators
+// who want to fully delete the page use the existing
+// DELETE /api/landing-pages/:id route, which is admin-only.
+router.delete(
+  "/trips/:id/landing-page",
+  verifyToken,
+  requireTravelTenant,
+  requirePermission("trips", "update"),
+  requireTmcAccess,
+  async (req, res) => {
+    try {
+      const trip = await loadTripWithLandingPage(req);
+      if (!trip.landingPage) {
+        return res.status(404).json({ error: "No landing page linked to this trip", code: "NOT_LINKED" });
+      }
+      const unlinked = await prisma.landingPage.update({
+        where: { id: trip.landingPage.id },
+        data: { tripId: null },
+      });
+      res.json({ unlinked: true, id: unlinked.id });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-trips] unlink landing-page error:", e.message);
+      res.status(500).json({ error: "Failed to unlink trip landing page" });
+    }
+  },
+);
+
 // ─── Participants ─────────────────────────────────────────────────────
 
 async function loadTrip(req) {
@@ -1439,6 +1690,73 @@ router.patch("/trips/:id/participants/:pid", verifyToken, requireTravelTenant, r
   }
 });
 
+// POST /api/travel/trips/:id/participants/:pid/approve
+// POST /api/travel/trips/:id/participants/:pid/reject
+//
+// Operator decision on a registered participant. Additive over the existing
+// PATCH route — the dedicated endpoints make audit + workflow integration
+// (notifications, downstream payment-plan trigger) cleaner than overloading
+// PATCH with an `applicationStatus` toggle in the allowed-fields list.
+//
+// `reviewNotes` is optional plain text captured at the decision moment;
+// used to keep a parent-facing rejection reason or an internal "approved
+// pending medical clearance" note. Stripped of nothing on the way out so
+// the Participants tab can show it inline next to the status pill.
+//
+// Re-approving an already-approved row (or re-rejecting a rejected row) is
+// tolerated and refreshes reviewedAt + reviewedById — useful when a second
+// reviewer signs off.
+async function decideApplication(req, res, nextStatus) {
+  try {
+    const trip = await loadTrip(req);
+    const pid = parseInt(req.params.pid, 10);
+    if (!Number.isFinite(pid)) {
+      return res.status(400).json({ error: "pid must be a number", code: "INVALID_PARTICIPANT_ID" });
+    }
+    const existing = await prisma.tripParticipant.findFirst({
+      where: { id: pid, tripId: trip.id },
+      select: { id: true, applicationStatus: true },
+    });
+    if (!existing) return res.status(404).json({ error: "Participant not found", code: "PARTICIPANT_NOT_FOUND" });
+
+    const reviewNotes = typeof req.body?.reviewNotes === "string"
+      ? req.body.reviewNotes.slice(0, 2000)
+      : null;
+    const reviewerId = req.user?.userId ?? null;
+
+    const updated = await prisma.tripParticipant.update({
+      where: { id: pid },
+      data: {
+        applicationStatus: nextStatus,
+        reviewedAt: new Date(),
+        reviewedById: Number.isFinite(reviewerId) ? reviewerId : null,
+        reviewNotes,
+      },
+    });
+    res.json(updated);
+  } catch (e) {
+    if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+    console.error("[travel-trips] participant decide error:", e.message);
+    res.status(500).json({ error: "Failed to update application status" });
+  }
+}
+
+router.post(
+  "/trips/:id/participants/:pid/approve",
+  verifyToken,
+  requireTravelTenant,
+  requireTmcAccess,
+  (req, res) => decideApplication(req, res, "approved"),
+);
+
+router.post(
+  "/trips/:id/participants/:pid/reject",
+  verifyToken,
+  requireTravelTenant,
+  requireTmcAccess,
+  (req, res) => decideApplication(req, res, "rejected"),
+);
+
 router.delete("/trips/:id/participants/:pid", verifyToken, requireTravelTenant, requireTmcAccess, async (req, res) => {
   try {
     const trip = await loadTrip(req);
@@ -1458,6 +1776,210 @@ router.delete("/trips/:id/participants/:pid", verifyToken, requireTravelTenant, 
     res.status(500).json({ error: "Failed to delete participant" });
   }
 });
+
+// ─── Pending registrations (Phase 5 hybrid architecture) ─────────────
+//
+// Trip-scoped admin queue surfacing the staging rows produced by the
+// landing-page → microsite OTP flow. Lives alongside Participants in
+// the CRM UI — the user keeps a single Participants area per
+// decision #7, so the frontend merges these rows into the same list
+// with a status-aware presentation.
+//
+//   GET    /trips/:id/registrations
+//          ?status=DRAFT|OTP_VERIFIED|REJECTED|CONVERTED  (default: all)
+//   POST   /trips/:id/registrations/:rid/approve
+//          Body: { reviewNotes? }
+//          Requires draft.status === "OTP_VERIFIED". In one
+//          transaction: creates TripParticipant with
+//          applicationStatus="approved" (per decision #8, no second
+//          approval workflow), updates draft to status=CONVERTED.
+//   POST   /trips/:id/registrations/:rid/reject
+//          Body: { reviewNotes? }
+//          Marks draft as REJECTED. No participant is created.
+//
+// Auth: same chain as participants (verifyToken + requireTravelTenant
+// + requireTmcAccess). All routes are tenant + trip scoped.
+
+router.get(
+  "/trips/:id/registrations",
+  verifyToken,
+  requireTravelTenant,
+  requireTmcAccess,
+  async (req, res) => {
+    try {
+      const trip = await loadTrip(req);
+      const where = { tripId: trip.id, tenantId: req.travelTenant.id };
+      const status = typeof req.query.status === "string" ? req.query.status : null;
+      const VALID_STATUSES = ["DRAFT", "OTP_VERIFIED", "APPROVED", "REJECTED", "CONVERTED"];
+      if (status) {
+        // Allow comma-separated multi-select: ?status=DRAFT,OTP_VERIFIED
+        const list = status.split(",").map((s) => s.trim()).filter(Boolean);
+        for (const s of list) {
+          if (!VALID_STATUSES.includes(s)) {
+            return res.status(400).json({
+              error: `status must be one of ${VALID_STATUSES.join(", ")}`,
+              code: "INVALID_STATUS",
+            });
+          }
+        }
+        where.status = list.length === 1 ? list[0] : { in: list };
+      }
+      const registrations = await prisma.pendingTripRegistration.findMany({
+        where,
+        orderBy: { createdAt: "desc" },
+        // Slim shape — omit the draftToken (server-side secret) and
+        // draftTokenExpiresAt (microsite-only signal). Operators don't
+        // need either; the CRM acts on the draft id directly.
+        select: {
+          id: true, tenantId: true, tripId: true, landingPageId: true,
+          studentName: true, studentDob: true, studentSchool: true,
+          studentClass: true, studentGender: true,
+          parentName: true, parentEmail: true, parentPhone: true, parentRelation: true,
+          passportNumber: true, passportExpiry: true,
+          passportNationality: true, passportPlaceOfIssue: true,
+          extrasJson: true,
+          status: true, otpVerified: true, otpVerifiedAt: true, otpPhone: true,
+          convertedToParticipantId: true,
+          approvedAt: true, approvedById: true,
+          rejectedAt: true, rejectedById: true,
+          reviewNotes: true,
+          audience: true, subBrand: true,
+          createdAt: true, updatedAt: true,
+        },
+      });
+      res.json(registrations);
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-trips] list pending-registrations error:", e.message);
+      res.status(500).json({ error: "Failed to list pending registrations" });
+    }
+  },
+);
+
+async function loadPendingRegistration(req) {
+  const trip = await loadTrip(req);
+  const rid = parseInt(req.params.rid, 10);
+  if (!Number.isFinite(rid)) {
+    const err = new Error("rid must be a number"); err.status = 400; err.code = "INVALID_REGISTRATION_ID";
+    throw err;
+  }
+  const draft = await prisma.pendingTripRegistration.findFirst({
+    where: { id: rid, tripId: trip.id, tenantId: req.travelTenant.id },
+  });
+  if (!draft) {
+    const err = new Error("Pending registration not found"); err.status = 404; err.code = "REGISTRATION_NOT_FOUND";
+    throw err;
+  }
+  return { trip, draft };
+}
+
+router.post(
+  "/trips/:id/registrations/:rid/approve",
+  verifyToken,
+  requireTravelTenant,
+  requireTmcAccess,
+  async (req, res) => {
+    try {
+      const { trip, draft } = await loadPendingRegistration(req);
+      // Per decision #8 the operator approves drafts that are
+      // OTP_VERIFIED. Drafts in DRAFT (no phone OTP yet) are blocked
+      // — let the user verify first. Drafts in REJECTED / CONVERTED
+      // are final; no re-conversion.
+      if (draft.status !== "OTP_VERIFIED") {
+        return res.status(409).json({
+          error: `cannot approve a draft in status=${draft.status}; only OTP_VERIFIED drafts are eligible`,
+          code: "INVALID_STATE",
+          currentStatus: draft.status,
+        });
+      }
+      const reviewNotes = typeof req.body?.reviewNotes === "string"
+        ? req.body.reviewNotes.slice(0, 2000)
+        : null;
+      const reviewerId = req.user?.userId ?? null;
+      const reviewerIdSafe = Number.isFinite(reviewerId) ? reviewerId : null;
+
+      // Atomic conversion. One transaction so we never end up with a
+      // half-converted draft (participant created but draft not
+      // pointed at it, or vice versa). Approve writes
+      // applicationStatus="approved" directly so the operator doesn't
+      // have to re-approve in the Participants tab.
+      const [participant] = await prisma.$transaction([
+        prisma.tripParticipant.create({
+          data: {
+            tripId: trip.id,
+            fullName: draft.studentName,
+            parentName: draft.parentName,
+            parentEmail: draft.parentEmail,
+            parentPhone: draft.parentPhone,
+            passportNumber: draft.passportNumber,
+            passportExpiry: draft.passportExpiry,
+            consentCapturedAt: draft.otpVerifiedAt,
+            applicationStatus: "approved",
+            reviewedAt: new Date(),
+            reviewedById: reviewerIdSafe,
+            reviewNotes,
+          },
+        }),
+      ]);
+      // Second update wires the back-reference; done as a separate call
+      // because we need the freshly-created participant.id to fill
+      // convertedToParticipantId.
+      const updatedDraft = await prisma.pendingTripRegistration.update({
+        where: { id: draft.id },
+        data: {
+          status: "CONVERTED",
+          convertedToParticipantId: participant.id,
+          approvedAt: new Date(),
+          approvedById: reviewerIdSafe,
+          reviewNotes: reviewNotes ?? draft.reviewNotes,
+        },
+      });
+      res.json({ approved: true, participant, registration: updatedDraft });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-trips] approve pending-registration error:", e.message);
+      res.status(500).json({ error: "Failed to approve registration" });
+    }
+  },
+);
+
+router.post(
+  "/trips/:id/registrations/:rid/reject",
+  verifyToken,
+  requireTravelTenant,
+  requireTmcAccess,
+  async (req, res) => {
+    try {
+      const { draft } = await loadPendingRegistration(req);
+      if (draft.status === "CONVERTED") {
+        return res.status(409).json({
+          error: "cannot reject a draft that was already converted to a participant",
+          code: "INVALID_STATE",
+          currentStatus: draft.status,
+        });
+      }
+      const reviewNotes = typeof req.body?.reviewNotes === "string"
+        ? req.body.reviewNotes.slice(0, 2000)
+        : null;
+      const reviewerId = req.user?.userId ?? null;
+      const reviewerIdSafe = Number.isFinite(reviewerId) ? reviewerId : null;
+      const updated = await prisma.pendingTripRegistration.update({
+        where: { id: draft.id },
+        data: {
+          status: "REJECTED",
+          rejectedAt: new Date(),
+          rejectedById: reviewerIdSafe,
+          reviewNotes,
+        },
+      });
+      res.json({ rejected: true, registration: updated });
+    } catch (e) {
+      if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
+      console.error("[travel-trips] reject pending-registration error:", e.message);
+      res.status(500).json({ error: "Failed to reject registration" });
+    }
+  },
+);
 
 // ─── DigiLocker Aadhaar verification (stub-mode) ─────────────────────
 //

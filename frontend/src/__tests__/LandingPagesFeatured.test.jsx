@@ -1,29 +1,35 @@
 /**
  * LandingPagesFeatured.test.jsx — RTL coverage for the Featured /trips
- * resolver UX added to the LandingPages list page.
+ * resolver UX on the LandingPages list page.
  *
  * SUT: frontend/src/pages/LandingPages.jsx
  *
+ * Post-merge behavior (the standalone Feature/Unfeature action buttons
+ * were removed): the /publish endpoint now also features the page on
+ * /trips, so publishing a sibling silently swaps the Featured marker.
+ * The "★ Featured" badge remains as a read-only signal on the current
+ * /trips page so operators can tell at a glance which page is live.
+ *
  * Scope:
- *   1. PUBLISHED rows render a "Feature" button.
- *   2. DRAFT rows render a disabled "Feature" button (publish-first
- *      affordance — backend would 409 PAGE_NOT_PUBLISHED anyway).
- *   3. Currently-featured rows render the "★ Featured" badge AND
- *      swap the action button to "Unfeature".
- *   4. Clicking Feature on a PUBLISHED page when no other page is
- *      featured shows a simple confirm + POSTs /:id/feature.
- *   5. Clicking Feature when another page is already featured in the
- *      same (tenantId, subBrand) scope shows a swap-confirm naming
- *      the page that will be unfeatured.
- *   6. Backend 409 PAGE_NOT_PUBLISHED surfaces as an error toast (not
- *      a modal) — defence-in-depth in case the client-side disable
- *      somehow gets bypassed.
- *   7. Unfeature flow confirms + POSTs /:id/unfeature.
+ *   1. The currently-featured row renders a "★ Featured" badge.
+ *   2. Publishing a sibling when no other page is featured fires
+ *      POST /:id/publish directly (no swap confirm).
+ *   3. Publishing a sibling when ANOTHER page in the same (tenant,
+ *      subBrand) scope is currently featured shows a confirm naming
+ *      both pages — the current "live at /trips" page + the candidate
+ *      replacement.
+ *   4. Declining that swap confirm does NOT fire POST /:id/publish.
+ *   5. Unpublish does NOT prompt a swap confirm; it just POSTs
+ *      /:id/unpublish directly (it un-features in the same atomic op).
+ *   6. Backend 409 PUBLISH_GATE_FAILED surfaces a friendly confirm
+ *      that, on accept, navigates into the builder so the operator
+ *      can fix the issues (defence-in-depth for travel pages with
+ *      missing content).
  *
  * Standing-rule notes (CLAUDE.md):
  *   - Stable mock object for useNotify (fresh objects per render trip
  *     the useCallback dep-identity infinite loop).
- *   - Confirm is a vi.fn() so each test can choose accept / reject.
+ *   - confirmMock is a vi.fn() so each test can choose accept / reject.
  */
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -59,8 +65,8 @@ vi.mock('../utils/notify', () => ({
 import LandingPages from '../pages/LandingPages';
 
 // Three pages in the same (tenantId, subBrand=tmc) scope. publishedFeatured
-// is the current /trips holder; publishedSibling is a candidate to swap in;
-// draftRow is a publish-first row.
+// is the current /trips holder; publishedSibling is a publish candidate;
+// draftRow is publish-first.
 const FIXTURE = [
   {
     id: 100,
@@ -112,7 +118,7 @@ function renderPage() {
   );
 }
 
-describe('<LandingPages /> — Featured / Unfeature UX', () => {
+describe('<LandingPages /> — Featured badge + publish-swap UX', () => {
   beforeEach(() => {
     fetchApiMock.mockReset();
     fetchApiMock.mockImplementation(defaultFetchMock);
@@ -124,7 +130,7 @@ describe('<LandingPages /> — Featured / Unfeature UX', () => {
     confirmMock.mockResolvedValue(true);
   });
 
-  it('renders the ★ Featured badge on the currently featured row', async () => {
+  it('renders the ★ Featured badge on the currently-featured row (exactly one in the DOM)', async () => {
     renderPage();
     await waitFor(() => expect(screen.getByText('Japan 2026')).toBeInTheDocument());
     // The badge text is "Featured" — pin via getByText.
@@ -134,107 +140,73 @@ describe('<LandingPages /> — Featured / Unfeature UX', () => {
     expect(screen.getAllByText('Featured').length).toBe(1);
   });
 
-  it('the currently-featured row shows the Unfeature action button (not Feature)', async () => {
+  it('the standalone Feature / Unfeature action buttons were removed (now collapsed into Publish/Unpublish)', async () => {
     renderPage();
     await waitFor(() => expect(screen.getByText('Japan 2026')).toBeInTheDocument());
-    expect(screen.getByRole('button', { name: /Unfeature/i })).toBeInTheDocument();
+    // The action row no longer carries a "Feature" or "Unfeature" button —
+    // those collapsed into Publish/Unpublish per the single-page-live
+    // workflow.
+    expect(screen.queryByRole('button', { name: /^Feature$/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Unfeature$/i })).toBeNull();
+    // Publish/Unpublish buttons render on each row: Unpublish on the
+    // PUBLISHED rows (Japan + Umrah), Publish on the DRAFT row (Bali).
+    expect(screen.getAllByRole('button', { name: /^Unpublish$/i }).length).toBe(2);
+    expect(screen.getAllByRole('button', { name: /^Publish$/i }).length).toBe(1);
   });
 
-  it('PUBLISHED non-featured row shows an enabled Feature button', async () => {
-    renderPage();
-    await waitFor(() => expect(screen.getByText('Umrah 2026')).toBeInTheDocument());
-    // There may be multiple Feature buttons (one per non-featured PUBLISHED row + draft rows).
-    const featureButtons = screen.getAllByRole('button', { name: /^Feature$/i });
-    // The PUBLISHED sibling's button is enabled.
-    const enabled = featureButtons.find((b) => !b.disabled);
-    expect(enabled).toBeTruthy();
-  });
-
-  it('DRAFT row renders a disabled Feature button with publish-first tooltip', async () => {
-    renderPage();
-    await waitFor(() => expect(screen.getByText('Bali Draft')).toBeInTheDocument());
-    const featureButtons = screen.getAllByRole('button', { name: /^Feature$/i });
-    const disabled = featureButtons.find((b) => b.disabled);
-    expect(disabled).toBeTruthy();
-    expect(disabled).toHaveAttribute('title', expect.stringMatching(/Publish first/i));
-  });
-
-  it('clicking Feature on a sibling shows a swap-confirm naming the current featured page', async () => {
+  it('publishing a DRAFT when another page is featured shows a swap-confirm naming both pages', async () => {
     fetchApiMock.mockImplementation((url, opts) => {
       const method = (opts && opts.method) || 'GET';
-      if (url === '/api/landing-pages/101/feature' && method === 'POST') {
-        return Promise.resolve({ id: 101, isFeatured: true });
+      if (url === '/api/landing-pages/102/publish' && method === 'POST') {
+        return Promise.resolve({ id: 102, status: 'PUBLISHED', isFeatured: true });
       }
       return defaultFetchMock(url, opts);
     });
     const user = userEvent.setup();
     renderPage();
-    await waitFor(() => expect(screen.getByText('Umrah 2026')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Bali Draft')).toBeInTheDocument());
 
-    const featureButtons = screen.getAllByRole('button', { name: /^Feature$/i });
-    const enabledFeature = featureButtons.find((b) => !b.disabled);
-    await user.click(enabledFeature);
+    // The DRAFT row's Publish button.
+    await user.click(screen.getByRole('button', { name: /^Publish$/i }));
 
     await waitFor(() => expect(confirmMock).toHaveBeenCalled());
     const confirmArg = confirmMock.mock.calls[0][0];
-    expect(confirmArg).toMatch(/Umrah 2026/);
+    // The confirm names BOTH the current /trips holder + the replacement.
     expect(confirmArg).toMatch(/Japan 2026/);
-    expect(confirmArg).toMatch(/unfeature/i);
+    expect(confirmArg).toMatch(/Bali Draft/);
+    // Mentions the public surface so the operator knows what's about to swap.
+    expect(confirmArg).toMatch(/\/trips/);
 
-    // Confirm resolves true → POST /feature should have been fired.
+    // Confirm resolves true → POST /publish should have fired.
     await waitFor(() => {
       const postCalls = fetchApiMock.mock.calls.filter(
-        ([u, o]) => u === '/api/landing-pages/101/feature' && o?.method === 'POST',
+        ([u, o]) => u === '/api/landing-pages/102/publish' && o?.method === 'POST',
       );
       expect(postCalls.length).toBe(1);
     });
-    expect(notifySuccess).toHaveBeenCalledWith(expect.stringMatching(/featured/i));
+    expect(notifySuccess).toHaveBeenCalledWith(expect.stringMatching(/live at \/trips/i));
   });
 
-  it('declining the swap-confirm does NOT POST /feature', async () => {
+  it('declining the swap-confirm does NOT POST /publish', async () => {
     confirmMock.mockResolvedValue(false);
     const user = userEvent.setup();
     renderPage();
-    await waitFor(() => expect(screen.getByText('Umrah 2026')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Bali Draft')).toBeInTheDocument());
 
-    const enabledFeature = screen.getAllByRole('button', { name: /^Feature$/i }).find((b) => !b.disabled);
-    await user.click(enabledFeature);
+    await user.click(screen.getByRole('button', { name: /^Publish$/i }));
 
     await waitFor(() => expect(confirmMock).toHaveBeenCalled());
     const postCalls = fetchApiMock.mock.calls.filter(
-      ([u, o]) => o?.method === 'POST' && /feature/.test(u),
+      ([u, o]) => o?.method === 'POST' && /publish/.test(u),
     );
     expect(postCalls.length).toBe(0);
   });
 
-  it('backend 409 PAGE_NOT_PUBLISHED surfaces as an error toast', async () => {
+  it('Unpublish on the currently-featured row skips the swap-confirm and POSTs /:id/unpublish directly', async () => {
     fetchApiMock.mockImplementation((url, opts) => {
       const method = (opts && opts.method) || 'GET';
-      if (url === '/api/landing-pages/101/feature' && method === 'POST') {
-        const err = new Error('Only published pages can be featured.');
-        err.status = 409;
-        err.code = 'PAGE_NOT_PUBLISHED';
-        return Promise.reject(err);
-      }
-      return defaultFetchMock(url, opts);
-    });
-    const user = userEvent.setup();
-    renderPage();
-    await waitFor(() => expect(screen.getByText('Umrah 2026')).toBeInTheDocument());
-
-    const enabledFeature = screen.getAllByRole('button', { name: /^Feature$/i }).find((b) => !b.disabled);
-    await user.click(enabledFeature);
-
-    await waitFor(() => expect(notifyError).toHaveBeenCalled());
-    const errArg = notifyError.mock.calls[0][0];
-    expect(errArg).toMatch(/Publish/i);
-  });
-
-  it('clicking Unfeature shows a confirm + POSTs /:id/unfeature on accept', async () => {
-    fetchApiMock.mockImplementation((url, opts) => {
-      const method = (opts && opts.method) || 'GET';
-      if (url === '/api/landing-pages/100/unfeature' && method === 'POST') {
-        return Promise.resolve({ id: 100, isFeatured: false });
+      if (url === '/api/landing-pages/100/unpublish' && method === 'POST') {
+        return Promise.resolve({ id: 100, status: 'DRAFT', isFeatured: false });
       }
       return defaultFetchMock(url, opts);
     });
@@ -242,16 +214,57 @@ describe('<LandingPages /> — Featured / Unfeature UX', () => {
     renderPage();
     await waitFor(() => expect(screen.getByText('Japan 2026')).toBeInTheDocument());
 
-    await user.click(screen.getByRole('button', { name: /Unfeature/i }));
+    // There are two "Unpublish" buttons (Japan + Umrah). The Japan row owns
+    // the first one — find the button that lives in the same .card as
+    // Japan 2026.
+    const japanCard = screen.getByText('Japan 2026').closest('.card');
+    const unpubBtn = japanCard.querySelector('button[title*="Take this page down"]');
+    expect(unpubBtn).toBeTruthy();
+    await user.click(unpubBtn);
 
-    await waitFor(() => expect(confirmMock).toHaveBeenCalled());
-    expect(confirmMock.mock.calls[0][0]).toMatch(/Japan 2026/);
+    // No confirm fires for unpublish — the un-feature is atomic with
+    // the unpublish on the backend side.
+    expect(confirmMock).not.toHaveBeenCalled();
     await waitFor(() => {
       const postCalls = fetchApiMock.mock.calls.filter(
-        ([u, o]) => u === '/api/landing-pages/100/unfeature' && o?.method === 'POST',
+        ([u, o]) => u === '/api/landing-pages/100/unpublish' && o?.method === 'POST',
       );
       expect(postCalls.length).toBe(1);
     });
-    expect(notifySuccess).toHaveBeenCalledWith(expect.stringMatching(/no longer featured/i));
+    expect(notifySuccess).toHaveBeenCalledWith(expect.stringMatching(/no longer live/i));
+  });
+
+  it('backend 409 PUBLISH_GATE_FAILED surfaces a friendly confirm that opens the builder on accept', async () => {
+    // Use a single-page fixture (no current /trips holder) so the SUT skips
+    // the swap-confirm and goes straight to the POST → backend rejects.
+    const SOLO = [{ ...FIXTURE[2] }];
+    fetchApiMock.mockImplementation((url, opts) => {
+      const method = (opts && opts.method) || 'GET';
+      if (url === '/api/landing-pages' && method === 'GET') return Promise.resolve(SOLO);
+      if (url === '/api/landing-pages/templates/list') return Promise.resolve([]);
+      if (url === '/api/landing-pages/102/publish' && method === 'POST') {
+        const err = new Error('Publish blocked');
+        err.status = 409;
+        err.code = 'PUBLISH_GATE_FAILED';
+        err.data = { issues: [{ code: 'NO_HERO', message: 'Hero block is empty' }] };
+        return Promise.reject(err);
+      }
+      return Promise.resolve(null);
+    });
+    const user = userEvent.setup();
+    renderPage();
+    await waitFor(() => expect(screen.getByText('Bali Draft')).toBeInTheDocument());
+
+    await user.click(screen.getByRole('button', { name: /^Publish$/i }));
+
+    // Confirm modal — only one call (the publish-gate prompt, no swap
+    // confirm because there is no current /trips holder).
+    await waitFor(() => expect(confirmMock).toHaveBeenCalled());
+    expect(confirmMock.mock.calls[0][0]).toMatch(/1 issue/);
+    expect(confirmMock.mock.calls[0][0]).toMatch(/builder/i);
+    // Accept → navigate to the builder.
+    await waitFor(() => {
+      expect(navigateMock).toHaveBeenCalledWith('/landing-pages/builder/102');
+    });
   });
 });

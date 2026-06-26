@@ -1,6 +1,7 @@
 const express = require("express");
 const path = require("path");
 const fs = require("fs");
+const crypto = require("crypto");
 const multer = require("multer");
 const { verifyToken } = require("../middleware/auth");
 const { renderPage } = require("../services/landingPageRenderer");
@@ -107,6 +108,54 @@ const videoUpload = multer({
   fileFilter: (_req, file, cb) => {
     if (ALLOWED_VIDEO_MIMES[(file.mimetype || "").toLowerCase()]) return cb(null, true);
     cb(new Error("Only MP4, WebM, MOV, and OGG videos are allowed"));
+  },
+});
+
+// ── Document upload multer config ─────────────────────────────────
+//
+// Why: the wanderlux brochure section needs an operator-uploaded PDF
+// (or DOC/DOCX) the published page can link to directly. Previously
+// operators had to host the brochure elsewhere first; this matches the
+// image-upload and video-upload ergonomics already used by the builder.
+//
+// MIME allowlist is intentionally narrow — PDFs are the canonical
+// brochure format; DOC/DOCX/PPT/PPTX cover the small "ours is a Word
+// deck" cases. 10 MB cap fits the typical agency brochure (5-9 MB).
+// Larger files belong on a CDN; we serve from local disk to keep the
+// surface simple.
+//
+// File extension derives from MIME (not the client filename) so a
+// renamed `.exe` masquerading as a PDF lands on disk with a `.pdf`
+// extension — but the static-serve content-type comes from the
+// detected MIME anyway, so the worst case is a download prompt rather
+// than execution.
+const ALLOWED_DOC_MIMES = {
+  "application/pdf": ".pdf",
+  "application/msword": ".doc",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+  "application/vnd.ms-powerpoint": ".ppt",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
+};
+const DOC_UPLOAD_SIZE_BYTES = 10 * 1024 * 1024; // 10 MB
+const docUpload = multer({
+  storage: multer.diskStorage({
+    destination: (req, _file, cb) => {
+      const dir = path.join(
+        __dirname, "..", "uploads", "landing-page-documents", `tenant-${req.user.tenantId}`
+      );
+      fs.mkdirSync(dir, { recursive: true });
+      cb(null, dir);
+    },
+    filename: (_req, file, cb) => {
+      const ext = ALLOWED_DOC_MIMES[(file.mimetype || "").toLowerCase()] || ".bin";
+      const unique = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+      cb(null, `${unique}${ext}`);
+    },
+  }),
+  limits: { fileSize: DOC_UPLOAD_SIZE_BYTES },
+  fileFilter: (_req, file, cb) => {
+    if (ALLOWED_DOC_MIMES[(file.mimetype || "").toLowerCase()]) return cb(null, true);
+    cb(new Error("Only PDF, DOC, DOCX, PPT, and PPTX documents are allowed"));
   },
 });
 
@@ -296,6 +345,47 @@ router.post(
       return res.status(400).json({ error: "No video file provided (field 'video')" });
     }
     const url = `/uploads/landing-page-videos/tenant-${req.user.tenantId}/${path.basename(req.file.path)}`;
+    res.status(201).json({
+      url,
+      mimetype: req.file.mimetype,
+      size: req.file.size,
+      filename: path.basename(req.file.path),
+    });
+  }
+);
+
+// ── Document upload for the brochure block ────────────────────────
+//
+// POST /api/landing-pages/upload-document (multipart/form-data, field "document")
+//
+// Returns: 201 { url, mimetype, size, filename }
+// Errors:
+//   400 — wrong MIME, missing file, multer LIMIT_FILE_SIZE
+//   401/403 — verifyToken
+//
+// Tenant-segmented path: /uploads/landing-page-documents/tenant-<id>/<file>.
+// Caller stores the returned `url` into `brochure.fileUrl` in the page
+// config; the wanderlux template surfaces a "Download brochure" CTA on
+// the brochure section's success state when that field is non-empty.
+router.post(
+  "/upload-document",
+  verifyToken,
+  (req, res, next) => {
+    docUpload.single("document")(req, res, (err) => {
+      if (err) {
+        const msg = err.code === "LIMIT_FILE_SIZE"
+          ? `Document too large (max ${DOC_UPLOAD_SIZE_BYTES / 1024 / 1024} MB)`
+          : (err.message || "Document upload failed");
+        return res.status(400).json({ error: msg });
+      }
+      next();
+    });
+  },
+  (req, res) => {
+    if (!req.file) {
+      return res.status(400).json({ error: "No document file provided (field 'document')" });
+    }
+    const url = `/uploads/landing-page-documents/tenant-${req.user.tenantId}/${path.basename(req.file.path)}`;
     res.status(201).json({
       url,
       mimetype: req.file.mimetype,
@@ -1275,22 +1365,43 @@ function validateTemplatePublishReadiness(page) {
     issues.push({ code: "INVALID_SLUG", message: "Page slug is missing or invalid." });
   }
 
+  // Hero headline — Wanderlux stores titleLines[] (the bridge splits the
+  // LLM's headline into multiple display lines); older templates store
+  // a single `headline` string. Either non-empty is enough.
   const hero = content.hero || {};
-  if (!hero.headline || !String(hero.headline).trim()) {
+  const heroTitleLines = Array.isArray(hero.titleLines) ? hero.titleLines : [];
+  const hasHeadline = heroTitleLines.some((l) => l && String(l).trim())
+    || (hero.headline && String(hero.headline).trim());
+  if (!hasHeadline) {
     issues.push({ code: "HERO_HEADLINE_EMPTY", message: "Hero headline is empty." });
   }
-  if (!hero.posterUrl || !String(hero.posterUrl).trim()) {
+  // Hero image — Wanderlux uses hero.image.src (set by the route's
+  // image-fetcher) OR hero.backgroundImage (set by operator upload);
+  // older templates use hero.posterUrl. Any of the three counts.
+  const hasHeroImage = (hero.image && hero.image.src && String(hero.image.src).trim())
+    || (hero.backgroundImage && String(hero.backgroundImage).trim())
+    || (hero.posterUrl && String(hero.posterUrl).trim());
+  if (!hasHeroImage) {
     issues.push({ code: "HERO_IMAGE_MISSING", message: "Upload a hero image — Publish is blocked without one." });
   }
 
+  // Brand name — Wanderlux stores brand.name; older templates use
+  // brand.programmeName. Accept either.
   const brand = content.brand || {};
-  if (!brand.programmeName || !String(brand.programmeName).trim()) {
+  const hasBrandName = (brand.name && String(brand.name).trim())
+    || (brand.programmeName && String(brand.programmeName).trim());
+  if (!hasBrandName) {
     issues.push({ code: "BRAND_NAME_EMPTY", message: "Brand / programme name is empty." });
   }
 
-  // FAQ coverage — same threshold as block-based travel pages.
-  const faqItems = Array.isArray((content.faq || {}).items) ? content.faq.items : [];
-  if ((content.faq || {}).show !== false && faqItems.length < MIN_FAQ_COUNT) {
+  // FAQ coverage — Wanderlux uses content.faqs.items (plural) and the
+  // bridge sets the whole `faqs` object to null when there are no
+  // items; older templates use content.faq.items (singular). Try both;
+  // if both are absent, `faqContainer` falls through to {} and
+  // faqItems.length is 0, which correctly triggers the gate.
+  const faqContainer = content.faqs || content.faq || {};
+  const faqItems = Array.isArray(faqContainer.items) ? faqContainer.items : [];
+  if (faqContainer.show !== false && faqItems.length < MIN_FAQ_COUNT) {
     issues.push({
       code: "FAQ_TOO_FEW",
       message: `Add at least ${MIN_FAQ_COUNT} FAQ entries (currently ${faqItems.length}).`,
@@ -1299,13 +1410,18 @@ function validateTemplatePublishReadiness(page) {
 
   // If the investment section is rendered, every tier must have an
   // amount (operator hasn't left a pricing TBD in production).
+  // Wanderlux stores tiers under investment.installments[]; older
+  // templates use investment.tiers[]. Accept either.
   const invest = content.investment || {};
-  if (invest.show !== false && Array.isArray(invest.tiers)) {
-    invest.tiers.forEach((tier, idx) => {
+  const tierList = Array.isArray(invest.installments)
+    ? invest.installments
+    : (Array.isArray(invest.tiers) ? invest.tiers : []);
+  if (invest.show !== false && tierList.length > 0) {
+    tierList.forEach((tier, idx) => {
       if (!tier || tier.amount == null || tier.amount === "") {
         issues.push({
           code: "TIER_UNCONFIGURED",
-          message: `Investment tier #${idx + 1} ("${(tier && tier.title) || ""}") has no amount set.`,
+          message: `Investment tier #${idx + 1} ("${(tier && (tier.title || tier.label)) || ""}") has no amount set.`,
         });
       }
     });
@@ -1794,7 +1910,36 @@ router.post("/:id/publish", verifyToken, async (req, res) => {
       }
     }
 
-    const published = await prisma.landingPage.update({ where: { id: existing.id }, data: { status: "PUBLISHED", publishedAt: new Date() } });
+    // Single-page-live workflow: publishing ALSO features the page so
+    // /trips resolves to it. Any sibling (same tenantId + subBrand)
+    // currently featured gets demoted in the same transaction — the
+    // invariant "at most ONE featured page per (tenant, subBrand)"
+    // still holds. Pre-merge this required two button clicks (Publish
+    // then Feature); the user opted to collapse the workflow because
+    // they only ever want one landing page live at a time.
+    const scope = {
+      tenantId: req.user.tenantId,
+      subBrand: existing.subBrand,
+    };
+    const now = new Date();
+    const [, published] = await prisma.$transaction([
+      prisma.landingPage.updateMany({
+        where: { ...scope, isFeatured: true, NOT: { id: existing.id } },
+        data: { isFeatured: false, featuredAt: null },
+      }),
+      prisma.landingPage.update({
+        where: { id: existing.id },
+        data: {
+          status: "PUBLISHED",
+          publishedAt: now,
+          isFeatured: true,
+          // Preserve the original featuredAt on re-publish so admin can
+          // see WHEN this page first became the /trips destination; only
+          // set it now if it was never featured before.
+          featuredAt: existing.featuredAt || now,
+        },
+      }),
+    ]);
     await snapshotSafe(prisma, published, VERSION_SOURCES.PUBLISH, req.user);
     res.json(published);
   } catch (err) {
@@ -2217,6 +2362,144 @@ async function applyLeadRouting(formProps, tenantId, contactId) {
   return null;
 }
 
+// Resolves the registration-mode marker for the form block being
+// submitted. Two sources:
+//   1. block.props.mode === "registration-draft"  → preferred, generic-block path
+//   2. page.content.register.mode === "registration-draft"  → Wanderlux templatePayload path
+// Either being truthy opts the submission into the
+// PendingTripRegistration flow instead of Contact+Deal.
+function resolveRegistrationMode(page, formProps) {
+  if (formProps && formProps.mode === "registration-draft") return "registration-draft";
+  if (page.templateType === "wanderlux-v1" && typeof page.content === "string") {
+    try {
+      const cfg = JSON.parse(page.content);
+      if (cfg && cfg.register && cfg.register.mode === "registration-draft") {
+        return "registration-draft";
+      }
+    } catch (_e) {
+      // malformed wanderlux config — fall through to lead path
+    }
+  }
+  return "lead";
+}
+
+// Hybrid landing-page → microsite registration-draft branch (Phase 3).
+//
+// When mode=registration-draft AND the page is trip-linked, the
+// landing-page wizard submission creates a PendingTripRegistration
+// staging row and returns a redirect URL pointing at the trip's
+// microsite with an opaque draftToken in the query string. No PII
+// in the URL. Falls back to a thank-you response (no microsite
+// redirect) when the trip has no published microsite yet — gives
+// operators a graceful pre-publish state.
+//
+// Does NOT create Contact + Deal. Marketing analytics for these
+// submissions still flow through LandingPageAnalytics (the FORM_SUBMIT
+// event is recorded by the main handler after this returns).
+async function handleRegistrationDraft(req, res, page, formProps) {
+  const tenantId = page.tenantId || 1;
+  // The wizard's per-step values arrive flattened under `fields`
+  // (the existing Wanderlux dc-runtime contract) or under a structured
+  // `{ student, parent, passport, extras }` envelope (Phase 6 frontend).
+  // Accept both shapes so we don't couple the backend to a single
+  // submit-side encoding.
+  const flat = (req.body && typeof req.body.fields === "object" && req.body.fields) ? req.body.fields : {};
+  const student = (req.body && typeof req.body.student === "object" && req.body.student) ? req.body.student : {};
+  const parent  = (req.body && typeof req.body.parent  === "object" && req.body.parent)  ? req.body.parent  : {};
+  const passport = (req.body && typeof req.body.passport === "object" && req.body.passport) ? req.body.passport : {};
+  const extras  = (req.body && typeof req.body.extras  === "object" && req.body.extras)  ? req.body.extras  : null;
+
+  // Read from structured payload first, then flat fallback.
+  const studentName    = student.name || flat.student_name || flat.studentName || null;
+  const parentName     = parent.name  || flat.parent_name  || flat.parentName  || flat.name || null;
+  const parentEmail    = parent.email || flat.parent_email || flat.parentEmail || flat.email || null;
+  const parentPhone    = parent.phone || flat.parent_phone || flat.parentPhone || flat.phone || null;
+
+  if (!studentName || !parentName || !parentEmail || !parentPhone) {
+    return res.status(400).json({
+      error: "studentName, parentName, parentEmail and parentPhone are required for trip-registration submissions",
+      code: "MISSING_FIELDS",
+    });
+  }
+
+  const draftToken = crypto.randomBytes(32).toString("hex");
+  const draftTokenExpiresAt = new Date(Date.now() + 72 * 60 * 60 * 1000); // 72h
+
+  const draft = await prisma.pendingTripRegistration.create({
+    data: {
+      tenantId,
+      tripId: page.tripId, // guaranteed non-null by caller's branch guard
+      landingPageId: page.id,
+      studentName,
+      studentDob: parseDateOrNull(student.dob || flat.student_dob),
+      studentSchool: student.school || flat.student_school || null,
+      studentClass: student.class || student.className || flat.student_class || null,
+      studentGender: student.gender || flat.student_gender || null,
+      parentName,
+      parentEmail,
+      parentPhone,
+      parentRelation: parent.relation || flat.parent_relation || null,
+      passportNumber: passport.number || flat.passport_number || null,
+      passportExpiry: parseDateOrNull(passport.expiry || flat.passport_expiry),
+      passportNationality: passport.nationality || flat.passport_nationality || null,
+      passportPlaceOfIssue: passport.placeOfIssue || flat.passport_place_of_issue || null,
+      extrasJson: extras ? JSON.stringify(extras) : null,
+      audience: typeof req.body.audience === "string" ? req.body.audience : (formProps.audience || null),
+      subBrand: page.subBrand || (typeof req.body.subBrand === "string" ? req.body.subBrand : null),
+      draftToken,
+      draftTokenExpiresAt,
+      status: "DRAFT",
+      otpVerified: false,
+    },
+  });
+
+  // Bump LandingPage.submissions + drop a FORM_SUBMIT analytics row so
+  // operators still see funnel metrics on registration-draft pages.
+  await prisma.landingPage.update({ where: { id: page.id }, data: { submissions: { increment: 1 } } });
+  await prisma.landingPageAnalytics.create({
+    data: { landingPageId: page.id, eventType: "FORM_SUBMIT", visitorIp: req.ip, metadata: JSON.stringify({ kind: "registration-draft", draftId: draft.id }), tenantId },
+  });
+
+  // Resolve microsite redirect. If the trip has a published microsite,
+  // the URL carries ONLY the opaque draftToken (no PII). If the trip
+  // hasn't published a microsite yet, fall back to a thank-you
+  // response — the operator can ship the microsite later and the
+  // PendingTripRegistration row will still flow through the CRM
+  // approval queue.
+  const microsite = await prisma.tripMicrosite.findUnique({
+    where: { tripId: page.tripId },
+    select: { publicUuid: true, publishedAt: true, expiresAt: true },
+  });
+  const now = Date.now();
+  const micrositeLive = microsite
+    && microsite.publicUuid
+    && microsite.publishedAt
+    && (!microsite.expiresAt || microsite.expiresAt.getTime() > now);
+
+  if (micrositeLive) {
+    return res.status(201).json({
+      ok: true,
+      draftId: draft.id,
+      redirect: {
+        type: "microsite",
+        url: `/p/tripmicrosite/${microsite.publicUuid}?draftToken=${draftToken}`,
+      },
+    });
+  }
+  return res.status(201).json({
+    ok: true,
+    draftId: draft.id,
+    redirect: { type: "thanks" },
+    message: "Thank you — your registration has been received. We'll be in touch shortly.",
+  });
+}
+
+function parseDateOrNull(v) {
+  if (!v) return null;
+  const d = new Date(v);
+  return Number.isFinite(d.getTime()) ? d : null;
+}
+
 publicRouter.post("/:slug/submit", express.json(), async (req, res) => {
   try {
     const page = await prisma.landingPage.findFirst({ where: { slug: req.params.slug } });
@@ -2234,6 +2517,25 @@ publicRouter.post("/:slug/submit", express.json(), async (req, res) => {
     const formComp = await pickFormFromContent(page.content, submittedAudience, isBrochureRequest);
     const formProps = (formComp && formComp.props) || {};
 
+    // Phase 3 hybrid branch — when the page is trip-linked AND the
+    // form block (or the Wanderlux templatePayload) declares
+    // mode=registration-draft, create a PendingTripRegistration
+    // instead of a Contact+Deal lead. The microsite OTP step
+    // (Phase 4) then attaches phone verification to the draft, and
+    // the CRM approval step (Phase 5) converts an OTP_VERIFIED draft
+    // to a TripParticipant. Outside this branch the existing
+    // Contact+Deal flow runs unchanged.
+    if (page.tripId && resolveRegistrationMode(page, formProps) === "registration-draft") {
+      // CAPTCHA still applies if the form-block configured it.
+      if (formProps.enableCaptcha) {
+        const ok = await verifyTurnstile(req.body.cfTurnstileToken, req.ip);
+        if (!ok) {
+          return res.status(400).json({ error: "CAPTCHA verification failed. Please try again." });
+        }
+      }
+      return handleRegistrationDraft(req, res, page, formProps);
+    }
+
     // #451: CAPTCHA verification before any DB writes.
     if (formProps.enableCaptcha) {
       const ok = await verifyTurnstile(req.body.cfTurnstileToken, req.ip);
@@ -2242,9 +2544,25 @@ publicRouter.post("/:slug/submit", express.json(), async (req, res) => {
       }
     }
 
-    const { email, name, full_name, phone, company, company_name } = req.body;
+    // The Wanderlux template sends form values nested under `fields`
+    // (multi-step form aggregates all step inputs there); the older
+    // single-block form types post flat. Read from `fields` first so
+    // Wanderlux submissions land with real contact info instead of
+    // the anonymous `lp-{slug}-{ts}@anonymous.local` fallback. Falls
+    // back to the flat shape for back-compat with the older types.
+    const formFields = (req.body && typeof req.body.fields === "object" && req.body.fields) ? req.body.fields : {};
+    const pick = (key) => formFields[key] || req.body[key] || null;
+    // Student programmes capture the PARENT as the lead contact (the
+    // person we'll actually call back); student details land in the
+    // contact's notes / source so the sales team has the full picture.
+    const email = pick("email") || pick("parent_email");
+    const name = pick("name") || pick("parent_name") || pick("full_name");
+    const full_name = pick("full_name");
+    const phone = pick("phone") || pick("parent_phone");
+    const company = pick("company") || pick("company_name") || pick("student_school");
+    const company_name = pick("company_name");
     const contactEmail = email || `lp-${page.slug}-${Date.now()}@anonymous.local`;
-    const contactName = name || full_name || "Landing Page Lead";
+    const contactName = name || full_name || pick("student_name") || "Landing Page Lead";
     // Append the audience tag to the contact source so lead-routing
     // rules + manual triage can branch on it (e.g. "Landing Page: Bali
     // (tmc)" vs "Landing Page: Bali (rfu)"). Only appends when the body

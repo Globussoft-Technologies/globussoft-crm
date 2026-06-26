@@ -1730,6 +1730,69 @@ server.listen(PORT, () => {
       ),
     );
 
+  // Reconcile User.wellnessRole against the canonical RBAC role on every
+  // wellness-tenant user. Heals any drift where a user holds a DOCTOR /
+  // NURSE / RECEPTIONIST / TELECALLER RBAC role but their wellnessRole
+  // column is stale (null, or pointing at a previous role). Without this,
+  // the /api/wellness/doctors/availability picker — which reads
+  // wellnessRole as its source of truth — silently omits the affected
+  // user. Idempotent; users already in sync are no-op reads.
+  // Set DISABLE_WELLNESS_ROLE_BOOT_SYNC=1 to opt out.
+  if (process.env.DISABLE_WELLNESS_ROLE_BOOT_SYNC !== "1") {
+    const {
+      backfillWellnessRolesOnBoot,
+      backfillRbacRolesFromWellnessRolesOnBoot,
+    } = require("./lib/wellnessRoleSync");
+
+    // Forward direction: derive wellnessRole from RBAC for users whose
+    // wellnessRole is null. Heals "promoted via Roles & Permissions but
+    // wellnessRole stayed null" cases (Dr manose).
+    backfillWellnessRolesOnBoot()
+      .then((stats) => {
+        if (!stats) return;
+        if (stats.changed > 0) {
+          console.log(
+            `[wellness-role-boot] forward — reconciled ${stats.changed} user(s) — set:${stats.set} cleared:${stats.cleared} (scanned ${stats.usersScanned} users across ${stats.tenantsScanned} tenant(s))`,
+          );
+        } else {
+          console.log(
+            `[wellness-role-boot] forward — already in sync (scanned ${stats.usersScanned} users across ${stats.tenantsScanned} tenant(s)).`,
+          );
+        }
+      })
+      .catch((err) =>
+        console.error(
+          "[wellness-role-boot] forward non-fatal error:",
+          err && err.message ? err.message : err,
+        ),
+      );
+
+    // Reverse direction: attach the matching RBAC role for users with
+    // wellnessRole='doctor'/'nurse'/'telecaller' who are still on USER /
+    // CUSTOMER / no role. Heals seeded clinical staff (Harsh / Meena /
+    // Vikas) so they have actual DOCTOR permissions, not just the tag.
+    // Won't override ADMIN / MANAGER — those are explicit admin choices.
+    backfillRbacRolesFromWellnessRolesOnBoot()
+      .then((stats) => {
+        if (!stats) return;
+        if (stats.promoted > 0) {
+          console.log(
+            `[wellness-role-boot] reverse — promoted ${stats.promoted} user(s) to matching RBAC role (scanned ${stats.usersScanned} tagged users across ${stats.tenantsScanned} tenant(s))`,
+          );
+        } else {
+          console.log(
+            `[wellness-role-boot] reverse — already in sync (scanned ${stats.usersScanned} tagged users across ${stats.tenantsScanned} tenant(s)).`,
+          );
+        }
+      })
+      .catch((err) =>
+        console.error(
+          "[wellness-role-boot] reverse non-fatal error:",
+          err && err.message ? err.message : err,
+        ),
+      );
+  }
+
   // Self-heal the SubscriptionPlan catalog so a fresh install / wiped DB /
   // partial seed always has the 3 canonical plans on /pricing. Idempotent —
   // existing rows are left alone (Owner edits via Manage Plans persist

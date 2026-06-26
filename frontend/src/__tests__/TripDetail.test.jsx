@@ -308,7 +308,7 @@ describe('<TripDetail /> — tab strip', () => {
     expect(tabs).toHaveLength(5);
     const labels = tabs.map((t) => t.textContent.trim());
     expect(labels).toEqual(
-      expect.arrayContaining(['Overview', 'Participants', 'Rooming', 'Payment plan', 'Microsite']),
+      expect.arrayContaining(['Overview', 'Participants', 'Rooming', 'Payment plan', 'Public page']),
     );
     // Overview is selected by default.
     const overview = screen.getByRole('tab', { name: /Overview/i });
@@ -326,12 +326,12 @@ describe('<TripDetail /> — Overview tab', () => {
     // KPI strip + summary bands keep these labels.
     expect(screen.getByText('Required docs')).toBeInTheDocument();
     expect(screen.getByText('Trip status')).toBeInTheDocument();
-    // 'Participants' / 'Microsite' / 'Payment plan' all appear as both tab
+    // 'Participants' / 'Public page' / 'Payment plan' all appear as both tab
     // chrome AND in the overview (KPI card / summary band title). Scope via
     // getAllByText.
     expect(screen.getAllByText('Participants').length).toBeGreaterThanOrEqual(2);
     expect(screen.getAllByText('Payment plan').length).toBeGreaterThanOrEqual(2);
-    expect(screen.getAllByText('Microsite').length).toBeGreaterThanOrEqual(2);
+    expect(screen.getAllByText('Public page').length).toBeGreaterThanOrEqual(2);
     // Summary-band status pills (rendered uppercase via CSS; literal mixed-
     // case in DOM).
     expect(screen.getByText('Not set yet')).toBeInTheDocument();
@@ -486,16 +486,16 @@ describe('<TripDetail /> — Microsite tab', () => {
   it('un-published trip renders MicrositeCreate copy + subdomain default seeded from trip-{tripCode}', async () => {
     renderPage();
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
-    fireEvent.click(screen.getByRole('tab', { name: /Microsite/i }));
+    fireEvent.click(screen.getByRole('tab', { name: /Public page/i }));
     expect(
-      await screen.findByText(/Create a public itinerary page/i),
+      await screen.findByText(/Create a public registration page/i),
     ).toBeInTheDocument();
     // Subdomain input pre-fills with "trip-{tripCode}".
     const subdomainInput = screen.getByLabelText(/Microsite subdomain/i);
     expect(subdomainInput.value).toBe('trip-TMC-AND-2026-MUMBAI-G7');
     // Publish button visible.
     expect(
-      screen.getByRole('button', { name: /Publish microsite/i }),
+      screen.getByRole('button', { name: /Publish public page/i }),
     ).toBeInTheDocument();
   });
 
@@ -515,7 +515,7 @@ describe('<TripDetail /> — Microsite tab', () => {
     // Scope tab click via getAllByRole + label filter to dodge the regex
     // ambiguity ("Microsite" appears as tab + Overview card label).
     const tabs = screen.getAllByRole('tab');
-    const micrositeTab = tabs.find((t) => /Microsite/.test(t.textContent));
+    const micrositeTab = tabs.find((t) => /Public page/.test(t.textContent));
     expect(micrositeTab).toBeTruthy();
     fireEvent.click(micrositeTab);
     // The full public URL renders in the live-link hero card; the publicUuid
@@ -744,11 +744,11 @@ describe('<TripDetail /> — Microsite Create flow', () => {
   it('Publish POSTs /api/travel/trips/:id/microsite with subdomain + itineraryHtml', async () => {
     renderPage();
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
-    fireEvent.click(screen.getByRole('tab', { name: /Microsite/i }));
-    await screen.findByText(/Create a public itinerary page/i);
+    fireEvent.click(screen.getByRole('tab', { name: /Public page/i }));
+    await screen.findByText(/Create a public registration page/i);
     fetchApiMock.mockClear();
     installFetchMock();
-    fireEvent.click(screen.getByRole('button', { name: /Publish microsite/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Publish public page/i }));
     await waitFor(() => {
       const post = fetchApiMock.mock.calls.find(
         ([u, o]) => u === '/api/travel/trips/101/microsite' && o?.method === 'POST',
@@ -767,7 +767,7 @@ describe('<TripDetail /> — Microsite Create flow', () => {
   it('Publish with blank itineraryHtml surfaces notify.error + no POST', async () => {
     renderPage();
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
-    fireEvent.click(screen.getByRole('tab', { name: /Microsite/i }));
+    fireEvent.click(screen.getByRole('tab', { name: /Public page/i }));
     // The RichTextEditor is contenteditable — direct DOM patching for an
     // empty payload. The SUT's itineraryHtml state seed is the placeholder,
     // so we have to mutate it via the editor's onInput hook. Easier path:
@@ -779,7 +779,7 @@ describe('<TripDetail /> — Microsite Create flow', () => {
     fireEvent.blur(editorDiv);
     fetchApiMock.mockClear();
     installFetchMock();
-    fireEvent.click(screen.getByRole('button', { name: /Publish microsite/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Publish public page/i }));
     await waitFor(() => {
       expect(notifyError).toHaveBeenCalledWith(
         expect.stringMatching(/Itinerary content required/i),
@@ -805,7 +805,7 @@ describe('<TripDetail /> — Microsite Editor preview toggle', () => {
     renderPage();
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
     const tabs = screen.getAllByRole('tab');
-    fireEvent.click(tabs.find((t) => /Microsite/.test(t.textContent)));
+    fireEvent.click(tabs.find((t) => /Public page/.test(t.textContent)));
     await screen.findByText((c) => c.includes('abc-123-def-456'));
     // Click Preview button — label flips to Edit.
     fireEvent.click(screen.getByRole('button', { name: /Preview/i }));
@@ -1104,9 +1104,9 @@ describe('<TripDetail /> — Microsite Create POST error', () => {
     });
     renderPage();
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
-    fireEvent.click(screen.getByRole('tab', { name: /Microsite/i }));
-    await screen.findByText(/Create a public itinerary page/i);
-    fireEvent.click(screen.getByRole('button', { name: /Publish microsite/i }));
+    fireEvent.click(screen.getByRole('tab', { name: /Public page/i }));
+    await screen.findByText(/Create a public registration page/i);
+    fireEvent.click(screen.getByRole('button', { name: /Publish public page/i }));
     await waitFor(() => {
       expect(notifyError).toHaveBeenCalledWith('Subdomain already taken');
     });
@@ -1136,7 +1136,7 @@ describe('<TripDetail /> — Microsite Editor save/unpublish/faq', () => {
     renderPage();
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
     const tabs = screen.getAllByRole('tab');
-    fireEvent.click(tabs.find((t) => /Microsite/.test(t.textContent)));
+    fireEvent.click(tabs.find((t) => /Public page/.test(t.textContent)));
     await screen.findByText((c) => c.includes('abc-123-def-456'));
     fetchApiMock.mockClear();
     // Re-install with PATCH support.
@@ -1176,7 +1176,7 @@ describe('<TripDetail /> — Microsite Editor save/unpublish/faq', () => {
     renderPage();
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
     const tabs = screen.getAllByRole('tab');
-    fireEvent.click(tabs.find((t) => /Microsite/.test(t.textContent)));
+    fireEvent.click(tabs.find((t) => /Public page/.test(t.textContent)));
     await screen.findByText((c) => c.includes('abc-123-def-456'));
     fireEvent.click(screen.getByRole('button', { name: /^Unpublish$/i }));
     await waitFor(() => {
@@ -1195,7 +1195,7 @@ describe('<TripDetail /> — Microsite Editor save/unpublish/faq', () => {
     renderPage();
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
     const tabs = screen.getAllByRole('tab');
-    fireEvent.click(tabs.find((t) => /Microsite/.test(t.textContent)));
+    fireEvent.click(tabs.find((t) => /Public page/.test(t.textContent)));
     await screen.findByText((c) => c.includes('abc-123-def-456'));
     // Type non-JSON into the FAQ textarea.
     const faqInput = screen.getByLabelText(/Microsite FAQ JSON/i);

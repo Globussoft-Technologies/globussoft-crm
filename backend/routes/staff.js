@@ -25,7 +25,10 @@ const prisma = require("../lib/prisma");
 // practice but the historical contract returned 400 on unknown values,
 // which we preserve for back-compat.
 const { isCatalogedKey } = require("../lib/wellnessRoleTypes");
-const { syncWellnessRoleFromRbacRoles } = require("../lib/wellnessRoleSync");
+const {
+  syncWellnessRoleFromRbacRoles,
+  syncRbacRoleFromWellnessRole,
+} = require("../lib/wellnessRoleSync");
 
 const VALID_ROLES = ["ADMIN", "MANAGER", "USER"];
 // Legacy whitelist — used only when the caller's tenant is non-wellness.
@@ -479,6 +482,28 @@ router.post("/", verifyRole(["ADMIN"]), async (req, res) => {
         onlyIfEmpty: true,
       });
       if (synced && synced !== user.wellnessRole) user.wellnessRole = synced;
+
+      // Reverse derivation: if the resulting wellnessRole maps to a
+      // matching clinical RBAC role (DOCTOR / NURSE / TELECALLER) and
+      // the user is still on USER / CUSTOMER, promote them. Heals the
+      // "admin set wellnessRole=doctor via the form but only picked the
+      // USER permission role → user appears in picker but has no
+      // clinical permissions" case. No-op for ADMIN / MANAGER (won't
+      // override an explicit privileged role) and for catalog-only keys
+      // like 'professional' (no matching RBAC role to promote to).
+      const promoted = await syncRbacRoleFromWellnessRole(tx, {
+        userId: user.id,
+        tenantId: req.user.tenantId,
+      });
+      if (promoted) {
+        const promotedRole = await tx.role.findFirst({
+          where: { tenantId: req.user.tenantId, key: promoted },
+          select: { id: true, key: true, name: true, landingPath: true },
+        });
+        if (promotedRole) {
+          user.__promotedRole = promotedRole;
+        }
+      }
       return user;
     });
 
@@ -499,16 +524,22 @@ router.post("/", verifyRole(["ADMIN"]), async (req, res) => {
       console.warn("[staff] audit User CREATE failed:", e.message),
     );
 
+    // If the reverse sync promoted the user to a clinical RBAC role,
+    // echo THAT role (not the originally-picked one) so the frontend
+    // row state matches DB state without a refetch. Strip the internal
+    // marker before serialising.
+    const { __promotedRole, ...createdClean } = created;
+    const echoedRole = __promotedRole || rbacRole;
     res.status(201).json({
-      ...created,
+      ...createdClean,
       // Echo the assignment so the frontend can update its row state
       // without a refetch.
-      primaryRole: rbacRole
+      primaryRole: echoedRole
         ? {
-            id: rbacRole.id,
-            key: rbacRole.key,
-            name: rbacRole.name,
-            landingPath: rbacRole.landingPath || null,
+            id: echoedRole.id,
+            key: echoedRole.key,
+            name: echoedRole.name,
+            landingPath: echoedRole.landingPath || null,
           }
         : null,
     });
@@ -815,6 +846,32 @@ router.put("/:id", verifyRole(["ADMIN"]), async (req, res) => {
           }
         }
 
+        // Reverse derivation: if the user's final wellnessRole maps to a
+        // matching clinical RBAC role (DOCTOR / NURSE / TELECALLER) and
+        // they're still on USER / CUSTOMER, promote them so the clinical
+        // permission grants follow the clinical tag. Won't override
+        // ADMIN / MANAGER. Fires on EITHER side of the change: admin set
+        // wellnessRole='doctor' explicitly OR the forward sync derived
+        // it above — either way the RBAC role should converge.
+        const promoted = await syncRbacRoleFromWellnessRole(tx, {
+          userId: target.id,
+          tenantId: req.user.tenantId,
+        });
+        if (promoted) {
+          const promotedRole = await tx.role.findFirst({
+            where: { tenantId: req.user.tenantId, key: promoted },
+            select: { id: true, key: true, name: true, landingPath: true },
+          });
+          if (promotedRole) {
+            updated.__promotedRole = promotedRole;
+            changed.rbacRoleId = {
+              from: changed.rbacRoleId?.from ?? currentRbacRoleId,
+              to: promotedRole.id,
+              derived: true,
+            };
+          }
+        }
+
         return updated;
       });
     } catch (err) {
@@ -838,8 +895,12 @@ router.put("/:id", verifyRole(["ADMIN"]), async (req, res) => {
     );
 
     // Echo the resolved RBAC role on the response so the staff list can
-    // update its row state without a refetch.
+    // update its row state without a refetch. If the reverse sync
+    // promoted the user (e.g. wellnessRole=doctor → DOCTOR role), echo
+    // THAT role so the row reflects the actual final state.
+    const { __promotedRole, ...userClean } = user;
     const echoedRbacRole = (() => {
+      if (__promotedRole) return __promotedRole;
       if (nextRbacRoleId === undefined) {
         // RBAC role not part of this PUT — surface the current assignment
         // from the snapshot read above.
@@ -858,7 +919,7 @@ router.put("/:id", verifyRole(["ADMIN"]), async (req, res) => {
       return null; // explicit clear
     })();
 
-    res.json({ ...user, primaryRole: echoedRbacRole });
+    res.json({ ...userClean, primaryRole: echoedRbacRole });
   } catch (err) {
     if (err.code === "P2025") {
       return res.status(404).json({ error: "User not found." });

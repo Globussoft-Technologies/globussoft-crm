@@ -1243,7 +1243,7 @@ export default function Staff() {
                   className="input-field"
                   value={creating.name}
                   onChange={(e) => setCreating({ ...creating, name: e.target.value })}
-                  placeholder="e.g. Dr. Priyambada"
+                  placeholder={isTravel ? 'e.g. Aisha Khan' : isWellness ? 'e.g. Dr. Priyambada' : 'e.g. Jane Smith'}
                   data-testid="staff-create-name"
                   autoFocus
                   style={{ width: '100%', marginTop: '0.25rem' }}
@@ -1256,7 +1256,7 @@ export default function Staff() {
                   className="input-field"
                   value={creating.email}
                   onChange={(e) => setCreating({ ...creating, email: e.target.value })}
-                  placeholder="name@yourclinic.com"
+                  placeholder={isTravel ? 'name@youragency.com' : isWellness ? 'name@yourclinic.com' : 'name@yourcompany.com'}
                   data-testid="staff-create-email"
                   style={{ width: '100%', marginTop: '0.25rem' }}
                 />

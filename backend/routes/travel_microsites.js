@@ -1255,7 +1255,7 @@ router.post("/microsites/public/:publicUuid/verify-otp", async (req, res) => {
     }
     const ms = await prisma.tripMicrosite.findUnique({
       where: { publicUuid: uuid },
-      select: { id: true, expiresAt: true },
+      select: { id: true, tripId: true, expiresAt: true },
     });
     if (!ms) return res.status(404).json({ error: "Microsite not found", code: "NOT_FOUND" });
 
@@ -1277,10 +1277,78 @@ router.post("/microsites/public/:publicUuid/verify-otp", async (req, res) => {
     if (!match) {
       return res.status(400).json({ error: "OTP code does not match", code: "OTP_INVALID" });
     }
-    await prisma.tripMicrositeOtp.update({
-      where: { id: otp.id },
-      data: { usedAt: new Date() },
-    });
+
+    // Phase 4 — optional PendingTripRegistration binding. When the
+    // caller supplies a draftToken AND purpose === "registration", we
+    // atomically mark the draft as OTP_VERIFIED in the same transaction
+    // that marks the OTP as used. Per decision #9, mismatches surface
+    // as explicit error codes rather than silent no-ops — the operator
+    // and the user both want a deterministic signal so they don't end
+    // up staring at a "verified" page that didn't actually advance the
+    // registration. Mismatches return BEFORE marking the OTP used, so
+    // the user can retry with a corrected token without re-requesting
+    // a fresh OTP.
+    let draftBindResult = null;
+    if (purpose === "registration" && req.body.draftToken) {
+      const draftToken = String(req.body.draftToken);
+      const draft = await prisma.pendingTripRegistration.findUnique({
+        where: { draftToken },
+        select: {
+          id: true, tripId: true, status: true,
+          otpVerified: true, draftTokenExpiresAt: true,
+        },
+      });
+      if (!draft) {
+        return res.status(404).json({
+          error: "Registration draft not found for this token",
+          code: "DRAFT_NOT_FOUND",
+        });
+      }
+      if (draft.tripId !== ms.tripId) {
+        return res.status(403).json({
+          error: "Draft token belongs to a different trip's microsite",
+          code: "DRAFT_WRONG_TRIP",
+        });
+      }
+      if (draft.draftTokenExpiresAt < new Date()) {
+        return res.status(400).json({
+          error: "Draft token has expired — please re-submit the registration form",
+          code: "DRAFT_EXPIRED",
+        });
+      }
+      // Already verified is idempotent — proceed without re-writing the
+      // draft row, but flag the response so the frontend can short-circuit
+      // straight to the "already submitted" UI.
+      draftBindResult = {
+        id: draft.id,
+        alreadyVerified: !!draft.otpVerified,
+      };
+    }
+
+    // Atomic commit. The OTP gets marked used, and (if a draft is being
+    // bound) the draft row updates to OTP_VERIFIED in the same
+    // transaction so we never end up with a verified OTP and an
+    // unverified draft.
+    const txOps = [
+      prisma.tripMicrositeOtp.update({
+        where: { id: otp.id },
+        data: { usedAt: new Date() },
+      }),
+    ];
+    if (draftBindResult && !draftBindResult.alreadyVerified) {
+      txOps.push(
+        prisma.pendingTripRegistration.update({
+          where: { id: draftBindResult.id },
+          data: {
+            status: "OTP_VERIFIED",
+            otpVerified: true,
+            otpVerifiedAt: new Date(),
+            otpPhone: String(phone),
+          },
+        }),
+      );
+    }
+    await prisma.$transaction(txOps);
 
     // Mint a short-lived access JWT scoped to the (micrositeId, phone,
     // purpose). The /full endpoint verifies this token and refuses to
@@ -1290,7 +1358,15 @@ router.post("/microsites/public/:publicUuid/verify-otp", async (req, res) => {
       JWT_SECRET,
       { expiresIn: OTP_ACCESS_TTL },
     );
-    res.json({ verified: true, accessToken, expiresIn: OTP_ACCESS_TTL });
+    const response = { verified: true, accessToken, expiresIn: OTP_ACCESS_TTL };
+    if (draftBindResult) {
+      response.draftBound = {
+        id: draftBindResult.id,
+        status: "OTP_VERIFIED",
+        alreadyVerified: draftBindResult.alreadyVerified,
+      };
+    }
+    res.json(response);
   } catch (e) {
     console.error("[travel-microsite] verify-otp error:", e.message);
     res.status(500).json({ error: "Failed to verify OTP" });
@@ -1363,6 +1439,50 @@ router.get("/microsites/public/:publicUuid/full", async (req, res) => {
           passportExpiry: true, dob: true,
         },
       });
+    }
+    // Phase 4 — when an OTP token was minted with purpose=registration
+    // AND the caller supplies the same draftToken used to mint it (?
+    // draftToken=<token>), surface the OTP_VERIFIED draft so the
+    // microsite UI can show the user's collected details + the
+    // "awaiting operator review" status. We require the draftToken
+    // again here (not just the access token) because the OTP access
+    // token is scoped to the (micrositeId, phone, purpose) tuple, not
+    // to a specific draft — a single OTP could verify multiple drafts
+    // for the same phone, and we want the frontend to be explicit
+    // about which one to show. Mismatches surface as explicit codes
+    // mirroring the /verify-otp contract.
+    if (claims.purpose === "registration" && req.query.draftToken) {
+      const draftToken = String(req.query.draftToken);
+      const draft = await prisma.pendingTripRegistration.findUnique({
+        where: { draftToken },
+        select: {
+          id: true, tripId: true, status: true, otpVerified: true,
+          otpVerifiedAt: true, draftTokenExpiresAt: true,
+          studentName: true, studentSchool: true, studentClass: true,
+          parentName: true, parentEmail: true, parentPhone: true,
+          passportNumber: true, passportExpiry: true,
+          createdAt: true,
+        },
+      });
+      if (!draft) {
+        return res.status(404).json({
+          error: "Registration draft not found for this token",
+          code: "DRAFT_NOT_FOUND",
+        });
+      }
+      if (draft.tripId !== ms.tripId) {
+        return res.status(403).json({
+          error: "Draft token belongs to a different trip's microsite",
+          code: "DRAFT_WRONG_TRIP",
+        });
+      }
+      if (draft.draftTokenExpiresAt < new Date()) {
+        return res.status(400).json({
+          error: "Draft token has expired — please re-submit the registration form",
+          code: "DRAFT_EXPIRED",
+        });
+      }
+      reveal.draft = draft;
     }
     if (claims.purpose === "teacher-access") {
       reveal.rooming = await prisma.roomingAssignment.findMany({

@@ -217,6 +217,71 @@ function VideoField({ label, value, onChange, placeholder }) {
   );
 }
 
+/**
+ * Document URL input + Upload button. Used for the brochure section's
+ * `fileUrl` field — operator either pastes a hosted-PDF link (Drive, S3,
+ * etc.) or uploads a PDF/DOC/PPT via /api/landing-pages/upload-document.
+ * Mirrors ImageField / VideoField so the affordance feels familiar.
+ *
+ * The returned URL is set into the value via onChange; the wanderlux
+ * brochure section's success-card surfaces a direct Download CTA when
+ * the field is non-empty.
+ */
+function FileField({ label, value, onChange, placeholder, accept }) {
+  const notify = useNotify();
+  const [uploading, setUploading] = useState(false);
+  const inputRef = React.useRef(null);
+  const handleFile = async (e) => {
+    const f = e.target.files && e.target.files[0];
+    if (!f) return;
+    // 10 MB matches the backend's DOC_UPLOAD_SIZE_BYTES cap. Larger
+    // files fail at the multer layer with a friendly 400; the client-
+    // side check just spares the round-trip.
+    if (f.size > 10 * 1024 * 1024) {
+      notify.error('Document too large (max 10 MB)');
+      return;
+    }
+    setUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append('document', f);
+      const res = await fetchApi('/api/landing-pages/upload-document', { method: 'POST', body: fd });
+      if (res && res.url) {
+        onChange(res.url);
+        notify.success('Document uploaded');
+      }
+    } catch (_e) {
+      notify.error('Upload failed');
+    } finally {
+      setUploading(false);
+      if (inputRef.current) inputRef.current.value = '';
+    }
+  };
+  return (
+    <div>
+      <label style={labelStyle}>{label}</label>
+      <div style={{ display: 'flex', gap: '0.5rem' }}>
+        <input type="text" style={{ ...inputStyle, flex: 1 }} value={value ?? ''} onChange={(e) => onChange(e.target.value)} placeholder={placeholder || 'https://… (Drive / S3 link) or upload below'} />
+        <input ref={inputRef} type="file" accept={accept || '.pdf,.doc,.docx,.ppt,.pptx,application/pdf'} onChange={handleFile} style={{ display: 'none' }} />
+        <button
+          type="button"
+          onClick={() => inputRef.current && inputRef.current.click()}
+          disabled={uploading}
+          style={{ padding: '0.4rem 0.75rem', borderRadius: 6, border: '1px solid var(--border-color)', background: 'var(--bg-color)', color: 'var(--text-primary)', cursor: 'pointer', fontSize: '0.8rem', whiteSpace: 'nowrap' }}
+        >
+          {uploading ? '…' : 'Upload'}
+        </button>
+      </div>
+      {value && (
+        <p style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', margin: '0.35rem 0 0' }}>
+          Linked file:{' '}
+          <a href={value} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent-color)' }}>{value}</a>
+        </p>
+      )}
+    </div>
+  );
+}
+
 function CheckboxField({ label, value, onChange }) {
   return (
     <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', margin: '0.7rem 0 0.3rem', fontSize: '0.85rem', color: 'var(--text-primary)', cursor: 'pointer' }}>
@@ -300,11 +365,30 @@ function ArrayEditor({ items, onChange, renderItem, itemLabel, newItem }) {
 // derived from `cfg` when it changes from an external source (Raw
 // JSON edit, page reload) — the `lastWroteRef` distinguishes those
 // from our own writes so we don't echo-trim mid-typing.
+// Heuristic: separator-less legacy strings that LOOK like an audience
+// (no digits, no month-like tokens — pure phrasing like "SCHOOL STUDENTS"
+// or "GRADES 6-12 TRAVELLERS") should land in the Audience slot, not the
+// Dates slot. Anything containing digits, month abbreviations, or date
+// separators (' - ', '–', '/', '.') is treated as Dates. Used both for
+// initial parse of existing data and for the post-load useEffect re-derive.
+const MONTH_TOKEN_RE = /\b(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|SEPT|OCT|NOV|DEC|JANUARY|FEBRUARY|MARCH|APRIL|JUNE|JULY|AUGUST|SEPTEMBER|OCTOBER|NOVEMBER|DECEMBER)\b/i;
+function splitHeroEyebrow(raw) {
+  const s = String(raw || '');
+  if (s.includes('|')) {
+    const parts = s.split('|');
+    return { dates: (parts[0] || '').trim(), audience: (parts.slice(1).join('|') || '').trim() };
+  }
+  const t = s.trim();
+  if (!t) return { dates: '', audience: '' };
+  const looksLikeDates = /\d/.test(t) || MONTH_TOKEN_RE.test(t) || /[-–/.]/.test(t);
+  return looksLikeDates ? { dates: t, audience: '' } : { dates: '', audience: t };
+}
+
 function HeroEyebrowFields({ cfg, setPath }) {
   const eyebrow = (cfg && cfg.hero && cfg.hero.eyebrow) || '';
-  const initialParts = eyebrow.split('|');
-  const [dates, setDates] = useState(() => (initialParts[0] || '').trim());
-  const [audience, setAudience] = useState(() => (initialParts[1] || '').trim());
+  const initial = splitHeroEyebrow(eyebrow);
+  const [dates, setDates] = useState(() => initial.dates);
+  const [audience, setAudience] = useState(() => initial.audience);
   const lastWroteRef = useRef(eyebrow);
 
   useEffect(() => {
@@ -312,16 +396,26 @@ function HeroEyebrowFields({ cfg, setPath }) {
     // Skip when the change is our own write, otherwise typing would
     // bounce through the trim and lose trailing spaces.
     if (eyebrow === lastWroteRef.current) return;
-    const parts = eyebrow.split('|');
-    setDates((parts[0] || '').trim());
-    setAudience((parts[1] || '').trim());
+    const parts = splitHeroEyebrow(eyebrow);
+    setDates(parts.dates);
+    setAudience(parts.audience);
     lastWroteRef.current = eyebrow;
   }, [eyebrow]);
 
   const commit = (nextDates, nextAudience) => {
     const dt = String(nextDates || '').trim();
     const au = String(nextAudience || '').trim();
-    const eb = dt && au ? `${dt} | ${au}` : (dt || au);
+    // Round-trip shape contract:
+    //   both halves filled →  "DATES | AUDIENCE"
+    //   dates only         →  "DATES"          (legacy, separator-less)
+    //   audience only      →  " | AUDIENCE"    (LEADING sep so a later
+    //                                          read still routes the
+    //                                          token to the right slot)
+    //   both empty         →  ""
+    let eb = '';
+    if (dt && au) eb = `${dt} | ${au}`;
+    else if (dt) eb = dt;
+    else if (au) eb = ` | ${au}`;
     lastWroteRef.current = eb;
     setPath(['hero', 'eyebrow'], eb);
   };
@@ -840,8 +934,25 @@ export function LayoutPanel({ cfg, onChange, isDirty = false }) {
     commit(next);
   };
 
+  // Append-only "show this hidden section" — used by the Hidden tray
+  // at the bottom of the panel. Drops the section at the END of the
+  // layout. For slot-precise insertion, see `addSectionAt` below.
   const showSection = (key) => {
     commit([...items, { kind: 'section', key }]);
+  };
+
+  // Insert a template section at a specific slot (used by the + Insert
+  // tray). Mirrors `addBlock` so operators can drop a section like
+  // "Brochure download" between two existing rows instead of being
+  // forced to append at the end + drag it up.
+  const addSectionAt = (key) => {
+    if (!key || items.some((it) => it.kind === 'section' && it.key === key)) return;
+    const insertAt = addAtIdx == null ? items.length : addAtIdx;
+    const next = [...items];
+    next.splice(insertAt, 0, { kind: 'section', key });
+    commit(next);
+    setAddAtIdx(null);
+    setFocusedIdx(insertAt);
   };
 
   const addBlock = (type) => {
@@ -985,6 +1096,21 @@ export function LayoutPanel({ cfg, onChange, isDirty = false }) {
   const renderInsertSlot = (slotIdx) => {
     const open = addAtIdx === slotIdx;
     if (open) {
+      // Template-section buttons go ABOVE the custom-block buttons so
+      // operators reach for full sections (Brochure download, FAQs,
+      // etc.) first. Only sections NOT already in the layout appear
+      // here — once added they vanish from the picker (each section can
+      // appear at most once).
+      const availableSections = hidden;
+      const trayHeadingStyle = {
+        width: '100%',
+        fontSize: '0.6rem',
+        fontWeight: 700,
+        color: 'var(--text-secondary)',
+        textTransform: 'uppercase',
+        letterSpacing: '0.06em',
+        margin: '0 0 0.25rem',
+      };
       return (
         <div
           key={`slot-${slotIdx}-open`}
@@ -999,23 +1125,47 @@ export function LayoutPanel({ cfg, onChange, isDirty = false }) {
             margin: '0.15rem 0',
           }}
         >
-          {CUSTOM_BLOCK_CATALOGUE.map((c) => (
+          {availableSections.length > 0 && (
+            <>
+              <div style={trayHeadingStyle}>Template sections</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.3rem', width: '100%', marginBottom: '0.35rem' }}>
+                {availableSections.map((key) => {
+                  const SectionIcon = SECTION_BY_KEY[key] && SECTION_BY_KEY[key].icon;
+                  return (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => addSectionAt(key)}
+                      style={{ background: 'var(--surface-color)', border: '1px solid var(--accent-color)', borderRadius: 4, padding: '0.3rem 0.55rem', cursor: 'pointer', color: 'var(--text-primary)', fontSize: '0.72rem', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}
+                    >
+                      {SectionIcon ? <SectionIcon size={12} /> : null}
+                      + {SECTION_LABEL_BY_KEY[key] || key}
+                    </button>
+                  );
+                })}
+              </div>
+            </>
+          )}
+          <div style={trayHeadingStyle}>Custom blocks</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.3rem', width: '100%' }}>
+            {CUSTOM_BLOCK_CATALOGUE.map((c) => (
+              <button
+                key={c.type}
+                type="button"
+                onClick={() => addBlock(c.type)}
+                style={{ background: 'var(--surface-color)', border: '1px solid var(--border-color)', borderRadius: 4, padding: '0.3rem 0.55rem', cursor: 'pointer', color: 'var(--text-primary)', fontSize: '0.72rem' }}
+              >
+                + {c.label}
+              </button>
+            ))}
             <button
-              key={c.type}
               type="button"
-              onClick={() => addBlock(c.type)}
-              style={{ background: 'var(--surface-color)', border: '1px solid var(--border-color)', borderRadius: 4, padding: '0.3rem 0.55rem', cursor: 'pointer', color: 'var(--text-primary)', fontSize: '0.72rem' }}
+              onClick={() => setAddAtIdx(null)}
+              style={{ background: 'none', border: '1px solid var(--border-color)', borderRadius: 4, padding: '0.3rem 0.55rem', cursor: 'pointer', color: 'var(--text-secondary)', fontSize: '0.72rem', marginLeft: 'auto' }}
             >
-              + {c.label}
+              Cancel
             </button>
-          ))}
-          <button
-            type="button"
-            onClick={() => setAddAtIdx(null)}
-            style={{ background: 'none', border: '1px solid var(--border-color)', borderRadius: 4, padding: '0.3rem 0.55rem', cursor: 'pointer', color: 'var(--text-secondary)', fontSize: '0.72rem', marginLeft: 'auto' }}
-          >
-            Cancel
-          </button>
+          </div>
         </div>
       );
     }
@@ -1240,8 +1390,9 @@ export default function LandingPageWanderluxEditor({ content, onChange }) {
   const cfg = content || {};
   const [open, setOpen] = useState({
     brand: true, hero: true, countdown: false, cities: true, video: false,
-    intro: false, highlights: false, safety: false, investment: false,
-    register: false, faqs: false, finalCta: false, footer: false, raw: false,
+    intro: false, highlights: false, safety: false, testimonials: false,
+    investment: false, register: false, brochure: false, faqs: false,
+    finalCta: false, footer: false, raw: false,
   });
 
   // Helper: deep-set into a nested path. Build a new object each change so
@@ -1387,7 +1538,26 @@ export default function LandingPageWanderluxEditor({ content, onChange }) {
         <TextArea label="Paragraphs (one per line)" value={(cfg.intro && Array.isArray(cfg.intro.paragraphs) ? cfg.intro.paragraphs.join('\n\n') : '')} onChange={(v) => setPath(['intro', 'paragraphs'], v.split(/\n\n+/).map((p) => p.trim()).filter(Boolean))} placeholder={'First paragraph…\n\nSecond paragraph…'} rows={5} />
         <TextField label="Gains title" value={cfg.intro && cfg.intro.gainsTitle} onChange={(v) => setPath(['intro', 'gainsTitle'], v)} placeholder="What You Gain" />
         <TextArea label="Gains quote" value={cfg.intro && cfg.intro.gainsQuote} onChange={(v) => setPath(['intro', 'gainsQuote'], v)} rows={2} />
-        <TextField label="Gains list (comma separated)" value={(cfg.intro && Array.isArray(cfg.intro.gains) ? cfg.intro.gains.join(', ') : '')} onChange={(v) => setPath(['intro', 'gains'], v.split(',').map((s) => s.trim()).filter(Boolean))} placeholder="Field research skills, Cross-cultural confidence, …" />
+        <ArrayEditor
+          items={
+            cfg.intro && Array.isArray(cfg.intro.gains)
+              ? cfg.intro.gains.map((g) =>
+                  g && typeof g === 'object'
+                    ? { title: g.title || '', description: g.description || g.body || '' }
+                    : { title: String(g || ''), description: '' },
+                )
+              : []
+          }
+          onChange={(next) => setPath(['intro', 'gains'], next)}
+          itemLabel="Gain"
+          newItem={() => ({ title: '', description: '' })}
+          renderItem={(g, set) => (
+            <>
+              <TextField label="Title" value={g.title} onChange={(v) => set({ ...g, title: v })} placeholder="Kaziranga National Park" />
+              <TextArea label="Description (one tight sentence)" value={g.description} onChange={(v) => set({ ...g, description: v })} rows={2} />
+            </>
+          )}
+        />
         <TextField label="CTA label" value={cfg.intro && cfg.intro.ctaLabel} onChange={(v) => setPath(['intro', 'ctaLabel'], v)} placeholder="Talk to Our Team →" />
       </Section>
 
@@ -1441,6 +1611,31 @@ export default function LandingPageWanderluxEditor({ content, onChange }) {
         <TextField label="CTA label" value={cfg.safety && cfg.safety.ctaLabel} onChange={(v) => setPath(['safety', 'ctaLabel'], v)} placeholder="Reserve a Seat →" />
       </Section>
 
+      {/* ── TESTIMONIALS ── */}
+      <Section id="testimonials" title="Testimonials" open={open} setOpen={setOpen}>
+        <TextField label="Eyebrow" value={cfg.testimonials && cfg.testimonials.eyebrow} onChange={(v) => setPath(['testimonials', 'eyebrow'], v)} placeholder="From Parents" />
+        <TextField label="Title" value={cfg.testimonials && cfg.testimonials.title} onChange={(v) => setPath(['testimonials', 'title'], v)} placeholder="They Returned More Independent. More Composed." />
+        <label style={{ ...labelStyle, marginTop: '0.6rem' }}>Quote cards</label>
+        <p style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', margin: '0 0 0.4rem' }}>
+          3 or more cards work best — the grid wraps at ~280px per card. Rating is shown as filled stars (1-5).
+        </p>
+        <ArrayEditor
+          items={cfg.testimonials && cfg.testimonials.items}
+          onChange={(next) => setPath(['testimonials', 'items'], next)}
+          itemLabel="Testimonial"
+          newItem={() => ({ initial: '', name: '', source: '', rating: 5, quote: '' })}
+          renderItem={(t, set) => (
+            <>
+              <TextField label="Name" value={t.name} onChange={(v) => set({ ...t, name: v, initial: (v && v.trim().charAt(0).toUpperCase()) || t.initial || '' })} placeholder="Priya S." />
+              <TextField label="Initial (avatar letter)" value={t.initial} onChange={(v) => set({ ...t, initial: (v || '').slice(0, 1).toUpperCase() })} placeholder="P" />
+              <TextField label="Source" value={t.source} onChange={(v) => set({ ...t, source: v })} placeholder="Google Review" />
+              <NumberField label="Rating (1-5)" value={t.rating} onChange={(v) => set({ ...t, rating: v == null ? 5 : Math.max(1, Math.min(5, v)) })} min={1} max={5} />
+              <TextArea label="Quote" value={t.quote} onChange={(v) => set({ ...t, quote: v })} rows={3} />
+            </>
+          )}
+        />
+      </Section>
+
       {/* ── INVESTMENT (PRICING) ── */}
       <Section id="investment" title="Investment (pricing)" open={open} setOpen={setOpen}>
         <TextField label="Eyebrow" value={cfg.investment && cfg.investment.eyebrow} onChange={(v) => setPath(['investment', 'eyebrow'], v)} placeholder="Investment" />
@@ -1477,6 +1672,73 @@ export default function LandingPageWanderluxEditor({ content, onChange }) {
         <NumberField label="Registered (already-booked count)" value={cfg.register && cfg.register.registered} onChange={(v) => setPath(['register', 'registered'], v)} min={0} max={9999} />
         <TextField label="Deadline (ISO date)" value={cfg.register && cfg.register.deadline} onChange={(v) => setPath(['register', 'deadline'], v)} placeholder="2026-12-31T23:59:00" />
         <TextField label="Submit button label" value={cfg.register && cfg.register.submitLabel} onChange={(v) => setPath(['register', 'submitLabel'], v)} placeholder="Submit Registration" />
+      </Section>
+
+      {/* ── BROCHURE DOWNLOAD ── */}
+      <Section id="brochure" title="Brochure download" open={open} setOpen={setOpen}>
+        <CheckboxField label="Show brochure section" value={cfg.brochure && cfg.brochure.enabled} onChange={(v) => setPath(['brochure', 'enabled'], v)} />
+        <TextField label="Eyebrow (pill label)" value={cfg.brochure && cfg.brochure.eyebrow} onChange={(v) => setPath(['brochure', 'eyebrow'], v)} placeholder="Still Exploring?" />
+        <TextField label="Title" value={cfg.brochure && cfg.brochure.title} onChange={(v) => setPath(['brochure', 'title'], v)} placeholder="Download the Detailed Programme Overview." />
+        <TextArea label="Body copy" value={cfg.brochure && cfg.brochure.body} onChange={(v) => setPath(['brochure', 'body'], v)} rows={3} placeholder="If you would prefer to review the complete itinerary…" />
+        <TextField label="Divider note (red label between body & form)" value={cfg.brochure && cfg.brochure.note} onChange={(v) => setPath(['brochure', 'note'], v)} placeholder="Select your school to receive the respective version" />
+
+        {/* Brochure file — paste a hosted link OR upload a PDF/DOC.
+            When set, the success state on the published page surfaces a
+            direct Download CTA in addition to the email-it-to-you copy
+            so visitors don't have to wait for the email round-trip. */}
+        <FileField
+          label="Brochure file (PDF / DOC) — upload or paste link"
+          value={cfg.brochure && cfg.brochure.fileUrl}
+          onChange={(v) => setPath(['brochure', 'fileUrl'], v)}
+          placeholder="https://… (Drive / Dropbox / S3 link) or upload below"
+        />
+        <p style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', margin: '0.35rem 0 0.6rem' }}>
+          When set, visitors see a Download button on the post-submit success card. Leave blank to only send the brochure via email.
+        </p>
+
+        <TextField label="Submit button label" value={cfg.brochure && cfg.brochure.submitLabel} onChange={(v) => setPath(['brochure', 'submitLabel'], v)} placeholder="Download Programme Brochure →" />
+        <TextField label="Success heading (after submit)" value={cfg.brochure && cfg.brochure.successTitle} onChange={(v) => setPath(['brochure', 'successTitle'], v)} placeholder="Brochure On Its Way" />
+        <TextArea label="Success body (after submit)" value={cfg.brochure && cfg.brochure.successBody} onChange={(v) => setPath(['brochure', 'successBody'], v)} rows={2} placeholder="Thank you — we've emailed the programme brochure…" />
+        <label style={{ ...labelStyle, marginTop: '0.6rem' }}>Form fields</label>
+        <p style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', margin: '0 0 0.4rem' }}>
+          Each row becomes one input on the lead-capture form. For Select fields, separate options with commas.
+        </p>
+        <ArrayEditor
+          items={cfg.brochure && cfg.brochure.fields}
+          onChange={(next) => setPath(['brochure', 'fields'], next)}
+          itemLabel="Field"
+          newItem={() => ({ name: '', label: '', type: 'text', required: true, placeholder: '' })}
+          renderItem={(f, set) => (
+            <>
+              <TextField label="Field name (id)" value={f.name} onChange={(v) => set({ ...f, name: v })} placeholder="parent_name" />
+              <TextField label="Label (shown to visitor)" value={f.label} onChange={(v) => set({ ...f, label: v })} placeholder="Parent's Name" />
+              <div>
+                <label style={labelStyle}>Type</label>
+                <select
+                  style={inputStyle}
+                  value={f.type || 'text'}
+                  onChange={(e) => set({ ...f, type: e.target.value })}
+                >
+                  <option value="text">Text</option>
+                  <option value="email">Email</option>
+                  <option value="tel">Phone</option>
+                  <option value="number">Number</option>
+                  <option value="select">Select (dropdown)</option>
+                </select>
+              </div>
+              <TextField label="Placeholder" value={f.placeholder} onChange={(v) => set({ ...f, placeholder: v })} placeholder="Enter full name" />
+              <CheckboxField label="Required" value={f.required} onChange={(v) => set({ ...f, required: v })} />
+              {f.type === 'select' && (
+                <TextField
+                  label="Options (comma separated)"
+                  value={Array.isArray(f.options) ? f.options.join(', ') : ''}
+                  onChange={(v) => set({ ...f, options: v.split(',').map((s) => s.trim()).filter(Boolean) })}
+                  placeholder="DPS, School of India, Other"
+                />
+              )}
+            </>
+          )}
+        />
       </Section>
 
       {/* ── FAQS ── */}

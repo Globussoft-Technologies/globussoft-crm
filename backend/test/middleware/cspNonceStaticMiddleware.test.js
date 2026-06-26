@@ -133,6 +133,24 @@ describe('cspNonceStaticMiddleware — fall-through cases', () => {
     cspNonceStaticMiddleware(req, res, next);
     expect(next).toHaveBeenCalledTimes(1);
   });
+
+  test('GET /p/e2e-lp-123 → calls next() (server-rendered landing page)', () => {
+    const req = makeReq({ path: '/p/e2e-lp-123' });
+    const res = makeRes();
+    const next = vi.fn();
+    cspNonceStaticMiddleware(req, res, next);
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(res.send).not.toHaveBeenCalled();
+  });
+
+  test('GET /embed/lead-form → calls next() (dedicated embed route)', () => {
+    const req = makeReq({ path: '/embed/lead-form' });
+    const res = makeRes();
+    const next = vi.fn();
+    cspNonceStaticMiddleware(req, res, next);
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(res.send).not.toHaveBeenCalled();
+  });
 });
 
 describe('cspNonceStaticMiddleware — SPA-route handling', () => {

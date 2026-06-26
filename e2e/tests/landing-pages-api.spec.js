@@ -9,7 +9,7 @@
  *
  * Endpoints covered (10):
  *   GET    /api/landing-pages/                — list (own tenant)
- *   GET    /api/landing-pages/templates/list  — hardcoded 4-template catalog
+ *   GET    /api/landing-pages/templates/list  — hardcoded 5-template catalog
  *   GET    /api/landing-pages/:id             — read
  *   POST   /api/landing-pages/                — create (+ slug validation, dedup, template fill)
  *   PUT    /api/landing-pages/:id             — update (+ slug validation)
@@ -213,15 +213,15 @@ test.describe('Landing pages API — GET /', () => {
 // ── GET /templates/list ────────────────────────────────────────────
 
 test.describe('Landing pages API — GET /templates/list', () => {
-  test('200 returns the 4-template catalog with id/name/description/content', async ({ request }) => {
+  test('200 returns the 5-template catalog with id/name/description/content', async ({ request }) => {
     const { token } = await getGeneric(request);
     const res = await get(request, token, '/api/landing-pages/templates/list');
     expect(res.status()).toBe(200);
     const tmpls = await res.json();
     expect(Array.isArray(tmpls)).toBe(true);
-    expect(tmpls.length).toBe(4);
+    expect(tmpls.length).toBe(5);
     const ids = tmpls.map((t) => t.id).sort();
-    expect(ids).toEqual(['event_registration', 'lead_capture', 'product_showcase', 'webinar_signup']);
+    expect(ids).toEqual(['event_registration', 'lead_capture', 'product_showcase', 'travel_destination', 'webinar_signup']);
     for (const t of tmpls) {
       expect(typeof t.id).toBe('string');
       expect(typeof t.name).toBe('string');

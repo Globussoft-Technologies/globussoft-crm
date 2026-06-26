@@ -171,8 +171,19 @@ async function createDeal(request, token, overrides = {}) {
     probability: overrides.probability != null ? overrides.probability : 50,
     stage: overrides.stage || 'lead',
     // expectedClose this quarter so the engine's `closesInQuarter` window
-    // catches it for expectedRevenue / closedRevenue accumulation.
-    expectedClose: overrides.expectedClose || new Date(Date.now() + 7 * 24 * 3600 * 1000).toISOString(),
+    // catches it for expectedRevenue / closedRevenue accumulation. Use a
+    // date within the current quarter even when the run is within a few
+    // days of the quarter boundary.
+    expectedClose: overrides.expectedClose || (() => {
+      const now = new Date();
+      const candidate = new Date(Date.now() + 7 * 24 * 3600 * 1000);
+      const quarterEnd = new Date(now.getFullYear(), (Math.floor(now.getMonth() / 3) + 1) * 3, 0, 23, 59, 59);
+      if (candidate > quarterEnd) {
+        quarterEnd.setDate(quarterEnd.getDate() - 1);
+        return quarterEnd.toISOString();
+      }
+      return candidate.toISOString();
+    })(),
   };
   const res = await authPost(request, token, '/deals', payload);
   expect(res.status(), `deal create: ${await res.text()}`).toBe(201);

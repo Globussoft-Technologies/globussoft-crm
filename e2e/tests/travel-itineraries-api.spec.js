@@ -310,17 +310,20 @@ test.describe("Travel itineraries API — diagnostic-first guard (PRD §4.1)", (
     await del(request, token, `/api/contacts/${noDiagnosticContactId}`).catch(() => {});
   });
 
-  test("POST /itineraries for a contact without a diagnostic → 403 DIAGNOSTIC_REQUIRED", async ({ request }) => {
+  test("POST /itineraries for a contact without a diagnostic → 201 (guard disabled)", async ({ request }) => {
     const token = await getTravelAdmin(request);
     if (!token || !noDiagnosticContactId) test.skip(true, "deps missing");
+    // PRD §4.1 diagnostic-first guard was disabled per product owner
+    // (2026-06-25) so WhatsApp / inbound leads can receive itineraries.
     const res = await post(request, token, "/api/travel/itineraries", {
       subBrand: "rfu",
       contactId: noDiagnosticContactId,
-      destination: `${RUN_TAG} should-be-rejected`,
+      destination: `${RUN_TAG} no-diagnostic-allowed`,
     });
-    expect(res.status(), `body: ${await res.text()}`).toBe(403);
+    expect(res.status(), `body: ${await res.text()}`).toBe(201);
     const body = await res.json();
-    expect(body.code).toBe("DIAGNOSTIC_REQUIRED");
+    expect(body.id).toBeTruthy();
+    created.itineraryIds.push(body.id);
   });
 
   test("POST /itineraries for a contact WITH a diagnostic → 201 (guard passes)", async ({ request }) => {

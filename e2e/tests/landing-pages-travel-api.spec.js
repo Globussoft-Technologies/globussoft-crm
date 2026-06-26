@@ -148,7 +148,7 @@ test.describe('AI generator — POST /generate-from-destination', () => {
     expect(afterCount).toBe(beforeCount);
   });
 
-  test('autoCreate=true persists a DRAFT row with generatedByAi=true, templateType=travel_destination', async ({ request }) => {
+  test('autoCreate=true persists a DRAFT row with generatedByAi=true, templateType=wanderlux-v1 (premium default)', async ({ request }) => {
     const dest = `${RUN_TAG}-auto-${Date.now()}`;
     const res = await post(request, '/api/landing-pages/generate-from-destination', {
       destination: dest, durationDays: 7, audience: 'photographers', subBrand: 'travelstall',
@@ -159,7 +159,7 @@ test.describe('AI generator — POST /generate-from-destination', () => {
     expect(body.page).toBeTruthy();
     expect(body.page.id).toBeTruthy();
     expect(body.page.status).toBe('DRAFT');
-    expect(body.page.templateType).toBe('travel_destination');
+    expect(body.page.templateType).toBe('wanderlux-v1');
     expect(body.page.generatedByAi).toBe(true);
     expect(body.page.generatedAt).toBeTruthy();
     expect(body.page.destination).toBe(dest);
@@ -170,9 +170,11 @@ test.describe('AI generator — POST /generate-from-destination', () => {
 
   test('autoCreate=true output preserves tierPricing as a null-shell, drops reviewCarousel, nulls all image URLs', async ({ request }) => {
     const dest = `${RUN_TAG}-bans-${Date.now()}`;
+    // Explicit legacy style so the persisted payload stays the block array
+    // this spec was written against (premium/wanderlux-v1 stores a config object).
     const res = await post(request, '/api/landing-pages/generate-from-destination', {
       destination: dest, durationDays: 4, audience: 'travellers', subBrand: 'travelstall',
-      autoCreate: true,
+      autoCreate: true, style: 'legacy',
     });
     expect(res.status()).toBe(201);
     const body = await res.json();
@@ -206,9 +208,11 @@ test.describe('AI generator — POST /generate-from-destination', () => {
 
   test('autoCreate page is DRAFT and FAILS the publish gate without operator edits (missing hero image, pricing)', async ({ request }) => {
     const dest = `${RUN_TAG}-gate-${Date.now()}`;
+    // Keep legacy style so the generated page stays block-based and the
+    // travel_destination publish gate fires the expected issue codes.
     const created = await post(request, '/api/landing-pages/generate-from-destination', {
       destination: dest, durationDays: 3, audience: 'travellers', subBrand: 'travelstall',
-      autoCreate: true,
+      autoCreate: true, style: 'legacy',
     });
     const body = await created.json();
     createdIds.add(body.page.id);

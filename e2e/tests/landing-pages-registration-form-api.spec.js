@@ -25,6 +25,8 @@ test.describe.configure({ mode: 'serial' });
 const BASE_URL = process.env.BASE_URL || 'https://crm.globusdemos.com';
 const REQUEST_TIMEOUT = 60000;
 const RUN_TAG = `E2E_FLOW_LPREGFORM_${Date.now()}`;
+// Slug validator only allows lowercase letters, numbers and hyphens.
+const SLUG_TAG = RUN_TAG.toLowerCase().replace(/_/g, '-');
 
 let token = null;
 
@@ -52,7 +54,7 @@ async function createPage(request, body = {}) {
   counter += 1;
   const res = await post(request, '/api/landing-pages', {
     title: body.title || `${RUN_TAG} p-${counter}-${Date.now()}`,
-    slug: body.slug || `${RUN_TAG.toLowerCase()}-p-${counter}-${Date.now()}`,
+    slug: body.slug || `${SLUG_TAG}-p-${counter}-${Date.now()}`,
     ...body,
   });
   expect(res.status(), `createPage: ${await res.text()}`).toBe(201);

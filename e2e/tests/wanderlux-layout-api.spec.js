@@ -168,11 +168,15 @@ test.describe('wanderlux hybrid layout — render', () => {
     });
     const html = await getPreviewHtml(request, pageId);
     const heroIdx = html.indexOf('===================== HERO');
-    const headingIdx = html.indexOf(marker);
     const footerIdx = html.indexOf('===================== FOOTER');
+    // The marker text also appears inside the injected window.__PAGE_CONFIG
+    // JSON in the <head>, so locate the *rendered* heading by its closing
+    // tag rather than a raw string match.
+    const headingMatch = html.match(new RegExp(`<h2[^>]*>${marker}</h2>`));
+    expect(headingMatch, 'rendered heading should appear in body').toBeTruthy();
+    const headingIdx = headingMatch.index;
     expect(headingIdx).toBeGreaterThan(heroIdx);
     expect(footerIdx).toBeGreaterThan(headingIdx);
-    expect(html).toMatch(new RegExp(`<h2[^>]*>${marker}</h2>`));
   });
 
   test('custom Button block with javascript: URL has the URL neutralised (defence-in-depth)', async ({ request }) => {

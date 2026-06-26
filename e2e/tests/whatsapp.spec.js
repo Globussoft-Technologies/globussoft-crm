@@ -119,8 +119,7 @@ test.describe('whatsapp.js — Cloud API messaging + templates + webhook', () =>
     });
     // 200 = WhatsAppConfig active and Meta accepted
     // 400 = no active config in this tenant (CI / local default)
-    // 422 = OUTSIDE_24H_WINDOW (Wave 7D — Meta 24h re-engagement gate
-    //       blocks free-form sends to phones with no prior inbound)
+    // 422 = legacy OUTSIDE_24H_WINDOW if the gate is ever re-enabled
     // 500 = config present but Meta provider error (network / quota / etc.)
     // The test asserts the auth gate + shape passed validation, not delivery.
     expect([200, 400, 422, 500]).toContain(res.status());
@@ -169,9 +168,9 @@ test.describe('whatsapp.js — Cloud API messaging + templates + webhook', () =>
       headers: auth(),
       data: { to: '+919900112233', body: 'Hello with stray templateId', templateId: 99999 },
     });
-    // 422 added: Wave 7D 24h gate fires for free-form sends with no prior
-    // inbound (templateId ≠ templateName, so the body branch wins, then
-    // the 24h gate evaluates and rejects).
+    // 422 allowed only if the legacy 24h gate is re-enabled; otherwise
+    // free-form sends now proceed to the config check and 400 when no
+    // provider is active.
     expect([200, 400, 422, 500]).toContain(res.status());
     if (res.status() === 400) {
       const body = await res.json();
@@ -706,11 +705,10 @@ test.describe('whatsapp.js — 2-way: threads + opt-outs (Wave 2 Agent KK)', () 
 
   test('POST /whatsapp/send to non-opted-out phone is NOT rejected by opt-out gate', async ({ request }) => {
     // Use a fresh phone that's never opted out. Send may still 400 (no
-    // active config), 422 OUTSIDE_24H_WINDOW (Wave 7D 24h gate — fresh
-    // phone has no inbound history), or 500 (Meta error). We ONLY assert
-    // the rejection (if any) is NOT due to the opt-out gate
-    // (CONTACT_OPTED_OUT). 422 is allowed but its `code` must not equal
-    // CONTACT_OPTED_OUT.
+    // active config), 422 legacy OUTSIDE_24H_WINDOW if the gate is ever
+    // re-enabled, or 500 (Meta error). We ONLY assert the rejection
+    // (if any) is NOT due to the opt-out gate (CONTACT_OPTED_OUT). 422
+    // is allowed but its `code` must not equal CONTACT_OPTED_OUT.
     const fresh = `+9199${stamp}7`;
     const res = await request.post(`${API}/whatsapp/send`, {
       headers: auth(),
@@ -872,30 +870,13 @@ test.describe('whatsapp.js — 2-way: threads + opt-outs (Wave 2 Agent KK)', () 
     expect(res.status()).toBe(404);
   });
 
-  // ── Wave 7D — PRD Gap §7 item 5 — 24h re-engagement-window enforcement ──
-  // Per Meta WhatsApp Business policy, free-form (non-template) messages are
-  // only allowed within 24h of the customer's last inbound message. Outside
-  // that window the route must reject 422 OUTSIDE_24H_WINDOW; templates
-  // bypass the gate (per Meta — templates re-open the window).
+  // ── Wave 7D — 24h re-engagement-window enforcement (REMOVED) ────────────
+  // The 24h free-form message gate was removed for Travel/Wellness verticals
+  // in PR #1184. Free-form messages now proceed to the WhatsAppConfig check
+  // (and may 400 if no provider is configured). The strict 422
+  // OUTSIDE_24H_WINDOW test that lived here has been removed accordingly.
 
-  test('POST /whatsapp/send rejects free-form to a phone with NO inbound history (cold outreach) → 422 OUTSIDE_24H_WINDOW', async ({ request }) => {
-    // Phone unique to this run so no prior inbound exists. We expect 422 with
-    // the documented code BEFORE the route hits Meta — the WhatsAppConfig
-    // check happens after. Status should NOT be 400 (validation), 401 (auth),
-    // or 500 (config missing) — the 24h gate fires earliest.
-    const phone = `+91${Date.now().toString().slice(-10)}`;
-    const res = await request.post(`${API}/whatsapp/send`, {
-      headers: auth(),
-      data: { to: phone, body: 'Hi from cold outreach' },
-    });
-    expect(res.status()).toBe(422);
-    const body = await res.json();
-    expect(body.code).toBe('OUTSIDE_24H_WINDOW');
-    expect(body.error).toMatch(/24 hours|template/i);
-    expect(body.hint).toMatch(/templateName/);
-  });
-
-  test('POST /whatsapp/send with templateName bypasses 24h-window gate', async ({ request }) => {
+  test('POST /whatsapp/send with templateName is still accepted', async ({ request }) => {
     // Same cold phone — but with templateName the route must NOT reject
     // 422 OUTSIDE_24H_WINDOW. It may still 400 / 500 downstream (no template
     // by that name in DB, no active config) but the response code must NOT

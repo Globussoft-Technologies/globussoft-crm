@@ -45,6 +45,7 @@ test.describe.configure({ mode: 'serial' });
 const BASE_URL = process.env.BASE_URL || 'https://crm.globusdemos.com';
 const REQUEST_TIMEOUT = 60000;
 const RUN_TAG = `E2E_FLOW_LP_${Date.now()}`;
+const MINIMAL_CONTENT = JSON.stringify([{ type: 'heading', props: { text: 'Hello' } }]);
 
 // ── Dual-token auth ────────────────────────────────────────────────
 // admin@globussoft.com (ADMIN, generic tenant)  — drives main CRUD
@@ -426,7 +427,7 @@ test.describe('Landing pages API — DELETE /:id', () => {
 test.describe('Landing pages API — POST /:id/publish (idempotent)', () => {
   test('200 sets status=PUBLISHED + publishedAt to a recent ISO', async ({ request }) => {
     const { token } = await getGeneric(request);
-    const created = await createPage(request, 'generic', { title: `${RUN_TAG} publish-1-${Date.now()}` });
+    const created = await createPage(request, 'generic', { title: `${RUN_TAG} publish-1-${Date.now()}`, content: MINIMAL_CONTENT });
     const before = Date.now();
     const res = await post(request, token, `/api/landing-pages/${created.id}/publish`, {});
     expect(res.status()).toBe(200);
@@ -441,7 +442,7 @@ test.describe('Landing pages API — POST /:id/publish (idempotent)', () => {
 
   test('200 idempotent — publishing an already-published page still returns 200 and bumps publishedAt', async ({ request }) => {
     const { token } = await getGeneric(request);
-    const created = await createPage(request, 'generic', { title: `${RUN_TAG} publish-twice-${Date.now()}` });
+    const created = await createPage(request, 'generic', { title: `${RUN_TAG} publish-twice-${Date.now()}`, content: MINIMAL_CONTENT });
     const r1 = await post(request, token, `/api/landing-pages/${created.id}/publish`, {});
     expect(r1.status()).toBe(200);
     const ts1 = Date.parse((await r1.json()).publishedAt);
@@ -466,7 +467,7 @@ test.describe('Landing pages API — POST /:id/publish (idempotent)', () => {
 test.describe('Landing pages API — POST /:id/unpublish (idempotent)', () => {
   test('200 sets status=DRAFT after publish', async ({ request }) => {
     const { token } = await getGeneric(request);
-    const created = await createPage(request, 'generic', { title: `${RUN_TAG} unpublish-1-${Date.now()}` });
+    const created = await createPage(request, 'generic', { title: `${RUN_TAG} unpublish-1-${Date.now()}`, content: MINIMAL_CONTENT });
     const pub = await post(request, token, `/api/landing-pages/${created.id}/publish`, {});
     expect(pub.status()).toBe(200);
     const res = await post(request, token, `/api/landing-pages/${created.id}/unpublish`, {});
@@ -496,7 +497,7 @@ test.describe('Landing pages API — POST /:id/duplicate', () => {
   test('201 new id; status=DRAFT; publishedAt=null; slug suffixed -copy-...', async ({ request }) => {
     const { token } = await getGeneric(request);
     // Source = published page so we can prove duplicate inherits DRAFT defaults.
-    const source = await createPage(request, 'generic', { title: `${RUN_TAG} dup-source-${Date.now()}` });
+    const source = await createPage(request, 'generic', { title: `${RUN_TAG} dup-source-${Date.now()}`, content: MINIMAL_CONTENT });
     const pub = await post(request, token, `/api/landing-pages/${source.id}/publish`, {});
     expect(pub.status()).toBe(200);
 

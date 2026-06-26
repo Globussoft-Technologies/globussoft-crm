@@ -143,6 +143,8 @@ test.describe('registrationForm block — round-trip + render', () => {
       ]),
       status: 'PUBLISHED',
     });
+    const pub = await post(request, `/api/landing-pages/${page.id}/publish`);
+    expect(pub.status()).toBe(200);
     const r = await request.get(`${BASE_URL}/p/${page.slug}`, { timeout: REQUEST_TIMEOUT });
     expect(r.ok(), `public render: ${r.status()}`).toBe(true);
     const html = await r.text();
@@ -169,6 +171,8 @@ test.describe('registrationForm block — round-trip + render', () => {
       ]),
       status: 'PUBLISHED',
     });
+    const pub = await post(request, `/api/landing-pages/${page.id}/publish`);
+    expect(pub.status()).toBe(200);
     const r = await request.get(`${BASE_URL}/p/${page.slug}`, { timeout: REQUEST_TIMEOUT });
     const html = await r.text();
     expect(html).toContain('name="audience" value="inquiry"');
@@ -259,6 +263,8 @@ test.describe('registrationForm — preset list endpoint (read-only catalogue)',
       ]),
       status: 'PUBLISHED',
     });
+    const pub = await post(request, `/api/landing-pages/${page.id}/publish`);
+    expect(pub.status()).toBe(200);
     const r = await request.get(`${BASE_URL}/p/${page.slug}`, { timeout: REQUEST_TIMEOUT });
     const html = await r.text();
     expect(html).toContain('name="destinationCountry"');

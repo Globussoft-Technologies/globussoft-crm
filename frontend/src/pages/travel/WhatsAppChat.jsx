@@ -803,16 +803,13 @@ export default function TravelWhatsAppChat() {
           .join('\n');
         outBody = `${quote}\n${outBody}`;
       }
-      try {
-        // Travel diff: route the send through Wati (watiClient) — the
-        // Meta-track /api/whatsapp/send stays wellness/generic-only.
-        await fetchApi('/api/travel/whatsapp/send', {
-          method: 'POST',
-          body: JSON.stringify({ to: detail.thread.contactPhone, body: outBody }),
-        });
-      } catch (sendErr) {
-        throw sendErr;
-      }
+      // Travel diff: route the send through Wati (watiClient) — the
+      // Meta-track /api/whatsapp/send stays wellness/generic-only. Errors
+      // bubble to the outer catch below (CONTACT_OPTED_OUT handling).
+      await fetchApi('/api/travel/whatsapp/send', {
+        method: 'POST',
+        body: JSON.stringify({ to: detail.thread.contactPhone, body: outBody }),
+      });
       setReply('');
       setReplyToMsg(null);
       // Reload detail

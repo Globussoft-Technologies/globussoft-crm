@@ -542,14 +542,11 @@ export default function WhatsAppThreads() {
           .join('\n');
         outBody = `${quote}\n${outBody}`;
       }
-      try {
-        await fetchApi('/api/whatsapp-web/send', {
-          method: 'POST',
-          body: JSON.stringify({ to: detail.thread.contactPhone, body: outBody }),
-        });
-      } catch (sendErr) {
-        throw sendErr;
-      }
+      // Errors bubble to the outer catch below (CONTACT_OPTED_OUT handling).
+      await fetchApi('/api/whatsapp-web/send', {
+        method: 'POST',
+        body: JSON.stringify({ to: detail.thread.contactPhone, body: outBody }),
+      });
       setReply('');
       setReplyToMsg(null);
       // Reload detail

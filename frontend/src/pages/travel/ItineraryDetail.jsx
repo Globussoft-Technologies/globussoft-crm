@@ -1173,6 +1173,60 @@ function SummaryTile({ label, value }) {
   );
 }
 
+// Inline hint surfaced when the pricing engine returns a preview for the
+// Add-item form. Shows the rule-derived unit cost + markup and the season /
+// markup rule that produced them, or the degradation reason when no rule
+// matched. Returns null when there is no preview so it doesn't waste layout.
+function PricingPreviewHint({ preview }) {
+  if (!preview) return null;
+
+  const fmt = (n) => {
+    const num = Number(n);
+    return Number.isFinite(num) ? num.toLocaleString("en-IN", { maximumFractionDigits: 2 }) : "—";
+  };
+
+  if (!preview.matched) {
+    const reasonText =
+      preview.reason === "NO_CATEGORY_MAPPING"
+        ? "No cost template for this item type — enter rate manually."
+        : preview.reason === "NO_COST_ROW"
+          ? "No matching cost row — enter rate manually."
+          : preview.reason || "No pricing preview available.";
+    const warnings = Array.isArray(preview.warnings) ? preview.warnings : [];
+    return (
+      <div style={{ marginBottom: 12, padding: 10, background: "var(--warn-bg, #fff8e6)", border: "1px solid var(--warn-border, #f0d080)", borderRadius: 6, fontSize: 12, color: "var(--text-primary)" }}>
+        <div style={{ fontWeight: 600, marginBottom: 4 }}>{reasonText}</div>
+        {warnings.length > 0 && (
+          <ul style={{ margin: 0, paddingLeft: 16, color: "var(--text-secondary)" }}>
+            {warnings.map((w, i) => <li key={i}>{w}</li>)}
+          </ul>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ marginBottom: 12, padding: 10, background: "var(--info-bg, #eef6ff)", border: "1px solid var(--info-border, #bcd7f0)", borderRadius: 6, fontSize: 12, color: "var(--text-primary)" }}>
+      <div style={{ fontWeight: 600, marginBottom: 4 }}>
+        Pricing preview: {preview.currency || "INR"} {fmt(preview.unitCost)} + {fmt(preview.markup)} markup
+      </div>
+      <div style={{ color: "var(--text-secondary)", lineHeight: 1.5 }}>
+        {preview.matchedSeasonName && <span>Season: {preview.matchedSeasonName}</span>}
+        {preview.matchedSeasonName && preview.matchedMarkupRuleId && <span> · </span>}
+        {preview.matchedMarkupRuleId && <span>Markup rule #{preview.matchedMarkupRuleId}</span>}
+        {preview.seasonMultiplier != null && (
+          <span> · Season multiplier: {Number(preview.seasonMultiplier).toFixed(2)}x</span>
+        )}
+      </div>
+      {Array.isArray(preview.warnings) && preview.warnings.length > 0 && (
+        <ul style={{ margin: "6px 0 0", paddingLeft: 16, color: "var(--text-secondary)" }}>
+          {preview.warnings.map((w, i) => <li key={i}>{w}</li>)}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 function ItemFields({ values, suppliers = [], onChange }) {
   return (
     <div style={{ display: "grid", gap: 12 }}>

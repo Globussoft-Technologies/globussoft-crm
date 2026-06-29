@@ -182,6 +182,7 @@ model Tenant {
   itineraryTemplates                  ItineraryTemplate[]
   // Brochure Engine (agentic-orchcrm) — persisted deliverables per tenant.
   travelBrochures                     TravelBrochure[]
+  travelBrandProfiles                 TravelBrandProfile[]
   travelCostMasters                   TravelCostMaster[]
   // #907 slice 1 — Sightseeing master (destination → POIs). Future slices
   // wire CRUD route + admin UI page + Cost Master "6th category" surface.
@@ -6028,6 +6029,24 @@ model TravelBrochure {
   @@index([tenantId, status])
   @@index([tenantId, tripId])
   @@index([tenantId, itineraryId])
+}
+
+// Saved Brand Kit profiles for the Brochure Engine — tenant-scoped so an agency's
+// brand assets (logo, accent, contacts, socials, QR link) persist server-side and
+// are shared across the team's devices/sessions (not browser-local). `payload` is a
+// JSON snapshot of the brand-kit form; MediumText holds the logo data-URI.
+model TravelBrandProfile {
+  id        Int      @id @default(autoincrement())
+  tenantId  Int
+  userId    Int? // who created it (informational)
+  name      String   @db.VarChar(120)
+  payload   String   @db.LongText // JSON brand-kit snapshot (logos inlined as data-URIs; LongText holds up to ~25MB profiles)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, name])
 }
 
 model TravelSeasonCalendar {

@@ -1,0 +1,159 @@
+
+> globussoft-crm-backend@3.9.2 start
+> node server.js
+
+[env] AI keys: GEMINI=MISSING OPENAI=MISSING
+[Sentry] SENTRY_DSN not set — error monitoring disabled
+[metaWebhook] META_APP_SECRET unset — running in DEV mode without signature verification. This is acceptable for local/ngrok development but MUST be set before deploying to production.
+[whatsappWeb] init — socket handle attached; restoring previously-linked sessions…
+[Email] SENDGRID_API_KEY not set — emails will be logged but not delivered
+[AI] GEMINI_API_KEY not found — AI draft will use fallback templates
+[Sentiment] GEMINI_API_KEY not set — using rule-based fallback
+[Report Engine] Initialized — checking every hour for due reports.
+Sequence Execution Engine initialized (cron: * * * * *)
+[LeadScoring] Cron initialized (every 10 minutes).
+[RecurringInvoice] Cron scheduled: daily at 6 AM
+[MarketplaceEngine] Cron scheduled: every 5 minutes
+[Retention] Cron scheduled: daily at 03:00.
+Scheduled Email Engine initialized (cron: * * * * *)
+[Sentiment] Cron initialized (every 15 minutes).
+[DealInsightsEngine] Cron initialized (every 6 hours).
+[ForecastSnapshot] cron initialized
+[WorkflowEngine] Initialized — listening for CRM events via eventBus
+[CampaignEngine] Campaign scheduling cron initialized (runs every minute)
+[Backup] Cron scheduled: daily at 02:00
+[Orchestrator] cron initialized (daily 07:00 IST)
+Appointment Reminders Engine initialized (cron: */15 * * * *)
+[NoShowRisk] cron initialized (daily 08:30 IST)
+[WellnessOps] cron initialized (hourly NPS + retention)
+[TripPostTripFeedback] cron initialized (daily 06:13 IST)
+[TripPaymentReminders] cron initialized (daily 07:13 IST)
+[payment-schedule-reminder] cron initialized (daily 09:13 IST, reminders + escalation)
+[TravelDiagnosticAlerts] cron initialized (every 5 min)
+[TravelJourneyReminders] cron initialized (every 30 min)
+[TripCountdown] cron scheduled (hourly :17)
+[PaymentDeadline] cron scheduled (hourly :37)
+[WebCheckinEmail] cron scheduled (hourly :47)
+[TravelReview] cron scheduled (daily 09:07)
+[VisaRiskFlag] cron initialized (every 6 hours)
+✓ Cron engine: visaRiskFlagEngine (every 6 hours)
+[WebCheckinScheduler] cron initialized (every 15 min, off-minute jitter)
+[ContactGreetings] cron initialized (daily 08:13 IST)
+[ReligiousGuidance] cron initialized (daily 09:13 IST)
+[quoteExpirySweep] cron initialized (daily 09:00 IST)
+[fxRateEngine] cron initialized (hourly, top-of-the-hour UTC)
+[gstr-filing-reminder] cron initialized (daily 05:00 UTC / 10:30 IST)
+[LowStock] cron initialized (daily 09:00 IST)
+[autoConsumption] listener registered for visit.completed
+SLA Breach Engine initialized (cron: */5 * * * *)
+[whatsappOutboundEngine] initialized (cron: */30 * * * * *)
+[whatsappMediaEngine] initialized (cron: */60 * * * * *)
+[whatsappTokenRefreshEngine] initialized (cron: 30 4 * * *)
+[whatsappTemplateSyncEngine] initialized (cron: 30 3 * * *)
+[demoHygiene] Cron scheduled: hourly at :17
+Lead SLA Breach Engine initialized (cron: */2 * * * *)
+[AuditIntegrity] Cron scheduled: daily at 04:00.
+[posReceiptDispatcher] subscribed to sale.completed
+[LeavePolicy] cron scheduled: 02:30 IST daily
+[walletExpiry] cron initialized (daily 03:30 IST)
+[Backend] Enterprise Express Server running securely on port 5000
+[LeadScoring] Scored 0 contacts across 3 tenants.
+[rbac-boot] RBAC state already compatible — no changes.
+[Sentiment] processed 0 messages
+[LeadSLABreach] tenants=3 checked=0 breached=0 (23ms)
+[MarketplaceEngine] Running sync cycle...
+[SLABreach] tenants=3 checked=0 breached=0 (39ms)
+[LeadSLABreach] tenants=3 checked=0 breached=0 (19ms)
+[LeadSLABreach] tenants=3 checked=0 breached=0 (12ms)
+[LeadScoring] Cron tick — rescoring all contacts...
+[MarketplaceEngine] Running sync cycle...
+[LeadScoring] Scored 0 contacts across 3 tenants.
+[SLABreach] tenants=3 checked=0 breached=0 (21ms)
+[LeadSLABreach] tenants=3 checked=0 breached=0 (23ms)
+[LeadSLABreach] tenants=3 checked=0 breached=0 (16ms)
+[LeadSLABreach] tenants=3 checked=0 breached=0 (15ms)
+[MarketplaceEngine] Running sync cycle...
+[Sentiment] processed 0 messages
+[SLABreach] tenants=3 checked=0 breached=0 (17ms)
+[AppointmentReminders] tenants=1 queued24=0 queued1=0 skipped=0 (34ms)
+[LeadSLABreach] tenants=3 checked=0 breached=0 (10ms)
+[LeadSLABreach] tenants=3 checked=0 breached=0 (10ms)
+[MarketplaceEngine] Running sync cycle...
+[LeadScoring] Cron tick — rescoring all contacts...
+[LeadScoring] Scored 0 contacts across 3 tenants.
+[SLABreach] tenants=3 checked=0 breached=0 (26ms)
+[LeadSLABreach] tenants=3 checked=0 breached=0 (23ms)
+[LeadSLABreach] tenants=3 checked=0 breached=0 (10ms)
+[LeadSLABreach] tenants=3 checked=0 breached=0 (7ms)
+[MarketplaceEngine] Running sync cycle...
+[SLABreach] tenants=3 checked=0 breached=0 (17ms)
+[LeadSLABreach] tenants=3 checked=0 breached=0 (9ms)
+[LeadSLABreach] tenants=3 checked=0 breached=0 (9ms)
+[LeadScoring] Cron tick — rescoring all contacts...
+[MarketplaceEngine] Running sync cycle...
+[Report Engine] Checking for due scheduled reports...
+[Sentiment] processed 0 messages
+[LeadSLABreach] tenants=3 checked=0 breached=0 (37ms)
+[LeadScoring] Scored 0 contacts across 3 tenants.
+[AppointmentReminders] tenants=1 queued24=0 queued1=0 skipped=0 (15ms)
+[SLABreach] tenants=3 checked=0 breached=0 (47ms)
+[fxRateEngine] {
+  fetched: 6,
+  errors: [
+    {
+      base: 'INR',
+      quote: 'AED',
+      stage: 'fetch',
+      message: 'no rate returned'
+    },
+    {
+      base: 'INR',
+      quote: 'SAR',
+      stage: 'fetch',
+      message: 'no rate returned'
+    }
+  ]
+}
+[LeadSLABreach] tenants=3 checked=0 breached=0 (10ms)
+[LeadSLABreach] tenants=3 checked=0 breached=0 (20ms)
+[MarketplaceEngine] Running sync cycle...
+[SLABreach] tenants=3 checked=0 breached=0 (18ms)
+[LeadSLABreach] tenants=3 checked=0 breached=0 (19ms)
+[LeadSLABreach] tenants=3 checked=0 breached=0 (10ms)
+[LeadScoring] Cron tick — rescoring all contacts...
+[MarketplaceEngine] Running sync cycle...
+[LeadSLABreach] tenants=3 checked=0 breached=0 (19ms)
+[LeadScoring] Scored 0 contacts across 3 tenants.
+[SLABreach] tenants=3 checked=0 breached=0 (23ms)
+[LeadSLABreach] tenants=3 checked=0 breached=0 (10ms)
+[LeadSLABreach] tenants=3 checked=0 breached=0 (10ms)
+[MarketplaceEngine] Running sync cycle...
+[Sentiment] processed 0 messages
+[AppointmentReminders] tenants=1 queued24=0 queued1=0 skipped=0 (15ms)
+[SLABreach] tenants=3 checked=0 breached=0 (13ms)
+[LeadSLABreach] tenants=3 checked=0 breached=0 (18ms)
+[WellnessOps] tenant enhanced-wellness: 35 NPS sent, 0 junk leads purged, 0 patients anonymized, 0 consents deleted, 0 call logs deleted, 0 memberships flagged expiring
+[LeadSLABreach] tenants=3 checked=0 breached=0 (12ms)
+[LeadScoring] Cron tick — rescoring all contacts...
+[MarketplaceEngine] Running sync cycle...
+[LeadScoring] Scored 0 contacts across 3 tenants.
+[SLABreach] tenants=3 checked=0 breached=0 (19ms)
+[LeadSLABreach] tenants=3 checked=0 breached=0 (18ms)
+[LeadSLABreach] tenants=3 checked=0 breached=0 (12ms)
+[LeadSLABreach] tenants=3 checked=0 breached=0 (7ms)
+[MarketplaceEngine] Running sync cycle...
+[SLABreach] tenants=3 checked=0 breached=0 (17ms)
+[LeadSLABreach] tenants=3 checked=0 breached=0 (12ms)
+[LeadSLABreach] tenants=3 checked=0 breached=0 (16ms)
+[LeadScoring] Cron tick — rescoring all contacts...
+[MarketplaceEngine] Running sync cycle...
+[Sentiment] processed 0 messages
+[LeadSLABreach] tenants=3 checked=0 breached=0 (20ms)
+[AppointmentReminders] tenants=1 queued24=0 queued1=0 skipped=0 (14ms)
+[LeadScoring] Scored 0 contacts across 3 tenants.
+[SLABreach] tenants=3 checked=0 breached=0 (27ms)
+[LeadSLABreach] tenants=3 checked=0 breached=0 (17ms)
+[LeadSLABreach] tenants=3 checked=0 breached=0 (10ms)
+[MarketplaceEngine] Running sync cycle...
+[SLABreach] tenants=3 checked=0 breached=0 (12ms)
+[LeadSLABreach] tenants=3 checked=0 breached=0 (11ms)

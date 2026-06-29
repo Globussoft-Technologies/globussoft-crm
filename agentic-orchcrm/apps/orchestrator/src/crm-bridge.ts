@@ -139,7 +139,11 @@ function strategyAssignment(models: ModelView[], strategy: Strategy): Record<Cap
   )[0]!;
   if (strategy === 'cheapest') return { reasoning: cheapest.id, balanced: cheapest.id, fast: cheapest.id, writing: cheapest.id };
   if (strategy === 'smartest') return { reasoning: smartest.id, balanced: smartest.id, fast: smartest.id, writing: smartest.id };
-  return { reasoning: balanced.id, balanced: balanced.id, fast: cheapest.id, writing: balanced.id };
+  // recommended — pin the reasoning tier (Studio Director CEO + Brochure Composer share
+  // it) to GPT-5.4 mini for sharper, more consistent composition; fall back to the
+  // computed `balanced` pick if that model isn't reachable with the configured keys.
+  const reasoningPick = avail.find((m) => m.id === 'gpt-5.4-mini')?.id ?? balanced.id;
+  return { reasoning: reasoningPick, balanced: balanced.id, fast: cheapest.id, writing: balanced.id };
 }
 
 interface Brief {
@@ -183,7 +187,16 @@ async function main(): Promise<void> {
   if (process.env.BROCHURE_MODE === 'catalog') {
     const config = loadConfig();
     return finish(
-      { ok: true, tiers: TIERS, strategies: STRATEGIES, defaults: config.models, models: catalogView(config) },
+      {
+        ok: true,
+        tiers: TIERS,
+        strategies: STRATEGIES,
+        defaults: config.models,
+        // Billing markup so the CRM's pre-run estimate can show the BILLED amount
+        // (raw provider cost × markup), matching what the tenant is actually charged.
+        markup: config.billing.markup,
+        models: catalogView(config),
+      },
       0,
     );
   }

@@ -5,6 +5,7 @@
  */
 // globals: true in vitest.config.js — describe/it/expect are ambient.
 const { sanitizeBrandKit } = require('../../lib/brochureBrandKit');
+const s3Service = require('../../services/s3Service');
 
 // A real, tiny 1x1 PNG (valid signature + IHDR/IDAT/IEND) so the magic-byte
 // sniff passes and the logo is re-emitted as a clean data: URI.
@@ -36,6 +37,30 @@ describe('brochureBrandKit.sanitizeBrandKit', () => {
   it('drops an external-URL logo (SSRF / non-determinism)', () => {
     const kit = sanitizeBrandKit({ logoUrl: 'https://evil.example.com/logo.png', name: 'Acme' });
     expect(kit.logoUrl).toBeUndefined();
+  });
+
+  it('accepts an S3 URL from the configured bucket as a logo', () => {
+    const originalBase = s3Service.S3_BASE_URL;
+    s3Service.S3_BASE_URL = 'https://bucket.example.com';
+    try {
+      const url = 'https://bucket.example.com/brand-kits/1/1700000000000-logo.png';
+      const kit = sanitizeBrandKit({ logoUrl: url, name: 'Acme' });
+      expect(kit.logoUrl).toBe(url);
+      expect(kit.name).toBe('Acme');
+    } finally {
+      s3Service.S3_BASE_URL = originalBase;
+    }
+  });
+
+  it('drops S3 URLs that do not belong to the configured bucket', () => {
+    const originalBase = s3Service.S3_BASE_URL;
+    s3Service.S3_BASE_URL = 'https://bucket.example.com';
+    try {
+      const kit = sanitizeBrandKit({ logoUrl: 'https://other-bucket.example.com/brand-kits/1/logo.png', name: 'Acme' });
+      expect(kit.logoUrl).toBeUndefined();
+    } finally {
+      s3Service.S3_BASE_URL = originalBase;
+    }
   });
 
   it('drops an oversized logo (> 120KB)', () => {

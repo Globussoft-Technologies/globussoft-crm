@@ -28,8 +28,9 @@
 'use strict';
 
 const zlib = require('node:zlib');
+const s3Service = require('../services/s3Service');
 
-const MAX_LOGO_BYTES = 120 * 1024; // 120KB inlined cap (keeps the PDF lean)
+const MAX_LOGO_BYTES = 10 * 1024 * 1024; // 10MB inlined cap (large logos bloat the PDF — keep reasonable)
 const NAME_MAX = 80;
 const TAGLINE_MAX = 140;
 const CONTACT_MAX = 120;
@@ -180,10 +181,34 @@ function analyzeLogoTreatment(bytes, mime) {
   }
 }
 
-/** Validate + normalise an uploaded logo data: URI. Empty url when invalid. */
+function isOwnS3ImageUrl(input) {
+  // Only accept URLs inside this app's brand-kits prefix. The upload endpoint
+  // already validated MIME type / magic bytes, so the key prefix is enough.
+  return (
+    s3Service.S3_BASE_URL &&
+    typeof input === 'string' &&
+    input.startsWith(s3Service.S3_BASE_URL) &&
+    /\/brand-kits\//i.test(input)
+  );
+}
+
+/** Validate + normalise an uploaded logo. Accepts legacy base64 data: URIs and
+ *  S3 URLs that belong to this app's bucket (uploaded via the brand-image endpoint).
+ *  Empty url when invalid. For S3-hosted logos we cannot decode the bytes here
+ *  without a network round-trip, so treatment is left null → the engine falls
+ *  back to its safe plate default (the placer's explicit backing toggle still wins).
+ */
 function sanitizeLogo(input) {
   if (typeof input !== 'string') return { url: '', treatment: null };
-  const m = /^data:[^;,]*;base64,([A-Za-z0-9+/=\s]+)$/.exec(input.trim());
+  const trimmed = input.trim();
+
+  // S3-hosted image uploaded by this tenant. We trust our own bucket and only
+  // validate the URL shape; SSRF is avoided because the bucket/domain is fixed.
+  if (isOwnS3ImageUrl(trimmed)) {
+    return { url: trimmed, treatment: null };
+  }
+
+  const m = /^data:[^;,]*;base64,([A-Za-z0-9+/=\s]+)$/.exec(trimmed);
   if (!m) return { url: '', treatment: null };
   const b64 = m[1].replace(/\s/g, '');
   let bytes;
@@ -208,6 +233,16 @@ function sanitizeHex(v) {
   if (typeof v !== 'string') return undefined;
   const t = v.trim();
   return /^#[0-9a-fA-F]{3,8}$/.test(t) ? t : undefined;
+}
+
+/** Validate a user-supplied URL for the QR code: http(s) only, length-capped, no
+ *  javascript:/data:/mailto: schemes (the QR is scanned and OPENED). Drop → undefined. */
+function sanitizeUrl(v) {
+  if (typeof v !== 'string') return undefined;
+  const t = v.trim();
+  if (!t || t.length > 500) return undefined;
+  if (!/^https?:\/\/[^\s]+\.[^\s]+$/i.test(t)) return undefined;
+  return t;
 }
 
 /** Coerce to a finite number clamped to [lo,hi]; non-numbers fall back to `dflt`. */
@@ -283,6 +318,9 @@ function sanitizeBrandKit(raw) {
   const backing = custom && r.custom && typeof r.custom === 'object' ? sanitizeBacking(r.custom.backing) : undefined;
   const name = capStr(r.name, NAME_MAX);
   const tagline = capStr(r.tagline, TAGLINE_MAX);
+  // Optional QR link (client-pasted) — drives the brochure QR code with priority over
+  // the composer's own qrData. http(s) only, validated.
+  const qrData = sanitizeUrl(r.qrUrl != null ? r.qrUrl : r.qrData);
 
   const contactRaw = Array.isArray(r.contact) ? r.contact : [];
   const contact = contactRaw
@@ -317,15 +355,66 @@ function sanitizeBrandKit(raw) {
     else if (backing === 'plate') onDark = true;
   }
 
+  // ADDITIONAL cover logos (beyond the primary logo) — each validated as a raster
+  // data-URI with a server-CLAMPED free cover placement. Cover-only; capped to 8.
+  const coverLogosRaw = Array.isArray(r.coverLogos) ? r.coverLogos : [];
+  const coverLogos = coverLogosRaw
+    .map((l) => {
+      if (!l || typeof l !== 'object') return null;
+      const lg = sanitizeLogo(l.url != null ? l.url : l.logoUrl);
+      if (!lg.url) return null;
+      const entry = {
+        url: lg.url,
+        x: clampNum(l.x, 0, 1, 0.5),
+        y: clampNum(l.y, 0, 1, 0.32),
+        scale: clampNum(l.scale, COVER_SCALE.lo, COVER_SCALE.hi, COVER_SCALE.dflt),
+      };
+      if (lg.treatment === 'bare') entry.onDark = false;
+      else if (lg.treatment === 'plate') entry.onDark = true;
+      return entry;
+    })
+    .filter(Boolean)
+    .slice(0, 8);
+
+  // Interior logo BAND — a row of logos (from the kit) on pages after the cover. Each
+  // item validated as a raster data-URI with a clamped horizontal position; the band
+  // position is a fixed enum and the shared size is clamped. Cover/interior independent.
+  let interiorLogos;
+  const ilRaw = r.interiorLogos && typeof r.interiorLogos === 'object' ? r.interiorLogos : null;
+  if (ilRaw && Array.isArray(ilRaw.items)) {
+    const items = ilRaw.items
+      .map((it) => {
+        if (!it || typeof it !== 'object') return null;
+        const lg = sanitizeLogo(it.url != null ? it.url : it.logoUrl);
+        if (!lg.url) return null;
+        const entry = { url: lg.url, x: clampNum(it.x, 0, 1, 0.5) };
+        if (lg.treatment === 'bare') entry.onDark = false;
+        else if (lg.treatment === 'plate') entry.onDark = true;
+        return entry;
+      })
+      .filter(Boolean)
+      .slice(0, 8);
+    if (items.length) {
+      interiorLogos = {
+        band: ilRaw.band === 'bottom' ? 'bottom' : 'header',
+        scale: clampNum(ilRaw.scale, INNER_SCALE.lo, INNER_SCALE.hi, INNER_SCALE.dflt),
+        items,
+      };
+    }
+  }
+
   const kit = {
     ...(logoUrl ? { logoUrl } : {}),
     ...(name ? { name } : {}),
     ...(tagline ? { tagline } : {}),
     ...(contact.length ? { contact } : {}),
     ...(socials.length ? { socials } : {}),
+    ...(qrData ? { qrData } : {}),
     ...(colors ? { colors } : {}),
     ...(typeof onDark === 'boolean' ? { onDark } : {}),
     ...(custom ? { custom } : {}),
+    ...(coverLogos.length ? { coverLogos } : {}),
+    ...(interiorLogos ? { interiorLogos } : {}),
   };
   // Nothing usable → undefined so the engine path is identical to "no brand".
   return Object.keys(kit).length ? kit : undefined;

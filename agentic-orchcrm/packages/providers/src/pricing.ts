@@ -54,9 +54,11 @@ const PRICES: Record<string, Price> = {
   // Groq ($0 on the free plan; estimates apply only on the paid Developer plan)
   'llama-3.3-70b-versatile': { input: 0.59, output: 0.79 },
   'llama-3.1-8b-instant': { input: 0.05, output: 0.08 },
-  // Groq-hosted OpenAI open models + Qwen (estimates; confirm at groq.com/pricing)
+  // Groq-hosted OpenAI open models + Qwen (confirm at groq.com/pricing).
+  // gpt-oss-120b verified 2026-06-26 at groq.com/pricing ($0.15 in / $0.60 out — Groq
+  // lowered the output rate from $0.75). Cached input (≈$0.075) isn't tracked here.
   'openai/gpt-oss-20b': { input: 0.1, output: 0.5 },
-  'openai/gpt-oss-120b': { input: 0.15, output: 0.75 },
+  'openai/gpt-oss-120b': { input: 0.15, output: 0.6 },
   'qwen/qwen3.6-27b': { input: 0.2, output: 0.8 },
   'qwen/qwen3-32b': { input: 0.29, output: 0.59 },
   // xAI / Grok (estimates — confirm at console.x.ai; ids are stable aliases)
@@ -73,9 +75,17 @@ const PRICES: Record<string, Price> = {
   'deepseek-reasoner': { input: 0.14, output: 0.28 },
 };
 
-/** The input/output price ($/1M tokens) for a model — DEFAULT_PRICE if unknown. */
+/** The input/output price ($/1M tokens) for a model — DEFAULT_PRICE if unknown.
+ *  Providers return DATED snapshot ids (e.g. OpenAI's "gpt-5.4-mini-2026-03-17"); a
+ *  trailing -YYYY-MM-DD (or -YYYYMMDD) date is stripped so the dated id maps to its
+ *  base catalog entry instead of silently mis-billing against DEFAULT_PRICE. This is
+ *  the SINGLE source for both the displayed catalog price AND the billed cost, so they
+ *  can never diverge for the same model. */
 export function priceOf(model: string): Price {
-  return PRICES[model] ?? DEFAULT_PRICE;
+  if (PRICES[model]) return PRICES[model];
+  const base = model.replace(/-\d{4}-\d{2}-\d{2}$/, '').replace(/-\d{8}$/, '');
+  if (base !== model && PRICES[base]) return PRICES[base]!;
+  return DEFAULT_PRICE;
 }
 
 /** Raw provider cost in USD for a single call. */
@@ -84,7 +94,7 @@ export function computeCost(
   inputTokens: number,
   outputTokens: number,
 ): number {
-  const price = PRICES[model] ?? DEFAULT_PRICE;
+  const price = priceOf(model); // normalize dated ids → correct base price (matches the catalog)
   return (
     (inputTokens / 1_000_000) * price.input +
     (outputTokens / 1_000_000) * price.output

@@ -541,6 +541,81 @@ function isDirectiveHeading(h: string): boolean {
 }
 
 /**
+ * A section that is INTERNAL SCAFFOLDING, not brochure content — the orchestrator
+ * threads the specialists' research notes, the copywriter's draft, and the raw user
+ * brief into the composer's task as "SOURCE MATERIAL" to SYNTHESIZE; a literal model
+ * sometimes dumps that scaffolding straight back as `sections[]` (headings like
+ * "Research Notes", "Copywriter Copy", "Raw User Details Verbatim", kicker "SOURCE
+ * CONTENT"). That must NEVER reach the PDF. Deterministic backstop at the parse choke
+ * point so it's caught regardless of model or template family — the prompt hardening
+ * lowers the rate, this guarantees the floor.
+ */
+const SCAFFOLD_RE =
+  /\b(source (content|material|notes?)|research notes?|copywriter('?s)? (copy|notes?|draft)|raw (user )?details?|raw brief|brief verbatim|agent (notes?|output|logs?)|specialist (notes?|output)|working notes?|internal notes?|photo[- ]?(search(es)?|guide|quer(y|ies)|prompts?)|image[- ]?search(es)?|search quer(y|ies)|render[- ]?engine|engine prompts?|suggested (image|photo)s?)\b/i;
+function isScaffoldSection(s: any): boolean {
+  const h = String(s?.heading || '').trim();
+  const k = String(s?.kicker || '').trim();
+  return SCAFFOLD_RE.test(h) || SCAFFOLD_RE.test(k) || /\bverbatim\b/i.test(h);
+}
+
+/**
+ * Footer contact lines. The Brand Kit is the AUTHORITATIVE source of agency identity:
+ * when it supplies contacts, use ONLY those — the composer's contact lines are either
+ * redundant (the brief repeated them) or, when the brief omits contacts, FABRICATED
+ * (the model invents an agency name + website and drops them in as contact lines). So
+ * brand contacts WIN exclusively; the composer's are used only when the kit has none.
+ */
+function footerContactLines(c: BrochureContent): string[] {
+  const norm = (s: string) => s.trim().toLowerCase().replace(/\s+/g, ' ');
+  const src = c.__brand?.contact?.length ? c.__brand.contact : (c.footer?.contactLines ?? []);
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const l of src) {
+    const v = String(l ?? '').trim();
+    if (!v || seen.has(norm(v))) continue;
+    seen.add(norm(v));
+    out.push(v);
+  }
+  return out.slice(0, 4);
+}
+
+/** Footer social slugs — Brand-Kit socials win exclusively when set (same reasoning). */
+function footerSocials(c: BrochureContent): string[] {
+  const src = c.__brand?.socials?.length ? c.__brand.socials : (c.footer?.social ?? []);
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const s of src) {
+    const v = String(s ?? '').trim().toLowerCase();
+    if (!v || seen.has(v)) continue;
+    seen.add(v);
+    out.push(v);
+  }
+  return out.slice(0, 6);
+}
+
+/**
+ * The Brand Kit owns the agency identity. When the kit supplies a name / logo /
+ * contacts, suppress the composer's agency fields — otherwise a brief that omits
+ * AGENCY makes the model HALLUCINATE one (a fake agency name + "X presents" line +
+ * a made-up website) that then clashes with the real brand on the cover/footer. The
+ * brand's name (or logo) already renders as the cover brandmark, so we just clear the
+ * composer's invented agencyName / agencyLine and strip any "presents"/URL pre-title.
+ */
+function applyBrandIdentity(c: BrochureContent): void {
+  const b = c.__brand;
+  const hasIdentity = !!(b && (b.name?.trim() || b.logoUrl || b.contact?.length));
+  if (!hasIdentity) return;
+  const o = c as any;
+  o.agencyName = '';
+  o.agencyLine = '';
+  const fabricated = /\bpresents\b|https?:\/\/|www\.|\.(com|in|org|net)\b/i;
+  if (c.preTitle && fabricated.test(c.preTitle)) o.preTitle = '';
+  if (c.badge && fabricated.test(c.badge)) o.badge = '';
+  if (c.topLeft && fabricated.test(c.topLeft)) o.topLeft = '';
+  if (c.topRight && fabricated.test(c.topRight)) o.topRight = '';
+}
+
+/**
  * Map a parsed object into BrochureContent, salvaging common LLM deviations:
  * unwrap a single container key (e.g. {brochure:{…}}), and pull the accent from
  * alternative key names. Defensive only — the composer prompt is the real cure.
@@ -570,9 +645,18 @@ function coerceContent(raw: Record<string, unknown>): BrochureContent {
   anyO.palette = palette;
   if (typeof anyO.title !== 'string' || !anyO.title.trim()) anyO.title = 'Your Journey';
   // Drop sections that merely echo a rendering DIRECTIVE (the engine draws the map
-  // and places the logo itself; the design-style line is guidance, not content).
+  // and places the logo itself; the design-style line is guidance, not content), AND
+  // sections that are internal SCAFFOLDING the model dumped instead of synthesizing
+  // (research notes / copywriter copy / raw user details). Neither is brochure content.
   if (Array.isArray(anyO.sections)) {
-    anyO.sections = anyO.sections.filter((s: any) => !isDirectiveHeading(s?.heading));
+    anyO.sections = anyO.sections.filter((s: any) => !isDirectiveHeading(s?.heading) && !isScaffoldSection(s));
+  }
+  // Drop a CTA sub-line that merely repeats the CTA — a common composer slip that
+  // printed the same line twice on the closing page (e.g. "LIMITED SEATS — BOOK BY …").
+  if (anyO.footer && typeof anyO.footer === 'object') {
+    const f = anyO.footer as Record<string, unknown>;
+    const norm = (s: unknown) => String(s ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
+    if (f.ctaSub && f.cta && norm(f.ctaSub) === norm(f.cta)) delete f.ctaSub;
   }
   return o as unknown as BrochureContent;
 }
@@ -585,6 +669,63 @@ function coerceContent(raw: Record<string, unknown>): BrochureContent {
  * remaining block into a prose section so NOTHING the user wrote is lost. The text
  * is escaped downstream like any other content.
  */
+/** Parse a DAY BY DAY block into structured days. Handles both inline
+ *  ("Day 1 — …: … Day 2 — …: …") and newline-separated styles; strips the
+ *  "Day N —" prefix (the engine numbers days itself) so the title is the place. */
+function fbParseDays(body: string): { title: string; text: string }[] {
+  const txt = cleanBrief(body).replace(/\n+/g, ' ').trim();
+  const parts = txt.split(/(?=\bDay\s+\d+\b\s*[—–:-])/i).map((s) => s.trim()).filter(Boolean);
+  const days: { title: string; text: string }[] = [];
+  for (const p of parts) {
+    const m = p.match(/^Day\s+\d+\s*[—–-]?\s*([^:]*?):\s*(.+)$/i);
+    if (m) {
+      days.push({ title: (m[1] || '').trim() || `Day ${days.length + 1}`, text: (m[2] || '').trim() });
+    } else {
+      const t = p.replace(/^Day\s+\d+\s*[—–-]?\s*/i, '').trim();
+      if (t) days.push({ title: t.slice(0, 80), text: '' });
+    }
+  }
+  return days.slice(0, 40);
+}
+
+/** Split a block into "Capitalised Label: value" pairs (inline OR multiline) — used
+ *  for INCLUSIONS (→ a spec grid) and the labelled rows of PRICING. */
+function fbParseKV(body: string): { k: string; v: string }[] {
+  const txt = cleanBrief(body).replace(/\n+/g, ' ').trim();
+  const parts = txt.split(/(?=[A-Z][A-Za-z'&./ ]{1,28}:\s)/).map((s) => s.trim()).filter(Boolean);
+  const kv: { k: string; v: string }[] = [];
+  for (const p of parts) {
+    const m = p.match(/^([A-Z][A-Za-z'&./ ]{1,28}):\s*(.+)$/);
+    if (m) kv.push({ k: m[1]!.trim(), v: m[2]!.trim().slice(0, 200) });
+  }
+  return kv.slice(0, 12);
+}
+
+/** PRICING → rows: any leading bare amount becomes an emphasised headline row, then
+ *  the "Label: amount" pairs (Single Supplement, Deposit, …). */
+function fbParsePriceRows(body: string): { label: string; value: string; emphasize?: boolean }[] {
+  const txt = cleanBrief(body).replace(/\n+/g, ' ').trim();
+  const parts = txt.split(/(?=[A-Z][A-Za-z'&./ ]{1,28}:\s)/).map((s) => s.trim()).filter(Boolean);
+  const rows: { label: string; value: string; emphasize?: boolean }[] = [];
+  let headline = '';
+  for (const p of parts) {
+    const m = p.match(/^([A-Z][A-Za-z'&./ ]{1,28}):\s*(.+)$/);
+    if (m) rows.push({ label: m[1]!.trim(), value: m[2]!.trim().slice(0, 80) });
+    else headline = (headline ? headline + ' ' : '') + p;
+  }
+  if (headline.trim()) rows.unshift({ label: 'Price', value: headline.trim().slice(0, 90), emphasize: true });
+  return rows.slice(0, 6);
+}
+
+/** "Tokyo → Hakone → Kyoto → Nara → Osaka" → ["Tokyo","Hakone",…] for the map. */
+function fbRouteCities(routeLine: string): string[] {
+  return routeLine
+    .split(/→|->|—|–|>|,/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .slice(0, 12);
+}
+
 export function buildFallbackBrochureContent(goal: string): BrochureContent {
   const blocks = splitBriefBlocks(goal || '');
   const find = (...names: string[]): string => {
@@ -595,19 +736,66 @@ export function buildFallbackBrochureContent(goal: string): BrochureContent {
   const firstLine = (s: string): string => cleanBrief((s.split('\n').find((l) => l.trim()) ?? '').trim());
 
   const agency = firstLine(find('agency')).split(/[—–-]/)[0]!.trim();
-  const title = firstLine(find('trip')) || firstLine(find('about the experience')) || 'Your Journey';
+  const tripLine = firstLine(find('trip'));
+  let title = tripLine || firstLine(find('about the experience')) || 'Your Journey';
+  // Split "Spirit of Japan — 8 Days · 5 Cities · Luxury" into title + subtitle.
+  let subtitle = '';
+  const dash = title.search(/\s[—–-]\s/);
+  if (tripLine && dash > 0) {
+    subtitle = title.slice(dash).replace(/^\s*[—–-]\s*/, '').trim();
+    title = title.slice(0, dash).trim();
+  }
   const tagline = firstLine(find('tagline'));
   const category = firstLine(find('category'));
   const duration = firstLine(find('duration'));
-  const routeLine = cleanBrief(find('route')).replace(/\n/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!subtitle) subtitle = [duration, category].filter(Boolean).join(' · ');
+  // ROUTE often carries a lowercase parenthetical ("ROUTE (in travel order):") that
+  // the ALL-CAPS block splitter doesn't treat as a heading, so fall back to a direct
+  // scan of the goal text for the route line.
+  let routeBody = find('route');
+  if (!routeBody) {
+    const rm = (goal || '').match(/ROUTE[^:\n]*:\s*([^\n]+)/i);
+    if (rm) routeBody = rm[1]!;
+  }
+  const routeLine = cleanBrief(routeBody).replace(/\n/g, ' ').replace(/\s+/g, ' ').trim();
   const aboutBody = cleanBrief(find('about the experience')).slice(0, 1100);
 
-  // Headings folded into cover/intro/route — everything ELSE becomes a section so
-  // the full brief survives this fallback path.
+  // STRUCTURED extraction — the whole point of this upgrade: a composer failure must
+  // still yield a real brochure (timeline, map, inclusions grid, pricing, footer),
+  // not a wall of generic "Details" prose bands.
+  const days = fbParseDays(find('day by day', 'day-by-day', 'itinerary'));
+  const cities = routeLine ? fbRouteCities(routeLine) : [];
+  const inclusions = fbParseKV(find('inclusions', 'inclusion'));
+  const priceRows = fbParsePriceRows(find('pricing', 'price'));
+  const heroQuery = cities[0] ? `${cities[0]} travel cityscape` : `${title} travel`;
+
+  // Footer from CONTACT / CALL TO ACTION / SOCIAL — so the closing page is present.
+  const footer: Record<string, unknown> = {};
+  const contactBody = find('contact');
+  if (contactBody) {
+    const lines = cleanBrief(contactBody).split(/\n|·|\||;/).map((l) => l.trim()).filter(Boolean).slice(0, 4);
+    if (lines.length) footer.contactLines = lines;
+  }
+  const cta = firstLine(find('call to action', 'cta'));
+  if (cta) footer.cta = cta.slice(0, 120);
+  const socialBody = find('social');
+  if (socialBody) {
+    const slugs = cleanBrief(socialBody)
+      .split(/[,\n]/)
+      .map((s) => s.trim().toLowerCase().replace(/[^a-z0-9]/g, ''))
+      .filter(Boolean)
+      .slice(0, 6);
+    if (slugs.length) footer.social = slugs;
+  }
+  const footerObj = footer.cta || footer.contactLines || footer.social ? footer : null;
+
+  // Headings folded into structured fields above — everything ELSE (additional
+  // services, dates/season, important info, etc.) becomes a section so NOTHING the
+  // user wrote is lost.
   const consumed =
-    /(create a premium|agency|^contact$|website|address|social|^trip$|category|target|tagline|group size|duration|accent|^route$|about the experience|design style|logo placement|^map$|overview)/i;
+    /(create a premium|agency|^contact|website|address|social|^trip|category|target|tagline|group size|duration|accent|^route|about the experience|design style|logo placement|^map$|overview|day ?by ?day|inclusions?|pricing|^price|call ?to ?action|cta)/i;
   const sections = blocks
-    .filter((b) => b.body && !consumed.test(b.heading.trim()) && !isDirectiveHeading(b.heading))
+    .filter((b) => b.body && !consumed.test(b.heading.trim()) && !isDirectiveHeading(b.heading) && !isScaffoldSection({ heading: b.heading }))
     .map((b) => briefBlockToSection(b))
     .filter((s) => Boolean((s as any).body) || ((s as any).bullets?.length ?? 0) > 0);
 
@@ -615,10 +803,16 @@ export function buildFallbackBrochureContent(goal: string): BrochureContent {
     palette: { accent: '#1C3F94' },
     ...(agency ? { agencyName: agency } : {}),
     title,
-    ...(duration || category ? { subtitle: [duration, category].filter(Boolean).join(' · ') } : {}),
+    ...(subtitle ? { subtitle } : {}),
     ...(tagline ? { tagline } : {}),
     ...(routeLine ? { routeLine } : {}),
-    ...(aboutBody ? { intro: { kicker: 'About the experience', heading: title, body: aboutBody } } : {}),
+    heroQuery,
+    ...(aboutBody ? { intro: { kicker: 'About', heading: title, body: aboutBody } } : {}),
+    ...(days.length ? { itinerary: { kicker: 'Day by day', heading: `Your ${days.length}-day journey`, days } } : {}),
+    ...(cities.length >= 2 ? { route: { kicker: 'The route', heading: 'Your route', cities } } : {}),
+    ...(inclusions.length ? { inclusions: { kicker: 'Inclusions', heading: "What's included", items: inclusions } } : {}),
+    ...(priceRows.length ? { pricing: { kicker: 'Investment', heading: 'Pricing', rows: priceRows } } : {}),
+    ...(footerObj ? { footer: footerObj } : {}),
     ...(sections.length ? { sections } : {}),
   };
   return content as unknown as BrochureContent;
@@ -787,8 +981,44 @@ export function ensureBriefCoverage(content: BrochureContent, goal: string): Bro
     if (hit / toks.length >= 0.34) continue; // already represented in the output
     added.push(briefBlockToSection(b));
   }
-  if (!added.length) return content;
-  return { ...content, sections: [...existing, ...added] } as BrochureContent;
+
+  // Footer backstop — the composer intermittently drops the contact/CTA footer even
+  // when the brief provides it, so the closing page (QR + contact lockup) appears on
+  // some runs and not others. Deterministically synthesize the footer from the brief's
+  // CONTACT / CALL-TO-ACTION blocks when the composed footer lacks them, so the last
+  // page is CONSISTENT regardless of model variance. Only FILLS gaps — a footer the
+  // composer already produced is preserved.
+  const footer: Record<string, unknown> = { ...((content as any).footer || {}) };
+  if (!Array.isArray(footer.contactLines) || !footer.contactLines.length) {
+    const cb = blocks.find((b) => /^contact/i.test(b.heading.trim()));
+    if (cb) {
+      const lines = cleanBrief(cb.body)
+        .split(/\n|·|\||;/)
+        .map((l) => l.trim())
+        .filter(Boolean)
+        .slice(0, 4);
+      if (lines.length) footer.contactLines = lines;
+    }
+  }
+  if (!footer.cta) {
+    const ab = blocks.find((b) => /call ?to ?action|^cta$/i.test(b.heading.trim()));
+    if (ab) {
+      const cta = cleanBrief(ab.body)
+        .split('\n')
+        .map((l) => l.trim())
+        .find(Boolean);
+      if (cta) footer.cta = cta.slice(0, 120);
+    }
+  }
+  const footerPatch =
+    footer.cta || (Array.isArray(footer.contactLines) && footer.contactLines.length) || footer.qrData ? footer : null;
+
+  if (!added.length && !footerPatch) return content;
+  return {
+    ...content,
+    ...(added.length ? { sections: [...existing, ...added] } : {}),
+    ...(footerPatch ? { footer: footerPatch } : {}),
+  } as BrochureContent;
 }
 
 // Internal: carry the resolved cover mode + map mode + brand kit on the content object.
@@ -874,8 +1104,80 @@ export interface BrandKit {
   contact?: string[];
   /** Optional Simple-Icons social slugs. */
   socials?: string[];
+  /** Optional client-supplied URL to encode into the brochure QR code. Takes priority
+   *  over the composer's own footer.qrData (so a pasted link always wins). */
+  qrData?: string;
   /** Hint that the logo is dark and needs a light chip behind it on the dark cover. */
   onDark?: boolean;
+  /** ADDITIONAL cover logos beyond the primary `logoUrl` — each an inert data: URI with
+   *  its own free cover placement (centre x,y + width as 0..1 fractions). Cover-only;
+   *  the primary logo still owns the interior running mark. Server-clamped numbers. */
+  coverLogos?: Array<{ url: string; x: number; y: number; scale: number; onDark?: boolean }>;
+  /** Interior-pages logo BAND — a horizontal row of logos (chosen from the kit) shown on
+   *  every page after the cover. `band` = header (top) or bottom; all share one height
+   *  (`scale`); each item sits at horizontal centre `x` (0..1). Takes precedence over the
+   *  single `custom.interior` mark. Banded honours header only (full-bleed bottom clashes);
+   *  editorial honours both. The engine RESERVES the band height so page text reflows clear. */
+  interiorLogos?: {
+    band: 'header' | 'bottom';
+    scale: number;
+    items: Array<{ url: string; x: number; onDark?: boolean }>;
+  };
+}
+
+/** Effective interior-mark scale — the band's shared scale wins over the single mark's. */
+function interiorMarkScale(c: BrochureContent): number | null {
+  const b = c.__brand;
+  if (b?.interiorLogos?.items?.length) return b.interiorLogos.scale;
+  return b?.custom?.interior?.scale ?? null;
+}
+
+/** The interior logo BAND HTML — a full-width absolute strip of logos at their x
+ *  positions, all at the shared height. Rendered in place of the single running mark
+ *  when `interiorLogos` is set. `fam` picks the family class + height model; banded
+ *  clamps a bottom band to the header (its full-bleed bottom can't reflow). */
+function interiorLogoBandHtml(c: BrochureContent, fam: 'editorial' | 'banded'): string {
+  const il = c.__brand?.interiorLogos;
+  if (!il?.items?.length) return '';
+  const rawCorner: LogoCorner = il.band === 'bottom' ? 'bottom-center' : 'top-center';
+  const corner = fam === 'banded' ? bandedSafeCorner(rawCorner)! : rawCorner;
+  const bottom = corner.startsWith('bottom');
+  const h = customMarkH(il.scale, corner, fam);
+  const cls = fam === 'editorial' ? 'ed-logoband' : 'logoband';
+  const imgs = il.items
+    .map((it) => {
+      if (!it?.url) return '';
+      const plate = it.onDark === false ? ' bare' : '';
+      const x = round1(clampN(it.x, 0, 1) * 100);
+      return `<img class="${cls}__img${plate}" src="${esc(it.url)}" alt="" style="left:${x}%;height:${round1(h)}mm">`;
+    })
+    .join('');
+  return imgs ? `<div class="${cls} ${bottom ? 'bottom' : 'top'}">${imgs}</div>` : '';
+}
+
+/** Render every ADDITIONAL cover logo (`brand.coverLogos`) as a free overlay — same
+ *  absolute-positioned box the primary custom-cover logo uses, one per entry. `cls` is
+ *  the family overlay class (`freelogo` banded · `ed-freelogo` editorial). All numbers
+ *  are server-clamped, so they're safe to interpolate into the inline style. */
+function coverLogosHtml(brand: BrandKit | undefined, cls: string): string {
+  const logos = brand?.coverLogos ?? [];
+  return logos
+    .map((l) => {
+      if (!l?.url) return '';
+      const plate = l.onDark === false ? ' bare' : '';
+      const left = round1(clampN(l.x, 0, 1) * 100);
+      const top = round1(clampN(l.y, 0, 1) * 100);
+      const w = round1(clampN(l.scale, 0.06, 0.6) * 100);
+      return `<div class="${cls}${plate}" style="left:${left}%;top:${top}%;width:${w}%"><img src="${esc(l.url)}" alt=""></div>`;
+    })
+    .join('');
+}
+
+/** The URL the QR code encodes: the user's Brand-Kit link wins over the composer's
+ *  own qrData. Returns '' when neither is set (no QR rendered). */
+function brandOrFooterQr(c: BrochureContent): string {
+  const src = c.__brand?.qrData || c.footer?.qrData;
+  return src ? qrUrl(src, 240) : '';
 }
 
 /**
@@ -908,15 +1210,17 @@ export async function buildBrochureHtml(
   tpl: BrochureTemplate,
   opts?: BrochureRenderOptions,
 ): Promise<string> {
+  content.__map3d = !!opts?.map3d;
+  if (opts?.brand) content.__brand = opts.brand;
+  // Brand Kit owns the agency identity → drop composer-invented agency name/website so
+  // a fabricated agency can't clash with the real brand (applies to every family).
+  applyBrandIdentity(content);
+
   if (tpl.family === 'banded') {
-    content.__map3d = !!opts?.map3d;
-    if (opts?.brand) content.__brand = opts.brand;
     return buildBandedHtml(content, tpl, opts?.measure);
   }
   // (banded reads the logo off content.__brand inside buildBandedHtml)
   if (tpl.family === 'editorial') {
-    content.__map3d = !!opts?.map3d;
-    if (opts?.brand) content.__brand = opts.brand;
     return buildEditorialHtml(content, tpl, opts?.measure);
   }
 
@@ -949,7 +1253,7 @@ export async function buildBrochureHtml(
       map = '';
     }
   }
-  const qr = c.footer?.qrData ? qrUrl(c.footer.qrData, 240) : '';
+  const qr = brandOrFooterQr(c);
 
   // ---- Body sections (flow order) ----
   const parts: string[] = [];
@@ -1024,15 +1328,17 @@ export async function buildBrochureHtml(
   }
 
   // Footer / CTA
-  if (c.footer && (c.footer.cta || c.footer.contactLines?.length || qr)) {
-    const social = (c.footer.social ?? [])
+  const flowContacts = footerContactLines(c);
+  const flowSocials = footerSocials(c);
+  if (c.footer?.cta || flowContacts.length || flowSocials.length || qr) {
+    const social = flowSocials
       .map((s) => `<img src="https://cdn.simpleicons.org/${encodeURIComponent(s.toLowerCase())}/ffffff" alt="">`)
       .join('');
-    const meta = (c.footer.contactLines ?? []).map((l) => esc(l)).join('<br>');
+    const meta = flowContacts.map((l) => esc(l)).join('<br>');
     parts.push(
       `<section class="section"><div class="footer"><div>` +
-        (c.footer.cta
-          ? `<div class="cta"><span class="em">${esc(c.footer.cta)}</span>${c.footer.ctaSub ? `<br>${esc(c.footer.ctaSub)}` : ''}</div>`
+        (c.footer?.cta
+          ? `<div class="cta"><span class="em">${esc(c.footer.cta)}</span>${c.footer?.ctaSub ? `<br>${esc(c.footer.ctaSub)}` : ''}</div>`
           : '') +
         (meta ? `<div class="meta">${meta}</div>` : '') +
         (social ? `<div class="soc">${social}</div>` : '') +
@@ -1179,6 +1485,15 @@ em,i{font-style:italic}
 .ed-runmark img{height:8.5mm;width:auto;max-width:50mm;object-fit:contain}
 /* CUSTOM-sized editorial mark: HEIGHT set inline (corner-safe), width auto + capped. */
 .ed-runmark.custom img{width:auto;max-width:58mm}
+/* Interior logo BAND — a full-width absolute strip; each logo is absolutely positioned
+   at its centre x (translateX -50%), all at the inline-set shared height. The packer
+   reserves the band height so page text reflows clear of it (top OR bottom). */
+.ed-logoband{position:absolute;left:0;right:0;z-index:6;height:0;pointer-events:none}
+.ed-logoband.top{top:9mm}
+.ed-logoband.bottom{bottom:8mm}
+.ed-logoband__img{position:absolute;top:0;transform:translateX(-50%);width:auto;max-width:46mm;object-fit:contain}
+.ed-logoband.bottom .ed-logoband__img{top:auto;bottom:0}
+.ed-logoband__img.bare{filter:drop-shadow(0 2px 9px rgba(0,0,0,.42))}
 /* Itinerary: the day grid packs TIGHT at the top (a short trip must not spread its
    rows across the whole page); leftover height is absorbed by a destination photo via
    the ordinary-page fill, exactly like every other content page. */
@@ -1355,9 +1670,9 @@ function editorialCover(c: BrochureContent, hero: string): string {
   const logoRight = placement === 'top-right';
   const lText = esc(c.topLeft || brandName || '');
   const rText = esc(c.topRight || c.year || '');
-  // When a CUSTOM cover logo overlaps the masthead, the agency/edition text yields
+  // When any cover logo overlaps the masthead, the agency/edition text yields
   // beside it (wraps to the side gap, or drops if there's no room) — logo wins.
-  const ko = fc ? mastheadKeepout(fc, 16) : null;
+  const ko = combinedMastheadKeepout(brand, 16);
   let leftSlot: string;
   let rightSlot: string;
   if (mhLogo) {
@@ -1382,8 +1697,11 @@ function editorialCover(c: BrochureContent, hero: string): string {
   const sp = t.lastIndexOf(' ');
   const titleHtml =
     sp > 0 ? `${esc(t.slice(0, sp))} <span class="it">${esc(t.slice(sp + 1))}</span>` : esc(t);
+  // If a cover logo overlaps the lockup or foot, add a subtle shield so the text
+  // stays legible over the photo.
+  const lockupShield = logoOverlapsRegion(brand, { x: 16, y: 210, w: 178, h: 80 }) ? 'background:rgba(0,0,0,0.42);padding:3mm 4mm;border-radius:2mm;' : '';
   const lockup =
-    `<div class="lockup">` +
+    `<div class="lockup"${lockupShield ? ` style="${lockupShield}"` : ''}>` +
     (c.preTitle ? `<div class="pre"><span class="pip"></span>${esc(c.preTitle)}</div>` : '') +
     `<h1>${titleHtml}</h1>` +
     `<div class="rule"></div>` +
@@ -1391,16 +1709,14 @@ function editorialCover(c: BrochureContent, hero: string): string {
     (c.routeLine ? `<div class="route">${esc(c.routeLine)}</div>` : '') +
     `</div>`;
 
-  // The foot carries the agency wordmark + line (the cover logo lives in the masthead
-  // corner now, so the foot stays a short single row that never collides with the
-  // title lockup above it).
   const agencyText = brandName ? `<b>${esc(brandName)}</b><br>` : '';
+  const footShield = logoOverlapsRegion(brand, { x: 16, y: 270, w: 178, h: 15 }) ? 'background:rgba(0,0,0,0.42);padding:2mm 3mm;border-radius:2mm;' : '';
   const foot =
-    `<div class="foot">` +
+    `<div class="foot"${footShield ? ` style="${footShield}"` : ''}>` +
     `<div class="agency">${agencyText}${esc(c.agencyLine || '')}</div>` +
     (c.badge ? `<div class="badge">${esc(c.badge)}</div>` : '') +
     `</div>`;
-  return `<section class="ed-cover">${heroImg}<div class="veil"></div><div class="frame"></div>${masthead}${freeLogo}${issue}${lockup}${foot}</section>`;
+  return `<section class="ed-cover">${heroImg}<div class="veil"></div><div class="frame"></div>${masthead}${freeLogo}${coverLogosHtml(brand, 'ed-freelogo')}${issue}${lockup}${foot}</section>`;
 }
 
 /**
@@ -1411,6 +1727,8 @@ function editorialCover(c: BrochureContent, hero: string): string {
  */
 function editorialRunMark(c: BrochureContent): string {
   const brand = c.__brand;
+  // Multi-logo interior BAND wins over the single mark when present.
+  if (brand?.interiorLogos?.items?.length) return interiorLogoBandHtml(c, 'editorial');
   const logo = brand?.logoUrl;
   const corner = runMarkCorner(c);
   if (!logo || !corner) return '';
@@ -1749,7 +2067,7 @@ async function buildEditorialBlocks(
       }
     }
   }
-  const qr = c.footer?.qrData ? qrUrl(c.footer.qrData, 240) : '';
+  const qr = brandOrFooterQr(c);
 
   const blocks: EdBlock[] = [];
   let n = 0;
@@ -1949,15 +2267,17 @@ async function buildEditorialBlocks(
   }
 
   // CTA / footer — the LAST block, pinned to the page bottom by an elastic spacer.
-  // Brand contact/socials fall back into the footer when the content lacks them.
-  const ctaContacts = c.footer?.contactLines?.length ? c.footer.contactLines : c.__brand?.contact;
-  const ctaSocials = c.footer?.social?.length ? c.footer.social : c.__brand?.socials;
-  if (c.footer && (c.footer.cta || ctaContacts?.length || qr)) {
-    const social = (ctaSocials ?? [])
+  // Contacts/socials MERGE the user's Brand Kit with the composer's own (so a kit
+  // number always shows); the block renders whenever ANY of those exist — even if
+  // the composer omitted `footer` entirely (brand-kit-only footer).
+  const ctaContacts = footerContactLines(c);
+  const ctaSocials = footerSocials(c);
+  if (c.footer?.cta || ctaContacts.length || ctaSocials.length || qr) {
+    const social = ctaSocials
       .map((s) => `<img src="https://cdn.simpleicons.org/${encodeURIComponent(s.toLowerCase())}/ffffff" alt="">`)
       .join('');
-    const meta = (ctaContacts ?? []).map((l) => esc(l)).join('<br>');
-    const chkItems = c.footer.checklist ?? [];
+    const meta = ctaContacts.map((l) => esc(l)).join('<br>');
+    const chkItems = c.footer?.checklist ?? [];
     const chk = chkItems.length
       ? `<ul class="chk">${chkItems.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>`
       : '';
@@ -1965,10 +2285,10 @@ async function buildEditorialBlocks(
     const hEst = Math.max(
       70,
       26 +
-        (c.footer.cta ? 20 : 0) +
-        (c.footer.ctaSub ? 8 : 0) +
+        (c.footer?.cta ? 20 : 0) +
+        (c.footer?.ctaSub ? 8 : 0) +
         chkItems.length * 7 +
-        (ctaContacts?.length ?? 0) * 5 +
+        ctaContacts.length * 5 +
         (social ? 12 : 0) +
         (qr ? 34 : 0),
     );
@@ -1976,8 +2296,8 @@ async function buildEditorialBlocks(
       id: 'cta',
       html:
         `<section class="ed-sec"><div class="ed-cta"><div>` +
-        (c.footer.cta
-          ? `<div class="big"><span class="em">${esc(c.footer.cta)}</span>${c.footer.ctaSub ? `<br>${esc(c.footer.ctaSub)}` : ''}</div>`
+        (c.footer?.cta
+          ? `<div class="big"><span class="em">${esc(c.footer.cta)}</span>${c.footer?.ctaSub ? `<br>${esc(c.footer.ctaSub)}` : ''}</div>`
           : '') +
         chk +
         (meta ? `<div class="meta">${meta}</div>` : '') +
@@ -2041,8 +2361,8 @@ function composeEditorialPages(
   // reflows; it never clips or overprints). The page's own padding already gives the
   // mark ~12mm (top) / ~7mm (bottom) of clearance, so we only reserve the EXCESS.
   const markCorner = runMarkCorner(c);
-  const markCust = c.__brand?.custom?.interior;
-  const markH = markCorner && markCust ? customMarkH(markCust.scale, markCorner, 'editorial') : 0;
+  const markScale = interiorMarkScale(c); // band scale wins over the single mark's
+  const markH = markCorner && markScale != null ? customMarkH(markScale, markCorner, 'editorial') : 0;
   const markTop = markH > 0 && markCorner!.startsWith('top'); // top-* (incl. centre)
   const markBottom = markH > 0 && markCorner!.startsWith('bottom');
   const reserveTop = markTop ? Math.max(0, round1(markH - 6)) : 0;
@@ -2152,8 +2472,22 @@ function composeEditorialPages(
     parts.push(`<div class="ed-page"${padStyle}>${runMark}${html}</div>`);
   });
 
+  // Safety net: never emit a blank interior page. Measurement variance / an empty
+  // section can occasionally strand a page with only the running mark and no real
+  // content — drop any interior page that carries no text AND no image. The cover
+  // (parts[0]) is always kept; a photo-filler page (has <img>) is intentional content.
+  const kept = [parts[0]!, ...parts.slice(1).filter(edPageHasContent)];
+
   const themeVars = resolveEditorialVars(tpl, accent);
-  return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">${head}<style>${themeVars}${EDITORIAL_CSS}${tpl.css}</style></head><body>${parts.join('')}</body></html>`;
+  return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">${head}<style>${themeVars}${EDITORIAL_CSS}${tpl.css}</style></head><body>${kept.join('')}</body></html>`;
+}
+
+/** True if an `.ed-page` HTML string carries real content — any image, or any text
+ *  once the absolute running-mark overlay and all tags are stripped. */
+function edPageHasContent(pageHtml: string): boolean {
+  const body = pageHtml.replace(/<div class="ed-runmark[\s\S]*?<\/div>/gi, '');
+  if (/<img\b/i.test(body)) return true;
+  return body.replace(/<[^>]+>/g, '').replace(/\s+/g, '').length > 0;
 }
 
 // ============================================================================
@@ -2392,6 +2726,11 @@ h1,h2,h3{font-family:var(--display);font-weight:400;line-height:.96;letter-spaci
    auto so the corner plate stays snug. Still corner-pinned + zero flow height, so it
    can never push content or add a page. */
 .page .runmark.custom img{width:auto;max-height:none;max-width:58mm}
+/* Interior logo BAND (banded, header only) — full-width strip; each logo at centre x,
+   shared inline height. The header bands reserve the --hr strip so text sits below it. */
+.page .logoband{position:absolute;left:0;right:0;top:6mm;z-index:9;height:0;pointer-events:none}
+.page .logoband__img{position:absolute;top:0;transform:translateX(-50%);width:auto;max-width:46mm;object-fit:contain}
+.page .logoband__img.bare{filter:drop-shadow(0 1px 6px rgba(0,0,0,.45))}
 
 /* ============ EXPERIENCE PAGE ============ */
 .exp{grid-template-columns:69mm 1fr;grid-template-rows:1fr auto}
@@ -2405,6 +2744,7 @@ h1,h2,h3{font-family:var(--display);font-weight:400;line-height:.96;letter-spaci
 .exp__why h2{color:var(--on-accent)}
 .exp__why p{font-size:12.5px;line-height:1.6;opacity:.97;margin-top:2mm;max-width:120mm}
 .exp__list{background:var(--paper);color:var(--ink);padding:12mm 15mm;flex:1;overflow:hidden}
+.exp__list.has-mark{padding-top:var(--hr,16mm)}
 .exp__close{grid-column:1/3;grid-row:2;background:var(--band-ink);color:var(--on-ink);display:grid;grid-template-columns:62mm 1fr;min-height:44mm}
 .exp__close figure{margin:0;overflow:hidden;background:var(--accent-deep)}
 .exp__close img{width:100%;height:100%;object-fit:cover}
@@ -2435,6 +2775,7 @@ h1,h2,h3{font-family:var(--display);font-weight:400;line-height:.96;letter-spaci
 .map__svg{position:absolute;inset:0;width:100%;height:100%;display:block}
 /* top kicker strip — fills the header on every page */
 .map__kicker{position:absolute;left:15mm;right:15mm;top:5mm;height:9mm;z-index:4;display:flex;justify-content:space-between;align-items:flex-end;border-bottom:.4mm solid var(--accent);padding-bottom:1.5mm}
+.map__kicker.has-mark{top:var(--hr,16mm);height:auto}
 .map__kicker .kk{font:700 11px/1 var(--body);text-transform:uppercase;letter-spacing:.22em;color:var(--accent-ink)}
 .map__kicker .eye{font:400 15px/1 var(--display);text-transform:uppercase;letter-spacing:.04em;color:var(--ink)}
 .map__note{position:absolute;right:1.6mm;top:50%;transform:translateY(-50%) rotate(180deg);writing-mode:vertical-rl;font:400 7px/1 var(--body);color:var(--ink);opacity:.42;letter-spacing:.14em;text-transform:uppercase;z-index:4}
@@ -2623,8 +2964,8 @@ function bandedCover(c: BrochureContent, a: BandedAssets): string {
   const leftText = esc(c.topLeft || c.agencyName || '');
   const rightText = esc(c.topRight || [c.agencyName ? '' : '', c.year].filter(Boolean).join(' · ') || c.year || '');
   const cornerLogo = `<span class="mlogo${plate}"><img src="${esc(logo)}" alt=""></span>`;
-  // When a CUSTOM cover logo overlaps the masthead, the text yields beside it.
-  const ko = fc ? mastheadKeepout(fc, 16) : null;
+  // When any cover logo overlaps the masthead, the text yields beside it.
+  const ko = combinedMastheadKeepout(brand, 16);
   let leftSlot: string;
   let rightSlot: string;
   if (corner) {
@@ -2647,19 +2988,24 @@ function bandedCover(c: BrochureContent, a: BandedAssets): string {
         )}%;width:${round1(clampN(fc.scale, 0.06, 0.6) * 100)}%"><img src="${esc(logo)}" alt=""></div>`
       : '';
 
+  // If a cover logo overlaps the main lockup / bottom strip, add a subtle shield so
+  // the text remains legible without radically changing the photo composition.
+  const lockShield = logoOverlapsRegion(brand, { x: 0, y: 100, w: 210, h: 100 }) ? 'background:rgba(0,0,0,0.42);padding:3mm 5mm;border-radius:2mm;' : '';
   const lock =
-    `<div class="lock">` +
+    `<div class="lock"${lockShield ? ` style="${lockShield}"` : ''}>` +
     (c.preTitle ? `<div class="pre">${esc(c.preTitle)}</div>` : '') +
     `<h1>${esc(c.title)}</h1>` +
     (c.subtitle || c.tagline ? `<div class="sub">${esc(c.subtitle || c.tagline)}</div>` : '') +
     (c.routeLine ? `<div class="route">${esc(c.routeLine)}</div>` : '') +
     `</div>`;
+  const agencyShield = logoOverlapsRegion(brand, { x: 17, y: 250, w: 80, h: 35 }) ? 'background:rgba(0,0,0,0.42);padding:2mm 3mm;border-radius:2mm;' : '';
   const agency =
     c.agencyName || c.agencyLine
-      ? `<div class="agency">${c.agencyName ? `<b>${esc(c.agencyName)}</b>` : ''}${esc(c.agencyLine || '')}</div>`
+      ? `<div class="agency"${agencyShield ? ` style="${agencyShield}"` : ''}>${c.agencyName ? `<b>${esc(c.agencyName)}</b>` : ''}${esc(c.agencyLine || '')}</div>`
       : '';
-  const pill = c.badge ? `<div class="pill">${esc(c.badge)}</div>` : '';
-  return `<section class="page cover">${heroImg}<div class="veil"></div><div class="disc"></div>${mark}${brandmark}${freeLogo}${lock}${agency}${pill}</section>`;
+  const pillShield = logoOverlapsRegion(brand, { x: 113, y: 250, w: 80, h: 35 }) ? 'background:rgba(0,0,0,0.42);padding:2mm 3mm;border-radius:2mm;' : '';
+  const pill = c.badge ? `<div class="pill"${pillShield ? ` style="${pillShield}"` : ''}>${esc(c.badge)}</div>` : '';
+  return `<section class="page cover">${heroImg}<div class="veil"></div><div class="disc"></div>${mark}${brandmark}${freeLogo}${coverLogosHtml(brand, 'freelogo')}${lock}${agency}${pill}</section>`;
 }
 
 /**
@@ -2671,6 +3017,9 @@ function bandedCover(c: BrochureContent, a: BandedAssets): string {
  */
 function runMarkCorner(c: BrochureContent): LogoCorner | null {
   const b = c.__brand;
+  // The interior logo BAND drives the reserve as a top/bottom-centre mark (it doesn't
+  // need the primary logo — its logos come from interiorLogos.items).
+  if (b?.interiorLogos?.items?.length) return b.interiorLogos.band === 'bottom' ? 'bottom-center' : 'top-center';
   if (!b?.logoUrl) return null;
   if (b.custom) return b.custom.interior ? b.custom.interior.corner : null;
   const p = b.placement || 'cover';
@@ -2692,6 +3041,9 @@ function wantsBandedRunMark(c: BrochureContent): boolean {
 
 function bandedRunMark(c: BrochureContent): string {
   const brand = c.__brand;
+  // Multi-logo interior BAND wins over the single mark when present (header only — banded
+  // is full-bleed, so a bottom band is clamped to the header by bandedSafeCorner inside).
+  if (brand?.interiorLogos?.items?.length) return interiorLogoBandHtml(c, 'banded');
   const logo = brand?.logoUrl;
   const corner = bandedSafeCorner(runMarkCorner(c)); // banded → top-left/top-right only
   if (!logo || !corner) return '';
@@ -2781,10 +3133,230 @@ function mastheadKeepout(
     right: round1(Math.max(0, W - padMm - (fc.x + fc.scale / 2) * W - gap)),
   };
 }
+
+/** All front-cover logo placements: the primary custom cover logo plus any extra
+ *  coverLogos. Used to compute combined keepout for text regions. */
+function allCoverLogoBoxes(brand: BrandKit | undefined): Array<{ x: number; y: number; scale: number }> {
+  const out: Array<{ x: number; y: number; scale: number }> = [];
+  if (brand?.custom?.cover && brand.logoUrl) out.push(brand.custom.cover);
+  if (brand?.coverLogos) {
+    for (const l of brand.coverLogos) {
+      if (l?.url) out.push({ x: l.x, y: l.y, scale: l.scale });
+    }
+  }
+  return out;
+}
+
+/** Combined masthead keepout across the primary cover logo AND any extra coverLogos.
+ *  Returns left/right available widths (mm) for the masthead text slots, or null when
+ *  no logo overlaps the top band. */
+function combinedMastheadKeepout(
+  brand: BrandKit | undefined,
+  padMm: number,
+): { left: number; right: number } | null {
+  const logos = allCoverLogoBoxes(brand);
+  if (!logos.length) return null;
+  const W = 210;
+  const H = 297;
+  const bandBottom = 34;
+  const gap = 5;
+  let leftAvail = W;
+  let rightAvail = W;
+  let anyOverlap = false;
+  for (const fc of logos) {
+    const halfH = fc.scale * W * 0.5;
+    const ty = fc.y * H - halfH;
+    if (ty > bandBottom) continue;
+    anyOverlap = true;
+    const lx = (fc.x - fc.scale / 2) * W;
+    const rx = (fc.x + fc.scale / 2) * W;
+    leftAvail = Math.min(leftAvail, lx - padMm - gap);
+    rightAvail = Math.min(rightAvail, W - rx - padMm - gap);
+  }
+  if (!anyOverlap) return null;
+  return {
+    left: round1(Math.max(0, leftAvail)),
+    right: round1(Math.max(0, rightAvail)),
+  };
+}
+
+/** True when any cover logo overlaps a rectangular region (mm coordinates). */
+function logoOverlapsRegion(
+  brand: BrandKit | undefined,
+  region: { x: number; y: number; w: number; h: number },
+): boolean {
+  const logos = allCoverLogoBoxes(brand);
+  if (!logos.length) return false;
+  const W = 210;
+  const H = 297;
+  const rx2 = region.x + region.w;
+  const ry2 = region.y + region.h;
+  for (const fc of logos) {
+    const lw = fc.scale * W;
+    const lh = lw;
+    const lx = fc.x * W - lw / 2;
+    const rx = lx + lw;
+    const ty = fc.y * H - lh / 2;
+    const by = ty + lh;
+    if (rx > region.x && lx < rx2 && by > region.y && ty < ry2) return true;
+  }
+  return false;
+}
 const MH_MIN = 14; // below this much side-room (mm) the slot text is dropped, not squeezed
 const mhSlotStyle = (avail: number) => ` style="max-width:${avail}mm;white-space:normal;line-height:1.25"`;
 
-function experiencePages(c: BrochureContent, a: BandedAssets): string[] {
+// ---- Itinerary (.exp timeline) measure-and-flow packing ---------------------
+// The .exp page is a fixed-height full-bleed grid (rail + accent why-band + paper
+// timeline + close stat). Its timeline band is `overflow:hidden`, so a blind
+// count cap (the old `balancedChunk(items, 11)`) clipped when day rows ran long
+// and looked sparse when they ran short. We now MEASURE each day row's real mm
+// height (headless Chrome, same path the banded sections use) and pack rows so a
+// page can never exceed the band — clipping is impossible, the day-count adapts
+// to the content, and the .exp LOOK is unchanged (same render body below).
+const EXP_PAGE = 297; // full-bleed banded page height (mm)
+const EXP_WHY = 60; // intro accent band reserved on page 1 (generous → bias to spill)
+const EXP_CLOSE = 54; // close stat band reserved on the LAST page
+const EXP_LHEAD = 24; // .exp__list kicker + h2 header (mm)
+const EXP_LIST_PAD = 24; // .exp__list vertical padding (12mm top + 12mm bottom)
+const EXP_ROW_GAP = 5.5; // .tl li padding-bottom — inter-row spacing (mm)
+const EXP_SAFETY = 6; // sub-pixel cushion → always bias toward an extra page, never a clip
+
+/** Conservative day-row height (mm) when the headless measurer is unavailable.
+ *  Over-estimates → fewer rows per page → spill, never clip. */
+function estExpDayHeight(it: { t: string; d: string }): number {
+  const titleLines = Math.max(1, Math.ceil((it.t?.length || 0) / 38));
+  const descLines = it.d ? Math.ceil(it.d.length / 52) : 0;
+  return titleLines * 5.4 + descLines * 4.4 + 3;
+}
+
+/** Probe doc: each day row rendered inside the timeline at its real column width
+ *  (.exp__list content = 141mm column − 30mm padding = 111mm) so measured heights
+ *  match the final render. Tagged `data-ed-id` for the family-agnostic measurer. */
+function buildExperienceMeasuringHtml(
+  items: { t: string; d: string }[],
+  tpl: BrochureTemplate,
+  accent: string,
+  accent2?: string,
+): string {
+  const vars = resolveBandedVars(tpl, accent, accent2);
+  const probeCss = `.bd-probe{margin:0;padding:0;position:relative}`;
+  const body = items
+    .map(
+      (it, i) =>
+        `<div class="bd-probe" data-ed-id="exp-day-${i}" style="width:111mm"><ol class="tl"><li>` +
+        `<div class="t">${esc(it.t)}</div>${it.d ? `<div class="d">${esc(it.d)}</div>` : ''}</li></ol></div>`,
+    )
+    .join('');
+  return (
+    `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">${fontsLinkBanded(tpl.fonts.display, tpl.fonts.body, tpl.coverFont)}` +
+    `<style>${vars}${BANDED_CSS}${tpl.css}${probeCss}</style></head><body>${body}</body></html>`
+  );
+}
+
+/** Usable timeline height (mm) on a given .exp page — page 1 reserves the why band,
+ *  the last page reserves the close stat band. */
+function expAvail(isFirst: boolean, isLast: boolean, hasIntro: boolean, hasStat: boolean, listPadExtra = 0): number {
+  return (
+    EXP_PAGE -
+    (isFirst && hasIntro ? EXP_WHY : 0) -
+    (isLast && hasStat ? EXP_CLOSE : 0) -
+    EXP_LHEAD -
+    EXP_LIST_PAD -
+    listPadExtra -
+    EXP_SAFETY
+  );
+}
+
+/** Greedy-pack day rows (by measured mm) into the minimum number of .exp pages that
+ *  never overflow → the page COUNT is the true content-driven minimum. */
+function greedyPackExp(dayH: number[], hasIntro: boolean, hasStat: boolean, listPadExtra = 0): number[][] {
+  // Pass 1 — pack assuming no page is the last (close handled in pass 2).
+  const pages: number[][] = [];
+  let cur: number[] = [];
+  let used = 0;
+  for (let i = 0; i < dayH.length; i++) {
+    const avail = expAvail(pages.length === 0, false, hasIntro, hasStat, listPadExtra);
+    if (cur.length && used + dayH[i]! > avail) {
+      pages.push(cur);
+      cur = [];
+      used = 0;
+    }
+    cur.push(i);
+    used += dayH[i]!;
+  }
+  if (cur.length) pages.push(cur);
+  // Pass 2 — the real last page must also fit the close band; pop trailing rows that
+  // no longer fit onto a fresh final page (which then carries the close instead).
+  if (hasStat && pages.length) {
+    for (let guard = 0; guard <= dayH.length; guard++) {
+      const li = pages.length - 1;
+      const avail = expAvail(li === 0, true, hasIntro, hasStat, listPadExtra);
+      const u = pages[li]!.reduce((s, idx) => s + dayH[idx]!, 0);
+      if (u <= avail || pages[li]!.length <= 1) break;
+      pages.push([pages[li]!.pop()!]);
+    }
+  }
+  return pages.length ? pages : [[]];
+}
+
+/** Pack day rows into .exp pages. Greedy fixes the MINIMUM page count (never clips);
+ *  then we even out the distribution across that same count so a lone-orphan tail
+ *  (e.g. 10 days → 9+1) becomes a balanced 5+5 — UNLESS a balanced page would
+ *  overflow, in which case we keep the safe greedy split. Best look, never a clip. */
+function packExperienceDays(
+  dayH: number[],
+  hasIntro: boolean,
+  hasStat: boolean,
+  listPadExtra = 0,
+): { pages: number[][]; closeOnLast: boolean } {
+  // Pack days by REAL height but WITHOUT reserving the close stat band. The close band
+  // is decorative — it must never push a day onto an extra page (that turned 8 days
+  // into a wasteful 4+4 with both pages half-empty). We decide the close placement
+  // AFTER pagination: it renders only if it genuinely fits the last page's leftover.
+  const greedy = greedyPackExp(dayH, hasIntro, false, listPadExtra);
+  let pages = greedy;
+
+  if (greedy.length > 1) {
+    // Even out the day counts across the same page count so a lone-orphan tail (e.g.
+    // 10 → 9+1) becomes a balanced 5+5 — unless a balanced page would overflow, in
+    // which case keep the safe greedy split.
+    const n = dayH.length;
+    const P = greedy.length;
+    const base = Math.floor(n / P);
+    const extra = n % P;
+    const cand: number[][] = [];
+    let k = 0;
+    for (let p = 0; p < P; p++) {
+      const cnt = base + (p < extra ? 1 : 0);
+      const g: number[] = [];
+      for (let j = 0; j < cnt; j++) g.push(k++);
+      cand.push(g);
+    }
+    const fits = cand.every(
+      (grp, pi) => grp.reduce((s, idx) => s + dayH[idx]!, 0) <= expAvail(pi === 0, false, hasIntro, false, listPadExtra),
+    );
+    pages = fits ? cand : greedy;
+  }
+
+  // Close band renders on the last page ONLY if it fits there (days + close ≤ usable);
+  // otherwise it's dropped so the days stay on the minimum number of pages.
+  let closeOnLast = false;
+  if (hasStat && pages.length) {
+    const last = pages[pages.length - 1]!;
+    const load = last.reduce((s, idx) => s + dayH[idx]!, 0);
+    closeOnLast = load <= expAvail(pages.length === 1, true, hasIntro, true, listPadExtra);
+  }
+  return { pages, closeOnLast };
+}
+
+async function experiencePages(
+  c: BrochureContent,
+  a: BandedAssets,
+  tpl: BrochureTemplate,
+  accent: string,
+  accent2?: string,
+  measure?: EdMeasureFn,
+): Promise<string[]> {
   const days = c.itinerary?.days ?? [];
   const hcards = c.highlights?.cards ?? [];
   const baseItems: { t: string; d: string }[] = days.length
@@ -2803,34 +3375,66 @@ function experiencePages(c: BrochureContent, a: BandedAssets): string[] {
   const listKick = c.itinerary?.kicker || c.highlights?.kicker || '';
   const listTitle = c.itinerary?.heading || c.highlights?.heading || 'Highlights';
 
-  // rail = up to 4 highlight cards (photo + label); fall back to the hero photo.
-  const railCards = hcards.slice(0, 4);
-  const railFigs = railCards.length
-    ? railCards
-        .map(
-          (card, i) =>
-            `<figure>${a.photos[i] ? `<img src="${esc(a.photos[i])}" alt="">` : ''}<figcaption>${esc(card.label)}</figcaption></figure>`,
-        )
-        .join('')
-    : `<figure>${a.hero ? `<img src="${esc(a.hero)}" alt="">` : ''}<figcaption>${esc(c.title)}</figcaption></figure>`;
-  const rail = `<div class="exp__rail">${railFigs}</div>`;
-
-  const chunks = items.length ? balancedChunk(items, 11) : [[]];
   const stat = c.highlights?.stat;
+
+  // Interior header mark determines how much top padding we must reserve so headers
+  // (why band + experience list) don't slide under the logo band. A top-LEFT mark sits
+  // over the left photo rail, so the right-column copy needs no extra reserve.
+  const corner = bandedSafeCorner(runMarkCorner(c));
+  const headerReserve = bandedHeaderReserve(c) ?? 16;
+  const listHasMark = !!corner && corner !== 'top-left';
+  const listPadExtra = listHasMark ? Math.max(0, headerReserve - 12) : 0;
+
+  // Measure-and-flow: real day-row heights → height-driven pagination (never clips,
+  // adapts the day-count). Estimate fallback when no measurer (spill, never clip).
+  let chunks: { t: string; d: string }[][];
+  let closeOnLast = !!stat; // when there are no measurable days, keep prior behaviour
+  if (items.length) {
+    let measured: Record<string, number> | null = null;
+    if (measure) {
+      try {
+        measured = await measure(
+          buildExperienceMeasuringHtml(items, tpl, accent, accent2),
+          items.map((_, i) => `exp-day-${i}`),
+        );
+      } catch {
+        measured = null;
+      }
+    }
+    const dayH = items.map((it, i) => sanitizeMeasuredSec(measured?.[`exp-day-${i}`], estExpDayHeight(it)) + EXP_ROW_GAP);
+    const packed = packExperienceDays(dayH, hasIntro, !!stat, listPadExtra);
+    closeOnLast = packed.closeOnLast;
+    chunks = packed.pages.map((g) => g.map((idx) => items[idx]!));
+  } else {
+    chunks = [[]];
+  }
   // Close photo = the next UNIQUE filler (never the cover hero or a rail photo again);
   // only fall back to a spare highlight / hero if the pool is exhausted.
+  const railCards = hcards.slice(0, 4);
   let closePhoto = a.fillers[a.fillCursor.i] || '';
   if (closePhoto) a.fillCursor.i++;
   else closePhoto = a.photos[railCards.length] || a.hero;
 
+  // Build a fresh photo rail per page. Page 1 uses the assigned highlight photos;
+  // continuation pages consume new filler images so the same 4 photos don't repeat.
+  const buildRail = (idx: number): string => {
+    if (railCards.length) {
+      const railFigs = railCards
+        .map((card, i) => {
+          const src = idx === 0 ? a.photos[i] : a.fillers[a.fillCursor.i++] || '';
+          return `<figure>${src ? `<img src="${esc(src)}" alt="">` : ''}<figcaption>${esc(card.label)}</figcaption></figure>`;
+        })
+        .join('');
+      return `<div class="exp__rail">${railFigs}</div>`;
+    }
+    const src = idx === 0 ? a.hero : a.fillers[a.fillCursor.i++] || '';
+    return `<div class="exp__rail"><figure>${src ? `<img src="${esc(src)}" alt="">` : ''}<figcaption>${esc(c.title)}</figcaption></figure></div>`;
+  };
+
   return chunks.map((slice, idx) => {
     const first = idx === 0;
     const last = idx === chunks.length - 1;
-    // The why band sits in the RIGHT column; reserve header space only when the logo
-    // is over it (centre/right). A top-LEFT logo sits over the photo rail, so the band
-    // needs no reserve.
-    const corner = bandedSafeCorner(runMarkCorner(c));
-    const whyMark = first && !!corner && markSide(corner) !== 'left';
+    const whyMark = first && listHasMark;
     const why =
       first && hasIntro
         ? `<div class="exp__why${whyMark ? ' has-mark' : ''}">` +
@@ -2842,14 +3446,15 @@ function experiencePages(c: BrochureContent, a: BandedAssets): string[] {
     const li = slice
       .map((it) => `<li><div class="t">${esc(it.t)}</div>${it.d ? `<div class="d">${esc(it.d)}</div>` : ''}</li>`)
       .join('');
+    const listCls = listHasMark ? 'exp__list has-mark' : 'exp__list';
     const list =
-      `<div class="exp__list">` +
+      `<div class="${listCls}">` +
       (listKick ? `<div class="kick">${esc(listKick)}</div>` : '') +
       `<h2>${esc(listTitle)}</h2>` +
       (li ? `<ol class="tl">${li}</ol>` : '') +
       `</div>`;
     let close = '';
-    if (last && stat) {
+    if (last && stat && closeOnLast) {
       close =
         `<div class="exp__close">` +
         `<figure>${closePhoto ? `<img src="${esc(closePhoto)}" alt="">` : ''}</figure>` +
@@ -2857,7 +3462,7 @@ function experiencePages(c: BrochureContent, a: BandedAssets): string[] {
         `<div class="ct"><b>${esc(stat.label)}</b>${c.tagline ? esc(c.tagline) : esc(c.subtitle || '')}</div></div>` +
         `</div>`;
     }
-    return `<section class="page exp">${rail}<div class="exp__main">${why}${list}</div>${close}</section>`;
+    return `<section class="page exp">${buildRail(idx)}<div class="exp__main">${why}${list}</div>${close}</section>`;
   });
 }
 
@@ -3021,12 +3626,10 @@ function buildBasemap2d(
   };
   const rx = Math.min(zone.w, zone.h) * 0.035;
   const geoBox = `left:${f1(zone.x)}px;top:${f1(zone.y)}px;width:${f1(zone.w)}px;height:${f1(zone.h)}px;border-radius:${f1(rx)}px`;
-  const behind =
-    `<img class="map__base" src="${esc(url)}" alt="Route map" style="${geoBox}">` +
-    // A gentle accent multiply veil so the generic raster basemap adopts the brand
-    // colour and reads as part of the designed deck (sits BELOW the SVG markers in DOM
-    // order, so pins/leaders/route stay crisp).
-    `<div class="map__tint" style="${geoBox}"></div>`;
+  // No accent veil over the basemap — a coloured multiply layer tinted the whole map
+  // (most visible with a saturated brand accent) and made it read murky. The map stays
+  // CLEAR; the brand accent already shows through the route line, pins and city labels.
+  const behind = `<img class="map__base" src="${esc(url)}" alt="Route map" style="${geoBox}">`;
   return { behind, project };
 }
 
@@ -3259,6 +3862,10 @@ function mapPages(c: BrochureContent, a: BandedAssets): string[] {
   const mc = bandedSafeCorner(runMarkCorner(c));
   const markTopLeft = mc === 'top-left';
   const markTopRight = mc === 'top-right';
+  // A full-width top-centre / band mark sits over the kicker; push the whole strip
+  // down by the header reserve so the route text remains legible. Corner marks keep
+  // the existing eyebrow-swap behaviour instead.
+  const kickerMark = !!mc && !markTopLeft && !markTopRight;
 
   return chunks.map((slice, ci) => {
     // Top kicker strip — fills the header, on every page, deterministic text.
@@ -3267,11 +3874,12 @@ function mapPages(c: BrochureContent, a: BandedAssets): string[] {
     const kickText = c.route?.kicker || (chunks.length > 1 ? `Part ${ci + 1} of ${chunks.length}` : 'The Route');
     const kk = `<span class="kk">${esc(kickText)}</span>`;
     const eye = first && last && first !== last ? `<span class="eye">${esc(first)} → ${esc(last)}</span>` : '<span></span>';
+    const kickerCls = 'map__kicker' + (kickerMark ? ' has-mark' : '');
     const kicker = markTopRight
-      ? `<div class="map__kicker">${eye}<span></span></div>` // eyebrow LEFT, clear of the right mark
+      ? `<div class="${kickerCls}">${eye}<span></span></div>` // eyebrow LEFT, clear of the right mark
       : markTopLeft
-        ? `<div class="map__kicker"><span></span>${eye}</div>` // eyebrow RIGHT, clear of the left mark
-        : `<div class="map__kicker">${kk}${eye}</div>`;
+        ? `<div class="${kickerCls}"><span></span>${eye}</div>` // eyebrow RIGHT, clear of the left mark
+        : `<div class="${kickerCls}">${kk}${eye}</div>`;
 
     // Match each place in this slice to its geocoded pin (by the same key the composer used).
     const pinFor = (p: MapPlace): LL | undefined => a.geo?.points.find((pt) => pt.name === (p.geo || p.name));
@@ -3685,15 +4293,15 @@ async function buildSectionFlowPages(
  *  for no mark / the small auto mark (which uses the CSS fallback). */
 function bandedHeaderReserve(c: BrochureContent): number | null {
   const corner = bandedSafeCorner(runMarkCorner(c));
-  const cust = c.__brand?.custom?.interior;
-  if (!corner || !cust) return null;
+  const scale = interiorMarkScale(c); // band scale wins over the single mark's
+  if (!corner || scale == null) return null;
   // padding-top must clear: top inset (4mm) + logo box (height + ~3mm plate) + ~4mm gap.
-  return clampN(round1(4 + customMarkH(cust.scale, corner, 'banded') + 7), 16, 36);
+  return clampN(round1(4 + customMarkH(scale, corner, 'banded') + 7), 16, 36);
 }
 
 function bandedFooter(c: BrochureContent, a: BandedAssets): string {
-  const lines = (c.footer?.contactLines ?? []).map((l) => esc(l)).join('<br>');
-  const social = (c.footer?.social ?? [])
+  const lines = footerContactLines(c).map((l) => esc(l)).join('<br>');
+  const social = footerSocials(c)
     .map(
       (s) => `<img src="https://cdn.simpleicons.org/${encodeURIComponent(s.toLowerCase())}/${a.onAccentHex}" alt="">`,
     )
@@ -3774,10 +4382,14 @@ function logisticsPages(c: BrochureContent, a: BandedAssets): string[] {
   // A single column can't exceed ~one page; if inclusions + pricing + CTA would overflow,
   // give PRICING its own full page so the table is shown in full (no squeeze, no lost
   // rows). Short content stays on one clean page with a photo filler.
-  const estIncl = incl.length ? 28 + incl.length * 13 : 0;
+  // Inclusion rows WRAP — a long value ("5 nights premium Makkah hotel within 200m …")
+  // spans 2-3 lines, which the old flat `n*13` undercounted → the column overflowed the
+  // fixed page and CLIPPED. Estimate each row by its real wrapped line count instead.
+  const inclRowMm = (it: { v?: string }) => Math.max(1, Math.ceil(String(it?.v ?? '').length / 34)) * 7 + 5;
+  const estIncl = incl.length ? 28 + incl.reduce((s, it) => s + inclRowMm(it), 0) : 0;
   const estPrice = price.length ? 30 + (price.length + 1) * 12 + (c.pricing?.note ? 12 : 0) : 0;
   const estCta = hasCta ? 50 : 0;
-  const COL_BUDGET = 250; // mm (reserves footer + safety; biased to split, which never clips)
+  const COL_BUDGET = 225; // mm (reserves footer + safety; biased to split, which never clips)
   const splitPrice = !!(incl.length && price.length && estIncl + estPrice + estCta > COL_BUDGET);
 
   const pages: string[] = [];
@@ -3796,7 +4408,27 @@ function logisticsPages(c: BrochureContent, a: BandedAssets): string[] {
   }
 
   // Split: inclusions page(s) first, then a dedicated pricing+CTA page (the last page).
-  const inclChunks = incl.length ? balancedChunk(incl, 9) : [];
+  // Chunk inclusions by WRAPPED height (not a flat count of 9) so a page of long-value
+  // rows can't overflow and clip.
+  const chunkInclByHeight = (items: typeof incl): (typeof incl)[] => {
+    const PAGE_MM = 235; // usable column height for inclusion rows (minus header/footer/safety)
+    const out: (typeof incl)[] = [];
+    let cur: typeof incl = [];
+    let used = 28; // inclusion header
+    for (const it of items) {
+      const h = inclRowMm(it);
+      if (cur.length && used + h > PAGE_MM) {
+        out.push(cur);
+        cur = [];
+        used = 0;
+      }
+      cur.push(it);
+      used += h;
+    }
+    if (cur.length) out.push(cur);
+    return out.length ? out : [items];
+  };
+  const inclChunks = incl.length ? chunkInclByHeight(incl) : [];
   inclChunks.forEach((slice, idx) => {
     const col = inclHeader(idx === 0 && topMark) + inclBand(slice) + fillPhoto();
     pages.push(page(col, '')); // footer goes on the final (pricing) page
@@ -3863,7 +4495,7 @@ async function buildBandedHtml(
       }
     }
   }
-  const qr = c.footer?.qrData ? qrUrl(c.footer.qrData, 240) : '';
+  const qr = brandOrFooterQr(c);
 
   const a: BandedAssets = { hero, photos, secUrls, fillers, fillCursor: { i: 0 }, geo, map, qr, onAccentHex: contrastInk(accent).replace('#', '') };
 
@@ -3873,7 +4505,7 @@ async function buildBandedHtml(
   const pages: string[] = [];
   pages.push(bandedCover(c, a));
   const interior: string[] = [
-    ...experiencePages(c, a),
+    ...(await experiencePages(c, a, tpl, accent, accent2, measure)),
     ...mapPages(c, a),
     ...secFlowPages,
     ...logisticsPages(c, a),

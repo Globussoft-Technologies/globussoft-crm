@@ -195,6 +195,15 @@ export default function ItineraryDetail() {
   // "Supplier ID" field). Fetched once; tolerant of failure (picker just
   // shows "— None —").
   const [suppliers, setSuppliers] = useState([]);
+  // Pricing-rule pre-fill for the Add-item form. The Pricing Rules page
+  // configures seasons + markup rules per sub-brand; before this wiring
+  // the rules had zero effect on itinerary line items because the advisor
+  // typed unitCost + markup by hand. Now: when itemType + supplier change,
+  // POST /items/preview-pricing returns the rule-computed numbers; we
+  // pre-fill the form only when unitCost AND markup are both blank so a
+  // typed override is never clobbered. Render a one-line hint near the
+  // form so the advisor knows what rule matched (and what to override).
+  const [pricingPreview, setPricingPreview] = useState(null);
   // Map state — client-side geocoded copy of itin.items (never saved to server
   // from here; the editor handles persistence). Items without lat/lng get
   // geocoded progressively so markers appear as they resolve.
@@ -219,6 +228,50 @@ export default function ItineraryDetail() {
       .then((res) => setSuppliers(Array.isArray(res) ? res : (res?.suppliers || [])))
       .catch(() => setSuppliers([]));
   }, []);
+
+  // Pre-fill unitCost + markup from the pricing engine whenever the advisor
+  // changes itemType or supplier inside the Add-item modal. Debounced 300ms
+  // so a rapid dropdown change doesn't fire two requests. Pre-fill is silent
+  // on failure (the form just stays as-is); the inline hint UI below picks
+  // up `pricingPreview` to surface what rule matched.
+  useEffect(() => {
+    if (!adding || !newItem.itemType) {
+      setPricingPreview(null);
+      return undefined;
+    }
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      try {
+        const body = { itemType: newItem.itemType };
+        if (newItem.supplierId !== "" && newItem.supplierId != null) {
+          body.supplierId = Number(newItem.supplierId);
+        }
+        const res = await fetchApi(`/api/travel/itineraries/${id}/items/preview-pricing`, {
+          method: "POST",
+          body: JSON.stringify(body),
+        });
+        if (cancelled) return;
+        setPricingPreview(res);
+        // Pre-fill ONLY when the advisor hasn't typed into either field —
+        // overriding a typed value would feel hostile. setNewItem callback
+        // form re-checks the latest state to dodge the obvious race with a
+        // concurrent keystroke.
+        if (res?.matched) {
+          setNewItem((prev) => {
+            if (prev.unitCost !== "" || prev.markup !== "") return prev;
+            return {
+              ...prev,
+              unitCost: String(res.unitCost ?? ""),
+              markup: String(res.markup ?? ""),
+            };
+          });
+        }
+      } catch (_e) {
+        if (!cancelled) setPricingPreview(null);
+      }
+    }, 300);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [adding, newItem.itemType, newItem.supplierId, id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Geocode missing coordinates for map display. Runs whenever the itinerary
   // loads or changes. Uses the existing geocoder.js LRU + 1 req/sec rate limiter
@@ -452,6 +505,7 @@ export default function ItineraryDetail() {
       });
       notify.success("Item added");
       setNewItem(EMPTY_ITEM);
+      setPricingPreview(null);
       setAdding(false);
       load();
     } catch (e) {
@@ -770,6 +824,7 @@ export default function ItineraryDetail() {
 
         {adding && (
           <div style={{ background: "var(--surface-color)", padding: 16, borderRadius: 8, border: "1px solid var(--border-color)", marginBottom: 16 }}>
+            <PricingPreviewHint preview={pricingPreview} />
             <ItemFields values={newItem} suppliers={suppliers} onChange={(patch) => setNewItem({ ...newItem, ...patch })} />
             <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
               <button
@@ -780,7 +835,7 @@ export default function ItineraryDetail() {
               >
                 {geocoding ? "Resolving location…" : "Save item"}
               </button>
-              <button type="button" onClick={() => { setNewItem(EMPTY_ITEM); setAdding(false); }} style={secondaryBtn}>Cancel</button>
+              <button type="button" onClick={() => { setNewItem(EMPTY_ITEM); setPricingPreview(null); setAdding(false); }} style={secondaryBtn}>Cancel</button>
             </div>
           </div>
         )}
@@ -1114,6 +1169,60 @@ function SummaryTile({ label, value }) {
       <div style={{ fontSize: 18, fontWeight: 700, color: "var(--text-primary)" }}>
         {value}
       </div>
+    </div>
+  );
+}
+
+// Inline hint surfaced when the pricing engine returns a preview for the
+// Add-item form. Shows the rule-derived unit cost + markup and the season /
+// markup rule that produced them, or the degradation reason when no rule
+// matched. Returns null when there is no preview so it doesn't waste layout.
+function PricingPreviewHint({ preview }) {
+  if (!preview) return null;
+
+  const fmt = (n) => {
+    const num = Number(n);
+    return Number.isFinite(num) ? num.toLocaleString("en-IN", { maximumFractionDigits: 2 }) : "—";
+  };
+
+  if (!preview.matched) {
+    const reasonText =
+      preview.reason === "NO_CATEGORY_MAPPING"
+        ? "No cost template for this item type — enter rate manually."
+        : preview.reason === "NO_COST_ROW"
+          ? "No matching cost row — enter rate manually."
+          : preview.reason || "No pricing preview available.";
+    const warnings = Array.isArray(preview.warnings) ? preview.warnings : [];
+    return (
+      <div style={{ marginBottom: 12, padding: 10, background: "var(--warn-bg, #fff8e6)", border: "1px solid var(--warn-border, #f0d080)", borderRadius: 6, fontSize: 12, color: "var(--text-primary)" }}>
+        <div style={{ fontWeight: 600, marginBottom: 4 }}>{reasonText}</div>
+        {warnings.length > 0 && (
+          <ul style={{ margin: 0, paddingLeft: 16, color: "var(--text-secondary)" }}>
+            {warnings.map((w, i) => <li key={i}>{w}</li>)}
+          </ul>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ marginBottom: 12, padding: 10, background: "var(--info-bg, #eef6ff)", border: "1px solid var(--info-border, #bcd7f0)", borderRadius: 6, fontSize: 12, color: "var(--text-primary)" }}>
+      <div style={{ fontWeight: 600, marginBottom: 4 }}>
+        Pricing preview: {preview.currency || "INR"} {fmt(preview.unitCost)} + {fmt(preview.markup)} markup
+      </div>
+      <div style={{ color: "var(--text-secondary)", lineHeight: 1.5 }}>
+        {preview.matchedSeasonName && <span>Season: {preview.matchedSeasonName}</span>}
+        {preview.matchedSeasonName && preview.matchedMarkupRuleId && <span> · </span>}
+        {preview.matchedMarkupRuleId && <span>Markup rule #{preview.matchedMarkupRuleId}</span>}
+        {preview.seasonMultiplier != null && (
+          <span> · Season multiplier: {Number(preview.seasonMultiplier).toFixed(2)}x</span>
+        )}
+      </div>
+      {Array.isArray(preview.warnings) && preview.warnings.length > 0 && (
+        <ul style={{ margin: "6px 0 0", paddingLeft: 16, color: "var(--text-secondary)" }}>
+          {preview.warnings.map((w, i) => <li key={i}>{w}</li>)}
+        </ul>
+      )}
     </div>
   );
 }

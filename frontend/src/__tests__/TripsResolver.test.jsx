@@ -4,13 +4,13 @@
  *
  * SUT: frontend/src/pages/public/TripsResolver.jsx
  *
- * The resolver asks GET /api/landing-pages/public/featured for the
- * admin-selected featured page and either:
- *   - 200 → <Navigate replace to=`/p/${slug}`/>
- *   - 404 / network error → renders the hardcoded TripsLanding fallback
+ * The backend now serves /trips as the server-rendered featured page.
+ * For client-side navigations the resolver forces a full-page load to
+ * /trips when a featured page exists, otherwise it renders the hardcoded
+ * TripsLanding fallback.
  *
- * We pin all three branches plus the "no slug in response" defensive
- * path (treat as fallback). global.fetch is stubbed per test.
+ * We pin both branches plus the "no slug in response" defensive path
+ * (treat as fallback). global.fetch is stubbed per test.
  */
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -32,25 +32,28 @@ function renderResolver() {
     <MemoryRouter initialEntries={['/trips']}>
       <Routes>
         <Route path="/trips" element={<TripsResolver />} />
-        <Route path="/p/:slug" element={<div data-testid="redirected-to-slug" />} />
       </Routes>
     </MemoryRouter>,
   );
 }
 
 describe('<TripsResolver />', () => {
+  let locationReplace;
+
   beforeEach(() => {
     global.fetch = vi.fn();
+    locationReplace = vi.fn();
+    vi.stubGlobal('location', { ...window.location, replace: locationReplace });
   });
 
-  it('redirects to /p/<slug> when the featured endpoint returns a slug', async () => {
+  it('forces a full-page load to /trips when the featured endpoint returns a slug', async () => {
     global.fetch.mockResolvedValueOnce({
       ok: true,
       json: async () => ({ id: 1, slug: 'japan-2026', title: 'Japan 2026' }),
     });
     renderResolver();
     await waitFor(() => {
-      expect(screen.getByTestId('redirected-to-slug')).toBeInTheDocument();
+      expect(locationReplace).toHaveBeenCalledWith('/trips');
     });
     // The fallback should NOT have rendered.
     expect(screen.queryByTestId('trips-fallback')).not.toBeInTheDocument();
@@ -66,7 +69,7 @@ describe('<TripsResolver />', () => {
     await waitFor(() => {
       expect(screen.getByTestId('trips-fallback')).toBeInTheDocument();
     });
-    expect(screen.queryByTestId('redirected-to-slug')).not.toBeInTheDocument();
+    expect(locationReplace).not.toHaveBeenCalled();
   });
 
   it('falls back to the hardcoded TripsLanding on network error', async () => {

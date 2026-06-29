@@ -207,6 +207,11 @@ export default function LandingPageBuilder() {
   // tenant has no rules configured (UI surfaces a hint instead of an
   // empty dropdown).
   const [routingRules, setRoutingRules] = useState([]);
+  // Trip-link picker — populated only when the operator is on the TMC
+  // sub-brand (the only sub-brand that owns trips today). Empty array
+  // for non-TMC pages so the picker stays hidden.
+  const [tmcTrips, setTmcTrips] = useState([]);
+  const [linkingTripId, setLinkingTripId] = useState(null);
   // #454: dirty-state tracking + beforeunload guard.
   const [isDirty, setIsDirty] = useState(false);
   // Version-history drawer state. Lightweight versioning per PRD —
@@ -259,6 +264,57 @@ export default function LandingPageBuilder() {
       .then(rules => Array.isArray(rules) ? setRoutingRules(rules) : setRoutingRules([]))
       .catch(() => setRoutingRules([]));
   }, []);
+
+  // Fetch TMC trips for the "Link to trip" picker. Travel admins only;
+  // 403 (non-travel tenant or non-TMC sub-brand access) → silently
+  // leave the picker empty so the toolbar renders without the dropdown
+  // for generic users.
+  useEffect(() => {
+    fetchApi('/api/travel/trips?limit=200')
+      .then(res => Array.isArray(res?.trips) ? setTmcTrips(res.trips) : setTmcTrips([]))
+      .catch(() => setTmcTrips([]));
+  }, []);
+  // Sync linking state with the page's persisted tripId so the
+  // dropdown reflects "Linked to trip X" on load.
+  useEffect(() => {
+    if (page?.tripId !== undefined) setLinkingTripId(page.tripId ?? null);
+  }, [page?.tripId]);
+
+  // Link / unlink the page to a TMC trip via the existing PUT endpoint.
+  // Schema enforces 1:1 (LandingPage.tripId @unique) — server returns
+  // 409 TRIP_ALREADY_LINKED if another page already claims this trip.
+  const handleLinkToTrip = async (nextTripId) => {
+    // nextTripId === '' means "unlink" — translate to null for the API
+    const payload = nextTripId === '' || nextTripId === null
+      ? { tripId: null }
+      : { tripId: parseInt(nextTripId, 10) };
+    try {
+      const updated = await fetchApi(`/api/landing-pages/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        silent: true,
+      });
+      setPage(updated);
+      setLinkingTripId(updated.tripId ?? null);
+      if (payload.tripId == null) {
+        notify.success('Unlinked — wizard submissions will fall back to lead capture.');
+      } else {
+        const trip = tmcTrips.find(t => t.id === payload.tripId);
+        notify.success(`Linked to ${trip ? trip.tripCode : `trip #${payload.tripId}`}`);
+      }
+    } catch (err) {
+      if (err.status === 409 && err.body?.code === 'TRIP_ALREADY_LINKED') {
+        notify.error(err.body.error || 'Another landing page is already linked to this trip.');
+      } else if (err.status === 404 && err.body?.code === 'TRIP_NOT_FOUND') {
+        notify.error('That trip is not in your tenant.');
+      } else {
+        notify.error('Failed to update trip link');
+      }
+      // Restore dropdown to the persisted value
+      setLinkingTripId(page?.tripId ?? null);
+    }
+  };
 
   // #454: native beforeunload guard.
   useEffect(() => {
@@ -378,7 +434,7 @@ export default function LandingPageBuilder() {
       setPage({ ...page, status: 'PUBLISHED', publishedAt: new Date().toISOString() });
       setPublishIssues({ ok: true, issues: [] });
       setShowPublishModal(false);
-      notify.success(`Published — public URL is /p/${page.slug}.`);
+      notify.success(`Published — public URL is /trips.`);
     } catch (err) {
       if (err?.status === 409 && err?.code === 'PUBLISH_GATE_FAILED') {
         setPublishIssues({ ok: false, issues: err.data?.issues || [] });
@@ -393,7 +449,7 @@ export default function LandingPageBuilder() {
 
   const handleUnpublish = async () => {
     if (!page?.id) return;
-    const ok = await notify.confirm(`Unpublish "${page.title}"? The public URL /p/${page.slug} will return 404 until you re-publish.`);
+    const ok = await notify.confirm(`Unpublish "${page.title}"? The public URL /trips will return 404 until you re-publish.`);
     if (!ok) return;
     try {
       await fetchApi(`/api/landing-pages/${page.id}/unpublish`, { method: 'POST' });
@@ -634,9 +690,33 @@ export default function LandingPageBuilder() {
           <Eye size={14} /> Preview
         </button>
         {page.status === 'PUBLISHED' && (
-          <a href={`${window.location.origin.replace(':5173', ':5000')}/p/${page.slug}`} target="_blank" rel="noreferrer" style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', padding: '0.35rem 0.7rem', border: '1px solid var(--border-color)', borderRadius: '6px', fontSize: '0.8rem', color: 'var(--text-primary)', textDecoration: 'none' }}>
+          <a href={`${window.location.origin}/trips`} target="_blank" rel="noreferrer" style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', padding: '0.35rem 0.7rem', border: '1px solid var(--border-color)', borderRadius: '6px', fontSize: '0.8rem', color: 'var(--text-primary)', textDecoration: 'none' }}>
             <Globe size={14} /> Open live
           </a>
+        )}
+        {/* Link-to-trip picker — only renders when the operator has at
+            least one TMC trip available. Hidden on tenants without
+            travel access. Saves immediately on change via the existing
+            PUT endpoint (tripId field, Phase 11). Linking is what
+            makes /api/pages/:slug/submit fire the registration-draft
+            branch — otherwise wizard submissions fall back to the
+            generic lead-capture path. */}
+        {tmcTrips.length > 0 && (
+          <select
+            value={linkingTripId ?? ''}
+            onChange={(e) => handleLinkToTrip(e.target.value)}
+            title="Link this landing page to a TMC trip so wizard submissions create PendingTripRegistration drafts"
+            aria-label="Link landing page to TMC trip"
+            data-testid="link-to-tmc-trip-picker"
+            style={{ padding: '0.3rem 0.5rem', border: '1px solid var(--border-color)', borderRadius: '6px', fontSize: '0.78rem', background: 'var(--surface-color)', color: 'var(--text-primary)', cursor: 'pointer', maxWidth: 180 }}
+          >
+            <option value="">— Not linked to a trip —</option>
+            {tmcTrips.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.tripCode} ({t.destination})
+              </option>
+            ))}
+          </select>
         )}
         <button className="btn-primary" onClick={() => handleSave(false)} disabled={saving || !slugIsValid} style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', padding: '0.35rem 0.9rem', fontSize: '0.85rem' }}>
           <Save size={14} /> {saving ? 'Saving...' : 'Save'}{isDirty && !saving && <span style={{ marginLeft: '0.3rem', opacity: 0.85 }}>•</span>}
@@ -720,7 +800,7 @@ export default function LandingPageBuilder() {
               <div><strong>Status:</strong> {page.status}</div>
               {page.status === 'PUBLISHED' && (
                 <div style={{ marginTop: '0.6rem' }}>
-                  <a href={`${window.location.origin.replace(':5173', ':5000')}/p/${page.slug}`} target="_blank" rel="noreferrer" style={{ color: 'var(--accent-color)' }}>Open public page →</a>
+                  <a href={`${window.location.origin}/trips`} target="_blank" rel="noreferrer" style={{ color: 'var(--accent-color)' }}>Open public page →</a>
                 </div>
               )}
             </div>
@@ -1086,7 +1166,7 @@ function PublishReadinessModal({ verdict, page, publishing, onPublish, onClose, 
         {ok ? (
           <>
             <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginBottom: '1rem' }}>
-              Page passes every readiness check. Click Publish to make <code>/p/{page?.slug}</code> public.
+              Page passes every readiness check. Click Publish to make <code>/trips</code> public.
             </p>
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
               <button onClick={onClose} style={{ padding: '0.5rem 1rem', border: '1px solid var(--border-color)', borderRadius: 6, background: 'transparent', color: 'var(--text-primary)', cursor: 'pointer' }}>Cancel</button>

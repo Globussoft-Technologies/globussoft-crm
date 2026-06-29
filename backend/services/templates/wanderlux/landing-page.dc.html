@@ -718,8 +718,11 @@
        always knows submissions made here will NOT land in Leads.
        The renderer sets cfg.meta.isPreview / cfg.meta.isPublished. -->
   <sc-if value="{{ showPreviewBanner }}">
-  <div role="status" aria-live="polite" style="position:fixed;top:0;left:0;right:0;z-index:90;background:#92400E;color:#fff;padding:10px 20px;text-align:center;font-size:13.5px;line-height:1.4;letter-spacing:0.02em;box-shadow:0 2px 8px rgba(0,0,0,0.2)">
+  <div role="status" aria-live="polite" style="position:fixed;top:0;left:0;right:0;z-index:90;background:#92400E;color:#fff;padding:10px 44px 10px 20px;text-align:center;font-size:13.5px;line-height:1.4;letter-spacing:0.02em;box-shadow:0 2px 8px rgba(0,0,0,0.2)">
     <strong style="font-weight:700">Preview mode</strong> — registrations made on this page are <strong>not</strong> saved. Publish the page (and feature it at <code style="background:rgba(255,255,255,0.18);padding:2px 6px;border-radius:3px;font-size:12.5px">/trips</code>) so real submissions land in your Leads.
+    <!-- Close button — operator can dismiss the banner so the layout
+         underneath is fully visible while they review preview content. -->
+    <button type="button" onClick="{{ dismissPreviewBanner }}" aria-label="Dismiss preview banner" title="Dismiss" style="position:absolute;right:8px;top:50%;transform:translateY(-50%);background:transparent;border:none;color:#fff;font-size:20px;line-height:1;cursor:pointer;padding:4px 8px;border-radius:4px;opacity:0.85" style-hover="opacity:1;background:rgba(255,255,255,0.12)">×</button>
   </div>
   </sc-if>
 
@@ -980,8 +983,16 @@ class Component extends DCLogic {
     now: Date.now(), openFaq:0, faqCat:'all', faqQuery:'',
     regStep:0, regValues:{}, regError:'', regSubmitted:false, regSending:false,
     brValues:{}, brError:'', brSubmitted:false, brSending:false,
-    toast: null
+    toast: null,
+    /* Preview banner can be dismissed by the operator. Persists for
+       the lifetime of the page-view only (not stored in localStorage)
+       so each fresh tab shows the warning. */
+    previewBannerDismissed: false
   };
+
+  dismissPreviewBanner(){
+    this.setState({ previewBannerDismissed: true });
+  }
 
   componentDidMount(){
     this._t = setInterval(() => this.setState({ now: Date.now() }), 1000);
@@ -1059,9 +1070,25 @@ class Component extends DCLogic {
     const s = {}; s[opts.sendingKey] = true; this.setState(s);
     fetch(opts.endpoint, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) })
       .then(r => { if(!r.ok) throw new Error('bad status'); return r.json().catch(() => ({})); })
-      .then(() => {
+      .then((body) => {
+        /* Phase 6 — hybrid registration-draft branch. When the backend
+           created a PendingTripRegistration (page is trip-linked +
+           register.mode is 'registration-draft' in the stored config),
+           it returns { redirect: { type: 'microsite', url } }. The URL
+           carries only the opaque draftToken; navigate the user to the
+           microsite so they can verify their phone via OTP. Otherwise
+           fall back to the toast + done-state (existing lead-capture
+           behaviour). */
+        const redirect = body && body.redirect;
+        if(redirect && redirect.type === 'microsite' && redirect.url){
+          window.location.href = redirect.url;
+          return;
+        }
         const p = {}; p[opts.doneKey] = true; p[opts.sendingKey] = false; this.setState(p);
-        this.showToast('Registration received — our team will reach out shortly.', 'success');
+        const msg = (redirect && redirect.type === 'thanks' && body && body.message)
+          ? body.message
+          : 'Registration received — our team will reach out shortly.';
+        this.showToast(msg, 'success');
       })
       .catch(() => {
         const p = { regError:'', brError:'' };
@@ -1363,7 +1390,15 @@ class Component extends DCLogic {
       .map(function(e) { return typeof e === 'string' ? e.trim() : (e && e.label ? String(e.label).trim() : ''); })
       .filter(function(e) { return !!e; })
       .map(function(e) { return { label: e, href: 'mailto:' + e }; });
-    out.showFooter = !!(ft.name || emailsList.length > 0);
+    /* Phone labels fall back to the dial string so a number entered only
+       in the "Tel" field still renders as a visible, clickable link. */
+    const phonesList = (ft.phones || [])
+      .map(function(p) {
+        const label = (p && (p.label || p.tel)) || '';
+        return { label: label, href: (p && p.tel) ? ('tel:' + p.tel) : '#' };
+      })
+      .filter(function(p) { return !!p.label; });
+    out.showFooter = !!(ft.name || ft.tagline || ft.brandLogo || ft.logo || emailsList.length > 0 || phonesList.length > 0 || (ft.legal && ft.legal.length));
     /* Footer logo source preference: explicit `footer.brandLogo` first
        (the new editor field), then the legacy `footer.logo`, then
        fallback to the brand-level `brand.logo` so a logo set once in
@@ -1374,11 +1409,11 @@ class Component extends DCLogic {
       brandLogo: footerLogo, brandLogoH: ft.brandLogoH || brandLogoH, showBrandMark: !!(ft.mark && !footerLogo),
       email:ft.email, emailHref: ft.email ? ('mailto:' + ft.email) : '#',
       emailsList: emailsList,
-      phones: (ft.phones || []).map(p => ({ label:p.label, href: p.tel ? ('tel:' + p.tel) : '#' })),
+      phones: phonesList,
       legal: ft.legal || []
     };
     out.showEmails = emailsList.length > 0;
-    out.showPhones = !!(ft.phones && ft.phones.length);
+    out.showPhones = phonesList.length > 0;
 
     /* ----- toast (transient banner shown after submit / on preview) -----
        Persistent preview banner: when the renderer flags this as a
@@ -1396,7 +1431,8 @@ class Component extends DCLogic {
         : '#1F2937')
       : '';
     const meta = cfg.meta || {};
-    out.showPreviewBanner = !!(meta.isPreview === true || meta.isPublished === false);
+    out.showPreviewBanner = !!(meta.isPreview === true || meta.isPublished === false) && !this.state.previewBannerDismissed;
+    out.dismissPreviewBanner = () => this.dismissPreviewBanner();
 
     return out;
   }

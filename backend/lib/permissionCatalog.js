@@ -115,7 +115,7 @@ const WELLNESS_MODULES = {
   // write the every-appointment-in-the-clinic view. Owners / managers /
   // receptionists who triage the global queue need this; doctors who
   // only work their own slots do NOT (they use `my_appointments`).
-  appointments: ['read', 'write', 'update', 'delete', 'export'],
+  appointments: ['read', 'write', 'update', 'delete', 'export', 'assign'],
   // `my_appointments` gates /wellness/my-appointments — the per-practitioner
   // view that's intentionally distinct from the tenant-wide list. Split out
   // so a doctor / nurse can be granted "see my own appointments" without

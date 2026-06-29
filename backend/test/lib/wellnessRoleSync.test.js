@@ -33,6 +33,7 @@ beforeAll(() => {
     findMany: vi.fn(),
     findFirst: vi.fn(),
     create: vi.fn(),
+    count: vi.fn(),
   };
 });
 
@@ -42,6 +43,9 @@ beforeEach(() => {
   prisma.user.update.mockReset();
   prisma.userRole.findMany.mockReset();
   prisma.wellnessRoleType.findMany.mockReset();
+  prisma.wellnessRoleType.findFirst.mockReset();
+  prisma.wellnessRoleType.create.mockReset();
+  prisma.wellnessRoleType.count.mockReset();
 });
 
 function stubTenant(vertical) {
@@ -60,6 +64,7 @@ function stubAssignments(roleKeys, { tenantId = 1 } = {}) {
 }
 function stubCatalog(rows = CATALOG) {
   prisma.wellnessRoleType.findMany.mockResolvedValue(rows);
+  prisma.wellnessRoleType.count.mockResolvedValue(rows.length);
 }
 
 describe('syncWellnessRoleFromRbacRoles', () => {
@@ -256,5 +261,24 @@ describe('syncWellnessRoleFromRbacRoles', () => {
     const out = await syncWellnessRoleFromRbacRoles(prisma, { userId: 7, tenantId: 1 });
     expect(out).toBeNull();
     expect(prisma.user.update).not.toHaveBeenCalled();
+  });
+
+  test('seeds default catalog when empty so RBAC-to-wellness mapping never no-ops', async () => {
+    stubTenant('wellness');
+    stubUser(1, null);
+    stubAssignments(['DOCTOR']);
+    prisma.wellnessRoleType.count.mockResolvedValue(0);
+    prisma.wellnessRoleType.findFirst.mockResolvedValue(null);
+    prisma.wellnessRoleType.create.mockResolvedValue({});
+    // After seeding, the catalog query returns the default mapping.
+    prisma.wellnessRoleType.findMany.mockResolvedValue(CATALOG);
+
+    const out = await syncWellnessRoleFromRbacRoles(prisma, { userId: 7, tenantId: 1 });
+    expect(out).toBe('doctor');
+    expect(prisma.wellnessRoleType.create).toHaveBeenCalled();
+    expect(prisma.user.update).toHaveBeenCalledWith({
+      where: { id: 7 },
+      data: { wellnessRole: 'doctor' },
+    });
   });
 });

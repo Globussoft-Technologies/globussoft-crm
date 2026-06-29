@@ -10,7 +10,7 @@
 
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { Luggage, Filter, Plus, Users, Calendar as CalendarIcon, X } from "lucide-react";
+import { Luggage, Filter, Plus, Users, Calendar as CalendarIcon, X, Trash2 } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 
@@ -112,6 +112,51 @@ export default function Trips() {
 
   useEffect(load, [status]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Track which trip is currently being deleted so we can disable its
+  // row's trash button (prevents double-click race) without disabling
+  // siblings.
+  const [deletingId, setDeletingId] = useState(null);
+
+  // DELETE /api/travel/trips/:id is ADMIN-only on the server
+  // (requirePermission("trips","delete")). The route cascades through
+  // participants, rooming, payment plan, microsite, document
+  // requirements, AND PendingTripRegistration drafts via the schema's
+  // onDelete:Cascade — so the confirmation copy MUST flag that. A
+  // wrongly-deleted trip cannot be recovered without restoring the
+  // mysqldump backup.
+  const remove = async (t) => {
+    const ok = await notify.confirm({
+      title: "Delete trip",
+      message:
+        `Permanently delete "${t.tripCode}" — ${t.destination}?\n\n`
+        + "This will also delete every participant, room assignment, payment-plan row, "
+        + "instalment payment, document requirement, microsite, landing page, and "
+        + "pending registration linked to this trip.\n\n"
+        + "This cannot be undone.",
+      confirmText: "Delete trip",
+      destructive: true,
+    });
+    if (!ok) return;
+    setDeletingId(t.id);
+    // Toast before the network call fires so the operator sees
+    // immediate feedback that the action is in progress — useful
+    // because the cascade can take a moment on trips with many
+    // participants.
+    notify.info(`Deleting trip ${t.tripCode}…`);
+    try {
+      await fetchApi(`/api/travel/trips/${t.id}`, { method: "DELETE" });
+      notify.success(`Trip ${t.tripCode} deleted`);
+      load();
+    } catch (e) {
+      // The route returns 403 RBAC_DENIED for non-ADMIN callers; surface
+      // the server-side message so the operator knows it's a perms issue
+      // rather than a network problem.
+      notify.error(e?.body?.error || "Failed to delete trip");
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
   return (
     <div style={{ padding: 24, maxWidth: 1200, margin: "0 auto" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
@@ -162,6 +207,7 @@ export default function Trips() {
                 <th style={th}>Participants</th>
                 <th style={th}>Per-student</th>
                 <th style={th}>Status</th>
+                <th style={{ ...th, width: 60, textAlign: "right" }} aria-label="Actions"></th>
               </tr>
             </thead>
             <tbody>
@@ -197,6 +243,28 @@ export default function Trips() {
                       }}>
                         {t.status}
                       </span>
+                    </td>
+                    <td style={{ ...td, textAlign: "right" }}>
+                      <button
+                        type="button"
+                        onClick={() => remove(t)}
+                        disabled={deletingId === t.id}
+                        aria-label={`Delete trip ${t.tripCode}`}
+                        title="Delete trip"
+                        style={{
+                          background: "transparent",
+                          border: "1px solid var(--border-color)",
+                          borderRadius: 6,
+                          padding: "4px 6px",
+                          color: "#A8323F",
+                          cursor: deletingId === t.id ? "wait" : "pointer",
+                          opacity: deletingId === t.id ? 0.5 : 1,
+                          display: "inline-flex",
+                          alignItems: "center",
+                        }}
+                      >
+                        <Trash2 size={14} aria-hidden />
+                      </button>
                     </td>
                   </tr>
                 );

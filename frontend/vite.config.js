@@ -65,7 +65,24 @@ export default defineConfig({
         target: process.env.VITE_API_PROXY_TARGET || 'http://localhost:5000',
         changeOrigin: true,
         rewrite: (path) => path,
-      }
+      },
+      // Public landing pages (/p/<slug>) are server-rendered HTML
+      // emitted by Express. In production Nginx routes /p/* to the
+      // backend; in dev we need to proxy it explicitly, otherwise
+      // Vite falls through to the SPA's 404 page. Excludes
+      // /p/tripmicrosite/* which is a real SPA route (PublicTripMicrosite).
+      '^/p/(?!tripmicrosite)': {
+        target: process.env.VITE_API_PROXY_TARGET || 'http://localhost:5000',
+        changeOrigin: true,
+        rewrite: (path) => path,
+      },
+      // /trips renders the currently featured published landing page
+      // as server-rendered HTML. Must proxy to the backend, not the SPA.
+      '/trips': {
+        target: process.env.VITE_API_PROXY_TARGET || 'http://localhost:5000',
+        changeOrigin: true,
+        rewrite: (path) => path,
+      },
     }
   },
   build: {

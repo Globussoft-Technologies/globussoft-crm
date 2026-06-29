@@ -483,6 +483,8 @@ export default function Staff() {
 
   // #618 — Edit / Deactivate / Reset Password / Resend Invite handlers.
   const openEdit = (member) => {
+    const rbacRoleId = member.primaryRole?.id ? String(member.primaryRole.id) : '';
+    const rbacRole = availableRoles.find((r) => String(r.id) === String(rbacRoleId));
     setEditing({
       id: member.id,
       name: member.name || '',
@@ -492,7 +494,11 @@ export default function Staff() {
       // Pre-populate the single Role dropdown from the member's current
       // primary RBAC role (surfaced by GET /api/staff). Empty string = unset
       // so admins must explicitly pick a role before saving.
-      rbacRoleId: member.primaryRole?.id ? String(member.primaryRole.id) : '',
+      rbacRoleId,
+      // Wellness role is editable independently of the RBAC role so admins
+      // can tag a manager/professional as bookable, or clear a stale tag.
+      wellnessRole: member.wellnessRole || '',
+      wellnessRoleTouched: false,
       // Travel-only: pre-fill the sub-brand picker from the member's current scope.
       subBrandAccess: parseSubBrandAccess(member.subBrandAccess),
     });
@@ -506,7 +512,10 @@ export default function Staff() {
     // we just stop asking the admin to fill them out separately.
     const rbacRole = availableRoles.find((r) => String(r.id) === String(editing.rbacRoleId));
     const accessTier = deriveAccessTier(rbacRole);
-    const wellnessRole = deriveWellnessRole(rbacRole, wellnessRoleTypes);
+    const derivedWellnessRole = deriveWellnessRole(rbacRole, wellnessRoleTypes);
+    const wellnessRole = editing.wellnessRoleTouched
+      ? editing.wellnessRole || null
+      : (derivedWellnessRole || editing.wellnessRole || null);
     setSavingEdit(true);
     try {
       await fetchApi(`/api/staff/${editing.id}`, {
@@ -515,7 +524,7 @@ export default function Staff() {
           name: editing.name,
           email: editing.email,
           role: accessTier,
-          wellnessRole: wellnessRole || null,
+          wellnessRole,
           // PRD Gap §1.5 — number or null. '' becomes null (clear assignment).
           commissionProfileId: editing.commissionProfileId === '' ? null : Number(editing.commissionProfileId),
           rbacRoleId: parseInt(editing.rbacRoleId, 10),
@@ -545,6 +554,8 @@ export default function Staff() {
       email: '',
       password: '',
       rbacRoleId: '',
+      wellnessRole: '',
+      wellnessRoleTouched: false,
       // Travel-only: brands this staff member may access ([] = all brands).
       subBrandAccess: [],
     });
@@ -561,15 +572,17 @@ export default function Staff() {
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { notify.error('Please enter a valid work email address.'); return; }
     if (password.length < 6) { notify.error('Password must be at least 6 characters.'); return; }
     if (!creating.rbacRoleId) { notify.error('Please choose a role.'); return; }
-    // Derive the legacy access tier + wellnessRole from the single Role pick
-    // so the backend's existing contract (which still takes role + wellnessRole
-    // + rbacRoleId) keeps working. ADMIN/MANAGER/USER picks map 1:1 onto the
-    // access tier; everything else defaults to USER. If the role key matches
-    // a wellness catalog entry (doctor / nurse / professional / …), seed
-    // wellnessRole so reports + auto-routing work without a second pick.
+    // Derive the legacy access tier from the single Role pick. If the admin
+    // has not explicitly touched the wellness-role dropdown, auto-derive it
+    // from the RBAC role key (Doctor → doctor, etc.) so the user lands in the
+    // right booking dropdown automatically. The dropdown is still editable for
+    // cases where a manager/professional needs a different clinical tag.
     const rbacRole = availableRoles.find((r) => String(r.id) === String(creating.rbacRoleId));
     const accessTier = deriveAccessTier(rbacRole);
-    const wellnessRole = deriveWellnessRole(rbacRole, wellnessRoleTypes);
+    const derivedWellnessRole = deriveWellnessRole(rbacRole, wellnessRoleTypes);
+    const wellnessRole = creating.wellnessRoleTouched
+      ? creating.wellnessRole || null
+      : (derivedWellnessRole || creating.wellnessRole || null);
     setSavingCreate(true);
     try {
       await fetchApi('/api/staff', {
@@ -579,7 +592,7 @@ export default function Staff() {
           email,
           password,
           role: accessTier,
-          wellnessRole: wellnessRole || null,
+          wellnessRole,
           rbacRoleId: parseInt(creating.rbacRoleId, 10),
           // Travel-only: scope to brands. Admin/empty → null (all brands). The
           // backend ignores this entirely for generic/wellness tenants.
@@ -681,6 +694,28 @@ export default function Staff() {
   };
 
   const adminCount = staff.filter(s => s.role === 'ADMIN').length;
+
+  // When the RBAC role changes and the admin hasn't manually picked a
+  // wellness role, auto-derive it from the role key (Doctor → doctor). The
+  // dropdown below still lets the admin override.
+  const deriveDefaultWellnessRole = (rbacRoleId) => {
+    const rbacRole = availableRoles.find((r) => String(r.id) === String(rbacRoleId));
+    return deriveWellnessRole(rbacRole, wellnessRoleTypes) || '';
+  };
+  const handleCreateRoleChange = (v) => {
+    setCreating((prev) => ({
+      ...prev,
+      rbacRoleId: v,
+      wellnessRole: prev.wellnessRoleTouched ? prev.wellnessRole : deriveDefaultWellnessRole(v),
+    }));
+  };
+  const handleEditRoleChange = (v) => {
+    setEditing((prev) => ({
+      ...prev,
+      rbacRoleId: v,
+      wellnessRole: prev.wellnessRoleTouched ? prev.wellnessRole : deriveDefaultWellnessRole(v),
+    }));
+  };
   const managerCount = staff.filter(s => s.role === 'MANAGER').length;
   const userCount = staff.filter(s => s.role === 'USER').length;
 
@@ -1284,11 +1319,28 @@ export default function Staff() {
                 Role
                 <RoleSelect
                   value={creating.rbacRoleId}
-                  onChange={(v) => setCreating({ ...creating, rbacRoleId: v })}
+                  onChange={handleCreateRoleChange}
                   options={availableRoles}
                   testId="staff-create-role"
                 />
               </label>
+              {isWellness && wellnessRoleTypes.length > 0 && (
+                <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                  Wellness role <span style={{ fontWeight: 400 }}>(controls booking dropdown visibility)</span>
+                  <select
+                    className="input-field"
+                    value={creating.wellnessRole}
+                    onChange={(e) => setCreating({ ...creating, wellnessRole: e.target.value, wellnessRoleTouched: true })}
+                    data-testid="staff-create-wellness-role"
+                    style={{ width: '100%', marginTop: '0.25rem' }}
+                  >
+                    <option value="">— None —</option>
+                    {wellnessRoleTypes.map((r) => (
+                      <option key={r.id} value={r.key}>{r.label}</option>
+                    ))}
+                  </select>
+                </label>
+              )}
               {isTravel && (
                 <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
                   Sub-brand access
@@ -1385,11 +1437,28 @@ export default function Staff() {
                 Role
                 <RoleSelect
                   value={editing.rbacRoleId}
-                  onChange={(v) => setEditing({ ...editing, rbacRoleId: v })}
+                  onChange={handleEditRoleChange}
                   options={availableRoles}
                   testId="staff-edit-role"
                 />
               </label>
+              {isWellness && wellnessRoleTypes.length > 0 && (
+                <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                  Wellness role <span style={{ fontWeight: 400 }}>(controls booking dropdown visibility)</span>
+                  <select
+                    className="input-field"
+                    value={editing.wellnessRole}
+                    onChange={(e) => setEditing({ ...editing, wellnessRole: e.target.value, wellnessRoleTouched: true })}
+                    data-testid="staff-edit-wellness-role"
+                    style={{ width: '100%', marginTop: '0.25rem' }}
+                  >
+                    <option value="">— None —</option>
+                    {wellnessRoleTypes.map((r) => (
+                      <option key={r.id} value={r.key}>{r.label}</option>
+                    ))}
+                  </select>
+                </label>
+              )}
               {isTravel && (
                 <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
                   Sub-brand access

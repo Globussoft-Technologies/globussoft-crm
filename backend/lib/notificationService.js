@@ -259,10 +259,10 @@ async function notify({ userId, tenantId, title, message, type, priority, link, 
 /**
  * Notify multiple users.
  */
-async function notifyMany({ userIds, tenantId, title, message, type, link, channels, io }) {
+async function notifyMany({ userIds, tenantId, title, message, type, priority, link, entityType, entityId, category, dedupWindowHours, channels, io }) {
   const results = [];
   for (const uid of userIds) {
-    const n = await notify({ userId: uid, tenantId, title, message, type, link, channels, io });
+    const n = await notify({ userId: uid, tenantId, title, message, type, priority, link, entityType, entityId, category, dedupWindowHours, channels, io });
     results.push(n);
   }
   return results;

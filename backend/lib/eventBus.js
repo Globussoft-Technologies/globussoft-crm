@@ -38,9 +38,9 @@ bus.on("payment.collected", async ({ payload, tenantId }) => {
     if (travelInvoiceId) {
       const inv = await prisma.travelInvoice.findFirst({
         where: { id: travelInvoiceId, tenantId },
-        select: { invoiceNumber: true },
+        select: { invoiceNum: true },
       });
-      const invNum = inv?.invoiceNumber || `#${travelInvoiceId}`;
+      const invNum = inv?.invoiceNum || `#${travelInvoiceId}`;
       title = `Payment received for invoice ${invNum}`;
       message = `A Razorpay payment of ${paidText} was received against invoice ${invNum}.`;
       link = `/travel/invoices/${travelInvoiceId}`;

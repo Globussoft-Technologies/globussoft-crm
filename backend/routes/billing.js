@@ -889,9 +889,22 @@ router.post("/public/confirm-payment", async (req, res) => {
       return res.status(400).json({ error: "Payment not completed" });
     }
 
-    const payment = await prisma.payment.findFirst({
+    let payment = await prisma.payment.findFirst({
       where: { gateway: "razorpay", gatewayId: razorpay_payment_link_id },
     });
+    // The webhook (routes/payments.js) may have already reconciled this row and
+    // replaced gatewayId (plink_… → pay_…). When the webhook wins the race the
+    // lookup above misses, so fall back to the payment-link id we persist in the
+    // row's metadata — otherwise the success page 404s on a payment that did go
+    // through.
+    if (!payment) {
+      payment = await prisma.payment.findFirst({
+        where: {
+          gateway: "razorpay",
+          metadata: { contains: `"plinkId":"${razorpay_payment_link_id}"` },
+        },
+      });
+    }
     if (!payment) return res.status(404).json({ error: "Payment record not found" });
 
     // Verify signature using tenant's own key secret

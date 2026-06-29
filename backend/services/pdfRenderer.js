@@ -4546,6 +4546,8 @@ async function renderTravelInvoicePdf(opts) {
   let rowY = tableTop + 22;
   doc.font("Helvetica").fontSize(10).fillColor("#222");
   let computedSubtotal = 0;
+  const lineRowMinHeight = 20;
+  const lineRowGap = 6;
   if (lines.length === 0) {
     doc.fillColor("#777").text(
       "(No line items on this invoice yet.)",
@@ -4554,7 +4556,6 @@ async function renderTravelInvoicePdf(opts) {
     rowY += 18;
   } else {
     for (const line of lines) {
-      if (rowY > 700) { doc.addPage(); rowY = 60; }
       const qty = Number(line.quantity) || 0;
       const unit = Number(line.unitPrice) || 0;
       const amount = line.amount != null ? Number(line.amount) : qty * unit;
@@ -4579,8 +4580,19 @@ async function renderTravelInvoicePdf(opts) {
           gstCell = `${halfStr}+${halfStr}% CGST/SGST ${fmt(split.cgst + split.sgst)}`;
         }
       }
+      const descText = String(line.description || "—");
+      doc.font("Helvetica").fontSize(10);
+      const descHeight = doc.heightOfString(descText, { width: 210 });
+      doc.font("Helvetica").fontSize(8);
+      const gstHeight = doc.heightOfString(gstCell, { width: 60, align: "right" });
+      const thisRowHeight = Math.max(lineRowMinHeight, descHeight, gstHeight) + lineRowGap;
+      if (rowY + thisRowHeight > 720) {
+        doc.addPage();
+        rowY = 60;
+      }
       doc.fillColor("#222");
-      doc.text(String(line.description || "—"), colX.desc, rowY, { width: 210 });
+      doc.font("Helvetica").fontSize(10);
+      doc.text(descText, colX.desc, rowY, { width: 210 });
       doc.text(sacCode == null ? "—" : sacCode, colX.sac, rowY, { width: 40, align: "left" });
       doc.fontSize(8);
       doc.text(gstCell, colX.gst, rowY, { width: 60, align: "right" });
@@ -4588,7 +4600,7 @@ async function renderTravelInvoicePdf(opts) {
       doc.text(qty === 0 ? "—" : String(qty), colX.qty, rowY, { width: 30, align: "right" });
       doc.text(unit === 0 ? "—" : fmt(unit), colX.unit, rowY, { width: 55, align: "right" });
       doc.text(fmt(amount), colX.total, rowY, { width: 70, align: "right" });
-      rowY += 20;
+      rowY += thisRowHeight;
     }
   }
   doc.y = rowY + 4;
@@ -4596,6 +4608,20 @@ async function renderTravelInvoicePdf(opts) {
   const grandTotal = invoice.totalAmount != null
     ? Number(invoice.totalAmount)
     : computedSubtotal;
+  const amountPaid = Math.max(0, Number(
+    invoice.amountPaid != null
+      ? invoice.amountPaid
+      : invoice.totalPaid != null
+        ? invoice.totalPaid
+        : invoice.paidAmount || 0,
+  ) || 0);
+  const explicitBalanceDue = invoice.balanceDue != null
+    ? Number(invoice.balanceDue)
+    : null;
+  const balanceDue = explicitBalanceDue != null && Number.isFinite(explicitBalanceDue)
+    ? Math.max(0, explicitBalanceDue)
+    : Math.max(0, grandTotal - amountPaid);
+  const hasPartialPayment = invoice.status !== "Paid" && amountPaid > 0;
 
   doc.moveDown(0.5);
   const totalsY = doc.y;
@@ -4606,16 +4632,27 @@ async function renderTravelInvoicePdf(opts) {
   doc.text(fmt(computedSubtotal), 450, ty, { width: 95, align: "right" });
   ty += 16;
 
+  if (hasPartialPayment) {
+    doc.text("Amount Paid", 350, ty, { width: 95, align: "right" });
+    doc.text(`-${fmt(amountPaid)}`, 450, ty, { width: 95, align: "right" });
+    ty += 16;
+  }
+
   doc.moveTo(350, ty).lineTo(545, ty).lineWidth(0.5).strokeColor("#bbb").stroke();
   ty += 6;
   // S34 — paint the total label in the sub-brand's primaryColor so the
   // page's most-load-bearing figure is brand-tinted. Numeric value stays
   // #111 (high-contrast black) for readability. Paid invoices read "Total Paid".
-  const totalLabel = invoice.status === "Paid" ? "Total Paid" : "Total Due";
+  const totalLabel = invoice.status === "Paid"
+    ? "Total Paid"
+    : hasPartialPayment
+      ? "Balance Due"
+      : "Total Due";
+  const totalValue = hasPartialPayment ? balanceDue : grandTotal;
   doc.font("Helvetica-Bold").fontSize(11).fillColor(primaryColor);
   doc.text(totalLabel, 350, ty, { width: 95, align: "right" });
   doc.fillColor("#111");
-  doc.text(fmt(grandTotal), 450, ty, { width: 95, align: "right" });
+  doc.text(fmt(totalValue), 450, ty, { width: 95, align: "right" });
   ty += 18;
   doc.y = ty + 8;
 
@@ -4638,7 +4675,10 @@ async function renderTravelInvoicePdf(opts) {
     sy += 4;
     doc.font("Helvetica").fontSize(9).fillColor("#222");
     for (const row of hsnSummary) {
-      if (sy > 720) { doc.addPage(); sy = 60; }
+      doc.font("Helvetica").fontSize(9);
+      const summaryDescHeight = doc.heightOfString(row.description, { width: 230, align: "left" });
+      const summaryRowHeight = Math.max(18, summaryDescHeight + 12);
+      if (sy + summaryRowHeight > 720) { doc.addPage(); sy = 60; }
       doc.text(row.sacCode, 50, sy, { width: 50, align: "left" });
       doc.text(row.description, 105, sy, { width: 230, align: "left" });
       doc.text(
@@ -4648,9 +4688,9 @@ async function renderTravelInvoicePdf(opts) {
       doc.text(fmt(row.taxableValue), 400, sy, { width: 95, align: "right" });
       doc.text(String(row.count), 500, sy, { width: 45, align: "right" });
       doc.fillColor("#777").fontSize(7);
-      doc.text(`${row.sacCode} / ${row.gstPercent}%`, 105, sy + 9, { width: 230, align: "left" });
+      doc.text(`${row.sacCode} / ${row.gstPercent}%`, 105, sy + summaryDescHeight + 1, { width: 230, align: "left" });
       doc.fillColor("#222").fontSize(9);
-      sy += 18;
+      sy += summaryRowHeight;
     }
     doc.y = sy + 4;
   }

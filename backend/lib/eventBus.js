@@ -11,6 +11,64 @@ bus.setMaxListeners(100);
 // Global io reference for routes to emit events with socket.io support
 let globalIo = null;
 
+// ── Travel payment admin notification listener ─────────────────────
+// Fires on every payment.collected event that carries a travel reference
+// (quote advance, milestone, or full travel-invoice payment) and notifies
+// all ADMIN/MANAGER users in the tenant.
+const { notifyMany } = require("./notificationService");
+
+bus.on("payment.collected", async ({ payload, tenantId }) => {
+  try {
+    const quoteId = payload.quoteId ? Number(payload.quoteId) : null;
+    const travelInvoiceId = payload.travelInvoiceId ? Number(payload.travelInvoiceId) : null;
+    if (!quoteId && !travelInvoiceId) return; // not a travel payment
+
+    const staff = await prisma.user.findMany({
+      where: { tenantId, role: { in: ["ADMIN", "MANAGER"] } },
+      select: { id: true },
+    });
+    const userIds = staff.map((u) => u.id);
+    if (!userIds.length) return;
+
+    const amount = Number(payload.amount || 0);
+    const currency = payload.currency || "INR";
+    const paidText = amount > 0 ? `${currency} ${amount.toLocaleString("en-IN")}` : `${currency} (amount unknown)`;
+
+    let title, message, link;
+    if (travelInvoiceId) {
+      const inv = await prisma.travelInvoice.findFirst({
+        where: { id: travelInvoiceId, tenantId },
+        select: { invoiceNum: true },
+      });
+      const invNum = inv?.invoiceNum || `#${travelInvoiceId}`;
+      title = `Payment received for invoice ${invNum}`;
+      message = `A Razorpay payment of ${paidText} was received against invoice ${invNum}.`;
+      link = `/travel/invoices/${travelInvoiceId}`;
+    } else {
+      title = `Advance payment received for quote #${quoteId}`;
+      message = `A Razorpay payment of ${paidText} was received as advance for quote #${quoteId}.`;
+      link = `/travel/quotes/${quoteId}`;
+    }
+
+    await notifyMany({
+      userIds,
+      tenantId,
+      title,
+      message,
+      type: "success",
+      link,
+      entityType: "Payment",
+      entityId:
+        payload.paymentId && !Number.isNaN(Number(payload.paymentId))
+          ? Number(payload.paymentId)
+          : null,
+      category: "payment",
+    });
+  } catch (e) {
+    console.error("[eventBus] travel payment notification listener failed:", e.message);
+  }
+});
+
 function setIO(io) {
   globalIo = io;
 }

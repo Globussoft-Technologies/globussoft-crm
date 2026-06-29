@@ -197,6 +197,7 @@ async function createAdvancePaymentLink({ quote, contact, displayName }) {
       if (validTs > Math.floor(Date.now() / 1000)) expireBy = validTs;
     }
 
+    const frontendBase = process.env.FRONTEND_URL || 'http://localhost:5173';
     const link = await gw.client.paymentLink.create({
       amount: Math.round(total * 100),          // full trip cost in smallest unit (paise)
       currency,
@@ -213,6 +214,10 @@ async function createAdvancePaymentLink({ quote, contact, displayName }) {
       notify: { sms: false, email: false },
       reminder_enable: true,
       notes: { quoteId: String(quote.id), tenantId: String(quote.tenantId), kind: 'travel-quote-advance' },
+      // Redirect back to the CRM success page so the payment is reconciled even
+      // when the Razorpay webhook cannot reach the server (localhost / dev boxes).
+      callback_url: `${frontendBase}/p/payment/success`,
+      callback_method: 'get',
     });
     // Persist the Razorpay payment-link id (plink_XXXX) on the quote for refund
     // tracking. Best-effort — a DB write failure must not fail the accept flow.
@@ -223,6 +228,32 @@ async function createAdvancePaymentLink({ quote, contact, displayName }) {
       });
     } catch (e) {
       console.error('[travel-quotes-public] advancePlinkId persist failed (non-fatal):', e.message);
+    }
+    // Create a pending Payment row so the public confirm-payment callback can
+    // find it, mark it SUCCESS, and reconcile the quote/invoice. Without this,
+    // the callback returns 404 and the payment never appears in the CRM.
+    try {
+      await prisma.payment.create({
+        data: {
+          tenantId: quote.tenantId,
+          invoiceId: null,
+          contactId: quote.contactId || null,
+          description: `Quote #${quote.id} advance (min. ${Math.round(ADVANCE_PCT * 100)}%)`,
+          amount: minAmountMajor,
+          currency,
+          gateway: 'razorpay',
+          gatewayId: link.id,
+          status: 'PENDING',
+          metadata: JSON.stringify({
+            type: 'travel-quote-advance',
+            quoteId: quote.id,
+            subBrand: quote.subBrand || null,
+            plinkId: link.id,
+          }),
+        },
+      });
+    } catch (e) {
+      console.error('[travel-quotes-public] advance payment row create failed (non-fatal):', e.message);
     }
     return { ok: true, url: link.short_url, id: link.id, amountMajor: minAmountMajor, totalAmount: total, currency };
   } catch (e) {

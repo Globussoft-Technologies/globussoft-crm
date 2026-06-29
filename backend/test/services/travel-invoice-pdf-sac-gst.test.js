@@ -41,6 +41,7 @@ const requireFromHere = createRequire(import.meta.url);
 const pdfR = requireFromHere('../../services/pdfRenderer.js');
 const hsnSacMapper = requireFromHere('../../lib/hsnSacMapper.js');
 const gstCalculation = requireFromHere('../../lib/gstCalculation.js');
+const PDFDocument = requireFromHere('pdfkit');
 
 const { generateTravelInvoicePdf } = pdfR;
 
@@ -270,6 +271,90 @@ describe('renderTravelInvoicePdf — slice 8: SAC + GST split + HSN summary', ()
       lines: sacLineMix(),
     });
     expect(buf.length).toBeGreaterThan(2048);
+  });
+
+  test('wrapped line-item descriptions are measured before row spacing is advanced', async () => {
+    const heightSpy = vi.spyOn(PDFDocument.prototype, 'heightOfString');
+    try {
+      const buf = await generateTravelInvoicePdf({
+        invoice: invoiceFixture({
+          invoiceNum: 'TINV-2026-0013',
+          status: 'Partial',
+          totalAmount: '40585.96',
+        }),
+        lines: [
+          {
+            id: 1,
+            description: 'IndiGo 6E 6876 Bangalore ↔ Kolkata (Economy)',
+            lineType: 'flight',
+            quantity: 2,
+            unitPrice: 8837.13,
+            amount: 17674.26,
+            taxableValue: 17674.26,
+            gstPercent: 0,
+          },
+          {
+            id: 2,
+            description: 'IndiGo 6E 344 Kolkata ↔ Bangalore (Economy)',
+            lineType: 'flight',
+            quantity: 2,
+            unitPrice: 9025.45,
+            amount: 18050.90,
+            taxableValue: 18050.90,
+            gstPercent: 0,
+          },
+          {
+            id: 3,
+            description: 'Hotel Corporate Hotel Near Sealdah Railway station, Kolkata',
+            lineType: 'hotel',
+            quantity: 2,
+            unitPrice: 2430.40,
+            amount: 4860.80,
+            taxableValue: 4860.80,
+            gstPercent: 0,
+          },
+        ],
+      });
+
+      expect(buf.slice(0, 5).toString('latin1')).toBe('%PDF-');
+      expect(heightSpy).toHaveBeenCalledWith(
+        'Hotel Corporate Hotel Near Sealdah Railway station, Kolkata',
+        expect.objectContaining({ width: 210 }),
+      );
+    } finally {
+      heightSpy.mockRestore();
+    }
+  });
+
+  test('partial-payment invoice PDF shows amount paid and remaining balance', async () => {
+    const buf = await generateTravelInvoicePdf({
+      invoice: invoiceFixture({
+        invoiceNum: 'TINV-2026-0013',
+        status: 'Partial',
+        totalAmount: '40585.96',
+        amountPaid: 21000,
+        balanceDue: 19585.96,
+      }),
+      lines: [
+        {
+          id: 1,
+          description: 'Trip invoice total',
+          lineType: 'tour_package',
+          quantity: 1,
+          unitPrice: 40585.96,
+          amount: 40585.96,
+          taxableValue: 40585.96,
+          gstPercent: 0,
+        },
+      ],
+    });
+
+    const text = extractPdfText(buf);
+    expect(text).toMatch(/Subtotal/);
+    expect(text).toMatch(/Amount Paid/);
+    expect(text).toMatch(/Balance Due/);
+    expect(text).toMatch(/21000\.00/);
+    expect(text).toMatch(/19585\.96/);
   });
 
   test('sacForLineType is invoked at least once per non-empty line list', async () => {

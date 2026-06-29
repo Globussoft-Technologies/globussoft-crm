@@ -56,6 +56,32 @@ function serialize(payment) {
   return { ...payment, metadata: safeJsonParse(payment.metadata, {}) };
 }
 
+async function recomputeTravelInvoiceStatus(prisma, tenantId, invoiceId) {
+  if (!Number.isFinite(invoiceId)) return;
+  const paidAgg = await prisma.payment.aggregate({
+    where: {
+      tenantId,
+      status: "SUCCESS",
+      OR: [
+        { invoiceId },
+        { metadata: { contains: `"travelInvoiceId":${invoiceId}` } },
+      ],
+    },
+    _sum: { amount: true },
+  });
+  const inv = await prisma.travelInvoice.findFirst({
+    where: { id: invoiceId, tenantId },
+    select: { totalAmount: true },
+  });
+  if (!inv) return;
+  const paid = Number(paidAgg._sum.amount || 0);
+  const total = Number(inv.totalAmount || 0);
+  const newStatus = total > 0 && paid >= total ? "Paid" : paid > 0 ? "Partial" : "Issued";
+  const updateData = { status: newStatus };
+  if (newStatus === "Paid") updateData.paidAt = new Date();
+  await prisma.travelInvoice.update({ where: { id: invoiceId }, data: updateData });
+}
+
 // Resolve which Razorpay secret verifies an incoming webhook. Customer
 // payments (customer → tenant) are signed with the TENANT's own webhook
 // secret; we find the Payment row the event references and load that tenant's
@@ -515,48 +541,123 @@ router.post(
               newStatus = 'fully_paid';
             }
 
-            const updateData = {
-              advancePaymentId: String(paymentId),
-              advancePaidAt: capturedAt,
-              paymentReference: String(paymentId),
-              status: newStatus,
-            };
-            if (paidMajor != null) updateData.advancePaidAmount = paidMajor;
-
             await prisma.travelQuote.updateMany({
               where: { id: quoteId },
-              data: updateData,
+              data: {
+                advancePaymentId: String(paymentId),
+                status: newStatus,
+              },
             });
 
-            // Create a Payment row so this appears on the Payments page.
-            // Deduplicate on gatewayId (paymentId = pay_XXXX).
+            // Reconcile the Payment row. Since createAdvancePaymentLink now
+            // creates a pending Payment row with gatewayId = plink_..., we first
+            // try to find and update that row. Fallback to the old pay_XXXX path
+            // for links created before this change.
             const tenantIdNum = Number(notes.tenantId);
             if (Number.isFinite(tenantIdNum) && paymentId) {
-              const existing = await prisma.payment.findFirst({
-                where: { gateway: 'razorpay', gatewayId: String(paymentId) },
-              });
-              if (!existing) {
-                await prisma.payment.create({
+              let paymentRow = null;
+              if (plinkId) {
+                paymentRow = await prisma.payment.findFirst({
+                  where: { gateway: 'razorpay', gatewayId: String(plinkId), tenantId: tenantIdNum },
+                });
+              }
+
+              // If the quote has already been converted to an invoice, link the
+              // payment to it so the invoice status reflects the advance.
+              let travelInvoiceId = null;
+              try {
+                const travelInv = await prisma.travelInvoice.findFirst({
+                  where: { quoteId, tenantId: tenantIdNum },
+                  select: { id: true },
+                });
+                if (travelInv) travelInvoiceId = travelInv.id;
+              } catch (_e) {}
+
+              const baseMetadata = {
+                type: 'travel-quote-advance',
+                quoteId,
+                subBrand: (quote && quote.subBrand) || null,
+                plinkId: plinkId || null,
+                razorpayPaymentId: String(paymentId),
+              };
+
+              let finalPaymentRow = paymentRow;
+              if (paymentRow) {
+                await prisma.payment.update({
+                  where: { id: paymentRow.id },
                   data: {
-                    tenantId: tenantIdNum,
-                    invoiceId: null,
-                    contactId: (quote && quote.contactId) || null,
-                    description: `Quote #${quoteId} advance — ${newStatus === 'fully_paid' ? 'fully paid' : 'advance deposit'}`,
-                    amount: paidMajor != null ? paidMajor : 0,
-                    currency: (paymentEnt && paymentEnt.currency ? String(paymentEnt.currency).toUpperCase() : 'INR'),
-                    gateway: 'razorpay',
+                    invoiceId: travelInvoiceId,
+                    contactId: (quote && quote.contactId) || paymentRow.contactId,
+                    amount: paidMajor != null ? paidMajor : paymentRow.amount,
+                    currency: (paymentEnt && paymentEnt.currency ? String(paymentEnt.currency).toUpperCase() : paymentRow.currency),
                     gatewayId: String(paymentId),
                     status: 'SUCCESS',
                     paidAt: capturedAt,
-                    metadata: JSON.stringify({
-                      type: 'travel-quote-advance',
-                      quoteId,
-                      subBrand: (quote && quote.subBrand) || null,
-                      plinkId: plinkId || null,
-                    }),
+                    metadata: JSON.stringify(
+                      travelInvoiceId
+                        ? { ...baseMetadata, travelInvoiceId }
+                        : baseMetadata
+                    ),
                   },
                 });
+              } else {
+                const existing = await prisma.payment.findFirst({
+                  where: { gateway: 'razorpay', gatewayId: String(paymentId) },
+                });
+                if (!existing) {
+                  finalPaymentRow = await prisma.payment.create({
+                    data: {
+                      tenantId: tenantIdNum,
+                      invoiceId: travelInvoiceId,
+                      contactId: (quote && quote.contactId) || null,
+                      description: `Quote #${quoteId} advance — ${newStatus === 'fully_paid' ? 'fully paid' : 'advance deposit'}`,
+                      amount: paidMajor != null ? paidMajor : 0,
+                      currency: (paymentEnt && paymentEnt.currency ? String(paymentEnt.currency).toUpperCase() : 'INR'),
+                      gateway: 'razorpay',
+                      gatewayId: String(paymentId),
+                      status: 'SUCCESS',
+                      paidAt: capturedAt,
+                      metadata: JSON.stringify(
+                        travelInvoiceId
+                          ? { ...baseMetadata, travelInvoiceId }
+                          : baseMetadata
+                      ),
+                    },
+                  });
+                } else {
+                  finalPaymentRow = existing;
+                }
               }
+
+              // Recompute the invoice status from all SUCCESS payments.
+              if (travelInvoiceId) {
+                try {
+                  await recomputeTravelInvoiceStatus(prisma, tenantIdNum, travelInvoiceId);
+                } catch (e) {
+                  console.error('[Payments] travel invoice recompute failed:', e.message);
+                }
+              }
+
+              // Emit automation event so workflow rules and the travel payment
+              // admin notification listener can react.
+              try {
+                require('../lib/eventBus').emitEvent(
+                  'payment.collected',
+                  {
+                    quoteId,
+                    paymentId: finalPaymentRow ? finalPaymentRow.id : null,
+                    travelInvoiceId: travelInvoiceId || null,
+                    amount: paidMajor,
+                    method: 'razorpay',
+                    currency: (paymentEnt && paymentEnt.currency ? String(paymentEnt.currency).toUpperCase() : 'INR'),
+                    paidAt: capturedAt,
+                    contactId: (quote && quote.contactId) || null,
+                    subBrand: (quote && quote.subBrand) || null,
+                  },
+                  tenantIdNum,
+                  null
+                );
+              } catch (_e) {}
             }
           } catch (e) {
             console.error('[Payments] travel-quote advance persist failed:', e.message);

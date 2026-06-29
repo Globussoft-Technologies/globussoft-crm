@@ -84,6 +84,13 @@ prisma.invoice = {
 };
 prisma.payment = {
   create: vi.fn(),
+  findFirst: vi.fn(),
+  update: vi.fn(),
+  findMany: vi.fn(),
+  aggregate: vi.fn(),
+};
+prisma.paymentGatewayConfig = {
+  findFirst: vi.fn(),
 };
 prisma.tenant = prisma.tenant || {};
 prisma.tenant.findUnique = vi.fn();
@@ -117,6 +124,11 @@ beforeEach(() => {
   prisma.invoice.create.mockReset();
   prisma.invoice.update.mockReset();
   prisma.payment.create.mockReset();
+  prisma.payment.findFirst.mockReset();
+  prisma.payment.update.mockReset();
+  prisma.payment.findMany.mockReset();
+  prisma.payment.aggregate.mockReset();
+  prisma.paymentGatewayConfig.findFirst.mockReset();
   prisma.tenant.findUnique.mockReset();
   prisma.auditLog.findFirst.mockReset();
   prisma.auditLog.create.mockReset();
@@ -126,7 +138,71 @@ beforeEach(() => {
   prisma.auditLog.findFirst.mockResolvedValue(null);
   prisma.auditLog.create.mockResolvedValue({ id: 1 });
   prisma.payment.create.mockResolvedValue({ id: 555, amount: 0, currency: 'USD' });
+  prisma.paymentGatewayConfig.findFirst.mockResolvedValue(null);
   eventBus.emitEvent.mockClear();
+});
+
+describe('POST /api/billing/public/confirm-payment - payment-link statuses', () => {
+  test('Razorpay partially_paid callback is reconciled as a successful payment', async () => {
+    const payment = {
+      id: 901,
+      tenantId: 1,
+      invoiceId: null,
+      gateway: 'razorpay',
+      gatewayId: 'plink_partial_123',
+      status: 'PENDING',
+      amount: 5000,
+      currency: 'INR',
+      metadata: JSON.stringify({ mode: 'payment_link', plinkId: 'plink_partial_123' }),
+    };
+    prisma.payment.findFirst
+      .mockResolvedValueOnce(payment)
+      .mockResolvedValueOnce({
+        amount: 5000,
+        currency: 'INR',
+        metadata: payment.metadata,
+      });
+    prisma.payment.update.mockResolvedValue({ ...payment, status: 'SUCCESS' });
+
+    const app = makeApp();
+    const res = await request(app)
+      .post('/api/billing/public/confirm-payment')
+      .send({
+        razorpay_payment_link_id: 'plink_partial_123',
+        razorpay_payment_link_reference_id: 'quote-10',
+        razorpay_payment_link_status: 'partially_paid',
+        razorpay_payment_id: 'pay_partial_123',
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      ok: true,
+      plinkId: 'plink_partial_123',
+      amountPaid: 5000,
+      currency: 'INR',
+    });
+    expect(prisma.payment.update).toHaveBeenCalledWith({
+      where: { id: 901 },
+      data: expect.objectContaining({
+        status: 'SUCCESS',
+        metadata: expect.stringContaining('"razorpayPaymentId":"pay_partial_123"'),
+      }),
+    });
+  });
+
+  test('non-complete Razorpay payment-link status is still rejected', async () => {
+    const app = makeApp();
+    const res = await request(app)
+      .post('/api/billing/public/confirm-payment')
+      .send({
+        razorpay_payment_link_id: 'plink_partial_123',
+        razorpay_payment_link_status: 'created',
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('Payment not completed');
+    expect(prisma.payment.findFirst).not.toHaveBeenCalled();
+  });
 });
 
 // ─── POST / — Invoice creation (validation contract) ───────────────
